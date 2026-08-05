@@ -2,9 +2,10 @@ import { type FC, type ReactNode, useEffect, useRef } from 'react';
 import CrossIcon from 'majesticons/line/multiply-line.svg?react';
 import type { AgentResponseTrace } from '@valerypopoff/rivet2-core';
 import { css } from '@emotion/react';
-import { createPortal } from 'react-dom';
+import Modal, { ModalBody, ModalTransition } from '@atlaskit/modal-dialog';
+import { AppModalHeader } from '../AppModalHeader.js';
 
-const responseInspectorCss = css`
+const inlineResponseInspectorCss = css`
   position: fixed;
   inset: 0;
   z-index: 10020;
@@ -38,17 +39,8 @@ const responseInspectorCss = css`
     display: grid;
     gap: 2px;
   }
-  header span,
-  .rivet-agent-response-inspector-unavailable p,
-  .rivet-agent-response-inspector-metrics dt,
-  .rivet-agent-response-inspector-timing,
-  .rivet-agent-response-inspector-section article span,
-  .rivet-agent-response-inspector-section p {
-    color: var(--rivet-web-app-foreground-muted, var(--grey-light));
-  }
-  header span,
-  .rivet-agent-response-inspector-metrics dt,
-  .rivet-agent-response-inspector-timing {
+  header span {
+    color: var(--rivet-web-app-foreground-muted, var(--foreground-muted));
     font-size: 12px;
   }
   header button {
@@ -74,18 +66,56 @@ const responseInspectorCss = css`
     width: 20px;
     height: 20px;
   }
-  .rivet-agent-response-inspector-body {
-    display: grid;
-    gap: 18px;
-    min-height: 0;
+  .rivet-agent-response-inspector-content {
+    --response-inspector-border: var(--rivet-web-app-card-border, var(--grey-darkish));
+    --response-inspector-card-background: color-mix(
+      in srgb,
+      var(--rivet-web-app-card-background, var(--grey-darker)) 92%,
+      var(--rivet-web-app-foreground, var(--foreground)) 8%
+    );
+    --response-inspector-foreground: var(--rivet-web-app-foreground, var(--foreground));
+    --response-inspector-muted: var(--rivet-web-app-foreground-muted, var(--foreground-muted));
+
     overflow: auto;
     padding: 20px;
   }
+
+  @media (max-width: 560px) {
+    padding: 10px;
+
+    .rivet-agent-response-inspector {
+      max-height: calc(100vh - 20px);
+    }
+
+    .rivet-agent-response-inspector-content {
+      padding: 16px;
+    }
+  }
+`;
+
+const responseInspectorContentCss = css`
+  --response-inspector-border: var(--modal-border);
+  --response-inspector-card-background: var(--surface-row-hover-bg);
+  --response-inspector-foreground: var(--foreground);
+  --response-inspector-muted: var(--foreground-muted);
+
+  display: grid;
+  gap: 18px;
+  min-width: 0;
+  color: var(--response-inspector-foreground);
+  font-size: var(--ui-font-size-compact);
+
+  .rivet-agent-response-inspector-subtitle {
+    margin: 0;
+    color: var(--response-inspector-muted);
+    font-size: var(--ui-font-size-xs);
+  }
   .rivet-agent-response-inspector-unavailable {
-    padding: 28px 18px;
+    padding: 12px 0 20px;
   }
   .rivet-agent-response-inspector-unavailable p {
     margin-bottom: 0;
+    color: var(--response-inspector-muted);
   }
   .rivet-agent-response-inspector-metric-group {
     display: grid;
@@ -102,8 +132,8 @@ const responseInspectorCss = css`
   }
   .rivet-agent-response-inspector-group-heading p {
     margin: 0;
-    color: var(--rivet-web-app-foreground-muted, var(--grey-light));
-    font-size: 12px;
+    color: var(--response-inspector-muted);
+    font-size: var(--ui-font-size-xs);
     line-height: 1.45;
   }
   .rivet-agent-response-inspector-metrics {
@@ -118,11 +148,17 @@ const responseInspectorCss = css`
     min-width: 0;
     padding: 10px 12px;
     border-radius: 8px;
-    background: color-mix(
-      in srgb,
-      var(--rivet-web-app-card-background, var(--grey-darker)) 92%,
-      var(--rivet-web-app-foreground, var(--foreground)) 8%
-    );
+    background: var(--response-inspector-card-background);
+  }
+  .rivet-agent-response-inspector-metrics dt,
+  .rivet-agent-response-inspector-timing,
+  .rivet-agent-response-inspector-section article span,
+  .rivet-agent-response-inspector-section p {
+    color: var(--response-inspector-muted);
+  }
+  .rivet-agent-response-inspector-metrics dt,
+  .rivet-agent-response-inspector-timing {
+    font-size: var(--ui-font-size-xs);
   }
   .rivet-agent-response-inspector-metrics dd {
     margin: 3px 0 0;
@@ -146,7 +182,7 @@ const responseInspectorCss = css`
     margin: 0;
   }
   .rivet-agent-response-inspector-section {
-    border-top: 1px solid var(--rivet-web-app-card-border, var(--grey-darkish));
+    border-top: 1px solid var(--response-inspector-border);
     padding: 12px 0;
   }
   .rivet-agent-response-inspector-section summary {
@@ -159,22 +195,11 @@ const responseInspectorCss = css`
     padding: 10px 0;
   }
   .rivet-agent-response-inspector-section article + article {
-    border-top: 1px solid var(--rivet-web-app-card-border, var(--grey-darkish));
+    border-top: 1px solid var(--response-inspector-border);
   }
   .rivet-agent-response-inspector-section article span,
   .rivet-agent-response-inspector-section p {
     font-size: 13px;
-  }
-  @media (max-width: 560px) {
-    padding: 10px;
-
-    .rivet-agent-response-inspector {
-      max-height: calc(100vh - 20px);
-    }
-
-    .rivet-agent-response-inspector-body {
-      padding: 16px;
-    }
   }
 `;
 
@@ -184,19 +209,34 @@ export const AgentResponseInspector: FC<{
   renderInPortal?: boolean;
 }> = ({ trace, onClose, renderInPortal = false }) => {
   const closeButtonRef = useRef<HTMLButtonElement>(null);
+  const useEditorModal = renderInPortal && typeof document !== 'undefined';
 
   useEffect(() => {
+    if (useEditorModal) return;
     closeButtonRef.current?.focus();
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') onClose();
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [onClose]);
+  }, [onClose, useEditorModal]);
 
-  const inspector = (
+  const content = <ResponseInspectorContent trace={trace} includeSubtitle={useEditorModal} />;
+
+  if (useEditorModal) {
+    return (
+      <ModalTransition>
+        <Modal onClose={onClose} width="large">
+          <AppModalHeader title="Response inspector" onClose={onClose} />
+          <ModalBody>{content}</ModalBody>
+        </Modal>
+      </ModalTransition>
+    );
+  }
+
+  return (
     <div
-      css={responseInspectorCss}
+      css={inlineResponseInspectorCss}
       className="rivet-agent-response-inspector-backdrop"
       onClick={(event) => event.target === event.currentTarget && onClose()}
     >
@@ -221,102 +261,106 @@ export const AgentResponseInspector: FC<{
             <CrossIcon aria-hidden="true" />
           </button>
         </header>
-        {trace == null ? (
-          <div className="rivet-agent-response-inspector-unavailable">
-            <strong>Trace unavailable</strong>
-            <p>This response was produced by an older host, a replay, or while response inspection was disabled.</p>
-          </div>
-        ) : (
-          <div className="rivet-agent-response-inspector-body">
-            <MetricGroup title="Execution">
-              <Metric label="Status" value={trace.status} />
-              <Metric label="Total duration" value={formatDuration(trace.durationMs)} />
-              <Metric label="Model calls" value={String(trace.summary.modelCallCount)} />
-              <Metric label="Tool calls" value={String(trace.summary.toolCallCount)} />
-            </MetricGroup>
-            <MetricGroup
-              title="Recovery behavior"
-              description="Provider request retries repeat a failed request. LLM profile fallbacks move to the next configured profile."
-            >
-              <Metric label="Provider request retries" value={String(trace.summary.retryCount)} />
-              <Metric label="LLM profile fallbacks" value={String(trace.summary.fallbackCount)} />
-            </MetricGroup>
-            <MetricGroup title="Usage and cost">
-              <Metric label="Input tokens" value={formatTokens(trace.summary.promptTokens)} />
-              <Metric label="Output tokens" value={formatTokens(trace.summary.completionTokens)} />
-              <Metric label="Cached input tokens" value={formatTokens(trace.summary.cachedTokens)} />
-              <Metric label="Reasoning tokens" value={formatTokens(trace.summary.reasoningTokens)} />
-              <Metric label="Model cost" value={formatCost(trace)} />
-            </MetricGroup>
-            {(trace.startedAt != null || trace.responseReadyAt != null || trace.backgroundWorkPending) && (
-              <section className="rivet-agent-response-inspector-metric-group">
-                <div className="rivet-agent-response-inspector-group-heading">
-                  <h3>Timing</h3>
-                </div>
-                <dl className="rivet-agent-response-inspector-timing">
-                  {trace.startedAt != null && (
-                    <div>
-                      <dt>Started</dt>
-                      <dd>{formatTimestamp(trace.startedAt)}</dd>
-                    </div>
-                  )}
-                  {trace.responseReadyAt != null && (
-                    <div>
-                      <dt>Response ready</dt>
-                      <dd>{formatTimestamp(trace.responseReadyAt)}</dd>
-                    </div>
-                  )}
-                  {trace.backgroundWorkPending && (
-                    <div>
-                      <dt>Async work</dt>
-                      <dd>Still active when this response was delivered</dd>
-                    </div>
-                  )}
-                </dl>
-              </section>
-            )}
-            <TraceSection
-              title="Model calls"
-              omitted={trace.omittedModelCallCount}
-              empty="No provider requests recorded."
-            >
-              {trace.modelCalls.map((call) => (
-                <article key={call.callId}>
-                  <strong>
-                    {call.provider} · {call.model}
-                  </strong>
-                  <span>
-                    {call.outcome}
-                    {call.profileIndex == null ? '' : ` · profile ${call.profileIndex + 1}`}
-                    {' · '}round {(call.roundIndex ?? 0) + 1} · attempt {call.attemptIndex + 1}
-                  </span>
-                  <span>
-                    {formatDuration(call.durationMs)} · {formatCallUsage(call.usage)} · {formatCallCost(call.pricing)}
-                  </span>
-                  {call.finishReason && <span>Finish reason: {call.finishReason}</span>}
-                </article>
-              ))}
-            </TraceSection>
-            <TraceSection title="Tool calls" omitted={trace.omittedToolCallCount} empty="No tool executions recorded.">
-              {trace.toolCalls.map((call, index) => (
-                <article key={`${call.toolCallId ?? call.toolName}-${index}`}>
-                  <strong>{call.toolName}</strong>
-                  <span>
-                    {call.outcome} · {call.handlerKind}
-                    {call.handlerName ? ` · ${call.handlerName}` : ''}
-                  </span>
-                  <span>{formatDuration(call.durationMs)}</span>
-                </article>
-              ))}
-            </TraceSection>
-          </div>
-        )}
+        {content}
       </section>
     </div>
   );
-
-  return renderInPortal && typeof document !== 'undefined' ? createPortal(inspector, document.body) : inspector;
 };
+
+const ResponseInspectorContent: FC<{ trace?: AgentResponseTrace; includeSubtitle: boolean }> = ({
+  trace,
+  includeSubtitle,
+}) => (
+  <div css={responseInspectorContentCss} className="rivet-agent-response-inspector-content">
+    {includeSubtitle && <p className="rivet-agent-response-inspector-subtitle">Execution metadata only</p>}
+    {trace == null ? (
+      <div className="rivet-agent-response-inspector-unavailable">
+        <strong>Trace unavailable</strong>
+        <p>This response was produced by an older host, a replay, or while response inspection was disabled.</p>
+      </div>
+    ) : (
+      <>
+        <MetricGroup title="Execution">
+          <Metric label="Status" value={trace.status} />
+          <Metric label="Total duration" value={formatDuration(trace.durationMs)} />
+          <Metric label="Model calls" value={String(trace.summary.modelCallCount)} />
+          <Metric label="Tool calls" value={String(trace.summary.toolCallCount)} />
+        </MetricGroup>
+        <MetricGroup
+          title="Recovery behavior"
+          description="Provider request retries repeat a failed request. LLM profile fallbacks move to the next configured profile."
+        >
+          <Metric label="Provider request retries" value={String(trace.summary.retryCount)} />
+          <Metric label="LLM profile fallbacks" value={String(trace.summary.fallbackCount)} />
+        </MetricGroup>
+        <MetricGroup title="Usage and cost">
+          <Metric label="Input tokens" value={formatTokens(trace.summary.promptTokens)} />
+          <Metric label="Output tokens" value={formatTokens(trace.summary.completionTokens)} />
+          <Metric label="Cached input tokens" value={formatTokens(trace.summary.cachedTokens)} />
+          <Metric label="Reasoning tokens" value={formatTokens(trace.summary.reasoningTokens)} />
+          <Metric label="Model cost" value={formatCost(trace)} />
+        </MetricGroup>
+        {(trace.startedAt != null || trace.responseReadyAt != null || trace.backgroundWorkPending) && (
+          <section className="rivet-agent-response-inspector-metric-group">
+            <div className="rivet-agent-response-inspector-group-heading">
+              <h3>Timing</h3>
+            </div>
+            <dl className="rivet-agent-response-inspector-timing">
+              {trace.startedAt != null && (
+                <div>
+                  <dt>Started</dt>
+                  <dd>{formatTimestamp(trace.startedAt)}</dd>
+                </div>
+              )}
+              {trace.responseReadyAt != null && (
+                <div>
+                  <dt>Response ready</dt>
+                  <dd>{formatTimestamp(trace.responseReadyAt)}</dd>
+                </div>
+              )}
+              {trace.backgroundWorkPending && (
+                <div>
+                  <dt>Async work</dt>
+                  <dd>Still active when this response was delivered</dd>
+                </div>
+              )}
+            </dl>
+          </section>
+        )}
+        <TraceSection title="Model calls" omitted={trace.omittedModelCallCount} empty="No provider requests recorded.">
+          {trace.modelCalls.map((call) => (
+            <article key={call.callId}>
+              <strong>
+                {call.provider} · {call.model}
+              </strong>
+              <span>
+                {call.outcome}
+                {call.profileIndex == null ? '' : ` · profile ${call.profileIndex + 1}`}
+                {' · '}round {(call.roundIndex ?? 0) + 1} · attempt {call.attemptIndex + 1}
+              </span>
+              <span>
+                {formatDuration(call.durationMs)} · {formatCallUsage(call.usage)} · {formatCallCost(call.pricing)}
+              </span>
+              {call.finishReason && <span>Finish reason: {call.finishReason}</span>}
+            </article>
+          ))}
+        </TraceSection>
+        <TraceSection title="Tool calls" omitted={trace.omittedToolCallCount} empty="No tool executions recorded.">
+          {trace.toolCalls.map((call, index) => (
+            <article key={`${call.toolCallId ?? call.toolName}-${index}`}>
+              <strong>{call.toolName}</strong>
+              <span>
+                {call.outcome} · {call.handlerKind}
+                {call.handlerName ? ` · ${call.handlerName}` : ''}
+              </span>
+              <span>{formatDuration(call.durationMs)}</span>
+            </article>
+          ))}
+        </TraceSection>
+      </>
+    )}
+  </div>
+);
 
 const MetricGroup: FC<{ title: string; description?: string; children: ReactNode }> = ({
   title,

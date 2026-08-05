@@ -323,16 +323,20 @@ test('response inspector uses semantic diagnostics in an app-level modal', () =>
   assert.match(inspectorSource, /label="LLM profile fallbacks"/);
   assert.match(inspectorSource, /<MetricGroup title="Usage and cost">/);
   assert.match(inspectorSource, /<h3>Timing<\/h3>/);
-  assert.match(inspectorSource, /createPortal\(inspector, document\.body\)/);
+  assert.match(inspectorSource, /<ModalTransition>/);
+  assert.match(inspectorSource, /<Modal onClose=\{onClose\} width="large">/);
+  assert.match(inspectorSource, /<AppModalHeader title="Response inspector" onClose=\{onClose\} \/>/);
+  assert.match(inspectorSource, /<ModalBody>\{content\}<\/ModalBody>/);
+  assert.doesNotMatch(inspectorSource, /createPortal/);
+  assert.match(inspectorSource, /const useEditorModal = renderInPortal && typeof document !== 'undefined'/);
   assert.match(inspectorSource, /\.rivet-agent-response-inspector-metrics \{[\s\S]*?margin: 0;[\s\S]*?padding: 0;/);
   assert.match(
     inspectorSource,
     /header button:focus-visible \{[\s\S]*?box-shadow: inset 0 0 0 1px var\(--rivet-web-app-control-focus-border, var\(--primary\)\);/,
   );
-  assert.match(
-    inspectorSource,
-    /\.rivet-agent-response-inspector-metrics > div \{[\s\S]*?var\(--rivet-web-app-card-background, var\(--grey-darker\)\) 92%,[\s\S]*?var\(--rivet-web-app-foreground, var\(--foreground\)\) 8%/,
-  );
+  assert.match(inspectorSource, /--response-inspector-card-background: var\(--surface-row-hover-bg\)/);
+  assert.match(inspectorSource, /--response-inspector-muted: var\(--foreground-muted\)/);
+  assert.match(inspectorSource, /const inlineResponseInspectorCss = css/);
   assert.doesNotMatch(inspectorSource, /Open graph at this run/);
   assert.doesNotMatch(inspectorSource, /trace\.(?:traceId|graphId|nodeId|processId)/);
 });

@@ -461,6 +461,15 @@ The response inspector is scoped to the currently selected root. Closing the
 drawer, clearing its root, or selecting another root closes any open inspector
 so replayed trace data never outlives its owning activity view.
 
+Editor-owned response inspectors use Rivet's shared Atlaskit `Modal`,
+`ModalBody`, and `AppModalHeader` primitives. This keeps their backdrop,
+surface, typography, spacing, focus lifecycle, and close behavior aligned with
+other editor dialogs. The diagnostic content is shared with the web-app
+preview, but that embedded surface deliberately keeps a scoped non-Atlaskit
+shell because an editor-level modal portal would escape the preview boundary.
+The generated hosted client mirrors the embedded shell rather than depending
+on editor-only React components.
+
 An incompatible recording can fail before its first recorded graph or node
 event can be replayed. Historic recordings can also contain only an unscoped
 `done`, `error`, or `abort` terminal (notably preflight failures recorded
