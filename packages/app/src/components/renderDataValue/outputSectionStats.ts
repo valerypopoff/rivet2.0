@@ -1,9 +1,4 @@
-import {
-  inferType,
-  type DataValue,
-  type DataType,
-  type ScalarDataValue,
-} from '@valerypopoff/rivet2-core';
+import { inferType, type DataValue, type DataType, type ScalarDataValue } from '@valerypopoff/rivet2-core';
 import type { DataRefReader } from '../../providers/ProvidersContext.js';
 import type { DataValueWithRefs } from '../../state/dataFlow.js';
 import {
@@ -52,7 +47,19 @@ export function getOutputSectionStatsForValue(
   return getOutputSectionStatsFromText(getOutputSectionTextForValue(value, dataRefs));
 }
 
-function getOutputSectionTextForValue(
+export function getOutputSectionArrayItemCount(
+  value: DataValueWithRefs | DataValue | undefined,
+  dataRefs: DataRefReader,
+): number | undefined {
+  if (!value || (isStoredRefDataValue(value) && isPreviewOnlyStoredValue(value))) {
+    return undefined;
+  }
+
+  const renderableValue = toRenderableDataValue(value, dataRefs);
+  return renderableValue && Array.isArray(renderableValue.value) ? renderableValue.value.length : undefined;
+}
+
+export function getOutputSectionTextForValue(
   value: DataValueWithRefs | DataValue | undefined,
   dataRefs: DataRefReader,
 ): string | undefined {

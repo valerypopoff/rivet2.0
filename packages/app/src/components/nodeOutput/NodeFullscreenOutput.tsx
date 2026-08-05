@@ -451,6 +451,7 @@ const NodeFullscreenOutput: FC<{ node: ChartNode }> = ({ node }) => {
       renderMarkdown,
       renderMode: 'expanded-preview',
       allowLargeStoredValueActions: true,
+      autoCollapseLlmChatDiagnosticOutputs: node.type === 'llmChatV2',
       wrapLines,
     });
     const hasBody = body != null;

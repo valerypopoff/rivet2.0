@@ -106,9 +106,10 @@ export function useFullscreenOutputSearch(args: { contentKey: FullscreenOutputSe
 
   const contextValue = useMemo(
     () => ({
+      query,
       registerProvider,
     }),
-    [registerProvider],
+    [query, registerProvider],
   );
 
   useEffect(() => {

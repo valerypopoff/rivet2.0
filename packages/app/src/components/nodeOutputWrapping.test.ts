@@ -14,6 +14,7 @@ test('fullscreen object output uses foldable searchable JSON with stable display
   const scalarRenderers = readComponent('renderDataValue', 'createScalarRenderers.tsx');
   const foldingCodeBlock = readComponent('renderDataValue', 'FoldingCodeBlock.tsx');
   const fullscreenOutput = readComponent('nodeOutput', 'NodeFullscreenOutput.tsx');
+  const renderedDataOutputs = readComponent('nodeOutput', 'RenderDataOutputs.tsx');
 
   assert.match(scalarRenderers, /<FoldingCodeBlock text=\{stringified\} language="json"/);
   assert.match(foldingCodeBlock, /useFullscreenOutputSearchContext/);
@@ -27,6 +28,19 @@ test('fullscreen object output uses foldable searchable JSON with stable display
   assert.match(foldingCodeBlock, /scheduleFullscreenOutputSearchTargetReveal/);
   assert.match(fullscreenOutput, /findFullscreenOutputScrollContainer/);
   assert.doesNotMatch(fullscreenOutput, /function findScrollContainer/);
+  assert.match(fullscreenOutput, /autoCollapseLlmChatDiagnosticOutputs: node\.type === 'llmChatV2'/);
+  assert.match(renderedDataOutputs, /LLM_CHAT_LARGE_DIAGNOSTIC_OUTPUT_PORT_IDS/);
+  assert.match(renderedDataOutputs, /LLM_CHAT_LARGE_DIAGNOSTIC_AUTO_COLLAPSE_CHARS = 1_000/);
+  assert.match(renderedDataOutputs, /LLM_CHAT_MESSAGE_OUTPUT_PORT_IDS/);
+  assert.match(renderedDataOutputs, /getOutputSectionArrayItemCount/);
+  assert.doesNotMatch(renderedDataOutputs, /'requestBody'|\bresponseBody\b/);
+  assert.match(renderedDataOutputs, /<Collapsible/);
+  assert.match(renderedDataOutputs, /\? 'message content' : label/);
+  assert.match(renderedDataOutputs, /messageCount === 1 \? 'message' : 'messages'/);
+  assert.match(renderedDataOutputs, /autoCollapseLlmChatDiagnosticOutputs/);
+  assert.match(renderedDataOutputs, /isEligibleLlmChatDiagnosticOutput/);
+  assert.match(renderedDataOutputs, /useFullscreenOutputSearchContext/);
+  assert.match(renderedDataOutputs, /searchQuery\.trim\(\)\.length > 0/);
 });
 
 test('large stored JSON previews preserve safe wrapping and external search ownership', () => {
