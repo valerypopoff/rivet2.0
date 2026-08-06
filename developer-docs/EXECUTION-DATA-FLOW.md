@@ -123,7 +123,7 @@ on raw calls because the round limit was reached or a tool is unknown, the
 reservation is released and the ordinary downstream Delegate scheduling path
 receives those calls.
 
-`Message (fires before tool call invocation)` is the nonblank model text
+`Message` is the nonblank model text
 that accompanied a tool-call round. Its persisted output id remains
 `assistant-message`. For a round with multiple calls, every Delegate invocation
 fires that branch with the same model text under its own process id. The branch

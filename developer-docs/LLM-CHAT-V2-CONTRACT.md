@@ -420,7 +420,7 @@ paths and should not be used as the primary target for new provider refactors.
   Chat without auto-continuation ignore this metadata.
 - `Delegate Tool Call` keeps the persisted `message` output id, now displayed as
   `Tool Result Message`, and adds `assistant-message`, displayed as
-  `Message (fires before tool call invocation)`, for nonblank assistant text
+  `Message`, for nonblank assistant text
   emitted alongside that tool-call round. This output is intrinsically per-call
   and pre-tool: each invocation emits the same assistant text under its own
   process id, then starts that branch and its tool handler in parallel, with no

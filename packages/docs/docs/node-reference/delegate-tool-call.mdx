@@ -35,7 +35,7 @@ safely represent multiple parallel split indexes.
 | ------------------------------------------- | ---------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
 | Tool Name                                   | `string` or `string[]`             | Name of the tool selected by the LLM. Connected auto-continuation emits one scalar name from each separate invocation.                  |
 | Tool Arguments                              | `object` or `object[]`             | Actual arguments selected by the LLM and passed to the handler. Connected auto-continuation emits one scalar object per invocation.     |
-| Message (fires before tool call invocation) | `string`                           | Nonblank assistant text emitted alongside a connected LLM auto-continuation round. It fires once for each tool-call invocation.         |
+| Message                                     | `string`                           | Nonblank assistant text emitted alongside a connected LLM auto-continuation round. It fires once for each tool-call invocation.         |
 | Output                                      | `string` or `string[]`             | Output returned by the delegated handler. Connected auto-continuation emits a scalar value from each separate tool-call invocation.     |
 | Tool Execution Time (sec)                   | `number` or `number[]`             | Seconds spent running the handler graph or external function. Connected auto-continuation emits one scalar duration per invocation.     |
 | Tool Result Message                         | `chat-message`, `object`, or array | Handler output shaped as a function-result message. Connected auto-continuation emits one scalar message from each separate invocation. |
@@ -66,8 +66,8 @@ not preserve a duration leave this output unavailable.
 | Handlers                   | Manual mapping from tool name to graph when auto delegate is off.                                          |
 | Unknown Handler            | Graph to run when no specific handler is found.                                                            |
 
-When this node is the connected auto-continuation Delegate, **Message (fires
-before tool call invocation)** activates automatically for nonblank text.
+When this node is the connected auto-continuation Delegate, **Message** activates
+automatically for nonblank text.
 When one model response contains multiple tool calls, Rivet creates one real,
 parallel Delegate invocation per call. Every invocation gets its own run page,
 scalar input and outputs, and Message/Tool Name/Tool Arguments/Output/Tool

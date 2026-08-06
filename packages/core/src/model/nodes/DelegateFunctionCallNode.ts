@@ -84,7 +84,7 @@ export class DelegateFunctionCallNodeImpl extends NodeImpl<DelegateFunctionCallN
     outputs.push({
       id: 'assistant-message' as PortId,
       dataType: 'string',
-      title: 'Message (fires before tool call invocation)',
+      title: 'Message',
       description:
         'Nonblank text the assistant emitted alongside a connected tool-call round. This output fires before the tools are invoked.',
     });
