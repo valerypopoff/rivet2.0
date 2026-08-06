@@ -174,6 +174,14 @@ highlighting or JSON stringification), so whitespace and line breaks remain
 inspectable. `LLM Chat` uses the same canvas-body presentation: wrapped lines
 within a setting stay compact, individual settings are separated, and its
 model/configuration group is separated from generation or invocation behavior.
+Inline LLM Chat shows its local model/provider and generation settings plus
+every active, non-default request behavior: provider-native capabilities,
+response-format metadata, tool policy, stream/cache behavior, headers, extra
+provider options, and retry settings. In **From profile** mode it shows only
+the configuration source and those invocation-owned settings, never attempting
+to guess the dynamic profile's provider configuration. Optional output toggles
+are deliberately omitted from this digest because their enabled output ports
+are already visible on the node.
 
 `Tool Calls` is declared and emitted only when LLM Chat's own `Tool use` setting
 is enabled. Profile mode does not override that invocation-level choice: a

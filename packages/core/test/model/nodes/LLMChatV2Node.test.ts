@@ -17,6 +17,7 @@ import {
   cloneLLMChatV2EditorCacheOutputs,
   resolveLLMChatV2RuntimeConfig,
 } from '../../../src/model/chat-v2/llmChatV2NodeRuntime.js';
+import { getLLMChatV2BodySections } from '../../../src/model/chat-v2/llmChatV2Body.js';
 
 function createNode(data: Partial<LLMChatV2Node['data']> = {}) {
   return new LLMChatV2NodeImpl({
@@ -409,6 +410,181 @@ describe('LLMChatV2NodeImpl', () => {
       /<span style="opacity: 0\.55">Reasoning effort:<\/span> Minimal/,
     );
     assert.doesNotMatch(getMarkdownBodyText(createNode({ provider: 'custom' })), /Reasoning effort:/);
+  });
+
+  it('shows every active non-output setting in the node body projection', () => {
+    const inlineSections = getLLMChatV2BodySections({
+      ...createNode().data,
+      provider: 'custom',
+      model: 'custom-model',
+      useModelInput: true,
+      apiKeySource: 'input',
+      customProviderApi: 'responses',
+      useCustomProviderBaseURLInput: true,
+      useTemperatureInput: true,
+      useTopPInput: true,
+      responseFormat: 'json_schema',
+      useResponseSchemaNameInput: true,
+      responseSchemaDescription: 'A strict response.',
+      useAsGraphPartialOutput: false,
+      cache: true,
+      headers: [{ key: 'x-provider-mode', value: 'preview' }],
+      extraProviderOptions: '{\n  "reasoning": "high"\n}',
+      retryOnNon200: true,
+      retryOnNon200RepeatTimes: 2,
+      retryOnNon200CooldownMs: 250,
+      outputUsage: true,
+      outputReasoning: true,
+      outputLLMAttempts: true,
+      outputRequestBody: true,
+      outputResponseBody: true,
+    });
+    const inlineFields = inlineSections.flatMap((section) => section.fields);
+
+    assert.deepEqual(
+      inlineFields.map((field) => [field.label, field.value]),
+      [
+        ['Provider', 'Custom'],
+        ['API', 'Custom Responses'],
+        ['Base URL', '(Using Input)'],
+        ['Model', '(Using Input)'],
+        ['API key source', 'Input port'],
+        ['Temperature', '(Using Input)'],
+        ['Max output tokens', '1024'],
+        ['Top P', '(Using Input)'],
+        ['Response format', 'JSON schema'],
+        ['Schema name', '(Using Input)'],
+        ['Schema description', 'A strict response.'],
+        ['Stream response', 'Disabled'],
+        ['Editor cache (legacy)', 'Enabled'],
+        ['Retry on non-200', 'Enabled'],
+        ['Repeat times', '2'],
+        ['Cooldown, ms', '250'],
+        ['Headers', 'x-provider-mode: preview'],
+      ],
+    );
+    assert.deepEqual(inlineSections.at(-1)?.snippet, {
+      label: 'Extra provider options',
+      text: '{\n  "reasoning": "high"\n}',
+    });
+    assert.equal(
+      inlineFields.some((field) => field.label.startsWith('Output ')),
+      false,
+    );
+
+    const toolFields = getLLMChatV2BodySections({
+      ...createNode().data,
+      useToolCalling: true,
+      toolChoice: 'function',
+      toolChoiceFunction: 'searchBook',
+      parallelToolCalls: true,
+      autoContinueToolCalls: true,
+      maxToolRounds: 5,
+    }).flatMap((section) => section.fields);
+    assert.deepEqual(
+      toolFields.slice(-5).map((field) => [field.label, field.value]),
+      [
+        ['Tool use', 'Enabled'],
+        ['Tool choice', 'Specific tool (searchBook)'],
+        ['Parallel toolcalls', 'Enabled'],
+        ['Auto-continue toolcalls', 'Enabled'],
+        ['Maximum tool rounds', '5'],
+      ],
+    );
+
+    const profileFields = getLLMChatV2BodySections({
+      ...createNode().data,
+      configurationMode: 'profile',
+      useToolCalling: true,
+      retryOnNon200: true,
+    }).flatMap((section) => section.fields);
+    assert.deepEqual(profileFields[0], { label: 'Configuration', value: 'From LLM Profiles input' });
+    assert.ok(profileFields.some((field) => field.label === 'Tool use'));
+    assert.ok(profileFields.some((field) => field.label === 'Retry on non-200'));
+    assert.equal(
+      profileFields.some((field) => field.label === 'Provider'),
+      false,
+    );
+  });
+
+  it('shows one provider-independent reasoning-effort row alongside provider-native settings', () => {
+    const fields = getLLMChatV2BodySections({
+      ...createNode().data,
+      provider: 'openai',
+      openAIReasoningEffort: 'high',
+      openAIReasoningSummary: 'concise',
+      enableOpenAIWebSearch: true,
+      enableOpenAICodeInterpreter: true,
+    }).flatMap((section) => section.fields);
+
+    assert.deepEqual(
+      fields.filter((field) => field.label === 'Reasoning effort'),
+      [{ label: 'Reasoning effort', value: 'High' }],
+    );
+    assert.deepEqual(fields.filter((field) => field.label !== 'Reasoning effort').slice(-3), [
+      { label: 'Reasoning summary', value: 'concise' },
+      { label: 'Web search', value: 'Enabled (Medium)' },
+      { label: 'Code interpreter', value: 'Enabled' },
+    ]);
+  });
+
+  it('shows every enabled Anthropic and Google provider-native setting in the node body projection', () => {
+    const anthropicFields = getLLMChatV2BodySections({
+      ...createNode().data,
+      provider: 'anthropic',
+      anthropicThinkingMode: 'enabled',
+      anthropicEffort: 'max',
+      anthropicThinkingBudget: 2048,
+      anthropicCacheControlTtl: '1h',
+    }).flatMap((section) => section.fields);
+    const googleFields = getLLMChatV2BodySections({
+      ...createNode().data,
+      provider: 'google',
+      googleThinkingLevel: 'minimal',
+      googleThinkingBudget: 1024,
+      googleIncludeThoughts: true,
+      enableGoogleSearchGrounding: true,
+      enableGoogleUrlContext: true,
+    }).flatMap((section) => section.fields);
+
+    assert.deepEqual(
+      anthropicFields.filter((field) =>
+        ['Reasoning effort', 'Thinking mode', 'Thinking budget', 'Cache breakpoint TTL'].includes(field.label),
+      ),
+      [
+        { label: 'Reasoning effort', value: 'Max' },
+        { label: 'Thinking mode', value: 'Enabled' },
+        { label: 'Thinking budget', value: '2048' },
+        { label: 'Cache breakpoint TTL', value: '1 hour' },
+      ],
+    );
+    assert.deepEqual(
+      googleFields.filter((field) =>
+        ['Reasoning effort', 'Thinking budget', 'Include thoughts', 'Google search grounding', 'URL context'].includes(
+          field.label,
+        ),
+      ),
+      [
+        { label: 'Reasoning effort', value: 'Minimal' },
+        { label: 'Thinking budget', value: '1024' },
+        { label: 'Include thoughts', value: 'Enabled' },
+        { label: 'Google search grounding', value: 'Enabled' },
+        { label: 'URL context', value: 'Enabled' },
+      ],
+    );
+  });
+
+  it('keeps extra provider options in the Markdown body fallback without treating them as markup', () => {
+    const body = getMarkdownBodyText(
+      createNode({
+        extraProviderOptions: '{\n  "note": "<script>not markup</script>"\n}',
+      }),
+    );
+
+    assert.match(
+      body,
+      /Extra provider options:<\/span>\n<pre>\{\n  "note": "&lt;script&gt;not markup&lt;\/script&gt;"\n\}<\/pre>/,
+    );
   });
 
   it('places error behavior after all LLM settings sections and retires editor cache', async () => {

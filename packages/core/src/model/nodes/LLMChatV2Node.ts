@@ -61,6 +61,22 @@ function getBodyLine(label: string, value: string): string {
   return `<span style="opacity: 0.55">${label}:</span> ${escapeMarkdownInline(value)}`;
 }
 
+function escapeMarkdownPreformatted(value: string): string {
+  return value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+function getBodySectionText(section: ReturnType<typeof getLLMChatV2BodySections>[number]): string {
+  return [
+    ...section.fields.map((field) => getBodyLine(field.label, field.value)),
+    ...(section.snippet
+      ? [
+          `<span style="opacity: 0.55">${section.snippet.label}:</span>`,
+          `<pre>${escapeMarkdownPreformatted(section.snippet.text)}</pre>`,
+        ]
+      : []),
+  ].join('\n');
+}
+
 export class LLMChatV2NodeImpl extends NodeImpl<LLMChatV2Node> {
   static create(): LLMChatV2Node {
     return {
@@ -302,9 +318,7 @@ export class LLMChatV2NodeImpl extends NodeImpl<LLMChatV2Node> {
     return {
       type: 'markdown',
       disableLinks: true,
-      text: getLLMChatV2BodySections(this.data)
-        .map((section) => section.fields.map((field) => getBodyLine(field.label, field.value)).join('\n'))
-        .join('\n\n'),
+      text: getLLMChatV2BodySections(this.data).map(getBodySectionText).join('\n\n'),
     };
   }
 
