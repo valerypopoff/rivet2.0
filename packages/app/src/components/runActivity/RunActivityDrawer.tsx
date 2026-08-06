@@ -355,9 +355,9 @@ const drawerStyles = css`
     display: grid;
     grid-template-columns:
       12px
-      minmax(150px, var(--run-activity-column-node-name))
-      minmax(130px, var(--run-activity-column-graph-name))
-      minmax(120px, var(--run-activity-column-node-type))
+      minmax(150px, var(--run-activity-column-node-name, 230px))
+      minmax(130px, var(--run-activity-column-graph-name, 180px))
+      minmax(120px, var(--run-activity-column-node-type, 150px))
       minmax(180px, 1fr)
       84px
       72px
@@ -492,6 +492,16 @@ const drawerStyles = css`
     padding: 8px 11px;
     margin: 0;
     text-align: left;
+  }
+
+  /*
+   * CollapsiblePanel's generic trigger style is injected from a separately
+   * rendered component. Keep the dense table layout more specific so Emotion
+   * insertion order can never turn a row back into a flex button.
+   */
+  && .run-activity-row-toggle {
+    display: grid;
+    justify-content: initial;
   }
 
   .run-activity-row-toggle > .label {
@@ -678,8 +688,8 @@ const drawerStyles = css`
     .run-activity-row-toggle {
       grid-template-columns:
         12px
-        minmax(150px, var(--run-activity-column-node-name))
-        minmax(130px, var(--run-activity-column-graph-name))
+        minmax(150px, var(--run-activity-column-node-name, 230px))
+        minmax(130px, var(--run-activity-column-graph-name, 180px))
         minmax(180px, 1fr)
         84px
         72px
@@ -689,8 +699,8 @@ const drawerStyles = css`
     .run-activity-column-header {
       grid-template-columns:
         12px
-        minmax(150px, var(--run-activity-column-node-name))
-        minmax(130px, var(--run-activity-column-graph-name))
+        minmax(150px, var(--run-activity-column-node-name, 230px))
+        minmax(130px, var(--run-activity-column-graph-name, 180px))
         minmax(180px, 1fr)
         84px
         72px
@@ -710,7 +720,7 @@ const drawerStyles = css`
       grid-template-columns:
         12px
         minmax(150px, 1fr)
-        minmax(130px, var(--run-activity-column-graph-name))
+        minmax(130px, var(--run-activity-column-graph-name, 180px))
         84px
         72px
         24px;

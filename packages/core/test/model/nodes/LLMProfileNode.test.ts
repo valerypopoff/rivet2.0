@@ -10,8 +10,16 @@ import {
   llmProfileStringDataKeys,
 } from '../../../src/model/chat-v2/llmProfileFieldRegistry.js';
 import { normalizeLLMProfileValue } from '../../../src/model/chat-v2/llmProfile.js';
+import { getLLMProfileBodySections } from '../../../src/model/chat-v2/llmProfileBody.js';
 import { llmProfileInputIds } from '../../../src/model/chat-v2/llmProfileTypes.js';
 import { resolveLLMChatV2RuntimeConfig } from '../../../src/model/chat-v2/llmChatV2NodeRuntime.js';
+
+function getMarkdownBodyText(node: LLMProfileNodeImpl): string {
+  const body = node.getBody();
+  assert.equal(typeof body, 'object');
+  assert.equal(body.type, 'markdown');
+  return body.text;
+}
 
 function createProfileNode(data: Partial<LLMProfileNode['data']> = {}) {
   const node = LLMProfileNodeImpl.create();
@@ -81,6 +89,128 @@ describe('LLMProfileNodeImpl', () => {
       node.getInputDefinitions().map((input) => input.id),
       ['model', 'apiKey', 'customProviderBaseURL', 'temperature', 'headers', 'extraProviderOptions'],
     );
+  });
+
+  it('renders every configured profile setting and parameter in its canvas body', () => {
+    const body = getMarkdownBodyText(
+      createProfileNode({
+        provider: 'custom',
+        customProviderApi: 'responses',
+        model: 'custom-model',
+        apiKeySource: 'input',
+        customProviderBaseURL: 'https://example.test/v1/responses',
+        useCustomProviderBaseURLInput: true,
+        useModelInput: true,
+        useTemperatureInput: true,
+        useMaxTokensInput: true,
+        topP: 0.75,
+        topK: 42,
+        presencePenalty: 0.2,
+        frequencyPenalty: -0.1,
+        stopSequences: ['END', 'STOP'],
+        seed: 123,
+        headers: [{ key: 'x-project', value: 'alpha' }],
+        extraProviderOptions: '{"reasoning_effort":"high"}',
+      }),
+    );
+
+    for (const expectedLine of [
+      'Provider:</span> Custom Responses',
+      'Base URL:</span> \\(Using Input\\)',
+      'Model:</span> \\(Using Input\\)',
+      'API key source:</span> Input port',
+      'Temperature:</span> \\(Using Input\\)',
+      'Max output tokens:</span> \\(Using Input\\)',
+      'Top P:</span> 0\\.75',
+      'Top K:</span> 42',
+      'Presence penalty:</span> 0\\.2',
+      'Frequency penalty:</span> \\-0\\.1',
+      'Stop sequences:</span> &quot;END&quot;, &quot;STOP&quot;',
+      'Seed:</span> 123',
+      'Headers:</span> x\\-project: alpha',
+    ]) {
+      assert.ok(body.includes(expectedLine), `Missing profile body line: ${expectedLine}`);
+    }
+    assert.ok(body.includes('Extra provider options:</span> '));
+    assert.ok(body.includes('\\{&quot;reasoning\\_effort&quot;:&quot;high&quot;\\}'));
+  });
+
+  it('keeps configured extra provider options as an unmodified body snippet', () => {
+    const options = '{\n  "foo": "bar"\n}';
+    const sections = getLLMProfileBodySections(
+      createProfileNode({
+        provider: 'custom',
+        extraProviderOptions: options,
+      }).data,
+    );
+
+    const advancedSection = sections.find((section) => section.id === 'advanced');
+    assert.equal(advancedSection?.snippet?.label, 'Extra provider options');
+    assert.equal(advancedSection?.snippet?.text, options);
+  });
+
+  it('renders enabled provider-native settings in its canvas body', () => {
+    const body = getMarkdownBodyText(
+      createProfileNode({
+        provider: 'openai',
+        openAIPreviousResponseId: 'resp_123',
+        openAIReasoningEffort: 'high',
+        openAIReasoningSummary: 'detailed',
+        enableOpenAIWebSearch: true,
+        openAIWebSearchContextSize: 'high',
+        enableOpenAICodeInterpreter: true,
+      }),
+    );
+
+    for (const expectedLine of [
+      'Previous response ID:</span> resp\\_123',
+      'Reasoning effort:</span> High',
+      'Reasoning summary:</span> detailed',
+      'Web search:</span> Enabled \\(High\\)',
+      'Code interpreter:</span> Enabled',
+    ]) {
+      assert.ok(body.includes(expectedLine), `Missing profile body line: ${expectedLine}`);
+    }
+  });
+
+  it('renders configured Anthropic and Google capability settings in its canvas body', () => {
+    const anthropicBody = getMarkdownBodyText(
+      createProfileNode({
+        provider: 'anthropic',
+        anthropicThinkingMode: 'enabled',
+        anthropicEffort: 'max',
+        anthropicThinkingBudget: 4096,
+        anthropicCacheControlTtl: '1h',
+      }),
+    );
+    const googleBody = getMarkdownBodyText(
+      createProfileNode({
+        provider: 'google',
+        googleThinkingLevel: 'high',
+        useGoogleThinkingBudgetInput: true,
+        googleIncludeThoughts: true,
+        enableGoogleSearchGrounding: true,
+        enableGoogleUrlContext: true,
+      }),
+    );
+
+    for (const expectedLine of [
+      'Thinking mode:</span> Enabled',
+      'Effort:</span> Max',
+      'Thinking budget:</span> 4096',
+      'Cache breakpoint TTL:</span> 1 hour',
+    ]) {
+      assert.ok(anthropicBody.includes(expectedLine), `Missing Anthropic profile body line: ${expectedLine}`);
+    }
+    for (const expectedLine of [
+      'Thinking level:</span> High',
+      'Thinking budget:</span> \\(Using Input\\)',
+      'Include thoughts:</span> Enabled',
+      'Google search grounding:</span> Enabled',
+      'URL context:</span> Enabled',
+    ]) {
+      assert.ok(googleBody.includes(expectedLine), `Missing Google profile body line: ${expectedLine}`);
+    }
   });
 
   it('keeps the full recoverable Profile input contract aligned with runtime ports', () => {
@@ -174,7 +304,19 @@ describe('LLMProfileNodeImpl', () => {
       customProviderApi: 'response' as any,
     });
 
+    assert.ok(getMarkdownBodyText(node).includes('Provider:</span> Custom \\(response\\)'));
     await assert.rejects(() => node.process({}, createRuntimeContext()), /Unsupported Custom provider API: response/);
+  });
+
+  it('keeps the canvas body renderable for malformed legacy optional values', () => {
+    const node = createProfileNode({
+      provider: 'custom',
+      headers: undefined as any,
+      stopSequences: [42] as any,
+      extraProviderOptions: { malformed: true } as any,
+    });
+
+    assert.doesNotThrow(() => getMarkdownBodyText(node));
   });
 
   it('resolves input-driven settings and embeds the resolved API key in the profile value', async () => {

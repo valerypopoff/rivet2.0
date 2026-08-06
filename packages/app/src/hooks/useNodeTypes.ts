@@ -26,6 +26,8 @@ import { compareNodeDescriptor } from '../components/nodes/CompareNode.js';
 import { coalesceNodeDescriptor } from '../components/nodes/CoalesceNode.js';
 import { passthroughNodeDescriptor } from '../components/nodes/PassthroughNode.js';
 import { dataBusNodeDescriptor } from '../components/nodes/DataBusNode.js';
+import { llmChatV2NodeDescriptor } from '../components/nodes/LLMChatV2Node.js';
+import { llmProfileNodeDescriptor } from '../components/nodes/LLMProfileNode.js';
 import { useAtomValue } from 'jotai';
 import { useProjectNodeRegistry } from './useProjectNodeRegistry';
 import type { NodeOutputCopyValueProjector } from '../utils/executionDataCopyValue.js';
@@ -89,6 +91,8 @@ const overriddenDescriptors: Partial<NodeComponentDescriptors> = {
   coalesce: coalesceNodeDescriptor,
   passthrough: passthroughNodeDescriptor,
   dataBus: dataBusNodeDescriptor,
+  llmChatV2: llmChatV2NodeDescriptor,
+  llmProfile: llmProfileNodeDescriptor,
 };
 
 export function useNodeTypes(): NodeComponentDescriptors {

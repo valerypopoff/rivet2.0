@@ -294,12 +294,16 @@ describe('LLMChatV2NodeImpl', () => {
     assert.equal(
       getMarkdownBodyText(node),
       [
-        '<span style="opacity: 0.55">Provider:</span> Custom',
-        '<span style="opacity: 0.55">Base URL:</span> https://api\\.cerebras\\.ai/v1',
-        '<span style="opacity: 0.55">Model:</span> llama\\-custom',
-        '<span style="opacity: 0.55">Temperature:</span> 0\\.5',
-        '<span style="opacity: 0.55">Max output tokens:</span> 1024',
-      ].join('\n'),
+        [
+          '<span style="opacity: 0.55">Provider:</span> Custom',
+          '<span style="opacity: 0.55">Base URL:</span> https://api\\.cerebras\\.ai/v1',
+          '<span style="opacity: 0.55">Model:</span> llama\\-custom',
+        ].join('\n'),
+        [
+          '<span style="opacity: 0.55">Temperature:</span> 0\\.5',
+          '<span style="opacity: 0.55">Max output tokens:</span> 1024',
+        ].join('\n'),
+      ].join('\n\n'),
     );
   });
 

@@ -15,8 +15,8 @@ import {
   shouldIncludeLLMChatV2ToolCalls,
   type LLMChatV2Node,
 } from '../chat-v2/llmChatV2NodeData.js';
+import { getLLMChatV2BodySections } from '../chat-v2/llmChatV2Body.js';
 import { isLLMChatV2StructuredResponseFormat } from '../chat-v2/chatV2FeatureCompatibility.js';
-import { getChatV2ModelInfo } from '../chat-v2/modelRegistry.js';
 import { LLMInvocationJournal } from '../chat-v2/llmInvocationJournal.js';
 import { executeLLMInvocation } from '../chat-v2/llmInvocationCoordinator.js';
 import {
@@ -31,12 +31,6 @@ import {
   resolveLLMChatV2RuntimeProviderOptions,
 } from '../chat-v2/llmChatV2NodeRuntime.js';
 import { projectLLMChatV2EditorCacheHit, writeLLMChatV2EditorCache } from '../chat-v2/llmChatV2CacheBoundary.js';
-import {
-  anthropicEffortOptions,
-  getChatV2ProviderLabel,
-  googleThinkingLevelOptions,
-  openAIReasoningEffortOptions,
-} from '../chat-v2/providerOptions.js';
 
 export type {
   LLMChatV2ApiKeySource,
@@ -52,40 +46,6 @@ function usesBaseURLInput(data: LLMChatV2Node['data']): boolean {
   return data.provider === 'custom' && data.useCustomProviderBaseURLInput;
 }
 
-function getCustomProviderBaseURLBodyValue(data: LLMChatV2Node['data']): string | undefined {
-  if (data.provider !== 'custom') {
-    return undefined;
-  }
-
-  if (data.useCustomProviderBaseURLInput) {
-    return '(Using Input)';
-  }
-
-  const baseURL = data.customProviderBaseURL.trim();
-  return baseURL || undefined;
-}
-
-function getOptionLabel(options: readonly { value: string; label: string }[], value: string | undefined): string {
-  return options.find((option) => option.value === (value ?? ''))?.label ?? value ?? 'Default';
-}
-
-function getProviderBodyLabel(data: LLMChatV2Node['data']): string {
-  return data.provider === 'custom' ? 'Custom' : getChatV2ProviderLabel(data.provider);
-}
-
-function getReasoningEffortBodyValue(data: LLMChatV2Node['data']): string | undefined {
-  switch (data.provider) {
-    case 'openai':
-      return getOptionLabel(openAIReasoningEffortOptions, data.openAIReasoningEffort);
-    case 'anthropic':
-      return getOptionLabel(anthropicEffortOptions, data.anthropicEffort);
-    case 'google':
-      return getOptionLabel(googleThinkingLevelOptions, data.googleThinkingLevel);
-    case 'custom':
-      return undefined;
-  }
-}
-
 function escapeMarkdownInline(value: string): string {
   return value
     .replace(/\r/g, '\\r')
@@ -99,25 +59,6 @@ function escapeMarkdownInline(value: string): string {
 
 function getBodyLine(label: string, value: string): string {
   return `<span style="opacity: 0.55">${label}:</span> ${escapeMarkdownInline(value)}`;
-}
-
-function getOptionalNumberBodyLine(label: string, value: number | undefined, usesInput: boolean): string | undefined {
-  if (usesInput) {
-    return getBodyLine(label, '(Using Input)');
-  }
-
-  return value === undefined ? undefined : getBodyLine(label, `${value}`);
-}
-
-function getStopSequencesBodyLine(data: LLMChatV2Node['data']): string | undefined {
-  if (data.useStopSequencesInput) {
-    return getBodyLine('Stop sequences', '(Using Input)');
-  }
-
-  const stopSequences = (data.stopSequences ?? []).filter((sequence) => sequence.length > 0);
-  return stopSequences.length === 0
-    ? undefined
-    : getBodyLine('Stop sequences', stopSequences.map((sequence) => JSON.stringify(sequence)).join(', '));
 }
 
 export class LLMChatV2NodeImpl extends NodeImpl<LLMChatV2Node> {
@@ -358,46 +299,12 @@ export class LLMChatV2NodeImpl extends NodeImpl<LLMChatV2Node> {
   }
 
   getBody(): NodeBodySpec {
-    if (this.data.configurationMode === 'profile') {
-      return {
-        type: 'markdown',
-        disableLinks: true,
-        text: [
-          getBodyLine('Configuration', 'From LLM Profiles input'),
-          ...(this.data.useToolCalling ? [getBodyLine('Tools', 'Enabled')] : []),
-          ...(this.data.responseFormat ? [getBodyLine('Response format', this.data.responseFormat)] : []),
-        ].join('\n'),
-      };
-    }
-
-    const modelInfo = getChatV2ModelInfo(this.data.provider, this.data.model);
-    const providerLabel = getProviderBodyLabel(this.data);
-    const baseURLValue = getCustomProviderBaseURLBodyValue(this.data);
-    const modelLine = modelInfo?.displayName ?? this.data.model;
-    const providerDetails = [
-      getBodyLine('Provider', providerLabel),
-      ...(baseURLValue ? [getBodyLine('Base URL', baseURLValue)] : []),
-      getBodyLine('Model', modelLine),
-    ];
-    const reasoningEffortValue = getReasoningEffortBodyValue(this.data);
-
     return {
       type: 'markdown',
       disableLinks: true,
-      text: [
-        ...providerDetails,
-        ...(reasoningEffortValue ? [getBodyLine('Reasoning effort', reasoningEffortValue)] : []),
-        getBodyLine('Temperature', this.data.useTemperatureInput ? '(Using Input)' : `${this.data.temperature}`),
-        getBodyLine('Max output tokens', this.data.useMaxTokensInput ? '(Using Input)' : `${this.data.maxTokens}`),
-        getOptionalNumberBodyLine('Top P', this.data.topP, this.data.useTopPInput),
-        getOptionalNumberBodyLine('Top K', this.data.topK, this.data.useTopKInput),
-        getOptionalNumberBodyLine('Presence penalty', this.data.presencePenalty, this.data.usePresencePenaltyInput),
-        getOptionalNumberBodyLine('Frequency penalty', this.data.frequencyPenalty, this.data.useFrequencyPenaltyInput),
-        getStopSequencesBodyLine(this.data),
-        getOptionalNumberBodyLine('Seed', this.data.seed, this.data.useSeedInput),
-      ]
-        .filter((line): line is string => line !== undefined)
-        .join('\n'),
+      text: getLLMChatV2BodySections(this.data)
+        .map((section) => section.fields.map((field) => getBodyLine(field.label, field.value)).join('\n'))
+        .join('\n\n'),
     };
   }
 

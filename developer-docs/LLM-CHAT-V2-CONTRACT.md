@@ -158,6 +158,23 @@ externally constructed values. This prevents stale hidden Chat inputs from
 changing a profile's model, credentials, headers, generation settings, or
 thinking budget at runtime.
 
+The `LLM Profile` canvas body is a read-only configuration digest. It shows
+every configured profile-owned setting that affects a provider request:
+provider/model/API mode and key source, static or input-driven generation
+parameters, provider-native reasoning and capability settings, Custom base URL
+and key lookup names, headers, and extra provider options. Input-driven fields
+are explicitly labelled **(Using Input)**. The body does not resolve or display
+the API-key value itself because that value is produced only while the node
+runs; its configured source remains visible. The canvas renderer groups the
+digest into model/credentials, generation, provider-native, and advanced
+sections with thin separators. Wrapped lines within one setting remain compact,
+while individual settings have a small vertical gap. Configured **Extra provider
+options** render as their original plain-text snippet (without syntax
+highlighting or JSON stringification), so whitespace and line breaks remain
+inspectable. `LLM Chat` uses the same canvas-body presentation: wrapped lines
+within a setting stay compact, individual settings are separated, and its
+model/configuration group is separated from generation or invocation behavior.
+
 `Tool Calls` is declared and emitted only when LLM Chat's own `Tool use` setting
 is enabled. Profile mode does not override that invocation-level choice: a
 profile may enable provider-native tools, but a Chat with Tool use off has no
