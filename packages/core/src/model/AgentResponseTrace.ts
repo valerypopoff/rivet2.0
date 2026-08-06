@@ -20,6 +20,7 @@ export type AgentModelCallTrace = {
   processId: ProcessId;
   provider: string;
   model: string;
+  customProviderApi?: ChatV2CallTraceEvent['customProviderApi'];
   outcome: ChatV2CallTraceEvent['outcome'];
   attemptIndex: number;
   profileIndex?: number;
@@ -214,6 +215,7 @@ function toModelCallTrace(event: Extract<AgentTraceEvent, { type: 'llm-call-fini
     processId: event.processId,
     provider: event.provider,
     model: event.model,
+    ...(event.customProviderApi == null ? {} : { customProviderApi: event.customProviderApi }),
     outcome: event.outcome,
     attemptIndex: event.attemptIndex,
     ...(event.profileIndex == null ? {} : { profileIndex: event.profileIndex }),
@@ -433,6 +435,7 @@ function isAgentModelCallTrace(value: unknown): boolean {
       'processId',
       'provider',
       'model',
+      'customProviderApi',
       'outcome',
       'attemptIndex',
       'profileIndex',
@@ -448,6 +451,9 @@ function isAgentModelCallTrace(value: unknown): boolean {
     typeof value.processId === 'string' &&
     typeof value.provider === 'string' &&
     typeof value.model === 'string' &&
+    (value.customProviderApi === undefined ||
+      value.customProviderApi === 'completions' ||
+      value.customProviderApi === 'responses') &&
     (value.outcome === 'success' || value.outcome === 'provider-failure' || value.outcome === 'aborted') &&
     isNonNegativeInteger(value.attemptIndex) &&
     isOptionalNonNegativeInteger(value.profileIndex) &&

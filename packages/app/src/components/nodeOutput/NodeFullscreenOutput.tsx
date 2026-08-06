@@ -217,10 +217,19 @@ const fullscreenOutputCss = css`
   }
 
   .node-output-error-message {
-    color: var(--error-light);
+    /* The red system-error background is sufficient; a border competes with
+       the normal output sections below it. */
+    background: var(--node-output-error-bg);
+    border-radius: 4px;
+    color: var(--foreground-bright);
     margin-bottom: 16px;
     overflow-wrap: anywhere;
+    padding: 12px;
     white-space: pre-wrap;
+  }
+
+  .node-output-error-message:last-child {
+    margin-bottom: 0;
   }
 
   .${MATCH_CLASS} {

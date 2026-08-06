@@ -24,6 +24,7 @@ import type { CodeRunner } from '../integrations/CodeRunner.js';
 import type { ProjectReferenceLoader } from './ProjectReferenceLoader.js';
 import type { GraphBoundary } from './GraphBoundaryCache.js';
 import type { GraphProgress } from './GraphProgress.js';
+import type { CustomProviderApi } from './chat-v2/customProviderApi.js';
 import type {
   RivetStoredValue,
   RivetStoredValueCacheResult,
@@ -90,6 +91,8 @@ export type ChatV2CallFinishedEvent = {
   processId: ProcessId;
   provider: ChatV2Provider;
   model: string;
+  /** Selected wire contract when provider is Custom. */
+  customProviderApi?: CustomProviderApi;
   outcome: ChatV2CallOutcome;
   finishReason?: string;
   rawUsage?: ChatV2CallRawUsage;

@@ -146,6 +146,25 @@ function createChatV2CapturedBodiesOutput(bodies: unknown[] | undefined): Output
   return inferType(bodies.length === 1 ? bodies[0] : bodies);
 }
 
+export function createChatV2CapturedBodyOutputs(
+  options: Pick<
+    RunChatV2PipelineOptions,
+    'requestBodies' | 'responseBodies' | 'outputRequestBody' | 'outputResponseBody'
+  >,
+): Outputs {
+  const outputs: Outputs = {};
+
+  if (shouldOutputChatV2RequestBody(options)) {
+    outputs[CHAT_V2_REQUEST_BODY_PORT_ID] = createChatV2CapturedBodiesOutput(options.requestBodies);
+  }
+
+  if (shouldOutputChatV2ResponseBody(options)) {
+    outputs[CHAT_V2_RESPONSE_BODY_PORT_ID] = createChatV2CapturedBodiesOutput(options.responseBodies);
+  }
+
+  return outputs;
+}
+
 export function createChatV2CommonOutputs({
   requestMessages,
   response,
@@ -199,13 +218,15 @@ export function createChatV2CommonOutputs({
     outputs['reasoning' as PortId] = createChatV2ReasoningOutput(reasoning);
   }
 
-  if (shouldOutputChatV2RequestBody({ outputRequestBody })) {
-    outputs[CHAT_V2_REQUEST_BODY_PORT_ID] = createChatV2CapturedBodiesOutput(requestBodies);
-  }
-
-  if (shouldOutputChatV2ResponseBody({ outputResponseBody })) {
-    outputs[CHAT_V2_RESPONSE_BODY_PORT_ID] = createChatV2CapturedBodiesOutput(responseBodies);
-  }
+  Object.assign(
+    outputs,
+    createChatV2CapturedBodyOutputs({
+      requestBodies,
+      responseBodies,
+      outputRequestBody,
+      outputResponseBody,
+    }),
+  );
 
   return outputs;
 }

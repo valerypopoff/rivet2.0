@@ -5,6 +5,7 @@ import type { ChatMessage } from '../../../src/model/DataValue.js';
 import type { PortId } from '../../../src/model/NodeBase.js';
 import type { StreamedFunctionCall } from '../../../src/model/chat/streamChatResponse.js';
 import {
+  createChatV2CapturedBodyOutputs,
   createChatV2CommonOutputs,
   normalizeChatV2Usage,
 } from '../../../src/model/chat-v2/chatV2Outputs.js';
@@ -227,6 +228,34 @@ describe('chatV2Outputs', () => {
     assert.equal('responseBody' in outputs, false);
   });
 
+  it('projects captured request and response bodies independently for failed node diagnostics', () => {
+    assert.deepEqual(
+      createChatV2CapturedBodyOutputs({
+        requestBodies: [{ model: 'test' }],
+        responseBodies: [{ error: { message: 'Denied' } }],
+        outputRequestBody: true,
+        outputResponseBody: true,
+      }),
+      {
+        requestBody: { type: 'object', value: { model: 'test' } },
+        responseBody: { type: 'object', value: { error: { message: 'Denied' } } },
+      },
+    );
+
+    assert.deepEqual(
+      createChatV2CapturedBodyOutputs({
+        requestBodies: [{ model: 'test' }],
+        responseBodies: [],
+        outputRequestBody: true,
+        outputResponseBody: true,
+      }),
+      {
+        requestBody: { type: 'object', value: { model: 'test' } },
+        responseBody: { type: 'control-flow-excluded', value: undefined },
+      },
+    );
+  });
+
   it('does not emit tool calls when Tool use did not declare that output', () => {
     const outputs = createChatV2CommonOutputs({
       requestMessages,
@@ -243,5 +272,4 @@ describe('chatV2Outputs', () => {
 
     assert.equal('function-calls' in outputs, false);
   });
-
 });

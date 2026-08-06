@@ -1,6 +1,10 @@
 import { type FC, type ReactNode, useEffect, useRef } from 'react';
 import CrossIcon from 'majesticons/line/multiply-line.svg?react';
-import type { AgentResponseTrace } from '@valerypopoff/rivet2-core';
+import {
+  getCustomProviderApiContract,
+  type AgentModelCallTrace,
+  type AgentResponseTrace,
+} from '@valerypopoff/rivet2-core';
 import { css } from '@emotion/react';
 import Modal, { ModalBody, ModalTransition } from '@atlaskit/modal-dialog';
 import { AppModalHeader } from '../AppModalHeader.js';
@@ -331,7 +335,7 @@ const ResponseInspectorContent: FC<{ trace?: AgentResponseTrace; includeSubtitle
           {trace.modelCalls.map((call) => (
             <article key={call.callId}>
               <strong>
-                {call.provider} · {call.model}
+                {formatModelCallProvider(call)} · {call.model}
               </strong>
               <span>
                 {call.outcome}
@@ -361,6 +365,10 @@ const ResponseInspectorContent: FC<{ trace?: AgentResponseTrace; includeSubtitle
     )}
   </div>
 );
+
+function formatModelCallProvider(call: Pick<AgentModelCallTrace, 'provider' | 'customProviderApi'>): string {
+  return call.provider === 'custom' ? getCustomProviderApiContract(call.customProviderApi).label : call.provider;
+}
 
 const MetricGroup: FC<{ title: string; description?: string; children: ReactNode }> = ({
   title,

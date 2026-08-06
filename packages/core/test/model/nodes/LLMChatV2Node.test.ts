@@ -100,6 +100,7 @@ describe('LLMChatV2NodeImpl', () => {
     assert.equal(node.data.customProviderApiKeyEnvVarName, 'CUSTOM_PROVIDER_API_KEY');
     assert.equal(node.data.customProviderBaseURL, '');
     assert.equal(node.data.useCustomProviderBaseURLInput, false);
+    assert.equal(node.data.customProviderApi, 'completions');
     assert.equal(node.data.baseURL, '');
     assert.equal(node.data.useBaseURLInput, false);
     assert.equal(node.data.extraProviderOptions, '');
@@ -212,6 +213,7 @@ describe('LLMChatV2NodeImpl', () => {
     );
     const envVarEditor = modelGroup.editors.find((editor: any) => editor.dataKey === 'customProviderApiKeyEnvVarName');
     const customBaseUrlEditor = modelGroup.editors.find((editor: any) => editor.dataKey === 'customProviderBaseURL');
+    const customProviderApiEditor = modelGroup.editors.find((editor: any) => editor.dataKey === 'customProviderApi');
     const providerAdvancedGroup = editors.find(
       (editor) => editor.type === 'group' && editor.label === 'Provider Advanced',
     ) as any;
@@ -224,6 +226,7 @@ describe('LLMChatV2NodeImpl', () => {
       [
         'provider',
         'customProviderBaseURL',
+        'customProviderApi',
         'LLMChatV2ModelCatalog',
         'apiKeySource',
         'customProviderApiKeyProgrammaticName',
@@ -262,6 +265,15 @@ describe('LLMChatV2NodeImpl', () => {
     assert.equal(customBaseUrlEditor.label, 'Provider base URL');
     assert.equal(customBaseUrlEditor.useInputToggleDataKey, 'useCustomProviderBaseURLInput');
     assert.equal(customBaseUrlEditor.hideIf({ provider: 'custom' }), false);
+    assert.equal(customProviderApiEditor.type, 'segmented');
+    assert.equal(customProviderApiEditor.label, 'API');
+    assert.equal(customProviderApiEditor.defaultValue, 'completions');
+    assert.deepEqual(customProviderApiEditor.options, [
+      { value: 'completions', label: 'Completions' },
+      { value: 'responses', label: 'Responses' },
+    ]);
+    assert.equal(customProviderApiEditor.hideIf({ provider: 'custom' }), false);
+    assert.equal(customProviderApiEditor.hideIf({ provider: 'openai' }), true);
     assert.equal(
       providerAdvancedGroup.editors.some((editor: any) => editor.dataKey === 'baseURL'),
       false,
@@ -508,7 +520,9 @@ describe('LLMChatV2NodeImpl', () => {
       'LLM response body follows LLM request body in the node output contract.',
     );
     assert.equal(
-      attemptsNode.getOutputDefinitions().some((output) => output.id === 'requestStatus' || output.id === 'requestError'),
+      attemptsNode
+        .getOutputDefinitions()
+        .some((output) => output.id === 'requestStatus' || output.id === 'requestError'),
       false,
     );
     assert.equal(
@@ -967,6 +981,23 @@ describe('LLMChatV2NodeImpl', () => {
     assert.deepEqual(
       resolveLLMChatV2RuntimeProviderOptions(
         createNode({
+          provider: 'custom',
+          customProviderApi: 'responses',
+          extraProviderOptions: '{ "reasoningEffort": "high", "store": false }',
+        }).data,
+        {},
+      ),
+      {
+        openai: {
+          reasoningEffort: 'high',
+          store: false,
+        },
+      },
+    );
+
+    assert.deepEqual(
+      resolveLLMChatV2RuntimeProviderOptions(
+        createNode({
           provider: 'openai',
           extraProviderOptions: '{ "reasoningEffort": "low", "store": false }',
           openAIReasoningEffort: 'high',
@@ -1050,6 +1081,18 @@ describe('LLMChatV2NodeImpl', () => {
         {},
       ),
       { custom: { parallel_tool_calls: true } },
+    );
+    assert.deepEqual(
+      resolveLLMChatV2RuntimeProviderOptions(
+        createNode({
+          provider: 'custom',
+          customProviderApi: 'responses',
+          useToolCalling: true,
+          parallelToolCalls: true,
+        }).data,
+        {},
+      ),
+      { openai: { parallelToolCalls: true } },
     );
     assert.equal(
       resolveLLMChatV2RuntimeProviderOptions(
@@ -1389,6 +1432,30 @@ describe('LLMChatV2NodeImpl', () => {
         response_format: { type: 'json_object' },
       },
     });
+  });
+
+  it('uses Vercel structured output for Custom provider Responses mode', async () => {
+    const node = createNode({
+      provider: 'custom',
+      customProviderApi: 'responses',
+      model: 'responses-compatible-model',
+      customProviderBaseURL: 'https://responses.example.test/v1/responses',
+      customProviderApiKeyEnvVarName: 'RESPONSES_API_KEY',
+      responseFormat: 'json',
+      extraProviderOptions: '{ "store": false }',
+      cache: true,
+    });
+    const runtime = await resolveLLMChatV2RuntimeConfig({
+      data: node.data,
+      nodeId: node.chartNode.id,
+      inputs: createPromptInputs(),
+      context: createRuntimeContextWithPluginEnv({ RESPONSES_API_KEY: 'responses-secret' }),
+    });
+
+    assert.ok(runtime.runOptions.responseOutput);
+    assert.deepEqual(runtime.runOptions.providerOptions, { openai: { store: false } });
+    assert.equal((runtime.runOptions.model as { provider?: string }).provider, 'custom.responses');
+    assert.equal(getCacheProviderConfig(runtime).baseURL, 'https://responses.example.test/v1');
   });
 
   it('treats Tool use and structured response formats as mutually exclusive', () => {
@@ -1880,6 +1947,90 @@ describe('LLMChatV2NodeImpl', () => {
     assert.match(getCacheProviderConfig(runtime).headers.Authorization, /^sha256:[a-f0-9]{64}$/);
   });
 
+  it('separates Custom API and endpoint-query cache identities without retaining query values', async () => {
+    const context = createRuntimeContextWithPluginEnv({
+      CUSTOM_CACHE_API_KEY: 'sk-custom-secret',
+    });
+    const common = {
+      provider: 'custom' as const,
+      model: 'shared-model',
+      customProviderApiKeyEnvVarName: 'CUSTOM_CACHE_API_KEY',
+      cache: true,
+    };
+    const resolve = (data: Partial<LLMChatV2Node['data']>) =>
+      resolveLLMChatV2RuntimeConfig({
+        data: createNode({ ...common, ...data }).data,
+        nodeId: 'custom-cache-node' as any,
+        inputs: createPromptInputs(),
+        context,
+      });
+
+    const legacyData = createNode({
+      ...common,
+      customProviderBaseURL: 'https://api.example.test/v1/chat/completions?api-version=secret-version',
+    }).data as LLMChatV2Node['data'] & { customProviderApi?: unknown };
+    delete legacyData.customProviderApi;
+    const legacy = await resolveLLMChatV2RuntimeConfig({
+      data: legacyData,
+      nodeId: 'custom-cache-node' as any,
+      inputs: createPromptInputs(),
+      context,
+    });
+    const completions = await resolve({
+      customProviderApi: 'completions',
+      customProviderBaseURL: 'https://api.example.test/v1?api-version=secret-version',
+    });
+    const changedQuery = await resolve({
+      customProviderApi: 'completions',
+      customProviderBaseURL: 'https://api.example.test/v1?api-version=other-secret-version',
+    });
+    const responses = await resolve({
+      customProviderApi: 'responses',
+      customProviderBaseURL: 'https://api.example.test/v1/responses?api-version=secret-version',
+    });
+
+    assert.equal(legacy.cacheKey, completions.cacheKey);
+    assert.notEqual(completions.cacheKey, changedQuery.cacheKey);
+    assert.notEqual(completions.cacheKey, responses.cacheKey);
+    for (const runtime of [legacy, completions, changedQuery, responses]) {
+      assert.ok(runtime.cacheKey);
+      assert.doesNotMatch(runtime.cacheKey, /secret-version|other-secret-version/);
+      assert.match(JSON.stringify(getCacheProviderConfig(runtime).endpointQuery), /sha256:[a-f0-9]{64}/);
+    }
+  });
+
+  it('uses only the active Custom base URL input in editor cache identity', async () => {
+    const context = createRuntimeContextWithPluginEnv({ CUSTOM_CACHE_API_KEY: 'sk-custom-secret' });
+    const commonData = {
+      provider: 'custom' as const,
+      model: 'shared-model',
+      customProviderApiKeyEnvVarName: 'CUSTOM_CACHE_API_KEY',
+      useCustomProviderBaseURLInput: true,
+      cache: true,
+    };
+    const inputs = createPromptInputs({
+      customProviderBaseURL: {
+        type: 'string',
+        value: 'https://active.example.test/v1?api-version=active-secret',
+      },
+    });
+    const first = await resolveLLMChatV2RuntimeConfig({
+      data: createNode({ ...commonData, customProviderBaseURL: 'https://stale-a.example.test/v1' }).data,
+      nodeId: 'custom-input-cache-node' as any,
+      inputs,
+      context,
+    });
+    const second = await resolveLLMChatV2RuntimeConfig({
+      data: createNode({ ...commonData, customProviderBaseURL: 'https://stale-b.example.test/v1' }).data,
+      nodeId: 'custom-input-cache-node' as any,
+      inputs,
+      context,
+    });
+
+    assert.equal(first.cacheKey, second.cacheKey);
+    assert.doesNotMatch(first.cacheKey!, /active-secret|stale-a|stale-b/);
+  });
+
   it('fingerprints extra provider option values in editor cache keys without changing runtime options', async () => {
     const node = createNode({
       provider: 'custom',
@@ -1975,6 +2126,91 @@ describe('LLMChatV2NodeImpl', () => {
         }),
       /Custom provider API key env var MISSING_CUSTOM_KEY is not set/,
     );
+  });
+
+  it('resolves intentionally keyless and explicitly header-authenticated Custom endpoints', async () => {
+    const common = {
+      provider: 'custom' as const,
+      model: 'local-model',
+      customProviderApi: 'responses' as const,
+      customProviderBaseURL: 'https://local.example.test/v1/responses?route=local',
+      customProviderApiKeyProgrammaticName: '',
+      customProviderApiKeyEnvVarName: '',
+      cache: true,
+    };
+    const keyless = await resolveLLMChatV2RuntimeConfig({
+      data: createNode(common).data,
+      nodeId: 'keyless-custom-node' as any,
+      inputs: createPromptInputs(),
+      context: createRuntimeContext(),
+    });
+    const headerAuthenticated = await resolveLLMChatV2RuntimeConfig({
+      data: createNode({ ...common, headers: [{ key: 'Authorization', value: 'Token explicit-secret' }] }).data,
+      nodeId: 'header-custom-node' as any,
+      inputs: createPromptInputs(),
+      context: createRuntimeContext(),
+    });
+
+    assert.equal(keyless.runOptions.customProviderApi, 'responses');
+    assert.equal((keyless.runOptions.model as { provider?: string }).provider, 'custom.responses');
+    assert.match(getCacheProviderConfig(keyless).endpointQuery[0][1], /^sha256:[a-f0-9]{64}$/);
+    assert.equal((headerAuthenticated.runOptions.model as { provider?: string }).provider, 'custom.responses');
+  });
+
+  it('publishes captured request, response, and attempt diagnostics before a terminal provider error', async () => {
+    const node = createNode({
+      provider: 'custom',
+      model: 'failing-model',
+      customProviderBaseURL: 'https://provider.example.test/v1',
+      customProviderApiKeyProgrammaticName: '',
+      customProviderApiKeyEnvVarName: '',
+      outputRequestBody: true,
+      outputResponseBody: true,
+      outputLLMAttempts: true,
+      useAsGraphPartialOutput: false,
+    });
+    const partialOutputs: Array<Record<string, any>> = [];
+    const fetchMock = mock.method(
+      globalThis,
+      'fetch',
+      async () =>
+        new Response(JSON.stringify({ error: { message: 'Deliberate provider failure' } }), {
+          status: 401,
+          headers: { 'content-type': 'application/json' },
+        }),
+    );
+
+    try {
+      await assert.rejects(
+        () =>
+          node.process(
+            createPromptInputs(),
+            createRuntimeContext({
+              signal: new AbortController().signal,
+              onPartialOutputs: (outputs: Record<string, any>) => partialOutputs.push(outputs),
+            }),
+          ),
+        /401|Deliberate provider failure/,
+      );
+
+      assert.equal(partialOutputs.length, 1);
+      assert.equal(partialOutputs[0]?.requestBody?.type, 'object');
+      assert.equal(partialOutputs[0]?.requestBody?.value?.model, 'failing-model');
+      assert.deepEqual(partialOutputs[0]?.responseBody, {
+        type: 'object',
+        value: { error: { message: 'Deliberate provider failure' } },
+      });
+      assert.deepEqual(
+        partialOutputs[0]?.llmAttempts?.value.map((attempt: Record<string, unknown>) => ({
+          stage: attempt.stage,
+          outcome: attempt.outcome,
+          status: attempt.status,
+        })),
+        [{ stage: 'request', outcome: 'failure', status: 401 }],
+      );
+    } finally {
+      fetchMock.mock.restore();
+    }
   });
 
   it('builds stable editor cache keys for equivalent object inputs', () => {

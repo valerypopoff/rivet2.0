@@ -56,6 +56,7 @@ describe('LLMProfileNodeImpl', () => {
     assert.equal(node.title, 'LLM Profile');
     assert.equal(node.data.provider, 'openai');
     assert.equal(node.data.model, 'gpt-5');
+    assert.equal(node.data.customProviderApi, 'completions');
     assert.deepEqual(new LLMProfileNodeImpl(node).getOutputDefinitions(), [
       {
         id: 'profile',
@@ -153,6 +154,7 @@ describe('LLMProfileNodeImpl', () => {
     const legacyData = structuredClone(legacyNode.data) as Record<string, unknown>;
     delete legacyData.openAIPreviousResponseId;
     delete legacyData.useOpenAIPreviousResponseIdInput;
+    delete legacyData.customProviderApi;
     const node = new LLMProfileNodeImpl({
       ...legacyNode,
       data: legacyData as LLMProfileNode['data'],
@@ -163,11 +165,22 @@ describe('LLMProfileNodeImpl', () => {
 
     assert.equal(profile.configuration.openAIPreviousResponseId, '');
     assert.equal(profile.configuration.useOpenAIPreviousResponseIdInput, false);
+    assert.equal(profile.configuration.customProviderApi, 'completions');
+  });
+
+  it('rejects a corrupt Custom API mode at the profile node boundary', async () => {
+    const node = createProfileNode({
+      provider: 'custom',
+      customProviderApi: 'response' as any,
+    });
+
+    await assert.rejects(() => node.process({}, createRuntimeContext()), /Unsupported Custom provider API: response/);
   });
 
   it('resolves input-driven settings and embeds the resolved API key in the profile value', async () => {
     const node = createProfileNode({
       provider: 'custom',
+      customProviderApi: 'responses',
       model: 'stale-model',
       useModelInput: true,
       apiKeySource: 'input',
@@ -198,6 +211,7 @@ describe('LLMProfileNodeImpl', () => {
     assert.equal(profile.configuration.model, 'runtime-model');
     assert.equal(profile.configuration.temperature, 0.2);
     assert.equal(profile.configuration.customProviderBaseURL, 'https://runtime.example/v1/chat/completions');
+    assert.equal(profile.configuration.customProviderApi, 'responses');
     assert.deepEqual(profile.configuration.headers, [{ key: 'x-runtime', value: 'enabled' }]);
     assert.deepEqual(JSON.parse(profile.configuration.extraProviderOptions), {
       custom: { mode: 'fast' },
@@ -205,6 +219,31 @@ describe('LLMProfileNodeImpl', () => {
     assert.equal(profile.configuration.useModelInput, false);
     assert.equal(profile.configuration.useTemperatureInput, false);
     assert.equal(profile.configuration.useHeadersInput, false);
+  });
+
+  it('represents intentional keyless and header-authenticated Custom profiles without inventing credentials', async () => {
+    const common = {
+      provider: 'custom' as const,
+      customProviderApi: 'responses' as const,
+      model: 'local-model',
+      customProviderBaseURL: 'https://local.example.test/v1/responses?route=local',
+      customProviderApiKeyProgrammaticName: '',
+      customProviderApiKeyEnvVarName: '',
+    };
+    const keylessResult = await createProfileNode(common).process({}, createRuntimeContext());
+    const headerResult = await createProfileNode({
+      ...common,
+      headers: [{ key: 'Authorization', value: 'Token explicit-secret' }],
+    }).process({}, createRuntimeContext());
+    const keyless = normalizeLLMProfileValue(keylessResult.profile?.value);
+    const headerAuthenticated = normalizeLLMProfileValue(headerResult.profile?.value);
+
+    assert.deepEqual(keyless.credential, { reference: { source: 'none' } });
+    assert.equal(keyless.configuration.customProviderApi, 'responses');
+    assert.equal(headerAuthenticated.credential.value, undefined);
+    assert.deepEqual(headerAuthenticated.configuration.headers, [
+      { key: 'Authorization', value: 'Token explicit-secret' },
+    ]);
   });
 
   it('embeds configured credentials and rejects malformed externally constructed profiles', async () => {

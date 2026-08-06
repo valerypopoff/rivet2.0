@@ -1,4 +1,4 @@
-import type { PortId } from '@valerypopoff/rivet2-core';
+import { getCustomProviderApiContract, type PortId } from '@valerypopoff/rivet2-core';
 import type {
   RunActivityGraphRun,
   RunActivityJournal,
@@ -216,7 +216,7 @@ function buildInvocationSearchTerms(
 ): string[] {
   const terms = [
     ...(resolvedSearchTerms ?? []),
-    ...invocation.modelCalls.flatMap((call) => [call.provider, call.model]),
+    ...invocation.modelCalls.flatMap((call) => [formatModelCallProvider(call), call.model]),
     ...invocation.toolCalls.map((call) => call.toolName),
   ];
   return [...new Set(terms.map(normalizeNonEmptyLabel).filter((term): term is string => term != null))];
@@ -316,11 +316,15 @@ function modelCallToChild(call: RunActivityModelCall): RunActivityChildViewModel
   ].filter((value): value is string => value != null);
   return {
     id: `model:${call.callId}:${call.sequence}`,
-    label: `${call.provider} / ${call.model}`,
+    label: `${formatModelCallProvider(call)} / ${call.model}`,
     secondaryText: context.join(' / '),
     status: call.outcome === 'success' ? 'success' : call.outcome === 'aborted' ? 'interrupted' : 'error',
     ...(call.durationMs == null ? {} : { durationMs: call.durationMs }),
   };
+}
+
+function formatModelCallProvider(call: Pick<RunActivityModelCall, 'provider' | 'customProviderApi'>): string {
+  return call.provider === 'custom' ? getCustomProviderApiContract(call.customProviderApi).label : call.provider;
 }
 
 function toolCallToChild(call: RunActivityToolCall, invocation: RunActivityNodeInvocation): RunActivityChildViewModel {

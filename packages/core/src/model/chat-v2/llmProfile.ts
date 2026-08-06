@@ -1,6 +1,7 @@
 import type { ChatV2CredentialReference, ChatV2CredentialResult } from './chatV2ProviderProfile.js';
 import { createLLMChatV2NodeData, type LLMChatV2NodeData, type LLMChatV2ProfileData } from './llmChatV2NodeData.js';
 import type { ChatV2Provider } from './chatV2Types.js';
+import { parseCustomProviderApi } from './customProviderApi.js';
 import {
   llmProfileBooleanDataKeys,
   llmProfileOptionalNumberDataKeys,
@@ -125,6 +126,7 @@ function normalizeConfiguration(data: LLMChatV2NodeData): LLMChatV2ProfileData {
     throw new Error(`Unsupported LLM Profile API key source: ${String(data.apiKeySource)}.`);
   }
   assertEnumValue(data.openAIWebSearchContextSize, ['low', 'medium', 'high'], 'OpenAI web search context');
+  const customProviderApi = parseCustomProviderApi(data.customProviderApi);
   assertEnumValue(data.anthropicThinkingMode, ['', 'adaptive', 'enabled', 'disabled'], 'Anthropic thinking mode');
   assertEnumValue(data.anthropicEffort, ['', 'low', 'medium', 'high', 'max'], 'Anthropic effort');
   assertEnumValue(data.anthropicCacheControlTtl, ['', '5m', '1h'], 'Anthropic cache TTL');
@@ -132,6 +134,7 @@ function normalizeConfiguration(data: LLMChatV2NodeData): LLMChatV2ProfileData {
 
   const resolvedData = {
     ...data,
+    customProviderApi,
     model: data.model.trim(),
     customProviderBaseURL: data.customProviderBaseURL.trim(),
     customProviderApiKeyProgrammaticName: data.customProviderApiKeyProgrammaticName?.trim(),

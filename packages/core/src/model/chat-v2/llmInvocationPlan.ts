@@ -89,7 +89,7 @@ export function buildLLMInvocationRunOptions(params: {
     prompt: plan.prompt,
     systemPrompt: plan.systemPrompt,
     functions: plan.functions,
-    responseOutput: createChatV2ResponseOutput(plan.responseFormatParameters, provider),
+    responseOutput: createChatV2ResponseOutput(plan.responseFormatParameters, provider, plan.data.customProviderApi),
     responseFormat: plan.responseFormatParameters?.responseFormat,
     outputUsage: plan.data.outputUsage,
     outputReasoning: plan.data.outputReasoning,

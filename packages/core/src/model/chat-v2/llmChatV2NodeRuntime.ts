@@ -3,17 +3,14 @@ import type { GptFunction } from '../DataValue.js';
 import type { Inputs, Outputs } from '../GraphProcessor.js';
 import type { PortId } from '../NodeBase.js';
 import type { InternalProcessContext } from '../ProcessContext.js';
-import {
-  createLLMProfileFallbackRunner,
-  getLLMAttemptErrorMessage,
-  type LLMAttempt,
-} from './llmProfileFallback.js';
+import { createLLMProfileFallbackRunner, getLLMAttemptErrorMessage, type LLMAttempt } from './llmProfileFallback.js';
 import { applyLLMProfileToNodeData, normalizeLLMProfileChainInput } from './llmProfile.js';
 import { buildLLMInvocationPlan, buildLLMInvocationRunOptions } from './llmInvocationPlan.js';
 import { resolveLLMModelCandidate } from './llmModelCandidate.js';
 import { mergeCustomProviderResponseFormatOptions } from './chatV2ResponseFormat.js';
 import { getLLMChatV2EditorCacheEligibility } from './llmChatV2CachePolicy.js';
 import { parseChatV2Provider } from './providerOptions.js';
+import { parseCustomProviderApi } from './customProviderApi.js';
 import type { ChatV2Model, ChatV2PipelineRoundOptions, ChatV2PipelineResult } from './chatV2Types.js';
 import {
   buildLLMChatV2EditorCacheKey,
@@ -118,6 +115,9 @@ export async function resolveLLMChatV2RuntimeConfig(params: {
                   roundIndex: roundOptions.roundIndex ?? 0,
                   provider: inlineRunOptions.provider,
                   model: inlineRunOptions.modelId,
+                  ...(inlineRunOptions.customProviderApi == null
+                    ? {}
+                    : { customProviderApi: inlineRunOptions.customProviderApi }),
                   stage: 'request',
                   outcome:
                     attempt.outcome === 'success' ? 'success' : attempt.outcome === 'aborted' ? 'aborted' : 'failure',
@@ -137,6 +137,9 @@ export async function resolveLLMChatV2RuntimeConfig(params: {
                 roundIndex: roundOptions.roundIndex ?? 0,
                 provider: inlineRunOptions.provider,
                 model: inlineRunOptions.modelId,
+                ...(inlineRunOptions.customProviderApi == null
+                  ? {}
+                  : { customProviderApi: inlineRunOptions.customProviderApi }),
                 stage: 'response-validation',
                 outcome: 'failure',
                 error: getLLMAttemptErrorMessage(error),
@@ -188,6 +191,7 @@ export async function resolveLLMChatV2RuntimeConfig(params: {
       firstProvider,
       resolveLLMChatV2RuntimeProviderOptions(firstProfileData, inputs),
       plan.responseFormatParameters,
+      firstProfileData.customProviderApi,
     ),
     anthropicCacheControlTtl:
       firstProvider === 'anthropic' ? firstProfileData.anthropicCacheControlTtl || undefined : undefined,
@@ -196,6 +200,9 @@ export async function resolveLLMChatV2RuntimeConfig(params: {
     candidates: profiles.map((profile) => ({
       provider: parseChatV2Provider(profile.configuration.provider),
       model: profile.configuration.model,
+      ...(profile.configuration.provider === 'custom'
+        ? { customProviderApi: parseCustomProviderApi(profile.configuration.customProviderApi) }
+        : {}),
     })),
     resolveCandidate: (profileIndex, roundOptions) =>
       resolveLLMModelCandidate({

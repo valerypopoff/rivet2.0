@@ -1,4 +1,4 @@
-import { describe, it } from 'node:test';
+import { describe, it, mock } from 'node:test';
 import { strict as assert } from 'node:assert';
 import type { ChatV2CallFinishedEvent, GraphExecutionMetadata } from '../../../src/model/ProcessContext.js';
 import { buildAgentResponseTrace, isAgentResponseTrace } from '../../../src/model/AgentResponseTrace.js';
@@ -10,6 +10,7 @@ import { createDefaultLLMProfileValue, normalizeLLMProfileChainInput } from '../
 import { resolveLLMChatV2RuntimeConfig } from '../../../src/model/chat-v2/llmChatV2NodeRuntime.js';
 import type { ChatV2Model, RunChatV2PipelineOptions } from '../../../src/model/chat-v2/chatV2Types.js';
 import { LLMChatV2NodeImpl } from '../../../src/model/nodes/LLMChatV2Node.js';
+import type { PortId } from '../../../src/model/NodeBase.js';
 
 function baseRoundOptions(overrides: Partial<RunChatV2PipelineOptions> = {}): RunChatV2PipelineOptions {
   return {
@@ -351,9 +352,243 @@ describe('LLM Profile fallback chain', () => {
     ]);
     assert.equal(
       runner.summary(),
-      'Profile 0 (custom/primary): failed after 2 provider attempts; last status 503.\n' +
-        'Profile 1 (custom/backup): succeeded in model 1 round (0).',
+      'Profile 0 (Custom Completions/primary): failed after 2 provider attempts; last status 503.\n' +
+        'Profile 1 (Custom Completions/backup): succeeded in model 1 round (0).',
     );
+  });
+
+  it('keeps Completions and Responses identities distinct across a mixed fallback chain', async () => {
+    const observed: ChatV2CallFinishedEvent[] = [];
+    const runner = createLLMProfileFallbackRunner({
+      candidates: [
+        { provider: 'custom', model: 'shared-model', customProviderApi: 'completions' },
+        { provider: 'custom', model: 'shared-model', customProviderApi: 'responses' },
+      ],
+      resolveCandidate: async (profileIndex, roundOptions) => {
+        const customProviderApi = profileIndex === 0 ? 'completions' : 'responses';
+        return {
+          ...roundOptions,
+          provider: 'custom',
+          customProviderApi,
+          model: {} as ChatV2Model,
+          modelId: 'shared-model',
+          context: {
+            ...roundOptions.context,
+            node: { id: 'chat' as any },
+            processId: 'process' as any,
+            onChatV2CallFinished: (event) => observed.push(event),
+          },
+          executeGenerate: async () => ({
+            text: profileIndex === 0 ? 'failed' : 'recovered',
+            requestStatus: profileIndex === 0 ? 503 : 200,
+          }),
+        };
+      },
+    });
+
+    const result = await runner.run(baseRoundOptions());
+
+    assert.equal(result.response, 'recovered');
+    assert.deepEqual(
+      runner.attempts.map(({ profileIndex, customProviderApi, outcome }) => ({
+        profileIndex,
+        customProviderApi,
+        outcome,
+      })),
+      [
+        { profileIndex: 0, customProviderApi: 'completions', outcome: 'failure' },
+        { profileIndex: 1, customProviderApi: 'responses', outcome: 'success' },
+      ],
+    );
+    assert.deepEqual(
+      observed.map(({ profileIndex, customProviderApi, outcome }) => ({ profileIndex, customProviderApi, outcome })),
+      [
+        { profileIndex: 0, customProviderApi: 'completions', outcome: 'provider-failure' },
+        { profileIndex: 1, customProviderApi: 'responses', outcome: 'success' },
+      ],
+    );
+    assert.equal(
+      runner.summary(),
+      'Profile 0 (Custom Completions/shared-model): failed after 1 provider attempt; last status 503.\n' +
+        'Profile 1 (Custom Responses/shared-model): succeeded in model 1 round (0).',
+    );
+  });
+
+  it('falls through an invalid Custom URL before any request reaches a valid Responses profile', async () => {
+    const created = LLMChatV2NodeImpl.create();
+    const node = new LLMChatV2NodeImpl({
+      ...created,
+      data: {
+        ...created.data,
+        configurationMode: 'profile',
+        useAsGraphPartialOutput: false,
+        outputLLMAttempts: true,
+      },
+    });
+    const malformed = createDefaultLLMProfileValue();
+    malformed.configuration = {
+      ...malformed.configuration,
+      provider: 'custom',
+      model: 'shared-model',
+      customProviderApi: 'completions',
+      customProviderBaseURL: 'not a URL',
+    };
+    malformed.credential = { value: 'primary-key', reference: { source: 'input' } };
+    const backup = createDefaultLLMProfileValue();
+    backup.configuration = {
+      ...backup.configuration,
+      provider: 'custom',
+      model: 'shared-model',
+      customProviderApi: 'responses',
+      customProviderBaseURL: 'https://backup.example.test/v1/responses?api-version=2026-08-01',
+    };
+    backup.credential = { value: 'backup-key', reference: { source: 'input' } };
+    const attempts: Array<Record<string, unknown>> = [];
+    const requestedURLs: string[] = [];
+    const fetchMock = mock.method(globalThis, 'fetch', async (input) => {
+      requestedURLs.push(String(input));
+      return new Response(
+        JSON.stringify({
+          id: 'resp_backup',
+          created_at: 1_700_000_000,
+          model: 'shared-model',
+          output: [
+            {
+              type: 'message',
+              role: 'assistant',
+              id: 'msg_backup',
+              content: [{ type: 'output_text', text: 'Recovered', annotations: [] }],
+            },
+          ],
+          usage: { input_tokens: 3, output_tokens: 1 },
+        }),
+        { status: 200, headers: { 'content-type': 'application/json' } },
+      );
+    });
+
+    try {
+      const runtime = await resolveLLMChatV2RuntimeConfig({
+        data: node.data,
+        nodeId: node.chartNode.id,
+        inputs: {
+          prompt: { type: 'string', value: 'Hello' },
+          llmProfile: { type: 'llm-config[]', value: [malformed, backup] },
+        } as any,
+        context: {
+          signal: new AbortController().signal,
+          settings: { chatNodeHeaders: {} },
+          getPluginConfig: () => '',
+        } as any,
+        onLLMAttempt: (attempt) => attempts.push(attempt),
+      });
+      const result = await runtime.runPipeline(runtime.runOptions);
+
+      assert.equal(result.response, 'Recovered');
+      assert.deepEqual(requestedURLs, ['https://backup.example.test/v1/responses?api-version=2026-08-01']);
+      assert.equal(attempts[0]?.stage, 'configuration');
+      assert.match(String(attempts[0]?.error), /valid absolute HTTP or HTTPS URL/);
+      assert.equal(attempts[1]?.customProviderApi, 'responses');
+      assert.equal(attempts[1]?.outcome, 'success');
+    } finally {
+      fetchMock.mock.restore();
+    }
+  });
+
+  it('parses Custom Responses JSON schema output and advances immediately after invalid structured output', async () => {
+    const created = LLMChatV2NodeImpl.create();
+    const node = new LLMChatV2NodeImpl({
+      ...created,
+      data: {
+        ...created.data,
+        configurationMode: 'profile',
+        responseFormat: 'json_schema',
+        responseSchemaName: 'answer_schema',
+        useAsGraphPartialOutput: false,
+        retryOnNon200: true,
+        retryOnNon200RepeatTimes: 3,
+        retryOnNon200CooldownMs: 0,
+        outputLLMAttempts: true,
+      },
+    });
+    const profile = (host: string) => {
+      const value = createDefaultLLMProfileValue();
+      value.configuration = {
+        ...value.configuration,
+        provider: 'custom',
+        model: 'shared-model',
+        customProviderApi: 'responses',
+        customProviderBaseURL: `https://${host}.example.test/v1`,
+      };
+      value.credential = { value: `${host}-key`, reference: { source: 'input' } };
+      return value;
+    };
+    const requestedHosts: string[] = [];
+    const attempts: Array<Record<string, unknown>> = [];
+    const fetchMock = mock.method(globalThis, 'fetch', async (input) => {
+      const host = new URL(String(input)).hostname.split('.')[0]!;
+      requestedHosts.push(host);
+      const text = host === 'primary' ? 'not-json' : '{"answer":"Recovered"}';
+      return new Response(
+        JSON.stringify({
+          id: `resp_${host}`,
+          created_at: 1_700_000_000,
+          model: 'shared-model',
+          output: [
+            {
+              type: 'message',
+              role: 'assistant',
+              id: `msg_${host}`,
+              content: [{ type: 'output_text', text, annotations: [] }],
+            },
+          ],
+          usage: { input_tokens: 3, output_tokens: 2 },
+        }),
+        { status: 200, headers: { 'content-type': 'application/json' } },
+      );
+    });
+
+    try {
+      const runtime = await resolveLLMChatV2RuntimeConfig({
+        data: node.data,
+        nodeId: node.chartNode.id,
+        inputs: {
+          prompt: { type: 'string', value: 'Return JSON.' },
+          responseSchema: {
+            type: 'object',
+            value: {
+              type: 'object',
+              properties: { answer: { type: 'string' } },
+              required: ['answer'],
+              additionalProperties: false,
+            },
+          },
+          llmProfile: { type: 'llm-config[]', value: [profile('primary'), profile('backup')] },
+        } as any,
+        context: {
+          signal: new AbortController().signal,
+          settings: { chatNodeHeaders: {} },
+          getPluginConfig: () => '',
+        } as any,
+        onLLMAttempt: (attempt) => attempts.push(attempt),
+      });
+      const result = await runtime.runPipeline(runtime.runOptions);
+
+      assert.deepEqual(result.commonOutputs['response' as PortId], {
+        type: 'object',
+        value: { answer: 'Recovered' },
+      });
+      assert.deepEqual(requestedHosts, ['primary', 'backup']);
+      assert.deepEqual(
+        attempts.map(({ profileIndex, stage, outcome }) => ({ profileIndex, stage, outcome })),
+        [
+          { profileIndex: 0, stage: 'request', outcome: 'success' },
+          { profileIndex: 0, stage: 'response-validation', outcome: 'failure' },
+          { profileIndex: 1, stage: 'request', outcome: 'success' },
+        ],
+      );
+    } finally {
+      fetchMock.mock.restore();
+    }
   });
 
   it('makes unused fallback profiles explicit in the human-readable summary', async () => {
@@ -375,7 +610,8 @@ describe('LLM Profile fallback chain', () => {
 
     assert.equal(
       runner.summary(),
-      'Profile 0 (custom/primary): succeeded in model 1 round (0).\n' + 'Profile 1 (custom/backup): not attempted.',
+      'Profile 0 (Custom Completions/primary): succeeded in model 1 round (0).\n' +
+        'Profile 1 (Custom Completions/backup): not attempted.',
     );
   });
 
@@ -428,8 +664,8 @@ describe('LLM Profile fallback chain', () => {
     );
     assert.equal(
       runner.summary(),
-      'Profile 0 (custom/invalid-json): had 1 failed provider attempt; last status 503; failed response validation in 1 model round.\n' +
-        'Profile 1 (custom/backup): succeeded in model 1 round (0).',
+      'Profile 0 (Custom Completions/invalid-json): had 1 failed provider attempt; last status 503; failed response validation in 1 model round.\n' +
+        'Profile 1 (Custom Completions/backup): succeeded in model 1 round (0).',
     );
   });
 
@@ -493,14 +729,26 @@ describe('LLM Profile fallback chain', () => {
       () => runner.run(baseRoundOptions()),
       (error) => {
         assert.ok(error instanceof LLMProfileFallbackExhaustedError);
-        assert.match(error.message, /Profile 0 \(custom\/first-invalid\), round 0, request attempt 0 success \(200\)/);
-        assert.match(error.message, /Profile 0 \(custom\/first-invalid\), round 0, response validation failure:/);
+        assert.match(
+          error.message,
+          /Profile 0 \(Custom Completions\/first-invalid\), round 0, request attempt 0 success \(200\)/,
+        );
+        assert.match(
+          error.message,
+          /Profile 0 \(Custom Completions\/first-invalid\), round 0, response validation failure:/,
+        );
         assert.match(
           error.message,
           /response validation failure: LLM profile response validation failed\.\n  Response format:/,
         );
-        assert.match(error.message, /Profile 1 \(custom\/second-invalid\), round 0, request attempt 0 success \(200\)/);
-        assert.match(error.message, /Profile 1 \(custom\/second-invalid\), round 0, response validation failure:/);
+        assert.match(
+          error.message,
+          /Profile 1 \(Custom Completions\/second-invalid\), round 0, request attempt 0 success \(200\)/,
+        );
+        assert.match(
+          error.message,
+          /Profile 1 \(Custom Completions\/second-invalid\), round 0, response validation failure:/,
+        );
         return true;
       },
     );
@@ -778,8 +1026,8 @@ describe('LLM Profile fallback chain', () => {
       () => runner.run(baseRoundOptions()),
       (error) => {
         assert.ok(error instanceof LLMProfileFallbackExhaustedError);
-        assert.match(error.message, /Profile 0 \(custom\/primary\)/);
-        assert.match(error.message, /Profile 1 \(custom\/backup\)/);
+        assert.match(error.message, /Profile 0 \(Custom Completions\/primary\)/);
+        assert.match(error.message, /Profile 1 \(Custom Completions\/backup\)/);
         assert.equal((error as Error & { cause?: unknown }).cause, undefined);
         return true;
       },

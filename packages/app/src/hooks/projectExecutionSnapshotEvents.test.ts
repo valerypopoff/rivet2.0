@@ -281,9 +281,10 @@ test('inactive project snapshots retain replayed user-input activity without res
   assert.deepEqual(snapshot.userInputQuestions, {});
   assert.equal(snapshot.selectedProcessPageNodes[nodeId], undefined);
 
-  const invocation = snapshot.runActivityJournal.rootsById[rootRunId]!.nodeInvocationsByKey[
-    createRunActivityNodeKey({ graphRunId, nodeId, processId, rootRunId })
-  ]!;
+  const invocation =
+    snapshot.runActivityJournal.rootsById[rootRunId]!.nodeInvocationsByKey[
+      createRunActivityNodeKey({ graphRunId, nodeId, processId, rootRunId })
+    ]!;
   assert.equal(invocation.status, 'waiting');
   assert.deepEqual(invocation.waitingForUserInput, { questionCount: 1, renderingType: 'markdown' });
 });
@@ -335,7 +336,8 @@ test('inactive project snapshot reducer upserts identified model and tool trace 
         outcome: 'success',
         pricing: { status: 'unknown' },
         processId,
-        provider: 'openai',
+        provider: 'custom',
+        customProviderApi: 'responses',
       } as never,
       message: 'llmCallFinished',
       projectId,
@@ -376,6 +378,10 @@ test('inactive project snapshot reducer upserts identified model and tool trace 
   assert.equal(events?.length, 2);
   assert.equal(events?.[0]?.type, 'llm-call-finished');
   assert.equal(events?.[0]?.durationMs, 12);
+  assert.equal(
+    (events?.[0] as Extract<AgentTraceEvent, { type: 'llm-call-finished' }> | undefined)?.customProviderApi,
+    'responses',
+  );
   assert.equal(events?.[1]?.type, 'tool-call-finished');
   assert.equal(events?.[1]?.durationMs, 6);
   assert.deepEqual((events?.[1] as Extract<AgentTraceEvent, { type: 'tool-call-finished' }> | undefined)?.resultOwner, {

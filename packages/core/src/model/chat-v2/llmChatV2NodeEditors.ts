@@ -10,6 +10,7 @@ import {
   anthropicEffortOptions,
   anthropicThinkingModeOptions,
   chatV2ProviderOptions,
+  customProviderApiOptions,
   getChatV2ModelOptions,
   googleThinkingLevelOptions,
   openAIReasoningEffortOptions,
@@ -102,7 +103,17 @@ function getModelEditors(modelOptions: { value: string; label: string }[]): LLMC
         dataKey: 'customProviderBaseURL',
         useInputToggleDataKey: 'useCustomProviderBaseURLInput',
         placeholder: 'https://api.cerebras.ai/v1',
-        helperMessage: 'OpenAI-compatible provider base URL. Full /chat/completions URLs are accepted and normalized.',
+        helperMessage:
+          'OpenAI-compatible provider base URL. Full /chat/completions or /responses URLs are accepted and normalized.',
+        hideIf: hideUnlessProvider('custom'),
+      },
+      {
+        type: 'segmented',
+        label: 'API',
+        ariaLabel: 'Custom provider API',
+        dataKey: 'customProviderApi',
+        defaultValue: 'completions',
+        options: [...customProviderApiOptions],
         hideIf: hideUnlessProvider('custom'),
       },
       {

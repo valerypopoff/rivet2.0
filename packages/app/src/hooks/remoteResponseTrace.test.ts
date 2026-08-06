@@ -60,7 +60,8 @@ void describe('remote response traces', () => {
       outcome: 'success',
       pricing: { status: 'unknown' as const },
       processId: 'nested-process' as ProcessId,
-      provider: 'openai',
+      provider: 'custom',
+      customProviderApi: 'responses',
     } satisfies Omit<Extract<AgentTraceEvent, { type: 'llm-call-finished' }>, 'type'>;
     collectRemoteAgentTraceEvent(traces, 'request', 'llm-call-finished', nestedModelCall);
 
@@ -75,5 +76,6 @@ void describe('remote response traces', () => {
     assert.equal(deliveredTrace?.graphRunId, rootExecution.graphRunId);
     assert.equal(deliveredTrace?.summary.modelCallCount, 1);
     assert.equal(deliveredTrace?.modelCalls[0]?.nodeId, nestedModelCall.nodeId);
+    assert.equal(deliveredTrace?.modelCalls[0]?.customProviderApi, 'responses');
   });
 });

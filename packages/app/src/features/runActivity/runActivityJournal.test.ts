@@ -339,8 +339,9 @@ test('attaches bounded model and tool traces without duplicating identified even
       callId: 'call-1' as never,
       nodeId,
       processId,
-      provider: 'openai',
+      provider: 'custom',
       model: 'gpt-test',
+      customProviderApi: 'responses',
       outcome: 'success',
       attemptIndex: 0,
       pricing: { status: 'unknown' },
@@ -356,8 +357,9 @@ test('attaches bounded model and tool traces without duplicating identified even
       callId: 'call-1' as never,
       nodeId,
       processId,
-      provider: 'openai',
+      provider: 'custom',
       model: 'gpt-test',
+      customProviderApi: 'responses',
       outcome: 'success',
       attemptIndex: 0,
       pricing: { status: 'unknown' },
@@ -448,6 +450,7 @@ test('attaches bounded model and tool traces without duplicating identified even
   assert.equal(invocation.modelCallCount, 2);
   assert.equal(invocation.modelCalls.length, 1);
   assert.equal(invocation.modelCalls[0]!.durationMs, 12);
+  assert.equal(invocation.modelCalls[0]!.customProviderApi, 'responses');
   assert.equal(invocation.omittedModelCallCount, 1);
   assert.equal(invocation.toolCallCount, 3);
   assert.equal(invocation.toolCalls.length, 2);

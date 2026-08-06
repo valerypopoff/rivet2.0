@@ -5,6 +5,7 @@ import type { InternalProcessContext } from '../ProcessContext.js';
 import type { AssistantMessageFunctionCallMode, StreamedFunctionCall } from '../chat/streamChatResponse.js';
 import type { ChatV2Provider } from './chatV2ProviderTypes.js';
 import type { ChatV2ResponseBodyCapture } from './chatV2ResponseBodyCapture.js';
+import type { CustomProviderApi } from './customProviderApi.js';
 
 export type { ChatV2Provider };
 
@@ -138,6 +139,8 @@ export type RunChatV2PipelineOptions = {
    */
   profileIndex?: number | undefined;
   roundIndex?: number | undefined;
+  /** Selected wire contract for Custom-provider calls. Never sent to the provider. */
+  customProviderApi?: CustomProviderApi | undefined;
   /** Internal physical-call trace used by the LLM Profile fallback coordinator. */
   onProviderAttempt?: ((attempt: ChatV2ProviderAttempt) => void) | undefined;
   context: Pick<InternalProcessContext, 'signal' | 'onPartialOutputs'> &

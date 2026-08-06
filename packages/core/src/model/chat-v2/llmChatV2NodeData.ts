@@ -7,11 +7,13 @@ import {
 import type { ChatV2Provider } from './chatV2Types.js';
 import type { ChartNode, NodeId } from '../NodeBase.js';
 import { llmProfileDataKeys } from './llmProfileFieldRegistry.js';
+import type { CustomProviderApi } from './customProviderApi.js';
+
+export type { CustomProviderApi } from './customProviderApi.js';
 
 export type LLMChatV2ToolChoiceMode = '' | 'auto' | 'function' | 'required';
 export type LLMChatV2ApiKeySource = 'environment' | 'input';
 export type LLMChatV2ConfigurationMode = 'inline' | 'profile';
-
 export type LLMChatV2NodeConfigData = ChatV2CommonNodeData & {
   configurationMode?: LLMChatV2ConfigurationMode;
   provider: ChatV2Provider;
@@ -20,6 +22,8 @@ export type LLMChatV2NodeConfigData = ChatV2CommonNodeData & {
   customProviderApiKeyEnvVarName?: string;
   customProviderBaseURL: string;
   useCustomProviderBaseURLInput: boolean;
+  /** Missing on legacy/programmatically-created nodes means Chat Completions. */
+  customProviderApi?: CustomProviderApi;
   baseURL: string;
   useBaseURLInput: boolean;
   headers: { key: string; value: string }[];
@@ -103,6 +107,7 @@ export function createLLMChatV2NodeData(): LLMChatV2NodeData {
     customProviderApiKeyEnvVarName: 'CUSTOM_PROVIDER_API_KEY',
     customProviderBaseURL: '',
     useCustomProviderBaseURLInput: false,
+    customProviderApi: 'completions',
     baseURL: '',
     useBaseURLInput: false,
     headers: [],

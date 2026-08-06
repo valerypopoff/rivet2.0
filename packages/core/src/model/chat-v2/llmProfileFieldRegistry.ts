@@ -42,6 +42,7 @@ export const llmProfileFieldSpecs = [
   { key: 'customProviderApiKeyEnvVarName', valueKind: 'string' },
   { key: 'customProviderBaseURL', inputId: 'customProviderBaseURL', valueKind: 'string' },
   { key: 'useCustomProviderBaseURLInput', valueKind: 'boolean', resolvedInputToggle: true },
+  { key: 'customProviderApi' },
   { key: 'headers', inputId: 'headers' },
   { key: 'useHeadersInput', valueKind: 'boolean', resolvedInputToggle: true },
   { key: 'extraProviderOptions', inputId: 'extraProviderOptions', valueKind: 'string' },

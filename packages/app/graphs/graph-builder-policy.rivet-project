@@ -22,6 +22,7 @@ data:
             baseURL: ""
             cache: false
             configurationMode: inline
+            customProviderApi: completions
             customProviderApiKeyEnvVarName: ""
             customProviderApiKeyProgrammaticName: ""
             customProviderBaseURL: ""
@@ -172,6 +173,7 @@ data:
             baseURL: ""
             cache: false
             configurationMode: inline
+            customProviderApi: completions
             customProviderApiKeyEnvVarName: ""
             customProviderApiKeyProgrammaticName: ""
             customProviderBaseURL: ""

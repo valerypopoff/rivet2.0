@@ -19,7 +19,7 @@ The profile contains:
 
 - provider and model
 - the resolved API key and its source metadata
-- Custom-provider base URL
+- Custom-provider base URL and Completions/Responses API choice
 - common generation parameters
 - OpenAI Previous Response ID
 - provider-specific reasoning and thinking settings
@@ -46,6 +46,13 @@ The API key is resolved when LLM Profile runs. The resulting `llm-config` value
 contains the resolved key, including when it came from Rivet settings or a
 programmatic runtime option. It can therefore appear in execution data,
 recordings, previews, or remote transport just like any other node output.
+
+For an intentionally keyless Custom profile, use configured-key mode, clear
+both alternative key-name fields, and leave the shared Custom provider key
+empty. If a configured programmatic or environment key name is present but
+missing at runtime, the profile fails instead of silently retrying without
+authentication. An explicit `Authorization` header remains available for
+header-authenticated endpoints.
 
 ## Outputs
 

@@ -11,6 +11,7 @@ import {
 } from './chatV2RuntimeOptions.js';
 import type { LLMChatV2NodeData, LLMChatV2ProfileData } from './llmChatV2NodeData.js';
 import { LLM_PROFILE_VALUE_VERSION, type LLMProfileValue } from './llmProfileTypes.js';
+import { parseCustomProviderApi } from './customProviderApi.js';
 
 export function resolveLLMProfileNodeValue(params: {
   data: LLMChatV2ProfileData;
@@ -49,6 +50,7 @@ export function resolveLLMProfileNodeValue(params: {
     data.provider === 'google' && data.useGoogleThinkingBudgetInput
       ? coerceTypeOptional(inputs['googleThinkingBudget' as PortId], 'number') ?? data.googleThinkingBudget
       : data.googleThinkingBudget;
+  const customProviderApi = parseCustomProviderApi(data.customProviderApi);
   const credential = resolveChatV2Credential({
     provider: data.provider,
     context,
@@ -83,6 +85,7 @@ export function resolveLLMProfileNodeValue(params: {
       useSeedInput: false,
       customProviderBaseURL,
       useCustomProviderBaseURLInput: false,
+      customProviderApi,
       openAIPreviousResponseId,
       useOpenAIPreviousResponseIdInput: false,
       headers: Object.entries(headers ?? {}).map(([key, value]) => ({ key, value })),

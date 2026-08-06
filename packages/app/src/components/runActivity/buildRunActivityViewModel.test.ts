@@ -547,8 +547,9 @@ test('searches every displayed model attempt and tool call instead of only row s
       callId: 'failed-profile',
       nodeId: capturedInvocation.nodeId,
       processId: capturedInvocation.processId,
-      provider: 'openai',
+      provider: 'custom',
       model: 'failed-profile-model',
+      customProviderApi: 'responses',
       outcome: 'provider-failure',
       attemptIndex: 0,
       profileIndex: 0,
@@ -599,9 +600,10 @@ test('searches every displayed model attempt and tool call instead of only row s
   }));
   const item = viewModel.items[0]!;
 
+  assert.equal(item.children?.[0]?.label, 'Custom Responses / failed-profile-model');
   assert.deepEqual(item.searchTerms, [
     'designer alias',
-    'openai',
+    'Custom Responses',
     'failed-profile-model',
     'anthropic',
     'effective-model',
@@ -610,6 +612,12 @@ test('searches every displayed model attempt and tool call instead of only row s
   ]);
   assert.deepEqual(
     filterRunActivityItems(viewModel.items, { filter: 'all', graphId: '', query: 'failed-profile-model' }).map(
+      (entry) => entry.activityKey,
+    ),
+    [capturedInvocation.key],
+  );
+  assert.deepEqual(
+    filterRunActivityItems(viewModel.items, { filter: 'all', graphId: '', query: 'Custom Responses' }).map(
       (entry) => entry.activityKey,
     ),
     [capturedInvocation.key],

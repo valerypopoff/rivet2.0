@@ -304,6 +304,32 @@ void describe('AgentResponseTrace', () => {
     assert.equal(isAgentResponseTrace({ ...trace, modelCalls: [{ ...trace.modelCalls[0], durationMs: -1 }] }), false);
   });
 
+  void it('preserves optional Custom API identity while accepting legacy traces without it', () => {
+    const trace = buildAgentResponseTrace({
+      scope: 'response',
+      execution,
+      events: [modelEvent({ provider: 'custom', model: 'shared-model', customProviderApi: 'responses' })],
+      status: 'completed',
+    });
+
+    assert.equal(trace.modelCalls[0]?.customProviderApi, 'responses');
+    assert.equal(isAgentResponseTrace(trace), true);
+    assert.equal(
+      isAgentResponseTrace({
+        ...trace,
+        modelCalls: trace.modelCalls.map(({ customProviderApi: _customProviderApi, ...call }) => call),
+      }),
+      true,
+    );
+    assert.equal(
+      isAgentResponseTrace({
+        ...trace,
+        modelCalls: [{ ...trace.modelCalls[0], customProviderApi: 'response' }],
+      }),
+      false,
+    );
+  });
+
   void it('reports entirely unknown pricing as unknown rather than zero cost', () => {
     const trace = buildAgentResponseTrace({
       scope: 'response',

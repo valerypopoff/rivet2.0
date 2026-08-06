@@ -52,7 +52,7 @@ Shared runtime foundation for the entire repo.
 - serialization with shared V3/V4 helpers (`serializationHelpers.ts`)
 - recording/playback support
 - runtime integration contracts
-- Vercel AI SDK provider adapters used by the user-facing `LLM Chat` node, including the OpenAI-compatible provider factory for Custom provider mode
+- Vercel AI SDK provider adapters used by the user-facing `LLM Chat` node, including the Chat Completions-compatible and OpenAI Responses adapters selected by Custom provider mode
 - `emitDetached` - explicit fire-and-forget event emission helper
 - `pQueueCompat` - CJS/ESM interop for p-queue
 - shared runtime settings normalization through `resolveProcessSettings(...)`

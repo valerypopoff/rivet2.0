@@ -20,6 +20,7 @@ import {
 } from './chatV2RuntimeOptions.js';
 import { createChatV2ResponseOutput, mergeCustomProviderResponseFormatOptions } from './chatV2ResponseFormat.js';
 import type { ChatV2PipelineRoundOptions, RunChatV2PipelineOptions } from './chatV2Types.js';
+import { parseCustomProviderApi } from './customProviderApi.js';
 import { parseChatV2Provider, type ResolvedChatV2ProviderConfig } from './providerOptions.js';
 import { restoreOpenAICompatibleInstructionRoles } from './developerMessageRoles.js';
 
@@ -43,6 +44,7 @@ export async function resolveLLMModelCandidate(params: {
   }
 
   const provider = parseChatV2Provider(effectiveData.provider);
+  const customProviderApi = provider === 'custom' ? parseCustomProviderApi(effectiveData.customProviderApi) : undefined;
   const modelId = getInputOrData(effectiveData, plan.inputs, 'model', 'string');
   const baseURL = resolveLLMChatV2BaseURL(effectiveData, plan.inputs);
   const headers = resolveLLMChatV2Headers(effectiveData, plan.inputs);
@@ -69,16 +71,16 @@ export async function resolveLLMModelCandidate(params: {
     credential,
     onRequestBody: plan.requestBodies == null ? undefined : (body) => plan.requestBodies!.push(body),
     onResponseBody:
-      plan.responseBodyCapture == null
-        ? undefined
-        : (response) => plan.responseBodyCapture!.capture(response),
+      plan.responseBodyCapture == null ? undefined : (response) => plan.responseBodyCapture!.capture(response),
     transformRequestBody,
+    customProviderApi,
   });
   const generationParameters = resolveLLMChatV2GenerationParameters(effectiveData, plan.inputs);
   const providerOptions = mergeCustomProviderResponseFormatOptions(
     provider,
     resolveLLMChatV2RuntimeProviderOptions(effectiveData, plan.inputs),
     plan.responseFormatParameters,
+    customProviderApi,
   );
   const baseRunOptions =
     params.roundOptions ??
@@ -97,6 +99,7 @@ export async function resolveLLMModelCandidate(params: {
       provider,
       model: resolvedProvider.model,
       modelId,
+      ...(customProviderApi == null ? {} : { customProviderApi }),
       additionalTools: resolveLLMChatV2BuiltInTools(
         effectiveData,
         plan.context,
@@ -104,7 +107,7 @@ export async function resolveLLMModelCandidate(params: {
         credential.value,
       ),
       ...generationParameters,
-      responseOutput: createChatV2ResponseOutput(plan.responseFormatParameters, provider),
+      responseOutput: createChatV2ResponseOutput(plan.responseFormatParameters, provider, customProviderApi),
       responseFormat: plan.responseFormatParameters?.responseFormat,
       providerOptions,
       anthropicCacheControlTtl:

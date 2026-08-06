@@ -1,14 +1,12 @@
 import type { PortId } from '../NodeBase.js';
-import {
-  isChatV2ResponseValidationError,
-  runChatV2PipelineExecution,
-} from './chatV2Pipeline.js';
+import { isChatV2ResponseValidationError, runChatV2PipelineExecution } from './chatV2Pipeline.js';
 import {
   type ChatV2Provider,
   type ChatV2PipelineRoundOptions,
   type ChatV2PipelineResult,
   type RunChatV2PipelineOptions,
 } from './chatV2Types.js';
+import { getCustomProviderApiContract, type CustomProviderApi } from './customProviderApi.js';
 
 export type LLMAttempt = {
   roundIndex: number;
@@ -16,6 +14,7 @@ export type LLMAttempt = {
   profileIndex?: number;
   provider: ChatV2Provider;
   model: string;
+  customProviderApi?: CustomProviderApi;
   stage: 'configuration' | 'request' | 'response-validation';
   outcome: 'success' | 'failure' | 'aborted';
   attemptIndex?: number;
@@ -26,7 +25,20 @@ export type LLMAttempt = {
 export type LLMProfileFallbackCandidate = {
   provider: ChatV2Provider;
   model: string;
+  customProviderApi?: CustomProviderApi;
 };
+
+function formatCandidateIdentity(candidate: {
+  provider: ChatV2Provider;
+  model: string;
+  customProviderApi?: CustomProviderApi;
+}): string {
+  const providerLabel =
+    candidate.provider === 'custom'
+      ? getCustomProviderApiContract(candidate.customProviderApi).label
+      : candidate.provider;
+  return `${providerLabel}/${candidate.model}`;
+}
 
 export type LLMProfileFallbackRunner = {
   run: (roundOptions: ChatV2PipelineRoundOptions) => Promise<ChatV2PipelineResult>;
@@ -61,7 +73,7 @@ function buildExhaustedMessage(attempts: readonly LLMAttempt[]): string {
             : 'configuration';
       const status = attempt.status == null ? '' : ` (${attempt.status})`;
       const error = attempt.error ? `: ${attempt.error.replace(/\r\n|\r|\n/g, '\n  ')}` : '';
-      return `Profile ${attempt.profileIndex} (${attempt.provider}/${attempt.model}), round ${attempt.roundIndex}, ${stage} ${attempt.outcome}${status}${error}`;
+      return `Profile ${attempt.profileIndex} (${formatCandidateIdentity(attempt)}), round ${attempt.roundIndex}, ${stage} ${attempt.outcome}${status}${error}`;
     })
     .join('\n');
   return details
@@ -85,7 +97,7 @@ export function buildLLMProfileFallbackSummary(
   return candidates
     .map((candidate, profileIndex) => {
       const profileAttempts = attempts.filter((attempt) => attempt.profileIndex === profileIndex);
-      const identity = `Profile ${profileIndex} (${candidate.provider}/${candidate.model})`;
+      const identity = `Profile ${profileIndex} (${formatCandidateIdentity(candidate)})`;
 
       if (profileAttempts.length === 0) {
         return `${identity}: not attempted.`;
@@ -226,6 +238,7 @@ export function createLLMProfileFallbackRunner(params: {
             profileIndex,
             provider: candidate.provider,
             model: candidate.model,
+            ...(candidate.customProviderApi == null ? {} : { customProviderApi: candidate.customProviderApi }),
             stage: 'configuration',
             outcome: 'failure',
             error: getLLMAttemptErrorMessage(error),
@@ -256,6 +269,7 @@ export function createLLMProfileFallbackRunner(params: {
               profileIndex,
               provider: candidate.provider,
               model: candidate.model,
+              ...(candidate.customProviderApi == null ? {} : { customProviderApi: candidate.customProviderApi }),
               stage: 'request',
               outcome:
                 attempt.outcome === 'success' ? 'success' : attempt.outcome === 'aborted' ? 'aborted' : 'failure',
@@ -288,6 +302,7 @@ export function createLLMProfileFallbackRunner(params: {
             profileIndex,
             provider: candidate.provider,
             model: candidate.model,
+            ...(candidate.customProviderApi == null ? {} : { customProviderApi: candidate.customProviderApi }),
             stage: responseValidationFailure ? 'response-validation' : 'configuration',
             outcome: 'failure',
             error: getLLMAttemptErrorMessage(error),

@@ -19,12 +19,12 @@ import { isLLMChatV2StructuredResponseFormat } from '../chat-v2/chatV2FeatureCom
 import { getChatV2ModelInfo } from '../chat-v2/modelRegistry.js';
 import { LLMInvocationJournal } from '../chat-v2/llmInvocationJournal.js';
 import { executeLLMInvocation } from '../chat-v2/llmInvocationCoordinator.js';
-import { projectLLMInvocationResult } from '../chat-v2/llmInvocationResultProjector.js';
-import { isChatV2PipelineProviderFailureResult } from '../chat-v2/chatV2Pipeline.js';
 import {
-  shouldOutputChatV2RequestBody,
-  shouldOutputChatV2ResponseBody,
-} from '../chat-v2/chatV2Types.js';
+  projectLLMInvocationDiagnostics,
+  projectLLMInvocationResult,
+} from '../chat-v2/llmInvocationResultProjector.js';
+import { isChatV2PipelineProviderFailureResult } from '../chat-v2/chatV2Pipeline.js';
+import { shouldOutputChatV2RequestBody, shouldOutputChatV2ResponseBody } from '../chat-v2/chatV2Types.js';
 import {
   buildLLMChatV2EditorCacheKey,
   resolveLLMChatV2RuntimeConfig,
@@ -328,14 +328,12 @@ export class LLMChatV2NodeImpl extends NodeImpl<LLMChatV2Node> {
     }
 
     if (this.data.configurationMode === 'profile') {
-      outputs.push(
-        {
-          id: 'llmProfileSummary' as PortId,
-          title: 'LLM Profile Summary',
-          dataType: 'string',
-          description: 'Human-readable profile fallback outcome for this LLM Chat run.',
-        },
-      );
+      outputs.push({
+        id: 'llmProfileSummary' as PortId,
+        title: 'LLM Profile Summary',
+        dataType: 'string',
+        description: 'Human-readable profile fallback outcome for this LLM Chat run.',
+      });
     }
 
     return outputs;
@@ -435,12 +433,33 @@ export class LLMChatV2NodeImpl extends NodeImpl<LLMChatV2Node> {
       return cacheHit;
     }
 
-    const result = await executeLLMInvocation({
-      context,
-      journal: invocationJournal,
-      runtime,
-      toolCallContinuation,
-    });
+    let result: Awaited<ReturnType<typeof executeLLMInvocation>>;
+    try {
+      result = await executeLLMInvocation({
+        context,
+        journal: invocationJournal,
+        runtime,
+        toolCallContinuation,
+      });
+    } catch (error) {
+      try {
+        const diagnostics = projectLLMInvocationDiagnostics({
+          runOptions: runtime.runOptions,
+          outputLLMAttempts: this.data.outputLLMAttempts,
+          llmAttempts: invocationJournal.llmAttempts,
+          profileSummary: runtime.getProfileSummary?.(),
+        });
+
+        if (Object.keys(diagnostics).length > 0) {
+          context.onPartialOutputs?.(diagnostics);
+        }
+      } catch {
+        // Developer diagnostics are observational and must never replace the
+        // provider/configuration error which caused this node to fail.
+      }
+
+      throw error;
+    }
 
     projectLLMInvocationResult({
       result,

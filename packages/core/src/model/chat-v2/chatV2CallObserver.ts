@@ -160,6 +160,7 @@ export function notifyChatV2CallFinished(
     processId,
     provider: options.provider,
     model: options.modelId,
+    ...(options.customProviderApi == null ? {} : { customProviderApi: options.customProviderApi }),
     outcome: params.outcome,
     ...(finishReason == null ? {} : { finishReason }),
     ...(rawUsage == null ? {} : { rawUsage }),

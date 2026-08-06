@@ -116,6 +116,7 @@ describe('chat v2 response format helpers', () => {
 
   it('omits the SDK output descriptor for custom-provider JSON object mode', () => {
     assert.equal(createChatV2ResponseOutput({ responseFormat: 'json' }, 'custom'), undefined);
+    assert.ok(createChatV2ResponseOutput({ responseFormat: 'json' }, 'custom', 'responses'));
   });
 
   it('rejects non-JSON-compatible response schemas before creating Vercel output descriptors', () => {
@@ -151,6 +152,24 @@ describe('chat v2 response format helpers', () => {
           customFlag: true,
         },
       },
+    );
+  });
+
+  it('leaves Custom Responses provider options to the Responses adapter', () => {
+    const providerOptions = {
+      openai: {
+        store: false,
+      },
+    } as const;
+
+    assert.equal(
+      mergeCustomProviderResponseFormatOptions(
+        'custom',
+        providerOptions,
+        { responseFormat: 'json', schemaName: 'answer_json' },
+        'responses',
+      ),
+      providerOptions,
     );
   });
 

@@ -584,6 +584,7 @@ function applyLlmCallFinished(
     processId: data.processId,
     provider: data.provider,
     model: data.model,
+    ...(data.customProviderApi == null ? {} : { customProviderApi: data.customProviderApi }),
     outcome: data.outcome,
     attemptIndex: data.attemptIndex,
     pricing: data.pricing,
