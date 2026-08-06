@@ -1,7 +1,4 @@
 
-- In LLM chat output, "messages sent" and "all messages" - auto collapse them and let the user unflod them when long
-
-- При вызове туллколов трекать на что уходит время и сколько
 
 - Make the LLM call fail after specific time? It should help the llm profile fallback chain. Then, a fail should be of 2 kinds: soft (will retry the same LLM profile if retrying is on) and hard (fail the whole LLM profile even if retrying is on)
 
