@@ -4,9 +4,6 @@ import { type SharedEditorProps } from './SharedEditorProps';
 import { css } from '@emotion/react';
 // eslint-disable-next-line import/no-cycle
 import { DefaultNodeEditorField } from './DefaultNodeEditorField';
-import Collapsible from 'react-collapsible';
-import ChevronDownIcon from 'majesticons/line/chevron-down-line.svg?react';
-import ChevronUpIcon from 'majesticons/line/chevron-up-line.svg?react';
 import { getEditorListKey, getEditorRenderRows, getHelperMessage } from './editorUtils';
 import { HelperMessage } from '@atlaskit/form';
 import { ToggleEditor } from './ToggleEditor';
@@ -15,100 +12,24 @@ import { useAtom } from 'jotai';
 import { nodeEditorGroupOpenState } from '../../state/ui.js';
 import { resolveNodeEditorGroupOpen, setNodeEditorGroupOpen } from '../../utils/nodeEditorGroupState.js';
 import { CodeEditorAiAssistBridge, GenericCodeEditorAiAssist } from './CodeEditorAiAssist';
+import { CollapsiblePanel, collapsiblePanelStyles } from '../CollapsiblePanel.js';
 
 const styles = css`
-  --editor-group-radius: calc(16px * var(--ui-font-scale));
-  --editor-group-toggle-radius: calc(8px * var(--ui-font-scale));
   --editor-group-padding-x: calc(16px * var(--ui-font-scale));
   --editor-group-padding-y: calc(16px * var(--ui-font-scale));
   --editor-group-padding-bottom: calc(18px * var(--ui-font-scale));
-  --editor-group-toggle-padding-y: calc(8px * var(--ui-font-scale));
-  --editor-group-toggle-icon-size: calc(24px * var(--ui-font-scale));
-
-  @supports not (corner-shape: squircle) {
-    --editor-group-radius: calc(8px * var(--ui-font-scale));
-    --editor-group-toggle-radius: calc(4px * var(--ui-font-scale));
-  }
 
   grid-column: span 2;
   display: flex;
   flex-direction: column;
   align-items: stretch;
 
-  > .editor-group-toggle-container,
-  > .Collapsible .editor-group-toggle-container {
-    display: flex;
-    flex-direction: column;
-    padding-left: var(--editor-group-padding-x);
-    padding-right: var(--editor-group-padding-x);
-    border: 1px solid var(--settings-collapsible-border);
-    border-radius: var(--editor-group-radius);
-    corner-shape: squircle;
-    background: var(--settings-collapsible-header-bg);
-  }
-
-  > .editor-group-toggle-container.open,
-  > .Collapsible > .editor-group-toggle-container.open {
-    border-bottom: none;
-    border-radius: var(--editor-group-radius) var(--editor-group-radius) 0 0;
-    corner-shape: squircle;
-  }
-
-  > .editor-group-toggle-container.open + .editor-group-static-content,
-  > .Collapsible > .editor-group-toggle-container.open + .Collapsible__contentOuter {
-    border: 1px solid var(--settings-collapsible-border);
-    border-top: none;
-    border-radius: 0 0 var(--editor-group-radius) var(--editor-group-radius);
-    corner-shape: squircle;
-    background: var(--settings-collapsible-body-bg);
-  }
-
-  .editor-group-toggle-area {
-    display: flex;
-    flex-direction: column;
-    align-items: stretch;
-  }
-
-  .editor-group-toggle {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: var(--editor-group-toggle-padding-y) var(--editor-group-padding-x);
-    margin: 0 calc(-1 * var(--editor-group-padding-x));
-    border: none;
-    background: none;
-    cursor: pointer;
-    outline: none;
-    font-size: var(--ui-font-size-base);
-    line-height: 1.25;
-    font-weight: 500;
-    border-radius: var(--editor-group-toggle-radius);
-    corner-shape: squircle;
-    transition: background 0.2s ease-out;
-    font-family: inherit;
-    color: var(--label-color);
-    font-weight: var(--label-font-weight);
-
-    .indicator {
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      width: var(--editor-group-toggle-icon-size);
-      height: var(--editor-group-toggle-icon-size);
-      flex: 0 0 var(--editor-group-toggle-icon-size);
-    }
-
-    &:hover {
-      background: var(--settings-collapsible-hover-bg);
-    }
-  }
-
-  .editor-group-toggle-with-switch {
+  .collapsible-panel-toggle-with-switch {
     justify-content: flex-start;
     cursor: default;
   }
 
-  .editor-group-toggle-with-switch:hover {
+  .collapsible-panel-toggle-with-switch:hover {
     background: none;
   }
 
@@ -133,20 +54,6 @@ const styles = css`
   }
 `;
 
-const CollapsibleToggle: FC<{ isOpen?: boolean; label: string; helperMessage?: string }> = ({
-  isOpen,
-  label,
-  helperMessage,
-}) => (
-  <div className="editor-group-toggle-area">
-    <button type="button" className="editor-group-toggle">
-      <span className="label">{label}</span>
-      <span className="indicator">{isOpen ? <ChevronUpIcon /> : <ChevronDownIcon />}</span>
-    </button>
-    {helperMessage && <HelperMessage>{helperMessage}</HelperMessage>}
-  </div>
-);
-
 const ToggleHeader: FC<{
   isChecked: boolean;
   isDisabled: boolean;
@@ -155,16 +62,16 @@ const ToggleHeader: FC<{
   helperMessage?: string;
   onChange: (value: boolean) => void;
 }> = ({ isChecked, isDisabled, label, toggleId, helperMessage, onChange }) => (
-  <div className="editor-group-toggle-area">
+  <div className="collapsible-panel-toggle-area">
     <LabeledToggle
       id={toggleId}
       isChecked={isChecked}
       isDisabled={isDisabled}
       onChange={onChange}
       label={label}
-      className="editor-group-toggle editor-group-toggle-with-switch"
-      switchClassName="editor-group-toggle-switch"
-      labelClassName="editor-group-toggle-label"
+      className="collapsible-panel-toggle collapsible-panel-toggle-with-switch"
+      switchClassName="collapsible-panel-toggle-switch"
+      labelClassName="collapsible-panel-toggle-label"
       helperMessage={helperMessage}
     />
   </div>
@@ -219,13 +126,7 @@ export const EditorGroup: FC<
               codeEditorFooterLeft={footerLeftAction}
             />
           )}
-          aiAssist={
-            <GenericCodeEditorAiAssist
-              {...sharedProps}
-              isDisabled={isDisabled}
-              codeEditor={editor}
-            />
-          }
+          aiAssist={<GenericCodeEditorAiAssist {...sharedProps} isDisabled={isDisabled} codeEditor={editor} />}
         />
       );
     }
@@ -286,8 +187,8 @@ export const EditorGroup: FC<
     }
 
     return (
-      <div css={styles}>
-        <div className="editor-group-toggle-container open">
+      <div css={[collapsiblePanelStyles, styles]}>
+        <div className="collapsible-panel-toggle-container open">
           <ToggleHeader
             isChecked={isToggleGroupEnabled}
             isDisabled={sharedProps.isReadonly || sharedProps.isDisabled}
@@ -297,25 +198,21 @@ export const EditorGroup: FC<
             onChange={setToggleGroupEnabled}
           />
         </div>
-        {isToggleGroupEnabled && <div className="editor-group-static-content">{renderedContent}</div>}
+        {isToggleGroupEnabled && <div className="collapsible-panel-static-content">{renderedContent}</div>}
       </div>
     );
   }
 
   return (
     <div css={styles}>
-      <Collapsible
+      <CollapsiblePanel
         open={isOpen}
-        handleTriggerClick={() => setOpen(!isOpen)}
-        trigger={<CollapsibleToggle label={label} helperMessage={helperMessage} />}
-        triggerClassName="editor-group-toggle-container"
-        triggerOpenedClassName="editor-group-toggle-container open"
-        triggerWhenOpen={<CollapsibleToggle label={label} isOpen helperMessage={helperMessage} />}
-        transitionTime={150}
-        easing="ease-out"
+        onToggle={() => setOpen(!isOpen)}
+        label={label}
+        helper={helperMessage && <HelperMessage>{helperMessage}</HelperMessage>}
       >
         {renderedContent}
-      </Collapsible>
+      </CollapsiblePanel>
     </div>
   );
 };

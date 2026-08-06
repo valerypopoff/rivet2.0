@@ -1,9 +1,6 @@
 import { css } from '@emotion/react';
 import { type NodeOutputDefinition } from '@valerypopoff/rivet2-core';
-import ChevronDownIcon from 'majesticons/line/chevron-down-line.svg?react';
-import ChevronUpIcon from 'majesticons/line/chevron-up-line.svg?react';
 import { useEffect, useState, type FC, type ReactNode } from 'react';
-import Collapsible from 'react-collapsible';
 import { type DataRefReader, useDataRefs } from '../../providers/ProvidersContext.js';
 import { type InputsOrOutputsWithRefs } from '../../state/dataFlow.js';
 import { RenderDataValue } from '../RenderDataValue.js';
@@ -19,6 +16,7 @@ import { renderedDataOutputsStyles } from '../renderDataValue/renderDataValueSty
 import { serializeDisplayedPortValue } from '../../utils/executionDataCopyValue.js';
 import { useFullscreenOutputSearchContext } from './FullscreenOutputSearchContext.js';
 import { createNodeOutputSectionsViewModel } from './nodeOutputViewModel.js';
+import { CollapsiblePanel } from '../CollapsiblePanel.js';
 
 const LLM_CHAT_LARGE_DIAGNOSTIC_OUTPUT_PORT_IDS = new Set([
   'all-messages',
@@ -33,53 +31,8 @@ const LLM_CHAT_LARGE_DIAGNOSTIC_AUTO_COLLAPSE_CHARS = 1_000;
 const autoCollapsedLlmDiagnosticOutputStyles = css`
   margin-top: 8px;
 
-  > .Collapsible {
-    border: 1px solid var(--grey-darkish);
-    border-radius: 8px;
-    corner-shape: squircle;
-    overflow: hidden;
-
-    @supports not (corner-shape: squircle) {
-      border-radius: 4px;
-    }
-  }
-
-  > .Collapsible > .auto-collapsed-llm-diagnostic-output-toggle-container {
-    background: transparent;
-  }
-
-  > .Collapsible > .auto-collapsed-llm-diagnostic-output-toggle-container.open {
-    border-bottom: 1px solid var(--grey-darkish);
-  }
-
-  .auto-collapsed-llm-diagnostic-output-toggle {
-    align-items: center;
-    background: transparent;
-    border: 0;
-    color: var(--grey-lighter);
-    cursor: pointer;
-    display: flex;
-    font: inherit;
-    gap: 6px;
-    margin: 0;
-    padding: 8px 10px;
-    text-align: left;
-    width: 100%;
-
-    &:hover {
-      background: var(--grey-light-seethrougher);
-      color: var(--foreground);
-    }
-
-    svg {
-      flex: 0 0 auto;
-      height: 16px;
-      width: 16px;
-    }
-  }
-
   .auto-collapsed-llm-diagnostic-output-content {
-    padding: 10px;
+    padding: calc(16px * var(--ui-font-scale));
   }
 `;
 
@@ -243,31 +196,19 @@ const AutoCollapsedLlmDiagnosticOutput: FC<{
   }, [sectionText]);
 
   const isMessageOutput = messageCount !== undefined;
-  const disclosureLabel = isMessageOutput ? 'message content' : label;
   const collapsedDescription = isMessageOutput
     ? `${messageCount.toLocaleString()} ${messageCount === 1 ? 'message' : 'messages'}`
     : `${sectionText.length.toLocaleString()} characters`;
-  const renderToggle = (toggleOpen: boolean) => (
-    <button type="button" className="auto-collapsed-llm-diagnostic-output-toggle" aria-expanded={toggleOpen}>
-      {toggleOpen ? <ChevronUpIcon /> : <ChevronDownIcon />}
-      <span>{toggleOpen ? `Collapse ${disclosureLabel}` : `Show ${disclosureLabel} (${collapsedDescription})`}</span>
-    </button>
-  );
 
   return (
     <div css={autoCollapsedLlmDiagnosticOutputStyles} className="auto-collapsed-llm-diagnostic-output">
-      <Collapsible
+      <CollapsiblePanel
         open={open}
-        handleTriggerClick={() => setIsOpen((current) => !current)}
-        trigger={renderToggle(false)}
-        triggerClassName="auto-collapsed-llm-diagnostic-output-toggle-container"
-        triggerOpenedClassName="auto-collapsed-llm-diagnostic-output-toggle-container open"
-        triggerWhenOpen={renderToggle(true)}
-        transitionTime={150}
-        easing="ease-out"
+        onToggle={() => setIsOpen((current) => !current)}
+        label={`${label} (${collapsedDescription})`}
       >
         <div className="auto-collapsed-llm-diagnostic-output-content">{children}</div>
-      </Collapsible>
+      </CollapsiblePanel>
     </div>
   );
 };

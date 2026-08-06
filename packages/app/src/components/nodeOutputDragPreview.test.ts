@@ -199,26 +199,34 @@ test('inline node output actions reserve flow space without moving their hit tar
     nodeStylesSource,
     /\.node-output-inner,[\s\S]*?--node-output-unfold-icon-size: [^;]+;[\s\S]*?--node-output-unfold-icon-offset-x: [^;]+;[\s\S]*?--node-output-unfold-icon-offset-y: [^;]+;/,
   );
+  assert.match(nodeStylesSource, /--node-output-unfold-margin-left: 0px;/);
+  assert.match(nodeStylesSource, /--node-output-unfold-margin-right: 0px;/);
   assert.match(
     nodeStylesSource,
     /\.node-output-inner,[\s\S]*?--node-output-copy-icon-size: [^;]+;[\s\S]*?--node-output-copy-icon-offset-x: [^;]+;[\s\S]*?--node-output-copy-icon-offset-y: [^;]+;/,
   );
+  assert.match(nodeStylesSource, /--node-output-copy-margin-left: 0px;/);
+  assert.match(nodeStylesSource, /--node-output-copy-margin-right: 0px;/);
   assert.match(
     nodeStylesSource,
     /\.node-output-inner,[\s\S]*?--node-output-response-inspector-icon-size: [^;]+;[\s\S]*?--node-output-response-inspector-icon-offset-x: [^;]+;[\s\S]*?--node-output-response-inspector-icon-offset-y: [^;]+;/,
   );
   assert.match(
     nodeStylesSource,
-    /\.node-output-inner,[\s\S]*?--node-output-response-inspector-margin-inline: calc\(2px \* var\(--ui-font-scale\)\);/,
+    /\.node-output-inner,[\s\S]*?--node-output-response-inspector-margin-left: calc\(3\.5px \* var\(--ui-font-scale\)\);[\s\S]*?--node-output-response-inspector-margin-right: calc\(-2px \* var\(--ui-font-scale\)\);/,
   );
   assert.match(
     nodeStylesSource,
     /\.node-output-inner,[\s\S]*?--node-output-prompt-designer-icon-size: [^;]+;[\s\S]*?--node-output-prompt-designer-icon-offset-x: [^;]+;[\s\S]*?--node-output-prompt-designer-icon-offset-y: [^;]+;/,
   );
+  assert.match(nodeStylesSource, /--node-output-prompt-designer-margin-left: 0px;/);
+  assert.match(nodeStylesSource, /--node-output-prompt-designer-margin-right: 0px;/);
   assert.match(
     nodeStylesSource,
     /\.node-output-inner,[\s\S]*?--node-output-fullscreen-icon-size: [^;]+;[\s\S]*?--node-output-fullscreen-icon-offset-x: [^;]+;[\s\S]*?--node-output-fullscreen-icon-offset-y: [^;]+;/,
   );
+  assert.match(nodeStylesSource, /--node-output-fullscreen-margin-left: 0px;/);
+  assert.match(nodeStylesSource, /--node-output-fullscreen-margin-right: 0px;/);
   assert.match(
     nodeStylesSource,
     /\.node-output-inner\.has-extra-output-action \{[\s\S]*?--node-output-action-exclusion-width: calc\(120px \* var\(--ui-font-scale\)\);/,
@@ -237,7 +245,7 @@ test('inline node output actions reserve flow space without moving their hit tar
   );
   assert.match(
     nodeStylesSource,
-    /\.response-inspector-button \{[\s\S]*?margin-inline: var\(--node-output-response-inspector-margin-inline\);/,
+    /\.output-toggle-button \{[\s\S]*?margin-left: var\(--node-output-unfold-margin-left\);[\s\S]*?margin-right: var\(--node-output-unfold-margin-right\);[\s\S]*?\.copy-button \{[\s\S]*?margin-left: var\(--node-output-copy-margin-left\);[\s\S]*?margin-right: var\(--node-output-copy-margin-right\);[\s\S]*?\.response-inspector-button \{[\s\S]*?margin-left: var\(--node-output-response-inspector-margin-left\);[\s\S]*?margin-right: var\(--node-output-response-inspector-margin-right\);[\s\S]*?\.prompt-designer-button \{[\s\S]*?margin-left: var\(--node-output-prompt-designer-margin-left\);[\s\S]*?margin-right: var\(--node-output-prompt-designer-margin-right\);[\s\S]*?\.expand-button \{[\s\S]*?margin-left: var\(--node-output-fullscreen-margin-left\);[\s\S]*?margin-right: var\(--node-output-fullscreen-margin-right\);/,
   );
   assert.match(
     nodeStylesSource,

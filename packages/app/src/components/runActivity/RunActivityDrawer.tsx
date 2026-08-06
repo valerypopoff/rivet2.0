@@ -2,10 +2,9 @@ import Portal from '@atlaskit/portal';
 import Select from '@atlaskit/select';
 import { css } from '@emotion/react';
 import clsx from 'clsx';
-import ChevronDownIcon from 'majesticons/line/chevron-down-line.svg?react';
-import ChevronUpIcon from 'majesticons/line/chevron-up-line.svg?react';
 import CopyIcon from 'majesticons/line/clipboard-line.svg?react';
 import CrossIcon from 'majesticons/line/multiply-line.svg?react';
+import FilterIcon from 'majesticons/line/filter-line.svg?react';
 import SearchIcon from 'majesticons/line/search-line.svg?react';
 import {
   type ChangeEvent,
@@ -20,6 +19,7 @@ import {
   useState,
 } from 'react';
 import { SegmentedEditor } from '../editors/SegmentedEditor.js';
+import { CollapsiblePanel } from '../CollapsiblePanel.js';
 import { Tooltip } from '../Tooltip.js';
 import { formatRunActivityDuration } from '../../utils/runActivityDuration.js';
 import {
@@ -59,6 +59,8 @@ type ColumnResizeState = {
 type PointerFocusedHeaderControl = 'graph-filter' | 'search' | undefined;
 
 const drawerStyles = css`
+  --run-activity-control-height: var(--form-control-select-height);
+
   position: fixed;
   z-index: 90;
   right: 0;
@@ -114,7 +116,6 @@ const drawerStyles = css`
   }
 
   .run-activity-header {
-    --run-activity-control-height: var(--form-control-select-height);
     display: flex;
     flex: none;
     align-items: center;
@@ -240,12 +241,22 @@ const drawerStyles = css`
     outline-offset: 1px;
   }
 
-  .run-activity-header-controls {
+  .run-activity-filter-row {
     display: flex;
+    flex: none;
     align-items: center;
+    min-height: 48px;
+    padding: 8px 16px;
+    border-bottom: 1px solid var(--app-strip-divider-color);
+    background: var(--app-panel-bg);
     min-width: 0;
-    flex: 1 1 560px;
     gap: 8px;
+  }
+
+  .run-activity-filter-button.is-active {
+    border-color: color-mix(in srgb, var(--primary) 52%, var(--form-control-border));
+    background: color-mix(in srgb, var(--primary) 16%, transparent);
+    color: var(--primary-light);
   }
 
   .run-activity-filters {
@@ -437,12 +448,7 @@ const drawerStyles = css`
   }
 
   .run-activity-row {
-    --run-activity-row-radius: calc(10px * var(--ui-font-scale));
-    overflow: hidden;
-    border: 1px solid var(--settings-collapsible-border, var(--app-panel-border));
-    border-radius: var(--run-activity-row-radius);
-    corner-shape: squircle;
-    background: var(--settings-collapsible-header-bg, var(--node-body-bg));
+    --collapsible-panel-padding-x: 0px;
     content-visibility: auto;
     contain-intrinsic-size: auto 66px;
   }
@@ -451,38 +457,45 @@ const drawerStyles = css`
     margin-top: 8px;
   }
 
-  .run-activity-row.status-error,
-  .run-activity-row.status-interrupted {
+  .run-activity-row.status-error > .Collapsible > .collapsible-panel-toggle-container,
+  .run-activity-row.status-interrupted > .Collapsible > .collapsible-panel-toggle-container,
+  .run-activity-row.status-error > .Collapsible > .collapsible-panel-toggle-container.open + .Collapsible__contentOuter,
+  .run-activity-row.status-interrupted
+    > .Collapsible
+    > .collapsible-panel-toggle-container.open
+    + .Collapsible__contentOuter {
     border-color: color-mix(in srgb, var(--error) 58%, var(--app-panel-border));
   }
 
-  .run-activity-row.status-running {
+  .run-activity-row.status-running > .Collapsible > .collapsible-panel-toggle-container,
+  .run-activity-row.status-running
+    > .Collapsible
+    > .collapsible-panel-toggle-container.open
+    + .Collapsible__contentOuter {
     border-color: color-mix(in srgb, var(--primary) 48%, var(--app-panel-border));
   }
 
-  .run-activity-row.status-waiting {
+  .run-activity-row.status-waiting > .Collapsible > .collapsible-panel-toggle-container,
+  .run-activity-row.status-waiting
+    > .Collapsible
+    > .collapsible-panel-toggle-container.open
+    + .Collapsible__contentOuter {
     border-color: color-mix(in srgb, var(--warning) 46%, var(--app-panel-border));
   }
 
   .run-activity-row-toggle {
+    display: grid;
     align-items: center;
+    justify-content: initial;
     width: 100%;
     min-height: 50px;
     padding: 8px 11px;
-    border: 0;
-    border-radius: inherit;
-    background: transparent;
-    color: inherit;
+    margin: 0;
     text-align: left;
-    cursor: pointer;
   }
 
-  .run-activity-row-toggle:hover {
-    background: var(--settings-collapsible-hover-bg, color-mix(in srgb, var(--surface-row-hover-bg) 42%, transparent));
-  }
-
-  .run-activity-row.is-expanded .run-activity-row-toggle {
-    border-radius: var(--run-activity-row-radius) var(--run-activity-row-radius) 0 0;
+  .run-activity-row-toggle > .label {
+    display: contents;
   }
 
   .run-activity-status-dot {
@@ -567,20 +580,18 @@ const drawerStyles = css`
     display: none;
   }
 
-  .run-activity-chevron {
+  .run-activity-row-toggle > .indicator {
     display: grid;
     place-items: center;
   }
 
-  .run-activity-chevron svg {
+  .run-activity-row-toggle > .indicator svg {
     width: 18px;
     height: 18px;
   }
 
   .run-activity-row-detail {
     padding: 4px 14px 14px 31px;
-    border-top: 1px solid var(--settings-collapsible-border, var(--app-panel-border));
-    background: var(--settings-collapsible-body-bg, var(--node-body-bg));
   }
 
   .run-activity-detail-message {
@@ -658,11 +669,6 @@ const drawerStyles = css`
   }
 
   @container run-activity-drawer (max-width: 1100px) {
-    .run-activity-header-controls {
-      order: 3;
-      flex-basis: 100%;
-    }
-
     .run-activity-summary {
       display: none;
     }
@@ -715,7 +721,7 @@ const drawerStyles = css`
       display: none;
     }
 
-    .run-activity-header-controls {
+    .run-activity-filter-row {
       flex-wrap: wrap;
     }
 
@@ -763,11 +769,9 @@ const drawerStyles = css`
       display: none;
     }
 
-    .run-activity-header-controls {
-      order: 3;
+    .run-activity-filter-row {
       display: grid;
       width: 100%;
-      flex-basis: 100%;
       grid-template-columns: 1fr;
     }
 
@@ -851,6 +855,7 @@ export const RunActivityDrawer: FC<RunActivityDrawerProps> = ({
   const [filter, setFilter] = useState<RunActivityFilter>('all');
   const [graphFilter, setGraphFilter] = useState('');
   const [query, setQuery] = useState('');
+  const [filtersOpen, setFiltersOpen] = useState(false);
   const [graphMenuPortalTarget, setGraphMenuPortalTarget] = useState<HTMLDivElement | null>(null);
   const [uncontrolledColumnWidths, setUncontrolledColumnWidths] = useState<RunActivityColumnWidths>(
     DEFAULT_RUN_ACTIVITY_COLUMN_WIDTHS,
@@ -1161,6 +1166,7 @@ export const RunActivityDrawer: FC<RunActivityDrawerProps> = ({
 
   const rootStatus = describeRootStatus(viewModel.status, viewModel.backgroundWorkPending);
   const itemSummary = `${filteredItems.length} of ${viewModel.items.length} ${viewModel.items.length === 1 ? 'activity' : 'activities'}`;
+  const hasActiveFilters = filter !== 'all' || graphFilter !== '' || query.trim() !== '';
   const drawerInlineStyle: CSSProperties & Record<`--run-activity-column-${string}`, string> = {
     height: displayHeight,
     '--run-activity-column-node-name': `${effectiveColumnWidths.nodeName}px`,
@@ -1202,7 +1208,53 @@ export const RunActivityDrawer: FC<RunActivityDrawerProps> = ({
             <span className="run-activity-summary">{formatAccounting(viewModel.accounting)}</span>
           )}
         </div>
-        <div className="run-activity-header-controls">
+        <div className="run-activity-header-actions">
+          <Tooltip content={filtersOpen ? 'Hide filters' : 'Show filters'} tag="span">
+            <button
+              type="button"
+              className={clsx('run-activity-icon-button', 'run-activity-filter-button', {
+                'is-active': hasActiveFilters,
+              })}
+              aria-label={filtersOpen ? 'Hide Run Activity filters' : 'Show Run Activity filters'}
+              aria-controls="run-activity-filter-row"
+              aria-expanded={filtersOpen}
+              title={isNarrowViewport ? (filtersOpen ? 'Hide filters' : 'Show filters') : undefined}
+              onClick={() => setFiltersOpen((current) => !current)}
+            >
+              <FilterIcon aria-hidden="true" />
+            </button>
+          </Tooltip>
+          <label className="run-activity-follow">
+            <input type="checkbox" checked={followLive} onChange={handleFollowChange} />
+            <span>Follow live</span>
+          </label>
+          {onCopyDiagnostics && (
+            <Tooltip content="Copy diagnostics" tag="span">
+              <button
+                type="button"
+                className="run-activity-icon-button"
+                aria-label="Copy diagnostics"
+                title={isNarrowViewport ? 'Copy diagnostics' : undefined}
+                onClick={onCopyDiagnostics}
+              >
+                <CopyIcon aria-hidden="true" />
+              </button>
+            </Tooltip>
+          )}
+          <button
+            ref={closeButtonRef}
+            type="button"
+            className="run-activity-icon-button"
+            aria-label="Close Run Activity"
+            title="Close"
+            onClick={onClose}
+          >
+            <CrossIcon aria-hidden="true" />
+          </button>
+        </div>
+      </header>
+      {filtersOpen && (
+        <div id="run-activity-filter-row" className="run-activity-filter-row">
           <div className="run-activity-filters">
             <SegmentedEditor
               label=""
@@ -1268,36 +1320,7 @@ export const RunActivityDrawer: FC<RunActivityDrawerProps> = ({
             {itemSummary}
           </span>
         </div>
-        <div className="run-activity-header-actions">
-          <label className="run-activity-follow">
-            <input type="checkbox" checked={followLive} onChange={handleFollowChange} />
-            <span>Follow live</span>
-          </label>
-          {onCopyDiagnostics && (
-            <Tooltip content="Copy diagnostics" tag="span">
-              <button
-                type="button"
-                className="run-activity-icon-button"
-                aria-label="Copy diagnostics"
-                title={isNarrowViewport ? 'Copy diagnostics' : undefined}
-                onClick={onCopyDiagnostics}
-              >
-                <CopyIcon aria-hidden="true" />
-              </button>
-            </Tooltip>
-          )}
-          <button
-            ref={closeButtonRef}
-            type="button"
-            className="run-activity-icon-button"
-            aria-label="Close Run Activity"
-            title="Close"
-            onClick={onClose}
-          >
-            <CrossIcon aria-hidden="true" />
-          </button>
-        </div>
-      </header>
+      )}
       {viewModel.partialReason && (
         <div className="run-activity-notice">Partial activity: {viewModel.partialReason}</div>
       )}
@@ -1430,42 +1453,40 @@ const RunActivityRow: FC<{
   renderExpandedContent,
 }) => {
   const preview = item.error ?? item.preview ?? describeActivity(item);
+  const detailId = `run-activity-detail-${toDomId(item.activityKey)}`;
   return (
-    <article
-      className={clsx('run-activity-row', `status-${item.status}`, { 'is-expanded': expanded })}
-      data-activity-key={item.activityKey}
-    >
-      <button
-        type="button"
-        className="run-activity-row-toggle"
-        aria-expanded={expanded}
-        aria-controls={`run-activity-detail-${toDomId(item.activityKey)}`}
-        onClick={onToggle}
-      >
-        <span className={`run-activity-status-dot status-${item.status}`} aria-hidden="true" />
-        <span className="run-activity-identity">
-          <span className="run-activity-node-title">{item.nodeTitle}</span>
-          <span className="run-activity-node-meta">
-            {item.graphName} / {item.nodeType}
+    <CollapsiblePanel
+      className={clsx('run-activity-row', `status-${item.status}`)}
+      rootProps={{ 'data-activity-key': item.activityKey }}
+      ariaControls={detailId}
+      open={expanded}
+      onToggle={onToggle}
+      toggleClassName="run-activity-row-toggle"
+      label={
+        <>
+          <span className={`run-activity-status-dot status-${item.status}`} aria-hidden="true" />
+          <span className="run-activity-identity">
+            <span className="run-activity-node-title">{item.nodeTitle}</span>
+            <span className="run-activity-node-meta">
+              {item.graphName} / {item.nodeType}
+            </span>
           </span>
-        </span>
-        <span className="run-activity-graph-name">{item.graphName}</span>
-        <span className="run-activity-node-type">{item.nodeType}</span>
-        <span className={clsx('run-activity-preview', { error: item.error })}>{preview}</span>
-        <span className="run-activity-started-at">
-          {item.startedAt != null && (
-            <time dateTime={new Date(item.startedAt).toISOString()}>{formatTime(item.startedAt)}</time>
-          )}
-        </span>
-        <span className="run-activity-duration">
-          {item.durationMs != null && formatRunActivityDuration(item.durationMs)}
-        </span>
-        <span className="run-activity-chevron" aria-hidden="true">
-          {expanded ? <ChevronUpIcon /> : <ChevronDownIcon />}
-        </span>
-      </button>
+          <span className="run-activity-graph-name">{item.graphName}</span>
+          <span className="run-activity-node-type">{item.nodeType}</span>
+          <span className={clsx('run-activity-preview', { error: item.error })}>{preview}</span>
+          <span className="run-activity-started-at">
+            {item.startedAt != null && (
+              <time dateTime={new Date(item.startedAt).toISOString()}>{formatTime(item.startedAt)}</time>
+            )}
+          </span>
+          <span className="run-activity-duration">
+            {item.durationMs != null && formatRunActivityDuration(item.durationMs)}
+          </span>
+        </>
+      }
+    >
       {expanded && (
-        <div className="run-activity-row-detail" id={`run-activity-detail-${toDomId(item.activityKey)}`}>
+        <div className="run-activity-row-detail" id={detailId}>
           {(item.error != null || item.preview != null) && (
             <div className={clsx('run-activity-detail-message', { error: item.error })}>
               {item.error ?? item.preview}
@@ -1519,7 +1540,7 @@ const RunActivityRow: FC<{
           </div>
         </div>
       )}
-    </article>
+    </CollapsiblePanel>
   );
 };
 

@@ -996,7 +996,10 @@ export const nodeStyles = css`
   .multi-node-output {
     /*
      * Inline output action controls:
-     * - actions-* moves/sizes the visible button group
+     * - actions-gap is the baseline spacing between every action
+     * - each *-margin-left/right value independently adds/subtracts space for
+     *   that action without replacing the baseline gap
+     * - actions-* otherwise moves/sizes the visible button group
      * - action-exclusion-* reserves text-wrapping space at that group position
      * - *-icon-size and *-icon-offset-* tune each SVG without changing hit targets
      */
@@ -1016,19 +1019,28 @@ export const nodeStyles = css`
     --node-output-unfold-icon-size: var(--node-output-action-icon-size);
     --node-output-unfold-icon-offset-x: var(--node-output-action-icon-offset-x);
     --node-output-unfold-icon-offset-y: 0.03em;
+    --node-output-unfold-margin-left: 0px;
+    --node-output-unfold-margin-right: 0px;
     --node-output-copy-icon-size: calc(var(--node-output-action-icon-size) * 0.9);
     --node-output-copy-icon-offset-x: 0.06em;
     --node-output-copy-icon-offset-y: var(--node-output-action-icon-offset-y);
+    --node-output-copy-margin-left: 0px;
+    --node-output-copy-margin-right: 0px;
     --node-output-response-inspector-icon-size: var(--node-output-action-icon-size);
     --node-output-response-inspector-icon-offset-x: var(--node-output-action-icon-offset-x);
     --node-output-response-inspector-icon-offset-y: var(--node-output-action-icon-offset-y);
-    --node-output-response-inspector-margin-inline: calc(2px * var(--ui-font-scale));
+    --node-output-response-inspector-margin-left: calc(3.5px * var(--ui-font-scale));
+    --node-output-response-inspector-margin-right: calc(-2px * var(--ui-font-scale));
     --node-output-prompt-designer-icon-size: var(--node-output-action-icon-size);
     --node-output-prompt-designer-icon-offset-x: var(--node-output-action-icon-offset-x);
     --node-output-prompt-designer-icon-offset-y: var(--node-output-action-icon-offset-y);
+    --node-output-prompt-designer-margin-left: 0px;
+    --node-output-prompt-designer-margin-right: 0px;
     --node-output-fullscreen-icon-size: calc(var(--node-output-action-icon-size) * 0.85);
     --node-output-fullscreen-icon-offset-x: var(--node-output-action-icon-offset-x);
     --node-output-fullscreen-icon-offset-y: var(--node-output-action-icon-offset-y);
+    --node-output-fullscreen-margin-left: 0px;
+    --node-output-fullscreen-margin-right: 0px;
 
     background-color: var(--node-output-surface-bg);
     border-radius: 0 0 var(--node-card-radius) var(--node-card-radius);
@@ -1300,8 +1312,29 @@ export const nodeStyles = css`
     opacity: 1;
   }
 
+  .output-toggle-button {
+    margin-left: var(--node-output-unfold-margin-left);
+    margin-right: var(--node-output-unfold-margin-right);
+  }
+
+  .copy-button {
+    margin-left: var(--node-output-copy-margin-left);
+    margin-right: var(--node-output-copy-margin-right);
+  }
+
   .response-inspector-button {
-    margin-inline: var(--node-output-response-inspector-margin-inline);
+    margin-left: var(--node-output-response-inspector-margin-left);
+    margin-right: var(--node-output-response-inspector-margin-right);
+  }
+
+  .prompt-designer-button {
+    margin-left: var(--node-output-prompt-designer-margin-left);
+    margin-right: var(--node-output-prompt-designer-margin-right);
+  }
+
+  .expand-button {
+    margin-left: var(--node-output-fullscreen-margin-left);
+    margin-right: var(--node-output-fullscreen-margin-right);
   }
 
   .output-toggle-button svg {

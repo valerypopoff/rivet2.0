@@ -15,7 +15,7 @@ const fullscreenOutputToolbarCss = css`
   gap: 8px;
 
   border: 1px solid var(--grey-darkish);
-  background: transparent;
+  background: var(--grey-darker);
   border-radius: 8px;
   corner-shape: squircle;
   @supports not (corner-shape: squircle) {
@@ -24,12 +24,6 @@ const fullscreenOutputToolbarCss = css`
   box-shadow: none;
   margin-bottom: 8px;
   padding: 8px 12px;
-
-  &.is-over-content {
-    border-color: var(--grey);
-    background: var(--grey-darker);
-    box-shadow: 4px 4px 8px var(--shadow-dark);
-  }
 
   .toolbar-icon {
     width: var(--fullscreen-output-toolbar-icon-size);
@@ -143,7 +137,6 @@ const fullscreenOutputToolbarCss = css`
 export type FullscreenNodeOutputToolbarProps = {
   wrapLines: boolean;
   renderMarkdown: boolean;
-  isOverContent?: boolean;
   onToggleWrapLines: () => void;
   onToggleRenderMarkdown: () => void;
   query: string;
@@ -163,7 +156,6 @@ export type FullscreenNodeOutputToolbarProps = {
 export const FullscreenNodeOutputToolbar: FC<FullscreenNodeOutputToolbarProps> = ({
   wrapLines,
   renderMarkdown,
-  isOverContent = false,
   onToggleWrapLines,
   onToggleRenderMarkdown,
   query,
@@ -180,7 +172,7 @@ export const FullscreenNodeOutputToolbar: FC<FullscreenNodeOutputToolbarProps> =
   onInspectResponse,
 }) => {
   return (
-    <div css={fullscreenOutputToolbarCss} className={isOverContent ? 'is-over-content' : undefined}>
+    <div css={fullscreenOutputToolbarCss}>
       <LabeledToggle
         id="fullscreen-output-wrap-lines"
         isChecked={wrapLines}

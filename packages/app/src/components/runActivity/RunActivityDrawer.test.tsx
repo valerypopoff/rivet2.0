@@ -153,8 +153,13 @@ test('renders semantic run state, filters, partial-data notice, and invocation a
     );
     assert.match(document.body.textContent ?? '', /Started/);
     assert.match(document.body.textContent ?? '', /Duration/);
+    const filterButton = document.querySelector<HTMLButtonElement>('[aria-label="Show Run Activity filters"]')!;
+    assert.equal(document.querySelector('#react-select-run-activity-graph-filter-input'), null);
+    assert.equal(document.querySelector('.run-activity-filter-row'), null);
+    await act(async () => filterButton.click());
+    assert.equal(filterButton.getAttribute('aria-expanded'), 'true');
     assert.ok(document.querySelector('#react-select-run-activity-graph-filter-input'));
-    assert.ok(document.querySelector('.run-activity-header-controls'));
+    assert.ok(document.querySelector('.run-activity-filter-row'));
     assert.equal(document.querySelector('.run-activity-toolbar'), null);
 
     const copyDiagnosticsButton = document.querySelector<HTMLButtonElement>('[aria-label="Copy diagnostics"]')!;

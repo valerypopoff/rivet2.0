@@ -344,13 +344,20 @@ widths remain aligned with the scrollbar, but it starts at that surface's
 origin and sticks at `top: 0`. Do not combine a top list inset with a negative
 sticky offset: that visibly jumps the labels when scrolling begins.
 
-Those filters, search, and the result count belong in the drawer's primary
-header rather than a second toolbar row. When the drawer becomes too narrow,
-the control group may wrap inside that same header; it must not overflow or be
-hidden. Pointer focus for the graph selector and search should remain visually
-quiet, while keyboard `:focus-visible` remains discoverable. The header's
-diagnostics action is the shared clipboard icon with an accessible **Copy
-diagnostics** label and tooltip, not a separate text-button treatment.
+The primary header has a filter icon that controls a dedicated filter row. The
+row is closed by default, so a drawer opened only to inspect activity does not
+spend a second line on controls. It contains the category filter, graph picker,
+search, and result count; the filter icon remains visibly active when a hidden
+row still has an active filter. When the drawer becomes too narrow, that row
+may wrap but must not overflow. Pointer focus for the graph selector and search
+should remain visually quiet, while keyboard `:focus-visible` remains
+discoverable. The header's diagnostics action is the shared clipboard icon with
+an accessible **Copy diagnostics** label and tooltip, not a separate text-button
+treatment.
+
+`--run-activity-control-height` belongs to the drawer root, not the header:
+the filter row is a sibling of the header and its segmented filter, graph picker,
+and search input must share the standard select height.
 On narrow/modal layouts, where the shared portal tooltip sits below the modal
 layer, keep the same accessible label and provide the native title fallback
 instead of raising the global tooltip layer above dialogs.
