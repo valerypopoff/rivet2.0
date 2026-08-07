@@ -11,7 +11,7 @@ The docs should describe the current Rivet 2 package and app shape:
 - app-level plugin installation with project YAML plugin declarations derived from actual plugin-node usage
 - LLM Chat as the recommended chat node for new graphs
 - Browser, Node, and remote executor behavior
-- `/download`, including stable Windows/macOS release metadata from the main-branch Pages workflow and developer Windows/macOS release metadata from the develop-branch Pages workflow
+- `/download`, including stable Windows/macOS GitHub Release-feed metadata from the main-branch workflow and developer Windows/macOS metadata from the develop-branch workflow
 - wrapper/embedding seams documented in the repo's developer docs
 - article typography should keep body text close to its preceding heading while preserving larger default gaps between adjacent headings
 

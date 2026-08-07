@@ -159,22 +159,20 @@ For local publishes, `scripts/publish-npm-packages.mjs` also reads `NPM_TOKEN` f
 
 ## Stable and Developer Releases
 
-This repo publishes Windows installer downloads to the GitHub Pages documentation site:
+This repo publishes desktop installer assets to rolling GitHub Release feeds and exposes their metadata through the GitHub Pages documentation site:
 
-- `.github/workflows/official-windows-release.yml` runs on pushes to `main` and publishes the current stable Windows release metadata.
-- `.github/workflows/developer-windows-release.yml` runs on pushes to `develop` and publishes the latest developer Windows release metadata.
+- `.github/workflows/official-windows-release.yml` runs on pushes to `main`, updates the current stable Windows/macOS assets in the `rivet-2-stable-feed` GitHub Release, and publishes their metadata.
+- `.github/workflows/developer-windows-release.yml` runs on pushes to `develop`, updates the current developer Windows/macOS assets in the `rivet-2-developer-feed` prerelease, and publishes their metadata.
 
 On pushes to `develop`, the workflow:
 
-1. Installs dependencies with the pinned Yarn install command and immutable
-   cache validation.
-2. Builds the monorepo with `yarn build`.
-3. Builds Windows MSI and NSIS installer bundles from `packages/app`.
-4. Builds the Docusaurus documentation site from `packages/docs`.
-5. Adds the latest developer installer metadata and download files to the docs build.
-6. Publishes the docs site to GitHub Pages.
+1. Verifies the checked-in AI Graph Builder assets, then builds Windows and macOS bundles in parallel after the pinned Yarn install and desktop-version sync.
+2. Builds Windows MSI and NSIS installers plus a signed and notarized universal macOS DMG from `packages/app`.
+3. Builds the Docusaurus documentation site from `packages/docs` in parallel with the platform bundles.
+4. Uploads the latest developer installer assets to the rolling GitHub Release feed and adds their metadata to the docs build.
+5. Publishes the docs site to GitHub Pages.
 
-On pushes to `main`, the stable release workflow runs the same Windows installer and documentation build path, but writes `official-release.json` and stable download aliases instead of the developer feed.
+On pushes to `main`, the stable release workflow runs the same desktop installer and documentation build path, but updates the stable GitHub Release feed and writes `official-release.json` instead of the developer feed.
 
 For desktop releases, `packages/app/package.json` is the version source of
 truth. The release workflows run `yarn sync:desktop-version` before packaging so
@@ -184,8 +182,8 @@ version automatically.
 The GitHub Pages site at `https://valerypopoff.github.io/rivet2.0/` presents
 Rivet 2 and hosts the documentation. The User Guide starts at `/user-guide`.
 The top-right Download link opens a downloads page with the latest stable
-Windows installer from `main` and latest developer Windows installer from
-`develop`.
+Windows/macOS installers from `main` and latest developer Windows/macOS
+installers from `develop`.
 
 GitHub Pages must either be enabled once in repository settings with Source set to GitHub Actions, or the repository must provide a `PAGES_ENABLEMENT_TOKEN` Actions secret that can enable Pages for the workflows. The stable release workflow deploys through the `github-pages` environment and should be allowed from `main`. The developer workflow deploys through `developer-windows-pages` so develop-branch installer deployments are not blocked by production `github-pages` environment rules; if that environment is protected later, it must allow `develop`.
 

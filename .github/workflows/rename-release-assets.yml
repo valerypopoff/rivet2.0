@@ -11,6 +11,7 @@ permissions:
 
 jobs:
   rename:
+    if: github.event.release.tag_name != 'rivet-2-stable-feed' && github.event.release.tag_name != 'rivet-2-developer-feed'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code

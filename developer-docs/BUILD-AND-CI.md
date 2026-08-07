@@ -827,14 +827,14 @@ Current workflow references:
 - `TAURI_KEY_PASSWORD`
 - Apple signing/notarization-related secrets for macOS release builds
 
-## Desktop Pages release workflows
+## Desktop Release and Pages workflows
 
-Rivet publishes desktop download metadata through the Docusaurus GitHub Pages site:
+Rivet publishes desktop installers as GitHub Release assets and publishes only the Docusaurus site plus release metadata through GitHub Pages:
 
 - [`.github/workflows/official-windows-release.yml`](../.github/workflows/official-windows-release.yml) runs on `main`
 - [`.github/workflows/developer-windows-release.yml`](../.github/workflows/developer-windows-release.yml) runs on `develop`
 
-The workflow filenames are historical, but the workflows are desktop release workflows. Each one builds Windows installers and a macOS disk image, builds the documentation site in parallel with the platform bundles, then publishes both sets of aliases and original artifacts to the `/download` page.
+The workflow filenames are historical, but the workflows are desktop release workflows. Each one builds Windows installers and a macOS disk image, builds the documentation site in parallel with the platform bundles, uploads the installers to its rolling GitHub Release feed, then publishes the corresponding metadata to the `/download` page.
 
 The platform and docs build jobs use `actions/checkout@v6` for the initial repository checkout. A failure in that step happens before any Rivet, Tauri, Rust, or Node build command runs. Treat `fatal: could not read Username for 'https://github.com': terminal prompts disabled` from this step as a GitHub repository checkout/authentication failure, not a macOS packaging failure. If the failing log fetches `origin/develop`, it is the developer release workflow; stable `main` runs fetch `origin/main`.
 
@@ -851,8 +851,9 @@ Tauri v1 signs and notarizes the application bundle when those variables are pre
 
 The job then runs [`.github/scripts/verify-macos-dmg.sh`](../.github/scripts/verify-macos-dmg.sh). That verification mounts the generated DMG, checks the contained `.app` with `codesign` and `spctl`, validates the DMG's stapled notarization ticket, and assesses the DMG's primary signature before upload. This makes a successful Pages release mean the downloadable macOS DMG is signed and notarized rather than merely packaged.
 
-Both workflows use [`.github/scripts/prepare-desktop-release-pages.mjs`](../.github/scripts/prepare-desktop-release-pages.mjs) after the docs build. The script reads `WINDOWS_BUNDLE_DIR` and `MACOS_BUNDLE_DIR`, copies original artifacts under platform-specific `downloads/<channel>/original/<platform>/` paths, creates stable download aliases, and generates a channel metadata file with a shared `version` field.
-It fails the job if a requested platform does not produce a stable download alias, so a successful Pages deployment cannot silently drop the macOS DMG or the Windows installer links.
+Both workflows first use [`.github/scripts/publish-desktop-release-assets.mjs`](../.github/scripts/publish-desktop-release-assets.mjs). It reads `WINDOWS_BUNDLE_DIR` and `MACOS_BUNDLE_DIR`, verifies that every requested platform produced its primary installer, uploads all current build artifacts to the channel's rolling GitHub Release feed, and writes a manifest of returned `browser_download_url` values. It never removes release assets: every asset name includes the version, source commit suffix, Actions run number, and attempt number. This means a failed upload cannot invalidate the live download metadata; the `/download` page references only the latest successful manifest.
+
+The workflows then use [`.github/scripts/prepare-desktop-release-pages.mjs`](../.github/scripts/prepare-desktop-release-pages.mjs). When given that manifest, it validates the channel, desktop version, requested platforms, and HTTPS asset URLs before generating the channel metadata file. It does not copy installers into the Pages output. This keeps the download-page contract (`official-release.json` and `developer-release.json`) intact while making normal Pages artifacts close to the documentation-site size instead of hundreds of megabytes of duplicated installer bytes.
 
 Before building installers, both platform jobs run `yarn sync:desktop-version`; Tauri's `beforeBuildCommand` also runs `prepare:tauri`, which performs the same version sync before rebuilding the sidecar. The `build-pages` assembly job runs `node scripts/sync-desktop-version.mjs` without installing dependencies before generating metadata, because it checks out a fresh workspace and the metadata script verifies that `packages/app/package.json` and Tauri's `package.version` match.
 That sync copies `packages/app/package.json` `version` into
@@ -862,17 +863,21 @@ and the app entry in `Cargo.lock`. Tauri uses `tauri.conf.json`
 developer bump only the app package version and still get correctly versioned
 developer/stable installer names.
 
-Generated metadata and aliases:
+Generated metadata and rolling release feeds:
 
-- stable workflow: `official-release.json`, `downloads/official/Rivet-2-Windows-Setup.exe`, `downloads/official/Rivet-2-Windows.msi`, and `downloads/official/Rivet-2-macOS.dmg`
-- developer workflow: `developer-release.json`, `downloads/developer/Rivet-2-Developer-Windows-Setup.exe`, `downloads/developer/Rivet-2-Developer-Windows.msi`, and `downloads/developer/Rivet-2-Developer-macOS.dmg`
+- stable workflow: `official-release.json` with current installer URLs in the `rivet-2-stable-feed` GitHub Release
+- developer workflow: `developer-release.json` with current installer URLs in the prerelease `rivet-2-developer-feed` GitHub Release
+
+These feed releases are intentionally asset containers, not semver releases and not the updater-release tags. Their static tags avoid interfering with the separate `app-v*` tagged release workflow. The published metadata identifies the exact source commit and Actions run that produced the current files; the feed Release itself stays a stable container so a failed later build cannot falsely describe itself as the live download. The `build-pages` job has `contents: write` only because GitHub Release creation and asset upload require it; it also has `actions: read` to download the platform and docs artifacts. The Pages deployment job retains its separate `pages: write` and `id-token: write` contract.
 
 The `/download` docs page reads both metadata files. A Pages deploy replaces the whole site, so each release workflow preserves the other channel from the currently published Pages site before writing its own current channel:
 
 - `main` stable runs preserve `developer-release.json` and the developer assets referenced by that metadata
 - `develop` developer runs preserve `official-release.json` and the stable assets referenced by that metadata
 
-The release workflows share the `rivet-docs-pages` concurrency group with `cancel-in-progress: false`, so stable and developer Pages deployments queue instead of racing and accidentally publishing a site that only contains one release channel.
+During the one-time migration, an older other-channel metadata file can still refer to a Pages-hosted installer. The preservation step keeps that asset until that other channel next publishes and replaces its metadata with GitHub Release URLs. This staged behavior prevents either channel's existing links from breaking. Preservation is fail-safe: a missing metadata file is accepted for the first publish, but an unavailable or structurally invalid already-published channel aborts the new workflow rather than deploying a site that silently drops it. Once both channels have published through the new flow, no installers remain in the Pages artifact.
+
+The release workflows share the `rivet-docs-pages` concurrency group with `cancel-in-progress: false`, so stable and developer Pages deployments queue instead of racing and accidentally publishing a site that only contains one release channel. Each `publish-pages` job also handles the transient GitHub Pages queue timeout that can occur after an artifact is accepted: each `actions/deploy-pages@v5` attempt is capped at five minutes, waits 15 seconds after a first failure so a cancelled Pages deployment can settle, then retries once against the same uploaded Pages artifact. GitHub Actions cannot branch on the action's internal failure reason, so this retry also covers other first-attempt deployment failures. A second failure remains a failed release, so the workflow never reports an unpublished site as successful. This keeps a prolonged Pages control-plane failure within roughly the original 10-minute wait budget while letting a fresh deployment recover automatically.
 
 ### `official-windows-release.yml`
 
@@ -889,8 +894,8 @@ The workflow has six jobs:
 2. `build-windows` runs on `windows-latest` after that verifier, checks out the repo, restores Node/Yarn, `pkg`, and Rust caches, installs Rust stable, runs the pinned Yarn install with immutable cache validation, syncs desktop version metadata, runs `yarn build:hosted-web-deps`, then runs `yarn tauri build --verbose --ci --bundles "msi,nsis"` from `packages/app`.
 3. `build-macos` runs on `macos-latest` after that verifier, checks out the repo, restores Node/Yarn, `pkg`, and Rust caches, installs the stable Rust toolchain with `x86_64-apple-darwin` and `aarch64-apple-darwin` targets, runs the pinned Yarn install with immutable cache validation, syncs desktop version metadata, runs `yarn build:hosted-web-deps`, then runs `yarn tauri build --verbose --ci --target universal-apple-darwin --bundles "dmg"` from `packages/app`.
 4. `build-docs` runs on `ubuntu-latest` after that verifier, installs dependencies with the shared Node/Yarn setup, builds the Docusaurus docs site from `packages/docs`, and uploads the docs build as an intermediate artifact. This job intentionally starts without waiting for the platform bundles.
-5. `build-pages` runs on `ubuntu-latest` after the platform bundles and docs artifact are ready, checks out the repo, syncs desktop version metadata without a Yarn install, downloads the docs site plus Windows and macOS bundle artifacts, preserves the current developer release feed from Pages if it exists, writes stable release metadata and installer files into `packages/docs/build`, and uploads that complete docs-site artifact.
-6. `publish-pages` runs on `ubuntu-latest`, downloads the generated docs-site artifact, configures GitHub Pages, uploads it as a GitHub Pages artifact, and deploys it with `actions/deploy-pages`.
+5. `build-pages` runs on `ubuntu-latest` after the platform bundles and docs artifact are ready, checks out the repo, syncs desktop version metadata without a Yarn install, downloads the docs site plus Windows and macOS bundle artifacts, publishes those artifacts to the rolling stable GitHub Release feed, preserves the current developer release metadata from Pages if it exists, writes stable release metadata into `packages/docs/build`, and uploads that complete docs-site artifact.
+6. `publish-pages` runs on `ubuntu-latest`, downloads the generated docs-site artifact, configures GitHub Pages, uploads it as a GitHub Pages artifact, and deploys it with `actions/deploy-pages`. A transient queued deployment gets one clean retry; an exhausted retry still fails the release visibly.
 
 The stable deploy job uses the `github-pages` environment. If that environment has branch restrictions, it must allow `main`.
 
@@ -911,8 +916,8 @@ The workflow has six jobs:
 2. `build-windows` runs on `windows-latest` after that verifier, checks out the repo, restores Node/Yarn, `pkg`, and Rust caches, installs Rust stable, runs the pinned Yarn install with immutable cache validation, syncs desktop version metadata, runs `yarn build:hosted-web-deps`, then runs `yarn tauri build --verbose --ci --bundles "msi,nsis"` from `packages/app`.
 3. `build-macos` runs on `macos-latest` after that verifier, checks out the repo, restores Node/Yarn, `pkg`, and Rust caches, installs the stable Rust toolchain with `x86_64-apple-darwin` and `aarch64-apple-darwin` targets, runs the pinned Yarn install with immutable cache validation, syncs desktop version metadata, runs `yarn build:hosted-web-deps`, then runs `yarn tauri build --verbose --ci --target universal-apple-darwin --bundles "dmg"` from `packages/app`.
 4. `build-docs` runs on `ubuntu-latest` after that verifier, installs dependencies with the shared Node/Yarn setup, builds the Docusaurus docs site from `packages/docs`, and uploads the docs build as an intermediate artifact. This job intentionally starts without waiting for the platform bundles.
-5. `build-pages` runs on `ubuntu-latest` after the platform bundles and docs artifact are ready, checks out the repo, syncs desktop version metadata without a Yarn install, downloads the docs site plus Windows and macOS bundle artifacts, preserves the current stable release feed from Pages if it exists, writes developer release metadata and installer files into `packages/docs/build`, and uploads that complete docs-site artifact.
-6. `publish-pages` runs on `ubuntu-latest`, downloads the generated docs-site artifact, configures GitHub Pages, uploads it as a GitHub Pages artifact, and deploys it with `actions/deploy-pages`.
+5. `build-pages` runs on `ubuntu-latest` after the platform bundles and docs artifact are ready, checks out the repo, syncs desktop version metadata without a Yarn install, downloads the docs site plus Windows and macOS bundle artifacts, publishes those artifacts to the rolling developer GitHub Release feed, preserves the current stable release metadata from Pages if it exists, writes developer release metadata into `packages/docs/build`, and uploads that complete docs-site artifact.
+6. `publish-pages` runs on `ubuntu-latest`, downloads the generated docs-site artifact, configures GitHub Pages, uploads it as a GitHub Pages artifact, and deploys it with `actions/deploy-pages`. A transient queued deployment gets one clean retry; an exhausted retry still fails the release visibly.
 
 Docusaurus owns the site root and reads `developer-release.json` on the `/download` page. The generated Pages site represents the current public docs plus the latest successful developer Windows and macOS release from `develop`, while preserving the stable release feed that was already published from `main`.
 
@@ -1063,40 +1068,16 @@ workspace-only metadata and dependencies. Always use the root
 `scripts/publish-npm-packages.mjs` path, or the GitHub workflow that calls it,
 so package manifests are staged and normalized before npm sees them.
 
-## `rename-release-assets.yml`
+## Rolling desktop release feeds
 
-### Trigger conditions
+The existing `rename-release-assets.yml` workflow remains responsible for stable aliases on ordinary tagged GitHub Releases. It explicitly skips the two feed tags below, so its post-publication download/re-upload behavior cannot race with the metadata-first desktop feed.
 
-- release `published`
-- release `edited`
+The desktop release workflows now create or update their own dedicated feed release before the Pages metadata is written:
 
-### Current behavior
+- `rivet-2-stable-feed` stores the current `main` installer build and is not marked as GitHub's latest semver release.
+- `rivet-2-developer-feed` stores the current `develop` installer build and is marked as a prerelease.
 
-Runs `.github/scripts/rename-release-files.mjs`, which:
-
-- enumerates release assets with pagination
-- downloads versioned app artifacts
-- re-uploads renamed stable filenames under the `Rivet-2` name
-- deletes older assets with the same target filename if needed
-
-The workflow does not run `yarn install`; the script uses Node's built-in
-`fetch` and the GitHub REST API directly so release-asset aliasing does not pay
-the full monorepo dependency install cost. If more than one versioned artifact
-normalizes to the same stable filename, the script updates its in-memory asset
-map after delete/upload operations so later uploads replace the current alias
-without trying to delete an already-deleted stale asset. Upload failures are
-collected and fail the workflow after all matching assets have been attempted,
-so a green release-asset job means the stable download aliases were actually
-created.
-
-Current rename targets include patterns for:
-
-- universal DMG
-- AppImage
-- Debian package
-- Windows setup executable
-
-The script resolves the target repository from `GITHUB_REPOSITORY` and defaults to `valerypopoff/rivet2.0` for local dry runs. Windows setup assets are normalized to `Rivet-2-Setup.exe`, while DMG/AppImage/Debian assets normalize to `Rivet-2.<extension>`.
+Each asset name includes the desktop version, source commit suffix, Actions run number, and attempt number. Feed releases deliberately retain historical assets rather than deleting them during automated publishing: this keeps existing Pages metadata valid if a later workflow fails before its Pages deployment. The download page always uses the metadata file rather than guessing a release URL, so the externally hosted filenames do not change the user-facing update or download flow. If feed storage eventually needs pruning, do it as an explicitly approved maintenance operation after verifying that no retained metadata refers to the candidate assets.
 
 ## Tauri Build and Packaging
 
@@ -1166,11 +1147,10 @@ Useful local validation flags:
 The current effective release flow is:
 
 1. update versions in package manifests; for desktop app releases, `packages/app/package.json` is the source and `yarn sync:desktop-version` updates Tauri/Cargo metadata
-2. push to `main` to publish npm packages and the current stable Windows/macOS desktop download feed on GitHub Pages
+2. push to `main` to publish npm packages, update the current stable Windows/macOS installers in the rolling GitHub Release feed, and publish their metadata through GitHub Pages
 3. push `app-v*` tag for updater-enabled desktop release drafts when that path is needed
 4. let `release.yml` create draft desktop artifacts
-5. let `rename-release-assets.yml` normalize asset names
-6. let the release-page workflows publish the Docusaurus site through GitHub Pages
+5. let the release-page workflows publish the Docusaurus site and both release-feed metadata documents through GitHub Pages
 
 ## Known Operational Risks
 
