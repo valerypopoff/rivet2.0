@@ -669,7 +669,11 @@ fixed release (rather than a floating caret), then run `yarn install` and the
 audit. This keeps the zero-install lockfile deterministic while the owning
 upstream packages catch up.
 
-The root `postcss@npm:^8.4.21` resolution keeps the `rtlcss` documentation
+The root `js-yaml` resolutions keep `gray-matter`'s js-yaml 3.x path and
+ESLint's js-yaml 4.x path on their current maintained patch releases. Keep them
+pinned until the owning documentation and lint toolchains refresh their declared
+ranges; this preserves zero-install determinism without a broad major-version
+override. The root `postcss@npm:^8.4.21` resolution keeps the `rtlcss` documentation
 toolchain on the same patched PostCSS 8.x release used by the rest of the
 workspace. Keep that descriptor pinned until `rtlcss` or its owning Docusaurus
 dependency refreshes the transitive lock entry; do not replace that fix with an
