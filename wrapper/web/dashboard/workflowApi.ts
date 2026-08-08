@@ -18,6 +18,12 @@ import type {
   WorkflowRecordingInputFilter,
   WorkflowRecordingRunsPageResponse,
   WorkflowRecordingWorkflowListResponse,
+  WorkflowRunStatisticsCatalogResponse,
+  WorkflowRunStatisticsPeriod,
+  WorkflowRunStatisticsQuery,
+  WorkflowRunStatisticsRunKind,
+  WorkflowRunStatisticsResponse,
+  WorkflowRunStatisticsSurface,
   WorkflowPublishedVersionRestoreResponse,
   WorkflowPublishedVersionCommentResponse,
   WorkflowPublishedVersionStarResponse,
@@ -161,6 +167,34 @@ export async function fetchWorkflowRecordingRuns(
     signal: options.signal,
   });
   return workflowJsonResponse<WorkflowRecordingRunsPageResponse>(response);
+}
+
+export async function fetchWorkflowRunStatisticsCatalog(
+  surface: WorkflowRunStatisticsSurface,
+  period: WorkflowRunStatisticsPeriod,
+  runKind: WorkflowRunStatisticsRunKind,
+  options: { signal?: AbortSignal } = {},
+): Promise<WorkflowRunStatisticsCatalogResponse> {
+  const query = new URLSearchParams({ surface, from: period.from, to: period.to, runKind });
+  const response = await fetch(`${API}/workflows/run-statistics/targets?${query}`, {
+    cache: 'no-store',
+    signal: options.signal,
+  });
+  return workflowJsonResponse<WorkflowRunStatisticsCatalogResponse>(response);
+}
+
+export async function fetchWorkflowRunStatistics(
+  query: WorkflowRunStatisticsQuery,
+  options: { signal?: AbortSignal } = {},
+): Promise<WorkflowRunStatisticsResponse> {
+  const response = await fetch(`${API}/workflows/run-statistics/query`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(query),
+    cache: 'no-store',
+    signal: options.signal,
+  });
+  return workflowJsonResponse<WorkflowRunStatisticsResponse>(response);
 }
 
 export async function fetchWorkflowRecordingArtifactText(

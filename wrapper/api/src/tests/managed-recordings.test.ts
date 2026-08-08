@@ -25,6 +25,16 @@ function createRecordingRow(
     status: 'succeeded',
     duration_ms: 1,
     endpoint_name_at_execution: endpointName,
+    execution_surface: null,
+    graph_id_at_execution: null,
+    graph_name_at_execution: null,
+    revision_key_at_execution: null,
+    ui_graph_id_at_execution: null,
+    ui_graph_name_at_execution: null,
+    web_app_slug_at_execution: null,
+    component_id_at_execution: null,
+    component_type_at_execution: null,
+    component_label_at_execution: null,
     error_message: null,
     recording_blob_key: `${recordingId}/recording`,
     replay_project_blob_key: `${recordingId}/project`,
@@ -72,6 +82,66 @@ test('managed per-endpoint retention does not combine projects that reused the s
   });
 
   assert.deepEqual(selected.map((row) => row.recording_id), ['a-old']);
+});
+
+test('managed recording statistics preserve web-app action identity and run-kind filtering', async () => {
+  const webAppRow: RecordingRow = {
+    ...createRecordingRow('web-app', '/apps/report', '2026-08-04T12:00:00.000Z'),
+    run_kind: 'published',
+    execution_surface: 'web_app_action',
+    ui_graph_id_at_execution: 'ui-report',
+    ui_graph_name_at_execution: 'Report',
+    component_id_at_execution: 'generate',
+    component_type_at_execution: 'button',
+    component_label_at_execution: 'Generate report',
+  };
+  const context = {
+    pool: {},
+    initialize: async () => {},
+    withTransaction: async () => {},
+    revisions: {
+      uploadRecordingBlobs: async () => ({ recordingBlobKey: 'recording', replayProjectBlobKey: 'project', replayDatasetBlobKey: null }),
+      insertRecordingRow: async () => {},
+      deleteBlobKeysBestEffort: async () => {},
+    },
+    db: {
+      queryOne: async () => null,
+      queryRows: async () => [webAppRow],
+    },
+    blobStore: { getText: async () => '' },
+    mappers: {
+      getWorkflowStatus: () => 'unpublished',
+      mapWorkflowRowToProjectItem: () => ({}),
+      toIsoString: (value: unknown) => String(value),
+      WORKFLOW_COLUMNS_QUALIFIED: '',
+      RECORDING_COLUMNS: 'recording_id',
+    },
+  } as unknown as ManagedWorkflowContext;
+  const service = createManagedWorkflowRecordingService({
+    context,
+    getRecordingConfig: () => ({
+      enabled: true,
+      compression: 'gzip',
+      gzipLevel: 4,
+      maxPendingWrites: 100,
+      includePartialOutputs: false,
+      includeTrace: false,
+      datasetMode: 'none',
+      retentionDays: 0,
+      maxRunsPerEndpoint: 0,
+      maxTotalBytes: 0,
+    }),
+  });
+
+  const catalog = await service.listWorkflowRunStatisticsCatalog('web_app', {
+    from: '2026-08-04T00:00:00.000Z',
+    to: '2026-08-05T00:00:00.000Z',
+  }, 'published');
+
+  assert.deepEqual(catalog.targets.map((entry) => entry.target), [
+    { surface: 'web_app', workflowId: 'workflow-a', uiGraphId: 'ui-report', componentId: 'generate' },
+  ]);
+  assert.equal(catalog.targets[0]?.componentLabel, 'Generate report');
 });
 
 test('managed startup cleanup deletes only claimed rows and their blobs', async () => {

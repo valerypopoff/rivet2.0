@@ -5,9 +5,11 @@ import { DatabaseSync } from 'node:sqlite';
 import { getAppDataRoot } from '../../security.js';
 import type {
   WorkflowRecordingBlobEncoding,
+  WorkflowRecordingExecutionIdentity,
   WorkflowRecordingFilterStatus,
   WorkflowRecordingRunKind,
   WorkflowRecordingStatus,
+  WorkflowRunStatisticsTarget,
 } from '../../../../shared/workflow-recording-types.js';
 
 export type WorkflowRecordingWorkflowRow = {
@@ -27,6 +29,7 @@ export type WorkflowRecordingRunRow = {
   status: WorkflowRecordingStatus;
   durationMs: number;
   endpointNameAtExecution: string;
+  executionIdentity?: WorkflowRecordingExecutionIdentity;
   errorMessage?: string;
   bundlePath: string;
   encoding: WorkflowRecordingBlobEncoding;
@@ -46,6 +49,10 @@ export type WorkflowRecordingWorkflowStatsRow = WorkflowRecordingWorkflowRow & {
   suspiciousRuns: number;
 };
 
+export type WorkflowRecordingStatisticsRow = WorkflowRecordingRunRow & {
+  sourceProjectName: string;
+};
+
 const RECORDING_RUN_COLUMNS = `
   id AS id,
   workflow_id AS workflowId,
@@ -54,6 +61,16 @@ const RECORDING_RUN_COLUMNS = `
   status AS status,
   duration_ms AS durationMs,
   endpoint_name_at_execution AS endpointNameAtExecution,
+  execution_surface AS executionSurface,
+  graph_id_at_execution AS graphIdAtExecution,
+  graph_name_at_execution AS graphNameAtExecution,
+  revision_key_at_execution AS revisionKeyAtExecution,
+  ui_graph_id_at_execution AS uiGraphIdAtExecution,
+  ui_graph_name_at_execution AS uiGraphNameAtExecution,
+  web_app_slug_at_execution AS webAppSlugAtExecution,
+  component_id_at_execution AS componentIdAtExecution,
+  component_type_at_execution AS componentTypeAtExecution,
+  component_label_at_execution AS componentLabelAtExecution,
   error_message AS errorMessage,
   bundle_path AS bundlePath,
   encoding AS encoding,
@@ -92,6 +109,16 @@ const UPSERT_RECORDING_RUN_SQL = `
     status,
     duration_ms,
     endpoint_name_at_execution,
+    execution_surface,
+    graph_id_at_execution,
+    graph_name_at_execution,
+    revision_key_at_execution,
+    ui_graph_id_at_execution,
+    ui_graph_name_at_execution,
+    web_app_slug_at_execution,
+    component_id_at_execution,
+    component_type_at_execution,
+    component_label_at_execution,
     error_message,
     bundle_path,
     encoding,
@@ -102,7 +129,7 @@ const UPSERT_RECORDING_RUN_SQL = `
     project_uncompressed_bytes,
     dataset_compressed_bytes,
     dataset_uncompressed_bytes
-  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   ON CONFLICT(id) DO UPDATE SET
     workflow_id = excluded.workflow_id,
     created_at = excluded.created_at,
@@ -110,6 +137,16 @@ const UPSERT_RECORDING_RUN_SQL = `
     status = excluded.status,
     duration_ms = excluded.duration_ms,
     endpoint_name_at_execution = excluded.endpoint_name_at_execution,
+    execution_surface = excluded.execution_surface,
+    graph_id_at_execution = excluded.graph_id_at_execution,
+    graph_name_at_execution = excluded.graph_name_at_execution,
+    revision_key_at_execution = excluded.revision_key_at_execution,
+    ui_graph_id_at_execution = excluded.ui_graph_id_at_execution,
+    ui_graph_name_at_execution = excluded.ui_graph_name_at_execution,
+    web_app_slug_at_execution = excluded.web_app_slug_at_execution,
+    component_id_at_execution = excluded.component_id_at_execution,
+    component_type_at_execution = excluded.component_type_at_execution,
+    component_label_at_execution = excluded.component_label_at_execution,
     error_message = excluded.error_message,
     bundle_path = excluded.bundle_path,
     encoding = excluded.encoding,
@@ -139,6 +176,7 @@ function writeWorkflowRecordingWorkflow(
 }
 
 function writeWorkflowRecordingRun(statement: RecordingStatement, row: WorkflowRecordingRunRow): void {
+  const identity = row.executionIdentity;
   statement.run(
     row.id,
     row.workflowId,
@@ -147,6 +185,16 @@ function writeWorkflowRecordingRun(statement: RecordingStatement, row: WorkflowR
     row.status,
     row.durationMs,
     row.endpointNameAtExecution,
+    identity?.surface ?? null,
+    identity?.graphId ?? null,
+    identity?.graphName ?? null,
+    identity?.revisionKey ?? null,
+    identity?.uiGraphId ?? null,
+    identity?.uiGraphName ?? null,
+    identity?.webAppSlug ?? null,
+    identity?.componentId ?? null,
+    identity?.componentType ?? null,
+    identity?.componentLabel ?? null,
     row.errorMessage ?? null,
     row.bundlePath,
     row.encoding,
@@ -218,6 +266,16 @@ async function openDatabase(): Promise<DatabaseSync> {
       status TEXT NOT NULL,
       duration_ms INTEGER NOT NULL,
       endpoint_name_at_execution TEXT NOT NULL,
+      execution_surface TEXT,
+      graph_id_at_execution TEXT,
+      graph_name_at_execution TEXT,
+      revision_key_at_execution TEXT,
+      ui_graph_id_at_execution TEXT,
+      ui_graph_name_at_execution TEXT,
+      web_app_slug_at_execution TEXT,
+      component_id_at_execution TEXT,
+      component_type_at_execution TEXT,
+      component_label_at_execution TEXT,
       error_message TEXT,
       bundle_path TEXT NOT NULL,
       encoding TEXT NOT NULL,
@@ -236,17 +294,52 @@ async function openDatabase(): Promise<DatabaseSync> {
       ON recording_runs(status, created_at DESC);
     CREATE INDEX IF NOT EXISTS idx_recording_runs_created_at
       ON recording_runs(created_at DESC);
-
     CREATE TABLE IF NOT EXISTS recording_storage_state (
       key TEXT PRIMARY KEY,
       value TEXT NOT NULL
     );
+    `);
+    ensureRecordingRunIdentityColumns(db);
+    db.exec(`
+      CREATE INDEX IF NOT EXISTS idx_recording_runs_statistics_target
+        ON recording_runs(
+          execution_surface,
+          workflow_id,
+          ui_graph_id_at_execution,
+          component_id_at_execution,
+          run_kind,
+          created_at DESC
+        );
     `);
 
     return db;
   } catch (error) {
     db?.close();
     throw error;
+  }
+}
+
+function ensureRecordingRunIdentityColumns(db: DatabaseSync): void {
+  const existingColumns = new Set(
+    db.prepare('PRAGMA table_info(recording_runs)').all<{ name: string }>().map((row) => row.name),
+  );
+  const columns = [
+    ['execution_surface', 'TEXT'],
+    ['graph_id_at_execution', 'TEXT'],
+    ['graph_name_at_execution', 'TEXT'],
+    ['revision_key_at_execution', 'TEXT'],
+    ['ui_graph_id_at_execution', 'TEXT'],
+    ['ui_graph_name_at_execution', 'TEXT'],
+    ['web_app_slug_at_execution', 'TEXT'],
+    ['component_id_at_execution', 'TEXT'],
+    ['component_type_at_execution', 'TEXT'],
+    ['component_label_at_execution', 'TEXT'],
+  ] as const;
+
+  for (const [name, type] of columns) {
+    if (!existingColumns.has(name)) {
+      db.exec(`ALTER TABLE recording_runs ADD COLUMN ${name} ${type}`);
+    }
   }
 }
 
@@ -470,6 +563,31 @@ export async function listWorkflowRecordingRunsOldestFirst(): Promise<WorkflowRe
   return rows.map(normalizeWorkflowRecordingRunRow);
 }
 
+export async function listWorkflowRecordingStatisticsRows(
+  from: string,
+  to: string,
+  target?: WorkflowRunStatisticsTarget,
+): Promise<WorkflowRecordingStatisticsRow[]> {
+  const db = await getDatabase();
+  const { clause, parameters } = buildStatisticsTargetClause(target);
+  const rows = db.prepare(`
+    SELECT
+      ${RECORDING_RUN_COLUMNS}
+    FROM recording_runs
+    WHERE created_at >= ? AND created_at < ?
+    ${clause}
+    ORDER BY created_at ASC, id ASC
+  `).all<Record<string, unknown>>(from, to, ...parameters);
+  const workflowNames = new Map(
+    (await listWorkflowRecordingWorkflowStatsRows()).map((workflow) => [workflow.workflowId, workflow.sourceProjectName]),
+  );
+
+  return rows.map((row) => {
+    const run = normalizeWorkflowRecordingRunRow(row);
+    return { ...run, sourceProjectName: workflowNames.get(run.workflowId) ?? run.workflowId };
+  });
+}
+
 export async function listWorkflowRecordingBundlePaths(): Promise<string[]> {
   const db = await getDatabase();
   const rows = db.prepare(`
@@ -571,6 +689,7 @@ function normalizeWorkflowRecordingRunRow(row: Record<string, unknown>): Workflo
     status,
     durationMs: toNumber(row.durationMs),
     endpointNameAtExecution: String(row.endpointNameAtExecution ?? ''),
+    executionIdentity: getExecutionIdentity(row),
     errorMessage: toOptionalString(row.errorMessage),
     bundlePath: String(row.bundlePath ?? ''),
     encoding: row.encoding === 'identity' ? 'identity' : 'gzip',
@@ -584,8 +703,70 @@ function normalizeWorkflowRecordingRunRow(row: Record<string, unknown>): Workflo
   };
 }
 
+function getExecutionIdentity(row: Record<string, unknown>): WorkflowRecordingExecutionIdentity | undefined {
+  const surface = row.executionSurface;
+  if (surface !== 'workflow_endpoint' && surface !== 'web_app_action') {
+    return undefined;
+  }
+
+  const componentType = row.componentTypeAtExecution;
+  return {
+    surface,
+    graphId: toOptionalString(row.graphIdAtExecution),
+    graphName: toOptionalString(row.graphNameAtExecution),
+    revisionKey: toOptionalString(row.revisionKeyAtExecution),
+    uiGraphId: toOptionalString(row.uiGraphIdAtExecution),
+    uiGraphName: toOptionalString(row.uiGraphNameAtExecution),
+    webAppSlug: toOptionalString(row.webAppSlugAtExecution),
+    componentId: toOptionalString(row.componentIdAtExecution),
+    componentType: componentType === 'button' || componentType === 'chat' ? componentType : undefined,
+    componentLabel: toOptionalString(row.componentLabelAtExecution),
+  };
+}
+
 function buildRunFilterClause(statusFilter: WorkflowRecordingFilterStatus): string {
   return statusFilter === 'failed'
     ? `WHERE workflow_id = ? AND status IN ('failed', 'suspicious')`
     : 'WHERE workflow_id = ?';
+}
+
+function buildStatisticsTargetClause(target: WorkflowRunStatisticsTarget | undefined): {
+  clause: string;
+  parameters: string[];
+} {
+  if (!target) {
+    return { clause: '', parameters: [] };
+  }
+
+  if (target.surface === 'endpoint') {
+    return {
+      clause: `AND workflow_id = ?
+        AND (execution_surface = 'workflow_endpoint'
+          OR (execution_surface IS NULL AND endpoint_name_at_execution NOT LIKE '/%'))`,
+      parameters: [target.workflowId],
+    };
+  }
+
+  if ('legacyEndpointName' in target) {
+    return {
+      clause: `AND workflow_id = ?
+        AND (
+          execution_surface IS NULL
+          OR (
+            execution_surface = 'web_app_action'
+            AND (ui_graph_id_at_execution IS NULL OR component_id_at_execution IS NULL)
+          )
+        )
+        AND endpoint_name_at_execution = ?`,
+      parameters: [target.workflowId, target.legacyEndpointName],
+    };
+  }
+
+  return {
+    clause: `AND workflow_id = ?
+      AND execution_surface = 'web_app_action'
+      AND ui_graph_id_at_execution = ?
+      AND component_id_at_execution = ?`,
+    parameters: [target.workflowId, target.uiGraphId, target.componentId],
+  };
 }

@@ -12,6 +12,7 @@ import {
 
 import type {
   WorkflowRecordingFilterStatus,
+  WorkflowRecordingExecutionIdentity,
   WorkflowRecordingInputFilter,
   WorkflowRecordingRunsPageResponse,
   WorkflowRecordingRunKind,
@@ -19,6 +20,11 @@ import type {
   WorkflowRecordingStatus,
   WorkflowRecordingWorkflowListResponse,
   WorkflowRecordingWorkflowSummary,
+  WorkflowRunStatisticsCatalogResponse,
+  WorkflowRunStatisticsPeriod,
+  WorkflowRunStatisticsQuery,
+  WorkflowRunStatisticsResponse,
+  WorkflowRunStatisticsSurface,
 } from '../../../../shared/workflow-recording-types.js';
 import { createHttpError } from '../../utils/httpError.js';
 import {
@@ -32,6 +38,7 @@ import {
   listWorkflowRecordingBundlePaths,
   listWorkflowRecordingRunRowsByWorkflowId,
   listWorkflowRecordingRunRowsForWorkflow,
+  listWorkflowRecordingStatisticsRows,
   listWorkflowRecordingWorkflowStatsRows,
   resetWorkflowRecordingDatabaseForTests,
   setWorkflowRecordingStorageState,
@@ -61,9 +68,13 @@ import {
   rebuildWorkflowRecordingIndex,
   removeEmptyWorkflowProjectRecordingsRoot,
 } from './recordings-maintenance.js';
-import { type StoredWorkflowRecordingMetadataV2 } from './recordings-metadata.js';
+import { type StoredWorkflowRecordingMetadataV3 } from './recordings-metadata.js';
 import { getWorkflowProject } from './workflow-query.js';
 import { filterRowsBySerializedRecordingInputPage } from './recording-input-filter.js';
+import {
+  buildWorkflowRunStatistics,
+  buildWorkflowRunStatisticsCatalog,
+} from './recording-statistics.js';
 
 type PersistWorkflowExecutionRecordingOptions = {
   workflowsRoot: string;
@@ -78,6 +89,7 @@ type PersistWorkflowExecutionRecordingOptions = {
   status: WorkflowRecordingStatus;
   durationMs: number;
   errorMessage?: string;
+  executionIdentity?: WorkflowRecordingExecutionIdentity;
 };
 
 type WorkflowRecordingStorageCounts = {
@@ -490,6 +502,34 @@ export async function listWorkflowRecordingRunsPage(
   };
 }
 
+export async function listWorkflowRunStatisticsCatalog(
+  root: string,
+  surface: WorkflowRunStatisticsSurface,
+  period: WorkflowRunStatisticsPeriod,
+  runKind: WorkflowRunStatisticsQuery['runKind'] = 'both',
+): Promise<WorkflowRunStatisticsCatalogResponse> {
+  await ensureWorkflowRecordingStorage(root);
+  const rows = await listWorkflowRecordingStatisticsRows(period.from, period.to);
+  return buildWorkflowRunStatisticsCatalog(
+    runKind === 'both' ? rows : rows.filter((row) => row.runKind === runKind),
+    surface,
+    period,
+  );
+}
+
+export async function getWorkflowRunStatistics(
+  root: string,
+  query: WorkflowRunStatisticsQuery,
+): Promise<WorkflowRunStatisticsResponse> {
+  await ensureWorkflowRecordingStorage(root);
+  const periodMs = Date.parse(query.period.to) - Date.parse(query.period.from);
+  const comparisonFrom = new Date(Date.parse(query.period.from) - periodMs).toISOString();
+  return buildWorkflowRunStatistics(
+    await listWorkflowRecordingStatisticsRows(comparisonFrom, query.period.to, query.target),
+    query,
+  );
+}
+
 async function listWorkflowRecordingRowsMatchingInputFilter(
   workflowId: string,
   statusFilter: WorkflowRecordingFilterStatus,
@@ -627,8 +667,8 @@ export async function persistWorkflowExecutionRecording(
       hasReplayDataset = true;
     }
 
-    const metadata: StoredWorkflowRecordingMetadataV2 = {
-      version: 2,
+    const metadata: StoredWorkflowRecordingMetadataV3 = {
+      version: 3,
       id: recordingId,
       workflowId,
       sourceProjectMetadataId: workflowId,
@@ -640,6 +680,7 @@ export async function persistWorkflowExecutionRecording(
       runKind: options.runKind,
       status: options.status,
       durationMs: Math.max(0, Math.round(options.durationMs)),
+      executionIdentity: options.executionIdentity,
       encoding: config.compression,
       hasReplayDataset,
       recordingCompressedBytes: recordingArtifact.compressedBytes,
@@ -671,6 +712,7 @@ export async function persistWorkflowExecutionRecording(
       status: options.status,
       durationMs: Math.max(0, Math.round(options.durationMs)),
       endpointNameAtExecution: options.endpointName,
+      executionIdentity: options.executionIdentity,
       errorMessage: options.errorMessage,
       bundlePath,
       encoding: config.compression,

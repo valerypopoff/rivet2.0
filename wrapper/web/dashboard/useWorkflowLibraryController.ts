@@ -88,6 +88,7 @@ export function useWorkflowLibraryController(options: {
   const [settingsModalProject, setSettingsModalProject] = useState<WorkflowProjectItem | null>(null);
   const [publishedHistoryProject, setPublishedHistoryProject] = useState<WorkflowProjectItem | null>(null);
   const [runtimeLibsOpen, setRuntimeLibsOpen] = useState(false);
+  const [runStatisticsOpen, setRunStatisticsOpen] = useState(false);
   const [appSettingsOpen, setAppSettingsOpen] = useState(false);
   const [aboutOpen, setAboutOpen] = useState(false);
   const [folderContextMenuState, setFolderContextMenuState] = useState<WorkflowFolderContextMenuState | null>(null);
@@ -540,6 +541,7 @@ export function useWorkflowLibraryController(options: {
     runRecordingsRetained: runRecordings.retained,
     runRecordingsFoundCount: runRecordings.foundCount,
     runRecordingsResetToken: runRecordings.resetToken,
+    runStatisticsOpen,
     appSettingsOpen,
     aboutOpen,
     folderContextMenuState,
@@ -591,6 +593,7 @@ export function useWorkflowLibraryController(options: {
     handleProjectModalSelectPublished,
     handleProjectModalSelectUnpublishedChanges,
     setRuntimeLibsOpen,
+    setRunStatisticsOpen,
     openRunRecordingsModal: runRecordings.show,
     hideRunRecordingsModal: runRecordings.hide,
     closeRunRecordingsModal: runRecordings.close,

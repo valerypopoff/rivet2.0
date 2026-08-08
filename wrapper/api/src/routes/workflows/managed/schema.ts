@@ -234,6 +234,16 @@ CREATE TABLE IF NOT EXISTS workflow_recordings (
   status TEXT NOT NULL,
   duration_ms INTEGER NOT NULL,
   endpoint_name_at_execution TEXT NOT NULL,
+  execution_surface TEXT NULL,
+  graph_id_at_execution TEXT NULL,
+  graph_name_at_execution TEXT NULL,
+  revision_key_at_execution TEXT NULL,
+  ui_graph_id_at_execution TEXT NULL,
+  ui_graph_name_at_execution TEXT NULL,
+  web_app_slug_at_execution TEXT NULL,
+  component_id_at_execution TEXT NULL,
+  component_type_at_execution TEXT NULL,
+  component_label_at_execution TEXT NULL,
   error_message TEXT NULL,
   recording_blob_key TEXT NOT NULL,
   replay_project_blob_key TEXT NOT NULL,
@@ -247,10 +257,30 @@ CREATE TABLE IF NOT EXISTS workflow_recordings (
   dataset_uncompressed_bytes INTEGER NOT NULL DEFAULT 0
 );
 
+ALTER TABLE workflow_recordings ADD COLUMN IF NOT EXISTS execution_surface TEXT NULL;
+ALTER TABLE workflow_recordings ADD COLUMN IF NOT EXISTS graph_id_at_execution TEXT NULL;
+ALTER TABLE workflow_recordings ADD COLUMN IF NOT EXISTS graph_name_at_execution TEXT NULL;
+ALTER TABLE workflow_recordings ADD COLUMN IF NOT EXISTS revision_key_at_execution TEXT NULL;
+ALTER TABLE workflow_recordings ADD COLUMN IF NOT EXISTS ui_graph_id_at_execution TEXT NULL;
+ALTER TABLE workflow_recordings ADD COLUMN IF NOT EXISTS ui_graph_name_at_execution TEXT NULL;
+ALTER TABLE workflow_recordings ADD COLUMN IF NOT EXISTS web_app_slug_at_execution TEXT NULL;
+ALTER TABLE workflow_recordings ADD COLUMN IF NOT EXISTS component_id_at_execution TEXT NULL;
+ALTER TABLE workflow_recordings ADD COLUMN IF NOT EXISTS component_type_at_execution TEXT NULL;
+ALTER TABLE workflow_recordings ADD COLUMN IF NOT EXISTS component_label_at_execution TEXT NULL;
+
 CREATE INDEX IF NOT EXISTS workflow_recordings_workflow_id_idx ON workflow_recordings(workflow_id);
 CREATE INDEX IF NOT EXISTS workflow_recordings_created_at_idx ON workflow_recordings(created_at DESC);
 CREATE INDEX IF NOT EXISTS workflow_recordings_endpoint_created_at_idx
   ON workflow_recordings(workflow_id, (LOWER(BTRIM(endpoint_name_at_execution))), created_at DESC, recording_id DESC);
+CREATE INDEX IF NOT EXISTS workflow_recordings_statistics_target_idx
+  ON workflow_recordings(
+    execution_surface,
+    workflow_id,
+    ui_graph_id_at_execution,
+    component_id_at_execution,
+    run_kind,
+    created_at DESC
+  );
 
 -- The web-app WebSocket transport keeps a compact, short-lived durable ledger.
 -- This is intentionally separate from workflow_recordings: it exists for action

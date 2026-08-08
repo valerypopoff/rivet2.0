@@ -395,6 +395,172 @@ test('workflow recording input filter evaluates JSON paths against the request i
   );
 });
 
+test('filesystem recording statistics use indexed identities for endpoint and web-app targets', async () => {
+  const created = await workflowMutations.createWorkflowProjectItem('', 'Statistics');
+  const [loadedProject, attachedData] = await rivetNode.loadProjectAndAttachedDataFromFile(created.absolutePath);
+  const workflowId = loadedProject.metadata.id!;
+  const recordingSerialized = (recordingId: string) => JSON.stringify({
+    version: 1,
+    recording: { recordingId, events: [], startTs: 1, finishTs: 1 },
+    assets: {},
+    strings: {},
+  });
+
+  await workflowRecordings.persistWorkflowExecutionRecording({
+    workflowsRoot,
+    sourceProject: loadedProject,
+    sourceProjectPath: created.absolutePath,
+    executedProject: loadedProject,
+    executedAttachedData: attachedData,
+    executedDatasets: [],
+    endpointName: 'statistics-endpoint',
+    recordingSerialized: recordingSerialized('statistics-endpoint'),
+    runKind: 'published',
+    status: 'succeeded',
+    durationMs: 125,
+    executionIdentity: {
+      surface: 'workflow_endpoint',
+      graphId: 'main',
+      graphName: 'Main',
+    },
+  });
+  await workflowRecordings.persistWorkflowExecutionRecording({
+    workflowsRoot,
+    sourceProject: loadedProject,
+    sourceProjectPath: created.absolutePath,
+    executedProject: loadedProject,
+    executedAttachedData: attachedData,
+    executedDatasets: [],
+    endpointName: '/apps/statistics',
+    recordingSerialized: recordingSerialized('statistics-web-app'),
+    runKind: 'published',
+    status: 'succeeded',
+    durationMs: 250,
+    executionIdentity: {
+      surface: 'web_app_action',
+      uiGraphId: 'ui-statistics',
+      uiGraphName: 'Statistics app',
+      componentId: 'run-button',
+      componentType: 'button',
+      componentLabel: 'Run report',
+    },
+  });
+  await workflowRecordings.persistWorkflowExecutionRecording({
+    workflowsRoot,
+    sourceProject: loadedProject,
+    sourceProjectPath: created.absolutePath,
+    executedProject: loadedProject,
+    executedAttachedData: attachedData,
+    executedDatasets: [],
+    endpointName: '/apps/statistics-partial',
+    recordingSerialized: recordingSerialized('statistics-web-app-partial'),
+    runKind: 'published',
+    status: 'succeeded',
+    durationMs: 175,
+    executionIdentity: {
+      surface: 'web_app_action',
+      uiGraphId: 'ui-statistics',
+    },
+  });
+
+  const now = new Date();
+  const period = {
+    from: new Date(now.getTime() - 60_000).toISOString(),
+    to: new Date(now.getTime() + 60_000).toISOString(),
+  };
+  const endpointCatalog = await workflowRecordings.listWorkflowRunStatisticsCatalog(
+    workflowsRoot,
+    'endpoint',
+    period,
+    'published',
+  );
+  const webAppCatalog = await workflowRecordings.listWorkflowRunStatisticsCatalog(
+    workflowsRoot,
+    'web_app',
+    period,
+    'published',
+  );
+
+  assert.deepEqual(endpointCatalog.targets.map((target) => target.target), [
+    { surface: 'endpoint', workflowId },
+  ]);
+  assert.deepEqual(webAppCatalog.targets.map((target) => target.target), [
+    { surface: 'web_app', workflowId, legacyEndpointName: '/apps/statistics-partial' },
+    { surface: 'web_app', workflowId, uiGraphId: 'ui-statistics', componentId: 'run-button' },
+  ]);
+
+  const stableWebAppTarget = webAppCatalog.targets.find((entry) => 'uiGraphId' in entry.target);
+  const partialWebAppTarget = webAppCatalog.targets.find((entry) => 'legacyEndpointName' in entry.target);
+  assert.ok(stableWebAppTarget);
+  assert.ok(partialWebAppTarget);
+
+  const webAppStatistics = await workflowRecordings.getWorkflowRunStatistics(workflowsRoot, {
+    target: stableWebAppTarget.target,
+    period,
+    runKind: 'published',
+    includeFailed: false,
+    includeWarnings: false,
+  });
+  assert.equal(webAppStatistics.current.runCount, 1);
+  assert.equal(webAppStatistics.current.medianDurationMs, 250);
+
+  const partialWebAppStatistics = await workflowRecordings.getWorkflowRunStatistics(workflowsRoot, {
+    target: partialWebAppTarget.target,
+    period,
+    runKind: 'published',
+    includeFailed: false,
+    includeWarnings: false,
+  });
+  assert.equal(partialWebAppStatistics.current.runCount, 1);
+  assert.equal(partialWebAppStatistics.current.medianDurationMs, 175);
+
+  await withWorkflowExecutionServer(async ({ apiBaseUrl }) => {
+    const targetsResponse = await fetch(
+      `${apiBaseUrl}/run-statistics/targets?${new URLSearchParams({
+        surface: 'web_app',
+        from: period.from,
+        to: period.to,
+        runKind: 'published',
+      })}`,
+    );
+    assert.equal(targetsResponse.ok, true);
+    const targets = await readJson<{
+      targets: Array<{
+        target: {
+          surface: string;
+          workflowId: string;
+          uiGraphId?: string;
+          componentId?: string;
+          legacyEndpointName?: string;
+        };
+      }>;
+    }>(targetsResponse);
+    assert.deepEqual(targets.targets.map((entry) => entry.target), [
+      { surface: 'web_app', workflowId, legacyEndpointName: '/apps/statistics-partial' },
+      { surface: 'web_app', workflowId, uiGraphId: 'ui-statistics', componentId: 'run-button' },
+    ]);
+
+    const stableTarget = targets.targets.find((entry) => entry.target.uiGraphId)?.target;
+    assert.ok(stableTarget);
+
+    const statisticsResponse = await fetch(`${apiBaseUrl}/run-statistics/query`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        target: stableTarget,
+        period,
+        runKind: 'published',
+        includeFailed: false,
+        includeWarnings: false,
+      }),
+    });
+    assert.equal(statisticsResponse.ok, true);
+    const statistics = await readJson<{ current: { runCount: number; medianDurationMs: number | null } }>(statisticsResponse);
+    assert.equal(statistics.current.runCount, 1);
+    assert.equal(statistics.current.medianDurationMs, 250);
+  });
+});
+
 test('workflow recording delete route removes a single recording and updates totals', async () => {
   const created = await workflowMutations.createWorkflowProjectItem('', 'DeleteOneRecording');
   await workflowMutations.publishWorkflowProjectItem(created.relativePath, {

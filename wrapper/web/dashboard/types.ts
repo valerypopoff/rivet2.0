@@ -26,10 +26,25 @@ import type {
   WorkflowRecordingRunKind,
   WorkflowRecordingRunSummary,
   WorkflowRecordingStatus,
+  WorkflowRunStatisticsBucket,
+  WorkflowRunStatisticsCatalogResponse,
+  WorkflowRunStatisticsDelta,
+  WorkflowRunStatisticsMetrics,
+  WorkflowRunStatisticsPeriod,
+  WorkflowRunStatisticsQuery,
+  WorkflowRunStatisticsResponse,
+  WorkflowRunStatisticsRunKind,
+  WorkflowRunStatisticsStatusCounts,
+  WorkflowRunStatisticsSurface,
+  WorkflowRunStatisticsTarget,
+  WorkflowRunStatisticsTargetSummary,
   WorkflowRecordingWorkflowListResponse,
   WorkflowRecordingWorkflowSummary,
 } from '../../shared/workflow-recording-types';
-export { WORKFLOW_RECORDING_INPUT_FILTER_OPERATORS } from '../../shared/workflow-recording-types';
+export {
+  getWorkflowRunStatisticsTargetKey,
+  WORKFLOW_RECORDING_INPUT_FILTER_OPERATORS,
+} from '../../shared/workflow-recording-types';
 
 export type {
   WorkflowFolderItem,
@@ -57,6 +72,18 @@ export type {
   WorkflowRecordingRunKind,
   WorkflowRecordingRunSummary,
   WorkflowRecordingStatus,
+  WorkflowRunStatisticsBucket,
+  WorkflowRunStatisticsCatalogResponse,
+  WorkflowRunStatisticsDelta,
+  WorkflowRunStatisticsMetrics,
+  WorkflowRunStatisticsPeriod,
+  WorkflowRunStatisticsQuery,
+  WorkflowRunStatisticsResponse,
+  WorkflowRunStatisticsRunKind,
+  WorkflowRunStatisticsStatusCounts,
+  WorkflowRunStatisticsSurface,
+  WorkflowRunStatisticsTarget,
+  WorkflowRunStatisticsTargetSummary,
   WorkflowRecordingWorkflowListResponse,
   WorkflowRecordingWorkflowSummary,
 };

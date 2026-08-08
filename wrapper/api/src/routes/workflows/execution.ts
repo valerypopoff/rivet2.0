@@ -16,6 +16,7 @@ import {
   type RivetWebAppActionResult,
   type RivetWebAppProcessorOptions,
   type UiComponentId,
+  type UiGraphActionComponent,
   type UiGraph,
 } from '@valerypopoff/rivet2-node';
 
@@ -58,6 +59,7 @@ import {
   shouldSnapshotWorkflowRecordingDatasets,
 } from './recordings-config.js';
 import { sanitizeUiAuthReturnTo } from '../../ui-auth-utils.js';
+import type { WorkflowRecordingExecutionIdentity } from '../../../../shared/workflow-recording-types.js';
 
 export const publishedWorkflowsRouter = Router();
 export const internalPublishedWorkflowsRouter = Router();
@@ -887,6 +889,7 @@ type WorkflowExecutionRecordingSnapshot = {
 type WebAppActionExecutionSnapshot = WorkflowExecutionRecordingSnapshot & {
   result?: RivetWebAppActionResult;
   executionError?: unknown;
+  executionIdentity: WorkflowRecordingExecutionIdentity;
 };
 
 function getWebAppActionState(body: Record<string, unknown>): Record<string, unknown> {
@@ -928,6 +931,7 @@ async function runRecordedWebAppAction(
   codeRunnerTelemetry: ManagedCodeRunnerTelemetry | null,
   options: {
     enableRemoteDebugger?: boolean;
+    webAppSlug: string;
   },
 ): Promise<WebAppActionExecutionSnapshot> {
   const componentId = getWebAppActionComponentId(req.body);
@@ -949,6 +953,12 @@ async function runRecordedWebAppAction(
   if (!component.action.graphId) {
     throw new Error('This UI action is not connected to a graph.');
   }
+  const executionIdentity = createWebAppActionRecordingIdentity(
+    executionProject,
+    uiGraph,
+    component,
+    options.webAppSlug,
+  );
 
   const rawInputs = resolveUiGraphActionInputs(component.action, actionState);
   const processorOptions = await createWebAppProcessorOptions(
@@ -1005,6 +1015,7 @@ async function runRecordedWebAppAction(
     errorMessage,
     result,
     executionError,
+    executionIdentity,
   };
 }
 
@@ -1163,6 +1174,7 @@ function enqueueExecutionRecording(
   options: {
     endpointName: string;
     runKind: 'published' | 'latest';
+    executionIdentity?: WorkflowRecordingExecutionIdentity;
   },
 ): void {
   const { project, attachedData, datasetProvider, projectVirtualPath } = executionProject;
@@ -1192,6 +1204,7 @@ function enqueueExecutionRecording(
       status: recording.status,
       durationMs: recording.durationMs,
       errorMessage: recording.errorMessage,
+      executionIdentity: options.executionIdentity,
     });
   });
 }
@@ -1205,6 +1218,7 @@ export function enqueueWebAppActionRecording(
   options: {
     endpointName: string;
     runKind: 'published' | 'latest';
+    executionIdentity?: WorkflowRecordingExecutionIdentity;
   },
 ): void {
   enqueueExecutionRecording(
@@ -1212,6 +1226,43 @@ export function enqueueWebAppActionRecording(
     { recorder, durationMs, status, errorMessage },
     options,
   );
+}
+
+function getGraphNameAtExecution(executionProject: WorkflowExecutionProject, graphId: string | undefined): string | undefined {
+  return graphId ? executionProject.project.graphs[graphId as keyof typeof executionProject.project.graphs]?.metadata?.name : undefined;
+}
+
+function createWorkflowEndpointRecordingIdentity(
+  executionProject: WorkflowExecutionProject,
+): WorkflowRecordingExecutionIdentity {
+  const graphId = executionProject.project.metadata.mainGraphId;
+  return {
+    surface: 'workflow_endpoint',
+    graphId,
+    graphName: getGraphNameAtExecution(executionProject, graphId),
+    revisionKey: executionProject.revisionKey,
+  };
+}
+
+export function createWebAppActionRecordingIdentity(
+  executionProject: WorkflowExecutionProject,
+  uiGraph: UiGraph,
+  component: UiGraphActionComponent,
+  webAppSlug: string,
+): WorkflowRecordingExecutionIdentity {
+  const graphId = component.action.graphId;
+  return {
+    surface: 'web_app_action',
+    graphId,
+    graphName: getGraphNameAtExecution(executionProject, graphId),
+    revisionKey: executionProject.revisionKey,
+    uiGraphId: uiGraph.id,
+    uiGraphName: uiGraph.name,
+    webAppSlug,
+    componentId: component.id,
+    componentType: component.type,
+    componentLabel: component.type === 'button' ? component.label : 'Chat',
+  };
 }
 
 async function executeWorkflowEndpoint(
@@ -1279,6 +1330,7 @@ async function executeWorkflowEndpoint(
     {
       endpointName: options.endpointName,
       runKind: options.runKind,
+      executionIdentity: createWorkflowEndpointRecordingIdentity(executionProject),
     });
 
   if (executionError) {
@@ -1459,10 +1511,12 @@ async function handleWebAppActionRequest(req: Request, res: Response, routeKind:
 
     const execution = await runRecordedWebAppAction(resolved.executionProject, uiGraph, req, codeRunnerTelemetry, {
       enableRemoteDebugger: routeKind === 'latest',
+      webAppSlug: resolved.slug,
     });
     enqueueExecutionRecording(resolved.executionProject, execution, {
       endpointName: getWebAppBasePath(routeKind, resolved.slug),
       runKind: routeKind,
+      executionIdentity: execution.executionIdentity,
     });
 
     setWorkflowExecutionDebugHeaders(res, resolved.executionProject, execution.durationMs);

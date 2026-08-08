@@ -4,6 +4,24 @@ export type WorkflowRecordingRunKind = 'published' | 'latest';
 
 export type WorkflowRecordingStatus = 'succeeded' | 'failed' | 'suspicious';
 
+/**
+ * Identifies the surface that started a recorded processor run. Fields are
+ * intentionally snapshots: project, web-app, and component names can change
+ * after a recording is created.
+ */
+export type WorkflowRecordingExecutionIdentity = {
+  surface: 'workflow_endpoint' | 'web_app_action';
+  graphId?: string;
+  graphName?: string;
+  revisionKey?: string;
+  uiGraphId?: string;
+  uiGraphName?: string;
+  webAppSlug?: string;
+  componentId?: string;
+  componentType?: 'button' | 'chat';
+  componentLabel?: string;
+};
+
 export type WorkflowRecordingFilterStatus = 'all' | 'failed';
 export const WORKFLOW_RECORDING_INPUT_FILTER_OPERATORS = [
   '==',
@@ -35,6 +53,7 @@ export type WorkflowRecordingRunSummary = {
   status: WorkflowRecordingStatus;
   durationMs: number;
   endpointNameAtExecution: string;
+  executionIdentity?: WorkflowRecordingExecutionIdentity;
   errorMessage?: string;
   hasReplayDataset: boolean;
   recordingCompressedBytes: number;
@@ -69,6 +88,111 @@ export type WorkflowRecordingRunsPageResponse = {
   statusFilter: WorkflowRecordingFilterStatus;
   inputFilter?: WorkflowRecordingInputFilter | null;
   runs: WorkflowRecordingRunSummary[];
+};
+
+export type WorkflowRunStatisticsSurface = 'endpoint' | 'web_app';
+export type WorkflowRunStatisticsRunKind = WorkflowRecordingRunKind | 'both';
+
+export type WorkflowRunStatisticsPeriod = {
+  from: string;
+  to: string;
+};
+
+export type WorkflowRunStatisticsStatusCounts = {
+  succeeded: number;
+  failed: number;
+  suspicious: number;
+};
+
+export type WorkflowRunStatisticsMetrics = {
+  runCount: number;
+  medianDurationMs: number | null;
+  p95DurationMs: number | null;
+  averageDurationMs: number | null;
+  minDurationMs: number | null;
+  maxDurationMs: number | null;
+};
+
+export type WorkflowRunStatisticsDelta = {
+  absoluteMs: number | null;
+  percent: number | null;
+};
+
+export type WorkflowRunStatisticsTarget =
+  | {
+      surface: 'endpoint';
+      workflowId: string;
+    }
+  | {
+      surface: 'web_app';
+      workflowId: string;
+      uiGraphId: string;
+      componentId: string;
+    }
+  | {
+      surface: 'web_app';
+      workflowId: string;
+      legacyEndpointName: string;
+    };
+
+/**
+ * Produces an opaque, collision-safe key for a statistics target. This key is
+ * only used for in-memory catalog and UI selection, never as persistent data.
+ */
+export function getWorkflowRunStatisticsTargetKey(target: WorkflowRunStatisticsTarget): string {
+  if (target.surface === 'endpoint') {
+    return JSON.stringify([0, target.workflowId]);
+  }
+  if ('legacyEndpointName' in target) {
+    return JSON.stringify([1, 0, target.workflowId, target.legacyEndpointName]);
+  }
+  return JSON.stringify([1, 1, target.workflowId, target.uiGraphId, target.componentId]);
+}
+
+export type WorkflowRunStatisticsTargetSummary = {
+  target: WorkflowRunStatisticsTarget;
+  projectName: string;
+  latestRunAt?: string;
+  totalRuns: number;
+  uiGraphName?: string;
+  componentType?: 'button' | 'chat';
+  componentLabel?: string;
+  endpointNameAtExecution?: string;
+  isLegacy?: boolean;
+};
+
+export type WorkflowRunStatisticsCatalogResponse = {
+  surface: WorkflowRunStatisticsSurface;
+  period: WorkflowRunStatisticsPeriod;
+  targets: WorkflowRunStatisticsTargetSummary[];
+};
+
+export type WorkflowRunStatisticsQuery = {
+  target: WorkflowRunStatisticsTarget;
+  period: WorkflowRunStatisticsPeriod;
+  runKind: WorkflowRunStatisticsRunKind;
+  includeFailed: boolean;
+  includeWarnings: boolean;
+};
+
+export type WorkflowRunStatisticsBucket = WorkflowRunStatisticsMetrics & {
+  from: string;
+  to: string;
+};
+
+export type WorkflowRunStatisticsResponse = {
+  target: WorkflowRunStatisticsTarget;
+  period: WorkflowRunStatisticsPeriod;
+  comparisonPeriod: WorkflowRunStatisticsPeriod;
+  current: WorkflowRunStatisticsMetrics;
+  previous: WorkflowRunStatisticsMetrics;
+  medianDelta: WorkflowRunStatisticsDelta;
+  p95Delta: WorkflowRunStatisticsDelta;
+  currentStatusCounts: WorkflowRunStatisticsStatusCounts;
+  previousStatusCounts: WorkflowRunStatisticsStatusCounts;
+  currentExcludedStatusCounts: WorkflowRunStatisticsStatusCounts;
+  previousExcludedStatusCounts: WorkflowRunStatisticsStatusCounts;
+  buckets: WorkflowRunStatisticsBucket[];
 };
 
 export const WORKFLOW_RECORDING_VIRTUAL_PROJECT_PATH_PREFIX = 'recording://';

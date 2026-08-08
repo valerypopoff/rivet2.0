@@ -15,6 +15,7 @@ import { getManagedDbConnectionConfig, getManagedDbPoolConfig } from './routes/w
 import { getManagedWorkflowStorageConfig, isManagedWorkflowStorageEnabled } from './routes/workflows/storage-config.js';
 import {
   createWebAppProcessorOptions,
+  createWebAppActionRecordingIdentity,
   createWebAppSocketFetchRequest,
   enqueueWebAppActionRecording,
   getWebAppBasePath,
@@ -27,6 +28,7 @@ import { getWorkflowExecutionRecorderOptions, isWorkflowRecordingEnabled } from 
 import { readRuntimeLimitSettingsSync } from './runtime-limit-settings.js';
 import { PostgresRivetWebAppRunCoordinator } from './web-app-action-coordinator.js';
 import { createPostgresRivetWebAppRunStore } from './web-app-action-run-store.js';
+import type { WorkflowRecordingExecutionIdentity } from '../../shared/workflow-recording-types.js';
 
 type WebAppSocketRoute = {
   routeKind: WebAppRouteKind;
@@ -36,6 +38,7 @@ type WebAppSocketRoute = {
 type RecorderEntry = {
   recorder: ExecutionRecorder | null;
   startedAt: number;
+  executionIdentity: WorkflowRecordingExecutionIdentity;
 };
 
 export type WebAppActionWebSocketRuntime = {
@@ -174,12 +177,21 @@ export async function initializeWebAppActionWebSockets(server: Server): Promise<
               null,
               { enableRemoteDebugger: route.routeKind === 'latest' },
             ),
-            onProcessorPrepared({ processor, runId }) {
+            onProcessorPrepared({ actionContext, processor, runId }) {
               const recorder = isWorkflowRecordingEnabled()
                 ? new ExecutionRecorder(getWorkflowExecutionRecorderOptions())
                 : null;
               recorder?.record(processor);
-              recorders.set(runId, { recorder, startedAt: performance.now() });
+              recorders.set(runId, {
+                recorder,
+                startedAt: performance.now(),
+                executionIdentity: createWebAppActionRecordingIdentity(
+                  resolved.executionProject,
+                  actionContext.uiGraph,
+                  actionContext.component,
+                  route.slug,
+                ),
+              });
             },
             onRunFinished({ result, runId }) {
               const entry = recorders.get(runId);
@@ -191,7 +203,11 @@ export async function initializeWebAppActionWebSockets(server: Server): Promise<
                 performance.now() - entry.startedAt,
                 getWorkflowRecordingStatusFromOutputs(result.outputs),
                 undefined,
-                { endpointName, runKind: route.routeKind },
+                {
+                  endpointName,
+                  runKind: route.routeKind,
+                  executionIdentity: entry.executionIdentity,
+                },
               );
             },
             onRunFailed({ error, outcome, runId }) {
@@ -209,7 +225,11 @@ export async function initializeWebAppActionWebSockets(server: Server): Promise<
                 performance.now() - entry.startedAt,
                 'failed',
                 error == null ? fallbackMessage : getWorkflowErrorMessage(error),
-                { endpointName, runKind: route.routeKind },
+                {
+                  endpointName,
+                  runKind: route.routeKind,
+                  executionIdentity: entry.executionIdentity,
+                },
               );
             },
           });

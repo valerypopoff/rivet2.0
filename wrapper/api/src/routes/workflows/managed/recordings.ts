@@ -8,6 +8,12 @@ import type {
   WorkflowRecordingRunsPageResponse,
   WorkflowRecordingRunSummary,
   WorkflowRecordingWorkflowListResponse,
+  WorkflowRunStatisticsCatalogResponse,
+  WorkflowRunStatisticsPeriod,
+  WorkflowRunStatisticsQuery,
+  WorkflowRunStatisticsResponse,
+  WorkflowRunStatisticsSurface,
+  WorkflowRunStatisticsTarget,
 } from '../../../../../shared/workflow-recording-types.js';
 import { WORKFLOW_PROJECT_EXTENSION } from '../../../../../shared/workflow-types.js';
 import { createHttpError } from '../../../utils/httpError.js';
@@ -22,6 +28,11 @@ import type {
   WorkflowRecordingListRow,
 } from './types.js';
 import { filterRowsBySerializedRecordingInputPage } from '../recording-input-filter.js';
+import {
+  buildWorkflowRunStatistics,
+  buildWorkflowRunStatisticsCatalog,
+  type WorkflowRecordingStatisticsRow,
+} from '../recording-statistics.js';
 
 type ManagedWorkflowRecordingServiceDependencies = {
   context: ManagedWorkflowContext;
@@ -48,6 +59,74 @@ function getCreatedAtMs(row: RecordingRow): number {
     ? row.created_at.getTime()
     : Date.parse(String(row.created_at));
   return Number.isFinite(timestamp) ? timestamp : 0;
+}
+
+function getExecutionIdentity(row: RecordingRow) {
+  if (row.execution_surface !== 'workflow_endpoint' && row.execution_surface !== 'web_app_action') {
+    return undefined;
+  }
+
+  return {
+    surface: row.execution_surface,
+    graphId: row.graph_id_at_execution ?? undefined,
+    graphName: row.graph_name_at_execution ?? undefined,
+    revisionKey: row.revision_key_at_execution ?? undefined,
+    uiGraphId: row.ui_graph_id_at_execution ?? undefined,
+    uiGraphName: row.ui_graph_name_at_execution ?? undefined,
+    webAppSlug: row.web_app_slug_at_execution ?? undefined,
+    componentId: row.component_id_at_execution ?? undefined,
+    componentType: row.component_type_at_execution ?? undefined,
+    componentLabel: row.component_label_at_execution ?? undefined,
+  } as const;
+}
+
+function getManagedStatisticsTargetClause(target: WorkflowRunStatisticsTarget | undefined): {
+  clause: string;
+  parameters: string[];
+} {
+  if (!target) return { clause: '', parameters: [] };
+  if (target.surface === 'endpoint') {
+    return {
+      clause: `AND workflow_id = $3
+        AND (execution_surface = 'workflow_endpoint'
+          OR (execution_surface IS NULL AND endpoint_name_at_execution NOT LIKE '/%'))`,
+      parameters: [target.workflowId],
+    };
+  }
+  if ('legacyEndpointName' in target) {
+    return {
+      clause: `AND workflow_id = $3
+        AND (
+          execution_surface IS NULL
+          OR (
+            execution_surface = 'web_app_action'
+            AND (ui_graph_id_at_execution IS NULL OR component_id_at_execution IS NULL)
+          )
+        )
+        AND endpoint_name_at_execution = $4`,
+      parameters: [target.workflowId, target.legacyEndpointName],
+    };
+  }
+  return {
+    clause: `AND workflow_id = $3
+      AND execution_surface = 'web_app_action'
+      AND ui_graph_id_at_execution = $4
+      AND component_id_at_execution = $5`,
+    parameters: [target.workflowId, target.uiGraphId, target.componentId],
+  };
+}
+
+function toStatisticsRow(row: RecordingRow, toIsoString: (value: Date | string | null | undefined) => string | null): WorkflowRecordingStatisticsRow {
+  return {
+    workflowId: row.workflow_id,
+    sourceProjectName: row.source_project_name,
+    createdAt: toIsoString(row.created_at) ?? new Date().toISOString(),
+    runKind: row.run_kind,
+    status: row.status,
+    durationMs: row.duration_ms,
+    endpointNameAtExecution: row.endpoint_name_at_execution,
+    executionIdentity: getExecutionIdentity(row),
+  };
 }
 
 export function selectManagedRecordingRowsForCleanup(
@@ -261,6 +340,7 @@ export function createManagedWorkflowRecordingService(options: ManagedWorkflowRe
           status: options.status,
           durationMs: Math.max(0, Math.round(options.durationMs)),
           endpointNameAtExecution: options.endpointName,
+          executionIdentity: options.executionIdentity,
           errorMessage: options.errorMessage ?? null,
           recordingBlobKey: uploadedBlobs.recordingBlobKey,
           replayProjectBlobKey: uploadedBlobs.replayProjectBlobKey,
@@ -389,6 +469,7 @@ export function createManagedWorkflowRecordingService(options: ManagedWorkflowRe
         status: row.status,
         durationMs: row.duration_ms,
         endpointNameAtExecution: row.endpoint_name_at_execution,
+        executionIdentity: getExecutionIdentity(row),
         errorMessage: row.error_message ?? undefined,
         hasReplayDataset: row.has_replay_dataset,
         recordingCompressedBytes: row.recording_compressed_bytes,
@@ -411,6 +492,48 @@ export function createManagedWorkflowRecordingService(options: ManagedWorkflowRe
         inputFilter,
         runs,
       };
+    },
+
+    async listWorkflowRunStatisticsCatalog(
+      surface: WorkflowRunStatisticsSurface,
+      period: WorkflowRunStatisticsPeriod,
+      runKind: WorkflowRunStatisticsQuery['runKind'] = 'both',
+    ): Promise<WorkflowRunStatisticsCatalogResponse> {
+      await deps.initialize();
+      const rows = await deps.queryRows<RecordingRow>(
+        deps.pool,
+        `
+          SELECT ${deps.recordingColumns}
+          FROM workflow_recordings
+          WHERE created_at >= $1::timestamptz AND created_at < $2::timestamptz
+          ORDER BY created_at ASC, recording_id ASC
+        `,
+        [period.from, period.to],
+      );
+      return buildWorkflowRunStatisticsCatalog(
+        rows.map((row) => toStatisticsRow(row, deps.toIsoString)).filter((row) => runKind === 'both' || row.runKind === runKind),
+        surface,
+        period,
+      );
+    },
+
+    async getWorkflowRunStatistics(query: WorkflowRunStatisticsQuery): Promise<WorkflowRunStatisticsResponse> {
+      await deps.initialize();
+      const periodMs = Date.parse(query.period.to) - Date.parse(query.period.from);
+      const comparisonFrom = new Date(Date.parse(query.period.from) - periodMs).toISOString();
+      const target = getManagedStatisticsTargetClause(query.target);
+      const rows = await deps.queryRows<RecordingRow>(
+        deps.pool,
+        `
+          SELECT ${deps.recordingColumns}
+          FROM workflow_recordings
+          WHERE created_at >= $1::timestamptz AND created_at < $2::timestamptz
+          ${target.clause}
+          ORDER BY created_at ASC, recording_id ASC
+        `,
+        [comparisonFrom, query.period.to, ...target.parameters],
+      );
+      return buildWorkflowRunStatistics(rows.map((row) => toStatisticsRow(row, deps.toIsoString)), query);
     },
 
     async readWorkflowRecordingArtifact(recordingId: string, artifact: 'recording' | 'replay-project' | 'replay-dataset'): Promise<string> {
@@ -509,6 +632,7 @@ export function createManagedWorkflowRecordingService(options: ManagedWorkflowRe
           status: options.status,
           durationMs: Math.max(0, Math.round(options.durationMs)),
           endpointNameAtExecution: options.endpointName,
+          executionIdentity: options.executionIdentity,
           errorMessage: options.errorMessage ?? null,
           recordingBlobKey: uploadedBlobs.recordingBlobKey,
           replayProjectBlobKey: uploadedBlobs.replayProjectBlobKey,

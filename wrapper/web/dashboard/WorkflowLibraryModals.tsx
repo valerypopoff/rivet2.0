@@ -1,4 +1,4 @@
-import type { FC } from 'react';
+import { lazy, Suspense, type FC } from 'react';
 import { AboutModal } from './AboutModal';
 import { AppSettingsModal } from './AppSettingsModal';
 import { ProjectSettingsModal } from './ProjectSettingsModal';
@@ -10,6 +10,11 @@ import type { HostedRouteConfig } from './types';
 import { useWorkflowLibraryController } from './useWorkflowLibraryController';
 
 type WorkflowLibraryController = ReturnType<typeof useWorkflowLibraryController>;
+
+const RunStatisticsModal = lazy(async () => {
+  const module = await import('./RunStatisticsModal');
+  return { default: module.RunStatisticsModal };
+});
 
 function getProjectVersionActionLabel(mode: WorkflowLibraryController['projectModalMode']) {
   if (mode === 'download') {
@@ -46,6 +51,8 @@ export const WorkflowLibraryModals: FC<{
     hideRunRecordingsModal,
     closeRunRecordingsModal,
     handleRunRecordingsFoundCountChange,
+    runStatisticsOpen,
+    setRunStatisticsOpen,
     appSettingsOpen,
     setAppSettingsOpen,
     aboutOpen,
@@ -93,6 +100,11 @@ export const WorkflowLibraryModals: FC<{
         onOpenRecording={onOpenRecording}
         onFoundCountChange={handleRunRecordingsFoundCountChange}
       />
+      {runStatisticsOpen ? (
+        <Suspense fallback={null}>
+          <RunStatisticsModal isOpen={runStatisticsOpen} onClose={() => setRunStatisticsOpen(false)} />
+        </Suspense>
+      ) : null}
       <AppSettingsModal
         isOpen={appSettingsOpen}
         onClose={() => setAppSettingsOpen(false)}
