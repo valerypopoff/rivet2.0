@@ -53,6 +53,7 @@ import {
 } from '../utils/projectComparisonSummary.js';
 import { useOpenNodeLibrary } from '../hooks/useOpenNodeLibrary.js';
 import type { EditorGraphRun } from '../hooks/editorGraphRunOptions.js';
+import { isRivetAppHostCapabilityEnabled, useRivetAppHostUiConfig } from '../providers/HostUiConfigContext.js';
 
 const Container = styled.div`
   position: relative;
@@ -131,7 +132,14 @@ export const GraphBuilder: FC<{ runGraph: EditorGraphRun }> = ({ runGraph }) => 
   const [selectedNodeIds, setSelectedNodeIds] = useAtom(selectedNodesState);
   const setEditingNodeId = useSetAtom(editingNodeState);
   const project = useAtomValue(projectState);
-  const loadedRecording = getLoadedRecordingForProject(useAtomValue(loadedRecordingState), project.metadata.id);
+  const hostUiConfig = useRivetAppHostUiConfig();
+  const aiGraphBuilderEnabled = isRivetAppHostCapabilityEnabled(hostUiConfig, 'aiGraphBuilder');
+  const recordingsEnabled = isRivetAppHostCapabilityEnabled(hostUiConfig, 'recordings');
+  const loadedRecordingForProject = getLoadedRecordingForProject(
+    useAtomValue(loadedRecordingState),
+    project.metadata.id,
+  );
+  const loadedRecording = recordingsEnabled ? loadedRecordingForProject : undefined;
   const activeComparison = useAtomValue(activeProjectComparisonState);
   const selectedGraphComparison = useAtomValue(selectedGraphProjectComparisonState);
   const setProjectCompareReference = useSetAtom(projectCompareReferenceState);
@@ -286,8 +294,12 @@ export const GraphBuilder: FC<{ runGraph: EditorGraphRun }> = ({ runGraph }) => 
         />
         <NodeChangesModalRenderer />
         <ProjectComparisonNodeChangesModalRenderer />
-        <AiGraphCreatorInput />
-        <AiGraphCreatorToggle />
+        {aiGraphBuilderEnabled ? (
+          <>
+            <AiGraphCreatorInput />
+            <AiGraphCreatorToggle />
+          </>
+        ) : null}
       </ErrorBoundary>
     </Container>
   );

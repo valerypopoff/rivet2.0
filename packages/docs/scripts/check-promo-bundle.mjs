@@ -27,7 +27,7 @@ const publishedPromoUrl = new URL('rivet-demo/', publishedSiteUrl).href;
 const landingHtml = await readFile(resolve(buildDirectory, 'index.html'), 'utf8');
 const indexHtml = await readFile(resolve(demoDirectory, 'index.html'), 'utf8');
 
-const expectedLandingIframeSources = ['agent', 'batch-runs', 'structured-output'].map(
+const expectedLandingIframeSources = ['agent', 'visual-code'].map(
   (projectId) => `${promoPublicPath}?project=${projectId}`,
 );
 const landingIframeSources = [...landingHtml.matchAll(/<iframe\b[^>]+src="([^"]+)"/g)].map((match) => match[1]);
@@ -77,7 +77,9 @@ const initialGzipBytes = (
   await Promise.all(initialAssetPaths.map(async (path) => gzipSync(await readFile(path)).byteLength))
 ).reduce((total, bytes) => total + bytes, 0);
 const outputPaths = await listFilesRecursively(demoDirectory);
-const monacoWorkerAssetPaths = outputPaths.filter((path) => /(?:^|[\\/])(?:css|editor|html|json|ts)\.worker-[^\\/]+\.js$/.test(path));
+const monacoWorkerAssetPaths = outputPaths.filter((path) =>
+  /(?:^|[\\/])(?:css|editor|html|json|ts)\.worker-[^\\/]+\.js$/.test(path),
+);
 
 assert.ok(monacoWorkerAssetPaths.length >= 5, 'The promo build must emit all five Monaco language worker assets.');
 

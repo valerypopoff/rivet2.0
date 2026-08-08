@@ -20,7 +20,7 @@ import {
   shouldRunMenuCommandForProjectSelection,
 } from '../utils/projectWorkspaceSelection.js';
 import type { MenuIds } from '../utils/menuCommandIds.js';
-import { useRivetAppHostUiConfig } from '../providers/HostUiConfigContext.js';
+import { isRivetAppHostCapabilityEnabled, useRivetAppHostUiConfig } from '../providers/HostUiConfigContext.js';
 import { shouldRunFileMenuCommand } from '../utils/fileMenuConfiguration.js';
 
 export type { MenuIds };
@@ -114,6 +114,10 @@ export function useMenuCommands(
         return;
       }
 
+      if (payload === 'load_recording' && !isRivetAppHostCapabilityEnabled(hostUiConfig, 'recordings')) {
+        return;
+      }
+
       if (!shouldRunMenuCommandForProjectSelection({ command: payload, projectWorkspaceSelected })) {
         return;
       }
@@ -186,7 +190,7 @@ export function useMenuCommands(
     setNewProjectModalOpen,
     setHelpModalOpen,
     projectWorkspaceSelected,
-    hostUiConfig.fileMenu,
+    hostUiConfig,
   ]);
 
   useEffect(() => {

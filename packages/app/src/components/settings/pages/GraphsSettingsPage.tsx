@@ -10,6 +10,7 @@ import { showGraphReferenceIndicatorsState, showUnreachableGraphTagsState } from
 import { LabeledToggle } from '../../LabeledToggle.js';
 import { SegmentedEditor } from '../../editors/SegmentedEditor.js';
 import { fields } from '../settingsPageStyles.js';
+import { isRivetAppHostCapabilityEnabled, useRivetAppHostUiConfig } from '../../../providers/HostUiConfigContext.js';
 
 const graphBuilderImplementationOptions = [
   { label: 'Transactional', value: 'plan-b' },
@@ -17,6 +18,8 @@ const graphBuilderImplementationOptions = [
 ] as const;
 
 export const GraphsSettingsPage: FC = () => {
+  const hostUiConfig = useRivetAppHostUiConfig();
+  const aiGraphBuilderEnabled = isRivetAppHostCapabilityEnabled(hostUiConfig, 'aiGraphBuilder');
   const [recordExecutions, setRecordExecutions] = useAtom(recordExecutionsState);
   const [showNodeRunDurations, setShowNodeRunDurations] = useAtom(showNodeRunDurationsState);
   const [showUnreachableGraphTags, setShowUnreachableGraphTags] = useAtom(showUnreachableGraphTagsState);
@@ -81,16 +84,18 @@ export const GraphsSettingsPage: FC = () => {
           />
         )}
       </Field>
-      <SegmentedEditor
-        value={graphBuilderImplementationMode}
-        onChange={changeGraphBuilderImplementationMode}
-        isReadonly={false}
-        isDisabled={false}
-        label="Graph Builder implementation"
-        name="graphBuilderImplementationMode"
-        helperMessage="Developer rollout control. Legacy remains the default until the evaluation and dogfood gates pass. Transactional builds a private draft for review before Apply. A running session keeps the implementation it started with; changes affect only new sessions."
-        options={graphBuilderImplementationOptions}
-      />
+      {aiGraphBuilderEnabled ? (
+        <SegmentedEditor
+          value={graphBuilderImplementationMode}
+          onChange={changeGraphBuilderImplementationMode}
+          isReadonly={false}
+          isDisabled={false}
+          label="Graph Builder implementation"
+          name="graphBuilderImplementationMode"
+          helperMessage="Developer rollout control. Legacy remains the default until the evaluation and dogfood gates pass. Transactional builds a private draft for review before Apply. A running session keeps the implementation it started with; changes affect only new sessions."
+          options={graphBuilderImplementationOptions}
+        />
+      ) : null}
     </div>
   );
 };

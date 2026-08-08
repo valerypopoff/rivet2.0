@@ -7,17 +7,18 @@ import {
   loadProjectFromString,
   serializeProject,
   validateProjectUiGraphActionBindings,
-  type AssemblePromptNode,
+  type BooleanNode,
   type ChartNode,
+  type CodeNewNode,
+  type CompareNode,
   type DelegateFunctionCallNode,
-  type DestructureNode,
   type GptFunctionNode,
   type GraphId,
   type GraphInputNode,
   type GraphOutputNode,
   type LLMChatV2Node,
   type NodeGraph,
-  type ObjectNode,
+  type NumberNode,
   type Project,
   type TextNode,
 } from '../../core/src/index.js';
@@ -60,14 +61,15 @@ for (const unknownId of ['', 'unknown', '__proto__', 'toString']) {
 }
 
 type PromoNodeByType = {
-  assemblePrompt: AssemblePromptNode;
+  boolean: BooleanNode;
+  codeNew: CodeNewNode;
+  compare: CompareNode;
   delegateFunctionCall: DelegateFunctionCallNode;
-  destructure: DestructureNode;
   gptFunction: GptFunctionNode;
   graphInput: GraphInputNode;
   graphOutput: GraphOutputNode;
   llmChatV2: LLMChatV2Node;
-  object: ObjectNode;
+  number: NumberNode;
   text: TextNode;
 };
 
@@ -252,89 +254,75 @@ function assertWorkflow(project: Project): void {
   );
 }
 
-function assertBatchRuns(project: Project): void {
-  assert.equal(Object.keys(project.graphs).length, 1, 'The batch-runs demo must not contain subgraphs.');
+async function assertVisualCode(project: Project): Promise<void> {
+  assert.equal(Object.keys(project.graphs).length, 1, 'The visual-code demo must not contain subgraphs.');
   const graph = getMainGraph(project);
-  assertNodeTypes(graph, ['graphInput', 'graphOutput', 'llmChatV2', 'text', 'text']);
-
-  const requests = findNode(graph, 'graphInput');
-  const instructions = findNodeByTitle(graph, 'Classification instructions');
-  const llm = findNode(graph, 'llmChatV2');
-  const output = findNode(graph, 'graphOutput');
-
-  assert.equal(llm.isSplitRun, true, 'The batch LLM must use Many parallel runs.');
-  assert.notEqual(llm.isSplitSequential, true, 'The batch LLM runs must remain parallel.');
-  assert.equal(llm.data.useToolCalling, false);
-  assert.equal(llm.data.responseFormat, 'text');
-  assert.equal(output.data.dataType, 'string[]');
-  assert.equal(requests.data.id, 'requests');
-  assert.equal(requests.data.dataType, 'string[]');
-  assert.equal(requests.data.useDefaultValueInput, false);
-  assert.deepEqual(requests.data.defaultValue, [
-    'I was charged twice for my monthly plan.',
-    'The dashboard stays blank after I sign in.',
-    'Please add a dark mode for late-night work.',
+  assertNodeTypes(graph, [
+    'boolean',
+    'boolean',
+    'codeNew',
+    'compare',
+    'compare',
+    'compare',
+    'graphInput',
+    'graphInput',
+    'graphInput',
+    'graphInput',
+    'graphOutput',
+    'number',
+    'number',
   ]);
 
-  const expectedConnections = [
-    [requests.id, 'data', llm.id, 'prompt'],
-    [instructions.id, 'output', llm.id, 'systemPrompt'],
-    [llm.id, 'response', output.id, 'value'],
-  ];
-
-  for (const [outputNodeId, outputId, inputNodeId, inputId] of expectedConnections) {
-    assert.ok(
-      graph.connections.some(
-        (connection) =>
-          connection.outputNodeId === outputNodeId &&
-          connection.outputId === outputId &&
-          connection.inputNodeId === inputNodeId &&
-          connection.inputId === inputId,
-      ),
-      `The batch-runs graph is missing ${String(outputId)} -> ${String(inputId)}.`,
-    );
-  }
-}
-
-function assertStructuredOutput(project: Project): void {
-  assert.equal(Object.keys(project.graphs).length, 1, 'The structured-output demo must not contain subgraphs.');
-  const graph = getMainGraph(project);
-  assertNodeTypes(graph, ['destructure', 'graphOutput', 'llmChatV2', 'object', 'text', 'text', 'text']);
-
-  const ticket = findNodeByTitle(graph, 'Messy support ticket');
-  const schemaNode = findNode(graph, 'object');
-  const llm = findNode(graph, 'llmChatV2');
-  const destructure = findNode(graph, 'destructure');
-  const render = findNodeByTitle(graph, 'Render triage card');
+  const amount = findNodeByTitle(graph, 'Expense amount') as NumberNode;
+  const limit = findNodeByTitle(graph, 'Auto-approval limit') as NumberNode;
+  const receiptPresent = findNodeByTitle(graph, 'Receipt present') as BooleanNode;
+  const tripPreApproved = findNodeByTitle(graph, 'Trip pre-approved') as BooleanNode;
+  const amountCheck = findNodeByTitle(graph, 'Compare - Is amount within auto-approval limit?') as CompareNode;
+  const evidenceCheck = findNodeByTitle(graph, 'Compare - Is there evidence and pre-approval?') as CompareNode;
+  const policyGate = findNodeByTitle(graph, 'Compare - Is policy eligible?') as CompareNode;
+  const code = findNode(graph, 'codeNew');
   const output = findNode(graph, 'graphOutput');
+  const graphInputs = Object.fromEntries(
+    filterNodes(graph, 'graphInput').map((node) => [node.data.id, node]),
+  ) as Record<string, GraphInputNode>;
 
-  assert.equal(llm.data.responseFormat, 'json_schema');
-  assert.equal(llm.data.useToolCalling, false);
   assert.equal(output.data.dataType, 'string');
-
-  const schema = JSON.parse(String(schemaNode.data.jsonTemplate)) as {
-    additionalProperties?: unknown;
-    properties?: Record<string, unknown>;
-    required?: unknown;
-    type?: unknown;
-  };
-  const fieldNames = ['category', 'needsHuman', 'priority', 'summary'];
-  assert.equal(schema.type, 'object');
-  assert.equal(schema.additionalProperties, false);
-  assert.deepEqual(Object.keys(schema.properties ?? {}).sort(), fieldNames);
-  assert.deepEqual([...(Array.isArray(schema.required) ? schema.required : [])].sort(), fieldNames);
-  assert.deepEqual(destructure.data.paths, ['$.category', '$.priority', '$.summary', '$.needsHuman']);
-  assert.deepEqual(destructure.data.pathPortIds, ['category', 'priority', 'summary', 'needsHuman']);
+  assert.deepEqual(Object.fromEntries(Object.entries(graphInputs).map(([id, node]) => [id, node.data.dataType])), {
+    autoApprovalLimit: 'number',
+    expenseAmount: 'number',
+    receiptPresent: 'boolean',
+    tripPreApproved: 'boolean',
+  });
+  assert.ok(
+    Object.values(graphInputs).every((node) => node.data.useDefaultValueInput === true),
+    'The visual-code demo must remain immediately runnable through visible default values.',
+  );
+  assert.equal(amount.data.value, 860);
+  assert.equal(limit.data.value, 1000);
+  assert.equal(receiptPresent.data.value, true);
+  assert.equal(tripPreApproved.data.value, true);
+  assert.equal(amountCheck.data.comparisonFunction, '<=');
+  assert.equal(evidenceCheck.data.comparisonFunction, 'and');
+  assert.equal(policyGate.data.comparisonFunction, 'and');
+  assert.equal(filterNodes(graph, 'codeNew').length, 1, 'The demo must use exactly one focused Code node.');
+  assert.match(code.data.code, /const tiers = \[/u);
+  assert.match(code.data.code, /visible policy gates/u);
+  assert.match(code.data.code, /Auto-approve/u);
 
   const expectedConnections = [
-    [ticket.id, 'output', llm.id, 'prompt'],
-    [schemaNode.id, 'output', llm.id, 'responseSchema'],
-    [llm.id, 'response', destructure.id, 'object'],
-    [destructure.id, 'category', render.id, 'category'],
-    [destructure.id, 'priority', render.id, 'priority'],
-    [destructure.id, 'summary', render.id, 'summary'],
-    [destructure.id, 'needsHuman', render.id, 'needsHuman'],
-    [render.id, 'output', output.id, 'value'],
+    [amount.id, 'value', graphInputs.expenseAmount!.id, 'default'],
+    [limit.id, 'value', graphInputs.autoApprovalLimit!.id, 'default'],
+    [receiptPresent.id, 'value', graphInputs.receiptPresent!.id, 'default'],
+    [tripPreApproved.id, 'value', graphInputs.tripPreApproved!.id, 'default'],
+    [graphInputs.expenseAmount!.id, 'data', amountCheck.id, 'a'],
+    [graphInputs.autoApprovalLimit!.id, 'data', amountCheck.id, 'b'],
+    [graphInputs.receiptPresent!.id, 'data', evidenceCheck.id, 'a'],
+    [graphInputs.tripPreApproved!.id, 'data', evidenceCheck.id, 'b'],
+    [amountCheck.id, 'output', policyGate.id, 'a'],
+    [evidenceCheck.id, 'output', policyGate.id, 'b'],
+    [policyGate.id, 'output', code.id, 'policyEligible'],
+    [graphInputs.expenseAmount!.id, 'data', code.id, 'amount'],
+    [code.id, 'output', output.id, 'value'],
   ];
 
   for (const [outputNodeId, outputId, inputNodeId, inputId] of expectedConnections) {
@@ -346,9 +334,16 @@ function assertStructuredOutput(project: Project): void {
           connection.inputNodeId === inputNodeId &&
           connection.inputId === inputId,
       ),
-      `The structured-output graph is missing ${String(outputId)} -> ${String(inputId)}.`,
+      `The visual-code graph is missing ${String(outputId)} -> ${String(inputId)}.`,
     );
   }
+
+  assert.ok(graph.metadata?.id, 'The visual-code graph must have an id.');
+  const outputs = await coreRunGraph(project, { graph: graph.metadata.id });
+  const decision = Object.values(outputs)[0]?.value;
+  assert.ok(typeof decision === 'string');
+  assert.match(decision, /Auto-approve/u);
+  assert.match(decision, /Finance \+ Travel desk/u);
 }
 
 function assertWebApp(project: Project): void {
@@ -356,37 +351,56 @@ function assertWebApp(project: Project): void {
   assert.equal(Object.keys(project.uiGraphs ?? {}).length, 1);
   assert.deepEqual(validateProjectUiGraphActionBindings(project), []);
   const graph = getMainGraph(project);
-  assertNodeTypes(graph, ['assemblePrompt', 'graphInput', 'graphInput', 'graphOutput', 'llmChatV2', 'text', 'text']);
+  assertNodeTypes(graph, ['graphInput', 'graphInput', 'graphOutput', 'llmChatV2', 'text', 'text', 'text']);
   const graphInputTypes = Object.fromEntries(
     filterNodes(graph, 'graphInput').map((node) => [node.data.id, node.data.dataType]),
   );
   const graphOutputTypes = Object.fromEntries(
     filterNodes(graph, 'graphOutput').map((node) => [node.data.id, node.data.dataType]),
   );
-  assert.deepEqual(graphInputTypes, { conversationHistory: 'chat-message[]', userInput: 'string' });
+  assert.deepEqual(graphInputTypes, { audience: 'string', productIdea: 'string' });
   assert.deepEqual(graphOutputTypes, { output: 'string' });
   const uiGraph = Object.values(project.uiGraphs ?? {})[0]!;
-  assert.equal(uiGraph.components.length, 1, 'The web-app demo needs only its Chat component.');
-  const chat = uiGraph.components.find((component) => component.type === 'chat');
-  assert.ok(chat && chat.action?.type === 'runGraph');
-  assert.equal(chat.action.graphId, project.metadata.mainGraphId);
-  assert.equal(chat.action.userInputId, 'userInput');
-  assert.equal(chat.action.historyInputId, 'conversationHistory');
-  assert.equal(chat.action.responseOutputId, 'output');
-  assert.deepEqual(chat.action.inputMappings ?? [], []);
+  assert.equal(uiGraph.components.length, 5, 'The web-app demo needs a compact conventional form and result view.');
+  assert.equal(
+    uiGraph.components.some((component) => component.type === 'chat'),
+    false,
+  );
 
-  const historyInput = filterNodes(graph, 'graphInput').find((node) => node.data.id === 'conversationHistory');
-  const userInput = filterNodes(graph, 'graphInput').find((node) => node.data.id === 'userInput');
-  assert.ok(historyInput && userInput, 'The web-app graph must expose userInput and conversationHistory.');
-  const instructions = findNodeByTitle(graph, 'Assistant instructions');
-  const prompt = findNode(graph, 'assemblePrompt');
+  const productIdeaField = uiGraph.components.find(
+    (component) => component.type === 'textarea' && component.stateKey === 'productIdea',
+  );
+  const audienceField = uiGraph.components.find(
+    (component) => component.type === 'input' && component.stateKey === 'audience',
+  );
+  const button = uiGraph.components.find((component) => component.type === 'button');
+  const outputView = uiGraph.components.find(
+    (component): component is Extract<(typeof uiGraph.components)[number], { type: 'output' }> =>
+      component.type === 'output' && component.stateKey === 'launchBrief',
+  );
+  assert.ok(productIdeaField && audienceField, 'The web app must provide its two editable form fields.');
+  assert.ok(button && button.action.type === 'runGraph');
+  assert.equal(button.action.graphId, project.metadata.mainGraphId);
+  assert.deepEqual(button.action.inputMappings, [
+    { inputKey: 'productIdea', stateKey: 'productIdea' },
+    { inputKey: 'audience', stateKey: 'audience' },
+  ]);
+  assert.deepEqual(button.action.outputs, [{ outputKey: 'output', stateKey: 'launchBrief' }]);
+  assert.ok(outputView);
+  assert.equal(outputView.renderAs, 'markdown');
+
+  const productIdeaInput = filterNodes(graph, 'graphInput').find((node) => node.data.id === 'productIdea');
+  const audienceInput = filterNodes(graph, 'graphInput').find((node) => node.data.id === 'audience');
+  assert.ok(productIdeaInput && audienceInput, 'The web-app graph must expose its form values.');
+  const instructions = findNodeByTitle(graph, 'Brief instructions');
+  const prompt = findNodeByTitle(graph, 'Build launch brief prompt');
   const llm = findNode(graph, 'llmChatV2');
   const output = findNode(graph, 'graphOutput');
   const expectedConnections = [
-    [historyInput.id, 'data', prompt.id, 'message1'],
-    [userInput.id, 'data', prompt.id, 'message2'],
+    [productIdeaInput.id, 'data', prompt.id, 'productIdea'],
+    [audienceInput.id, 'data', prompt.id, 'audience'],
     [instructions.id, 'output', llm.id, 'systemPrompt'],
-    [prompt.id, 'prompt', llm.id, 'prompt'],
+    [prompt.id, 'output', llm.id, 'prompt'],
     [llm.id, 'response', output.id, 'value'],
   ];
 
@@ -413,13 +427,14 @@ for (const demo of demos) {
   assert.deepEqual(project.plugins, []);
   assert.equal(Object.keys(project.nodePrefabs ?? {}).length, 0, `${demo.file} must not contain node-library prefabs.`);
 
-  const apiKeyNode = findApiKeyNode(project);
-  assertApiKeyWiring(project, apiKeyNode);
+  if (demo.kind !== 'visual-code') {
+    const apiKeyNode = findApiKeyNode(project);
+    assertApiKeyWiring(project, apiKeyNode);
+  }
   assertRoundTrip(project);
 
   if (demo.kind === 'agent') await assertAgent(project);
-  if (demo.kind === 'batch-runs') assertBatchRuns(project);
-  if (demo.kind === 'structured-output') assertStructuredOutput(project);
+  if (demo.kind === 'visual-code') await assertVisualCode(project);
   if (demo.kind === 'workflow') assertWorkflow(project);
   if (demo.kind === 'web-app') assertWebApp(project);
 }

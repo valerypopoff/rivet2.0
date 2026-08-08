@@ -4,7 +4,7 @@ export type HomepageCard = {
   description: string;
 };
 
-export type HomepageDemoId = 'agent' | 'workflow' | 'web-app' | 'batch-runs' | 'structured-output';
+export type HomepageDemoId = 'agent' | 'workflow' | 'web-app' | 'visual-code';
 
 export type HomepageDemo = Pick<HomepageCard, 'title' | 'description'> & {
   demoId: HomepageDemoId;
@@ -12,7 +12,6 @@ export type HomepageDemo = Pick<HomepageCard, 'title' | 'description'> & {
 };
 export type HomepageFeature = HomepageDemo;
 export type HomepageContextualDemo = HomepageDemo & Pick<HomepageCard, 'eyebrow'>;
-export type HomepageFoundation = Omit<HomepageCard, 'eyebrow'>;
 
 export type HomepageUseCaseIcon = 'agent' | 'knowledge' | 'prompt' | 'web-app' | 'evaluation' | 'automation';
 
@@ -23,40 +22,32 @@ export type HomepageUseCase = HomepageCard & {
 const agentDemo = {
   demoId: 'agent',
   title: 'LLM agents with tools',
-  description: 'Easily build LLM agents with tools. Inspect the calls, tool results, and final answers.',
+  description:
+    'The "LLM Chat" node automaticaly runs the tools and loops until the LLM answers with a non-toolcall response.',
   instruction: 'Paste your OpenAI API key, then run the project to watch the LLM call its tool graph.',
 } satisfies HomepageDemo;
 const workflowDemo = {
   demoId: 'workflow',
   title: 'Multi-step LLM workflows',
-  description: 'Run focused LLM steps in parallel, combine their results, and inspect every value in the workflow.',
+  description: 'Run LLM-powered branches in parallel and combine their results.',
   instruction: 'Paste your OpenAI API key, then run the project to see two LLM steps execute in parallel.',
 } satisfies HomepageDemo;
 const webAppDemo = {
   demoId: 'web-app',
   title: 'Workflow-powered web apps',
-  description: 'Put a chat interface over an LLM workflow. Build both in Rivet and keep them in the same project.',
-  instruction: 'Paste your OpenAI API key, then open “Chat web app — open this” under Web Apps.',
+  description: 'Use a simple UI builder and run your AI workflows as web apps.',
+  instruction: 'Paste your OpenAI API key, then open "Launch brief web app - open this" under Web Apps.',
 } satisfies HomepageDemo;
-const batchRunsDemo = {
-  demoId: 'batch-runs',
-  title: 'One node, many inspectable runs',
+const visualCodeDemo = {
+  demoId: 'visual-code',
+  title: 'A compact approval flow with one focused code step',
   description:
-    'Feed three requests into one LLM node, run them in parallel, and switch between the node’s individual inputs, outputs, durations, and statuses.',
-  instruction:
-    'Paste your OpenAI API key, then run the project; the Classify requests node processes three customer requests as parallel, selectable runs.',
-} satisfies HomepageDemo;
-const structuredOutputDemo = {
-  demoId: 'structured-output',
-  title: 'Typed structured output',
-  description:
-    'Constrain an LLM with a visible JSON schema, expose its fields as typed values, and pass them through ordinary Rivet nodes without parsing strings by hand.',
-  instruction:
-    'Paste your OpenAI API key, then run the project; the LLM extracts a support ticket into the visible schema and the final Text node renders a triage card.',
+    'Number, Boolean, and Compare nodes make the policy visible. One Code node owns the tiered routing calculation that would be tedious to draw block by block.',
+  instruction: 'Run the project and inspect how visible policy checks feed one focused Code node.',
 } satisfies HomepageDemo;
 
 export const homepageContent = {
-  demos: [agentDemo, workflowDemo, webAppDemo, batchRunsDemo, structuredOutputDemo] satisfies HomepageDemo[],
+  demos: [agentDemo, workflowDemo, webAppDemo, visualCodeDemo] satisfies HomepageDemo[],
   meta: {
     title: 'Rivet 2 — Visual AI workflows you can inspect, test, and ship',
     description:
@@ -66,7 +57,7 @@ export const homepageContent = {
     eyebrow: 'Free · Open-source · MIT licensed',
     title: 'Rivet 2 — visual IDE for production AI agents, workflows, and web apps',
     description:
-      'Build, debug and run the same Rivet 2 project in a desktop app, in a self-hosted web-service, or serve as an endpoint inside your own backend.',
+      'Run the same Rivet 2 project in a desktop app, as an async function on your backend, or serve as an endpoint in a self-hosted web-service.',
     primaryAction: {
       label: 'Download Rivet 2',
       to: '/download',
@@ -87,26 +78,9 @@ export const homepageContent = {
     description:
       'Move quickly without giving up control. Rivet keeps prompts, tools, branching, data, and model calls visible on one canvas—and gives you code nodes when a visual block is not the right abstraction.',
   },
-  foundations: [
-    {
-      title: 'Inspect the whole execution',
-      description:
-        'See inputs, outputs, tool calls, timing, errors, and intermediate values at the node where they happened. Debug the workflow instead of guessing what the model did.',
-    },
-    {
-      title: 'Compose systems, not prompt demos',
-      description:
-        'Use subgraphs, loops, parallel work, reusable LLM profiles, async side effects, stored values, and typed inputs to keep complex agents legible.',
-    },
-    {
-      title: 'Use code without abandoning the canvas',
-      description:
-        'Drop into JavaScript for custom transformations or integrations, then bring the result straight back into the visible workflow.',
-    },
-  ] satisfies HomepageFoundation[],
   foundationsDemo: {
-    ...batchRunsDemo,
-    eyebrow: 'Live execution demo',
+    ...visualCodeDemo,
+    eyebrow: 'Live visual-plus-code demo',
   } satisfies HomepageContextualDemo,
   useCases: {
     eyebrow: 'Built for practical AI work',
@@ -158,10 +132,6 @@ export const homepageContent = {
       },
     ] satisfies HomepageUseCase[],
   },
-  useCasesDemo: {
-    ...structuredOutputDemo,
-    eyebrow: 'Live typed-data demo',
-  } satisfies HomepageContextualDemo,
   lifecycle: {
     eyebrow: 'From first idea to a running product',
     title: 'The graph stays useful after the prototype works.',
@@ -186,59 +156,54 @@ export const homepageContent = {
         title: 'Run in your stack',
         description: 'Execute projects from Node, the CLI, Docker, or an application that embeds the Rivet runtime.',
       },
+      {
+        number: '05',
+        title: 'Debug live',
+        description:
+          'Connect the editor to a remote backend run and watch nodes finish in real time, including generated outputs and the exact point of failure.',
+      },
+      {
+        number: '06',
+        title: 'Replay what happened',
+        description:
+          'Capture completed runs, then reopen the recorded graph and data flow for post-mortem inspection instead of reconstructing the failure from logs.',
+      },
     ],
-  },
-  production: {
-    eyebrow: 'A visual builder with a real runtime',
-    title: 'Prototype fast. Keep the architecture.',
-    description:
-      'A Rivet project is not a screenshot of a prototype. It is the executable artifact. Keep editing it in the desktop IDE while production runs it through the Node package, CLI, Docker, or an embedded host.',
-    capabilities: [
-      'Run the same .rivet-project outside the editor',
-      'Run in Browser or Node, or invoke project graphs programmatically',
-      'Observe remote executions from the desktop debugger',
-      'Bring your own providers, credentials, stores, and MCP tools',
-      'Host workflows and web apps behind infrastructure you control',
-    ],
-    responsibilityNote:
-      'Your production host remains responsible for authentication, tenancy, durable storage, quotas, telemetry, and deployment policy.',
-    runtimeLabel: 'Node integration',
-    commandLabel: 'Run a graph from your Node service',
-    command: `import { runGraphInFile } from '@valerypopoff/rivet2-node';
-
-const output = await runGraphInFile('./assistant.rivet-project', {
-  graph: 'Chat',
-  inputs: { message },
-});`,
-    runtimeSignals: ['Project loaded', 'Request handled', 'Outputs returned'],
-    runtimeSurfaces: ['Desktop', 'Browser', 'Node', 'CLI', 'Embedded'],
-    action: {
-      label: 'Explore the API reference',
-      to: '/api-reference',
-    },
   },
   wrapper: {
-    eyebrow: 'A ready self-hosted Rivet server',
-    title: 'Serve Rivet projects without building the host yourself.',
+    eyebrow: 'Rivet Studio Server',
+    title: 'Put Rivet on your VM. Get the whole workspace in your browser.',
     description:
-      'Rivet Studio Server is a ready-to-deploy, self-hosted wrapper for Rivet projects. Use it when you want production API endpoints and web apps without writing and maintaining your own Node server.',
-    capabilities: [
-      'Publish project workflows as callable API endpoints',
-      'Serve web apps defined inside Rivet projects',
-      'Keep deployment and project execution on infrastructure you control',
-      'Start with a ready server instead of implementing the hosting layer from scratch',
+      'Run Rivet Studio Server on infrastructure you control and use Rivet as a cloud workspace, project library, deployment surface, and observability console—without depending on the desktop app for everyday work.',
+    facts: [
+      {
+        number: '01',
+        title: 'The full editor in your browser',
+        description:
+          'Open the Rivet editor from any browser connected to your server. Build, run, and debug projects without installing the desktop app on that machine.',
+      },
+      {
+        number: '02',
+        title: 'Projects managed on the server',
+        description:
+          'Create folders, upload, edit, duplicate, rename, and save .rivet-project files in the hosted workspace. Routine edits no longer require a Git push just to reach the server.',
+      },
+      {
+        number: '03',
+        title: 'Publish workflows and web apps',
+        description:
+          'Turn a workflow into an HTTP endpoint or publish a project-contained web app from the UI, while keeping snapshots and execution on your own infrastructure.',
+      },
+      {
+        number: '04',
+        title: 'Recordings, live debugging, and run statistics',
+        description:
+          'Attach the Remote Debugger to latest server runs, reopen retained executions as graph replays, and inspect timing and outcome statistics across workflows and web-app actions.',
+      },
     ],
-    serverLabel: 'Rivet Studio Server',
-    deploymentLabel: 'One self-hosted runtime for your Rivet projects',
-    services: [
-      ['API endpoints', 'Run project workflows over HTTP'],
-      ['Published web apps', 'Serve project-defined interfaces'],
-      ['Rivet projects', 'Deploy the same artifacts you edit'],
-    ],
-    runtimeSurfaces: ['Self-hosted', 'Docker-ready', 'Your infrastructure'],
     action: {
-      label: 'View Rivet Studio Server on GitHub',
-      to: 'https://github.com/valerypopoff/Rivet-Studio-Server',
+      label: 'View Rivet Studio Server for Rivet 2 on GitHub',
+      to: 'https://github.com/valerypopoff/Rivet-Studio-Server/tree/develop-rivet2',
     },
   },
   closing: {

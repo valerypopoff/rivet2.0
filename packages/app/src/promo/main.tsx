@@ -12,18 +12,17 @@ import { deserializeProject, getError, type GraphId } from '@valerypopoff/rivet2
 import { MemoryAsyncStorage, MemoryStaticDataStore, RivetAppHost, type RivetWorkspaceHost } from '../host.js';
 import { installGlobalErrorHandlers } from '../utils/errorHandling.js';
 import agentProjectSource from './projects/promo-agent.rivet-project?raw';
-import batchRunsProjectSource from './projects/promo-batch-runs.rivet-project?raw';
-import structuredOutputProjectSource from './projects/promo-structured-output.rivet-project?raw';
+import visualCodeProjectSource from './projects/promo-visual-code.rivet-project?raw';
 import webAppProjectSource from './projects/promo-web-app.rivet-project?raw';
 import workflowProjectSource from './projects/promo-workflow.rivet-project?raw';
 import { isPromoProjectKey, PROMO_PROJECT_MANIFEST, type PromoProjectKey } from './promoProjectManifest.js';
+import { PROMO_HOST_UI } from './promoHostUi.js';
 import '../host.css';
 import './promo.css';
 
 const PROMO_PROJECT_SOURCES = {
   agent: agentProjectSource,
-  'batch-runs': batchRunsProjectSource,
-  'structured-output': structuredOutputProjectSource,
+  'visual-code': visualCodeProjectSource,
   'web-app': webAppProjectSource,
   workflow: workflowProjectSource,
 } satisfies Record<PromoProjectKey, string>;
@@ -53,17 +52,14 @@ function getSelectedPromoProject(search: string): PromoProjectSelection {
 
 const selectedPromoProject = getSelectedPromoProject(window.location.search);
 const selectedPromoDefinition = 'definition' in selectedPromoProject ? selectedPromoProject.definition : undefined;
-const PROMO_HOST_UI = {
-  checkForUpdates: false,
-  fileMenu: { visibleItems: [] },
-  preloadCodeEditor: false,
-  workspaceTabs: { visibleItems: [] },
-} as const;
-
 type PromoMessage =
   | { type: 'rivet-demo:error'; message: string }
   | { type: 'rivet-demo:ready' }
   | { type: 'rivet-demo:release' };
+
+type PromoParentMessage =
+  | { type: 'rivet-demo:status-request' }
+  | { type: 'rivet-demo:interaction-state'; active: boolean };
 
 let latestStartupMessage: Extract<PromoMessage, { type: 'rivet-demo:error' | 'rivet-demo:ready' }> | undefined;
 
@@ -75,6 +71,22 @@ function postToParent(message: PromoMessage) {
   if (window.parent !== window) {
     window.parent.postMessage(message, '*');
   }
+}
+
+function setPromoInteractionActive(active: boolean) {
+  document.documentElement.classList.toggle('promo-interaction-active', active);
+}
+
+function isPromoParentMessage(value: unknown): value is PromoParentMessage {
+  if (typeof value !== 'object' || value == null || !('type' in value)) {
+    return false;
+  }
+
+  if (value.type === 'rivet-demo:status-request') {
+    return true;
+  }
+
+  return value.type === 'rivet-demo:interaction-state' && 'active' in value && typeof value.active === 'boolean';
 }
 
 function createPromoSnapshot(definition: PromoProjectDefinition) {
@@ -175,15 +187,14 @@ installGlobalErrorHandlers();
 window.addEventListener(
   'message',
   (event) => {
-    if (
-      event.source === window.parent &&
-      typeof event.data === 'object' &&
-      event.data != null &&
-      'type' in event.data &&
-      event.data.type === 'rivet-demo:status-request' &&
-      latestStartupMessage
-    ) {
+    if (event.source !== window.parent || !isPromoParentMessage(event.data)) {
+      return;
+    }
+
+    if (event.data.type === 'rivet-demo:status-request' && latestStartupMessage) {
       postToParent(latestStartupMessage);
+    } else if (event.data.type === 'rivet-demo:interaction-state') {
+      setPromoInteractionActive(event.data.active);
     }
   },
   true,

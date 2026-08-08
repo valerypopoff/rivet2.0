@@ -12,12 +12,53 @@ import {
 } from '../content/homepageContent';
 import styles from './index.module.css';
 
-function Arrow() {
-  return <span aria-hidden="true">↗</span>;
-}
-
 function RivetNodeRunningIndicator() {
   return <span aria-hidden="true" className={styles.liveDemoRunningIndicator} />;
+}
+
+type DownloadPlatform = 'macos' | 'windows';
+
+function detectDownloadPlatform(): DownloadPlatform {
+  if (typeof navigator !== 'undefined' && /Macintosh|Mac OS X|iPhone|iPad/i.test(navigator.userAgent)) {
+    return 'macos';
+  }
+
+  return 'windows';
+}
+
+function DownloadPlatformIcon({ platform }: { platform: DownloadPlatform }) {
+  return platform === 'macos' ? (
+    <svg aria-hidden="true" className={styles.actionIcon} viewBox="0 0 24 24">
+      <path d="M16.7 12.7c0-2 1.6-3 1.7-3.1a3.7 3.7 0 0 0-2.9-1.6c-1.2-.1-2.4.7-3 .7-.7 0-1.7-.7-2.8-.7a3.9 3.9 0 0 0-3.3 2c-1.4 2.4-.4 5.9 1 7.9.7 1 1.5 2.1 2.5 2.1 1 0 1.4-.6 2.7-.6s1.6.6 2.7.6c1.1 0 1.8-1 2.5-2 .8-1.1 1.1-2.2 1.1-2.3-.1 0-2.1-.8-2.1-3Zm-2-6a3.5 3.5 0 0 0 .8-2.6 3.6 3.6 0 0 0-2.4 1.2 3.3 3.3 0 0 0-.9 2.5c1 .1 1.9-.5 2.5-1.1Z" />
+    </svg>
+  ) : (
+    <svg aria-hidden="true" className={styles.actionIcon} viewBox="0 0 24 24">
+      <path d="m3 4.2 7.4-1v7.2H3V4.2Zm8.5-1.2 9.5-1.3v8.7h-9.5V3Zm-8.5 8.5h7.4v7.3L3 17.8v-6.3Zm8.5 0H21v8.8l-9.5-1.3v-7.5Z" />
+    </svg>
+  );
+}
+
+function GitHubIcon() {
+  return (
+    <svg aria-hidden="true" className={styles.actionIcon} viewBox="0 0 24 24">
+      <path d="M12 2.2a9.8 9.8 0 0 0-3.1 19.1c.5.1.7-.2.7-.5v-1.9c-2.8.6-3.4-1.2-3.4-1.2-.5-1.2-1.1-1.5-1.1-1.5-.9-.6.1-.6.1-.6 1 0 1.6 1.1 1.6 1.1.9 1.5 2.4 1.1 3 .9.1-.7.4-1.1.6-1.3-2.3-.3-4.7-1.1-4.7-5.1 0-1.1.4-2.1 1.1-2.8-.1-.3-.5-1.3.1-2.8 0 0 .9-.3 2.9 1.1a10.2 10.2 0 0 1 5.3 0c2-1.4 2.9-1.1 2.9-1.1.6 1.5.2 2.5.1 2.8.7.7 1.1 1.7 1.1 2.8 0 4-2.4 4.8-4.7 5.1.4.3.7.9.7 1.8v2.7c0 .3.2.6.7.5A9.8 9.8 0 0 0 12 2.2Z" />
+    </svg>
+  );
+}
+
+function DownloadAction({ label, to }: { label: string; to: string }) {
+  const [platform, setPlatform] = useState<DownloadPlatform>('windows');
+
+  useEffect(() => {
+    setPlatform(detectDownloadPlatform());
+  }, []);
+
+  return (
+    <ActionLink to={to}>
+      <DownloadPlatformIcon platform={platform} />
+      {label}
+    </ActionLink>
+  );
 }
 
 function SectionHeading({
@@ -45,7 +86,9 @@ type RivetDemoMessage =
   | { type: 'rivet-demo:ready' }
   | { type: 'rivet-demo:release' };
 
-type RivetDemoRequest = { type: 'rivet-demo:status-request' };
+type RivetDemoRequest =
+  | { type: 'rivet-demo:status-request' }
+  | { type: 'rivet-demo:interaction-state'; active: boolean };
 
 const RIVET_DEMO_STARTUP_TIMEOUT_MS = 30_000;
 
@@ -88,11 +131,22 @@ function RivetDemoWindow({
     );
   }, [targetOrigin]);
 
+  const setDemoInteractionActive = useCallback(
+    (nextActive: boolean) => {
+      setActive(nextActive);
+      iframeRef.current?.contentWindow?.postMessage(
+        { type: 'rivet-demo:interaction-state', active: nextActive } satisfies RivetDemoRequest,
+        targetOrigin ?? '*',
+      );
+    },
+    [targetOrigin],
+  );
+
   const collapse = useCallback(() => {
-    setActive(false);
+    setDemoInteractionActive(false);
     onCollapse();
     requestAnimationFrame(() => expandButtonRef.current?.focus());
-  }, [onCollapse]);
+  }, [onCollapse, setDemoInteractionActive]);
 
   useEffect(() => {
     const handleMessage = (event: MessageEvent) => {
@@ -111,11 +165,11 @@ function RivetDemoWindow({
         if (expanded) {
           collapse();
         } else {
-          setActive(false);
+          setDemoInteractionActive(false);
         }
         window.focus();
       } else {
-        setActive(false);
+        setDemoInteractionActive(false);
         setReady(false);
         setError(typeof event.data.message === 'string' ? event.data.message : 'The embedded demo could not start.');
       }
@@ -124,7 +178,7 @@ function RivetDemoWindow({
     window.addEventListener('message', handleMessage);
     requestDemoStatus();
     return () => window.removeEventListener('message', handleMessage);
-  }, [collapse, expanded, requestDemoStatus, targetOrigin]);
+  }, [collapse, expanded, requestDemoStatus, setDemoInteractionActive, targetOrigin]);
 
   useEffect(() => {
     if (ready || error) {
@@ -186,14 +240,14 @@ function RivetDemoWindow({
   }, [collapse, expanded]);
 
   const reset = () => {
-    setActive(false);
+    setDemoInteractionActive(false);
     setError(undefined);
     setReady(false);
     setInstance((current) => current + 1);
   };
 
   const expand = () => {
-    setActive(true);
+    setDemoInteractionActive(true);
     onExpand();
     requestAnimationFrame(() => iframeRef.current?.focus());
   };
@@ -230,13 +284,7 @@ function RivetDemoWindow({
               disabled={!ready || Boolean(error)}
               onClick={expanded ? collapse : expand}
             >
-              {expanded ? (
-                'Close large popup'
-              ) : (
-                <>
-                  Open large popup <Arrow />
-                </>
-              )}
+              {expanded ? 'Close large popup' : 'Open large popup'}
             </button>
           </div>
         </div>
@@ -270,14 +318,11 @@ function RivetDemoWindow({
               className={styles.liveDemoActivation}
               type="button"
               onClick={() => {
-                setActive(true);
+                setDemoInteractionActive(true);
                 iframeRef.current?.focus();
               }}
             >
               <strong>Click to explore this project</strong>
-              <span>
-                The frame activates on click so it does not capture page scrolling. Press Escape to release it.
-              </span>
             </button>
           ) : null}
         </div>
@@ -286,7 +331,7 @@ function RivetDemoWindow({
   );
 }
 
-type DemoShowcaseId = 'hero' | 'foundations' | 'use-cases';
+type DemoShowcaseId = 'hero' | 'foundations';
 type DemoPickerVariant = 'hero' | 'contextual';
 
 function RivetDemoShowcase({
@@ -307,6 +352,7 @@ function RivetDemoShowcase({
   const idPrefix = useId();
   const [selectedDemoId, setSelectedDemoId] = useState<HomepageDemoId>(demos[0]!.demoId);
   const selectedDemo = demos.find((demo) => demo.demoId === selectedDemoId) ?? demos[0]!;
+  const hasDemoChoice = demos.length > 1;
   const panelId = `${idPrefix}-panel`;
   const selectedTabId = `${idPrefix}-${selectedDemo.demoId}-tab`;
 
@@ -341,7 +387,7 @@ function RivetDemoShowcase({
   return (
     <div className={styles.demoShowcase}>
       <div
-        aria-label="Choose the Rivet project shown below"
+        aria-label={hasDemoChoice ? 'Choose the Rivet project shown below' : 'Rivet project shown below'}
         className={pickerVariant === 'hero' ? styles.heroFeatureList : styles.contextualDemoList}
         role="tablist"
       >
@@ -364,7 +410,6 @@ function RivetDemoShowcase({
               {contextualDemo ? <span className={styles.contextualDemoEyebrow}>{contextualDemo.eyebrow}</span> : null}
               <strong>{demo.title}</strong>
               <span>{demo.description}</span>
-              {selected ? <i className={styles.selectedDemoIndicator}>Selected demo</i> : null}
             </button>
           );
         })}
@@ -494,14 +539,13 @@ export default function Home() {
               <h1>{content.hero.title}</h1>
               <p className={styles.heroDescription}>{content.hero.description}</p>
               <div className={styles.heroActions}>
-                <ActionLink to={content.hero.primaryAction.to}>
-                  {content.hero.primaryAction.label} <Arrow />
-                </ActionLink>
+                <DownloadAction label={content.hero.primaryAction.label} to={content.hero.primaryAction.to} />
                 <ActionLink to={content.hero.secondaryAction.to} variant="secondary">
                   {content.hero.secondaryAction.label}
                 </ActionLink>
                 <ActionLink to={content.hero.sourceAction.to} variant="text">
-                  {content.hero.sourceAction.label} <Arrow />
+                  <GitHubIcon />
+                  {content.hero.sourceAction.label}
                 </ActionLink>
               </div>
             </div>
@@ -527,15 +571,6 @@ export default function Home() {
               title={content.philosophy.title}
               description={content.philosophy.description}
             />
-            <div className={styles.foundationGrid}>
-              {content.foundations.map((foundation, index) => (
-                <article className={styles.foundationCard} key={foundation.title}>
-                  <span className={styles.cardNumber}>{String(index + 1).padStart(2, '0')}</span>
-                  <h3>{foundation.title}</h3>
-                  <span>{foundation.description}</span>
-                </article>
-              ))}
-            </div>
             <RivetDemoShowcase
               demoBaseUrl={demoBaseUrl}
               demos={[content.foundationsDemo]}
@@ -547,9 +582,7 @@ export default function Home() {
           </div>
         </section>
 
-        <section
-          className={`${styles.useCasesSection} ${expandedShowcaseId === 'use-cases' ? styles.sectionWithExpandedDemo : ''}`}
-        >
+        <section className={styles.useCasesSection}>
           <div className={styles.sectionShell}>
             <SectionHeading
               eyebrow={content.useCases.eyebrow}
@@ -567,14 +600,6 @@ export default function Home() {
                 </article>
               ))}
             </div>
-            <RivetDemoShowcase
-              demoBaseUrl={demoBaseUrl}
-              demos={[content.useCasesDemo]}
-              expanded={expandedShowcaseId === 'use-cases'}
-              onCollapse={() => setExpandedShowcaseId(null)}
-              onExpand={() => setExpandedShowcaseId('use-cases')}
-              pickerVariant="contextual"
-            />
           </div>
         </section>
 
@@ -595,103 +620,25 @@ export default function Home() {
           </div>
         </section>
 
-        <section className={styles.productionSection}>
-          <div className={styles.sectionShell}>
-            <div className={styles.productionGrid}>
-              <div className={styles.productionCopy}>
-                <SectionHeading
-                  eyebrow={content.production.eyebrow}
-                  title={content.production.title}
-                  description={content.production.description}
-                />
-                <ul>
-                  {content.production.capabilities.map((capability) => (
-                    <li key={capability}>
-                      <i />
-                      {capability}
-                    </li>
-                  ))}
-                </ul>
-                <p className={styles.responsibilityNote}>{content.production.responsibilityNote}</p>
-                <ActionLink to={content.production.action.to} variant="text">
-                  {content.production.action.label} <Arrow />
-                </ActionLink>
-              </div>
-              <div className={styles.runtimeCard}>
-                <div className={styles.runtimeTopbar}>
-                  <span>{content.production.runtimeLabel}</span>
-                  <i />
-                </div>
-                <div className={styles.runtimeBody}>
-                  <p>{content.production.commandLabel}</p>
-                  <pre>
-                    <code>{content.production.command}</code>
-                  </pre>
-                  <div className={styles.runtimeSignals}>
-                    {content.production.runtimeSignals.map((signal) => (
-                      <span key={signal}>
-                        <i /> {signal}
-                      </span>
-                    ))}
-                  </div>
-                </div>
-                <div className={styles.runtimeFooter}>
-                  {content.production.runtimeSurfaces.map((surface) => (
-                    <span key={surface}>{surface}</span>
-                  ))}
-                </div>
-              </div>
-            </div>
-          </div>
-        </section>
-
         <section className={styles.wrapperSection}>
           <div className={styles.sectionShell}>
-            <div className={styles.wrapperGrid}>
-              <div className={styles.wrapperCard}>
-                <div className={styles.wrapperTopbar}>
-                  <span>{content.wrapper.serverLabel}</span>
-                  <i />
-                </div>
-                <div className={styles.wrapperBody}>
-                  <strong>{content.wrapper.deploymentLabel}</strong>
-                  <div className={styles.wrapperServices}>
-                    {content.wrapper.services.map(([label, description]) => (
-                      <div key={label}>
-                        <i />
-                        <span>
-                          <b>{label}</b>
-                          {description}
-                        </span>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-                <div className={styles.runtimeFooter}>
-                  {content.wrapper.runtimeSurfaces.map((surface) => (
-                    <span key={surface}>{surface}</span>
-                  ))}
-                </div>
-              </div>
-              <div className={styles.wrapperCopy}>
-                <SectionHeading
-                  eyebrow={content.wrapper.eyebrow}
-                  title={content.wrapper.title}
-                  description={content.wrapper.description}
-                />
-                <ul>
-                  {content.wrapper.capabilities.map((capability) => (
-                    <li key={capability}>
-                      <i />
-                      {capability}
-                    </li>
-                  ))}
-                </ul>
-                <ActionLink to={content.wrapper.action.to} variant="text">
-                  {content.wrapper.action.label} <Arrow />
-                </ActionLink>
-              </div>
+            <SectionHeading
+              eyebrow={content.wrapper.eyebrow}
+              title={content.wrapper.title}
+              description={content.wrapper.description}
+            />
+            <div className={styles.studioFactsGrid}>
+              {content.wrapper.facts.map((fact) => (
+                <article className={styles.studioFact} key={fact.number}>
+                  <span>{fact.number}</span>
+                  <h3>{fact.title}</h3>
+                  <p>{fact.description}</p>
+                </article>
+              ))}
             </div>
+            <ActionLink to={content.wrapper.action.to} variant="text">
+              {content.wrapper.action.label}
+            </ActionLink>
           </div>
         </section>
 
@@ -702,9 +649,7 @@ export default function Home() {
             <h2>{content.closing.title}</h2>
             <p>{content.closing.description}</p>
             <div className={styles.heroActions}>
-              <ActionLink to={content.closing.primaryAction.to}>
-                {content.closing.primaryAction.label} <Arrow />
-              </ActionLink>
+              <ActionLink to={content.closing.primaryAction.to}>{content.closing.primaryAction.label}</ActionLink>
               <ActionLink to={content.closing.secondaryAction.to} variant="secondary">
                 {content.closing.secondaryAction.label}
               </ActionLink>

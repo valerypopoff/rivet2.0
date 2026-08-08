@@ -91,6 +91,19 @@
   font-weight: 700;
 }
 
+/* Keep the brand-to-navigation separation deliberately stronger than the link rhythm. */
+.theme-layout-navbar-left.navbar__items {
+  gap: 1rem;
+}
+
+.theme-layout-navbar-left .navbar__brand {
+  margin-right: 1rem;
+}
+
+.theme-layout-navbar-left .navbar__item {
+  padding: 0;
+}
+
 .footer {
   border-top: 1px solid #cfd8e3;
 }

@@ -12,6 +12,7 @@ contracts, or source layout. User-facing docs live under `packages/docs/docs`.
 - [Repo File Tree](./REPO-FILE-TREE.md)
 - [Build And CI](./BUILD-AND-CI.md)
 - [App Architecture](./APP-ARCHITECTURE.md)
+- [GitHub Pages Promo Demo Host](./PROMO-DEMO-HOST.md)
 - [Core Engine](./CORE-ENGINE.md)
 - [Execution Data Flow](./EXECUTION-DATA-FLOW.md)
 - [Editor Workspace State](./EDITOR-WORKSPACE-STATE.md)

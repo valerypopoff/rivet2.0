@@ -36,6 +36,7 @@ import { resolveAiAssistModelSettings } from '../../../utils/aiAssistModelSettin
 import { createAiAssistVercelGeneratorChatNodeDefinition } from '../../../utils/aiAssistVercelGenerator.js';
 import { AiAssistPromptModal } from '../../AiAssistPromptModal.js';
 import { renderMarkdown, toSanitizedMarkdownHtml } from '../../../hooks/useMarkdown.js';
+import { isRivetAppHostCapabilityEnabled, useRivetAppHostUiConfig } from '../../../providers/HostUiConfigContext.js';
 
 const AI_ASSIST_CANCEL_REASON = 'Generate using AI canceled';
 
@@ -188,7 +189,17 @@ export interface AiAssistEditorBaseProps<TNodeData, TOutputs> {
   getIsError?: (outputs: TOutputs) => boolean;
 }
 
-export const AiAssistEditorBase = <TNodeData, TOutputs>({
+export const AiAssistEditorBase = <TNodeData, TOutputs>(props: AiAssistEditorBaseProps<TNodeData, TOutputs>) => {
+  const hostUiConfig = useRivetAppHostUiConfig();
+
+  if (!isRivetAppHostCapabilityEnabled(hostUiConfig, 'aiAssist')) {
+    return null;
+  }
+
+  return <AiAssistEditorContent {...props} />;
+};
+
+const AiAssistEditorContent = <TNodeData, TOutputs>({
   node,
   data,
   isReadonly,

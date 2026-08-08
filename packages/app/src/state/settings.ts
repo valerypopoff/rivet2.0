@@ -7,14 +7,20 @@ import { createHybridStorage, memoryStorage } from './storage.js';
 export { graphBuilderImplementationModeState } from './graphBuilderAi.js';
 
 // Legacy storage key for recoil-persist to avoid breaking existing users' settings
+const SETTINGS_STORAGE_KEY = 'recoil-persist';
+const LEGACY_INVALID_OPENAI_API_KEY_PLACEHOLDER = 'admin@123';
+const DEFAULT_EDITOR_SETTINGS = {
+  defaultNodeColors: true,
+  openNodeSettingsOnCreate: true,
+} as const satisfies Pick<Settings, 'defaultNodeColors' | 'openNodeSettingsOnCreate'>;
+
 const { storage } = createHybridStorage('recoil-persist', undefined, { debounceMs: 0 });
 
 export const settingsState = atomWithStorage<Settings>(
   'settings',
   {
     recordingPlaybackLatency: 1000,
-    defaultNodeColors: false,
-    openNodeSettingsOnCreate: true,
+    ...DEFAULT_EDITOR_SETTINGS,
 
     openAiApiKey: '',
     openAiKey: '',
@@ -40,9 +46,37 @@ export function resolveEditorPreferences(
   settings: Partial<Pick<Settings, 'defaultNodeColors' | 'openNodeSettingsOnCreate'>> | undefined,
 ): EditorPreferences {
   return {
-    applyDefaultNodeColors: settings?.defaultNodeColors ?? false,
-    openNodeSettingsOnCreate: settings?.openNodeSettingsOnCreate ?? true,
+    applyDefaultNodeColors: settings?.defaultNodeColors ?? DEFAULT_EDITOR_SETTINGS.defaultNodeColors,
+    openNodeSettingsOnCreate: settings?.openNodeSettingsOnCreate ?? DEFAULT_EDITOR_SETTINGS.openNodeSettingsOnCreate,
   };
+}
+
+/**
+ * Removes an accidental legacy placeholder that was persisted as an OpenAI
+ * credential by an earlier desktop build. Runtime environment values are never
+ * written into app settings, so this only touches the exact stored placeholder.
+ */
+export function clearLegacyInvalidOpenAiApiKeyPlaceholder(): boolean {
+  const storedSettings = memoryStorage.get(SETTINGS_STORAGE_KEY)?.settings;
+  if (typeof storedSettings !== 'object' || storedSettings == null || Array.isArray(storedSettings)) {
+    return false;
+  }
+
+  const hasInvalidOpenAiApiKey = storedSettings.openAiApiKey === LEGACY_INVALID_OPENAI_API_KEY_PLACEHOLDER;
+  const hasInvalidLegacyOpenAiKey = storedSettings.openAiKey === LEGACY_INVALID_OPENAI_API_KEY_PLACEHOLDER;
+  if (!hasInvalidOpenAiApiKey && !hasInvalidLegacyOpenAiKey) {
+    return false;
+  }
+
+  memoryStorage.set(SETTINGS_STORAGE_KEY, {
+    ...memoryStorage.get(SETTINGS_STORAGE_KEY),
+    settings: {
+      ...storedSettings,
+      ...(hasInvalidOpenAiApiKey ? { openAiApiKey: '' } : {}),
+      ...(hasInvalidLegacyOpenAiKey ? { openAiKey: '' } : {}),
+    },
+  });
+  return true;
 }
 
 export const themes = [
@@ -112,7 +146,9 @@ export const checkForUpdatesState = atomWithStorage<boolean>('checkForUpdates', 
 
 export const skippedMaxVersionState = atomWithStorage<string | undefined>('skippedMaxVersion', undefined, storage);
 
-export const zoomSensitivityState = atomWithStorage<number>('zoomSensitivity', 0.25, storage);
+export const DEFAULT_ZOOM_SENSITIVITY = 1.2;
+
+export const zoomSensitivityState = atomWithStorage<number>('zoomSensitivity', DEFAULT_ZOOM_SENSITIVITY, storage);
 
 export const canvasBackgroundPatterns = [
   {

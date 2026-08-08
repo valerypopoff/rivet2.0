@@ -12,6 +12,11 @@
   text-align: center;
 }
 
+html.promo-interaction-active,
+html.promo-interaction-active body {
+  overscroll-behavior: contain;
+}
+
 .promo-loading-content,
 .promo-error-content {
   display: grid;
@@ -56,11 +61,5 @@
 @keyframes promo-spin {
   to {
     transform: rotate(360deg);
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .promo-loading-indicator {
-    animation: none;
   }
 }

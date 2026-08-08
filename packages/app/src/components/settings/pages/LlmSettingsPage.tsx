@@ -29,6 +29,7 @@ import { useDependsOnPlugins } from '../../../hooks/useDependsOnPlugins.js';
 import { fillMissingSettingsFromEnvironmentVariables } from '../../../utils/tauri.js';
 import { useEnvironmentProvider } from '../../../providers/ProvidersContext.js';
 import { chatV2ModelCatalogService } from '../../../utils/chatV2ModelCatalogService.js';
+import { isRivetAppHostCapabilityEnabled, useRivetAppHostUiConfig } from '../../../providers/HostUiConfigContext.js';
 
 const llmSettingsStyles = css`
   .ai-assist-model-control {
@@ -84,6 +85,8 @@ function isRefreshableAiAssistProvider(provider: AiAssistProvider): provider is 
 }
 
 export const LlmSettingsPage: FC = () => {
+  const hostUiConfig = useRivetAppHostUiConfig();
+  const aiAssistEnabled = isRivetAppHostCapabilityEnabled(hostUiConfig, 'aiAssist');
   const [settings, setSettings] = useAtom(settingsState);
   const [selectedAssistModel, setSelectedAssistModel] = useAtom(selectedAssistModelState);
   const [customAssistProviderBaseURL, setCustomAssistProviderBaseURL] = useAtom(aiAssistCustomProviderBaseURLState);
@@ -143,86 +146,86 @@ export const LlmSettingsPage: FC = () => {
 
   return (
     <div css={[fields, llmSettingsStyles]}>
-      <section className="settings-section">
-        <h2 className="settings-section-heading">Generate using AI</h2>
-        <FieldHelperMessage>
-          Choose the provider and model used by the &quot;Generate using AI&quot; feature.
-        </FieldHelperMessage>
-        <div className="settings-section-fields">
-          <Field name="ai-assist-provider" label="Drafting provider">
-            {() => (
-              <Select
-                options={aiAssistProviderOptions}
-                value={selectedAssistProviderOption}
-                onChange={(option) => {
-                  if (option) {
-                    setSelectedAssistModel(getDefaultAiAssistModelForProvider(option.value as AiAssistProvider));
-                  }
-                }}
-              />
-            )}
-          </Field>
-          {selectedAssistProvider !== 'custom' && (
-            <Field name="ai-assist-model" label="Drafting model">
+      {aiAssistEnabled ? (
+        <section className="settings-section">
+          <h2 className="settings-section-heading">Generate using AI</h2>
+          <FieldHelperMessage>
+            Choose the provider and model used by the &quot;Generate using AI&quot; feature.
+          </FieldHelperMessage>
+          <div className="settings-section-fields">
+            <Field name="ai-assist-provider" label="Drafting provider">
               {() => (
-                <div className="ai-assist-model-control">
-                  <div className="ai-assist-model-row">
-                    <Select
-                      options={assistModelOptions}
-                      value={selectedAssistModelOption}
-                      onChange={(option) => {
-                        if (option) {
-                          setSelectedAssistModel(option.value as AiAssistModelSelectorValue);
-                        }
-                      }}
-                    />
-                    <Button
-                      className="ai-assist-refresh-models"
-                      appearance="primary"
-                      onClick={() => void refreshAiAssistModelOptions()}
-                    >
-                      Re-fetch Model List
-                    </Button>
-                  </div>
-                  {modelCatalogSession.status ? (
-                    <div className={`ai-assist-refresh-status ${modelCatalogSession.status.tone}`}>
-                      {modelCatalogSession.status.message}
-                    </div>
-                  ) : null}
-                </div>
+                <Select
+                  options={aiAssistProviderOptions}
+                  value={selectedAssistProviderOption}
+                  onChange={(option) => {
+                    if (option) {
+                      setSelectedAssistModel(getDefaultAiAssistModelForProvider(option.value as AiAssistProvider));
+                    }
+                  }}
+                />
               )}
             </Field>
-          )}
-          {selectedAssistProvider === 'custom' && (
-            <>
-              <Field name="ai-assist-custom-provider-base-url" label="Custom provider API URL">
+            {selectedAssistProvider !== 'custom' && (
+              <Field name="ai-assist-model" label="Drafting model">
                 {() => (
-                  <>
-                    <FieldHelperMessage>
-                      OpenAI-compatible base URL for Generate using AI, for example https://api.cerebras.ai/v1. Rivet
-                      will use this with the custom provider API key below.
-                    </FieldHelperMessage>
+                  <div className="ai-assist-model-control">
+                    <div className="ai-assist-model-row">
+                      <Select
+                        options={assistModelOptions}
+                        value={selectedAssistModelOption}
+                        onChange={(option) => {
+                          if (option) {
+                            setSelectedAssistModel(option.value as AiAssistModelSelectorValue);
+                          }
+                        }}
+                      />
+                      <Button
+                        className="ai-assist-refresh-models"
+                        appearance="primary"
+                        onClick={() => void refreshAiAssistModelOptions()}
+                      >
+                        Re-fetch Model List
+                      </Button>
+                    </div>
+                    {modelCatalogSession.status ? (
+                      <div className={`ai-assist-refresh-status ${modelCatalogSession.status.tone}`}>
+                        {modelCatalogSession.status.message}
+                      </div>
+                    ) : null}
+                  </div>
+                )}
+              </Field>
+            )}
+            {selectedAssistProvider === 'custom' && (
+              <>
+                <Field name="ai-assist-custom-provider-base-url" label="Custom provider API URL">
+                  {() => (
+                    <>
+                      <FieldHelperMessage>
+                        OpenAI-compatible base URL for Generate using AI, for example https://api.cerebras.ai/v1. Rivet
+                        will use this with the custom provider API key below.
+                      </FieldHelperMessage>
+                      <TextField
+                        value={customAssistProviderBaseURL}
+                        onChange={(event) => setCustomAssistProviderBaseURL((event.target as HTMLInputElement).value)}
+                      />
+                    </>
+                  )}
+                </Field>
+                <Field name="ai-assist-custom-model" label="Custom provider model">
+                  {() => (
                     <TextField
-                      value={customAssistProviderBaseURL}
-                      onChange={(event) =>
-                        setCustomAssistProviderBaseURL((event.target as HTMLInputElement).value)
-                      }
+                      value={customAssistModel}
+                      onChange={(event) => setCustomAssistModel((event.target as HTMLInputElement).value)}
                     />
-                  </>
-                )}
-              </Field>
-              <Field name="ai-assist-custom-model" label="Custom provider model">
-                {() => (
-                  <TextField
-                    value={customAssistModel}
-                    onChange={(event) => setCustomAssistModel((event.target as HTMLInputElement).value)}
-                  />
-                )}
-              </Field>
-            </>
-          )}
-        </div>
-      </section>
+                  )}
+                </Field>
+              </>
+            )}
+          </div>
+        </section>
+      ) : null}
       <section className="settings-section">
         <h2 className="settings-section-heading">LLM credentials</h2>
         <FieldHelperMessage>

@@ -3,8 +3,10 @@ import test from 'node:test';
 import { createStore } from 'jotai/vanilla';
 import {
   canvasBackgroundColorOptions,
+  clearLegacyInvalidOpenAiApiKeyPlaceholder,
   clampCanvasBackgroundPatternOpacity,
   DEFAULT_CUSTOM_THEME_PRIMARY_COLOR,
+  DEFAULT_ZOOM_SENSITIVITY,
   DEFAULT_CANVAS_BACKGROUND_PATTERN_OPACITY,
   DEFAULT_CANVAS_BACKGROUND_CUSTOM_COLOR,
   formatCanvasBackgroundCustomColor,
@@ -42,13 +44,64 @@ function restoreRecoilPersistStorage(previousStorage: unknown) {
 
 test('resolveEditorPreferences applies editor defaults when settings are missing', () => {
   assert.deepEqual(resolveEditorPreferences(undefined), {
-    applyDefaultNodeColors: false,
+    applyDefaultNodeColors: true,
     openNodeSettingsOnCreate: true,
   });
   assert.deepEqual(resolveEditorPreferences({}), {
-    applyDefaultNodeColors: false,
+    applyDefaultNodeColors: true,
     openNodeSettingsOnCreate: true,
   });
+});
+
+test('default zoom sensitivity is the approximately 60 percent slider position', () => {
+  assert.equal(DEFAULT_ZOOM_SENSITIVITY, 1.2);
+});
+
+test('clearLegacyInvalidOpenAiApiKeyPlaceholder only removes the known persisted placeholder', () => {
+  const previousStorage = memoryStorage.get('recoil-persist');
+
+  try {
+    memoryStorage.set('recoil-persist', {
+      ...(previousStorage ?? {}),
+      settings: {
+        openAiApiKey: 'admin@123',
+        openAiKey: 'valid-legacy-key',
+        anthropicApiKey: 'keep-me',
+      },
+    });
+
+    assert.equal(clearLegacyInvalidOpenAiApiKeyPlaceholder(), true);
+    assert.deepEqual(memoryStorage.get('recoil-persist')?.settings, {
+      openAiApiKey: '',
+      openAiKey: 'valid-legacy-key',
+      anthropicApiKey: 'keep-me',
+    });
+    assert.equal(clearLegacyInvalidOpenAiApiKeyPlaceholder(), false);
+  } finally {
+    restoreRecoilPersistStorage(previousStorage);
+  }
+});
+
+test('clearLegacyInvalidOpenAiApiKeyPlaceholder also clears the legacy OpenAI key alias', () => {
+  const previousStorage = memoryStorage.get('recoil-persist');
+
+  try {
+    memoryStorage.set('recoil-persist', {
+      ...(previousStorage ?? {}),
+      settings: {
+        openAiApiKey: 'valid-current-key',
+        openAiKey: 'admin@123',
+      },
+    });
+
+    assert.equal(clearLegacyInvalidOpenAiApiKeyPlaceholder(), true);
+    assert.deepEqual(memoryStorage.get('recoil-persist')?.settings, {
+      openAiApiKey: 'valid-current-key',
+      openAiKey: '',
+    });
+  } finally {
+    restoreRecoilPersistStorage(previousStorage);
+  }
 });
 
 test('resolveEditorPreferences respects explicit editor settings', () => {
@@ -189,10 +242,7 @@ test('custom theme color parsing produces safe rgba values and css variables', (
     a: 0.75,
   });
   assert.equal(normalizeCustomThemePrimaryColor('rgba(12.4,20.6,30,0.33333)'), 'rgba(12,21,30,0.333)');
-  assert.equal(
-    normalizeCustomThemeSecondaryColor(undefined, 'rgba(12.4,20.6,30,0.33333)'),
-    'rgba(12,21,30,0.333)',
-  );
+  assert.equal(normalizeCustomThemeSecondaryColor(undefined, 'rgba(12.4,20.6,30,0.33333)'), 'rgba(12,21,30,0.333)');
   assert.equal(normalizeCustomThemePrimaryColor('bad-color'), DEFAULT_CUSTOM_THEME_PRIMARY_COLOR);
   assert.equal(formatCustomThemePrimaryColor({ r: 260, g: -1, b: 12.4, a: 1.2 }), 'rgba(255,0,12,1)');
   assert.equal(formatCustomThemeSecondaryColor({ r: 1, g: 2, b: 300, a: -1 }), 'rgba(1,2,255,0)');
@@ -200,13 +250,10 @@ test('custom theme color parsing produces safe rgba values and css variables', (
     '--custom-theme-primary': 'rgba(1,2,3,0.4)',
     '--custom-theme-secondary': 'rgba(1,2,3,0.4)',
   });
-  assert.deepEqual(
-    getCustomThemeCssVariables({ primaryColor: 'rgba(1,2,3,0.4)', secondaryColor: 'rgba(9,8,7,0.6)' }),
-    {
-      '--custom-theme-primary': 'rgba(1,2,3,0.4)',
-      '--custom-theme-secondary': 'rgba(9,8,7,0.6)',
-    },
-  );
+  assert.deepEqual(getCustomThemeCssVariables({ primaryColor: 'rgba(1,2,3,0.4)', secondaryColor: 'rgba(9,8,7,0.6)' }), {
+    '--custom-theme-primary': 'rgba(1,2,3,0.4)',
+    '--custom-theme-secondary': 'rgba(9,8,7,0.6)',
+  });
   assert.deepEqual(getCustomThemeCssVariables({ primaryColor: 'rgba(1,2,3,0.4)', secondaryColor: 'bad-color' }), {
     '--custom-theme-primary': 'rgba(1,2,3,0.4)',
     '--custom-theme-secondary': 'rgba(1,2,3,0.4)',
@@ -245,7 +292,10 @@ test('clampCanvasBackgroundPatternOpacity keeps canvas pattern opacity in range'
   assert.equal(clampCanvasBackgroundPatternOpacity(-1), MIN_CANVAS_BACKGROUND_PATTERN_OPACITY);
   assert.equal(clampCanvasBackgroundPatternOpacity(1), MAX_CANVAS_BACKGROUND_PATTERN_OPACITY);
   assert.equal(clampCanvasBackgroundPatternOpacity(Number.NaN), DEFAULT_CANVAS_BACKGROUND_PATTERN_OPACITY);
-  assert.equal(clampCanvasBackgroundPatternOpacity(Number.POSITIVE_INFINITY), DEFAULT_CANVAS_BACKGROUND_PATTERN_OPACITY);
+  assert.equal(
+    clampCanvasBackgroundPatternOpacity(Number.POSITIVE_INFINITY),
+    DEFAULT_CANVAS_BACKGROUND_PATTERN_OPACITY,
+  );
   assert.equal(clampCanvasBackgroundPatternOpacity(null), DEFAULT_CANVAS_BACKGROUND_PATTERN_OPACITY);
   assert.equal(clampCanvasBackgroundPatternOpacity('0.04'), DEFAULT_CANVAS_BACKGROUND_PATTERN_OPACITY);
 });

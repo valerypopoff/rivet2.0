@@ -6,8 +6,7 @@ const expectedHomepageDemoOrder = [
   'agent',
   'workflow',
   'web-app',
-  'batch-runs',
-  'structured-output',
+  'visual-code',
 ] as const satisfies readonly PromoProjectKey[];
 
 assert.deepEqual(
@@ -20,18 +19,9 @@ assert.deepEqual(
   expectedHomepageDemoOrder.slice(0, 3),
   'The hero must default to Agent and switch among Agent, Workflow, and Web App in that order.',
 );
-assert.equal(homepageContent.foundationsDemo.demoId, 'batch-runs', 'Foundations must own the fixed batch-runs demo.');
-assert.equal(
-  homepageContent.useCasesDemo.demoId,
-  'structured-output',
-  'Use Cases must own the fixed structured-output demo.',
-);
+assert.equal(homepageContent.foundationsDemo.demoId, 'visual-code', 'Foundations must own the fixed visual-code demo.');
 assert.deepEqual(
-  [
-    ...homepageContent.hero.features.map((demo) => demo.demoId),
-    homepageContent.foundationsDemo.demoId,
-    homepageContent.useCasesDemo.demoId,
-  ],
+  [...homepageContent.hero.features.map((demo) => demo.demoId), homepageContent.foundationsDemo.demoId],
   expectedHomepageDemoOrder,
   'Every section-owned demo must map to exactly one intended homepage placement.',
 );

@@ -135,9 +135,11 @@ export {
 } from './providers/HostCallbacksContext.js';
 export {
   HostUiConfigProvider,
+  isRivetAppHostCapabilityEnabled,
   shouldCheckForUpdates,
   shouldPreloadCodeEditor,
   useRivetAppHostUiConfig,
+  type RivetAppHostCapability,
   type RivetAppHostUiConfig,
 } from './providers/HostUiConfigContext.js';
 export type { FileMenuConfig, FileMenuItemId } from './utils/fileMenuConfiguration.js';

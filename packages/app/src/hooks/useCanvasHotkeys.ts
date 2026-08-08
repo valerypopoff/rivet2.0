@@ -25,6 +25,7 @@ import { useLoadGraph } from './useLoadGraph.js';
 import { createRootGraphViewContext } from '../domain/graphEditing/navigationActions.js';
 import { useProjectWorkspaceTarget } from './useProjectWorkspaceTarget.js';
 import { getCanvasGraphHotkey } from './canvasGraphHotkeys.js';
+import { isRivetAppHostCapabilityEnabled, useRivetAppHostUiConfig } from '../providers/HostUiConfigContext.js';
 
 type CanvasHotkeyOptions =
   | boolean
@@ -56,6 +57,8 @@ function isCanvasTextEntryFocused(activeElement: Element | null): boolean {
 
 export function useCanvasHotkeys(options: CanvasHotkeyOptions = true) {
   const { enabled, graphCommandsEnabled } = resolveCanvasHotkeyOptions(options);
+  const hostUiConfig = useRivetAppHostUiConfig();
+  const aiGraphBuilderEnabled = isRivetAppHostCapabilityEnabled(hostUiConfig, 'aiGraphBuilder');
   const [canvasPosition, setCanvasPosition] = useAtom(canvasPositionState);
   const viewportBounds = useViewportBounds();
   const { canvasToClientPosition, getCanvasPositionForZoomAtClientPoint } = useCanvasPositioning();
@@ -244,7 +247,7 @@ export function useCanvasHotkeys(options: CanvasHotkeyOptions = true) {
       }
     }
 
-    if (graphHotkey === 'openAiGraphCreator') {
+    if (aiGraphBuilderEnabled && graphHotkey === 'openAiGraphCreator') {
       e.preventDefault();
       e.stopPropagation();
 

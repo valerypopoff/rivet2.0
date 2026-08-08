@@ -30,35 +30,37 @@ CTA changes. `src/pages/index.tsx` owns the page structure and
 The hero keeps its introductory copy above three horizontal demo tabs at every
 viewport width. Those tabs select Agent, Workflow, or Web App in that order,
 with Agent selected initially, and one eagerly mounted Rivet window sits beneath
-them. Foundations and Use Cases each own another eagerly mounted window:
-Foundations opens the fixed batch-runs project and Use Cases opens the fixed
-structured-output project. These are three independent, section-owned iframe
-instances rather than one shared demo lab.
+them. The Foundations section owns one more eagerly mounted window for the fixed
+Visual + Code project. The Use Cases section is explanatory copy only. These are
+two independent, section-owned iframe instances rather than one shared demo lab.
 Keep the hero calls to action in one non-shifting row, with the source link
 following the two primary actions. At every supported viewport width, each
 section window embeds the real Rivet editor from the separately built
 `/rivet-demo/` entry. The checked-in projects live at
 `../app/src/promo/projects/promo-agent.rivet-project`,
-`../app/src/promo/projects/promo-workflow.rivet-project`, and
-`../app/src/promo/projects/promo-web-app.rivet-project`, with the contextual examples in
-`../app/src/promo/projects/promo-batch-runs.rivet-project` and
-`../app/src/promo/projects/promo-structured-output.rivet-project`. All landing-page projects stay together in this
-dedicated `promo/projects` directory. The canonical
+`../app/src/promo/projects/promo-workflow.rivet-project`,
+`../app/src/promo/projects/promo-web-app.rivet-project`, and
+`../app/src/promo/projects/promo-visual-code.rivet-project`. All landing-page
+projects stay together in this dedicated `promo/projects` directory. The canonical
 manifest in `../app/src/promo/promoProjectManifest.ts` owns their query ids,
 project ids, initial graphs, paths, and loading hints. The whitelisted `project`
-query selects one of those five demos; an unknown value produces an explicit
-startup error instead of silently opening a different project. Each project uses only built-in nodes, contains
-one blank `API Key — paste yours here` Text node wired to every LLM Chat API-key
-input, keeps its provider/model settings inline instead of adding LLM Profile
-nodes, and uses fresh in-memory app storage on every iframe load. No credential
-is bundled or retained when the iframe is reset or another demo is selected.
+query selects one of those four demos; an unknown value produces an explicit
+startup error instead of silently opening a different project. Each project uses only built-in nodes and fresh
+in-memory app storage on every iframe load. The three LLM-backed projects each
+contain one blank `API Key — paste yours here` Text node wired to every LLM Chat
+API-key input and keep provider/model settings inline instead of adding LLM
+Profile nodes. The deterministic Visual + Code project deliberately has no LLM
+node or API-key field: it contrasts ordinary Number, Boolean, and Compare policy
+gates with one focused Code calculation. No credential is bundled or retained
+when the iframe is reset or another demo is selected.
 The agent has one necessary subgraph: the handler for its typed tool. The model
 receives that result and produces the final answer. The parallel workflow and
-web-app backing workflow each stay in one graph; the web-app project adds only
-its Chat UI resource. The batch-runs demo uses a typed `string[]` Graph Input
-with three default requests, keeping the example data visible without an extra
-code node. Unused diagnostic LLM outputs stay hidden so first-time visitors see
-only the ports that explain each example. The LLM-backed graphs
+web-app backing workflow each stay in one graph; the web-app project adds one
+conventional form-and-result UI resource. The Visual + Code project stays in one compact graph and
+uses ordinary Number, Boolean, and Compare nodes for its visible policy gates,
+then exactly one Code node for tiered approval and reimbursement rules that
+would be noisy to express as a large visual branch tree. Unused diagnostic LLM outputs stay hidden
+so first-time visitors see only the ports that explain each example. The LLM-backed graphs
 intentionally require the visitor's own OpenAI API key; CI validates their
 minimal topology without calling a provider and executes only the agent's
 deterministic tool subgraph. Roboto and Roboto Mono files are bundled
@@ -80,19 +82,21 @@ and static-data provider use fresh in-memory stores instead of loading or saving
 the documentation site's persisted Rivet state. The promo host also blocks
 browser File commands and hides the Trivet Tests and Data Studio workspace tabs.
 Any future feature added to this surface that writes
-directly to browser storage must be reviewed separately. Narrow screens keep all
-three section-owned editor windows embedded; responsive layout stacks their
+directly to browser storage must be reviewed separately. Narrow screens keep both
+section-owned editor windows embedded; responsive layout stacks their
 controls and content without replacing the demos with links. The
-foundation cards use one descriptive heading per item; avoid adding redundant
-all-caps labels or decorative proof bars back to the hero. Descriptive landing
+fixed Foundations demo explains the visual-plus-code composition on its own;
+avoid restoring redundant explanatory fact cards above it. Descriptive landing
 copy uses `--body-copy-size` as its minimum size; compact UI labels, eyebrows,
 code, and metadata may remain smaller. Use-case cards use inline, decorative
 SVG icons so they stay theme-aware and require no separate image assets.
-The production-runtime section is followed by an editable Rivet Studio Server
-section sourced from `src/content/homepageContent.ts`; it presents the optional
-self-hosted server without making it part of the core Rivet runtime.
+The lifecycle section is followed directly by a Rivet Studio Server section
+sourced from `src/content/homepageContent.ts`; it presents the optional
+self-hosted server through four factual capability cards without making it part
+of the core Rivet runtime. The copy distinguishes the browser editor, hosted
+project management, publication, and observability surfaces.
 At the narrowest responsive breakpoint, the hero title scales down while the
-three editor windows remain embedded in their owning sections.
+two editor windows remain embedded in their owning sections.
 The docs shell and landing page intentionally mirror Rivet's canonical themes:
 locally bundled Roboto/Roboto Mono typography, the Molten palette in dark mode,
 and the Bright palette in light mode. Keep this small semantic mirror in `src/css/custom.css`
