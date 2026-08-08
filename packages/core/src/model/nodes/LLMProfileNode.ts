@@ -1,21 +1,36 @@
 import { nanoid } from 'nanoid/non-secure';
-import { dedent } from 'ts-dedent';
 import type { EditorDefinition } from '../EditorDefinition.js';
 import type { Inputs, Outputs } from '../GraphProcessor.js';
 import type { ChartNode, NodeId, NodeInputDefinition, NodeOutputDefinition, PortId } from '../NodeBase.js';
+import type { NodeBodySpec } from '../NodeBodySpec.js';
 import { nodeDefinition } from '../NodeDefinition.js';
 import { NodeImpl, type NodeUIData } from '../NodeImpl.js';
 import type { InternalProcessContext } from '../ProcessContext.js';
 import type { RivetUIContext } from '../RivetUIContext.js';
 import { getLLMProfileEditors } from '../chat-v2/llmChatV2NodeEditors.js';
 import type { LLMChatV2ProfileData } from '../chat-v2/llmChatV2NodeData.js';
+import { getLLMProfileBodySections } from '../chat-v2/llmProfileBody.js';
 import { resolveLLMProfileNodeValue } from '../chat-v2/llmProfileNodeRuntime.js';
 import { createLLMProfileNodeData } from '../chat-v2/llmProfileTypes.js';
-import { getChatV2ProviderLabel } from '../chat-v2/providerOptions.js';
 
 export type { LLMProfileValue } from '../chat-v2/llmProfileTypes.js';
 export type LLMProfileNodeData = LLMChatV2ProfileData;
 export type LLMProfileNode = ChartNode<'llmProfile', LLMProfileNodeData>;
+
+function escapeMarkdownInline(value: unknown): string {
+  return String(value)
+    .replace(/\r/g, '\\r')
+    .replace(/\n/g, '\\n')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/([\\`*_[\]{}()#+\-.!|])/g, '\\$1');
+}
+
+function getBodyLine(label: string, value: unknown): string {
+  return `<span style="opacity: 0.55">${label}:</span> ${escapeMarkdownInline(value)}`;
+}
 
 export class LLMProfileNodeImpl extends NodeImpl<LLMProfileNode> {
   static create(): LLMProfileNode {
@@ -117,13 +132,20 @@ export class LLMProfileNodeImpl extends NodeImpl<LLMProfileNode> {
     return await getLLMProfileEditors(this.data, context);
   }
 
-  getBody(): string {
-    return dedent`
-      Provider: ${getChatV2ProviderLabel(this.data.provider)}
-      Model: ${this.data.useModelInput ? '(from input)' : this.data.model}
-      Temperature: ${this.data.useTemperatureInput ? '(from input)' : this.data.temperature}
-      Max output tokens: ${this.data.useMaxTokensInput ? '(from input)' : this.data.maxTokens}
-    `;
+  getBody(): NodeBodySpec {
+    return {
+      type: 'markdown',
+      disableLinks: true,
+      text: getLLMProfileBodySections(this.data)
+        .map((section) => {
+          const fields = section.fields.map((field) => getBodyLine(field.label, field.value));
+          const snippet = section.snippet
+            ? `${getBodyLine(section.snippet.label, '')}\n${escapeMarkdownInline(section.snippet.text)}`
+            : undefined;
+          return [...fields, ...(snippet ? [snippet] : [])].join('\n');
+        })
+        .join('\n\n'),
+    };
   }
 
   static getUIData(): NodeUIData {

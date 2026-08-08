@@ -9,6 +9,8 @@ import {
   type ResolvedChatV2ProviderConfig,
 } from './providerOptions.js';
 import type { ChatV2Model, ChatV2Provider } from './chatV2Types.js';
+import type { CustomProviderApi } from './customProviderApi.js';
+import { getChatV2ProviderCapabilities } from './chatV2ProviderRegistry.js';
 
 export type ChatV2CredentialReference = {
   source: 'input' | 'settings' | 'plugin' | 'programmatic' | 'environment' | 'none';
@@ -23,6 +25,7 @@ export type ChatV2CredentialResult = {
 export type ChatV2ProviderProfile = {
   provider: ChatV2Provider;
   modelId: string;
+  customProviderApi?: CustomProviderApi | undefined;
   baseURL?: string | undefined;
   hasCustomHeaders: boolean;
   credential: ChatV2CredentialReference;
@@ -136,7 +139,9 @@ export async function createResolvedChatV2Provider(options: {
   headers?: Record<string, string> | undefined;
   credential: ChatV2CredentialResult;
   onRequestBody?: CreateChatV2ModelOptions['onRequestBody'];
+  onResponseBody?: CreateChatV2ModelOptions['onResponseBody'];
   transformRequestBody?: CreateChatV2ModelOptions['transformRequestBody'];
+  customProviderApi?: CustomProviderApi | undefined;
 }): Promise<{
   profile: ChatV2ProviderProfile;
   model: ChatV2Model;
@@ -150,19 +155,24 @@ export async function createResolvedChatV2Provider(options: {
     ...config,
     apiKey: options.credential.value,
     onRequestBody: options.onRequestBody,
+    onResponseBody: options.onResponseBody,
     transformRequestBody: options.transformRequestBody,
+    customProviderApi: options.customProviderApi,
   });
 
   return {
     profile: {
       provider: options.provider,
       modelId: options.modelId,
+      ...(options.provider === 'custom' && options.customProviderApi != null
+        ? { customProviderApi: options.customProviderApi }
+        : {}),
       baseURL: config.baseURL,
       hasCustomHeaders: Object.keys(config.headers ?? {}).length > 0,
       credential: options.credential.reference,
       capabilities: {
-        builtInTools: options.provider === 'openai' || options.provider === 'google',
-        structuredOutput: true,
+        builtInTools: getChatV2ProviderCapabilities(options.provider).builtInTools,
+        structuredOutput: getChatV2ProviderCapabilities(options.provider).structuredOutput,
       },
     },
     model,

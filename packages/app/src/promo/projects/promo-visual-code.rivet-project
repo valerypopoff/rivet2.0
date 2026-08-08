@@ -1,0 +1,165 @@
+version: 4
+data:
+  attachedData:
+    trivet:
+      testSuites: []
+      version: 1
+  graphs:
+    promo-visual-code-main:
+      metadata:
+        description: Visible approval gates feed one focused code calculation for a
+          tiered reimbursement route.
+        id: promo-visual-code-main
+        name: Visual policy with focused code
+      nodes:
+        '[6XJghZPBN4Mg0y0l06iVK]:graphInput "Graph Input"':
+          data:
+            dataType: number
+            id: autoApprovalLimit
+            useDefaultValueInput: true
+          outgoingConnections:
+            - data->"Compare - Is amount within auto-approval limit?"
+              visual-amount-check/b
+          visualData: 93.84955752212375/-5.353982300885129/277/45/transparent/var(--node-color-3)
+        '[F-ynUvNXhZ6ICc07uv3gp]:graphInput "Graph Input"':
+          data:
+            dataType: boolean
+            id: tripPreApproved
+            useDefaultValueInput: true
+          outgoingConnections:
+            - data->"Compare - Is there evidence and pre-approval?"
+              visual-evidence-check/b
+          visualData: 93.84955752212375/540.4424778761064/277/46/transparent/var(--node-color-3)
+        '[YRmWiLQLbt-DUuaZ_u61K]:graphInput "Graph Input"':
+          data:
+            dataType: number
+            id: expenseAmount
+            useDefaultValueInput: true
+          outgoingConnections:
+            - data->"Code - Route and calculate reimbursement
+              __rivet_bend:680.1327433628312,-223.27433628318556"
+              visual-code/amount
+            - data->"Compare - Is amount within auto-approval limit?"
+              visual-amount-check/a
+          visualData: 93.84955752212375/-224.3805309734515/277/42/transparent/var(--node-color-3)
+        '[bpXnJYUuMto5wj6Mz6qkQ]:graphInput "Graph Input"':
+          data:
+            dataType: boolean
+            id: receiptPresent
+            useDefaultValueInput: true
+          outgoingConnections:
+            - data->"Compare - Is there evidence and pre-approval?"
+              visual-evidence-check/a
+          visualData: 93.84955752212375/325.3982300884956/277/44/transparent/var(--node-color-3)
+        '[visual-amount-check]:compare "Compare - Is amount within auto-approval limit?"':
+          data:
+            comparisonFunction: <=
+          outgoingConnections:
+            - output->"Compare - Is policy eligible?" visual-policy-gate/a
+          visualData: 570.7079646017698/-128.71681415929203/292.38441592920344/48//
+        '[visual-amount]:number "Expense amount"':
+          data:
+            round: false
+            roundTo: 0
+            value: 860
+          outgoingConnections:
+            - value->"Graph Input" YRmWiLQLbt-DUuaZ_u61K/default
+          visualData: -246.41592920353983/-257.49568249693306/264.4020619469027/58/transparent/var(--node-color-4)
+        '[visual-code]:codeNew "Code - Route and calculate reimbursement"':
+          data:
+            allowConsole: false
+            allowFetch: false
+            allowProcess: false
+            allowRequire: false
+            allowRivet: false
+            code: >-
+              const amount = Number({{amount}});
+
+              const policyEligible = Boolean({{policyEligible}});
+
+
+              // Keep the simple policy checks on the canvas. This tiered
+              routing
+
+              // table is clearer as one focused calculation than as a dense
+              tree
+
+              // of comparison, branch, lookup, and rounding nodes.
+
+              const tiers = [
+                { upperBound: 250, route: 'Team lead', handlingRate: 0.02 },
+                { upperBound: 750, route: 'Finance', handlingRate: 0.04 },
+                { upperBound: 1000, route: 'Finance + Travel desk', handlingRate: 0.08 },
+              ];
+
+
+              if (!policyEligible) {
+                return '# Expense decision\n\n**Needs review**\n\nThe request did not pass the visible policy gates.';
+              }
+
+
+              const tier = tiers.find(({ upperBound }) => amount <= upperBound)
+              ?? tiers.at(-1);
+
+              const reimbursableAmount = Math.round(amount * (1 +
+              tier.handlingRate) * 100) / 100;
+
+
+              return [
+                '# Expense decision',
+                '',
+                '**Auto-approve**',
+                '',
+                `- Route to: **${tier.route}**`,
+                `- Reimbursable amount: **$${reimbursableAmount.toFixed(2)}**`,
+                `- Handling rate: **${tier.handlingRate * 100}%**`,
+              ].join('\n');
+          outgoingConnections:
+            - output->"Graph output" visual-output/value
+          visualData: 1445.6194690265488/-569.8672566371681/610.4406678682076/51//
+        '[visual-evidence-check]:compare "Compare - Is there evidence and pre-approval?"':
+          data:
+            comparisonFunction: and
+          outgoingConnections:
+            - output->"Compare - Is policy eligible?" visual-policy-gate/b
+          visualData: 570.7079646017698/384.55752212389376/292.38441592920344/48//
+        '[visual-limit]:number "Auto-approval limit"':
+          data:
+            round: false
+            roundTo: 0
+            value: 1000
+          outgoingConnections:
+            - value->"Graph Input" 6XJghZPBN4Mg0y0l06iVK/default
+          visualData: -246.41592920353983/25.971161032137985/264.4020619469027/59/transparent/var(--node-color-4)
+        '[visual-output]:graphOutput "Graph output"':
+          data:
+            dataType: string
+            id: expenceDecision
+          visualData: 2146.739694212736/-569.8672566371681/320/57/transparent/var(--node-color-3)
+        '[visual-policy-gate]:compare "Compare - Is policy eligible?"':
+          data:
+            comparisonFunction: and
+          outgoingConnections:
+            - output->"Code - Route and calculate reimbursement"
+              visual-code/policyEligible
+          visualData: 1009.424778761062/108.53982300884957/262.16814159292016/54//
+        '[visual-preapproval]:boolean "Trip pre-approved"':
+          data:
+            value: true
+          outgoingConnections:
+            - value->"Graph Input" F-ynUvNXhZ6ICc07uv3gp/default
+          visualData: -246.41592920353983/579.8226580661926/264.4020619469027/61/transparent/var(--node-color-4)
+        '[visual-receipt]:boolean "Receipt present"':
+          data:
+            value: true
+          outgoingConnections:
+            - value->"Graph Input" bpXnJYUuMto5wj6Mz6qkQ/default
+          visualData: -246.41592920353983/295.863094945931/264.4020619469027/60/transparent/var(--node-color-4)
+  metadata:
+    description: See compact visual policy gates feed one focused code calculation
+      for an expense decision.
+    id: rivet-promo-visual-code
+    mainGraphId: promo-visual-code-main
+    title: Demo – Visual Policy With Focused Code
+  plugins: []
+  references: []

@@ -14,6 +14,8 @@ test('fullscreen object output uses foldable searchable JSON with stable display
   const scalarRenderers = readComponent('renderDataValue', 'createScalarRenderers.tsx');
   const foldingCodeBlock = readComponent('renderDataValue', 'FoldingCodeBlock.tsx');
   const fullscreenOutput = readComponent('nodeOutput', 'NodeFullscreenOutput.tsx');
+  const fullscreenModal = readComponent('FullScreenModal.tsx');
+  const renderedDataOutputs = readComponent('nodeOutput', 'RenderDataOutputs.tsx');
 
   assert.match(scalarRenderers, /<FoldingCodeBlock text=\{stringified\} language="json"/);
   assert.match(foldingCodeBlock, /useFullscreenOutputSearchContext/);
@@ -25,8 +27,41 @@ test('fullscreen object output uses foldable searchable JSON with stable display
   assert.match(foldingCodeBlock, /vertical: 'hidden'/);
   assert.match(foldingCodeBlock, /ScrollType\.Immediate/);
   assert.match(foldingCodeBlock, /scheduleFullscreenOutputSearchTargetReveal/);
-  assert.match(fullscreenOutput, /findFullscreenOutputScrollContainer/);
-  assert.doesNotMatch(fullscreenOutput, /function findScrollContainer/);
+  assert.doesNotMatch(fullscreenOutput, /findFullscreenOutputScrollContainer/);
+  assert.match(fullscreenOutput, /position: sticky;/);
+  assert.match(fullscreenOutput, /top: var\(--fullscreen-modal-vertical-inset\);/);
+  assert.match(fullscreenOutput, /padding-bottom: calc\(24px \* var\(--ui-font-scale\)\);/);
+  assert.match(fullscreenModal, /--fullscreen-modal-vertical-inset: 16px;/);
+  assert.match(fullscreenModal, /border-top: 0 !important;/);
+  assert.match(fullscreenModal, /border-bottom: 0 !important;/);
+  assert.match(fullscreenModal, /padding-top: 0 !important;/);
+  assert.match(fullscreenModal, /padding-bottom: 0 !important;/);
+  assert.match(fullscreenOutput, /autoCollapseLlmChatDiagnosticOutputs: node\.type === 'llmChatV2'/);
+  assert.match(renderedDataOutputs, /LLM_CHAT_LARGE_DIAGNOSTIC_OUTPUT_PORT_IDS/);
+  assert.match(renderedDataOutputs, /LLM_CHAT_LARGE_DIAGNOSTIC_AUTO_COLLAPSE_CHARS = 1_000/);
+  assert.match(renderedDataOutputs, /LLM_CHAT_MESSAGE_OUTPUT_PORT_IDS/);
+  assert.match(renderedDataOutputs, /getOutputSectionArrayItemCount/);
+  assert.doesNotMatch(renderedDataOutputs, /'requestBody'|\bresponseBody\b/);
+  assert.match(renderedDataOutputs, /<CollapsiblePanel/);
+  assert.match(renderedDataOutputs, /label=\{`\$\{label\} \(\$\{collapsedDescription\}\)`\}/);
+  assert.match(renderedDataOutputs, /messageCount === 1 \? 'message' : 'messages'/);
+  assert.match(renderedDataOutputs, /autoCollapseLlmChatDiagnosticOutputs/);
+  assert.match(renderedDataOutputs, /isEligibleLlmChatDiagnosticOutput/);
+  assert.match(renderedDataOutputs, /useFullscreenOutputSearchContext/);
+  assert.match(renderedDataOutputs, /searchQuery\.trim\(\)\.length > 0/);
+
+  const collapsiblePanel = readComponent('CollapsiblePanel.tsx');
+  const editorGroup = readComponent('editors', 'EditorGroup.tsx');
+  const runActivityDrawer = readComponent('runActivity', 'RunActivityDrawer.tsx');
+  assert.match(collapsiblePanel, /--collapsible-panel-radius/);
+  assert.match(collapsiblePanel, /aria-expanded=\{isOpen \?\? false\}/);
+  assert.match(collapsiblePanel, /transitionTime=\{150\}/);
+  assert.match(editorGroup, /<CollapsiblePanel/);
+  assert.doesNotMatch(editorGroup, /from 'react-collapsible'/);
+  assert.match(runActivityDrawer, /<CollapsiblePanel/);
+  assert.match(runActivityDrawer, /toggleClassName="run-activity-row-toggle"/);
+  assert.match(runActivityDrawer, /--collapsible-panel-padding-x: 0px;/);
+  assert.doesNotMatch(runActivityDrawer, /from 'majesticons\/line\/chevron-/);
 });
 
 test('large stored JSON previews preserve safe wrapping and external search ownership', () => {
@@ -73,4 +108,17 @@ test('structured node output keeps parsed source after returned values', () => {
   assert.match(structuredOutput, /<FoldingCodeBlock text=\{source\} language=\{language\}/);
   assert.match(codeNew, /parsedSourceLabel="Parsed code"/);
   assert.match(expression, /parsedSourceLanguage="javascript"/);
+});
+
+test('generic node errors preserve line breaks in inline and fullscreen output', () => {
+  const inlineOutput = readComponent('nodeOutput', 'NodeInlineOutput.tsx');
+  const fullscreenOutput = readComponent('nodeOutput', 'NodeFullscreenOutput.tsx');
+  const nodeStyles = readComponent('nodeStyles.ts');
+
+  assert.match(inlineOutput, /<div className="node-output-error-message">\{content\.error\}<\/div>/);
+  assert.match(fullscreenOutput, /<div className="node-output-error-message">\{content\.error\}<\/div>/);
+  assert.match(nodeStyles, /\.node-output-error-message \{[\s\S]*?white-space: pre-wrap;/);
+  assert.match(fullscreenOutput, /\.node-output-error-message \{[\s\S]*?white-space: pre-wrap;/);
+  assert.match(fullscreenOutput, /\.node-output-error-message \{[\s\S]*?background: var\(--node-output-error-bg\);/);
+  assert.doesNotMatch(fullscreenOutput, /\.node-output-error-message \{[\s\S]*?border(?:-left)?:/);
 });

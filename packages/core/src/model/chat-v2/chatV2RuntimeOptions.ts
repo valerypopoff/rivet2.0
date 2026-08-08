@@ -14,6 +14,7 @@ import type {
   RunChatV2PipelineOptions,
 } from './chatV2Types.js';
 import { applyLLMChatV2ParallelToolCallProviderOptions } from './parallelToolCalls.js';
+import { getCustomProviderApiContract } from './customProviderApi.js';
 import type { LLMChatV2NodeData } from './llmChatV2NodeData.js';
 
 export type LLMChatV2GenerationParameters = Pick<
@@ -94,9 +95,13 @@ export function resolveLLMChatV2ExtraProviderOptions(data: LLMChatV2NodeData, in
 function resolveProviderOptions(data: LLMChatV2NodeData, inputs: Inputs): ChatV2ProviderOptions | undefined {
   const providerOptions: ChatV2ProviderOptions = {};
   const extraProviderOptions = resolveLLMChatV2ExtraProviderOptions(data, inputs);
+  const providerOptionsKey =
+    data.provider === 'custom'
+      ? getCustomProviderApiContract(data.customProviderApi).providerOptionsKey
+      : data.provider;
 
   if (extraProviderOptions) {
-    providerOptions[data.provider] = extraProviderOptions;
+    providerOptions[providerOptionsKey] = extraProviderOptions;
   }
 
   if (data.provider === 'openai') {
@@ -183,6 +188,7 @@ export function resolveLLMChatV2RuntimeProviderOptions(
     provider: data.provider,
     useToolCalling: data.useToolCalling,
     parallelToolCalls: data.parallelToolCalls,
+    customProviderApi: data.customProviderApi,
     providerOptions: resolveProviderOptions(data, inputs),
   });
 

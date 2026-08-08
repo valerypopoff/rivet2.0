@@ -1,17 +1,18 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import type { DataRefReader } from '../../providers/ProvidersContext.js';
-import { getOutputSectionStatsForValue, shouldShowOutputSectionStats } from './outputSectionStats.js';
+import {
+  getOutputSectionArrayItemCount,
+  getOutputSectionStatsForValue,
+  shouldShowOutputSectionStats,
+} from './outputSectionStats.js';
 
 const emptyDataRefs: DataRefReader = {
   get: () => undefined,
 };
 
 test('output section stats are enabled only for fullscreen output surfaces', () => {
-  assert.equal(
-    shouldShowOutputSectionStats({ mode: 'expanded-preview', allowLargeStoredValueActions: true }),
-    true,
-  );
+  assert.equal(shouldShowOutputSectionStats({ mode: 'expanded-preview', allowLargeStoredValueActions: true }), true);
   assert.equal(shouldShowOutputSectionStats({ mode: 'expanded-preview', allowLargeStoredValueActions: false }), false);
   assert.equal(shouldShowOutputSectionStats({ mode: 'full', allowLargeStoredValueActions: true }), false);
   assert.equal(shouldShowOutputSectionStats({ mode: 'compact', allowLargeStoredValueActions: true }), false);
@@ -22,6 +23,11 @@ test('output section stats count string output words and characters', () => {
     wordCount: 3,
     characterCount: 18,
   });
+});
+
+test('output section array item count uses the rendered array value', () => {
+  assert.equal(getOutputSectionArrayItemCount({ type: 'string[]', value: ['first', 'second'] }, emptyDataRefs), 2);
+  assert.equal(getOutputSectionArrayItemCount({ type: 'string', value: 'not an array' }, emptyDataRefs), undefined);
 });
 
 test('output section stats count object output from displayed JSON text', () => {

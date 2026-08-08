@@ -51,14 +51,14 @@ test('rejects model-visible outputs and lower-level execution behavior', () => {
   const llm = getLlm(project, manifest, 'schema');
   llm.data.outputUsage = true;
   llm.data.outputReasoning = true;
-  llm.data.outputRequestStatus = true;
+  llm.data.outputLLMAttempts = true;
   llm.data.retryOnNon200 = true;
   llm.data.headers = [{ key: 'Authorization', value: 'secret' }];
 
   const errors = validateGraphBuilderPolicyAsset(project, manifest);
   assert(errors.some((error) => error.includes('outputUsage')));
   assert(errors.some((error) => error.includes('outputReasoning')));
-  assert(errors.some((error) => error.includes('outputRequestStatus')));
+  assert(errors.some((error) => error.includes('outputLLMAttempts')));
   assert(errors.some((error) => error.includes('retryOnNon200')));
   assert(errors.some((error) => error.includes('must not serialize headers')));
 });

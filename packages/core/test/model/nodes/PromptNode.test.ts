@@ -264,6 +264,18 @@ describe('PromptNode', () => {
     assert.equal(promptTextEditor?.showTextStats, true);
   });
 
+  it('identifies the generated chat message as its primary Run Activity output', () => {
+    const node = createNode({ computeTokenCount: true });
+
+    assert.deepEqual(node.getRunActivityDescriptor(), {
+      primaryOutputPortId: 'output',
+    });
+    assert.equal(
+      node.getOutputDefinitions().some((output) => output.id === 'output'),
+      true,
+    );
+  });
+
   it('keeps AI assist first, then type and prompt text before secondary settings', () => {
     const node = createNode({});
     const editors = node.getEditors();

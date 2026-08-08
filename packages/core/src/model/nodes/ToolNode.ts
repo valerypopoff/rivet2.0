@@ -6,7 +6,7 @@ import {
   type NodeOutputDefinition,
 } from '../NodeBase.js';
 import { nanoid } from 'nanoid/non-secure';
-import { NodeImpl, type NodeUIData } from '../NodeImpl.js';
+import { NodeImpl, type NodeRunActivityDescriptor, type NodeUIData } from '../NodeImpl.js';
 import { nodeDefinition } from '../NodeDefinition.js';
 import { dedent } from 'ts-dedent';
 import { type EditorDefinition } from '../EditorDefinition.js';
@@ -117,6 +117,14 @@ export class GptFunctionNodeImpl extends NodeImpl<GptFunctionNode> {
         description: 'The tool that can be called by the LLM.',
       },
     ];
+  }
+
+  getRunActivityDescriptor(): NodeRunActivityDescriptor {
+    return {
+      category: 'tool',
+      primaryOutputPortId: 'function' as PortId,
+      fullOutputActionLabel: 'Open tool definition',
+    };
   }
 
   getEditors(): EditorDefinition<GptFunctionNode>[] {

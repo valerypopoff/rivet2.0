@@ -1,18 +1,19 @@
 import { defineConfig, splitVendorChunkPlugin } from 'vite';
-import type { PluginOption } from 'vite';
+import type { PluginOption, UserConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 import viteTsconfigPaths from 'vite-tsconfig-paths';
 import svgr from 'vite-plugin-svgr';
-import monacoEditorPlugin from 'vite-plugin-monaco-editor';
 import topLevelAwait from 'vite-plugin-top-level-await';
 import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { dirname, join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { gunzipSync } from 'node:zlib';
 import { visualizer } from 'rollup-plugin-visualizer';
 
 const analyzeBundle = process.env.RIVET_BUNDLE_ANALYZE === 'true';
 const require = createRequire(import.meta.url);
+const appDirectory = dirname(fileURLToPath(import.meta.url));
 const dictionaryEnBrowserModuleId = '\0rivet-dictionary-en-browser';
 const cspellWordsBrowserModuleId = '\0rivet-cspell-words-browser';
 const cspellSoftwareTermFiles = [
@@ -123,65 +124,79 @@ const cspellWordsBrowserPlugin = (): PluginOption => ({
   },
 });
 
+export type RivetViteConfigOptions = {
+  reactDevTools?: boolean;
+};
+
 // https://vitejs.dev/config/
-export default defineConfig({
-  optimizeDeps: {
-    include: ['nspell'],
-    exclude: [
-      '@valerypopoff/rivet2-core',
-      '@valerypopoff/trivet',
-      'dictionary-en',
-      'rivet-cspell-words',
-      ...tauriApiOptimizeDepsExcludes,
-    ],
-  },
-  resolve: {
-    preserveSymlinks: true,
+export function createRivetViteConfig(options: RivetViteConfigOptions = {}): UserConfig {
+  const enableReactDevTools = options.reactDevTools ?? true;
 
-    alias: [
-      {
-        find: '@valerypopoff/rivet2-core/web-app-runtime',
-        replacement: resolve('../core/src/webAppRuntime.ts'),
-      },
-      { find: /^@valerypopoff\/rivet2-core$/, replacement: resolve('../core/src/index.ts') },
-      { find: '@valerypopoff/trivet', replacement: resolve('../trivet/src/index.ts') },
-      { find: '@google-cloud/vertexai', replacement: resolve('./src/utils/browser/vertexAiBrowserStub.ts') },
-    ],
-  },
-  build: {
-    chunkSizeWarningLimit: 10000,
-    rollupOptions: {
-      output: {
-        manualChunks: (id) => {
-          if (id.includes('commonjsHelpers')) {
-            return 'vendor';
-          }
-
-          if (id.includes('gpt-tokenizer')) {
-            return 'gpt-tokenizer';
-          }
-        },
-      },
-      plugins: analyzeBundle ? [visualizer()] : [],
+  return {
+    optimizeDeps: {
+      include: ['nspell'],
+      exclude: [
+        '@valerypopoff/rivet2-core',
+        '@valerypopoff/trivet',
+        'dictionary-en',
+        'rivet-cspell-words',
+        ...tauriApiOptimizeDepsExcludes,
+      ],
     },
-  },
-  plugins: [
-    reactDevTools(),
-    react(),
-    viteTsconfigPaths(),
-    svgr({
-      svgrOptions: {
-        icon: true,
+    resolve: {
+      preserveSymlinks: true,
+
+      alias: [
+        {
+          find: '@valerypopoff/rivet2-core/web-app-runtime',
+          replacement: resolve(appDirectory, '../core/src/webAppRuntime.ts'),
+        },
+        {
+          find: /^@valerypopoff\/rivet2-core$/,
+          replacement: resolve(appDirectory, '../core/src/index.ts'),
+        },
+        { find: '@valerypopoff/trivet', replacement: resolve(appDirectory, '../trivet/src/index.ts') },
+        {
+          find: '@google-cloud/vertexai',
+          replacement: resolve(appDirectory, './src/utils/browser/vertexAiBrowserStub.ts'),
+        },
+      ],
+    },
+    build: {
+      chunkSizeWarningLimit: 10000,
+      rollupOptions: {
+        output: {
+          manualChunks: (id) => {
+            if (id.includes('commonjsHelpers')) {
+              return 'vendor';
+            }
+
+            if (id.includes('gpt-tokenizer')) {
+              return 'gpt-tokenizer';
+            }
+          },
+        },
+        plugins: analyzeBundle ? [visualizer()] : [],
       },
-    }),
-    dictionaryEnBrowserPlugin(),
-    cspellWordsBrowserPlugin(),
-    // Bad ESM
-    (monacoEditorPlugin as any).default({}),
-    topLevelAwait(),
-    splitVendorChunkPlugin(),
-  ],
-  worker: {
-    format: 'es',
-  },
-});
+    },
+    plugins: [
+      enableReactDevTools ? reactDevTools() : undefined,
+      react(),
+      viteTsconfigPaths(),
+      svgr({
+        svgrOptions: {
+          icon: true,
+        },
+      }),
+      dictionaryEnBrowserPlugin(),
+      cspellWordsBrowserPlugin(),
+      topLevelAwait(),
+      splitVendorChunkPlugin(),
+    ],
+    worker: {
+      format: 'es',
+    },
+  };
+}
+
+export default defineConfig(createRivetViteConfig());

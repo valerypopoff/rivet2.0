@@ -5,7 +5,12 @@ import { useAtomValue } from 'jotai';
 import { useLoadRecording } from '../hooks/useLoadRecording';
 import { useSaveRecording } from '../hooks/useSaveRecording';
 import { graphRunningState, graphPausedState } from '../state/dataFlow';
-import { lastRecordingState, loadedRecordingState, recordingPlaybackStartingState } from '../state/execution';
+import {
+  getLoadedRecordingForProject,
+  lastRecordingState,
+  loadedRecordingState,
+  recordingPlaybackStartingState,
+} from '../state/execution';
 import { selectedExecutorState } from '../state/settings';
 import MultiplyIcon from 'majesticons/line/multiply-line.svg?react';
 import PauseIcon from 'majesticons/line/pause-circle-line.svg?react';
@@ -27,6 +32,7 @@ import { getActionBarExecutionState } from '../state/selectors/executionSelector
 import type { DebuggerPanelAnchor } from '../state/ui.js';
 import { NodeRunningIndicator } from './visualNode/NodeRunningIndicator.js';
 import { getActionBarRunButtonPresentation } from './actionBarRunButtons.js';
+import { isRivetAppHostCapabilityEnabled, useRivetAppHostUiConfig } from '../providers/HostUiConfigContext.js';
 
 const styles = css`
   --action-bar-height: calc(32px * var(--ui-font-scale));
@@ -169,24 +175,28 @@ export const ActionBar: FC<ActionBarProps> = ({ onRunGraph, onAbortGraph, onPaus
   const actionBarRef = useRef<HTMLDivElement>(null);
   const graphMetadata = useAtomValue(graphMetadataState);
   const projectMetadata = useAtomValue(projectMetadataState);
+  const hostUiConfig = useRivetAppHostUiConfig();
+  const recordingsEnabled = isRivetAppHostCapabilityEnabled(hostUiConfig, 'recordings');
+  const trivetInputCopyEnabled = isRivetAppHostCapabilityEnabled(hostUiConfig, 'trivetInputCopy');
   const lastRecording = useAtomValue(lastRecordingState);
   const saveRecording = useSaveRecording();
 
   const graphRunning = useAtomValue(graphRunningState);
   const graphPaused = useAtomValue(graphPausedState);
 
-  const loadedRecording = useAtomValue(loadedRecordingState);
+  const loadedRecording = getLoadedRecordingForProject(useAtomValue(loadedRecordingState), projectMetadata.id);
   const recordingPlaybackStarting = useAtomValue(recordingPlaybackStartingState);
   const { unloadRecording } = useLoadRecording();
   const [menuIsOpen, toggleMenuIsOpen] = useToggle();
   const selectedExecutor = useAtomValue(selectedExecutorState);
-  const recordingPlaybackIsStarting = !!loadedRecording && recordingPlaybackStarting && !graphRunning;
+  const activeRecording = recordingsEnabled ? loadedRecording : undefined;
+  const recordingPlaybackIsStarting = !!activeRecording && recordingPlaybackStarting && !graphRunning;
 
   const { sessionState: remoteDebugger, disconnect } = useRemoteDebugger();
   const actionBarExecutionState = getActionBarExecutionState({
     graphPaused,
     graphRunning,
-    hasLoadedRecording: !!loadedRecording,
+    hasLoadedRecording: !!activeRecording,
     recordingPlaybackStarting: recordingPlaybackIsStarting,
     selectedExecutor,
     session: remoteDebugger,
@@ -205,7 +215,7 @@ export const ActionBar: FC<ActionBarProps> = ({ onRunGraph, onAbortGraph, onPaus
   const runButtonPresentation = getActionBarRunButtonPresentation({
     currentGraphName: graphMetadata?.name,
     graphRunning,
-    hasLoadedRecording: !!loadedRecording,
+    hasLoadedRecording: !!activeRecording,
     hasMainGraph,
     isMainGraph,
     showRunButton: actionBarExecutionState.showRunButton,
@@ -263,7 +273,7 @@ export const ActionBar: FC<ActionBarProps> = ({ onRunGraph, onAbortGraph, onPaus
         </div>
       )}
 
-      {loadedRecording && !graphRunning && (
+      {activeRecording && !graphRunning && (
         <div className={clsx('unload-recording-button')}>
           <button onClick={() => unloadRecording()}>Unload Recording</button>
         </div>
@@ -286,7 +296,7 @@ export const ActionBar: FC<ActionBarProps> = ({ onRunGraph, onAbortGraph, onPaus
 
       {isGentracePluginEnabled && <GentraceInteractors />}
 
-      {lastRecording && (
+      {recordingsEnabled && lastRecording && (
         <div className={clsx('save-recording-button')}>
           <button onClick={saveRecording}>Save Recording</button>
         </div>
@@ -295,7 +305,7 @@ export const ActionBar: FC<ActionBarProps> = ({ onRunGraph, onAbortGraph, onPaus
         <div
           className={clsx('run-button', {
             running: graphRunning,
-            recording: !!loadedRecording,
+            recording: !!activeRecording,
             secondary: runButtonPresentation.currentGraphRunSecondary,
           })}
         >
@@ -309,7 +319,7 @@ export const ActionBar: FC<ActionBarProps> = ({ onRunGraph, onAbortGraph, onPaus
               <>
                 Abort <MultiplyIcon />
               </>
-            ) : loadedRecording ? (
+            ) : activeRecording ? (
               renderRunButtonContents('Play Recording')
             ) : (
               renderRunButtonContents(runButtonPresentation.currentGraphRunLabel)
@@ -343,7 +353,7 @@ export const ActionBar: FC<ActionBarProps> = ({ onRunGraph, onAbortGraph, onPaus
           <ActionBarMoreMenu
             getDebuggerPanelAnchor={getDebuggerPanelAnchor}
             onClose={toggleMenuIsOpen.setLeft}
-            onCopyAsTestCase={toggleCopyAsTestCaseModalOpen.setRight}
+            onCopyAsTestCase={trivetInputCopyEnabled ? toggleCopyAsTestCaseModalOpen.setRight : undefined}
           />
         )}
         placement="bottom-end"
@@ -362,7 +372,9 @@ export const ActionBar: FC<ActionBarProps> = ({ onRunGraph, onAbortGraph, onPaus
           </button>
         )}
       />
-      <CopyAsTestCaseModal open={copyAsTestCaseModalOpen} onClose={toggleCopyAsTestCaseModalOpen.setLeft} />
+      {trivetInputCopyEnabled ? (
+        <CopyAsTestCaseModal open={copyAsTestCaseModalOpen} onClose={toggleCopyAsTestCaseModalOpen.setLeft} />
+      ) : null}
     </div>
   );
 };

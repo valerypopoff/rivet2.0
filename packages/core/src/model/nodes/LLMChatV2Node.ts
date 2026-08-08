@@ -5,8 +5,8 @@ import type { Inputs, Outputs } from '../GraphProcessor.js';
 import type { NodeId, NodeInputDefinition, NodeOutputDefinition, PortId } from '../NodeBase.js';
 import type { NodeBodySpec } from '../NodeBodySpec.js';
 import { nodeDefinition } from '../NodeDefinition.js';
-import { NodeImpl, type NodeUIData } from '../NodeImpl.js';
-import type { InternalProcessContext } from '../ProcessContext.js';
+import { NodeImpl, type NodeRunActivityDescriptor, type NodeUIData } from '../NodeImpl.js';
+import type { ChatV2CallFinishedEvent, InternalProcessContext } from '../ProcessContext.js';
 import type { RivetUIContext } from '../RivetUIContext.js';
 import { getCommonChatV2Inputs, getCommonChatV2Outputs } from '../chat-v2/chatV2Shared.js';
 import { getLLMChatV2Editors } from '../chat-v2/llmChatV2NodeEditors.js';
@@ -15,28 +15,22 @@ import {
   shouldIncludeLLMChatV2ToolCalls,
   type LLMChatV2Node,
 } from '../chat-v2/llmChatV2NodeData.js';
+import { getLLMChatV2BodySections } from '../chat-v2/llmChatV2Body.js';
 import { isLLMChatV2StructuredResponseFormat } from '../chat-v2/chatV2FeatureCompatibility.js';
+import { LLMInvocationJournal } from '../chat-v2/llmInvocationJournal.js';
+import { executeLLMInvocation } from '../chat-v2/llmInvocationCoordinator.js';
 import {
-  buildLLMProfileRequestDiagnostics,
-  compactLLMProfileRequestErrors,
-  compactLLMProfileRequestStatuses,
-} from '../chat-v2/llmProfileFallback.js';
-import { getChatV2ModelInfo } from '../chat-v2/modelRegistry.js';
-import { shouldOutputChatV2RequestBody, shouldOutputChatV2RequestError } from '../chat-v2/chatV2Types.js';
+  projectLLMInvocationDiagnostics,
+  projectLLMInvocationResult,
+} from '../chat-v2/llmInvocationResultProjector.js';
+import { isChatV2PipelineProviderFailureResult } from '../chat-v2/chatV2Pipeline.js';
+import { shouldOutputChatV2RequestBody, shouldOutputChatV2ResponseBody } from '../chat-v2/chatV2Types.js';
 import {
   buildLLMChatV2EditorCacheKey,
-  cloneLLMChatV2EditorCacheOutputs,
   resolveLLMChatV2RuntimeConfig,
   resolveLLMChatV2RuntimeProviderOptions,
 } from '../chat-v2/llmChatV2NodeRuntime.js';
-import {
-  anthropicEffortOptions,
-  getChatV2ProviderLabel,
-  googleThinkingLevelOptions,
-  openAIReasoningEffortOptions,
-} from '../chat-v2/providerOptions.js';
-import { runChatV2PipelineWithToolContinuation } from '../chat-v2/toolContinuation.js';
-import { delegateToolCall } from './toolCallDelegation.js';
+import { projectLLMChatV2EditorCacheHit, writeLLMChatV2EditorCache } from '../chat-v2/llmChatV2CacheBoundary.js';
 
 export type {
   LLMChatV2ApiKeySource,
@@ -50,40 +44,6 @@ export { buildLLMChatV2EditorCacheKey, resolveLLMChatV2RuntimeProviderOptions };
 
 function usesBaseURLInput(data: LLMChatV2Node['data']): boolean {
   return data.provider === 'custom' && data.useCustomProviderBaseURLInput;
-}
-
-function getCustomProviderBaseURLBodyValue(data: LLMChatV2Node['data']): string | undefined {
-  if (data.provider !== 'custom') {
-    return undefined;
-  }
-
-  if (data.useCustomProviderBaseURLInput) {
-    return '(Using Input)';
-  }
-
-  const baseURL = data.customProviderBaseURL.trim();
-  return baseURL || undefined;
-}
-
-function getOptionLabel(options: readonly { value: string; label: string }[], value: string | undefined): string {
-  return options.find((option) => option.value === (value ?? ''))?.label ?? value ?? 'Default';
-}
-
-function getProviderBodyLabel(data: LLMChatV2Node['data']): string {
-  return data.provider === 'custom' ? 'Custom' : getChatV2ProviderLabel(data.provider);
-}
-
-function getReasoningEffortBodyValue(data: LLMChatV2Node['data']): string | undefined {
-  switch (data.provider) {
-    case 'openai':
-      return getOptionLabel(openAIReasoningEffortOptions, data.openAIReasoningEffort);
-    case 'anthropic':
-      return getOptionLabel(anthropicEffortOptions, data.anthropicEffort);
-    case 'google':
-      return getOptionLabel(googleThinkingLevelOptions, data.googleThinkingLevel);
-    case 'custom':
-      return undefined;
-  }
 }
 
 function escapeMarkdownInline(value: string): string {
@@ -101,23 +61,20 @@ function getBodyLine(label: string, value: string): string {
   return `<span style="opacity: 0.55">${label}:</span> ${escapeMarkdownInline(value)}`;
 }
 
-function getOptionalNumberBodyLine(label: string, value: number | undefined, usesInput: boolean): string | undefined {
-  if (usesInput) {
-    return getBodyLine(label, '(Using Input)');
-  }
-
-  return value === undefined ? undefined : getBodyLine(label, `${value}`);
+function escapeMarkdownPreformatted(value: string): string {
+  return value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
-function getStopSequencesBodyLine(data: LLMChatV2Node['data']): string | undefined {
-  if (data.useStopSequencesInput) {
-    return getBodyLine('Stop sequences', '(Using Input)');
-  }
-
-  const stopSequences = (data.stopSequences ?? []).filter((sequence) => sequence.length > 0);
-  return stopSequences.length === 0
-    ? undefined
-    : getBodyLine('Stop sequences', stopSequences.map((sequence) => JSON.stringify(sequence)).join(', '));
+function getBodySectionText(section: ReturnType<typeof getLLMChatV2BodySections>[number]): string {
+  return [
+    ...section.fields.map((field) => getBodyLine(field.label, field.value)),
+    ...(section.snippet
+      ? [
+          `<span style="opacity: 0.55">${section.snippet.label}:</span>`,
+          `<pre>${escapeMarkdownPreformatted(section.snippet.text)}</pre>`,
+        ]
+      : []),
+  ].join('\n');
 }
 
 export class LLMChatV2NodeImpl extends NodeImpl<LLMChatV2Node> {
@@ -132,6 +89,13 @@ export class LLMChatV2NodeImpl extends NodeImpl<LLMChatV2Node> {
         width: 260,
       },
       data: createLLMChatV2NodeData(),
+    };
+  }
+
+  getRunActivityDescriptor(): NodeRunActivityDescriptor {
+    return {
+      category: 'model',
+      primaryOutputPortId: 'response' as PortId,
     };
   }
 
@@ -277,58 +241,21 @@ export class LLMChatV2NodeImpl extends NodeImpl<LLMChatV2Node> {
     const responseOutput = outputs.find((output) => output.id === ('response' as PortId));
 
     if (responseOutput != null && isLLMChatV2StructuredResponseFormat(this.data.responseFormat)) {
-      responseOutput.dataType = [
-        'object',
-        'object[]',
-        'any',
-        'any[]',
-        'string',
-        'string[]',
-        'number',
-        'number[]',
-        'boolean',
-        'boolean[]',
-      ] as const;
-    }
-
-    if (this.data.outputRequestStatus) {
-      const profileArrayRequestDetails =
-        this.data.configurationMode === 'profile'
-          ? (['number', 'number[]', 'any'] as const)
-          : this.data.retryOnNon200
-            ? 'number[]'
-            : 'number';
-      outputs.push({
-        id: 'requestStatus' as PortId,
-        title: 'Response Status',
-        dataType: profileArrayRequestDetails,
-        ...(this.data.configurationMode === 'profile'
-          ? {
-              description:
-                'A scalar profile keeps the normal status shape. An LLM Profile array groups values by profile: one request is a number, retries are a number array.',
-            }
-          : {}),
-      });
-    }
-
-    if (shouldOutputChatV2RequestError(this.data)) {
-      const profileArrayRequestErrors =
-        this.data.configurationMode === 'profile'
-          ? (['string', 'string[]', 'any'] as const)
-          : this.data.retryOnNon200
-            ? 'string[]'
-            : 'string';
-      outputs.push({
-        id: 'requestError' as PortId,
-        title: 'Response Error',
-        dataType: profileArrayRequestErrors,
-        ...(this.data.configurationMode === 'profile'
-          ? {
-              description:
-                'A scalar profile keeps the normal error shape. An LLM Profile array keeps profile positions when errors occur: one error is a string and retries are an array.',
-            }
-          : {}),
-      });
+      responseOutput.dataType =
+        this.data.responseFormat === 'json_schema'
+          ? 'object'
+          : ([
+              'object',
+              'object[]',
+              'any',
+              'any[]',
+              'string',
+              'string[]',
+              'number',
+              'number[]',
+              'boolean',
+              'boolean[]',
+            ] as const);
     }
 
     if (shouldOutputChatV2RequestBody(this.data)) {
@@ -339,21 +266,31 @@ export class LLMChatV2NodeImpl extends NodeImpl<LLMChatV2Node> {
       });
     }
 
+    if (shouldOutputChatV2ResponseBody(this.data)) {
+      outputs.push({
+        id: 'responseBody' as PortId,
+        title: 'LLM response body',
+        dataType: ['object', 'object[]', 'string', 'string[]', 'any', 'any[]'] as const,
+      });
+    }
+
+    if (this.data.outputLLMAttempts) {
+      outputs.push({
+        id: 'llmAttempts' as PortId,
+        title: 'LLM Attempts',
+        dataType: 'object[]',
+        description:
+          'Chronological provider configuration, request, and response-validation attempts for this LLM Chat run.',
+      });
+    }
+
     if (this.data.configurationMode === 'profile') {
-      outputs.push(
-        {
-          id: 'llmProfileSummary' as PortId,
-          title: 'LLM Profile Summary',
-          dataType: 'string',
-          description: 'Human-readable profile fallback outcome for this LLM Chat run.',
-        },
-        {
-          id: 'llmProfileAttempts' as PortId,
-          title: 'LLM Profile Attempts',
-          dataType: 'object[]',
-          description: 'Chronological provider/profile attempts for this LLM Chat run.',
-        },
-      );
+      outputs.push({
+        id: 'llmProfileSummary' as PortId,
+        title: 'LLM Profile Summary',
+        dataType: 'string',
+        description: 'Human-readable profile fallback outcome for this LLM Chat run.',
+      });
     }
 
     return outputs;
@@ -378,167 +315,87 @@ export class LLMChatV2NodeImpl extends NodeImpl<LLMChatV2Node> {
   }
 
   getBody(): NodeBodySpec {
-    if (this.data.configurationMode === 'profile') {
-      return {
-        type: 'markdown',
-        disableLinks: true,
-        text: [
-          getBodyLine('Configuration', 'From LLM Profiles input'),
-          ...(this.data.useToolCalling ? [getBodyLine('Tools', 'Enabled')] : []),
-          ...(this.data.responseFormat ? [getBodyLine('Response format', this.data.responseFormat)] : []),
-        ].join('\n'),
-      };
-    }
-
-    const modelInfo = getChatV2ModelInfo(this.data.provider, this.data.model);
-    const providerLabel = getProviderBodyLabel(this.data);
-    const baseURLValue = getCustomProviderBaseURLBodyValue(this.data);
-    const modelLine = modelInfo?.displayName ?? this.data.model;
-    const providerDetails = [
-      getBodyLine('Provider', providerLabel),
-      ...(baseURLValue ? [getBodyLine('Base URL', baseURLValue)] : []),
-      getBodyLine('Model', modelLine),
-    ];
-    const reasoningEffortValue = getReasoningEffortBodyValue(this.data);
-
     return {
       type: 'markdown',
       disableLinks: true,
-      text: [
-        ...providerDetails,
-        ...(reasoningEffortValue ? [getBodyLine('Reasoning effort', reasoningEffortValue)] : []),
-        getBodyLine('Temperature', this.data.useTemperatureInput ? '(Using Input)' : `${this.data.temperature}`),
-        getBodyLine('Max output tokens', this.data.useMaxTokensInput ? '(Using Input)' : `${this.data.maxTokens}`),
-        getOptionalNumberBodyLine('Top P', this.data.topP, this.data.useTopPInput),
-        getOptionalNumberBodyLine('Top K', this.data.topK, this.data.useTopKInput),
-        getOptionalNumberBodyLine('Presence penalty', this.data.presencePenalty, this.data.usePresencePenaltyInput),
-        getOptionalNumberBodyLine('Frequency penalty', this.data.frequencyPenalty, this.data.useFrequencyPenaltyInput),
-        getStopSequencesBodyLine(this.data),
-        getOptionalNumberBodyLine('Seed', this.data.seed, this.data.useSeedInput),
-      ]
-        .filter((line): line is string => line !== undefined)
-        .join('\n'),
+      text: getLLMChatV2BodySections(this.data).map(getBodySectionText).join('\n\n'),
     };
   }
 
   async process(inputs: Inputs, context: InternalProcessContext): Promise<Outputs> {
+    const invocationJournal = new LLMInvocationJournal();
+    // Retries, fallback profiles, and tool continuation produce several
+    // physical provider calls underneath one node invocation. Always observe
+    // them locally so every later output projection shares one truthful
+    // boundary; whether Usage is exposed remains an output-setting decision.
+    const usageTrackingContext = {
+      ...context,
+      onChatV2CallFinished: (event: ChatV2CallFinishedEvent) => {
+        try {
+          invocationJournal.recordModelCall(event);
+        } catch {
+          // Accounting is observational and must never affect a provider call.
+        }
+        return context.onChatV2CallFinished?.(event);
+      },
+    };
     const runtime = await resolveLLMChatV2RuntimeConfig({
       data: this.data,
       nodeId: this.chartNode.id,
       inputs,
-      context,
+      context: usageTrackingContext,
+      onLLMAttempt: (attempt) => invocationJournal.recordLLMAttempt(attempt),
     });
     const toolCallContinuation = context.toolCallContinuation;
 
-    if (runtime.cachedOutputs != null) {
-      if (runtime.profileChainUsesArray && this.data.outputRequestStatus) {
-        const cachedStatus = runtime.cachedOutputs['requestStatus' as PortId];
-        if (cachedStatus?.type === 'any' && Array.isArray(cachedStatus.value)) {
-          cachedStatus.value = compactLLMProfileRequestStatuses(cachedStatus.value);
-        }
-      }
-      if (runtime.profileChainUsesArray && shouldOutputChatV2RequestError(this.data)) {
-        const cachedError = runtime.cachedOutputs['requestError' as PortId];
-        if (cachedError?.type === 'any' && Array.isArray(cachedError.value)) {
-          cachedError.value = compactLLMProfileRequestErrors(cachedError.value);
-        }
-      }
-
-      // Cached provider output belongs to an earlier invocation, whereas this
-      // port is an observability record for physical profile attempts made by
-      // the current one. A cache hit made no such attempt.
-      if (runtime.profileAttempts != null) {
-        runtime.cachedOutputs['llmProfileAttempts' as PortId] = {
-          type: 'object[]',
-          value: [],
-        };
-        runtime.cachedOutputs['llmProfileSummary' as PortId] = {
-          type: 'string',
-          value: 'Editor cache hit — no LLM Profile calls were made for this run.',
-        };
-      }
-      return runtime.cachedOutputs;
+    const cacheHit = projectLLMChatV2EditorCacheHit(runtime);
+    if (cacheHit != null) {
+      context.markResultAsEditorCacheHit?.();
+      return cacheHit;
     }
 
-    const result = runtime.shouldAutoContinueToolCalls
-      ? await runChatV2PipelineWithToolContinuation({
-          ...runtime.runOptions,
-          autoContinue: true,
-          maxToolRounds: runtime.maxToolRounds,
-          functions: runtime.functions,
-          delegateToolCallRound: toolCallContinuation
-            ? async (toolCalls, preToolMessage) => {
-                const results = await toolCallContinuation.run(toolCalls, preToolMessage);
-                return results.map((result) => ({
-                  type: 'chat-message' as const,
-                  value: result.message,
-                  delegatedToolCall: result.record,
-                }));
-              }
-            : undefined,
-          delegateToolCall: async (toolCall) => {
-            const delegated = await delegateToolCall(toolCall, context, {
-              handlers: [],
-              unknownHandler: undefined,
-              autoDelegate: true,
-              fallBackToExternalCall: true,
-              passthroughErrors: true,
-            });
+    let result: Awaited<ReturnType<typeof executeLLMInvocation>>;
+    try {
+      result = await executeLLMInvocation({
+        context,
+        journal: invocationJournal,
+        runtime,
+        toolCallContinuation,
+      });
+    } catch (error) {
+      try {
+        const diagnostics = projectLLMInvocationDiagnostics({
+          runOptions: runtime.runOptions,
+          outputLLMAttempts: this.data.outputLLMAttempts,
+          llmAttempts: invocationJournal.llmAttempts,
+          profileSummary: runtime.getProfileSummary?.(),
+        });
 
-            return {
-              type: 'chat-message',
-              value: delegated.message,
-              delegatedToolCall: delegated.record,
-            };
-          },
-          runPipeline: runtime.runPipeline,
-        })
-      : await runtime.runPipeline(runtime.runOptions);
-
-    if (runtime.profileAttempts != null) {
-      result.commonOutputs['llmProfileAttempts' as PortId] = {
-        type: 'object[]',
-        value: runtime.profileAttempts,
-      };
-      result.commonOutputs['llmProfileSummary' as PortId] = {
-        type: 'string',
-        value: runtime.getProfileSummary!(),
-      };
-
-      if (runtime.profileChainUsesArray && runtime.profileChainLength != null) {
-        const diagnostics = buildLLMProfileRequestDiagnostics(runtime.profileChainLength, runtime.profileAttempts);
-        // Rivet has scalar and one-dimensional array Data Values, but no
-        // nested-array Data Type. Keep profile/retry grouping as portable JSON
-        // inside Any values. One request or error stays scalar when doing so
-        // preserves useful diagnostic information.
-        if (this.data.outputRequestStatus) {
-          result.commonOutputs['requestStatus' as PortId] = {
-            type: 'any',
-            value: diagnostics.statuses,
-          };
+        if (Object.keys(diagnostics).length > 0) {
+          context.onPartialOutputs?.(diagnostics);
         }
-        if (shouldOutputChatV2RequestError(this.data)) {
-          result.commonOutputs['requestError' as PortId] = {
-            type: 'any',
-            value: diagnostics.errors,
-          };
-        }
+      } catch {
+        // Developer diagnostics are observational and must never replace the
+        // provider/configuration error which caused this node to fail.
       }
+
+      throw error;
     }
 
-    if (toolCallContinuation && result.functionCalls.length > 0) {
+    projectLLMInvocationResult({
+      result,
+      modelCalls: invocationJournal.modelCalls,
+      outputUsage: this.data.outputUsage,
+      outputLLMAttempts: this.data.outputLLMAttempts,
+      llmAttempts: invocationJournal.llmAttempts,
+      profileSummary: runtime.getProfileSummary?.(),
+    });
+
+    if (toolCallContinuation && !isChatV2PipelineProviderFailureResult(result) && result.functionCalls.length > 0) {
       toolCallContinuation.release();
     }
 
-    if (runtime.cacheKey != null && runtime.editorCache != null && !runtime.isProfileFallbackExhausted()) {
-      const cacheOutputs = cloneLLMChatV2EditorCacheOutputs(result.commonOutputs);
-      // Attempt history is specific to this execution. Rebuild it as an empty
-      // observability value on a later cache hit instead of presenting stale
-      // provider calls as if they happened again.
-      delete cacheOutputs['llmProfileAttempts' as PortId];
-      delete cacheOutputs['llmProfileSummary' as PortId];
-      runtime.editorCache.set(runtime.cacheKey, cacheOutputs);
-    }
+    writeLLMChatV2EditorCache({ runtime, result });
 
     return result.commonOutputs;
   }

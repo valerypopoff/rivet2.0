@@ -42,7 +42,7 @@ describe('buildChatV2RequestPlan', () => {
       retryOnNon200RepeatTimes: 2,
       retryOnNon200CooldownMs: 25,
       outputUsage: true,
-      outputRequestStatus: true,
+      outputRequestBody: true,
       includeFunctionCalls: true,
     });
 
@@ -50,9 +50,20 @@ describe('buildChatV2RequestPlan', () => {
     assert.equal(plan.request.responseFormat, 'json_schema');
     assert.deepEqual(plan.request.providerOptions, { custom: { structuredOutputs: true } });
     assert.equal(plan.output.outputUsage, true);
-    assert.equal(plan.output.outputRequestStatus, true);
-    assert.equal(plan.output.outputRequestError, true);
     assert.equal(plan.output.outputRequestBody, true);
+    assert.equal(plan.output.outputResponseBody, false);
+  });
+
+  it('keeps response-body capture explicitly opt-in', () => {
+    const plan = buildChatV2RequestPlan({
+      provider: 'openai',
+      model,
+      modelId: 'gpt-test',
+      messages: [],
+      outputResponseBody: true,
+    });
+
+    assert.equal(plan.output.outputResponseBody, true);
   });
 
   it('produces an inspectable summary without model objects, messages, or credentials', () => {

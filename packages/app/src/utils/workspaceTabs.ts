@@ -1,12 +1,17 @@
 import type { OverlayKey } from '../state/ui.js';
 
 export type WorkspaceTabKey = OverlayKey | 'welcomeScreen';
+export type WorkspaceTabItemId = 'trivet' | 'dataStudio';
 
 export type WorkspaceTabDefinition = {
   key: WorkspaceTabKey;
   label: string;
   className: string;
   targetOverlay: OverlayKey | undefined;
+};
+
+export type WorkspaceTabsConfig = {
+  visibleItems?: readonly WorkspaceTabItemId[];
 };
 
 export const WELCOME_SCREEN_TAB: WorkspaceTabDefinition = {
@@ -16,11 +21,10 @@ export const WELCOME_SCREEN_TAB: WorkspaceTabDefinition = {
   targetOverlay: undefined,
 };
 
-export const WORKSPACE_TABS: WorkspaceTabDefinition[] = [
+export const WORKSPACE_TABS = [
   { key: 'trivet', label: 'Trivet Tests', className: 'trivet-menu', targetOverlay: 'trivet' },
-  { key: 'chatViewer', label: 'Chat Viewer', className: 'chat-viewer-menu', targetOverlay: 'chatViewer' },
   { key: 'dataStudio', label: 'Data Studio', className: 'data-studio', targetOverlay: 'dataStudio' },
-];
+] satisfies WorkspaceTabDefinition[];
 
 export const PROMPT_DESIGNER_TAB: WorkspaceTabDefinition = {
   key: 'promptDesigner',
@@ -30,29 +34,25 @@ export const PROMPT_DESIGNER_TAB: WorkspaceTabDefinition = {
 };
 
 export function getVisibleWorkspaceTabs({
-  chatViewerAvailable,
+  config,
   openOverlay,
   welcomeScreenAvailable = false,
 }: {
-  chatViewerAvailable: boolean;
+  config?: WorkspaceTabsConfig;
   openOverlay: OverlayKey | undefined;
   welcomeScreenAvailable?: boolean;
 }): WorkspaceTabDefinition[] {
-  const workspaceTabs: WorkspaceTabDefinition[] = WORKSPACE_TABS.filter((tab) => {
-    if (tab.key === 'chatViewer') {
-      return chatViewerAvailable;
-    }
-
-    return true;
-  });
+  const visibleItems = config?.visibleItems == null ? undefined : new Set(config.visibleItems);
+  const workspaceTabs: WorkspaceTabDefinition[] =
+    visibleItems == null ? [...WORKSPACE_TABS] : WORKSPACE_TABS.filter((tab) => visibleItems.has(tab.key));
 
   if (welcomeScreenAvailable) {
     workspaceTabs.unshift(WELCOME_SCREEN_TAB);
   }
 
-  if (openOverlay !== 'promptDesigner') {
-    return workspaceTabs;
+  if (openOverlay === 'promptDesigner') {
+    workspaceTabs.push(PROMPT_DESIGNER_TAB);
   }
 
-  return [...workspaceTabs, PROMPT_DESIGNER_TAB];
+  return workspaceTabs;
 }

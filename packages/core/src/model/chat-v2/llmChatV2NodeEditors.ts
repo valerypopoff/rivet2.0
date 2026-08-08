@@ -10,6 +10,7 @@ import {
   anthropicEffortOptions,
   anthropicThinkingModeOptions,
   chatV2ProviderOptions,
+  customProviderApiOptions,
   getChatV2ModelOptions,
   googleThinkingLevelOptions,
   openAIReasoningEffortOptions,
@@ -102,7 +103,17 @@ function getModelEditors(modelOptions: { value: string; label: string }[]): LLMC
         dataKey: 'customProviderBaseURL',
         useInputToggleDataKey: 'useCustomProviderBaseURLInput',
         placeholder: 'https://api.cerebras.ai/v1',
-        helperMessage: 'OpenAI-compatible provider base URL. Full /chat/completions URLs are accepted and normalized.',
+        helperMessage:
+          'OpenAI-compatible provider base URL. Full /chat/completions or /responses URLs are accepted and normalized.',
+        hideIf: hideUnlessProvider('custom'),
+      },
+      {
+        type: 'segmented',
+        label: 'API',
+        ariaLabel: 'Custom provider API',
+        dataKey: 'customProviderApi',
+        defaultValue: 'completions',
+        options: [...customProviderApiOptions],
         hideIf: hideUnlessProvider('custom'),
       },
       {
@@ -434,7 +445,10 @@ function getToolEditors(): LLMChatV2EditorDefinition {
       type: 'toggle',
       label: 'Allow parallel toolcalls',
       dataKey: 'parallelToolCalls',
-      helperMessage: LLM_CHAT_V2_PARALLEL_TOOL_CALLS_HELPER_MESSAGE,
+      helperMessage: (data) =>
+        data.configurationMode === 'profile'
+          ? `${LLM_CHAT_V2_PARALLEL_TOOL_CALLS_HELPER_MESSAGE} In From profile mode, it applies only to candidates whose providers support parallel tool calls; unsupported candidates ignore it.`
+          : LLM_CHAT_V2_PARALLEL_TOOL_CALLS_HELPER_MESSAGE,
       hideIf: (data) =>
         !data.useToolCalling ||
         (data.configurationMode !== 'profile' && !supportsLLMChatV2ParallelToolCalls(data.provider)),
@@ -449,8 +463,9 @@ function getToolEditors(): LLMChatV2EditorDefinition {
     },
     {
       type: 'number',
-      label: 'Max tool rounds',
+      label: 'Maximum tool rounds',
       dataKey: 'maxToolRounds',
+      helperMessage: 'Each round may contain multiple parallel tool calls if not disallowed.',
       min: 1,
       step: 1,
       hideIf: (data) => !data.useToolCalling || !data.autoContinueToolCalls,
@@ -476,10 +491,10 @@ function getOutputEditors(): LLMChatV2EditorDefinition {
     },
     {
       type: 'toggle',
-      label: 'Output response status',
-      dataKey: 'outputRequestStatus',
+      label: 'Output LLM attempts',
+      dataKey: 'outputLLMAttempts',
       helperMessage:
-        'Adds a Response Status output. Retry mode returns statuses for each physical request. An LLM Profile array groups values by profile, while a profile with one request stays a number.',
+        'Adds one chronological record for every profile configuration, provider request, and response-validation attempt. Records include provider, model, retry status, and provider error details when available.',
     },
     {
       type: 'toggle',
@@ -487,6 +502,13 @@ function getOutputEditors(): LLMChatV2EditorDefinition {
       dataKey: 'outputRequestBody',
       helperMessage:
         'Adds an LLM request body output. It can contain prompts and non-secret provider options; it never includes authorization headers or API keys.',
+    },
+    {
+      type: 'toggle',
+      label: 'Output response body',
+      dataKey: 'outputResponseBody',
+      helperMessage:
+        'Adds the complete LLM response body captured at the provider HTTP boundary. JSON responses are parsed for inspection; other responses remain text. Rivet does not redact or truncate captured content.',
     },
     {
       type: 'toggle',
@@ -558,13 +580,6 @@ function getErrorBehaviorEditors(): LLMChatV2EditorDefinition {
       layout: 'inline',
       helperMessage: 'Milliseconds to wait between repeats',
       hideIf: (data) => !data.retryOnNon200,
-    },
-    {
-      type: 'toggle',
-      label: 'Output response error',
-      dataKey: 'outputRequestError',
-      helperMessage:
-        'Adds a Response Error output. Provider request failures become excluded outputs instead of node errors. Retry mode returns errors for each physical request; an LLM Profile array groups errors by profile.',
     },
   ]);
 }

@@ -193,6 +193,26 @@ describe('runChatV2PipelineWithToolContinuation', () => {
     assert.equal(result, firstResult);
   });
 
+  it('does not execute a tool from a provider-failure diagnostic result', async () => {
+    const failedToolCall = makeToolCall('call_failed', 'foo');
+    const failedResult = makePipelineResult('partial provider content', [failedToolCall]);
+    failedResult.terminalOutcome = 'provider-failure';
+    let delegated = 0;
+
+    const result = await runChatV2PipelineWithToolContinuation(
+      baseOptions({
+        runPipeline: async () => failedResult,
+        delegateToolCall: async (toolCall) => {
+          delegated += 1;
+          return makeToolResultMessage(toolCall, 'must not run');
+        },
+      }),
+    );
+
+    assert.strictEqual(result, failedResult);
+    assert.equal(delegated, 0);
+  });
+
   it('delegates all tool calls in a round before asking the model again', async () => {
     const fooCall = makeToolCall('call_foo', 'foo');
     const barCall = makeToolCall('call_bar', 'bar');
@@ -595,6 +615,46 @@ describe('runChatV2PipelineWithToolContinuation', () => {
     });
     assert.equal('responseTokens' in result.commonOutputs, false);
     assert.deepEqual(result.commonOutputs.usage, { type: 'object', value: result.usage });
+  });
+
+  it('allows 21 calls across ten batches but does not auto-continue an eleventh batch', async () => {
+    const firstTenBatches = Array.from({ length: 10 }, (_, roundIndex) =>
+      Array.from({ length: roundIndex === 0 ? 3 : 2 }, (_, callIndex) =>
+        makeToolCall(`call_${roundIndex + 1}_${callIndex + 1}`, 'foo', {
+          round: roundIndex + 1,
+          call: callIndex + 1,
+        }),
+      ),
+    );
+    const delegatedBatches: string[][] = [];
+    let providerCalls = 0;
+
+    const result = await runChatV2PipelineWithToolContinuation(
+      baseOptions({
+        maxToolRounds: 10,
+        runPipeline: async () => {
+          providerCalls++;
+          const batch = firstTenBatches[providerCalls - 1] ?? [makeToolCall('call_11_1', 'foo')];
+          return makePipelineResult('', batch);
+        },
+        delegateToolCallRound: async (toolCalls) => {
+          delegatedBatches.push(toolCalls.map((toolCall) => toolCall.id));
+          return toolCalls.map((toolCall) => makeDelegatedToolResultMessage(toolCall, `${toolCall.id} result`));
+        },
+      }),
+    );
+
+    assert.equal(providerCalls, 11);
+    assert.equal(delegatedBatches.length, 10);
+    assert.deepEqual(
+      delegatedBatches,
+      firstTenBatches.map((batch) => batch.map((toolCall) => toolCall.id)),
+    );
+    assert.equal(delegatedBatches.flat().length, 21);
+    assert.deepEqual(
+      result.functionCalls.map((toolCall) => toolCall.id),
+      ['call_11_1'],
+    );
   });
 
   it('does not auto-continue unknown tool calls', async () => {

@@ -36,7 +36,17 @@ test('graph tree header preserves action order, filter behavior, and Node librar
   assert.match(header, /nodeLibraryItemCount > 0/);
   assert.match(header, /\{\.\.\.GRAPH_FILTER_INPUT_MARKER\}/);
   assert.match(header, /aria-label="Filter graphs"/);
+  assert.match(header, /className="graph-list-filter"[\s\S]*!hasWebApps[\s\S]*<span>Create web app<\/span>/);
   assert.match(filterFocus, /GRAPH_FILTER_INPUT_MARKER/);
+});
+
+test('web app resources use an empty-state create action until the first app exists', () => {
+  const source = readComponent('GraphList.tsx');
+
+  assert.match(source, /const uiGraphs = Object\.values\(project\.uiGraphs \?\? \{\}\);/);
+  assert.match(source, /hasWebApps=\{uiGraphs\.length > 0\}/);
+  assert.match(source, /\{uiGraphs\.length > 0 && \([\s\S]*<UiGraphResourceSection/);
+  assert.match(source, /onCreateWebApp=\{handleCreateUiGraph\}/);
 });
 
 test('graph tree styles keep compact selected and reachability presentation', () => {

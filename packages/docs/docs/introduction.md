@@ -1,5 +1,5 @@
 ---
-slug: /
+slug: /user-guide
 ---
 
 # Introduction to Rivet
@@ -40,9 +40,12 @@ Rivet projects can contain multiple graphs, datasets, plugin usage, and app-spec
 
 See [working with projects](/user-guide/working-with-projects), [working with graphs](/user-guide/working-with-graphs), and [executing workflows](/user-guide/executing-ai-chains).
 
-### Use App Workspaces
+### Inspect Complete Runs
 
-The desktop app includes workspaces for Prompt Designer, Chat Viewer, Data Studio, and Trivet tests. These tools help you tune prompts, inspect chat outputs, manage datasets, and test graphs from the same Rivet window.
+The desktop app includes Prompt Designer, Data Studio, Trivet tests, and a
+run-level [Run Activity](/user-guide/features/run-activity) drawer. Run Activity
+keeps the graph canvas available while you follow activity across the root
+graph, subgraphs, LLM calls, delegated tools, and errors.
 
 ### Extend Rivet With Plugins
 

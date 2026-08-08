@@ -6,6 +6,7 @@ import type { OutputRenderMode } from '../renderDataValue/outputRenderTypes.js';
 export type NodeOutputRenderPolicyProps = {
   renderMode?: OutputRenderMode;
   allowLargeStoredValueActions?: boolean;
+  autoCollapseLlmChatDiagnosticOutputs?: boolean;
   wrapLines?: boolean;
 };
 

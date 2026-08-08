@@ -4,6 +4,8 @@ import type { Outputs } from '../GraphProcessor.js';
 import type { InternalProcessContext } from '../ProcessContext.js';
 import type { AssistantMessageFunctionCallMode, StreamedFunctionCall } from '../chat/streamChatResponse.js';
 import type { ChatV2Provider } from './chatV2ProviderTypes.js';
+import type { ChatV2ResponseBodyCapture } from './chatV2ResponseBodyCapture.js';
+import type { CustomProviderApi } from './customProviderApi.js';
 
 export type { ChatV2Provider };
 
@@ -118,11 +120,12 @@ export type RunChatV2PipelineOptions = {
   toolChoice?: ChatV2ToolChoice | undefined;
   anthropicCacheControlTtl?: '5m' | '1h' | undefined;
   requestBodies?: unknown[] | undefined;
+  responseBodies?: unknown[] | undefined;
+  responseBodyCapture?: ChatV2ResponseBodyCapture | undefined;
   outputUsage?: boolean | undefined;
   outputReasoning?: boolean | undefined;
-  outputRequestStatus?: boolean | undefined;
-  outputRequestError?: boolean | undefined;
   outputRequestBody?: boolean | undefined;
+  outputResponseBody?: boolean | undefined;
   includeFunctionCalls?: boolean | undefined;
   emitPartialOutputs?: boolean | undefined;
   functionCallMode?: AssistantMessageFunctionCallMode | undefined;
@@ -136,6 +139,8 @@ export type RunChatV2PipelineOptions = {
    */
   profileIndex?: number | undefined;
   roundIndex?: number | undefined;
+  /** Selected wire contract for Custom-provider calls. Never sent to the provider. */
+  customProviderApi?: CustomProviderApi | undefined;
   /** Internal physical-call trace used by the LLM Profile fallback coordinator. */
   onProviderAttempt?: ((attempt: ChatV2ProviderAttempt) => void) | undefined;
   context: Pick<InternalProcessContext, 'signal' | 'onPartialOutputs'> &
@@ -144,26 +149,21 @@ export type RunChatV2PipelineOptions = {
   executeGenerate?: ChatV2GenerateExecutor | undefined;
 };
 
-/**
- * Older LLM Chat nodes used Output request details as one switch for status,
- * error, and request body. Keep that saved contract intact while newly saved
- * nodes use the independent controls.
- */
-export function shouldOutputChatV2RequestError(
-  options: Pick<RunChatV2PipelineOptions, 'outputRequestStatus' | 'outputRequestError'>,
-): boolean {
-  return options.outputRequestError ?? options.outputRequestStatus ?? false;
+/** Provider-neutral per-round fields. Candidate resolution supplies the model. */
+export type ChatV2PipelineRoundOptions = Omit<RunChatV2PipelineOptions, 'model'>;
+
+export function shouldOutputChatV2RequestBody(options: Pick<RunChatV2PipelineOptions, 'outputRequestBody'>): boolean {
+  return options.outputRequestBody === true;
 }
 
-export function shouldOutputChatV2RequestBody(
-  options: Pick<RunChatV2PipelineOptions, 'outputRequestStatus' | 'outputRequestBody'>,
-): boolean {
-  return options.outputRequestBody ?? options.outputRequestStatus ?? false;
+/** New diagnostics are opt-in; old status-detail nodes never expose responses. */
+export function shouldOutputChatV2ResponseBody(options: Pick<RunChatV2PipelineOptions, 'outputResponseBody'>): boolean {
+  return options.outputResponseBody === true;
 }
 
 export type ChatV2ProviderAttempt = {
   attemptIndex: number;
-  outcome: 'success' | 'provider-failure';
+  outcome: 'success' | 'provider-failure' | 'aborted';
   status?: number | undefined;
   error?: unknown;
 };
@@ -180,4 +180,11 @@ export type ChatV2PipelineResult = {
   finishReason: string | undefined;
   providerMetadata: ChatV2ProviderMetadata | undefined;
   requestStatus: number | undefined;
+  /**
+   * Internal terminal classification for a provider request that produced
+   * diagnostic outputs instead of throwing. A non-200 response can still
+   * carry partial text or tool-like data; it must never enter tool
+   * continuation as though the provider completed successfully.
+   */
+  terminalOutcome?: 'provider-failure' | undefined;
 };

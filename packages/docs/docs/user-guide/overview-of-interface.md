@@ -26,7 +26,7 @@ Rivet can show a broken-thread icon next to graphs that are unreachable from the
 
 The **Web Apps** section below the graph tree lists the project's declarative web-app screens. Use **New web app** there to add one. Selecting a web app opens its builder instead of a workflow canvas; see [Rivet Web Apps](./rivet-web-apps.md) for the full building and serving guide.
 
-Use the search button in the top bar, or press **Ctrl+F** or **Cmd+F**, to search across graph names and node content in the current project. When matches are found, Rivet shows how many text occurrences were found and how many graphs contain them.
+Use the search button in the top bar, or press **Ctrl+F** or **Cmd+F**, to search across graph names and node content in the current project. When matches are found, Rivet shows how many text occurrences were found and how many graphs contain them. Rivet shortcuts continue to work when you switch your keyboard language or layout.
 
 To delete a graph, right click on it and select "Delete". This will delete the graph from your project.
 
@@ -106,13 +106,15 @@ Markdown editors in node settings can fold heading sections and fenced code bloc
 
 Monaco text and code editors include editor tools in the right-click menu. **Check spelling** runs a local English spellcheck only when triggered, highlights possible misspellings in the editor, and does not send text anywhere. **Prettify** uses the editor's built-in formatter when one is available, and **JSON escape** / **JSON unescape** work on the selected text.
 
+If Monaco warns that a document contains many ambiguous Unicode characters, **Disable Ambiguous Highlight** immediately turns off that kind of highlighting in every current text/code editor. The choice lasts for the current Rivet session and resets when Rivet is reloaded.
+
 In JSON editors, hover or place the cursor on a string value and use the inline preview button at the end of that string to view and copy the decoded, unescaped text. In editable node settings, the preview also has an **Edit** action: edit the decoded text in the modal and click **Save** to write it back to the JSON field as an escaped JSON string. The edit modal can be resized from its bottom-right corner, and Rivet remembers that size. This works on complete string values even while the surrounding JSON is still being edited. In the full output modal, the same preview is read-only and is shown only for escaped or long string values. Drag the preview's bottom-left corner to adjust its width and maximum text height; Rivet remembers the size.
 
 When the **Bright** theme is active, node text and code editors use Monaco's light editor theme so Comment, Code, Expression, JS Filter, and LLM Chat technical-option editors match the rest of the light interface.
 
 ## Workspaces
 
-The top app bar contains workspace tabs. Canvas is the normal graph-editing workspace. Other workspaces, such as Trivet Tests, Chat Viewer, and Data Studio, open full-screen workspace views. When no project is open, the top bar shows a Welcome screen tab so you can return to the centered welcome screen after opening a project-independent workspace. Run/debug controls are shown only while Canvas is active.
+The top app bar contains workspace tabs. Canvas is the normal graph-editing workspace. Other workspaces, such as Trivet Tests and Data Studio, open full-screen workspace views. When no project is open, the top bar shows a Welcome screen tab so you can return to the centered welcome screen after opening a project-independent workspace. Run/debug controls are shown only while Canvas is active.
 
 ### Prompt Designer
 
@@ -122,11 +124,14 @@ The prompt designer allows you to tweak an individual prompt to get the output y
 
 Trivet allows you to set up test suites and test cases for your project. See the [Trivet](../trivet.md) documentation for more information.
 
-### Chat Viewer
+### Run Activity
 
-The chat viewer gives you a full-screen view of Chat and LLM Chat nodes that have produced chat content. Its top-bar tab appears only when there is something to view.
-
-This view can give you a quick overview of how your AI is performing, and what it is doing at any given time. It can also be used to debug issues with your AI.
+Run Activity is a resizable editor drawer for the current or latest root
+execution. It keeps the canvas available while showing activity from the root
+graph, subgraphs, repeated node invocations, model calls, delegated tools, and
+errors. Click the **Runtime** control in the lower-right status bar to toggle
+the drawer. Use its row actions to return to the exact graph run and node
+process represented by an entry. See [Run Activity](./features/run-activity.md).
 
 ## Action Bar
 

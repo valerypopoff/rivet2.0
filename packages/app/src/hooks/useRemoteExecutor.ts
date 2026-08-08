@@ -24,7 +24,7 @@ import { trivetState } from '../state/trivet';
 import { runTrivet } from '@valerypopoff/trivet';
 import { produce } from 'immer';
 import { userInputModalQuestionsState } from '../state/userInput';
-import { frozenNodeOutputsState, lastRunDataByNodeState } from '../state/dataFlow';
+import { frozenNodeOutputsState, graphRunningState, lastRunDataByNodeState } from '../state/dataFlow';
 import { useAtomValue, useSetAtom, useAtom, useStore } from 'jotai';
 import { type RefObject, useEffect, useRef } from 'react';
 import { useProjectNodeRegistry } from './useProjectNodeRegistry';
@@ -68,6 +68,14 @@ import {
 } from './remoteDebuggerDiagnostics.js';
 import type { EditorGraphRunOptions } from './editorGraphRunOptions.js';
 import { waitForExecutorSessionRunCapability } from './executorSessionRunReadiness.js';
+import {
+  captureRemoteResponseTraceRootExecution,
+  collectRemoteAgentTraceEvent,
+  emitRemoteResponseTrace,
+  type RemoteResponseTraceState,
+} from './remoteResponseTrace.js';
+
+type RemoteExecutorMessageHandler = Parameters<ExecutorSessionRuntime['subscribeMessages']>[0];
 
 export function useRemoteExecutor() {
   const executorSession = useExecutorSessionRuntime();
@@ -78,6 +86,7 @@ export function useRemoteExecutor() {
   const webAppStoragePatchCallbacksByRequestIdRef = useRef(
     new Map<RemoteRunRequestId, (storagePatch: RivetWebAppStorage) => void>(),
   );
+  const responseTraceByRequestIdRef = useRef(new Map<RemoteRunRequestId, RemoteResponseTraceState>());
   const externalDebuggerRunFlushedFrozenOutputsRef = useRef(false);
   const remoteDebuggerDiagnosticsRef = useRef(createRemoteDebuggerDiagnostics());
   const unscopedEventRoutingRef = useRef(createUnscopedRemoteExecutionRoutingState());
@@ -113,11 +122,17 @@ export function useRemoteExecutor() {
       clearActiveRemoteRunRequest(activeGraphRequestIdRef);
       earlyResultRequestIdsRef.current.clear();
       webAppStoragePatchCallbacksByRequestIdRef.current.clear();
+      responseTraceByRequestIdRef.current.clear();
       executorSession.setActiveGraphRunRequestId(null);
       if (store.get(projectState).metadata.id !== project.metadata.id) {
         return;
       }
 
+      if (store.get(graphRunningState)) {
+        currentExecution.onRunActivityEvent('error', {
+          error: new Error('Remote executor disconnected before the graph run reached a terminal event.'),
+        });
+      }
       currentExecution.onStop();
     },
   });
@@ -146,215 +161,245 @@ export function useRemoteExecutor() {
     };
   }, [executorSession]);
 
-  useEffect(() => {
-    return executorSession.subscribeMessages((message, data, requestId) => {
-      if (store.get(projectState).metadata.id !== project.metadata.id) {
-        return;
-      }
+  const handleExecutorMessage: RemoteExecutorMessageHandler = useStableCallback((message, data, requestId) => {
+    if (store.get(projectState).metadata.id !== project.metadata.id) {
+      return;
+    }
 
-      const sessionState = executorSession.getRuntimeState();
-      const externalDebuggerTarget =
-        sessionState.target?.type === 'external-debugger' ? sessionState.target : undefined;
-      const routingBefore = externalDebuggerTarget
-        ? summarizeRemoteDebuggerRoutingState(unscopedEventRoutingRef.current)
-        : undefined;
-      const eventSummary = externalDebuggerTarget ? summarizeRemoteDebuggerEvent(message, data) : undefined;
-      const dispatchDecision = getRemoteExecutionEventDispatchDecision({
-        activeRequestId: activeGraphRequestIdRef.current ?? executorSession.getActiveGraphRunRequestId(),
+    const sessionState = executorSession.getRuntimeState();
+    const externalDebuggerTarget = sessionState.target?.type === 'external-debugger' ? sessionState.target : undefined;
+    const routingBefore = externalDebuggerTarget
+      ? summarizeRemoteDebuggerRoutingState(unscopedEventRoutingRef.current)
+      : undefined;
+    const eventSummary = externalDebuggerTarget ? summarizeRemoteDebuggerEvent(message, data) : undefined;
+    const dispatchDecision = getRemoteExecutionEventDispatchDecision({
+      activeRequestId: activeGraphRequestIdRef.current ?? executorSession.getActiveGraphRunRequestId(),
+      currentProjectId: project.metadata.id,
+      data,
+      message,
+      requestId,
+      unscopedRoutingState: unscopedEventRoutingRef.current,
+    });
+    const shouldDispatchExecutionEvent = dispatchDecision.shouldDispatch;
+    const routingAfter = externalDebuggerTarget
+      ? summarizeRemoteDebuggerRoutingState(unscopedEventRoutingRef.current)
+      : undefined;
+
+    if (
+      shouldFlushFrozenNodeOutputsForRemoteDebuggerEvent({
+        alreadyFlushed: externalDebuggerRunFlushedFrozenOutputsRef.current,
+        message,
+        shouldDispatchExecutionEvent,
+        target: externalDebuggerTarget,
+      })
+    ) {
+      externalDebuggerRunFlushedFrozenOutputsRef.current = true;
+      setFrozenNodeOutputs({});
+    }
+
+    if (externalDebuggerTarget && routingBefore && routingAfter && eventSummary) {
+      remoteDebuggerDiagnosticsRef.current.recordEvent({
+        activeRequestId: activeGraphRequestIdRef.current,
         currentProjectId: project.metadata.id,
-        data,
+        decision: dispatchDecision,
+        event: eventSummary,
         message,
         requestId,
-        unscopedRoutingState: unscopedEventRoutingRef.current,
+        routingAfter,
+        routingBefore,
+        session: {
+          status: sessionState.status,
+          targetType: externalDebuggerTarget.type,
+          url: externalDebuggerTarget.url,
+        },
       });
-      const shouldDispatchExecutionEvent = dispatchDecision.shouldDispatch;
-      const routingAfter = externalDebuggerTarget
-        ? summarizeRemoteDebuggerRoutingState(unscopedEventRoutingRef.current)
-        : undefined;
+    }
 
-      if (
-        shouldFlushFrozenNodeOutputsForRemoteDebuggerEvent({
-          alreadyFlushed: externalDebuggerRunFlushedFrozenOutputsRef.current,
-          message,
-          shouldDispatchExecutionEvent,
-          target: externalDebuggerTarget,
-        })
-      ) {
-        externalDebuggerRunFlushedFrozenOutputsRef.current = true;
-        setFrozenNodeOutputs({});
-      }
-
-      if (externalDebuggerTarget && routingBefore && routingAfter && eventSummary) {
-        remoteDebuggerDiagnosticsRef.current.recordEvent({
-          activeRequestId: activeGraphRequestIdRef.current,
-          currentProjectId: project.metadata.id,
-          decision: dispatchDecision,
-          event: eventSummary,
-          message,
-          requestId,
-          routingAfter,
-          routingBefore,
-          session: {
-            status: sessionState.status,
-            targetType: externalDebuggerTarget.type,
-            url: externalDebuggerTarget.url,
-          },
-        });
-      }
-
-      switch (message) {
-        case 'codeConsole':
-          if (shouldDispatchExecutionEvent) {
-            logCodeConsoleMessage(data as CodeConsoleMessage);
-          }
-          break;
-        case 'nodeStart':
-          if (shouldDispatchExecutionEvent) {
-            eventDispatcher.nodeStart(data);
-          }
-          break;
-        case 'nodeFinish':
-          if (shouldDispatchExecutionEvent) {
-            eventDispatcher.nodeFinish(data);
-          }
-          break;
-        case 'nodeError':
-          if (shouldDispatchExecutionEvent) {
-            eventDispatcher.nodeError(data);
-            if (eventSummary && isAbortLikeRemoteDebuggerNodeError(data)) {
-              remoteDebuggerDiagnosticsRef.current.logUnexpectedAbortNodeError(eventSummary);
-            }
-          }
-          break;
-        case 'userInput':
-          if (shouldDispatchExecutionEvent) {
-            eventDispatcher.userInput(data);
-          }
-          break;
-        case 'start':
-          if (shouldDispatchExecutionEvent) {
-            eventDispatcher.start(data);
-          }
-          break;
-        case 'done':
-          executorSession.resolvePendingGraphExecution(requestId, (data as { results: unknown }).results as any);
-          if (requestId) {
-            earlyResultRequestIdsRef.current.delete(requestId);
-            webAppStoragePatchCallbacksByRequestIdRef.current.delete(requestId);
-          }
-          clearActiveRemoteRunRequestIfMatches(activeGraphRequestIdRef, requestId);
-          if (requestId === executorSession.getActiveGraphRunRequestId()) {
-            executorSession.setActiveGraphRunRequestId(null);
-          }
-          if (shouldDispatchExecutionEvent) {
-            eventDispatcher.done(data);
-          }
-          break;
-        case 'graphOutputsReady':
-          if (requestId) {
-            earlyResultRequestIdsRef.current.add(requestId);
-            webAppStoragePatchCallbacksByRequestIdRef.current.delete(requestId);
-          }
-          executorSession.resolvePendingGraphExecution(requestId, (data as { outputs: GraphOutputs }).outputs);
-          break;
-        case 'webAppStoragePatch': {
-          const callback = requestId ? webAppStoragePatchCallbacksByRequestIdRef.current.get(requestId) : undefined;
-          if (callback) {
-            try {
-              callback((data as ProcessEventMessageMap['webAppStoragePatch']).storagePatch);
-            } catch (error) {
-              handleError(error, 'Failed to apply web app storage returned by the executor.');
-            }
-          }
-          break;
+    switch (message) {
+      case 'codeConsole':
+        if (shouldDispatchExecutionEvent) {
+          logCodeConsoleMessage(data as CodeConsoleMessage);
         }
-        case 'abort':
-          executorSession.rejectPendingGraphExecution(requestId, new Error('graph execution aborted'));
-          if (requestId) {
-            earlyResultRequestIdsRef.current.delete(requestId);
-            webAppStoragePatchCallbacksByRequestIdRef.current.delete(requestId);
+        break;
+      case 'nodeStart':
+        if (shouldDispatchExecutionEvent) {
+          eventDispatcher.nodeStart(data);
+        }
+        break;
+      case 'nodeFinish':
+        if (shouldDispatchExecutionEvent) {
+          eventDispatcher.nodeFinish(data);
+        }
+        break;
+      case 'nodeError':
+        if (shouldDispatchExecutionEvent) {
+          eventDispatcher.nodeError(data);
+          if (eventSummary && isAbortLikeRemoteDebuggerNodeError(data)) {
+            remoteDebuggerDiagnosticsRef.current.logUnexpectedAbortNodeError(eventSummary);
           }
-          clearActiveRemoteRunRequestIfMatches(activeGraphRequestIdRef, requestId);
-          if (requestId === executorSession.getActiveGraphRunRequestId()) {
-            executorSession.setActiveGraphRunRequestId(null);
+        }
+        break;
+      case 'userInput':
+        if (shouldDispatchExecutionEvent) {
+          eventDispatcher.userInput(data);
+        }
+        break;
+      case 'start':
+        captureRemoteResponseTraceRootExecution(responseTraceByRequestIdRef.current, requestId, data);
+        if (shouldDispatchExecutionEvent) {
+          eventDispatcher.start(data);
+        }
+        break;
+      case 'done':
+        executorSession.resolvePendingGraphExecution(requestId, (data as { results: unknown }).results as any);
+        if (requestId) {
+          earlyResultRequestIdsRef.current.delete(requestId);
+          webAppStoragePatchCallbacksByRequestIdRef.current.delete(requestId);
+          responseTraceByRequestIdRef.current.delete(requestId);
+        }
+        clearActiveRemoteRunRequestIfMatches(activeGraphRequestIdRef, requestId);
+        if (requestId === executorSession.getActiveGraphRunRequestId()) {
+          executorSession.setActiveGraphRunRequestId(null);
+        }
+        if (shouldDispatchExecutionEvent) {
+          eventDispatcher.done(data);
+        }
+        break;
+      case 'graphOutputsReady':
+        emitRemoteResponseTrace(responseTraceByRequestIdRef.current, requestId, data, true);
+        if (shouldDispatchExecutionEvent) {
+          eventDispatcher.graphOutputsReady(data);
+        }
+        if (requestId) {
+          earlyResultRequestIdsRef.current.add(requestId);
+          webAppStoragePatchCallbacksByRequestIdRef.current.delete(requestId);
+        }
+        executorSession.resolvePendingGraphExecution(requestId, (data as { outputs: GraphOutputs }).outputs);
+        break;
+      case 'webAppStoragePatch': {
+        const callback = requestId ? webAppStoragePatchCallbacksByRequestIdRef.current.get(requestId) : undefined;
+        if (callback) {
+          try {
+            callback((data as ProcessEventMessageMap['webAppStoragePatch']).storagePatch);
+          } catch (error) {
+            handleError(error, 'Failed to apply web app storage returned by the executor.');
           }
-          if (shouldDispatchExecutionEvent) {
-            eventDispatcher.abort(data);
-          }
-          break;
-        case 'graphAbort':
-          if (shouldDispatchExecutionEvent) {
-            eventDispatcher.graphAbort(data);
-          }
-          break;
-        case 'graphError':
-          if (shouldDispatchExecutionEvent) {
-            eventDispatcher.graphError(data);
-          }
-          break;
-        case 'partialOutput':
-          if (shouldDispatchExecutionEvent) {
-            eventDispatcher.partialOutput(data);
-          }
-          break;
-        case 'progress':
-          executorSession.reportPendingGraphProgress(requestId, (data as ProcessEventMessageMap['progress']).progress);
-          break;
-        case 'graphStart':
-          if (shouldDispatchExecutionEvent) {
-            eventDispatcher.graphStart(data);
-          }
-          break;
-        case 'graphFinish':
-          if (shouldDispatchExecutionEvent) {
-            eventDispatcher.graphFinish(data);
-          }
-          break;
-        case 'nodeOutputsCleared':
-          if (shouldDispatchExecutionEvent) {
-            eventDispatcher.nodeOutputsCleared(data);
-          }
-          break;
-        case 'trace':
-          if (shouldDispatchExecutionEvent) {
-            logRuntimeDebug('Remote graph trace', { trace: data });
-          }
-          break;
-        case 'pause':
-          if (shouldDispatchExecutionEvent) {
-            eventDispatcher.pause();
-          }
-          break;
-        case 'resume':
-          if (shouldDispatchExecutionEvent) {
-            eventDispatcher.resume();
-          }
-          break;
-        case 'error':
-          executorSession.rejectPendingGraphExecution(requestId, (data as { error: Error }).error);
-          if (requestId) {
-            earlyResultRequestIdsRef.current.delete(requestId);
-            webAppStoragePatchCallbacksByRequestIdRef.current.delete(requestId);
-          }
-          clearActiveRemoteRunRequestIfMatches(activeGraphRequestIdRef, requestId);
-          if (requestId === executorSession.getActiveGraphRunRequestId()) {
-            executorSession.setActiveGraphRunRequestId(null);
-          }
-          if (shouldDispatchExecutionEvent) {
-            eventDispatcher.error(data);
-          }
-          break;
-        case 'nodeExcluded':
-          if (shouldDispatchExecutionEvent) {
-            eventDispatcher.nodeExcluded(data);
-            if (eventSummary && shouldLogRemoteDebuggerNodeExcluded(eventSummary)) {
-              remoteDebuggerDiagnosticsRef.current.logNodeExcluded(eventSummary);
-            }
-          }
-          break;
+        }
+        break;
       }
-    });
-  }, [eventDispatcher, executorSession, project.metadata.id, setFrozenNodeOutputs, store]);
+      case 'abort':
+        executorSession.rejectPendingGraphExecution(requestId, new Error('graph execution aborted'));
+        if (requestId) {
+          earlyResultRequestIdsRef.current.delete(requestId);
+          webAppStoragePatchCallbacksByRequestIdRef.current.delete(requestId);
+          emitRemoteResponseTrace(responseTraceByRequestIdRef.current, requestId, data, false, 'aborted');
+          responseTraceByRequestIdRef.current.delete(requestId);
+        }
+        clearActiveRemoteRunRequestIfMatches(activeGraphRequestIdRef, requestId);
+        if (requestId === executorSession.getActiveGraphRunRequestId()) {
+          executorSession.setActiveGraphRunRequestId(null);
+        }
+        if (shouldDispatchExecutionEvent) {
+          eventDispatcher.abort(data);
+        }
+        break;
+      case 'graphAbort':
+        emitRemoteResponseTrace(responseTraceByRequestIdRef.current, requestId, data, false, 'aborted');
+        if (shouldDispatchExecutionEvent) {
+          eventDispatcher.graphAbort(data);
+        }
+        break;
+      case 'graphError':
+        emitRemoteResponseTrace(responseTraceByRequestIdRef.current, requestId, data, false, 'error');
+        if (shouldDispatchExecutionEvent) {
+          eventDispatcher.graphError(data);
+        }
+        break;
+      case 'partialOutput':
+        if (shouldDispatchExecutionEvent) {
+          eventDispatcher.partialOutput(data);
+        }
+        break;
+      case 'llmCallFinished':
+        collectRemoteAgentTraceEvent(responseTraceByRequestIdRef.current, requestId, 'llm-call-finished', data);
+        if (shouldDispatchExecutionEvent) {
+          eventDispatcher.llmCallFinished(data);
+        }
+        break;
+      case 'toolCallFinished':
+        collectRemoteAgentTraceEvent(responseTraceByRequestIdRef.current, requestId, 'tool-call-finished', data);
+        if (shouldDispatchExecutionEvent) {
+          eventDispatcher.toolCallFinished(data);
+        }
+        break;
+      case 'progress':
+        executorSession.reportPendingGraphProgress(requestId, (data as ProcessEventMessageMap['progress']).progress);
+        if (shouldDispatchExecutionEvent) {
+          eventDispatcher.progress(data);
+        }
+        break;
+      case 'graphStart':
+        captureRemoteResponseTraceRootExecution(responseTraceByRequestIdRef.current, requestId, data);
+        if (shouldDispatchExecutionEvent) {
+          eventDispatcher.graphStart(data);
+        }
+        break;
+      case 'graphFinish':
+        emitRemoteResponseTrace(responseTraceByRequestIdRef.current, requestId, data, false);
+        if (shouldDispatchExecutionEvent) {
+          eventDispatcher.graphFinish(data);
+        }
+        break;
+      case 'nodeOutputsCleared':
+        if (shouldDispatchExecutionEvent) {
+          eventDispatcher.nodeOutputsCleared(data);
+        }
+        break;
+      case 'trace':
+        if (shouldDispatchExecutionEvent) {
+          logRuntimeDebug('Remote graph trace', { trace: data });
+        }
+        break;
+      case 'pause':
+        if (shouldDispatchExecutionEvent) {
+          eventDispatcher.pause(data);
+        }
+        break;
+      case 'resume':
+        if (shouldDispatchExecutionEvent) {
+          eventDispatcher.resume(data);
+        }
+        break;
+      case 'error':
+        executorSession.rejectPendingGraphExecution(requestId, (data as { error: Error }).error);
+        if (requestId) {
+          earlyResultRequestIdsRef.current.delete(requestId);
+          webAppStoragePatchCallbacksByRequestIdRef.current.delete(requestId);
+          emitRemoteResponseTrace(responseTraceByRequestIdRef.current, requestId, data, false, 'error');
+          responseTraceByRequestIdRef.current.delete(requestId);
+        }
+        clearActiveRemoteRunRequestIfMatches(activeGraphRequestIdRef, requestId);
+        if (requestId === executorSession.getActiveGraphRunRequestId()) {
+          executorSession.setActiveGraphRunRequestId(null);
+        }
+        if (shouldDispatchExecutionEvent) {
+          eventDispatcher.error(data);
+        }
+        break;
+      case 'nodeExcluded':
+        if (shouldDispatchExecutionEvent) {
+          eventDispatcher.nodeExcluded(data);
+          if (eventSummary && shouldLogRemoteDebuggerNodeExcluded(eventSummary)) {
+            remoteDebuggerDiagnosticsRef.current.logNodeExcluded(eventSummary);
+          }
+        }
+        break;
+    }
+  });
+
+  useEffect(() => {
+    return executorSession.subscribeMessages(handleExecutorMessage);
+  }, [executorSession, handleExecutorMessage]);
 
   const tryRunGraph = async (options: EditorGraphRunOptions = {}): Promise<GraphOutputs | undefined> => {
     options.abortSignal?.throwIfAborted();
@@ -473,12 +518,23 @@ export function useRemoteExecutor() {
             if (options.onWebAppStoragePatch) {
               webAppStoragePatchCallbacksByRequestIdRef.current.set(requestId, options.onWebAppStoragePatch);
             }
+            if (options.onResponseTrace) {
+              responseTraceByRequestIdRef.current.set(requestId, {
+                callback: options.onResponseTrace,
+                events: [],
+                startedAt: Date.now(),
+                delivered: false,
+              });
+            }
           },
           onRequestSettled: (requestId) => {
             if (earlyResultRequestIdsRef.current.has(requestId)) {
               return;
             }
             webAppStoragePatchCallbacksByRequestIdRef.current.delete(requestId);
+            if (!earlyResultRequestIdsRef.current.has(requestId)) {
+              responseTraceByRequestIdRef.current.delete(requestId);
+            }
             clearActiveRemoteRunRequestIfMatches(activeGraphRequestIdRef, requestId);
             if (requestId === executorSession.getActiveGraphRunRequestId()) {
               executorSession.setActiveGraphRunRequestId(null);

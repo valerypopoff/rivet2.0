@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   WarningsPort,
+  type AgentTraceEvent,
   type DataValue,
   type GraphId,
   type GraphRunId,
@@ -12,6 +13,7 @@ import {
   type RootRunId,
 } from '@valerypopoff/rivet2-core';
 import type { DataRefStore } from '../providers/ProvidersContext.js';
+import { createRunActivityNodeKey } from '../features/runActivity/runActivityJournal.js';
 import { createEmptyProjectExecutionSnapshot, type ProjectExecutionSnapshot } from '../state/dataFlow.js';
 import { MISSING_DEBUGGER_TERMINAL_EVENT_WARNING } from './graphExecutionEventHelpers.js';
 import { applyProcessEventToProjectExecutionSnapshot } from './projectExecutionSnapshotEvents.js';
@@ -215,11 +217,13 @@ test('inactive project snapshot reducer stores hidden user input prompts and cle
         graphRunId,
         rootRunId,
       },
+      inputs: {},
       inputStrings: ['Question?'],
       node: {
         id: nodeId,
       },
       processId,
+      renderingType: 'text',
     } as never,
     message: 'userInput',
     projectId,
@@ -247,4 +251,179 @@ test('inactive project snapshot reducer stores hidden user input prompts and cle
   }).snapshot;
 
   assert.deepEqual(finishedSnapshot.userInputQuestions, {});
+});
+
+test('inactive project snapshots retain replayed user-input activity without restoring a modal question', () => {
+  const nodeId = 'node-a' as NodeId;
+  const processId = 'replay-process-a' as ProcessId;
+  const projectId = 'project-a' as ProjectId;
+  const graphId = 'graph-a' as GraphId;
+  const graphRunId = 'replay-graph-run-a' as GraphRunId;
+  const rootRunId = 'replay-root-run-a' as RootRunId;
+  const refStore = createDataRefStore();
+
+  const snapshot = applyProcessEventToProjectExecutionSnapshot({
+    data: {
+      execution: { graphId, graphRunId, rootRunId },
+      inputs: {},
+      inputStrings: ['Historical question?'],
+      isReplay: true,
+      node: { id: nodeId },
+      processId,
+      renderingType: 'markdown',
+    } as never,
+    message: 'userInput',
+    projectId,
+    refStore,
+    snapshot: createEmptyProjectExecutionSnapshot(),
+  }).snapshot;
+
+  assert.deepEqual(snapshot.userInputQuestions, {});
+  assert.equal(snapshot.selectedProcessPageNodes[nodeId], undefined);
+
+  const invocation =
+    snapshot.runActivityJournal.rootsById[rootRunId]!.nodeInvocationsByKey[
+      createRunActivityNodeKey({ graphRunId, nodeId, processId, rootRunId })
+    ]!;
+  assert.equal(invocation.status, 'waiting');
+  assert.deepEqual(invocation.waitingForUserInput, { questionCount: 1, renderingType: 'markdown' });
+});
+
+test('inactive project snapshots retain their live pause state while replaying historical pause lifecycle events', () => {
+  const projectId = 'project-a' as ProjectId;
+  const refStore = createDataRefStore();
+  const snapshot = { ...createEmptyProjectExecutionSnapshot(), graphPaused: true };
+
+  const afterPause = applyProcessEventToProjectExecutionSnapshot({
+    data: { isReplay: true },
+    message: 'pause',
+    projectId,
+    refStore,
+    snapshot,
+  }).snapshot;
+  const afterResume = applyProcessEventToProjectExecutionSnapshot({
+    data: { isReplay: true },
+    message: 'resume',
+    projectId,
+    refStore,
+    snapshot: afterPause,
+  }).snapshot;
+
+  assert.equal(afterPause.graphPaused, true);
+  assert.equal(afterResume.graphPaused, true);
+});
+
+test('inactive project snapshot reducer upserts identified model and tool trace events', () => {
+  const projectId = 'project-a' as ProjectId;
+  const graphId = 'graph-a' as GraphId;
+  const graphRunId = 'graph-run-a' as GraphRunId;
+  const rootRunId = 'root-run-a' as RootRunId;
+  const nodeId = 'llm-node' as NodeId;
+  const processId = 'llm-process' as ProcessId;
+  const refStore = createDataRefStore();
+  const execution = { graphId, graphRunId, rootRunId };
+  let snapshot = createEmptyProjectExecutionSnapshot();
+
+  for (const durationMs of [10, 12]) {
+    snapshot = applyProcessEventToProjectExecutionSnapshot({
+      data: {
+        attemptIndex: 0,
+        callId: 'model-call',
+        durationMs,
+        execution,
+        model: 'gpt-test',
+        nodeId,
+        outcome: 'success',
+        pricing: { status: 'unknown' },
+        processId,
+        provider: 'custom',
+        customProviderApi: 'responses',
+      } as never,
+      message: 'llmCallFinished',
+      projectId,
+      refStore,
+      snapshot,
+    }).snapshot;
+  }
+
+  for (const [index, durationMs] of [4, 6].entries()) {
+    snapshot = applyProcessEventToProjectExecutionSnapshot({
+      data: {
+        durationMs,
+        execution,
+        handlerKind: 'graph',
+        outcome: 'success',
+        sourceNodeId: nodeId,
+        sourceProcessId: processId,
+        toolCallId: 'tool-call',
+        toolName: 'lookup',
+        ...(index === 0
+          ? {
+              resultOwner: {
+                nodeId: 'delegate-node' as NodeId,
+                processId: 'delegate-process' as ProcessId,
+                outputPortId: 'output' as PortId,
+              },
+            }
+          : {}),
+      } as never,
+      message: 'toolCallFinished',
+      projectId,
+      refStore,
+      snapshot,
+    }).snapshot;
+  }
+
+  const events = snapshot.lastRunDataByNode[nodeId]?.[0]?.data.agentTraceEvents;
+  assert.equal(events?.length, 2);
+  assert.equal(events?.[0]?.type, 'llm-call-finished');
+  assert.equal(events?.[0]?.durationMs, 12);
+  assert.equal(
+    (events?.[0] as Extract<AgentTraceEvent, { type: 'llm-call-finished' }> | undefined)?.customProviderApi,
+    'responses',
+  );
+  assert.equal(events?.[1]?.type, 'tool-call-finished');
+  assert.equal(events?.[1]?.durationMs, 6);
+  assert.deepEqual((events?.[1] as Extract<AgentTraceEvent, { type: 'tool-call-finished' }> | undefined)?.resultOwner, {
+    nodeId: 'delegate-node',
+    processId: 'delegate-process',
+    outputPortId: 'output',
+  });
+});
+
+test('inactive project snapshot reducer keeps anonymous tool trace events distinct', () => {
+  const projectId = 'project-a' as ProjectId;
+  const graphId = 'graph-a' as GraphId;
+  const graphRunId = 'graph-run-a' as GraphRunId;
+  const rootRunId = 'root-run-a' as RootRunId;
+  const nodeId = 'llm-node' as NodeId;
+  const processId = 'llm-process' as ProcessId;
+  const refStore = createDataRefStore();
+  const execution = { graphId, graphRunId, rootRunId };
+  let snapshot = createEmptyProjectExecutionSnapshot();
+
+  for (const durationMs of [4, 6]) {
+    snapshot = applyProcessEventToProjectExecutionSnapshot({
+      data: {
+        durationMs,
+        execution,
+        handlerKind: 'external',
+        outcome: 'success',
+        sourceNodeId: nodeId,
+        sourceProcessId: processId,
+        toolName: 'anonymous',
+      } as never,
+      message: 'toolCallFinished',
+      projectId,
+      refStore,
+      snapshot,
+    }).snapshot;
+  }
+
+  const events = snapshot.lastRunDataByNode[nodeId]?.[0]?.data.agentTraceEvents;
+  assert.equal(events?.length, 2);
+  assert.deepEqual(
+    events?.map((event) => event.durationMs),
+    [4, 6],
+  );
 });

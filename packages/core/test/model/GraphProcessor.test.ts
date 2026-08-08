@@ -8,9 +8,11 @@ import {
   globalRivetNodeRegistry,
   nodeDefinition,
   type ChartNode,
+  type ChatV2CallFinishedEvent,
   type GraphId,
   type GraphProgress,
   type Inputs,
+  type InternalProcessContext,
   type NodeConnection,
   type NodeId,
   type NodeInputDefinition,
@@ -24,9 +26,10 @@ import {
 } from '../../src/index.js';
 import { loadTestGraphInProcessor, testProcessContext } from '../testUtils';
 
-type TrackedNode = ChartNode<'trackedTest', { delayMs: number }>;
+type TrackedNode = ChartNode<'trackedTest', { delayMs: number; markEditorCacheHit?: boolean }>;
 type FailingNode = ChartNode<'failingTest', { delayMs: number }>;
 type LoopRequiredNode = ChartNode<'loopRequiredTest', Record<string, never>>;
+type ObservedLlmCallNode = ChartNode<'observedLlmCallTest', Record<string, never>>;
 const originalFetch = globalThis.fetch;
 
 afterEach(() => {
@@ -94,13 +97,16 @@ class TrackedTestNodeImpl extends NodeImpl<TrackedNode> {
       : [];
   }
 
-  async process(inputs: Inputs): Promise<Outputs> {
+  async process(inputs: Inputs, context: InternalProcessContext): Promise<Outputs> {
     TrackedTestNodeImpl.activeCount += 1;
     TrackedTestNodeImpl.maxActiveCount = Math.max(TrackedTestNodeImpl.maxActiveCount, TrackedTestNodeImpl.activeCount);
     TrackedTestNodeImpl.processCount += 1;
 
     try {
       await waitFor(this.data.delayMs);
+      if (this.data.markEditorCacheHit) {
+        context.markResultAsEditorCacheHit?.();
+      }
       return inputs['input1' as PortId] != null ? { ['output1' as PortId]: inputs['input1' as PortId] } : {};
     } finally {
       TrackedTestNodeImpl.activeCount -= 1;
@@ -189,6 +195,47 @@ class LoopRequiredTestNodeImpl extends NodeImpl<LoopRequiredNode> {
 
 const loopRequiredTestNode = nodeDefinition(LoopRequiredTestNodeImpl, 'Loop Required Test');
 
+class ObservedLlmCallTestNodeImpl extends NodeImpl<ObservedLlmCallNode> {
+  static create(): ObservedLlmCallNode {
+    return {
+      type: 'observedLlmCallTest',
+      id: 'observed-llm-call-node' as NodeId,
+      title: 'Observed LLM Call Test',
+      visualData: { x: 0, y: 0, width: 175 },
+      data: {},
+    };
+  }
+
+  static getUIData() {
+    return {};
+  }
+
+  getInputDefinitions(): NodeInputDefinition[] {
+    return [];
+  }
+
+  getOutputDefinitions(): NodeOutputDefinition[] {
+    return [{ id: 'output' as PortId, title: 'Output', dataType: 'string' }];
+  }
+
+  process(_inputs: Inputs, context: InternalProcessContext): Outputs {
+    context.onChatV2CallFinished?.({
+      callId: 'nested-call' as never,
+      attemptIndex: 0,
+      nodeId: this.chartNode.id,
+      processId: context.processId!,
+      provider: 'openai',
+      model: 'test-model',
+      outcome: 'success',
+      pricing: { status: 'unknown' },
+    });
+
+    return { ['output' as PortId]: { type: 'string', value: 'done' } };
+  }
+}
+
+const observedLlmCallTestNode = nodeDefinition(ObservedLlmCallTestNodeImpl, 'Observed LLM Call Test');
+
 function createTrackedRegistry() {
   return createBuiltInRegistry().register(trackedTestNode);
 }
@@ -199,6 +246,10 @@ function createTimingRegistry() {
 
 function createLoopRequiredRegistry() {
   return createBuiltInRegistry().register(loopRequiredTestNode);
+}
+
+function createObservedLlmCallRegistry() {
+  return createBuiltInRegistry().register(observedLlmCallTestNode);
 }
 
 function makeProject(graph: any) {
@@ -226,6 +277,20 @@ function makeGraphOutputNode(id = 'output', dataType = 'any') {
       dataType,
     },
     visualData: { x: 500, y: 0, width: 300 },
+  };
+}
+
+function makeSubgraphNode(id: string, graphId: string) {
+  return {
+    id: id as NodeId,
+    type: 'subGraph',
+    title: id,
+    data: {
+      graphId,
+      useErrorOutput: false,
+      useAsGraphPartialOutput: false,
+    },
+    visualData: { x: 0, y: 0, width: 300 },
   };
 }
 
@@ -709,13 +774,19 @@ void describe('GraphProcessor', () => {
     const graph = createSingleNodeGraph(trackedNode, 'timing-disabled-graph');
 
     let untimedFinish: ProcessEvents['nodeFinish'] | undefined;
+    let untimedStart: ProcessEvents['nodeStart'] | undefined;
     const untimedProcessor = new GraphProcessor(makeProject(graph), graph.metadata.id as any, registry);
+    untimedProcessor.on('nodeStart', (event) => {
+      untimedStart = event;
+    });
     untimedProcessor.on('nodeFinish', (event) => {
       untimedFinish = event;
     });
     await untimedProcessor.processGraph(testProcessContext(), {});
 
     assert.equal(Object.prototype.hasOwnProperty.call(untimedFinish!, 'durationMs'), false);
+    assert.equal(untimedStart?.resultOrigin, 'executed');
+    assert.equal(untimedFinish?.resultOrigin, 'executed');
 
     let timedFinish: ProcessEvents['nodeFinish'] | undefined;
     const timedProcessor = new GraphProcessor(makeProject(graph), graph.metadata.id as any, registry, false, {
@@ -728,6 +799,29 @@ void describe('GraphProcessor', () => {
 
     assert.equal(typeof timedFinish?.durationMs, 'number');
     assert.ok(timedFinish!.durationMs! >= 0);
+  });
+
+  void it('uses terminal provenance to report a confirmed editor-cache replay', async () => {
+    const registry = createTrackedRegistry();
+    const trackedNode = registry.create('trackedTest');
+    trackedNode.id = 'editor-cache-node' as NodeId;
+    trackedNode.data.markEditorCacheHit = true;
+    const graph = createSingleNodeGraph(trackedNode, 'editor-cache-origin-graph');
+    const origins: Array<{ event: 'start' | 'finish'; origin: ProcessEvents['nodeFinish']['resultOrigin'] }> = [];
+    const processor = new GraphProcessor(makeProject(graph), graph.metadata.id as GraphId, registry);
+    processor.on('nodeStart', ({ node, resultOrigin }) => {
+      if (node.id === trackedNode.id) origins.push({ event: 'start', origin: resultOrigin });
+    });
+    processor.on('nodeFinish', ({ node, resultOrigin }) => {
+      if (node.id === trackedNode.id) origins.push({ event: 'finish', origin: resultOrigin });
+    });
+
+    await processor.processGraph(testProcessContext(), {});
+
+    assert.deepEqual(origins, [
+      { event: 'start', origin: 'executed' },
+      { event: 'finish', origin: 'editor-cache' },
+    ]);
   });
 
   void it('captures node error duration when requested', async () => {
@@ -751,6 +845,7 @@ void describe('GraphProcessor', () => {
 
     assert.equal(typeof nodeError?.durationMs, 'number');
     assert.ok(nodeError!.durationMs! >= 0);
+    assert.equal(nodeError?.resultOrigin, 'executed');
   });
 
   void it('captures split-run aggregate and per-item durations when requested', async () => {
@@ -781,6 +876,7 @@ void describe('GraphProcessor', () => {
     assert.equal(typeof splitFinish?.splitRunDurationMs?.[1], 'number');
     assert.ok(splitFinish!.splitRunDurationMs![0]! >= 0);
     assert.ok(splitFinish!.splitRunDurationMs![1]! >= 0);
+    assert.equal(splitFinish?.resultOrigin, 'executed');
   });
 
   void it('does not add duration to preloaded node events', async () => {
@@ -803,6 +899,7 @@ void describe('GraphProcessor', () => {
     await processor.processGraph(testProcessContext(), {});
 
     assert.equal(Object.prototype.hasOwnProperty.call(preloadFinish!, 'durationMs'), false);
+    assert.equal(preloadFinish?.resultOrigin, 'preloaded');
   });
 
   void it('replays frozen node outputs and skips the node implementation', async () => {
@@ -828,7 +925,7 @@ void describe('GraphProcessor', () => {
       ],
     };
     const processor = new GraphProcessor(makeProject(graph), graph.metadata.id as GraphId, registry);
-    const nodeEvents: string[] = [];
+    const nodeEvents: Array<{ label: string; resultOrigin: ProcessEvents['nodeStart']['resultOrigin'] }> = [];
     processor.setFrozenNodeOutputResolver(
       createFrozenNodeOutputResolver({
         [graph.metadata.id]: {
@@ -840,18 +937,20 @@ void describe('GraphProcessor', () => {
         },
       } as any),
     );
-    processor.on('nodeStart', ({ node }) => nodeEvents.push(`start:${node.id}`));
-    processor.on('nodeFinish', ({ node }) => nodeEvents.push(`finish:${node.id}`));
+    processor.on('nodeStart', ({ node, resultOrigin }) => nodeEvents.push({ label: `start:${node.id}`, resultOrigin }));
+    processor.on('nodeFinish', ({ node, resultOrigin }) =>
+      nodeEvents.push({ label: `finish:${node.id}`, resultOrigin }),
+    );
 
     const outputs = await processor.processGraph(testProcessContext());
 
     assert.deepEqual(outputs.result, { type: 'string', value: 'frozen value' });
     assert.equal(TrackedTestNodeImpl.processCount, 0);
     assert.deepEqual(nodeEvents, [
-      'start:frozen-tracked-node',
-      'finish:frozen-tracked-node',
-      `start:${outputNode.id}`,
-      `finish:${outputNode.id}`,
+      { label: 'start:frozen-tracked-node', resultOrigin: 'frozen' },
+      { label: 'finish:frozen-tracked-node', resultOrigin: 'frozen' },
+      { label: `start:${outputNode.id}`, resultOrigin: 'executed' },
+      { label: `finish:${outputNode.id}`, resultOrigin: 'executed' },
     ]);
   });
 
@@ -924,6 +1023,83 @@ void describe('GraphProcessor', () => {
 
     assert.deepEqual(outputs.result, { type: 'string', value: 'frozen child value' });
     assert.equal(TrackedTestNodeImpl.processCount, 0);
+  });
+
+  void it('emits a nested LLM call once with its nested execution identity', async () => {
+    const registry = createObservedLlmCallRegistry();
+    const observedNode = registry.create('observedLlmCallTest');
+    const childOutputNode = makeGraphOutputNode('childResult', 'string');
+    const childGraph = {
+      metadata: {
+        id: 'observed-call-child-graph',
+        name: 'Observed Call Child Graph',
+        description: '',
+      },
+      nodes: [observedNode, childOutputNode],
+      connections: [
+        {
+          outputNodeId: observedNode.id,
+          outputId: 'output' as PortId,
+          inputNodeId: childOutputNode.id,
+          inputId: 'value' as PortId,
+        },
+      ],
+    };
+    const middleSubgraphNode = makeSubgraphNode('call-observed-child', childGraph.metadata.id);
+    const middleOutputNode = makeGraphOutputNode('middleResult', 'string');
+    const middleGraph = {
+      metadata: {
+        id: 'observed-call-middle-graph',
+        name: 'Observed Call Middle Graph',
+        description: '',
+      },
+      nodes: [middleSubgraphNode, middleOutputNode],
+      connections: [
+        {
+          outputNodeId: middleSubgraphNode.id,
+          outputId: 'childResult' as PortId,
+          inputNodeId: middleOutputNode.id,
+          inputId: 'value' as PortId,
+        },
+      ],
+    };
+    const rootSubgraphNode = makeSubgraphNode('call-observed-middle', middleGraph.metadata.id);
+    const rootOutputNode = makeGraphOutputNode('result', 'string');
+    const rootGraph = {
+      metadata: {
+        id: 'observed-call-root-graph',
+        name: 'Observed Call Root Graph',
+        description: '',
+      },
+      nodes: [rootSubgraphNode, rootOutputNode],
+      connections: [
+        {
+          outputNodeId: rootSubgraphNode.id,
+          outputId: 'middleResult' as PortId,
+          inputNodeId: rootOutputNode.id,
+          inputId: 'value' as PortId,
+        },
+      ],
+    };
+    const project = makeProject(rootGraph);
+    project.graphs[middleGraph.metadata.id] = middleGraph as any;
+    project.graphs[childGraph.metadata.id] = childGraph as any;
+    const processor = new GraphProcessor(project, rootGraph.metadata.id as GraphId, registry);
+    const hostEvents: ChatV2CallFinishedEvent[] = [];
+    const processorEvents: ProcessEvents['llmCallFinished'][] = [];
+    processor.on('llmCallFinished', (event) => processorEvents.push(event));
+
+    const outputs = await processor.processGraph({
+      ...testProcessContext(),
+      onChatV2CallFinished: (event) => hostEvents.push(event),
+    });
+
+    assert.deepEqual(outputs.result, { type: 'string', value: 'done' });
+    assert.equal(hostEvents.length, 1);
+    assert.equal(processorEvents.length, 1);
+    assert.equal(processorEvents[0]!.callId, 'nested-call');
+    assert.equal(processorEvents[0]!.execution.graphId, childGraph.metadata.id);
+    assert.equal(processorEvents[0]!.execution.parentGraphRunId == null, false);
   });
 
   void it('keeps readiness and control-flow exclusions ahead of frozen output replay', async () => {

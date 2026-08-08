@@ -1,7 +1,7 @@
 import { css } from '@emotion/react';
 import { type ChartNode } from '@valerypopoff/rivet2-core';
 import { useAtom, useAtomValue, useSetAtom } from 'jotai';
-import { type FC, type ReactNode, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { type FC, type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
 import { useToggle } from 'ahooks';
 import { useNodeIO } from '../../hooks/useGetNodeIO.js';
 import { useStableCallback } from '../../hooks/useStableCallback.js';
@@ -20,9 +20,10 @@ import { fullscreenOutputNodeState, hoveringNodeState } from '../../state/graphB
 import { fullscreenOutputModalBoundsState, overlayOpenState } from '../../state/ui.js';
 import { useDataRefs } from '../../providers/ProvidersContext.js';
 import { FullScreenModal } from '../FullScreenModal.js';
+import { AgentResponseInspector } from '../agentTrace/AgentResponseInspector.js';
+import { buildLlmInvocationTrace } from '../agentTrace/agentTraceViewModel.js';
 import { CodeNodeErrorOutput } from '../nodes/CodeNode.js';
 import { MATCH_ACTIVE_CLASS, MATCH_CLASS } from './fullscreenOutputSearch.js';
-import { findFullscreenOutputScrollContainer } from './fullscreenOutputSearchViewport.js';
 import { FullscreenNodeOutputToolbar } from './FullscreenNodeOutputToolbar.js';
 import { FullscreenOutputSearchContext } from './FullscreenOutputSearchContext.js';
 import { copyOutputJson, copyOutputValue } from './nodeOutputCopyActions.js';
@@ -35,7 +36,11 @@ import {
   shouldShowNodeRunDurationSummary,
 } from './NodeRunDurationMeta.js';
 import { useFullscreenOutputSearch } from './useFullscreenOutputSearch.js';
-import { createFullscreenNodeOutputViewModel, getNodeOutputCopySource } from './nodeOutputViewModel.js';
+import {
+  createFullscreenNodeOutputViewModel,
+  getNodeOutputCopySource,
+  getSelectedNodeOutputProcess,
+} from './nodeOutputViewModel.js';
 
 export const FullscreenNodeOutputModalRenderer: FC = () => {
   useDependsOnPlugins();
@@ -113,7 +118,7 @@ const fullscreenOutputCss = css`
 
   .fullscreen-header {
     position: sticky;
-    top: 0;
+    top: var(--fullscreen-modal-vertical-inset);
     z-index: 1;
     flex: 0 0 auto;
     display: flex;
@@ -169,16 +174,12 @@ const fullscreenOutputCss = css`
     }
   }
 
-  .fullscreen-header.is-over-content .picker {
-    border-color: var(--grey);
-    background: var(--grey-darker);
-    box-shadow: 4px 4px 8px var(--shadow-dark);
-  }
-
   .fullscreen-output-body {
     flex: 1 1 auto;
     min-width: 0;
     min-height: 0;
+    box-sizing: border-box;
+    padding-bottom: calc(24px * var(--ui-font-scale));
   }
 
   .fullscreen-output-body.wrap-lines .pre-wrap,
@@ -216,10 +217,19 @@ const fullscreenOutputCss = css`
   }
 
   .node-output-error-message {
-    color: var(--error-light);
+    /* The red system-error background is sufficient; a border competes with
+       the normal output sections below it. */
+    background: var(--node-output-error-bg);
+    border-radius: 4px;
+    color: var(--foreground-bright);
     margin-bottom: 16px;
     overflow-wrap: anywhere;
+    padding: 12px;
     white-space: pre-wrap;
+  }
+
+  .node-output-error-message:last-child {
+    margin-bottom: 0;
   }
 
   .${MATCH_CLASS} {
@@ -237,26 +247,13 @@ const fullscreenOutputCss = css`
   }
 `;
 
-function isWindowScrollContainer(scrollContainer: HTMLElement | Window): scrollContainer is Window {
-  return scrollContainer === window;
-}
-
-function getScrollContainerTop(scrollContainer: HTMLElement | Window): number {
-  if (isWindowScrollContainer(scrollContainer)) {
-    return window.scrollY || document.documentElement.scrollTop || document.body.scrollTop || 0;
-  }
-
-  return scrollContainer.scrollTop;
-}
-
 const NodeFullscreenOutput: FC<{ node: ChartNode }> = ({ node }) => {
   const dataRefs = useDataRefs();
   const output = useAtomValue(lastRunDataState(node.id));
   const [selectedPage, setSelectedPage] = useAtom(selectedProcessPageState(node.id));
   const graphSelectionOptions = useAtomValue(resolvedGraphSelectionState);
   const showNodeRunDurations = useAtomValue(showNodeRunDurationsState);
-  const fullscreenOutputRootRef = useRef<HTMLDivElement>(null);
-  const [isHeaderOverContent, setIsHeaderOverContent] = useState(false);
+  const [isInspectorOpen, setInspectorOpen] = useState(false);
 
   const filteredOutput = useMemo(
     () => filterProcessDataForSelection({ ...graphSelectionOptions, processData: output }),
@@ -289,6 +286,11 @@ const NodeFullscreenOutput: FC<{ node: ChartNode }> = ({ node }) => {
     [dataRefs, filteredOutput, node.type, selectedPage, showNodeRunDurations],
   );
   const { data, processId } = outputViewModel;
+  const selectedProcessData = useMemo(
+    () => getSelectedNodeOutputProcess(filteredOutput ?? [], selectedPage),
+    [filteredOutput, selectedPage],
+  );
+  const responseTrace = useMemo(() => buildLlmInvocationTrace(node, selectedProcessData), [node, selectedProcessData]);
 
   const handleOpenPromptDesigner = () => {
     if (!processId) {
@@ -345,40 +347,6 @@ const NodeFullscreenOutput: FC<{ node: ChartNode }> = ({ node }) => {
     contentKey: contentVersion,
   });
 
-  useLayoutEffect(() => {
-    const rootElement = fullscreenOutputRootRef.current;
-    if (!rootElement || typeof window === 'undefined') {
-      return;
-    }
-
-    const scrollContainer = findFullscreenOutputScrollContainer(rootElement);
-    let animationFrame: number | undefined;
-
-    const updateHeaderElevation = () => {
-      if (animationFrame !== undefined) {
-        window.cancelAnimationFrame(animationFrame);
-      }
-
-      animationFrame = window.requestAnimationFrame(() => {
-        animationFrame = undefined;
-        setIsHeaderOverContent(getScrollContainerTop(scrollContainer) > 0);
-      });
-    };
-
-    updateHeaderElevation();
-    scrollContainer.addEventListener('scroll', updateHeaderElevation, { passive: true });
-    window.addEventListener('resize', updateHeaderElevation);
-
-    return () => {
-      if (animationFrame !== undefined) {
-        window.cancelAnimationFrame(animationFrame);
-      }
-
-      scrollContainer.removeEventListener('scroll', updateHeaderElevation);
-      window.removeEventListener('resize', updateHeaderElevation);
-    };
-  }, [contentVersion]);
-
   const prevPage = useStableCallback(() => {
     if (!filteredOutput) {
       return;
@@ -423,7 +391,7 @@ const NodeFullscreenOutput: FC<{ node: ChartNode }> = ({ node }) => {
       <div className="errored">
         {showDurationSummary && filteredOutput && <NodeRunDurationSummaryMeta processData={filteredOutput} hasBody />}
         {showDurationMeta && <NodeRunDurationMeta data={selectedData} hasBody />}
-        {content.error}
+        <div className="node-output-error-message">{content.error}</div>
       </div>
     );
   } else {
@@ -439,6 +407,7 @@ const NodeFullscreenOutput: FC<{ node: ChartNode }> = ({ node }) => {
       renderMarkdown,
       renderMode: 'expanded-preview',
       allowLargeStoredValueActions: true,
+      autoCollapseLlmChatDiagnosticOutputs: node.type === 'llmChatV2',
       wrapLines,
     });
     const hasBody = body != null;
@@ -467,8 +436,8 @@ const NodeFullscreenOutput: FC<{ node: ChartNode }> = ({ node }) => {
   }
 
   return (
-    <div css={fullscreenOutputCss} ref={fullscreenOutputRootRef}>
-      <header className={`fullscreen-header${isHeaderOverContent ? ' is-over-content' : ''}`}>
+    <div css={fullscreenOutputCss}>
+      <header className="fullscreen-header">
         {outputViewModel.totalPages > 1 ? (
           <NodeOutputPager
             selectedPage={displaySelectedPage}
@@ -482,7 +451,6 @@ const NodeFullscreenOutput: FC<{ node: ChartNode }> = ({ node }) => {
         <FullscreenNodeOutputToolbar
           wrapLines={wrapLines}
           renderMarkdown={renderMarkdown}
-          isOverContent={isHeaderOverContent}
           onToggleWrapLines={toggleWrapLines.toggle}
           onToggleRenderMarkdown={toggleRenderMarkdown.toggle}
           query={query}
@@ -496,6 +464,7 @@ const NodeFullscreenOutput: FC<{ node: ChartNode }> = ({ node }) => {
           onCopyValue={handleCopyToClipboard}
           onCopyJson={handleCopyToClipboardJson}
           onOpenPromptDesigner={node.type === 'chat' ? handleOpenPromptDesigner : undefined}
+          onInspectResponse={node.type === 'llmChatV2' ? () => setInspectorOpen(true) : undefined}
         />
       </header>
 
@@ -509,6 +478,9 @@ const NodeFullscreenOutput: FC<{ node: ChartNode }> = ({ node }) => {
           {outputBody}
         </div>
       </FullscreenOutputSearchContext.Provider>
+      {isInspectorOpen && (
+        <AgentResponseInspector trace={responseTrace} onClose={() => setInspectorOpen(false)} renderInPortal />
+      )}
     </div>
   );
 };

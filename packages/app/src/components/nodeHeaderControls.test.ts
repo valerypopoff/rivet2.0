@@ -8,8 +8,8 @@ const componentsDir = dirname(fileURLToPath(import.meta.url));
 
 test('node edit gear reveal does not animate icon color', () => {
   const nodeStylesSource = readFileSync(join(componentsDir, 'nodeStyles.ts'), 'utf8');
-  const editButtonBlock = /\.title-controls \.edit-button \{(?<styles>[\s\S]*?)\n  \}/.exec(nodeStylesSource)
-    ?.groups?.styles;
+  const editButtonBlock = /\.title-controls \.edit-button \{(?<styles>[\s\S]*?)\n  \}/.exec(nodeStylesSource)?.groups
+    ?.styles;
   const editButtonHoverBlock = /\.edit-button:hover \{(?<styles>[\s\S]*?)\n    \}/.exec(nodeStylesSource)?.groups
     ?.styles;
 
@@ -20,6 +20,21 @@ test('node edit gear reveal does not animate icon color', () => {
   assert.ok(editButtonHoverBlock, 'Expected node edit button hover styles to be present');
   assert.match(editButtonHoverBlock, /color: var\(--node-bg-foreground\);/);
   assert.doesNotMatch(editButtonHoverBlock, /primary-text/);
+});
+
+test('Delegate Tool Call headers expose the request-response continuation indicator', () => {
+  const nodeStylesSource = readFileSync(join(componentsDir, 'nodeStyles.ts'), 'utf8');
+  const nodeTitleLabelSource = readFileSync(join(componentsDir, 'visualNode', 'NodeTitleLabel.tsx'), 'utf8');
+  const indicatorSource = readFileSync(join(componentsDir, 'visualNode', 'ToolCallContinuationIndicator.tsx'), 'utf8');
+  const iconSource = readFileSync(join(componentsDir, 'visualNode', 'ToolCallContinuationIcon.tsx'), 'utf8');
+
+  assert.match(nodeTitleLabelSource, /node\.type === 'delegateFunctionCall'/);
+  assert.match(nodeTitleLabelSource, /hasToolCallContinuationIcon && <ToolCallContinuationIndicator \/>/);
+  assert.match(indicatorSource, /Tool calls return results to the LLM/);
+  assert.match(iconSource, /M3\.5 7\.5h14\.7/);
+  assert.match(iconSource, /M20\.5 16\.5H5\.8/);
+  assert.match(nodeStylesSource, /\.title-text-label \.tool-call-continuation-indicator/);
+  assert.doesNotMatch(nodeStylesSource, /hasToolCallContinuationIndicator/);
 });
 
 test('linked node headers use the library-link control instead of the edit gear', () => {
@@ -52,7 +67,10 @@ test('linked node headers use the library-link control instead of the edit gear'
 
   for (const source of [normalNodeSource, zoomedOutNodeSource]) {
     assert.match(source, /isNodePrefabInstance && \(/);
-    assert.match(source, /className=\{clsx\('grab-area', \{ 'has-subgraph-header-link': node\.type === 'subGraph' \}\)\}/);
+    assert.match(
+      source,
+      /className=\{clsx\('grab-area', \{ 'has-subgraph-header-link': node\.type === 'subGraph' \}\)\}/,
+    );
     assert.match(source, /className="node-prefab-instance-indicator"/);
     assert.match(source, /aria-label="Open library node"/);
     assert.match(source, /onClick=\{handleEditClick\}/);

@@ -705,6 +705,7 @@ export const GraphList: FC = memo(() => {
 
   const runningGraphs = useAtomValue(runningGraphsState);
   const project = useAtomValue(projectState);
+  const uiGraphs = Object.values(project.uiGraphs ?? {});
   const nodeLibraryItemCount = Object.keys(project.nodePrefabs ?? {}).length;
   const plugins = useAtomValue(pluginsState);
   const projectNodeRegistry = useProjectNodeRegistry();
@@ -1008,11 +1009,13 @@ export const GraphList: FC = memo(() => {
   return (
     <div css={styles}>
       <GraphListHeader
+        hasWebApps={uiGraphs.length > 0}
         nodeLibraryItemCount={nodeLibraryItemCount}
         nodeLibraryOpen={nodeLibraryOpen}
         projectTitle={project.metadata.title}
         searchText={searchText}
         onClearFilter={() => setSearchText('')}
+        onCreateWebApp={handleCreateUiGraph}
         onFilterKeyDown={handleSearchKeyDown}
         onFilterTextChange={setSearchText}
         onOpenNodeLibrary={handleOpenNodeLibrary}
@@ -1028,13 +1031,15 @@ export const GraphList: FC = memo(() => {
         ref={graphListContainerRef}
         tabIndex={-1}
       >
-        <UiGraphResourceSection
-          referencingSelectedUiGraphIds={referencingSelectedUiGraphIds}
-          selectedUiGraphId={selectedUiGraphId}
-          uiGraphs={Object.values(project.uiGraphs ?? {})}
-          onCreate={handleCreateUiGraph}
-          onOpen={handleOpenUiGraph}
-        />
+        {uiGraphs.length > 0 && (
+          <UiGraphResourceSection
+            referencingSelectedUiGraphIds={referencingSelectedUiGraphIds}
+            selectedUiGraphId={selectedUiGraphId}
+            uiGraphs={uiGraphs}
+            onCreate={handleCreateUiGraph}
+            onOpen={handleOpenUiGraph}
+          />
+        )}
         <div className="graph-list-heading">Graphs</div>
         {graphListReachability.notice && <div className="graph-list-notice">{graphListReachability.notice}</div>}
         <div

@@ -178,6 +178,9 @@ jobs:
       - build-macos
       - build-docs
     runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: write
     steps:
       - uses: actions/checkout@v6
 
@@ -206,6 +209,19 @@ jobs:
           name: rivet-official-macos-bundles
           path: release-bundles/macos
 
+      - name: Publish stable desktop release assets
+        run: node .github/scripts/publish-desktop-release-assets.mjs
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_SHA: ${{ github.sha }}
+          RELEASE_CHANNEL: official
+          RELEASE_PLATFORMS: windows,macos
+          RELEASE_TARGET_COMMITISH: ${{ github.event.repository.default_branch }}
+          RELEASE_ASSETS_MANIFEST_PATH: release-assets-manifest.json
+          WINDOWS_BUNDLE_DIR: release-bundles/windows
+          MACOS_BUNDLE_DIR: release-bundles/macos
+
       - name: Add stable release downloads to docs site
         run: node .github/scripts/prepare-desktop-release-pages.mjs
         env:
@@ -215,8 +231,7 @@ jobs:
           PRESERVE_RELEASE_METADATA_FILES: developer-release.json
           PAGES_SITE_URL: https://valerypopoff.github.io/rivet2.0/
           PAGES_OUT_DIR: packages/docs/build
-          WINDOWS_BUNDLE_DIR: release-bundles/windows
-          MACOS_BUNDLE_DIR: release-bundles/macos
+          RELEASE_ASSETS_MANIFEST_PATH: release-assets-manifest.json
 
       - name: Upload Pages content
         uses: actions/upload-artifact@v7
@@ -233,7 +248,7 @@ jobs:
     runs-on: ubuntu-latest
     environment:
       name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
+      url: ${{ steps.deployment_first_attempt.outputs.page_url || steps.deployment.outputs.page_url }}
     env:
       PAGES_ENABLEMENT_TOKEN: ${{ secrets.PAGES_ENABLEMENT_TOKEN }}
     steps:
@@ -259,6 +274,23 @@ jobs:
         with:
           path: rivet-docs-pages
 
-      - name: Deploy to GitHub Pages
+      # Pages can transiently leave an accepted artifact in deployment_queued.
+      # A healthy deployment is much faster, so bound each attempt to five
+      # minutes and retry once after the action cancels the first deployment.
+      - name: Deploy to GitHub Pages (attempt 1 of 2)
+        id: deployment_first_attempt
+        continue-on-error: true
+        uses: actions/deploy-pages@v5
+        with:
+          timeout: '300000'
+
+      - name: Wait for GitHub Pages cancellation to settle
+        if: steps.deployment_first_attempt.outcome == 'failure'
+        run: sleep 15
+
+      - name: Deploy to GitHub Pages (attempt 2 of 2)
+        if: steps.deployment_first_attempt.outcome == 'failure'
         id: deployment
         uses: actions/deploy-pages@v5
+        with:
+          timeout: '300000'

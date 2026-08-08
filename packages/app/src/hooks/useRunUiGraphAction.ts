@@ -6,6 +6,7 @@ import {
   type UiGraph,
   type GraphProgress,
   type RivetWebAppStorage,
+  type AgentResponseTrace,
   formatUiGraphActionBindingIssues,
   getUiGraphActionComponent,
   jsonValueToDataValue,
@@ -59,6 +60,7 @@ export async function runUiGraphAction(options: {
   outputs: GraphOutputs;
   statePatch: Record<string, unknown>;
   storagePatch: Record<string, unknown>;
+  responseTrace?: AgentResponseTrace;
 }> {
   const uiGraph = normalizeUiGraph(options.uiGraph);
   const component = getUiGraphActionComponent(uiGraph, options.componentId);
@@ -82,11 +84,19 @@ export async function runUiGraphAction(options: {
   options.abortSignal?.throwIfAborted();
   const browserStoredValues = createRivetStoredValueSnapshotStore(options.storage ?? {});
   let remoteStoragePatch: Record<string, unknown> = {};
+  let responseTrace: AgentResponseTrace | undefined;
   const rawInputs = resolveUiGraphComponentActionInputs(component, options.state);
   const runOptions = {
     graphId: component.action.graphId,
     inputs: toGraphInputs(rawInputs),
     onProgress: options.onProgress,
+    ...(component.type === 'chat' && component.allowResponseInspection
+      ? {
+          onResponseTrace: (trace: AgentResponseTrace) => {
+            responseTrace = trace;
+          },
+        }
+      : {}),
     onWebAppStoragePatch: (storagePatch: Record<string, unknown>) => {
       remoteStoragePatch = { ...remoteStoragePatch, ...storagePatch };
     },
@@ -109,6 +119,7 @@ export async function runUiGraphAction(options: {
     outputs,
     statePatch: resolveUiGraphComponentActionOutputStatePatch(component, outputs, options.state),
     storagePatch: { ...browserStoredValues.getPatch(), ...remoteStoragePatch },
+    ...(component.type === 'chat' && component.allowResponseInspection && responseTrace ? { responseTrace } : {}),
   };
 }
 

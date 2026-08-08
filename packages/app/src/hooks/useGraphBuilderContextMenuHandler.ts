@@ -15,7 +15,6 @@ import { editingNodeState } from '../state/graphBuilder';
 import { projectState } from '../state/savedGraphs';
 import { useCanvasPositioning } from './useCanvasPositioning';
 import { useFactorIntoSubgraph } from './useFactorIntoSubgraph';
-import { useGraphExecutor } from './useGraphExecutor';
 import { useLoadGraph } from './useLoadGraph';
 import { usePasteNodes } from './usePasteNodes';
 import { graphMetadataState, nodesByIdState } from '../state/graph';
@@ -30,17 +29,17 @@ import { useGoToSubgraphNode } from './useGoToSubgraphNode.js';
 import { useFrozenNodeOutputActions } from './useFrozenNodeOutputActions.js';
 import { subGraphPortRearrangeTargetState, variadicPortRearrangeTargetState } from '../state/ui.js';
 import { useOpenNodeLibrary } from './useOpenNodeLibrary.js';
+import type { EditorGraphRun } from './editorGraphRunOptions.js';
 
 type NodeFreezeTarget = {
   nodeId: NodeId;
   nodeType: ChartNode['type'];
 };
 
-export function useGraphBuilderContextMenuHandler() {
+export function useGraphBuilderContextMenuHandler(runGraph: EditorGraphRun) {
   const { clientToCanvasPosition } = useCanvasPositioning();
   const loadGraph = useLoadGraph();
   const project = useAtomValue(projectState);
-  const { tryRunGraph } = useGraphExecutor();
   const pasteNodes = usePasteNodes();
   const copyNodes = useCopyNodes();
   const duplicateNode = useDuplicateNode();
@@ -147,12 +146,12 @@ export function useGraphBuilderContextMenuHandler() {
         .with('node-run-to-here', () => {
           const { nodeId } = context.data as { nodeId: NodeId };
 
-          tryRunGraph({ to: [nodeId] });
+          runGraph({ to: [nodeId] });
         })
         .with('node-run-from-here', () => {
           const { nodeId } = context.data as { nodeId: NodeId };
 
-          tryRunGraph({ from: nodeId });
+          runGraph({ from: nodeId });
         })
         .with(P.union('node-freeze', 'nodes-freeze'), () => {
           const { nodeId, nodeType, freezeNodeTargets } = context.data as {

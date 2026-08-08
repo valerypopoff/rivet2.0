@@ -546,6 +546,7 @@ export function createRivetWebAppWebSocketGateway(
                   runId,
                   statePatch: result.statePatch,
                   storagePatch: result.storagePatch,
+                  ...(result.responseTrace == null ? {} : { responseTrace: result.responseTrace }),
                 },
                 { deferTerminalNotification: true },
               );

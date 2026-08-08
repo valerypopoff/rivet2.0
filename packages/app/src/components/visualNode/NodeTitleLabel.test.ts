@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { createElement } from 'react';
+import { Children, createElement, isValidElement, type ReactNode } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
+import { ToolCallContinuationIndicator } from './ToolCallContinuationIndicator.js';
 import { NodeTitleLabel } from './NodeTitleLabel.js';
 
 function renderNodeTitle(type: string, title: string) {
@@ -47,6 +48,20 @@ test('NodeTitleLabel gives every Knowledge node a database icon', () => {
     assert.match(html, /<ellipse/);
     assert.match(html, /aria-hidden="true"/);
   }
+});
+
+test('NodeTitleLabel gives Delegate Tool Call its lifecycle icon before the title', () => {
+  const element = NodeTitleLabel({ node: { type: 'delegateFunctionCall', title: 'Delegate Tool Call' } as any });
+
+  if (!isValidElement<{ children: ReactNode }>(element)) {
+    assert.fail('Expected NodeTitleLabel to render an element.');
+  }
+
+  const [icon, title] = Children.toArray(element.props.children);
+
+  assert.ok(isValidElement(icon));
+  assert.equal(icon.type, ToolCallContinuationIndicator);
+  assert.equal(title, 'Delegate Tool Call');
 });
 
 test('NodeTitleLabel leaves other node titles plain', () => {

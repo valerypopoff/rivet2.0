@@ -4,7 +4,6 @@ import clsx from 'clsx';
 import { css } from '@emotion/react';
 import { type TrivetTestCase, type TrivetTestCaseResult } from '@valerypopoff/trivet';
 import { keyBy } from 'lodash-es';
-import { LoadingSpinner } from '../LoadingSpinner';
 import { useContextMenu } from '../../hooks/useContextMenu';
 import { useStableCallback } from '../../hooks/useStableCallback';
 import Portal from '@atlaskit/portal';
@@ -13,6 +12,7 @@ import PlayIcon from 'majesticons/line/play-circle-line.svg?react';
 import Popup from '@atlaskit/popup';
 import TextField from '@atlaskit/textfield';
 import { PopupMenu, PopupMenuContainer, PopupMenuItem, popupMenuSurfaceStyles } from '../PopupMenu';
+import { NodeRunningIndicator } from '../visualNode/NodeRunningIndicator';
 
 const containerStyles = css`
   display: flex;
@@ -385,7 +385,7 @@ const TestCaseStatusIcon: FC<{ results?: TrivetTestCaseResult[]; running: boolea
 
   if (results == null || results.length === 0) {
     if (running) {
-      return <LoadingSpinner />;
+      return <NodeRunningIndicator isRunning delayMs={0} label="Test case running" />;
     } else {
       return <div />;
     }

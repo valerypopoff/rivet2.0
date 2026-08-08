@@ -2,6 +2,7 @@ import {
   parseRivetWebAppServerMessage,
   RIVET_WEB_APP_ACTION_PROTOCOL_VERSION,
   type GraphProgress,
+  type AgentResponseTrace,
 } from '@valerypopoff/rivet2-core/web-app-runtime';
 import type { WebAppClientConfig } from './webAppClientTypes.js';
 
@@ -10,6 +11,7 @@ type WebAppActionResponse = {
   error?: string;
   statePatch?: Record<string, unknown>;
   storagePatch?: Record<string, unknown>;
+  responseTrace?: AgentResponseTrace;
 };
 
 export type HostedActionRunner = {
@@ -22,7 +24,11 @@ export type HostedActionRunner = {
     signal: AbortSignal;
     state: Record<string, unknown>;
     storage: Record<string, unknown>;
-  }): Promise<{ statePatch?: Record<string, unknown>; storagePatch?: Record<string, unknown> }>;
+  }): Promise<{
+    statePatch?: Record<string, unknown>;
+    storagePatch?: Record<string, unknown>;
+    responseTrace?: AgentResponseTrace;
+  }>;
 };
 
 export class HostedActionError extends Error {
@@ -68,7 +74,11 @@ function createHttpActionRunner(actionPath: string): HostedActionRunner {
       if (!response.ok) {
         throw new HostedActionError(result.error || 'Action failed.', result.code);
       }
-      return { statePatch: result.statePatch, storagePatch: result.storagePatch };
+      return {
+        statePatch: result.statePatch,
+        storagePatch: result.storagePatch,
+        responseTrace: result.responseTrace,
+      };
     },
   };
 }
@@ -87,7 +97,11 @@ function createWebSocketActionRunner(socketPath: string): HostedActionRunner {
     };
     onProgress(progress: GraphProgress): void;
     reject(error: unknown): void;
-    resolve(result: { statePatch?: Record<string, unknown>; storagePatch?: Record<string, unknown> }): void;
+    resolve(result: {
+      statePatch?: Record<string, unknown>;
+      storagePatch?: Record<string, unknown>;
+      responseTrace?: AgentResponseTrace;
+    }): void;
     runId?: string;
     signal: AbortSignal;
     startSent: boolean;
@@ -192,7 +206,11 @@ function createWebSocketActionRunner(socketPath: string): HostedActionRunner {
         pending.onProgress(message.progress);
       } else if (message.type === 'action.completed') {
         settlePending(pending, () =>
-          pending.resolve({ statePatch: message.statePatch, storagePatch: message.storagePatch }),
+          pending.resolve({
+            statePatch: message.statePatch,
+            storagePatch: message.storagePatch,
+            responseTrace: message.responseTrace,
+          }),
         );
       } else if (message.type === 'action.failed') {
         settlePending(pending, () => pending.reject(new HostedActionError(message.error, message.code)));

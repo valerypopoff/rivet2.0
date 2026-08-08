@@ -1,7 +1,4 @@
-import {
-  isChatV2StructuredResponseFormat,
-  type ChatV2StructuredResponseFormat,
-} from './chatV2ResponseFormat.js';
+import { isChatV2StructuredResponseFormat, type ChatV2StructuredResponseFormat } from './chatV2ResponseFormat.js';
 import type { LLMChatV2NodeData } from './llmChatV2NodeData.js';
 
 export type LLMChatV2StructuredResponseFormat = ChatV2StructuredResponseFormat;

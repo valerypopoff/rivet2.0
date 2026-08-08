@@ -1,5 +1,6 @@
 import type { UiComponentId } from './UiGraph.js';
 import { normalizeGraphProgress, type GraphProgress } from './GraphProgress.js';
+import { isAgentResponseTrace, type AgentResponseTrace } from './AgentResponseTrace.js';
 
 export const RIVET_WEB_APP_ACTION_PROTOCOL_VERSION = 1 as const;
 
@@ -51,6 +52,7 @@ export type RivetWebAppServerMessage =
       type: 'action.completed';
       statePatch: Record<string, unknown>;
       storagePatch?: Record<string, unknown>;
+      responseTrace?: AgentResponseTrace;
     } & RunEventBase)
   | ({ type: 'action.failed'; error: string; code?: string } & RunEventBase)
   | ({ type: 'action.cancelled' } & RunEventBase)
@@ -168,6 +170,7 @@ export function parseRivetWebAppServerMessage(value: unknown): RivetWebAppServer
             ...base,
             statePatch: value.statePatch,
             ...(isRecord(value.storagePatch) ? { storagePatch: value.storagePatch } : {}),
+            ...(isAgentResponseTrace(value.responseTrace) ? { responseTrace: value.responseTrace } : {}),
           }
         : undefined;
     case 'action.failed':

@@ -7,6 +7,7 @@ import {
   createInMemoryRivetWebAppRunCoordinator,
   createInMemoryRivetWebAppRunStore,
   createRivetWebAppWebSocketGateway,
+  getUiGraphChatMessagesStateKey,
   type Project,
   type RivetKnowledgeStore,
   type RivetWebAppServerMessage,
@@ -100,6 +101,55 @@ void describe('Rivet web app WebSocket gateway', () => {
     assert.equal(replayedAccepted.runId, accepted.runId);
     assert.equal(replayedCompleted.runId, accepted.runId);
     assert.equal(starts, 1);
+  });
+
+  void it('adds an opted-in Chat response trace to protocol-v1 completion', async () => {
+    const project = makeProject();
+    const graphId = project.metadata.mainGraphId;
+    project.graphs[graphId]!.nodes.push({
+      data: { dataType: 'chat-message[]', id: 'history' },
+      id: 'history-node' as never,
+      title: 'History',
+      type: 'graphInput',
+      visualData: { x: 0, y: 120 },
+    });
+    const uiGraph = Object.values(project.uiGraphs!)[0]!;
+    uiGraph.components = [
+      {
+        action: {
+          graphId,
+          historyInputId: 'history',
+          responseOutputId: 'result',
+          type: 'runGraph',
+          userInputId: 'input',
+        },
+        allowResponseInspection: true,
+        id: 'chat' as never,
+        type: 'chat',
+      },
+    ];
+    const harness = await createHarness(project);
+    const client = await harness.connect();
+    const messages = collectMessages(client);
+
+    client.send(
+      JSON.stringify({
+        type: 'action.start',
+        componentId: 'chat',
+        requestId: 'request-trace',
+        revisionKey: 'revision-1',
+        state: {
+          [getUiGraphChatMessagesStateKey('chat' as never)]: [{ content: 'Hello', role: 'user' }],
+        },
+      }),
+    );
+    await messages.next('action.accepted');
+    await messages.next('action.progress');
+    const completed = await messages.next('action.completed');
+
+    assert.equal(completed.responseTrace?.schemaVersion, 1);
+    assert.equal(completed.responseTrace?.scope, 'response');
+    assert.equal(completed.responseTrace?.status, 'completed');
   });
 
   void it('streams status messages sent by the setWebAppStatus external call', async () => {

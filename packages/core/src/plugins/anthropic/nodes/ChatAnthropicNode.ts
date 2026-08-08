@@ -136,6 +136,13 @@ export const ChatAnthropicNodeImpl: PluginNodeImpl<ChatAnthropicNode> = {
     return chartNode;
   },
 
+  getRunActivityDescriptor() {
+    return {
+      category: 'model',
+      primaryOutputPortId: 'response' as PortId,
+    };
+  },
+
   getInputDefinitions(data): NodeInputDefinition[] {
     const inputs: NodeInputDefinition[] = [];
 
@@ -460,8 +467,7 @@ export const ChatAnthropicNodeImpl: PluginNodeImpl<ChatAnthropicNode> = {
       endpoint: undefined,
     };
 
-    const systemText =
-      typeof system === 'string' ? system : system?.map((message) => message.text).join('\n\n');
+    const systemText = typeof system === 'string' ? system : system?.map((message) => message.text).join('\n\n');
     const tokenCountEstimate = await context.tokenizer.getTokenCountForString(
       [systemText, prompt].filter(Boolean).join('\n\n'),
       tokenizerInfo,
@@ -520,6 +526,7 @@ export const ChatAnthropicNodeImpl: PluginNodeImpl<ChatAnthropicNode> = {
           if (data.cache) {
             const cached = cache.get(cacheKey);
             if (cached) {
+              context.markResultAsEditorCacheHit?.();
               return cached;
             }
           }

@@ -1,6 +1,7 @@
-import { useAtom, useAtomValue } from 'jotai';
+import { useAtom, useAtomValue, useSetAtom } from 'jotai';
 import type { ProjectId } from '@valerypopoff/rivet2-core';
 import { openedProjectsSortedIdsState, projectsState, projectState } from '../../state/savedGraphs.js';
+import { clearLoadedRecordingForProjectState } from '../../state/execution.js';
 import { removeOpenedProject } from '../../utils/openedProjects.js';
 import { useCurrentProjectEditorSnapshot } from '../useCurrentProjectEditorSnapshot.js';
 import { useLoadProject } from '../useLoadProject.js';
@@ -12,6 +13,7 @@ export function useWorkspaceHostCloseProject() {
   const [projects, setProjects] = useAtom(projectsState);
   const currentProject = useAtomValue(projectState);
   const openedProjectIds = useAtomValue(openedProjectsSortedIdsState);
+  const clearLoadedRecordingForProject = useSetAtom(clearLoadedRecordingForProjectState);
   const loadProject = useLoadProject();
   const { persistCurrentProjectEditorSnapshot } = useCurrentProjectEditorSnapshot();
   const { captureCurrentProjectExecutionSnapshot, restoreProjectExecutionSnapshot } = useProjectExecutionSnapshots();
@@ -51,6 +53,10 @@ export function useWorkspaceHostCloseProject() {
     cleanupClosedProject(projectId, {
       currentExecutionSnapshot: closingCurrentProjectExecutionSnapshot,
     });
+    // Recording selection is app-local but belongs to one project tab. Release
+    // it before removing the tab so no invisible owner can block other tabs
+    // from loading or unloading their own recording.
+    clearLoadedRecordingForProject(projectId);
     setProjects((previousProjects) => removeOpenedProject(previousProjects, projectId));
 
     return true;

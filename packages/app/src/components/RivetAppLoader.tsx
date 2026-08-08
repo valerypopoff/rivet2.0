@@ -1,9 +1,14 @@
 import { useState, type ReactNode } from 'react';
-import { allInitializeStoreFns, configureHybridStorageBackend, type AsyncStorageBackend } from '../state/storage';
+import {
+  allInitializeStoreFns,
+  configureHybridStorageBackend,
+  flushHybridStorageGroup,
+  type AsyncStorageBackend,
+} from '../state/storage';
 import useAsyncEffect from 'use-async-effect';
 import { RivetApp } from './RivetApp';
 import { useAtomValue } from 'jotai';
-import { settingsState } from '../state/settings.js';
+import { clearLegacyInvalidOpenAiApiKeyPlaceholder, settingsState } from '../state/settings.js';
 import { useDependsOnPlugins } from '../hooks/useDependsOnPlugins.js';
 import { fillMissingSettingsFromEnvironmentVariables } from '../utils/tauri.js';
 import { prefetchChatV2DiscoveredModelOptions } from '../utils/chatV2ModelCatalog.js';
@@ -50,6 +55,10 @@ export const RivetAppLoader = ({
 
     for (const initializeFn of allInitializeStoreFns) {
       await initializeFn();
+    }
+
+    if (clearLegacyInvalidOpenAiApiKeyPlaceholder()) {
+      await flushHybridStorageGroup('recoil-persist');
     }
 
     setIsLoading(false);

@@ -134,6 +134,14 @@ export class PromptNodeImpl extends NodeImpl<PromptNode> {
     return outputs;
   }
 
+  getRunActivityDescriptor() {
+    // A Prompt can additionally emit a token count, but its user-visible
+    // result is always the generated chat-message on `output`.
+    return {
+      primaryOutputPortId: 'output' as PortId,
+    };
+  }
+
   getEditors(): EditorDefinition<PromptNode>[] {
     return [
       {

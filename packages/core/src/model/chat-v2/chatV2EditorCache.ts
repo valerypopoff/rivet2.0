@@ -1,12 +1,15 @@
 import stableStringify from 'safe-stable-stringify';
+import CryptoJS from 'crypto-js';
 import type { Outputs } from '../GraphProcessor.js';
-import type { ResolvedChatV2ProviderConfig } from './providerOptions.js';
+import { normalizeOpenAICompatibleEndpoint, type ResolvedChatV2ProviderConfig } from './providerOptions.js';
 import type { ChatV2Provider, ChatV2ProviderOptions, ChatV2ToolChoice } from './chatV2Types.js';
 import type { LLMChatV2EditorCacheKeyParts, LLMChatV2NodeData } from './llmChatV2NodeData.js';
 import type { LLMProfileValue } from './llmProfileTypes.js';
+import { parseCustomProviderApi } from './customProviderApi.js';
 
 export function buildLLMChatV2EditorCacheKey(parts: LLMChatV2EditorCacheKeyParts): string {
-  return stableStringify(parts) ?? '';
+  const { cacheVersion = 2, ...keyParts } = parts;
+  return stableStringify({ cacheVersion, ...keyParts }) ?? '';
 }
 
 function cloneEditorCacheValue<T>(value: T, seen = new WeakMap<object, unknown>()): T {
@@ -57,27 +60,52 @@ function fingerprintSecret(secret: string | undefined): string | undefined {
     return undefined;
   }
 
-  let hash = 2166136261;
-
-  for (let i = 0; i < secret.length; i++) {
-    hash ^= secret.charCodeAt(i);
-    hash = Math.imul(hash, 16777619);
-  }
-
-  return `${secret.length}:${(hash >>> 0).toString(36)}`;
+  // Cache keys stay in-memory, but provider credentials and header values must
+  // not be recoverable from them. SHA-256 also avoids FNV's easy collisions.
+  return `sha256:${CryptoJS.SHA256(secret).toString(CryptoJS.enc.Hex)}`;
 }
 
 function fingerprintProviderConfigForCache(config: ResolvedChatV2ProviderConfig): ResolvedChatV2ProviderConfig {
-  if (config.headers == null) {
+  if (config.headers == null && config.endpointQuery == null) {
     return config;
   }
 
   return {
     ...config,
-    headers: Object.fromEntries(
-      Object.entries(config.headers).map(([key, value]) => [key, fingerprintSecret(value) ?? '']),
-    ),
+    ...(config.headers == null
+      ? {}
+      : {
+          headers: Object.fromEntries(
+            Object.entries(config.headers).map(([key, value]) => [key, fingerprintSecret(value) ?? '']),
+          ),
+        }),
+    ...(config.endpointQuery == null
+      ? {}
+      : {
+          endpointQuery: config.endpointQuery.map(([key, value]) => [key, fingerprintSecret(value) ?? '']),
+        }),
   };
+}
+
+function fingerprintCustomProviderBaseURL(value: string): string {
+  if (!value.trim()) {
+    return '';
+  }
+
+  try {
+    const endpoint = normalizeOpenAICompatibleEndpoint(value);
+    return (
+      stableStringify({
+        baseURL: endpoint.baseURL,
+        endpointQuery: endpoint.endpointQuery.map(([key, queryValue]) => [key, fingerprintSecret(queryValue) ?? '']),
+      }) ?? ''
+    );
+  } catch {
+    // Profile candidates are resolved lazily so a malformed primary URL can
+    // fall through to the next profile. Cache fingerprinting must neither
+    // pre-empt that recovery nor retain the malformed URL verbatim.
+    return `invalid-url:${fingerprintSecret(value)}`;
+  }
 }
 
 function fingerprintNodeDataForCache(data: LLMChatV2NodeData): LLMChatV2NodeData {
@@ -87,7 +115,11 @@ function fingerprintNodeDataForCache(data: LLMChatV2NodeData): LLMChatV2NodeData
     ...data,
     baseURL: '',
     useBaseURLInput: false,
-    customProviderBaseURL: isCustomProvider ? data.customProviderBaseURL : '',
+    customProviderApi: isCustomProvider ? parseCustomProviderApi(data.customProviderApi) : 'completions',
+    customProviderBaseURL:
+      isCustomProvider && !data.useCustomProviderBaseURLInput
+        ? fingerprintCustomProviderBaseURL(data.customProviderBaseURL)
+        : '',
     useCustomProviderBaseURLInput: isCustomProvider ? data.useCustomProviderBaseURLInput : false,
     extraProviderOptions: data.useExtraProviderOptionsInput ? '' : fingerprintSecret(data.extraProviderOptions) ?? '',
     headers: (data.headers ?? []).map(({ key, value }) => ({
@@ -142,8 +174,6 @@ export function resolveLLMChatV2EditorCache(params: {
   systemPrompt: unknown;
   toolChoice: ChatV2ToolChoice | undefined;
   profileChain?: readonly LLMProfileValue[] | undefined;
-  /** Keeps scalar profile output shapes distinct from one-item profile arrays. */
-  profileChainUsesArray?: boolean | undefined;
 }): { cacheKey: string | undefined; cachedOutputs: Outputs | undefined } {
   const { editorCache } = params;
 
@@ -166,12 +196,7 @@ export function resolveLLMChatV2EditorCache(params: {
     providerOptions: fingerprintProviderOptionsForCache(params.providerOptions),
     toolChoice: params.toolChoice,
     profileChain:
-      params.profileChain == null
-        ? undefined
-        : {
-            inputWasArray: params.profileChainUsesArray ?? false,
-            profiles: fingerprintProfileChainForCache(params.data, params.profileChain),
-          },
+      params.profileChain == null ? undefined : fingerprintProfileChainForCache(params.data, params.profileChain),
   });
 
   return {

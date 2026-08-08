@@ -88,11 +88,15 @@ export function getStorageDecision(value: DataValue): StorageDecision {
     }
     default: {
       if (isArrayDataType(value.type)) {
-        const serialized = stringifyForPreview(value.value);
+        // Structured, non-media arrays can still have a useful compact JSON
+        // preview. Do not collapse them to only their data type: Run Activity
+        // deliberately does not restore refs, so that would hide the actual
+        // node output even though a safe excerpt can be retained here.
+        const serialized = stringifyAnyJsonLikeForDisplay(value.value);
         return serialized.length > REF_STORAGE_THRESHOLD_CHARS
           ? {
               storage: 'ref',
-              preview: buildSummaryPreview(value),
+              preview: buildJsonPreview(serialized, Array.isArray(value.value) ? value.value.length : undefined),
               sizeHint: serialized.length,
             }
           : { storage: 'inline' };
@@ -299,14 +303,21 @@ function buildSummaryPreview(value: DataValue): StoredDataPreview {
 }
 
 function buildChatMessagePreview(message: ChatMessage): StoredDataPreview {
+  // Keep the existing preview-only path for a large function result. Output
+  // renderers intentionally treat that as a textual result rather than a
+  // role-aware chat-message body.
   const functionResultText = getFunctionResultText(message);
-  if (functionResultText && functionResultText.length > REF_STORAGE_THRESHOLD_CHARS) {
+  if (functionResultText != null && functionResultText.length > REF_STORAGE_THRESHOLD_CHARS) {
     return buildTextPreview(functionResultText);
   }
 
+  const excerpt = getChatMessageExcerpt(message);
   return {
     kind: 'summary',
     label: `Chat Message (${message.type})`,
+    ...(excerpt == null
+      ? {}
+      : { excerpt: createExcerpt(excerpt, COMPACT_PREVIEW_MAX_CHARS, COMPACT_PREVIEW_MAX_LINES) }),
     totalBytes: getChatMessageSize(message),
   };
 }
@@ -320,12 +331,76 @@ function buildChatMessagesPreview(messages: ChatMessage[]): StoredDataPreview {
     }
   }
 
+  const excerpt = messages
+    .map((message) => {
+      const messageExcerpt = getChatMessageExcerpt(message);
+      return messageExcerpt == null ? undefined : `${message.type}: ${messageExcerpt}`;
+    })
+    .filter((value): value is string => value != null)
+    .join('\n');
+
   return {
     kind: 'summary',
     label: 'Chat Message Array',
+    ...(excerpt === ''
+      ? {}
+      : { excerpt: createExcerpt(excerpt, COMPACT_PREVIEW_MAX_CHARS, COMPACT_PREVIEW_MAX_LINES) }),
     totalBytes: messages.reduce((acc, current) => acc + getChatMessageSize(current), 0),
     itemCount: messages.length,
   };
+}
+
+/**
+ * Produces a safe, bounded-text precursor for history previews without
+ * restoring the ref payload. Message roles and non-text parts remain visible
+ * enough to make the preview useful, while image/document bytes never enter
+ * the metadata-only Run Activity projection.
+ */
+function getChatMessageExcerpt(message: ChatMessage): string | undefined {
+  const parts = Array.isArray(message.message) ? message.message : [message.message];
+  const content = parts
+    .map((part) => {
+      if (typeof part === 'string') return part;
+      if (!isPlainRecord(part) || typeof part.type !== 'string') return '[Unsupported message content]';
+
+      // Treat this as a runtime record after validation rather than relying on
+      // the static message-part union: stale/remote histories can contain an
+      // unknown content type, which should produce a compact fallback instead
+      // of breaking the activity drawer.
+      const record = part as Record<string, unknown>;
+      const contentType = record.type;
+
+      switch (contentType) {
+        case 'url':
+          return typeof record.url === 'string' ? record.url : '[URL]';
+        case 'image':
+          return `[Image: ${typeof record.mediaType === 'string' ? record.mediaType : 'unknown'}]`;
+        case 'document': {
+          const title = typeof record.title === 'string' && record.title.trim() ? record.title : undefined;
+          const mediaType = typeof record.mediaType === 'string' ? record.mediaType : 'unknown';
+          return title ? `[Document: ${title}]` : `[Document: ${mediaType}]`;
+        }
+        default:
+          return `[Unsupported message content: ${contentType}]`;
+      }
+    })
+    .filter((part): part is string => part != null && part !== '');
+
+  if (message.type !== 'assistant') {
+    return content.length === 0 ? undefined : content.join('\n');
+  }
+
+  const toolCalls =
+    Array.isArray(message.function_calls) && message.function_calls.length > 0
+      ? message.function_calls
+      : message.function_call == null
+        ? []
+        : [message.function_call];
+  const toolCallText = toolCalls.map((call) =>
+    typeof call?.name === 'string' && call.name.trim() ? `[Tool call: ${call.name}]` : '[Tool call]',
+  );
+  const excerpt = [...content, ...toolCallText].join('\n');
+  return excerpt === '' ? undefined : excerpt;
 }
 
 function getFunctionResultText(message: ChatMessage): string | undefined {

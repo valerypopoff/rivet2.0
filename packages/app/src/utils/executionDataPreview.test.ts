@@ -89,11 +89,12 @@ test('getStorageDecision keeps short chat messages on the normal chat-message re
   assert.deepEqual(decision.preview, {
     kind: 'summary',
     label: 'Chat Message (function)',
+    excerpt: 'short result',
     totalBytes: 12,
   });
 });
 
-test('getStorageDecision keeps long non-function chat messages on the role-aware renderer', () => {
+test('getStorageDecision retains a text excerpt for role-aware chat messages', () => {
   const message = 'a'.repeat(REF_STORAGE_THRESHOLD_CHARS + 1);
   const decision = getStorageDecision({
     type: 'chat-message',
@@ -104,11 +105,10 @@ test('getStorageDecision keeps long non-function chat messages on the role-aware
   });
 
   assert.equal(decision.storage, 'ref');
-  assert.deepEqual(decision.preview, {
-    kind: 'summary',
-    label: 'Chat Message (user)',
-    totalBytes: message.length,
-  });
+  assert.equal(decision.preview.kind, 'summary');
+  assert.equal(decision.preview.label, 'Chat Message (user)');
+  assert.match(decision.preview.excerpt ?? '', /^a+/);
+  assert.equal(decision.preview.totalBytes, message.length);
 });
 
 test('getStorageDecision builds a text preview for arrays of long function-result messages', () => {
@@ -126,7 +126,7 @@ test('getStorageDecision builds a text preview for arrays of long function-resul
   assert.equal(decision.preview.totalChars, firstMessage.length + 1 + 'second result'.length);
 });
 
-test('getStorageDecision keeps mixed chat-message arrays on the role-aware renderer', () => {
+test('getStorageDecision retains role-labelled excerpts for mixed chat-message arrays', () => {
   const firstMessage = 'a'.repeat(REF_STORAGE_THRESHOLD_CHARS);
   const decision = getStorageDecision({
     type: 'chat-message[]',
@@ -137,10 +137,44 @@ test('getStorageDecision keeps mixed chat-message arrays on the role-aware rende
   });
 
   assert.equal(decision.storage, 'ref');
-  assert.deepEqual(decision.preview, {
-    kind: 'summary',
-    label: 'Chat Message Array',
-    totalBytes: firstMessage.length + 'assistant response'.length,
-    itemCount: 2,
+  assert.equal(decision.preview.kind, 'summary');
+  assert.equal(decision.preview.label, 'Chat Message Array');
+  assert.match(decision.preview.excerpt ?? '', /^function: a+/);
+  assert.equal(decision.preview.totalBytes, firstMessage.length + 'assistant response'.length);
+  assert.equal(decision.preview.itemCount, 2);
+});
+
+test('getStorageDecision retains JSON excerpts for large structured arrays instead of their type label', () => {
+  const decision = getStorageDecision({
+    type: 'gpt-function[]',
+    value: [
+      {
+        name: 'searchKnowledge',
+        description: 'x'.repeat(REF_STORAGE_THRESHOLD_CHARS + 1),
+        parameters: { type: 'object', properties: {} },
+        strict: true,
+      },
+    ],
   });
+
+  assert.equal(decision.storage, 'ref');
+  assert.equal(decision.preview.kind, 'json');
+  assert.match(decision.preview.excerpt, /searchKnowledge/);
+  assert.equal(decision.preview.itemCount, 1);
+});
+
+test('getStorageDecision retains the legacy function call when an assistant message has an empty function_calls array', () => {
+  const decision = getStorageDecision({
+    type: 'chat-message',
+    value: {
+      type: 'assistant',
+      message: '',
+      function_call: { id: 'call_1', name: 'lookup', arguments: '{}' },
+      function_calls: [],
+    },
+  });
+
+  assert.equal(decision.storage, 'ref');
+  assert.equal(decision.preview.kind, 'summary');
+  assert.equal(decision.preview.excerpt, '[Tool call: lookup]');
 });

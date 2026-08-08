@@ -6,11 +6,14 @@ import {
 } from './chatV2Retry.js';
 import type { ChatV2Provider } from './chatV2Types.js';
 import type { ChartNode, NodeId } from '../NodeBase.js';
+import { llmProfileDataKeys } from './llmProfileFieldRegistry.js';
+import type { CustomProviderApi } from './customProviderApi.js';
+
+export type { CustomProviderApi } from './customProviderApi.js';
 
 export type LLMChatV2ToolChoiceMode = '' | 'auto' | 'function' | 'required';
 export type LLMChatV2ApiKeySource = 'environment' | 'input';
 export type LLMChatV2ConfigurationMode = 'inline' | 'profile';
-
 export type LLMChatV2NodeConfigData = ChatV2CommonNodeData & {
   configurationMode?: LLMChatV2ConfigurationMode;
   provider: ChatV2Provider;
@@ -19,6 +22,8 @@ export type LLMChatV2NodeConfigData = ChatV2CommonNodeData & {
   customProviderApiKeyEnvVarName?: string;
   customProviderBaseURL: string;
   useCustomProviderBaseURLInput: boolean;
+  /** Missing on legacy/programmatically-created nodes means Chat Completions. */
+  customProviderApi?: CustomProviderApi;
   baseURL: string;
   useBaseURLInput: boolean;
   headers: { key: string; value: string }[];
@@ -56,67 +61,23 @@ export type LLMChatV2NodeConfigData = ChatV2CommonNodeData & {
   retryOnNon200?: boolean;
   retryOnNon200RepeatTimes?: number;
   retryOnNon200CooldownMs?: number;
-  outputRequestStatus?: boolean;
-  outputRequestError?: boolean;
+  outputLLMAttempts?: boolean;
   outputRequestBody?: boolean;
+  outputResponseBody?: boolean;
 };
 
 export type LLMChatV2NodeData = LLMChatV2NodeConfigData;
 export type LLMChatV2Node = ChartNode<'llmChatV2', LLMChatV2NodeData>;
 
-export const llmChatV2ProfileDataKeys = [
-  'model',
-  'useModelInput',
-  'temperature',
-  'useTemperatureInput',
-  'topP',
-  'useTopPInput',
-  'topK',
-  'useTopKInput',
-  'presencePenalty',
-  'usePresencePenaltyInput',
-  'frequencyPenalty',
-  'useFrequencyPenaltyInput',
-  'stopSequences',
-  'useStopSequencesInput',
-  'seed',
-  'useSeedInput',
-  'maxTokens',
-  'useMaxTokensInput',
-  'provider',
-  'apiKeySource',
-  'customProviderApiKeyProgrammaticName',
-  'customProviderApiKeyEnvVarName',
-  'customProviderBaseURL',
-  'useCustomProviderBaseURLInput',
-  'headers',
-  'useHeadersInput',
-  'extraProviderOptions',
-  'useExtraProviderOptionsInput',
-  'openAIReasoningEffort',
-  'openAIReasoningSummary',
-  'openAIPreviousResponseId',
-  'useOpenAIPreviousResponseIdInput',
-  'enableOpenAIWebSearch',
-  'openAIWebSearchContextSize',
-  'enableOpenAICodeInterpreter',
-  'anthropicThinkingMode',
-  'anthropicThinkingBudget',
-  'useAnthropicThinkingBudgetInput',
-  'anthropicEffort',
-  'anthropicCacheControlTtl',
-  'googleThinkingBudget',
-  'useGoogleThinkingBudgetInput',
-  'googleThinkingLevel',
-  'googleIncludeThoughts',
-  'enableGoogleSearchGrounding',
-  'enableGoogleUrlContext',
-] as const satisfies readonly (keyof LLMChatV2NodeData)[];
+/** @deprecated Use llmProfileDataKeys from llmProfileFieldRegistry instead. */
+export const llmChatV2ProfileDataKeys = llmProfileDataKeys;
 
 export type LLMChatV2ProfileDataKey = (typeof llmChatV2ProfileDataKeys)[number];
 export type LLMChatV2ProfileData = Pick<LLMChatV2NodeData, LLMChatV2ProfileDataKey>;
 
 export type LLMChatV2EditorCacheKeyParts = {
+  /** Bump when cache identity semantics change; entries are editor-memory only. */
+  cacheVersion?: number;
   nodeId: NodeId;
   nodeData: LLMChatV2NodeData;
   provider: ChatV2Provider;
@@ -146,6 +107,7 @@ export function createLLMChatV2NodeData(): LLMChatV2NodeData {
     customProviderApiKeyEnvVarName: 'CUSTOM_PROVIDER_API_KEY',
     customProviderBaseURL: '',
     useCustomProviderBaseURLInput: false,
+    customProviderApi: 'completions',
     baseURL: '',
     useBaseURLInput: false,
     headers: [],
@@ -183,9 +145,9 @@ export function createLLMChatV2NodeData(): LLMChatV2NodeData {
     retryOnNon200: false,
     retryOnNon200RepeatTimes: DEFAULT_LLM_CHAT_V2_RETRY_ON_NON_200_REPEAT_TIMES,
     retryOnNon200CooldownMs: DEFAULT_LLM_CHAT_V2_RETRY_ON_NON_200_COOLDOWN_MS,
-    outputRequestStatus: false,
-    outputRequestError: false,
+    outputLLMAttempts: false,
     outputRequestBody: false,
+    outputResponseBody: false,
   };
 }
 

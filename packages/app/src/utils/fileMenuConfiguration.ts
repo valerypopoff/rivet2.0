@@ -44,10 +44,24 @@ export const FILE_MENU_GROUPS = [
 
 export const DEFAULT_FILE_MENU_ITEM_IDS = FILE_MENU_GROUPS.flatMap((group) => group.map((item) => item.id));
 
+const FILE_MENU_ITEM_IDS = new Set<MenuIds>(DEFAULT_FILE_MENU_ITEM_IDS);
+
 export function getVisibleFileMenuGroups(config?: FileMenuConfig): FileMenuGroupDefinition[] {
   const visibleItemIds = new Set<FileMenuItemId>(config?.visibleItems ?? DEFAULT_FILE_MENU_ITEM_IDS);
 
   return FILE_MENU_GROUPS.map((group) => group.filter((item) => visibleItemIds.has(item.id))).filter(
     (group) => group.length > 0,
   );
+}
+
+export function isFileMenuItemId(command: MenuIds): command is FileMenuItemId {
+  return FILE_MENU_ITEM_IDS.has(command);
+}
+
+export function shouldRunFileMenuCommand(command: MenuIds, config?: FileMenuConfig): boolean {
+  if (!isFileMenuItemId(command) || config?.visibleItems == null) {
+    return true;
+  }
+
+  return config.visibleItems.includes(command);
 }

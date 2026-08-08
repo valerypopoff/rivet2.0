@@ -1,6 +1,12 @@
-import { type ChartNode, type NodeId, type NodeInputDefinition, type NodeOutputDefinition } from '../NodeBase.js';
+import {
+  type ChartNode,
+  type NodeId,
+  type NodeInputDefinition,
+  type NodeOutputDefinition,
+  type PortId,
+} from '../NodeBase.js';
 import { nanoid } from 'nanoid/non-secure';
-import { NodeImpl, type NodeUIData } from '../NodeImpl.js';
+import { NodeImpl, type NodeRunActivityDescriptor, type NodeUIData } from '../NodeImpl.js';
 import type { Inputs, Outputs } from '../GraphProcessor.js';
 import { type InternalProcessContext } from '../ProcessContext.js';
 import { type EditorDefinition } from '../../index.js';
@@ -33,6 +39,13 @@ export class ChatNodeImpl extends NodeImpl<ChatNode> {
 
   getOutputDefinitions(): NodeOutputDefinition[] {
     return ChatNodeBase.getOutputDefinitions(this.data);
+  }
+
+  getRunActivityDescriptor(): NodeRunActivityDescriptor {
+    return {
+      category: 'model',
+      primaryOutputPortId: 'response' as PortId,
+    };
   }
 
   static getUIData(): NodeUIData {

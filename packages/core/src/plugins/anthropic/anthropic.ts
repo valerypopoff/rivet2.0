@@ -3,6 +3,7 @@ import { parseProviderJsonChunk } from '../../utils/providerStreamParsing.js';
 
 export type AnthropicModel = {
   maxTokens: number;
+  /** USD per token. Anthropic Chat consumers multiply this directly by token counts. */
   cost: {
     prompt: number;
     completion: number;
@@ -14,8 +15,8 @@ export const anthropicModels = {
   'claude-instant-1': {
     maxTokens: 100_000,
     cost: {
-      prompt: 0.00163,
-      completion: 0.00551,
+      prompt: 1.63e-6,
+      completion: 5.51e-6,
     },
     displayName: 'Claude Instant',
   },
@@ -95,7 +96,7 @@ export const anthropicModels = {
     maxTokens: 200_000,
     cost: {
       prompt: 3e-6,
-      completion: 3.75e-6,
+      completion: 15e-6,
     },
     displayName: 'Claude Sonnet 4',
   },
@@ -103,7 +104,7 @@ export const anthropicModels = {
     maxTokens: 200_000,
     cost: {
       prompt: 15e-6,
-      completion: 18.75e-6,
+      completion: 75e-6,
     },
     displayName: 'Claude Opus 4',
   },

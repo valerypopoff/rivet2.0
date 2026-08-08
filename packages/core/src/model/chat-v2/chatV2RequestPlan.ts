@@ -6,7 +6,10 @@ import type {
   RunChatV2PipelineOptions,
   StreamChatV2Options,
 } from './chatV2Types.js';
-import { shouldOutputChatV2RequestBody, shouldOutputChatV2RequestError } from './chatV2Types.js';
+import {
+  shouldOutputChatV2RequestBody,
+  shouldOutputChatV2ResponseBody,
+} from './chatV2Types.js';
 
 export type ChatV2TransportMode = 'stream' | 'generate';
 
@@ -24,9 +27,8 @@ export type ChatV2RequestPlan = {
     RunChatV2PipelineOptions,
     | 'outputUsage'
     | 'outputReasoning'
-    | 'outputRequestStatus'
-    | 'outputRequestError'
     | 'outputRequestBody'
+    | 'outputResponseBody'
     | 'includeFunctionCalls'
     | 'functionCallMode'
   >;
@@ -54,9 +56,8 @@ type BuildChatV2RequestPlanOptions = Pick<
   | 'retryOnNon200CooldownMs'
   | 'outputUsage'
   | 'outputReasoning'
-  | 'outputRequestStatus'
-  | 'outputRequestError'
   | 'outputRequestBody'
+  | 'outputResponseBody'
   | 'includeFunctionCalls'
   | 'emitPartialOutputs'
   | 'functionCallMode'
@@ -120,9 +121,8 @@ export function buildChatV2RequestPlan(options: BuildChatV2RequestPlanOptions): 
     output: {
       outputUsage: options.outputUsage,
       outputReasoning: options.outputReasoning,
-      outputRequestStatus: options.outputRequestStatus === true,
-      outputRequestError: shouldOutputChatV2RequestError(options),
       outputRequestBody: shouldOutputChatV2RequestBody(options),
+      outputResponseBody: shouldOutputChatV2ResponseBody(options),
       includeFunctionCalls: options.includeFunctionCalls,
       functionCallMode: options.functionCallMode,
     },

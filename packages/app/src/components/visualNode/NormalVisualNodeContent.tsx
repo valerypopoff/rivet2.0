@@ -84,12 +84,7 @@ export const NormalVisualNodeContent: FC<{
     isNodePrefabInstance = false,
   }) => {
     useDependsOnPlugins();
-    const {
-      onNodeSelected,
-      onNodeSizeChanged,
-      onNodeStartEditing,
-      onResizeFinish,
-    } = useCanvasHandlersContext();
+    const { onNodeSelected, onNodeSizeChanged, onNodeStartEditing, onResizeFinish } = useCanvasHandlersContext();
     const { clientToCanvasPosition } = useCanvasPositioning();
     const setViewingNodeChanges = useSetAtom(viewingNodeChangesState);
     const setViewingProjectComparisonNode = useSetAtom(viewingProjectComparisonNodeState);

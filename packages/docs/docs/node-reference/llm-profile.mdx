@@ -19,7 +19,7 @@ The profile contains:
 
 - provider and model
 - the resolved API key and its source metadata
-- Custom-provider base URL
+- Custom-provider base URL and Completions/Responses API choice
 - common generation parameters
 - OpenAI Previous Response ID
 - provider-specific reasoning and thinking settings
@@ -47,6 +47,13 @@ contains the resolved key, including when it came from Rivet settings or a
 programmatic runtime option. It can therefore appear in execution data,
 recordings, previews, or remote transport just like any other node output.
 
+For an intentionally keyless Custom profile, use configured-key mode, clear
+both alternative key-name fields, and leave the shared Custom provider key
+empty. If a configured programmatic or environment key name is present but
+missing at runtime, the profile fails instead of silently retrying without
+authentication. An explicit `Authorization` header remains available for
+header-authenticated endpoints.
+
 ## Outputs
 
 | Title   | Data Type    | Description                                               |
@@ -60,7 +67,7 @@ recordings, previews, or remote transport just like any other node output.
 3. Use an Array node to collect the profiles in preferred order, then connect
    the resulting `llm-config[]` value to **LLM Profiles**.
 4. LLM Chat retries the first profile according to its own **Retry on non-200**
-   settings before trying the next profile. Inspect **LLM Profile Attempts** to
+   settings before trying the next profile. Inspect **LLM Attempts** to
    see which profiles and physical attempts ran.
 
 ## See Also

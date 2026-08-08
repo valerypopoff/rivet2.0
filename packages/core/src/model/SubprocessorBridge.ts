@@ -48,6 +48,8 @@ export function wireSubprocessorEvents(
     processor.on('nodeFinish', (event) => parentEmitter.emit('nodeFinish', event)),
     processor.on('partialOutput', (event) => parentEmitter.emit('partialOutput', event)),
     processor.on('progress', (event) => parentEmitter.emit('progress', event)),
+    processor.on('llmCallFinished', (event) => parentEmitter.emit('llmCallFinished', event)),
+    processor.on('toolCallFinished', (event) => parentEmitter.emit('toolCallFinished', event)),
     processor.on('nodeExcluded', (event) => parentEmitter.emit('nodeExcluded', event)),
     processor.on('nodeStart', (event) => parentEmitter.emit('nodeStart', event)),
     processor.on('graphAbort', (event) => parentEmitter.emit('graphAbort', event)),

@@ -1,5 +1,6 @@
 import { type ChartNode } from '@valerypopoff/rivet2-core';
 import { type FC } from 'react';
+import { ToolCallContinuationIndicator } from './ToolCallContinuationIndicator.js';
 
 const GlobalNodeTitleIcon: FC<{ direction: 'get' | 'set' }> = ({ direction }) => (
   <svg
@@ -49,11 +50,13 @@ export const NodeTitleLabel: FC<{ node: Pick<ChartNode, 'title' | 'type'> }> = (
         ? 'set'
         : undefined;
   const hasKnowledgeIcon = knowledgeNodeTypes.has(node.type);
+  const hasToolCallContinuationIcon = node.type === 'delegateFunctionCall';
 
   return (
     <span className="title-text-label">
       {globalIconDirection && <GlobalNodeTitleIcon direction={globalIconDirection} />}
       {hasKnowledgeIcon && <KnowledgeNodeTitleIcon />}
+      {hasToolCallContinuationIcon && <ToolCallContinuationIndicator />}
       {node.title}
     </span>
   );

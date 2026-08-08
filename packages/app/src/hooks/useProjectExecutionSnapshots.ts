@@ -11,6 +11,7 @@ import {
   lastRunDataByNodeState,
   projectExecutionSnapshotsState,
   rootGraphState,
+  runActivityJournalState,
   runningGraphsState,
   selectedGraphRunByViewState,
   selectedProcessPageNodesState,
@@ -20,6 +21,7 @@ import { lastRecordingState } from '../state/execution.js';
 import { userInputModalQuestionsState } from '../state/userInput.js';
 import { useDataRefs } from '../providers/ProvidersContext.js';
 import { clearExecutionDataRefs } from '../utils/executionDataStorage.js';
+import { createRunActivityJournal } from '../features/runActivity/runActivityJournal.js';
 
 export function useProjectExecutionSnapshots() {
   const store = useStore();
@@ -36,6 +38,7 @@ export function useProjectExecutionSnapshots() {
       lastRecording: store.get(lastRecordingState),
       lastRunDataByNode: store.get(lastRunDataByNodeState),
       rootGraph: store.get(rootGraphState),
+      runActivityJournal: store.get(runActivityJournalState),
       runningGraphs: store.get(runningGraphsState),
       selectedGraphRunByView: store.get(selectedGraphRunByViewState),
       selectedProcessPageNodes: store.get(selectedProcessPageNodesState),
@@ -55,6 +58,7 @@ export function useProjectExecutionSnapshots() {
       store.set(lastRecordingState, nextSnapshot.lastRecording);
       store.set(lastRunDataByNodeState, nextSnapshot.lastRunDataByNode);
       store.set(rootGraphState, nextSnapshot.rootGraph);
+      store.set(runActivityJournalState, nextSnapshot.runActivityJournal ?? createRunActivityJournal());
       store.set(runningGraphsState, nextSnapshot.runningGraphs);
       store.set(selectedGraphRunByViewState, nextSnapshot.selectedGraphRunByView);
       store.set(selectedProcessPageNodesState, nextSnapshot.selectedProcessPageNodes);

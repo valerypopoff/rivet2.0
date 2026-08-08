@@ -1,6 +1,7 @@
 import clsx from 'clsx';
 import type { FC, KeyboardEvent, SVGProps } from 'react';
 import CrossIcon from 'majesticons/line/multiply-line.svg?react';
+import PlusIcon from 'majesticons/line/plus-line.svg?react';
 import SearchIcon from 'majesticons/line/search-line.svg?react';
 import SettingsCogIcon from 'majesticons/line/settings-cog-line.svg?react';
 import { Tooltip } from '../Tooltip.js';
@@ -8,9 +9,11 @@ import { SubgraphLinkIcon } from '../visualNode/SubgraphLinkIcon.js';
 import { GRAPH_FILTER_INPUT_MARKER } from './graphFilterFocus.js';
 
 export const GraphListHeader: FC<{
+  hasWebApps: boolean;
   nodeLibraryItemCount: number;
   nodeLibraryOpen: boolean;
   onClearFilter(): void;
+  onCreateWebApp(): void;
   onFilterKeyDown(event: KeyboardEvent<HTMLInputElement>): void;
   onFilterTextChange(value: string): void;
   onOpenNodeLibrary(): void;
@@ -19,9 +22,11 @@ export const GraphListHeader: FC<{
   projectTitle: string;
   searchText: string;
 }> = ({
+  hasWebApps,
   nodeLibraryItemCount,
   nodeLibraryOpen,
   onClearFilter,
+  onCreateWebApp,
   onFilterKeyDown,
   onFilterTextChange,
   onOpenNodeLibrary,
@@ -86,6 +91,12 @@ export const GraphListHeader: FC<{
           </button>
         )}
       </div>
+      {!hasWebApps && (
+        <button type="button" className="graph-list-action" onClick={onCreateWebApp}>
+          <PlusIcon aria-hidden="true" className="project-tree-panel-icon" />
+          <span>Create web app</span>
+        </button>
+      )}
     </div>
   </div>
 );

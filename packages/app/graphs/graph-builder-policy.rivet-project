@@ -22,6 +22,7 @@ data:
             baseURL: ""
             cache: false
             configurationMode: inline
+            customProviderApi: completions
             customProviderApiKeyEnvVarName: ""
             customProviderApiKeyProgrammaticName: ""
             customProviderBaseURL: ""
@@ -40,10 +41,10 @@ data:
             openAIReasoningEffort: ""
             openAIReasoningSummary: ""
             openAIWebSearchContextSize: medium
+            outputLLMAttempts: false
             outputReasoning: false
             outputRequestBody: false
-            outputRequestError: false
-            outputRequestStatus: false
+            outputResponseBody: false
             outputUsage: false
             parallelToolCalls: false
             provider: openai
@@ -172,6 +173,7 @@ data:
             baseURL: ""
             cache: false
             configurationMode: inline
+            customProviderApi: completions
             customProviderApiKeyEnvVarName: ""
             customProviderApiKeyProgrammaticName: ""
             customProviderBaseURL: ""
@@ -190,10 +192,10 @@ data:
             openAIReasoningEffort: ""
             openAIReasoningSummary: ""
             openAIWebSearchContextSize: medium
+            outputLLMAttempts: false
             outputReasoning: false
             outputRequestBody: false
-            outputRequestError: false
-            outputRequestStatus: false
+            outputResponseBody: false
             outputUsage: false
             parallelToolCalls: false
             provider: openai

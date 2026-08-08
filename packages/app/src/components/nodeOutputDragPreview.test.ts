@@ -175,7 +175,9 @@ test('inline node output actions reserve flow space without moving their hit tar
   );
 
   assert.match(nodeInlineOutputSource, /const hasPromptDesignerAction = node\.type === 'chat';/);
-  assert.match(nodeInlineOutputSource, /'node-output-inner has-output-actions has-prompt-designer-action'/);
+  assert.match(nodeInlineOutputSource, /const hasResponseInspectorAction = node\.type === 'llmChatV2';/);
+  assert.match(nodeInlineOutputSource, /<AgentResponseInspector[\s\S]*?renderInPortal \/>/);
+  assert.match(nodeInlineOutputSource, /'node-output-inner has-output-actions has-extra-output-action'/);
   assert.match(nodeInlineOutputSource, /'node-output-inner has-output-actions'/);
   assert.match(
     nodeStylesSource,
@@ -197,21 +199,37 @@ test('inline node output actions reserve flow space without moving their hit tar
     nodeStylesSource,
     /\.node-output-inner,[\s\S]*?--node-output-unfold-icon-size: [^;]+;[\s\S]*?--node-output-unfold-icon-offset-x: [^;]+;[\s\S]*?--node-output-unfold-icon-offset-y: [^;]+;/,
   );
+  assert.match(nodeStylesSource, /--node-output-unfold-margin-left: 0px;/);
+  assert.match(nodeStylesSource, /--node-output-unfold-margin-right: 0px;/);
   assert.match(
     nodeStylesSource,
     /\.node-output-inner,[\s\S]*?--node-output-copy-icon-size: [^;]+;[\s\S]*?--node-output-copy-icon-offset-x: [^;]+;[\s\S]*?--node-output-copy-icon-offset-y: [^;]+;/,
+  );
+  assert.match(nodeStylesSource, /--node-output-copy-margin-left: 0px;/);
+  assert.match(nodeStylesSource, /--node-output-copy-margin-right: 0px;/);
+  assert.match(
+    nodeStylesSource,
+    /\.node-output-inner,[\s\S]*?--node-output-response-inspector-icon-size: [^;]+;[\s\S]*?--node-output-response-inspector-icon-offset-x: [^;]+;[\s\S]*?--node-output-response-inspector-icon-offset-y: [^;]+;/,
+  );
+  assert.match(
+    nodeStylesSource,
+    /\.node-output-inner,[\s\S]*?--node-output-response-inspector-margin-left: calc\(3\.5px \* var\(--ui-font-scale\)\);[\s\S]*?--node-output-response-inspector-margin-right: calc\(-2px \* var\(--ui-font-scale\)\);/,
   );
   assert.match(
     nodeStylesSource,
     /\.node-output-inner,[\s\S]*?--node-output-prompt-designer-icon-size: [^;]+;[\s\S]*?--node-output-prompt-designer-icon-offset-x: [^;]+;[\s\S]*?--node-output-prompt-designer-icon-offset-y: [^;]+;/,
   );
+  assert.match(nodeStylesSource, /--node-output-prompt-designer-margin-left: 0px;/);
+  assert.match(nodeStylesSource, /--node-output-prompt-designer-margin-right: 0px;/);
   assert.match(
     nodeStylesSource,
     /\.node-output-inner,[\s\S]*?--node-output-fullscreen-icon-size: [^;]+;[\s\S]*?--node-output-fullscreen-icon-offset-x: [^;]+;[\s\S]*?--node-output-fullscreen-icon-offset-y: [^;]+;/,
   );
+  assert.match(nodeStylesSource, /--node-output-fullscreen-margin-left: 0px;/);
+  assert.match(nodeStylesSource, /--node-output-fullscreen-margin-right: 0px;/);
   assert.match(
     nodeStylesSource,
-    /\.node-output-inner\.has-prompt-designer-action \{[\s\S]*?--node-output-action-exclusion-width: calc\(120px \* var\(--ui-font-scale\)\);/,
+    /\.node-output-inner\.has-extra-output-action \{[\s\S]*?--node-output-action-exclusion-width: calc\(120px \* var\(--ui-font-scale\)\);/,
   );
   assert.match(
     nodeStylesSource,
@@ -223,11 +241,23 @@ test('inline node output actions reserve flow space without moving their hit tar
   );
   assert.match(
     nodeStylesSource,
+    /\.copy-button,[\s\S]*?\.response-inspector-button,[\s\S]*?\.prompt-designer-button \{[\s\S]*?width: var\(--node-output-action-hit-size\);/,
+  );
+  assert.match(
+    nodeStylesSource,
+    /\.output-toggle-button \{[\s\S]*?margin-left: var\(--node-output-unfold-margin-left\);[\s\S]*?margin-right: var\(--node-output-unfold-margin-right\);[\s\S]*?\.copy-button \{[\s\S]*?margin-left: var\(--node-output-copy-margin-left\);[\s\S]*?margin-right: var\(--node-output-copy-margin-right\);[\s\S]*?\.response-inspector-button \{[\s\S]*?margin-left: var\(--node-output-response-inspector-margin-left\);[\s\S]*?margin-right: var\(--node-output-response-inspector-margin-right\);[\s\S]*?\.prompt-designer-button \{[\s\S]*?margin-left: var\(--node-output-prompt-designer-margin-left\);[\s\S]*?margin-right: var\(--node-output-prompt-designer-margin-right\);[\s\S]*?\.expand-button \{[\s\S]*?margin-left: var\(--node-output-fullscreen-margin-left\);[\s\S]*?margin-right: var\(--node-output-fullscreen-margin-right\);/,
+  );
+  assert.match(
+    nodeStylesSource,
     /\.output-toggle-button svg \{[\s\S]*?width: var\(--node-output-unfold-icon-size\);[\s\S]*?height: var\(--node-output-unfold-icon-size\);[\s\S]*?transform: translate\(var\(--node-output-unfold-icon-offset-x\), var\(--node-output-unfold-icon-offset-y\)\);/,
   );
   assert.match(
     nodeStylesSource,
     /\.copy-button svg \{[\s\S]*?width: var\(--node-output-copy-icon-size\);[\s\S]*?height: var\(--node-output-copy-icon-size\);[\s\S]*?transform: translate\(var\(--node-output-copy-icon-offset-x\), var\(--node-output-copy-icon-offset-y\)\);/,
+  );
+  assert.match(
+    nodeStylesSource,
+    /\.response-inspector-button svg \{[\s\S]*?width: var\(--node-output-response-inspector-icon-size\);[\s\S]*?height: var\(--node-output-response-inspector-icon-size\);[\s\S]*?transform: translate\(\s*var\(--node-output-response-inspector-icon-offset-x\),\s*var\(--node-output-response-inspector-icon-offset-y\)\s*\);/,
   );
   assert.match(
     nodeStylesSource,
@@ -290,4 +320,31 @@ test('inline node output actions reserve flow space without moving their hit tar
     /\.structured-node-output-section \+ \.structured-node-output-section \{[\s\S]*?margin-top: var\(--output-section-group-gap, \$\{outputSectionGroupGap\}\);/,
   );
   assert.match(structuredNodeOutputStylesBlock, /\.output-section-header \{[\s\S]*?align-items: baseline;/);
+});
+
+test('response inspector uses semantic diagnostics in an app-level modal', () => {
+  const inspectorSource = readFileSync(join(componentsDir, 'agentTrace', 'AgentResponseInspector.tsx'), 'utf8');
+
+  assert.match(inspectorSource, /<MetricGroup title="Execution">/);
+  assert.match(inspectorSource, /title="Recovery behavior"/);
+  assert.match(inspectorSource, /label="Provider request retries"/);
+  assert.match(inspectorSource, /label="LLM profile fallbacks"/);
+  assert.match(inspectorSource, /<MetricGroup title="Usage and cost">/);
+  assert.match(inspectorSource, /<h3>Timing<\/h3>/);
+  assert.match(inspectorSource, /<ModalTransition>/);
+  assert.match(inspectorSource, /<Modal onClose=\{onClose\} width="large">/);
+  assert.match(inspectorSource, /<AppModalHeader title="Response inspector" onClose=\{onClose\} \/>/);
+  assert.match(inspectorSource, /<ModalBody>\{content\}<\/ModalBody>/);
+  assert.doesNotMatch(inspectorSource, /createPortal/);
+  assert.match(inspectorSource, /const useEditorModal = renderInPortal && typeof document !== 'undefined'/);
+  assert.match(inspectorSource, /\.rivet-agent-response-inspector-metrics \{[\s\S]*?margin: 0;[\s\S]*?padding: 0;/);
+  assert.match(
+    inspectorSource,
+    /header button:focus-visible \{[\s\S]*?box-shadow: inset 0 0 0 1px var\(--rivet-web-app-control-focus-border, var\(--primary\)\);/,
+  );
+  assert.match(inspectorSource, /--response-inspector-card-background: var\(--surface-row-hover-bg\)/);
+  assert.match(inspectorSource, /--response-inspector-muted: var\(--foreground-muted\)/);
+  assert.match(inspectorSource, /const inlineResponseInspectorCss = css/);
+  assert.doesNotMatch(inspectorSource, /Open graph at this run/);
+  assert.doesNotMatch(inspectorSource, /trace\.(?:traceId|graphId|nodeId|processId)/);
 });

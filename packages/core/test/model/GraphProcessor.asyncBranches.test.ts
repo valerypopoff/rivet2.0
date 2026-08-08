@@ -620,10 +620,18 @@ void describe('GraphProcessor managed async branches', () => {
     );
     const outputProcessor = createProcessor(graphWithOutput);
     const rootErrors: Array<Error | string> = [];
+    const graphErrors: ProcessEvents['graphError'][] = [];
     outputProcessor.on('error', ({ error }) => rootErrors.push(error));
+    outputProcessor.on('graphError', (event) => graphErrors.push(event));
     await assert.rejects(outputProcessor.processGraph(testProcessContext()), /cannot contain Graph Output node/);
     assert.equal(rootErrors.length, 1);
     assert.match(String(rootErrors[0]), /cannot contain Graph Output node/);
+    assert.equal(graphErrors.length, 1);
+    assert.equal(graphErrors[0]!.graph.metadata?.id, graphWithOutput.metadata?.id);
+    assert.match(String(graphErrors[0]!.error), /cannot contain Graph Output node/);
+    assert.equal(graphErrors[0]!.execution.graphId, graphWithOutput.metadata?.id);
+    assert.ok(String(graphErrors[0]!.execution.rootRunId));
+    assert.ok(String(graphErrors[0]!.execution.graphRunId));
 
     const graphWithJoin = makeGraph(
       'async-join-invalid',

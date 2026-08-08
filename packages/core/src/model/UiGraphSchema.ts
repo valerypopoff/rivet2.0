@@ -107,7 +107,13 @@ export const UI_GRAPH_COMPONENT_SCHEMA = z.discriminatedUnion(
       objectOptions,
     ),
     z.object(
-      { id: componentId, type: z.literal('chat'), placeholder: optionalString, action: chatRunGraphActionSchema },
+      {
+        id: componentId,
+        type: z.literal('chat'),
+        placeholder: optionalString,
+        allowResponseInspection: z.boolean().optional(),
+        action: chatRunGraphActionSchema,
+      },
       objectOptions,
     ),
     z.object(

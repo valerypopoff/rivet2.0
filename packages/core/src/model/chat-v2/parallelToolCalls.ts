@@ -1,10 +1,12 @@
 import type { ChatV2Provider, ChatV2ProviderOptions } from './chatV2Types.js';
+import { getCustomProviderApiContract, type CustomProviderApi } from './customProviderApi.js';
+import { getChatV2ProviderCapabilities } from './chatV2ProviderRegistry.js';
 
 export const LLM_CHAT_V2_PARALLEL_TOOL_CALLS_HELPER_MESSAGE =
-  'Supported by OpenAI, Anthropic, and compatible Custom providers. Custom providers receive parallel_tool_calls only when enabled; otherwise their default applies unless Extra provider options supplies the field.';
+  'Allows the model to request multiple tool calls in one round.';
 
 export function supportsLLMChatV2ParallelToolCalls(provider: ChatV2Provider): boolean {
-  return provider === 'openai' || provider === 'anthropic' || provider === 'custom';
+  return getChatV2ProviderCapabilities(provider).parallelToolCalls;
 }
 
 function mergeProviderOptions(
@@ -25,6 +27,7 @@ export function applyLLMChatV2ParallelToolCallProviderOptions(params: {
   provider: ChatV2Provider;
   useToolCalling: boolean | undefined;
   parallelToolCalls: boolean | undefined;
+  customProviderApi?: CustomProviderApi | undefined;
   providerOptions: ChatV2ProviderOptions | undefined;
 }): ChatV2ProviderOptions | undefined {
   const { provider, useToolCalling, parallelToolCalls, providerOptions } = params;
@@ -45,6 +48,12 @@ export function applyLLMChatV2ParallelToolCallProviderOptions(params: {
       });
 
     case 'custom':
+      if (getCustomProviderApiContract(params.customProviderApi).parallelToolCalls === 'openai-option') {
+        return mergeProviderOptions(providerOptions, 'openai', {
+          parallelToolCalls: !!parallelToolCalls,
+        });
+      }
+
       // OpenAI-compatible endpoints vary widely. Do not send an unsupported
       // field to existing/default Custom-provider graphs unless the user
       // explicitly opts in to requesting parallel calls.

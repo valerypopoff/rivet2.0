@@ -13,6 +13,8 @@ export type {
   RivetWebAppServerMessage,
 } from './model/UiGraphActionProtocol.js';
 export type { GraphProgress } from './model/GraphProgress.js';
+export type { AgentResponseTrace } from './model/AgentResponseTrace.js';
+export { isAgentResponseTrace } from './model/AgentResponseTrace.js';
 export type { RivetMarkdownSanitizerPolicy } from './model/MarkdownSanitizationPolicy.js';
 export type {
   UiGraphChatMessagePresentation,
@@ -21,6 +23,7 @@ export type {
 } from './model/UiGraphBrowserRuntime.js';
 export {
   createUiGraphChatHistoryFlushStatePatch,
+  createUiGraphChatMessageRemovalStatePatch,
   createUiGraphChatPinStatePatch,
   createUiGraphChatSubmissionStatePatch,
   getUiGraphActionState,
@@ -59,4 +62,7 @@ export {
   revealUiGraphChatElement,
   revealUiGraphChatSearchMatch,
   saveUiGraphChatPersistentState,
+  saveUiGraphResponseTrace,
+  loadUiGraphResponseTrace,
+  pruneUiGraphResponseTraces,
 } from './model/UiGraphBrowserRuntime.js';

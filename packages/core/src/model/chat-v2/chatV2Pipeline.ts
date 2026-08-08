@@ -1,4 +1,3 @@
-import type { ChatMessage } from '../DataValue.js';
 import type { PortId } from '../NodeBase.js';
 import { coercePromptToChatMessages, prependSystemPrompt } from '../chat/chatMessages.js';
 import { generateChatV2, streamChatV2 } from './aiSdkBridge.js';
@@ -15,34 +14,23 @@ import { chatV2ToolsToAiSdk } from './toolConverter.js';
 import { buildChatV2RequestPlan, type ChatV2RequestPlan } from './chatV2RequestPlan.js';
 import {
   getChatV2ProviderErrorStatusCode,
-  isChatV2ProviderApiCallError,
-  isChatV2ProviderFetchError,
   normalizeChatV2ProviderError,
 } from './chatV2Errors.js';
-import { waitForLLMChatV2RetryCooldown } from './chatV2Retry.js';
+import { createLLMChatV2RetryAbortError, waitForLLMChatV2RetryCooldown } from './chatV2Retry.js';
 import {
   createChatV2CommonOutputs,
-  createChatV2ProviderFailureOutputs,
   normalizeChatV2Usage,
 } from './chatV2Outputs.js';
+import { materializeLLMResponse } from './llmResponseMaterializer.js';
 
 type ChatV2WithRetryResult = {
   result: StreamChatV2Result;
-  requestStatuses: number[];
-  requestErrors: unknown[];
   responseError?: unknown;
 };
 
 export type ChatV2PipelineProviderFailure = {
-  requestMessages: ChatMessage[];
   options: RunChatV2PipelineOptions;
-  plan: ChatV2RequestPlan;
   normalizedError: unknown;
-  rawError: unknown;
-  requestStatuses: number[];
-  requestErrors: string[];
-  /** A completed non-200 custom stream may still have a useful response body. */
-  diagnosticResult?: ChatV2PipelineResult;
 };
 
 export type ChatV2PipelineExecution =
@@ -55,35 +43,27 @@ export type ChatV2PipelineExecution =
       failure: ChatV2PipelineProviderFailure;
     };
 
-class ChatV2RetryFailure extends Error {
-  constructor(
-    public readonly error: unknown,
-    public readonly requestStatuses: number[],
-    public readonly requestErrors: unknown[],
-  ) {
-    super('Chat v2 retry attempts failed');
-    this.name = 'ChatV2RetryFailure';
+/** Identifies legacy pipeline results that represent a terminal provider failure. */
+export function isChatV2PipelineProviderFailureResult(result: ChatV2PipelineResult): boolean {
+  return result.terminalOutcome === 'provider-failure';
+}
+
+export class ChatV2ResponseValidationError extends Error {
+  constructor(public readonly responseDataType: string) {
+    super(
+      'LLM profile response validation failed.\n' +
+        'Response format: JSON schema\n' +
+        `Parsed Response type: ${responseDataType}\n` +
+        'The provider request succeeded, but the final value prepared for the Response port is not an object. ' +
+        'JSON schema response format requires an object, so Rivet rejected this LLM profile. ' +
+        'Retry on non-200 does not apply to this validation failure.',
+    );
+    this.name = 'ChatV2ResponseValidationError';
   }
 }
 
-function isChatV2RetryFailure(error: unknown): error is ChatV2RetryFailure {
-  return error instanceof ChatV2RetryFailure;
-}
-
-function getProviderFailureMessage(error: unknown): string {
-  try {
-    if (error instanceof Error && typeof error.message === 'string') {
-      return error.message;
-    }
-  } catch {
-    return 'Provider request failed with unreadable error metadata.';
-  }
-
-  try {
-    return String(error);
-  } catch {
-    return 'Provider request failed with unreadable error metadata.';
-  }
+export function isChatV2ResponseValidationError(error: unknown): error is ChatV2ResponseValidationError {
+  return error instanceof ChatV2ResponseValidationError;
 }
 
 function buildNon200StatusError(statusCode: number): Error & { statusCode: number } {
@@ -93,13 +73,6 @@ function buildNon200StatusError(statusCode: number): Error & { statusCode: numbe
   error.name = 'AI_APICallError';
   error.statusCode = statusCode;
   return error;
-}
-
-function normalizeProviderFailureMessage(
-  error: unknown,
-  options: Pick<RunChatV2PipelineOptions, 'provider' | 'modelId'>,
-): string {
-  return getProviderFailureMessage(normalizeProviderFailure(error, options));
 }
 
 function normalizeProviderFailure(
@@ -114,13 +87,6 @@ function normalizeProviderFailure(
   } catch {
     return error;
   }
-}
-
-function normalizeProviderFailureMessages(
-  errors: unknown[],
-  options: Pick<RunChatV2PipelineOptions, 'provider' | 'modelId'>,
-): string[] {
-  return errors.map((error) => normalizeProviderFailureMessage(error, options));
 }
 
 function notifyProviderAttempt(options: RunChatV2PipelineOptions, attempt: ChatV2ProviderAttempt): void {
@@ -138,20 +104,21 @@ async function runChatV2WithRetry(
   signal: AbortSignal,
   transportMode: ChatV2RequestPlan['transportMode'],
 ): Promise<ChatV2WithRetryResult> {
-  const requestStatuses: number[] = [];
-  const requestErrors: unknown[] = [];
-
   for (let attempt = 0; ; attempt++) {
     const callId = createObservedChatV2CallId(options);
+    const callStartedAt = Date.now();
     let callWasObserved = false;
     try {
       const result = transportMode === 'generate' ? await generateChatV2(chatOptions) : await streamChatV2(chatOptions);
+      await options.responseBodyCapture?.flush();
       const statusCode = result.requestStatus ?? 200;
       notifyChatV2CallFinished(options, {
         callId,
         attemptIndex: attempt,
         outcome: statusCode === 200 ? 'success' : 'provider-failure',
         result,
+        startedAt: callStartedAt,
+        durationMs: Math.max(0, Date.now() - callStartedAt),
       });
       callWasObserved = true;
 
@@ -162,48 +129,50 @@ async function runChatV2WithRetry(
         ...(statusCode === 200 ? {} : { error: buildNon200StatusError(statusCode) }),
       });
 
-      if (retryPlan.enabled) {
-        requestStatuses.push(statusCode);
-      }
-
       if (!retryPlan.enabled || statusCode === 200) {
-        return { result, requestStatuses, requestErrors };
+        return { result };
       }
 
       const responseError = buildNon200StatusError(statusCode);
-      requestErrors.push(responseError);
 
       if (attempt >= retryPlan.repeatTimes) {
-        return { result, requestStatuses, requestErrors, responseError };
+        return { result, responseError };
       }
 
       await waitForLLMChatV2RetryCooldown(retryPlan.cooldownMs, signal);
     } catch (error) {
+      await options.responseBodyCapture?.flush();
       if (!callWasObserved) {
         notifyChatV2CallFinished(options, {
           callId,
           attemptIndex: attempt,
           outcome: signal.aborted ? 'aborted' : 'provider-failure',
           error,
+          startedAt: callStartedAt,
+          durationMs: Math.max(0, Date.now() - callStartedAt),
         });
       }
       const statusCode = getChatV2ProviderErrorStatusCode(error);
       notifyProviderAttempt(options, {
         attemptIndex: attempt,
-        outcome: 'provider-failure',
+        outcome: signal.aborted ? 'aborted' : 'provider-failure',
         ...(statusCode == null ? {} : { status: statusCode }),
         error,
       });
+
+      if (signal.aborted) {
+        // The provider may reject concurrently with graph cancellation. The
+        // cancellation wins: it must neither retry nor masquerade as a
+        // provider failure to profile fallback and run activity.
+        throw createLLMChatV2RetryAbortError();
+      }
 
       if (!retryPlan.enabled || statusCode == null || statusCode === 200) {
         throw error;
       }
 
-      requestStatuses.push(statusCode);
-      requestErrors.push(error);
-
       if (attempt >= retryPlan.repeatTimes) {
-        throw new ChatV2RetryFailure(error, requestStatuses, requestErrors);
+        throw error;
       }
 
       await waitForLLMChatV2RetryCooldown(retryPlan.cooldownMs, signal);
@@ -211,74 +180,10 @@ async function runChatV2WithRetry(
   }
 }
 
-function buildProviderFailureResult(
-  requestMessages: ChatMessage[],
-  options: RunChatV2PipelineOptions,
-  plan: ChatV2RequestPlan,
-  normalizedError: unknown,
-  rawError: unknown,
-  requestStatuses: number[],
-  requestErrors: string[],
-): ChatV2PipelineResult | undefined {
-  if (!plan.output.outputRequestStatus && !plan.output.outputRequestError) {
-    return undefined;
-  }
-
-  const statusCode = getChatV2ProviderErrorStatusCode(normalizedError);
-  if (statusCode == null && !isChatV2ProviderApiCallError(rawError) && !isChatV2ProviderFetchError(rawError)) {
-    return undefined;
-  }
-  const responseError = getProviderFailureMessage(normalizedError);
-  const retryRequestStatuses = plan.retry.enabled
-    ? requestStatuses.length > 0
-      ? requestStatuses
-      : statusCode == null
-        ? []
-        : [statusCode]
-    : [];
-  const retryRequestErrors = plan.retry.enabled ? (requestErrors.length > 0 ? requestErrors : [responseError]) : [];
-
-  const commonOutputs = createChatV2ProviderFailureOutputs({
-    requestMessages,
-    responseStatus: statusCode,
-    responseError,
-    requestStatuses: retryRequestStatuses,
-    requestErrors: retryRequestErrors,
-    requestBodies: options.requestBodies,
-    outputUsage: plan.output.outputUsage,
-    outputReasoning: plan.output.outputReasoning,
-    outputRequestStatus: plan.output.outputRequestStatus,
-    outputRequestError: plan.output.outputRequestError,
-    outputRequestBody: plan.output.outputRequestBody,
-    includeFunctionCalls: plan.output.includeFunctionCalls,
-    retryOnNon200: plan.retry.enabled,
-  });
-  const allMessagesOutput = commonOutputs['all-messages' as PortId];
-
-  if (allMessagesOutput?.type !== 'chat-message[]') {
-    throw new Error('Chat v2 provider failure expected all-messages output to be chat-message[].');
-  }
-
-  return {
-    commonOutputs,
-    requestMessages,
-    allMessages: allMessagesOutput.value,
-    response: '',
-    functionCalls: [],
-    reasoning: '',
-    usage: undefined,
-    rawUsage: undefined,
-    finishReason: undefined,
-    providerMetadata: undefined,
-    requestStatus: statusCode,
-  };
-}
-
 /**
- * Runs one provider/model round without deciding whether a provider failure
- * should become diagnostic outputs or should advance an LLM Profile fallback
- * chain. Shared prompt/schema/tool construction errors deliberately continue
- * to throw: they are graph configuration errors, not a profile failure.
+ * Runs one provider/model round. Provider failures stay distinct from shared
+ * graph configuration errors so an LLM Profile fallback chain can advance to
+ * its next candidate; terminal failures always remain node errors.
  */
 export async function runChatV2PipelineExecution(options: RunChatV2PipelineOptions): Promise<ChatV2PipelineExecution> {
   const requestMessages = prependSystemPrompt(
@@ -324,19 +229,14 @@ export async function runChatV2PipelineExecution(options: RunChatV2PipelineOptio
                   functionCalls,
                   usage: undefined,
                   reasoning: '',
-                  requestStatus: undefined,
-                  responseError: undefined,
-                  requestStatuses: [],
-                  requestErrors: [],
                   requestBodies: undefined,
+                  responseBodies: undefined,
                   outputUsage: false,
                   outputReasoning: false,
-                  outputRequestStatus: false,
-                  outputRequestError: false,
                   outputRequestBody: false,
+                  outputResponseBody: false,
                   includeFunctionCalls: plan.output.includeFunctionCalls,
                   functionCallMode: plan.output.functionCallMode,
-                  retryOnNon200: false,
                   responseFormat: undefined,
                 }),
               );
@@ -351,29 +251,17 @@ export async function runChatV2PipelineExecution(options: RunChatV2PipelineOptio
       throw caughtError;
     }
 
-    const retryFailure = isChatV2RetryFailure(caughtError) ? caughtError : undefined;
-    const rawError = retryFailure?.error ?? caughtError;
     return {
       outcome: 'provider-failure',
       failure: {
-        requestMessages,
         options,
-        plan,
-        normalizedError: normalizeProviderFailure(rawError, options),
-        rawError,
-        requestStatuses: retryFailure?.requestStatuses ?? [],
-        requestErrors: normalizeProviderFailureMessages(retryFailure?.requestErrors ?? [], options),
+        normalizedError: normalizeProviderFailure(caughtError, options),
       },
     };
   }
 
   const usage = normalizeChatV2Usage(chatResponse.result.usage, options);
-  const requestStatuses = chatResponse.requestStatuses;
   const requestStatus = chatResponse.result.requestStatus ?? 200;
-  const requestErrors = normalizeProviderFailureMessages(chatResponse.requestErrors, options);
-  const responseError = chatResponse.responseError
-    ? normalizeProviderFailureMessage(chatResponse.responseError, options)
-    : undefined;
   const commonOutputs = createChatV2CommonOutputs({
     requestMessages,
     response: chatResponse.result.responseText,
@@ -381,19 +269,14 @@ export async function runChatV2PipelineExecution(options: RunChatV2PipelineOptio
     functionCalls: chatResponse.result.functionCalls,
     usage,
     reasoning: chatResponse.result.reasoning,
-    requestStatus,
-    responseError,
-    requestStatuses,
-    requestErrors,
     requestBodies: options.requestBodies,
+    responseBodies: options.responseBodies,
     outputUsage: plan.output.outputUsage,
     outputReasoning: plan.output.outputReasoning,
-    outputRequestStatus: plan.output.outputRequestStatus,
-    outputRequestError: plan.output.outputRequestError,
     outputRequestBody: plan.output.outputRequestBody,
+    outputResponseBody: plan.output.outputResponseBody,
     includeFunctionCalls: plan.output.includeFunctionCalls,
     functionCallMode: plan.output.functionCallMode,
-    retryOnNon200: plan.retry.enabled,
     responseFormat: plan.request.responseFormat,
   });
   const allMessagesOutput = commonOutputs['all-messages' as PortId];
@@ -423,43 +306,34 @@ export async function runChatV2PipelineExecution(options: RunChatV2PipelineOptio
     return {
       outcome: 'provider-failure',
       failure: {
-        requestMessages,
         options,
-        plan,
         normalizedError: normalizeProviderFailure(rawError, options),
-        rawError,
-        requestStatuses: chatResponse.requestStatuses,
-        requestErrors: normalizeProviderFailureMessages(chatResponse.requestErrors, options),
-        diagnosticResult: result,
       },
     };
+  }
+
+  // A tool-request round is not a terminal Response value. Auto-continuation
+  // will make another model call after delegated tools finish, so validate the
+  // value only once a provider round actually produces the final response.
+  if (plan.request.responseFormat === 'json_schema' && chatResponse.result.functionCalls.length === 0) {
+    const materialized = materializeLLMResponse({
+      rawText: chatResponse.result.responseText,
+      structuredOutput: chatResponse.result.structuredOutput,
+      responseFormat: plan.request.responseFormat,
+    });
+    if (materialized.validation === 'invalid') {
+      throw new ChatV2ResponseValidationError(materialized.value.type);
+    }
   }
 
   return { outcome: 'success', result };
 }
 
 /**
- * Retains the established single-profile behavior: request-detail mode can
- * turn a provider failure into normal excluded outputs; otherwise it remains
- * a thrown normalized provider error.
+ * Terminal provider failures are node errors. The fallback coordinator may
+ * still catch this decision boundary and advance to a later LLM Profile.
  */
-export function materializeChatV2PipelineFailure(failure: ChatV2PipelineProviderFailure): ChatV2PipelineResult {
-  if (failure.diagnosticResult != null) {
-    return failure.diagnosticResult;
-  }
-  const failureResult = buildProviderFailureResult(
-    failure.requestMessages,
-    failure.options,
-    failure.plan,
-    failure.normalizedError,
-    failure.rawError,
-    failure.requestStatuses,
-    failure.requestErrors,
-  );
-  if (failureResult != null) {
-    return failureResult;
-  }
-
+export function materializeChatV2PipelineFailure(failure: ChatV2PipelineProviderFailure): never {
   throw failure.normalizedError;
 }
 

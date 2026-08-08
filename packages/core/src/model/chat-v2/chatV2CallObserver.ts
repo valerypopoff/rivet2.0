@@ -6,7 +6,7 @@ import type {
   ChatV2CallRawUsage,
 } from '../ProcessContext.js';
 import type { RunChatV2PipelineOptions, StreamChatV2Result } from './chatV2Types.js';
-import { calculateChatV2Cost, getChatV2ModelInfo } from './modelRegistry.js';
+import { calculateChatV2UsageCost, getChatV2ModelInfo } from './modelRegistry.js';
 
 function toUsageNumber(value: unknown): number | undefined {
   return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : undefined;
@@ -58,7 +58,7 @@ function normalizeObservedUsage(rawUsage: ChatV2CallRawUsage | undefined): ChatV
   const cacheReadTokens = rawUsage.inputTokenDetails?.cacheReadTokens;
   const cacheWriteTokens = rawUsage.inputTokenDetails?.cacheWriteTokens;
   const cachedTokens =
-    cacheReadTokens != null && cacheWriteTokens != null ? cacheReadTokens + cacheWriteTokens : undefined;
+    cacheReadTokens == null && cacheWriteTokens == null ? undefined : (cacheReadTokens ?? 0) + (cacheWriteTokens ?? 0);
   const reasoningTokens = rawUsage.outputTokenDetails?.reasoningTokens;
 
   const normalized = {
@@ -127,6 +127,8 @@ export function notifyChatV2CallFinished(
     outcome: ChatV2CallFinishedEvent['outcome'];
     result?: StreamChatV2Result;
     error?: unknown;
+    startedAt?: number;
+    durationMs?: number;
   },
 ): void {
   const observer = options.context.onChatV2CallFinished;
@@ -141,17 +143,10 @@ export function notifyChatV2CallFinished(
   const rawUsage = safelyRead(() => copyRawUsage(resultUsage ?? errorUsage));
   const normalizedUsage = safelyRead(() => normalizeObservedUsage(rawUsage));
   const modelInfo = safelyRead(() => getChatV2ModelInfo(options.provider, options.modelId));
-  const calculatedCost =
-    modelInfo != null && normalizedUsage?.promptTokens != null && normalizedUsage.completionTokens != null
-      ? safelyRead(() =>
-          calculateChatV2Cost(
-            options.provider,
-            options.modelId,
-            normalizedUsage.promptTokens!,
-            normalizedUsage.completionTokens!,
-          ),
-        )
-      : undefined;
+  const hasKnownPricing = modelInfo?.cost != null;
+  const calculatedCost = hasKnownPricing
+    ? safelyRead(() => calculateChatV2UsageCost(options.provider, options.modelId, rawUsage))
+    : undefined;
   const costUsd = toUsageNumber(calculatedCost);
   const finishReason =
     safelyRead(() => params.result?.finishReason) ??
@@ -165,14 +160,17 @@ export function notifyChatV2CallFinished(
     processId,
     provider: options.provider,
     model: options.modelId,
+    ...(options.customProviderApi == null ? {} : { customProviderApi: options.customProviderApi }),
     outcome: params.outcome,
     ...(finishReason == null ? {} : { finishReason }),
     ...(rawUsage == null ? {} : { rawUsage }),
     ...(normalizedUsage == null ? {} : { normalizedUsage }),
     pricing: {
-      status: modelInfo == null ? 'unknown' : 'known',
+      status: hasKnownPricing ? 'known' : 'unknown',
       ...(costUsd == null ? {} : { costUsd }),
     },
+    ...(params.startedAt == null ? {} : { startedAt: params.startedAt }),
+    ...(params.durationMs == null ? {} : { durationMs: params.durationMs }),
   };
 
   try {

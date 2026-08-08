@@ -46,6 +46,13 @@ output remains read-only.
 
 - Markdown folding, JSON-schema `required` definitions, interpolation diagnostics,
   JSON-template validation, spellcheck, and text tools are Monaco capabilities.
+- Monaco's built-in **Disable Ambiguous Highlight** banner action is rebound by
+  [`unicodeHighlighting.ts`](../packages/app/src/utils/monaco/unicodeHighlighting.ts).
+  Monaco standalone updates a shared configuration service that already-created
+  editors do not observe, so Rivet applies the setting directly to every current
+  Monaco editor and to later editors in the same app session. It deliberately
+  keeps Monaco's command id and is session-only, matching Monaco standalone's
+  in-memory configuration behavior.
 - Spellcheck is on-demand and local. CSpell dictionaries are loaded lazily.
 - Escape is consumed by the nearest closable editor surface before the node panel.
 - Format commands delegate to Monaco; JSON escape/unescape use native JSON APIs.

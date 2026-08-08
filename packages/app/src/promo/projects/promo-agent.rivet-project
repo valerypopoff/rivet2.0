@@ -1,0 +1,182 @@
+version: 4
+data:
+  attachedData:
+    trivet:
+      testSuites: []
+      version: 1
+  graphs:
+    LVLFqWRpHjYOxWF2e4dxH:
+      metadata:
+        description: ""
+        id: LVLFqWRpHjYOxWF2e4dxH
+        name: getCurrentUtcTime
+      nodes:
+        '[S1a24SDsq-WkwJj8vOHF4]:graphOutput "Graph output"':
+          data:
+            dataType: string
+            id: output
+          visualData: 1334/678/316/908/transparent/var(--node-color-3)
+        '[ZuJqsLI1wX4W9xony2PeB]:codeNew "Code - Current UTC time"':
+          data:
+            allowConsole: false
+            allowFetch: false
+            allowProcess: false
+            allowRequire: false
+            allowRivet: false
+            code: |-
+              const now = new Date()
+
+              return {
+                iso: now.toISOString(),
+                unixMs: now.getTime()
+              }
+          outgoingConnections:
+            - output->"Graph output" S1a24SDsq-WkwJj8vOHF4/value
+          visualData: 949/678/312/908//
+    promo-agent-main:
+      metadata:
+        description: An LLM calls a typed tool graph, receives its result, and writes
+          the final answer.
+        id: promo-agent-main
+        name: LLM agent with a tool
+      nodes:
+        '[Bmwdue5Tjv1qtlmR5Gobw]:graphOutput "Graph Output"':
+          data:
+            dataType: string
+            id: output
+          visualData: 1468/-218.66666666666666/330/19/transparent/var(--node-color-3)
+        '[IpwfISqHATH7aEkfKN5hv]:graphInput "Graph Input"':
+          data:
+            dataType: string
+            id: input
+            useDefaultValueInput: true
+          outgoingConnections:
+            - data->"Prompt" nDqpzvp-eBaRoe93KibMb/instruction
+          visualData: 236/59.66666666666666/208/1623/transparent/var(--node-color-3)
+        '[Xrn1Z71HmEZ7HagTJSUPy]:text "Text - mock input"':
+          data:
+            text: What time is it?
+          outgoingConnections:
+            - output->"Graph Input" IpwfISqHATH7aEkfKN5hv/default
+          visualData: -51/59.66666666666666/253/1624/transparent/var(--node-color-4)
+        '[agent-api-key]:text "Text - API Key"':
+          data:
+            text: ""
+          outgoingConnections:
+            - output->"LLM chat" agent-llm/apiKey
+          visualData: 563/353/222/1627/transparent/var(--node-color-4)
+        '[agent-delegate]:delegateFunctionCall "Delegate tool call"':
+          data:
+            autoDelegate: true
+            fallBackToExternalCall: false
+            handlers: []
+            passthroughErrors: false
+          visualData: 1468/-3/446/1621//
+        '[agent-llm]:llmChatV2 "LLM chat"':
+          data:
+            anthropicCacheControlTtl: ""
+            anthropicEffort: ""
+            anthropicThinkingMode: ""
+            apiKeySource: input
+            autoContinueToolCalls: true
+            baseURL: ""
+            cache: false
+            configurationMode: inline
+            customProviderApiKeyEnvVarName: CUSTOM_PROVIDER_API_KEY
+            customProviderApiKeyProgrammaticName: ""
+            customProviderBaseURL: ""
+            enableGoogleSearchGrounding: false
+            enableGoogleUrlContext: false
+            enableOpenAICodeInterpreter: false
+            enableOpenAIWebSearch: false
+            extraProviderOptions: ""
+            googleIncludeThoughts: false
+            googleThinkingLevel: ""
+            headers: []
+            maxTokens: 1000
+            maxToolRounds: 3
+            model: gpt-5.6-luna
+            openAIPreviousResponseId: ""
+            openAIReasoningEffort: none
+            openAIReasoningSummary: ""
+            openAIWebSearchContextSize: medium
+            outputReasoning: false
+            outputRequestBody: false
+            outputLLMAttempts: false
+            outputUsage: false
+            parallelToolCalls: false
+            provider: openai
+            responseFormat: text
+            responseSchemaDescription: ""
+            responseSchemaName: ""
+            retryOnNon200: false
+            retryOnNon200CooldownMs: 0
+            retryOnNon200RepeatTimes: 0
+            stopSequences: []
+            temperature: 0.2
+            toolChoice: ""
+            toolChoiceFunction: ""
+            useAnthropicThinkingBudgetInput: false
+            useAsGraphPartialOutput: false
+            useBaseURLInput: false
+            useCustomProviderBaseURLInput: false
+            useExtraProviderOptionsInput: false
+            useFrequencyPenaltyInput: false
+            useGoogleThinkingBudgetInput: false
+            useHeadersInput: false
+            useMaxTokensInput: false
+            useModelInput: false
+            useOpenAIPreviousResponseIdInput: false
+            usePresencePenaltyInput: false
+            useResponseSchemaDescriptionInput: false
+            useResponseSchemaNameInput: false
+            useSeedInput: false
+            useStopSequencesInput: false
+            useTemperatureInput: false
+            useToolCalling: true
+            useTopKInput: false
+            useTopPInput: false
+          outgoingConnections:
+            - function-calls->"Delegate tool call" agent-delegate/function-call
+            - response->"Graph Output" Bmwdue5Tjv1qtlmR5Gobw/value
+          visualData: 975/-218.66666666666666/340/40/transparent/var(--node-color-6)
+        '[agent-task]:text "Text - system prompt"':
+          data:
+            text: You are a helpfull assistant.
+          outgoingConnections:
+            - output->"LLM chat" agent-llm/systemPrompt
+          visualData: 478/-465/307/1626/transparent/var(--node-color-4)
+        '[ilz3hEQpf9uKE2CBb8D2Z]:gptFunction "Tool - current UTC time"':
+          data:
+            description: Return the exact current UTC timestamp and Unix time. Use when an
+              exact current time is needed.
+            name: getCurrentUtcTime
+            resultHandling: continue
+            schema: |-
+              {
+                "type": "object",
+                "properties": {},
+                "additionalProperties": false
+              }
+          outgoingConnections:
+            - function->"LLM chat" agent-llm/functions
+          visualData: 478/-258.66666666666663/307/1628//
+        '[nDqpzvp-eBaRoe93KibMb]:prompt "Prompt"':
+          data:
+            enableFunctionCall: false
+            promptText: "Answer this user question:\r
+
+              {{instruction}}"
+            type: developer
+            useTypeInput: false
+          outgoingConnections:
+            - output->"LLM chat" agent-llm/prompt
+          visualData: 478/59.66666666666666/307/1616//
+  metadata:
+    description: Paste an OpenAI API key, then watch an LLM call a typed tool graph
+      and use its result in a final answer.
+    id: rivet-promo-agent
+    mainGraphId: promo-agent-main
+    title: Demo — LLM Agent
+  plugins: []
+  references: []

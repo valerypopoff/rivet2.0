@@ -4,6 +4,7 @@ import { beforeEach, describe, it } from 'node:test';
 import { type DataId } from '@valerypopoff/rivet2-core';
 import { IDBFactory } from 'fake-indexeddb';
 import { openStaticDataDatabase } from '../../hooks/useStaticDataDatabase.js';
+import { MemoryStaticDataStore } from '../../providers/StaticDataStore.js';
 import { createRecoverableIndexedDbConnection } from '../../utils/indexedDb.js';
 import { IndexedDBStorage, MemoryAsyncStorage, createDefaultAsyncStorage } from './indexedDB.js';
 
@@ -89,6 +90,20 @@ void describe('browser IndexedDB storage', () => {
     await database.transaction('data', 'readwrite').store.clear();
     assert.deepEqual(await database.transaction('data', 'readonly').store.getAll(), []);
     database.close();
+  });
+
+  void it('keeps the page-lifetime static-data store contract in memory', async () => {
+    const database = new MemoryStaticDataStore();
+    const id = 'memory-static-data' as DataId;
+
+    await database.clear();
+    assert.equal(await database.get(id), undefined);
+    await database.insert(id, 'stored');
+    assert.deepEqual(await database.get(id), { id, data: 'stored' });
+    assert.deepEqual(await database.getAll(), [{ id, data: 'stored' }]);
+    await assert.rejects(database.insert(id, 'duplicate'), /already exists/);
+    await database.clear();
+    assert.deepEqual(await database.getAll(), []);
   });
 
   void it('closes static-data connections that block a future schema upgrade', async () => {

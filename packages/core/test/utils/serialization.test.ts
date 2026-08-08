@@ -746,7 +746,7 @@ describe('serialization compatibility', () => {
           type: 'llmChatV2',
           title: 'LLM Chat',
           visualData: { x: 0, y: 0 },
-          data: { outputRequestStatus: true },
+          data: { outputRequestStatus: true, outputRequestError: true },
           variants: [],
         },
       ],
@@ -756,8 +756,9 @@ describe('serialization compatibility', () => {
     const deserialized = deserializeGraph(serializeGraph(graph));
     const data = deserialized.nodes[0]!.data as Record<string, unknown>;
 
-    assert.equal(data.outputRequestStatus, true);
-    assert.equal(data.outputRequestError, true);
+    assert.equal(data.outputLLMAttempts, true);
+    assert.equal('outputRequestStatus' in data, false);
+    assert.equal('outputRequestError' in data, false);
     assert.equal(data.outputRequestBody, true);
   });
 

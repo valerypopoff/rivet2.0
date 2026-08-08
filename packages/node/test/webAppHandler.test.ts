@@ -414,7 +414,7 @@ void describe('createRivetWebAppHandler', () => {
             [draftKey]: 'Unsaved draft',
             [messagesKey]: [
               { content: 'Question', role: 'user' },
-              { content: 'Response', role: 'assistant' },
+              { content: 'Response\n\n| Column | Value |\n| --- | --- |\n| Status | Ready |', role: 'assistant' },
             ],
             [pinsKey]: [1],
           }),
@@ -433,11 +433,120 @@ void describe('createRivetWebAppHandler', () => {
     dom.window.document.querySelector<HTMLButtonElement>('.rivet-web-app-reset-button')?.click();
     assert.equal(dom.window.document.querySelectorAll('.rivet-web-app-chat-message').length, 2);
 
+    dom.window.document
+      .querySelector<HTMLElement>('[data-rivet-chat-message-index="1"] .rivet-web-app-chat-message')
+      ?.dispatchEvent(
+        new dom.window.MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 32, clientY: 48 }),
+      );
+    assert.deepEqual(
+      [
+        ...dom.window.document.querySelectorAll<HTMLButtonElement>('.rivet-web-app-chat-message-context-menu button'),
+      ].map((button) => button.textContent),
+      ['Open in reading view', 'Remove message'],
+    );
+    dom.window.document.querySelector<HTMLButtonElement>('.rivet-web-app-chat-message-context-menu button')?.click();
+    assert.equal(dom.window.document.querySelector('.rivet-web-app-chat-reading-view')?.getAttribute('role'), 'dialog');
+    assert.deepEqual(
+      [
+        ...dom.window.document.querySelectorAll(
+          '.rivet-web-app-chat-reading-view th, .rivet-web-app-chat-reading-view td',
+        ),
+      ].map((cell) => cell.textContent?.trim()),
+      ['Column', 'Value', 'Status', 'Ready'],
+    );
+    dom.window.document.querySelector<HTMLButtonElement>('.rivet-web-app-chat-reading-view-close')?.click();
+
+    dom.window.document
+      .querySelector<HTMLElement>('[data-rivet-chat-message-index="1"] .rivet-web-app-chat-message')
+      ?.dispatchEvent(new dom.window.MouseEvent('contextmenu', { bubbles: true, cancelable: true }));
+    dom.window.document
+      .querySelectorAll<HTMLButtonElement>('.rivet-web-app-chat-message-context-menu button')[1]
+      ?.click();
+    assert.equal(dom.window.document.querySelectorAll('.rivet-web-app-chat-message').length, 1);
+    assert.deepEqual(JSON.parse(dom.window.localStorage.getItem(storageKey)!), {
+      [draftKey]: 'Unsaved draft',
+      [messagesKey]: [{ content: 'Question', role: 'user' }],
+    });
+
     dom.window.document.querySelector<HTMLButtonElement>('.rivet-web-app-chat-menu-button')?.click();
     assert.equal(dom.window.document.querySelector('.rivet-web-app-chat-menu')?.textContent, 'Flush chat history');
     dom.window.document.querySelector<HTMLButtonElement>('.rivet-web-app-chat-menu button')?.click();
     assert.equal(dom.window.document.querySelectorAll('.rivet-web-app-chat-message').length, 0);
     assert.deepEqual(JSON.parse(dom.window.localStorage.getItem(storageKey)!), { [draftKey]: 'Unsaved draft' });
+    dom.window.close();
+  });
+
+  void it('renders the opt-in hosted response inspector without editor-only navigation', () => {
+    const project = makeProject();
+    const uiGraph = project.uiGraphs?.['ui-graph' as UiGraphId]!;
+    const chatId = 'chat' as UiComponentId;
+    uiGraph.components = [{ action: { type: 'runGraph' }, allowResponseInspection: true, id: chatId, type: 'chat' }];
+    const messagesKey = getUiGraphChatMessagesStateKey(chatId);
+    const chatStorageKey = 'rivet-web-app-chat-state:v1:https%3A%2F%2Fexample.test:%2Fapp:ui-graph';
+    const traceStorageKey = 'rivet-web-app-response-traces:v1:https%3A%2F%2Fexample.test:%2Fapp:ui-graph:chat';
+    const responseTrace = {
+      schemaVersion: 1,
+      traceId: 'trace-1',
+      scope: 'response',
+      rootRunId: 'trace-1',
+      graphRunId: 'graph-run-1',
+      graphId: 'main-graph',
+      startedAt: Date.parse('2026-08-01T10:00:00.000Z'),
+      responseReadyAt: Date.parse('2026-08-01T10:00:04.000Z'),
+      status: 'completed',
+      summary: {
+        modelCallCount: 0,
+        toolCallCount: 0,
+        retryCount: 2,
+        fallbackCount: 1,
+        knownCostUsd: 0,
+        costStatus: 'unknown',
+      },
+      modelCalls: [],
+      toolCalls: [],
+      omittedModelCallCount: 0,
+      omittedToolCallCount: 0,
+    };
+    const dom = new JSDOM(renderRivetWebAppHtml(uiGraph, { actionPath: '/app/actions/run' }), {
+      beforeParse(window) {
+        window.localStorage.setItem(
+          chatStorageKey,
+          JSON.stringify({
+            [messagesKey]: [
+              { content: 'Question', role: 'user' },
+              { content: 'Response', responseTraceId: 'trace-1', role: 'assistant' },
+            ],
+          }),
+        );
+        window.localStorage.setItem(traceStorageKey, JSON.stringify([responseTrace]));
+      },
+      runScripts: 'dangerously',
+      url: 'https://example.test/app',
+    });
+
+    dom.window.document
+      .querySelector<HTMLElement>('[data-rivet-chat-message-index="1"] .rivet-web-app-chat-message')
+      ?.dispatchEvent(new dom.window.MouseEvent('contextmenu', { bubbles: true, cancelable: true }));
+    const menuButtons = [
+      ...dom.window.document.querySelectorAll<HTMLButtonElement>('.rivet-web-app-chat-message-context-menu button'),
+    ];
+    assert.deepEqual(
+      menuButtons.map((button) => button.textContent),
+      ['Open in reading view', 'Inspect response', 'Remove message'],
+    );
+    menuButtons[1]?.click();
+    const inspector = dom.window.document.querySelector('.rivet-agent-response-inspector');
+    assert.equal(inspector?.getAttribute('role'), 'dialog');
+    const inspectorText = inspector?.textContent ?? '';
+    assert.match(inspectorText, /Execution/);
+    assert.match(inspectorText, /Recovery behavior/);
+    assert.match(inspectorText, /Provider request retries2/);
+    assert.match(inspectorText, /LLM profile fallbacks1/);
+    assert.match(inspectorText, /Usage and cost/);
+    assert.match(inspectorText, /Timing/);
+    assert.doesNotMatch(inspectorText, /trace-1|graph-run-1|main-graph/);
+    assert.doesNotMatch(inspectorText, /Open graph at this run/);
+    dom.window.document.querySelector<HTMLButtonElement>('.rivet-agent-response-inspector-close')?.click();
     dom.window.close();
   });
 
@@ -1541,6 +1650,47 @@ void describe('createRivetWebAppHandler', () => {
 
     assert.deepEqual(result.outputs.value, { type: 'string', value: 'hello' });
     assert.deepEqual(result.statePatch, { result: 'hello' });
+  });
+
+  void it('collects response traces only for Chat components that explicitly opt in', async () => {
+    const project = makeProject();
+    project.graphs[graphId]!.nodes.push({
+      data: { dataType: 'chat-message[]', id: 'history' },
+      id: 'history-node' as never,
+      title: 'History',
+      type: 'graphInput',
+      visualData: { x: 0, y: 120 },
+    });
+    const uiGraph = project.uiGraphs?.['ui-graph' as UiGraphId]!;
+    const buttonAction = (uiGraph.components[0] as Extract<UiGraphComponent, { type: 'button' }>).action;
+    const action = {
+      graphId: buttonAction.graphId,
+      historyInputId: 'history',
+      responseOutputId: 'value',
+      type: 'runGraph' as const,
+      userInputId: 'input',
+    };
+    const state = {
+      [getUiGraphChatMessagesStateKey('chat' as UiComponentId)]: [{ content: 'hello', role: 'user' }],
+    };
+    uiGraph.components = [{ action, id: 'chat' as UiComponentId, type: 'chat' }];
+
+    const disabled = await runRivetWebAppAction(project, {
+      componentId: 'chat',
+      state,
+      uiGraph,
+    });
+    assert.equal(disabled.responseTrace, undefined);
+
+    uiGraph.components = [{ action, allowResponseInspection: true, id: 'chat' as UiComponentId, type: 'chat' }];
+    const enabled = await runRivetWebAppAction(project, {
+      componentId: 'chat',
+      state,
+      uiGraph,
+    });
+    assert.equal(enabled.responseTrace?.scope, 'response');
+    assert.equal(enabled.responseTrace?.status, 'completed');
+    assert.equal(enabled.responseTrace?.summary.modelCallCount, 0);
   });
 
   void it('returns a web-app action result before its managed async branch settles', async () => {

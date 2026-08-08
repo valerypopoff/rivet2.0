@@ -30,6 +30,14 @@ const config = {
 
   trailingSlash: false,
 
+  // Development serves the prebuilt Rivet promo from the same Docusaurus
+  // origin. Production builds that entry separately after Docusaurus finishes.
+  staticDirectories: process.env.NODE_ENV === 'production' ? ['static'] : ['static', '.promo-dev'],
+
+  customFields: {
+    promoDemoUrl: process.env.RIVET_PROMO_DEMO_URL || null,
+  },
+
   plugins: [require.resolve('docusaurus-plugin-image-zoom')],
 
   presets: [
@@ -37,7 +45,6 @@ const config = {
       'classic',
       /** @type {import('@docusaurus/preset-classic').Options} */
       ({
-        pages: false,
         docs: {
           routeBasePath: '/',
           sidebarPath: require.resolve('./sidebars.js'),
@@ -53,7 +60,7 @@ const config = {
   themeConfig:
     /** @type {import('@docusaurus/preset-classic').ThemeConfig} */
     ({
-      image: 'img/social-card.png',
+      image: 'img/social-card-v2.png',
       colorMode: {
         defaultMode: 'dark',
       },
@@ -118,7 +125,7 @@ const config = {
               },
               {
                 label: 'User Guide',
-                to: '/',
+                to: '/user-guide',
               },
               {
                 label: 'API Reference',

@@ -3,6 +3,7 @@ import { describe, it } from 'node:test';
 import {
   applyUiGraphStatePatch,
   createUiGraphChatHistoryFlushStatePatch,
+  createUiGraphChatMessageRemovalStatePatch,
   createUiGraphChatPinStatePatch,
   createUiGraphChatSubmissionStatePatch,
   createUiGraphActionExecutionController,
@@ -26,6 +27,8 @@ import {
   type UiGraphId,
   type UiGraphRunGraphAction,
   type UiGraphChatMessage,
+  buildAgentResponseTrace,
+  type GraphExecutionMetadata,
   type UiComponentId,
 } from '../../src/index.js';
 import {
@@ -37,8 +40,11 @@ import {
   hasUiGraphChatPersistentStateChanged,
   loadUiGraphChatPersistentState,
   loadUiGraphWebAppStorage,
+  loadUiGraphResponseTrace,
+  pruneUiGraphResponseTraces,
   revealUiGraphChatElement,
   saveUiGraphChatPersistentState,
+  saveUiGraphResponseTrace,
 } from '../../src/model/UiGraphBrowserRuntime.js';
 
 const componentId = 'component' as UiComponentId;
@@ -110,6 +116,186 @@ describe('UiGraphRuntimeModel', () => {
         { [messagesKey]: [...state[messagesKey]] },
       ),
       true,
+    );
+  });
+
+  it('stores bounded response traces per Chat component and removes orphaned traces', () => {
+    const firstChatId = 'chat-a' as UiComponentId;
+    const secondChatId = 'chat-b' as UiComponentId;
+    const uiGraph: UiGraph = {
+      components: [
+        { action: { type: 'runGraph' }, allowResponseInspection: true, id: firstChatId, type: 'chat' },
+        { action: { type: 'runGraph' }, allowResponseInspection: true, id: secondChatId, type: 'chat' },
+      ],
+      id: 'trace-app' as UiGraphId,
+      name: 'Trace app',
+    };
+    const storageValues = new Map<string, string>();
+    const storage = {
+      getItem: (key: string) => storageValues.get(key) ?? null,
+      removeItem: (key: string) => storageValues.delete(key),
+      setItem: (key: string, value: string) => storageValues.set(key, value),
+    };
+    const location = { origin: 'https://example.test', pathname: '/apps/traces/' };
+    const makeTrace = (index: number) =>
+      buildAgentResponseTrace({
+        scope: 'response',
+        execution: {
+          graphId: 'graph',
+          graphRunId: `graph-run-${index}`,
+          rootRunId: `trace-${index}`,
+        } as GraphExecutionMetadata,
+        events: [],
+        status: 'completed',
+      });
+
+    for (let index = 0; index < 101; index += 1) {
+      saveUiGraphResponseTrace(uiGraph, firstChatId, makeTrace(index), storage, location);
+    }
+    saveUiGraphResponseTrace(uiGraph, secondChatId, makeTrace(200), storage, location);
+
+    assert.equal(loadUiGraphResponseTrace(uiGraph, firstChatId, 'trace-0', storage, location), undefined);
+    assert.equal(loadUiGraphResponseTrace(uiGraph, firstChatId, 'trace-100', storage, location)?.traceId, 'trace-100');
+    assert.equal(loadUiGraphResponseTrace(uiGraph, secondChatId, 'trace-100', storage, location), undefined);
+    assert.equal(loadUiGraphResponseTrace(uiGraph, secondChatId, 'trace-200', storage, location)?.traceId, 'trace-200');
+
+    pruneUiGraphResponseTraces(
+      uiGraph,
+      {
+        [getUiGraphChatMessagesStateKey(firstChatId)]: [
+          { content: 'kept', responseTraceId: 'trace-100', role: 'assistant' },
+        ],
+        [getUiGraphChatMessagesStateKey(secondChatId)]: [],
+      },
+      storage,
+      location,
+    );
+
+    assert.equal(loadUiGraphResponseTrace(uiGraph, firstChatId, 'trace-99', storage, location), undefined);
+    assert.equal(loadUiGraphResponseTrace(uiGraph, firstChatId, 'trace-100', storage, location)?.traceId, 'trace-100');
+    assert.equal(loadUiGraphResponseTrace(uiGraph, secondChatId, 'trace-200', storage, location), undefined);
+  });
+
+  it('keeps unsynced response traces readable after browser storage rejects a write', () => {
+    const chatId = 'quota-chat' as UiComponentId;
+    const uiGraph: UiGraph = {
+      components: [{ action: { type: 'runGraph' }, allowResponseInspection: true, id: chatId, type: 'chat' }],
+      id: 'quota-trace-app' as UiGraphId,
+      name: 'Quota trace app',
+    };
+    const storageValues = new Map<string, string>();
+    let rejectWrites = false;
+    const storage = {
+      getItem: (key: string) => storageValues.get(key) ?? null,
+      removeItem: (key: string) => {
+        if (rejectWrites) throw new Error('storage full');
+        storageValues.delete(key);
+      },
+      setItem: (key: string, value: string) => {
+        if (rejectWrites) throw new Error('storage full');
+        storageValues.set(key, value);
+      },
+    };
+    const location = { origin: 'https://example.test', pathname: '/apps/quota-traces/' };
+    const makeTrace = (index: number) =>
+      buildAgentResponseTrace({
+        scope: 'response',
+        execution: {
+          graphId: 'graph',
+          graphRunId: `graph-run-${index}`,
+          rootRunId: `quota-trace-${index}`,
+        } as GraphExecutionMetadata,
+        events: [],
+        status: 'completed',
+      });
+
+    saveUiGraphResponseTrace(uiGraph, chatId, makeTrace(1), storage, location);
+    rejectWrites = true;
+    saveUiGraphResponseTrace(uiGraph, chatId, makeTrace(2), storage, location);
+
+    assert.equal(
+      loadUiGraphResponseTrace(uiGraph, chatId, 'quota-trace-2', storage, location)?.traceId,
+      'quota-trace-2',
+    );
+    assert.equal(
+      [...storageValues.values()].some((value) => value.includes('quota-trace-2')),
+      false,
+    );
+
+    rejectWrites = false;
+    saveUiGraphResponseTrace(uiGraph, chatId, makeTrace(3), storage, location);
+
+    assert.equal(
+      [...storageValues.values()].some((value) => value.includes('quota-trace-2')),
+      true,
+    );
+    assert.equal(
+      loadUiGraphResponseTrace(uiGraph, chatId, 'quota-trace-3', storage, location)?.traceId,
+      'quota-trace-3',
+    );
+  });
+
+  it('purges response trace IDs and data when Chat response inspection is disabled', () => {
+    const chatId = 'opt-out-chat' as UiComponentId;
+    const enabledUiGraph: UiGraph = {
+      components: [{ action: { type: 'runGraph' }, allowResponseInspection: true, id: chatId, type: 'chat' }],
+      id: 'opt-out-trace-app' as UiGraphId,
+      name: 'Opt-out trace app',
+    };
+    const disabledUiGraph: UiGraph = {
+      ...enabledUiGraph,
+      components: [{ action: { type: 'runGraph' }, allowResponseInspection: false, id: chatId, type: 'chat' }],
+    };
+    const storageValues = new Map<string, string>();
+    const storage = {
+      getItem: (key: string) => storageValues.get(key) ?? null,
+      removeItem: (key: string) => storageValues.delete(key),
+      setItem: (key: string, value: string) => storageValues.set(key, value),
+    };
+    const location = { origin: 'https://example.test', pathname: '/apps/opt-out-traces/' };
+    const trace = buildAgentResponseTrace({
+      scope: 'response',
+      execution: {
+        graphId: 'graph',
+        graphRunId: 'graph-run',
+        rootRunId: 'opt-out-trace',
+      } as GraphExecutionMetadata,
+      events: [],
+      status: 'completed',
+    });
+    const messagesKey = getUiGraphChatMessagesStateKey(chatId);
+    const state = {
+      [messagesKey]: [
+        { content: 'Question', role: 'user' },
+        { content: 'Answer', responseTraceId: trace.traceId, role: 'assistant' },
+      ],
+    };
+
+    saveUiGraphResponseTrace(enabledUiGraph, chatId, trace, storage, location);
+    saveUiGraphChatPersistentState(enabledUiGraph, state, storage, location);
+    assert.equal(
+      loadUiGraphResponseTrace(enabledUiGraph, chatId, trace.traceId, storage, location)?.traceId,
+      trace.traceId,
+    );
+
+    saveUiGraphChatPersistentState(disabledUiGraph, state, storage, location);
+
+    assert.deepEqual(loadUiGraphChatPersistentState(disabledUiGraph, storage, location), {
+      [messagesKey]: [
+        { content: 'Question', role: 'user' },
+        { content: 'Answer', role: 'assistant' },
+      ],
+    });
+    assert.equal(loadUiGraphResponseTrace(disabledUiGraph, chatId, trace.traceId, storage, location), undefined);
+    assert.equal(
+      [...storageValues.values()].some((value) => value.includes(trace.traceId)),
+      false,
+    );
+
+    saveUiGraphResponseTrace(disabledUiGraph, chatId, trace, storage, location);
+    assert.equal(
+      [...storageValues.values()].some((value) => value.includes(trace.traceId)),
+      false,
     );
   });
 
@@ -330,6 +516,11 @@ describe('UiGraphRuntimeModel', () => {
 
     assert.deepEqual(presentations[0]?.timestamp, { dateTime: '2026-07-20T23:45:00.000Z', label: '23:45' });
     assert.equal(presentations[0]?.dateSeparator, undefined);
+    assert.deepEqual(presentations[1]?.timestamp, {
+      dateTime: '2026-07-20T23:46:00.000Z',
+      elapsedSincePreviousUserMessage: '60 seconds after previous user message',
+      label: '23:46',
+    });
     assert.equal(presentations[1]?.dateSeparator, undefined);
     assert.deepEqual(presentations[2]?.dateSeparator, {
       dateTime: '2026-07-21T00:05:00.000Z',
@@ -347,6 +538,25 @@ describe('UiGraphRuntimeModel', () => {
     );
     assert.equal(oneDatePresentations[0]?.dateSeparator, undefined);
     assert.equal(oneDatePresentations[1]?.dateSeparator, undefined);
+    assert.equal(
+      oneDatePresentations[1]?.timestamp?.elapsedSincePreviousUserMessage,
+      '36000 seconds after previous user message',
+    );
+
+    const malformedUserTimestampPresentations = getUiGraphChatMessagePresentations(
+      [
+        { role: 'user', content: 'First', timestamp: '2026-07-22T08:00:00.000Z' },
+        { role: 'assistant', content: 'First response', timestamp: '2026-07-22T08:00:02.000Z' },
+        { role: 'user', content: 'Legacy user', timestamp: 'not-a-date' },
+        { role: 'assistant', content: 'Second response', timestamp: '2026-07-22T08:00:04.000Z' },
+      ],
+      { locales: 'en-GB', timeZone: 'UTC' },
+    );
+    assert.equal(
+      malformedUserTimestampPresentations[3]?.timestamp?.elapsedSincePreviousUserMessage,
+      undefined,
+      'a malformed closest user timestamp must not reuse an older user turn',
+    );
   });
 
   it('stamps a Chat response when the interaction controller receives its action result', async () => {
@@ -369,6 +579,36 @@ describe('UiGraphRuntimeModel', () => {
     assert.equal(messages[1]?.role, 'assistant');
     assert.equal(typeof messages[1]?.timestamp, 'string');
     assert.equal(Number.isNaN(new Date(messages[1]!.timestamp!).getTime()), false);
+
+    const responseTrace = buildAgentResponseTrace({
+      scope: 'response',
+      execution: { graphId: 'graph', graphRunId: 'graph-run', rootRunId: 'trace-id' } as GraphExecutionMetadata,
+      events: [],
+      status: 'completed',
+    });
+    await controller.runAction(chat, async () => ({
+      responseTrace,
+      statePatch: {
+        [messagesKey]: [
+          { role: 'user', content: 'Question' },
+          { role: 'assistant', content: 'Inspection disabled' },
+        ],
+      },
+    }));
+    assert.equal((controller.getSnapshot().state[messagesKey] as UiGraphChatMessage[])[1]?.responseTraceId, undefined);
+
+    const inspectedChat = { ...chat, allowResponseInspection: true };
+    controller.setUiGraph({ ...uiGraph, components: [inspectedChat] });
+    await controller.runAction(inspectedChat, async () => ({
+      responseTrace,
+      statePatch: {
+        [messagesKey]: [
+          { role: 'user', content: 'Question' },
+          { role: 'assistant', content: 'Inspection enabled' },
+        ],
+      },
+    }));
+    assert.equal((controller.getSnapshot().state[messagesKey] as UiGraphChatMessage[])[1]?.responseTraceId, 'trace-id');
   });
 
   it('keeps Chat pins in session state without exposing stale or non-assistant entries', () => {
@@ -410,6 +650,26 @@ describe('UiGraphRuntimeModel', () => {
     assert.deepEqual(createUiGraphChatPinStatePatch(componentId, { ...state, [pinsKey]: [1] }, 3), {
       [pinsKey]: [1, 3],
     });
+    assert.deepEqual(createUiGraphChatMessageRemovalStatePatch(componentId, state, 1), {
+      [messagesKey]: [
+        { role: 'user', content: 'First question' },
+        { role: 'user', content: 'Second question' },
+        { role: 'assistant', content: 'Second answer' },
+        { role: 'assistant', content: 'Second follow-up' },
+      ],
+      [pinsKey]: [2, 3],
+    });
+    assert.deepEqual(createUiGraphChatMessageRemovalStatePatch(componentId, state, 3), {
+      [messagesKey]: [
+        { role: 'user', content: 'First question' },
+        { role: 'assistant', content: 'First answer' },
+        { role: 'user', content: 'Second question' },
+        { role: 'assistant', content: 'Second follow-up' },
+      ],
+      [pinsKey]: [1, 3],
+    });
+    assert.equal(createUiGraphChatMessageRemovalStatePatch(componentId, state, -1), undefined);
+    assert.equal(createUiGraphChatMessageRemovalStatePatch(componentId, state, 99), undefined);
     assert.deepEqual(
       getUiGraphComponentActionState(
         { action: { type: 'runGraph' }, id: componentId, type: 'chat' },

@@ -88,7 +88,7 @@ import { groupConnectionsByNode } from './nodeCanvas/groupConnectionsByNode.js';
 import { getDraggingViewportNodeIds } from './nodeCanvas/draggingViewportNodeIds.js';
 import { filterValidSubGraphConnections } from '../domain/graphEditing/connectionValidation.js';
 import { useExecutorSessionState } from '../hooks/useExecutorSession.js';
-import { loadedRecordingState } from '../state/execution.js';
+import { getLoadedRecordingForProject, loadedRecordingState } from '../state/execution.js';
 import { type DragActivatorModifierState } from './nodeCanvas/nodeDragInteraction.js';
 import {
   getCanvasHighlightedNodeIds,
@@ -218,7 +218,7 @@ export const NodeCanvas: FC<NodeCanvasProps> = ({
   const selectedProcessPagePerNode = useAtomValue(selectedProcessPageNodesState);
   const selectedExecutor = useAtomValue(selectedExecutorState);
   const graphRunning = useAtomValue(graphRunningState);
-  const loadedRecording = useAtomValue(loadedRecordingState);
+  const rawLoadedRecording = useAtomValue(loadedRecordingState);
   const zoomSensitivity = useAtomValue(zoomSensitivityState);
   const canvasBackgroundColorMode = useAtomValue(canvasBackgroundColorModeState);
   const canvasBackgroundCustomColor = useAtomValue(canvasBackgroundCustomColorState);
@@ -229,6 +229,7 @@ export const NodeCanvas: FC<NodeCanvasProps> = ({
   const rawPreviewConnections = useAtomValue(canvasPreviewConnectionsState);
   const definitionValidConnections = useAtomValue(definitionValidConnectionsState);
   const project = useAtomValue(projectState);
+  const loadedRecording = getLoadedRecordingForProject(rawLoadedRecording, project.metadata.id);
   const referencedProjects = useAtomValue(referencedProjectsState);
   const selectedGraphComparison = useAtomValue(selectedGraphProjectComparisonState);
   const executorSession = useExecutorSessionState();

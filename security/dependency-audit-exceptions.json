@@ -38,47 +38,29 @@
       "expires": "2026-10-10"
     },
     {
-      "advisoryIds": [1123897],
-      "packages": ["brace-expansion"],
-      "dependents": ["minimatch@npm:3.1.5"],
-      "scope": "Lint and build-time glob matching only; no runtime bundle accepts untrusted brace patterns through this dependency.",
-      "reason": "The latest compatible brace-expansion 1.x release remains affected. Remove the exception when the remaining minimatch 3 consumer can move to a newer major line.",
-      "owner": "Rivet maintainers",
-      "expires": "2026-10-20"
-    },
-    {
-      "advisoryIds": [1124334],
-      "packages": ["brace-expansion"],
-      "dependents": ["minimatch@npm:3.1.5", "minimatch@npm:9.0.9"],
-      "scope": "Lint, build-time glob matching, and TypeScript analysis only; no Rivet runtime bundle accepts untrusted brace patterns through these dependencies.",
-      "reason": "brace-expansion 1.x and 2.x have no fixed compatible release. The 5.x consumer is pinned to fixed 5.0.8; remove this exception when the remaining minimatch 3 and 9 toolchain consumers adopt a fixed major line.",
-      "owner": "Rivet maintainers",
-      "expires": "2026-10-20"
-    },
-    {
-      "advisoryIds": [1123911],
-      "packages": ["js-yaml"],
-      "dependents": ["@eslint/eslintrc@npm:3.2.0"],
-      "scope": "ESLint configuration loading during local and CI checks only; it is not shipped in Rivet runtime bundles.",
-      "reason": "The current ESLint configuration package constrains js-yaml 4.x, whose latest compatible release remains affected. Remove the exception when its upstream accepts a fixed release line.",
-      "owner": "Rivet maintainers",
-      "expires": "2026-10-20"
-    },
-    {
-      "advisoryIds": [1123912],
-      "packages": ["js-yaml"],
-      "dependents": ["gray-matter@npm:4.0.3"],
-      "scope": "Documentation frontmatter parsing during the Docusaurus build only; it is not shipped in Rivet runtime bundles.",
-      "reason": "gray-matter 4 constrains js-yaml 3.x, whose latest compatible release remains affected. Remove the exception when the documentation toolchain can adopt a fixed major line.",
-      "owner": "Rivet maintainers",
-      "expires": "2026-10-20"
-    },
-    {
       "advisoryIds": [1109532, 1109543, 1109552],
       "packages": ["tar-fs"],
       "dependents": ["pkg-fetch@npm:3.4.2"],
       "scope": "Legacy app-executor packaging through pkg/pkg-fetch only; it does not extract user-controlled archives at runtime.",
       "reason": "pkg is archived and pins pkg-fetch. Replace the executor binary packager before this exception expires.",
+      "owner": "Rivet maintainers",
+      "expires": "2026-10-10"
+    },
+    {
+      "advisoryIds": [1138808, 1138809],
+      "packages": ["image-size"],
+      "dependents": ["@docusaurus/mdx-loader@npm:3.10.1"],
+      "scope": "Documentation build toolchain parsing repository-controlled MDX image assets only; it is not shipped in Rivet runtime bundles.",
+      "reason": "image-size 2.0.2 is the current compatible release required by Docusaurus 3.10.1. Its ICNS, JXL, and HEIF parsers run only over reviewed documentation assets during the build. Remove this exception when Docusaurus or image-size publishes a compatible fixed release.",
+      "owner": "Rivet maintainers",
+      "expires": "2026-10-10"
+    },
+    {
+      "advisoryIds": [1138813],
+      "packages": ["nanoid"],
+      "dependents": ["@valerypopoff/rivet-app@workspace:packages/app", "postcss@npm:8.5.22"],
+      "scope": "Rivet editor runtime identifiers and the PostCSS documentation build toolchain; neither passes zero-sized custom NanoID generation requests.",
+      "reason": "The advisory concerns custom generators called with a zero size. Rivet calls only nanoid() without arguments, while PostCSS reaches NanoID transitively. Upgrade when a compatible NanoID or PostCSS release removes this legacy dependency path.",
       "owner": "Rivet maintainers",
       "expires": "2026-10-10"
     }

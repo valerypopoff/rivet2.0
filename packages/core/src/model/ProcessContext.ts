@@ -24,6 +24,7 @@ import type { CodeRunner } from '../integrations/CodeRunner.js';
 import type { ProjectReferenceLoader } from './ProjectReferenceLoader.js';
 import type { GraphBoundary } from './GraphBoundaryCache.js';
 import type { GraphProgress } from './GraphProgress.js';
+import type { CustomProviderApi } from './chat-v2/customProviderApi.js';
 import type {
   RivetStoredValue,
   RivetStoredValueCacheResult,
@@ -90,14 +91,50 @@ export type ChatV2CallFinishedEvent = {
   processId: ProcessId;
   provider: ChatV2Provider;
   model: string;
+  /** Selected wire contract when provider is Custom. */
+  customProviderApi?: CustomProviderApi;
   outcome: ChatV2CallOutcome;
   finishReason?: string;
   rawUsage?: ChatV2CallRawUsage;
   normalizedUsage?: ChatV2CallNormalizedUsage;
   pricing: ChatV2CallPricing;
+  /** Epoch milliseconds when the physical provider attempt started. */
+  startedAt?: number;
+  /** Wall-clock duration of this physical provider attempt. */
+  durationMs?: number;
 };
 
 export type ChatV2CallFinishedObserver = (event: ChatV2CallFinishedEvent) => void;
+
+/**
+ * Portable, privacy-bounded subset of a completed physical Chat V2 call.
+ * Provider-shaped raw usage is intentionally retained only by the host observer
+ * and cannot enter processor events, recordings, or remote transport.
+ */
+export type ChatV2CallTraceEvent = Omit<ChatV2CallFinishedEvent, 'rawUsage'>;
+
+export type ToolCallFinishedEvent = {
+  toolCallId?: string;
+  toolName: string;
+  sourceNodeId: NodeId;
+  sourceProcessId: ProcessId;
+  /**
+   * Exact node invocation that owns the persisted tool-result output, when
+   * delegation ran through a Delegate Tool Call node. This is intentionally a
+   * pointer only: execution traces never copy tool arguments or result text.
+   */
+  resultOwner?: {
+    nodeId: NodeId;
+    processId: ProcessId;
+    outputPortId: PortId;
+  };
+  handlerKind: 'graph' | 'external' | 'unknown';
+  handlerGraphId?: GraphId;
+  handlerName?: string;
+  outcome: 'success' | 'passthrough-error' | 'failure' | 'aborted';
+  startedAt?: number;
+  durationMs?: number;
+};
 
 export type ProcessContext = {
   settings: RuntimeSettings;
@@ -202,6 +239,18 @@ export type InternalProcessContext<T extends ChartNode = ChartNode> = ProcessCon
 
   /** Stable execution lineage for the current graph invocation. */
   execution: GraphExecutionMetadata;
+
+  /**
+   * Marks this invocation's terminal result as an editor-cache replay.
+   * Cache-aware node implementations call this only after confirming a hit.
+   */
+  markResultAsEditorCacheHit?: () => void;
+
+  /** Emits privacy-bounded metadata after a delegated tool execution settles. */
+  onToolCallFinished?: (event: ToolCallFinishedEvent) => void;
+
+  /** LLM invocation that owns a connected Delegate Tool Call execution. */
+  toolCallTraceSource?: { nodeId: NodeId; processId: ProcessId };
 
   /** Context values that are accessible on graphs and all subgraphs. */
   contextValues: Record<string, DataValue>;

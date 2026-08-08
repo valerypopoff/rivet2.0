@@ -6,8 +6,8 @@ import { useStableCallback } from '../../hooks/useStableCallback';
 import Portal from '@atlaskit/portal';
 import { type TrivetTestSuite } from '@valerypopoff/trivet';
 import Tabs, { Tab, TabList, TabPanel } from '@atlaskit/tabs';
-import { LoadingSpinner } from '../LoadingSpinner';
 import { PopupMenu, PopupMenuItem } from '../PopupMenu';
+import { NodeRunningIndicator } from '../visualNode/NodeRunningIndicator';
 
 const styles = css`
   min-height: 100%;
@@ -38,10 +38,6 @@ const styles = css`
     &:hover {
       background-color: var(--primary-dark);
     }
-  }
-
-  .selected .spinner svg {
-    color: var(--foreground-on-primary);
   }
 
   .test-suite-status {
@@ -111,7 +107,11 @@ export const TestSuiteList: FC<TestSuiteListProps> = ({
               >
                 <div className="test-suite-name">{testSuite.name ?? 'Untitled Test Suite'}</div>
                 <div className="test-suite-status spinner">
-                  {runningTestSuiteId === testSuite.id && <LoadingSpinner />}
+                  <NodeRunningIndicator
+                    isRunning={runningTestSuiteId === testSuite.id}
+                    delayMs={0}
+                    label="Test suite running"
+                  />
                 </div>
               </div>
             ))}

@@ -5651,6 +5651,20 @@ __metadata:
   languageName: node
   linkType: hard
 
+"@fontsource/roboto-mono@npm:^5.3.0":
+  version: 5.3.0
+  resolution: "@fontsource/roboto-mono@npm:5.3.0"
+  checksum: 10/87cf9277b1755a379fa75c93fa2fc8a4743326fee17f90a2032727b9134aa655ff6aa2a8b0d7a46757febbac1b5fbfdd802813f56a32176e278c1b48d1bf573e
+  languageName: node
+  linkType: hard
+
+"@fontsource/roboto@npm:^5.3.0":
+  version: 5.3.0
+  resolution: "@fontsource/roboto@npm:5.3.0"
+  checksum: 10/d9f968fb239a16acdd3976a106f1ec8b530a6577ea5b1437dbeab3f782b7c189468dbaabdad3b2e68b75d63316bb48e2e905f661dec59a9a9353846eec04d35d
+  languageName: node
+  linkType: hard
+
 "@gentrace/core@npm:^3.5.12":
   version: 3.5.12
   resolution: "@gentrace/core@npm:3.5.12"
@@ -8752,6 +8766,8 @@ __metadata:
     "@emotion/styled": "npm:^11.11.0"
     "@eslint/eslintrc": "npm:^3.2.0"
     "@floating-ui/react": "npm:^0.26.1"
+    "@fontsource/roboto": "npm:^5.3.0"
+    "@fontsource/roboto-mono": "npm:^5.3.0"
     "@recoiljs/refine": "npm:^0.1.1"
     "@swc/core": "npm:^1.15.43"
     "@tanstack/react-query": "npm:^5.4.3"
@@ -8812,7 +8828,7 @@ __metadata:
     mime: "npm:^4.0.4"
     minimatch: "npm:^10.2.5"
     monaco-editor: "npm:^0.44.0"
-    nanoid: "npm:^3.3.6"
+    nanoid: "npm:^3.3.16"
     nspell: "npm:^2.1.5"
     openai: "npm:^4.28.4"
     p-queue: "npm:^7.4.1"
@@ -8847,7 +8863,6 @@ __metadata:
     url-join: "npm:^5.0.0"
     use-async-effect: "npm:^2.2.7"
     vite: "npm:^6.4.3"
-    vite-plugin-monaco-editor: "npm:^1.1.0"
     vite-plugin-svgr: "npm:^4.5.0"
     vite-plugin-top-level-await: "npm:^1.6.0"
     vite-tsconfig-paths: "npm:^4.3.2"
@@ -8927,7 +8942,7 @@ __metadata:
     mdast-util-to-markdown: "npm:^2.1.2"
     minimatch: "npm:^10.2.5"
     mustache: "npm:^4.2.0"
-    nanoid: "npm:^3.3.6"
+    nanoid: "npm:^3.3.16"
     openai: "npm:^4.28.4"
     p-queue: "npm:^7.4.1"
     p-queue-6: "npm:p-queue@^6.0.0"
@@ -8977,7 +8992,7 @@ __metadata:
     lodash-es: "npm:^4.18.1"
     marked: "npm:^9.1.2"
     minimatch: "npm:^10.2.5"
-    nanoid: "npm:^3.3.6"
+    nanoid: "npm:^3.3.16"
     rimraf: "npm:^6.1.3"
     ts-node: "npm:^10.9.1"
     ts-pattern: "npm:^5.6.2"
@@ -10299,31 +10314,31 @@ __metadata:
   languageName: node
   linkType: hard
 
-"brace-expansion@npm:1.1.12":
-  version: 1.1.12
-  resolution: "brace-expansion@npm:1.1.12"
+"brace-expansion@npm:1.1.18":
+  version: 1.1.18
+  resolution: "brace-expansion@npm:1.1.18"
   dependencies:
     balanced-match: "npm:^1.0.0"
     concat-map: "npm:0.0.1"
-  checksum: 10/12cb6d6310629e3048cadb003e1aca4d8c9bb5c67c3c321bafdd7e7a50155de081f78ea3e0ed92ecc75a9015e784f301efc8132383132f4f7904ad1ac529c562
+  checksum: 10/b55a3c03239b8d2127c7cbb3408c9ad3a556a8c303bf3064df78bfb7c093160fc8f6e0a32e42a850a78eba12f29ccf6ef997690b9acf945d242c56c61c4aa977
   languageName: node
   linkType: hard
 
-"brace-expansion@npm:5.0.8":
-  version: 5.0.8
-  resolution: "brace-expansion@npm:5.0.8"
-  dependencies:
-    balanced-match: "npm:^4.0.2"
-  checksum: 10/75d2d2ebc8f5f65156d16706216d23e48f499a1164e4b045e0ca4045d3ce6b16ced11ea2e4c76e3670b6c38454123213f43d23127df8fc6840980aea9a35e061
-  languageName: node
-  linkType: hard
-
-"brace-expansion@npm:^2.0.2":
-  version: 2.1.2
-  resolution: "brace-expansion@npm:2.1.2"
+"brace-expansion@npm:2.1.4":
+  version: 2.1.4
+  resolution: "brace-expansion@npm:2.1.4"
   dependencies:
     balanced-match: "npm:^1.0.0"
-  checksum: 10/0e0f9b0df1f0809e9c326470e022eeb24334ddb54c43b1ac39f1d38f3cbaeb940794de1db826f5491843ac00d7932c43f10350a65ccd51fe7d05da627152f204
+  checksum: 10/11e18dc39706037331abedbb742af1da733267042f94c0f08487ef1a63cee068c1859f8d5f95523869725191133eb1a69753de457ed4b76b7c187d9ea0646737
+  languageName: node
+  linkType: hard
+
+"brace-expansion@npm:5.0.9":
+  version: 5.0.9
+  resolution: "brace-expansion@npm:5.0.9"
+  dependencies:
+    balanced-match: "npm:^4.0.2"
+  checksum: 10/d8683d612919212c7cf298861acd1c15101e7e2ad186e7ae9747390e5b3fc9e9b55ce71107570d32985784d9d88fbbe438d725863aed7b0f3d08d5f080535eec
   languageName: node
   linkType: hard
 
@@ -11987,6 +12002,8 @@ __metadata:
     "@docusaurus/preset-classic": "npm:3.10.1"
     "@docusaurus/theme-classic": "npm:^3.10.1"
     "@docusaurus/types": "npm:^3.10.1"
+    "@fontsource/roboto": "npm:^5.3.0"
+    "@fontsource/roboto-mono": "npm:^5.3.0"
     "@mdx-js/react": "npm:^3.1.1"
     "@tsconfig/docusaurus": "npm:^2.0.9"
     "@types/node": "npm:^22.20.1"
@@ -13506,10 +13523,10 @@ __metadata:
   languageName: node
   linkType: hard
 
-"fast-uri@npm:4.1.1":
-  version: 4.1.1
-  resolution: "fast-uri@npm:4.1.1"
-  checksum: 10/f8a186718e360ffb0888b812892dc2930902c4200b9a35ab15923678b4cbcece04a155d36edc74f1ed3e5a9f60893095cf195b6e0a2351282f7714bac0993445
+"fast-uri@npm:4.1.2":
+  version: 4.1.2
+  resolution: "fast-uri@npm:4.1.2"
+  checksum: 10/e5e049fabd47930669c1af4642e6205a18683138cbc984673317e1ccb88d46de20e66b4ae6bc2e9ee70011eff263cc0f745daeaa7f841835d12c1e0d8d558f11
   languageName: node
   linkType: hard
 
@@ -15122,10 +15139,10 @@ __metadata:
   languageName: node
   linkType: hard
 
-"ip-address@npm:^10.2.0":
-  version: 10.2.0
-  resolution: "ip-address@npm:10.2.0"
-  checksum: 10/12fec399e1af5753ac322e47a6d81a50d3a528b3abb17c09525b2a2edcaedcca628c40520706f7037bc4d8e951b0296c47e7b86d0a8e6e2335c8f0ba4afcfac1
+"ip-address@npm:10.4.0":
+  version: 10.4.0
+  resolution: "ip-address@npm:10.4.0"
+  checksum: 10/8a286dd112a88c372b10c706caca14dcf5ed029a11c3911062ad8937ca0f951aa513ecacf82e15ffcf6343749ae6c079dd9741282fc94033a06ff1b7bd6ce69a
   languageName: node
   linkType: hard
 
@@ -15837,26 +15854,26 @@ __metadata:
   languageName: node
   linkType: hard
 
-"js-yaml@npm:3.14.2":
-  version: 3.14.2
-  resolution: "js-yaml@npm:3.14.2"
+"js-yaml@npm:3.15.1":
+  version: 3.15.1
+  resolution: "js-yaml@npm:3.15.1"
   dependencies:
     argparse: "npm:^1.0.7"
     esprima: "npm:^4.0.0"
   bin:
     js-yaml: bin/js-yaml.js
-  checksum: 10/172e0b6007b0bf0fc8d2469c94424f7dd765c64a047d2b790831fecef2204a4054eabf4d911eb73ab8c9a3256ab8ba1ee8d655b789bf24bf059c772acc2075a1
+  checksum: 10/905842ce08c18b154ff2c187ff81bb41294cc5dda214331b5d9b8bcf395894e48b00fa37b9d4dd4c3ffec672b7496a94558e3876d3a8ad4d12b06248112e6d92
   languageName: node
   linkType: hard
 
-"js-yaml@npm:4.2.0":
-  version: 4.2.0
-  resolution: "js-yaml@npm:4.2.0"
+"js-yaml@npm:4.3.1":
+  version: 4.3.1
+  resolution: "js-yaml@npm:4.3.1"
   dependencies:
     argparse: "npm:^2.0.1"
   bin:
     js-yaml: bin/js-yaml.js
-  checksum: 10/51de2067a2b44b07ba5206132e56005f8b568ff279bb4d2f645068958c56fa4827d40a6841c983234671fa0a134bf094d0b0717873c2a3d319185297af145a6d
+  checksum: 10/2ce71b5d632abbd77da80447bf860e8a0264e54bffe94840984887d58b023761495b523727547904517a6107a1ef189854b361e0fc44995ee13a84f222d7bd42
   languageName: node
   linkType: hard
 
@@ -17605,15 +17622,6 @@ __metadata:
   bin:
     nanoid: bin/nanoid.cjs
   checksum: 10/8004af92b5541af1dbd23b69845b5026f777d5b7ef07163cea1837aae86e052ced8b383cecbf8a4f1b5e77ae207df96dc45e16b9e0fa3c4b761d085f1e42851b
-  languageName: node
-  linkType: hard
-
-"nanoid@npm:^3.3.6":
-  version: 3.3.7
-  resolution: "nanoid@npm:3.3.7"
-  bin:
-    nanoid: bin/nanoid.cjs
-  checksum: 10/ac1eb60f615b272bccb0e2b9cd933720dad30bf9708424f691b8113826bb91aca7e9d14ef5d9415a6ba15c266b37817256f58d8ce980c82b0ba3185352565679
   languageName: node
   linkType: hard
 
@@ -23106,15 +23114,6 @@ __metadata:
     "@types/unist": "npm:^3.0.0"
     vfile-message: "npm:^4.0.0"
   checksum: 10/a5a85293c9eb8787aa42e180edaef00c13199a493d6ed82fecf13ab29a68526850788e22434d77808ea6b17a74e03ff899b9b4711df5b9eee75afcddd7c2e1fb
-  languageName: node
-  linkType: hard
-
-"vite-plugin-monaco-editor@npm:^1.1.0":
-  version: 1.1.0
-  resolution: "vite-plugin-monaco-editor@npm:1.1.0"
-  peerDependencies:
-    monaco-editor: ">=0.33.0"
-  checksum: 10/46ac2b301b42d0903c6eb8f165e672912b4f55e947b8d55a8c4e85d38632adc7dc450ff28012727f02a411f2e736c12c90515dcbbd95bd3345093b317db33253
   languageName: node
   linkType: hard
 

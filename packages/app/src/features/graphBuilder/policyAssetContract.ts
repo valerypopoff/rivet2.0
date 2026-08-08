@@ -92,7 +92,7 @@ export const GRAPH_BUILDER_POLICY_SEALED_FALSE_LLM_DATA_KEYS = Object.freeze([
   'parallelToolCalls',
   'autoContinueToolCalls',
   'retryOnNon200',
-  'outputRequestStatus',
+  'outputLLMAttempts',
 ] as const satisfies readonly (keyof LLMChatV2NodeData)[]);
 
 export const GRAPH_BUILDER_POLICY_SEALED_EMPTY_LLM_DATA_KEYS = Object.freeze([

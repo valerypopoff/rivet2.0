@@ -24,6 +24,8 @@ import { projectState } from '../state/savedGraphs.js';
 import { useLoadGraph } from './useLoadGraph.js';
 import { createRootGraphViewContext } from '../domain/graphEditing/navigationActions.js';
 import { useProjectWorkspaceTarget } from './useProjectWorkspaceTarget.js';
+import { getCanvasGraphHotkey } from './canvasGraphHotkeys.js';
+import { isRivetAppHostCapabilityEnabled, useRivetAppHostUiConfig } from '../providers/HostUiConfigContext.js';
 
 type CanvasHotkeyOptions =
   | boolean
@@ -46,8 +48,17 @@ function resolveCanvasHotkeyOptions(options: CanvasHotkeyOptions) {
   };
 }
 
+function isCanvasTextEntryFocused(activeElement: Element | null): boolean {
+  return (
+    activeElement instanceof HTMLElement &&
+    (['INPUT', 'TEXTAREA'].includes(activeElement.tagName) || activeElement.isContentEditable)
+  );
+}
+
 export function useCanvasHotkeys(options: CanvasHotkeyOptions = true) {
   const { enabled, graphCommandsEnabled } = resolveCanvasHotkeyOptions(options);
+  const hostUiConfig = useRivetAppHostUiConfig();
+  const aiGraphBuilderEnabled = isRivetAppHostCapabilityEnabled(hostUiConfig, 'aiGraphBuilder');
   const [canvasPosition, setCanvasPosition] = useAtom(canvasPositionState);
   const viewportBounds = useViewportBounds();
   const { canvasToClientPosition, getCanvasPositionForZoomAtClientPoint } = useCanvasPositioning();
@@ -81,7 +92,9 @@ export function useCanvasHotkeys(options: CanvasHotkeyOptions = true) {
       return;
     }
 
-    if (graphCommandsEnabled && e.key === 'f' && (e.metaKey || e.ctrlKey) && !e.shiftKey && graphSearch.searching) {
+    const graphHotkey = getCanvasGraphHotkey(e);
+
+    if (graphCommandsEnabled && graphHotkey === 'search' && graphSearch.searching) {
       e.preventDefault();
       e.stopPropagation();
 
@@ -91,7 +104,7 @@ export function useCanvasHotkeys(options: CanvasHotkeyOptions = true) {
     }
 
     // If we're in an input, don't do anything
-    if (['input', 'textarea'].includes(document.activeElement?.tagName.toLowerCase()!)) {
+    if (isCanvasTextEntryFocused(document.activeElement)) {
       return;
     }
 
@@ -128,9 +141,10 @@ export function useCanvasHotkeys(options: CanvasHotkeyOptions = true) {
       return;
     }
 
-    if ((e.key === '-' || e.key === '=') && (e.metaKey || e.ctrlKey) && !e.shiftKey) {
+    const zoomDirection = graphHotkey === 'zoomIn' ? 'in' : graphHotkey === 'zoomOut' ? 'out' : undefined;
+    if (zoomDirection) {
       const zoomSpeed = 0.25;
-      const zoomFactor = e.key === '=' ? 1 + zoomSpeed : 1 - zoomSpeed;
+      const zoomFactor = zoomDirection === 'in' ? 1 + zoomSpeed : 1 - zoomSpeed;
 
       const newZoom = canvasPosition.zoom * zoomFactor;
 
@@ -172,7 +186,7 @@ export function useCanvasHotkeys(options: CanvasHotkeyOptions = true) {
       setCanvasPosition(position);
     }
 
-    if (e.key === 'f' && (e.metaKey || e.ctrlKey) && !e.shiftKey) {
+    if (graphHotkey === 'search') {
       e.preventDefault();
       e.stopPropagation();
 
@@ -180,8 +194,8 @@ export function useCanvasHotkeys(options: CanvasHotkeyOptions = true) {
       setOpenOverlay(undefined);
     }
 
-    if (e.key === 'e' && !e.metaKey && !e.ctrlKey && !e.shiftKey) {
-      if (['INPUT', 'TEXTAREA'].includes(document.activeElement?.tagName!)) {
+    if (graphHotkey === 'editHoveredNode') {
+      if (isCanvasTextEntryFocused(document.activeElement)) {
         return;
       }
 
@@ -190,35 +204,35 @@ export function useCanvasHotkeys(options: CanvasHotkeyOptions = true) {
       }
     }
 
-    if (e.key === 'z' && (e.metaKey || e.ctrlKey) && !e.shiftKey) {
+    if (graphHotkey === 'undo') {
       e.preventDefault();
       e.stopPropagation();
 
       undo();
     }
 
-    if (e.key === 'y' && (e.metaKey || e.ctrlKey) && !e.shiftKey) {
+    if (graphHotkey === 'redo') {
       e.preventDefault();
       e.stopPropagation();
 
       redo();
     }
 
-    if (e.key === 'z' && (e.metaKey || e.ctrlKey) && e.shiftKey) {
+    if (graphHotkey === 'redoWithShift') {
       e.preventDefault();
       e.stopPropagation();
 
       redo();
     }
 
-    if (e.key === 'p' && (e.metaKey || e.ctrlKey) && !e.shiftKey) {
+    if (graphHotkey === 'goTo') {
       e.preventDefault();
       e.stopPropagation();
 
       setGoToSearch({ searching: true, query: '', selectedIndex: 0, entries: [] });
     }
 
-    if (e.key === 'a' && (e.metaKey || e.ctrlKey) && !e.shiftKey) {
+    if (graphHotkey === 'selectAll') {
       e.preventDefault();
       e.stopPropagation();
 
@@ -233,7 +247,7 @@ export function useCanvasHotkeys(options: CanvasHotkeyOptions = true) {
       }
     }
 
-    if (e.key === 'i' && (e.metaKey || e.ctrlKey) && !e.shiftKey) {
+    if (aiGraphBuilderEnabled && graphHotkey === 'openAiGraphCreator') {
       e.preventDefault();
       e.stopPropagation();
 

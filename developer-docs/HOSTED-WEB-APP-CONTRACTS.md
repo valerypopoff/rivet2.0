@@ -134,7 +134,12 @@ with browser chat history and is formatted in the browser's locale and timezone,
 is stripped when Rivet converts conversation history to graph `chat-message[]` input.
 Custom browser renderers can use `getUiGraphChatMessagePresentations(messages)` from
 `@valerypopoff/rivet2-core/web-app-runtime` to render the local times and the
-transition-only date separators without modifying Chat state.
+transition-only date separators without modifying Chat state. The timestamp
+presentation for an assistant turn additionally exposes a browser-observed
+`elapsedSincePreviousUserMessage` string when the closest preceding user turn has
+a valid earlier timestamp. The React and hosted renderers append that string as a
+second line in the message-time tooltip; it measures end-to-end browser time, not
+only model inference time.
 `runRivetWebAppAction(...)` repeats the projection for direct host calls, so
 lifecycle hooks and `createProcessorOptions` receive only action-relevant state.
 Unrelated form values and prior output state remain local to the web app.
@@ -475,6 +480,45 @@ remain usable after browser back/forward restoration instead of targeting a disp
 WebSocket runner.
 
 ## Security
+
+### Optional Chat response inspection
+
+Chat response inspection is opt-in per component through
+`allowResponseInspection`; the default is `false`. When disabled, the action
+runner must not collect, transport, persist, or expose an `AgentResponseTrace`.
+When enabled, HTTP results and protocol-v1 `action.completed` messages may add an
+optional `responseTrace`. This is an additive v1 field: older clients ignore it,
+and newer clients show **Trace unavailable** if an older host omits it. Clients
+also ignore an invalid or future-version optional trace without discarding the
+otherwise valid `action.completed` state patch.
+
+Assistant messages store only an optional `responseTraceId`. Conversation
+history conversion ignores that field, so trace metadata never enters later LLM
+context. Validated traces are stored separately from messages, scoped by app
+path, UI graph, and Chat component; the browser keeps the newest 100 and prunes
+orphans after history changes. Unavailable browser storage falls back to
+in-memory storage for the page session. If a browser-storage write fails, that
+in-memory copy remains authoritative until a later write succeeds, so an older
+persisted record cannot hide a response trace that the current page just
+produced. Disabling response inspection strips earlier trace IDs from persisted
+messages and deletes that Chat component's separately stored trace data; later
+trace-save attempts are ignored while inspection remains disabled.
+
+The assistant-message menu order is **Open in reading view**, **Inspect
+response**, **Remove message**. The shared accessible inspector groups metadata
+into **Execution**, **Recovery behavior**, **Usage and cost**, and **Timing**,
+then lists physical model and tool calls. **Provider request retries** means a
+failed request was repeated; **LLM profile fallbacks** means execution moved to
+the next configured profile. Correlation identities remain in the portable
+trace for runtime isolation, recordings, and retention, but the normal inspector
+does not render opaque trace, graph, node, or process IDs. Both React and
+generated hosted renderers must validate the portable trace before rendering it.
+
+The trace duration ends when graph outputs are ready. If managed async branches
+remain active, the trace reports that fact without delaying the foreground
+response. The trace contract forbids prompts, messages, generated text,
+reasoning, tool arguments/results, retrieved content, raw provider bodies,
+headers, credentials, and raw errors.
 
 Web apps are declarative: no project JavaScript or arbitrary HTML execution.
 Markdown and rich content use the shared sanitization policy. Action routes should

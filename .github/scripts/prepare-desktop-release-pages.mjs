@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const pagesOutDir = path.resolve(repoRoot, process.env.PAGES_OUT_DIR ?? 'desktop-release-pages');
 const releaseChannel = process.env.RELEASE_CHANNEL ?? 'developer';
+const releaseAssetsManifestPath = process.env.RELEASE_ASSETS_MANIFEST_PATH?.trim();
 
 const releaseConfigs = {
   developer: {
@@ -144,6 +145,24 @@ function releaseAssetUrls(metadata) {
     .filter((url) => typeof url === 'string' && url.length > 0);
 }
 
+function assertPublishedReleaseMetadata(metadata, metadataFile) {
+  if (metadata == null || typeof metadata !== 'object') {
+    throw new Error(`Existing ${metadataFile} is not a release metadata object.`);
+  }
+
+  if (!Array.isArray(metadata.stableDownloads) || metadata.stableDownloads.length === 0) {
+    throw new Error(`Existing ${metadataFile} does not contain any stable downloads.`);
+  }
+
+  if (!metadata.stableDownloads.every(isStableDownload)) {
+    throw new Error(`Existing ${metadataFile} has invalid stable download metadata.`);
+  }
+
+  if (!Array.isArray(metadata.artifacts) || !metadata.artifacts.every(isReleaseAsset)) {
+    throw new Error(`Existing ${metadataFile} has invalid build artifact metadata.`);
+  }
+}
+
 async function preservePublishedRelease(metadataFile, publishedSiteUrl) {
   const metadataUrl = new URL(metadataFile, publishedSiteUrl);
   let response;
@@ -151,8 +170,11 @@ async function preservePublishedRelease(metadataFile, publishedSiteUrl) {
   try {
     response = await fetch(metadataUrl, { cache: 'no-store' });
   } catch (error) {
-    console.warn(`Could not fetch existing ${metadataFile}; continuing without preserving it.`, error);
-    return;
+    throw new Error(
+      `Could not fetch existing ${metadataFile}; refusing to publish a Pages site that could drop the other release channel. ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
   }
 
   if (response.status === 404) {
@@ -161,8 +183,9 @@ async function preservePublishedRelease(metadataFile, publishedSiteUrl) {
   }
 
   if (!response.ok) {
-    console.warn(`Could not fetch existing ${metadataFile}: ${response.status} ${response.statusText}`);
-    return;
+    throw new Error(
+      `Could not fetch existing ${metadataFile}; refusing to publish a Pages site that could drop the other release channel. ${response.status} ${response.statusText}`,
+    );
   }
 
   const metadataText = await response.text();
@@ -171,8 +194,19 @@ async function preservePublishedRelease(metadataFile, publishedSiteUrl) {
   try {
     metadata = JSON.parse(metadataText);
   } catch (error) {
-    console.warn(`Existing ${metadataFile} is not valid JSON; continuing without preserving it.`, error);
-    return;
+    throw new Error(
+      `Existing ${metadataFile} is not valid JSON; refusing to publish a Pages site that could drop the other release channel. ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
+  }
+
+  try {
+    assertPublishedReleaseMetadata(metadata, metadataFile);
+  } catch (error) {
+    throw new Error(
+      `${error instanceof Error ? error.message : String(error)} Refusing to publish a Pages site that could drop the other release channel.`,
+    );
   }
 
   for (const assetUrl of releaseAssetUrls(metadata)) {
@@ -187,14 +221,17 @@ async function preservePublishedRelease(metadataFile, publishedSiteUrl) {
       const assetResponse = await fetch(new URL(assetPath, publishedSiteUrl), { cache: 'no-store' });
 
       if (!assetResponse.ok) {
-        console.warn(`Could not preserve ${assetUrl}: ${assetResponse.status} ${assetResponse.statusText}`);
-        continue;
+        throw new Error(`${assetResponse.status} ${assetResponse.statusText}`);
       }
 
       const assetBytes = Buffer.from(await assetResponse.arrayBuffer());
       await writeUnderPagesRoot(assetPath, assetBytes);
     } catch (error) {
-      console.warn(`Could not preserve ${assetUrl}; continuing.`, error);
+      throw new Error(
+        `Could not preserve ${assetUrl}; refusing to publish a Pages site that could break the other release channel. ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
     }
   }
 
@@ -347,6 +384,103 @@ function assertStableDownloadsForRequestedPlatforms(stableDownloads, releasePlat
   }
 }
 
+function isReleaseAsset(value) {
+  return (
+    value != null &&
+    typeof value === 'object' &&
+    typeof value.name === 'string' &&
+    value.name.length > 0 &&
+    typeof value.originalPath === 'string' &&
+    value.originalPath.length > 0 &&
+    typeof value.platform === 'string' &&
+    value.platform.length > 0 &&
+    typeof value.size === 'number' &&
+    Number.isFinite(value.size) &&
+    value.size >= 0 &&
+    typeof value.url === 'string' &&
+    value.url.length > 0
+  );
+}
+
+function isStableDownload(value) {
+  return (
+    value != null &&
+    typeof value === 'object' &&
+    typeof value.label === 'string' &&
+    value.label.length > 0 &&
+    typeof value.name === 'string' &&
+    value.name.length > 0 &&
+    typeof value.platform === 'string' &&
+    value.platform.length > 0 &&
+    typeof value.size === 'number' &&
+    Number.isFinite(value.size) &&
+    value.size >= 0 &&
+    typeof value.url === 'string' &&
+    value.url.length > 0
+  );
+}
+
+function assertHttpsReleaseAssetUrl(url, description) {
+  let parsedUrl;
+
+  try {
+    parsedUrl = new URL(url);
+  } catch {
+    throw new Error(`${description} must use an absolute HTTPS URL, received: ${url}`);
+  }
+
+  if (parsedUrl.protocol !== 'https:') {
+    throw new Error(`${description} must use an absolute HTTPS URL, received: ${url}`);
+  }
+}
+
+async function readReleaseAssetsManifest({ releasePlatforms, version }) {
+  if (!releaseAssetsManifestPath) {
+    return null;
+  }
+
+  const manifestPath = path.resolve(repoRoot, releaseAssetsManifestPath);
+  let manifest;
+
+  try {
+    manifest = JSON.parse(await readFile(manifestPath, 'utf8'));
+  } catch (error) {
+    throw new Error(
+      `Could not read release asset manifest at ${manifestPath}: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+
+  if (manifest?.version !== 1 || manifest.channel !== releaseChannel) {
+    throw new Error(`Release asset manifest ${manifestPath} is not for the ${releaseChannel} release channel.`);
+  }
+
+  if (manifest.desktopVersion !== version) {
+    throw new Error(
+      `Release asset manifest ${manifestPath} has desktop version ${String(manifest.desktopVersion)}, expected ${version}.`,
+    );
+  }
+
+  if (!Array.isArray(manifest.stableDownloads) || !manifest.stableDownloads.every(isStableDownload)) {
+    throw new Error(`Release asset manifest ${manifestPath} has invalid stableDownloads.`);
+  }
+
+  if (!Array.isArray(manifest.artifacts) || !manifest.artifacts.every(isReleaseAsset)) {
+    throw new Error(`Release asset manifest ${manifestPath} has invalid artifacts.`);
+  }
+
+  for (const asset of [...manifest.stableDownloads, ...manifest.artifacts]) {
+    assertHttpsReleaseAssetUrl(asset.url, `Release asset ${asset.name}`);
+  }
+
+  assertStableDownloadsForRequestedPlatforms(manifest.stableDownloads, releasePlatforms);
+
+  return {
+    artifacts: manifest.artifacts,
+    releaseUrl: typeof manifest.release?.url === 'string' ? manifest.release.url : null,
+    stableDownloads: manifest.stableDownloads,
+  };
+}
+
 async function main() {
   const releasePlatforms = parseReleasePlatforms();
   const preserveMetadataFiles = (process.env.PRESERVE_RELEASE_METADATA_FILES ?? '')
@@ -354,26 +488,34 @@ async function main() {
     .map((file) => file.trim())
     .filter((file) => file.length > 0 && file !== releaseConfig.metadataFile);
   const publishedSiteUrl = process.env.PAGES_SITE_URL ?? defaultPublishedSiteUrl();
+  const version = await readAppVersion();
 
   for (const metadataFile of preserveMetadataFiles) {
     await preservePublishedRelease(metadataFile, publishedSiteUrl);
   }
 
-  await mkdir(originalDownloadsDir, { recursive: true });
+  const releaseAssetsManifest = await readReleaseAssetsManifest({ releasePlatforms, version });
+  let artifacts;
+  let releaseUrl = null;
+  let stableDownloads;
 
-  const artifacts = (await Promise.all(
-    releasePlatforms.map((platformConfig) => collectPlatformArtifacts(platformConfig)),
-  ))
-    .flat()
-    .sort((a, b) => `${a.platform}:${a.name}`.localeCompare(`${b.platform}:${b.name}`));
-  const stableDownloads = await createStableDownloads(artifacts);
-  assertStableDownloadsForRequestedPlatforms(stableDownloads, releasePlatforms);
+  if (releaseAssetsManifest) {
+    ({ artifacts, releaseUrl, stableDownloads } = releaseAssetsManifest);
+  } else {
+    await mkdir(originalDownloadsDir, { recursive: true });
+    artifacts = (await Promise.all(
+      releasePlatforms.map((platformConfig) => collectPlatformArtifacts(platformConfig)),
+    ))
+      .flat()
+      .sort((a, b) => `${a.platform}:${a.name}`.localeCompare(`${b.platform}:${b.name}`));
+    stableDownloads = await createStableDownloads(artifacts);
+    assertStableDownloadsForRequestedPlatforms(stableDownloads, releasePlatforms);
+  }
 
   const shortSha = (process.env.GITHUB_SHA ?? 'local').slice(0, 7);
   const repository = process.env.GITHUB_REPOSITORY ?? 'local/repo';
   const runId = process.env.GITHUB_RUN_ID;
   const serverUrl = process.env.GITHUB_SERVER_URL ?? 'https://github.com';
-  const version = await readAppVersion();
   const releaseMetadata = {
     channel: releaseChannel,
     title: `${releaseConfig.displayName} Desktop Release`,
@@ -385,6 +527,7 @@ async function main() {
     runNumber: process.env.GITHUB_RUN_NUMBER ?? null,
     runUrl: runId ? `${serverUrl}/${repository}/actions/runs/${runId}` : null,
     commitUrl: process.env.GITHUB_SHA ? `${serverUrl}/${repository}/commit/${process.env.GITHUB_SHA}` : null,
+    releaseUrl,
     stableDownloads,
     artifacts: artifacts.map(({ sourcePath: _sourcePath, ...artifact }) => artifact),
   };

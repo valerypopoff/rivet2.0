@@ -5,6 +5,7 @@ import type { GptFunction } from '../DataValue.js';
 import type { Inputs } from '../GraphProcessor.js';
 import type { PortId } from '../NodeBase.js';
 import type { ChatV2Provider, ChatV2ProviderOptions, ChatV2ResponseOutput } from './chatV2Types.js';
+import { getCustomProviderApiContract, type CustomProviderApi } from './customProviderApi.js';
 
 export type ChatV2ResponseFormat = '' | 'text' | 'json' | 'json_schema';
 
@@ -143,6 +144,7 @@ export function resolveChatV2ResponseFormatParameters(
 export function createChatV2ResponseOutput(
   parameters: ChatV2ResponseFormatParameters,
   provider?: ChatV2Provider,
+  customProviderApi: CustomProviderApi = 'completions',
 ): ChatV2ResponseOutput | undefined {
   if (parameters == null) {
     return undefined;
@@ -153,7 +155,10 @@ export function createChatV2ResponseOutput(
   }
 
   if (parameters.responseFormat === 'json') {
-    if (provider === 'custom') {
+    if (
+      provider === 'custom' &&
+      getCustomProviderApiContract(customProviderApi).structuredOutput === 'raw-response-format'
+    ) {
       return undefined;
     }
 
@@ -174,8 +179,13 @@ export function mergeCustomProviderResponseFormatOptions(
   provider: ChatV2Provider,
   providerOptions: ChatV2ProviderOptions | undefined,
   parameters: ChatV2ResponseFormatParameters,
+  customProviderApi: CustomProviderApi = 'completions',
 ): ChatV2ProviderOptions | undefined {
-  if (provider !== 'custom' || parameters == null) {
+  if (
+    provider !== 'custom' ||
+    getCustomProviderApiContract(customProviderApi).structuredOutput === 'sdk-output' ||
+    parameters == null
+  ) {
     return providerOptions;
   }
 

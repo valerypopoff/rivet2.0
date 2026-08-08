@@ -54,35 +54,39 @@ const toRecordedEventMap: {
       },
       execution,
     ),
-  nodeStart: ({ node, inputs, processId, execution }) =>
+  nodeStart: ({ node, inputs, inputConnections, processId, resultOrigin, execution }) =>
     withExecution(
       {
         nodeId: node.id,
         inputs,
+        ...(inputConnections == null ? {} : { inputConnections }),
         processId,
+        ...(resultOrigin === undefined ? {} : { resultOrigin }),
       },
       execution,
     ),
-  nodeFinish: ({ node, outputs, processId, durationMs, splitRunDurationMs, execution }) =>
+  nodeFinish: ({ node, outputs, processId, resultOrigin, durationMs, splitRunDurationMs, execution }) =>
     withExecution(
       withDuration(
         {
           nodeId: node.id,
           outputs,
           processId,
+          ...(resultOrigin === undefined ? {} : { resultOrigin }),
         },
         durationMs,
         splitRunDurationMs,
       ),
       execution,
     ),
-  nodeError: ({ node, error, processId, durationMs, splitRunDurationMs, execution }) =>
+  nodeError: ({ node, error, processId, resultOrigin, durationMs, splitRunDurationMs, execution }) =>
     withExecution(
       withDuration(
         {
           nodeId: node.id,
           error: typeof error === 'string' ? error : error.stack!,
           processId,
+          ...(resultOrigin === undefined ? {} : { resultOrigin }),
         },
         durationMs,
         splitRunDurationMs,
@@ -99,7 +103,7 @@ const toRecordedEventMap: {
       },
       execution,
     ),
-  nodeExcluded: ({ node, processId, inputs, outputs, reason, execution }) =>
+  nodeExcluded: ({ node, processId, inputs, outputs, reason, resultOrigin, execution }) =>
     withExecution(
       {
         nodeId: node.id,
@@ -107,6 +111,7 @@ const toRecordedEventMap: {
         inputs,
         outputs,
         reason,
+        ...(resultOrigin === undefined ? {} : { resultOrigin }),
       },
       execution,
     ),
@@ -122,13 +127,14 @@ const toRecordedEventMap: {
       },
       execution,
     ),
-  partialOutput: ({ node, outputs, index, processId, execution }) =>
+  partialOutput: ({ node, outputs, index, processId, resultOrigin, execution }) =>
     withExecution(
       {
         nodeId: node.id,
         outputs,
         index,
         processId,
+        ...(resultOrigin === undefined ? {} : { resultOrigin }),
       },
       execution,
     ),
@@ -141,6 +147,8 @@ const toRecordedEventMap: {
       },
       execution,
     ),
+  llmCallFinished: ({ execution, ...event }) => ({ ...event, execution }),
+  toolCallFinished: ({ execution, ...event }) => ({ ...event, execution }),
   nodeOutputsCleared: ({ node, processId, execution }) =>
     withExecution(
       {

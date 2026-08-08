@@ -1,5 +1,6 @@
 import { produce } from 'immer';
 import {
+  type AgentTraceEvent,
   type GraphRunId,
   type ProcessEventMessageMap,
   type ProcessEvents,
@@ -33,19 +34,64 @@ import {
   mergeNodeRunDataForProcess,
   prepareNodeRunDataForStorage,
 } from './useExecutionDataFlow.js';
+import { applyProcessEventToRunActivityJournal } from '../features/runActivity/runActivityProcessEvents.js';
+import { createRunActivityJournal } from '../features/runActivity/runActivityJournal.js';
+import { handleError } from '../utils/errorHandling.js';
+import { upsertAgentTraceEventForInvocation } from './agentTraceEventStorage.js';
 
 export type ProjectExecutionSnapshotEventResult = {
   changed: boolean;
   snapshot: ProjectExecutionSnapshot;
 };
 
-export function applyProcessEventToProjectExecutionSnapshot<K extends keyof ProcessEventMessageMap>(options: {
+type ProjectExecutionSnapshotEventOptions<K extends keyof ProcessEventMessageMap> = {
   data: ProcessEventMessageMap[K];
   message: K;
   projectId: ProjectId;
   refStore: DataRefStore;
   snapshot: ProjectExecutionSnapshot | undefined;
-}): ProjectExecutionSnapshotEventResult {
+};
+
+export function applyProcessEventToProjectExecutionSnapshot<K extends keyof ProcessEventMessageMap>(
+  options: ProjectExecutionSnapshotEventOptions<K>,
+): ProjectExecutionSnapshotEventResult {
+  const occurredAt = Date.now();
+  const previousSnapshot = options.snapshot ?? createEmptyProjectExecutionSnapshot();
+  const result = applyProcessEventToProjectExecutionSnapshotData(options);
+  let runActivityJournal = previousSnapshot.runActivityJournal ?? createRunActivityJournal();
+
+  try {
+    runActivityJournal = applyProcessEventToRunActivityJournal({
+      data: options.data,
+      // Project snapshots created by older app versions do not carry the
+      // additive Run Activity journal. Treat them as an empty journal instead
+      // of making an inactive-project or replay event fail during restoration.
+      journal: runActivityJournal,
+      message: options.message,
+      occurredAt,
+    });
+  } catch (error) {
+    // This projection is observational. A malformed activity event must not
+    // discard the primary execution snapshot for an inactive project.
+    handleError(error, `Failed to update Run Activity for ${options.message}`, { toastError: false });
+  }
+
+  if (result.snapshot.runActivityJournal === runActivityJournal) {
+    return result;
+  }
+
+  return {
+    changed: true,
+    snapshot: {
+      ...result.snapshot,
+      runActivityJournal,
+    },
+  };
+}
+
+function applyProcessEventToProjectExecutionSnapshotData<K extends keyof ProcessEventMessageMap>(
+  options: ProjectExecutionSnapshotEventOptions<K>,
+): ProjectExecutionSnapshotEventResult {
   const snapshot = options.snapshot ?? createEmptyProjectExecutionSnapshot();
 
   switch (options.message) {
@@ -126,10 +172,34 @@ export function applyProcessEventToProjectExecutionSnapshot<K extends keyof Proc
         changed: true,
         snapshot: applyPartialOutput(snapshot, options.data as ProcessEvents['partialOutput'], options),
       };
+    case 'llmCallFinished': {
+      const data = options.data as ProcessEvents['llmCallFinished'];
+      return {
+        changed: true,
+        snapshot: applyAgentTraceEvent(snapshot, {
+          type: 'llm-call-finished',
+          ...data,
+        }),
+      };
+    }
+    case 'toolCallFinished': {
+      const data = options.data as ProcessEvents['toolCallFinished'];
+      return {
+        changed: true,
+        snapshot: applyAgentTraceEvent(snapshot, {
+          type: 'tool-call-finished',
+          ...data,
+        }),
+      };
+    }
     case 'nodeOutputsCleared':
       return {
         changed: true,
-        snapshot: applyNodeOutputsCleared(snapshot, options.data as ProcessEvents['nodeOutputsCleared'], options.refStore),
+        snapshot: applyNodeOutputsCleared(
+          snapshot,
+          options.data as ProcessEvents['nodeOutputsCleared'],
+          options.refStore,
+        ),
       };
     case 'userInput':
       return {
@@ -167,11 +237,17 @@ export function applyProcessEventToProjectExecutionSnapshot<K extends keyof Proc
         snapshot: applyAbort(snapshot),
       };
     case 'pause':
+      if ((options.data as ProcessEvents['pause'])?.isReplay) {
+        return { changed: false, snapshot };
+      }
       return {
         changed: true,
         snapshot: { ...snapshot, graphPaused: true },
       };
     case 'resume':
+      if ((options.data as ProcessEvents['resume'])?.isReplay) {
+        return { changed: false, snapshot };
+      }
       return {
         changed: true,
         snapshot: { ...snapshot, graphPaused: false },
@@ -187,6 +263,12 @@ export function applyProcessEventToProjectExecutionSnapshot<K extends keyof Proc
         snapshot,
       };
   }
+}
+
+function applyAgentTraceEvent(snapshot: ProjectExecutionSnapshot, event: AgentTraceEvent): ProjectExecutionSnapshot {
+  return produce(snapshot, (draft) => {
+    upsertAgentTraceEventForInvocation(draft.lastRunDataByNode, event);
+  });
 }
 
 function applyStart(
@@ -231,6 +313,13 @@ function applyUserInput(
   snapshot: ProjectExecutionSnapshot,
   data: ProcessEvents['userInput'],
 ): ProjectExecutionSnapshot {
+  // Playback retains this event for the snapshot's Run Activity journal, but
+  // never restores an already-satisfied historical prompt into the User Input
+  // modal when the project becomes active again.
+  if (data.isReplay) {
+    return snapshot;
+  }
+
   return produce(snapshot, (draft) => {
     draft.userInputQuestions ??= {};
     draft.userInputQuestions[data.node.id] ??= [];
@@ -272,10 +361,7 @@ function applyGraphStart(
       });
     }
 
-    draft.selectedGraphRunByView = updateSelectedGraphRunForGraphStart(
-      draft.selectedGraphRunByView,
-      graphViewKey,
-    );
+    draft.selectedGraphRunByView = updateSelectedGraphRunForGraphStart(draft.selectedGraphRunByView, graphViewKey);
   });
 }
 

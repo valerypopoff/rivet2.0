@@ -5,8 +5,8 @@ import type { ChatMessage } from '../../../src/model/DataValue.js';
 import type { PortId } from '../../../src/model/NodeBase.js';
 import type { StreamedFunctionCall } from '../../../src/model/chat/streamChatResponse.js';
 import {
+  createChatV2CapturedBodyOutputs,
   createChatV2CommonOutputs,
-  createChatV2ProviderFailureOutputs,
   normalizeChatV2Usage,
 } from '../../../src/model/chat-v2/chatV2Outputs.js';
 import { calculateChatV2Cost } from '../../../src/model/chat-v2/modelRegistry.js';
@@ -55,7 +55,67 @@ describe('chatV2Outputs', () => {
     });
   });
 
-  it('builds successful common outputs including structured response, usage, reasoning, tools, and retry status', () => {
+  it('keeps a Usage cost unknown when the provider omitted one billable token count', () => {
+    assert.deepEqual(
+      normalizeChatV2Usage(
+        {
+          inputTokens: 12,
+        },
+        { provider: 'openai', modelId: 'gpt-5.6-luna' },
+      ),
+      {
+        promptTokens: 12,
+        completionTokens: 0,
+        totalTokens: 12,
+        cachedTokens: 0,
+        reasoningTokens: 0,
+        totalCost: undefined,
+      },
+    );
+  });
+
+  it('drops malformed provider token metadata instead of leaking it into Usage', () => {
+    assert.deepEqual(
+      normalizeChatV2Usage(
+        {
+          inputTokens: Number.NaN,
+          outputTokens: 8,
+          totalTokens: Number.POSITIVE_INFINITY,
+          inputTokenDetails: {
+            cacheReadTokens: -2,
+            cacheWriteTokens: 3,
+          },
+          outputTokenDetails: {
+            reasoningTokens: -1,
+          },
+        },
+        { provider: 'openai', modelId: 'gpt-5.6-luna' },
+      ),
+      {
+        promptTokens: 0,
+        completionTokens: 8,
+        totalTokens: 8,
+        cachedTokens: 3,
+        reasoningTokens: 0,
+        totalCost: undefined,
+      },
+    );
+  });
+
+  it('uses the same normalized pricing for GPT-5.6 Luna Usage output', () => {
+    assert.equal(
+      normalizeChatV2Usage(
+        {
+          inputTokens: 1_000_000,
+          outputTokens: 1_000_000,
+        },
+        { provider: 'openai', modelId: 'gpt-5.6-luna' },
+      )?.totalCost,
+      1.4,
+    );
+  });
+
+  it('builds successful common outputs including structured response, usage, reasoning, tools, and bodies', () => {
     const usage = normalizeChatV2Usage(
       {
         inputTokens: 10,
@@ -73,16 +133,13 @@ describe('chatV2Outputs', () => {
       functionCalls: [functionCall],
       usage,
       reasoning: ['  ', 'Because it is the capital.'],
-      requestStatus: 200,
-      responseError: undefined,
-      requestStatuses: [503, 200],
-      requestErrors: ['503 HTTP error'],
       requestBodies: [{ model: 'gpt-4o', messages: [{ role: 'user', content: 'Hello' }] }],
+      responseBodies: [{ id: 'response-1', output: 'Hello' }],
       outputUsage: true,
       outputReasoning: true,
-      outputRequestStatus: true,
+      outputRequestBody: true,
+      outputResponseBody: true,
       includeFunctionCalls: true,
-      retryOnNon200: true,
       responseFormat: 'json',
     });
 
@@ -99,17 +156,13 @@ describe('chatV2Outputs', () => {
       type: 'string[]',
       value: ['Because it is the capital.'],
     });
-    assert.deepEqual(outputs['requestStatus' as PortId], {
-      type: 'number[]',
-      value: [503, 200],
-    });
-    assert.deepEqual(outputs['requestError' as PortId], {
-      type: 'string[]',
-      value: ['503 HTTP error'],
-    });
     assert.deepEqual(outputs['requestBody' as PortId], {
       type: 'object',
       value: { model: 'gpt-4o', messages: [{ role: 'user', content: 'Hello' }] },
+    });
+    assert.deepEqual(outputs['responseBody' as PortId], {
+      type: 'object',
+      value: { id: 'response-1', output: 'Hello' },
     });
   });
 
@@ -121,16 +174,13 @@ describe('chatV2Outputs', () => {
       functionCalls: [],
       usage: undefined,
       reasoning: '',
-      requestStatus: undefined,
-      responseError: undefined,
-      requestStatuses: [],
-      requestErrors: [],
       requestBodies: [],
+      responseBodies: [],
       outputUsage: true,
       outputReasoning: true,
-      outputRequestStatus: true,
+      outputRequestBody: true,
+      outputResponseBody: true,
       includeFunctionCalls: true,
-      retryOnNon200: false,
       responseFormat: undefined,
     });
 
@@ -146,21 +196,17 @@ describe('chatV2Outputs', () => {
       type: 'control-flow-excluded',
       value: undefined,
     });
-    assert.deepEqual(outputs['requestStatus' as PortId], {
-      type: 'number',
-      value: 200,
-    });
-    assert.deepEqual(outputs['requestError' as PortId], {
+    assert.deepEqual(outputs['requestBody' as PortId], {
       type: 'control-flow-excluded',
       value: undefined,
     });
-    assert.deepEqual(outputs['requestBody' as PortId], {
+    assert.deepEqual(outputs['responseBody' as PortId], {
       type: 'control-flow-excluded',
       value: undefined,
     });
   });
 
-  it('keeps response status, response error, and request body independently optional', () => {
+  it('keeps request and response bodies independently optional', () => {
     const outputs = createChatV2CommonOutputs({
       requestMessages,
       response: 'Done',
@@ -168,24 +214,46 @@ describe('chatV2Outputs', () => {
       functionCalls: [],
       usage: undefined,
       reasoning: '',
-      requestStatus: 202,
-      responseError: 'provider warning',
-      requestStatuses: [],
-      requestErrors: [],
       requestBodies: [{ model: 'test' }],
+      responseBodies: [{ id: 'response-1' }],
       outputUsage: false,
       outputReasoning: false,
-      outputRequestStatus: true,
-      outputRequestError: false,
       outputRequestBody: false,
+      outputResponseBody: false,
       includeFunctionCalls: false,
-      retryOnNon200: false,
       responseFormat: undefined,
     });
 
-    assert.deepEqual(outputs['requestStatus' as PortId], { type: 'number', value: 202 });
-    assert.equal('requestError' in outputs, false);
     assert.equal('requestBody' in outputs, false);
+    assert.equal('responseBody' in outputs, false);
+  });
+
+  it('projects captured request and response bodies independently for failed node diagnostics', () => {
+    assert.deepEqual(
+      createChatV2CapturedBodyOutputs({
+        requestBodies: [{ model: 'test' }],
+        responseBodies: [{ error: { message: 'Denied' } }],
+        outputRequestBody: true,
+        outputResponseBody: true,
+      }),
+      {
+        requestBody: { type: 'object', value: { model: 'test' } },
+        responseBody: { type: 'object', value: { error: { message: 'Denied' } } },
+      },
+    );
+
+    assert.deepEqual(
+      createChatV2CapturedBodyOutputs({
+        requestBodies: [{ model: 'test' }],
+        responseBodies: [],
+        outputRequestBody: true,
+        outputResponseBody: true,
+      }),
+      {
+        requestBody: { type: 'object', value: { model: 'test' } },
+        responseBody: { type: 'control-flow-excluded', value: undefined },
+      },
+    );
   });
 
   it('does not emit tool calls when Tool use did not declare that output', () => {
@@ -196,89 +264,12 @@ describe('chatV2Outputs', () => {
       functionCalls: [createFunctionCall()],
       usage: undefined,
       reasoning: '',
-      requestStatus: 200,
-      responseError: undefined,
-      requestStatuses: [],
-      requestErrors: [],
       outputUsage: false,
       outputReasoning: false,
-      outputRequestStatus: false,
       includeFunctionCalls: false,
-      retryOnNon200: false,
       responseFormat: undefined,
     });
 
     assert.equal('function-calls' in outputs, false);
-  });
-
-  it('builds provider failure outputs without successful response side effects', () => {
-    const outputs = createChatV2ProviderFailureOutputs({
-      requestMessages,
-      responseStatus: 429,
-      responseError: '429 Rate Limited',
-      requestStatuses: [429, 429],
-      requestErrors: ['first 429', 'second 429'],
-      requestBodies: [{ attempt: 1 }, { attempt: 2 }],
-      outputUsage: true,
-      outputReasoning: true,
-      outputRequestStatus: true,
-      outputRequestError: true,
-      outputRequestBody: true,
-      includeFunctionCalls: true,
-      retryOnNon200: true,
-    });
-
-    assert.deepEqual(outputs['requestStatus' as PortId], {
-      type: 'number[]',
-      value: [429, 429],
-    });
-    assert.deepEqual(outputs['requestError' as PortId], {
-      type: 'string[]',
-      value: ['first 429', 'second 429'],
-    });
-    assert.deepEqual(outputs['requestBody' as PortId], {
-      type: 'object[]',
-      value: [{ attempt: 1 }, { attempt: 2 }],
-    });
-    assert.deepEqual(outputs['response' as PortId], {
-      type: 'control-flow-excluded',
-      value: undefined,
-    });
-    assert.deepEqual(outputs['usage' as PortId], {
-      type: 'control-flow-excluded',
-      value: undefined,
-    });
-    assert.deepEqual(outputs['function-calls' as PortId], {
-      type: 'control-flow-excluded',
-      value: undefined,
-    });
-  });
-
-  it('can return only Response Error for a provider failure', () => {
-    const outputs = createChatV2ProviderFailureOutputs({
-      requestMessages,
-      responseStatus: 503,
-      responseError: '503 Service Unavailable',
-      requestStatuses: [503],
-      requestErrors: ['503 Service Unavailable'],
-      outputUsage: false,
-      outputReasoning: false,
-      outputRequestStatus: false,
-      outputRequestError: true,
-      outputRequestBody: false,
-      includeFunctionCalls: false,
-      retryOnNon200: false,
-    });
-
-    assert.deepEqual(outputs['requestError' as PortId], {
-      type: 'string',
-      value: '503 Service Unavailable',
-    });
-    assert.equal('requestStatus' in outputs, false);
-    assert.equal('requestBody' in outputs, false);
-    assert.deepEqual(outputs['response' as PortId], {
-      type: 'control-flow-excluded',
-      value: undefined,
-    });
   });
 });

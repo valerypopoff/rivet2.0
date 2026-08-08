@@ -255,6 +255,13 @@ test('hasStoredPortMapValues distinguishes real port wrappers from absent wrappe
 test('hasStoredSplitOutputValues distinguishes real split wrappers from empty split maps', () => {
   assert.equal(
     hasStoredSplitOutputValues({
+      0: undefined,
+      1: null,
+    } as never),
+    false,
+  );
+  assert.equal(
+    hasStoredSplitOutputValues({
       0: {
         output: undefined,
       },

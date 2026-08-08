@@ -8,6 +8,10 @@ import { DEFAULT_LEFT_SIDEBAR_WIDTH } from '../utils/leftSidebarWidth.js';
 import type { ConnectedGraphInputUsage } from '../domain/graphEditing/graphInputUsage.js';
 import { DEFAULT_HORIZONTAL_MODAL_BOUNDS, type HorizontalModalBounds } from '../utils/fullScreenModalBounds.js';
 import type { NodeEditorGroupOpenState } from '../utils/nodeEditorGroupState.js';
+import {
+  DEFAULT_RUN_ACTIVITY_COLUMN_WIDTHS,
+  type RunActivityColumnWidths,
+} from '../features/runActivity/runActivityColumnWidths.js';
 
 const { storage } = createHybridStorage('ui');
 
@@ -22,7 +26,7 @@ export const debuggerPanelAnchorState = atom<DebuggerPanelAnchor | undefined>(un
 
 export const dataBusFullRowCountState = atom<number>(0);
 
-export type OverlayKey = 'promptDesigner' | 'trivet' | 'chatViewer' | 'dataStudio';
+export type OverlayKey = 'promptDesigner' | 'trivet' | 'dataStudio';
 
 export const overlayOpenState = atom<OverlayKey | undefined>(undefined);
 
@@ -91,6 +95,23 @@ export const fullscreenOutputModalBoundsState = atomWithStorage<HorizontalModalB
 );
 
 export const graphSearchPanelHeightState = atomWithStorage<number>('graphSearchPanelHeightState', 420, storage);
+
+/** Whether the project-scoped Run Activity surface is visible. */
+export const runActivityDrawerOpenState = atom<boolean>(false);
+
+/** Persisted desktop height. Narrow viewports render Run Activity as an overlay instead. */
+export const runActivityDrawerHeightState = atomWithStorage<number>('runActivityDrawerHeightState', 360, storage);
+
+/**
+ * User-local desktop column preferences for Run Activity. The drawer validates
+ * this persisted value before use so old or malformed browser storage cannot
+ * distort the table layout.
+ */
+export const runActivityColumnWidthsState = atomWithStorage<RunActivityColumnWidths>(
+  'runActivityColumnWidthsState',
+  DEFAULT_RUN_ACTIVITY_COLUMN_WIDTHS,
+  storage,
+);
 
 export const leftSidebarWidthState = atomWithStorage<number>(
   'leftSidebarWidthState',

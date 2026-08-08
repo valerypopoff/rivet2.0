@@ -15,6 +15,7 @@ import {
   logRuntimeDebug,
   logRuntimeError,
   logRuntimeInfo,
+  AgentResponseTraceCollector,
 } from '@valerypopoff/rivet2-core';
 import { produce } from 'immer';
 import { useEffect, useRef } from 'react';
@@ -33,7 +34,13 @@ import {
 } from '../state/savedGraphs';
 import { recordExecutionsState, settingsState, showNodeRunDurationsState } from '../state/settings';
 import { graphState } from '../state/graph';
-import { lastRecordingState, loadedRecordingState, recordingPlaybackStartingState } from '../state/execution';
+import {
+  getLoadedRecordingForProject,
+  isCurrentLoadedRecordingForProject,
+  lastRecordingState,
+  loadedRecordingState,
+  recordingPlaybackStartingState,
+} from '../state/execution';
 import { fillMissingSettingsFromEnvironmentVariables } from '../utils/tauri';
 import { getLLMChatV2CustomProviderApiKeyEnvVarNames } from '../utils/chatV2CustomProviderEnv';
 import { trivetState } from '../state/trivet';
@@ -114,7 +121,7 @@ export function useLocalExecutor() {
   const eventDispatcher = createProcessEventDispatcher(currentExecution);
   const setUserInputQuestions = useSetAtom(userInputModalQuestionsState);
   const savedSettings = useAtomValue(settingsState);
-  const loadedRecording = useAtomValue(loadedRecordingState);
+  const loadedRecording = getLoadedRecordingForProject(useAtomValue(loadedRecordingState), project.metadata.id);
   const recordingPlaybackStarting = useAtomValue(recordingPlaybackStartingState);
   const setRecordingPlaybackStarting = useSetAtom(recordingPlaybackStartingState);
   const setLastRecordingState = useSetAtom(lastRecordingState);
@@ -266,6 +273,15 @@ export function useLocalExecutor() {
     processor.on('partialOutput', (data) => {
       routeLocalProcessEvent(runProjectId, 'partialOutput', data, () => eventDispatcher.partialOutput(data));
     });
+    processor.on('progress', (data) => {
+      routeLocalProcessEvent(runProjectId, 'progress', data, () => eventDispatcher.progress(data));
+    });
+    processor.on('llmCallFinished', (data) => {
+      routeLocalProcessEvent(runProjectId, 'llmCallFinished', data, () => eventDispatcher.llmCallFinished(data));
+    });
+    processor.on('toolCallFinished', (data) => {
+      routeLocalProcessEvent(runProjectId, 'toolCallFinished', data, () => eventDispatcher.toolCallFinished(data));
+    });
     processor.on('graphStart', async (data: ProcessEvents['graphStart']) => {
       routeLocalProcessEvent(runProjectId, 'graphStart', data, () => eventDispatcher.graphStart(data));
       await yieldToMacrotask();
@@ -273,15 +289,18 @@ export function useLocalExecutor() {
     processor.on('graphFinish', (data) => {
       routeLocalProcessEvent(runProjectId, 'graphFinish', data, () => eventDispatcher.graphFinish(data));
     });
+    processor.on('graphOutputsReady', (data) => {
+      routeLocalProcessEvent(runProjectId, 'graphOutputsReady', data, () => eventDispatcher.graphOutputsReady(data));
+    });
     processor.on('nodeOutputsCleared', (data) => {
       routeLocalProcessEvent(runProjectId, 'nodeOutputsCleared', data, () => eventDispatcher.nodeOutputsCleared(data));
     });
     processor.on('trace', (trace) => logRuntimeDebug('Local graph trace', { trace }));
-    processor.on('pause', () => {
-      routeLocalProcessEvent(runProjectId, 'pause', undefined, () => eventDispatcher.pause());
+    processor.on('pause', (data) => {
+      routeLocalProcessEvent(runProjectId, 'pause', data, () => eventDispatcher.pause(data));
     });
-    processor.on('resume', () => {
-      routeLocalProcessEvent(runProjectId, 'resume', undefined, () => eventDispatcher.resume());
+    processor.on('resume', (data) => {
+      routeLocalProcessEvent(runProjectId, 'resume', data, () => eventDispatcher.resume(data));
     });
     processor.on('error', (data) => {
       routeLocalProcessEvent(runProjectId, 'error', data, () => eventDispatcher.error(data));
@@ -335,6 +354,7 @@ export function useLocalExecutor() {
     }
 
     let processor: GraphProcessor | undefined;
+    let responseTraceCollector: AgentResponseTraceCollector | undefined;
     const handleAbort = () => {
       void processor?.abort();
     };
@@ -343,6 +363,19 @@ export function useLocalExecutor() {
       if (recordingToReplay) {
         await yieldToMacrotask();
         options.abortSignal?.throwIfAborted();
+
+        // The user can close this tab during the repaint yield. Its recording
+        // is released synchronously on close, so do not construct a hidden
+        // playback processor from a stale captured selection.
+        if (
+          !isCurrentLoadedRecordingForProject(
+            store.get(loadedRecordingState),
+            recordingToReplay,
+            runProjectId,
+          )
+        ) {
+          return undefined;
+        }
       }
 
       const savedGraph = saveGraph() ?? graph;
@@ -370,6 +403,7 @@ export function useLocalExecutor() {
       processor = new GraphProcessor(tempProject, graphToRun, projectNodeRegistry, true, {
         captureNodeTimings: showNodeRunDurations,
       });
+      responseTraceCollector = options.onResponseTrace ? new AgentResponseTraceCollector(processor) : undefined;
       for (const [name, externalFunction] of Object.entries(options.externalFunctions ?? {})) {
         processor.setExternalFunction(name, externalFunction);
       }
@@ -459,6 +493,8 @@ export function useLocalExecutor() {
         }
       }
 
+      const responseTrace = responseTraceCollector?.build();
+      if (responseTrace) options.onResponseTrace?.(responseTrace);
       return results;
     } catch (e) {
       const runProjectIsActive = store.get(projectState).metadata.id === runProjectId;
@@ -486,6 +522,7 @@ export function useLocalExecutor() {
       return undefined;
     } finally {
       const cleanupProcessorRun = () => {
+        responseTraceCollector?.dispose();
         options.abortSignal?.removeEventListener('abort', handleAbort);
 
         if (processor && runProjectId && store.get(projectState).metadata.id === runProjectId) {
@@ -507,8 +544,19 @@ export function useLocalExecutor() {
       }
 
       if (recordingToReplay) {
-        recordingPlaybackStartingRef.current = false;
-        setRecordingPlaybackStarting(false);
+        // A closed owner can be replaced by another tab's recording while this
+        // stale invocation settles. Only the still-selected recording may
+        // clear the shared short pre-start flag.
+        if (
+          isCurrentLoadedRecordingForProject(
+            store.get(loadedRecordingState),
+            recordingToReplay,
+            runProjectId,
+          )
+        ) {
+          recordingPlaybackStartingRef.current = false;
+          setRecordingPlaybackStarting(false);
+        }
       }
     }
   });

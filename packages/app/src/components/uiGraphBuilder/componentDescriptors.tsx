@@ -35,6 +35,7 @@ import {
 } from './uiGraphComponentModel.js';
 import { isUiGraphDataKeyMissing } from './dataKeys.js';
 import { Tooltip } from '../Tooltip.js';
+import { LabeledToggle } from '../LabeledToggle.js';
 
 export {
   createChatAdditionalInputBinding,
@@ -482,6 +483,17 @@ const ChatSettings: FC<UiGraphComponentSettingsProps> = ({ component, dataKeyOpt
           }
         />
       </label>
+      <LabeledToggle
+        id={`ui-graph-chat-response-inspection-${component.id}`}
+        isChecked={component.allowResponseInspection === true}
+        label="Allow response inspection"
+        helperMessage="Lets users inspect privacy-bounded timing, model, tool, usage, and cost metadata."
+        onChange={(allowResponseInspection) =>
+          onUpdate((draft) => {
+            (draft as UiGraphChatComponent).allowResponseInspection = allowResponseInspection;
+          })
+        }
+      />
     </>
   );
 };

@@ -19,8 +19,10 @@ interface FullScreenModalProps {
 }
 
 const styles = css`
+  --fullscreen-modal-vertical-inset: 16px;
+
   box-sizing: border-box;
-  padding: 16px 0;
+  padding: var(--fullscreen-modal-vertical-inset) 0;
   height: 100%;
   max-height: calc(100vh - 32px);
   width: 100%;
@@ -95,8 +97,15 @@ function getResizableModalShellStyles(testId: string, bounds: HorizontalModalBou
     }
 
     [data-testid='${testId}--scrollable'] {
+      border-top: 0 !important;
+      border-bottom: 0 !important;
       overflow-x: auto !important;
       overflow-y: auto !important;
+    }
+
+    [data-testid='${testId}--body'] {
+      padding-top: 0 !important;
+      padding-bottom: 0 !important;
     }
   `;
 }

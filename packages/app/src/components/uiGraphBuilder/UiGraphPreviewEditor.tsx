@@ -173,7 +173,7 @@ export const UiGraphPreviewEditor: FC<{
             interactionController={interactionController}
             onComponentSelectionChange={selectComponentFromPointer}
             onRootPointerDownCapture={startSelectionRectangle}
-            renderComponentFrame={(frameProps) => (
+            renderComponentFrame={(frameProps) =>
               frameProps.component.id === paletteComponent?.id ? (
                 <PalettePreviewComponentFrame {...frameProps} />
               ) : (
@@ -182,7 +182,7 @@ export const UiGraphPreviewEditor: FC<{
                   onFocusCapture={() => selectComponentFromFocus(frameProps.component.id)}
                 />
               )
-            )}
+            }
             rootRef={scrollContainerRef}
             selectedComponentIds={selectedComponentIds}
             interactionUiGraph={uiGraph}
@@ -203,10 +203,7 @@ export const UiGraphPreviewEditor: FC<{
 };
 
 const PalettePreviewComponentFrame: FC<RivetWebAppComponentFrameProps> = ({ children, className, component }) => (
-  <div
-    className="ui-graph-preview-sortable-row palette-placeholder"
-    data-rivet-web-app-component-type={component.type}
-  >
+  <div className="ui-graph-preview-sortable-row palette-placeholder" data-rivet-web-app-component-type={component.type}>
     <div className="ui-graph-preview-sortable-body">
       <div className={`${className} active`} data-rivet-web-app-component-type={component.type}>
         <div className="ui-graph-preview-palette-placeholder-content">{children}</div>

@@ -5,17 +5,23 @@ import {
   decodeDebuggerTransportSentinels,
   type ChartNode,
   type FrozenNodeOutputsByGraph,
+  type GraphExecutionMetadata,
   type GraphId,
+  type GraphRunId,
   type NodeConnection,
   type NodeGraph,
   type NodeId,
   type NodePrefabId,
   type PortId,
+  type ProcessEventMessageMap,
+  type ProcessId,
   type Project,
   type ProjectId,
+  type RootRunId,
 } from '@valerypopoff/rivet2-core';
 import {
   canPreloadEditorRunFromPlan,
+  createProcessEventDispatcher,
   getDependentDataForNodeForPreload,
   getEditorRunFromPlan,
   getEditorRunToPlan,
@@ -24,6 +30,8 @@ import {
   selectTestSuitesToRun,
   shouldFlushFrozenNodeOutputsForRemoteDebuggerEvent,
 } from './remoteExecutorHelpers';
+import { createRunActivityNodeKey, createRunActivityJournal } from '../features/runActivity/runActivityJournal';
+import { applyProcessEventToRunActivityJournal } from '../features/runActivity/runActivityProcessEvents';
 import { deleteGlobalDataRef, setGlobalDataRef } from '../utils/globals/globalDataRefs';
 
 const registry = createBuiltInRegistry();
@@ -63,7 +71,12 @@ function makeLinkedNode(nodeId: string, prefabId: NodePrefabId): ChartNode {
   return node;
 }
 
-function makeConnection(outputNodeId: string, inputNodeId: string, inputId = 'input', outputId = 'output'): NodeConnection {
+function makeConnection(
+  outputNodeId: string,
+  inputNodeId: string,
+  inputId = 'input',
+  outputId = 'output',
+): NodeConnection {
   return {
     outputNodeId: outputNodeId as NodeId,
     inputNodeId: inputNodeId as NodeId,
@@ -136,6 +149,208 @@ test('selectTestSuitesToRun filters suites and cases narrowly', () => {
   );
 
   assert.deepEqual(selected, [{ id: 'suite-1', testCases: [{ id: 'case-2' }] }]);
+});
+
+test('Run Activity observer failures do not suppress primary execution-state events', () => {
+  let primaryNodeStartCount = 0;
+  const previousConsoleError = console.error;
+  console.error = () => undefined;
+
+  try {
+    const dispatcher = createProcessEventDispatcher({
+      onRunActivityEvent: () => {
+        throw new Error('projection failed');
+      },
+      onNodeStart: () => {
+        primaryNodeStartCount += 1;
+      },
+    } as any);
+
+    assert.equal(dispatcher.nodeStart({}), true);
+    assert.equal(primaryNodeStartCount, 1);
+  } finally {
+    console.error = previousConsoleError;
+  }
+});
+
+test('projects replay-shaped waiting, progress, model, and tool events into Run Activity', () => {
+  const execution: GraphExecutionMetadata = {
+    graphId,
+    graphRunId: 'replay-graph-run' as GraphRunId,
+    rootRunId: 'replay-root-run' as RootRunId,
+  };
+  const node = makeTextNode('replayed-agent');
+  const processId = 'replayed-agent-process' as ProcessId;
+  const replayedInputProcessId = 'replayed-user-input-process' as ProcessId;
+  let occurredAt = 0;
+  let journal = createRunActivityJournal();
+  let primaryUserInputCount = 0;
+  let primaryModelCallCount = 0;
+  let primaryToolCallCount = 0;
+  let primaryPauseCount = 0;
+  let primaryResumeCount = 0;
+  const projectRunActivityEvent = <K extends keyof ProcessEventMessageMap>(
+    message: K,
+    data: ProcessEventMessageMap[K],
+  ) => {
+    journal = applyProcessEventToRunActivityJournal({
+      journal,
+      message,
+      data,
+      occurredAt: ++occurredAt,
+    });
+  };
+
+  const dispatcher = createProcessEventDispatcher({
+    onRunActivityEvent: projectRunActivityEvent,
+    onUserInput: () => {
+      primaryUserInputCount += 1;
+    },
+    onLlmCallFinished: () => {
+      primaryModelCallCount += 1;
+    },
+    onToolCallFinished: () => {
+      primaryToolCallCount += 1;
+    },
+    onPause: () => {
+      primaryPauseCount += 1;
+    },
+    onResume: () => {
+      primaryResumeCount += 1;
+    },
+  } as any);
+
+  assert.equal(
+    dispatcher.userInput({
+      node,
+      processId,
+      inputs: {},
+      inputStrings: ['Which option?'],
+      renderingType: 'markdown',
+      execution,
+    } satisfies ProcessEventMessageMap['userInput']),
+    true,
+  );
+  assert.equal(
+    dispatcher.userInput({
+      node,
+      processId: replayedInputProcessId,
+      inputs: {},
+      inputStrings: ['Historical choice'],
+      renderingType: 'markdown',
+      isReplay: true,
+      execution,
+    } satisfies ProcessEventMessageMap['userInput']),
+    true,
+  );
+  assert.equal(
+    dispatcher.progress({
+      node,
+      processId,
+      progress: { percent: 50, message: 'Thinking' },
+      execution,
+    } satisfies ProcessEventMessageMap['progress']),
+    true,
+  );
+  assert.equal(
+    dispatcher.llmCallFinished({
+      execution,
+      callId: 'replayed-model-call' as never,
+      nodeId: node.id,
+      processId,
+      provider: 'openai',
+      model: 'gpt-test',
+      outcome: 'success',
+      attemptIndex: 0,
+      startedAt: 10,
+      durationMs: 12,
+      normalizedUsage: { promptTokens: 5, completionTokens: 3 },
+      pricing: { status: 'unknown' },
+    } satisfies ProcessEventMessageMap['llmCallFinished']),
+    true,
+  );
+  assert.equal(
+    dispatcher.toolCallFinished({
+      execution,
+      toolCallId: 'replayed-tool-call',
+      toolName: 'lookup',
+      sourceNodeId: node.id,
+      sourceProcessId: processId,
+      resultOwner: {
+        nodeId: 'delegate' as NodeId,
+        processId: 'delegate-process' as ProcessId,
+        outputPortId: 'output' as PortId,
+      },
+      handlerKind: 'graph',
+      handlerGraphId: graphId,
+      handlerName: 'Lookup',
+      outcome: 'success',
+      startedAt: 25,
+      durationMs: 8,
+    } satisfies ProcessEventMessageMap['toolCallFinished']),
+    true,
+  );
+  assert.equal(dispatcher.pause({ isReplay: true } satisfies ProcessEventMessageMap['pause']), true);
+  assert.equal(dispatcher.resume({ isReplay: true } satisfies ProcessEventMessageMap['resume']), true);
+
+  assert.equal(primaryUserInputCount, 1);
+  assert.equal(primaryModelCallCount, 1);
+  assert.equal(primaryToolCallCount, 1);
+  assert.equal(primaryPauseCount, 0);
+  assert.equal(primaryResumeCount, 0);
+
+  const invocation = journal.rootsById[execution.rootRunId]!.nodeInvocationsByKey[
+    createRunActivityNodeKey({ ...execution, nodeId: node.id, processId })
+  ]!;
+  assert.equal(invocation.status, 'waiting');
+  assert.deepEqual(invocation.waitingForUserInput, { questionCount: 1, renderingType: 'markdown' });
+
+  const replayedInputInvocation = journal.rootsById[execution.rootRunId]!.nodeInvocationsByKey[
+    createRunActivityNodeKey({ ...execution, nodeId: node.id, processId: replayedInputProcessId })
+  ]!;
+  assert.equal(replayedInputInvocation.status, 'waiting');
+  assert.deepEqual(replayedInputInvocation.waitingForUserInput, { questionCount: 1, renderingType: 'markdown' });
+  assert.deepEqual(invocation.progress, { percent: 50, message: 'Thinking' });
+  assert.deepEqual(
+    invocation.modelCalls.map(({ sequence: _sequence, ...call }) => call),
+    [
+      {
+        callId: 'replayed-model-call',
+        nodeId: node.id,
+        processId,
+        provider: 'openai',
+        model: 'gpt-test',
+        outcome: 'success',
+        attemptIndex: 0,
+        startedAt: 10,
+        durationMs: 12,
+        usage: { promptTokens: 5, completionTokens: 3 },
+        pricing: { status: 'unknown' },
+      },
+    ],
+  );
+  assert.deepEqual(
+    invocation.toolCalls.map(({ sequence: _sequence, ...call }) => call),
+    [
+      {
+        toolCallId: 'replayed-tool-call',
+        toolName: 'lookup',
+        sourceNodeId: node.id,
+        sourceProcessId: processId,
+        resultOwner: {
+          nodeId: 'delegate',
+          processId: 'delegate-process',
+          outputPortId: 'output',
+        },
+        handlerKind: 'graph',
+        handlerGraphId: graphId,
+        handlerName: 'Lookup',
+        outcome: 'success',
+        startedAt: 25,
+        durationMs: 8,
+      },
+    ],
+  );
 });
 
 test('getEditorRunFromPlan runs the selected node and downstream nodes while preloading upstream and side inputs', () => {

@@ -8,6 +8,10 @@ import {
   type UiGraphChatMessage,
 } from './UiGraph.js';
 import { getUiGraphJsonOutputFilename } from './UiGraphRuntimeModel.js';
+import { isAgentResponseTrace, type AgentResponseTrace } from './AgentResponseTrace.js';
+
+type UiGraphBrowserStorage = Pick<Storage, 'getItem' | 'removeItem' | 'setItem'>;
+type UiGraphStorageLocation = Pick<Location, 'origin' | 'pathname'>;
 
 const OUTPUT_MAX_HEIGHT_PX = 800;
 const OUTPUT_MAX_VIEWPORT_HEIGHT_RATIO = 0.8;
@@ -17,9 +21,15 @@ const CHAT_SEARCH_MATCH_CLASS = 'rivet-web-app-chat-search-match';
 const CHAT_SEARCH_ACTIVE_MATCH_CLASS = 'rivet-web-app-chat-search-match-active';
 const UI_GRAPH_CHAT_STORAGE_PREFIX = 'rivet-web-app-chat-state:v1';
 const UI_GRAPH_APP_STORAGE_PREFIX = 'rivet-web-app-storage:v1';
+const UI_GRAPH_RESPONSE_TRACE_STORAGE_PREFIX = 'rivet-web-app-response-traces:v1';
+const UI_GRAPH_RESPONSE_TRACE_LIMIT = 100;
+const responseTraceMemoryFallback = new Map<string, AgentResponseTrace[]>();
+const unsyncedResponseTraceKeysByStorage = new WeakMap<UiGraphBrowserStorage, Set<string>>();
 
 export type UiGraphChatMessageTimestampPresentation = Readonly<{
   dateTime: string;
+  /** Present only for an assistant response with a valid preceding user-turn timestamp. */
+  elapsedSincePreviousUserMessage?: string;
   label: string;
 }>;
 
@@ -32,9 +42,6 @@ export type UiGraphChatMessagePresentationOptions = Readonly<{
   locales?: Intl.LocalesArgument;
   timeZone?: string;
 }>;
-
-type UiGraphBrowserStorage = Pick<Storage, 'getItem' | 'removeItem' | 'setItem'>;
-type UiGraphStorageLocation = Pick<Location, 'origin' | 'pathname'>;
 
 const escapeRegularExpression = (value: string): string => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
@@ -106,12 +113,18 @@ export function getUiGraphChatMessagePresentations(
       dateTime: timestamp.toISOString(),
       dateLabel: dateFormatter.format(timestamp),
       timeLabel: timeFormatter.format(timestamp),
+      timestamp,
     };
   });
   const hasMultipleDates = new Set(entries.flatMap((entry) => (entry ? [entry.dateKey] : []))).size > 1;
   let previousDateKey: string | undefined;
+  let previousUserTimestamp: Date | undefined;
 
-  return entries.map((entry) => {
+  return entries.map((entry, index) => {
+    const message = messages[index]!;
+    if (message.role === 'user') {
+      previousUserTimestamp = entry?.timestamp;
+    }
     if (!entry) return {};
 
     const dateSeparator =
@@ -119,12 +132,30 @@ export function getUiGraphChatMessagePresentations(
         ? { dateTime: entry.dateTime, label: entry.dateLabel }
         : undefined;
     previousDateKey = entry.dateKey;
+
+    const elapsedSincePreviousUserMessage =
+      message.role === 'assistant' && previousUserTimestamp
+        ? formatUiGraphChatElapsedSeconds(entry.timestamp.getTime() - previousUserTimestamp.getTime())
+        : undefined;
+
     return {
       ...(dateSeparator ? { dateSeparator } : {}),
-      timestamp: { dateTime: entry.dateTime, label: entry.timeLabel },
+      timestamp: {
+        dateTime: entry.dateTime,
+        ...(elapsedSincePreviousUserMessage ? { elapsedSincePreviousUserMessage } : {}),
+        label: entry.timeLabel,
+      },
     };
   });
 }
+
+/** Formats a browser-observed assistant-response delay without altering stored timestamps. */
+const formatUiGraphChatElapsedSeconds = (elapsedMilliseconds: number): string | undefined => {
+  if (!Number.isFinite(elapsedMilliseconds) || elapsedMilliseconds < 0) return undefined;
+
+  const seconds = Math.round((elapsedMilliseconds / 1_000) * 10) / 10;
+  return `${Number.isInteger(seconds) ? seconds : seconds.toFixed(1)} seconds after previous user message`;
+};
 
 const parseUiGraphChatTimestamp = (value: unknown): Date | undefined => {
   if (typeof value !== 'string') return undefined;
@@ -166,6 +197,160 @@ export function getUiGraphWebAppStorageKey(
     encodeURIComponent(pathname),
     encodeURIComponent(uiGraph.id),
   ].join(':');
+}
+
+function getUiGraphResponseTraceStorageKey(
+  uiGraph: UiGraph,
+  componentId: string,
+  location: UiGraphStorageLocation | undefined = getDefaultUiGraphStorageLocation(),
+): string | undefined {
+  if (!location?.origin) return undefined;
+  const pathname = location.pathname.replace(/\/+$/, '') || '/';
+  return [
+    UI_GRAPH_RESPONSE_TRACE_STORAGE_PREFIX,
+    encodeURIComponent(location.origin),
+    encodeURIComponent(pathname),
+    encodeURIComponent(uiGraph.id),
+    encodeURIComponent(componentId),
+  ].join(':');
+}
+
+const isUiGraphResponseInspectionEnabled = (uiGraph: UiGraph, componentId: string): boolean =>
+  uiGraph.components.some(
+    (component) =>
+      component.type === 'chat' && component.id === componentId && component.allowResponseInspection === true,
+  );
+
+const removeUiGraphChatResponseTraceIds = (messages: readonly UiGraphChatMessage[]): UiGraphChatMessage[] =>
+  messages.map((message) => {
+    if (message.responseTraceId == null) return message;
+    const sanitized = { ...message };
+    delete sanitized.responseTraceId;
+    return sanitized;
+  });
+
+const purgeDisabledUiGraphResponseTraces = (
+  uiGraph: UiGraph,
+  storage: UiGraphBrowserStorage | undefined,
+  location?: UiGraphStorageLocation,
+): void => {
+  for (const component of uiGraph.components) {
+    if (component.type !== 'chat' || component.allowResponseInspection === true) continue;
+    const key =
+      getUiGraphResponseTraceStorageKey(uiGraph, component.id, location) ?? `memory:${uiGraph.id}:${component.id}`;
+    persistUiGraphResponseTraces(key, [], storage);
+  }
+};
+
+/** Persists a validated trace outside Chat history so it never enters model context. */
+export function saveUiGraphResponseTrace(
+  uiGraph: UiGraph,
+  componentId: string,
+  trace: AgentResponseTrace,
+  storage: UiGraphBrowserStorage | undefined = getDefaultUiGraphBrowserStorage(),
+  location?: UiGraphStorageLocation,
+): void {
+  if (!isAgentResponseTrace(trace)) return;
+  if (!isUiGraphResponseInspectionEnabled(uiGraph, componentId)) {
+    const key =
+      getUiGraphResponseTraceStorageKey(uiGraph, componentId, location) ?? `memory:${uiGraph.id}:${componentId}`;
+    persistUiGraphResponseTraces(key, [], storage);
+    return;
+  }
+  const key =
+    getUiGraphResponseTraceStorageKey(uiGraph, componentId, location) ?? `memory:${uiGraph.id}:${componentId}`;
+  const traces = loadUiGraphResponseTraces(uiGraph, componentId, storage, location).filter(
+    (candidate) => candidate.traceId !== trace.traceId,
+  );
+  traces.push(trace);
+  const bounded = traces.slice(-UI_GRAPH_RESPONSE_TRACE_LIMIT);
+  persistUiGraphResponseTraces(key, bounded, storage);
+}
+
+/** Loads one validated response trace from the app/UI-graph-scoped store. */
+export function loadUiGraphResponseTrace(
+  uiGraph: UiGraph,
+  componentId: string,
+  traceId: string,
+  storage: UiGraphBrowserStorage | undefined = getDefaultUiGraphBrowserStorage(),
+  location?: UiGraphStorageLocation,
+): AgentResponseTrace | undefined {
+  if (!isUiGraphResponseInspectionEnabled(uiGraph, componentId)) return undefined;
+  return loadUiGraphResponseTraces(uiGraph, componentId, storage, location).find((trace) => trace.traceId === traceId);
+}
+
+/** Removes retained traces no longer referenced by Chat messages. */
+export function pruneUiGraphResponseTraces(
+  uiGraph: UiGraph,
+  state: Readonly<Record<string, unknown>>,
+  storage: UiGraphBrowserStorage | undefined = getDefaultUiGraphBrowserStorage(),
+  location?: UiGraphStorageLocation,
+): void {
+  for (const component of uiGraph.components) {
+    if (component.type !== 'chat') continue;
+    const referenced =
+      component.allowResponseInspection === true
+        ? new Set(
+            getUiGraphChatMessages(component.id, state).flatMap((message) =>
+              typeof message.responseTraceId === 'string' ? [message.responseTraceId] : [],
+            ),
+          )
+        : new Set<string>();
+    const key =
+      getUiGraphResponseTraceStorageKey(uiGraph, component.id, location) ?? `memory:${uiGraph.id}:${component.id}`;
+    const retained = loadUiGraphResponseTraces(uiGraph, component.id, storage, location).filter((trace) =>
+      referenced.has(trace.traceId),
+    );
+    persistUiGraphResponseTraces(key, retained, storage);
+  }
+}
+
+function persistUiGraphResponseTraces(
+  key: string,
+  traces: AgentResponseTrace[],
+  storage: UiGraphBrowserStorage | undefined,
+): void {
+  responseTraceMemoryFallback.set(key, traces);
+  if (!storage || key.startsWith('memory:')) return;
+
+  try {
+    if (traces.length === 0) storage.removeItem(key);
+    else storage.setItem(key, JSON.stringify(traces));
+    unsyncedResponseTraceKeysByStorage.get(storage)?.delete(key);
+  } catch {
+    const unsyncedKeys = unsyncedResponseTraceKeysByStorage.get(storage) ?? new Set<string>();
+    unsyncedKeys.add(key);
+    unsyncedResponseTraceKeysByStorage.set(storage, unsyncedKeys);
+  }
+}
+
+function loadUiGraphResponseTraces(
+  uiGraph: UiGraph,
+  componentId: string,
+  storage: UiGraphBrowserStorage | undefined,
+  location?: UiGraphStorageLocation,
+): AgentResponseTrace[] {
+  const key =
+    getUiGraphResponseTraceStorageKey(uiGraph, componentId, location) ?? `memory:${uiGraph.id}:${componentId}`;
+  if (storage && unsyncedResponseTraceKeysByStorage.get(storage)?.has(key)) {
+    return responseTraceMemoryFallback.get(key) ?? [];
+  }
+  if (storage && !key.startsWith('memory:')) {
+    try {
+      const raw = storage.getItem(key);
+      if (raw) {
+        const parsed: unknown = JSON.parse(raw);
+        if (Array.isArray(parsed)) {
+          const traces = parsed.filter(isAgentResponseTrace).slice(-UI_GRAPH_RESPONSE_TRACE_LIMIT);
+          responseTraceMemoryFallback.set(key, traces);
+          return traces;
+        }
+      }
+    } catch {
+      // Fall through to the in-memory copy.
+    }
+  }
+  return responseTraceMemoryFallback.get(key) ?? [];
 }
 
 /** Loads the browser snapshot used by Stored Value nodes for this one web app. */
@@ -250,13 +435,15 @@ export function getUiGraphChatPersistentState(
     const pinsStateKey = getUiGraphChatPinsStateKey(component.id);
     const draft = state[draftStateKey];
     const messages = getUiGraphChatMessages(component.id, state);
+    const persistedMessages =
+      component.allowResponseInspection === true ? messages : removeUiGraphChatResponseTraceIds(messages);
     const pins = getUiGraphChatPins(component.id, state).map((pin) => pin.messageIndex);
 
     if (typeof draft === 'string' && draft) {
       persistentState[draftStateKey] = draft;
     }
-    if (messages.length > 0) {
-      persistentState[messagesStateKey] = messages;
+    if (persistedMessages.length > 0) {
+      persistentState[messagesStateKey] = persistedMessages;
     }
     if (pins.length > 0) {
       persistentState[pinsStateKey] = pins;
@@ -320,6 +507,7 @@ export function saveUiGraphChatPersistentState(
   storage: UiGraphBrowserStorage | undefined = getDefaultUiGraphBrowserStorage(),
   location?: UiGraphStorageLocation,
 ): void {
+  purgeDisabledUiGraphResponseTraces(uiGraph, storage, location);
   const key = getUiGraphChatStorageKey(uiGraph, location);
   if (!key || !storage) {
     return;

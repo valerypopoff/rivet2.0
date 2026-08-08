@@ -82,7 +82,7 @@ on LLM Chat also keeps the wire ordinary because split-run continuation is not
 upgraded in this iteration.
 
 The connected Delegate's persisted `assistant-message` output is presented as
-`Message (fires before tool call invocation)` and requires no editor toggle.
+`Message` and requires no editor toggle.
 The context-menu freeze policy uses the same continuation resolution and
 disables freezing that Delegate, because frozen replay cannot participate in the
 live request/response loop. Keep wire styling, freeze eligibility, and runtime

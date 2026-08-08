@@ -9,6 +9,7 @@ import type { ChartNode, NodeId, PortId } from '../../src/model/NodeBase.js';
 import type { DelegateFunctionCallNode } from '../../src/model/nodes/DelegateFunctionCallNode.js';
 import type { StreamedFunctionCall } from '../../src/model/chat/streamChatResponse.js';
 import type { NodeOutputs } from '../../src/model/NodeIO.js';
+import { DELEGATE_TOOL_CALL_INPUT_ID } from '../../src/model/chat-v2/toolContinuationConnection.js';
 
 describe('ToolCallContinuationCoordinator', () => {
   it('creates the branch adapter only after a paused round becomes runnable', async () => {
@@ -72,7 +73,50 @@ describe('ToolCallContinuationCoordinator', () => {
       result.results.map((item) => item.record.name),
       ['lookup'],
     );
-    assert.deepEqual(activatedOutputPortSets, [['tool-name', 'tool-arguments', 'output', 'message']]);
+    assert.deepEqual(activatedOutputPortSets, [['tool-name', 'tool-arguments', 'output', 'execution-time', 'message']]);
+  });
+
+  it('validates every scalar call for frozen or preloaded Delegate output before handlers start', async () => {
+    const starts: string[] = [];
+    const coordinator = new ToolCallContinuationCoordinator({
+      accumulateCost: () => undefined,
+      createBranchAdapter: () => ({
+        canRunContinuationBranches: () => true,
+        runOutputBranch: async () => emptyBranchResult(),
+        validatePreToolBranch: () => undefined,
+      }),
+      createDelegateProcessContext: () => makeExternalFunctionContext(),
+      createNodeAbortController: () => new AbortController(),
+      emitDelegateError: async () => undefined,
+      emitDelegateFinish: async () => undefined,
+      emitDelegatePartialOutput: () => undefined,
+      emitDelegateStart: async (_node, inputs) =>
+        starts.push(String((inputs[DELEGATE_TOOL_CALL_INPUT_ID]?.value as StreamedFunctionCall).id)),
+      getActiveOutputPortIds: () => new Set(),
+      getContinuationBranchBoundaryNodeIds: () => new Set(),
+      hasPreloadedOrFrozenDelegateOutput: (_node, inputs) =>
+        (inputs[DELEGATE_TOOL_CALL_INPUT_ID]?.value as StreamedFunctionCall).id === 'frozen',
+      registerNodeAbortController: () => undefined,
+      rootAbortSignal: new AbortController().signal,
+      startNodeTiming: () => undefined,
+      unregisterNodeAbortController: () => undefined,
+      waitUntilUnpaused: async () => undefined,
+    } satisfies ToolCallContinuationCoordinatorAdapter);
+
+    await assert.rejects(
+      () =>
+        coordinator.run({
+          assistantMessage: '',
+          delegateNode: makeDelegateNode(),
+          llmNode: makeNode('llm', 'llmChatV2', 'LLM Chat'),
+          llmSignal: new AbortController().signal,
+          toolCalls: [makeToolCall('first'), makeToolCall('frozen')],
+        }),
+      /cannot use preloaded or frozen outputs/,
+    );
+
+    assert.equal(starts.length, 1);
+    assert.match(starts[0]!, /frozen/);
   });
 });
 
@@ -102,10 +146,10 @@ function makeNode(id: string, type: string, title: string): ChartNode {
   } as ChartNode;
 }
 
-function makeToolCall(): StreamedFunctionCall {
+function makeToolCall(id = 'tool-call'): StreamedFunctionCall {
   return {
     arguments: '{}',
-    id: 'tool-call',
+    id,
     lastParsedArguments: {},
     name: 'lookup',
     type: 'function',

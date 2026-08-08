@@ -8,6 +8,7 @@ import {
   type JSFilterNode,
   type JSMapNode,
   type ProcessEvents,
+  type AgentTraceEvent,
 } from '@valerypopoff/rivet2-core';
 import { type ExecutionDataFlowApi } from './useExecutionDataFlow';
 import { lastRunDataByNodeState } from '../state/dataFlow';
@@ -17,6 +18,7 @@ import { handleError } from '../utils/errorHandling';
 import { shouldToastAsyncBranchSafetyError } from '../utils/graphExecutionErrorPresentation';
 import { useDataRefs } from '../providers/ProvidersContext';
 import { projectState } from '../state/savedGraphs';
+import { upsertAgentTraceEventForInvocation } from './agentTraceEventStorage.js';
 
 export type NodeExecutionEventsApi = {
   onNodeError: (data: ProcessEvents['nodeError']) => void;
@@ -25,6 +27,8 @@ export type NodeExecutionEventsApi = {
   onNodeOutputsCleared: (data: ProcessEvents['nodeOutputsCleared']) => void;
   onNodeStart: (data: ProcessEvents['nodeStart']) => void;
   onPartialOutput: (data: ProcessEvents['partialOutput']) => void;
+  onLlmCallFinished: (data: ProcessEvents['llmCallFinished']) => void;
+  onToolCallFinished: (data: ProcessEvents['toolCallFinished']) => void;
 };
 
 export function useNodeExecutionEvents({
@@ -183,6 +187,28 @@ export function useNodeExecutionEvents({
     setSelectedNodePageLatest(node.id, execution);
   };
 
+  const appendAgentTraceEvent = (event: AgentTraceEvent) => {
+    setLastRunData((prev) =>
+      produce(prev, (draft) => {
+        upsertAgentTraceEventForInvocation(draft, event);
+      }),
+    );
+  };
+
+  const onLlmCallFinished = (data: ProcessEvents['llmCallFinished']) => {
+    appendAgentTraceEvent({
+      type: 'llm-call-finished',
+      ...data,
+    });
+  };
+
+  const onToolCallFinished = (data: ProcessEvents['toolCallFinished']) => {
+    appendAgentTraceEvent({
+      type: 'tool-call-finished',
+      ...data,
+    });
+  };
+
   return {
     onNodeError,
     onNodeExcluded,
@@ -190,6 +216,8 @@ export function useNodeExecutionEvents({
     onNodeOutputsCleared,
     onNodeStart,
     onPartialOutput,
+    onLlmCallFinished,
+    onToolCallFinished,
   };
 }
 

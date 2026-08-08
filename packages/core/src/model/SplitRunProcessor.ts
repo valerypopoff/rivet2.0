@@ -6,7 +6,7 @@ import {
   isArrayDataValue,
   arrayizeDataValue,
 } from './DataValue.js';
-import { type ChartNode, type NodeInputDefinition, type PortId } from './NodeBase.js';
+import { type ChartNode, type NodeConnection, type NodeInputDefinition, type PortId } from './NodeBase.js';
 import type { ProcessId } from './ProcessContext.js';
 import type { Inputs, Outputs } from './GraphProcessor.js';
 import { getGraphAbortReasonFromError, isAbortLikeError } from './GraphAbortReasons.js';
@@ -14,8 +14,11 @@ import { getError } from '../utils/errors.js';
 import PQueue from '../utils/pQueueCompat.js';
 import { entries, fromEntries } from '../utils/typeSafety.js';
 
+type SplitRunResultOrigin = 'executed' | 'editor-cache';
+
 export type SplitRunDeps = {
   getInputValues(node: ChartNode): Inputs;
+  getInputConnections(node: ChartNode): NodeConnection[];
   getInputDefinitions(node: ChartNode): NodeInputDefinition[];
   isExcludedDueToControlFlow(node: ChartNode, inputValues: Inputs, processId: ProcessId): boolean;
   processNodeWithInputData(
@@ -24,6 +27,7 @@ export type SplitRunDeps = {
     index: number,
     processId: ProcessId,
     partialOutput?: (node: ChartNode, partialOutputs: Outputs, index: number) => void,
+    markResultAsEditorCacheHit?: () => void,
   ): Promise<Outputs>;
   splitRunConcurrency: number;
   accumulateCost(output: Outputs): void;
@@ -35,31 +39,42 @@ export type SplitRunDeps = {
     processId: ProcessId,
     durationMs?: number,
     splitRunDurationMs?: Record<number, number>,
+    resultOrigin?: SplitRunResultOrigin,
   ): Promise<void>;
   isAborted(): boolean;
   getAbortError(): Error;
-  emit(event: 'nodeStart', data: { node: ChartNode; inputs: Inputs; processId: ProcessId }): Promise<void> | void;
+  emit(
+    event: 'nodeStart',
+    data: {
+      node: ChartNode;
+      inputs: Inputs;
+      inputConnections: NodeConnection[];
+      processId: ProcessId;
+      resultOrigin: 'executed';
+    },
+  ): Promise<void> | void;
   emit(
     event: 'nodeFinish',
     data: {
       node: ChartNode;
       outputs: Outputs;
       processId: ProcessId;
+      resultOrigin: SplitRunResultOrigin;
       durationMs?: number;
       splitRunDurationMs?: Record<number, number>;
     },
   ): Promise<void> | void;
   emit(
     event: 'partialOutput',
-    data: { node: ChartNode; outputs: Outputs; index: number; processId: ProcessId },
+    data: { node: ChartNode; outputs: Outputs; index: number; processId: ProcessId; resultOrigin: 'executed' },
   ): void;
   startNodeTiming?(): number | undefined;
   finishNodeTiming?(start: number | undefined): number | undefined;
 };
 
 type SplitResult =
-  | { type: 'output'; output: Outputs; durationMs?: number; error?: Error }
-  | { type: 'error'; error: Error; durationMs?: number; output?: Outputs };
+  | { type: 'output'; output: Outputs; resultOrigin: SplitRunResultOrigin; durationMs?: number; error?: Error }
+  | { type: 'error'; error: Error; resultOrigin: SplitRunResultOrigin; durationMs?: number; output?: Outputs };
 
 function withOptionalDuration<T extends object>(
   payload: T,
@@ -73,11 +88,7 @@ function withOptionalDuration<T extends object>(
   } as T & { durationMs?: number; splitRunDurationMs?: Record<number, number> };
 }
 
-export async function processSplitRunNode(
-  node: ChartNode,
-  processId: ProcessId,
-  deps: SplitRunDeps,
-): Promise<void> {
+export async function processSplitRunNode(node: ChartNode, processId: ProcessId, deps: SplitRunDeps): Promise<void> {
   const inputValues = deps.getInputValues(node);
 
   if (deps.isExcludedDueToControlFlow(node, inputValues, processId)) {
@@ -98,13 +109,18 @@ export async function processSplitRunNode(
     node.splitRunMax ?? 10,
   );
 
-  await deps.emit('nodeStart', { node, inputs: inputValues, processId });
+  await deps.emit('nodeStart', {
+    node,
+    inputs: inputValues,
+    inputConnections: deps.getInputConnections(node),
+    processId,
+    resultOrigin: 'executed',
+  });
   const timingStart = deps.startNodeTiming?.();
   let splitRunDurationMs: Record<number, number> | undefined;
+  let results: SplitResult[] = [];
 
   try {
-    let results: SplitResult[];
-
     if (node.isSplitSequential) {
       results = await runSequential(node, inputValues, inputDefinitionsById, splittingAmount, processId, deps);
     } else {
@@ -134,13 +150,21 @@ export async function processSplitRunNode(
           node,
           outputs: aggregateResults,
           processId,
+          resultOrigin: getSplitRunResultOrigin(results),
         },
         deps.finishNodeTiming?.(timingStart),
         splitRunDurationMs,
       ),
     );
   } catch (error) {
-    await deps.nodeErrored(node, error, processId, deps.finishNodeTiming?.(timingStart), splitRunDurationMs);
+    await deps.nodeErrored(
+      node,
+      error,
+      processId,
+      deps.finishNodeTiming?.(timingStart),
+      splitRunDurationMs,
+      getSplitRunResultOrigin(results),
+    );
   }
 }
 
@@ -161,16 +185,37 @@ async function runSequential(
 
     const inputs = splitInputsAtIndex(inputValues, inputDefinitionsById, i);
     const splitTimingStart = deps.startNodeTiming?.();
+    let resultOrigin: SplitRunResultOrigin = 'executed';
 
     try {
-      const output = await deps.processNodeWithInputData(node, inputs, i, processId, (n, partialOutputs, index) => {
-        deps.emit('partialOutput', { node: n, outputs: partialOutputs, index, processId });
-      });
+      const output = await deps.processNodeWithInputData(
+        node,
+        inputs,
+        i,
+        processId,
+        (n, partialOutputs, index) => {
+          deps.emit('partialOutput', {
+            node: n,
+            outputs: partialOutputs,
+            index,
+            processId,
+            resultOrigin: 'executed',
+          });
+        },
+        () => {
+          resultOrigin = 'editor-cache';
+        },
+      );
 
       deps.accumulateCost(output);
-      results.push({ type: 'output', output, durationMs: deps.finishNodeTiming?.(splitTimingStart) });
+      results.push({ type: 'output', output, resultOrigin, durationMs: deps.finishNodeTiming?.(splitTimingStart) });
     } catch (error) {
-      results.push({ type: 'error', error: getError(error), durationMs: deps.finishNodeTiming?.(splitTimingStart) });
+      results.push({
+        type: 'error',
+        error: getError(error),
+        resultOrigin,
+        durationMs: deps.finishNodeTiming?.(splitTimingStart),
+      });
     }
   }
 
@@ -191,6 +236,7 @@ async function runParallel(
     range(0, splittingAmount).map(async (i: number) => {
       const result = await queue.add(async () => {
         const splitTimingStart = deps.startNodeTiming?.();
+        let resultOrigin: SplitRunResultOrigin = 'executed';
 
         try {
           if (deps.isAborted()) {
@@ -198,16 +244,37 @@ async function runParallel(
           }
 
           const inputs = splitInputsAtIndex(inputValues, inputDefinitionsById, i);
-          const output = await deps.processNodeWithInputData(node, inputs, i, processId, (n, partialOutputs, index) => {
-            deps.emit('partialOutput', { node: n, outputs: partialOutputs, index, processId });
-          });
+          const output = await deps.processNodeWithInputData(
+            node,
+            inputs,
+            i,
+            processId,
+            (n, partialOutputs, index) => {
+              deps.emit('partialOutput', {
+                node: n,
+                outputs: partialOutputs,
+                index,
+                processId,
+                resultOrigin: 'executed',
+              });
+            },
+            () => {
+              resultOrigin = 'editor-cache';
+            },
+          );
 
           deps.accumulateCost(output);
-          return { type: 'output' as const, output, durationMs: deps.finishNodeTiming?.(splitTimingStart) };
+          return {
+            type: 'output' as const,
+            output,
+            resultOrigin,
+            durationMs: deps.finishNodeTiming?.(splitTimingStart),
+          };
         } catch (error) {
           return {
             type: 'error' as const,
             error: getError(error),
+            resultOrigin,
             durationMs: deps.finishNodeTiming?.(splitTimingStart),
           };
         }
@@ -220,6 +287,12 @@ async function runParallel(
       return result;
     }),
   );
+}
+
+function getSplitRunResultOrigin(results: SplitResult[]): SplitRunResultOrigin {
+  return results.length > 0 && results.every((result) => result.resultOrigin === 'editor-cache')
+    ? 'editor-cache'
+    : 'executed';
 }
 
 function getParallelSplitRunConcurrency(node: ChartNode, defaultConcurrency: number): number {

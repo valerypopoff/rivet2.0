@@ -2,7 +2,7 @@
 
 The Rivet API Reference is for developers who want to run Rivet projects from code, embed Rivet in another app, build plugins, or use Rivet's runtime packages directly.
 
-If you only want to use the desktop app, start with the [User Guide](/).
+If you only want to use the desktop app, start with the [User Guide](/user-guide).
 
 To get started with integrating Rivet into your existing TypeScript or JavaScript application, see the [Integration - Getting Started](./api-reference/getting-started-integration.mdx) page.
 

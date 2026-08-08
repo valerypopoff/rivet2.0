@@ -61,6 +61,7 @@ class AccountingProbeNodeImpl extends NodeImpl<AccountingProbeNode> {
       processId: context.processId,
       provider: 'custom',
       model: 'probe-model',
+      customProviderApi: 'responses',
       outcome: 'success',
       pricing: { status: 'unknown' },
     });
@@ -153,6 +154,7 @@ void describe('Node ProcessContext parity', () => {
       assert.equal(events[0]?.nodeId, 'accounting-probe', runner.name);
       assert.equal(events[0]?.provider, 'custom', runner.name);
       assert.equal(events[0]?.model, 'probe-model', runner.name);
+      assert.equal(events[0]?.customProviderApi, 'responses', runner.name);
       assert.equal(events[0]?.outcome, 'success', runner.name);
     }
   });

@@ -159,8 +159,13 @@ export class ToolCallContinuationCoordinator {
 
       // Validate the complete round before parallel calls can cause side effects.
       // The first invocation still produces a real Delegate error run for diagnostics.
+      let invalidInvocationIndex = 0;
       try {
-        if (this.#adapter.hasPreloadedOrFrozenDelegateOutput(delegateNode, inputsByCall[0]!, processIds[0]!)) {
+        const frozenInvocationIndex = inputsByCall.findIndex((inputs, index) =>
+          this.#adapter.hasPreloadedOrFrozenDelegateOutput(delegateNode, inputs, processIds[index]!),
+        );
+        if (frozenInvocationIndex >= 0) {
+          invalidInvocationIndex = frozenInvocationIndex;
           throw new Error(
             `Delegate Tool Call "${delegateNode.title}" is the active auto-continuation handler and cannot use preloaded or frozen outputs. Clear its preload or unfreeze it before running this graph.`,
           );
@@ -179,8 +184,8 @@ export class ToolCallContinuationCoordinator {
           });
         }
       } catch (error) {
-        const processId = processIds[0]!;
-        const inputs = inputsByCall[0]!;
+        const processId = processIds[invalidInvocationIndex]!;
+        const inputs = inputsByCall[invalidInvocationIndex]!;
         await this.#adapter.emitDelegateStart(delegateNode, inputs, processId);
         await this.#adapter.emitDelegateError(delegateNode, error, processId, this.#adapter.startNodeTiming());
         throw error;
@@ -272,6 +277,7 @@ export class ToolCallContinuationCoordinator {
                   'tool-name' as PortId,
                   'tool-arguments' as PortId,
                   'output' as PortId,
+                  'execution-time' as PortId,
                   'message' as PortId,
                 ]),
                 availableNodeOutputs: preToolBranch.nodeOutputs,

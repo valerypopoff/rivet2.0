@@ -36,6 +36,7 @@ export function renderNodeOutputBody(options: RenderNodeOutputBodyOptions): Reac
     renderMarkdown,
     renderMode,
     allowLargeStoredValueActions,
+    autoCollapseLlmChatDiagnosticOutputs,
     wrapLines,
   } = options;
 
@@ -101,6 +102,7 @@ export function renderNodeOutputBody(options: RenderNodeOutputBodyOptions): Reac
               isCompact={isCompact}
               mode={renderMode}
               allowLargeStoredValueActions={allowLargeStoredValueActions}
+              autoCollapseLlmChatDiagnosticOutputs={autoCollapseLlmChatDiagnosticOutputs}
               wrapLines={wrapLines}
             />
           ),
@@ -145,6 +147,7 @@ export function renderNodeOutputBody(options: RenderNodeOutputBodyOptions): Reac
       isCompact={isCompact}
       mode={renderMode}
       allowLargeStoredValueActions={allowLargeStoredValueActions}
+      autoCollapseLlmChatDiagnosticOutputs={autoCollapseLlmChatDiagnosticOutputs}
       wrapLines={wrapLines}
     />
   );

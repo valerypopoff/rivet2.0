@@ -283,7 +283,7 @@ export const nodeStyles = css`
   }
 
   .node:not(.isComment) .grab-area {
-    padding-right: calc(66px * var(--ui-font-scale));
+    padding-right: var(--node-title-header-padding, calc(66px * var(--ui-font-scale)));
   }
 
   .node.hasHeaderWarning:not(.isComment) .grab-area {
@@ -384,6 +384,28 @@ export const nodeStyles = css`
     stroke-linejoin: round;
   }
 
+  .title-text-label .tool-call-continuation-tooltip {
+    display: inline-flex;
+    margin-right: 0.35em;
+    pointer-events: auto;
+    vertical-align: -0.14em;
+  }
+
+  .title-text-label .tool-call-continuation-indicator {
+    align-items: center;
+    color: currentColor;
+    cursor: help;
+    display: inline-flex;
+    height: 1em;
+    justify-content: center;
+    width: 1em;
+
+    svg {
+      height: 1em;
+      width: 1em;
+    }
+  }
+
   .node .node-title .title-text-description {
     min-width: 0;
     max-width: 100%;
@@ -431,14 +453,14 @@ export const nodeStyles = css`
     margin-left: -0.1em;
   }
 
-   .split-run-summary svg {
+  .split-run-summary svg {
     margin-bottom: 0.1em;
-   }
+  }
 
   .split-run-summary-mode {
     font-weight: 700;
     text-transform: uppercase;
-    letter-spacing: calc(1.0px * var(--ui-font-scale));
+    letter-spacing: calc(1px * var(--ui-font-scale));
   }
 
   .split-run-summary:hover {
@@ -974,7 +996,10 @@ export const nodeStyles = css`
   .multi-node-output {
     /*
      * Inline output action controls:
-     * - actions-* moves/sizes the visible button group
+     * - actions-gap is the baseline spacing between every action
+     * - each *-margin-left/right value independently adds/subtracts space for
+     *   that action without replacing the baseline gap
+     * - actions-* otherwise moves/sizes the visible button group
      * - action-exclusion-* reserves text-wrapping space at that group position
      * - *-icon-size and *-icon-offset-* tune each SVG without changing hit targets
      */
@@ -994,15 +1019,28 @@ export const nodeStyles = css`
     --node-output-unfold-icon-size: var(--node-output-action-icon-size);
     --node-output-unfold-icon-offset-x: var(--node-output-action-icon-offset-x);
     --node-output-unfold-icon-offset-y: 0.03em;
+    --node-output-unfold-margin-left: 0px;
+    --node-output-unfold-margin-right: 0px;
     --node-output-copy-icon-size: calc(var(--node-output-action-icon-size) * 0.9);
     --node-output-copy-icon-offset-x: 0.06em;
     --node-output-copy-icon-offset-y: var(--node-output-action-icon-offset-y);
+    --node-output-copy-margin-left: 0px;
+    --node-output-copy-margin-right: 0px;
+    --node-output-response-inspector-icon-size: var(--node-output-action-icon-size);
+    --node-output-response-inspector-icon-offset-x: var(--node-output-action-icon-offset-x);
+    --node-output-response-inspector-icon-offset-y: var(--node-output-action-icon-offset-y);
+    --node-output-response-inspector-margin-left: calc(3.5px * var(--ui-font-scale));
+    --node-output-response-inspector-margin-right: calc(-2px * var(--ui-font-scale));
     --node-output-prompt-designer-icon-size: var(--node-output-action-icon-size);
     --node-output-prompt-designer-icon-offset-x: var(--node-output-action-icon-offset-x);
     --node-output-prompt-designer-icon-offset-y: var(--node-output-action-icon-offset-y);
+    --node-output-prompt-designer-margin-left: 0px;
+    --node-output-prompt-designer-margin-right: 0px;
     --node-output-fullscreen-icon-size: calc(var(--node-output-action-icon-size) * 0.85);
     --node-output-fullscreen-icon-offset-x: var(--node-output-action-icon-offset-x);
     --node-output-fullscreen-icon-offset-y: var(--node-output-action-icon-offset-y);
+    --node-output-fullscreen-margin-left: 0px;
+    --node-output-fullscreen-margin-right: 0px;
 
     background-color: var(--node-output-surface-bg);
     border-radius: 0 0 var(--node-card-radius) var(--node-card-radius);
@@ -1024,7 +1062,7 @@ export const nodeStyles = css`
     max-height: var(--node-output-collapsed-max-height);
   }
 
-  .node-output-inner.has-prompt-designer-action {
+  .node-output-inner.has-extra-output-action {
     --node-output-action-exclusion-width: calc(120px * var(--ui-font-scale));
   }
 
@@ -1036,7 +1074,11 @@ export const nodeStyles = css`
 
   .node-output-warnings {
     background-color: var(--node-output-warning-bg-start);
-    background-image: linear-gradient(to bottom, var(--node-output-warning-bg-start) 0%, var(--node-output-warning-bg-end) 100%);
+    background-image: linear-gradient(
+      to bottom,
+      var(--node-output-warning-bg-start) 0%,
+      var(--node-output-warning-bg-end) 100%
+    );
     border-radius: 0 0 var(--node-card-radius) var(--node-card-radius);
     corner-shape: var(--node-card-corner-shape);
     border-top: 2px solid var(--warning-light);
@@ -1237,6 +1279,7 @@ export const nodeStyles = css`
   .copy-button,
   .expand-button,
   .output-toggle-button,
+  .response-inspector-button,
   .prompt-designer-button {
     width: var(--node-output-action-hit-size);
     height: var(--node-output-action-hit-size);
@@ -1256,6 +1299,7 @@ export const nodeStyles = css`
   .node:is(:hover, .hovered, .showHoverControls) .copy-button,
   .node:is(:hover, .hovered, .showHoverControls) .expand-button,
   .node:is(:hover, .hovered, .showHoverControls) .output-toggle-button,
+  .node:is(:hover, .hovered, .showHoverControls) .response-inspector-button,
   .node:is(:hover, .hovered, .showHoverControls) .prompt-designer-button {
     opacity: var(--node-output-action-node-hover-opacity);
   }
@@ -1263,8 +1307,34 @@ export const nodeStyles = css`
   .node .copy-button:hover,
   .node .expand-button:hover,
   .node .output-toggle-button:hover,
+  .node .response-inspector-button:hover,
   .node .prompt-designer-button:hover {
     opacity: 1;
+  }
+
+  .output-toggle-button {
+    margin-left: var(--node-output-unfold-margin-left);
+    margin-right: var(--node-output-unfold-margin-right);
+  }
+
+  .copy-button {
+    margin-left: var(--node-output-copy-margin-left);
+    margin-right: var(--node-output-copy-margin-right);
+  }
+
+  .response-inspector-button {
+    margin-left: var(--node-output-response-inspector-margin-left);
+    margin-right: var(--node-output-response-inspector-margin-right);
+  }
+
+  .prompt-designer-button {
+    margin-left: var(--node-output-prompt-designer-margin-left);
+    margin-right: var(--node-output-prompt-designer-margin-right);
+  }
+
+  .expand-button {
+    margin-left: var(--node-output-fullscreen-margin-left);
+    margin-right: var(--node-output-fullscreen-margin-right);
   }
 
   .output-toggle-button svg {
@@ -1277,6 +1347,15 @@ export const nodeStyles = css`
     width: var(--node-output-copy-icon-size);
     height: var(--node-output-copy-icon-size);
     transform: translate(var(--node-output-copy-icon-offset-x), var(--node-output-copy-icon-offset-y));
+  }
+
+  .response-inspector-button svg {
+    width: var(--node-output-response-inspector-icon-size);
+    height: var(--node-output-response-inspector-icon-size);
+    transform: translate(
+      var(--node-output-response-inspector-icon-offset-x),
+      var(--node-output-response-inspector-icon-offset-y)
+    );
   }
 
   .prompt-designer-button svg {
@@ -1473,5 +1552,4 @@ export const nodeStyles = css`
       text-decoration: line-through;
     }
   }
-
 `;

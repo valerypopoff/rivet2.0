@@ -85,7 +85,7 @@ const styles = css`
 `;
 
 export const NoProject: FC = () => {
-  const openDocumentation = useOpenUrl('https://valerypopoff.github.io/rivet2.0/');
+  const openDocumentation = useOpenUrl('https://valerypopoff.github.io/rivet2.0/user-guide');
   const setNewProjectModalOpen = useSetAtom(newProjectModalOpenState);
   const setSettingsModalOpen = useSetAtom(settingsModalOpenState);
   const openProject = useLoadProjectWithFileBrowser();

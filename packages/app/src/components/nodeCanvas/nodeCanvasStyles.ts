@@ -3,12 +3,16 @@ import { nodeStyles } from '../nodeStyles.js';
 
 export const nodeCanvasStyles = css`
   width: 100vw;
-  height: calc(100vh - var(--data-bus-full-row-height, 0px));
+  height: calc(100vh - var(--data-bus-full-row-height, 0px) - var(--run-activity-drawer-reserved-height, 0px));
   position: relative;
   top: var(--data-bus-full-row-height, 0px);
   background-color: var(--canvas-background-color, var(--grey-darker));
   overflow: hidden;
   z-index: 0;
+
+  @media (max-width: 720px) {
+    height: calc(100vh - var(--data-bus-full-row-height, 0px));
+  }
 
   .canvas-background-pattern {
     position: absolute;

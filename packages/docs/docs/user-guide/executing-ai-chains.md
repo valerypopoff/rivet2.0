@@ -32,23 +32,25 @@ internal continuation for each split invocation; parallel split indexes cannot
 safely share one connected Delegate result.
 
 The LLM Chat node stays **Running** throughout the loop. The Delegate runs once
-for each model tool-call round and also stays **Running** while that round's
-handlers execute. Separate Delegate run pages let you inspect repeated rounds.
+for each tool call and also stays **Running** while that call's handler
+executes. Calls from one model response run concurrently; separate Delegate run
+pages let you inspect each one.
 If more than one eligible Delegate is connected, Rivet marks the candidate wires
 red and dashed and reports an ambiguity error. With no connected Delegate, LLM
 Chat uses its internal tool delegation.
 
 The Delegate exposes normal text that the assistant produced alongside its tool
-calls as **Message (fires before tool call invocation)**. This port activates
-automatically once for every tool call, and Rivet runs those branch invocations
-before dispatching the shared tool batch.
-**Output** and **Tool Result Message** follow ordinary left-to-right execution
-after the Delegate finishes. Whitespace-only messages do not activate the
+calls as **Message**. This port activates
+automatically once for every tool call, and Rivet starts those branch
+invocations alongside the corresponding handler.
+**Output**, **Tool Execution Time (sec)**, and **Tool Result Message** follow ordinary
+left-to-right execution after the Delegate finishes. Whitespace-only messages do not activate the
 pre-tool branch.
 
-An ordinary pre-tool branch must finish before tool dispatch. Put a **Start Async
+The pre-tool branch starts in parallel with tool dispatch. Put a **Start Async
 Branch** node directly after the message output when the message should only
-trigger work such as `setWebAppStatus`. The async node returns immediately, so
+trigger work such as `setWebAppStatus` and its remaining work must not delay the
+graph's logical foreground completion. The async node returns immediately, so
 its downstream work can overlap the tools and later LLM rounds. The branch
 remains managed by the root run. In a web app, the final foreground response is
 returned as soon as it is ready even if that async branch is still running; the

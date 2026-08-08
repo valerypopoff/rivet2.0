@@ -15,11 +15,13 @@ import {
   type RootRunId,
   type ProjectId,
   type FrozenNodeOutputsByGraph,
+  type AgentTraceEvent,
 } from '@valerypopoff/rivet2-core';
 import { graphNavigationStackState } from './graphBuilder.js';
 import type { GraphViewKey } from '../domain/graphEditing/navigationActions.js';
 import { getGraphSelectionOptions } from './selectors/executionSelectors.js';
 import type { ProcessQuestions } from './userInput.js';
+import { createRunActivityJournal, type RunActivityJournal } from '../features/runActivity/runActivityJournal.js';
 
 export type GraphRunSelection = GraphRunId | 'latest';
 
@@ -53,6 +55,7 @@ export type ProjectExecutionSnapshot = {
   lastRecording?: string;
   lastRunDataByNode: RunDataByNodeId;
   rootGraph: GraphId | undefined;
+  runActivityJournal: RunActivityJournal;
   runningGraphs: GraphId[];
   selectedGraphRunByView: Record<GraphViewKey, GraphRunSelection>;
   selectedProcessPageNodes: Record<NodeId, PageValue>;
@@ -60,6 +63,8 @@ export type ProjectExecutionSnapshot = {
 };
 
 export type NodeRunDataBase = {
+  /** Privacy-bounded physical model/tool events correlated to this invocation. */
+  agentTraceEvents?: AgentTraceEvent[];
   startedAt?: number;
   finishedAt?: number;
   durationMs?: number;
@@ -107,6 +112,13 @@ export type StoredDataPreview =
   | {
       kind: 'summary';
       label: string;
+      /**
+       * Optional compact text representation for consumers that cannot or
+       * should not restore the ref-backed value. This supplements the summary
+       * label; it never changes how the normal output renderer restores the
+       * underlying value.
+       */
+      excerpt?: string;
       totalBytes?: number;
       itemCount?: number;
     };
@@ -173,6 +185,9 @@ export const graphRunningState = atom(false);
 
 export const graphStartTimeState = atom<number | undefined>(undefined);
 
+/** Metadata-only activity for the current and most recent root execution. */
+export const runActivityJournalState = atom<RunActivityJournal>(createRunActivityJournal());
+
 export const graphPausedState = atom(false);
 
 export const resolvedGraphSelectionState = atom((get) => {
@@ -225,6 +240,7 @@ export function createEmptyProjectExecutionSnapshot(): ProjectExecutionSnapshot 
     lastRecording: undefined,
     lastRunDataByNode: {},
     rootGraph: undefined,
+    runActivityJournal: createRunActivityJournal(),
     runningGraphs: [],
     selectedGraphRunByView: {},
     selectedProcessPageNodes: {},

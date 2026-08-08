@@ -37,6 +37,10 @@ test('canvas navigation shortcuts resolve graph tree toggle keys', () => {
   assert.equal(getCanvasNavigationShortcut({ ...BASE_EVENT, ctrlKey: true, key: 'q' }), 'toggleGraphTree');
   assert.equal(getCanvasNavigationShortcut({ ...BASE_EVENT, metaKey: true, key: 'Q' }), 'toggleGraphTree');
   assert.equal(getCanvasNavigationShortcut({ ...BASE_EVENT, ctrlKey: true, code: 'KeyQ', key: '' }), 'toggleGraphTree');
+  assert.equal(
+    getCanvasNavigationShortcut({ ...BASE_EVENT, ctrlKey: true, code: 'KeyQ', key: '\u0439' }),
+    'toggleGraphTree',
+  );
 });
 
 test('canvas navigation shortcut tooltip labels expose the requested keys', () => {

@@ -55,7 +55,11 @@ entry points, but never treats a web app itself as a graph.
 Web-app resource rows use the graph tree's shrink-and-ellipsis label contract, so a
 long app name stays inside the left panel while its full accessible button name is
 preserved. The resource section keeps the same breathing room before the Graphs
-section as the project header uses before Web Apps.
+section as the project header uses before Web Apps. When a project has no web apps,
+the empty Web Apps section and its `New web app` row stay hidden; `GraphListHeader`
+instead exposes `Create web app` after `Filter graphs`. It calls the same
+`useUiGraphOperations.createUiGraph()` path, so the new app is opened and the normal
+Web Apps resource section appears immediately on the resulting project update.
 
 ## Hosted Workspace
 

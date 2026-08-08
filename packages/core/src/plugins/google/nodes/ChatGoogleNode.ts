@@ -511,30 +511,30 @@ export const ChatGoogleNodeImpl: PluginNodeImpl<ChatGoogleNode> = {
       if (gptTools) {
         tools = [
           {
-            functionDeclarations: gptTools.map(
-              (tool): FunctionDeclaration => {
-                const parameters = tool.parameters as JsonSchemaFunctionParameters;
+            functionDeclarations: gptTools.map((tool): FunctionDeclaration => {
+              const parameters = tool.parameters as JsonSchemaFunctionParameters;
 
-                return {
-                  name: tool.name,
-                  description: tool.description,
-                  parameters:
-                    Object.keys(parameters.properties ?? {}).length === 0
-                      ? undefined
-                      : {
-                          type: Type.OBJECT,
-                          properties: mapValues(parameters.properties ?? {}, (property) => ({
-                            // gemini doesn't support union property types, it uses openapi style not jsonschema, what a mess
-                            type: toGoogleSchemaType(
-                              Array.isArray(property.type) ? property.type.find((type) => type !== 'null') : property.type,
-                            ),
-                            description: property.description,
-                          })),
-                          required: parameters.required ?? [],
-                        },
-                };
-              },
-            ),
+              return {
+                name: tool.name,
+                description: tool.description,
+                parameters:
+                  Object.keys(parameters.properties ?? {}).length === 0
+                    ? undefined
+                    : {
+                        type: Type.OBJECT,
+                        properties: mapValues(parameters.properties ?? {}, (property) => ({
+                          // gemini doesn't support union property types, it uses openapi style not jsonschema, what a mess
+                          type: toGoogleSchemaType(
+                            Array.isArray(property.type)
+                              ? property.type.find((type) => type !== 'null')
+                              : property.type,
+                          ),
+                          description: property.description,
+                        })),
+                        required: parameters.required ?? [],
+                      },
+              };
+            }),
           },
         ];
       }
@@ -589,6 +589,7 @@ export const ChatGoogleNodeImpl: PluginNodeImpl<ChatGoogleNode> = {
           if (data.cache) {
             const cached = cache.get(cacheKey);
             if (cached) {
+              context.markResultAsEditorCacheHit?.();
               return cached;
             }
           }

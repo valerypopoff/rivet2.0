@@ -1,6 +1,6 @@
 {
   "formatVersion": 1,
-  "catalogFingerprint": "fnv1a64:9d20412a931d8dba",
+  "catalogFingerprint": "fnv1a64:2b4bcdc4d0bbc5f9",
   "entries": [
     {
       "authoringChoiceId": "registered:abortGraph",
@@ -170,7 +170,7 @@
       "authoringChoiceId": "registered:chat",
       "nodeType": "chat",
       "displayName": "Chat (Legacy)",
-      "description": "The Chat Node sends one or more messages to an OpenAI compatible chat completions API and returns the response from the LLM. :::info This is the legacy chat node. It remains available so existing graphs keep working. For new graphs, prefer the LLM Chat Node, which supports OpenAI, Anthropic, Google, custom OpenAI compatible providers, input port API keys, reasoning settings, response status/error outputs, and retry diagnostics. ::: You can use the Chat Node for local LLMs, as long as their API is compatible with the OpenAI API. For example, you can use the Chat Node with LM Studio. If you are looking for other language models that do not support the OpenAI API format, use LLM Chat or see the Plugins page for available plugin nodes.",
+      "description": "The Chat Node sends one or more messages to an OpenAI compatible chat completions API and returns the response from the LLM. :::info This is the legacy chat node. It remains available so existing graphs keep working. For new graphs, prefer the LLM Chat Node, which supports OpenAI, Anthropic, Google, custom OpenAI compatible providers, input port API keys, reasoning settings, LLM Attempts diagnostics, and retry controls. ::: You can use the Chat Node for local LLMs, as long as their API is compatible with the OpenAI API. For example, you can use the Chat Node with LM Studio. If you are looking for other language models that do not support the OpenAI API format, use LLM Chat or see the Plugins page for available plugin nodes.",
       "aliases": [],
       "capabilities": {
         "createWithDefaults": true,
@@ -1297,7 +1297,7 @@
       "authoringChoiceId": "registered:llmProfile",
       "nodeType": "llmProfile",
       "displayName": "LLM Profile",
-      "description": "LLM Profile packages one reusable inference configuration into a typed llm config value. Connect it to an LLM Chat node whose Configuration is From profile . You can also collect several profile values into an ordered llm config[] array and use that as LLM Chat's fallback chain. If an LLM Chat is currently configured inline, use its Export LLM settings to profile node action to create and connect this node automatically with the chat's current provider and inference settings. The profile contains: provider and model the resolved API key and its source metadata Custom provider base URL common generation parameters OpenAI Previous Response ID provider specific reasoning and thinking settings provider native capabilities such as OpenAI Web Search and Google Search Grounding custom headers and extra provider options It intentionally does not contain prompts, response schemas, Rivet tools, to",
+      "description": "LLM Profile packages one reusable inference configuration into a typed llm config value. Connect it to an LLM Chat node whose Configuration is From profile . You can also collect several profile values into an ordered llm config[] array and use that as LLM Chat's fallback chain. If an LLM Chat is currently configured inline, use its Export LLM settings to profile node action to create and connect this node automatically with the chat's current provider and inference settings. The profile contains: provider and model the resolved API key and its source metadata Custom provider base URL and Completions/Responses API choice common generation parameters OpenAI Previous Response ID provider specific reasoning and thinking settings provider native capabilities such as OpenAI Web Search and Google Search Grounding custom headers and extra provider options It intentionally does not contain promp",
       "aliases": [],
       "capabilities": {
         "createWithDefaults": true,

@@ -15,6 +15,7 @@ import { NodeCanvas } from './NodeCanvas.js';
 import { NodeEditor, type NodeChanged } from './NodeEditor.js';
 import { EditNodeCommandOverrideContext, type EditNodeCommand } from '../commands/editNodeCommand.js';
 import { useStableCallback } from '../hooks/useStableCallback.js';
+import { matchesKeyboardShortcut } from '../utils/keyboardShortcutMatcher.js';
 import { useCanvasPositioning } from '../hooks/useCanvasPositioning.js';
 import { getCanvasPositionForNodes } from '../hooks/useCenterViewOnGraph.js';
 import { useProjectNodeRegistry } from '../hooks/useProjectNodeRegistry.js';
@@ -412,7 +413,13 @@ export const NodeLibraryBuilder: FC = () => {
       const inputFocused =
         activeElement instanceof HTMLElement &&
         (['INPUT', 'TEXTAREA'].includes(activeElement.tagName) || activeElement.isContentEditable);
-      const isPaste = event.key.toLowerCase() === 'v' && (event.metaKey || event.ctrlKey) && !event.shiftKey;
+      const isPaste = matchesKeyboardShortcut(event, {
+        altKey: false,
+        codes: ['KeyV'],
+        commandModifier: 'any-command',
+        keys: ['v'],
+        shiftKey: false,
+      });
 
       if (!isPaste || inputFocused || editingPrefabId || clipboard?.type !== 'nodes') {
         return;

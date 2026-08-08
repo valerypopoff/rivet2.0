@@ -14,6 +14,7 @@ import {
 import { scheduleFullscreenOutputSearchTargetReveal } from './fullscreenOutputSearchViewport.js';
 import type { NodeRunDataWithRefs } from '../../state/dataFlow.js';
 import type { ProcessId } from '@valerypopoff/rivet2-core';
+import { matchesKeyboardShortcut, type KeyboardShortcutEvent } from '../../utils/keyboardShortcutMatcher.js';
 
 export type FullscreenOutputSearchContentKey = {
   data: NodeRunDataWithRefs | undefined;
@@ -21,6 +22,16 @@ export type FullscreenOutputSearchContentKey = {
   renderMarkdown: boolean;
   selectedPage: number | 'latest';
 };
+
+export function isFullscreenOutputSearchShortcut(event: KeyboardShortcutEvent): boolean {
+  return matchesKeyboardShortcut(event, {
+    altKey: false,
+    codes: ['KeyF'],
+    commandModifier: 'any-command',
+    keys: ['f'],
+    shiftKey: false,
+  });
+}
 
 export function useFullscreenOutputSearch(args: { contentKey: FullscreenOutputSearchContentKey }) {
   const { contentKey } = args;
@@ -95,14 +106,15 @@ export function useFullscreenOutputSearch(args: { contentKey: FullscreenOutputSe
 
   const contextValue = useMemo(
     () => ({
+      query,
       registerProvider,
     }),
-    [registerProvider],
+    [query, registerProvider],
   );
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key.toLowerCase() !== 'f' || !(event.metaKey || event.ctrlKey) || event.shiftKey) {
+      if (!isFullscreenOutputSearchShortcut(event)) {
         return;
       }
 

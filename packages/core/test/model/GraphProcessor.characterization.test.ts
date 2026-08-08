@@ -1197,6 +1197,45 @@ void describe('GraphProcessor characterization', () => {
     assert.deepEqual(readerFinish?.outputs.output, { type: 'string', value: 'global value' });
   });
 
+  void it('emits a scoped startup error when project-reference loading fails', async () => {
+    const startupGraph = makeGraph([], [], 'reference-loader-failure' as GraphId);
+    const project = makeProject(startupGraph);
+    project.references = [{ id: 'missing-reference' as ProjectId, title: 'Missing reference' }];
+    const processor = new GraphProcessor(project, startupGraph.metadata!.id!, createRegistry());
+    const lifecycleEvents: string[] = [];
+    const graphErrors: ProcessEvents['graphError'][] = [];
+    const rootErrors: Array<Error | string> = [];
+    processor.on('graphError', (event) => {
+      lifecycleEvents.push('graphError');
+      graphErrors.push(event);
+    });
+    processor.on('error', ({ error }) => {
+      lifecycleEvents.push('error');
+      rootErrors.push(error);
+    });
+
+    await assert.rejects(
+      processor.processGraph({
+        ...testProcessContext(),
+        projectReferenceLoader: {
+          async loadProject() {
+            throw new Error('reference loader unavailable');
+          },
+        },
+      }),
+      /reference loader unavailable/,
+    );
+
+    assert.deepEqual(lifecycleEvents, ['graphError', 'error']);
+    assert.equal(graphErrors.length, 1);
+    assert.equal(graphErrors[0]!.graph.metadata?.id, startupGraph.metadata?.id);
+    assert.match(String(graphErrors[0]!.error), /reference loader unavailable/);
+    assert.ok(String(graphErrors[0]!.execution.rootRunId));
+    assert.ok(String(graphErrors[0]!.execution.graphRunId));
+    assert.equal(rootErrors.length, 1);
+    assert.match(String(rootErrors[0]), /reference loader unavailable/);
+  });
+
   void it('reads cached referenced projects only when loaded-project caching is enabled', async () => {
     const mainGraphId = 'reference-cache-main' as GraphId;
     const referencedProjectId = 'reference-cache-child' as ProjectId;

@@ -1,7 +1,7 @@
 import { nanoid } from 'nanoid';
 import type { ChartNode, NodeId, NodeInputDefinition, NodeOutputDefinition, PortId } from '../NodeBase.js';
 import type { GraphId } from '../NodeGraph.js';
-import { NodeImpl, type NodeBody, type NodeUIData } from '../NodeImpl.js';
+import { NodeImpl, type NodeBody, type NodeRunActivityDescriptor, type NodeUIData } from '../NodeImpl.js';
 import { dedent } from 'ts-dedent';
 import type { EditorDefinition } from '../EditorDefinition.js';
 import type { RivetUIContext } from '../RivetUIContext.js';
@@ -68,14 +68,6 @@ export class DelegateFunctionCallNodeImpl extends NodeImpl<DelegateFunctionCallN
     const outputs: NodeOutputDefinition[] = [];
 
     outputs.push({
-      id: 'assistant-message' as PortId,
-      dataType: 'string',
-      title: 'Message (fires before tool call invocation)',
-      description:
-        'Nonblank text the assistant emitted alongside a connected tool-call round. This output fires before the tools are invoked.',
-    });
-
-    outputs.push({
       id: 'tool-name' as PortId,
       dataType: ['string', 'string[]'] as const,
       title: 'Tool Name',
@@ -90,10 +82,25 @@ export class DelegateFunctionCallNodeImpl extends NodeImpl<DelegateFunctionCallN
     });
 
     outputs.push({
+      id: 'assistant-message' as PortId,
+      dataType: 'string',
+      title: 'Message',
+      description:
+        'Nonblank text the assistant emitted alongside a connected tool-call round. This output fires before the tools are invoked.',
+    });
+
+    outputs.push({
       id: 'output' as PortId,
       dataType: ['string', 'string[]'] as const,
       title: 'Output',
       description: 'The output of the tool call.',
+    });
+
+    outputs.push({
+      id: 'execution-time' as PortId,
+      dataType: ['number', 'number[]'] as const,
+      title: 'Tool Execution Time (sec)',
+      description: 'Seconds spent running the tool handler graph or external function.',
     });
 
     outputs.push({
@@ -104,6 +111,14 @@ export class DelegateFunctionCallNodeImpl extends NodeImpl<DelegateFunctionCallN
     });
 
     return outputs;
+  }
+
+  getRunActivityDescriptor(): NodeRunActivityDescriptor {
+    return {
+      category: 'tool',
+      primaryOutputPortId: 'output' as PortId,
+      fullOutputActionLabel: 'Open tool result',
+    };
   }
 
   static getUIData(): NodeUIData {

@@ -5,13 +5,10 @@ import { useLoadRecording } from '../hooks/useLoadRecording';
 import { useExecutorSessionState } from '../hooks/useExecutorSession';
 import { getExecutorOptions, selectedExecutorState } from '../state/settings';
 import { useExecutorSessionHostConfig } from '../providers/ExecutorSessionContext.js';
+import { isRivetAppHostCapabilityEnabled, useRivetAppHostUiConfig } from '../providers/HostUiConfigContext.js';
 import { getExecutorProductState, isExternalDebuggerProductState } from '../state/selectors/executionSelectors.js';
 import { projectState, projectsState } from '../state/savedGraphs.js';
-import {
-  debuggerPanelAnchorState,
-  type DebuggerPanelAnchor,
-  debuggerPanelOpenState,
-} from '../state/ui';
+import { debuggerPanelAnchorState, type DebuggerPanelAnchor, debuggerPanelOpenState } from '../state/ui';
 import { updateOpenedProjectExecutorMode } from '../utils/openedProjects.js';
 import { createLocalProjectExecutorMode } from '../utils/projectExecutorMode.js';
 import { SegmentedEditor } from './editors/SegmentedEditor';
@@ -64,7 +61,7 @@ const moreMenuStyles = css`
 export const ActionBarMoreMenu: FC<{
   getDebuggerPanelAnchor: () => DebuggerPanelAnchor | undefined;
   onClose: () => void;
-  onCopyAsTestCase: () => void;
+  onCopyAsTestCase?: () => void;
 }> = ({ getDebuggerPanelAnchor, onClose, onCopyAsTestCase }) => {
   const setDebuggerPanelOpen = useSetAtom(debuggerPanelOpenState);
   const setDebuggerPanelAnchor = useSetAtom(debuggerPanelAnchorState);
@@ -72,15 +69,20 @@ export const ActionBarMoreMenu: FC<{
   const currentProject = useAtomValue(projectState);
   const setProjects = useSetAtom(projectsState);
   const { loadRecording } = useLoadRecording();
+  const hostUiConfig = useRivetAppHostUiConfig();
+  const recordingsEnabled = isRivetAppHostCapabilityEnabled(hostUiConfig, 'recordings');
+  const trivetInputCopyEnabled = isRivetAppHostCapabilityEnabled(hostUiConfig, 'trivetInputCopy');
   const hostConfig = useExecutorSessionHostConfig();
   const executorOptions = getExecutorOptions({ hasInternalExecutorUrl: !!hostConfig?.internalExecutorUrl });
 
   const openDebuggerPanel = (event: MouseEvent<HTMLButtonElement>) => {
     const rect = event.currentTarget.getBoundingClientRect();
-    setDebuggerPanelAnchor(getDebuggerPanelAnchor() ?? {
-      bottom: rect.bottom,
-      right: rect.right,
-    });
+    setDebuggerPanelAnchor(
+      getDebuggerPanelAnchor() ?? {
+        bottom: rect.bottom,
+        right: rect.right,
+      },
+    );
     setDebuggerPanelOpen(true);
     onClose();
   };
@@ -130,12 +132,10 @@ export const ActionBarMoreMenu: FC<{
       <PopupMenuItem icon={BugIcon} onClick={openDebuggerPanel}>
         Remote Debugger
       </PopupMenuItem>
-      <PopupMenuItem onClick={doLoadRecording}>
-        Load Recording
-      </PopupMenuItem>
-      <PopupMenuItem onClick={onCopyAsTestCase}>
-        Copy Inputs for Trivet
-      </PopupMenuItem>
+      {recordingsEnabled ? <PopupMenuItem onClick={doLoadRecording}>Load Recording</PopupMenuItem> : null}
+      {trivetInputCopyEnabled && onCopyAsTestCase ? (
+        <PopupMenuItem onClick={onCopyAsTestCase}>Copy Inputs for Trivet</PopupMenuItem>
+      ) : null}
     </PopupMenu>
   );
 };

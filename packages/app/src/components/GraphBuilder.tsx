@@ -18,7 +18,7 @@ import { UserInputModal } from './UserInputModal.js';
 import Button from '@atlaskit/button';
 import { isNotNull } from '../utils/genericUtilFunctions.js';
 import { ErrorBoundary } from 'react-error-boundary';
-import { loadedRecordingState } from '../state/execution.js';
+import { getLoadedRecordingForProject, loadedRecordingState } from '../state/execution.js';
 import { useGraphHistoryNavigation } from '../hooks/useGraphHistoryNavigation';
 import { entries } from '../utils/typeSafety';
 import { useGraphBuilderContextMenuHandler } from '../hooks/useGraphBuilderContextMenuHandler';
@@ -52,10 +52,16 @@ import {
   getProjectComparisonReferenceFileName,
 } from '../utils/projectComparisonSummary.js';
 import { useOpenNodeLibrary } from '../hooks/useOpenNodeLibrary.js';
+import type { EditorGraphRun } from '../hooks/editorGraphRunOptions.js';
+import { isRivetAppHostCapabilityEnabled, useRivetAppHostUiConfig } from '../providers/HostUiConfigContext.js';
 
 const Container = styled.div`
   position: relative;
-  height: 100vh;
+  height: calc(100vh - var(--run-activity-drawer-reserved-height, 0px));
+
+  @media (max-width: 720px) {
+    height: 100vh;
+  }
 
   .user-input-modal-open {
     position: absolute;
@@ -120,13 +126,20 @@ const Container = styled.div`
   }
 `;
 
-export const GraphBuilder: FC = () => {
+export const GraphBuilder: FC<{ runGraph: EditorGraphRun }> = ({ runGraph }) => {
   const [nodes, setNodes] = useAtom(nodesState);
   const [connections, setConnections] = useAtom(connectionsState);
   const [selectedNodeIds, setSelectedNodeIds] = useAtom(selectedNodesState);
   const setEditingNodeId = useSetAtom(editingNodeState);
-  const loadedRecording = useAtomValue(loadedRecordingState);
   const project = useAtomValue(projectState);
+  const hostUiConfig = useRivetAppHostUiConfig();
+  const aiGraphBuilderEnabled = isRivetAppHostCapabilityEnabled(hostUiConfig, 'aiGraphBuilder');
+  const recordingsEnabled = isRivetAppHostCapabilityEnabled(hostUiConfig, 'recordings');
+  const loadedRecordingForProject = getLoadedRecordingForProject(
+    useAtomValue(loadedRecordingState),
+    project.metadata.id,
+  );
+  const loadedRecording = recordingsEnabled ? loadedRecordingForProject : undefined;
   const activeComparison = useAtomValue(activeProjectComparisonState);
   const selectedGraphComparison = useAtomValue(selectedGraphProjectComparisonState);
   const setProjectCompareReference = useSetAtom(projectCompareReferenceState);
@@ -144,7 +157,7 @@ export const GraphBuilder: FC = () => {
   });
 
   const nodesById = useAtomValue(nodesByIdState);
-  const contextMenuHandler = useGraphBuilderContextMenuHandler();
+  const contextMenuHandler = useGraphBuilderContextMenuHandler(runGraph);
   const openNodeLibrary = useOpenNodeLibrary();
 
   const nodeSelected = useStableCallback((node: ChartNode, multi: boolean) => {
@@ -281,8 +294,12 @@ export const GraphBuilder: FC = () => {
         />
         <NodeChangesModalRenderer />
         <ProjectComparisonNodeChangesModalRenderer />
-        <AiGraphCreatorInput />
-        <AiGraphCreatorToggle />
+        {aiGraphBuilderEnabled ? (
+          <>
+            <AiGraphCreatorInput />
+            <AiGraphCreatorToggle />
+          </>
+        ) : null}
       </ErrorBoundary>
     </Container>
   );
