@@ -657,6 +657,13 @@ validates policy rather than a frozen advisory count, so a newly published high
 finding or a new unreviewed dependent fails CI even when lower-severity counts
 change.
 
+An exception for a parser used only by a build tool must state that the input is
+repository-controlled and identify the owning toolchain. An exception for a
+runtime dependency must instead identify the exact safe API boundary (for
+example, a default-only ID generator) and must not treat unused vulnerable APIs
+as a blanket runtime waiver. In both cases, retain the shortest practical expiry
+and remove the entry as soon as a compatible upstream release exists.
+
 When a transitive finding has a compatible upstream fix, prefer refreshing that
 resolution with `node .yarn/releases/yarn-4.17.1.cjs up -R <package>` instead of
 adding an exception. Commit the resulting `yarn.lock`, `.pnp.cjs`, and

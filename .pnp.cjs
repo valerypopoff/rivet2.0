@@ -15448,7 +15448,7 @@ const RAW_RUNTIME_STATE =
           ["mime", "npm:4.0.4"],\
           ["minimatch", "npm:10.2.5"],\
           ["monaco-editor", "npm:0.44.0"],\
-          ["nanoid", "npm:3.3.7"],\
+          ["nanoid", "npm:3.3.16"],\
           ["nspell", "npm:2.1.5"],\
           ["openai", "npm:4.28.4"],\
           ["p-queue", "npm:7.4.1"],\
@@ -15596,7 +15596,7 @@ const RAW_RUNTIME_STATE =
           ["mdast-util-to-markdown", "npm:2.1.2"],\
           ["minimatch", "npm:10.2.5"],\
           ["mustache", "npm:4.2.0"],\
-          ["nanoid", "npm:3.3.7"],\
+          ["nanoid", "npm:3.3.16"],\
           ["openai", "npm:4.28.4"],\
           ["p-queue", "npm:7.4.1"],\
           ["p-queue-6", [\
@@ -15657,7 +15657,7 @@ const RAW_RUNTIME_STATE =
           ["lodash-es", "npm:4.18.1"],\
           ["marked", "npm:9.1.2"],\
           ["minimatch", "npm:10.2.5"],\
-          ["nanoid", "npm:3.3.7"],\
+          ["nanoid", "npm:3.3.16"],\
           ["rimraf", "npm:6.1.3"],\
           ["ts-node", "virtual:cce41fb5932c708537e2c8102f67c1df8503bc7b0e98fe405b8d054c96ba0fd0ec3b4d44ffa2144f5379ff48b0cfcbb1215b2409bcf11998c11e7bcf45bd049f#npm:10.9.1"],\
           ["ts-pattern", "npm:5.6.2"],\
@@ -26451,13 +26451,6 @@ const RAW_RUNTIME_STATE =
         "packageLocation": "./.yarn/cache/nanoid-npm-3.3.16-dbca216f06-8004af92b5.zip/node_modules/nanoid/",\
         "packageDependencies": [\
           ["nanoid", "npm:3.3.16"]\
-        ],\
-        "linkType": "HARD"\
-      }],\
-      ["npm:3.3.7", {\
-        "packageLocation": "./.yarn/cache/nanoid-npm-3.3.7-98824ba130-ac1eb60f61.zip/node_modules/nanoid/",\
-        "packageDependencies": [\
-          ["nanoid", "npm:3.3.7"]\
         ],\
         "linkType": "HARD"\
       }]\

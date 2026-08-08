@@ -117,10 +117,11 @@ configuration and request payloads are never logged by this adapter.
 
 Workspace dependency policy is enforced by `yarn security:audit`. Direct runtime
 HTTP, MCP, WebSocket, YAML, JSONPath, Vite/Rollup, and cloud-provider dependencies
-stay on patched compatible releases; reviewed residual high findings are limited
-to non-runtime toolchains and require expiring entries in
-`security/dependency-audit-exceptions.json`. Cargo dependencies are independently
-checked by RustSec. The desktop Tauri feature list is method-scoped for file,
+stay on patched compatible releases; reviewed residual high findings require
+expiring entries in `security/dependency-audit-exceptions.json`. A runtime
+exception is permitted only when its exact, non-vulnerable API boundary is
+documented and no compatible upstream fix exists. Cargo dependencies are
+independently checked by RustSec. The desktop Tauri feature list is method-scoped for file,
 dialog, HTTP, and window APIs; Tauri v1's all-or-nothing path and global-shortcut
 features remain because the app uses those APIs.
 
