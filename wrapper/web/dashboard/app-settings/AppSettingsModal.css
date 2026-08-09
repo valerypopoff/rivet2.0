@@ -123,11 +123,6 @@
   white-space: nowrap;
 }
 
-.app-settings-mode-tab:disabled {
-  cursor: not-allowed;
-  opacity: 0.65;
-}
-
 .app-settings-proxy-no-proxy {
   min-height: 74px;
   resize: vertical;

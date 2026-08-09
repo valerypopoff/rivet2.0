@@ -52,6 +52,12 @@
   min-height: 32px;
 }
 
+.project-settings-section-switcher {
+  width: fit-content;
+  max-width: 100%;
+  flex: 0 0 auto;
+}
+
 .project-settings-title-display {
   display: inline-flex;
   align-items: flex-start;

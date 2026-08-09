@@ -11,36 +11,47 @@ type StatisticsRequest = {
 };
 
 function getStatisticsResponse(request: StatisticsRequest) {
+  const secondBucketFrom = new Date(Date.parse(request.period.from) + 60 * 60 * 1000).toISOString();
+  const includedRunCount = 3 + Number(request.includeFailed) + Number(request.includeWarnings);
+
   return {
     target: request.target,
     period: request.period,
-    comparisonPeriod: request.period,
     current: {
-      runCount: request.includeFailed ? 4 : 3,
+      runCount: includedRunCount,
       medianDurationMs: 1_250,
       p95DurationMs: 2_200,
       averageDurationMs: 1_400,
       minDurationMs: 900,
       maxDurationMs: 2_400,
     },
-    previous: {
-      runCount: 2,
-      medianDurationMs: 1_750,
-      p95DurationMs: 2_600,
-      averageDurationMs: 1_900,
-      minDurationMs: 1_200,
-      maxDurationMs: 2_600,
+    currentStatusCounts: { succeeded: 3, failed: 1, suspicious: 1 },
+    currentExcludedStatusCounts: {
+      succeeded: 0,
+      failed: request.includeFailed ? 0 : 1,
+      suspicious: request.includeWarnings ? 0 : 1,
     },
-    medianDelta: { absoluteMs: -500, percent: -28.57 },
-    p95Delta: { absoluteMs: -400, percent: -15.38 },
-    currentStatusCounts: { succeeded: 3, failed: 1, suspicious: 0 },
-    previousStatusCounts: { succeeded: 2, failed: 0, suspicious: 0 },
-    currentExcludedStatusCounts: request.includeFailed
-      ? { succeeded: 0, failed: 0, suspicious: 0 }
-      : { succeeded: 0, failed: 1, suspicious: 0 },
-    previousExcludedStatusCounts: { succeeded: 0, failed: 0, suspicious: 0 },
     buckets: [
-      { from: request.period.from, to: request.period.to, runCount: 3, medianDurationMs: 1_250, p95DurationMs: 2_200, averageDurationMs: 1_400, minDurationMs: 900, maxDurationMs: 2_400 },
+      {
+        from: request.period.from,
+        to: secondBucketFrom,
+        runCount: 3,
+        medianDurationMs: 1_250,
+        p95DurationMs: 2_200,
+        averageDurationMs: 1_400,
+        minDurationMs: 900,
+        maxDurationMs: 2_400,
+      },
+      {
+        from: secondBucketFrom,
+        to: request.period.to,
+        runCount: 2,
+        medianDurationMs: 1_100,
+        p95DurationMs: 1_900,
+        averageDurationMs: 1_300,
+        minDurationMs: 800,
+        maxDurationMs: 2_000,
+      },
     ],
   };
 }
@@ -48,6 +59,14 @@ function getStatisticsResponse(request: StatisticsRequest) {
 async function installRunStatisticsRoutes(page: Page) {
   const catalogRequests: URL[] = [];
   const statisticsRequests: StatisticsRequest[] = [];
+  let releaseWebAppCatalog = () => {};
+  let releaseArchiveStatistics = () => {};
+  const webAppCatalogReady = new Promise<void>((resolve) => {
+    releaseWebAppCatalog = resolve;
+  });
+  const archiveStatisticsReady = new Promise<void>((resolve) => {
+    releaseArchiveStatistics = resolve;
+  });
 
   await page.route('**/api/workflows/run-statistics/**', async (route) => {
     const request = route.request();
@@ -65,12 +84,21 @@ async function installRunStatisticsRoutes(page: Page) {
           latestRunAt: '2026-08-04T12:00:00.000Z',
           totalRuns: 3,
         }]
-        : [{
-          target: { surface: 'endpoint', workflowId: 'workflow-a' },
-          projectName: 'Report project',
-          latestRunAt: '2026-08-04T12:00:00.000Z',
-          totalRuns: 3,
-        }];
+        : [
+          {
+            target: { surface: 'endpoint', workflowId: 'workflow-a' },
+            projectName: 'Report project',
+            latestRunAt: '2026-08-04T12:00:00.000Z',
+            totalRuns: 3,
+          },
+          {
+            target: { surface: 'endpoint', workflowId: 'workflow-b' },
+            projectName: 'Archive project',
+            latestRunAt: '2026-08-04T11:00:00.000Z',
+            totalRuns: 2,
+          },
+        ];
+      if (surface === 'web_app') await webAppCatalogReady;
       await route.fulfill({
         status: 200,
         contentType: 'application/json',
@@ -86,6 +114,7 @@ async function installRunStatisticsRoutes(page: Page) {
     if (request.method() === 'POST' && url.pathname.endsWith('/query')) {
       const body = request.postDataJSON() as StatisticsRequest;
       statisticsRequests.push(body);
+      if (body.target.workflowId === 'workflow-b') await archiveStatisticsReady;
       await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(getStatisticsResponse(body)) });
       return;
     }
@@ -93,12 +122,12 @@ async function installRunStatisticsRoutes(page: Page) {
     await route.fulfill({ status: 500, contentType: 'application/json', body: JSON.stringify({ error: 'Unexpected statistics request' }) });
   });
 
-  return { catalogRequests, statisticsRequests };
+  return { catalogRequests, releaseArchiveStatistics, releaseWebAppCatalog, statisticsRequests };
 }
 
 test.describe('Run statistics modal', () => {
-  test('compares endpoint and web-app action execution timing with status filters', async ({ page }) => {
-    const { catalogRequests, statisticsRequests } = await installRunStatisticsRoutes(page);
+  test('shows all run outcomes before successful-run timing statistics', async ({ page }) => {
+    const { catalogRequests, releaseArchiveStatistics, releaseWebAppCatalog, statisticsRequests } = await installRunStatisticsRoutes(page);
     await page.goto('/', { waitUntil: 'domcontentloaded' });
     await authenticateIfNeeded(page);
     await waitForDashboardReady(page);
@@ -109,21 +138,75 @@ test.describe('Run statistics modal', () => {
     await expect(page.getByTestId('run-statistics-modal--blanket')).toHaveCSS('background-color', 'rgba(0, 0, 0, 0.56)');
     await expect(modal).toHaveCSS('background-color', 'rgb(31, 31, 34)');
     await expect(page.getByTestId('run-statistics-modal--body')).toHaveCSS('padding-top', '0px');
+    await expect(modal.locator('.run-statistics-header-row')).toHaveCSS('padding-bottom', '14px');
+    const runTypeSwitcher = modal.locator('.run-statistics-header-row').getByRole('group', { name: 'Run type' });
+    await expect(runTypeSwitcher).toBeVisible();
+    await expect(runTypeSwitcher).toHaveClass(/segmented-control/);
+    await expect(runTypeSwitcher.getByRole('button', { name: 'Endpoints' })).toHaveCSS('height', '28px');
+    await expect(runTypeSwitcher.getByRole('button', { name: 'Endpoints' })).toHaveAttribute('aria-pressed', 'true');
+    await expect(modal.locator('.run-statistics-content').getByRole('group', { name: 'Run type' })).toHaveCount(0);
+    const headerLeadBox = await modal.locator('.run-statistics-help').boundingBox();
+    const switcherBox = await runTypeSwitcher.boundingBox();
+    expect(switcherBox?.y).toBeGreaterThan(headerLeadBox?.y ?? Number.POSITIVE_INFINITY);
+    expect(switcherBox?.x).toBeCloseTo(headerLeadBox?.x ?? Number.NaN, 0);
+    const targetSelect = modal.getByRole('combobox', { name: 'Workflow endpoint' });
+    await expect(targetSelect).toBeVisible();
+    await expect(modal.locator('.run-statistics-target-select__single-value')).toHaveText('Report project');
+    await expect(modal.locator('.run-statistics-sidebar')).toHaveCount(0);
+    const targetControlBox = await modal.locator('.run-statistics-target-control').boundingBox();
+    const filtersBox = await modal.locator('.run-statistics-controls').boundingBox();
+    expect(targetControlBox?.y).toBeLessThan(filtersBox?.y ?? Number.POSITIVE_INFINITY);
     await expect(modal.locator('.run-statistics-target-title')).toHaveText('Report project');
     await expect(modal.locator('.run-statistics-metric-card').first()).toContainText('1.25 s');
-    await expect(modal.getByText('500 ms faster')).toBeVisible();
-    await expect(modal.getByRole('region', { name: 'Run outcomes' })).toContainText('Errors');
-    await expect(modal.getByRole('region', { name: 'Run outcomes' })).toContainText('25%');
-    await expect(modal.getByRole('region', { name: 'Run outcomes' })).toContainText('Warnings');
+    await expect(modal.locator('.run-statistics-metric-delta')).toHaveCount(0);
+    await expect(modal.getByText(/faster|slower|no change/i)).toHaveCount(0);
+    const metricCardBox = await modal.locator('.run-statistics-metric-card').first().boundingBox();
+    expect(metricCardBox?.height).toBeLessThan(82);
+    const outcomes = modal.getByRole('region', { name: 'Run outcomes' });
+    const timingStatistics = modal.getByRole('region', { name: 'Timing statistics' });
+    await expect(outcomes).toContainText('Errors');
+    await expect(outcomes).toContainText('20%');
+    await expect(timingStatistics).toContainText('Successful runs are included by default.');
+    await expect(timingStatistics).toHaveCSS('border-top-width', '1px');
+    await expect(timingStatistics).toHaveCSS('padding-top', '18px');
+    const outcomesBox = await outcomes.boundingBox();
+    const timingStatisticsBox = await timingStatistics.boundingBox();
+    expect(outcomesBox?.y).toBeLessThan(timingStatisticsBox?.y ?? Number.POSITIVE_INFINITY);
+    await expect(modal.locator('.recharts-line-curve').nth(0)).toHaveAttribute('stroke', '#5aa9ff');
+    await expect(modal.locator('.recharts-line-curve').nth(1)).toHaveAttribute('stroke', '#c58aff');
+    await expect(outcomes).toContainText('Warnings');
     expect(catalogRequests[0]?.searchParams.get('surface')).toBe('endpoint');
     expect(catalogRequests[0]?.searchParams.get('runKind')).toBe('published');
     expect(statisticsRequests[0]?.includeFailed).toBe(false);
 
-    await modal.getByLabel('Include failed runs').check();
+    await targetSelect.press('ArrowDown');
+    await targetSelect.press('ArrowDown');
+    await targetSelect.press('Enter');
+    await expect(modal.locator('.run-statistics-target-title')).toHaveText('Archive project');
+    await expect.poll(() => statisticsRequests.at(-1)?.target.workflowId).toBe('workflow-b');
+    await expect(modal.getByText('Calculating statistics...')).toBeVisible();
+    await expect(modal.locator('.run-statistics-metric-card')).toHaveCount(0);
+    await expect(modal.getByRole('region', { name: 'Run outcomes' })).toHaveCount(0);
+    releaseArchiveStatistics();
+    await expect(modal.locator('.run-statistics-metric-card').first()).toContainText('1.25 s');
+
+    await timingStatistics.getByLabel('Include failed runs').check();
     await expect.poll(() => statisticsRequests.at(-1)?.includeFailed).toBe(true);
     await expect(modal.getByText('4 included runs')).toBeVisible();
+    await expect(outcomes).toContainText('20%');
+
+    await timingStatistics.getByLabel('Include runs with warnings').check();
+    await expect.poll(() => statisticsRequests.at(-1)?.includeWarnings).toBe(true);
+    await expect(modal.getByText('5 included runs')).toBeVisible();
+    await expect(outcomes).toContainText('20%');
 
     await modal.getByRole('button', { name: 'Web apps' }).click();
+    await expect(modal.getByText('Loading available runs...')).toBeVisible();
+    await expect(modal.getByRole('combobox', { name: 'Workflow endpoint' })).toHaveCount(0);
+    await expect(modal.locator('.run-statistics-target-title')).toHaveCount(0);
+    releaseWebAppCatalog();
+    await expect(modal.getByRole('combobox', { name: 'Web app action' })).toBeVisible();
+    await expect(modal.locator('.run-statistics-target-select__single-value')).toHaveText('Summary app - Generate summary');
     await expect(modal.locator('.run-statistics-target-title')).toHaveText('Summary app - Generate summary');
     await expect.poll(() => catalogRequests.at(-1)?.searchParams.get('surface')).toBe('web_app');
     await expect.poll(() => statisticsRequests.at(-1)?.target.surface).toBe('web_app');

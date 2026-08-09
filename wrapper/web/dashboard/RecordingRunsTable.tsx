@@ -10,6 +10,7 @@ import {
   type WorkflowRecordingStatus,
   type WorkflowRecordingWorkflowSummary,
 } from './types';
+import { SegmentedControl, SegmentedControlButton } from './SegmentedControl';
 
 const timestampFormatter = new Intl.DateTimeFormat(undefined, {
   year: 'numeric',
@@ -245,28 +246,26 @@ export const RecordingRunsTable: FC<RecordingRunsTableProps> = ({
             <div className="run-recordings-runs-title">
               {overallRunsCount} {overallRunsCount === 1 ? 'Run' : 'Runs'}
             </div>
-            <div className="run-recordings-segmented" role="group" aria-label="Filter runs">
-              <button
-                type="button"
-                className={`run-recordings-segmented-button${statusFilter === 'all' ? ' active' : ''}`}
+            <SegmentedControl label="Filter runs">
+              <SegmentedControlButton
+                selected={statusFilter === 'all'}
                 onClick={() => {
                   onSetStatusFilter('all');
                   onSetPage(1);
                 }}
               >
                 {allRunsLabel}
-              </button>
-              <button
-                type="button"
-                className={`run-recordings-segmented-button${statusFilter === 'failed' ? ' active' : ''}`}
+              </SegmentedControlButton>
+              <SegmentedControlButton
+                selected={statusFilter === 'failed'}
                 onClick={() => {
                   onSetStatusFilter('failed');
                   onSetPage(1);
                 }}
               >
                 {badRunsLabel}
-              </button>
-            </div>
+              </SegmentedControlButton>
+            </SegmentedControl>
             <button
               type="button"
               className={`run-recordings-filter-link${inputFilterVisible ? ' active' : ''}`}
@@ -280,21 +279,20 @@ export const RecordingRunsTable: FC<RecordingRunsTableProps> = ({
           <div className="run-recordings-runs-controls">
             <div className="run-recordings-inline-control">
               <span className="run-recordings-field-label">Per page</span>
-              <div className="run-recordings-segmented" role="group" aria-label="Runs per page">
+              <SegmentedControl label="Runs per page">
                 {runsPerPageOptions.map((option) => (
-                  <button
+                  <SegmentedControlButton
                     key={option}
-                    type="button"
-                    className={`run-recordings-segmented-button${runsPerPage === option ? ' active' : ''}`}
+                    selected={runsPerPage === option}
                     onClick={() => {
                       onSetRunsPerPage(option);
                       onSetPage(1);
                     }}
                   >
                     {option}
-                  </button>
+                  </SegmentedControlButton>
                 ))}
-              </div>
+              </SegmentedControl>
             </div>
           </div>
         </div>

@@ -5,7 +5,6 @@ import type {
   WorkflowRecordingStatus,
   WorkflowRunStatisticsBucket,
   WorkflowRunStatisticsCatalogResponse,
-  WorkflowRunStatisticsDelta,
   WorkflowRunStatisticsMetrics,
   WorkflowRunStatisticsPeriod,
   WorkflowRunStatisticsQuery,
@@ -86,31 +85,16 @@ export function buildWorkflowRunStatistics(
 ): WorkflowRunStatisticsResponse {
   const fromMs = parseTime(query.period.from);
   const toMs = parseTime(query.period.to);
-  const periodMs = Math.max(0, toMs - fromMs);
-  const comparisonPeriod: WorkflowRunStatisticsPeriod = {
-    from: new Date(fromMs - periodMs).toISOString(),
-    to: new Date(fromMs).toISOString(),
-  };
-  const comparisonFromMs = fromMs - periodMs;
   const currentRows = rows.filter((row) => isInPeriod(row, fromMs, toMs) && matchesQuery(row, query));
-  const previousRows = rows.filter((row) => isInPeriod(row, comparisonFromMs, fromMs) && matchesQuery(row, query));
   const currentIncluded = currentRows.filter((row) => shouldIncludeStatus(row.status, query));
-  const previousIncluded = previousRows.filter((row) => shouldIncludeStatus(row.status, query));
   const current = summarizeDurations(currentIncluded);
-  const previous = summarizeDurations(previousIncluded);
 
   return {
     target: query.target,
     period: query.period,
-    comparisonPeriod,
     current,
-    previous,
-    medianDelta: getDelta(current.medianDurationMs, previous.medianDurationMs),
-    p95Delta: getDelta(current.p95DurationMs, previous.p95DurationMs),
     currentStatusCounts: countStatuses(currentRows),
-    previousStatusCounts: countStatuses(previousRows),
     currentExcludedStatusCounts: countStatuses(currentRows.filter((row) => !shouldIncludeStatus(row.status, query))),
-    previousExcludedStatusCounts: countStatuses(previousRows.filter((row) => !shouldIncludeStatus(row.status, query))),
     buckets: buildBuckets(currentIncluded, query.period),
   };
 }
@@ -223,15 +207,6 @@ function percentile(sortedValues: readonly number[], fraction: number): number |
   return lowerValue + (upperValue - lowerValue) * (index - lower);
 }
 
-function getDelta(current: number | null, previous: number | null): WorkflowRunStatisticsDelta {
-  if (current == null || previous == null) return { absoluteMs: null, percent: null };
-  const absoluteMs = current - previous;
-  return {
-    absoluteMs,
-    percent: previous === 0 ? null : (absoluteMs / previous) * 100,
-  };
-}
-
 function buildBuckets(rows: readonly WorkflowRecordingStatisticsRow[], period: WorkflowRunStatisticsPeriod): WorkflowRunStatisticsBucket[] {
   const fromMs = parseTime(period.from);
   const toMs = parseTime(period.to);
@@ -247,7 +222,7 @@ function buildBuckets(rows: readonly WorkflowRecordingStatisticsRow[], period: W
   return [...buckets.entries()]
     .sort(([left], [right]) => left - right)
     .map(([start, bucketRows]) => ({
-      from: new Date(start).toISOString(),
+      from: new Date(Math.max(start, fromMs)).toISOString(),
       to: new Date(Math.min(start + bucketMs, toMs)).toISOString(),
       ...summarizeDurations(bucketRows),
     }));

@@ -735,6 +735,9 @@ test.describe('Workflow library layout', () => {
     await expect(appSettingsModal.getByLabel('Published web app URL slug')).toHaveValue('public-apps');
     await expect(appSettingsModal.getByText(/restart/i)).toHaveCount(0);
     await expect(appSettingsModal.getByRole('button', { name: 'Key' })).toHaveAttribute('aria-pressed', 'true');
+    const webAppAuthMode = appSettingsModal.getByRole('group', { name: 'Web app auth mode' });
+    await expect(webAppAuthMode).toHaveClass(/segmented-control/);
+    await expect(webAppAuthMode.getByRole('button', { name: 'Key' })).toHaveCSS('height', '28px');
     await expect(appSettingsModal.getByText('Visitors enter the Rivet key before opening web apps.')).toBeVisible();
     await appSettingsModal.getByRole('button', { name: 'OAuth' }).click();
     await expect(appSettingsModal.getByText("Visitors sign in with the provider configured in the OAuth tab and are checked against each web app's allowed-email list.")).toBeVisible();
@@ -747,7 +750,9 @@ test.describe('Workflow library layout', () => {
     await expect(webAppButtonDataSection.getByText('Large payloads are buffered in the API process.')).toBeVisible();
     await appSettingsModal.getByLabel('Maximum web app button data in MiB').fill('200');
     await webAppButtonDataSection.getByRole('button', { name: 'Save' }).click();
-    await expect(webAppButtonDataSection.locator('.project-settings-success')).toHaveText('Saved. Applying within a few seconds.');
+    await expect(webAppButtonDataSection.locator('.project-settings-success')).toHaveText(
+      'Saved. Nginx reloads shortly; restart the API to apply the new WebSocket message limit.',
+    );
 
     await appSettingsModal.getByRole('tab', { name: 'OAuth' }).click();
     await expect(appSettingsModal.getByRole('tab', { name: 'OAuth' })).toHaveAttribute('aria-selected', 'true');

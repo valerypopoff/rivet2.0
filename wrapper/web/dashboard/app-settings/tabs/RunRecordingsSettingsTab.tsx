@@ -1,7 +1,7 @@
 import TextField from '@atlaskit/textfield';
 
 import { defaultMaxRunsPerEndpoint, defaultRetentionDays, type RunRecordingsSettingsForm } from '../model';
-import { ModeButton, SettingsActions } from '../SettingsControls';
+import { ModeButton, ModeGroup, SettingsActions } from '../SettingsControls';
 import type { useRunRecordingsForm } from '../useRunRecordingsForm';
 
 export function RunRecordingsSettingsTab({ recordings }: { recordings: ReturnType<typeof useRunRecordingsForm> }) {
@@ -23,10 +23,10 @@ export function RunRecordingsSettingsTab({ recordings }: { recordings: ReturnTyp
 
           <div className="app-settings-field">
             <span className="app-settings-field-label">Runs kept per workflow endpoint</span>
-            <div className="project-settings-tabs app-settings-mode-tabs" role="group" aria-label="Runs kept per workflow endpoint mode">
+            <ModeGroup label="Runs kept per workflow endpoint mode">
               <ModeButton active={form.maxRunsPerEndpointMode === 'latest'} disabled={recordings.controlsDisabled} onClick={() => update('maxRunsPerEndpointMode', 'latest')}>Keep latest runs</ModeButton>
               <ModeButton active={form.maxRunsPerEndpointMode === 'all'} disabled={recordings.controlsDisabled} onClick={() => update('maxRunsPerEndpointMode', 'all')}>Keep all runs</ModeButton>
-            </div>
+            </ModeGroup>
             {form.maxRunsPerEndpointMode === 'latest' ? (
               <TextField aria-label="Newest runs to keep per workflow endpoint" type="number" min={1} value={form.maxRunsPerEndpoint} isDisabled={recordings.controlsDisabled} placeholder={defaultMaxRunsPerEndpoint} onChange={(event) => update('maxRunsPerEndpoint', event.currentTarget.value)} />
             ) : null}
@@ -39,10 +39,10 @@ export function RunRecordingsSettingsTab({ recordings }: { recordings: ReturnTyp
 
           <div className="app-settings-field">
             <span className="app-settings-field-label">Days to keep recordings</span>
-            <div className="project-settings-tabs app-settings-mode-tabs" role="group" aria-label="Recording retention mode">
+            <ModeGroup label="Recording retention mode">
               <ModeButton active={form.recordingRetentionMode === 'forever'} disabled={recordings.controlsDisabled} onClick={() => update('recordingRetentionMode', 'forever')}>Keep forever</ModeButton>
               <ModeButton active={form.recordingRetentionMode === 'limited'} disabled={recordings.controlsDisabled} onClick={() => update('recordingRetentionMode', 'limited')}>Keep for some time</ModeButton>
-            </div>
+            </ModeGroup>
             {form.recordingRetentionMode === 'limited' ? (
               <TextField aria-label="Days to keep recordings" type="number" min={1} value={form.retentionDays} isDisabled={recordings.controlsDisabled} placeholder={defaultRetentionDays} onChange={(event) => update('retentionDays', event.currentTarget.value)} />
             ) : null}

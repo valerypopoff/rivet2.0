@@ -113,11 +113,6 @@ export type WorkflowRunStatisticsMetrics = {
   maxDurationMs: number | null;
 };
 
-export type WorkflowRunStatisticsDelta = {
-  absoluteMs: number | null;
-  percent: number | null;
-};
-
 export type WorkflowRunStatisticsTarget =
   | {
       surface: 'endpoint';
@@ -183,15 +178,9 @@ export type WorkflowRunStatisticsBucket = WorkflowRunStatisticsMetrics & {
 export type WorkflowRunStatisticsResponse = {
   target: WorkflowRunStatisticsTarget;
   period: WorkflowRunStatisticsPeriod;
-  comparisonPeriod: WorkflowRunStatisticsPeriod;
   current: WorkflowRunStatisticsMetrics;
-  previous: WorkflowRunStatisticsMetrics;
-  medianDelta: WorkflowRunStatisticsDelta;
-  p95Delta: WorkflowRunStatisticsDelta;
   currentStatusCounts: WorkflowRunStatisticsStatusCounts;
-  previousStatusCounts: WorkflowRunStatisticsStatusCounts;
   currentExcludedStatusCounts: WorkflowRunStatisticsStatusCounts;
-  previousExcludedStatusCounts: WorkflowRunStatisticsStatusCounts;
   buckets: WorkflowRunStatisticsBucket[];
 };
 

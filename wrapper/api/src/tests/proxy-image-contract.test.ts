@@ -295,7 +295,8 @@ test('API images and launchers use the filtered Rivet source context and symlink
   assert.match(ensureDevDeps, /hasExpectedApiRivetLink\('rivet-node', 'rivet\/packages\/node', \[/);
   assert.match(ensureDevDeps, /YARN_NODE_LINKER: 'node-modules'/);
   assert.match(ensureDevDeps, /'\.rivet-dependency-overlay'/);
-  assert.match(ensureDevDeps, /'wrapper\/web\/node_modules'/);
+  assert.match(ensureDevDeps, /!exists\('wrapper\/web\/node_modules\/\.bin\/vite'\)/);
+  assert.match(ensureDevDeps, /path\.join\('rivet\/node_modules', packageNameToNodeModulesRelPath\(dependencyName\)\)/);
 
   assert.match(apiTsconfig, /"preserveSymlinks": true/);
   assert.match(apiPackageJson, /run-preserve-symlinks\.mjs tsx/);

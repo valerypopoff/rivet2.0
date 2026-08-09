@@ -13,6 +13,7 @@ import type {
   WorkflowProjectItem,
   WorkflowProjectStatus,
 } from './types';
+import { SegmentedControl, SegmentedControlButton } from './SegmentedControl';
 import { useProjectSettingsActions } from './useProjectSettingsActions';
 
 const renderWorkflowEndpointHelp = (
@@ -187,26 +188,28 @@ export const ProjectSettingsModal: FC<ProjectSettingsModalProps> = ({
   const workflowPublishButtonLabel = isUnpublishedProject ? 'Publish' : 'Update';
   const showWebAppOauthSettings = routeConfig.webAppsAuthMode === 'oauth';
   const renderTabs = () => (
-    <div className="project-settings-tabs" role="tablist" aria-label="Project settings sections">
-      <button
-        type="button"
-        className={`project-settings-tab${activeTab === 'workflow' ? ' active' : ''}`}
+    <SegmentedControl
+      className="project-settings-section-switcher"
+      label="Project settings sections"
+      role="tablist"
+    >
+      <SegmentedControlButton
+        selected={activeTab === 'workflow'}
         role="tab"
         aria-selected={activeTab === 'workflow'}
         onClick={() => setActiveTab('workflow')}
       >
         Endpoint
-      </button>
-      <button
-        type="button"
-        className={`project-settings-tab${activeTab === 'web-apps' ? ' active' : ''}`}
+      </SegmentedControlButton>
+      <SegmentedControlButton
+        selected={activeTab === 'web-apps'}
         role="tab"
         aria-selected={activeTab === 'web-apps'}
         onClick={() => setActiveTab('web-apps')}
       >
         Web apps
-      </button>
-    </div>
+      </SegmentedControlButton>
+    </SegmentedControl>
   );
   const renderPublishedHistoryButton = () => (
     <Button
@@ -464,6 +467,7 @@ export const ProjectSettingsModal: FC<ProjectSettingsModalProps> = ({
                       <span className="project-settings-modal-title">{baseFileName}</span>
                     </div>
                   </div>
+                  {renderTabs()}
                 </div>
                 <button
                   type="button"
@@ -477,7 +481,6 @@ export const ProjectSettingsModal: FC<ProjectSettingsModalProps> = ({
               </div>
 
               <div className="project-settings-modal-content">
-                {renderTabs()}
                 {activeTab === 'workflow' ? renderWorkflowSettings() : renderWebAppsSettings()}
                 {renderDangerSection()}
               </div>
