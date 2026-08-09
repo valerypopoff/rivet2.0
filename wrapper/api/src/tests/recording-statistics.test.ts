@@ -26,7 +26,7 @@ const period = getStatisticsQueryPeriod({
   to: '2026-08-05T00:00:00.000Z',
 });
 
-test('run statistics calculate metrics, comparison deltas, and time buckets from metadata rows', () => {
+test('run statistics calculate selected-period metrics and time buckets from metadata rows', () => {
   const rows = [
     row({ createdAt: '2026-08-03T02:00:00.000Z', durationMs: 600 }),
     row({ createdAt: '2026-08-03T03:00:00.000Z', durationMs: 400 }),
@@ -53,8 +53,14 @@ test('run statistics calculate metrics, comparison deltas, and time buckets from
     minDurationMs: 100,
     maxDurationMs: 500,
   });
-  assert.equal(statistics.previous.medianDurationMs, 500);
-  assert.equal(statistics.medianDelta.absoluteMs, -200);
+  assert.deepEqual(Object.keys(statistics).sort(), [
+    'buckets',
+    'current',
+    'currentExcludedStatusCounts',
+    'currentStatusCounts',
+    'period',
+    'target',
+  ]);
   assert.equal(statistics.buckets.length, 5);
   assert.equal(statistics.buckets[0]?.medianDurationMs, 100);
   assert.equal(statistics.buckets.at(-1)?.p95DurationMs, 500);
@@ -87,6 +93,32 @@ test('run statistics exclude failed and warning runs by default without losing s
   });
   assert.equal(included.current.runCount, 3);
   assert.equal(included.current.medianDurationMs, 1_000);
+});
+
+test('run statistics clamp chart bucket bounds to a custom selected period', () => {
+  const statistics = buildWorkflowRunStatistics([
+    row({ createdAt: '2026-08-04T12:45:00.000Z', durationMs: 100 }),
+  ], {
+    target: { surface: 'endpoint', workflowId: 'workflow-a' },
+    period: {
+      from: '2026-08-04T12:30:00.000Z',
+      to: '2026-08-04T13:15:00.000Z',
+    },
+    runKind: 'published',
+    includeFailed: false,
+    includeWarnings: false,
+  });
+
+  assert.deepEqual(statistics.buckets, [{
+    from: '2026-08-04T12:30:00.000Z',
+    to: '2026-08-04T13:00:00.000Z',
+    runCount: 1,
+    medianDurationMs: 100,
+    p95DurationMs: 100,
+    averageDurationMs: 100,
+    minDurationMs: 100,
+    maxDurationMs: 100,
+  }]);
 });
 
 test('statistics catalog keeps endpoints, known web-app actions, and incomplete legacy web-app actions distinct', () => {

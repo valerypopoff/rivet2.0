@@ -504,6 +504,18 @@ test.describe('Project settings modal', () => {
     await installProjectSettingsRoutes(page, project, createProjectSettingsRouteTrackers());
 
     const { modal } = await openProjectSettingsModal(page, project);
+    const projectSettingsSections = modal.getByRole('tablist', { name: 'Project settings sections' });
+    await expect(projectSettingsSections).toHaveClass(/segmented-control/);
+    await expect(modal.locator('.project-settings-modal-header-row').getByRole('tablist')).toHaveCount(1);
+    await expect(modal.locator('.project-settings-modal-content').getByRole('tablist')).toHaveCount(0);
+    await expect(projectSettingsSections.getByRole('tab', { name: 'Endpoint' })).toHaveCSS('height', '28px');
+    await expect(projectSettingsSections.getByRole('tab', { name: 'Endpoint' })).toHaveAttribute('aria-selected', 'true');
+    const sectionSwitcherBox = await projectSettingsSections.boundingBox();
+    const modalBox = await modal.boundingBox();
+    expect(sectionSwitcherBox).not.toBeNull();
+    expect(modalBox).not.toBeNull();
+    expect(sectionSwitcherBox!.width).toBeLessThan(180);
+    expect(sectionSwitcherBox!.width).toBeLessThan(modalBox!.width / 2);
     const activeProjectSection = page.locator('.active-project-section');
     await expect(activeProjectSection.locator('.active-project-details > :first-child')).toHaveClass(/active-project-name-row/);
     await expect(activeProjectSection.locator('.active-project-name')).toHaveText(unique);

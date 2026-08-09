@@ -411,6 +411,10 @@ test.describe('Run recordings modal', () => {
   test('filters and paginates runs with the operator menu outside modal clipping', async ({ page }) => {
     const { runFetches } = await installRunRecordingRoutes(page);
     const modal = await openLatestFlowRecordings(page);
+    const runFilter = modal.getByRole('group', { name: 'Filter runs' });
+    await expect(runFilter).toHaveClass(/segmented-control/);
+    await expect(runFilter.getByRole('button').first()).toHaveCSS('height', '28px');
+    await expect(runFilter.getByRole('button').first()).toHaveAttribute('aria-pressed', 'true');
     await expect(modal.locator('.run-recordings-run').first().locator('.run-recordings-run-endpoint'))
       .toHaveText('Endpoint at execution: latest-flow');
 

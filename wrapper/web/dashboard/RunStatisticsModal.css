@@ -21,11 +21,19 @@
 
 .run-statistics-header-row {
   position: relative;
-  padding: 16px 56px 0 18px;
 }
 
-.run-statistics-heading {
+.run-statistics-header-content {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 10px;
   width: 100%;
+  min-width: 0;
+}
+
+.run-statistics-surface-switcher {
+  flex: 0 0 auto;
 }
 
 .run-statistics-title {
@@ -37,8 +45,8 @@
 
 .run-statistics-help,
 .run-statistics-period-label,
-.run-statistics-target-description,
 .run-statistics-outcomes-help,
+.run-statistics-statistics-help,
 .run-statistics-notes,
 .run-statistics-empty-state {
   color: var(--grey-light);
@@ -80,7 +88,6 @@
   display: flex;
   gap: 12px;
   flex-wrap: wrap;
-  min-height: 34px;
   align-items: center;
 }
 
@@ -114,26 +121,13 @@
   padding: 0 10px;
 }
 
-.run-statistics-layout {
-  display: grid;
-  grid-template-columns: minmax(220px, 0.32fr) minmax(0, 1fr);
-  flex: 1 1 auto;
-  min-height: 0;
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 12px;
-  overflow: hidden;
+.run-statistics-target-control {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 100%;
 }
 
-.run-statistics-sidebar {
-  min-height: 0;
-  overflow: auto;
-  padding: 14px;
-  border-right: 1px solid rgba(255, 255, 255, 0.08);
-  background: rgba(0, 0, 0, 0.14);
-}
-
-.run-statistics-sidebar-heading,
-.run-statistics-target-group-label,
 .run-statistics-chart-heading,
 .run-statistics-metric-label {
   color: var(--grey-light);
@@ -143,57 +137,77 @@
   text-transform: uppercase;
 }
 
-.run-statistics-navigator,
-.run-statistics-target-group {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.run-statistics-navigator {
-  margin-top: 10px;
-  gap: 12px;
-}
-
-.run-statistics-target-group-label {
-  padding: 5px 6px 2px;
-}
-
-.run-statistics-target {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
+.run-statistics-target-select {
   width: 100%;
-  padding: 8px;
-  border: 1px solid transparent;
-  border-radius: 6px;
-  background: transparent;
-  color: var(--grey-lightest);
-  cursor: pointer;
-  text-align: left;
 }
 
-.run-statistics-target:hover,
-.run-statistics-target:focus-visible {
-  background: rgba(255, 255, 255, 0.06);
+.run-statistics-target-select__control {
+  min-height: 38px;
+  border: 1px solid rgba(255, 255, 255, 0.12) !important;
+  border-radius: 7px !important;
+  background: rgba(0, 0, 0, 0.26) !important;
+  box-shadow: none !important;
 }
 
-.run-statistics-target.active {
-  border-color: rgba(126, 226, 148, 0.3);
-  background: rgba(126, 226, 148, 0.1);
+.run-statistics-target-select__control:hover,
+.run-statistics-target-select__control--is-focused {
+  border-color: rgba(255, 255, 255, 0.24) !important;
 }
 
-.run-statistics-target-label {
+.run-statistics-target-select__single-value,
+.run-statistics-target-select__input-container {
+  color: var(--grey-lightest) !important;
+}
+
+.run-statistics-target-select__indicator,
+.run-statistics-target-select__dropdown-indicator {
+  color: var(--grey-light) !important;
+}
+
+.run-statistics-target-select__indicator-separator {
+  display: none;
+}
+
+.run-statistics-target-select__menu {
+  z-index: 200;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: #1f1f22 !important;
+}
+
+.run-statistics-target-select__menu-portal {
+  z-index: 200;
+}
+
+.run-statistics-target-select__option {
+  background: transparent !important;
+  color: var(--grey-lightest) !important;
+}
+
+.run-statistics-target-select__option--is-focused,
+.run-statistics-target-select__option--is-selected {
+  background: rgba(255, 255, 255, 0.1) !important;
+}
+
+.run-statistics-target-option {
+  min-width: 0;
+}
+
+.run-statistics-target-option-label {
   overflow: hidden;
-  font-size: 14px;
+  font-size: 13px;
   font-weight: 700;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.run-statistics-target-description,
+.run-statistics-target-option-description {
+  margin-top: 2px;
+  color: var(--grey-light);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
 .run-statistics-period-label,
-.run-statistics-run-count,
 .run-statistics-notes,
 .run-statistics-empty-state {
   font-size: 12px;
@@ -201,33 +215,22 @@
 
 .run-statistics-details {
   display: flex;
+  flex: 1 1 auto;
   flex-direction: column;
   gap: 14px;
   min-width: 0;
   min-height: 0;
   overflow: auto;
   padding: 16px;
-}
-
-.run-statistics-details-heading {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 12px;
+  background: rgba(0, 0, 0, 0.08);
 }
 
 .run-statistics-target-title {
   color: var(--grey-lightest);
   font-size: 18px;
   font-weight: 700;
-}
-
-.run-statistics-run-count {
-  flex: 0 0 auto;
-  padding: 3px 8px;
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  border-radius: 999px;
-  color: var(--grey-light);
 }
 
 .run-statistics-metrics {
@@ -242,9 +245,26 @@
   gap: 8px;
 }
 
-.run-statistics-outcomes-help {
+.run-statistics-outcomes-help,
+.run-statistics-statistics-help {
   margin-top: 3px;
   font-size: 12px;
+}
+
+.run-statistics-section {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding-top: 18px;
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.run-statistics-section-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
 }
 
 .run-statistics-outcome-cards {
@@ -264,9 +284,8 @@
 .run-statistics-metric-card {
   display: flex;
   min-width: 0;
-  min-height: 102px;
   flex-direction: column;
-  justify-content: space-between;
+  gap: 10px;
   padding: 12px;
 }
 
@@ -309,15 +328,6 @@
   font-size: 12px;
 }
 
-.run-statistics-metric-delta {
-  font-size: 12px;
-  font-weight: 700;
-}
-
-.run-statistics-metric-delta.faster { color: #7ee294; }
-.run-statistics-metric-delta.slower { color: #f4c95d; }
-.run-statistics-metric-delta.neutral { color: var(--grey-light); }
-
 .run-statistics-chart-card {
   padding: 14px;
 }
@@ -343,8 +353,6 @@
 }
 
 @media (max-width: 900px) {
-  .run-statistics-layout { grid-template-columns: 1fr; overflow: auto; }
-  .run-statistics-sidebar { max-height: 240px; border-right: 0; border-bottom: 1px solid rgba(255, 255, 255, 0.08); }
   .run-statistics-details { overflow: visible; }
   .run-statistics-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .run-statistics-outcome-cards { grid-template-columns: 1fr; }

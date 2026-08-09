@@ -519,8 +519,6 @@ export function createManagedWorkflowRecordingService(options: ManagedWorkflowRe
 
     async getWorkflowRunStatistics(query: WorkflowRunStatisticsQuery): Promise<WorkflowRunStatisticsResponse> {
       await deps.initialize();
-      const periodMs = Date.parse(query.period.to) - Date.parse(query.period.from);
-      const comparisonFrom = new Date(Date.parse(query.period.from) - periodMs).toISOString();
       const target = getManagedStatisticsTargetClause(query.target);
       const rows = await deps.queryRows<RecordingRow>(
         deps.pool,
@@ -531,7 +529,7 @@ export function createManagedWorkflowRecordingService(options: ManagedWorkflowRe
           ${target.clause}
           ORDER BY created_at ASC, recording_id ASC
         `,
-        [comparisonFrom, query.period.to, ...target.parameters],
+        [query.period.from, query.period.to, ...target.parameters],
       );
       return buildWorkflowRunStatistics(rows.map((row) => toStatisticsRow(row, deps.toIsoString)), query);
     },

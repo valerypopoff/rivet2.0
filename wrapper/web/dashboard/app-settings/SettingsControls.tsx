@@ -1,6 +1,8 @@
 import Button, { LoadingButton } from '@atlaskit/button';
 import type { ReactNode } from 'react';
 
+import { SegmentedControl, SegmentedControlButton } from '../SegmentedControl';
+
 export function ActionStatus({
   error,
   pending,
@@ -81,15 +83,33 @@ export function ModeButton({
   onClick: () => void;
 }) {
   return (
-    <button
-      type="button"
-      className={`project-settings-tab app-settings-mode-tab${active ? ' active' : ''}`}
-      aria-pressed={active}
+    <SegmentedControlButton
+      className="app-settings-mode-tab"
+      selected={active}
       disabled={disabled}
       onClick={onClick}
     >
       {children}
-    </button>
+    </SegmentedControlButton>
+  );
+}
+
+export function ModeGroup({
+  children,
+  label,
+  wide = false,
+}: {
+  children: ReactNode;
+  label: string;
+  wide?: boolean;
+}) {
+  return (
+    <SegmentedControl
+      className={`app-settings-mode-tabs${wide ? ' app-settings-wide-mode-tabs' : ''}`}
+      label={label}
+    >
+      {children}
+    </SegmentedControl>
   );
 }
 

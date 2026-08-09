@@ -1,6 +1,6 @@
 import TextField from '@atlaskit/textfield';
 
-import { ModeButton, SettingsActions } from '../SettingsControls';
+import { ModeButton, ModeGroup, SettingsActions } from '../SettingsControls';
 import type { DeploymentStorageSettingsForm } from '../model';
 import type { useDeploymentStorageForm } from '../useDeploymentStorageForm';
 
@@ -17,10 +17,10 @@ export function StorageSettingsTab({ storage }: { storage: ReturnType<typeof use
         <div className="app-settings-field-grid" aria-busy={storage.controlsDisabled}>
           <div className="app-settings-field">
             <span className="app-settings-field-label">Project artifact storage</span>
-            <div className="project-settings-tabs app-settings-mode-tabs app-settings-wide-mode-tabs" role="group" aria-label="Storage backend">
+            <ModeGroup label="Storage backend" wide>
               <ModeButton active={form.storageMode === 'filesystem'} disabled={storage.controlsDisabled} onClick={() => update('storageMode', 'filesystem')}>Local folders</ModeButton>
               <ModeButton active={form.storageMode === 'managed'} disabled={storage.controlsDisabled} onClick={() => update('storageMode', 'managed')}>Object storage</ModeButton>
-            </div>
+            </ModeGroup>
             <span className="app-settings-field-help">
               {form.storageMode === 'filesystem'
                 ? 'Saved projects, recordings, published snapshots, and runtime libraries use the mounted local folders.'
@@ -66,7 +66,7 @@ export function StorageSettingsTab({ storage }: { storage: ReturnType<typeof use
         <div className="app-settings-field-grid" aria-busy={storage.controlsDisabled}>
           <div className="app-settings-field">
             <span className="app-settings-field-label">Metadata database</span>
-            <div className="project-settings-tabs app-settings-mode-tabs app-settings-wide-mode-tabs" role="group" aria-label="Database backend">
+            <ModeGroup label="Database backend" wide>
               <ModeButton active={form.databaseMode === 'local-docker'} disabled={storage.controlsDisabled} onClick={() => {
                 storage.setForm((current) => ({ ...current, databaseMode: 'local-docker', databaseSslMode: 'disable' }));
                 storage.clearFeedback();
@@ -75,7 +75,7 @@ export function StorageSettingsTab({ storage }: { storage: ReturnType<typeof use
                 storage.setForm((current) => ({ ...current, databaseMode: 'managed', databaseSslMode: 'require' }));
                 storage.clearFeedback();
               }}>Managed Postgres</ModeButton>
-            </div>
+            </ModeGroup>
             <span className="app-settings-field-help">
               {form.databaseMode === 'local-docker'
                 ? 'Use the optional Compose Postgres service for local managed-storage rehearsals. It must already be running before object storage mode can apply.'
@@ -96,11 +96,11 @@ export function StorageSettingsTab({ storage }: { storage: ReturnType<typeof use
               </label>
               <div className="app-settings-field">
                 <span className="app-settings-field-label">PostgreSQL SSL</span>
-                <div className="project-settings-tabs app-settings-mode-tabs" role="group" aria-label="PostgreSQL SSL mode">
+                <ModeGroup label="PostgreSQL SSL mode">
                   <ModeButton active={form.databaseSslMode === 'require'} disabled={storage.controlsDisabled} onClick={() => update('databaseSslMode', 'require')}>Require</ModeButton>
                   <ModeButton active={form.databaseSslMode === 'verify-full'} disabled={storage.controlsDisabled} onClick={() => update('databaseSslMode', 'verify-full')}>Verify full</ModeButton>
                   <ModeButton active={form.databaseSslMode === 'disable'} disabled={storage.controlsDisabled} onClick={() => update('databaseSslMode', 'disable')}>Disable</ModeButton>
-                </div>
+                </ModeGroup>
               </div>
             </>
           ) : null}

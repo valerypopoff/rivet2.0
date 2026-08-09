@@ -2,7 +2,7 @@ import TextField from '@atlaskit/textfield';
 
 import type { HostedRouteConfig } from '../../types';
 import { defaultSessionTtlHours, type WebAppAuthSettingsForm } from '../model';
-import { BooleanSetting, ModeButton, SettingsActions } from '../SettingsControls';
+import { BooleanSetting, ModeButton, ModeGroup, SettingsActions } from '../SettingsControls';
 import type { useWebAppAuthForm } from '../useWebAppAuthForm';
 
 export function OAuthSettingsTab({ auth, routeConfig }: {
@@ -27,10 +27,10 @@ export function OAuthSettingsTab({ auth, routeConfig }: {
           </div>
           <div className="app-settings-field">
             <span className="app-settings-field-label">Provider type</span>
-            <div className="project-settings-tabs app-settings-mode-tabs" role="group" aria-label="OAuth provider">
+            <ModeGroup label="OAuth provider">
               <ModeButton active={form.provider === 'external'} disabled={auth.controlsDisabled} onClick={() => update('provider', 'external')}>External provider</ModeButton>
               <ModeButton active={form.provider === 'dummy'} disabled={auth.controlsDisabled} onClick={() => update('provider', 'dummy')}>Local dummy</ModeButton>
-            </div>
+            </ModeGroup>
             <span className="app-settings-field-help">{form.provider === 'dummy' ? 'Use a local test sign-in page instead of leaving localhost for a real provider.' : 'Use a real OAuth provider for public or shared deployments.'}</span>
           </div>
 
@@ -74,10 +74,10 @@ export function OAuthSettingsTab({ auth, routeConfig }: {
               </label>
               <div className="app-settings-field">
                 <span className="app-settings-field-label">Token request credentials</span>
-                <div className="project-settings-tabs app-settings-mode-tabs" role="group" aria-label="Token request credentials">
+                <ModeGroup label="Token request credentials">
                   <ModeButton active={form.clientAuthMethod === 'body'} disabled={auth.controlsDisabled} onClick={() => update('clientAuthMethod', 'body')}>Request body</ModeButton>
                   <ModeButton active={form.clientAuthMethod === 'basic'} disabled={auth.controlsDisabled} onClick={() => update('clientAuthMethod', 'basic')}>HTTP Basic</ModeButton>
-                </div>
+                </ModeGroup>
               </div>
             </>
           )}

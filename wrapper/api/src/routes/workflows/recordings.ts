@@ -522,10 +522,8 @@ export async function getWorkflowRunStatistics(
   query: WorkflowRunStatisticsQuery,
 ): Promise<WorkflowRunStatisticsResponse> {
   await ensureWorkflowRecordingStorage(root);
-  const periodMs = Date.parse(query.period.to) - Date.parse(query.period.from);
-  const comparisonFrom = new Date(Date.parse(query.period.from) - periodMs).toISOString();
   return buildWorkflowRunStatistics(
-    await listWorkflowRecordingStatisticsRows(comparisonFrom, query.period.to, query.target),
+    await listWorkflowRecordingStatisticsRows(query.period.from, query.period.to, query.target),
     query,
   );
 }

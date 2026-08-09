@@ -1,5 +1,6 @@
 import Checkbox from '@atlaskit/checkbox';
 import ModalDialog, { ModalBody, ModalTransition } from '@atlaskit/modal-dialog';
+import Select from '@atlaskit/select';
 import {
   CartesianGrid,
   Legend,
@@ -20,6 +21,7 @@ import type {
   WorkflowRunStatisticsSurface,
   WorkflowRunStatisticsTargetSummary,
 } from './types';
+import { SegmentedControl, SegmentedControlButton } from './SegmentedControl';
 import { getWorkflowRunStatisticsTargetKey } from './types';
 import { fetchWorkflowRunStatistics, fetchWorkflowRunStatisticsCatalog } from './workflowApi';
 import './RunStatisticsModal.css';
@@ -45,6 +47,10 @@ const timestampFormatter = new Intl.DateTimeFormat(undefined, {
   hour: '2-digit',
   minute: '2-digit',
 });
+
+// Green, yellow, and red are reserved for run outcomes in this modal.
+const CHART_MEDIAN_COLOR = '#5aa9ff';
+const CHART_P95_COLOR = '#c58aff';
 
 function getPeriod(preset: Exclude<PeriodPreset, 'custom'>): WorkflowRunStatisticsPeriod {
   const to = new Date();
@@ -95,16 +101,35 @@ function getTargetDescription(summary: WorkflowRunStatisticsTargetSummary): stri
   return `${summary.projectName} - ${summary.totalRuns.toLocaleString()} recorded ${summary.totalRuns === 1 ? 'run' : 'runs'}`;
 }
 
-function getDeltaLabel(value: number | null): { text: string; tone: 'faster' | 'slower' | 'neutral' } {
-  if (value == null || value === 0) return { text: 'No change', tone: 'neutral' };
-  if (value < 0) return { text: `${formatDuration(Math.abs(value))} faster`, tone: 'faster' };
-  return { text: `${formatDuration(value)} slower`, tone: 'slower' };
-}
-
 function hasValidPeriod(period: WorkflowRunStatisticsPeriod): boolean {
   const from = Date.parse(period.from);
   const to = Date.parse(period.to);
   return Number.isFinite(from) && Number.isFinite(to) && from < to;
+}
+
+function getCatalogQueryKey(
+  surface: WorkflowRunStatisticsSurface,
+  period: WorkflowRunStatisticsPeriod,
+  runKind: RunKind,
+): string {
+  return JSON.stringify([surface, period.from, period.to, runKind]);
+}
+
+function getStatisticsQueryKey(
+  target: WorkflowRunStatisticsTargetSummary['target'],
+  period: WorkflowRunStatisticsPeriod,
+  runKind: RunKind,
+  includeFailed: boolean,
+  includeWarnings: boolean,
+): string {
+  return JSON.stringify([
+    getWorkflowRunStatisticsTargetKey(target),
+    period.from,
+    period.to,
+    runKind,
+    includeFailed,
+    includeWarnings,
+  ]);
 }
 
 function updateDateTimePeriod(
@@ -118,23 +143,11 @@ function updateDateTimePeriod(
     : { ...period, [key]: value };
 }
 
-function MetricCard({
-  label,
-  value,
-  delta,
-}: {
-  label: string;
-  value: number | null;
-  delta?: number | null;
-}) {
-  const deltaLabel = getDeltaLabel(delta ?? null);
+function MetricCard({ label, value }: { label: string; value: number | null }) {
   return (
     <div className="run-statistics-metric-card">
       <div className="run-statistics-metric-label">{label}</div>
       <div className="run-statistics-metric-value">{formatDuration(value)}</div>
-      {delta !== undefined ? (
-        <div className={`run-statistics-metric-delta ${deltaLabel.tone}`}>{deltaLabel.text}</div>
-      ) : null}
     </div>
   );
 }
@@ -171,7 +184,13 @@ function OutcomeCard({
   );
 }
 
-function StatisticsNavigator({
+type StatisticsTargetOption = {
+  description: string;
+  label: string;
+  value: string;
+};
+
+function StatisticsTargetSelect({
   surface,
   targets,
   selectedTargetKey,
@@ -182,46 +201,36 @@ function StatisticsNavigator({
   selectedTargetKey: string;
   onSelect: (key: string) => void;
 }) {
-  const groups = useMemo(() => {
-    if (surface === 'endpoint') {
-      return [{ key: 'endpoints', label: null, targets }];
-    }
-    const grouped = new Map<string, { label: string; targets: WorkflowRunStatisticsTargetSummary[] }>();
-    for (const target of targets) {
-      const uiGraphId = 'uiGraphId' in target.target ? target.target.uiGraphId : 'legacy';
-      const key = JSON.stringify([target.target.workflowId, uiGraphId]);
-      const existing = grouped.get(key) ?? {
-        label: target.isLegacy ? target.projectName : `${target.projectName} - ${target.uiGraphName || 'Web app'}`,
-        targets: [],
-      };
-      existing.targets.push(target);
-      grouped.set(key, existing);
-    }
-    return [...grouped.entries()].map(([key, group]) => ({ key, ...group }));
-  }, [surface, targets]);
+  const options = useMemo<StatisticsTargetOption[]>(
+    () => targets.map((summary) => ({
+      description: getTargetDescription(summary),
+      label: formatTargetLabel(summary),
+      value: getWorkflowRunStatisticsTargetKey(summary.target),
+    })),
+    [targets],
+  );
+  const label = surface === 'endpoint' ? 'Workflow endpoint' : 'Web app action';
 
   return (
-    <nav className="run-statistics-navigator" aria-label={surface === 'endpoint' ? 'Workflow endpoints' : 'Web app actions'}>
-      {groups.map((group) => (
-        <div className="run-statistics-target-group" key={group.key}>
-          {group.label ? <div className="run-statistics-target-group-label">{group.label}</div> : null}
-          {group.targets.map((summary) => {
-            const targetKey = getWorkflowRunStatisticsTargetKey(summary.target);
-            return (
-              <button
-                type="button"
-                className={`run-statistics-target${selectedTargetKey === targetKey ? ' active' : ''}`}
-                key={targetKey}
-                onClick={() => onSelect(targetKey)}
-              >
-                <span className="run-statistics-target-label">{formatTargetLabel(summary)}</span>
-                <span className="run-statistics-target-description">{getTargetDescription(summary)}</span>
-              </button>
-            );
-          })}
+    <Select
+      inputId="run-statistics-target-select"
+      className="run-statistics-target-select"
+      classNamePrefix="run-statistics-target-select"
+      options={options}
+      value={options.find((option) => option.value === selectedTargetKey) ?? null}
+      onChange={(option: StatisticsTargetOption | null) => onSelect(option?.value ?? '')}
+      formatOptionLabel={(option: StatisticsTargetOption, { context }: { context: 'menu' | 'value' }) => (
+        <div className="run-statistics-target-option">
+          <div className="run-statistics-target-option-label">{option.label}</div>
+          {context === 'menu' ? <div className="run-statistics-target-option-description">{option.description}</div> : null}
         </div>
-      ))}
-    </nav>
+      )}
+      isSearchable={options.length > 8}
+      menuPlacement="auto"
+      menuPortalTarget={typeof document === 'undefined' ? undefined : document.body}
+      menuPosition="fixed"
+      aria-label={label}
+    />
   );
 }
 
@@ -235,26 +244,45 @@ export const RunStatisticsModal: FC<RunStatisticsModalProps> = ({ isOpen, onClos
   const [catalog, setCatalog] = useState<WorkflowRunStatisticsCatalogResponse | null>(null);
   const [catalogLoading, setCatalogLoading] = useState(false);
   const [catalogError, setCatalogError] = useState<string | null>(null);
+  const [catalogResultKey, setCatalogResultKey] = useState<string | null>(null);
   const [selectedTargetKey, setSelectedTargetKey] = useState('');
   const [statistics, setStatistics] = useState<WorkflowRunStatisticsResponse | null>(null);
   const [statisticsLoading, setStatisticsLoading] = useState(false);
   const [statisticsError, setStatisticsError] = useState<string | null>(null);
+  const [statisticsResultKey, setStatisticsResultKey] = useState<string | null>(null);
 
-  const selectedTarget = useMemo(
-    () => catalog?.targets.find((candidate) => getWorkflowRunStatisticsTargetKey(candidate.target) === selectedTargetKey) ?? null,
-    [catalog, selectedTargetKey],
-  );
   const validPeriod = hasValidPeriod(period);
+  const catalogQueryKey = getCatalogQueryKey(surface, period, runKind);
+  const catalogReady = Boolean(catalog && !catalogLoading && validPeriod && catalogResultKey === catalogQueryKey);
+  const selectedTarget = useMemo(
+    () => (
+      catalogReady
+        ? catalog?.targets.find((candidate) => getWorkflowRunStatisticsTargetKey(candidate.target) === selectedTargetKey) ?? null
+        : null
+    ),
+    [catalog, catalogReady, selectedTargetKey],
+  );
+  const statisticsQueryKey = selectedTarget
+    ? getStatisticsQueryKey(selectedTarget.target, period, runKind, includeFailed, includeWarnings)
+    : null;
+  const statisticsReady = Boolean(
+    statistics &&
+    !statisticsLoading &&
+    statisticsQueryKey &&
+    statisticsResultKey === statisticsQueryKey,
+  );
 
   useEffect(() => {
     if (!isOpen || !validPeriod) return;
     const controller = new AbortController();
+    const requestKey = catalogQueryKey;
     setCatalogLoading(true);
     setCatalogError(null);
     void fetchWorkflowRunStatisticsCatalog(surface, period, runKind, { signal: controller.signal })
       .then((nextCatalog) => {
         if (controller.signal.aborted) return;
         setCatalog(nextCatalog);
+        setCatalogResultKey(requestKey);
         setSelectedTargetKey((current) => (
           nextCatalog.targets.some((target) => getWorkflowRunStatisticsTargetKey(target.target) === current)
             ? current
@@ -264,6 +292,7 @@ export const RunStatisticsModal: FC<RunStatisticsModalProps> = ({ isOpen, onClos
       .catch((error: unknown) => {
         if (controller.signal.aborted) return;
         setCatalog(null);
+        setCatalogResultKey(requestKey);
         setSelectedTargetKey('');
         setCatalogError(error instanceof Error ? error.message : 'Unable to load run statistics targets.');
       })
@@ -271,14 +300,16 @@ export const RunStatisticsModal: FC<RunStatisticsModalProps> = ({ isOpen, onClos
         if (!controller.signal.aborted) setCatalogLoading(false);
       });
     return () => controller.abort();
-  }, [isOpen, period, runKind, surface, validPeriod]);
+  }, [catalogQueryKey, isOpen, period, runKind, surface, validPeriod]);
 
   useEffect(() => {
     if (!isOpen || !selectedTarget || !validPeriod) {
       setStatistics(null);
+      setStatisticsResultKey(null);
       return;
     }
     const controller = new AbortController();
+    const requestKey = statisticsQueryKey;
     setStatisticsLoading(true);
     setStatisticsError(null);
     void fetchWorkflowRunStatistics({
@@ -289,18 +320,21 @@ export const RunStatisticsModal: FC<RunStatisticsModalProps> = ({ isOpen, onClos
       includeWarnings,
     }, { signal: controller.signal })
       .then((nextStatistics) => {
-        if (!controller.signal.aborted) setStatistics(nextStatistics);
+        if (controller.signal.aborted) return;
+        setStatistics(nextStatistics);
+        setStatisticsResultKey(requestKey);
       })
       .catch((error: unknown) => {
         if (controller.signal.aborted) return;
         setStatistics(null);
+        setStatisticsResultKey(requestKey);
         setStatisticsError(error instanceof Error ? error.message : 'Unable to load run statistics.');
       })
       .finally(() => {
         if (!controller.signal.aborted) setStatisticsLoading(false);
       });
     return () => controller.abort();
-  }, [includeFailed, includeWarnings, isOpen, period, runKind, selectedTarget, validPeriod]);
+  }, [isOpen, selectedTarget, statisticsQueryKey, validPeriod]);
 
   if (!isOpen) return null;
 
@@ -319,54 +353,58 @@ export const RunStatisticsModal: FC<RunStatisticsModalProps> = ({ isOpen, onClos
         <ModalBody>
           <div className="project-settings-modal-shell run-statistics-shell">
             <div className="project-settings-modal-header-row run-statistics-header-row">
-              <div className="project-settings-modal-heading run-statistics-heading">
-                <div className="project-settings-modal-title run-statistics-title">Run statistics</div>
-                <div className="run-statistics-help">Compare processor execution time across retained run recordings.</div>
+              <div className="run-statistics-header-content">
+                <div className="project-settings-modal-heading run-statistics-heading">
+                  <div className="project-settings-modal-title run-statistics-title">Run statistics</div>
+                  <div className="run-statistics-help">Compare processor execution time across retained run recordings.</div>
+                </div>
+                <SegmentedControl className="run-statistics-surface-switcher" label="Run type">
+                  <SegmentedControlButton selected={surface === 'endpoint'} onClick={() => setSurface('endpoint')}>Endpoints</SegmentedControlButton>
+                  <SegmentedControlButton selected={surface === 'web_app'} onClick={() => setSurface('web_app')}>Web apps</SegmentedControlButton>
+                </SegmentedControl>
               </div>
               <button type="button" className="project-settings-close-button" onClick={onClose} aria-label="Close run statistics">&times;</button>
             </div>
 
             <div className="project-settings-modal-content run-statistics-content">
+              <div className="run-statistics-target-control">
+                <div className="run-recordings-field-label">{surface === 'endpoint' ? 'Workflow endpoint' : 'Web app action'}</div>
+                {catalogLoading ? <div className="run-statistics-empty-state">Loading available runs...</div> : null}
+                {catalogReady && catalog?.targets.length === 0 ? <div className="run-statistics-empty-state">No recorded runs in this period.</div> : null}
+                {catalogReady && catalog ? (
+                  <StatisticsTargetSelect surface={surface} targets={catalog.targets} selectedTargetKey={selectedTargetKey} onSelect={setSelectedTargetKey} />
+                ) : null}
+                {catalogError && catalogResultKey === catalogQueryKey ? <div className="project-settings-error">{catalogError}</div> : null}
+              </div>
+
               <div className="run-statistics-controls">
                 <div className="run-statistics-control-group">
-                  <div className="run-recordings-field-label">Runs</div>
-                  <div className="run-recordings-segmented">
-                    <button type="button" className={`run-recordings-segmented-button${surface === 'endpoint' ? ' active' : ''}`} onClick={() => setSurface('endpoint')}>Endpoints</button>
-                    <button type="button" className={`run-recordings-segmented-button${surface === 'web_app' ? ' active' : ''}`} onClick={() => setSurface('web_app')}>Web apps</button>
-                  </div>
-                </div>
-                <div className="run-statistics-control-group">
                   <div className="run-recordings-field-label">Period</div>
-                  <div className="run-recordings-segmented run-statistics-period-options">
+                  <SegmentedControl className="run-statistics-period-options" label="Period">
                     {periodOptions.map((option) => (
-                      <button
-                        type="button"
+                      <SegmentedControlButton
                         key={option.value}
-                        className={`run-recordings-segmented-button${periodPreset === option.value ? ' active' : ''}`}
+                        selected={periodPreset === option.value}
                         onClick={() => {
                           setPeriodPreset(option.value);
                           setPeriod(getPeriod(option.value));
                         }}
                       >
                         {option.label}
-                      </button>
+                      </SegmentedControlButton>
                     ))}
-                    <button type="button" className={`run-recordings-segmented-button${periodPreset === 'custom' ? ' active' : ''}`} onClick={() => setPeriodPreset('custom')}>Custom</button>
-                  </div>
+                    <SegmentedControlButton selected={periodPreset === 'custom'} onClick={() => setPeriodPreset('custom')}>Custom</SegmentedControlButton>
+                  </SegmentedControl>
                 </div>
                 <div className="run-statistics-control-group">
                   <div className="run-recordings-field-label">Version</div>
-                  <div className="run-recordings-segmented">
+                  <SegmentedControl label="Version">
                     {(['published', 'latest', 'both'] as RunKind[]).map((value) => (
-                      <button type="button" key={value} className={`run-recordings-segmented-button${runKind === value ? ' active' : ''}`} onClick={() => setRunKind(value)}>
+                      <SegmentedControlButton key={value} selected={runKind === value} onClick={() => setRunKind(value)}>
                         {value === 'both' ? 'Both' : value[0].toUpperCase() + value.slice(1)}
-                      </button>
+                      </SegmentedControlButton>
                     ))}
-                  </div>
-                </div>
-                <div className="run-statistics-status-options">
-                  <Checkbox label="Include failed runs" isChecked={includeFailed} onChange={(event) => setIncludeFailed(event.currentTarget.checked)} />
-                  <Checkbox label="Include runs with warnings" isChecked={includeWarnings} onChange={(event) => setIncludeWarnings(event.currentTarget.checked)} />
+                  </SegmentedControl>
                 </div>
               </div>
 
@@ -384,44 +422,22 @@ export const RunStatisticsModal: FC<RunStatisticsModalProps> = ({ isOpen, onClos
               ) : null}
 
               {!validPeriod ? <div className="project-settings-error">The period end must be after its start.</div> : null}
-              {catalogError ? <div className="project-settings-error">{catalogError}</div> : null}
-
-              <div className="run-statistics-layout">
-                <aside className="run-statistics-sidebar">
-                  <div className="run-statistics-sidebar-heading">{surface === 'endpoint' ? 'Workflow endpoints' : 'Web app actions'}</div>
-                  {catalogLoading ? <div className="run-statistics-empty-state">Loading available runs...</div> : null}
-                  {!catalogLoading && catalog?.targets.length === 0 ? <div className="run-statistics-empty-state">No recorded runs in this period.</div> : null}
-                  {!catalogLoading && catalog ? (
-                    <StatisticsNavigator surface={surface} targets={catalog.targets} selectedTargetKey={selectedTargetKey} onSelect={setSelectedTargetKey} />
-                  ) : null}
-                </aside>
-
-                <section className="run-statistics-details" aria-live="polite">
-                  {!selectedTarget && !catalogLoading ? <div className="run-statistics-empty-state">Choose a target with recorded runs.</div> : null}
-                  {selectedTarget ? (
-                    <>
-                      <div className="run-statistics-details-heading">
-                        <div>
-                          <div className="run-statistics-target-title">{selectedTitle}</div>
-                          <div className="run-statistics-period-label">{selectedPeriodLabel}</div>
-                        </div>
-                        {statistics ? <div className="run-statistics-run-count">{statistics.current.runCount.toLocaleString()} included runs</div> : null}
-                      </div>
-                      {statisticsError ? <div className="project-settings-error">{statisticsError}</div> : null}
-                      {statisticsLoading ? <div className="run-statistics-empty-state">Calculating statistics...</div> : null}
-                      {statistics && !statisticsLoading ? (
-                        <>
-                          <div className="run-statistics-metrics">
-                            <MetricCard label="Median" value={statistics.current.medianDurationMs} delta={statistics.medianDelta.absoluteMs} />
-                            <MetricCard label="P95" value={statistics.current.p95DurationMs} delta={statistics.p95Delta.absoluteMs} />
-                            <MetricCard label="Average" value={statistics.current.averageDurationMs} />
-                            <MetricCard label="Fastest" value={statistics.current.minDurationMs} />
-                            <MetricCard label="Slowest" value={statistics.current.maxDurationMs} />
-                          </div>
+              <section className="run-statistics-details" aria-live="polite">
+                {catalogReady && !selectedTarget ? <div className="run-statistics-empty-state">Choose a target with recorded runs.</div> : null}
+                {selectedTarget ? (
+                  <>
+                    <div>
+                      <div className="run-statistics-target-title">{selectedTitle}</div>
+                      <div className="run-statistics-period-label">{selectedPeriodLabel}</div>
+                    </div>
+                    {statisticsError && statisticsResultKey === statisticsQueryKey ? <div className="project-settings-error">{statisticsError}</div> : null}
+                    {statisticsLoading ? <div className="run-statistics-empty-state">Calculating statistics...</div> : null}
+                    {statisticsReady ? (
+                      <>
                           <div className="run-statistics-outcomes" role="region" aria-label="Run outcomes">
                             <div>
                               <div className="run-statistics-chart-heading">Run outcomes</div>
-                              <div className="run-statistics-outcomes-help">All matching runs, regardless of the duration filters above.</div>
+                              <div className="run-statistics-outcomes-help">All matching runs in the selected period and version.</div>
                             </div>
                             <div className="run-statistics-outcome-cards">
                               <OutcomeCard label="Succeeded" tone="succeeded" count={statistics.currentStatusCounts.succeeded} total={currentStatusTotal} />
@@ -429,36 +445,54 @@ export const RunStatisticsModal: FC<RunStatisticsModalProps> = ({ isOpen, onClos
                               <OutcomeCard label="Warnings" tone="warning" count={statistics.currentStatusCounts.suspicious} total={currentStatusTotal} />
                             </div>
                           </div>
-                          {statistics.current.runCount === 0 ? <div className="run-statistics-empty-state">No runs match these filters.</div> : null}
-                          {statistics.current.runCount > 0 ? (
-                            <div className="run-statistics-chart-card">
-                              <div className="run-statistics-chart-heading">Duration over time</div>
-                              <div className="run-statistics-chart">
-                                <ResponsiveContainer width="100%" height="100%">
-                                  <LineChart data={statistics.buckets.map((bucket) => ({ ...bucket, label: timestampFormatter.format(new Date(bucket.from)) }))} margin={{ top: 8, right: 12, left: 0, bottom: 0 }}>
-                                    <CartesianGrid stroke="rgba(255, 255, 255, 0.08)" vertical={false} />
-                                    <XAxis dataKey="label" minTickGap={36} tick={{ fill: 'var(--grey-light)', fontSize: 11 }} tickLine={false} axisLine={false} />
-                                    <YAxis tickFormatter={formatAxisDuration} tick={{ fill: 'var(--grey-light)', fontSize: 11 }} tickLine={false} axisLine={false} width={52} />
-                                    <Tooltip formatter={(value: number | undefined) => formatDuration(value ?? null)} contentStyle={{ background: '#1f2228', border: '1px solid rgba(255,255,255,0.12)', borderRadius: 6 }} labelStyle={{ color: '#dfe1e6' }} />
-                                    <Legend wrapperStyle={{ fontSize: 12 }} />
-                                    <Line type="monotone" dataKey="medianDurationMs" name="Median" stroke="#7ee294" strokeWidth={2} dot={false} connectNulls />
-                                    <Line type="monotone" dataKey="p95DurationMs" name="P95" stroke="#f4c95d" strokeWidth={2} dot={false} connectNulls />
-                                  </LineChart>
-                                </ResponsiveContainer>
+                          <section className="run-statistics-section" role="region" aria-label="Timing statistics">
+                            <div className="run-statistics-section-heading">
+                              <div>
+                                <div className="run-statistics-chart-heading">Statistics</div>
+                                <div className="run-statistics-statistics-help">Successful runs are included by default. Add other outcomes to the timing analysis when useful.</div>
+                              </div>
+                              <div className="run-statistics-status-options">
+                                <Checkbox label="Include failed runs" isChecked={includeFailed} onChange={(event) => setIncludeFailed(event.currentTarget.checked)} />
+                                <Checkbox label="Include runs with warnings" isChecked={includeWarnings} onChange={(event) => setIncludeWarnings(event.currentTarget.checked)} />
                               </div>
                             </div>
-                          ) : null}
-                          <div className="run-statistics-notes">
-                            <span>Previous equal period: {statistics.previous.runCount.toLocaleString()} included runs.</span>
-                            {excludedCurrent > 0 ? <span>{excludedCurrent.toLocaleString()} failed or warning {excludedCurrent === 1 ? 'run is' : 'runs are'} excluded.</span> : null}
-                            <span>Times measure processor execution, not network or recording persistence.</span>
-                          </div>
-                        </>
-                      ) : null}
-                    </>
-                  ) : null}
-                </section>
-              </div>
+                            <div className="run-statistics-metrics">
+                              <MetricCard label="Median" value={statistics.current.medianDurationMs} />
+                              <MetricCard label="P95" value={statistics.current.p95DurationMs} />
+                              <MetricCard label="Average" value={statistics.current.averageDurationMs} />
+                              <MetricCard label="Fastest" value={statistics.current.minDurationMs} />
+                              <MetricCard label="Slowest" value={statistics.current.maxDurationMs} />
+                            </div>
+                            {statistics.current.runCount === 0 ? <div className="run-statistics-empty-state">No runs match these statistics filters.</div> : null}
+                            {statistics.current.runCount > 0 ? (
+                              <div className="run-statistics-chart-card">
+                                <div className="run-statistics-chart-heading">Duration over time</div>
+                                <div className="run-statistics-chart">
+                                  <ResponsiveContainer width="100%" height="100%">
+                                    <LineChart data={statistics.buckets.map((bucket) => ({ ...bucket, label: timestampFormatter.format(new Date(bucket.from)) }))} margin={{ top: 8, right: 12, left: 0, bottom: 0 }}>
+                                      <CartesianGrid stroke="rgba(255, 255, 255, 0.08)" vertical={false} />
+                                      <XAxis dataKey="label" minTickGap={36} tick={{ fill: 'var(--grey-light)', fontSize: 11 }} tickLine={false} axisLine={false} />
+                                      <YAxis tickFormatter={formatAxisDuration} tick={{ fill: 'var(--grey-light)', fontSize: 11 }} tickLine={false} axisLine={false} width={52} />
+                                      <Tooltip formatter={(value: number | undefined) => formatDuration(value ?? null)} contentStyle={{ background: '#1f2228', border: '1px solid rgba(255,255,255,0.12)', borderRadius: 6 }} labelStyle={{ color: '#dfe1e6' }} />
+                                      <Legend wrapperStyle={{ fontSize: 12 }} />
+                                      <Line type="monotone" dataKey="medianDurationMs" name="Median" stroke={CHART_MEDIAN_COLOR} strokeWidth={2} dot={false} connectNulls />
+                                      <Line type="monotone" dataKey="p95DurationMs" name="P95" stroke={CHART_P95_COLOR} strokeWidth={2} dot={false} connectNulls />
+                                    </LineChart>
+                                  </ResponsiveContainer>
+                                </div>
+                              </div>
+                            ) : null}
+                            <div className="run-statistics-notes">
+                              <span>{statistics.current.runCount.toLocaleString()} included {statistics.current.runCount === 1 ? 'run' : 'runs'}.</span>
+                              {excludedCurrent > 0 ? <span>{excludedCurrent.toLocaleString()} failed or warning {excludedCurrent === 1 ? 'run is' : 'runs are'} excluded.</span> : null}
+                              <span>Times measure processor execution, not network or recording persistence.</span>
+                            </div>
+                          </section>
+                      </>
+                    ) : null}
+                  </>
+                ) : null}
+              </section>
             </div>
           </div>
         </ModalBody>

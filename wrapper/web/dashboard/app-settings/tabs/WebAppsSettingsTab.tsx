@@ -1,6 +1,6 @@
 import TextField from '@atlaskit/textfield';
 
-import { ModeButton, SettingsActions } from '../SettingsControls';
+import { ModeButton, ModeGroup, SettingsActions } from '../SettingsControls';
 import type { usePublicRoutesForm } from '../usePublicRoutesForm';
 import type { useRuntimeLimitsForm } from '../useRuntimeLimitsForm';
 import type { useWebAppAuthForm } from '../useWebAppAuthForm';
@@ -70,7 +70,7 @@ export function WebAppsSettingsTab({
         <div className="app-settings-field-grid" aria-busy={auth.controlsDisabled}>
           <div className="app-settings-field">
             <span className="app-settings-field-label">How visitors access web apps</span>
-            <div className="project-settings-tabs app-settings-mode-tabs app-settings-wide-mode-tabs" role="group" aria-label="Web app auth mode">
+            <ModeGroup label="Web app auth mode" wide>
               <ModeButton active={auth.form.mode === 'ui-gate'} disabled={auth.controlsDisabled} onClick={() => {
                 auth.setForm((form) => ({ ...form, mode: 'ui-gate' })); auth.clearFeedback();
               }}>Key</ModeButton>
@@ -80,7 +80,7 @@ export function WebAppsSettingsTab({
               <ModeButton active={auth.form.mode === 'none'} disabled={auth.controlsDisabled} onClick={() => {
                 auth.setForm((form) => ({ ...form, mode: 'none' })); auth.clearFeedback();
               }}>No gate</ModeButton>
-            </div>
+            </ModeGroup>
             <span className="app-settings-field-help">{authHelp}</span>
           </div>
         </div>

@@ -135,16 +135,10 @@ function collectRivetDependencyNames() {
 }
 
 function hasExpectedRivetNodeModulesInstall() {
-  const dependencyRoots = [
-    'rivet/node_modules',
-    'wrapper/api/node_modules',
-    'wrapper/web/node_modules',
-  ];
-
+  // Vite resolves imports in vendored Rivet source from rivet/node_modules.
+  // Wrapper package installs cannot satisfy those source imports reliably.
   return collectRivetDependencyNames().every((dependencyName) =>
-    dependencyRoots.some((dependencyRoot) =>
-      exists(path.join(dependencyRoot, packageNameToNodeModulesRelPath(dependencyName))),
-    ),
+    exists(path.join('rivet/node_modules', packageNameToNodeModulesRelPath(dependencyName))),
   );
 }
 
