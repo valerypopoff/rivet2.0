@@ -206,6 +206,35 @@ export const homepageContent = {
       to: 'https://github.com/valerypopoff/Rivet-Studio-Server/tree/develop-rivet2',
     },
   },
+  boundaries: {
+    eyebrow: 'Know what Rivet is built for',
+    title: 'Rivet is not Zapier for nontechnical users.',
+    description:
+      'Rivet 2 is a professional AI workflow IDE for developers. If your main need is choosing ready-made Google Drive, CRM, email, and other SaaS actions from a large connector catalog, an integration-automation product will fit better.',
+    limitations: [
+      {
+        title: 'Not a no-code connector catalog',
+        description:
+          'Rivet does not aim to ship a dedicated node for every popular internet service. Its scope is AI systems and the general workflow primitives needed to build them.',
+      },
+      {
+        title: 'Built for technical teams',
+        description:
+          'The workflow author is expected to understand HTTP APIs, authentication, JSON data, and, when the visual primitives stop being useful, JavaScript.',
+      },
+      {
+        title: 'Bring ordinary integrations yourself',
+        description:
+          'Call the service API with HTTP Request or Code nodes, or package the integration as your own reusable node. Rivet keeps that contract visible instead of pretending the API is not there.',
+      },
+    ],
+    fit: {
+      eyebrow: 'Where Rivet does fit',
+      title: 'Use Rivet when AI behavior is the hard part.',
+      description:
+        'Rivet concentrates its prebuilt surface on LLM providers, prompts, tools, knowledge and retrieval, structured data, testing, fallbacks, and execution inspection. Ordinary SaaS connectivity remains a developer-owned boundary.',
+    },
+  },
   closing: {
     eyebrow: 'Build the workflow you actually want to maintain',
     title: 'Free to use. Open to inspect. Ready to grow with the project.',

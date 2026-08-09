@@ -74,6 +74,7 @@ function SectionHeading({
 }) {
   return (
     <div className={align === 'center' ? styles.sectionHeadingCentered : styles.sectionHeading}>
+      <span className={styles.headingGlow} aria-hidden="true" />
       <p className={styles.eyebrow}>{eyebrow}</p>
       <h2>{title}</h2>
       {description && <p className={styles.sectionDescription}>{description}</p>}
@@ -296,7 +297,7 @@ function RivetDemoWindow({
             src={url}
             title={`${demo.title} — interactive Rivet 2 editor`}
             loading="eager"
-            sandbox="allow-same-origin allow-scripts"
+            sandbox="allow-same-origin allow-scripts allow-popups"
             onLoad={requestDemoStatus}
           />
           {!ready && !error ? (
@@ -528,10 +529,83 @@ export default function Home() {
         <meta property="og:description" content={content.meta.description} />
       </Head>
       <main className={styles.landing}>
+        <svg className={styles.landingAtmosphereFilters} aria-hidden="true" focusable="false">
+          <defs>
+            <filter id="landing-cloud-hero" x="-30%" y="-40%" width="160%" height="180%">
+              <feTurbulence
+                type="fractalNoise"
+                baseFrequency="0.009 0.014"
+                numOctaves="4"
+                seed="17"
+                result="cloudNoise"
+              />
+              <feDisplacementMap
+                in="SourceGraphic"
+                in2="cloudNoise"
+                scale="118"
+                xChannelSelector="R"
+                yChannelSelector="B"
+                result="displacedCloud"
+              />
+              <feColorMatrix in="cloudNoise" type="luminanceToAlpha" result="cloudOpacity" />
+              <feComponentTransfer in="cloudOpacity" result="shapedCloudOpacity">
+                <feFuncA type="table" tableValues="0.28 0.42 0.6 0.78 0.94" />
+              </feComponentTransfer>
+              <feComposite in="displacedCloud" in2="shapedCloudOpacity" operator="in" result="texturedCloud" />
+              <feGaussianBlur in="texturedCloud" stdDeviation="36" />
+            </filter>
+            <filter id="landing-cloud-closing" x="-30%" y="-40%" width="160%" height="180%">
+              <feTurbulence
+                type="fractalNoise"
+                baseFrequency="0.012 0.008"
+                numOctaves="4"
+                seed="31"
+                result="cloudNoise"
+              />
+              <feDisplacementMap
+                in="SourceGraphic"
+                in2="cloudNoise"
+                scale="94"
+                xChannelSelector="G"
+                yChannelSelector="R"
+                result="displacedCloud"
+              />
+              <feColorMatrix in="cloudNoise" type="luminanceToAlpha" result="cloudOpacity" />
+              <feComponentTransfer in="cloudOpacity" result="shapedCloudOpacity">
+                <feFuncA type="table" tableValues="0.3 0.46 0.63 0.8 0.95" />
+              </feComponentTransfer>
+              <feComposite in="displacedCloud" in2="shapedCloudOpacity" operator="in" result="texturedCloud" />
+              <feGaussianBlur in="texturedCloud" stdDeviation="32" />
+            </filter>
+            <filter id="landing-cloud-heading" x="-35%" y="-50%" width="170%" height="200%">
+              <feTurbulence
+                type="fractalNoise"
+                baseFrequency="0.016 0.011"
+                numOctaves="4"
+                seed="43"
+                result="cloudNoise"
+              />
+              <feDisplacementMap
+                in="SourceGraphic"
+                in2="cloudNoise"
+                scale="72"
+                xChannelSelector="B"
+                yChannelSelector="G"
+                result="displacedCloud"
+              />
+              <feColorMatrix in="cloudNoise" type="luminanceToAlpha" result="cloudOpacity" />
+              <feComponentTransfer in="cloudOpacity" result="shapedCloudOpacity">
+                <feFuncA type="table" tableValues="0.24 0.4 0.58 0.76 0.92" />
+              </feComponentTransfer>
+              <feComposite in="displacedCloud" in2="shapedCloudOpacity" operator="in" result="texturedCloud" />
+              <feGaussianBlur in="texturedCloud" stdDeviation="24" />
+            </filter>
+          </defs>
+        </svg>
         <section className={`${styles.hero} ${expandedShowcaseId === 'hero' ? styles.sectionWithExpandedDemo : ''}`}>
-          <div className={styles.heroGlow} aria-hidden="true" />
           <div className={styles.heroGrid}>
             <div className={styles.heroCopy}>
+              <div className={styles.heroGlow} aria-hidden="true" />
               <p className={styles.heroEyebrow}>
                 <span />
                 {content.hero.eyebrow}
@@ -642,9 +716,34 @@ export default function Home() {
           </div>
         </section>
 
+        <section className={styles.boundarySection}>
+          <div className={styles.sectionShell}>
+            <SectionHeading
+              eyebrow={content.boundaries.eyebrow}
+              title={content.boundaries.title}
+              description={content.boundaries.description}
+            />
+            <div className={styles.boundaryGrid}>
+              {content.boundaries.limitations.map((limitation) => (
+                <article className={styles.boundaryCard} key={limitation.title}>
+                  <h3>{limitation.title}</h3>
+                  <p>{limitation.description}</p>
+                </article>
+              ))}
+            </div>
+            <aside className={styles.boundaryFit}>
+              <span>{content.boundaries.fit.eyebrow}</span>
+              <div>
+                <h3>{content.boundaries.fit.title}</h3>
+                <p>{content.boundaries.fit.description}</p>
+              </div>
+            </aside>
+          </div>
+        </section>
+
         <section className={styles.closingSection}>
-          <div className={styles.closingGlow} aria-hidden="true" />
           <div className={styles.closingContent}>
+            <div className={styles.closingGlow} aria-hidden="true" />
             <p className={styles.eyebrow}>{content.closing.eyebrow}</p>
             <h2>{content.closing.title}</h2>
             <p>{content.closing.description}</p>

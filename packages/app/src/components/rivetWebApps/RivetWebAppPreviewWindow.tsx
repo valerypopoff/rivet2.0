@@ -5,9 +5,12 @@ import {
   type RivetWebAppActionResult,
   type RivetWebAppStorageAdapter,
 } from './RivetWebAppRenderer.js';
+import {
+  RIVET_WEB_APP_PREVIEW_PARAM,
+  RIVET_WEB_APP_PREVIEW_STORAGE_PREFIX,
+} from './rivetWebAppPreviewContract.js';
 
-export const RIVET_WEB_APP_PREVIEW_PARAM = 'rivet-web-app-preview';
-export const RIVET_WEB_APP_PREVIEW_STORAGE_PREFIX = 'rivet-web-app-preview:';
+export { RIVET_WEB_APP_PREVIEW_PARAM, RIVET_WEB_APP_PREVIEW_STORAGE_PREFIX } from './rivetWebAppPreviewContract.js';
 
 type PreviewPayload = {
   storage?: Record<string, unknown>;

@@ -20,6 +20,7 @@ import { useOpenUrl } from '../../hooks/useOpenUrl';
 import BrowserLineIcon from 'majesticons/line/browser-line.svg?react';
 import AlertCircleIcon from 'majesticons/line/alert-circle-line.svg?react';
 import { NoTestCasesSplash } from './NoTestCasesSplash';
+import { TRIVET_DOCUMENTATION_URL } from '../../utils/documentationUrls.js';
 import { useTestSuite } from '../../hooks/useTestSuite';
 import { GraphSelector } from '../editors/GraphSelectorEditor';
 import { wrapAsync } from '../../utils/errorHandling';
@@ -235,7 +236,7 @@ export const TestSuite: FC<{ testSuite: TrivetTestSuite; tryRunTests: TryRunTest
     });
   }, [testCaseValidationResults, testSuite, updateTestSuite]);
 
-  const viewDocumentation = useOpenUrl('https://github.com/valerypopoff/rivet2.0/docs/trivet');
+  const viewDocumentation = useOpenUrl(TRIVET_DOCUMENTATION_URL);
 
   return (
     <div css={styles}>
