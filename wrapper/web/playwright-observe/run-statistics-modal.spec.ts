@@ -152,6 +152,11 @@ test.describe('Run statistics modal', () => {
     const targetSelect = modal.getByRole('combobox', { name: 'Workflow endpoint' });
     await expect(targetSelect).toBeVisible();
     await expect(modal.locator('.run-statistics-target-select__single-value')).toHaveText('Report project');
+    await modal.locator('.run-statistics-target-select__control').click();
+    const endpointTargetMenu = page.locator('.run-statistics-target-select__menu');
+    await expect(endpointTargetMenu).toBeVisible();
+    await expect(endpointTargetMenu).toContainText('Archive project');
+    await endpointTargetMenu.getByText('Report project', { exact: true }).click();
     await expect(modal.locator('.run-statistics-sidebar')).toHaveCount(0);
     const targetControlBox = await modal.locator('.run-statistics-target-control').boundingBox();
     const filtersBox = await modal.locator('.run-statistics-controls').boundingBox();
@@ -205,8 +210,14 @@ test.describe('Run statistics modal', () => {
     await expect(modal.getByRole('combobox', { name: 'Workflow endpoint' })).toHaveCount(0);
     await expect(modal.locator('.run-statistics-target-title')).toHaveCount(0);
     releaseWebAppCatalog();
-    await expect(modal.getByRole('combobox', { name: 'Web app action' })).toBeVisible();
+    const webAppSelect = modal.getByRole('combobox', { name: 'Web app action' });
+    await expect(webAppSelect).toBeVisible();
     await expect(modal.locator('.run-statistics-target-select__single-value')).toHaveText('Summary app - Generate summary');
+    await modal.locator('.run-statistics-target-select__control').click();
+    const webAppTargetMenu = page.locator('.run-statistics-target-select__menu');
+    await expect(webAppTargetMenu).toBeVisible();
+    await expect(webAppTargetMenu).toContainText('Summary app - Generate summary');
+    await webAppTargetMenu.getByText('Summary app - Generate summary', { exact: true }).click();
     await expect(modal.locator('.run-statistics-target-title')).toHaveText('Summary app - Generate summary');
     await expect.poll(() => catalogRequests.at(-1)?.searchParams.get('surface')).toBe('web_app');
     await expect.poll(() => statisticsRequests.at(-1)?.target.surface).toBe('web_app');
