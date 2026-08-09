@@ -402,6 +402,8 @@ The separate `Run statistics` modal uses the SQLite/Postgres index only, so larg
 
 The statistics UI keys catalog and timing responses to the active surface, target, period, version, and outcome controls. A slower or aborted earlier request must never render stale metrics, outcomes, or an old error under newer filters.
 
+The target selector is a portaled modal control. Its menu must use the shared modal-menu stacking level so mouse activation remains visible above the modal surface as well as keyboard selection.
+
 Recording playback state is project-scoped in upstream Rivet. The hosted editor bridge must attach a loaded recorder to the exact replay project id returned by the workspace open operation; writing the older `{ recorder, path }` shape loads the project but intentionally leaves `Play Recording` hidden. Switching to another project must not globally clear that owner-scoped state, and closing a replay tab prunes its cached recorder payload. Replay datasets are optional. A `404` from the replay-dataset artifact endpoint means that run has no captured dataset snapshot, and `HostedIOProvider` must continue opening the replay project with an empty dataset rather than treating that response as a project-load failure.
 
 Keep wrapper-side recording cleanup on the stable upstream `loadedRecordingState` export and perform the project ownership comparison in the wrapper. Do not import newer convenience atoms such as `clearLoadedRecordingForProjectState` until they are part of the Rivet revision consumed by image builds; local `rivet/` development checkouts can be ahead of the exact upstream commit resolved by GitHub Actions.

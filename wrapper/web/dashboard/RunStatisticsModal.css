@@ -175,7 +175,7 @@
 }
 
 .run-statistics-target-select__menu-portal {
-  z-index: 200;
+  z-index: 7001 !important;
 }
 
 .run-statistics-target-select__option {
