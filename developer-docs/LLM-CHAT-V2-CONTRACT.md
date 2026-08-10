@@ -220,7 +220,9 @@ Streaming is disabled by default. The LLM Chat canvas body treats it like other
 active behavior settings: it shows `Stream response: Enabled` only when the
 setting is on and omits the field when streaming is off. It never adds a
 `Disabled` line merely to describe an inactive setting. Existing projects that
-explicitly enabled streaming retain that behavior.
+explicitly enabled streaming retain that behavior. The editor keeps the
+`Stream response` control in `Response settings`, alongside the response-format
+selection and schema metadata; it is not an output-port toggle.
 
 Older serialized `outputRequestStatus` and `outputRequestError` settings are
 migrated to `outputLLMAttempts: true` and then removed. The old request-details

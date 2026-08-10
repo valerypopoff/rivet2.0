@@ -145,7 +145,7 @@ controls whether that Chat exposes the `Reasoning` output.
 
 The node body shows the selected reasoning effort for built-in providers.
 
-### Response Format
+### Response Settings
 
 Response format supports Default, Text, JSON object, and JSON schema. JSON object and JSON schema make the Response output emit the parsed structured value instead of a JSON string when parsing succeeds. JSON object falls back to the raw string Response output if the provider response cannot be parsed. JSON schema instead requires the final Response to be an object. In Custom **Completions** mode, JSON object and JSON schema use the Chat Completions `response_format` request field. In Custom **Responses** mode, Rivet uses the Responses API `text.format` contract through the provider adapter. JSON schema adds a Response Schema input port and optional schema name/description settings in either mode.
 
@@ -157,6 +157,14 @@ request itself succeeded. With an LLM Profile fallback chain, Rivet immediately
 tries the next profile. With Inline configuration or no remaining fallback,
 the node fails with an error that identifies the final Response type and
 explains why non-200 retry was not used.
+
+**Stream response** is also configured here. When enabled, the provider request
+uses streaming so Rivet can show live response updates while the node runs.
+When disabled, Rivet uses a non-streaming provider request and only displays the
+final response. Connected downstream nodes receive only the final response in
+both modes. Tool-call rounds can return tool calls before a final structured
+response exists; in that case Rivet keeps the tool calls, and auto-continue can
+produce the final structured response on a later model round.
 
 ### Tools
 
@@ -226,21 +234,20 @@ before it when the unresolved output can contain several calls.
 
 ### Provider Advanced
 
-Provider Advanced contains optional Headers and Extra provider options. Built-in OpenAI, Anthropic, and Google providers use their provider-owned endpoints. For OpenAI-compatible custom hosts, choose Custom provider, set the Model section's Provider base URL, and select the API contract implemented by that host.
+Provider Advanced contains optional Headers and Extra provider options. Headers are added to every physical provider request, including retries, fallback candidates, and auto-continued tool rounds. Built-in OpenAI, Anthropic, and Google providers use their provider-owned endpoints. For OpenAI-compatible custom hosts, choose Custom provider, set the Model section's Provider base URL, and select the API contract implemented by that host.
 
 **Extra provider options** must be a JSON object. Rivet adds its fields exactly as written to the top level of the physical provider request after the normal request is generated. Field spelling is preserved, and these values override generated fields with the same name. This intentionally permits low-level control such as `reasoning_effort`, as well as replacement of `model`, `messages`, `input`, `tools`, or response-format fields. Rivet does not validate whether an arbitrary field is supported by the selected provider.
 
 ### Outputs
 
-| Setting                              | Description                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
-| ------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Output reasoning                     | Adds a Reasoning output when the provider exposes reasoning or thinking text.                                                                                                                                                                                                                                                                                                                                                                                                                            |
-| Output usage details                 | Adds a Usage output containing prompt, completion, total, cached, and reasoning tokens plus estimated cost when available.                                                                                                                                                                                                                                                                                                                                                                               |
-| Output LLM attempts                  | Adds an LLM Attempts output with every configuration, provider-request, and response-validation attempt in chronological order.                                                                                                                                                                                                                                                                                                                                                                          |
-| Output request body                  | Adds an LLM request body output. The body can contain prompts and non-secret provider options, but never authorization headers or API keys. If the node ultimately fails after sending one or more requests, their captured bodies remain visible in the failed run's output.                                                                                                                                                                                                                            |
-| Output response body                 | Adds an LLM response body output. Rivet clones the provider HTTP response for debugging, parses JSON when possible, otherwise keeps the response text exactly as received. It does not consume or change the model stream. Responses received before a terminal node error remain visible in the failed run's output.                                                                                                                                                                                    |
-| Stream response                      | When enabled, the provider request uses streaming so Rivet can show live response updates while the node runs. When disabled, Rivet uses a non-streaming provider request and only displays the final response. Connected downstream nodes receive only the final response in both modes. Tool-call rounds can return tool calls before a final structured response exists; in that case Rivet keeps the tool calls, and auto-continue can produce the final structured response on a later model round. |
-| Cache outputs (editor only) (legacy) | Shown only for nodes that already have this legacy setting enabled. It reuses matching editor-run outputs while the Rivet app remains open; turn it off to retire it from that node.                                                                                                                                                                                                                                                                                                                     |
+| Setting                              | Description                                                                                                                                                                                                                                                                                                           |
+| ------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Output reasoning                     | Adds a Reasoning output when the provider exposes reasoning or thinking text.                                                                                                                                                                                                                                         |
+| Output usage details                 | Adds a Usage output containing prompt, completion, total, cached, and reasoning tokens plus estimated cost when available.                                                                                                                                                                                            |
+| Output LLM attempts                  | Adds an LLM Attempts output with every configuration, provider-request, and response-validation attempt in chronological order.                                                                                                                                                                                       |
+| Output request body                  | Adds an LLM request body output. The body can contain prompts and non-secret provider options, but never authorization headers or API keys. If the node ultimately fails after sending one or more requests, their captured bodies remain visible in the failed run's output.                                         |
+| Output response body                 | Adds an LLM response body output. Rivet clones the provider HTTP response for debugging, parses JSON when possible, otherwise keeps the response text exactly as received. It does not consume or change the model stream. Responses received before a terminal node error remain visible in the failed run's output. |
+| Cache outputs (editor only) (legacy) | Shown only for nodes that already have this legacy setting enabled. It reuses matching editor-run outputs while the Rivet app remains open; turn it off to retire it from that node.                                                                                                                                  |
 
 ### Error Behavior
 

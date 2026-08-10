@@ -506,7 +506,7 @@ describe('LLMProfileNodeImpl', () => {
     const chatGroups = chatEditors
       .filter((editor): editor is Extract<typeof editor, { type: 'group' }> => editor.type === 'group')
       .map((editor) => editor.label);
-    assert.deepEqual(chatGroups, ['Response format', 'Tools', 'Outputs', 'Error behavior']);
+    assert.deepEqual(chatGroups, ['Response settings', 'Tools', 'Outputs', 'Error behavior']);
   });
 
   it('does not render an empty Reasoning group for Custom provider profiles', async () => {

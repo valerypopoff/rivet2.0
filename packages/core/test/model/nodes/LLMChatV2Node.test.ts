@@ -633,7 +633,7 @@ describe('LLMChatV2NodeImpl', () => {
       'Google',
       'Parameters',
       'Reasoning',
-      'Response format',
+      'Response settings',
       'Tools',
       'Outputs',
       'Provider Advanced',
@@ -661,6 +661,10 @@ describe('LLMChatV2NodeImpl', () => {
     assert.equal(
       outputsGroup.editors.find((editor: any) => editor.dataKey === 'outputResponseBody')?.label,
       'Output response body',
+    );
+    assert.equal(
+      outputsGroup.editors.some((editor: any) => editor.dataKey === 'useAsGraphPartialOutput'),
+      false,
     );
     const legacyCacheEditor = outputsGroup.editors.find((editor: any) => editor.dataKey === 'cache');
     assert.equal(legacyCacheEditor.label, 'Cache outputs (editor only) (legacy)');
@@ -876,9 +880,13 @@ describe('LLMChatV2NodeImpl', () => {
     const editors = await node.getEditors({});
     const toolsGroup = editors.find((editor) => editor.type === 'group' && editor.label === 'Tools') as any;
     const outputGroup = editors.find((editor) => editor.type === 'group' && editor.label === 'Outputs') as any;
+    const responseSettingsGroup = editors.find(
+      (editor) => editor.type === 'group' && editor.label === 'Response settings',
+    ) as any;
 
     assert.ok(toolsGroup);
     assert.ok(outputGroup);
+    assert.ok(responseSettingsGroup);
     const toolEditorKeys = toolsGroup.editors.map((editor: any) => editor.dataKey);
 
     assert.deepEqual(toolEditorKeys.slice(0, 5), [
@@ -986,11 +994,11 @@ describe('LLMChatV2NodeImpl', () => {
       'Output reasoning',
     );
     assert.equal(
-      outputGroup.editors.find((editor: any) => editor.dataKey === 'useAsGraphPartialOutput')?.label,
+      responseSettingsGroup.editors.find((editor: any) => editor.dataKey === 'useAsGraphPartialOutput')?.label,
       'Stream response',
     );
     assert.match(
-      outputGroup.editors.find((editor: any) => editor.dataKey === 'useAsGraphPartialOutput')?.helperMessage,
+      responseSettingsGroup.editors.find((editor: any) => editor.dataKey === 'useAsGraphPartialOutput')?.helperMessage,
       /Other nodes only receive the final response/,
     );
     assert.equal(
@@ -1325,14 +1333,8 @@ describe('LLMChatV2NodeImpl', () => {
       parallelToolCalls: false,
       extraProviderOptions: '{ "parallel_tool_calls": false, "customFlag": true }',
     }).data;
-    const disabled = resolveLLMChatV2RuntimeProviderOptions(
-      data,
-      {},
-    );
-    const enabled = resolveLLMChatV2RuntimeProviderOptions(
-      { ...data, parallelToolCalls: true },
-      {},
-    );
+    const disabled = resolveLLMChatV2RuntimeProviderOptions(data, {});
+    const enabled = resolveLLMChatV2RuntimeProviderOptions({ ...data, parallelToolCalls: true }, {});
 
     assert.equal(disabled, undefined);
     assert.deepEqual(enabled, { custom: { parallel_tool_calls: true } });
@@ -1407,15 +1409,12 @@ describe('LLMChatV2NodeImpl', () => {
 
     assert.throws(
       () =>
-        resolveLLMChatV2ExtraProviderOptions(
-          createNode({ useExtraProviderOptionsInput: true }).data,
-          {
-            extraProviderOptions: {
-              type: 'object',
-              value: { unsupported: () => 'not JSON' },
-            },
-          } as any,
-        ),
+        resolveLLMChatV2ExtraProviderOptions(createNode({ useExtraProviderOptionsInput: true }).data, {
+          extraProviderOptions: {
+            type: 'object',
+            value: { unsupported: () => 'not JSON' },
+          },
+        } as any),
       /Extra provider options must contain only portable JSON values/,
     );
   });
@@ -1455,7 +1454,7 @@ describe('LLMChatV2NodeImpl', () => {
     assert.equal(inputById.get('maxTokens' as any)?.title, 'Max output tokens');
   });
 
-  it('exposes response-format settings and JSON schema input ports only when needed', async () => {
+  it('exposes response settings and JSON schema input ports only when needed', async () => {
     const defaultNode = createNode();
     const jsonSchemaNode = createNode({
       responseFormat: 'json_schema',
@@ -1464,20 +1463,27 @@ describe('LLMChatV2NodeImpl', () => {
     });
 
     const editors = await defaultNode.getEditors({});
-    const responseFormatGroup = editors.find(
-      (editor) => editor.type === 'group' && editor.label === 'Response format',
+    const responseSettingsGroup = editors.find(
+      (editor) => editor.type === 'group' && editor.label === 'Response settings',
     ) as any;
 
-    assert.ok(responseFormatGroup);
-    assert.deepEqual(responseFormatGroup.editors.find((editor: any) => editor.dataKey === 'responseFormat')?.options, [
-      { value: '', label: 'Default' },
-      { value: 'text', label: 'Text' },
-      { value: 'json', label: 'JSON object' },
-      { value: 'json_schema', label: 'JSON schema' },
-    ]);
+    assert.ok(responseSettingsGroup);
+    assert.deepEqual(
+      responseSettingsGroup.editors.find((editor: any) => editor.dataKey === 'responseFormat')?.options,
+      [
+        { value: '', label: 'Default' },
+        { value: 'text', label: 'Text' },
+        { value: 'json', label: 'JSON object' },
+        { value: 'json_schema', label: 'JSON schema' },
+      ],
+    );
     assert.equal(
-      responseFormatGroup.editors.some((editor: any) => editor.dataKey === 'failProfileOnNonObjectResponse'),
+      responseSettingsGroup.editors.some((editor: any) => editor.dataKey === 'failProfileOnNonObjectResponse'),
       false,
+    );
+    assert.equal(
+      responseSettingsGroup.editors.find((editor: any) => editor.dataKey === 'useAsGraphPartialOutput')?.label,
+      'Stream response',
     );
     assert.equal(
       createNode({ responseFormat: 'json_schema' })

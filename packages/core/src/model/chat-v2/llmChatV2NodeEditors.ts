@@ -377,8 +377,8 @@ function getReasoningEditors(): LLMChatV2EditorDefinition {
   ]);
 }
 
-function getResponseFormatEditors(): LLMChatV2EditorDefinition {
-  return group('Response format', [
+function getResponseSettingsEditors(): LLMChatV2EditorDefinition {
+  return group('Response settings', [
     {
       type: 'dropdown',
       label: 'Response format',
@@ -392,6 +392,13 @@ function getResponseFormatEditors(): LLMChatV2EditorDefinition {
       defaultValue: '',
       helperMessage:
         'Uses Vercel AI SDK structured-output response formatting when supported by the provider. JSON schema adds a Response Schema input port.',
+    },
+    {
+      type: 'toggle',
+      label: 'Stream response',
+      dataKey: 'useAsGraphPartialOutput',
+      helperMessage:
+        'Shows streamed response updates in the node output while running in the editor. Other nodes only receive the final response after it is complete.',
     },
     {
       type: 'string',
@@ -512,13 +519,6 @@ function getOutputEditors(): LLMChatV2EditorDefinition {
     },
     {
       type: 'toggle',
-      label: 'Stream response',
-      dataKey: 'useAsGraphPartialOutput',
-      helperMessage:
-        'Shows streamed response updates in the node output while running in the editor. Other nodes only receive the final response after it is complete.',
-    },
-    {
-      type: 'toggle',
       label: 'Cache outputs (editor only) (legacy)',
       dataKey: 'cache',
       helperMessage:
@@ -604,7 +604,7 @@ export async function getLLMChatV2Editors(
           ...(data.provider === 'custom' ? [] : [getReasoningEditors()]),
         ]
       : []),
-    getResponseFormatEditors(),
+    getResponseSettingsEditors(),
     getToolEditors(),
     getOutputEditors(),
     ...(!usesProfile ? [getProviderAdvancedEditors()] : []),

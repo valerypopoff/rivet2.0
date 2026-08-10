@@ -181,6 +181,121 @@ describe('createChatV2Model', () => {
     assert.notEqual(google.config?.baseURL, 'https://stale-google.example/v1');
   });
 
+  it('sends Provider Advanced headers with every built-in and Custom provider request', async () => {
+    const receivedHeaders = new Map<string, Headers>();
+    const fetchMock = mock.method(globalThis, 'fetch', async (input, init) => {
+      const headers = new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined));
+      const marker = headers.get('x-rivet-provider-advanced');
+      assert.ok(marker);
+      receivedHeaders.set(marker, headers);
+
+      switch (marker) {
+        case 'openai':
+        case 'custom-responses':
+          return new Response(
+            JSON.stringify({
+              id: `resp_${marker}`,
+              created_at: 1_700_000_000,
+              model: 'test-model',
+              output: [
+                {
+                  type: 'message',
+                  role: 'assistant',
+                  id: `msg_${marker}`,
+                  content: [{ type: 'output_text', text: 'OK', annotations: [] }],
+                },
+              ],
+              usage: { input_tokens: 1, output_tokens: 1 },
+            }),
+            { status: 200, headers: { 'content-type': 'application/json' } },
+          );
+        case 'anthropic':
+          return new Response(
+            JSON.stringify({
+              id: 'msg_anthropic',
+              type: 'message',
+              role: 'assistant',
+              model: 'claude-test',
+              content: [{ type: 'text', text: 'OK' }],
+              stop_reason: 'end_turn',
+              usage: { input_tokens: 1, output_tokens: 1 },
+            }),
+            { status: 200, headers: { 'content-type': 'application/json' } },
+          );
+        case 'google':
+          return new Response(
+            JSON.stringify({
+              candidates: [
+                {
+                  content: { role: 'model', parts: [{ text: 'OK' }] },
+                  finishReason: 'STOP',
+                },
+              ],
+              usageMetadata: { promptTokenCount: 1, candidatesTokenCount: 1, totalTokenCount: 2 },
+            }),
+            { status: 200, headers: { 'content-type': 'application/json' } },
+          );
+        case 'custom-completions':
+          return new Response(
+            JSON.stringify({
+              id: 'chatcmpl_custom',
+              object: 'chat.completion',
+              created: 1_700_000_000,
+              model: 'custom-chat',
+              choices: [{ index: 0, message: { role: 'assistant', content: 'OK' }, finish_reason: 'stop' }],
+              usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+            }),
+            { status: 200, headers: { 'content-type': 'application/json' } },
+          );
+        default:
+          throw new Error(`Unexpected provider marker: ${marker}`);
+      }
+    });
+
+    const context = { settings: {}, getPluginConfig: () => undefined } as any;
+    const candidates = [
+      { provider: 'openai', model: 'gpt-4o-mini', marker: 'openai' },
+      { provider: 'anthropic', model: 'claude-test', marker: 'anthropic' },
+      { provider: 'google', model: 'gemini-test', marker: 'google' },
+      {
+        provider: 'custom',
+        model: 'custom-chat',
+        marker: 'custom-completions',
+        baseURL: 'https://custom.example.test/v1',
+        customProviderApi: 'completions',
+      },
+      {
+        provider: 'custom',
+        model: 'custom-responses',
+        marker: 'custom-responses',
+        baseURL: 'https://custom.example.test/v1',
+        customProviderApi: 'responses',
+      },
+    ] as const;
+
+    try {
+      for (const candidate of candidates) {
+        const model = createChatV2Model(candidate.provider, candidate.model, context, {
+          apiKey: 'test-key',
+          headers: { 'X-Rivet-Provider-Advanced': candidate.marker },
+          ...('baseURL' in candidate ? { baseURL: candidate.baseURL } : {}),
+          ...('customProviderApi' in candidate ? { customProviderApi: candidate.customProviderApi } : {}),
+        }) as { doGenerate(options: unknown): Promise<unknown> };
+
+        await model.doGenerate({
+          prompt: [{ role: 'user', content: [{ type: 'text', text: 'Test Provider Advanced headers.' }] }],
+        });
+      }
+
+      assert.deepEqual([...receivedHeaders.keys()].sort(), candidates.map(({ marker }) => marker).sort());
+      for (const candidate of candidates) {
+        assert.equal(receivedHeaders.get(candidate.marker)?.get('x-rivet-provider-advanced'), candidate.marker);
+      }
+    } finally {
+      fetchMock.mock.restore();
+    }
+  });
+
   it('enables structured outputs on custom OpenAI-compatible chat models', async () => {
     const model = createChatV2Model(
       'custom',
@@ -828,10 +943,7 @@ describe('createChatV2Model', () => {
       await model.config.fetch(request);
 
       assert.ok(sentInput instanceof Request);
-      assert.equal(
-        sentInput.url,
-        'https://custom.example.test/v1/chat/completions?stale=kept&api-version=2026-08-10',
-      );
+      assert.equal(sentInput.url, 'https://custom.example.test/v1/chat/completions?stale=kept&api-version=2026-08-10');
       assert.deepEqual(JSON.parse(String(sentInit?.body)), {
         model: 'wire-model',
         messages: [{ role: 'user', content: 'Hello' }],
@@ -931,7 +1043,10 @@ describe('createChatV2Model', () => {
         '{"model":"manual-model","reasoning_effort":"none","nested":{"replaced":true},"messages":[{"role":"user","content":"Hello"}],"reasoningEffort":"literal","nullable":null,"__proto__":{"safe":true}}',
       );
       assert.equal(sentBodies.length, candidates.length);
-      assert.deepEqual(sentBodies, Array.from({ length: candidates.length }, () => expected));
+      assert.deepEqual(
+        sentBodies,
+        Array.from({ length: candidates.length }, () => expected),
+      );
       assert.deepEqual(capturedBodies, sentBodies);
       for (const body of sentBodies as Array<Record<string, unknown>>) {
         assert.equal(Object.prototype.hasOwnProperty.call(body, '__proto__'), true);
