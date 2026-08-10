@@ -200,7 +200,7 @@ limit before tests can start.
 
 Runs repository checks for test style, documentation links, the checked Graph
 Builder policy project, compact generated Graph Builder node specifications,
-generated legacy graph-builder context, rich-text sinks, AI
+the legacy Graph Creator rollback boundary, rich-text sinks, AI
 runtime boundaries, desktop shell policy, low-level editor boundaries, tracked
 Yarn PnP install state, and generated web-app client freshness.
 The web-app freshness check runs through the Node workspace's
@@ -230,17 +230,15 @@ docs and direct `developer-docs/*.md` files. It skips external URLs, anchors,
 and fenced code blocks, then resolves remaining links against the repo root so
 Windows and Linux CI runners use the same containment rules.
 
-The graph-creator-data checker keeps the temporary
-`packages/app/graphs/graph-creator.rivet-data` artifact reproducible from the
-current built-in node source files and node-reference docs until the rollout
-observation window ends. Neither Graph Builder implementation loads this 1 MB
-bundle at runtime: the hardened legacy path uses the live safe authoring
-catalog, while the transactional path's compact checked knowledge is covered
-by `check-graph-builder-node-specs.mjs`. The checker also rejects regression of
-removed legacy repository-discovery, nested-research, dormant mutation, and
-per-operation publication nodes, and rejects re-importing the data bundle from
-the legacy runtime. If the retained artifact freshness check fails, run
-`node scripts/checks/check-graph-creator-data.mjs --write`.
+`check-legacy-graph-creator-rollback.mjs` owns the temporary legacy Graph
+Creator rollback boundary. The former 1 MB `graph-creator.rivet-data` bundle
+was not imported by either Graph Builder implementation and has been retired:
+the hardened legacy path uses the live safe authoring catalog, while the
+transactional path's compact checked knowledge is covered by
+`check-graph-builder-node-specs.mjs`. The check rejects restoring the retired
+bundle, regression of removed legacy repository-discovery, nested-research,
+dormant mutation, and per-operation publication nodes, and reintroducing a
+runtime dataset dependency.
 
 `check-graph-builder-policy.mjs` owns the small transactional policy project's
 serialized topology and runtime manifest. It deserializes
@@ -262,8 +260,8 @@ node .yarn/releases/yarn-4.17.1.cjs check:graph-builder-policy
 ```
 
 `yarn check:graph-builder-assets` is the release-facing aggregate gate. It
-runs the retained legacy Graph Creator data check plus the policy and generated
-node help/specification checks. The node-spec command first builds Core's ESM
+runs the legacy Graph Creator rollback-boundary check plus the policy and
+generated node help/specification checks. The node-spec command first builds Core's ESM
 output because the app authoring catalog deliberately consumes Core through its
 public package export; this keeps the aggregate gate valid in fresh CI
 checkouts where `packages/core/dist` does not exist yet. The checker then uses
