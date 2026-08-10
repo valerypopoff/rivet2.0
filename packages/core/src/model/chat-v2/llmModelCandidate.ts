@@ -14,9 +14,11 @@ import {
 } from './chatV2ProviderProfile.js';
 import {
   resolveLLMChatV2BuiltInTools,
+  resolveLLMChatV2ExtraProviderOptions,
   resolveLLMChatV2GenerationParameters,
   resolveLLMChatV2Headers,
   resolveLLMChatV2RuntimeProviderOptions,
+  type LLMChatV2RequestBodyOverlay,
 } from './chatV2RuntimeOptions.js';
 import { createChatV2ResponseOutput, mergeCustomProviderResponseFormatOptions } from './chatV2ResponseFormat.js';
 import type { ChatV2PipelineRoundOptions, RunChatV2PipelineOptions } from './chatV2Types.js';
@@ -29,6 +31,7 @@ export type ResolvedLLMModelCandidate = {
   effectiveData: ReturnType<typeof applyLLMProfileToNodeData>;
   credential: ChatV2CredentialResult;
   providerConfig: ResolvedChatV2ProviderConfig;
+  requestBodyOverlay: LLMChatV2RequestBodyOverlay | undefined;
   runOptions: RunChatV2PipelineOptions;
 };
 
@@ -48,6 +51,7 @@ export async function resolveLLMModelCandidate(params: {
   const modelId = getInputOrData(effectiveData, plan.inputs, 'model', 'string');
   const baseURL = resolveLLMChatV2BaseURL(effectiveData, plan.inputs);
   const headers = resolveLLMChatV2Headers(effectiveData, plan.inputs);
+  const requestBodyOverlay = resolveLLMChatV2ExtraProviderOptions(effectiveData, plan.inputs);
   const credential =
     profile?.credential ??
     resolveChatV2Credential({
@@ -73,6 +77,7 @@ export async function resolveLLMModelCandidate(params: {
     onResponseBody:
       plan.responseBodyCapture == null ? undefined : (response) => plan.responseBodyCapture!.capture(response),
     transformRequestBody,
+    requestBodyOverlay,
     customProviderApi,
   });
   const generationParameters = resolveLLMChatV2GenerationParameters(effectiveData, plan.inputs);
@@ -94,6 +99,7 @@ export async function resolveLLMModelCandidate(params: {
     effectiveData,
     credential,
     providerConfig: resolvedProvider.config,
+    requestBodyOverlay,
     runOptions: {
       ...baseRunOptions,
       provider,

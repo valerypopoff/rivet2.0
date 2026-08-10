@@ -115,6 +115,7 @@ export type CreateChatV2ModelOptions = {
   onRequestBody?: ((body: unknown) => void) | undefined;
   onResponseBody?: ((response: Response) => void) | undefined;
   transformRequestBody?: ((body: unknown) => unknown) | undefined;
+  requestBodyOverlay?: Readonly<Record<string, unknown>> | undefined;
   customProviderApi?: CustomProviderApi | undefined;
   endpointQuery?: ReadonlyArray<readonly [string, string]> | undefined;
 };
@@ -195,6 +196,25 @@ function parseFetchBody(body: BodyInit | null | undefined): unknown {
   return undefined;
 }
 
+async function resolveProviderFetchBody(
+  input: RequestInfo | URL,
+  init: RequestInit | undefined,
+): Promise<{ originalBody: BodyInit | null | undefined; parsedBody: unknown }> {
+  if (init?.body != null) {
+    return { originalBody: init.body, parsedBody: parseFetchBody(init.body) };
+  }
+
+  if (!(input instanceof Request) || input.body == null) {
+    return { originalBody: undefined, parsedBody: undefined };
+  }
+
+  // Fetch implementations may provide the complete request as a Request
+  // object rather than as URL + init. Read a clone so diagnostics and raw
+  // overlays do not consume the body that will be sent.
+  const bodyText = await input.clone().text();
+  return { originalBody: bodyText, parsedBody: parseBodyText(bodyText) };
+}
+
 function cloneCapturedRequestBody(body: unknown): unknown {
   if (typeof structuredClone === 'function') {
     try {
@@ -226,6 +246,21 @@ function serializeTransformedFetchBody(originalBody: BodyInit | null | undefined
   }
 
   return serialized;
+}
+
+export function applyChatV2RequestBodyOverlay(
+  body: unknown,
+  overlay: Readonly<Record<string, unknown>> | undefined,
+): unknown {
+  if (overlay == null) {
+    return body;
+  }
+
+  if (body === null || typeof body !== 'object' || Array.isArray(body)) {
+    throw new Error('Extra provider options could not be applied because the provider request body is not a JSON object.');
+  }
+
+  return { ...(body as Record<string, unknown>), ...overlay };
 }
 
 function removeStaleContentLength(headers: HeadersInit | undefined): HeadersInit | undefined {
@@ -264,11 +299,14 @@ function createProviderProcessingFetch(
   processing: { omitGeneratedEmptyBearer: boolean; endpointQuery: ReadonlyArray<readonly [string, string]> },
 ): typeof fetch {
   return async (input, init) => {
-    const parsedBody = parseFetchBody(init?.body);
-    const processedBody =
+    const { originalBody, parsedBody } = await resolveProviderFetchBody(input, init);
+    const transformedBody =
       parsedBody !== undefined && options.transformRequestBody != null
         ? options.transformRequestBody(parsedBody)
         : parsedBody;
+    const processedBody = applyChatV2RequestBodyOverlay(transformedBody, options.requestBodyOverlay);
+    const shouldSerializeProcessedBody =
+      parsedBody !== undefined && (options.transformRequestBody != null || options.requestBodyOverlay != null);
 
     if (processedBody !== undefined) {
       options.onRequestBody?.(cloneCapturedRequestBody(processedBody));
@@ -276,15 +314,16 @@ function createProviderProcessingFetch(
 
     const nativeFetch = globalThis.fetch as unknown as (input: unknown, init?: unknown) => Promise<Response>;
     let processedInit =
-      processedBody !== parsedBody
+      shouldSerializeProcessedBody
         ? {
             ...init,
-            body: serializeTransformedFetchBody(init?.body, processedBody),
-            headers: removeStaleContentLength(init?.headers),
+            body: serializeTransformedFetchBody(originalBody, processedBody),
+            headers: removeStaleContentLength(init?.headers ?? (input instanceof Request ? input.headers : undefined)),
           }
         : init;
-    if (processing.omitGeneratedEmptyBearer && processedInit?.headers != null) {
-      const headers = new Headers(processedInit.headers);
+    const effectiveHeaders = processedInit?.headers ?? (input instanceof Request ? input.headers : undefined);
+    if (processing.omitGeneratedEmptyBearer && effectiveHeaders != null) {
+      const headers = new Headers(effectiveHeaders);
       if (headers.get('authorization')?.trim().toLowerCase() === 'bearer') {
         headers.delete('authorization');
         processedInit = { ...processedInit, headers };
@@ -310,6 +349,7 @@ function maybeCreateProviderProcessingFetch(
   return options.onRequestBody == null &&
     options.onResponseBody == null &&
     options.transformRequestBody == null &&
+    options.requestBodyOverlay == null &&
     !omitGeneratedEmptyBearer &&
     endpointQuery.length === 0
     ? undefined

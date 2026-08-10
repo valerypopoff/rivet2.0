@@ -318,6 +318,10 @@ describe('createChatV2Model', () => {
           apiKey: 'custom-responses-key',
           baseURL: 'https://api.example.test/v1',
           customProviderApi: 'responses',
+          requestBodyOverlay: {
+            model: 'wire-model-override',
+            reasoning_effort: 'none',
+          },
         },
       ) as {
         doGenerate(options: unknown): Promise<{ content: Array<{ type: string; text?: string }> }>;
@@ -329,7 +333,8 @@ describe('createChatV2Model', () => {
 
       assert.equal(requestedUrl, 'https://api.example.test/v1/responses');
       assert.equal(requestedHeaders?.get('authorization'), 'Bearer custom-responses-key');
-      assert.equal(requestedBody?.model, 'responses-compatible-model');
+      assert.equal(requestedBody?.model, 'wire-model-override');
+      assert.equal(requestedBody?.reasoning_effort, 'none');
       assert.ok(Array.isArray(requestedBody?.input));
       assert.equal(result.content.find((part) => part.type === 'text')?.text, 'Custom Responses works.');
       assert.equal(fetchMock.mock.callCount(), 1);
@@ -726,6 +731,10 @@ describe('createChatV2Model', () => {
             ...(body as Record<string, unknown>),
             transformed: true,
           }),
+          requestBodyOverlay: {
+            transformed: false,
+            raw_field: 'preserved',
+          },
         },
       ) as { config?: { fetch?: typeof fetch } };
       const requestBody = {
@@ -740,11 +749,222 @@ describe('createChatV2Model', () => {
         body: JSON.stringify(requestBody),
       });
 
-      const expected = { ...requestBody, transformed: true };
+      const expected = { ...requestBody, transformed: false, raw_field: 'preserved' };
       assert.deepEqual(capturedBodies, [expected]);
       assert.deepEqual(sentBody, expected);
       assert.equal(sentHeaders?.has('content-length'), false);
       assert.equal(sentHeaders?.get('x-test'), 'preserved');
+    } finally {
+      fetchMock.mock.restore();
+    }
+  });
+
+  it('sends an in-place request-body transformation instead of relying on object identity', async () => {
+    let sentBody: unknown;
+    const fetchMock = mock.method(globalThis, 'fetch', async (_input, init) => {
+      sentBody = JSON.parse(String(init?.body));
+      return new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } });
+    });
+
+    try {
+      const model = createChatV2Model(
+        'custom',
+        'custom-model',
+        { settings: {}, getPluginConfig: () => undefined } as any,
+        {
+          apiKey: 'test-key',
+          baseURL: 'https://custom.example.test/v1',
+          transformRequestBody: (body) => {
+            (body as Record<string, unknown>).transformedInPlace = true;
+            return body;
+          },
+        },
+      ) as { config?: { fetch?: typeof fetch } };
+      assert.ok(model.config?.fetch);
+      await model.config.fetch('https://custom.example.test/v1/chat/completions', {
+        method: 'POST',
+        body: JSON.stringify({ model: 'custom-model' }),
+      });
+
+      assert.deepEqual(sentBody, { model: 'custom-model', transformedInPlace: true });
+    } finally {
+      fetchMock.mock.restore();
+    }
+  });
+
+  it('applies overlays and endpoint processing when the SDK supplies a Request object', async () => {
+    let sentInput: RequestInfo | URL | undefined;
+    let sentInit: RequestInit | undefined;
+    const fetchMock = mock.method(globalThis, 'fetch', async (input, init) => {
+      sentInput = input;
+      sentInit = init;
+      return new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } });
+    });
+
+    try {
+      const model = createChatV2Model(
+        'custom',
+        'custom-model',
+        { settings: {}, getPluginConfig: () => undefined } as any,
+        {
+          apiKey: 'test-key',
+          baseURL: 'https://custom.example.test/v1',
+          endpointQuery: [['api-version', '2026-08-10']],
+          requestBodyOverlay: { model: 'wire-model', reasoning_effort: 'none' },
+        },
+      ) as { config?: { fetch?: typeof fetch } };
+      assert.ok(model.config?.fetch);
+
+      const request = new Request('https://custom.example.test/v1/chat/completions?stale=kept', {
+        method: 'POST',
+        headers: {
+          authorization: 'Bearer test-key',
+          'content-length': '1',
+          'content-type': 'application/json',
+          'x-request-header': 'preserved',
+        },
+        body: JSON.stringify({ model: 'generated-model', messages: [{ role: 'user', content: 'Hello' }] }),
+      });
+      await model.config.fetch(request);
+
+      assert.ok(sentInput instanceof Request);
+      assert.equal(
+        sentInput.url,
+        'https://custom.example.test/v1/chat/completions?stale=kept&api-version=2026-08-10',
+      );
+      assert.deepEqual(JSON.parse(String(sentInit?.body)), {
+        model: 'wire-model',
+        messages: [{ role: 'user', content: 'Hello' }],
+        reasoning_effort: 'none',
+      });
+      const headers = new Headers(sentInit?.headers);
+      assert.equal(headers.has('content-length'), false);
+      assert.equal(headers.get('authorization'), 'Bearer test-key');
+      assert.equal(headers.get('content-type'), 'application/json');
+      assert.equal(headers.get('x-request-header'), 'preserved');
+      assert.equal(request.bodyUsed, false);
+    } finally {
+      fetchMock.mock.restore();
+    }
+  });
+
+  it('removes only an empty generated bearer header from Request-object inputs', async () => {
+    let sentHeaders: Headers | undefined;
+    const fetchMock = mock.method(globalThis, 'fetch', async (_input, init) => {
+      sentHeaders = new Headers(init?.headers);
+      return new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } });
+    });
+
+    try {
+      const model = createChatV2Model(
+        'custom',
+        'responses-compatible-model',
+        { settings: {}, getPluginConfig: () => undefined } as any,
+        {
+          baseURL: 'https://custom.example.test/v1',
+          customProviderApi: 'responses',
+        },
+      ) as { config?: { fetch?: typeof fetch } };
+      assert.ok(model.config?.fetch);
+      const request = new Request('https://custom.example.test/v1/responses', {
+        method: 'POST',
+        headers: {
+          authorization: 'Bearer ',
+          'content-type': 'application/json',
+          'x-request-header': 'preserved',
+        },
+        body: JSON.stringify({ model: 'responses-compatible-model', input: [] }),
+      });
+
+      await model.config.fetch(request);
+
+      assert.equal(sentHeaders?.has('authorization'), false);
+      assert.equal(sentHeaders?.get('content-type'), 'application/json');
+      assert.equal(sentHeaders?.get('x-request-header'), 'preserved');
+      assert.equal(request.bodyUsed, false);
+    } finally {
+      fetchMock.mock.restore();
+    }
+  });
+
+  it('applies exact raw request fields last for every provider adapter', async () => {
+    const capturedBodies: unknown[] = [];
+    const sentBodies: unknown[] = [];
+    const fetchMock = mock.method(globalThis, 'fetch', async (_input, init) => {
+      sentBodies.push(JSON.parse(String(init?.body)));
+      return new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } });
+    });
+    const overlay = JSON.parse(
+      '{"model":"manual-model","reasoning_effort":"none","reasoningEffort":"literal","nested":{"replaced":true},"nullable":null,"__proto__":{"safe":true}}',
+    ) as Record<string, unknown>;
+    const context = { settings: {}, getPluginConfig: () => undefined } as any;
+    const candidates = [
+      { provider: 'openai', model: 'gpt-test' },
+      { provider: 'anthropic', model: 'claude-test' },
+      { provider: 'google', model: 'gemini-test' },
+      { provider: 'custom', model: 'custom-chat', customProviderApi: 'completions' },
+      { provider: 'custom', model: 'custom-responses', customProviderApi: 'responses' },
+    ] as const;
+
+    try {
+      for (const candidate of candidates) {
+        const model = createChatV2Model(candidate.provider, candidate.model, context, {
+          apiKey: 'test-key',
+          ...(candidate.provider === 'custom' ? { baseURL: 'https://custom.example.test/v1' } : {}),
+          ...('customProviderApi' in candidate ? { customProviderApi: candidate.customProviderApi } : {}),
+          requestBodyOverlay: overlay,
+          onRequestBody: (body) => capturedBodies.push(body),
+        }) as { config?: { fetch?: typeof fetch } };
+        assert.ok(model.config?.fetch);
+        await model.config.fetch('https://provider.example.test/request', {
+          method: 'POST',
+          body: JSON.stringify({
+            model: 'generated-model',
+            reasoning_effort: 'high',
+            nested: { original: true },
+            messages: [{ role: 'user', content: 'Hello' }],
+          }),
+        });
+      }
+
+      const expected = JSON.parse(
+        '{"model":"manual-model","reasoning_effort":"none","nested":{"replaced":true},"messages":[{"role":"user","content":"Hello"}],"reasoningEffort":"literal","nullable":null,"__proto__":{"safe":true}}',
+      );
+      assert.equal(sentBodies.length, candidates.length);
+      assert.deepEqual(sentBodies, Array.from({ length: candidates.length }, () => expected));
+      assert.deepEqual(capturedBodies, sentBodies);
+      for (const body of sentBodies as Array<Record<string, unknown>>) {
+        assert.equal(Object.prototype.hasOwnProperty.call(body, '__proto__'), true);
+      }
+    } finally {
+      fetchMock.mock.restore();
+    }
+  });
+
+  it('fails clearly instead of ignoring an overlay on a non-object request body', async () => {
+    const fetchMock = mock.method(globalThis, 'fetch', async () => new Response('{}', { status: 200 }));
+
+    try {
+      const model = createChatV2Model(
+        'custom',
+        'custom-model',
+        { settings: {}, getPluginConfig: () => undefined } as any,
+        {
+          apiKey: 'test-key',
+          baseURL: 'https://custom.example.test/v1',
+          requestBodyOverlay: { raw_field: true },
+        },
+      ) as { config?: { fetch?: typeof fetch } };
+      assert.ok(model.config?.fetch);
+      await assert.rejects(
+        () =>
+          model.config!.fetch!('https://custom.example.test/v1/chat/completions', {
+            method: 'POST',
+            body: '[]',
+          }),
+        /provider request body is not a JSON object/,
+      );
+      assert.equal(fetchMock.mock.callCount(), 0);
     } finally {
       fetchMock.mock.restore();
     }

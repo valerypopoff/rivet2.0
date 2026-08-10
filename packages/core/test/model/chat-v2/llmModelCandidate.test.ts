@@ -61,6 +61,7 @@ describe('LLM model candidate', () => {
 
     assert.equal((candidate.runOptions.model as { provider?: string }).provider, 'custom.responses');
     assert.ok(candidate.runOptions.responseOutput);
-    assert.deepEqual(candidate.runOptions.providerOptions, { openai: { store: false } });
+    assert.equal(candidate.runOptions.providerOptions, undefined);
+    assert.deepEqual(candidate.requestBodyOverlay, { store: false });
   });
 });

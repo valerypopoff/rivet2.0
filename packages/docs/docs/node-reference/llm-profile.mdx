@@ -54,6 +54,12 @@ missing at runtime, the profile fails instead of silently retrying without
 authentication. An explicit `Authorization` header remains available for
 header-authenticated endpoints.
 
+**Extra provider options** in a profile use the same raw request-body contract
+as Inline LLM Chat configuration. They must resolve to a JSON object; their
+exact top-level names and values are applied after the provider request is
+generated and override same-named generated fields. In a fallback chain, each
+candidate uses only the Extra provider options stored in that profile.
+
 ## Outputs
 
 | Title   | Data Type    | Description                                               |

@@ -38,6 +38,10 @@ const tauriApiOptimizeDepsExcludes = [
   '@tauri-apps/api/tauri',
   '@tauri-apps/api/window',
 ];
+const monacoJsonOptimizeDepsIncludes = [
+  'monaco-editor/esm/vs/language/json/monaco.contribution.js',
+  'monaco-editor/esm/vs/language/json/jsonMode.js',
+];
 
 const reactDevTools = (): PluginOption => {
   return {
@@ -134,7 +138,11 @@ export function createRivetViteConfig(options: RivetViteConfigOptions = {}): Use
 
   return {
     optimizeDeps: {
-      include: ['nspell'],
+      // Monaco registers JSON support lazily. Pre-bundle both sides of that
+      // loader so opening a JSON-backed node editor cannot trigger Vite's
+      // dependency re-optimization and leave the live page with a stale 504
+      // `?v=` import URL.
+      include: ['nspell', ...monacoJsonOptimizeDepsIncludes],
       exclude: [
         '@valerypopoff/rivet2-core',
         '@valerypopoff/trivet',

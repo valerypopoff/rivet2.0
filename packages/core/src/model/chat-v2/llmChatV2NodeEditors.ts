@@ -545,7 +545,7 @@ function getProviderAdvancedEditors(): LLMChatV2EditorDefinition {
       useInputToggleDataKey: 'useExtraProviderOptionsInput',
       language: 'json',
       helperMessage:
-        'Power-user Vercel providerOptions for the selected provider. Enter a JSON object; visible settings above override conflicting fields.',
+        'Adds these exact top-level JSON fields to the provider request body. Field names are preserved, and these values override generated request fields with the same name.',
       enableFolding: true,
     },
   ]);

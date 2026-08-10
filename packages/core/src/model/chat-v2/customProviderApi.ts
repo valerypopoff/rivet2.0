@@ -3,7 +3,6 @@ export type CustomProviderApi = 'completions' | 'responses';
 export type CustomProviderApiContract = Readonly<{
   api: CustomProviderApi;
   adapter: 'openai-compatible' | 'openai-responses';
-  providerOptionsKey: 'custom' | 'openai';
   endpointPath: '/chat/completions' | '/responses';
   label: 'Custom Completions' | 'Custom Responses';
   structuredOutput: 'raw-response-format' | 'sdk-output';
@@ -19,7 +18,6 @@ const customProviderApiContracts: Record<CustomProviderApi, CustomProviderApiCon
   completions: {
     api: 'completions',
     adapter: 'openai-compatible',
-    providerOptionsKey: 'custom',
     endpointPath: '/chat/completions',
     label: 'Custom Completions',
     structuredOutput: 'raw-response-format',
@@ -28,7 +26,6 @@ const customProviderApiContracts: Record<CustomProviderApi, CustomProviderApiCon
   responses: {
     api: 'responses',
     adapter: 'openai-responses',
-    providerOptionsKey: 'openai',
     endpointPath: '/responses',
     label: 'Custom Responses',
     structuredOutput: 'sdk-output',

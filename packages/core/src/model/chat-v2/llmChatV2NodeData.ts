@@ -90,6 +90,7 @@ export type LLMChatV2EditorCacheKeyParts = {
   generationParameters: unknown;
   responseFormatParameters: unknown;
   providerOptions: unknown;
+  requestBodyOverlay?: unknown;
   toolChoice: unknown;
   /** Ordered, credential-fingerprinted fallback profile configuration. */
   profileChain?: unknown;

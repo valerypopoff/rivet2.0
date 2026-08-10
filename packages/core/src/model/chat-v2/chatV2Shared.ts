@@ -74,7 +74,7 @@ export function createChatV2CommonNodeData(overrides: Partial<ChatV2CommonNodeDa
     outputUsage: false,
     outputReasoning: false,
     cache: false,
-    useAsGraphPartialOutput: true,
+    useAsGraphPartialOutput: false,
     ...overrides,
   };
 }

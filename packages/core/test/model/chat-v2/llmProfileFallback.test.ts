@@ -441,12 +441,15 @@ describe('LLM Profile fallback chain', () => {
       model: 'shared-model',
       customProviderApi: 'responses',
       customProviderBaseURL: 'https://backup.example.test/v1/responses?api-version=2026-08-01',
+      extraProviderOptions: '{ "model": "backup-wire-model", "fallback_marker": "backup" }',
     };
     backup.credential = { value: 'backup-key', reference: { source: 'input' } };
     const attempts: Array<Record<string, unknown>> = [];
     const requestedURLs: string[] = [];
-    const fetchMock = mock.method(globalThis, 'fetch', async (input) => {
+    const requestedBodies: Array<Record<string, unknown>> = [];
+    const fetchMock = mock.method(globalThis, 'fetch', async (input, init) => {
       requestedURLs.push(String(input));
+      requestedBodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
       return new Response(
         JSON.stringify({
           id: 'resp_backup',
@@ -485,6 +488,8 @@ describe('LLM Profile fallback chain', () => {
 
       assert.equal(result.response, 'Recovered');
       assert.deepEqual(requestedURLs, ['https://backup.example.test/v1/responses?api-version=2026-08-01']);
+      assert.equal(requestedBodies[0]?.model, 'backup-wire-model');
+      assert.equal(requestedBodies[0]?.fallback_marker, 'backup');
       assert.equal(attempts[0]?.stage, 'configuration');
       assert.match(String(attempts[0]?.error), /valid absolute HTTP or HTTPS URL/);
       assert.equal(attempts[1]?.customProviderApi, 'responses');

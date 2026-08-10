@@ -92,6 +92,7 @@ export async function resolveLLMChatV2RuntimeConfig(params: {
       provider: inlineRunOptions.provider,
       providerConfig: inlineCandidate.providerConfig,
       providerOptions: inlineRunOptions.providerOptions,
+      requestBodyOverlay: inlineCandidate.requestBodyOverlay,
       responseFormatParameters: plan.responseFormatParameters,
       systemPrompt: plan.systemPrompt,
       toolChoice: plan.toolChoice,
@@ -228,6 +229,7 @@ export async function resolveLLMChatV2RuntimeConfig(params: {
     // global-header edit cannot reuse a stale profile-mode editor cache entry.
     providerConfig: { headers: cleanHeaders(context.settings?.chatNodeHeaders ?? {}) },
     providerOptions: undefined,
+    requestBodyOverlay: undefined,
     responseFormatParameters: plan.responseFormatParameters,
     systemPrompt: plan.systemPrompt,
     toolChoice: plan.toolChoice,

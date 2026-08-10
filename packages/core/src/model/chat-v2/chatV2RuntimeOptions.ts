@@ -5,6 +5,7 @@ import { cleanHeaders, getInputOrData } from '../../utils/inputs.js';
 import type { Inputs } from '../GraphProcessor.js';
 import type { PortId } from '../NodeBase.js';
 import type { InternalProcessContext } from '../ProcessContext.js';
+import { cloneRivetStoredValue, type RivetStoredValue } from '../StoredValueStore.js';
 import type { ResolvedChatV2ProviderConfig } from './providerOptions.js';
 import { resolveChatV2Credential } from './chatV2ProviderProfile.js';
 import type {
@@ -14,7 +15,6 @@ import type {
   RunChatV2PipelineOptions,
 } from './chatV2Types.js';
 import { applyLLMChatV2ParallelToolCallProviderOptions } from './parallelToolCalls.js';
-import { getCustomProviderApiContract } from './customProviderApi.js';
 import type { LLMChatV2NodeData } from './llmChatV2NodeData.js';
 
 export type LLMChatV2GenerationParameters = Pick<
@@ -22,8 +22,7 @@ export type LLMChatV2GenerationParameters = Pick<
   'maxTokens' | 'temperature' | 'topP' | 'topK' | 'presencePenalty' | 'frequencyPenalty' | 'stopSequences' | 'seed'
 >;
 
-type JsonValue = string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue | undefined };
-type JsonObject = { [key: string]: JsonValue | undefined };
+export type LLMChatV2RequestBodyOverlay = Record<string, RivetStoredValue>;
 
 export function resolveLLMChatV2Headers(data: LLMChatV2NodeData, inputs: Inputs): Record<string, string> | undefined {
   const resolvedHeaders =
@@ -50,7 +49,7 @@ export function resolveLLMChatV2ApiKey(
   }).value;
 }
 
-function parseExtraProviderOptionsText(rawText: string): JsonObject | undefined {
+function parseExtraProviderOptionsText(rawText: string): LLMChatV2RequestBodyOverlay | undefined {
   const raw = rawText.trim();
 
   if (!raw) {
@@ -68,8 +67,8 @@ function parseExtraProviderOptionsText(rawText: string): JsonObject | undefined 
   return normalizeExtraProviderOptions(parsed);
 }
 
-function normalizeExtraProviderOptions(value: unknown): JsonObject | undefined {
-  if (value == null) {
+function normalizeExtraProviderOptions(value: unknown): LLMChatV2RequestBodyOverlay | undefined {
+  if (value === undefined) {
     return undefined;
   }
 
@@ -77,14 +76,18 @@ function normalizeExtraProviderOptions(value: unknown): JsonObject | undefined {
     return parseExtraProviderOptionsText(value);
   }
 
-  if (typeof value !== 'object' || Array.isArray(value)) {
+  const cloned = cloneRivetStoredValue(value, 'Extra provider options');
+  if (cloned === null || typeof cloned !== 'object' || Array.isArray(cloned)) {
     throw new Error('Extra provider options must be a JSON object.');
   }
 
-  return value as JsonObject;
+  return cloned;
 }
 
-export function resolveLLMChatV2ExtraProviderOptions(data: LLMChatV2NodeData, inputs: Inputs): JsonObject | undefined {
+export function resolveLLMChatV2ExtraProviderOptions(
+  data: LLMChatV2NodeData,
+  inputs: Inputs,
+): LLMChatV2RequestBodyOverlay | undefined {
   if (!data.useExtraProviderOptionsInput) {
     return parseExtraProviderOptionsText(data.extraProviderOptions ?? '');
   }
@@ -94,15 +97,6 @@ export function resolveLLMChatV2ExtraProviderOptions(data: LLMChatV2NodeData, in
 
 function resolveProviderOptions(data: LLMChatV2NodeData, inputs: Inputs): ChatV2ProviderOptions | undefined {
   const providerOptions: ChatV2ProviderOptions = {};
-  const extraProviderOptions = resolveLLMChatV2ExtraProviderOptions(data, inputs);
-  const providerOptionsKey =
-    data.provider === 'custom'
-      ? getCustomProviderApiContract(data.customProviderApi).providerOptionsKey
-      : data.provider;
-
-  if (extraProviderOptions) {
-    providerOptions[providerOptionsKey] = extraProviderOptions;
-  }
 
   if (data.provider === 'openai') {
     const previousResponseId =
