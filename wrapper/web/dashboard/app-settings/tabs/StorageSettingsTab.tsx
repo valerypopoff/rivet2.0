@@ -1,6 +1,6 @@
 import TextField from '@atlaskit/textfield';
 
-import { ModeButton, ModeGroup, SettingsActions } from '../SettingsControls';
+import { ModeButton, ModeGroup } from '../SettingsControls';
 import type { DeploymentStorageSettingsForm } from '../model';
 import type { useDeploymentStorageForm } from '../useDeploymentStorageForm';
 
@@ -106,17 +106,6 @@ export function StorageSettingsTab({ storage }: { storage: ReturnType<typeof use
           ) : null}
         </div>
       </section>
-
-      <SettingsActions
-        changed={storage.changed}
-        disabled={storage.controlsDisabled}
-        error={storage.error}
-        loading={storage.saving}
-        onRevert={storage.revert}
-        onSave={storage.save}
-        saved={storage.saved}
-        savedMessage="Saved. Restart Docker services or roll out Kubernetes pods to apply storage changes."
-      />
     </div>
   );
 }

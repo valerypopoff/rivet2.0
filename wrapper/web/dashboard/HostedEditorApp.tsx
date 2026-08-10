@@ -7,7 +7,7 @@ import {
   type RivetAppHostProjectSavedEvent,
   type RivetWorkspaceHost,
 } from '../../../rivet/packages/app/src/host';
-import { EditorMessageBridge } from './EditorMessageBridge';
+import { EditorMessageBridge, type SavedProjectSignal } from './EditorMessageBridge';
 import { RIVET_EXECUTOR_WS_URL } from '../../shared/hosted-env';
 import { postMessageToDashboard } from '../../shared/editor-bridge';
 import { hostedRivetProviders } from './hostedRivetProviders';
@@ -27,14 +27,19 @@ const HOSTED_RIVET_UI = {
   webApps: {
     desktopPreview: false,
   },
+  keyboardShortcuts: {
+    saveProject: true,
+  },
 } satisfies RivetAppHostUiConfig;
 
 export const HostedEditorApp: FC = () => {
   const [workspaceHost, setWorkspaceHost] = useState<RivetWorkspaceHost | null>(null);
+  const [savedProjectSignal, setSavedProjectSignal] = useState<SavedProjectSignal | null>(null);
   const reconcileHostedProjectTitleAfterSave = useReconcileHostedProjectTitleAfterSave(workspaceHost);
 
   const handleProjectSaved = useCallback((event: RivetAppHostProjectSavedEvent) => {
     reconcileHostedProjectTitleAfterSave(event);
+    setSavedProjectSignal({ projectId: event.project.metadata.id });
 
     if (!event.path) {
       return;
@@ -81,7 +86,12 @@ export const HostedEditorApp: FC = () => {
       onWorkspaceHostDisposed={handleWorkspaceHostDisposed}
       onWorkspaceHostReady={handleWorkspaceHostReady}
     >
-      {workspaceHost ? <EditorMessageBridge workspaceHost={workspaceHost} /> : null}
+      {workspaceHost ? (
+        <EditorMessageBridge
+          savedProjectSignal={savedProjectSignal}
+          workspaceHost={workspaceHost}
+        />
+      ) : null}
     </RivetAppHost>
   );
 };

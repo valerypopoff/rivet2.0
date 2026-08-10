@@ -1,8 +1,5 @@
 import TextField from '@atlaskit/textfield';
 
-import type { HostedRouteConfig } from '../../types';
-import { formatWebAppsAuthMode, parseDelimitedListText } from '../model';
-import { SettingsActions } from '../SettingsControls';
 import type { useRuntimeLimitsForm } from '../useRuntimeLimitsForm';
 import type { useTrustedHostsForm } from '../useTrustedHostsForm';
 
@@ -11,36 +8,17 @@ const appName = 'Rivet Studio Server';
 
 export function GeneralSettingsTab({
   limits,
-  routeConfig,
   trustedHosts,
 }: {
   limits: ReturnType<typeof useRuntimeLimitsForm>;
-  routeConfig: HostedRouteConfig;
   trustedHosts: ReturnType<typeof useTrustedHostsForm>;
 }) {
-  const trustedHostCount = parseDelimitedListText(trustedHosts.form.trustedHostsText).length;
-  const showLimitStatus = limits.status === 'shell' || limits.status === null;
-
   return (
     <div className="project-settings-tab-panel app-settings-general-panel" role="tabpanel">
       <section className="app-settings-section" aria-label="Application">
         <div className="app-settings-section-title">Application</div>
         <div className="about-detail-row"><span className="about-detail-label">Name</span><span className="about-detail-value">{appName}</span></div>
         <div className="about-detail-row"><span className="about-detail-label">Version</span><span className="about-detail-value">{appVersion}</span></div>
-      </section>
-
-      <section className="app-settings-section" aria-label="Routes">
-        <div className="app-settings-section-title">Routes</div>
-        <div className="about-detail-row"><span className="about-detail-label">Published workflows</span><span className="about-detail-value">{routeConfig.publishedWorkflowsBasePath}</span></div>
-        <div className="about-detail-row"><span className="about-detail-label">Latest workflows</span><span className="about-detail-value">{routeConfig.latestWorkflowsBasePath}</span></div>
-        <div className="about-detail-row"><span className="about-detail-label">Published web apps</span><span className="about-detail-value">{routeConfig.publishedAppsBasePath}</span></div>
-        <div className="about-detail-row"><span className="about-detail-label">Latest web apps</span><span className="about-detail-value">{routeConfig.latestAppsBasePath}</span></div>
-      </section>
-
-      <section className="app-settings-section" aria-label="Access">
-        <div className="app-settings-section-title">Access</div>
-        <div className="about-detail-row"><span className="about-detail-label">Web app auth</span><span className="about-detail-value">{formatWebAppsAuthMode(routeConfig.webAppsAuthMode)}</span></div>
-        <div className="about-detail-row"><span className="about-detail-label">Trusted hosts</span><span className="about-detail-value">{trustedHostCount ? `${trustedHostCount} configured` : 'None'}</span></div>
       </section>
 
       <section className="app-settings-section" aria-label="Trusted host settings">
@@ -66,15 +44,6 @@ export function GeneralSettingsTab({
             </span>
           </label>
         </div>
-        <SettingsActions
-          changed={trustedHosts.changed}
-          disabled={trustedHosts.controlsDisabled}
-          error={trustedHosts.error}
-          loading={trustedHosts.saving}
-          onRevert={trustedHosts.revert}
-          onSave={trustedHosts.save}
-          saved={trustedHosts.saved}
-        />
       </section>
 
       <section className="app-settings-section" aria-label="Shell execution">
@@ -115,15 +84,6 @@ export function GeneralSettingsTab({
             <span className="app-settings-field-help">How much command output the API keeps before truncating it.</span>
           </label>
         </div>
-        <SettingsActions
-          changed={limits.changed.shell}
-          disabled={limits.controlsDisabled}
-          error={showLimitStatus ? limits.error : null}
-          loading={limits.saving && limits.status === 'shell'}
-          onRevert={() => limits.revert('shell')}
-          onSave={() => limits.save('shell')}
-          saved={showLimitStatus && limits.saved}
-        />
       </section>
     </div>
   );

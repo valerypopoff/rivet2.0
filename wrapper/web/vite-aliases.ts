@@ -27,7 +27,6 @@ export function createModuleOverrideAliases(overrideDir: string) {
     { find: /^\.\.?\/(?:.*\/)?useContextMenu(\.js|\.ts)?$/, replacement: resolve(overrideDir, 'hooks/useContextMenu.ts') },
     { find: /^\.\.?\/(?:.*\/)?useCopyNodesHotkeys(\.js|\.ts)?$/, replacement: resolve(overrideDir, 'hooks/useCopyNodesHotkeys.ts') },
     { find: /^\.\.?\/(?:.*\/)?useLoadProject(\.js|\.ts)?$/, replacement: resolve(overrideDir, 'hooks/useLoadProject.ts') },
-    { find: /^\.\.?\/(?:.*\/)?useWindowsHotkeysFix(\.js|\.ts)?$/, replacement: resolve(overrideDir, 'hooks/useWindowsHotkeysFix.tsx') },
     { find: /^\.\.?\/(?:.*\/)?useLoadPackagePlugin(\.js|\.ts)?$/, replacement: resolve(overrideDir, 'hooks/useLoadPackagePlugin.ts') },
     { find: /^\.\.?\/(?:.*\/)?useSyncCurrentStateIntoOpenedProjects(\.js|\.ts)?$/, replacement: resolve(overrideDir, 'hooks/useSyncCurrentStateIntoOpenedProjects.ts') },
     { find: /^\.\.?\/(?:.*\/)?TauriNativeApi(\.js|\.ts)?$/, replacement: resolve(overrideDir, 'model/native/TauriNativeApi.ts') },
@@ -42,6 +41,9 @@ export function createBrowserSubpathAliases(webDir: string) {
     { find: /^jsonpath-plus$/, replacement: resolve(webDir, 'node_modules/jsonpath-plus/dist/index-browser-esm.js') },
     { find: /^nanoid$/, replacement: resolve(webDir, 'node_modules/nanoid/index.browser.js') },
     { find: /^nanoid\/non-secure$/, replacement: resolve(webDir, 'node_modules/nanoid/non-secure/index.js') },
+    // Rivet core uses Zod 4 APIs. zod@3.25+ ships that compatibility entrypoint
+    // alongside its legacy default export, so always select the V4 surface here.
+    { find: /^zod$/, replacement: resolve(webDir, 'node_modules/zod/v4/index.js') },
     { find: /^yaml$/, replacement: resolve(webDir, 'node_modules/yaml/browser/index.js') },
     { find: /^yaml\/util$/, replacement: resolve(webDir, 'node_modules/yaml/browser/dist/util.js') },
   ];

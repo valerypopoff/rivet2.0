@@ -1,5 +1,5 @@
 import Button from '@atlaskit/button';
-import type { FC } from 'react';
+import type { Dispatch, FC, SetStateAction } from 'react';
 import { ActiveProjectSection } from './ActiveProjectSection';
 import { WorkflowFolderTree } from './WorkflowFolderTree';
 import { WorkflowLibraryContextMenus } from './WorkflowLibraryContextMenus';
@@ -34,7 +34,7 @@ interface WorkflowLibraryPanelProps {
   contentVisible: boolean;
   onToggleCollapse: () => void;
   routeConfig: HostedRouteConfig;
-  onRouteConfigChange?: (config: HostedRouteConfig) => void;
+  onRouteConfigChange?: Dispatch<SetStateAction<HostedRouteConfig>>;
 }
 
 const SidebarOpenIcon: FC = () => (
@@ -126,7 +126,6 @@ export const WorkflowLibraryPanel: FC<WorkflowLibraryPanelProps> = ({
     onProjectPreviewOpen,
     onProjectPersistentOpen,
     setProjectRowRef,
-    setAboutOpen,
     setRuntimeLibsOpen,
     openRunRecordingsModal,
     setRunStatisticsOpen,
@@ -267,14 +266,6 @@ export const WorkflowLibraryPanel: FC<WorkflowLibraryPanelProps> = ({
             aria-label="App settings"
           >
             Settings
-          </Button>
-          <Button
-            appearance="subtle"
-            className="panel-bottom-button project-settings-secondary-button button-size-m"
-            onClick={() => setAboutOpen(true)}
-            title="Show version information"
-          >
-            About
           </Button>
         </div>
 

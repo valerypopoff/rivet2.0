@@ -1,9 +1,8 @@
 import { type ProjectId } from '@valerypopoff/rivet2-core';
 import { useAtomValue, useSetAtom } from 'jotai';
-import { type FC, useCallback, useEffect, useMemo, useRef } from 'react';
+import { type FC, useCallback, useEffect, useMemo } from 'react';
 
 import { useExecutorSessionRuntime, type RivetWorkspaceHost } from '../../../rivet/packages/app/src/host';
-import { useSaveProject } from '../../../rivet/packages/app/src/hooks/useSaveProject';
 import { graphRunningState } from '../../../rivet/packages/app/src/state/dataFlow';
 import {
   executorSessionRevisionState,
@@ -27,12 +26,16 @@ import { usePreviewProjectLifecycle } from './usePreviewProjectLifecycle';
 import { useWorkflowRecordingBridge } from './useWorkflowRecordingBridge';
 
 type EditorMessageBridgeProps = {
+  savedProjectSignal: SavedProjectSignal | null;
   workspaceHost: RivetWorkspaceHost;
 };
 
-export const EditorMessageBridge: FC<EditorMessageBridgeProps> = ({ workspaceHost }) => {
+export type SavedProjectSignal = {
+  projectId: ProjectId;
+};
+
+export const EditorMessageBridge: FC<EditorMessageBridgeProps> = ({ savedProjectSignal, workspaceHost }) => {
   const openProject = useOpenWorkflowProject(workspaceHost);
-  const { saveProject } = useSaveProject();
   const executorSessionRuntime = useExecutorSessionRuntime();
   const projects = useAtomValue(projectsState);
   const loadedProject = useAtomValue(loadedProjectState);
@@ -48,11 +51,6 @@ export const EditorMessageBridge: FC<EditorMessageBridgeProps> = ({ workspaceHos
   const openedProjectPaths = useMemo(() => projects.openedProjectsSortedIds
     .map((projectId) => projects.openedProjects[projectId]?.fsPath)
     .filter((projectPath): projectPath is string => Boolean(projectPath)), [projects]);
-  const loadedProjectRef = useRef(loadedProject);
-  const saveProjectRef = useRef(saveProject);
-  loadedProjectRef.current = loadedProject;
-  saveProjectRef.current = saveProject;
-
   const preview = usePreviewProjectLifecycle({
     currentProjectId: currentProject.metadata.id as ProjectId | undefined,
     executorTargetType: executorSessionRuntime.getRuntimeState().target?.type,
@@ -69,10 +67,6 @@ export const EditorMessageBridge: FC<EditorMessageBridgeProps> = ({ workspaceHos
     selectBrowserExecutor,
     setLoadedRecording,
   });
-  const saveCurrentProject = useCallback(async () => {
-    await saveProjectRef.current();
-    preview.promotePreviewProjectByPath(loadedProjectRef.current.path);
-  }, [preview.promotePreviewProjectByPath]);
   const openGraphSearch = useCallback(() => {
     setSearching(openOrFocusGraphSearchState);
   }, [setSearching]);
@@ -80,7 +74,6 @@ export const EditorMessageBridge: FC<EditorMessageBridgeProps> = ({ workspaceHos
   useEditorBridgeInteractions({
     canOpenGraphSearch: openOverlay === undefined,
     onOpenGraphSearch: openGraphSearch,
-    onSave: saveCurrentProject,
   });
   useEditorCommandBridge({
     currentProject,
@@ -89,9 +82,14 @@ export const EditorMessageBridge: FC<EditorMessageBridgeProps> = ({ workspaceHos
     preview,
     projects,
     recording,
-    saveCurrentProject,
     workspaceHost,
   });
+
+  useEffect(() => {
+    if (savedProjectSignal) {
+      preview.promotePreviewProjectById(savedProjectSignal.projectId);
+    }
+  }, [preview.promotePreviewProjectById, savedProjectSignal]);
 
   useEffect(() => {
     postMessageToDashboard({ type: 'editor-ready' });

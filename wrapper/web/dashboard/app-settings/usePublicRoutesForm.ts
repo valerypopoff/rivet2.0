@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { type Dispatch, type SetStateAction, useState } from 'react';
 
 import type { HostedRouteConfig } from '../types';
 import { publicRouteSettingsResource } from '../appSettingsApi';
@@ -42,7 +42,7 @@ function mergeSavedForm(
 export function usePublicRoutesForm(
   enabled: boolean,
   routeConfig: HostedRouteConfig,
-  onRouteConfigChange?: (config: HostedRouteConfig) => void,
+  onRouteConfigChange?: Dispatch<SetStateAction<HostedRouteConfig>>,
 ) {
   const [applying, setApplying] = useState(false);
   const resource = useSettingsFormResource({
@@ -50,7 +50,7 @@ export function usePublicRoutesForm(
       setApplying(true);
       try {
         const activeConfig = await waitForHostedRouteConfig(settings);
-        onRouteConfigChange?.({ ...routeConfig, ...activeConfig });
+        onRouteConfigChange?.((current) => ({ ...current, ...activeConfig }));
       } finally {
         setApplying(false);
       }

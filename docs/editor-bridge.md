@@ -72,14 +72,14 @@ All message types live in `wrapper/shared/editor-bridge.ts`. Both sides import f
 
 Save can be initiated from either context:
 
-- inside the iframe, the editor bridge listens for `Ctrl+S` / `Cmd+S` and calls the editor's normal save flow across platforms, including hosted Windows browser sessions; when it owns the shortcut it stops same-target listeners too, so upstream Windows/Tauri menu hotkeys cannot perform a second save for the same keypress
-- outside the iframe, the dashboard captures the save shortcut and sends `save-project`
-- save completion is reported through `RivetAppHost.onProjectSaved`, which the wrapper forwards to the dashboard as `project-saved`; the wrapper does not override upstream save/menu hooks just to observe saves
+- inside the iframe, Rivet owns `Ctrl+S` / `Cmd+S` through `RivetAppHost.ui.keyboardShortcuts.saveProject: true`; the wrapper does not register a competing iframe save listener
+- outside the iframe, the dashboard captures the save shortcut, consumes key repeats, and sends `save-project`; `useEditorCommandBridge` handles that command through the public `RivetWorkspaceHost.saveCurrentProject()` API and contains unexpected promise rejections from the message-event boundary. Normal handled save failures still resolve `false` and keep Rivet's own failure notification behavior
+- save completion is reported through `RivetAppHost.onProjectSaved`, which the wrapper forwards to the dashboard as `project-saved` and uses to promote a matching preview tab by project ID. Cancelled and failed saves do not emit this callback and therefore cannot promote a preview
 - the dashboard shows the left-card `Save` button only when the selected workflow is the active editor project and the iframe reports unsaved changes through `active-project-unsaved-changes-changed`; publication status such as `Published` or `Unpublished changes` must not drive save-button visibility
 - the API validates the saved project payload before persistence and treats the workflow tree/file name as the hosted project title source of truth; if the editor changed `data.metadata.title`, the saved `.rivet-project` is rewritten back to the current tree name
 - after a successful save, the hosted wrapper calls `RivetWorkspaceHost.updateProjectMetadata()` with `persistedExternally: true` so all Rivet title surfaces update to the file-tree name immediately without reopening the project, changing the active graph, or manually reseeding Rivet's dirty baseline
 - wrapper-owned save code that bypasses Rivet's save command must call `RivetWorkspaceHost.markCurrentProjectClean()` or `markProjectClean()` only after the backend save succeeds, optionally with the exact snapshot that should become clean; do not read or mutate `savedProjectContentDigestsState`, `projectUnsavedChangesState`, or `projectDataUnsavedChangesState` directly
-- the hosted wrapper also overrides the upstream Windows hotkey fallback so `Ctrl+S` does not trigger a second save via the legacy keyup path
+- same-project concurrent save requests are deduplicated by Rivet's workspace host; keep save ownership on this upstream contract instead of restoring wrapper hotkey or internal save-hook overrides
 
 That lets the hosted shell behave like a single app even though the editor lives in an iframe.
 
@@ -147,7 +147,6 @@ Those execution websocket responsibilities are separate from the dashboard/edito
 - `wrapper/web/io/HostedIOProvider.ts` - API-backed project loading/saving plus replay and published-version preview loading
 - `wrapper/web/overrides/hooks/useCopyNodesHotkeys.ts` - hosted clipboard hotkey override that reads the latest node state synchronously
 - `wrapper/web/overrides/hooks/useContextMenu.ts` - hosted context-menu override that clears stale focused menu inputs
-- `wrapper/web/overrides/hooks/useWindowsHotkeysFix.tsx` - hosted Windows hotkey override that suppresses duplicate save fallback
 - `wrapper/web/hosted-editor.css` - hosted global CSS that suppresses visible canvas focus outlines
 - `wrapper/web/vite.config.ts` and `wrapper/web/project-tab-label-transform.ts` - hosted build plugin and tested helper for scoped `ProjectSelector` tab-label normalization
 - `wrapper/web/vite-aliases.ts` - Vite alias wiring that redirects hosted builds to tracked wrapper overrides

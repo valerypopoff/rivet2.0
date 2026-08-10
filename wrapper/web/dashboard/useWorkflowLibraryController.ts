@@ -90,7 +90,6 @@ export function useWorkflowLibraryController(options: {
   const [runtimeLibsOpen, setRuntimeLibsOpen] = useState(false);
   const [runStatisticsOpen, setRunStatisticsOpen] = useState(false);
   const [appSettingsOpen, setAppSettingsOpen] = useState(false);
-  const [aboutOpen, setAboutOpen] = useState(false);
   const [folderContextMenuState, setFolderContextMenuState] = useState<WorkflowFolderContextMenuState | null>(null);
   const [projectContextMenuState, setProjectContextMenuState] = useState<WorkflowProjectContextMenuState | null>(null);
   const selection = useWorkflowLibrarySelection({
@@ -543,7 +542,6 @@ export function useWorkflowLibraryController(options: {
     runRecordingsResetToken: runRecordings.resetToken,
     runStatisticsOpen,
     appSettingsOpen,
-    aboutOpen,
     folderContextMenuState,
     projectContextMenuState,
     projectModalProject,
@@ -599,7 +597,6 @@ export function useWorkflowLibraryController(options: {
     closeRunRecordingsModal: runRecordings.close,
     handleRunRecordingsFoundCountChange: runRecordings.setFoundCount,
     setAppSettingsOpen,
-    setAboutOpen,
     onOpenRecording: (recordingId: string) => {
       runRecordings.hide();
       onOpenRecording(recordingId);

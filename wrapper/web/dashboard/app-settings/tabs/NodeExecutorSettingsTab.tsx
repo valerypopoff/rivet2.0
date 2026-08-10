@@ -2,7 +2,6 @@ import TextField from '@atlaskit/textfield';
 
 import type { HostedRouteConfig } from '../../types';
 import type { ExecutorUrlOverrideSettingsForm, NodeExecutorProxySettingsForm } from '../model';
-import { SettingsActions } from '../SettingsControls';
 import type { useNodeExecutorForms } from '../useNodeExecutorForms';
 
 export function NodeExecutorSettingsTab({
@@ -34,7 +33,6 @@ export function NodeExecutorSettingsTab({
             <span className="app-settings-field-help">Include internal service names that should bypass the proxy. In Kubernetes, include cluster-local suffixes such as .svc and .cluster.local when your proxy should not handle in-cluster calls.</span>
           </label>
         </div>
-        <SettingsActions changed={proxy.changed} disabled={!proxy.loaded || proxy.loading || proxy.saving} error={proxy.error} loading={proxy.saving} onRevert={proxy.revert} onSave={proxy.save} saved={proxy.saved} />
       </section>
 
       <section className="app-settings-section" aria-label="Websocket URL overrides">
@@ -51,7 +49,6 @@ export function NodeExecutorSettingsTab({
             <span className="app-settings-field-help">Optional override for the editor's default Remote Debugger URL. Leave blank to use the hosted latest-debugger websocket when available. Active URL: {routeConfig.remoteDebuggerDefaultWs || 'none'}.</span>
           </label>
         </div>
-        <SettingsActions changed={urls.changed} disabled={!urls.loaded || urls.loading || urls.saving} error={urls.error} loading={urls.saving} onRevert={urls.revert} onSave={urls.save} saved={urls.saved} savedMessage="Saved. Reload the editor to apply websocket URL overrides to active sessions." />
       </section>
     </div>
   );

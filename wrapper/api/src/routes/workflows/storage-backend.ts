@@ -23,7 +23,6 @@ import type {
   WorkflowRecordingRunsPageResponse,
   WorkflowRecordingWorkflowListResponse,
   WorkflowRunStatisticsCatalogResponse,
-  WorkflowRunStatisticsPeriod,
   WorkflowRunStatisticsQuery,
   WorkflowRunStatisticsResponse,
   WorkflowRunStatisticsSurface,
@@ -463,12 +462,10 @@ export async function listWorkflowRecordingRunsPageWithBackend(
 
 export async function listWorkflowRunStatisticsCatalogWithBackend(
   surface: WorkflowRunStatisticsSurface,
-  period: WorkflowRunStatisticsPeriod,
-  runKind?: WorkflowRunStatisticsQuery['runKind'],
 ): Promise<WorkflowRunStatisticsCatalogResponse> {
   return delegateWithWorkflowsRoot(
-    async (backend) => backend.listWorkflowRunStatisticsCatalog(surface, period, runKind),
-    async (root) => listWorkflowRunStatisticsCatalog(root, surface, period, runKind),
+    async (backend) => backend.listWorkflowRunStatisticsCatalog(surface),
+    async (root) => listWorkflowRunStatisticsCatalog(root, surface),
   );
 }
 

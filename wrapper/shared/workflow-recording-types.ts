@@ -92,6 +92,7 @@ export type WorkflowRecordingRunsPageResponse = {
 
 export type WorkflowRunStatisticsSurface = 'endpoint' | 'web_app';
 export type WorkflowRunStatisticsRunKind = WorkflowRecordingRunKind | 'both';
+export type WorkflowRunStatisticsAggregation = 'auto' | 'day' | 'week';
 
 export type WorkflowRunStatisticsPeriod = {
   from: string;
@@ -158,7 +159,6 @@ export type WorkflowRunStatisticsTargetSummary = {
 
 export type WorkflowRunStatisticsCatalogResponse = {
   surface: WorkflowRunStatisticsSurface;
-  period: WorkflowRunStatisticsPeriod;
   targets: WorkflowRunStatisticsTargetSummary[];
 };
 
@@ -168,6 +168,11 @@ export type WorkflowRunStatisticsQuery = {
   runKind: WorkflowRunStatisticsRunKind;
   includeFailed: boolean;
   includeWarnings: boolean;
+  /**
+   * Controls only the chart grouping. Omitting it preserves the adaptive
+   * grouping used by clients created before this field existed.
+  */
+  aggregation?: WorkflowRunStatisticsAggregation;
 };
 
 export type WorkflowRunStatisticsBucket = WorkflowRunStatisticsMetrics & {

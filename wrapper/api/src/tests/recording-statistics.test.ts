@@ -121,6 +121,42 @@ test('run statistics clamp chart bucket bounds to a custom selected period', () 
   }]);
 });
 
+test('run statistics can group chart buckets by UTC day or ISO week', () => {
+  const groupingPeriod = {
+    from: '2026-08-02T12:00:00.000Z',
+    to: '2026-08-11T06:00:00.000Z',
+  };
+  const rows = [
+    row({ createdAt: '2026-08-02T13:00:00.000Z', durationMs: 100 }),
+    row({ createdAt: '2026-08-03T09:00:00.000Z', durationMs: 200 }),
+    row({ createdAt: '2026-08-03T22:00:00.000Z', durationMs: 300 }),
+    row({ createdAt: '2026-08-04T10:00:00.000Z', durationMs: 400 }),
+    row({ createdAt: '2026-08-10T23:00:00.000Z', durationMs: 500 }),
+  ];
+  const query = {
+    target: { surface: 'endpoint' as const, workflowId: 'workflow-a' },
+    period: groupingPeriod,
+    runKind: 'published' as const,
+    includeFailed: false,
+    includeWarnings: false,
+  };
+
+  const daily = buildWorkflowRunStatistics(rows, { ...query, aggregation: 'day' });
+  assert.deepEqual(daily.buckets.map(({ from, to, runCount }) => ({ from, to, runCount })), [
+    { from: '2026-08-02T12:00:00.000Z', to: '2026-08-03T00:00:00.000Z', runCount: 1 },
+    { from: '2026-08-03T00:00:00.000Z', to: '2026-08-04T00:00:00.000Z', runCount: 2 },
+    { from: '2026-08-04T00:00:00.000Z', to: '2026-08-05T00:00:00.000Z', runCount: 1 },
+    { from: '2026-08-10T00:00:00.000Z', to: '2026-08-11T00:00:00.000Z', runCount: 1 },
+  ]);
+
+  const weekly = buildWorkflowRunStatistics(rows, { ...query, aggregation: 'week' });
+  assert.deepEqual(weekly.buckets.map(({ from, to, runCount }) => ({ from, to, runCount })), [
+    { from: '2026-08-02T12:00:00.000Z', to: '2026-08-03T00:00:00.000Z', runCount: 1 },
+    { from: '2026-08-03T00:00:00.000Z', to: '2026-08-10T00:00:00.000Z', runCount: 3 },
+    { from: '2026-08-10T00:00:00.000Z', to: '2026-08-11T06:00:00.000Z', runCount: 1 },
+  ]);
+});
+
 test('statistics catalog keeps endpoints, known web-app actions, and incomplete legacy web-app actions distinct', () => {
   const rows = [
     row(),
@@ -142,11 +178,11 @@ test('statistics catalog keeps endpoints, known web-app actions, and incomplete 
     }),
   ];
 
-  const endpointCatalog = buildWorkflowRunStatisticsCatalog(rows, 'endpoint', period);
+  const endpointCatalog = buildWorkflowRunStatisticsCatalog(rows, 'endpoint');
   assert.equal(endpointCatalog.targets.length, 1);
   assert.deepEqual(endpointCatalog.targets[0]?.target, { surface: 'endpoint', workflowId: 'workflow-a' });
 
-  const webAppCatalog = buildWorkflowRunStatisticsCatalog(rows, 'web_app', period);
+  const webAppCatalog = buildWorkflowRunStatisticsCatalog(rows, 'web_app');
   assert.equal(webAppCatalog.targets.length, 3);
   assert.deepEqual(webAppCatalog.targets.map((target) => target.target), [
     { surface: 'web_app', workflowId: 'workflow-a', legacyEndpointName: '/apps/legacy' },
@@ -205,13 +241,37 @@ test('statistics catalog uses the newest labels and keeps colon-containing targe
     }),
   ];
 
-  const catalog = buildWorkflowRunStatisticsCatalog(rows, 'web_app', period);
+  const catalog = buildWorkflowRunStatisticsCatalog(rows, 'web_app');
   assert.equal(catalog.targets.length, 2);
   const renamedTarget = catalog.targets.find((entry) => entry.target.workflowId === 'workflow:a');
   assert.equal(renamedTarget?.projectName, 'Newest project name');
   assert.equal(renamedTarget?.uiGraphName, 'Newest web app name');
   assert.equal(renamedTarget?.componentLabel, 'Newest button label');
   assert.equal(renamedTarget?.endpointNameAtExecution, '/apps/new-name');
+});
+
+test('statistics catalog keeps retained targets when the selected query has no matching period or version', () => {
+  const retainedRow = row({
+    workflowId: 'workflow-history',
+    sourceProjectName: 'Historical project',
+    createdAt: '2026-08-01T12:00:00.000Z',
+    runKind: 'latest',
+  });
+
+  const catalog = buildWorkflowRunStatisticsCatalog([retainedRow], 'endpoint');
+  assert.deepEqual(catalog.targets.map((entry) => entry.target), [
+    { surface: 'endpoint', workflowId: 'workflow-history' },
+  ]);
+
+  const statistics = buildWorkflowRunStatistics([retainedRow], {
+    target: { surface: 'endpoint', workflowId: 'workflow-history' },
+    period,
+    runKind: 'published',
+    includeFailed: false,
+    includeWarnings: false,
+  });
+  assert.deepEqual(statistics.currentStatusCounts, { succeeded: 0, failed: 0, suspicious: 0 });
+  assert.equal(statistics.current.runCount, 0);
 });
 
 test('statistics target and run-kind matching never mix endpoint and web-app action rows', () => {

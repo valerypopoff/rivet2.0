@@ -16,7 +16,6 @@ import type {
   WorkflowRecordingRunsPageResponse,
   WorkflowRecordingWorkflowListResponse,
   WorkflowRunStatisticsCatalogResponse,
-  WorkflowRunStatisticsPeriod,
   WorkflowRunStatisticsQuery,
   WorkflowRunStatisticsResponse,
   WorkflowRunStatisticsSurface,
@@ -280,10 +279,8 @@ export class ManagedWorkflowBackend {
 
   async listWorkflowRunStatisticsCatalog(
     surface: WorkflowRunStatisticsSurface,
-    period: WorkflowRunStatisticsPeriod,
-    runKind?: WorkflowRunStatisticsQuery['runKind'],
   ): Promise<WorkflowRunStatisticsCatalogResponse> {
-    return this.#recordings.listWorkflowRunStatisticsCatalog(surface, period, runKind);
+    return this.#recordings.listWorkflowRunStatisticsCatalog(surface);
   }
 
   async getWorkflowRunStatistics(query: WorkflowRunStatisticsQuery): Promise<WorkflowRunStatisticsResponse> {

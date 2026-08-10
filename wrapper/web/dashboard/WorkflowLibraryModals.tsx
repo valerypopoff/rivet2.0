@@ -1,5 +1,4 @@
-import { lazy, Suspense, type FC } from 'react';
-import { AboutModal } from './AboutModal';
+import { lazy, Suspense, type Dispatch, type FC, type SetStateAction } from 'react';
 import { AppSettingsModal } from './AppSettingsModal';
 import { ProjectSettingsModal } from './ProjectSettingsModal';
 import { RuntimeLibrariesModal } from './RuntimeLibrariesModal';
@@ -31,7 +30,7 @@ function getProjectVersionActionLabel(mode: WorkflowLibraryController['projectMo
 export const WorkflowLibraryModals: FC<{
   controller: WorkflowLibraryController;
   routeConfig: HostedRouteConfig;
-  onRouteConfigChange?: (config: HostedRouteConfig) => void;
+  onRouteConfigChange?: Dispatch<SetStateAction<HostedRouteConfig>>;
 }> = ({ controller, routeConfig, onRouteConfigChange }) => {
   const {
     settingsModalOpen,
@@ -55,8 +54,6 @@ export const WorkflowLibraryModals: FC<{
     setRunStatisticsOpen,
     appSettingsOpen,
     setAppSettingsOpen,
-    aboutOpen,
-    setAboutOpen,
     onOpenRecording,
     onOpenPublishedVersionPreview,
     projectModalProject,
@@ -110,10 +107,6 @@ export const WorkflowLibraryModals: FC<{
         onClose={() => setAppSettingsOpen(false)}
         routeConfig={routeConfig}
         onRouteConfigChange={onRouteConfigChange}
-      />
-      <AboutModal
-        isOpen={aboutOpen}
-        onClose={() => setAboutOpen(false)}
       />
       <WorkflowProjectVersionModal
         isOpen={projectModalProject != null}

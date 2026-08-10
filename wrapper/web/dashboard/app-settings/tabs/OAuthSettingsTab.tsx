@@ -2,7 +2,7 @@ import TextField from '@atlaskit/textfield';
 
 import type { HostedRouteConfig } from '../../types';
 import { defaultSessionTtlHours, type WebAppAuthSettingsForm } from '../model';
-import { BooleanSetting, ModeButton, ModeGroup, SettingsActions } from '../SettingsControls';
+import { BooleanSetting, ModeButton, ModeGroup } from '../SettingsControls';
 import type { useWebAppAuthForm } from '../useWebAppAuthForm';
 
 export function OAuthSettingsTab({ auth, routeConfig }: {
@@ -10,7 +10,6 @@ export function OAuthSettingsTab({ auth, routeConfig }: {
   routeConfig: HostedRouteConfig;
 }) {
   const form = auth.form;
-  const showStatus = auth.status === 'oauth';
   const update = <K extends keyof WebAppAuthSettingsForm>(key: K, value: WebAppAuthSettingsForm[K]) => {
     auth.setForm((current) => ({ ...current, [key]: value }));
     auth.clearFeedback();
@@ -96,7 +95,6 @@ export function OAuthSettingsTab({ auth, routeConfig }: {
             <span className="app-settings-field-help">Turn this off after finding the email claim path because profile logs can contain user data.</span>
           </div>
         </div>
-        <SettingsActions changed={auth.changed.oauth} disabled={auth.controlsDisabled} error={showStatus ? auth.error : null} loading={auth.saving && showStatus} onRevert={() => auth.revert('oauth')} onSave={() => auth.save('oauth')} saved={showStatus && auth.saved} />
       </section>
     </div>
   );

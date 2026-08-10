@@ -1,7 +1,7 @@
 import TextField from '@atlaskit/textfield';
 
 import { defaultMaxRunsPerEndpoint, defaultRetentionDays, type RunRecordingsSettingsForm } from '../model';
-import { ModeButton, ModeGroup, SettingsActions } from '../SettingsControls';
+import { ModeButton, ModeGroup } from '../SettingsControls';
 import type { useRunRecordingsForm } from '../useRunRecordingsForm';
 
 export function RunRecordingsSettingsTab({ recordings }: { recordings: ReturnType<typeof useRunRecordingsForm> }) {
@@ -53,15 +53,6 @@ export function RunRecordingsSettingsTab({ recordings }: { recordings: ReturnTyp
             </span>
           </div>
         </div>
-        <SettingsActions
-          changed={recordings.changed}
-          disabled={recordings.controlsDisabled}
-          error={recordings.error}
-          loading={recordings.saving}
-          onRevert={recordings.revert}
-          onSave={recordings.save}
-          saved={recordings.saved}
-        />
       </section>
     </div>
   );

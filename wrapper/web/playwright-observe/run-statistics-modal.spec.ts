@@ -8,30 +8,34 @@ type StatisticsRequest = {
   runKind: string;
   includeFailed: boolean;
   includeWarnings: boolean;
+  aggregation: 'auto' | 'day' | 'week';
 };
 
 function getStatisticsResponse(request: StatisticsRequest) {
+  const hasMatchingRuns = request.runKind !== 'latest';
   const secondBucketFrom = new Date(Date.parse(request.period.from) + 60 * 60 * 1000).toISOString();
-  const includedRunCount = 3 + Number(request.includeFailed) + Number(request.includeWarnings);
+  const includedRunCount = hasMatchingRuns
+    ? 3 + Number(request.includeFailed) + Number(request.includeWarnings)
+    : 0;
 
   return {
     target: request.target,
     period: request.period,
     current: {
       runCount: includedRunCount,
-      medianDurationMs: 1_250,
-      p95DurationMs: 2_200,
-      averageDurationMs: 1_400,
-      minDurationMs: 900,
-      maxDurationMs: 2_400,
+      medianDurationMs: hasMatchingRuns ? 1_250 : null,
+      p95DurationMs: hasMatchingRuns ? 2_200 : null,
+      averageDurationMs: hasMatchingRuns ? 1_400 : null,
+      minDurationMs: hasMatchingRuns ? 900 : null,
+      maxDurationMs: hasMatchingRuns ? 2_400 : null,
     },
-    currentStatusCounts: { succeeded: 3, failed: 1, suspicious: 1 },
+    currentStatusCounts: hasMatchingRuns ? { succeeded: 3, failed: 1, suspicious: 1 } : { succeeded: 0, failed: 0, suspicious: 0 },
     currentExcludedStatusCounts: {
       succeeded: 0,
       failed: request.includeFailed ? 0 : 1,
       suspicious: request.includeWarnings ? 0 : 1,
     },
-    buckets: [
+    buckets: hasMatchingRuns ? [
       {
         from: request.period.from,
         to: secondBucketFrom,
@@ -52,7 +56,7 @@ function getStatisticsResponse(request: StatisticsRequest) {
         minDurationMs: 800,
         maxDurationMs: 2_000,
       },
-    ],
+    ] : [],
   };
 }
 
@@ -104,7 +108,6 @@ async function installRunStatisticsRoutes(page: Page) {
         contentType: 'application/json',
         body: JSON.stringify({
           surface,
-          period: { from: url.searchParams.get('from'), to: url.searchParams.get('to') },
           targets,
         }),
       });
@@ -181,8 +184,23 @@ test.describe('Run statistics modal', () => {
     await expect(modal.locator('.recharts-line-curve').nth(1)).toHaveAttribute('stroke', '#c58aff');
     await expect(outcomes).toContainText('Warnings');
     expect(catalogRequests[0]?.searchParams.get('surface')).toBe('endpoint');
-    expect(catalogRequests[0]?.searchParams.get('runKind')).toBe('published');
+    expect(catalogRequests[0]?.searchParams.get('from')).toBeNull();
+    expect(catalogRequests[0]?.searchParams.get('to')).toBeNull();
+    expect(catalogRequests[0]?.searchParams.get('runKind')).toBeNull();
     expect(statisticsRequests[0]?.includeFailed).toBe(false);
+    expect(statisticsRequests[0]?.aggregation).toBe('auto');
+
+    await modal.getByRole('button', { name: 'Latest' }).click();
+    await expect(modal.getByText('No runs for this target match the selected period and version.')).toBeVisible();
+    await expect(modal.locator('.run-statistics-target-select__single-value')).toHaveText('Report project');
+    expect(catalogRequests).toHaveLength(1);
+    await modal.getByRole('button', { name: 'Published' }).click();
+    await expect(modal.locator('.run-statistics-metric-card').first()).toContainText('1.25 s');
+
+    await modal.getByRole('button', { name: 'By day' }).click();
+    await expect.poll(() => statisticsRequests.at(-1)?.aggregation).toBe('day');
+    await modal.getByRole('button', { name: 'By week' }).click();
+    await expect.poll(() => statisticsRequests.at(-1)?.aggregation).toBe('week');
 
     await targetSelect.press('ArrowDown');
     await targetSelect.press('ArrowDown');

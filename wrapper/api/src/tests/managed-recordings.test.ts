@@ -133,10 +133,7 @@ test('managed recording statistics preserve web-app action identity and run-kind
     }),
   });
 
-  const catalog = await service.listWorkflowRunStatisticsCatalog('web_app', {
-    from: '2026-08-04T00:00:00.000Z',
-    to: '2026-08-05T00:00:00.000Z',
-  }, 'published');
+  const catalog = await service.listWorkflowRunStatisticsCatalog('web_app');
 
   assert.deepEqual(catalog.targets.map((entry) => entry.target), [
     { surface: 'web_app', workflowId: 'workflow-a', uiGraphId: 'ui-report', componentId: 'generate' },

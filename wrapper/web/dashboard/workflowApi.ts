@@ -21,7 +21,6 @@ import type {
   WorkflowRunStatisticsCatalogResponse,
   WorkflowRunStatisticsPeriod,
   WorkflowRunStatisticsQuery,
-  WorkflowRunStatisticsRunKind,
   WorkflowRunStatisticsResponse,
   WorkflowRunStatisticsSurface,
   WorkflowPublishedVersionRestoreResponse,
@@ -171,11 +170,9 @@ export async function fetchWorkflowRecordingRuns(
 
 export async function fetchWorkflowRunStatisticsCatalog(
   surface: WorkflowRunStatisticsSurface,
-  period: WorkflowRunStatisticsPeriod,
-  runKind: WorkflowRunStatisticsRunKind,
   options: { signal?: AbortSignal } = {},
 ): Promise<WorkflowRunStatisticsCatalogResponse> {
-  const query = new URLSearchParams({ surface, from: period.from, to: period.to, runKind });
+  const query = new URLSearchParams({ surface });
   const response = await fetch(`${API}/workflows/run-statistics/targets?${query}`, {
     cache: 'no-store',
     signal: options.signal,

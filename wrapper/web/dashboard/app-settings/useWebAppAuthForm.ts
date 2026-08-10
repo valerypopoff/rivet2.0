@@ -1,3 +1,5 @@
+import type { Dispatch, SetStateAction } from 'react';
+
 import type { WebAppAuthSettingsDraft } from '../../../shared/app-settings-types';
 import type { HostedRouteConfig } from '../types';
 import { webAppAuthSettingsResource } from '../appSettingsApi';
@@ -55,13 +57,12 @@ function mergeSavedForm(
 
 export function useWebAppAuthForm(
   enabled: boolean,
-  routeConfig: HostedRouteConfig,
-  onRouteConfigChange?: (config: HostedRouteConfig) => void,
+  onRouteConfigChange?: Dispatch<SetStateAction<HostedRouteConfig>>,
 ) {
   const resource = useSettingsFormResource({
     afterSave: (settings, scope) => {
       if (scope === 'web-apps') {
-        onRouteConfigChange?.({ ...routeConfig, webAppsAuthMode: settings.mode });
+        onRouteConfigChange?.((current) => ({ ...current, webAppsAuthMode: settings.mode }));
       }
     },
     defaultForm,

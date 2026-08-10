@@ -23,7 +23,10 @@ test('hosted editor shell mounts RivetAppHost with wrapper providers, executor U
   assert.match(hostedEditorApp, /onProjectSaved=\{handleProjectSaved\}/);
   assert.match(hostedEditorApp, /onActiveProjectChanged=\{handleActiveProjectChanged\}/);
   assert.match(hostedEditorApp, /onOpenProjectCountChanged=\{handleOpenProjectCountChanged\}/);
-  assert.match(hostedEditorApp, /<EditorMessageBridge workspaceHost=\{workspaceHost\} \/>/);
+  assert.match(
+    hostedEditorApp,
+    /<EditorMessageBridge\s+savedProjectSignal=\{savedProjectSignal\}\s+workspaceHost=\{workspaceHost\}\s+\/>/,
+  );
 
   assert.match(hostedEditorApp, /const HOSTED_FILE_MENU_VISIBLE_ITEMS = \[/);
   assert.match(hostedEditorApp, /webApps:\s*\{\s*desktopPreview:\s*false,\s*\}/);
@@ -129,14 +132,14 @@ test('hosted project IO keeps app-state cleanup and workspace commands on wrappe
   assert.match(hostedDatasetProvider, /metadata\.projectId === projectId/);
 });
 
-test('hosted executor, save, find, and clipboard shims stay scoped to wrapper-owned overrides', () => {
+test('hosted executor, save, find, and clipboard seams keep clear ownership', () => {
   const viteAliases = readRepoFile('wrapper/web/vite-aliases.ts');
   const hostedEditorApp = readRepoFile('wrapper/web/dashboard/HostedEditorApp.tsx');
   const editorEvents = readRepoFile('wrapper/web/dashboard/useEditorBridgeEvents.ts');
   const editorMessageBridge = readRepoFile('wrapper/web/dashboard/EditorMessageBridge.tsx');
+  const editorCommandBridge = readRepoFile('wrapper/web/dashboard/useEditorCommandBridge.ts');
   const editorBridgeInteractions = readRepoFile('wrapper/web/dashboard/useEditorBridgeInteractions.ts');
   const previewProjectLifecycle = readRepoFile('wrapper/web/dashboard/usePreviewProjectLifecycle.ts');
-  const windowsHotkeysFix = readRepoFile('wrapper/web/overrides/hooks/useWindowsHotkeysFix.tsx');
   const clipboardHotkeys = readRepoFile('wrapper/web/overrides/hooks/useCopyNodesHotkeys.ts');
   const packageJson = readRepoFile('package.json');
 
@@ -145,12 +148,16 @@ test('hosted executor, save, find, and clipboard shims stay scoped to wrapper-ow
   assert.match(editorMessageBridge, /useExecutorSessionRuntime\(\)/);
   assert.match(editorMessageBridge, /executorSessionRevisionState/);
   assert.match(previewProjectLifecycle, /executorTargetType === 'external-debugger'/);
-  assert.match(editorMessageBridge, /const \{ saveProject \} = useSaveProject\(\)/);
+  assert.match(hostedEditorApp, /keyboardShortcuts:\s*\{\s*saveProject: true/);
+  assert.match(editorCommandBridge, /workspaceRef\.current\.saveCurrentProject\(\)/);
+  assert.match(editorCommandBridge, /Failed to save the current hosted project/);
+  assert.match(editorMessageBridge, /savedProjectSignal/);
+  assert.match(previewProjectLifecycle, /promotePreviewProjectById/);
+  assert.doesNotMatch(editorMessageBridge, /useSaveProject|onSave/);
   assert.doesNotMatch(editorMessageBridge, /rivet-project-saved/);
-  assert.match(editorBridgeInteractions, /event\.defaultPrevented \|\| !isSaveShortcutEvent\(event\)/);
-  assert.match(editorBridgeInteractions, /event\.stopImmediatePropagation\?\.\(\)/);
-  assert.match(windowsHotkeysFix, /menuId === 'save_project' && isHostedMode\(\)/);
-  assert.doesNotMatch(windowsHotkeysFix, /CmdOrCtrl\+Shift\+I|import_graph/);
+  assert.doesNotMatch(editorBridgeInteractions, /isSaveShortcutEvent|onSave/);
+  assert.doesNotMatch(viteAliases, /useWindowsHotkeysFix/);
+  assert.match(editorEvents, /if \(!event\.repeat\) \{\s*handleSaveProject\(\);\s*\}/);
   assert.match(editorEvents, /postMessageToEditor\(editorWindow,\s*\{\s*type: 'trigger-editor-find-shortcut'/);
   assert.match(editorEvents, /activeWorkflowProjectPath && isEditorDuplicateShortcutEvent\(event\)/);
   assert.match(editorEvents, /postMessageToEditor\(editorWindow,\s*\{\s*type: 'trigger-editor-duplicate-shortcut'/);
@@ -175,6 +182,7 @@ test('hosted executor, save, find, and clipboard shims stay scoped to wrapper-ow
     'wrapper/web/overrides/hooks/useRemoteDebugger.ts',
     'wrapper/web/overrides/hooks/useSaveProject.ts',
     'wrapper/web/overrides/hooks/useMenuCommands.ts',
+    'wrapper/web/overrides/hooks/useWindowsHotkeysFix.tsx',
     'wrapper/web/overrides/hooks/remoteDebuggerClient.ts',
     'wrapper/web/overrides/hooks/remoteDebuggerDatasets.ts',
     'wrapper/web/overrides/components/DebuggerConnectPanel.tsx',

@@ -4,6 +4,7 @@ import type {
   WorkflowRecordingRunKind,
   WorkflowRecordingStatus,
   WorkflowRunStatisticsBucket,
+  WorkflowRunStatisticsAggregation,
   WorkflowRunStatisticsCatalogResponse,
   WorkflowRunStatisticsMetrics,
   WorkflowRunStatisticsPeriod,
@@ -35,7 +36,6 @@ const EMPTY_STATUS_COUNTS: WorkflowRunStatisticsStatusCounts = {
 export function buildWorkflowRunStatisticsCatalog(
   rows: readonly WorkflowRecordingStatisticsRow[],
   surface: WorkflowRunStatisticsSurface,
-  period: WorkflowRunStatisticsPeriod,
 ): WorkflowRunStatisticsCatalogResponse {
   const targets = new Map<string, WorkflowRunStatisticsTargetSummary>();
 
@@ -67,7 +67,6 @@ export function buildWorkflowRunStatisticsCatalog(
 
   return {
     surface,
-    period,
     targets: [...targets.values()].sort((left, right) => {
       const latestDifference = (right.latestRunAt ?? '').localeCompare(left.latestRunAt ?? '');
       if (latestDifference) return latestDifference;
@@ -95,7 +94,7 @@ export function buildWorkflowRunStatistics(
     current,
     currentStatusCounts: countStatuses(currentRows),
     currentExcludedStatusCounts: countStatuses(currentRows.filter((row) => !shouldIncludeStatus(row.status, query))),
-    buckets: buildBuckets(currentIncluded, query.period),
+    buckets: buildBuckets(currentIncluded, query.period, query.aggregation ?? 'auto'),
   };
 }
 
@@ -207,13 +206,17 @@ function percentile(sortedValues: readonly number[], fraction: number): number |
   return lowerValue + (upperValue - lowerValue) * (index - lower);
 }
 
-function buildBuckets(rows: readonly WorkflowRecordingStatisticsRow[], period: WorkflowRunStatisticsPeriod): WorkflowRunStatisticsBucket[] {
+function buildBuckets(
+  rows: readonly WorkflowRecordingStatisticsRow[],
+  period: WorkflowRunStatisticsPeriod,
+  aggregation: WorkflowRunStatisticsAggregation,
+): WorkflowRunStatisticsBucket[] {
   const fromMs = parseTime(period.from);
   const toMs = parseTime(period.to);
-  const bucketMs = getBucketDurationMs(toMs - fromMs);
+  const automaticBucketMs = getBucketDurationMs(toMs - fromMs);
   const buckets = new Map<number, WorkflowRecordingStatisticsRow[]>();
   for (const row of rows) {
-    const start = Math.floor(parseTime(row.createdAt) / bucketMs) * bucketMs;
+    const start = getBucketStartMs(parseTime(row.createdAt), aggregation, automaticBucketMs);
     const bucketRows = buckets.get(start) ?? [];
     bucketRows.push(row);
     buckets.set(start, bucketRows);
@@ -223,9 +226,36 @@ function buildBuckets(rows: readonly WorkflowRecordingStatisticsRow[], period: W
     .sort(([left], [right]) => left - right)
     .map(([start, bucketRows]) => ({
       from: new Date(Math.max(start, fromMs)).toISOString(),
-      to: new Date(Math.min(start + bucketMs, toMs)).toISOString(),
+      to: new Date(Math.min(getBucketEndMs(start, aggregation, automaticBucketMs), toMs)).toISOString(),
       ...summarizeDurations(bucketRows),
     }));
+}
+
+function getBucketStartMs(
+  timestamp: number,
+  aggregation: WorkflowRunStatisticsAggregation,
+  automaticBucketMs: number,
+): number {
+  if (aggregation === 'auto') return Math.floor(timestamp / automaticBucketMs) * automaticBucketMs;
+
+  const date = new Date(timestamp);
+  if (aggregation === 'day') {
+    return Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate());
+  }
+
+  const daysSinceMonday = (date.getUTCDay() + 6) % 7;
+  return Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate() - daysSinceMonday);
+}
+
+function getBucketEndMs(
+  start: number,
+  aggregation: WorkflowRunStatisticsAggregation,
+  automaticBucketMs: number,
+): number {
+  if (aggregation === 'auto') return start + automaticBucketMs;
+  const date = new Date(start);
+  date.setUTCDate(date.getUTCDate() + (aggregation === 'day' ? 1 : 7));
+  return date.getTime();
 }
 
 function getBucketDurationMs(periodMs: number): number {
