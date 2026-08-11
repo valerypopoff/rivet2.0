@@ -74,6 +74,9 @@ Provider, model, Custom API, base URL, routing-header, or credential changes
 rotate the identity. Generation parameters and breaker-policy edits retain it.
 Serialized/imported profile values are rebound to the current executing project
 while preserving an existing source profile-node ID.
+Profiles resolved without a loaded project deliberately omit that identity;
+LLM Chat creates the project-scoped identity when it later consumes the
+profile during a graph run.
 
 ## Runtime store contract
 

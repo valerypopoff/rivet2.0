@@ -96,16 +96,26 @@ export function resolveLLMProfileNodeValue(params: {
     useGoogleThinkingBudgetInput: false,
   };
 
+  // A profile can be resolved outside a loaded project, for example by a
+  // programmatic caller or a focused node test. Its health identity is
+  // project-scoped, so defer attaching it until LLM Chat binds the profile to
+  // the executing project in that case.
+  const projectId = context.project?.metadata?.id;
+
   return {
     version: LLM_PROFILE_VALUE_VERSION,
     credential,
     configuration,
-    healthIdentity: createRivetLLMProfileHealthIdentity({
-      configuration,
-      credential,
-      chatNodeHeaders: context.settings.chatNodeHeaders,
-      projectId: context.project.metadata.id,
-      profileNodeId: context.node.id,
-    }),
+    ...(projectId == null
+      ? {}
+      : {
+          healthIdentity: createRivetLLMProfileHealthIdentity({
+            configuration,
+            credential,
+            chatNodeHeaders: context.settings.chatNodeHeaders,
+            projectId,
+            profileNodeId: context.node.id,
+          }),
+        }),
   };
 }
