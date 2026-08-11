@@ -438,6 +438,17 @@ dispatcher that updates primary execution state; they are not editor-only UI
 signals. A forwarding failure must not suppress the primary callback, and a
 Run Activity projection failure must not suppress the workflow event.
 
+`llmProfileAttempt` is also part of the shared process-event contract. It is
+the authoritative record for profile health-gate decisions and health updates,
+including open-circuit skips for which no physical `llmCallFinished` event can
+exist. Browser, Node, Remote Debugger, inactive-project snapshots, and recording
+replay must attach it to the owning LLM Chat invocation with its recorded
+node/process identity. Run Activity renders gate skips, fail-open store errors,
+first-output and stream-inactivity timeouts, and health updates as chronological
+child rows alongside physical model calls. Replaying the same event identity
+must update the retained row rather than duplicate it. Older transports and
+recordings may omit this additive event and remain valid.
+
 Playback re-emits recorded pause and resume lifecycle events for observability,
 but never automatically pauses the new playback session at a historical pause.
 Only a pause requested by the current user may suspend the player.
@@ -501,6 +512,10 @@ effective summary values.
 
 Never place secrets, raw request bodies, full message arrays, chain-of-thought,
 tool arguments/results, or retrieved documents into activity metadata.
+Circuit-breaker rows may retain only the opaque health key, provider/model
+identity, state/disposition/outcome, timeout kind, retry time, status, and
+bounded error text supplied by `llmProfileAttempt`; they must not reconstruct
+credentials or routing-header values from the configuration fingerprint.
 
 ## Required regression coverage
 
@@ -512,6 +527,9 @@ Tests must cover:
 - outputs-ready while async work remains active;
 - runtime-executed model calls, retries, profile fallbacks, parallel tools, and direct
   return without double counting;
+- LLM profile health-gate skips, fail-open store errors, deadline timeouts,
+  health updates, omitted-event counts, replay deduplication, and failed-node
+  retention;
 - frozen, preloaded, cached, unknown, and ref-evicted values;
 - exact graph-run/process navigation and deleted targets;
 - Browser, Node, Remote Debugger, inactive-project, recording, and replay parity;

@@ -28,6 +28,7 @@ import type {
   ProcessId,
   RootRunId,
   ChatV2CallTraceEvent,
+  LLMProfileAttemptTraceEvent,
   ToolCallFinishedEvent,
 } from './ProcessContext.js';
 import type { ExecutionRecorder } from '../recording/ExecutionRecorder.js';
@@ -235,6 +236,9 @@ export type ProcessEvents = {
 
   /** Privacy-bounded metadata for one physical LLM provider call. */
   llmCallFinished: WithExecution<ChatV2CallTraceEvent>;
+
+  /** Privacy-bounded metadata for one LLM fallback/profile-health decision. */
+  llmProfileAttempt: WithExecution<LLMProfileAttemptTraceEvent>;
 
   /** Privacy-bounded metadata for one delegated tool execution. */
   toolCallFinished: WithExecution<ToolCallFinishedEvent>;
@@ -1380,6 +1384,7 @@ export class GraphProcessor {
     // observer from the root run so nested LLM calls are not emitted once by
     // every ancestor before their own event is bridged to the root emitter.
     const hostChatV2Observer = this.getRootProcessor().#context.onChatV2CallFinished;
+    const hostLLMProfileAttemptObserver = this.getRootProcessor().#context.onLLMProfileAttempt;
     this.#nodeProcessContextBase = {
       ...this.#context,
       abortGraph: (error) => {
@@ -1413,6 +1418,17 @@ export class GraphProcessor {
         // trace transport.
         const { rawUsage: _rawUsage, ...traceEvent } = event;
         emitDetached(this.#emitter, 'llmCallFinished', this.#withExecution(traceEvent));
+      },
+      onLLMProfileAttempt: (event) => {
+        try {
+          const observerResult = hostLLMProfileAttemptObserver?.(event);
+          if (observerResult != null && typeof (observerResult as PromiseLike<void>).then === 'function') {
+            void Promise.resolve(observerResult).catch(() => undefined);
+          }
+        } catch {
+          // Host observers must never change graph execution.
+        }
+        emitDetached(this.#emitter, 'llmProfileAttempt', this.#withExecution(event));
       },
       onToolCallFinished: (event) => {
         emitDetached(this.#emitter, 'toolCallFinished', this.#withExecution(event));

@@ -326,6 +326,12 @@ export function useRemoteExecutor() {
           eventDispatcher.llmCallFinished(data);
         }
         break;
+      case 'llmProfileAttempt':
+        collectRemoteAgentTraceEvent(responseTraceByRequestIdRef.current, requestId, 'llm-profile-attempt', data);
+        if (shouldDispatchExecutionEvent) {
+          eventDispatcher.llmProfileAttempt(data);
+        }
+        break;
       case 'toolCallFinished':
         collectRemoteAgentTraceEvent(responseTraceByRequestIdRef.current, requestId, 'tool-call-finished', data);
         if (shouldDispatchExecutionEvent) {

@@ -5,6 +5,7 @@ import type { GraphId, NodeGraph } from './NodeGraph.js';
 import type {
   ChatV2CallTraceEvent,
   GraphExecutionMetadata,
+  LLMProfileAttemptTraceEvent,
   ProcessId,
   ToolCallFinishedEvent,
 } from './ProcessContext.js';
@@ -95,6 +96,7 @@ export type SerializedProcessEventMap = {
     progress: GraphProgress;
   }>;
   llmCallFinished: WithExecution<ChatV2CallTraceEvent>;
+  llmProfileAttempt: WithExecution<LLMProfileAttemptTraceEvent>;
   toolCallFinished: WithExecution<ToolCallFinishedEvent>;
   nodeOutputsCleared: WithExecution<{ node: ChartNode; processId?: ProcessId }>;
   error: { error: Error | string };
@@ -131,6 +133,7 @@ export type ProcessEventMessageMap = {
   partialOutput: SerializedProcessEventMap['partialOutput'];
   progress: SerializedProcessEventMap['progress'];
   llmCallFinished: SerializedProcessEventMap['llmCallFinished'];
+  llmProfileAttempt: SerializedProcessEventMap['llmProfileAttempt'];
   toolCallFinished: SerializedProcessEventMap['toolCallFinished'];
   nodeOutputsCleared: SerializedProcessEventMap['nodeOutputsCleared'];
   error: SerializedProcessEventMap['error'];

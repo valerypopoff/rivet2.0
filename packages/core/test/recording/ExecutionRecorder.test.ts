@@ -592,7 +592,7 @@ void describe('ExecutionRecorder', () => {
     );
   });
 
-  void it('records and replays privacy-bounded model and tool trace events', async () => {
+  void it('records and replays privacy-bounded model, profile, and tool trace events', async () => {
     const recorder = new ExecutionRecorder();
     const emitter = new Emittery<ProcessEvents>();
     recorder.record(emitter as unknown as GraphProcessor);
@@ -628,14 +628,32 @@ void describe('ExecutionRecorder', () => {
       startedAt: 130,
       durationMs: 15,
     };
+    const profileAttemptEvent: ProcessEvents['llmProfileAttempt'] = {
+      execution,
+      eventId: 'profile-attempt-1',
+      roundIndex: 0,
+      profileIndex: 0,
+      nodeId,
+      processId,
+      provider: 'openai',
+      model: 'gpt-5',
+      stage: 'health-gate',
+      outcome: 'skipped',
+      profileHealthKey: 'llm-profile:sha256:primary',
+      healthState: 'open',
+      healthDisposition: 'deny',
+      retryAt: 1_000,
+    };
 
     await emitter.emit('llmCallFinished', modelEvent);
+    await emitter.emit('llmProfileAttempt', profileAttemptEvent);
     await emitter.emit('toolCallFinished', toolEvent);
     await emitter.emit('done', { results: {} });
 
     const replayEmitter = new Emittery<ProcessEvents>();
     const replayed: unknown[] = [];
     replayEmitter.on('llmCallFinished', (event) => replayed.push(event));
+    replayEmitter.on('llmProfileAttempt', (event) => replayed.push(event));
     replayEmitter.on('toolCallFinished', (event) => replayed.push(event));
 
     await replayExecutionRecording({
@@ -659,9 +677,10 @@ void describe('ExecutionRecorder', () => {
       waitUntilUnpaused: async () => {},
     });
 
-    assert.equal(replayed.length, 2);
-    const [replayedModelEvent, replayedToolEvent] = replayed as [
+    assert.equal(replayed.length, 3);
+    const [replayedModelEvent, replayedProfileAttemptEvent, replayedToolEvent] = replayed as [
       ProcessEvents['llmCallFinished'],
+      ProcessEvents['llmProfileAttempt'],
       ProcessEvents['toolCallFinished'],
     ];
     assert.deepEqual(
@@ -669,10 +688,15 @@ void describe('ExecutionRecorder', () => {
       { ...modelEvent, execution: undefined },
     );
     assert.deepEqual(
+      { ...replayedProfileAttemptEvent, execution: undefined },
+      { ...profileAttemptEvent, execution: undefined },
+    );
+    assert.deepEqual(
       { ...replayedToolEvent, execution: undefined },
       { ...toolEvent, execution: undefined },
     );
     assert.equal(replayedModelEvent.execution.graphId, execution.graphId);
+    assert.equal(replayedProfileAttemptEvent.execution.graphId, execution.graphId);
     assert.equal(replayedToolEvent.execution.graphId, execution.graphId);
     assert.equal(replayedModelEvent.execution.rootRunId, replayedToolEvent.execution.rootRunId);
     assert.equal(replayedModelEvent.execution.graphRunId, replayedToolEvent.execution.graphRunId);

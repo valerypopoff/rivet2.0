@@ -29,3 +29,17 @@ void test('app executor carries Stored Value snapshots and patches across remote
   assert.match(source, /webAppStorageBoundaryPublished = true/);
   assert.doesNotMatch(source, /setWebAppStorage|getWebAppStorage/);
 });
+
+void test('app executor preserves Rivet-owned run options over host injections', async () => {
+  const source = await readFile(new URL('./executor.mts', import.meta.url), 'utf8');
+  const createProcessorCall = /const processor = createProcessor\(project, \{([\s\S]*?)\n      \}\);/.exec(source)?.[1];
+
+  assert.ok(createProcessorCall);
+  assert.ok(createProcessorCall.indexOf('...injectedProcessorOptions') < createProcessorCall.indexOf('graph: graphId'));
+  assert.ok(
+    createProcessorCall.indexOf('...injectedProcessorOptions') < createProcessorCall.indexOf('remoteDebugger:'),
+  );
+  assert.ok(
+    createProcessorCall.indexOf('...injectedProcessorOptions') < createProcessorCall.indexOf('storedValueStore:'),
+  );
+});

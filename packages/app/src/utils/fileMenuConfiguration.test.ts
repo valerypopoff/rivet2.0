@@ -79,4 +79,24 @@ test('file menu command policy blocks hidden commands without blocking non-file 
   assert.equal(shouldRunFileMenuCommand('settings', { visibleItems: ['settings'] }), true);
   assert.equal(shouldRunFileMenuCommand('run', { visibleItems: [] }), true);
   assert.equal(shouldRunFileMenuCommand('open_project'), true);
+  assert.equal(
+    shouldRunFileMenuCommand(
+      'save_project',
+      { visibleItems: [] },
+      { hostedSaveShortcutEnabled: true, source: 'host-save-shortcut' },
+    ),
+    true,
+  );
+  assert.equal(
+    shouldRunFileMenuCommand('save_project', { visibleItems: [] }, { hostedSaveShortcutEnabled: true }),
+    false,
+  );
+  assert.equal(
+    shouldRunFileMenuCommand(
+      'open_project',
+      { visibleItems: [] },
+      { hostedSaveShortcutEnabled: true, source: 'host-save-shortcut' },
+    ),
+    false,
+  );
 });

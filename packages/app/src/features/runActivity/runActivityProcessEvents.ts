@@ -24,6 +24,7 @@ const RUN_ACTIVITY_PROCESS_EVENT_NAMES = new Set<keyof ProcessEventMessageMap>([
   'nodeExcluded',
   'nodeOutputsCleared',
   'llmCallFinished',
+  'llmProfileAttempt',
   'toolCallFinished',
   'done',
   'abort',

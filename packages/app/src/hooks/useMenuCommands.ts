@@ -21,11 +21,11 @@ import {
 } from '../utils/projectWorkspaceSelection.js';
 import type { MenuIds } from '../utils/menuCommandIds.js';
 import { isRivetAppHostCapabilityEnabled, useRivetAppHostUiConfig } from '../providers/HostUiConfigContext.js';
-import { shouldRunFileMenuCommand } from '../utils/fileMenuConfiguration.js';
+import { shouldRunFileMenuCommand, type FileMenuCommandSource } from '../utils/fileMenuConfiguration.js';
 
 export type { MenuIds };
 
-type MenuCommandEvent = { payload: MenuIds };
+type MenuCommandEvent = { payload: MenuIds; source?: FileMenuCommandSource };
 type MenuCommandHandler = (e: MenuCommandEvent) => void;
 
 interface MenuCommandWindow extends Window {
@@ -71,8 +71,8 @@ function dispatchMenuCommand(event: MenuCommandEvent) {
   getCurrentMenuCommandHandler()(event);
 }
 
-export function runMenuCommand(command: MenuIds) {
-  dispatchMenuCommand({ payload: command });
+export function runMenuCommand(command: MenuIds, options?: { source?: FileMenuCommandSource }) {
+  dispatchMenuCommand({ payload: command, source: options?.source });
 }
 
 export function useRunMenuCommand() {
@@ -109,8 +109,13 @@ export function useMenuCommands(
   const mainWindowRef = useRef<NativeWindowHandle | null>(null);
 
   useEffect(() => {
-    const handler: MenuCommandHandler = ({ payload }) => {
-      if (!shouldRunFileMenuCommand(payload, hostUiConfig.fileMenu)) {
+    const handler: MenuCommandHandler = ({ payload, source }) => {
+      if (
+        !shouldRunFileMenuCommand(payload, hostUiConfig.fileMenu, {
+          hostedSaveShortcutEnabled: hostUiConfig.keyboardShortcuts?.saveProject,
+          source,
+        })
+      ) {
         return;
       }
 

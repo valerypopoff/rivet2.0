@@ -22,7 +22,7 @@ export type LLMProfileBodySnippet = Readonly<{
 }>;
 
 export type LLMProfileBodySection = Readonly<{
-  id: 'model' | 'parameters' | 'provider' | 'advanced';
+  id: 'model' | 'parameters' | 'provider' | 'reliability' | 'advanced';
   fields: readonly LLMProfileBodyField[];
   snippet?: LLMProfileBodySnippet | undefined;
 }>;
@@ -228,11 +228,14 @@ export function getLLMProfileBodySections(data: LLMChatV2ProfileData): readonly 
     data.extraProviderOptions.trim().length > 0
       ? { label: 'Extra provider options', text: data.extraProviderOptions }
       : undefined;
+  const reliabilityFields: LLMProfileBodyField[] =
+    data.enableCircuitBreaker === true ? [{ label: 'Circuit breaker', value: 'Enabled' }] : [];
 
   const sections: LLMProfileBodySection[] = [
     { id: 'model', fields: modelFields.filter((field): field is LLMProfileBodyField => field !== undefined) },
     { id: 'parameters', fields: parameterFields.filter((field): field is LLMProfileBodyField => field !== undefined) },
     { id: 'provider', fields: getProviderBodyFields(data) },
+    { id: 'reliability', fields: reliabilityFields },
     {
       id: 'advanced',
       fields: advancedFields.filter((field): field is LLMProfileBodyField => field !== undefined),

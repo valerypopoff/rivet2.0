@@ -32,6 +32,7 @@ import type { ProjectReferenceLoader } from '../model/ProjectReferenceLoader.js'
 import { resolveProcessSettings } from './processSettings.js';
 import type { RivetStoredValueStore } from '../model/StoredValueStore.js';
 import type { RivetKnowledgeStoreRegistry } from '../integrations/KnowledgeStore.js';
+import type { RivetLLMProfileHealthStore } from '../model/chat-v2/llmProfileHealthStore.js';
 
 export type RunGraphOptions = {
   graph?: string;
@@ -54,6 +55,7 @@ export type RunGraphOptions = {
   concurrency?: GraphProcessorConcurrency;
   getChatNodeEndpoint?: ProcessContext['getChatNodeEndpoint'];
   onChatV2CallFinished?: ProcessContext['onChatV2CallFinished'];
+  llmProfileHealthStore?: RivetLLMProfileHealthStore;
   tokenizer?: Tokenizer;
   codeRunner?: ProcessContext['codeRunner'];
   projectPath?: string;
@@ -245,6 +247,7 @@ export function coreCreateProcessor(
           settings: resolveProcessSettings(options),
           getChatNodeEndpoint: options.getChatNodeEndpoint,
           onChatV2CallFinished: options.onChatV2CallFinished,
+          llmProfileHealthStore: options.llmProfileHealthStore,
         },
         resolvedInputs,
         resolvedContextValues,

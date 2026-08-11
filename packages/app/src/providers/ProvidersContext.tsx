@@ -5,6 +5,9 @@ import {
   type AudioProvider,
   type ProjectId,
   type CombinedDataset,
+  getDefaultRivetLLMProfileHealthStore,
+  type RivetLLMProfileHealthSnapshot,
+  type RivetLLMProfileHealthStore,
 } from '@valerypopoff/rivet2-core';
 import { BrowserIOProvider } from '../io/BrowserIOProvider.js';
 import { LegacyBrowserIOProvider } from '../io/LegacyBrowserIOProvider.js';
@@ -42,6 +45,19 @@ export type PathPolicyProvider = {
   readRelativeProjectFile?(currentProjectPath: string, projectFilePath: string): Promise<string>;
 };
 
+/**
+ * Optional operational surface supplied by a host that owns shared LLM
+ * profile health. It is intentionally separate from the execution store so a
+ * browser host can expose permissioned HTTP list/reset operations without
+ * exposing its atomic store implementation to the editor.
+ */
+export type LLMProfileHealthAdminProvider = {
+  /** Omitted means the host-backed administration covers every executor. */
+  executionScope?: 'browser-only' | 'shared';
+  list(input: { projectId: ProjectId }): Promise<readonly RivetLLMProfileHealthSnapshot[]>;
+  reset(input: { key?: string; projectId: ProjectId }): Promise<void>;
+};
+
 export type Providers = {
   io: IOProvider;
   datasets: AppDatasetProvider;
@@ -50,6 +66,8 @@ export type Providers = {
   environment: EnvironmentProvider;
   pathPolicy: PathPolicyProvider;
   staticData: StaticDataStore;
+  llmProfileHealthAdmin?: LLMProfileHealthAdminProvider;
+  llmProfileHealthStore?: RivetLLMProfileHealthStore;
 };
 
 export type ProviderOverrides = Partial<Omit<Providers, 'dataRefs'>> & {
@@ -95,6 +113,81 @@ export function useStaticDataStore(): StaticDataStore {
   return useProviders().staticData;
 }
 
+export function useLLMProfileHealthAdmin(): LLMProfileHealthAdminProvider | undefined {
+  return useProviders().llmProfileHealthAdmin;
+}
+
+export function useLLMProfileHealthStore(): RivetLLMProfileHealthStore | undefined {
+  return useProviders().llmProfileHealthStore;
+}
+
+const missingBrowserLLMProfileHealthStoreMessage =
+  'This Rivet host exposes shared LLM profile health administration but did not provide an LLM profile health store for Browser execution.';
+
+function failMissingBrowserLLMProfileHealthStore(): never {
+  throw new Error(missingBrowserLLMProfileHealthStoreMessage);
+}
+
+const missingBrowserLLMProfileHealthStore: RivetLLMProfileHealthStore = {
+  begin: failMissingBrowserLLMProfileHealthStore,
+  finish: failMissingBrowserLLMProfileHealthStore,
+  renew: failMissingBrowserLLMProfileHealthStore,
+  reset: failMissingBrowserLLMProfileHealthStore,
+  list: failMissingBrowserLLMProfileHealthStore,
+};
+
+export function createLLMProfileHealthAdminProvider(
+  store: RivetLLMProfileHealthStore,
+  options: { executionScope?: LLMProfileHealthAdminProvider['executionScope'] } = {},
+): LLMProfileHealthAdminProvider {
+  return {
+    ...(options.executionScope == null ? {} : { executionScope: options.executionScope }),
+    list: ({ projectId }) => Promise.resolve(store.list({ projectId })),
+    reset: async ({ key, projectId }) => {
+      if (key == null) {
+        await store.reset({ projectId });
+        return;
+      }
+
+      const projectEntries = await store.list({ projectId });
+      if (!projectEntries.some((entry) => entry.identity.key === key)) {
+        throw new Error('The requested LLM profile health record does not belong to the active project.');
+      }
+      await store.reset({ key });
+    },
+  };
+}
+
+export function resolveLLMProfileHealthProviders(
+  overrides: Pick<ProviderOverrides, 'llmProfileHealthAdmin' | 'llmProfileHealthStore'> = {},
+  options: { exposeDefaultAdmin?: boolean } = {},
+): Pick<Providers, 'llmProfileHealthAdmin' | 'llmProfileHealthStore'> {
+  const store = overrides.llmProfileHealthStore;
+  if (store) {
+    return {
+      llmProfileHealthStore: store,
+      ...(overrides.llmProfileHealthAdmin == null ? {} : { llmProfileHealthAdmin: overrides.llmProfileHealthAdmin }),
+    };
+  }
+
+  if (overrides.llmProfileHealthAdmin) {
+    return {
+      llmProfileHealthStore: missingBrowserLLMProfileHealthStore,
+      llmProfileHealthAdmin: overrides.llmProfileHealthAdmin,
+    };
+  }
+
+  const defaultStore = getDefaultRivetLLMProfileHealthStore();
+  const defaultAdmin =
+    options.exposeDefaultAdmin === false
+      ? undefined
+      : createLLMProfileHealthAdminProvider(defaultStore, { executionScope: 'browser-only' });
+  return {
+    llmProfileHealthStore: defaultStore,
+    ...(defaultAdmin == null ? {} : { llmProfileHealthAdmin: defaultAdmin }),
+  };
+}
+
 function createDefaultDataRefs(): DataRefStore {
   return {
     get: getGlobalDataRef,
@@ -104,7 +197,11 @@ function createDefaultDataRefs(): DataRefStore {
 }
 
 function createDefaultProviders(
-  overrides: Pick<ProviderOverrides, 'datasets' | 'pathPolicy' | 'staticData'> = {},
+  overrides: Pick<
+    ProviderOverrides,
+    'datasets' | 'llmProfileHealthAdmin' | 'llmProfileHealthStore' | 'pathPolicy' | 'staticData'
+  > = {},
+  options: { exposeDefaultHealthAdmin?: boolean } = {},
 ): Providers {
   const datasets = overrides.datasets ?? new BrowserDatasetProvider();
   const pathPolicy = overrides.pathPolicy ?? getDefaultPathPolicyProvider();
@@ -127,6 +224,9 @@ function createDefaultProviders(
     environment: getDefaultEnvironmentProvider(),
     pathPolicy,
     staticData,
+    ...resolveLLMProfileHealthProviders(overrides, {
+      exposeDefaultAdmin: options.exposeDefaultHealthAdmin,
+    }),
   };
 }
 
@@ -150,7 +250,7 @@ export const ProvidersProvider: FC<{ providers?: ProviderOverrides; children: Re
     }
 
     const { storage: _storage, ...runtimeProviders } = providers;
-    const defaults = createDefaultProviders(runtimeProviders);
+    const defaults = createDefaultProviders(runtimeProviders, { exposeDefaultHealthAdmin: false });
     return {
       ...defaults,
       ...runtimeProviders,

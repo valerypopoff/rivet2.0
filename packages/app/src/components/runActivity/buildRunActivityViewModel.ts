@@ -4,6 +4,7 @@ import type {
   RunActivityJournal,
   RunActivityModelCall,
   RunActivityNodeInvocation,
+  RunActivityProfileAttempt,
   RunActivityRoot,
   RunActivityToolCall,
 } from '../../features/runActivity/runActivityJournal.js';
@@ -217,6 +218,15 @@ function buildInvocationSearchTerms(
   const terms = [
     ...(resolvedSearchTerms ?? []),
     ...invocation.modelCalls.flatMap((call) => [formatModelCallProvider(call), call.model]),
+    ...(invocation.profileAttempts ?? []).flatMap((attempt) => [
+      formatModelCallProvider(attempt),
+      attempt.model,
+      attempt.stage,
+      attempt.healthState,
+      attempt.healthDisposition,
+      attempt.healthOutcome,
+      attempt.timeoutKind,
+    ]),
     ...invocation.toolCalls.map((call) => call.toolName),
   ];
   return [...new Set(terms.map(normalizeNonEmptyLabel).filter((term): term is string => term != null))];
@@ -296,10 +306,75 @@ function selectStoredPortValue(
 function buildChildRows(invocation: RunActivityNodeInvocation): RunActivityChildViewModel[] {
   return [
     ...invocation.modelCalls.map((call) => ({ sequence: call.sequence, child: modelCallToChild(call) })),
+    ...(invocation.profileAttempts ?? []).map((attempt) => ({
+      sequence: attempt.sequence,
+      child: profileAttemptToChild(attempt),
+    })),
     ...invocation.toolCalls.map((call) => ({ sequence: call.sequence, child: toolCallToChild(call, invocation) })),
   ]
     .sort((left, right) => left.sequence - right.sequence || left.child.id.localeCompare(right.child.id))
     .map(({ child }) => child);
+}
+
+function profileAttemptToChild(attempt: RunActivityProfileAttempt): RunActivityChildViewModel {
+  const context = [
+    describeProfileAttemptOutcome(attempt),
+    attempt.profileIndex == null ? undefined : `profile ${attempt.profileIndex + 1}`,
+    `round ${attempt.roundIndex + 1}`,
+    attempt.attemptIndex == null ? undefined : `attempt ${attempt.attemptIndex + 1}`,
+  ].filter((value): value is string => value != null);
+
+  return {
+    id: `profile-attempt:${attempt.eventId}`,
+    label: `${formatModelCallProvider(attempt)} / ${attempt.model} - ${describeProfileAttemptStage(attempt.stage)}`,
+    secondaryText: context.join(' / '),
+    status: getProfileAttemptStatus(attempt),
+  };
+}
+
+function describeProfileAttemptStage(stage: RunActivityProfileAttempt['stage']): string {
+  switch (stage) {
+    case 'health-gate':
+      return 'circuit gate';
+    case 'health-update':
+      return 'circuit update';
+    case 'response-validation':
+      return 'response validation';
+    default:
+      return stage;
+  }
+}
+
+function describeProfileAttemptOutcome(attempt: RunActivityProfileAttempt): string {
+  if (attempt.healthDisposition === 'deny') {
+    return attempt.retryAt == null
+      ? 'skipped while circuit is open'
+      : `skipped until ${new Date(attempt.retryAt).toLocaleString()}`;
+  }
+  if (attempt.healthDisposition === 'fail-open') return `health store failed open${formatAttemptError(attempt)}`;
+  if (attempt.timeoutKind === 'first-output') return 'first output timed out';
+  if (attempt.timeoutKind === 'stream-inactivity') return 'stream became inactive';
+  if (attempt.stage === 'health-update' && attempt.healthOutcome) {
+    return `recorded ${attempt.healthOutcome}${attempt.healthState ? `; circuit ${attempt.healthState}` : ''}`;
+  }
+  return `${attempt.outcome}${attempt.healthState ? `; circuit ${attempt.healthState}` : ''}${formatAttemptError(attempt)}`;
+}
+
+function formatAttemptError(attempt: RunActivityProfileAttempt): string {
+  return attempt.error ? `: ${attempt.error}` : '';
+}
+
+function getProfileAttemptStatus(attempt: RunActivityProfileAttempt): RunActivityItemStatus {
+  if (attempt.outcome === 'aborted') return 'interrupted';
+  if (attempt.healthDisposition === 'deny' || attempt.outcome === 'skipped') return 'not-ran';
+  if (
+    attempt.outcome === 'failure' ||
+    attempt.timeoutKind != null ||
+    (attempt.stage === 'health-update' && attempt.healthOutcome === 'unhealthy')
+  ) {
+    return 'error';
+  }
+  return 'success';
 }
 
 function getEffectiveModelCall(calls: readonly RunActivityModelCall[]): RunActivityModelCall | undefined {
@@ -400,6 +475,9 @@ function buildDetailRows(
   if (invocation.omittedModelCallCount > 0) {
     rows.push({ label: 'Model call rows omitted', value: String(invocation.omittedModelCallCount) });
   }
+  if ((invocation.omittedProfileAttemptCount ?? 0) > 0) {
+    rows.push({ label: 'LLM profile attempt rows omitted', value: String(invocation.omittedProfileAttemptCount) });
+  }
   if (invocation.omittedToolCallCount > 0) {
     rows.push({ label: 'Tool call rows omitted', value: String(invocation.omittedToolCallCount) });
   }
@@ -434,7 +512,7 @@ function resolveCategory(
   resolvedCategory: RunActivityInvocationResolution['category'],
 ): RunActivityCategory {
   if (resolvedCategory) return resolvedCategory;
-  if (invocation.modelCallCount > 0) return 'model';
+  if (invocation.modelCallCount > 0 || (invocation.profileAttempts?.length ?? 0) > 0) return 'model';
   if (invocation.toolCallCount > 0) return 'tool';
   return 'generic';
 }

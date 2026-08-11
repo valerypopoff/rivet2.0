@@ -59,7 +59,11 @@ async function ensureFileHandlePermission(
   }
 }
 
-async function writeProjectFile(fileHandle: FileSystemFileHandle, project: Project, testData: TrivetData): Promise<void> {
+async function writeProjectFile(
+  fileHandle: FileSystemFileHandle,
+  project: Project,
+  testData: TrivetData,
+): Promise<void> {
   const canWrite = await ensureFileHandlePermission(fileHandle, 'readwrite');
 
   if (!canWrite) {
@@ -87,9 +91,17 @@ export class BrowserIOProvider implements IOProvider {
   }
 
   async saveProjectData(project: Project, testData: TrivetData): Promise<string | undefined> {
-    const fileHandle = await window.showSaveFilePicker({
-      suggestedName: `${project.metadata?.title ?? 'project'}${PROJECT_FILE_EXTENSION}`,
-    });
+    let fileHandle: FileSystemFileHandle;
+    try {
+      fileHandle = await window.showSaveFilePicker({
+        suggestedName: `${project.metadata?.title ?? 'project'}${PROJECT_FILE_EXTENSION}`,
+      });
+    } catch (error) {
+      if (isAbortError(error)) {
+        return undefined;
+      }
+      throw error;
+    }
 
     await writeProjectFile(fileHandle, project, testData);
 

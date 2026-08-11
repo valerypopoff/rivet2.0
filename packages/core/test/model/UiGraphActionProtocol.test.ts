@@ -121,12 +121,22 @@ void describe('UiGraphActionProtocol', () => {
       runId: 'run',
       sequence: 1,
     });
+    const failed = parseRivetWebAppServerMessage({
+      type: 'action.failed',
+      requestId: 'request',
+      runId: 'run',
+      sequence: 4,
+      error: 'Provider unavailable',
+      responseTrace: { ...responseTrace, status: 'error' },
+    });
 
     assert.ok(completed && completed.type === 'action.completed');
     assert.ok(accepted && accepted.type === 'action.accepted');
+    assert.ok(failed && failed.type === 'action.failed');
     assert.equal(isRivetWebAppRunTerminalEvent(completed), true);
     assert.equal(isRivetWebAppRunTerminalEvent(accepted), false);
     assert.deepEqual(completed?.type === 'action.completed' ? completed.responseTrace : undefined, responseTrace);
+    assert.equal(failed?.type === 'action.failed' ? failed.responseTrace?.status : undefined, 'error');
     for (const invalidOrFutureTrace of [
       { ...responseTrace, messages: ['secret'] },
       { ...responseTrace, schemaVersion: responseTrace.schemaVersion + 1 },

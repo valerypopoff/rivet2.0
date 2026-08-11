@@ -313,7 +313,7 @@ test('inactive project snapshots retain their live pause state while replaying h
   assert.equal(afterResume.graphPaused, true);
 });
 
-test('inactive project snapshot reducer upserts identified model and tool trace events', () => {
+test('inactive project snapshot reducer upserts identified model, profile, and tool trace events', () => {
   const projectId = 'project-a' as ProjectId;
   const graphId = 'graph-a' as GraphId;
   const graphRunId = 'graph-run-a' as GraphRunId;
@@ -340,6 +340,31 @@ test('inactive project snapshot reducer upserts identified model and tool trace 
         customProviderApi: 'responses',
       } as never,
       message: 'llmCallFinished',
+      projectId,
+      refStore,
+      snapshot,
+    }).snapshot;
+  }
+
+  for (const [index, error] of ['Initial store failure', 'Latest store failure'].entries()) {
+    snapshot = applyProcessEventToProjectExecutionSnapshot({
+      data: {
+        eventId: 'profile-attempt',
+        roundIndex: 0,
+        profileIndex: 0,
+        execution,
+        model: 'gpt-test',
+        nodeId,
+        processId,
+        provider: 'custom',
+        customProviderApi: 'responses',
+        stage: 'health-gate',
+        outcome: 'failure',
+        healthDisposition: 'fail-open',
+        error,
+        attemptIndex: index,
+      } as never,
+      message: 'llmProfileAttempt',
       projectId,
       refStore,
       snapshot,
@@ -375,16 +400,21 @@ test('inactive project snapshot reducer upserts identified model and tool trace 
   }
 
   const events = snapshot.lastRunDataByNode[nodeId]?.[0]?.data.agentTraceEvents;
-  assert.equal(events?.length, 2);
+  assert.equal(events?.length, 3);
   assert.equal(events?.[0]?.type, 'llm-call-finished');
   assert.equal(events?.[0]?.durationMs, 12);
   assert.equal(
     (events?.[0] as Extract<AgentTraceEvent, { type: 'llm-call-finished' }> | undefined)?.customProviderApi,
     'responses',
   );
-  assert.equal(events?.[1]?.type, 'tool-call-finished');
-  assert.equal(events?.[1]?.durationMs, 6);
-  assert.deepEqual((events?.[1] as Extract<AgentTraceEvent, { type: 'tool-call-finished' }> | undefined)?.resultOwner, {
+  assert.equal(events?.[1]?.type, 'llm-profile-attempt');
+  assert.equal(
+    (events?.[1] as Extract<AgentTraceEvent, { type: 'llm-profile-attempt' }> | undefined)?.error,
+    'Latest store failure',
+  );
+  assert.equal(events?.[2]?.type, 'tool-call-finished');
+  assert.equal(events?.[2]?.durationMs, 6);
+  assert.deepEqual((events?.[2] as Extract<AgentTraceEvent, { type: 'tool-call-finished' }> | undefined)?.resultOwner, {
     nodeId: 'delegate-node',
     processId: 'delegate-process',
     outputPortId: 'output',
@@ -423,7 +453,7 @@ test('inactive project snapshot reducer keeps anonymous tool trace events distin
   const events = snapshot.lastRunDataByNode[nodeId]?.[0]?.data.agentTraceEvents;
   assert.equal(events?.length, 2);
   assert.deepEqual(
-    events?.map((event) => event.durationMs),
+    events?.map((event) => ('durationMs' in event ? event.durationMs : undefined)),
     [4, 6],
   );
 });

@@ -115,6 +115,11 @@ export function createDebuggerProcessorAttachments(options: {
         }),
       );
       cleanups.push(
+        processor.on('llmProfileAttempt', (data) => {
+          options.broadcast(processor, 'llmProfileAttempt', data);
+        }),
+      );
+      cleanups.push(
         processor.on('toolCallFinished', (data) => {
           options.broadcast(processor, 'toolCallFinished', data);
         }),

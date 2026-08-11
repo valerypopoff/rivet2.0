@@ -182,6 +182,16 @@ function applyProcessEventToProjectExecutionSnapshotData<K extends keyof Process
         }),
       };
     }
+    case 'llmProfileAttempt': {
+      const data = options.data as ProcessEvents['llmProfileAttempt'];
+      return {
+        changed: true,
+        snapshot: applyAgentTraceEvent(snapshot, {
+          type: 'llm-profile-attempt',
+          ...data,
+        }),
+      };
+    }
     case 'toolCallFinished': {
       const data = options.data as ProcessEvents['toolCallFinished'];
       return {

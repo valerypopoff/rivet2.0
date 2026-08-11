@@ -1693,6 +1693,81 @@ void describe('createRivetWebAppHandler', () => {
     assert.equal(enabled.responseTrace?.summary.modelCallCount, 0);
   });
 
+  void it('preserves an opted-in response trace when a hosted Chat action fails', async () => {
+    const project = makeProject();
+    const graph = project.graphs[graphId]!;
+    graph.nodes.push(
+      {
+        data: { dataType: 'chat-message[]', id: 'history' },
+        id: 'history-node' as never,
+        title: 'History',
+        type: 'graphInput',
+        visualData: { x: 0, y: 120 },
+      },
+      {
+        data: { functionName: 'missingActionFunction', useErrorOutput: false, useFunctionNameInput: false },
+        id: 'failing-call' as never,
+        title: 'Failing call',
+        type: 'externalCall',
+        visualData: { x: 200, y: 0 },
+      } as never,
+    );
+    graph.connections = [
+      {
+        inputId: 'arguments' as never,
+        inputNodeId: 'failing-call' as never,
+        outputId: 'data' as never,
+        outputNodeId: 'input-node' as never,
+      },
+      {
+        inputId: 'value' as never,
+        inputNodeId: 'output-node' as never,
+        outputId: 'result' as never,
+        outputNodeId: 'failing-call' as never,
+      },
+    ];
+    const uiGraph = project.uiGraphs?.['ui-graph' as UiGraphId]!;
+    uiGraph.components = [
+      {
+        action: {
+          graphId,
+          historyInputId: 'history',
+          responseOutputId: 'value',
+          type: 'runGraph',
+          userInputId: 'input',
+        },
+        allowResponseInspection: true,
+        id: 'chat' as UiComponentId,
+        type: 'chat',
+      },
+    ];
+    let hookTraceStatus: string | undefined;
+    const handler = createRivetWebAppHandler(project, {
+      basePath: '/app',
+      onActionError: ({ responseTrace }) => {
+        hookTraceStatus = responseTrace?.status;
+      },
+      uiGraphId: 'ui-graph',
+    });
+    const response = await handler.handleRequest(
+      new Request('https://example.test/app/actions/run', {
+        body: JSON.stringify({
+          componentId: 'chat',
+          state: {
+            [getUiGraphChatMessagesStateKey('chat' as UiComponentId)]: [{ content: 'hello', role: 'user' }],
+          },
+        }),
+        headers: { 'content-type': 'application/json' },
+        method: 'POST',
+      }),
+    );
+    const body = (await response.json()) as { responseTrace?: { status?: string } };
+
+    assert.equal(response.status, 400);
+    assert.equal(hookTraceStatus, 'error');
+    assert.equal(body.responseTrace?.status, 'error');
+  });
+
   void it('returns a web-app action result before its managed async branch settles', async () => {
     const project = makeProject();
     project.graphs[graphId]!.nodes.push(

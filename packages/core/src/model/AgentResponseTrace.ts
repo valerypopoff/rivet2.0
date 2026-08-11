@@ -2,6 +2,7 @@ import type {
   ChatV2CallTraceEvent,
   GraphExecutionMetadata,
   GraphRunId,
+  LLMProfileAttemptTraceEvent,
   ProcessId,
   RootRunId,
   ToolCallFinishedEvent,
@@ -12,6 +13,7 @@ import type { GraphProcessor } from './GraphProcessor.js';
 
 export const AGENT_RESPONSE_TRACE_SCHEMA_VERSION = 1 as const;
 export const AGENT_RESPONSE_TRACE_MAX_MODEL_CALLS = 250;
+export const AGENT_RESPONSE_TRACE_MAX_PROFILE_ATTEMPTS = 1_000;
 export const AGENT_RESPONSE_TRACE_MAX_TOOL_CALLS = 500;
 
 export type AgentModelCallTrace = {
@@ -24,6 +26,8 @@ export type AgentModelCallTrace = {
   outcome: ChatV2CallTraceEvent['outcome'];
   attemptIndex: number;
   profileIndex?: number;
+  profileHealthKey?: string;
+  profileHealthState?: ChatV2CallTraceEvent['profileHealthState'];
   roundIndex?: number;
   startedAt?: number;
   durationMs?: number;
@@ -45,6 +49,10 @@ export type AgentToolCallTrace = {
   outcome: ToolCallFinishedEvent['outcome'];
   startedAt?: number;
   durationMs?: number;
+};
+
+export type AgentLLMProfileAttemptTrace = Omit<LLMProfileAttemptTraceEvent, 'eventId'> & {
+  eventId: string;
 };
 
 export type AgentResponseTrace = {
@@ -76,13 +84,18 @@ export type AgentResponseTrace = {
     costStatus: 'known' | 'partial' | 'unknown';
   };
   modelCalls: AgentModelCallTrace[];
+  /** Additive in schema v1; absent in traces produced before profile-health observability. */
+  profileAttempts?: AgentLLMProfileAttemptTrace[];
   toolCalls: AgentToolCallTrace[];
   omittedModelCallCount: number;
+  /** Additive in schema v1; absent in older traces. */
+  omittedProfileAttemptCount?: number;
   omittedToolCallCount: number;
 };
 
 export type AgentTraceEvent =
   | ({ type: 'llm-call-finished'; execution: GraphExecutionMetadata } & ChatV2CallTraceEvent)
+  | ({ type: 'llm-profile-attempt'; execution: GraphExecutionMetadata } & LLMProfileAttemptTraceEvent)
   | ({ type: 'tool-call-finished'; execution: GraphExecutionMetadata } & ToolCallFinishedEvent);
 
 export type BuildAgentResponseTraceOptions = {
@@ -107,6 +120,9 @@ export function buildAgentResponseTrace(options: BuildAgentResponseTraceOptions)
       if (event.type === 'llm-call-finished') {
         return event.nodeId === options.nodeId && event.processId === options.processId;
       }
+      if (event.type === 'llm-profile-attempt') {
+        return event.nodeId === options.nodeId && event.processId === options.processId;
+      }
       return event.sourceNodeId === options.nodeId && event.sourceProcessId === options.processId;
     }),
   );
@@ -115,12 +131,18 @@ export function buildAgentResponseTrace(options: BuildAgentResponseTraceOptions)
       (event): event is Extract<AgentTraceEvent, { type: 'llm-call-finished' }> => event.type === 'llm-call-finished',
     )
     .map(toModelCallTrace);
+  const allProfileAttempts = matchingEvents
+    .filter(
+      (event): event is Extract<AgentTraceEvent, { type: 'llm-profile-attempt' }> =>
+        event.type === 'llm-profile-attempt',
+    )
+    .map(toProfileAttemptTrace);
   const allToolCalls = matchingEvents
     .filter(
       (event): event is Extract<AgentTraceEvent, { type: 'tool-call-finished' }> => event.type === 'tool-call-finished',
     )
     .map(toToolCallTrace);
-  const summary = summarizeAgentCalls(allModelCalls, allToolCalls);
+  const summary = summarizeAgentCalls(allModelCalls, allProfileAttempts, allToolCalls);
   const terminalAt = options.responseReadyAt ?? options.finishedAt;
 
   return {
@@ -142,8 +164,13 @@ export function buildAgentResponseTrace(options: BuildAgentResponseTraceOptions)
     ...(options.backgroundWorkPending == null ? {} : { backgroundWorkPending: options.backgroundWorkPending }),
     summary,
     modelCalls: allModelCalls.slice(0, AGENT_RESPONSE_TRACE_MAX_MODEL_CALLS),
+    profileAttempts: allProfileAttempts.slice(0, AGENT_RESPONSE_TRACE_MAX_PROFILE_ATTEMPTS),
     toolCalls: allToolCalls.slice(0, AGENT_RESPONSE_TRACE_MAX_TOOL_CALLS),
     omittedModelCallCount: Math.max(0, allModelCalls.length - AGENT_RESPONSE_TRACE_MAX_MODEL_CALLS),
+    omittedProfileAttemptCount: Math.max(
+      0,
+      allProfileAttempts.length - AGENT_RESPONSE_TRACE_MAX_PROFILE_ATTEMPTS,
+    ),
     omittedToolCallCount: Math.max(0, allToolCalls.length - AGENT_RESPONSE_TRACE_MAX_TOOL_CALLS),
   };
 }
@@ -184,6 +211,10 @@ export function getAgentTraceEventIdentity(event: AgentTraceEvent): string | und
     return `model\u0000${event.execution.rootRunId}\u0000${event.execution.graphRunId}\u0000${event.nodeId}\u0000${event.processId}\u0000${event.callId}`;
   }
 
+  if (event.type === 'llm-profile-attempt') {
+    return `profile-attempt\u0000${event.execution.rootRunId}\u0000${event.execution.graphRunId}\u0000${event.nodeId}\u0000${event.processId}\u0000${event.eventId}`;
+  }
+
   return event.toolCallId == null
     ? undefined
     : `tool\u0000${event.execution.rootRunId}\u0000${event.execution.graphRunId}\u0000${event.sourceNodeId}\u0000${event.sourceProcessId}\u0000${event.toolCallId}`;
@@ -195,6 +226,18 @@ export function getAgentTraceEventIdentity(event: AgentTraceEvent): string | und
  * later legacy-shaped copy erase result navigation.
  */
 export function mergeAgentTraceEvent(existing: AgentTraceEvent, incoming: AgentTraceEvent): AgentTraceEvent {
+  if (existing.type === 'llm-call-finished' && incoming.type === 'llm-call-finished') {
+    return {
+      ...incoming,
+      ...(incoming.profileHealthKey == null && existing.profileHealthKey != null
+        ? { profileHealthKey: existing.profileHealthKey }
+        : {}),
+      ...(incoming.profileHealthState == null && existing.profileHealthState != null
+        ? { profileHealthState: existing.profileHealthState }
+        : {}),
+    };
+  }
+
   if (
     existing.type === 'tool-call-finished' &&
     incoming.type === 'tool-call-finished' &&
@@ -219,6 +262,8 @@ function toModelCallTrace(event: Extract<AgentTraceEvent, { type: 'llm-call-fini
     outcome: event.outcome,
     attemptIndex: event.attemptIndex,
     ...(event.profileIndex == null ? {} : { profileIndex: event.profileIndex }),
+    ...(event.profileHealthKey == null ? {} : { profileHealthKey: event.profileHealthKey }),
+    ...(event.profileHealthState == null ? {} : { profileHealthState: event.profileHealthState }),
     ...(event.roundIndex == null ? {} : { roundIndex: event.roundIndex }),
     ...(event.startedAt == null ? {} : { startedAt: event.startedAt }),
     ...(event.durationMs == null ? {} : { durationMs: event.durationMs }),
@@ -244,7 +289,18 @@ function toToolCallTrace(event: Extract<AgentTraceEvent, { type: 'tool-call-fini
   };
 }
 
-function summarizeAgentCalls(modelCalls: AgentModelCallTrace[], toolCalls: AgentToolCallTrace[]) {
+function toProfileAttemptTrace(
+  event: Extract<AgentTraceEvent, { type: 'llm-profile-attempt' }>,
+): AgentLLMProfileAttemptTrace {
+  const { type: _type, execution: _execution, ...trace } = event;
+  return trace;
+}
+
+function summarizeAgentCalls(
+  modelCalls: AgentModelCallTrace[],
+  profileAttempts: AgentLLMProfileAttemptTrace[],
+  toolCalls: AgentToolCallTrace[],
+) {
   const usageKeys = ['promptTokens', 'completionTokens', 'totalTokens', 'cachedTokens', 'reasoningTokens'] as const;
   const usage = Object.fromEntries(
     usageKeys.flatMap((key) => {
@@ -258,7 +314,7 @@ function summarizeAgentCalls(modelCalls: AgentModelCallTrace[], toolCalls: Agent
   const unknownCostCount = modelCalls.filter(
     (call) => call.pricing.status === 'unknown' || !Number.isFinite(call.pricing.costUsd),
   ).length;
-  const profileTransitions = countProfileFallbacks(modelCalls);
+  const profileTransitions = countProfileFallbacks(modelCalls, profileAttempts);
 
   return {
     modelCallCount: modelCalls.length,
@@ -282,17 +338,32 @@ function summarizeAgentCalls(modelCalls: AgentModelCallTrace[], toolCalls: Agent
  * profile across continuation rounds. Using that invariant also accounts for
  * configuration-failed profiles that never produced a physical-call event.
  */
-function countProfileFallbacks(modelCalls: readonly AgentModelCallTrace[]): number {
+function countProfileFallbacks(
+  modelCalls: readonly AgentModelCallTrace[],
+  profileAttempts: readonly AgentLLMProfileAttemptTrace[],
+): number {
   const highestProfileByInvocation = new Map<string, number>();
   let count = 0;
 
-  for (const call of modelCalls) {
-    if (call.profileIndex == null) continue;
-    const key = `${call.nodeId}\u0000${call.processId}`;
+  const candidates = [
+    ...modelCalls.flatMap((call) =>
+      call.profileIndex == null
+        ? []
+        : [{ nodeId: call.nodeId, processId: call.processId, profileIndex: call.profileIndex }],
+    ),
+    ...profileAttempts.flatMap((attempt) =>
+      attempt.profileIndex == null
+        ? []
+        : [{ nodeId: attempt.nodeId, processId: attempt.processId, profileIndex: attempt.profileIndex }],
+    ),
+  ];
+
+  for (const candidate of candidates) {
+    const key = `${candidate.nodeId}\u0000${candidate.processId}`;
     const highestProfile = highestProfileByInvocation.get(key) ?? 0;
-    if (call.profileIndex <= highestProfile) continue;
-    count += call.profileIndex - highestProfile;
-    highestProfileByInvocation.set(key, call.profileIndex);
+    if (candidate.profileIndex <= highestProfile) continue;
+    count += candidate.profileIndex - highestProfile;
+    highestProfileByInvocation.set(key, candidate.profileIndex);
   }
 
   return count;
@@ -318,8 +389,10 @@ export function isAgentResponseTrace(value: unknown): value is AgentResponseTrac
       'backgroundWorkPending',
       'summary',
       'modelCalls',
+      'profileAttempts',
       'toolCalls',
       'omittedModelCallCount',
+      'omittedProfileAttemptCount',
       'omittedToolCallCount',
     ])
   )
@@ -328,7 +401,13 @@ export function isAgentResponseTrace(value: unknown): value is AgentResponseTrac
   if (typeof value.graphRunId !== 'string' || typeof value.graphId !== 'string') return false;
   if (value.scope !== 'response' && value.scope !== 'llm-invocation') return false;
   if (!isRecord(value.summary) || !Array.isArray(value.modelCalls) || !Array.isArray(value.toolCalls)) return false;
+  if (value.profileAttempts !== undefined && !Array.isArray(value.profileAttempts)) return false;
   if (value.modelCalls.length > AGENT_RESPONSE_TRACE_MAX_MODEL_CALLS) return false;
+  if (
+    Array.isArray(value.profileAttempts) &&
+    value.profileAttempts.length > AGENT_RESPONSE_TRACE_MAX_PROFILE_ATTEMPTS
+  )
+    return false;
   if (value.toolCalls.length > AGENT_RESPONSE_TRACE_MAX_TOOL_CALLS) return false;
   return (
     isOptionalString(value.nodeId) &&
@@ -340,9 +419,11 @@ export function isAgentResponseTrace(value: unknown): value is AgentResponseTrac
     isOptionalBoolean(value.backgroundWorkPending) &&
     ['running', 'response-ready', 'completed', 'error', 'aborted', 'unavailable'].includes(String(value.status)) &&
     isNonNegativeInteger(value.omittedModelCallCount) &&
+    (value.omittedProfileAttemptCount === undefined || isNonNegativeInteger(value.omittedProfileAttemptCount)) &&
     isNonNegativeInteger(value.omittedToolCallCount) &&
     isAgentTraceSummary(value.summary) &&
     value.modelCalls.every(isAgentModelCallTrace) &&
+    (value.profileAttempts === undefined || value.profileAttempts.every(isAgentLLMProfileAttemptTrace)) &&
     value.toolCalls.every(isAgentToolCallTrace)
   );
 }
@@ -370,6 +451,10 @@ export class AgentResponseTraceCollector {
       processor.on('llmCallFinished', (event) => {
         this.#execution ??= event.execution;
         this.#events.push({ type: 'llm-call-finished', ...event });
+      }),
+      processor.on('llmProfileAttempt', (event) => {
+        this.#execution ??= event.execution;
+        this.#events.push({ type: 'llm-profile-attempt', ...event });
       }),
       processor.on('toolCallFinished', (event) => {
         this.#execution ??= event.execution;
@@ -439,6 +524,8 @@ function isAgentModelCallTrace(value: unknown): boolean {
       'outcome',
       'attemptIndex',
       'profileIndex',
+      'profileHealthKey',
+      'profileHealthState',
       'roundIndex',
       'startedAt',
       'durationMs',
@@ -457,12 +544,78 @@ function isAgentModelCallTrace(value: unknown): boolean {
     (value.outcome === 'success' || value.outcome === 'provider-failure' || value.outcome === 'aborted') &&
     isNonNegativeInteger(value.attemptIndex) &&
     isOptionalNonNegativeInteger(value.profileIndex) &&
+    isOptionalString(value.profileHealthKey) &&
+    (value.profileHealthState === undefined ||
+      value.profileHealthState === 'closed' ||
+      value.profileHealthState === 'open' ||
+      value.profileHealthState === 'half-open') &&
     isOptionalNonNegativeInteger(value.roundIndex) &&
     isOptionalNonNegativeFiniteNumber(value.startedAt) &&
     isOptionalNonNegativeFiniteNumber(value.durationMs) &&
     isOptionalString(value.finishReason) &&
     (value.usage === undefined || isAgentTraceUsage(value.usage)) &&
     isAgentTracePricing(value.pricing)
+  );
+}
+
+function isAgentLLMProfileAttemptTrace(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    hasOnlyKeys(value, [
+      'eventId',
+      'roundIndex',
+      'profileIndex',
+      'nodeId',
+      'processId',
+      'provider',
+      'model',
+      'customProviderApi',
+      'stage',
+      'outcome',
+      'attemptIndex',
+      'status',
+      'error',
+      'profileHealthKey',
+      'healthState',
+      'healthDisposition',
+      'healthOutcome',
+      'retryAt',
+      'timeoutKind',
+    ]) &&
+    typeof value.eventId === 'string' &&
+    isNonNegativeInteger(value.roundIndex) &&
+    isOptionalNonNegativeInteger(value.profileIndex) &&
+    typeof value.nodeId === 'string' &&
+    typeof value.processId === 'string' &&
+    typeof value.provider === 'string' &&
+    typeof value.model === 'string' &&
+    (value.customProviderApi === undefined ||
+      value.customProviderApi === 'completions' ||
+      value.customProviderApi === 'responses') &&
+    ['configuration', 'request', 'response-validation', 'health-gate', 'health-update'].includes(
+      String(value.stage),
+    ) &&
+    ['success', 'failure', 'aborted', 'skipped'].includes(String(value.outcome)) &&
+    isOptionalNonNegativeInteger(value.attemptIndex) &&
+    isOptionalNonNegativeFiniteNumber(value.status) &&
+    isOptionalString(value.error) &&
+    isOptionalString(value.profileHealthKey) &&
+    (value.healthState === undefined ||
+      value.healthState === 'closed' ||
+      value.healthState === 'open' ||
+      value.healthState === 'half-open') &&
+    (value.healthDisposition === undefined ||
+      value.healthDisposition === 'allow' ||
+      value.healthDisposition === 'deny' ||
+      value.healthDisposition === 'fail-open') &&
+    (value.healthOutcome === undefined ||
+      value.healthOutcome === 'healthy' ||
+      value.healthOutcome === 'unhealthy' ||
+      value.healthOutcome === 'ignored') &&
+    isOptionalNonNegativeFiniteNumber(value.retryAt) &&
+    (value.timeoutKind === undefined ||
+      value.timeoutKind === 'first-output' ||
+      value.timeoutKind === 'stream-inactivity')
   );
 }
 

@@ -7,6 +7,7 @@ export * from './chatV2ResponseFormat.js';
 export * from './chatV2Shared.js';
 export * from './chatV2Types.js';
 export * from './llmProfileTypes.js';
+export * from './llmProfileHealthStore.js';
 export * from './llmProfileBody.js';
 export * from './llmChatV2Body.js';
 export * from './messageConverter.js';

@@ -65,6 +65,12 @@ export const llmProfileFieldSpecs = [
   { key: 'googleIncludeThoughts', valueKind: 'boolean' },
   { key: 'enableGoogleSearchGrounding', valueKind: 'boolean' },
   { key: 'enableGoogleUrlContext', valueKind: 'boolean' },
+  { key: 'enableCircuitBreaker', valueKind: 'boolean' },
+  { key: 'firstOutputTimeoutMs', valueKind: 'required-number' },
+  { key: 'streamInactivityTimeoutMs', valueKind: 'required-number' },
+  { key: 'circuitBreakerFailureThreshold', valueKind: 'required-number' },
+  { key: 'circuitBreakerFailureWindowMs', valueKind: 'required-number' },
+  { key: 'circuitBreakerOpenDurationMs', valueKind: 'required-number' },
 ] as const satisfies readonly LLMProfileFieldSpec[];
 
 export const llmProfileDataKeys = llmProfileFieldSpecs.map((field) => field.key);

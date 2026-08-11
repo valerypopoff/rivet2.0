@@ -26,6 +26,10 @@ test('local executor isolates awaited processor event handlers from UI projectio
     useLocalExecutorSource,
     /routeLocalProcessEvent\(runProjectId, 'nodeFinish', data, \(\) => eventDispatcher\.nodeFinish\(data\)\)/,
   );
+  assert.match(
+    useLocalExecutorSource,
+    /processor\.on\('llmProfileAttempt', \(data\) => \{[\s\S]*routeLocalProcessEvent\(runProjectId, 'llmProfileAttempt', data, \(\) => eventDispatcher\.llmProfileAttempt\(data\)\)/,
+  );
   assert.doesNotMatch(useLocalExecutorSource, /processor\.on\('nodeFinish', currentExecution\.onNodeFinish\)/);
 });
 
@@ -43,6 +47,11 @@ test('local executor clears project-owned browser runtime resources on project c
     /processor\.abort\(\);[\s\S]*currentProcessorsByProjectId\.current\.delete\(projectId\);/,
   );
   assert.match(useLocalExecutorSource, /editorExecutionCachesByProjectId\.current\.delete\(projectId\);/);
+});
+
+test('local executor forwards a host-provided LLM profile health store to every browser run', () => {
+  assert.match(useLocalExecutorSource, /const llmProfileHealthStore = useLLMProfileHealthStore\(\)/);
+  assert.equal(useLocalExecutorSource.match(/llmProfileHealthStore,/g)?.length, 2);
 });
 
 test('local recording playback revalidates its captured owner before and after the pre-start yield', () => {

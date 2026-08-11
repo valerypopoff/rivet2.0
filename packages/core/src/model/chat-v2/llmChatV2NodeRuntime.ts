@@ -4,7 +4,11 @@ import type { Inputs, Outputs } from '../GraphProcessor.js';
 import type { PortId } from '../NodeBase.js';
 import type { InternalProcessContext } from '../ProcessContext.js';
 import { createLLMProfileFallbackRunner, getLLMAttemptErrorMessage, type LLMAttempt } from './llmProfileFallback.js';
-import { applyLLMProfileToNodeData, normalizeLLMProfileChainInput } from './llmProfile.js';
+import {
+  applyLLMProfileToNodeData,
+  normalizeLLMProfileChainInput,
+  scopeLLMProfileHealthIdentity,
+} from './llmProfile.js';
 import { buildLLMInvocationPlan, buildLLMInvocationRunOptions } from './llmInvocationPlan.js';
 import { resolveLLMModelCandidate } from './llmModelCandidate.js';
 import { mergeCustomProviderResponseFormatOptions } from './chatV2ResponseFormat.js';
@@ -23,6 +27,11 @@ import {
 } from './chatV2RuntimeOptions.js';
 import { type LLMChatV2EditorCacheKeyParts, type LLMChatV2NodeData } from './llmChatV2NodeData.js';
 import { isChatV2ResponseValidationError, runChatV2Pipeline } from './chatV2Pipeline.js';
+import {
+  DEFAULT_LLM_PROFILE_FIRST_OUTPUT_TIMEOUT_MS,
+  DEFAULT_LLM_PROFILE_STREAM_INACTIVITY_TIMEOUT_MS,
+  resolveRivetLLMProfileCircuitBreakerPolicy,
+} from './llmProfileHealthStore.js';
 
 export { buildLLMChatV2EditorCacheKey, cloneLLMChatV2EditorCacheOutputs };
 export { resolveLLMChatV2RuntimeProviderOptions } from './chatV2RuntimeOptions.js';
@@ -164,7 +173,15 @@ export async function resolveLLMChatV2RuntimeConfig(params: {
     };
   }
 
-  const profiles = normalizeLLMProfileChainInput(profileInput?.value);
+  const profiles = normalizeLLMProfileChainInput(profileInput?.value).map((profile) =>
+    profile.configuration.enableCircuitBreaker !== true
+      ? profile
+      : scopeLLMProfileHealthIdentity(profile, {
+          projectId: context.project.metadata.id,
+          profileNodeId: nodeId,
+          chatNodeHeaders: context.settings.chatNodeHeaders,
+        }),
+  );
   // Profile-owned provider-native capabilities are resolved only after the
   // input profile is normalized. One cache entry covers the complete fallback
   // chain, so every possible candidate must be replay-safe.
@@ -198,13 +215,28 @@ export async function resolveLLMChatV2RuntimeConfig(params: {
       firstProvider === 'anthropic' ? firstProfileData.anthropicCacheControlTtl || undefined : undefined,
   });
   const fallbackRunner = createLLMProfileFallbackRunner({
-    candidates: profiles.map((profile) => ({
-      provider: parseChatV2Provider(profile.configuration.provider),
-      model: profile.configuration.model,
-      ...(profile.configuration.provider === 'custom'
-        ? { customProviderApi: parseCustomProviderApi(profile.configuration.customProviderApi) }
-        : {}),
-    })),
+    candidates: profiles.map((profile) => {
+      const policy = resolveRivetLLMProfileCircuitBreakerPolicy(profile.configuration);
+      return {
+        provider: parseChatV2Provider(profile.configuration.provider),
+        model: profile.configuration.model,
+        ...(profile.configuration.provider === 'custom'
+          ? { customProviderApi: parseCustomProviderApi(profile.configuration.customProviderApi) }
+          : {}),
+        ...(policy == null
+          ? {}
+          : {
+              health: {
+                identity: profile.healthIdentity!,
+                policy,
+                firstOutputTimeoutMs:
+                  profile.configuration.firstOutputTimeoutMs ?? DEFAULT_LLM_PROFILE_FIRST_OUTPUT_TIMEOUT_MS,
+                streamInactivityTimeoutMs:
+                  profile.configuration.streamInactivityTimeoutMs ?? DEFAULT_LLM_PROFILE_STREAM_INACTIVITY_TIMEOUT_MS,
+              },
+            }),
+      };
+    }),
     resolveCandidate: (profileIndex, roundOptions) =>
       resolveLLMModelCandidate({
         plan,
@@ -212,6 +244,7 @@ export async function resolveLLMChatV2RuntimeConfig(params: {
         roundOptions,
       }).then((candidate) => candidate.runOptions),
     onAttempt: params.onLLMAttempt,
+    healthStore: context.llmProfileHealthStore,
   });
   const { cacheKey, cachedOutputs } = resolveLLMChatV2EditorCache({
     apiKey: undefined,

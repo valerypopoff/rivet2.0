@@ -125,3 +125,34 @@ test('projects user-input and progress events through the process-event boundary
   assert.deepEqual(invocation.waitingForUserInput, { questionCount: 1, renderingType: 'markdown' });
   assert.deepEqual(invocation.progress, { percent: 50, message: 'Preparing choices' });
 });
+
+test('projects LLM profile health events through the process-event boundary', () => {
+  const processId = 'profile-health' as ProcessId;
+  const journal = applyProcessEventToRunActivityJournal({
+    journal: createRunActivityJournal(),
+    message: 'llmProfileAttempt',
+    occurredAt: 7,
+    data: {
+      eventId: 'health-gate-1',
+      roundIndex: 0,
+      profileIndex: 1,
+      nodeId: node.id,
+      processId,
+      provider: 'openai',
+      model: 'gpt-test',
+      stage: 'health-gate',
+      outcome: 'failure',
+      healthDisposition: 'fail-open',
+      healthState: 'closed',
+      error: 'Shared health store unavailable',
+      execution,
+    } satisfies ProcessEventMessageMap['llmProfileAttempt'],
+  });
+
+  const invocation =
+    journal.rootsById[execution.rootRunId]!.nodeInvocationsByKey[
+      createRunActivityNodeKey({ ...execution, nodeId: node.id, processId })
+    ]!;
+  assert.equal(invocation.profileAttempts?.[0]?.healthDisposition, 'fail-open');
+  assert.equal(invocation.profileAttempts?.[0]?.error, 'Shared health store unavailable');
+});

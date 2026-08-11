@@ -28,11 +28,13 @@ import {
   shutdownSharedAppExecutorCodeWorkerPool,
 } from './codeRunnerWorkerPool.mjs';
 import { parseExecutorHostFromArgs, parseExecutorPortFromArgs } from './executorConfig.mjs';
+import { getAppExecutorHostOptions, markAppExecutorModuleLoaded } from './executorHostState.mjs';
+
+markAppExecutorModuleLoaded();
 
 type AppExecutorDebugger = ReturnType<typeof startDebuggerServer>;
-type AppExecutorClient = Parameters<
-  NonNullable<Parameters<typeof startDebuggerServer>[0]['dynamicGraphRun']>
->[0]['client'];
+type AppExecutorDebuggerOptions = NonNullable<Parameters<typeof startDebuggerServer>[0]>;
+type AppExecutorClient = Parameters<NonNullable<AppExecutorDebuggerOptions['dynamicGraphRun']>>[0]['client'];
 type AppExecutorProcessor = ReturnType<typeof createProcessor>['processor'];
 const processorsByClient = new WeakMap<AppExecutorClient, Set<AppExecutorProcessor>>();
 const clientByProcessor = new WeakMap<AppExecutorProcessor, AppExecutorClient>();
@@ -314,6 +316,15 @@ const rivetDebugger = startDebuggerServer({
       });
       const clientScopedDebugger = createClientScopedDebugger(client);
 
+      const injectedProcessorOptions =
+        (await getAppExecutorHostOptions().createProcessorOptions?.({
+          graphId,
+          isWebAppAction: initialWebAppStorage !== undefined,
+          project,
+          projectPath,
+          requestId,
+        })) ?? {};
+
       const webAppStorage =
         initialWebAppStorage === undefined
           ? undefined
@@ -333,6 +344,7 @@ const rivetDebugger = startDebuggerServer({
           }
         : undefined;
       const processor = createProcessor(project, {
+        ...injectedProcessorOptions,
         graph: graphId,
         inputs,
         ...debuggerState.settings!,

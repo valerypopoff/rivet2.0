@@ -10,6 +10,9 @@ import {
   llmProfileStringDataKeys,
 } from './llmProfileFieldRegistry.js';
 import { LLM_PROFILE_VALUE_VERSION, pickLLMChatV2ProfileData, type LLMProfileValue } from './llmProfileTypes.js';
+import { createRivetLLMProfileHealthIdentity } from './llmProfileHealthStore.js';
+import type { NodeId } from '../NodeBase.js';
+import type { ProjectId } from '../Project.js';
 
 export {
   applyLLMProfileToNodeData,
@@ -58,10 +61,16 @@ export function normalizeLLMProfileValue(value: unknown): LLMProfileValue {
     model: model.trim(),
   } as LLMChatV2NodeData);
 
+  const sourceIdentity = normalizeSourceIdentity(value.healthIdentity);
   return {
     version: LLM_PROFILE_VALUE_VERSION,
     configuration,
     credential,
+    healthIdentity: createRivetLLMProfileHealthIdentity({
+      configuration,
+      credential,
+      ...sourceIdentity,
+    }),
   };
 }
 
@@ -86,6 +95,40 @@ export function normalizeLLMProfileChainInput(value: unknown): LLMProfileValue[]
       throw new Error(`LLM Profiles input item ${index} is invalid: ${message}`);
     }
   });
+}
+
+/**
+ * Programmatic or serialized llm-config values may originate outside the
+ * currently executing project. Always bind health to that project before
+ * shared storage is consulted so copied values cannot share a circuit across
+ * projects. Preserve an originating profile-node identity when one exists;
+ * otherwise the consuming Chat node owns the identity.
+ */
+export function scopeLLMProfileHealthIdentity(
+  profile: LLMProfileValue,
+  fallback: {
+    projectId: ProjectId;
+    profileNodeId: NodeId;
+    chatNodeHeaders?: Record<string, string> | undefined;
+  },
+): LLMProfileValue {
+  const profileNodeId = profile.healthIdentity?.profileNodeId ?? fallback.profileNodeId;
+  const healthIdentity = createRivetLLMProfileHealthIdentity({
+    configuration: profile.configuration,
+    credential: profile.credential,
+    chatNodeHeaders: fallback.chatNodeHeaders,
+    projectId: fallback.projectId,
+    profileNodeId,
+  });
+
+  if (profile.healthIdentity?.key === healthIdentity.key) {
+    return profile;
+  }
+
+  return {
+    ...profile,
+    healthIdentity,
+  };
 }
 
 function normalizeConfiguration(data: LLMChatV2NodeData): LLMChatV2ProfileData {
@@ -193,6 +236,17 @@ function normalizeCredential(value: unknown): ChatV2CredentialResult {
       source: value.reference.source as ChatV2CredentialReference['source'],
       ...(name == null ? {} : { name }),
     },
+  };
+}
+
+function normalizeSourceIdentity(value: unknown): { projectId?: ProjectId; profileNodeId?: NodeId } {
+  if (!isRecord(value)) {
+    return {};
+  }
+
+  return {
+    ...(typeof value.projectId === 'string' ? { projectId: value.projectId as ProjectId } : {}),
+    ...(typeof value.profileNodeId === 'string' ? { profileNodeId: value.profileNodeId as NodeId } : {}),
   };
 }
 

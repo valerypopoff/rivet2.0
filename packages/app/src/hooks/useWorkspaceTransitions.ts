@@ -5,6 +5,7 @@ import {
   type NodeId,
   type NodePrefabId,
   type Project,
+  type ProjectId,
   type UiGraphId,
 } from '@valerypopoff/rivet2-core';
 import { toast, type Id as ToastId } from 'react-toastify';
@@ -64,6 +65,8 @@ import {
   resolveProjectWorkspaceTarget,
 } from '../domain/workspace/projectWorkspaceTarget.js';
 import { clearUiGraphPreviewSessions } from '../components/rivetWebApps/uiGraphPreviewSession.js';
+import { selectedOpeningProjectTabIdState } from '../state/openingProjectTabs.js';
+import { runDeduplicatedProjectSave } from '../utils/projectSaveCoordinator.js';
 
 export function useWorkspaceTransitions() {
   const ioProvider = useIOProvider();
@@ -404,66 +407,98 @@ export function useWorkspaceTransitions() {
       });
     },
 
-    async saveProject(options: { forceSaveAs?: boolean } = {}) {
-      const latestProject = store.get(projectState);
-      const latestLoadedProject = store.get(loadedProjectState);
-      const latestTestSuites = store.get(trivetState).testSuites;
-      const savedGraph = saveCurrentGraph();
-      const projectToPersist = withDerivedProjectPluginSpecs(mergeCurrentGraphIntoProject(latestProject, savedGraph), {
-        appPluginStates: store.get(pluginsState),
-        currentGraph: savedGraph,
-        registry: store.get(projectNodeRegistryState),
-      });
-      const canSaveInPlace = canSaveProjectDataNoPrompt(ioProvider, latestLoadedProject.path);
-      const shouldUseSaveAs =
-        options.forceSaveAs || !latestLoadedProject.loaded || !latestLoadedProject.path || !canSaveInPlace;
+    saveProject(options: { forceSaveAs?: boolean } = {}): Promise<boolean> {
+      const projectId = store.get(projectState).metadata.id as ProjectId | undefined;
+      if (!projectId) {
+        return Promise.resolve(false);
+      }
 
-      let saving: ToastId | undefined;
-      let savedPath: string | null = null;
-      const savingTimeout = setTimeout(() => {
-        saving = toast.info('Saving project');
-      }, 500);
+      return runDeduplicatedProjectSave(store, projectId, async () => {
+        const activeProjectIsOpen = store.get(projectsState).openedProjects[projectId] != null;
+        const openingProjectTabSelected = store.get(selectedOpeningProjectTabIdState) != null;
+        if (!activeProjectIsOpen || openingProjectTabSelected) {
+          return false;
+        }
 
-      try {
-        setProject(projectToPersist);
-        persistCurrentProjectEditorSnapshot({
-          project: projectToPersist,
-        });
-        await flushHybridStorageGroup('graph');
-        await flushHybridStorageGroup('project');
+        let saving: ToastId | undefined;
+        let savingTimeout: ReturnType<typeof setTimeout> | undefined;
+        let projectPath: string | null | undefined;
+        let shouldUseSaveAs = options.forceSaveAs ?? false;
 
-        if (shouldUseSaveAs) {
-          const filePath = await ioProvider.saveProjectData(projectToPersist, { testSuites: latestTestSuites });
+        try {
+          const latestProject = store.get(projectState);
+          const latestLoadedProject = store.get(loadedProjectState);
+          projectPath = latestLoadedProject.path;
+          const latestTestSuites = store.get(trivetState).testSuites;
+          const savedGraph = saveCurrentGraph();
+          const projectToPersist = withDerivedProjectPluginSpecs(
+            mergeCurrentGraphIntoProject(latestProject, savedGraph),
+            {
+              appPluginStates: store.get(pluginsState),
+              currentGraph: savedGraph,
+              registry: store.get(projectNodeRegistryState),
+            },
+          );
+          const saveInPlaceProvider = canSaveProjectDataNoPrompt(ioProvider, latestLoadedProject.path)
+            ? ioProvider
+            : undefined;
+          shouldUseSaveAs =
+            options.forceSaveAs || !latestLoadedProject.loaded || !latestLoadedProject.path || !saveInPlaceProvider;
 
-          if (filePath) {
-            savedPath = filePath;
-            setLoadedProject({ loaded: true, path: filePath });
+          let savedPath: string | null = null;
+          savingTimeout = setTimeout(() => {
+            saving = toast.info('Saving project');
+          }, 500);
+
+          setProject(projectToPersist);
+          persistCurrentProjectEditorSnapshot({
+            project: projectToPersist,
+          });
+          await flushHybridStorageGroup('graph');
+          await flushHybridStorageGroup('project');
+
+          if (shouldUseSaveAs) {
+            const filePath = await ioProvider.saveProjectData(projectToPersist, { testSuites: latestTestSuites });
+
+            if (filePath) {
+              savedPath = filePath;
+              setLoadedProject({ loaded: true, path: filePath });
+              setOpenedProjectSnapshots((snapshots) => {
+                const nextSnapshots = { ...snapshots };
+                delete nextSnapshots[projectToPersist.metadata.id];
+                return nextSnapshots;
+              });
+              setProjects((prev) => addOpenedProject(prev, projectToPersist, { fsPath: filePath }));
+              await flushHybridStorageGroup('graph');
+              await flushHybridStorageGroup('project');
+              toast.success('Project saved');
+            }
+          } else {
+            if (!saveInPlaceProvider) {
+              throw new Error('The active project cannot be saved in place.');
+            }
+            const savePath = latestLoadedProject.path!;
+            await saveInPlaceProvider.saveProjectDataNoPrompt(
+              projectToPersist,
+              { testSuites: latestTestSuites },
+              savePath,
+            );
+            savedPath = savePath;
+            setLoadedProject({ loaded: true, path: savePath });
             setOpenedProjectSnapshots((snapshots) => {
               const nextSnapshots = { ...snapshots };
               delete nextSnapshots[projectToPersist.metadata.id];
               return nextSnapshots;
             });
-            setProjects((prev) => addOpenedProject(prev, projectToPersist, { fsPath: filePath }));
             await flushHybridStorageGroup('graph');
             await flushHybridStorageGroup('project');
             toast.success('Project saved');
           }
-        } else {
-          const projectPath = latestLoadedProject.path!;
-          await ioProvider.saveProjectDataNoPrompt(projectToPersist, { testSuites: latestTestSuites }, projectPath);
-          savedPath = projectPath;
-          setLoadedProject({ loaded: true, path: projectPath });
-          setOpenedProjectSnapshots((snapshots) => {
-            const nextSnapshots = { ...snapshots };
-            delete nextSnapshots[projectToPersist.metadata.id];
-            return nextSnapshots;
-          });
-          await flushHybridStorageGroup('graph');
-          await flushHybridStorageGroup('project');
-          toast.success('Project saved');
-        }
 
-        if (savedPath) {
+          if (!savedPath) {
+            return false;
+          }
+
           setSavedProjectContentDigests((previousDigests) =>
             markProjectClean(previousDigests, {
               project: projectToPersist,
@@ -475,27 +510,46 @@ export function useWorkspaceTransitions() {
           setProjectDataUnsavedChanges((previousFlags) =>
             markProjectDirtyFlag(previousFlags, projectToPersist.metadata.id, false),
           );
-          hostCallbacks.onProjectSaved?.({
-            project: projectToPersist,
-            path: savedPath,
-            saveAs: shouldUseSaveAs,
+          try {
+            void Promise.resolve(
+              hostCallbacks.onProjectSaved?.({
+                project: projectToPersist,
+                path: savedPath,
+                saveAs: shouldUseSaveAs,
+              }),
+            ).catch((callbackError) => {
+              handleError(callbackError, 'Hosted onProjectSaved callback failed', {
+                metadata: { projectId, projectPath: savedPath },
+                toastError: false,
+              });
+            });
+          } catch (callbackError) {
+            handleError(callbackError, 'Hosted onProjectSaved callback failed', {
+              metadata: { projectId, projectPath: savedPath },
+              toastError: false,
+            });
+          }
+
+          return true;
+        } catch (err) {
+          handleError(err, 'Failed to save project', {
+            metadata: {
+              forceSaveAs: options.forceSaveAs ?? false,
+              projectId,
+              projectPath,
+              usedSaveAs: shouldUseSaveAs,
+            },
           });
+          return false;
+        } finally {
+          if (savingTimeout != null) {
+            clearTimeout(savingTimeout);
+          }
+          if (saving != null) {
+            toast.dismiss(saving);
+          }
         }
-      } catch (err) {
-        handleError(err, 'Failed to save project', {
-          metadata: {
-            forceSaveAs: options.forceSaveAs ?? false,
-            projectId: projectToPersist.metadata.id,
-            projectPath: latestLoadedProject.path,
-            usedSaveAs: shouldUseSaveAs,
-          },
-        });
-      } finally {
-        clearTimeout(savingTimeout);
-        if (saving != null) {
-          toast.dismiss(saving);
-        }
-      }
+      });
     },
   };
 }

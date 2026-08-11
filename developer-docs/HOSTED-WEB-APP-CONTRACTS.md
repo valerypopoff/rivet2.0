@@ -9,6 +9,39 @@ policy through `ui`, executor configuration, and `RivetWorkspaceHost`. Wrappers 
 their shell, authentication, persistence, publication, and route mapping. They do
 not import app-internal atoms.
 
+Hosted shells receive `RivetWorkspaceHost` through `onWorkspaceHostReady` or
+`RivetWorkspaceHostBridge`. `workspaceHost.saveCurrentProject()` is the supported
+imperative Save command for wrapper-owned buttons and shortcuts originating outside
+the editor iframe. It runs Rivet's normal workspace save transition: the live graph
+is merged into the project, project persistence and the existing static-data
+bookkeeping complete, the clean digest and both dirty flags are updated, normal
+notifications and error handling run, and `RivetAppHost.onProjectSaved` is emitted
+after persistence. It resolves `true` only for that completed save and `false` when
+there is no active project, Save As is cancelled, or persistence fails. Concurrent
+requests for the same project within one mounted workspace share one in-flight
+persistence operation. Wrappers must not import `useSaveProject`,
+`useWorkspaceTransitions`, or dirty-state atoms.
+
+`onProjectSaved` is an observer, not part of persistence ownership. A synchronous
+throw or rejected promise from wrapper callback code is logged without changing a
+successfully persisted save into `false` or repeating the persistence operation.
+
+Editor-focused Save shortcuts are owned declaratively by Rivet:
+
+```tsx
+<RivetAppHost
+  ui={{
+    keyboardShortcuts: {
+      saveProject: true,
+    },
+  }}
+/>
+```
+
+This enables only the platform Save chord for hosted ownership. The wrapper should
+remove its iframe-local Save listener and call `workspaceHost.saveCurrentProject()`
+only for wrapper-owned Save buttons or shortcuts originating outside the iframe.
+
 ## Declarative Web Apps
 
 `Project.uiGraphs` stores declarative UI resources. UI graphs are not executable

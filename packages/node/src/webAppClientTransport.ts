@@ -35,6 +35,7 @@ export class HostedActionError extends Error {
   constructor(
     message: string,
     readonly code?: string,
+    readonly responseTrace?: AgentResponseTrace,
   ) {
     super(message);
   }
@@ -72,7 +73,7 @@ function createHttpActionRunner(actionPath: string): HostedActionRunner {
       });
       const result = await readHostedActionResponse(response);
       if (!response.ok) {
-        throw new HostedActionError(result.error || 'Action failed.', result.code);
+        throw new HostedActionError(result.error || 'Action failed.', result.code, result.responseTrace);
       }
       return {
         statePatch: result.statePatch,
@@ -213,7 +214,9 @@ function createWebSocketActionRunner(socketPath: string): HostedActionRunner {
           }),
         );
       } else if (message.type === 'action.failed') {
-        settlePending(pending, () => pending.reject(new HostedActionError(message.error, message.code)));
+        settlePending(pending, () =>
+          pending.reject(new HostedActionError(message.error, message.code, message.responseTrace)),
+        );
       } else if (message.type === 'action.cancelled') {
         settlePending(pending, () => pending.reject(new DOMException('The action was cancelled.', 'AbortError')));
       } else if (message.type === 'action.interrupted') {

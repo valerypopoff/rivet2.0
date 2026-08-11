@@ -5,6 +5,7 @@ import {
   type LLMChatV2NodeData,
   type LLMChatV2ProfileData,
 } from './llmChatV2NodeData.js';
+import type { RivetLLMProfileHealthIdentity } from './llmProfileHealthStore.js';
 
 export const LLM_PROFILE_VALUE_VERSION = 1 as const;
 
@@ -19,6 +20,8 @@ export type LLMProfileValue = {
   version: typeof LLM_PROFILE_VALUE_VERSION;
   configuration: LLMChatV2ProfileData;
   credential: ChatV2CredentialResult;
+  /** Stable privacy-bounded identity used by optional cross-run health policy. */
+  healthIdentity?: RivetLLMProfileHealthIdentity;
 };
 
 export function createLLMProfileNodeData(): LLMChatV2ProfileData {

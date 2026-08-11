@@ -8,6 +8,13 @@ import type { ChatV2Provider } from './chatV2Types.js';
 import type { ChartNode, NodeId } from '../NodeBase.js';
 import { llmProfileDataKeys } from './llmProfileFieldRegistry.js';
 import type { CustomProviderApi } from './customProviderApi.js';
+import {
+  DEFAULT_LLM_PROFILE_CIRCUIT_FAILURE_THRESHOLD,
+  DEFAULT_LLM_PROFILE_CIRCUIT_FAILURE_WINDOW_MS,
+  DEFAULT_LLM_PROFILE_CIRCUIT_OPEN_DURATION_MS,
+  DEFAULT_LLM_PROFILE_FIRST_OUTPUT_TIMEOUT_MS,
+  DEFAULT_LLM_PROFILE_STREAM_INACTIVITY_TIMEOUT_MS,
+} from './llmProfileHealthStore.js';
 
 export type { CustomProviderApi } from './customProviderApi.js';
 
@@ -48,6 +55,12 @@ export type LLMChatV2NodeConfigData = ChatV2CommonNodeData & {
   googleIncludeThoughts?: boolean;
   enableGoogleSearchGrounding: boolean;
   enableGoogleUrlContext: boolean;
+  enableCircuitBreaker?: boolean;
+  firstOutputTimeoutMs?: number;
+  streamInactivityTimeoutMs?: number;
+  circuitBreakerFailureThreshold?: number;
+  circuitBreakerFailureWindowMs?: number;
+  circuitBreakerOpenDurationMs?: number;
   responseFormat?: ChatV2ResponseFormat;
   responseSchemaName?: string;
   useResponseSchemaNameInput?: boolean;
@@ -133,6 +146,12 @@ export function createLLMChatV2NodeData(): LLMChatV2NodeData {
     googleIncludeThoughts: false,
     enableGoogleSearchGrounding: false,
     enableGoogleUrlContext: false,
+    enableCircuitBreaker: false,
+    firstOutputTimeoutMs: DEFAULT_LLM_PROFILE_FIRST_OUTPUT_TIMEOUT_MS,
+    streamInactivityTimeoutMs: DEFAULT_LLM_PROFILE_STREAM_INACTIVITY_TIMEOUT_MS,
+    circuitBreakerFailureThreshold: DEFAULT_LLM_PROFILE_CIRCUIT_FAILURE_THRESHOLD,
+    circuitBreakerFailureWindowMs: DEFAULT_LLM_PROFILE_CIRCUIT_FAILURE_WINDOW_MS,
+    circuitBreakerOpenDurationMs: DEFAULT_LLM_PROFILE_CIRCUIT_OPEN_DURATION_MS,
     responseFormat: '',
     responseSchemaName: '',
     useResponseSchemaNameInput: false,

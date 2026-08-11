@@ -28,6 +28,7 @@ export type NodeExecutionEventsApi = {
   onNodeStart: (data: ProcessEvents['nodeStart']) => void;
   onPartialOutput: (data: ProcessEvents['partialOutput']) => void;
   onLlmCallFinished: (data: ProcessEvents['llmCallFinished']) => void;
+  onLlmProfileAttempt: (data: ProcessEvents['llmProfileAttempt']) => void;
   onToolCallFinished: (data: ProcessEvents['toolCallFinished']) => void;
 };
 
@@ -202,6 +203,13 @@ export function useNodeExecutionEvents({
     });
   };
 
+  const onLlmProfileAttempt = (data: ProcessEvents['llmProfileAttempt']) => {
+    appendAgentTraceEvent({
+      type: 'llm-profile-attempt',
+      ...data,
+    });
+  };
+
   const onToolCallFinished = (data: ProcessEvents['toolCallFinished']) => {
     appendAgentTraceEvent({
       type: 'tool-call-finished',
@@ -217,6 +225,7 @@ export function useNodeExecutionEvents({
     onNodeStart,
     onPartialOutput,
     onLlmCallFinished,
+    onLlmProfileAttempt,
     onToolCallFinished,
   };
 }

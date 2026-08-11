@@ -24,6 +24,7 @@ import { projectState } from '../../state/savedGraphs.js';
 import { settingsState } from '../../state/settings.js';
 import { useGetAdHocInternalProcessContext } from '../../hooks/useGetAdHocInternalProcessContext';
 import { useProjectNodeRegistry } from '../../hooks/useProjectNodeRegistry';
+import { useLLMProfileHealthStore } from '../../providers/ProvidersContext.js';
 import type { PromptDesignerTestGroupResults } from '../../state/promptDesigner';
 import { resolvePromptDesignerEvaluatorGraph } from './promptDesignerTestValidation.js';
 
@@ -68,6 +69,7 @@ export function useRunPromptDesignerTestGroup(datasetProvider: DatasetProvider) 
   const project = useAtomValue(projectState);
   const projectNodeRegistry = useProjectNodeRegistry();
   const settings = useAtomValue(settingsState);
+  const llmProfileHealthStore = useLLMProfileHealthStore();
 
   return async (
     testGroup: NodeTestGroup,
@@ -93,6 +95,7 @@ export function useRunPromptDesignerTestGroup(datasetProvider: DatasetProvider) 
         datasetProvider,
         settings: resolveProcessSettings(settings),
         tokenizer: new GptTokenizerTokenizer(),
+        llmProfileHealthStore,
       },
       {
         ['conditions' as PortId]: {

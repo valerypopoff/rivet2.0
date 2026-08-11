@@ -22,6 +22,7 @@ import {
   createRivetStoredValueSnapshotStore,
   type RivetStoredValueStore,
   type RivetKnowledgeStoreRegistry,
+  type RivetLLMProfileHealthStore,
   rivetWebAppStatusExternalFunction,
   AgentResponseTraceCollector,
   type AgentResponseTrace,
@@ -39,6 +40,7 @@ import {
 export type RivetWebAppProcessorOptions = Omit<NodeCreateProcessorOptions, 'graph'> & {
   storedValueStore?: RivetStoredValueStore;
   knowledgeStores?: RivetKnowledgeStoreRegistry;
+  llmProfileHealthStore?: RivetLLMProfileHealthStore;
 };
 
 export type RivetWebAppActionContext = {
@@ -70,7 +72,9 @@ export type RivetWebAppHandlerOptions = {
   assetMode?: RivetWebAppAssetMode;
   basePath?: string;
   createProcessorOptions?: RivetWebAppCreateProcessorOptions;
-  onActionError?: (context: RivetWebAppActionContext & { error: unknown }) => Promise<void> | void;
+  onActionError?: (
+    context: RivetWebAppActionContext & { error: unknown; responseTrace?: AgentResponseTrace },
+  ) => Promise<void> | void;
   onActionFinish?: (context: RivetWebAppActionContext & RivetWebAppActionResult) => Promise<void> | void;
   onActionStart?: (context: RivetWebAppActionContext) => Promise<void> | void;
   resolveContext?: (request: Request) => Promise<Record<string, DataValue>> | Record<string, DataValue>;
@@ -78,6 +82,7 @@ export type RivetWebAppHandlerOptions = {
   revisionKey?: string;
   storedValueStore?: RivetStoredValueStore;
   knowledgeStores?: RivetKnowledgeStoreRegistry;
+  llmProfileHealthStore?: RivetLLMProfileHealthStore;
   uiGraphId?: UiGraphId | string;
 };
 
@@ -121,6 +126,7 @@ export type RunRivetWebAppActionOptions = {
   state?: Record<string, unknown>;
   storedValueStore?: RivetStoredValueStore;
   knowledgeStores?: RivetKnowledgeStoreRegistry;
+  llmProfileHealthStore?: RivetLLMProfileHealthStore;
   storage?: Record<string, unknown>;
   uiGraph: UiGraph;
 };
@@ -141,6 +147,25 @@ export class RivetWebAppActionHttpError extends Error {
     super(message);
     this.name = 'RivetWebAppActionHttpError';
   }
+}
+
+const actionErrorResponseTraces = new WeakMap<object, AgentResponseTrace>();
+
+function attachActionResponseTrace(error: unknown, responseTrace: AgentResponseTrace | undefined): unknown {
+  if (responseTrace == null) return error;
+  const target =
+    (typeof error === 'object' && error != null) || typeof error === 'function'
+      ? (error as object)
+      : new Error(String(error));
+  actionErrorResponseTraces.set(target, responseTrace);
+  return target;
+}
+
+/** Returns privacy-bounded response diagnostics retained for a failed web-app action. */
+export function getRivetWebAppActionErrorResponseTrace(error: unknown): AgentResponseTrace | undefined {
+  return (typeof error === 'object' && error != null) || typeof error === 'function'
+    ? actionErrorResponseTraces.get(error as object)
+    : undefined;
 }
 
 export function createRivetWebAppHandler(
@@ -214,6 +239,7 @@ export function createRivetWebAppHandler(
             state: body.state,
             storedValueStore: options.storedValueStore,
             knowledgeStores: options.knowledgeStores,
+            llmProfileHealthStore: options.llmProfileHealthStore,
             storage: body.storage,
             uiGraph,
           });
@@ -221,10 +247,12 @@ export function createRivetWebAppHandler(
           return jsonResponse(result);
         } catch (error) {
           const errorCode = getActionErrorCode(error);
+          const responseTrace = getRivetWebAppActionErrorResponseTrace(error);
           return jsonResponse(
             {
               error: error instanceof Error ? error.message : String(error),
               ...(errorCode ? { code: errorCode } : {}),
+              ...(responseTrace == null ? {} : { responseTrace }),
             },
             getActionErrorStatus(error),
           );
@@ -264,6 +292,7 @@ export async function prepareRivetWebAppAction(
     state = {},
     storedValueStore,
     knowledgeStores,
+    llmProfileHealthStore,
     storage = {},
     uiGraph,
   }: RunRivetWebAppActionOptions,
@@ -330,6 +359,7 @@ export async function prepareRivetWebAppAction(
     const actionAbortController = new AbortController();
     const hostStoredValueStore = processorOptions.storedValueStore ?? storedValueStore;
     const hostKnowledgeStores = processorOptions.knowledgeStores ?? knowledgeStores;
+    const hostLLMProfileHealthStore = processorOptions.llmProfileHealthStore ?? llmProfileHealthStore;
     // A host store fully replaces browser persistence, including the untrusted browser snapshot.
     const browserStoredValues = hostStoredValueStore
       ? undefined
@@ -347,6 +377,7 @@ export async function prepareRivetWebAppAction(
       returnWhenGraphOutputsReady: true,
       storedValueStore: hostStoredValueStore ?? browserStoredValues!.store,
       knowledgeStores: hostKnowledgeStores,
+      llmProfileHealthStore: hostLLMProfileHealthStore,
     });
     const responseTraceCollector =
       component.type === 'chat' && component.allowResponseInspection === true
@@ -393,8 +424,14 @@ export async function prepareRivetWebAppAction(
           await callActionHook(onActionFinish, { ...actionContext, ...result });
           return result;
         } catch (error) {
-          await callActionHook(onActionError, { ...actionContext, error });
-          throw error;
+          const responseTrace = responseTraceCollector?.build();
+          const tracedError = attachActionResponseTrace(error, responseTrace);
+          await callActionHook(onActionError, {
+            ...actionContext,
+            error: tracedError,
+            ...(responseTrace == null ? {} : { responseTrace }),
+          });
+          throw tracedError;
         } finally {
           if (!processorRunStarted) {
             removeAbortForwarding();

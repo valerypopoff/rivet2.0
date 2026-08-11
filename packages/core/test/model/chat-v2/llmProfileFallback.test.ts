@@ -6,11 +6,17 @@ import {
   createLLMProfileFallbackRunner,
   LLMProfileFallbackExhaustedError,
 } from '../../../src/model/chat-v2/llmProfileFallback.js';
-import { createDefaultLLMProfileValue, normalizeLLMProfileChainInput } from '../../../src/model/chat-v2/llmProfile.js';
+import {
+  createDefaultLLMProfileValue,
+  normalizeLLMProfileChainInput,
+  scopeLLMProfileHealthIdentity,
+} from '../../../src/model/chat-v2/llmProfile.js';
 import { resolveLLMChatV2RuntimeConfig } from '../../../src/model/chat-v2/llmChatV2NodeRuntime.js';
 import type { ChatV2Model, RunChatV2PipelineOptions } from '../../../src/model/chat-v2/chatV2Types.js';
 import { LLMChatV2NodeImpl } from '../../../src/model/nodes/LLMChatV2Node.js';
 import type { PortId } from '../../../src/model/NodeBase.js';
+import type { NodeId } from '../../../src/model/NodeBase.js';
+import type { ProjectId } from '../../../src/model/Project.js';
 
 function baseRoundOptions(overrides: Partial<RunChatV2PipelineOptions> = {}): RunChatV2PipelineOptions {
   return {
@@ -47,6 +53,44 @@ describe('LLM Profile fallback chain', () => {
     );
     assert.throws(() => normalizeLLMProfileChainInput([]), /at least one LLM Profile/);
     assert.throws(() => normalizeLLMProfileChainInput([first, { version: 1 }]), /item 1 is invalid/);
+  });
+
+  it('scopes profiles to the consuming project without replacing profile-node identity', () => {
+    const unscoped = normalizeLLMProfileChainInput(createDefaultLLMProfileValue())[0]!;
+    const projectA = scopeLLMProfileHealthIdentity(unscoped, {
+      projectId: 'project-a' as ProjectId,
+      profileNodeId: 'chat-a' as NodeId,
+    });
+    const projectB = scopeLLMProfileHealthIdentity(unscoped, {
+      projectId: 'project-b' as ProjectId,
+      profileNodeId: 'chat-a' as NodeId,
+    });
+    assert.notEqual(projectA.healthIdentity?.key, projectB.healthIdentity?.key);
+
+    const rescopeToProjectB = scopeLLMProfileHealthIdentity(projectA, {
+      projectId: 'project-b' as ProjectId,
+      profileNodeId: 'chat-b' as NodeId,
+    });
+    assert.notEqual(rescopeToProjectB, projectA);
+    assert.equal(rescopeToProjectB.healthIdentity?.projectId, 'project-b');
+    assert.equal(rescopeToProjectB.healthIdentity?.profileNodeId, 'chat-a');
+    assert.notEqual(rescopeToProjectB.healthIdentity?.key, projectA.healthIdentity?.key);
+
+    const alreadyScoped = scopeLLMProfileHealthIdentity(rescopeToProjectB, {
+      projectId: 'project-b' as ProjectId,
+      profileNodeId: 'another-chat' as NodeId,
+    });
+    assert.equal(alreadyScoped, rescopeToProjectB);
+
+    const changedGlobalHeaders = scopeLLMProfileHealthIdentity(alreadyScoped, {
+      projectId: 'project-b' as ProjectId,
+      profileNodeId: 'another-chat' as NodeId,
+      chatNodeHeaders: { 'X-Provider-Route': 'route-b' },
+    });
+    assert.notEqual(changedGlobalHeaders.healthIdentity?.key, alreadyScoped.healthIdentity?.key);
+    assert.equal(changedGlobalHeaders.healthIdentity?.projectId, 'project-b');
+    assert.equal(changedGlobalHeaders.healthIdentity?.profileNodeId, 'chat-a');
+    assert.doesNotMatch(JSON.stringify(changedGlobalHeaders.healthIdentity), /route-b/);
   });
 
   it('exposes one profile-or-chain input, universal attempt history, and preserves the chain during Many-runs', () => {

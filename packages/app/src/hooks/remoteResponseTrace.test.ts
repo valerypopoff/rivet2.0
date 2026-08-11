@@ -64,6 +64,21 @@ void describe('remote response traces', () => {
       customProviderApi: 'responses',
     } satisfies Omit<Extract<AgentTraceEvent, { type: 'llm-call-finished' }>, 'type'>;
     collectRemoteAgentTraceEvent(traces, 'request', 'llm-call-finished', nestedModelCall);
+    collectRemoteAgentTraceEvent(traces, 'request', 'llm-profile-attempt', {
+      eventId: 'profile-attempt-1',
+      roundIndex: 0,
+      profileIndex: 0,
+      execution: nestedExecution,
+      nodeId: nestedModelCall.nodeId,
+      processId: nestedModelCall.processId,
+      provider: 'custom',
+      model: nestedModelCall.model,
+      customProviderApi: 'responses',
+      stage: 'health-gate',
+      outcome: 'skipped',
+      healthState: 'open',
+      healthDisposition: 'deny',
+    });
 
     emitRemoteResponseTrace(traces, 'request', { execution: nestedExecution }, false);
     assert.equal(deliveredTraces.length, 0);
@@ -77,5 +92,7 @@ void describe('remote response traces', () => {
     assert.equal(deliveredTrace?.summary.modelCallCount, 1);
     assert.equal(deliveredTrace?.modelCalls[0]?.nodeId, nestedModelCall.nodeId);
     assert.equal(deliveredTrace?.modelCalls[0]?.customProviderApi, 'responses');
+    assert.equal(deliveredTrace?.profileAttempts?.length, 1);
+    assert.equal(deliveredTrace?.profileAttempts?.[0]?.healthDisposition, 'deny');
   });
 });

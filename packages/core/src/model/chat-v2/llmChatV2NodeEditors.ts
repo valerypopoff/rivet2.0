@@ -21,6 +21,13 @@ import {
   supportsLLMChatV2ParallelToolCalls,
 } from './parallelToolCalls.js';
 import type { LLMChatV2Node, LLMChatV2NodeData, LLMChatV2ProfileData } from './llmChatV2NodeData.js';
+import {
+  DEFAULT_LLM_PROFILE_CIRCUIT_FAILURE_THRESHOLD,
+  DEFAULT_LLM_PROFILE_CIRCUIT_FAILURE_WINDOW_MS,
+  DEFAULT_LLM_PROFILE_CIRCUIT_OPEN_DURATION_MS,
+  DEFAULT_LLM_PROFILE_FIRST_OUTPUT_TIMEOUT_MS,
+  DEFAULT_LLM_PROFILE_STREAM_INACTIVITY_TIMEOUT_MS,
+} from './llmProfileHealthStore.js';
 
 type LLMChatV2EditorDefinition = EditorDefinition<LLMChatV2Node>;
 type LLMProfileEditorNode = ChartNode<'llmProfile', LLMChatV2ProfileData>;
@@ -159,6 +166,68 @@ function getModelEditors(modelOptions: { value: string; label: string }[]): LLMC
 
 function getProviderEditors(): LLMChatV2EditorDefinition[] {
   return [getOpenAIProviderEditors(), getAnthropicProviderEditors(), getGoogleProviderEditors()];
+}
+
+function getCircuitBreakerEditors(): LLMChatV2EditorDefinition {
+  return group('Reliability', [
+    {
+      type: 'toggle',
+      label: 'Temporarily skip unhealthy profile',
+      dataKey: 'enableCircuitBreaker',
+      helperMessage:
+        'Uses a circuit breaker to skip this profile after repeated provider failures or response timeouts. After the suspension expires, one recovery probe is allowed before normal traffic resumes.',
+    },
+    {
+      type: 'number',
+      label: 'First output timeout, ms',
+      dataKey: 'firstOutputTimeoutMs',
+      defaultValue: DEFAULT_LLM_PROFILE_FIRST_OUTPUT_TIMEOUT_MS,
+      min: 1,
+      step: 1,
+      helperMessage: 'Maximum wait for a non-stream response or the first useful streamed output before falling back.',
+      hideIf: (data) => data.enableCircuitBreaker !== true,
+    },
+    {
+      type: 'number',
+      label: 'Stream inactivity timeout, ms',
+      dataKey: 'streamInactivityTimeoutMs',
+      defaultValue: DEFAULT_LLM_PROFILE_STREAM_INACTIVITY_TIMEOUT_MS,
+      min: 1,
+      step: 1,
+      helperMessage: 'Maximum gap between streamed response events before falling back.',
+      hideIf: (data) => data.enableCircuitBreaker !== true,
+    },
+    {
+      type: 'number',
+      label: 'Failure threshold',
+      dataKey: 'circuitBreakerFailureThreshold',
+      defaultValue: DEFAULT_LLM_PROFILE_CIRCUIT_FAILURE_THRESHOLD,
+      min: 1,
+      step: 1,
+      helperMessage: 'Unhealthy profile attempts required within the failure window before suspension.',
+      hideIf: (data) => data.enableCircuitBreaker !== true,
+    },
+    {
+      type: 'number',
+      label: 'Failure window, ms',
+      dataKey: 'circuitBreakerFailureWindowMs',
+      defaultValue: DEFAULT_LLM_PROFILE_CIRCUIT_FAILURE_WINDOW_MS,
+      min: 1,
+      step: 1,
+      helperMessage: 'Only unhealthy profile attempts inside this rolling window count toward suspension.',
+      hideIf: (data) => data.enableCircuitBreaker !== true,
+    },
+    {
+      type: 'number',
+      label: 'Suspension duration, ms',
+      dataKey: 'circuitBreakerOpenDurationMs',
+      defaultValue: DEFAULT_LLM_PROFILE_CIRCUIT_OPEN_DURATION_MS,
+      min: 1,
+      step: 1,
+      helperMessage: 'How long the fallback chain skips this profile before allowing one recovery probe.',
+      hideIf: (data) => data.enableCircuitBreaker !== true,
+    },
+  ]);
 }
 
 function getOpenAIProviderEditors(): LLMChatV2EditorDefinition {
@@ -622,6 +691,7 @@ export async function getLLMProfileEditors(
     ...getProviderEditors(),
     getParameterEditors(),
     ...(profileData.provider === 'custom' ? [] : [getReasoningEditors()]),
+    getCircuitBreakerEditors(),
     getProviderAdvancedEditors(),
   ] as unknown as EditorDefinition<LLMProfileEditorNode>[];
 }

@@ -10,6 +10,7 @@ import type {
   StreamChatV2Result,
   StreamChatV2Options,
 } from './chatV2Types.js';
+import { isChatV2ProviderTimeoutError } from './chatV2Types.js';
 import { chatV2ToolsToAiSdk } from './toolConverter.js';
 import { buildChatV2RequestPlan, type ChatV2RequestPlan } from './chatV2RequestPlan.js';
 import {
@@ -104,12 +105,38 @@ async function runChatV2WithRetry(
   signal: AbortSignal,
   transportMode: ChatV2RequestPlan['transportMode'],
 ): Promise<ChatV2WithRetryResult> {
+  const prepareProviderRetry = async () => {
+    try {
+      await options.onBeforeProviderRetry?.(retryPlan.cooldownMs);
+    } catch {
+      // Circuit-health persistence is observational and must fail open.
+    }
+  };
+
   for (let attempt = 0; ; attempt++) {
     const callId = createObservedChatV2CallId(options);
     const callStartedAt = Date.now();
     let callWasObserved = false;
+    const attemptController = new AbortController();
+    const abortAttemptFromCaller = () => attemptController.abort(signal.reason);
+    if (signal.aborted) {
+      abortAttemptFromCaller();
+    } else {
+      signal.addEventListener('abort', abortAttemptFromCaller, { once: true });
+    }
     try {
-      const result = transportMode === 'generate' ? await generateChatV2(chatOptions) : await streamChatV2(chatOptions);
+      const attemptChatOptions: StreamChatV2Options = {
+        ...chatOptions,
+        abortSignal: attemptController.signal,
+        firstOutputTimeoutMs: options.firstOutputTimeoutMs,
+        streamInactivityTimeoutMs: options.streamInactivityTimeoutMs,
+        onStreamActivity: options.onStreamActivity,
+        onTimeout: (error) => attemptController.abort(error),
+      };
+      const result =
+        transportMode === 'generate'
+          ? await generateChatV2(attemptChatOptions)
+          : await streamChatV2(attemptChatOptions);
       await options.responseBodyCapture?.flush();
       const statusCode = result.requestStatus ?? 200;
       notifyChatV2CallFinished(options, {
@@ -139,9 +166,16 @@ async function runChatV2WithRetry(
         return { result, responseError };
       }
 
+      await prepareProviderRetry();
       await waitForLLMChatV2RetryCooldown(retryPlan.cooldownMs, signal);
-    } catch (error) {
-      await options.responseBodyCapture?.flush();
+    } catch (caughtError) {
+      const error =
+        !signal.aborted && isChatV2ProviderTimeoutError(attemptController.signal.reason)
+          ? attemptController.signal.reason
+          : caughtError;
+      await options.responseBodyCapture?.flush({
+        waitForPending: !signal.aborted && !isChatV2ProviderTimeoutError(error),
+      });
       if (!callWasObserved) {
         notifyChatV2CallFinished(options, {
           callId,
@@ -167,7 +201,7 @@ async function runChatV2WithRetry(
         throw createLLMChatV2RetryAbortError();
       }
 
-      if (!retryPlan.enabled || statusCode == null || statusCode === 200) {
+      if (isChatV2ProviderTimeoutError(error) || !retryPlan.enabled || statusCode == null || statusCode === 200) {
         throw error;
       }
 
@@ -175,7 +209,10 @@ async function runChatV2WithRetry(
         throw error;
       }
 
+      await prepareProviderRetry();
       await waitForLLMChatV2RetryCooldown(retryPlan.cooldownMs, signal);
+    } finally {
+      signal.removeEventListener('abort', abortAttemptFromCaller);
     }
   }
 }

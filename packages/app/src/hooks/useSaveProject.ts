@@ -3,12 +3,12 @@ import { useWorkspaceTransitions } from './useWorkspaceTransitions.js';
 export function useSaveProject() {
   const workspaceTransitions = useWorkspaceTransitions();
 
-  async function saveProject() {
-    await workspaceTransitions.saveProject();
+  function saveProject() {
+    return workspaceTransitions.saveProject();
   }
 
-  async function saveProjectAs() {
-    await workspaceTransitions.saveProject({ forceSaveAs: true });
+  function saveProjectAs() {
+    return workspaceTransitions.saveProject({ forceSaveAs: true });
   }
 
   return {

@@ -8,9 +8,11 @@ import {
   type RivetWebAppRunEvent,
   type RivetStoredValueStore,
   type RivetKnowledgeStoreRegistry,
+  type RivetLLMProfileHealthStore,
   type UiGraph,
 } from '@valerypopoff/rivet2-core';
 import {
+  getRivetWebAppActionErrorResponseTrace,
   prepareRivetWebAppAction,
   RivetWebAppActionHttpError,
   type RivetWebAppActionContext,
@@ -44,6 +46,7 @@ export type RivetWebAppSocketSession = {
   revisionKey?: string;
   storedValueStore?: RivetStoredValueStore;
   knowledgeStores?: RivetKnowledgeStoreRegistry;
+  llmProfileHealthStore?: RivetLLMProfileHealthStore;
   uiGraph: UiGraph;
 };
 
@@ -487,6 +490,7 @@ export function createRivetWebAppWebSocketGateway(
           state: message.state,
           storedValueStore: session.storedValueStore,
           knowledgeStores: session.knowledgeStores,
+          llmProfileHealthStore: session.llmProfileHealthStore,
           storage: message.storage,
           uiGraph: session.uiGraph,
         });
@@ -738,10 +742,12 @@ function createRunErrorEvent(
   if (activeRun.abortController.signal.aborted) {
     return { type: 'action.cancelled', requestId, runId };
   }
+  const responseTrace = getRivetWebAppActionErrorResponseTrace(error);
   return {
     type: 'action.failed',
     error: error instanceof Error ? error.message : String(error),
     ...(error instanceof RivetWebAppActionHttpError && error.code ? { code: error.code } : {}),
+    ...(responseTrace == null ? {} : { responseTrace }),
     requestId,
     runId,
   };
