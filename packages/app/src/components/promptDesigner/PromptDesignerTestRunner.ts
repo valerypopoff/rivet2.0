@@ -3,7 +3,6 @@ import { cloneDeep, range, zip } from 'lodash-es';
 import { nanoid } from 'nanoid/non-secure';
 import {
   ChatNodeImpl,
-  GptTokenizerTokenizer,
   GraphProcessor,
   type ChatMessage,
   type ChatNodeConfigData,
@@ -19,7 +18,6 @@ import {
   coerceTypeOptional,
   resolveProcessSettings,
 } from '@valerypopoff/rivet2-core';
-import { TauriNativeApi } from '../../model/native/TauriNativeApi.js';
 import { projectState } from '../../state/savedGraphs.js';
 import { settingsState } from '../../state/settings.js';
 import { useGetAdHocInternalProcessContext } from '../../hooks/useGetAdHocInternalProcessContext';
@@ -27,6 +25,7 @@ import { useProjectNodeRegistry } from '../../hooks/useProjectNodeRegistry';
 import { useLLMProfileHealthStore } from '../../providers/ProvidersContext.js';
 import type { PromptDesignerTestGroupResults } from '../../state/promptDesigner';
 import { resolvePromptDesignerEvaluatorGraph } from './promptDesignerTestValidation.js';
+import { createPromptDesignerEvaluatorProcessorOptions } from './promptDesignerTestProcessorOptions.js';
 
 export async function runAdHocChat(messages: ChatMessage[], data: ChatNodeConfigData, context: InternalProcessContext) {
   const chatNode = new ChatNodeImpl({
@@ -90,13 +89,11 @@ export function useRunPromptDesignerTestGroup(datasetProvider: DatasetProvider) 
     });
 
     const outputs = await processor.processGraph(
-      {
-        nativeApi: new TauriNativeApi(),
+      createPromptDesignerEvaluatorProcessorOptions({
         datasetProvider,
         settings: resolveProcessSettings(settings),
-        tokenizer: new GptTokenizerTokenizer(),
         llmProfileHealthStore,
-      },
+      }),
       {
         ['conditions' as PortId]: {
           type: 'string[]',

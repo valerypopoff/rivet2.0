@@ -2,6 +2,9 @@
 // New source-reading tests are rejected; add behavior/pure/static-owner coverage instead.
 export const sourceReadingTestAllowlist = new Set([
   'packages/app-executor/bin/executor.test.mts',
+  // Static bootstrap contract: importing the entrypoint would start the
+  // executor's socket server, so this narrow source guard is intentional.
+  'packages/app-executor/bin/executorHost.test.mts',
   'packages/app/src/components/ActionBarLayout.test.ts',
   'packages/app/src/components/ActionBarMoreMenu.test.ts',
   'packages/app/src/components/GraphListLayout.test.ts',
