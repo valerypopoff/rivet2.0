@@ -31,14 +31,18 @@ inspectable.
 The `Reliability` section belongs to the `LLM Profile` node. It is not available
 on inline LLM Chat configuration.
 
-| Setting                            |    Default | Meaning                                                                     |
-| ---------------------------------- | ---------: | --------------------------------------------------------------------------- |
-| Temporarily skip unhealthy profile |        Off | Enables the circuit breaker for this resolved profile.                      |
-| First output timeout               |  30,000 ms | Maximum wait for a non-stream response or the first useful streamed output. |
-| Stream inactivity timeout          |  30,000 ms | Maximum gap between useful streamed response events.                        |
-| Failure threshold                  |          3 | Unhealthy outcomes needed inside the rolling window.                        |
-| Failure window                     | 300,000 ms | Rolling interval used to count unhealthy outcomes.                          |
-| Suspension duration                | 300,000 ms | Time an open profile is skipped before one recovery probe is allowed.       |
+| Setting                            | Default | Meaning                                                                     |
+| ---------------------------------- | ------: | --------------------------------------------------------------------------- |
+| Temporarily skip unhealthy profile |     Off | Enables the circuit breaker for this resolved profile.                      |
+| First output timeout               |  30 sec | Maximum wait for a non-stream response or the first useful streamed output. |
+| Stream inactivity timeout          |  30 sec | Maximum gap between useful streamed response events.                        |
+| Failure threshold                  |       3 | Unhealthy outcomes needed inside the rolling window.                        |
+| Failure window                     | 300 sec | Rolling interval used to count unhealthy outcomes.                          |
+| Suspension duration                | 300 sec | Time an open profile is skipped before one recovery probe is allowed.       |
+
+Reliability controls are presented in whole seconds. Rivet continues storing
+and applying their values internally as milliseconds, so existing projects and
+the public runtime contract remain unchanged.
 
 The identity includes the executing project, source LLM Profile node, provider,
 model, Custom API mode, and a SHA-256 configuration fingerprint. The fingerprint
