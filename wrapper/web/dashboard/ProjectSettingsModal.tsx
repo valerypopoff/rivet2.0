@@ -216,7 +216,7 @@ export const ProjectSettingsModal: FC<ProjectSettingsModalProps> = ({
         aria-selected={activeTab === 'llm-health'}
         onClick={() => setActiveTab('llm-health')}
       >
-        LLM reliability
+        LLM profile suspension
       </SegmentedControlButton>
     </SegmentedControl>
   );

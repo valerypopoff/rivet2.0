@@ -6,7 +6,8 @@ import type { Project, ProjectId, RivetLLMProfileHealthSnapshot } from '@valeryp
 
 import {
   getLLMProfileHealthDisplayName,
-  getSuspendedLLMProfileHealthEntries,
+  getLLMProfileHealthStatusDetail,
+  getOperationalLLMProfileHealthEntries,
 } from '../dashboard/llmProfileHealthPresentation';
 
 function snapshot(
@@ -31,8 +32,8 @@ function snapshot(
   };
 }
 
-test('LLM reliability settings show only currently suspended profiles in the active project', () => {
-  const entries = getSuspendedLLMProfileHealthEntries('project-a' as ProjectId, [
+test('LLM profile suspension settings show suspensions and recovery states in the active project', () => {
+  const entries = getOperationalLLMProfileHealthEntries('project-a' as ProjectId, [
     snapshot('closed', 'project-a', 'closed'),
     snapshot('other-project', 'project-b', 'open'),
     snapshot('half-open', 'project-a', 'half-open'),
@@ -40,19 +41,30 @@ test('LLM reliability settings show only currently suspended profiles in the act
     snapshot('newer', 'project-a', 'open'),
   ]);
 
-  assert.deepEqual(entries.map((entry) => entry.identity.key), ['newer', 'older']);
+  assert.deepEqual(entries.map((entry) => entry.identity.key), ['newer', 'half-open', 'older']);
 });
 
-test('LLM reliability settings hide expired suspensions even if a stale source still marks them open', () => {
-  const entries = getSuspendedLLMProfileHealthEntries('project-a' as ProjectId, [
+test('LLM profile suspension settings retain expired suspensions as awaiting recovery', () => {
+  const entries = getOperationalLLMProfileHealthEntries('project-a' as ProjectId, [
     { ...snapshot('expired', 'project-a', 'open'), openUntil: 9_999 },
     { ...snapshot('active', 'project-a', 'open'), openUntil: 10_001 },
-  ], 10_000);
+  ]);
 
-  assert.deepEqual(entries.map((entry) => entry.identity.key), ['active']);
+  assert.deepEqual(entries.map((entry) => entry.identity.key), ['expired', 'active']);
+  assert.match(getLLMProfileHealthStatusDetail(entries[0]!, 10_000), /awaiting recovery attempt/);
+  assert.match(getLLMProfileHealthStatusDetail(entries[1]!, 10_000), /suspended until/);
 });
 
-test('LLM reliability settings resolve retained profile nodes to friendly graph and node names', () => {
+test('LLM profile suspension settings distinguish an active recovery attempt', () => {
+  const recovering = {
+    ...snapshot('recovering', 'project-a', 'half-open'),
+    halfOpenLeaseUntil: 10_001,
+  };
+
+  assert.match(getLLMProfileHealthStatusDetail(recovering, 10_000), /recovery attempt in progress/);
+});
+
+test('LLM profile suspension settings resolve retained profile nodes to friendly graph and node names', () => {
   const project = {
     graphs: {
       graph: {
@@ -66,18 +78,19 @@ test('LLM reliability settings resolve retained profile nodes to friendly graph 
   assert.equal(getLLMProfileHealthDisplayName(undefined, snapshot('open', 'project-a', 'open')), 'LLM Profile profile-node');
 });
 
-test('outer Project Settings owns LLM reliability administration and the embedded editor owns execution only', () => {
+test('outer Project Settings owns LLM profile suspension administration and the embedded editor owns execution only', () => {
   const modalSource = readFileSync(new URL('../dashboard/ProjectSettingsModal.tsx', import.meta.url), 'utf8');
   const healthSource = readFileSync(new URL('../dashboard/LLMProfileHealthSettings.tsx', import.meta.url), 'utf8');
   const providersSource = readFileSync(new URL('../dashboard/hostedRivetProviders.ts', import.meta.url), 'utf8');
 
   assert.ok(modalSource.indexOf('Endpoint') < modalSource.indexOf('Web apps'));
-  assert.ok(modalSource.indexOf('Web apps') < modalSource.indexOf('LLM reliability'));
+  assert.ok(modalSource.indexOf('Web apps') < modalSource.indexOf('LLM profile suspension'));
   assert.match(healthSource, /HEALTH_REFRESH_INTERVAL_MS = 5_000/);
   assert.match(healthSource, /activeProject\.projectMetadataId/);
   assert.match(healthSource, /project\.metadata\.id/);
   assert.doesNotMatch(healthSource, /activeProject\.id as ProjectId/);
-  assert.match(healthSource, /No LLM profiles are currently suspended\./);
+  assert.match(healthSource, /No LLM profiles are currently suspended or awaiting recovery\./);
+  assert.doesNotMatch(healthSource, /LLM profile reliability/);
   assert.doesNotMatch(providersSource, /llmProfileHealthAdmin:/);
   assert.match(providersSource, /llmProfileHealthStore:/);
 });

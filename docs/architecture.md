@@ -74,15 +74,16 @@ LLM Profile suspension state is wrapper-owned operational state, not project con
 Reliability settings stored in an LLM Profile are authoring data. Upstream
 standalone Rivet deliberately leaves them inert; Rivet Studio Server activates
 them by supplying this store to every hosted execution surface. The outer
-Project Settings modal owns the operational **LLM reliability** tab. It polls only
-while open, shows only profiles the server currently reports as suspended, and can
+Project Settings modal owns the operational **LLM profile suspension** tab. It polls only
+while open, shows active suspensions plus profiles awaiting or running their
+single recovery attempt, and can
 atomically delete one profile's complete reliability history or every profile's history
 for the project. The embedded Rivet editor receives the execution store but not
 the management provider. Workflow catalog entries carry the immutable Rivet
 project metadata id separately from the filesystem path or managed catalog id,
 so health lookup remains correctly scoped even when loading the full project
 for friendly graph and node labels fails. The dashboard loads the full project
-only when a suspended row needs those labels. Filesystem mode derives the id in
+only when an operational reliability row needs those labels. Filesystem mode derives the id in
 the same cached parse used for graph/node statistics rather than reparsing every
 project for each tree request.
 

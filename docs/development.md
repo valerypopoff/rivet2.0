@@ -261,11 +261,13 @@ Windows PowerShell override example:
 
 The local executor is the wrapper entrypoint, not the upstream standalone executable. It injects an HTTP-backed LLM Profile health store into Node-mode editor runs. By default it calls `http://127.0.0.1:3100/api/workflows/llm-profile-health`; set `RIVET_LLM_PROFILE_HEALTH_API_URL` only when the local API is exposed elsewhere. `RIVET_KEY` must match the API because the executor derives the normal trusted proxy token from it.
 
-The dashboard's outer Project Settings > LLM reliability tab administers that same
+The dashboard's outer Project Settings > LLM profile suspension tab administers that same
 server state. It is intentionally outside the embedded Rivet editor, and the
 embedded provider configuration carries only the runtime store. Upstream
 standalone Rivet can save Reliability settings but does not enforce them or
-create local suspension state.
+create local suspension state. The tab keeps an expired suspension visible as
+awaiting recovery, then marks its leased recovery request as in progress, so an
+empty panel means there is no suspension or pending recovery lifecycle.
 
 Important constraints:
 

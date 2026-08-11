@@ -6,8 +6,8 @@ import { hostedLLMProfileHealthAdmin } from './hostedRivetProviders';
 import {
   getLLMProfileHealthDisplayName,
   getLLMProfileHealthIdentityLabel,
-  getLLMProfileHealthSuspensionDetail,
-  getSuspendedLLMProfileHealthEntries,
+  getLLMProfileHealthStatusDetail,
+  getOperationalLLMProfileHealthEntries,
 } from './llmProfileHealthPresentation';
 import type { WorkflowProjectItem } from './types';
 import { fetchHostedProjectFile } from './workflowApi';
@@ -42,8 +42,8 @@ export const LLMProfileHealthSettings: FC<{ activeProject: WorkflowProjectItem }
   const activeProjectId = useRef<ProjectId>();
   activeProjectId.current = projectId;
 
-  const suspendedEntries = useMemo(
-    () => projectId == null ? [] : getSuspendedLLMProfileHealthEntries(projectId, entries),
+  const operationalEntries = useMemo(
+    () => projectId == null ? [] : getOperationalLLMProfileHealthEntries(projectId, entries),
     [entries, projectId],
   );
   const hasHealthHistory = projectId != null && entries.some((entry) => entry.identity.projectId === projectId);
@@ -97,7 +97,7 @@ export const LLMProfileHealthSettings: FC<{ activeProject: WorkflowProjectItem }
     let active = true;
     if (
       activeProjectContext?.project != null ||
-      (catalogProjectId != null && suspendedEntries.length === 0)
+      (catalogProjectId != null && operationalEntries.length === 0)
     ) {
       return () => {
         active = false;
@@ -139,7 +139,7 @@ export const LLMProfileHealthSettings: FC<{ activeProject: WorkflowProjectItem }
     activeProject.updatedAt,
     activeProjectContext?.project,
     catalogProjectId,
-    suspendedEntries.length,
+    operationalEntries.length,
   ]);
 
   const reset = async (key?: string) => {
@@ -166,6 +166,7 @@ export const LLMProfileHealthSettings: FC<{ activeProject: WorkflowProjectItem }
         <div className="project-settings-help project-settings-llm-health-help">
           Rivet Studio Server remembers provider failures and suspensions across workflow runs. Clearing history
           completely forgets this information; it does not change LLM profile suspension settings saved in the project.
+          After a suspension expires, the profile remains visible here while it awaits or runs its recovery attempt.
         </div>
         <div className="project-settings-llm-health-actions">
           <Button
@@ -190,24 +191,26 @@ export const LLMProfileHealthSettings: FC<{ activeProject: WorkflowProjectItem }
       <div className="project-settings-llm-health-status">
         {error ? (
           <div className="project-settings-error project-settings-llm-health-error">
-            Could not load LLM profile reliability: {error}
+            Could not load LLM profile suspension state: {error}
           </div>
         ) : null}
 
         {loading ? (
-          <div className="project-settings-help">Loading LLM profile reliability...</div>
-        ) : suspendedEntries.length === 0 ? (
-          <div className="project-settings-help">No LLM profiles are currently suspended.</div>
+          <div className="project-settings-help">Loading LLM profile suspension state...</div>
+        ) : operationalEntries.length === 0 ? (
+          <div className="project-settings-help">
+            No LLM profiles are currently suspended or awaiting recovery.
+          </div>
         ) : (
           <div className="project-settings-llm-health-list">
-            {suspendedEntries.map((entry) => (
+            {operationalEntries.map((entry) => (
               <div className="project-settings-llm-health-row" key={entry.identity.key}>
                 <div className="project-settings-llm-health-description">
                   <div className="project-settings-llm-health-name">
                     {getLLMProfileHealthDisplayName(activeProjectContext?.project, entry)}
                   </div>
                   <div className="project-settings-llm-health-metadata">
-                    {getLLMProfileHealthIdentityLabel(entry)} - {getLLMProfileHealthSuspensionDetail(entry)}
+                    {getLLMProfileHealthIdentityLabel(entry)} - {getLLMProfileHealthStatusDetail(entry)}
                   </div>
                 </div>
                 <LoadingButton
@@ -217,7 +220,7 @@ export const LLMProfileHealthSettings: FC<{ activeProject: WorkflowProjectItem }
                   isLoading={resettingKey === entry.identity.key}
                   isDisabled={resettingKey != null}
                 >
-                  Clear and resume
+                  Clear history
                 </LoadingButton>
               </div>
             ))}
@@ -229,7 +232,7 @@ export const LLMProfileHealthSettings: FC<{ activeProject: WorkflowProjectItem }
         <div
           className="project-settings-llm-health-confirmation"
           role="alertdialog"
-          aria-label="Clear all LLM profile reliability history"
+          aria-label="Clear all LLM profile suspension history"
         >
           <div>
             Clear all recorded failures, suspensions, and recovery attempts for this project? The next request starts

@@ -1,17 +1,14 @@
 import type { Project, ProjectId, RivetLLMProfileHealthSnapshot } from '@valerypopoff/rivet2-core';
 
-export function getSuspendedLLMProfileHealthEntries(
+export function getOperationalLLMProfileHealthEntries(
   projectId: ProjectId,
   entries: readonly RivetLLMProfileHealthSnapshot[],
-  now = Date.now(),
 ): readonly RivetLLMProfileHealthSnapshot[] {
   return entries
     .filter(
       (entry) =>
         entry.identity.projectId === projectId &&
-        entry.state === 'open' &&
-        entry.openUntil != null &&
-        entry.openUntil > now,
+        entry.state !== 'closed',
     )
     .sort((left, right) => right.updatedAt - left.updatedAt);
 }
@@ -40,10 +37,16 @@ export function getLLMProfileHealthIdentityLabel(snapshot: RivetLLMProfileHealth
   return `${provider}/${snapshot.identity.model}`;
 }
 
-export function getLLMProfileHealthSuspensionDetail(snapshot: RivetLLMProfileHealthSnapshot): string {
+export function getLLMProfileHealthStatusDetail(
+  snapshot: RivetLLMProfileHealthSnapshot,
+  now = Date.now(),
+): string {
   const failureLabel = `${snapshot.failureCount} recent failure${snapshot.failureCount === 1 ? '' : 's'}`;
-  const expiryLabel = snapshot.openUntil == null
-    ? 'suspended'
-    : `suspended until ${new Date(snapshot.openUntil).toLocaleString()}`;
-  return `${failureLabel} - ${expiryLabel}`;
+  if (snapshot.state === 'open' && snapshot.openUntil != null && snapshot.openUntil > now) {
+    return `${failureLabel} - suspended until ${new Date(snapshot.openUntil).toLocaleString()}`;
+  }
+  if (snapshot.halfOpenLeaseUntil != null && snapshot.halfOpenLeaseUntil > now) {
+    return `${failureLabel} - recovery attempt in progress`;
+  }
+  return `${failureLabel} - awaiting recovery attempt`;
 }

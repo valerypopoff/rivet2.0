@@ -510,9 +510,11 @@ The state records only safe profile identity metadata, bounded failure timestamp
 
 `GET /api/workflows/llm-profile-health?projectId=<id>` and `POST /api/workflows/llm-profile-health/reset` are trusted hosted-editor administration surfaces. Both require an exact project id. Reset accepts that project id alone for one atomic project-wide reset, or the project id plus one exact key; unscoped listing and key-only reset are rejected. Runtime `begin`, `finish`, and `renew` identities also require their project id. These routes use the normal wrapper proxy-auth contract and are not public workflow endpoints.
 
-The wrapper-owned Project Settings > LLM reliability tab shows only profiles
-that are currently suspended. Clearing history deletes the complete stored record,
-including failures, suspension, and recovery attempts; it does not alter the
+The wrapper-owned Project Settings > LLM profile suspension tab shows profiles that
+are currently suspended, awaiting their recovery attempt, or running that attempt.
+This keeps retained recovery state visible after a suspension expires instead of
+presenting the project as having no operational reliability state. Clearing history
+deletes the complete stored record, including failures, suspension, and recovery attempts; it does not alter the
 LLM profile suspension settings in the project. Its full-width reliability explanation
 is followed by Refresh and Clear-all actions, then a divider and the current
 suspension state. Project deletion performs the same project-wide cleanup
