@@ -62,7 +62,7 @@ profile available. A
 second failed logical attempt inside the configured failure window suspends the
 profile; only subsequent requests are skipped for the suspension duration.
 Existing reliability history is intentionally retained when the policy is
-edited. In Rivet Studio Server, use Project Settings > LLM reliability > Clear
+edited. In Rivet Studio Server, use Project Settings > LLM profile suspension > Clear
 all history when testing should begin from an empty history.
 
 The identity includes the executing project, source LLM Profile node, provider,
@@ -117,13 +117,13 @@ permissioned editor-facing list/reset API, separate from the atomic execution
 store so a custom browser host can implement administration over HTTP without
 exposing database operations directly. A host-supplied execution store does not
 implicitly expose administration. Standalone Rivet supplies neither provider,
-so it has no LLM reliability management section.
+so it has no LLM profile suspension management section.
 
 Rivet Studio Server owns its operational UI outside the embedded editor. Its
-Project Settings > LLM reliability tab shows only profiles that are currently
-suspended. Profiles that are available or running a recovery attempt stay
-hidden because they are not currently suspended. The tab maps retained profile
-node IDs back to graph/node names and can clear one visible profile's history
+Project Settings > LLM profile suspension tab shows profiles that are currently
+suspended, awaiting their one recovery attempt, or running that attempt. Fully
+available profiles stay hidden. The tab maps retained profile node IDs back to
+graph/node names and can clear one visible profile's history
 and resume it, or clear history for the whole project. Project-wide listing and
 clearing use the store's first-class
 `list({ projectId })` and atomic `reset({ projectId })` operations rather than

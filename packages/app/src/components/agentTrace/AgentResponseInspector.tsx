@@ -353,7 +353,7 @@ const ResponseInspectorContent: FC<{ trace?: AgentResponseTrace; includeSubtitle
         <TraceSection
           title="LLM profile attempts"
           omitted={trace.omittedProfileAttemptCount ?? 0}
-          empty="No profile fallback or circuit-breaker decisions recorded."
+          empty="No profile fallback or suspension decisions recorded."
         >
           {buildAgentProfileAttemptInspectorRows(trace.profileAttempts ?? []).map((row) => (
             <article key={row.eventId}>

@@ -517,7 +517,7 @@ describe('LLM Profile circuit-breaker fallback integration', () => {
     assert.equal(calls, 2);
   });
 
-  it('summarizes provider deadlines and the circuit state they produced', () => {
+  it('summarizes provider deadlines and the suspension they produced without exposing circuit terminology', () => {
     const summary = buildLLMProfileFallbackSummary(
       [candidate('primary')],
       [
@@ -546,5 +546,6 @@ describe('LLM Profile circuit-breaker fallback integration', () => {
 
     assert.match(summary, /timed out waiting for first useful output/);
     assert.match(summary, /profile is suspended/);
+    assert.doesNotMatch(summary, /circuit/i);
   });
 });

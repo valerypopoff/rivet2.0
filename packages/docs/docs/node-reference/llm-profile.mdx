@@ -88,8 +88,8 @@ This behavior is host-activated: standalone Rivet saves these settings but does
 not enforce them. Production hosts must supply shared LLM Profile reliability
 storage. Rivet Studio Server does this automatically, so all VM processes and
 Kubernetes replicas share the same suspension history. Its Project Settings >
-**LLM reliability** tab shows currently suspended profiles and can clear their
-history.
+**LLM profile suspension** tab shows suspended profiles and profiles awaiting or
+running a recovery attempt, and can clear their history.
 
 If every profile in a fallback chain is suspended, LLM Chat fails immediately
 instead of trying a profile that is still unavailable. Leave automatic
