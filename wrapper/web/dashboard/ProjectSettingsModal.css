@@ -539,6 +539,16 @@
   background: rgba(255, 255, 255, 0.035);
 }
 
+.project-settings-llm-health-row-suspended {
+  border-color: rgba(255, 107, 122, 0.42);
+  background: rgba(255, 107, 122, 0.08);
+}
+
+.project-settings-llm-health-row-recovery {
+  border-color: rgba(255, 215, 106, 0.42);
+  background: rgba(255, 215, 106, 0.08);
+}
+
 .project-settings-llm-health-description {
   min-width: 0;
 }
@@ -555,6 +565,14 @@
   color: var(--grey-light);
   font-size: var(--workflow-library-font-size-s);
   overflow-wrap: anywhere;
+}
+
+.project-settings-llm-health-metadata-suspended {
+  color: #ff9ba5;
+}
+
+.project-settings-llm-health-metadata-recovery {
+  color: #ffe08a;
 }
 
 .project-settings-llm-health-error {

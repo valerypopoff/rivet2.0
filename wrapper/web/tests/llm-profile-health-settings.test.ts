@@ -7,6 +7,7 @@ import type { Project, ProjectId, RivetLLMProfileHealthSnapshot } from '@valeryp
 import {
   getLLMProfileHealthDisplayName,
   getLLMProfileHealthStatusDetail,
+  getLLMProfileHealthStatusTone,
   getOperationalLLMProfileHealthEntries,
 } from '../dashboard/llmProfileHealthPresentation';
 
@@ -53,6 +54,8 @@ test('LLM profile suspension settings retain expired suspensions as awaiting rec
   assert.deepEqual(entries.map((entry) => entry.identity.key), ['expired', 'active']);
   assert.match(getLLMProfileHealthStatusDetail(entries[0]!, 10_000), /awaiting recovery attempt/);
   assert.match(getLLMProfileHealthStatusDetail(entries[1]!, 10_000), /suspended until/);
+  assert.equal(getLLMProfileHealthStatusTone(entries[0]!, 10_000), 'recovery');
+  assert.equal(getLLMProfileHealthStatusTone(entries[1]!, 10_000), 'suspended');
 });
 
 test('LLM profile suspension settings distinguish an active recovery attempt', () => {
@@ -62,6 +65,7 @@ test('LLM profile suspension settings distinguish an active recovery attempt', (
   };
 
   assert.match(getLLMProfileHealthStatusDetail(recovering, 10_000), /recovery attempt in progress/);
+  assert.equal(getLLMProfileHealthStatusTone(recovering, 10_000), 'recovery');
 });
 
 test('LLM profile suspension settings resolve retained profile nodes to friendly graph and node names', () => {
@@ -90,6 +94,8 @@ test('outer Project Settings owns LLM profile suspension administration and the 
   assert.match(healthSource, /project\.metadata\.id/);
   assert.doesNotMatch(healthSource, /activeProject\.id as ProjectId/);
   assert.match(healthSource, /No LLM profiles are currently suspended or awaiting recovery\./);
+  assert.match(healthSource, /project-settings-llm-health-row-\$\{tone\}/);
+  assert.match(healthSource, /project-settings-llm-health-metadata-\$\{tone\}/);
   assert.doesNotMatch(healthSource, /LLM profile reliability/);
   assert.doesNotMatch(providersSource, /llmProfileHealthAdmin:/);
   assert.match(providersSource, /llmProfileHealthStore:/);

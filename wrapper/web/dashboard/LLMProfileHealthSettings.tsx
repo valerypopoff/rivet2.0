@@ -7,6 +7,7 @@ import {
   getLLMProfileHealthDisplayName,
   getLLMProfileHealthIdentityLabel,
   getLLMProfileHealthStatusDetail,
+  getLLMProfileHealthStatusTone,
   getOperationalLLMProfileHealthEntries,
 } from './llmProfileHealthPresentation';
 import type { WorkflowProjectItem } from './types';
@@ -160,6 +161,8 @@ export const LLMProfileHealthSettings: FC<{ activeProject: WorkflowProjectItem }
     }
   };
 
+  const statusNow = Date.now();
+
   return (
     <div className="project-settings-tab-panel project-settings-llm-health" role="tabpanel">
       <div className="project-settings-llm-health-toolbar">
@@ -203,27 +206,34 @@ export const LLMProfileHealthSettings: FC<{ activeProject: WorkflowProjectItem }
           </div>
         ) : (
           <div className="project-settings-llm-health-list">
-            {operationalEntries.map((entry) => (
-              <div className="project-settings-llm-health-row" key={entry.identity.key}>
-                <div className="project-settings-llm-health-description">
-                  <div className="project-settings-llm-health-name">
-                    {getLLMProfileHealthDisplayName(activeProjectContext?.project, entry)}
-                  </div>
-                  <div className="project-settings-llm-health-metadata">
-                    {getLLMProfileHealthIdentityLabel(entry)} - {getLLMProfileHealthStatusDetail(entry)}
-                  </div>
-                </div>
-                <LoadingButton
-                  appearance="subtle"
-                  className="project-settings-secondary-button button-size-l"
-                  onClick={() => void reset(entry.identity.key)}
-                  isLoading={resettingKey === entry.identity.key}
-                  isDisabled={resettingKey != null}
+            {operationalEntries.map((entry) => {
+              const tone = getLLMProfileHealthStatusTone(entry, statusNow);
+
+              return (
+                <div
+                  className={`project-settings-llm-health-row project-settings-llm-health-row-${tone}`}
+                  key={entry.identity.key}
                 >
-                  Clear history
-                </LoadingButton>
-              </div>
-            ))}
+                  <div className="project-settings-llm-health-description">
+                    <div className="project-settings-llm-health-name">
+                      {getLLMProfileHealthDisplayName(activeProjectContext?.project, entry)}
+                    </div>
+                    <div className={`project-settings-llm-health-metadata project-settings-llm-health-metadata-${tone}`}>
+                      {getLLMProfileHealthIdentityLabel(entry)} - {getLLMProfileHealthStatusDetail(entry, statusNow)}
+                    </div>
+                  </div>
+                  <LoadingButton
+                    appearance="subtle"
+                    className="project-settings-secondary-button button-size-l"
+                    onClick={() => void reset(entry.identity.key)}
+                    isLoading={resettingKey === entry.identity.key}
+                    isDisabled={resettingKey != null}
+                  >
+                    Clear history
+                  </LoadingButton>
+                </div>
+              );
+            })}
           </div>
         )}
       </div>

@@ -497,6 +497,68 @@ async function openProjectSettingsModal(page: Page, project: WorkflowProjectItem
 }
 
 test.describe('Project settings modal', () => {
+  test('distinguishes active LLM profile suspensions from recovery states', async ({ page }) => {
+    const project = createProjectSettingsFixture('codex-project-settings-llm-health');
+    const now = Date.now();
+    const healthEntries = [
+      {
+        identity: {
+          key: 'suspended-profile',
+          projectId: project.id,
+          profileNodeId: null,
+          provider: 'openai',
+          model: 'suspended-model',
+          configurationFingerprint: 'sha256:suspended',
+        },
+        state: 'open',
+        failureCount: 3,
+        openUntil: now + 60_000,
+        updatedAt: now,
+      },
+      {
+        identity: {
+          key: 'recovering-profile',
+          projectId: project.id,
+          profileNodeId: null,
+          provider: 'openai',
+          model: 'recovering-model',
+          configurationFingerprint: 'sha256:recovering',
+        },
+        state: 'half-open',
+        failureCount: 3,
+        halfOpenLeaseUntil: now + 60_000,
+        updatedAt: now - 1,
+      },
+    ];
+    await installProjectSettingsRoutes(page, project, createProjectSettingsRouteTrackers());
+    await page.route('**/api/workflows/llm-profile-health/?projectId=*', async (route) => {
+      if (!isRouteRequest(route.request(), 'GET', '/api/workflows/llm-profile-health/')) {
+        await route.fallback();
+        return;
+      }
+
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify(healthEntries),
+      });
+    });
+
+    const { modal } = await openProjectSettingsModal(page, project);
+    await modal.getByRole('tab', { name: 'LLM profile suspension' }).click();
+
+    const suspendedRow = modal.locator('.project-settings-llm-health-row-suspended');
+    const recoveryRow = modal.locator('.project-settings-llm-health-row-recovery');
+    await expect(suspendedRow).toContainText('suspended until');
+    await expect(recoveryRow).toContainText('recovery attempt in progress');
+
+    const [suspendedColor, recoveryColor] = await Promise.all([
+      suspendedRow.evaluate((element) => getComputedStyle(element).borderLeftColor),
+      recoveryRow.evaluate((element) => getComputedStyle(element).borderLeftColor),
+    ]);
+    expect(suspendedColor).not.toBe(recoveryColor);
+  });
+
   test('publish controls validate endpoints and keep rename/delete ownership clear', async ({ page }) => {
     const unique = 'codex-project-settings-fixture';
     const endpointName = 'codex-project-settings-endpoint';

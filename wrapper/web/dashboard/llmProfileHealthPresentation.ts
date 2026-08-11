@@ -1,5 +1,7 @@
 import type { Project, ProjectId, RivetLLMProfileHealthSnapshot } from '@valerypopoff/rivet2-core';
 
+export type LLMProfileHealthStatusTone = 'suspended' | 'recovery';
+
 export function getOperationalLLMProfileHealthEntries(
   projectId: ProjectId,
   entries: readonly RivetLLMProfileHealthSnapshot[],
@@ -49,4 +51,13 @@ export function getLLMProfileHealthStatusDetail(
     return `${failureLabel} - recovery attempt in progress`;
   }
   return `${failureLabel} - awaiting recovery attempt`;
+}
+
+export function getLLMProfileHealthStatusTone(
+  snapshot: RivetLLMProfileHealthSnapshot,
+  now = Date.now(),
+): LLMProfileHealthStatusTone {
+  return snapshot.state === 'open' && snapshot.openUntil != null && snapshot.openUntil > now
+    ? 'suspended'
+    : 'recovery';
 }
