@@ -335,9 +335,9 @@ function profileAttemptToChild(attempt: RunActivityProfileAttempt): RunActivityC
 function describeProfileAttemptStage(stage: RunActivityProfileAttempt['stage']): string {
   switch (stage) {
     case 'health-gate':
-      return 'circuit gate';
+      return 'reliability check';
     case 'health-update':
-      return 'circuit update';
+      return 'reliability update';
     case 'response-validation':
       return 'response validation';
     default:
@@ -348,16 +348,42 @@ function describeProfileAttemptStage(stage: RunActivityProfileAttempt['stage']):
 function describeProfileAttemptOutcome(attempt: RunActivityProfileAttempt): string {
   if (attempt.healthDisposition === 'deny') {
     return attempt.retryAt == null
-      ? 'skipped while circuit is open'
-      : `skipped until ${new Date(attempt.retryAt).toLocaleString()}`;
+      ? 'profile suspended; skipped'
+      : `profile suspended until ${new Date(attempt.retryAt).toLocaleString()}`;
   }
-  if (attempt.healthDisposition === 'fail-open') return `health store failed open${formatAttemptError(attempt)}`;
+  if (attempt.healthDisposition === 'fail-open') {
+    return `reliability service unavailable; profile request continued${formatAttemptError(attempt)}`;
+  }
   if (attempt.timeoutKind === 'first-output') return 'first output timed out';
   if (attempt.timeoutKind === 'stream-inactivity') return 'stream became inactive';
   if (attempt.stage === 'health-update' && attempt.healthOutcome) {
-    return `recorded ${attempt.healthOutcome}${attempt.healthState ? `; circuit ${attempt.healthState}` : ''}`;
+    return `recorded ${describeReliabilityOutcome(attempt.healthOutcome)}${describeReliabilityState(attempt.healthState)}`;
   }
-  return `${attempt.outcome}${attempt.healthState ? `; circuit ${attempt.healthState}` : ''}${formatAttemptError(attempt)}`;
+  return `${attempt.outcome}${describeReliabilityState(attempt.healthState)}${formatAttemptError(attempt)}`;
+}
+
+function describeReliabilityOutcome(outcome: NonNullable<RunActivityProfileAttempt['healthOutcome']>): string {
+  switch (outcome) {
+    case 'healthy':
+      return 'success';
+    case 'unhealthy':
+      return 'failure';
+    default:
+      return 'ignored result';
+  }
+}
+
+function describeReliabilityState(state: RunActivityProfileAttempt['healthState']): string {
+  switch (state) {
+    case 'open':
+      return '; profile suspended';
+    case 'half-open':
+      return '; recovery attempt in progress';
+    case 'closed':
+      return '; profile available';
+    default:
+      return '';
+  }
 }
 
 function formatAttemptError(attempt: RunActivityProfileAttempt): string {

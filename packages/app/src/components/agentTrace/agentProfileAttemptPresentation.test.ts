@@ -16,7 +16,7 @@ const baseAttempt = {
   'roundIndex' | 'profileIndex' | 'nodeId' | 'processId' | 'provider' | 'customProviderApi' | 'model'
 >;
 
-test('presents circuit skips, fail-open decisions, and timeout failures for Response Inspector', () => {
+test('presents suspension skips, reliability-service decisions, and timeout failures for Response Inspector', () => {
   const rows = buildAgentProfileAttemptInspectorRows([
     {
       ...baseAttempt,
@@ -47,12 +47,12 @@ test('presents circuit skips, fail-open decisions, and timeout failures for Resp
     {
       eventId: 'open-gate',
       providerAndModel: 'Custom Responses / fast-provider',
-      context: 'circuit gate / skipped while circuit is open / profile 1 / round 1',
+      context: 'reliability check / profile suspended; skipped / profile 1 / round 1',
     },
     {
       eventId: 'store-fail-open',
       providerAndModel: 'Custom Responses / fast-provider',
-      context: 'circuit gate / health store failed open; profile request continued / profile 1 / round 1',
+      context: 'reliability check / reliability service unavailable; profile request continued / profile 1 / round 1',
       error: 'Health store unavailable',
     },
     {

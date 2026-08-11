@@ -630,7 +630,7 @@ test('searches every displayed model attempt and tool call instead of only row s
   );
 });
 
-test('renders circuit skips, fail-open decisions, timeouts, and omitted profile attempts', () => {
+test('renders suspension skips, reliability-service decisions, timeouts, and omitted profile attempts', () => {
   const journal = createRunActivityJournal();
   const selectedRoot = root(newerActiveRootId, 1, 'completed');
   const capturedInvocation = invocation({
@@ -697,11 +697,11 @@ test('renders circuit skips, fail-open decisions, timeouts, and omitted profile 
 
   assert.equal(item.category, 'model');
   assert.equal(item.children?.[0]?.status, 'not-ran');
-  assert.match(item.children?.[0]?.secondaryText ?? '', /^skipped until .+ \/ profile 1 \/ round 1$/);
+  assert.match(item.children?.[0]?.secondaryText ?? '', /^profile suspended until .+ \/ profile 1 \/ round 1$/);
   assert.deepEqual(
     item.children?.slice(1).map((child) => [child.status, child.secondaryText]),
     [
-      ['error', 'health store failed open: Health store unavailable / profile 2 / round 1'],
+      ['error', 'reliability service unavailable; profile request continued: Health store unavailable / profile 2 / round 1'],
       ['error', 'first output timed out / profile 2 / round 1'],
     ],
   );

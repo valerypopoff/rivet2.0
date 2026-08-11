@@ -169,23 +169,30 @@ function getProviderEditors(): LLMChatV2EditorDefinition[] {
 }
 
 function getCircuitBreakerEditors(): LLMChatV2EditorDefinition {
-  return group('Reliability', [
+  return group('LLM profile suspension', [
+    {
+      type: 'info',
+      label: "It's a hosted runtime capability",
+      helperMessage:
+        'This configuration is enforced by Rivet Studio Server or another host that explicitly provides shared LLM profile reliability. It has no effect in standalone Rivet.',
+    },
     {
       type: 'toggle',
-      label: 'Temporarily skip unhealthy profile',
+      label: 'Enable automatic suspension',
       dataKey: 'enableCircuitBreaker',
       helperMessage:
-        'Uses a circuit breaker to skip this profile after repeated provider failures or response timeouts. After the suspension expires, one recovery probe is allowed before normal traffic resumes.',
+        'After provider failures or timeouts, temporarily suspend this profile in the LLM profiles fallback chain. When the suspension ends, one recovery attempt checks whether the profile can resume.',
     },
     {
       type: 'number',
-      label: 'First output timeout, seconds',
+      label: 'Useful output wait time, seconds',
       dataKey: 'firstOutputTimeoutMs',
       defaultValue: DEFAULT_LLM_PROFILE_FIRST_OUTPUT_TIMEOUT_MS,
       storageMultiplier: 1_000,
       min: 1_000,
       step: 1_000,
-      helperMessage: 'Maximum wait for a non-stream response or the first useful streamed output before falling back.',
+      helperMessage:
+        'Maximum wait time for a non-stream response (or the first useful streamed output). A call that reaches this deadline falls back immediately, even before this profile is suspended.',
       hideIf: (data) => data.enableCircuitBreaker !== true,
     },
     {
@@ -201,12 +208,13 @@ function getCircuitBreakerEditors(): LLMChatV2EditorDefinition {
     },
     {
       type: 'number',
-      label: 'Failure threshold',
+      label: 'Failures before suspension',
       dataKey: 'circuitBreakerFailureThreshold',
       defaultValue: DEFAULT_LLM_PROFILE_CIRCUIT_FAILURE_THRESHOLD,
       min: 1,
       step: 1,
-      helperMessage: 'Unhealthy profile attempts required within the failure window before suspension.',
+      helperMessage:
+        'Failed or timed-out profile attempts required within the failure window before suspending this profile.',
       hideIf: (data) => data.enableCircuitBreaker !== true,
     },
     {
@@ -217,7 +225,7 @@ function getCircuitBreakerEditors(): LLMChatV2EditorDefinition {
       storageMultiplier: 1_000,
       min: 1_000,
       step: 1_000,
-      helperMessage: 'Only unhealthy profile attempts inside this rolling window count toward suspension.',
+      helperMessage: 'Failed or timed-out profile attempts inside this rolling window count toward suspension.',
       hideIf: (data) => data.enableCircuitBreaker !== true,
     },
     {
@@ -228,7 +236,7 @@ function getCircuitBreakerEditors(): LLMChatV2EditorDefinition {
       storageMultiplier: 1_000,
       min: 1_000,
       step: 1_000,
-      helperMessage: 'How long the fallback chain skips this profile before allowing one recovery probe.',
+      helperMessage: 'How long the fallback chain skips this profile before allowing one recovery attempt.',
       hideIf: (data) => data.enableCircuitBreaker !== true,
     },
   ]);

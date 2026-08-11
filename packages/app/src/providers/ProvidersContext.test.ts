@@ -1,7 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
-  getDefaultRivetLLMProfileHealthStore,
   InMemoryRivetLLMProfileHealthStore,
   type ProjectId,
   type RivetLLMProfileCircuitBreakerPolicy,
@@ -39,17 +38,10 @@ function recordFailure(store: InMemoryRivetLLMProfileHealthStore, identity: Rive
   store.finish({ identity, policy, permitId: permit.permitId, outcome: 'unhealthy' });
 }
 
-test('default providers expose the same process-local health store used by core fallback', () => {
+test('standalone providers do not activate LLM profile health', () => {
   const resolved = resolveLLMProfileHealthProviders();
 
-  assert.equal(resolved.llmProfileHealthStore, getDefaultRivetLLMProfileHealthStore());
-  assert.ok(resolved.llmProfileHealthAdmin);
-});
-
-test('an embedded host can keep the default process-local store without exposing its admin UI', () => {
-  const resolved = resolveLLMProfileHealthProviders({}, { exposeDefaultAdmin: false });
-
-  assert.equal(resolved.llmProfileHealthStore, getDefaultRivetLLMProfileHealthStore());
+  assert.equal(resolved.llmProfileHealthStore, undefined);
   assert.equal(resolved.llmProfileHealthAdmin, undefined);
 });
 
@@ -88,7 +80,7 @@ test('the local admin refuses a key outside the active project', async () => {
   assert.equal((await store.list({ projectId: otherProjectId })).length, 1);
 });
 
-test('an admin-only host cannot silently use unrelated process-local Browser health', async () => {
+test('an admin-only host does not activate Browser health execution', () => {
   const admin: LLMProfileHealthAdminProvider = {
     list: async () => [],
     reset: async () => undefined,
@@ -96,12 +88,5 @@ test('an admin-only host cannot silently use unrelated process-local Browser hea
   const resolved = resolveLLMProfileHealthProviders({ llmProfileHealthAdmin: admin });
 
   assert.equal(resolved.llmProfileHealthAdmin, admin);
-  assert.throws(
-    () =>
-      resolved.llmProfileHealthStore!.begin({
-        identity: createIdentity('owned', projectId),
-        policy,
-      }),
-    /did not provide an LLM profile health store for Browser execution/,
-  );
+  assert.equal(resolved.llmProfileHealthStore, undefined);
 });

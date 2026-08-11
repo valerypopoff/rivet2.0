@@ -5,7 +5,6 @@ import {
   type AudioProvider,
   type ProjectId,
   type CombinedDataset,
-  getDefaultRivetLLMProfileHealthStore,
   type RivetLLMProfileHealthSnapshot,
   type RivetLLMProfileHealthStore,
 } from '@valerypopoff/rivet2-core';
@@ -121,21 +120,6 @@ export function useLLMProfileHealthStore(): RivetLLMProfileHealthStore | undefin
   return useProviders().llmProfileHealthStore;
 }
 
-const missingBrowserLLMProfileHealthStoreMessage =
-  'This Rivet host exposes shared LLM profile health administration but did not provide an LLM profile health store for Browser execution.';
-
-function failMissingBrowserLLMProfileHealthStore(): never {
-  throw new Error(missingBrowserLLMProfileHealthStoreMessage);
-}
-
-const missingBrowserLLMProfileHealthStore: RivetLLMProfileHealthStore = {
-  begin: failMissingBrowserLLMProfileHealthStore,
-  finish: failMissingBrowserLLMProfileHealthStore,
-  renew: failMissingBrowserLLMProfileHealthStore,
-  reset: failMissingBrowserLLMProfileHealthStore,
-  list: failMissingBrowserLLMProfileHealthStore,
-};
-
 export function createLLMProfileHealthAdminProvider(
   store: RivetLLMProfileHealthStore,
   options: { executionScope?: LLMProfileHealthAdminProvider['executionScope'] } = {},
@@ -160,7 +144,6 @@ export function createLLMProfileHealthAdminProvider(
 
 export function resolveLLMProfileHealthProviders(
   overrides: Pick<ProviderOverrides, 'llmProfileHealthAdmin' | 'llmProfileHealthStore'> = {},
-  options: { exposeDefaultAdmin?: boolean } = {},
 ): Pick<Providers, 'llmProfileHealthAdmin' | 'llmProfileHealthStore'> {
   const store = overrides.llmProfileHealthStore;
   if (store) {
@@ -172,20 +155,11 @@ export function resolveLLMProfileHealthProviders(
 
   if (overrides.llmProfileHealthAdmin) {
     return {
-      llmProfileHealthStore: missingBrowserLLMProfileHealthStore,
       llmProfileHealthAdmin: overrides.llmProfileHealthAdmin,
     };
   }
 
-  const defaultStore = getDefaultRivetLLMProfileHealthStore();
-  const defaultAdmin =
-    options.exposeDefaultAdmin === false
-      ? undefined
-      : createLLMProfileHealthAdminProvider(defaultStore, { executionScope: 'browser-only' });
-  return {
-    llmProfileHealthStore: defaultStore,
-    ...(defaultAdmin == null ? {} : { llmProfileHealthAdmin: defaultAdmin }),
-  };
+  return {};
 }
 
 function createDefaultDataRefs(): DataRefStore {
@@ -201,7 +175,6 @@ function createDefaultProviders(
     ProviderOverrides,
     'datasets' | 'llmProfileHealthAdmin' | 'llmProfileHealthStore' | 'pathPolicy' | 'staticData'
   > = {},
-  options: { exposeDefaultHealthAdmin?: boolean } = {},
 ): Providers {
   const datasets = overrides.datasets ?? new BrowserDatasetProvider();
   const pathPolicy = overrides.pathPolicy ?? getDefaultPathPolicyProvider();
@@ -224,9 +197,7 @@ function createDefaultProviders(
     environment: getDefaultEnvironmentProvider(),
     pathPolicy,
     staticData,
-    ...resolveLLMProfileHealthProviders(overrides, {
-      exposeDefaultAdmin: options.exposeDefaultHealthAdmin,
-    }),
+    ...resolveLLMProfileHealthProviders(overrides),
   };
 }
 
@@ -250,7 +221,7 @@ export const ProvidersProvider: FC<{ providers?: ProviderOverrides; children: Re
     }
 
     const { storage: _storage, ...runtimeProviders } = providers;
-    const defaults = createDefaultProviders(runtimeProviders, { exposeDefaultHealthAdmin: false });
+    const defaults = createDefaultProviders(runtimeProviders);
     return {
       ...defaults,
       ...runtimeProviders,

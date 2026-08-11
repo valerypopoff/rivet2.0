@@ -60,40 +60,41 @@ exact top-level names and values are applied after the provider request is
 generated and override same-named generated fields. In a fallback chain, each
 candidate uses only the Extra provider options stored in that profile.
 
-## Reliability
+## LLM profile suspension
 
-Enable **Temporarily skip unhealthy profile** when repeated provider outages
-would otherwise make every graph run wait for the same slow profile before
-falling back. The profile can then define:
+Enable **Automatic suspension** when repeated provider outages would otherwise
+make every graph run wait for the same slow profile before falling back. Rivet
+Studio Server then temporarily suspends the profile after repeated failures or
+timeouts. The profile can define:
 
-- **First useful output timeout**: maximum wait for the first usable response
+- **Useful output wait time**: maximum wait for the first usable response
   data from a provider call.
 - **Stream inactivity timeout**: maximum pause between useful streamed response
   events after output has started.
-- **Unhealthy calls to trip**: number of unhealthy logical profile calls within
-  the observation window that opens the circuit.
-- **Observation window**: rolling period used to count unhealthy calls.
-- **Cooldown**: how long the profile is skipped before Rivet permits one
-  half-open recovery probe.
+- **Failures before suspension**: number of failed or timed-out logical profile
+  calls within the failure window before the profile is suspended.
+- **Failure window**: rolling period used to count failed or timed-out calls.
+- **Suspension duration**: how long the fallback chain skips the profile before
+  one recovery attempt is allowed.
 
 Timeouts, transport failures, HTTP 408/429/5xx responses, and slow successful
-calls count as provider-health failures. Configuration mistakes, authentication
-errors, response-schema validation failures, and caller cancellation still
-fail or fall back normally but do not mark the provider unhealthy. Retries for
-one profile are recorded as one logical health outcome, so **Retry on non-200**
-does not multiply the circuit-breaker count.
+calls count as failures. Configuration mistakes, authentication errors,
+response-schema validation failures, and caller cancellation still fail or fall
+back normally but do not count toward suspension. Retries for one profile are
+recorded as one logical result, so **Retry on non-200** does not multiply the
+failure count.
 
-The default editor/runtime store is process-local. It is useful for Browser
-runs and a single Node process, but it resets on restart and cannot coordinate
-multiple servers. Production hosts should inject a shared LLM Profile Health
-Store; Rivet Studio Server uses durable shared storage so all VM processes or
-Kubernetes replicas see the same circuit state. Project Settings can inspect
-and reset the states exposed by the active host.
+This behavior is host-activated: standalone Rivet saves these settings but does
+not enforce them. Production hosts must supply shared LLM Profile reliability
+storage. Rivet Studio Server does this automatically, so all VM processes and
+Kubernetes replicas share the same suspension history. Its Project Settings >
+**LLM reliability** tab shows currently suspended profiles and can clear their
+history.
 
-If every profile in a fallback chain has an open circuit, LLM Chat fails
-immediately instead of silently probing an unhealthy candidate. Keep the final
-reliable fallback's circuit breaker disabled when the chain must always make a
-last attempt.
+If every profile in a fallback chain is suspended, LLM Chat fails immediately
+instead of trying a profile that is still unavailable. Leave automatic
+suspension disabled on the final reliable fallback when the chain must always
+make a last attempt.
 
 ## Outputs
 

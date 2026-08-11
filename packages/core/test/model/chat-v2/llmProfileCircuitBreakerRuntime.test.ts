@@ -64,6 +64,49 @@ function open(store: InMemoryRivetLLMProfileHealthStore, profile: RivetLLMProfil
 }
 
 describe('LLM Profile circuit-breaker fallback integration', () => {
+  it('leaves saved Reliability policy inert when the host does not provide a health store', async () => {
+    const resolved: number[] = [];
+    const runner = createLLMProfileFallbackRunner({
+      candidates: [
+        {
+          ...candidate('primary'),
+          health: {
+            ...candidate('primary').health!,
+            firstOutputTimeoutMs: 5,
+            streamInactivityTimeoutMs: 5,
+          },
+        },
+        candidate('backup'),
+      ],
+      resolveCandidate: async (profileIndex, options) => {
+        resolved.push(profileIndex);
+        return {
+          ...options,
+          provider: 'custom',
+          model: {} as ChatV2Model,
+          modelId: profileIndex === 0 ? 'primary' : 'backup',
+          executeGenerate: async () => {
+            await new Promise((resolve) => setTimeout(resolve, 20));
+            return { text: 'primary', requestStatus: 200 };
+          },
+        };
+      },
+    });
+
+    const result = await runner.run(roundOptions());
+
+    assert.equal(result.response, 'primary');
+    assert.deepEqual(resolved, [0]);
+    assert.equal(
+      runner.attempts.some((attempt) => attempt.stage === 'health-gate'),
+      false,
+    );
+    assert.equal(
+      runner.attempts.some((attempt) => attempt.stage === 'health-update'),
+      false,
+    );
+  });
+
   it('skips an open profile without resolving it and runs the next candidate', async () => {
     const store = new InMemoryRivetLLMProfileHealthStore();
     open(store, identity('primary'));
@@ -106,7 +149,70 @@ describe('LLM Profile circuit-breaker fallback integration', () => {
 
     await assert.rejects(() => runner.run(roundOptions()), LLMProfileFallbackExhaustedError);
     assert.equal(resolutions, 0);
-    assert.deepEqual(runner.attempts.map((attempt) => attempt.outcome), ['skipped', 'skipped']);
+    assert.deepEqual(
+      runner.attempts.map((attempt) => attempt.outcome),
+      ['skipped', 'skipped'],
+    );
+  });
+
+  it('keeps the circuit closed after the first timeout when the failure threshold is two', async () => {
+    const store = new InMemoryRivetLLMProfileHealthStore();
+    const primary = {
+      ...candidate('primary'),
+      health: {
+        ...candidate('primary').health!,
+        policy: { ...policy, failureThreshold: 2 },
+        firstOutputTimeoutMs: 15,
+      },
+    };
+    const backup: LLMProfileFallbackCandidate = { provider: 'custom', model: 'backup' };
+
+    const runWorkflow = () => {
+      const runner = createLLMProfileFallbackRunner({
+        candidates: [primary, backup],
+        healthStore: store,
+        resolveCandidate: async (profileIndex, options) => ({
+          ...options,
+          provider: 'custom',
+          model: {} as ChatV2Model,
+          modelId: profileIndex === 0 ? 'primary' : 'backup',
+          executeGenerate:
+            profileIndex === 0
+              ? (args) =>
+                  new Promise((_resolve, reject) => {
+                    args.abortSignal?.addEventListener(
+                      'abort',
+                      () => {
+                        const error = new Error('primary timed out');
+                        error.name = 'AbortError';
+                        reject(error);
+                      },
+                      { once: true },
+                    );
+                  })
+              : async () => ({ text: 'backup', requestStatus: 200 }),
+        }),
+      });
+      return runner.run(roundOptions());
+    };
+
+    assert.equal((await runWorkflow()).response, 'backup');
+    assert.deepEqual(
+      store.list({ projectId: 'project' as ProjectId }).map(({ state, failureCount }) => ({
+        state,
+        failureCount,
+      })),
+      [{ state: 'closed', failureCount: 1 }],
+    );
+
+    assert.equal((await runWorkflow()).response, 'backup');
+    assert.deepEqual(
+      store.list({ projectId: 'project' as ProjectId }).map(({ state, failureCount }) => ({
+        state,
+        failureCount,
+      })),
+      [{ state: 'open', failureCount: 2 }],
+    );
   });
 
   it('counts only availability failures as unhealthy', () => {
@@ -187,7 +293,7 @@ describe('LLM Profile circuit-breaker fallback integration', () => {
 
     const result = await runner.run(roundOptions());
     assert.equal(result.response, 'ok');
-    assert.match(runner.attempts[0]?.error ?? '', /health store begin timed out/);
+    assert.match(runner.attempts[0]?.error ?? '', /LLM profile reliability service begin timed out/);
     assert.equal(runner.attempts[0]?.healthDisposition, 'fail-open');
   });
 
@@ -252,7 +358,7 @@ describe('LLM Profile circuit-breaker fallback integration', () => {
 
     const result = await runner.run(roundOptions());
     assert.equal(result.response, 'ok');
-    assert.match(runner.attempts.at(-1)?.error ?? '', /health store finish timed out/);
+    assert.match(runner.attempts.at(-1)?.error ?? '', /LLM profile reliability service finish timed out/);
     assert.equal(runner.attempts.at(-1)?.healthDisposition, 'fail-open');
   });
 
@@ -397,9 +503,7 @@ describe('LLM Profile circuit-breaker fallback integration', () => {
         retryOnNon200CooldownMs: 30,
         executeGenerate: async () => {
           calls += 1;
-          return calls === 1
-            ? { text: '', requestStatus: 503 }
-            : { text: 'recovered', requestStatus: 200 };
+          return calls === 1 ? { text: '', requestStatus: 503 } : { text: 'recovered', requestStatus: 200 };
         },
       }),
     });
@@ -414,30 +518,33 @@ describe('LLM Profile circuit-breaker fallback integration', () => {
   });
 
   it('summarizes provider deadlines and the circuit state they produced', () => {
-    const summary = buildLLMProfileFallbackSummary([candidate('primary')], [
-      {
-        roundIndex: 0,
-        profileIndex: 0,
-        provider: 'custom',
-        model: 'primary',
-        stage: 'request',
-        outcome: 'failure',
-        attemptIndex: 0,
-        timeoutKind: 'first-output',
-      },
-      {
-        roundIndex: 0,
-        profileIndex: 0,
-        provider: 'custom',
-        model: 'primary',
-        stage: 'health-update',
-        outcome: 'success',
-        healthOutcome: 'unhealthy',
-        healthState: 'open',
-      },
-    ]);
+    const summary = buildLLMProfileFallbackSummary(
+      [candidate('primary')],
+      [
+        {
+          roundIndex: 0,
+          profileIndex: 0,
+          provider: 'custom',
+          model: 'primary',
+          stage: 'request',
+          outcome: 'failure',
+          attemptIndex: 0,
+          timeoutKind: 'first-output',
+        },
+        {
+          roundIndex: 0,
+          profileIndex: 0,
+          provider: 'custom',
+          model: 'primary',
+          stage: 'health-update',
+          outcome: 'success',
+          healthOutcome: 'unhealthy',
+          healthState: 'open',
+        },
+      ],
+    );
 
     assert.match(summary, /timed out waiting for first useful output/);
-    assert.match(summary, /circuit is open/);
+    assert.match(summary, /profile is suspended/);
   });
 });

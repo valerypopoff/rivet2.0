@@ -1,48 +1,69 @@
-# LLM Profile Circuit Breaker
+# LLM Profile Suspension
 
 ## Purpose
 
-An `LLM Profile` can opt into a circuit breaker that temporarily removes an
-unhealthy provider configuration from an LLM Chat fallback chain. This is a
-cross-run reliability policy, not another request retry:
+An `LLM Profile` can configure automatic suspension, which temporarily removes
+a failing provider configuration from an LLM Chat fallback chain. This is a
+host-activated cross-run reliability policy, not another request retry. Rivet
+Studio Server activates it automatically; another host must explicitly supply
+an `llmProfileHealthStore`. Without that store the complete LLM profile
+suspension policy is inert, including its provider deadlines.
 
-- the normal per-request retry policy still runs first;
-- after that candidate exhausts its configured physical request retries, one
-  logical healthy, unhealthy, or ignored candidate outcome is recorded against
-  the resolved profile configuration;
-- after the configured number of unhealthy outcomes inside the rolling failure
-  window, later runs skip that profile and move directly to the next profile;
-- after the suspension duration, the store admits one half-open recovery probe;
-- a healthy probe closes the circuit, while an unhealthy probe opens it again.
+When activated:
 
-If every candidate in a fallback chain is currently denied by its health gate,
-LLM Chat fails immediately with the recorded circuit decisions; it does not
-bypass an open circuit as a last resort. Deployments that require an always
-eligible final fallback should leave the circuit breaker disabled on that last
-profile.
+- ordinary retryable non-200 failures still use the normal per-request retry
+  policy before fallback;
+- each configured first-output or stream-inactivity deadline applies to the
+  current provider call immediately: reaching it abandons that call and moves
+  to the next fallback candidate even while the circuit is still closed;
+- when a candidate ends, one logical successful, failed, or ignored result is
+  recorded against the resolved profile configuration. Ordinary non-200
+  failures end after their configured physical-request retries; a deadline ends
+  the candidate immediately;
+- after the configured number of failed results inside the rolling failure
+  window, later runs suspend that profile and move directly to the next profile;
+- after the suspension duration, the store admits one recovery attempt;
+- a successful recovery attempt resumes the profile, while a failed attempt
+  suspends it again.
 
-Configuration and response-validation errors do not make a provider unhealthy.
-Graph cancellation is also ignored. The attempt trace records health-gate,
-timeout, skip, and health-store failures so fallback behavior remains
+If every candidate in a fallback chain is currently suspended, LLM Chat fails
+immediately with the recorded suspension decisions; it does not try a suspended
+profile as a last resort. Deployments that require an always eligible final
+fallback should leave automatic suspension disabled on that last profile.
+
+Configuration and response-validation errors do not count toward suspension.
+Graph cancellation is also ignored. The attempt trace records reliability
+checks, timeouts, skips, and reliability-service failures so fallback behavior remains
 inspectable.
 
 ## LLM Profile settings
 
-The `Reliability` section belongs to the `LLM Profile` node. It is not available
-on inline LLM Chat configuration.
+The `LLM profile suspension` section belongs to the `LLM Profile` node. It is
+not available on inline LLM Chat configuration.
 
-| Setting                            | Default | Meaning                                                                     |
-| ---------------------------------- | ------: | --------------------------------------------------------------------------- |
-| Temporarily skip unhealthy profile |     Off | Enables the circuit breaker for this resolved profile.                      |
-| First output timeout               |  30 sec | Maximum wait for a non-stream response or the first useful streamed output. |
-| Stream inactivity timeout          |  30 sec | Maximum gap between useful streamed response events.                        |
-| Failure threshold                  |       3 | Unhealthy outcomes needed inside the rolling window.                        |
-| Failure window                     | 300 sec | Rolling interval used to count unhealthy outcomes.                          |
-| Suspension duration                | 300 sec | Time an open profile is skipped before one recovery probe is allowed.       |
+| Setting                    | Default | Meaning                                                                     |
+| -------------------------- | ------: | --------------------------------------------------------------------------- |
+| Automatic suspension       |     Off | Enables automatic suspension for this resolved profile.                     |
+| Useful output wait time    |  30 sec | Maximum wait for a non-stream response or the first useful streamed output. |
+| Stream inactivity timeout  |  30 sec | Maximum gap between useful streamed response events.                        |
+| Failures before suspension |       3 | Failed or timed-out results needed inside the rolling window.               |
+| Failure window             | 300 sec | Rolling interval used to count failed or timed-out results.                 |
+| Suspension duration        | 300 sec | Time the profile is skipped before one recovery attempt is allowed.         |
 
 Reliability controls are presented in whole seconds. Rivet continues storing
-and applying their values internally as milliseconds, so existing projects and
-the public runtime contract remain unchanged.
+their values internally as milliseconds, so existing projects and the public
+runtime contract remain unchanged. Standalone Rivet still authors and
+serializes these settings, but does not apply them.
+
+The deadline and failures-before-suspension setting answer different questions.
+For example, a 10-second first-output deadline with a threshold of 2 abandons
+the first slow call at 10 seconds and records one failure, but leaves the
+profile available. A
+second failed logical attempt inside the configured failure window suspends the
+profile; only subsequent requests are skipped for the suspension duration.
+Existing reliability history is intentionally retained when the policy is
+edited. In Rivet Studio Server, use Project Settings > LLM reliability > Clear
+all history when testing should begin from an empty history.
 
 The identity includes the executing project, source LLM Profile node, provider,
 model, Custom API mode, and a SHA-256 configuration fingerprint. The fingerprint
@@ -66,24 +87,19 @@ a different project scope. The process-local reference store and the Studio
 Server durable stores enforce the same rule so project-scoped listing and reset
 cannot be bypassed by a malformed or stale identity.
 
-When no host store is supplied, core uses one process-local
-`InMemoryRivetLLMProfileHealthStore`. The normal desktop/browser editor injects
-that same renderer singleton into Browser runs, so Project Settings can inspect
-and reset the state used by those runs. Process-local state is intentionally
-lost when the process or page reloads and is not shared between replicas. The
-standalone Node executor is a different process and keeps its own fallback
-singleton; the renderer's local Project Settings adapter does not administer
-that sidecar state. Hosts that require one manageable state across Browser and
-Node execution must inject a shared backend into both paths.
+When no host store is supplied, core does not apply suspension checks and does
+not apply first-output or stream-inactivity deadlines from LLM profile
+suspension. Standalone
+Browser, Node, editor, and headless runs therefore retain ordinary LLM fallback
+behavior and no cross-run suspension history. The exported in-memory implementation
+is a reference store for tests and explicit custom-host integrations; Rivet
+does not install it implicitly.
 
-Hosted editors pass a shared implementation through
+Hosted editors may pass a shared implementation through
 `RivetAppHost.providers.llmProfileHealthStore`. Browser-mode graph runs forward
-that store through `ProcessContext`. A host that exposes shared health
-administration without a matching Browser execution store receives an explicit
-unavailable-store adapter. Circuit-breaker operations then follow the runtime's
-fail-open policy: the provider request continues unprotected and the
-profile-attempt trace records the store failure. Rivet never silently creates
-an unrelated process-local health record.
+that store through `ProcessContext`. Supplying only an administration provider
+does not activate execution health. Rivet never silently creates an unrelated
+process-local health record.
 
 Node-mode editor runs execute in `app-executor`, so the store object cannot be
 sent over the editor WebSocket. A hosted executor must start through
@@ -94,32 +110,31 @@ Stored Value, and event options override overlapping callback values. The
 standalone desktop sidecar still starts from `executor.mts` with its existing
 defaults.
 
-## Project Settings administration
+## Host administration
 
 The app provider surface also accepts `llmProfileHealthAdmin`. It is a
 permissioned editor-facing list/reset API, separate from the atomic execution
-store so a browser host can implement it over HTTP without exposing database
-operations directly. Project Settings shows only records whose identity belongs
-to the open project, maps retained profile node IDs back to graph/node names,
-and can reset one identity or the whole project. Project-wide listing and reset
-must use the store's first-class `list({ projectId })` and atomic
-`reset({ projectId })` operations rather than deriving a key prefix or issuing
-one reset per returned row. Resetting health makes profiles eligible again; it
-never changes saved node settings and does not cancel requests already in
-progress.
+store so a custom browser host can implement administration over HTTP without
+exposing database operations directly. A host-supplied execution store does not
+implicitly expose administration. Standalone Rivet supplies neither provider,
+so it has no LLM reliability management section.
 
-The standalone editor supplies a local admin adapter for the default in-memory
-Browser store. When Node execution is selected, Project Settings disables that
-adapter and explains that the sidecar owns separate process-local state; it
-never pretends to reset the Node executor. Embedded hosts may replace it. A
-host-supplied execution store does not
-implicitly expose administration; the host must also provide
-`llmProfileHealthAdmin` if Project Settings should show the management section.
-If a host deliberately omits the admin provider, the section is hidden and
-automatic cooldown and recovery continue without it. If a host supplies shared
-administration but omits the matching Browser execution store, Browser runs
-continue under fail-open behavior and expose the misconfiguration in LLM
-profile-attempt diagnostics rather than writing unrelated process-local state.
+Rivet Studio Server owns its operational UI outside the embedded editor. Its
+Project Settings > LLM reliability tab shows only profiles that are currently
+suspended. Profiles that are available or running a recovery attempt stay
+hidden because they are not currently suspended. The tab maps retained profile
+node IDs back to graph/node names and can clear one visible profile's history
+and resume it, or clear history for the whole project. Project-wide listing and
+clearing use the store's first-class
+`list({ projectId })` and atomic `reset({ projectId })` operations rather than
+deriving a key prefix or issuing one reset per returned row.
+
+Clearing history atomically deletes the complete failure, suspension, and
+recovery-attempt record for the selected profile or project. A late result from
+a request admitted before clearing cannot recreate that deleted history.
+Clearing history never changes saved node settings and does not cancel requests
+already in progress. Project-wide clearing also deletes available records hidden from the operational
+suspension list.
 
 ## Observability
 
@@ -131,8 +146,8 @@ recording/replay, and response-trace collector. This matters for an open-circuit
 skip because no physical provider call exists from which the UI could infer it.
 
 Run Activity attaches these decisions to the owning LLM Chat invocation and
-shows circuit-gate skips, fail-open health-store errors, first-output/stream
-inactivity timeouts, and health updates in chronological order beside physical
+shows suspension skips, unavailable reliability-service errors, first-output/stream
+inactivity timeouts, and reliability updates in chronological order beside physical
 model calls. Response Inspector exposes the same records in its **LLM profile
 attempts** section. Older recordings remain loadable; their additive profile
 attempt collection is simply absent.

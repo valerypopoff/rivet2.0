@@ -229,7 +229,7 @@ export function getLLMProfileBodySections(data: LLMChatV2ProfileData): readonly 
       ? { label: 'Extra provider options', text: data.extraProviderOptions }
       : undefined;
   const reliabilityFields: LLMProfileBodyField[] =
-    data.enableCircuitBreaker === true ? [{ label: 'Circuit breaker', value: 'Enabled' }] : [];
+    data.enableCircuitBreaker === true ? [{ label: 'Automatic suspension', value: 'Configured' }] : [];
 
   const sections: LLMProfileBodySection[] = [
     { id: 'model', fields: modelFields.filter((field): field is LLMProfileBodyField => field !== undefined) },

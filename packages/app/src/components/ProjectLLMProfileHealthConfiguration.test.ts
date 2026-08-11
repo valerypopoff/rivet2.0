@@ -5,6 +5,7 @@ import {
   getLLMProfileHealthDetail,
   getLLMProfileHealthDisplayName,
   getLLMProfileHealthIdentityLabel,
+  getSuspendedLLMProfileHealthEntries,
   normalizeLLMProfileHealthEntries,
 } from './llmProfileHealthPresentation.js';
 
@@ -44,7 +45,7 @@ test('LLM profile health falls back to provider and model after the source node 
   assert.equal(getLLMProfileHealthDisplayName(project, snapshot), 'custom/fast-model');
   assert.equal(getLLMProfileHealthIdentityLabel(snapshot), 'Custom Completions/fast-model');
   assert.match(getLLMProfileHealthDetail(snapshot, 10_000), /^2 recent failures - suspended until /);
-  assert.equal(getLLMProfileHealthDetail(snapshot, 12_000), '2 recent failures - recovery probe available');
+  assert.equal(getLLMProfileHealthDetail(snapshot, 12_000), '2 recent failures - recovery attempt available');
 });
 
 test('LLM profile health ignores records outside the active project and sorts newest first', () => {
@@ -64,9 +65,33 @@ test('LLM profile health ignores records outside the active project and sorts ne
   );
 });
 
+test('LLM profile health settings list only actively suspended profiles', () => {
+  const activeOpen = { ...snapshot, identity: { ...snapshot.identity, key: 'active-open' }, openUntil: 12_000 };
+  const expiredOpen = { ...snapshot, identity: { ...snapshot.identity, key: 'expired-open' }, openUntil: 10_000 };
+  const halfOpen = {
+    ...snapshot,
+    identity: { ...snapshot.identity, key: 'half-open' },
+    state: 'half-open' as const,
+    openUntil: 9_000,
+  };
+  const closed = {
+    ...snapshot,
+    identity: { ...snapshot.identity, key: 'closed' },
+    state: 'closed' as const,
+    openUntil: undefined,
+  };
+
+  assert.deepEqual(
+    getSuspendedLLMProfileHealthEntries([activeOpen, expiredOpen, halfOpen, closed], 10_001).map(
+      (entry) => entry.identity.key,
+    ),
+    ['active-open'],
+  );
+});
+
 test('LLM profile health reports only an unexpired recovery lease as in progress', () => {
   const halfOpen = { ...snapshot, state: 'half-open' as const, halfOpenLeaseUntil: 11_000, openUntil: 9_000 };
 
-  assert.equal(getLLMProfileHealthDetail(halfOpen, 10_000), '2 recent failures - recovery probe in progress');
-  assert.equal(getLLMProfileHealthDetail(halfOpen, 12_000), '2 recent failures - recovery probe available');
+  assert.equal(getLLMProfileHealthDetail(halfOpen, 10_000), '2 recent failures - recovery attempt in progress');
+  assert.equal(getLLMProfileHealthDetail(halfOpen, 12_000), '2 recent failures - recovery attempt available');
 });

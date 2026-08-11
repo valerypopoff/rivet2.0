@@ -36,8 +36,16 @@ describe('InMemoryRivetLLMProfileHealthStore', () => {
     const profile = identity('primary');
 
     const first = store.begin({ identity: profile, policy });
-    store.finish({ identity: profile, policy, permitId: first.permitId!, outcome: 'unhealthy' });
+    const afterFirst = store.finish({
+      identity: profile,
+      policy,
+      permitId: first.permitId!,
+      outcome: 'unhealthy',
+    });
+    assert.equal(afterFirst.state, 'closed');
+    assert.equal(afterFirst.failureCount, 1);
     const second = store.begin({ identity: profile, policy });
+    assert.equal(second.disposition, 'allow');
     const opened = store.finish({ identity: profile, policy, permitId: second.permitId!, outcome: 'unhealthy' });
     assert.equal(opened.state, 'open');
     assert.equal(store.begin({ identity: profile, policy }).disposition, 'deny');
@@ -125,10 +133,7 @@ describe('InMemoryRivetLLMProfileHealthStore', () => {
     const projectB = identity('shared-key', 'project-b' as ProjectId);
     const permit = store.begin({ identity: projectA, policy });
 
-    assert.throws(
-      () => store.begin({ identity: projectB, policy }),
-      /belongs to a different project scope/,
-    );
+    assert.throws(() => store.begin({ identity: projectB, policy }), /belongs to a different project scope/);
     assert.throws(
       () =>
         store.renew({

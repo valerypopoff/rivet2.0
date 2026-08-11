@@ -13,6 +13,7 @@ import {
   getLLMProfileHealthDetail,
   getLLMProfileHealthDisplayName,
   getLLMProfileHealthIdentityLabel,
+  getSuspendedLLMProfileHealthEntries,
   normalizeLLMProfileHealthEntries,
 } from './llmProfileHealthPresentation.js';
 
@@ -53,10 +54,6 @@ const styles = css`
   .llm-profile-health-empty {
     margin-top: 8px;
   }
-
-  .llm-profile-health-state {
-    text-transform: capitalize;
-  }
 `;
 
 export const ProjectLLMProfileHealthConfiguration: FC = () => {
@@ -72,7 +69,7 @@ export const ProjectLLMProfileHealthConfiguration: FC = () => {
       project={project}
       disabledReason={
         selectedExecutor === 'nodejs' && admin.executionScope === 'browser-only'
-          ? 'This standalone editor can manage Browser-run health only. Node executor health lives in the separate executor process and recovers automatically; use Browser execution here or configure a shared host store and administration API.'
+          ? 'This host can manage Browser-run LLM profile suspension only. Node executor reliability runs in a separate process; use Browser execution here or configure a shared host store and administration API.'
           : undefined
       }
     />
@@ -85,6 +82,8 @@ const ProjectLLMProfileHealthConfigurationContent: FC<{
   disabledReason?: string;
 }> = ({ admin, project, disabledReason }) => {
   const [entries, setEntries] = useState<readonly RivetLLMProfileHealthSnapshot[]>([]);
+  const [suspensionClockTick, setSuspensionClockTick] = useState(0);
+  const suspendedEntries = getSuspendedLLMProfileHealthEntries(entries);
   const [loading, setLoading] = useState(true);
   const [resettingKey, setResettingKey] = useState<string>();
   const [confirmResetAll, setConfirmResetAll] = useState(false);
@@ -104,7 +103,9 @@ const ProjectLLMProfileHealthConfigurationContent: FC<{
         }
       } catch (error) {
         if (generation === requestGeneration.current) {
-          toast.error(`Failed to load LLM profile health: ${error instanceof Error ? error.message : String(error)}`);
+          toast.error(
+            `Failed to load LLM profile reliability: ${error instanceof Error ? error.message : String(error)}`,
+          );
         }
       } finally {
         if (generation === requestGeneration.current) setLoading(false);
@@ -127,6 +128,24 @@ const ProjectLLMProfileHealthConfigurationContent: FC<{
     };
   }, [disabledReason, refresh]);
 
+  useEffect(() => {
+    const now = Date.now();
+    const nextOpenUntil = entries.reduce<number | undefined>((soonest, entry) => {
+      const openUntil = entry.state === 'open' ? entry.openUntil : undefined;
+      if (openUntil == null || openUntil <= now || (soonest != null && openUntil >= soonest)) {
+        return soonest;
+      }
+      return openUntil;
+    }, undefined);
+    if (nextOpenUntil == null) return;
+
+    const timeout = setTimeout(
+      () => setSuspensionClockTick((tick) => tick + 1),
+      Math.min(Math.max(1, nextOpenUntil - Date.now() + 1), 2_147_483_647),
+    );
+    return () => clearTimeout(timeout);
+  }, [entries, suspensionClockTick]);
+
   const reset = async (key?: string) => {
     const requestedProjectId = project.metadata.id;
     setResettingKey(key ?? '*');
@@ -135,7 +154,9 @@ const ProjectLLMProfileHealthConfigurationContent: FC<{
       if (activeProjectId.current !== requestedProjectId) return;
       await refresh();
     } catch (error) {
-      toast.error(`Failed to reset LLM profile health: ${error instanceof Error ? error.message : String(error)}`);
+      toast.error(
+        `Failed to clear LLM profile reliability history: ${error instanceof Error ? error.message : String(error)}`,
+      );
     } finally {
       setResettingKey(undefined);
     }
@@ -144,7 +165,7 @@ const ProjectLLMProfileHealthConfigurationContent: FC<{
   return (
     <div css={styles}>
       <div className="llm-profile-health-heading">
-        <strong>LLM profile health</strong>
+        <strong>LLM profile reliability</strong>
         <div className="llm-profile-health-actions">
           <Button
             appearance="subtle"
@@ -158,29 +179,32 @@ const ProjectLLMProfileHealthConfigurationContent: FC<{
             isDisabled={disabledReason != null || loading || resettingKey != null || entries.length === 0}
             onClick={() => setConfirmResetAll(true)}
           >
-            Reset all
+            Clear all history
           </Button>
         </div>
       </div>
       <div className="llm-profile-health-help">
-        Circuit-breaker state available to this editor. Resetting health permits suspended profiles to be tried again;
-        it does not change their saved configuration or cancel requests already in progress.
+        This host remembers provider failures and suspensions across workflow runs. Clearing history completely forgets
+        this information; it does not change LLM profile suspension settings or cancel requests already in progress.
       </div>
       {disabledReason ? (
         <div className="llm-profile-health-empty">{disabledReason}</div>
       ) : loading ? (
-        <div className="llm-profile-health-empty">Loading profile health...</div>
+        <div className="llm-profile-health-empty">Loading LLM profile reliability...</div>
       ) : entries.length === 0 ? (
-        <div className="llm-profile-health-empty">No profile health has been recorded for this project.</div>
+        <div className="llm-profile-health-empty">
+          No LLM profile reliability history has been recorded for this project.
+        </div>
+      ) : suspendedEntries.length === 0 ? (
+        <div className="llm-profile-health-empty">No LLM profiles are currently suspended.</div>
       ) : (
         <div className="llm-profile-health-list">
-          {entries.map((entry) => (
+          {suspendedEntries.map((entry) => (
             <div className="llm-profile-health-row" key={entry.identity.key}>
               <div>
                 <div>{getLLMProfileHealthDisplayName(project, entry)}</div>
                 <div className="llm-profile-health-meta">
-                  {getLLMProfileHealthIdentityLabel(entry)} -{' '}
-                  <span className="llm-profile-health-state">{entry.state}</span> - {getLLMProfileHealthDetail(entry)}
+                  {getLLMProfileHealthIdentityLabel(entry)} - {getLLMProfileHealthDetail(entry)}
                 </div>
               </div>
               <Button
@@ -188,7 +212,7 @@ const ProjectLLMProfileHealthConfigurationContent: FC<{
                 isDisabled={resettingKey != null}
                 onClick={() => void reset(entry.identity.key)}
               >
-                Reset
+                Clear and resume
               </Button>
             </div>
           ))}
@@ -197,10 +221,14 @@ const ProjectLLMProfileHealthConfigurationContent: FC<{
       <ModalTransition>
         {confirmResetAll && (
           <Modal autoFocus={false} onClose={() => setConfirmResetAll(false)} width="small">
-            <AppModalHeader title="Reset LLM profile health?" onClose={() => setConfirmResetAll(false)} />
+            <AppModalHeader
+              title="Clear all LLM profile reliability history?"
+              onClose={() => setConfirmResetAll(false)}
+            />
             <ModalBody>
-              Suspended profiles in this project will be eligible for another request immediately. Saved profile
-              settings are not changed.
+              Clear all recorded failures, suspensions, and recovery attempts for this project. The next request starts
+              with no recorded history. LLM Profile node settings are not changed, and requests already in progress are
+              not cancelled.
             </ModalBody>
             <ModalFooter>
               <Button onClick={() => setConfirmResetAll(false)}>Cancel</Button>
@@ -211,7 +239,7 @@ const ProjectLLMProfileHealthConfigurationContent: FC<{
                   void reset();
                 }}
               >
-                Reset all
+                Clear all history
               </Button>
             </ModalFooter>
           </Modal>

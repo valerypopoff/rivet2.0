@@ -8,7 +8,6 @@ import {
 } from './chatV2Types.js';
 import { getCustomProviderApiContract, type CustomProviderApi } from './customProviderApi.js';
 import {
-  getDefaultRivetLLMProfileHealthStore,
   type RivetLLMProfileCircuitBreakerPolicy,
   type RivetLLMProfileHealthIdentity,
   type RivetLLMProfileHealthOutcome,
@@ -26,7 +25,7 @@ const DEFAULT_LLM_PROFILE_HEALTH_OPERATION_TIMEOUT_MS = 2_000;
 
 class LLMProfileHealthOperationTimeoutError extends Error {
   constructor(operation: string, timeoutMs: number) {
-    super(`LLM Profile health store ${operation} timed out after ${timeoutMs} ms.`);
+    super(`LLM profile reliability service ${operation} timed out after ${timeoutMs} ms.`);
     this.name = 'LLMProfileHealthOperationTimeoutError';
   }
 }
@@ -51,9 +50,7 @@ function runBoundedHealthOperation<T>(params: {
   const operationSignal = params.runWhenAborted ? undefined : params.signal;
   if (operationSignal?.aborted) {
     return Promise.reject(
-      operationSignal.reason instanceof Error
-        ? operationSignal.reason
-        : new Error('LLM Chat request was aborted.'),
+      operationSignal.reason instanceof Error ? operationSignal.reason : new Error('LLM Chat request was aborted.'),
     );
   }
 
@@ -83,10 +80,7 @@ function runBoundedHealthOperation<T>(params: {
         ),
       );
     const timer = setTimeout(
-      () =>
-        finish(() =>
-          reject(new LLMProfileHealthOperationTimeoutError(params.operation, params.timeoutMs)),
-        ),
+      () => finish(() => reject(new LLMProfileHealthOperationTimeoutError(params.operation, params.timeoutMs))),
       params.timeoutMs,
     );
 
@@ -190,9 +184,9 @@ function buildExhaustedMessage(attempts: readonly LLMAttempt[]): string {
           : attempt.stage === 'response-validation'
             ? 'response validation'
             : attempt.stage === 'health-gate'
-              ? 'health gate'
+              ? 'reliability check'
               : attempt.stage === 'health-update'
-                ? 'health update'
+                ? 'reliability update'
                 : 'configuration';
       const status = attempt.status == null ? '' : ` (${attempt.status})`;
       const error = attempt.error ? `: ${attempt.error.replace(/\r\n|\r|\n/g, '\n  ')}` : '';
@@ -262,8 +256,7 @@ export function buildLLMProfileFallbackSummary(
       );
       const failedHealthOperations = profileAttempts.filter(
         (attempt) =>
-          (attempt.stage === 'health-gate' || attempt.stage === 'health-update') &&
-          attempt.outcome === 'failure',
+          (attempt.stage === 'health-gate' || attempt.stage === 'health-update') && attempt.outcome === 'failure',
       );
 
       if (successfulRounds.length > 0) {
@@ -295,18 +288,20 @@ export function buildLLMProfileFallbackSummary(
       if (skippedHealthGates.length > 0) {
         const retryAt = skippedHealthGates.at(-1)?.retryAt;
         clauses.push(
-          `skipped by its open circuit in ${pluralize(skippedHealthGates.length, 'model round')}${
-            retryAt == null ? '' : `; next probe after ${new Date(retryAt).toISOString()}`
+          `suspended in ${pluralize(skippedHealthGates.length, 'model round')}${
+            retryAt == null ? '' : `; next recovery attempt after ${new Date(retryAt).toISOString()}`
           }`,
         );
       }
       if (failedHealthOperations.length > 0) {
-        clauses.push(`health store unavailable ${pluralize(failedHealthOperations.length, 'time')}; failed open`);
+        clauses.push(
+          `reliability service unavailable ${pluralize(failedHealthOperations.length, 'time')}; profile was tried normally`,
+        );
       }
       if (latestHealthUpdate?.healthState === 'open') {
-        clauses.push('circuit is open');
+        clauses.push('profile is suspended');
       } else if (latestHealthUpdate?.healthState === 'half-open') {
-        clauses.push('circuit remains half-open');
+        clauses.push('recovery attempt is in progress');
       }
 
       return `${identity}: ${clauses.join('; ')}.`;
@@ -485,10 +480,9 @@ function createHealthPermit(params: {
       if (now - lastRenewalAt < renewalIntervalMs) return;
       lastRenewalAt = now;
       renewalInFlight = true;
-      void renewLease(candidate.health.policy.halfOpenLeaseMs)
-        .finally(() => {
-          renewalInFlight = false;
-        });
+      void renewLease(candidate.health.policy.halfOpenLeaseMs).finally(() => {
+        renewalInFlight = false;
+      });
     },
     renewForRetry: (cooldownMs) =>
       state === 'half-open'
@@ -588,9 +582,12 @@ export function createLLMProfileFallbackRunner(params: {
       for (let profileIndex = activeProfileIndex; profileIndex < params.candidates.length; profileIndex++) {
         throwIfAborted(roundOptions.context.signal);
         const candidate = params.candidates[profileIndex]!;
-        const healthStore = candidate.health == null
-          ? undefined
-          : params.healthStore ?? getDefaultRivetLLMProfileHealthStore();
+        // Reliability is a host-activated capability. Saved profile policy is
+        // intentionally inert unless the current runtime explicitly supplies
+        // a health store; standalone Rivet must not create process-local
+        // suspension state or apply the policy's provider deadlines.
+        const activeHealth = params.healthStore == null ? undefined : candidate.health;
+        const healthStore = activeHealth == null ? undefined : params.healthStore;
         let healthPermit:
           | {
               permitId: string;
@@ -601,8 +598,8 @@ export function createLLMProfileFallbackRunner(params: {
             }
           | undefined;
 
-        if (candidate.health != null && healthStore != null) {
-          const candidateHealth = candidate.health;
+        if (activeHealth != null && healthStore != null) {
+          const candidateHealth = activeHealth;
           try {
             const begin = await runBoundedHealthOperation({
               operation: 'begin',
@@ -632,7 +629,7 @@ export function createLLMProfileFallbackRunner(params: {
                 ...(candidate.customProviderApi == null ? {} : { customProviderApi: candidate.customProviderApi }),
                 stage: 'health-gate',
                 outcome: 'skipped',
-                profileHealthKey: candidate.health.identity.key,
+                profileHealthKey: activeHealth.identity.key,
                 healthState: begin.state,
                 healthDisposition: 'deny',
                 ...(begin.retryAt == null ? {} : { retryAt: begin.retryAt }),
@@ -643,7 +640,7 @@ export function createLLMProfileFallbackRunner(params: {
 
             const permitId = begin.permitId;
             if (!permitId) {
-              throw new Error('LLM Profile health store allowed a request without returning a permit.');
+              throw new Error('LLM profile reliability service allowed a request without returning a permit.');
             }
             recordAttempt({
               roundIndex,
@@ -653,12 +650,12 @@ export function createLLMProfileFallbackRunner(params: {
               ...(candidate.customProviderApi == null ? {} : { customProviderApi: candidate.customProviderApi }),
               stage: 'health-gate',
               outcome: 'success',
-              profileHealthKey: candidate.health.identity.key,
+              profileHealthKey: activeHealth.identity.key,
               healthState: begin.state,
               healthDisposition: 'allow',
             });
             healthPermit = createHealthPermit({
-              candidate: candidate as LLMProfileFallbackCandidate & { health: LLMProfileFallbackHealth },
+              candidate: { ...candidate, health: activeHealth },
               healthStore,
               permitId,
               state: begin.state,
@@ -680,7 +677,7 @@ export function createLLMProfileFallbackRunner(params: {
               ...(candidate.customProviderApi == null ? {} : { customProviderApi: candidate.customProviderApi }),
               stage: 'health-gate',
               outcome: 'failure',
-              profileHealthKey: candidate.health.identity.key,
+              profileHealthKey: activeHealth.identity.key,
               healthDisposition: 'fail-open',
               error: getLLMAttemptErrorMessage(error),
             });
@@ -736,17 +733,17 @@ export function createLLMProfileFallbackRunner(params: {
           ...candidateOptions,
           profileIndex,
           roundIndex,
-          ...(candidate.health == null
+          ...(activeHealth == null
             ? {}
             : {
-                profileHealthKey: candidate.health.identity.key,
+                profileHealthKey: activeHealth.identity.key,
                 ...(healthPermit == null ? {} : { profileHealthState: healthPermit.state }),
               }),
-          ...(candidate.health == null
+          ...(activeHealth == null
             ? {}
             : {
-                firstOutputTimeoutMs: candidate.health.firstOutputTimeoutMs,
-                streamInactivityTimeoutMs: candidate.health.streamInactivityTimeoutMs,
+                firstOutputTimeoutMs: activeHealth.firstOutputTimeoutMs,
+                streamInactivityTimeoutMs: activeHealth.streamInactivityTimeoutMs,
                 onStreamActivity: chainStreamActivity(candidateOptions.onStreamActivity, healthPermit?.renew),
                 onBeforeProviderRetry: healthPermit?.renewForRetry,
               }),
@@ -769,9 +766,7 @@ export function createLLMProfileFallbackRunner(params: {
               attemptIndex: attempt.attemptIndex,
               ...(attempt.status == null ? {} : { status: attempt.status }),
               ...(attempt.error == null ? {} : { error: getLLMAttemptErrorMessage(attempt.error) }),
-              ...(isChatV2ProviderTimeoutError(attempt.error)
-                ? { timeoutKind: attempt.error.timeoutKind }
-                : {}),
+              ...(isChatV2ProviderTimeoutError(attempt.error) ? { timeoutKind: attempt.error.timeoutKind } : {}),
             });
           },
         };

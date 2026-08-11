@@ -18,7 +18,7 @@ const LLM_PROFILE_CLOSED_PERMIT_MIN_RETENTION_MS = 24 * 60 * 60 * 1_000;
 
 export class RivetLLMProfileHealthPolicyError extends Error {
   constructor(message: string) {
-    super(`LLM Profile health policy is invalid: ${message}`);
+    super(`LLM profile suspension policy is invalid: ${message}`);
     this.name = 'RivetLLMProfileHealthPolicyError';
   }
 }
@@ -46,7 +46,7 @@ export function resolveRivetLLMProfileCircuitBreakerPolicy(
 
   const firstOutputTimeoutMs = requirePositiveInteger(
     configuration.firstOutputTimeoutMs ?? DEFAULT_LLM_PROFILE_FIRST_OUTPUT_TIMEOUT_MS,
-    'First useful output timeout',
+    'Useful output wait time',
   );
   const streamInactivityTimeoutMs = requirePositiveInteger(
     configuration.streamInactivityTimeoutMs ?? DEFAULT_LLM_PROFILE_STREAM_INACTIVITY_TIMEOUT_MS,
@@ -54,7 +54,7 @@ export function resolveRivetLLMProfileCircuitBreakerPolicy(
   );
   const failureThreshold = requirePositiveInteger(
     configuration.circuitBreakerFailureThreshold ?? DEFAULT_LLM_PROFILE_CIRCUIT_FAILURE_THRESHOLD,
-    'Failure threshold',
+    'Failures before suspension',
   );
   const failureWindowMs = requirePositiveInteger(
     configuration.circuitBreakerFailureWindowMs ?? DEFAULT_LLM_PROFILE_CIRCUIT_FAILURE_WINDOW_MS,
@@ -62,7 +62,7 @@ export function resolveRivetLLMProfileCircuitBreakerPolicy(
   );
   const openDurationMs = requirePositiveInteger(
     configuration.circuitBreakerOpenDurationMs ?? DEFAULT_LLM_PROFILE_CIRCUIT_OPEN_DURATION_MS,
-    'Open duration',
+    'Suspension duration',
   );
 
   return {
@@ -251,15 +251,11 @@ type MutableHealthEntry = {
   closedPermits: Map<string, number>;
 };
 
-function requireMatchingProjectScope(
-  existing: MutableHealthEntry,
-  identity: RivetLLMProfileHealthIdentity,
-): void {
-  const storedProjectId =
-    existing.identity.projectId == null ? undefined : String(existing.identity.projectId);
+function requireMatchingProjectScope(existing: MutableHealthEntry, identity: RivetLLMProfileHealthIdentity): void {
+  const storedProjectId = existing.identity.projectId == null ? undefined : String(existing.identity.projectId);
   const requestProjectId = identity.projectId == null ? undefined : String(identity.projectId);
   if (storedProjectId !== requestProjectId) {
-    throw new Error(`LLM Profile health key ${identity.key} belongs to a different project scope.`);
+    throw new Error(`LLM profile reliability key ${identity.key} belongs to a different project scope.`);
   }
 }
 
@@ -505,10 +501,4 @@ export class InMemoryRivetLLMProfileHealthStore implements RivetLLMProfileHealth
         };
       });
   }
-}
-
-const defaultProcessLocalLLMProfileHealthStore = new InMemoryRivetLLMProfileHealthStore();
-
-export function getDefaultRivetLLMProfileHealthStore(): RivetLLMProfileHealthStore {
-  return defaultProcessLocalLLMProfileHealthStore;
 }

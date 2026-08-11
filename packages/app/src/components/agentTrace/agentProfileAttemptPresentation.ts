@@ -35,9 +35,9 @@ function formatProvider(attempt: Pick<AgentLLMProfileAttemptTrace, 'provider' | 
 function describeStage(stage: AgentLLMProfileAttemptTrace['stage']): string {
   switch (stage) {
     case 'health-gate':
-      return 'circuit gate';
+      return 'reliability check';
     case 'health-update':
-      return 'circuit update';
+      return 'reliability update';
     case 'response-validation':
       return 'response validation';
     default:
@@ -48,16 +48,40 @@ function describeStage(stage: AgentLLMProfileAttemptTrace['stage']): string {
 function describeOutcome(attempt: AgentLLMProfileAttemptTrace): string {
   if (attempt.healthDisposition === 'deny') {
     return attempt.retryAt == null
-      ? 'skipped while circuit is open'
-      : `skipped until ${new Date(attempt.retryAt).toLocaleString()}`;
+      ? 'profile suspended; skipped'
+      : `profile suspended until ${new Date(attempt.retryAt).toLocaleString()}`;
   }
   if (attempt.healthDisposition === 'fail-open') {
-    return 'health store failed open; profile request continued';
+    return 'reliability service unavailable; profile request continued';
   }
   if (attempt.timeoutKind === 'first-output') return 'first output timed out';
   if (attempt.timeoutKind === 'stream-inactivity') return 'stream became inactive';
   if (attempt.stage === 'health-update' && attempt.healthOutcome) {
-    return `recorded ${attempt.healthOutcome}${attempt.healthState ? `; circuit ${attempt.healthState}` : ''}`;
+    return `recorded ${describeReliabilityOutcome(attempt.healthOutcome)}${describeReliabilityState(attempt.healthState)}`;
   }
-  return `${attempt.outcome}${attempt.healthState ? `; circuit ${attempt.healthState}` : ''}`;
+  return `${attempt.outcome}${describeReliabilityState(attempt.healthState)}`;
+}
+
+function describeReliabilityOutcome(outcome: NonNullable<AgentLLMProfileAttemptTrace['healthOutcome']>): string {
+  switch (outcome) {
+    case 'healthy':
+      return 'success';
+    case 'unhealthy':
+      return 'failure';
+    default:
+      return 'ignored result';
+  }
+}
+
+function describeReliabilityState(state: AgentLLMProfileAttemptTrace['healthState']): string {
+  switch (state) {
+    case 'open':
+      return '; profile suspended';
+    case 'half-open':
+      return '; recovery attempt in progress';
+    case 'closed':
+      return '; profile available';
+    default:
+      return '';
+  }
 }

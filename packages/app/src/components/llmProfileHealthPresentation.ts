@@ -25,11 +25,11 @@ export function getLLMProfileHealthIdentityLabel(snapshot: RivetLLMProfileHealth
 export function getLLMProfileHealthDetail(snapshot: RivetLLMProfileHealthSnapshot, now = Date.now()): string {
   const failureLabel = `${snapshot.failureCount} recent failure${snapshot.failureCount === 1 ? '' : 's'}`;
   if (snapshot.state === 'open' && snapshot.openUntil != null) {
-    if (snapshot.openUntil <= now) return `${failureLabel} - recovery probe available`;
+    if (snapshot.openUntil <= now) return `${failureLabel} - recovery attempt available`;
     return `${failureLabel} - suspended until ${new Date(snapshot.openUntil).toLocaleString()}`;
   }
   if (snapshot.state === 'half-open') {
-    return `${failureLabel} - recovery probe ${snapshot.halfOpenLeaseUntil != null && snapshot.halfOpenLeaseUntil > now ? 'in progress' : 'available'}`;
+    return `${failureLabel} - recovery attempt ${snapshot.halfOpenLeaseUntil != null && snapshot.halfOpenLeaseUntil > now ? 'in progress' : 'available'}`;
   }
   return failureLabel;
 }
@@ -41,4 +41,16 @@ export function normalizeLLMProfileHealthEntries(
   return entries
     .filter((entry) => entry.identity.projectId === projectId)
     .sort((left, right) => right.updatedAt - left.updatedAt);
+}
+
+/**
+ * Project Settings is an operational suspension view, rather than a history
+ * viewer. A profile whose suspension has elapsed is eligible for a recovery
+ * attempt, so it is not currently suspended and must not remain visible here.
+ */
+export function getSuspendedLLMProfileHealthEntries(
+  entries: readonly RivetLLMProfileHealthSnapshot[],
+  now = Date.now(),
+): readonly RivetLLMProfileHealthSnapshot[] {
+  return entries.filter((entry) => entry.state === 'open' && (entry.openUntil ?? 0) > now);
 }
