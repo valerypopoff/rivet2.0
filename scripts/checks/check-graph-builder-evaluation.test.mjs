@@ -6,6 +6,7 @@ import test from 'node:test';
 import developmentFixtures from '../../packages/app/src/features/graphBuilder/evaluation/fixtures/development-fixtures.v1.json' with { type: 'json' };
 import {
   defaultGraphBuilderEvaluationFixtureDirectory,
+  hashEvaluationAsset,
   validateGraphBuilderEvaluationAssets,
 } from './check-graph-builder-evaluation.mjs';
 
@@ -45,4 +46,11 @@ test('freshness check detects drift and write mode refreshes only the public man
   } finally {
     await rm(temporaryRoot, { recursive: true, force: true });
   }
+});
+
+test('evaluation asset hashes are stable across LF and CRLF checkouts', () => {
+  const lfSource = '{\n  "version": 1\n}\n';
+  const crlfSource = lfSource.replace(/\n/g, '\r\n');
+
+  assert.equal(hashEvaluationAsset(crlfSource), hashEvaluationAsset(lfSource));
 });

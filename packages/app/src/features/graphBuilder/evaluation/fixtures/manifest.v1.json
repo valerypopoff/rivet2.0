@@ -6,17 +6,17 @@
     {
       "kind": "policy",
       "path": "evaluation-policy.v1.json",
-      "sha256": "sha256:1738154f13cf19438ecaf865f34cb8344db4a0775de2983b1f8425edba31a60a"
+      "sha256": "sha256:ba32ab2ab572c575d9991d6cf8e074a939fa4657d88c629c91ecf7534ba6d917"
     },
     {
       "kind": "development-fixtures",
       "path": "development-fixtures.v1.json",
-      "sha256": "sha256:ddbda1dc06f905c852477672412dd6987756a23b4523fcec65c279390aaf885c"
+      "sha256": "sha256:6c019d7229f85af55ae0ef0d80847f37cea02fdc001af313ef7c25d7ab761436"
     },
     {
       "kind": "hidden-holdout-contract",
       "path": "hidden-holdout.contract.v1.json",
-      "sha256": "sha256:2babf3757153881783eaf92ee1517aa79200d27622e62e40c1f502e9433edfde"
+      "sha256": "sha256:b6a1621e0a03cfefa7fb6a78724477551ee621696d5718fd7c794eee61f02008"
     }
   ]
 }

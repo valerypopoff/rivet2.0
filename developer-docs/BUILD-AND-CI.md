@@ -161,6 +161,8 @@ When adding or cleaning tests, prefer behavior-level tests at the owning helper,
 When a retained source-shape guard covers a formatted expression or call, match the required semantic arguments while allowing normal whitespace and multiline formatting; do not make Prettier-compatible layout changes fail the suite.
 `packages/app-executor/bin/executorHost.test.mts` is an approved static-entrypoint guard: importing its startup path would bind the executor socket server, so it verifies the host/standalone bootstrap boundary from source. Keep that one exception listed in `scripts/checks/source-reading-test-allowlist.mjs`; migrate any other test to an observable helper instead.
 
+Graph Builder evaluation manifest hashes canonicalize text asset line endings to LF before hashing. This keeps the checked manifest identical across Windows CRLF and Linux LF checkouts; do not replace the canonical digest with a raw-byte digest.
+
 Use table-driven cases when many inputs share the same setup. Keep fixtures local unless at least three nearby tests need the same builder. Keep characterization tests broad but few, and avoid asserting entire large objects when a minimal observable subset proves the same behavior. Test names should describe behavior rather than implementation details.
 
 Avoid `as any` unless the test intentionally models malformed caller input or a boundary that TypeScript normally protects. Do not commit `.only`. Skipped tests need a nearby comment explaining why they are skipped and what condition lets the skip be removed.
