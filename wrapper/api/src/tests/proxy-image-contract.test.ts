@@ -209,6 +209,7 @@ test('executor image and compose contracts keep the websocket service independen
   const executorEntrypoint = readRepoFile('image/executor/entrypoint.sh');
   const executorDockerfile = readRepoFile('image/executor/Dockerfile');
   const executorBundler = readRepoFile('wrapper/executor/build/bundle-executor.cjs');
+  const executorHost = readRepoFile('wrapper/executor/src/executor.mts');
   const composeExecutorDockerfile = readRepoFile('ops/docker/Dockerfile.executor');
   const prodCompose = readRepoFile('ops/compose/docker-compose.yml');
   const devCompose = readRepoFile('ops/compose/docker-compose.dev.yml');
@@ -220,16 +221,24 @@ test('executor image and compose contracts keep the websocket service independen
   assert.match(executorDockerfile, /ENV RIVET_EXECUTOR_PORT=21889/);
   assert.match(executorDockerfile, /ENV RIVET_EXECUTOR_HOST=0\.0\.0\.0/);
   assert.match(executorDockerfile, /ENV RIVET_CODE_RUNNER_REQUIRE_ROOT=\/data\/runtime-libraries\/current\/node_modules/);
+  assert.match(executorDockerfile, /COPY wrapper\/executor\/src\/ \/app\/wrapper\/executor\/src\//);
+  assert.match(executorDockerfile, /COPY wrapper\/shared\/llmProfileHealthHttpStore\.ts \/app\/wrapper\/shared\/llmProfileHealthHttpStore\.ts/);
   assert.doesNotMatch(executorDockerfile, /ENV PORT=21889/);
   assert.match(composeExecutorDockerfile, /ENV RIVET_EXECUTOR_HOST=0\.0\.0\.0/);
   assert.match(composeExecutorDockerfile, /ENV RIVET_CODE_RUNNER_REQUIRE_ROOT=\/data\/runtime-libraries\/current\/node_modules/);
+  assert.match(composeExecutorDockerfile, /COPY wrapper\/executor\/src\/ \/app\/wrapper\/executor\/src\//);
+  assert.match(composeExecutorDockerfile, /COPY wrapper\/shared\/llmProfileHealthHttpStore\.ts \/app\/wrapper\/shared\/llmProfileHealthHttpStore\.ts/);
   assert.ok(composeExecutorDockerfile.includes('node executor-bundle.cjs --host \\"${RIVET_EXECUTOR_HOST}\\" --port 21889'));
   assert.match(executorBundler, /'import\.meta\.url': '__filename'/);
+  assert.match(executorBundler, /wrapperExecutorDir[\s\S]*src', 'executor\.mts'/);
+  assert.match(executorHost, /startAppExecutor/);
+  assert.match(executorHost, /createHttpRivetLLMProfileHealthStore/);
+  assert.match(executorHost, /llmProfileHealthStore: healthStore/);
 
   for (const compose of [prodCompose, devCompose]) {
     assert.match(compose, /executor:[\s\S]*- PORT=21889[\s\S]*- RIVET_EXECUTOR_PORT=21889[\s\S]*- RIVET_EXECUTOR_HOST=0\.0\.0\.0/);
     assert.match(compose, /OPENAI_ENDPOINT=\$\{OPENAI_ENDPOINT:-\}\r?\n\s*- PINECONE_API_KEY=\$\{PINECONE_API_KEY:-\}/);
-    assert.match(compose, /RIVET_RUNTIME_PROCESS_ROLE=executor\r?\n\s*- PINECONE_API_KEY=\$\{PINECONE_API_KEY:-\}/);
+    assert.match(compose, /RIVET_RUNTIME_PROCESS_ROLE=executor[\s\S]*RIVET_KEY=\$\{RIVET_KEY:-\}[\s\S]*RIVET_LLM_PROFILE_HEALTH_API_URL=http:\/\/api:80\/api\/workflows\/llm-profile-health[\s\S]*PINECONE_API_KEY=\$\{PINECONE_API_KEY:-\}/);
     assert.equal((compose.match(/^\s*- PINECONE_API_KEY=\$\{PINECONE_API_KEY:-\}$/gm) ?? []).length, 2);
     assert.match(compose, /- HOME=\/home\/rivet/);
     assert.match(compose, /- npm_config_cache=\/home\/rivet\/\.npm/);
@@ -256,6 +265,7 @@ test('API images and launchers use the filtered Rivet source context and symlink
   const ensureRivetRuntimeBuild = readRepoFile('scripts/ensure-rivet-runtime-build.mjs');
   const linkScript = readRepoFile('scripts/link-rivet-node-package.mjs');
   const ensureDevDeps = readRepoFile('scripts/ensure-dev-deps.mjs');
+  const localDependencyPolicy = readRepoFile('scripts/lib/rivet-local-dependencies.mjs');
   const apiPackageJson = readRepoFile('wrapper/api/package.json');
   const apiTsconfig = readRepoFile('wrapper/api/tsconfig.json');
   const preserveSymlinksRunner = readRepoFile('scripts/run-preserve-symlinks.mjs');
@@ -293,7 +303,10 @@ test('API images and launchers use the filtered Rivet source context and symlink
   assert.match(linkScript, /linkDependencyEntriesFromRoot\(dependencyRoot, destinationNodeModulesDir, skippedPackageNames\)/);
   assert.match(ensureDevDeps, /hasExpectedApiRivetLink\('rivet-core', 'rivet\/packages\/core', \[/);
   assert.match(ensureDevDeps, /hasExpectedApiRivetLink\('rivet-node', 'rivet\/packages\/node', \[/);
-  assert.match(ensureDevDeps, /YARN_NODE_LINKER: 'node-modules'/);
+  assert.match(ensureDevDeps, /getRivetYarnEnvironment\(rootDir, rivetDir\)/);
+  assert.match(ensureRivetRuntimeBuild, /getRivetYarnEnvironment\(rootDir, rivetRootDir\)/);
+  assert.match(localDependencyPolicy, /isExternalRivetWorkspace/);
+  assert.match(localDependencyPolicy, /YARN_NODE_LINKER: 'node-modules'/);
   assert.match(ensureDevDeps, /'\.rivet-dependency-overlay'/);
   assert.match(ensureDevDeps, /!exists\('wrapper\/web\/node_modules\/\.bin\/vite'\)/);
   assert.match(ensureDevDeps, /path\.join\('rivet\/node_modules', packageNameToNodeModulesRelPath\(dependencyName\)\)/);

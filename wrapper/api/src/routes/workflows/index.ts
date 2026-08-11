@@ -54,6 +54,7 @@ import {
 } from './storage-backend.js';
 import { createWorkflowDownloadContentDisposition } from './workflow-download.js';
 import { getStatisticsQueryPeriod } from './recording-statistics.js';
+import { llmProfileHealthRouter } from './llm-profile-health.js';
 
 export const workflowsRouter = Router();
 const timing = createResponseTimingMiddleware();
@@ -126,6 +127,8 @@ const publishProjectSchema = z.object({
   relativePath: z.unknown(),
   settings: z.unknown().optional(),
 });
+
+workflowsRouter.use('/llm-profile-health', llmProfileHealthRouter);
 
 const publishProjectWebAppsSchema = z.object({
   relativePath: z.unknown(),

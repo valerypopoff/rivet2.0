@@ -47,6 +47,7 @@ import { readWorkflowEndpointAuthSettingsSync } from '../../workflow-endpoint-au
 import { enqueueWorkflowExecutionRecordingPersistence } from './recordings.js';
 import {
   createExecutionProjectReferenceLoader,
+  getLLMProfileHealthStore,
   persistWorkflowExecutionRecordingWithBackend,
   resolveLatestExecutionProject,
   resolveLatestWebAppExecutionProject as resolveLatestWebAppExecutionProjectWithBackend,
@@ -1164,6 +1165,7 @@ export async function createWebAppProcessorOptions(
     datasetProvider: executionProject.datasetProvider,
     projectPath: executionProject.projectVirtualPath,
     projectReferenceLoader: await createExecutionProjectReferenceLoader(executionProject.projectVirtualPath),
+    llmProfileHealthStore: await getLLMProfileHealthStore(),
     remoteDebugger,
   };
 }
@@ -1290,6 +1292,7 @@ async function executeWorkflowEndpoint(
     projectPath: projectVirtualPath,
     datasetProvider,
     projectReferenceLoader,
+    llmProfileHealthStore: await getLLMProfileHealthStore(),
     remoteDebugger,
     context: getWorkflowExecutionContext(req),
     inputs: getWorkflowRequestInputs(req),

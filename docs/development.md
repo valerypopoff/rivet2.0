@@ -9,12 +9,12 @@ See also: [Wrapper ManagedCodeRunner Speed Plan](./wrapper-managed-code-runner-s
 - `npm run setup`
   - ensures `wrapper/api` and `wrapper/web` dependencies exist
   - clones `rivet/` from the configured Rivet 2 repo if it is missing
-  - installs upstream Yarn dependencies with `YARN_NODE_LINKER=node-modules` and builds `@valerypopoff/rivet2-core` and `@valerypopoff/rivet2-node` when needed
-  - verifies the vendored Rivet workspace dependencies inside `rivet/node_modules`, where Vite resolves upstream source imports; wrapper package installs are not considered a substitute
+  - installs upstream Yarn dependencies and builds `@valerypopoff/rivet2-core` and `@valerypopoff/rivet2-node` when needed; wrapper-owned snapshots use `YARN_NODE_LINKER=node-modules`, while a symlink/junction to an external checkout preserves that checkout's configured Yarn linker
+  - verifies the vendored Rivet workspace dependencies inside `rivet/node_modules`; an external PnP checkout instead uses its own `.pnp.cjs` plus Yarn install-state and is never converted to a physical `node_modules` install by wrapper setup
   - links `wrapper/api/node_modules/@valerypopoff/rivet2-core`, `@valerypopoff/rivet2-node`, and Rivet 2's `@rivet2/*` runtime aliases to generated package overlays under `wrapper/api/node_modules/.rivet-package-links`; those overlays point `dist` at the built packages under `rivet/` and build a generated dependency overlay from installed `rivet/`, API, and web package dependencies
   - removes retired generated API package links from older setup runs before writing the current Rivet 2 package links
   - keeps API runtime and TypeScript resolution on symlink-preserved paths, so setup does not need to create helper dependency links inside the external `rivet/` checkout
-  - accepts either a Git checkout, a valid upstream snapshot, or a local symlink/junction already present in `rivet/`
+  - accepts either a Git checkout, a valid upstream snapshot, or a local symlink/junction already present in `rivet/`; dependency bootstrap must not mutate the dependency mode of a linked external checkout
 - `npm run setup:k8s-tools`
   - downloads the pinned Helm release into `.data/tools/helm/`
   - use this when you want Kubernetes verification or the local Kubernetes launcher to work without a system Helm install
@@ -259,6 +259,8 @@ Windows PowerShell override example:
 - Vite web app on `http://localhost:5174`
 - executor websocket service on port `21889`
 
+The local executor is the wrapper entrypoint, not the upstream standalone executable. It injects an HTTP-backed LLM Profile health store into Node-mode editor runs. By default it calls `http://127.0.0.1:3100/api/workflows/llm-profile-health`; set `RIVET_LLM_PROFILE_HEALTH_API_URL` only when the local API is exposed elsewhere. `RIVET_KEY` must match the API because the executor derives the normal trusted proxy token from it.
+
 Important constraints:
 
 - host Node must be `24+` for local API execution because the API now uses Node's built-in `node:sqlite`
@@ -276,6 +278,7 @@ The Docker launchers now render layered Compose files:
 - the executor websocket service is pinned separately to `21889`
 - do not treat `PORT` in `.env` as a shared port for every container; the executor must stay on `21889` unless the nginx upstreams change with it
 - the executor service sets `RIVET_EXECUTOR_HOST=0.0.0.0` in Docker so the proxy container can connect to it over the compose network; do not change that back to `127.0.0.1` unless the proxy and executor are collapsed into the same process/network namespace
+- the executor service sets `RIVET_LLM_PROFILE_HEALTH_API_URL=http://api:80/api/workflows/llm-profile-health` and receives `RIVET_KEY`; this keeps Node-mode editor circuit-breaker state aligned with API-owned endpoint and web-app runs
 
 - `npm run dev` / `npm run dev:docker:*` use `ops/compose/docker-compose.managed-services.yml` plus `ops/compose/docker-compose.dev.yml`
 - `npm run prod`, `npm run prod:prebuilt`, `npm run prod:restart`, and `npm run prod:custom` use `ops/compose/docker-compose.managed-services.yml` plus `ops/compose/docker-compose.yml`

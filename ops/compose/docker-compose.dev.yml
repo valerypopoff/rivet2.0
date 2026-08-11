@@ -237,6 +237,8 @@ services:
       - RIVET_APP_DATA_ROOT=/home/rivet/.local/share/com.valerypopoff.rivet2
       - RIVET_RUNTIME_LIBRARIES_ROOT=/data/runtime-libraries
       - RIVET_RUNTIME_PROCESS_ROLE=executor
+      - RIVET_KEY=${RIVET_KEY:-}
+      - RIVET_LLM_PROFILE_HEALTH_API_URL=http://api:80/api/workflows/llm-profile-health
       - PINECONE_API_KEY=${PINECONE_API_KEY:-}
       - RIVET_RUNTIME_LIBRARIES_SYNC_POLL_INTERVAL_MS
       - RIVET_NODE_EXECUTOR_PROXY_SETTINGS_POLL_INTERVAL_MS

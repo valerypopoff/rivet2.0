@@ -494,6 +494,19 @@ Current request/response behavior for all execution routes:
 - successful object responses get `durationMs` injected unless already present
 - failures return JSON with `error.name`/`error.message` plus `durationMs`
 
+### Durable LLM Profile circuit breakers
+
+When an LLM Profile enables circuit-breaker health policy, every physical profile attempt consults the backend selected for the workflow deployment:
+
+- filesystem mode uses the single-host SQLite health store under `RIVET_APP_DATA_ROOT`
+- managed mode uses shared Postgres state across control and execution replicas
+- published and latest workflow endpoints receive the store through their processor options
+- HTTP compatibility and resumable WebSocket web-app actions receive the same store; reconnecting a web-app action does not create a browser-local health island
+
+The state records only safe profile identity metadata, bounded failure timestamps, circuit state, and permit/lease data. The backend owns time and serializes same-key transitions. An open circuit skips that profile until its cooldown expires; after that, a single leased half-open probe is allowed. Candidate activity renews the owning permit without shortening an existing lease. A successful recovery probe invalidates all permits admitted before the circuit opened. Stale permits, including a request that finishes after an administrator resets the project, cannot mutate or recreate the record, and an existing key cannot be rebound to another project.
+
+`GET /api/workflows/llm-profile-health?projectId=<id>` and `POST /api/workflows/llm-profile-health/reset` are trusted hosted-editor administration surfaces. Both require an exact project id. Reset accepts that project id alone for one atomic project-wide reset, or the project id plus one exact key; unscoped listing and key-only reset are rejected. Runtime `begin`, `finish`, and `renew` identities also require their project id. These routes use the normal wrapper proxy-auth contract and are not public workflow endpoints.
+
 ## Filesystem hot path
 
 In `filesystem` mode, the published/latest routes now keep a local derived warm path while staying compatibility-first:

@@ -1,6 +1,7 @@
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
+import { getRivetYarnEnvironment } from './lib/rivet-local-dependencies.mjs';
 
 const rootDir = process.cwd();
 const rivetRootDir = process.env.RIVET_SOURCE_ROOT
@@ -125,7 +126,7 @@ function runRuntimeBuild() {
     cwd: rivetRootDir,
     env: {
       ...process.env,
-      YARN_NODE_LINKER: 'node-modules',
+      ...getRivetYarnEnvironment(rootDir, rivetRootDir),
     },
     stdio: 'inherit',
   });

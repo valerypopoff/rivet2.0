@@ -2,7 +2,7 @@
 
 ## Repository layout
 
-- `rivet/` is upstream Rivet source consumed by this repo. `npm run setup` may clone it as a Git checkout for local development, while `npm run setup:rivet` downloads the configured Rivet 2 source ref into a clean snapshot for Docker builds. The default source is `https://github.com/valerypopoff/rivet2.0.git` at `main`, overrideable with `RIVET_REPO_URL` and `RIVET_REPO_REF`; `RIVET_REPO_REF` can be a branch, tag, or exact commit SHA. It may also be a local symlink or Windows junction to another Rivet checkout. Local Docker launchers copy the build-relevant subset into `.data/docker-contexts/rivet-source` and the install metadata into `.data/docker-contexts/rivet-dependency-metadata` before invoking BuildKit, while dev bind mounts still point at the live source path. Treat `rivet/` as read-only input here; repo-specific behavior belongs in the wrapper layer, and real Rivet changes should be contributed upstream.
+- `rivet/` is upstream Rivet source consumed by this repo. `npm run setup` may clone it as a Git checkout for local development, while `npm run setup:rivet` downloads the configured Rivet 2 source ref into a clean snapshot for Docker builds. The default source is `https://github.com/valerypopoff/rivet2.0.git` at `main`, overrideable with `RIVET_REPO_URL` and `RIVET_REPO_REF`; `RIVET_REPO_REF` can be a branch, tag, or exact commit SHA. It may also be a local symlink or Windows junction to another Rivet checkout. Wrapper-owned snapshots use the wrapper's physical `node_modules` dependency layout, but local setup preserves the configured Yarn linker of a linked external checkout so the wrapper cannot convert or damage that checkout's install state. Local Docker launchers copy the build-relevant subset into `.data/docker-contexts/rivet-source` and the install metadata into `.data/docker-contexts/rivet-dependency-metadata` before invoking BuildKit, while dev bind mounts still point at the live source path. Treat `rivet/` as read-only input here; repo-specific behavior belongs in the wrapper layer, and real Rivet changes should be contributed upstream.
 - `wrapper/web/` contains the hosted dashboard, browser entrypoint, and the tracked alias-based override layer for upstream editor behavior.
 - `wrapper/api/` contains workflow management, publication, recordings, runtime-library management, native IO shims, plugin install/load routes, and guarded shell/config endpoints.
 - `wrapper/shared/` contains browser/server contracts such as hosted env constants, editor-bridge messages, workflow types, and recording helpers.
@@ -61,6 +61,21 @@ That control-plane singleton is intentional, not accidental. In the current supp
 - the latest debugger is still process-local rather than a distributed cross-replica service
 
 The important operational detail is that these tiers scale independently. A new execution replica is only another execution-plane API pod; it does not automatically imply a matching proxy pod. In an endpoint-heavy deployment, `execution` is the primary scale target, `proxy` is the supporting ingress tier, `web` can remain fixed at `1`, and `backend` remains singleton by constraint rather than by capacity preference.
+
+### LLM profile health state
+
+LLM Profile circuit-breaker state is wrapper-owned operational state, not project content and not a Rivet Stored Value. The state has to coordinate concurrent endpoint, web-app, and hosted-editor runs, so it uses a dedicated atomic store:
+
+- filesystem mode keeps `llm-profile-health.sqlite` under `RIVET_APP_DATA_ROOT`; this is appropriate for the supported single-host filesystem topology
+- managed mode keeps `llm_profile_health` rows in the shared Postgres database, so control-plane and execution replicas observe the same open and half-open circuits
+- each run receives the selected store through Rivet's `llmProfileHealthStore` processor option; published/latest workflow requests and HTTP/WebSocket web-app actions therefore share the same health history
+- the hosted Browser executor uses the authenticated `/api/workflows/llm-profile-health` bridge, while the hosted Node executor uses the wrapper-specific executor entrypoint and the same bridge
+
+The storage adapter is backend-owned and reused across runs. Filesystem mode opens one lazy SQLite connection per API process, while managed mode reuses the existing managed-workflow Postgres pool; neither path creates a database or pool for each graph or web-app action.
+
+The store, not the browser or executor client, owns timestamps; managed mode uses the Postgres clock so replicas cannot disagree because of pod clock skew. `begin`, `finish`, and permit `renew` are atomic; only one half-open probe may own a live lease, renewals never shorten that lease, and long closed-state attempts also refresh their permits. A successful half-open probe clears every permit admitted before the circuit opened, so a late result from the previous health generation cannot immediately poison the recovered route. Managed transitions and resets take the same project-scoped PostgreSQL advisory lock in addition to row locks, so an atomic project reset cannot race a just-started transition whose placeholder row has not acquired its project id yet. Project-wide reset is one backend operation, and a late completion after reset is a no-op rather than recreating deleted state. Project Settings administration lists and resets records by the exact persisted `identity.projectId`, never by a hash or key prefix; an existing key cannot be rebound to another project.
+
+Closed-state permits are retained while their provider candidates are in flight. Permits abandoned by a crashed executor are pruned after a conservative minimum of 24 hours (or a longer configured health-policy interval), so repeated process loss cannot grow a durable row forever; a completion carrying an expired permit is treated as stale.
 
 ### Resumable web-app action transport
 

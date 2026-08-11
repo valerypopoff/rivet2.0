@@ -83,6 +83,8 @@ import type { AttachedData, Project, CombinedDataset } from '@valerypopoff/rivet
 import { getFilesystemExecutionCache } from './filesystem-execution-cache.js';
 import { normalizeHostedProjectTitle } from './hosted-project-contents.js';
 import { writeWorkflowProjectStatsCacheFromContents } from './project-stats.js';
+import { FilesystemRivetLLMProfileHealthStore } from '../../llm-profile-health/filesystem-store.js';
+import type { RivetStudioLLMProfileHealthStore } from '../../llm-profile-health/store.js';
 
 function mapHostedProjectFilesystemError(
   error: unknown,
@@ -133,6 +135,12 @@ type ExecutionProjectResult = {
 };
 
 let managedBackendPromise: Promise<ManagedWorkflowBackend> | null = null;
+let filesystemLLMProfileHealthStore: FilesystemRivetLLMProfileHealthStore | null = null;
+
+function getFilesystemLLMProfileHealthStore(): FilesystemRivetLLMProfileHealthStore {
+  filesystemLLMProfileHealthStore ??= new FilesystemRivetLLMProfileHealthStore();
+  return filesystemLLMProfileHealthStore;
+}
 
 async function getManagedBackend(): Promise<ManagedWorkflowBackend> {
   if (!managedBackendPromise) {
@@ -460,6 +468,13 @@ export async function listWorkflowRecordingRunsPageWithBackend(
   );
 }
 
+export async function getLLMProfileHealthStore(): Promise<RivetStudioLLMProfileHealthStore> {
+  return delegate<RivetStudioLLMProfileHealthStore>(
+    async (backend) => backend.getLLMProfileHealthStore(),
+    async () => getFilesystemLLMProfileHealthStore(),
+  );
+}
+
 export async function listWorkflowRunStatisticsCatalogWithBackend(
   surface: WorkflowRunStatisticsSurface,
 ): Promise<WorkflowRunStatisticsCatalogResponse> {
@@ -481,12 +496,12 @@ export async function getWorkflowRunStatisticsWithBackend(
 export async function disposeWorkflowStorage(): Promise<void> {
   const backendPromise = managedBackendPromise;
   managedBackendPromise = null;
-  if (!backendPromise) {
-    return;
-  }
-
-  const backend = await backendPromise;
-  await backend.dispose();
+  const filesystemStore = filesystemLLMProfileHealthStore;
+  filesystemLLMProfileHealthStore = null;
+  await Promise.all([
+    backendPromise?.then((backend) => backend.dispose()),
+    filesystemStore?.dispose(),
+  ]);
 }
 
 export async function readWorkflowRecordingArtifactWithBackend(recordingId: string, artifact: 'recording' | 'replay-project' | 'replay-dataset'): Promise<string> {

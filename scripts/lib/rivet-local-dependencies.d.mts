@@ -1,0 +1,8 @@
+export function isExternalRivetWorkspace(wrapperRootDir: string, rivetRootDir: string): boolean;
+
+export function hasRivetPnpInstall(rivetRootDir: string): boolean;
+
+export function getRivetYarnEnvironment(
+  wrapperRootDir: string,
+  rivetRootDir: string,
+): Record<string, string>;

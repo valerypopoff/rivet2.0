@@ -2,6 +2,11 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import {
+  getRivetYarnEnvironment,
+  hasRivetPnpInstall,
+  isExternalRivetWorkspace,
+} from './lib/rivet-local-dependencies.mjs';
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(scriptDir, '..');
@@ -134,7 +139,11 @@ function collectRivetDependencyNames() {
   return [...dependencyNames];
 }
 
-function hasExpectedRivetNodeModulesInstall() {
+function hasExpectedRivetDependencyInstall() {
+  if (isExternalRivetWorkspace(rootDir, rivetDir) && hasRivetPnpInstall(rivetDir)) {
+    return true;
+  }
+
   // Vite resolves imports in vendored Rivet source from rivet/node_modules.
   // Wrapper package installs cannot satisfy those source imports reliably.
   return collectRivetDependencyNames().every((dependencyName) =>
@@ -173,7 +182,7 @@ const needsApiDeps = !exists('wrapper/api/node_modules/.bin/tsx');
 const needsWebDeps =
   !exists('wrapper/web/node_modules/.bin/vite') ||
   !exists('wrapper/web/node_modules/.bin/playwright');
-const needsRivetDeps = !hasExpectedRivetNodeModulesInstall();
+const needsRivetDeps = !hasExpectedRivetDependencyInstall();
 const needsRivetCoreBuild = !exists('rivet/packages/core/dist/esm/index.js');
 const needsRivetNodeBuild = !exists('rivet/packages/node/dist/esm/index.js');
 const needsApiRivetLinks =
@@ -212,8 +221,8 @@ if (needsWebDeps) {
 
 if (needsRivetDeps) {
   console.log('[predev] Installing rivet dependencies with Yarn via Corepack');
-  run(corepackCmd, ['yarn', 'install', '--immutable'], path.join(rootDir, 'rivet'), {
-    YARN_NODE_LINKER: 'node-modules',
+  run(corepackCmd, ['yarn', 'install', '--immutable'], rivetDir, {
+    ...getRivetYarnEnvironment(rootDir, rivetDir),
     YARN_CHECKSUM_BEHAVIOR: 'ignore',
   });
 }

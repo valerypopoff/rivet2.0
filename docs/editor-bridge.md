@@ -121,6 +121,14 @@ The editor bridge is not the same thing as the executor/debugger websocket trans
 
 Those execution websocket responsibilities are separate from the dashboard/editor `window.postMessage` bridge. The bridge moves open/save/delete/path-move intent between browsing contexts; the Rivet executor session talks to `/ws/executor*`.
 
+### Hosted LLM profile health providers
+
+LLM Profile circuit-breaker state also does not travel over `window.postMessage`. `hostedRivetProviders` supplies an HTTP-backed `llmProfileHealthStore` for Browser-mode graph runs and an `llmProfileHealthAdmin` provider for Project Settings. Both call the authenticated `/api/workflows/llm-profile-health` API, so Browser runs share health with published endpoints, web-app actions, and other server replicas.
+
+Node-mode editor runs reach the same state through `wrapper/executor/src/executor.mts`. That wrapper entrypoint starts upstream `executorHost.mts` with `createProcessorOptions`, injecting an HTTP-backed `llmProfileHealthStore` without forking the executor protocol. Compose points it at `http://api:80/api/workflows/llm-profile-health`; the Kubernetes backend sidecar uses the backend pod's loopback API. Both authenticate with the proxy token derived from `RIVET_KEY`.
+
+The health API owns the clock and rejects caller timestamp fields. Every hosted runtime request must carry a project id. Project Settings can list and reset only the active project's entries; even a single-key reset also carries that project id, and the HTTP surface exposes no unscoped list or reset operation. The runtime store exposes atomic begin/finish/renew operations; it is not a browser-local cache and does not fall back to local state when the server call fails.
+
 ## Key files
 
 - `wrapper/shared/editor-bridge.ts` - shared message types, guards, and helpers
@@ -141,6 +149,8 @@ Those execution websocket responsibilities are separate from the dashboard/edito
 - `wrapper/web/dashboard/HostedEditorApp.tsx` - `RivetAppHost` UI policy, callback forwarding for active project, open project count, saved project events, and workspace-host readiness
 - `wrapper/web/dashboard/useReconcileHostedProjectTitleAfterSave.ts` - save-completion title reconciliation through `RivetWorkspaceHost.updateProjectMetadata`; do not mutate active project, opened snapshot, or dirty-state atoms from wrapper code
 - `wrapper/web/dashboard/hostedRivetProviders.ts` - explicit provider overrides passed into `RivetAppHost`
+- `wrapper/shared/llmProfileHealthHttpStore.ts` - authenticated runtime and Project Settings clients for durable LLM Profile health
+- `wrapper/executor/src/executor.mts` - wrapper executor entrypoint that injects the server-backed health store into Node-mode runs
 - `wrapper/web/overrides/state/savedGraphs.ts` - hosted preservation of editor-owned `projectContext__"<projectId>"` storage across tab close/reopen
 - `wrapper/web/dashboard/useOpenWorkflowProject.ts` - hosted path loading, duplicate-id checks, and open/replace-current or opening-tab completion calls through the captured `RivetWorkspaceHost`
 - `wrapper/web/io/HostedDatasetProvider.ts` - hosted dataset import wrapper that prunes stale per-project IndexedDB dataset rows before importing the current project payload
