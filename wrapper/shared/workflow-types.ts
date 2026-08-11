@@ -153,6 +153,8 @@ export type WorkflowProjectStats = {
 
 export type WorkflowProjectItem = {
   id: string;
+  /** Immutable Rivet project metadata id used by runtime-scoped services. */
+  projectMetadataId?: string;
   name: string;
   fileName: string;
   relativePath: string;

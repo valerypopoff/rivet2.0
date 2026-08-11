@@ -121,13 +121,13 @@ The editor bridge is not the same thing as the executor/debugger websocket trans
 
 Those execution websocket responsibilities are separate from the dashboard/editor `window.postMessage` bridge. The bridge moves open/save/delete/path-move intent between browsing contexts; the Rivet executor session talks to `/ws/executor*`.
 
-### Hosted LLM profile health providers
+### Hosted LLM profile suspension providers
 
-LLM Profile circuit-breaker state also does not travel over `window.postMessage`. `hostedRivetProviders` supplies an HTTP-backed `llmProfileHealthStore` for Browser-mode graph runs and an `llmProfileHealthAdmin` provider for Project Settings. Both call the authenticated `/api/workflows/llm-profile-health` API, so Browser runs share health with published endpoints, web-app actions, and other server replicas.
+LLM Profile suspension state also does not travel over `window.postMessage`. `hostedRivetProviders` supplies an HTTP-backed `llmProfileHealthStore` for Browser-mode graph runs. It intentionally does not inject `llmProfileHealthAdmin` into the embedded editor: the wrapper-owned Project Settings modal owns the **LLM reliability** tab and calls the authenticated `/api/workflows/llm-profile-health` API directly. Browser runs still share the same reliability history with published endpoints, web-app actions, and other server replicas.
 
 Node-mode editor runs reach the same state through `wrapper/executor/src/executor.mts`. That wrapper entrypoint starts upstream `executorHost.mts` with `createProcessorOptions`, injecting an HTTP-backed `llmProfileHealthStore` without forking the executor protocol. Compose points it at `http://api:80/api/workflows/llm-profile-health`; the Kubernetes backend sidecar uses the backend pod's loopback API. Both authenticate with the proxy token derived from `RIVET_KEY`.
 
-The health API owns the clock and rejects caller timestamp fields. Every hosted runtime request must carry a project id. Project Settings can list and reset only the active project's entries; even a single-key reset also carries that project id, and the HTTP surface exposes no unscoped list or reset operation. The runtime store exposes atomic begin/finish/renew operations; it is not a browser-local cache and does not fall back to local state when the server call fails.
+The reliability API owns the clock and rejects caller timestamp fields. Every hosted runtime request must carry a project id. The outer Project Settings modal loads the list only while its **LLM reliability** tab is open, refreshes every five seconds, and can list and clear only the active project's entries. Even a single-profile clear carries that project id, and the HTTP surface exposes no unscoped list or clear operation. The runtime store exposes atomic begin/finish/renew operations; it is not a browser-local cache and does not fall back to local state when the server call fails.
 
 ## Key files
 

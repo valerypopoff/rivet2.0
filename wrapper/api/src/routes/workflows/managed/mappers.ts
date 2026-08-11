@@ -103,6 +103,7 @@ export function mapWorkflowRowToProjectItem(
 
   return {
     id: row.workflow_id,
+    projectMetadataId: row.workflow_id,
     name: row.name,
     fileName: row.file_name,
     relativePath: row.relative_path,

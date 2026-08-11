@@ -16,7 +16,7 @@ const hostedDatasetProvider = new HostedDatasetProvider();
 const hostedLLMProfileHealthStore = createHttpRivetLLMProfileHealthStore({
   baseUrl: `${RIVET_API_BASE_URL}/workflows/llm-profile-health`,
 });
-const hostedLLMProfileHealthAdmin = createHttpLLMProfileHealthAdminProvider({
+export const hostedLLMProfileHealthAdmin = createHttpLLMProfileHealthAdminProvider({
   baseUrl: `${RIVET_API_BASE_URL}/workflows/llm-profile-health`,
 });
 
@@ -30,5 +30,4 @@ export const hostedRivetProviders = {
   environment: getDefaultEnvironmentProvider(),
   pathPolicy: getDefaultPathPolicyProvider(),
   llmProfileHealthStore: hostedLLMProfileHealthStore,
-  llmProfileHealthAdmin: hostedLLMProfileHealthAdmin,
 } satisfies ProviderOverrides;

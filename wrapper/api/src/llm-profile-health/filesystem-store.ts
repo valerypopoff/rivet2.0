@@ -19,6 +19,10 @@ import type { RivetStudioLLMProfileHealthStore } from './store.js';
 
 type StoredRow = { key: string; entryJson: string };
 
+export function getFilesystemLLMProfileHealthDatabasePath(): string {
+  return path.join(getAppDataRoot(), 'llm-profile-health.sqlite');
+}
+
 function requireProjectId(
   identity: RivetLLMProfileHealthBeginRequest['identity'],
 ): void {
@@ -40,7 +44,7 @@ export class FilesystemRivetLLMProfileHealthStore implements RivetStudioLLMProfi
   readonly #databasePath: string;
   #databasePromise: Promise<DatabaseSync> | null = null;
 
-  constructor(databasePath = path.join(getAppDataRoot(), 'llm-profile-health.sqlite')) {
+  constructor(databasePath = getFilesystemLLMProfileHealthDatabasePath()) {
     this.#databasePath = databasePath;
   }
 

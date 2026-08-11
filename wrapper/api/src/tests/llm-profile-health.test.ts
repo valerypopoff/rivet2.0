@@ -12,6 +12,7 @@ import type {
   RivetLLMProfileCircuitBreakerPolicy,
   RivetLLMProfileHealthIdentity,
 } from '@valerypopoff/rivet2-node';
+import { loadProjectFromFile } from '@valerypopoff/rivet2-node';
 
 import { createApiApp } from '../app.js';
 import { getExpectedProxyAuthToken } from '../auth.js';
@@ -31,6 +32,7 @@ import {
   disposeWorkflowStorage,
   getLLMProfileHealthStore,
 } from '../routes/workflows/storage-backend.js';
+import { resetWorkflowRecordingStorageForTests } from '../routes/workflows/recordings.js';
 
 const policy: RivetLLMProfileCircuitBreakerPolicy = {
   failureThreshold: 2,
@@ -621,10 +623,71 @@ test('authenticated health API scopes resets by exact project and rejects caller
   } finally {
     server.close();
     await once(server, 'close');
+    await resetWorkflowRecordingStorageForTests();
     await disposeWorkflowStorage();
     await fs.rm(tempRoot, { recursive: true, force: true });
     if (previousAppDataRoot == null) delete process.env.RIVET_APP_DATA_ROOT;
     else process.env.RIVET_APP_DATA_ROOT = previousAppDataRoot;
+    if (previousKey == null) delete process.env.RIVET_KEY;
+    else process.env.RIVET_KEY = previousKey;
+  }
+});
+
+test('filesystem project deletion removes durable LLM profile health before deleting project files', async () => {
+  const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'rivet-llm-health-project-delete-'));
+  const previousAppDataRoot = process.env.RIVET_APP_DATA_ROOT;
+  const previousWorkflowsRoot = process.env.RIVET_WORKFLOWS_ROOT;
+  const previousKey = process.env.RIVET_KEY;
+  process.env.RIVET_APP_DATA_ROOT = tempRoot;
+  process.env.RIVET_WORKFLOWS_ROOT = path.join(tempRoot, 'workflows');
+  process.env.RIVET_KEY = 'llm-health-project-delete-key';
+
+  const server = http.createServer(createApiApp('control'));
+  server.listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  const address = server.address();
+  assert.ok(address && typeof address !== 'string');
+  const workflowsUrl = `http://127.0.0.1:${address.port}/api/workflows`;
+  const headers = {
+    'content-type': 'application/json',
+    'x-rivet-proxy-auth': getExpectedProxyAuthToken(),
+  };
+
+  try {
+    const createResponse = await fetch(`${workflowsUrl}/projects`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ name: 'Health cleanup' }),
+    });
+    assert.equal(createResponse.status, 201);
+    const created = await createResponse.json() as {
+      project: { id: string; relativePath: string; absolutePath: string };
+    };
+    const project = await loadProjectFromFile(created.project.absolutePath);
+    const projectId = project.metadata.id!;
+    const projectIdentity = identity('deleted-project-profile', projectId);
+    const store = await getLLMProfileHealthStore();
+    await store.begin({ identity: projectIdentity, policy });
+    assert.equal((await store.list({ projectId })).length, 1);
+
+    const deleteResponse = await fetch(`${workflowsUrl}/projects`, {
+      method: 'DELETE',
+      headers,
+      body: JSON.stringify({ relativePath: created.project.relativePath }),
+    });
+    assert.equal(deleteResponse.status, 200);
+    assert.equal((await store.list({ projectId })).length, 0);
+    await assert.rejects(() => fs.access(created.project.absolutePath));
+  } finally {
+    server.close();
+    await once(server, 'close');
+    await resetWorkflowRecordingStorageForTests();
+    await disposeWorkflowStorage();
+    await fs.rm(tempRoot, { recursive: true, force: true });
+    if (previousAppDataRoot == null) delete process.env.RIVET_APP_DATA_ROOT;
+    else process.env.RIVET_APP_DATA_ROOT = previousAppDataRoot;
+    if (previousWorkflowsRoot == null) delete process.env.RIVET_WORKFLOWS_ROOT;
+    else process.env.RIVET_WORKFLOWS_ROOT = previousWorkflowsRoot;
     if (previousKey == null) delete process.env.RIVET_KEY;
     else process.env.RIVET_KEY = previousKey;
   }

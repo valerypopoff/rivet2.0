@@ -39,6 +39,26 @@ function normalizeString(value) {
   return typeof value === 'string' ? value.trim() : '';
 }
 
+function mergeNoProxyValues(value, additionalValue = process.env.RIVET_NODE_EXECUTOR_PROXY_BYPASS_HOSTS) {
+  const seen = new Set();
+  const entries = [];
+
+  for (const source of [value, additionalValue]) {
+    for (const entry of normalizeString(source).split(',')) {
+      const normalized = entry.trim();
+      const key = normalized.toLowerCase();
+      if (!normalized || seen.has(key)) {
+        continue;
+      }
+
+      seen.add(key);
+      entries.push(normalized);
+    }
+  }
+
+  return entries.join(',');
+}
+
 function hasProxyEnvValue() {
   return proxyEnvKeys.some((key) => Boolean(process.env[key]?.trim()));
 }
@@ -116,7 +136,10 @@ async function readNodeExecutorProxySettings(settingsPath = getNodeExecutorProxy
 export function applyNodeExecutorProxySettingsToEnv(settings) {
   const normalized = normalizeNodeExecutorProxySettings(settings);
   for (const [upperKey, lowerKey, fieldName] of settingsEnvPairs) {
-    applyProxySettingEnvPair(upperKey, lowerKey, normalized[fieldName]);
+    const value = fieldName === 'noProxy'
+      ? mergeNoProxyValues(normalized[fieldName])
+      : normalized[fieldName];
+    applyProxySettingEnvPair(upperKey, lowerKey, value);
   }
   applyProxySettingEnvPair('ALL_PROXY', 'all_proxy', '');
 }

@@ -4,7 +4,12 @@ import { loadProjectFromString } from '@valerypopoff/rivet2-node';
 import type { WorkflowProjectStats } from './types.js';
 import { getWorkflowProjectStatsPath } from './fs-helpers.js';
 
-const WORKFLOW_PROJECT_STATS_CACHE_SCHEMA_VERSION = 3;
+const WORKFLOW_PROJECT_STATS_CACHE_SCHEMA_VERSION = 4;
+
+export type WorkflowProjectIndexData = {
+  stats: WorkflowProjectStats;
+  projectMetadataId?: string;
+};
 
 type WorkflowProjectStatsCache = {
   schemaVersion: typeof WORKFLOW_PROJECT_STATS_CACHE_SCHEMA_VERSION;
@@ -12,6 +17,7 @@ type WorkflowProjectStatsCache = {
   fileMtimeMs: number;
   fileCtimeMs: number;
   stats: WorkflowProjectStats;
+  projectMetadataId: string | null;
 };
 
 function emptyWorkflowProjectStats(): WorkflowProjectStats {
@@ -61,6 +67,7 @@ function normalizeStatsCache(value: unknown): WorkflowProjectStatsCache | null {
     !Number.isFinite(raw.fileMtimeMs) ||
     typeof raw.fileCtimeMs !== 'number' ||
     !Number.isFinite(raw.fileCtimeMs) ||
+    !(raw.projectMetadataId === null || typeof raw.projectMetadataId === 'string') ||
     !stats
   ) {
     return null;
@@ -72,39 +79,68 @@ function normalizeStatsCache(value: unknown): WorkflowProjectStatsCache | null {
     fileMtimeMs: raw.fileMtimeMs,
     fileCtimeMs: raw.fileCtimeMs,
     stats,
+    projectMetadataId: raw.projectMetadataId,
   };
 }
 
-export function getWorkflowProjectStatsFromContents(contents: string): WorkflowProjectStats {
+export function getWorkflowProjectIndexDataFromContents(contents: string): WorkflowProjectIndexData {
   try {
     const project = loadProjectFromString(contents);
     const graphs = Object.values(project.graphs ?? {});
 
     return {
-      graphCount: graphs.length,
-      webAppCount: Object.keys(project.uiGraphs ?? {}).length,
-      totalNodeCount: graphs.reduce((count, graph) => {
-        const nodes = graph.nodes as unknown;
-        if (Array.isArray(nodes)) {
-          return count + nodes.length;
-        }
+      stats: {
+        graphCount: graphs.length,
+        webAppCount: Object.keys(project.uiGraphs ?? {}).length,
+        totalNodeCount: graphs.reduce((count, graph) => {
+          const nodes = graph.nodes as unknown;
+          if (Array.isArray(nodes)) {
+            return count + nodes.length;
+          }
 
-        if (nodes != null && typeof nodes === 'object') {
-          return count + Object.keys(nodes).length;
-        }
+          if (nodes != null && typeof nodes === 'object') {
+            return count + Object.keys(nodes).length;
+          }
 
-        return count;
-      }, 0),
+          return count;
+        }, 0),
+      },
+      ...(project.metadata.id ? { projectMetadataId: project.metadata.id } : {}),
     };
   } catch {
-    return emptyWorkflowProjectStats();
+    return { stats: emptyWorkflowProjectStats() };
   }
 }
 
-async function readWorkflowProjectStatsCache(
+export function getWorkflowProjectStatsFromContents(contents: string): WorkflowProjectStats {
+  return getWorkflowProjectIndexDataFromContents(contents).stats;
+}
+
+async function writeWorkflowProjectIndexCache(
+  filePath: string,
+  indexData: WorkflowProjectIndexData,
+  fileStats?: { size: number; mtimeMs: number; ctimeMs: number },
+): Promise<void> {
+  try {
+    const resolvedFileStats = fileStats ?? await fs.stat(filePath);
+    const cache: WorkflowProjectStatsCache = {
+      schemaVersion: WORKFLOW_PROJECT_STATS_CACHE_SCHEMA_VERSION,
+      fileSize: resolvedFileStats.size,
+      fileMtimeMs: resolvedFileStats.mtimeMs,
+      fileCtimeMs: resolvedFileStats.ctimeMs,
+      stats: indexData.stats,
+      projectMetadataId: indexData.projectMetadataId ?? null,
+    };
+
+    await fs.writeFile(getWorkflowProjectStatsPath(filePath), `${JSON.stringify(cache, null, 2)}\n`, 'utf8');
+  } catch {
+  }
+}
+
+async function readWorkflowProjectIndexCache(
   filePath: string,
   fileStats: { size: number; mtimeMs: number; ctimeMs: number },
-): Promise<WorkflowProjectStats | null> {
+): Promise<WorkflowProjectIndexData | null> {
   try {
     const cacheContents = await fs.readFile(getWorkflowProjectStatsPath(filePath), 'utf8');
     const cache = normalizeStatsCache(JSON.parse(cacheContents));
@@ -114,7 +150,10 @@ async function readWorkflowProjectStatsCache(
       cache.fileMtimeMs === fileStats.mtimeMs &&
       cache.fileCtimeMs === fileStats.ctimeMs
     ) {
-      return cache.stats;
+      return {
+        stats: cache.stats,
+        ...(cache.projectMetadataId ? { projectMetadataId: cache.projectMetadataId } : {}),
+      };
     }
   } catch {
   }
@@ -127,36 +166,28 @@ export async function writeWorkflowProjectStatsCacheFromContents(
   contents: string,
   fileStats?: { size: number; mtimeMs: number; ctimeMs: number },
 ): Promise<WorkflowProjectStats> {
-  const stats = getWorkflowProjectStatsFromContents(contents);
-
-  try {
-    const resolvedFileStats = fileStats ?? await fs.stat(filePath);
-    const cache: WorkflowProjectStatsCache = {
-      schemaVersion: WORKFLOW_PROJECT_STATS_CACHE_SCHEMA_VERSION,
-      fileSize: resolvedFileStats.size,
-      fileMtimeMs: resolvedFileStats.mtimeMs,
-      fileCtimeMs: resolvedFileStats.ctimeMs,
-      stats,
-    };
-
-    await fs.writeFile(getWorkflowProjectStatsPath(filePath), `${JSON.stringify(cache, null, 2)}\n`, 'utf8');
-  } catch {
-  }
-
-  return stats;
+  const indexData = getWorkflowProjectIndexDataFromContents(contents);
+  await writeWorkflowProjectIndexCache(filePath, indexData, fileStats);
+  return indexData.stats;
 }
 
-export async function getWorkflowProjectStatsFromFileCached(filePath: string): Promise<WorkflowProjectStats> {
+export async function getWorkflowProjectIndexDataFromFileCached(filePath: string): Promise<WorkflowProjectIndexData> {
   try {
     const fileStats = await fs.stat(filePath);
-    const cachedStats = await readWorkflowProjectStatsCache(filePath, fileStats);
-    if (cachedStats) {
-      return cachedStats;
+    const cachedIndexData = await readWorkflowProjectIndexCache(filePath, fileStats);
+    if (cachedIndexData) {
+      return cachedIndexData;
     }
 
     const contents = await fs.readFile(filePath, 'utf8');
-    return writeWorkflowProjectStatsCacheFromContents(filePath, contents, fileStats);
+    const indexData = getWorkflowProjectIndexDataFromContents(contents);
+    await writeWorkflowProjectIndexCache(filePath, indexData, fileStats);
+    return indexData;
   } catch {
-    return emptyWorkflowProjectStats();
+    return { stats: emptyWorkflowProjectStats() };
   }
+}
+
+export async function getWorkflowProjectStatsFromFileCached(filePath: string): Promise<WorkflowProjectStats> {
+  return (await getWorkflowProjectIndexDataFromFileCached(filePath)).stats;
 }

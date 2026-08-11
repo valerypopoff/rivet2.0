@@ -44,7 +44,7 @@ test('hosted editor shell mounts RivetAppHost with wrapper providers, executor U
   assert.match(hostedProviders, /createHttpRivetLLMProfileHealthStore/);
   assert.match(hostedProviders, /createHttpLLMProfileHealthAdminProvider/);
   assert.match(hostedProviders, /llmProfileHealthStore: hostedLLMProfileHealthStore/);
-  assert.match(hostedProviders, /llmProfileHealthAdmin: hostedLLMProfileHealthAdmin/);
+  assert.doesNotMatch(hostedProviders, /llmProfileHealthAdmin:/);
   assert.doesNotMatch(hostedProviders, /utils\/globals\/datasetProvider|utils\/globals\/ioProvider/);
   assert.match(editorMessageBridge, /workspaceHost: RivetWorkspaceHost/);
   assert.match(editorMessageBridge, /useOpenWorkflowProject\(workspaceHost\)/);

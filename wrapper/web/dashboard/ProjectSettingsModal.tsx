@@ -14,6 +14,7 @@ import type {
   WorkflowProjectStatus,
 } from './types';
 import { SegmentedControl, SegmentedControlButton } from './SegmentedControl';
+import { LLMProfileHealthSettings } from './LLMProfileHealthSettings';
 import { useProjectSettingsActions } from './useProjectSettingsActions';
 
 const renderWorkflowEndpointHelp = (
@@ -104,7 +105,7 @@ function normalizeAllowedEmailDraft(value: string): string[] {
   return emails;
 }
 
-type ProjectSettingsTab = 'workflow' | 'web-apps';
+type ProjectSettingsTab = 'workflow' | 'web-apps' | 'llm-health';
 
 type ProjectSettingsModalProps = {
   activeProject: WorkflowProjectItem;
@@ -208,6 +209,14 @@ export const ProjectSettingsModal: FC<ProjectSettingsModalProps> = ({
         onClick={() => setActiveTab('web-apps')}
       >
         Web apps
+      </SegmentedControlButton>
+      <SegmentedControlButton
+        selected={activeTab === 'llm-health'}
+        role="tab"
+        aria-selected={activeTab === 'llm-health'}
+        onClick={() => setActiveTab('llm-health')}
+      >
+        LLM reliability
       </SegmentedControlButton>
     </SegmentedControl>
   );
@@ -481,7 +490,9 @@ export const ProjectSettingsModal: FC<ProjectSettingsModalProps> = ({
               </div>
 
               <div className="project-settings-modal-content">
-                {activeTab === 'workflow' ? renderWorkflowSettings() : renderWebAppsSettings()}
+                {activeTab === 'workflow' ? renderWorkflowSettings() : null}
+                {activeTab === 'web-apps' ? renderWebAppsSettings() : null}
+                {activeTab === 'llm-health' ? <LLMProfileHealthSettings activeProject={activeProject} /> : null}
                 {renderDangerSection()}
               </div>
             </div>

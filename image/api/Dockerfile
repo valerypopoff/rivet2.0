@@ -44,6 +44,7 @@ RUN --mount=type=cache,target=/root/.npm npm ci
 
 WORKDIR /app
 COPY scripts/link-rivet-node-package.mjs scripts/link-rivet-node-package.mjs
+COPY scripts/lib/rivet-local-dependencies.mjs scripts/lib/rivet-local-dependencies.d.mts scripts/lib/
 COPY wrapper/api/ wrapper/api/
 COPY wrapper/shared/ wrapper/shared/
 

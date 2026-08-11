@@ -70,7 +70,7 @@ function requireMatchingProjectScope(
   const requestProjectId = identity.projectId == null ? undefined : String(identity.projectId);
   if (storedProjectId !== requestProjectId) {
     throw new Error(
-      `LLM Profile health key ${identity.key} belongs to a different project scope.`,
+      `LLM profile reliability key ${identity.key} belongs to a different project scope.`,
     );
   }
 }

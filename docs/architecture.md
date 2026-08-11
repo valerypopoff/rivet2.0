@@ -62,20 +62,41 @@ That control-plane singleton is intentional, not accidental. In the current supp
 
 The important operational detail is that these tiers scale independently. A new execution replica is only another execution-plane API pod; it does not automatically imply a matching proxy pod. In an endpoint-heavy deployment, `execution` is the primary scale target, `proxy` is the supporting ingress tier, `web` can remain fixed at `1`, and `backend` remains singleton by constraint rather than by capacity preference.
 
-### LLM profile health state
+### LLM profile suspension state
 
-LLM Profile circuit-breaker state is wrapper-owned operational state, not project content and not a Rivet Stored Value. The state has to coordinate concurrent endpoint, web-app, and hosted-editor runs, so it uses a dedicated atomic store:
+LLM Profile suspension state is wrapper-owned operational state, not project content and not a Rivet Stored Value. The state has to coordinate concurrent endpoint, web-app, and hosted-editor runs, so it uses a dedicated atomic store:
 
 - filesystem mode keeps `llm-profile-health.sqlite` under `RIVET_APP_DATA_ROOT`; this is appropriate for the supported single-host filesystem topology
-- managed mode keeps `llm_profile_health` rows in the shared Postgres database, so control-plane and execution replicas observe the same open and half-open circuits
-- each run receives the selected store through Rivet's `llmProfileHealthStore` processor option; published/latest workflow requests and HTTP/WebSocket web-app actions therefore share the same health history
+- managed mode keeps `llm_profile_health` rows in the shared Postgres database, so control-plane and execution replicas observe the same suspensions and recovery attempts
+- each run receives the selected store through Rivet's `llmProfileHealthStore` processor option; published/latest workflow requests and HTTP/WebSocket web-app actions therefore share the same reliability history
 - the hosted Browser executor uses the authenticated `/api/workflows/llm-profile-health` bridge, while the hosted Node executor uses the wrapper-specific executor entrypoint and the same bridge
+
+Reliability settings stored in an LLM Profile are authoring data. Upstream
+standalone Rivet deliberately leaves them inert; Rivet Studio Server activates
+them by supplying this store to every hosted execution surface. The outer
+Project Settings modal owns the operational **LLM reliability** tab. It polls only
+while open, shows only profiles the server currently reports as suspended, and can
+atomically delete one profile's complete reliability history or every profile's history
+for the project. The embedded Rivet editor receives the execution store but not
+the management provider. Workflow catalog entries carry the immutable Rivet
+project metadata id separately from the filesystem path or managed catalog id,
+so health lookup remains correctly scoped even when loading the full project
+for friendly graph and node labels fails. The dashboard loads the full project
+only when a suspended row needs those labels. Filesystem mode derives the id in
+the same cached parse used for graph/node statistics rather than reparsing every
+project for each tree request.
 
 The storage adapter is backend-owned and reused across runs. Filesystem mode opens one lazy SQLite connection per API process, while managed mode reuses the existing managed-workflow Postgres pool; neither path creates a database or pool for each graph or web-app action.
 
 The store, not the browser or executor client, owns timestamps; managed mode uses the Postgres clock so replicas cannot disagree because of pod clock skew. `begin`, `finish`, and permit `renew` are atomic; only one half-open probe may own a live lease, renewals never shorten that lease, and long closed-state attempts also refresh their permits. A successful half-open probe clears every permit admitted before the circuit opened, so a late result from the previous health generation cannot immediately poison the recovered route. Managed transitions and resets take the same project-scoped PostgreSQL advisory lock in addition to row locks, so an atomic project reset cannot race a just-started transition whose placeholder row has not acquired its project id yet. Project-wide reset is one backend operation, and a late completion after reset is a no-op rather than recreating deleted state. Project Settings administration lists and resets records by the exact persisted `identity.projectId`, never by a hash or key prefix; an existing key cannot be rebound to another project.
 
 Closed-state permits are retained while their provider candidates are in flight. Permits abandoned by a crashed executor are pruned after a conservative minimum of 24 hours (or a longer configured health-policy interval), so repeated process loss cannot grow a durable row forever; a completion carrying an expired permit is treated as stale.
+
+Deleting a project also deletes its health records. Filesystem mode performs
+the SQLite reset before removing project files. Managed mode deletes Postgres
+health rows inside the same transaction that deletes the workflow row. A reset
+or deletion invalidates retained permits, so a late completion from an already
+running request cannot recreate the removed record.
 
 ### Resumable web-app action transport
 

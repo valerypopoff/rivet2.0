@@ -12,13 +12,9 @@ import {
   requireProjectPath,
   resolveWorkflowRelativePath,
 } from './fs-helpers.js';
-import { getWorkflowProjectStatsFromFileCached } from './project-stats.js';
+import { getWorkflowProjectIndexDataFromFileCached } from './project-stats.js';
 import { getWorkflowProjectSettings } from './publication.js';
-import type { WorkflowFolderItem, WorkflowProjectItem, WorkflowProjectPathMove, WorkflowProjectStats } from './types.js';
-
-async function getWorkflowProjectStats(filePath: string): Promise<WorkflowProjectStats> {
-  return getWorkflowProjectStatsFromFileCached(filePath);
-}
+import type { WorkflowFolderItem, WorkflowProjectItem, WorkflowProjectPathMove } from './types.js';
 
 export async function listWorkflowFolders(root: string): Promise<WorkflowFolderItem[]> {
   const entries = await fs.readdir(root, { withFileTypes: true });
@@ -83,19 +79,18 @@ export async function getWorkflowProject(
     includeAggregatePublicationStatus: options.includeAggregatePublicationStatus,
     root,
   });
-  const projectStats = options.includeStats === false
-    ? undefined
-    : await getWorkflowProjectStats(filePath);
+  const projectIndexData = await getWorkflowProjectIndexDataFromFileCached(filePath);
 
   return {
     id: relativePath,
+    ...(projectIndexData.projectMetadataId ? { projectMetadataId: projectIndexData.projectMetadataId } : {}),
     name: projectName,
     fileName,
     relativePath,
     absolutePath: filePath,
     updatedAt: stats.mtime.toISOString(),
     settings,
-    ...(projectStats ? { stats: projectStats } : {}),
+    ...(options.includeStats === false ? {} : { stats: projectIndexData.stats }),
   };
 }
 

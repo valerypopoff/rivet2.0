@@ -494,18 +494,30 @@ Current request/response behavior for all execution routes:
 - successful object responses get `durationMs` injected unless already present
 - failures return JSON with `error.name`/`error.message` plus `durationMs`
 
-### Durable LLM Profile circuit breakers
+### Durable LLM profile suspension
 
-When an LLM Profile enables circuit-breaker health policy, every physical profile attempt consults the backend selected for the workflow deployment:
+When an LLM Profile configures automatic suspension, Rivet Studio Server
+activates that saved configuration by injecting its health store. Standalone
+Rivet intentionally does not enforce the policy. Every Studio Server profile
+attempt consults the backend selected for the workflow deployment:
 
 - filesystem mode uses the single-host SQLite health store under `RIVET_APP_DATA_ROOT`
 - managed mode uses shared Postgres state across control and execution replicas
 - published and latest workflow endpoints receive the store through their processor options
 - HTTP compatibility and resumable WebSocket web-app actions receive the same store; reconnecting a web-app action does not create a browser-local health island
 
-The state records only safe profile identity metadata, bounded failure timestamps, circuit state, and permit/lease data. The backend owns time and serializes same-key transitions. An open circuit skips that profile until its cooldown expires; after that, a single leased half-open probe is allowed. Candidate activity renews the owning permit without shortening an existing lease. A successful recovery probe invalidates all permits admitted before the circuit opened. Stale permits, including a request that finishes after an administrator resets the project, cannot mutate or recreate the record, and an existing key cannot be rebound to another project.
+The state records only safe profile identity metadata, bounded failure timestamps, suspension state, and permit/lease data. The backend owns time and serializes same-key transitions. A suspended profile is skipped until its suspension ends; after that, one leased recovery attempt is allowed. Candidate activity renews the owning permit without shortening an existing lease. A successful recovery attempt invalidates all permits admitted before the profile was suspended. Stale permits, including a request that finishes after an administrator clears the project history, cannot mutate or recreate the record, and an existing key cannot be rebound to another project. Internally, this uses standard circuit-breaker states and leases; those implementation names are intentionally not shown in the product UI.
 
 `GET /api/workflows/llm-profile-health?projectId=<id>` and `POST /api/workflows/llm-profile-health/reset` are trusted hosted-editor administration surfaces. Both require an exact project id. Reset accepts that project id alone for one atomic project-wide reset, or the project id plus one exact key; unscoped listing and key-only reset are rejected. Runtime `begin`, `finish`, and `renew` identities also require their project id. These routes use the normal wrapper proxy-auth contract and are not public workflow endpoints.
+
+The wrapper-owned Project Settings > LLM reliability tab shows only profiles
+that are currently suspended. Clearing history deletes the complete stored record,
+including failures, suspension, and recovery attempts; it does not alter the
+LLM profile suspension settings in the project. Its full-width reliability explanation
+is followed by Refresh and Clear-all actions, then a divider and the current
+suspension state. Project deletion performs the same project-wide cleanup
+before filesystem artifacts are removed or inside the managed workflow deletion
+transaction, respectively.
 
 ## Filesystem hot path
 

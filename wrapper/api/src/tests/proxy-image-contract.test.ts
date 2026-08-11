@@ -153,6 +153,16 @@ test('proxy templates forward hosted web apps to the API-owned auth layer', () =
   assert.match(proxyBootstrap, /proxy_set_header X-Forwarded-Proto \\\$rivet_forwarded_proto;/);
 });
 
+test('dev Compose exposes the host machine to both Node execution paths', () => {
+  const devCompose = readRepoFile('ops/compose/docker-compose.dev.yml');
+
+  assert.equal((devCompose.match(/host\.docker\.internal:host-gateway/g) ?? []).length, 2);
+  assert.equal(
+    (devCompose.match(/RIVET_NODE_EXECUTOR_PROXY_BYPASS_HOSTS=\$\{RIVET_NODE_EXECUTOR_PROXY_BYPASS_HOSTS:-\}/g) ?? []).length,
+    2,
+  );
+});
+
 test('compose fallback artifact mounts stay isolated under app data', () => {
   const prodCompose = readRepoFile('ops/compose/docker-compose.yml');
   const devCompose = readRepoFile('ops/compose/docker-compose.dev.yml');
@@ -276,6 +286,7 @@ test('API images and launchers use the filtered Rivet source context and symlink
     assert.match(dockerfile, /YARN_NODE_LINKER=node-modules yarn build:runtime/);
     assert.doesNotMatch(dockerfile, /yarn workspace @valerypopoff\/rivet2-(core|node) run build/);
     assert.match(dockerfile, /RUN node \/app\/scripts\/link-rivet-node-package\.mjs/);
+    assert.match(dockerfile, /COPY scripts\/lib\/rivet-local-dependencies\.mjs scripts\/lib\/rivet-local-dependencies\.d\.mts scripts\/lib\//);
   }
 
   for (const dockerfile of [
