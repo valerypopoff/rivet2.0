@@ -27,7 +27,8 @@ async function main() {
   envFileLabel = path.basename(envPath);
   if (hasEnvFile) {
     const relativeEnvPath = path.relative(rootDir, envPath) || envFileLabel;
-    composeBase = `docker compose --env-file "${relativeEnvPath}" -f ops/compose/docker-compose.managed-services.yml -f ops/compose/docker-compose.yml`;
+    mergedEnv.RIVET_RUNTIME_ENV_FILE = envPath;
+    composeBase = `docker compose --env-file "${relativeEnvPath}" -f ops/compose/docker-compose.managed-services.yml -f ops/compose/docker-compose.yml -f ops/compose/docker-compose.runtime-env.yml`;
   }
 
   assertNoRetiredEnv(mergedEnv, { launcherName: 'prod-docker', envFileLabel });

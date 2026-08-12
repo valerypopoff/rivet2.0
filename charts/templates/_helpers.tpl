@@ -76,7 +76,7 @@ app.kubernetes.io/component: {{ .component }}
 {{- printf "%s:%s" .image.repository $tag -}}
 {{- end -}}
 
-{{- define "rivet.vaultAnnotations" -}}
+{{- define "rivet.vaultBaseAnnotations" -}}
 {{- if .Values.vault.enabled -}}
 {{- if .Values.vault.secretPath }}
 vault.hashicorp.com/agent-inject: "true"
@@ -84,10 +84,6 @@ vault.hashicorp.com/agent-pre-populate-only: "true"
 vault.hashicorp.com/agent-inject-secret-{{ .Values.vault.dotenvFileName }}: {{ .Values.vault.secretPath | quote }}
 vault.hashicorp.com/secret-volume-path-{{ .Values.vault.dotenvFileName }}: "/vault"
 vault.hashicorp.com/agent-inject-file-{{ .Values.vault.dotenvFileName }}: {{ .Values.vault.dotenvFileName | quote }}
-{{- if .Values.vault.dotenvTemplate }}
-vault.hashicorp.com/agent-inject-template-{{ .Values.vault.dotenvFileName }}: |
-{{ .Values.vault.dotenvTemplate | nindent 2 }}
-{{- end }}
 {{- end }}
 {{- if .Values.vault.role }}
 vault.hashicorp.com/role: {{ .Values.vault.role | quote }}
@@ -106,4 +102,22 @@ vault.hashicorp.com/tls-skip-verify: "true"
 {{ $key }}: {{ tpl (printf "%v" $value) $ | quote }}
 {{- end }}
 {{- end -}}
+{{- end -}}
+
+{{- define "rivet.vaultAnnotations" -}}
+{{- include "rivet.vaultBaseAnnotations" . }}
+{{- if and .Values.vault.enabled .Values.vault.secretPath .Values.vault.dotenvTemplate }}
+vault.hashicorp.com/agent-inject-template-{{ .Values.vault.dotenvFileName }}: |
+{{ .Values.vault.dotenvTemplate | nindent 2 }}
+{{- end }}
+{{- end -}}
+
+{{- define "rivet.vaultProxyAnnotations" -}}
+{{- include "rivet.vaultBaseAnnotations" . }}
+{{- if and .Values.vault.enabled .Values.vault.secretPath }}
+vault.hashicorp.com/agent-inject-template-{{ .Values.vault.dotenvFileName }}: |
+  {{ printf "{{- with secret %q -}}" .Values.vault.secretPath }}
+  RIVET_KEY={{ "{{ .Data.data.RIVET_KEY | toJSON }}" }}
+  {{ "{{- end }}" }}
+{{- end }}
 {{- end -}}

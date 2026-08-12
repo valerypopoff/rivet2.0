@@ -258,6 +258,22 @@ test('executor image and compose contracts keep the websocket service independen
   }
 });
 
+test('Docker launchers attach the selected dotenv only to API and executor runtimes', () => {
+  const runtimeEnvCompose = readRepoFile('ops/compose/docker-compose.runtime-env.yml');
+  const devLauncher = readRepoFile('scripts/dev-docker.mjs');
+  const prodLauncher = readRepoFile('scripts/prod-docker.mjs');
+
+  assert.match(runtimeEnvCompose, /services:\s*\n\s*api:\s*\n\s*env_file:\s*\n\s*- "\$\{RIVET_RUNTIME_ENV_FILE\}"/);
+  assert.match(runtimeEnvCompose, /\n\s*executor:\s*\n\s*env_file:\s*\n\s*- "\$\{RIVET_RUNTIME_ENV_FILE\}"/);
+  assert.doesNotMatch(runtimeEnvCompose, /\n\s*(?:web|proxy):\s*\n/);
+
+  for (const launcher of [devLauncher, prodLauncher]) {
+    assert.match(launcher, /mergedEnv\.RIVET_RUNTIME_ENV_FILE = envPath/);
+    assert.match(launcher, /-f ops\/compose\/docker-compose\.runtime-env\.yml/);
+  }
+  assert.match(devLauncher, /config --no-interpolate --no-env-resolution --no-path-resolution/);
+});
+
 test('API images and launchers use the filtered Rivet source context and symlink-preserved runtime links', () => {
   const apiDockerfile = readRepoFile('image/api/Dockerfile');
   const apiEntrypoint = readRepoFile('image/api/entrypoint.sh');

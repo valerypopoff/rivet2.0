@@ -18,7 +18,7 @@ spec:
         {{- with .Values.podAnnotations.proxy }}
 {{ toYaml . | nindent 8 }}
         {{- end }}
-        {{- include "rivet.vaultAnnotations" . | nindent 8 }}
+        {{- include "rivet.vaultProxyAnnotations" . | nindent 8 }}
     spec:
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets:
@@ -76,10 +76,7 @@ spec:
                   name: {{ .Values.auth.keySecretName }}
                   key: {{ .Values.auth.keySecretKey }}
             {{- end }}
-            {{- range $key, $value := .Values.env }}
-            - name: {{ $key }}
-              value: {{ tpl (printf "%v" $value) $ | quote }}
-            {{- end }}
+{{ include "rivet.env.proxyValues" . | nindent 12 }}
           volumeMounts:
             - name: app-data
               mountPath: /data/rivet-app

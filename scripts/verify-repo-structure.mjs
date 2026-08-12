@@ -58,6 +58,7 @@ const expectedOpsEntries = {
   compose: [
     'docker-compose.dev.yml',
     'docker-compose.managed-services.yml',
+    'docker-compose.runtime-env.yml',
     'docker-compose.yml',
   ],
   docker: [

@@ -178,6 +178,22 @@ test('chart renders custom public route env defaults as bootstrap values', async
   assert.match(renderedChart, /name: RIVET_LATEST_APPS_BASE_PATH\s*\n\s*value: "\/custom-apps-latest"/);
 });
 
+test('chart forwards arbitrary runtime credentials without a provider-specific template list', async () => {
+  const renderedChart = await renderLocalKubernetesChartWithOverrides([
+    'env.BILLING_OPENAI_KEY=chart-test-secret',
+  ]);
+
+  assert.equal(
+    (renderedChart.match(/name: BILLING_OPENAI_KEY\s*\n\s*value: "chart-test-secret"/g) ?? []).length,
+    3,
+    'only the control API, execution API, and editor executor should receive arbitrary runtime credentials',
+  );
+  assert.match(readRepoFile('charts/templates/proxy-deployment.yaml'), /include "rivet\.env\.proxyValues"/);
+  assert.match(readRepoFile('charts/templates/proxy-deployment.yaml'), /include "rivet\.vaultProxyAnnotations"/);
+  assert.match(readRepoFile('charts/templates/_helpers.tpl'), /RIVET_KEY=\{\{ "\{\{ \.Data\.data\.RIVET_KEY \| toJSON \}\}" \}\}/);
+  assert.doesNotMatch(readRepoFile('charts/templates/_env.tpl'), /OPENAI_API_KEY|ANTHROPIC_API_KEY|GOOGLE_GENERATIVE_AI_API_KEY/);
+});
+
 test('chart validation rejects placeholder images and unsupported filesystem topology', async () => {
   await assertHelmTemplateFails(
     ['images.api.repository=example.invalid/api'],

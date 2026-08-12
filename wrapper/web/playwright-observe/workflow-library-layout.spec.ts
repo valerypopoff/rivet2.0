@@ -566,17 +566,24 @@ test.describe('Workflow library layout', () => {
     await expect(appSettingsActions).toHaveCount(1);
     await expect(appSettingsModal.getByLabel('Trusted hosts')).toHaveValue('internal.example.test');
     await appSettingsModal.getByLabel('Trusted hosts').fill('internal.example.test\nhealthcheck.example.test');
+    await appSettingsActions.getByRole('button', { name: 'Revert' }).click();
+    await expect(appSettingsModal.getByLabel('Trusted hosts')).toHaveValue('internal.example.test');
+    await appSettingsModal.getByLabel('Trusted hosts').fill('internal.example.test\nhealthcheck.example.test');
+    await appSettingsActions.getByRole('button', { name: 'Save' }).click();
+    await expect(appSettingsActions.locator('.project-settings-success')).toHaveText('Saved.');
+    await expect(appSettingsModal.getByLabel('Trusted hosts')).toHaveValue('internal.example.test\nhealthcheck.example.test');
+
+    await appSettingsModal.getByRole('tab', { name: 'Shell execution' }).click();
+    await expect(appSettingsModal.getByRole('tab', { name: 'Shell execution' })).toHaveAttribute('aria-selected', 'true');
+    await expect(appSettingsModal.getByText('They do not limit workflows, web apps, LLM calls, HTTP Call nodes, or endpoints.')).toBeVisible();
     await expect(appSettingsModal.getByLabel('Command timeout in seconds')).toHaveValue('30');
     await expect(appSettingsModal.getByLabel('Maximum captured output in MiB')).toHaveValue('10');
     await appSettingsModal.getByLabel('Command timeout in seconds').fill('45');
     await appSettingsActions.getByRole('button', { name: 'Revert' }).click();
-    await expect(appSettingsModal.getByLabel('Trusted hosts')).toHaveValue('internal.example.test');
     await expect(appSettingsModal.getByLabel('Command timeout in seconds')).toHaveValue('30');
-    await appSettingsModal.getByLabel('Trusted hosts').fill('internal.example.test\nhealthcheck.example.test');
     await appSettingsModal.getByLabel('Command timeout in seconds').fill('45');
     await appSettingsActions.getByRole('button', { name: 'Save' }).click();
     await expect(appSettingsActions.locator('.project-settings-success')).toHaveText('Saved.');
-    await expect(appSettingsModal.getByLabel('Trusted hosts')).toHaveValue('internal.example.test\nhealthcheck.example.test');
     await expect(appSettingsModal.getByLabel('Command timeout in seconds')).toHaveValue('45');
 
     await appSettingsModal.getByRole('tab', { name: 'Workflow endpoints' }).click();
@@ -774,7 +781,7 @@ test.describe('Workflow library layout', () => {
     await appSettingsActions.getByRole('button', { name: 'Save' }).click();
     await expect(appSettingsActions.locator('.project-settings-success')).toHaveText('Saved.');
 
-    await appSettingsModal.getByRole('tab', { name: 'General' }).click();
+    await appSettingsModal.getByRole('tab', { name: 'Shell execution' }).click();
     const maxOutputInput = appSettingsModal.getByLabel('Maximum captured output in MiB');
     await maxOutputInput.fill('11');
     await expect(maxOutputInput).toHaveValue('11');
@@ -793,8 +800,8 @@ test.describe('Workflow library layout', () => {
     await appSettingsActions.getByRole('button', { name: 'Save' }).click();
     await expect(appSettingsActions.locator('.project-settings-success')).toHaveText('Saved.');
 
-    await expect(appSettingsModal.getByRole('tab', { name: 'General' })).toBeVisible();
-    await appSettingsModal.getByRole('tab', { name: 'General' }).click();
+    await expect(appSettingsModal.getByRole('tab', { name: 'Shell execution' })).toBeVisible();
+    await appSettingsModal.getByRole('tab', { name: 'Shell execution' }).click();
     await expect(appSettingsModal.getByLabel('Maximum captured output in MiB')).toHaveValue('11');
     await expect(appSettingsActions.getByRole('button', { name: 'Save' })).toBeEnabled();
     await expect(appSettingsModal).toContainText('OAuth');

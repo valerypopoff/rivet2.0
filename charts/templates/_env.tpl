@@ -78,6 +78,16 @@
 {{- end }}
 {{- end -}}
 
+{{- define "rivet.env.proxyValues" -}}
+{{- $root := . -}}
+{{- range $key := list "RIVET_PUBLISHED_WORKFLOWS_BASE_PATH" "RIVET_LATEST_WORKFLOWS_BASE_PATH" "RIVET_PUBLISHED_APPS_BASE_PATH" "RIVET_LATEST_APPS_BASE_PATH" "RIVET_WEB_APPS_BASE_PATH" "RIVET_LATEST_WEB_APPS_BASE_PATH" "RIVET_PROXY_RESOLVER" "RIVET_TRUST_INCOMING_FORWARDED_HEADERS" }}
+{{- if hasKey $root.Values.env $key }}
+- name: {{ $key }}
+  value: {{ tpl (printf "%v" (index $root.Values.env $key)) $root | quote }}
+{{- end }}
+{{- end }}
+{{- end -}}
+
 {{- define "rivet.env.apiWorkload" -}}
 {{- $root := .root -}}
 {{- include "rivet.env.vaultDotenv" $root }}

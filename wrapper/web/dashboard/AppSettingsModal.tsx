@@ -8,6 +8,7 @@ import { NodeExecutorSettingsTab } from './app-settings/tabs/NodeExecutorSetting
 import { OAuthSettingsTab } from './app-settings/tabs/OAuthSettingsTab';
 import { RunRecordingsSettingsTab } from './app-settings/tabs/RunRecordingsSettingsTab';
 import { ServerUiAccessSettingsTab } from './app-settings/tabs/ServerUiAccessSettingsTab';
+import { ShellExecutionSettingsTab } from './app-settings/tabs/ShellExecutionSettingsTab';
 import { StorageSettingsTab } from './app-settings/tabs/StorageSettingsTab';
 import { WebAppsSettingsTab } from './app-settings/tabs/WebAppsSettingsTab';
 import { WorkflowEndpointsSettingsTab } from './app-settings/tabs/WorkflowEndpointsSettingsTab';
@@ -31,6 +32,7 @@ interface AppSettingsModalProps {
 
 const tabs: ReadonlyArray<{ id: AppSettingsTab; label: string }> = [
   { id: 'general', label: 'General' },
+  { id: 'shell-execution', label: 'Shell execution' },
   { id: 'server-ui-access', label: 'Server UI access' },
   { id: 'storage', label: 'Storage' },
   { id: 'workflow-endpoints', label: 'Workflow endpoints' },
@@ -66,7 +68,7 @@ function OpenAppSettingsModal({
   const [actionFeedback, setActionFeedback] = useState<TabActionFeedback>(null);
   const [savingTab, setSavingTab] = useState(false);
   const usesRuntimeLimits = (
-    activeTab === 'general' ||
+    activeTab === 'shell-execution' ||
     activeTab === 'workflow-endpoints' ||
     activeTab === 'web-apps' ||
     activeTab === 'docker'
@@ -83,8 +85,10 @@ function OpenAppSettingsModal({
   const webAppAuth = useWebAppAuthForm(isWebAppAuthSettingsTab(activeTab), onRouteConfigChange);
 
   const panel = activeTab === 'general'
-    ? <GeneralSettingsTab limits={limits} trustedHosts={trustedHosts} />
-    : activeTab === 'server-ui-access'
+    ? <GeneralSettingsTab trustedHosts={trustedHosts} />
+    : activeTab === 'shell-execution'
+      ? <ShellExecutionSettingsTab limits={limits} />
+      : activeTab === 'server-ui-access'
       ? <ServerUiAccessSettingsTab auth={webAppAuth} />
       : activeTab === 'storage'
         ? <StorageSettingsTab storage={storage} />
@@ -101,25 +105,24 @@ function OpenAppSettingsModal({
                   : <DockerSettingsTab limits={limits} />;
 
   const tabActions: TabSettingsAction[] = activeTab === 'general'
-    ? [
-        {
-          changed: trustedHosts.changed,
-          disabled: trustedHosts.controlsDisabled,
-          error: trustedHosts.error,
-          name: 'trusted hosts',
-          revert: trustedHosts.revert,
-          save: trustedHosts.save,
-        },
-        {
+    ? [{
+        changed: trustedHosts.changed,
+        disabled: trustedHosts.controlsDisabled,
+        error: trustedHosts.error,
+        name: 'trusted hosts',
+        revert: trustedHosts.revert,
+        save: trustedHosts.save,
+      }]
+    : activeTab === 'shell-execution'
+      ? [{
           changed: limits.changed.shell,
           disabled: limits.controlsDisabled,
           error: limits.status === 'shell' || limits.status === null ? limits.error : null,
           name: 'shell execution',
           revert: () => limits.revert('shell'),
           save: () => limits.save('shell'),
-        },
-      ]
-    : activeTab === 'server-ui-access'
+        }]
+      : activeTab === 'server-ui-access'
       ? [{
           changed: webAppAuth.changed.serverUiAccess,
           disabled: webAppAuth.controlsDisabled,

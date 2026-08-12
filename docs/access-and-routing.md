@@ -45,7 +45,7 @@ Current proxy timeout behavior:
 - `/api/*`, `${RIVET_PUBLISHED_WORKFLOWS_BASE_PATH}`, `${RIVET_PUBLISHED_APPS_BASE_PATH}`, `${RIVET_LATEST_WORKFLOWS_BASE_PATH}`, and `${RIVET_LATEST_APPS_BASE_PATH}` use the App Settings -> `Workflow endpoints` HTTP timeout, saved in seconds under `settings/runtime-limits.json` and defaulting to `180`; the proxy watches that file and rewrites a generated timeout include before reloading nginx
 - websocket routes stay long-lived at `86400s`; the workflow-endpoint timeout is only for the standard HTTP upstream routes
 - web-app action sockets use `Upgrade`/`Connection: upgrade`, disable proxy buffering, and stay on their route family: published actions reach execution and latest actions reach control
-- this proxy timeout is separate from App Settings -> `General` shell command limits, which only apply to hosted shell execution under `/api/shell/exec`
+- this proxy timeout is separate from App Settings -> `Shell execution` command limits, which only apply to hosted shell execution under `/api/shell/exec`
 
 Important local-Docker wiring note:
 

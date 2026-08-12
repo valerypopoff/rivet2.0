@@ -17,6 +17,7 @@ import type { HostedRouteConfig } from '../types';
 
 export type AppSettingsTab =
   | 'general'
+  | 'shell-execution'
   | 'storage'
   | 'node-executor-proxy'
   | 'run-recordings'
