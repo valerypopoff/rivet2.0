@@ -1,6 +1,6 @@
 import TextField from '@atlaskit/textfield';
 
-import { ModeButton, ModeGroup, SettingsActions } from '../SettingsControls';
+import { ModeButton, ModeGroup } from '../SettingsControls';
 import type { usePublicRoutesForm } from '../usePublicRoutesForm';
 import type { useRuntimeLimitsForm } from '../useRuntimeLimitsForm';
 import type { useWebAppAuthForm } from '../useWebAppAuthForm';
@@ -14,9 +14,6 @@ export function WebAppsSettingsTab({
   limits: ReturnType<typeof useRuntimeLimitsForm>;
   routes: ReturnType<typeof usePublicRoutesForm>;
 }) {
-  const routeStatus = routes.status === 'web-apps';
-  const authStatus = auth.status === 'web-apps';
-  const limitStatus = limits.status === 'web-app-request-size' || limits.status === null;
   const authHelp = auth.form.mode === 'oauth'
     ? 'Visitors sign in with the provider configured in the OAuth tab and are checked against each web app\'s allowed-email list.'
     : auth.form.mode === 'none'
@@ -53,16 +50,6 @@ export function WebAppsSettingsTab({
             <span className="app-settings-field-help">Latest saved draft web apps open from this top-level URL slug.</span>
           </label>
         </div>
-        <SettingsActions
-          changed={routes.changed.webApps}
-          disabled={routes.controlsDisabled}
-          error={routeStatus ? routes.error : null}
-          loading={routes.saving || routes.applying}
-          onRevert={() => routes.revert('web-apps')}
-          onSave={() => routes.save('web-apps')}
-          pending={routeStatus && routes.applying ? 'Applying routes...' : undefined}
-          saved={routeStatus && routes.saved}
-        />
       </section>
 
       <section className="app-settings-section" aria-label="Web app auth">
@@ -84,7 +71,6 @@ export function WebAppsSettingsTab({
             <span className="app-settings-field-help">{authHelp}</span>
           </div>
         </div>
-        <SettingsActions changed={auth.changed.mode} disabled={auth.controlsDisabled} error={authStatus ? auth.error : null} loading={auth.saving && authStatus} onRevert={() => auth.revert('web-apps')} onSave={() => auth.save('web-apps')} saved={authStatus && auth.saved} />
       </section>
 
       <section className="app-settings-section" aria-label="Web app button data">
@@ -101,16 +87,6 @@ export function WebAppsSettingsTab({
             <span className="app-settings-field-help">Large payloads are buffered in the API process. If another reverse proxy sits in front of Rivet, configure it to allow at least this size too.</span>
           </label>
         </div>
-        <SettingsActions
-          changed={limits.changed.webAppRequestSize}
-          disabled={limits.controlsDisabled}
-          error={limitStatus ? limits.error : null}
-          loading={limits.saving && limits.status === 'web-app-request-size'}
-          onRevert={() => limits.revert('web-app-request-size')}
-          onSave={() => limits.save('web-app-request-size')}
-          saved={limitStatus && limits.saved}
-          savedMessage="Saved. Nginx reloads shortly; restart the API to apply the new WebSocket message limit."
-        />
       </section>
     </div>
   );

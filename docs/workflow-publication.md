@@ -494,6 +494,33 @@ Current request/response behavior for all execution routes:
 - successful object responses get `durationMs` injected unless already present
 - failures return JSON with `error.name`/`error.message` plus `durationMs`
 
+### Durable LLM profile suspension
+
+When an LLM Profile configures automatic suspension, Rivet Studio Server
+activates that saved configuration by injecting its health store. Standalone
+Rivet intentionally does not enforce the policy. Every Studio Server profile
+attempt consults the backend selected for the workflow deployment:
+
+- filesystem mode uses the single-host SQLite health store under `RIVET_APP_DATA_ROOT`
+- managed mode uses shared Postgres state across control and execution replicas
+- published and latest workflow endpoints receive the store through their processor options
+- HTTP compatibility and resumable WebSocket web-app actions receive the same store; reconnecting a web-app action does not create a browser-local health island
+
+The state records only safe profile identity metadata, bounded failure timestamps, suspension state, and permit/lease data. The backend owns time and serializes same-key transitions. A suspended profile is skipped until its suspension ends; after that, one leased recovery attempt is allowed. Candidate activity renews the owning permit without shortening an existing lease. A successful recovery attempt invalidates all permits admitted before the profile was suspended. Stale permits, including a request that finishes after an administrator clears the project history, cannot mutate or recreate the record, and an existing key cannot be rebound to another project. Internally, this uses standard circuit-breaker states and leases; those implementation names are intentionally not shown in the product UI.
+
+`GET /api/workflows/llm-profile-health?projectId=<id>` and `POST /api/workflows/llm-profile-health/reset` are trusted hosted-editor administration surfaces. Both require an exact project id. Reset accepts that project id alone for one atomic project-wide reset, or the project id plus one exact key; unscoped listing and key-only reset are rejected. Runtime `begin`, `finish`, and `renew` identities also require their project id. These routes use the normal wrapper proxy-auth contract and are not public workflow endpoints.
+
+The wrapper-owned Project Settings > LLM profile suspension tab shows profiles that
+are currently suspended, awaiting their recovery attempt, or running that attempt.
+This keeps retained recovery state visible after a suspension expires instead of
+presenting the project as having no operational reliability state. Clearing history
+deletes the complete stored record, including failures, suspension, and recovery attempts; it does not alter the
+LLM profile suspension settings in the project. Its full-width reliability explanation
+is followed by Refresh and Clear-all actions, then a divider and the current
+suspension state. Project deletion performs the same project-wide cleanup
+before filesystem artifacts are removed or inside the managed workflow deletion
+transaction, respectively.
+
 ## Filesystem hot path
 
 In `filesystem` mode, the published/latest routes now keep a local derived warm path while staying compatibility-first:
@@ -723,7 +750,7 @@ The main recordings routes are:
 - `GET /api/workflows/recordings/:recordingId/replay-project`
 - `GET /api/workflows/recordings/:recordingId/replay-dataset`
 - `DELETE /api/workflows/recordings/:recordingId`
-- `GET /api/workflows/run-statistics/targets?surface=endpoint|web_app&from=<iso>&to=<iso>&runKind=published|latest|both`
+- `GET /api/workflows/run-statistics/targets?surface=endpoint|web_app`
 - `POST /api/workflows/run-statistics/query`
 
 `GET /api/workflows/recordings` still exists as a compatibility alias for the workflow-list response, but the dashboard uses `/recordings/workflows`.
@@ -732,7 +759,7 @@ The main recordings routes are:
 
 The dashboard exposes a `Run recordings` action next to `Runtime libraries`.
 
-It also exposes a separate `Run statistics` action. It uses indexed recording metadata only; it never reads or decompresses replay bundles just to calculate timings. The modal defaults to the last seven days of successful published runs and lets a developer switch among endpoint and web-app action targets, choose 24-hour/7-day/30-day/90-day/custom periods, include failed or warning (`suspicious`) runs, and select Published, Latest, or Both. It reports count, median, P95, average, fastest, and slowest processor execution time for the selected period only. A colored Run outcomes section always shows the succeeded, error, and warning counts and percentages for every matching run, even when errors or warnings are excluded from duration metrics. The chart uses hour/day/week/month buckets according to the selected span.
+It also exposes a separate `Run statistics` action. It uses indexed recording metadata only; it never reads or decompresses replay bundles just to calculate timings. Its target dropdown is the complete retained endpoint or web-app action catalog for the selected surface, independent of period, version, and outcome filters. The modal defaults to the last seven days of successful published runs and lets a developer switch among those targets, choose 24-hour/7-day/30-day/90-day/custom periods, include failed or warning (`suspicious`) runs, and select Published, Latest, or Both. When the selected target has no runs under those filters, it stays selected and the modal says so below the filters. It reports count, median, P95, average, fastest, and slowest processor execution time for the selected period only. A colored Run outcomes section always shows the succeeded, error, and warning counts and percentages for every matching run, even when errors or warnings are excluded from duration metrics. The chart uses hour/day/week/month buckets according to the selected span.
 
 New recording rows snapshot an execution identity before they are persisted: endpoint graph identity, or web-app UI graph/component identity and labels. This keeps web-app action statistics grouped by the stable UI graph and component IDs even after a project, app, or button is renamed. Older rows without that identity are shown as a `Legacy action` when their recorded endpoint path begins with `/`; other identity-less historical rows are treated as workflow endpoint runs. Malformed historical rows that identify themselves as web-app actions but lack either stable UI graph or component ID are also shown as a `Legacy action`, regardless of the old route shape. Statistics are therefore an observability view over retained historical data, not a claim about the project currently published at a matching slug.
 

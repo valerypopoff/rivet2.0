@@ -9,7 +9,6 @@ import type {
   WorkflowRecordingRunSummary,
   WorkflowRecordingWorkflowListResponse,
   WorkflowRunStatisticsCatalogResponse,
-  WorkflowRunStatisticsPeriod,
   WorkflowRunStatisticsQuery,
   WorkflowRunStatisticsResponse,
   WorkflowRunStatisticsSurface,
@@ -496,8 +495,6 @@ export function createManagedWorkflowRecordingService(options: ManagedWorkflowRe
 
     async listWorkflowRunStatisticsCatalog(
       surface: WorkflowRunStatisticsSurface,
-      period: WorkflowRunStatisticsPeriod,
-      runKind: WorkflowRunStatisticsQuery['runKind'] = 'both',
     ): Promise<WorkflowRunStatisticsCatalogResponse> {
       await deps.initialize();
       const rows = await deps.queryRows<RecordingRow>(
@@ -505,15 +502,13 @@ export function createManagedWorkflowRecordingService(options: ManagedWorkflowRe
         `
           SELECT ${deps.recordingColumns}
           FROM workflow_recordings
-          WHERE created_at >= $1::timestamptz AND created_at < $2::timestamptz
           ORDER BY created_at ASC, recording_id ASC
         `,
-        [period.from, period.to],
+        [],
       );
       return buildWorkflowRunStatisticsCatalog(
-        rows.map((row) => toStatisticsRow(row, deps.toIsoString)).filter((row) => runKind === 'both' || row.runKind === runKind),
+        rows.map((row) => toStatisticsRow(row, deps.toIsoString)),
         surface,
-        period,
       );
     },
 

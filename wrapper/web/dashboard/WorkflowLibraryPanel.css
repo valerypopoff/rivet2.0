@@ -114,8 +114,7 @@
 [data-testid='run-statistics-modal--blanket'],
 [data-testid='workflow-project-version-modal--blanket'],
 [data-testid='workflow-published-version-history-modal--blanket'],
-[data-testid='app-settings-modal--blanket'],
-[data-testid='about-modal--blanket'] {
+[data-testid='app-settings-modal--blanket'] {
   background: rgba(0, 0, 0, 0.56) !important;
   backdrop-filter: blur(2px);
 }
@@ -126,8 +125,7 @@
 [data-testid='run-statistics-modal'],
 [data-testid='workflow-project-version-modal'],
 [data-testid='workflow-published-version-history-modal'],
-[data-testid='app-settings-modal'],
-[data-testid='about-modal'] {
+[data-testid='app-settings-modal'] {
   background: #1f1f22 !important;
   border: 1px solid rgba(255, 255, 255, 0.08) !important;
   box-shadow: 0 20px 50px rgba(0, 0, 0, 0.38) !important;
@@ -144,8 +142,7 @@
 [data-testid='run-statistics-modal--header'],
 [data-testid='workflow-project-version-modal--header'],
 [data-testid='workflow-published-version-history-modal--header'],
-[data-testid='app-settings-modal--header'],
-[data-testid='about-modal--header'] {
+[data-testid='app-settings-modal--header'] {
   border-bottom: 1px solid rgba(255, 255, 255, 0.08);
 }
 
@@ -155,8 +152,7 @@
 [data-testid='run-statistics-modal--body'],
 [data-testid='workflow-project-version-modal--body'],
 [data-testid='workflow-published-version-history-modal--body'],
-[data-testid='app-settings-modal--body'],
-[data-testid='about-modal--body'] {
+[data-testid='app-settings-modal--body'] {
   padding: 0 !important;
 }
 

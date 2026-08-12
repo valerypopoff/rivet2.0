@@ -27,32 +27,18 @@ function projectTab(editorRoot: EditorRoot, name: string) {
   return editorRoot.getByText(name, { exact: true }).first();
 }
 
-test('hosted editor project tabs show only the project title', async ({ page }) => {
-  const projectId = 'tab-label-project';
-  const graphId = 'tab-label-graph';
-  const projectTitle = 'Tab Label Project';
-
-  await seedHostedEditorProject(page, {
-    graphId,
-    projectId,
-    projectPath: `/workflows/${projectTitle}.rivet-project`,
-    title: projectTitle,
-  });
-
-  await page.goto('/?editor', { waitUntil: 'domcontentloaded' });
-  await authenticateIfNeeded(page);
-
-  const editorRoot = await getEditorRoot(page);
-  const tab = projectTab(editorRoot, projectTitle);
-  await expect(tab).toBeVisible();
-  await expect(tab).not.toContainText('.rivet-project');
-});
-
-test('hosted editor project tab updates to the file-tree title after save', async ({ page }) => {
-  const projectId = 'save-title-project';
-  const graphId = 'save-title-graph';
-  const editorTitle = 'Editor Settings Name';
-  const fileTreeTitle = 'File Tree Name';
+async function verifyHostedSaveShortcut(
+  page: Page,
+  options: {
+    platform: 'MacIntel' | 'Win32';
+    shortcut: 'Control+S' | 'Meta+S';
+    suffix: string;
+  },
+) {
+  const projectId = `save-title-project-${options.suffix}`;
+  const graphId = `save-title-graph-${options.suffix}`;
+  const editorTitle = `Editor Settings Name ${options.suffix}`;
+  const fileTreeTitle = `File Tree Name ${options.suffix}`;
   const projectPath = `/workflows/${fileTreeTitle}.rivet-project`;
   let saveRequestCount = 0;
 
@@ -78,6 +64,13 @@ test('hosted editor project tab updates to the file-tree title after save', asyn
     title: editorTitle,
   });
 
+  await page.addInitScript((platform) => {
+    Object.defineProperty(Navigator.prototype, 'platform', {
+      configurable: true,
+      get: () => platform,
+    });
+  }, options.platform);
+
   await page.goto('/?editor', { waitUntil: 'domcontentloaded' });
   await authenticateIfNeeded(page);
 
@@ -88,9 +81,46 @@ test('hosted editor project tab updates to the file-tree title after save', asyn
   await expect(canvas).toBeVisible();
 
   await canvas.click();
-  await page.keyboard.press('Control+S');
+  await canvas.press(options.shortcut);
 
   await expect.poll(() => saveRequestCount).toBe(1);
   await expect(projectTab(editorRoot, fileTreeTitle)).toBeVisible();
   await expect(canvas).toBeVisible();
+}
+
+test('hosted editor project tabs show only the project title', async ({ page }) => {
+  const projectId = 'tab-label-project';
+  const graphId = 'tab-label-graph';
+  const projectTitle = 'Tab Label Project';
+
+  await seedHostedEditorProject(page, {
+    graphId,
+    projectId,
+    projectPath: `/workflows/${projectTitle}.rivet-project`,
+    title: projectTitle,
+  });
+
+  await page.goto('/?editor', { waitUntil: 'domcontentloaded' });
+  await authenticateIfNeeded(page);
+
+  const editorRoot = await getEditorRoot(page);
+  const tab = projectTab(editorRoot, projectTitle);
+  await expect(tab).toBeVisible();
+  await expect(tab).not.toContainText('.rivet-project');
+});
+
+test('hosted editor owns the Windows save shortcut', async ({ page }) => {
+  await verifyHostedSaveShortcut(page, {
+    platform: 'Win32',
+    shortcut: 'Control+S',
+    suffix: 'windows',
+  });
+});
+
+test('hosted editor owns the macOS save shortcut', async ({ page }) => {
+  await verifyHostedSaveShortcut(page, {
+    platform: 'MacIntel',
+    shortcut: 'Meta+S',
+    suffix: 'macos',
+  });
 });

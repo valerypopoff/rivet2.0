@@ -16,6 +16,7 @@ import { useEffect, useMemo, useState, type FC } from 'react';
 import type {
   WorkflowRunStatisticsStatusCounts,
   WorkflowRunStatisticsCatalogResponse,
+  WorkflowRunStatisticsAggregation,
   WorkflowRunStatisticsPeriod,
   WorkflowRunStatisticsResponse,
   WorkflowRunStatisticsSurface,
@@ -109,10 +110,8 @@ function hasValidPeriod(period: WorkflowRunStatisticsPeriod): boolean {
 
 function getCatalogQueryKey(
   surface: WorkflowRunStatisticsSurface,
-  period: WorkflowRunStatisticsPeriod,
-  runKind: RunKind,
 ): string {
-  return JSON.stringify([surface, period.from, period.to, runKind]);
+  return surface;
 }
 
 function getStatisticsQueryKey(
@@ -121,6 +120,7 @@ function getStatisticsQueryKey(
   runKind: RunKind,
   includeFailed: boolean,
   includeWarnings: boolean,
+  aggregation: WorkflowRunStatisticsAggregation,
 ): string {
   return JSON.stringify([
     getWorkflowRunStatisticsTargetKey(target),
@@ -129,6 +129,7 @@ function getStatisticsQueryKey(
     runKind,
     includeFailed,
     includeWarnings,
+    aggregation,
   ]);
 }
 
@@ -239,6 +240,7 @@ export const RunStatisticsModal: FC<RunStatisticsModalProps> = ({ isOpen, onClos
   const [periodPreset, setPeriodPreset] = useState<PeriodPreset>('7d');
   const [period, setPeriod] = useState<WorkflowRunStatisticsPeriod>(() => getPeriod('7d'));
   const [runKind, setRunKind] = useState<RunKind>('published');
+  const [aggregation, setAggregation] = useState<WorkflowRunStatisticsAggregation>('auto');
   const [includeFailed, setIncludeFailed] = useState(false);
   const [includeWarnings, setIncludeWarnings] = useState(false);
   const [catalog, setCatalog] = useState<WorkflowRunStatisticsCatalogResponse | null>(null);
@@ -252,8 +254,8 @@ export const RunStatisticsModal: FC<RunStatisticsModalProps> = ({ isOpen, onClos
   const [statisticsResultKey, setStatisticsResultKey] = useState<string | null>(null);
 
   const validPeriod = hasValidPeriod(period);
-  const catalogQueryKey = getCatalogQueryKey(surface, period, runKind);
-  const catalogReady = Boolean(catalog && !catalogLoading && validPeriod && catalogResultKey === catalogQueryKey);
+  const catalogQueryKey = getCatalogQueryKey(surface);
+  const catalogReady = Boolean(catalog && !catalogLoading && catalogResultKey === catalogQueryKey);
   const selectedTarget = useMemo(
     () => (
       catalogReady
@@ -263,7 +265,7 @@ export const RunStatisticsModal: FC<RunStatisticsModalProps> = ({ isOpen, onClos
     [catalog, catalogReady, selectedTargetKey],
   );
   const statisticsQueryKey = selectedTarget
-    ? getStatisticsQueryKey(selectedTarget.target, period, runKind, includeFailed, includeWarnings)
+    ? getStatisticsQueryKey(selectedTarget.target, period, runKind, includeFailed, includeWarnings, aggregation)
     : null;
   const statisticsReady = Boolean(
     statistics &&
@@ -273,12 +275,12 @@ export const RunStatisticsModal: FC<RunStatisticsModalProps> = ({ isOpen, onClos
   );
 
   useEffect(() => {
-    if (!isOpen || !validPeriod) return;
+    if (!isOpen) return;
     const controller = new AbortController();
     const requestKey = catalogQueryKey;
     setCatalogLoading(true);
     setCatalogError(null);
-    void fetchWorkflowRunStatisticsCatalog(surface, period, runKind, { signal: controller.signal })
+    void fetchWorkflowRunStatisticsCatalog(surface, { signal: controller.signal })
       .then((nextCatalog) => {
         if (controller.signal.aborted) return;
         setCatalog(nextCatalog);
@@ -300,7 +302,7 @@ export const RunStatisticsModal: FC<RunStatisticsModalProps> = ({ isOpen, onClos
         if (!controller.signal.aborted) setCatalogLoading(false);
       });
     return () => controller.abort();
-  }, [catalogQueryKey, isOpen, period, runKind, surface, validPeriod]);
+  }, [catalogQueryKey, isOpen, surface]);
 
   useEffect(() => {
     if (!isOpen || !selectedTarget || !validPeriod) {
@@ -318,6 +320,7 @@ export const RunStatisticsModal: FC<RunStatisticsModalProps> = ({ isOpen, onClos
       runKind,
       includeFailed,
       includeWarnings,
+      aggregation,
     }, { signal: controller.signal })
       .then((nextStatistics) => {
         if (controller.signal.aborted) return;
@@ -370,7 +373,7 @@ export const RunStatisticsModal: FC<RunStatisticsModalProps> = ({ isOpen, onClos
               <div className="run-statistics-target-control">
                 <div className="run-recordings-field-label">{surface === 'endpoint' ? 'Workflow endpoint' : 'Web app action'}</div>
                 {catalogLoading ? <div className="run-statistics-empty-state">Loading available runs...</div> : null}
-                {catalogReady && catalog?.targets.length === 0 ? <div className="run-statistics-empty-state">No recorded runs in this period.</div> : null}
+                {catalogReady && catalog?.targets.length === 0 ? <div className="run-statistics-empty-state">No retained recorded runs.</div> : null}
                 {catalogReady && catalog ? (
                   <StatisticsTargetSelect surface={surface} targets={catalog.targets} selectedTargetKey={selectedTargetKey} onSelect={setSelectedTargetKey} />
                 ) : null}
@@ -406,6 +409,14 @@ export const RunStatisticsModal: FC<RunStatisticsModalProps> = ({ isOpen, onClos
                     ))}
                   </SegmentedControl>
                 </div>
+                <div className="run-statistics-control-group">
+                  <div className="run-recordings-field-label">Chart grouping</div>
+                  <SegmentedControl label="Chart grouping">
+                    <SegmentedControlButton selected={aggregation === 'auto'} onClick={() => setAggregation('auto')}>Auto</SegmentedControlButton>
+                    <SegmentedControlButton selected={aggregation === 'day'} onClick={() => setAggregation('day')}>By day</SegmentedControlButton>
+                    <SegmentedControlButton selected={aggregation === 'week'} onClick={() => setAggregation('week')}>By week</SegmentedControlButton>
+                  </SegmentedControl>
+                </div>
               </div>
 
               {periodPreset === 'custom' ? (
@@ -422,6 +433,9 @@ export const RunStatisticsModal: FC<RunStatisticsModalProps> = ({ isOpen, onClos
               ) : null}
 
               {!validPeriod ? <div className="project-settings-error">The period end must be after its start.</div> : null}
+              {statisticsReady && currentStatusTotal === 0 ? (
+                <div className="run-statistics-empty-state">No runs for this target match the selected period and version.</div>
+              ) : null}
               <section className="run-statistics-details" aria-live="polite">
                 {catalogReady && !selectedTarget ? <div className="run-statistics-empty-state">Choose a target with recorded runs.</div> : null}
                 {selectedTarget ? (
@@ -432,7 +446,7 @@ export const RunStatisticsModal: FC<RunStatisticsModalProps> = ({ isOpen, onClos
                     </div>
                     {statisticsError && statisticsResultKey === statisticsQueryKey ? <div className="project-settings-error">{statisticsError}</div> : null}
                     {statisticsLoading ? <div className="run-statistics-empty-state">Calculating statistics...</div> : null}
-                    {statisticsReady ? (
+                    {statisticsReady && currentStatusTotal > 0 ? (
                       <>
                           <div className="run-statistics-outcomes" role="region" aria-label="Run outcomes">
                             <div>

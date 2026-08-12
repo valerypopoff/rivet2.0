@@ -118,6 +118,17 @@ test('managed schema persists resumable web app action runs separately from reco
   assert.ok(MANAGED_WORKFLOW_SCHEMA_SQL.includes('ON DELETE CASCADE'));
 });
 
+test('managed schema persists shared LLM Profile health with project-scoped administration', () => {
+  assert.ok(MANAGED_WORKFLOW_SCHEMA_SQL.includes('CREATE TABLE IF NOT EXISTS llm_profile_health'));
+  assert.ok(MANAGED_WORKFLOW_SCHEMA_SQL.includes('key TEXT PRIMARY KEY'));
+  assert.ok(MANAGED_WORKFLOW_SCHEMA_SQL.includes('project_id TEXT NULL'));
+  assert.ok(MANAGED_WORKFLOW_SCHEMA_SQL.includes('entry_json JSONB NULL'));
+  assert.ok(MANAGED_WORKFLOW_SCHEMA_SQL.includes('ALTER TABLE llm_profile_health'));
+  assert.ok(MANAGED_WORKFLOW_SCHEMA_SQL.includes('ADD COLUMN IF NOT EXISTS project_id TEXT NULL'));
+  assert.ok(MANAGED_WORKFLOW_SCHEMA_SQL.includes('llm_profile_health_project_id_idx'));
+  assert.ok(MANAGED_WORKFLOW_SCHEMA_SQL.includes('llm_profile_health_updated_at_idx'));
+});
+
 test('managed recording schema supports endpoint-scoped retention scans', () => {
   assert.ok(MANAGED_WORKFLOW_SCHEMA_SQL.includes('workflow_recordings_endpoint_created_at_idx'));
   assert.ok(MANAGED_WORKFLOW_SCHEMA_SQL.includes('ON workflow_recordings(workflow_id,'));

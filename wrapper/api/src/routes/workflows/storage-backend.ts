@@ -23,7 +23,6 @@ import type {
   WorkflowRecordingRunsPageResponse,
   WorkflowRecordingWorkflowListResponse,
   WorkflowRunStatisticsCatalogResponse,
-  WorkflowRunStatisticsPeriod,
   WorkflowRunStatisticsQuery,
   WorkflowRunStatisticsResponse,
   WorkflowRunStatisticsSurface,
@@ -80,10 +79,15 @@ import {
 } from './recordings.js';
 import { createPublishedWorkflowProjectReferenceLoader, findPublishedWorkflowWebAppBySlug } from './publication.js';
 import { NodeDatasetProvider } from '@valerypopoff/rivet2-node';
-import type { AttachedData, Project, CombinedDataset } from '@valerypopoff/rivet2-node';
+import type { AttachedData, CombinedDataset, Project, ProjectId } from '@valerypopoff/rivet2-node';
 import { getFilesystemExecutionCache } from './filesystem-execution-cache.js';
 import { normalizeHostedProjectTitle } from './hosted-project-contents.js';
 import { writeWorkflowProjectStatsCacheFromContents } from './project-stats.js';
+import {
+  FilesystemRivetLLMProfileHealthStore,
+  getFilesystemLLMProfileHealthDatabasePath,
+} from '../../llm-profile-health/filesystem-store.js';
+import type { RivetStudioLLMProfileHealthStore } from '../../llm-profile-health/store.js';
 
 function mapHostedProjectFilesystemError(
   error: unknown,
@@ -134,6 +138,29 @@ type ExecutionProjectResult = {
 };
 
 let managedBackendPromise: Promise<ManagedWorkflowBackend> | null = null;
+let filesystemLLMProfileHealthStore: FilesystemRivetLLMProfileHealthStore | null = null;
+
+function getFilesystemLLMProfileHealthStore(): FilesystemRivetLLMProfileHealthStore {
+  filesystemLLMProfileHealthStore ??= new FilesystemRivetLLMProfileHealthStore();
+  return filesystemLLMProfileHealthStore;
+}
+
+async function resetFilesystemLLMProfileHealthForProject(projectId: ProjectId): Promise<void> {
+  const existingStore = filesystemLLMProfileHealthStore;
+  if (existingStore != null) {
+    await existingStore.reset({ projectId });
+    return;
+  }
+
+  if (!await pathExists(getFilesystemLLMProfileHealthDatabasePath())) {
+    // Avoid creating an empty health database just because a project is deleted.
+    // Recheck the singleton after the asynchronous filesystem lookup in case an
+    // execution initialized it while the lookup was in progress.
+    if (filesystemLLMProfileHealthStore == null) return;
+  }
+
+  await getFilesystemLLMProfileHealthStore().reset({ projectId });
+}
 
 async function getManagedBackend(): Promise<ManagedWorkflowBackend> {
   if (!managedBackendPromise) {
@@ -461,14 +488,19 @@ export async function listWorkflowRecordingRunsPageWithBackend(
   );
 }
 
+export async function getLLMProfileHealthStore(): Promise<RivetStudioLLMProfileHealthStore> {
+  return delegate<RivetStudioLLMProfileHealthStore>(
+    async (backend) => backend.getLLMProfileHealthStore(),
+    async () => getFilesystemLLMProfileHealthStore(),
+  );
+}
+
 export async function listWorkflowRunStatisticsCatalogWithBackend(
   surface: WorkflowRunStatisticsSurface,
-  period: WorkflowRunStatisticsPeriod,
-  runKind?: WorkflowRunStatisticsQuery['runKind'],
 ): Promise<WorkflowRunStatisticsCatalogResponse> {
   return delegateWithWorkflowsRoot(
-    async (backend) => backend.listWorkflowRunStatisticsCatalog(surface, period, runKind),
-    async (root) => listWorkflowRunStatisticsCatalog(root, surface, period, runKind),
+    async (backend) => backend.listWorkflowRunStatisticsCatalog(surface),
+    async (root) => listWorkflowRunStatisticsCatalog(root, surface),
   );
 }
 
@@ -484,12 +516,12 @@ export async function getWorkflowRunStatisticsWithBackend(
 export async function disposeWorkflowStorage(): Promise<void> {
   const backendPromise = managedBackendPromise;
   managedBackendPromise = null;
-  if (!backendPromise) {
-    return;
-  }
-
-  const backend = await backendPromise;
-  await backend.dispose();
+  const filesystemStore = filesystemLLMProfileHealthStore;
+  filesystemLLMProfileHealthStore = null;
+  await Promise.all([
+    backendPromise?.then((backend) => backend.dispose()),
+    filesystemStore?.dispose(),
+  ]);
 }
 
 export async function readWorkflowRecordingArtifactWithBackend(recordingId: string, artifact: 'recording' | 'replay-project' | 'replay-dataset'): Promise<string> {
@@ -751,7 +783,13 @@ export async function deleteWorkflowProjectItemWithBackend(relativePath: unknown
         allowProjectFile: true,
       }));
 
-      const projectId = await deleteWorkflowProjectItem(relativePath);
+      const projectId = await deleteWorkflowProjectItem(relativePath, {
+        beforeDelete: async (projectMetadataId) => {
+          if (projectMetadataId != null) {
+            await resetFilesystemLLMProfileHealthForProject(projectMetadataId as ProjectId);
+          }
+        },
+      });
       markFilesystemExecutionStructureDirty([resolvedPath]);
       return projectId;
     },

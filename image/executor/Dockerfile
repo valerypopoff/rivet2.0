@@ -35,6 +35,8 @@ WORKDIR /app/rivet
 RUN YARN_NODE_LINKER=node-modules yarn build:runtime
 
 COPY wrapper/executor/build/bundle-executor.cjs /app/wrapper/executor/build/bundle-executor.cjs
+COPY wrapper/executor/src/ /app/wrapper/executor/src/
+COPY wrapper/shared/llmProfileHealthHttpStore.ts /app/wrapper/shared/llmProfileHealthHttpStore.ts
 RUN NODE_PATH=/app/rivet/node_modules node /app/wrapper/executor/build/bundle-executor.cjs
 
 FROM node:20-alpine

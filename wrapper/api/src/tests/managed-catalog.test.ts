@@ -52,12 +52,18 @@ function createWebAppPublicationRow(
   };
 }
 
-function createCatalogForDeleteGuard(workflowRow: WorkflowRow, webAppRows: unknown[] = []) {
+function createCatalogForDeleteGuard(
+  workflowRow: WorkflowRow,
+  webAppRows: unknown[] = [],
+  options: { allowDeletion?: boolean; executedQueries?: string[] } = {},
+) {
   const client = {
     query: async (sql: string, params: unknown[] = []) => {
-      assert.match(sql, /FROM workflow_web_apps/);
+      options.executedQueries?.push(sql);
       assert.deepEqual(params, [workflowRow.workflow_id]);
-      return { rows: webAppRows };
+      if (/FROM workflow_web_apps/.test(sql)) return { rows: webAppRows };
+      if (options.allowDeletion) return { rows: [], rowCount: 1 };
+      throw new Error('Unexpected query after delete guard');
     },
   };
   const hooks = {
@@ -74,9 +80,7 @@ function createCatalogForDeleteGuard(workflowRow: WorkflowRow, webAppRows: unkno
       ) => run(client, hooks),
       db: {
         queryOne: async () => null,
-        queryRows: async () => {
-          throw new Error('Unexpected queryRows after delete guard');
-        },
+        queryRows: async () => options.allowDeletion ? [] : Promise.reject(new Error('Unexpected queryRows after delete guard')),
         isUniqueViolation: () => false,
         withManagedDbRetry: async <T,>(_scope: string, run: () => Promise<T>) => run(),
         getManagedDbConnectionConfig: () => ({}),
@@ -189,6 +193,7 @@ test('managed workflow tree includes graph and node stats from current draft rev
   const tree = await catalog.getTree();
 
   assert.equal(tree.projects.length, 1);
+  assert.equal(tree.projects[0]?.projectMetadataId, workflowRow.workflow_id);
   assert.equal(tree.projects[0]?.stats?.graphCount, 1);
   assert.equal(tree.projects[0]?.stats?.totalNodeCount, 2);
   assert.equal(tree.projects[0]?.stats?.webAppCount, 1);
@@ -330,6 +335,22 @@ test('managed workflow deletion is blocked by every active publication marker', 
       name,
     );
   }
+});
+
+test('managed workflow deletion removes project health in the same transaction before the workflow row', async () => {
+  const workflowRow = createWorkflowRow();
+  const executedQueries: string[] = [];
+
+  const deletedProjectId = await createCatalogForDeleteGuard(workflowRow, [], {
+    allowDeletion: true,
+    executedQueries,
+  }).deleteWorkflowProjectItem(workflowRow.relative_path);
+
+  assert.equal(deletedProjectId, workflowRow.workflow_id);
+  const healthDeleteIndex = executedQueries.findIndex((sql) => /DELETE FROM llm_profile_health/.test(sql));
+  const workflowDeleteIndex = executedQueries.findIndex((sql) => /DELETE FROM workflows/.test(sql));
+  assert.ok(healthDeleteIndex >= 0);
+  assert.ok(workflowDeleteIndex > healthDeleteIndex);
 });
 
 test('managed workflow tree backfills legacy revision stats when metadata is missing', async () => {

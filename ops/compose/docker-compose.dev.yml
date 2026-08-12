@@ -112,6 +112,8 @@ services:
     working_dir: /app
     ports:
       - "${RIVET_LOCAL_BIND_HOST:-127.0.0.1}:${RIVET_API_PORT:-3100}:80"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     environment:
       - HTTP_PROXY=${HTTP_PROXY:-}
       - HTTPS_PROXY=${HTTPS_PROXY:-}
@@ -140,6 +142,7 @@ services:
       - RIVET_WEB_APPS_BASE_PATH=${RIVET_WEB_APPS_BASE_PATH:-/apps}
       - RIVET_LATEST_WEB_APPS_BASE_PATH=${RIVET_LATEST_WEB_APPS_BASE_PATH:-/apps-latest}
       - RIVET_RUNTIME_LIBRARIES_SYNC_POLL_INTERVAL_MS
+      - RIVET_NODE_EXECUTOR_PROXY_BYPASS_HOSTS=${RIVET_NODE_EXECUTOR_PROXY_BYPASS_HOSTS:-}
       - CHOKIDAR_USEPOLLING=true
       - CHOKIDAR_INTERVAL=300
       - RIVET_CORS_ALLOWED_ORIGINS=${RIVET_CORS_ALLOWED_ORIGINS:-}
@@ -237,9 +240,14 @@ services:
       - RIVET_APP_DATA_ROOT=/home/rivet/.local/share/com.valerypopoff.rivet2
       - RIVET_RUNTIME_LIBRARIES_ROOT=/data/runtime-libraries
       - RIVET_RUNTIME_PROCESS_ROLE=executor
+      - RIVET_KEY=${RIVET_KEY:-}
+      - RIVET_LLM_PROFILE_HEALTH_API_URL=http://api:80/api/workflows/llm-profile-health
       - PINECONE_API_KEY=${PINECONE_API_KEY:-}
       - RIVET_RUNTIME_LIBRARIES_SYNC_POLL_INTERVAL_MS
       - RIVET_NODE_EXECUTOR_PROXY_SETTINGS_POLL_INTERVAL_MS
+      - RIVET_NODE_EXECUTOR_PROXY_BYPASS_HOSTS=${RIVET_NODE_EXECUTOR_PROXY_BYPASS_HOSTS:-}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
       - npm_cache:/home/rivet/.npm
       - yarn_cache:/home/rivet/.cache/yarn

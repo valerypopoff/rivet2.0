@@ -340,6 +340,12 @@ Use this chart's existing `autoscaling.proxy`, `autoscaling.execution`, `resourc
 
 ### Persistence and storage
 
+LLM Profile circuit-breaker health is part of managed operational state. Every backend and execution replica uses the shared `llm_profile_health` Postgres table; do not replace it with pod-local memory, a browser snapshot, or SQLite in a multi-replica cluster. The table stores the exact project id for efficient project-scoped listing and atomic reset, plus the serialized state used by row-locked begin/finish/renew transitions. Transitions and reset operations also share a project-scoped PostgreSQL advisory lock, which closes the new-row race between a project reset and a transition whose placeholder has not stored its project id yet.
+
+The backend's hosted executor sidecar calls the loopback `/api/workflows/llm-profile-health` route and authenticates with the existing `RIVET_KEY`-derived proxy token. Published and latest endpoint runs plus HTTP/WebSocket web-app actions are injected directly with the managed store. No additional public Service or Ingress route is required for executor coordination.
+
+Half-open ownership is a renewable lease. Postgres time is authoritative across replicas; renewals are monotonic, a successful probe invalidates permits from the pre-open health generation, and a stale finish after a project reset is a no-op. These guarantees depend on all replicas using the same Postgres database and applying the managed schema before serving traffic.
+
 In Kubernetes, production should stay on managed storage:
 
 - `workflowStorage.backend=managed`

@@ -46,7 +46,6 @@ export function useEditorCommandBridge({
   preview,
   projects,
   recording,
-  saveCurrentProject,
   workspaceHost,
 }: {
   currentProject: Project;
@@ -55,7 +54,6 @@ export function useEditorCommandBridge({
   preview: ReturnType<typeof usePreviewProjectLifecycle>;
   projects: OpenedProjectsInfo;
   recording: ReturnType<typeof useWorkflowRecordingBridge>;
-  saveCurrentProject: () => Promise<void>;
   workspaceHost: RivetWorkspaceHost;
 }) {
   const setLoadedProject = useSetAtom(loadedProjectState);
@@ -66,7 +64,6 @@ export function useEditorCommandBridge({
   const currentProjectRef = useRef(currentProject);
   const workspaceRef = useRef(workspaceHost);
   const openProjectRef = useRef(openProject);
-  const saveCurrentProjectRef = useRef(saveCurrentProject);
   const serializedCommandQueueRef = useRef<Promise<void>>(Promise.resolve());
   const openedProjectPathAliasesRef = useRef(new Map<string, ProjectId>());
 
@@ -75,7 +72,6 @@ export function useEditorCommandBridge({
   currentProjectRef.current = currentProject;
   workspaceRef.current = workspaceHost;
   openProjectRef.current = openProject;
-  saveCurrentProjectRef.current = saveCurrentProject;
 
   useEffect(() => {
     const context: EditorCommandBridgeContext = {
@@ -136,9 +132,14 @@ export function useEditorCommandBridge({
       }
 
       switch (event.data.type) {
-        case 'save-project':
-          await saveCurrentProjectRef.current();
+        case 'save-project': {
+          try {
+            await workspaceRef.current.saveCurrentProject();
+          } catch (error) {
+            console.error('Failed to save the current hosted project:', error);
+          }
           break;
+        }
         case 'trigger-editor-find-shortcut':
           replayEditorFindShortcut(event.data.modifier);
           break;

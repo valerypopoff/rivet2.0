@@ -513,7 +513,10 @@ export async function unpublishWorkflowProjectItem(relativePath: unknown) {
   return getWorkflowProject(root, projectPath);
 }
 
-export async function deleteWorkflowProjectItem(relativePath: unknown) {
+export async function deleteWorkflowProjectItem(
+  relativePath: unknown,
+  options: { beforeDelete?: (projectId: string | null) => Promise<void> } = {},
+) {
   const root = await ensureWorkflowsRoot();
   const projectPath = requireProjectPath(resolveWorkflowRelativePath(root, relativePath, {
     allowProjectFile: true,
@@ -532,6 +535,7 @@ export async function deleteWorkflowProjectItem(relativePath: unknown) {
   const projectMetadataId = await loadProjectFromFile(projectPath)
     .then((project) => project.metadata.id ?? null)
     .catch(() => null);
+  await options.beforeDelete?.(projectMetadataId);
   await deletePublishedWorkflowSnapshot(root, existingSettings.publishedSnapshotId);
   await Promise.all(existingSettings.publishedWebApps.map((webApp) =>
     deletePublishedWorkflowSnapshot(root, webApp.publishedSnapshotId).catch(() => {})));

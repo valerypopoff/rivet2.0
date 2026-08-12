@@ -1,6 +1,6 @@
 import TextField from '@atlaskit/textfield';
 
-import { BooleanSetting, SettingsActions } from '../SettingsControls';
+import { BooleanSetting } from '../SettingsControls';
 import type { usePublicRoutesForm } from '../usePublicRoutesForm';
 import type { useRuntimeLimitsForm } from '../useRuntimeLimitsForm';
 import type { useWorkflowEndpointAuthForm } from '../useWorkflowEndpointAuthForm';
@@ -14,9 +14,6 @@ export function WorkflowEndpointsSettingsTab({
   limits: ReturnType<typeof useRuntimeLimitsForm>;
   routes: ReturnType<typeof usePublicRoutesForm>;
 }) {
-  const showRouteStatus = routes.status === 'workflow-endpoints';
-  const showLimitStatus = limits.status === 'proxy-timeout' || limits.status === null;
-
   return (
     <div className="project-settings-tab-panel app-settings-workflow-endpoints-panel" role="tabpanel">
       <section className="app-settings-section" aria-label="Workflow endpoint routes">
@@ -47,16 +44,6 @@ export function WorkflowEndpointsSettingsTab({
             <span className="app-settings-field-help">Latest saved draft workflow endpoints open from this top-level URL slug.</span>
           </label>
         </div>
-        <SettingsActions
-          changed={routes.changed.workflowEndpoints}
-          disabled={routes.controlsDisabled}
-          error={showRouteStatus ? routes.error : null}
-          loading={routes.saving || routes.applying}
-          onRevert={() => routes.revert('workflow-endpoints')}
-          onSave={() => routes.save('workflow-endpoints')}
-          pending={showRouteStatus && routes.applying ? 'Applying routes...' : undefined}
-          saved={showRouteStatus && routes.saved}
-        />
       </section>
 
       <section className="app-settings-section" aria-label="Workflow endpoint access control">
@@ -76,7 +63,6 @@ export function WorkflowEndpointsSettingsTab({
             <span className="app-settings-field-help">Keep this enabled unless workflow endpoints are protected by another trusted access layer.</span>
           </label>
         </div>
-        <SettingsActions changed={auth.changed} disabled={auth.controlsDisabled} error={auth.error} loading={auth.saving} onRevert={auth.revert} onSave={auth.save} saved={auth.saved} />
       </section>
 
       <section className="app-settings-section" aria-label="HTTP request timeout">
@@ -92,15 +78,6 @@ export function WorkflowEndpointsSettingsTab({
             <span className="app-settings-field-help">How long standard API, workflow endpoint, and web-app action requests may stay open through nginx. Websocket routes stay long-lived separately.</span>
           </label>
         </div>
-        <SettingsActions
-          changed={limits.changed.proxyTimeout}
-          disabled={limits.controlsDisabled}
-          error={showLimitStatus ? limits.error : null}
-          loading={limits.saving && limits.status === 'proxy-timeout'}
-          onRevert={() => limits.revert('proxy-timeout')}
-          onSave={() => limits.save('proxy-timeout')}
-          saved={showLimitStatus && limits.saved}
-        />
       </section>
     </div>
   );

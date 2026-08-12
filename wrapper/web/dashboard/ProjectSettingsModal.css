@@ -486,3 +486,121 @@
   opacity: 0.65;
   cursor: not-allowed;
 }
+
+.project-settings-llm-health {
+  gap: 12px;
+}
+
+.project-settings-llm-health-toolbar {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 10px;
+}
+
+.project-settings-llm-health-help {
+  padding-right: 0;
+}
+
+.project-settings-llm-health-actions,
+.project-settings-llm-health-confirmation-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.project-settings-llm-health-actions {
+  justify-content: flex-start;
+}
+
+.project-settings-llm-health-status {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding-top: 12px;
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.project-settings-llm-health-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.project-settings-llm-health-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 10px 12px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.project-settings-llm-health-row-suspended {
+  border-color: rgba(255, 107, 122, 0.42);
+  background: rgba(255, 107, 122, 0.08);
+}
+
+.project-settings-llm-health-row-recovery {
+  border-color: rgba(255, 215, 106, 0.42);
+  background: rgba(255, 215, 106, 0.08);
+}
+
+.project-settings-llm-health-description {
+  min-width: 0;
+}
+
+.project-settings-llm-health-name {
+  color: var(--grey-lightest);
+  font-size: var(--workflow-library-font-size-m);
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+
+.project-settings-llm-health-metadata {
+  margin-top: 3px;
+  color: var(--grey-light);
+  font-size: var(--workflow-library-font-size-s);
+  overflow-wrap: anywhere;
+}
+
+.project-settings-llm-health-metadata-suspended {
+  color: #ff9ba5;
+}
+
+.project-settings-llm-health-metadata-recovery {
+  color: #ffe08a;
+}
+
+.project-settings-llm-health-error {
+  overflow-wrap: anywhere;
+}
+
+.project-settings-llm-health-confirmation {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid rgba(255, 107, 122, 0.36);
+  border-radius: 8px;
+  background: rgba(255, 107, 122, 0.08);
+  color: var(--grey-lightest);
+  font-size: var(--workflow-library-font-size-m);
+  line-height: 1.45;
+}
+
+@media (max-width: 720px) {
+  .project-settings-llm-health-toolbar,
+  .project-settings-llm-health-row {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .project-settings-llm-health-actions {
+    justify-content: flex-start;
+    flex-wrap: wrap;
+  }
+}

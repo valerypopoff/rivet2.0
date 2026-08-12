@@ -21,7 +21,7 @@
     "verify:local-docker:split": "node scripts/verify-compatibility.mjs local-docker:split",
     "verify:repo-structure": "node scripts/verify-repo-structure.mjs",
     "verify:test-style": "node scripts/verify-test-style.mjs",
-    "verify:web-pure": "npm --prefix wrapper/api exec -- tsx --test wrapper/web/tests/api-request.test.ts wrapper/web/tests/editor-bridge-contract.test.ts wrapper/web/tests/editor-bridge-focus.test.ts wrapper/web/tests/hosted-env-shim.test.ts wrapper/web/tests/hosted-fonts.test.ts wrapper/web/tests/hosted-runtime-config.test.ts wrapper/web/tests/modal-theme-contract.test.ts wrapper/web/tests/opened-project-metadata.test.ts wrapper/web/tests/vite-aliases.test.ts",
+    "verify:web-pure": "npm --prefix wrapper/api exec -- tsx --test wrapper/web/tests/api-request.test.ts wrapper/web/tests/editor-bridge-contract.test.ts wrapper/web/tests/editor-bridge-focus.test.ts wrapper/web/tests/hosted-env-shim.test.ts wrapper/web/tests/hosted-fonts.test.ts wrapper/web/tests/hosted-runtime-config.test.ts wrapper/web/tests/llm-profile-health-settings.test.ts wrapper/web/tests/modal-theme-contract.test.ts wrapper/web/tests/opened-project-metadata.test.ts wrapper/web/tests/vite-aliases.test.ts",
     "verify:kubernetes": "npm --prefix wrapper/api exec -- tsx --test wrapper/api/src/tests/kubernetes-launcher-config.test.ts wrapper/api/src/tests/kubernetes-contract.test.ts && node scripts/verify-kubernetes.mjs",
     "ui:observe": "node scripts/playwright-observe.mjs test",
     "ui:observe:debug": "node scripts/playwright-observe.mjs debug",
@@ -58,6 +58,6 @@
     "predev:local": "node scripts/ensure-dev-deps.mjs",
     "dev:local:api": "node scripts/run-with-env.mjs \"npm --prefix wrapper/api run dev\"",
     "dev:local:web": "node scripts/run-with-env.mjs \"npm --prefix wrapper/web run dev\"",
-    "dev:local:executor": "node scripts/run-with-env.mjs \"corepack yarn --cwd rivet workspace @valerypopoff/rivet-app-executor run dev\""
+    "dev:local:executor": "node scripts/run-with-env.mjs \"corepack yarn --cwd rivet tsx watch --inspect=9228 ../wrapper/executor/src/executor.mts\""
   }
 }

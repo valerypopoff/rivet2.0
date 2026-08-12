@@ -6,7 +6,6 @@ import {
   focusHostedEditorFrame,
   isEditorFindShortcutEvent,
   isEditableElement,
-  isSaveShortcutEvent,
 } from './editorBridgeFocus';
 
 const MOUNTED_EDITOR_SEARCH_INPUT_SELECTORS = [
@@ -69,32 +68,10 @@ export function replayEditorDuplicateShortcut(modifier: EditorShortcutModifier):
 export function useEditorBridgeInteractions({
   canOpenGraphSearch,
   onOpenGraphSearch,
-  onSave,
 }: {
   canOpenGraphSearch: boolean;
   onOpenGraphSearch: () => void;
-  onSave: () => Promise<void>;
 }) {
-  useEffect(() => {
-    const handler = async (event: KeyboardEvent) => {
-      if (event.defaultPrevented || !isSaveShortcutEvent(event)) {
-        return;
-      }
-
-      event.preventDefault();
-      event.stopPropagation();
-      event.stopImmediatePropagation?.();
-      await onSave();
-    };
-
-    window.addEventListener('keydown', handler, true);
-    document.addEventListener('keydown', handler, true);
-    return () => {
-      window.removeEventListener('keydown', handler, true);
-      document.removeEventListener('keydown', handler, true);
-    };
-  }, [onSave]);
-
   useEffect(() => {
     const handler = (event: KeyboardEvent) => {
       if (event.defaultPrevented || !isEditorFindShortcutEvent(event)) {

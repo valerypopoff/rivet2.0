@@ -88,7 +88,7 @@ spec:
             initialDelaySeconds: 5
             periodSeconds: 10
           env:
-{{ include "rivet.env.executorWorkload" (dict "root" . "port" .Values.service.executor.targetPort "storageBackend" .Values.runtimeLibraries.backend) | nindent 12 }}
+{{ include "rivet.env.executorWorkload" (dict "root" . "port" .Values.service.executor.targetPort "apiPort" .Values.service.api.targetPort "storageBackend" .Values.runtimeLibraries.backend) | nindent 12 }}
           volumeMounts:
 {{ include "rivet.pod.executorVolumeMounts" . | nindent 12 }}
           resources:

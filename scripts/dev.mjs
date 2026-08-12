@@ -57,4 +57,4 @@ process.on('SIGTERM', () => shutdown(0));
 
 start('API', 'npm --prefix wrapper/api run dev');
 start('WEB', 'npm --prefix wrapper/web run dev');
-start('EXECUTOR', 'corepack yarn --cwd rivet workspace @valerypopoff/rivet-app-executor run dev');
+start('EXECUTOR', 'corepack yarn --cwd rivet tsx watch --inspect=9228 ../wrapper/executor/src/executor.mts');

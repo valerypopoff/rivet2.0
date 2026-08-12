@@ -35,6 +35,7 @@ const relevantEnvKeys = [
   'no_proxy',
   'RIVET_APP_DATA_ROOT',
   'RIVET_NODE_EXECUTOR_PROXY_SETTINGS_PATH',
+  'RIVET_NODE_EXECUTOR_PROXY_BYPASS_HOSTS',
 ] as const;
 
 async function withProxySettingsEnv(run: (tempRoot: string) => Promise<void> | void) {
@@ -126,6 +127,21 @@ test('Node executor proxy bootstrap applies saved values to upper and lower env 
     assert.equal(process.env.https_proxy, undefined);
     assert.equal(process.env.NO_PROXY, undefined);
     assert.equal(process.env.no_proxy, undefined);
+  });
+});
+
+test('Node executor proxy bootstrap always bypasses launcher-owned local hosts', async () => {
+  await withProxySettingsEnv(async () => {
+    process.env.RIVET_NODE_EXECUTOR_PROXY_BYPASS_HOSTS = 'host.docker.internal,HOST.DOCKER.INTERNAL';
+
+    bootstrapProxySettings.applyNodeExecutorProxySettingsToEnv({
+      httpProxy: 'http://proxy.local:3128',
+      httpsProxy: '',
+      noProxy: 'localhost,host.docker.internal',
+    });
+
+    assert.equal(process.env.NO_PROXY, 'localhost,host.docker.internal');
+    assert.equal(process.env.no_proxy, 'localhost,host.docker.internal');
   });
 });
 

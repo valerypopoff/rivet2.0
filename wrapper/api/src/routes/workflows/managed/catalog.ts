@@ -720,6 +720,10 @@ export function createManagedWorkflowCatalogService(options: ManagedWorkflowCata
           [workflow.workflow_id],
         );
 
+        // Health is project-scoped operational state. Remove it inside the
+        // workflow deletion transaction so no durable circuit state can
+        // survive a successfully deleted managed project.
+        await client.query('DELETE FROM llm_profile_health WHERE project_id = $1', [workflow.workflow_id]);
         await client.query('DELETE FROM workflows WHERE workflow_id = $1', [workflow.workflow_id]);
         await deps.queueWorkflowInvalidation(client, hooks, workflow.workflow_id);
         hooks.onCommit(() => deps.deleteBlobKeysBestEffort(

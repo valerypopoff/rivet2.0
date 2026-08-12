@@ -118,7 +118,9 @@ export function useEditorBridgeEvents(options: UseEditorBridgeEventsOptions) {
         return;
       }
 
-      handleSaveProject();
+      if (!event.repeat) {
+        handleSaveProject();
+      }
     };
 
     window.addEventListener('keydown', handler, true);

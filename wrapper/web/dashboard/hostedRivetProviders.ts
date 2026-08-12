@@ -6,8 +6,19 @@ import {
   getDefaultEnvironmentProvider,
   getDefaultPathPolicyProvider,
 } from '../overrides/utils/tauri';
+import { RIVET_API_BASE_URL } from '../../shared/hosted-env';
+import {
+  createHttpLLMProfileHealthAdminProvider,
+  createHttpRivetLLMProfileHealthStore,
+} from '../../shared/llmProfileHealthHttpStore';
 
 const hostedDatasetProvider = new HostedDatasetProvider();
+const hostedLLMProfileHealthStore = createHttpRivetLLMProfileHealthStore({
+  baseUrl: `${RIVET_API_BASE_URL}/workflows/llm-profile-health`,
+});
+export const hostedLLMProfileHealthAdmin = createHttpLLMProfileHealthAdminProvider({
+  baseUrl: `${RIVET_API_BASE_URL}/workflows/llm-profile-health`,
+});
 
 export function clearHostedDatasetsForProject(projectId: ProjectId): Promise<void> {
   return hostedDatasetProvider.deleteStoredDatasetsForProject(projectId);
@@ -18,4 +29,5 @@ export const hostedRivetProviders = {
   datasets: hostedDatasetProvider,
   environment: getDefaultEnvironmentProvider(),
   pathPolicy: getDefaultPathPolicyProvider(),
+  llmProfileHealthStore: hostedLLMProfileHealthStore,
 } satisfies ProviderOverrides;

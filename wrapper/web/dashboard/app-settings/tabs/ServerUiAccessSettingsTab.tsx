@@ -1,8 +1,6 @@
-import { SettingsActions } from '../SettingsControls';
 import type { useWebAppAuthForm } from '../useWebAppAuthForm';
 
 export function ServerUiAccessSettingsTab({ auth }: { auth: ReturnType<typeof useWebAppAuthForm> }) {
-  const showStatus = auth.status === 'server-ui-access';
   return (
     <div className="project-settings-tab-panel app-settings-server-ui-access-panel" role="tabpanel">
       <section className="app-settings-section" aria-label="Server UI access">
@@ -35,15 +33,6 @@ export function ServerUiAccessSettingsTab({ auth }: { auth: ReturnType<typeof us
             </span>
           </label>
         </div>
-        <SettingsActions
-          changed={auth.changed.serverUiAccess}
-          disabled={auth.controlsDisabled}
-          error={showStatus ? auth.error : null}
-          loading={auth.saving && showStatus}
-          onRevert={() => auth.revert('server-ui-access')}
-          onSave={() => auth.save('server-ui-access')}
-          saved={showStatus && auth.saved}
-        />
       </section>
     </div>
   );

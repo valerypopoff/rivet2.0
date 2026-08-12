@@ -41,7 +41,6 @@ ALIASED_FILES=(
   "hooks/useLoadPackagePlugin.ts"
   "hooks/useLoadProject.ts"
   "hooks/useSyncCurrentStateIntoOpenedProjects.ts"
-  "hooks/useWindowsHotkeysFix.tsx"
   "model/native/TauriNativeApi.ts"
   "utils/deserializeProject.ts"
   "utils/tauri.ts"

@@ -5,7 +5,6 @@ import test from 'node:test';
 const sharedModalTheme = readFileSync(new URL('../dashboard/WorkflowLibraryPanel.css', import.meta.url), 'utf8');
 
 const hostedModals = [
-  ['../dashboard/AboutModal.tsx', 'about-modal'],
   ['../dashboard/AppSettingsModal.tsx', 'app-settings-modal'],
   ['../dashboard/ProjectSettingsModal.tsx', 'workflow-project-settings-modal'],
   ['../dashboard/RunRecordingsModal.tsx', 'run-recordings-modal'],

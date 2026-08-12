@@ -21,7 +21,6 @@ import type {
   WorkflowRecordingWorkflowListResponse,
   WorkflowRecordingWorkflowSummary,
   WorkflowRunStatisticsCatalogResponse,
-  WorkflowRunStatisticsPeriod,
   WorkflowRunStatisticsQuery,
   WorkflowRunStatisticsResponse,
   WorkflowRunStatisticsSurface,
@@ -38,6 +37,7 @@ import {
   listWorkflowRecordingBundlePaths,
   listWorkflowRecordingRunRowsByWorkflowId,
   listWorkflowRecordingRunRowsForWorkflow,
+  listWorkflowRecordingStatisticsCatalogRows,
   listWorkflowRecordingStatisticsRows,
   listWorkflowRecordingWorkflowStatsRows,
   resetWorkflowRecordingDatabaseForTests,
@@ -505,16 +505,9 @@ export async function listWorkflowRecordingRunsPage(
 export async function listWorkflowRunStatisticsCatalog(
   root: string,
   surface: WorkflowRunStatisticsSurface,
-  period: WorkflowRunStatisticsPeriod,
-  runKind: WorkflowRunStatisticsQuery['runKind'] = 'both',
 ): Promise<WorkflowRunStatisticsCatalogResponse> {
   await ensureWorkflowRecordingStorage(root);
-  const rows = await listWorkflowRecordingStatisticsRows(period.from, period.to);
-  return buildWorkflowRunStatisticsCatalog(
-    runKind === 'both' ? rows : rows.filter((row) => row.runKind === runKind),
-    surface,
-    period,
-  );
+  return buildWorkflowRunStatisticsCatalog(await listWorkflowRecordingStatisticsCatalogRows(), surface);
 }
 
 export async function getWorkflowRunStatistics(

@@ -101,6 +101,15 @@ export function usePreviewProjectLifecycle({
     promotePreviewProject(preview);
   }, [promotePreviewProject]);
 
+  const promotePreviewProjectById = useCallback((projectId: ProjectId) => {
+    const preview = previewProjectRef.current;
+    if (!preview || preview.projectId !== projectId) {
+      return;
+    }
+
+    promotePreviewProject(preview);
+  }, [promotePreviewProject]);
+
   const clearPreviewProjectByPath = useCallback((path: string | null | undefined) => {
     const preview = previewProjectRef.current;
     if (!preview || !path || normalizeWorkflowPath(preview.path) !== normalizeWorkflowPath(path)) {
@@ -141,6 +150,7 @@ export function usePreviewProjectLifecycle({
     previewProjectIsSafelyReplaceable,
     previewProjectRef,
     promotePreviewProject,
+    promotePreviewProjectById,
     promotePreviewProjectByPath,
     rememberPreviewProject,
   }), [
@@ -148,6 +158,7 @@ export function usePreviewProjectLifecycle({
     clearPreviewProjectByPath,
     previewProjectIsSafelyReplaceable,
     promotePreviewProject,
+    promotePreviewProjectById,
     promotePreviewProjectByPath,
     rememberPreviewProject,
   ]);

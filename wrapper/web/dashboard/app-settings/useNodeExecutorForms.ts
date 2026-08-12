@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { type Dispatch, type SetStateAction, useMemo } from 'react';
 
 import type { HostedRouteConfig } from '../types';
 import {
@@ -22,8 +22,7 @@ const defaultUrlForm: ExecutorUrlOverrideSettingsForm = {
 
 export function useNodeExecutorForms(
   enabled: boolean,
-  routeConfig: HostedRouteConfig,
-  onRouteConfigChange?: (config: HostedRouteConfig) => void,
+  onRouteConfigChange?: Dispatch<SetStateAction<HostedRouteConfig>>,
 ) {
   const proxy = useSettingsFormResource({
     defaultForm: defaultProxyForm,
@@ -38,7 +37,7 @@ export function useNodeExecutorForms(
   const urls = useSettingsFormResource({
     afterSave: async () => {
       const activeConfig = await fetchHostedConfig();
-      onRouteConfigChange?.({ ...routeConfig, ...activeConfig });
+      onRouteConfigChange?.((current) => ({ ...current, ...activeConfig }));
     },
     defaultForm: defaultUrlForm,
     enabled,

@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import { relative, resolve } from 'node:path';
 import test from 'node:test';
 
-import { createModuleOverrideAliases } from '../vite-aliases';
+import { createBrowserSubpathAliases, createModuleOverrideAliases } from '../vite-aliases';
 import { replaceHostedProjectTabLabelExpression } from '../project-tab-label-transform';
 
 const overrideDir = resolve('/repo/wrapper/web/overrides');
@@ -50,7 +50,6 @@ test('module override aliases keep only wrapper-owned Rivet app seams', () => {
     /\/overrides\/hooks\/useSyncCurrentStateIntoOpenedProjects\.ts$/,
   );
   assert.match(replacementFor('../hooks/useCopyNodesHotkeys') ?? '', /\/overrides\/hooks\/useCopyNodesHotkeys\.ts$/);
-  assert.match(replacementFor('../hooks/useWindowsHotkeysFix') ?? '', /\/overrides\/hooks\/useWindowsHotkeysFix\.tsx$/);
 
   for (const retiredOverride of [
     '../model/TauriProjectReferenceLoader',
@@ -63,6 +62,7 @@ test('module override aliases keep only wrapper-owned Rivet app seams', () => {
     '../hooks/useRemoteExecutor',
     '../hooks/useSaveProject',
     '../hooks/useMenuCommands',
+    '../hooks/useWindowsHotkeysFix',
   ]) {
     assert.equal(replacementFor(retiredOverride), null, `${retiredOverride} should not be aliased`);
   }
@@ -104,6 +104,12 @@ test('hosted Vite config mirrors upstream browser dependencies with provider sub
   assert.equal(wrapperPackageJson.dependencies?.dompurify, upstreamNodePackageJson.dependencies?.dompurify);
   assert.ok(viteConfig.includes('find: /^@gentrace\\/core\\/(.+)$/'));
   assert.ok(viteConfig.includes('node_modules/@gentrace/core/$1'));
+});
+
+test('hosted Vite config resolves vendored Zod imports to the V4 API surface', () => {
+  const zodAlias = createBrowserSubpathAliases(resolve('/repo/wrapper/web')).find((alias) => alias.find.test('zod'));
+
+  assert.match(zodAlias?.replacement.replace(/\\/g, '/') ?? '', /\/node_modules\/zod\/v4\/index\.js$/);
 });
 
 test('settings override delegates upstream settings and keeps hosted-only exports narrow', () => {

@@ -133,6 +133,30 @@
   resize: vertical;
 }
 
+.app-settings-panel-region .project-settings-textarea {
+  --form-control-bg-focus: var(--form-control-bg);
+  --form-control-border-focus: var(--form-control-border);
+}
+
+/* Keep input chrome stable while operators edit settings. */
+.app-settings-panel-region .project-settings-textarea:focus,
+.app-settings-panel-region .project-settings-textarea:focus-visible {
+  box-shadow: none !important;
+  outline: none !important;
+}
+
+.app-settings-panel-region [data-ds--text-field--container]:focus-within {
+  border-color: var(--ds-border-input, rgba(255, 255, 255, 0.12)) !important;
+  box-shadow: none !important;
+  outline: none !important;
+}
+
+.app-settings-panel-region :is(input, textarea):focus,
+.app-settings-panel-region :is(input, textarea):focus-visible {
+  box-shadow: none !important;
+  outline: none !important;
+}
+
 .app-settings-checkbox-field {
   display: inline-flex;
   align-items: center;

@@ -546,6 +546,7 @@ test.describe('Workflow library layout', () => {
     await page.getByRole('button', { name: 'App settings' }).click();
     const appSettingsModal = page.locator('[data-testid="app-settings-modal"]');
     await expect(appSettingsModal).toBeVisible();
+    const appSettingsActions = appSettingsModal.locator('.app-settings-panel-region > .app-settings-actions-row');
     await expect(appSettingsModal.getByRole('tab', { name: 'General' })).toHaveAttribute('aria-selected', 'true');
     const appSettingsTabList = appSettingsModal.getByRole('tablist', { name: 'App settings sections' });
     await expect(appSettingsTabList).toHaveAttribute('aria-orientation', 'vertical');
@@ -560,47 +561,40 @@ test.describe('Workflow library layout', () => {
     expect(storageTabBox!.y).toBeGreaterThan(generalTabBox!.y + generalTabBox!.height - 2);
     expect(generalTabBox!.x + generalTabBox!.width).toBeLessThan(panelRegionBox!.x);
     await expect(appSettingsModal).toContainText('Rivet Studio Server');
-    await expect(appSettingsModal).toContainText('Published workflows');
-    await expect(appSettingsModal).toContainText('/workflows');
-    await expect(appSettingsModal).toContainText('Published web apps');
-    await expect(appSettingsModal).toContainText('/apps');
+    await expect(appSettingsModal.locator('section[aria-label="Routes"]')).toHaveCount(0);
+    await expect(appSettingsModal.locator('section[aria-label="Access"]')).toHaveCount(0);
+    await expect(appSettingsActions).toHaveCount(1);
     await expect(appSettingsModal.getByLabel('Trusted hosts')).toHaveValue('internal.example.test');
-    const trustedHostsSection = appSettingsModal.locator('section[aria-label="Trusted host settings"]');
     await appSettingsModal.getByLabel('Trusted hosts').fill('internal.example.test\nhealthcheck.example.test');
-    await trustedHostsSection.locator('.app-settings-actions-row').getByRole('button', { name: 'Save' }).click();
-    await expect(trustedHostsSection.locator('.project-settings-success')).toHaveText('Saved.');
-    await expect(appSettingsModal.getByLabel('Trusted hosts')).toHaveValue('internal.example.test\nhealthcheck.example.test');
     await expect(appSettingsModal.getByLabel('Command timeout in seconds')).toHaveValue('30');
     await expect(appSettingsModal.getByLabel('Maximum captured output in MiB')).toHaveValue('10');
     await appSettingsModal.getByLabel('Command timeout in seconds').fill('45');
-    const shellExecutionSection = appSettingsModal.locator('section[aria-label="Shell execution"]');
-    await shellExecutionSection.locator('.app-settings-actions-row').getByRole('button', { name: 'Save' }).click();
-    const generalActions = shellExecutionSection.locator('.app-settings-actions-row');
-    await expect(generalActions.locator('.project-settings-success')).toHaveText('Saved.');
+    await appSettingsActions.getByRole('button', { name: 'Revert' }).click();
+    await expect(appSettingsModal.getByLabel('Trusted hosts')).toHaveValue('internal.example.test');
+    await expect(appSettingsModal.getByLabel('Command timeout in seconds')).toHaveValue('30');
+    await appSettingsModal.getByLabel('Trusted hosts').fill('internal.example.test\nhealthcheck.example.test');
+    await appSettingsModal.getByLabel('Command timeout in seconds').fill('45');
+    await appSettingsActions.getByRole('button', { name: 'Save' }).click();
+    await expect(appSettingsActions.locator('.project-settings-success')).toHaveText('Saved.');
+    await expect(appSettingsModal.getByLabel('Trusted hosts')).toHaveValue('internal.example.test\nhealthcheck.example.test');
+    await expect(appSettingsModal.getByLabel('Command timeout in seconds')).toHaveValue('45');
 
     await appSettingsModal.getByRole('tab', { name: 'Workflow endpoints' }).click();
     await expect(appSettingsModal.getByRole('tab', { name: 'Workflow endpoints' })).toHaveAttribute('aria-selected', 'true');
     await expect(appSettingsModal.locator('.app-settings-workflow-endpoints-panel .app-settings-section-title')).toContainText(['Routes', 'Access control', 'HTTP request timeout']);
     await expect(appSettingsModal.getByLabel('Published workflow endpoint URL slug')).toHaveValue('workflows');
     await expect(appSettingsModal.getByLabel('Latest saved workflow endpoint URL slug')).toHaveValue('workflows-latest');
-    const workflowEndpointAuthSection = appSettingsModal.locator('.app-settings-workflow-endpoints-panel .app-settings-section', { hasText: 'Access control' });
     await expect(appSettingsModal.getByLabel('Require Authorization: Bearer <Rivet key> for workflow endpoint calls')).toBeChecked();
     await expect(appSettingsModal.getByLabel('Proxy read timeout in seconds')).toHaveValue('180');
     await expect(appSettingsModal.getByLabel('Published web app URL slug')).toHaveCount(0);
     await appSettingsModal.getByLabel('Published workflow endpoint URL slug').fill('public-workflows');
-    await appSettingsModal.locator('.app-settings-workflow-endpoints-panel .app-settings-actions-row').first().getByRole('button', { name: 'Save' }).click();
-    const workflowRouteActions = appSettingsModal.locator('.app-settings-workflow-endpoints-panel .app-settings-actions-row').first();
-    await expect(workflowRouteActions.locator('.project-settings-success')).toHaveText('Saved.');
-    await expect(appSettingsModal.getByLabel('Published workflow endpoint URL slug')).toHaveValue('public-workflows');
     await appSettingsModal.getByLabel('Require Authorization: Bearer <Rivet key> for workflow endpoint calls').uncheck();
-    await workflowEndpointAuthSection.getByRole('button', { name: 'Save' }).click();
-    await expect(workflowEndpointAuthSection.locator('.project-settings-success')).toHaveText('Saved.');
-    await expect(appSettingsModal.getByLabel('Require Authorization: Bearer <Rivet key> for workflow endpoint calls')).not.toBeChecked();
     await appSettingsModal.getByLabel('Proxy read timeout in seconds').fill('240');
-    const workflowTimeoutSection = appSettingsModal.locator('.app-settings-workflow-endpoints-panel .app-settings-section', { hasText: 'HTTP request timeout' });
-    await workflowTimeoutSection.getByRole('button', { name: 'Save' }).click();
-    const workflowTimeoutActions = workflowTimeoutSection.locator('.app-settings-actions-row');
-    await expect(workflowTimeoutActions.locator('.project-settings-success')).toHaveText('Saved.');
+    await expect(appSettingsActions).toHaveCount(1);
+    await appSettingsActions.getByRole('button', { name: 'Save' }).click();
+    await expect(appSettingsActions.locator('.project-settings-success')).toHaveText('Saved.');
+    await expect(appSettingsModal.getByLabel('Published workflow endpoint URL slug')).toHaveValue('public-workflows');
+    await expect(appSettingsModal.getByLabel('Require Authorization: Bearer <Rivet key> for workflow endpoint calls')).not.toBeChecked();
     await expect.poll(async () => {
       const [contentBox, sectionBox] = await Promise.all([
         appSettingsModal.locator('.app-settings-panel-region').boundingBox(),
@@ -629,12 +623,12 @@ test.describe('Workflow library layout', () => {
     await appSettingsModal.getByLabel('Object storage URL').fill('http://workflow-minio:9000/rivet-workflows');
     await appSettingsModal.getByLabel('Object storage access key ID').fill('minioadmin');
     await appSettingsModal.getByLabel('Object storage secret access key').fill('minioadmin');
-    await expect(appSettingsModal.locator('.app-settings-storage-panel .app-settings-action-button').first()).toHaveCSS('height', '40px');
-    await expect(appSettingsModal.locator('.app-settings-storage-panel .app-settings-action-button').first()).toHaveCSS('min-width', '84px');
-    await expect(appSettingsModal.locator('.app-settings-storage-panel .app-settings-actions-row')).toHaveCSS('border-top-width', '1px');
-    await appSettingsModal.locator('.app-settings-storage-panel .app-settings-actions-row').getByRole('button', { name: 'Save' }).click();
-    const storageActions = appSettingsModal.locator('.app-settings-storage-panel .app-settings-actions-row');
-    await expect(storageActions.locator('.project-settings-success')).toHaveText('Saved. Restart Docker services or roll out Kubernetes pods to apply storage changes.');
+    await expect(appSettingsActions).toHaveCount(1);
+    await expect(appSettingsActions.locator('.app-settings-action-button').first()).toHaveCSS('height', '40px');
+    await expect(appSettingsActions.locator('.app-settings-action-button').first()).toHaveCSS('min-width', '84px');
+    await expect(appSettingsActions).toHaveCSS('border-top-width', '1px');
+    await appSettingsActions.getByRole('button', { name: 'Save' }).click();
+    await expect(appSettingsActions.locator('.project-settings-success')).toHaveText('Saved. Restart Docker services or roll out Kubernetes pods to apply storage changes.');
     await expect(appSettingsModal.locator('.app-settings-storage-panel .app-settings-section > .project-settings-success')).toHaveCount(0);
 
     await appSettingsModal.getByRole('tab', { name: 'Run recordings' }).click();
@@ -668,27 +662,22 @@ test.describe('Workflow library layout', () => {
       return contentBox && sectionBox ? sectionBox.width / contentBox.width : 0;
     }).toBeGreaterThan(0.9);
     await appSettingsModal.getByLabel('Queued recording writes').fill('101');
-    await expect(appSettingsModal.locator('.app-settings-recordings-panel .app-settings-action-button').first()).toHaveCSS('height', '40px');
-    await expect(appSettingsModal.locator('.app-settings-recordings-panel .app-settings-action-button').first()).toHaveCSS('min-width', '84px');
-    await expect(appSettingsModal.locator('.app-settings-recordings-panel .app-settings-actions-row')).toHaveCSS('border-top-width', '1px');
-    await expect(appSettingsModal.locator('.app-settings-recordings-panel .app-settings-actions-row')).toHaveCSS('margin-top', '8px');
-    await expect(appSettingsModal.locator('.app-settings-recordings-panel .app-settings-actions-row')).toHaveCSS('padding-top', '14px');
-    await appSettingsModal.getByRole('button', { name: 'Save' }).click();
-    const recordingsActions = appSettingsModal.locator('.app-settings-recordings-panel .app-settings-actions-row');
-    await expect(recordingsActions.locator('.project-settings-success')).toHaveText('Saved.');
+    await expect(appSettingsActions).toHaveCount(1);
+    await expect(appSettingsActions.locator('.app-settings-action-button').first()).toHaveCSS('height', '40px');
+    await expect(appSettingsActions.locator('.app-settings-action-button').first()).toHaveCSS('min-width', '84px');
+    await expect(appSettingsActions).toHaveCSS('border-top-width', '1px');
+    await expect(appSettingsActions).toHaveCSS('margin-top', '8px');
+    await expect(appSettingsActions).toHaveCSS('padding-top', '14px');
+    await appSettingsActions.getByRole('button', { name: 'Save' }).click();
+    await expect(appSettingsActions.locator('.project-settings-success')).toHaveText('Saved.');
     await expect(appSettingsModal.locator('.app-settings-recordings-panel .app-settings-section > .project-settings-success')).toHaveCount(0);
     await appSettingsModal.getByRole('tab', { name: 'Node executor proxy' }).click();
     await expect(appSettingsModal.getByRole('tab', { name: 'Node executor proxy' })).toHaveAttribute('aria-selected', 'true');
-    const nodeProxySection = appSettingsModal.locator('.app-settings-proxy-panel .app-settings-section', { hasText: 'HTTP_PROXY' });
     const websocketOverrideSection = appSettingsModal.locator('.app-settings-proxy-panel .app-settings-section', { hasText: 'Websocket URL overrides' });
     await expect(websocketOverrideSection.locator('.app-settings-section-title')).toHaveText('Websocket URL overrides');
     await expect(appSettingsModal.getByText('HTTP_PROXY')).toBeVisible();
-    await expect(nodeProxySection.locator('.app-settings-field-grid')).toHaveCSS('gap', '18px');
-    await expect(nodeProxySection.locator('.app-settings-action-button').first()).toHaveCSS('height', '40px');
-    await expect(nodeProxySection.locator('.app-settings-action-button').first()).toHaveCSS('min-width', '84px');
-    await expect(nodeProxySection.locator('.app-settings-actions-row')).toHaveCSS('border-top-width', '1px');
-    await expect(nodeProxySection.locator('.app-settings-actions-row')).toHaveCSS('margin-top', '8px');
-    await expect(nodeProxySection.locator('.app-settings-actions-row')).toHaveCSS('padding-top', '14px');
+    await expect(appSettingsModal.locator('.app-settings-proxy-panel .app-settings-section').first().locator('.app-settings-field-grid')).toHaveCSS('gap', '18px');
+    await expect(appSettingsActions).toHaveCount(1);
     await expect(appSettingsModal.getByRole('textbox', { name: 'HTTP_PROXY' })).toHaveValue('http://proxy.example.internal:3128');
     await expect(appSettingsModal.getByText('NO_PROXY')).toBeVisible();
     await expect(appSettingsModal.getByRole('textbox', { name: 'NO_PROXY' })).toHaveValue('localhost,127.0.0.1,::1,api,web,executor,proxy,.svc,.cluster.local');
@@ -698,16 +687,11 @@ test.describe('Workflow library layout', () => {
     await expect(appSettingsModal.getByRole('textbox', { name: 'Remote Debugger websocket URL override' })).toHaveValue('');
     await expect(appSettingsModal.getByText('Active URL: ws://127.0.0.1:8081/ws/executor/internal.')).toBeVisible();
     await appSettingsModal.getByRole('textbox', { name: 'HTTP_PROXY' }).fill('http://proxy.example.internal:3129');
-    await nodeProxySection.getByRole('button', { name: 'Save' }).click();
-    const proxyActions = nodeProxySection.locator('.app-settings-actions-row');
-    await expect(proxyActions.locator('.project-settings-success')).toHaveText('Saved.');
-    await expect(appSettingsModal.locator('.app-settings-proxy-panel .app-settings-section > .project-settings-success')).toHaveCount(0);
     await appSettingsModal
       .getByRole('textbox', { name: 'Remote Debugger websocket URL override' })
       .fill('wss://debugger.example.test/ws/latest-debugger');
-    await websocketOverrideSection.getByRole('button', { name: 'Save' }).click();
-    const executorUrlActions = websocketOverrideSection.locator('.app-settings-actions-row');
-    await expect(executorUrlActions.locator('.project-settings-success')).toHaveText('Saved. Reload the editor to apply websocket URL overrides to active sessions.');
+    await appSettingsActions.getByRole('button', { name: 'Save' }).click();
+    await expect(appSettingsActions.locator('.project-settings-success')).toHaveText('Saved. Reload the editor to apply websocket URL overrides to active sessions.');
     await expect(appSettingsModal.getByText('Active URL: wss://debugger.example.test/ws/latest-debugger.')).toBeVisible();
 
     await appSettingsModal.getByRole('tab', { name: 'Web apps' }).click();
@@ -729,11 +713,6 @@ test.describe('Workflow library layout', () => {
         : Number.POSITIVE_INFINITY;
     }).toBeLessThanOrEqual(1);
     await appSettingsModal.getByLabel('Published web app URL slug').fill('public-apps');
-    await appSettingsModal.getByRole('button', { name: 'Save' }).first().click();
-    const webRouteActions = appSettingsModal.locator('.app-settings-web-apps-panel .app-settings-actions-row').first();
-    await expect(webRouteActions.locator('.project-settings-success')).toHaveText('Saved.');
-    await expect(appSettingsModal.getByLabel('Published web app URL slug')).toHaveValue('public-apps');
-    await expect(appSettingsModal.getByText(/restart/i)).toHaveCount(0);
     await expect(appSettingsModal.getByRole('button', { name: 'Key' })).toHaveAttribute('aria-pressed', 'true');
     const webAppAuthMode = appSettingsModal.getByRole('group', { name: 'Web app auth mode' });
     await expect(webAppAuthMode).toHaveClass(/segmented-control/);
@@ -741,18 +720,16 @@ test.describe('Workflow library layout', () => {
     await expect(appSettingsModal.getByText('Visitors enter the Rivet key before opening web apps.')).toBeVisible();
     await appSettingsModal.getByRole('button', { name: 'OAuth' }).click();
     await expect(appSettingsModal.getByText("Visitors sign in with the provider configured in the OAuth tab and are checked against each web app's allowed-email list.")).toBeVisible();
-    const webAppAuthSection = appSettingsModal.locator('section[aria-label="Web app auth"]');
-    await webAppAuthSection.getByRole('button', { name: 'Save' }).click();
-    const webAuthModeActions = webAppAuthSection.locator('.app-settings-actions-row');
-    await expect(webAuthModeActions.locator('.project-settings-success')).toHaveText('Saved.');
 
     const webAppButtonDataSection = appSettingsModal.locator('section[aria-label="Web app button data"]');
     await expect(webAppButtonDataSection.getByText('Large payloads are buffered in the API process.')).toBeVisible();
     await appSettingsModal.getByLabel('Maximum web app button data in MiB').fill('200');
-    await webAppButtonDataSection.getByRole('button', { name: 'Save' }).click();
-    await expect(webAppButtonDataSection.locator('.project-settings-success')).toHaveText(
+    await expect(appSettingsActions).toHaveCount(1);
+    await appSettingsActions.getByRole('button', { name: 'Save' }).click();
+    await expect(appSettingsActions.locator('.project-settings-success')).toHaveText(
       'Saved. Nginx reloads shortly; restart the API to apply the new WebSocket message limit.',
     );
+    await expect(appSettingsModal.getByLabel('Published web app URL slug')).toHaveValue('public-apps');
 
     await appSettingsModal.getByRole('tab', { name: 'OAuth' }).click();
     await expect(appSettingsModal.getByRole('tab', { name: 'OAuth' })).toHaveAttribute('aria-selected', 'true');
@@ -781,20 +758,21 @@ test.describe('Workflow library layout', () => {
     await expect(appSettingsModal.getByText('Default test email')).toBeVisible();
     await expect(appSettingsModal.getByLabel('Default test email')).toHaveValue('local@example.test');
     await appSettingsModal.getByLabel('Session signing secret').fill('local-session-secret');
-    await appSettingsModal.locator('.app-settings-oauth-panel .app-settings-actions-row').last().getByRole('button', { name: 'Save' }).click();
-    const oauthActions = appSettingsModal.locator('.app-settings-oauth-panel .app-settings-actions-row').last();
-    await expect(oauthActions.locator('.project-settings-success')).toHaveText('Saved.');
+    await expect(appSettingsActions).toHaveCount(1);
+    await appSettingsActions.getByRole('button', { name: 'Save' }).click();
+    await expect(appSettingsActions.locator('.project-settings-success')).toHaveText('Saved.');
 
     await appSettingsModal.getByRole('tab', { name: 'Server UI access' }).click();
     await expect(appSettingsModal.getByRole('tab', { name: 'Server UI access' })).toHaveAttribute('aria-selected', 'true');
     await expect(appSettingsModal.getByText('RIVET_SERVER_UI_AUTH_MODE', { exact: true })).toBeVisible();
-    await appSettingsModal.getByLabel('Server UI admin emails').fill('admin@example.test');
-    await appSettingsModal
-      .locator('.app-settings-server-ui-access-panel .app-settings-actions-row')
-      .getByRole('button', { name: 'Save' })
-      .click();
-    const serverUiAccessActions = appSettingsModal.locator('.app-settings-server-ui-access-panel .app-settings-actions-row');
-    await expect(serverUiAccessActions.locator('.project-settings-success')).toHaveText('Saved.');
+    const serverUiEmails = appSettingsModal.getByLabel('Server UI admin emails');
+    const serverUiEmailBorder = await serverUiEmails.evaluate((element) => getComputedStyle(element).borderColor);
+    await serverUiEmails.focus();
+    await expect(serverUiEmails).toHaveCSS('border-color', serverUiEmailBorder);
+    await serverUiEmails.fill('admin@example.test');
+    await expect(appSettingsActions).toHaveCount(1);
+    await appSettingsActions.getByRole('button', { name: 'Save' }).click();
+    await expect(appSettingsActions.locator('.project-settings-success')).toHaveText('Saved.');
 
     await appSettingsModal.getByRole('tab', { name: 'General' }).click();
     const maxOutputInput = appSettingsModal.getByLabel('Maximum captured output in MiB');
@@ -809,32 +787,20 @@ test.describe('Workflow library layout', () => {
     await expect(appSettingsModal.getByText('Kubernetes ignores this setting.')).toBeVisible();
     await dockerTimeoutInput.fill('1500');
     await expect(dockerTimeoutInput).toHaveValue('1500');
-    await expect(appSettingsModal.locator('.app-settings-docker-panel .app-settings-action-button').first()).toHaveCSS('height', '40px');
-    await expect(appSettingsModal.locator('.app-settings-docker-panel .app-settings-actions-row')).toHaveCSS('border-top-width', '1px');
-    await appSettingsModal.locator('.app-settings-docker-panel .app-settings-actions-row').getByRole('button', { name: 'Save' }).click();
-    const dockerActions = appSettingsModal.locator('.app-settings-docker-panel .app-settings-actions-row');
-    await expect(dockerActions.locator('.project-settings-success')).toHaveText('Saved.');
+    await expect(appSettingsActions).toHaveCount(1);
+    await expect(appSettingsActions.locator('.app-settings-action-button').first()).toHaveCSS('height', '40px');
+    await expect(appSettingsActions).toHaveCSS('border-top-width', '1px');
+    await appSettingsActions.getByRole('button', { name: 'Save' }).click();
+    await expect(appSettingsActions.locator('.project-settings-success')).toHaveText('Saved.');
 
     await expect(appSettingsModal.getByRole('tab', { name: 'General' })).toBeVisible();
     await appSettingsModal.getByRole('tab', { name: 'General' }).click();
     await expect(appSettingsModal.getByLabel('Maximum captured output in MiB')).toHaveValue('11');
-    await expect(
-      appSettingsModal
-        .locator('section[aria-label="Shell execution"] .app-settings-actions-row')
-        .getByRole('button', { name: 'Save' }),
-    ).toBeEnabled();
+    await expect(appSettingsActions.getByRole('button', { name: 'Save' })).toBeEnabled();
     await expect(appSettingsModal).toContainText('OAuth');
     await page.getByRole('button', { name: 'Close app settings' }).click();
     await expect(appSettingsModal).toHaveCount(0);
-
-    await page.getByRole('button', { name: 'About' }).click();
-    const aboutModal = page.locator('[data-testid="about-modal"]');
-    await expect(aboutModal).toBeVisible();
-    await expect(aboutModal).toContainText('Rivet Studio Server');
-    await expect(aboutModal).toContainText('Version');
-    await expect(aboutModal).toContainText(/Version\s*\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?/);
-    await page.getByRole('button', { name: 'Close about' }).click();
-    await expect(aboutModal).toHaveCount(0);
+    await expect(page.getByRole('button', { name: 'About' })).toHaveCount(0);
 
     await header.click({ position: { x: headerBox!.width - 8, y: headerBox!.height / 2 } });
 

@@ -59,6 +59,10 @@ async function main() {
     mergedEnv.COMPOSE_PARALLEL_LIMIT = '1';
   }
 
+  // Keep local Node and endpoint execution off a configured outbound proxy.
+  // Compose maps this hostname to Docker's supported host-gateway address.
+  mergedEnv.RIVET_NODE_EXECUTOR_PROXY_BYPASS_HOSTS = 'host.docker.internal';
+
   assertNoRetiredEnv(mergedEnv, { launcherName: 'dev-docker', envFileLabel });
 
   if (['build', 'up', 'dev', 'recreate'].includes(action)) {

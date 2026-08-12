@@ -215,6 +215,7 @@ test('workflow project stats count serialized graph nodes and web apps', async (
   assert.equal(project.stats?.graphCount, 1);
   assert.equal(project.stats?.totalNodeCount, 1);
   assert.equal(project.stats?.webAppCount, 2);
+  assert.equal(project.projectMetadataId, created.projectMetadataId);
 });
 
 test('workflow project stats cache is rebuilt when the project file changes', async () => {
@@ -226,10 +227,11 @@ test('workflow project stats cache is rebuilt when the project file changes', as
   await fs.writeFile(
     sidecars.stats,
     `${JSON.stringify({
-      schemaVersion: 3,
+      schemaVersion: 4,
       fileSize: fileStats.size,
       fileMtimeMs: fileStats.mtimeMs,
       fileCtimeMs: fileStats.ctimeMs,
+      projectMetadataId: created.projectMetadataId ?? null,
       stats: {
         graphCount: 99,
         totalNodeCount: 99,
@@ -243,6 +245,7 @@ test('workflow project stats cache is rebuilt when the project file changes', as
   assert.equal(cachedProject.stats?.graphCount, 99);
   assert.equal(cachedProject.stats?.totalNodeCount, 99);
   assert.equal(cachedProject.stats?.webAppCount, 99);
+  assert.equal(cachedProject.projectMetadataId, created.projectMetadataId);
 
   await fs.writeFile(
     created.absolutePath,
@@ -273,10 +276,11 @@ test('workflow project stats cache is rebuilt when file ctime changes', async ()
   await fs.writeFile(
     sidecars.stats,
     `${JSON.stringify({
-      schemaVersion: 3,
+      schemaVersion: 4,
       fileSize: fileStats.size,
       fileMtimeMs: fileStats.mtimeMs,
       fileCtimeMs: fileStats.ctimeMs,
+      projectMetadataId: created.projectMetadataId ?? null,
       stats: {
         graphCount: 99,
         totalNodeCount: 99,
@@ -967,9 +971,16 @@ test('delete workflow project removes project and sidecars', async () => {
   await fs.writeFile(sidecars.settings, '{}', 'utf8');
   await fs.writeFile(sidecars.stats, '{}', 'utf8');
 
-  const deletedProjectId = await workflowMutations.deleteWorkflowProjectItem(created.relativePath);
+  let callbackProjectId: string | null | undefined;
+  const deletedProjectId = await workflowMutations.deleteWorkflowProjectItem(created.relativePath, {
+    beforeDelete: async (projectId) => {
+      callbackProjectId = projectId;
+      assert.equal(await workflowFs.pathExists(created.absolutePath), true);
+    },
+  });
 
   assert.equal(typeof deletedProjectId, 'string');
+  assert.equal(callbackProjectId, deletedProjectId);
   assert.equal(await workflowFs.pathExists(created.absolutePath), false);
   assert.equal(await workflowFs.pathExists(sidecars.dataset), false);
   assert.equal(await workflowFs.pathExists(sidecars.settings), false);

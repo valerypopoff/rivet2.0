@@ -471,14 +471,10 @@ test('filesystem recording statistics use indexed identities for endpoint and we
   const endpointCatalog = await workflowRecordings.listWorkflowRunStatisticsCatalog(
     workflowsRoot,
     'endpoint',
-    period,
-    'published',
   );
   const webAppCatalog = await workflowRecordings.listWorkflowRunStatisticsCatalog(
     workflowsRoot,
     'web_app',
-    period,
-    'published',
   );
 
   assert.deepEqual(endpointCatalog.targets.map((target) => target.target), [
@@ -516,12 +512,7 @@ test('filesystem recording statistics use indexed identities for endpoint and we
 
   await withWorkflowExecutionServer(async ({ apiBaseUrl }) => {
     const targetsResponse = await fetch(
-      `${apiBaseUrl}/run-statistics/targets?${new URLSearchParams({
-        surface: 'web_app',
-        from: period.from,
-        to: period.to,
-        runKind: 'published',
-      })}`,
+      `${apiBaseUrl}/run-statistics/targets?${new URLSearchParams({ surface: 'web_app' })}`,
     );
     assert.equal(targetsResponse.ok, true);
     const targets = await readJson<{
@@ -552,12 +543,27 @@ test('filesystem recording statistics use indexed identities for endpoint and we
         runKind: 'published',
         includeFailed: false,
         includeWarnings: false,
+        aggregation: 'week',
       }),
     });
     assert.equal(statisticsResponse.ok, true);
     const statistics = await readJson<{ current: { runCount: number; medianDurationMs: number | null } }>(statisticsResponse);
     assert.equal(statistics.current.runCount, 1);
     assert.equal(statistics.current.medianDurationMs, 250);
+
+    const invalidAggregationResponse = await fetch(`${apiBaseUrl}/run-statistics/query`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        target: stableTarget,
+        period,
+        runKind: 'published',
+        includeFailed: false,
+        includeWarnings: false,
+        aggregation: 'month',
+      }),
+    });
+    assert.equal(invalidAggregationResponse.status, 400);
   });
 });
 

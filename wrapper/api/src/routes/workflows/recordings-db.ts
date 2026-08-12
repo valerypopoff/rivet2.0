@@ -588,6 +588,18 @@ export async function listWorkflowRecordingStatisticsRows(
   });
 }
 
+export async function listWorkflowRecordingStatisticsCatalogRows(): Promise<WorkflowRecordingStatisticsRow[]> {
+  const runs = await listWorkflowRecordingRunsOldestFirst();
+  const workflowNames = new Map(
+    (await listWorkflowRecordingWorkflowStatsRows()).map((workflow) => [workflow.workflowId, workflow.sourceProjectName]),
+  );
+
+  return runs.map((run) => ({
+    ...run,
+    sourceProjectName: workflowNames.get(run.workflowId) ?? run.workflowId,
+  }));
+}
+
 export async function listWorkflowRecordingBundlePaths(): Promise<string[]> {
   const db = await getDatabase();
   const rows = db.prepare(`

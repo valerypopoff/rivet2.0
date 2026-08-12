@@ -25,7 +25,7 @@ const resolveRivet = {
 
 esbuild
   .build({
-    entryPoints: [path.join(appExecutorDir, 'bin', 'executor.mts')],
+    entryPoints: [path.join(wrapperExecutorDir, 'src', 'executor.mts')],
     bundle: true,
     platform: 'node',
     outfile: path.join(appExecutorDir, 'bin', 'executor-bundle.cjs'),

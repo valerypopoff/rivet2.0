@@ -54,6 +54,7 @@ import {
 } from './storage-backend.js';
 import { createWorkflowDownloadContentDisposition } from './workflow-download.js';
 import { getStatisticsQueryPeriod } from './recording-statistics.js';
+import { llmProfileHealthRouter } from './llm-profile-health.js';
 
 export const workflowsRouter = Router();
 const timing = createResponseTimingMiddleware();
@@ -126,6 +127,8 @@ const publishProjectSchema = z.object({
   relativePath: z.unknown(),
   settings: z.unknown().optional(),
 });
+
+workflowsRouter.use('/llm-profile-health', llmProfileHealthRouter);
 
 const publishProjectWebAppsSchema = z.object({
   relativePath: z.unknown(),
@@ -216,9 +219,6 @@ const runStatisticsPeriodSchema = z.object({
 
 const runStatisticsCatalogQuerySchema = z.object({
   surface: z.enum(['endpoint', 'web_app']),
-  from: z.string().datetime(),
-  to: z.string().datetime(),
-  runKind: z.enum(['published', 'latest', 'both']).optional().default('both'),
 });
 
 const runStatisticsQuerySchema = z.object({
@@ -227,6 +227,7 @@ const runStatisticsQuerySchema = z.object({
   runKind: z.enum(['published', 'latest', 'both']),
   includeFailed: z.boolean().default(false),
   includeWarnings: z.boolean().default(false),
+  aggregation: z.enum(['auto', 'day', 'week']).optional().default('auto'),
 });
 
 workflowsRouter.get('/tree', timing, asyncHandler(async (_req, res) => {
@@ -243,13 +244,7 @@ workflowsRouter.get('/recordings/workflows', asyncHandler(async (_req, res) => {
 
 workflowsRouter.get('/run-statistics/targets', asyncHandler(async (req, res) => {
   const query = runStatisticsCatalogQuerySchema.parse(req.query);
-  let period;
-  try {
-    period = getStatisticsQueryPeriod(query);
-  } catch (error) {
-    throw badRequest(error instanceof Error ? error.message : 'Invalid statistics period');
-  }
-  res.json(await listWorkflowRunStatisticsCatalogWithBackend(query.surface, period, query.runKind));
+  res.json(await listWorkflowRunStatisticsCatalogWithBackend(query.surface));
 }));
 
 workflowsRouter.post('/run-statistics/query', validateBody(runStatisticsQuerySchema), asyncHandler(async (req, res) => {

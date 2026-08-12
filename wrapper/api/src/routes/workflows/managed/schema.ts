@@ -325,4 +325,24 @@ CREATE TABLE IF NOT EXISTS web_app_action_cancel_commands (
 CREATE INDEX IF NOT EXISTS web_app_action_cancel_commands_pending_idx
   ON web_app_action_cancel_commands(host_id, requested_at)
   WHERE acknowledged_at IS NULL;
+
+-- Operational LLM Profile circuit state is deliberately separate from project
+-- revisions and user Stored Values. JSONB keeps the host store forward-compatible
+-- with the public Rivet health-store contract while row locks make transitions
+-- atomic across execution pods.
+CREATE TABLE IF NOT EXISTS llm_profile_health (
+  key TEXT PRIMARY KEY,
+  project_id TEXT NULL,
+  entry_json JSONB NULL,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+ALTER TABLE llm_profile_health
+  ADD COLUMN IF NOT EXISTS project_id TEXT NULL;
+
+CREATE INDEX IF NOT EXISTS llm_profile_health_project_id_idx
+  ON llm_profile_health(project_id);
+
+CREATE INDEX IF NOT EXISTS llm_profile_health_updated_at_idx
+  ON llm_profile_health(updated_at DESC);
 `;
