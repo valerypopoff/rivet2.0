@@ -365,13 +365,17 @@ describe('api', () => {
     try {
       const project = makePineconeKnowledgeStatusProject();
       const environmentOutputs = await runGraph(project, {});
+      const hostEnvironmentOutputs = await runGraph(project, {
+        executionEnvironment: { PINECONE_API_KEY: 'host-pinecone-key' },
+      });
       const explicitOutputs = await runGraph(project, {
         pluginEnv: { PINECONE_API_KEY: 'explicit-pinecone-key' },
       });
 
       assert.equal(environmentOutputs.value?.type, 'string');
+      assert.equal(hostEnvironmentOutputs.value?.type, 'string');
       assert.equal(explicitOutputs.value?.type, 'string');
-      assert.deepEqual(requestApiKeys, ['headless-pinecone-key', 'explicit-pinecone-key']);
+      assert.deepEqual(requestApiKeys, ['headless-pinecone-key', 'host-pinecone-key', 'explicit-pinecone-key']);
     } finally {
       globalThis.fetch = originalFetch;
       resetGlobalRivetNodeRegistry();

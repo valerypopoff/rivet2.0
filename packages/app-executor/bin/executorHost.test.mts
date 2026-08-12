@@ -14,7 +14,18 @@ void test('app executor exposes a host entrypoint without changing standalone st
   assert.match(hostSource, /if \(hasAppExecutorModuleLoaded\(\)\)/);
   assert.match(executorSource, /markAppExecutorModuleLoaded\(\)/);
   assert.match(executorSource, /getAppExecutorHostOptions\(\)\.createProcessorOptions/);
-  assert.match(executorSource, /\.\.\.injectedProcessorOptions,[\s\S]*graph: graphId,/);
+  assert.match(
+    executorSource,
+    /const \{ executionEnvironment: hostExecutionEnvironment, \.\.\.hostProcessorOptions \} = injectedProcessorOptions;/,
+  );
+  assert.match(
+    executorSource,
+    /const \{ executionEnvironment: ignoredUploadedExecutionEnvironment, \.\.\.uploadedSettings \}/,
+  );
+  assert.match(
+    executorSource,
+    /\.\.\.hostProcessorOptions,[\s\S]*graph: graphId,[\s\S]*\.\.\.uploadedSettings,[\s\S]*executionEnvironment: hostExecutionEnvironment,/,
+  );
   assert.match(executorSource, /isWebAppAction: initialWebAppStorage !== undefined/);
   assert.doesNotMatch(executorSource, /from '\.\/executorHost\.mjs'/);
   assert.match(stateSource, /export function configureAppExecutorHost/);

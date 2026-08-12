@@ -105,6 +105,15 @@ This package is the shared Node runtime used by:
 - parts of the app-executor stack
 
 It is not just a convenience wrapper. It sets Node-default providers, debugger integration, env-based LLM/plugin config fallback, and Node-specific reference loading. When callers use the default Node registry, project-declared built-in plugins are registered before processor construction so their nodes, provider integrations, and declared string/secret environment fallbacks are available in headless graph and web-app runs; an explicitly supplied registry remains host-owned and is not augmented. Runtime settings still flow through core's shared `resolveProcessSettings(...)` helper instead of being rebuilt independently in the Node package. When callers omit shared LLM credentials, the Node package fills `openAiApiKey`/legacy `openAiKey` from `OPENAI_API_KEY`, `anthropicApiKey` from `ANTHROPIC_API_KEY`, `googleApiKey` from `GOOGLE_GENERATIVE_AI_API_KEY`, and shared `customAiApiKey` from the canonical `CUSTOM_PROVIDER_API_KEY` env var before falling back to legacy `CUSTOM_AI_API_KEY`; named custom-provider keys should be passed explicitly as top-level run options whose names match each node's `Alternative programmatic key name`, while plugin-declared env values continue to populate `pluginEnv`. Supplying `pluginEnv` explicitly replaces that automatic plugin-environment extraction rather than merging with `process.env`.
+
+Hosted runtimes may pass `executionEnvironment` to `createProcessor(...)` or
+`createGraphRunner(...)`. It is an immutable per-run overlay: Node merges it
+over the real process environment for provider/plugin fallback and gives Code
+nodes that enable `Allow "process"` a scoped `process.env` view, without mutating global `process.env` or
+placing the values in project-visible Rivet settings. App-executor hosts pass
+the same option through `createProcessorOptions`; uploaded executor settings
+cannot override it. This is the supported seam for server-owned live credential
+rotation and other host-managed environment values.
 It also supplies a default tokenizer for Node-side runs when the caller does not provide one explicitly.
 
 The default Node MCP provider deliberately uses short-lived clients. Every tool or

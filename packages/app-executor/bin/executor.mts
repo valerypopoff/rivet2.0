@@ -309,13 +309,6 @@ const rivetDebugger = startDebuggerServer({
         logRuntimeError(`Failed to enable plugin ${fail.id}.`, fail.error);
       }
 
-      const codeRunner = new AppExecutorWorkerCodeRunner((message) => {
-        if (processorForConsole) {
-          rivetDebugger.broadcast(processorForConsole, 'codeConsole', message, requestId);
-        }
-      });
-      const clientScopedDebugger = createClientScopedDebugger(client);
-
       const injectedProcessorOptions =
         (await getAppExecutorHostOptions().createProcessorOptions?.({
           graphId,
@@ -324,6 +317,19 @@ const rivetDebugger = startDebuggerServer({
           projectPath,
           requestId,
         })) ?? {};
+      const { executionEnvironment: hostExecutionEnvironment, ...hostProcessorOptions } = injectedProcessorOptions;
+      const { executionEnvironment: ignoredUploadedExecutionEnvironment, ...uploadedSettings } =
+        (debuggerState.settings ?? {}) as Rivet.Settings & { executionEnvironment?: unknown };
+      void ignoredUploadedExecutionEnvironment;
+      const codeRunner = new AppExecutorWorkerCodeRunner(
+        (message) => {
+          if (processorForConsole) {
+            rivetDebugger.broadcast(processorForConsole, 'codeConsole', message, requestId);
+          }
+        },
+        { executionEnvironment: hostExecutionEnvironment },
+      );
+      const clientScopedDebugger = createClientScopedDebugger(client);
 
       const webAppStorage =
         initialWebAppStorage === undefined
@@ -344,10 +350,11 @@ const rivetDebugger = startDebuggerServer({
           }
         : undefined;
       const processor = createProcessor(project, {
-        ...injectedProcessorOptions,
+        ...hostProcessorOptions,
         graph: graphId,
         inputs,
-        ...debuggerState.settings!,
+        ...uploadedSettings,
+        executionEnvironment: hostExecutionEnvironment,
         remoteDebugger: clientScopedDebugger,
         remoteDebuggerRequestId: requestId,
         captureNodeTimings: captureNodeTimings ?? false,

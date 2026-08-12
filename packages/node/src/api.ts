@@ -99,6 +99,12 @@ export async function runGraphInFile(path: string, options: NodeRunGraphOptions)
 }
 
 export type NodeRunGraphOptions = RunGraphOptions & {
+  /**
+   * Host-owned environment values for one processor run. These overlay the
+   * process environment without changing it, which keeps concurrent hosted
+   * executions isolated from each other.
+   */
+  executionEnvironment?: Readonly<Record<string, string | undefined>>;
   remoteDebugger?: RivetDebuggerServer;
   remoteDebuggerRequestId?: RemoteRunRequestId;
 };
@@ -208,7 +214,8 @@ export function createProcessor(project: Project, options: NodeCreateProcessorOp
   attachRemoteDebugger();
   attachAbortCleanup();
 
-  const pluginEnv = resolveNodePluginEnv(effectiveProcessorOptions);
+  const executionEnvironment = resolveNodeExecutionEnvironment(effectiveProcessorOptions);
+  const pluginEnv = resolveNodePluginEnv(effectiveProcessorOptions, executionEnvironment);
 
   return {
     ...processor,
@@ -236,7 +243,9 @@ export function createProcessor(project: Project, options: NodeCreateProcessorOp
         attachAbortCleanup();
       }
 
-      const runScopedCodeRunner = runtimePolicy.useCachedDefaultCodeRunner ? new CachedNodeCodeRunner() : undefined;
+      const runScopedCodeRunner = runtimePolicy.useCachedDefaultCodeRunner
+        ? new CachedNodeCodeRunner({ executionEnvironment })
+        : undefined;
       const detachProcessorAbort = bindAbortSignal(processor.processor, abortSignal);
 
       const cleanupRunResources = () => {
@@ -254,7 +263,9 @@ export function createProcessor(project: Project, options: NodeCreateProcessorOp
 
       try {
         const outputsPromise = processor.processor.processGraph(
-          createNodeProcessContext(effectiveProcessorOptions, pluginEnv, { codeRunner: runScopedCodeRunner }),
+          createNodeProcessContext(effectiveProcessorOptions, pluginEnv, executionEnvironment, {
+            codeRunner: runScopedCodeRunner,
+          }),
           processor.inputs,
           processor.contextValues,
           { returnWhenGraphOutputsReady: effectiveProcessorOptions.returnWhenGraphOutputsReady },
@@ -291,17 +302,17 @@ export function createGraphRunner(project: Project, options: NodeGraphRunnerOpti
   };
   void ignoredRuntimeProfile;
 
-  const typedProcessorOptions = processorOptions as RunGraphOptions;
-  const effectiveProcessorOptions: RunGraphOptions = {
+  const typedProcessorOptions = processorOptions as NodeRunGraphOptions;
+  const effectiveProcessorOptions: NodeRunGraphOptions = {
     ...typedProcessorOptions,
     registry: resolveNodeProcessorRegistry(project, typedProcessorOptions.registry),
   };
+  const executionEnvironment = resolveNodeExecutionEnvironment(effectiveProcessorOptions);
   const processContext = createNodeProcessContext(
     effectiveProcessorOptions,
-    resolveNodePluginEnv(effectiveProcessorOptions),
-    {
-      codeRunner: undefined,
-    },
+    resolveNodePluginEnv(effectiveProcessorOptions, executionEnvironment),
+    executionEnvironment,
+    { codeRunner: undefined },
   );
   const activeProcessors = new Set<NodeGraphProcessor>();
   let disposed = false;
@@ -528,39 +539,63 @@ function createRunnerProcessor(project: Project, options: RunGraphOptions): Node
 }
 
 function createNodeProcessContext(
-  options: RunGraphOptions,
+  options: NodeRunGraphOptions,
   pluginEnv: Record<string, string | undefined>,
+  executionEnvironment: Readonly<Record<string, string | undefined>>,
   overrides: { codeRunner?: ProcessContext['codeRunner'] } = {},
 ): ProcessContext {
+  // This overlay is a host execution facility, never project-visible settings.
+  const { executionEnvironment: ignoredExecutionEnvironment, ...runtimeOptions } = options;
+  void ignoredExecutionEnvironment;
+
   return {
-    nativeApi: options.nativeApi ?? new NodeNativeApi(),
-    datasetProvider: options.datasetProvider,
-    mcpProvider: options.mcpProvider ?? new NodeMCPProvider(),
-    audioProvider: options.audioProvider,
-    tokenizer: options.tokenizer ?? new FallbackTokenizer(),
-    codeRunner: options.codeRunner ?? overrides.codeRunner ?? new NodeCodeRunner(),
-    projectPath: options.projectPath,
-    projectReferenceLoader: options.projectReferenceLoader ?? new NodeProjectReferenceLoader(),
-    editorExecutionCache: options.editorExecutionCache,
+    nativeApi: runtimeOptions.nativeApi ?? new NodeNativeApi(),
+    datasetProvider: runtimeOptions.datasetProvider,
+    mcpProvider: runtimeOptions.mcpProvider ?? new NodeMCPProvider(),
+    audioProvider: runtimeOptions.audioProvider,
+    tokenizer: runtimeOptions.tokenizer ?? new FallbackTokenizer(),
+    codeRunner: runtimeOptions.codeRunner ?? overrides.codeRunner ?? new NodeCodeRunner(executionEnvironment),
+    projectPath: runtimeOptions.projectPath,
+    projectReferenceLoader: runtimeOptions.projectReferenceLoader ?? new NodeProjectReferenceLoader(),
+    editorExecutionCache: runtimeOptions.editorExecutionCache,
     settings: resolveProcessSettings(
-      { ...options, pluginEnv },
+      { ...runtimeOptions, pluginEnv },
       {
-        openAiApiKey: process.env.OPENAI_API_KEY ?? '',
-        anthropicApiKey: process.env.ANTHROPIC_API_KEY ?? '',
-        googleApiKey: process.env.GOOGLE_GENERATIVE_AI_API_KEY ?? '',
-        customAiApiKey: process.env.CUSTOM_PROVIDER_API_KEY ?? process.env.CUSTOM_AI_API_KEY ?? '',
-        openAiOrganization: process.env.OPENAI_ORG_ID ?? '',
+        openAiApiKey: executionEnvironment.OPENAI_API_KEY ?? '',
+        anthropicApiKey: executionEnvironment.ANTHROPIC_API_KEY ?? '',
+        googleApiKey: executionEnvironment.GOOGLE_GENERATIVE_AI_API_KEY ?? '',
+        customAiApiKey: executionEnvironment.CUSTOM_PROVIDER_API_KEY ?? executionEnvironment.CUSTOM_AI_API_KEY ?? '',
+        openAiOrganization: executionEnvironment.OPENAI_ORG_ID ?? '',
       },
     ),
-    getChatNodeEndpoint: options.getChatNodeEndpoint,
-    onChatV2CallFinished: options.onChatV2CallFinished,
-    llmProfileHealthStore: options.llmProfileHealthStore,
+    getChatNodeEndpoint: runtimeOptions.getChatNodeEndpoint,
+    onChatV2CallFinished: runtimeOptions.onChatV2CallFinished,
+    llmProfileHealthStore: runtimeOptions.llmProfileHealthStore,
   };
 }
 
-function resolveNodePluginEnv(options: RunGraphOptions): Record<string, string | undefined> {
-  // If unset, use process.env
-  return options.pluginEnv ?? getPluginEnvFromProcessEnv(options.registry);
+function resolveNodeExecutionEnvironment(options: NodeRunGraphOptions): Readonly<Record<string, string | undefined>> {
+  if (!options.executionEnvironment || Object.keys(options.executionEnvironment).length === 0) {
+    return process.env;
+  }
+
+  return { ...process.env, ...options.executionEnvironment };
+}
+
+function resolveNodePluginEnv(
+  options: NodeRunGraphOptions,
+  executionEnvironment: Readonly<Record<string, string | undefined>>,
+): Record<string, string | undefined> {
+  const pluginEnv = options.pluginEnv ?? getPluginEnvFromEnvironment(options.registry, executionEnvironment);
+  if (!options.executionEnvironment || Object.keys(options.executionEnvironment).length === 0) {
+    return pluginEnv;
+  }
+
+  // `executionEnvironment` also includes the real process environment so Code
+  // nodes and first-class provider fallbacks see the normal Node baseline. Do
+  // not copy that entire baseline into `pluginEnv`: only declared plugin values
+  // and the host's explicit overlay belong in project runtime settings.
+  return { ...pluginEnv, ...options.executionEnvironment };
 }
 
 function bindAbortSignal(processor: NodeGraphProcessor, abortSignal?: AbortSignal): () => void {
@@ -578,7 +613,10 @@ function bindAbortSignal(processor: NodeGraphProcessor, abortSignal?: AbortSigna
   };
 }
 
-function getPluginEnvFromProcessEnv(registry?: NodeRegistration<any, any>) {
+function getPluginEnvFromEnvironment(
+  registry: NodeRegistration<any, any> | undefined,
+  environment: Readonly<Record<string, string | undefined>>,
+) {
   const pluginEnv: Record<string, string> = {};
   for (const plugin of (registry ?? globalRivetNodeRegistry).getPlugins() ?? []) {
     for (const [configName, config] of Object.entries(plugin.configSpec ?? {})) {
@@ -597,7 +635,7 @@ function getPluginEnvFromProcessEnv(registry?: NodeRegistration<any, any>) {
             ? configName
             : undefined;
       if (envVarName) {
-        pluginEnv[envVarName] = process.env[envVarName] ?? '';
+        pluginEnv[envVarName] = environment[envVarName] ?? '';
       }
     }
   }
