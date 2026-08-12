@@ -587,15 +587,16 @@ function resolveNodePluginEnv(
   executionEnvironment: Readonly<Record<string, string | undefined>>,
 ): Record<string, string | undefined> {
   const pluginEnv = options.pluginEnv ?? getPluginEnvFromEnvironment(options.registry, executionEnvironment);
-  if (!options.executionEnvironment || Object.keys(options.executionEnvironment).length === 0) {
+  const hostEnvironmentOverlay = options.executionEnvironment;
+  if (!hostEnvironmentOverlay || Object.keys(hostEnvironmentOverlay).length === 0) {
     return pluginEnv;
   }
 
   // `executionEnvironment` also includes the real process environment so Code
   // nodes and first-class provider fallbacks see the normal Node baseline. Do
   // not copy that entire baseline into `pluginEnv`: only declared plugin values
-  // and the host's explicit overlay belong in project runtime settings.
-  return { ...pluginEnv, ...options.executionEnvironment };
+  // and this host's explicit overlay belong in project runtime settings.
+  return { ...pluginEnv, ...hostEnvironmentOverlay };
 }
 
 function bindAbortSignal(processor: NodeGraphProcessor, abortSignal?: AbortSignal): () => void {

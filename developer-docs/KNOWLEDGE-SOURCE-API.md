@@ -147,7 +147,9 @@ still require explicit host loading. Node environment extraction honors
 declared fallbacks on both string and secret plugin configuration fields.
 Passing `pluginEnv` explicitly replaces automatic plugin-environment extraction
 for that processor, so hosts that provide it must include every fallback they
-want Knowledge Store providers to see.
+want Knowledge Store providers to see. A separate Node
+`executionEnvironment` overlay may still supply explicitly managed names; it
+does not project the host's remaining physical environment into `pluginEnv`.
 
 ## Data and Node Surface
 
