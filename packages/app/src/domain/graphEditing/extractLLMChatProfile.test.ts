@@ -26,6 +26,12 @@ function createChatNode(): LLMChatV2Node {
       provider: 'custom',
       model: 'custom-model',
       apiKeySource: 'input',
+      providerApiKeyNames: {
+        openai: {
+          programmaticName: 'billingOpenAiKey',
+          environmentVariableName: 'BILLING_OPENAI_KEY',
+        },
+      },
       useModelInput: true,
       useCustomProviderBaseURLInput: true,
       useTemperatureInput: true,
@@ -97,8 +103,11 @@ test('extractLLMChatConfigurationToProfile moves profile-owned inputs and keeps 
   assert.equal(result.profileNode.data.model, 'custom-model');
   assert.equal(result.profileNode.data.useModelInput, true);
   assert.equal(result.profileNode.data.apiKeySource, 'input');
+  assert.deepEqual(result.profileNode.data.providerApiKeyNames, chatNode.data.providerApiKeyNames);
 
-  const profileInputConnections = result.nextConnections.filter((connection) => connection.inputNodeId === profileNodeId);
+  const profileInputConnections = result.nextConnections.filter(
+    (connection) => connection.inputNodeId === profileNodeId,
+  );
   assert.deepEqual(
     profileInputConnections.map((connection) => connection.inputId).sort(),
     ['apiKey', 'customProviderBaseURL', 'extraProviderOptions', 'headers', 'model', 'temperature'].sort(),
@@ -129,8 +138,14 @@ test('extractLLMChatConfigurationToProfile moves profile-owned inputs and keeps 
     1,
   );
 
-  assert.deepEqual(result.nextChatRecoverableConnections.map((connection) => connection.inputId), ['prompt']);
-  assert.deepEqual(result.nextProfileRecoverableConnections.map((connection) => connection.inputId), ['temperature']);
+  assert.deepEqual(
+    result.nextChatRecoverableConnections.map((connection) => connection.inputId),
+    ['prompt'],
+  );
+  assert.deepEqual(
+    result.nextProfileRecoverableConnections.map((connection) => connection.inputId),
+    ['temperature'],
+  );
 });
 
 test('extractLLMChatConfigurationToProfile rejects chats already configured from a profile', () => {
@@ -193,7 +208,5 @@ test('extractLLMChatConfigurationToProfile moves disabled profile-owned recovera
   });
 
   assert.deepEqual(result.nextChatRecoverableConnections, []);
-  assert.deepEqual(result.nextProfileRecoverableConnections, [
-    { ...topPConnection, inputNodeId: profileNodeId },
-  ]);
+  assert.deepEqual(result.nextProfileRecoverableConnections, [{ ...topPConnection, inputNodeId: profileNodeId }]);
 });

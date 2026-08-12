@@ -14,6 +14,7 @@ import { GetGlobalVariableSelectorEditor } from './custom/GetGlobalVariableSelec
 import { GetStoredValueSelectorEditor } from './custom/GetStoredValueSelectorEditor';
 import { KnowledgeStoreSelectorEditor } from './custom/KnowledgeStoreSelectorEditor';
 import { LLMChatV2ConfigurationEditor } from './custom/LLMChatV2ConfigurationEditor';
+import { LLMChatV2CredentialNamesEditor } from './custom/LLMChatV2CredentialNamesEditor';
 
 export const CustomEditor: FC<
   SharedEditorProps & {
@@ -31,6 +32,7 @@ export const CustomEditor: FC<
     .with('PromptNodeAiAssist', () => <PromptNodeAiAssistEditor {...props} editor={editor} />)
     .with('TextNodeAiAssist', () => <TextNodeAiAssistEditor {...props} editor={editor} />)
     .with('LLMChatV2Configuration', () => <LLMChatV2ConfigurationEditor {...props} editor={editor} />)
+    .with('LLMChatV2CredentialNames', () => <LLMChatV2CredentialNamesEditor {...props} editor={editor} />)
     .with('LLMChatV2ModelCatalog', () => <LLMChatV2ModelCatalogEditor {...props} editor={editor} />)
     .with('GetGlobalVariableSelector', () => <GetGlobalVariableSelectorEditor {...props} editor={editor} />)
     .with('GetStoredValueSelector', () => <GetStoredValueSelectorEditor {...props} editor={editor} />)

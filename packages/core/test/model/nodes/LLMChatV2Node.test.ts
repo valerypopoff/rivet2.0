@@ -2,7 +2,7 @@ import { describe, it, mock } from 'node:test';
 import { strict as assert } from 'node:assert';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { type LLMChatV2Node, LLMChatV2NodeImpl } from '../../../src/index.js';
+import { CHAT_V2_DEFAULT_CREDENTIAL_NAMES, type LLMChatV2Node, LLMChatV2NodeImpl } from '../../../src/index.js';
 import {
   createsLLMChatV2ToolResponseFormatConflictForEdit,
   hasLLMChatV2ToolResponseFormatConflict,
@@ -120,6 +120,7 @@ describe('LLMChatV2NodeImpl', () => {
     assert.equal(node.title, 'LLM Chat');
     assert.equal(node.data.provider, 'openai');
     assert.equal(node.data.apiKeySource, 'environment');
+    assert.equal(node.data.providerApiKeyNames, undefined);
     assert.equal(node.data.customProviderApiKeyProgrammaticName, '');
     assert.equal(node.data.customProviderApiKeyEnvVarName, 'CUSTOM_PROVIDER_API_KEY');
     assert.equal(node.data.customProviderBaseURL, '');
@@ -167,6 +168,14 @@ describe('LLMChatV2NodeImpl', () => {
     assert.equal(node.data.outputResponseBody, false);
   });
 
+  it('keeps the public built-in credential defaults stable', () => {
+    assert.deepEqual(CHAT_V2_DEFAULT_CREDENTIAL_NAMES, {
+      openai: { programmaticName: 'openAiApiKey', environmentVariableName: 'OPENAI_API_KEY' },
+      anthropic: { programmaticName: 'anthropicApiKey', environmentVariableName: 'ANTHROPIC_API_KEY' },
+      google: { programmaticName: 'googleApiKey', environmentVariableName: 'GOOGLE_GENERATIVE_AI_API_KEY' },
+    });
+  });
+
   it('uses the dedicated configuration editor so Inline settings can be exported to a profile', async () => {
     const node = createNode();
     const editors = await node.getEditors({});
@@ -189,6 +198,9 @@ describe('LLMChatV2NodeImpl', () => {
     const editors = await inputNode.getEditors({});
     const modelGroup = editors.find((editor) => editor.type === 'group' && editor.label === 'Model') as any;
     const apiKeySourceEditor = modelGroup.editors.find((editor: any) => editor.dataKey === 'apiKeySource');
+    const credentialNamesEditor = modelGroup.editors.find(
+      (editor: any) => editor.customEditorId === 'LLMChatV2CredentialNames',
+    );
 
     assert.ok(!defaultInputs.some((input) => input.id === 'apiKey'));
     assert.deepEqual(inputPort, {
@@ -204,9 +216,13 @@ describe('LLMChatV2NodeImpl', () => {
       { value: 'input', label: 'Input port' },
     ]);
     assert.equal(typeof apiKeySourceEditor?.helperMessage, 'function');
+    assert.equal(credentialNamesEditor?.label, 'Configured API key names');
+    assert.equal(credentialNamesEditor?.hideIf(defaultNode.data), false);
+    assert.equal(credentialNamesEditor?.hideIf(inputNode.data), true);
+    assert.equal(credentialNamesEditor?.hideIf(createNode({ provider: 'custom' }).data), true);
     assert.equal(
       apiKeySourceEditor.helperMessage(defaultNode.data),
-      'Configured key uses Settings > LLM > OpenAI API Key in the Rivet editor, with OPENAI_API_KEY as a desktop/Node fallback. Programmatic runs can pass openAiApiKey or set OPENAI_API_KEY.',
+      'Configured key uses openAiApiKey or OPENAI_API_KEY, including the existing Settings > LLM provider key.',
     );
     assert.equal(
       apiKeySourceEditor.helperMessage(inputNode.data),
@@ -214,7 +230,21 @@ describe('LLMChatV2NodeImpl', () => {
     );
     assert.equal(
       apiKeySourceEditor.helperMessage(createNode({ provider: 'anthropic' }).data),
-      'Configured key uses Settings > LLM > Anthropic API Key in the Rivet editor, with ANTHROPIC_API_KEY as a desktop/Node fallback. Programmatic runs can pass anthropicApiKey or set ANTHROPIC_API_KEY.',
+      'Configured key uses anthropicApiKey or ANTHROPIC_API_KEY, including the existing Settings > LLM provider key.',
+    );
+    assert.equal(
+      apiKeySourceEditor.helperMessage(
+        createNode({
+          provider: 'google',
+          providerApiKeyNames: {
+            google: {
+              programmaticName: 'searchGoogleKey',
+              environmentVariableName: 'SEARCH_GOOGLE_KEY',
+            },
+          },
+        }).data,
+      ),
+      'Configured key checks searchGoogleKey first, then SEARCH_GOOGLE_KEY. This explicit override does not fall back to the shared provider key.',
     );
   });
 
@@ -253,6 +283,7 @@ describe('LLMChatV2NodeImpl', () => {
         'customProviderApi',
         'LLMChatV2ModelCatalog',
         'apiKeySource',
+        'LLMChatV2CredentialNames',
         'customProviderApiKeyProgrammaticName',
         'customProviderApiKeyEnvVarName',
       ],
@@ -1889,6 +1920,158 @@ describe('LLMChatV2NodeImpl', () => {
         }),
       ),
       'configured-google-key',
+    );
+  });
+
+  it('shows only non-default built-in credential names in the node body', () => {
+    const defaultBody = getMarkdownBodyText(createNode({ provider: 'openai' }));
+    const overrideBody = getMarkdownBodyText(
+      createNode({
+        provider: 'openai',
+        providerApiKeyNames: {
+          openai: {
+            programmaticName: 'billingOpenAiKey',
+            environmentVariableName: 'BILLING_OPENAI_KEY',
+          },
+        },
+      }),
+    );
+
+    assert.doesNotMatch(defaultBody, /Programmatic API key name/);
+    assert.match(overrideBody, /Programmatic API key name:<\/span> billingOpenAiKey/);
+    assert.match(overrideBody, /API key environment variable:<\/span> BILLING\\_OPENAI\\_KEY/);
+  });
+
+  it('keeps malformed built-in credential aliases out of display paths while execution stays strict', async () => {
+    const node = createNode({
+      provider: 'openai',
+      providerApiKeyNames: {
+        openai: { programmaticName: 'not valid', environmentVariableName: 'NOT-PORTABLE' },
+      },
+    });
+
+    assert.doesNotThrow(() => getMarkdownBodyText(node));
+    await assert.doesNotReject(() => node.getEditors({}));
+    assert.throws(
+      () => resolveLLMChatV2ApiKey(node.data, {}, createRuntimeContext()),
+      /programmatic API key name must be a JavaScript-style identifier/,
+    );
+  });
+
+  it('resolves strict built-in provider aliases in programmatic, plugin env, and Node env order', () => {
+    const node = createNode({
+      provider: 'openai',
+      providerApiKeyNames: {
+        openai: {
+          programmaticName: 'billingOpenAiKey',
+          environmentVariableName: 'BILLING_OPENAI_KEY',
+        },
+      },
+    });
+    const previousProcessValue = process.env.BILLING_OPENAI_KEY;
+    process.env.BILLING_OPENAI_KEY = 'node-env-key';
+
+    try {
+      assert.equal(
+        resolveLLMChatV2ApiKey(
+          node.data,
+          {},
+          createRuntimeContext({
+            settings: {
+              openAiApiKey: 'shared-key-that-must-not-win',
+              billingOpenAiKey: 'programmatic-alias-key',
+              pluginEnv: { BILLING_OPENAI_KEY: 'plugin-env-key' },
+            },
+          }),
+        ),
+        'programmatic-alias-key',
+      );
+      assert.equal(
+        resolveLLMChatV2ApiKey(
+          node.data,
+          {},
+          createRuntimeContext({ settings: { pluginEnv: { BILLING_OPENAI_KEY: 'plugin-env-key' } } }),
+        ),
+        'plugin-env-key',
+      );
+      assert.equal(resolveLLMChatV2ApiKey(node.data, {}, createRuntimeContext({ settings: {} })), 'node-env-key');
+    } finally {
+      if (previousProcessValue == null) delete process.env.BILLING_OPENAI_KEY;
+      else process.env.BILLING_OPENAI_KEY = previousProcessValue;
+    }
+  });
+
+  it('does not fall back to a shared provider key when an explicit built-in alias is missing', () => {
+    const data = createNode({
+      provider: 'anthropic',
+      providerApiKeyNames: {
+        anthropic: {
+          programmaticName: 'legalAnthropicKey',
+          environmentVariableName: 'LEGAL_ANTHROPIC_KEY',
+        },
+      },
+    }).data;
+
+    const previousProcessValue = process.env.LEGAL_ANTHROPIC_KEY;
+    process.env.LEGAL_ANTHROPIC_KEY = '   ';
+
+    try {
+      assert.throws(
+        () =>
+          resolveLLMChatV2ApiKey(
+            data,
+            {},
+            createRuntimeContext({
+              settings: {
+                anthropicApiKey: 'shared-key-that-must-not-win',
+                legalAnthropicKey: '   ',
+                pluginEnv: { LEGAL_ANTHROPIC_KEY: '   ' },
+              },
+              getPluginConfig: () => 'shared-plugin-key-that-must-not-win',
+            }),
+          ),
+        /anthropic API key is not set\. Pass legalAnthropicKey programmatically or configure LEGAL_ANTHROPIC_KEY/,
+      );
+    } finally {
+      if (previousProcessValue == null) delete process.env.LEGAL_ANTHROPIC_KEY;
+      else process.env.LEGAL_ANTHROPIC_KEY = previousProcessValue;
+    }
+  });
+
+  it('keeps built-in aliases independent and lets the API-key input override them', () => {
+    const aliases = {
+      openai: { programmaticName: 'openAiOne', environmentVariableName: 'OPENAI_ONE' },
+      anthropic: { programmaticName: 'anthropicTwo', environmentVariableName: 'ANTHROPIC_TWO' },
+      google: { programmaticName: 'googleThree', environmentVariableName: 'GOOGLE_THREE' },
+    };
+    const settings = {
+      openAiOne: 'openai-key',
+      anthropicTwo: 'anthropic-key',
+      googleThree: 'google-key',
+    };
+
+    for (const [provider, expected] of [
+      ['openai', 'openai-key'],
+      ['anthropic', 'anthropic-key'],
+      ['google', 'google-key'],
+    ] as const) {
+      assert.equal(
+        resolveLLMChatV2ApiKey(
+          createNode({ provider, providerApiKeyNames: aliases }).data,
+          {},
+          createRuntimeContext({ settings }),
+        ),
+        expected,
+      );
+    }
+
+    assert.equal(
+      resolveLLMChatV2ApiKey(
+        createNode({ provider: 'google', apiKeySource: 'input', providerApiKeyNames: aliases }).data,
+        { apiKey: { type: 'string', value: 'input-key' } } as any,
+        createRuntimeContext({ settings }),
+      ),
+      'input-key',
     );
   });
 

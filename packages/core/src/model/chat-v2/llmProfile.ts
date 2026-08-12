@@ -13,6 +13,7 @@ import { LLM_PROFILE_VALUE_VERSION, pickLLMChatV2ProfileData, type LLMProfileVal
 import { createRivetLLMProfileHealthIdentity } from './llmProfileHealthStore.js';
 import type { NodeId } from '../NodeBase.js';
 import type { ProjectId } from '../Project.js';
+import { normalizeChatV2CredentialNamesByProvider } from './chatV2CredentialNames.js';
 
 export {
   applyLLMProfileToNodeData,
@@ -178,6 +179,7 @@ function normalizeConfiguration(data: LLMChatV2NodeData): LLMChatV2ProfileData {
   const resolvedData = {
     ...data,
     customProviderApi,
+    providerApiKeyNames: normalizeChatV2CredentialNamesByProvider(data.providerApiKeyNames),
     model: data.model.trim(),
     customProviderBaseURL: data.customProviderBaseURL.trim(),
     customProviderApiKeyProgrammaticName: data.customProviderApiKeyProgrammaticName?.trim(),

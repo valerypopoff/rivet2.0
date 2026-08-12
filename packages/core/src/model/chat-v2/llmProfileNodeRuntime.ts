@@ -57,6 +57,7 @@ export function resolveLLMProfileNodeValue(params: {
     context,
     apiKeySource: data.apiKeySource === 'input' ? 'input' : 'configured',
     inputs,
+    providerApiKeyNames: data.providerApiKeyNames,
     customProgrammaticName: data.customProviderApiKeyProgrammaticName,
     customEnvironmentName: data.customProviderApiKeyEnvVarName,
   });

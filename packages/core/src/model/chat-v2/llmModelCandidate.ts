@@ -59,6 +59,7 @@ export async function resolveLLMModelCandidate(params: {
       context: plan.context,
       apiKeySource: effectiveData.apiKeySource === 'input' ? 'input' : 'configured',
       inputs: plan.inputs,
+      providerApiKeyNames: effectiveData.providerApiKeyNames,
       customProgrammaticName: effectiveData.customProviderApiKeyProgrammaticName,
       customEnvironmentName: effectiveData.customProviderApiKeyEnvVarName,
     });

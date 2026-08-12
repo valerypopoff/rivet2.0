@@ -8,6 +8,7 @@ import type { ChatV2Provider } from './chatV2Types.js';
 import type { ChartNode, NodeId } from '../NodeBase.js';
 import { llmProfileDataKeys } from './llmProfileFieldRegistry.js';
 import type { CustomProviderApi } from './customProviderApi.js';
+import type { ChatV2CredentialNamesByProvider } from './chatV2CredentialNames.js';
 import {
   DEFAULT_LLM_PROFILE_CIRCUIT_FAILURE_THRESHOLD,
   DEFAULT_LLM_PROFILE_CIRCUIT_FAILURE_WINDOW_MS,
@@ -25,6 +26,7 @@ export type LLMChatV2NodeConfigData = ChatV2CommonNodeData & {
   configurationMode?: LLMChatV2ConfigurationMode;
   provider: ChatV2Provider;
   apiKeySource?: LLMChatV2ApiKeySource;
+  providerApiKeyNames?: ChatV2CredentialNamesByProvider;
   customProviderApiKeyProgrammaticName?: string;
   customProviderApiKeyEnvVarName?: string;
   customProviderBaseURL: string;

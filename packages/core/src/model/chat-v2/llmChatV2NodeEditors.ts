@@ -28,6 +28,7 @@ import {
   DEFAULT_LLM_PROFILE_FIRST_OUTPUT_TIMEOUT_MS,
   DEFAULT_LLM_PROFILE_STREAM_INACTIVITY_TIMEOUT_MS,
 } from './llmProfileHealthStore.js';
+import { getChatV2CredentialNamesForDisplay, isChatV2BuiltInProvider } from './chatV2CredentialNames.js';
 
 type LLMChatV2EditorDefinition = EditorDefinition<LLMChatV2Node>;
 type LLMProfileEditorNode = ChartNode<'llmProfile', LLMChatV2ProfileData>;
@@ -79,11 +80,14 @@ function getApiKeySourceHelperMessage(data: LLMChatV2NodeData): string {
 
   switch (data.provider) {
     case 'openai':
-      return 'Configured key uses Settings > LLM > OpenAI API Key in the Rivet editor, with OPENAI_API_KEY as a desktop/Node fallback. Programmatic runs can pass openAiApiKey or set OPENAI_API_KEY.';
     case 'anthropic':
-      return 'Configured key uses Settings > LLM > Anthropic API Key in the Rivet editor, with ANTHROPIC_API_KEY as a desktop/Node fallback. Programmatic runs can pass anthropicApiKey or set ANTHROPIC_API_KEY.';
-    case 'google':
-      return 'Configured key uses Settings > LLM > Google API Key in the Rivet editor, with GOOGLE_GENERATIVE_AI_API_KEY as a desktop/Node fallback. Programmatic runs can pass googleApiKey or set GOOGLE_GENERATIVE_AI_API_KEY.';
+    case 'google': {
+      const names = getChatV2CredentialNamesForDisplay(data.provider, data.providerApiKeyNames?.[data.provider]);
+      const hasOverride = data.providerApiKeyNames?.[data.provider] != null;
+      return hasOverride
+        ? `Configured key checks ${names.programmaticName} first, then ${names.environmentVariableName}. This explicit override does not fall back to the shared provider key.`
+        : `Configured key uses ${names.programmaticName} or ${names.environmentVariableName}, including the existing Settings > LLM provider key.`;
+    }
     case 'custom': {
       const programmaticName = data.customProviderApiKeyProgrammaticName?.trim();
       const envVarName = data.customProviderApiKeyEnvVarName?.trim() || 'CUSTOM_PROVIDER_API_KEY';
@@ -142,6 +146,12 @@ function getModelEditors(modelOptions: { value: string; label: string }[]): LLMC
           { value: 'input', label: 'Input port' },
         ],
         helperMessage: getApiKeySourceHelperMessage,
+      },
+      {
+        type: 'custom',
+        label: 'Configured API key names',
+        customEditorId: 'LLMChatV2CredentialNames',
+        hideIf: (data) => !isChatV2BuiltInProvider(data.provider) || data.apiKeySource === 'input',
       },
       {
         type: 'string',

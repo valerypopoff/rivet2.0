@@ -43,8 +43,8 @@ function createChatNode(data: Partial<LLMChatV2Node['data']> = {}) {
   });
 }
 
-function createRuntimeContext() {
-  return {
+function createRuntimeContext(overrides: Record<string, unknown> = {}) {
+  const context = {
     settings: {
       openAiKey: 'configured-openai-key',
       openAiEndpoint: 'https://api.openai.test/v1/responses',
@@ -53,6 +53,14 @@ function createRuntimeContext() {
     },
     getPluginConfig: () => '',
     editorExecutionCache: new Map<string, unknown>(),
+  };
+  return {
+    ...context,
+    ...overrides,
+    settings: {
+      ...context.settings,
+      ...((overrides.settings as Record<string, unknown> | undefined) ?? {}),
+    },
   } as any;
 }
 
@@ -426,6 +434,77 @@ describe('LLMProfileNodeImpl', () => {
           },
         }),
       /headers must contain string key\/value pairs/,
+    );
+  });
+
+  it('preserves built-in credential aliases and applies the profile credential instead of Chat aliases', async () => {
+    const providerApiKeyNames = {
+      openai: {
+        programmaticName: 'profileOpenAiKey',
+        environmentVariableName: 'PROFILE_OPENAI_KEY',
+      },
+      anthropic: {
+        programmaticName: 'rememberedAnthropicKey',
+        environmentVariableName: 'REMEMBERED_ANTHROPIC_KEY',
+      },
+    };
+    const output = await createProfileNode({
+      provider: 'openai',
+      providerApiKeyNames,
+    }).process({}, createRuntimeContext({ settings: { profileOpenAiKey: 'profile-secret' } }));
+    const profile = normalizeLLMProfileValue(output.profile?.value);
+
+    assert.deepEqual(profile.configuration.providerApiKeyNames, providerApiKeyNames);
+    assert.deepEqual(profile.credential, {
+      value: 'profile-secret',
+      reference: { source: 'programmatic', name: 'profileOpenAiKey' },
+    });
+    assert.match(
+      getMarkdownBodyText(createProfileNode({ provider: 'openai', providerApiKeyNames })),
+      /profileOpenAiKey/,
+    );
+
+    const chat = createChatNode({
+      configurationMode: 'profile',
+      providerApiKeyNames: {
+        openai: {
+          programmaticName: 'missingChatKey',
+          environmentVariableName: 'MISSING_CHAT_KEY',
+        },
+      },
+    });
+    const runtime = await resolveLLMChatV2RuntimeConfig({
+      data: chat.data,
+      nodeId: chat.chartNode.id,
+      inputs: {
+        llmProfile: { type: 'llm-config', value: profile },
+        prompt: { type: 'string', value: 'Hello' },
+      } as any,
+      context: createRuntimeContext(),
+    });
+
+    assert.equal(runtime.runOptions.modelId, profile.configuration.model);
+  });
+
+  it('rejects invalid built-in credential aliases at the profile boundary', async () => {
+    const output = await createProfileNode({ provider: 'openai' }).process({}, createRuntimeContext());
+    const profile = normalizeLLMProfileValue(output.profile?.value);
+
+    assert.throws(
+      () =>
+        normalizeLLMProfileValue({
+          ...profile,
+          configuration: {
+            ...profile.configuration,
+            providerApiKeyNames: {
+              openai: {
+                programmaticName: 'not-valid-name',
+                environmentVariableName: 'OPENAI_KEY',
+              },
+            },
+          },
+        }),
+      /programmatic API key name must be a JavaScript-style identifier/,
     );
   });
 

@@ -38,6 +38,7 @@ export const llmProfileFieldSpecs = [
   { key: 'useMaxTokensInput', valueKind: 'boolean', resolvedInputToggle: true },
   { key: 'provider' },
   { key: 'apiKeySource', inputId: 'apiKey' },
+  { key: 'providerApiKeyNames' },
   { key: 'customProviderApiKeyProgrammaticName', valueKind: 'string' },
   { key: 'customProviderApiKeyEnvVarName', valueKind: 'string' },
   { key: 'customProviderBaseURL', inputId: 'customProviderBaseURL', valueKind: 'string' },

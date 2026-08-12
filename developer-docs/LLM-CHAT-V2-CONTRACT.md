@@ -56,6 +56,25 @@ own prompts and history, response format/schema, Rivet tools and continuation,
 outputs, retries and request diagnostics, and editor caching. Provider/model
 configuration, including OpenAI Previous Response ID, belongs to the profile.
 
+Built-in OpenAI, Anthropic, and Google providers can optionally store a
+provider-specific pair of credential _names_: a programmatic processor-setting
+name and an environment-variable name. The defaults remain
+`openAiApiKey`/`OPENAI_API_KEY`, `anthropicApiKey`/`ANTHROPIC_API_KEY`, and
+`googleApiKey`/`GOOGLE_GENERATIVE_AI_API_KEY`. An absent override follows the
+legacy shared-provider resolution path exactly. A stored override is a strict
+account boundary: the runtime checks the named processor setting, then
+`pluginEnv`, then Node `process.env`, and never falls back to the shared key.
+The API-key input port remains higher priority than either configured-key path.
+Only names are serialized; key values never enter project YAML. Credential-name
+maps are profile-owned, survive provider switching and Inline-to-profile
+extraction, and are included in normalized profile configuration. The profile's
+already-resolved credential wins when LLM Chat consumes an `llm-config` value.
+The editor shows effective defaults as editable values; clearing either field,
+including whitespace-only input, restores and displays that provider default.
+Browser and remote executor environment discovery must inspect both graph nodes
+and node-library prefab sources because prefab instances execute the source
+node's current credential configuration.
+
 The profile output contains the resolved raw API key by design, along with its
 credential-source metadata. This supports fully detachable provider slots but
 also means normal execution data, recordings, previews, and remote transport may
@@ -256,6 +275,10 @@ paths and should not be used as the primary target for new provider refactors.
   flag also derive profile normalization from the same declaration. Profile
   serialization, profile-mode stripping, validation categories, and UI ports
   must not keep parallel hand-written field lists.
+- [`chatV2CredentialNames.ts`](../packages/core/src/model/chat-v2/chatV2CredentialNames.ts)
+  owns built-in provider defaults, portable name validation, normalization,
+  and display-safe projection. Runtime resolution remains fail-closed for an
+  explicitly stored invalid or missing alias.
 - [`llmInvocationPlan.ts`](../packages/core/src/model/chat-v2/llmInvocationPlan.ts)
   owns provider-neutral, once-per-node-run inputs: prompts, Rivet tools,
   response-format policy, output policy, and request-body capture.
