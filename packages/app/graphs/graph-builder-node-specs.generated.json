@@ -1,6 +1,6 @@
 {
   "formatVersion": 1,
-  "catalogFingerprint": "fnv1a64:2b4bcdc4d0bbc5f9",
+  "catalogFingerprint": "fnv1a64:32fb37a0ea2a3366",
   "entries": [
     {
       "authoringChoiceId": "registered:abortGraph",
@@ -230,7 +230,7 @@
       "authoringChoiceId": "registered:code",
       "nodeType": "code",
       "displayName": "Code (legacy)",
-      "description": "The Code (legacy) Node allows you to run arbitrary JavaScript code during your graph's execution. This can be useful for a variety of purposes, such as: Performing complex calculations Custom, domain specific logic that is complex to represent in Rivet nodes alone Using JavaScript functions that are not available in other nodes Use Code for new workflows when you want inputs created from {{name}} tokens and one direct returned value, while still keeping the same runtime permissions.",
+      "description": "The Code (legacy) Node allows you to run arbitrary JavaScript code during your graph's execution. This can be useful for a variety of purposes, such as: Performing complex calculations Custom, domain specific logic that is complex to represent in Rivet nodes alone Using JavaScript functions that are not available in other nodes Use Code for new workflows when you want inputs created from {{name}} tokens and one direct returned value.",
       "aliases": [],
       "capabilities": {
         "createWithDefaults": true,
