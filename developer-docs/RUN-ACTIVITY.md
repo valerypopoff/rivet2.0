@@ -469,11 +469,25 @@ and the selected graph when they match. This keeps a user-requested `abort()`
 during playback attached to the same Run Activity root; it must never emit an
 undefined or unrelated lifecycle identity.
 
-Run Activity timestamps its root and node lifecycle to the playback session so
-the running UI measures the replay the user is currently watching. Recorded
-node durations and physical model/tool durations remain attached to their
-replayed events when present. Do not present a recording's historical
-wall-clock timestamps as the current playback time.
+Run Activity keeps two clocks during playback:
+
+- The local receipt clock timestamps the new replay session. It continues to
+  own ordering, the Started column, and whether the editor is actively
+  replaying the recording.
+- `RecordingPlayer` attaches the original `RecordedEvent.ts` as transient
+  `replayRecordedAt` provenance on each replayed lifecycle event. Run Activity
+  uses that timeline for the root elapsed duration: from the first historical
+  lifecycle event to the root terminal event. While playback is still active,
+  it ends at the latest delivered historical event instead of advancing at
+  replay speed.
+
+This lets a recording replay quickly without claiming that an 18-second model
+call took a few milliseconds. Individual recorded node durations and physical
+model/tool durations remain attached to their replayed events when present.
+Legacy recordings and ordinary live events have no `replayRecordedAt`, so they
+continue to use the local receipt clock. The recorder deliberately strips this
+transient provenance if a replay is recorded again: the new recording's own
+`RecordedEvent.ts` becomes the only historical timeline.
 
 The response inspector is scoped to the currently selected root. Closing the
 drawer, clearing its root, or selecting another root closes any open inspector

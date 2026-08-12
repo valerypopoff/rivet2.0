@@ -17,6 +17,7 @@ import {
 import {
   createRunActivityJournal,
   createRunActivityNodeKey,
+  getRunActivityRootDurationMs,
   reduceRunActivityEvents,
   reduceRunActivityJournal,
   type RunActivityEvent,
@@ -176,6 +177,38 @@ Provider message: ${'x'.repeat(700)}`;
 
   const key = createRunActivityNodeKey({ rootRunId, graphRunId, nodeId, processId });
   assert.equal(journal.rootsById[rootRunId]!.nodeInvocationsByKey[key]!.errorSummary, error);
+});
+
+test('keeps replay receipt timestamps separate from the recorded run duration', () => {
+  let journal = createRunActivityJournal();
+  journal = apply(
+    journal,
+    'start',
+    { project, startGraph: graph, inputs: {}, contextValues: {}, execution, replayRecordedAt: 10_000 },
+    1_000_000,
+  );
+  journal = apply(
+    journal,
+    'nodeStart',
+    { node, processId, inputs: {}, execution, replayRecordedAt: 10_200 },
+    1_000_001,
+  );
+  journal = apply(
+    journal,
+    'nodeFinish',
+    { node, processId, execution, outputs: {}, durationMs: 18_000, replayRecordedAt: 28_200 },
+    1_000_002,
+  );
+  journal = apply(journal, 'graphFinish', { graph, execution, outputs: {}, replayRecordedAt: 28_500 }, 1_000_003);
+
+  const root = journal.rootsById[rootRunId]!;
+  assert.equal(root.startedAt, 1_000_000);
+  assert.deepEqual(root.recordedTiming, {
+    startedAt: 10_000,
+    latestAt: 28_500,
+    finishedAt: 28_500,
+  });
+  assert.equal(getRunActivityRootDurationMs(root, 9_999_999), 18_500);
 });
 
 test('retains circuit-breaker decisions on failed LLM invocations and deduplicates replayed events', () => {

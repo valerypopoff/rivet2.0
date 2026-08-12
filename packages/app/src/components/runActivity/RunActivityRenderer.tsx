@@ -44,6 +44,7 @@ import {
   areRunActivityColumnWidthsEqual,
   normalizeRunActivityColumnWidths,
 } from '../../features/runActivity/runActivityColumnWidths.js';
+import { getRunActivityRootDurationMs } from '../../features/runActivity/runActivityJournal.js';
 import {
   buildRunActivityViewModel,
   selectRunActivityRoot,
@@ -83,7 +84,13 @@ export const RunActivityRenderer: FC = () => {
   const columnWidths = useMemo(() => normalizeRunActivityColumnWidths(storedColumnWidths), [storedColumnWidths]);
 
   useEffect(() => {
-    if (shouldCloseRunActivityInspector({ drawerOpen: open, inspectedRootRunId, selectedRootRunId: selectedRoot?.rootRunId })) {
+    if (
+      shouldCloseRunActivityInspector({
+        drawerOpen: open,
+        inspectedRootRunId,
+        selectedRootRunId: selectedRoot?.rootRunId,
+      })
+    ) {
       setInspectedProcess(undefined);
     }
   }, [inspectedRootRunId, open, selectedRoot?.rootRunId]);
@@ -96,11 +103,17 @@ export const RunActivityRenderer: FC = () => {
   }, [columnWidths, setStoredColumnWidths, storedColumnWidths]);
 
   useEffect(() => {
-    if (!open || (selectedRoot?.status !== 'running' && selectedRoot?.status !== 'outputs-ready')) return;
+    if (
+      !open ||
+      (selectedRoot?.status !== 'running' && selectedRoot?.status !== 'outputs-ready') ||
+      selectedRoot.recordedTiming != null
+    ) {
+      return;
+    }
     setNow(Date.now());
     const interval = window.setInterval(() => setNow(Date.now()), LIVE_DURATION_REFRESH_MS);
     return () => window.clearInterval(interval);
-  }, [open, selectedRoot?.rootRunId, selectedRoot?.status]);
+  }, [open, selectedRoot?.recordedTiming, selectedRoot?.rootRunId, selectedRoot?.status]);
 
   const resolveInvocation = useMemo<ResolveRunActivityInvocation>(() => {
     return ({ root, graphRun, invocation }) => {
@@ -166,12 +179,14 @@ export const RunActivityRenderer: FC = () => {
     [journal, resolveInvocation, selectedRoot?.finishedAt, selectedRoot?.startedAt],
   );
   const viewModel = useMemo(() => {
-    if (selectedRoot?.startedAt == null || selectedRoot.finishedAt != null) return stableViewModel;
+    if (selectedRoot?.startedAt == null || selectedRoot.finishedAt != null || selectedRoot.recordedTiming != null) {
+      return stableViewModel;
+    }
     return {
       ...stableViewModel,
-      durationMs: Math.max(0, now - selectedRoot.startedAt),
+      durationMs: getRunActivityRootDurationMs(selectedRoot, now),
     };
-  }, [now, selectedRoot?.finishedAt, selectedRoot?.startedAt, stableViewModel]);
+  }, [now, selectedRoot?.finishedAt, selectedRoot?.recordedTiming, selectedRoot?.startedAt, stableViewModel]);
 
   const selectExactExecutionTarget = useStableCallback((identity: RunActivityInvocationIdentity) => {
     const graphRun = journal.rootsById[identity.rootRunId]?.graphRunsById[identity.graphRunId];

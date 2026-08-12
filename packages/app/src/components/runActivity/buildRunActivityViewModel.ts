@@ -8,7 +8,10 @@ import type {
   RunActivityRoot,
   RunActivityToolCall,
 } from '../../features/runActivity/runActivityJournal.js';
-import { selectCurrentRunActivityRoot } from '../../features/runActivity/runActivityJournal.js';
+import {
+  getRunActivityRootDurationMs,
+  selectCurrentRunActivityRoot,
+} from '../../features/runActivity/runActivityJournal.js';
 import type { NodeRunDataWithRefs, StoredDataValue } from '../../state/dataFlow.js';
 import type {
   RunActivityCategory,
@@ -87,6 +90,7 @@ export function buildRunActivityViewModel(
     .sort((left, right) => left.sequence - right.sequence);
   const partialReason = getPartialReason(journal, root);
   const accounting = buildAccountingSummary(root);
+  const durationMs = getRunActivityRootDurationMs(root, now);
 
   return {
     rootRunId: root.rootRunId,
@@ -94,7 +98,7 @@ export function buildRunActivityViewModel(
     items,
     ...(root.startedAt == null ? {} : { startedAt: root.startedAt }),
     ...(root.graphOutputsReadyAt == null ? {} : { outputsReadyAt: root.graphOutputsReadyAt }),
-    ...(root.startedAt == null ? {} : { durationMs: Math.max(0, (root.finishedAt ?? now) - root.startedAt) }),
+    ...(durationMs == null ? {} : { durationMs }),
     ...(root.status === 'outputs-ready' ? { backgroundWorkPending: true } : {}),
     ...(accounting == null ? {} : { accounting }),
     graphOptions: buildGraphOptions(root, items),

@@ -28,6 +28,35 @@ function withOptionalDuration<T extends object>(
   } as T & { durationMs?: number; splitRunDurationMs?: Record<number, number> };
 }
 
+function withReplayRecordedAt<T>(data: T, replayRecordedAt: number | undefined): T {
+  if (
+    typeof replayRecordedAt !== 'number' ||
+    !Number.isFinite(replayRecordedAt) ||
+    data == null ||
+    typeof data !== 'object'
+  ) {
+    return data;
+  }
+  return { ...data, replayRecordedAt } as T;
+}
+
+const REPLAY_TIMED_LIFECYCLE_EVENTS = new Set<keyof ProcessEvents>([
+  'start',
+  'graphStart',
+  'graphOutputsReady',
+  'graphFinish',
+  'graphError',
+  'graphAbort',
+  'nodeStart',
+  'userInput',
+  'progress',
+  'partialOutput',
+  'nodeFinish',
+  'nodeError',
+  'nodeExcluded',
+  'nodeOutputsCleared',
+]);
+
 export async function replayExecutionRecording(options: {
   emitter: Emittery<ProcessEvents>;
   erroredNodes: Map<NodeId, Error | string>;
@@ -79,6 +108,7 @@ export async function replayExecutionRecording(options: {
 
   let hasEmittedRunActivityExecution = false;
   let getFallbackExecution: ((graphId: GraphId) => GraphExecutionMetadata) | undefined;
+  let currentReplayRecordedAt: number | undefined;
 
   const getReplayFallbackGraph = () => {
     const replayTargetGraph = fallbackGraphId == null ? undefined : project.graphs[fallbackGraphId];
@@ -96,7 +126,14 @@ export async function replayExecutionRecording(options: {
     // playback error remains attached to that root instead of synthesizing a
     // second one.
     hasEmittedRunActivityExecution = true;
-    emitDetached(emitter, event, data);
+    const payload = REPLAY_TIMED_LIFECYCLE_EVENTS.has(event)
+      ? withReplayRecordedAt(data, currentReplayRecordedAt)
+      : data;
+    emitDetached(emitter, event, payload);
+  };
+
+  const emitReplayTerminalEvent = <K extends 'abort' | 'done' | 'error'>(event: K, data: ProcessEvents[K]): void => {
+    emitDetached(emitter, event, withReplayRecordedAt(data, currentReplayRecordedAt));
   };
 
   const emitFallbackRootTerminal = (
@@ -266,6 +303,7 @@ export async function replayExecutionRecording(options: {
       }
 
       await waitUntilUnpaused();
+      currentReplayRecordedAt = event.ts;
 
       switch (event.type) {
         case 'start': {
@@ -283,7 +321,7 @@ export async function replayExecutionRecording(options: {
         }
         case 'abort': {
           emitFallbackRootTerminal('aborted', event.data);
-          emitDetached(emitter, 'abort', event.data);
+          emitReplayTerminalEvent('abort', event.data);
           break;
         }
         case 'pause': {
@@ -299,21 +337,23 @@ export async function replayExecutionRecording(options: {
         }
         case 'done': {
           emitFallbackRootTerminal('completed', { outputs: event.data.results });
-          emitDetached(emitter, 'done', event.data);
+          emitReplayTerminalEvent('done', event.data);
           setGraphOutputs(event.data.results);
           setRunning(false);
           break;
         }
         case 'error': {
           emitFallbackRootTerminal('error', event.data);
-          emitDetached(emitter, 'error', event.data);
+          emitReplayTerminalEvent('error', event.data);
           break;
         }
         case 'globalSet': {
           const { data } = event;
           const legacyGraphId = data.execution?.graphId ?? getReplayFallbackGraph()?.metadata?.id;
           if (legacyGraphId == null) {
-            throw new Error('Cannot replay a global value event because the current project has no graph to attach it to.');
+            throw new Error(
+              'Cannot replay a global value event because the current project has no graph to attach it to.',
+            );
           }
           emitDetached(emitter, 'globalSet', {
             ...data,
@@ -563,7 +603,11 @@ export async function replayExecutionRecording(options: {
     // Activity has no active root to attach it to in that case.
     emitFallbackRootTerminal('error', { error: replayError });
 
-    emitDetached(emitter, 'error', { error: replayError });
+    // This is a fresh playback failure, not a historical event from the last
+    // successful dispatch. Do not accidentally attribute it to that event's
+    // recording timestamp.
+    currentReplayRecordedAt = undefined;
+    emitReplayTerminalEvent('error', { error: replayError });
   } finally {
     setRunning(false);
   }

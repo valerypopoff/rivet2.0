@@ -48,6 +48,39 @@ test('uses graph start as a live fallback before an identified activity root arr
   );
 });
 
+test('shows the historical duration when the selected root is a completed recording replay', () => {
+  const journal = createRunActivityJournal();
+  const rootRunId = 'recorded-root' as RootRunId;
+  journal.rootsById[rootRunId] = {
+    sequence: 1,
+    rootRunId,
+    status: 'completed',
+    startedAt: 1_000_000,
+    finishedAt: 1_000_013,
+    recordedTiming: {
+      startedAt: 50_000,
+      latestAt: 68_490,
+      finishedAt: 68_490,
+    },
+    paused: false,
+    isPartial: false,
+    graphRunsById: {},
+    graphRunOrder: [],
+    nodeInvocationsByKey: {},
+    nodeInvocationOrder: [],
+    omittedNodeInvocationCount: 0,
+    omittedLegacyEventCount: 0,
+  };
+  journal.rootOrder = [rootRunId];
+  journal.latestCompletedRootRunId = rootRunId;
+
+  assert.deepEqual(resolveRuntimeStatusTiming({ graphRunning: false, journal, now: 2_000_000 }), {
+    elapsedMs: 18_490,
+    startedAt: 1_000_000,
+    isLive: false,
+  });
+});
+
 test('does not let the previous completed root mask a newly starting live run', () => {
   const journal = createRunActivityJournal();
   const previousRootRunId = 'previous-root' as RootRunId;

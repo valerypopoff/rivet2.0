@@ -701,7 +701,10 @@ test('renders suspension skips, reliability-service decisions, timeouts, and omi
   assert.deepEqual(
     item.children?.slice(1).map((child) => [child.status, child.secondaryText]),
     [
-      ['error', 'reliability service unavailable; profile request continued: Health store unavailable / profile 2 / round 1'],
+      [
+        'error',
+        'reliability service unavailable; profile request continued: Health store unavailable / profile 2 / round 1',
+      ],
       ['error', 'first output timed out / profile 2 / round 1'],
     ],
   );
@@ -736,6 +739,26 @@ test('keeps older Run Activity journals without profile-attempt fields readable'
   const item = buildRunActivityViewModel(journal, () => ({ nodeTitle: 'Legacy node' })).items[0]!;
   assert.equal(item.children, undefined);
   assert.equal(item.detailRows, undefined);
+});
+
+test('projects a recorded replay duration instead of its near-instant delivery duration', () => {
+  const journal = createRunActivityJournal();
+  const selectedRoot = root(newerActiveRootId, 1, 'completed');
+  selectedRoot.startedAt = 1_000_000;
+  selectedRoot.finishedAt = 1_000_013;
+  selectedRoot.recordedTiming = {
+    startedAt: 10_000,
+    latestAt: 28_490,
+    finishedAt: 28_490,
+  };
+  journal.rootsById[selectedRoot.rootRunId] = selectedRoot;
+  journal.latestCompletedRootRunId = selectedRoot.rootRunId;
+
+  const viewModel = buildRunActivityViewModel(journal, () => undefined, { now: 9_999_999 });
+  assert.equal(viewModel.durationMs, 18_490);
+  // The started value intentionally remains the local replay receipt time so
+  // the activity list continues to order and label the playback session.
+  assert.equal(viewModel.startedAt, 1_000_000);
 });
 
 function root(rootRunId: RootRunId, sequence: number, status: RunActivityRoot['status']): RunActivityRoot {

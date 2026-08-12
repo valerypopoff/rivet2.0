@@ -199,13 +199,25 @@ function toRecordedEvent<T extends keyof ProcessEvents>(event: T, data: ProcessE
     };
   }
 
+  const recordableData = omitReplayRecordedAt(data);
   const recordedEvent: RecordedEvent<T> = {
     type: event,
-    data: toRecordedEventMap[event](data) as unknown as RecordedEvent<T>['data'],
+    data: toRecordedEventMap[event](recordableData) as unknown as RecordedEvent<T>['data'],
     ts: Date.now(),
   };
 
   return recordedEvent as RecordedEvents;
+}
+
+/**
+ * Replay provenance belongs to the current delivery, not the historical event
+ * itself. If a replay is recorded again, the recorder's own `ts` is the one
+ * authoritative timestamp to persist.
+ */
+function omitReplayRecordedAt<T>(data: T): T {
+  if (data == null || typeof data !== 'object') return data;
+  const { replayRecordedAt: _replayRecordedAt, ...recordableData } = data as T & { replayRecordedAt?: number };
+  return recordableData as T;
 }
 
 export type ExecutionRecorderOptions = {
