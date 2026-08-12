@@ -18,8 +18,10 @@
 ### Runtime environment overrides
 
 The wrapper owns UI-managed runtime variables through the versioned App Settings
-repository at `settings/environment-variables.json`. The public settings API
-returns names and configuration metadata only; it never returns saved values.
+repository at `settings/environment-variables.json`. Its list API returns names
+and configuration metadata only; it never returns saved values. The authenticated
+Settings value-reveal route reads one requested value at a time with a no-store
+response, solely for deliberate operator edits.
 At the start of a Node/headless execution, the wrapper captures an immutable
 override map and passes it to upstream Rivet as `executionEnvironment`. Upstream
 builds a per-run `process.env` view for Node-executed Code nodes and resolves Node/provider
