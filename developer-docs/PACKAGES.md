@@ -909,7 +909,7 @@ describe the current Rivet 2 surface:
 - User-facing docs should say `workflow` / `Executing Workflows` for current graph execution concepts. The old `executing-ai-chains` URL may remain for link stability, but visible labels and prose should not present "AI chains" as the current product language
 - Browser, Node, and remote executor behavior, including hosted/internal executor URL seams
 - app-level plugin installation, derived project plugin YAML, missing-plugin install prompts, and read-only project-used plugin settings
-- Code-family runtime permissions, Node-only `require` / `process`, and configurable require-root behavior
+- Code/Expression executor capabilities, Node-only `require` / `process`, and configurable require-root behavior
 - HTTP Call retry/status/error contracts and LLM Chat retry/LLM Attempts diagnostics
 - keep provider-neutral Chat v2 output assembly in `chatV2Outputs.ts` and pipeline orchestration in `chatV2Pipeline.ts` instead of adding output-shape policy back to node classes or provider adapters
 - wrapper/source-checkout guidance pointing to app host seams and generated built-package artifacts rather than stale npm names

@@ -12,6 +12,21 @@ export interface CodeRunnerOptions {
   includeConsole: boolean;
 }
 
+/**
+ * Code and Expression nodes request every API their executor can provide.
+ *
+ * This is intentionally not a permission system or a sandbox. Node runners
+ * provide the Node-specific APIs, while browser runners only supply the APIs
+ * they actually implement.
+ */
+export const ALL_CODE_RUNNER_OPTIONS: CodeRunnerOptions = Object.freeze({
+  includeRequire: true,
+  includeFetch: true,
+  includeRivet: true,
+  includeProcess: true,
+  includeConsole: true,
+});
+
 /** An object that can run arbitrary code (evals it). */
 export interface CodeRunner {
   runCode: (
@@ -19,7 +34,7 @@ export interface CodeRunner {
     inputs: Inputs,
     options: CodeRunnerOptions,
     graphInputs?: Record<string, DataValue>,
-    contextValues?: Record<string, DataValue>
+    contextValues?: Record<string, DataValue>,
   ) => Promise<Outputs>;
 }
 
@@ -29,18 +44,10 @@ export class IsomorphicCodeRunner implements CodeRunner {
     inputs: Inputs,
     options: CodeRunnerOptions,
     graphInputs?: Record<string, DataValue>,
-    contextValues?: Record<string, DataValue>
+    contextValues?: Record<string, DataValue>,
   ): Promise<Outputs> {
     const argNames = ['inputs'];
     const args: any[] = [inputs];
-
-    if (options.includeRequire) {
-      throw new Error('require() requires the Node executor.');
-    }
-
-    if (options.includeProcess) {
-      throw new Error('process requires the Node executor.');
-    }
 
     if (options.includeConsole) {
       argNames.push('console');
@@ -83,7 +90,7 @@ export class NotAllowedCodeRunner implements CodeRunner {
     _inputs: Inputs,
     _options: CodeRunnerOptions,
     _graphInputs?: Record<string, DataValue>,
-    _contextValues?: Record<string, DataValue>
+    _contextValues?: Record<string, DataValue>,
   ): Promise<Outputs> {
     throw new Error('Dynamic code execution is disabled.');
   }

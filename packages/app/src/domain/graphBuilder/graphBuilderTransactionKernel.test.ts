@@ -387,7 +387,7 @@ test('cloneNode requires a fresh bounded host ID even after an earlier delete', 
   assert.deepEqual(unboundedIdKernel.getDraft(), project);
 });
 
-test('cloneNode rejects Code source types before allocation and rolls back preceding operations', () => {
+test('cloneNode copies Code source types, including ignored legacy fields', () => {
   for (const sourceType of ['code', 'codeNew']) {
     const source = {
       ...makeNode('source', {
@@ -403,21 +403,17 @@ test('cloneNode rejects Code source types before allocation and rolls back prece
       type: sourceType,
     } satisfies ChartNode;
     const project = makeProject([source, makeNode('other', { title: 'Original' })]);
-    let allocatorCalls = 0;
     const kernel = makeKernel({
       project,
-      idGenerator: () => {
-        allocatorCalls += 1;
-        return 'must-not-be-allocated' as NodeId;
-      },
+      ids: ['copy'],
     });
 
     const result = kernel.applyPatch(
-      patch(`blocked-clone-${sourceType}`, 0, [
+      patch(`clone-${sourceType}`, 0, [
         {
           op: 'updateNodeEnvelope',
           node: { kind: 'existing', nodeId: 'other' },
-          envelope: { title: 'Must roll back' },
+          envelope: { title: 'Updated before clone' },
         },
         {
           op: 'cloneNode',
@@ -427,14 +423,18 @@ test('cloneNode rejects Code source types before allocation and rolls back prece
       ]),
     );
 
-    assert.equal(result.disposition, 'rejected');
-    if (result.disposition !== 'rejected') {
+    assert.equal(result.disposition, 'applied');
+    if (result.disposition !== 'applied') {
       continue;
     }
-    assert.equal(result.diagnostics[0]?.ruleId, 'clone-source-type');
-    assert.equal(allocatorCalls, 0);
-    assert.deepEqual(kernel.getDraft(), project);
-    assert.equal(kernel.getDraftRevision(), 0);
+    const draft = kernel.getDraft();
+    const draftNodes = draft.graphs[graphId]!.nodes;
+    assert.equal(draftNodes.find((node) => node.id === 'other')?.title, 'Updated before clone');
+    const copy = draftNodes.find((node) => node.id === 'copy');
+    assert.ok(copy);
+    assert.equal(copy.type, sourceType);
+    assert.deepEqual(copy.data, source.data);
+    assert.equal(kernel.getDraftRevision(), 1);
   }
 });
 

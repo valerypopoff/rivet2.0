@@ -192,8 +192,6 @@ function connectionKey(connection: GraphBuilderConnectionDescriptor): string {
 }
 
 const graphBuilderDataTypes = new Set<string>(dataTypes);
-const cloneBlockedSourceNodeTypes = new Set(['code', 'codeNew']);
-
 function isBoundedIdentifier(value: unknown): value is string {
   return (
     typeof value === 'string' &&
@@ -1084,20 +1082,6 @@ export class GraphBuilderTransactionKernel {
         }
         if (!sourceNode) {
           throw this.#missingNodeError(operation.source, operationIndex);
-        }
-        if (cloneBlockedSourceNodeTypes.has(sourceNode.type)) {
-          throw new OperationRejectedError([
-            createDiagnostic({
-              key: `clone-node:blocked-source-type:${operationIndex}:${sourceNodeId}`,
-              ruleId: 'clone-source-type',
-              graphId: this.#activeGraphId,
-              nodeId: sourceNodeId,
-              clientId: operation.clientId,
-              operationIndex,
-              message:
-                'Code nodes cannot be cloned because their opaque runtime permissions must not be copied to a new node.',
-            }),
-          ]);
         }
         validatePrecondition(sourceNode, operation.precondition, this.#activeGraphId, operationIndex);
 
