@@ -3,6 +3,7 @@ import type {
   DeploymentDatabaseSslMode,
   DeploymentStorageMode,
   DeploymentStorageSettings,
+  EnvironmentVariableSettings,
   ExecutorUrlOverrideSettings,
   PublicRouteSettings,
   RuntimeLimitSettings,
@@ -20,6 +21,7 @@ export type AppSettingsTab =
   | 'shell-execution'
   | 'storage'
   | 'node-executor-proxy'
+  | 'environment-variables'
   | 'run-recordings'
   | 'web-apps'
   | 'oauth'
@@ -95,6 +97,20 @@ export type NodeExecutorProxySettingsForm = {
   noProxy: string;
 };
 
+export type EnvironmentVariableSettingsFormEntry = {
+  clientId: string;
+  id?: string;
+  name: string;
+  value: string;
+  valueConfigured: boolean;
+  valueTouched: boolean;
+  browserAccess: boolean;
+};
+
+export type EnvironmentVariableSettingsForm = {
+  variables: EnvironmentVariableSettingsFormEntry[];
+};
+
 export type RunRecordingsSettingsForm = {
   maxPendingWrites: string;
   maxRunsPerEndpoint: string;
@@ -154,6 +170,22 @@ export function createDeploymentStorageForm(settings: DeploymentStorageSettings)
     storageAccessKeyId: settings.storageAccessKeyId,
     storageAccessKey: '',
     storageAccessKeyConfigured: settings.storageAccessKeyConfigured,
+  };
+}
+
+export function createEnvironmentVariableForm(
+  settings: EnvironmentVariableSettings,
+): EnvironmentVariableSettingsForm {
+  return {
+    variables: settings.variables.map((entry) => ({
+      clientId: entry.id,
+      id: entry.id,
+      name: entry.name,
+      value: '',
+      valueConfigured: entry.valueConfigured,
+      valueTouched: false,
+      browserAccess: entry.browserAccess,
+    })),
   };
 }
 

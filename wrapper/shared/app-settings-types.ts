@@ -48,6 +48,36 @@ export interface TrustedHostSettingsDraft {
   trustedHosts?: unknown;
 }
 
+export interface EnvironmentVariableSettingsEntry {
+  id: string;
+  name: string;
+  valueConfigured: boolean;
+  browserAccess: boolean;
+  overridesPhysicalEnvironment: boolean;
+}
+
+export interface EnvironmentVariableSettings {
+  variables: EnvironmentVariableSettingsEntry[];
+  updatedAt: string | null;
+  source: AppSettingsSource;
+}
+
+export interface EnvironmentVariableValue {
+  id: string;
+  value: string;
+}
+
+export interface EnvironmentVariableSettingsDraftEntry {
+  id?: unknown;
+  name?: unknown;
+  value?: unknown;
+  browserAccess?: unknown;
+}
+
+export interface EnvironmentVariableSettingsDraft {
+  variables?: unknown;
+}
+
 export interface RunRecordingsSettings {
   maxPendingWrites: number;
   maxRunsPerEndpoint: number;
@@ -101,10 +131,7 @@ export type WebAppRouteSettings = Pick<
   'publishedAppsBasePath' | 'latestAppsBasePath' | 'updatedAt' | 'source'
 >;
 
-export type WebAppRouteSettingsDraft = Pick<
-  PublicRouteSettingsDraft,
-  'publishedAppsBasePath' | 'latestAppsBasePath'
->;
+export type WebAppRouteSettingsDraft = Pick<PublicRouteSettingsDraft, 'publishedAppsBasePath' | 'latestAppsBasePath'>;
 
 export type WebAppAuthMode = 'ui-gate' | 'oauth' | 'none';
 export type WebAppOAuthProvider = 'external' | 'dummy';

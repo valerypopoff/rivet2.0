@@ -15,6 +15,33 @@
 
 ## Runtime shape
 
+### Runtime environment overrides
+
+The wrapper owns UI-managed runtime variables through the versioned App Settings
+repository at `settings/environment-variables.json`. The public settings API
+returns names and configuration metadata only; it never returns saved values.
+At the start of a Node/headless execution, the wrapper captures an immutable
+override map and passes it to upstream Rivet as `executionEnvironment`. Upstream
+builds a per-run `process.env` view for Node-executed Code nodes and resolves Node/provider
+environment fallbacks from that same view without mutating the process global.
+This prevents one concurrent run from observing another run's overrides.
+
+The API process applies this to published/latest workflow endpoints and web-app
+HTTP/WebSocket actions directly. The app-executor sidecar obtains the overlay
+from an executor-authenticated internal API endpoint for each run; the endpoint
+cannot be read through ordinary browser proxy authentication. Browser executor
+lookups remain intentionally narrower: a managed variable must be explicitly
+marked browser-accessible and cannot have a protected secret-like name. A
+same-origin `BroadcastChannel` invalidates the hosted editor's in-memory env
+cache after a Settings save, preserving fast warm node-editor opens without
+stale values.
+
+The Kubernetes backend and execution API workloads mount the same app-data PVC,
+so execution-plane endpoint processes also see the saved overlay. The editor
+executor calls its colocated backend API over loopback in Kubernetes and the
+`api` service in Docker; neither path needs a deployment restart after a
+variable save.
+
 The route map below describes logical ownership. In `RIVET_API_PROFILE=combined`, one API process serves both the control-plane and published-execution surfaces. In split deployments, `RIVET_API_PROFILE=control` and `RIVET_API_PROFILE=execution` separate those surfaces into different API workloads.
 
 ```text

@@ -3,7 +3,7 @@ import { z } from 'zod';
 
 import { validateBody } from '../../middleware/validate.js';
 import { asyncHandler } from '../../utils/asyncHandler.js';
-import { badRequest } from '../../utils/httpError.js';
+import { badRequest, createHttpError } from '../../utils/httpError.js';
 import { createResponseTimingMiddleware } from '../../utils/responseTiming.js';
 import {
   WORKFLOW_RECORDING_INPUT_FILTER_OPERATORS,
@@ -55,6 +55,8 @@ import {
 import { createWorkflowDownloadContentDisposition } from './workflow-download.js';
 import { getStatisticsQueryPeriod } from './recording-statistics.js';
 import { llmProfileHealthRouter } from './llm-profile-health.js';
+import { readExecutionEnvironmentVariables } from '../../environment-variable-settings.js';
+import { isTrustedExecutorRequest } from '../../auth.js';
 
 export const workflowsRouter = Router();
 const timing = createResponseTimingMiddleware();
@@ -129,6 +131,16 @@ const publishProjectSchema = z.object({
 });
 
 workflowsRouter.use('/llm-profile-health', llmProfileHealthRouter);
+
+// The Node executor is a separate process. It asks the API for one immutable
+// overlay at run start, so saved UI variables apply immediately without
+// exposing them to browser clients or mutating process.env.
+workflowsRouter.get('/execution-environment', asyncHandler(async (req, res) => {
+  if (!isTrustedExecutorRequest(req)) {
+    throw createHttpError(403, 'Forbidden');
+  }
+  res.json({ environment: await readExecutionEnvironmentVariables() });
+}));
 
 const publishProjectWebAppsSchema = z.object({
   relativePath: z.unknown(),

@@ -3,6 +3,7 @@ import { type Dispatch, type FC, type SetStateAction, useEffect, useState } from
 
 import { SettingsActions } from './app-settings/SettingsControls';
 import { DockerSettingsTab } from './app-settings/tabs/DockerSettingsTab';
+import { EnvironmentVariablesSettingsTab } from './app-settings/tabs/EnvironmentVariablesSettingsTab';
 import { GeneralSettingsTab } from './app-settings/tabs/GeneralSettingsTab';
 import { NodeExecutorSettingsTab } from './app-settings/tabs/NodeExecutorSettingsTab';
 import { OAuthSettingsTab } from './app-settings/tabs/OAuthSettingsTab';
@@ -14,6 +15,7 @@ import { WebAppsSettingsTab } from './app-settings/tabs/WebAppsSettingsTab';
 import { WorkflowEndpointsSettingsTab } from './app-settings/tabs/WorkflowEndpointsSettingsTab';
 import { isWebAppAuthSettingsTab, type AppSettingsTab } from './app-settings/model';
 import { useDeploymentStorageForm } from './app-settings/useDeploymentStorageForm';
+import { useEnvironmentVariablesForm } from './app-settings/useEnvironmentVariablesForm';
 import { useNodeExecutorForms } from './app-settings/useNodeExecutorForms';
 import { usePublicRoutesForm } from './app-settings/usePublicRoutesForm';
 import { useRunRecordingsForm } from './app-settings/useRunRecordingsForm';
@@ -38,6 +40,7 @@ const tabs: ReadonlyArray<{ id: AppSettingsTab; label: string }> = [
   { id: 'workflow-endpoints', label: 'Workflow endpoints' },
   { id: 'run-recordings', label: 'Run recordings' },
   { id: 'node-executor-proxy', label: 'Node executor proxy' },
+  { id: 'environment-variables', label: 'Environment variables' },
   { id: 'web-apps', label: 'Web apps' },
   { id: 'oauth', label: 'OAuth' },
   { id: 'docker', label: 'Docker' },
@@ -82,6 +85,7 @@ function OpenAppSettingsModal({
   const workflowAuth = useWorkflowEndpointAuthForm(activeTab === 'workflow-endpoints');
   const recordings = useRunRecordingsForm(activeTab === 'run-recordings');
   const nodeExecutor = useNodeExecutorForms(activeTab === 'node-executor-proxy', onRouteConfigChange);
+  const environmentVariables = useEnvironmentVariablesForm(activeTab === 'environment-variables');
   const webAppAuth = useWebAppAuthForm(isWebAppAuthSettingsTab(activeTab), onRouteConfigChange);
 
   const panel = activeTab === 'general'
@@ -98,6 +102,8 @@ function OpenAppSettingsModal({
             ? <RunRecordingsSettingsTab recordings={recordings} />
             : activeTab === 'node-executor-proxy'
               ? <NodeExecutorSettingsTab nodeExecutor={nodeExecutor} routeConfig={routeConfig} />
+              : activeTab === 'environment-variables'
+                ? <EnvironmentVariablesSettingsTab environmentVariables={environmentVariables} />
               : activeTab === 'web-apps'
                 ? <WebAppsSettingsTab auth={webAppAuth} limits={limits} routes={routes} />
                 : activeTab === 'oauth'
@@ -225,6 +231,16 @@ function OpenAppSettingsModal({
                       savedMessage: 'Saved. Nginx reloads shortly; restart the API to apply the new WebSocket message limit.',
                     },
                   ]
+                : activeTab === 'environment-variables'
+                  ? [{
+                      changed: environmentVariables.changed,
+                      disabled: environmentVariables.controlsDisabled,
+                      error: environmentVariables.error,
+                      name: 'environment variables',
+                      revert: environmentVariables.revert,
+                      save: environmentVariables.save,
+                      savedMessage: 'Saved. New runs now use these values.',
+                    }]
                 : activeTab === 'oauth'
                   ? [{
                       changed: webAppAuth.changed.oauth,

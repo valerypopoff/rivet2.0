@@ -2,6 +2,9 @@ import { RIVET_API_BASE_URL } from '../../shared/hosted-env';
 import type {
   DeploymentStorageSettings,
   DeploymentStorageSettingsDraft,
+  EnvironmentVariableSettings,
+  EnvironmentVariableSettingsDraft,
+  EnvironmentVariableValue,
   ExecutorUrlOverrideSettings,
   ExecutorUrlOverrideSettingsDraft,
   NodeExecutorProxySettings,
@@ -65,6 +68,19 @@ export const nodeExecutorProxySettingsResource = createAppSettingsResource<
   NodeExecutorProxySettings,
   NodeExecutorProxySettingsDraft
 >('node-executor-proxy');
+export const environmentVariableSettingsResource = createAppSettingsResource<
+  EnvironmentVariableSettings,
+  EnvironmentVariableSettingsDraft
+>('environment-variables');
+
+export async function readEnvironmentVariableValue(
+  id: string,
+  signal?: AbortSignal,
+): Promise<EnvironmentVariableValue> {
+  return appSettingsJsonResponse<EnvironmentVariableValue>(
+    await fetch(`${API}/environment-variables/${encodeURIComponent(id)}/value`, { cache: 'no-store', signal }),
+  );
+}
 export const executorUrlOverrideSettingsResource = createAppSettingsResource<
   ExecutorUrlOverrideSettings,
   ExecutorUrlOverrideSettingsDraft

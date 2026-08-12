@@ -1,7 +1,8 @@
 import { Router, type Request } from 'express';
 import path from 'node:path';
 import { LATEST_WORKFLOW_REMOTE_DEBUGGER_PATH, isLatestWorkflowRemoteDebuggerEnabled } from '../latestWorkflowRemoteDebugger.js';
-import { getAppDataRoot, isEnvAllowed } from '../security.js';
+import { getAppDataRoot, isEnvAllowed, isProtectedBrowserEnvName } from '../security.js';
+import { resolveBrowserEnvironmentVariable } from '../environment-variable-settings.js';
 import {
   getLatestWebAppsBasePath,
   getLatestWorkflowsBasePath,
@@ -11,6 +12,7 @@ import {
 import { getWebAppAuthMode } from '../web-app-oauth.js';
 import { readDeploymentStorageRuntimeSettingsSync } from '../deployment-storage-settings.js';
 import { readExecutorUrlOverrideSettingsSync } from '../executor-url-override-settings.js';
+import { asyncHandler } from '../utils/asyncHandler.js';
 
 export const configRouter = Router();
 
@@ -64,7 +66,7 @@ configRouter.get('/path/app-log-dir', (_req, res) => {
 });
 
 // GET /api/config/env/:name
-configRouter.get('/config/env/:name', (req, res) => {
+configRouter.get('/config/env/:name', asyncHandler(async (req, res) => {
   const name = String(req.params.name ?? '');
 
   if (!name) {
@@ -72,10 +74,16 @@ configRouter.get('/config/env/:name', (req, res) => {
     return;
   }
 
-  if (!isEnvAllowed(name)) {
+  if (isProtectedBrowserEnvName(name)) {
     res.json({ value: '' });
     return;
   }
 
-  res.json({ value: process.env[name] ?? '' });
-});
+  const managed = await resolveBrowserEnvironmentVariable(name);
+  if (managed.configured) {
+    res.json({ value: managed.value ?? '' });
+    return;
+  }
+
+  res.json({ value: isEnvAllowed(name) ? process.env[name] ?? '' : '' });
+}));

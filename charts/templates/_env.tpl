@@ -128,6 +128,8 @@
   value: editor
 - name: RIVET_LLM_PROFILE_HEALTH_API_URL
   value: {{ printf "http://127.0.0.1:%v/api/workflows/llm-profile-health" .apiPort | quote }}
+- name: RIVET_EXECUTION_ENVIRONMENT_API_URL
+  value: {{ printf "http://127.0.0.1:%v/api/workflows/execution-environment" .apiPort | quote }}
 {{ include "rivet.env.authKey" $root }}
 {{ include "rivet.env.globalValues" $root }}
 {{- end -}}

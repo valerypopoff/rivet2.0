@@ -6,6 +6,7 @@ import type { RivetPlugin } from '@valerypopoff/rivet2-core';
 import {
   fillMissingSettingsFromEnvironmentVariables,
   getEnvVar,
+  invalidateHostedEnvironmentVariableCache,
 } from '../overrides/utils/tauri';
 
 type FetchHandler = (url: string) => Promise<Response> | Response;
@@ -131,6 +132,27 @@ test('getEnvVar retries after malformed hosted env responses', async () => {
   try {
     assert.equal(await getEnvVar(envName), undefined);
     assert.equal(await getEnvVar(envName), 'recovered-value');
+    assert.equal(requestCount, 2);
+  } finally {
+    restoreFetch();
+  }
+});
+
+test('getEnvVar reloads after UI-managed environment variables change', async () => {
+  const envName = 'CODEX_UI_MANAGED_ENV_CACHE_TEST';
+  let value = 'before-save';
+  let requestCount = 0;
+  const restoreFetch = withFetch(() => {
+    requestCount += 1;
+    return jsonResponse(value);
+  });
+
+  try {
+    assert.equal(await getEnvVar(envName), 'before-save');
+    value = 'after-save';
+    assert.equal(await getEnvVar(envName), 'before-save');
+    invalidateHostedEnvironmentVariableCache();
+    assert.equal(await getEnvVar(envName), 'after-save');
     assert.equal(requestCount, 2);
   } finally {
     restoreFetch();

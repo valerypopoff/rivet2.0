@@ -32,6 +32,11 @@ const devDependencyMarkerChecks = {
   api: [
     'test -f /app/node_modules/.package-lock.json',
     'cmp -s /app/package-lock.json /app/node_modules/.package-lock.json',
+    // The API links built upstream packages through a container-local snapshot.
+    // Recreate it after a mounted Rivet runtime build changes those exports.
+    'cmp -s /workspace/rivet/packages/core/dist/esm/index.js /app/node_modules/@valerypopoff/rivet2-core/dist/esm/index.js',
+    'cmp -s /workspace/rivet/packages/node/dist/esm/index.js /app/node_modules/@valerypopoff/rivet2-node/dist/esm/index.js',
+    'cmp -s /workspace/rivet/packages/node/dist/esm/webAppHandler.js /app/node_modules/@valerypopoff/rivet2-node/dist/esm/webAppHandler.js',
   ].join(' && '),
 };
 

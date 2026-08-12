@@ -50,6 +50,7 @@
 .app-settings-general-panel,
 .app-settings-storage-panel,
 .app-settings-proxy-panel,
+.app-settings-environment-variables-panel,
 .app-settings-recordings-panel,
 .app-settings-workflow-endpoints-panel,
 .app-settings-web-apps-panel {
@@ -131,6 +132,102 @@
 .app-settings-trusted-hosts {
   min-height: 92px;
   resize: vertical;
+}
+
+.app-settings-environment-variables-list {
+  display: grid;
+  gap: 0;
+}
+
+.app-settings-environment-variables-table {
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 6px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  background: rgba(0, 0, 0, 0.08);
+}
+
+.app-settings-environment-variable-header,
+.app-settings-environment-variable {
+  display: grid;
+  grid-template-columns: minmax(130px, 0.85fr) minmax(190px, 1.3fr) 72px 40px;
+  align-items: center;
+  gap: 8px;
+  min-width: 460px;
+  padding: 6px 8px;
+}
+
+.app-settings-environment-variable-header {
+  min-height: 30px;
+  color: var(--grey-light);
+  background: rgba(255, 255, 255, 0.035);
+  font-size: var(--workflow-library-font-size-s);
+  font-weight: 700;
+}
+
+.app-settings-environment-variable {
+  min-height: 44px;
+  border-top: 1px solid rgba(255, 255, 255, 0.07);
+}
+
+.app-settings-environment-variable:first-child {
+  border-top-color: rgba(255, 255, 255, 0.04);
+}
+
+.app-settings-environment-variable-cell,
+.app-settings-environment-variable-value-cell {
+  min-width: 0;
+}
+
+.app-settings-environment-variable-value-cell {
+  display: grid;
+  gap: 4px;
+}
+
+.app-settings-environment-variables-table [data-ds--text-field--container] {
+  min-height: 32px;
+}
+
+.app-settings-environment-variable-browser-heading,
+.app-settings-environment-variable-actions-heading,
+.app-settings-environment-variable-browser-cell,
+.app-settings-environment-variable-actions-cell {
+  text-align: center;
+}
+
+.app-settings-environment-variable-browser-cell,
+.app-settings-environment-variable-actions-cell {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.app-settings-environment-variable-browser-cell input {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  accent-color: var(--grey-lightest);
+}
+
+.app-settings-environment-variable-icon-button {
+  width: 28px !important;
+  min-width: 28px !important;
+  height: 28px !important;
+  padding: 0 !important;
+}
+
+.app-settings-environment-variable-icon-button svg {
+  width: 16px;
+  height: 16px;
+}
+
+.app-settings-environment-variable-error {
+  padding: 0 2px;
+  font-size: var(--workflow-library-font-size-xs);
+}
+
+.app-settings-environment-variables-empty {
+  padding: 12px;
 }
 
 .app-settings-panel-region .project-settings-textarea {

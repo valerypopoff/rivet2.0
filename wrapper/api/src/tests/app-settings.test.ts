@@ -6,7 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 
-import { getExpectedProxyAuthToken } from '../auth.js';
+import { getExpectedExecutorAuthToken, getExpectedProxyAuthToken } from '../auth.js';
 import { createApiApp } from '../app.js';
 import { getCommandTimeout, getMaxOutputBytes } from '../security.js';
 import {
@@ -63,6 +63,11 @@ import {
   getWorkflowStorageBackendMode,
 } from '../routes/workflows/storage-config.js';
 import { writePrivateJsonSettingsFile } from '../settings-file-writer.js';
+import {
+  getEnvironmentVariableSettingsPath,
+  readEnvironmentVariableSettings,
+  readExecutionEnvironmentVariables,
+} from '../environment-variable-settings.js';
 
 const relevantEnvKeys = [
   'HTTP_PROXY',
@@ -114,6 +119,8 @@ const relevantEnvKeys = [
   'RIVET_REQUIRE_WORKFLOW_KEY',
   'RIVET_UI_TOKEN_FREE_HOSTS',
   'RIVET_KEY',
+  'OPENAI_API_KEY',
+  'UI_MANAGED_ENVIRONMENT_VARIABLE_TEST',
 ] as const;
 
 async function withAppSettingsEnv(run: (tempRoot: string) => Promise<void> | void) {
@@ -164,6 +171,13 @@ async function startServer(profile: Parameters<typeof createApiApp>[0] = 'contro
 function trustedProxyHeaders(): Record<string, string> {
   return {
     'x-rivet-proxy-auth': getExpectedProxyAuthToken(),
+  };
+}
+
+function trustedExecutorHeaders(): Record<string, string> {
+  return {
+    ...trustedProxyHeaders(),
+    'x-rivet-executor-auth': getExpectedExecutorAuthToken(),
   };
 }
 

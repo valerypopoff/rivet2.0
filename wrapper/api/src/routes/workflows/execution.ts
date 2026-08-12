@@ -44,6 +44,7 @@ import {
   WEB_APP_OAUTH_SELECT_ACCOUNT_PROMPT,
 } from '../../web-app-oauth.js';
 import { readWorkflowEndpointAuthSettingsSync } from '../../workflow-endpoint-auth-settings.js';
+import { readExecutionEnvironmentVariables } from '../../environment-variable-settings.js';
 import { enqueueWorkflowExecutionRecordingPersistence } from './recordings.js';
 import {
   createExecutionProjectReferenceLoader,
@@ -1155,17 +1156,19 @@ export async function createWebAppProcessorOptions(
   },
 ): Promise<RivetWebAppProcessorOptions> {
   const remoteDebugger = getLatestRemoteDebuggerForExecution(options);
+  const executionEnvironment = await readExecutionEnvironmentVariables();
 
   return {
     codeRunner: new ManagedCodeRunner(
       getRootPath(),
-      codeRunnerTelemetry ? { telemetry: codeRunnerTelemetry } : {},
+      { ...(codeRunnerTelemetry ? { telemetry: codeRunnerTelemetry } : {}), executionEnvironment },
     ) as any,
     context: getWebAppWorkflowExecutionContext(req),
     datasetProvider: executionProject.datasetProvider,
     projectPath: executionProject.projectVirtualPath,
     projectReferenceLoader: await createExecutionProjectReferenceLoader(executionProject.projectVirtualPath),
     llmProfileHealthStore: await getLLMProfileHealthStore(),
+    executionEnvironment,
     remoteDebugger,
   };
 }
@@ -1281,18 +1284,20 @@ async function executeWorkflowEndpoint(
   const { project, datasetProvider, projectVirtualPath } = executionProject;
   const projectReferenceLoader = await createExecutionProjectReferenceLoader(projectVirtualPath);
   const remoteDebugger = getLatestRemoteDebuggerForExecution(options);
+  const executionEnvironment = await readExecutionEnvironmentVariables();
   const codeRunnerTelemetry = shouldCollectCodeRunnerTelemetry()
     ? createManagedCodeRunnerTelemetry()
     : null;
   const processor = createProcessor(project, {
     codeRunner: new ManagedCodeRunner(
       getRootPath(),
-      codeRunnerTelemetry ? { telemetry: codeRunnerTelemetry } : {},
+      { ...(codeRunnerTelemetry ? { telemetry: codeRunnerTelemetry } : {}), executionEnvironment },
     ) as any,
     projectPath: projectVirtualPath,
     datasetProvider,
     projectReferenceLoader,
     llmProfileHealthStore: await getLLMProfileHealthStore(),
+    executionEnvironment,
     remoteDebugger,
     context: getWorkflowExecutionContext(req),
     inputs: getWorkflowRequestInputs(req),

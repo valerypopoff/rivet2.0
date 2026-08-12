@@ -99,6 +99,24 @@ test('plain JS does not prepare runtime libraries', async () => {
   });
 });
 
+test('Code nodes receive their immutable managed execution environment', async () => {
+  const name = 'RIVET_MANAGED_ENVIRONMENT_TEST';
+  await withScopedEnv([name], { [name]: 'physical' }, async () => {
+    const runner = new ManagedCodeRunner('/tmp/rivet-runtime-libraries-test', {
+      executionEnvironment: { [name]: 'managed' },
+    });
+
+    const output = await runner.runCode(
+      `return { output: { type: 'string', value: process.env.${name} } };`,
+      {},
+      { ...plainOptions, includeProcess: true },
+    );
+
+    assert.equal(getOutputValue(output), 'managed');
+    assert.equal(process.env[name], 'physical');
+  });
+});
+
 test('require-enabled code prepares runtime libraries once per runner', async () => {
   await withRunnerEnv({}, async () => {
     let prepareCalls = 0;
