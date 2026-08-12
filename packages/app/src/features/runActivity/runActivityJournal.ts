@@ -1,6 +1,7 @@
 import { produce } from 'immer';
 import {
   AGENT_RESPONSE_TRACE_MAX_MODEL_CALLS,
+  AGENT_RESPONSE_TRACE_MAX_PROFILE_ATTEMPTS,
   AGENT_RESPONSE_TRACE_MAX_TOOL_CALLS,
   type AgentModelCallTrace,
   type AgentToolCallTrace,
@@ -15,6 +16,7 @@ import {
   type ProcessId,
   type ProjectId,
   type GraphProgress,
+  type LLMProfileAttemptTraceEvent,
   type RootRunId,
 } from '@valerypopoff/rivet2-core';
 
@@ -30,6 +32,10 @@ export type RunActivityModelCall = AgentModelCallTrace & {
 };
 
 export type RunActivityToolCall = AgentToolCallTrace & {
+  sequence: number;
+};
+
+export type RunActivityProfileAttempt = LLMProfileAttemptTraceEvent & {
   sequence: number;
 };
 
@@ -66,10 +72,14 @@ export type RunActivityNodeInvocation = {
   outputsAvailable: boolean;
   outputsClearedAt?: number;
   modelCalls: RunActivityModelCall[];
+  /** Additive for compatibility with journals persisted before circuit observability. */
+  profileAttempts?: RunActivityProfileAttempt[];
   toolCalls: RunActivityToolCall[];
   modelCallCount: number;
   toolCallCount: number;
   omittedModelCallCount: number;
+  /** Additive for compatibility with journals persisted before circuit observability. */
+  omittedProfileAttemptCount?: number;
   omittedToolCallCount: number;
 };
 
@@ -114,6 +124,7 @@ export type RunActivityJournalLimits = {
   completedRootCount: number;
   nodeInvocationsPerRoot: number;
   modelCallsPerInvocation: number;
+  profileAttemptsPerInvocation: number;
   toolCallsPerInvocation: number;
 };
 
@@ -153,6 +164,7 @@ type ProcessEventName =
   | 'nodeExcluded'
   | 'nodeOutputsCleared'
   | 'llmCallFinished'
+  | 'llmProfileAttempt'
   | 'toolCallFinished'
   | 'done'
   | 'abort'
@@ -176,6 +188,7 @@ export const DEFAULT_RUN_ACTIVITY_JOURNAL_LIMITS: RunActivityJournalLimits = {
   completedRootCount: 1,
   nodeInvocationsPerRoot: 2_000,
   modelCallsPerInvocation: AGENT_RESPONSE_TRACE_MAX_MODEL_CALLS,
+  profileAttemptsPerInvocation: AGENT_RESPONSE_TRACE_MAX_PROFILE_ATTEMPTS,
   toolCallsPerInvocation: AGENT_RESPONSE_TRACE_MAX_TOOL_CALLS,
 };
 
@@ -282,6 +295,9 @@ function applyEvent(journal: RunActivityJournal, event: RunActivityEvent, occurr
       return;
     case 'llmCallFinished':
       applyLlmCallFinished(journal, event.data, occurredAt);
+      return;
+    case 'llmProfileAttempt':
+      applyLlmProfileAttempt(journal, event.data, occurredAt);
       return;
     case 'toolCallFinished':
       applyToolCallFinished(journal, event.data, occurredAt);
@@ -610,6 +626,59 @@ function applyLlmCallFinished(
   }
 }
 
+function applyLlmProfileAttempt(
+  journal: RunActivityJournal,
+  data: RunActivityEventByName['llmProfileAttempt']['data'],
+  at: number,
+): void {
+  const invocation = getOrCreateTraceInvocation(
+    journal,
+    'llmProfileAttempt',
+    data.execution,
+    data.nodeId,
+    data.processId,
+    at,
+  );
+  if (invocation == null) return;
+
+  invocation.profileAttempts ??= [];
+  invocation.omittedProfileAttemptCount ??= 0;
+  const existingIndex = invocation.profileAttempts.findIndex((attempt) => attempt.eventId === data.eventId);
+  const attempt: RunActivityProfileAttempt = {
+    eventId: data.eventId,
+    roundIndex: data.roundIndex,
+    ...(data.profileIndex == null ? {} : { profileIndex: data.profileIndex }),
+    nodeId: data.nodeId,
+    processId: data.processId,
+    provider: data.provider,
+    model: data.model,
+    ...(data.customProviderApi == null ? {} : { customProviderApi: data.customProviderApi }),
+    stage: data.stage,
+    outcome: data.outcome,
+    ...(data.attemptIndex == null ? {} : { attemptIndex: data.attemptIndex }),
+    ...(data.status == null ? {} : { status: data.status }),
+    ...(data.error == null ? {} : { error: data.error }),
+    ...(data.profileHealthKey == null ? {} : { profileHealthKey: data.profileHealthKey }),
+    ...(data.healthState == null ? {} : { healthState: data.healthState }),
+    ...(data.healthDisposition == null ? {} : { healthDisposition: data.healthDisposition }),
+    ...(data.healthOutcome == null ? {} : { healthOutcome: data.healthOutcome }),
+    ...(data.retryAt == null ? {} : { retryAt: data.retryAt }),
+    ...(data.timeoutKind == null ? {} : { timeoutKind: data.timeoutKind }),
+    sequence: existingIndex < 0 ? takeSequence(journal) : invocation.profileAttempts[existingIndex]!.sequence,
+  };
+
+  if (existingIndex >= 0) {
+    invocation.profileAttempts[existingIndex] = attempt;
+    return;
+  }
+
+  if (invocation.profileAttempts.length < journal.limits.profileAttemptsPerInvocation) {
+    invocation.profileAttempts.push(attempt);
+  } else {
+    invocation.omittedProfileAttemptCount += 1;
+  }
+}
+
 function applyToolCallFinished(
   journal: RunActivityJournal,
   data: RunActivityEventByName['toolCallFinished']['data'],
@@ -822,10 +891,12 @@ function ensureNodeInvocation(
     outputRevision: 0,
     outputsAvailable: false,
     modelCalls: [],
+    profileAttempts: [],
     toolCalls: [],
     modelCallCount: 0,
     toolCallCount: 0,
     omittedModelCallCount: 0,
+    omittedProfileAttemptCount: 0,
     omittedToolCallCount: 0,
   };
   root.nodeInvocationsByKey[key] = invocation;
@@ -995,6 +1066,10 @@ function normalizeLimits(limits: Partial<RunActivityJournalLimits>): RunActivity
     modelCallsPerInvocation: normalizeLimit(
       limits.modelCallsPerInvocation,
       DEFAULT_RUN_ACTIVITY_JOURNAL_LIMITS.modelCallsPerInvocation,
+    ),
+    profileAttemptsPerInvocation: normalizeLimit(
+      limits.profileAttemptsPerInvocation,
+      DEFAULT_RUN_ACTIVITY_JOURNAL_LIMITS.profileAttemptsPerInvocation,
     ),
     toolCallsPerInvocation: normalizeLimit(
       limits.toolCallsPerInvocation,

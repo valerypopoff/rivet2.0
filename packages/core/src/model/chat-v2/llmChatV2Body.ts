@@ -251,7 +251,7 @@ function getToolBodyFields(data: LLMChatV2NodeData): LLMChatV2BodyField[] {
 
 function getBehaviorBodyFields(data: LLMChatV2NodeData): LLMChatV2BodyField[] {
   return [
-    ...(data.useAsGraphPartialOutput === false ? [{ label: 'Stream response', value: 'Disabled' }] : []),
+    ...(data.useAsGraphPartialOutput ? [{ label: 'Stream response', value: 'Enabled' }] : []),
     ...(data.cache ? [{ label: 'Editor cache (legacy)', value: 'Enabled' }] : []),
   ];
 }

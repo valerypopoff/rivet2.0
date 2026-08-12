@@ -21,16 +21,21 @@ data:
             autoContinueToolCalls: false
             baseURL: ""
             cache: false
+            circuitBreakerFailureThreshold: 3
+            circuitBreakerFailureWindowMs: 300000
+            circuitBreakerOpenDurationMs: 300000
             configurationMode: inline
             customProviderApi: completions
             customProviderApiKeyEnvVarName: ""
             customProviderApiKeyProgrammaticName: ""
             customProviderBaseURL: ""
+            enableCircuitBreaker: false
             enableGoogleSearchGrounding: false
             enableGoogleUrlContext: false
             enableOpenAICodeInterpreter: false
             enableOpenAIWebSearch: false
             extraProviderOptions: ""
+            firstOutputTimeoutMs: 30000
             googleIncludeThoughts: false
             googleThinkingLevel: ""
             headers: []
@@ -55,6 +60,7 @@ data:
             retryOnNon200CooldownMs: 0
             retryOnNon200RepeatTimes: 0
             stopSequences: []
+            streamInactivityTimeoutMs: 30000
             temperature: 0
             toolChoice: ""
             toolChoiceFunction: ""
@@ -172,16 +178,21 @@ data:
             autoContinueToolCalls: false
             baseURL: ""
             cache: false
+            circuitBreakerFailureThreshold: 3
+            circuitBreakerFailureWindowMs: 300000
+            circuitBreakerOpenDurationMs: 300000
             configurationMode: inline
             customProviderApi: completions
             customProviderApiKeyEnvVarName: ""
             customProviderApiKeyProgrammaticName: ""
             customProviderBaseURL: ""
+            enableCircuitBreaker: false
             enableGoogleSearchGrounding: false
             enableGoogleUrlContext: false
             enableOpenAICodeInterpreter: false
             enableOpenAIWebSearch: false
             extraProviderOptions: ""
+            firstOutputTimeoutMs: 30000
             googleIncludeThoughts: false
             googleThinkingLevel: ""
             headers: []
@@ -206,6 +217,7 @@ data:
             retryOnNon200CooldownMs: 0
             retryOnNon200RepeatTimes: 0
             stopSequences: []
+            streamInactivityTimeoutMs: 30000
             temperature: 0
             toolChoice: ""
             toolChoiceFunction: ""

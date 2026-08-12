@@ -173,7 +173,7 @@ test('Run Activity observer failures do not suppress primary execution-state eve
   }
 });
 
-test('projects replay-shaped waiting, progress, model, and tool events into Run Activity', () => {
+test('projects replay-shaped waiting, progress, model, profile-health, and tool events into Run Activity', () => {
   const execution: GraphExecutionMetadata = {
     graphId,
     graphRunId: 'replay-graph-run' as GraphRunId,
@@ -186,6 +186,7 @@ test('projects replay-shaped waiting, progress, model, and tool events into Run 
   let journal = createRunActivityJournal();
   let primaryUserInputCount = 0;
   let primaryModelCallCount = 0;
+  let primaryProfileAttemptCount = 0;
   let primaryToolCallCount = 0;
   let primaryPauseCount = 0;
   let primaryResumeCount = 0;
@@ -208,6 +209,9 @@ test('projects replay-shaped waiting, progress, model, and tool events into Run 
     },
     onLlmCallFinished: () => {
       primaryModelCallCount += 1;
+    },
+    onLlmProfileAttempt: () => {
+      primaryProfileAttemptCount += 1;
     },
     onToolCallFinished: () => {
       primaryToolCallCount += 1;
@@ -270,6 +274,24 @@ test('projects replay-shaped waiting, progress, model, and tool events into Run 
     true,
   );
   assert.equal(
+    dispatcher.llmProfileAttempt({
+      execution,
+      eventId: 'replayed-profile-attempt',
+      roundIndex: 0,
+      profileIndex: 0,
+      nodeId: node.id,
+      processId,
+      provider: 'openai',
+      model: 'gpt-test',
+      stage: 'health-gate',
+      outcome: 'skipped',
+      healthState: 'open',
+      healthDisposition: 'deny',
+      retryAt: 30_000,
+    } satisfies ProcessEventMessageMap['llmProfileAttempt']),
+    true,
+  );
+  assert.equal(
     dispatcher.toolCallFinished({
       execution,
       toolCallId: 'replayed-tool-call',
@@ -295,19 +317,22 @@ test('projects replay-shaped waiting, progress, model, and tool events into Run 
 
   assert.equal(primaryUserInputCount, 1);
   assert.equal(primaryModelCallCount, 1);
+  assert.equal(primaryProfileAttemptCount, 1);
   assert.equal(primaryToolCallCount, 1);
   assert.equal(primaryPauseCount, 0);
   assert.equal(primaryResumeCount, 0);
 
-  const invocation = journal.rootsById[execution.rootRunId]!.nodeInvocationsByKey[
-    createRunActivityNodeKey({ ...execution, nodeId: node.id, processId })
-  ]!;
+  const invocation =
+    journal.rootsById[execution.rootRunId]!.nodeInvocationsByKey[
+      createRunActivityNodeKey({ ...execution, nodeId: node.id, processId })
+    ]!;
   assert.equal(invocation.status, 'waiting');
   assert.deepEqual(invocation.waitingForUserInput, { questionCount: 1, renderingType: 'markdown' });
 
-  const replayedInputInvocation = journal.rootsById[execution.rootRunId]!.nodeInvocationsByKey[
-    createRunActivityNodeKey({ ...execution, nodeId: node.id, processId: replayedInputProcessId })
-  ]!;
+  const replayedInputInvocation =
+    journal.rootsById[execution.rootRunId]!.nodeInvocationsByKey[
+      createRunActivityNodeKey({ ...execution, nodeId: node.id, processId: replayedInputProcessId })
+    ]!;
   assert.equal(replayedInputInvocation.status, 'waiting');
   assert.deepEqual(replayedInputInvocation.waitingForUserInput, { questionCount: 1, renderingType: 'markdown' });
   assert.deepEqual(invocation.progress, { percent: 50, message: 'Thinking' });
@@ -326,6 +351,25 @@ test('projects replay-shaped waiting, progress, model, and tool events into Run 
         durationMs: 12,
         usage: { promptTokens: 5, completionTokens: 3 },
         pricing: { status: 'unknown' },
+      },
+    ],
+  );
+  assert.deepEqual(
+    invocation.profileAttempts?.map(({ sequence: _sequence, ...attempt }) => attempt),
+    [
+      {
+        eventId: 'replayed-profile-attempt',
+        roundIndex: 0,
+        profileIndex: 0,
+        nodeId: node.id,
+        processId,
+        provider: 'openai',
+        model: 'gpt-test',
+        stage: 'health-gate',
+        outcome: 'skipped',
+        healthState: 'open',
+        healthDisposition: 'deny',
+        retryAt: 30_000,
       },
     ],
   );

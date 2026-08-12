@@ -12,11 +12,12 @@ import {
 import type { LLMChatV2NodeData, LLMChatV2ProfileData } from './llmChatV2NodeData.js';
 import { LLM_PROFILE_VALUE_VERSION, type LLMProfileValue } from './llmProfileTypes.js';
 import { parseCustomProviderApi } from './customProviderApi.js';
+import { createRivetLLMProfileHealthIdentity } from './llmProfileHealthStore.js';
 
 export function resolveLLMProfileNodeValue(params: {
   data: LLMChatV2ProfileData;
   inputs: Inputs;
-  context: Pick<InternalProcessContext, 'getPluginConfig' | 'settings'>;
+  context: Pick<InternalProcessContext, 'getPluginConfig' | 'settings' | 'node' | 'project'>;
 }): LLMProfileValue {
   const { data, inputs, context } = params;
   const runtimeData = data as LLMChatV2NodeData;
@@ -60,42 +61,61 @@ export function resolveLLMProfileNodeValue(params: {
     customEnvironmentName: data.customProviderApiKeyEnvVarName,
   });
 
+  const configuration: LLMChatV2ProfileData = {
+    ...data,
+    model,
+    useModelInput: false,
+    temperature: generation.temperature ?? data.temperature,
+    useTemperatureInput: false,
+    maxTokens: generation.maxTokens ?? data.maxTokens,
+    useMaxTokensInput: false,
+    topP: generation.topP,
+    useTopPInput: false,
+    topK: generation.topK,
+    useTopKInput: false,
+    presencePenalty: generation.presencePenalty,
+    usePresencePenaltyInput: false,
+    frequencyPenalty: generation.frequencyPenalty,
+    useFrequencyPenaltyInput: false,
+    stopSequences: generation.stopSequences ?? [],
+    useStopSequencesInput: false,
+    seed: generation.seed,
+    useSeedInput: false,
+    customProviderBaseURL,
+    useCustomProviderBaseURLInput: false,
+    customProviderApi,
+    openAIPreviousResponseId,
+    useOpenAIPreviousResponseIdInput: false,
+    headers: Object.entries(headers ?? {}).map(([key, value]) => ({ key, value })),
+    useHeadersInput: false,
+    extraProviderOptions: extraProviderOptions == null ? '' : JSON.stringify(extraProviderOptions),
+    useExtraProviderOptionsInput: false,
+    anthropicThinkingBudget,
+    useAnthropicThinkingBudgetInput: false,
+    googleThinkingBudget,
+    useGoogleThinkingBudgetInput: false,
+  };
+
+  // A profile can be resolved outside a loaded project, for example by a
+  // programmatic caller or a focused node test. Its health identity is
+  // project-scoped, so defer attaching it until LLM Chat binds the profile to
+  // the executing project in that case.
+  const projectId = context.project?.metadata?.id;
+
   return {
     version: LLM_PROFILE_VALUE_VERSION,
     credential,
-    configuration: {
-      ...data,
-      model,
-      useModelInput: false,
-      temperature: generation.temperature ?? data.temperature,
-      useTemperatureInput: false,
-      maxTokens: generation.maxTokens ?? data.maxTokens,
-      useMaxTokensInput: false,
-      topP: generation.topP,
-      useTopPInput: false,
-      topK: generation.topK,
-      useTopKInput: false,
-      presencePenalty: generation.presencePenalty,
-      usePresencePenaltyInput: false,
-      frequencyPenalty: generation.frequencyPenalty,
-      useFrequencyPenaltyInput: false,
-      stopSequences: generation.stopSequences ?? [],
-      useStopSequencesInput: false,
-      seed: generation.seed,
-      useSeedInput: false,
-      customProviderBaseURL,
-      useCustomProviderBaseURLInput: false,
-      customProviderApi,
-      openAIPreviousResponseId,
-      useOpenAIPreviousResponseIdInput: false,
-      headers: Object.entries(headers ?? {}).map(([key, value]) => ({ key, value })),
-      useHeadersInput: false,
-      extraProviderOptions: extraProviderOptions == null ? '' : JSON.stringify(extraProviderOptions),
-      useExtraProviderOptionsInput: false,
-      anthropicThinkingBudget,
-      useAnthropicThinkingBudgetInput: false,
-      googleThinkingBudget,
-      useGoogleThinkingBudgetInput: false,
-    },
+    configuration,
+    ...(projectId == null
+      ? {}
+      : {
+          healthIdentity: createRivetLLMProfileHealthIdentity({
+            configuration,
+            credential,
+            chatNodeHeaders: context.settings.chatNodeHeaders,
+            projectId,
+            profileNodeId: context.node.id,
+          }),
+        }),
   };
 }

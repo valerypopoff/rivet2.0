@@ -52,7 +52,7 @@ export const LLMChatV2ConfigurationEditor: FC<Props> = ({ editor, isDisabled, is
   const exportTooltip =
     'Creates an LLM Profile from these Inline settings, moves configuration input connections to it, connects it to this LLM Chat, and switches this node to From profile.';
   const helperMessage =
-    'Inline keeps provider and model settings in this node. From profile adds an LLM Profile input so reusable configurations can be switched without changing Chat behavior.';
+    'Inline keeps provider and model settings in this node. From profile adds an LLM Profile input so reusable configurations can be switched without changing Chat behavior. Profile Reliability is enforced only by Rivet Studio Server or another explicitly integrated host.';
 
   return (
     <Field name="configurationMode" label={editor.label} isDisabled={isControlDisabled}>

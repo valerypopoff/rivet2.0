@@ -23,6 +23,8 @@ export type FileMenuConfig = {
   visibleItems?: readonly FileMenuItemId[];
 };
 
+export type FileMenuCommandSource = 'host-save-shortcut';
+
 export const FILE_MENU_GROUPS = [
   [
     { id: 'new_project', label: 'New project' },
@@ -58,7 +60,19 @@ export function isFileMenuItemId(command: MenuIds): command is FileMenuItemId {
   return FILE_MENU_ITEM_IDS.has(command);
 }
 
-export function shouldRunFileMenuCommand(command: MenuIds, config?: FileMenuConfig): boolean {
+export function shouldRunFileMenuCommand(
+  command: MenuIds,
+  config?: FileMenuConfig,
+  options: { hostedSaveShortcutEnabled?: boolean; source?: FileMenuCommandSource } = {},
+): boolean {
+  if (
+    command === 'save_project' &&
+    options.hostedSaveShortcutEnabled === true &&
+    options.source === 'host-save-shortcut'
+  ) {
+    return true;
+  }
+
   if (!isFileMenuItemId(command) || config?.visibleItems == null) {
     return true;
   }

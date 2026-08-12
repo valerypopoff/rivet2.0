@@ -5,6 +5,7 @@ import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 
 const componentsDir = dirname(fileURLToPath(import.meta.url));
+const appRoot = join(componentsDir, '..', '..');
 
 test('node body previews distinguish wrapped text from clipped object source', () => {
   const nodeBodySource = readFileSync(join(componentsDir, 'NodeBody.tsx'), 'utf8');
@@ -64,4 +65,10 @@ test('colorized previews inline Monaco token colors before guarded writes', () =
   assert.match(monacoSource, /monaco-editor\/esm\/vs\/language\/json\/jsonMode\.js/);
   assert.match(monacoSource, /monaco\.editor\.createModel\('', 'json'\)/);
   assert.match(monacoSource, /languageContributionPromises\.delete\(language\)/);
+
+  const viteConfigSource = readFileSync(join(appRoot, 'vite.config.ts'), 'utf8');
+  assert.match(viteConfigSource, /monacoJsonOptimizeDepsIncludes/);
+  assert.match(viteConfigSource, /monaco-editor\/esm\/vs\/language\/json\/monaco\.contribution\.js/);
+  assert.match(viteConfigSource, /monaco-editor\/esm\/vs\/language\/json\/jsonMode\.js/);
+  assert.match(viteConfigSource, /include: \['nspell', \.\.\.monacoJsonOptimizeDepsIncludes\]/);
 });

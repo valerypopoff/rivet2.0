@@ -38,3 +38,19 @@ test('createWebviewWindowHandle browser fallback reports popup closure and can c
     globalThis.window = originalWindow;
   }
 });
+
+test('createWebviewWindowHandle browser fallback fails immediately when the browser blocks the popup', async () => {
+  const originalWindow = globalThis.window;
+  globalThis.window = {
+    open: () => null,
+  } as typeof window;
+
+  try {
+    await assert.rejects(
+      createWebviewWindowHandle('preview', { url: 'https://example.com/preview' }),
+      /Browser blocked the detached web app preview\. Allow popups for this site and try again\./,
+    );
+  } finally {
+    globalThis.window = originalWindow;
+  }
+});

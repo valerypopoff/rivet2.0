@@ -51,6 +51,24 @@ const toolEvent = (overrides: Partial<Extract<AgentTraceEvent, { type: 'tool-cal
     ...overrides,
   }) satisfies Extract<AgentTraceEvent, { type: 'tool-call-finished' }>;
 
+const profileAttemptEvent = (
+  overrides: Partial<Extract<AgentTraceEvent, { type: 'llm-profile-attempt' }>> = {},
+) =>
+  ({
+    type: 'llm-profile-attempt',
+    execution,
+    eventId: crypto.randomUUID(),
+    roundIndex: 0,
+    profileIndex: 0,
+    nodeId: 'llm' as NodeId,
+    processId: 'process' as ProcessId,
+    provider: 'custom',
+    model: 'model',
+    stage: 'health-gate',
+    outcome: 'success',
+    ...overrides,
+  }) satisfies Extract<AgentTraceEvent, { type: 'llm-profile-attempt' }>;
+
 void describe('AgentResponseTrace', () => {
   void it('aggregates physical calls without confusing unrelated profiles or parallel tools with fallbacks', () => {
     const trace = buildAgentResponseTrace({
@@ -328,6 +346,97 @@ void describe('AgentResponseTrace', () => {
       }),
       false,
     );
+  });
+
+  void it('preserves privacy-bounded profile health metadata in recorded model calls', () => {
+    const trace = buildAgentResponseTrace({
+      scope: 'response',
+      execution,
+      events: [
+        modelEvent({
+          profileIndex: 1,
+          profileHealthKey: 'llm-profile:sha256:test',
+          profileHealthState: 'half-open',
+        }),
+      ],
+      status: 'completed',
+    });
+
+    assert.equal(trace.modelCalls[0]?.profileHealthKey, 'llm-profile:sha256:test');
+    assert.equal(trace.modelCalls[0]?.profileHealthState, 'half-open');
+    assert.equal(isAgentResponseTrace(trace), true);
+    assert.equal(
+      isAgentResponseTrace({
+        ...trace,
+        modelCalls: [{ ...trace.modelCalls[0], profileHealthState: 'recovering' }],
+      }),
+      false,
+    );
+
+    const originalEvent = modelEvent({
+      callId: 'health-redelivery' as never,
+      profileHealthKey: 'llm-profile:sha256:redelivery',
+      profileHealthState: 'open',
+    });
+    const {
+      profileHealthKey: _profileHealthKey,
+      profileHealthState: _profileHealthState,
+      ...legacyRedelivery
+    } = originalEvent;
+    const redeliveredTrace = buildAgentResponseTrace({
+      scope: 'response',
+      execution,
+      events: [originalEvent, legacyRedelivery],
+      status: 'completed',
+    });
+    assert.equal(redeliveredTrace.modelCalls[0]?.profileHealthKey, 'llm-profile:sha256:redelivery');
+    assert.equal(redeliveredTrace.modelCalls[0]?.profileHealthState, 'open');
+  });
+
+  void it('preserves profile skips without physical calls and counts their fallback transition', () => {
+    const skipped = profileAttemptEvent({
+      eventId: 'skip-primary',
+      profileIndex: 0,
+      outcome: 'skipped',
+      healthState: 'open',
+      healthDisposition: 'deny',
+      retryAt: 123_456,
+      profileHealthKey: 'llm-profile:sha256:primary',
+    });
+    const admitted = profileAttemptEvent({
+      eventId: 'allow-backup',
+      profileIndex: 1,
+      healthState: 'closed',
+      healthDisposition: 'allow',
+      profileHealthKey: 'llm-profile:sha256:backup',
+    });
+    const trace = buildAgentResponseTrace({
+      scope: 'response',
+      execution,
+      events: [skipped, admitted],
+      status: 'error',
+    });
+
+    assert.equal(trace.summary.modelCallCount, 0);
+    assert.equal(trace.summary.fallbackCount, 1);
+    assert.deepEqual(
+      trace.profileAttempts?.map((attempt) => [attempt.eventId, attempt.outcome, attempt.healthDisposition]),
+      [
+        ['skip-primary', 'skipped', 'deny'],
+        ['allow-backup', 'success', 'allow'],
+      ],
+    );
+    assert.equal(isAgentResponseTrace(trace), true);
+    assert.equal(
+      isAgentResponseTrace({
+        ...trace,
+        profileAttempts: [{ ...trace.profileAttempts![0], healthDisposition: 'unknown' }],
+      }),
+      false,
+    );
+
+    const { profileAttempts: _profileAttempts, omittedProfileAttemptCount: _omitted, ...legacyTrace } = trace;
+    assert.equal(isAgentResponseTrace(legacyTrace), true);
   });
 
   void it('reports entirely unknown pricing as unknown rather than zero cost', () => {

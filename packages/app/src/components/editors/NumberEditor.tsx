@@ -36,6 +36,7 @@ export const DefaultNumberEditor: FC<
       step={editor.step}
       allowEmpty={editor.allowEmpty}
       defaultValue={editor.defaultValue}
+      storageMultiplier={editor.storageMultiplier}
     />
   );
 };
@@ -55,6 +56,8 @@ export const NumberEditor: FC<{
   step?: number;
   allowEmpty?: boolean;
   defaultValue?: number;
+  /** Converts a displayed editor value back to the value stored on the node. */
+  storageMultiplier?: number;
 }> = ({
   value,
   onChange,
@@ -70,7 +73,12 @@ export const NumberEditor: FC<{
   step,
   allowEmpty,
   defaultValue,
+  storageMultiplier = 1,
 }) => {
+  const toDisplayValue = (storedValue: number | undefined): number | undefined =>
+    storedValue == null ? undefined : storedValue / storageMultiplier;
+  const toStoredValue = (displayValue: number): number => Math.round(displayValue * storageMultiplier);
+
   return (
     <Field name={name ?? label} label={label} isDisabled={isDisabled}>
       {({ fieldProps }) => (
@@ -79,17 +87,17 @@ export const NumberEditor: FC<{
           <TextField
             {...fieldProps}
             type="number"
-            min={min}
-            max={max}
-            step={step}
-            defaultValue={value ?? defaultValue}
+            min={toDisplayValue(min)}
+            max={toDisplayValue(max)}
+            step={toDisplayValue(step)}
+            defaultValue={toDisplayValue(value ?? defaultValue)}
             isReadOnly={isReadonly}
             autoFocus={autoFocus}
             onChange={(e) => {
               if (allowEmpty && (e.target as HTMLInputElement).value === '') {
                 onChange(undefined);
               } else {
-                onChange((e.target as HTMLInputElement).valueAsNumber);
+                onChange(toStoredValue((e.target as HTMLInputElement).valueAsNumber));
               }
             }}
             onKeyDown={(e) => {

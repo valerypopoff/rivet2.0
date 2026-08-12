@@ -630,6 +630,114 @@ test('searches every displayed model attempt and tool call instead of only row s
   );
 });
 
+test('renders suspension skips, reliability-service decisions, timeouts, and omitted profile attempts', () => {
+  const journal = createRunActivityJournal();
+  const selectedRoot = root(newerActiveRootId, 1, 'completed');
+  const capturedInvocation = invocation({
+    key: 'profile-health',
+    sequence: 1,
+    graphId: 'main',
+    graphRunId: 'main-run',
+    nodeId: 'chat',
+    processId: 'chat-process',
+  });
+  capturedInvocation.profileAttempts = [
+    {
+      sequence: 2,
+      eventId: 'open-gate',
+      roundIndex: 0,
+      profileIndex: 0,
+      nodeId: capturedInvocation.nodeId,
+      processId: capturedInvocation.processId,
+      provider: 'custom',
+      model: 'fast-but-unhealthy',
+      customProviderApi: 'responses',
+      stage: 'health-gate',
+      outcome: 'skipped',
+      healthState: 'open',
+      healthDisposition: 'deny',
+      retryAt: 2_000,
+    },
+    {
+      sequence: 3,
+      eventId: 'store-fail-open',
+      roundIndex: 0,
+      profileIndex: 1,
+      nodeId: capturedInvocation.nodeId,
+      processId: capturedInvocation.processId,
+      provider: 'anthropic',
+      model: 'backup',
+      stage: 'health-gate',
+      outcome: 'failure',
+      healthDisposition: 'fail-open',
+      error: 'Health store unavailable',
+    },
+    {
+      sequence: 4,
+      eventId: 'first-output-timeout',
+      roundIndex: 0,
+      profileIndex: 1,
+      nodeId: capturedInvocation.nodeId,
+      processId: capturedInvocation.processId,
+      provider: 'anthropic',
+      model: 'backup',
+      stage: 'request',
+      outcome: 'failure',
+      timeoutKind: 'first-output',
+    },
+  ];
+  capturedInvocation.omittedProfileAttemptCount = 2;
+  selectedRoot.nodeInvocationsByKey[capturedInvocation.key] = capturedInvocation;
+  selectedRoot.nodeInvocationOrder = [capturedInvocation.key];
+  journal.rootsById[selectedRoot.rootRunId] = selectedRoot;
+  journal.latestCompletedRootRunId = selectedRoot.rootRunId;
+
+  const viewModel = buildRunActivityViewModel(journal, () => ({ nodeTitle: 'Answer user' }));
+  const item = viewModel.items[0]!;
+
+  assert.equal(item.category, 'model');
+  assert.equal(item.children?.[0]?.status, 'not-ran');
+  assert.match(item.children?.[0]?.secondaryText ?? '', /^profile suspended until .+ \/ profile 1 \/ round 1$/);
+  assert.deepEqual(
+    item.children?.slice(1).map((child) => [child.status, child.secondaryText]),
+    [
+      ['error', 'reliability service unavailable; profile request continued: Health store unavailable / profile 2 / round 1'],
+      ['error', 'first output timed out / profile 2 / round 1'],
+    ],
+  );
+  assert.equal(item.hasErrors, true);
+  assert.deepEqual(
+    item.detailRows?.find((row) => row.label === 'LLM profile attempt rows omitted'),
+    {
+      label: 'LLM profile attempt rows omitted',
+      value: '2',
+    },
+  );
+  assert.ok(item.searchTerms?.includes('first-output'));
+  assert.ok(item.searchTerms?.includes('fail-open'));
+});
+
+test('keeps older Run Activity journals without profile-attempt fields readable', () => {
+  const journal = createRunActivityJournal();
+  const selectedRoot = root(newerActiveRootId, 1, 'completed');
+  const legacyInvocation = invocation({
+    key: 'legacy-without-profile-attempts',
+    sequence: 1,
+    graphId: 'main',
+    graphRunId: 'main-run',
+    nodeId: 'text',
+    processId: 'text-process',
+  });
+  selectedRoot.nodeInvocationsByKey[legacyInvocation.key] = legacyInvocation;
+  selectedRoot.nodeInvocationOrder = [legacyInvocation.key];
+  journal.rootsById[selectedRoot.rootRunId] = selectedRoot;
+  journal.latestCompletedRootRunId = selectedRoot.rootRunId;
+
+  const item = buildRunActivityViewModel(journal, () => ({ nodeTitle: 'Legacy node' })).items[0]!;
+  assert.equal(item.children, undefined);
+  assert.equal(item.detailRows, undefined);
+});
+
 function root(rootRunId: RootRunId, sequence: number, status: RunActivityRoot['status']): RunActivityRoot {
   return {
     sequence,

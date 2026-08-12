@@ -8,6 +8,7 @@ import {
 import { css } from '@emotion/react';
 import Modal, { ModalBody, ModalTransition } from '@atlaskit/modal-dialog';
 import { AppModalHeader } from '../AppModalHeader.js';
+import { buildAgentProfileAttemptInspectorRows } from './agentProfileAttemptPresentation.js';
 
 const inlineResponseInspectorCss = css`
   position: fixed;
@@ -346,6 +347,19 @@ const ResponseInspectorContent: FC<{ trace?: AgentResponseTrace; includeSubtitle
                 {formatDuration(call.durationMs)} · {formatCallUsage(call.usage)} · {formatCallCost(call.pricing)}
               </span>
               {call.finishReason && <span>Finish reason: {call.finishReason}</span>}
+            </article>
+          ))}
+        </TraceSection>
+        <TraceSection
+          title="LLM profile attempts"
+          omitted={trace.omittedProfileAttemptCount ?? 0}
+          empty="No profile fallback or suspension decisions recorded."
+        >
+          {buildAgentProfileAttemptInspectorRows(trace.profileAttempts ?? []).map((row) => (
+            <article key={row.eventId}>
+              <strong>{row.providerAndModel}</strong>
+              <span>{row.context}</span>
+              {row.error && <span>{row.error}</span>}
             </article>
           ))}
         </TraceSection>

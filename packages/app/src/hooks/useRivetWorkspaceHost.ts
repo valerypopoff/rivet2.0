@@ -6,6 +6,7 @@ import { useWorkspaceHostOpenProject } from './workspaceHost/useWorkspaceHostOpe
 import { useWorkspaceHostOpeningTabs } from './workspaceHost/useWorkspaceHostOpeningTabs.js';
 import { useWorkspaceHostProjectMetadata } from './workspaceHost/useWorkspaceHostProjectMetadata.js';
 import { useWorkspaceHostTabUi } from './workspaceHost/useWorkspaceHostTabUi.js';
+import { useWorkspaceHostSave } from './workspaceHost/useWorkspaceHostSave.js';
 import type { RivetWorkspaceHost } from './workspaceHost/types.js';
 
 export { normalizeProjectSnapshot } from './workspaceHost/projectSnapshot.js';
@@ -26,6 +27,7 @@ export type {
 } from './workspaceHost/types.js';
 
 export function useRivetWorkspaceHost(): RivetWorkspaceHost {
+  const saveCurrentProject = useWorkspaceHostSave();
   const { openProjectSnapshot, openProjectPath, replaceCurrent } = useWorkspaceHostOpenProject();
   const closeProject = useWorkspaceHostCloseProject();
   const { startOpeningProjectTab, finishOpeningProjectTab, cancelOpeningProjectTab } =
@@ -37,6 +39,7 @@ export function useRivetWorkspaceHost(): RivetWorkspaceHost {
 
   return useMemo(
     () => ({
+      saveCurrentProject,
       openProjectSnapshot,
       openProjectPath,
       closeProject,
@@ -62,6 +65,7 @@ export function useRivetWorkspaceHost(): RivetWorkspaceHost {
       openProjectPath,
       openProjectSnapshot,
       replaceCurrent,
+      saveCurrentProject,
       setProjectTabUiState,
       startOpeningProjectTab,
       startProjectCompare,

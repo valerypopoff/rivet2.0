@@ -7,6 +7,7 @@ import QuestionIcon from 'majesticons/line/question-circle-line.svg?react';
 import { css } from '@emotion/react';
 import { useAtom } from 'jotai';
 import { AppModalHeader } from './AppModalHeader';
+import { USER_GUIDE_URL } from '../utils/documentationUrls.js';
 
 const styles = css`
   ul li a,
@@ -40,7 +41,7 @@ export const HelpModal: FC = () => {
               <p>Need help with Rivet 2? Check out the following places.</p>
 
               <h2>
-                <a href="https://valerypopoff.github.io/rivet2.0/user-guide" target="_blank" rel="noreferrer">
+                <a href={USER_GUIDE_URL} target="_blank" rel="noreferrer">
                   <QuestionIcon /> Rivet 2 documentation
                 </a>
               </h2>

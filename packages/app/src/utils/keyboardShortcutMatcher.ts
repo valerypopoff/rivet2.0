@@ -1,4 +1,4 @@
-export type KeyboardShortcutPlatform = 'macos' | 'windows';
+export type KeyboardShortcutPlatform = 'linux' | 'macos' | 'windows';
 
 export type KeyboardShortcutEvent = Pick<KeyboardEvent, 'altKey' | 'code' | 'ctrlKey' | 'key' | 'metaKey'> & {
   shiftKey?: boolean;

@@ -324,6 +324,7 @@ export class LLMChatV2NodeImpl extends NodeImpl<LLMChatV2Node> {
 
   async process(inputs: Inputs, context: InternalProcessContext): Promise<Outputs> {
     const invocationJournal = new LLMInvocationJournal();
+    let profileAttemptSequence = 0;
     // Retries, fallback profiles, and tool continuation produce several
     // physical provider calls underneath one node invocation. Always observe
     // them locally so every later output projection shares one truthful
@@ -344,7 +345,15 @@ export class LLMChatV2NodeImpl extends NodeImpl<LLMChatV2Node> {
       nodeId: this.chartNode.id,
       inputs,
       context: usageTrackingContext,
-      onLLMAttempt: (attempt) => invocationJournal.recordLLMAttempt(attempt),
+      onLLMAttempt: (attempt) => {
+        invocationJournal.recordLLMAttempt(attempt);
+        context.onLLMProfileAttempt?.({
+          ...attempt,
+          eventId: `${context.processId}:llm-profile-attempt:${profileAttemptSequence++}`,
+          nodeId: context.node.id,
+          processId: context.processId,
+        });
+      },
     });
     const toolCallContinuation = context.toolCallContinuation;
 

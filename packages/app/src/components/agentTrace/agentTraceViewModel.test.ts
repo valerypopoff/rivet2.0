@@ -50,6 +50,22 @@ void describe('agentTraceViewModel', () => {
       handlerKind: 'graph',
       outcome: 'success',
     } satisfies AgentTraceEvent;
+    const selectedProfileAttempt = {
+      type: 'llm-profile-attempt',
+      execution,
+      eventId: 'profile-attempt-1',
+      roundIndex: 0,
+      profileIndex: 0,
+      nodeId: node.id,
+      processId: selectedProcessId,
+      provider: 'openai',
+      model: 'gpt-test',
+      stage: 'health-gate',
+      outcome: 'skipped',
+      healthState: 'open',
+      healthDisposition: 'deny',
+      retryAt: 10_000,
+    } satisfies AgentTraceEvent;
     const processData = {
       graphId: execution.graphId,
       graphRunId: execution.graphRunId,
@@ -65,6 +81,7 @@ void describe('agentTraceViewModel', () => {
           modelEvent(otherProcessId),
           selectedToolCall,
           { ...selectedToolCall, durationMs: 4 },
+          selectedProfileAttempt,
         ],
       },
     } as unknown as ProcessDataForNode;
@@ -77,6 +94,8 @@ void describe('agentTraceViewModel', () => {
     assert.equal(trace?.modelCalls[0]?.durationMs, 12);
     assert.equal(trace?.toolCalls.length, 1);
     assert.equal(trace?.toolCalls[0]?.durationMs, 4);
+    assert.equal(trace?.profileAttempts?.length, 1);
+    assert.equal(trace?.profileAttempts?.[0]?.healthDisposition, 'deny');
     assert.equal(trace?.durationMs, 40);
   });
 

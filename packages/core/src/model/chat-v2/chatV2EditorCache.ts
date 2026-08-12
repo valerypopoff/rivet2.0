@@ -8,7 +8,7 @@ import type { LLMProfileValue } from './llmProfileTypes.js';
 import { parseCustomProviderApi } from './customProviderApi.js';
 
 export function buildLLMChatV2EditorCacheKey(parts: LLMChatV2EditorCacheKeyParts): string {
-  const { cacheVersion = 2, ...keyParts } = parts;
+  const { cacheVersion = 3, ...keyParts } = parts;
   return stableStringify({ cacheVersion, ...keyParts }) ?? '';
 }
 
@@ -129,12 +129,12 @@ function fingerprintNodeDataForCache(data: LLMChatV2NodeData): LLMChatV2NodeData
   };
 }
 
-function fingerprintProviderOptionsForCache(providerOptions: ChatV2ProviderOptions | undefined): string | undefined {
-  if (providerOptions == null) {
+function fingerprintRuntimeValueForCache(value: unknown): string | undefined {
+  if (value == null) {
     return undefined;
   }
 
-  return fingerprintSecret(stableStringify(providerOptions) ?? '');
+  return fingerprintSecret(stableStringify(value) ?? '');
 }
 
 function fingerprintProfileChainForCache(
@@ -170,6 +170,7 @@ export function resolveLLMChatV2EditorCache(params: {
   provider: ChatV2Provider;
   providerConfig: ResolvedChatV2ProviderConfig;
   providerOptions: ChatV2ProviderOptions | undefined;
+  requestBodyOverlay?: unknown;
   responseFormatParameters: unknown;
   systemPrompt: unknown;
   toolChoice: ChatV2ToolChoice | undefined;
@@ -193,7 +194,8 @@ export function resolveLLMChatV2EditorCache(params: {
     functions: params.functions,
     generationParameters: params.generationParameters,
     responseFormatParameters: params.responseFormatParameters,
-    providerOptions: fingerprintProviderOptionsForCache(params.providerOptions),
+    providerOptions: fingerprintRuntimeValueForCache(params.providerOptions),
+    requestBodyOverlay: fingerprintRuntimeValueForCache(params.requestBodyOverlay),
     toolChoice: params.toolChoice,
     profileChain:
       params.profileChain == null ? undefined : fingerprintProfileChainForCache(params.data, params.profileChain),

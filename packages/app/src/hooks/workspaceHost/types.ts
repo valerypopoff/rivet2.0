@@ -69,6 +69,12 @@ export type WorkspaceHostOpenProjectSnapshot = (
 ) => Promise<boolean>;
 
 export type RivetWorkspaceHost = {
+  /**
+   * Saves the active project through Rivet's normal workspace transition.
+   * Resolves false when no project can be saved, Save As is cancelled, or
+   * persistence fails through the normal handled-error path.
+   */
+  saveCurrentProject(): Promise<boolean>;
   openProjectSnapshot(snapshot: RivetProjectSnapshotInput, options?: RivetProjectOpenOptions): Promise<boolean>;
   openProjectPath(path: string): Promise<boolean>;
   closeProject(projectId?: ProjectId): Promise<boolean>;

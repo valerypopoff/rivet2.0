@@ -6,6 +6,7 @@ import type { AssistantMessageFunctionCallMode, StreamedFunctionCall } from '../
 import type { ChatV2Provider } from './chatV2ProviderTypes.js';
 import type { ChatV2ResponseBodyCapture } from './chatV2ResponseBodyCapture.js';
 import type { CustomProviderApi } from './customProviderApi.js';
+import type { RivetLLMProfileHealthState } from './llmProfileHealthStore.js';
 
 export type { ChatV2Provider };
 
@@ -85,7 +86,37 @@ export type StreamChatV2Options = {
   executeStream?: ChatV2StreamExecutor | undefined;
   executeGenerate?: ChatV2GenerateExecutor | undefined;
   onPartialOutput?: ((partial: { text: string; functionCalls: StreamedFunctionCall[] }) => void) | undefined;
+  /** Deadline to the first semantic stream event, or the complete generate response. */
+  firstOutputTimeoutMs?: number | undefined;
+  /** Maximum gap between events after the first semantic stream event. */
+  streamInactivityTimeoutMs?: number | undefined;
+  /** Internal hook used to abort the physical provider request on a deadline. */
+  onTimeout?: ((error: ChatV2ProviderTimeoutError) => void) | undefined;
+  /** Internal activity hook used to renew a half-open circuit probe lease. */
+  onStreamActivity?: (() => void) | undefined;
+  /** Internal hook used to keep one half-open probe exclusive across a retry cooldown. */
+  onBeforeProviderRetry?: ((cooldownMs: number) => void | Promise<void>) | undefined;
 };
+
+export class ChatV2ProviderTimeoutError extends Error {
+  readonly code = 'RIVET_LLM_PROVIDER_TIMEOUT';
+
+  constructor(
+    public readonly timeoutKind: 'first-output' | 'stream-inactivity',
+    public readonly timeoutMs: number,
+  ) {
+    super(
+      timeoutKind === 'first-output'
+        ? `LLM provider did not produce a useful response within ${timeoutMs} ms.`
+        : `LLM provider stream produced no activity for ${timeoutMs} ms.`,
+    );
+    this.name = 'ChatV2ProviderTimeoutError';
+  }
+}
+
+export function isChatV2ProviderTimeoutError(error: unknown): error is ChatV2ProviderTimeoutError {
+  return error instanceof ChatV2ProviderTimeoutError;
+}
 
 export type StreamChatV2Result = {
   responseText: string;
@@ -138,11 +169,17 @@ export type RunChatV2PipelineOptions = {
    * provider.
    */
   profileIndex?: number | undefined;
+  profileHealthKey?: string | undefined;
+  profileHealthState?: RivetLLMProfileHealthState | undefined;
   roundIndex?: number | undefined;
   /** Selected wire contract for Custom-provider calls. Never sent to the provider. */
   customProviderApi?: CustomProviderApi | undefined;
   /** Internal physical-call trace used by the LLM Profile fallback coordinator. */
   onProviderAttempt?: ((attempt: ChatV2ProviderAttempt) => void) | undefined;
+  firstOutputTimeoutMs?: number | undefined;
+  streamInactivityTimeoutMs?: number | undefined;
+  onStreamActivity?: (() => void) | undefined;
+  onBeforeProviderRetry?: ((cooldownMs: number) => void | Promise<void>) | undefined;
   context: Pick<InternalProcessContext, 'signal' | 'onPartialOutputs'> &
     Partial<Pick<InternalProcessContext, 'node' | 'onChatV2CallFinished' | 'processId'>>;
   executeStream?: ChatV2StreamExecutor | undefined;

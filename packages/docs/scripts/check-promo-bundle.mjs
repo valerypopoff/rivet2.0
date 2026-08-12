@@ -37,6 +37,11 @@ assert.deepEqual(
   expectedLandingIframeSources,
   `The generated landing page must embed its initial Rivet editors from ${publishedPromoUrl}.`,
 );
+assert.match(
+  landingHtml,
+  /<iframe\b[^>]+sandbox="allow-same-origin allow-scripts allow-popups"/,
+  'The generated landing page must allow its embedded promo editor to open detached web-app previews.',
+);
 assert.equal(landingHtml.includes('localhost'), false, 'The production landing page must not reference localhost.');
 assert.equal(
   landingHtml.includes('.promo-dev'),

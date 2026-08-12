@@ -155,6 +155,8 @@ export function notifyChatV2CallFinished(
     callId: params.callId,
     attemptIndex: params.attemptIndex,
     ...(options.profileIndex == null ? {} : { profileIndex: options.profileIndex }),
+    ...(options.profileHealthKey == null ? {} : { profileHealthKey: options.profileHealthKey }),
+    ...(options.profileHealthState == null ? {} : { profileHealthState: options.profileHealthState }),
     ...(options.roundIndex == null ? {} : { roundIndex: options.roundIndex }),
     nodeId,
     processId,

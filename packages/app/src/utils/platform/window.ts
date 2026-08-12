@@ -163,6 +163,10 @@ export async function createWebviewWindowHandle(
 ): Promise<NativeWindowHandle> {
   if (!isInTauri()) {
     const popup = window.open(options.url, '_blank');
+    if (popup == null) {
+      throw new Error('Browser blocked the detached web app preview. Allow popups for this site and try again.');
+    }
+
     const closeIntervals = new Set<ReturnType<typeof globalThis.setInterval>>();
     const closeHandlers = new Set<() => void>();
     let closeNotified = false;
@@ -186,14 +190,14 @@ export async function createWebviewWindowHandle(
 
     return {
       close: async () => {
-        popup?.close();
+        popup.close();
         notifyClosed();
       },
       onCloseRequested: async (handler) => {
         closeHandlers.add(handler);
 
         const intervalId = globalThis.setInterval(() => {
-          if (popup == null || popup.closed) {
+          if (popup.closed) {
             notifyClosed();
           }
         }, 250);

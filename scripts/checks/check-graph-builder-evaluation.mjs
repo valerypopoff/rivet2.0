@@ -31,15 +31,15 @@ export async function validateGraphBuilderEvaluationAssets({
   const refreshedAssets = [];
   for (const asset of manifest.assets) {
     const assetPath = resolveContainedAssetPath(fixtureDirectory, asset.path);
-    const bytes = await readFile(assetPath);
-    const sha256 = `sha256:${createHash('sha256').update(bytes).digest('hex')}`;
+    const source = await readFile(assetPath, 'utf8');
+    const sha256 = hashEvaluationAsset(source);
     if (!write && sha256 !== asset.sha256) {
       throw new Error(
         `Graph Builder evaluation asset is stale: ${asset.path}. Expected ${asset.sha256}, received ${sha256}. ` +
           'Run "yarn check:graph-builder-evaluation --write" after an intentional fixture or policy change.',
       );
     }
-    loadedAssets.set(asset.kind, JSON.parse(bytes.toString('utf8')));
+    loadedAssets.set(asset.kind, JSON.parse(source));
     refreshedAssets.push({ ...asset, sha256 });
   }
 
@@ -72,6 +72,11 @@ export async function validateGraphBuilderEvaluationAssets({
     fixtureSet,
     hiddenHoldout,
   };
+}
+
+export function hashEvaluationAsset(source) {
+  const canonicalSource = source.replace(/\r\n?/g, '\n');
+  return `sha256:${createHash('sha256').update(canonicalSource, 'utf8').digest('hex')}`;
 }
 
 async function validateConcreteRuntimeSeams() {

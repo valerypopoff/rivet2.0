@@ -54,7 +54,7 @@ export type RivetWebAppServerMessage =
       storagePatch?: Record<string, unknown>;
       responseTrace?: AgentResponseTrace;
     } & RunEventBase)
-  | ({ type: 'action.failed'; error: string; code?: string } & RunEventBase)
+  | ({ type: 'action.failed'; error: string; code?: string; responseTrace?: AgentResponseTrace } & RunEventBase)
   | ({ type: 'action.cancelled' } & RunEventBase)
   | ({ type: 'action.interrupted'; error: string } & RunEventBase)
   | {
@@ -180,6 +180,7 @@ export function parseRivetWebAppServerMessage(value: unknown): RivetWebAppServer
             ...base,
             error: value.error,
             ...(typeof value.code === 'string' ? { code: value.code } : {}),
+            ...(isAgentResponseTrace(value.responseTrace) ? { responseTrace: value.responseTrace } : {}),
           }
         : undefined;
     case 'action.interrupted':

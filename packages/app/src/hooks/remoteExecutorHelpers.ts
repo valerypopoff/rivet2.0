@@ -380,6 +380,7 @@ export function createProcessEventDispatcher(currentExecution: {
   onNodeStart: (event: ProcessEvents['nodeStart']) => void;
   onPartialOutput: (event: ProcessEvents['partialOutput']) => void;
   onLlmCallFinished: (event: ProcessEvents['llmCallFinished']) => void;
+  onLlmProfileAttempt: (event: ProcessEvents['llmProfileAttempt']) => void;
   onToolCallFinished: (event: ProcessEvents['toolCallFinished']) => void;
   onPause: () => void;
   onResume: () => void;
@@ -458,6 +459,10 @@ export function createProcessEventDispatcher(currentExecution: {
       dispatchWithRunActivity('llmCallFinished', data as ProcessEvents['llmCallFinished'], () =>
         currentExecution.onLlmCallFinished(data as ProcessEvents['llmCallFinished']),
       ),
+    llmProfileAttempt: (data: unknown) =>
+      dispatchWithRunActivity('llmProfileAttempt', data as ProcessEvents['llmProfileAttempt'], () =>
+        currentExecution.onLlmProfileAttempt(data as ProcessEvents['llmProfileAttempt']),
+      ),
     toolCallFinished: (data: unknown) =>
       dispatchWithRunActivity('toolCallFinished', data as ProcessEvents['toolCallFinished'], () =>
         currentExecution.onToolCallFinished(data as ProcessEvents['toolCallFinished']),
@@ -474,8 +479,7 @@ export function createProcessEventDispatcher(currentExecution: {
       dispatchWithRunActivity('nodeOutputsCleared', data as ProcessEvents['nodeOutputsCleared'], () =>
         currentExecution.onNodeOutputsCleared(data as ProcessEvents['nodeOutputsCleared']),
       ),
-    progress: (data: unknown) =>
-      dispatchRunActivityEvent('progress', data as ProcessEvents['progress']),
+    progress: (data: unknown) => dispatchRunActivityEvent('progress', data as ProcessEvents['progress']),
     pause: (data: unknown) => {
       const event = data as ProcessEvents['pause'];
       return event?.isReplay

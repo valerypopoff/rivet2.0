@@ -7,8 +7,12 @@ export type ChatV2ResponseBodyCapture = {
   readonly bodies: unknown[];
   /** Starts an independent clone read for one provider HTTP response. */
   capture(response: Response): void;
-  /** Waits for every response observed so far to finish cloning. */
-  flush(): Promise<void>;
+  /**
+   * Publishes captured bodies in physical response order. By default this
+   * waits for pending clone reads; deadline/cancellation paths can publish
+   * only already-settled diagnostics so a broken clone cannot block fallback.
+   */
+  flush(options?: { waitForPending?: boolean }): Promise<void>;
 };
 
 type CapturedResponseBody = {
@@ -34,6 +38,9 @@ function parseResponseBody(text: string): unknown {
 export function createChatV2ResponseBodyCapture(): ChatV2ResponseBodyCapture {
   const entries: CapturedResponseBody[] = [];
   const bodies: unknown[] = [];
+  const publishSettledBodies = () => {
+    bodies.splice(0, bodies.length, ...entries.filter((entry) => entry.captured).map((entry) => entry.value));
+  };
 
   return {
     bodies,
@@ -52,6 +59,7 @@ export function createChatV2ResponseBodyCapture(): ChatV2ResponseBodyCapture {
           .then((text) => {
             entry.value = parseResponseBody(text);
             entry.captured = true;
+            publishSettledBodies();
           })
           .catch(() => {
             // The original response remains owned by the provider SDK.
@@ -60,7 +68,11 @@ export function createChatV2ResponseBodyCapture(): ChatV2ResponseBodyCapture {
         // A malformed or already-consumed Response has no safe diagnostic body.
       }
     },
-    async flush() {
+    async flush(options = {}) {
+      if (options.waitForPending === false) {
+        publishSettledBodies();
+        return;
+      }
       // New fetches are normally sequential, but continue until no capture was
       // added while an earlier clone was settling.
       let observedEntryCount = 0;
@@ -70,7 +82,7 @@ export function createChatV2ResponseBodyCapture(): ChatV2ResponseBodyCapture {
         await Promise.allSettled(pending.map((entry) => entry.settled));
       }
 
-      bodies.splice(0, bodies.length, ...entries.filter((entry) => entry.captured).map((entry) => entry.value));
+      publishSettledBodies();
     },
   };
 }

@@ -3,6 +3,7 @@ import { type FC } from 'react';
 import { useMarkdown } from '../../hooks/useMarkdown';
 import Button from '@atlaskit/button';
 import { useOpenUrl } from '../../hooks/useOpenUrl';
+import { TRIVET_DOCUMENTATION_URL } from '../../utils/documentationUrls.js';
 
 const styles = css`
   display: flex;
@@ -57,7 +58,7 @@ export const NoTestCasesSplash: FC<{
 }> = ({ onCreateNewTestCase }) => {
   const contentHtml = useMarkdown(content);
 
-  const viewDocumentation = useOpenUrl('https://github.com/valerypopoff/rivet2.0/docs/trivet');
+  const viewDocumentation = useOpenUrl(TRIVET_DOCUMENTATION_URL);
 
   return (
     <div css={styles}>

@@ -58,6 +58,19 @@ test('workspace host exposes a narrow clean-baseline API for hosted wrappers', (
   assert.match(hostSource, /RivetProjectCleanBaselineSnapshotInput/);
 });
 
+test('workspace host exposes the normal project save transition for hosted wrappers', () => {
+  const workspaceHostTypesSource = source('workspaceHost', 'types.ts');
+  const workspaceHostSaveSource = source('workspaceHost', 'useWorkspaceHostSave.ts');
+  const workspaceHostFacadeSource = source('useRivetWorkspaceHost.ts');
+  const hostSource = source('..', 'host.tsx');
+
+  assert.match(workspaceHostTypesSource, /saveCurrentProject\(\): Promise<boolean>;/);
+  assert.match(workspaceHostSaveSource, /workspaceTransitions\.saveProject\(\)/);
+  assert.match(workspaceHostFacadeSource, /const saveCurrentProject = useWorkspaceHostSave\(\);/);
+  assert.match(workspaceHostFacadeSource, /saveCurrentProject,/);
+  assert.match(hostSource, /RivetWorkspaceHost,/);
+});
+
 test('workspace host exposes project compare controls for hosted wrappers', () => {
   const workspaceHostTypesSource = source('workspaceHost', 'types.ts');
   const workspaceHostCompareSource = source('workspaceHost', 'useWorkspaceHostCompare.ts');

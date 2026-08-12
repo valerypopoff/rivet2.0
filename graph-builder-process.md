@@ -10,9 +10,9 @@ This report records:
 - the remaining rollout and capability limits.
 
 The historical analysis covers the Sparkles/Generate UI path,
-`useAiGraphBuilder`, the bundled `graph-creator.rivet-project` and
-`graph-creator.rivet-data`, the AI Assist adapter, host mutation helpers, and
-their focused checks. Historical measurements refer to commit `471e76af`.
+`useAiGraphBuilder`, the bundled `graph-creator.rivet-project`, the former
+`graph-creator.rivet-data` bundle, the AI Assist adapter, host mutation helpers,
+and their focused checks. Historical measurements refer to commit `471e76af`.
 
 The current architecture statements are grounded in the repository-owned
 Graph Builder domain, virtual workspace, policy runner, session controller,
@@ -191,12 +191,14 @@ The current normal path uses registry-backed search, complete templates, and
 bounded document reads. Source remains a developer diagnostic, not routine
 model context.
 
-### 6. Bundled knowledge had freshness checks
+### 6. The unused legacy knowledge bundle was retired
 
-`check-graph-creator-data.mjs` reproducibly generated and checked legacy source,
-documentation, and summary rows. That still protects the rollback asset while
-it exists. The transactional path uses its own smaller checked policy and
-catalog assets and does not load the 1.18 MB dataset.
+`graph-creator.rivet-data` was a generated source, documentation, and summary
+bundle. Neither the hardened rollback nor transactional path loaded it at
+runtime, so its freshness check only created avoidable CI churn after unrelated
+node documentation changes. The bundle is retired. The rollback boundary is
+now checked by `check-legacy-graph-creator-rollback.mjs`; the transactional path
+continues to use its smaller checked policy and catalog assets.
 
 ### 7. The workflow dogfooded Rivet
 

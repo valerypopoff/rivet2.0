@@ -86,9 +86,28 @@ test('BrowserIOProvider can save back to a project file handle after save-as', a
   }
 });
 
+test('BrowserIOProvider treats cancelling the save picker as a cancelled Save As', async () => {
+  const originalWindow = globalThis.window;
+
+  try {
+    globalThis.window = {
+      showSaveFilePicker: async () => {
+        throw new DOMException('The user aborted a request.', 'AbortError');
+      },
+    } as unknown as typeof window;
+
+    const provider = new BrowserIOProvider();
+    assert.equal(await provider.saveProjectData(testProject, { testSuites: [] }), undefined);
+  } finally {
+    globalThis.window = originalWindow;
+  }
+});
+
 test('BrowserIOProvider remembers project file handles from supported browser open picker', async () => {
   const originalWindow = globalThis.window;
-  const serializedProject = serializeProject(testProject, { trivet: serializeTrivetData({ testSuites: [] }) }) as string;
+  const serializedProject = serializeProject(testProject, {
+    trivet: serializeTrivetData({ testSuites: [] }),
+  }) as string;
   let openOptions: OpenFilePickerOptions | undefined;
   const file = {
     name: 'opened-project.rivet-project',
@@ -132,7 +151,9 @@ test('BrowserIOProvider requests write permission only when saving an opened pro
   const originalWindow = globalThis.window;
   const writes: string[] = [];
   const permissionRequests: Array<'read' | 'readwrite' | undefined> = [];
-  const serializedProject = serializeProject(testProject, { trivet: serializeTrivetData({ testSuites: [] }) }) as string;
+  const serializedProject = serializeProject(testProject, {
+    trivet: serializeTrivetData({ testSuites: [] }),
+  }) as string;
   const file = {
     name: 'opened-project.rivet-project',
     text: async () => serializedProject,
@@ -201,7 +222,9 @@ test('BrowserIOProvider requests write permission only when saving an opened pro
 
 test('BrowserIOProvider surfaces denied write permission when saving an opened project handle', async () => {
   const originalWindow = globalThis.window;
-  const serializedProject = serializeProject(testProject, { trivet: serializeTrivetData({ testSuites: [] }) }) as string;
+  const serializedProject = serializeProject(testProject, {
+    trivet: serializeTrivetData({ testSuites: [] }),
+  }) as string;
   const file = {
     name: 'readonly-project.rivet-project',
     text: async () => serializedProject,
@@ -306,7 +329,9 @@ test('BrowserIOProvider reports file handle read failures without opening a seco
 test('BrowserIOProvider falls back to standard file input when browser file handle picker is unavailable', async () => {
   const originalWindow = globalThis.window;
   const originalDocument = globalThis.document;
-  const serializedProject = serializeProject(testProject, { trivet: serializeTrivetData({ testSuites: [] }) }) as string;
+  const serializedProject = serializeProject(testProject, {
+    trivet: serializeTrivetData({ testSuites: [] }),
+  }) as string;
   const selectedFile = {
     name: 'fallback-project.rivet-project',
     text: async () => serializedProject,

@@ -8,8 +8,8 @@ import type { RunDataByNodeId } from '../state/dataFlow.js';
  */
 export function upsertAgentTraceEventForInvocation(runDataByNode: RunDataByNodeId, event: AgentTraceEvent): void {
   const execution = event.execution;
-  const nodeId = event.type === 'llm-call-finished' ? event.nodeId : event.sourceNodeId;
-  const processId = event.type === 'llm-call-finished' ? event.processId : event.sourceProcessId;
+  const nodeId = event.type === 'tool-call-finished' ? event.sourceNodeId : event.nodeId;
+  const processId = event.type === 'tool-call-finished' ? event.sourceProcessId : event.processId;
   const processes = (runDataByNode[nodeId] ??= []);
   let process = processes.find((candidate) => candidate.processId === processId);
 

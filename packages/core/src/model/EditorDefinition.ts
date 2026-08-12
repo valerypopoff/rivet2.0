@@ -127,6 +127,13 @@ export type NumberEditorDefinition<T extends ChartNode> = SharedEditorDefinition
 
   defaultValue?: number;
 
+  /**
+   * Multiplier applied between the value shown in the editor and the value
+   * stored on the node. For example, a millisecond value can be presented as
+   * seconds with a multiplier of 1_000 while preserving its serialized shape.
+   */
+  storageMultiplier?: number;
+
   useInputToggleDataKey?: DataOfType<T, boolean>;
 
   min?: number;

@@ -10,6 +10,7 @@ import ReactDOM from 'react-dom/client';
 import { useCallback, useRef, useState } from 'react';
 import { deserializeProject, getError, type GraphId } from '@valerypopoff/rivet2-core';
 import { MemoryAsyncStorage, MemoryStaticDataStore, RivetAppHost, type RivetWorkspaceHost } from '../host.js';
+import { RivetWebAppPreviewWindow } from '../components/rivetWebApps/RivetWebAppPreviewWindow.js';
 import { installGlobalErrorHandlers } from '../utils/errorHandling.js';
 import agentProjectSource from './projects/promo-agent.rivet-project?raw';
 import visualCodeProjectSource from './projects/promo-visual-code.rivet-project?raw';
@@ -17,6 +18,7 @@ import webAppProjectSource from './projects/promo-web-app.rivet-project?raw';
 import workflowProjectSource from './projects/promo-workflow.rivet-project?raw';
 import { isPromoProjectKey, PROMO_PROJECT_MANIFEST, type PromoProjectKey } from './promoProjectManifest.js';
 import { PROMO_HOST_UI } from './promoHostUi.js';
+import { getPromoRootMode } from './promoRoot.js';
 import '../host.css';
 import './promo.css';
 
@@ -52,6 +54,7 @@ function getSelectedPromoProject(search: string): PromoProjectSelection {
 
 const selectedPromoProject = getSelectedPromoProject(window.location.search);
 const selectedPromoDefinition = 'definition' in selectedPromoProject ? selectedPromoProject.definition : undefined;
+const promoRootMode = getPromoRootMode(window.location.search);
 type PromoMessage =
   | { type: 'rivet-demo:error'; message: string }
   | { type: 'rivet-demo:ready' }
@@ -183,31 +186,41 @@ function PromoApp() {
   );
 }
 
-installGlobalErrorHandlers();
-window.addEventListener(
-  'message',
-  (event) => {
-    if (event.source !== window.parent || !isPromoParentMessage(event.data)) {
-      return;
-    }
+function PromoRoot() {
+  if (promoRootMode === 'web-app-preview') {
+    return <RivetWebAppPreviewWindow />;
+  }
 
-    if (event.data.type === 'rivet-demo:status-request' && latestStartupMessage) {
-      postToParent(latestStartupMessage);
-    } else if (event.data.type === 'rivet-demo:interaction-state') {
-      setPromoInteractionActive(event.data.active);
-    }
-  },
-  true,
-);
-window.addEventListener(
-  'keydown',
-  (event) => {
-    if (event.key === 'Escape') {
-      postToParent({ type: 'rivet-demo:release' });
-    }
-  },
-  true,
-);
+  return <PromoApp />;
+}
+
+installGlobalErrorHandlers();
+if (promoRootMode === 'editor') {
+  window.addEventListener(
+    'message',
+    (event) => {
+      if (event.source !== window.parent || !isPromoParentMessage(event.data)) {
+        return;
+      }
+
+      if (event.data.type === 'rivet-demo:status-request' && latestStartupMessage) {
+        postToParent(latestStartupMessage);
+      } else if (event.data.type === 'rivet-demo:interaction-state') {
+        setPromoInteractionActive(event.data.active);
+      }
+    },
+    true,
+  );
+  window.addEventListener(
+    'keydown',
+    (event) => {
+      if (event.key === 'Escape') {
+        postToParent({ type: 'rivet-demo:release' });
+      }
+    },
+    true,
+  );
+}
 
 const root = ReactDOM.createRoot(document.getElementById('root') as HTMLElement);
-root.render(<PromoApp />);
+root.render(<PromoRoot />);

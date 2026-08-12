@@ -35,7 +35,7 @@
     "check:file-tree": "node scripts/checks/check-file-tree.mjs",
     "check:graph-builder-policy": "tsx scripts/checks/check-graph-builder-policy.mjs",
     "check:graph-builder-node-specs": "yarn workspace @valerypopoff/rivet2-core run build:esm && tsx scripts/checks/check-graph-builder-node-specs.mjs",
-    "check:graph-builder-assets": "node scripts/checks/check-graph-creator-data.mjs && yarn check:graph-builder-policy && yarn check:graph-builder-node-specs",
+    "check:graph-builder-assets": "node scripts/checks/check-legacy-graph-creator-rollback.mjs && yarn check:graph-builder-policy && yarn check:graph-builder-node-specs",
     "check:graph-builder-evaluation": "tsx scripts/checks/check-graph-builder-evaluation.mjs",
     "check:promo-catalog": "tsx scripts/checks/check-promo-catalog.mts",
     "check:pnp": "node scripts/checks/check-pnp-install-state.mjs",

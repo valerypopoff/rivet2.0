@@ -21,6 +21,13 @@ import {
   supportsLLMChatV2ParallelToolCalls,
 } from './parallelToolCalls.js';
 import type { LLMChatV2Node, LLMChatV2NodeData, LLMChatV2ProfileData } from './llmChatV2NodeData.js';
+import {
+  DEFAULT_LLM_PROFILE_CIRCUIT_FAILURE_THRESHOLD,
+  DEFAULT_LLM_PROFILE_CIRCUIT_FAILURE_WINDOW_MS,
+  DEFAULT_LLM_PROFILE_CIRCUIT_OPEN_DURATION_MS,
+  DEFAULT_LLM_PROFILE_FIRST_OUTPUT_TIMEOUT_MS,
+  DEFAULT_LLM_PROFILE_STREAM_INACTIVITY_TIMEOUT_MS,
+} from './llmProfileHealthStore.js';
 
 type LLMChatV2EditorDefinition = EditorDefinition<LLMChatV2Node>;
 type LLMProfileEditorNode = ChartNode<'llmProfile', LLMChatV2ProfileData>;
@@ -159,6 +166,80 @@ function getModelEditors(modelOptions: { value: string; label: string }[]): LLMC
 
 function getProviderEditors(): LLMChatV2EditorDefinition[] {
   return [getOpenAIProviderEditors(), getAnthropicProviderEditors(), getGoogleProviderEditors()];
+}
+
+function getCircuitBreakerEditors(): LLMChatV2EditorDefinition {
+  return group('LLM profile suspension', [
+    {
+      type: 'info',
+      label: "It's a hosted runtime capability",
+      helperMessage:
+        'This configuration is enforced by Rivet Studio Server or another host that explicitly provides shared LLM profile reliability. It has no effect in standalone Rivet.',
+    },
+    {
+      type: 'toggle',
+      label: 'Enable automatic suspension',
+      dataKey: 'enableCircuitBreaker',
+      helperMessage:
+        'After provider failures or timeouts, temporarily suspend this profile in the LLM profiles fallback chain. When the suspension ends, one recovery attempt checks whether the profile can resume.',
+    },
+    {
+      type: 'number',
+      label: 'Useful output wait time, seconds',
+      dataKey: 'firstOutputTimeoutMs',
+      defaultValue: DEFAULT_LLM_PROFILE_FIRST_OUTPUT_TIMEOUT_MS,
+      storageMultiplier: 1_000,
+      min: 1_000,
+      step: 1_000,
+      helperMessage:
+        'Maximum wait time for a non-stream response (or the first useful streamed output). A call that reaches this deadline falls back immediately, even before this profile is suspended.',
+      hideIf: (data) => data.enableCircuitBreaker !== true,
+    },
+    {
+      type: 'number',
+      label: 'Stream inactivity timeout, seconds',
+      dataKey: 'streamInactivityTimeoutMs',
+      defaultValue: DEFAULT_LLM_PROFILE_STREAM_INACTIVITY_TIMEOUT_MS,
+      storageMultiplier: 1_000,
+      min: 1_000,
+      step: 1_000,
+      helperMessage: 'Maximum gap between streamed response events before falling back.',
+      hideIf: (data) => data.enableCircuitBreaker !== true,
+    },
+    {
+      type: 'number',
+      label: 'Failures before suspension',
+      dataKey: 'circuitBreakerFailureThreshold',
+      defaultValue: DEFAULT_LLM_PROFILE_CIRCUIT_FAILURE_THRESHOLD,
+      min: 1,
+      step: 1,
+      helperMessage:
+        'Failed or timed-out profile attempts required within the failure window before suspending this profile.',
+      hideIf: (data) => data.enableCircuitBreaker !== true,
+    },
+    {
+      type: 'number',
+      label: 'Failure window, seconds',
+      dataKey: 'circuitBreakerFailureWindowMs',
+      defaultValue: DEFAULT_LLM_PROFILE_CIRCUIT_FAILURE_WINDOW_MS,
+      storageMultiplier: 1_000,
+      min: 1_000,
+      step: 1_000,
+      helperMessage: 'Failed or timed-out profile attempts inside this rolling window count toward suspension.',
+      hideIf: (data) => data.enableCircuitBreaker !== true,
+    },
+    {
+      type: 'number',
+      label: 'Suspension duration, seconds',
+      dataKey: 'circuitBreakerOpenDurationMs',
+      defaultValue: DEFAULT_LLM_PROFILE_CIRCUIT_OPEN_DURATION_MS,
+      storageMultiplier: 1_000,
+      min: 1_000,
+      step: 1_000,
+      helperMessage: 'How long the fallback chain skips this profile before allowing one recovery attempt.',
+      hideIf: (data) => data.enableCircuitBreaker !== true,
+    },
+  ]);
 }
 
 function getOpenAIProviderEditors(): LLMChatV2EditorDefinition {
@@ -377,8 +458,8 @@ function getReasoningEditors(): LLMChatV2EditorDefinition {
   ]);
 }
 
-function getResponseFormatEditors(): LLMChatV2EditorDefinition {
-  return group('Response format', [
+function getResponseSettingsEditors(): LLMChatV2EditorDefinition {
+  return group('Response settings', [
     {
       type: 'dropdown',
       label: 'Response format',
@@ -392,6 +473,13 @@ function getResponseFormatEditors(): LLMChatV2EditorDefinition {
       defaultValue: '',
       helperMessage:
         'Uses Vercel AI SDK structured-output response formatting when supported by the provider. JSON schema adds a Response Schema input port.',
+    },
+    {
+      type: 'toggle',
+      label: 'Stream response',
+      dataKey: 'useAsGraphPartialOutput',
+      helperMessage:
+        'Shows streamed response updates in the node output while running in the editor. Other nodes only receive the final response after it is complete.',
     },
     {
       type: 'string',
@@ -512,13 +600,6 @@ function getOutputEditors(): LLMChatV2EditorDefinition {
     },
     {
       type: 'toggle',
-      label: 'Stream response',
-      dataKey: 'useAsGraphPartialOutput',
-      helperMessage:
-        'Shows streamed response updates in the node output while running in the editor. Other nodes only receive the final response after it is complete.',
-    },
-    {
-      type: 'toggle',
       label: 'Cache outputs (editor only) (legacy)',
       dataKey: 'cache',
       helperMessage:
@@ -545,7 +626,7 @@ function getProviderAdvancedEditors(): LLMChatV2EditorDefinition {
       useInputToggleDataKey: 'useExtraProviderOptionsInput',
       language: 'json',
       helperMessage:
-        'Power-user Vercel providerOptions for the selected provider. Enter a JSON object; visible settings above override conflicting fields.',
+        'Adds these exact top-level JSON fields to the provider request body. Field names are preserved, and these values override generated request fields with the same name.',
       enableFolding: true,
     },
   ]);
@@ -604,7 +685,7 @@ export async function getLLMChatV2Editors(
           ...(data.provider === 'custom' ? [] : [getReasoningEditors()]),
         ]
       : []),
-    getResponseFormatEditors(),
+    getResponseSettingsEditors(),
     getToolEditors(),
     getOutputEditors(),
     ...(!usesProfile ? [getProviderAdvancedEditors()] : []),
@@ -622,6 +703,7 @@ export async function getLLMProfileEditors(
     ...getProviderEditors(),
     getParameterEditors(),
     ...(profileData.provider === 'custom' ? [] : [getReasoningEditors()]),
+    getCircuitBreakerEditors(),
     getProviderAdvancedEditors(),
   ] as unknown as EditorDefinition<LLMProfileEditorNode>[];
 }

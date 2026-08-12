@@ -216,6 +216,14 @@ headers. Response body clones the provider HTTP response before the SDK
 consumes it, parses valid JSON for inspection, otherwise preserves text, and
 leaves captured content unredacted and untruncated.
 
+Streaming is disabled by default. The LLM Chat canvas body treats it like other
+active behavior settings: it shows `Stream response: Enabled` only when the
+setting is on and omits the field when streaming is off. It never adds a
+`Disabled` line merely to describe an inactive setting. Existing projects that
+explicitly enabled streaming retain that behavior. The editor keeps the
+`Stream response` control in `Response settings`, alongside the response-format
+selection and schema metadata; it is not an output-port toggle.
+
 Older serialized `outputRequestStatus` and `outputRequestError` settings are
 migrated to `outputLLMAttempts: true` and then removed. The old request-details
 switch also preserves `outputRequestBody: true` when it had enabled that
@@ -540,6 +548,20 @@ paths and should not be used as the primary target for new provider refactors.
   is used instead.
 - Undefined SDK request fields should be omitted rather than serialized as
   explicit `undefined` provider options.
+- **Extra provider options** are not SDK `providerOptions`. Resolve them as a
+  portable JSON object, then apply them as the final top-level physical-request
+  overlay after SDK generation and Rivet request-body transformations. Preserve
+  field spelling and JSON values exactly; overlay fields win collisions. Capture
+  the overlaid body for `LLM request body`, and serialize that identical body for
+  the network request. Install the processing fetch whenever an overlay exists,
+  and support both URL-plus-init and complete `Request` inputs without consuming
+  the original request body or retaining a stale `Content-Length` header, even
+  when request diagnostics are disabled. Each retry and continuation round
+  reuses its candidate's overlay, while each fallback profile resolves only its
+  own value. Reject non-object or non-portable input locally, and fail clearly if
+  an adapter unexpectedly generates a non-object request body. Serialize the
+  processed body whenever a request transformation runs; never infer that no
+  change occurred merely because a transformer returned the same object.
 - New LLM Chat nodes leave optional generation fields such as `topP` unset
   unless the user configures them or enables the matching input port.
 - [`customProviderApi.ts`](../packages/core/src/model/chat-v2/customProviderApi.ts)
@@ -565,6 +587,9 @@ paths and should not be used as the primary target for new provider refactors.
   override. Custom Responses must instead use the adapter-owned structured
   output contract and place OpenAI-adapter options under
   `providerOptions.openai`; do not emit the Chat Completions raw override there.
+  In both modes these are generated defaults only: the final raw request-body
+  overlay may replace them deliberately, while Rivet response parsing continues
+  to follow the node's selected response format.
 - A Custom base URL may be entered as a base, `/chat/completions`, or
   `/responses` endpoint. `normalizeOpenAICompatibleEndpoint` validates an
   absolute HTTP(S) URL, removes either recognized endpoint suffix and redundant

@@ -12,7 +12,10 @@ import {
   buildLLMChatV2EditorCacheKey,
   resolveLLMChatV2RuntimeProviderOptions,
 } from '../../../src/model/nodes/LLMChatV2Node.js';
-import { resolveLLMChatV2ApiKey } from '../../../src/model/chat-v2/chatV2RuntimeOptions.js';
+import {
+  resolveLLMChatV2ApiKey,
+  resolveLLMChatV2ExtraProviderOptions,
+} from '../../../src/model/chat-v2/chatV2RuntimeOptions.js';
 import {
   cloneLLMChatV2EditorCacheOutputs,
   resolveLLMChatV2RuntimeConfig,
@@ -65,6 +68,26 @@ function createRuntimeContext(overrides: Record<string, unknown> = {}) {
     editorExecutionCache: new Map<string, unknown>(),
     ...overrides,
   } as any;
+}
+
+async function capturePhysicalRequestBody(model: unknown, body: unknown): Promise<unknown> {
+  let sentBody: unknown;
+  const fetchMock = mock.method(globalThis, 'fetch', async (_input, init) => {
+    sentBody = JSON.parse(String(init?.body));
+    return new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } });
+  });
+
+  try {
+    const providerFetch = (model as { config?: { fetch?: typeof fetch } }).config?.fetch;
+    assert.ok(providerFetch);
+    await providerFetch('https://provider.example.test/request', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    });
+    return sentBody;
+  } finally {
+    fetchMock.mock.restore();
+  }
 }
 
 function createRuntimeContextWithPluginEnv(pluginEnv: Record<string, string>) {
@@ -282,7 +305,7 @@ describe('LLMChatV2NodeImpl', () => {
     assert.equal(extraProviderOptionsEditor.type, 'code');
     assert.equal(extraProviderOptionsEditor.language, 'json');
     assert.equal(extraProviderOptionsEditor.useInputToggleDataKey, 'useExtraProviderOptionsInput');
-    assert.match(extraProviderOptionsEditor.helperMessage, /providerOptions/);
+    assert.match(extraProviderOptionsEditor.helperMessage, /exact top-level JSON fields/);
   });
 
   it('shows the custom provider base URL in the node body', () => {
@@ -426,7 +449,7 @@ describe('LLMChatV2NodeImpl', () => {
       responseFormat: 'json_schema',
       useResponseSchemaNameInput: true,
       responseSchemaDescription: 'A strict response.',
-      useAsGraphPartialOutput: false,
+      useAsGraphPartialOutput: true,
       cache: true,
       headers: [{ key: 'x-provider-mode', value: 'preview' }],
       extraProviderOptions: '{\n  "reasoning": "high"\n}',
@@ -455,7 +478,7 @@ describe('LLMChatV2NodeImpl', () => {
         ['Response format', 'JSON schema'],
         ['Schema name', '(Using Input)'],
         ['Schema description', 'A strict response.'],
-        ['Stream response', 'Disabled'],
+        ['Stream response', 'Enabled'],
         ['Editor cache (legacy)', 'Enabled'],
         ['Retry on non-200', 'Enabled'],
         ['Repeat times', '2'],
@@ -469,6 +492,15 @@ describe('LLMChatV2NodeImpl', () => {
     });
     assert.equal(
       inlineFields.some((field) => field.label.startsWith('Output ')),
+      false,
+    );
+    assert.equal(
+      getLLMChatV2BodySections({
+        ...createNode().data,
+        useAsGraphPartialOutput: false,
+      })
+        .flatMap((section) => section.fields)
+        .some((field) => field.label === 'Stream response'),
       false,
     );
 
@@ -601,7 +633,7 @@ describe('LLMChatV2NodeImpl', () => {
       'Google',
       'Parameters',
       'Reasoning',
-      'Response format',
+      'Response settings',
       'Tools',
       'Outputs',
       'Provider Advanced',
@@ -629,6 +661,10 @@ describe('LLMChatV2NodeImpl', () => {
     assert.equal(
       outputsGroup.editors.find((editor: any) => editor.dataKey === 'outputResponseBody')?.label,
       'Output response body',
+    );
+    assert.equal(
+      outputsGroup.editors.some((editor: any) => editor.dataKey === 'useAsGraphPartialOutput'),
+      false,
     );
     const legacyCacheEditor = outputsGroup.editors.find((editor: any) => editor.dataKey === 'cache');
     assert.equal(legacyCacheEditor.label, 'Cache outputs (editor only) (legacy)');
@@ -844,9 +880,13 @@ describe('LLMChatV2NodeImpl', () => {
     const editors = await node.getEditors({});
     const toolsGroup = editors.find((editor) => editor.type === 'group' && editor.label === 'Tools') as any;
     const outputGroup = editors.find((editor) => editor.type === 'group' && editor.label === 'Outputs') as any;
+    const responseSettingsGroup = editors.find(
+      (editor) => editor.type === 'group' && editor.label === 'Response settings',
+    ) as any;
 
     assert.ok(toolsGroup);
     assert.ok(outputGroup);
+    assert.ok(responseSettingsGroup);
     const toolEditorKeys = toolsGroup.editors.map((editor: any) => editor.dataKey);
 
     assert.deepEqual(toolEditorKeys.slice(0, 5), [
@@ -954,11 +994,11 @@ describe('LLMChatV2NodeImpl', () => {
       'Output reasoning',
     );
     assert.equal(
-      outputGroup.editors.find((editor: any) => editor.dataKey === 'useAsGraphPartialOutput')?.label,
+      responseSettingsGroup.editors.find((editor: any) => editor.dataKey === 'useAsGraphPartialOutput')?.label,
       'Stream response',
     );
     assert.match(
-      outputGroup.editors.find((editor: any) => editor.dataKey === 'useAsGraphPartialOutput')?.helperMessage,
+      responseSettingsGroup.editors.find((editor: any) => editor.dataKey === 'useAsGraphPartialOutput')?.helperMessage,
       /Other nodes only receive the final response/,
     );
     assert.equal(
@@ -1141,24 +1181,18 @@ describe('LLMChatV2NodeImpl', () => {
     );
   });
 
-  it('merges extra provider options into the selected Vercel provider namespace', () => {
+  it('keeps raw request-body overrides separate from SDK provider options', () => {
     assert.deepEqual(
-      resolveLLMChatV2RuntimeProviderOptions(
+      resolveLLMChatV2ExtraProviderOptions(
         createNode({
           provider: 'custom',
           extraProviderOptions: '{ "reasoningEffort": "high", "customFlag": true }',
         }).data,
         {},
       ),
-      {
-        custom: {
-          reasoningEffort: 'high',
-          customFlag: true,
-        },
-      },
+      { reasoningEffort: 'high', customFlag: true },
     );
-
-    assert.deepEqual(
+    assert.equal(
       resolveLLMChatV2RuntimeProviderOptions(
         createNode({
           provider: 'custom',
@@ -1167,12 +1201,7 @@ describe('LLMChatV2NodeImpl', () => {
         }).data,
         {},
       ),
-      {
-        openai: {
-          reasoningEffort: 'high',
-          store: false,
-        },
-      },
+      undefined,
     );
 
     assert.deepEqual(
@@ -1187,7 +1216,6 @@ describe('LLMChatV2NodeImpl', () => {
       {
         openai: {
           reasoningEffort: 'high',
-          store: false,
         },
       },
     );
@@ -1204,7 +1232,7 @@ describe('LLMChatV2NodeImpl', () => {
         }).data,
         {},
       ),
-      { openai: { parallelToolCalls: false, customFlag: true } },
+      { openai: { parallelToolCalls: false } },
     );
     assert.deepEqual(
       resolveLLMChatV2RuntimeProviderOptions(
@@ -1227,7 +1255,7 @@ describe('LLMChatV2NodeImpl', () => {
         }).data,
         {},
       ),
-      { anthropic: { disableParallelToolUse: true, customFlag: true } },
+      { anthropic: { disableParallelToolUse: true } },
     );
     assert.deepEqual(
       resolveLLMChatV2RuntimeProviderOptions(
@@ -1298,43 +1326,27 @@ describe('LLMChatV2NodeImpl', () => {
     );
   });
 
-  it('preserves Custom provider advanced overrides until the parallel tool-call control is enabled', () => {
-    const disabled = resolveLLMChatV2RuntimeProviderOptions(
-      createNode({
-        provider: 'custom',
-        useToolCalling: true,
-        parallelToolCalls: false,
-        extraProviderOptions: '{ "parallel_tool_calls": false, "customFlag": true }',
-      }).data,
-      {},
-    );
-    const enabled = resolveLLMChatV2RuntimeProviderOptions(
-      createNode({
-        provider: 'custom',
-        useToolCalling: true,
-        parallelToolCalls: true,
-        extraProviderOptions: '{ "parallel_tool_calls": false, "customFlag": true }',
-      }).data,
-      {},
-    );
+  it('keeps raw Custom fields independent from generated parallel tool-call options', () => {
+    const data = createNode({
+      provider: 'custom',
+      useToolCalling: true,
+      parallelToolCalls: false,
+      extraProviderOptions: '{ "parallel_tool_calls": false, "customFlag": true }',
+    }).data;
+    const disabled = resolveLLMChatV2RuntimeProviderOptions(data, {});
+    const enabled = resolveLLMChatV2RuntimeProviderOptions({ ...data, parallelToolCalls: true }, {});
 
-    assert.deepEqual(disabled, {
-      custom: {
-        parallel_tool_calls: false,
-        customFlag: true,
-      },
-    });
-    assert.deepEqual(enabled, {
-      custom: {
-        parallel_tool_calls: true,
-        customFlag: true,
-      },
+    assert.equal(disabled, undefined);
+    assert.deepEqual(enabled, { custom: { parallel_tool_calls: true } });
+    assert.deepEqual(resolveLLMChatV2ExtraProviderOptions(data, {}), {
+      parallel_tool_calls: false,
+      customFlag: true,
     });
   });
 
   it('resolves extra provider options from an input port', () => {
     assert.deepEqual(
-      resolveLLMChatV2RuntimeProviderOptions(
+      resolveLLMChatV2ExtraProviderOptions(
         createNode({
           provider: 'custom',
           useExtraProviderOptionsInput: true,
@@ -1347,16 +1359,11 @@ describe('LLMChatV2NodeImpl', () => {
           },
         } as any,
       ),
-      {
-        custom: {
-          reasoningEffort: 'high',
-          customFlag: true,
-        },
-      },
+      { reasoningEffort: 'high', customFlag: true },
     );
 
     assert.deepEqual(
-      resolveLLMChatV2RuntimeProviderOptions(
+      resolveLLMChatV2ExtraProviderOptions(
         createNode({
           provider: 'custom',
           useExtraProviderOptionsInput: true,
@@ -1368,18 +1375,14 @@ describe('LLMChatV2NodeImpl', () => {
           },
         } as any,
       ),
-      {
-        custom: {
-          reasoningEffort: 'medium',
-        },
-      },
+      { reasoningEffort: 'medium' },
     );
   });
 
   it('rejects invalid extra provider options', () => {
     assert.throws(
       () =>
-        resolveLLMChatV2RuntimeProviderOptions(
+        resolveLLMChatV2ExtraProviderOptions(
           createNode({
             extraProviderOptions: '{',
           }).data,
@@ -1390,13 +1393,29 @@ describe('LLMChatV2NodeImpl', () => {
 
     assert.throws(
       () =>
-        resolveLLMChatV2RuntimeProviderOptions(
+        resolveLLMChatV2ExtraProviderOptions(
           createNode({
             extraProviderOptions: '[]',
           }).data,
           {},
         ),
       /Extra provider options must be a JSON object/,
+    );
+
+    assert.throws(
+      () => resolveLLMChatV2ExtraProviderOptions(createNode({ extraProviderOptions: 'null' }).data, {}),
+      /Extra provider options must be a JSON object/,
+    );
+
+    assert.throws(
+      () =>
+        resolveLLMChatV2ExtraProviderOptions(createNode({ useExtraProviderOptionsInput: true }).data, {
+          extraProviderOptions: {
+            type: 'object',
+            value: { unsupported: () => 'not JSON' },
+          },
+        } as any),
+      /Extra provider options must contain only portable JSON values/,
     );
   });
 
@@ -1435,7 +1454,7 @@ describe('LLMChatV2NodeImpl', () => {
     assert.equal(inputById.get('maxTokens' as any)?.title, 'Max output tokens');
   });
 
-  it('exposes response-format settings and JSON schema input ports only when needed', async () => {
+  it('exposes response settings and JSON schema input ports only when needed', async () => {
     const defaultNode = createNode();
     const jsonSchemaNode = createNode({
       responseFormat: 'json_schema',
@@ -1444,20 +1463,27 @@ describe('LLMChatV2NodeImpl', () => {
     });
 
     const editors = await defaultNode.getEditors({});
-    const responseFormatGroup = editors.find(
-      (editor) => editor.type === 'group' && editor.label === 'Response format',
+    const responseSettingsGroup = editors.find(
+      (editor) => editor.type === 'group' && editor.label === 'Response settings',
     ) as any;
 
-    assert.ok(responseFormatGroup);
-    assert.deepEqual(responseFormatGroup.editors.find((editor: any) => editor.dataKey === 'responseFormat')?.options, [
-      { value: '', label: 'Default' },
-      { value: 'text', label: 'Text' },
-      { value: 'json', label: 'JSON object' },
-      { value: 'json_schema', label: 'JSON schema' },
-    ]);
+    assert.ok(responseSettingsGroup);
+    assert.deepEqual(
+      responseSettingsGroup.editors.find((editor: any) => editor.dataKey === 'responseFormat')?.options,
+      [
+        { value: '', label: 'Default' },
+        { value: 'text', label: 'Text' },
+        { value: 'json', label: 'JSON object' },
+        { value: 'json_schema', label: 'JSON schema' },
+      ],
+    );
     assert.equal(
-      responseFormatGroup.editors.some((editor: any) => editor.dataKey === 'failProfileOnNonObjectResponse'),
+      responseSettingsGroup.editors.some((editor: any) => editor.dataKey === 'failProfileOnNonObjectResponse'),
       false,
+    );
+    assert.equal(
+      responseSettingsGroup.editors.find((editor: any) => editor.dataKey === 'useAsGraphPartialOutput')?.label,
+      'Stream response',
     );
     assert.equal(
       createNode({ responseFormat: 'json_schema' })
@@ -1513,7 +1539,6 @@ describe('LLMChatV2NodeImpl', () => {
 
     assert.deepEqual(runtime.runOptions.providerOptions, {
       custom: {
-        customFlag: true,
         response_format: {
           type: 'json_schema',
           json_schema: {
@@ -1525,6 +1550,17 @@ describe('LLMChatV2NodeImpl', () => {
         },
       },
     });
+    assert.deepEqual(
+      await capturePhysicalRequestBody(runtime.runOptions.model, {
+        model: 'llama-custom',
+        response_format: runtime.runOptions.providerOptions?.custom?.response_format,
+      }),
+      {
+        model: 'llama-custom',
+        customFlag: true,
+        response_format: { type: 'json_object' },
+      },
+    );
     assert.equal('failProfileOnNonObjectResponse' in runtime.runOptions, false);
   });
 
@@ -1608,10 +1644,20 @@ describe('LLMChatV2NodeImpl', () => {
     assert.equal(runtime.runOptions.responseOutput, undefined);
     assert.deepEqual(runtime.runOptions.providerOptions, {
       custom: {
-        customFlag: true,
         response_format: { type: 'json_object' },
       },
     });
+    assert.deepEqual(
+      await capturePhysicalRequestBody(runtime.runOptions.model, {
+        model: 'deepseek-ai/DeepSeek-V4-Flash',
+        response_format: runtime.runOptions.providerOptions?.custom?.response_format,
+      }),
+      {
+        model: 'deepseek-ai/DeepSeek-V4-Flash',
+        customFlag: true,
+        response_format: { type: 'text' },
+      },
+    );
   });
 
   it('uses Vercel structured output for Custom provider Responses mode', async () => {
@@ -1633,7 +1679,11 @@ describe('LLMChatV2NodeImpl', () => {
     });
 
     assert.ok(runtime.runOptions.responseOutput);
-    assert.deepEqual(runtime.runOptions.providerOptions, { openai: { store: false } });
+    assert.equal(runtime.runOptions.providerOptions, undefined);
+    assert.deepEqual(await capturePhysicalRequestBody(runtime.runOptions.model, { model: 'generated', store: true }), {
+      model: 'generated',
+      store: false,
+    });
     assert.equal((runtime.runOptions.model as { provider?: string }).provider, 'custom.responses');
     assert.equal(getCacheProviderConfig(runtime).baseURL, 'https://responses.example.test/v1');
   });
@@ -2231,14 +2281,7 @@ describe('LLMChatV2NodeImpl', () => {
       context,
     });
 
-    assert.deepEqual(runtime.runOptions.providerOptions, {
-      custom: {
-        reasoningEffort: 'high',
-        byok: {
-          apiKey: 'raw-provider-option-secret',
-        },
-      },
-    });
+    assert.equal(runtime.runOptions.providerOptions, undefined);
     assert.ok(runtime.cacheKey);
     assert.doesNotMatch(runtime.cacheKey!, /raw-provider-option-secret/);
     assert.doesNotMatch(runtime.cacheKey!, /reasoningEffort/);
@@ -2280,11 +2323,27 @@ describe('LLMChatV2NodeImpl', () => {
       inputs,
       context,
     });
+    const changedInputRuntime = await resolveLLMChatV2RuntimeConfig({
+      data: firstNode.data,
+      nodeId: firstNode.chartNode.id,
+      inputs: createPromptInputs({
+        extraProviderOptions: {
+          type: 'object',
+          value: {
+            reasoning_effort: 'none',
+            byok: { apiKey: 'different-input-option-secret' },
+          },
+        },
+      }),
+      context,
+    });
 
     assert.deepEqual(firstRuntime.runOptions.providerOptions, secondRuntime.runOptions.providerOptions);
     assert.equal(firstRuntime.cacheKey, secondRuntime.cacheKey);
+    assert.notEqual(firstRuntime.cacheKey, changedInputRuntime.cacheKey);
     assert.ok(firstRuntime.cacheKey);
     assert.doesNotMatch(firstRuntime.cacheKey!, /input-option-secret/);
+    assert.doesNotMatch(changedInputRuntime.cacheKey!, /different-input-option-secret/);
     assert.doesNotMatch(firstRuntime.cacheKey!, /stale/);
   });
 

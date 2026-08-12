@@ -12,6 +12,17 @@ export type RivetAppHostUiConfig = {
   capabilities?: Partial<Record<RivetAppHostCapability, boolean>>;
   checkForUpdates?: boolean;
   fileMenu?: FileMenuConfig;
+  keyboardShortcuts?: {
+    /**
+     * Controls Rivet's save-project shortcut in hosted browser apps.
+     *
+     * - `undefined` preserves Rivet's existing platform behavior.
+     * - `true` makes Rivet own Ctrl+S (Windows/Linux) or Cmd+S (macOS)
+     *   without opting into any other browser-host shortcuts.
+     * - `false` disables Rivet's save-project shortcut.
+     */
+    saveProject?: boolean;
+  };
   preloadCodeEditor?: boolean;
   webApps?: {
     desktopPreview?: boolean;

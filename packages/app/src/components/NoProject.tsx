@@ -8,6 +8,7 @@ import { newProjectModalOpenState } from '../state/ui';
 import { settingsModalOpenState } from './SettingsModal';
 import { useLoadProjectWithFileBrowser } from '../hooks/useLoadProjectWithFileBrowser';
 import { wrapAsync } from '../utils/errorHandling';
+import { USER_GUIDE_URL } from '../utils/documentationUrls.js';
 
 const styles = css`
   background: var(--grey-darker);
@@ -85,7 +86,7 @@ const styles = css`
 `;
 
 export const NoProject: FC = () => {
-  const openDocumentation = useOpenUrl('https://valerypopoff.github.io/rivet2.0/user-guide');
+  const openDocumentation = useOpenUrl(USER_GUIDE_URL);
   const setNewProjectModalOpen = useSetAtom(newProjectModalOpenState);
   const setSettingsModalOpen = useSetAtom(settingsModalOpenState);
   const openProject = useLoadProjectWithFileBrowser();

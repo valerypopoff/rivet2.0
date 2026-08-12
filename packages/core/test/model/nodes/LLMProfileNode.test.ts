@@ -279,6 +279,13 @@ describe('LLMProfileNodeImpl', () => {
     assert.equal(profile.configuration.useOpenAIPreviousResponseIdInput, false);
   });
 
+  it('resolves a profile without a loaded project and defers its health identity', async () => {
+    const result = await createProfileNode().process({}, createRuntimeContext());
+
+    assert.ok(result.profile);
+    assert.equal((result.profile.value as Record<string, unknown>).healthIdentity, undefined);
+  });
+
   it('normalizes legacy profile nodes that predate Previous Response ID ownership', async () => {
     const legacyNode = LLMProfileNodeImpl.create();
     const legacyData = structuredClone(legacyNode.data) as Record<string, unknown>;
@@ -472,6 +479,7 @@ describe('LLMProfileNodeImpl', () => {
       'Google',
       'Parameters',
       'Reasoning',
+      'LLM profile suspension',
       'Provider Advanced',
     ]);
     const profileDataKeys = new Set<string>(llmChatV2ProfileDataKeys);
@@ -506,7 +514,7 @@ describe('LLMProfileNodeImpl', () => {
     const chatGroups = chatEditors
       .filter((editor): editor is Extract<typeof editor, { type: 'group' }> => editor.type === 'group')
       .map((editor) => editor.label);
-    assert.deepEqual(chatGroups, ['Response format', 'Tools', 'Outputs', 'Error behavior']);
+    assert.deepEqual(chatGroups, ['Response settings', 'Tools', 'Outputs', 'Error behavior']);
   });
 
   it('does not render an empty Reasoning group for Custom provider profiles', async () => {

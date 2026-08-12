@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 
 #[cfg(target_os = "windows")]
 use tauri::LogicalSize;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 use tauri::MenuItem;
 use tauri::{AppHandle, InvokeError, Manager};
 #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -148,10 +148,28 @@ fn read_relative_project_file(
 
 #[cfg(target_os = "macos")]
 fn create_macos_menu() -> Menu {
-    Menu::new().add_submenu(Submenu::new(
+    let app_menu = Submenu::new(
         "App",
         Menu::new().add_item(CustomMenuItem::new("quit", "Exit")),
-    ))
+    );
+
+    // macOS routes standard text-editing shortcuts through the native Edit
+    // menu's first-responder actions. Keep Rivet commands in the in-app Menu,
+    // but retain these system commands so focused Monaco and form editors own
+    // Cmd+Z, Cmd+X, Cmd+C, Cmd+V, Cmd+A, and Cmd+Shift+Z.
+    let edit_menu = Submenu::new(
+        "Edit",
+        Menu::new()
+            .add_native_item(MenuItem::Undo)
+            .add_native_item(MenuItem::Redo)
+            .add_native_item(MenuItem::Separator)
+            .add_native_item(MenuItem::Cut)
+            .add_native_item(MenuItem::Copy)
+            .add_native_item(MenuItem::Paste)
+            .add_native_item(MenuItem::SelectAll),
+    );
+
+    Menu::new().add_submenu(app_menu).add_submenu(edit_menu)
 }
 
 #[cfg(target_os = "linux")]

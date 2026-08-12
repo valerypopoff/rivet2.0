@@ -1,75 +1,43 @@
-import { useEffect } from 'react';
 import { useRunMenuCommand } from './useMenuCommands';
 import { isMacOSPlatform, isWindowsPlatform } from '../utils/platform/os.js';
 import { isInTauri } from '../utils/tauri.js';
-import { getInAppMenuHotkeyCommand, type InAppMenuHotkeyPlatform } from '../utils/inAppMenuHotkeys.js';
-
-interface InAppMenuHotkeyWindow extends Window {
-  __rivetInAppMenuHotkeysCleanup?: () => void;
-}
-declare let window: InAppMenuHotkeyWindow;
-
-const shouldUseInAppMenuHotkeys = isWindowsPlatform() || (isInTauri() && isMacOSPlatform());
-const hotkeyListenerOptions = { capture: true };
-const consumeRunHotkeySelector = '[data-rivet-consume-run-hotkey="true"]';
+import {
+  shouldRegisterInAppMenuHotkeys,
+  type InAppMenuHotkeyPlatform,
+  type InAppMenuHotkeyPolicy,
+} from '../utils/inAppMenuHotkeys.js';
+import { useRivetAppHostUiConfig } from '../providers/HostUiConfigContext.js';
+import { useStableInAppMenuHotkeyListener } from './useStableInAppMenuHotkeyListener.js';
 
 function getInAppMenuHotkeyPlatform(): InAppMenuHotkeyPlatform {
-  return isMacOSPlatform() ? 'macos' : 'windows';
-}
-
-function shouldSkipInAppMenuHotkey(event: KeyboardEvent, command: string) {
-  if (command !== 'run' || !(event.target instanceof Element)) {
-    return false;
+  if (isMacOSPlatform()) {
+    return 'macos';
   }
 
-  return event.target.closest(consumeRunHotkeySelector) != null;
+  return isWindowsPlatform() ? 'windows' : 'linux';
+}
+
+function getInAppMenuHotkeyPolicy(saveProject: boolean | undefined): InAppMenuHotkeyPolicy {
+  return {
+    legacyShortcutsEnabled: isWindowsPlatform() || (isInTauri() && isMacOSPlatform()),
+    saveProject,
+  };
 }
 
 export const useInAppMenuHotkeys = () => {
   const runMenuCommandImpl = useRunMenuCommand();
+  const hostUiConfig = useRivetAppHostUiConfig();
+  const runtimeConfig = {
+    platform: getInAppMenuHotkeyPlatform(),
+    policy: getInAppMenuHotkeyPolicy(hostUiConfig.keyboardShortcuts?.saveProject),
+  };
+  const listenerEnabled = shouldRegisterInAppMenuHotkeys(runtimeConfig.policy);
 
-  useEffect(() => {
-    if (typeof window === 'undefined' || !shouldUseInAppMenuHotkeys) {
-      return;
-    }
+  useStableInAppMenuHotkeyListener({
+    enabled: listenerEnabled,
+    runMenuCommand: runMenuCommandImpl,
+    runtimeConfig,
+  });
 
-    window.__rivetInAppMenuHotkeysCleanup?.();
-    const platform = getInAppMenuHotkeyPlatform();
-
-    const onKeyDown = (event: KeyboardEvent) => {
-      const command = getInAppMenuHotkeyCommand(event, platform);
-
-      if (command) {
-        if (shouldSkipInAppMenuHotkey(event, command)) {
-          return;
-        }
-
-        event.preventDefault();
-        event.stopPropagation();
-
-        if (event.repeat) {
-          return;
-        }
-
-        runMenuCommandImpl(command);
-      }
-    };
-
-    window.addEventListener('keydown', onKeyDown, hotkeyListenerOptions);
-
-    const cleanup = () => {
-      window.removeEventListener('keydown', onKeyDown, hotkeyListenerOptions);
-    };
-
-    window.__rivetInAppMenuHotkeysCleanup = cleanup;
-
-    return () => {
-      if (window.__rivetInAppMenuHotkeysCleanup === cleanup) {
-        cleanup();
-        delete window.__rivetInAppMenuHotkeysCleanup;
-      }
-    };
-  }, [runMenuCommandImpl]);
-
-  return shouldUseInAppMenuHotkeys;
+  return listenerEnabled;
 };

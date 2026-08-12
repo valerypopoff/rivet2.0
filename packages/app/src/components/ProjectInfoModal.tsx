@@ -15,11 +15,12 @@ import { AppModalHeader } from './AppModalHeader';
 import Button from '@atlaskit/button';
 import { ProjectContextConfiguration } from './ProjectContextConfiguration';
 import { ProjectKnowledgeStoresConfiguration } from './ProjectKnowledgeStoresConfiguration';
+import { ProjectLLMProfileHealthConfiguration } from './ProjectLLMProfileHealthConfiguration';
 import Collapsible from 'react-collapsible';
 import ChevronDownIcon from 'majesticons/line/chevron-down-line.svg?react';
 import ChevronUpIcon from 'majesticons/line/chevron-up-line.svg?react';
 import { projectSettingsSectionOpenState } from '../state/ui';
-import { useIOProvider } from '../providers/ProvidersContext';
+import { useIOProvider, useLLMProfileHealthAdmin } from '../providers/ProvidersContext';
 import {
   activeProjectComparisonState,
   projectCompareReferenceState,
@@ -208,6 +209,7 @@ export const ProjectInfoPanel: FC = () => {
   const [project, setProject] = useAtom(projectState);
   const savedGraphs = useAtomValue(savedGraphsState);
   const ioProvider = useIOProvider();
+  const llmProfileHealthAdmin = useLLMProfileHealthAdmin();
   const [compareLoading, setCompareLoading] = useState(false);
   const activeComparison = useAtomValue(activeProjectComparisonState);
   const selectedGraphComparison = useAtomValue(selectedGraphProjectComparisonState);
@@ -299,6 +301,12 @@ export const ProjectInfoPanel: FC = () => {
         <div className="project-info-item">
           <ProjectKnowledgeStoresConfiguration />
         </div>
+
+        {llmProfileHealthAdmin && (
+          <div className="project-info-item">
+            <ProjectLLMProfileHealthConfiguration />
+          </div>
+        )}
 
         <div className="project-info-item">
           <ProjectReferencesConfiguration />

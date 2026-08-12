@@ -554,6 +554,7 @@ function createNodeProcessContext(
     ),
     getChatNodeEndpoint: options.getChatNodeEndpoint,
     onChatV2CallFinished: options.onChatV2CallFinished,
+    llmProfileHealthStore: options.llmProfileHealthStore,
   };
 }
 

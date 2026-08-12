@@ -22,7 +22,15 @@ const macMenu = /#\[cfg\(target_os = "macos"\)\]\s+fn create_macos_menu\(\) -> M
 if (!macMenu || !/CustomMenuItem::new\("quit", "Exit"\)/.test(macMenu)) {
   failures.push('macOS system menu must keep the Exit item');
 }
-if (macMenu && /"File"|"Edit"|"Run"|"Debug"|"Help"|"Window"/.test(macMenu)) {
+if (!macMenu || !/Submenu::new\(\s*"Edit"/.test(macMenu)) {
+  failures.push('macOS system menu must keep a native Edit submenu for focused text editors');
+}
+for (const item of ['Undo', 'Redo', 'Cut', 'Copy', 'Paste', 'SelectAll']) {
+  if (!macMenu || !new RegExp(`MenuItem::${item}`).test(macMenu)) {
+    failures.push(`macOS Edit menu must keep native ${item}`);
+  }
+}
+if (macMenu && /"File"|"Run"|"Debug"|"Help"|"Window"/.test(macMenu)) {
   failures.push('macOS workflow commands belong in the in-app Menu, not the system menu');
 }
 

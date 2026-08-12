@@ -4,7 +4,7 @@ export type LLMChatV2EditorCacheEligibility =
   | { eligible: true }
   | {
       eligible: false;
-      reason: 'disabled' | 'rivet-tools' | 'provider-native-tools';
+      reason: 'disabled' | 'rivet-tools' | 'provider-native-tools' | 'circuit-breaker';
     };
 
 /**
@@ -15,6 +15,11 @@ export type LLMChatV2EditorCacheEligibility =
 export function getLLMChatV2EditorCacheEligibility(data: LLMChatV2NodeData): LLMChatV2EditorCacheEligibility {
   if (!data.cache) {
     return { eligible: false, reason: 'disabled' };
+  }
+  if (data.enableCircuitBreaker === true) {
+    // Cross-run provider health is mutable external state. Replaying a cached
+    // response would bypass the health gate and make recovery diagnostics lie.
+    return { eligible: false, reason: 'circuit-breaker' };
   }
   if (data.useToolCalling) {
     return { eligible: false, reason: 'rivet-tools' };

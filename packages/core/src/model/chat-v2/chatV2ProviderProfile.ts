@@ -141,6 +141,7 @@ export async function createResolvedChatV2Provider(options: {
   onRequestBody?: CreateChatV2ModelOptions['onRequestBody'];
   onResponseBody?: CreateChatV2ModelOptions['onResponseBody'];
   transformRequestBody?: CreateChatV2ModelOptions['transformRequestBody'];
+  requestBodyOverlay?: CreateChatV2ModelOptions['requestBodyOverlay'];
   customProviderApi?: CustomProviderApi | undefined;
 }): Promise<{
   profile: ChatV2ProviderProfile;
@@ -157,6 +158,7 @@ export async function createResolvedChatV2Provider(options: {
     onRequestBody: options.onRequestBody,
     onResponseBody: options.onResponseBody,
     transformRequestBody: options.transformRequestBody,
+    requestBodyOverlay: options.requestBodyOverlay,
     customProviderApi: options.customProviderApi,
   });
 

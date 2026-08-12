@@ -34,6 +34,11 @@ import type {
 import type { ToolCallContinuation } from './ToolCallContinuation.js';
 import type { KnowledgeStoreConnectionId, RivetKnowledgeStore } from '../integrations/KnowledgeStore.js';
 import type { ChatV2Provider } from './chat-v2/chatV2ProviderTypes.js';
+import type {
+  RivetLLMProfileHealthOutcome,
+  RivetLLMProfileHealthState,
+  RivetLLMProfileHealthStore,
+} from './chat-v2/llmProfileHealthStore.js';
 
 export type ChatV2CallId = Opaque<string, 'ChatV2CallId'>;
 
@@ -85,6 +90,10 @@ export type ChatV2CallFinishedEvent = {
   attemptIndex: number;
   /** Zero-based profile index when LLM Chat is using a profile fallback chain. */
   profileIndex?: number;
+  /** Privacy-bounded stable profile health key when circuit breaking is enabled. */
+  profileHealthKey?: string;
+  /** Circuit state observed when this physical call was admitted. */
+  profileHealthState?: 'closed' | 'open' | 'half-open';
   /** Zero-based model round within one auto-continued LLM Chat invocation. */
   roundIndex?: number;
   nodeId: NodeId;
@@ -112,6 +121,36 @@ export type ChatV2CallFinishedObserver = (event: ChatV2CallFinishedEvent) => voi
  * and cannot enter processor events, recordings, or remote transport.
  */
 export type ChatV2CallTraceEvent = Omit<ChatV2CallFinishedEvent, 'rawUsage'>;
+
+/**
+ * Privacy-bounded lifecycle event for one profile decision inside an LLM Chat
+ * fallback round. Unlike physical-call events, this also records candidates
+ * skipped by an open circuit and health-store fail-open decisions.
+ */
+export type LLMProfileAttemptTraceEvent = {
+  eventId: string;
+  roundIndex: number;
+  /** Present when this attempt belongs to a From profile fallback candidate. */
+  profileIndex?: number;
+  nodeId: NodeId;
+  processId: ProcessId;
+  provider: ChatV2Provider;
+  model: string;
+  customProviderApi?: CustomProviderApi;
+  stage: 'configuration' | 'request' | 'response-validation' | 'health-gate' | 'health-update';
+  outcome: 'success' | 'failure' | 'aborted' | 'skipped';
+  attemptIndex?: number;
+  status?: number;
+  error?: string;
+  profileHealthKey?: string;
+  healthState?: RivetLLMProfileHealthState;
+  healthDisposition?: 'allow' | 'deny' | 'fail-open';
+  healthOutcome?: RivetLLMProfileHealthOutcome;
+  retryAt?: number;
+  timeoutKind?: 'first-output' | 'stream-inactivity';
+};
+
+export type LLMProfileAttemptObserver = (event: LLMProfileAttemptTraceEvent) => void;
 
 export type ToolCallFinishedEvent = {
   toolCallId?: string;
@@ -172,6 +211,12 @@ export type ProcessContext = {
    * provider attempt. Observer failures are isolated from graph execution.
    */
   onChatV2CallFinished?: ChatV2CallFinishedObserver;
+
+  /** Host-only observer for profile fallback and circuit-health decisions. */
+  onLLMProfileAttempt?: LLMProfileAttemptObserver;
+
+  /** Optional shared persistence for cross-run LLM Profile circuit state. */
+  llmProfileHealthStore?: RivetLLMProfileHealthStore;
 
   /**
    * If implemented, chat nodes will first call this to resolve their configured endpoint to a final endpoint.

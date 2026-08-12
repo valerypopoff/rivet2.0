@@ -58,6 +58,7 @@ import {
   useDataRefs,
   useDatasetProvider,
   useEnvironmentProvider,
+  useLLMProfileHealthStore,
   usePathPolicyProvider,
 } from '../providers/ProvidersContext';
 import { useProjectNodeRegistry } from './useProjectNodeRegistry';
@@ -110,6 +111,7 @@ export function useLocalExecutor() {
   const dataRefs = useDataRefs();
   const datasetProvider = useDatasetProvider();
   const environmentProvider = useEnvironmentProvider();
+  const llmProfileHealthStore = useLLMProfileHealthStore();
   const pathPolicy = usePathPolicyProvider();
   const projectNodeRegistry = useProjectNodeRegistry();
   const project = useAtomValue(projectState);
@@ -279,6 +281,9 @@ export function useLocalExecutor() {
     processor.on('llmCallFinished', (data) => {
       routeLocalProcessEvent(runProjectId, 'llmCallFinished', data, () => eventDispatcher.llmCallFinished(data));
     });
+    processor.on('llmProfileAttempt', (data) => {
+      routeLocalProcessEvent(runProjectId, 'llmProfileAttempt', data, () => eventDispatcher.llmProfileAttempt(data));
+    });
     processor.on('toolCallFinished', (data) => {
       routeLocalProcessEvent(runProjectId, 'toolCallFinished', data, () => eventDispatcher.toolCallFinished(data));
     });
@@ -367,13 +372,7 @@ export function useLocalExecutor() {
         // The user can close this tab during the repaint yield. Its recording
         // is released synchronously on close, so do not construct a hidden
         // playback processor from a stale captured selection.
-        if (
-          !isCurrentLoadedRecordingForProject(
-            store.get(loadedRecordingState),
-            recordingToReplay,
-            runProjectId,
-          )
-        ) {
+        if (!isCurrentLoadedRecordingForProject(store.get(loadedRecordingState), recordingToReplay, runProjectId)) {
           return undefined;
         }
       }
@@ -475,6 +474,7 @@ export function useLocalExecutor() {
             projectPath: loadedProject.path ?? undefined,
             projectReferenceLoader: new TauriProjectReferenceLoader(pathPolicy),
             editorExecutionCache: getEditorExecutionCache(tempProject.metadata.id),
+            llmProfileHealthStore,
           },
           options.inputs ?? {},
           contextValues,
@@ -547,13 +547,7 @@ export function useLocalExecutor() {
         // A closed owner can be replaced by another tab's recording while this
         // stale invocation settles. Only the still-selected recording may
         // clear the shared short pre-start flag.
-        if (
-          isCurrentLoadedRecordingForProject(
-            store.get(loadedRecordingState),
-            recordingToReplay,
-            runProjectId,
-          )
-        ) {
+        if (isCurrentLoadedRecordingForProject(store.get(loadedRecordingState), recordingToReplay, runProjectId)) {
           recordingPlaybackStartingRef.current = false;
           setRecordingPlaybackStarting(false);
         }
@@ -641,6 +635,7 @@ export function useLocalExecutor() {
                   datasetProvider,
                   audioProvider,
                   tokenizer: new GptTokenizerTokenizer(),
+                  llmProfileHealthStore,
                 },
                 inputs,
                 contextValues,

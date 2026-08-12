@@ -8,6 +8,7 @@ import {
   type NodeGraph,
   type NodeId,
   type PortId,
+  type ProcessEventMessageMap,
   type ProcessId,
   type Project,
   type ProjectId,
@@ -175,6 +176,42 @@ Provider message: ${'x'.repeat(700)}`;
 
   const key = createRunActivityNodeKey({ rootRunId, graphRunId, nodeId, processId });
   assert.equal(journal.rootsById[rootRunId]!.nodeInvocationsByKey[key]!.errorSummary, error);
+});
+
+test('retains circuit-breaker decisions on failed LLM invocations and deduplicates replayed events', () => {
+  let journal = createRunActivityJournal();
+  journal = apply(journal, 'graphStart', { graph, inputs: {}, execution }, 1);
+  journal = apply(journal, 'nodeStart', { node, processId, inputs: {}, execution }, 2);
+
+  const profileAttempt = {
+    eventId: 'profile-gate-1',
+    roundIndex: 0,
+    profileIndex: 0,
+    nodeId,
+    processId,
+    provider: 'custom',
+    model: 'slow-provider',
+    customProviderApi: 'responses',
+    stage: 'health-gate',
+    outcome: 'skipped',
+    profileHealthKey: 'opaque-health-key',
+    healthState: 'open',
+    healthDisposition: 'deny',
+    retryAt: 10_000,
+    execution,
+  } satisfies ProcessEventMessageMap['llmProfileAttempt'];
+
+  journal = apply(journal, 'llmProfileAttempt', profileAttempt, 3);
+  journal = apply(journal, 'llmProfileAttempt', { ...profileAttempt, retryAt: 12_000 }, 4);
+  journal = apply(journal, 'nodeError', { node, processId, execution, error: 'Every profile failed' }, 5);
+
+  const key = createRunActivityNodeKey({ rootRunId, graphRunId, nodeId, processId });
+  const invocation = journal.rootsById[rootRunId]!.nodeInvocationsByKey[key]!;
+  assert.equal(invocation.status, 'error');
+  assert.equal(invocation.profileAttempts?.length, 1);
+  assert.equal(invocation.profileAttempts?.[0]?.retryAt, 12_000);
+  assert.equal(invocation.profileAttempts?.[0]?.sequence, 3);
+  assert.equal(invocation.omittedProfileAttemptCount, 0);
 });
 
 test('keeps first-seen invocation order while parallel nodes finish out of order', () => {

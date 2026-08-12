@@ -43,6 +43,26 @@ with Escape, resetting it, or closing the large popup disables the containment.
 The activation prompt itself is a concise blue action label; do not add a
 second instructional sentence below it.
 
+The expanded demo uses integer-pixel fixed insets and no transformed ancestor.
+Keep the iframe-bearing popup pixel-aligned: fractional viewport dimensions
+combined with centering transforms cause the browser to resample the embedded
+editor and blur its one-pixel canvas lines.
+
+## Detached web-app previews
+
+The landing iframe deliberately includes `allow-popups` in its sandbox so the
+promo editor's existing **Run detached** action can open a browser popup or tab
+for a project web app. That popup remains sandboxed and same-origin with the
+promo iframe; `main.tsx` recognizes the preview query and mounts
+`RivetWebAppPreviewWindow` directly, which reuses the ordinary payload and
+action bridge back to the editor. Do not add `allow-popups-to-escape-sandbox`.
+
+Browser popup preferences decide whether the detached preview appears in a
+window or tab. If the browser blocks it, the editor receives a direct toast
+asking the visitor to allow popups rather than leaving an inert preview
+session. This is separate from **Open large popup**, which enlarges the
+existing landing iframe and never opens another editor instance.
+
 The landing loading overlay uses the same always-spinning circular affordance
 as an active Rivet node. It intentionally does not disable that progress
 indicator under `prefers-reduced-motion`, because a stationary indicator makes
@@ -61,6 +81,32 @@ Landing-page buttons, links, and demo controls communicate hover through color
 and border changes only. They must not translate or deepen their shadow on
 hover, and the page deliberately does not append external-link arrow glyphs to
 action labels.
+
+The landing atmosphere is owned by `pages/index.module.css` and intentionally
+has no repeating background grid. Every large heading owns its nearby blue
+cloud: the hero and closing copy contain their dedicated glow, while reusable
+`SectionHeading` instances contain `headingGlow`. The glows start as layered
+polygonal patches and use the hidden SVG filters in `pages/index.tsx` for
+seeded fractal displacement, continuously varying opacity, and soft edges. Do
+not replace them with radial or elliptical gradients, which read as regular
+mathematical blobs. Keep the filters deterministic and noninteractive so the
+decoration never shifts between renders or participates in page input.
+
+Landing color variables deliberately use near-white and near-black surfaces
+with lightly tinted text rather than low-contrast gray-on-gray combinations.
+Keep `--landing-ink` close to the background's opposite extreme and reserve
+`--landing-muted` for supporting copy; changing theme must preserve this
+hierarchy in both light and dark modes.
+
+The landing page states Rivet's product boundary immediately before the closing
+call to action. Keep this section explicit: Rivet is a developer-oriented AI
+workflow IDE, not a no-code catalog of service-specific SaaS connectors. It
+should explain that ordinary integrations are authored with HTTP Request, Code,
+or developer-owned reusable nodes, while Rivet's prebuilt surface concentrates
+on LLM and AI-system concerns. This distinction is product guidance, not a
+disclaimer hidden in secondary documentation. Keep its cards and positive-fit
+callout neutral; blue-filled or blue-outlined blocks are reserved for the live
+Rivet project demos.
 
 The canonical promo catalog contains four projects. The hero switches among
 Agent, Workflow, and Web App; the `Visual when it helps. Code when it matters.`
