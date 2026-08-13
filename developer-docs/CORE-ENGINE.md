@@ -1179,6 +1179,11 @@ That is especially true for nested execution correctness: `ProcessContextBuilder
 
 `Code (legacy)`, `Code` (internal type `codeNew`), `Expression`, `JS Filter`, and `JS Map` still execute
 through the configured `CodeRunner`. Browser mode uses `IsomorphicCodeRunner`.
+The runtime's `CodeRunnerOptions` and all-enabled Code-family default live in
+[`CodeRunnerOptions.ts`](../packages/core/src/integrations/CodeRunnerOptions.ts),
+separate from the runner implementation: built-in node registration can read
+the capability request during package initialization without joining the
+intentional execution-time public-namespace import cycle.
 Compatible-profile `createProcessor(...)` execution through
 `@valerypopoff/rivet2-node` still defaults to `NodeCodeRunner`, while
 omitted-default `createProcessor(...)` and eligible `runGraph(...)` calls can

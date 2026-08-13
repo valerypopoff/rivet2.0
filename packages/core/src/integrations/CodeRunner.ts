@@ -1,16 +1,12 @@
 import type { Inputs, Outputs } from '../index.js';
 import type { DataValue } from '../model/DataValue.js';
+import type { CodeRunnerOptions } from './CodeRunnerOptions.js';
 
-// eslint-disable-next-line import/no-cycle -- There has to be a cycle if we're to import the entirety of Rivet here.
+// eslint-disable-next-line import/no-cycle -- Authored code receives the complete public Rivet namespace at execution time.
 import * as Rivet from '../exports.js';
 
-export interface CodeRunnerOptions {
-  includeRequire: boolean;
-  includeFetch: boolean;
-  includeRivet: boolean;
-  includeProcess: boolean;
-  includeConsole: boolean;
-}
+export { ALL_CODE_RUNNER_OPTIONS } from './CodeRunnerOptions.js';
+export type { CodeRunnerOptions } from './CodeRunnerOptions.js';
 
 /**
  * Code and Expression nodes request every API their executor can provide.
@@ -19,14 +15,6 @@ export interface CodeRunnerOptions {
  * provide the Node-specific APIs, while browser runners only supply the APIs
  * they actually implement.
  */
-export const ALL_CODE_RUNNER_OPTIONS: CodeRunnerOptions = Object.freeze({
-  includeRequire: true,
-  includeFetch: true,
-  includeRivet: true,
-  includeProcess: true,
-  includeConsole: true,
-});
-
 /** An object that can run arbitrary code (evals it). */
 export interface CodeRunner {
   runCode: (

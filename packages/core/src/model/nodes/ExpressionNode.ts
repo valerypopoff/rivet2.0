@@ -22,7 +22,7 @@ import {
   sanitizeGeneratedJsValueError,
   type JsValueInterpolationRuntimeContext,
 } from './jsValueInterpolation.js';
-import { ALL_CODE_RUNNER_OPTIONS } from '../../integrations/CodeRunner.js';
+import { ALL_CODE_RUNNER_OPTIONS } from '../../integrations/CodeRunnerOptions.js';
 
 export type ExpressionNode = ChartNode<'expression', ExpressionNodeData>;
 
