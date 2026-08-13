@@ -214,6 +214,34 @@ existing `MatchNode`/`matchNode` symbols, while its current UI display name is
 when a display name changes, so old projects continue to load and run without
 an implicit migration.
 
+### Stable dynamic-port companions
+
+`StringListPortBinding` can assign a stored stable id to a dynamic port for
+each string-list row. A stored-stable binding may also declare
+`companionBindings` for ports whose ids are derived from that same stable id.
+When a row is renamed, reordered, migrated from a legacy generated id, or
+deleted, the app remaps or removes the primary port and every companion port
+together. `Regex Match` uses this for its case output and `value-<case-id>`
+input in Per output value mode. This is an editor-only connection-preservation
+contract: runtime nodes still own which ports are currently exposed, and mode
+changes rely on recoverable connections rather than guessing or fan-out.
+
+`Regex Match` stores its routing choice as the existing optional boolean
+`exclusive`: `false` (including a missing legacy value) runs all matches, and
+`true` runs only the first one. Its editor presents that unchanged contract as
+the **Matching cases to trigger** segmented selector (**Trigger all matching
+cases** / **Trigger first only**), so this UI does not require a project
+migration or add another runtime mode.
+
+In Per output value mode, the canvas presents the paired inputs beneath a
+non-port **Values** label after `Test`, with non-interactive dotted guides that
+start after each input circle and stop before its matching output label. Their
+persisted ids remain `value-<case-id>` and `value-unmatched`; the concise
+visible labels, group heading, and guides do not affect execution, saved
+projects, or existing connections. These inputs are optional: every unwired
+per-case input independently preserves the legacy `Test` fallback, so an
+unwired branch cannot hold up a selected route.
+
 Graphs include:
 
 - graph metadata

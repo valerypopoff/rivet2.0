@@ -27,11 +27,13 @@ type PrepareStringListPortBindingEditOptions<T extends ChartNode> = {
   previousRows: readonly EditableStringListRow[];
   nextRows: readonly EditableStringListRow[];
   connections: readonly NodeConnection[];
+  recoverableConnections?: readonly NodeConnection[];
 };
 
 type PrepareStringListPortBindingEditResult<T extends ChartNode> = {
   nextNode: T;
   nextConnections: NodeConnection[];
+  nextRecoverableConnections: NodeConnection[];
 };
 
 type StoredStableIdStringListPortBinding<T extends ChartNode> = Extract<
@@ -40,6 +42,8 @@ type StoredStableIdStringListPortBinding<T extends ChartNode> = Extract<
     identity: 'stored-stable-id';
   }
 >;
+
+type PortBindingSide = 'input' | 'output';
 
 type ValueDerivedStringListPortBinding<T extends ChartNode> = Extract<
   StringListPortBinding<T>,
@@ -123,6 +127,7 @@ export function prepareStringListPortBindingEdit<T extends ChartNode>({
   previousRows,
   nextRows,
   connections,
+  recoverableConnections = [],
 }: PrepareStringListPortBindingEditOptions<T>): PrepareStringListPortBindingEditResult<T> {
   if (portBinding.identity === 'stored-stable-id') {
     return prepareStoredStableIdPortBindingEdit({
@@ -132,6 +137,7 @@ export function prepareStringListPortBindingEdit<T extends ChartNode>({
       previousRows,
       nextRows,
       connections,
+      recoverableConnections,
     });
   }
 
@@ -142,6 +148,7 @@ export function prepareStringListPortBindingEdit<T extends ChartNode>({
     previousRows,
     nextRows,
     connections,
+    recoverableConnections,
   });
 }
 
@@ -152,6 +159,7 @@ function prepareStoredStableIdPortBindingEdit<T extends ChartNode>({
   previousRows,
   nextRows,
   connections,
+  recoverableConnections = [],
 }: Omit<PrepareStringListPortBindingEditOptions<T>, 'portBinding'> & {
   portBinding: StoredStableIdStringListPortBinding<T>;
 }): PrepareStringListPortBindingEditResult<T> {
@@ -176,9 +184,19 @@ function prepareStoredStableIdPortBindingEdit<T extends ChartNode>({
     const previousRuntimePortId = previousRuntimePortIds[index]!;
 
     if (survivingUiIds.has(row.uiId)) {
-      remappedPortIds.set(previousRuntimePortId, previousStablePortIdByUiId.get(row.uiId)!);
+      const nextStablePortId = previousStablePortIdByUiId.get(row.uiId)!;
+      addStoredStablePortBindingRemap({
+        remappedPortIds,
+        previousPortId: previousRuntimePortId,
+        nextPortId: nextStablePortId,
+        portBinding,
+      });
     } else {
-      removedPortIds.add(previousRuntimePortId);
+      addStoredStablePortBindingRemoval({
+        removedPortIds,
+        portId: previousRuntimePortId,
+        portBinding,
+      });
     }
   });
 
@@ -191,14 +209,86 @@ function prepareStoredStableIdPortBindingEdit<T extends ChartNode>({
         [storedPortIdDataKey]: nextStablePortIds,
       },
     } as T,
-    nextConnections: remapConnectionsForPortBinding({
+    nextConnections: remapConnectionsForStoredStablePortBinding({
       nodeId: node.id,
-      side: portBinding.side,
+      portBinding,
       connections,
       remappedPortIds,
       removedPortIds,
     }),
+    nextRecoverableConnections: remapConnectionsForStoredStablePortBinding({
+      nodeId: node.id,
+      portBinding,
+      connections: recoverableConnections,
+      remappedPortIds,
+      removedPortIds,
+    }),
   };
+}
+
+function addStoredStablePortBindingRemap<T extends ChartNode>({
+  remappedPortIds,
+  previousPortId,
+  nextPortId,
+  portBinding,
+}: {
+  remappedPortIds: Map<string, string>;
+  previousPortId: string;
+  nextPortId: string;
+  portBinding: StoredStableIdStringListPortBinding<T>;
+}): void {
+  remappedPortIds.set(previousPortId, nextPortId);
+
+  for (const companionBinding of portBinding.companionBindings ?? []) {
+    remappedPortIds.set(
+      `${companionBinding.prefix ?? ''}${previousPortId}${companionBinding.suffix ?? ''}`,
+      `${companionBinding.prefix ?? ''}${nextPortId}${companionBinding.suffix ?? ''}`,
+    );
+  }
+}
+
+function addStoredStablePortBindingRemoval<T extends ChartNode>({
+  removedPortIds,
+  portId,
+  portBinding,
+}: {
+  removedPortIds: Set<string>;
+  portId: string;
+  portBinding: StoredStableIdStringListPortBinding<T>;
+}): void {
+  removedPortIds.add(portId);
+
+  for (const companionBinding of portBinding.companionBindings ?? []) {
+    removedPortIds.add(`${companionBinding.prefix ?? ''}${portId}${companionBinding.suffix ?? ''}`);
+  }
+}
+
+function remapConnectionsForStoredStablePortBinding<T extends ChartNode>({
+  nodeId,
+  portBinding,
+  connections,
+  remappedPortIds,
+  removedPortIds,
+}: {
+  nodeId: NodeId;
+  portBinding: StoredStableIdStringListPortBinding<T>;
+  connections: readonly NodeConnection[];
+  remappedPortIds: ReadonlyMap<string, string>;
+  removedPortIds: ReadonlySet<string>;
+}): NodeConnection[] {
+  const bindings: { side: PortBindingSide }[] = [{ side: portBinding.side }, ...(portBinding.companionBindings ?? [])];
+
+  return bindings.reduce(
+    (nextConnections, binding) =>
+      remapConnectionsForPortBinding({
+        nodeId,
+        side: binding.side,
+        connections: nextConnections,
+        remappedPortIds,
+        removedPortIds,
+      }),
+    [...connections],
+  );
 }
 
 function prepareValueDerivedPortBindingEdit<T extends ChartNode>({
@@ -208,6 +298,7 @@ function prepareValueDerivedPortBindingEdit<T extends ChartNode>({
   previousRows,
   nextRows,
   connections,
+  recoverableConnections = [],
 }: Omit<PrepareStringListPortBindingEditOptions<T>, 'portBinding'> & {
   portBinding: ValueDerivedStringListPortBinding<T>;
 }): PrepareStringListPortBindingEditResult<T> {
@@ -251,6 +342,13 @@ function prepareValueDerivedPortBindingEdit<T extends ChartNode>({
       nodeId: node.id,
       side: portBinding.side,
       connections,
+      remappedPortIds,
+      removedPortIds,
+    }),
+    nextRecoverableConnections: remapConnectionsForPortBinding({
+      nodeId: node.id,
+      side: portBinding.side,
+      connections: recoverableConnections,
       remappedPortIds,
       removedPortIds,
     }),

@@ -15,6 +15,7 @@ type EditNodeWithConnectionsParams = {
   nodeId: NodeId;
   newNode: ChartNode;
   nextConnections: NodeConnection[];
+  nextRecoverableConnections: NodeConnection[];
   previousNodeOverride?: ChartNode;
 };
 
@@ -38,11 +39,7 @@ export function shouldMergeEditNodeWithConnectionsCommand(
   );
 }
 
-function replaceNodeInGraph(
-  nodes: ChartNode[],
-  nodeId: NodeId,
-  nextNode: ChartNode,
-): ChartNode[] {
+function replaceNodeInGraph(nodes: ChartNode[], nodeId: NodeId, nextNode: ChartNode): ChartNode[] {
   return produce(nodes, (draft) => {
     const index = draft.findIndex((node) => node.id === nodeId);
 
@@ -86,12 +83,7 @@ export function useEditNodeWithConnectionsCommand() {
     setNodes(replaceNodeInGraph(currentState.nodes, nodeId, newNode));
     setConnections(structuredClone([...nextConnections]));
     setRecoverableNodeConnections((entries) =>
-      setRecoverableNodeConnectionsForGraphNode(
-        entries,
-        currentState.graphId,
-        nodeId,
-        nextRecoverableConnections,
-      ),
+      setRecoverableNodeConnectionsForGraphNode(entries, currentState.graphId, nodeId, nextRecoverableConnections),
     );
   };
 
@@ -126,29 +118,39 @@ export function useEditNodeWithConnectionsCommand() {
       if (shouldMerge) {
         setCommandHistories((stacks) => removeLastCommandHistoryEntryForGraph(stacks, currentState.graphId));
 
-        // Connection-aware editors provide the authoritative next connection set, so any previously recoverable
-        // auto-removed connections for this node should be discarded on apply/redo.
-        applyNodeAndConnections(params.nodeId, params.newNode, params.nextConnections, [], currentState);
+        applyNodeAndConnections(
+          params.nodeId,
+          params.newNode,
+          params.nextConnections,
+          params.nextRecoverableConnections,
+          currentState,
+        );
 
         const commandToMergeWith = lastCommand!;
 
         return {
           previousNode: structuredClone(commandToMergeWith.appliedData.previousNode),
           previousConnections: structuredClone(commandToMergeWith.appliedData.previousConnections),
-          previousRecoverableConnections: structuredClone(commandToMergeWith.appliedData.previousRecoverableConnections),
-          nextRecoverableConnections: [],
+          previousRecoverableConnections: structuredClone(
+            commandToMergeWith.appliedData.previousRecoverableConnections,
+          ),
+          nextRecoverableConnections: structuredClone(params.nextRecoverableConnections),
         };
       }
 
-      // Connection-aware editors provide the authoritative next connection set, so any previously recoverable
-      // auto-removed connections for this node should be discarded on apply/redo.
-      applyNodeAndConnections(params.nodeId, params.newNode, params.nextConnections, [], currentState);
+      applyNodeAndConnections(
+        params.nodeId,
+        params.newNode,
+        params.nextConnections,
+        params.nextRecoverableConnections,
+        currentState,
+      );
 
       return {
         previousNode: structuredClone(params.previousNodeOverride ?? nodeToEdit),
         previousConnections: structuredClone(currentState.connections),
         previousRecoverableConnections: structuredClone(currentRecoverableConnections),
-        nextRecoverableConnections: [],
+        nextRecoverableConnections: structuredClone(params.nextRecoverableConnections),
       };
     },
     undo({ nodeId }, appliedData, currentState) {

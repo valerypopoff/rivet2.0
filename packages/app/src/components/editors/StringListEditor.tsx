@@ -20,7 +20,11 @@ import {
 } from '../../domain/graphEditing/stringListPortBinding';
 import { useEditNodeWithConnectionsCommand } from '../../commands/editNodeWithConnectionsCommand';
 import { useAtomValue } from 'jotai';
-import { connectionsState } from '../../state/graph';
+import { connectionsState, graphState } from '../../state/graph';
+import {
+  getRecoverableNodeConnectionsForNode,
+  recoverableNodeConnectionsStatePerGraph,
+} from '../../state/recoverableNodeConnections';
 
 const styles = css`
   & > div:first-of-type {
@@ -121,6 +125,16 @@ export const StringListEditor: FC<StringListEditorProps> = ({
   const data = node.data as Record<string, unknown>;
   const stringListValue = data[editor.dataKey] as string[] | string | undefined;
   const connections = useAtomValue(connectionsState);
+  const graph = useAtomValue(graphState);
+  const recoverableConnectionsByGraph = useAtomValue(recoverableNodeConnectionsStatePerGraph);
+  const recoverableConnections = useMemo(
+    () =>
+      getRecoverableNodeConnectionsForNode(
+        graph.metadata?.id ? recoverableConnectionsByGraph[graph.metadata.id] ?? {} : {},
+        node.id,
+      ),
+    [graph.metadata?.id, node.id, recoverableConnectionsByGraph],
+  );
   const editNodeWithConnections = useEditNodeWithConnectionsCommand();
 
   const stringList = useMemo(
@@ -139,19 +153,21 @@ export const StringListEditor: FC<StringListEditorProps> = ({
     const nextValues = getEditableStringListValues(nextRows);
 
     if (editor.portBinding) {
-      const { nextNode, nextConnections } = prepareStringListPortBindingEdit({
+      const { nextNode, nextConnections, nextRecoverableConnections } = prepareStringListPortBindingEdit({
         node,
         dataKey: editor.dataKey,
         portBinding: editor.portBinding,
         previousRows,
         nextRows,
         connections,
+        recoverableConnections,
       });
 
       editNodeWithConnections({
         nodeId: node.id,
         newNode: nextNode,
         nextConnections,
+        nextRecoverableConnections,
       });
 
       return;
@@ -183,9 +199,7 @@ export const StringListEditor: FC<StringListEditorProps> = ({
   };
 
   const handleItemChange = (uiId: string, value: string) => {
-    applyRowsChange((currentRows) =>
-      currentRows.map((row) => (row.uiId === uiId ? { ...row, value } : row)),
-    );
+    applyRowsChange((currentRows) => currentRows.map((row) => (row.uiId === uiId ? { ...row, value } : row)));
   };
 
   const handleDragEnd = ({ active, over }: DragEndEvent) => {
@@ -352,13 +366,7 @@ const SortableStringListItem: FC<{
   return (
     <div ref={setNodeRef} style={style} className={`string-item${isDragging ? ' dragging' : ''}`}>
       {showReorderHandle ? (
-        <button
-          type="button"
-          className="drag-handle"
-          aria-label="Reorder item"
-          {...attributes}
-          {...listeners}
-        >
+        <button type="button" className="drag-handle" aria-label="Reorder item" {...attributes} {...listeners}>
           <DragHandleIcon />
         </button>
       ) : null}

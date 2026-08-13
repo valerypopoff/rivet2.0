@@ -1,6 +1,6 @@
 {
   "formatVersion": 1,
-  "catalogFingerprint": "fnv1a64:32fb37a0ea2a3366",
+  "catalogFingerprint": "fnv1a64:7dfc147086f44d42",
   "entries": [
     {
       "authoringChoiceId": "registered:abortGraph",
@@ -1393,7 +1393,7 @@
       "authoringChoiceId": "registered:match",
       "nodeType": "match",
       "displayName": "Regex Match",
-      "description": "The Regex Match Node is used to match a string input against a series of regular expressions. Each regular expression corresponds to an output of the node. The node can be configured to either run the first matching output port, or to run all matching output ports. If no match is found, the Unmatched output port will be executed. This node is useful for routing control flow based on the content of a string. For example, you can use the Regex Match Node to check if a user's message contains certain keywords and route the conversation accordingly. If the Value input is provided, it will be passed through the corresponding output port if a match is found. If the Value input is not provided, the Test input will be passed through the corresponding output port if a match is found.",
+      "description": "The Regex Match Node is used to match a string input against a series of regular expressions. Each regular expression corresponds to an output of the node. The node can be configured to either run the first matching output port, or to run all matching output ports. If no match is found, the Unmatched output port will be executed. This node is useful for routing control flow based on the content of a string. For example, you can use the Regex Match Node to check if a user's message contains certain keywords and route the conversation accordingly. Choose how values reach the outputs with Case values . One shared value keeps the original single optional Value input: its value reaches every output that matches, or the Test value is passed through when Value is unconnected. Values per case adds a canvas only Values group after Test , containing one optional input for every case and one for Un",
       "aliases": [],
       "capabilities": {
         "createWithDefaults": true,
