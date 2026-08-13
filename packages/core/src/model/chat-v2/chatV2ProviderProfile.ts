@@ -11,6 +11,11 @@ import {
 import type { ChatV2Model, ChatV2Provider } from './chatV2Types.js';
 import type { CustomProviderApi } from './customProviderApi.js';
 import { getChatV2ProviderCapabilities } from './chatV2ProviderRegistry.js';
+import {
+  isChatV2BuiltInProvider,
+  normalizeChatV2CredentialNames,
+  type ChatV2CredentialNamesByProvider,
+} from './chatV2CredentialNames.js';
 
 export type ChatV2CredentialReference = {
   source: 'input' | 'settings' | 'plugin' | 'programmatic' | 'environment' | 'none';
@@ -37,19 +42,60 @@ export type ChatV2ProviderProfile = {
 
 type ProviderContext = Pick<InternalProcessContext, 'getPluginConfig' | 'settings'>;
 
-function getStringSetting(settings: InternalProcessContext['settings'], key: string): string | undefined {
-  const value = settings[key];
+function getNonEmptyString(value: unknown): string | undefined {
   return typeof value === 'string' && value.trim() ? value : undefined;
+}
+
+function getStringSetting(settings: InternalProcessContext['settings'], key: string): string | undefined {
+  return getNonEmptyString(settings[key]);
 }
 
 function resolveConfiguredCredential(
   provider: ChatV2Provider,
   context: ProviderContext,
   options: {
+    providerApiKeyNames?: ChatV2CredentialNamesByProvider | undefined;
     customProgrammaticName?: string | undefined;
     customEnvironmentName?: string | undefined;
   },
 ): ChatV2CredentialResult {
+  if (isChatV2BuiltInProvider(provider) && options.providerApiKeyNames?.[provider] != null) {
+    const names = normalizeChatV2CredentialNames(provider, options.providerApiKeyNames[provider]);
+    const programmaticValue = getStringSetting(context.settings, names.programmaticName);
+    if (programmaticValue) {
+      return {
+        value: programmaticValue,
+        reference: { source: 'programmatic', name: names.programmaticName },
+      };
+    }
+
+    const pluginEnvValue = getNonEmptyString(context.settings.pluginEnv?.[names.environmentVariableName]);
+    if (pluginEnvValue) {
+      return {
+        value: pluginEnvValue,
+        reference: { source: 'environment', name: names.environmentVariableName },
+      };
+    }
+
+    const processValue = getNonEmptyString(
+      (
+        globalThis as typeof globalThis & {
+          process?: { env?: Record<string, string | undefined> };
+        }
+      ).process?.env?.[names.environmentVariableName],
+    );
+    if (processValue) {
+      return {
+        value: processValue,
+        reference: { source: 'environment', name: names.environmentVariableName },
+      };
+    }
+
+    throw new Error(
+      `${provider} API key is not set. Pass ${names.programmaticName} programmatically or configure ${names.environmentVariableName}.`,
+    );
+  }
+
   switch (provider) {
     case 'openai': {
       const value = context.settings.openAiApiKey || context.settings.openAiKey || undefined;
@@ -119,6 +165,7 @@ export function resolveChatV2Credential(options: {
   context: ProviderContext;
   apiKeySource?: 'configured' | 'input' | undefined;
   inputs?: Inputs | undefined;
+  providerApiKeyNames?: ChatV2CredentialNamesByProvider | undefined;
   customProgrammaticName?: string | undefined;
   customEnvironmentName?: string | undefined;
 }): ChatV2CredentialResult {

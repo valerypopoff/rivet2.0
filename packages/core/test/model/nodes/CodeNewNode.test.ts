@@ -86,52 +86,19 @@ describe('CodeNewNode', () => {
     );
   });
 
-  it('creates a code editor, runtime permissions, and no manual input/output editors', () => {
+  it('creates one code editor and no manual input/output editors', () => {
     const editors = new CodeNewNodeImpl(CodeNewNodeImpl.create()).getEditors();
 
     assert.deepStrictEqual(editors, [
       {
         type: 'code',
         label: 'Code',
-        helperMessage: 'Use {{var}} to create input ports. Interpolated variables evaluate as the connected values.',
+        helperMessage:
+          'Use {{var}} to create input ports. Interpolated variables evaluate as the connected values. Node execution also provides "require" and "process". Browser execution provides "fetch", "console", and "Rivet".',
         dataKey: 'code',
         language: 'javascript',
         interpolationSyntax: 'js-value',
         enableFolding: true,
-      },
-      {
-        type: 'group',
-        label: 'Runtime permissions',
-        defaultOpen: true,
-        editors: [
-          {
-            type: 'toggle',
-            label: 'Allow "fetch"',
-            dataKey: 'allowFetch',
-          },
-          {
-            type: 'toggle',
-            label: 'Allow "Rivet"',
-            dataKey: 'allowRivet',
-          },
-          {
-            type: 'toggle',
-            label: 'Allow "console"',
-            dataKey: 'allowConsole',
-          },
-          {
-            type: 'toggle',
-            label: 'Allow "require"',
-            dataKey: 'allowRequire',
-            helperMessage: 'Only available with the Node executor',
-          },
-          {
-            type: 'toggle',
-            label: 'Allow "process"',
-            dataKey: 'allowProcess',
-            helperMessage: 'Only available with the Node executor',
-          },
-        ],
       },
     ]);
   });
@@ -267,16 +234,10 @@ describe('CodeNewNode', () => {
     assert.deepStrictEqual(result.output?.value, 7);
   });
 
-  it('passes runtime permission options to the code runner', async () => {
+  it('always requests every runtime API, ignoring retired saved permission fields', async () => {
     const codeRunner = new CapturingCodeRunner();
-    const node = createNode({
-      allowConsole: true,
-      allowFetch: true,
-      allowProcess: true,
-      allowRequire: true,
-      allowRivet: true,
-      code: 'return 1;',
-    });
+    const node = createNode({ code: 'return 1;' });
+    (node.chartNode.data as Record<string, unknown>).allowRivet = false;
 
     await node.process({}, createContext(codeRunner));
 

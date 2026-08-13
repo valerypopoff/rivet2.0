@@ -1,9 +1,15 @@
 import type { CodeRunner, CodeRunnerOptions, DataValue, Inputs, Outputs } from '@valerypopoff/rivet2-core';
 import { createCodeRunnerRequire } from './codeRunnerRequire.js';
-import { buildNodeCodeRunnerInvocation, compileNodeCodeRunnerFunction } from './nodeCodeRunnerInvocation.js';
+import {
+  buildNodeCodeRunnerInvocation,
+  compileNodeCodeRunnerFunction,
+  type NodeExecutionEnvironment,
+} from './nodeCodeRunnerInvocation.js';
 
 export class NodeCodeRunner implements CodeRunner {
   private readonly runtimeRequire = createCodeRunnerRequire();
+
+  constructor(private readonly executionEnvironment?: NodeExecutionEnvironment) {}
 
   async runCode(
     code: string,
@@ -14,6 +20,7 @@ export class NodeCodeRunner implements CodeRunner {
   ): Promise<Outputs> {
     const { argNames, args } = await buildNodeCodeRunnerInvocation({
       contextValues,
+      executionEnvironment: this.executionEnvironment,
       graphInputs,
       inputs,
       loadRivet: () => import('@valerypopoff/rivet2-node'),

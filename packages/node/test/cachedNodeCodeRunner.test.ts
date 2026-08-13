@@ -44,6 +44,33 @@ void describe('CachedNodeCodeRunner', () => {
     assert.equal(runner.getCacheStats().hits, 1);
   });
 
+  void it('uses the runner-scoped environment without changing the Node process environment', async () => {
+    const name = 'RIVET_TEST_SCOPED_EXECUTION_ENVIRONMENT';
+    const originalValue = process.env[name];
+    process.env[name] = 'physical';
+
+    try {
+      const runner = new CachedNodeCodeRunner({ executionEnvironment: { [name]: 'managed' } });
+      const outputs = await runner.runCode(
+        `
+          const replaceEnvironmentResult = Reflect.set(process, 'env', { ${name}: 'replacement' });
+          return { output: { type: 'string', value: [process.env.${name}, String(replaceEnvironmentResult)].join('/') } };
+        `,
+        {},
+        { ...DEFAULT_OPTIONS, includeProcess: true },
+      );
+
+      assert.deepEqual(outputs, { output: { type: 'string', value: 'managed/false' } });
+      assert.equal(process.env[name], 'physical');
+    } finally {
+      if (originalValue === undefined) {
+        delete process.env[name];
+      } else {
+        process.env[name] = originalValue;
+      }
+    }
+  });
+
   void it('separates cached functions by permission argument shape', async () => {
     const runner = new CachedNodeCodeRunner();
     const code = "return { output: { type: 'string', value: typeof require } };";
@@ -95,7 +122,9 @@ void describe('CachedNodeCodeRunner', () => {
     assert.deepEqual(withoutExtras, { output: { type: 'string', value: 'undefined:undefined:none:none' } });
     assert.deepEqual(withGraphInputs, { output: { type: 'string', value: 'object:undefined:undefined:none' } });
     assert.deepEqual(withGraphInputsAndContext, { output: { type: 'string', value: 'object:object:first:first' } });
-    assert.deepEqual(withGraphInputsAndContextAgain, { output: { type: 'string', value: 'object:object:second:second' } });
+    assert.deepEqual(withGraphInputsAndContextAgain, {
+      output: { type: 'string', value: 'object:object:second:second' },
+    });
     assert.deepEqual(runner.getCacheStats(), {
       entries: 3,
       hits: 1,

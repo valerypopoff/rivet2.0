@@ -109,6 +109,17 @@ export type RunActivityRoot = {
   startedAt?: number;
   graphOutputsReadyAt?: number;
   finishedAt?: number;
+  /**
+   * Original recording timeline, populated only by RecordingPlayer. The
+   * ordinary timestamps above remain local receipt timestamps so live runs
+   * and replay UI ordering retain their existing behavior.
+   */
+  recordedTiming?: {
+    startedAt: number;
+    latestAt: number;
+    graphOutputsReadyAt?: number;
+    finishedAt?: number;
+  };
   paused: boolean;
   isPartial: boolean;
   terminalErrorSummary?: string;
@@ -228,6 +239,21 @@ export function reduceRunActivityJournal(journal: RunActivityJournal, event: Run
   });
 }
 
+/**
+ * Resolve the duration shown for a root. Replayed recordings use their
+ * original elapsed timeline; all ordinary runs continue to use local wall
+ * time. An in-progress replay therefore advances only when its next
+ * historical event is delivered, never at playback speed.
+ */
+export function getRunActivityRootDurationMs(root: RunActivityRoot, now: number): number | undefined {
+  const recordedTiming = root.recordedTiming;
+  if (recordedTiming != null) {
+    const end = recordedTiming.finishedAt ?? recordedTiming.latestAt;
+    return Math.max(0, end - recordedTiming.startedAt);
+  }
+  return root.startedAt == null ? undefined : Math.max(0, (root.finishedAt ?? now) - root.startedAt);
+}
+
 export function reduceRunActivityEvents(
   journal: RunActivityJournal,
   events: readonly RunActivityEvent[],
@@ -253,71 +279,73 @@ function applyEvent(journal: RunActivityJournal, event: RunActivityEvent, occurr
   switch (event.type) {
     case 'start':
       applyStart(journal, event.data, occurredAt);
-      return;
+      break;
     case 'graphStart':
       applyGraphStart(journal, event.data, occurredAt);
-      return;
+      break;
     case 'graphOutputsReady':
       applyGraphOutputsReady(journal, event.data, occurredAt);
-      return;
+      break;
     case 'graphFinish':
       applyGraphTerminal(journal, event.data, occurredAt, 'completed');
-      return;
+      break;
     case 'graphError':
       applyGraphTerminal(journal, event.data, occurredAt, 'error');
-      return;
+      break;
     case 'graphAbort':
       applyGraphTerminal(journal, event.data, occurredAt, 'aborted');
-      return;
+      break;
     case 'nodeStart':
       applyNodeStart(journal, event.data, occurredAt, event.resultOrigin);
-      return;
+      break;
     case 'userInput':
       applyUserInput(journal, event.data, occurredAt);
-      return;
+      break;
     case 'progress':
       applyProgress(journal, event.data, occurredAt);
-      return;
+      break;
     case 'partialOutput':
       applyPartialOutput(journal, event.data, occurredAt, event.resultOrigin);
-      return;
+      break;
     case 'nodeFinish':
       applyNodeFinish(journal, event.data, occurredAt, event.resultOrigin);
-      return;
+      break;
     case 'nodeError':
       applyNodeError(journal, event.data, occurredAt, event.resultOrigin);
-      return;
+      break;
     case 'nodeExcluded':
       applyNodeExcluded(journal, event.data, occurredAt, event.resultOrigin);
-      return;
+      break;
     case 'nodeOutputsCleared':
       applyNodeOutputsCleared(journal, event.data, occurredAt);
-      return;
+      break;
     case 'llmCallFinished':
       applyLlmCallFinished(journal, event.data, occurredAt);
-      return;
+      break;
     case 'llmProfileAttempt':
       applyLlmProfileAttempt(journal, event.data, occurredAt);
-      return;
+      break;
     case 'toolCallFinished':
       applyToolCallFinished(journal, event.data, occurredAt);
-      return;
+      break;
     case 'done':
-      applyUnscopedRootTerminal(journal, 'completed', occurredAt);
-      return;
+      applyUnscopedRootTerminal(journal, 'completed', occurredAt, undefined, getReplayRecordedAt(event.data));
+      break;
     case 'abort':
-      applyUnscopedRootTerminal(journal, 'aborted', occurredAt, event.data?.error);
-      return;
+      applyUnscopedRootTerminal(journal, 'aborted', occurredAt, event.data?.error, getReplayRecordedAt(event.data));
+      break;
     case 'error':
-      applyUnscopedRootTerminal(journal, 'error', occurredAt, event.data?.error);
-      return;
+      applyUnscopedRootTerminal(journal, 'error', occurredAt, event.data?.error, getReplayRecordedAt(event.data));
+      break;
     case 'pause':
       applyUnscopedPause(journal, true);
-      return;
+      break;
     case 'resume':
       applyUnscopedPause(journal, false);
-      return;
+      break;
   }
+
+  applyRecordedTimingFromScopedEvent(journal, event);
 }
 
 function applyStart(journal: RunActivityJournal, data: RunActivityEventByName['start']['data'], at: number): void {
@@ -980,6 +1008,7 @@ function applyUnscopedRootTerminal(
   status: Exclude<RunActivityRootStatus, 'running' | 'outputs-ready'>,
   at: number,
   error?: unknown,
+  replayRecordedAt?: number,
 ): void {
   if ((journal.pendingUnscopedTerminalConfirmations ?? 0) > 0) {
     journal.pendingUnscopedTerminalConfirmations -= 1;
@@ -992,6 +1021,57 @@ function applyUnscopedRootTerminal(
     return;
   }
   finishRoot(journal, root, status, at, error);
+  applyRecordedTiming(root, replayRecordedAt, false, false);
+}
+
+function applyRecordedTimingFromScopedEvent(journal: RunActivityJournal, event: RunActivityEvent): void {
+  const replayRecordedAt = getReplayRecordedAt(event.data);
+  const execution = getEventExecution(event.data);
+  if (replayRecordedAt == null || execution == null) return;
+
+  const root = journal.rootsById[execution.rootRunId];
+  if (root == null) return;
+
+  const isRootGraphEvent = execution.parentGraphRunId == null;
+  const isRootTerminal =
+    isRootGraphEvent && (event.type === 'graphFinish' || event.type === 'graphError' || event.type === 'graphAbort');
+  applyRecordedTiming(root, replayRecordedAt, event.type === 'graphOutputsReady' && isRootGraphEvent, isRootTerminal);
+}
+
+function applyRecordedTiming(
+  root: RunActivityRoot,
+  replayRecordedAt: number | undefined,
+  outputsReady: boolean,
+  rootTerminal: boolean,
+): void {
+  if (replayRecordedAt == null) return;
+
+  const timing = (root.recordedTiming ??= {
+    startedAt: replayRecordedAt,
+    latestAt: replayRecordedAt,
+  });
+  timing.startedAt = Math.min(timing.startedAt, replayRecordedAt);
+  timing.latestAt = Math.max(timing.latestAt, replayRecordedAt);
+  if (outputsReady) {
+    timing.graphOutputsReadyAt = Math.min(timing.graphOutputsReadyAt ?? replayRecordedAt, replayRecordedAt);
+  }
+  if (rootTerminal) {
+    timing.finishedAt = timing.latestAt;
+  } else if (root.status !== 'running' && root.status !== 'outputs-ready') {
+    timing.finishedAt ??= timing.latestAt;
+  }
+}
+
+function getReplayRecordedAt(data: unknown): number | undefined {
+  if (data == null || typeof data !== 'object') return undefined;
+  const value = (data as { replayRecordedAt?: unknown }).replayRecordedAt;
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+}
+
+function getEventExecution(data: unknown): GraphExecutionMetadata | undefined {
+  if (data == null || typeof data !== 'object') return undefined;
+  const execution = (data as { execution?: unknown }).execution;
+  return execution != null && typeof execution === 'object' ? (execution as GraphExecutionMetadata) : undefined;
 }
 
 function applyUnscopedPause(journal: RunActivityJournal, paused: boolean): void {

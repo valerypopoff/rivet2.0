@@ -1,4 +1,5 @@
 import type { LLMChatV2ProfileData } from './llmChatV2NodeData.js';
+import { getNonDefaultChatV2CredentialNames } from './chatV2CredentialNames.js';
 import { getChatV2ModelInfo } from './modelRegistry.js';
 import {
   anthropicCacheControlTtlOptions,
@@ -184,6 +185,7 @@ function getStopSequencesBodyField(data: LLMChatV2ProfileData): LLMProfileBodyFi
  * in the node data and therefore cannot be rendered here.
  */
 export function getLLMProfileBodySections(data: LLMChatV2ProfileData): readonly LLMProfileBodySection[] {
+  const credentialNames = getNonDefaultChatV2CredentialNames(data.provider, data.providerApiKeyNames);
   const modelFields: Array<LLMProfileBodyField | undefined> = [
     {
       label: 'Provider',
@@ -197,6 +199,12 @@ export function getLLMProfileBodySections(data: LLMChatV2ProfileData): readonly 
       : []),
     { label: 'Model', value: getModelBodyLabel(data) },
     { label: 'API key source', value: data.apiKeySource === 'input' ? 'Input port' : 'Configured key' },
+    ...(credentialNames != null && data.apiKeySource !== 'input'
+      ? [
+          { label: 'Programmatic API key name', value: credentialNames.programmaticName },
+          { label: 'API key environment variable', value: credentialNames.environmentVariableName },
+        ]
+      : []),
     ...(data.provider === 'custom' && data.apiKeySource !== 'input'
       ? [
           data.customProviderApiKeyProgrammaticName?.trim()

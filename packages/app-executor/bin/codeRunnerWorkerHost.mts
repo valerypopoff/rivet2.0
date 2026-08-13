@@ -80,7 +80,7 @@ function createBridgedConsole() {
 }
 
 async function runCode(request) {
-  const { code, contextValues, graphInputs, inputs, options, requireAnchorPath } = request;
+  const { code, contextValues, executionEnvironment, graphInputs, inputs, options, requireAnchorPath } = request;
   const argNames = ['inputs'];
   const args = [inputs];
 
@@ -96,7 +96,7 @@ async function runCode(request) {
 
   if (options.includeProcess) {
     argNames.push('process');
-    args.push(process);
+    args.push(createScopedProcess(executionEnvironment));
   }
 
   if (options.includeFetch) {
@@ -119,6 +119,46 @@ async function runCode(request) {
   const AsyncFunction = async function () {}.constructor;
   const codeFunction = new AsyncFunction(...argNames);
   return await codeFunction(...args);
+}
+
+function createScopedProcess(executionEnvironment) {
+  if (!executionEnvironment || Object.keys(executionEnvironment).length === 0) {
+    return process;
+  }
+
+  const environment = { ...process.env };
+  for (const [name, value] of Object.entries(executionEnvironment)) {
+    if (value === undefined) {
+      delete environment[name];
+    } else {
+      environment[name] = value;
+    }
+  }
+
+  Object.freeze(environment);
+  return new Proxy(process, {
+    get(target, property) {
+      return property === 'env' ? environment : Reflect.get(target, property, target);
+    },
+    set(target, property, value) {
+      if (property === 'env') {
+        return false;
+      }
+      return Reflect.set(target, property, value, target);
+    },
+    defineProperty(target, property, descriptor) {
+      if (property === 'env') {
+        return false;
+      }
+      return Reflect.defineProperty(target, property, descriptor);
+    },
+    deleteProperty(target, property) {
+      if (property === 'env') {
+        return false;
+      }
+      return Reflect.deleteProperty(target, property);
+    },
+  });
 }
 
 parentPort.postMessage({ type: 'ready' });
@@ -149,6 +189,7 @@ parentPort.once('message', (request) => {
 export type CodeWorkerRunRequest = {
   code: string;
   contextValues: Record<string, DataValue> | undefined;
+  executionEnvironment: Readonly<Record<string, string | undefined>> | undefined;
   graphInputs: Record<string, DataValue> | undefined;
   inputs: Inputs;
   options: CodeRunnerOptions;
@@ -162,10 +203,12 @@ export function createCodeWorkerRunRequest(
   options: CodeRunnerOptions,
   graphInputs: Record<string, DataValue> | undefined,
   contextValues: Record<string, DataValue> | undefined,
+  executionEnvironment?: Readonly<Record<string, string | undefined>>,
 ): CodeWorkerRunRequest {
   return {
     code,
     contextValues,
+    executionEnvironment,
     graphInputs,
     inputs,
     options,
@@ -293,7 +336,10 @@ export async function runCodeOnReadyWorker(
   });
 }
 
-function emitConsoleMessage(onConsole: ((message: CodeConsoleMessage) => void) | undefined, message: CodeConsoleMessage) {
+function emitConsoleMessage(
+  onConsole: ((message: CodeConsoleMessage) => void) | undefined,
+  message: CodeConsoleMessage,
+) {
   try {
     onConsole?.(message);
   } catch {

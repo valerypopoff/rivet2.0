@@ -1618,6 +1618,15 @@ and re-emitting each event on a provided `Emittery<ProcessEvents>` emitter. This
 means the app's standard event handlers (`onNodeStart`, `onGraphStart`, etc.)
 receive the same events during replay as during live execution.
 
+Replay also adds optional, delivery-only `replayRecordedAt` provenance to each
+re-emitted lifecycle event. It is the source event's `RecordedEvent.ts`, not a
+new execution timestamp. The editor retains its fresh local receipt timestamp
+for session ordering and live-state controls, while Run Activity computes the
+displayed replay duration from the historical provenance. This avoids showing a
+fast replay as though the original provider calls completed in milliseconds.
+`ExecutionRecorder` strips this provenance before serializing a new recording,
+so replaying and recording again creates one new, self-contained timeline.
+
 In the desktop app, replay is intentionally routed through the local executor
 path even when the selected live executor is Node. The ActionBar's `Play
 Recording` button still delegates to `useGraphExecutor`, but

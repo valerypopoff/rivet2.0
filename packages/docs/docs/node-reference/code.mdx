@@ -17,7 +17,7 @@ The Code (legacy) Node allows you to run arbitrary JavaScript code during your g
 - Custom, domain-specific logic that is complex to represent in Rivet nodes alone
 - Using JavaScript functions that are not available in other nodes
 
-Use [Code](./code-new.mdx) for new workflows when you want inputs created from `{{name}}` tokens and one direct returned value, while still keeping the same runtime permissions.
+Use [Code](./code-new.mdx) for new workflows when you want inputs created from `{{name}}` tokens and one direct returned value.
 
 ### Code Inputs
 
@@ -103,8 +103,8 @@ const foo = graphInputs.myString.value; // graphInputs.myString.type === 'string
 
 ## Outputs
 
-| Title          | Data Type | Description                                                                                      | Notes |
-| -------------- | --------- | ------------------------------------------------------------------------------------------------ | ----- |
+| Title          | Data Type | Description                                                                                          | Notes                                                               |
+| -------------- | --------- | ---------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------- |
 | (custom names) | Any       | The typed output values returned by the code. Dynamic based on the outputs configured in the editor. | Each configured output name must be present in the returned object. |
 
 </TabItem>
@@ -113,11 +113,10 @@ const foo = graphInputs.myString.value; // graphInputs.myString.type === 'string
 
 ## Editor Settings
 
-| Setting | Description | Default Value | Use Input Toggle | Input Data Type |
-| --- | --- | --- | --- | --- |
-| Inputs | The names of the inputs accessible through the `inputs` object. Each input creates a corresponding input port. | `input1` | No | N/A |
-| Outputs | The names of the outputs that the returned object must contain. Each output creates a corresponding output port. | `output1` | No | N/A |
-| Runtime Permissions | Per-node toggles for optional globals: `fetch`, `Rivet`, `console`, `require`, and `process`. | All off | No | N/A |
+| Setting | Description                                                                                                      | Default Value | Use Input Toggle | Input Data Type |
+| ------- | ---------------------------------------------------------------------------------------------------------------- | ------------- | ---------------- | --------------- |
+| Inputs  | The names of the inputs accessible through the `inputs` object. Each input creates a corresponding input port.   | `input1`      | No               | N/A             |
+| Outputs | The names of the outputs that the returned object must contain. Each output creates a corresponding output port. | `output1`     | No               | N/A             |
 
 </TabItem>
 
@@ -183,7 +182,7 @@ If you throw an `Error` in the code node, then it will error.
 
 **Q: How is the code node implemented?**
 
-A: The Code (legacy) Node is implemented using an async [Function constructor](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Function/Function). The always-present argument is `inputs`; optional runtime permissions add more globals such as `fetch`, `Rivet`, `console`, `require`, and `process`.
+A: The Code (legacy) Node is implemented using an async [Function constructor](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Function/Function). The always-present argument is `inputs`; the active executor also provides every API it supports, including `fetch`, `Rivet`, `console`, `require`, and `process`.
 
 ```js
 async function codeNode(inputs) {
@@ -193,7 +192,11 @@ async function codeNode(inputs) {
 
 **Q: Can I use `require` or `import` in the code node?**
 
-A: `import` is not exposed. `require` is available only in the Node executor when the Code (legacy) node's `require` runtime permission is enabled. Programmatic Node runs use `NodeCodeRunner`; the desktop Node executor uses the app-executor runner. Both resolve modules from the process working directory by default, and hosted/runtime-library environments can override that with `RIVET_CODE_RUNNER_REQUIRE_ROOT` or `RIVET_CODE_RUNNER_REQUIRE_ANCHOR`.
+A: `import` is not exposed. `require` and `process` are available only in the Node executor. Browser execution provides `fetch`, `console`, and `Rivet`. Programmatic Node runs use `NodeCodeRunner`; the desktop Node executor uses the app-executor runner. Both resolve modules from the process working directory by default, and hosted/runtime-library environments can override that with `RIVET_CODE_RUNNER_REQUIRE_ROOT` or `RIVET_CODE_RUNNER_REQUIRE_ANCHOR`.
+
+**Q: Is Code (legacy) a security sandbox?**
+
+A: No. Code nodes execute trusted JavaScript; executor-provided APIs do not make arbitrary or untrusted JavaScript safe to run.
 
 **Q: Can I use `async`/`await` in the code node?**
 
@@ -201,11 +204,11 @@ A: Yes. Code (legacy) nodes run through an async function, so you can use `await
 
 **Q: Can I use external libraries in the code node?**
 
-A: In Browser executor mode, external libraries are not available. In Node executor mode, enable the `require` runtime permission and require packages that are resolvable from the Code-runner require root. For larger reusable integrations, a Rivet plugin is still usually cleaner.
+A: In Browser executor mode, external libraries are not available. In Node executor mode, require packages that are resolvable from the Code-runner require root. For larger reusable integrations, a Rivet plugin is still usually cleaner.
 
 **Q: Can I use `console.log` in the code node?**
 
-A: Yes, when the Code (legacy) node's `console` runtime permission is enabled. In the app executor, console calls are forwarded back to the Rivet UI for the active run.
+A: Yes. In the app executor, console calls are forwarded back to the Rivet UI for the active run.
 
 **Q: Can the code node function like an [If Node](./if.mdx)?**
 

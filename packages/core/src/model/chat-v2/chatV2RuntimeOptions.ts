@@ -44,6 +44,7 @@ export function resolveLLMChatV2ApiKey(
     context,
     apiKeySource: data.apiKeySource === 'input' ? 'input' : 'configured',
     inputs,
+    providerApiKeyNames: data.providerApiKeyNames,
     customProgrammaticName: data.customProviderApiKeyProgrammaticName,
     customEnvironmentName: data.customProviderApiKeyEnvVarName,
   }).value;

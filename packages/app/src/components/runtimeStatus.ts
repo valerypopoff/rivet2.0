@@ -1,5 +1,8 @@
 import type { RunActivityJournal } from '../features/runActivity/runActivityJournal.js';
-import { selectCurrentRunActivityRoot } from '../features/runActivity/runActivityJournal.js';
+import {
+  getRunActivityRootDurationMs,
+  selectCurrentRunActivityRoot,
+} from '../features/runActivity/runActivityJournal.js';
 
 export type RuntimeStatusTiming = {
   elapsedMs?: number;
@@ -34,7 +37,7 @@ export function resolveRuntimeStatusTiming(options: {
 
   if (root?.startedAt != null) {
     return {
-      elapsedMs: Math.max(0, (root.finishedAt ?? options.now) - root.startedAt),
+      elapsedMs: getRunActivityRootDurationMs(root, options.now),
       startedAt: root.startedAt,
       isLive: root.finishedAt == null,
     };

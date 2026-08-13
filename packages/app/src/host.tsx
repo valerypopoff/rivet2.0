@@ -191,7 +191,10 @@ export {
   getEnvVar,
   isInTauri,
 } from './utils/tauri.js';
-export { getLLMChatV2CustomProviderApiKeyEnvVarNames } from './utils/chatV2CustomProviderEnv.js';
+export {
+  getLLMChatV2ApiKeyEnvVarNames,
+  getLLMChatV2CustomProviderApiKeyEnvVarNames,
+} from './utils/chatV2ProviderEnv.js';
 export {
   compareProjects,
   getProjectConnectionComparisonKey,

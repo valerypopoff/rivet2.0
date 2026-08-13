@@ -331,13 +331,10 @@ draft can be accepted, rather than being deferred to execution. The YAML parser
 is only a structural gate; it is never a substitute for Rivet semantic
 validation.
 
-Direct document editing does not bypass the Code-node privilege boundary.
-Creating a Code node with enabled runtime permissions, expanding an existing
-Code node's permissions, or changing source while the captured base node has an
-enabled base/variant runtime permission is rejected atomically. Disabling such
-permissions remains possible, but a later edit in the same session is still
-compared with the captured base and cannot use that as a privilege-changing
-shortcut.
+Direct document editing uses the same Code and Expression data shape as the
+editor. The active executor, rather than node-level permissions, determines
+which JavaScript APIs exist at runtime; Graph Builder can therefore create,
+clone, and update Code source normally.
 
 Delegate Tool Call keeps the same candidate-level invariants when authored
 through YAML as when configured through its editor adapter. New or reconfigured

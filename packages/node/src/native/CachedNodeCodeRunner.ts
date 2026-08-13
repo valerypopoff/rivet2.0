@@ -4,6 +4,7 @@ import {
   buildNodeCodeRunnerInvocationArgs,
   compileNodeCodeRunnerFunction,
   createNodeCodeRunnerInvocationPlan,
+  type NodeExecutionEnvironment,
   type NodeCodeRunnerFunction,
   type NodeCodeRunnerInvocationPlan,
 } from './nodeCodeRunnerInvocation.js';
@@ -17,6 +18,7 @@ type CacheEntry = {
 };
 
 export type CachedNodeCodeRunnerOptions = {
+  executionEnvironment?: NodeExecutionEnvironment;
   maxEntries?: number;
 };
 
@@ -44,12 +46,14 @@ export class CachedNodeCodeRunner implements CodeRunner {
   private readonly lruEntries = new Set<CacheEntry>();
   private readonly maxEntries: number;
   private readonly runtimeRequire = createCodeRunnerRequire();
+  private readonly executionEnvironment: NodeExecutionEnvironment | undefined;
   private hits = 0;
   private misses = 0;
   private rivetModulePromise: Promise<unknown> | undefined;
 
   constructor(options: CachedNodeCodeRunnerOptions = {}) {
     this.maxEntries = normalizeMaxEntries(options.maxEntries);
+    this.executionEnvironment = options.executionEnvironment;
   }
 
   async runCode(
@@ -62,6 +66,7 @@ export class CachedNodeCodeRunner implements CodeRunner {
     const invocationPlan = this.getInvocationPlan(options, graphInputs != null, contextValues != null);
     const args = await buildNodeCodeRunnerInvocationArgs({
       contextValues,
+      executionEnvironment: this.executionEnvironment,
       graphInputs,
       inputs,
       loadRivet: () => this.loadRivet(),

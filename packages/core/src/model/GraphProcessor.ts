@@ -112,7 +112,16 @@ import {
 // eslint-disable-next-line import/no-cycle -- There has to be a cycle because CodeRunner needs to import the entirety of Rivet
 import { IsomorphicCodeRunner } from '../integrations/CodeRunner.js';
 
-type WithExecution<T extends object> = T & { execution: GraphExecutionMetadata };
+/**
+ * Provenance attached only while RecordingPlayer re-emits a historical event.
+ * Consumers retain their fresh receipt clock for live ordering and activity,
+ * while presentation can separately use the original recording timestamp.
+ */
+export type ReplayEventTiming = {
+  replayRecordedAt?: number;
+};
+
+type WithExecution<T extends object> = T & { execution: GraphExecutionMetadata } & ReplayEventTiming;
 type NodeTimingStart = number | undefined;
 type NodeAbortControllerEntry = AbortController | Set<AbortController>;
 const graphProcessorGraphOverride = Symbol('graphProcessorGraphOverride');
@@ -247,13 +256,13 @@ export type ProcessEvents = {
   nodeOutputsCleared: WithExecution<{ node: ChartNode; processId?: ProcessId }>;
 
   /** Called when the root graph has errored. The root graph will also throw. */
-  error: { error: Error | string };
+  error: { error: Error | string } & ReplayEventTiming;
 
   /** Called when processing has completed. */
-  done: { results: GraphOutputs };
+  done: { results: GraphOutputs } & ReplayEventTiming;
 
   /** Called when processing has been aborted. */
-  abort: { successful: boolean; error?: string | Error };
+  abort: { successful: boolean; error?: string | Error } & ReplayEventTiming;
 
   /** Called when processing has finished either successfully or unsuccessfully. */
   finish: void;

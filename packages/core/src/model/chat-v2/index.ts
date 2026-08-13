@@ -2,6 +2,7 @@ export * from './aiSdkBridge.js';
 export * from './chatV2FeatureCompatibility.js';
 export * from './chatV2Pipeline.js';
 export * from './chatV2ProviderProfile.js';
+export * from './chatV2CredentialNames.js';
 export * from './chatV2RequestPlan.js';
 export * from './chatV2ResponseFormat.js';
 export * from './chatV2Shared.js';

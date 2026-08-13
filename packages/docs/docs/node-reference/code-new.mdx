@@ -88,10 +88,9 @@ The returned value can be a string, number, boolean, object, array, `null`, or J
 
 ## Editor Settings
 
-| Setting             | Description                                                                                                     | Default Value                           | Use Input Toggle | Input Data Type |
-| ------------------- | --------------------------------------------------------------------------------------------------------------- | --------------------------------------- | ---------------- | --------------- |
-| Code                | JavaScript code to run. Use `{{name}}` tokens to create input ports, and `return` the value you want to output. | A small `{{input}}` passthrough example | No               | N/A             |
-| Runtime Permissions | Per-node toggles for optional globals: `fetch`, `Rivet`, `console`, `require`, and `process`.                   | All off                                 | No               | N/A             |
+| Setting | Description                                                                                            | Default Value                           | Use Input Toggle | Input Data Type |
+| ------- | ------------------------------------------------------------------------------------------------------ | --------------------------------------- | ---------------- | --------------- |
+| Code    | JavaScript code to run. Use `{{name}}` tokens to create input ports, and `return` the value to output. | A small `{{input}}` passthrough example | No               | N/A             |
 
 </TabItem>
 
@@ -129,7 +128,11 @@ A: Expression is for a single JavaScript expression. Code is for a code body: yo
 
 **Q: Can I use `require` or `process`?**
 
-A: Yes, but only when the corresponding runtime permission is enabled. `require` and `process` are only available with the Node executor.
+A: Yes. `require` and `process` are available only with the Node executor. Browser execution provides `fetch`, `console`, and `Rivet`.
+
+**Q: Is Code a security sandbox?**
+
+A: No. Code nodes execute trusted JavaScript; executor-provided APIs do not make arbitrary or untrusted JavaScript safe to run.
 
 **Q: Can I return `undefined`?**
 

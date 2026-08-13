@@ -1,17 +1,20 @@
 import type { Inputs, Outputs } from '../index.js';
 import type { DataValue } from '../model/DataValue.js';
+import type { CodeRunnerOptions } from './CodeRunnerOptions.js';
 
-// eslint-disable-next-line import/no-cycle -- There has to be a cycle if we're to import the entirety of Rivet here.
+// eslint-disable-next-line import/no-cycle -- Authored code receives the complete public Rivet namespace at execution time.
 import * as Rivet from '../exports.js';
 
-export interface CodeRunnerOptions {
-  includeRequire: boolean;
-  includeFetch: boolean;
-  includeRivet: boolean;
-  includeProcess: boolean;
-  includeConsole: boolean;
-}
+export { ALL_CODE_RUNNER_OPTIONS } from './CodeRunnerOptions.js';
+export type { CodeRunnerOptions } from './CodeRunnerOptions.js';
 
+/**
+ * Code and Expression nodes request every API their executor can provide.
+ *
+ * This is intentionally not a permission system or a sandbox. Node runners
+ * provide the Node-specific APIs, while browser runners only supply the APIs
+ * they actually implement.
+ */
 /** An object that can run arbitrary code (evals it). */
 export interface CodeRunner {
   runCode: (
@@ -19,7 +22,7 @@ export interface CodeRunner {
     inputs: Inputs,
     options: CodeRunnerOptions,
     graphInputs?: Record<string, DataValue>,
-    contextValues?: Record<string, DataValue>
+    contextValues?: Record<string, DataValue>,
   ) => Promise<Outputs>;
 }
 
@@ -29,18 +32,10 @@ export class IsomorphicCodeRunner implements CodeRunner {
     inputs: Inputs,
     options: CodeRunnerOptions,
     graphInputs?: Record<string, DataValue>,
-    contextValues?: Record<string, DataValue>
+    contextValues?: Record<string, DataValue>,
   ): Promise<Outputs> {
     const argNames = ['inputs'];
     const args: any[] = [inputs];
-
-    if (options.includeRequire) {
-      throw new Error('require() requires the Node executor.');
-    }
-
-    if (options.includeProcess) {
-      throw new Error('process requires the Node executor.');
-    }
 
     if (options.includeConsole) {
       argNames.push('console');
@@ -83,7 +78,7 @@ export class NotAllowedCodeRunner implements CodeRunner {
     _inputs: Inputs,
     _options: CodeRunnerOptions,
     _graphInputs?: Record<string, DataValue>,
-    _contextValues?: Record<string, DataValue>
+    _contextValues?: Record<string, DataValue>,
   ): Promise<Outputs> {
     throw new Error('Dynamic code execution is disabled.');
   }

@@ -9,15 +9,21 @@ import {
   ExecutionRecorder,
   getKnowledgeStoreProvider,
   globalRivetNodeRegistry,
+  nodeDefinition,
   resetGlobalRivetNodeRegistry,
+  resolveChatV2Credential,
   runGraph,
   type ChartNode,
   type CodeRunner,
   type GraphId,
-  type NodeImpl,
+  type Inputs,
+  type InternalProcessContext,
   type NodeGraph,
   type NodeId,
+  NodeImpl,
+  type NodeInputDefinition,
   type NodeRegistration,
+  type NodeOutputDefinition,
   type Outputs,
   type PortId,
   type Project,
@@ -32,6 +38,58 @@ import {
   makeTextChainProject,
 } from './runtimeSpeedFixtures.js';
 import { makePineconeKnowledgeStatusProject } from './webAppFixtures.js';
+
+const environmentBoundaryCredentialName = 'RIVET_TEST_NAMED_NODE_CREDENTIAL';
+const environmentBoundaryPhysicalSentinel = 'RIVET_TEST_PHYSICAL_ENVIRONMENT_SENTINEL';
+const environmentBoundaryOverlayName = 'RIVET_TEST_HOST_ENVIRONMENT_OVERLAY';
+
+type EnvironmentBoundaryProbeNode = ChartNode<'environmentBoundaryProbe', Record<string, never>>;
+
+class EnvironmentBoundaryProbeNodeImpl extends NodeImpl<EnvironmentBoundaryProbeNode> {
+  static create(): EnvironmentBoundaryProbeNode {
+    return {
+      data: {},
+      id: 'environment-boundary-probe' as NodeId,
+      title: 'Environment Boundary Probe',
+      type: 'environmentBoundaryProbe',
+      visualData: { x: 0, y: 0 },
+    };
+  }
+
+  static getUIData() {
+    return {};
+  }
+
+  getInputDefinitions(): NodeInputDefinition[] {
+    return [];
+  }
+
+  getOutputDefinitions(): NodeOutputDefinition[] {
+    return [{ dataType: 'object', id: 'output' as PortId, title: 'Output' }];
+  }
+
+  async process(_inputs: Inputs, context: InternalProcessContext): Promise<Outputs> {
+    const credential = resolveChatV2Credential({
+      provider: 'custom',
+      context,
+      customEnvironmentName: environmentBoundaryCredentialName,
+    });
+
+    return {
+      output: {
+        type: 'object',
+        value: {
+          credential: credential.value ?? null,
+          pluginEnv: Object.fromEntries(
+            Object.entries(context.settings.pluginEnv ?? {}).filter(([, value]) => value !== undefined),
+          ),
+        },
+      },
+    };
+  }
+}
+
+const environmentBoundaryProbeNode = nodeDefinition(EnvironmentBoundaryProbeNodeImpl, 'Environment Boundary Probe');
 
 function makeCodeProject(code: string): Project {
   const codeNode = CodeNodeImpl.create();
@@ -63,6 +121,37 @@ function makeCodeProject(code: string): Project {
       mainGraphId: graph.metadata!.id,
       title: 'Node API Test Project',
     },
+  } as Project;
+}
+
+function makeEnvironmentBoundaryProject(): Project {
+  const graphId = 'environment-boundary-graph' as GraphId;
+  const probeNode = EnvironmentBoundaryProbeNodeImpl.create();
+  const graph: NodeGraph = {
+    connections: [
+      {
+        inputId: 'value' as PortId,
+        inputNodeId: 'environment-boundary-output' as NodeId,
+        outputId: 'output' as PortId,
+        outputNodeId: probeNode.id,
+      },
+    ],
+    metadata: { description: '', id: graphId, name: 'Environment Boundary' },
+    nodes: [
+      probeNode,
+      {
+        data: { dataType: 'object', id: 'result' },
+        id: 'environment-boundary-output' as NodeId,
+        title: 'Output',
+        type: 'graphOutput',
+        visualData: { x: 200, y: 0 },
+      },
+    ],
+  };
+
+  return {
+    graphs: { [graphId]: graph },
+    metadata: { id: 'environment-boundary-project' as GraphId, mainGraphId: graphId, title: 'Environment Boundary' },
   } as Project;
 }
 
@@ -365,13 +454,17 @@ describe('api', () => {
     try {
       const project = makePineconeKnowledgeStatusProject();
       const environmentOutputs = await runGraph(project, {});
+      const hostEnvironmentOutputs = await runGraph(project, {
+        executionEnvironment: { PINECONE_API_KEY: 'host-pinecone-key' },
+      });
       const explicitOutputs = await runGraph(project, {
         pluginEnv: { PINECONE_API_KEY: 'explicit-pinecone-key' },
       });
 
       assert.equal(environmentOutputs.value?.type, 'string');
+      assert.equal(hostEnvironmentOutputs.value?.type, 'string');
       assert.equal(explicitOutputs.value?.type, 'string');
-      assert.deepEqual(requestApiKeys, ['headless-pinecone-key', 'explicit-pinecone-key']);
+      assert.deepEqual(requestApiKeys, ['headless-pinecone-key', 'host-pinecone-key', 'explicit-pinecone-key']);
     } finally {
       globalThis.fetch = originalFetch;
       resetGlobalRivetNodeRegistry();
@@ -380,6 +473,39 @@ describe('api', () => {
       } else {
         process.env.PINECONE_API_KEY = originalApiKey;
       }
+    }
+  });
+
+  it('keeps physical environment out of pluginEnv while preserving host overlays and named credential lookup', async () => {
+    const originalCredential = process.env[environmentBoundaryCredentialName];
+    const originalSentinel = process.env[environmentBoundaryPhysicalSentinel];
+    const originalOverlay = process.env[environmentBoundaryOverlayName];
+    process.env[environmentBoundaryCredentialName] = 'physical-named-credential';
+    process.env[environmentBoundaryPhysicalSentinel] = 'physical-secret-that-must-not-leak';
+    process.env[environmentBoundaryOverlayName] = 'physical-overlay-value';
+
+    try {
+      const registry = createBuiltInRegistry().register(environmentBoundaryProbeNode);
+      const outputs = await runGraph(makeEnvironmentBoundaryProject(), {
+        executionEnvironment: { [environmentBoundaryOverlayName]: 'host-overlay-value' },
+        registry,
+      });
+      const value = outputs.result?.value as
+        | { credential?: unknown; pluginEnv?: Record<string, string | undefined> }
+        | undefined;
+
+      assert.equal(outputs.result?.type, 'object');
+      assert.equal(value?.credential, 'physical-named-credential');
+      assert.equal(value?.pluginEnv?.[environmentBoundaryOverlayName], 'host-overlay-value');
+      assert.equal(value?.pluginEnv?.[environmentBoundaryCredentialName], undefined);
+      assert.equal(value?.pluginEnv?.[environmentBoundaryPhysicalSentinel], undefined);
+    } finally {
+      if (originalCredential === undefined) delete process.env[environmentBoundaryCredentialName];
+      else process.env[environmentBoundaryCredentialName] = originalCredential;
+      if (originalSentinel === undefined) delete process.env[environmentBoundaryPhysicalSentinel];
+      else process.env[environmentBoundaryPhysicalSentinel] = originalSentinel;
+      if (originalOverlay === undefined) delete process.env[environmentBoundaryOverlayName];
+      else process.env[environmentBoundaryOverlayName] = originalOverlay;
     }
   });
 

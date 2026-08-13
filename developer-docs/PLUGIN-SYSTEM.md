@@ -298,9 +298,11 @@ headless HTTP or web-app execution, and plugin config such as
 `PINECONE_API_KEY` is read from the Node host environment. Environment
 fallback extraction covers both visible string settings and secret settings;
 secret editor typing must not suppress a declared host environment fallback.
-An explicitly supplied `pluginEnv` is the complete plugin-environment map for
-that processor and takes precedence over automatic `process.env` extraction;
-it is not merged with host environment values.
+An explicitly supplied `pluginEnv` replaces automatic `process.env`
+extraction; it is not merged with the physical host environment. A separate
+Node `executionEnvironment` overlay is intentionally applied afterwards and
+wins for its explicitly supplied names only. That overlay does not enumerate
+or project the rest of `process.env` into `pluginEnv`.
 
 An explicitly supplied `registry` remains authoritative and is not mutated.
 URI and package plugins are never imported automatically by the Node API;

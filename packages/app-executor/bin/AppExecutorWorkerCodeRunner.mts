@@ -7,13 +7,10 @@ import type {
   Inputs,
   Outputs,
 } from '@valerypopoff/rivet2-core';
-import * as process from 'node:process';
+import { createScopedNodeProcess, type NodeExecutionEnvironment } from '@valerypopoff/rivet2-node';
 import { inspect } from 'node:util';
 import { createCodeRunnerRequire } from './codeRunnerRequire.mjs';
-import {
-  getSharedCodeWorkerPool,
-  type AppExecutorCodeWorkerPool,
-} from './codeRunnerWorkerPool.mjs';
+import { getSharedCodeWorkerPool, type AppExecutorCodeWorkerPool } from './codeRunnerWorkerPool.mjs';
 import { createCodeWorkerRunRequest } from './codeRunnerWorkerHost.mjs';
 
 export {
@@ -28,7 +25,10 @@ export class AppExecutorWorkerCodeRunner implements CodeRunner {
 
   constructor(
     private readonly onConsole?: (message: CodeConsoleMessage) => void,
-    private readonly options: { workerPool?: AppExecutorCodeWorkerPool } = {},
+    private readonly options: {
+      executionEnvironment?: NodeExecutionEnvironment;
+      workerPool?: AppExecutorCodeWorkerPool;
+    } = {},
   ) {}
 
   async runCode(
@@ -46,7 +46,16 @@ export class AppExecutorWorkerCodeRunner implements CodeRunner {
       // The app sidecar isolates ordinary Code-family JavaScript in workers, but
       // Rivet-capable code imports @valerypopoff/rivet2-node. Keep that path on the
       // current thread so packaged sidecar module resolution stays compatible.
-      return runCodeInCurrentThread(code, inputs, options, graphInputs, contextValues, this.runtimeRequire, this.onConsole);
+      return runCodeInCurrentThread(
+        code,
+        inputs,
+        options,
+        graphInputs,
+        contextValues,
+        this.runtimeRequire,
+        this.onConsole,
+        this.options.executionEnvironment,
+      );
     }
 
     return runCodeInWorker(
@@ -57,6 +66,7 @@ export class AppExecutorWorkerCodeRunner implements CodeRunner {
       contextValues,
       this.onConsole,
       this.options.workerPool ?? getSharedCodeWorkerPool(),
+      this.options.executionEnvironment,
     );
   }
 }
@@ -81,8 +91,12 @@ async function runCodeInWorker(
   contextValues: Record<string, DataValue> | undefined,
   onConsole?: (message: CodeConsoleMessage) => void,
   workerPool = getSharedCodeWorkerPool(),
+  executionEnvironment?: NodeExecutionEnvironment,
 ): Promise<Outputs> {
-  return workerPool.run(createCodeWorkerRunRequest(code, inputs, options, graphInputs, contextValues), onConsole);
+  return workerPool.run(
+    createCodeWorkerRunRequest(code, inputs, options, graphInputs, contextValues, executionEnvironment),
+    onConsole,
+  );
 }
 
 async function runCodeInCurrentThread(
@@ -93,6 +107,7 @@ async function runCodeInCurrentThread(
   contextValues: Record<string, DataValue> | undefined,
   runtimeRequire: NodeJS.Require,
   onConsole?: (message: CodeConsoleMessage) => void,
+  executionEnvironment?: NodeExecutionEnvironment,
 ): Promise<Outputs> {
   const argNames = ['inputs'];
   const args: unknown[] = [inputs];
@@ -109,7 +124,7 @@ async function runCodeInCurrentThread(
 
   if (options.includeProcess) {
     argNames.push('process');
-    args.push(process);
+    args.push(createScopedNodeProcess(executionEnvironment));
   }
 
   if (options.includeFetch) {
@@ -158,7 +173,10 @@ function createBridgedConsole(onConsole?: (message: CodeConsoleMessage) => void)
   return bridgedConsole;
 }
 
-function emitConsoleMessage(onConsole: ((message: CodeConsoleMessage) => void) | undefined, message: CodeConsoleMessage) {
+function emitConsoleMessage(
+  onConsole: ((message: CodeConsoleMessage) => void) | undefined,
+  message: CodeConsoleMessage,
+) {
   try {
     onConsole?.(message);
   } catch {

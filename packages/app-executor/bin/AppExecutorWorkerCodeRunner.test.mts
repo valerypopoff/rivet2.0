@@ -142,6 +142,37 @@ function defaultCodeRunnerOptions(overrides: Partial<CodeRunnerOptions> = {}): C
   };
 }
 
+void describe('AppExecutorWorkerCodeRunner execution environment', () => {
+  void it('overrides process.env only for one worker execution', async () => {
+    const name = 'RIVET_TEST_APP_EXECUTOR_SCOPED_ENVIRONMENT';
+    const originalValue = process.env[name];
+    process.env[name] = 'physical';
+
+    try {
+      const runner = new AppExecutorWorkerCodeRunner(undefined, {
+        executionEnvironment: { [name]: 'managed' },
+      });
+      const outputs = await runner.runCode(
+        `
+          const replaceEnvironmentResult = Reflect.set(process, 'env', { ${name}: 'replacement' });
+          return { output: { type: 'string', value: [process.env.${name}, String(replaceEnvironmentResult)].join('/') } };
+        `,
+        {},
+        defaultCodeRunnerOptions({ includeProcess: true }),
+      );
+
+      assert.deepEqual(outputs, { output: { type: 'string', value: 'managed/false' } });
+      assert.equal(process.env[name], 'physical');
+    } finally {
+      if (originalValue === undefined) {
+        delete process.env[name];
+      } else {
+        process.env[name] = originalValue;
+      }
+    }
+  });
+});
+
 void after(async () => {
   await shutdownSharedAppExecutorCodeWorkerPool();
 });

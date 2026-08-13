@@ -335,8 +335,10 @@ node .yarn/releases/yarn-4.17.1.cjs check:graph-builder-node-specs
 ```
 
 The second command is part of `yarn test:style`, so changing a built-in
-authoring adapter, registered default, or captured preference contract without
-refreshing the checked asset fails locally and in CI.
+authoring adapter, registered default, captured preference contract, or any
+node-reference page that supplies generated help without refreshing the checked
+assets fails locally and in CI. Run the write command before staging those
+changes; do not wait for the CI freshness gate to discover the drift.
 
 When changing the authoring semantics or transaction normalization contract,
 also run the focused suites below. They cover project-aware and variadic ports,

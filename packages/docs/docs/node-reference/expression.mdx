@@ -29,3 +29,5 @@ Inputs are created from `{{name}}` interpolation tokens in the expression body.
 ## Notes
 
 Expression is best for compact value transforms. Use the [Code node](./code-new.mdx) when you need statements, local declarations, `await`, or an explicit `return`.
+
+The active executor provides the APIs it supports. Node execution provides `fetch`, `console`, `Rivet`, `require`, and `process`; browser execution provides `fetch`, `console`, and `Rivet`. Expression nodes execute trusted JavaScript; this executor boundary is not a security sandbox.

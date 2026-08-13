@@ -243,7 +243,10 @@ test('transactional authoring rejects a Data Bus relay cycle before accepting th
   assert.ok(result.diagnostics.some((entry) => entry.ruleId === 'data-bus-topology'));
   assert.ok(result.diagnostics.some((entry) => /relay cycle/u.test(entry.message)));
   assert.equal(kernel.getDraftRevision(), 0);
-  assert.deepEqual(kernel.getDraft().graphs[activeGraphId]!.connections, inputProject.graphs[activeGraphId]!.connections);
+  assert.deepEqual(
+    kernel.getDraft().graphs[activeGraphId]!.connections,
+    inputProject.graphs[activeGraphId]!.connections,
+  );
 });
 
 test('tool-delegation built-ins expose only the safe settings needed for auto-continuation', () => {
@@ -1470,20 +1473,11 @@ test('legacy Code exposes only source and named ports through its safe authoring
     outputs: [{ id: 'result', dataType: 'any' }],
   });
 
-  assert.throws(
-    () =>
-      catalog.applyNodeSettings({
-        node: legacyCode,
-        project: inputProject,
-        settings: { code: 'return { result: inputs.value };' },
-      }),
-    /runtime permission/,
-  );
-
   const updated = catalog.applyNodeSettings({
     node: legacyCode,
     project: inputProject,
     settings: {
+      code: 'return { result: inputs.value };',
       inputNames: ['value'],
       outputNames: ['result'],
     },
@@ -1504,46 +1498,11 @@ test('legacy Code exposes only source and named ports through its safe authoring
       allowConsole: true,
     },
   );
-
-  const variantPrivilegedCode = structuredClone(legacyCode);
-  variantPrivilegedCode.data = {
-    ...(variantPrivilegedCode.data as Record<string, unknown>),
-    allowFetch: false,
-    allowRequire: false,
-    allowRivet: false,
-    allowProcess: false,
-    allowConsole: false,
-  };
-  variantPrivilegedCode.variants = [
-    {
-      id: 'malformed-permission',
-      data: {
-        ...(variantPrivilegedCode.data as Record<string, unknown>),
-        allowRequire: 'yes',
-      },
-    },
-  ];
-  assert.throws(
-    () =>
-      catalog.applyNodeSettings({
-        node: variantPrivilegedCode,
-        project: project([variantPrivilegedCode]),
-        settings: { code: 'return {};' },
-      }),
-    /base or variant runtime permission/,
-  );
 });
 
-test('Code source is authorable on demand without exposing runtime permissions in compact projections', async () => {
+test('Code source is authorable on demand without exposing retired runtime fields in compact projections', async () => {
   const source = 'const value = {{bookContent}};\nreturn value;';
-  const code = node('codeNew', 'code', {
-    code: source,
-    allowFetch: true,
-    allowRequire: false,
-    allowRivet: false,
-    allowProcess: false,
-    allowConsole: false,
-  });
+  const code = node('codeNew', 'code', { code: source });
   const inputProject = project([code]);
   const { catalog, semantics } = setup(inputProject);
   const entry = catalog.getEntry('registered:codeNew')!;
@@ -1659,10 +1618,10 @@ test('Code source is authorable on demand without exposing runtime permissions i
     {
       type: 'get-node-specs',
       authoringChoiceIds: ['registered:codeNew'],
-      authoringSettings: { allowFetch: true },
+      authoringSettings: { unsupportedSetting: true },
     },
     {
-      requestId: 'reject-code-spec',
+      requestId: 'reject-unsupported-code-spec',
       requestIndex: 2,
       observedDraftRevision: 0,
       draft: inputProject,
@@ -1698,24 +1657,11 @@ test('Code source is authorable on demand without exposing runtime permissions i
   );
   assert.equal(JSON.stringify(rejectedSpecification).includes('"configured"'), false);
 
-  assert.throws(
-    () =>
-      catalog.applyNodeSettings({
-        node: code,
-        project: inputProject,
-        settings: { code: 'return {{chapters}};' },
-      }),
-    /runtime permission/,
-  );
-
-  const safeCode = structuredClone(code);
-  (safeCode.data as { allowFetch?: boolean }).allowFetch = false;
   const updated = catalog.applyNodeSettings({
-    node: safeCode,
-    project: project([safeCode]),
+    node: code,
+    project: inputProject,
     settings: { code: 'return {{chapters}};' },
   });
-  assert.equal((updated.data as { allowFetch?: boolean }).allowFetch, false);
   const candidate = project([updated]);
   assert.deepEqual(
     semantics
@@ -1726,15 +1672,6 @@ test('Code source is authorable on demand without exposing runtime permissions i
       })
       .inputs.map((port) => port.id),
     ['chapters'],
-  );
-  assert.throws(
-    () =>
-      catalog.applyNodeSettings({
-        node: updated,
-        project: candidate,
-        settings: { allowFetch: false },
-      }),
-    /not supported/,
   );
 });
 
@@ -1800,7 +1737,7 @@ test('safe-settings inspection reports oversized and invalid fields without misl
   });
 });
 
-test('transactional Code authoring persists source while permission expansion rejects atomically', () => {
+test('transactional Code authoring persists source without creating retired runtime fields', () => {
   const inputProject = project();
   const { semantics } = setup(inputProject);
   const allocatedIds = ['generated-code'] as NodeId[];
@@ -1836,37 +1773,26 @@ test('transactional Code authoring persists source while permission expansion re
     .getDraft()
     .graphs[activeGraphId]!.nodes.find((candidate) => candidate.id === 'generated-code')!;
   assert.equal((createdNode.data as { code?: string }).code, 'return {{bookContent}};');
-  assert.equal((createdNode.data as { allowFetch?: boolean }).allowFetch, false);
-
-  const rejected = kernel.applyPatch({
-    protocolVersion: GRAPH_BUILDER_PROTOCOL_VERSION,
-    patchId: 'expand-code-permissions',
-    expectedDraftRevision: 1,
-    operations: [
-      {
-        op: 'updateNodeSettings',
-        node: { kind: 'existing', nodeId: 'generated-code' },
-        settings: { allowFetch: true },
-      },
-    ],
-  });
-  assert.equal(rejected.disposition, 'rejected');
-  assert.equal(kernel.getDraftRevision(), 1);
-  assert.equal(
-    (
-      kernel.getDraft().graphs[activeGraphId]!.nodes.find((candidate) => candidate.id === 'generated-code')!.data as {
-        allowFetch?: boolean;
-      }
-    ).allowFetch,
-    false,
-  );
+  assert.equal(Object.hasOwn(createdNode.data as object, 'allowFetch'), false);
 });
 
-test('full-document Code edits preserve the runtime-permission boundary', () => {
-  const privilegedCode = node('codeNew', 'privileged-code', {
-    code: 'return 1;',
-    allowFetch: true,
+test('Graph Builder creates Expression nodes without retired runtime fields', () => {
+  const inputProject = project();
+  const { catalog } = setup(inputProject);
+
+  const created = catalog.createNode({
+    authoringChoiceId: 'registered:expression',
+    allocatedNodeId: 'generated-expression' as NodeId,
+    project: inputProject,
+    settings: { expression: '{{value}} + 1' },
   });
+
+  assert.equal((created.data as { expression?: string }).expression, '{{value}} + 1');
+  assert.equal(Object.hasOwn(created.data as object, 'allowFetch'), false);
+});
+
+test('full-document Code edits can change source regardless of retired permission fields', () => {
+  const privilegedCode = node('codeNew', 'privileged-code', { code: 'return 1;', allowFetch: true });
   const base = project([privilegedCode]);
   const { semantics } = setup(base);
   const touchedScope = {
@@ -1887,36 +1813,9 @@ test('full-document Code edits preserve the runtime-permission boundary', () => 
     candidate: changedSource,
     touchedScope,
   });
-  assert.ok(
-    changedSourceValidation.diagnostics.some(
-      (entry) => entry.ruleId === 'protected-node-mutation' && /cannot change Code source/u.test(entry.message),
-    ),
-  );
-
-  const safeBase = project();
-  const { semantics: safeSemantics } = setup(safeBase);
-  const unsafeCreated = structuredClone(safeBase);
-  const createdNode = node('codeNew', 'unsafe-created-code', {
-    code: 'return fetch("https://example.invalid");',
-    allowFetch: true,
-  });
-  unsafeCreated.graphs[activeGraphId]!.nodes.push(createdNode);
-  const unsafeCreatedValidation = safeSemantics.validateCandidate({
-    base: safeBase,
-    candidate: unsafeCreated,
-    touchedScope: {
-      graphIds: [activeGraphId],
-      nodeIds: [createdNode.id],
-      connectionKeys: [],
-      operationIndices: [],
-    },
-  });
-  assert.ok(
-    unsafeCreatedValidation.diagnostics.some(
-      (entry) =>
-        entry.ruleId === 'protected-node-mutation' &&
-        /cannot create or expand Code runtime permissions/u.test(entry.message),
-    ),
+  assert.equal(
+    changedSourceValidation.diagnostics.some((entry) => entry.ruleId === 'protected-node-mutation'),
+    false,
   );
 });
 

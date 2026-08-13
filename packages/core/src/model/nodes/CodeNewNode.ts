@@ -22,17 +22,16 @@ import {
   sanitizeGeneratedJsValueError,
   type JsValueInterpolationRuntimeContext,
 } from './jsValueInterpolation.js';
+import { ALL_CODE_RUNNER_OPTIONS } from '../../integrations/CodeRunnerOptions.js';
 
 export type CodeNewNode = ChartNode<'codeNew', CodeNewNodeData>;
 
 export type CodeNewNodeData = {
   code: string;
-  allowFetch?: boolean;
-  allowRequire?: boolean;
-  allowRivet?: boolean;
-  allowProcess?: boolean;
-  allowConsole?: boolean;
 };
+
+const CODE_RUNTIME_HELPER_MESSAGE =
+  'Node execution also provides "require" and "process". Browser execution provides "fetch", "console", and "Rivet".';
 
 const DEFAULT_CODE_NEW = dedent`
   // This is a Code node. Write JavaScript here and return one value.
@@ -141,11 +140,6 @@ export class CodeNewNodeImpl extends NodeImpl<CodeNewNode> {
       },
       data: {
         code: DEFAULT_CODE_NEW,
-        allowFetch: false,
-        allowRequire: false,
-        allowRivet: false,
-        allowProcess: false,
-        allowConsole: false,
       },
     };
   }
@@ -169,45 +163,13 @@ export class CodeNewNodeImpl extends NodeImpl<CodeNewNode> {
       {
         type: 'code',
         label: 'Code',
-        helperMessage: 'Use {{var}} to create input ports. Interpolated variables evaluate as the connected values.',
+        helperMessage:
+          'Use {{var}} to create input ports. Interpolated variables evaluate as the connected values. ' +
+          CODE_RUNTIME_HELPER_MESSAGE,
         dataKey: 'code',
         language: 'javascript',
         interpolationSyntax: 'js-value',
         enableFolding: true,
-      },
-      {
-        type: 'group',
-        label: 'Runtime permissions',
-        defaultOpen: true,
-        editors: [
-          {
-            type: 'toggle',
-            label: 'Allow "fetch"',
-            dataKey: 'allowFetch',
-          },
-          {
-            type: 'toggle',
-            label: 'Allow "Rivet"',
-            dataKey: 'allowRivet',
-          },
-          {
-            type: 'toggle',
-            label: 'Allow "console"',
-            dataKey: 'allowConsole',
-          },
-          {
-            type: 'toggle',
-            label: 'Allow "require"',
-            dataKey: 'allowRequire',
-            helperMessage: 'Only available with the Node executor',
-          },
-          {
-            type: 'toggle',
-            label: 'Allow "process"',
-            dataKey: 'allowProcess',
-            helperMessage: 'Only available with the Node executor',
-          },
-        ],
       },
     ];
   }
@@ -243,13 +205,7 @@ export class CodeNewNodeImpl extends NodeImpl<CodeNewNode> {
       const outputs = await context.codeRunner.runCode(
         appendCodeNodeSourceUrl(source, sourceUrl),
         inputs,
-        {
-          includeFetch: this.data.allowFetch ?? false,
-          includeRequire: this.data.allowRequire ?? false,
-          includeRivet: this.data.allowRivet ?? false,
-          includeProcess: this.data.allowProcess ?? false,
-          includeConsole: this.data.allowConsole ?? false,
-        },
+        ALL_CODE_RUNNER_OPTIONS,
         context.graphInputNodeValues,
         context.contextValues,
       );

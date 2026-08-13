@@ -3,6 +3,7 @@ import {
   DEFAULT_LLM_CHAT_V2_RETRY_ON_NON_200_REPEAT_TIMES,
 } from './chatV2Retry.js';
 import type { LLMChatV2NodeData } from './llmChatV2NodeData.js';
+import { getNonDefaultChatV2CredentialNames } from './chatV2CredentialNames.js';
 import { getChatV2ModelInfo } from './modelRegistry.js';
 import {
   anthropicCacheControlTtlOptions,
@@ -290,12 +291,19 @@ function getAdvancedBodySection(data: LLMChatV2NodeData): LLMChatV2BodySection {
 
 function getInlineModelBodyFields(data: LLMChatV2NodeData): LLMChatV2BodyField[] {
   const customBaseURL = getCustomProviderBaseURLBodyValue(data);
+  const credentialNames = getNonDefaultChatV2CredentialNames(data.provider, data.providerApiKeyNames);
   return [
     { label: 'Provider', value: getProviderBodyLabel(data) },
     getCustomProviderApiBodyField(data),
     customBaseURL ? { label: 'Base URL', value: customBaseURL } : undefined,
     { label: 'Model', value: getModelBodyValue(data) },
     ...(data.apiKeySource === 'input' ? [{ label: 'API key source', value: 'Input port' }] : []),
+    ...(credentialNames != null && data.apiKeySource !== 'input'
+      ? [
+          { label: 'Programmatic API key name', value: credentialNames.programmaticName },
+          { label: 'API key environment variable', value: credentialNames.environmentVariableName },
+        ]
+      : []),
     ...(data.provider === 'custom' && data.apiKeySource !== 'input'
       ? [
           data.customProviderApiKeyProgrammaticName?.trim()

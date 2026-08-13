@@ -516,37 +516,6 @@ function normalizeAdapter(adapter: GraphBuilderNodeAuthoringAdapter | undefined)
   });
 }
 
-const CODE_RUNTIME_PERMISSION_KEYS = [
-  'allowFetch',
-  'allowRequire',
-  'allowRivet',
-  'allowProcess',
-  'allowConsole',
-] as const;
-
-function codeDataSets(node: ChartNode): unknown[] {
-  return [node.data, ...(node.variants ?? []).map((variant) => variant.data)];
-}
-
-function codeRuntimePermissionState(node: ChartNode): unknown[] {
-  return codeDataSets(node).map((data) => {
-    if (data === null || typeof data !== 'object' || Array.isArray(data)) {
-      return data;
-    }
-    const record = data as Record<string, unknown>;
-    return CODE_RUNTIME_PERMISSION_KEYS.map((key) => record[key]);
-  });
-}
-
-function codeSourceState(node: ChartNode): unknown[] {
-  return codeDataSets(node).map((data) => {
-    if (data === null || typeof data !== 'object' || Array.isArray(data)) {
-      return data;
-    }
-    return (data as Record<string, unknown>).code;
-  });
-}
-
 function delegateConfigurationState(node: ChartNode): unknown[] {
   return [node.data, ...(node.variants ?? []).map((variant) => variant.data)];
 }
@@ -578,33 +547,6 @@ function getDelegateFunctionCallConfigurationError(node: ChartNode): string | un
   return undefined;
 }
 
-function hasUnsafeCodeRuntimePermission(node: ChartNode): boolean {
-  return codeDataSets(node).some((data) => {
-    if (data === null || typeof data !== 'object' || Array.isArray(data)) {
-      return true;
-    }
-    const record = data as Record<string, unknown>;
-    return CODE_RUNTIME_PERMISSION_KEYS.some((key) => {
-      const value = record[key];
-      return value !== undefined && value !== false;
-    });
-  });
-}
-
-function applyCodeAuthoringSettings(node: ChartNode, settings: PortableJsonObject): ChartNode {
-  if (node.data === null || typeof node.data !== 'object' || Array.isArray(node.data)) {
-    throw new Error('Code node settings payload is malformed.');
-  }
-  const currentData = node.data as Record<string, unknown>;
-  if (Object.hasOwn(settings, 'code') && settings.code !== currentData.code && hasUnsafeCodeRuntimePermission(node)) {
-    throw new Error('Code source cannot be changed while a base or variant runtime permission is enabled.');
-  }
-
-  const nextNode = cloneDeep(node);
-  Object.assign(nextNode.data as Record<string, unknown>, settings);
-  return nextNode;
-}
-
 function createBuiltInAdapter(
   nodeType: string,
   project: GraphBuilderAuthoringProject,
@@ -634,15 +576,6 @@ function createBuiltInAdapter(
         }
         return projection;
       },
-      applySettings: ({ node, settings }) => applyCodeAuthoringSettings(node, settings),
-    });
-  }
-
-  if (nodeType === 'codeNew') {
-    return normalizeAdapter({
-      description: getBuiltInDescription(nodeType),
-      settings: ownRecordValue(STATIC_BUILT_IN_SETTINGS, nodeType) ?? [],
-      applySettings: ({ node, settings }) => applyCodeAuthoringSettings(node, settings),
     });
   }
 
@@ -1172,28 +1105,6 @@ export class GraphBuilderAuthoringCatalogSnapshot {
         baseNode.type !== candidateNode.type ||
         !deepEqual(delegateConfigurationState(baseNode), delegateConfigurationState(candidateNode));
       return configurationChanged ? getDelegateFunctionCallConfigurationError(candidateNode) : undefined;
-    }
-
-    if (candidateNode.type !== 'code' && candidateNode.type !== 'codeNew') {
-      return undefined;
-    }
-
-    if (
-      hasUnsafeCodeRuntimePermission(candidateNode) &&
-      (!baseNode ||
-        baseNode.type !== candidateNode.type ||
-        !deepEqual(codeRuntimePermissionState(baseNode), codeRuntimePermissionState(candidateNode)))
-    ) {
-      return 'Graph Builder cannot create or expand Code runtime permissions through virtual-document editing.';
-    }
-
-    if (
-      baseNode &&
-      baseNode.type === candidateNode.type &&
-      hasUnsafeCodeRuntimePermission(baseNode) &&
-      !deepEqual(codeSourceState(baseNode), codeSourceState(candidateNode))
-    ) {
-      return 'Graph Builder cannot change Code source while a base or variant runtime permission is enabled.';
     }
 
     return undefined;

@@ -36,10 +36,6 @@ export const CodeNodeAIAssistEditor: FC<
         const configuration = coerceTypeOptional(outputs.configuration, 'object') as {
           inputs: string[];
           outputs: string[];
-          allowFetch: boolean;
-          allowRequire: boolean;
-          allowProcess: boolean;
-          allowRivet: boolean;
         };
 
         if (code) {
@@ -48,10 +44,6 @@ export const CodeNodeAIAssistEditor: FC<
             code,
             inputNames: configuration.inputs,
             outputNames: configuration.outputs,
-            allowFetch: configuration.allowFetch,
-            allowRequire: configuration.allowRequire,
-            allowProcess: configuration.allowProcess,
-            allowRivet: configuration.allowRivet,
           };
         }
 

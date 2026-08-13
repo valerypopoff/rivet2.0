@@ -11,7 +11,7 @@ import type {
 } from './ProcessContext.js';
 import type { Project, ProjectId } from './Project.js';
 import type { Settings } from './Settings.js';
-import type { FrozenNodeOutputsByGraph, NodeResultOrigin } from './GraphProcessor.js';
+import type { FrozenNodeOutputsByGraph, NodeResultOrigin, ReplayEventTiming } from './GraphProcessor.js';
 import type { GraphProgress } from './GraphProgress.js';
 import type { RivetWebAppStorage } from './UiGraphWebAppStorage.js';
 
@@ -28,7 +28,7 @@ export type CodeConsoleMessage = {
   level: CodeConsoleLevel;
 };
 
-type WithExecution<T extends object> = T & { execution: GraphExecutionMetadata };
+type WithExecution<T extends object> = T & { execution: GraphExecutionMetadata } & ReplayEventTiming;
 
 export type SerializedProcessEventMap = {
   start: WithExecution<{
@@ -99,9 +99,9 @@ export type SerializedProcessEventMap = {
   llmProfileAttempt: WithExecution<LLMProfileAttemptTraceEvent>;
   toolCallFinished: WithExecution<ToolCallFinishedEvent>;
   nodeOutputsCleared: WithExecution<{ node: ChartNode; processId?: ProcessId }>;
-  error: { error: Error | string };
-  done: { results: GraphOutputs };
-  abort: { successful: boolean; error?: string | Error };
+  error: { error: Error | string } & ReplayEventTiming;
+  done: { results: GraphOutputs } & ReplayEventTiming;
+  abort: { successful: boolean; error?: string | Error } & ReplayEventTiming;
   finish: void;
   trace: string;
   /** Present only when RecordingPlayer re-emits a historical lifecycle transition. */

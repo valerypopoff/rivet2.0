@@ -5,10 +5,14 @@ import {
   ExpressionNodeImpl,
   IsomorphicCodeRunner,
   NotAllowedCodeRunner,
+  type CodeRunner,
+  type CodeRunnerOptions,
   interpolateExpressionSource,
   type ExpressionNode,
+  type Inputs,
   type InternalProcessContext,
   type NodeBodySpec,
+  type Outputs,
   type PortId,
 } from '../../../src/index.js';
 
@@ -29,6 +33,20 @@ const createContext = (codeRunner = new IsomorphicCodeRunner()) =>
     contextValues: {},
   }) as InternalProcessContext;
 
+class CapturingCodeRunner implements CodeRunner {
+  options: CodeRunnerOptions | undefined;
+
+  async runCode(_code: string, _inputs: Inputs, options: CodeRunnerOptions): Promise<Outputs> {
+    this.options = options;
+    return {
+      output: {
+        type: 'any',
+        value: 'captured',
+      },
+    };
+  }
+}
+
 describe('ExpressionNode', () => {
   it('can create node', () => {
     const node = ExpressionNodeImpl.create();
@@ -45,13 +63,30 @@ describe('ExpressionNode', () => {
       {
         type: 'code',
         label: 'Expression',
-        helperMessage: 'Use {{var}} to create input ports. Interpolated variables evaluate as the connected values.',
+        helperMessage:
+          'Use {{var}} to create input ports. Interpolated variables evaluate as the connected values. Node execution also provides "require" and "process". Browser execution provides "fetch", "console", and "Rivet".',
         dataKey: 'expression',
         language: 'javascript',
         interpolationSyntax: 'js-value',
         enableFolding: true,
       },
     ]);
+  });
+
+  it('always requests every runtime API, ignoring retired saved permission fields', async () => {
+    const codeRunner = new CapturingCodeRunner();
+    const node = createNode({ expression: '1' });
+    (node.chartNode.data as Record<string, unknown>).allowRivet = false;
+
+    await node.process({}, createContext(codeRunner));
+
+    assert.deepStrictEqual(codeRunner.options, {
+      includeConsole: true,
+      includeFetch: true,
+      includeProcess: true,
+      includeRequire: true,
+      includeRivet: true,
+    });
   });
 
   it('renders a colorized expression preview body', () => {

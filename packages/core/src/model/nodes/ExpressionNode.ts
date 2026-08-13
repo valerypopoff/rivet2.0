@@ -22,12 +22,16 @@ import {
   sanitizeGeneratedJsValueError,
   type JsValueInterpolationRuntimeContext,
 } from './jsValueInterpolation.js';
+import { ALL_CODE_RUNNER_OPTIONS } from '../../integrations/CodeRunnerOptions.js';
 
 export type ExpressionNode = ChartNode<'expression', ExpressionNodeData>;
 
 export type ExpressionNodeData = {
   expression: string;
 };
+
+const CODE_RUNTIME_HELPER_MESSAGE =
+  'Node execution also provides "require" and "process". Browser execution provides "fetch", "console", and "Rivet".';
 
 const DEFAULT_EXPRESSION = '{{a}} == "123" ? {{b}} : {{c}}';
 const MAX_BODY_PREVIEW_LINES = 15;
@@ -113,7 +117,9 @@ export class ExpressionNodeImpl extends NodeImpl<ExpressionNode> {
       {
         type: 'code',
         label: 'Expression',
-        helperMessage: 'Use {{var}} to create input ports. Interpolated variables evaluate as the connected values.',
+        helperMessage:
+          'Use {{var}} to create input ports. Interpolated variables evaluate as the connected values. ' +
+          CODE_RUNTIME_HELPER_MESSAGE,
         dataKey: 'expression',
         language: 'javascript',
         interpolationSyntax: 'js-value',
@@ -157,13 +163,7 @@ export class ExpressionNodeImpl extends NodeImpl<ExpressionNode> {
       return await context.codeRunner.runCode(
         source,
         inputs,
-        {
-          includeFetch: false,
-          includeRequire: false,
-          includeRivet: false,
-          includeProcess: false,
-          includeConsole: false,
-        },
+        ALL_CODE_RUNNER_OPTIONS,
         context.graphInputNodeValues,
         context.contextValues,
       );

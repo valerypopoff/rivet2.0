@@ -6,8 +6,12 @@ import {
   IsomorphicCodeRunner,
   NotAllowedCodeRunner,
   type CodeNode,
+  type CodeRunner,
+  type CodeRunnerOptions,
+  type Inputs,
   type InternalProcessContext,
   type NodeBodySpec,
+  type Outputs,
   type ProcessId,
 } from '../../../src/index.js';
 
@@ -29,12 +33,42 @@ const createContext = (codeRunner = new IsomorphicCodeRunner()) =>
     processId: 'test-process' as ProcessId,
   }) as InternalProcessContext;
 
+class CapturingCodeRunner implements CodeRunner {
+  options: CodeRunnerOptions | undefined;
+
+  async runCode(_code: string, _inputs: Inputs, options: CodeRunnerOptions): Promise<Outputs> {
+    this.options = options;
+    return {
+      output1: {
+        type: 'any',
+        value: 'captured',
+      },
+    };
+  }
+}
+
 describe('CodeNode', () => {
   it('creates the legacy Code node label', () => {
     const node = CodeNodeImpl.create();
 
     assert.strictEqual(node.type, 'code');
     assert.strictEqual(node.title, 'Code (legacy)');
+  });
+
+  it('always requests every runtime API, ignoring retired saved permission fields', async () => {
+    const codeRunner = new CapturingCodeRunner();
+    const node = createNode({ code: 'return { output1: { type: "any", value: 1 } };' });
+    (node.chartNode.data as Record<string, unknown>).allowRequire = false;
+
+    await node.process({}, createContext(codeRunner));
+
+    assert.deepStrictEqual(codeRunner.options, {
+      includeConsole: true,
+      includeFetch: true,
+      includeProcess: true,
+      includeRequire: true,
+      includeRivet: true,
+    });
   });
 
   it('returns a colorized body preview without per-line ellipsis truncation', () => {
@@ -121,12 +155,9 @@ describe('CodeNode', () => {
 
   it('adds code-node line information to syntax errors after the run fails', async () => {
     const node = createNode({
-      code: [
-        'const first = 1;',
-        'if (first {',
-        '  return { output1: { type: "number", value: first } };',
-        '}',
-      ].join('\n'),
+      code: ['const first = 1;', 'if (first {', '  return { output1: { type: "number", value: first } };', '}'].join(
+        '\n',
+      ),
     });
 
     await assert.rejects(
@@ -164,10 +195,7 @@ describe('CodeNode', () => {
       () => node.process({}, createContext()),
       (error: unknown) => {
         assert.ok(error instanceof Error);
-        assert.match(
-          error.message,
-          /return \{ "type": "control-flow-excluded", "value": undefined \}/,
-        );
+        assert.match(error.message, /return \{ "type": "control-flow-excluded", "value": undefined \}/);
         assert.match(error.message, /return \{ "type": "any", "value": undefined \}/);
         assert.doesNotMatch(error.message, /undefiend/);
         return true;

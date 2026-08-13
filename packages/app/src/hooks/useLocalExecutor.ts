@@ -42,7 +42,7 @@ import {
   recordingPlaybackStartingState,
 } from '../state/execution';
 import { fillMissingSettingsFromEnvironmentVariables } from '../utils/tauri';
-import { getLLMChatV2CustomProviderApiKeyEnvVarNames } from '../utils/chatV2CustomProviderEnv';
+import { getLLMChatV2ApiKeyEnvVarNames } from '../utils/chatV2ProviderEnv';
 import { trivetState } from '../state/trivet';
 import { runTrivet } from '@valerypopoff/trivet';
 import {
@@ -464,7 +464,7 @@ export function useLocalExecutor() {
               projectNodeRegistry.getPlugins(),
               {
                 environmentProvider,
-                extraEnvVarNames: getLLMChatV2CustomProviderApiKeyEnvVarNames(tempProject),
+                extraEnvVarNames: getLLMChatV2ApiKeyEnvVarNames(tempProject),
               },
             ),
             nativeApi: new TauriNativeApi(),
@@ -628,7 +628,7 @@ export function useLocalExecutor() {
                     projectNodeRegistry.getPlugins(),
                     {
                       environmentProvider,
-                      extraEnvVarNames: getLLMChatV2CustomProviderApiKeyEnvVarNames(project),
+                      extraEnvVarNames: getLLMChatV2ApiKeyEnvVarNames(project),
                     },
                   ),
                   nativeApi: new TauriNativeApi(),

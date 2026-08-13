@@ -19,6 +19,7 @@ import {
   buildCodeNodeSourceUrl,
   enrichCodeNodeErrorWithLocation,
 } from './codeNodeErrorDiagnostics.js';
+import { ALL_CODE_RUNNER_OPTIONS } from '../../integrations/CodeRunnerOptions.js';
 
 export type CodeNode = ChartNode<'code', CodeNodeData>;
 
@@ -26,12 +27,10 @@ export type CodeNodeData = {
   code: string;
   inputNames: string | string[];
   outputNames: string | string[];
-  allowFetch?: boolean;
-  allowRequire?: boolean;
-  allowRivet?: boolean;
-  allowProcess?: boolean;
-  allowConsole?: boolean;
 };
+
+const CODE_RUNTIME_HELPER_MESSAGE =
+  'Node execution also provides "require" and "process". Browser execution provides "fetch", "console", and "Rivet".';
 
 export class CodeNodeImpl extends NodeImpl<CodeNode> {
   static create(): CodeNode {
@@ -58,11 +57,6 @@ export class CodeNodeImpl extends NodeImpl<CodeNode> {
         `,
         inputNames: 'input1',
         outputNames: 'output1',
-        allowFetch: false,
-        allowRequire: false,
-        allowRivet: false,
-        allowProcess: false,
-        allowConsole: false,
       },
     };
 
@@ -113,6 +107,7 @@ export class CodeNodeImpl extends NodeImpl<CodeNode> {
       {
         type: 'code',
         label: '',
+        helperMessage: CODE_RUNTIME_HELPER_MESSAGE,
         dataKey: 'code',
         language: 'javascript',
         enableFolding: true,
@@ -138,40 +133,6 @@ export class CodeNodeImpl extends NodeImpl<CodeNode> {
           identity: 'value-derived',
           valueToPortId: 'sanitize-identifier',
         },
-      },
-      {
-        type: 'group',
-        label: 'Runtime permissions',
-        defaultOpen: true,
-        editors: [
-          {
-            type: 'toggle',
-            label: 'Allow "fetch"',
-            dataKey: 'allowFetch',
-          },
-          {
-            type: 'toggle',
-            label: 'Allow "Rivet"',
-            dataKey: 'allowRivet',
-          },
-          {
-            type: 'toggle',
-            label: 'Allow "console"',
-            dataKey: 'allowConsole',
-          },
-          {
-            type: 'toggle',
-            label: 'Allow "require"',
-            dataKey: 'allowRequire',
-            helperMessage: 'Only available with the Node executor',
-          },
-          {
-            type: 'toggle',
-            label: 'Allow "process"',
-            dataKey: 'allowProcess',
-            helperMessage: 'Only available with the Node executor',
-          },
-        ],
       },
     ];
   }
@@ -207,13 +168,7 @@ export class CodeNodeImpl extends NodeImpl<CodeNode> {
       outputs = await context.codeRunner.runCode(
         appendCodeNodeSourceUrl(this.data.code, sourceUrl),
         inputs,
-        {
-          includeFetch: this.data.allowFetch ?? false,
-          includeRequire: this.data.allowRequire ?? false,
-          includeRivet: this.data.allowRivet ?? false,
-          includeProcess: this.data.allowProcess ?? false,
-          includeConsole: this.data.allowConsole ?? false,
-        },
+        ALL_CODE_RUNNER_OPTIONS,
         context.graphInputNodeValues,
         context.contextValues,
       );

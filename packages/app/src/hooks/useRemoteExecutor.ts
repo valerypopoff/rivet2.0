@@ -39,7 +39,7 @@ import {
   shouldFlushFrozenNodeOutputsForRemoteDebuggerEvent,
 } from './remoteExecutorHelpers.js';
 import { handleError } from '../utils/errorHandling.js';
-import { getLLMChatV2CustomProviderApiKeyEnvVarNames } from '../utils/chatV2CustomProviderEnv.js';
+import { getLLMChatV2ApiKeyEnvVarNames } from '../utils/chatV2ProviderEnv.js';
 import { useEnvironmentProvider } from '../providers/ProvidersContext.js';
 import { pluginsState } from '../state/plugins.js';
 import { withDerivedProjectPluginSpecs } from '../utils/pluginUsage.js';
@@ -451,7 +451,7 @@ export function useRemoteExecutor() {
           projectNodeRegistry.getPlugins(),
           {
             environmentProvider,
-            extraEnvVarNames: getLLMChatV2CustomProviderApiKeyEnvVarNames(projectToUpload),
+            extraEnvVarNames: getLLMChatV2ApiKeyEnvVarNames(projectToUpload),
           },
         );
 
@@ -654,7 +654,7 @@ export function useRemoteExecutor() {
                 projectNodeRegistry.getPlugins(),
                 {
                   environmentProvider,
-                  extraEnvVarNames: getLLMChatV2CustomProviderApiKeyEnvVarNames(projectToUpload),
+                  extraEnvVarNames: getLLMChatV2ApiKeyEnvVarNames(projectToUpload),
                 },
               );
 
