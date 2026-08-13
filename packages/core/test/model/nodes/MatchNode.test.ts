@@ -71,9 +71,16 @@ describe('MatchNode', () => {
       { value: false, label: 'Trigger all matching cases' },
       { value: true, label: 'Trigger first only' },
     ]);
+    const valueModeEditor = allMatches
+      .getEditors()
+      .find((editor) => editor.type === 'segmented' && editor.dataKey === 'valueInputMode');
+    assert.deepEqual(valueModeEditor?.options, [
+      { value: 'shared', label: 'One shared custom value' },
+      { value: 'per-output', label: 'Custom values per case' },
+    ]);
     assert.deepEqual(
       allMatches.getEditors().map((editor) => editor.label),
-      ['Matching cases to trigger', 'Case values', 'Cases (regular expressions)'],
+      ['Matching cases to trigger', 'Custom case values', 'Cases (regular expressions)'],
     );
   });
 
@@ -112,10 +119,10 @@ describe('MatchNode', () => {
     });
 
     assert.deepEqual(
-      node.getInputDefinitions().map(({ id, required }) => ({ id, required })),
+      node.getInputDefinitions().map(({ id, title, required }) => ({ id, title, required })),
       [
-        { id: 'input', required: true },
-        { id: 'value', required: undefined },
+        { id: 'input', title: 'Test', required: true },
+        { id: 'value', title: 'Custom value', required: undefined },
       ],
     );
     assert.ok(node.getOutputDefinitions().every(({ dataType }) => dataType === 'any'));

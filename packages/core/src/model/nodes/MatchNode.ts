@@ -62,10 +62,10 @@ export class MatchNodeImpl extends NodeImpl<MatchNode> {
     if (this.getValueInputMode() === 'shared') {
       inputs.push({
         id: 'value' as PortId,
-        title: 'Value',
+        title: 'Custom value',
         dataType: 'any',
         description:
-          'The value passed through to every matching output. If unconnected, the test value will be passed through.',
+          'The optional value passed through to every matching output. If unconnected, the Test value is passed through.',
       });
     } else {
       const portIds = this.getCasePortIds();
@@ -75,7 +75,7 @@ export class MatchNodeImpl extends NodeImpl<MatchNode> {
           id: this.getCaseValueInputId(portIds[index]!) as PortId,
           title: this.getCaseTitle(caseValue, index),
           dataType: 'any',
-          description: `The value emitted when /${caseValue}/ matches the test value. If unconnected, Test is passed through.`,
+          description: `The optional custom value emitted when /${caseValue}/ matches the Test value. If unconnected, Test is passed through.`,
         });
       });
 
@@ -84,7 +84,7 @@ export class MatchNodeImpl extends NodeImpl<MatchNode> {
         title: 'Unmatched',
         dataType: 'any',
         description:
-          'The value emitted when no regular expression matches the test value. If unconnected, Test is passed through.',
+          'The optional custom value emitted when no regular expression matches the Test value. If unconnected, Test is passed through.',
       });
     }
 
@@ -102,8 +102,8 @@ export class MatchNodeImpl extends NodeImpl<MatchNode> {
         dataType: 'any',
         description:
           this.getValueInputMode() === 'shared'
-            ? `The shared Value (or Test if Value is unconnected) passed through if the test value matches /${this.data.cases[i]!}/.`
-            : `The corresponding ${this.getCaseTitle(this.data.cases[i], i)} Value (or Test if it is unconnected) passed through if the test value matches /${this.data.cases[i]!}/.`,
+            ? `The shared Custom value (or Test if Custom value is unconnected) passed through if the test value matches /${this.data.cases[i]!}/.`
+            : `The corresponding ${this.getCaseTitle(this.data.cases[i], i)} custom value (or Test if it is unconnected) passed through if the test value matches /${this.data.cases[i]!}/.`,
       });
     }
 
@@ -113,8 +113,8 @@ export class MatchNodeImpl extends NodeImpl<MatchNode> {
       dataType: 'any',
       description:
         this.getValueInputMode() === 'shared'
-          ? 'The shared Value (or Test if Value is unconnected) passed through if no regexes match.'
-          : 'The Unmatched Value (or Test if it is unconnected) passed through if no regexes match.',
+          ? 'The shared Custom value (or Test if Custom value is unconnected) passed through if no regexes match.'
+          : 'The Unmatched custom value (or Test if it is unconnected) passed through if no regexes match.',
     });
 
     return outputs;
@@ -138,12 +138,12 @@ export class MatchNodeImpl extends NodeImpl<MatchNode> {
       },
       {
         type: 'segmented',
-        label: 'Case values',
+        label: 'Custom case values',
         dataKey: 'valueInputMode',
         defaultValue: 'shared',
         options: [
-          { value: 'shared', label: 'One shared value' },
-          { value: 'per-output', label: 'Values per case' },
+          { value: 'shared', label: 'One shared custom value' },
+          { value: 'per-output', label: 'Custom values per case' },
         ],
       },
       {
@@ -170,7 +170,7 @@ export class MatchNodeImpl extends NodeImpl<MatchNode> {
   static getUIData(): NodeUIData {
     return {
       infoBoxBody: dedent`
-        Configure any number of regular expressions, each corresponding to an output. Trigger all matched outputs by default, or choose Trigger first matching case. Shared value mode passes one value to every active output, while Per output mode gives each case and Unmatched output its own value input.
+        Configure any number of regular expressions, each corresponding to an output. Trigger all matched outputs by default, or choose Trigger first matching case. One shared custom value passes one optional value to every active output, while Custom values per case gives each case and Unmatched output its own optional custom value input.
       `,
       infoBoxTitle: 'Regex Match Node',
       contextMenuTitle: 'Regex Match',

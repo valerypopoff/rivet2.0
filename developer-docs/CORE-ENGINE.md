@@ -222,7 +222,7 @@ each string-list row. A stored-stable binding may also declare
 When a row is renamed, reordered, migrated from a legacy generated id, or
 deleted, the app remaps or removes the primary port and every companion port
 together. `Regex Match` uses this for its case output and `value-<case-id>`
-input in Per output value mode. This is an editor-only connection-preservation
+input in Custom values per case mode. This is an editor-only connection-preservation
 contract: runtime nodes still own which ports are currently exposed, and mode
 changes rely on recoverable connections rather than guessing or fan-out.
 
@@ -233,8 +233,8 @@ the **Matching cases to trigger** segmented selector (**Trigger all matching
 cases** / **Trigger first only**), so this UI does not require a project
 migration or add another runtime mode.
 
-In Per output value mode, the canvas presents the paired inputs beneath a
-non-port **Values** label after `Test`, with non-interactive dotted guides that
+In Custom values per case mode, the canvas presents the paired inputs beneath a
+non-port **Custom values** label after `Test`, with non-interactive dotted guides that
 start after each input circle and stop before its matching output label. Their
 persisted ids remain `value-<case-id>` and `value-unmatched`; the concise
 visible labels, group heading, and guides do not affect execution, saved

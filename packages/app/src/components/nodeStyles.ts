@@ -772,7 +772,7 @@ export const nodeStyles = css`
     gap: 8px;
   }
 
-  /* Regex Match exposes Test and a Values group label before its paired
+  /* Regex Match exposes Test and a Custom values group label before its paired
    * Per-output inputs. Keep the case outputs on those paired input rows. */
   .node-ports.match-per-output-values .output-ports {
     padding-top: 52px;

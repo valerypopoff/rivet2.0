@@ -619,7 +619,7 @@ export const NodePorts: FC<NodePortsProps> = ({ node, connections }) => {
 
             return (
               <Fragment key={`input-${input.id}`}>
-                {isFirstRegexMatchValueInput && <div className="regex-match-values-label">Values</div>}
+                {isFirstRegexMatchValueInput && <div className="regex-match-values-label">Custom values</div>}
                 <Port
                   title={input.title}
                   id={input.id}

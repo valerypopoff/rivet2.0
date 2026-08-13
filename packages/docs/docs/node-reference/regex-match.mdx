@@ -17,7 +17,7 @@ The node can be configured to either run the _first_ matching output port, or to
 
 This node is useful for routing control flow based on the content of a string. For example, you can use the Regex Match Node to check if a user's message contains certain keywords and route the conversation accordingly.
 
-Choose how values reach the outputs with **Case values**. **One shared value** keeps the original single optional `Value` input: its value reaches every output that matches, or the `Test` value is passed through when `Value` is unconnected. **Values per case** adds a canvas-only **Values** group after `Test`, containing one optional input for every case and one for `Unmatched`. Each input falls back to `Test` independently when it is unconnected. Dotted row guides show which input belongs to each labelled output, so each route can emit its own value and type.
+Choose how custom values reach the outputs with **Custom case values**. **One shared custom value** keeps the original single optional `Custom value` input: its value reaches every output that matches, or the `Test` value is passed through when `Custom value` is unconnected. **Custom values per case** adds a canvas-only **Custom values** group after `Test`, containing one optional custom value for every case and one for `Unmatched`. Each input falls back to `Test` independently when it is unconnected. Dotted row guides show which input belongs to each labelled output, so each route can emit its own value and type.
 
 <Tabs
   defaultValue="inputs"
@@ -32,12 +32,12 @@ Choose how values reach the outputs with **Case values**. **One shared value** k
 
 ## Inputs
 
-| Case values mode | Title     | Data Type | Description                                              | Notes                                                 |
-| ---------------- | --------- | --------- | -------------------------------------------------------- | ----------------------------------------------------- |
-| Both             | Test      | `string`  | The string to be tested against the regular expressions. | Required. The input is coerced to a string if needed. |
-| One shared value | Value     | `any`     | The value passed to every matching output.               | Optional. If unconnected, `Test` is passed through.   |
-| Values per case  | `[Case]`  | `any`     | The value emitted for that matching case.                | Shown under **Values**; optional, otherwise `Test`.   |
-| Values per case  | Unmatched | `any`     | The value emitted when no case matches.                  | Shown under **Values**; optional, otherwise `Test`.   |
+| Custom case value mode  | Title        | Data Type | Description                                              | Notes                                                      |
+| ----------------------- | ------------ | --------- | -------------------------------------------------------- | ---------------------------------------------------------- |
+| Both                    | Test         | `string`  | The string to be tested against the regular expressions. | Required. The input is coerced to a string if needed.      |
+| One shared custom value | Custom value | `any`     | The value passed to every matching output.               | Optional. If unconnected, `Test` is passed through.        |
+| Custom values per case  | `[Case]`     | `any`     | The custom value emitted for that matching case.         | Shown under **Custom values**; optional, otherwise `Test`. |
+| Custom values per case  | Unmatched    | `any`     | The custom value emitted when no case matches.           | Shown under **Custom values**; optional, otherwise `Test`. |
 
 </TabItem>
 
@@ -56,11 +56,11 @@ Choose how values reach the outputs with **Case values**. **One shared value** k
 
 ## Editor Settings
 
-| Setting                     | Description                                                                                                                       | Default Value              | Use Input Toggle | Input Data Type |
-| --------------------------- | --------------------------------------------------------------------------------------------------------------------------------- | -------------------------- | ---------------- | --------------- |
-| Matching cases to trigger   | **Trigger all matching cases** runs every matching case. **Trigger first only** runs only the first matching case.                | Trigger all matching cases | No               | N/A             |
-| Case values                 | **One shared value** uses one optional `Value` input for all outputs. **Values per case** adds the **Values** group after `Test`. | One shared value           | No               | N/A             |
-| Cases (regular expressions) | The list of regular expression cases to match against.                                                                            | `YES`, `NO`                | No               | N/A             |
+| Setting                     | Description                                                                                                                                                   | Default Value              | Use Input Toggle | Input Data Type |
+| --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------- | ---------------- | --------------- |
+| Matching cases to trigger   | **Trigger all matching cases** runs every matching case. **Trigger first only** runs only the first matching case.                                            | Trigger all matching cases | No               | N/A             |
+| Custom case values          | **One shared custom value** uses one optional `Custom value` input for all outputs. **Custom values per case** adds the **Custom values** group after `Test`. | One shared custom value    | No               | N/A             |
+| Cases (regular expressions) | The list of regular expression cases to match against.                                                                                                        | `YES`, `NO`                | No               | N/A             |
 
 </TabItem>
 
@@ -72,7 +72,7 @@ Choose how values reach the outputs with **Case values**. **One shared value** k
    > Would you like to hear about information about cats or dogs first? Please only pick one! I will give you information on both, I just want to know what you'd like to hear first.
 2. Create a Regex Match Node and connect the `Response` output of the LLM Chat Node to the `Test` input of the Regex Match Node.
 3. In the body of the Regex Match Node, set the regular expressions to `cats` and `dogs`.
-4. Set **Case values** to **Values per case**. Connect three [Text Nodes](./text.mdx) with the values "You chose cats!", "You chose dogs!", and "Sorry, I didn't understand that. Please try again." directly to the `cats`, `dogs`, and `Unmatched` inputs under **Values**.
+4. Set **Custom case values** to **Custom values per case**. Connect three [Text Nodes](./text.mdx) with the values "You chose cats!", "You chose dogs!", and "Sorry, I didn't understand that. Please try again." directly to the `cats`, `dogs`, and `Unmatched` inputs under **Custom values**.
 5. Connect the Regex Match outputs to the next work for each route.
 6. Run the graph. Depending on the AI's response, the corresponding output is executed with its own configured text.
 
