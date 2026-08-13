@@ -69,7 +69,8 @@ Proxy shell scripts run inside Linux containers, so they must stay LF-normalized
 Current subdomains:
 
 - `ops/compose/`
-  - Docker Compose stacks
+  - Docker Compose stacks and narrowly scoped launcher-applied overrides, such
+    as the runtime-only dotenv attachment for API/executor services
 - `ops/docker/`
   - Compose-only Dockerfiles
 - `ops/nginx/`

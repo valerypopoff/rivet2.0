@@ -119,6 +119,18 @@ async function installAppSettingsRoute(page: Page): Promise<void> {
     updatedAt: null as string | null,
     source: 'default',
   };
+  let environmentVariableSettings = {
+    variables: [] as Array<{
+      id: string;
+      name: string;
+      valueConfigured: boolean;
+      browserAccess: boolean;
+      overridesPhysicalEnvironment: boolean;
+    }>,
+    updatedAt: null as string | null,
+    source: 'default',
+  };
+  let environmentVariableValues = new Map<string, string>();
 
   await page.route('**/api/config', async (route) => {
     const url = new URL(route.request().url());
@@ -144,6 +156,79 @@ async function installAppSettingsRoute(page: Page): Promise<void> {
   await page.route('**/api/app-settings/**', async (route) => {
     const url = new URL(route.request().url());
     const method = route.request().method();
+
+    const environmentVariableValueMatch = url.pathname.match(
+      /^\/api\/app-settings\/environment-variables\/([^/]+)\/value$/,
+    );
+    if (environmentVariableValueMatch) {
+      const id = decodeURIComponent(environmentVariableValueMatch[1]!);
+      const value = environmentVariableValues.get(id);
+      await route.fulfill(
+        value === undefined
+          ? {
+              status: 404,
+              contentType: 'application/json',
+              body: JSON.stringify({ error: 'Environment variable not found' }),
+            }
+          : {
+              status: 200,
+              contentType: 'application/json',
+              headers: {
+                'Cache-Control': 'no-store, no-cache, must-revalidate',
+              },
+              body: JSON.stringify({ id, value }),
+            },
+      );
+      return;
+    }
+
+    if (url.pathname === '/api/app-settings/environment-variables') {
+      if (method === 'PATCH') {
+        const body = route.request().postDataJSON() as {
+          variables?: Array<{
+            id?: string;
+            name?: string;
+            value?: string;
+            browserAccess?: boolean;
+          }>;
+        };
+        const nextValues = new Map<string, string>();
+        environmentVariableSettings = {
+          variables: (body.variables ?? []).map((entry, index) => {
+            const id = entry.id ?? `environment-variable-${index + 1}`;
+            nextValues.set(id, entry.value ?? environmentVariableValues.get(id) ?? '');
+            return {
+              id,
+              name: entry.name ?? '',
+              valueConfigured: true,
+              browserAccess: entry.browserAccess ?? false,
+              overridesPhysicalEnvironment: false,
+            };
+          }),
+          updatedAt: '2026-06-30T12:01:00.000Z',
+          source: 'app-settings',
+        };
+        environmentVariableValues = nextValues;
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify(environmentVariableSettings),
+        });
+        return;
+      }
+
+      if (method !== 'GET') {
+        await route.fallback();
+        return;
+      }
+
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify(environmentVariableSettings),
+      });
+      return;
+    }
 
     if (url.pathname === '/api/app-settings/node-executor-proxy') {
       if (method === 'PATCH') {
@@ -566,18 +651,52 @@ test.describe('Workflow library layout', () => {
     await expect(appSettingsActions).toHaveCount(1);
     await expect(appSettingsModal.getByLabel('Trusted hosts')).toHaveValue('internal.example.test');
     await appSettingsModal.getByLabel('Trusted hosts').fill('internal.example.test\nhealthcheck.example.test');
+    await appSettingsActions.getByRole('button', { name: 'Revert' }).click();
+    await expect(appSettingsModal.getByLabel('Trusted hosts')).toHaveValue('internal.example.test');
+    await appSettingsModal.getByLabel('Trusted hosts').fill('internal.example.test\nhealthcheck.example.test');
+    await appSettingsActions.getByRole('button', { name: 'Save' }).click();
+    await expect(appSettingsActions.locator('.project-settings-success')).toHaveText('Saved.');
+    await expect(appSettingsModal.getByLabel('Trusted hosts')).toHaveValue('internal.example.test\nhealthcheck.example.test');
+
+    await appSettingsModal.getByRole('tab', { name: 'Shell execution' }).click();
+    await expect(appSettingsModal.getByRole('tab', { name: 'Shell execution' })).toHaveAttribute('aria-selected', 'true');
+    await expect(appSettingsModal.getByText('They do not limit workflows, web apps, LLM calls, HTTP Call nodes, or endpoints.')).toBeVisible();
     await expect(appSettingsModal.getByLabel('Command timeout in seconds')).toHaveValue('30');
     await expect(appSettingsModal.getByLabel('Maximum captured output in MiB')).toHaveValue('10');
     await appSettingsModal.getByLabel('Command timeout in seconds').fill('45');
     await appSettingsActions.getByRole('button', { name: 'Revert' }).click();
-    await expect(appSettingsModal.getByLabel('Trusted hosts')).toHaveValue('internal.example.test');
     await expect(appSettingsModal.getByLabel('Command timeout in seconds')).toHaveValue('30');
-    await appSettingsModal.getByLabel('Trusted hosts').fill('internal.example.test\nhealthcheck.example.test');
     await appSettingsModal.getByLabel('Command timeout in seconds').fill('45');
     await appSettingsActions.getByRole('button', { name: 'Save' }).click();
     await expect(appSettingsActions.locator('.project-settings-success')).toHaveText('Saved.');
-    await expect(appSettingsModal.getByLabel('Trusted hosts')).toHaveValue('internal.example.test\nhealthcheck.example.test');
     await expect(appSettingsModal.getByLabel('Command timeout in seconds')).toHaveValue('45');
+
+    await appSettingsModal.getByRole('tab', { name: 'Environment variables' }).click();
+    await expect(appSettingsModal.getByText('No UI-managed environment variables are configured.')).toBeVisible();
+    await appSettingsModal.getByRole('button', { name: 'Add variable' }).click();
+    await appSettingsModal.getByLabel('Environment variable 1 name').fill('APP_TEST_KEY');
+    await appSettingsModal.getByLabel('Environment variable 1 value').fill('saved-only-value');
+    await appSettingsModal.getByLabel('Allow Browser executor access for APP_TEST_KEY').check();
+    await appSettingsActions.getByRole('button', { name: 'Save' }).click();
+    await expect(appSettingsActions.locator('.project-settings-success')).toContainText(
+      'New runs now use these values.',
+    );
+    const environmentVariableRow = appSettingsModal.locator('.app-settings-environment-variable').first();
+    const environmentVariableRowBounds = await environmentVariableRow.boundingBox();
+    expect(environmentVariableRowBounds?.height).toBeLessThanOrEqual(56);
+    await expect(appSettingsModal.getByLabel('Environment variable 1 value')).toHaveValue('');
+    await expect(appSettingsModal.getByLabel('Environment variable 1 value')).toHaveAttribute(
+      'placeholder',
+      '••••••••',
+    );
+    await expect(appSettingsModal).not.toContainText('saved-only-value');
+    await appSettingsModal.getByRole('button', { name: 'Show value for APP_TEST_KEY' }).click();
+    await expect(appSettingsModal.getByLabel('Environment variable 1 value')).toHaveValue('saved-only-value');
+    await appSettingsModal.getByRole('button', { name: 'Hide value for APP_TEST_KEY' }).click();
+    await expect(appSettingsModal.getByLabel('Environment variable 1 value')).toHaveValue('');
+    await appSettingsModal.getByLabel('Environment variable 1 value').fill('replacement-value');
+    await expect(appSettingsModal.getByLabel('Environment variable 1 value')).toHaveAttribute('type', 'text');
+    await expect(appSettingsModal.getByLabel('Environment variable 1 value')).toHaveValue('replacement-value');
 
     await appSettingsModal.getByRole('tab', { name: 'Workflow endpoints' }).click();
     await expect(appSettingsModal.getByRole('tab', { name: 'Workflow endpoints' })).toHaveAttribute('aria-selected', 'true');
@@ -774,7 +893,7 @@ test.describe('Workflow library layout', () => {
     await appSettingsActions.getByRole('button', { name: 'Save' }).click();
     await expect(appSettingsActions.locator('.project-settings-success')).toHaveText('Saved.');
 
-    await appSettingsModal.getByRole('tab', { name: 'General' }).click();
+    await appSettingsModal.getByRole('tab', { name: 'Shell execution' }).click();
     const maxOutputInput = appSettingsModal.getByLabel('Maximum captured output in MiB');
     await maxOutputInput.fill('11');
     await expect(maxOutputInput).toHaveValue('11');
@@ -793,8 +912,8 @@ test.describe('Workflow library layout', () => {
     await appSettingsActions.getByRole('button', { name: 'Save' }).click();
     await expect(appSettingsActions.locator('.project-settings-success')).toHaveText('Saved.');
 
-    await expect(appSettingsModal.getByRole('tab', { name: 'General' })).toBeVisible();
-    await appSettingsModal.getByRole('tab', { name: 'General' }).click();
+    await expect(appSettingsModal.getByRole('tab', { name: 'Shell execution' })).toBeVisible();
+    await appSettingsModal.getByRole('tab', { name: 'Shell execution' }).click();
     await expect(appSettingsModal.getByLabel('Maximum captured output in MiB')).toHaveValue('11');
     await expect(appSettingsActions.getByRole('button', { name: 'Save' })).toBeEnabled();
     await expect(appSettingsModal).toContainText('OAuth');

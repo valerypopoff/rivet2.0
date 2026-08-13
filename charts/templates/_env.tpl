@@ -78,6 +78,16 @@
 {{- end }}
 {{- end -}}
 
+{{- define "rivet.env.proxyValues" -}}
+{{- $root := . -}}
+{{- range $key := list "RIVET_PUBLISHED_WORKFLOWS_BASE_PATH" "RIVET_LATEST_WORKFLOWS_BASE_PATH" "RIVET_PUBLISHED_APPS_BASE_PATH" "RIVET_LATEST_APPS_BASE_PATH" "RIVET_WEB_APPS_BASE_PATH" "RIVET_LATEST_WEB_APPS_BASE_PATH" "RIVET_PROXY_RESOLVER" "RIVET_TRUST_INCOMING_FORWARDED_HEADERS" }}
+{{- if hasKey $root.Values.env $key }}
+- name: {{ $key }}
+  value: {{ tpl (printf "%v" (index $root.Values.env $key)) $root | quote }}
+{{- end }}
+{{- end }}
+{{- end -}}
+
 {{- define "rivet.env.apiWorkload" -}}
 {{- $root := .root -}}
 {{- include "rivet.env.vaultDotenv" $root }}
@@ -118,6 +128,8 @@
   value: editor
 - name: RIVET_LLM_PROFILE_HEALTH_API_URL
   value: {{ printf "http://127.0.0.1:%v/api/workflows/llm-profile-health" .apiPort | quote }}
+- name: RIVET_EXECUTION_ENVIRONMENT_API_URL
+  value: {{ printf "http://127.0.0.1:%v/api/workflows/execution-environment" .apiPort | quote }}
 {{ include "rivet.env.authKey" $root }}
 {{ include "rivet.env.globalValues" $root }}
 {{- end -}}

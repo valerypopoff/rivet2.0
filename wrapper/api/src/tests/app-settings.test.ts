@@ -6,7 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 
-import { getExpectedProxyAuthToken } from '../auth.js';
+import { getExpectedExecutorAuthToken, getExpectedProxyAuthToken } from '../auth.js';
 import { createApiApp } from '../app.js';
 import { getCommandTimeout, getMaxOutputBytes } from '../security.js';
 import {
@@ -63,6 +63,11 @@ import {
   getWorkflowStorageBackendMode,
 } from '../routes/workflows/storage-config.js';
 import { writePrivateJsonSettingsFile } from '../settings-file-writer.js';
+import {
+  getEnvironmentVariableSettingsPath,
+  readEnvironmentVariableSettings,
+  readExecutionEnvironmentVariables,
+} from '../environment-variable-settings.js';
 
 const relevantEnvKeys = [
   'HTTP_PROXY',
@@ -114,6 +119,8 @@ const relevantEnvKeys = [
   'RIVET_REQUIRE_WORKFLOW_KEY',
   'RIVET_UI_TOKEN_FREE_HOSTS',
   'RIVET_KEY',
+  'OPENAI_API_KEY',
+  'UI_MANAGED_ENVIRONMENT_VARIABLE_TEST',
 ] as const;
 
 async function withAppSettingsEnv(run: (tempRoot: string) => Promise<void> | void) {
@@ -164,6 +171,13 @@ async function startServer(profile: Parameters<typeof createApiApp>[0] = 'contro
 function trustedProxyHeaders(): Record<string, string> {
   return {
     'x-rivet-proxy-auth': getExpectedProxyAuthToken(),
+  };
+}
+
+function trustedExecutorHeaders(): Record<string, string> {
+  return {
+    ...trustedProxyHeaders(),
+    'x-rivet-executor-auth': getExpectedExecutorAuthToken(),
   };
 }
 
@@ -1739,5 +1753,160 @@ test('Web app auth settings reject incomplete server UI OAuth preparation', asyn
       }),
       /Server UI admin emails must contain valid email addresses/,
     );
+  });
+});
+
+test('UI-managed environment variables override runtime values while list and browser execution stay secret-safe', async () => {
+  await withAppSettingsEnv(async () => {
+    process.env.OPENAI_API_KEY = 'physical-openai-key';
+    process.env.UI_MANAGED_ENVIRONMENT_VARIABLE_TEST = 'physical-value';
+    const server = await startServer();
+
+    try {
+      const initialResponse = await fetch(`${server.baseUrl}/api/app-settings/environment-variables`, {
+        headers: trustedProxyHeaders(),
+      });
+      assert.equal(initialResponse.status, 200);
+      assert.deepEqual(((await initialResponse.json()) as { variables: unknown[] }).variables, []);
+
+      const saveResponse = await fetch(`${server.baseUrl}/api/app-settings/environment-variables`, {
+        method: 'PATCH',
+        headers: {
+          ...trustedProxyHeaders(),
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({
+          variables: [
+            {
+              name: 'OPENAI_API_KEY',
+              value: 'ui-openai-key',
+              browserAccess: false,
+            },
+            {
+              name: 'UI_MANAGED_ENVIRONMENT_VARIABLE_TEST',
+              value: 'ui-value',
+              browserAccess: true,
+            },
+          ],
+        }),
+      });
+      assert.equal(saveResponse.status, 200);
+      const savedText = await saveResponse.text();
+      assert.doesNotMatch(savedText, /ui-openai-key|ui-value/);
+      const saved = JSON.parse(savedText) as {
+        variables: Array<{ id: string; name: string; browserAccess: boolean }>;
+      };
+      assert.equal(saved.variables.length, 2);
+      assert.equal(saved.variables[0]?.name, 'OPENAI_API_KEY');
+      assert.equal(saved.variables[0]?.browserAccess, false);
+
+      const unauthenticatedRevealResponse = await fetch(
+        `${server.baseUrl}/api/app-settings/environment-variables/${saved.variables[0]!.id}/value`,
+      );
+      assert.equal(unauthenticatedRevealResponse.status, 403);
+
+      const revealedOpenAiResponse = await fetch(
+        `${server.baseUrl}/api/app-settings/environment-variables/${saved.variables[0]!.id}/value`,
+        { headers: trustedProxyHeaders() },
+      );
+      assert.equal(revealedOpenAiResponse.status, 200);
+      assert.match(revealedOpenAiResponse.headers.get('cache-control') ?? '', /no-store/);
+      assert.deepEqual(await revealedOpenAiResponse.json(), {
+        id: saved.variables[0]!.id,
+        value: 'ui-openai-key',
+      });
+
+      const missingRevealResponse = await fetch(
+        `${server.baseUrl}/api/app-settings/environment-variables/missing-environment-variable/value`,
+        { headers: trustedProxyHeaders() },
+      );
+      assert.equal(missingRevealResponse.status, 404);
+
+      assert.equal((await readExecutionEnvironmentVariables()).OPENAI_API_KEY, 'ui-openai-key');
+      assert.equal((await readExecutionEnvironmentVariables()).UI_MANAGED_ENVIRONMENT_VARIABLE_TEST, 'ui-value');
+      assert.equal((await readEnvironmentVariableSettings()).variables[0]?.overridesPhysicalEnvironment, true);
+      assert.equal(fs.existsSync(getEnvironmentVariableSettingsPath()), true);
+
+      const browserOpenAiResponse = await fetch(`${server.baseUrl}/api/config/env/OPENAI_API_KEY`, {
+        headers: trustedProxyHeaders(),
+      });
+      assert.deepEqual(await browserOpenAiResponse.json(), { value: '' });
+      const browserManagedResponse = await fetch(
+        `${server.baseUrl}/api/config/env/UI_MANAGED_ENVIRONMENT_VARIABLE_TEST`,
+        {
+          headers: trustedProxyHeaders(),
+        },
+      );
+      assert.deepEqual(await browserManagedResponse.json(), {
+        value: 'ui-value',
+      });
+
+      // Simulate another API replica updating the shared app-data volume. The
+      // browser route must not wait for its background settings poll.
+      const storedSettingsPath = getEnvironmentVariableSettingsPath();
+      const storedSettings = JSON.parse(fs.readFileSync(storedSettingsPath, 'utf8')) as {
+        variables: Array<{ name: string; value: string }>;
+      };
+      const storedManagedEntry = storedSettings.variables.find(
+        (entry) => entry.name === 'UI_MANAGED_ENVIRONMENT_VARIABLE_TEST',
+      );
+      assert.ok(storedManagedEntry);
+      storedManagedEntry.value = 'ui-value-from-another-replica';
+      fs.writeFileSync(storedSettingsPath, JSON.stringify(storedSettings), {
+        mode: 0o600,
+      });
+
+      const refreshedBrowserManagedResponse = await fetch(
+        `${server.baseUrl}/api/config/env/UI_MANAGED_ENVIRONMENT_VARIABLE_TEST`,
+        { headers: trustedProxyHeaders() },
+      );
+      assert.deepEqual(await refreshedBrowserManagedResponse.json(), {
+        value: 'ui-value-from-another-replica',
+      });
+
+      const revealedManagedResponse = await fetch(
+        `${server.baseUrl}/api/app-settings/environment-variables/${saved.variables[1]!.id}/value`,
+        { headers: trustedProxyHeaders() },
+      );
+      assert.deepEqual(await revealedManagedResponse.json(), {
+        id: saved.variables[1]!.id,
+        value: 'ui-value-from-another-replica',
+      });
+
+      const browserExecutionResponse = await fetch(`${server.baseUrl}/api/workflows/execution-environment`, {
+        headers: trustedProxyHeaders(),
+      });
+      assert.equal(browserExecutionResponse.status, 403);
+      const executorResponse = await fetch(`${server.baseUrl}/api/workflows/execution-environment`, {
+        headers: trustedExecutorHeaders(),
+      });
+      assert.equal(executorResponse.status, 200);
+      assert.deepEqual(await executorResponse.json(), {
+        environment: {
+          OPENAI_API_KEY: 'ui-openai-key',
+          UI_MANAGED_ENVIRONMENT_VARIABLE_TEST: 'ui-value-from-another-replica',
+        },
+      });
+
+      const protectedBrowserResponse = await fetch(`${server.baseUrl}/api/app-settings/environment-variables`, {
+        method: 'PATCH',
+        headers: {
+          ...trustedProxyHeaders(),
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({
+          variables: [
+            {
+              name: 'RIVET_KEY',
+              value: 'must-not-leak',
+              browserAccess: true,
+            },
+          ],
+        }),
+      });
+      assert.equal(protectedBrowserResponse.status, 400);
+    } finally {
+      await server.close();
+    }
   });
 });

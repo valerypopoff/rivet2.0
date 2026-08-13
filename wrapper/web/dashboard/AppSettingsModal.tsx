@@ -3,16 +3,19 @@ import { type Dispatch, type FC, type SetStateAction, useEffect, useState } from
 
 import { SettingsActions } from './app-settings/SettingsControls';
 import { DockerSettingsTab } from './app-settings/tabs/DockerSettingsTab';
+import { EnvironmentVariablesSettingsTab } from './app-settings/tabs/EnvironmentVariablesSettingsTab';
 import { GeneralSettingsTab } from './app-settings/tabs/GeneralSettingsTab';
 import { NodeExecutorSettingsTab } from './app-settings/tabs/NodeExecutorSettingsTab';
 import { OAuthSettingsTab } from './app-settings/tabs/OAuthSettingsTab';
 import { RunRecordingsSettingsTab } from './app-settings/tabs/RunRecordingsSettingsTab';
 import { ServerUiAccessSettingsTab } from './app-settings/tabs/ServerUiAccessSettingsTab';
+import { ShellExecutionSettingsTab } from './app-settings/tabs/ShellExecutionSettingsTab';
 import { StorageSettingsTab } from './app-settings/tabs/StorageSettingsTab';
 import { WebAppsSettingsTab } from './app-settings/tabs/WebAppsSettingsTab';
 import { WorkflowEndpointsSettingsTab } from './app-settings/tabs/WorkflowEndpointsSettingsTab';
 import { isWebAppAuthSettingsTab, type AppSettingsTab } from './app-settings/model';
 import { useDeploymentStorageForm } from './app-settings/useDeploymentStorageForm';
+import { useEnvironmentVariablesForm } from './app-settings/useEnvironmentVariablesForm';
 import { useNodeExecutorForms } from './app-settings/useNodeExecutorForms';
 import { usePublicRoutesForm } from './app-settings/usePublicRoutesForm';
 import { useRunRecordingsForm } from './app-settings/useRunRecordingsForm';
@@ -31,11 +34,13 @@ interface AppSettingsModalProps {
 
 const tabs: ReadonlyArray<{ id: AppSettingsTab; label: string }> = [
   { id: 'general', label: 'General' },
+  { id: 'shell-execution', label: 'Shell execution' },
   { id: 'server-ui-access', label: 'Server UI access' },
   { id: 'storage', label: 'Storage' },
   { id: 'workflow-endpoints', label: 'Workflow endpoints' },
   { id: 'run-recordings', label: 'Run recordings' },
   { id: 'node-executor-proxy', label: 'Node executor proxy' },
+  { id: 'environment-variables', label: 'Environment variables' },
   { id: 'web-apps', label: 'Web apps' },
   { id: 'oauth', label: 'OAuth' },
   { id: 'docker', label: 'Docker' },
@@ -66,7 +71,7 @@ function OpenAppSettingsModal({
   const [actionFeedback, setActionFeedback] = useState<TabActionFeedback>(null);
   const [savingTab, setSavingTab] = useState(false);
   const usesRuntimeLimits = (
-    activeTab === 'general' ||
+    activeTab === 'shell-execution' ||
     activeTab === 'workflow-endpoints' ||
     activeTab === 'web-apps' ||
     activeTab === 'docker'
@@ -80,11 +85,14 @@ function OpenAppSettingsModal({
   const workflowAuth = useWorkflowEndpointAuthForm(activeTab === 'workflow-endpoints');
   const recordings = useRunRecordingsForm(activeTab === 'run-recordings');
   const nodeExecutor = useNodeExecutorForms(activeTab === 'node-executor-proxy', onRouteConfigChange);
+  const environmentVariables = useEnvironmentVariablesForm(activeTab === 'environment-variables');
   const webAppAuth = useWebAppAuthForm(isWebAppAuthSettingsTab(activeTab), onRouteConfigChange);
 
   const panel = activeTab === 'general'
-    ? <GeneralSettingsTab limits={limits} trustedHosts={trustedHosts} />
-    : activeTab === 'server-ui-access'
+    ? <GeneralSettingsTab trustedHosts={trustedHosts} />
+    : activeTab === 'shell-execution'
+      ? <ShellExecutionSettingsTab limits={limits} />
+      : activeTab === 'server-ui-access'
       ? <ServerUiAccessSettingsTab auth={webAppAuth} />
       : activeTab === 'storage'
         ? <StorageSettingsTab storage={storage} />
@@ -94,6 +102,8 @@ function OpenAppSettingsModal({
             ? <RunRecordingsSettingsTab recordings={recordings} />
             : activeTab === 'node-executor-proxy'
               ? <NodeExecutorSettingsTab nodeExecutor={nodeExecutor} routeConfig={routeConfig} />
+              : activeTab === 'environment-variables'
+                ? <EnvironmentVariablesSettingsTab environmentVariables={environmentVariables} />
               : activeTab === 'web-apps'
                 ? <WebAppsSettingsTab auth={webAppAuth} limits={limits} routes={routes} />
                 : activeTab === 'oauth'
@@ -101,25 +111,24 @@ function OpenAppSettingsModal({
                   : <DockerSettingsTab limits={limits} />;
 
   const tabActions: TabSettingsAction[] = activeTab === 'general'
-    ? [
-        {
-          changed: trustedHosts.changed,
-          disabled: trustedHosts.controlsDisabled,
-          error: trustedHosts.error,
-          name: 'trusted hosts',
-          revert: trustedHosts.revert,
-          save: trustedHosts.save,
-        },
-        {
+    ? [{
+        changed: trustedHosts.changed,
+        disabled: trustedHosts.controlsDisabled,
+        error: trustedHosts.error,
+        name: 'trusted hosts',
+        revert: trustedHosts.revert,
+        save: trustedHosts.save,
+      }]
+    : activeTab === 'shell-execution'
+      ? [{
           changed: limits.changed.shell,
           disabled: limits.controlsDisabled,
           error: limits.status === 'shell' || limits.status === null ? limits.error : null,
           name: 'shell execution',
           revert: () => limits.revert('shell'),
           save: () => limits.save('shell'),
-        },
-      ]
-    : activeTab === 'server-ui-access'
+        }]
+      : activeTab === 'server-ui-access'
       ? [{
           changed: webAppAuth.changed.serverUiAccess,
           disabled: webAppAuth.controlsDisabled,
@@ -222,6 +231,16 @@ function OpenAppSettingsModal({
                       savedMessage: 'Saved. Nginx reloads shortly; restart the API to apply the new WebSocket message limit.',
                     },
                   ]
+                : activeTab === 'environment-variables'
+                  ? [{
+                      changed: environmentVariables.changed,
+                      disabled: environmentVariables.controlsDisabled,
+                      error: environmentVariables.error,
+                      name: 'environment variables',
+                      revert: environmentVariables.revert,
+                      save: environmentVariables.save,
+                      savedMessage: 'Saved. New runs now use these values.',
+                    }]
                 : activeTab === 'oauth'
                   ? [{
                       changed: webAppAuth.changed.oauth,

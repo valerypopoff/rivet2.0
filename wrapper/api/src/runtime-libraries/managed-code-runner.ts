@@ -3,6 +3,7 @@ import path from 'node:path';
 import { createRequire } from 'node:module';
 import { performance } from 'node:perf_hooks';
 import { LRUCache } from 'lru-cache';
+import { createScopedNodeProcess, type NodeExecutionEnvironment } from '@valerypopoff/rivet2-node';
 
 import { prepareRuntimeLibrariesForExecution } from './backend.js';
 
@@ -49,6 +50,7 @@ export interface ManagedCodeRunnerTelemetrySnapshot extends ManagedCodeRunnerTel
 }
 
 interface ManagedCodeRunnerOptions {
+  executionEnvironment?: NodeExecutionEnvironment;
   telemetry?: ManagedCodeRunnerTelemetry;
   prepareRuntimeLibraries?: PrepareRuntimeLibraries;
   loadRivet?: LoadRivetModule;
@@ -289,6 +291,7 @@ export class ManagedCodeRunner {
   private readonly prepareRuntimeLibraries: PrepareRuntimeLibraries;
   private readonly loadRivet: LoadRivetModule;
   private readonly telemetry: ManagedCodeRunnerTelemetry | null;
+  private readonly executionEnvironment: NodeExecutionEnvironment | undefined;
   private prepareForRequirePromise: Promise<void> | null = null;
   private requireSnapshot: ManagedRequireSnapshot | null = null;
   private requireFn: NodeRequire | null = null;
@@ -300,6 +303,7 @@ export class ManagedCodeRunner {
     this.prepareRuntimeLibraries = options.prepareRuntimeLibraries ?? prepareRuntimeLibrariesForExecution;
     this.loadRivet = options.loadRivet ?? (() => import('@valerypopoff/rivet2-node'));
     this.telemetry = options.telemetry ?? null;
+    this.executionEnvironment = options.executionEnvironment;
   }
 
   async runCode(
@@ -331,7 +335,7 @@ export class ManagedCodeRunner {
 
     if (options.includeProcess) {
       argNames.push('process');
-      args.push(process);
+      args.push(createScopedNodeProcess(this.executionEnvironment));
     }
 
     if (options.includeFetch) {

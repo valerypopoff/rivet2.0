@@ -6,6 +6,12 @@ import {
   writeDeploymentStorageSettings,
 } from '../deployment-storage-settings.js';
 import {
+  environmentVariableSettingsRepository,
+  readEnvironmentVariableSettings,
+  readEnvironmentVariableValue,
+  writeEnvironmentVariableSettings,
+} from '../environment-variable-settings.js';
+import {
   executorUrlOverrideSettingsRepository,
   readExecutorUrlOverrideSettings,
   writeExecutorUrlOverrideSettings,
@@ -42,6 +48,7 @@ import {
   readWorkflowEndpointAuthSettings,
   writeWorkflowEndpointAuthSettings,
 } from '../workflow-endpoint-auth-settings.js';
+import { createHttpError } from '../utils/httpError.js';
 import {
   runRecordingsSettingsRepository,
   readRunRecordingsSettings,
@@ -111,9 +118,7 @@ function registerSettingsResource(options: {
 }
 
 function normalizeRuntimeLimitSettingsDraft(value: unknown): RuntimeLimitSettingsDraft {
-  const raw = value && typeof value === 'object'
-    ? value as RuntimeLimitSettingsDraft
-    : {};
+  const raw = value && typeof value === 'object' ? (value as RuntimeLimitSettingsDraft) : {};
   const draft: RuntimeLimitSettingsDraft = {};
 
   for (const key of [
@@ -144,6 +149,24 @@ async function reloadNodeExecutorProxySettingsInCurrentProcess(): Promise<void> 
   }
 }
 
+registerSettingsResource({
+  path: '/environment-variables',
+  repository: environmentVariableSettingsRepository,
+  read: readEnvironmentVariableSettings,
+  write: writeEnvironmentVariableSettings,
+});
+appSettingsRouter.get('/environment-variables/:id/value', async (req, res, next) => {
+  try {
+    const value = await readEnvironmentVariableValue(req.params.id);
+    if (value === undefined) {
+      throw createHttpError(404, 'Environment variable not found');
+    }
+    res.set('Cache-Control', 'no-store, no-cache, must-revalidate');
+    res.json({ id: req.params.id, value });
+  } catch (error) {
+    next(error);
+  }
+});
 registerSettingsResource({
   path: '/node-executor-proxy',
   repository: nodeExecutorProxySettingsRepository,

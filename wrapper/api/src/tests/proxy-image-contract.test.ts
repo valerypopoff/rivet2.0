@@ -248,7 +248,7 @@ test('executor image and compose contracts keep the websocket service independen
   for (const compose of [prodCompose, devCompose]) {
     assert.match(compose, /executor:[\s\S]*- PORT=21889[\s\S]*- RIVET_EXECUTOR_PORT=21889[\s\S]*- RIVET_EXECUTOR_HOST=0\.0\.0\.0/);
     assert.match(compose, /OPENAI_ENDPOINT=\$\{OPENAI_ENDPOINT:-\}\r?\n\s*- PINECONE_API_KEY=\$\{PINECONE_API_KEY:-\}/);
-    assert.match(compose, /RIVET_RUNTIME_PROCESS_ROLE=executor[\s\S]*RIVET_KEY=\$\{RIVET_KEY:-\}[\s\S]*RIVET_LLM_PROFILE_HEALTH_API_URL=http:\/\/api:80\/api\/workflows\/llm-profile-health[\s\S]*PINECONE_API_KEY=\$\{PINECONE_API_KEY:-\}/);
+    assert.match(compose, /RIVET_RUNTIME_PROCESS_ROLE=executor[\s\S]*RIVET_KEY=\$\{RIVET_KEY:-\}[\s\S]*RIVET_LLM_PROFILE_HEALTH_API_URL=http:\/\/api:80\/api\/workflows\/llm-profile-health[\s\S]*RIVET_EXECUTION_ENVIRONMENT_API_URL=http:\/\/api:80\/api\/workflows\/execution-environment[\s\S]*PINECONE_API_KEY=\$\{PINECONE_API_KEY:-\}/);
     assert.equal((compose.match(/^\s*- PINECONE_API_KEY=\$\{PINECONE_API_KEY:-\}$/gm) ?? []).length, 2);
     assert.match(compose, /- HOME=\/home\/rivet/);
     assert.match(compose, /- npm_config_cache=\/home\/rivet\/\.npm/);
@@ -256,6 +256,22 @@ test('executor image and compose contracts keep the websocket service independen
     assert.match(compose, /\/home\/rivet\/\.local\/share\/com\.valerypopoff\.rivet2/);
     assert.doesNotMatch(compose, /\/root\/\.npm|\/root\/\.cache\/yarn|HOME=\/root|\/root\/\.local\/share\/com\.valerypopoff\.rivet2/);
   }
+});
+
+test('Docker launchers attach the selected dotenv only to API and executor runtimes', () => {
+  const runtimeEnvCompose = readRepoFile('ops/compose/docker-compose.runtime-env.yml');
+  const devLauncher = readRepoFile('scripts/dev-docker.mjs');
+  const prodLauncher = readRepoFile('scripts/prod-docker.mjs');
+
+  assert.match(runtimeEnvCompose, /services:\s*\n\s*api:\s*\n\s*env_file:\s*\n\s*- "\$\{RIVET_RUNTIME_ENV_FILE\}"/);
+  assert.match(runtimeEnvCompose, /\n\s*executor:\s*\n\s*env_file:\s*\n\s*- "\$\{RIVET_RUNTIME_ENV_FILE\}"/);
+  assert.doesNotMatch(runtimeEnvCompose, /\n\s*(?:web|proxy):\s*\n/);
+
+  for (const launcher of [devLauncher, prodLauncher]) {
+    assert.match(launcher, /mergedEnv\.RIVET_RUNTIME_ENV_FILE = envPath/);
+    assert.match(launcher, /-f ops\/compose\/docker-compose\.runtime-env\.yml/);
+  }
+  assert.match(devLauncher, /config --no-interpolate --no-env-resolution --no-path-resolution/);
 });
 
 test('API images and launchers use the filtered Rivet source context and symlink-preserved runtime links', () => {
@@ -342,6 +358,9 @@ test('API images and launchers use the filtered Rivet source context and symlink
   assert.match(devCompose, /\[ ! -f \.yarn\/unplugged\/\.rivet-dev-yarn-install-ok \]/);
   assert.match(devCompose, /\.yarn\/unplugged\/\.rivet-dev-yarn-install-ok/);
   assert.match(devDockerLauncher, /rivet\/\.yarn\/unplugged\/\.rivet-dev-yarn-install-ok/);
+  assert.match(devDockerLauncher, /packages\/core\/dist\/esm\/index\.js/);
+  assert.match(devDockerLauncher, /packages\/node\/dist\/esm\/index\.js/);
+  assert.match(devDockerLauncher, /packages\/node\/dist\/esm\/webAppHandler\.js/);
   assert.match(devCompose, /RIVET_SOURCE_ROOT=\/workspace\/rivet node \/workspace\/scripts\/ensure-rivet-runtime-build\.mjs/);
   assert.match(devCompose, /RIVET_SOURCE_ROOT=\/tmp\/rivet-source RIVET_API_PACKAGE_ROOT=\/app node \/workspace\/scripts\/link-rivet-node-package\.mjs/);
   assert.match(ensureRivetRuntimeBuild, /function getConfiguredYarnPath\(\)/);

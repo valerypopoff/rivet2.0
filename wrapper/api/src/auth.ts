@@ -3,6 +3,7 @@ import type { Request } from 'express';
 import { createHash, timingSafeEqual } from 'node:crypto';
 
 const PROXY_AUTH_HEADER = 'x-rivet-proxy-auth';
+const EXECUTOR_AUTH_HEADER = 'x-rivet-executor-auth';
 const TOKEN_FREE_HOST_HEADER = 'x-rivet-token-free-host';
 const UI_SESSION_COOKIE_NAME = 'rivet_ui_token';
 
@@ -30,6 +31,11 @@ export function getExpectedProxyAuthToken(): string {
   return sharedKey ? sha256Hex(`${sharedKey}:proxy-auth`) : '';
 }
 
+export function getExpectedExecutorAuthToken(): string {
+  const sharedKey = getSharedKey();
+  return sharedKey ? sha256Hex(`${sharedKey}:executor-internal`) : '';
+}
+
 export function getExpectedUiSessionToken(): string {
   const sharedKey = getSharedKey();
   return sharedKey ? sha256Hex(`${sharedKey}:ui-session`) : '';
@@ -51,6 +57,21 @@ export function isTrustedProxyRequest(request: Request | IncomingMessage): boole
   }
 
   const headerValue = request.headers[PROXY_AUTH_HEADER];
+  const providedToken = Array.isArray(headerValue) ? headerValue[0] : headerValue;
+  return typeof providedToken === 'string' && timingSafeStringEqual(providedToken.trim(), expectedToken);
+}
+
+/**
+ * The executor reads the full UI-managed environment for Node runs. This is
+ * separate from proxy auth, which is attached to ordinary browser requests.
+ */
+export function isTrustedExecutorRequest(request: Request | IncomingMessage): boolean {
+  const expectedToken = getExpectedExecutorAuthToken();
+  if (!expectedToken) {
+    return false;
+  }
+
+  const headerValue = request.headers[EXECUTOR_AUTH_HEADER];
   const providedToken = Array.isArray(headerValue) ? headerValue[0] : headerValue;
   return typeof providedToken === 'string' && timingSafeStringEqual(providedToken.trim(), expectedToken);
 }

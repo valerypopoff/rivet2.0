@@ -1,16 +1,11 @@
-import TextField from '@atlaskit/textfield';
-
-import type { useRuntimeLimitsForm } from '../useRuntimeLimitsForm';
 import type { useTrustedHostsForm } from '../useTrustedHostsForm';
 
 const appVersion = import.meta.env.VITE_APP_VERSION || 'unknown';
 const appName = 'Rivet Studio Server';
 
 export function GeneralSettingsTab({
-  limits,
   trustedHosts,
 }: {
-  limits: ReturnType<typeof useRuntimeLimitsForm>;
   trustedHosts: ReturnType<typeof useTrustedHostsForm>;
 }) {
   return (
@@ -46,45 +41,6 @@ export function GeneralSettingsTab({
         </div>
       </section>
 
-      <section className="app-settings-section" aria-label="Shell execution">
-        <div className="app-settings-section-title">Shell execution</div>
-        <div className="app-settings-field-grid" aria-busy={limits.controlsDisabled}>
-          <label className="app-settings-field">
-            <span className="app-settings-field-label">Command timeout</span>
-            <TextField
-              aria-label="Command timeout in seconds"
-              type="number"
-              min={1}
-              value={limits.form.commandTimeoutSeconds}
-              isDisabled={limits.controlsDisabled}
-              elemAfterInput={<span className="app-settings-input-suffix">seconds</span>}
-              onChange={(event) => {
-                const value = event.currentTarget.value;
-                limits.setForm((form) => ({ ...form, commandTimeoutSeconds: value }));
-                limits.clearFeedback();
-              }}
-            />
-            <span className="app-settings-field-help">How long hosted shell commands may run before the API stops them.</span>
-          </label>
-          <label className="app-settings-field">
-            <span className="app-settings-field-label">Maximum captured output</span>
-            <TextField
-              aria-label="Maximum captured output in MiB"
-              type="number"
-              min={1}
-              value={limits.form.maxOutputMiB}
-              isDisabled={limits.controlsDisabled}
-              elemAfterInput={<span className="app-settings-input-suffix">MiB</span>}
-              onChange={(event) => {
-                const value = event.currentTarget.value;
-                limits.setForm((form) => ({ ...form, maxOutputMiB: value }));
-                limits.clearFeedback();
-              }}
-            />
-            <span className="app-settings-field-help">How much command output the API keeps before truncating it.</span>
-          </label>
-        </div>
-      </section>
     </div>
   );
 }

@@ -5,6 +5,7 @@ import { type RivetPlugin, type Settings, type StringPluginConfigurationSpec } f
 import { entries } from '../../../../rivet/packages/core/src/utils/typeSafety';
 import type { EnvironmentProvider, PathPolicyProvider } from '../../../../rivet/packages/app/src/providers/ProvidersContext.js';
 import { RIVET_API_BASE_URL, RIVET_HOSTED_MODE } from '../../../shared/hosted-env';
+import { ENVIRONMENT_VARIABLES_CHANGED_CHANNEL } from '../../../shared/environment-variable-events';
 
 export function isInTauri(): boolean {
   return false;
@@ -16,6 +17,18 @@ export function isHostedMode(): boolean {
 
 const cachedEnvVars = new Map<string, string>();
 const pendingEnvVars = new Map<string, Promise<string | undefined>>();
+
+export function invalidateHostedEnvironmentVariableCache(): void {
+  cachedEnvVars.clear();
+  pendingEnvVars.clear();
+}
+
+if (typeof window !== 'undefined' && typeof BroadcastChannel !== 'undefined') {
+  const environmentVariablesChannel = new BroadcastChannel(ENVIRONMENT_VARIABLES_CHANGED_CHANNEL);
+  environmentVariablesChannel.addEventListener('message', () => {
+    invalidateHostedEnvironmentVariableCache();
+  });
+}
 
 export function getDefaultEnvironmentProvider(): EnvironmentProvider {
   return {

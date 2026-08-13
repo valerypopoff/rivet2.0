@@ -91,6 +91,10 @@ test('rendered chart keeps control-plane and execution-plane API env contracts d
     renderedChart,
     /name: RIVET_LLM_PROFILE_HEALTH_API_URL\s*\n\s*value: "http:\/\/127\.0\.0\.1:8080\/api\/workflows\/llm-profile-health"/,
   );
+  assert.match(
+    renderedChart,
+    /name: RIVET_EXECUTION_ENVIRONMENT_API_URL\s*\n\s*value: "http:\/\/127\.0\.0\.1:8080\/api\/workflows\/execution-environment"/,
+  );
   assert.match(renderedChart, /initContainers:\s*\n\s*- name: deployment-storage-settings/);
   assert.match(renderedChart, /node \/opt\/rivet\/lib\/bootstrap-deployment-storage-settings\.mjs/);
   assert.match(renderedChart, /name: RIVET_DEPLOYMENT_STORAGE_MODE\s*\n\s*value: "managed"/);
@@ -176,6 +180,22 @@ test('chart renders custom public route env defaults as bootstrap values', async
   assert.match(renderedChart, /name: RIVET_LATEST_WORKFLOWS_BASE_PATH\s*\n\s*value: "\/custom-workflows-latest"/);
   assert.match(renderedChart, /name: RIVET_PUBLISHED_APPS_BASE_PATH\s*\n\s*value: "\/custom-apps"/);
   assert.match(renderedChart, /name: RIVET_LATEST_APPS_BASE_PATH\s*\n\s*value: "\/custom-apps-latest"/);
+});
+
+test('chart forwards arbitrary runtime credentials without a provider-specific template list', async () => {
+  const renderedChart = await renderLocalKubernetesChartWithOverrides([
+    'env.BILLING_OPENAI_KEY=chart-test-secret',
+  ]);
+
+  assert.equal(
+    (renderedChart.match(/name: BILLING_OPENAI_KEY\s*\n\s*value: "chart-test-secret"/g) ?? []).length,
+    3,
+    'only the control API, execution API, and editor executor should receive arbitrary runtime credentials',
+  );
+  assert.match(readRepoFile('charts/templates/proxy-deployment.yaml'), /include "rivet\.env\.proxyValues"/);
+  assert.match(readRepoFile('charts/templates/proxy-deployment.yaml'), /include "rivet\.vaultProxyAnnotations"/);
+  assert.match(readRepoFile('charts/templates/_helpers.tpl'), /RIVET_KEY=\{\{ "\{\{ \.Data\.data\.RIVET_KEY \| toJSON \}\}" \}\}/);
+  assert.doesNotMatch(readRepoFile('charts/templates/_env.tpl'), /OPENAI_API_KEY|ANTHROPIC_API_KEY|GOOGLE_GENERATIVE_AI_API_KEY/);
 });
 
 test('chart validation rejects placeholder images and unsupported filesystem topology', async () => {

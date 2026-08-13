@@ -32,6 +32,11 @@ const devDependencyMarkerChecks = {
   api: [
     'test -f /app/node_modules/.package-lock.json',
     'cmp -s /app/package-lock.json /app/node_modules/.package-lock.json',
+    // The API links built upstream packages through a container-local snapshot.
+    // Recreate it after a mounted Rivet runtime build changes those exports.
+    'cmp -s /workspace/rivet/packages/core/dist/esm/index.js /app/node_modules/@valerypopoff/rivet2-core/dist/esm/index.js',
+    'cmp -s /workspace/rivet/packages/node/dist/esm/index.js /app/node_modules/@valerypopoff/rivet2-node/dist/esm/index.js',
+    'cmp -s /workspace/rivet/packages/node/dist/esm/webAppHandler.js /app/node_modules/@valerypopoff/rivet2-node/dist/esm/webAppHandler.js',
   ].join(' && '),
 };
 
@@ -52,7 +57,8 @@ async function main() {
   envFileLabel = path.basename(envPath);
   if (hasEnvFile) {
     const relativeEnvPath = path.relative(rootDir, envPath) || envFileLabel;
-    composeBase = `docker compose --env-file "${relativeEnvPath}" -f ops/compose/docker-compose.managed-services.yml -f ops/compose/docker-compose.dev.yml`;
+    mergedEnv.RIVET_RUNTIME_ENV_FILE = envPath;
+    composeBase = `docker compose --env-file "${relativeEnvPath}" -f ops/compose/docker-compose.managed-services.yml -f ops/compose/docker-compose.dev.yml -f ops/compose/docker-compose.runtime-env.yml`;
   }
 
   if (!Object.prototype.hasOwnProperty.call(mergedEnv, 'COMPOSE_PARALLEL_LIMIT')) {
@@ -82,7 +88,7 @@ async function main() {
     build: [`${composeBase} build api executor`],
     up: [`${composeBase} up --build`],
     down: [`${composeBase} down`],
-    config: [`${composeBase} config`],
+    config: [`${composeBase} config --no-interpolate --no-env-resolution --no-path-resolution`],
     ps: [`${composeBase} ps`],
     logs: [`${composeBase} logs -f --tail=120 ${diagnosticServices}`],
     dev: [`${composeBase} up -d --build --wait --wait-timeout ${waitTimeoutSeconds}`],

@@ -406,7 +406,7 @@ No `startupProbe` is currently defined. If cold production startup needs a longe
 
 ### Vault dotenv contract
 
-All runtime images source `/vault/dotenv` at startup. They also accept the Vault Injector default fallback path `/vault/secrets/<dotenvFileName>`.
+Runtime images source `/vault/dotenv` at startup and also accept the Vault Injector default fallback path `/vault/secrets/<dotenvFileName>`. API and executor workloads receive the configured full dotenv; the proxy's chart-owned template writes only `RIVET_KEY` to that path.
 
 When Vault is enabled, the dotenv file should provide the sensitive values that should not live directly in Helm values:
 
@@ -415,9 +415,13 @@ RIVET_KEY=<shared-random-secret>
 RIVET_DEPLOYMENT_DATABASE_PASSWORD=<postgres-password>
 RIVET_DEPLOYMENT_STORAGE_ACCESS_KEY_ID=<object-storage-access-key-id>
 RIVET_DEPLOYMENT_STORAGE_ACCESS_KEY=<object-storage-secret-access-key>
+# Arbitrary provider aliases used by LLM Chat/Profile are supported too:
+BILLING_OPENAI_KEY=<provider-api-key>
 ```
 
 You may provide `RIVET_DEPLOYMENT_DATABASE_CONNECTION_STRING` instead of `RIVET_DEPLOYMENT_DATABASE_PASSWORD`, but keep the non-secret `postgres.host`, `postgres.database`, and `postgres.username` values in the Helm values because chart validation uses them to catch incomplete managed-storage configuration. The chart bootstrap writes these values into `settings/deployment-storage.json` when that file is absent; API and executor runtime containers read the settings file rather than the dotenv variables.
+
+Vault dotenv injection is the preferred place for production LLM/provider credentials. The full injected file is sourced only by backend API, execution API, and editor executor workloads, so custom credential names do not require a fixed chart template list. The proxy receives a generated one-variable dotenv containing only `RIVET_KEY`; it does not receive provider credentials. Non-secret development values may use `env`, which is likewise projected into execution workloads while the proxy receives only its route/resolver settings. Do not commit provider keys in Helm values. Browser access remains separately restricted by `RIVET_ENV_ALLOWLIST`; server-side availability never makes a secret browser-readable.
 
 `RIVET_KEY` must be available to both the proxy and API workloads. It is used for trusted proxy-to-API identity and for optional public route/UI access checks.
 
