@@ -19,7 +19,7 @@ import MoreMenuVerticalIcon from 'majesticons/line/more-menu-vertical-line.svg?r
 import Popup from '@atlaskit/popup';
 import { useRemoteDebugger } from '../hooks/useRemoteDebugger';
 import { ActionBarMoreMenu } from './ActionBarMoreMenu';
-import { CopyAsTestCaseModal } from './CopyAsTestCaseModal';
+import { AddRunInputsToEvaluationModal } from './CopyAsTestCaseModal';
 import { PopupMenuContainer } from './PopupMenu.js';
 import { useToggle } from 'ahooks';
 import { useDependsOnPlugins } from '../hooks/useDependsOnPlugins';
@@ -165,7 +165,6 @@ const styles = css`
 
 export type ActionBarProps = {
   onRunGraph?: (options: { graphId?: GraphId }) => void;
-  onRunTests?: () => void;
   onAbortGraph?: () => void;
   onPauseGraph?: () => void;
   onResumeGraph?: () => void;
@@ -177,7 +176,7 @@ export const ActionBar: FC<ActionBarProps> = ({ onRunGraph, onAbortGraph, onPaus
   const projectMetadata = useAtomValue(projectMetadataState);
   const hostUiConfig = useRivetAppHostUiConfig();
   const recordingsEnabled = isRivetAppHostCapabilityEnabled(hostUiConfig, 'recordings');
-  const trivetInputCopyEnabled = isRivetAppHostCapabilityEnabled(hostUiConfig, 'trivetInputCopy');
+  const evaluationInputCopyEnabled = isRivetAppHostCapabilityEnabled(hostUiConfig, 'evaluationInputCopy');
   const lastRecording = useAtomValue(lastRecordingState);
   const saveRecording = useSaveRecording();
 
@@ -203,7 +202,7 @@ export const ActionBar: FC<ActionBarProps> = ({ onRunGraph, onAbortGraph, onPaus
   });
   const runButtonsBlocked = !actionBarExecutionState.canRun && !graphRunning;
   const showPrimaryGraphControlButton = actionBarExecutionState.showRunButton || graphRunning;
-  const [copyAsTestCaseModalOpen, toggleCopyAsTestCaseModalOpen] = useToggle();
+  const [addRunInputsToEvaluationModalOpen, toggleAddRunInputsToEvaluationModalOpen] = useToggle();
 
   const plugins = useDependsOnPlugins();
 
@@ -353,7 +352,9 @@ export const ActionBar: FC<ActionBarProps> = ({ onRunGraph, onAbortGraph, onPaus
           <ActionBarMoreMenu
             getDebuggerPanelAnchor={getDebuggerPanelAnchor}
             onClose={toggleMenuIsOpen.setLeft}
-            onCopyAsTestCase={trivetInputCopyEnabled ? toggleCopyAsTestCaseModalOpen.setRight : undefined}
+            onAddRunInputsToEvaluation={
+              evaluationInputCopyEnabled ? toggleAddRunInputsToEvaluationModalOpen.setRight : undefined
+            }
           />
         )}
         placement="bottom-end"
@@ -372,8 +373,11 @@ export const ActionBar: FC<ActionBarProps> = ({ onRunGraph, onAbortGraph, onPaus
           </button>
         )}
       />
-      {trivetInputCopyEnabled ? (
-        <CopyAsTestCaseModal open={copyAsTestCaseModalOpen} onClose={toggleCopyAsTestCaseModalOpen.setLeft} />
+      {evaluationInputCopyEnabled ? (
+        <AddRunInputsToEvaluationModal
+          open={addRunInputsToEvaluationModalOpen}
+          onClose={toggleAddRunInputsToEvaluationModalOpen.setLeft}
+        />
       ) : null}
     </div>
   );

@@ -21,7 +21,6 @@ export function useNewProject() {
     const loaded = await workspaceTransitions.loadProject({
       project,
       graphToLoad: initialGraph,
-      testSuites: [],
       markClean: true,
     });
 

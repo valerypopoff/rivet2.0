@@ -1,5 +1,5 @@
 import { css } from '@emotion/react';
-import { type ChartNode } from '@valerypopoff/rivet2-core';
+import { type ChartNode, type LLMChatV2Node } from '@valerypopoff/rivet2-core';
 import { useAtom, useAtomValue, useSetAtom } from 'jotai';
 import { type FC, type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
 import { useToggle } from 'ahooks';
@@ -463,7 +463,7 @@ const NodeFullscreenOutput: FC<{ node: ChartNode }> = ({ node }) => {
           onSearchInputKeyDown={handleSearchInputKeyDown}
           onCopyValue={handleCopyToClipboard}
           onCopyJson={handleCopyToClipboardJson}
-          onOpenPromptDesigner={node.type === 'chat' ? handleOpenPromptDesigner : undefined}
+          onOpenPromptDesigner={node.type === 'llmChatV2' && (node as LLMChatV2Node).data.configurationMode !== 'profile' ? handleOpenPromptDesigner : undefined}
           onInspectResponse={node.type === 'llmChatV2' ? () => setInspectorOpen(true) : undefined}
         />
       </header>

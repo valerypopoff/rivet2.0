@@ -14,8 +14,15 @@ import { doctor, makeDoctorCommand, type DoctorArgs } from './commands/doctor.js
 import { makeCommand as makeRunCommand, run } from './commands/run.js';
 import { makeCommand as makeServeCommand, serve } from './commands/serve.js';
 import { makeCommand as makeServeAppCommand, serveApp } from './commands/serveApp.js';
+import { EvaluationCliError, makeEvaluationCommand, runEvaluation } from './commands/evaluations.js';
 
 await yargs(hideBin(process.argv))
+  .command(
+    'evaluations run',
+    'Run a named Evaluation suite.',
+    (y) => makeEvaluationCommand(y),
+    (args) => runCli(() => runEvaluation(args as never)),
+  )
   .command(
     'list <projectFile>',
     'List graphs, web apps, library nodes, and plugins in a project file.',
@@ -61,7 +68,7 @@ async function runCli(action: () => Promise<void>): Promise<void> {
     await action();
   } catch (err) {
     console.error(chalk.red(formatCliError(err)));
-    process.exit(1);
+    process.exit(err instanceof EvaluationCliError ? err.exitCode : 1);
   }
 }
 

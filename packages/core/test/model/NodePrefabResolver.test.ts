@@ -124,7 +124,6 @@ describe('NodePrefabResolver', () => {
       isSplitRun: true,
       splitRunConcurrency: 3,
       variants: [{ id: 'alternative', data: { text: 'alternative text' } }],
-      tests: [{ id: 'test', evaluatorGraphId: graphId, tests: [] }],
     });
 
     const detachedNode = detachNodePrefabInstance(project, instanceNode);
@@ -140,7 +139,6 @@ describe('NodePrefabResolver', () => {
     assert.equal(detachedNode.isSplitRun, true);
     assert.equal(detachedNode.splitRunConcurrency, 3);
     assert.deepEqual(detachedNode.variants, [{ id: 'alternative', data: { text: 'alternative text' } }]);
-    assert.deepEqual(detachedNode.tests, [{ id: 'test', evaluatorGraphId: graphId, tests: [] }]);
     assert.deepEqual(detachedNode.visualData, {
       x: 100,
       y: 200,

@@ -65,10 +65,10 @@ export function useGraphExecutionEvents(
   {
     clearNodeRunDataPreservationForNextStart,
     consumeNodeRunDataPreservationForNextStart,
-    trivetRunningLatest,
+    evaluationRunningLatest,
   }: Pick<
     ExecutionDataFlowApi,
-    'clearNodeRunDataPreservationForNextStart' | 'consumeNodeRunDataPreservationForNextStart' | 'trivetRunningLatest'
+    'clearNodeRunDataPreservationForNextStart' | 'consumeNodeRunDataPreservationForNextStart' | 'evaluationRunningLatest'
   >,
   options: GraphExecutionEventsOptions = {},
 ): GraphExecutionEventsApi {
@@ -118,7 +118,7 @@ export function useGraphExecutionEvents(
     setRootGraph(startGraph.metadata!.id);
     setGraphStartTime(Date.now());
 
-    if (!trivetRunningLatest.current) {
+    if (!evaluationRunningLatest.current) {
       resetLastRunDataForRunStart(nodeIdsToPreserve);
       setGraphRunHistoryByView({});
       setSelectedGraphRunByView({});

@@ -2,7 +2,7 @@
 
 ![License](https://img.shields.io/github/license/valerypopoff/rivet2.0)
 
-Rivet is a visual IDE and runtime for building AI workflows, agents, prompt chains, graph-based tools, and reusable automation flows. This repository is the Rivet 2 monorepo: it contains the desktop app, graph runtime, Node runtime, CLI, app executor sidecar, Trivet test tooling, documentation site, and maintainer developer docs. Rivet 2 continues the previous Rivet codebase as an independently maintained project.
+Rivet is a visual IDE and runtime for building AI workflows, agents, prompt chains, graph-based tools, and reusable automation flows. This repository is the Rivet 2 monorepo: it contains the desktop app, graph runtime, Node runtime, CLI, app executor sidecar, Evaluations test tooling, documentation site, and maintainer developer docs. Rivet 2 continues the previous Rivet codebase as an independently maintained project.
 
 [Download Rivet 2 desktop app](https://valerypopoff.github.io/rivet2.0/download)
 
@@ -38,7 +38,7 @@ Rivet 2 is organized as a Yarn workspace monorepo:
 | `@valerypopoff/rivet-app-executor` | Node executor sidecar used by the app for Node-mode graph execution.                                                                                        |
 | `@valerypopoff/rivet2-node`        | Node runtime adapter for loading and running Rivet projects programmatically.                                                                               |
 | `@valerypopoff/rivet2-cli`         | CLI commands for running and serving Rivet graphs.                                                                                                          |
-| `@valerypopoff/trivet`             | Graph-oriented test utilities and test serialization.                                                                                                       |
+| `@valerypopoff/rivet2-evaluations`             | Graph-oriented test utilities and test serialization.                                                                                                       |
 | `packages/docs`                    | Docusaurus documentation site.                                                                                                                              |
 
 The repo also includes `developer-docs/`, which documents current architecture
@@ -146,7 +146,7 @@ The public npm packages are published under the `@valerypopoff` scope:
 
 - `@valerypopoff/rivet2-core`
 - `@valerypopoff/rivet2-node`
-- `@valerypopoff/trivet`
+- `@valerypopoff/rivet2-evaluations`
 - `@valerypopoff/rivet2-cli`
 
 Package versions are lockstep and start at `2.x`. The `package.json` version in those four packages is the source of truth: patch releases are `2.0.1`, compatible feature releases are `2.1.0`, and the workflow refuses to publish anything outside major version `2`.

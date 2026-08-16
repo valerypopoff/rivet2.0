@@ -51,7 +51,7 @@ jobs:
             ':!.yarn/install-state.gz' \
             ':!packages/core/dist/**' \
             ':!packages/node/dist/**' \
-            ':!packages/trivet/dist/**' \
+            ':!packages/evaluations/dist/**' \
             ':!packages/cli/dist/**' \
             ':!packages/cli/bin/**' \
             ':!packages/cli/tsconfig.tsbuildinfo')"

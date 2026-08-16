@@ -1,26 +1,5 @@
 version: 4
 data:
-  attachedData:
-    trivet:
-      testSuites:
-        - id: MaoXCgibUQDV5fCN_oy2e
-          name: Graph to Test
-          testCases:
-            - expectedOutput:
-                has_mission: YES
-                mission_statement: Acme is on a mission to make project planning easier.
-              id: hxRYlHF68ZmmpMT0lo037
-              input:
-                statement: Acme is on a mission to make project planning easier.
-            - expectedOutput:
-                has_mission: NO
-                mission_statement: Not applicable
-              id: ngJC1XL42jQCTRZW5fhRG
-              input:
-                statement: Acme is a project planning system
-          testGraph: rUcgbRwgkovsnv8X5xyVF
-          validationGraph: fVykgHFjTZ8dWoJmnxEha
-      version: 1
   graphs:
     D0TnEZI8WPm1ZjZyhYfeQ:
       metadata:

@@ -78,7 +78,7 @@ Runs builds in fixed order:
 1. core
 2. node
 3. app-executor
-4. trivet
+4. evaluations
 5. app
 6. cli
 
@@ -94,12 +94,12 @@ instead of knowing Rivet's internal workspace order:
 - `yarn build:runtime`: builds `@valerypopoff/rivet2-core` and
   `@valerypopoff/rivet2-node`. This is the API endpoint runtime set.
 - `yarn build:hosted-web-deps`: builds `@valerypopoff/rivet2-core` and
-  `@valerypopoff/trivet`. This is the hosted web/editor dependency set; the
+  `@valerypopoff/rivet2-evaluations`. This is the hosted web/editor dependency set; the
   app source is still consumed from `packages/app/src`.
 - `yarn build:executor-runtime`: builds `@valerypopoff/rivet2-core`,
   `@valerypopoff/rivet2-node`, and `@valerypopoff/rivet-app-executor`.
 - `yarn build:npm-public`: builds the public npm publish set: core, node,
-  Trivet, and CLI.
+  Evaluations, and CLI.
 
 These scripts intentionally do not build docs, tests, the desktop app, or the
 CLI unless that package is part of the named target.
@@ -107,7 +107,7 @@ CLI unless that package is part of the named target.
 ### `yarn bench:build-timing`
 
 Runs `node scripts/measure-build-phases.mjs`, which measures Yarn install,
-core build, node build, Trivet build, app-executor build, and app build. Use
+core build, node build, Evaluations build, app-executor build, and app build. Use
 `--skip-install` to measure build-only phases and `--skip-app` when a hosted
 wrapper does not need the browser app build. This is a build-time diagnostic,
 not a graph-runtime benchmark.
@@ -395,7 +395,7 @@ Runs lint across:
 - core
 - node
 - app
-- trivet
+- evaluations
 - app-executor
 - cli
 
@@ -412,7 +412,7 @@ Runs:
 - `node scripts/publish-npm-packages.mjs`
 
 This publishes only the public npm package set: `@valerypopoff/rivet2-core`,
-`@valerypopoff/rivet2-node`, `@valerypopoff/trivet`, and
+`@valerypopoff/rivet2-node`, `@valerypopoff/rivet2-evaluations`, and
 `@valerypopoff/rivet2-cli`. Build those workspaces before publishing.
 
 ## Per-Package Build Notes
@@ -460,9 +460,9 @@ workspaces, run `yarn build:packages:local` or
 `node scripts/create-built-package-artifacts.mjs --out-dir <dir>`. By default,
 the script stages the `runtime` target (`core` + `node`). It also accepts
 `--target hosted-web-deps`, `--target executor-runtime`, `--target wrapper`, or
-`--include core,node,trivet,app-executor` for custom sets. Custom sets
+`--include core,node,evaluations,app-executor` for custom sets. Custom sets
 automatically include required local package artifacts such as core when node or
-Trivet is selected. The script validates built outputs, writes
+Evaluations is selected. The script validates built outputs, writes
 package-manager-neutral `file:` package directories, rewrites generated
 internal dependencies to local `file:` dependencies, copies the app-executor
 bundle/sidecar artifacts when requested, and writes `rivet-build-artifacts.json`
@@ -548,7 +548,7 @@ surface narrow:
   `node scripts/create-built-package-artifacts.mjs --target executor-runtime`.
   The app-executor binary artifacts are platform-specific, so build this target
   on the platform that will run the executor image.
-- Hosted web/editor images need built core and Trivet plus app host/editor
+- Hosted web/editor images need built core and Evaluations plus app host/editor
   source under `packages/app/src`; use `yarn build:hosted-web-deps` and
   `node scripts/create-built-package-artifacts.mjs --target hosted-web-deps`.
 
@@ -590,9 +590,9 @@ The CLI now includes a small smoke suite so root `yarn test` / `npm run test` va
 
 The CLI Dockerfile installs the published CLI package through its `RIVET_CLI_VERSION` build argument, and `docker-publish.sh` reads that value from `packages/cli/package.json`. Keep the package version and Docker publish flow aligned whenever the product version changes.
 
-### Trivet
+### Evaluations
 
-`packages/trivet/package.json`:
+`packages/evaluations/package.json`:
 
 - dual ESM/CJS build similar to core/node
 
@@ -816,7 +816,7 @@ policy project/manifest and generated node help/specification assets. It is
 platform-independent, so release workflows should keep it as one shared
 prerequisite instead of repeating it in every Windows/macOS/Linux build job.
 
-`yarn build:hosted-web-deps` builds only the core and Trivet package outputs
+`yarn build:hosted-web-deps` builds only the core and Evaluations package outputs
 that the app package typecheck consumes. The Tauri `beforeBuildCommand` still
 runs `prepare:tauri` and the app `build` from `packages/app` through the pinned
 root Yarn file, so the final app frontend and app-executor sidecar are built
@@ -1000,7 +1000,7 @@ The workflow:
 4. installs dependencies with the checked-in Yarn release and `--immutable --immutable-cache --check-cache`
 5. verifies the retained legacy and Plan B Graph Builder assets with
    `yarn check:graph-builder-assets`
-6. runs `yarn build:npm-public`, which builds `@valerypopoff/rivet2-core`, `@valerypopoff/rivet2-node`, `@valerypopoff/trivet`, and `@valerypopoff/rivet2-cli`
+6. runs `yarn build:npm-public`, which builds `@valerypopoff/rivet2-core`, `@valerypopoff/rivet2-node`, `@valerypopoff/rivet2-evaluations`, and `@valerypopoff/rivet2-cli`
 7. verifies that dependency install and package build touched only generated artifacts
 8. uses Node `22.21.1` and npm `11.5.1` for npm trusted-publishing compatibility
 9. verifies that the repository `NPM_TOKEN` secret is present and accepted by `npm whoami`
@@ -1010,7 +1010,7 @@ The publish step intentionally skips the script's clean-tree check because this
 job installs dependencies and builds ignored publish artifacts immediately
 before publishing. The workflow performs cleanliness checks before install and
 after build instead, so source changes still fail while Yarn install artifacts,
-generated `packages/core/dist`, `packages/node/dist`, `packages/trivet/dist`,
+generated `packages/core/dist`, `packages/node/dist`, `packages/evaluations/dist`,
 `packages/cli/dist`, `packages/cli/bin`, and
 `packages/cli/tsconfig.tsbuildinfo` files do not block publishing.
 
@@ -1021,7 +1021,7 @@ npm packages are versioned in lockstep and must stay on major version `2`.
 When bumping one npm-published package for a `main` release, bump all four
 manifests together:
 `packages/core/package.json`, `packages/node/package.json`,
-`packages/trivet/package.json`, and `packages/cli/package.json`.
+`packages/evaluations/package.json`, and `packages/cli/package.json`.
 
 - patch releases: `2.0.1`, `2.0.2`, etc. for compatible fixes
 - minor releases: `2.1.0`, `2.2.0`, etc. for compatible features
@@ -1065,13 +1065,13 @@ not publish directly from the workspace package directories. It stages clean
 temporary package directories containing only package metadata, README/LICENSE
 files, and built outputs:
 
-- `dist/cjs`, `dist/esm`, and `dist/types` for `rivet2-core`, `rivet2-node`, and `trivet`
+- `dist/cjs`, `dist/esm`, and `dist/types` for `rivet2-core`, `rivet2-node`, and `evaluations`
 - `bin` and `dist` for `rivet2-cli`
 
 During staging, internal `workspace:^` dependencies are rewritten to the same
 published `^2.x` version. For example, `@valerypopoff/rivet2-node` receives a
 normal npm dependency on `@valerypopoff/rivet2-core`,
-`@valerypopoff/trivet` receives the same normal npm dependency on core, and
+`@valerypopoff/rivet2-evaluations` receives the same normal npm dependency on core, and
 `@valerypopoff/rivet2-cli` receives a normal npm dependency on
 `@valerypopoff/rivet2-node`.
 
@@ -1140,7 +1140,7 @@ Current behavior:
 6. stage clean temporary npm package directories
 7. rewrite internal workspace dependencies to public `^2.x` package ranges
 8. skip already-published package versions
-9. publish core, node, Trivet, and cli with `npm publish --access public --registry https://registry.npmjs.org/`
+9. publish core, node, Evaluations, and cli with `npm publish --access public --registry https://registry.npmjs.org/`
 
 ### Operational implication
 

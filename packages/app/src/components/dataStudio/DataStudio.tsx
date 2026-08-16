@@ -1,3 +1,4 @@
+import Button from '@atlaskit/button';
 import { type FC } from 'react';
 import { css } from '@emotion/react';
 import { ErrorBoundary } from 'react-error-boundary';
@@ -9,6 +10,7 @@ import { DatasetList } from './DatasetList';
 import { DatasetDisplay } from './DatasetDisplay';
 import { useAtom, useAtomValue } from 'jotai';
 import { handleError } from '../../utils/errorHandling.js';
+import { evaluationsState } from '../../state/evaluations.js';
 
 export const DataStudioRenderer: FC = () => {
   const [openOverlay, setOpenOverlay] = useAtom(overlayOpenState);
@@ -53,7 +55,7 @@ const styles = css`
     border-right: 1px solid var(--grey);
     z-index: 2;
 
-    header {
+    .ordinary-datasets header {
       padding: 8px 16px;
       border-bottom: 1px solid var(--grey);
       display: flex;
@@ -65,22 +67,74 @@ const styles = css`
   .dataset-display-area {
     overflow: hidden;
   }
+
+  .evaluation-resources {
+    margin: 18px 12px;
+    padding-top: 16px;
+    border-top: 1px solid var(--grey);
+  }
+
+  .evaluation-resources h3 {
+    margin: 0 4px 8px;
+    color: var(--grey-light);
+    font-size: var(--ui-font-size-sm);
+  }
+
+  .evaluation-resources button {
+    width: 100%;
+    justify-content: flex-start;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
 `;
 
 export const DataStudio: FC<{
   onClose: () => void;
 }> = ({ onClose }) => {
   const [selectedDataset, setSelectedDataset] = useAtom(selectedDatasetState);
+  const [evaluations, setEvaluations] = useAtom(evaluationsState);
+  const [, setOpenOverlay] = useAtom(overlayOpenState);
 
   const project = useAtomValue(projectState);
   const { datasets } = useDatasets(project.metadata.id);
+  const evaluationDatasets = evaluations.datasets.filter((dataset) => dataset.projectId === project.metadata.id);
 
   const selectedDatasetMeta = datasets?.find((d) => d.id === selectedDataset);
+
+  const openEvaluationDataset = (datasetId: string) => {
+    setEvaluations((current) => ({
+      ...current,
+      data: {
+        ...current.data,
+        selectedDatasetId: datasetId,
+        selectedSuiteId: undefined,
+      },
+      runs: [],
+      selectedRunId: undefined,
+      requestedView: 'dataset',
+    }));
+    setOpenOverlay('evaluations');
+  };
 
   return (
     <div css={styles}>
       <div className="content">
-        <DatasetList />
+        <div className="left-sidebar">
+          <DatasetList className="ordinary-datasets" />
+          <div className="evaluation-resources">
+            <h3>Evaluation datasets</h3>
+            {evaluationDatasets.length === 0 ? (
+              <p className="muted">No evaluation datasets yet.</p>
+            ) : (
+              evaluationDatasets.map((dataset) => (
+                <Button appearance="subtle" key={dataset.id} onClick={() => openEvaluationDataset(dataset.id)}>
+                  {dataset.name}
+                </Button>
+              ))
+            )}
+          </div>
+        </div>
 
         <div className="dataset-display-area">
           {selectedDatasetMeta && <DatasetDisplay dataset={selectedDatasetMeta} onChangedId={setSelectedDataset} />}

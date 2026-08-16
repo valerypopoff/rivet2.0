@@ -8,6 +8,8 @@ import {
   type RivetLLMProfileHealthSnapshot,
   type RivetLLMProfileHealthStore,
 } from '@valerypopoff/rivet2-core';
+import { type EvaluationRunStore } from '@valerypopoff/rivet2-evaluations';
+import { LocalEvaluationRunStore } from './EvaluationRunStore.js';
 import { BrowserIOProvider } from '../io/BrowserIOProvider.js';
 import { LegacyBrowserIOProvider } from '../io/LegacyBrowserIOProvider.js';
 import { TauriIOProvider } from '../io/TauriIOProvider.js';
@@ -67,6 +69,11 @@ export type Providers = {
   staticData: StaticDataStore;
   llmProfileHealthAdmin?: LLMProfileHealthAdminProvider;
   llmProfileHealthStore?: RivetLLMProfileHealthStore;
+  /**
+   * Operational evaluation history is deliberately separate from project YAML.
+   * Hosts can replace this ephemeral editor default with a durable shared store.
+   */
+  evaluationRunStore: EvaluationRunStore;
 };
 
 export type ProviderOverrides = Partial<Omit<Providers, 'dataRefs'>> & {
@@ -118,6 +125,10 @@ export function useLLMProfileHealthAdmin(): LLMProfileHealthAdminProvider | unde
 
 export function useLLMProfileHealthStore(): RivetLLMProfileHealthStore | undefined {
   return useProviders().llmProfileHealthStore;
+}
+
+export function useEvaluationRunStore(): EvaluationRunStore {
+  return useProviders().evaluationRunStore;
 }
 
 export function createLLMProfileHealthAdminProvider(
@@ -173,7 +184,7 @@ function createDefaultDataRefs(): DataRefStore {
 function createDefaultProviders(
   overrides: Pick<
     ProviderOverrides,
-    'datasets' | 'llmProfileHealthAdmin' | 'llmProfileHealthStore' | 'pathPolicy' | 'staticData'
+    'datasets' | 'evaluationRunStore' | 'llmProfileHealthAdmin' | 'llmProfileHealthStore' | 'pathPolicy' | 'staticData'
   > = {},
 ): Providers {
   const datasets = overrides.datasets ?? new BrowserDatasetProvider();
@@ -197,6 +208,7 @@ function createDefaultProviders(
     environment: getDefaultEnvironmentProvider(),
     pathPolicy,
     staticData,
+    evaluationRunStore: overrides.evaluationRunStore ?? new LocalEvaluationRunStore(),
     ...resolveLLMProfileHealthProviders(overrides),
   };
 }

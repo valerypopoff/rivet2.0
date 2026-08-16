@@ -1,3 +1,6 @@
+- Montecarlo system to emulate using endpoints? To see how many tokens will be spent?
+
+
 - In nodes that have variadic inputs, when an input in the middle is removed, the remaining inputs look weird. Do we need to automatically remove them? It should we allow the user to remove them if needed?
 
 

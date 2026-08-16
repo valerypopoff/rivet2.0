@@ -29,12 +29,12 @@ import {
   savedProjectContentDigestsState,
 } from '../state/savedGraphs.js';
 import { projectExecutionSnapshotsState } from '../state/dataFlow.js';
-import { trivetState } from '../state/trivet.js';
+import { evaluationsState } from '../state/evaluations.js';
 import { useCenterViewOnGraph } from './useCenterViewOnGraph.js';
 import { useSaveCurrentGraph } from './useSaveCurrentGraph.js';
 import type { GraphViewContext } from '../domain/graphEditing/navigationActions.js';
 import {
-  createDefaultTrivetState,
+  createDefaultEvaluationsState,
   createGraphSwitchTransition,
   createProjectLoadTransition,
   mergeCurrentGraphIntoProject,
@@ -77,7 +77,7 @@ export function useWorkspaceTransitions() {
   const [project, setProject] = useAtom(projectState);
   const [loadedProject, setLoadedProject] = useAtom(loadedProjectState);
   const setProjectData = useSetAtom(projectDataState);
-  const setTrivetState = useSetAtom(trivetState);
+  const setEvaluationsState = useSetAtom(evaluationsState);
   const setNavigationStack = useSetAtom(graphNavigationStackState);
   const setIsReadOnlyGraph = useSetAtom(isReadOnlyGraphState);
   const setHistoricalGraph = useSetAtom(historicalGraphState);
@@ -94,7 +94,7 @@ export function useWorkspaceTransitions() {
   const saveCurrentGraph = useSaveCurrentGraph();
   const applyProjectExecutorMode = useApplyProjectExecutorMode();
   const { persistCurrentProjectExecutionSnapshot, restoreProjectExecutionSnapshot } = useProjectExecutionSnapshots();
-  const { testSuites } = useAtomValue(trivetState);
+  const evaluations = useAtomValue(evaluationsState);
   const {
     canvasPosition,
     graphNavigationStack,
@@ -175,7 +175,8 @@ export function useWorkspaceTransitions() {
       data?: Project['data'];
       fsPath?: string | null;
       openedGraph?: GraphId;
-      testSuites?: typeof testSuites;
+      evaluationData?: typeof evaluations.data;
+      evaluationDatasets?: typeof evaluations.datasets;
       graphToLoad?: typeof currentGraph;
       graphView?: GraphViewContext;
       markClean?: boolean;
@@ -294,7 +295,7 @@ export function useWorkspaceTransitions() {
         applyProjectExecutorMode(projectInfo.executorMode, { projectId: targetProjectId });
         await applyStaticData(projectInfo.data);
         setLoadedProject(transition.loadedProject);
-        setTrivetState(createDefaultTrivetState(projectInfo.testSuites ?? []));
+        setEvaluationsState(createDefaultEvaluationsState(projectInfo.evaluationData, projectInfo.evaluationDatasets));
         if (!targetProjectHasOpenTab) {
           clearUiGraphPreviewSessions(targetProjectId);
         }
@@ -429,7 +430,7 @@ export function useWorkspaceTransitions() {
           const latestProject = store.get(projectState);
           const latestLoadedProject = store.get(loadedProjectState);
           projectPath = latestLoadedProject.path;
-          const latestTestSuites = store.get(trivetState).testSuites;
+          const latestEvaluations = store.get(evaluationsState);
           const savedGraph = saveCurrentGraph();
           const projectToPersist = withDerivedProjectPluginSpecs(
             mergeCurrentGraphIntoProject(latestProject, savedGraph),
@@ -458,7 +459,10 @@ export function useWorkspaceTransitions() {
           await flushHybridStorageGroup('project');
 
           if (shouldUseSaveAs) {
-            const filePath = await ioProvider.saveProjectData(projectToPersist, { testSuites: latestTestSuites });
+            const filePath = await ioProvider.saveProjectData(projectToPersist, {
+              evaluationData: latestEvaluations.data,
+              evaluationDatasets: latestEvaluations.datasets,
+            });
 
             if (filePath) {
               savedPath = filePath;
@@ -480,7 +484,7 @@ export function useWorkspaceTransitions() {
             const savePath = latestLoadedProject.path!;
             await saveInPlaceProvider.saveProjectDataNoPrompt(
               projectToPersist,
-              { testSuites: latestTestSuites },
+              { evaluationData: latestEvaluations.data, evaluationDatasets: latestEvaluations.datasets },
               savePath,
             );
             savedPath = savePath;

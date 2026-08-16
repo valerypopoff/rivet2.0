@@ -9,6 +9,7 @@ import {
 } from '../state/execution.js';
 import { projectState, projectsState } from '../state/savedGraphs.js';
 import { useIOProvider } from '../providers/ProvidersContext.js';
+import { ExecutionRecorder, type ProjectId } from '@valerypopoff/rivet2-core';
 
 export function useLoadRecording() {
   const ioProvider = useIOProvider();
@@ -76,6 +77,28 @@ export function useLoadRecording() {
       }
 
       store.set(clearLoadedRecordingForProjectState, project.metadata.id);
+    },
+    /** Loads a recording already owned by a trusted Rivet run store. */
+    loadSerializedRecording: (input: { serialized: string; path: string; projectId: ProjectId }): boolean => {
+      const project = store.get(projectState);
+      if (project.metadata.id !== input.projectId) {
+        toast.warn('Switch to this evaluation project before opening its recording.');
+        return false;
+      }
+      if (!canChangeRecording('loading', input.projectId)) return false;
+
+      try {
+        store.set(loadedRecordingState, {
+          recorder: ExecutionRecorder.deserializeFromString(input.serialized),
+          path: input.path,
+          projectId: input.projectId,
+        });
+        store.set(recordingPlaybackStartingState, false);
+        return true;
+      } catch (error) {
+        toast.error(`Could not open the evaluation recording: ${error instanceof Error ? error.message : String(error)}`);
+        return false;
+      }
     },
   };
 }

@@ -241,13 +241,6 @@ test('cloneNode deep-clones the complete node, resets position, and copies no co
       },
     },
     variants: [{ id: 'variant', data: { opaqueVariant: ['preserve', 2] } }],
-    tests: [
-      {
-        id: 'test-group',
-        evaluatorGraphId: graphId,
-        tests: [{ conditionText: 'preserve test metadata' }],
-      },
-    ],
   } satisfies ChartNode;
   const target = makeNode('target');
   let normalizedCreatedNodeIds: readonly NodeId[] = [];

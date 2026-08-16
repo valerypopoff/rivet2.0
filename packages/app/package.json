@@ -91,7 +91,7 @@
     "@types/ws": "^8.5.8",
     "@types/yargs": "^17.0.29",
     "@valerypopoff/rivet2-core": "workspace:^",
-    "@valerypopoff/trivet": "workspace:^",
+    "@valerypopoff/rivet2-evaluations": "workspace:^",
     "@vitejs/plugin-react": "^4.7.0",
     "ahooks": "^3.9.7",
     "clsx": "^2.0.0",

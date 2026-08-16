@@ -87,7 +87,10 @@ test('port labels expose reorder drag only in explicit rearrange modes', () => {
   assert.match(nodePortsSource, /useReorderVariadicPortsCommand\(\)/);
   assert.match(nodePortsSource, /reorderVariadicPorts\(\{/);
   assert.match(nodePortsSource, /variadicPortReorderSpec\?\.kind === 'input-output-pair'/);
-  assert.match(nodePortsSource, /className=\{`node-ports\$\{isRearrangingSubGraphPorts \? ' subgraph-port-rearrange-mode' : ''\}\$\{/);
+  assert.match(
+    nodePortsSource,
+    /className=\{`node-ports\$\{alignRegexMatchOutputsWithValues \? ' match-per-output-values' : ''\}\$\{/,
+  );
   assert.match(nodePortsSource, /document\.addEventListener\('pointerdown', handlePointerDown, true\)/);
   assert.match(nodePortsSource, /setSubGraphPortRearrangeTarget\(undefined\)/);
   assert.match(nodePortsSource, /setVariadicPortRearrangeTarget\(undefined\)/);

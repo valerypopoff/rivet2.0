@@ -132,9 +132,10 @@ export const pluginInfos: PluginInfo[] = [
     id: 'gentrace',
     name: 'Gentrace',
     description: dedent`
-      Gentrace evaluates and observes your generative AI pipelines.
+      Export completed Rivet Evaluations to Gentrace for external reporting and observability.
 
-      This plugin helps you run Gentrace test cases through your Rivet graph and evaluates their performance on a variety of benchmarks.
+      Rivet remains the execution engine: datasets, assertions, evaluator graphs, retries, costs, and recordings
+      stay in the Evaluations workspace before a completed run is exported.
     `,
     author: 'Gentrace',
     logoImage: GentraceLogo,

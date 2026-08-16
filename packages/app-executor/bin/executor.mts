@@ -236,6 +236,7 @@ const rivetDebugger = startDebuggerServer({
     projectPath,
     useEditorCache,
     captureNodeTimings,
+    evaluation,
     returnWhenGraphOutputsReady,
     webAppStorage: initialWebAppStorage,
   }) => {
@@ -358,6 +359,7 @@ const rivetDebugger = startDebuggerServer({
         remoteDebugger: clientScopedDebugger,
         remoteDebuggerRequestId: requestId,
         captureNodeTimings: captureNodeTimings ?? false,
+        evaluation,
         returnWhenGraphOutputsReady,
         registry,
         datasetProvider: getDatasetProviderForClient(client),

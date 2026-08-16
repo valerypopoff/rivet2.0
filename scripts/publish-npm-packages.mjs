@@ -22,8 +22,8 @@ const publishPackages = [
     requiredFiles: ['dist/cjs/bundle.cjs', 'dist/esm/index.js', 'dist/types/index.d.ts'],
   },
   {
-    name: '@valerypopoff/trivet',
-    workspaceDir: 'packages/trivet',
+    name: '@valerypopoff/rivet2-evaluations',
+    workspaceDir: 'packages/evaluations',
     copyEntries: ['dist/cjs', 'dist/esm', 'dist/types'],
     requiredFiles: ['dist/cjs/bundle.cjs', 'dist/esm/index.js', 'dist/types/index.d.ts'],
   },

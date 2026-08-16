@@ -1,6 +1,5 @@
 import type { Opaque } from 'type-fest';
 import type { DataType } from './DataValue.js';
-import type { GraphId } from '../index.js';
 
 /** Unique in a NodeGraph. */
 export type NodeId = Opaque<string, 'NodeId'>;
@@ -58,8 +57,6 @@ export interface NodeBase {
   /** Alternative sets of data for the node. */
   variants?: ChartNodeVariant<unknown>[];
 
-  tests?: NodeTestGroup[];
-
   /** If true, the node is disabled and effectively "not ran" */
   disabled?: boolean;
 
@@ -82,16 +79,6 @@ export type ChartNode<Type extends string = string, Data = unknown> = NodeBase &
 export type ChartNodeVariant<Data = unknown> = {
   id: string;
   data: Data;
-};
-
-export type NodeTestGroup = {
-  id: string;
-  evaluatorGraphId: GraphId;
-  tests: NodeTest[];
-};
-
-export type NodeTest = {
-  conditionText: string;
 };
 
 /** Represents an input definition of a node. */

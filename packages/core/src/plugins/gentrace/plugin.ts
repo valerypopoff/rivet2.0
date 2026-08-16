@@ -1,20 +1,6 @@
-import { Pipeline, StepRun, init, runTest, getPipelines } from './gentraceSdk.js';
+import { Pipeline, StepRun, getPipelines, init } from './gentraceSdk.js';
 
-import type { Project } from '../../model/Project.js';
-import type { GraphId, NodeGraph } from '../../model/NodeGraph.js';
-import type { NativeApi } from '../../native/NativeApi.js';
-import type { Recording } from '../../recording/RecordedEvents.js';
 import type { RivetPlugin, SecretPluginConfigurationSpec } from '../../model/RivetPlugin.js';
-import type { Settings } from '../../model/Settings.js';
-import type { DataValue } from '../../model/DataValue.js';
-import { globalRivetNodeRegistry } from '../../model/Nodes.js';
-import { cloneDeep, mapValues } from 'lodash-es';
-import { GptTokenizerTokenizer } from '../../integrations/GptTokenizerTokenizer.js';
-import { ExecutionRecorder } from '../../recording/ExecutionRecorder.js';
-import { inferType } from '../../utils/coerceType.js';
-// eslint-disable-next-line import/no-cycle -- Local Gentrace execution intentionally depends on GraphProcessor.
-import { GraphProcessor } from '../../model/GraphProcessor.js';
-import { resolveProcessSettings } from '../../api/processSettings.js';
 
 const apiKeyConfigSpec: SecretPluginConfigurationSpec = {
   type: 'secret',
@@ -24,309 +10,134 @@ const apiKeyConfigSpec: SecretPluginConfigurationSpec = {
   helperText: 'Create at https://gentrace.ai/settings/api-keys',
 };
 
-function initializeGentrace(gentraceApiKey: string) {
-  init({
-    apiKey: gentraceApiKey,
-  });
+/**
+ * The core package deliberately does not import the Evaluations package: that
+ * package depends on core to execute graphs. This narrow structural view keeps
+ * Gentrace an optional reporter rather than creating another evaluator runner
+ * or a package dependency cycle.
+ */
+export type GentraceEvaluationRun = {
+  id: string;
+  suiteName: string;
+  startedAt: string;
+  completedAt?: string;
+  purpose: string;
+  executionStatus: string;
+  qualityStatus: string;
+  qualityReason: { code: string; message: string };
+  accountingStatus: string;
+  aggregate?: unknown;
+  trials: Array<{
+    id: string;
+    caseId: string;
+    caseName: string;
+    trialIndex: number;
+    executionStatus: string;
+    qualityStatus: string;
+    qualityReason: { code: string; message: string };
+    inputs: object;
+    expected: object;
+    outputs: object;
+    observations: unknown[];
+    totalMetrics: { durationMs: number };
+    error?: string;
+  }>;
+};
+
+function initializeGentrace(gentraceApiKey: string): void {
+  if (!gentraceApiKey) throw new Error('Gentrace API key not set.');
+  init({ apiKey: gentraceApiKey });
 }
 
-export const runGentraceTests = async (
-  gentracePipelineSlug: string,
-  settings: Settings,
-  project: Omit<Project, 'data'>,
-  graph: NodeGraph,
-  nativeApi: NativeApi,
-  contextValues: Record<string, DataValue> = {},
-) => {
-  const gentraceApiKey = settings.pluginSettings?.gentrace?.gentraceApiKey as string | undefined;
-
-  if (!gentraceApiKey) {
-    throw new Error('Gentrace API key not set.');
-  }
-
-  const graphId = graph.metadata?.id;
-
-  if (!graphId) {
-    throw new Error('Graph ID not set.');
-  }
-
-  initializeGentrace(gentraceApiKey);
-
-  const response = await runTest(gentracePipelineSlug, async (testCase) => {
-    const pipeline = new Pipeline({
-      slug: gentracePipelineSlug,
-    });
-
-    const runner = pipeline.start();
-
-    const rivetFormattedInputs = mapValues(testCase.inputs, inferType);
-
-    const tempProject = {
-      ...project,
-      graphs: {
-        ...project.graphs,
-        [graph.metadata!.id!]: graph,
-      },
-    };
-
-    const recorder = new ExecutionRecorder();
-    const processor = new GraphProcessor(tempProject, graphId, globalRivetNodeRegistry);
-    processor.executor = 'browser';
-
-    recorder.record(processor);
-    const runContextValues = cloneDeep(contextValues);
-    await processor.processGraph(
-      {
-        settings: resolveProcessSettings(settings),
-        nativeApi,
-        tokenizer: new GptTokenizerTokenizer(),
-      },
-      rivetFormattedInputs,
-      runContextValues,
-    );
-
-    const fullRecording = recorder.getRecording();
-
-    const stepRuns = convertRecordingToStepRuns(fullRecording, project, graphId);
-
-    for (const stepRun of stepRuns) {
-      await runner.addStepRunNode(stepRun);
-    }
-
-    if (stepRuns.length === 0) {
-      throw new Error('No Rivet steps found. You need operations which are not Graph Input or Graph Output nodes.');
-    }
-
-    return ['', runner];
-  });
-
-  return response;
-};
-
-export const runRemoteGentraceTests = async (
-  gentracePipelineSlug: string,
-  settings: Settings,
-  project: Omit<Project, 'data'>,
-  graph: NodeGraph,
-  runAndRecord: (testCase: Record<string, any>) => Promise<Recording>,
-) => {
-  const gentraceApiKey = settings.pluginSettings?.gentrace?.gentraceApiKey as string | undefined;
-
-  if (!gentraceApiKey) {
-    throw new Error('Gentrace API key not set.');
-  }
-
-  const graphId = graph.metadata?.id;
-
-  if (!graphId) {
-    throw new Error('Graph ID not set.');
-  }
-
-  initializeGentrace(gentraceApiKey);
-
-  const response = await runTest(gentracePipelineSlug, async (testCase) => {
-    const pipeline = new Pipeline({
-      slug: gentracePipelineSlug,
-    });
-
-    const runner = pipeline.start();
-
-    const rivetFormattedInputs = mapValues(testCase.inputs, inferType);
-
-    const fullRecording = await runAndRecord(rivetFormattedInputs);
-    const stepRuns = convertRecordingToStepRuns(fullRecording, project, graphId);
-
-    for (const stepRun of stepRuns) {
-      await runner.addStepRunNode(stepRun);
-    }
-
-    if (stepRuns.length === 0) {
-      throw new Error('No Rivet steps found. You need operations which are not Graph Input or Graph Output nodes.');
-    }
-
-    return ['', runner];
-  });
-
-  return response;
-};
-
-type SimplifiedNode = {
-  nodeId: string;
-  start: number;
-  end: number;
-  modelParams: Record<string, any>;
-  inputs: Record<string, any>;
-  outputs: Record<string, any>;
-};
-
-function convertRecordingToStepRuns(recording: Recording, project: Omit<Project, 'data'>, graphId: GraphId): StepRun[] {
-  const partialProcessStartEndPairs: {
-    [processId: string]: Partial<SimplifiedNode>;
-  } = {};
-
-  recording.events.forEach((event) => {
-    const eventType = event?.type;
-
-    if (!eventType) {
-      return;
-    }
-
-    if (eventType === 'nodeStart' || eventType === 'nodeFinish') {
-      const processId = event?.data?.processId;
-      const nodeId = event?.data?.nodeId;
-
-      if (!processId) {
-        return;
-      }
-
-      let existingPair = partialProcessStartEndPairs[processId];
-
-      if (!existingPair) {
-        existingPair = {};
-        partialProcessStartEndPairs[processId] = existingPair;
-      }
-
-      existingPair.nodeId = nodeId;
-
-      if (eventType === 'nodeStart') {
-        existingPair.start = event.ts;
-        existingPair.inputs = event.data.inputs;
-      } else {
-        existingPair.end = event.ts;
-        existingPair.outputs = event.data.outputs;
-      }
-    }
-  });
-
-  const processStartEndPairs = partialProcessStartEndPairs as {
-    [processId: string]: SimplifiedNode;
+function timestampForTrial(
+  run: GentraceEvaluationRun,
+  durationMs: number,
+  index: number,
+): { start: string; end: string } {
+  const runStart = Date.parse(run.startedAt);
+  const safeStart = Number.isFinite(runStart) ? runStart + index : Date.now();
+  const safeDuration = Number.isFinite(durationMs) && durationMs >= 0 ? durationMs : 0;
+  return {
+    start: new Date(safeStart).toISOString(),
+    end: new Date(safeStart + safeDuration).toISOString(),
   };
+}
 
-  const selectedGraph = project.graphs[graphId];
-
-  if (!selectedGraph) {
-    return [];
+/**
+ * Exports an already completed Rivet Evaluation as one Gentrace pipeline run.
+ * It never fetches Gentrace test cases and never executes a Rivet graph: the
+ * generic Evaluations runner remains the sole execution engine.
+ */
+export async function exportGentraceEvaluationRun(input: {
+  gentraceApiKey: string;
+  pipelineSlug: string;
+  run: GentraceEvaluationRun;
+}): Promise<{ resultId?: string; pipelineRunId?: string }> {
+  initializeGentrace(input.gentraceApiKey);
+  if (!input.pipelineSlug) throw new Error('Gentrace pipeline slug is required.');
+  if (input.run.executionStatus !== 'completed') {
+    throw new Error('Only completed Rivet Evaluation runs can be exported to Gentrace.');
   }
 
-  // Convert to step runs
-  const stepRuns: StepRun[] = [];
+  const pipeline = new Pipeline({ slug: input.pipelineSlug });
+  const runner = pipeline.start({
+    metadata: {
+      source: { type: 'string', value: 'rivet-evaluations' },
+      evaluationRunId: { type: 'string', value: input.run.id },
+      suiteName: { type: 'string', value: input.run.suiteName },
+      purpose: { type: 'string', value: input.run.purpose },
+      qualityStatus: { type: 'string', value: input.run.qualityStatus },
+      qualityReason: { type: 'string', value: input.run.qualityReason.message },
+      accountingStatus: { type: 'string', value: input.run.accountingStatus },
+      executionStatus: { type: 'string', value: input.run.executionStatus },
+    },
+  });
 
-  for (const [, pair] of Object.entries(processStartEndPairs)) {
-    const { nodeId } = pair;
-
-    const relatedNode = selectedGraph.nodes.find((node) => node.id === nodeId);
-
-    const nodeType = relatedNode?.type;
-
-    if (!nodeType || !relatedNode.data || nodeType === 'graphInput' || nodeType === 'graphOutput') {
-      continue;
-    }
-
-    const nodeData = relatedNode.data as Record<string, any>;
-
-    if (relatedNode) {
-      pair.modelParams = { ...nodeData, ...{ type: nodeType } };
-    }
-
-    if (nodeType === 'chat') {
-      const modelName = nodeData.model ? nodeData.model : '';
-
-      if (modelName.startsWith('gpt')) {
-        // Convert to OpenAI Gentrace node
-        const gentraceOpenAIInputs: Record<string, any> = { ...pair.inputs };
-
-        gentraceOpenAIInputs.messages = [
-          {
-            content: pair.inputs.prompt.value,
-            role: 'user',
-          },
-        ];
-
-        const gentraceOpenAIModelParams: Record<string, any> = { ...pair.modelParams };
-
-        gentraceOpenAIModelParams.model = modelName;
-
-        gentraceOpenAIModelParams.frequency_penalty = pair.modelParams.frequencyPenalty || null;
-
-        gentraceOpenAIModelParams.max_tokens = pair.modelParams.maxTokens || undefined;
-
-        gentraceOpenAIModelParams.presence_penalty = pair.modelParams.presencePenalty || null;
-
-        gentraceOpenAIModelParams.stop = pair.modelParams.stop || null;
-
-        gentraceOpenAIModelParams.temperature = pair.modelParams.temperature || null;
-
-        gentraceOpenAIModelParams.top_p = pair.modelParams.top_p || null;
-
-        const gentraceOpenAIOutputs: Record<string, any> = { ...pair.outputs };
-
-        const outputValues: string[] = Array.isArray(pair.outputs.response.value)
-          ? pair.outputs.response.value
-          : [pair.outputs.response.value];
-
-        gentraceOpenAIOutputs.choices = outputValues.map((outputValue, index) => {
-          return {
-            index,
-            message: {
-              content: outputValue,
-              role: 'assistant',
-            },
-            usage: {
-              completion_tokens: pair.outputs.responseTokens.value,
-              prompt_tokens: pair.outputs.requestTokens.value,
-              total_tokens: pair.outputs.responseTokens.value + pair.outputs.requestTokens.value,
-            },
-          };
-        });
-
-        stepRuns.push(
-          new StepRun(
-            'openai',
-            'openai_createChatCompletion',
-            pair.end - pair.start,
-            new Date(pair.start).toISOString(),
-            new Date(pair.end).toISOString(),
-            gentraceOpenAIInputs,
-            gentraceOpenAIModelParams,
-            gentraceOpenAIOutputs,
-            {},
-            undefined,
-          ),
-        );
-
-        continue;
-      }
-    }
-
-    stepRuns.push(
+  for (const [index, trial] of input.run.trials.entries()) {
+    const durationMs = typeof trial.totalMetrics.durationMs === 'number' ? trial.totalMetrics.durationMs : 0;
+    const { start, end } = timestampForTrial(input.run, durationMs, index);
+    await runner.addStepRunNode(
       new StepRun(
         'rivet',
-        nodeType ? `rivet_operation_${nodeType}` : 'rivet_operation',
-        pair.end - pair.start,
-        new Date(pair.start).toISOString(),
-        new Date(pair.end).toISOString(),
-        pair.inputs,
-        pair.modelParams,
-        pair.outputs,
+        'rivet_evaluation_trial',
+        durationMs,
+        start,
+        end,
+        {
+          caseId: trial.caseId,
+          caseName: trial.caseName,
+          trialIndex: trial.trialIndex,
+          inputs: trial.inputs,
+          expected: trial.expected,
+        },
+        {
+          source: 'rivet-evaluations',
+          purpose: input.run.purpose,
+        },
+        {
+          executionStatus: trial.executionStatus,
+          qualityStatus: trial.qualityStatus,
+          qualityReason: trial.qualityReason,
+          outputs: trial.outputs,
+          observations: trial.observations,
+          metrics: trial.totalMetrics,
+        },
         {},
-        undefined,
+        trial.error,
       ),
     );
   }
 
-  return stepRuns;
+  return (await runner.submit({ waitForServer: true })) as { resultId?: string; pipelineRunId?: string };
 }
 
-export const getGentracePipelines = async (gentraceApiKey: string) => {
+export async function getGentracePipelines(gentraceApiKey: string) {
   initializeGentrace(gentraceApiKey);
-  return await getPipelines();
-};
+  return getPipelines();
+}
 
 export const gentracePlugin: RivetPlugin = {
   id: 'gentrace',
   name: 'Gentrace',
-
-  configSpec: {
-    gentraceApiKey: apiKeyConfigSpec,
-  },
+  configSpec: { gentraceApiKey: apiKeyConfigSpec },
 };

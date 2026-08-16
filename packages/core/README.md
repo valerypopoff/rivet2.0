@@ -2,7 +2,7 @@
 
 Shared graph model, execution engine, built-in nodes, serialization, provider integrations, plugin assembly, and runtime contracts for Rivet 2.
 
-This package is the foundation used by the Rivet app, Node runtime, CLI, app executor, and Trivet tooling.
+This package is the foundation used by the Rivet app, Node runtime, CLI, app executor, and Evaluations tooling.
 
 ## Development
 

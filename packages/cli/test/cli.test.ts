@@ -18,6 +18,11 @@ import {
 import yargs from 'yargs';
 import { parseJsonInputRecord, parseJsonKeyValueInputRecord, parseKeyValueInputRecord } from '../src/commandInputs.js';
 import { buildDoctorReport, makeDoctorCommand } from '../src/commands/doctor.js';
+import {
+  evaluationRunFailure,
+  formatEvaluationRunAsJUnit,
+  makeEvaluationCommand,
+} from '../src/commands/evaluations.js';
 import { buildProjectInspection } from '../src/commands/list.js';
 import { makeCommand as makeRunCommand, run } from '../src/commands/run.js';
 import {
@@ -29,8 +34,17 @@ import {
   parseEndpointAliases,
   type ServeArgs,
 } from '../src/commands/serve.js';
-import { createWebAppServeApp, makeCommand as makeServeAppCommand, type ServeAppArgs } from '../src/commands/serveApp.js';
-import { resolveDatasetFilePath, throwIfInvalidGraph, throwIfNoMainGraph, withProviderProcessorOptions } from '../src/cliRuntime.js';
+import {
+  createWebAppServeApp,
+  makeCommand as makeServeAppCommand,
+  type ServeAppArgs,
+} from '../src/commands/serveApp.js';
+import {
+  resolveDatasetFilePath,
+  throwIfInvalidGraph,
+  throwIfNoMainGraph,
+  withProviderProcessorOptions,
+} from '../src/cliRuntime.js';
 import { formatListenUrl } from '../src/http.js';
 import { shapeOutputs } from '../src/output.js';
 
@@ -59,9 +73,7 @@ test('run command builder registers its default option values', async () => {
 });
 
 test('serve command exposes its expected defaults', async () => {
-  const argv = await makeServeCommand(yargs([]))
-    .exitProcess(false)
-    .parse();
+  const argv = await makeServeCommand(yargs([])).exitProcess(false).parse();
 
   assert.equal(argv.port, 3000);
   assert.equal(argv.host, '0.0.0.0');
@@ -119,6 +131,203 @@ test('doctor command exposes dataset and JSON options', () => {
   assert.equal(options.default['require-dataset-file'], false);
   assert.equal(options.key['dataset-file'], true);
   assert.equal(options.key['require-dataset-file'], true);
+});
+
+test('evaluations command distinguishes quality evaluation from execution benchmarking', () => {
+  const command = makeEvaluationCommand(yargs([])).exitProcess(false);
+  const options = command.getOptions();
+
+  assert.equal(options.default.benchmark, false);
+  assert.equal(options.key.benchmark, true);
+});
+
+test('evaluation JUnit separates execution errors from quality failures', () => {
+  const trial = (overrides: Record<string, unknown>) => ({
+    id: 'trial',
+    caseId: 'case',
+    caseName: 'Case',
+    caseIndex: 0,
+    trialIndex: 0,
+    executionStatus: 'completed',
+    qualityStatus: 'passed',
+    qualityReason: { code: 'checks-passed', message: 'Checks passed.' },
+    inputs: {},
+    expected: {},
+    outputs: {},
+    observations: [],
+    targetMetrics: { durationMs: 1 },
+    evaluatorMetrics: { durationMs: 0 },
+    totalMetrics: { durationMs: 1 },
+    ...overrides,
+  });
+  const report = formatEvaluationRunAsJUnit({
+    suiteName: 'Suite',
+    trials: [
+      trial({ executionStatus: 'error', qualityStatus: 'unable-to-evaluate', error: 'Target crashed' }),
+      trial({
+        qualityStatus: 'unable-to-evaluate',
+        qualityReason: { code: 'required-check-error', message: 'Judge crashed' },
+      }),
+      trial({ qualityStatus: 'failed', qualityReason: { code: 'checks-failed', message: 'Wrong answer' } }),
+      trial({ executionStatus: 'canceled', qualityStatus: 'not-evaluated' }),
+      trial({
+        qualityStatus: 'not-evaluated',
+        qualityReason: { code: 'benchmark', message: 'Execution benchmark.' },
+      }),
+    ],
+    purpose: 'evaluation',
+    executionStatus: 'completed',
+    qualityStatus: 'failed',
+    qualityReason: { code: 'checks-failed', message: 'One or more checks failed.' },
+    thresholdResults: [],
+  } as unknown as Parameters<typeof formatEvaluationRunAsJUnit>[0]);
+
+  assert.match(report, /failures="1" errors="2"/u);
+  assert.match(report, /<error message="Target crashed"/u);
+  assert.match(report, /<error message="Judge crashed"/u);
+  assert.match(report, /<failure message="Wrong answer"/u);
+  assert.equal((report.match(/<skipped /gu) ?? []).length, 2);
+});
+
+test('evaluation JUnit exposes aggregate threshold results that are not represented by trial rows', () => {
+  const report = formatEvaluationRunAsJUnit({
+    suiteName: 'Threshold suite',
+    purpose: 'evaluation',
+    executionStatus: 'completed',
+    qualityStatus: 'failed',
+    qualityReason: { code: 'thresholds-failed', message: 'The pass-rate threshold failed.' },
+    thresholdResults: [
+      {
+        id: 'threshold',
+        metric: 'passRate',
+        operator: 'at-least',
+        status: 'failed',
+        expectedValue: 1,
+        actualValue: 0.5,
+        message: 'Pass rate 50% is below 100%.',
+      },
+    ],
+    trials: [
+      {
+        id: 'trial',
+        caseId: 'case',
+        caseName: 'Case',
+        caseIndex: 0,
+        trialIndex: 0,
+        executionStatus: 'completed',
+        qualityStatus: 'passed',
+        qualityReason: { code: 'checks-passed', message: 'Checks passed.' },
+        inputs: {},
+        expected: {},
+        outputs: {},
+        observations: [],
+        targetMetrics: { durationMs: 1 },
+        evaluatorMetrics: { durationMs: 0 },
+        totalMetrics: { durationMs: 1 },
+      },
+    ],
+  } as unknown as Parameters<typeof formatEvaluationRunAsJUnit>[0]);
+
+  assert.match(report, /tests="2" failures="1" errors="0"/u);
+  assert.match(report, /<testcase name="Evaluation aggregate requirements">/u);
+  assert.match(report, /<failure message="Pass rate 50% is below 100%\."/u);
+
+  const unavailableReport = formatEvaluationRunAsJUnit({
+    suiteName: 'Cost threshold suite',
+    purpose: 'evaluation',
+    executionStatus: 'completed',
+    qualityStatus: 'unable-to-evaluate',
+    qualityReason: {
+      code: 'required-metric-unavailable',
+      message: 'Cost accounting is incomplete.',
+    },
+    thresholdResults: [
+      {
+        id: 'cost-threshold',
+        metric: 'averageCostUsd',
+        operator: 'at-most',
+        status: 'unavailable',
+        expectedValue: 0.01,
+        message: 'Average cost is unavailable.',
+      },
+    ],
+    trials: [
+      {
+        id: 'trial',
+        caseId: 'case',
+        caseName: 'Case',
+        caseIndex: 0,
+        trialIndex: 0,
+        executionStatus: 'completed',
+        qualityStatus: 'passed',
+        qualityReason: { code: 'checks-passed', message: 'Checks passed.' },
+        inputs: {},
+        expected: {},
+        outputs: {},
+        observations: [],
+        targetMetrics: { durationMs: 1 },
+        evaluatorMetrics: { durationMs: 0 },
+        totalMetrics: { durationMs: 1 },
+      },
+    ],
+  } as unknown as Parameters<typeof formatEvaluationRunAsJUnit>[0]);
+
+  assert.match(unavailableReport, /tests="2" failures="0" errors="1"/u);
+  assert.match(unavailableReport, /<error message="Average cost is unavailable\."/u);
+});
+
+test('evaluation CLI exit classification keeps benchmarks successful and execution failures nonzero', () => {
+  const reason = { code: 'benchmark' as const, message: 'Execution benchmark.' };
+  const status = (
+    overrides: Partial<Parameters<typeof evaluationRunFailure>[0]>,
+  ): Parameters<typeof evaluationRunFailure>[0] => ({
+    purpose: 'evaluation',
+    executionStatus: 'completed',
+    qualityStatus: 'passed',
+    qualityReason: reason,
+    aggregate: undefined,
+    trials: [],
+    ...overrides,
+  });
+
+  assert.equal(
+    evaluationRunFailure(status({ purpose: 'execution-benchmark', qualityStatus: 'not-evaluated' })),
+    undefined,
+  );
+  assert.equal(
+    evaluationRunFailure(status({ executionStatus: 'canceled', qualityStatus: 'not-evaluated' }))?.exitCode,
+    3,
+  );
+  assert.equal(evaluationRunFailure(status({ executionStatus: 'error', qualityStatus: 'failed' }))?.exitCode, 3);
+  assert.equal(evaluationRunFailure(status({ qualityStatus: 'failed' }))?.exitCode, 2);
+  assert.equal(evaluationRunFailure(status({ qualityStatus: 'unable-to-evaluate' }))?.exitCode, 3);
+  assert.equal(evaluationRunFailure(status({ qualityStatus: 'not-evaluated' }))?.exitCode, 3);
+  assert.equal(
+    evaluationRunFailure(
+      status({
+        purpose: 'execution-benchmark',
+        qualityStatus: 'not-evaluated',
+        aggregate: {
+          trialCount: 1,
+          evaluatedTrialCount: 0,
+          notEvaluatedTrialCount: 1,
+          unableToEvaluateTrialCount: 0,
+          passedTrialCount: 0,
+          failedTrialCount: 0,
+          erroredTrialCount: 1,
+          canceledTrialCount: 0,
+          passRate: 0,
+          averageLatencyMs: 1,
+          p95LatencyMs: 1,
+          targetErrorRate: 1,
+          evaluatorErrorRate: 0,
+          toolFailureRate: 0,
+          metrics: {},
+        },
+      }),
+    )?.exitCode,
+    3,
+  );
 });
 
 test('run command executes a real project and writes shaped output', async (t) => {
@@ -409,7 +618,7 @@ test('createServeApp exposes health, auth, CORS, and endpoint aliases', async ()
   assert.equal(response.headers.get('access-control-allow-origin'), 'https://example.test');
   assert.equal(response.headers.has('x-duration-ms'), true);
 
-  const body = await response.json() as Record<string, unknown>;
+  const body = (await response.json()) as Record<string, unknown>;
   assert.deepEqual(body.output, { type: 'string', value: 'hello' });
 
   const invalidJsonResponse = await app.fetch(
@@ -461,7 +670,7 @@ test('createWebAppServeApp serves app JSON and rejects stale revision keys', asy
 
   const appResponse = await app.fetch(new Request('http://localhost/app.json'));
   assert.equal(appResponse.status, 200);
-  assert.equal((await appResponse.json() as { name: string }).name, 'Test web app');
+  assert.equal(((await appResponse.json()) as { name: string }).name, 'Test web app');
 
   const actionResponse = await app.fetch(
     new Request('http://localhost/actions/run', {
@@ -527,7 +736,7 @@ test('createWebAppServeApp dev mode rereads the project file for web app routes'
 
   const response = await app.fetch(new Request('http://localhost/app.json'));
   assert.equal(response.status, 200);
-  assert.equal((await response.json() as { name: string }).name, 'Changed web app');
+  assert.equal(((await response.json()) as { name: string }).name, 'Changed web app');
 });
 
 test('createWebAppServeApp dev mode reports project reload failures as server errors', async (t) => {

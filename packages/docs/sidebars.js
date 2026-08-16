@@ -37,7 +37,7 @@ const sidebars = {
       collapsed: false,
       items: [
         'user-guide/features/prompt-designer',
-        'user-guide/features/trivet-tests',
+        'user-guide/features/evaluations',
         'user-guide/features/run-activity',
         'user-guide/features/data-studio',
       ],
@@ -73,15 +73,14 @@ const sidebars = {
     },
     {
       type: 'category',
-      label: 'Testing',
+      label: 'Evaluations',
       collapsible: true,
       collapsed: false,
       items: [
-        'trivet',
-        'user-guide/trivet-getting-started',
-        'user-guide/trivet-validation-graphs',
-        'user-guide/trivet-tutorial',
-        'user-guide/trivet-library',
+        'evaluations',
+        'user-guide/evaluations-getting-started',
+        'user-guide/evaluator-graphs',
+        'user-guide/evaluations-library',
       ],
     },
     {

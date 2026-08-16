@@ -19,7 +19,7 @@ import {
   selectedProcessPageNodesState,
 } from '../state/dataFlow';
 import { previousDataPerNodeToKeepState } from '../state/settings';
-import { trivetTestsRunningState } from '../state/trivet';
+import { evaluationsRunningState } from '../state/evaluations';
 import { type ProcessQuestions, userInputModalQuestionsState } from '../state/userInput';
 import {
   clearExecutionDataRefs,
@@ -32,7 +32,7 @@ import { projectState } from '../state/savedGraphs';
 export type ExecutionDataFlowApi = {
   clearNodeRunDataPreservationForNextStart: () => void;
   consumeNodeRunDataPreservationForNextStart: () => NodeId[] | undefined;
-  onTrivetStart: () => void;
+  onEvaluationStart: () => void;
   onUserInput: (data: ProcessEvents['userInput']) => void;
   preserveNodeRunDataForNextStart: (nodeIds: NodeId[]) => void;
   setDataForNode: (
@@ -44,7 +44,7 @@ export type ExecutionDataFlowApi = {
   setSelectedNodePageLatest: (nodeId: NodeId, execution: GraphExecutionMetadata | undefined) => void;
   shouldSuppressPreloadedNodeEvent: (nodeId: NodeId, processId: ProcessId) => boolean;
   suppressPreloadedNodeEventsForCurrentRun: (nodeIds: NodeId[]) => void;
-  trivetRunningLatest: ReturnType<typeof useLatest<boolean>>;
+  evaluationRunningLatest: ReturnType<typeof useLatest<boolean>>;
 };
 
 export function useExecutionDataFlow(): ExecutionDataFlowApi {
@@ -53,8 +53,8 @@ export function useExecutionDataFlow(): ExecutionDataFlowApi {
   const setSelectedPage = useSetAtom(selectedProcessPageNodesState);
   const setUserInputQuestions = useSetAtom(userInputModalQuestionsState);
   const setLastRecordingState = useSetAtom(lastRecordingState);
-  const trivetRunning = useAtomValue(trivetTestsRunningState);
-  const trivetRunningLatest = useLatest(trivetRunning);
+  const evaluationRunning = useAtomValue(evaluationsRunningState);
+  const evaluationRunningLatest = useLatest(evaluationRunning);
   const previousDataPerNodeToKeep = useAtomValue(previousDataPerNodeToKeepState);
   const currentGraphView = useAtomValue(currentGraphViewState);
   const selectedGraphRunByView = useAtomValue(selectedGraphRunByViewState);
@@ -189,7 +189,7 @@ export function useExecutionDataFlow(): ExecutionDataFlowApi {
     setSelectedNodePageLatest(node.id, execution);
   };
 
-  const onTrivetStart = () => {
+  const onEvaluationStart = () => {
     clearNodeRunDataPreservationForNextStart();
     setLastRecordingState(undefined);
     setUserInputQuestions({});
@@ -200,14 +200,14 @@ export function useExecutionDataFlow(): ExecutionDataFlowApi {
   return {
     clearNodeRunDataPreservationForNextStart,
     consumeNodeRunDataPreservationForNextStart,
-    onTrivetStart,
+    onEvaluationStart,
     onUserInput,
     preserveNodeRunDataForNextStart,
     setDataForNode,
     setSelectedNodePageLatest,
     shouldSuppressPreloadedNodeEvent,
     suppressPreloadedNodeEventsForCurrentRun,
-    trivetRunningLatest,
+    evaluationRunningLatest,
   };
 }
 

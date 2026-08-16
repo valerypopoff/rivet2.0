@@ -3,30 +3,51 @@ import { Field } from '@atlaskit/form';
 import TextField from '@atlaskit/textfield';
 import Button from '@atlaskit/button';
 import Select from '@atlaskit/select';
-import { openai } from '@valerypopoff/rivet2-core';
-import type { PromptDesignerConfigurationState } from '../../state/promptDesigner';
 import type { SetStateAction } from 'jotai';
-import { LabeledToggle } from '../LabeledToggle.js';
+import type { PromptDesignerConfigurationState } from '../../state/promptDesigner.js';
 
-export type PromptDesignerConfigPanelProps = {
+const providerOptions = [
+  { label: 'OpenAI', value: 'openai' },
+  { label: 'Anthropic', value: 'anthropic' },
+  { label: 'Google', value: 'google' },
+  { label: 'Custom provider', value: 'custom' },
+] as const;
+
+/**
+ * This deliberately exposes the small inline configuration surface that is
+ * useful while iterating on a prompt. The preview uses LLM Chat V2 (not the
+ * old private Chat runner); full profile behaviour belongs to the graph and
+ * repeatable comparisons belong to Evaluations.
+ */
+export const PromptDesignerConfigPanel: FC<{
   config: PromptDesignerConfigurationState;
   setConfig: (update: SetStateAction<PromptDesignerConfigurationState>) => void;
   onRun: () => void;
-};
-
-export const PromptDesignerConfigPanel: FC<PromptDesignerConfigPanelProps> = ({ config, setConfig, onRun }) => {
+}> = ({ config, setConfig, onRun }) => {
+  const provider = providerOptions.find((option) => option.value === config.data.provider) ?? providerOptions[0];
   return (
     <div className="panel">
       <div className="chat-config-area">
         <div className="chat-config-controls">
-          <Field name="model" label="Model">
+          <Field name="provider" label="Provider">
             {({ fieldProps }) => (
               <Select
                 {...fieldProps}
-                options={openai.openAiModelOptions}
-                value={openai.openAiModelOptions.find((o) => o.value === config.data.model)!}
-                placeholder="Select a model"
-                onChange={(value) => setConfig((s) => ({ ...s, data: { ...s.data, model: value!.value } }))}
+                options={providerOptions as unknown as { label: string; value: string }[]}
+                value={provider}
+                onChange={(value) => setConfig((state) => ({
+                  ...state,
+                  data: { ...state.data, provider: value!.value as typeof state.data.provider },
+                }))}
+              />
+            )}
+          </Field>
+          <Field name="model" label="Model">
+            {({ fieldProps }) => (
+              <TextField
+                {...fieldProps}
+                value={config.data.model}
+                onChange={(event) => setConfig((state) => ({ ...state, data: { ...state.data, model: event.currentTarget.value } }))}
               />
             )}
           </Field>
@@ -34,114 +55,45 @@ export const PromptDesignerConfigPanel: FC<PromptDesignerConfigPanelProps> = ({ 
             {({ fieldProps }) => (
               <TextField
                 {...fieldProps}
-                placeholder="Enter temperature"
                 type="number"
-                value={config.data.temperature}
+                value={String(config.data.temperature)}
                 min={0}
-                max={1}
                 step={0.1}
-                onChange={(e) =>
-                  setConfig((s) => ({
-                    ...s,
-                    data: { ...s.data, temperature: (e.target as HTMLInputElement).valueAsNumber },
-                  }))
-                }
+                onChange={(event) => {
+                  const value = event.currentTarget.valueAsNumber;
+                  if (Number.isFinite(value)) setConfig((state) => ({ ...state, data: { ...state.data, temperature: value } }));
+                }}
               />
             )}
           </Field>
-          <Field name="useTopP">
-            {() => (
-              <LabeledToggle
-                id="useTopP"
-                isChecked={config.data.useTopP}
-                onChange={(value) =>
-                  setConfig((s) => ({
-                    ...s,
-                    data: { ...s.data, useTopP: value },
-                  }))
-                }
-                label="Use Top P"
-              />
-            )}
-          </Field>
-          <Field name="topP" label="Top P">
+          <Field name="max-tokens" label="Max output tokens">
             {({ fieldProps }) => (
               <TextField
                 {...fieldProps}
-                placeholder="Enter top p"
                 type="number"
-                value={config.data.top_p ?? 0}
-                min={0}
-                max={1}
-                step={0.1}
-                onChange={(e) =>
-                  setConfig((s) => ({
-                    ...s,
-                    data: { ...s.data, topP: (e.target as HTMLInputElement).valueAsNumber },
-                  }))
-                }
-              />
-            )}
-          </Field>
-          <Field name="max-tokens" label="Max Tokens">
-            {({ fieldProps }) => (
-              <TextField
-                {...fieldProps}
-                placeholder="Enter max tokens"
-                type="number"
+                value={String(config.data.maxTokens)}
                 min={1}
-                max={100}
-                value={config.data.maxTokens}
-                onChange={(e) =>
-                  setConfig((s) => ({
-                    ...s,
-                    data: { ...s.data, maxTokens: (e.target as HTMLInputElement).valueAsNumber },
-                  }))
-                }
+                onChange={(event) => {
+                  const value = event.currentTarget.valueAsNumber;
+                  if (Number.isFinite(value)) setConfig((state) => ({ ...state, data: { ...state.data, maxTokens: Math.max(1, value) } }));
+                }}
               />
             )}
           </Field>
-          <Field name="frequencyPenalty" label="Frequency Penalty">
-            {({ fieldProps }) => (
-              <TextField
-                {...fieldProps}
-                placeholder="Enter frequency penalty"
-                type="number"
-                min={0}
-                max={100}
-                value={config.data.frequencyPenalty ?? 0}
-                onChange={(e) =>
-                  setConfig((s) => ({
-                    ...s,
-                    data: { ...s.data, frequencyPenalty: (e.target as HTMLInputElement).valueAsNumber },
-                  }))
-                }
-              />
-            )}
-          </Field>
-          <Field name="presencePenalty" label="Presence Penalty">
-            {({ fieldProps }) => (
-              <TextField
-                {...fieldProps}
-                placeholder="Enter presence penalty"
-                type="number"
-                min={0}
-                max={100}
-                value={config.data.presencePenalty ?? 0}
-                onChange={(e) =>
-                  setConfig((s) => ({
-                    ...s,
-                    data: { ...s.data, presencePenalty: (e.target as HTMLInputElement).valueAsNumber },
-                  }))
-                }
-              />
-            )}
-          </Field>
+          {config.data.provider === 'custom' && (
+            <Field name="custom-base-url" label="Custom provider base URL">
+              {({ fieldProps }) => (
+                <TextField
+                  {...fieldProps}
+                  value={config.data.customProviderBaseURL}
+                  onChange={(event) => setConfig((state) => ({ ...state, data: { ...state.data, customProviderBaseURL: event.currentTarget.value } }))}
+                />
+              )}
+            </Field>
+          )}
         </div>
         <div className="controls-buttons">
-          <Button appearance="primary" onClick={onRun}>
-            Run
-          </Button>
+          <Button appearance="primary" onClick={onRun}>Run preview</Button>
         </div>
       </div>
     </div>

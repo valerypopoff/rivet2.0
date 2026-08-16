@@ -12,7 +12,7 @@ The public runtime packages are published under the `@valerypopoff` npm scope:
 
 - `@valerypopoff/rivet2-core` contains the graph model, execution engine, built-in nodes, plugin contracts, serialization, and shared runtime APIs.
 - `@valerypopoff/rivet2-node` adds Node-specific defaults, filesystem loading, Node native APIs, MCP support, Code-family `require()` support, and remote-debugger helpers.
-- `@valerypopoff/trivet` provides programmatic graph test utilities and Trivet test serialization.
+- `@valerypopoff/rivet2-evaluations` provides programmatic graph test utilities and Evaluations test serialization.
 - `@valerypopoff/rivet2-cli` runs and serves Rivet graphs from the command line.
 
 ## `@valerypopoff/rivet2-core`
@@ -31,11 +31,11 @@ You will most likely want to use Rivet node in your application. All types from 
 
 See the [Rivet node overview](./api-reference/node/overview.mdx) for more information.
 
-## `@valerypopoff/trivet`
+## `@valerypopoff/rivet2-evaluations`
 
-Trivet is the graph-oriented test package used by Rivet's Trivet Tests workspace and by programmatic test runners. It provides test-suite/test-case/result types, serialization helpers, `runTrivet(...)`, and graph-runner helpers for validating one Rivet graph with another graph.
+Evaluations is the graph-oriented test package used by Rivet's Evaluations workspace and by programmatic test runners. It provides test-suite/test-case/result types, serialization helpers, `runEvaluationSuite(...)`, and graph-runner helpers for validating one Rivet graph with another graph.
 
-See the [Trivet Library](./user-guide/trivet-library.md) page for more information.
+See the [Evaluations Library](./user-guide/evaluations-library.md) page for more information.
 
 ## `@valerypopoff/rivet2-cli`
 

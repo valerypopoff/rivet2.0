@@ -1,4 +1,4 @@
-import type { ChartNode, ProcessId } from '@valerypopoff/rivet2-core';
+import type { ChartNode, LLMChatV2Node, ProcessId } from '@valerypopoff/rivet2-core';
 import { useAtom, useAtomValue, useSetAtom } from 'jotai';
 import CopyIcon from 'majesticons/line/clipboard-line.svg?react';
 import EyeIcon from 'majesticons/line/eye-line.svg?react';
@@ -186,7 +186,7 @@ const NodeOutputSingleProcess: FC<{
   const handleCopyToClipboard = useStableCallback(() =>
     copyOutputValue(copySource, dataRefs, getCopyValueData, io.outputDefinitions),
   );
-  const hasPromptDesignerAction = node.type === 'chat';
+  const hasPromptDesignerAction = node.type === 'llmChatV2' && (node as LLMChatV2Node).data.configurationMode !== 'profile';
   const hasResponseInspectorAction = node.type === 'llmChatV2';
   const responseTrace = useMemo(() => buildLlmInvocationTrace(node, processData), [node, processData]);
   const responseInspector = isInspectorOpen ? (

@@ -27,7 +27,6 @@ import {
   getEditorRunToPlan,
   getFrozenNodeOptionsForExecutorTarget,
   getFrozenNodeOutputsForExecutorRunPayload,
-  selectTestSuitesToRun,
   shouldFlushFrozenNodeOutputsForRemoteDebuggerEvent,
 } from './remoteExecutorHelpers';
 import { createRunActivityNodeKey, createRunActivityJournal } from '../features/runActivity/runActivityJournal';
@@ -138,18 +137,6 @@ function makeDataBusRunGraph(): NodeGraph {
     ],
   };
 }
-
-test('selectTestSuitesToRun filters suites and cases narrowly', () => {
-  const selected = selectTestSuitesToRun(
-    [
-      { id: 'suite-1', testCases: [{ id: 'case-1' }, { id: 'case-2' }] },
-      { id: 'suite-2', testCases: [{ id: 'case-3' }] },
-    ],
-    { testSuiteIds: ['suite-1'], testCaseIds: ['case-2'] },
-  );
-
-  assert.deepEqual(selected, [{ id: 'suite-1', testCases: [{ id: 'case-2' }] }]);
-});
 
 test('Run Activity observer failures do not suppress primary execution-state events', () => {
   let primaryNodeStartCount = 0;

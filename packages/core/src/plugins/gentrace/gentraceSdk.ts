@@ -4,5 +4,4 @@
 export { init } from '@gentrace/core/dist/providers/init.mjs';
 export { getPipelines } from '@gentrace/core/dist/providers/pipeline-methods.mjs';
 export { Pipeline } from '@gentrace/core/dist/providers/pipeline.mjs';
-export { runTest } from '@gentrace/core/dist/providers/run-test.mjs';
 export { StepRun } from '@gentrace/core/dist/providers/step-run.mjs';

@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import {
   CodeNewNodeImpl,
   CodeNodeImpl,
+  type CodeNode,
   type CodeRunnerOptions,
   GraphProcessor,
   GraphInputNodeImpl,
@@ -22,6 +23,7 @@ import {
   type Project,
   type ProjectId,
   type Tokenizer,
+  resolveProcessSettings,
 } from '@valerypopoff/rivet2-core';
 import { AppExecutorWorkerCodeRunner } from './AppExecutorWorkerCodeRunner.mjs';
 import { AppExecutorCodeWorkerPool, shutdownSharedAppExecutorCodeWorkerPool } from './codeRunnerWorkerPool.mjs';
@@ -36,7 +38,7 @@ const tokenizer: Tokenizer = {
 function testProcessContext(): ProcessContext {
   return {
     codeRunner: new AppExecutorWorkerCodeRunner(),
-    settings: {},
+    settings: resolveProcessSettings(),
     tokenizer,
   };
 }
@@ -57,7 +59,7 @@ function makeProject(graph: NodeGraph): Project {
   } as Project;
 }
 
-function makeCodeNode(code: string): ChartNode {
+function makeCodeNode(code: string): CodeNode {
   const node = CodeNodeImpl.create();
   node.id = 'code-node' as NodeId;
   node.title = 'Code (legacy)';
@@ -104,9 +106,6 @@ function makeCodeRunnerEquivalenceProject(code: string): Project {
   const codeNode = makeCodeNode(code);
   codeNode.data = {
     ...codeNode.data,
-    allowFetch: true,
-    allowProcess: true,
-    allowRequire: true,
     inputNames: ['local'],
     outputNames: ['output1'],
   };
@@ -445,7 +444,7 @@ void describe('AppExecutorWorkerCodeRunner', () => {
         },
       };
     `;
-    const inputs = {
+    const inputs: Record<PortId, DataValue> = {
       ['local' as PortId]: { type: 'string', value: 'input' },
     };
     const options = defaultCodeRunnerOptions({
@@ -453,10 +452,10 @@ void describe('AppExecutorWorkerCodeRunner', () => {
       includeProcess: true,
       includeRequire: true,
     });
-    const graphInputs = {
+    const graphInputs: Record<string, DataValue> = {
       local: { type: 'string', value: 'input' },
     };
-    const contextValues = {
+    const contextValues: Record<string, DataValue> = {
       ctx: { type: 'string', value: 'context' },
     };
     let nodeOutputs: Outputs | undefined;

@@ -91,7 +91,7 @@ Important interpretation:
 | `RunThreadNode` on-message hook                         | Executor            | `direct-static`            | Yes            | No                                                                        | No             | Bundled OpenAI plugin surface                                                                                                                                    |
 | Web-app `Button` / `Chat` action                        | Project entry point | `direct-static`            | Yes            | No                                                                        | No             | Stored `action.graphId`; target and its supported dependencies are definitely reachable                                                                          |
 | `ReferencedGraphAliasNode`                              | Executor            | `cross-project`            | Yes            | No                                                                        | Yes            | Must not mark current-project graphs as used                                                                                                                     |
-| `NodeTestGroup.evaluatorGraphId`                        | Test-only reference | excluded from reachability | Yes            | No                                                                        | No             | Relevant for template duplication, not main-graph reachability                                                                                                   |
+| `attachedData.evaluations.suites[].evaluators[].graphId` | Evaluation-only reference | excluded from reachability | Yes            | No                                                                        | No             | Relevant for evaluation-definition validation and template duplication, not main-graph reachability                                                               |
 
 ## `Call Graph` Findings
 
@@ -155,7 +155,7 @@ That missed other persisted same-project graph references, including:
 - `DelegateFunctionCallNode.unknownHandler`
 - `RunThreadNode.toolCallHandlers[]`
 - `RunThreadNode.onMessageCreationSubgraphId`
-- node test groups via `NodeTestGroup.evaluatorGraphId`
+- evaluator graphs referenced by `attachedData.evaluations`
 - node variants containing any of the supported graph-ID fields
 
 The remap logic is now centralized in [`templateProjectGraphIds.ts`](../packages/app/src/utils/templateProjectGraphIds.ts).

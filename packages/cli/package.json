@@ -26,6 +26,7 @@
   },
   "dependencies": {
     "@hono/node-server": "^1.19.14",
+    "@valerypopoff/rivet2-evaluations": "workspace:^",
     "@valerypopoff/rivet2-node": "workspace:^",
     "chalk": "^5.4.1",
     "didyoumean2": "^7.0.4",

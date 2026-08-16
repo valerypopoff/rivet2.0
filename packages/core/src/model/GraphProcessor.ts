@@ -881,6 +881,7 @@ export class GraphProcessor {
             splitIndex: this.#executor.index,
           }
         : undefined,
+      ...(this.#context?.evaluation === undefined ? {} : { evaluation: this.#context.evaluation }),
     };
   }
 

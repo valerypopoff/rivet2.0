@@ -74,7 +74,7 @@ That includes:
 - tool-call arguments
 - processor traces
 
-Core exposes small logging helpers from [`runtimeLogging.ts`](../packages/core/src/utils/runtimeLogging.ts). Use these helpers from app, executor, Trivet, and provider paths when runtime diagnostics are needed:
+Core exposes small logging helpers from [`runtimeLogging.ts`](../packages/core/src/utils/runtimeLogging.ts). Use these helpers from app, executor, Evaluations, and provider paths when runtime diagnostics are needed:
 
 - `summarizeDataValueForLog(...)`
 - `summarizePortMapForLog(...)`
@@ -1376,7 +1376,7 @@ long-lived host signal cannot retain completed processors. Reusable processors
 reattach on their next run, while `coreCreateProcessor(...).dispose()` and the
 Node processor's existing `dispose()` release an unstarted binding explicitly.
 
-Runtime settings are normalized through [`processSettings.ts`](../packages/core/src/api/processSettings.ts). `resolveProcessSettings(...)` is the shared boundary used by core, `rivet-node`, and Trivet so programmatic execution gets the same runtime defaults while still preserving explicit runtime options such as `recordingPlaybackLatency`, without depending on app-only editor preference fields that still exist on the legacy `Settings` object for compatibility. Shared LLM credentials (`openAiApiKey`, legacy `openAiKey`, `anthropicApiKey`, `googleApiKey`, and `customAiApiKey`) are first-class runtime settings so LLM Chat configured-key mode works the same in the app, Node package, CLI, and test runners; provider plugin config remains the compatibility fallback for older Anthropic/Google plugin settings. Custom provider configured-key mode checks the node's `customProviderApiKeyProgrammaticName` as a top-level runtime setting name, then checks the node-specific env var name through `settings.pluginEnv` / `process.env`, then falls back to the shared `customAiApiKey`. `resolveProcessSettings(...)` must normalize `openAiApiKey` and `openAiKey` to the same resolved runtime value so old OpenAI-backed nodes and new programmatic callers stay compatible, and it must preserve extra top-level settings so wrapper/backend code can pass separate custom-provider secrets using the exact names configured on each LLM Chat node without abusing plugin environment settings. [`getPluginConfig(...)`](../packages/core/src/utils/getPluginConfig.ts) deliberately bridges shared `anthropicApiKey` and `googleApiKey` settings into the legacy Anthropic/Google plugin config lookup after non-empty explicit plugin settings and before plugin env fallbacks, so old plugin nodes and app-side helper graphs such as `Generate using AI` can use the same Settings > LLM keys without duplicating credentials into Plugins settings. Missing or blank plugin values fall through instead of blocking shared keys or environment fallbacks, because plugin settings are often partial.
+Runtime settings are normalized through [`processSettings.ts`](../packages/core/src/api/processSettings.ts). `resolveProcessSettings(...)` is the shared boundary used by core, `rivet-node`, and Evaluations so programmatic execution gets the same runtime defaults while still preserving explicit runtime options such as `recordingPlaybackLatency`, without depending on app-only editor preference fields that still exist on the legacy `Settings` object for compatibility. Shared LLM credentials (`openAiApiKey`, legacy `openAiKey`, `anthropicApiKey`, `googleApiKey`, and `customAiApiKey`) are first-class runtime settings so LLM Chat configured-key mode works the same in the app, Node package, CLI, and test runners; provider plugin config remains the compatibility fallback for older Anthropic/Google plugin settings. Custom provider configured-key mode checks the node's `customProviderApiKeyProgrammaticName` as a top-level runtime setting name, then checks the node-specific env var name through `settings.pluginEnv` / `process.env`, then falls back to the shared `customAiApiKey`. `resolveProcessSettings(...)` must normalize `openAiApiKey` and `openAiKey` to the same resolved runtime value so old OpenAI-backed nodes and new programmatic callers stay compatible, and it must preserve extra top-level settings so wrapper/backend code can pass separate custom-provider secrets using the exact names configured on each LLM Chat node without abusing plugin environment settings. [`getPluginConfig(...)`](../packages/core/src/utils/getPluginConfig.ts) deliberately bridges shared `anthropicApiKey` and `googleApiKey` settings into the legacy Anthropic/Google plugin config lookup after non-empty explicit plugin settings and before plugin env fallbacks, so old plugin nodes and app-side helper graphs such as `Generate using AI` can use the same Settings > LLM keys without duplicating credentials into Plugins settings. Missing or blank plugin values fall through instead of blocking shared keys or environment fallbacks, because plugin settings are often partial.
 
 ## Event Streaming API
 
@@ -1494,7 +1494,7 @@ Serialization is not just persistence. It is also the compatibility boundary for
 - old project files
 - graph import/export
 - app save/load behavior
-- Trivet/project attached data handling
+- Evaluations/project attached data handling
 
 Any structural refactor that changes graph/project/node shape must be reviewed together with serialization.
 

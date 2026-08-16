@@ -24,5 +24,5 @@ test('host capabilities remain enabled unless a host explicitly opts out', () =>
   assert.equal(isRivetAppHostCapabilityEnabled(undefined, 'aiAssist'), true);
   assert.equal(isRivetAppHostCapabilityEnabled({}, 'aiGraphBuilder'), true);
   assert.equal(isRivetAppHostCapabilityEnabled({ capabilities: { recordings: false } }, 'recordings'), false);
-  assert.equal(isRivetAppHostCapabilityEnabled({ capabilities: { recordings: false } }, 'trivetInputCopy'), true);
+  assert.equal(isRivetAppHostCapabilityEnabled({ capabilities: { recordings: false } }, 'evaluationInputCopy'), true);
 });

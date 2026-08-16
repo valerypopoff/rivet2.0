@@ -114,15 +114,15 @@ When the **Bright** theme is active, node text and code editors use Monaco's lig
 
 ## Workspaces
 
-The top app bar contains workspace tabs. Canvas is the normal graph-editing workspace. Other workspaces, such as Trivet Tests and Data Studio, open full-screen workspace views. When no project is open, the top bar shows a Welcome screen tab so you can return to the centered welcome screen after opening a project-independent workspace. Run/debug controls are shown only while Canvas is active.
+The top app bar contains workspace tabs. Canvas is the normal graph-editing workspace. Other workspaces, such as Evaluations and Data Studio, open full-screen workspace views. When no project is open, the top bar shows a Welcome screen tab so you can return to the centered welcome screen after opening a project-independent workspace. Run/debug controls are shown only while Canvas is active.
 
 ### Prompt Designer
 
 The prompt designer allows you to tweak an individual prompt to get the output you are looking for. It is opened from a Chat or LLM Chat node's flask icon, and Rivet shows a top-bar tab for it only while it is open. See the [Prompt Designer](./features/prompt-designer.md) documentation for more information.
 
-### Trivet Tests
+### Evaluations
 
-Trivet allows you to set up test suites and test cases for your project. See the [Trivet](../trivet.md) documentation for more information.
+Evaluations lets you define datasets, complete-graph evaluation suites, assertions, evaluator graphs, thresholds, and baselines for your project. See the [Evaluations](../evaluations.md) documentation for more information.
 
 ### Run Activity
 

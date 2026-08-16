@@ -3,7 +3,7 @@ import test from 'node:test';
 import { type ChartNode, type GraphId, type Project, type ProjectId } from '@valerypopoff/rivet2-core';
 import { remapTemplateProjectGraphIds } from './templateProjectGraphIds.js';
 
-function makeNode(type: string, data: Record<string, unknown>, options: { variants?: unknown[]; tests?: unknown[] } = {}): ChartNode {
+function makeNode(type: string, data: Record<string, unknown>, options: { variants?: unknown[] } = {}): ChartNode {
   return {
     id: `${type}-node` as any,
     type,
@@ -11,7 +11,6 @@ function makeNode(type: string, data: Record<string, unknown>, options: { varian
     visualData: { x: 0, y: 0 },
     data,
     variants: options.variants as any,
-    tests: options.tests as any,
   };
 }
 
@@ -57,8 +56,6 @@ test('remapTemplateProjectGraphIds updates same-project graph ids across support
           makeNode('openaiRunThread', {
             toolCallHandlers: [{ key: 'search', value: 'tool' as GraphId }],
             onMessageCreationSubgraphId: 'message' as GraphId,
-          }, {
-            tests: [{ id: 'group-1', evaluatorGraphId: 'eval' as GraphId, tests: [] }],
           }),
           makeNode('referencedGraphAlias', {
             projectId: 'external-project' as ProjectId,
@@ -83,6 +80,5 @@ test('remapTemplateProjectGraphIds updates same-project graph ids across support
   assert.equal((nodes[4]!.data as any).unknownHandler, 'fallback-copy');
   assert.equal((nodes[5]!.data as any).toolCallHandlers[0].value, 'tool-copy');
   assert.equal((nodes[5]!.data as any).onMessageCreationSubgraphId, 'message-copy');
-  assert.equal(nodes[5]!.tests?.[0]?.evaluatorGraphId, 'eval-copy');
   assert.equal((nodes[6]!.data as any).graphId, 'external-graph');
 });

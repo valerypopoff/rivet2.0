@@ -7,14 +7,13 @@ import {
   serializeGraph,
   serializeProject,
 } from '@valerypopoff/rivet2-core';
-import { type PathBasedIOProvider } from './IOProvider.js';
+import { type EvaluationProjectFileData, type PathBasedIOProvider } from './IOProvider.js';
 import { getDefaultPathPolicyProvider, isInTauri } from '../utils/tauri.js';
 import {
-  type SerializedTrivetData,
-  type TrivetData,
-  deserializeTrivetData,
-  serializeTrivetData,
-} from '@valerypopoff/trivet';
+  createEmptyEvaluationProjectData,
+  deserializeEvaluationProjectData,
+  serializeEvaluationProjectData,
+} from '@valerypopoff/rivet2-evaluations';
 import { saveDatasetsFile, loadDatasetsFile } from './datasets.js';
 import { type AppDatasetProvider, type PathPolicyProvider } from '../providers/ProvidersContext.js';
 import { openDialog, saveDialog } from '../utils/platform/dialog.js';
@@ -55,7 +54,7 @@ export class TauriIOProvider implements PathBasedIOProvider {
     }
   }
 
-  async saveProjectData(project: Project, testData: TrivetData) {
+  async saveProjectData(project: Project, evaluation: EvaluationProjectFileData) {
     const filePath = await saveDialog({
       filters: [
         {
@@ -68,7 +67,7 @@ export class TauriIOProvider implements PathBasedIOProvider {
     });
 
     const data = serializeProject(project, {
-      trivet: serializeTrivetData(testData),
+      evaluations: serializeEvaluationProjectData(evaluation.evaluationData),
     }) as string;
 
     if (filePath) {
@@ -77,7 +76,7 @@ export class TauriIOProvider implements PathBasedIOProvider {
         path: filePath,
       });
 
-      await saveDatasetsFile(filePath, project, this.#datasetProvider, this.#pathPolicy);
+      await saveDatasetsFile(filePath, project, this.#datasetProvider, evaluation.evaluationDatasets, this.#pathPolicy);
 
       return filePath;
     }
@@ -85,9 +84,9 @@ export class TauriIOProvider implements PathBasedIOProvider {
     return undefined;
   }
 
-  async saveProjectDataNoPrompt(project: Project, testData: TrivetData, path: string) {
+  async saveProjectDataNoPrompt(project: Project, evaluation: EvaluationProjectFileData, path: string) {
     const data = serializeProject(project, {
-      trivet: serializeTrivetData(testData),
+      evaluations: serializeEvaluationProjectData(evaluation.evaluationData),
     }) as string;
 
     await nativeWriteFile({
@@ -95,7 +94,7 @@ export class TauriIOProvider implements PathBasedIOProvider {
       path,
     });
 
-    await saveDatasetsFile(path, project, this.#datasetProvider, this.#pathPolicy);
+    await saveDatasetsFile(path, project, this.#datasetProvider, evaluation.evaluationDatasets, this.#pathPolicy);
   }
 
   async loadGraphData(callback: (graphData: NodeGraph) => void) {
@@ -119,7 +118,7 @@ export class TauriIOProvider implements PathBasedIOProvider {
     }
   }
 
-  async loadProjectData(callback: (data: { project: Project; testData: TrivetData; path: string }) => void) {
+  async loadProjectData(callback: (data: { project: Project; evaluation: EvaluationProjectFileData; path: string }) => void) {
     const path = (await openDialog({
       filters: [
         {
@@ -139,17 +138,17 @@ export class TauriIOProvider implements PathBasedIOProvider {
     }
   }
 
-  async loadProjectDataNoPrompt(path: string): Promise<{ project: Project; testData: TrivetData }> {
+  async loadProjectDataNoPrompt(path: string): Promise<{ project: Project; evaluation: EvaluationProjectFileData }> {
     const data = await nativeReadTextFile(path);
     const [projectData, attachedData] = deserializeProject(data, path);
 
-    const trivetData = attachedData.trivet
-      ? deserializeTrivetData(attachedData.trivet as SerializedTrivetData)
-      : { testSuites: [] };
+    const evaluationData = attachedData.evaluations
+      ? deserializeEvaluationProjectData(attachedData.evaluations)
+      : createEmptyEvaluationProjectData();
 
-    await loadDatasetsFile(path, projectData, this.#datasetProvider, this.#pathPolicy);
+    const evaluationDatasets = await loadDatasetsFile(path, projectData, this.#datasetProvider, this.#pathPolicy);
 
-    return { project: projectData, testData: trivetData };
+    return { project: projectData, evaluation: { evaluationData, evaluationDatasets } };
   }
 
   async loadRecordingData(callback: (data: { recorder: ExecutionRecorder; path: string }) => void) {

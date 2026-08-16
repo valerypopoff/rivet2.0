@@ -13,7 +13,7 @@ export function useLoadProjectWithFileBrowser() {
 
   return async () => {
     try {
-      await ioProvider.loadProjectData(({ project, testData, path }) => {
+      await ioProvider.loadProjectData(({ project, evaluation, path }) => {
         const { data, ...projectData } = project;
         const openedProjects = Object.values(projects.openedProjects) as OpenedProjectInfo[];
 
@@ -40,7 +40,8 @@ export function useLoadProjectWithFileBrowser() {
             project: projectData,
             data,
             fsPath: path,
-            testSuites: testData.testSuites,
+            evaluationData: evaluation.evaluationData,
+            evaluationDatasets: evaluation.evaluationDatasets,
             markClean: true,
           });
 

@@ -4,6 +4,7 @@ import type { ChartNode, NodeConnection, NodeId, PortId } from './NodeBase.js';
 import type { GraphId, NodeGraph } from './NodeGraph.js';
 import type {
   ChatV2CallTraceEvent,
+  EvaluationExecutionMetadata,
   GraphExecutionMetadata,
   LLMProfileAttemptTraceEvent,
   ProcessId,
@@ -185,6 +186,7 @@ export type OutgoingMessageMap = {
     projectPath?: string | null;
     useEditorCache?: boolean;
     captureNodeTimings?: boolean;
+    evaluation?: EvaluationExecutionMetadata;
     returnWhenGraphOutputsReady?: boolean;
     webAppStorage?: RivetWebAppStorage;
   };

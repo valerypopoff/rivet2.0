@@ -8,6 +8,6 @@ test('GitHub Pages demo exposes only its intentionally limited editor surface', 
     aiAssist: false,
     aiGraphBuilder: false,
     recordings: false,
-    trivetInputCopy: false,
+    evaluationInputCopy: false,
   });
 });

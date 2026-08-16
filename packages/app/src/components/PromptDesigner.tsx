@@ -1,20 +1,19 @@
 import { css } from '@emotion/react';
 import { type FC } from 'react';
-import { useAtom, useAtomValue } from 'jotai';
+import { useAtom, useAtomValue, useSetAtom } from 'jotai';
+import { nanoid } from 'nanoid/non-secure';
 import { AppErrorBoundary } from './AppErrorBoundary';
-import {
-  promptDesignerState,
-} from '../state/promptDesigner';
-import { type NodeTestGroup } from '@valerypopoff/rivet2-core';
-import Tabs, { Tab, TabList, TabPanel } from '@atlaskit/tabs';
 import Button from '@atlaskit/button';
 import { overlayOpenState } from '../state/ui';
+import { graphState } from '../state/graph.js';
+import { projectState } from '../state/savedGraphs.js';
+import { evaluationsState } from '../state/evaluations.js';
 import { wrapAsync } from '../utils/errorHandling';
+import { toast } from 'react-toastify';
 import { usePromptDesignerMessages } from '../hooks/usePromptDesignerMessages';
 import { PromptDesignerConfigPanel } from './promptDesigner/PromptDesignerConfigPanel';
 import { PromptDesignerMessageList } from './promptDesigner/PromptDesignerMessageList.js';
 import { PromptDesignerResponsePane } from './promptDesigner/PromptDesignerResponsePane.js';
-import { PromptDesignerTestPanel } from './promptDesigner/PromptDesignerTestPanel';
 import { usePromptDesignerAttachedNode } from './promptDesigner/usePromptDesignerAttachedNode.js';
 import { usePromptDesignerRunActions } from './promptDesigner/usePromptDesignerRunActions.js';
 
@@ -146,113 +145,6 @@ const styles = css`
     border-bottom: 1px solid var(--grey);
   }
 
-  .test-config-area {
-    display: grid;
-    grid-template-rows: auto 1fr;
-    height: 100%;
-  }
-
-  .test-config {
-    padding: 20px;
-    border-bottom: 1px solid var(--grey);
-  }
-
-  .test-list {
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-    border-bottom: 1px solid var(--grey);
-  }
-
-  .test-empty-state {
-    padding: 16px 20px;
-    color: var(--grey-lightest);
-    font-size: var(--ui-font-size-sm);
-    line-height: 1.4;
-    border-bottom: 1px solid var(--grey);
-  }
-
-  .test-group {
-    border-bottom: 1px solid var(--grey);
-    padding: 10px;
-    position: relative;
-  }
-
-  .test-group-buttons {
-    display: flex;
-    justify-content: flex-end;
-    gap: 8px;
-    margin-top: 16px;
-  }
-
-  .delete-test-group-button {
-    position: absolute;
-    top: 0;
-    right: 0;
-    z-index: 10;
-  }
-
-  .test-group-tests {
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-    margin-top: 16px;
-  }
-
-  .test-group-test-controls {
-    display: flex;
-    gap: 8px;
-    align-items: center;
-  }
-
-  .test-group-result {
-    border: 1px solid var(--grey);
-    border-radius: 20px;
-    corner-shape: squircle;
-    @supports not (corner-shape: squircle) {
-      border-radius: 10px;
-    }
-    padding: 10px;
-    position: relative;
-  }
-
-  .test-group-result-response {
-    max-height: 300px;
-    overflow: auto;
-    border-bottom: 1px solid var(--grey);
-  }
-
-  .test-group-result-conditions {
-    padding: 10px;
-
-    .test-group-result-condition-result {
-      display: flex;
-      gap: 8px;
-      align-items: center;
-
-      .pass {
-        color: var(--success);
-      }
-
-      .fail {
-        color: var(--error);
-      }
-    }
-  }
-
-  .test-group-results {
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-  }
-
-  .test-group-result-expand {
-    position: absolute;
-    top: 0;
-    right: 0;
-    z-index: 10;
-  }
-
   .add-message {
     justify-self: stretch;
     display: flex;
@@ -284,18 +176,83 @@ export type PromptDesignerProps = {
 };
 
 export const PromptDesigner: FC<PromptDesignerProps> = ({ onClose }) => {
+  const setOpenOverlay = useSetAtom(overlayOpenState);
+  const graph = useAtomValue(graphState);
+  const project = useAtomValue(projectState);
+  const setEvaluations = useSetAtom(evaluationsState);
   const { messages, setMessages, messageChanged, deleteMessage, addMessage } = usePromptDesignerMessages();
-  const [promptDesigner, setPromptDesigner] = useAtom(promptDesignerState);
-  const { attachedNode, config, setConfig, testGroups, addTestGroup, deleteTestGroup, testGroupChanged } =
-    usePromptDesignerAttachedNode({
-      setMessages,
+  const { attachedNode, config, setConfig } = usePromptDesignerAttachedNode({ setMessages });
+  const { response, tryRunSingle } = usePromptDesignerRunActions({
+    configData: config.data,
+    messages,
+  });
+
+  const openInEvaluations = () => {
+    const graphId = graph.metadata?.id;
+    if (!attachedNode || !graphId) {
+      // The designer can open with an old/deleted selection. Do not create an
+      // ambiguous suite in that case.
+      toast.error('Select an LLM Chat node in a saved graph before opening an evaluation.');
+      return;
+    }
+    const candidateGraph = {
+      ...graph,
+      nodes: graph.nodes.map((node) => (node.id === attachedNode.id ? { ...node, data: { ...config.data } } : node)),
+    };
+    const candidateProject = {
+      ...project,
+      graphs: { ...project.graphs, [graphId]: candidateGraph },
+    };
+    setEvaluations((current) => {
+      const existing = current.data.suites.find((suite) => suite.targetGraphId === graphId);
+      const projectDatasets = current.datasets.filter((candidate) => candidate.projectId === project.metadata.id);
+      if (existing) {
+        return {
+          ...current,
+          data: {
+            ...current.data,
+            selectedSuiteId: existing.id,
+            selectedDatasetId: undefined,
+          },
+          // This candidate lives only in the function passed below. Persisting
+          // definitions never writes the unsaved prompt settings into the file.
+          promptDesignerProjectOverride: { project: candidateProject, projectId: project.metadata.id, graphId },
+        };
+      }
+      const nextDataset = projectDatasets[0] ?? {
+        id: nanoid(),
+        projectId: project.metadata.id,
+        name: 'Prompt Designer evaluation cases',
+        fields: [],
+        cases: [],
+      };
+      const suite = {
+        id: nanoid(),
+        name: `Evaluate ${graph.metadata?.name ?? graphId}`,
+        targetGraphId: graphId,
+        datasetId: nextDataset.id,
+        inputBindings: [],
+        assertions: [],
+        evaluators: [],
+        configuration: { trialCount: 1, concurrency: 4, recordingRetention: 'failures-and-baselines' as const },
+        thresholds: [],
+      };
+      return {
+        ...current,
+        datasets: projectDatasets.length === 0 ? [...current.datasets, nextDataset] : current.datasets,
+        data: {
+          ...current.data,
+          suites: [...current.data.suites, suite],
+          selectedSuiteId: suite.id,
+          selectedDatasetId: undefined,
+        },
+        // This candidate lives only in the function passed below. Persisting
+        // definitions never writes the unsaved prompt settings into the file.
+        promptDesignerProjectOverride: { project: candidateProject, projectId: project.metadata.id, graphId },
+      };
     });
-  const { handleCancel, handleStartTestGroup, inProgress, response, resultsForAttachedNode, tryRunSingle } =
-    usePromptDesignerRunActions({
-      configData: config.data,
-      messages,
-      samples: promptDesigner.samples,
-    });
+    setOpenOverlay('evaluations');
+  };
 
   return (
     <div css={styles}>
@@ -313,36 +270,19 @@ export const PromptDesigner: FC<PromptDesignerProps> = ({ onClose }) => {
           />
         </div>
         <div className="response-area">
-          <PromptDesignerResponsePane response={response.response} results={resultsForAttachedNode} />
+          <PromptDesignerResponsePane response={response.response} />
         </div>
         <div className="controls-area">
-          <Tabs id="prompt-designer-tabs">
-            <TabList>
-              <Tab>Config</Tab>
-              <Tab>Test</Tab>
-            </TabList>
-            <TabPanel>
-              <PromptDesignerConfigPanel
-                config={config}
-                setConfig={setConfig}
-                onRun={wrapAsync(tryRunSingle, 'Run prompt designer test')}
-              />
-            </TabPanel>
-            <TabPanel>
-              <PromptDesignerTestPanel
-                testGroups={testGroups}
-                canEditTestGroups={attachedNode != null}
-                promptDesigner={promptDesigner}
-                setPromptDesigner={setPromptDesigner}
-                onTestGroupChanged={testGroupChanged}
-                onDeleteTestGroup={deleteTestGroup}
-                onAddTestGroup={addTestGroup}
-                onStartTestGroup={handleStartTestGroup}
-                inProgress={inProgress}
-                onCancel={handleCancel}
-              />
-            </TabPanel>
-          </Tabs>
+          <PromptDesignerConfigPanel
+            config={config}
+            setConfig={setConfig}
+            onRun={wrapAsync(tryRunSingle, 'Run prompt designer chat')}
+          />
+          <div className="controls-buttons">
+            <Button appearance="subtle" onClick={openInEvaluations}>
+              Open in Evaluations
+            </Button>
+          </div>
         </div>
       </div>
     </div>

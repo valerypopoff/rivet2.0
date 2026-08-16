@@ -7,7 +7,9 @@ import {
   ExecutionRecorder,
   createFrozenNodeOutputResolver,
   type GraphOutputs,
+  type Project,
   type GraphId,
+  type GraphInputNode,
   type ProcessEventMessageMap,
   type ProcessEvents,
   type ProjectId,
@@ -43,8 +45,17 @@ import {
 } from '../state/execution';
 import { fillMissingSettingsFromEnvironmentVariables } from '../utils/tauri';
 import { getLLMChatV2ApiKeyEnvVarNames } from '../utils/chatV2ProviderEnv';
-import { trivetState } from '../state/trivet';
-import { runTrivet } from '@valerypopoff/trivet';
+import { evaluationsState } from '../state/evaluations';
+import {
+  EvaluationGraphExecutionError,
+  fingerprintEvaluationDataset,
+  finalizeEvaluationRecordingRetention,
+  runEvaluationSuite,
+  type EvaluationExecutionMetrics,
+  type EvaluationRecordingReference,
+  type EvaluationRunPurpose,
+  type PortableJson,
+} from '@valerypopoff/rivet2-evaluations';
 import {
   createEmptyProjectExecutionSnapshot,
   frozenNodeOutputsState,
@@ -58,6 +69,7 @@ import {
   useDataRefs,
   useDatasetProvider,
   useEnvironmentProvider,
+  useEvaluationRunStore,
   useLLMProfileHealthStore,
   usePathPolicyProvider,
 } from '../providers/ProvidersContext';
@@ -79,6 +91,42 @@ import {
   shouldRouteProjectEventToSnapshot,
 } from './projectExecutionSnapshotRouting.js';
 import type { EditorGraphRunOptions } from './editorGraphRunOptions.js';
+import { formatEvaluationCompletionToast } from '../utils/evaluationRunSummary.js';
+import { evaluationRecordingRetentionUpdates } from '../utils/evaluationRecordingRetentionUpdates.js';
+
+function evaluationInputsToGraphOutputs(
+  project: Project,
+  graphId: GraphId,
+  inputs: Record<string, PortableJson>,
+): GraphOutputs {
+  const graph = project.graphs[graphId];
+  if (!graph) {
+    throw new Error(`Evaluation target graph "${graphId}" does not exist.`);
+  }
+  const inputsById = new Map(
+    graph.nodes
+      .filter((node): node is GraphInputNode => node.type === 'graphInput')
+      .map((node) => [node.data.id, node]),
+  );
+  return Object.fromEntries(
+    Object.entries(inputs).map(([inputId, value]) => {
+      const graphInput = inputsById.get(inputId);
+      if (!graphInput) {
+        throw new Error(`Evaluation provided unknown graph input "${inputId}".`);
+      }
+      return [inputId, { type: graphInput.data.dataType, value }];
+    }),
+  ) as GraphOutputs;
+}
+
+function createEvaluationRecordingReference(): EvaluationRecordingReference {
+  const id = globalThis.crypto?.randomUUID?.() ?? `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+  return {
+    id: `evaluation-recording-${id}`,
+    retention: 'temporary',
+    expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
+  };
+}
 
 /**
  * Yield to the macrotask queue so the browser can repaint.
@@ -111,6 +159,7 @@ export function useLocalExecutor() {
   const dataRefs = useDataRefs();
   const datasetProvider = useDatasetProvider();
   const environmentProvider = useEnvironmentProvider();
+  const evaluationRunStore = useEvaluationRunStore();
   const llmProfileHealthStore = useLLMProfileHealthStore();
   const pathPolicy = usePathPolicyProvider();
   const projectNodeRegistry = useProjectNodeRegistry();
@@ -118,6 +167,7 @@ export function useLocalExecutor() {
   const graph = useAtomValue(graphState);
   const store = useStore();
   const currentProcessorsByProjectId = useRef(new Map<ProjectId, GraphProcessor>());
+  const evaluationAbortControllersByProjectId = useRef(new Map<ProjectId, AbortController>());
   const saveGraph = useSaveCurrentGraph();
   const currentExecution = useCurrentExecution();
   const eventDispatcher = createProcessEventDispatcher(currentExecution);
@@ -127,7 +177,7 @@ export function useLocalExecutor() {
   const recordingPlaybackStarting = useAtomValue(recordingPlaybackStartingState);
   const setRecordingPlaybackStarting = useSetAtom(recordingPlaybackStartingState);
   const setLastRecordingState = useSetAtom(lastRecordingState);
-  const [{ testSuites }, setTrivetState] = useAtom(trivetState);
+  const [evaluations, setEvaluationsState] = useAtom(evaluationsState);
   const recordExecutions = useAtomValue(recordExecutionsState);
   const showNodeRunDurations = useAtomValue(showNodeRunDurationsState);
   const projectData = useAtomValue(projectDataState);
@@ -151,9 +201,24 @@ export function useLocalExecutor() {
 
       processor.abort();
       currentProcessorsByProjectId.current.delete(projectId);
+      evaluationAbortControllersByProjectId.current
+        .get(projectId)
+        ?.abort(new DOMException('Project closed.', 'AbortError'));
+      evaluationAbortControllersByProjectId.current.delete(projectId);
       editorExecutionCachesByProjectId.current.delete(projectId);
     }
   }, [openedProjects]);
+
+  // Evaluation workspace state is scoped to the active project. Unlike
+  // ordinary graph runs, it does not keep a separate live-state snapshot for
+  // every open tab, so a project switch must not let an old evaluation keep
+  // publishing progress into the newly selected project's workspace.
+  useEffect(() => {
+    for (const [projectId, controller] of evaluationAbortControllersByProjectId.current) {
+      if (projectId === project.metadata.id) continue;
+      controller.abort(new DOMException('Active project changed.', 'AbortError'));
+    }
+  }, [project.metadata.id]);
 
   function getEditorExecutionCache(projectId: string) {
     let cache = editorExecutionCachesByProjectId.current.get(projectId);
@@ -324,6 +389,35 @@ export function useLocalExecutor() {
     });
 
     currentProcessorsByProjectId.current.set(runProjectId, processor);
+  }
+
+  /**
+   * An evaluation owns many concurrent processors, so routing their events
+   * through the regular editor data-flow handlers would let one finished trial
+   * clear the canvas state for another. Run Activity is intentionally an
+   * observer and already keys every event by root/graph run identity, so feed
+   * it the complete stream directly.
+   */
+  function attachEvaluationRunActivity(processor: GraphProcessor) {
+    processor.on('start', (data) => currentExecution.onRunActivityEvent('start', data));
+    processor.on('done', (data) => currentExecution.onRunActivityEvent('done', data));
+    processor.on('abort', (data) => currentExecution.onRunActivityEvent('abort', data));
+    processor.on('error', (data) => currentExecution.onRunActivityEvent('error', data));
+    processor.on('graphStart', (data) => currentExecution.onRunActivityEvent('graphStart', data));
+    processor.on('graphFinish', (data) => currentExecution.onRunActivityEvent('graphFinish', data));
+    processor.on('graphError', (data) => currentExecution.onRunActivityEvent('graphError', data));
+    processor.on('graphAbort', (data) => currentExecution.onRunActivityEvent('graphAbort', data));
+    processor.on('graphOutputsReady', (data) => currentExecution.onRunActivityEvent('graphOutputsReady', data));
+    processor.on('nodeStart', (data) => currentExecution.onRunActivityEvent('nodeStart', data));
+    processor.on('nodeFinish', (data) => currentExecution.onRunActivityEvent('nodeFinish', data));
+    processor.on('nodeError', (data) => currentExecution.onRunActivityEvent('nodeError', data));
+    processor.on('nodeExcluded', (data) => currentExecution.onRunActivityEvent('nodeExcluded', data));
+    processor.on('nodeOutputsCleared', (data) => currentExecution.onRunActivityEvent('nodeOutputsCleared', data));
+    processor.on('partialOutput', (data) => currentExecution.onRunActivityEvent('partialOutput', data));
+    processor.on('progress', (data) => currentExecution.onRunActivityEvent('progress', data));
+    processor.on('llmCallFinished', (data) => currentExecution.onRunActivityEvent('llmCallFinished', data));
+    processor.on('llmProfileAttempt', (data) => currentExecution.onRunActivityEvent('llmProfileAttempt', data));
+    processor.on('toolCallFinished', (data) => currentExecution.onRunActivityEvent('toolCallFinished', data));
   }
 
   const tryRunGraph = useStableCallback(async (options: EditorGraphRunOptions = {}) => {
@@ -555,80 +649,208 @@ export function useLocalExecutor() {
     }
   });
 
-  const tryRunTests = useStableCallback(
-    async (options: { testSuiteIds?: string[]; testCaseIds?: string[]; iterationCount?: number } = {}) => {
-      toast.info(
-        (options.iterationCount ?? 1) > 1 ? `Running Tests (${options.iterationCount!} iterations)` : 'Running Tests',
+  const tryRunEvaluation = useStableCallback(
+    async ({
+      suiteId,
+      projectOverride,
+      purpose,
+    }: {
+      suiteId: string;
+      projectOverride?: Project;
+      purpose: EvaluationRunPurpose;
+    }) => {
+      const suite = evaluations.data.suites.find((candidate) => candidate.id === suiteId);
+      const dataset = evaluations.datasets.find((candidate) => candidate.id === suite?.datasetId);
+      if (!suite || !dataset) {
+        throw new Error('The selected evaluation suite or its dataset no longer exists.');
+      }
+
+      const evaluationBaseProject = projectOverride ?? project;
+      // A suite can target any graph, not just the canvas graph that happened
+      // to be open when the user pressed Run. Derive plugin requirements from
+      // the suite target so the execution project and the runner agree.
+      const evaluationGraph = evaluationBaseProject.graphs[suite.targetGraphId];
+      if (!evaluationGraph) {
+        throw new Error(`Evaluation target graph "${suite.targetGraphId}" no longer exists.`);
+      }
+      const projectForEvaluation = withDerivedProjectPluginSpecs(
+        {
+          ...evaluationBaseProject,
+          graphs: { ...evaluationBaseProject.graphs, [evaluationGraph.metadata!.id!]: evaluationGraph },
+        },
+        { appPluginStates: pluginStates, currentGraph: evaluationGraph, registry: projectNodeRegistry },
       );
-      logRuntimeInfo('Running local Trivet tests', {
-        selectedTestSuiteCount: options.testSuiteIds?.length,
-        selectedTestCaseCount: options.testCaseIds?.length,
-        iterationCount: options.iterationCount ?? 1,
-      });
-      currentExecution.onTrivetStart();
+      const runProjectId = projectForEvaluation.metadata.id;
+      if (!runProjectId) throw new Error('Cannot run an evaluation without a project id.');
 
-      setTrivetState((s) => ({
-        ...s,
-        runningTests: true,
-        recentTestResults: undefined,
-      }));
-      const testSuitesToRun = options.testSuiteIds
-        ? testSuites
-            .filter((t) => options.testSuiteIds!.includes(t.id))
-            .map((t) => ({
-              ...t,
-              testCases: options.testCaseIds
-                ? t.testCases.filter((tc) => options.testCaseIds?.includes(tc.id))
-                : t.testCases,
-            }))
-        : testSuites;
+      if (evaluationAbortControllersByProjectId.current.has(runProjectId)) {
+        throw new Error('An evaluation is already running for this project.');
+      }
+
+      // Register before the first asynchronous preparation step. Project
+      // switching must be able to cancel snapshotting/upload work too, rather
+      // than only the graph runs that start afterwards.
+      const evaluationAbortController = new AbortController();
+      evaluationAbortControllersByProjectId.current.set(runProjectId, evaluationAbortController);
+      const isActiveEvaluationProject = () => store.get(projectState).metadata.id === runProjectId;
+      const ensureActiveEvaluationProject = () => {
+        if (evaluationAbortController.signal.aborted) throw evaluationAbortController.signal.reason;
+        if (isActiveEvaluationProject()) return;
+
+        const reason = new DOMException('Active project changed.', 'AbortError');
+        evaluationAbortController.abort(reason);
+        throw reason;
+      };
+      const updateActiveProjectEvaluationState = (update: Parameters<typeof setEvaluationsState>[0]): void => {
+        if (isActiveEvaluationProject()) setEvaluationsState(update);
+      };
+
       try {
-        const projectForTests = withDerivedProjectPluginSpecs(
-          {
-            ...project,
-            graphs: {
-              ...project.graphs,
-              [graph.metadata!.id!]: graph,
-            },
-          },
-          {
-            appPluginStates: pluginStates,
-            currentGraph: graph,
-            registry: projectNodeRegistry,
-          },
-        );
+        // Store the exact cases before execution starts. Run summaries retain
+        // only the fingerprint, so this content-addressed snapshot is what
+        // makes a later replay/comparison truthful after the .rivet-data file
+        // changes.
+        let datasetSnapshotWarning: string | undefined;
+        try {
+          await evaluationRunStore.putDatasetSnapshot({
+            projectId: runProjectId,
+            fingerprint: fingerprintEvaluationDataset(dataset),
+            dataset: structuredClone({ ...dataset, projectId: runProjectId }),
+            createdAt: new Date().toISOString(),
+          });
+          ensureActiveEvaluationProject();
+        } catch (error) {
+          if (evaluationAbortController.signal.aborted) throw evaluationAbortController.signal.reason;
+          // Storage must never prevent the graph under test from running. The
+          // final run must nevertheless state that its historical case snapshot
+          // is unavailable rather than implying replay remains complete.
+          datasetSnapshotWarning =
+            'The exact evaluation dataset snapshot could not be retained; later replay may not have the original cases.';
+          logRuntimeDebug('Evaluation dataset snapshot was not retained.', {
+            error,
+            suiteId,
+            projectId: runProjectId,
+          });
+        }
 
-        const result = await runTrivet({
-          project: projectForTests,
-          iterationCount: options.iterationCount,
-          testSuites: testSuitesToRun,
-          onUpdate: (results) => {
-            setTrivetState((s) => ({
-              ...s,
-              recentTestResults: results,
-            }));
+        ensureActiveEvaluationProject();
+        toast.info(`Running evaluation: ${suite.name}`);
+        logRuntimeInfo('Running local evaluation', { suiteId, suiteName: suite.name });
+        currentExecution.onEvaluationStart();
+        updateActiveProjectEvaluationState((state) => ({ ...state, runningSuiteId: suiteId, currentRun: undefined }));
+        const result = await runEvaluationSuite({
+          project: projectForEvaluation,
+          evaluationData: evaluations.data,
+          dataset,
+          suiteId,
+          purpose,
+          executionMode: 'browser',
+          signal: evaluationAbortController.signal,
+          onUpdate: (run) => {
+            updateActiveProjectEvaluationState((state) => ({ ...state, currentRun: run }));
+            // Progress persistence is best-effort. A full browser store must
+            // not turn a successful graph evaluation into an unhandled promise
+            // rejection or interrupt its remaining trials.
+            void evaluationRunStore.put(run).catch((error) => {
+              logRuntimeDebug('Evaluation progress was not retained.', { error, suiteId, projectId: runProjectId });
+            });
           },
-          runGraph: async (project, graphId, inputs) => {
-            const runProjectId = project.metadata.id;
-            if (!runProjectId) {
-              throw new Error('Cannot run local Trivet graph without a project id.');
-            }
-
-            const processor = new GraphProcessor(project, graphId, projectNodeRegistry, true, {
+          runGraph: async ({ project: evaluationProject, graphId, inputs, signal, metadata }) => {
+            const startedAt = Date.now();
+            const metrics: EvaluationExecutionMetrics = {
+              durationMs: 0,
+              modelCallCount: 0,
+              toolCallCount: 0,
+              toolFailureCount: 0,
+            };
+            const providerAttempts: PortableJson[] = [];
+            const processor = new GraphProcessor(evaluationProject, graphId, projectNodeRegistry, true, {
               captureNodeTimings: showNodeRunDurations,
             });
+            const recorder = new ExecutionRecorder();
+            const recording = createEvaluationRecordingReference();
             processor.executor = 'browser';
-            attachGraphEvents(processor, runProjectId);
-            const contextValues = getProjectContextValues(projectContext);
+            recorder.record(processor);
+            attachEvaluationRunActivity(processor);
+            processor.on('llmCallFinished', (event) => {
+              metrics.modelCallCount = (metrics.modelCallCount ?? 0) + 1;
+              metrics.inputTokens = (metrics.inputTokens ?? 0) + (event.normalizedUsage?.promptTokens ?? 0);
+              metrics.outputTokens = (metrics.outputTokens ?? 0) + (event.normalizedUsage?.completionTokens ?? 0);
+              metrics.cachedInputTokens = (metrics.cachedInputTokens ?? 0) + (event.normalizedUsage?.cachedTokens ?? 0);
+              metrics.reasoningTokens = (metrics.reasoningTokens ?? 0) + (event.normalizedUsage?.reasoningTokens ?? 0);
+              if (event.pricing.status === 'known')
+                metrics.costUsd = (metrics.costUsd ?? 0) + (event.pricing.costUsd ?? 0);
+              else metrics.hasUnknownCost = true;
+              providerAttempts.push({
+                kind: 'provider-call',
+                provider: event.provider,
+                model: event.model,
+                customProviderApi: event.customProviderApi ?? null,
+                outcome: event.outcome,
+                finishReason: event.finishReason ?? null,
+                profileIndex: event.profileIndex ?? null,
+                attemptIndex: event.attemptIndex,
+                roundIndex: event.roundIndex ?? null,
+                durationMs: event.durationMs ?? null,
+              });
+            });
+            processor.on('llmProfileAttempt', (event) => {
+              providerAttempts.push({
+                kind: 'profile-decision',
+                provider: event.provider,
+                model: event.model,
+                customProviderApi: event.customProviderApi ?? null,
+                stage: event.stage,
+                outcome: event.outcome,
+                profileIndex: event.profileIndex ?? null,
+                attemptIndex: event.attemptIndex ?? null,
+                roundIndex: event.roundIndex,
+                status: event.status ?? null,
+                healthState: event.healthState ?? null,
+                healthDisposition: event.healthDisposition ?? null,
+                timeoutKind: event.timeoutKind ?? null,
+              });
+            });
+            processor.on('toolCallFinished', (event) => {
+              metrics.toolCallCount = (metrics.toolCallCount ?? 0) + 1;
+              if (event.outcome !== 'success') metrics.toolFailureCount = (metrics.toolFailureCount ?? 0) + 1;
+            });
+            const abort = () => {
+              void processor.abort();
+            };
+            signal?.addEventListener('abort', abort, { once: true });
+            const persistRecording = async (): Promise<EvaluationRecordingReference | undefined> => {
+              if (recorder.events.length === 0) return undefined;
+              try {
+                await evaluationRunStore.putRecording({
+                  projectId: runProjectId,
+                  runId: metadata.evaluationRunId,
+                  trialId: `${metadata.caseId}:${metadata.trialIndex}`,
+                  reference: recording,
+                  serialized: recorder.serialize(),
+                  createdAt: new Date().toISOString(),
+                });
+                return recording;
+              } catch (error) {
+                // A failed artifact write must not turn a valid model verdict
+                // into a broken evaluation. The compact run remains usable.
+                logRuntimeDebug('Evaluation recording was not retained.', {
+                  error,
+                  graphId,
+                  evaluationRunId: metadata.evaluationRunId,
+                });
+                return undefined;
+              }
+            };
             try {
-              return await processor.processGraph(
+              const outputs = await processor.processGraph(
                 {
                   settings: await fillMissingSettingsFromEnvironmentVariables(
                     savedSettings,
                     projectNodeRegistry.getPlugins(),
                     {
                       environmentProvider,
-                      extraEnvVarNames: getLLMChatV2ApiKeyEnvVarNames(project),
+                      extraEnvVarNames: getLLMChatV2ApiKeyEnvVarNames(evaluationProject),
                     },
                   ),
                   nativeApi: new TauriNativeApi(),
@@ -636,43 +858,97 @@ export function useLocalExecutor() {
                   audioProvider,
                   tokenizer: new GptTokenizerTokenizer(),
                   llmProfileHealthStore,
+                  evaluation: metadata,
                 },
-                inputs,
-                contextValues,
+                evaluationInputsToGraphOutputs(evaluationProject, graphId, inputs),
+                getProjectContextValues(projectContext),
               );
+              const portableOutputs = Object.fromEntries(
+                Object.entries(outputs).map(([key, value]) => [key, value.value as PortableJson]),
+              );
+              metrics.durationMs = Date.now() - startedAt;
+              const persistedRecording = await persistRecording();
+              return {
+                outputs: portableOutputs,
+                metrics,
+                ...(persistedRecording === undefined ? {} : { recording: persistedRecording }),
+                ...(providerAttempts.length === 0 ? {} : { providerAttempts }),
+              };
+            } catch (error) {
+              metrics.durationMs = Math.max(metrics.durationMs, Date.now() - startedAt);
+              const persistedRecording = await persistRecording();
+              if (signal?.aborted || (error instanceof DOMException && error.name === 'AbortError')) throw error;
+              throw new EvaluationGraphExecutionError(error instanceof Error ? error.message : String(error), {
+                metrics,
+                ...(persistedRecording === undefined ? {} : { recording: persistedRecording }),
+                ...(providerAttempts.length === 0 ? {} : { providerAttempts }),
+              });
             } finally {
-              if (currentProcessorsByProjectId.current.get(runProjectId) === processor) {
-                currentProcessorsByProjectId.current.delete(runProjectId);
-              }
+              signal?.removeEventListener('abort', abort);
             }
           },
         });
-        setTrivetState((s) => ({
-          ...s,
-          recentTestResults: result,
-          runningTests: false,
-        }));
-        toast.info(
-          `Ran tests: ${result.testSuiteResults.length} tests, ${
-            result.testSuiteResults.filter((t) => t.passing).length
-          } passing`,
+        const finalizedResult = finalizeEvaluationRecordingRetention(
+          result,
+          suite.configuration?.recordingRetention ?? 'failures-and-baselines',
         );
-        logRuntimeInfo('Finished local Trivet tests', {
-          testSuiteCount: result.testSuiteResults.length,
-          passingTestSuiteCount: result.testSuiteResults.filter((testSuite) => testSuite.passing).length,
-          iterationCount: result.iterationCount,
-        });
-      } catch (e) {
-        setTrivetState((s) => ({
-          ...s,
-          runningTests: false,
+        if (datasetSnapshotWarning) finalizedResult.warnings.push(datasetSnapshotWarning);
+        try {
+          await Promise.all(
+            evaluationRecordingRetentionUpdates(runProjectId, finalizedResult.trials).map((update) =>
+              evaluationRunStore.updateRecordingRetention(update),
+            ),
+          );
+        } catch (error) {
+          // Run quality is already final. Report an artifact-store fault as a
+          // warning rather than misrepresenting the evaluation itself as an
+          // execution error.
+          finalizedResult.warnings.push('Some evaluation recording retention updates could not be saved.');
+          logRuntimeDebug('Evaluation recording retention was not persisted.', {
+            error,
+            suiteId,
+            projectId: runProjectId,
+          });
+        }
+        try {
+          await evaluationRunStore.put(finalizedResult);
+        } catch (error) {
+          finalizedResult.warnings.push('This completed evaluation could not be saved to run history.');
+          logRuntimeDebug('Completed evaluation was not retained.', { error, suiteId, projectId: runProjectId });
+        }
+        updateActiveProjectEvaluationState((state) => ({
+          ...state,
+          runningSuiteId: undefined,
+          currentRun: finalizedResult,
+          selectedRunId: finalizedResult.id,
+          runs: [finalizedResult, ...state.runs.filter((run) => run.id !== finalizedResult.id)],
         }));
-        handleError(e, 'Failed to run local tests');
+        if (store.get(projectState).metadata.id === runProjectId) {
+          toast.info(formatEvaluationCompletionToast(finalizedResult));
+        }
+        return finalizedResult;
+      } catch (error) {
+        updateActiveProjectEvaluationState((state) => ({ ...state, runningSuiteId: undefined }));
+        if (!evaluationAbortController.signal.aborted && isActiveEvaluationProject()) {
+          handleError(error, 'Failed to run evaluation');
+        }
+        return undefined;
+      } finally {
+        if (evaluationAbortControllersByProjectId.current.get(runProjectId) === evaluationAbortController) {
+          evaluationAbortControllersByProjectId.current.delete(runProjectId);
+        }
       }
     },
   );
 
   function tryAbortGraph() {
+    const evaluationAbortController = evaluationAbortControllersByProjectId.current.get(
+      project.metadata.id as ProjectId,
+    );
+    if (evaluationAbortController) {
+      evaluationAbortController.abort(new DOMException('Evaluation canceled.', 'AbortError'));
+      return;
+    }
     currentProcessorsByProjectId.current.get(project.metadata.id as ProjectId)?.abort();
   }
 
@@ -704,7 +980,7 @@ export function useLocalExecutor() {
     tryAbortGraph,
     tryPauseGraph,
     tryResumeGraph,
-    tryRunTests,
+    tryRunEvaluation,
     submitUserInput,
   };
 }

@@ -4,7 +4,7 @@ import { useIOProvider } from '../providers/ProvidersContext.js';
 import { openedProjectSnapshotsState, type OpenedProjectInfo, projectState } from '../state/savedGraphs.js';
 import { handleError } from '../utils/errorHandling.js';
 import { useWorkspaceTransitions } from './useWorkspaceTransitions.js';
-import type { TrivetState } from '../state/trivet.js';
+import type { EvaluationProjectFileData } from '../io/IOProvider.js';
 import { useRivetAppHostCallbacks } from '../providers/HostCallbacksContext.js';
 
 export function useLoadProject() {
@@ -25,17 +25,17 @@ export function useLoadProject() {
       let project = storedSnapshot?.project;
       let data = storedSnapshot?.data;
       let markClean = false;
-      let testSuites: TrivetState['testSuites'] = [];
+      let evaluation: EvaluationProjectFileData | undefined;
 
       if (!project && projectInfo.fsPath && isPathBasedIOProvider(ioProvider)) {
         const loadedProject = await ioProvider.loadProjectDataNoPrompt(projectInfo.fsPath);
         project = loadedProject.project;
         data = loadedProject.project.data;
         markClean = true;
-        testSuites = loadedProject.testData.testSuites;
+        evaluation = loadedProject.evaluation;
       } else if (projectInfo.fsPath && isPathBasedIOProvider(ioProvider)) {
-        const { testData } = await ioProvider.loadProjectDataNoPrompt(projectInfo.fsPath);
-        testSuites = testData.testSuites;
+        const loadedProject = await ioProvider.loadProjectDataNoPrompt(projectInfo.fsPath);
+        evaluation = loadedProject.evaluation;
       }
 
       if (!project) {
@@ -48,7 +48,8 @@ export function useLoadProject() {
         fsPath: projectInfo.fsPath,
         openedGraph: projectInfo.openedGraph,
         executorMode: projectInfo.executorMode,
-        testSuites,
+        evaluationData: evaluation?.evaluationData,
+        evaluationDatasets: evaluation?.evaluationDatasets,
         markClean,
       });
     } catch (err) {

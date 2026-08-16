@@ -35,12 +35,12 @@ const RAW_RUNTIME_STATE =
       "reference": "workspace:packages/docs"\
     },\
     {\
-      "name": "@valerypopoff/rivet2-node",\
-      "reference": "workspace:packages/node"\
+      "name": "@valerypopoff/rivet2-evaluations",\
+      "reference": "workspace:packages/evaluations"\
     },\
     {\
-      "name": "@valerypopoff/trivet",\
-      "reference": "workspace:packages/trivet"\
+      "name": "@valerypopoff/rivet2-node",\
+      "reference": "workspace:packages/node"\
     }\
   ],\
   "enableTopLevelFallback": true,\
@@ -52,8 +52,8 @@ const RAW_RUNTIME_STATE =
     ["@valerypopoff/rivet-app-executor", ["workspace:packages/app-executor"]],\
     ["@valerypopoff/rivet2-cli", ["workspace:packages/cli"]],\
     ["@valerypopoff/rivet2-core", ["workspace:packages/core"]],\
+    ["@valerypopoff/rivet2-evaluations", ["workspace:packages/evaluations"]],\
     ["@valerypopoff/rivet2-node", ["workspace:packages/node"]],\
-    ["@valerypopoff/trivet", ["workspace:packages/trivet"]],\
     ["docs", ["workspace:packages/docs"]]\
   ],\
   "fallbackPool": [\
@@ -15411,7 +15411,7 @@ const RAW_RUNTIME_STATE =
           ["@typescript-eslint/eslint-plugin", "virtual:c72650afd8d8ecff5306990489065a4e0c34d2b88c4acd8d3577f92d5cf46b6fcfd28624afe640ea0bc70671a30a586d15077b1a64459cd4c0f76ed3d182f496#npm:8.24.0"],\
           ["@valerypopoff/rivet-app", "workspace:packages/app"],\
           ["@valerypopoff/rivet2-core", "workspace:packages/core"],\
-          ["@valerypopoff/trivet", "workspace:packages/trivet"],\
+          ["@valerypopoff/rivet2-evaluations", "workspace:packages/evaluations"],\
           ["@vitejs/plugin-react", "virtual:c72650afd8d8ecff5306990489065a4e0c34d2b88c4acd8d3577f92d5cf46b6fcfd28624afe640ea0bc70671a30a586d15077b1a64459cd4c0f76ed3d182f496#npm:4.7.0"],\
           ["ahooks", "virtual:c72650afd8d8ecff5306990489065a4e0c34d2b88c4acd8d3577f92d5cf46b6fcfd28624afe640ea0bc70671a30a586d15077b1a64459cd4c0f76ed3d182f496#npm:3.9.7"],\
           ["clsx", "npm:2.0.0"],\
@@ -15531,6 +15531,7 @@ const RAW_RUNTIME_STATE =
           ["@types/yargs", "npm:17.0.29"],\
           ["@typescript-eslint/eslint-plugin", "virtual:c72650afd8d8ecff5306990489065a4e0c34d2b88c4acd8d3577f92d5cf46b6fcfd28624afe640ea0bc70671a30a586d15077b1a64459cd4c0f76ed3d182f496#npm:8.24.0"],\
           ["@valerypopoff/rivet2-cli", "workspace:packages/cli"],\
+          ["@valerypopoff/rivet2-evaluations", "workspace:packages/evaluations"],\
           ["@valerypopoff/rivet2-node", "workspace:packages/node"],\
           ["chalk", "npm:5.4.1"],\
           ["didyoumean2", "npm:7.0.4"],\
@@ -15623,6 +15624,29 @@ const RAW_RUNTIME_STATE =
         "linkType": "SOFT"\
       }]\
     ]],\
+    ["@valerypopoff/rivet2-evaluations", [\
+      ["workspace:packages/evaluations", {\
+        "packageLocation": "./packages/evaluations/",\
+        "packageDependencies": [\
+          ["@types/eslint", "npm:8.44.6"],\
+          ["@types/node", "npm:22.20.1"],\
+          ["@typescript-eslint/eslint-plugin", "virtual:0b3de7e004ab4ff83b29432a1b8507d62de6bdcc6652e51c320a2081fae7427a75086ac86fc6ccba73f945b34c859166424dd26ee1cdc4f8bc71aace2476e4a7#npm:8.24.0"],\
+          ["@valerypopoff/rivet2-core", "workspace:packages/core"],\
+          ["@valerypopoff/rivet2-evaluations", "workspace:packages/evaluations"],\
+          ["eslint", "virtual:cce41fb5932c708537e2c8102f67c1df8503bc7b0e98fe405b8d054c96ba0fd0ec3b4d44ffa2144f5379ff48b0cfcbb1215b2409bcf11998c11e7bcf45bd049f#npm:9.20.1"],\
+          ["eslint-config-standard-with-typescript", "virtual:0b3de7e004ab4ff83b29432a1b8507d62de6bdcc6652e51c320a2081fae7427a75086ac86fc6ccba73f945b34c859166424dd26ee1cdc4f8bc71aace2476e4a7#npm:39.1.1"],\
+          ["eslint-plugin-import", "virtual:0b3de7e004ab4ff83b29432a1b8507d62de6bdcc6652e51c320a2081fae7427a75086ac86fc6ccba73f945b34c859166424dd26ee1cdc4f8bc71aace2476e4a7#npm:2.31.0"],\
+          ["eslint-plugin-n", "virtual:cce41fb5932c708537e2c8102f67c1df8503bc7b0e98fe405b8d054c96ba0fd0ec3b4d44ffa2144f5379ff48b0cfcbb1215b2409bcf11998c11e7bcf45bd049f#npm:16.2.0"],\
+          ["eslint-plugin-promise", "virtual:cce41fb5932c708537e2c8102f67c1df8503bc7b0e98fe405b8d054c96ba0fd0ec3b4d44ffa2144f5379ff48b0cfcbb1215b2409bcf11998c11e7bcf45bd049f#npm:6.1.1"],\
+          ["rimraf", "npm:6.1.3"],\
+          ["ts-node", "virtual:99235f35d2eb424966d2d3b608a4bd2996288f73a132a2382b1cbe77d9cf61f132c94c3d07d43fab234da7b31ff422522698aa442a655312f2519337de7cf16b#npm:10.9.1"],\
+          ["tsx", "npm:4.23.0"],\
+          ["typescript", "patch:typescript@npm%3A5.7.3#optional!builtin<compat/typescript>::version=5.7.3&hash=5786d5"],\
+          ["yaml", "npm:2.9.0"]\
+        ],\
+        "linkType": "SOFT"\
+      }]\
+    ]],\
     ["@valerypopoff/rivet2-node", [\
       ["workspace:packages/node", {\
         "packageLocation": "./packages/node/",\
@@ -15665,31 +15689,6 @@ const RAW_RUNTIME_STATE =
           ["type-fest", "npm:4.34.1"],\
           ["typescript", "patch:typescript@npm%3A5.7.3#optional!builtin<compat/typescript>::version=5.7.3&hash=5786d5"],\
           ["ws", "virtual:3fb85cabf578e555681617dde86c6d3e8bb09b034041a2715ad0b7191a8b57cd858a88db356af310ff8b15df244adc8d7c82e129e7e52aecfe0b1e06697972bb#npm:8.21.0"]\
-        ],\
-        "linkType": "SOFT"\
-      }]\
-    ]],\
-    ["@valerypopoff/trivet", [\
-      ["workspace:packages/trivet", {\
-        "packageLocation": "./packages/trivet/",\
-        "packageDependencies": [\
-          ["@types/eslint", "npm:8.44.6"],\
-          ["@types/lodash-es", "npm:4.17.10"],\
-          ["@types/node", "npm:22.20.1"],\
-          ["@typescript-eslint/eslint-plugin", "virtual:0b3de7e004ab4ff83b29432a1b8507d62de6bdcc6652e51c320a2081fae7427a75086ac86fc6ccba73f945b34c859166424dd26ee1cdc4f8bc71aace2476e4a7#npm:8.24.0"],\
-          ["@valerypopoff/rivet2-core", "workspace:packages/core"],\
-          ["@valerypopoff/trivet", "workspace:packages/trivet"],\
-          ["eslint", "virtual:cce41fb5932c708537e2c8102f67c1df8503bc7b0e98fe405b8d054c96ba0fd0ec3b4d44ffa2144f5379ff48b0cfcbb1215b2409bcf11998c11e7bcf45bd049f#npm:9.20.1"],\
-          ["eslint-config-standard-with-typescript", "virtual:0b3de7e004ab4ff83b29432a1b8507d62de6bdcc6652e51c320a2081fae7427a75086ac86fc6ccba73f945b34c859166424dd26ee1cdc4f8bc71aace2476e4a7#npm:39.1.1"],\
-          ["eslint-plugin-import", "virtual:0b3de7e004ab4ff83b29432a1b8507d62de6bdcc6652e51c320a2081fae7427a75086ac86fc6ccba73f945b34c859166424dd26ee1cdc4f8bc71aace2476e4a7#npm:2.31.0"],\
-          ["eslint-plugin-n", "virtual:cce41fb5932c708537e2c8102f67c1df8503bc7b0e98fe405b8d054c96ba0fd0ec3b4d44ffa2144f5379ff48b0cfcbb1215b2409bcf11998c11e7bcf45bd049f#npm:16.2.0"],\
-          ["eslint-plugin-promise", "virtual:cce41fb5932c708537e2c8102f67c1df8503bc7b0e98fe405b8d054c96ba0fd0ec3b4d44ffa2144f5379ff48b0cfcbb1215b2409bcf11998c11e7bcf45bd049f#npm:6.1.1"],\
-          ["lodash-es", "npm:4.18.1"],\
-          ["rimraf", "npm:6.1.3"],\
-          ["ts-node", "virtual:61e4e4a2d18410270e3eb25cf83007d4f8285c905145b0f97f8bfe353e74325483423c302d65fb68e30518f4436d4f8f4222193b574f21e109b869c884619914#npm:10.9.1"],\
-          ["tsx", "npm:4.23.0"],\
-          ["typescript", "patch:typescript@npm%3A5.7.3#optional!builtin<compat/typescript>::version=5.7.3&hash=5786d5"],\
-          ["yaml", "npm:2.9.0"]\
         ],\
         "linkType": "SOFT"\
       }]\
@@ -32724,8 +32723,8 @@ const RAW_RUNTIME_STATE =
         ],\
         "linkType": "SOFT"\
       }],\
-      ["virtual:61e4e4a2d18410270e3eb25cf83007d4f8285c905145b0f97f8bfe353e74325483423c302d65fb68e30518f4436d4f8f4222193b574f21e109b869c884619914#npm:10.9.1", {\
-        "packageLocation": "./.yarn/__virtual__/ts-node-virtual-e7b7c1eec9/0/cache/ts-node-npm-10.9.1-6c268be7f4-bee56d4dc9.zip/node_modules/ts-node/",\
+      ["virtual:99235f35d2eb424966d2d3b608a4bd2996288f73a132a2382b1cbe77d9cf61f132c94c3d07d43fab234da7b31ff422522698aa442a655312f2519337de7cf16b#npm:10.9.1", {\
+        "packageLocation": "./.yarn/__virtual__/ts-node-virtual-4eed3a8fc2/0/cache/ts-node-npm-10.9.1-6c268be7f4-bee56d4dc9.zip/node_modules/ts-node/",\
         "packageDependencies": [\
           ["@cspotcode/source-map-support", "npm:0.8.1"],\
           ["@swc/core", null],\
@@ -32744,7 +32743,7 @@ const RAW_RUNTIME_STATE =
           ["create-require", "npm:1.1.1"],\
           ["diff", "npm:4.0.2"],\
           ["make-error", "npm:1.3.6"],\
-          ["ts-node", "virtual:61e4e4a2d18410270e3eb25cf83007d4f8285c905145b0f97f8bfe353e74325483423c302d65fb68e30518f4436d4f8f4222193b574f21e109b869c884619914#npm:10.9.1"],\
+          ["ts-node", "virtual:99235f35d2eb424966d2d3b608a4bd2996288f73a132a2382b1cbe77d9cf61f132c94c3d07d43fab234da7b31ff422522698aa442a655312f2519337de7cf16b#npm:10.9.1"],\
           ["typescript", "patch:typescript@npm%3A5.7.3#optional!builtin<compat/typescript>::version=5.7.3&hash=5786d5"],\
           ["v8-compile-cache-lib", "npm:3.0.1"],\
           ["yn", "npm:3.1.1"]\

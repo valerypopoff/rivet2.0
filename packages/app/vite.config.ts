@@ -145,7 +145,7 @@ export function createRivetViteConfig(options: RivetViteConfigOptions = {}): Use
       include: ['nspell', ...monacoJsonOptimizeDepsIncludes],
       exclude: [
         '@valerypopoff/rivet2-core',
-        '@valerypopoff/trivet',
+        '@valerypopoff/rivet2-evaluations',
         'dictionary-en',
         'rivet-cspell-words',
         ...tauriApiOptimizeDepsExcludes,
@@ -163,7 +163,7 @@ export function createRivetViteConfig(options: RivetViteConfigOptions = {}): Use
           find: /^@valerypopoff\/rivet2-core$/,
           replacement: resolve(appDirectory, '../core/src/index.ts'),
         },
-        { find: '@valerypopoff/trivet', replacement: resolve(appDirectory, '../trivet/src/index.ts') },
+        { find: '@valerypopoff/rivet2-evaluations', replacement: resolve(appDirectory, '../evaluations/src/index.ts') },
         {
           find: '@google-cloud/vertexai',
           replacement: resolve(appDirectory, './src/utils/browser/vertexAiBrowserStub.ts'),

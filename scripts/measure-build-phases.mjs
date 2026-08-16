@@ -23,7 +23,7 @@ const phases = [
   },
   workspaceBuildPhase('core build', '@valerypopoff/rivet2-core'),
   workspaceBuildPhase('node build', '@valerypopoff/rivet2-node'),
-  workspaceBuildPhase('trivet build', '@valerypopoff/trivet'),
+  workspaceBuildPhase('evaluations build', '@valerypopoff/rivet2-evaluations'),
   workspaceBuildPhase('app-executor build', '@valerypopoff/rivet-app-executor'),
   !args.has('--skip-app') && workspaceBuildPhase('app build', '@valerypopoff/rivet-app'),
 ].filter(Boolean);

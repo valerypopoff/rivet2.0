@@ -121,7 +121,7 @@ export const homepageContent = {
         eyebrow: 'Evaluation',
         title: 'Repeatable tests for AI behavior',
         description:
-          'Use Trivet test suites, datasets, recordings, and validation graphs to turn important examples into checks you can rerun.',
+          'Use evaluation suites, datasets, recordings, assertions, and evaluator graphs to turn important examples into checks you can rerun.',
       },
       {
         icon: 'automation',
@@ -149,7 +149,7 @@ export const homepageContent = {
       {
         number: '03',
         title: 'Test',
-        description: 'Save representative cases in datasets and Trivet suites so improvements stay improvements.',
+        description: 'Save representative cases in evaluation datasets and suites so improvements stay improvements.',
       },
       {
         number: '04',

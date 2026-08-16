@@ -4,7 +4,7 @@ import { useAtom, useAtomValue, useSetAtom } from 'jotai';
 import { type FC, type ReactNode } from 'react';
 import { useRivetAppHostUiConfig } from '../providers/HostUiConfigContext.js';
 import { hideGraphSearchPanelState, searchingGraphState } from '../state/graphBuilder.js';
-import { trivetState } from '../state/trivet.js';
+import { evaluationsRunningState } from '../state/evaluations.js';
 import { overlayOpenState, runActivityDrawerOpenState, type OverlayKey } from '../state/ui.js';
 import { getVisibleWorkspaceTabs } from '../utils/workspaceTabs.js';
 import { NodeRunningIndicator } from './visualNode/NodeRunningIndicator.js';
@@ -83,7 +83,7 @@ const styles = css`
     }
   }
 
-  .trivet-menu button {
+  .evaluations-menu button {
     display: flex;
     flex-direction: row;
 
@@ -94,24 +94,26 @@ const styles = css`
 `;
 
 export const OverlayTabs: FC<{
+  projectAvailable?: boolean;
   showWelcomeScreen?: boolean;
-}> = ({ showWelcomeScreen = false }) => {
+}> = ({ projectAvailable = true, showWelcomeScreen = false }) => {
   const hostUiConfig = useRivetAppHostUiConfig();
   const [openOverlay, setOpenOverlay] = useAtom(overlayOpenState);
   const setRunActivityOpen = useSetAtom(runActivityDrawerOpenState);
   const setGraphSearch = useSetAtom(searchingGraphState);
 
-  const trivet = useAtomValue(trivetState);
+  const evaluationsRunning = useAtomValue(evaluationsRunningState);
 
   const openWorkspace = (workspace: OverlayKey | undefined) => {
     setRunActivityOpen(false);
-    setOpenOverlay((current) => (current === workspace ? undefined : workspace));
+    setOpenOverlay(workspace);
     setGraphSearch(hideGraphSearchPanelState);
   };
 
   const visibleWorkspaceTabs = getVisibleWorkspaceTabs({
     config: hostUiConfig.workspaceTabs,
     openOverlay,
+    projectAvailable,
     welcomeScreenAvailable: showWelcomeScreen,
   });
 
@@ -130,9 +132,9 @@ export const OverlayTabs: FC<{
             onOpen={() => openWorkspace(tab.targetOverlay)}
           >
             {tab.label}
-            {tab.key === 'trivet' && trivet.runningTests && (
+            {tab.key === 'evaluations' && evaluationsRunning && (
               <div className="spinner">
-                <NodeRunningIndicator isRunning delayMs={0} label="Trivet tests running" />
+                <NodeRunningIndicator isRunning delayMs={0} label="Evaluation running" />
               </div>
             )}
           </WorkspaceTab>

@@ -1,5 +1,11 @@
 import { atom } from 'jotai';
-import { type ChatMessage, type ChatNodeConfigData, type NodeId, type ProcessId } from '@valerypopoff/rivet2-core';
+import {
+  createLLMChatV2NodeData,
+  type ChatMessage,
+  type LLMChatV2NodeData,
+  type NodeId,
+  type ProcessId,
+} from '@valerypopoff/rivet2-core';
 
 export type PromptDesignerMessagesState = {
   messages: ChatMessage[];
@@ -16,16 +22,16 @@ export type PromptDesignerResponseState = {
 export const promptDesignerResponseState = atom<PromptDesignerResponseState>({});
 
 export type PromptDesignerConfigurationState = {
-  data: ChatNodeConfigData;
+  /**
+   * Prompt Designer previews the same current LLM Chat implementation that a
+   * graph executes. Repeated evaluation belongs to Evaluations; this is only
+   * the editable, one-off preview configuration.
+   */
+  data: LLMChatV2NodeData;
 };
 
 export const promptDesignerConfigurationState = atom<PromptDesignerConfigurationState>({
-  data: {
-    model: 'gpt-4',
-    maxTokens: 1024,
-    temperature: 0.2,
-    useTopP: false,
-  },
+  data: createLLMChatV2NodeData(),
 });
 
 export const promptDesignerAttachedChatNodeState = atom<
@@ -35,26 +41,3 @@ export const promptDesignerAttachedChatNodeState = atom<
     }
   | undefined
 >(undefined);
-
-export type PromptDesignerState = {
-  samples: number;
-};
-
-export const promptDesignerState = atom<PromptDesignerState>({
-  samples: 10,
-});
-
-export type PromptDesignerTestGroupResults = {
-  response: string;
-  groupId: string;
-  results: {
-    conditionText: string;
-    pass: boolean;
-  }[];
-};
-
-export type PromptDesignerTestGroupResultsByNodeIdState = {
-  [nodeId: string]: PromptDesignerTestGroupResults[];
-};
-
-export const promptDesignerTestGroupResultsByNodeIdState = atom<PromptDesignerTestGroupResultsByNodeIdState>({});

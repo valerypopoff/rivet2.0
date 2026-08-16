@@ -1,15 +1,20 @@
 import { type NodeGraph, type Project, type ExecutionRecorder } from '@valerypopoff/rivet2-core';
-import { type TrivetData } from '@valerypopoff/trivet';
+import { type EvaluationDataset, type EvaluationProjectData } from '@valerypopoff/rivet2-evaluations';
+
+export type EvaluationProjectFileData = {
+  evaluationData: EvaluationProjectData;
+  evaluationDatasets: EvaluationDataset[];
+};
 
 /** Base IO interface - all platforms (browser, Tauri, web) support these methods. */
 export interface IOProvider {
   saveGraphData(graphData: NodeGraph): Promise<void>;
 
-  saveProjectData(project: Project, testData: TrivetData): Promise<string | undefined>;
+  saveProjectData(project: Project, evaluation: EvaluationProjectFileData): Promise<string | undefined>;
 
   loadGraphData(callback: (graphData: NodeGraph) => void): Promise<void>;
 
-  loadProjectData(callback: (data: { project: Project; testData: TrivetData; path: string }) => void): Promise<void>;
+  loadProjectData(callback: (data: { project: Project; evaluation: EvaluationProjectFileData; path: string }) => void): Promise<void>;
 
   loadRecordingData(callback: (data: { recorder: ExecutionRecorder; path: string }) => void): Promise<void>;
 
@@ -22,9 +27,9 @@ export interface IOProvider {
 
 /** Extended interface for platforms with path-based file system access (Tauri, Node.js). */
 export interface PathBasedIOProvider extends IOProvider {
-  saveProjectDataNoPrompt(project: Project, testData: TrivetData, path: string): Promise<void>;
+  saveProjectDataNoPrompt(project: Project, evaluation: EvaluationProjectFileData, path: string): Promise<void>;
 
-  loadProjectDataNoPrompt(path: string): Promise<{ project: Project; testData: TrivetData }>;
+  loadProjectDataNoPrompt(path: string): Promise<{ project: Project; evaluation: EvaluationProjectFileData }>;
 
   openDirectory(): Promise<string | string[] | null>;
 
