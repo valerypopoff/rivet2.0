@@ -5,5 +5,6 @@ export * from './runner.js';
 export * from './store.js';
 export * from './serialization.js';
 export * from './datasetTransfer.js';
+export * from './suiteTransfer.js';
 export * from './dataTypes.js';
 export * from './normalization.js';

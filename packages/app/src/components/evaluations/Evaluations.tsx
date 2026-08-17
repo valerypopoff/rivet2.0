@@ -11,11 +11,13 @@ import {
   createEvaluationBaselineSnapshot,
   canonicalStringify,
   deserializeEvaluationDatasetJson,
+  deserializeEvaluationSuiteBundleJson,
   isEvaluationValueCompatibleWithDataType,
   normalizeEvaluationBaselineSnapshot,
   normalizeEvaluationRun,
   hasAuthoritativeEvaluationCriteria,
   serializeEvaluationDatasetJson,
+  serializeEvaluationSuiteBundleJson,
   type EvaluationBaselineSnapshot,
   type EvaluationDataset,
   type EvaluationDatasetField,
@@ -868,6 +870,7 @@ const EvaluationsContainer: FC<{ tryRunEvaluation: TryRunEvaluation; abortEvalua
   const [state, setState] = useAtom(evaluationsState);
   const project = useAtomValue(projectState);
   const runStore = useEvaluationRunStore();
+  const io = useIOProvider();
   const { loadSerializedRecording } = useLoadRecording();
   const graph = useAtomValue(graphState);
   const setOpenOverlay = useSetAtom(overlayOpenState);
@@ -1002,6 +1005,78 @@ const EvaluationsContainer: FC<{ tryRunEvaluation: TryRunEvaluation; abortEvalua
       selectedRunId: undefined,
     }));
     setView('dataset');
+  };
+
+  const importDatasetResource = () => {
+    void io
+      .readFileAsString((source, fileName) => {
+        try {
+          const dataset = deserializeEvaluationDatasetJson(source, {
+            id: nanoid(),
+            projectId: project.metadata.id,
+          });
+          setState((current) => ({
+            ...current,
+            datasets: [...current.datasets, dataset],
+            data: {
+              ...current.data,
+              selectedSuiteId: undefined,
+              selectedDatasetId: dataset.id,
+            },
+            runs: [],
+            selectedRunId: undefined,
+            currentRun: undefined,
+          }));
+          setView('dataset');
+          toast.success(`Imported evaluation dataset from ${fileName}.`);
+        } catch (error) {
+          toast.error(
+            `Could not import the evaluation dataset: ${error instanceof Error ? error.message : String(error)}`,
+          );
+        }
+      })
+      .catch((error) =>
+        toast.error(
+          `Could not open an evaluation dataset file: ${error instanceof Error ? error.message : String(error)}`,
+        ),
+      );
+  };
+
+  const importSuiteResource = () => {
+    void io
+      .readFileAsString((source, fileName) => {
+        try {
+          const imported = deserializeEvaluationSuiteBundleJson(source, {
+            projectId: project.metadata.id,
+            suiteId: nanoid(),
+            datasetId: nanoid(),
+          });
+          setState((current) => ({
+            ...current,
+            datasets: [...current.datasets, imported.dataset],
+            data: {
+              ...current.data,
+              suites: [...current.data.suites, imported.suite],
+              selectedSuiteId: imported.suite.id,
+              selectedDatasetId: undefined,
+            },
+            runs: [],
+            selectedRunId: undefined,
+            currentRun: undefined,
+          }));
+          setView('definition');
+          toast.success(`Imported evaluation suite and dataset from ${fileName}. Repair graph references if needed.`);
+        } catch (error) {
+          toast.error(
+            `Could not import the evaluation suite: ${error instanceof Error ? error.message : String(error)}`,
+          );
+        }
+      })
+      .catch((error) =>
+        toast.error(
+          `Could not open an evaluation suite file: ${error instanceof Error ? error.message : String(error)}`,
+        ),
+      );
   };
 
   const addCase = (sourceDataset: EvaluationDataset) => {
@@ -1322,6 +1397,21 @@ const EvaluationsContainer: FC<{ tryRunEvaluation: TryRunEvaluation; abortEvalua
     }
   };
 
+  const exportSelectedSuite = () => {
+    if (!selectedSuite || !suiteDataset) {
+      toast.warn('A suite needs an available evaluation dataset before it can be exported.');
+      return;
+    }
+    void io
+      .saveString(
+        serializeEvaluationSuiteBundleJson(selectedSuite, suiteDataset),
+        `${selectedSuite.name || 'evaluation-suite'}.rivet-evaluation-suite.json`,
+      )
+      .catch((error) =>
+        toast.error(`Could not export the evaluation suite: ${error instanceof Error ? error.message : String(error)}`),
+      );
+  };
+
   return (
     <div css={styles}>
       <EvaluationSuiteSidebar
@@ -1339,6 +1429,8 @@ const EvaluationsContainer: FC<{ tryRunEvaluation: TryRunEvaluation; abortEvalua
         getReferenceStatus={(suite) => getEvaluationSuiteReferenceStatus(suite, project, state.datasets)}
         onCreateDataset={createDatasetResource}
         onCreateSuite={() => setCreateSuiteOpen(true)}
+        onImportDataset={importDatasetResource}
+        onImportSuite={importSuiteResource}
         onSelectDataset={selectDataset}
         onSelectSuite={selectSuite}
       />
@@ -1401,6 +1493,16 @@ const EvaluationsContainer: FC<{ tryRunEvaluation: TryRunEvaluation; abortEvalua
               <div className="evaluation-suite-title-row">
                 <h1>{selectedSuite.name || 'Untitled evaluation suite'}</h1>
                 <div className="spacer" />
+                <Button
+                  appearance="subtle"
+                  isDisabled={!suiteDataset}
+                  title={
+                    suiteDataset ? 'Export this suite and its evaluation dataset' : 'Repair the dataset reference first'
+                  }
+                  onClick={exportSelectedSuite}
+                >
+                  Export suite + dataset
+                </Button>
                 {state.runningSuiteId === selectedSuite.id ? (
                   <Button appearance="danger" onClick={abortEvaluation}>
                     Cancel evaluation

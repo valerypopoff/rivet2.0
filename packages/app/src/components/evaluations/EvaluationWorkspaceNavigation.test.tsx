@@ -27,6 +27,8 @@ test('suite sidebar renders resource rows with an explicit current selection', (
       getReferenceStatus={() => ({ datasetExists: true, targetGraphExists: true, evaluatorGraphsExist: true })}
       onCreateDataset={() => undefined}
       onCreateSuite={() => undefined}
+      onImportDataset={() => undefined}
+      onImportSuite={() => undefined}
       onSelectDataset={() => undefined}
       onSelectSuite={() => undefined}
     />,
@@ -37,6 +39,8 @@ test('suite sidebar renders resource rows with an explicit current selection', (
   assert.match(html, /Second suite/u);
   assert.match(html, /Datasets/u);
   assert.match(html, /Shared cases/u);
+  assert.match(html, /aria-label="Import evaluation suite and dataset"/u);
+  assert.match(html, /aria-label="Import evaluation dataset"/u);
   assert.match(html, /aria-current="true"/u);
 });
 

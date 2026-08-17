@@ -12,6 +12,12 @@
 
 Do not put raw model output, prompts, credentials, recordings, or complete historical runs in the project attachment. Baselines store compact aggregate/per-case metrics and provenance so changing a baseline does not change the executable graph fingerprint.
 
+## Resource transfer
+
+Evaluation datasets use a versioned JSON export for lossless interchange; importing from the **Datasets** sidebar creates a new destination-scoped dataset, while importing from an existing dataset replaces only that resource's fields and cases. CSV remains a case-row format and therefore requires the destination dataset's field contract to already exist.
+
+An evaluation-suite export is a versioned JSON bundle containing exactly one suite and the dataset named by that suite's `datasetId`. Import creates fresh suite and dataset IDs in the active project, retains field and case IDs so suite bindings and expected-value references remain connected, and never overwrites a resource already in the project. Target and evaluator graph IDs remain references: a bundle does not copy graphs, so a destination project that does not contain those IDs shows the normal repairable missing-graph state. Bundles intentionally exclude baselines, run history, recordings, and dataset snapshots because those artifacts are project/run-store evidence rather than reusable suite configuration.
+
 Project attachment deserialization is a trust boundary. It validates the nested suite and baseline structure before returning typed data, then normalizes legacy baseline accounting and quality metadata. Malformed array entries or missing structural fields must fail with a path-specific error rather than reaching editor or comparison code as a falsely typed value.
 
 ## Runner contract
@@ -69,6 +75,7 @@ execution failure.
 The editor hierarchy is project → resource → section:
 
 - `EvaluationSuiteSidebar.tsx` owns explicit suite and dataset selection. It uses flat resource rows rather than action-button styling.
+- `suiteTransfer.ts` owns the versioned suite-plus-dataset bundle format. Validate the source before assigning destination IDs; the dependency relationship must be checked before a suite is retargeted to its newly imported dataset.
 - `EvaluationSectionTabs.tsx` owns the horizontal Definition, Runs, and Compare tab strip. It is rendered only for an explicitly selected suite; a directly selected dataset opens its own editor rather than becoming a suite tab.
 - `CreateEvaluationSuiteModal.tsx` creates a suite atomically after the author explicitly chooses a name, target graph, and existing/new dataset. The editor must not silently use the first graph or dataset.
 - `EvaluationFormField.tsx` owns the label, help-text, and control spacing used by Evaluation dialogs and definition editors. Repeated assertions, evaluator graphs, and thresholds use labeled editor cards rather than anonymous wrapping control rows.

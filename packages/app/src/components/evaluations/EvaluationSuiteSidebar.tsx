@@ -28,12 +28,19 @@ const styles = css`
     padding: 0 14px 12px 16px;
   }
 
+  .evaluation-sidebar-actions {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+  }
+
   h2 {
     margin: 0;
     font-size: var(--ui-font-size-base);
   }
 
-  .add-suite {
+  .add-suite,
+  .import-resource {
     border: 0;
     border-radius: 6px;
     background: transparent;
@@ -44,12 +51,14 @@ const styles = css`
     padding: 5px 8px;
   }
 
-  .add-suite:hover:not(:disabled) {
+  .add-suite:hover:not(:disabled),
+  .import-resource:hover:not(:disabled) {
     background: var(--grey-darkish);
     color: var(--foreground);
   }
 
-  .add-suite:disabled {
+  .add-suite:disabled,
+  .import-resource:disabled {
     cursor: not-allowed;
     opacity: 0.45;
   }
@@ -129,6 +138,8 @@ export const EvaluationSuiteSidebar: FC<{
   getReferenceStatus: (suite: EvaluationSuite) => EvaluationSuiteReferenceStatus;
   onCreateDataset: () => void;
   onCreateSuite: () => void;
+  onImportDataset: () => void;
+  onImportSuite: () => void;
   onSelectDataset: (datasetId: string) => void;
   onSelectSuite: (suiteId: string) => void;
 }> = ({
@@ -143,6 +154,8 @@ export const EvaluationSuiteSidebar: FC<{
   getReferenceStatus,
   onCreateDataset,
   onCreateSuite,
+  onImportDataset,
+  onImportSuite,
   onSelectDataset,
   onSelectSuite,
 }) => (
@@ -150,16 +163,27 @@ export const EvaluationSuiteSidebar: FC<{
     <section className="evaluation-sidebar-section" aria-labelledby="evaluation-suites-heading">
       <div className="evaluation-sidebar-header">
         <h2 id="evaluation-suites-heading">Evaluation suites</h2>
-        <button
-          type="button"
-          className="add-suite"
-          disabled={!canCreateSuite}
-          title={canCreateSuite ? 'Create evaluation suite' : 'Create a graph before creating an evaluation suite'}
-          aria-label="Create evaluation suite"
-          onClick={onCreateSuite}
-        >
-          +
-        </button>
+        <div className="evaluation-sidebar-actions">
+          <button
+            type="button"
+            className="import-resource"
+            title="Import evaluation suite and dataset"
+            aria-label="Import evaluation suite and dataset"
+            onClick={onImportSuite}
+          >
+            Import
+          </button>
+          <button
+            type="button"
+            className="add-suite"
+            disabled={!canCreateSuite}
+            title={canCreateSuite ? 'Create evaluation suite' : 'Create a graph before creating an evaluation suite'}
+            aria-label="Create evaluation suite"
+            onClick={onCreateSuite}
+          >
+            +
+          </button>
+        </div>
       </div>
       <div className="suite-list">
         {suites.length === 0 ? (
@@ -197,16 +221,27 @@ export const EvaluationSuiteSidebar: FC<{
     <section className="evaluation-sidebar-section" aria-labelledby="evaluation-datasets-heading">
       <div className="evaluation-sidebar-header">
         <h2 id="evaluation-datasets-heading">Datasets</h2>
-        <button
-          type="button"
-          className="add-suite"
-          disabled={!canCreateDataset}
-          title="Create evaluation dataset"
-          aria-label="Create evaluation dataset"
-          onClick={onCreateDataset}
-        >
-          +
-        </button>
+        <div className="evaluation-sidebar-actions">
+          <button
+            type="button"
+            className="import-resource"
+            title="Import evaluation dataset"
+            aria-label="Import evaluation dataset"
+            onClick={onImportDataset}
+          >
+            Import
+          </button>
+          <button
+            type="button"
+            className="add-suite"
+            disabled={!canCreateDataset}
+            title="Create evaluation dataset"
+            aria-label="Create evaluation dataset"
+            onClick={onCreateDataset}
+          >
+            +
+          </button>
+        </div>
       </div>
       <div className="suite-list">
         {datasets.length === 0 ? (
