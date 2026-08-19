@@ -22,6 +22,7 @@ import type {
 } from '../../../../../shared/workflow-recording-types.js';
 import type { ManagedWorkflowStorageConfig } from '../storage-config.js';
 import { PostgresRivetLLMProfileHealthStore } from '../../../llm-profile-health/managed-store.js';
+import { PostgresRivetEvaluationRunStore } from '../../../evaluation-runs/managed-store.js';
 import type { ManagedWorkflowBlobStore } from './blob-store.js';
 import { createManagedWorkflowCatalogService } from './catalog.js';
 import { createManagedWorkflowContext } from './context.js';
@@ -48,6 +49,7 @@ export class ManagedWorkflowBackend {
   readonly #publication: ReturnType<typeof createManagedWorkflowPublicationService>;
   readonly #recordings: ReturnType<typeof createManagedWorkflowRecordingService>;
   readonly #llmProfileHealthStore: PostgresRivetLLMProfileHealthStore;
+  readonly #evaluationRunStore: PostgresRivetEvaluationRunStore;
 
   constructor(config: ManagedWorkflowStorageConfig, blobStore?: ManagedWorkflowBlobStore) {
     this.#context = createManagedWorkflowContext(config, blobStore);
@@ -68,6 +70,7 @@ export class ManagedWorkflowBackend {
       context: this.#context,
     });
     this.#llmProfileHealthStore = new PostgresRivetLLMProfileHealthStore(this.#context.pool);
+    this.#evaluationRunStore = new PostgresRivetEvaluationRunStore(this.#context.pool);
   }
 
   async initialize(): Promise<void> {
@@ -158,6 +161,11 @@ export class ManagedWorkflowBackend {
   async getLLMProfileHealthStore(): Promise<PostgresRivetLLMProfileHealthStore> {
     await this.initialize();
     return this.#llmProfileHealthStore;
+  }
+
+  async getEvaluationRunStore(): Promise<PostgresRivetEvaluationRunStore> {
+    await this.initialize();
+    return this.#evaluationRunStore;
   }
 
   async listWorkflowPublishedVersions(relativePath: unknown): Promise<WorkflowPublishedVersionsResponse> {

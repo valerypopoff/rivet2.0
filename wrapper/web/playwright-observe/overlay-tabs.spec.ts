@@ -22,13 +22,13 @@ test.describe('Workspace navigation', () => {
 
     const frame = page.frameLocator('iframe.dashboard-editor-frame');
     const workspaceNav = frame.getByRole('navigation', { name: 'Workspace navigation' });
-    const trivetTab = workspaceNav.getByRole('button', { name: 'Trivet Tests' });
+    const evaluationsTab = workspaceNav.getByRole('button', { name: 'Evaluations' });
     const dataStudioTab = workspaceNav.getByRole('button', { name: 'Data Studio' });
     const dataStudioMenuItem = workspaceNav.locator('.menu-item.data-studio');
-    const trivetMenuItem = workspaceNav.locator('.menu-item.trivet-menu');
+    const evaluationsMenuItem = workspaceNav.locator('.menu-item.evaluations-menu');
 
     await expect(workspaceNav).toBeVisible({ timeout: 120_000 });
-    await expect(trivetTab).toBeVisible();
+    await expect(evaluationsTab).toBeVisible();
     await expect(dataStudioTab).toBeVisible();
 
     await dataStudioTab.click();
@@ -37,10 +37,10 @@ test.describe('Workspace navigation', () => {
     await dataStudioTab.click();
     await expect(dataStudioMenuItem).not.toHaveClass(/active/);
 
-    await trivetTab.click();
-    await expect(trivetMenuItem).toHaveClass(/active/);
+    await evaluationsTab.click();
+    await expect(evaluationsMenuItem).toHaveClass(/active/);
 
-    await trivetTab.click();
-    await expect(trivetMenuItem).not.toHaveClass(/active/);
+    await evaluationsTab.click();
+    await expect(evaluationsMenuItem).not.toHaveClass(/active/);
   });
 });

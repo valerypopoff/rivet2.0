@@ -180,6 +180,7 @@ export const ProjectSettingsModal: FC<ProjectSettingsModalProps> = ({
   const canCloseModal = !savingSettings && !savingWebApps && !deletingProject;
   const disablePublishAction =
     savingSettings ||
+    loadingWebApps ||
     deletingProject ||
     endpointValidationError != null ||
     (!isUnpublishedProject && !hasWorkflowChangesToPublish && !hasWorkflowEndpointDraftChange);

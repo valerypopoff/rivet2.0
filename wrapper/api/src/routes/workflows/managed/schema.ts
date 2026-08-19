@@ -345,4 +345,48 @@ CREATE INDEX IF NOT EXISTS llm_profile_health_project_id_idx
 
 CREATE INDEX IF NOT EXISTS llm_profile_health_updated_at_idx
   ON llm_profile_health(updated_at DESC);
+
+-- Evaluation definitions stay in project revisions; complete run summaries are
+-- durable operational data. Project deletion cascades these rows alongside
+-- existing recordings and never leaks historical results into project YAML.
+CREATE TABLE IF NOT EXISTS evaluation_runs (
+  project_id TEXT NOT NULL REFERENCES workflows(workflow_id) ON DELETE CASCADE,
+  run_id TEXT NOT NULL,
+  suite_id TEXT NOT NULL,
+  started_at TIMESTAMPTZ NOT NULL,
+  run_json JSONB NOT NULL,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (project_id, run_id)
+);
+
+CREATE INDEX IF NOT EXISTS evaluation_runs_project_started_idx
+  ON evaluation_runs(project_id, started_at DESC);
+
+CREATE INDEX IF NOT EXISTS evaluation_runs_project_suite_idx
+  ON evaluation_runs(project_id, suite_id);
+
+-- Replayable artifacts stay outside compact EvaluationRun summaries. They are
+-- project-scoped and cascade with the project, so a project deletion cannot
+-- leave raw model outputs or recordings behind.
+CREATE TABLE IF NOT EXISTS evaluation_recordings (
+  project_id TEXT NOT NULL REFERENCES workflows(workflow_id) ON DELETE CASCADE,
+  recording_id TEXT NOT NULL,
+  run_id TEXT NOT NULL,
+  artifact_json JSONB NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (project_id, recording_id)
+);
+
+CREATE INDEX IF NOT EXISTS evaluation_recordings_project_run_idx
+  ON evaluation_recordings(project_id, run_id);
+
+-- Raw cases are retained only as immutable, content-addressed snapshots for
+-- historical Evaluation runs. Project baselines remain compact metrics.
+CREATE TABLE IF NOT EXISTS evaluation_dataset_snapshots (
+  project_id TEXT NOT NULL REFERENCES workflows(workflow_id) ON DELETE CASCADE,
+  dataset_fingerprint TEXT NOT NULL,
+  snapshot_json JSONB NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (project_id, dataset_fingerprint)
+);
 `;

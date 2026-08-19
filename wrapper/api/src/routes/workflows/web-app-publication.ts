@@ -26,6 +26,7 @@ import {
   resolveWorkflowRelativePath,
 } from './fs-helpers.js';
 import type { StoredWorkflowPublishedWebApp } from './types.js';
+import { hasProjectMainGraph } from './main-graph.js';
 import { getWorkflowProject } from './workflow-query.js';
 
 type UiGraphSummary = {
@@ -218,6 +219,7 @@ export async function listWorkflowProjectWebApps(relativePath: unknown): Promise
   const publishedContentHashBySnapshotId = new Map<string, Promise<string>>();
 
   return {
+    hasMainGraph: hasProjectMainGraph(project),
     webApps: [
       ...(await Promise.all(currentUiGraphs.map(async (uiGraph) => {
         const published = publishedByUiGraphId.get(uiGraph.uiGraphId);

@@ -44,6 +44,11 @@ const packages = [
       { scope: '@rivet2', name: 'rivet-node' },
     ],
   },
+  {
+    linkName: 'rivet-evaluations',
+    source: path.join(rivetRootDir, 'packages', 'evaluations'),
+    aliases: [],
+  },
 ];
 let localRivetPackageNames;
 

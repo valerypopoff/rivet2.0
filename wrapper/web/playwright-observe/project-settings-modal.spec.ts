@@ -11,6 +11,7 @@ import type {
 
 type ProjectSettingsRouteTrackers = {
   projectLoadRequests: Array<{ path: string }>;
+  endpointPublishRequests: Array<{ relativePath?: string; settings?: { endpointName?: string } }>;
   webAppPublishRequests: Array<{
     relativePath: string;
     publications: Array<{ uiGraphId: string; slug: string; allowedEmails?: string[] }>;
@@ -23,6 +24,7 @@ type ProjectSettingsRouteTrackers = {
 };
 
 type ProjectSettingsFixtureProject = WorkflowProjectItem & {
+  hasMainGraph?: boolean;
   webApps?: WorkflowProjectWebAppSummary[];
 };
 
@@ -45,6 +47,7 @@ function isRouteRequest(routeRequest: { method: () => string; url: () => string 
 function createProjectSettingsRouteTrackers(): ProjectSettingsRouteTrackers {
   return {
     projectLoadRequests: [],
+    endpointPublishRequests: [],
     webAppPublishRequests: [],
     webAppUnpublishRequests: [],
     publishedVersionCommentRequests: [],
@@ -174,6 +177,7 @@ async function installProjectSettingsRoutes(
       relativePath?: string;
       settings?: { endpointName?: string };
     };
+    trackers.endpointPublishRequests.push(requestBody);
     const targetProject = projects.find((candidate) => candidate.relativePath === requestBody.relativePath) ?? project;
     targetProject.settings = {
       status: 'published',
@@ -223,6 +227,7 @@ async function installProjectSettingsRoutes(
       status: 200,
       contentType: 'application/json',
       body: JSON.stringify({
+        hasMainGraph: targetProject.hasMainGraph ?? true,
         webApps: targetProject.webApps ?? [],
       }),
     });
@@ -694,6 +699,42 @@ test.describe('Project settings modal', () => {
     await nextModal.getByRole('button', { name: 'Publish', exact: true }).click();
     await expect(nextModal.locator('.project-status-badge.published')).toBeVisible({ timeout: 30_000 });
     await expect(nextModal.locator('.project-settings-endpoint-code')).toContainText(endpointName);
+  });
+
+  test('endpoint publication requires a selected Main Graph', async ({ page }) => {
+    const project = createProjectSettingsFixture('codex-project-settings-no-main-graph');
+    project.hasMainGraph = false;
+    const routeTrackers = createProjectSettingsRouteTrackers();
+    await installProjectSettingsRoutes(page, project, routeTrackers);
+
+    const { modal } = await openProjectSettingsModal(page, project);
+
+    await expect(modal.locator('.project-settings-error')).toContainText(
+      'Choose a Main Graph before publishing this endpoint.',
+    );
+    await expect(modal.getByRole('button', { name: 'Publish', exact: true })).toBeDisabled();
+    expect(routeTrackers.endpointPublishRequests).toEqual([]);
+  });
+
+  test('endpoint update requires a selected Main Graph', async ({ page }) => {
+    const project = createProjectSettingsFixture('codex-project-settings-published-no-main-graph');
+    project.hasMainGraph = false;
+    project.settings = {
+      status: 'published',
+      endpointName: 'requires-main-graph',
+      lastPublishedAt: '2026-04-08T10:30:00.000Z',
+      publishedWebApps: [],
+    };
+    const routeTrackers = createProjectSettingsRouteTrackers();
+    await installProjectSettingsRoutes(page, project, routeTrackers);
+
+    const { modal } = await openProjectSettingsModal(page, project);
+
+    await expect(modal.locator('.project-settings-error')).toContainText(
+      'Choose a Main Graph before publishing this endpoint.',
+    );
+    await expect(modal.getByRole('button', { name: 'Update', exact: true })).toBeDisabled();
+    expect(routeTrackers.endpointPublishRequests).toEqual([]);
   });
 
   test('publishes and unpublishes multiple web apps from project settings', async ({ page }) => {

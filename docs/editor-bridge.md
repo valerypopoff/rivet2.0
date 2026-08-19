@@ -13,31 +13,31 @@ All message types live in `wrapper/shared/editor-bridge.ts`. Both sides import f
 
 ### Dashboard-to-editor commands
 
-| Type | Payload | When sent |
-|---|---|---|
-| `open-project` | `path`, `replaceCurrent`, optional `title`, optional `preview`, optional `reloadFromDisk` | User opens or creates a workflow project |
-| `open-recording` | `recordingId`, `replaceCurrent` | User opens a stored workflow run from the recordings browser |
-| `open-published-version-preview` | `relativePath`, `versionId`, `replaceCurrent` | User previews a stored published workflow version from Project Settings |
-| `compare-open-project-with` | `path`, optional `referencePath`, optional `labels.referenceLabel` / `labels.currentLabel` | User starts Rivet compare mode from another project row or from the open project's current published version |
-| `refresh-open-project-from-disk` | `path` | A server-side mutation changed a project that may already be open in the editor |
-| `save-project` | (none) | User saves from the dashboard surface or presses the save shortcut outside the iframe |
-| `trigger-editor-duplicate-shortcut` | `modifier` | Dashboard-focused `Ctrl+D` / `Cmd+D` should duplicate the selected Rivet node instead of opening browser bookmark UI |
-| `trigger-editor-find-shortcut` | `modifier` | Dashboard-focused `Ctrl+F` / `Cmd+F` should open Rivet search instead of browser find |
-| `delete-workflow-project` | `path`, `projectId` | User deletes a workflow project from the dashboard |
-| `workflow-paths-moved` | `moves[]` | A project or folder rename/move changed one or more workflow project references |
+| Type                                | Payload                                                                                    | When sent                                                                                                            |
+| ----------------------------------- | ------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------- |
+| `open-project`                      | `path`, `replaceCurrent`, optional `title`, optional `preview`, optional `reloadFromDisk`  | User opens or creates a workflow project                                                                             |
+| `open-recording`                    | `recordingId`, `replaceCurrent`                                                            | User opens a stored workflow run from the recordings browser                                                         |
+| `open-published-version-preview`    | `relativePath`, `versionId`, `replaceCurrent`                                              | User previews a stored published workflow version from Project Settings                                              |
+| `compare-open-project-with`         | `path`, optional `referencePath`, optional `labels.referenceLabel` / `labels.currentLabel` | User starts Rivet compare mode from another project row or from the open project's current published version         |
+| `refresh-open-project-from-disk`    | `path`                                                                                     | A server-side mutation changed a project that may already be open in the editor                                      |
+| `save-project`                      | (none)                                                                                     | User saves from the dashboard surface or presses the save shortcut outside the iframe                                |
+| `trigger-editor-duplicate-shortcut` | `modifier`                                                                                 | Dashboard-focused `Ctrl+D` / `Cmd+D` should duplicate the selected Rivet node instead of opening browser bookmark UI |
+| `trigger-editor-find-shortcut`      | `modifier`                                                                                 | Dashboard-focused `Ctrl+F` / `Cmd+F` should open Rivet search instead of browser find                                |
+| `delete-workflow-project`           | `path`, `projectId`                                                                        | User deletes a workflow project from the dashboard                                                                   |
+| `workflow-paths-moved`              | `moves[]`                                                                                  | A project or folder rename/move changed one or more workflow project references                                      |
 
 ### Editor-to-dashboard events
 
-| Type | Payload | When sent |
-|---|---|---|
-| `editor-ready` | (none) | Editor iframe mounted and is ready to receive commands |
-| `project-opened` | `path` | A project or replay opened successfully |
-| `project-open-failed` | `path`, `error` | Open failed for a project path or recording ID |
-| `active-project-path-changed` | `path` | User switched the active tab inside the editor |
-| `active-project-unsaved-changes-changed` | `path`, `hasUnsavedChanges` | Rivet dirty-state atoms changed for the active editor project |
-| `open-project-count-changed` | `count` | Number of open editor tabs changed |
-| `project-compare-failed` | `path`, `error` | A project-tree compare reference could not be loaded or deserialized |
-| `project-saved` | `path` | Current project saved successfully |
+| Type                                     | Payload                     | When sent                                                            |
+| ---------------------------------------- | --------------------------- | -------------------------------------------------------------------- |
+| `editor-ready`                           | (none)                      | Editor iframe mounted and is ready to receive commands               |
+| `project-opened`                         | `path`                      | A project or replay opened successfully                              |
+| `project-open-failed`                    | `path`, `error`             | Open failed for a project path or recording ID                       |
+| `active-project-path-changed`            | `path`                      | User switched the active tab inside the editor                       |
+| `active-project-unsaved-changes-changed` | `path`, `hasUnsavedChanges` | Rivet dirty-state atoms changed for the active editor project        |
+| `open-project-count-changed`             | `count`                     | Number of open editor tabs changed                                   |
+| `project-compare-failed`                 | `path`, `error`             | A project-tree compare reference could not be loaded or deserialized |
+| `project-saved`                          | `path`                      | Current project saved successfully                                   |
 
 ## Message flow
 
@@ -128,6 +128,16 @@ LLM Profile suspension state also does not travel over `window.postMessage`. `ho
 Node-mode editor runs reach the same state through `wrapper/executor/src/executor.mts`. That wrapper entrypoint starts upstream `executorHost.mts` with `createProcessorOptions`, injecting an HTTP-backed `llmProfileHealthStore` without forking the executor protocol. Compose points it at `http://api:80/api/workflows/llm-profile-health`; the Kubernetes backend sidecar uses the backend pod's loopback API. Both authenticate with the proxy token derived from `RIVET_KEY`.
 
 The reliability API owns the clock and rejects caller timestamp fields. Every hosted runtime request must carry a project id. The outer Project Settings modal loads the list only while its **LLM profile suspension** tab is open, refreshes every five seconds, and can list and clear only the active project's entries. Active suspensions use the red operational treatment; profiles awaiting their one recovery attempt and those with a recovery attempt in progress use yellow. This keeps retained recovery state visible without presenting it as an active block. Even a single-profile clear carries that project id, and the HTTP surface exposes no unscoped list or clear operation. The runtime store exposes atomic begin/finish/renew operations; it is not a browser-local cache and does not fall back to local state when the server call fails.
+
+### Hosted Evaluations providers
+
+The hosted editor receives an HTTP-backed `evaluationRunStore` through `hostedRivetProviders`. It uses the same `@valerypopoff/rivet2-evaluations` engine as the standalone editor, but Rivet Studio Server owns durable summaries, observations, immutable content-addressed dataset snapshots, and retained replayable recordings. A dataset snapshot is written once per project/fingerprint before its run begins, so later edits to `.rivet-data` cannot change the cases behind a historical run. The `/api/workflows/evaluation-runs` surface sits behind the same global control-plane `requireAuth` middleware as the workflow tree and other project administration routes. Project ID predicates isolate stored rows, but this is an administrator-wide authorization model, not per-user project ACL: every authenticated control-plane administrator can administer every workflow project. The surface persists, lists, inspects, and deletes runs, dataset snapshots, and recording artifacts; it also updates recording retention when a run is promoted as a baseline. The editor still owns evaluation scheduling and cancellation and executes each target/evaluator graph through its active Browser or remote-executor adapter. Comparisons and exports consume the retained run records rather than invoking separate server-side evaluation jobs.
+
+Filesystem deployments persist the store in the wrapper SQLite database; managed and Kubernetes deployments use the shared PostgreSQL backend. Each backend owns retention: failed and baseline recordings are pinned, successful candidate recordings expire after the configured temporary-retention period, and every artifact is size-limited in serialized UTF-8 bytes. Listing or opening run history also reclaims expired temporary artifacts, so a project that stops running evaluations does not retain those recordings indefinitely. Duplicate artifact writes preserve the existing retention decision, so a delayed retry cannot demote an already pinned artifact; only the retention-update operations change that state, and a recording ID cannot be reassigned to another run or trial. SQLite wraps multi-row deletion, baseline promotion, retention updates, and stale-run checks in immediate transactions; PostgreSQL uses row locks or atomic conflict predicates. Project deletion removes its evaluation records and artifacts in the same ownership boundary: the filesystem store marks the project deleted before its atomic cleanup and rejects later run, snapshot, or recording creation, while the managed workflow foreign key serializes writes with the deletion transaction and rejects post-delete inserts.
+
+Dataset snapshots currently follow retained run history rather than an independent age or count cap. Automatically deleting an apparently unreferenced snapshot is unsafe because snapshot retention happens immediately before the first asynchronous run write; a concurrent cleanup could otherwise remove the exact cases for a run that is starting. Deleting a whole project removes every snapshot in both backends, while deleting an individual run currently leaves its immutable snapshot available for another historical or concurrently starting run. The hosted store therefore still has an unbounded-total-policy gap for ordinary run summaries, distinct dataset snapshots, and failure recordings; only temporary artifacts, individual recording size, explicit run deletion, and whole-project deletion are bounded today. The existing `Run recordings` settings are endpoint-keyed publication settings and cannot be silently treated as per-suite Evaluation limits. Closing this gap requires explicit evaluation run-age/per-suite/total-byte settings plus an atomic run/snapshot lease, while excluding baseline and manual-retention artifacts from eviction. The standalone browser compacts unpinned run summaries and temporary recordings, but it cannot observe project files deleted outside Rivet, so local site data may retain snapshots until the browser origin's storage is cleared.
+
+New run writes use the version-2 Evaluations envelope: execution state, quality status and reason, accounting completeness, and evaluation-versus-benchmark purpose are separate fields. The HTTP API validates that envelope. SQLite, PostgreSQL, and the hosted editor's HTTP client normalize older retained records when they are read, so UI and reporter consumers receive one current shape without rewriting historical database rows. A normal evaluation must have a required quality criterion; an execution benchmark may intentionally report `not-evaluated`. Missing provider pricing marks accounting partial and affects quality only when a configured cost threshold requires that metric.
 
 ## Key files
 

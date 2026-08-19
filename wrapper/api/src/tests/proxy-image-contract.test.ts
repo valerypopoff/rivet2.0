@@ -400,7 +400,7 @@ test('API images and launchers use the filtered Rivet source context and symlink
   assert.match(rivetContextHelper, /scripts['"], ['"]build-wrapper-target\.mjs/);
   assert.match(rivetContextHelper, /packages['"], ['"]app['"], ['"]package\.json/);
   assert.match(rivetContextHelper, /packages['"], ['"]app-executor['"], ['"]package\.json/);
-  assert.match(rivetContextHelper, /packages['"], ['"]trivet['"], ['"]package\.json/);
+  assert.match(rivetContextHelper, /packages['"], ['"]evaluations['"], ['"]package\.json/);
   assert.doesNotMatch(rivetContextHelper, /visit\(''\)/);
   assert.match(rivetContextHelper, /Excluded dependency folders, build output, VCS data, and Yarn cache artifacts/);
 });
@@ -499,7 +499,7 @@ test('CI and production launchers publish and run the Rivet 2 wrapper image set'
   assert.match(executorDockerfile, /bundle-executor\.cjs/);
   assert.doesNotMatch(
     `${apiDockerfile}\n${webDockerfile}\n${executorDockerfile}`,
-    /yarn workspace @valerypopoff\/(rivet2-core|rivet2-node|trivet) run build/,
+    /yarn workspace @valerypopoff\/(rivet2-core|rivet2-node|rivet2-evaluations) run build/,
   );
   assert.doesNotMatch(webPackageJson, /"rivet-studio-server":\s*"file:\.\.\/\.\."/);
   assert.doesNotMatch(webPackageLock, /"node_modules\/rivet-studio-server"/);

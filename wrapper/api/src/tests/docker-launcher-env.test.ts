@@ -50,7 +50,7 @@ function writeMinimalRivetSource(
   writeFile(path.join(sourceRoot, '.yarnrc.yml'), 'yarnPath: .yarn/releases/yarn-4.6.0.cjs\n');
   writeFile(path.join(sourceRoot, '.yarn', 'releases', 'yarn-4.6.0.cjs'), '');
 
-  for (const packageName of ['app', 'app-executor', 'core', 'node', 'trivet']) {
+  for (const packageName of ['app', 'app-executor', 'core', 'node', 'evaluations']) {
     writeFile(path.join(sourceRoot, 'packages', packageName, 'package.json'), JSON.stringify({ name: packageName }));
   }
 
@@ -182,7 +182,7 @@ test('prepareRivetDockerContext copies source-only wrapper build scripts outside
     assert.equal(fs.existsSync(path.join(dependencyContextPath, 'scripts')), false);
     assert.equal(fs.existsSync(path.join(dependencyContextPath, 'scripts', 'build-wrapper-target.mjs')), false);
     assert.equal(fs.existsSync(path.join(dependencyContextPath, 'scripts', 'ci-timing.mjs')), false);
-    assert.equal(fs.existsSync(path.join(dependencyContextPath, 'packages', 'trivet', 'package.json')), true);
+    assert.equal(fs.existsSync(path.join(dependencyContextPath, 'packages', 'evaluations', 'package.json')), true);
   } finally {
     fs.rmSync(tempRoot, { recursive: true, force: true });
   }

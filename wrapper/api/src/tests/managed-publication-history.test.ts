@@ -324,6 +324,7 @@ test('managed web app publication list exposes revision-based statuses', async (
 
   const response = await service.listWorkflowProjectWebApps('Main.rivet-project');
 
+  assert.equal(response.hasMainGraph, true);
   assert.deepEqual(
     response.webApps.map((webApp) => [
       webApp.uiGraphId,
@@ -338,6 +339,30 @@ test('managed web app publication list exposes revision-based statuses', async (
       ['ui-removed', 'removed-app', 'removed-app', 'unpublished_changes', true],
       ['ui-unpublished', 'Draft Only Web App', null, 'unpublished', false],
     ],
+  );
+});
+
+test('managed endpoint publish rejects a revision whose selected Main Graph no longer exists', async () => {
+  const contentsWithoutMainGraph = createBlankProjectFile('Main').replace(
+    /^[ \t]*mainGraphId:.*\r?\n/m,
+    '    mainGraphId: "missing-main-graph"\n',
+  );
+  const { service, clientQueries, endpointSyncCalls, invalidationRequests } = createPublicationHarness({
+    revisionContents: {
+      'draft-revision': contentsWithoutMainGraph,
+    },
+  });
+
+  await assert.rejects(
+    service.publishWorkflowProjectItem('Main.rivet-project', { endpointName: 'missing-main-graph' }),
+    /Choose a Main Graph before publishing this endpoint/,
+  );
+
+  assert.deepEqual(endpointSyncCalls, []);
+  assert.deepEqual(invalidationRequests, []);
+  assert.equal(
+    clientQueries.some((query) => normalizeSql(query.sql).startsWith('INSERT INTO workflow_published_versions')),
+    false,
   );
 });
 

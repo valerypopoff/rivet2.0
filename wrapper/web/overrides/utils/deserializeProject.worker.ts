@@ -26,7 +26,7 @@ async function handleMessage(event: MessageEvent) {
         type: 'deserializeHostedProjectPayload:result',
         result: {
           project,
-          serializedTrivetData: attachedData.trivet ?? null,
+          serializedEvaluationData: attachedData.evaluations ?? null,
         },
       });
     }

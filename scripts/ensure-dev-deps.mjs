@@ -95,6 +95,7 @@ function hasExpectedRivetWorkspace() {
     'rivet/.yarnrc.yml',
     'rivet/packages/core/package.json',
     'rivet/packages/node/package.json',
+    'rivet/packages/evaluations/package.json',
   ];
 
   return requiredEntries.every((relPath) => exists(relPath));
@@ -117,6 +118,7 @@ function collectRivetDependencyNames() {
   const packageJsonRelPaths = [
     'rivet/packages/core/package.json',
     'rivet/packages/node/package.json',
+    'rivet/packages/evaluations/package.json',
   ];
   const dependencyNames = new Set([
     'esbuild',
@@ -185,6 +187,7 @@ const needsWebDeps =
 const needsRivetDeps = !hasExpectedRivetDependencyInstall();
 const needsRivetCoreBuild = !exists('rivet/packages/core/dist/esm/index.js');
 const needsRivetNodeBuild = !exists('rivet/packages/node/dist/esm/index.js');
+const needsRivetEvaluationsBuild = !exists('rivet/packages/evaluations/dist/esm/index.js');
 const needsApiRivetLinks =
   !hasExpectedApiRivetLink('rivet-core', 'rivet/packages/core', [
     '@rivet2/rivet-core',
@@ -194,6 +197,9 @@ const needsApiRivetLinks =
     '@rivet2/rivet-node',
     '@valerypopoff/rivet2-node',
   ]) ||
+  !hasExpectedApiRivetLink('rivet-evaluations', 'rivet/packages/evaluations', [
+    '@valerypopoff/rivet2-evaluations',
+  ]) ||
   hasRetiredApiRivetLinks();
 
 if (
@@ -202,6 +208,7 @@ if (
   !needsRivetDeps &&
   !needsRivetCoreBuild &&
   !needsRivetNodeBuild &&
+  !needsRivetEvaluationsBuild &&
   !needsApiRivetLinks
 ) {
   process.exit(0);
@@ -237,7 +244,12 @@ if (needsRivetNodeBuild) {
   run(corepackCmd, ['yarn', 'workspace', '@valerypopoff/rivet2-node', 'run', 'build'], path.join(rootDir, 'rivet'));
 }
 
-if (needsApiRivetLinks || needsApiDeps || needsRivetCoreBuild || needsRivetNodeBuild) {
+if (needsRivetEvaluationsBuild) {
+  console.log('[predev] Building @valerypopoff/rivet2-evaluations');
+  run(corepackCmd, ['yarn', 'workspace', '@valerypopoff/rivet2-evaluations', 'run', 'build'], path.join(rootDir, 'rivet'));
+}
+
+if (needsApiRivetLinks || needsApiDeps || needsRivetCoreBuild || needsRivetNodeBuild || needsRivetEvaluationsBuild) {
   console.log('[predev] Linking wrapper/api to local Rivet packages');
   run(process.execPath, ['scripts/link-rivet-node-package.mjs']);
 }

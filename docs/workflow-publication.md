@@ -103,6 +103,8 @@ In Project Settings:
    - non-empty
    - letters, numbers, and hyphens only
    - unique across active published and latest endpoint identities, case-insensitively
+   - the saved project has a selected Main Graph that still exists
+   - in filesystem mode, the copied snapshot still has a selected Main Graph before it becomes active
 3. Server computes a SHA-256 hash of `endpointName + project file + dataset state`.
 4. Server writes a new published version snapshot and history metadata.
 5. Server writes the settings sidecar with `endpointName`, `publishedEndpointName`, `publishedSnapshotId`, `publishedStateHash`, and `lastPublishedAt`.

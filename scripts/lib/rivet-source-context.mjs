@@ -171,7 +171,7 @@ function validateRivetSource(sourceRoot) {
     path.join('packages', 'app-executor', 'package.json'),
     path.join('packages', 'core', 'package.json'),
     path.join('packages', 'node', 'package.json'),
-    path.join('packages', 'trivet', 'package.json'),
+    path.join('packages', 'evaluations', 'package.json'),
   ];
 
   for (const relativePath of requiredPaths) {

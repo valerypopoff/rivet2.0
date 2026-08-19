@@ -9,6 +9,7 @@ import {
   unpublishWorkflowProjectWebApp,
   updateWorkflowProjectWebAppAccess,
 } from './workflowApi';
+import { WORKFLOW_ENDPOINT_MAIN_GRAPH_REQUIRED_MESSAGE } from '../../shared/workflow-types';
 import { ENDPOINT_NAME_PATTERN, validateEndpointName } from './projectSettingsForm';
 import type {
   WorkflowProjectItem,
@@ -107,6 +108,7 @@ export function useProjectSettingsActions(options: UseProjectSettingsActionsOpti
   const [webApps, setWebApps] = useState<WorkflowProjectWebAppSummary[]>([]);
   const [webAppSlugDrafts, setWebAppSlugDrafts] = useState<Record<string, string>>({});
   const [webAppAllowedEmailDrafts, setWebAppAllowedEmailDrafts] = useState<Record<string, string>>({});
+  const [hasMainGraph, setHasMainGraph] = useState<boolean | null>(null);
   const [loadingWebApps, setLoadingWebApps] = useState(false);
   const [savingWebApps, setSavingWebApps] = useState(false);
   const [deletingProject, setDeletingProject] = useState(false);
@@ -121,11 +123,13 @@ export function useProjectSettingsActions(options: UseProjectSettingsActionsOpti
     try {
       const response = await fetchWorkflowProjectWebApps(activeProject.relativePath);
       setWebApps(response.webApps);
+      setHasMainGraph(response.hasMainGraph);
       setWebAppSlugDrafts(createInitialWebAppSlugDrafts(response.webApps));
       setWebAppAllowedEmailDrafts(createInitialWebAppAllowedEmailDrafts(response.webApps));
     } catch (err: any) {
       toast.error(err.message || 'Failed to load project web apps');
       setWebApps([]);
+      setHasMainGraph(null);
       setWebAppSlugDrafts({});
       setWebAppAllowedEmailDrafts({});
     } finally {
@@ -135,6 +139,7 @@ export function useProjectSettingsActions(options: UseProjectSettingsActionsOpti
 
   useEffect(() => {
     setWebApps([]);
+    setHasMainGraph(null);
     setWebAppSlugDrafts({});
     setWebAppAllowedEmailDrafts({});
 
@@ -153,6 +158,7 @@ export function useProjectSettingsActions(options: UseProjectSettingsActionsOpti
         }
 
         setWebApps(response.webApps);
+        setHasMainGraph(response.hasMainGraph);
         setWebAppSlugDrafts(createInitialWebAppSlugDrafts(response.webApps));
         setWebAppAllowedEmailDrafts(createInitialWebAppAllowedEmailDrafts(response.webApps));
       })
@@ -189,11 +195,16 @@ export function useProjectSettingsActions(options: UseProjectSettingsActionsOpti
   }, [activeProject.absolutePath, allProjects, endpointLookupName]);
 
   const endpointValidationError = useMemo(() => {
-    return validateEndpointName(
+    if (hasMainGraph === false) {
+      return WORKFLOW_ENDPOINT_MAIN_GRAPH_REQUIRED_MESSAGE;
+    }
+
+    const endpointNameError = validateEndpointName(
       trimmedDraftEndpointName,
       endpointDuplicateProject?.fileName ?? null,
     );
-  }, [endpointDuplicateProject, trimmedDraftEndpointName]);
+    return endpointNameError;
+  }, [endpointDuplicateProject, hasMainGraph, trimmedDraftEndpointName]);
 
   const webAppSlugValidationErrors = useMemo(() => {
     const errors: Record<string, string> = {};
@@ -275,6 +286,10 @@ export function useProjectSettingsActions(options: UseProjectSettingsActionsOpti
     };
 
   const handlePublishProject = async () => {
+    if (endpointValidationError) {
+      return;
+    }
+
     setSavingSettings(true);
 
     try {

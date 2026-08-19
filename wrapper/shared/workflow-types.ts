@@ -131,8 +131,12 @@ export type WorkflowProjectWebAppSummary = {
 };
 
 export type WorkflowProjectWebAppsResponse = {
+  hasMainGraph: boolean;
   webApps: WorkflowProjectWebAppSummary[];
 };
+
+export const WORKFLOW_ENDPOINT_MAIN_GRAPH_REQUIRED_MESSAGE =
+  'Choose a Main Graph before publishing this endpoint.';
 
 export type WorkflowProjectWebAppPublicationDraft = {
   uiGraphId: string;

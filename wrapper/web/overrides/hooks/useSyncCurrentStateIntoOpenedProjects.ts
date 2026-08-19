@@ -16,7 +16,7 @@ import {
   projectsState,
   savedProjectContentDigestsState,
 } from '../../../../rivet/packages/app/src/state/savedGraphs';
-import { trivetState } from '../../../../rivet/packages/app/src/state/trivet';
+import { evaluationsState } from '../../../../rivet/packages/app/src/state/evaluations';
 import { addOpenedProject } from '../../../../rivet/packages/app/src/utils/openedProjects.js';
 import { useExecutorSessionState } from '../../../../rivet/packages/app/src/hooks/useExecutorSession.js';
 import {
@@ -182,7 +182,7 @@ export function useSyncCurrentStateIntoOpenedProjects({ enabled = true }: { enab
   const currentProjectData = useAtomValue(projectDataState);
   const loadedProject = useAtomValue(loadedProjectState);
   const currentGraph = useAtomValue(graphState);
-  const currentTrivetState = useAtomValue(trivetState);
+  const currentEvaluationsState = useAtomValue(evaluationsState);
   const selectedExecutor = useAtomValue(selectedExecutorState);
   const executorSession = useExecutorSessionState();
   const executorTargetType = executorSession.target?.type;
@@ -392,13 +392,15 @@ export function useSyncCurrentStateIntoOpenedProjects({ enabled = true }: { enab
 
     primeOpenedProjectSession(currentProjectId, {
       fsPath: expectedProjectPath ?? loadedProjectPath,
-      testData: {
-        testSuites: currentTrivetState.testSuites,
+      evaluation: {
+        evaluationData: currentEvaluationsState.data,
+        evaluationDatasets: currentEvaluationsState.datasets,
       },
     });
   }, [
     currentProject.metadata.id,
-    currentTrivetState.testSuites,
+    currentEvaluationsState.data,
+    currentEvaluationsState.datasets,
     enabled,
     loadedProject.path,
     openedProjectIds,

@@ -169,6 +169,9 @@ test('recording index rebuild keeps workflow metadata from the newest bundle', a
   // bundle last. Workflow metadata must still come from the newest run.
   await writeBundleMetadata('a-newer', '2026-08-03T00:00:00.000Z', 'New project name');
   await writeBundleMetadata('z-older', '2026-08-01T00:00:00.000Z', 'Old project name');
+  // This test exercises index ordering, not retention. Keep its fixed fixture
+  // dates from expiring as calendar time moves forward.
+  await writeRunRecordingsSettings({ retentionDays: 0 });
   await workflowRecordings.initializeWorkflowRecordingStorage(workflowsRoot);
 
   const [workflow] = await workflowRecordingDb.listWorkflowRecordingWorkflowStatsRows();

@@ -1,5 +1,5 @@
 import { getError, type Project } from '@valerypopoff/rivet2-core';
-import type { SerializedTrivetData } from '@valerypopoff/trivet';
+import type { EvaluationProjectData } from '@valerypopoff/rivet2-evaluations';
 import { nanoid } from 'nanoid';
 
 type PromiseResolvers<T> = {
@@ -10,7 +10,7 @@ type PromiseResolvers<T> = {
 
 type DeserializedHostedProjectPayload = {
   project: Project;
-  serializedTrivetData: SerializedTrivetData | null;
+  serializedEvaluationData: EvaluationProjectData | null;
 };
 
 const waiting = new Map<string, PromiseResolvers<unknown>>();
