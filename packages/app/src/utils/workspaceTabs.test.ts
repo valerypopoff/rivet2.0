@@ -13,7 +13,7 @@ test('workspace tabs show project workspaces when a project is available', () =>
   );
 });
 
-test('workspace tabs hide project-scoped workspaces without a project', () => {
+test('workspace tabs retain the local Evaluations library without a project', () => {
   const tabs = getVisibleWorkspaceTabs({
     openOverlay: undefined,
     projectAvailable: false,
@@ -22,7 +22,7 @@ test('workspace tabs hide project-scoped workspaces without a project', () => {
 
   assert.deepEqual(
     tabs.map((tab) => tab.key),
-    ['welcomeScreen'],
+    ['welcomeScreen', 'evaluations'],
   );
 });
 
@@ -46,7 +46,10 @@ test('workspace tabs show Welcome screen only in no-project mode', () => {
 
   assert.deepEqual(
     tabs.map((tab) => [tab.key, tab.targetOverlay]),
-    [['welcomeScreen', undefined]],
+    [
+      ['welcomeScreen', undefined],
+      ['evaluations', 'evaluations'],
+    ],
   );
 });
 

@@ -1,8 +1,8 @@
 import { type Project } from '@valerypopoff/rivet2-core';
-import { type EvaluationProjectFileData, type IOProvider, isPathBasedIOProvider } from '../io/IOProvider.js';
+import { type IOProvider, isPathBasedIOProvider } from '../io/IOProvider.js';
 
 type ProjectSaveWithoutPromptProvider = IOProvider & {
-  saveProjectDataNoPrompt(project: Project, evaluation: EvaluationProjectFileData, path: string): Promise<void>;
+  saveProjectDataNoPrompt(project: Project, path: string): Promise<void>;
   canSaveProjectDataNoPrompt?(path: string): boolean;
 };
 

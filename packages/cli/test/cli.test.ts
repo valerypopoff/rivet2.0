@@ -139,6 +139,7 @@ test('evaluations command distinguishes quality evaluation from execution benchm
 
   assert.equal(options.default.benchmark, false);
   assert.equal(options.key.benchmark, true);
+  assert.equal(options.key['suite-file'], true);
 });
 
 test('evaluation JUnit separates execution errors from quality failures', () => {

@@ -7,12 +7,11 @@ import {
   serializeGraph,
   serializeProject,
 } from '@valerypopoff/rivet2-core';
-import { type EvaluationProjectFileData, type IOProvider } from './IOProvider.js';
 import {
-  createEmptyEvaluationProjectData,
-  deserializeEvaluationProjectData,
-  serializeEvaluationProjectData,
-} from '@valerypopoff/rivet2-evaluations';
+  deserializeLegacyEvaluationProjectData,
+  type EvaluationProjectFileData,
+  type IOProvider,
+} from './IOProvider.js';
 import { openBrowserFile } from './browserFileInput.js';
 
 export class LegacyBrowserIOProvider implements IOProvider {
@@ -26,8 +25,8 @@ export class LegacyBrowserIOProvider implements IOProvider {
     link.click();
   }
 
-  async saveProjectData(project: Project, evaluation: EvaluationProjectFileData): Promise<string | undefined> {
-    const serializedData = serializeProject(project, { evaluations: serializeEvaluationProjectData(evaluation.evaluationData) });
+  async saveProjectData(project: Project): Promise<string | undefined> {
+    const serializedData = serializeProject(project);
     const blob = new Blob([serializedData as string], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
@@ -55,9 +54,7 @@ export class LegacyBrowserIOProvider implements IOProvider {
 
     const [project, attachedData] = deserializeProject(text);
 
-    const evaluationData = attachedData?.evaluations
-      ? deserializeEvaluationProjectData(attachedData.evaluations)
-      : createEmptyEvaluationProjectData();
+    const evaluationData = deserializeLegacyEvaluationProjectData(attachedData?.evaluations);
 
     callback({ project, evaluation: { evaluationData, evaluationDatasets: [] }, path: file.name });
   }

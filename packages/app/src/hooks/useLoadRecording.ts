@@ -10,10 +10,14 @@ import {
 import { projectState, projectsState } from '../state/savedGraphs.js';
 import { useIOProvider } from '../providers/ProvidersContext.js';
 import { ExecutionRecorder, type ProjectId } from '@valerypopoff/rivet2-core';
+import { graphState } from '../state/graph.js';
+import { requireRecordingRootGraphId } from '../utils/recordingPlayback.js';
+import { useLoadGraph } from './useLoadGraph.js';
 
 export function useLoadRecording() {
   const ioProvider = useIOProvider();
   const store = useStore();
+  const loadGraph = useLoadGraph();
 
   function canChangeRecording(action: 'loading' | 'unloading', ownerProjectId: string | undefined) {
     const currentRecording = store.get(loadedRecordingState);
@@ -88,8 +92,16 @@ export function useLoadRecording() {
       if (!canChangeRecording('loading', input.projectId)) return false;
 
       try {
+        const recorder = ExecutionRecorder.deserializeFromString(input.serialized);
+        const rootGraphId = requireRecordingRootGraphId(recorder.events);
+        const rootGraph = project.graphs[rootGraphId];
+        if (!rootGraph) {
+          toast.error(`Could not open the evaluation recording: graph "${rootGraphId}" is no longer in the project.`);
+          return false;
+        }
+        if (store.get(graphState).metadata?.id !== rootGraphId) loadGraph(rootGraph);
         store.set(loadedRecordingState, {
-          recorder: ExecutionRecorder.deserializeFromString(input.serialized),
+          recorder,
           path: input.path,
           projectId: input.projectId,
         });

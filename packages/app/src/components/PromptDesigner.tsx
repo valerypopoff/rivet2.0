@@ -205,15 +205,12 @@ export const PromptDesigner: FC<PromptDesignerProps> = ({ onClose }) => {
     };
     setEvaluations((current) => {
       const existing = current.data.suites.find((suite) => suite.targetGraphId === graphId);
-      const projectDatasets = current.datasets.filter((candidate) => candidate.projectId === project.metadata.id);
+      const projectDatasets = current.datasets;
       if (existing) {
         return {
           ...current,
-          data: {
-            ...current.data,
-            selectedSuiteId: existing.id,
-            selectedDatasetId: undefined,
-          },
+          selectedSuiteId: existing.id,
+          selectedDatasetId: undefined,
           // This candidate lives only in the function passed below. Persisting
           // definitions never writes the unsaved prompt settings into the file.
           promptDesignerProjectOverride: { project: candidateProject, projectId: project.metadata.id, graphId },
@@ -221,7 +218,6 @@ export const PromptDesigner: FC<PromptDesignerProps> = ({ onClose }) => {
       }
       const nextDataset = projectDatasets[0] ?? {
         id: nanoid(),
-        projectId: project.metadata.id,
         name: 'Prompt Designer evaluation cases',
         fields: [],
         cases: [],
@@ -243,9 +239,9 @@ export const PromptDesigner: FC<PromptDesignerProps> = ({ onClose }) => {
         data: {
           ...current.data,
           suites: [...current.data.suites, suite],
-          selectedSuiteId: suite.id,
-          selectedDatasetId: undefined,
         },
+        selectedSuiteId: suite.id,
+        selectedDatasetId: undefined,
         // This candidate lives only in the function passed below. Persisting
         // definitions never writes the unsaved prompt settings into the file.
         promptDesignerProjectOverride: { project: candidateProject, projectId: project.metadata.id, graphId },

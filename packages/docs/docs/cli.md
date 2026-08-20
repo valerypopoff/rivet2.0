@@ -30,6 +30,7 @@ The Rivet CLI provides the following commands:
 - [`rivet list`](./cli/list.md) / [`rivet inspect`](./cli/list.md) - Inspect a project file without running it.
 - [`rivet doctor`](./cli/doctor.md) - Check a project file for common CLI/runtime problems.
 - [`rivet run`](./cli/run.md) - Runs a Rivet graph in a project using provided input values.
+- [`rivet evaluations run`](./cli/evaluations.md) - Runs an exported Evaluation suite and dataset against a project.
 - [`rivet serve`](./cli/serve.md) - Serves a Rivet project using a local server.
 - [`rivet serve-app`](./cli/serve-app.md) - Serves a project-contained Rivet web app.
 - [`rivet completion`](./cli/completion.md) - Generates a shell completion script.

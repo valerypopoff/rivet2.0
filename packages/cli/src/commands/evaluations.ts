@@ -6,15 +6,18 @@ import {
 } from '@valerypopoff/rivet2-node';
 import {
   deserializeEvaluationProjectData,
+  deserializeEvaluationSuiteBundleJson,
   EvaluationGraphExecutionError,
   runEvaluationSuite,
   validateEvaluationDataset,
   type EvaluationDataset,
   type EvaluationExecutionMetrics,
+  type EvaluationProjectData,
   type EvaluationRun,
   type PortableJson,
 } from '@valerypopoff/rivet2-evaluations';
 import { readFile } from 'node:fs/promises';
+import { resolve } from 'node:path';
 import type * as yargs from 'yargs';
 import {
   addDatasetOptions,
@@ -39,6 +42,7 @@ export class EvaluationCliError extends Error {
 type EvaluationRunArgs = {
   project?: string;
   suite?: string;
+  suiteFile?: string;
   trials?: number;
   concurrency?: number;
   baseline?: string;
@@ -52,10 +56,17 @@ export function makeEvaluationCommand<T>(y: yargs.Argv<T>) {
   return addDatasetOptions(addProviderOptions(y))
     .option('project', {
       demandOption: true,
-      describe: 'The Rivet project that owns the evaluation suite',
+      describe: 'The currently runnable Rivet project containing the target and evaluator graphs',
       type: 'string',
     })
-    .option('suite', { demandOption: true, describe: 'Evaluation suite ID or name', type: 'string' })
+    .option('suite', {
+      describe: 'Evaluation suite ID or name in a legacy project attachment; omit when using --suite-file',
+      type: 'string',
+    })
+    .option('suite-file', {
+      describe: 'An Export suite + dataset JSON bundle from the Evaluations workspace',
+      type: 'string',
+    })
     .option('trials', { describe: 'Override the suite trial count', type: 'number' })
     .option('concurrency', { describe: 'Override the suite worker-pool concurrency (1–32)', type: 'number' })
     .option('baseline', { describe: 'Use this saved baseline ID instead of the suite default', type: 'string' })
@@ -70,6 +81,31 @@ export function makeEvaluationCommand<T>(y: yargs.Argv<T>) {
 
 function findSuite(data: ReturnType<typeof deserializeEvaluationProjectData>, input: string) {
   return data.suites.find((suite) => suite.id === input || suite.name === input);
+}
+
+async function loadEvaluationSuiteBundle(path: string): Promise<{ data: EvaluationProjectData; dataset: EvaluationDataset }> {
+  let source: string;
+  const resolvedPath = resolve(process.cwd(), path);
+  try {
+    source = await readFile(resolvedPath, 'utf8');
+  } catch (error) {
+    throw new EvaluationCliError(
+      `Could not read evaluation suite bundle "${resolvedPath}": ${error instanceof Error ? error.message : String(error)}`,
+      3,
+    );
+  }
+  try {
+    const bundle = deserializeEvaluationSuiteBundleJson(source, {
+      suiteId: 'cli-imported-suite',
+      datasetId: 'cli-imported-dataset',
+    });
+    return { data: { version: 1, suites: [bundle.suite], baselines: [] }, dataset: bundle.dataset };
+  } catch (error) {
+    throw new EvaluationCliError(
+      `Could not import evaluation suite bundle "${resolvedPath}": ${error instanceof Error ? error.message : String(error)}`,
+      3,
+    );
+  }
 }
 
 async function loadEvaluationDataset(projectPath: string, projectId: string, datasetId: string, datasetFile?: string) {
@@ -245,15 +281,26 @@ export function evaluationRunFailure(
 }
 
 export async function runEvaluation(args: EvaluationRunArgs): Promise<void> {
-  if (!args.project || !args.suite) throw new EvaluationCliError('Both --project and --suite are required.', 3);
+  if (!args.project || (!args.suite && !args.suiteFile)) {
+    throw new EvaluationCliError('Provide --project and either --suite-file or --suite for a legacy project attachment.', 3);
+  }
   const projectPath = await getProjectFile(args.project);
   const [project, attachedData] = await loadProjectAndAttachedDataFromFile(projectPath);
+  const importedBundle = args.suiteFile === undefined ? undefined : await loadEvaluationSuiteBundle(args.suiteFile);
   const rawData = (attachedData as { evaluations?: unknown }).evaluations;
-  if (!rawData) throw new EvaluationCliError('This project has no Evaluation definitions.', 3);
-  const evaluationData = deserializeEvaluationProjectData(rawData);
-  const suite = findSuite(evaluationData, args.suite);
+  if (!importedBundle && !rawData) {
+    throw new EvaluationCliError(
+      'This project has no legacy Evaluation definitions. Export the suite + dataset from Rivet and pass it with --suite-file.',
+      3,
+    );
+  }
+  const evaluationData = importedBundle?.data ?? deserializeEvaluationProjectData(rawData);
+  const suite = importedBundle?.data.suites[0] ?? findSuite(evaluationData, args.suite!);
   if (!suite) throw new EvaluationCliError(`Evaluation suite "${args.suite}" was not found.`, 3);
-  const dataset = await loadEvaluationDataset(projectPath, project.metadata.id, suite.datasetId, args.datasetFile);
+  if (args.baseline !== undefined && importedBundle) {
+    throw new EvaluationCliError('Exported suite bundles do not include baselines; omit --baseline or use a legacy project attachment.', 3);
+  }
+  const dataset = importedBundle?.dataset ?? (await loadEvaluationDataset(projectPath, project.metadata.id, suite.datasetId, args.datasetFile));
   const datasetProvider = await createDatasetProvider(projectPath, args);
   const effectiveData =
     args.trials === undefined && args.concurrency === undefined
@@ -380,9 +427,17 @@ export async function runEvaluation(args: EvaluationRunArgs): Promise<void> {
     const measured =
       run.purpose === 'execution-benchmark'
         ? `${run.aggregate?.trialCount ?? 0} trials measured`
+        : run.evaluationMode === 'scoring'
+          ? `${formatScore(run.aggregate?.meanScore)}; ${run.aggregate?.scoredTrialCount ?? 0}/${run.aggregate?.trialCount ?? 0} trials scored`
         : `${run.aggregate?.passedTrialCount ?? 0}/${run.aggregate?.evaluatedTrialCount ?? 0} evaluated trials passed`;
     process.stdout.write(`${run.suiteName}: ${run.qualityStatus} (${run.executionStatus}; ${measured})\n`);
   }
   const failure = evaluationRunFailure(run);
   if (failure) throw failure;
+}
+
+function formatScore(score: number | undefined): string {
+  if (score === undefined) return 'score unavailable';
+  const outOfHundred = score * 100;
+  return `${outOfHundred.toFixed(outOfHundred === Math.round(outOfHundred) ? 0 : 1)}/100`;
 }

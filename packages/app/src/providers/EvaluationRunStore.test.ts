@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict';
-import test from 'node:test';
+import { beforeEach, test } from 'node:test';
+import 'fake-indexeddb/auto';
+import { IDBFactory } from 'fake-indexeddb';
 import type { ProjectId } from '@valerypopoff/rivet2-core';
 import {
   fingerprintEvaluationDataset,
@@ -9,6 +11,10 @@ import {
 } from '@valerypopoff/rivet2-evaluations';
 
 import { LocalEvaluationRunStore } from './EvaluationRunStore.js';
+
+beforeEach(() => {
+  Object.defineProperty(globalThis, 'indexedDB', { configurable: true, value: new IDBFactory(), writable: true });
+});
 
 function makeStorage(): Storage {
   const values = new Map<string, string>();
@@ -74,6 +80,20 @@ function makeRun(id: string, projectId: ProjectId, revision = 1): EvaluationRun 
     warnings: [],
   };
 }
+
+test('does not let an equal-revision local progress write demote a completed run', async () => {
+  const store = new LocalEvaluationRunStore();
+  const projectId = 'equal-revision-project' as ProjectId;
+  const completed = makeRun('run-1', projectId, 7);
+  const running = { ...completed, executionStatus: 'running' as const, completedAt: undefined };
+
+  await store.put(completed);
+  await store.put(running);
+
+  const stored = await store.get({ projectId, runId: completed.id });
+  assert.equal(stored?.revision, 7);
+  assert.equal(stored?.executionStatus, 'completed');
+});
 
 test('normalizes legacy local evaluation runs when reading persisted history', async () => {
   const originalStorage = globalThis.localStorage;
@@ -174,6 +194,7 @@ test('keeps local evaluation dataset snapshots separate by project and fingerpri
 
 test('reports local-storage failures instead of claiming an evaluation run was saved', async () => {
   const originalStorage = globalThis.localStorage;
+  const originalIndexedDb = globalThis.indexedDB;
   const storage = makeStorage();
   const unavailableStorage: Storage = {
     ...storage,
@@ -182,9 +203,103 @@ test('reports local-storage failures instead of claiming an evaluation run was s
     },
   };
   Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: unavailableStorage });
+  Object.defineProperty(globalThis, 'indexedDB', { configurable: true, value: undefined, writable: true });
   try {
     const store = new LocalEvaluationRunStore();
     await assert.rejects(store.put(makeRun('run-1', 'evaluation-project' as ProjectId)), /could not retain/);
+  } finally {
+    Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: originalStorage });
+    Object.defineProperty(globalThis, 'indexedDB', { configurable: true, value: originalIndexedDb, writable: true });
+  }
+});
+
+test('uses legacy localStorage only when IndexedDB cannot initialize', async () => {
+  const originalStorage = globalThis.localStorage;
+  const originalIndexedDb = globalThis.indexedDB;
+  const storage = makeStorage();
+  const projectId = 'legacy-fallback-project' as ProjectId;
+  Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: storage });
+  Object.defineProperty(globalThis, 'indexedDB', {
+    configurable: true,
+    value: { open: () => { throw new Error('IndexedDB is blocked'); } } as unknown as IDBFactory,
+    writable: true,
+  });
+  try {
+    const store = new LocalEvaluationRunStore();
+    await store.put(makeRun('run-1', projectId));
+
+    assert.deepEqual(
+      (await store.list({ projectId })).map((run) => run.id),
+      ['run-1'],
+    );
+    assert.ok(storage.getItem(`rivet-evaluation-runs:${projectId}`));
+  } finally {
+    Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: originalStorage });
+    Object.defineProperty(globalThis, 'indexedDB', { configurable: true, value: originalIndexedDb, writable: true });
+  }
+});
+
+test('uses IndexedDB for run history and migrates legacy localStorage records', async () => {
+  const originalStorage = globalThis.localStorage;
+  const originalIndexedDb = globalThis.indexedDB;
+  const storage = makeStorage();
+  const projectId = 'indexed-history-project' as ProjectId;
+  const legacyRun = makeRun('legacy-run', projectId);
+  storage.setItem(`rivet-evaluation-runs:${projectId}`, JSON.stringify([legacyRun]));
+  Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: storage });
+  Object.defineProperty(globalThis, 'indexedDB', { configurable: true, value: new IDBFactory(), writable: true });
+  try {
+    const store = new LocalEvaluationRunStore();
+    assert.equal((await store.list({ projectId }))[0]?.id, legacyRun.id);
+    assert.equal(storage.getItem(`rivet-evaluation-runs:${projectId}`), null);
+
+    await store.put(makeRun('run-2', projectId));
+    assert.deepEqual(
+      (await store.list({ projectId })).map((run) => run.id),
+      ['run-2', 'legacy-run'],
+    );
+  } finally {
+    Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: originalStorage });
+    Object.defineProperty(globalThis, 'indexedDB', { configurable: true, value: originalIndexedDb, writable: true });
+  }
+});
+
+test('keeps legacy history readable and retries when an IndexedDB migration write fails', async () => {
+  const originalStorage = globalThis.localStorage;
+  const storage = makeStorage();
+  const projectId = 'retry-migration-project' as ProjectId;
+  const legacyRun = makeRun('legacy-run', projectId);
+  const originalTransaction = IDBDatabase.prototype.transaction;
+  storage.setItem(`rivet-evaluation-runs:${projectId}`, JSON.stringify([legacyRun]));
+  Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: storage });
+  try {
+    Object.defineProperty(IDBDatabase.prototype, 'transaction', {
+      configurable: true,
+      value: function (this: IDBDatabase, storeNames: string | string[], mode?: IDBTransactionMode): IDBTransaction {
+        if (mode === 'readwrite') throw new Error('IndexedDB quota exceeded');
+        return Reflect.apply(originalTransaction, this, [storeNames, mode]) as IDBTransaction;
+      },
+      writable: true,
+    });
+    try {
+      const store = new LocalEvaluationRunStore();
+      assert.equal((await store.list({ projectId }))[0]?.id, legacyRun.id);
+      assert.ok(storage.getItem(`rivet-evaluation-runs:${projectId}`));
+
+      Object.defineProperty(IDBDatabase.prototype, 'transaction', {
+        configurable: true,
+        value: originalTransaction,
+        writable: true,
+      });
+      assert.equal((await store.list({ projectId }))[0]?.id, legacyRun.id);
+      assert.equal(storage.getItem(`rivet-evaluation-runs:${projectId}`), null);
+    } finally {
+      Object.defineProperty(IDBDatabase.prototype, 'transaction', {
+        configurable: true,
+        value: originalTransaction,
+        writable: true,
+      });
+    }
   } finally {
     Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: originalStorage });
   }

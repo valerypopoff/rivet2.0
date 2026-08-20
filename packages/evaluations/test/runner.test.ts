@@ -29,7 +29,10 @@ const project = {
   graphs: {
     target: {
       metadata: { id: 'target', name: 'Target' },
-      nodes: [{ id: 'input-node', type: 'graphInput', data: { id: 'input', dataType: 'string' } }],
+      nodes: [
+        { id: 'input-node', type: 'graphInput', data: { id: 'input', dataType: 'string' } },
+        { id: 'result-node', type: 'graphOutput', data: { id: 'result', dataType: 'any' } },
+      ],
       connections: [],
     },
     evaluator: {
@@ -41,6 +44,23 @@ const project = {
           data: { id, dataType: 'object' },
         })),
         { id: 'result-output', type: 'graphOutput', data: { id: 'result', dataType: 'object' } },
+      ],
+      connections: [],
+    },
+    'direct-target': {
+      metadata: { id: 'direct-target', name: 'Direct target' },
+      nodes: [
+        { id: 'story-input', type: 'graphInput', data: { id: 'story', dataType: 'string' } },
+        { id: 'candidate-output', type: 'graphOutput', data: { id: 'candidateGlossary', dataType: 'object' } },
+      ],
+      connections: [],
+    },
+    'direct-evaluator': {
+      metadata: { id: 'direct-evaluator', name: 'Direct evaluator' },
+      nodes: [
+        { id: 'candidate-input', type: 'graphInput', data: { id: 'candidate', dataType: 'object' } },
+        { id: 'reference-input', type: 'graphInput', data: { id: 'reference', dataType: 'object' } },
+        { id: 'direct-result-output', type: 'graphOutput', data: { id: 'result', dataType: 'object' } },
       ],
       connections: [],
     },
@@ -175,6 +195,64 @@ test('an execution benchmark runs only the target and never claims a quality res
   assert.equal(result.trials[0]?.executionStatus, 'completed');
   assert.equal(result.trials[0]?.qualityStatus, 'not-evaluated');
   assert.deepEqual(result.trials[0]?.observations, []);
+});
+
+test('live project optional fields do not prevent evaluation provenance fingerprinting', async () => {
+  const withExplicitUndefined = structuredClone(project);
+  const targetNode = withExplicitUndefined.graphs.target!.nodes[0]! as { description?: string; data: Record<string, unknown> };
+  targetNode.description = undefined;
+  targetNode.data.defaultValue = undefined;
+  const evaluatorNode = withExplicitUndefined.graphs.evaluator!.nodes[0]! as { description?: string };
+  evaluatorNode.description = undefined;
+
+  const [withoutOptionalFields, withOptionalFields] = await Promise.all(
+    [project, withExplicitUndefined].map((projectForRun) =>
+      runEvaluationSuite({
+        project: projectForRun,
+        evaluationData: data(suite({ evaluators: [{ id: 'judge', name: 'Judge', graphId: 'evaluator', required: true }] })),
+        dataset: dataset(),
+        suiteId: 'suite',
+        runGraph: async ({ graphId }) =>
+          graphId === 'evaluator'
+            ? { outputs: { result: { passed: true, score: 100 } }, metrics: { durationMs: 1 } }
+            : { outputs: { result: 'ok' }, metrics: { durationMs: 1 } },
+      }),
+    ),
+  );
+
+  assert.equal(withOptionalFields.executionStatus, 'completed');
+  assert.equal(withOptionalFields.provenance.projectFingerprint, withoutOptionalFields.provenance.projectFingerprint);
+  assert.equal(withOptionalFields.provenance.targetFingerprint, withoutOptionalFields.provenance.targetFingerprint);
+  assert.deepEqual(withOptionalFields.provenance.evaluatorFingerprints, withoutOptionalFields.provenance.evaluatorFingerprints);
+});
+
+test('provenance ignores graph presentation edits but tracks executable graph changes', async () => {
+  const cosmeticProject = structuredClone(project);
+  cosmeticProject.metadata.title = 'Renamed project';
+  cosmeticProject.metadata.description = 'Updated project notes';
+  cosmeticProject.graphs.target!.metadata!.description = 'Updated graph notes';
+  cosmeticProject.graphs.target!.nodes[0] = {
+    ...cosmeticProject.graphs.target!.nodes[0]!,
+    description: 'Updated node notes',
+    visualData: { x: 120, y: 240, width: 320, zIndex: 4 },
+  };
+  const materialProject = structuredClone(cosmeticProject);
+  (materialProject.graphs.target!.nodes[0]!.data as { dataType: string }).dataType = 'any';
+
+  const execute = (projectForRun: Project) =>
+    runEvaluationSuite({
+      project: projectForRun,
+      evaluationData: data(suite()),
+      dataset: dataset(),
+      suiteId: 'suite',
+      runGraph: async () => ({ outputs: { result: 'ok' }, metrics: { durationMs: 1 } }),
+    });
+  const [base, cosmetic, material] = await Promise.all([execute(project), execute(cosmeticProject), execute(materialProject)]);
+
+  assert.equal(cosmetic.provenance.projectFingerprint, base.provenance.projectFingerprint);
+  assert.equal(cosmetic.provenance.targetFingerprint, base.provenance.targetFingerprint);
+  assert.notEqual(material.provenance.projectFingerprint, base.provenance.projectFingerprint);
+  assert.notEqual(material.provenance.targetFingerprint, base.provenance.targetFingerprint);
 });
 
 test('progress updates are detached immutable revisions', async () => {
@@ -360,6 +438,101 @@ test('rejects duplicate definition ids and invalid threshold values before graph
   }
 });
 
+test('rejects ambiguous graph ports before executing any graph', async (context) => {
+  const cases: Array<{ name: string; project: Project; value: EvaluationSuite; error: RegExp }> = [];
+
+  const duplicateTargetInput = structuredClone(project);
+  duplicateTargetInput.graphs.target!.nodes.push({
+    id: 'duplicate-input-node',
+    type: 'graphInput',
+    data: { id: 'input', dataType: 'string' },
+  });
+  cases.push({
+    name: 'duplicate target Graph Input ids',
+    project: duplicateTargetInput,
+    value: suite(),
+    error: /duplicate Graph Input ids/,
+  });
+
+  const duplicateTargetOutput = structuredClone(project);
+  duplicateTargetOutput.graphs.target!.nodes.push({
+    id: 'duplicate-output-node',
+    type: 'graphOutput',
+    data: { id: 'result', dataType: 'any' },
+  });
+  cases.push({
+    name: 'duplicate target Graph Output ids',
+    project: duplicateTargetOutput,
+    value: suite(),
+    error: /duplicate Graph Output ids/,
+  });
+
+  const duplicateEvaluatorOutput = structuredClone(project);
+  duplicateEvaluatorOutput.graphs.evaluator!.nodes.push({
+    id: 'duplicate-result-node',
+    type: 'graphOutput',
+    data: { id: 'result', dataType: 'object' },
+  });
+  cases.push({
+    name: 'duplicate evaluator Graph Output ids',
+    project: duplicateEvaluatorOutput,
+    value: suite({ evaluators: [{ id: 'judge', name: 'Judge', graphId: 'evaluator', required: true }] }),
+    error: /duplicate Graph Output ids/,
+  });
+
+  for (const item of cases) {
+    await context.test(item.name, async () => {
+      let calls = 0;
+      await assert.rejects(
+        runEvaluationSuite({
+          project: item.project,
+          evaluationData: data(item.value),
+          dataset: dataset(),
+          suiteId: 'suite',
+          runGraph: async () => {
+            calls += 1;
+            return { outputs: {}, metrics: { durationMs: 1 } };
+          },
+        }),
+        item.error,
+      );
+      assert.equal(calls, 0);
+    });
+  }
+});
+
+test('validates every enabled case value used by an assertion before target execution', async () => {
+  const value = dataset();
+  value.fields.push({ id: 'expected', name: 'Expected', dataType: 'string', role: 'expected' });
+  const configuredSuite = suite({
+    assertions: [
+      {
+        id: 'expected-result',
+        name: 'Expected result',
+        outputPath: '$.result',
+        operator: 'matches-regex',
+        expected: { kind: 'dataset-field', fieldId: 'expected' },
+        required: true,
+      },
+    ],
+  });
+  let calls = 0;
+  await assert.rejects(
+    runEvaluationSuite({
+      project,
+      evaluationData: data(configuredSuite),
+      dataset: value,
+      suiteId: 'suite',
+      runGraph: async () => {
+        calls += 1;
+        return { outputs: { result: 'ok' }, metrics: { durationMs: 1 } };
+      },
+    }),
+    /missing expected field "Expected"/,
+  );
+  assert.equal(calls, 0);
+});
+
 test('deep equality drives authoritative pass and fail quality results', async () => {
   const evaluationSuite = suite({
     assertions: [
@@ -453,6 +626,70 @@ test('rejects a bound field that has no saved case value before executing the ta
     /has no saved value for bound input field "Input"/u,
   );
   assert.equal(targetCalls, 0);
+});
+
+test('rejects any supplied dataset value that violates its declared type before graph execution', async () => {
+  const invalidDataset = dataset();
+  invalidDataset.fields.push({ id: 'metadata', name: 'Metadata score', dataType: 'number', role: 'metadata' });
+  invalidDataset.cases[0]!.values.metadata = 'not-a-number';
+  let targetCalls = 0;
+
+  await assert.rejects(
+    runEvaluationSuite({
+      project,
+      evaluationData: data(suite()),
+      dataset: invalidDataset,
+      suiteId: 'suite',
+      runGraph: async () => {
+        targetCalls += 1;
+        return { outputs: {} };
+      },
+    }),
+    /Metadata score.*declared number type/u,
+  );
+  assert.equal(targetCalls, 0);
+});
+
+test('invalid adapter metrics cannot corrupt a completed run or persisted aggregates', async () => {
+  const result = await runEvaluationSuite({
+    project,
+    evaluationData: data(suite()),
+    dataset: dataset(),
+    suiteId: 'suite',
+    runGraph: async () => ({
+      outputs: { result: 'ok' },
+      metrics: { durationMs: Number.NaN, costUsd: -1 },
+    }),
+  });
+
+  assert.equal(result.executionStatus, 'completed');
+  assert.equal(result.trials[0]?.executionStatus, 'error');
+  assert.match(result.trials[0]?.error ?? '', /target metrics\.durationMs must be a non-negative finite number/u);
+  assert.equal(result.trials[0]?.targetMetrics.hasUnknownCost, true);
+  assert.equal(result.trials[0]?.targetMetrics.costUsd, undefined);
+  assert.equal(result.aggregate?.totalCostUsd, undefined);
+  assert.equal(Number.isFinite(result.trials[0]?.targetMetrics.durationMs), true);
+  assert.equal(Number.isFinite(result.aggregate?.p95LatencyMs), true);
+});
+
+test('invalid diagnostics on a failed adapter are discarded without hiding the graph error', async () => {
+  const result = await runEvaluationSuite({
+    project,
+    evaluationData: data(suite()),
+    dataset: dataset(),
+    suiteId: 'suite',
+    runGraph: async () => {
+      throw new EvaluationGraphExecutionError('provider failed', {
+        metrics: { durationMs: Number.POSITIVE_INFINITY, modelCallCount: -1 },
+        providerAttempts: { attempt: undefined } as unknown as PortableJson,
+      });
+    },
+  });
+
+  assert.equal(result.trials[0]?.error, 'provider failed');
+  assert.equal(result.trials[0]?.targetMetrics.hasUnknownCost, true);
+  assert.equal(result.trials[0]?.targetProviderAttempts, undefined);
+  assert.equal(Number.isFinite(result.trials[0]?.targetMetrics.durationMs), true);
 });
 
 test('the shared work pool preserves work order while bounding concurrency', async () => {
@@ -606,6 +843,79 @@ test('provenance ignores cosmetic and retention edits but tracks material qualit
   assert.deepEqual(benchmarkChangedQuality.provenance.evaluatorFingerprints, {});
 });
 
+test('provenance treats reordered target input bindings as the same execution contract', async () => {
+  const projectWithTwoInputs = structuredClone(project);
+  projectWithTwoInputs.graphs.target!.nodes.push({
+    id: 'second-input-node',
+    type: 'graphInput',
+    data: { id: 'second', dataType: 'string' },
+  });
+  const datasetWithTwoInputs = dataset();
+  datasetWithTwoInputs.fields.push({ id: 'second', name: 'Second', dataType: 'string', role: 'input' });
+  datasetWithTwoInputs.cases[0]!.values.second = 'two';
+  const first = suite({
+    inputBindings: [
+      { graphInputId: 'input', datasetFieldId: 'input' },
+      { graphInputId: 'second', datasetFieldId: 'second' },
+    ],
+  });
+  const reordered = { ...first, inputBindings: [...first.inputBindings].reverse() };
+  const execute = (value: EvaluationSuite) =>
+    runEvaluationSuite({
+      project: projectWithTwoInputs,
+      evaluationData: data(value),
+      dataset: datasetWithTwoInputs,
+      suiteId: 'suite',
+      runGraph: async () => ({ outputs: { result: 'ok' }, metrics: { durationMs: 1 } }),
+    });
+
+  const [left, right] = await Promise.all([execute(first), execute(reordered)]);
+  assert.equal(right.provenance.suiteFingerprint, left.provenance.suiteFingerprint);
+});
+
+test('scoring provenance ignores dormant pass/fail controls and evaluator labels', async () => {
+  const baseSuite = suite({
+    evaluationMode: 'scoring',
+    evaluators: [{ id: 'judge', name: 'Original judge', graphId: 'evaluator' }],
+    thresholds: [{ id: 'legacy-threshold', metric: 'mean-score', operator: 'at-least', value: 0.5 }],
+  });
+  const cosmeticScoringEdit = structuredClone(baseSuite);
+  cosmeticScoringEdit.assertions[0] = {
+    ...cosmeticScoringEdit.assertions[0]!,
+    name: 'Dormant check',
+    expected: { kind: 'literal', value: 'not evaluated in scoring' },
+  };
+  cosmeticScoringEdit.thresholds = [
+    { id: 'legacy-threshold', metric: 'mean-score', operator: 'at-least', value: 0.95 },
+  ];
+  cosmeticScoringEdit.evaluators[0] = {
+    ...cosmeticScoringEdit.evaluators[0]!,
+    name: 'Renamed judge',
+    required: false,
+    runOnTargetError: true,
+  };
+  const changedWeight = structuredClone(cosmeticScoringEdit);
+  changedWeight.evaluators[0] = { ...changedWeight.evaluators[0]!, scoreWeight: 2 };
+
+  const execute = (value: EvaluationSuite) =>
+    runEvaluationSuite({
+      project,
+      evaluationData: data(value),
+      dataset: dataset(),
+      suiteId: 'suite',
+      runGraph: async ({ graphId }) =>
+        graphId === 'evaluator'
+          ? { outputs: { result: { score: 75 } }, metrics: { durationMs: 1 } }
+          : { outputs: { result: 'ok' }, metrics: { durationMs: 1 } },
+    });
+
+  const base = await execute(baseSuite);
+  const cosmetic = await execute(cosmeticScoringEdit);
+  const weighted = await execute(changedWeight);
+  assert.equal(cosmetic.provenance.suiteFingerprint, base.provenance.suiteFingerprint);
+  assert.notEqual(weighted.provenance.suiteFingerprint, base.provenance.suiteFingerprint);
+});
+
 test('a target execution error fails quality, while a required evaluator error is unable to evaluate', async () => {
   const failedTarget = await runEvaluationSuite({
     project,
@@ -620,6 +930,8 @@ test('a target execution error fails quality, while a required evaluator error i
   assert.equal(failedTarget.trials[0]?.qualityStatus, 'failed');
   assert.equal(failedTarget.qualityStatus, 'failed');
   assert.equal(failedTarget.aggregate?.targetErrorRate, 1);
+  assert.equal(failedTarget.accountingStatus, 'partial');
+  assert.equal(failedTarget.aggregate?.totalCostUsd, undefined);
 
   const evaluatorError = await runEvaluationSuite({
     project,
@@ -670,12 +982,29 @@ test('an explicit pass-rate requirement governs tolerated per-trial quality fail
   assert.equal(tolerated.aggregate?.passRate, 0.8);
   assert.equal(tolerated.aggregate?.failedTrialCount, 1);
   assert.equal(tolerated.thresholdResults[0]?.status, 'passed');
+  assert.equal(tolerated.thresholdResults[0]?.message, 'Actual value 80% satisfied at-least 80%.');
   assert.equal(tolerated.qualityStatus, 'passed');
 
   qualitySuite.thresholds = [{ id: 'pass-rate', metric: 'pass-rate', operator: 'at-least', value: 1 }];
   const rejected = await runEvaluationSuite(options);
   assert.equal(rejected.thresholdResults[0]?.status, 'failed');
+  assert.equal(rejected.thresholdResults[0]?.message, 'Actual value 80% did not satisfy at-least 100%.');
   assert.equal(rejected.qualityStatus, 'failed');
+});
+
+test('threshold messages format percentage values without floating-point noise', async () => {
+  const result = await runEvaluationSuite({
+    project,
+    evaluationData: data(
+      suite({ thresholds: [{ id: 'pass-rate', metric: 'pass-rate', operator: 'at-least', value: 0.29 }] }),
+    ),
+    dataset: dataset(),
+    suiteId: 'suite',
+    runGraph: async () => ({ outputs: { result: 'ok' }, metrics: { durationMs: 1 } }),
+  });
+
+  assert.match(result.thresholdResults[0]?.message ?? '', /29%/);
+  assert.doesNotMatch(result.thresholdResults[0]?.message ?? '', /28\.999/);
 });
 
 test('an explicit target-error-rate requirement governs tolerated target failures', async () => {
@@ -753,7 +1082,7 @@ test('weights evaluator scores in run and case aggregates, and preserves the app
       if (graphId === 'evaluator') {
         // The runner invokes the same evaluator graph twice; distinguish the
         // configured judges through their deterministic call sequence.
-        const score = calls++ === 0 ? 0.2 : 0.8;
+        const score = calls++ === 0 ? 20 : 80;
         return { outputs: { result: { passed: true, score } }, metrics: { durationMs: 1 } };
       }
       return { outputs: { result: 'ok' }, metrics: { durationMs: 1 } };
@@ -764,6 +1093,300 @@ test('weights evaluator scores in run and case aggregates, and preserves the app
   assert.ok(Math.abs((summarizeEvaluationRun(result)?.cases[0]?.meanScore ?? 0) - 0.35) < 1e-12);
   assert.equal(result.trials[0]?.observations.find((observation) => observation.id === 'strong')?.scoreWeight, 3);
   assert.equal(result.trials[0]?.observations.find((observation) => observation.id === 'weak')?.scoreWeight, 1);
+});
+
+test('direct evaluator bindings map target outputs and dataset fields to ordinary graph inputs', async () => {
+  const glossaryDataset: EvaluationDataset = {
+    id: 'dataset',
+    projectId: project.metadata.id,
+    name: 'Glossary cases',
+    fields: [
+      { id: 'story-field', name: 'Story', role: 'input', dataType: 'string', required: true },
+      { id: 'reference-field', name: 'Reference glossary', role: 'expected', dataType: 'object', required: true },
+    ],
+    cases: [
+      {
+        id: 'case',
+        name: 'Case',
+        values: { 'story-field': 'A story', 'reference-field': { terms: ['reference'] } },
+      },
+    ],
+  };
+  const directSuite = suite({
+    targetGraphId: 'direct-target',
+    inputBindings: [{ graphInputId: 'story', datasetFieldId: 'story-field' }],
+    evaluationMode: 'scoring',
+    evaluators: [
+      {
+        id: 'judge',
+        name: 'Glossary judge',
+        graphId: 'direct-evaluator',
+        inputBindings: [
+          {
+            graphInputId: 'candidate',
+            source: { kind: 'target-output', outputId: 'candidateGlossary' },
+          },
+          {
+            graphInputId: 'reference',
+            source: { kind: 'dataset-field', fieldId: 'reference-field' },
+          },
+        ],
+      },
+    ],
+  });
+  let evaluatorInputs: Record<string, PortableJson> | undefined;
+  const result = await runEvaluationSuite({
+    project,
+    evaluationData: data(directSuite),
+    dataset: glossaryDataset,
+    suiteId: 'suite',
+    runGraph: async ({ graphId, inputs }) => {
+      if (graphId === 'direct-target') {
+        assert.deepEqual(inputs, { story: 'A story' });
+        return { outputs: { candidateGlossary: { terms: ['candidate'] } }, metrics: { durationMs: 1 } };
+      }
+      evaluatorInputs = inputs;
+      return { outputs: { result: { score: 85 } }, metrics: { durationMs: 1 } };
+    },
+  });
+
+  assert.deepEqual(evaluatorInputs, {
+    candidate: { terms: ['candidate'] },
+    reference: { terms: ['reference'] },
+  });
+  assert.equal(result.qualityStatus, 'scored');
+  assert.equal(result.aggregate?.meanScore, 0.85);
+  assert.equal(result.trials[0]?.observations[0]?.scoreWeight, 1);
+});
+
+test('scoring evaluator results use a 100-point graph contract and reject values above it', async () => {
+  const result = await runEvaluationSuite({
+    project,
+    evaluationData: data(
+      suite({
+        evaluationMode: 'scoring',
+        assertions: [],
+        evaluators: [{ id: 'judge', name: 'Judge', graphId: 'evaluator' }],
+      }),
+    ),
+    dataset: dataset(),
+    suiteId: 'suite',
+    runGraph: async ({ graphId }) =>
+      graphId === 'target'
+        ? { outputs: { result: 'ok' }, metrics: { durationMs: 1 } }
+        : { outputs: { result: { score: 101 } }, metrics: { durationMs: 1 } },
+  });
+
+  assert.equal(result.qualityStatus, 'unable-to-evaluate');
+  assert.equal(result.trials[0]?.observations[0]?.status, 'error');
+  assert.match(result.trials[0]?.observations[0]?.message ?? '', /number from 0 to 100/);
+});
+
+test('direct evaluator bindings fail before execution when a required evaluator input has no source', async () => {
+  let calls = 0;
+  await assert.rejects(
+    runEvaluationSuite({
+      project,
+      evaluationData: data(
+        suite({
+          targetGraphId: 'direct-target',
+          inputBindings: [{ graphInputId: 'story', datasetFieldId: 'input' }],
+          evaluationMode: 'scoring',
+          evaluators: [
+            {
+              id: 'judge',
+              name: 'Glossary judge',
+              graphId: 'direct-evaluator',
+              inputBindings: [
+                {
+                  graphInputId: 'candidate',
+                  source: { kind: 'target-output', outputId: 'candidateGlossary' },
+                },
+              ],
+            },
+          ],
+        }),
+      ),
+      dataset: dataset(),
+      suiteId: 'suite',
+      runGraph: async () => {
+        calls += 1;
+        return { outputs: {}, metrics: { durationMs: 1 } };
+      },
+    }),
+    /input "reference" must be bound/,
+  );
+  assert.equal(calls, 0);
+});
+
+test('direct evaluator bindings reject a runtime target value that violates the evaluator input type', async () => {
+  const directDataset = {
+    id: 'dataset',
+    projectId: project.metadata.id,
+    name: 'Glossary cases',
+    fields: [{ id: 'story-field', name: 'Story', role: 'input', dataType: 'string' }],
+    cases: [{ id: 'case', name: 'Case', values: { 'story-field': 'A story' } }],
+  } as EvaluationDataset;
+  const directSuite = suite({
+    targetGraphId: 'direct-target',
+    inputBindings: [{ graphInputId: 'story', datasetFieldId: 'story-field' }],
+    evaluationMode: 'scoring',
+    evaluators: [
+      {
+        id: 'judge',
+        name: 'Glossary judge',
+        graphId: 'direct-evaluator',
+        inputBindings: [
+          {
+            graphInputId: 'candidate',
+            source: { kind: 'target-output', outputId: 'candidateGlossary' },
+          },
+          { graphInputId: 'reference', source: { kind: 'context', context: 'outputs' } },
+        ],
+      },
+    ],
+  });
+
+  const run = await runEvaluationSuite({
+    project,
+    evaluationData: data(directSuite),
+    dataset: directDataset,
+    suiteId: directSuite.id,
+    runGraph: async ({ graphId }) =>
+      graphId === 'direct-target'
+        ? { outputs: { candidateGlossary: 'not an object' }, metrics: { durationMs: 1 } }
+        : { outputs: { result: { score: 100 } }, metrics: { durationMs: 1 } },
+  });
+
+  assert.equal(run.qualityStatus, 'unable-to-evaluate');
+  assert.match(run.trials[0]!.observations[0]!.message ?? '', /Target output "candidateGlossary" is not compatible/);
+});
+
+test('scoring suites average trials per case before averaging equally across cases', async () => {
+  const scoringDataset: EvaluationDataset = {
+    id: 'dataset',
+    projectId: project.metadata.id,
+    name: 'Scoring dataset',
+    fields: [
+      { id: 'input', name: 'Story', dataType: 'string', role: 'input', required: true },
+      { id: 'reference', name: 'Reference glossary', dataType: 'object', role: 'expected', required: true },
+    ],
+    cases: [
+      { id: 'case-0', name: 'Case 0', values: { input: 'first story', reference: { terms: [] } } },
+      { id: 'case-1', name: 'Case 1', values: { input: 'second story', reference: { terms: [] } } },
+    ],
+  };
+  const result = await runEvaluationSuite({
+    project,
+    evaluationData: data(
+      suite({
+        evaluationMode: 'scoring',
+        // These legacy criteria deliberately remain stored but are ignored by
+        // scoring mode, which is governed by evaluator scores alone.
+        thresholds: [{ id: 'legacy', metric: 'made-up-metric', operator: 'max-regression', value: 1 }],
+        evaluators: [{ id: 'judge', name: 'Judge', graphId: 'evaluator' }],
+        configuration: { concurrency: 1, trialCount: 2 },
+      }),
+    ),
+    dataset: scoringDataset,
+    suiteId: 'suite',
+    runGraph: async ({ graphId, inputs }) => {
+      if (graphId === 'target') {
+        return { outputs: { glossary: { generated: inputs.input } }, metrics: { durationMs: 1 } };
+      }
+      const run = inputs.run as { caseIndex: number; trialIndex: number };
+      assert.deepEqual(inputs.inputs, { input: run.caseIndex === 0 ? 'first story' : 'second story' });
+      assert.deepEqual(inputs.expected, { reference: { terms: [] } });
+      assert.deepEqual(inputs.outputs, {
+        glossary: { generated: run.caseIndex === 0 ? 'first story' : 'second story' },
+      });
+      const scores = [
+        [80, 90],
+        [60, 70],
+      ];
+      // Scoring evaluators use the same 100-point score shown by the UI. A legacy passed
+      // property is deliberately ignored rather than becoming a second
+      // pass/fail contract.
+      return {
+        outputs: { result: { score: scores[run.caseIndex]![run.trialIndex], passed: 'ignored' } },
+        metrics: { durationMs: 1 },
+      };
+    },
+  });
+
+  const summary = summarizeEvaluationRun(result)!;
+  assert.equal(result.qualityStatus, 'scored');
+  assert.equal(result.aggregate?.scoredTrialCount, 4);
+  assert.equal(result.aggregate?.missingScoreTrialCount, 0);
+  assert.ok(Math.abs((result.aggregate?.meanScore ?? 0) - 0.75) < 1e-12);
+  assert.ok(Math.abs((summary.cases[0]?.meanScore ?? 0) - 0.85) < 1e-12);
+  assert.ok(Math.abs((summary.cases[1]?.meanScore ?? 0) - 0.65) < 1e-12);
+  assert.equal(result.thresholdResults.length, 0);
+});
+
+test('scoring suites retain partial averages but report incomplete score coverage', async () => {
+  let judgeCalls = 0;
+  const result = await runEvaluationSuite({
+    project,
+    evaluationData: data(
+      suite({
+        evaluationMode: 'scoring',
+        assertions: [],
+        evaluators: [{ id: 'judge', name: 'Judge', graphId: 'evaluator' }],
+        configuration: { concurrency: 1, trialCount: 2 },
+      }),
+    ),
+    dataset: dataset(),
+    suiteId: 'suite',
+    runGraph: async ({ graphId }) => {
+      if (graphId === 'target') return { outputs: { result: 'ok' }, metrics: { durationMs: 1 } };
+      judgeCalls += 1;
+      return {
+        outputs: { result: judgeCalls === 1 ? { score: 80 } : { message: 'The judge did not score this trial.' } },
+        metrics: { durationMs: 1 },
+      };
+    },
+  });
+
+  const summary = summarizeEvaluationRun(result)!;
+  assert.equal(result.qualityStatus, 'unable-to-evaluate');
+  assert.equal(result.qualityReason.code, 'scores-incomplete');
+  assert.equal(result.aggregate?.scoredTrialCount, 1);
+  assert.equal(result.aggregate?.missingScoreTrialCount, 1);
+  assert.equal(result.aggregate?.meanScore, 0.8);
+  assert.equal(summary.cases[0]?.scoredTrialCount, 1);
+  assert.equal(summary.cases[0]?.missingScoreTrialCount, 1);
+  assert.equal(summary.cases[0]?.meanScore, 0.8);
+  assert.throws(
+    () => createEvaluationBaselineSnapshot(result),
+    /A scoring baseline needs a complete score for every requested trial/,
+  );
+});
+
+test('scoring suites do not invoke a judge after the target execution fails', async () => {
+  let evaluatorCalls = 0;
+  const result = await runEvaluationSuite({
+    project,
+    evaluationData: data(
+      suite({
+        evaluationMode: 'scoring',
+        assertions: [],
+        evaluators: [{ id: 'judge', name: 'Judge', graphId: 'evaluator', runOnTargetError: true }],
+      }),
+    ),
+    dataset: dataset(),
+    suiteId: 'suite',
+    runGraph: async ({ graphId }) => {
+      if (graphId === 'target') throw new Error('target unavailable');
+      evaluatorCalls += 1;
+      return { outputs: { result: { score: 0 } }, metrics: { durationMs: 1 } };
+    },
+  });
+
+  assert.equal(evaluatorCalls, 0);
+  assert.equal(result.qualityStatus, 'unable-to-evaluate');
+  assert.equal(result.aggregate?.scoredTrialCount, 0);
+  assert.equal(result.aggregate?.missingScoreTrialCount, 1);
 });
 
 test('rejects non-positive evaluator score weights', async () => {
@@ -1031,30 +1654,35 @@ test('an evaluator timeout contributes elapsed latency even without adapter metr
   assert.ok((result.trials[0]?.totalMetrics.durationMs ?? 0) >= 11);
 });
 
-test('a required assertion error is unable to evaluate rather than a false pass', async () => {
-  const result = await runEvaluationSuite({
-    project,
-    evaluationData: data(
-      suite({
-        assertions: [
-          {
-            id: 'invalid-regex',
-            name: 'Invalid regex',
-            outputPath: '$.result',
-            operator: 'matches-regex',
-            expected: { kind: 'literal', value: '[' },
-            required: true,
-          },
-        ],
-      }),
-    ),
-    dataset: dataset(),
-    suiteId: 'suite',
-    runGraph: async () => ({ outputs: { result: 'ok' }, metrics: { durationMs: 1 } }),
-  });
-  assert.equal(result.trials[0]?.executionStatus, 'completed');
-  assert.equal(result.trials[0]?.qualityStatus, 'unable-to-evaluate');
-  assert.equal(result.qualityStatus, 'unable-to-evaluate');
+test('rejects an invalid assertion configuration before starting target work', async () => {
+  let calls = 0;
+  await assert.rejects(
+    runEvaluationSuite({
+      project,
+      evaluationData: data(
+        suite({
+          assertions: [
+            {
+              id: 'invalid-regex',
+              name: 'Invalid regex',
+              outputPath: '$.result',
+              operator: 'matches-regex',
+              expected: { kind: 'literal', value: '[' },
+              required: true,
+            },
+          ],
+        }),
+      ),
+      dataset: dataset(),
+      suiteId: 'suite',
+      runGraph: async () => {
+        calls += 1;
+        return { outputs: { result: 'ok' }, metrics: { durationMs: 1 } };
+      },
+    }),
+    /invalid expected regular expression/,
+  );
+  assert.equal(calls, 0);
 });
 
 test('a relative baseline threshold is unable to evaluate when no compatible baseline exists', async () => {
@@ -1102,6 +1730,28 @@ test('a relative baseline threshold is unable to evaluate when no compatible bas
   });
   assert.equal(result.qualityStatus, 'unable-to-evaluate');
   assert.match(result.warnings.join('\n'), /baseline is stale/);
+});
+
+test('a relative threshold does not compare runs from different execution modes', async () => {
+  const currentSuite = suite({
+    thresholds: [{ id: 'regression', metric: 'average-latency-ms', operator: 'max-regression', value: 0.1 }],
+  });
+  const execute = (executionMode: string, baseline?: ReturnType<typeof createEvaluationBaselineSnapshot>) =>
+    runEvaluationSuite({
+      project,
+      evaluationData: data(currentSuite),
+      dataset: dataset(),
+      suiteId: 'suite',
+      executionMode,
+      ...(baseline === undefined ? {} : { baseline }),
+      runGraph: async () => ({ outputs: { result: 'ok' }, metrics: { durationMs: 10 } }),
+    });
+
+  const browserRun = await execute('browser');
+  const desktopRun = await execute('desktop', createEvaluationBaselineSnapshot(browserRun));
+
+  assert.equal(desktopRun.thresholdResults[0]?.status, 'unavailable');
+  assert.match(desktopRun.warnings.join('\n'), /baseline is stale/);
 });
 
 test('a cost regression threshold rejects a compatible baseline with partial accounting', async () => {
@@ -1325,6 +1975,47 @@ test('cancellation during an evaluator preserves incurred target cost while mark
   assert.equal(result.trials[0]?.totalMetrics.hasUnknownCost, true);
   assert.equal(result.aggregate?.totalCostUsd, undefined);
   assert.equal(result.aggregate?.averageCostUsd, undefined);
+});
+
+test('cancellation between evaluators preserves completed target and evaluator evidence', async () => {
+  const controller = new AbortController();
+  let evaluatorCalls = 0;
+  const result = await runEvaluationSuite({
+    project,
+    evaluationData: data(
+      suite({
+        evaluators: [
+          { id: 'judge-1', name: 'Judge 1', graphId: 'evaluator', required: true },
+          { id: 'judge-2', name: 'Judge 2', graphId: 'evaluator', required: true },
+        ],
+      }),
+    ),
+    dataset: dataset(),
+    suiteId: 'suite',
+    signal: controller.signal,
+    runGraph: async ({ graphId }) => {
+      if (graphId === 'target') {
+        return { outputs: { result: 'ok' }, metrics: { durationMs: 4, costUsd: 0.01 } };
+      }
+      evaluatorCalls += 1;
+      const metrics = {
+        get durationMs() {
+          controller.abort(new DOMException('Canceled after first evaluator.', 'AbortError'));
+          return 3;
+        },
+        costUsd: 0.02,
+      };
+      return { outputs: { result: { passed: true, score: 90 } }, metrics };
+    },
+  });
+
+  assert.equal(result.executionStatus, 'canceled');
+  assert.equal(evaluatorCalls, 1);
+  assert.equal(result.trials[0]?.outputs.result, 'ok');
+  assert.equal(result.trials[0]?.observations[0]?.id, 'output-object');
+  assert.equal(result.trials[0]?.observations[1]?.id, 'judge-1');
+  assert.equal(result.trials[0]?.targetMetrics.costUsd, 0.01);
+  assert.equal(result.trials[0]?.evaluatorMetrics.costUsd, 0.02);
 });
 
 test('a seed input cannot silently replace a case-bound target input', async () => {

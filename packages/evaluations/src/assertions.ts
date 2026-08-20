@@ -91,6 +91,12 @@ export function isEvaluationOutputPathSyntaxValid(path: string): boolean {
   return parseEvaluationOutputPath(path) !== undefined;
 }
 
+/** The Graph Output that owns an assertion path, including nested paths. */
+export function getEvaluationTopLevelOutputId(path: string): string | undefined {
+  const first = parseEvaluationOutputPath(path)?.[0];
+  return first?.kind === 'property' ? first.key : undefined;
+}
+
 function getPath(value: PortableJson, path: string): PortableJson | undefined {
   const segments = parseEvaluationOutputPath(path);
   if (!segments) return undefined;
@@ -214,6 +220,68 @@ function operatorDescription(operator: EvaluationAssertion['operator']): string 
     case 'contains-all':
       return 'contains every expected text';
   }
+}
+
+/**
+ * Validates author-controlled expected data without needing target outputs.
+ * The runner uses this before scheduling work; assertion execution uses the
+ * same function so direct callers cannot observe a looser contract.
+ */
+export function validateEvaluationAssertionExpectedValue(
+  assertion: EvaluationAssertion,
+  expected: PortableJson,
+): void {
+  assertPortableJson(expected, `quality check ${assertion.name} expected value`);
+  switch (assertion.operator) {
+    case 'equals':
+    case 'not-equals':
+    case 'array-includes':
+      return;
+    case 'contains':
+      expectedString(assertion, expected, 'its expected text');
+      return;
+    case 'matches-regex': {
+      const pattern = expectedString(assertion, expected, 'its expected regular expression');
+      try {
+        new RegExp(pattern);
+      } catch {
+        assertionConfigurationError(assertion, 'contains an invalid expected regular expression.');
+      }
+      return;
+    }
+    case 'type-is':
+      expectedTypeName(assertion, expected);
+      return;
+    case 'json-schema':
+      assertSupportedJsonSchema(assertion, expected);
+      return;
+    case 'number-at-least':
+      expectedFiniteNumber(assertion, expected, 'its expected minimum');
+      return;
+    case 'number-at-most':
+      expectedFiniteNumber(assertion, expected, 'its expected maximum');
+      return;
+    case 'number-between':
+      expectedNumberRange(assertion, expected);
+      return;
+    case 'set-overlaps':
+      expectedSet(assertion, expected);
+      return;
+    case 'contains-any':
+    case 'contains-all':
+      expectedTextList(assertion, expected);
+      return;
+  }
+}
+
+export function validateEvaluationAssertionConfiguration(
+  assertion: EvaluationAssertion,
+  expected: PortableJson,
+): void {
+  if (!isEvaluationOutputPathSyntaxValid(assertion.outputPath)) {
+    assertionConfigurationError(assertion, `uses invalid output path "${assertion.outputPath}".`);
+  }
+  validateEvaluationAssertionExpectedValue(assertion, expected);
 }
 
 const SUPPORTED_SCHEMA_KEYWORDS = new Set([
@@ -420,7 +488,7 @@ export function evaluateAssertion(
   const actual = getPath(outputRoot, assertion.outputPath);
   const actualFound = actual !== undefined;
   const expected = expectedValue(assertion, testCase);
-  assertPortableJson(expected);
+  validateEvaluationAssertionConfiguration(assertion, expected);
   let passed = false;
   switch (assertion.operator) {
     case 'equals':
@@ -434,7 +502,7 @@ export function evaluateAssertion(
       break;
     case 'contains':
       {
-        const expectedText = expectedString(assertion, expected, 'its expected text');
+        const expectedText = expected as string;
         passed = typeof actual === 'string' && actual.includes(expectedText);
       }
       break;
@@ -443,38 +511,31 @@ export function evaluateAssertion(
       // errors. Let the runner report that quality could not be evaluated instead
       // of reporting a normal failed quality assertion.
       {
-        const expectedPattern = expectedString(assertion, expected, 'its expected regular expression');
-        let pattern: RegExp;
-        try {
-          pattern = new RegExp(expectedPattern);
-        } catch {
-          assertionConfigurationError(assertion, 'contains an invalid expected regular expression.');
-        }
+        const pattern = new RegExp(expected as string);
         passed = typeof actual === 'string' && pattern.test(actual);
       }
       break;
     case 'type-is':
-      passed = typeMatches(actual, expectedTypeName(assertion, expected));
+      passed = typeMatches(actual, expected);
       break;
     case 'json-schema':
-      assertSupportedJsonSchema(assertion, expected);
       passed = matchesSchema(actual, expected);
       break;
     case 'number-at-least':
       {
-        const minimum = expectedFiniteNumber(assertion, expected, 'its expected minimum');
+        const minimum = expected as number;
         passed = typeof actual === 'number' && actual >= minimum;
       }
       break;
     case 'number-at-most':
       {
-        const maximum = expectedFiniteNumber(assertion, expected, 'its expected maximum');
+        const maximum = expected as number;
         passed = typeof actual === 'number' && actual <= maximum;
       }
       break;
     case 'number-between':
       {
-        const [minimum, maximum] = expectedNumberRange(assertion, expected);
+        const [minimum, maximum] = expected as [number, number];
         passed = typeof actual === 'number' && actual >= minimum && actual <= maximum;
       }
       break;
@@ -484,7 +545,7 @@ export function evaluateAssertion(
       break;
     case 'set-overlaps':
       {
-        const candidates = expectedSet(assertion, expected);
+        const candidates = expected as PortableJson[];
         passed =
           Array.isArray(actual) &&
           candidates.some((candidate) =>
@@ -494,13 +555,13 @@ export function evaluateAssertion(
       break;
     case 'contains-any':
       {
-        const expectedTexts = expectedTextList(assertion, expected);
+        const expectedTexts = expected as string[];
         passed = typeof actual === 'string' && expectedTexts.some((candidate) => actual.includes(candidate));
       }
       break;
     case 'contains-all':
       {
-        const expectedTexts = expectedTextList(assertion, expected);
+        const expectedTexts = expected as string[];
         passed = typeof actual === 'string' && expectedTexts.every((candidate) => actual.includes(candidate));
       }
       break;

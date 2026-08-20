@@ -1,5 +1,32 @@
 import { assertPortableJson } from './canonical.js';
-import type { PortableJson } from './types.js';
+import type { EvaluationDataset, PortableJson } from './types.js';
+
+export const portableEvaluationDataTypes = [
+  'any',
+  'any[]',
+  'string',
+  'string[]',
+  'date',
+  'date[]',
+  'time',
+  'time[]',
+  'datetime',
+  'datetime[]',
+  'number',
+  'number[]',
+  'vector',
+  'vector[]',
+  'boolean',
+  'boolean[]',
+  'object',
+  'object[]',
+] as const;
+
+const portableEvaluationDataTypeSet = new Set<string>(portableEvaluationDataTypes);
+
+export function isPortableEvaluationDataType(dataType: string): boolean {
+  return portableEvaluationDataTypeSet.has(dataType);
+}
 
 function isObject(value: PortableJson): boolean {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -48,4 +75,37 @@ export function isEvaluationValueCompatibleWithDataType(value: PortableJson, dat
   // do not have a safe portable dataset representation here. Unknown future
   // types must also fail closed until their exact JSON contract is defined.
   return false;
+}
+
+/** Shared declared-type check for graph/dataset binding authoring and execution validation. */
+export function areEvaluationDataTypesCompatible(sourceDataType: string, targetDataType: string): boolean {
+  return sourceDataType === 'any' || targetDataType === 'any' || sourceDataType === targetDataType;
+}
+
+/**
+ * Enforces the declared portable JSON contract at explicit transfer
+ * boundaries. Durable local drafts remain recoverable even if an older build
+ * wrote an unsupported type; imports and exports fail with the precise field
+ * and case that needs repair instead of deferring the error until execution.
+ */
+export function assertEvaluationDatasetValuesMatchDeclaredTypes(dataset: EvaluationDataset): void {
+  const fieldsById = new Map(dataset.fields.map((field) => [field.id, field]));
+  for (const [fieldIndex, field] of dataset.fields.entries()) {
+    if (!isPortableEvaluationDataType(field.dataType)) {
+      throw new Error(
+        `fields[${fieldIndex}].dataType "${field.dataType}" has no portable evaluation JSON representation.`,
+      );
+    }
+  }
+
+  for (const [caseIndex, testCase] of dataset.cases.entries()) {
+    for (const [fieldId, value] of Object.entries(testCase.values)) {
+      const field = fieldsById.get(fieldId);
+      if (field && !isEvaluationValueCompatibleWithDataType(value, field.dataType)) {
+        throw new Error(
+          `cases[${caseIndex}].values.${fieldId} is not compatible with declared type "${field.dataType}".`,
+        );
+      }
+    }
+  }
 }

@@ -7,13 +7,12 @@ import {
   serializeGraph,
   serializeProject,
 } from '@valerypopoff/rivet2-core';
-import { type EvaluationProjectFileData, type PathBasedIOProvider } from './IOProvider.js';
-import { getDefaultPathPolicyProvider, isInTauri } from '../utils/tauri.js';
 import {
-  createEmptyEvaluationProjectData,
-  deserializeEvaluationProjectData,
-  serializeEvaluationProjectData,
-} from '@valerypopoff/rivet2-evaluations';
+  deserializeLegacyEvaluationProjectData,
+  type EvaluationProjectFileData,
+  type PathBasedIOProvider,
+} from './IOProvider.js';
+import { getDefaultPathPolicyProvider, isInTauri } from '../utils/tauri.js';
 import { saveDatasetsFile, loadDatasetsFile } from './datasets.js';
 import { type AppDatasetProvider, type PathPolicyProvider } from '../providers/ProvidersContext.js';
 import { openDialog, saveDialog } from '../utils/platform/dialog.js';
@@ -54,7 +53,7 @@ export class TauriIOProvider implements PathBasedIOProvider {
     }
   }
 
-  async saveProjectData(project: Project, evaluation: EvaluationProjectFileData) {
+  async saveProjectData(project: Project) {
     const filePath = await saveDialog({
       filters: [
         {
@@ -66,9 +65,7 @@ export class TauriIOProvider implements PathBasedIOProvider {
       defaultPath: `${project.metadata?.title ?? 'project'}.rivet-project`,
     });
 
-    const data = serializeProject(project, {
-      evaluations: serializeEvaluationProjectData(evaluation.evaluationData),
-    }) as string;
+    const data = serializeProject(project) as string;
 
     if (filePath) {
       await nativeWriteFile({
@@ -76,7 +73,7 @@ export class TauriIOProvider implements PathBasedIOProvider {
         path: filePath,
       });
 
-      await saveDatasetsFile(filePath, project, this.#datasetProvider, evaluation.evaluationDatasets, this.#pathPolicy);
+      await saveDatasetsFile(filePath, project, this.#datasetProvider, this.#pathPolicy);
 
       return filePath;
     }
@@ -84,17 +81,15 @@ export class TauriIOProvider implements PathBasedIOProvider {
     return undefined;
   }
 
-  async saveProjectDataNoPrompt(project: Project, evaluation: EvaluationProjectFileData, path: string) {
-    const data = serializeProject(project, {
-      evaluations: serializeEvaluationProjectData(evaluation.evaluationData),
-    }) as string;
+  async saveProjectDataNoPrompt(project: Project, path: string) {
+    const data = serializeProject(project) as string;
 
     await nativeWriteFile({
       contents: data,
       path,
     });
 
-    await saveDatasetsFile(path, project, this.#datasetProvider, evaluation.evaluationDatasets, this.#pathPolicy);
+    await saveDatasetsFile(path, project, this.#datasetProvider, this.#pathPolicy);
   }
 
   async loadGraphData(callback: (graphData: NodeGraph) => void) {
@@ -142,9 +137,7 @@ export class TauriIOProvider implements PathBasedIOProvider {
     const data = await nativeReadTextFile(path);
     const [projectData, attachedData] = deserializeProject(data, path);
 
-    const evaluationData = attachedData.evaluations
-      ? deserializeEvaluationProjectData(attachedData.evaluations)
-      : createEmptyEvaluationProjectData();
+    const evaluationData = deserializeLegacyEvaluationProjectData(attachedData.evaluations);
 
     const evaluationDatasets = await loadDatasetsFile(path, projectData, this.#datasetProvider, this.#pathPolicy);
 

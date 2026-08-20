@@ -42,7 +42,7 @@ See [working with projects](/user-guide/working-with-projects), [working with gr
 
 ### Inspect Complete Runs
 
-The desktop app includes Prompt Designer, Data Studio, Evaluations tests, and a
+The desktop app includes Prompt Designer, Data Studio, the Evaluations workspace, and a
 run-level [Run Activity](/user-guide/features/run-activity) drawer. Run Activity
 keeps the graph canvas available while you follow activity across the root
 graph, subgraphs, LLM calls, delegated tools, and errors.

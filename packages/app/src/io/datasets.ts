@@ -8,7 +8,6 @@ export async function saveDatasetsFile(
   projectFilePath: string,
   project: Project,
   datasetProvider: AppDatasetProvider,
-  evaluationDatasets: readonly EvaluationDataset[] = [],
   pathPolicy?: PathPolicyProvider,
 ) {
   await (pathPolicy?.allowDataFileNeighbor ?? allowDataFileNeighbor)(projectFilePath);
@@ -16,12 +15,14 @@ export async function saveDatasetsFile(
   const dataPath = projectFilePath.replace('.rivet-project', '.rivet-data');
   const datasets = await datasetProvider.exportDatasetsForProject(project.metadata.id);
 
-  if (datasets.length > 0 || evaluationDatasets.length > 0 || (await nativeExists(dataPath))) {
+  if (datasets.length > 0 || (await nativeExists(dataPath))) {
     const serializedDatasets = JSON.parse(serializeDatasets(datasets)) as { datasets: unknown };
-    const normalizedEvaluations = evaluationDatasets.map((dataset) => validateEvaluationDataset(dataset));
 
     await nativeWriteFile({
-      contents: JSON.stringify({ ...serializedDatasets, evaluationDatasets: normalizedEvaluations }),
+      // Evaluation datasets were stored here by older Rivet builds. They are
+      // migrated to the local library on open and intentionally never written
+      // back into a project sidecar.
+      contents: JSON.stringify(serializedDatasets),
       path: dataPath,
     });
   }
@@ -53,7 +54,14 @@ export async function loadDatasetsFile(
     ? (parsed.evaluationDatasets as EvaluationDataset[])
     : [];
   await datasetProvider.importDatasetsForProject?.(project.metadata.id, datasets);
-  return evaluationDatasets
-    .map((dataset) => validateEvaluationDataset(dataset))
-    .filter((dataset) => dataset.projectId === project.metadata.id);
+  return evaluationDatasets.flatMap((dataset) => {
+    try {
+      const validated = validateEvaluationDataset(dataset);
+      return validated.projectId === undefined || validated.projectId === project.metadata.id ? [validated] : [];
+    } catch {
+      // Evaluation datasets are a legacy migration input. Ignore an invalid
+      // entry rather than preventing the unrelated project data from loading.
+      return [];
+    }
+  });
 }

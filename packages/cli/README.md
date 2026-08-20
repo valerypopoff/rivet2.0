@@ -10,10 +10,13 @@ npx @valerypopoff/rivet2-cli list my-project.rivet-project
 npx @valerypopoff/rivet2-cli inspect my-project.rivet-project
 npx @valerypopoff/rivet2-cli doctor my-project.rivet-project
 npx @valerypopoff/rivet2-cli run my-project.rivet-project
+npx @valerypopoff/rivet2-cli evaluations run --project my-project.rivet-project --suite-file evaluation.json
 npx @valerypopoff/rivet2-cli serve my-project.rivet-project --port 8080
 npx @valerypopoff/rivet2-cli serve-app my-project.rivet-project "My web app"
 npx @valerypopoff/rivet2-cli completion
 ```
+
+The Evaluations command consumes a **suite + dataset** bundle exported from Rivet's application-local Evaluations workspace. The project supplies its target and evaluator graphs; the bundle does not contain graph definitions, baselines, run history, or recordings. Use `--benchmark` for measurement without quality checks, `--json` for a complete `EvaluationRun`, or `--junit` for CI.
 
 The CLI package exposes the `rivet` binary when installed globally:
 

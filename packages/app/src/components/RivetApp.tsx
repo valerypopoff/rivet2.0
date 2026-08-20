@@ -200,7 +200,7 @@ export const RivetApp: FC = () => {
   useProjectPlugins();
 
   useEffect(() => {
-    const projectScopedOverlay = openOverlay === 'evaluations' || openOverlay === 'dataStudio';
+    const projectScopedOverlay = openOverlay === 'dataStudio';
     if (projectScopedOverlay && (noProjectOpen || selectedOpeningProjectTabId != null)) {
       setOpenOverlay(undefined);
     }
@@ -312,6 +312,7 @@ export const RivetApp: FC = () => {
         <>
           <ProjectSelector mode="workspace" />
           <NoProject />
+          <EvaluationsRenderer tryRunEvaluation={tryRunEvaluation} abortEvaluation={tryAbortGraph} />
           <PromptDesignerRenderer />
           <NewProjectModalRenderer />
           <AppErrorBoundary context="Settings Modal" fallback={<div>Failed to render Settings</div>}>

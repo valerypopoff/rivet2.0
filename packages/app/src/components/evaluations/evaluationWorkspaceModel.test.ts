@@ -15,17 +15,27 @@ import {
   getUnusedExpectedFields,
   getEvaluationSuiteReferenceStatus,
   getEvaluationRunQualityPresentation,
+  formatEvaluationDurationSeconds,
   getEvaluationAssertionAuthoringIssue,
   getEvaluationEvaluatorAuthoringIssue,
   getEvaluationInputBindingAuthoringIssues,
+  getEvaluationDatasetValueTypeAuthoringIssues,
   getEvaluationExpectedValueAuthoringIssues,
   getEvaluationExecutionConfigurationAuthoringIssues,
   getEvaluationThresholdAuthoringIssue,
   resolveComparableEvaluationRun,
+  mergeEvaluationRunHistory,
+  meanEvaluationTrialScore,
   resolveProjectEvaluationDataset,
   resolvePromptDesignerEvaluationProject,
   resolveSelectedEvaluationSuite,
+  reassignEvaluationSuiteDataset,
+  reassignEvaluationSuiteTarget,
+  removeEvaluationDatasetField,
+  removeEvaluationDatasetFieldReferences,
   suggestEvaluationAssertionOperator,
+  sortEvaluationRunsByScore,
+  sortEvaluationTrialsByScore,
 } from './evaluationWorkspaceModel.js';
 
 const suite = {
@@ -39,6 +49,149 @@ test('suite selection is explicit and never falls back to the first suite', () =
   assert.equal(resolveSelectedEvaluationSuite([suite], undefined), undefined);
   assert.equal(resolveSelectedEvaluationSuite([suite], 'missing'), undefined);
   assert.equal(resolveSelectedEvaluationSuite([suite], suite.id), suite);
+});
+
+test('runs and trials sort by score without mutating their execution order', () => {
+  const weighted = {
+    id: 'weighted',
+    observations: [
+      { score: 0.9, scoreWeight: 2 },
+      { score: 0.4, scoreWeight: 1 },
+    ],
+  } as unknown as EvaluationRun['trials'][number];
+  const low = { id: 'low', observations: [{ score: 0.2 }] } as unknown as EvaluationRun['trials'][number];
+  const missing = { id: 'missing', observations: [] } as unknown as EvaluationRun['trials'][number];
+  const trials = [low, missing, weighted];
+
+  assert.ok(Math.abs((meanEvaluationTrialScore(weighted) ?? 0) - 11 / 15) < Number.EPSILON);
+  assert.deepEqual(
+    sortEvaluationTrialsByScore(trials, 'score-desc').map((trial) => trial.id),
+    ['weighted', 'low', 'missing'],
+  );
+  assert.deepEqual(
+    sortEvaluationTrialsByScore(trials, 'score-asc').map((trial) => trial.id),
+    ['low', 'weighted', 'missing'],
+  );
+  assert.deepEqual(trials.map((trial) => trial.id), ['low', 'missing', 'weighted']);
+
+  const runs = [
+    { id: 'low-run', aggregate: { meanScore: 0.2 } },
+    { id: 'unscored-run', aggregate: {} },
+    { id: 'high-run', aggregate: { meanScore: 0.9 } },
+  ] as unknown as EvaluationRun[];
+  assert.deepEqual(
+    sortEvaluationRunsByScore(runs, 'score-desc').map((run) => run.id),
+    ['high-run', 'low-run', 'unscored-run'],
+  );
+  assert.deepEqual(runs.map((run) => run.id), ['low-run', 'unscored-run', 'high-run']);
+});
+
+test('evaluation durations are consistently presented in seconds', () => {
+  assert.equal(formatEvaluationDurationSeconds(8_546), '8.55 sec');
+  assert.equal(formatEvaluationDurationSeconds(13_799), '13.8 sec');
+  assert.equal(formatEvaluationDurationSeconds(undefined), 'Unavailable');
+  assert.equal(formatEvaluationDurationSeconds(-1), 'Unavailable');
+});
+
+test('resource reassignment clears only evaluator bindings owned by the changed resource', () => {
+  const boundSuite = {
+    ...suite,
+    targetGraphId: 'old-target' as GraphId,
+    datasetId: 'old-dataset',
+    inputBindings: [{ graphInputId: 'story', datasetFieldId: 'story-field' }],
+    assertions: [
+      {
+        id: 'reference-check',
+        name: 'Reference check',
+        outputPath: '$',
+        operator: 'equals',
+        expected: { kind: 'dataset-field', fieldId: 'reference-field' },
+      },
+    ],
+    evaluators: [
+      {
+        id: 'judge',
+        name: 'Judge',
+        graphId: 'judge' as GraphId,
+        inputBindings: [
+          { graphInputId: 'candidate', source: { kind: 'target-output', outputId: 'candidate' } },
+          { graphInputId: 'reference', source: { kind: 'dataset-field', fieldId: 'reference-field' } },
+          { graphInputId: 'metadata', source: { kind: 'context', context: 'case' } },
+        ],
+      },
+    ],
+  } satisfies EvaluationSuite;
+
+  const reassignedDataset = reassignEvaluationSuiteDataset(boundSuite, 'new-dataset');
+  assert.equal(reassignedDataset.datasetId, 'new-dataset');
+  assert.deepEqual(reassignedDataset.inputBindings, []);
+  assert.deepEqual(reassignedDataset.assertions[0]?.expected, { kind: 'literal', value: null });
+  assert.deepEqual(
+    reassignedDataset.evaluators[0]?.inputBindings?.map((binding) => binding.source.kind),
+    ['target-output', 'context'],
+  );
+
+  const reassignedTarget = reassignEvaluationSuiteTarget(boundSuite, 'new-target' as GraphId);
+  assert.equal(reassignedTarget.targetGraphId, 'new-target');
+  assert.deepEqual(reassignedTarget.inputBindings, []);
+  assert.deepEqual(
+    reassignedTarget.evaluators[0]?.inputBindings?.map((binding) => binding.source.kind),
+    ['dataset-field', 'context'],
+  );
+  assert.equal(reassignedTarget.assertions[0]?.outputPath, '');
+  assert.equal(reassignedTarget.assertions[0]?.expected.kind, 'dataset-field');
+});
+
+test('removing a dataset field clears every suite reference while preserving unrelated bindings', () => {
+  const dataset = {
+    id: 'dataset',
+    projectId: 'project' as ProjectId,
+    name: 'Dataset',
+    fields: [
+      { id: 'story', name: 'Story', role: 'input', dataType: 'string' },
+      { id: 'reference', name: 'Reference', role: 'expected', dataType: 'object' },
+    ],
+    cases: [{ id: 'case', name: 'Case', values: { story: 'Story', reference: { terms: [] } } }],
+  } satisfies EvaluationDataset;
+  const suiteWithReferences = {
+    ...suite,
+    datasetId: dataset.id,
+    inputBindings: [{ graphInputId: 'storyInput', datasetFieldId: 'story' }],
+    assertions: [
+      {
+        id: 'reference-check',
+        name: 'Reference check',
+        outputPath: '$',
+        operator: 'equals',
+        expected: { kind: 'dataset-field', fieldId: 'reference' },
+      },
+    ],
+    evaluators: [
+      {
+        id: 'judge',
+        name: 'Judge',
+        graphId: 'judge' as GraphId,
+        inputBindings: [
+          { graphInputId: 'reference', source: { kind: 'dataset-field', fieldId: 'reference' } },
+          { graphInputId: 'case', source: { kind: 'context', context: 'case' } },
+        ],
+      },
+    ],
+  } satisfies EvaluationSuite;
+
+  const withoutReference = removeEvaluationDatasetField(dataset, 'reference');
+  assert.deepEqual(
+    withoutReference.fields.map((field) => field.id),
+    ['story'],
+  );
+  assert.deepEqual(withoutReference.cases[0]?.values, { story: 'Story' });
+
+  const repairedSuite = removeEvaluationDatasetFieldReferences(suiteWithReferences, 'reference');
+  assert.deepEqual(repairedSuite.inputBindings, suiteWithReferences.inputBindings);
+  assert.deepEqual(repairedSuite.assertions[0]?.expected, { kind: 'literal', value: null });
+  assert.deepEqual(repairedSuite.evaluators[0]?.inputBindings, [
+    { graphInputId: 'case', source: { kind: 'context', context: 'case' } },
+  ]);
 });
 
 test('suite references report missing graphs and datasets independently', () => {
@@ -70,6 +223,19 @@ test('a same-ID evaluation dataset from another project is unavailable', () => {
   assert.equal(resolveProjectEvaluationDataset([foreignDataset], projectId, suite.datasetId), undefined);
   assert.deepEqual(getEvaluationSuiteReferenceStatus(suite, project, [foreignDataset]), {
     datasetExists: false,
+    targetGraphExists: true,
+    evaluatorGraphsExist: true,
+  });
+});
+
+test('a local evaluation dataset is available to the currently open project', () => {
+  const projectId = 'project-a' as ProjectId;
+  const localDataset = { id: suite.datasetId } as EvaluationDataset;
+  const project = { metadata: { id: projectId }, graphs: { [suite.targetGraphId]: {} } } as unknown as Project;
+
+  assert.equal(resolveProjectEvaluationDataset([localDataset], projectId, suite.datasetId), localDataset);
+  assert.deepEqual(getEvaluationSuiteReferenceStatus(suite, project, [localDataset]), {
+    datasetExists: true,
     targetGraphExists: true,
     evaluatorGraphsExist: true,
   });
@@ -129,6 +295,39 @@ test('compare ignores failed history when choosing its initial run', () => {
   );
 });
 
+test('run history keeps the terminal in-memory run when a delayed store read is stale', () => {
+  const stalePersistedRun = {
+    id: 'run-1',
+    suiteId: suite.id,
+    revision: 4,
+    executionStatus: 'running',
+  } as EvaluationRun;
+  const completedRun = {
+    ...stalePersistedRun,
+    revision: 5,
+    executionStatus: 'completed',
+    aggregate: {},
+  } as EvaluationRun;
+
+  assert.deepEqual(mergeEvaluationRunHistory([stalePersistedRun], completedRun), [completedRun]);
+});
+
+test('run history favors a terminal snapshot when revisions are equal', () => {
+  const stalePersistedRun = {
+    id: 'run-1',
+    suiteId: suite.id,
+    revision: 5,
+    executionStatus: 'running',
+  } as EvaluationRun;
+  const completedRun = {
+    ...stalePersistedRun,
+    executionStatus: 'completed',
+    aggregate: {},
+  } as EvaluationRun;
+
+  assert.deepEqual(mergeEvaluationRunHistory([stalePersistedRun], completedRun), [completedRun]);
+});
+
 test('quality presentation remains passed when provider accounting is partial', () => {
   const run = {
     qualityStatus: 'passed',
@@ -154,6 +353,20 @@ test('quality presentation preserves the engine reason for a failed run', () => 
   assert.deepEqual(getEvaluationRunQualityPresentation(run), {
     label: 'Failed',
     explanation: 'P95 latency exceeded 1,000 ms.',
+  });
+});
+
+test('quality presentation labels complete scoring runs without calling them passed', () => {
+  const run = {
+    qualityStatus: 'scored',
+    qualityReason: { code: 'scores-complete', message: 'Every requested trial produced a score.' },
+    accountingStatus: 'complete',
+    executionStatus: 'completed',
+  } as unknown as EvaluationRun;
+
+  assert.deepEqual(getEvaluationRunQualityPresentation(run), {
+    label: 'Scored',
+    explanation: 'Every requested trial produced a score.',
   });
 });
 
@@ -201,7 +414,10 @@ test('unused expected fields stay visible until an explicit assertion consumes t
 });
 
 test('quality-check authoring catches incompatible outputs and expected values before execution', () => {
-  const outputs = [{ id: 'answer', dataType: 'string', outputPath: '$["answer"]' }] as const;
+  const outputs = [
+    { id: 'answer', dataType: 'string', outputPath: '$["answer"]' },
+    { id: 'score', dataType: 'number', outputPath: '$["score"]' },
+  ] as const;
   const fields = [
     { id: 'keywords', name: 'keywords', role: 'expected', dataType: 'string[]' },
     { id: 'minimum', name: 'minimum', role: 'expected', dataType: 'number' },
@@ -254,7 +470,7 @@ test('quality-check authoring catches incompatible outputs and expected values b
       {
         id: 'range',
         name: 'Bad range',
-        outputPath: '$.nested.score',
+        outputPath: '$["score"]',
         operator: 'number-between',
         expected: { kind: 'literal', value: [10, 5] },
       },
@@ -302,13 +518,19 @@ test('quality-check authoring uses the runtime JSON-path grammar before executio
     expected: { kind: 'literal', value: 'expected' },
   } as const;
 
-  for (const outputPath of ['$', '  $["answer"]  ', '$.result.score', '$["quoted-key"][0]', "$['quoted-key']"]) {
+  for (const outputPath of ['$', '  $["answer"]  ', '$.answer']) {
     assert.equal(getEvaluationAssertionAuthoringIssue({ ...assertion, outputPath }, outputs, []), undefined);
   }
   for (const outputPath of ['answer', '$.answer!', '$[answer]', '$.items[-1]']) {
     assert.equal(
       getEvaluationAssertionAuthoringIssue({ ...assertion, outputPath }, outputs, [])?.code,
       'invalid-output-path',
+    );
+  }
+  for (const outputPath of ['$.result.score', '$["quoted-key"][0]', "$['quoted-key']"]) {
+    assert.equal(
+      getEvaluationAssertionAuthoringIssue({ ...assertion, outputPath }, outputs, [])?.code,
+      'missing-output',
     );
   }
 });
@@ -321,7 +543,7 @@ test('input-binding authoring catches missing bindings and case values before ex
   } as GraphInputNode;
   const dataset = {
     id: 'dataset',
-    projectId: 'project',
+    projectId: 'project' as ProjectId,
     name: 'Dataset',
     fields: [{ id: 'topic-field', name: 'topic', role: 'input', dataType: 'string' }],
     cases: [{ id: 'case', name: 'Case 1', enabled: true, values: {} }],
@@ -347,7 +569,7 @@ test('input-binding authoring catches missing bindings and case values before ex
 test('expected-value authoring catches absent and operator-incompatible case values', () => {
   const dataset = {
     id: 'dataset',
-    projectId: 'project',
+    projectId: 'project' as ProjectId,
     name: 'Dataset',
     fields: [{ id: 'keywords', name: 'keywords', role: 'expected', dataType: 'string[]' }],
     cases: [{ id: 'case', name: 'Case 1', enabled: true, values: {} }],
@@ -387,9 +609,39 @@ test('expected-value authoring catches absent and operator-incompatible case val
     }),
     [],
   );
+
+  const scoringSuite = { ...suiteWithCheck, evaluationMode: 'scoring' as const };
+  assert.deepEqual(getEvaluationExpectedValueAuthoringIssues(scoringSuite, dataset), []);
+  assert.match(
+    getEvaluationExpectedValueAuthoringIssues(scoringSuite, {
+      ...dataset,
+      fields: [{ ...dataset.fields[0]!, required: true }],
+    })[0]!,
+    /no required value/,
+  );
 });
 
-test('evaluator authoring requires one object-shaped reserved input and result output', () => {
+test('dataset value type authoring checks every enabled supplied cell independently of quality mode', () => {
+  const dataset = {
+    id: 'dataset',
+    projectId: 'project' as ProjectId,
+    name: 'Dataset',
+    fields: [
+      { id: 'input', name: 'input', role: 'input', dataType: 'string' },
+      { id: 'metadata', name: 'retries', role: 'metadata', dataType: 'number' },
+    ],
+    cases: [
+      { id: 'enabled', name: 'Enabled case', enabled: true, values: { input: 'hello', metadata: 'three' } },
+      { id: 'disabled', name: 'Disabled case', enabled: false, values: { metadata: 'also invalid' } },
+    ],
+  } as EvaluationDataset;
+
+  assert.deepEqual(getEvaluationDatasetValueTypeAuthoringIssues(dataset), [
+    'Case “Enabled case” value for “retries” is not compatible with its declared number type.',
+  ]);
+});
+
+test('evaluator authoring preserves the legacy object-shaped reserved input contract', () => {
   const evaluator = {
     id: 'evaluator',
     name: 'Judge',
@@ -426,14 +678,75 @@ test('evaluator authoring requires one object-shaped reserved input and result o
         resultOutput,
       ]),
     )!,
-    /input “outputs” must use the object or any data type/,
+    /Legacy evaluator input “outputs” must use the object or any data type/,
   );
   assert.match(
     getEvaluationEvaluatorAuthoringIssue(
       evaluator,
       projectWithNodes([...reservedInputs, { ...reservedInputs[0], id: 'duplicate-case' }, resultOutput]),
     )!,
-    /Graph Input “case” more than once/,
+    /duplicate Graph Input ids/,
+  );
+});
+
+test('evaluator authoring validates direct target-output and dataset-field mappings', () => {
+  const projectId = 'project' as ProjectId;
+  const directSuite = {
+    id: 'suite',
+    name: 'Suite',
+    targetGraphId: 'target' as GraphId,
+    datasetId: 'dataset',
+    inputBindings: [],
+    assertions: [],
+    evaluators: [],
+  } as EvaluationSuite;
+  const directDataset = {
+    id: 'dataset',
+    projectId,
+    name: 'Dataset',
+    fields: [{ id: 'reference-field', name: 'Reference', role: 'expected', dataType: 'object' }],
+    cases: [{ id: 'case', name: 'Case', values: { 'reference-field': { terms: [] } } }],
+  } as EvaluationDataset;
+  const directEvaluator = {
+    id: 'judge',
+    name: 'Judge',
+    graphId: 'judge',
+    inputBindings: [
+      { graphInputId: 'candidate', source: { kind: 'target-output', outputId: 'candidate-output' } },
+      { graphInputId: 'reference', source: { kind: 'dataset-field', fieldId: 'reference-field' } },
+    ],
+  } as EvaluationSuite['evaluators'][number];
+  const project = {
+    metadata: { id: projectId },
+    graphs: {
+      target: {
+        nodes: [
+          {
+            id: 'candidate-output-node',
+            type: 'graphOutput',
+            data: { id: 'candidate-output', dataType: 'object' },
+          },
+        ],
+      },
+      judge: {
+        nodes: [
+          { id: 'candidate-input', type: 'graphInput', data: { id: 'candidate', dataType: 'object' } },
+          { id: 'reference-input', type: 'graphInput', data: { id: 'reference', dataType: 'object' } },
+          { id: 'result-output', type: 'graphOutput', data: { id: 'result', dataType: 'object' } },
+        ],
+      },
+    },
+  } as unknown as Project;
+
+  assert.equal(getEvaluationEvaluatorAuthoringIssue(directEvaluator, project, directSuite, directDataset), undefined);
+  assert.match(
+    getEvaluationEvaluatorAuthoringIssue(
+      { ...directEvaluator, inputBindings: directEvaluator.inputBindings?.slice(0, 1) },
+      project,
+      directSuite,
+      directDataset,
+    )!,
+    /Choose a source for evaluator input “reference”/,
   );
 });
 
@@ -490,6 +803,13 @@ test('threshold authoring rejects unsupported and context-free quality metrics',
   );
   assert.equal(
     getEvaluationThresholdAuthoringIssue(
+      { id: 'out-of-range-rate', metric: 'pass-rate', operator: 'at-least', value: 1.01 },
+      base,
+    ),
+    'Rate and score thresholds must be between 0% and 100%.',
+  );
+  assert.equal(
+    getEvaluationThresholdAuthoringIssue(
       { id: 'latency', metric: 'p95-latency-ms', operator: 'at-most', value: 2_000 },
       base,
     ),
@@ -520,6 +840,14 @@ test('only required checks, required evaluators, or thresholds enable a quality 
     hasAuthoritativeEvaluationCriteria({
       ...base,
       thresholds: [{ id: 'latency', metric: 'p95-latency-ms', operator: 'at-most', value: 1000 }],
+    }),
+    true,
+  );
+  assert.equal(
+    hasAuthoritativeEvaluationCriteria({
+      ...base,
+      evaluationMode: 'scoring',
+      evaluators: [{ id: 'judge', name: 'Informational in pass/fail', graphId: base.targetGraphId, required: false }],
     }),
     true,
   );

@@ -6,6 +6,7 @@ import type {
   EvaluationQualityStatus,
   EvaluationRun,
   EvaluationRunPurpose,
+  EvaluationSuiteMode,
   EvaluationTrial,
   EvaluationTrialExecutionStatus,
 } from './types.js';
@@ -15,7 +16,15 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function isQualityStatus(value: unknown): value is EvaluationQualityStatus {
-  return ['passed', 'failed', 'not-evaluated', 'unable-to-evaluate'].includes(String(value));
+  return ['passed', 'failed', 'scored', 'not-evaluated', 'unable-to-evaluate'].includes(String(value));
+}
+
+function isEvaluationMode(value: unknown): value is EvaluationSuiteMode {
+  return value === 'pass-fail' || value === 'scoring';
+}
+
+function isQualityStatusForMode(status: EvaluationQualityStatus, evaluationMode: EvaluationSuiteMode): boolean {
+  return evaluationMode === 'scoring' ? status !== 'passed' && status !== 'failed' : status !== 'scored';
 }
 
 function isExecutionStatus(value: unknown): value is EvaluationTrialExecutionStatus {
@@ -26,12 +35,37 @@ function isRunExecutionStatus(value: unknown): value is EvaluationRun['execution
   return ['queued', 'running', 'completed', 'canceled', 'error'].includes(String(value));
 }
 
+function isTerminalRunExecutionStatus(status: EvaluationRun['executionStatus']): boolean {
+  return status === 'completed' || status === 'canceled' || status === 'error';
+}
+
+/**
+ * Orders snapshots for one run without allowing an equal-revision progress
+ * update to demote a terminal result. Writers and delayed UI reads share this
+ * rule so persistence cannot disagree with what the workspace presents.
+ */
+export function shouldReplaceEvaluationRun(
+  existing: Pick<EvaluationRun, 'executionStatus' | 'revision'> | undefined,
+  incoming: Pick<EvaluationRun, 'executionStatus' | 'revision'>,
+): boolean {
+  if (!existing) return true;
+  const existingRevision = existing.revision ?? 0;
+  const incomingRevision = incoming.revision ?? 0;
+  if (incomingRevision !== existingRevision) return incomingRevision > existingRevision;
+  return !isTerminalRunExecutionStatus(existing.executionStatus) || isTerminalRunExecutionStatus(incoming.executionStatus);
+}
+
 function isPurpose(value: unknown): value is EvaluationRunPurpose {
   return value === 'evaluation' || value === 'execution-benchmark';
 }
 
 function isAccountingStatus(value: unknown): value is EvaluationAccountingStatus {
   return value === 'complete' || value === 'partial';
+}
+
+/** Run records keep scores normalized even though evaluator graphs use 0..100. */
+function isNormalizedScore(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= 1;
 }
 
 function reasonForQualityStatus(
@@ -47,11 +81,24 @@ function reasonForQualityStatus(
       return { code: 'checks-passed', message: 'All required quality criteria passed.' };
     case 'failed':
       return { code: 'checks-failed', message: 'One or more required quality criteria failed.' };
+    case 'scored':
+      return { code: 'scores-complete', message: 'Every requested trial produced a score.' };
     case 'not-evaluated':
       return { code: 'no-trial-quality-checks', message: 'No per-trial quality check evaluated this result.' };
     case 'unable-to-evaluate':
       return { code: 'required-check-error', message: 'A required quality criterion could not be evaluated.' };
   }
+}
+
+function reasonForQualityStatusInMode(
+  status: EvaluationQualityStatus,
+  evaluationMode: EvaluationSuiteMode,
+  executionStatus?: EvaluationTrialExecutionStatus,
+): EvaluationQualityReason {
+  if (evaluationMode === 'scoring' && status === 'unable-to-evaluate') {
+    return { code: 'scores-incomplete', message: 'One or more requested trials did not produce a usable score.' };
+  }
+  return reasonForQualityStatus(status, executionStatus);
 }
 
 function isTargetExecutionError(value: Record<string, unknown>, observations: readonly unknown[]): boolean {
@@ -79,6 +126,29 @@ function legacyQualityFromObservations(
   return 'not-evaluated';
 }
 
+/**
+ * Scoring runs are new enough that they do not need to preserve a legacy
+ * pass/fail quality label. Do still recover a useful status when a partial or
+ * hand-edited scoring record lacks its derived status, but never let an old
+ * `passed`/`failed` value leak into the scoring UI.
+ */
+function scoringQualityFromObservations(observations: readonly unknown[]): EvaluationQualityStatus {
+  const evaluatorObservations = observations.filter(
+    (observation): observation is Record<string, unknown> => isRecord(observation) && observation.kind === 'graph',
+  );
+  const hasCompleteScore =
+    evaluatorObservations.length > 0 &&
+    evaluatorObservations.every(
+      (observation) =>
+        observation.status === 'scored' &&
+        typeof observation.score === 'number' &&
+        Number.isFinite(observation.score) &&
+        observation.score >= 0 &&
+        observation.score <= 1,
+    );
+  return hasCompleteScore ? 'scored' : 'unable-to-evaluate';
+}
+
 function isQualityReasonCompatible(
   reason: EvaluationQualityReason,
   status: EvaluationQualityStatus,
@@ -95,10 +165,16 @@ function isQualityReasonCompatible(
       return reason.code === 'checks-passed' || reason.code === 'thresholds-passed';
     case 'failed':
       return reason.code === 'checks-failed' || reason.code === 'thresholds-failed' || reason.code === 'target-error';
+    case 'scored':
+      return reason.code === 'scores-complete';
     case 'not-evaluated':
       return reason.code === 'no-trial-quality-checks' || reason.code === 'no-completed-trials';
     case 'unable-to-evaluate':
-      return reason.code === 'required-check-error' || reason.code === 'required-metric-unavailable';
+      return (
+        reason.code === 'required-check-error' ||
+        reason.code === 'required-metric-unavailable' ||
+        reason.code === 'scores-incomplete'
+      );
   }
 }
 
@@ -117,6 +193,7 @@ function normalizeQualityReason(
 export function normalizeEvaluationTrial(
   value: EvaluationTrial | unknown,
   purpose: EvaluationRunPurpose = 'evaluation',
+  evaluationMode: EvaluationSuiteMode = 'pass-fail',
 ): EvaluationTrial {
   if (!isRecord(value)) throw new Error('Evaluation trial must be an object.');
   const legacyStatus = value.status;
@@ -139,10 +216,14 @@ export function normalizeEvaluationTrial(
     purpose === 'execution-benchmark' || executionStatus === 'canceled'
       ? 'not-evaluated'
       : executionStatus === 'error'
-        ? 'failed'
-        : isQualityStatus(value.qualityStatus)
-          ? value.qualityStatus
-          : legacyQualityFromObservations(observations, targetExecutionError);
+        ? evaluationMode === 'scoring'
+          ? 'unable-to-evaluate'
+          : 'failed'
+        : evaluationMode === 'scoring'
+          ? scoringQualityFromObservations(observations)
+          : isQualityStatus(value.qualityStatus) && isQualityStatusForMode(value.qualityStatus, evaluationMode)
+            ? value.qualityStatus
+            : legacyQualityFromObservations(observations, targetExecutionError);
   const normalized = structuredClone(value) as Record<string, unknown>;
   // Legacy runs stored a single status that conflated execution and quality.
   // Read it above, then remove it so normalized v2 values cannot contradict
@@ -158,7 +239,7 @@ export function normalizeEvaluationTrial(
         ? { code: 'canceled', message: 'The execution was canceled.' }
         : purpose === 'execution-benchmark'
           ? { code: 'benchmark', message: 'This run measured execution without evaluating output quality.' }
-          : reasonForQualityStatus(qualityStatus, executionStatus),
+          : reasonForQualityStatusInMode(qualityStatus, evaluationMode, executionStatus),
       qualityStatus,
       purpose,
       executionStatus,
@@ -172,6 +253,9 @@ export function normalizeEvaluationAggregate(
 ): EvaluationAggregate {
   if (!isRecord(value)) throw new Error('Evaluation aggregate must be an object.');
   const normalized = structuredClone(value) as unknown as EvaluationAggregate;
+  // Never let a graph-facing 0..100 value (or corrupt local data) masquerade
+  // as the persisted normalized score and render as an impossible 9900/100.
+  if (!isNormalizedScore(normalized.meanScore)) delete normalized.meanScore;
   if (trials) {
     const completed = trials.filter((trial) => trial.executionStatus === 'completed');
     const evaluated = completed.filter((trial) => trial.qualityStatus === 'passed' || trial.qualityStatus === 'failed');
@@ -179,6 +263,7 @@ export function normalizeEvaluationAggregate(
     const failed = evaluated.filter((trial) => trial.qualityStatus === 'failed');
     const notEvaluated = completed.filter((trial) => trial.qualityStatus === 'not-evaluated');
     const unable = completed.filter((trial) => trial.qualityStatus === 'unable-to-evaluate');
+    const scored = completed.filter((trial) => trial.qualityStatus === 'scored');
     return {
       ...normalized,
       trialCount: trials.length,
@@ -189,6 +274,9 @@ export function normalizeEvaluationAggregate(
       failedTrialCount: failed.length,
       erroredTrialCount: trials.filter((trial) => trial.executionStatus === 'error').length,
       canceledTrialCount: trials.filter((trial) => trial.executionStatus === 'canceled').length,
+      ...(scored.length > 0 || normalized.scoredTrialCount !== undefined
+        ? { scoredTrialCount: scored.length, missingScoreTrialCount: trials.length - scored.length }
+        : {}),
       passRate: evaluated.length === 0 ? 0 : passed.length / evaluated.length,
     };
   }
@@ -229,23 +317,34 @@ export function normalizeEvaluationBaselineSnapshot(
       : 'complete';
   const aggregate = normalizeEvaluationAggregate(value.aggregate);
   const purpose = isPurpose(value.purpose) ? value.purpose : 'evaluation';
+  const evaluationMode = isEvaluationMode(value.evaluationMode) ? value.evaluationMode : 'pass-fail';
+  const hasCompleteScoringAggregate =
+    aggregate.trialCount > 0 &&
+    aggregate.scoredTrialCount === aggregate.trialCount &&
+    aggregate.missingScoreTrialCount === 0 &&
+    aggregate.meanScore !== undefined;
   const qualityStatus: EvaluationQualityStatus =
     purpose === 'execution-benchmark'
       ? 'not-evaluated'
-      : isQualityStatus(value.qualityStatus)
-        ? value.qualityStatus
-        : aggregate.failedTrialCount > 0 || aggregate.erroredTrialCount > 0
-          ? 'failed'
-          : aggregate.evaluatedTrialCount > 0
-            ? 'passed'
-            : 'not-evaluated';
+      : evaluationMode === 'scoring'
+        ? hasCompleteScoringAggregate
+          ? 'scored'
+          : 'unable-to-evaluate'
+        : isQualityStatus(value.qualityStatus) && isQualityStatusForMode(value.qualityStatus, evaluationMode)
+          ? value.qualityStatus
+          : aggregate.failedTrialCount > 0 || aggregate.erroredTrialCount > 0
+            ? 'failed'
+            : aggregate.evaluatedTrialCount > 0
+              ? 'passed'
+              : 'not-evaluated';
   const qualityReasonFallback =
     purpose === 'execution-benchmark'
       ? { code: 'benchmark' as const, message: 'This run measured execution without evaluating output quality.' }
-      : reasonForQualityStatus(qualityStatus);
+      : reasonForQualityStatusInMode(qualityStatus, evaluationMode);
   return {
     ...(structuredClone(value) as unknown as EvaluationBaselineSnapshot),
     purpose,
+    evaluationMode,
     qualityStatus,
     qualityReason: normalizeQualityReason(value.qualityReason, qualityReasonFallback, qualityStatus, purpose),
     accountingStatus,
@@ -256,13 +355,14 @@ export function normalizeEvaluationBaselineSnapshot(
 export function normalizeEvaluationRun(value: EvaluationRun | unknown): EvaluationRun {
   if (!isRecord(value)) throw new Error('Evaluation run must be an object.');
   const purpose = isPurpose(value.purpose) ? value.purpose : 'evaluation';
+  const evaluationMode = isEvaluationMode(value.evaluationMode) ? value.evaluationMode : 'pass-fail';
   const executionStatus = isRunExecutionStatus(value.executionStatus)
     ? value.executionStatus
     : typeof value.completedAt === 'string'
       ? 'completed'
       : 'running';
   const trials = Array.isArray(value.trials)
-    ? value.trials.map((trial) => normalizeEvaluationTrial(trial, purpose))
+    ? value.trials.map((trial) => normalizeEvaluationTrial(trial, purpose, evaluationMode))
     : [];
   const accountingStatus = isAccountingStatus(value.accountingStatus)
     ? value.accountingStatus
@@ -273,8 +373,13 @@ export function normalizeEvaluationRun(value: EvaluationRun | unknown): Evaluati
   if (purpose === 'execution-benchmark' || executionStatus === 'canceled') {
     qualityStatus = 'not-evaluated';
   } else if (executionStatus === 'error') {
-    qualityStatus = 'failed';
-  } else if (isQualityStatus(value.qualityStatus)) {
+    qualityStatus = evaluationMode === 'scoring' ? 'unable-to-evaluate' : 'failed';
+  } else if (executionStatus === 'queued' || executionStatus === 'running') {
+    qualityStatus = 'not-evaluated';
+  } else if (evaluationMode === 'scoring') {
+    const scored = trials.filter((trial) => trial.qualityStatus === 'scored').length;
+    qualityStatus = scored > 0 && scored === trials.length ? 'scored' : 'unable-to-evaluate';
+  } else if (isQualityStatus(value.qualityStatus) && isQualityStatusForMode(value.qualityStatus, evaluationMode)) {
     qualityStatus = value.qualityStatus;
   } else if (trials.some((trial) => trial.executionStatus === 'error' || trial.qualityStatus === 'failed')) {
     qualityStatus = 'failed';
@@ -303,7 +408,7 @@ export function normalizeEvaluationRun(value: EvaluationRun | unknown): Evaluati
           : (executionStatus === 'error' || trials.some((trial) => trial.executionStatus === 'error')) &&
               qualityStatus === 'failed'
             ? { code: 'target-error' as const, message: 'One or more target graph executions failed.' }
-            : reasonForQualityStatus(qualityStatus);
+            : reasonForQualityStatusInMode(qualityStatus, evaluationMode);
   const provenance = isRecord(value.provenance)
     ? {
         ...structuredClone(value.provenance),
@@ -319,6 +424,7 @@ export function normalizeEvaluationRun(value: EvaluationRun | unknown): Evaluati
     ...(normalized as unknown as EvaluationRun),
     version: 2,
     purpose,
+    evaluationMode,
     executionStatus,
     qualityStatus,
     qualityReason: normalizeQualityReason(

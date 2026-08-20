@@ -829,34 +829,31 @@ The CLI Docker image entrypoint runs the globally installed `rivet` binary as `r
 
 ### Role
 
-Graph-oriented testing package.
+Portable, executor-agnostic evaluation engine shared by the app, CLI, and host integrations.
 
 ### Package metadata
 
-- Version: `2.1.9`
+- Version: `2.2.0`
 - Main: `dist/cjs/bundle.cjs`
 - Module: `dist/esm/index.js`
 - Types: `dist/types/index.d.ts`
 
 ### What it contains
 
-- test-suite/test-case/result types
-- Evaluations serialization
-- `runEvaluationSuite(...)`
-- `createTestGraphRunner(...)`
-- validation helpers
+- suite, typed-dataset, case, evaluator, assertion, threshold, run, baseline, recording, and store contracts
+- `runEvaluationSuite(...)`, `runEvaluationCases(...)`, and bounded scheduling helpers
+- strict portable-JSON, binding, assertion, evaluator-result, threshold, and run normalization
+- canonical execution provenance and compact baseline snapshots
+- versioned dataset JSON and suite-plus-dataset bundle transfer
+- executor-agnostic `EvaluationGraphRunner` and persistence-agnostic `EvaluationRunStore` interfaces
 
 ### Runtime model
 
-Evaluations runs:
+The runner maps an evaluation dataset into a target graph, executes every enabled case for the configured trials, and then either applies pass/fail checks or combines evaluator-graph scores. Evaluators use explicit Graph Input bindings from target outputs, dataset fields, or evaluation-context objects; the five-input legacy context envelope remains a compatibility fallback. The graph-facing scoring contract is 0–100, while stored aggregates remain normalized internally.
 
-1. a test graph with case inputs
-2. a validation graph against input/expected/output objects
-3. boolean/truthy validation outputs to determine pass/fail
+Execution, quality, and accounting are independent result dimensions. A benchmark runs only the target and deliberately reports quality as not evaluated. Hosts supply the actual graph runtime, recording storage, and run-history store; the package owns validation, bounded scheduling, cancellation, stable ordering, aggregation, provenance, and portable result contracts.
 
-The app integrates this package directly for test UI and persistence.
-
-`createTestGraphRunner(...)` also resolves runtime settings through core's shared `resolveProcessSettings(...)` helper, so Evaluations inherits the same minimal runtime defaults as app and Node execution rather than carrying a separate settings shape.
+The Rivet app keeps reusable suites, datasets, and compact baselines in its application-local evaluation library. That storage is app state, not package-global state and not project attachment data. The CLI therefore consumes an exported suite-plus-dataset bundle with `rivet evaluations run --project <file> --suite-file <bundle>`.
 
 ## `packages/docs/`
 

@@ -2,18 +2,51 @@ import {
   assertEvaluationDatasetSnapshot,
   fingerprintEvaluationDataset,
   normalizeEvaluationRun,
+  shouldReplaceEvaluationRun,
   type EvaluationDatasetSnapshot,
   type EvaluationRecordingArtifact,
   type EvaluationRun,
   type EvaluationRunStore,
 } from '@valerypopoff/rivet2-evaluations';
 import type { ProjectId } from '@valerypopoff/rivet2-core';
+import { openDB, type DBSchema, type IDBPDatabase } from 'idb';
+import { createRecoverableIndexedDbConnection, preserveIndexedDbRequestTiming } from '../utils/indexedDb.js';
 
 const PREFIX = 'rivet-evaluation-runs:';
 const RECORDING_PREFIX = 'rivet-evaluation-recordings:';
 const DATASET_SNAPSHOT_PREFIX = 'rivet-evaluation-dataset-snapshots:';
+const DATABASE_NAME = 'rivet_evaluation_history';
+const DATABASE_STORE = 'values';
 const MAX_RUNS_PER_PROJECT = 100;
 const MAX_RECORDING_BYTES_PER_PROJECT = 20 * 1024 * 1024;
+
+interface EvaluationRunDatabase extends DBSchema {
+  values: {
+    key: string;
+    value: string;
+  };
+}
+
+function openEvaluationRunDatabase(onUnavailable: () => void): Promise<IDBPDatabase<EvaluationRunDatabase>> {
+  let database: IDBPDatabase<EvaluationRunDatabase> | undefined;
+  return openDB<EvaluationRunDatabase>(DATABASE_NAME, 1, {
+    upgrade(upgradeDatabase) {
+      if (!upgradeDatabase.objectStoreNames.contains(DATABASE_STORE)) {
+        upgradeDatabase.createObjectStore(DATABASE_STORE);
+      }
+    },
+    blocking() {
+      database?.close();
+      onUnavailable();
+    },
+    terminated() {
+      onUnavailable();
+    },
+  }).then((openedDatabase) => {
+    database = openedDatabase;
+    return openedDatabase;
+  });
+}
 
 function utf8ByteLength(value: string): number {
   return new TextEncoder().encode(value).byteLength;
@@ -26,24 +59,24 @@ function utf8ByteLength(value: string): number {
  */
 export class LocalEvaluationRunStore implements EvaluationRunStore {
   readonly #pendingWrites = new Map<ProjectId, Promise<void>>();
+  readonly #getDatabase = createRecoverableIndexedDbConnection(openEvaluationRunDatabase);
+  readonly #migratedLegacyKeys = new Set<string>();
+  #storageBackend: 'unknown' | 'indexeddb' | 'legacy' = 'unknown';
 
   async put(run: EvaluationRun): Promise<void> {
-    await this.queueRunWrite(run.projectId, () => {
-      const storedRecordings = this.readRecordings(run.projectId);
+    const normalized = normalizeEvaluationRun(run);
+    await this.queueRunWrite(normalized.projectId, async () => {
+      const storedRecordings = await this.readRecordings(normalized.projectId);
       const recordings = storedRecordings.filter((artifact) => !this.isExpired(artifact, Date.now()));
       const protectedRunIds = new Set(
         recordings.filter((artifact) => artifact.reference.retention !== 'temporary').map((artifact) => artifact.runId),
       );
-      const prunedRunIds = this.putSerialized(run, protectedRunIds);
+      const prunedRunIds = await this.putSerialized(normalized, protectedRunIds);
       if (prunedRunIds.length > 0 || recordings.length !== storedRecordings.length) {
-        if (
-          !this.writeRecordings(
-            run.projectId,
-            recordings.filter((artifact) => !prunedRunIds.includes(artifact.runId)),
-          )
-        ) {
-          throw new Error('The browser could not retain evaluation recordings.');
-        }
+        await this.writeRecordings(
+          normalized.projectId,
+          recordings.filter((artifact) => !prunedRunIds.includes(artifact.runId)),
+        );
       }
     });
   }
@@ -53,46 +86,36 @@ export class LocalEvaluationRunStore implements EvaluationRunStore {
   }
 
   async list(input: { projectId: ProjectId; suiteId?: string }): Promise<readonly EvaluationRun[]> {
-    await this.queueRunWrite(input.projectId, () => {
-      const storedRecordings = this.readRecordings(input.projectId);
+    await this.queueRunWrite(input.projectId, async () => {
+      const storedRecordings = await this.readRecordings(input.projectId);
       const activeRecordings = storedRecordings.filter((artifact) => !this.isExpired(artifact, Date.now()));
-      if (activeRecordings.length !== storedRecordings.length) this.writeRecordings(input.projectId, activeRecordings);
+      if (activeRecordings.length !== storedRecordings.length) await this.writeRecordings(input.projectId, activeRecordings);
     });
-    return this.readRuns(input.projectId)
+    return (await this.readRuns(input.projectId))
       .filter((candidate) => input.suiteId == null || candidate.suiteId === input.suiteId)
       .map((candidate) => structuredClone(candidate));
   }
 
   async delete(input: { projectId: ProjectId; runId: string }): Promise<void> {
-    await this.queueRunWrite(input.projectId, () => {
-      if (
-        !this.write(
-          input.projectId,
-          this.readRuns(input.projectId).filter((candidate) => candidate.id !== input.runId),
-        )
-      ) {
-        throw new Error('The browser could not update evaluation run history.');
-      }
-      if (
-        !this.writeRecordings(
-          input.projectId,
-          this.readRecordings(input.projectId).filter((artifact) => artifact.runId !== input.runId),
-        )
-      ) {
-        throw new Error('The browser could not update evaluation recordings.');
-      }
+    await this.queueRunWrite(input.projectId, async () => {
+      await this.write(
+        input.projectId,
+        (await this.readRuns(input.projectId)).filter((candidate) => candidate.id !== input.runId),
+      );
+      await this.writeRecordings(
+        input.projectId,
+        (await this.readRecordings(input.projectId)).filter((artifact) => artifact.runId !== input.runId),
+      );
     });
   }
 
   async putDatasetSnapshot(snapshot: EvaluationDatasetSnapshot): Promise<void> {
     assertEvaluationDatasetSnapshot(snapshot);
-    await this.queueRunWrite(snapshot.projectId, () => {
-      const snapshots = this.readDatasetSnapshots(snapshot.projectId);
+    await this.queueRunWrite(snapshot.projectId, async () => {
+      const snapshots = await this.readDatasetSnapshots(snapshot.projectId);
       if (snapshots[snapshot.fingerprint] !== undefined) return;
       snapshots[snapshot.fingerprint] = structuredClone(snapshot);
-      if (!this.writeDatasetSnapshots(snapshot.projectId, snapshots)) {
-        throw new Error('The browser could not retain this evaluation dataset snapshot.');
-      }
+      await this.writeDatasetSnapshots(snapshot.projectId, snapshots);
     });
   }
 
@@ -103,14 +126,14 @@ export class LocalEvaluationRunStore implements EvaluationRunStore {
     // Join an in-flight snapshot write for this project before returning a
     // historical dataset. This is also harmless when there is no write.
     await this.queueRunWrite(input.projectId, () => undefined);
-    const snapshot = this.readDatasetSnapshots(input.projectId)[input.fingerprint];
+    const snapshot = (await this.readDatasetSnapshots(input.projectId))[input.fingerprint];
     return snapshot ? structuredClone(snapshot) : undefined;
   }
 
   async putRecording(artifact: EvaluationRecordingArtifact): Promise<void> {
-    await this.queueRunWrite(artifact.projectId, () => {
+    await this.queueRunWrite(artifact.projectId, async () => {
       const now = Date.now();
-      const stored = this.readRecordings(artifact.projectId);
+      const stored = await this.readRecordings(artifact.projectId);
       const existing = stored.find((item) => item.reference.id === artifact.reference.id);
       if (existing && (existing.runId !== artifact.runId || existing.trialId !== artifact.trialId)) {
         throw new Error('An evaluation recording ID cannot be reassigned to another run or trial.');
@@ -125,9 +148,7 @@ export class LocalEvaluationRunStore implements EvaluationRunStore {
       if (!retained.some((candidate) => candidate.reference.id === artifact.reference.id)) {
         throw new Error('Evaluation recording exceeds the browser storage retention limit.');
       }
-      if (!this.writeRecordings(artifact.projectId, retained)) {
-        throw new Error('The browser could not retain this evaluation recording.');
-      }
+      await this.writeRecordings(artifact.projectId, retained);
     });
   }
 
@@ -136,10 +157,10 @@ export class LocalEvaluationRunStore implements EvaluationRunStore {
     recordingId: string;
   }): Promise<EvaluationRecordingArtifact | undefined> {
     let found: EvaluationRecordingArtifact | undefined;
-    await this.queueRunWrite(input.projectId, () => {
-      const records = this.readRecordings(input.projectId);
+    await this.queueRunWrite(input.projectId, async () => {
+      const records = await this.readRecordings(input.projectId);
       const active = records.filter((artifact) => !this.isExpired(artifact, Date.now()));
-      if (active.length !== records.length) this.writeRecordings(input.projectId, active);
+      if (active.length !== records.length) await this.writeRecordings(input.projectId, active);
       found = active.find((candidate) => candidate.reference.id === input.recordingId);
     });
     return found ? structuredClone(found) : undefined;
@@ -151,45 +172,37 @@ export class LocalEvaluationRunStore implements EvaluationRunStore {
     retention: EvaluationRecordingArtifact['reference']['retention'];
     expiresAt?: string;
   }): Promise<void> {
-    await this.queueRunWrite(input.projectId, () => {
-      if (
-        !this.writeRecordings(
-          input.projectId,
-          this.readRecordings(input.projectId).map((artifact) => {
-            if (artifact.reference.id !== input.recordingId) return artifact;
-            return {
-              ...artifact,
-              reference: {
-                id: artifact.reference.id,
-                retention: input.retention,
-                ...(input.expiresAt === undefined ? {} : { expiresAt: input.expiresAt }),
-              },
-            };
-          }),
-        )
-      ) {
-        throw new Error('The browser could not update evaluation recording retention.');
-      }
+    await this.queueRunWrite(input.projectId, async () => {
+      await this.writeRecordings(
+        input.projectId,
+        (await this.readRecordings(input.projectId)).map((artifact) => {
+          if (artifact.reference.id !== input.recordingId) return artifact;
+          return {
+            ...artifact,
+            reference: {
+              id: artifact.reference.id,
+              retention: input.retention,
+              ...(input.expiresAt === undefined ? {} : { expiresAt: input.expiresAt }),
+            },
+          };
+        }),
+      );
     });
   }
 
   async promoteBaseline(input: { projectId: ProjectId; runId: string }): Promise<void> {
-    await this.queueRunWrite(input.projectId, () => {
-      if (
-        !this.writeRecordings(
-          input.projectId,
-          this.readRecordings(input.projectId).map((artifact) =>
-            artifact.runId !== input.runId
-              ? artifact
-              : {
-                  ...artifact,
-                  reference: { id: artifact.reference.id, retention: 'baseline' },
-                },
-          ),
-        )
-      ) {
-        throw new Error('The browser could not retain the evaluation baseline recording.');
-      }
+    await this.queueRunWrite(input.projectId, async () => {
+      await this.writeRecordings(
+        input.projectId,
+        (await this.readRecordings(input.projectId)).map((artifact) =>
+          artifact.runId !== input.runId
+            ? artifact
+            : {
+                ...artifact,
+                reference: { id: artifact.reference.id, retention: 'baseline' },
+              },
+        ),
+      );
     });
   }
 
@@ -202,10 +215,10 @@ export class LocalEvaluationRunStore implements EvaluationRunStore {
   private datasetSnapshotKey(projectId: ProjectId): string {
     return `${DATASET_SNAPSHOT_PREFIX}${projectId}`;
   }
-  private putSerialized(run: EvaluationRun, protectedRunIds: ReadonlySet<string>): string[] {
-    const runs = this.readRuns(run.projectId);
+  private async putSerialized(run: EvaluationRun, protectedRunIds: ReadonlySet<string>): Promise<string[]> {
+    const runs = await this.readRuns(run.projectId);
     const existing = runs.find((candidate) => candidate.id === run.id);
-    if ((existing?.revision ?? 0) > (run.revision ?? 0)) return [];
+    if (!shouldReplaceEvaluationRun(existing, run)) return [];
     const ordered = [run, ...runs.filter((candidate) => candidate.id !== run.id)];
     let unprotectedCount = 0;
     const next = ordered.filter((candidate) => {
@@ -213,31 +226,129 @@ export class LocalEvaluationRunStore implements EvaluationRunStore {
       unprotectedCount += 1;
       return unprotectedCount <= MAX_RUNS_PER_PROJECT;
     });
-    if (!this.write(run.projectId, next)) {
-      throw new Error('The browser could not retain this evaluation run.');
-    }
+    await this.write(run.projectId, next);
     const kept = new Set(next.map((candidate) => candidate.id));
     return runs.filter((candidate) => !kept.has(candidate.id)).map((candidate) => candidate.id);
   }
-  private storage(): Storage | undefined {
-    return typeof localStorage === 'undefined' ? undefined : localStorage;
-  }
-  private write(projectId: ProjectId, runs: readonly EvaluationRun[]): boolean {
+
+  private legacyStorage(): Storage | undefined {
     try {
-      const storage = this.storage();
-      if (!storage) return false;
-      storage.setItem(this.key(projectId), JSON.stringify(runs));
-      return true;
+      return typeof localStorage === 'undefined' ? undefined : localStorage;
     } catch {
-      return false;
+      return undefined;
     }
   }
 
-  private readRuns(projectId: ProjectId): EvaluationRun[] {
-    const storage = this.storage();
-    if (!storage) return [];
+  /**
+   * A few browser shells expose `indexedDB` but reject opening it. Use the
+   * legacy store only when that happens before this instance has successfully
+   * used IndexedDB; switching backends after a successful write could make an
+   * older IndexedDB record hide newer fallback data.
+   */
+  private async database(): Promise<IDBPDatabase<EvaluationRunDatabase> | undefined> {
+    if (this.#storageBackend === 'legacy') return undefined;
+    if (typeof indexedDB === 'undefined') {
+      if (this.#storageBackend === 'indexeddb') throw new Error('IndexedDB is no longer available.');
+      this.#storageBackend = 'legacy';
+      return undefined;
+    }
+
     try {
-      const parsed: unknown = JSON.parse(storage.getItem(this.key(projectId)) ?? '[]');
+      const database = await this.#getDatabase();
+      this.#storageBackend = 'indexeddb';
+      return database;
+    } catch (error) {
+      if (this.#storageBackend === 'unknown' && this.legacyStorage()) {
+        this.#storageBackend = 'legacy';
+        return undefined;
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * Evaluation results can contain full target and evaluator outputs, which
+   * are much larger than browser localStorage's practical quota. IndexedDB is
+   * the durable application-local store; localStorage is read once only to
+   * migrate history created by older Rivet versions or to support runtimes
+   * that genuinely lack IndexedDB.
+   */
+  private async readSerialized(key: string): Promise<string | null> {
+    const database = await this.database();
+    if (!database) return this.legacyStorage()?.getItem(key) ?? null;
+
+    const transaction = preserveIndexedDbRequestTiming(database.transaction(DATABASE_STORE, 'readonly'));
+    const stored = (await transaction.store.get(key)) ?? null;
+    if (stored !== null || this.#migratedLegacyKeys.has(key)) return stored;
+
+    const legacy = this.legacyStorage()?.getItem(key) ?? null;
+    if (legacy === null) {
+      this.#migratedLegacyKeys.add(key);
+      return null;
+    }
+
+    try {
+      const migration = preserveIndexedDbRequestTiming(database.transaction(DATABASE_STORE, 'readwrite'));
+      await migration.store.put(legacy, key);
+      await migration.done;
+    } catch {
+      // Reading old history must not depend on having enough IndexedDB space to
+      // copy it. Leave the source intact and retry migration later.
+      return legacy;
+    }
+    this.#migratedLegacyKeys.add(key);
+    // Do not keep a second full copy in quota-limited localStorage. A completed
+    // IndexedDB transaction means the migrated record survives this removal.
+    try {
+      this.legacyStorage()?.removeItem(key);
+    } catch {
+      // Leaving the old copy behind is harmless; IndexedDB stays authoritative.
+    }
+    return legacy;
+  }
+
+  private async writeSerialized(key: string, value: string): Promise<void> {
+    const database = await this.database();
+    if (!database) {
+      const storage = this.legacyStorage();
+      if (!storage) throw new Error('browser storage is unavailable');
+      storage.setItem(key, value);
+      return;
+    }
+
+    const transaction = preserveIndexedDbRequestTiming(database.transaction(DATABASE_STORE, 'readwrite'));
+    await transaction.store.put(value, key);
+    await transaction.done;
+    this.#migratedLegacyKeys.add(key);
+    try {
+      this.legacyStorage()?.removeItem(key);
+    } catch {
+      // IndexedDB is already durable. A stale legacy copy cannot override it.
+    }
+  }
+
+  private storageError(message: string, error: unknown): Error {
+    const detail = error instanceof Error ? error.message : String(error);
+    return new Error(detail ? `${message}: ${detail}` : message);
+  }
+
+  private async write(projectId: ProjectId, runs: readonly EvaluationRun[]): Promise<void> {
+    try {
+      await this.writeSerialized(this.key(projectId), JSON.stringify(runs));
+    } catch (error) {
+      throw this.storageError('The browser could not retain this evaluation run', error);
+    }
+  }
+
+  private async readRuns(projectId: ProjectId): Promise<EvaluationRun[]> {
+    let serialized: string | null;
+    try {
+      serialized = await this.readSerialized(this.key(projectId));
+    } catch (error) {
+      throw this.storageError('The browser could not read evaluation run history', error);
+    }
+    try {
+      const parsed: unknown = JSON.parse(serialized ?? '[]');
       if (!Array.isArray(parsed)) return [];
       return parsed.flatMap((candidate) => {
         if (!this.isRunForProject(candidate, projectId)) return [];
@@ -260,11 +371,15 @@ export class LocalEvaluationRunStore implements EvaluationRunStore {
     );
   }
 
-  private readRecordings(projectId: ProjectId): EvaluationRecordingArtifact[] {
-    const storage = this.storage();
-    if (!storage) return [];
+  private async readRecordings(projectId: ProjectId): Promise<EvaluationRecordingArtifact[]> {
+    let serialized: string | null;
     try {
-      const parsed: unknown = JSON.parse(storage.getItem(this.recordingKey(projectId)) ?? '[]');
+      serialized = await this.readSerialized(this.recordingKey(projectId));
+    } catch (error) {
+      throw this.storageError('The browser could not read evaluation recordings', error);
+    }
+    try {
+      const parsed: unknown = JSON.parse(serialized ?? '[]');
       if (!Array.isArray(parsed)) return [];
       return parsed.filter((value): value is EvaluationRecordingArtifact =>
         this.isRecordingForProject(value, projectId),
@@ -274,14 +389,11 @@ export class LocalEvaluationRunStore implements EvaluationRunStore {
     }
   }
 
-  private writeRecordings(projectId: ProjectId, recordings: readonly EvaluationRecordingArtifact[]): boolean {
+  private async writeRecordings(projectId: ProjectId, recordings: readonly EvaluationRecordingArtifact[]): Promise<void> {
     try {
-      const storage = this.storage();
-      if (!storage) return false;
-      storage.setItem(this.recordingKey(projectId), JSON.stringify(this.enforceRecordingBudget(recordings)));
-      return true;
-    } catch {
-      return false;
+      await this.writeSerialized(this.recordingKey(projectId), JSON.stringify(this.enforceRecordingBudget(recordings)));
+    } catch (error) {
+      throw this.storageError('The browser could not retain evaluation recordings', error);
     }
   }
 
@@ -297,11 +409,15 @@ export class LocalEvaluationRunStore implements EvaluationRunStore {
     );
   }
 
-  private readDatasetSnapshots(projectId: ProjectId): Record<string, EvaluationDatasetSnapshot> {
-    const storage = this.storage();
-    if (!storage) return {};
+  private async readDatasetSnapshots(projectId: ProjectId): Promise<Record<string, EvaluationDatasetSnapshot>> {
+    let serialized: string | null;
     try {
-      const parsed: unknown = JSON.parse(storage.getItem(this.datasetSnapshotKey(projectId)) ?? '{}');
+      serialized = await this.readSerialized(this.datasetSnapshotKey(projectId));
+    } catch (error) {
+      throw this.storageError('The browser could not read evaluation dataset snapshots', error);
+    }
+    try {
+      const parsed: unknown = JSON.parse(serialized ?? '{}');
       if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return {};
       return Object.fromEntries(
         Object.entries(parsed).filter(([fingerprint, value]) =>
@@ -313,17 +429,14 @@ export class LocalEvaluationRunStore implements EvaluationRunStore {
     }
   }
 
-  private writeDatasetSnapshots(
+  private async writeDatasetSnapshots(
     projectId: ProjectId,
     snapshots: Readonly<Record<string, EvaluationDatasetSnapshot>>,
-  ): boolean {
+  ): Promise<void> {
     try {
-      const storage = this.storage();
-      if (!storage) return false;
-      storage.setItem(this.datasetSnapshotKey(projectId), JSON.stringify(snapshots));
-      return true;
-    } catch {
-      return false;
+      await this.writeSerialized(this.datasetSnapshotKey(projectId), JSON.stringify(snapshots));
+    } catch (error) {
+      throw this.storageError('The browser could not retain this evaluation dataset snapshot', error);
     }
   }
 

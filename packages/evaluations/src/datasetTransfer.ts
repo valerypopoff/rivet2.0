@@ -1,4 +1,5 @@
 import { assertPortableJson, fingerprintEvaluationDataset } from './canonical.js';
+import { assertEvaluationDatasetValuesMatchDeclaredTypes } from './dataTypes.js';
 import type { EvaluationDataset, EvaluationDatasetCase, EvaluationDatasetField } from './types.js';
 
 const DATASET_EXPORT_VERSION = 1;
@@ -14,6 +15,11 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function requireString(value: unknown, path: string): string {
   if (typeof value !== 'string' || value.length === 0) throw new Error(`${path} must be a non-empty string.`);
+  return value;
+}
+
+function requireText(value: unknown, path: string): string {
+  if (typeof value !== 'string') throw new Error(`${path} must be a string.`);
   return value;
 }
 
@@ -37,7 +43,7 @@ function parseFields(value: unknown): EvaluationDatasetField[] {
     }
     return {
       id,
-      name: requireString(field.name, `fields[${index}].name`),
+      name: requireText(field.name, `fields[${index}].name`),
       dataType: requireString(field.dataType, `fields[${index}].dataType`),
       role,
       ...(typeof field.description === 'string' ? { description: field.description } : {}),
@@ -66,7 +72,7 @@ function parseCases(value: unknown, fieldIds: ReadonlySet<string>): EvaluationDa
     if (testCase.enabled !== undefined && typeof testCase.enabled !== 'boolean') throw new Error(`cases[${index}].enabled must be a boolean.`);
     return {
       id,
-      name: requireString(testCase.name, `cases[${index}].name`),
+      name: requireText(testCase.name, `cases[${index}].name`),
       values: testCase.values as EvaluationDatasetCase['values'],
       ...(typeof testCase.enabled === 'boolean' ? { enabled: testCase.enabled } : {}),
       ...(Array.isArray(testCase.tags) ? { tags: testCase.tags as string[] } : {}),
@@ -76,10 +82,9 @@ function parseCases(value: unknown, fieldIds: ReadonlySet<string>): EvaluationDa
 }
 
 /**
- * Validates the durable .rivet-data representation as well as file imports.
- * A caller may provide a scope when importing into an existing dataset, which
- * deliberately retains that dataset/project identity while accepting the
- * incoming field and case definitions.
+ * Validates durable evaluation datasets and portable imports. `projectId` is
+ * accepted solely for backwards-compatible migration from project-owned
+ * datasets; newly created local datasets omit it.
  */
 export function validateEvaluationDataset(
   value: unknown,
@@ -87,18 +92,38 @@ export function validateEvaluationDataset(
 ): EvaluationDataset {
   if (!isRecord(value)) throw new Error('Evaluation dataset must be an object.');
   const fields = parseFields(value.fields);
+  const importedProjectId =
+    value.projectId === undefined ? undefined : (requireString(value.projectId, 'dataset.projectId') as EvaluationDataset['projectId']);
+  const projectId = scope?.projectId ?? importedProjectId;
   const dataset: EvaluationDataset = {
     id: scope?.id ?? requireString(value.id, 'dataset.id'),
-    projectId: scope?.projectId ?? (requireString(value.projectId, 'dataset.projectId') as EvaluationDataset['projectId']),
-    name: requireString(value.name, 'dataset.name'),
-    ...(typeof value.description === 'string' ? { description: value.description } : {}),
+    name: requireText(value.name, 'dataset.name'),
+    ...(projectId === undefined ? {} : { projectId }),
     fields,
     cases: parseCases(value.cases, new Set(fields.map((field) => field.id))),
   };
-  if (value.description !== undefined && typeof value.description !== 'string') {
-    throw new Error('dataset.description must be a string.');
-  }
   return { ...dataset, contentFingerprint: fingerprintEvaluationDataset(dataset) };
+}
+
+/**
+ * Converts a legacy project-owned dataset into the application-local form.
+ * Field and case identity stay stable, so existing suite bindings continue to
+ * work after migration.
+ */
+export function localizeEvaluationDataset(value: unknown, id?: string): EvaluationDataset {
+  const dataset = validateEvaluationDataset(value, id === undefined ? undefined : { id });
+  const { projectId: _legacyProjectId, ...localDataset } = dataset;
+  return { ...localDataset, contentFingerprint: fingerprintEvaluationDataset(localDataset) };
+}
+
+/** Strict validation for explicit portable import and export boundaries. */
+export function validateEvaluationDatasetForTransfer(
+  value: unknown,
+  scope?: Pick<EvaluationDataset, 'id' | 'projectId'>,
+): EvaluationDataset {
+  const dataset = validateEvaluationDataset(value, scope);
+  assertEvaluationDatasetValuesMatchDeclaredTypes(dataset);
+  return dataset;
 }
 
 /**
@@ -107,19 +132,17 @@ export function validateEvaluationDataset(
  * roles and Rivet data types.
  */
 export function serializeEvaluationDatasetJson(dataset: EvaluationDataset): string {
-  const validated = validateEvaluationDataset(dataset);
+  const validated = validateEvaluationDatasetForTransfer(dataset);
   return JSON.stringify({ version: DATASET_EXPORT_VERSION, dataset: validated } satisfies DatasetExportEnvelope, null, 2);
 }
 
 /**
- * Reads a dataset export into the selected project scope. Import deliberately
- * keeps incoming field/case IDs but never lets a file switch project or
- * dataset identity: existing suites stay attached to the dataset being
- * replaced.
+ * Reads a dataset export into a destination dataset identity. Import keeps
+ * incoming field/case IDs but never lets a file overwrite another resource.
  */
 export function deserializeEvaluationDatasetJson(
   source: string,
-  scope: Pick<EvaluationDataset, 'id' | 'projectId'>,
+  scope: Pick<EvaluationDataset, 'id'>,
 ): EvaluationDataset {
   let parsed: unknown;
   try {
@@ -130,5 +153,7 @@ export function deserializeEvaluationDatasetJson(
   if (!isRecord(parsed) || parsed.version !== DATASET_EXPORT_VERSION || !isRecord(parsed.dataset)) {
     throw new Error(`Expected an evaluation dataset export with version ${DATASET_EXPORT_VERSION}.`);
   }
-  return validateEvaluationDataset(parsed.dataset, scope);
+  const dataset = validateEvaluationDatasetForTransfer(parsed.dataset, { id: scope.id });
+  const { projectId: _legacyProjectId, ...localDataset } = dataset;
+  return { ...localDataset, contentFingerprint: fingerprintEvaluationDataset(localDataset) };
 }

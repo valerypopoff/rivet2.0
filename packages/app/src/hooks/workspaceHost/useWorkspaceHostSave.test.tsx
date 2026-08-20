@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import type { GraphId, Project, ProjectId } from '@valerypopoff/rivet2-core';
-import type { EvaluationProjectFileData, IOProvider } from '../../io/IOProvider.js';
+import type { IOProvider } from '../../io/IOProvider.js';
 import React from 'react';
 import { JSDOM } from 'jsdom';
 import { createRoot } from 'react-dom/client';
@@ -31,7 +31,7 @@ import { useWorkspaceHostSave } from './useWorkspaceHostSave.js';
 
 type SaveableIOProvider = IOProvider & {
   canSaveProjectDataNoPrompt(path: string): boolean;
-  saveProjectDataNoPrompt(project: Project, evaluation: EvaluationProjectFileData, path: string): Promise<void>;
+  saveProjectDataNoPrompt(project: Project, path: string): Promise<void>;
 };
 
 type MountedSaveHost = {

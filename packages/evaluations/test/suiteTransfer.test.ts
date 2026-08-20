@@ -34,12 +34,22 @@ const suite: EvaluationSuite = {
       expected: { kind: 'dataset-field', fieldId: 'expected' },
     },
   ],
-  evaluators: [{ id: 'evaluator-a', name: 'Judge', graphId: 'judge-graph' }],
+  evaluators: [
+    {
+      id: 'evaluator-a',
+      name: 'Judge',
+      graphId: 'judge-graph',
+      inputBindings: [
+        { graphInputId: 'candidate', source: { kind: 'target-output', outputId: 'answer' } },
+        { graphInputId: 'reference', source: { kind: 'dataset-field', fieldId: 'expected' } },
+      ],
+    },
+  ],
+  evaluationMode: 'scoring',
 };
 
-test('suite bundles import as new linked project resources while retaining field and graph references', () => {
+test('suite bundles import as new linked local resources while retaining field and graph references', () => {
   const result = deserializeEvaluationSuiteBundleJson(serializeEvaluationSuiteBundleJson(suite, dataset), {
-    projectId: 'destination-project' as ProjectId,
     suiteId: 'destination-suite',
     datasetId: 'destination-dataset',
   });
@@ -47,10 +57,11 @@ test('suite bundles import as new linked project resources while retaining field
   assert.equal(result.suite.id, 'destination-suite');
   assert.equal(result.suite.datasetId, 'destination-dataset');
   assert.equal(result.dataset.id, 'destination-dataset');
-  assert.equal(result.dataset.projectId, 'destination-project');
+  assert.equal(result.dataset.projectId, undefined);
   assert.deepEqual(result.suite.inputBindings, suite.inputBindings);
   assert.deepEqual(result.suite.assertions, suite.assertions);
   assert.deepEqual(result.suite.evaluators, suite.evaluators);
+  assert.equal(result.suite.evaluationMode, 'scoring');
   assert.deepEqual(result.dataset.fields, dataset.fields);
   assert.deepEqual(result.dataset.cases, dataset.cases);
 });
@@ -66,7 +77,6 @@ test('suite bundle import rejects unsupported exports', () => {
   assert.throws(
     () =>
       deserializeEvaluationSuiteBundleJson('{"version":2}', {
-        projectId: 'destination-project' as ProjectId,
         suiteId: 'destination-suite',
         datasetId: 'destination-dataset',
       }),

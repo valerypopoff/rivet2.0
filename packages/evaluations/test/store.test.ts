@@ -1,7 +1,12 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import type { ProjectId } from '@valerypopoff/rivet2-core';
-import type { EvaluationDatasetSnapshot, EvaluationRecordingArtifact, EvaluationRun } from '../src/index.js';
+import type {
+  EvaluationDatasetSnapshot,
+  EvaluationProjectData,
+  EvaluationRecordingArtifact,
+  EvaluationRun,
+} from '../src/index.js';
 import {
   deserializeEvaluationProjectData,
   fingerprintEvaluationDataset,
@@ -9,6 +14,7 @@ import {
   normalizeEvaluationBaselineSnapshot,
   normalizeEvaluationRun,
   normalizeEvaluationTrial,
+  serializeEvaluationProjectData,
 } from '../src/index.js';
 
 function run(revision: number, status: EvaluationRun['executionStatus']): EvaluationRun {
@@ -121,6 +127,143 @@ test('normalization replaces quality reasons that contradict normalized purpose 
   assert.equal(trial.qualityReason.code, 'benchmark');
 });
 
+test('scoring trial normalization never revives a pass/fail quality label', () => {
+  const normalized = normalizeEvaluationTrial(
+    {
+      id: 'trial',
+      caseId: 'case',
+      caseName: 'Case',
+      caseIndex: 0,
+      trialIndex: 0,
+      executionStatus: 'completed',
+      qualityStatus: 'passed',
+      qualityReason: { code: 'checks-passed', message: 'Legacy pass/fail result.' },
+      inputs: {},
+      expected: {},
+      outputs: {},
+      observations: [
+        {
+          id: 'judge',
+          kind: 'graph',
+          name: 'Judge',
+          required: false,
+          status: 'scored',
+          score: 0.85,
+        },
+      ],
+      targetMetrics: { durationMs: 1 },
+      evaluatorMetrics: { durationMs: 1 },
+      totalMetrics: { durationMs: 2 },
+    },
+    'evaluation',
+    'scoring',
+  );
+
+  assert.equal(normalized.qualityStatus, 'scored');
+  assert.equal(normalized.qualityReason.code, 'scores-complete');
+});
+
+test('scoring run normalization derives completion from trial evidence instead of a stored scored label', () => {
+  const scoringRun = run(1, 'completed');
+  scoringRun.evaluationMode = 'scoring';
+  scoringRun.qualityStatus = 'scored';
+  scoringRun.qualityReason = { code: 'scores-complete', message: 'Contradictory stored score.' };
+  scoringRun.trials = [
+    {
+      id: 'trial',
+      caseId: 'case',
+      caseName: 'Case',
+      caseIndex: 0,
+      trialIndex: 0,
+      executionStatus: 'completed',
+      qualityStatus: 'scored',
+      qualityReason: { code: 'scores-complete', message: 'Contradictory stored score.' },
+      inputs: {},
+      expected: {},
+      outputs: {},
+      observations: [
+        {
+          id: 'judge',
+          kind: 'graph',
+          name: 'Judge',
+          required: true,
+          status: 'error',
+          message: 'Judge did not return a score.',
+        },
+      ],
+      targetMetrics: { durationMs: 1 },
+      evaluatorMetrics: { durationMs: 1 },
+      totalMetrics: { durationMs: 2 },
+    },
+  ];
+
+  const normalized = normalizeEvaluationRun(scoringRun);
+  assert.equal(normalized.trials[0]?.qualityStatus, 'unable-to-evaluate');
+  assert.equal(normalized.qualityStatus, 'unable-to-evaluate');
+  assert.equal(normalized.qualityReason.code, 'scores-incomplete');
+});
+
+test('scoring run normalization drops a graph-facing score from stored aggregates', () => {
+  const scoringRun = run(1, 'completed');
+  scoringRun.evaluationMode = 'scoring';
+  scoringRun.qualityStatus = 'scored';
+  scoringRun.qualityReason = { code: 'scores-complete', message: 'Stored on the wrong score scale.' };
+  scoringRun.trials = [
+    {
+      id: 'trial',
+      caseId: 'case',
+      caseName: 'Case',
+      caseIndex: 0,
+      trialIndex: 0,
+      executionStatus: 'completed',
+      qualityStatus: 'scored',
+      qualityReason: { code: 'scores-complete', message: 'Stored on the wrong score scale.' },
+      inputs: {},
+      expected: {},
+      outputs: {},
+      observations: [
+        {
+          id: 'judge',
+          kind: 'graph',
+          name: 'Judge',
+          required: true,
+          status: 'scored',
+          score: 85,
+        },
+      ],
+      targetMetrics: { durationMs: 1 },
+      evaluatorMetrics: { durationMs: 1 },
+      totalMetrics: { durationMs: 2 },
+    },
+  ];
+  scoringRun.aggregate = {
+    trialCount: 1,
+    evaluatedTrialCount: 0,
+    notEvaluatedTrialCount: 0,
+    unableToEvaluateTrialCount: 0,
+    passedTrialCount: 0,
+    failedTrialCount: 0,
+    erroredTrialCount: 0,
+    canceledTrialCount: 0,
+    scoredTrialCount: 1,
+    missingScoreTrialCount: 0,
+    passRate: 0,
+    meanScore: 85,
+    averageLatencyMs: 2,
+    p95LatencyMs: 2,
+    targetErrorRate: 0,
+    evaluatorErrorRate: 0,
+    toolFailureRate: 0,
+    metrics: {},
+  };
+
+  const normalized = normalizeEvaluationRun(scoringRun);
+  assert.equal(normalized.qualityStatus, 'unable-to-evaluate');
+  assert.equal(normalized.aggregate?.meanScore, undefined);
+  assert.equal(normalized.aggregate?.scoredTrialCount, 0);
+  assert.equal(normalized.aggregate?.missingScoreTrialCount, 1);
+});
+
 test('baseline normalization replaces contradictory benchmark quality metadata', () => {
   const completed = run(1, 'completed');
   const normalized = normalizeEvaluationBaselineSnapshot({
@@ -155,6 +298,44 @@ test('baseline normalization replaces contradictory benchmark quality metadata',
   assert.equal(normalized.qualityReason?.code, 'benchmark');
 });
 
+test('scoring baseline normalization requires complete score coverage', () => {
+  const completed = run(1, 'completed');
+  const normalized = normalizeEvaluationBaselineSnapshot({
+    id: 'baseline',
+    suiteId: 'suite',
+    createdAt: completed.startedAt,
+    purpose: 'evaluation',
+    evaluationMode: 'scoring',
+    qualityStatus: 'scored',
+    qualityReason: { code: 'scores-complete', message: 'Contradictory stored score.' },
+    accountingStatus: 'complete',
+    provenance: completed.provenance,
+    aggregate: {
+      trialCount: 2,
+      evaluatedTrialCount: 0,
+      notEvaluatedTrialCount: 0,
+      unableToEvaluateTrialCount: 1,
+      passedTrialCount: 0,
+      failedTrialCount: 0,
+      erroredTrialCount: 0,
+      canceledTrialCount: 0,
+      scoredTrialCount: 1,
+      missingScoreTrialCount: 1,
+      passRate: 0,
+      meanScore: 0.8,
+      averageLatencyMs: 1,
+      p95LatencyMs: 1,
+      targetErrorRate: 0,
+      evaluatorErrorRate: 1,
+      toolFailureRate: 0,
+      metrics: {},
+    },
+    cases: [],
+  });
+  assert.equal(normalized.qualityStatus, 'unable-to-evaluate');
+  assert.equal(normalized.qualityReason?.code, 'scores-incomplete');
+});
+
 test('project deserialization rejects malformed suite and baseline entries at the read boundary', () => {
   assert.throws(
     () => deserializeEvaluationProjectData({ version: 1, suites: [5], baselines: [] }),
@@ -173,6 +354,111 @@ test('project deserialization rejects malformed suite and baseline entries at th
     () => deserializeEvaluationProjectData({ version: 1, suites: [], baselines: [false] }),
     /evaluations\.baselines\[0\] must be an object/,
   );
+  assert.throws(
+    () =>
+      deserializeEvaluationProjectData({
+        version: 1,
+        suites: [
+          {
+            id: 'suite',
+            name: 'Suite',
+            targetGraphId: 'graph',
+            datasetId: 'dataset',
+            inputBindings: [],
+            assertions: [],
+            evaluators: [],
+            evaluationMode: 'numeric',
+          },
+        ],
+        baselines: [],
+      }),
+    /evaluationMode must be "pass-fail" or "scoring"/,
+  );
+  assert.throws(
+    () =>
+      deserializeEvaluationProjectData({
+        version: 1,
+        suites: [
+          {
+            id: 'suite',
+            name: 'Suite',
+            targetGraphId: 'graph',
+            datasetId: 'dataset',
+            inputBindings: [],
+            assertions: [],
+            evaluators: [
+              {
+                id: 'judge',
+                name: 'Judge',
+                graphId: 'judge',
+                inputBindings: [{ graphInputId: 'context', source: { kind: 'context', context: 'everything' } }],
+              },
+            ],
+          },
+        ],
+        baselines: [],
+      }),
+    /source\.context is not supported/,
+  );
+});
+
+test('project persistence strips obsolete workspace resource selections before portable JSON validation', () => {
+  const dataWithLegacySelections: EvaluationProjectData & {
+    selectedSuiteId?: unknown;
+    selectedDatasetId?: unknown;
+  } = {
+    version: 1,
+    suites: [],
+    baselines: [],
+    selectedSuiteId: undefined,
+    selectedDatasetId: 'dataset',
+  };
+
+  assert.deepEqual(serializeEvaluationProjectData(dataWithLegacySelections), {
+    version: 1,
+    suites: [],
+    baselines: [],
+  });
+  assert.deepEqual(
+    deserializeEvaluationProjectData({
+      version: 1,
+      suites: [],
+      baselines: [],
+      selectedSuiteId: 1,
+      selectedDatasetId: null,
+    }),
+    { version: 1, suites: [], baselines: [] },
+  );
+});
+
+test('durable suite validation preserves temporarily empty authoring labels', () => {
+  const result = deserializeEvaluationProjectData({
+    version: 1,
+    suites: [
+      {
+        id: 'suite',
+        name: '',
+        targetGraphId: 'graph',
+        datasetId: 'dataset',
+        inputBindings: [],
+        assertions: [
+          {
+            id: 'assertion',
+            name: '',
+            outputPath: '$',
+            operator: 'equals',
+            expected: { kind: 'literal', value: null },
+          },
+        ],
+        evaluators: [{ id: 'evaluator', name: '', graphId: 'judge', inputBindings: [] }],
+      },
+    ],
+    baselines: [],
+  });
+
+  assert.equal(result.suites[0]?.name, '');
+  assert.equal(result.suites[0]?.assertions[0]?.name, '');
+  assert.equal(result.suites[0]?.evaluators[0]?.name, '');
 });
 
 function snapshot(projectId = 'project' as ProjectId): EvaluationDatasetSnapshot {
@@ -195,6 +481,16 @@ test('run stores do not let a delayed progress snapshot replace a newer complete
   const store = new InMemoryEvaluationRunStore();
   await store.put(run(4, 'completed'));
   await store.put(run(3, 'running'));
+
+  const stored = await store.get({ projectId: 'project' as ProjectId, runId: 'run' });
+  assert.equal(stored?.revision, 4);
+  assert.equal(stored?.executionStatus, 'completed');
+});
+
+test('run stores do not let an equal-revision progress snapshot demote a terminal run', async () => {
+  const store = new InMemoryEvaluationRunStore();
+  await store.put(run(4, 'completed'));
+  await store.put(run(4, 'running'));
 
   const stored = await store.get({ projectId: 'project' as ProjectId, runId: 'run' });
   assert.equal(stored?.revision, 4);

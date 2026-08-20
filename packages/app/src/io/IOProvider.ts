@@ -1,16 +1,37 @@
 import { type NodeGraph, type Project, type ExecutionRecorder } from '@valerypopoff/rivet2-core';
-import { type EvaluationDataset, type EvaluationProjectData } from '@valerypopoff/rivet2-evaluations';
+import {
+  createEmptyEvaluationProjectData,
+  deserializeEvaluationProjectData,
+  type EvaluationDataset,
+  type EvaluationProjectData,
+} from '@valerypopoff/rivet2-evaluations';
 
 export type EvaluationProjectFileData = {
+  /** Legacy load/import envelope. New saves never write this data to a project. */
   evaluationData: EvaluationProjectData;
+  /** Legacy load/import envelope. New saves never write this data to a project. */
   evaluationDatasets: EvaluationDataset[];
 };
+
+/**
+ * Evaluation attachments are an optional, one-way migration input. A bad
+ * legacy payload must not prevent the project itself from opening or replace
+ * the durable local evaluation library.
+ */
+export function deserializeLegacyEvaluationProjectData(value: unknown): EvaluationProjectData {
+  if (value === undefined) return createEmptyEvaluationProjectData();
+  try {
+    return deserializeEvaluationProjectData(value);
+  } catch {
+    return createEmptyEvaluationProjectData();
+  }
+}
 
 /** Base IO interface - all platforms (browser, Tauri, web) support these methods. */
 export interface IOProvider {
   saveGraphData(graphData: NodeGraph): Promise<void>;
 
-  saveProjectData(project: Project, evaluation: EvaluationProjectFileData): Promise<string | undefined>;
+  saveProjectData(project: Project): Promise<string | undefined>;
 
   loadGraphData(callback: (graphData: NodeGraph) => void): Promise<void>;
 
@@ -27,7 +48,7 @@ export interface IOProvider {
 
 /** Extended interface for platforms with path-based file system access (Tauri, Node.js). */
 export interface PathBasedIOProvider extends IOProvider {
-  saveProjectDataNoPrompt(project: Project, evaluation: EvaluationProjectFileData, path: string): Promise<void>;
+  saveProjectDataNoPrompt(project: Project, path: string): Promise<void>;
 
   loadProjectDataNoPrompt(path: string): Promise<{ project: Project; evaluation: EvaluationProjectFileData }>;
 

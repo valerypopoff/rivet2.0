@@ -13,17 +13,50 @@ export function assertPortableJson(
   if (typeof value !== 'object') throw new Error(`${path} must be portable JSON.`);
   if (stack.has(value)) throw new Error(`${path} must not contain a cycle.`);
   if (Array.isArray(value)) {
+    if (Object.getOwnPropertySymbols(value).length > 0) {
+      throw new Error(`${path} must not contain symbol-keyed array properties.`);
+    }
     stack.add(value);
-    value.forEach((entry, index) => assertPortableJson(entry, `${path}[${index}]`, stack));
-    stack.delete(value);
+    try {
+      for (let index = 0; index < value.length; index += 1) {
+        const descriptor = Object.getOwnPropertyDescriptor(value, index);
+        if (!descriptor) throw new Error(`${path}[${index}] must not be a sparse array entry.`);
+        if (!descriptor.enumerable || descriptor.get || descriptor.set) {
+          throw new Error(`${path}[${index}] must be an enumerable data property.`);
+        }
+        assertPortableJson(descriptor.value, `${path}[${index}]`, stack);
+      }
+      if (Object.getOwnPropertyNames(value).length !== value.length + 1) {
+        throw new Error(`${path} must not contain hidden or extra array properties.`);
+      }
+    } finally {
+      stack.delete(value);
+    }
     return;
   }
   if (Object.getPrototypeOf(value) !== Object.prototype && Object.getPrototypeOf(value) !== null) {
     throw new Error(`${path} must be a plain object.`);
   }
+  if (Object.getOwnPropertySymbols(value).length > 0) {
+    throw new Error(`${path} must not contain symbol-keyed object properties.`);
+  }
+  const ownPropertyNames = Object.getOwnPropertyNames(value);
+  const keys = Object.keys(value);
+  if (ownPropertyNames.length !== keys.length) {
+    throw new Error(`${path} must not contain non-enumerable object properties.`);
+  }
   stack.add(value);
-  for (const [key, entry] of Object.entries(value)) assertPortableJson(entry, `${path}.${key}`, stack);
-  stack.delete(value);
+  try {
+    for (const key of keys) {
+      const descriptor = Object.getOwnPropertyDescriptor(value, key);
+      if (!descriptor || descriptor.get || descriptor.set) {
+        throw new Error(`${path}.${key} must be an enumerable data property.`);
+      }
+      assertPortableJson(descriptor.value, `${path}.${key}`, stack);
+    }
+  } finally {
+    stack.delete(value);
+  }
 }
 
 export function canonicalizePortableJson(value: unknown): PortableJson {
@@ -72,7 +105,7 @@ export function fingerprintEvaluationDataset(value: { id: unknown; fields: unkno
  * accepting a snapshot that can no longer prove which cases were run.
  */
 export function assertEvaluationDatasetSnapshot(snapshot: EvaluationDatasetSnapshot): void {
-  if (snapshot.dataset.projectId !== snapshot.projectId) {
+  if (snapshot.dataset.projectId !== undefined && snapshot.dataset.projectId !== snapshot.projectId) {
     throw new Error('An evaluation dataset snapshot must belong to its project.');
   }
   if (fingerprintEvaluationDataset(snapshot.dataset) !== snapshot.fingerprint) {

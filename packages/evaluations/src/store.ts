@@ -1,5 +1,5 @@
 import { assertEvaluationDatasetSnapshot } from './canonical.js';
-import { normalizeEvaluationRun } from './normalization.js';
+import { normalizeEvaluationRun, shouldReplaceEvaluationRun } from './normalization.js';
 import type {
   EvaluationDatasetSnapshot,
   EvaluationRecordingArtifact,
@@ -16,7 +16,7 @@ export class InMemoryEvaluationRunStore implements EvaluationRunStore {
     const normalized = normalizeEvaluationRun(run);
     const key = `${normalized.projectId}/${normalized.id}`;
     const existing = this.#runs.get(key);
-    if ((existing?.revision ?? 0) > (normalized.revision ?? 0)) return;
+    if (!shouldReplaceEvaluationRun(existing, normalized)) return;
     this.#runs.set(key, structuredClone(normalized));
   }
 
@@ -45,7 +45,7 @@ export class InMemoryEvaluationRunStore implements EvaluationRunStore {
     assertEvaluationDatasetSnapshot(snapshot);
     const key = `${snapshot.projectId}/${snapshot.fingerprint}`;
     // A content-addressed historical snapshot must never be rewritten by a
-    // later save of the live .rivet-data dataset.
+    // later edit of the live evaluation dataset.
     if (this.#datasetSnapshots.has(key)) return;
     this.#datasetSnapshots.set(key, structuredClone(snapshot));
   }

@@ -47,6 +47,7 @@ describe('workspaceTransitions', () => {
     assert.deepEqual(state, {
       data: { version: 1, suites: [], baselines: [] },
       datasets: [],
+      migratedLegacyProjectIds: [],
       activeView: 'definition',
       runs: [],
       runningSuiteId: undefined,

@@ -4,7 +4,6 @@ import { LazyCodeEditor } from './LazyComponents';
 import { useAtomValue, useAtom, useSetAtom } from 'jotai';
 import { lastRunDataByNodeState } from '../state/dataFlow';
 import { graphState } from '../state/graph';
-import { projectState } from '../state/savedGraphs.js';
 import { type BuiltInNodes, type GraphInputNode, type PortId } from '@valerypopoff/rivet2-core';
 import { max, range } from 'lodash-es';
 import { css } from '@emotion/react';
@@ -49,7 +48,6 @@ export const AddRunInputsToEvaluationModal: FC<{
 }> = ({ open, onClose }) => {
   const lastRunData = useAtomValue(lastRunDataByNodeState);
   const graph = useAtomValue(graphState);
-  const project = useAtomValue(projectState);
   const [selectedExecutionNum, setSelectedExecutionNum] = useState(1);
   const [selectedSuiteId, setSelectedSuiteId] = useState<string | undefined>(undefined);
   const [{ data, datasets }, setEvaluationsState] = useAtom(evaluationsState);
@@ -93,11 +91,9 @@ export const AddRunInputsToEvaluationModal: FC<{
   const suiteOptions = useMemo(
     () =>
       data.suites
-        .filter((suite) =>
-          datasets.some((dataset) => dataset.id === suite.datasetId && dataset.projectId === project.metadata.id),
-        )
+        .filter((suite) => datasets.some((dataset) => dataset.id === suite.datasetId))
         .map((suite) => ({ label: suite.name, value: suite.id })),
-    [data.suites, datasets, project.metadata.id],
+    [data.suites, datasets],
   );
 
   useEffect(() => {
@@ -113,9 +109,7 @@ export const AddRunInputsToEvaluationModal: FC<{
       return;
     }
     const suite = data.suites.find((candidate) => candidate.id === selectedSuiteId);
-    const dataset = datasets.find(
-      (candidate) => candidate.id === suite?.datasetId && candidate.projectId === project.metadata.id,
-    );
+    const dataset = datasets.find((candidate) => candidate.id === suite?.datasetId);
     if (!suite || !dataset) return;
     const values = Object.fromEntries(
       suite.inputBindings.flatMap((binding) =>
@@ -124,9 +118,10 @@ export const AddRunInputsToEvaluationModal: FC<{
     );
     setEvaluationsState((state) => ({
       ...state,
-      data: { ...state.data, selectedSuiteId, selectedDatasetId: undefined },
+      selectedSuiteId,
+      selectedDatasetId: undefined,
       datasets: state.datasets.map((candidate) =>
-        candidate.id === dataset.id && candidate.projectId === project.metadata.id
+        candidate.id === dataset.id
           ? {
               ...candidate,
               cases: [

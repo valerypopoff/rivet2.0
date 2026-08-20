@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { formatEvaluationCompletionToast } from './evaluationRunSummary.js';
+import { formatEvaluationCompletionToast, formatEvaluationRunHistoryPersistenceWarning } from './evaluationRunSummary.js';
 
 test('evaluation completion summaries use authoritative quality and evaluated trial counts', () => {
   assert.equal(
@@ -60,6 +60,70 @@ test('execution benchmark summaries describe measurement instead of quality pass
   );
 });
 
+test('scoring completion summaries show the normalized score and coverage', () => {
+  assert.equal(
+    formatEvaluationCompletionToast({
+      purpose: 'evaluation',
+      executionStatus: 'completed',
+      qualityStatus: 'scored',
+      aggregate: {
+        trialCount: 4,
+        evaluatedTrialCount: 0,
+        notEvaluatedTrialCount: 0,
+        unableToEvaluateTrialCount: 0,
+        passedTrialCount: 0,
+        failedTrialCount: 0,
+        erroredTrialCount: 0,
+        canceledTrialCount: 0,
+        scoredTrialCount: 4,
+        missingScoreTrialCount: 0,
+        passRate: 0,
+        meanScore: 0.85,
+        averageLatencyMs: 1,
+        p95LatencyMs: 1,
+        targetErrorRate: 0,
+        evaluatorErrorRate: 0,
+        toolFailureRate: 0,
+        metrics: {},
+      },
+      trials: [],
+    }),
+    'Evaluation Scored: 85/100; 4 of 4 requested trials scored.',
+  );
+});
+
+test('incomplete scoring summaries retain zero-score coverage instead of describing thresholds', () => {
+  assert.equal(
+    formatEvaluationCompletionToast({
+      purpose: 'evaluation',
+      evaluationMode: 'scoring',
+      executionStatus: 'completed',
+      qualityStatus: 'unable-to-evaluate',
+      aggregate: {
+        trialCount: 2,
+        evaluatedTrialCount: 0,
+        notEvaluatedTrialCount: 0,
+        unableToEvaluateTrialCount: 2,
+        passedTrialCount: 0,
+        failedTrialCount: 0,
+        erroredTrialCount: 0,
+        canceledTrialCount: 0,
+        scoredTrialCount: 0,
+        missingScoreTrialCount: 2,
+        passRate: 0,
+        averageLatencyMs: 1,
+        p95LatencyMs: 1,
+        targetErrorRate: 0,
+        evaluatorErrorRate: 1,
+        toolFailureRate: 0,
+        metrics: {},
+      },
+      trials: [],
+    }),
+    'Evaluation Unable to evaluate: unavailable; 0 of 2 requested trials scored.',
+  );
+});
+
 test('execution benchmark summaries surface trial execution errors', () => {
   assert.equal(
     formatEvaluationCompletionToast({
@@ -115,5 +179,12 @@ test('threshold-only evaluation summaries do not claim that zero of zero trials 
       trials: [],
     }),
     'Evaluation Passed: aggregate requirements passed; no per-trial quality checks ran.',
+  );
+});
+
+test('run-history persistence warnings expose the storage reason without calling the evaluation failed', () => {
+  assert.equal(
+    formatEvaluationRunHistoryPersistenceWarning(new Error('QuotaExceededError: storage is full')),
+    'This completed evaluation could not be saved to run history: QuotaExceededError: storage is full',
   );
 });

@@ -1,5 +1,4 @@
-import type { ProjectId } from '@valerypopoff/rivet2-core';
-import { validateEvaluationDataset } from './datasetTransfer.js';
+import { localizeEvaluationDataset, validateEvaluationDatasetForTransfer } from './datasetTransfer.js';
 import { deserializeEvaluationProjectData } from './serialization.js';
 import type { EvaluationDataset, EvaluationSuite } from './types.js';
 
@@ -17,7 +16,6 @@ export type EvaluationSuiteBundle = {
 };
 
 export type EvaluationSuiteBundleImportScope = {
-  projectId: ProjectId;
   suiteId: string;
   datasetId: string;
 };
@@ -44,7 +42,7 @@ function validateBundle(value: unknown): EvaluationSuiteBundle {
     throw new Error(`Expected an evaluation suite export with version ${SUITE_BUNDLE_EXPORT_VERSION}.`);
   }
   const suite = validateEvaluationSuite(value.suite);
-  const dataset = validateEvaluationDataset(value.dataset);
+  const dataset = validateEvaluationDatasetForTransfer(value.dataset);
   if (suite.datasetId !== dataset.id) {
     throw new Error('The evaluation suite export must include the dataset referenced by its suite.');
   }
@@ -66,7 +64,7 @@ export function serializeEvaluationSuiteBundleJson(suite: EvaluationSuite, datas
 }
 
 /**
- * Imports a bundle as new project resources. Field and case IDs remain stable
+ * Imports a bundle as new local evaluation resources. Field and case IDs remain stable
  * so the imported suite's bindings and expected-value references still point
  * to its imported dataset; suite and dataset identities are always supplied by
  * the destination to avoid overwriting existing resources.
@@ -82,15 +80,11 @@ export function deserializeEvaluationSuiteBundleJson(
     throw new Error('Evaluation suite JSON is not valid JSON.');
   }
 
-  requireNonEmptyString(scope.projectId, 'projectId');
   requireNonEmptyString(scope.suiteId, 'suiteId');
   requireNonEmptyString(scope.datasetId, 'datasetId');
 
   const bundle = validateBundle(parsed);
-  const dataset = validateEvaluationDataset(bundle.dataset, {
-    id: scope.datasetId,
-    projectId: scope.projectId,
-  });
+  const dataset = localizeEvaluationDataset(bundle.dataset, scope.datasetId);
   return {
     dataset,
     suite: {

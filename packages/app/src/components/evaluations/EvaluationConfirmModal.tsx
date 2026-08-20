@@ -16,6 +16,7 @@ const bodyStyles = css`
 `;
 
 export type EvaluationConfirmation = {
+  appearance?: 'danger' | 'primary';
   confirmLabel: string;
   description: string;
   onConfirm: () => void;
@@ -40,7 +41,7 @@ export const EvaluationConfirmModal: FC<{
             Cancel
           </Button>
           <Button
-            appearance="primary"
+            appearance={confirmation.appearance ?? 'primary'}
             onClick={() => {
               onClose();
               confirmation.onConfirm();

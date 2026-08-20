@@ -1,6 +1,19 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { isEvaluationValueCompatibleWithDataType, type PortableJson } from '../src/index.js';
+import {
+  assertEvaluationDatasetValuesMatchDeclaredTypes,
+  areEvaluationDataTypesCompatible,
+  isPortableEvaluationDataType,
+  isEvaluationValueCompatibleWithDataType,
+  type PortableJson,
+} from '../src/index.js';
+
+test('matches declared evaluator source and input types while allowing any on either side', () => {
+  assert.equal(areEvaluationDataTypesCompatible('object', 'object'), true);
+  assert.equal(areEvaluationDataTypesCompatible('object', 'any'), true);
+  assert.equal(areEvaluationDataTypesCompatible('any', 'object'), true);
+  assert.equal(areEvaluationDataTypesCompatible('object', 'string'), false);
+});
 
 test('checks scalar evaluation field values by their declared Rivet type', () => {
   assert.equal(isEvaluationValueCompatibleWithDataType('topic', 'string'), true);
@@ -35,6 +48,25 @@ test('fails closed for unknown and non-portable Rivet data types', () => {
   assert.equal(isEvaluationValueCompatibleWithDataType({}, 'fn<object>'), false);
   assert.equal(isEvaluationValueCompatibleWithDataType({}, 'image'), false);
   assert.equal(isEvaluationValueCompatibleWithDataType({}, 'future-provider-value'), false);
+});
+
+test('defines the portable dataset type contract explicitly', () => {
+  assert.equal(isPortableEvaluationDataType('object[]'), true);
+  assert.equal(isPortableEvaluationDataType('vector'), true);
+  assert.equal(isPortableEvaluationDataType('image'), false);
+});
+
+test('reports the exact transferred dataset cell whose value violates its declared type', () => {
+  assert.throws(
+    () =>
+      assertEvaluationDatasetValuesMatchDeclaredTypes({
+        id: 'dataset-a',
+        name: 'Dataset',
+        fields: [{ id: 'score', name: 'Score', dataType: 'number', role: 'expected' }],
+        cases: [{ id: 'case-a', name: 'Case', values: { score: 'not-a-number' } }],
+      }),
+    /cases\[0\]\.values\.score.*number/u,
+  );
 });
 
 test('rejects non-portable runtime values even for any', () => {

@@ -1,4 +1,8 @@
-import { evaluateAssertion } from './assertions.js';
+import {
+  evaluateAssertion,
+  getEvaluationTopLevelOutputId,
+  validateEvaluationAssertionConfiguration,
+} from './assertions.js';
 import {
   assertPortableJson,
   canonicalStringify,
@@ -6,8 +10,9 @@ import {
   fingerprint,
   fingerprintEvaluationDataset,
 } from './canonical.js';
+import { normalizeEvaluationRun } from './normalization.js';
 import { EvaluationGraphExecutionError } from './types.js';
-import { isEvaluationValueCompatibleWithDataType } from './dataTypes.js';
+import { areEvaluationDataTypesCompatible, isEvaluationValueCompatibleWithDataType } from './dataTypes.js';
 import type {
   EvaluationAggregate,
   EvaluationBaselineSnapshot,
@@ -15,6 +20,7 @@ import type {
   EvaluationDataset,
   EvaluationExecutionMetrics,
   EvaluationGraphRunner,
+  EvaluationGraphEvaluator,
   EvaluationObservation,
   EvaluationProjectData,
   EvaluationQualityReason,
@@ -23,6 +29,7 @@ import type {
   EvaluationRunPurpose,
   EvaluationRunProvenance,
   EvaluationSuite,
+  EvaluationSuiteMode,
   EvaluationThreshold,
   EvaluationThresholdResult,
   EvaluationTrial,
@@ -31,10 +38,20 @@ import type {
   PortableJson,
 } from './types.js';
 import { findAutoDelegateGraphCandidate } from '@valerypopoff/rivet2-core';
-import type { GraphId, GraphInputNode, GraphOutputNode, Project } from '@valerypopoff/rivet2-core';
+import type {
+  ChartNode,
+  GraphId,
+  GraphInputNode,
+  GraphOutputNode,
+  NodeConnection,
+  NodeGraph,
+  Project,
+} from '@valerypopoff/rivet2-core';
 
 const DEFAULT_CONCURRENCY = 4;
 const MAX_CONCURRENCY = 32;
+
+export const LEGACY_EVALUATOR_INPUT_IDS = ['case', 'inputs', 'expected', 'outputs', 'run'] as const;
 
 export type RunEvaluationSuiteOptions = {
   project: Project;
@@ -54,10 +71,27 @@ export type RunEvaluationSuiteOptions = {
 };
 
 export function hasAuthoritativeEvaluationCriteria(suite: EvaluationSuite): boolean {
+  if (getEvaluationSuiteMode(suite) === 'scoring') return suite.evaluators.length > 0;
   return (
     suite.assertions.some((assertion) => assertion.required !== false) ||
     suite.evaluators.some((evaluator) => evaluator.required !== false) ||
     (suite.thresholds?.length ?? 0) > 0
+  );
+}
+
+/** Older saved suites predate scoring and therefore retain pass/fail semantics. */
+export function getEvaluationSuiteMode(suite: Pick<EvaluationSuite, 'evaluationMode'>): EvaluationSuiteMode {
+  return suite.evaluationMode === 'scoring' ? 'scoring' : 'pass-fail';
+}
+
+/** Existing evaluators with the complete reserved-input contract keep working without migration. */
+export function usesLegacyEvaluatorInputEnvelope(
+  evaluator: Pick<EvaluationGraphEvaluator, 'inputBindings'>,
+  graphInputIds: readonly string[],
+): boolean {
+  return (
+    evaluator.inputBindings === undefined &&
+    LEGACY_EVALUATOR_INPUT_IDS.every((inputId) => graphInputIds.includes(inputId))
   );
 }
 
@@ -104,6 +138,76 @@ export async function runEvaluationWorkPool<TWork, TResult>(
 
 export function createEmptyMetrics(): EvaluationExecutionMetrics {
   return { durationMs: 0 };
+}
+
+const executionMetricCountKeys = [
+  'inputTokens',
+  'outputTokens',
+  'cachedInputTokens',
+  'reasoningTokens',
+  'modelCallCount',
+  'toolCallCount',
+  'toolFailureCount',
+] as const;
+
+/**
+ * Graph runners are host adapters, so their TypeScript return type is not a
+ * runtime trust boundary. Copy only the metrics Rivet understands and reject
+ * values that would become `null` or otherwise change during JSON storage.
+ */
+function cloneExecutionMetrics(value: EvaluationExecutionMetrics, path: string): EvaluationExecutionMetrics {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error(`${path} must be an object.`);
+  }
+  if (!Number.isFinite(value.durationMs) || value.durationMs < 0) {
+    throw new Error(`${path}.durationMs must be a non-negative finite number.`);
+  }
+  const metrics: EvaluationExecutionMetrics = { durationMs: value.durationMs };
+  for (const key of executionMetricCountKeys) {
+    const count = value[key];
+    if (count === undefined) continue;
+    if (!Number.isSafeInteger(count) || count < 0) {
+      throw new Error(`${path}.${key} must be a non-negative safe integer.`);
+    }
+    metrics[key] = count;
+  }
+  if (value.costUsd !== undefined) {
+    if (!Number.isFinite(value.costUsd) || value.costUsd < 0) {
+      throw new Error(`${path}.costUsd must be a non-negative finite number.`);
+    }
+    metrics.costUsd = value.costUsd;
+  }
+  if (value.hasUnknownCost !== undefined) {
+    if (typeof value.hasUnknownCost !== 'boolean') throw new Error(`${path}.hasUnknownCost must be a boolean.`);
+    metrics.hasUnknownCost = value.hasUnknownCost;
+  }
+  return metrics;
+}
+
+function tryCloneExecutionMetrics(
+  value: EvaluationExecutionMetrics | undefined,
+  path: string,
+): EvaluationExecutionMetrics | undefined {
+  if (value === undefined) return undefined;
+  try {
+    return cloneExecutionMetrics(value, path);
+  } catch {
+    return undefined;
+  }
+}
+
+function cloneOptionalPortableJson(value: PortableJson | undefined, path: string): PortableJson | undefined {
+  if (value === undefined) return undefined;
+  assertPortableJson(value, path);
+  return clonePortableJson(value);
+}
+
+function tryCloneOptionalPortableJson(value: PortableJson | undefined, path: string): PortableJson | undefined {
+  try {
+    return cloneOptionalPortableJson(value, path);
+  } catch {
+    return undefined;
+  }
 }
 
 /**
@@ -235,6 +339,24 @@ function validateDefinitionIds(suite: EvaluationSuite): void {
   }
 }
 
+const rateThresholdMetrics = new Set([
+  'pass-rate',
+  'mean-score',
+  'target-error-rate',
+  'evaluator-error-rate',
+  'tool-failure-rate',
+]);
+
+function formatThresholdResultValue(
+  metric: string,
+  operator: EvaluationThreshold['operator'],
+  value: number,
+): string {
+  return operator === 'max-regression' || rateThresholdMetrics.has(metric)
+    ? `${Number((value * 100).toFixed(4))}%`
+    : String(value);
+}
+
 function validateThresholdConfiguration(threshold: EvaluationThreshold): void {
   const { metric, operator, value } = threshold as EvaluationThreshold & {
     metric: string;
@@ -249,14 +371,7 @@ function validateThresholdConfiguration(threshold: EvaluationThreshold): void {
   }
   if (!Number.isFinite(value)) throw new Error(`Evaluation threshold "${threshold.id}" must use a finite value.`);
 
-  const rateMetrics = new Set([
-    'pass-rate',
-    'mean-score',
-    'target-error-rate',
-    'evaluator-error-rate',
-    'tool-failure-rate',
-  ]);
-  if (rateMetrics.has(metric) && (value < 0 || value > 1)) {
+  if (rateThresholdMetrics.has(metric) && (value < 0 || value > 1)) {
     throw new Error(`Evaluation threshold "${threshold.id}" must use a value from 0 to 1.`);
   }
   if (['average-cost', 'total-cost', 'average-latency-ms', 'p95-latency-ms'].includes(metric) && value < 0) {
@@ -286,8 +401,9 @@ function validateSuite(
   dataset: EvaluationDataset,
   purpose: EvaluationRunPurpose,
 ): void {
+  const evaluationMode = getEvaluationSuiteMode(suite);
   validateDefinitionIds(suite);
-  if (dataset.projectId !== project.metadata.id) {
+  if (dataset.projectId !== undefined && dataset.projectId !== project.metadata.id) {
     throw new Error(`Evaluation dataset "${dataset.name}" belongs to a different project.`);
   }
   if (suite.datasetId !== dataset.id)
@@ -295,7 +411,16 @@ function validateSuite(
   const graph = project.graphs[suite.targetGraphId];
   if (!graph) throw new Error(`Target graph "${suite.targetGraphId}" does not exist.`);
   const graphInputs = graph.nodes.filter((node): node is GraphInputNode => node.type === 'graphInput');
-  const inputIds = new Set(graphInputs.map((input) => input.data.id));
+  const graphInputIds = graphInputs.map((input) => input.data.id);
+  if (new Set(graphInputIds).size !== graphInputIds.length) {
+    throw new Error(`Target graph "${suite.targetGraphId}" has duplicate Graph Input ids.`);
+  }
+  const graphOutputs = graph.nodes.filter((node): node is GraphOutputNode => node.type === 'graphOutput');
+  const graphOutputIds = graphOutputs.map((output) => output.data.id);
+  if (new Set(graphOutputIds).size !== graphOutputIds.length) {
+    throw new Error(`Target graph "${suite.targetGraphId}" has duplicate Graph Output ids.`);
+  }
+  const inputIds = new Set(graphInputIds);
   const graphInputsById = new Map(graphInputs.map((input) => [input.data.id, input]));
   const fields = new Map(dataset.fields.map((field) => [field.id, field]));
   if (fields.size !== dataset.fields.length)
@@ -313,7 +438,7 @@ function validateSuite(
     if (field.role !== 'input')
       throw new Error(`Dataset field "${field.name}" must have the input role to bind it to a graph input.`);
     const graphInput = graphInputsById.get(binding.graphInputId)!;
-    if (field.dataType !== 'any' && graphInput.data.dataType !== 'any' && field.dataType !== graphInput.data.dataType) {
+    if (!areEvaluationDataTypesCompatible(field.dataType, graphInput.data.dataType)) {
       throw new Error(
         `Dataset field "${field.name}" (${field.dataType}) is not compatible with graph input "${graphInput.data.id}" (${graphInput.data.dataType}).`,
       );
@@ -331,15 +456,21 @@ function validateSuite(
     }
   }
 
-  // Validate every enabled case before the worker pool starts. A field's
-  // declared type is only authoring metadata; the actual portable value is
-  // the execution contract.
+  // Validate every enabled case before the worker pool starts. The declared
+  // field type is part of the dataset contract even when that field is not
+  // bound directly to the target graph (for example evaluator metadata).
   for (const testCase of dataset.cases.filter((candidate) => candidate.enabled !== false)) {
     for (const [fieldId, value] of Object.entries(testCase.values)) {
-      if (!fields.has(fieldId)) {
+      const field = fields.get(fieldId);
+      if (!field) {
         throw new Error(`Case "${testCase.name}" supplies unknown dataset field "${fieldId}".`);
       }
       assertPortableJson(value, `case.${testCase.id}.${fieldId}`);
+      if (!isEvaluationValueCompatibleWithDataType(value, field.dataType)) {
+        throw new Error(
+          `Case "${testCase.name}" value for "${field.name}" is not compatible with its declared ${field.dataType} type.`,
+        );
+      }
     }
     for (const binding of suite.inputBindings) {
       const value = testCase.values[binding.datasetFieldId];
@@ -361,13 +492,31 @@ function validateSuite(
       }
     }
   }
-  if (purpose === 'evaluation') {
+  if (purpose === 'evaluation' && evaluationMode === 'pass-fail') {
     for (const assertion of suite.assertions) {
+      const outputId = getEvaluationTopLevelOutputId(assertion.outputPath);
+      if (assertion.outputPath.trim() !== '$' && outputId === undefined) {
+        throw new Error(
+          `Assertion "${assertion.name}" output path must start with a named target Graph Output.`,
+        );
+      }
+      if (outputId !== undefined && !graphOutputIds.includes(outputId)) {
+        throw new Error(`Assertion "${assertion.name}" references missing target output "${outputId}".`);
+      }
       if (assertion.expected.kind === 'dataset-field') {
         const field = fields.get(assertion.expected.fieldId);
         if (!field) throw new Error(`Assertion "${assertion.name}" references a missing expected dataset field.`);
         if (field.role !== 'expected')
           throw new Error(`Assertion "${assertion.name}" must reference a dataset field with the expected role.`);
+        for (const testCase of dataset.cases.filter((candidate) => candidate.enabled !== false)) {
+          const expected = testCase.values[field.id];
+          if (expected === undefined) {
+            throw new Error(`Case "${testCase.name}" is missing expected field "${field.name}".`);
+          }
+          validateEvaluationAssertionConfiguration(assertion, expected);
+        }
+      } else {
+        validateEvaluationAssertionConfiguration(assertion, assertion.expected.value);
       }
     }
   }
@@ -393,14 +542,113 @@ function validateSuite(
     }
     const evaluatorGraph = project.graphs[evaluator.graphId];
     if (!evaluatorGraph) throw new Error(`Evaluator graph "${evaluator.graphId}" does not exist.`);
-    const evaluatorInputs = new Set(
-      evaluatorGraph.nodes
-        .filter((node): node is GraphInputNode => node.type === 'graphInput')
-        .map((node) => node.data.id),
+    const evaluatorGraphInputs = evaluatorGraph.nodes.filter(
+      (node): node is GraphInputNode => node.type === 'graphInput',
     );
-    for (const inputId of ['case', 'inputs', 'expected', 'outputs', 'run']) {
-      if (!evaluatorInputs.has(inputId)) {
-        throw new Error(`Evaluator graph "${evaluator.name}" must declare the reserved Graph Input "${inputId}".`);
+    const evaluatorInputIds = evaluatorGraphInputs.map((input) => input.data.id);
+    if (new Set(evaluatorInputIds).size !== evaluatorInputIds.length) {
+      throw new Error(`Evaluator graph "${evaluator.name}" has duplicate Graph Input ids.`);
+    }
+    const evaluatorOutputIds = evaluatorGraph.nodes
+      .filter((node): node is GraphOutputNode => node.type === 'graphOutput')
+      .map((output) => output.data.id);
+    if (new Set(evaluatorOutputIds).size !== evaluatorOutputIds.length) {
+      throw new Error(`Evaluator graph "${evaluator.name}" has duplicate Graph Output ids.`);
+    }
+    const evaluatorInputsById = new Map(evaluatorGraphInputs.map((input) => [input.data.id, input]));
+    const usesLegacyInputs = usesLegacyEvaluatorInputEnvelope(evaluator, evaluatorInputIds);
+    if (usesLegacyInputs) {
+      for (const inputId of LEGACY_EVALUATOR_INPUT_IDS) {
+        const evaluatorInput = evaluatorInputsById.get(inputId)!;
+        if (evaluatorInput.data.dataType !== 'object' && evaluatorInput.data.dataType !== 'any') {
+          throw new Error(
+            `Evaluator graph "${evaluator.name}" legacy input "${inputId}" must accept the object or any data type.`,
+          );
+        }
+      }
+      for (const evaluatorInput of evaluatorGraphInputs) {
+        if (
+          LEGACY_EVALUATOR_INPUT_IDS.includes(evaluatorInput.data.id as (typeof LEGACY_EVALUATOR_INPUT_IDS)[number])
+        ) {
+          continue;
+        }
+        if (evaluatorInput.data.defaultValue === undefined || evaluatorInput.data.useDefaultValueInput) {
+          throw new Error(
+            `Evaluator graph "${evaluator.name}" input "${evaluatorInput.data.id}" needs a direct binding or a static graph default.`,
+          );
+        }
+      }
+    } else {
+      const evaluatorBindings = evaluator.inputBindings ?? [];
+      const boundEvaluatorInputs = new Set<string>();
+      for (const binding of evaluatorBindings) {
+        if (boundEvaluatorInputs.has(binding.graphInputId)) {
+          throw new Error(
+            `Evaluator graph "${evaluator.name}" input "${binding.graphInputId}" is bound more than once.`,
+          );
+        }
+        boundEvaluatorInputs.add(binding.graphInputId);
+        const evaluatorInput = evaluatorInputsById.get(binding.graphInputId);
+        if (!evaluatorInput) {
+          throw new Error(
+            `Evaluator graph "${evaluator.name}" input "${binding.graphInputId}" does not exist on the selected graph.`,
+          );
+        }
+
+        let sourceDataType: string;
+        if (binding.source.kind === 'dataset-field') {
+          const field = fields.get(binding.source.fieldId);
+          if (!field) {
+            throw new Error(
+              `Evaluator graph "${evaluator.name}" binding references missing dataset field "${binding.source.fieldId}".`,
+            );
+          }
+          sourceDataType = field.dataType;
+          for (const testCase of dataset.cases.filter((candidate) => candidate.enabled !== false)) {
+            const value = testCase.values[field.id];
+            if (value === undefined) {
+              throw new Error(
+                `Case "${testCase.name}" has no saved value for evaluator input "${binding.graphInputId}" from dataset field "${field.name}".`,
+              );
+            }
+            if (!isEvaluationValueCompatibleWithDataType(value, evaluatorInput.data.dataType)) {
+              throw new Error(
+                `Case "${testCase.name}" value from dataset field "${field.name}" is not compatible with evaluator input "${binding.graphInputId}" (${evaluatorInput.data.dataType}).`,
+              );
+            }
+          }
+        } else if (binding.source.kind === 'target-output') {
+          const outputId = binding.source.outputId;
+          const targetOutput = graph.nodes.find(
+            (node): node is GraphOutputNode =>
+              node.type === 'graphOutput' && (node.data as { id?: unknown }).id === outputId,
+          );
+          if (!targetOutput) {
+            throw new Error(
+              `Evaluator graph "${evaluator.name}" binding references missing target output "${outputId}".`,
+            );
+          }
+          sourceDataType = targetOutput.data.dataType;
+        } else if (binding.source.kind === 'context') {
+          sourceDataType = 'object';
+        } else {
+          throw new Error(
+            `Evaluator graph "${evaluator.name}" input "${binding.graphInputId}" uses an unsupported source.`,
+          );
+        }
+        if (!areEvaluationDataTypesCompatible(sourceDataType, evaluatorInput.data.dataType)) {
+          throw new Error(
+            `Evaluator graph "${evaluator.name}" source for input "${binding.graphInputId}" (${sourceDataType}) is not compatible with ${evaluatorInput.data.dataType}.`,
+          );
+        }
+      }
+      for (const evaluatorInput of evaluatorGraphInputs) {
+        if (boundEvaluatorInputs.has(evaluatorInput.data.id)) continue;
+        if (evaluatorInput.data.defaultValue === undefined || evaluatorInput.data.useDefaultValueInput) {
+          throw new Error(
+            `Evaluator graph "${evaluator.name}" input "${evaluatorInput.data.id}" must be bound to a target output, dataset field, or evaluation context value, or have a static graph default.`,
+          );
+        }
       }
     }
     const resultOutput = evaluatorGraph.nodes.find(
@@ -414,7 +662,7 @@ function validateSuite(
     }
   }
 
-  if (purpose === 'evaluation') {
+  if (purpose === 'evaluation' && evaluationMode === 'pass-fail') {
     const hasRequiredPerTrialCheck =
       suite.assertions.some((assertion) => assertion.required !== false) ||
       suite.evaluators.some((evaluator) => evaluator.required !== false);
@@ -444,6 +692,8 @@ function validateSuite(
         throw new Error(`Evaluation threshold metric "${metric}" is not supported.`);
       }
     }
+  } else if (purpose === 'evaluation' && suite.evaluators.length === 0) {
+    throw new Error('A scoring evaluation suite requires at least one evaluator graph.');
   }
 
   const caseIds = new Set(dataset.cases.map((testCase) => testCase.id));
@@ -536,6 +786,62 @@ function createEvaluatorCaseInput(testCase: EvaluationDataset['cases'][number]):
   };
 }
 
+function createEvaluatorGraphInputs(input: {
+  evaluator: EvaluationGraphEvaluator;
+  project: Project;
+  testCase: EvaluationDataset['cases'][number];
+  targetInputs: Record<string, PortableJson>;
+  expected: Record<string, PortableJson>;
+  targetOutputs: Record<string, PortableJson>;
+  run: PortableJson;
+}): Record<string, PortableJson> {
+  const { evaluator, project, testCase, targetInputs, expected, targetOutputs, run } = input;
+  const contextValues = {
+    case: createEvaluatorCaseInput(testCase),
+    inputs: clonePortableJson(targetInputs),
+    expected: clonePortableJson(expected),
+    outputs: clonePortableJson(targetOutputs),
+    run: clonePortableJson(run),
+  } satisfies Record<(typeof LEGACY_EVALUATOR_INPUT_IDS)[number], PortableJson>;
+  const evaluatorGraphInputs =
+    project.graphs[evaluator.graphId]?.nodes.filter((node): node is GraphInputNode => node.type === 'graphInput') ?? [];
+  const evaluatorGraphInputIds = evaluatorGraphInputs.map((node) => node.data.id);
+  if (usesLegacyEvaluatorInputEnvelope(evaluator, evaluatorGraphInputIds)) return contextValues;
+  const evaluatorInputsById = new Map(evaluatorGraphInputs.map((node) => [node.data.id, node]));
+
+  const evaluatorInputs: Record<string, PortableJson> = {};
+  for (const binding of evaluator.inputBindings ?? []) {
+    if (binding.source.kind === 'dataset-field') {
+      const value = testCase.values[binding.source.fieldId];
+      if (value === undefined) {
+        throw new Error(
+          `Case "${testCase.name}" has no value for evaluator input "${binding.graphInputId}" from dataset field "${binding.source.fieldId}".`,
+        );
+      }
+      evaluatorInputs[binding.graphInputId] = clonePortableJson(value);
+    } else if (binding.source.kind === 'target-output') {
+      if (!Object.hasOwn(targetOutputs, binding.source.outputId)) {
+        throw new Error(
+          `Target graph did not produce output "${binding.source.outputId}" required by evaluator input "${binding.graphInputId}".`,
+        );
+      }
+      const targetOutputValue = targetOutputs[binding.source.outputId]!;
+      const evaluatorInput = evaluatorInputsById.get(binding.graphInputId);
+      if (evaluatorInput && !isEvaluationValueCompatibleWithDataType(targetOutputValue, evaluatorInput.data.dataType)) {
+        throw new Error(
+          `Target output "${binding.source.outputId}" is not compatible with evaluator input "${binding.graphInputId}" (${evaluatorInput.data.dataType}).`,
+        );
+      }
+      evaluatorInputs[binding.graphInputId] = clonePortableJson(targetOutputValue);
+    } else if (binding.source.kind === 'context') {
+      evaluatorInputs[binding.graphInputId] = clonePortableJson(contextValues[binding.source.context]);
+    } else {
+      throw new Error(`Evaluator input "${binding.graphInputId}" uses an unsupported source.`);
+    }
+  }
+  return evaluatorInputs;
+}
+
 function hashStableText(value: string): number {
   let hash = 0x811c9dc5;
   for (let index = 0; index < value.length; index += 1) {
@@ -553,16 +859,21 @@ function deriveSeed(seed: number | undefined, caseId: string, trialIndex: number
   return (value ^ (value >>> 16)) >>> 0;
 }
 
-function normalizeEvaluatorResult(value: PortableJson): EvaluationObservation {
+function normalizeEvaluatorResult(value: PortableJson, evaluationMode: EvaluationSuiteMode): EvaluationObservation {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) {
     throw new Error('Evaluator graph output "result" must be an object.');
   }
-  if (typeof value.passed !== 'boolean') throw new Error('Evaluator graph output "result.passed" must be a boolean.');
+  if (evaluationMode === 'pass-fail' && typeof value.passed !== 'boolean') {
+    throw new Error('Evaluator graph output "result.passed" must be a boolean.');
+  }
+  const score = value.score;
   if (
-    value.score !== undefined &&
-    (typeof value.score !== 'number' || !Number.isFinite(value.score) || value.score < 0 || value.score > 1)
+    (evaluationMode === 'scoring' || score !== undefined) &&
+    (typeof score !== 'number' || !Number.isFinite(score) || score < 0 || score > 100)
   ) {
-    throw new Error('Evaluator graph output "result.score" must be a number from 0 to 1.');
+    throw new Error(
+      'Evaluator graph output "result.score" must be a number from 0 to 100 (for example, return 85 for 85/100).',
+    );
   }
   if (value.message !== undefined && typeof value.message !== 'string') {
     throw new Error('Evaluator graph output "result.message" must be a string.');
@@ -583,8 +894,11 @@ function normalizeEvaluatorResult(value: PortableJson): EvaluationObservation {
     kind: 'graph',
     name: '',
     required: true,
-    status: value.passed ? 'passed' : 'failed',
-    ...(typeof value.score === 'number' ? { score: value.score } : {}),
+    status: evaluationMode === 'scoring' ? 'scored' : value.passed ? 'passed' : 'failed',
+    // Evaluator authors use the same 100-point scale shown by the UI. Runs
+    // retain normalized values so historical aggregation and thresholds stay
+    // backward compatible with existing evaluation records.
+    ...(typeof score === 'number' ? { score: score / 100 } : {}),
     ...(typeof value.message === 'string' ? { message: value.message } : {}),
     ...(value.evidence !== undefined ? { evidence: clonePortableJson(value.evidence) } : {}),
     ...(metrics ? { metrics: clonePortableJson(metrics) as Record<string, number> } : {}),
@@ -648,6 +962,7 @@ async function runTrial(input: {
   signal?: AbortSignal;
 }): Promise<EvaluationTrial> {
   const { project, suite, dataset, purpose, testCase, caseIndex, trialIndex, runId, runGraph, signal } = input;
+  const evaluationMode = getEvaluationSuiteMode(suite);
   const { inputs, expected } = resolveCaseInputs(suite, dataset, testCase, purpose);
   const seed = deriveSeed(suite.configuration?.seed, testCase.id, trialIndex);
   if (seed !== undefined && suite.configuration?.seedGraphInputId) inputs[suite.configuration.seedGraphInputId] = seed;
@@ -672,16 +987,21 @@ async function runTrial(input: {
       suite.configuration?.timeoutMs,
       signal,
     );
-    targetMetrics = target.metrics;
+    targetMetrics = cloneExecutionMetrics(target.metrics, 'target metrics');
     assertPortableJson(target.outputs, 'target outputs');
     outputs = clonePortableJson(target.outputs);
-    recording = target.recording;
-    targetProviderAttempts = target.providerAttempts;
+    recording = target.recording === undefined ? undefined : structuredClone(target.recording);
+    targetProviderAttempts = cloneOptionalPortableJson(target.providerAttempts, 'target provider attempts');
   } catch (error) {
     if (error instanceof EvaluationGraphExecutionError) {
-      targetMetrics = error.metrics ?? targetMetrics;
-      recording = error.recording;
-      targetProviderAttempts = error.providerAttempts;
+      const errorMetrics = tryCloneExecutionMetrics(error.metrics, 'target error metrics');
+      targetMetrics = errorMetrics ?? { ...targetMetrics, hasUnknownCost: true };
+      recording = error.recording === undefined ? undefined : structuredClone(error.recording);
+      targetProviderAttempts = tryCloneOptionalPortableJson(error.providerAttempts, 'target error provider attempts');
+    } else {
+      // A plain adapter failure does not prove that no priced provider work
+      // happened before the error. Do not report authoritative zero cost.
+      targetMetrics = { ...targetMetrics, hasUnknownCost: true };
     }
     targetError = toErrorMessage(error);
     targetMetrics = { ...targetMetrics, durationMs: Math.max(targetMetrics.durationMs, Date.now() - targetStartedAt) };
@@ -722,7 +1042,7 @@ async function runTrial(input: {
       status: 'error',
       message: targetError,
     });
-  } else if (purpose === 'evaluation') {
+  } else if (purpose === 'evaluation' && evaluationMode === 'pass-fail') {
     for (const assertion of suite.assertions) {
       try {
         observations.push(evaluateAssertion(assertion, outputs, testCase));
@@ -740,8 +1060,7 @@ async function runTrial(input: {
   }
 
   for (const evaluator of purpose === 'evaluation' ? suite.evaluators : []) {
-    throwIfAborted(signal);
-    if (targetError && !evaluator.runOnTargetError) {
+    if (targetError && (evaluationMode === 'scoring' || !evaluator.runOnTargetError)) {
       observations.push({
         id: evaluator.id,
         kind: 'graph',
@@ -762,51 +1081,70 @@ async function runTrial(input: {
           runGraph({
             project,
             graphId: evaluator.graphId,
-            inputs: {
-              case: createEvaluatorCaseInput(testCase),
-              inputs,
+            inputs: createEvaluatorGraphInputs({
+              evaluator,
+              project,
+              testCase,
+              targetInputs: inputs,
               expected,
-              outputs,
+              targetOutputs: outputs,
               run: { targetError: targetError ?? null, caseIndex, trialIndex, seed: seed ?? null },
-            },
+            }),
             signal: attemptSignal,
             metadata: { ...metadata, phase: 'evaluator' },
           }),
         suite.configuration?.timeoutMs,
         signal,
       );
-      completedAttemptMetrics = result.metrics;
-      completedAttemptRecording = result.recording;
-      completedAttemptProviderAttempts = result.providerAttempts;
-      evaluatorMetrics = mergeMetrics(evaluatorMetrics, result.metrics);
+      completedAttemptMetrics = cloneExecutionMetrics(result.metrics, `evaluator ${evaluator.name} metrics`);
+      completedAttemptRecording = result.recording === undefined ? undefined : structuredClone(result.recording);
+      completedAttemptProviderAttempts = cloneOptionalPortableJson(
+        result.providerAttempts,
+        `evaluator ${evaluator.name} provider attempts`,
+      );
+      evaluatorMetrics = mergeMetrics(evaluatorMetrics, completedAttemptMetrics);
       assertPortableJson(result.outputs, `evaluator ${evaluator.name} outputs`);
-      const observation = normalizeEvaluatorResult(result.outputs.result ?? null);
+      const observation = normalizeEvaluatorResult(result.outputs.result ?? null, evaluationMode);
       observations.push({
         ...observation,
         id: evaluator.id,
         name: evaluator.name,
         required: evaluator.required !== false,
-        ...(evaluator.scoreWeight === undefined ? {} : { scoreWeight: evaluator.scoreWeight }),
-        durationMs: result.metrics.durationMs || Date.now() - start,
-        ...(result.metrics.costUsd === undefined ? {} : { costUsd: result.metrics.costUsd }),
-        ...(result.providerAttempts === undefined ? {} : { providerAttempts: result.providerAttempts }),
-        ...(result.recording === undefined ? {} : { recording: result.recording }),
+        scoreWeight: evaluator.scoreWeight ?? 1,
+        durationMs: completedAttemptMetrics.durationMs || Date.now() - start,
+        ...(completedAttemptMetrics.costUsd === undefined ? {} : { costUsd: completedAttemptMetrics.costUsd }),
+        ...(completedAttemptProviderAttempts === undefined
+          ? {}
+          : { providerAttempts: completedAttemptProviderAttempts }),
+        ...(completedAttemptRecording === undefined ? {} : { recording: completedAttemptRecording }),
       });
     } catch (error) {
       const executionError = error instanceof EvaluationGraphExecutionError ? error : undefined;
-      const failureMetrics = executionError?.metrics ?? completedAttemptMetrics;
-      const failureProviderAttempts = executionError?.providerAttempts ?? completedAttemptProviderAttempts;
-      const failureRecording = executionError?.recording ?? completedAttemptRecording;
-      if (executionError?.metrics) {
+      const executionErrorMetrics = tryCloneExecutionMetrics(
+        executionError?.metrics,
+        `evaluator ${evaluator.name} error metrics`,
+      );
+      const failureMetrics = executionErrorMetrics ?? completedAttemptMetrics;
+      const failureProviderAttempts =
+        tryCloneOptionalPortableJson(
+          executionError?.providerAttempts,
+          `evaluator ${evaluator.name} error provider attempts`,
+        ) ?? completedAttemptProviderAttempts;
+      const failureRecording =
+        executionError?.recording === undefined ? completedAttemptRecording : structuredClone(executionError.recording);
+      if (executionErrorMetrics) {
         // A failed judge is still a physical graph execution. Its latency,
         // tokens, and cost must remain part of the run rather than vanishing
         // just because the evaluator did not return a valid result object.
-        evaluatorMetrics = mergeMetrics(evaluatorMetrics, executionError.metrics);
+        evaluatorMetrics = mergeMetrics(evaluatorMetrics, executionErrorMetrics);
       } else if (!completedAttemptMetrics) {
         // Generic adapter failures and runner timeouts do not carry an
         // EvaluationGraphExecutionError payload. Their elapsed time is still
         // physical evaluator work and must remain visible in run metrics.
-        evaluatorMetrics = mergeMetrics(evaluatorMetrics, { durationMs: Date.now() - start });
+        evaluatorMetrics = mergeMetrics(evaluatorMetrics, {
+          durationMs: Date.now() - start,
+          hasUnknownCost: true,
+        });
       }
       if (isAbort(error) || signal?.aborted) {
         const executionStatus = 'canceled' as const;
@@ -858,6 +1196,25 @@ async function runTrial(input: {
       code: 'benchmark',
       message: 'This trial measured execution without evaluating output quality.',
     };
+  } else if (evaluationMode === 'scoring') {
+    const scoringObservations = observations.filter((entry) => entry.kind === 'graph');
+    const hasCompleteScore =
+      targetError === undefined &&
+      scoringObservations.length === suite.evaluators.length &&
+      scoringObservations.every((entry) => entry.status === 'scored' && entry.score !== undefined);
+    if (hasCompleteScore) {
+      qualityStatus = 'scored';
+      qualityReason = { code: 'scores-complete', message: 'All evaluator graphs returned a score for this trial.' };
+    } else {
+      qualityStatus = 'unable-to-evaluate';
+      qualityReason = {
+        code: 'scores-incomplete',
+        message:
+          targetError === undefined
+            ? 'One or more evaluator graphs did not return a usable score for this trial.'
+            : 'The target graph failed, so this trial could not contribute a score.',
+      };
+    }
   } else if (targetError !== undefined) {
     qualityStatus = 'failed';
     qualityReason = {
@@ -939,7 +1296,10 @@ function meanObservationMetrics(observations: readonly EvaluationObservation[]):
   return Object.fromEntries(Object.entries(totals).map(([name, total]) => [name, total / counts[name]!]));
 }
 
-function aggregate(trials: EvaluationTrial[]): { aggregate: EvaluationAggregate; cases: EvaluationCaseAggregate[] } {
+function aggregate(
+  trials: EvaluationTrial[],
+  evaluationMode: EvaluationSuiteMode = 'pass-fail',
+): { aggregate: EvaluationAggregate; cases: EvaluationCaseAggregate[] } {
   const incurred = trials;
   const settled = trials.filter((trial) => trial.executionStatus !== 'canceled');
   const completed = trials.filter((trial) => trial.executionStatus === 'completed');
@@ -963,6 +1323,59 @@ function aggregate(trials: EvaluationTrial[]): { aggregate: EvaluationAggregate;
   // a mean keeps a `0..1` quality score meaningful as trial count changes;
   // an evaluator that needs a total can return it as an explicit metric.
   const meanMetrics = meanObservationMetrics(settledObservations);
+  const byCase = new Map<string, EvaluationTrial[]>();
+  for (const trial of trials) byCase.set(trial.caseId, [...(byCase.get(trial.caseId) ?? []), trial]);
+  const cases = Array.from(byCase.values()).map((caseTrials): EvaluationCaseAggregate => {
+    const caseSettled = caseTrials.filter((trial) => trial.executionStatus !== 'canceled');
+    const caseCompleted = caseSettled.filter((trial) => trial.executionStatus === 'completed');
+    const caseEvaluated = caseCompleted.filter(
+      (trial) => trial.qualityStatus === 'passed' || trial.qualityStatus === 'failed',
+    );
+    const casePassed = caseEvaluated.filter((trial) => trial.qualityStatus === 'passed');
+    const caseFailed = caseEvaluated.filter((trial) => trial.qualityStatus === 'failed');
+    const caseScored = caseCompleted.filter((trial) => trial.qualityStatus === 'scored');
+    const caseObservations = caseSettled.flatMap((trial) => trial.observations);
+    // A scoring trial has already proved every configured evaluator produced
+    // a score. Average evaluators within a trial first, then average those
+    // trials, so each case gets equal weight regardless of its evaluator set.
+    const caseTrialScores = caseScored
+      .map((trial) => meanObservationScore(trial.observations))
+      .filter((score): score is number => score !== undefined);
+    const caseMeanScore =
+      evaluationMode === 'scoring'
+        ? caseTrialScores.length === 0
+          ? undefined
+          : caseTrialScores.reduce((sum, score) => sum + score, 0) / caseTrialScores.length
+        : meanObservationScore(caseObservations);
+    return {
+      caseId: caseTrials[0]!.caseId,
+      caseName: caseTrials[0]!.caseName,
+      ...(caseEvaluated.length === 0 ? {} : { passRate: casePassed.length / caseEvaluated.length }),
+      evaluatedTrialCount: caseEvaluated.length,
+      passedTrialCount: casePassed.length,
+      failedTrialCount: caseFailed.length,
+      notEvaluatedTrialCount: caseCompleted.filter((trial) => trial.qualityStatus === 'not-evaluated').length,
+      unableToEvaluateTrialCount: caseCompleted.filter((trial) => trial.qualityStatus === 'unable-to-evaluate').length,
+      erroredTrialCount: caseTrials.filter((trial) => trial.executionStatus === 'error').length,
+      canceledTrialCount: caseTrials.filter((trial) => trial.executionStatus === 'canceled').length,
+      ...(evaluationMode === 'scoring'
+        ? {
+            scoredTrialCount: caseScored.length,
+            missingScoreTrialCount: caseTrials.length - caseScored.length,
+          }
+        : {}),
+      ...(caseMeanScore === undefined ? {} : { meanScore: caseMeanScore }),
+      metrics: meanObservationMetrics(caseObservations),
+    };
+  });
+  const scoredTrialCount = cases.reduce((sum, testCase) => sum + (testCase.scoredTrialCount ?? 0), 0);
+  const scoringCaseMeans = cases
+    .map((testCase) => testCase.meanScore)
+    .filter((score): score is number => score !== undefined);
+  const scoringMeanScore =
+    scoringCaseMeans.length === 0
+      ? undefined
+      : scoringCaseMeans.reduce((sum, score) => sum + score, 0) / scoringCaseMeans.length;
   const aggregateValue: EvaluationAggregate = {
     trialCount: trials.length,
     evaluatedTrialCount: evaluated.length,
@@ -973,7 +1386,15 @@ function aggregate(trials: EvaluationTrial[]): { aggregate: EvaluationAggregate;
     erroredTrialCount: errors.length,
     canceledTrialCount: canceled.length,
     passRate: evaluated.length === 0 ? 0 : passed.length / evaluated.length,
-    ...(meanScore === undefined ? {} : { meanScore }),
+    ...(evaluationMode === 'scoring'
+      ? {
+          scoredTrialCount,
+          missingScoreTrialCount: trials.length - scoredTrialCount,
+          ...(scoringMeanScore === undefined ? {} : { meanScore: scoringMeanScore }),
+        }
+      : meanScore === undefined
+        ? {}
+        : { meanScore }),
     averageLatencyMs:
       incurred.length === 0
         ? 0
@@ -999,36 +1420,9 @@ function aggregate(trials: EvaluationTrial[]): { aggregate: EvaluationAggregate;
           settled.reduce((sum, trial) => sum + (trial.totalMetrics.toolCallCount ?? 0), 0),
     metrics: meanMetrics,
   };
-  const byCase = new Map<string, EvaluationTrial[]>();
-  for (const trial of trials) byCase.set(trial.caseId, [...(byCase.get(trial.caseId) ?? []), trial]);
   return {
     aggregate: aggregateValue,
-    cases: Array.from(byCase.values()).map((caseTrials) => {
-      const caseSettled = caseTrials.filter((trial) => trial.executionStatus !== 'canceled');
-      const caseCompleted = caseSettled.filter((trial) => trial.executionStatus === 'completed');
-      const caseEvaluated = caseCompleted.filter(
-        (trial) => trial.qualityStatus === 'passed' || trial.qualityStatus === 'failed',
-      );
-      const casePassed = caseEvaluated.filter((trial) => trial.qualityStatus === 'passed');
-      const caseFailed = caseEvaluated.filter((trial) => trial.qualityStatus === 'failed');
-      const caseObservations = caseSettled.flatMap((trial) => trial.observations);
-      const caseMeanScore = meanObservationScore(caseObservations);
-      return {
-        caseId: caseTrials[0]!.caseId,
-        caseName: caseTrials[0]!.caseName,
-        ...(caseEvaluated.length === 0 ? {} : { passRate: casePassed.length / caseEvaluated.length }),
-        evaluatedTrialCount: caseEvaluated.length,
-        passedTrialCount: casePassed.length,
-        failedTrialCount: caseFailed.length,
-        notEvaluatedTrialCount: caseCompleted.filter((trial) => trial.qualityStatus === 'not-evaluated').length,
-        unableToEvaluateTrialCount: caseCompleted.filter((trial) => trial.qualityStatus === 'unable-to-evaluate')
-          .length,
-        erroredTrialCount: caseTrials.filter((trial) => trial.executionStatus === 'error').length,
-        canceledTrialCount: caseTrials.filter((trial) => trial.executionStatus === 'canceled').length,
-        ...(caseMeanScore === undefined ? {} : { meanScore: caseMeanScore }),
-        metrics: meanObservationMetrics(caseObservations),
-      };
-    }),
+    cases,
   };
 }
 
@@ -1063,6 +1457,7 @@ function isHigherBetterMetric(metric: string): boolean {
 
 function baselineCompatible(current: EvaluationRunProvenance, baseline: EvaluationBaselineSnapshot): boolean {
   return (
+    current.executionMode === baseline.provenance.executionMode &&
     current.suiteFingerprint === baseline.provenance.suiteFingerprint &&
     current.datasetFingerprint === baseline.provenance.datasetFingerprint &&
     current.targetFingerprint === baseline.provenance.targetFingerprint &&
@@ -1076,15 +1471,117 @@ function baselineCompatible(current: EvaluationRunProvenance, baseline: Evaluati
  * description, path, main-graph selection) and UI graphs: changing those must
  * not invalidate an otherwise comparable baseline.
  */
+function executionNodeConfiguration(node: ChartNode): Record<string, unknown> {
+  return {
+    id: node.id,
+    type: node.type,
+    title: node.title,
+    data: node.data,
+    variants: node.variants,
+    isSplitRun: node.isSplitRun,
+    isSplitSequential: node.isSplitSequential,
+    splitRunMax: node.splitRunMax,
+    splitRunConcurrency: node.splitRunConcurrency,
+    disabled: node.disabled,
+    isConditional: node.isConditional,
+  };
+}
+
+function executionConnectionConfiguration(connection: NodeConnection): Record<string, unknown> {
+  return {
+    outputNodeId: connection.outputNodeId,
+    inputNodeId: connection.inputNodeId,
+    outputId: connection.outputId,
+    inputId: connection.inputId,
+  };
+}
+
+function executionGraphConfiguration(graph: NodeGraph): Record<string, unknown> {
+  return {
+    metadata: {
+      id: graph.metadata?.id,
+      name: graph.metadata?.name,
+      attachedData: graph.metadata?.attachedData,
+    },
+    nodes: graph.nodes.map(executionNodeConfiguration),
+    connections: graph.connections.map(executionConnectionConfiguration),
+  };
+}
+
+function executionProjectGraphs(project: Project): Record<string, unknown> {
+  return Object.fromEntries(
+    Object.entries(project.graphs).map(([graphId, graph]) => [graphId, executionGraphConfiguration(graph)]),
+  );
+}
+
 function executionProjectConfiguration(project: Project): Record<string, unknown> {
   return {
     ...(project.plugins === undefined ? {} : { plugins: project.plugins }),
-    ...(project.nodePrefabs === undefined ? {} : { nodePrefabs: project.nodePrefabs }),
+    ...(project.nodePrefabs === undefined
+      ? {}
+      : {
+          nodePrefabs: Object.fromEntries(
+            Object.entries(project.nodePrefabs).map(([prefabId, prefab]) => [
+              prefabId,
+              { id: prefab.id, sourceNode: executionNodeConfiguration(prefab.sourceNode) },
+            ]),
+          ),
+        }),
     ...(project.data === undefined ? {} : { data: project.data }),
     ...(project.references === undefined ? {} : { references: project.references }),
     ...(project.metadata.mcpServer === undefined ? {} : { mcpServer: project.metadata.mcpServer }),
     ...(project.metadata.knowledgeStores === undefined ? {} : { knowledgeStores: project.metadata.knowledgeStores }),
   };
+}
+
+/**
+ * Rivet's live project model intentionally keeps optional fields as own
+ * properties whose value is `undefined` (for example `node.description`).
+ * That is valid executable state, but it is not PortableJson. Evaluation
+ * datasets and graph outputs must retain the stricter contract; provenance
+ * fingerprints instead mirror ordinary JSON serialization for this one
+ * runtime-only boundary so those optional fields neither block a run nor
+ * create a distinct baseline identity.
+ */
+function canonicalizeExecutionFingerprintValue(
+  value: unknown,
+  path = '$',
+  stack = new Set<object>(),
+): PortableJson {
+  if (value === null || typeof value === 'string' || typeof value === 'boolean') return value;
+  if (typeof value === 'number') {
+    if (!Number.isFinite(value)) throw new Error(`${path} must not contain a non-finite number.`);
+    return value;
+  }
+  if (value === undefined) return null;
+  if (typeof value !== 'object') throw new Error(`${path} must be JSON-compatible to fingerprint an evaluation.`);
+  if (stack.has(value)) throw new Error(`${path} must not contain a cycle.`);
+
+  if (Array.isArray(value)) {
+    stack.add(value);
+    const normalized = Array.from(value, (entry, index) =>
+      canonicalizeExecutionFingerprintValue(entry, `${path}[${index}]`, stack),
+    );
+    stack.delete(value);
+    return normalized;
+  }
+
+  if (Object.getPrototypeOf(value) !== Object.prototype && Object.getPrototypeOf(value) !== null) {
+    throw new Error(`${path} must be a plain object to fingerprint an evaluation.`);
+  }
+
+  stack.add(value);
+  const normalized = Object.fromEntries(
+    Object.entries(value).flatMap(([key, entry]) =>
+      entry === undefined ? [] : [[key, canonicalizeExecutionFingerprintValue(entry, `${path}.${key}`, stack)]],
+    ),
+  );
+  stack.delete(value);
+  return normalized;
+}
+
+function fingerprintExecutionProject(value: unknown): string {
+  return fingerprint(canonicalizeExecutionFingerprintValue(value));
 }
 
 /**
@@ -1168,9 +1665,9 @@ function fingerprintGraphDependency(project: Project, graphId: GraphId): string 
     const graph = project.graphs[id];
     if (!graph) return { graphId: id, missing: true };
     const dependencies = getStaticChildren(graph).map(collect);
-    return { graph, dependencies };
+    return { graph: executionGraphConfiguration(graph), dependencies };
   };
-  return fingerprint({
+  return fingerprintExecutionProject({
     graphDependency: collect(graphId),
     projectExecutionConfiguration: executionProjectConfiguration(project),
   });
@@ -1238,8 +1735,16 @@ export function evaluateThresholdResults(
         baselineValue: previous,
         ...(zeroBaselineRegression ? {} : { regression }),
         message: failed
-          ? `Regression exceeded the allowed ${threshold.value}.`
-          : `Regression stayed within the allowed ${threshold.value}.`,
+          ? `Regression exceeded the allowed ${formatThresholdResultValue(
+              threshold.metric,
+              threshold.operator,
+              threshold.value,
+            )}.`
+          : `Regression stayed within the allowed ${formatThresholdResultValue(
+              threshold.metric,
+              threshold.operator,
+              threshold.value,
+            )}.`,
       };
     }
 
@@ -1252,8 +1757,12 @@ export function evaluateThresholdResults(
       expectedValue: threshold.value,
       actualValue: actual,
       message: passed
-        ? `Actual value ${actual} satisfied ${threshold.operator} ${threshold.value}.`
-        : `Actual value ${actual} did not satisfy ${threshold.operator} ${threshold.value}.`,
+        ? `Actual value ${formatThresholdResultValue(threshold.metric, threshold.operator, actual)} satisfied ${
+            threshold.operator
+          } ${formatThresholdResultValue(threshold.metric, threshold.operator, threshold.value)}.`
+        : `Actual value ${formatThresholdResultValue(threshold.metric, threshold.operator, actual)} did not satisfy ${
+            threshold.operator
+          } ${formatThresholdResultValue(threshold.metric, threshold.operator, threshold.value)}.`,
     };
   });
 }
@@ -1265,12 +1774,28 @@ function createProvenance(
   options: RunEvaluationSuiteOptions,
 ): EvaluationRunProvenance {
   const purpose = options.purpose ?? 'evaluation';
+  const evaluationMode = getEvaluationSuiteMode(suite);
   const configuration = suite.configuration;
+  const materialEvaluators = suite.evaluators.map((evaluator) => ({
+    graphId: evaluator.graphId,
+    inputBindings:
+      evaluator.inputBindings?.slice().sort((left, right) => left.graphInputId.localeCompare(right.graphInputId)) ??
+      null,
+    // Normalize defaults so editing a control between its implicit and
+    // explicit default does not invalidate a baseline.
+    scoreWeight: evaluator.scoreWeight ?? 1,
+    ...(evaluationMode === 'scoring'
+      ? {}
+      : { required: evaluator.required !== false, runOnTargetError: evaluator.runOnTargetError === true }),
+  }));
   const materialSuiteDefinition = {
     purpose,
+    evaluationMode,
     targetGraphId: suite.targetGraphId,
     datasetId: suite.datasetId,
-    inputBindings: suite.inputBindings,
+    inputBindings: suite.inputBindings
+      .slice()
+      .sort((left, right) => left.graphInputId.localeCompare(right.graphInputId)),
     configuration: {
       trialCount: configuration?.trialCount ?? 1,
       concurrency: configuration?.concurrency ?? DEFAULT_CONCURRENCY,
@@ -1278,25 +1803,28 @@ function createProvenance(
       seed: configuration?.seed ?? null,
       seedGraphInputId: configuration?.seedGraphInputId ?? null,
     },
-    ...(purpose === 'evaluation'
-      ? {
-          assertions: suite.assertions,
-          evaluators: suite.evaluators,
-          thresholds: suite.thresholds ?? [],
-        }
-      : {}),
+    ...(purpose !== 'evaluation'
+      ? {}
+      : evaluationMode === 'scoring'
+        ? { evaluators: materialEvaluators }
+        : {
+            assertions: suite.assertions,
+            evaluators: materialEvaluators,
+            thresholds: suite.thresholds ?? [],
+          }),
   };
   return {
     projectFingerprint:
       options.projectFingerprint ??
-      fingerprint({
+      fingerprintExecutionProject({
         projectId: project.metadata.id,
-        graphs: project.graphs,
+        graphs: executionProjectGraphs(project),
         executionConfiguration: executionProjectConfiguration(project),
       }),
     // Names, descriptions, tags, and recording-retention choices do not
     // change an execution result. Quality-only definitions likewise cannot
-    // stale an execution-benchmark comparison because they never ran.
+    // stale an execution-benchmark comparison because they never ran. Pass/
+    // fail assertions and thresholds are equally dormant in scoring mode.
     suiteFingerprint: fingerprint(materialSuiteDefinition),
     datasetFingerprint: fingerprintEvaluationDataset(dataset),
     targetFingerprint: fingerprintGraphDependency(project, suite.targetGraphId),
@@ -1314,9 +1842,12 @@ function createProvenance(
 export async function runEvaluationSuite(options: RunEvaluationSuiteOptions): Promise<EvaluationRun> {
   const suite = resolveSuite(options.evaluationData, options.suiteId);
   const purpose = options.purpose ?? 'evaluation';
+  const evaluationMode = getEvaluationSuiteMode(suite);
   if (purpose === 'evaluation' && !hasAuthoritativeEvaluationCriteria(suite)) {
     throw new Error(
-      `Evaluation suite "${suite.name}" has no required quality check or threshold. Add a quality criterion or run it as an execution benchmark.`,
+      evaluationMode === 'scoring'
+        ? `Scoring evaluation suite "${suite.name}" has no evaluator graph. Add an evaluator that returns result.score or run an execution benchmark.`
+        : `Evaluation suite "${suite.name}" has no required quality check or threshold. Add a quality criterion or run it as an execution benchmark.`,
     );
   }
   validateSuite(options.project, suite, options.dataset, purpose);
@@ -1330,6 +1861,7 @@ export async function runEvaluationSuite(options: RunEvaluationSuiteOptions): Pr
     revision: 0,
     startedAt: new Date().toISOString(),
     purpose,
+    evaluationMode,
     executionStatus: 'running',
     qualityStatus: 'not-evaluated',
     qualityReason: { code: 'in-progress', message: 'The run is still in progress.' },
@@ -1380,7 +1912,11 @@ export async function runEvaluationSuite(options: RunEvaluationSuiteOptions): Pr
       } catch (error) {
         const executionStatus = isAbort(error) ? ('canceled' as const) : ('error' as const);
         const qualityStatus =
-          purpose === 'evaluation' && executionStatus === 'error' ? ('failed' as const) : ('not-evaluated' as const);
+          purpose === 'evaluation' && executionStatus === 'error'
+            ? evaluationMode === 'scoring'
+              ? ('unable-to-evaluate' as const)
+              : ('failed' as const)
+            : ('not-evaluated' as const);
         return {
           id: makeId('trial'),
           caseId: task.testCase.id,
@@ -1393,7 +1929,9 @@ export async function runEvaluationSuite(options: RunEvaluationSuiteOptions): Pr
             executionStatus === 'canceled'
               ? { code: 'canceled' as const, message: 'The evaluation trial was canceled.' }
               : purpose === 'evaluation'
-                ? { code: 'target-error' as const, message: 'The target graph could not be executed.' }
+                ? evaluationMode === 'scoring'
+                  ? { code: 'scores-incomplete' as const, message: 'The target graph could not produce a score.' }
+                  : { code: 'target-error' as const, message: 'The target graph could not be executed.' }
                 : { code: 'benchmark' as const, message: 'This benchmark trial could not be executed.' },
           inputs: {},
           expected: {},
@@ -1415,7 +1953,7 @@ export async function runEvaluationSuite(options: RunEvaluationSuiteOptions): Pr
   const results = await workPool;
   run.trials = results.filter((result): result is EvaluationTrial => result !== undefined);
   run.completedAt = new Date().toISOString();
-  const outcome = aggregate(run.trials);
+  const outcome = aggregate(run.trials, evaluationMode);
   run.aggregate = outcome.aggregate;
   run.provenance.accountingComplete = !run.trials.some((trial) => trial.totalMetrics.hasUnknownCost);
   run.accountingStatus = run.provenance.accountingComplete ? 'complete' : 'partial';
@@ -1435,6 +1973,28 @@ export async function runEvaluationSuite(options: RunEvaluationSuiteOptions): Pr
       code: 'benchmark',
       message: 'This run measured execution without evaluating output quality.',
     };
+  } else if (evaluationMode === 'scoring') {
+    run.executionStatus = 'completed';
+    if ((outcome.aggregate.missingScoreTrialCount ?? run.trials.length) > 0) {
+      run.qualityStatus = 'unable-to-evaluate';
+      run.qualityReason = {
+        code: 'scores-incomplete',
+        message:
+          'One or more requested trials did not produce a usable score. Available averages are shown with coverage.',
+      };
+      run.warnings.push(
+        `Score coverage is ${outcome.aggregate.scoredTrialCount ?? 0} of ${outcome.aggregate.trialCount} requested trials.`,
+      );
+    } else if ((outcome.aggregate.scoredTrialCount ?? 0) > 0) {
+      run.qualityStatus = 'scored';
+      run.qualityReason = {
+        code: 'scores-complete',
+        message: 'Every requested trial produced a score. Overall score is the equal-weight average of case averages.',
+      };
+    } else {
+      run.qualityStatus = 'unable-to-evaluate';
+      run.qualityReason = { code: 'scores-incomplete', message: 'No requested trial produced a usable score.' };
+    }
   } else {
     const baseline =
       options.baseline ?? options.evaluationData.baselines.find((candidate) => candidate.suiteId === suite.id);
@@ -1517,7 +2077,7 @@ export async function runEvaluationCases(
 export function summarizeEvaluationRun(
   run: EvaluationRun,
 ): { aggregate: EvaluationAggregate; cases: EvaluationCaseAggregate[] } | undefined {
-  return run.aggregate ? aggregate(run.trials) : undefined;
+  return run.aggregate ? aggregate(run.trials, getEvaluationSuiteMode(run)) : undefined;
 }
 
 /**
@@ -1525,22 +2085,31 @@ export function summarizeEvaluationRun(
  * outputs, credentials, and replay artifacts remain in the run store.
  */
 export function createEvaluationBaselineSnapshot(run: EvaluationRun): EvaluationBaselineSnapshot {
-  if (run.executionStatus !== 'completed') {
+  const normalizedRun = normalizeEvaluationRun(run);
+  if (normalizedRun.executionStatus !== 'completed') {
     throw new Error('Only a completed evaluation run can be promoted to a baseline.');
   }
-  const summary = summarizeEvaluationRun(run);
+  if (
+    normalizedRun.purpose !== 'execution-benchmark' &&
+    getEvaluationSuiteMode(normalizedRun) === 'scoring' &&
+    normalizedRun.qualityStatus !== 'scored'
+  ) {
+    throw new Error('A scoring baseline needs a complete score for every requested trial.');
+  }
+  const summary = summarizeEvaluationRun(normalizedRun);
   if (!summary) throw new Error('Only a completed evaluation run can be promoted to a baseline.');
   return {
     id: makeId('baseline'),
-    suiteId: run.suiteId,
-    sourceRunId: run.id,
+    suiteId: normalizedRun.suiteId,
+    sourceRunId: normalizedRun.id,
     createdAt: new Date().toISOString(),
-    provenance: run.provenance,
+    provenance: normalizedRun.provenance,
     aggregate: summary.aggregate,
-    purpose: run.purpose,
-    qualityStatus: run.qualityStatus,
-    qualityReason: run.qualityReason,
-    accountingStatus: run.accountingStatus,
+    purpose: normalizedRun.purpose,
+    evaluationMode: getEvaluationSuiteMode(normalizedRun),
+    qualityStatus: normalizedRun.qualityStatus,
+    qualityReason: normalizedRun.qualityReason,
+    accountingStatus: normalizedRun.accountingStatus,
     cases: summary.cases,
   };
 }

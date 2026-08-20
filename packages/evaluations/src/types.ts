@@ -26,9 +26,13 @@ export type EvaluationDatasetCase = {
 
 export type EvaluationDataset = {
   id: string;
-  projectId: ProjectId;
+  /**
+   * Legacy project ownership retained only while importing older project
+   * files. Locally persisted evaluation datasets intentionally omit it so
+   * they can be reused with any currently open project.
+  */
+  projectId?: ProjectId;
   name: string;
-  description?: string;
   fields: EvaluationDatasetField[];
   cases: EvaluationDatasetCase[];
   /** Derived from fields and cases; stored to make snapshot reuse inspectable. */
@@ -68,14 +72,39 @@ export type EvaluationAssertion = {
   expected: EvaluationExpectedSource;
 };
 
+export type EvaluationEvaluatorContextInput = 'case' | 'inputs' | 'expected' | 'outputs' | 'run';
+
+export type EvaluationEvaluatorInputSource =
+  | { kind: 'dataset-field'; fieldId: string }
+  | { kind: 'target-output'; outputId: string }
+  | { kind: 'context'; context: EvaluationEvaluatorContextInput };
+
+export type EvaluationEvaluatorInputBinding = {
+  graphInputId: string;
+  source: EvaluationEvaluatorInputSource;
+};
+
 export type EvaluationGraphEvaluator = {
   id: string;
   name: string;
   graphId: GraphId;
+  /**
+   * Explicit evaluator Graph Input mappings. Missing means an older evaluator
+   * may use the five reserved context inputs; an empty array explicitly opts
+   * into direct mapping for a graph with no required inputs.
+   */
+  inputBindings?: EvaluationEvaluatorInputBinding[];
   required?: boolean;
   scoreWeight?: number;
   runOnTargetError?: boolean;
 };
+
+/**
+ * Pass/fail suites evaluate required assertions and evaluator verdicts.
+ * Scoring evaluator graphs return scores on the user-facing 0..100 scale.
+ * Runs store normalized scores internally for aggregation and compatibility.
+ */
+export type EvaluationSuiteMode = 'pass-fail' | 'scoring';
 
 export type EvaluationThreshold =
   | { id: string; metric: 'pass-rate' | 'mean-score'; operator: 'at-least'; value: number }
@@ -114,6 +143,8 @@ export type EvaluationSuite = {
   inputBindings: EvaluationInputBinding[];
   assertions: EvaluationAssertion[];
   evaluators: EvaluationGraphEvaluator[];
+  /** Missing values are legacy pass/fail suites. */
+  evaluationMode?: EvaluationSuiteMode;
   configuration?: EvaluationRunConfiguration;
   thresholds?: EvaluationThreshold[];
 };
@@ -133,6 +164,8 @@ export type EvaluationBaselineSnapshot = {
   qualityReason?: EvaluationQualityReason;
   /** Optional for project baselines created before EvaluationRun v2. */
   accountingStatus?: EvaluationAccountingStatus;
+  /** Optional for baselines created before score-capable suites existed. */
+  evaluationMode?: EvaluationSuiteMode;
   cases: Array<
     Pick<
       EvaluationCaseAggregate,
@@ -148,6 +181,8 @@ export type EvaluationBaselineSnapshot = {
       | 'unableToEvaluateTrialCount'
       | 'erroredTrialCount'
       | 'canceledTrialCount'
+      | 'scoredTrialCount'
+      | 'missingScoreTrialCount'
     >
   >;
 };
@@ -156,13 +191,9 @@ export type EvaluationProjectData = {
   version: 1;
   suites: EvaluationSuite[];
   baselines: EvaluationBaselineSnapshot[];
-  /** Editor-only selection state. It never affects execution or baselines. */
-  selectedSuiteId?: string;
-  /** Lets Data Studio open an evaluation dataset even before it has a suite. */
-  selectedDatasetId?: string;
 };
 
-export type EvaluationObservationStatus = 'passed' | 'failed' | 'error' | 'skipped';
+export type EvaluationObservationStatus = 'passed' | 'failed' | 'scored' | 'error' | 'skipped';
 
 export type EvaluationObservation = {
   id: string;
@@ -170,6 +201,10 @@ export type EvaluationObservation = {
   name: string;
   status: EvaluationObservationStatus;
   required: boolean;
+  /**
+   * Normalized internal score in the closed 0..1 range. Evaluator graphs
+   * return their `result.score` on the user-facing 0..100 scale.
+   */
   score?: number;
   /**
    * The configured importance of a graph evaluator's score. It is copied into
@@ -212,7 +247,7 @@ export type EvaluationRunPurpose = 'evaluation' | 'execution-benchmark';
 
 export type EvaluationTrialExecutionStatus = 'completed' | 'error' | 'canceled';
 
-export type EvaluationQualityStatus = 'passed' | 'failed' | 'not-evaluated' | 'unable-to-evaluate';
+export type EvaluationQualityStatus = 'passed' | 'failed' | 'scored' | 'not-evaluated' | 'unable-to-evaluate';
 
 export type EvaluationAccountingStatus = 'complete' | 'partial';
 
@@ -220,6 +255,8 @@ export type EvaluationQualityReasonCode =
   | 'in-progress'
   | 'checks-passed'
   | 'checks-failed'
+  | 'scores-complete'
+  | 'scores-incomplete'
   | 'benchmark'
   | 'no-trial-quality-checks'
   | 'target-error'
@@ -283,6 +320,11 @@ export type EvaluationCaseAggregate = {
   unableToEvaluateTrialCount?: number;
   erroredTrialCount?: number;
   canceledTrialCount?: number;
+  /** Completed trials that produced a usable score in a scoring suite. */
+  scoredTrialCount?: number;
+  /** Requested trials that could not contribute a score. */
+  missingScoreTrialCount?: number;
+  /** Normalized internal score in the closed 0..1 range. */
   meanScore?: number;
   metrics: Record<string, number>;
 };
@@ -296,7 +338,12 @@ export type EvaluationAggregate = {
   failedTrialCount: number;
   erroredTrialCount: number;
   canceledTrialCount: number;
+  /** Completed trials that produced a usable score in a scoring suite. */
+  scoredTrialCount?: number;
+  /** Requested trials that could not contribute a score. */
+  missingScoreTrialCount?: number;
   passRate: number;
+  /** Normalized internal score in the closed 0..1 range. */
   meanScore?: number;
   averageLatencyMs: number;
   p95LatencyMs: number;
@@ -333,6 +380,8 @@ export type EvaluationRun = {
   startedAt: string;
   completedAt?: string;
   purpose: EvaluationRunPurpose;
+  /** Captures the suite semantics that produced this run. */
+  evaluationMode?: EvaluationSuiteMode;
   executionStatus: 'queued' | 'running' | 'completed' | 'canceled' | 'error';
   qualityStatus: EvaluationQualityStatus;
   qualityReason: EvaluationQualityReason;

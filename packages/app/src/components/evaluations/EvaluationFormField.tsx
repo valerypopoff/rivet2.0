@@ -15,7 +15,7 @@ const fieldStyles = css`
   }
 
   .evaluation-field-description {
-    margin: -2px 0 2px;
+    margin: 0;
     color: var(--grey-light);
     font-size: var(--ui-font-size-sm);
     line-height: 1.35;
@@ -26,8 +26,9 @@ export const EvaluationFormField: FC<{
   children: ReactNode;
   className?: string;
   description?: ReactNode;
+  descriptionPlacement?: 'after-control' | 'after-label';
   label: ReactNode;
-}> = ({ children, className, description, label }) => {
+}> = ({ children, className, description, descriptionPlacement = 'after-control', label }) => {
   const labelId = useId();
   const descriptionId = useId();
 
@@ -42,12 +43,17 @@ export const EvaluationFormField: FC<{
       <span id={labelId} className="evaluation-field-label">
         {label}
       </span>
-      {description == null ? null : (
+      {descriptionPlacement === 'after-label' && description != null ? (
         <span id={descriptionId} className="evaluation-field-description">
           {description}
         </span>
-      )}
+      ) : null}
       {children}
+      {descriptionPlacement === 'after-control' && description != null ? (
+        <span id={descriptionId} className="evaluation-field-description">
+          {description}
+        </span>
+      ) : null}
     </div>
   );
 };

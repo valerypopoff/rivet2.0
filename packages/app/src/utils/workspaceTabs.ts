@@ -28,7 +28,6 @@ export const WORKSPACE_TABS = [
     label: 'Evaluations',
     className: 'evaluations-menu',
     targetOverlay: 'evaluations',
-    requiresProject: true,
   },
   {
     key: 'dataStudio',

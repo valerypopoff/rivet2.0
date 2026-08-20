@@ -1190,7 +1190,7 @@ Current behavior:
 - persists an existing graph even if the current edit reduced it to zero nodes and zero connections
 - uses `saveProjectDataNoPrompt` when the loaded project has a path and the active IO provider can actually save that target without prompting
 - falls back to save-as when needed
-- persists Evaluations test-suite data alongside the project
+- flushes the application-local Evaluations library before project persistence when needed, but never embeds suites, datasets, baselines, runs, or recordings in the saved project
 - keeps the current open-project tab metadata intact when save/save-as updates the project's persisted path
 - shows slow-save toast feedback for large saves
 
@@ -1394,13 +1394,13 @@ Current architectural detail:
 
 - `useRemoteExecutor` no longer owns the websocket/session lifecycle directly
 - it consumes a shared executor session that owns connection state and pending remote run coordination
-- this keeps run/test behavior separate from transport/session behavior
+- this keeps normal graph-run and Evaluation behavior separate from transport/session behavior
 - `executorSession.ts` remains the runtime coordinator, while focused app-private helpers own target identity (`executorSessionTarget.ts`), incoming/outgoing websocket frame parsing and safe-send policy (`executorSessionTransport.ts`), dataset protocol bridging (`executorSessionDatasetBridge.ts`), failure-isolated callback delivery (`executorSessionCallbackIsolation.ts`), and pending graph-run promises (`executorSessionPendingExecutions.ts`)
 - it does not reconnect the internal sidecar directly on disconnect; `executorSession` owns reconnect timing so callers do not race ahead of Tauri sidecar startup
-- remote graph/test runs now carry request IDs through the debugger protocol so multiple pending remote runs can resolve independently
+- remote graph and Evaluation runs now carry request IDs through the debugger protocol so multiple pending remote runs can resolve independently
 - read-only UI consumers should use shared session/debugger state directly rather than mounting `useRemoteExecutor`, because that hook still owns remote event subscriptions and execution side effects
-- plain run/test orchestration helpers now live in [`packages/app/src/hooks/remoteExecutorHelpers.ts`](../packages/app/src/hooks/remoteExecutorHelpers.ts)
-- that helper module holds context-value shaping, editor run-from planning/preload derivation, event-dispatch fan-out, and test-suite selection without depending on React state
+- shared graph/Evaluation orchestration helpers now live in [`packages/app/src/hooks/remoteExecutorHelpers.ts`](../packages/app/src/hooks/remoteExecutorHelpers.ts)
+- that helper module holds context-value shaping, editor run-from planning/preload derivation, and event-dispatch fan-out without depending on React state; Evaluations suite/dataset selection remains in the application-local Evaluations state
 - frozen-output snapshots are sent only to internal executor targets (`internal-desktop` and `internal-hosted`) and only for normal graph runs. External Remote Debugger runs, recording playback, and evaluation execution must not receive frozen payloads or frozen run-from preload data. The app validates and prepares internal-executor frozen payloads before serializing the run message because the app-to-executor command channel is JSON; explicit `undefined` values are represented with debugger transport sentinels and decoded only on the `frozenNodeOutputs` field in [`packages/node/src/debugger.ts`](../packages/node/src/debugger.ts), while genuinely non-JSON-safe frozen values must fail with a user-visible error before websocket send. The app-executor sidecar attaches the same core frozen-output resolver before `processor.run()`, so Browser and internal Node executor modes share replay semantics for JSON-transportable values.
 - execution-data sanitization now lives in [`packages/app/src/utils/executionDataSanitization.ts`](../packages/app/src/utils/executionDataSanitization.ts), so node-event persistence does not duplicate Uint8Array repair across event branches
 - execution-data storage/ref ownership now lives in [`packages/app/src/utils/executionDataStorage.ts`](../packages/app/src/utils/executionDataStorage.ts): it stores node data, creates stable execution-scoped ref ids, restores ref-backed values, collects refs, and clears removed/preserved refs. New storage behavior and tests should target this owner directly rather than adding app-private compatibility facades.
@@ -1955,8 +1955,8 @@ return `false` when Rivet cannot complete the requested transition, including
 when closing the active project would fail to load the fallback tab. Project
 open and close behavior still funnels through
 [`useWorkspaceTransitions`](../packages/app/src/hooks/useWorkspaceTransitions.ts)
-so graph cleanup, editor-state persistence, static-data hydration, and Evaluations
-test-suite state remain centralized. `saveCurrentProject()` funnels through the
+so graph cleanup, editor-state persistence, static-data hydration, and project-scoped
+Evaluation run state remain centralized. `saveCurrentProject()` funnels through the
 same transition used by Rivet's Save command, returns `true` only after successful
 persistence and `onProjectSaved`, returns `false` for unavailable/cancelled/failed
 saves, and shares one in-flight promise for concurrent requests targeting the same

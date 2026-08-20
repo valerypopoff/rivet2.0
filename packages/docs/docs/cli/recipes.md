@@ -65,6 +65,26 @@ npx @valerypopoff/rivet2-cli run my-project.rivet-project "Append row" \
   --input-json row='["alpha","beta"]'
 ```
 
+## Run An Evaluation In CI
+
+Export **suite + dataset** from Rivet's Evaluations workspace, then run the bundle against the project containing its graphs:
+
+```bash
+npx @valerypopoff/rivet2-cli evaluations run \
+  --project ./my-project.rivet-project \
+  --suite-file ./quality-suite.json \
+  --junit > evaluation-results.xml
+```
+
+Use `--benchmark --json` to capture target execution and accounting without applying the suite's quality checks:
+
+```bash
+npx @valerypopoff/rivet2-cli evaluations run \
+  --project ./my-project.rivet-project \
+  --suite-file ./quality-suite.json \
+  --benchmark --json > benchmark-run.json
+```
+
 ## Serve Named Graph Endpoints
 
 ```bash

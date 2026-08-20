@@ -1,6 +1,12 @@
 import {
+  areEvaluationDataTypesCompatible,
+  getEvaluationTopLevelOutputId,
   isEvaluationValueCompatibleWithDataType,
   isEvaluationOutputPathSyntaxValid,
+  shouldReplaceEvaluationRun,
+  validateEvaluationAssertionExpectedValue,
+  LEGACY_EVALUATOR_INPUT_IDS,
+  usesLegacyEvaluatorInputEnvelope,
   type EvaluationAssertion,
   type EvaluationAssertionOperator,
   type EvaluationBaselineSnapshot,
@@ -32,9 +38,12 @@ export type EvaluationSuiteReferenceStatus = {
 };
 
 export type EvaluationRunQualityPresentation = {
-  label: 'Passed' | 'Failed' | 'Not evaluated' | 'Unable to evaluate';
+  label: 'Passed' | 'Failed' | 'Scored' | 'Not evaluated' | 'Unable to evaluate';
   explanation: string;
 };
+
+/** UI-only ordering; stored run and trial history always keeps its execution order. */
+export type EvaluationScoreSort = 'default' | 'score-desc' | 'score-asc';
 
 export const evaluationAssertionOperatorOptions: ReadonlyArray<{
   label: string;
@@ -206,39 +215,12 @@ function outputDataTypeMatches(operator: EvaluationAssertionOperator, dataType: 
   }
 }
 
-function literalMatchesOperator(operator: EvaluationAssertionOperator, value: PortableJson): boolean {
-  switch (operator) {
-    case 'contains':
-      return typeof value === 'string';
-    case 'matches-regex':
-      if (typeof value !== 'string') return false;
-      try {
-        new RegExp(value);
-        return true;
-      } catch {
-        return false;
-      }
-    case 'contains-any':
-    case 'contains-all':
-      return Array.isArray(value) && value.length > 0 && value.every((item) => typeof item === 'string');
-    case 'type-is':
-      return typeof value === 'string' && ['array', 'boolean', 'null', 'number', 'object', 'string'].includes(value);
-    case 'json-schema':
-      return value !== null && typeof value === 'object' && !Array.isArray(value);
-    case 'number-at-least':
-    case 'number-at-most':
-      return typeof value === 'number' && Number.isFinite(value);
-    case 'number-between':
-      return (
-        Array.isArray(value) &&
-        value.length === 2 &&
-        value.every((item) => typeof item === 'number' && Number.isFinite(item)) &&
-        value[0]! <= value[1]!
-      );
-    case 'set-overlaps':
-      return Array.isArray(value);
-    default:
-      return true;
+function expectedValueMatchesAssertion(assertion: EvaluationAssertion, value: PortableJson): boolean {
+  try {
+    validateEvaluationAssertionExpectedValue(assertion, value);
+    return true;
+  } catch {
+    return false;
   }
 }
 
@@ -288,14 +270,20 @@ export function getEvaluationAssertionAuthoringIssue(
     };
   }
 
-  const output = resolveEvaluationTargetOutput(outputPath, outputs);
-  const isExactTopLevelPath = /^\$\.[A-Za-z_$][\w$]*$/.test(outputPath) || /^\$\["(?:[^"\\]|\\.)*"\]$/.test(outputPath);
-  if (!output && isExactTopLevelPath) {
+  const topLevelOutputId = getEvaluationTopLevelOutputId(outputPath);
+  if (outputPath !== '$' && topLevelOutputId === undefined) {
     return {
-      code: 'missing-output',
-      message: 'The selected target output no longer exists. Choose another output or enter a nested output path.',
+      code: 'invalid-output-path',
+      message: 'The output path must start with a named Graph Output, such as $["answer"] or $.result.score.',
     };
   }
+  if (topLevelOutputId !== undefined && !outputs.some((candidate) => candidate.id === topLevelOutputId)) {
+    return {
+      code: 'missing-output',
+      message: 'The target output used by this path no longer exists. Choose another output.',
+    };
+  }
+  const output = resolveEvaluationTargetOutput(outputPath, outputs);
   if (output && !outputDataTypeMatches(assertion.operator, output.dataType)) {
     return {
       code: 'incompatible-output',
@@ -324,7 +312,7 @@ export function getEvaluationAssertionAuthoringIssue(
     return undefined;
   }
 
-  if (!literalMatchesOperator(assertion.operator, assertion.expected.value)) {
+  if (!expectedValueMatchesAssertion(assertion, assertion.expected.value)) {
     return {
       code: 'incompatible-expected-value',
       message: `This comparison requires ${describeExpectedValue(assertion.operator)} as its expected JSON value.`,
@@ -413,18 +401,23 @@ export function getEvaluationInputBindingAuthoringIssues(
   return issues;
 }
 
-/** Required case values and values consumed by deterministic checks must be valid before execution. */
+/**
+ * Required case values are always validated. Values consumed exclusively by
+ * dormant pass/fail assertions are ignored while the suite uses scoring.
+ */
 export function getEvaluationExpectedValueAuthoringIssues(
   suite: EvaluationSuite,
   dataset: EvaluationDataset,
 ): string[] {
   const assertionsByField = new Map<string, EvaluationAssertion[]>();
-  for (const assertion of suite.assertions) {
-    if (assertion.expected.kind !== 'dataset-field') continue;
-    assertionsByField.set(assertion.expected.fieldId, [
-      ...(assertionsByField.get(assertion.expected.fieldId) ?? []),
-      assertion,
-    ]);
+  if (suite.evaluationMode !== 'scoring') {
+    for (const assertion of suite.assertions) {
+      if (assertion.expected.kind !== 'dataset-field') continue;
+      assertionsByField.set(assertion.expected.fieldId, [
+        ...(assertionsByField.get(assertion.expected.fieldId) ?? []),
+        assertion,
+      ]);
+    }
   }
 
   const issues: string[] = [];
@@ -444,7 +437,7 @@ export function getEvaluationExpectedValueAuthoringIssues(
         continue;
       }
       for (const assertion of assertions) {
-        if (!literalMatchesOperator(assertion.operator, value)) {
+        if (!expectedValueMatchesAssertion(assertion, value)) {
           issues.push(
             `Case “${testCase.name}” value for “${field.name}” does not provide ${describeExpectedValue(assertion.operator)} required by “${assertion.name}”.`,
           );
@@ -456,31 +449,42 @@ export function getEvaluationExpectedValueAuthoringIssues(
   return issues;
 }
 
+/**
+ * Dataset values participate in every run, including execution benchmarks.
+ * Keep this check separate from assertion-specific expected-value validation so
+ * the benchmark controls can reject corrupt typed cells without requiring
+ * pass/fail-only reference values.
+ */
+export function getEvaluationDatasetValueTypeAuthoringIssues(dataset: EvaluationDataset): string[] {
+  const issues: string[] = [];
+  const fields = new Map(dataset.fields.map((field) => [field.id, field]));
+
+  for (const testCase of dataset.cases.filter((candidate) => candidate.enabled !== false)) {
+    for (const [fieldId, value] of Object.entries(testCase.values)) {
+      const field = fields.get(fieldId);
+      if (!field || value === undefined) continue;
+      if (!isEvaluationValueCompatibleWithDataType(value, field.dataType)) {
+        issues.push(
+          `Case “${testCase.name}” value for “${field.name}” is not compatible with its declared ${field.dataType} type.`,
+        );
+      }
+    }
+  }
+
+  return issues;
+}
+
 export function getEvaluationEvaluatorAuthoringIssue(
   evaluator: EvaluationGraphEvaluator,
   project: Project,
+  suite?: EvaluationSuite,
+  dataset?: EvaluationDataset,
 ): string | undefined {
   if (evaluator.scoreWeight !== undefined && (!Number.isFinite(evaluator.scoreWeight) || evaluator.scoreWeight <= 0)) {
     return 'Score weight must be a positive finite number.';
   }
   const graph = project.graphs[evaluator.graphId];
   if (!graph) return 'Choose an existing evaluator graph.';
-  const graphInputs = graph.nodes.filter((node): node is GraphInputNode => node.type === 'graphInput');
-  const reservedInputIds = ['case', 'inputs', 'expected', 'outputs', 'run'] as const;
-  const missingInputs = reservedInputIds.filter((id) => !graphInputs.some((input) => input.data.id === id));
-  if (missingInputs.length > 0) {
-    return `Evaluator graph is missing reserved Graph Input${missingInputs.length === 1 ? '' : 's'}: ${missingInputs.join(', ')}.`;
-  }
-  for (const inputId of reservedInputIds) {
-    const matchingInputs = graphInputs.filter((input) => input.data.id === inputId);
-    if (matchingInputs.length > 1) {
-      return `Evaluator graph declares reserved Graph Input “${inputId}” more than once.`;
-    }
-    const dataType = matchingInputs[0]!.data.dataType;
-    if (dataType !== 'object' && dataType !== 'any') {
-      return `Evaluator graph input “${inputId}” must use the object or any data type.`;
-    }
-  }
   const resultOutput = graph.nodes.find(
     (node): node is GraphOutputNode => node.type === 'graphOutput' && (node.data as { id?: unknown }).id === 'result',
   );
@@ -488,7 +492,76 @@ export function getEvaluationEvaluatorAuthoringIssue(
   if (resultOutput.data.dataType !== 'object' && resultOutput.data.dataType !== 'any') {
     return 'Evaluator graph output “result” must use the object or any data type.';
   }
-  return undefined;
+
+  const graphInputs = graph.nodes.filter((node): node is GraphInputNode => node.type === 'graphInput');
+  const graphInputIds = graphInputs.map((input) => input.data.id);
+  if (new Set(graphInputIds).size !== graphInputIds.length) return 'Evaluator graph has duplicate Graph Input ids.';
+  const graphInputsById = new Map(graphInputs.map((input) => [input.data.id, input]));
+  if (usesLegacyEvaluatorInputEnvelope(evaluator, graphInputIds)) {
+    for (const inputId of LEGACY_EVALUATOR_INPUT_IDS) {
+      const dataType = graphInputsById.get(inputId)!.data.dataType;
+      if (dataType !== 'object' && dataType !== 'any') {
+        return `Legacy evaluator input “${inputId}” must use the object or any data type.`;
+      }
+    }
+    const unboundInput = graphInputs.find(
+      (input) =>
+        !LEGACY_EVALUATOR_INPUT_IDS.includes(input.data.id as (typeof LEGACY_EVALUATOR_INPUT_IDS)[number]) &&
+        (input.data.defaultValue === undefined || input.data.useDefaultValueInput),
+    );
+    return unboundInput
+      ? `Evaluator input “${unboundInput.data.id}” needs a direct binding or a static graph default.`
+      : undefined;
+  }
+
+  const boundInputIds = new Set<string>();
+  for (const binding of evaluator.inputBindings ?? []) {
+    if (boundInputIds.has(binding.graphInputId))
+      return `Evaluator input “${binding.graphInputId}” is bound more than once.`;
+    boundInputIds.add(binding.graphInputId);
+    const evaluatorInput = graphInputsById.get(binding.graphInputId);
+    if (!evaluatorInput) return `Bound evaluator input “${binding.graphInputId}” does not exist on the selected graph.`;
+
+    let sourceDataType: string;
+    if (binding.source.kind === 'dataset-field') {
+      const fieldId = binding.source.fieldId;
+      const field = dataset?.fields.find((candidate) => candidate.id === fieldId);
+      if (!field) return `Binding for “${binding.graphInputId}” references a missing dataset field.`;
+      sourceDataType = field.dataType;
+      for (const testCase of dataset!.cases.filter((candidate) => candidate.enabled !== false)) {
+        const value = testCase.values[field.id];
+        if (value === undefined) {
+          return `Case “${testCase.name}” has no value for evaluator input “${binding.graphInputId}” from “${field.name}”.`;
+        }
+        if (!isEvaluationValueCompatibleWithDataType(value, evaluatorInput.data.dataType)) {
+          return `Case “${testCase.name}” value from “${field.name}” is not compatible with evaluator input “${binding.graphInputId}” (${evaluatorInput.data.dataType}).`;
+        }
+      }
+    } else if (binding.source.kind === 'target-output') {
+      const outputId = binding.source.outputId;
+      const targetOutput = suite
+        ? getEvaluationTargetOutputs(project.graphs[suite.targetGraphId]?.nodes ?? []).find(
+            (output) => output.id === outputId,
+          )
+        : undefined;
+      if (!targetOutput) return `Binding for “${binding.graphInputId}” references a missing target output.`;
+      sourceDataType = targetOutput.dataType;
+    } else if (binding.source.kind === 'context') {
+      sourceDataType = 'object';
+    } else {
+      return `Binding for “${binding.graphInputId}” uses an unsupported source.`;
+    }
+    if (!areEvaluationDataTypesCompatible(sourceDataType, evaluatorInput.data.dataType)) {
+      return `Source for evaluator input “${binding.graphInputId}” (${sourceDataType}) is not compatible with ${evaluatorInput.data.dataType}.`;
+    }
+  }
+  const unboundInput = graphInputs.find(
+    (input) =>
+      !boundInputIds.has(input.data.id) && (input.data.defaultValue === undefined || input.data.useDefaultValueInput),
+  );
+  return unboundInput
+    ? `Choose a source for evaluator input “${unboundInput.data.id}” or give it a static graph default.`
+    : undefined;
 }
 
 export function getEvaluationThresholdAuthoringIssue(
@@ -521,7 +594,7 @@ export function getEvaluationThresholdAuthoringIssue(
     'tool-failure-rate',
   ]);
   if (rateMetrics.has(metric) && (threshold.value < 0 || threshold.value > 1)) {
-    return 'Rate and score thresholds must be between 0 and 1.';
+    return 'Rate and score thresholds must be between 0% and 100%.';
   }
   if (['average-cost', 'total-cost', 'average-latency-ms', 'p95-latency-ms'].includes(metric) && threshold.value < 0) {
     return 'Cost and latency thresholds cannot be negative.';
@@ -620,6 +693,9 @@ export function getEvaluationRunQualityPresentation(run: EvaluationRun): Evaluat
   if (qualityStatus === 'failed') {
     return { label: 'Failed', explanation: run.qualityReason.message };
   }
+  if (qualityStatus === 'scored') {
+    return { label: 'Scored', explanation: run.qualityReason.message };
+  }
   if (qualityStatus === 'not-evaluated') {
     return {
       label: 'Not evaluated',
@@ -633,8 +709,66 @@ export function getEvaluationRunQualityPresentation(run: EvaluationRun): Evaluat
 }
 
 /**
- * Selection in Evaluations is explicit. In particular, loading a project with
- * no saved selection must not make the first suite look selected.
+ * Scores are normalized internally, but the Runs view displays them on Rivet's
+ * 0–100 scale. Keep missing scores last so partial scoring runs stay useful.
+ */
+export function meanEvaluationTrialScore(trial: EvaluationRun['trials'][number]): number | undefined {
+  let weightedScore = 0;
+  let totalWeight = 0;
+  for (const observation of trial.observations) {
+    if (typeof observation.score !== 'number' || !Number.isFinite(observation.score)) continue;
+    const weight = observation.scoreWeight ?? 1;
+    if (!Number.isFinite(weight) || weight <= 0) continue;
+    weightedScore += observation.score * weight;
+    totalWeight += weight;
+  }
+  return totalWeight === 0 ? undefined : weightedScore / totalWeight;
+}
+
+function sortByOptionalScore<T>(
+  items: readonly T[],
+  sort: EvaluationScoreSort,
+  getScore: (item: T) => number | undefined,
+): T[] {
+  if (sort === 'default') return [...items];
+  const direction = sort === 'score-desc' ? -1 : 1;
+  return items
+    .map((item, index) => ({ item, index, score: getScore(item) }))
+    .sort((left, right) => {
+      if (left.score === undefined) return right.score === undefined ? left.index - right.index : 1;
+      if (right.score === undefined) return -1;
+      return (left.score - right.score) * direction || left.index - right.index;
+    })
+    .map(({ item }) => item);
+}
+
+export function sortEvaluationTrialsByScore(
+  trials: readonly EvaluationRun['trials'][number][],
+  sort: EvaluationScoreSort,
+): EvaluationRun['trials'][number][] {
+  return sortByOptionalScore(trials, sort, meanEvaluationTrialScore);
+}
+
+export function sortEvaluationRunsByScore(
+  runs: readonly EvaluationRun[],
+  sort: EvaluationScoreSort,
+): EvaluationRun[] {
+  return sortByOptionalScore(runs, sort, (run) => {
+    const score = run.aggregate?.meanScore;
+    return typeof score === 'number' && Number.isFinite(score) ? score : undefined;
+  });
+}
+
+/** Evaluation timings are stored in milliseconds but presented in seconds. */
+export function formatEvaluationDurationSeconds(durationMs: number | undefined): string {
+  if (durationMs === undefined || !Number.isFinite(durationMs) || durationMs < 0) return 'Unavailable';
+  const decimals = durationMs >= 10_000 ? 1 : 2;
+  return `${(durationMs / 1_000).toFixed(decimals)} sec`;
+}
+
+/**
+ * Selection in Evaluations is explicit. In particular, entering a project
+ * without a workspace selection must not make the first suite look selected.
  */
 export function resolveSelectedEvaluationSuite(
   suites: readonly EvaluationSuite[],
@@ -644,8 +778,98 @@ export function resolveSelectedEvaluationSuite(
 }
 
 /**
- * Dataset IDs are only unique within a project. Do not let a stale or malformed
- * data file make a suite appear runnable against another project's dataset.
+ * Resource reassignment must clear only bindings owned by that resource. Keep
+ * unrelated evaluator sources intact so repairing one suite reference does not
+ * discard valid authoring work.
+ */
+export function reassignEvaluationSuiteDataset(suite: EvaluationSuite, datasetId: string): EvaluationSuite {
+  return {
+    ...suite,
+    datasetId,
+    inputBindings: [],
+    assertions: suite.assertions.map((assertion) =>
+      assertion.expected.kind === 'dataset-field'
+        ? { ...assertion, expected: { kind: 'literal' as const, value: null } }
+        : assertion,
+    ),
+    evaluators: suite.evaluators.map((evaluator) => ({
+      ...evaluator,
+      ...(evaluator.inputBindings === undefined
+        ? {}
+        : {
+            inputBindings: evaluator.inputBindings.filter((binding) => binding.source.kind !== 'dataset-field'),
+          }),
+    })),
+  };
+}
+
+export function reassignEvaluationSuiteTarget(
+  suite: EvaluationSuite,
+  targetGraphId: EvaluationSuite['targetGraphId'],
+): EvaluationSuite {
+  return {
+    ...suite,
+    targetGraphId,
+    inputBindings: [],
+    // Assertions remain useful when their expected value and operator stay
+    // intact, but an output path belongs to the old target graph. Clear it so
+    // the editor requires an explicit choice from the newly selected graph.
+    assertions: suite.assertions.map((assertion) => ({ ...assertion, outputPath: '' })),
+    evaluators: suite.evaluators.map((evaluator) => ({
+      ...evaluator,
+      ...(evaluator.inputBindings === undefined
+        ? {}
+        : {
+            inputBindings: evaluator.inputBindings.filter((binding) => binding.source.kind !== 'target-output'),
+          }),
+    })),
+  };
+}
+
+export function removeEvaluationDatasetField(dataset: EvaluationDataset, fieldId: string): EvaluationDataset {
+  return {
+    ...dataset,
+    fields: dataset.fields.filter((field) => field.id !== fieldId),
+    cases: dataset.cases.map((testCase) => {
+      const { [fieldId]: _removedValue, ...values } = testCase.values;
+      return { ...testCase, values };
+    }),
+  };
+}
+
+export function removeEvaluationDatasetFieldReferences(suite: EvaluationSuite, fieldId: string): EvaluationSuite {
+  return {
+    ...suite,
+    inputBindings: suite.inputBindings.filter((binding) => binding.datasetFieldId !== fieldId),
+    assertions: suite.assertions.map((assertion) =>
+      assertion.expected.kind === 'dataset-field' && assertion.expected.fieldId === fieldId
+        ? { ...assertion, expected: { kind: 'literal' as const, value: null } }
+        : assertion,
+    ),
+    evaluators: suite.evaluators.map((evaluator) => ({
+      ...evaluator,
+      ...(evaluator.inputBindings === undefined
+        ? {}
+        : {
+            inputBindings: evaluator.inputBindings.filter(
+              (binding) => binding.source.kind !== 'dataset-field' || binding.source.fieldId !== fieldId,
+            ),
+          }),
+    })),
+  };
+}
+
+/** Resolves a dataset from Rivet's application-local evaluation library. */
+export function resolveEvaluationDataset(
+  datasets: readonly EvaluationDataset[],
+  datasetId: string | undefined,
+): EvaluationDataset | undefined {
+  return datasetId == null ? undefined : datasets.find((dataset) => dataset.id === datasetId);
+}
+
+/**
+ * Retained for legacy project-owned dataset imports. Application-local
+ * datasets omit projectId and are valid for any active project.
  */
 export function resolveProjectEvaluationDataset(
   datasets: readonly EvaluationDataset[],
@@ -654,7 +878,9 @@ export function resolveProjectEvaluationDataset(
 ): EvaluationDataset | undefined {
   return datasetId == null
     ? undefined
-    : datasets.find((dataset) => dataset.id === datasetId && dataset.projectId === projectId);
+    : datasets.find(
+        (dataset) => dataset.id === datasetId && (dataset.projectId === undefined || dataset.projectId === projectId),
+      );
 }
 
 export function getEvaluationSuiteReferenceStatus(
@@ -682,6 +908,26 @@ export function canCompareEvaluationSuite(
     runs.filter((run) => run.suiteId === suiteId && run.executionStatus === 'completed' && run.aggregate !== undefined)
       .length >= 2
   );
+}
+
+/**
+ * Merges a delayed run-store read with the in-memory snapshot published by the
+ * active executor. The store read may have begun before the executor wrote its
+ * terminal revision, so replacing state with it would make a completed run
+ * appear to be running again.
+ */
+export function mergeEvaluationRunHistory(
+  persistedRuns: readonly EvaluationRun[],
+  currentRun: EvaluationRun | undefined,
+): EvaluationRun[] {
+  if (!currentRun) return [...persistedRuns];
+
+  const existingIndex = persistedRuns.findIndex((run) => run.id === currentRun.id);
+  if (existingIndex === -1) return [currentRun, ...persistedRuns];
+
+  if (!shouldReplaceEvaluationRun(persistedRuns[existingIndex], currentRun)) return [...persistedRuns];
+
+  return persistedRuns.map((run, index) => (index === existingIndex ? currentRun : run));
 }
 
 /**

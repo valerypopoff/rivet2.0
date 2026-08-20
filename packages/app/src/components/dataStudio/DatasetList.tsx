@@ -83,7 +83,7 @@ export const DatasetList: FC<{ className?: string }> = ({ className }) => {
       }}
     >
       <header>
-        <h2>Datasets</h2>
+        <h2>Graph datasets</h2>
         <Button appearance="primary" onClick={newDataset}>
           +
         </Button>

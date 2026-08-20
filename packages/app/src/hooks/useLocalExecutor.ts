@@ -21,7 +21,7 @@ import {
 } from '@valerypopoff/rivet2-core';
 import { produce } from 'immer';
 import { useEffect, useRef } from 'react';
-import { toast } from 'react-toastify';
+import { toast, type Id as ToastId } from 'react-toastify';
 import { TauriNativeApi } from '../model/native/TauriNativeApi';
 import { useStableCallback } from './useStableCallback';
 import { useSaveCurrentGraph } from './useSaveCurrentGraph';
@@ -91,7 +91,10 @@ import {
   shouldRouteProjectEventToSnapshot,
 } from './projectExecutionSnapshotRouting.js';
 import type { EditorGraphRunOptions } from './editorGraphRunOptions.js';
-import { formatEvaluationCompletionToast } from '../utils/evaluationRunSummary.js';
+import {
+  formatEvaluationCompletionToast,
+  formatEvaluationRunHistoryPersistenceWarning,
+} from '../utils/evaluationRunSummary.js';
 import { evaluationRecordingRetentionUpdates } from '../utils/evaluationRecordingRetentionUpdates.js';
 
 function evaluationInputsToGraphOutputs(
@@ -674,10 +677,7 @@ export function useLocalExecutor() {
         throw new Error(`Evaluation target graph "${suite.targetGraphId}" no longer exists.`);
       }
       const projectForEvaluation = withDerivedProjectPluginSpecs(
-        {
-          ...evaluationBaseProject,
-          graphs: { ...evaluationBaseProject.graphs, [evaluationGraph.metadata!.id!]: evaluationGraph },
-        },
+        evaluationBaseProject,
         { appPluginStates: pluginStates, currentGraph: evaluationGraph, registry: projectNodeRegistry },
       );
       const runProjectId = projectForEvaluation.metadata.id;
@@ -704,12 +704,13 @@ export function useLocalExecutor() {
       const updateActiveProjectEvaluationState = (update: Parameters<typeof setEvaluationsState>[0]): void => {
         if (isActiveEvaluationProject()) setEvaluationsState(update);
       };
+      let runningToastId: ToastId | undefined;
 
       try {
         // Store the exact cases before execution starts. Run summaries retain
         // only the fingerprint, so this content-addressed snapshot is what
-        // makes a later replay/comparison truthful after the .rivet-data file
-        // changes.
+        // makes a later replay/comparison truthful after the live evaluation
+        // dataset changes.
         let datasetSnapshotWarning: string | undefined;
         try {
           await evaluationRunStore.putDatasetSnapshot({
@@ -734,8 +735,9 @@ export function useLocalExecutor() {
         }
 
         ensureActiveEvaluationProject();
-        toast.info(`Running evaluation: ${suite.name}`);
-        logRuntimeInfo('Running local evaluation', { suiteId, suiteName: suite.name });
+        const runKind = purpose === 'evaluation' ? 'evaluation' : 'execution benchmark';
+        runningToastId = toast.info(`Running ${runKind}: ${suite.name}`);
+        logRuntimeInfo(`Running local ${runKind}`, { suiteId, suiteName: suite.name });
         currentExecution.onEvaluationStart();
         updateActiveProjectEvaluationState((state) => ({ ...state, runningSuiteId: suiteId, currentRun: undefined }));
         const result = await runEvaluationSuite({
@@ -748,12 +750,6 @@ export function useLocalExecutor() {
           signal: evaluationAbortController.signal,
           onUpdate: (run) => {
             updateActiveProjectEvaluationState((state) => ({ ...state, currentRun: run }));
-            // Progress persistence is best-effort. A full browser store must
-            // not turn a successful graph evaluation into an unhandled promise
-            // rejection or interrupt its remaining trials.
-            void evaluationRunStore.put(run).catch((error) => {
-              logRuntimeDebug('Evaluation progress was not retained.', { error, suiteId, projectId: runProjectId });
-            });
           },
           runGraph: async ({ project: evaluationProject, graphId, inputs, signal, metadata }) => {
             const startedAt = Date.now();
@@ -913,7 +909,7 @@ export function useLocalExecutor() {
         try {
           await evaluationRunStore.put(finalizedResult);
         } catch (error) {
-          finalizedResult.warnings.push('This completed evaluation could not be saved to run history.');
+          finalizedResult.warnings.push(formatEvaluationRunHistoryPersistenceWarning(error));
           logRuntimeDebug('Completed evaluation was not retained.', { error, suiteId, projectId: runProjectId });
         }
         updateActiveProjectEvaluationState((state) => ({
@@ -934,6 +930,7 @@ export function useLocalExecutor() {
         }
         return undefined;
       } finally {
+        if (runningToastId !== undefined) toast.dismiss(runningToastId);
         if (evaluationAbortControllersByProjectId.current.get(runProjectId) === evaluationAbortController) {
           evaluationAbortControllersByProjectId.current.delete(runProjectId);
         }

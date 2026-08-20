@@ -29,12 +29,11 @@ import {
   savedProjectContentDigestsState,
 } from '../state/savedGraphs.js';
 import { projectExecutionSnapshotsState } from '../state/dataFlow.js';
-import { evaluationsState } from '../state/evaluations.js';
+import { evaluationsState, resetEvaluationsForProjectLoad } from '../state/evaluations.js';
 import { useCenterViewOnGraph } from './useCenterViewOnGraph.js';
 import { useSaveCurrentGraph } from './useSaveCurrentGraph.js';
 import type { GraphViewContext } from '../domain/graphEditing/navigationActions.js';
 import {
-  createDefaultEvaluationsState,
   createGraphSwitchTransition,
   createProjectLoadTransition,
   mergeCurrentGraphIntoProject,
@@ -295,7 +294,14 @@ export function useWorkspaceTransitions() {
         applyProjectExecutorMode(projectInfo.executorMode, { projectId: targetProjectId });
         await applyStaticData(projectInfo.data);
         setLoadedProject(transition.loadedProject);
-        setEvaluationsState(createDefaultEvaluationsState(projectInfo.evaluationData, projectInfo.evaluationDatasets));
+        setEvaluationsState((current) =>
+          resetEvaluationsForProjectLoad(
+            current,
+            projectInfo.evaluationData,
+            projectInfo.evaluationDatasets,
+            targetProjectId,
+          ),
+        );
         if (!targetProjectHasOpenTab) {
           clearUiGraphPreviewSessions(targetProjectId);
         }
@@ -430,7 +436,6 @@ export function useWorkspaceTransitions() {
           const latestProject = store.get(projectState);
           const latestLoadedProject = store.get(loadedProjectState);
           projectPath = latestLoadedProject.path;
-          const latestEvaluations = store.get(evaluationsState);
           const savedGraph = saveCurrentGraph();
           const projectToPersist = withDerivedProjectPluginSpecs(
             mergeCurrentGraphIntoProject(latestProject, savedGraph),
@@ -457,12 +462,13 @@ export function useWorkspaceTransitions() {
           });
           await flushHybridStorageGroup('graph');
           await flushHybridStorageGroup('project');
+          // Legacy evaluation resources may be about to disappear from the
+          // project file/sidecar. Commit their one-way migration before any
+          // project save can replace those legacy files.
+          await flushHybridStorageGroup('evaluation-library');
 
           if (shouldUseSaveAs) {
-            const filePath = await ioProvider.saveProjectData(projectToPersist, {
-              evaluationData: latestEvaluations.data,
-              evaluationDatasets: latestEvaluations.datasets,
-            });
+            const filePath = await ioProvider.saveProjectData(projectToPersist);
 
             if (filePath) {
               savedPath = filePath;
@@ -482,11 +488,7 @@ export function useWorkspaceTransitions() {
               throw new Error('The active project cannot be saved in place.');
             }
             const savePath = latestLoadedProject.path!;
-            await saveInPlaceProvider.saveProjectDataNoPrompt(
-              projectToPersist,
-              { evaluationData: latestEvaluations.data, evaluationDatasets: latestEvaluations.datasets },
-              savePath,
-            );
+            await saveInPlaceProvider.saveProjectDataNoPrompt(projectToPersist, savePath);
             savedPath = savePath;
             setLoadedProject({ loaded: true, path: savePath });
             setOpenedProjectSnapshots((snapshots) => {

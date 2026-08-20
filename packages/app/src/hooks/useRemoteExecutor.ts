@@ -23,7 +23,7 @@ import { useRemoteDebugger } from './useRemoteDebugger';
 import { fillMissingSettingsFromEnvironmentVariables } from '../utils/tauri';
 import { loadedProjectState, projectContextState, projectDataState, projectState } from '../state/savedGraphs';
 import { useStableCallback } from './useStableCallback';
-import { toast } from 'react-toastify';
+import { toast, type Id as ToastId } from 'react-toastify';
 import { evaluationsState } from '../state/evaluations';
 import {
   EvaluationGraphExecutionError,
@@ -80,7 +80,10 @@ import {
 } from './remoteDebuggerDiagnostics.js';
 import type { EditorGraphRunOptions } from './editorGraphRunOptions.js';
 import { waitForExecutorSessionRunCapability } from './executorSessionRunReadiness.js';
-import { formatEvaluationCompletionToast } from '../utils/evaluationRunSummary.js';
+import {
+  formatEvaluationCompletionToast,
+  formatEvaluationRunHistoryPersistenceWarning,
+} from '../utils/evaluationRunSummary.js';
 import { evaluationRecordingRetentionUpdates } from '../utils/evaluationRecordingRetentionUpdates.js';
 import {
   captureRemoteResponseTraceRootExecution,
@@ -751,10 +754,7 @@ export function useRemoteExecutor() {
         throw new Error(`Evaluation target graph "${suite.targetGraphId}" no longer exists.`);
       }
       const projectForEvaluation = withDerivedProjectPluginSpecs(
-        {
-          ...evaluationBaseProject,
-          graphs: { ...evaluationBaseProject.graphs, [evaluationGraph.metadata!.id!]: evaluationGraph },
-        },
+        evaluationBaseProject,
         { appPluginStates: pluginStates, currentGraph: evaluationGraph, registry: projectNodeRegistry },
       );
       const evaluationProjectId = projectForEvaluation.metadata.id;
@@ -782,6 +782,7 @@ export function useRemoteExecutor() {
       const updateActiveProjectEvaluationState = (update: Parameters<typeof setEvaluationsState>[0]): void => {
         if (isActiveEvaluationProject()) setEvaluationsState(update);
       };
+      let runningToastId: ToastId | undefined;
       try {
         let datasetSnapshotWarning: string | undefined;
         try {
@@ -832,7 +833,8 @@ export function useRemoteExecutor() {
         }
 
         ensureActiveEvaluationProject();
-        toast.info(`Running evaluation: ${suite.name}`);
+        const runKind = purpose === 'evaluation' ? 'evaluation' : 'execution benchmark';
+        runningToastId = toast.info(`Running ${runKind}: ${suite.name}`);
         currentExecution.onEvaluationStart();
         updateActiveProjectEvaluationState((state) => ({ ...state, runningSuiteId: suiteId, currentRun: undefined }));
         const result = await runEvaluationSuite({
@@ -845,15 +847,6 @@ export function useRemoteExecutor() {
           signal: evaluationAbortController.signal,
           onUpdate: (run) => {
             updateActiveProjectEvaluationState((state) => ({ ...state, currentRun: run }));
-            // A remote history/store outage must not interrupt the target
-            // executions or surface as an unhandled rejected promise.
-            void evaluationRunStore.put(run).catch((error) => {
-              logRuntimeDebug('Remote evaluation progress was not retained.', {
-                error,
-                suiteId,
-                projectId: evaluationProjectId,
-              });
-            });
           },
           runGraph: async ({ graphId, inputs, project: evaluationProject, signal, metadata }) => {
             const startedAt = Date.now();
@@ -961,7 +954,7 @@ export function useRemoteExecutor() {
         try {
           await evaluationRunStore.put(finalizedResult);
         } catch (error) {
-          finalizedResult.warnings.push('This completed evaluation could not be saved to run history.');
+          finalizedResult.warnings.push(formatEvaluationRunHistoryPersistenceWarning(error));
           logRuntimeDebug('Completed remote evaluation was not retained.', {
             error,
             suiteId,
@@ -986,6 +979,7 @@ export function useRemoteExecutor() {
         }
         return undefined;
       } finally {
+        if (runningToastId !== undefined) toast.dismiss(runningToastId);
         if (evaluationAbortControllerRef.current === evaluationAbortController) {
           evaluationAbortControllerRef.current = null;
           evaluationProjectIdRef.current = null;

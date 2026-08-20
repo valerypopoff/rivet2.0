@@ -122,7 +122,7 @@ The prompt designer allows you to tweak an individual prompt to get the output y
 
 ### Evaluations
 
-Evaluations lets you define datasets, complete-graph evaluation suites, assertions, evaluator graphs, thresholds, and baselines for your project. See the [Evaluations](../evaluations.md) documentation for more information.
+Evaluations manages an application-local library of reusable datasets, complete-graph suites, deterministic checks, evaluator graphs, thresholds, and baselines. Open a project to bind and run its graphs; the library remains available when projects close or change. See the [Evaluations](../evaluations.md) documentation for more information.
 
 ### Run Activity
 

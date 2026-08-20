@@ -60,13 +60,16 @@ test('does not let not-equals pass when its configured output path is missing', 
   assert.equal(observation.status, 'failed');
 });
 
-test('rejects malformed output JSON paths instead of partially matching them', () => {
-  const observation = evaluateAssertion(
-    assertion({ outputPath: '$.answer!', expected: { kind: 'literal', value: 'expected' } }),
-    { answer: 'expected' },
-    testCase,
+test('rejects malformed output JSON paths as configuration errors instead of partially matching them', () => {
+  assert.throws(
+    () =>
+      evaluateAssertion(
+        assertion({ outputPath: '$.answer!', expected: { kind: 'literal', value: 'expected' } }),
+        { answer: 'expected' },
+        testCase,
+      ),
+    /invalid output path/,
   );
-  assert.equal(observation.status, 'failed');
 });
 
 test('does not treat null or arrays as object values', () => {
