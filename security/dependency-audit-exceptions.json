@@ -54,15 +54,6 @@
       "reason": "image-size 2.0.2 is the current compatible release required by Docusaurus 3.10.1. Its ICNS, JXL, and HEIF parsers run only over reviewed documentation assets during the build. Remove this exception when Docusaurus or image-size publishes a compatible fixed release.",
       "owner": "Rivet maintainers",
       "expires": "2026-10-10"
-    },
-    {
-      "advisoryIds": [1138813],
-      "packages": ["nanoid"],
-      "dependents": ["@valerypopoff/rivet-app@workspace:packages/app", "postcss@npm:8.5.22"],
-      "scope": "Rivet editor runtime identifiers and the PostCSS documentation build toolchain; neither passes zero-sized custom NanoID generation requests.",
-      "reason": "The advisory concerns custom generators called with a zero size. Rivet calls only nanoid() without arguments, while PostCSS reaches NanoID transitively. Upgrade when a compatible NanoID or PostCSS release removes this legacy dependency path.",
-      "owner": "Rivet maintainers",
-      "expires": "2026-10-10"
     }
   ]
 }

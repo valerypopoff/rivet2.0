@@ -1,0 +1,6 @@
+# RUSTSEC-2026-0258 affects h2 0.3.27, which Tauri 1.8.3 pulls in through the
+# updater and legacy HTTP APIs. The advisory is a low-severity denial-of-service
+# issue and only h2 0.4.16+ is patched; upgrading it requires the Tauri 2
+# migration. Update Tauri and remove this exception by 2026-11-30.
+[advisories]
+ignore = ["RUSTSEC-2026-0258"]

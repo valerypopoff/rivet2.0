@@ -687,7 +687,9 @@ override. The root `postcss@npm:^8.4.21` resolution keeps the `rtlcss` documenta
 toolchain on the same patched PostCSS 8.x release used by the rest of the
 workspace. Keep that descriptor pinned until `rtlcss` or its owning Docusaurus
 dependency refreshes the transitive lock entry; do not replace that fix with an
-audit exception. Likewise, keep the direct
+audit exception. The `nanoid@npm:^3.3.16` resolution keeps PostCSS's CommonJS
+dependency on the supported NanoID 3.3.18 security patch, while the workspace's
+direct NanoID dependencies use the same release. Likewise, keep the direct
 `brace-expansion` resolutions for the `^1.1.7`, `^2.0.2`, `^5.0.5`, and
 `^5.0.8` descriptors on their reviewed fixed releases. Keep the matching
 `fast-uri` and `ip-address` resolutions current as well: they patch the Ajv and
@@ -697,10 +699,25 @@ dependencies; keep their deterministic lock entries current instead of
 restoring the former audit exceptions.
 
 The build workflow runs that JavaScript audit immediately after dependency
-installation. A separate `rustsec/audit-check` job scans
-`packages/app/src-tauri/Cargo.lock`; keeping it separate avoids adding Rust setup
-time to the normal Node build. Weekly Dependabot groups Yarn production/development
-updates, Cargo updates, and GitHub Action updates into reviewable pull requests.
+installation. A separate Rust job installs the pinned `cargo-audit` release and
+scans `packages/app/src-tauri/Cargo.lock`; keeping it separate avoids adding Rust
+setup time to the normal Node build and avoids an indirect Node runtime from an
+audit action. JavaScript exceptions that no longer match an audit finding are
+blocking: remove them instead of carrying stale approvals forward. RustSec
+advisories may be temporarily ignored only when the checked-in
+[`audit.toml`](../packages/app/src-tauri/.cargo/audit.toml) and structured
+[`rust-audit-exceptions.json`](../security/rust-audit-exceptions.json) agree.
+The workflow validates that every Rust ignore is documented, has the upstream
+constraint, scope, mitigation, owner, and re-review date, and is not expired.
+It also audits the same lockfile without those ignores before the normal audit,
+so a temporary Rust exception that no longer matches an advisory fails CI and
+must be removed. Remove it as soon as a compatible fix is available.
+Informational RustSec reports (currently Tauri 1's Linux GTK stack and build-time
+dependency chain) remain visible rather than being suppressed; every
+vulnerability not explicitly listed in the temporary policy fails the job.
+Weekly Dependabot groups Yarn
+production/development updates, Cargo updates, and GitHub Action updates into
+reviewable pull requests.
 
 Current reviewed JavaScript exceptions are limited to docs/build/lint tooling,
 native build tooling, and the archived `pkg` executor packager. They are not a
@@ -946,7 +963,7 @@ The repository's GitHub Pages source must be configured for GitHub Actions deplo
 
 The developer deploy job uses the historically named `developer-windows-pages` environment instead of the default `github-pages` environment. Even though the workflow now publishes Windows and macOS desktop downloads, keeping the existing environment name avoids requiring a one-time GitHub environment migration. This keeps the develop-branch installer feed from being blocked by production-oriented `github-pages` environment protection rules, such as "only main can deploy." If the `developer-windows-pages` environment is later given branch restrictions, it must allow `develop`.
 
-The Pages release workflows use Node 24-compatible action majors (`actions/checkout@v6`, `actions/upload-artifact@v7`, `actions/download-artifact@v7`, and `actions/upload-pages-artifact@v5`) and do not force Node 24 globally with `FORCE_JAVASCRIPT_ACTIONS_TO_NODE24`. The build itself still uses Node `20.4.x`; that is the project toolchain, not the JavaScript runtime used by GitHub's actions.
+The Pages release workflows use Node 24-compatible action majors (`actions/checkout@v6`, `actions/upload-artifact@v7`, `actions/download-artifact@v7`, and `actions/upload-pages-artifact@v5`) and do not force Node 24 globally with `FORCE_JAVASCRIPT_ACTIONS_TO_NODE24`. The build itself uses the pinned Node `22.21.1` toolchain; that is separate from the JavaScript runtime used by GitHub's actions.
 
 ### Secrets/environment
 

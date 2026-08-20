@@ -143,20 +143,30 @@ if (usedExceptions.size > 0) {
   console.log(`Accepted ${usedExceptions.size} high-severity finding(s) through current, documented exceptions.`);
 }
 
+const unusedExceptions = [];
 for (const exception of exceptions) {
   if (!usedExceptions.has(exception.key)) {
-    console.warn(`Unused dependency exception: ${exception.key} (expires ${exception.expires}).`);
+    unusedExceptions.push(exception);
   }
 }
 
-if (blockingFindings.length > 0) {
-  console.error('\nBlocking dependency findings:');
-  for (const { row, exception, unreviewedDependents } of blockingFindings) {
-    const expired = exception?.expiresAt < now ? ` Exception expired ${exception.expires}.` : '';
-    const ancestry =
-      unreviewedDependents.length > 0 ? ` Unreviewed dependent(s): ${unreviewedDependents.join(', ')}.` : '';
-    const suffix = `${expired}${ancestry}`;
-    console.error(`- ${formatFinding(row)}${suffix}`);
+if (blockingFindings.length > 0 || unusedExceptions.length > 0) {
+  if (unusedExceptions.length > 0) {
+    console.error('\nUnused dependency exceptions:');
+    for (const exception of unusedExceptions) {
+      console.error(`- ${exception.key} (expires ${exception.expires})`);
+    }
+  }
+
+  if (blockingFindings.length > 0) {
+    console.error('\nBlocking dependency findings:');
+    for (const { row, exception, unreviewedDependents } of blockingFindings) {
+      const expired = exception?.expiresAt < now ? ` Exception expired ${exception.expires}.` : '';
+      const ancestry =
+        unreviewedDependents.length > 0 ? ` Unreviewed dependent(s): ${unreviewedDependents.join(', ')}.` : '';
+      const suffix = `${expired}${ancestry}`;
+      console.error(`- ${formatFinding(row)}${suffix}`);
+    }
   }
   process.exitCode = 1;
 }
