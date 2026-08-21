@@ -349,22 +349,6 @@ function findLatestExecutionWithOutput(executions: ProcessDataForNode[] | undefi
   return undefined;
 }
 
-export function selectTestSuitesToRun<T extends { id: string; testCases: { id: string }[] }>(
-  testSuites: T[],
-  options: { testSuiteIds?: string[]; testCaseIds?: string[] },
-): T[] {
-  return options.testSuiteIds
-    ? testSuites
-        .filter((testSuite) => options.testSuiteIds!.includes(testSuite.id))
-        .map((testSuite) => ({
-          ...testSuite,
-          testCases: options.testCaseIds
-            ? testSuite.testCases.filter((testCase) => options.testCaseIds?.includes(testCase.id))
-            : testSuite.testCases,
-        }))
-    : testSuites;
-}
-
 export function createProcessEventDispatcher(currentExecution: {
   onAbort: (event: ProcessEvents['abort']) => void;
   onDone: (event: ProcessEvents['done']) => void;

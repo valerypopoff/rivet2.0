@@ -7,7 +7,7 @@ import {
 } from '../domain/graphEditing/navigationActions.js';
 import {
   chooseProjectGraph,
-  createDefaultTrivetState,
+  createDefaultEvaluationsState,
   createGraphSwitchTransition,
   createProjectLoadTransition,
   mergeCurrentGraphIntoProject,
@@ -41,15 +41,16 @@ function makeProject(graphs: NodeGraph[], options: { mainGraphId?: string } = {}
 }
 
 describe('workspaceTransitions', () => {
-  test('createDefaultTrivetState resets transient trivet state', () => {
-    const state = createDefaultTrivetState([{ id: 'suite-1', name: 'Suite', testCases: [] } as any]);
+  test('createDefaultEvaluationsState resets transient evaluation state', () => {
+    const state = createDefaultEvaluationsState({ version: 1, suites: [], baselines: [] }, []);
 
     assert.deepEqual(state, {
-      testSuites: [{ id: 'suite-1', name: 'Suite', testCases: [] }],
-      selectedTestSuiteId: undefined,
-      editingTestCaseId: undefined,
-      recentTestResults: undefined,
-      runningTests: false,
+      data: { version: 1, suites: [], baselines: [] },
+      datasets: [],
+      migratedLegacyProjectIds: [],
+      activeView: 'definition',
+      runs: [],
+      runningSuiteId: undefined,
     });
   });
 

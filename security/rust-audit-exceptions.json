@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "exceptions": [
+    {
+      "advisoryId": "RUSTSEC-2026-0258",
+      "packages": ["h2"],
+      "scope": "Tauri 1's desktop updater and legacy HTTP client dependency path.",
+      "reason": "The only patched h2 release is on the incompatible 0.4 line. Upgrading requires the planned Tauri 2 migration.",
+      "owner": "Rivet maintainers",
+      "expires": "2026-11-30"
+    }
+  ]
+}

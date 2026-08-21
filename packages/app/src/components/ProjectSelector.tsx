@@ -133,7 +133,10 @@ export const ProjectSelector: FC<{
         onSelectOpeningProjectTab={handleSelectOpeningProjectTab}
         onSelectProject={handleSelectProject}
       />
-      <OverlayTabs showWelcomeScreen={!projectMode} />
+      <OverlayTabs
+        projectAvailable={projectMode && selectedOpeningProjectTabId == null}
+        showWelcomeScreen={!projectMode}
+      />
       {showWindowsWindowControls && <WindowsWindowControls />}
       {closeConfirmModal}
     </div>

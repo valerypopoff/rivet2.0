@@ -18,6 +18,7 @@ export * from './toolConverter.js';
 export * from './toolContinuationConnection.js';
 export * from './chatV2ProviderRegistry.js';
 export * from './llmChatV2NodeMigration.js';
+export * from './llmChatV2NodeData.js';
 export * from './llmInvocationCoordinator.js';
 export * from './llmInvocationProjections.js';
 export * from './llmInvocationDecision.js';

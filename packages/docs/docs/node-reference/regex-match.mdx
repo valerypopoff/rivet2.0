@@ -17,7 +17,7 @@ The node can be configured to either run the _first_ matching output port, or to
 
 This node is useful for routing control flow based on the content of a string. For example, you can use the Regex Match Node to check if a user's message contains certain keywords and route the conversation accordingly.
 
-If the `Value` input is provided, it will be passed through the corresponding output port if a match is found. If the `Value` input is not provided, the `Test` input will be passed through the corresponding output port if a match is found.
+Choose how custom values reach the outputs with **Custom case values**. **One shared custom value** keeps the original single optional `Custom value` input: its value reaches every output that matches, or the `Test` value is passed through when `Custom value` is unconnected. **Custom values per case** adds a canvas-only **Custom values** group after `Test`, containing one optional custom value for every case and one for `Unmatched`. Each input falls back to `Test` independently when it is unconnected. Dotted row guides show which input belongs to each labelled output, so each route can emit its own value and type.
 
 <Tabs
   defaultValue="inputs"
@@ -32,10 +32,12 @@ If the `Value` input is provided, it will be passed through the corresponding ou
 
 ## Inputs
 
-| Title | Data Type | Description                                                    | Default Value | Notes                                                          |
-| ----- | --------- | -------------------------------------------------------------- | ------------- | -------------------------------------------------------------- |
-| Test  | `string`  | The string to be tested against the regular expressions.       | (required)    | The input will be coerced into a string if it is not a string. |
-| Value | `any`     | The value to be passed to the output port if a match is found. | (optional)    | If not provided, the `Test` input will be used as the value.   |
+| Custom case value mode  | Title        | Data Type | Description                                              | Notes                                                      |
+| ----------------------- | ------------ | --------- | -------------------------------------------------------- | ---------------------------------------------------------- |
+| Both                    | Test         | `string`  | The string to be tested against the regular expressions. | Required. The input is coerced to a string if needed.      |
+| One shared custom value | Custom value | `any`     | The value passed to every matching output.               | Optional. If unconnected, `Test` is passed through.        |
+| Custom values per case  | `[Case]`     | `any`     | The custom value emitted for that matching case.         | Shown under **Custom values**; optional, otherwise `Test`. |
+| Custom values per case  | Unmatched    | `any`     | The custom value emitted when no case matches.           | Shown under **Custom values**; optional, otherwise `Test`. |
 
 </TabItem>
 
@@ -54,10 +56,11 @@ If the `Value` input is provided, it will be passed through the corresponding ou
 
 ## Editor Settings
 
-| Setting   | Description                                                                                                                                     | Default Value | Use Input Toggle | Input Data Type |
-| --------- | ----------------------------------------------------------------------------------------------------------------------------------------------- | ------------- | ---------------- | --------------- |
-| Exclusive | If enabled, then the _first_ matched case will be ran, and all other cases will not be ran. If disabled, then _all_ matching cases will be ran. | Off           | No               | N/A             |
-| Cases     | The list of regular expression cases to match against.                                                                                          | `YES`, `NO`   | No               | N/A             |
+| Setting                     | Description                                                                                                                                                   | Default Value              | Use Input Toggle | Input Data Type |
+| --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------- | ---------------- | --------------- |
+| Matching cases to trigger   | **Trigger all matching cases** runs every matching case. **Trigger first only** runs only the first matching case.                                            | Trigger all matching cases | No               | N/A             |
+| Custom case values          | **One shared custom value** uses one optional `Custom value` input for all outputs. **Custom values per case** adds the **Custom values** group after `Test`. | One shared custom value    | No               | N/A             |
+| Cases (regular expressions) | The list of regular expression cases to match against.                                                                                                        | `YES`, `NO`                | No               | N/A             |
 
 </TabItem>
 
@@ -69,9 +72,9 @@ If the `Value` input is provided, it will be passed through the corresponding ou
    > Would you like to hear about information about cats or dogs first? Please only pick one! I will give you information on both, I just want to know what you'd like to hear first.
 2. Create a Regex Match Node and connect the `Response` output of the LLM Chat Node to the `Test` input of the Regex Match Node.
 3. In the body of the Regex Match Node, set the regular expressions to `cats` and `dogs`.
-4. Add three pairs of [If Nodes](./if.mdx) and [Text Nodes](./text.mdx). Connect the `Case 1` output of the Regex Match Node to the first If Node's `If` input, the `Case 2` output of the Regex Match Node to the second If Node's `If` input, and the `Unmatched` output of the Regex Match Node to the third If Node's `If` input. Connect the text nodes to the If Nodes' `Value` inputs.
-5. The text of the three Text Nodes should be "You chose cats!", "You chose dogs!", and "Sorry, I didn't understand that. Please try again.", respectively.
-6. Run the graph. Depending on the AI's response, the corresponding If Node will be executed, with the text the AI selected
+4. Set **Custom case values** to **Custom values per case**. Connect three [Text Nodes](./text.mdx) with the values "You chose cats!", "You chose dogs!", and "Sorry, I didn't understand that. Please try again." directly to the `cats`, `dogs`, and `Unmatched` inputs under **Custom values**.
+5. Connect the Regex Match outputs to the next work for each route.
+6. Run the graph. Depending on the AI's response, the corresponding output is executed with its own configured text.
 
 ![Regex Match Node Example 1](./assets/match-node-example-01.png)
 
@@ -83,7 +86,7 @@ If the `Test` input is missing, `null`, or `undefined`, the Regex Match Node tre
 
 **Q: Can multiple cases match at once?**
 
-A: Yes, multiple cases can match at once. If multiple cases match, all of the corresponding output ports will be executed. This may become a toggleable option in the future, so that only the first matching case will be executed.
+A: Yes, multiple cases can match at once. **Trigger all matching cases** is the default. Choose **Trigger first only** to execute only the first matching case.
 
 **Q: Can I use the Regex Match Node to match against numbers?**
 

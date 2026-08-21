@@ -7,13 +7,11 @@ import {
   serializeGraph,
   serializeProject,
 } from '@valerypopoff/rivet2-core';
-import { type IOProvider } from './IOProvider.js';
 import {
-  type SerializedTrivetData,
-  type TrivetData,
-  deserializeTrivetData,
-  serializeTrivetData,
-} from '@valerypopoff/trivet';
+  deserializeLegacyEvaluationProjectData,
+  type EvaluationProjectFileData,
+  type IOProvider,
+} from './IOProvider.js';
 import { openBrowserFile } from './browserFileInput.js';
 
 const PROJECT_FILE_EXTENSION = '.rivet-project';
@@ -62,7 +60,6 @@ async function ensureFileHandlePermission(
 async function writeProjectFile(
   fileHandle: FileSystemFileHandle,
   project: Project,
-  testData: TrivetData,
 ): Promise<void> {
   const canWrite = await ensureFileHandlePermission(fileHandle, 'readwrite');
 
@@ -71,7 +68,7 @@ async function writeProjectFile(
   }
 
   const writable = await fileHandle.createWritable();
-  await writable.write(serializeProject(project, { trivet: serializeTrivetData(testData) }) as string);
+  await writable.write(serializeProject(project) as string);
   await writable.close();
 }
 
@@ -90,7 +87,7 @@ export class BrowserIOProvider implements IOProvider {
     await writable.close();
   }
 
-  async saveProjectData(project: Project, testData: TrivetData): Promise<string | undefined> {
+  async saveProjectData(project: Project): Promise<string | undefined> {
     let fileHandle: FileSystemFileHandle;
     try {
       fileHandle = await window.showSaveFilePicker({
@@ -103,7 +100,7 @@ export class BrowserIOProvider implements IOProvider {
       throw error;
     }
 
-    await writeProjectFile(fileHandle, project, testData);
+    await writeProjectFile(fileHandle, project);
 
     return this.rememberProjectFileHandle(fileHandle);
   }
@@ -112,14 +109,14 @@ export class BrowserIOProvider implements IOProvider {
     return this.#projectFileHandles.has(path);
   }
 
-  async saveProjectDataNoPrompt(project: Project, testData: TrivetData, path: string): Promise<void> {
+  async saveProjectDataNoPrompt(project: Project, path: string): Promise<void> {
     const fileHandle = this.#projectFileHandles.get(path);
 
     if (!fileHandle) {
       throw new Error('Browser project file handle is not available. Use Save project as... to choose a save target.');
     }
 
-    await writeProjectFile(fileHandle, project, testData);
+    await writeProjectFile(fileHandle, project);
   }
 
   async loadGraphData(callback: (graphData: NodeGraph) => void): Promise<void> {
@@ -131,7 +128,7 @@ export class BrowserIOProvider implements IOProvider {
   }
 
   async loadProjectData(
-    callback: (data: { project: Project; testData: TrivetData; path: string }) => void,
+    callback: (data: { project: Project; evaluation: EvaluationProjectFileData; path: string }) => void,
   ): Promise<void> {
     const projectFile = await this.openProjectFile();
     if (!projectFile) return;
@@ -140,11 +137,9 @@ export class BrowserIOProvider implements IOProvider {
 
     const [project, attachedData] = deserializeProject(text);
 
-    const testData = attachedData?.trivet
-      ? deserializeTrivetData(attachedData.trivet as SerializedTrivetData)
-      : { testSuites: [] };
+    const evaluationData = deserializeLegacyEvaluationProjectData(attachedData?.evaluations);
 
-    callback({ project, testData, path: projectFile.path });
+    callback({ project, evaluation: { evaluationData, evaluationDatasets: [] }, path: projectFile.path });
   }
 
   private async openProjectFile(): Promise<{ file: File; path: string } | undefined> {

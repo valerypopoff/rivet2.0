@@ -11,7 +11,7 @@ import { DatasetListItem } from './DatasetListItem';
 import { wrapAsync } from '../../utils/errorHandling';
 import { PopupMenu, PopupMenuItem } from '../PopupMenu';
 
-export const DatasetList: FC<{}> = () => {
+export const DatasetList: FC<{ className?: string }> = ({ className }) => {
   const [selectedDataset, setSelectedDataset] = useAtom(selectedDatasetState);
   const {
     refs,
@@ -76,14 +76,14 @@ export const DatasetList: FC<{}> = () => {
 
   return (
     <div
-      className="left-sidebar"
+      className={className ?? 'left-sidebar'}
       onContextMenu={(e) => {
         handleContextMenu(e);
         e.preventDefault();
       }}
     >
       <header>
-        <h2>Datasets</h2>
+        <h2>Graph datasets</h2>
         <Button appearance="primary" onClick={newDataset}>
           +
         </Button>

@@ -11,7 +11,7 @@ import { useAtom, useAtomValue } from 'jotai';
 import { handleError } from '../../utils/errorHandling.js';
 
 export const DataStudioRenderer: FC = () => {
-  const [openOverlay, setOpenOverlay] = useAtom(overlayOpenState);
+  const openOverlay = useAtomValue(overlayOpenState);
 
   if (openOverlay !== 'dataStudio') return null;
 
@@ -24,7 +24,7 @@ export const DataStudioRenderer: FC = () => {
       }}
       fallbackRender={() => 'Failed to render Data Studio'}
     >
-      <DataStudio onClose={() => setOpenOverlay(undefined)} />
+      <DataStudio />
     </ErrorBoundary>
   );
 };
@@ -53,7 +53,7 @@ const styles = css`
     border-right: 1px solid var(--grey);
     z-index: 2;
 
-    header {
+    .graph-datasets header {
       padding: 8px 16px;
       border-bottom: 1px solid var(--grey);
       display: flex;
@@ -65,11 +65,10 @@ const styles = css`
   .dataset-display-area {
     overflow: hidden;
   }
+
 `;
 
-export const DataStudio: FC<{
-  onClose: () => void;
-}> = ({ onClose }) => {
+export const DataStudio: FC = () => {
   const [selectedDataset, setSelectedDataset] = useAtom(selectedDatasetState);
 
   const project = useAtomValue(projectState);
@@ -79,8 +78,10 @@ export const DataStudio: FC<{
 
   return (
     <div css={styles}>
-      <div className="content">
-        <DatasetList />
+        <div className="content">
+          <div className="left-sidebar">
+            <DatasetList className="graph-datasets" />
+          </div>
 
         <div className="dataset-display-area">
           {selectedDatasetMeta && <DatasetDisplay dataset={selectedDatasetMeta} onChangedId={setSelectedDataset} />}

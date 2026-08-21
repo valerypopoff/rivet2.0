@@ -10,7 +10,7 @@ export const PROMO_HOST_UI = {
     aiAssist: false,
     aiGraphBuilder: false,
     recordings: false,
-    trivetInputCopy: false,
+    evaluationInputCopy: false,
   },
   checkForUpdates: false,
   fileMenu: { visibleItems: ['new_project', 'open_project', 'save_project', 'settings'] },

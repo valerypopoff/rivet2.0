@@ -5,7 +5,7 @@ import {
   type PortId,
   isBuiltInInputDefinition,
 } from '@valerypopoff/rivet2-core';
-import { type FC, type MouseEvent, useEffect, useMemo, useRef, useState } from 'react';
+import { Fragment, type FC, type MouseEvent, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useCanvasNodeIO } from '../hooks/useGetNodeIO.js';
 import { useStableCallback } from '../hooks/useStableCallback.js';
@@ -56,6 +56,19 @@ export type NodePortsProps = {
   zoomedOut?: boolean;
 };
 
+type RegexMatchValueConnectionGuide = {
+  inputId: PortId;
+  left: number;
+  top: number;
+  width: number;
+};
+
+const REGEX_MATCH_VALUE_GUIDE_ENDPOINT_GAP_PX = 6;
+
+function hasPerOutputRegexMatchValues(node: ChartNode): boolean {
+  return node.type === 'match' && (node.data as { valueInputMode?: unknown }).valueInputMode === 'per-output';
+}
+
 function isSubGraphErrorOutputDefinition(node: ChartNode, output: NodeOutputDefinition): boolean {
   return (
     node.type === 'subGraph' &&
@@ -91,6 +104,9 @@ export const NodePorts: FC<NodePortsProps> = ({ node, connections }) => {
   const previewPortOrderRef = useRef<string[] | undefined>();
   const [draggedPort, setDraggedPort] = useState<PortReorderDrag | undefined>();
   const [previewPortOrder, setPreviewPortOrder] = useState<string[] | undefined>();
+  const [regexMatchValueConnectionGuides, setRegexMatchValueConnectionGuides] = useState<
+    RegexMatchValueConnectionGuide[]
+  >([]);
   const hoveredDataBusChannelKeySet = useMemo(() => new Set(hoveredDataBusChannelKeys), [hoveredDataBusChannelKeys]);
 
   const getDataBusAntenna = (input: boolean, portId: PortId) => {
@@ -128,6 +144,7 @@ export const NodePorts: FC<NodePortsProps> = ({ node, connections }) => {
   };
 
   const isSubGraphNode = node.type === 'subGraph';
+  const alignRegexMatchOutputsWithValues = hasPerOutputRegexMatchValues(node);
   const isRearrangingSubGraphPorts =
     isSubGraphNode &&
     subGraphPortRearrangeTarget?.projectId === projectId &&
@@ -239,6 +256,90 @@ export const NodePorts: FC<NodePortsProps> = ({ node, connections }) => {
     reorderableVariadicOutputDefinitions,
     variadicPortReorderSpec,
   ]);
+
+  useLayoutEffect(() => {
+    if (!alignRegexMatchOutputsWithValues) {
+      setRegexMatchValueConnectionGuides((previousGuides) => (previousGuides.length === 0 ? previousGuides : []));
+      return;
+    }
+
+    const root = portsRootRef.current;
+    if (!root) {
+      return;
+    }
+
+    const updateGuides = () => {
+      const rootRect = root.getBoundingClientRect();
+      const scaleX = root.offsetWidth === 0 ? 1 : rootRect.width / root.offsetWidth || 1;
+      const scaleY = root.offsetHeight === 0 ? 1 : rootRect.height / root.offsetHeight || 1;
+      const portCircles = Array.from(root.querySelectorAll<HTMLElement>('.port-circle'));
+      const nextGuides = displayedInputDefinitions.flatMap((input) => {
+        if (!input.id.startsWith('value-')) {
+          return [];
+        }
+
+        const outputId = input.id === 'value-unmatched' ? 'unmatched' : input.id.slice('value-'.length);
+        const inputCircle = portCircles.find(
+          (element) => element.classList.contains('input-port') && element.dataset.portid === input.id,
+        );
+        const outputCircle = portCircles.find(
+          (element) => element.classList.contains('output-port') && element.dataset.portid === outputId,
+        );
+        const outputLabel = outputCircle?.closest('.port')?.querySelector<HTMLElement>('.port-label');
+        const inputRect = inputCircle?.getBoundingClientRect();
+        const outputLabelRect = outputLabel?.getBoundingClientRect();
+        const outputCircleRect = outputCircle?.getBoundingClientRect();
+        const outputTargetRect = outputLabelRect?.width ? outputLabelRect : outputCircleRect;
+
+        if (!inputRect || !outputTargetRect) {
+          return [];
+        }
+
+        const left = (inputRect.right - rootRect.left) / scaleX + REGEX_MATCH_VALUE_GUIDE_ENDPOINT_GAP_PX;
+        const right = (outputTargetRect.left - rootRect.left) / scaleX - REGEX_MATCH_VALUE_GUIDE_ENDPOINT_GAP_PX;
+        const width = right - left;
+
+        if (width <= 0) {
+          return [];
+        }
+
+        return [
+          {
+            inputId: input.id,
+            left,
+            top: (inputRect.top - rootRect.top + inputRect.height / 2) / scaleY,
+            width,
+          },
+        ];
+      });
+
+      setRegexMatchValueConnectionGuides((previousGuides) =>
+        previousGuides.length === nextGuides.length &&
+        previousGuides.every(
+          (guide, index) =>
+            guide.inputId === nextGuides[index]?.inputId &&
+            guide.left === nextGuides[index]?.left &&
+            guide.top === nextGuides[index]?.top &&
+            guide.width === nextGuides[index]?.width,
+        )
+          ? previousGuides
+          : nextGuides,
+      );
+    };
+
+    updateGuides();
+
+    if (typeof ResizeObserver === 'undefined') {
+      return;
+    }
+
+    const resizeObserver = new ResizeObserver(updateGuides);
+    resizeObserver.observe(root);
+
+    return () => {
+      resizeObserver.disconnect();
+    };
+  }, [alignRegexMatchOutputsWithValues, displayedInputDefinitions, displayedOutputDefinitions]);
 
   const handlePortMouseDown = useStableCallback((event: MouseEvent<HTMLDivElement>, port: PortId, isInput: boolean) => {
     event.stopPropagation();
@@ -495,13 +596,13 @@ export const NodePorts: FC<NodePortsProps> = ({ node, connections }) => {
   return (
     <>
       <div
-        className={`node-ports${isRearrangingSubGraphPorts ? ' subgraph-port-rearrange-mode' : ''}${
-          isRearrangingVariadicPorts ? ' variadic-port-rearrange-mode' : ''
-        }`}
+        className={`node-ports${alignRegexMatchOutputsWithValues ? ' match-per-output-values' : ''}${
+          isRearrangingSubGraphPorts ? ' subgraph-port-rearrange-mode' : ''
+        }${isRearrangingVariadicPorts ? ' variadic-port-rearrange-mode' : ''}`}
         ref={portsRootRef}
       >
         <div className="input-ports">
-          {displayedInputDefinitions.map((input) => {
+          {displayedInputDefinitions.map((input, index) => {
             const dataBusAntenna = getDataBusAntenna(true, input.id);
             const connected =
               connections.some((conn) => conn.inputNodeId === node.id && conn.inputId === input.id) ||
@@ -510,35 +611,56 @@ export const NodePorts: FC<NodePortsProps> = ({ node, connections }) => {
               isRearrangingVariadicPorts &&
               reorderableVariadicInputDefinitions.some((definition) => definition.id === input.id);
             const reorderable = isRearrangingSubGraphPorts || isVariadicInputReorderable;
+            const isFirstRegexMatchValueInput =
+              alignRegexMatchOutputsWithValues &&
+              input.id.startsWith('value-') &&
+              !displayedInputDefinitions.slice(0, index).some((definition) => definition.id.startsWith('value-'));
+            const hideRegexMatchValueInputLabel = alignRegexMatchOutputsWithValues && input.id.startsWith('value-');
 
             return (
-              <Port
-                title={input.title}
-                id={input.id}
-                preservePortCase={preservePortTextCase}
-                input
-                connected={connected}
-                key={`input-${input.id}`}
-                nodeId={node.id}
-                canDragTo={draggingWire ? !draggingWire.startPortIsInput : false}
-                closest={closestPortToDraggingWire?.nodeId === node.id && closestPortToDraggingWire.portId === input.id}
-                definition={input}
-                draggingDataType={draggingWire?.dataType}
-                onMouseDown={handlePortMouseDown}
-                onMouseUp={handlePortMouseUp}
-                onMouseOver={onPortMouseOver}
-                onMouseOut={onPortMouseOut}
-                reorderable={reorderable}
-                reorderDragging={draggedPort?.side === 'input' && draggedPort.portId === input.id}
-                onReorderMouseDown={handleReorderMouseDown}
-                dataBusAntenna={dataBusAntenna?.props}
-                onDataBusAntennaHoverChange={(hovered) =>
-                  dataBusAntenna && handleDataBusAntennaHoverChange(dataBusAntenna.channels, hovered)
-                }
-              />
+              <Fragment key={`input-${input.id}`}>
+                {isFirstRegexMatchValueInput && <div className="regex-match-values-label">Custom values</div>}
+                <Port
+                  title={input.title}
+                  id={input.id}
+                  hideLabel={hideRegexMatchValueInputLabel}
+                  preservePortCase={preservePortTextCase}
+                  input
+                  connected={connected}
+                  nodeId={node.id}
+                  canDragTo={draggingWire ? !draggingWire.startPortIsInput : false}
+                  closest={
+                    closestPortToDraggingWire?.nodeId === node.id && closestPortToDraggingWire.portId === input.id
+                  }
+                  definition={input}
+                  draggingDataType={draggingWire?.dataType}
+                  onMouseDown={handlePortMouseDown}
+                  onMouseUp={handlePortMouseUp}
+                  onMouseOver={onPortMouseOver}
+                  onMouseOut={onPortMouseOut}
+                  reorderable={reorderable}
+                  reorderDragging={draggedPort?.side === 'input' && draggedPort.portId === input.id}
+                  onReorderMouseDown={handleReorderMouseDown}
+                  dataBusAntenna={dataBusAntenna?.props}
+                  onDataBusAntennaHoverChange={(hovered) =>
+                    dataBusAntenna && handleDataBusAntennaHoverChange(dataBusAntenna.channels, hovered)
+                  }
+                />
+              </Fragment>
             );
           })}
         </div>
+        {alignRegexMatchOutputsWithValues && (
+          <div aria-hidden className="regex-match-value-connection-guides">
+            {regexMatchValueConnectionGuides.map((guide) => (
+              <div
+                className="regex-match-value-connection-guide"
+                key={`guide-${guide.inputId}`}
+                style={{ left: guide.left, top: guide.top, width: guide.width }}
+              />
+            ))}
+          </div>
+        )}
         <div className="output-ports">
           {displayedOutputDefinitions.map((output) => {
             const dataBusAntenna = getDataBusAntenna(false, output.id);

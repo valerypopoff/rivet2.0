@@ -23,11 +23,11 @@ const artifacts = {
       '@valerypopoff/rivet2-core': 'file:../rivet2-core',
     },
   },
-  trivet: {
+  evaluations: {
     kind: 'package',
-    name: '@valerypopoff/trivet',
-    sourceDir: path.join(repoRoot, 'packages/trivet'),
-    artifactDir: 'trivet',
+    name: '@valerypopoff/rivet2-evaluations',
+    sourceDir: path.join(repoRoot, 'packages/evaluations'),
+    artifactDir: 'rivet2-evaluations',
     requiresArtifacts: ['core'],
     rewriteDependencies: {
       '@valerypopoff/rivet2-core': 'file:../rivet2-core',
@@ -43,9 +43,9 @@ const artifacts = {
 
 const artifactTargets = {
   runtime: ['core', 'node'],
-  'hosted-web-deps': ['core', 'trivet'],
+  'hosted-web-deps': ['core', 'evaluations'],
   'executor-runtime': ['core', 'node', 'app-executor'],
-  wrapper: ['core', 'node', 'trivet', 'app-executor'],
+  wrapper: ['core', 'node', 'evaluations', 'app-executor'],
 };
 const artifactOrder = Object.keys(artifacts);
 

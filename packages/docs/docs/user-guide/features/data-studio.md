@@ -1,12 +1,12 @@
 # Data Studio
 
-The Data Studio in Rivet is your scratch pad for working with data and graphs. It is accessible by clicking the "Data Studio" tab at the top of Rivet.
+Data Studio manages reusable **graph datasets**: mutable table data that graph nodes can read, update, and search. It is accessible by clicking the "Data Studio" tab at the top of Rivet. Evaluation datasets are managed separately in **Evaluations**.
 
 ![Data Studio](./assets/data-studio.png)
 
-## Datasets
+## Graph datasets
 
-The data in the data studio is organized into "datasets". Each dataset is isolated from the others, and can be used to store data for a specific purpose.
+Graph datasets are isolated from one another and can store data for a specific graph or runtime workflow. They are distinct from evaluation datasets, which contain typed test cases for evaluation suites.
 
 You can right click on a dataset to rename or delete it. Note that deleting cannot be undone at this time.
 

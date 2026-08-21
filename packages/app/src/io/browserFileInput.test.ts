@@ -1,7 +1,9 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { type Project, serializeProject } from '@valerypopoff/rivet2-core';
-import { serializeTrivetData } from '@valerypopoff/trivet';
+import { createEmptyEvaluationProjectData, serializeEvaluationProjectData } from '@valerypopoff/rivet2-evaluations';
+
+const emptyEvaluationFile = { evaluationData: createEmptyEvaluationProjectData(), evaluationDatasets: [] };
 import { BrowserIOProvider } from './BrowserIOProvider.js';
 import { openBrowserFile } from './browserFileInput.js';
 
@@ -56,7 +58,7 @@ test('BrowserIOProvider can save back to a project file handle after save-as', a
     } as unknown as typeof window;
 
     const provider = new BrowserIOProvider();
-    const path = await provider.saveProjectData(testProject, { testSuites: [] });
+    const path = await provider.saveProjectData(testProject);
 
     if (!path) {
       throw new Error('Expected saveProjectData to return a browser project path');
@@ -75,12 +77,13 @@ test('BrowserIOProvider can save back to a project file handle after save-as', a
           title: 'Updated Project',
         },
       },
-      { testSuites: [] },
       path,
     );
 
     assert.equal(writes.length, 2);
     assert.match(writes[1]!, /Updated Project/);
+    assert.doesNotMatch(writes[0]!, /"evaluations"/u);
+    assert.doesNotMatch(writes[1]!, /"evaluations"/u);
   } finally {
     globalThis.window = originalWindow;
   }
@@ -97,7 +100,7 @@ test('BrowserIOProvider treats cancelling the save picker as a cancelled Save As
     } as unknown as typeof window;
 
     const provider = new BrowserIOProvider();
-    assert.equal(await provider.saveProjectData(testProject, { testSuites: [] }), undefined);
+    assert.equal(await provider.saveProjectData(testProject), undefined);
   } finally {
     globalThis.window = originalWindow;
   }
@@ -106,7 +109,7 @@ test('BrowserIOProvider treats cancelling the save picker as a cancelled Save As
 test('BrowserIOProvider remembers project file handles from supported browser open picker', async () => {
   const originalWindow = globalThis.window;
   const serializedProject = serializeProject(testProject, {
-    trivet: serializeTrivetData({ testSuites: [] }),
+    evaluations: serializeEvaluationProjectData(emptyEvaluationFile.evaluationData),
   }) as string;
   let openOptions: OpenFilePickerOptions | undefined;
   const file = {
@@ -152,7 +155,7 @@ test('BrowserIOProvider requests write permission only when saving an opened pro
   const writes: string[] = [];
   const permissionRequests: Array<'read' | 'readwrite' | undefined> = [];
   const serializedProject = serializeProject(testProject, {
-    trivet: serializeTrivetData({ testSuites: [] }),
+    evaluations: serializeEvaluationProjectData(emptyEvaluationFile.evaluationData),
   }) as string;
   const file = {
     name: 'opened-project.rivet-project',
@@ -208,7 +211,6 @@ test('BrowserIOProvider requests write permission only when saving an opened pro
           title: 'Updated Project',
         },
       },
-      { testSuites: [] },
       loadedPath,
     );
 
@@ -223,7 +225,7 @@ test('BrowserIOProvider requests write permission only when saving an opened pro
 test('BrowserIOProvider surfaces denied write permission when saving an opened project handle', async () => {
   const originalWindow = globalThis.window;
   const serializedProject = serializeProject(testProject, {
-    trivet: serializeTrivetData({ testSuites: [] }),
+    evaluations: serializeEvaluationProjectData(emptyEvaluationFile.evaluationData),
   }) as string;
   const file = {
     name: 'readonly-project.rivet-project',
@@ -263,7 +265,7 @@ test('BrowserIOProvider surfaces denied write permission when saving an opened p
     const projectPath = loadedPath;
 
     await assert.rejects(
-      () => provider.saveProjectDataNoPrompt(testProject, { testSuites: [] }, projectPath),
+      () => provider.saveProjectDataNoPrompt(testProject, projectPath),
       /Browser write permission was not granted/,
     );
   } finally {
@@ -330,7 +332,7 @@ test('BrowserIOProvider falls back to standard file input when browser file hand
   const originalWindow = globalThis.window;
   const originalDocument = globalThis.document;
   const serializedProject = serializeProject(testProject, {
-    trivet: serializeTrivetData({ testSuites: [] }),
+    evaluations: serializeEvaluationProjectData(emptyEvaluationFile.evaluationData),
   }) as string;
   const selectedFile = {
     name: 'fallback-project.rivet-project',
@@ -406,8 +408,8 @@ test('BrowserIOProvider stores same-name project file handles as separate save t
     } as unknown as typeof window;
 
     const provider = new BrowserIOProvider();
-    const firstPath = await provider.saveProjectData(testProject, { testSuites: [] });
-    const secondPath = await provider.saveProjectData(testProject, { testSuites: [] });
+    const firstPath = await provider.saveProjectData(testProject);
+    const secondPath = await provider.saveProjectData(testProject);
 
     assert.ok(firstPath);
     assert.ok(secondPath);

@@ -977,3 +977,65 @@ test('restoring an output-side recoverable connection still works for dynamic do
   assert.deepEqual(result.nextConnections, [recoverableConnection]);
   assert.deepEqual(result.nextRecoverableConnections, []);
 });
+
+test('Regex Match Per output wires become recoverable in Shared mode and restore when switched back', () => {
+  const sourceNode = makeTextNode('source', 'case value');
+  const matchNode = registry.createDynamic('match');
+  matchNode.id = 'match' as NodeId;
+  matchNode.data = {
+    ...(matchNode.data as Record<string, unknown>),
+    cases: ['YES'],
+    casePortIds: ['case-yes'],
+    valueInputMode: 'per-output',
+  };
+  const connection = makeConnection({
+    outputNodeId: sourceNode.id,
+    inputNodeId: matchNode.id,
+    inputId: 'value-case-yes' as PortId,
+  });
+
+  const sharedResult = reconcileNodeEditConnections({
+    nodeId: matchNode.id,
+    newNode: {
+      data: {
+        ...(matchNode.data as Record<string, unknown>),
+        valueInputMode: 'shared',
+      },
+    },
+    nodes: [sourceNode, matchNode],
+    liveConnections: [connection],
+    recoverableConnections: [],
+    project,
+    referencedProjects: {},
+    projectNodeRegistry: registry,
+  });
+
+  assert.deepEqual(sharedResult.nextConnections, []);
+  assert.deepEqual(sharedResult.nextRecoverableConnections, [connection]);
+
+  const sharedMatchNode = {
+    ...matchNode,
+    data: {
+      ...(matchNode.data as Record<string, unknown>),
+      valueInputMode: 'shared',
+    },
+  };
+  const perOutputResult = reconcileNodeEditConnections({
+    nodeId: sharedMatchNode.id,
+    newNode: {
+      data: {
+        ...(sharedMatchNode.data as Record<string, unknown>),
+        valueInputMode: 'per-output',
+      },
+    },
+    nodes: [sourceNode, sharedMatchNode],
+    liveConnections: [],
+    recoverableConnections: sharedResult.nextRecoverableConnections,
+    project,
+    referencedProjects: {},
+    projectNodeRegistry: registry,
+  });
+
+  assert.deepEqual(perOutputResult.nextConnections, [connection]);
+  assert.deepEqual(perOutputResult.nextRecoverableConnections, []);
+});

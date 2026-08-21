@@ -62,7 +62,8 @@ export function useWorkspaceHostOpenProject() {
           fsPath: snapshot.path,
           openedGraph: snapshot.openedGraph,
           graphToLoad: snapshot.graphToLoad,
-          testSuites: snapshot.testSuites,
+          evaluationData: snapshot.evaluationData,
+          evaluationDatasets: snapshot.evaluationDatasets,
           executorMode: existingExecutorMode,
           markClean: true,
         });
@@ -149,14 +150,15 @@ export function useWorkspaceHostOpenProject() {
         throw new Error('The active IO provider does not support opening projects by path.');
       }
 
-      const { project, testData } = await ioProvider.loadProjectDataNoPrompt(path);
+      const { project, evaluation } = await ioProvider.loadProjectDataNoPrompt(path);
       const { data, ...projectWithoutData } = project;
 
       return await openProjectSnapshot({
         project: projectWithoutData,
         data,
         path,
-        testSuites: testData.testSuites,
+        evaluationData: evaluation.evaluationData,
+        evaluationDatasets: evaluation.evaluationDatasets,
       });
     } catch (error) {
       callbacks.onOpenError?.({

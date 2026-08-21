@@ -61,8 +61,8 @@ const moreMenuStyles = css`
 export const ActionBarMoreMenu: FC<{
   getDebuggerPanelAnchor: () => DebuggerPanelAnchor | undefined;
   onClose: () => void;
-  onCopyAsTestCase?: () => void;
-}> = ({ getDebuggerPanelAnchor, onClose, onCopyAsTestCase }) => {
+  onAddRunInputsToEvaluation?: () => void;
+}> = ({ getDebuggerPanelAnchor, onClose, onAddRunInputsToEvaluation }) => {
   const setDebuggerPanelOpen = useSetAtom(debuggerPanelOpenState);
   const setDebuggerPanelAnchor = useSetAtom(debuggerPanelAnchorState);
   const [selectedExecutor, setSelectedExecutor] = useAtom(selectedExecutorState);
@@ -71,7 +71,7 @@ export const ActionBarMoreMenu: FC<{
   const { loadRecording } = useLoadRecording();
   const hostUiConfig = useRivetAppHostUiConfig();
   const recordingsEnabled = isRivetAppHostCapabilityEnabled(hostUiConfig, 'recordings');
-  const trivetInputCopyEnabled = isRivetAppHostCapabilityEnabled(hostUiConfig, 'trivetInputCopy');
+  const evaluationInputCopyEnabled = isRivetAppHostCapabilityEnabled(hostUiConfig, 'evaluationInputCopy');
   const hostConfig = useExecutorSessionHostConfig();
   const executorOptions = getExecutorOptions({ hasInternalExecutorUrl: !!hostConfig?.internalExecutorUrl });
 
@@ -133,8 +133,8 @@ export const ActionBarMoreMenu: FC<{
         Remote Debugger
       </PopupMenuItem>
       {recordingsEnabled ? <PopupMenuItem onClick={doLoadRecording}>Load Recording</PopupMenuItem> : null}
-      {trivetInputCopyEnabled && onCopyAsTestCase ? (
-        <PopupMenuItem onClick={onCopyAsTestCase}>Copy Inputs for Trivet</PopupMenuItem>
+      {evaluationInputCopyEnabled && onAddRunInputsToEvaluation ? (
+        <PopupMenuItem onClick={onAddRunInputsToEvaluation}>Add run inputs to evaluation dataset</PopupMenuItem>
       ) : null}
     </PopupMenu>
   );

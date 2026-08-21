@@ -1,11 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import {
-  type ChartNode,
-  type NodeConnection,
-  type NodeId,
-  type PortId,
-} from '@valerypopoff/rivet2-core';
+import { type ChartNode, type NodeConnection, type NodeId, type PortId } from '@valerypopoff/rivet2-core';
 import {
   createEditableStringListRows,
   moveEditableStringListRows,
@@ -235,6 +230,136 @@ test('legacy match ids remap to generated stable ids on first edit', () => {
   assert.equal(result.nextNode.data.casePortIds.length, 2);
   assert.notEqual(result.nextConnections[0]!.outputId, 'case2');
   assert.equal(result.nextConnections[0]!.outputId, result.nextNode.data.casePortIds[1]);
+});
+
+test('paired stable-id bindings keep Regex Match input and output wires with the same case', () => {
+  const node = makeNode<{
+    cases: string[];
+    casePortIds?: string[];
+  }>('match', {
+    cases: ['YES', 'NO'],
+    casePortIds: ['case-yes', 'case-no'],
+  });
+  const previousRows = createEditableStringListRows(['YES', 'NO']);
+  const nextRows = [
+    { uiId: previousRows[1]!.uiId, value: 'NOPE' },
+    { uiId: previousRows[0]!.uiId, value: 'YEP' },
+  ];
+  const connections = [
+    makeConnection({ outputNodeId: node.id, outputId: 'case-yes' as PortId }),
+    makeConnection({ outputNodeId: node.id, outputId: 'case-no' as PortId }),
+    makeConnection({ inputNodeId: node.id, inputId: 'value-case-yes' as PortId }),
+    makeConnection({ inputNodeId: node.id, inputId: 'value-case-no' as PortId }),
+  ];
+
+  const result = prepareStringListPortBindingEdit({
+    node,
+    dataKey: 'cases',
+    portBinding: {
+      side: 'output',
+      identity: 'stored-stable-id',
+      idDataKey: 'casePortIds',
+      legacyPortIdPattern: { kind: 'prefix', prefix: 'case', startIndex: 1 },
+      companionBindings: [{ side: 'input', prefix: 'value-' }],
+    },
+    previousRows,
+    nextRows,
+    connections,
+  });
+
+  assert.deepEqual(result.nextNode.data.casePortIds, ['case-no', 'case-yes']);
+  assert.deepEqual(result.nextConnections, connections);
+});
+
+test('paired stable-id bindings delete the matching input and output wires together', () => {
+  const node = makeNode('match', {
+    cases: ['YES', 'NO'],
+    casePortIds: ['case-yes', 'case-no'],
+  });
+  const previousRows = createEditableStringListRows(['YES', 'NO']);
+  const connections = [
+    makeConnection({ outputNodeId: node.id, outputId: 'case-yes' as PortId }),
+    makeConnection({ outputNodeId: node.id, outputId: 'case-no' as PortId }),
+    makeConnection({ inputNodeId: node.id, inputId: 'value-case-yes' as PortId }),
+    makeConnection({ inputNodeId: node.id, inputId: 'value-case-no' as PortId }),
+  ];
+
+  const result = prepareStringListPortBindingEdit({
+    node,
+    dataKey: 'cases',
+    portBinding: {
+      side: 'output',
+      identity: 'stored-stable-id',
+      idDataKey: 'casePortIds',
+      legacyPortIdPattern: { kind: 'prefix', prefix: 'case', startIndex: 1 },
+      companionBindings: [{ side: 'input', prefix: 'value-' }],
+    },
+    previousRows,
+    nextRows: [{ uiId: previousRows[0]!.uiId, value: 'YES' }],
+    connections,
+  });
+
+  assert.deepEqual(result.nextConnections, [connections[0]!, connections[2]!]);
+});
+
+test('paired stable-id bindings migrate legacy Regex Match input and output ids together', () => {
+  const node = makeNode<{
+    cases: string[];
+    casePortIds?: string[];
+  }>('match', { cases: ['YES'] });
+  const previousRows = createEditableStringListRows(['YES']);
+  const connections = [
+    makeConnection({ outputNodeId: node.id, outputId: 'case1' as PortId }),
+    makeConnection({ inputNodeId: node.id, inputId: 'value-case1' as PortId }),
+  ];
+
+  const result = prepareStringListPortBindingEdit({
+    node,
+    dataKey: 'cases',
+    portBinding: {
+      side: 'output',
+      identity: 'stored-stable-id',
+      idDataKey: 'casePortIds',
+      legacyPortIdPattern: { kind: 'prefix', prefix: 'case', startIndex: 1 },
+      companionBindings: [{ side: 'input', prefix: 'value-' }],
+    },
+    previousRows,
+    nextRows: [{ uiId: previousRows[0]!.uiId, value: 'YEP' }],
+    connections,
+  });
+
+  const [nextCasePortId] = result.nextNode.data.casePortIds!;
+  assert.equal(result.nextConnections[0]!.outputId, nextCasePortId);
+  assert.equal(result.nextConnections[1]!.inputId, `value-${nextCasePortId}`);
+});
+
+test('paired stable-id bindings retain recoverable Regex Match value wires through case edits', () => {
+  const node = makeNode<{
+    cases: string[];
+    casePortIds?: string[];
+  }>('match', { cases: ['YES'] });
+  const previousRows = createEditableStringListRows(['YES']);
+  const recoverableConnections = [makeConnection({ inputNodeId: node.id, inputId: 'value-case1' as PortId })];
+
+  const result = prepareStringListPortBindingEdit({
+    node,
+    dataKey: 'cases',
+    portBinding: {
+      side: 'output',
+      identity: 'stored-stable-id',
+      idDataKey: 'casePortIds',
+      legacyPortIdPattern: { kind: 'prefix', prefix: 'case', startIndex: 1 },
+      companionBindings: [{ side: 'input', prefix: 'value-' }],
+    },
+    previousRows,
+    nextRows: [{ uiId: previousRows[0]!.uiId, value: 'YEP' }],
+    connections: [],
+    recoverableConnections,
+  });
+
+  assert.equal(result.nextConnections.length, 0);
+  assert.equal(result.nextRecoverableConnections.length, 1);
+  assert.equal(result.nextRecoverableConnections[0]!.inputId, `value-${result.nextNode.data.casePortIds![0]}`);
 });
 
 test('duplicate stored stable ids are treated as legacy and remapped to fresh stable ids', () => {

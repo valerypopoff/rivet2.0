@@ -7,13 +7,11 @@ import {
   serializeGraph,
   serializeProject,
 } from '@valerypopoff/rivet2-core';
-import { type IOProvider } from './IOProvider.js';
 import {
-  type SerializedTrivetData,
-  type TrivetData,
-  deserializeTrivetData,
-  serializeTrivetData,
-} from '@valerypopoff/trivet';
+  deserializeLegacyEvaluationProjectData,
+  type EvaluationProjectFileData,
+  type IOProvider,
+} from './IOProvider.js';
 import { openBrowserFile } from './browserFileInput.js';
 
 export class LegacyBrowserIOProvider implements IOProvider {
@@ -27,8 +25,8 @@ export class LegacyBrowserIOProvider implements IOProvider {
     link.click();
   }
 
-  async saveProjectData(project: Project, testData: TrivetData): Promise<string | undefined> {
-    const serializedData = serializeProject(project, { trivet: serializeTrivetData(testData) });
+  async saveProjectData(project: Project): Promise<string | undefined> {
+    const serializedData = serializeProject(project);
     const blob = new Blob([serializedData as string], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
@@ -47,7 +45,7 @@ export class LegacyBrowserIOProvider implements IOProvider {
   }
 
   async loadProjectData(
-    callback: (data: { project: Project; testData: TrivetData; path: string }) => void,
+    callback: (data: { project: Project; evaluation: EvaluationProjectFileData; path: string }) => void,
   ): Promise<void> {
     const file = await openBrowserFile({ accept: '.rivet-project' });
     if (!file) return;
@@ -56,11 +54,9 @@ export class LegacyBrowserIOProvider implements IOProvider {
 
     const [project, attachedData] = deserializeProject(text);
 
-    const testData = attachedData?.trivet
-      ? deserializeTrivetData(attachedData.trivet as SerializedTrivetData)
-      : { testSuites: [] };
+    const evaluationData = deserializeLegacyEvaluationProjectData(attachedData?.evaluations);
 
-    callback({ project, testData, path: file.name });
+    callback({ project, evaluation: { evaluationData, evaluationDatasets: [] }, path: file.name });
   }
 
   async loadRecordingData(callback: (data: { recorder: ExecutionRecorder; path: string }) => void): Promise<void> {

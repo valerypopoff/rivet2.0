@@ -60,7 +60,6 @@ export function useNewProjectFromTemplate() {
       project: projectWithoutData,
       data,
       graphToLoad,
-      testSuites: [],
       markClean: true,
     });
 

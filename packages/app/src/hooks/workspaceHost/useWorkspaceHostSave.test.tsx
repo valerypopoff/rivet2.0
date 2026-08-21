@@ -1,13 +1,12 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import type { GraphId, Project, ProjectId } from '@valerypopoff/rivet2-core';
-import type { TrivetData } from '@valerypopoff/trivet';
+import type { IOProvider } from '../../io/IOProvider.js';
 import React from 'react';
 import { JSDOM } from 'jsdom';
 import { createRoot } from 'react-dom/client';
 import { act } from 'react-dom/test-utils';
 import { getDefaultStore } from 'jotai';
-import type { IOProvider } from '../../io/IOProvider.js';
 import { ProvidersProvider } from '../../providers/ProvidersContext.js';
 import { MemoryStaticDataStore } from '../../providers/StaticDataStore.js';
 import { HostCallbacksProvider, type RivetAppHostProjectSavedEvent } from '../../providers/HostCallbacksContext.js';
@@ -32,7 +31,7 @@ import { useWorkspaceHostSave } from './useWorkspaceHostSave.js';
 
 type SaveableIOProvider = IOProvider & {
   canSaveProjectDataNoPrompt(path: string): boolean;
-  saveProjectDataNoPrompt(project: Project, testData: TrivetData, path: string): Promise<void>;
+  saveProjectDataNoPrompt(project: Project, path: string): Promise<void>;
 };
 
 type MountedSaveHost = {

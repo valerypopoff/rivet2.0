@@ -1,6 +1,6 @@
 # Prompt Designer
 
-The Prompt Designer gives you a UI to tweak and test prompts from Chat and LLM Chat nodes.
+The Prompt Designer gives you a UI to tune an inline LLM Chat node and make one-off requests while you are designing a prompt.
 
 ![Prompt Designer](./assets/prompt-designer.png)
 
@@ -20,6 +20,6 @@ The middle of the Prompt Designer contains the model response.
 
 The right side of the Prompt Designer contains tweakable model parameters, such as temperature and max tokens.
 
-Once you have tweaked your prompt, and set the settings to your desired values, you can click Run at the bottom left to test your prompt.
+For repeatable testing, open **Evaluations** from the Prompt Designer. Evaluations owns datasets, complete-graph runs, assertions, evaluator graphs, trial counts, costs, baselines, and retained results. It deliberately does not turn a one-off prompt response into expected truth: choose the expected fields and checks explicitly.
 
-The Tests view can run prompt test groups against an evaluator graph. Choose an evaluator graph before running tests so Rivet knows how to score each case.
+Once you have tweaked your prompt and settings, use **Run** at the bottom left for a one-off preview. For repeatable checks and comparisons, use **Open in Evaluations**.

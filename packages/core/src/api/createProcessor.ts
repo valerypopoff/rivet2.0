@@ -56,6 +56,7 @@ export type RunGraphOptions = {
   getChatNodeEndpoint?: ProcessContext['getChatNodeEndpoint'];
   onChatV2CallFinished?: ProcessContext['onChatV2CallFinished'];
   llmProfileHealthStore?: RivetLLMProfileHealthStore;
+  evaluation?: ProcessContext['evaluation'];
   tokenizer?: Tokenizer;
   codeRunner?: ProcessContext['codeRunner'];
   projectPath?: string;
@@ -248,6 +249,7 @@ export function coreCreateProcessor(
           getChatNodeEndpoint: options.getChatNodeEndpoint,
           onChatV2CallFinished: options.onChatV2CallFinished,
           llmProfileHealthStore: options.llmProfileHealthStore,
+          evaluation: options.evaluation,
         },
         resolvedInputs,
         resolvedContextValues,

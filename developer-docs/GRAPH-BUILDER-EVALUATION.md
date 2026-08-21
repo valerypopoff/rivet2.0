@@ -115,10 +115,13 @@ owns the reusable public development-suite loop:
 6. construct and validate the observation, then score and aggregate it with the
    checked policy.
 
-The loop is sequential and retains fixture-set order, which makes fake-provider
-development runs reproducible and prevents trial completion order from
-changing result ordering. It never constructs a provider client and never
-claims a measured baseline. Adapter exceptions become sanitized failed
+The loop uses Evaluations' shared `runEvaluationWorkPool()` with concurrency
+fixed at one. That keeps fixture-set order reproducible while using the same
+cancellation and stable-result-ordering semantics as product Evaluations. The
+Graph Builder harness intentionally owns only its domain-specific fixture
+materialization, redaction auditing, and scoring; it never becomes a second
+general-purpose graph-evaluation runner. It never constructs a provider client
+and never claims a measured baseline. Adapter exceptions become sanitized failed
 observations; externally aborting the suite still aborts the suite. Missing,
 duplicate, malformed, or cyclic redaction audit surfaces fail closed with
 `redaction-audit-incomplete` instead of being mistaken for a clean audit.

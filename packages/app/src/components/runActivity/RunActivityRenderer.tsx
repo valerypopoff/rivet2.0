@@ -186,7 +186,7 @@ export const RunActivityRenderer: FC = () => {
       ...stableViewModel,
       durationMs: getRunActivityRootDurationMs(selectedRoot, now),
     };
-  }, [now, selectedRoot?.finishedAt, selectedRoot?.recordedTiming, selectedRoot?.startedAt, stableViewModel]);
+  }, [now, selectedRoot, stableViewModel]);
 
   const selectExactExecutionTarget = useStableCallback((identity: RunActivityInvocationIdentity) => {
     const graphRun = journal.rootsById[identity.rootRunId]?.graphRunsById[identity.graphRunId];

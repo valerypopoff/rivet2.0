@@ -12,7 +12,7 @@ import 'react-toastify/dist/ReactToastify.css';
 import { PromptDesignerRenderer } from './PromptDesigner.js';
 import { useGraphExecutor } from '../hooks/useGraphExecutor.js';
 import { useMenuCommands } from '../hooks/useMenuCommands.js';
-import { TrivetRenderer } from './trivet/Trivet.js';
+import { EvaluationsRenderer } from './evaluations/Evaluations.js';
 import { ActionBar } from './ActionBar';
 import { DebuggerPanelRenderer } from './DebuggerConnectPanel';
 import { useAtomValue, useSetAtom } from 'jotai';
@@ -126,7 +126,7 @@ export const RivetApp: FC = () => {
   }, [selectedExecutor, setSelectedExecutor]);
 
   useExecutorSessionCoordinator(selectedExecutor);
-  const { tryRunGraph, tryRunTests, tryAbortGraph, tryPauseGraph, tryResumeGraph } = useGraphExecutor();
+  const { tryRunGraph, tryRunEvaluation, tryAbortGraph, tryPauseGraph, tryResumeGraph } = useGraphExecutor();
   const theme = useAtomValue(themeState);
   const customThemePrimaryColor = useAtomValue(customThemePrimaryColorState);
   const customThemeSecondaryColor = useAtomValue(customThemeSecondaryColorState);
@@ -135,6 +135,7 @@ export const RivetApp: FC = () => {
   const leftSidebarOpen = useAtomValue(sidebarOpenState);
   const leftSidebarLiveWidth = useAtomValue(leftSidebarLiveWidthState);
   const openOverlay = useAtomValue(overlayOpenState);
+  const setOpenOverlay = useSetAtom(overlayOpenState);
   const runActivityDrawerOpen = useAtomValue(runActivityDrawerOpenState);
   const runActivityDrawerHeight = useAtomValue(runActivityDrawerHeightState);
   const workspaceVisibleTabCount = useAtomValue(workspaceVisibleTabCountState);
@@ -189,7 +190,7 @@ export const RivetApp: FC = () => {
 
   const noProjectOpen = workspaceVisibleTabCount === 0;
   const isCanvasMode = openOverlay === undefined;
-  const openingProjectSelected = isCanvasMode && selectedOpeningProjectTabId != null;
+  const openingProjectSelected = selectedOpeningProjectTabId != null;
   const nodeLibraryOpen = workspaceTarget?.type === 'nodeLibrary';
   const uiGraphOpen = workspaceTarget?.type === 'uiGraph';
   const workspaceCapabilities = getProjectWorkspaceTargetCapabilities(workspaceTarget);
@@ -198,6 +199,13 @@ export const RivetApp: FC = () => {
   useRestorePersistedWorkspace();
   useProjectPlugins();
 
+  useEffect(() => {
+    const projectScopedOverlay = openOverlay === 'dataStudio';
+    if (projectScopedOverlay && (noProjectOpen || selectedOpeningProjectTabId != null)) {
+      setOpenOverlay(undefined);
+    }
+  }, [noProjectOpen, openOverlay, selectedOpeningProjectTabId, setOpenOverlay]);
+
   const runGraph = wrapAsync(async (options?: EditorGraphRunOptions) => {
     if (!workspaceCapabilities.canRun) {
       return;
@@ -205,7 +213,6 @@ export const RivetApp: FC = () => {
 
     await tryRunGraph(options);
   }, 'Run graph');
-  const runTests = wrapAsync(tryRunTests, 'Run tests');
   const hostUiConfig = useRivetAppHostUiConfig();
 
   useMenuCommands({
@@ -305,9 +312,8 @@ export const RivetApp: FC = () => {
         <>
           <ProjectSelector mode="workspace" />
           <NoProject />
+          <EvaluationsRenderer tryRunEvaluation={tryRunEvaluation} abortEvaluation={tryAbortGraph} />
           <PromptDesignerRenderer />
-          <TrivetRenderer tryRunTests={tryRunTests} />
-          <DataStudioRenderer />
           <NewProjectModalRenderer />
           <AppErrorBoundary context="Settings Modal" fallback={<div>Failed to render Settings</div>}>
             <SettingsModal />
@@ -320,7 +326,6 @@ export const RivetApp: FC = () => {
           {isCanvasMode && !openingProjectSelected && !nodeLibraryOpen && !uiGraphOpen && (
             <ActionBar
               onRunGraph={runGraph}
-              onRunTests={runTests}
               onAbortGraph={tryAbortGraph}
               onPauseGraph={tryPauseGraph}
               onResumeGraph={tryResumeGraph}
@@ -341,8 +346,10 @@ export const RivetApp: FC = () => {
             <SettingsModal />
           </AppErrorBoundary>
           <PromptDesignerRenderer />
-          <TrivetRenderer tryRunTests={tryRunTests} />
-          <DataStudioRenderer />
+          {!openingProjectSelected && (
+            <EvaluationsRenderer tryRunEvaluation={tryRunEvaluation} abortEvaluation={tryAbortGraph} />
+          )}
+          {!openingProjectSelected && <DataStudioRenderer />}
           <NewProjectModalRenderer />
           <MissingAppPluginsModalRenderer />
           <DeleteGraphInputConfirmModalRenderer />

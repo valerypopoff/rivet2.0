@@ -1,187 +1,84 @@
 import Popup from '@atlaskit/popup';
 import { css } from '@emotion/react';
-import { ExecutionRecorder, runGentraceTests, runRemoteGentraceTests } from '@valerypopoff/rivet2-core';
+import { exportGentraceEvaluationRun } from '@valerypopoff/rivet2-core';
 import { useToggle } from 'ahooks';
 import clsx from 'clsx';
 import EditPen from 'majesticons/line/edit-pen-2-line.svg?react';
-import TestTube from 'majesticons/line/test-tube-filled-line.svg?react';
+import Share from 'majesticons/line/share-line.svg?react';
+import { useAtomValue } from 'jotai';
+import { toast } from 'react-toastify';
 
 import GentraceImage from '../../assets/vendor_logos/gentrace.svg?react';
-import { toast } from 'react-toastify';
-import { useRemoteDebugger } from '../../hooks/useRemoteDebugger';
-import { useExecutorSessionRuntime } from '../../providers/ExecutorSessionContext';
-import { useProjectNodeRegistry } from '../../hooks/useProjectNodeRegistry';
-import { TauriNativeApi } from '../../model/native/TauriNativeApi';
-import { graphState } from '../../state/graph';
-import { projectContextState, projectState } from '../../state/savedGraphs.js';
-import { settingsState } from '../../state/settings';
-import { fillMissingSettingsFromEnvironmentVariables } from '../../utils/tauri';
-import GentracePipelinePicker, { type GentracePipeline } from './GentracePipelinePicker';
-import { useAtomValue } from 'jotai';
-import { wrapAsync } from '../../utils/errorHandling';
-import { useEnvironmentProvider } from '../../providers/ProvidersContext.js';
-import { getProjectContextValues } from '../../utils/projectContextValues.js';
+import { graphState } from '../../state/graph.js';
+import { projectState } from '../../state/savedGraphs.js';
+import { settingsState } from '../../state/settings.js';
+import { evaluationsState } from '../../state/evaluations.js';
+import { useEvaluationRunStore } from '../../providers/ProvidersContext.js';
 import { PopupMenuContainer } from '../PopupMenu.js';
+import GentracePipelinePicker, { type GentracePipeline } from './GentracePipelinePicker.js';
 
+/**
+ * Gentrace is a reporter for complete Evaluations, never a second graph-run
+ * path. The generic evaluation runner owns case scheduling, evaluator graphs,
+ * accounting, cancellation, and recording retention.
+ */
 export const GentraceInteractors = () => {
   const project = useAtomValue(projectState);
   const graph = useAtomValue(graphState);
   const savedSettings = useAtomValue(settingsState);
-  const projectContext = useAtomValue(projectContextState(project.metadata.id));
-  const executorSessionRuntime = useExecutorSessionRuntime();
-  const environmentProvider = useEnvironmentProvider();
-  const projectNodeRegistry = useProjectNodeRegistry();
-
-  const remoteDebugger = useRemoteDebugger();
+  const evaluations = useAtomValue(evaluationsState);
+  const evaluationRunStore = useEvaluationRunStore();
+  const [gentracePipelineSelectorOpen, toggleGentracePipelineSelectorOpen] = useToggle(false);
 
   const gentracePipelineSettings = graph?.metadata?.attachedData?.gentracePipeline as GentracePipeline | undefined;
   const currentGentracePipelineSlug = gentracePipelineSettings?.slug;
+  const gentraceApiKey = savedSettings.pluginSettings?.gentrace?.gentraceApiKey as string | undefined;
 
-  const [gentracePipelineSelectorOpen, toggleGentracePipelineSelectorOpen] = useToggle(false);
-
-  const onRun = async () => {
-    const settings = await fillMissingSettingsFromEnvironmentVariables(
-      savedSettings,
-      projectNodeRegistry.getPlugins(),
-      {
-        environmentProvider,
-      },
-    );
-
-    if (!graph.metadata?.id) {
+  const exportLatestEvaluation = async () => {
+    const graphId = graph.metadata?.id;
+    if (!graphId) return;
+    if (!gentraceApiKey) {
+      toast.warn('Set the Gentrace API key in Plugin settings before exporting an evaluation.');
       return;
     }
-
     if (!currentGentracePipelineSlug) {
-      toast.warn('No Gentrace pipeline added.');
+      toast.warn('Associate a Gentrace pipeline before exporting an evaluation.');
       return;
     }
 
-    const contextValues = getProjectContextValues(projectContext);
-
-    toast.info(`Running Gentrace pipeline ${currentGentracePipelineSlug} tests ...`);
-    let testResultId: string | null = null;
+    const suiteIds = new Set(
+      evaluations.data.suites.filter((suite) => suite.targetGraphId === graphId).map((suite) => suite.id),
+    );
+    const knownRuns = evaluations.runs.length > 0
+      ? evaluations.runs
+      : await evaluationRunStore.list({ projectId: project.metadata.id });
+    const run = knownRuns
+      .filter((candidate) => suiteIds.has(candidate.suiteId) && candidate.executionStatus === 'completed')
+      .sort((left, right) => right.startedAt.localeCompare(left.startedAt))[0];
+    if (!run) {
+      toast.info('Run a completed Evaluation for this graph before exporting to Gentrace.');
+      return;
+    }
 
     try {
-      if (executorSessionRuntime.getRuntimeState().capabilities.canRecordSocket) {
-        const testResponse = await runRemoteGentraceTests(
-          currentGentracePipelineSlug,
-          settings,
-          project,
-          graph,
-          async (inputs) => {
-            const sessionState = executorSessionRuntime.getRuntimeState();
-            if (!sessionState.capabilities.canSendRun) {
-              throw new Error(
-                `Remote executor cannot accept a Gentrace graph run right now (status: ${
-                  sessionState.status
-                }, target: ${sessionState.target?.type ?? 'none'}).`,
-              );
-            }
-
-            if (sessionState.capabilities.canUploadProject) {
-              const projectUploadSent = remoteDebugger.send('set-dynamic-data', {
-                project: {
-                  ...project,
-                  graphs: {
-                    ...project.graphs,
-                    [graph.metadata!.id!]: graph,
-                  },
-                },
-                settings: await fillMissingSettingsFromEnvironmentVariables(
-                  savedSettings,
-                  projectNodeRegistry.getPlugins(),
-                  {
-                    environmentProvider,
-                  },
-                ),
-              });
-              if (!projectUploadSent) {
-                throw new Error('Remote executor disconnected before the Gentrace project upload could be sent.');
-              }
-            }
-
-            const recorder = new ExecutionRecorder();
-
-            const recorderPromise = executorSessionRuntime.recordSocketEvents((socket) => recorder.recordSocket(socket));
-            if (!recorderPromise) {
-              throw new Error('Remote executor is not ready to record Gentrace execution.');
-            }
-
-            const requestId = executorSessionRuntime.createRemoteExecutionRequest();
-
-            const runSent = remoteDebugger.send('run', { requestId, graphId: graph.metadata!.id!, inputs, contextValues });
-            if (!runSent) {
-              void recorderPromise.catch(() => {});
-              throw new Error('Remote executor disconnected before the Gentrace graph run could be sent.');
-            }
-
-            await recorderPromise;
-
-            return recorder.getRecording();
-          },
-        );
-        testResultId = testResponse.resultId;
-      } else {
-        const testResponse = await runGentraceTests(
-          currentGentracePipelineSlug,
-          settings,
-          project,
-          graph,
-          new TauriNativeApi(),
-          contextValues,
-        );
-        testResultId = testResponse.resultId;
-      }
-    } catch (e: any) {
-      const serverResult = e?.response?.data?.message ?? e?.message;
-      toast.error(
+      const response = await exportGentraceEvaluationRun({
+        gentraceApiKey,
+        pipelineSlug: currentGentracePipelineSlug,
+        run,
+      });
+      const resultId = response.resultId ?? response.pipelineRunId;
+      const link = resultId == null || !gentracePipelineSettings?.id
+        ? undefined
+        : `https://gentrace.ai/pipeline/${gentracePipelineSettings.id}/results/${resultId}`;
+      toast.success(
         <div>
-          <div
-            css={css`
-              margin-bottom: 10px;
-            `}
-          >
-            Error running Gentrace pipeline {currentGentracePipelineSlug} tests:
-          </div>
-
-          <div>
-            <code
-              css={css`
-                font-size: var(--ui-font-size-sm);
-              `}
-            >
-              {serverResult}
-            </code>
-          </div>
+          <div>Exported evaluation “{run.suiteName}” to Gentrace.</div>
+          {link && <a href={link} target="_blank" rel="noreferrer">Open Gentrace result</a>}
         </div>,
-        {
-          autoClose: false,
-          closeOnClick: false,
-          draggable: false,
-        },
       );
-      return;
+    } catch (error) {
+      toast.error(`Could not export the evaluation to Gentrace: ${error instanceof Error ? error.message : String(error)}`);
     }
-
-    const url = `http://gentrace.ai/pipeline/${gentracePipelineSettings.id}/results/${testResultId}?size=compact`;
-
-    toast.info(
-      <div>
-        <div>Gentrace pipeline {currentGentracePipelineSlug} tests finished.</div>
-        <div>
-          View results here{' '}
-          <a href={url} target="_blank" rel="noreferrer">
-            {url}
-          </a>
-        </div>
-      </div>,
-      {
-        autoClose: false,
-        closeOnClick: false,
-        draggable: false,
-      },
-    );
   };
 
   return (
@@ -196,23 +93,20 @@ export const GentraceInteractors = () => {
           <div className={clsx('run-gentrace-button')}>
             <button
               {...triggerProps}
-              onMouseDown={(e) => {
-                if (e.button === 0) {
+              onMouseDown={(event) => {
+                if (event.button === 0) {
                   toggleGentracePipelineSelectorOpen.toggle();
-                  e.preventDefault();
+                  event.preventDefault();
                 }
               }}
               css={css`
                 display: flex;
-                flex-direction: row;
                 align-items: center;
                 justify-content: center;
               `}
             >
-              <div>
-                <GentraceImage height="17px" width="17px" />
-              </div>
-              {currentGentracePipelineSlug ? 'Change' : 'Add'} Gentrace Pipeline
+              <GentraceImage height="17px" width="17px" />
+              {currentGentracePipelineSlug ? 'Change' : 'Add'} Gentrace pipeline
               <EditPen />
             </button>
           </div>
@@ -220,12 +114,10 @@ export const GentraceInteractors = () => {
       />
 
       <div className={clsx('run-gentrace-button')}>
-        <button onClick={wrapAsync(onRun, 'Run Gentrace tests')} css={``}>
-          <div>
-            <GentraceImage height="17px" width="17px" />
-          </div>
-          Run Gentrace Tests
-          <TestTube />
+        <button onClick={() => void exportLatestEvaluation()}>
+          <GentraceImage height="17px" width="17px" />
+          Export latest evaluation
+          <Share />
         </button>
       </div>
     </>

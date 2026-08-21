@@ -96,7 +96,7 @@ Browser execution can replay any frozen value that `structuredClone(...)` can cl
 
 Replay is not `preloadNodeData(...)`. A frozen node still receives its real current inputs in `nodeStart`, emits a normal `nodeFinish`, uses a normal process id, writes `nodeResults`, and schedules downstream nodes exactly like a computed node. The core frozen-output resolver resets its replay counter per graph run and keys lookup by the processor's current graph id plus node id. If a node is invoked more times within the same graph run than there are captured output instances, the resolver reuses the last captured output. A node inside a reusable subgraph is therefore frozen for every invocation of that graph node while the project remains open.
 
-The Browser and internal Node live run-from paths treat frozen boundary outputs as available preload data. If a boundary dependency has both previous execution history and frozen output data, the frozen output wins. Preload event suppression remains unchanged; frozen boundary data is only used to seed the run boundary and must not create duplicate output pages. Live `Run to here` also preserves visible execution data for frozen nodes that are outside the selected target's dependency slice, so a frozen node does not visually lose its output when the user runs to an unrelated node. Frozen nodes inside the run-to slice are allowed to replay normally and update through the ordinary node lifecycle. External Remote Debugger runs, recording playback, and Trivet/test execution do not consult frozen outputs, even for run-from preload planning or run-to visual preservation. While an external Remote Debugger target is selected, `VisualNode` hides frozen presentation state without clearing it; if the user disconnects before any accepted remote execution event arrives, the same frozen outputs become visible again. Once an accepted external Remote Debugger run event arrives, the active `useRemoteExecutor` subscriber clears visible `frozenNodeOutputsState`, and `ExecutorSessionProvider` applies the same flush to inactive project execution snapshots so stale local frozen data cannot reappear after remote execution has replaced that project's run history.
+The Browser and internal Node live run-from paths treat frozen boundary outputs as available preload data. If a boundary dependency has both previous execution history and frozen output data, the frozen output wins. Preload event suppression remains unchanged; frozen boundary data is only used to seed the run boundary and must not create duplicate output pages. Live `Run to here` also preserves visible execution data for frozen nodes that are outside the selected target's dependency slice, so a frozen node does not visually lose its output when the user runs to an unrelated node. Frozen nodes inside the run-to slice are allowed to replay normally and update through the ordinary node lifecycle. External Remote Debugger runs, recording playback, and evaluation execution do not consult frozen outputs, even for run-from preload planning or run-to visual preservation. While an external Remote Debugger target is selected, `VisualNode` hides frozen presentation state without clearing it; if the user disconnects before any accepted remote execution event arrives, the same frozen outputs become visible again. Once an accepted external Remote Debugger run event arrives, the active `useRemoteExecutor` subscriber clears visible `frozenNodeOutputsState`, and `ExecutorSessionProvider` applies the same flush to inactive project execution snapshots so stale local frozen data cannot reappear after remote execution has replaced that project's run history.
 
 ## Connected Tool Continuation Execution
 
@@ -496,7 +496,7 @@ Transport features are exposed as session capabilities. For example,
 `canSendRun` controls whether remote run commands can be sent, `canUploadProject`
 replaces older direct `remoteUploadAllowed` checks for project uploads, and
 `canRecordSocket` gates Gentrace socket recording. Remote graph execution,
-Trivet remote runs, remote user-input replies, editor startup preload data
+Evaluations remote runs, remote user-input replies, editor startup preload data
 bundled into run messages, live preload messages for already-attached processors,
 and remote abort/pause/resume commands check those capabilities at action time
 before sending protocol messages and then verify that the websocket accepted the send.
@@ -551,7 +551,7 @@ terminal frame can correspond to a root run. Events from older transports that
 do not carry a project id keep the compatibility fallback and still pass
 through. `done`, `abort`, `error`, disconnect, and send-failure paths clear the
 active request explicitly.
-Trivet/test runs use the executor-session pending-promise API and reject that
+evaluation runs use the executor-session pending-promise API and reject that
 pending request if the `run` send fails before reaching the socket, so the
 failure is observed through the same async result path as normal remote test-run
 completion.
@@ -702,7 +702,7 @@ Each `GraphRunRecord` contains:
 
 Records are created in `onGraphStart` and updated in `onGraphFinish`/`onGraphError`/`onGraphAbort`.
 
-On new execution start (`onStart`), all history is cleared (unless running Trivet tests).
+On new execution start (`onStart`), all history is cleared (unless running Evaluations tests).
 
 ### Graph run selection
 
@@ -1038,7 +1038,7 @@ The remote execution client pipeline is layered intentionally:
   active-request event filtering, completion cleanup, and pending test-run
   send-failure cleanup.
 - `remoteExecutorHelpers.ts` owns pure run-from planning, preload extraction,
-  Trivet selection, and process-event dispatcher construction.
+  Evaluations selection, and process-event dispatcher construction.
 
 Gentrace remote runs are intentionally outside this editor/test-run pipeline.
 They use `recordSocketEvents(...)` to capture the raw executor socket stream for
@@ -1091,7 +1091,7 @@ Persisted app-side execution payloads now share one storage/preview utility laye
 - `storeNodeDataForHistory(...)` only writes fields that are explicitly present, so start-time payloads such as `inputData` and small debug snapshots survive later finish/error updates instead of being overwritten with `undefined`
 - `useNodeExecutionEvents` uses that shared path for started, finished, excluded, and partial-output persistence
 - split-run partial outputs still keep their separate `splitOutputData[index]` storage model, but they now reuse the same storage transform and stable ref-id scheme before persistence. Render/copy helpers should only prefer split output data when at least one split entry contains a real visible stored port wrapper; an empty split map, warnings-only split map, or internal-port-only split map from partial outputs must not hide a later valid `outputData` payload.
-- `onStart`, `onTrivetStart`, and node-output clearing paths clear the corresponding execution-scoped refs when they wipe prior run data
+- `onStart`, `onEvaluationsStart`, and node-output clearing paths clear the corresponding execution-scoped refs when they wipe prior run data
 - error-only and timing-only node-run records can legitimately have no stored input/output payloads. Ref collection and cleanup must treat those records as node-run metadata with zero refs, not as malformed port maps, so one failed node cannot break the next run-start cleanup.
 - `executionDataStorage.ts` is the low-level storage/restore boundary. App-side read/restore behavior goes through `executionDataReaders.ts` so UI and executor-preload code share the same displayed-output restore, port-level restore/coercion, and warning extraction logic.
 - Preview-only or editor-assist consumers that interpolate stored inputs for display, such as Code, Expression, JS list, Extract Object Path parsed-source sections, and Prompt Designer attached-node hydration, should use `tryRestoreStoredPortMap(...)`. Missing ref-backed inputs are skipped port-by-port so available inputs still render in the parsed preview or editor assist surface, while an entirely unavailable input map simply removes the optional detail instead of breaking the visible output value. Strict `restoreStoredPortMap(...)` remains appropriate for executor preload paths that must fail loudly when required boundary data has been evicted.
@@ -1634,7 +1634,7 @@ Recording` button still delegates to `useGraphExecutor`, but
 override, and the ActionBar keeps playback enabled without waiting for the Node
 sidecar. Remote/app-executor sessions only run live graphs; they do not receive
 a `run` protocol message for recording playback. This override is scoped to
-graph playback and playback controls, so live features such as Trivet tests keep
+graph playback and playback controls, so live features such as Evaluations tests keep
 using the selected executor while a recording is loaded. The app blocks
 recording load/unload while an execution is active, which keeps the playback
 override stable for the lifetime of the run and prevents Abort/Pause/Resume from
@@ -1771,10 +1771,10 @@ absence gracefully since the final `nodeFinish` event contains the complete outp
 | [`useExecutorSessionCoordinator.ts`](../packages/app/src/hooks/useExecutorSessionCoordinator.ts)         | Product policy for Browser/hosted Node/desktop Node startup, cleanup, sidecar readiness, and external-debugger handoff restoration                                   |
 | [`useExecutorSession.ts`](../packages/app/src/hooks/useExecutorSession.ts)                               | Read-only executor-session snapshot hook plus compatibility exports for coordinator helpers                                                                          |
 | [`useRemoteDebugger.ts`](../packages/app/src/hooks/useRemoteDebugger.ts)                                 | External Remote Debugger command/subscription surface; does not own Node executor restoration policy                                                                 |
-| [`useRemoteExecutor.ts`](../packages/app/src/hooks/useRemoteExecutor.ts)                                 | Remote graph/test execution over the shared session; sends protocol messages only after action-time capability checks                                                |
+| [`useRemoteExecutor.ts`](../packages/app/src/hooks/useRemoteExecutor.ts)                                 | Remote graph/Evaluation execution over the shared session; sends protocol messages only after action-time capability checks                                          |
 | [`remoteExecutorUploadCache.ts`](../packages/app/src/hooks/remoteExecutorUploadCache.ts)                 | Remote project/settings/static-data upload decisions, cache invalidation, and send-success marking                                                                   |
 | [`remoteExecutorRunRequest.ts`](../packages/app/src/hooks/remoteExecutorRunRequest.ts)                   | Remote run request-id registration, active request filtering, send-failure cleanup, and pending test-run send helpers                                                |
-| [`remoteExecutorHelpers.ts`](../packages/app/src/hooks/remoteExecutorHelpers.ts)                         | Run-from planning, preload extraction, Trivet selection, and `createProcessEventDispatcher` routing from WebSocket messages to handlers                              |
+| [`remoteExecutorHelpers.ts`](../packages/app/src/hooks/remoteExecutorHelpers.ts)                         | Run-from planning, preload extraction, Evaluations selection, and `createProcessEventDispatcher` routing from WebSocket messages to handlers                              |
 | [`GraphProcessor.ts`](../packages/core/src/model/GraphProcessor.ts)                                      | Core execution engine, `#createSubProcessor`, `#buildExecutionMetadata`                                                                                              |
 | [`SubprocessorBridge.ts`](../packages/core/src/model/SubprocessorBridge.ts)                              | `wireSubprocessorEvents` - forwards child events to parent emitter                                                                                                   |
 | [`SplitRunProcessor.ts`](../packages/core/src/model/SplitRunProcessor.ts)                                | `processSplitRunNode` - iterates split inputs, creates subprocessors per iteration                                                                                   |

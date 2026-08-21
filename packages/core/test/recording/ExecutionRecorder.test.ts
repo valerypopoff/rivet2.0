@@ -993,6 +993,58 @@ void describe('ExecutionRecorder', () => {
     );
   });
 
+  void it('records only replayable events from its scoped remote request', async () => {
+    const recorder = new ExecutionRecorder();
+    const socket = new FakeSocket();
+    const recordingFinished = recorder.recordSocket(socket as unknown as WebSocket, { requestId: 'evaluation-request' });
+
+    socket.emit({
+      message: 'webAppStoragePatch',
+      data: { storagePatch: {} },
+      requestId: 'evaluation-request',
+    });
+    socket.emit({
+      message: 'nodeFinish',
+      data: { node, outputs: {}, processId, execution },
+      requestId: 'another-request',
+    });
+    socket.emit({
+      message: 'done',
+      data: { results: { output: { type: 'string', value: 'kept' } } },
+      requestId: 'evaluation-request',
+    });
+
+    await recordingFinished;
+    assert.deepEqual(recorder.events.map((event) => event.type), ['done']);
+  });
+
+  void it('stops a scoped remote recorder when its owning evaluation request is abandoned', async () => {
+    const recorder = new ExecutionRecorder();
+    const socket = new FakeSocket();
+    const abortController = new AbortController();
+    const recordingFinished = recorder.recordSocket(socket as unknown as WebSocket, {
+      requestId: 'evaluation-request',
+      signal: abortController.signal,
+    });
+
+    socket.emit({
+      message: 'nodeStart',
+      data: { node, inputs: {}, processId, execution },
+      requestId: 'evaluation-request',
+    });
+    abortController.abort();
+    await recordingFinished;
+
+    // A late event from the now-unowned request cannot leak into a later
+    // evaluation recording through the shared debugger socket.
+    socket.emit({
+      message: 'done',
+      data: { results: {} },
+      requestId: 'evaluation-request',
+    });
+    assert.deepEqual(recorder.events.map((event) => event.type), ['nodeStart']);
+  });
+
   void it('keeps remote socket recordings open after successful abort until done', async () => {
     const recorder = new ExecutionRecorder();
     const socket = new FakeSocket();

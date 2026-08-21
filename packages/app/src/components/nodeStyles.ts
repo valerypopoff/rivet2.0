@@ -772,6 +772,35 @@ export const nodeStyles = css`
     gap: 8px;
   }
 
+  /* Regex Match exposes Test and a Custom values group label before its paired
+   * Per-output inputs. Keep the case outputs on those paired input rows. */
+  .node-ports.match-per-output-values .output-ports {
+    padding-top: 52px;
+  }
+
+  .regex-match-values-label {
+    color: var(--node-port-label-color);
+    font-size: var(--ui-font-size-2xs);
+    line-height: 16px;
+    margin: 4px 4px 0 12px;
+    opacity: 0.5;
+    pointer-events: none;
+    user-select: none;
+  }
+
+  .regex-match-value-connection-guides {
+    position: absolute;
+    inset: 0;
+    z-index: 1;
+    pointer-events: none;
+  }
+
+  .regex-match-value-connection-guide {
+    position: absolute;
+    border-top: 1px dotted color-mix(in srgb, var(--node-port-border) 62%, transparent);
+    transform: translateY(-50%);
+  }
+
   .input-ports .port {
     flex-direction: row;
     justify-content: flex-start;

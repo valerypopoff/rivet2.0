@@ -26,7 +26,7 @@ export const debuggerPanelAnchorState = atom<DebuggerPanelAnchor | undefined>(un
 
 export const dataBusFullRowCountState = atom<number>(0);
 
-export type OverlayKey = 'promptDesigner' | 'trivet' | 'dataStudio';
+export type OverlayKey = 'promptDesigner' | 'evaluations' | 'dataStudio';
 
 export const overlayOpenState = atom<OverlayKey | undefined>(undefined);
 

@@ -1,6 +1,6 @@
 {
   "formatVersion": 1,
-  "catalogFingerprint": "fnv1a64:32fb37a0ea2a3366",
+  "catalogFingerprint": "fnv1a64:22460d918bcec9b4",
   "entries": [
     {
       "authoringChoiceId": "registered:abortGraph",
@@ -1393,7 +1393,7 @@
       "authoringChoiceId": "registered:match",
       "nodeType": "match",
       "displayName": "Regex Match",
-      "description": "The Regex Match Node is used to match a string input against a series of regular expressions. Each regular expression corresponds to an output of the node. The node can be configured to either run the first matching output port, or to run all matching output ports. If no match is found, the Unmatched output port will be executed. This node is useful for routing control flow based on the content of a string. For example, you can use the Regex Match Node to check if a user's message contains certain keywords and route the conversation accordingly. If the Value input is provided, it will be passed through the corresponding output port if a match is found. If the Value input is not provided, the Test input will be passed through the corresponding output port if a match is found.",
+      "description": "The Regex Match Node is used to match a string input against a series of regular expressions. Each regular expression corresponds to an output of the node. The node can be configured to either run the first matching output port, or to run all matching output ports. If no match is found, the Unmatched output port will be executed. This node is useful for routing control flow based on the content of a string. For example, you can use the Regex Match Node to check if a user's message contains certain keywords and route the conversation accordingly. Choose how custom values reach the outputs with Custom case values . One shared custom value keeps the original single optional Custom value input: its value reaches every output that matches, or the Test value is passed through when Custom value is unconnected. Custom values per case adds a canvas only Custom values group after Test , containing",
       "aliases": [],
       "capabilities": {
         "createWithDefaults": true,

@@ -9,7 +9,7 @@ The root `yarn build` script currently builds packages in this order:
 1. `@valerypopoff/rivet2-core`
 2. `@valerypopoff/rivet2-node`
 3. `@valerypopoff/rivet-app-executor`
-4. `@valerypopoff/trivet`
+4. `@valerypopoff/rivet2-evaluations`
 5. `@valerypopoff/rivet-app`
 6. `@valerypopoff/rivet2-cli`
 
@@ -19,9 +19,9 @@ Hosted wrappers should prefer the narrower root build targets when they do not
 need the full desktop/app/CLI surface:
 
 - `yarn build:runtime`: core + node for API endpoint runtime images.
-- `yarn build:hosted-web-deps`: core + Trivet for hosted web/editor images.
+- `yarn build:hosted-web-deps`: core + Evaluations for hosted web/editor images.
 - `yarn build:executor-runtime`: core + node + app-executor artifacts.
-- `yarn build:npm-public`: core + node + Trivet + CLI for npm publishing.
+- `yarn build:npm-public`: core + node + Evaluations + CLI for npm publishing.
 
 Those targets are implemented by
 [`scripts/build-wrapper-target.mjs`](../scripts/build-wrapper-target.mjs) so
@@ -35,7 +35,7 @@ Shared runtime foundation for the entire repo.
 
 ### Package metadata
 
-- Version: `2.1.9`
+- Version: `2.2.0`
 - Main: `dist/cjs/bundle.cjs`
 - Module: `dist/esm/index.js`
 - Types: `dist/types/index.d.ts`
@@ -65,7 +65,7 @@ Shared runtime foundation for the entire repo.
 - app
 - node
 - app-executor
-- trivet
+- evaluations
 
 ## `@valerypopoff/rivet2-node` (`packages/node/`)
 
@@ -75,7 +75,7 @@ Node runtime wrapper around core.
 
 ### Package metadata
 
-- Version: `2.1.9`
+- Version: `2.2.0`
 - Main: `dist/cjs/bundle.cjs`
 - Module: `dist/esm/index.js`
 - Types: `dist/types/index.d.ts`
@@ -132,10 +132,12 @@ configuration and request payloads are never logged by this adapter.
 Workspace dependency policy is enforced by `yarn security:audit`. Direct runtime
 HTTP, MCP, WebSocket, YAML, JSONPath, Vite/Rollup, and cloud-provider dependencies
 stay on patched compatible releases; reviewed residual high findings require
-expiring entries in `security/dependency-audit-exceptions.json`. A runtime
+expiring entries in `security/dependency-audit-exceptions.json`, and unused
+entries fail the audit so they must be removed rather than carried forward. A runtime
 exception is permitted only when its exact, non-vulnerable API boundary is
 documented and no compatible upstream fix exists. Cargo dependencies are
-independently checked by RustSec. The desktop Tauri feature list is method-scoped for file,
+independently checked by RustSec; temporary advisory ignores must also match the
+expiring `security/rust-audit-exceptions.json` policy. The desktop Tauri feature list is method-scoped for file,
 dialog, HTTP, and window APIs; Tauri v1's all-or-nothing path and global-shortcut
 features remain because the app uses those APIs.
 
@@ -539,7 +541,7 @@ Desktop IDE frontend plus Tauri app packaging layer.
 
 ### Package metadata
 
-- Version: `2.8.9`
+- Version: `2.9.0`
 - Private: yes
 
 ### Runtime shape
@@ -554,7 +556,7 @@ Desktop IDE frontend plus Tauri app packaging layer.
 - local and sidecar execution
 - plugin loading/install UI
 - prompt designer
-- Trivet UI
+- Evaluations UI
 - debugger/data/update overlays
 
 ### Important current boundaries
@@ -563,7 +565,7 @@ Desktop IDE frontend plus Tauri app packaging layer.
 - app-only convenience helpers, such as type-safe object iteration, live in the app package; shared behavior that must match core runtime semantics is exported intentionally by core first
 - hosted/wrapper applications that mount Rivet's editor from a vendored `rivet/` folder should import directly from local source paths such as `../rivet/packages/app/src/host` and `../rivet/packages/app/src/host.css`, then render `RivetAppHost` instead of rendering `RivetApp` directly; that host shell owns QueryClient, provider context, executor-session context, async storage bootstrap, optional post-app bridge children, lifecycle callbacks, host UI policy such as browser top-bar Menu visibility, a stable imperative workspace-host handle through `onWorkspaceHostReady` / `RivetWorkspaceHostBridge` / `useRivetWorkspaceHost`, optional hosted executor websocket configuration through `executor.internalExecutorUrl`, project-comparison helper re-exports for wrapper-owned compare UIs including node field diffs, and the shared host style entrypoint, including the Atlaskit reset that keeps canvas Markdown spacing consistent with standalone Rivet. The public workspace-host facade remains `useRivetWorkspaceHost`; its internal implementation is split under `packages/app/src/hooks/workspaceHost/`, but hosted wrappers should not import those internal operation hooks. The workspace-host handle also exposes `setProjectTabUiState(...)` and the `tabUi` open/replace option for transient wrapper-owned project-tab presentation such as preview tabs, `startOpeningProjectTab(...)` / `finishOpeningProjectTab(...)` / `cancelOpeningProjectTab(...)` for transient loading project tabs before a full snapshot is available, `updateProjectMetadata(...)` for externally owned project title/description changes on an already-open project, `markCurrentProjectClean(...)` / `markProjectClean(...)` for wrapper-owned save flows that need to re-seed Rivet's unsaved-changes baseline without reaching into app-internal dirty-state atoms or reloading the project, plus `startProjectCompare(...)` / `stopProjectCompare(...)` for wrapper-owned compare flows that need optional reference/current side labels such as `Published` / `Unpublished`. `setProjectTabUiState(projectId, { preview: true })` makes the upstream project tab render as a preview tab for the current editor session only; `{ preview: false }` clears it, closing the tab clears it automatically, and the state is never written to project YAML, project data, workspace storage, or wrapper metadata. `startOpeningProjectTab({ title, path }, { tabUi: { preview: true }, replaceCurrent: true })` creates only a loading tab and canvas placeholder; it does not create a project, dirty baseline, context state, or runnable/savable editor target. The tab itself shows only the title/preview/close affordances; the visible preloader belongs in the editor area and uses the same canvas background color setting plus Rivet's text-colored node-running circular indicator. `finishOpeningProjectTab(openingTabId, snapshot)` swaps in a real clean snapshot through the normal open path and returns `false` if the placeholder was already closed; `cancelOpeningProjectTab(openingTabId)` removes the placeholder without unsaved-change confirmation. Opening tabs count for hosted open-tab count callbacks, while callback `projectIds` still contains only real project ids. `updateProjectMetadata(..., { title }, { path, persistedExternally: true })` updates the active project metadata or inactive opened-project snapshot plus the tab title/path; when the project was already dirty, the external-persisted flag does not clear unrelated unsaved graph edits. Compare labels are transient UI state for the active compare session and are not project YAML or wrapper metadata. The style entrypoint also locks the document and Rivet app shell to the iframe viewport so modal scroll restoration cannot shift or clip the editor after fullscreen output modals close. Hosted shells must make both `Roboto` and `Roboto Mono` available, because Rivet's shared typography tokens default ordinary UI text to Roboto and explicit code/monospace surfaces to Roboto Mono.
 - `RivetAppHost` provider overrides are the supported hosted integration layer for IO, datasets, env vars, persisted atom storage, static-data storage, and path policy behavior; wrappers should inject those providers instead of aliasing private globals or Tauri modules. Storage-restricted or disposable embeds can pair `MemoryAsyncStorage` with `MemoryStaticDataStore` so neither editor state nor project static data depends on browser persistence.
-- `RivetAppHost` UI config is the supported wrapper layer for hiding top-level browser Menu items, persistent workspace tabs, and host-unsupported web-app editor actions. Pass `ui={{ fileMenu: { visibleItems: [...] } }}` with stable `FileMenuItemId` values to filter the canonical dropdown order and labels, including the browser-only `Rivet settings` label for the stable `settings` command id and the `Help` item for the stable `get_help` command id. Browser File-menu commands omitted from the allowlist are also rejected by `useMenuCommands`, so hidden keyboard/programmatic file actions cannot bypass the host policy; unrelated commands such as `run` still work. The one intentional override is a Save command originating from Rivet's hosted shortcut while `ui.keyboardShortcuts.saveProject` is `true`; this keeps the editor-owned Save chord usable even when the host hides its Menu row without enabling arbitrary hidden programmatic commands. Pass `ui={{ workspaceTabs: { visibleItems: [...] } }}` with stable `WorkspaceTabItemId` values to limit the Trivet Tests and Data Studio destinations; an empty allowlist removes their navigation surface, while contextual Welcome and active Prompt Designer tabs remain visible. Hosted/server shells can pass `ui={{ webApps: { desktopPreview: false } }}` to hide editor-side web-app preview actions such as the web-app editor's **Run detached** button while keeping `Project.uiGraphs`, YAML serialization, publishing, and Node web-app serving APIs unchanged. On a browser host the same action uses the `window.open` fallback, so the host's entrypoint must route the preview query to `RivetWebAppPreviewWindow` and any iframe sandbox must explicitly allow popups; a popup blocked by the browser is reported as an editor error. Lightweight embeds can additionally set `ui.checkForUpdates: false` and `ui.preloadCodeEditor: false`; the latter disables only idle Monaco warmup and preserves normal on-demand editors. The public config key and item-id type retain the `fileMenu` name for compatibility even though the visible top-bar trigger is labeled `Menu`. These policies do not rewrite the desktop/Tauri native application menu.
+- `RivetAppHost` UI config is the supported wrapper layer for hiding top-level browser Menu items, persistent workspace tabs, and host-unsupported web-app editor actions. Pass `ui={{ fileMenu: { visibleItems: [...] } }}` with stable `FileMenuItemId` values to filter the canonical dropdown order and labels, including the browser-only `Rivet settings` label for the stable `settings` command id and the `Help` item for the stable `get_help` command id. Browser File-menu commands omitted from the allowlist are also rejected by `useMenuCommands`, so hidden keyboard/programmatic file actions cannot bypass the host policy; unrelated commands such as `run` still work. The one intentional override is a Save command originating from Rivet's hosted shortcut while `ui.keyboardShortcuts.saveProject` is `true`; this keeps the editor-owned Save chord usable even when the host hides its Menu row without enabling arbitrary hidden programmatic commands. Pass `ui={{ workspaceTabs: { visibleItems: [...] } }}` with stable `WorkspaceTabItemId` values to limit the Evaluations and Data Studio destinations; an empty allowlist removes their navigation surface, while contextual Welcome and active Prompt Designer tabs remain visible. Hosted/server shells can pass `ui={{ webApps: { desktopPreview: false } }}` to hide editor-side web-app preview actions such as the web-app editor's **Run detached** button while keeping `Project.uiGraphs`, YAML serialization, publishing, and Node web-app serving APIs unchanged. On a browser host the same action uses the `window.open` fallback, so the host's entrypoint must route the preview query to `RivetWebAppPreviewWindow` and any iframe sandbox must explicitly allow popups; a popup blocked by the browser is reported as an editor error. Lightweight embeds can additionally set `ui.checkForUpdates: false` and `ui.preloadCodeEditor: false`; the latter disables only idle Monaco warmup and preserves normal on-demand editors. The public config key and item-id type retain the `fileMenu` name for compatibility even though the visible top-bar trigger is labeled `Menu`. These policies do not rewrite the desktop/Tauri native application menu.
 - Hosted wrappers should give editor-focused save shortcuts one owner through `ui={{ keyboardShortcuts: { saveProject: true } }}`. This opts into only `Ctrl+S` on Windows/Linux or `Cmd+S` on macOS; it does not activate New, Open, Run, Remote Debugger, or other menu shortcuts. Omitting the setting preserves Rivet's existing platform behavior, while `false` leaves the save shortcut to the host. Rivet's handler is capture-phase and stable across React rerenders, consumes repeat keydowns without dispatching another command, and intentionally remains active inside text-entry and Monaco surfaces.
 - execution transport/session ownership is centralized under `src/hooks/executorSession.ts`, `src/providers/ExecutorSessionContext.tsx`, and `src/hooks/useExecutorSessionCoordinator.ts`; `src/hooks/useExecutorSession.ts` is now only a compatibility/read-only state hook that exposes `useExecutorSessionState()` plus coordinator exports
 - project/graph load-save-switch sequencing is centralized under `src/hooks/useWorkspaceTransitions.ts` and `src/utils/workspaceTransitions.ts`; per-open-project executor mode restoration is part of that transition layer and uses editor tab metadata rather than project serialization
@@ -604,7 +606,7 @@ Node sidecar process used by the desktop app for Node-capable execution.
 
 ### Package metadata
 
-- Version: `2.1.9`
+- Version: `2.2.0`
 - Bin: `./bin/executor-bundle.cjs`
 
 ### Main behavior
@@ -709,7 +711,7 @@ Operational CLI for running or serving Rivet graphs.
 
 ### Package metadata
 
-- Version: `2.1.9`
+- Version: `2.2.0`
 - Source entry: `src/cli.ts`
 - Published bin mapping: `rivet -> bin/cli.js`
 - Types: `dist/types/cli.d.ts`
@@ -821,42 +823,39 @@ In `--dev` mode, the selected web-app ID is pinned at startup so adding a second
 
 The CLI package's `prepack` script only builds the package; it deliberately does not copy the repository root README over the package-local CLI README. The CLI `verify` script runs build, lint, tests, package smoke, and a dry-run npm pack so release checks exercise the generated package contents. `smoke:package` creates packed tarballs from package-local metadata plus built files, checks that the generated CLI bin/type files are present, installs the local package tarballs into a temporary npm project, runs the direct built `bin/cli.js` against the checked-in example project, and also checks the installed `rivet` command through offline `npm exec`. Installed-package smoke subprocesses clear inherited Yarn PnP `NODE_OPTIONS` preloads so the check behaves like a normal npm installation even when launched from a Yarn workspace script. `smoke:docker` is opt-in because it requires a Docker daemon; it builds a temporary image from the current local package tarball plus the real entrypoint, runs the image against the example project, and removes the temporary smoke image afterward.
 
-Public workspace package manifests intentionally do not define a `publish` lifecycle script. Direct `npm publish` from `packages/core`, `packages/node`, `packages/trivet`, or `packages/cli` is not the supported release path because those manifests can still contain workspace-only metadata and dependencies. Use the root npm publish script, which stages package-manager-neutral manifests before publishing.
+Public workspace package manifests intentionally do not define a `publish` lifecycle script. Direct `npm publish` from `packages/core`, `packages/node`, `packages/evaluations`, or `packages/cli` is not the supported release path because those manifests can still contain workspace-only metadata and dependencies. Use the root npm publish script, which stages package-manager-neutral manifests before publishing.
 
 The CLI Docker image entrypoint runs the globally installed `rivet` binary as `rivet serve /project` when no CLI subcommand is passed, so project files should be mounted at `/project` and the container does not need `npx` or package resolution at runtime. If the first argument is `completion`, `doctor`, `list`, `inspect`, `run`, `serve`, or `serve-app`, the entrypoint runs that CLI command directly, which lets the same image inspect projects or host web apps without overriding the Docker entrypoint. CLI shell scripts are kept LF-only through `.gitattributes` because they run inside Linux containers. `docker-publish.sh` reads the package version from `packages/cli/package.json`, passes it into the Dockerfile as `RIVET_CLI_VERSION`, and tags both amd64 and arm64 images with that same version. The Dockerfile's default build arg is only a local-build fallback and should be kept in sync with the package version when the CLI version is bumped.
 
-## `@valerypopoff/trivet` (`packages/trivet/`)
+## `@valerypopoff/rivet2-evaluations` (`packages/evaluations/`)
 
 ### Role
 
-Graph-oriented testing package.
+Portable, executor-agnostic evaluation engine shared by the app, CLI, and host integrations.
 
 ### Package metadata
 
-- Version: `2.1.9`
+- Version: `2.3.0`
 - Main: `dist/cjs/bundle.cjs`
 - Module: `dist/esm/index.js`
 - Types: `dist/types/index.d.ts`
 
 ### What it contains
 
-- test-suite/test-case/result types
-- Trivet serialization
-- `runTrivet(...)`
-- `createTestGraphRunner(...)`
-- validation helpers
+- suite, typed-dataset, case, evaluator, assertion, threshold, run, baseline, recording, and store contracts
+- `runEvaluationSuite(...)`, `runEvaluationCases(...)`, and bounded scheduling helpers
+- strict portable-JSON, binding, assertion, evaluator-result, threshold, and run normalization
+- canonical execution provenance and compact baseline snapshots
+- versioned dataset JSON and suite-plus-dataset bundle transfer
+- executor-agnostic `EvaluationGraphRunner` and persistence-agnostic `EvaluationRunStore` interfaces
 
 ### Runtime model
 
-Trivet runs:
+The runner maps an evaluation dataset into a target graph, executes every enabled case for the configured trials, and then either applies pass/fail checks or combines evaluator-graph scores. Evaluators use explicit Graph Input bindings from target outputs, dataset fields, or evaluation-context objects; the five-input legacy context envelope remains a compatibility fallback. The graph-facing scoring contract is 0–100, while stored aggregates remain normalized internally.
 
-1. a test graph with case inputs
-2. a validation graph against input/expected/output objects
-3. boolean/truthy validation outputs to determine pass/fail
+Execution, quality, and accounting are independent result dimensions. A benchmark runs only the target and deliberately reports quality as not evaluated. Hosts supply the actual graph runtime, recording storage, and run-history store; the package owns validation, bounded scheduling, cancellation, stable ordering, aggregation, provenance, and portable result contracts.
 
-The app integrates this package directly for test UI and persistence.
-
-`createTestGraphRunner(...)` also resolves runtime settings through core's shared `resolveProcessSettings(...)` helper, so Trivet inherits the same minimal runtime defaults as app and Node execution rather than carrying a separate settings shape.
+The Rivet app keeps reusable suites, datasets, and compact baselines in its application-local evaluation library. That storage is app state, not package-global state and not project attachment data. The CLI therefore consumes an exported suite-plus-dataset bundle with `rivet evaluations run --project <file> --suite-file <bundle>`.
 
 ## `packages/docs/`
 
@@ -866,7 +865,7 @@ Docusaurus 3 documentation site package.
 
 ### Package metadata
 
-- Version: `2.0.3`
+- Version: `2.1.0`
 - Private: yes
 
 ### Script surface
@@ -900,7 +899,7 @@ describe the current Rivet 2 surface:
 - Tutorial pages must use current app-facing labels rather than old internal names. In particular, the old `Splitting` tutorial URL is kept for link stability, but the visible tutorial is `Running Many Items` and should describe the current node run-mode control: `Run once`, `Many parallel runs`, and `Many sequential runs`
 - Tutorial pages for YAML and Subgraphs should stay as practical desktop-app walkthroughs, not placeholders. They should explain the current Extract YAML / To YAML and Graph Input / Graph Output / Subgraph node flows before sending readers to the node reference
 - API Reference pages under both core and node are source-backed reference pages, not empty stubs. Keep `GraphProcessor`, `DataValue`, `NodeGraph`, `Project`, `Settings`, `DebuggerEvents`, `LooseDataValue`, `RivetDebuggerServer`, and `RunGraphOptions` aligned with the current TypeScript definitions
-- public packages under `@valerypopoff`: `rivet2-core`, `rivet2-node`, `trivet`, and `rivet2-cli`
+- public packages under `@valerypopoff`: `rivet2-core`, `rivet2-node`, `evaluations`, and `rivet2-cli`
 - app package names and root workspace scripts from the current manifests
 - LLM Chat as the recommended chat node for new graphs, with legacy Chat called out as legacy
 - Getting Started, User Guide, and Node Reference pages should teach `LLM Chat` as the default chat node for new workflows. Legacy `Chat` examples are acceptable only when the page is explicitly documenting old project/tutorial content or the legacy node itself
@@ -932,16 +931,16 @@ Current behavior:
 - refuses to run on a dirty git tree unless `--skip-clean-check` is passed
 - verifies the public package names and lockstep package versions
 - rejects non-semver versions and versions outside major `2`
-- validates built outputs for `@valerypopoff/rivet2-core`, `@valerypopoff/rivet2-node`, `@valerypopoff/trivet`, and `@valerypopoff/rivet2-cli`
+- validates built outputs for `@valerypopoff/rivet2-core`, `@valerypopoff/rivet2-node`, `@valerypopoff/rivet2-evaluations`, and `@valerypopoff/rivet2-cli`
 - stages clean npm package directories from built artifacts
 - rewrites internal `workspace:^` dependencies to the same public `^2.x` package version
 - skips package versions that already exist on npm
-- publishes only core, node, Trivet, and cli under the `@valerypopoff` scope
+- publishes only core, node, Evaluations, and cli under the `@valerypopoff` scope
 
 The lockstep version check reads the package manifests directly. For a
 main-branch npm release, update all four public package versions together:
 `packages/core/package.json`, `packages/node/package.json`,
-`packages/trivet/package.json`, and `packages/cli/package.json`. The desktop
+`packages/evaluations/package.json`, and `packages/cli/package.json`. The desktop
 app version in `packages/app/package.json` is separate and drives Windows
 installer filenames, not npm package publishing.
 
@@ -953,7 +952,7 @@ changed. It then verifies the repository `NPM_TOKEN` secret with `npm whoami`
 before publishing. It calls this script with `--skip-clean-check` because the
 workflow owns its own post-build clean-tree check. That check excludes
 `.yarn/install-state.gz`, `packages/core/dist`, `packages/node/dist`,
-`packages/trivet/dist`, `packages/cli/dist`, `packages/cli/bin`, and
+`packages/evaluations/dist`, `packages/cli/dist`, `packages/cli/bin`, and
 `packages/cli/tsconfig.tsbuildinfo` outputs, but it does not exclude the tracked
 `.yarn/cache`, `.pnp.cjs`, or `.pnp.loader.mjs` inputs. Yarn-generated drift in
 those files should block publishing until it is committed.
@@ -968,14 +967,14 @@ default.
 Supported targets:
 
 - `--target runtime`: `rivet2-core` + `rivet2-node`; this is the default.
-- `--target hosted-web-deps`: `rivet2-core` + Trivet.
+- `--target hosted-web-deps`: `rivet2-core` + Evaluations.
 - `--target executor-runtime`: `rivet2-core` + `rivet2-node` + app-executor.
 - `--target wrapper`: all wrapper-facing artifacts.
-- `--include core,node,trivet,app-executor`: custom artifact set.
+- `--include core,node,evaluations,app-executor`: custom artifact set.
 
 For package artifacts, workspace dependencies are rewritten to local `file:`
 dependencies inside the staged artifact set. Custom `--include` sets
-automatically add required local artifacts, so selecting `node` or `trivet`
+automatically add required local artifacts, so selecting `node` or `evaluations`
 also stages `core`. For app-executor, the script copies
 `bin/executor-bundle.cjs` and the generated `dist/` sidecar artifacts, but not
 build metadata such as TypeScript build-info files.
@@ -997,4 +996,4 @@ which build layers are expensive and cacheable.
 - Treat `node` as the Node-default runtime adapter, not just a re-export package.
 - Treat `app-executor` as a runtime package, not a build artifact.
 - Treat `cli` as an operational wrapper around `rivet-node` rather than an independent execution engine.
-- Treat `trivet` as both a test runner and a persistence format owner for test data.
+- Treat `evaluations` as both a test runner and a persistence format owner for test data.

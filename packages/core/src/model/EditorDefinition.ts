@@ -243,6 +243,16 @@ export type StringListPortBinding<T extends ChartNode> =
       identity: 'stored-stable-id';
       idDataKey: DataOfType<T, string[]>;
       legacyPortIdPattern: LegacyOrderedPortIdPattern;
+      /**
+       * Additional ports whose ids are derived from the stored stable id for
+       * the same list row. They are remapped or removed together with the
+       * primary bound port when that row is edited.
+       */
+      companionBindings?: {
+        side: 'input' | 'output';
+        prefix?: string;
+        suffix?: string;
+      }[];
     };
 
 export type EditorDefinitionGroup<T extends ChartNode> = SharedEditorDefinitionProps<T> & {

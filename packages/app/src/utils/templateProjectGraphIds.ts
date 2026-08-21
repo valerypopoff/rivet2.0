@@ -29,9 +29,6 @@ function remapNodeGraphIds(node: ChartNode, graphIdMapping: GraphIdMapping): voi
     remapNodeData(node.type, variant.data as Record<string, unknown>, graphIdMapping);
   }
 
-  for (const testGroup of node.tests ?? []) {
-    testGroup.evaluatorGraphId = remapGraphId(testGroup.evaluatorGraphId, graphIdMapping);
-  }
 }
 
 function remapNodeData(nodeType: string, data: Record<string, unknown>, graphIdMapping: GraphIdMapping): void {

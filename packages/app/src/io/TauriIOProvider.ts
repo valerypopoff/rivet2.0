@@ -7,14 +7,12 @@ import {
   serializeGraph,
   serializeProject,
 } from '@valerypopoff/rivet2-core';
-import { type PathBasedIOProvider } from './IOProvider.js';
-import { getDefaultPathPolicyProvider, isInTauri } from '../utils/tauri.js';
 import {
-  type SerializedTrivetData,
-  type TrivetData,
-  deserializeTrivetData,
-  serializeTrivetData,
-} from '@valerypopoff/trivet';
+  deserializeLegacyEvaluationProjectData,
+  type EvaluationProjectFileData,
+  type PathBasedIOProvider,
+} from './IOProvider.js';
+import { getDefaultPathPolicyProvider, isInTauri } from '../utils/tauri.js';
 import { saveDatasetsFile, loadDatasetsFile } from './datasets.js';
 import { type AppDatasetProvider, type PathPolicyProvider } from '../providers/ProvidersContext.js';
 import { openDialog, saveDialog } from '../utils/platform/dialog.js';
@@ -55,7 +53,7 @@ export class TauriIOProvider implements PathBasedIOProvider {
     }
   }
 
-  async saveProjectData(project: Project, testData: TrivetData) {
+  async saveProjectData(project: Project) {
     const filePath = await saveDialog({
       filters: [
         {
@@ -67,9 +65,7 @@ export class TauriIOProvider implements PathBasedIOProvider {
       defaultPath: `${project.metadata?.title ?? 'project'}.rivet-project`,
     });
 
-    const data = serializeProject(project, {
-      trivet: serializeTrivetData(testData),
-    }) as string;
+    const data = serializeProject(project) as string;
 
     if (filePath) {
       await nativeWriteFile({
@@ -85,10 +81,8 @@ export class TauriIOProvider implements PathBasedIOProvider {
     return undefined;
   }
 
-  async saveProjectDataNoPrompt(project: Project, testData: TrivetData, path: string) {
-    const data = serializeProject(project, {
-      trivet: serializeTrivetData(testData),
-    }) as string;
+  async saveProjectDataNoPrompt(project: Project, path: string) {
+    const data = serializeProject(project) as string;
 
     await nativeWriteFile({
       contents: data,
@@ -119,7 +113,7 @@ export class TauriIOProvider implements PathBasedIOProvider {
     }
   }
 
-  async loadProjectData(callback: (data: { project: Project; testData: TrivetData; path: string }) => void) {
+  async loadProjectData(callback: (data: { project: Project; evaluation: EvaluationProjectFileData; path: string }) => void) {
     const path = (await openDialog({
       filters: [
         {
@@ -139,17 +133,15 @@ export class TauriIOProvider implements PathBasedIOProvider {
     }
   }
 
-  async loadProjectDataNoPrompt(path: string): Promise<{ project: Project; testData: TrivetData }> {
+  async loadProjectDataNoPrompt(path: string): Promise<{ project: Project; evaluation: EvaluationProjectFileData }> {
     const data = await nativeReadTextFile(path);
     const [projectData, attachedData] = deserializeProject(data, path);
 
-    const trivetData = attachedData.trivet
-      ? deserializeTrivetData(attachedData.trivet as SerializedTrivetData)
-      : { testSuites: [] };
+    const evaluationData = deserializeLegacyEvaluationProjectData(attachedData.evaluations);
 
-    await loadDatasetsFile(path, projectData, this.#datasetProvider, this.#pathPolicy);
+    const evaluationDatasets = await loadDatasetsFile(path, projectData, this.#datasetProvider, this.#pathPolicy);
 
-    return { project: projectData, testData: trivetData };
+    return { project: projectData, evaluation: { evaluationData, evaluationDatasets } };
   }
 
   async loadRecordingData(callback: (data: { recorder: ExecutionRecorder; path: string }) => void) {

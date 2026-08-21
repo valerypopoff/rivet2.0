@@ -6,7 +6,7 @@
  */
 export const USER_GUIDE_URL = 'https://valerypopoff.github.io/rivet2.0/user-guide';
 
-export const TRIVET_DOCUMENTATION_URL = `${USER_GUIDE_URL}/trivet-getting-started`;
+export const EVALUATIONS_DOCUMENTATION_URL = `${USER_GUIDE_URL}/evaluations`;
 
 export function getBuiltInPluginDocumentationUrl(pluginSlug: string): string {
   return `${USER_GUIDE_URL}/plugins/built-in/${pluginSlug}`;

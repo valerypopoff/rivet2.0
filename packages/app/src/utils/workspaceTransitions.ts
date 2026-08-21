@@ -13,7 +13,7 @@ import {
   type GraphNavigationStack,
   type GraphViewContext,
 } from '../domain/graphEditing/navigationActions.js';
-import type { TrivetState } from '../state/trivet.js';
+import { createDefaultEvaluationsState } from '../state/evaluations.js';
 import type { CanvasPosition } from '../state/graphBuilder.js';
 import type { OpenedProjectInfo } from '../state/savedGraphs.js';
 import { prepareCurrentGraphForSave } from './currentGraphSave.js';
@@ -51,15 +51,7 @@ export type GraphSwitchTransition = {
   viewport: GraphSwitchViewportStrategy;
 };
 
-export function createDefaultTrivetState(testSuites: TrivetState['testSuites'] = []): TrivetState {
-  return {
-    testSuites,
-    selectedTestSuiteId: undefined,
-    editingTestCaseId: undefined,
-    recentTestResults: undefined,
-    runningTests: false,
-  };
-}
+export { createDefaultEvaluationsState };
 
 export function chooseProjectGraph(
   project: Omit<Project, 'data'>,

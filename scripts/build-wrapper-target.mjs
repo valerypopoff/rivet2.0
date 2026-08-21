@@ -8,12 +8,12 @@ const yarnPath = path.join(repoRoot, '.yarn', 'releases', 'yarn-4.17.1.cjs');
 
 const targets = {
   runtime: ['@valerypopoff/rivet2-core', '@valerypopoff/rivet2-node'],
-  'hosted-web-deps': ['@valerypopoff/rivet2-core', '@valerypopoff/trivet'],
+  'hosted-web-deps': ['@valerypopoff/rivet2-core', '@valerypopoff/rivet2-evaluations'],
   'executor-runtime': ['@valerypopoff/rivet2-core', '@valerypopoff/rivet2-node', '@valerypopoff/rivet-app-executor'],
   'npm-public': [
     '@valerypopoff/rivet2-core',
     '@valerypopoff/rivet2-node',
-    '@valerypopoff/trivet',
+    '@valerypopoff/rivet2-evaluations',
     '@valerypopoff/rivet2-cli',
   ],
 };

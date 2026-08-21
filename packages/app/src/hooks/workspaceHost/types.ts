@@ -1,5 +1,5 @@
 import type { GraphId, NodeGraph, Project, ProjectId } from '@valerypopoff/rivet2-core';
-import type { TrivetState } from '../../state/trivet.js';
+import type { EvaluationDataset, EvaluationProjectData } from '@valerypopoff/rivet2-evaluations';
 import type { ProjectCompareSideLabels } from '../../state/projectComparison.js';
 import type { ProjectTabUiState } from '../../state/projectTabUi.js';
 import type { OpeningProjectTabId } from '../../state/openingProjectTabs.js';
@@ -12,7 +12,8 @@ export type RivetProjectSnapshotInput = {
   path?: string | null;
   openedGraph?: GraphId;
   graphToLoad?: NodeGraph;
-  testSuites?: TrivetState['testSuites'];
+  evaluationData?: EvaluationProjectData;
+  evaluationDatasets?: EvaluationDataset[];
 };
 
 export type MoveProjectPathsInput = ProjectPathMovesInput;

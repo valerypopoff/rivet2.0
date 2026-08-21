@@ -218,6 +218,9 @@ export type ProcessContext = {
   /** Optional shared persistence for cross-run LLM Profile circuit state. */
   llmProfileHealthStore?: RivetLLMProfileHealthStore;
 
+  /** Optional host-owned Evaluation identity propagated into execution events and recordings. */
+  evaluation?: EvaluationExecutionMetadata;
+
   /**
    * If implemented, chat nodes will first call this to resolve their configured endpoint to a final endpoint.
    * You can use this for adding auth headers, or to load balance between multiple endpoints.
@@ -246,12 +249,26 @@ export type SubgraphExecutorMetadata = {
   splitIndex?: number;
 };
 
+/**
+ * Optional identity attached to graph runs started by an Evaluation suite.
+ * It stays outside graph inputs so a graph never depends on an evaluation
+ * workspace being available.
+ */
+export type EvaluationExecutionMetadata = {
+  evaluationRunId: string;
+  suiteId: string;
+  caseId: string;
+  trialIndex: number;
+  phase: 'target' | 'evaluator';
+};
+
 export type GraphExecutionMetadata = {
   rootRunId: RootRunId;
   graphRunId: GraphRunId;
   graphId: GraphId;
   parentGraphRunId?: GraphRunId;
   executor?: SubgraphExecutorMetadata;
+  evaluation?: EvaluationExecutionMetadata;
 };
 
 export type InternalProcessContext<T extends ChartNode = ChartNode> = ProcessContext & {

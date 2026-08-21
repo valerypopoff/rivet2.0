@@ -4,70 +4,18 @@ sidebar_label: Gentrace
 
 # Gentrace Plugin
 
-[Gentrace](https://gentrace.ai) is an evaluation and observability product that helps improve the quality, safety, and compliance of your AI features.
+[Gentrace](https://gentrace.ai) is an optional reporting destination for a completed Rivet Evaluation. Rivet executes the suite first—using its own evaluation dataset, assertions, evaluator graphs, cost accounting, retries, and recordings—then exports the completed observations to Gentrace.
 
-Gentrace complements Rivet by providing Rivet users a seamless way to evaluate their Rivet graphs using Gentrace.
+The plugin does **not** fetch Gentrace test cases and does **not** run a second, parallel graph-testing loop.
 
-This plugin adds UI to interact with Gentrace directly from the Rivet graph.
+## Getting started
 
-### Documentation
+Install the Gentrace plugin, create an API key in [Gentrace](https://gentrace.ai/settings/api-keys), and enter it in the plugin settings.
 
-Gentrace's documentation is publicly available [here](https://docs.gentrace.ai/docs).
+From the graph action bar, choose **Add Gentrace pipeline** and associate the graph with a pipeline. Run an [Evaluation](../../../evaluations.md) targeting that graph. Once it completes, choose **Export latest evaluation**.
 
-### Getting started
+The export creates a Gentrace pipeline run containing one step per Rivet case/trial, including its inputs, expected values, outputs, evaluator observations, status, error, and metrics. The source project, dataset, and recordings remain owned by Rivet.
 
-Once the Gentrace plugin is installed in Rivet, you will need to [create a Gentrace API key](https://gentrace.ai/settings/api-keys) if you don't already have one.
+## When to use it
 
-Then, supply that API key in the Gentrace plugin tab.
-
-![](./assets/gentrace-api-key.png)
-
-### Usage
-
-The plugin exposes two buttons in the Rivet graph view that show up next to the "Run" button.
-
-![](./assets/gentrace-high-level-usage.png)
-
-#### Associating a Gentrace pipeline
-
-The "Change Gentrace Pipeline" button associates a Gentrace pipeline with a Rivet graph.
-
-![](./assets/gentrace-change-pipeline.png)
-
-A Gentrace pipeline captures the analytics, test cases, evaluators, and evaluation results for a generative workflow. Learn more about [Gentrace pipelines here](https://docs.gentrace.ai/docs/pipelines).
-
-#### Running Gentrace tests
-
-The "Run Gentrace tests" button pulls and runs [test cases](https://docs.gentrace.ai/docs/test-cases) defined in the associated Gentrace pipeline through the Rivet graph.
-
-To make this more concrete, let's say you define 100 example test cases for a Gentrace pipeline. Each test case has the following schema.
-
-```typescript
-type EmailTestCase = {
-  query: string;
-  sender: string;
-  receiver: string;
-};
-```
-
-The plugin will pull all test cases and invoke the Rivet graph once per case. During each invocation, each key-value pair from a test case maps onto a Graph Input Rivet node with a matching ID. Project Context values are also included, so Context nodes behave the same way they do during a normal graph run.
-
-With the TestCase schema above, three Graph Input Rivet nodes are required to properly run the graph.
-
-![](./assets/gentrace-graph-inputs.png)
-
-### Viewing test results
-
-Once the Gentrace plugin finishes running all test cases through the Rivet graph, the plugin will show a toast notification with a link to the results.
-
-The linked report shows how well that Rivet graph performs against the evaluation benchmarks provided in Gentrace.
-
-![](./assets/gentrace-view-results.png)
-
-### Understanding Gentrace evaluation
-
-To learn more about your Gentrace evaluation results, read through the Gentrace evaluation [core concepts](https://docs.gentrace.ai/docs/evaluate-overview) and [quickstart](https://docs.gentrace.ai/docs/evaluate-quickstart) pages.
-
-### Contact
-
-Reach out to [support@gentrace.ai](mailto:support@gentrace.ai) if you have any questions or feature requests.
+Use the Evaluations workspace to define and judge quality. Use this plugin when your team also wants the completed result in Gentrace's reporting surface. The evaluation still has one source of truth in Rivet.

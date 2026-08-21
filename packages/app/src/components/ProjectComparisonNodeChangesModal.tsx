@@ -167,7 +167,6 @@ function getNodeFieldLabel(fieldComparison: ProjectNodeFieldComparison): string 
     isSplitSequential: 'Sequential split run',
     splitRunConcurrency: 'Split run concurrency',
     splitRunMax: 'Split run max',
-    tests: 'Tests',
     title: 'Title',
     type: 'Node type',
     variants: 'Variants',

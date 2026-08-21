@@ -225,6 +225,17 @@ export type ExecutionRecorderOptions = {
   includeTrace?: boolean;
 };
 
+export type SocketRecordingOptions = {
+  /** Record only the protocol messages belonging to one remote graph run. */
+  requestId?: string;
+  /** Stop listening when the owning remote operation finishes or is aborted. */
+  signal?: AbortSignal;
+};
+
+function isRecordableProcessEvent(message: string): message is keyof ProcessEvents {
+  return message in toRecordedEventMap || isPrefix(message, 'globalSet:') || isPrefix(message, 'userEvent:');
+}
+
 function mapValuesDeep(obj: any, fn: (value: any) => any): any {
   if (Array.isArray(obj)) {
     return obj.map((value) => {
@@ -331,12 +342,37 @@ export class ExecutionRecorder {
   off: Emittery<ExecutionRecorderEvents>['off'] = undefined!;
   once: Emittery<ExecutionRecorderEvents>['once'] = undefined!;
 
-  recordSocket(channel: WebSocket) {
+  recordSocket(channel: WebSocket, options: SocketRecordingOptions = {}) {
     return new Promise<void>((resolve) => {
       this.recordingId = nanoid() as RecordingId;
 
+      let settled = false;
+      const finish = () => {
+        if (settled) return;
+        settled = true;
+        channel.removeEventListener('message', listener);
+        options.signal?.removeEventListener('abort', finish);
+        resolve();
+      };
+
       const listener = (event: MessageEvent) => {
-        const { message, data } = JSON.parse(event.data);
+        let payload: { message?: unknown; data?: unknown; requestId?: unknown };
+        try {
+          payload = JSON.parse(event.data) as { message?: unknown; data?: unknown; requestId?: unknown };
+        } catch {
+          // A debugger socket can carry control-plane payloads alongside graph
+          // events. They are not part of a replayable graph recording.
+          return;
+        }
+
+        const { message, data, requestId } = payload;
+        if (typeof message !== 'string' || !isRecordableProcessEvent(message)) {
+          return;
+        }
+
+        if (options.requestId !== undefined && requestId !== options.requestId) {
+          return;
+        }
 
         if (this.#includePartialOutputs === false && message === 'partialOutput') {
           return;
@@ -346,24 +382,22 @@ export class ExecutionRecorder {
           return;
         }
 
-        if (message === 'codeConsole') {
-          return;
-        }
+        this.#events.push(toRecordedEvent(message, data as never) as RecordedEvents);
 
-        this.#events.push(toRecordedEvent(message, data) as RecordedEvents);
-
-        if (isRecordingTerminalEvent(message, data)) {
+        if (isRecordingTerminalEvent(message, data as never)) {
           emitDetached(this.#emitter, 'finish', {
             recording: this.getRecording(),
           });
-
-          channel.removeEventListener('message', listener);
-
-          resolve();
+          finish();
         }
       };
 
+      if (options.signal?.aborted) {
+        finish();
+        return;
+      }
       channel.addEventListener('message', listener);
+      options.signal?.addEventListener('abort', finish, { once: true });
     });
   }
 

@@ -94,7 +94,7 @@ Create a compact inventory containing:
   credential lookup requirements, without assuming host-only values are visible;
 - linked Node Library instances and their effective source nodes;
 - saved node variants, which may contain alternate complete node data;
-- node test groups and their evaluator-graph dependencies;
+- Evaluation suites and their evaluator-graph dependencies, when an exported evaluation bundle is explicitly in scope;
 - mocks and default-value connections;
 - all branches that can produce a public output or a user-visible side effect.
 

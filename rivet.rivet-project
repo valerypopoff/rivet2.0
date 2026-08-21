@@ -1,8 +1,9 @@
 version: 4
 data:
   attachedData:
-    trivet:
-      testSuites: []
+    evaluations:
+      baselines: []
+      suites: []
       version: 1
   graphs:
     1C7HNzd5v7ULqf04-5Uob:

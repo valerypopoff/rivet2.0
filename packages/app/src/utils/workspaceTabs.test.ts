@@ -2,14 +2,27 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { getVisibleWorkspaceTabs } from './workspaceTabs.js';
 
-test('workspace tabs show project-independent workspaces', () => {
+test('workspace tabs show project workspaces when a project is available', () => {
   const tabs = getVisibleWorkspaceTabs({
     openOverlay: undefined,
   });
 
   assert.deepEqual(
     tabs.map((tab) => tab.key),
-    ['trivet', 'dataStudio'],
+    ['evaluations', 'dataStudio'],
+  );
+});
+
+test('workspace tabs retain the local Evaluations library without a project', () => {
+  const tabs = getVisibleWorkspaceTabs({
+    openOverlay: undefined,
+    projectAvailable: false,
+    welcomeScreenAvailable: true,
+  });
+
+  assert.deepEqual(
+    tabs.map((tab) => tab.key),
+    ['welcomeScreen', 'evaluations'],
   );
 });
 
@@ -20,13 +33,14 @@ test('workspace tabs show active Prompt Designer only while it is open', () => {
 
   assert.deepEqual(
     tabs.map((tab) => tab.key),
-    ['trivet', 'dataStudio', 'promptDesigner'],
+    ['evaluations', 'dataStudio', 'promptDesigner'],
   );
 });
 
 test('workspace tabs show Welcome screen only in no-project mode', () => {
   const tabs = getVisibleWorkspaceTabs({
     openOverlay: undefined,
+    projectAvailable: false,
     welcomeScreenAvailable: true,
   });
 
@@ -34,8 +48,7 @@ test('workspace tabs show Welcome screen only in no-project mode', () => {
     tabs.map((tab) => [tab.key, tab.targetOverlay]),
     [
       ['welcomeScreen', undefined],
-      ['trivet', 'trivet'],
-      ['dataStudio', 'dataStudio'],
+      ['evaluations', 'evaluations'],
     ],
   );
 });
@@ -43,19 +56,20 @@ test('workspace tabs show Welcome screen only in no-project mode', () => {
 test('workspace tabs honor a host-provided visible-item allowlist', () => {
   assert.deepEqual(
     getVisibleWorkspaceTabs({
-      config: { visibleItems: ['dataStudio', 'trivet'] },
+      config: { visibleItems: ['dataStudio', 'evaluations'] },
       openOverlay: undefined,
     }).map((tab) => tab.key),
-    ['trivet', 'dataStudio'],
+    ['evaluations', 'dataStudio'],
   );
 
   assert.deepEqual(
     getVisibleWorkspaceTabs({
       config: { visibleItems: ['dataStudio'] },
       openOverlay: undefined,
+      projectAvailable: false,
       welcomeScreenAvailable: true,
     }).map((tab) => tab.key),
-    ['welcomeScreen', 'dataStudio'],
+    ['welcomeScreen'],
   );
 
   assert.deepEqual(

@@ -40,12 +40,20 @@ jobs:
     name: Audit Rust dependencies
     runs-on: ubuntu-latest
     permissions:
-      checks: write
-      issues: write
+      contents: read
 
     steps:
       - uses: actions/checkout@v6
-      - uses: rustsec/audit-check@v2.0.0
+      - uses: actions/setup-node@v5
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          working-directory: packages/app/src-tauri
+          node-version: 22.21.1
+      - name: Install Cargo audit
+        run: cargo install cargo-audit --locked --version 0.22.2
+      - name: Verify current Rust audit exception policy
+        shell: bash
+        run: |
+          cargo audit --json --file packages/app/src-tauri/Cargo.lock > "$RUNNER_TEMP/rust-audit-unfiltered.json" || true
+          node scripts/checks/check-rust-audit-exceptions.mjs --audit-report "$RUNNER_TEMP/rust-audit-unfiltered.json"
+      - name: Audit Rust dependencies
+        working-directory: packages/app/src-tauri
+        run: cargo audit --no-fetch

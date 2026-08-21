@@ -244,7 +244,7 @@ export const GraphBuilder: FC<{ runGraph: EditorGraphRun }> = ({ runGraph }) => 
           onNodeStartEditing={nodeStartEditing}
           onContextMenuItemSelected={contextMenuHandler}
         />
-        {loadedRecording && <div className="recording-border" />}
+        {loadedRecording && overlay === undefined && <div className="recording-border" />}
         {isReadOnly && <div className="read-only-border" />}
         {overlay === undefined && <NodeEditorRenderer />}
         {firstNodeQuestions && firstNodeQuestions.length > 0 && (

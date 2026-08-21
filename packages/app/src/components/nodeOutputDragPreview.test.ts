@@ -174,7 +174,10 @@ test('inline node output actions reserve flow space without moving their hit tar
     /const styles = css`\s*display: block;[\s\S]*?> \* \+ \* \{[\s\S]*?margin-top: 8px;/,
   );
 
-  assert.match(nodeInlineOutputSource, /const hasPromptDesignerAction = node\.type === 'chat';/);
+  assert.match(
+    nodeInlineOutputSource,
+    /const hasPromptDesignerAction = node\.type === 'llmChatV2' && \(node as LLMChatV2Node\)\.data\.configurationMode !== 'profile';/,
+  );
   assert.match(nodeInlineOutputSource, /const hasResponseInspectorAction = node\.type === 'llmChatV2';/);
   assert.match(nodeInlineOutputSource, /<AgentResponseInspector[\s\S]*?renderInPortal \/>/);
   assert.match(nodeInlineOutputSource, /'node-output-inner has-output-actions has-extra-output-action'/);

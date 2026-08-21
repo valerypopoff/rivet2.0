@@ -14,7 +14,7 @@ At a high level:
 3. `@valerypopoff/rivet2-node` adapts core for Node environments.
 4. `@valerypopoff/rivet2-cli` exposes run/serve workflows on top of `rivet-node`.
 5. `@valerypopoff/rivet-app-executor` is the Node sidecar used by the desktop app.
-6. `@valerypopoff/trivet` provides graph-oriented testing utilities and serialization.
+6. `@valerypopoff/rivet2-evaluations` provides graph-oriented testing utilities and serialization.
 7. `packages/docs` is the Docusaurus documentation site.
 
 ## Workspace Layout
@@ -27,7 +27,7 @@ packages/
   core/           Runtime engine, graph model, built-in nodes/plugins
   docs/           Docusaurus site
   node/           Node integration library
-  trivet/         Test-runner package
+  evaluations/         Test-runner package
 developer-docs/   These internal docs
 refactor-history.md  Consolidated record of completed refactors and residual watchlist
 .github/         CI workflows and release scripts
@@ -43,13 +43,13 @@ core
 |  `- cli
 |- app
 |- app-executor
-`- trivet
+`- evaluations
 ```
 
 Important implications:
 
 - `core` is the foundation and does not depend on other workspace packages.
-- `node`, `app`, `app-executor`, and `trivet` all rely on `core` concepts and types.
+- `node`, `app`, `app-executor`, and `evaluations` all rely on `core` concepts and types.
 - `cli` is not an independent runtime; it is a thin operational layer over `rivet-node`.
 - the app uses both `core` directly and the sidecar protocol indirectly.
 
@@ -80,7 +80,7 @@ Contains:
 - project workspace UI
 - local and sidecar execution orchestration
 - plugin installation/loading UX
-- Trivet integration
+- Evaluations integration
 - prompt-designer integration
 - updater/debugger/data overlays
 - Tauri-native bridging
@@ -103,7 +103,7 @@ Owned by:
 
 - `packages/cli`
 - `packages/app-executor`
-- `packages/trivet`
+- `packages/evaluations`
 - `packages/docs`
 
 These packages expose the runtime in different ways rather than redefining it.
@@ -224,14 +224,14 @@ Several parts of the system intentionally keep large or auxiliary data outside t
 
 - static project data can live separately from `projectState`
 - remembered graph/subgraph/viewport state lives separately in `projectEditorStateByProjectIdState`
-- app state stores Trivet and runtime context separately
+- app state stores Evaluations and runtime context separately
 - recording and debugger flows serialize execution data separately
 
 This split shows up repeatedly in app save/load code and should be treated as architectural, not incidental.
 
 ### Runtime settings normalization
 
-Runtime execution settings are normalized in core through `resolveProcessSettings(...)`. The app, Node package, and Trivet should pass their available runtime/env values into that shared resolver instead of each package reconstructing a full legacy `Settings` object. Editor-only preferences may still live in persisted app settings, but they should not become required inputs for backend/programmatic workflow execution. `openAiApiKey` is the preferred OpenAI key field, `openAiKey` remains a legacy alias, and the resolver must keep both names synchronized with the same runtime value.
+Runtime execution settings are normalized in core through `resolveProcessSettings(...)`. The app, Node package, and Evaluations should pass their available runtime/env values into that shared resolver instead of each package reconstructing a full legacy `Settings` object. Editor-only preferences may still live in persisted app settings, but they should not become required inputs for backend/programmatic workflow execution. `openAiApiKey` is the preferred OpenAI key field, `openAiKey` remains a legacy alias, and the resolver must keep both names synchronized with the same runtime value.
 
 ## Current Refactor Hotspots
 

@@ -35,4 +35,4 @@ The inputs to the Autoevals node depend on the configured evaluation being perfo
 
 ## Evaluations
 
-See the [autoevals documentation](https://github.com/braintrustdata/autoevals)
+The Autoevals node returns its provider score from `0` to `1`. Rivet evaluator graphs expose `result.score` on a `0` to `100` scale, so multiply the node score by `100` before returning it from an evaluator graph. See [Evaluator graphs](../../evaluator-graphs.md) for the complete contract and the [autoevals documentation](https://github.com/braintrustdata/autoevals) for evaluator-specific behavior.

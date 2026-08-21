@@ -1,15 +1,19 @@
 import {
   logRuntimeDebug,
   logRuntimeInfo,
+  ExecutionRecorder,
   type CodeConsoleMessage,
   type GraphOutputs,
   type NodeId,
+  type ProjectId,
   type Outputs,
   type ProcessEventMessageMap,
   type RemoteRunRequestId,
   type RivetWebAppStorage,
   type StringArrayDataValue,
   type GraphId,
+  type GraphInputNode,
+  type Project,
 } from '@valerypopoff/rivet2-core';
 import { useCurrentExecution } from './useCurrentExecution';
 import { graphState } from '../state/graph';
@@ -19,9 +23,18 @@ import { useRemoteDebugger } from './useRemoteDebugger';
 import { fillMissingSettingsFromEnvironmentVariables } from '../utils/tauri';
 import { loadedProjectState, projectContextState, projectDataState, projectState } from '../state/savedGraphs';
 import { useStableCallback } from './useStableCallback';
-import { toast } from 'react-toastify';
-import { trivetState } from '../state/trivet';
-import { runTrivet } from '@valerypopoff/trivet';
+import { toast, type Id as ToastId } from 'react-toastify';
+import { evaluationsState } from '../state/evaluations';
+import {
+  EvaluationGraphExecutionError,
+  fingerprintEvaluationDataset,
+  finalizeEvaluationRecordingRetention,
+  runEvaluationSuite,
+  type EvaluationExecutionMetrics,
+  type EvaluationRecordingReference,
+  type EvaluationRunPurpose,
+  type PortableJson,
+} from '@valerypopoff/rivet2-evaluations';
 import { produce } from 'immer';
 import { userInputModalQuestionsState } from '../state/userInput';
 import { frozenNodeOutputsState, graphRunningState, lastRunDataByNodeState } from '../state/dataFlow';
@@ -35,12 +48,11 @@ import {
   getEditorRunToPlan,
   getFrozenNodeOptionsForExecutorTarget,
   getFrozenNodeOutputsForExecutorRunPayload,
-  selectTestSuitesToRun,
   shouldFlushFrozenNodeOutputsForRemoteDebuggerEvent,
 } from './remoteExecutorHelpers.js';
 import { handleError } from '../utils/errorHandling.js';
 import { getLLMChatV2ApiKeyEnvVarNames } from '../utils/chatV2ProviderEnv.js';
-import { useEnvironmentProvider } from '../providers/ProvidersContext.js';
+import { useEnvironmentProvider, useEvaluationRunStore } from '../providers/ProvidersContext.js';
 import { pluginsState } from '../state/plugins.js';
 import { withDerivedProjectPluginSpecs } from '../utils/pluginUsage.js';
 import { getProjectContextValues } from '../utils/projectContextValues.js';
@@ -69,6 +81,11 @@ import {
 import type { EditorGraphRunOptions } from './editorGraphRunOptions.js';
 import { waitForExecutorSessionRunCapability } from './executorSessionRunReadiness.js';
 import {
+  formatEvaluationCompletionToast,
+  formatEvaluationRunHistoryPersistenceWarning,
+} from '../utils/evaluationRunSummary.js';
+import { evaluationRecordingRetentionUpdates } from '../utils/evaluationRecordingRetentionUpdates.js';
+import {
   captureRemoteResponseTraceRootExecution,
   collectRemoteAgentTraceEvent,
   emitRemoteResponseTrace,
@@ -77,16 +94,123 @@ import {
 
 type RemoteExecutorMessageHandler = Parameters<ExecutorSessionRuntime['subscribeMessages']>[0];
 
+type RemoteEvaluationMetricsState = {
+  metrics: EvaluationExecutionMetrics;
+  providerAttempts: PortableJson[];
+};
+
+function createRemoteEvaluationMetricsState(): RemoteEvaluationMetricsState {
+  return {
+    metrics: { durationMs: 0, modelCallCount: 0, toolCallCount: 0, toolFailureCount: 0 },
+    providerAttempts: [],
+  };
+}
+
+function collectRemoteEvaluationEvent(
+  state: RemoteEvaluationMetricsState | undefined,
+  message: 'llmCallFinished' | 'llmProfileAttempt' | 'toolCallFinished',
+  data: unknown,
+): void {
+  if (!state) return;
+
+  if (message === 'llmCallFinished') {
+    const event = data as ProcessEventMessageMap['llmCallFinished'];
+    state.metrics.modelCallCount = (state.metrics.modelCallCount ?? 0) + 1;
+    state.metrics.inputTokens = (state.metrics.inputTokens ?? 0) + (event.normalizedUsage?.promptTokens ?? 0);
+    state.metrics.outputTokens = (state.metrics.outputTokens ?? 0) + (event.normalizedUsage?.completionTokens ?? 0);
+    state.metrics.cachedInputTokens =
+      (state.metrics.cachedInputTokens ?? 0) + (event.normalizedUsage?.cachedTokens ?? 0);
+    state.metrics.reasoningTokens =
+      (state.metrics.reasoningTokens ?? 0) + (event.normalizedUsage?.reasoningTokens ?? 0);
+    if (event.pricing.status === 'known')
+      state.metrics.costUsd = (state.metrics.costUsd ?? 0) + (event.pricing.costUsd ?? 0);
+    else state.metrics.hasUnknownCost = true;
+    state.providerAttempts.push({
+      kind: 'provider-call',
+      provider: event.provider,
+      model: event.model,
+      customProviderApi: event.customProviderApi ?? null,
+      outcome: event.outcome,
+      finishReason: event.finishReason ?? null,
+      profileIndex: event.profileIndex ?? null,
+      attemptIndex: event.attemptIndex,
+      roundIndex: event.roundIndex ?? null,
+      durationMs: event.durationMs ?? null,
+    });
+    return;
+  }
+
+  if (message === 'llmProfileAttempt') {
+    const event = data as ProcessEventMessageMap['llmProfileAttempt'];
+    state.providerAttempts.push({
+      kind: 'profile-decision',
+      provider: event.provider,
+      model: event.model,
+      customProviderApi: event.customProviderApi ?? null,
+      stage: event.stage,
+      outcome: event.outcome,
+      profileIndex: event.profileIndex ?? null,
+      attemptIndex: event.attemptIndex ?? null,
+      roundIndex: event.roundIndex,
+      status: event.status ?? null,
+      healthState: event.healthState ?? null,
+      healthDisposition: event.healthDisposition ?? null,
+      timeoutKind: event.timeoutKind ?? null,
+    });
+    return;
+  }
+
+  const event = data as ProcessEventMessageMap['toolCallFinished'];
+  state.metrics.toolCallCount = (state.metrics.toolCallCount ?? 0) + 1;
+  if (event.outcome !== 'success') state.metrics.toolFailureCount = (state.metrics.toolFailureCount ?? 0) + 1;
+}
+
+function evaluationInputsToGraphOutputs(
+  project: Project,
+  graphId: GraphId,
+  inputs: Record<string, PortableJson>,
+): GraphOutputs {
+  const graph = project.graphs[graphId];
+  if (!graph) throw new Error(`Evaluation target graph "${graphId}" does not exist.`);
+  const graphInputs = new Map(
+    graph.nodes
+      .filter((node): node is GraphInputNode => node.type === 'graphInput')
+      .map((node) => [node.data.id, node]),
+  );
+  return Object.fromEntries(
+    Object.entries(inputs).map(([inputId, value]) => {
+      const graphInput = graphInputs.get(inputId);
+      if (!graphInput) throw new Error(`Evaluation provided unknown graph input "${inputId}".`);
+      return [inputId, { type: graphInput.data.dataType, value }];
+    }),
+  ) as GraphOutputs;
+}
+
+function createRemoteEvaluationRecordingReference(): EvaluationRecordingReference {
+  const id = globalThis.crypto?.randomUUID?.() ?? `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+  return {
+    id: `evaluation-recording-${id}`,
+    retention: 'temporary',
+    expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
+  };
+}
+
 export function useRemoteExecutor() {
   const executorSession = useExecutorSessionRuntime();
   const environmentProvider = useEnvironmentProvider();
+  const evaluationRunStore = useEvaluationRunStore();
   const store = useStore();
   const activeGraphRequestIdRef = useRef<RemoteRunRequestId | null>(null);
+  // An evaluation owns several remote graph requests at once, so it cannot
+  // share the normal one-request editor abort state.
+  const evaluationAbortControllerRef = useRef<AbortController | null>(null);
+  const evaluationProjectIdRef = useRef<ProjectId | null>(null);
   const earlyResultRequestIdsRef = useRef(new Set<RemoteRunRequestId>());
   const webAppStoragePatchCallbacksByRequestIdRef = useRef(
     new Map<RemoteRunRequestId, (storagePatch: RivetWebAppStorage) => void>(),
   );
   const responseTraceByRequestIdRef = useRef(new Map<RemoteRunRequestId, RemoteResponseTraceState>());
+  const evaluationMetricsByRequestIdRef = useRef(new Map<RemoteRunRequestId, RemoteEvaluationMetricsState>());
   const externalDebuggerRunFlushedFrozenOutputsRef = useRef(false);
   const remoteDebuggerDiagnosticsRef = useRef(createRemoteDebuggerDiagnostics());
   const unscopedEventRoutingRef = useRef(createUnscopedRemoteExecutionRoutingState());
@@ -109,7 +233,7 @@ export function useRemoteExecutor() {
   const graph = useAtomValue(graphState);
   const savedSettings = useAtomValue(settingsState);
   const showNodeRunDurations = useAtomValue(showNodeRunDurationsState);
-  const [{ testSuites }, setTrivetState] = useAtom(trivetState);
+  const [evaluations, setEvaluationsState] = useAtom(evaluationsState);
   const setUserInputQuestions = useSetAtom(userInputModalQuestionsState);
   const lastRunData = useAtomValue(lastRunDataByNodeState);
   const frozenNodeOutputs = useAtomValue(frozenNodeOutputsState);
@@ -119,10 +243,16 @@ export function useRemoteExecutor() {
 
   const remoteDebugger = useRemoteDebugger({
     onDisconnect: () => {
+      evaluationAbortControllerRef.current?.abort(
+        new DOMException('Remote executor disconnected while an evaluation was running.', 'AbortError'),
+      );
+      evaluationAbortControllerRef.current = null;
+      evaluationProjectIdRef.current = null;
       clearActiveRemoteRunRequest(activeGraphRequestIdRef);
       earlyResultRequestIdsRef.current.clear();
       webAppStoragePatchCallbacksByRequestIdRef.current.clear();
       responseTraceByRequestIdRef.current.clear();
+      evaluationMetricsByRequestIdRef.current.clear();
       executorSession.setActiveGraphRunRequestId(null);
       if (store.get(projectState).metadata.id !== project.metadata.id) {
         return;
@@ -138,6 +268,14 @@ export function useRemoteExecutor() {
   });
 
   const eventDispatcher = createProcessEventDispatcher(currentExecution);
+
+  // Evaluations expose one active suite in the editor. Stop a remote
+  // evaluation when the user changes project instead of allowing its later
+  // events to appear under a different project's Evaluations workspace.
+  useEffect(() => {
+    if (evaluationProjectIdRef.current == null || evaluationProjectIdRef.current === project.metadata.id) return;
+    evaluationAbortControllerRef.current?.abort(new DOMException('Active project changed.', 'AbortError'));
+  }, [project.metadata.id]);
 
   useEffect(() => {
     externalDebuggerRunFlushedFrozenOutputsRef.current = false;
@@ -321,18 +459,33 @@ export function useRemoteExecutor() {
         }
         break;
       case 'llmCallFinished':
+        collectRemoteEvaluationEvent(
+          requestId == null ? undefined : evaluationMetricsByRequestIdRef.current.get(requestId),
+          'llmCallFinished',
+          data,
+        );
         collectRemoteAgentTraceEvent(responseTraceByRequestIdRef.current, requestId, 'llm-call-finished', data);
         if (shouldDispatchExecutionEvent) {
           eventDispatcher.llmCallFinished(data);
         }
         break;
       case 'llmProfileAttempt':
+        collectRemoteEvaluationEvent(
+          requestId == null ? undefined : evaluationMetricsByRequestIdRef.current.get(requestId),
+          'llmProfileAttempt',
+          data,
+        );
         collectRemoteAgentTraceEvent(responseTraceByRequestIdRef.current, requestId, 'llm-profile-attempt', data);
         if (shouldDispatchExecutionEvent) {
           eventDispatcher.llmProfileAttempt(data);
         }
         break;
       case 'toolCallFinished':
+        collectRemoteEvaluationEvent(
+          requestId == null ? undefined : evaluationMetricsByRequestIdRef.current.get(requestId),
+          'toolCallFinished',
+          data,
+        );
         collectRemoteAgentTraceEvent(responseTraceByRequestIdRef.current, requestId, 'tool-call-finished', data);
         if (shouldDispatchExecutionEvent) {
           eventDispatcher.toolCallFinished(data);
@@ -580,139 +733,266 @@ export function useRemoteExecutor() {
     return undefined;
   };
 
-  const tryRunTests = useStableCallback(
-    async (options: { testSuiteIds?: string[]; testCaseIds?: string[]; iterationCount?: number } = {}) => {
-      toast.info(
-        (options.iterationCount ?? 1) > 1 ? `Running Tests (${options.iterationCount!} iterations)` : 'Running Tests',
+  const tryRunEvaluation = useStableCallback(
+    async ({
+      suiteId,
+      projectOverride,
+      purpose,
+    }: {
+      suiteId: string;
+      projectOverride?: Project;
+      purpose: EvaluationRunPurpose;
+    }) => {
+      const suite = evaluations.data.suites.find((candidate) => candidate.id === suiteId);
+      const dataset = evaluations.datasets.find((candidate) => candidate.id === suite?.datasetId);
+      if (!suite || !dataset) throw new Error('The selected evaluation suite or its dataset no longer exists.');
+      const evaluationBaseProject = projectOverride ?? project;
+      // The active canvas may be unrelated to the selected suite. Always use
+      // the suite target when deriving the remotely uploaded project.
+      const evaluationGraph = evaluationBaseProject.graphs[suite.targetGraphId];
+      if (!evaluationGraph) {
+        throw new Error(`Evaluation target graph "${suite.targetGraphId}" no longer exists.`);
+      }
+      const projectForEvaluation = withDerivedProjectPluginSpecs(
+        evaluationBaseProject,
+        { appPluginStates: pluginStates, currentGraph: evaluationGraph, registry: projectNodeRegistry },
       );
-      logRuntimeInfo('Running remote Trivet tests', {
-        selectedTestSuiteCount: options.testSuiteIds?.length,
-        selectedTestCaseCount: options.testCaseIds?.length,
-        iterationCount: options.iterationCount ?? 1,
-      });
-      currentExecution.onTrivetStart();
+      const evaluationProjectId = projectForEvaluation.metadata.id;
+      if (!evaluationProjectId)
+        throw new Error('The loaded project is missing its project ID, so the evaluation cannot be stored.');
+      if (evaluationAbortControllerRef.current) {
+        throw new Error('An evaluation is already running for this project.');
+      }
 
-      setTrivetState((s) => ({
-        ...s,
-        runningTests: true,
-        recentTestResults: undefined,
-      }));
-      const testSuitesToRun = selectTestSuitesToRun(testSuites, options);
+      // Register before the asynchronous storage and executor preparation.
+      // Otherwise switching projects during that work can start an evaluation
+      // after its originating workspace has already gone away.
+      const evaluationAbortController = new AbortController();
+      evaluationAbortControllerRef.current = evaluationAbortController;
+      evaluationProjectIdRef.current = evaluationProjectId;
+      const isActiveEvaluationProject = () => store.get(projectState).metadata.id === evaluationProjectId;
+      const ensureActiveEvaluationProject = () => {
+        if (evaluationAbortController.signal.aborted) throw evaluationAbortController.signal.reason;
+        if (isActiveEvaluationProject()) return;
+
+        const reason = new DOMException('Active project changed.', 'AbortError');
+        evaluationAbortController.abort(reason);
+        throw reason;
+      };
+      const updateActiveProjectEvaluationState = (update: Parameters<typeof setEvaluationsState>[0]): void => {
+        if (isActiveEvaluationProject()) setEvaluationsState(update);
+      };
+      let runningToastId: ToastId | undefined;
       try {
-        const projectForTests = withDerivedProjectPluginSpecs(
-          {
-            ...project,
-            graphs: {
-              ...project.graphs,
-              [graph.metadata!.id!]: graph,
+        let datasetSnapshotWarning: string | undefined;
+        try {
+          await evaluationRunStore.putDatasetSnapshot({
+            projectId: evaluationProjectId,
+            fingerprint: fingerprintEvaluationDataset(dataset),
+            dataset: structuredClone({ ...dataset, projectId: evaluationProjectId }),
+            createdAt: new Date().toISOString(),
+          });
+          ensureActiveEvaluationProject();
+        } catch (error) {
+          if (evaluationAbortController.signal.aborted) throw evaluationAbortController.signal.reason;
+          datasetSnapshotWarning =
+            'The exact evaluation dataset snapshot could not be retained; later replay may not have the original cases.';
+          logRuntimeDebug('Remote evaluation dataset snapshot was not retained.', {
+            error,
+            suiteId,
+            projectId: evaluationProjectId,
+          });
+        }
+
+        const sessionState = executorSession.getRuntimeState();
+        if (!sessionState.capabilities.canSendRun) {
+          throw new Error(
+            `Remote executor cannot accept an evaluation run right now (status: ${sessionState.status}, target: ${sessionState.target?.type ?? 'none'}).`,
+          );
+        }
+        if (sessionState.capabilities.canUploadProject) {
+          const settings = await fillMissingSettingsFromEnvironmentVariables(
+            savedSettings,
+            projectNodeRegistry.getPlugins(),
+            {
+              environmentProvider,
+              extraEnvVarNames: getLLMChatV2ApiKeyEnvVarNames(projectForEvaluation),
             },
-          },
-          {
-            appPluginStates: pluginStates,
-            currentGraph: graph,
-            registry: projectNodeRegistry,
-          },
-        );
+          );
+          ensureActiveEvaluationProject();
+          uploadRemoteExecutorProjectIfNeeded({
+            cache: uploadCacheRef.current,
+            project: projectForEvaluation,
+            sessionKey: getRemoteExecutorUploadSessionKey(sessionState),
+            settings,
+            transport: {
+              sendDynamicData: (payload) => remoteDebugger.send('set-dynamic-data', payload),
+              sendStaticData: (id, dataValue) => remoteDebugger.sendRaw(`set-static-data:${id}:${dataValue}`),
+            },
+          });
+        }
 
-        const result = await runTrivet({
-          project: projectForTests,
-          iterationCount: options.iterationCount,
-          testSuites: testSuitesToRun,
-          onUpdate: (results) => {
-            setTrivetState((s) => ({
-              ...s,
-              recentTestResults: results,
-            }));
+        ensureActiveEvaluationProject();
+        const runKind = purpose === 'evaluation' ? 'evaluation' : 'execution benchmark';
+        runningToastId = toast.info(`Running ${runKind}: ${suite.name}`);
+        currentExecution.onEvaluationStart();
+        updateActiveProjectEvaluationState((state) => ({ ...state, runningSuiteId: suiteId, currentRun: undefined }));
+        const result = await runEvaluationSuite({
+          project: projectForEvaluation,
+          evaluationData: evaluations.data,
+          dataset,
+          suiteId,
+          purpose,
+          executionMode: 'remote',
+          signal: evaluationAbortController.signal,
+          onUpdate: (run) => {
+            updateActiveProjectEvaluationState((state) => ({ ...state, currentRun: run }));
           },
-          runGraph: async (project, graphId, inputs) => {
-            const sessionState = executorSession.getRuntimeState();
-            if (!sessionState.capabilities.canSendRun) {
-              throw new Error(
-                `Remote executor cannot accept a test graph run right now (status: ${sessionState.status}, target: ${
-                  sessionState.target?.type ?? 'none'
-                }).`,
-              );
-            }
-
-            if (sessionState.capabilities.canUploadProject) {
-              const projectToUpload = withDerivedProjectPluginSpecs(
-                {
-                  ...project,
-                  graphs: {
-                    ...project.graphs,
-                    [graph.metadata!.id!]: graph,
-                  },
+          runGraph: async ({ graphId, inputs, project: evaluationProject, signal, metadata }) => {
+            const startedAt = Date.now();
+            if (signal?.aborted) throw signal.reason;
+            let requestId: RemoteRunRequestId | undefined;
+            const captured = createRemoteEvaluationMetricsState();
+            const recorder = new ExecutionRecorder();
+            const recording = createRemoteEvaluationRecordingReference();
+            const recordingAbortController = new AbortController();
+            let recorderPromise: Promise<void> | undefined;
+            const persistRecording = async (): Promise<EvaluationRecordingReference | undefined> => {
+              if (recorder.events.length === 0) return undefined;
+              try {
+                await evaluationRunStore.putRecording({
+                  projectId: evaluationProjectId,
+                  runId: metadata.evaluationRunId,
+                  trialId: `${metadata.caseId}:${metadata.trialIndex}`,
+                  reference: recording,
+                  serialized: recorder.serialize(),
+                  createdAt: new Date().toISOString(),
+                });
+                return recording;
+              } catch (error) {
+                logRuntimeDebug('Remote evaluation recording was not retained.', {
+                  error,
+                  graphId,
+                  evaluationRunId: metadata.evaluationRunId,
+                });
+                return undefined;
+              }
+            };
+            try {
+              const outputs = await sendPendingRemoteGraphRunRequest({
+                abortSignal: signal,
+                disconnectErrorMessage: 'Remote executor disconnected before the evaluation graph run could be sent.',
+                executorSession,
+                onRequestCreated: (createdRequestId) => {
+                  requestId = createdRequestId;
+                  evaluationMetricsByRequestIdRef.current.set(createdRequestId, captured);
+                  recorderPromise = executorSession.recordSocketEvents((socket) =>
+                    recorder.recordSocket(socket, {
+                      requestId: createdRequestId,
+                      signal: recordingAbortController.signal,
+                    }),
+                  );
                 },
-                {
-                  appPluginStates: pluginStates,
-                  currentGraph: graph,
-                  registry: projectNodeRegistry,
+                payload: {
+                  graphId,
+                  inputs: evaluationInputsToGraphOutputs(evaluationProject, graphId, inputs),
+                  contextValues: getProjectContextValues(projectContext),
+                  projectPath: loadedProject.path,
+                  captureNodeTimings: showNodeRunDurations,
+                  evaluation: metadata,
                 },
-              );
-              const settings = await fillMissingSettingsFromEnvironmentVariables(
-                savedSettings,
-                projectNodeRegistry.getPlugins(),
-                {
-                  environmentProvider,
-                  extraEnvVarNames: getLLMChatV2ApiKeyEnvVarNames(projectToUpload),
-                },
-              );
-
-              uploadRemoteExecutorProjectIfNeeded({
-                cache: uploadCacheRef.current,
-                project: projectToUpload,
-                sessionKey: getRemoteExecutorUploadSessionKey(sessionState),
-                settings,
-                transport: {
-                  sendDynamicData: (payload) => remoteDebugger.send('set-dynamic-data', payload),
-                  sendStaticData: (id, dataValue) => remoteDebugger.sendRaw(`set-static-data:${id}:${dataValue}`),
-                },
+                sendAbort: (createdRequestId) => remoteDebugger.send('abort', { requestId: createdRequestId }),
+                sendRun: (payload) => remoteDebugger.send('run', payload),
               });
+              captured.metrics.durationMs = Date.now() - startedAt;
+              await recorderPromise;
+              const persistedRecording = await persistRecording();
+              return {
+                outputs: Object.fromEntries(
+                  Object.entries(outputs).map(([key, value]) => [key, value.value as PortableJson]),
+                ),
+                metrics: captured.metrics,
+                ...(persistedRecording === undefined ? {} : { recording: persistedRecording }),
+                ...(captured.providerAttempts.length === 0 ? {} : { providerAttempts: captured.providerAttempts }),
+              };
+            } catch (error) {
+              captured.metrics.durationMs = Math.max(captured.metrics.durationMs, Date.now() - startedAt);
+              recordingAbortController.abort();
+              await recorderPromise;
+              const persistedRecording = await persistRecording();
+              if (signal?.aborted || (error instanceof DOMException && error.name === 'AbortError')) throw error;
+              throw new EvaluationGraphExecutionError(error instanceof Error ? error.message : String(error), {
+                metrics: captured.metrics,
+                ...(persistedRecording === undefined ? {} : { recording: persistedRecording }),
+                ...(captured.providerAttempts.length === 0 ? {} : { providerAttempts: captured.providerAttempts }),
+              });
+            } finally {
+              recordingAbortController.abort();
+              if (requestId !== undefined) evaluationMetricsByRequestIdRef.current.delete(requestId);
             }
-
-            const contextValues = getProjectContextValues(projectContext);
-
-            const results = await sendPendingRemoteGraphRunRequest({
-              disconnectErrorMessage: 'Remote executor disconnected before the test graph run could be sent.',
-              executorSession,
-              payload: {
-                graphId,
-                inputs,
-                contextValues,
-                projectPath: loadedProject.path,
-                captureNodeTimings: showNodeRunDurations,
-              },
-              sendRun: (payload) => remoteDebugger.send('run', payload),
-            });
-            return results;
           },
         });
-        setTrivetState((s) => ({
-          ...s,
-          recentTestResults: result,
-          runningTests: false,
-        }));
-        toast.info(
-          `Ran tests: ${result.testSuiteResults.length} tests, ${
-            result.testSuiteResults.filter((t) => t.passing).length
-          } passing`,
+        const finalizedResult = finalizeEvaluationRecordingRetention(
+          result,
+          suite.configuration?.recordingRetention ?? 'failures-and-baselines',
         );
-        logRuntimeInfo('Finished remote Trivet tests', {
-          testSuiteCount: result.testSuiteResults.length,
-          passingTestSuiteCount: result.testSuiteResults.filter((testSuite) => testSuite.passing).length,
-          iterationCount: result.iterationCount,
-        });
-      } catch (e) {
-        setTrivetState((s) => ({
-          ...s,
-          runningTests: false,
+        if (datasetSnapshotWarning) finalizedResult.warnings.push(datasetSnapshotWarning);
+        try {
+          await Promise.all(
+            evaluationRecordingRetentionUpdates(evaluationProjectId, finalizedResult.trials).map((update) =>
+              evaluationRunStore.updateRecordingRetention(update),
+            ),
+          );
+        } catch (error) {
+          finalizedResult.warnings.push('Some evaluation recording retention updates could not be saved.');
+          logRuntimeDebug('Remote evaluation recording retention was not persisted.', {
+            error,
+            suiteId,
+            projectId: evaluationProjectId,
+          });
+        }
+        try {
+          await evaluationRunStore.put(finalizedResult);
+        } catch (error) {
+          finalizedResult.warnings.push(formatEvaluationRunHistoryPersistenceWarning(error));
+          logRuntimeDebug('Completed remote evaluation was not retained.', {
+            error,
+            suiteId,
+            projectId: evaluationProjectId,
+          });
+        }
+        updateActiveProjectEvaluationState((state) => ({
+          ...state,
+          runningSuiteId: undefined,
+          currentRun: finalizedResult,
+          selectedRunId: finalizedResult.id,
+          runs: [finalizedResult, ...state.runs.filter((run) => run.id !== finalizedResult.id)],
         }));
-        handleError(e, 'Failed to run remote tests');
+        if (store.get(projectState).metadata.id === evaluationProjectId) {
+          toast.info(formatEvaluationCompletionToast(finalizedResult));
+        }
+        return finalizedResult;
+      } catch (error) {
+        updateActiveProjectEvaluationState((state) => ({ ...state, runningSuiteId: undefined }));
+        if (!evaluationAbortController.signal.aborted && isActiveEvaluationProject()) {
+          handleError(error, 'Failed to run evaluation');
+        }
+        return undefined;
+      } finally {
+        if (runningToastId !== undefined) toast.dismiss(runningToastId);
+        if (evaluationAbortControllerRef.current === evaluationAbortController) {
+          evaluationAbortControllerRef.current = null;
+          evaluationProjectIdRef.current = null;
+        }
       }
     },
   );
 
   function tryAbortGraph() {
+    if (evaluationAbortControllerRef.current) {
+      evaluationAbortControllerRef.current.abort(new DOMException('Evaluation canceled.', 'AbortError'));
+      return;
+    }
     const sessionState = executorSession.getRuntimeState();
     if (!sessionState.capabilities.canSendAbort) {
       logRuntimeDebug('Remote graph abort skipped because executor session cannot send abort.', {
@@ -797,7 +1077,7 @@ export function useRemoteExecutor() {
     tryPauseGraph,
     tryResumeGraph,
     active: remoteDebugger.sessionState.capabilities.canSendRun,
-    tryRunTests,
+    tryRunEvaluation,
     submitUserInput,
   };
 }

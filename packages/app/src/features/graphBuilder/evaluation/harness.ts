@@ -1,4 +1,5 @@
 import type { NodeGraph } from '@valerypopoff/rivet2-core';
+import { runEvaluationWorkPool } from '@valerypopoff/rivet2-evaluations';
 import { cloneDeep } from 'lodash-es';
 import { canonicalGraphBuilderAuthoringStringify } from '../graphBuilderDomain.js';
 import {
@@ -107,10 +108,13 @@ export type GraphBuilderDevelopmentEvaluationRun = Readonly<{
 }>;
 
 /**
- * Runs the public development suite sequentially and deterministically. It
- * never creates a provider client: all model/session behavior is supplied by
- * the injected adapter, which makes the same runner usable for fake providers,
- * the two legacy result slots, and Plan B.
+ * Runs the public development suite through the shared evaluation work-pool.
+ * This suite intentionally keeps concurrency at one because its fixtures
+ * exercise shared authoring/runtime seams, while retaining the common
+ * cancellation and deterministic-result-ordering behavior used by product
+ * evaluations. It never creates a provider client: all model/session behavior
+ * is supplied by the injected adapter, which makes the same runner usable for
+ * fake providers, the two legacy result slots, and Plan B.
  */
 export async function runGraphBuilderDevelopmentEvaluation(
   options: RunGraphBuilderDevelopmentEvaluationOptions,
@@ -129,21 +133,27 @@ export async function runGraphBuilderDevelopmentEvaluation(
   }
 
   const signal = options.signal ?? new AbortController().signal;
-  const observations: GraphBuilderEvaluationObservation[] = [];
-
-  for (const fixture of fixtures) {
-    for (let trial = 1; trial <= trialsPerFixture; trial += 1) {
-      signal.throwIfAborted();
-      observations.push(
-        await runFixtureTrial({
-          adapter: options.adapter,
-          fixture,
-          resultSlot,
-          trial,
-          signal,
-        }),
-      );
-    }
+  const work = fixtures.flatMap((fixture) =>
+    Array.from({ length: trialsPerFixture }, (_, index) => ({ fixture, trial: index + 1 })),
+  );
+  const scheduledObservations = await runEvaluationWorkPool({
+    work,
+    concurrency: 1,
+    signal,
+    execute: ({ fixture, trial }) => runFixtureTrial({
+      adapter: options.adapter,
+      fixture,
+      resultSlot,
+      trial,
+      signal,
+    }),
+  });
+  signal.throwIfAborted();
+  const observations = scheduledObservations.filter(
+    (observation): observation is GraphBuilderEvaluationObservation => observation !== undefined,
+  );
+  if (observations.length !== work.length) {
+    throw new Error('Graph Builder evaluation ended before every fixture trial completed.');
   }
 
   const scores = observations.map((observation) => {

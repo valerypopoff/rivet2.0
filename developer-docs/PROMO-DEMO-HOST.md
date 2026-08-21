@@ -15,7 +15,7 @@ it is not the normal desktop editor and is not a general host-mode switch.
 - Rivet settings
 
 The same policy disables recording import/export and playback controls, Copy
-Inputs for Trivet, AI Graph Builder, and per-editor Generate using AI controls.
+Inputs for Evaluations, AI Graph Builder, and per-editor Generate using AI controls.
 The hidden Graph Builder keyboard shortcut is gated by the same capability, so
 it cannot activate an invisible interface.
 

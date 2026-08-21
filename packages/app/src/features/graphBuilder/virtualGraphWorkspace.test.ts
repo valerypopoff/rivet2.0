@@ -11,7 +11,6 @@ import {
 } from './virtualGraphWorkspace.js';
 
 const activeGraphId = 'active/graph' as GraphId;
-const evaluatorGraphId = 'evaluator' as GraphId;
 
 function project(
   options: {
@@ -60,13 +59,6 @@ function project(
               },
             },
             variants: [{ id: 'variant-1', data: { text: 'variant' } }],
-            tests: [
-              {
-                id: 'test-group',
-                evaluatorGraphId,
-                tests: [{ conditionText: 'output = expected' }],
-              },
-            ],
           },
         ],
         connections: [],
@@ -129,7 +121,6 @@ test('virtual graph documents are deterministic, full-fidelity, and reveal only 
   assert.equal(document.digest, repeated.digest);
   assert.match(document.contents, /^version: 1\n/u);
   assert.match(document.contents, /customGraphField:/u);
-  assert.match(document.contents, /tests:/u);
   assert.match(document.contents, /\$graphBuilderSecret: host-secret:fnv1a64:/u);
   assert.doesNotMatch(document.contents, /super-secret-value|nested-secret-value/u);
   assert.match(document.contents, /apiKeySource: environment/u);
@@ -141,7 +132,6 @@ test('virtual graph documents are deterministic, full-fidelity, and reveal only 
 
   const draft = first.getDraft();
   const node = draft.graphs[activeGraphId]!.nodes[0]!;
-  assert.deepEqual(node.tests, project().graphs[activeGraphId]!.nodes[0]!.tests);
   assert.equal((node.data as Record<string, unknown>).apiKey, 'super-secret-value');
 
   const context = first.getPolicyWorkspaceContext(activeGraphId);
@@ -267,7 +257,6 @@ test('exact unified diffs apply atomically, preserve raw fields and secrets, and
   const node = workspace.getDraft().graphs[activeGraphId]!.nodes[0]!;
   assert.equal(node.title, 'After');
   assert.equal((node.data as Record<string, unknown>).apiKey, 'super-secret-value');
-  assert.deepEqual(node.tests, project().graphs[activeGraphId]!.nodes[0]!.tests);
   assert.notEqual(workspace.readDocument(path).digest, beforeDigest);
 
   const replayed = workspace.applyUnifiedDiff({
@@ -412,11 +401,6 @@ test('full-document parsing rejects malformed ChartNode envelope fields atomical
       name: 'variant',
       replace: (contents) => contents.replace('id: variant-1', 'id: ""'),
       expected: /"variants\[0\]"/u,
-    },
-    {
-      name: 'test case',
-      replace: (contents) => contents.replace('conditionText: output = expected', 'conditionText: 42'),
-      expected: /conditionText/u,
     },
   ];
 

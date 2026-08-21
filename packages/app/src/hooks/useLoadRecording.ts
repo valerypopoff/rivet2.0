@@ -9,10 +9,15 @@ import {
 } from '../state/execution.js';
 import { projectState, projectsState } from '../state/savedGraphs.js';
 import { useIOProvider } from '../providers/ProvidersContext.js';
+import { ExecutionRecorder, type ProjectId } from '@valerypopoff/rivet2-core';
+import { graphState } from '../state/graph.js';
+import { requireRecordingRootGraphId } from '../utils/recordingPlayback.js';
+import { useLoadGraph } from './useLoadGraph.js';
 
 export function useLoadRecording() {
   const ioProvider = useIOProvider();
   const store = useStore();
+  const loadGraph = useLoadGraph();
 
   function canChangeRecording(action: 'loading' | 'unloading', ownerProjectId: string | undefined) {
     const currentRecording = store.get(loadedRecordingState);
@@ -76,6 +81,36 @@ export function useLoadRecording() {
       }
 
       store.set(clearLoadedRecordingForProjectState, project.metadata.id);
+    },
+    /** Loads a recording already owned by a trusted Rivet run store. */
+    loadSerializedRecording: (input: { serialized: string; path: string; projectId: ProjectId }): boolean => {
+      const project = store.get(projectState);
+      if (project.metadata.id !== input.projectId) {
+        toast.warn('Switch to this evaluation project before opening its recording.');
+        return false;
+      }
+      if (!canChangeRecording('loading', input.projectId)) return false;
+
+      try {
+        const recorder = ExecutionRecorder.deserializeFromString(input.serialized);
+        const rootGraphId = requireRecordingRootGraphId(recorder.events);
+        const rootGraph = project.graphs[rootGraphId];
+        if (!rootGraph) {
+          toast.error(`Could not open the evaluation recording: graph "${rootGraphId}" is no longer in the project.`);
+          return false;
+        }
+        if (store.get(graphState).metadata?.id !== rootGraphId) loadGraph(rootGraph);
+        store.set(loadedRecordingState, {
+          recorder,
+          path: input.path,
+          projectId: input.projectId,
+        });
+        store.set(recordingPlaybackStartingState, false);
+        return true;
+      } catch (error) {
+        toast.error(`Could not open the evaluation recording: ${error instanceof Error ? error.message : String(error)}`);
+        return false;
+      }
     },
   };
 }

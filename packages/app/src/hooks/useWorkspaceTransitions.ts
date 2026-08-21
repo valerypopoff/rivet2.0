@@ -29,12 +29,11 @@ import {
   savedProjectContentDigestsState,
 } from '../state/savedGraphs.js';
 import { projectExecutionSnapshotsState } from '../state/dataFlow.js';
-import { trivetState } from '../state/trivet.js';
+import { evaluationsState, resetEvaluationsForProjectLoad } from '../state/evaluations.js';
 import { useCenterViewOnGraph } from './useCenterViewOnGraph.js';
 import { useSaveCurrentGraph } from './useSaveCurrentGraph.js';
 import type { GraphViewContext } from '../domain/graphEditing/navigationActions.js';
 import {
-  createDefaultTrivetState,
   createGraphSwitchTransition,
   createProjectLoadTransition,
   mergeCurrentGraphIntoProject,
@@ -77,7 +76,7 @@ export function useWorkspaceTransitions() {
   const [project, setProject] = useAtom(projectState);
   const [loadedProject, setLoadedProject] = useAtom(loadedProjectState);
   const setProjectData = useSetAtom(projectDataState);
-  const setTrivetState = useSetAtom(trivetState);
+  const setEvaluationsState = useSetAtom(evaluationsState);
   const setNavigationStack = useSetAtom(graphNavigationStackState);
   const setIsReadOnlyGraph = useSetAtom(isReadOnlyGraphState);
   const setHistoricalGraph = useSetAtom(historicalGraphState);
@@ -94,7 +93,7 @@ export function useWorkspaceTransitions() {
   const saveCurrentGraph = useSaveCurrentGraph();
   const applyProjectExecutorMode = useApplyProjectExecutorMode();
   const { persistCurrentProjectExecutionSnapshot, restoreProjectExecutionSnapshot } = useProjectExecutionSnapshots();
-  const { testSuites } = useAtomValue(trivetState);
+  const evaluations = useAtomValue(evaluationsState);
   const {
     canvasPosition,
     graphNavigationStack,
@@ -175,7 +174,8 @@ export function useWorkspaceTransitions() {
       data?: Project['data'];
       fsPath?: string | null;
       openedGraph?: GraphId;
-      testSuites?: typeof testSuites;
+      evaluationData?: typeof evaluations.data;
+      evaluationDatasets?: typeof evaluations.datasets;
       graphToLoad?: typeof currentGraph;
       graphView?: GraphViewContext;
       markClean?: boolean;
@@ -294,7 +294,14 @@ export function useWorkspaceTransitions() {
         applyProjectExecutorMode(projectInfo.executorMode, { projectId: targetProjectId });
         await applyStaticData(projectInfo.data);
         setLoadedProject(transition.loadedProject);
-        setTrivetState(createDefaultTrivetState(projectInfo.testSuites ?? []));
+        setEvaluationsState((current) =>
+          resetEvaluationsForProjectLoad(
+            current,
+            projectInfo.evaluationData,
+            projectInfo.evaluationDatasets,
+            targetProjectId,
+          ),
+        );
         if (!targetProjectHasOpenTab) {
           clearUiGraphPreviewSessions(targetProjectId);
         }
@@ -429,7 +436,6 @@ export function useWorkspaceTransitions() {
           const latestProject = store.get(projectState);
           const latestLoadedProject = store.get(loadedProjectState);
           projectPath = latestLoadedProject.path;
-          const latestTestSuites = store.get(trivetState).testSuites;
           const savedGraph = saveCurrentGraph();
           const projectToPersist = withDerivedProjectPluginSpecs(
             mergeCurrentGraphIntoProject(latestProject, savedGraph),
@@ -456,9 +462,13 @@ export function useWorkspaceTransitions() {
           });
           await flushHybridStorageGroup('graph');
           await flushHybridStorageGroup('project');
+          // Legacy evaluation resources may be about to disappear from the
+          // project file/sidecar. Commit their one-way migration before any
+          // project save can replace those legacy files.
+          await flushHybridStorageGroup('evaluation-library');
 
           if (shouldUseSaveAs) {
-            const filePath = await ioProvider.saveProjectData(projectToPersist, { testSuites: latestTestSuites });
+            const filePath = await ioProvider.saveProjectData(projectToPersist);
 
             if (filePath) {
               savedPath = filePath;
@@ -478,11 +488,7 @@ export function useWorkspaceTransitions() {
               throw new Error('The active project cannot be saved in place.');
             }
             const savePath = latestLoadedProject.path!;
-            await saveInPlaceProvider.saveProjectDataNoPrompt(
-              projectToPersist,
-              { testSuites: latestTestSuites },
-              savePath,
-            );
+            await saveInPlaceProvider.saveProjectDataNoPrompt(projectToPersist, savePath);
             savedPath = savePath;
             setLoadedProject({ loaded: true, path: savePath });
             setOpenedProjectSnapshots((snapshots) => {

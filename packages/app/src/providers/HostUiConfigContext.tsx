@@ -2,7 +2,7 @@ import { createContext, useContext, type FC, type ReactNode } from 'react';
 import type { FileMenuConfig } from '../utils/fileMenuConfiguration.js';
 import type { WorkspaceTabsConfig } from '../utils/workspaceTabs.js';
 
-export type RivetAppHostCapability = 'aiAssist' | 'aiGraphBuilder' | 'recordings' | 'trivetInputCopy';
+export type RivetAppHostCapability = 'aiAssist' | 'aiGraphBuilder' | 'recordings' | 'evaluationInputCopy';
 
 export type RivetAppHostUiConfig = {
   /**

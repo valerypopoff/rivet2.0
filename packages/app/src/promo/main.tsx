@@ -101,7 +101,8 @@ function createPromoSnapshot(definition: PromoProjectDefinition) {
     openedGraph: definition.graphId as GraphId,
     path: definition.path,
     project,
-    testSuites: [],
+    evaluationData: { version: 1 as const, suites: [], baselines: [] },
+    evaluationDatasets: [],
   };
 }
 

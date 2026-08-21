@@ -1,11 +1,14 @@
-- Make the LLM call fail after specific time? It should help the llm profile fallback chain. Then, a fail should be of 2 kinds: soft (will retry the same LLM profile if retrying is on) and hard (fail the whole LLM profile even if retrying is on)
+- Montecarlo system to emulate using endpoints? To see how many tokens will be spent?
+
+
+- In nodes that have variadic inputs, when an input in the middle is removed, the remaining inputs look weird. Do we need to automatically remove them? It should we allow the user to remove them if needed?
 
 
 - Need to show the curent graph name somewhere. Like, by pressing some button?
 
 - Сделать чтобы можно было стримить аутпут из ЛЛМ чат нода прям в веб апп в компонент чата
 
-- Добавить агенту эвернесс о своих тулах? Чтобы он в случае чего мог посмотреть а как именно работает тул. Это ппоможет ему правильнее им пользоваться
+- Добавить агенту эвернесс о конструкции втоих тулов? Чтобы он в случае чего мог посмотреть а как именно работает тул. Это поможет ему правильнее им пользоваться
 
 - A main page for the github website that says that it is a yet another workflow builder for AI but: free, developer oriented (not for everyone) so there's no bullshit, it's for professional work, it's good and optimized for production use (not only for POCs)
 
@@ -15,9 +18,9 @@
 
 - Recorded actions in the Editor? Like, record connecting some nodes. Then record disconnecting them. Like some chore that needs to be done before saving for example
 
-- When zoom out the canvas, the main buttons in teh output area should scale down slower than the nod eitself. Like, when the node zoomed out 2x, the buttons in the output area should only zoom out 1.5x. Or should work when the scale is lower than some threshold. Choose the threshold wisely.
+- When zooming out the canvas, the main buttons in teh output area should scale down slower than the nod eitself. Like, when the node zoomed out 2x, the buttons in the output area should only zoom out 1.5x. Or should work when the scale is lower than some threshold. Choose the threshold wisely.
 
-- Node from rivet project. Should be compatible with rivet wrappers. Isn't "Project References" the same thing?
+- Node from a rivet project. Should be compatible with rivet wrappers. Isn't "Project References" the same thing?
 
 - A special node mode that works like a filter: in this mode the node can accept multiple connections from different nodes into one port. Without such mode, I have to copy-paste the same node multiple times. Probably, for each connection set there should be a separate execution path. Like, "add path". Or! Allow connecting an auxiliary node as a filter for selected inputs/outputs of a node.
 
@@ -35,7 +38,6 @@
 
 - Get back to MCP and see if it works and how it works. I don't see an MCP node. I think we need it
 
-- In nodes that have variadic inputs, when an input in the middle is removed, the remaining inputs look weird. Do we need to automatically remove them? It should we allow the user to remove them if needed?
 
 - Reassess Loop until node. Definitely can make the end conditions better
 

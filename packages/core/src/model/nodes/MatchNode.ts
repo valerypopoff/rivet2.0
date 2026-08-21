@@ -20,6 +20,9 @@ export type MatchNodeData = {
   cases: string[];
   casePortIds?: string[];
 
+  /** Missing values are legacy Shared mode. */
+  valueInputMode?: 'shared' | 'per-output';
+
   /** If true, only the first matching branch will be ran. */
   exclusive?: boolean;
 };
@@ -38,6 +41,7 @@ export class MatchNodeImpl extends NodeImpl<MatchNode> {
       data: {
         cases: ['YES', 'NO'],
         casePortIds: [nanoid(), nanoid()],
+        valueInputMode: 'shared',
       },
     };
 
@@ -53,65 +57,99 @@ export class MatchNodeImpl extends NodeImpl<MatchNode> {
         required: true,
         description: 'The value that will be tested against each of the cases.',
       },
-      {
+    ];
+
+    if (this.getValueInputMode() === 'shared') {
+      inputs.push({
         id: 'value' as PortId,
-        title: 'Value',
+        title: 'Custom value',
         dataType: 'any',
         description:
-          'The value passed through to the output port that matches. If unconnected, the test value will be passed through.',
-      },
-    ];
+          'The optional value passed through to every matching output. If unconnected, the Test value is passed through.',
+      });
+    } else {
+      const portIds = this.getCasePortIds();
+
+      this.data.cases.forEach((caseValue, index) => {
+        inputs.push({
+          id: this.getCaseValueInputId(portIds[index]!) as PortId,
+          title: this.getCaseTitle(caseValue, index),
+          dataType: 'any',
+          description: `The optional custom value emitted when /${caseValue}/ matches the Test value. If unconnected, Test is passed through.`,
+        });
+      });
+
+      inputs.push({
+        id: 'value-unmatched' as PortId,
+        title: 'Unmatched',
+        dataType: 'any',
+        description:
+          'The optional custom value emitted when no regular expression matches the Test value. If unconnected, Test is passed through.',
+      });
+    }
 
     return inputs;
   }
 
   getOutputDefinitions(): NodeOutputDefinition[] {
     const outputs: NodeOutputDefinition[] = [];
-    const portIds = resolveStoredOrderedPortIds(this.data.cases.length, this.data.casePortIds, {
-      kind: 'prefix',
-      prefix: 'case',
-      startIndex: 1,
-    });
+    const portIds = this.getCasePortIds();
 
     for (let i = 0; i < this.data.cases.length; i++) {
       outputs.push({
         id: portIds[i]! as PortId,
-        title: this.data.cases[i]?.trim() ? this.data.cases[i]! : `Case ${i + 1}`,
-        dataType: 'string',
-        description: `The 'value' (or 'test' if value is unconnected) passed through if the test value matches this regex: /${this
-          .data.cases[i]!}/`,
+        title: this.getCaseTitle(this.data.cases[i], i),
+        dataType: 'any',
+        description:
+          this.getValueInputMode() === 'shared'
+            ? `The shared Custom value (or Test if Custom value is unconnected) passed through if the test value matches /${this.data.cases[i]!}/.`
+            : `The corresponding ${this.getCaseTitle(this.data.cases[i], i)} custom value (or Test if it is unconnected) passed through if the test value matches /${this.data.cases[i]!}/.`,
       });
     }
 
     outputs.push({
       id: 'unmatched' as PortId,
       title: 'Unmatched',
-      dataType: 'string',
-      description: 'The value (or test if value is unconnected) passed through if no regexes match.',
+      dataType: 'any',
+      description:
+        this.getValueInputMode() === 'shared'
+          ? 'The shared Custom value (or Test if Custom value is unconnected) passed through if no regexes match.'
+          : 'The Unmatched custom value (or Test if it is unconnected) passed through if no regexes match.',
     });
 
     return outputs;
   }
 
   getBody(): NodeBody {
-    return dedent`
-      ${this.data.exclusive ? 'First Matching Case' : 'All Matching Cases'}
-      ${this.data.cases.length} Cases
-    `;
+    return this.data.exclusive ? 'Trigger the first matching case only' : 'Trigger all matching cases';
   }
 
   getEditors(): EditorDefinition<MatchNode>[] {
     return [
       {
-        type: 'toggle',
+        type: 'segmented',
+        label: 'Matching cases to trigger',
         dataKey: 'exclusive',
-        label: 'Exclusive',
-        helperMessage: 'If enabled, only the first matching branch will be ran.',
+        defaultValue: false,
+        options: [
+          { value: false, label: 'Trigger all matching cases' },
+          { value: true, label: 'Trigger first only' },
+        ],
+      },
+      {
+        type: 'segmented',
+        label: 'Custom case values',
+        dataKey: 'valueInputMode',
+        defaultValue: 'shared',
+        options: [
+          { value: 'shared', label: 'One shared custom value' },
+          { value: 'per-output', label: 'Custom values per case' },
+        ],
       },
       {
         type: 'stringList',
         dataKey: 'cases',
-        label: 'Cases',
+        label: 'Cases (regular expressions)',
         placeholder: 'Case (regular expression)',
         reorderable: true,
         portBinding: {
@@ -123,8 +161,8 @@ export class MatchNodeImpl extends NodeImpl<MatchNode> {
             prefix: 'case',
             startIndex: 1,
           },
+          companionBindings: [{ side: 'input', prefix: 'value-' }],
         },
-        helperMessage: '(Regular expressions)',
       },
     ];
   }
@@ -132,7 +170,7 @@ export class MatchNodeImpl extends NodeImpl<MatchNode> {
   static getUIData(): NodeUIData {
     return {
       infoBoxBody: dedent`
-        Any number of regular expressions can be configured, each corresponding to an output of the node. The output port of the first matching regex will be ran, and all other output ports will not be ran.
+        Configure any number of regular expressions, each corresponding to an output. Trigger all matched outputs by default, or choose Trigger first matching case. One shared custom value passes one optional value to every active output, while Custom values per case gives each case and Unmatched output its own optional custom value input.
       `,
       infoBoxTitle: 'Regex Match Node',
       contextMenuTitle: 'Regex Match',
@@ -143,15 +181,23 @@ export class MatchNodeImpl extends NodeImpl<MatchNode> {
   async process(inputs: Inputs): Promise<Outputs> {
     const inputValue = inputs['input' as PortId];
     const inputString = inputValue?.value == null ? undefined : coerceType(inputValue, 'string');
-    const value = inputs['value' as PortId];
-    const portIds = resolveStoredOrderedPortIds(this.data.cases.length, this.data.casePortIds, {
-      kind: 'prefix',
-      prefix: 'case',
-      startIndex: 1,
-    });
+    const portIds = this.getCasePortIds();
+    const sharedValue = inputs['value' as PortId];
 
-    const outputType = value === undefined ? 'string' : value.type;
-    const outputValue = value === undefined ? inputString : value.value;
+    const getTestOutputValue = (): DataValue =>
+      ({
+        type: 'string',
+        value: inputString,
+      }) as DataValue;
+    const getSharedOutputValue = (): DataValue => sharedValue ?? getTestOutputValue();
+    const getOutputValue = (portId: string): DataValue =>
+      this.getValueInputMode() === 'shared'
+        ? getSharedOutputValue()
+        : inputs[this.getCaseValueInputId(portId) as PortId] ?? getTestOutputValue();
+    const getUnmatchedOutputValue = (): DataValue =>
+      this.getValueInputMode() === 'shared'
+        ? getSharedOutputValue()
+        : inputs['value-unmatched' as PortId] ?? getTestOutputValue();
 
     const cases = this.data.cases;
     let matched = false;
@@ -163,10 +209,7 @@ export class MatchNodeImpl extends NodeImpl<MatchNode> {
       const canMatch = !this.data.exclusive || !matched;
       if (match && canMatch) {
         matched = true;
-        output[portIds[i]! as PortId] = {
-          type: outputType,
-          value: outputValue,
-        } as DataValue;
+        output[portIds[i]! as PortId] = getOutputValue(portIds[i]!);
       } else {
         output[portIds[i]! as PortId] = {
           type: 'control-flow-excluded',
@@ -176,10 +219,7 @@ export class MatchNodeImpl extends NodeImpl<MatchNode> {
     }
 
     if (!matched) {
-      output['unmatched' as PortId] = {
-        type: outputType,
-        value: outputValue,
-      } as DataValue;
+      output['unmatched' as PortId] = getUnmatchedOutputValue();
     } else {
       output['unmatched' as PortId] = {
         type: 'control-flow-excluded',
@@ -188,6 +228,26 @@ export class MatchNodeImpl extends NodeImpl<MatchNode> {
     }
 
     return output;
+  }
+
+  private getValueInputMode(): 'shared' | 'per-output' {
+    return this.data.valueInputMode === 'per-output' ? 'per-output' : 'shared';
+  }
+
+  private getCasePortIds(): string[] {
+    return resolveStoredOrderedPortIds(this.data.cases.length, this.data.casePortIds, {
+      kind: 'prefix',
+      prefix: 'case',
+      startIndex: 1,
+    });
+  }
+
+  private getCaseTitle(caseValue: string | undefined, index: number): string {
+    return caseValue?.trim() ? caseValue : `Case ${index + 1}`;
+  }
+
+  private getCaseValueInputId(portId: string): string {
+    return `value-${portId}`;
   }
 }
 

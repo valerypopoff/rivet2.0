@@ -671,37 +671,6 @@ function assertVirtualNodeEnvelope(
     });
   }
 
-  if (node.tests !== undefined) {
-    if (!Array.isArray(node.tests)) {
-      invalidVirtualNode(path, index, '"tests" must be an array when present');
-    }
-    const testGroupIds = new Set<string>();
-    node.tests.forEach((testGroup, groupIndex) => {
-      if (
-        !isPlainRecord(testGroup) ||
-        typeof testGroup.id !== 'string' ||
-        testGroup.id.length === 0 ||
-        typeof testGroup.evaluatorGraphId !== 'string' ||
-        testGroup.evaluatorGraphId.length === 0 ||
-        !Array.isArray(testGroup.tests)
-      ) {
-        invalidVirtualNode(
-          path,
-          index,
-          `"tests[${groupIndex}]" must contain non-empty string "id" and "evaluatorGraphId" values plus a tests array`,
-        );
-      }
-      if (testGroupIds.has(testGroup.id)) {
-        invalidVirtualNode(path, index, `"tests[${groupIndex}].id" must be unique`);
-      }
-      testGroupIds.add(testGroup.id);
-      testGroup.tests.forEach((testCase, testIndex) => {
-        if (!isPlainRecord(testCase) || typeof testCase.conditionText !== 'string') {
-          invalidVirtualNode(path, index, `"tests[${groupIndex}].tests[${testIndex}].conditionText" must be a string`);
-        }
-      });
-    });
-  }
 }
 
 function assertVirtualGraphShape(value: unknown, graphId: GraphId, path: string): asserts value is NodeGraph {

@@ -106,6 +106,7 @@ export {
   useDataRefs,
   useDatasetProvider,
   useEnvironmentProvider,
+  useEvaluationRunStore,
   useIOProvider,
   useLLMProfileHealthAdmin,
   useLLMProfileHealthStore,
@@ -121,6 +122,7 @@ export {
   type ProviderOverrides,
   type Providers,
 } from './providers/ProvidersContext.js';
+export type { EvaluationRunStore } from '@valerypopoff/rivet2-evaluations';
 export {
   BrowserStaticDataStore,
   MemoryStaticDataStore,
