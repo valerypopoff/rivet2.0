@@ -1020,8 +1020,7 @@ The workflow:
 6. runs `yarn build:npm-public`, which builds `@valerypopoff/rivet2-core`, `@valerypopoff/rivet2-node`, `@valerypopoff/rivet2-evaluations`, and `@valerypopoff/rivet2-cli`
 7. verifies that dependency install and package build touched only generated artifacts
 8. uses Node `22.21.1` and npm `11.5.1` for npm trusted-publishing compatibility
-9. verifies that the repository `NPM_TOKEN` secret is present and accepted by `npm whoami`
-10. runs `node scripts/publish-npm-packages.mjs --skip-clean-check`
+9. runs `node scripts/publish-npm-packages.mjs --skip-clean-check`, using `NPM_TOKEN` when present or npm trusted publishing when configured
 
 The publish step intentionally skips the script's clean-tree check because this
 job installs dependencies and builds ignored publish artifacts immediately
@@ -1052,19 +1051,19 @@ turn an already-published package into a hard failure.
 
 ### npm authentication
 
-The main-branch npm workflow currently requires a repository secret named
-`NPM_TOKEN`. Add it under GitHub repository Settings -> Secrets and variables ->
-Actions. The token should be an npm automation token that can publish public
-packages under the `@valerypopoff` scope.
+The main-branch npm workflow supports either a repository `NPM_TOKEN` secret or
+npm trusted publishing. For token publishing, add a granular token under GitHub
+repository Settings -> Secrets and variables -> Actions with read/write package
+access for the `@valerypopoff` scope and **Bypass 2FA** enabled, unless a package
+explicitly disallows token-based publishing. For trusted publishing, configure
+npm's trusted-publisher settings for this repository and workflow; the workflow
+already grants `id-token: write` and sets npm provenance.
 
-The workflow verifies the token with `npm whoami` before it runs the publish
-script. This catches missing or invalid secrets before the package staging script
-gets as far as `npm publish`.
-
-The workflow still grants `id-token: write` and sets npm provenance so published
-packages can include provenance metadata. Fully tokenless npm trusted publishing
-can be revisited later, but this workflow's expected auth path is the
-`NPM_TOKEN` repository secret.
+The workflow deliberately does not call `npm whoami` before publishing.
+`whoami` is an account-identity operation that npm rejects for bypass-2FA
+granular tokens even when the same token can publish. Authentication is checked
+by the actual `npm publish` command: it uses the configured token when present,
+or the GitHub OIDC identity for trusted publishing.
 
 For local publishes, `scripts/publish-npm-packages.mjs` reads repo-root `.env`
 before it stages packages. A local `NPM_TOKEN=...` entry is mapped to
@@ -1073,7 +1072,8 @@ staging directory while `npm view` / `npm publish` run. The temporary `.npmrc` i
 removed before the script exits, including when `--keep-stage` leaves staged
 packages available for inspection. The repo-root `.env` file is ignored by Git
 and must not be committed. GitHub Actions does not receive local `.env` values;
-CI publishes need the repository secret named `NPM_TOKEN`.
+CI publishing needs either `NPM_TOKEN` or trusted publishing configured for each
+published package.
 
 ### Package staging
 
