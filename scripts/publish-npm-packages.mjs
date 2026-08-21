@@ -40,6 +40,7 @@ const args = new Set(process.argv.slice(2));
 const dryRun = args.has('--dry-run');
 const stageOnly = args.has('--stage-only');
 const keepStage = args.has('--keep-stage');
+const checkVersionsOnly = args.has('--check-versions');
 const skipCleanCheck = args.has('--skip-clean-check');
 const skipRegistryCheck = dryRun || args.has('--skip-registry-check');
 const npmDistTag = process.env.NPM_DIST_TAG;
@@ -51,7 +52,7 @@ main();
 function main() {
   loadDotEnv();
 
-  if (!skipCleanCheck) {
+  if (!skipCleanCheck && !checkVersionsOnly) {
     ensureCleanWorkingTree();
   }
 
@@ -61,6 +62,11 @@ function main() {
   }));
 
   const version = validatePackageVersions(packageJsons);
+  if (checkVersionsOnly) {
+    console.log(`Public npm package versions are lockstep at ${version}.`);
+    return;
+  }
+
   const distTag = npmDistTag ?? (version.includes('-') ? 'next' : 'latest');
   const stagingRoot = mkdtempSync(path.join(tmpdir(), 'rivet-npm-publish-'));
   const npmAuthConfigPath = writeNpmAuthConfig(stagingRoot);
