@@ -948,9 +948,11 @@ It does not publish the app, the app executor, or Docker images. The main-branch
 npm workflow is the canonical automation path for this script. That workflow
 verifies a clean checkout before installing dependencies, then verifies after
 the build that only Yarn install-state artifacts and generated publish artifacts
-changed. It then verifies the repository `NPM_TOKEN` secret with `npm whoami`
-before publishing. It calls this script with `--skip-clean-check` because the
-workflow owns its own post-build clean-tree check. That check excludes
+changed. It then calls this script with `--skip-clean-check` because the workflow
+owns its own post-build clean-tree check. Publishing uses the configured
+`NPM_TOKEN` secret or npm trusted publishing. It intentionally does not preflight
+with `npm whoami`, because npm treats that as an account-identity operation that
+bypass-2FA granular publish tokens cannot perform. That check excludes
 `.yarn/install-state.gz`, `packages/core/dist`, `packages/node/dist`,
 `packages/evaluations/dist`, `packages/cli/dist`, `packages/cli/bin`, and
 `packages/cli/tsconfig.tsbuildinfo` outputs, but it does not exclude the tracked
