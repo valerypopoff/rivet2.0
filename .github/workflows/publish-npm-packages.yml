@@ -38,6 +38,9 @@ jobs:
       - name: Install dependencies
         run: node .yarn/releases/yarn-4.17.1.cjs install --immutable --immutable-cache --check-cache
 
+      - name: Verify npm publish package versions
+        run: node scripts/publish-npm-packages.mjs --check-versions
+
       - name: Verify AI graph builder assets
         run: yarn check:graph-builder-assets
 

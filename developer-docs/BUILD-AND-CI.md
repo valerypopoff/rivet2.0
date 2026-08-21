@@ -1015,12 +1015,14 @@ The workflow:
 2. verifies the checkout starts clean
 3. runs the shared Node/Yarn setup for the build, matching the repo development toolchain and restoring Yarn install state
 4. installs dependencies with the checked-in Yarn release and `--immutable --immutable-cache --check-cache`
-5. verifies the retained legacy and Plan B Graph Builder assets with
+5. verifies that the four public npm package manifests use one lockstep version
+   before building
+6. verifies the retained legacy and Plan B Graph Builder assets with
    `yarn check:graph-builder-assets`
-6. runs `yarn build:npm-public`, which builds `@valerypopoff/rivet2-core`, `@valerypopoff/rivet2-node`, `@valerypopoff/rivet2-evaluations`, and `@valerypopoff/rivet2-cli`
-7. verifies that dependency install and package build touched only generated artifacts
-8. uses Node `22.21.1` and npm `11.5.1` for npm trusted-publishing compatibility
-9. runs `node scripts/publish-npm-packages.mjs --skip-clean-check`, using `NPM_TOKEN` when present or npm trusted publishing when configured
+7. runs `yarn build:npm-public`, which builds `@valerypopoff/rivet2-core`, `@valerypopoff/rivet2-node`, `@valerypopoff/rivet2-evaluations`, and `@valerypopoff/rivet2-cli`
+8. verifies that dependency install and package build touched only generated artifacts
+9. uses Node `22.21.1` and npm `11.5.1` for npm trusted-publishing compatibility
+10. runs `node scripts/publish-npm-packages.mjs --skip-clean-check`, using `NPM_TOKEN` when present or npm trusted publishing when configured
 
 The publish step intentionally skips the script's clean-tree check because this
 job installs dependencies and builds ignored publish artifacts immediately
@@ -1168,6 +1170,9 @@ publish Docker images.
 Useful local validation flags:
 
 - `--stage-only`: validate and stage the packages without invoking npm
+- `--check-versions`: validate only the public package manifests' lockstep semver
+  version; this is safe in a dirty checkout and runs before publishable packages
+  are built
 - `--keep-stage`: keep the temporary staged package directory for inspection;
   npm auth config is still removed before exit
 - `--dry-run`: run `npm publish --dry-run` against the staged package directories
@@ -1177,7 +1182,7 @@ Useful local validation flags:
 
 The current effective release flow is:
 
-1. update versions in package manifests; for desktop app releases, `packages/app/package.json` is the source and `yarn sync:desktop-version` updates Tauri/Cargo metadata
+1. update the four public npm package manifests to the same version; for desktop app releases, `packages/app/package.json` is the source and `yarn sync:desktop-version` updates Tauri/Cargo metadata
 2. push to `main` to publish npm packages, update the current stable Windows/macOS installers in the rolling GitHub Release feed, and publish their metadata through GitHub Pages
 3. push `app-v*` tag for updater-enabled desktop release drafts when that path is needed
 4. let `release.yml` create draft desktop artifacts
