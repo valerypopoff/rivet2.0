@@ -22,10 +22,11 @@ const outputDefinitions = [
 const ExtractObjectPathNodeOutputBody: FC<{
   node: ExtractObjectPathNode;
   data: NodeRunDataWithRefs;
+  renderMarkdown?: boolean;
   renderMode: OutputRenderMode;
   allowLargeStoredValueActions?: boolean;
   wrapLines?: boolean;
-}> = ({ node, data, renderMode, allowLargeStoredValueActions, wrapLines }) => {
+}> = ({ node, data, renderMarkdown, renderMode, allowLargeStoredValueActions, wrapLines }) => {
   const errorMessage = data.status?.type === 'error' ? data.status.error : undefined;
   const dataRefs = useDataRefs();
   const pathSource = getExtractObjectPathPreviewSource(node, data);
@@ -55,6 +56,7 @@ const ExtractObjectPathNodeOutputBody: FC<{
         <StructuredNodeOutputSection label={label} key={`${keyPrefix}${id}`} statsValue={outputValue}>
           <RenderDataValue
             value={outputValue}
+            renderMarkdown={renderMarkdown}
             mode={renderMode}
             allowLargeStoredValueActions={allowLargeStoredValueActions}
             wrapLines={wrapLines}
@@ -84,19 +86,21 @@ const ExtractObjectPathNodeOutputBody: FC<{
 };
 
 export const extractObjectPathNodeDescriptor: NodeComponentDescriptor<'extractObjectPath'> = {
-  Output: ({ node, data, renderMode = 'compact', allowLargeStoredValueActions, wrapLines }) => (
+  Output: ({ node, data, renderMarkdown, renderMode = 'compact', allowLargeStoredValueActions, wrapLines }) => (
     <ExtractObjectPathNodeOutputBody
       node={node}
       data={data}
+      renderMarkdown={renderMarkdown}
       renderMode={renderMode}
       allowLargeStoredValueActions={allowLargeStoredValueActions}
       wrapLines={wrapLines}
     />
   ),
-  FullscreenOutput: ({ node, data, renderMode = 'expanded-preview', allowLargeStoredValueActions, wrapLines }) => (
+  FullscreenOutput: ({ node, data, renderMarkdown, renderMode = 'expanded-preview', allowLargeStoredValueActions, wrapLines }) => (
     <ExtractObjectPathNodeOutputBody
       node={node}
       data={data}
+      renderMarkdown={renderMarkdown}
       renderMode={renderMode}
       allowLargeStoredValueActions={allowLargeStoredValueActions}
       wrapLines={wrapLines}

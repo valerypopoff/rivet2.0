@@ -4,6 +4,8 @@ import type { InputsOrOutputsWithRefs, NodeRunDataWithRefs } from '../../state/d
 import type { OutputRenderMode } from '../renderDataValue/outputRenderTypes.js';
 
 export type NodeOutputRenderPolicyProps = {
+  /** Whether text output should use the Markdown renderer when the caller exposes that control. */
+  renderMarkdown?: boolean;
   renderMode?: OutputRenderMode;
   allowLargeStoredValueActions?: boolean;
   autoCollapseLlmChatDiagnosticOutputs?: boolean;

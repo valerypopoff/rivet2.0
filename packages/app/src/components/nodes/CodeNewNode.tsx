@@ -18,10 +18,11 @@ import { getSortedRenderableSplitOutputEntries } from '../nodeOutput/splitOutput
 const CodeNewNodeOutputBody: FC<{
   node: CodeNewNode;
   data: NodeRunDataWithRefs;
+  renderMarkdown?: boolean;
   renderMode: OutputRenderMode;
   allowLargeStoredValueActions?: boolean;
   wrapLines?: boolean;
-}> = ({ node, data, renderMode, allowLargeStoredValueActions, wrapLines }) => {
+}> = ({ node, data, renderMarkdown, renderMode, allowLargeStoredValueActions, wrapLines }) => {
   const hasError = data.status?.type === 'error';
   const parsedError = hasError ? getCodeNodeErrorViewModel(data) : undefined;
   const dataRefs = useDataRefs();
@@ -52,6 +53,7 @@ const CodeNewNodeOutputBody: FC<{
       <RenderDataValue
         value={outputValue}
         isCompact={isCompactPreview}
+        renderMarkdown={renderMarkdown}
         mode={renderMode}
         allowLargeStoredValueActions={allowLargeStoredValueActions}
         wrapLines={wrapLines}
@@ -111,19 +113,21 @@ const CodeNewNodeOutputBody: FC<{
 };
 
 export const codeNewNodeDescriptor: NodeComponentDescriptor<'codeNew'> = {
-  Output: ({ node, data, renderMode = 'compact', allowLargeStoredValueActions, wrapLines }) => (
+  Output: ({ node, data, renderMarkdown, renderMode = 'compact', allowLargeStoredValueActions, wrapLines }) => (
     <CodeNewNodeOutputBody
       node={node}
       data={data}
+      renderMarkdown={renderMarkdown}
       renderMode={renderMode}
       allowLargeStoredValueActions={allowLargeStoredValueActions}
       wrapLines={wrapLines}
     />
   ),
-  FullscreenOutput: ({ node, data, renderMode = 'expanded-preview', allowLargeStoredValueActions, wrapLines }) => (
+  FullscreenOutput: ({ node, data, renderMarkdown, renderMode = 'expanded-preview', allowLargeStoredValueActions, wrapLines }) => (
     <CodeNewNodeOutputBody
       node={node}
       data={data}
+      renderMarkdown={renderMarkdown}
       renderMode={renderMode}
       allowLargeStoredValueActions={allowLargeStoredValueActions}
       wrapLines={wrapLines}

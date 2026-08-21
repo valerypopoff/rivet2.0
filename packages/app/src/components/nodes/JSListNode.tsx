@@ -23,10 +23,11 @@ const JS_LIST_OUTPUT_CONFIG = {
 const JSListNodeOutputBody: FC<{
   node: JSListNode;
   data: NodeRunDataWithRefs;
+  renderMarkdown?: boolean;
   renderMode: OutputRenderMode;
   allowLargeStoredValueActions?: boolean;
   wrapLines?: boolean;
-}> = ({ node, data, renderMode, allowLargeStoredValueActions, wrapLines }) => {
+}> = ({ node, data, renderMarkdown, renderMode, allowLargeStoredValueActions, wrapLines }) => {
   const { outputId, resultLabel } = JS_LIST_OUTPUT_CONFIG[node.type];
   const errorMessage = data.status?.type === 'error' ? data.status.error : undefined;
   const dataRefs = useDataRefs();
@@ -62,6 +63,7 @@ const JSListNodeOutputBody: FC<{
               <StructuredNodeOutputSection label={resultLabel} key={key} statsValue={outputs[outputId]}>
                 <RenderDataValue
                   value={outputs[outputId]}
+                  renderMarkdown={renderMarkdown}
                   mode={renderMode}
                   allowLargeStoredValueActions={allowLargeStoredValueActions}
                   wrapLines={wrapLines}
@@ -75,6 +77,7 @@ const JSListNodeOutputBody: FC<{
         <StructuredNodeOutputSection label={resultLabel} statsValue={data.outputData?.[outputId]}>
           <RenderDataValue
             value={data.outputData?.[outputId]}
+            renderMarkdown={renderMarkdown}
             mode={renderMode}
             allowLargeStoredValueActions={allowLargeStoredValueActions}
             wrapLines={wrapLines}
@@ -86,19 +89,21 @@ const JSListNodeOutputBody: FC<{
 };
 
 export const jsFilterNodeDescriptor: NodeComponentDescriptor<'jsFilter'> = {
-  Output: ({ node, data, renderMode = 'compact', allowLargeStoredValueActions, wrapLines }) => (
+  Output: ({ node, data, renderMarkdown, renderMode = 'compact', allowLargeStoredValueActions, wrapLines }) => (
     <JSListNodeOutputBody
       node={node}
       data={data}
+      renderMarkdown={renderMarkdown}
       renderMode={renderMode}
       allowLargeStoredValueActions={allowLargeStoredValueActions}
       wrapLines={wrapLines}
     />
   ),
-  FullscreenOutput: ({ node, data, renderMode = 'expanded-preview', allowLargeStoredValueActions, wrapLines }) => (
+  FullscreenOutput: ({ node, data, renderMarkdown, renderMode = 'expanded-preview', allowLargeStoredValueActions, wrapLines }) => (
     <JSListNodeOutputBody
       node={node}
       data={data}
+      renderMarkdown={renderMarkdown}
       renderMode={renderMode}
       allowLargeStoredValueActions={allowLargeStoredValueActions}
       wrapLines={wrapLines}
@@ -107,19 +112,21 @@ export const jsFilterNodeDescriptor: NodeComponentDescriptor<'jsFilter'> = {
 };
 
 export const jsMapNodeDescriptor: NodeComponentDescriptor<'jsMap'> = {
-  Output: ({ node, data, renderMode = 'compact', allowLargeStoredValueActions, wrapLines }) => (
+  Output: ({ node, data, renderMarkdown, renderMode = 'compact', allowLargeStoredValueActions, wrapLines }) => (
     <JSListNodeOutputBody
       node={node}
       data={data}
+      renderMarkdown={renderMarkdown}
       renderMode={renderMode}
       allowLargeStoredValueActions={allowLargeStoredValueActions}
       wrapLines={wrapLines}
     />
   ),
-  FullscreenOutput: ({ node, data, renderMode = 'expanded-preview', allowLargeStoredValueActions, wrapLines }) => (
+  FullscreenOutput: ({ node, data, renderMarkdown, renderMode = 'expanded-preview', allowLargeStoredValueActions, wrapLines }) => (
     <JSListNodeOutputBody
       node={node}
       data={data}
+      renderMarkdown={renderMarkdown}
       renderMode={renderMode}
       allowLargeStoredValueActions={allowLargeStoredValueActions}
       wrapLines={wrapLines}

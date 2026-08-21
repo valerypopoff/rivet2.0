@@ -12,7 +12,7 @@ export const LoopControllerNodeOutput: FC<{
   renderMode?: OutputRenderMode;
   allowLargeStoredValueActions?: boolean;
   wrapLines?: boolean;
-}> = ({ outputs, isCompact, renderMode, allowLargeStoredValueActions, wrapLines }) => {
+}> = ({ outputs, renderMarkdown, isCompact, renderMode, allowLargeStoredValueActions, wrapLines }) => {
   const outputKeys = Object.keys(outputs).filter((key) => key.startsWith('output') && outputs[key as PortId] != null);
 
   const breakLoop = outputs['break' as PortId] != null && outputs['break' as PortId]!.type !== 'control-flow-excluded';
@@ -32,6 +32,7 @@ export const LoopControllerNodeOutput: FC<{
             key={key}
             value={outputs[key as PortId]}
             isCompact={isCompact}
+            renderMarkdown={renderMarkdown}
             mode={renderMode}
             allowLargeStoredValueActions={allowLargeStoredValueActions}
             wrapLines={wrapLines}

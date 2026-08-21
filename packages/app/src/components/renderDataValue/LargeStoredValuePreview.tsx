@@ -1,6 +1,7 @@
 import { css } from '@emotion/react';
 import prettyBytes from 'pretty-bytes';
 import { useEffect, useId, useMemo, useRef, useState, type FC } from 'react';
+import { useMarkdown } from '../../hooks/useMarkdown.js';
 import { useDataRefs } from '../../providers/ProvidersContext.js';
 import type { StoredDataValue } from '../../state/dataFlow.js';
 import { FULL_RENDER_SAFE_THRESHOLD_CHARS } from '../../utils/outputStorageLimits.js';
@@ -103,9 +104,10 @@ const styles = css`
 export const LargeStoredValuePreview: FC<{
   value: Extract<StoredDataValue, { storage: 'ref' }>;
   mode: OutputRenderMode;
+  renderMarkdown?: boolean;
   allowLargeStoredValueActions?: boolean;
   wrapLines?: boolean;
-}> = ({ value, mode, allowLargeStoredValueActions, wrapLines = true }) => {
+}> = ({ value, mode, renderMarkdown, allowLargeStoredValueActions, wrapLines = true }) => {
   const dataRefs = useDataRefs();
   const [showFull, setShowFull] = useState(mode === 'full');
   const [chunkPage, setChunkPage] = useState(0);
@@ -167,6 +169,8 @@ export const LargeStoredValuePreview: FC<{
   const showActions = shouldShowLargeStoredValueActions({ mode, allowLargeStoredValueActions });
   const missingRef = mode !== 'compact' && restoredValue == null;
   const usesFoldingJsonPreview = preview.kind === 'json' && showFull && !shouldPageFullText;
+  const markdownEnabled = preview.kind === 'text' && showFull && !!renderMarkdown;
+  const markdownRendered = useMarkdown(activeChunkText, markdownEnabled);
   const { providerRootProps, clearSearchAutoExpansion, activeMatchRange } = useLargeStoredValueFullscreenSearch({
     providerId,
     rootRef,
@@ -181,6 +185,7 @@ export const LargeStoredValuePreview: FC<{
     chunkPage,
     setChunkPage,
     highlightMode: usesFoldingJsonPreview ? 'external' : 'dom',
+    renderMarkdown: markdownEnabled,
   });
 
   const handleCopyFullValue = () => {
@@ -241,6 +246,8 @@ export const LargeStoredValuePreview: FC<{
               <div className="json-preview-content">
                 <ColorizedPreformattedText text={activeChunkText ?? ''} language="json" wrapWords />
               </div>
+            ) : markdownEnabled ? (
+              <div className="markdown-body rivet-markdown-output" dangerouslySetInnerHTML={markdownRendered} />
             ) : (
               <pre>{activeChunkText}</pre>
             )}
@@ -260,7 +267,11 @@ export const LargeStoredValuePreview: FC<{
         </div>
       ) : (
         <div ref={contentRef} className="preview-content">
-          <pre>{showFull ? activeChunkText : preview.kind === 'summary' ? preview.label : preview.excerpt}</pre>
+          {markdownEnabled ? (
+            <div className="markdown-body rivet-markdown-output" dangerouslySetInnerHTML={markdownRendered} />
+          ) : (
+            <pre>{showFull ? activeChunkText : preview.kind === 'summary' ? preview.label : preview.excerpt}</pre>
+          )}
         </div>
       )}
     </div>
