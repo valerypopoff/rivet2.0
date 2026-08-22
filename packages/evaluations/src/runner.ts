@@ -1894,6 +1894,7 @@ export async function runEvaluationSuite(options: RunEvaluationSuiteOptions): Pr
     .flatMap((testCase, caseIndex) =>
       Array.from({ length: trialCount }, (_, trialIndex) => ({ testCase, caseIndex, trialIndex })),
     );
+  run.requestedTrialCount = work.length;
   const publish = () => {
     run.revision = (run.revision ?? 0) + 1;
     // Progress callbacks and stores may retain earlier revisions. Publish a

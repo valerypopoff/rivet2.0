@@ -2,6 +2,7 @@ import {
   assertEvaluationDatasetSnapshot,
   fingerprintEvaluationDataset,
   normalizeEvaluationRun,
+  preserveEvaluationRunName,
   shouldReplaceEvaluationRun,
   type EvaluationDatasetSnapshot,
   type EvaluationRecordingArtifact,
@@ -79,6 +80,21 @@ export class LocalEvaluationRunStore implements EvaluationRunStore {
         );
       }
     });
+  }
+
+  async updateRunName(input: { projectId: ProjectId; runId: string; name?: string }): Promise<EvaluationRun | undefined> {
+    let renamed: EvaluationRun | undefined;
+    await this.queueRunWrite(input.projectId, async () => {
+      const runs = await this.readRuns(input.projectId);
+      const index = runs.findIndex((candidate) => candidate.id === input.runId);
+      if (index === -1) return;
+      renamed = normalizeEvaluationRun({ ...runs[index]!, name: input.name });
+      await this.write(
+        input.projectId,
+        runs.map((candidate, candidateIndex) => (candidateIndex === index ? renamed! : candidate)),
+      );
+    });
+    return renamed ? structuredClone(renamed) : undefined;
   }
 
   async get(input: { projectId: ProjectId; runId: string }): Promise<EvaluationRun | undefined> {
@@ -218,8 +234,9 @@ export class LocalEvaluationRunStore implements EvaluationRunStore {
   private async putSerialized(run: EvaluationRun, protectedRunIds: ReadonlySet<string>): Promise<string[]> {
     const runs = await this.readRuns(run.projectId);
     const existing = runs.find((candidate) => candidate.id === run.id);
-    if (!shouldReplaceEvaluationRun(existing, run)) return [];
-    const ordered = [run, ...runs.filter((candidate) => candidate.id !== run.id)];
+    const nextRun = preserveEvaluationRunName(existing, run);
+    if (!shouldReplaceEvaluationRun(existing, nextRun)) return [];
+    const ordered = [nextRun, ...runs.filter((candidate) => candidate.id !== run.id)];
     let unprotectedCount = 0;
     const next = ordered.filter((candidate) => {
       if (protectedRunIds.has(candidate.id)) return true;

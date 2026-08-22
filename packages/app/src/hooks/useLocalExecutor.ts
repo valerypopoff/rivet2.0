@@ -50,6 +50,7 @@ import {
   EvaluationGraphExecutionError,
   fingerprintEvaluationDataset,
   finalizeEvaluationRecordingRetention,
+  preserveEvaluationRunName,
   runEvaluationSuite,
   type EvaluationExecutionMetrics,
   type EvaluationRecordingReference,
@@ -749,7 +750,11 @@ export function useLocalExecutor() {
           executionMode: 'browser',
           signal: evaluationAbortController.signal,
           onUpdate: (run) => {
-            updateActiveProjectEvaluationState((state) => ({ ...state, currentRun: run }));
+            updateActiveProjectEvaluationState((state) => {
+              const existing =
+                state.currentRun?.id === run.id ? state.currentRun : state.runs.find((candidate) => candidate.id === run.id);
+              return { ...state, currentRun: preserveEvaluationRunName(existing, run) };
+            });
           },
           runGraph: async ({ project: evaluationProject, graphId, inputs, signal, metadata }) => {
             const startedAt = Date.now();
@@ -888,10 +893,17 @@ export function useLocalExecutor() {
           result,
           suite.configuration?.recordingRetention ?? 'failures-and-baselines',
         );
-        if (datasetSnapshotWarning) finalizedResult.warnings.push(datasetSnapshotWarning);
+        const currentEvaluationState = store.get(evaluationsState);
+        const finalizedRun = preserveEvaluationRunName(
+          currentEvaluationState.currentRun?.id === finalizedResult.id
+            ? currentEvaluationState.currentRun
+            : currentEvaluationState.runs.find((candidate) => candidate.id === finalizedResult.id),
+          finalizedResult,
+        );
+        if (datasetSnapshotWarning) finalizedRun.warnings.push(datasetSnapshotWarning);
         try {
           await Promise.all(
-            evaluationRecordingRetentionUpdates(runProjectId, finalizedResult.trials).map((update) =>
+            evaluationRecordingRetentionUpdates(runProjectId, finalizedRun.trials).map((update) =>
               evaluationRunStore.updateRecordingRetention(update),
             ),
           );
@@ -899,7 +911,7 @@ export function useLocalExecutor() {
           // Run quality is already final. Report an artifact-store fault as a
           // warning rather than misrepresenting the evaluation itself as an
           // execution error.
-          finalizedResult.warnings.push('Some evaluation recording retention updates could not be saved.');
+          finalizedRun.warnings.push('Some evaluation recording retention updates could not be saved.');
           logRuntimeDebug('Evaluation recording retention was not persisted.', {
             error,
             suiteId,
@@ -907,22 +919,30 @@ export function useLocalExecutor() {
           });
         }
         try {
-          await evaluationRunStore.put(finalizedResult);
+          await evaluationRunStore.put(finalizedRun);
         } catch (error) {
-          finalizedResult.warnings.push(formatEvaluationRunHistoryPersistenceWarning(error));
+          finalizedRun.warnings.push(formatEvaluationRunHistoryPersistenceWarning(error));
           logRuntimeDebug('Completed evaluation was not retained.', { error, suiteId, projectId: runProjectId });
         }
-        updateActiveProjectEvaluationState((state) => ({
-          ...state,
-          runningSuiteId: undefined,
-          currentRun: finalizedResult,
-          selectedRunId: finalizedResult.id,
-          runs: [finalizedResult, ...state.runs.filter((run) => run.id !== finalizedResult.id)],
-        }));
+        updateActiveProjectEvaluationState((state) => {
+          const namedFinalRun = preserveEvaluationRunName(
+            state.currentRun?.id === finalizedRun.id
+              ? state.currentRun
+              : state.runs.find((candidate) => candidate.id === finalizedRun.id),
+            finalizedRun,
+          );
+          return {
+            ...state,
+            runningSuiteId: undefined,
+            currentRun: namedFinalRun,
+            selectedRunId: finalizedRun.id,
+            runs: [namedFinalRun, ...state.runs.filter((run) => run.id !== finalizedRun.id)],
+          };
+        });
         if (store.get(projectState).metadata.id === runProjectId) {
-          toast.info(formatEvaluationCompletionToast(finalizedResult));
+          toast.info(formatEvaluationCompletionToast(finalizedRun));
         }
-        return finalizedResult;
+        return finalizedRun;
       } catch (error) {
         updateActiveProjectEvaluationState((state) => ({ ...state, runningSuiteId: undefined }));
         if (!evaluationAbortController.signal.aborted && isActiveEvaluationProject()) {

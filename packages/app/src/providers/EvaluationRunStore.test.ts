@@ -95,6 +95,17 @@ test('does not let an equal-revision local progress write demote a completed run
   assert.equal(stored?.executionStatus, 'completed');
 });
 
+test('persists a user-assigned run name across newer execution snapshots', async () => {
+  const store = new LocalEvaluationRunStore();
+  const projectId = 'named-run-project' as ProjectId;
+  const running = { ...makeRun('run-1', projectId, 1), executionStatus: 'running' as const, completedAt: undefined };
+  await store.put(running);
+  await store.updateRunName({ projectId, runId: running.id, name: '  Regression check  ' });
+  await store.put(makeRun('run-1', projectId, 2));
+
+  assert.equal((await store.get({ projectId, runId: running.id }))?.name, 'Regression check');
+});
+
 test('normalizes legacy local evaluation runs when reading persisted history', async () => {
   const originalStorage = globalThis.localStorage;
   const storage = makeStorage();

@@ -55,6 +55,17 @@ export function shouldReplaceEvaluationRun(
   return !isTerminalRunExecutionStatus(existing.executionStatus) || isTerminalRunExecutionStatus(incoming.executionStatus);
 }
 
+/**
+ * Execution snapshots never own a user-assigned run name. Preserve it when a
+ * runner publishes a newer progress or terminal revision after a rename.
+ */
+export function preserveEvaluationRunName(
+  existing: Pick<EvaluationRun, 'name'> | undefined,
+  incoming: EvaluationRun,
+): EvaluationRun {
+  return existing?.name !== undefined && incoming.name === undefined ? { ...incoming, name: existing.name } : incoming;
+}
+
 function isPurpose(value: unknown): value is EvaluationRunPurpose {
   return value === 'evaluation' || value === 'execution-benchmark';
 }
@@ -428,6 +439,15 @@ export function normalizeEvaluationRun(value: EvaluationRun | unknown): Evaluati
   // As with legacy trial.status, the old verdict is input-only compatibility
   // data. New v2 values expose one unambiguous qualityStatus instead.
   delete normalized.verdict;
+  const name = typeof value.name === 'string' && value.name.trim().length > 0 ? value.name.trim() : undefined;
+  delete normalized.name;
+  const requestedTrialCount =
+    typeof value.requestedTrialCount === 'number' &&
+    Number.isSafeInteger(value.requestedTrialCount) &&
+    value.requestedTrialCount >= 0
+      ? value.requestedTrialCount
+      : undefined;
+  delete normalized.requestedTrialCount;
   const aggregate = value.aggregate === undefined ? undefined : normalizeEvaluationAggregate(value.aggregate, trials);
   return {
     ...(normalized as unknown as EvaluationRun),
@@ -449,6 +469,8 @@ export function normalizeEvaluationRun(value: EvaluationRun | unknown): Evaluati
     thresholdResults: Array.isArray(value.thresholdResults)
       ? (structuredClone(value.thresholdResults) as EvaluationRun['thresholdResults'])
       : [],
+    ...(name === undefined ? {} : { name }),
+    ...(requestedTrialCount === undefined ? {} : { requestedTrialCount }),
     ...(aggregate === undefined
       ? {}
       : { aggregate: accountingStatus === 'partial' ? withoutAuthoritativeCost(aggregate) : aggregate }),

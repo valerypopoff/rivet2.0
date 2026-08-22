@@ -328,6 +328,19 @@ test('run history favors a terminal snapshot when revisions are equal', () => {
   assert.deepEqual(mergeEvaluationRunHistory([stalePersistedRun], completedRun), [completedRun]);
 });
 
+test('run history preserves a stored user-assigned name while merging a live execution snapshot', () => {
+  const persistedRun = {
+    id: 'named-run',
+    suiteId: suite.id,
+    name: 'Regression check',
+    revision: 1,
+    executionStatus: 'running',
+  } as EvaluationRun;
+  const liveRun = { ...persistedRun, name: undefined, revision: 2, executionStatus: 'running' as const };
+
+  assert.equal(mergeEvaluationRunHistory([persistedRun], liveRun)[0]?.name, 'Regression check');
+});
+
 test('quality presentation remains passed when provider accounting is partial', () => {
   const run = {
     qualityStatus: 'passed',

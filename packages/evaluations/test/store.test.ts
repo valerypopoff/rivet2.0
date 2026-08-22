@@ -503,6 +503,29 @@ test('run stores do not let an equal-revision progress snapshot demote a termina
   assert.equal(stored?.executionStatus, 'completed');
 });
 
+test('run normalization preserves only a valid planned target-execution count', () => {
+  const valid = normalizeEvaluationRun({ ...run(1, 'running'), requestedTrialCount: 3 });
+  const invalid = normalizeEvaluationRun({ ...run(1, 'running'), requestedTrialCount: -1 });
+
+  assert.equal(valid.requestedTrialCount, 3);
+  assert.equal(invalid.requestedTrialCount, undefined);
+});
+
+test('run names survive later execution snapshots and can be cleared explicitly', async () => {
+  const store = new InMemoryEvaluationRunStore();
+  await store.put(run(1, 'running'));
+
+  const renamed = await store.updateRunName({ projectId: 'project' as ProjectId, runId: 'run', name: '  Baseline  ' });
+  assert.equal(renamed?.name, 'Baseline');
+
+  await store.put(run(2, 'completed'));
+  assert.equal((await store.get({ projectId: 'project' as ProjectId, runId: 'run' }))?.name, 'Baseline');
+
+  await store.updateRunName({ projectId: 'project' as ProjectId, runId: 'run' });
+  await store.put(run(3, 'completed'));
+  assert.equal((await store.get({ projectId: 'project' as ProjectId, runId: 'run' }))?.name, undefined);
+});
+
 function recording(overrides: Partial<EvaluationRecordingArtifact> = {}): EvaluationRecordingArtifact {
   return {
     projectId: 'project' as ProjectId,

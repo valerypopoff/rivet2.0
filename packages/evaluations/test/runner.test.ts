@@ -272,6 +272,7 @@ test('progress updates are detached immutable revisions', async () => {
   assert.ok(updates.length >= 3);
   assert.equal(updates[0]?.revision, 1);
   assert.equal(updates[0]?.trials.length, 0);
+  assert.equal(updates[0]?.requestedTrialCount, 2);
   assert.equal(updates[0]?.provenance.accountingComplete, true);
   assert.deepEqual(updates[0]?.warnings, []);
   assert.equal(updates.at(-1)?.provenance.accountingComplete, false);
@@ -2105,6 +2106,7 @@ test('publishes the running shell before the first target graph starts', async (
       assert.equal(published, true);
       assert.equal(updates[0]?.executionStatus, 'running');
       assert.deepEqual(updates[0]?.trials, []);
+      assert.equal(updates[0]?.requestedTrialCount, 1);
       return { outputs: { result: 'ok' }, metrics: { durationMs: 1 } };
     },
   });

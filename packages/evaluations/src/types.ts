@@ -377,6 +377,8 @@ export type EvaluationRun = {
   projectId: ProjectId;
   suiteId: string;
   suiteName: string;
+  /** Optional user-assigned label for distinguishing retained runs. */
+  name?: string;
   /**
    * Monotonically increases while a run is persisted. Stores use it to reject
    * a delayed live-progress write after a newer completed snapshot.
@@ -388,6 +390,8 @@ export type EvaluationRun = {
   purpose: EvaluationRunPurpose;
   /** Captures the suite semantics that produced this run. */
   evaluationMode?: EvaluationSuiteMode;
+  /** Planned target executions, retained so live progress does not depend on a later suite edit. */
+  requestedTrialCount?: number;
   executionStatus: 'queued' | 'running' | 'completed' | 'canceled' | 'error';
   qualityStatus: EvaluationQualityStatus;
   qualityReason: EvaluationQualityReason;
@@ -473,6 +477,8 @@ export type EvaluationGraphRunner = (input: {
 
 export type EvaluationRunStore = {
   put(run: EvaluationRun): Promise<void>;
+  /** Sets a user-assigned run name; omit the name to restore the Unnamed label. */
+  updateRunName(input: { projectId: ProjectId; runId: string; name?: string }): Promise<EvaluationRun | undefined>;
   get(input: { projectId: ProjectId; runId: string }): Promise<EvaluationRun | undefined>;
   list(input: { projectId: ProjectId; suiteId?: string }): Promise<readonly EvaluationRun[]>;
   delete(input: { projectId: ProjectId; runId: string }): Promise<void>;

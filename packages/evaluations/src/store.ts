@@ -1,5 +1,5 @@
 import { assertEvaluationDatasetSnapshot } from './canonical.js';
-import { normalizeEvaluationRun, shouldReplaceEvaluationRun } from './normalization.js';
+import { normalizeEvaluationRun, preserveEvaluationRunName, shouldReplaceEvaluationRun } from './normalization.js';
 import type {
   EvaluationDatasetSnapshot,
   EvaluationRecordingArtifact,
@@ -16,8 +16,18 @@ export class InMemoryEvaluationRunStore implements EvaluationRunStore {
     const normalized = normalizeEvaluationRun(run);
     const key = `${normalized.projectId}/${normalized.id}`;
     const existing = this.#runs.get(key);
-    if (!shouldReplaceEvaluationRun(existing, normalized)) return;
-    this.#runs.set(key, structuredClone(normalized));
+    const next = preserveEvaluationRunName(existing, normalized);
+    if (!shouldReplaceEvaluationRun(existing, next)) return;
+    this.#runs.set(key, structuredClone(next));
+  }
+
+  async updateRunName(input: { projectId: string; runId: string; name?: string }): Promise<EvaluationRun | undefined> {
+    const key = `${input.projectId}/${input.runId}`;
+    const existing = this.#runs.get(key);
+    if (!existing) return undefined;
+    const renamed = normalizeEvaluationRun({ ...existing, name: input.name });
+    this.#runs.set(key, structuredClone(renamed));
+    return structuredClone(renamed);
   }
 
   async get(input: { projectId: string; runId: string }): Promise<EvaluationRun | undefined> {

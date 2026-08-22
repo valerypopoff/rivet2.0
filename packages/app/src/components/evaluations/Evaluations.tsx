@@ -768,6 +768,13 @@ const styles = css`
     gap: 10px;
     margin-top: 16px;
   }
+  .evaluation-run-name {
+    margin-top: 16px;
+    margin-bottom: 0;
+  }
+  .evaluation-run-name + .evaluation-run-summary {
+    margin-top: 10px;
+  }
   .evaluation-run-summary-row {
     display: grid;
     grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -1111,6 +1118,13 @@ function createSuite(dataset: EvaluationDataset, graphId: string, name = 'New ev
     configuration: { trialCount: 1, concurrency: 4, recordingRetention: 'failures-and-baselines' },
     thresholds: [],
   };
+}
+
+function withEvaluationRunName(run: EvaluationRun, value: string): EvaluationRun {
+  const name = value.trim();
+  if (name.length > 0) return { ...run, name };
+  const { name: _name, ...unnamed } = run;
+  return unnamed;
 }
 
 const ResourceTitle: FC<{
@@ -2222,6 +2236,46 @@ const EvaluationsContainer: FC<{ tryRunEvaluation: TryRunEvaluation; abortEvalua
     }
   };
 
+  const renameEvaluationRun = async (runId: string, value: string) => {
+    const isLiveRun =
+      state.currentRun?.id === runId &&
+      (state.currentRun.executionStatus === 'queued' || state.currentRun.executionStatus === 'running');
+    const rename = (run: EvaluationRun) => (run.id === runId ? withEvaluationRunName(run, value) : run);
+
+    // A live run has no terminal history record yet. Keep its name in memory
+    // until the runner writes the named terminal snapshot. A retained run only
+    // updates after its history write succeeds, avoiding an unsaved name that
+    // looks durable in the Runs tab.
+    if (isLiveRun) {
+      setState((current) => ({
+        ...current,
+        currentRun: current.currentRun ? rename(current.currentRun) : undefined,
+        runs: current.runs.map(rename),
+      }));
+    }
+
+    try {
+      const renamed = await runStore.updateRunName({
+        projectId: project.metadata.id,
+        runId,
+        ...(value.trim().length === 0 ? {} : { name: value.trim() }),
+      });
+      if (renamed === undefined) {
+        if (isLiveRun) return;
+        throw new Error('This evaluation run is no longer available in local history.');
+      }
+      if (!isLiveRun) {
+        setState((current) => ({
+          ...current,
+          currentRun: current.currentRun ? rename(current.currentRun) : undefined,
+          runs: current.runs.map(rename),
+        }));
+      }
+    } catch (error) {
+      toast.error(`Could not save the evaluation run name: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  };
+
   const promoteBaseline = async () => {
     const run = comparableRun;
     if (!run || !selectedSuite) return;
@@ -2585,6 +2639,7 @@ const EvaluationsContainer: FC<{ tryRunEvaluation: TryRunEvaluation; abortEvalua
                   error={runsError}
                   onSelect={(runId) => setState((current) => ({ ...current, selectedRunId: runId }))}
                   onScoreSortChange={setRunScoreSort}
+                  onRename={(runId, name) => void renameEvaluationRun(runId, name)}
                   onOpenRecording={(recordingId) => void openRecording(recordingId)}
                 />
               )}
@@ -4110,6 +4165,7 @@ const Runs: FC<{
   error?: string;
   onSelect: (runId: string) => void;
   onScoreSortChange: (scoreSort: EvaluationScoreSort) => void;
+  onRename: (runId: string, name: string) => void;
   onOpenRecording: (recordingId: string) => void;
 }> = ({
   dataset,
@@ -4121,6 +4177,7 @@ const Runs: FC<{
   error,
   onSelect,
   onScoreSortChange,
+  onRename,
   onOpenRecording,
 }) => {
   const liveRun =
@@ -4135,12 +4192,14 @@ const Runs: FC<{
     [run, scoreSort],
   );
   const [expandedTrialIds, setExpandedTrialIds] = useState<Set<string>>(new Set());
+  const [renamingRunId, setRenamingRunId] = useState<string>();
 
   // Trial ids are run-scoped. Clearing an old run's explicit expansion when
   // the selected run changes avoids a stale card state leaking into a newly
   // selected history entry while still keeping every panel initially closed.
   useEffect(() => {
     setExpandedTrialIds(new Set());
+    setRenamingRunId(undefined);
   }, [run?.id]);
 
   if (status === 'loading') return <div className="empty">Loading evaluation runs…</div>;
@@ -4152,8 +4211,9 @@ const Runs: FC<{
   const runSummary = aggregate ? summarizeEvaluationRun(run) : undefined;
   const summaryAggregate = runSummary?.aggregate ?? aggregate;
   const isScoringRun = run.evaluationMode === 'scoring';
+  const isRunInProgress = run.executionStatus === 'queued' || run.executionStatus === 'running';
   const executionLabel = `${run.executionStatus.charAt(0).toUpperCase()}${run.executionStatus.slice(1)}`;
-  const isExecutionSettled = run.executionStatus !== 'running';
+  const isExecutionSettled = !isRunInProgress;
   const isAccountingPartial = run.accountingStatus === 'partial';
   const hasIncompleteExecution =
     run.executionStatus === 'error' ||
@@ -4184,15 +4244,20 @@ const Runs: FC<{
       summaryAggregate.p95LatencyMs < 0);
   const hasLatencyProblem =
     isExecutionSettled && (hasIncompleteExecution || summaryAggregate === undefined || hasInvalidLatencySummary);
+  const pendingSummaryValue = '…';
+  const formatScoreStatistic = (value: number | undefined) =>
+    isRunInProgress ? pendingSummaryValue : formatEvaluationScore(value);
   const formatLatencyStatistic = (value: number | undefined) => {
-    if (!summaryAggregate) return isExecutionSettled ? 'Unavailable' : 'Calculating';
+    if (isRunInProgress) return pendingSummaryValue;
+    if (!summaryAggregate) return 'Unavailable';
     if (summaryAggregate.trialCount === 0) return 'Unavailable';
     return formatEvaluationDurationSeconds(value);
   };
   const summaryItemClass = (hasProblem: boolean) =>
     `evaluation-run-summary-item${hasProblem ? ' evaluation-run-summary-item-warning' : ''}`;
-  const qualitySummary =
-    isScoringRun && summaryAggregate
+  const qualitySummary = isRunInProgress
+    ? `${run.executionStatus === 'queued' ? 'Queued' : 'Evaluating'}: ${run.trials.length}/${run.requestedTrialCount ?? '…'} ran`
+    : isScoringRun && summaryAggregate
       ? `${quality.label}: ${summaryAggregate.scoredTrialCount ?? 0} of ${summaryAggregate.trialCount} trials`
       : summaryAggregate
         ? summaryAggregate.evaluatedTrialCount > 0
@@ -4210,14 +4275,20 @@ const Runs: FC<{
   );
   const runOptionLabel = (candidate: EvaluationRun) => {
     const normalized = normalizeEvaluationRun(candidate);
+    const liveLabel =
+      normalized.executionStatus === 'queued'
+        ? 'Queued'
+        : normalized.executionStatus === 'running'
+          ? 'Running'
+          : undefined;
     const result =
       normalized.purpose === 'execution-benchmark'
         ? `Execution benchmark · ${normalized.executionStatus}`
-        : `Evaluation · ${getEvaluationRunQualityPresentation(normalized).label}`;
+        : `Evaluation · ${liveLabel ?? getEvaluationRunQualityPresentation(normalized).label}`;
     const score = normalized.aggregate?.meanScore;
     const scoreLabel =
       normalized.evaluationMode === 'scoring' && typeof score === 'number' ? ` · Score ${formatEvaluationScore(score)}` : '';
-    return `${normalized.suiteName} · ${new Date(normalized.startedAt).toLocaleString()} · ${result}${scoreLabel}`;
+    return `${normalized.name ?? 'Unnamed'} · ${normalized.suiteName} · ${new Date(normalized.startedAt).toLocaleString()} · ${result}${scoreLabel}`;
   };
   const formatValue = (value: unknown) => JSON.stringify(value, null, 2) ?? String(value);
   const expectedFieldNameCounts = new Map<string, number>();
@@ -4250,6 +4321,17 @@ const Runs: FC<{
           />
         </div>
       )}
+      <ResourceTitle
+        className="evaluation-run-name"
+        editing={renamingRunId === run.id}
+        fallback="Unnamed"
+        headingLevel="h4"
+        label="evaluation run"
+        value={run.name ?? ''}
+        onStartEditing={() => setRenamingRunId(run.id)}
+        onFinishEditing={() => setRenamingRunId(undefined)}
+        onCommit={(name) => onRename(run.id, name)}
+      />
       <div className="evaluation-run-summary">
         <div className="evaluation-run-summary-row">
           <div className={summaryItemClass(hasQualityProblem)}>
@@ -4265,7 +4347,9 @@ const Runs: FC<{
           <div className={summaryItemClass(hasCostProblem)}>
             <span className="evaluation-run-summary-label">Total cost</span>
             <span className="evaluation-run-summary-value">
-              {isAccountingPartial || summaryAggregate?.totalCostUsd === undefined
+              {isRunInProgress
+                ? pendingSummaryValue
+                : isAccountingPartial || summaryAggregate?.totalCostUsd === undefined
                 ? 'Unavailable'
                 : `$${summaryAggregate.totalCostUsd.toFixed(4)}`}
             </span>
@@ -4284,19 +4368,19 @@ const Runs: FC<{
                 <div>
                   <span className="evaluation-run-summary-statistic-label">Mean</span>
                   <span className="evaluation-run-summary-statistic-value">
-                    {formatEvaluationScore(summaryAggregate?.meanScore)}
+                    {formatScoreStatistic(summaryAggregate?.meanScore)}
                   </span>
                 </div>
                 <div>
                   <span className="evaluation-run-summary-statistic-label">Median</span>
                   <span className="evaluation-run-summary-statistic-value">
-                    {formatEvaluationScore(summaryAggregate?.medianScore)}
+                    {formatScoreStatistic(summaryAggregate?.medianScore)}
                   </span>
                 </div>
                 <div>
                   <span className="evaluation-run-summary-statistic-label">P95</span>
                   <span className="evaluation-run-summary-statistic-value">
-                    {formatEvaluationScore(summaryAggregate?.p95Score)}
+                    {formatScoreStatistic(summaryAggregate?.p95Score)}
                   </span>
                 </div>
               </div>

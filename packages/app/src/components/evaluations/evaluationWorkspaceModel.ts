@@ -3,6 +3,7 @@ import {
   getEvaluationTopLevelOutputId,
   isEvaluationValueCompatibleWithDataType,
   isEvaluationOutputPathSyntaxValid,
+  preserveEvaluationRunName,
   shouldReplaceEvaluationRun,
   validateEvaluationAssertionExpectedValue,
   LEGACY_EVALUATOR_INPUT_IDS,
@@ -927,7 +928,7 @@ export function mergeEvaluationRunHistory(
 
   if (!shouldReplaceEvaluationRun(persistedRuns[existingIndex], currentRun)) return [...persistedRuns];
 
-  return persistedRuns.map((run, index) => (index === existingIndex ? currentRun : run));
+  return persistedRuns.map((run, index) => (index === existingIndex ? preserveEvaluationRunName(run, currentRun) : run));
 }
 
 /**
