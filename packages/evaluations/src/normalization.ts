@@ -256,6 +256,15 @@ export function normalizeEvaluationAggregate(
   // Never let a graph-facing 0..100 value (or corrupt local data) masquerade
   // as the persisted normalized score and render as an impossible 9900/100.
   if (!isNormalizedScore(normalized.meanScore)) delete normalized.meanScore;
+  if (!isNormalizedScore(normalized.medianScore)) delete normalized.medianScore;
+  if (!isNormalizedScore(normalized.p95Score)) delete normalized.p95Score;
+  if (
+    typeof normalized.medianLatencyMs !== 'number' ||
+    !Number.isFinite(normalized.medianLatencyMs) ||
+    normalized.medianLatencyMs < 0
+  ) {
+    delete normalized.medianLatencyMs;
+  }
   if (trials) {
     const completed = trials.filter((trial) => trial.executionStatus === 'completed');
     const evaluated = completed.filter((trial) => trial.qualityStatus === 'passed' || trial.qualityStatus === 'failed');

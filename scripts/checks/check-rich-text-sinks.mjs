@@ -14,6 +14,7 @@ const approvedHtmlSinkFiles = new Set([
   'packages/app/src/components/nodes/CommentNode.tsx',
   'packages/app/src/components/pluginsOverlay/PluginCatalogItem.tsx',
   'packages/app/src/components/renderDataValue/createScalarRenderers.tsx',
+  'packages/app/src/components/renderDataValue/LargeStoredValuePreview.tsx',
   'packages/app/src/components/rivetWebApps/RivetWebAppRenderer.tsx',
   'packages/app/src/components/evaluations/Evaluations.tsx',
   'packages/node/src/webAppClient.ts',

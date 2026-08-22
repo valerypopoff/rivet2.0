@@ -1270,6 +1270,14 @@ function percentile(values: number[], percentage: number): number {
   return ordered[Math.min(ordered.length - 1, Math.ceil((percentage / 100) * ordered.length) - 1)]!;
 }
 
+function median(values: number[]): number {
+  if (values.length === 0) return 0;
+  const ordered = values.slice().sort((left, right) => left - right);
+  const upperIndex = Math.floor(ordered.length / 2);
+  if (ordered.length % 2 !== 0) return ordered[upperIndex]!;
+  return (ordered[upperIndex - 1]! + ordered[upperIndex]!) / 2;
+}
+
 function meanObservationScore(observations: readonly EvaluationObservation[]): number | undefined {
   let weightedScore = 0;
   let totalWeight = 0;
@@ -1376,6 +1384,7 @@ function aggregate(
     scoringCaseMeans.length === 0
       ? undefined
       : scoringCaseMeans.reduce((sum, score) => sum + score, 0) / scoringCaseMeans.length;
+  const incurredLatencies = incurred.map((trial) => trial.totalMetrics.durationMs);
   const aggregateValue: EvaluationAggregate = {
     trialCount: trials.length,
     evaluatedTrialCount: evaluated.length,
@@ -1391,6 +1400,12 @@ function aggregate(
           scoredTrialCount,
           missingScoreTrialCount: trials.length - scoredTrialCount,
           ...(scoringMeanScore === undefined ? {} : { meanScore: scoringMeanScore }),
+          ...(scoringCaseMeans.length === 0
+            ? {}
+            : {
+                medianScore: median(scoringCaseMeans),
+                p95Score: percentile(scoringCaseMeans, 95),
+              }),
         }
       : meanScore === undefined
         ? {}
@@ -1398,11 +1413,9 @@ function aggregate(
     averageLatencyMs:
       incurred.length === 0
         ? 0
-        : incurred.reduce((sum, trial) => sum + trial.totalMetrics.durationMs, 0) / incurred.length,
-    p95LatencyMs: percentile(
-      incurred.map((trial) => trial.totalMetrics.durationMs),
-      95,
-    ),
+        : incurredLatencies.reduce((sum, durationMs) => sum + durationMs, 0) / incurred.length,
+    medianLatencyMs: median(incurredLatencies),
+    p95LatencyMs: percentile(incurredLatencies, 95),
     ...(incurred.length === 0 || totalCostUsd === undefined
       ? {}
       : { totalCostUsd, averageCostUsd: totalCostUsd / incurred.length }),

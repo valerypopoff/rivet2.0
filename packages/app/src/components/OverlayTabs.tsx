@@ -1,13 +1,11 @@
 import { css } from '@emotion/react';
 import clsx from 'clsx';
-import { useAtom, useAtomValue, useSetAtom } from 'jotai';
+import { useAtom, useSetAtom } from 'jotai';
 import { type FC, type ReactNode } from 'react';
 import { useRivetAppHostUiConfig } from '../providers/HostUiConfigContext.js';
 import { hideGraphSearchPanelState, searchingGraphState } from '../state/graphBuilder.js';
-import { evaluationsRunningState } from '../state/evaluations.js';
 import { overlayOpenState, runActivityDrawerOpenState, type OverlayKey } from '../state/ui.js';
 import { getVisibleWorkspaceTabs } from '../utils/workspaceTabs.js';
-import { NodeRunningIndicator } from './visualNode/NodeRunningIndicator.js';
 
 const styles = css`
   display: flex;
@@ -83,14 +81,6 @@ const styles = css`
     }
   }
 
-  .evaluations-menu button {
-    display: flex;
-    flex-direction: row;
-
-    .spinner {
-      margin-left: 4px;
-    }
-  }
 `;
 
 export const OverlayTabs: FC<{
@@ -101,8 +91,6 @@ export const OverlayTabs: FC<{
   const [openOverlay, setOpenOverlay] = useAtom(overlayOpenState);
   const setRunActivityOpen = useSetAtom(runActivityDrawerOpenState);
   const setGraphSearch = useSetAtom(searchingGraphState);
-
-  const evaluationsRunning = useAtomValue(evaluationsRunningState);
 
   const openWorkspace = (workspace: OverlayKey | undefined) => {
     setRunActivityOpen(false);
@@ -132,11 +120,6 @@ export const OverlayTabs: FC<{
             onOpen={() => openWorkspace(tab.targetOverlay)}
           >
             {tab.label}
-            {tab.key === 'evaluations' && evaluationsRunning && (
-              <div className="spinner">
-                <NodeRunningIndicator isRunning delayMs={0} label="Evaluation running" />
-              </div>
-            )}
           </WorkspaceTab>
         ))}
       </div>

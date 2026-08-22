@@ -346,7 +346,13 @@ export type EvaluationAggregate = {
   /** Normalized internal score in the closed 0..1 range. */
   meanScore?: number;
   averageLatencyMs: number;
+  /** Optional so historical persisted runs without this newer factoid remain readable. */
+  medianLatencyMs?: number;
   p95LatencyMs: number;
+  /** Score distribution statistics use equal-weight per-case mean scores. */
+  medianScore?: number;
+  /** Score distribution statistics use equal-weight per-case mean scores. */
+  p95Score?: number;
   totalCostUsd?: number;
   averageCostUsd?: number;
   targetErrorRate: number;

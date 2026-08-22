@@ -2,7 +2,10 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import type { EvaluationDataset, EvaluationSuite } from '@valerypopoff/rivet2-evaluations';
 import type { ProjectId } from '@valerypopoff/rivet2-core';
+import { JSDOM } from 'jsdom';
+import { createRoot } from 'react-dom/client';
 import { renderToStaticMarkup } from 'react-dom/server';
+import { act } from 'react-dom/test-utils';
 import { EvaluationDefinitionTabs } from './EvaluationDefinitionTabs.js';
 import { EvaluationFormField } from './EvaluationFormField.js';
 import { EvaluationSectionTabs } from './EvaluationSectionTabs.js';
@@ -50,6 +53,50 @@ test('suite sidebar renders resource rows with an explicit current selection', (
   assert.match(html, /data-contextmenutype="evaluation-dataset"/u);
   assert.match(html, /aria-current="true"/u);
   assert.match(html, /aria-label="Resize evaluations panel"/u);
+});
+
+test('suite sidebar shows a running indicator only on the suite that owns the evaluation', async () => {
+  const dom = new JSDOM('<div id="root"></div>');
+  const restoreGlobals = installDomGlobals(dom);
+  const root = createRoot(dom.window.document.getElementById('root')!);
+
+  try {
+    await act(async () =>
+      root.render(
+        <EvaluationSuiteSidebar
+          canCreateDataset
+          canCreateSuite
+          datasets={[]}
+          getDatasetUsage={() => '0 evaluation suites'}
+          selectedSuiteId="suite-1"
+          selectedDatasetId={undefined}
+          suites={[
+            { id: 'suite-1', name: 'First suite', targetGraphId: 'graph-1' },
+            { id: 'suite-2', name: 'Second suite', targetGraphId: 'graph-2' },
+          ] as EvaluationSuite[]}
+          getGraphName={(suite) => `Graph ${suite.targetGraphId}`}
+          getReferenceStatus={() => ({ datasetExists: true, targetGraphExists: true, evaluatorGraphsExist: true })}
+          onCreateDataset={() => undefined}
+          onCreateSuite={() => undefined}
+          onDeleteDataset={() => undefined}
+          onDeleteSuite={() => undefined}
+          onImportDataset={() => undefined}
+          onImportSuite={() => undefined}
+          onSelectDataset={() => undefined}
+          onSelectSuite={() => undefined}
+          runningSuiteId="suite-2"
+        />,
+      ),
+    );
+
+    const indicators = dom.window.document.querySelectorAll('[role="status"]');
+    assert.equal(indicators.length, 1);
+    assert.equal(indicators[0]?.getAttribute('aria-label'), 'Evaluation suite “Second suite” is running');
+  } finally {
+    await act(async () => root.unmount());
+    restoreGlobals();
+    dom.window.close();
+  }
 });
 
 test('suite tabs expose definition, runs, and comparison availability without button-style navigation', () => {
@@ -178,3 +225,23 @@ test('scoring warning formatting ignores stale pass-fail validation results', ()
   ]);
   assert.doesNotMatch(warnings.join('\n'), /Fix the highlighted|before running/u);
 });
+
+function installDomGlobals(dom: JSDOM): () => void {
+  const keys = ['document', 'Element', 'navigator', 'window', 'IS_REACT_ACT_ENVIRONMENT'] as const;
+  const previousDescriptors = keys.map((key) => [key, Object.getOwnPropertyDescriptor(globalThis, key)] as const);
+
+  Object.defineProperties(globalThis, {
+    document: { configurable: true, value: dom.window.document },
+    Element: { configurable: true, value: dom.window.Element },
+    navigator: { configurable: true, value: dom.window.navigator },
+    window: { configurable: true, value: dom.window },
+    IS_REACT_ACT_ENVIRONMENT: { configurable: true, value: true },
+  });
+
+  return () => {
+    for (const [key, descriptor] of previousDescriptors) {
+      if (descriptor) Object.defineProperty(globalThis, key, descriptor);
+      else Reflect.deleteProperty(globalThis, key);
+    }
+  };
+}

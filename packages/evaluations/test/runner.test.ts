@@ -1309,7 +1309,7 @@ test('scoring suites average trials per case before averaging equally across cas
       // pass/fail contract.
       return {
         outputs: { result: { score: scores[run.caseIndex]![run.trialIndex], passed: 'ignored' } },
-        metrics: { durationMs: 1 },
+        metrics: { durationMs: [[10, 20], [30, 40]][run.caseIndex]![run.trialIndex]! },
       };
     },
   });
@@ -1319,9 +1319,23 @@ test('scoring suites average trials per case before averaging equally across cas
   assert.equal(result.aggregate?.scoredTrialCount, 4);
   assert.equal(result.aggregate?.missingScoreTrialCount, 0);
   assert.ok(Math.abs((result.aggregate?.meanScore ?? 0) - 0.75) < 1e-12);
+  assert.ok(Math.abs((result.aggregate?.medianScore ?? 0) - 0.75) < 1e-12);
+  assert.ok(Math.abs((result.aggregate?.p95Score ?? 0) - 0.85) < 1e-12);
+  assert.equal(result.aggregate?.averageLatencyMs, 26);
+  assert.equal(result.aggregate?.medianLatencyMs, 26);
+  assert.equal(result.aggregate?.p95LatencyMs, 41);
   assert.ok(Math.abs((summary.cases[0]?.meanScore ?? 0) - 0.85) < 1e-12);
   assert.ok(Math.abs((summary.cases[1]?.meanScore ?? 0) - 0.65) < 1e-12);
   assert.equal(result.thresholdResults.length, 0);
+
+  const historicalRun = structuredClone(result);
+  delete historicalRun.aggregate?.medianScore;
+  delete historicalRun.aggregate?.p95Score;
+  delete historicalRun.aggregate?.medianLatencyMs;
+  const historicalSummary = summarizeEvaluationRun(historicalRun)!;
+  assert.ok(Math.abs((historicalSummary.aggregate.medianScore ?? 0) - 0.75) < 1e-12);
+  assert.ok(Math.abs((historicalSummary.aggregate.p95Score ?? 0) - 0.85) < 1e-12);
+  assert.equal(historicalSummary.aggregate.medianLatencyMs, 26);
 });
 
 test('scoring suites retain partial averages but report incomplete score coverage', async () => {

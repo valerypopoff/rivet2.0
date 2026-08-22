@@ -97,6 +97,12 @@ import {
   type EvaluationWorkspaceView,
 } from './evaluationWorkspaceModel.js';
 
+const evaluationScoreSortOptions: Array<{ label: string; value: EvaluationScoreSort }> = [
+  { label: 'Default order', value: 'default' },
+  { label: 'Score: highest first', value: 'score-desc' },
+  { label: 'Score: lowest first', value: 'score-asc' },
+];
+
 const styles = css`
   position: fixed;
   inset: var(--project-selector-height) 0 0;
@@ -757,11 +763,20 @@ const styles = css`
   .status-unable-to-evaluate {
     color: var(--warning);
   }
-  .evaluation-run-summary-grid {
+  .evaluation-run-summary {
+    display: grid;
+    gap: 10px;
+    margin-top: 16px;
+  }
+  .evaluation-run-summary-row {
     display: grid;
     grid-template-columns: repeat(3, minmax(0, 1fr));
     gap: 10px;
-    margin-top: 16px;
+  }
+  .evaluation-run-summary-statistics-row {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px;
   }
   .evaluation-run-summary-item {
     min-width: 0;
@@ -769,6 +784,9 @@ const styles = css`
     border: 1px solid var(--grey-darkish);
     border-radius: 6px;
     background: var(--grey-dark);
+  }
+  .evaluation-run-summary-item-warning {
+    background: color-mix(in srgb, var(--warning) 12%, var(--grey-dark));
   }
   .evaluation-run-summary-label {
     display: block;
@@ -783,6 +801,35 @@ const styles = css`
     font-weight: 600;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+  .evaluation-run-summary-statistics-card-full {
+    grid-column: 1 / -1;
+  }
+  .evaluation-run-summary-statistics-values {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 10px;
+  }
+  .evaluation-run-summary-statistic-label {
+    display: block;
+    margin-bottom: 4px;
+    color: var(--grey-light);
+    font-size: var(--ui-font-size-sm);
+  }
+  .evaluation-run-summary-statistic-value {
+    display: block;
+    overflow: hidden;
+    color: var(--foreground);
+    font-weight: 600;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .evaluation-run-summary-cost-warning {
+    display: block;
+    margin-top: 6px;
+    color: var(--warning);
+    font-size: var(--ui-font-size-sm);
+    line-height: 1.4;
   }
   .evaluation-run-explanation,
   .evaluation-run-no-checks {
@@ -861,10 +908,14 @@ const styles = css`
     display: grid;
     width: 100%;
     min-width: 0;
-    grid-template-columns: minmax(140px, 1fr) auto auto auto;
+    grid-template-columns: minmax(220px, 1fr) minmax(104px, 128px) minmax(120px, 140px) minmax(72px, 88px);
     align-items: center;
     gap: 14px;
     text-align: left;
+  }
+  .evaluation-trial .collapsible-panel-toggle .label {
+    flex: 1 1 auto;
+    min-width: 0;
   }
   .evaluation-trial-toggle-summary .trial-case {
     overflow: hidden;
@@ -874,6 +925,14 @@ const styles = css`
   .evaluation-trial-toggle-summary .trial-duration {
     color: var(--grey-light);
     font-weight: 400;
+  }
+  .evaluation-trial-toggle-summary .trial-execution,
+  .evaluation-trial-toggle-summary .trial-quality,
+  .evaluation-trial-toggle-summary .trial-duration {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
   .evaluation-trial-content {
     padding: 16px;
@@ -955,7 +1014,7 @@ const styles = css`
     margin-top: 16px;
   }
   @media (max-width: 1000px) {
-    .evaluation-run-summary-grid,
+    .evaluation-run-summary-row,
     .evaluation-trial-results,
     .evaluation-observation-list,
     .evaluation-threshold-result-list {
@@ -963,7 +1022,8 @@ const styles = css`
     }
   }
   @media (max-width: 700px) {
-    .evaluation-run-summary-grid,
+    .evaluation-run-summary-row,
+    .evaluation-run-summary-statistics-row,
     .evaluation-trial-results,
     .evaluation-observation-list,
     .evaluation-threshold-result-list {
@@ -976,6 +1036,9 @@ const styles = css`
       grid-template-columns: minmax(0, 1fr) auto;
     }
     .evaluation-trial-toggle-summary .trial-duration {
+      display: none;
+    }
+    .evaluation-trial-toggle-summary .trial-execution {
       display: none;
     }
     .evaluation-runs-score-sort {
@@ -1395,6 +1458,9 @@ function formatEvaluationTimingDiagnostics(value: unknown): unknown {
       }
       if (key === 'averageLatencyMs' && typeof nestedValue === 'number') {
         return ['averageLatency', formatEvaluationDurationSeconds(nestedValue)];
+      }
+      if (key === 'medianLatencyMs' && typeof nestedValue === 'number') {
+        return ['medianLatency', formatEvaluationDurationSeconds(nestedValue)];
       }
       if (key === 'p95LatencyMs' && typeof nestedValue === 'number') {
         return ['p95Latency', formatEvaluationDurationSeconds(nestedValue)];
@@ -4082,12 +4148,66 @@ const Runs: FC<{
   if (!run) return <div className="empty">Run a suite to inspect trials, metrics, and retained recordings here.</div>;
 
   const quality = getEvaluationRunQualityPresentation(run);
-  const visibleWarnings = run.warnings;
   const aggregate = run.aggregate;
-  const scoreSummary = aggregate ? summarizeEvaluationRun(run) : undefined;
+  const runSummary = aggregate ? summarizeEvaluationRun(run) : undefined;
+  const summaryAggregate = runSummary?.aggregate ?? aggregate;
   const isScoringRun = run.evaluationMode === 'scoring';
   const executionLabel = `${run.executionStatus.charAt(0).toUpperCase()}${run.executionStatus.slice(1)}`;
-  const accountingLabel = run.accountingStatus === 'complete' ? 'Complete' : 'Partial';
+  const isExecutionSettled = run.executionStatus !== 'running';
+  const isAccountingPartial = run.accountingStatus === 'partial';
+  const hasIncompleteExecution =
+    run.executionStatus === 'error' ||
+    run.executionStatus === 'canceled' ||
+    run.trials.some((trial) => trial.executionStatus === 'error' || trial.executionStatus === 'canceled');
+  const hasQualityProblem =
+    run.purpose === 'evaluation' && (run.qualityStatus === 'failed' || run.qualityStatus === 'unable-to-evaluate');
+  const hasCostProblem =
+    isExecutionSettled &&
+    (isAccountingPartial || (run.executionStatus === 'completed' && summaryAggregate?.totalCostUsd === undefined));
+  const hasScoreProblem =
+    isScoringRun &&
+    run.purpose === 'evaluation' &&
+    isExecutionSettled &&
+    (summaryAggregate === undefined ||
+      (summaryAggregate.scoredTrialCount ?? 0) < summaryAggregate.trialCount ||
+      !Number.isFinite(summaryAggregate.meanScore) ||
+      !Number.isFinite(summaryAggregate.medianScore) ||
+      !Number.isFinite(summaryAggregate.p95Score));
+  const hasInvalidLatencySummary =
+    summaryAggregate !== undefined &&
+    (summaryAggregate.trialCount === 0 ||
+      !Number.isFinite(summaryAggregate.averageLatencyMs) ||
+      !Number.isFinite(summaryAggregate.medianLatencyMs) ||
+      !Number.isFinite(summaryAggregate.p95LatencyMs) ||
+      summaryAggregate.averageLatencyMs < 0 ||
+      (summaryAggregate.medianLatencyMs ?? 0) < 0 ||
+      summaryAggregate.p95LatencyMs < 0);
+  const hasLatencyProblem =
+    isExecutionSettled && (hasIncompleteExecution || summaryAggregate === undefined || hasInvalidLatencySummary);
+  const formatLatencyStatistic = (value: number | undefined) => {
+    if (!summaryAggregate) return isExecutionSettled ? 'Unavailable' : 'Calculating';
+    if (summaryAggregate.trialCount === 0) return 'Unavailable';
+    return formatEvaluationDurationSeconds(value);
+  };
+  const summaryItemClass = (hasProblem: boolean) =>
+    `evaluation-run-summary-item${hasProblem ? ' evaluation-run-summary-item-warning' : ''}`;
+  const qualitySummary =
+    isScoringRun && summaryAggregate
+      ? `${quality.label}: ${summaryAggregate.scoredTrialCount ?? 0} of ${summaryAggregate.trialCount} trials`
+      : summaryAggregate
+        ? summaryAggregate.evaluatedTrialCount > 0
+          ? `${quality.label}: ${summaryAggregate.passedTrialCount} of ${summaryAggregate.evaluatedTrialCount} passed`
+          : summaryAggregate.unableToEvaluateTrialCount > 0
+            ? `${quality.label}: ${summaryAggregate.unableToEvaluateTrialCount} trials`
+            : quality.label
+        : `${quality.label}: ${run.trials.length} recorded`;
+  const visibleWarnings = run.warnings.filter(
+    (warning) =>
+      !(
+        isAccountingPartial &&
+        warning === 'Some provider pricing was unavailable. Cost totals are unavailable, and cost requirements cannot be evaluated.'
+      ),
+  );
   const runOptionLabel = (candidate: EvaluationRun) => {
     const normalized = normalizeEvaluationRun(candidate);
     const result =
@@ -4130,79 +4250,91 @@ const Runs: FC<{
           />
         </div>
       )}
-      <div className="evaluation-run-summary-grid">
-        <div className="evaluation-run-summary-item">
-          <span className="evaluation-run-summary-label">Quality</span>
-          <span className={`evaluation-run-summary-value status-${run.qualityStatus}`}>{quality.label}</span>
-        </div>
-        <div className="evaluation-run-summary-item">
-          <span className="evaluation-run-summary-label">Execution</span>
-          <span className="evaluation-run-summary-value">{executionLabel}</span>
-        </div>
-        <div className="evaluation-run-summary-item">
-          <span className="evaluation-run-summary-label">Accounting</span>
-          <span className="evaluation-run-summary-value">{accountingLabel}</span>
-        </div>
-        <div className="evaluation-run-summary-item">
-          <span className="evaluation-run-summary-label">{isScoringRun ? 'Score trials' : 'Quality trials'}</span>
-          <span className="evaluation-run-summary-value">
-            {isScoringRun && aggregate
-              ? `${aggregate.scoredTrialCount ?? 0} of ${aggregate.trialCount} scored`
-              : aggregate
-                ? aggregate.evaluatedTrialCount > 0
-                  ? `${aggregate.passedTrialCount} of ${aggregate.evaluatedTrialCount} passed`
-                  : aggregate.unableToEvaluateTrialCount > 0
-                    ? `${aggregate.unableToEvaluateTrialCount} unable to evaluate`
-                    : 'Not evaluated'
-                : `${run.trials.length} recorded`}
-          </span>
-        </div>
-        {isScoringRun ? (
-          <>
-            <div className="evaluation-run-summary-item">
-              <span className="evaluation-run-summary-label">Overall score</span>
-              <span className="evaluation-run-summary-value">{formatEvaluationScore(aggregate?.meanScore)}</span>
-            </div>
-            <div className="evaluation-run-summary-item">
-              <span className="evaluation-run-summary-label">Score coverage</span>
-              <span className="evaluation-run-summary-value">
-                {aggregate ? `${aggregate.scoredTrialCount ?? 0} of ${aggregate.trialCount} trials` : 'Calculating'}
-              </span>
-            </div>
-          </>
-        ) : null}
-        <div className="evaluation-run-summary-item">
-          <span className="evaluation-run-summary-label">P95 latency</span>
-          <span className="evaluation-run-summary-value">
-            {aggregate ? formatEvaluationDurationSeconds(aggregate.p95LatencyMs) : 'Calculating'}
-          </span>
-        </div>
-        {!isScoringRun ? (
-          <div className="evaluation-run-summary-item">
-            <span className="evaluation-run-summary-label">Pass rate</span>
-            <span className="evaluation-run-summary-value">
-              {aggregate
-                ? aggregate.evaluatedTrialCount > 0
-                  ? `${Math.round(aggregate.passRate * 100)}%`
-                  : 'Not evaluated'
-                : 'Calculating'}
+      <div className="evaluation-run-summary">
+        <div className="evaluation-run-summary-row">
+          <div className={summaryItemClass(hasQualityProblem)}>
+            <span className="evaluation-run-summary-label">Quality</span>
+            <span className={`evaluation-run-summary-value status-${run.qualityStatus}`} title={qualitySummary}>
+              {qualitySummary}
             </span>
           </div>
-        ) : null}
-        <div className="evaluation-run-summary-item">
-          <span className="evaluation-run-summary-label">Total cost</span>
-          <span className="evaluation-run-summary-value">
-            {run.accountingStatus === 'partial' || aggregate?.totalCostUsd === undefined
-              ? 'Unavailable'
-              : `$${aggregate.totalCostUsd.toFixed(4)}`}
-          </span>
+          <div className={summaryItemClass(hasIncompleteExecution)}>
+            <span className="evaluation-run-summary-label">Execution</span>
+            <span className="evaluation-run-summary-value">{executionLabel}</span>
+          </div>
+          <div className={summaryItemClass(hasCostProblem)}>
+            <span className="evaluation-run-summary-label">Total cost</span>
+            <span className="evaluation-run-summary-value">
+              {isAccountingPartial || summaryAggregate?.totalCostUsd === undefined
+                ? 'Unavailable'
+                : `$${summaryAggregate.totalCostUsd.toFixed(4)}`}
+            </span>
+            {isAccountingPartial ? (
+              <span className="evaluation-run-summary-cost-warning">
+                Provider pricing was unavailable. Cost thresholds cannot be evaluated and cost comparisons are unavailable.
+              </span>
+            ) : null}
+          </div>
+        </div>
+        <div className="evaluation-run-summary-statistics-row">
+          {isScoringRun ? (
+            <div className={summaryItemClass(hasScoreProblem)} aria-label="Score statistics">
+              <span className="evaluation-run-summary-label">Score</span>
+              <div className="evaluation-run-summary-statistics-values">
+                <div>
+                  <span className="evaluation-run-summary-statistic-label">Mean</span>
+                  <span className="evaluation-run-summary-statistic-value">
+                    {formatEvaluationScore(summaryAggregate?.meanScore)}
+                  </span>
+                </div>
+                <div>
+                  <span className="evaluation-run-summary-statistic-label">Median</span>
+                  <span className="evaluation-run-summary-statistic-value">
+                    {formatEvaluationScore(summaryAggregate?.medianScore)}
+                  </span>
+                </div>
+                <div>
+                  <span className="evaluation-run-summary-statistic-label">P95</span>
+                  <span className="evaluation-run-summary-statistic-value">
+                    {formatEvaluationScore(summaryAggregate?.p95Score)}
+                  </span>
+                </div>
+              </div>
+            </div>
+          ) : null}
+          <div
+            className={`${summaryItemClass(hasLatencyProblem)}${isScoringRun ? '' : ' evaluation-run-summary-statistics-card-full'}`}
+            aria-label="Latency statistics"
+          >
+            <span className="evaluation-run-summary-label">Target graph latency</span>
+            <div className="evaluation-run-summary-statistics-values">
+              <div>
+                <span className="evaluation-run-summary-statistic-label">Mean</span>
+                <span className="evaluation-run-summary-statistic-value">
+                  {formatLatencyStatistic(summaryAggregate?.averageLatencyMs)}
+                </span>
+              </div>
+              <div>
+                <span className="evaluation-run-summary-statistic-label">Median</span>
+                <span className="evaluation-run-summary-statistic-value">
+                  {formatLatencyStatistic(summaryAggregate?.medianLatencyMs)}
+                </span>
+              </div>
+              <div>
+                <span className="evaluation-run-summary-statistic-label">P95</span>
+                <span className="evaluation-run-summary-statistic-value">
+                  {formatLatencyStatistic(summaryAggregate?.p95LatencyMs)}
+                </span>
+              </div>
+            </div>
+          </div>
         </div>
       </div>
 
       <div className="evaluation-run-summary-notice">
         <p className="evaluation-run-explanation">{quality.explanation}</p>
       </div>
-      {isScoringRun && scoreSummary ? (
+      {isScoringRun && runSummary ? (
         <div className="evaluation-threshold-results">
           <h3>Scores by case</h3>
           <p className="muted">
@@ -4218,7 +4350,7 @@ const Runs: FC<{
               </tr>
             </thead>
             <tbody>
-              {scoreSummary.cases.map((testCase) => (
+              {runSummary.cases.map((testCase) => (
                 <tr key={testCase.caseId}>
                   <td>{testCase.caseName}</td>
                   <td>{formatEvaluationScore(testCase.meanScore)}</td>
@@ -4238,13 +4370,6 @@ const Runs: FC<{
           comes from the requirements below.
         </p>
       ) : null}
-      {run.accountingStatus === 'partial' ? (
-        <p className="evaluation-run-no-checks">
-          Some provider pricing was unavailable. Execution and quality results remain valid unless a configured cost
-          threshold requires the missing amount.
-        </p>
-      ) : null}
-
       {run.thresholdResults.length > 0 ? (
         <div className="evaluation-threshold-results">
           <h3>Aggregate quality requirements</h3>
@@ -4280,20 +4405,12 @@ const Runs: FC<{
         </div>
       ) : null}
 
-      {isScoringRun && scoreSummary && (runs.length > 1 || run.trials.length > 1) ? (
+      {isScoringRun && runSummary && (runs.length > 1 || run.trials.length > 1) ? (
         <div className="evaluation-trial-sort">
           <EvaluationFormField className="evaluation-runs-score-sort" label="Sort by score">
             <Select
-              options={[
-                { label: 'Default order', value: 'default' },
-                { label: 'Highest to lowest', value: 'score-desc' },
-                { label: 'Lowest to highest', value: 'score-asc' },
-              ]}
-              value={[
-                { label: 'Default order', value: 'default' },
-                { label: 'Highest to lowest', value: 'score-desc' },
-                { label: 'Lowest to highest', value: 'score-asc' },
-              ].find((option) => option.value === scoreSort)}
+              options={evaluationScoreSortOptions}
+              value={evaluationScoreSortOptions.find((option) => option.value === scoreSort)}
               onChange={(value) => onScoreSortChange((value?.value ?? 'default') as EvaluationScoreSort)}
             />
           </EvaluationFormField>
@@ -4303,9 +4420,14 @@ const Runs: FC<{
       <div className="evaluation-trial-list">
         {sortedTrials.map((trial) => {
           const recordings: Array<{ label: string; reference: EvaluationRecordingReference }> = [];
-          if (trial.recording) recordings.push({ label: 'Target', reference: trial.recording });
+          if (trial.recording) recordings.push({ label: 'Load target graph recording', reference: trial.recording });
           for (const observation of trial.observations) {
-            if (observation.recording) recordings.push({ label: observation.name, reference: observation.recording });
+            if (observation.recording) {
+              recordings.push({
+                label: `Load '${observation.name}' graph recording`,
+                reference: observation.recording,
+              });
+            }
           }
           const isOpen = expandedTrialIds.has(trial.id);
           const expectedValues = Object.fromEntries(
@@ -4348,16 +4470,24 @@ const Runs: FC<{
               ariaControls={`evaluation-trial-${trial.id}`}
               label={
                 <span className="evaluation-trial-toggle-summary">
-                  <span className="trial-case">
+                  <span className="trial-case" title={`${trial.caseName} · Trial ${trial.trialIndex + 1}`}>
                     {trial.caseName} · Trial {trial.trialIndex + 1}
                   </span>
-                  <span className={`status-${trial.executionStatus === 'completed' ? 'pass' : 'fail'}`}>
-                    Execution {trial.executionStatus}
+                  <span
+                    className={`trial-execution status-${trial.executionStatus === 'completed' ? 'pass' : 'fail'}`}
+                    title={trial.executionStatus === 'completed' ? 'Executed' : `Execution ${trial.executionStatus}`}
+                  >
+                    {trial.executionStatus === 'completed' ? 'Executed' : `Execution ${trial.executionStatus}`}
                   </span>
-                  <span className={`status-${trialStatusClass}`} title={trial.qualityReason.message}>
+                  <span
+                    className={`trial-quality status-${trialStatusClass}`}
+                    title={trial.qualityReason.message}
+                  >
                     {trialQualityLabel}
                   </span>
-                  <span className="trial-duration">{formatEvaluationDurationSeconds(trial.totalMetrics.durationMs)}</span>
+                  <span className="trial-duration" title={formatEvaluationDurationSeconds(trial.totalMetrics.durationMs)}>
+                    {formatEvaluationDurationSeconds(trial.totalMetrics.durationMs)}
+                  </span>
                 </span>
               }
             >
@@ -4525,7 +4655,7 @@ const Runs: FC<{
                           className="evaluation-secondary-action"
                           onClick={() => onOpenRecording(recording.reference.id)}
                         >
-                          Open {recording.label}
+                          {recording.label}
                         </Button>
                       </span>
                     ))

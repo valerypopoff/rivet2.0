@@ -2039,8 +2039,11 @@ Markdown structure and safe links while removing scripts, active elements, event
 attributes, inline styles, SVG, and unsafe protocols. Direct `marked(...)` calls and
 new raw HTML sinks are rejected by
 `scripts/checks/check-rich-text-sinks.mjs` unless the file is an audited renderer
-owner. `trusted-static` is reserved for checked-in constant prose; project or
-execution content must never use it.
+owner. `LargeStoredValuePreview` is one such owner: it receives the branded,
+sanitized result of `useMarkdown` when a user loads a long string value, so the
+full-value and ordinary-output paths preserve the same boundary. `trusted-static`
+is reserved for checked-in constant prose; project or execution content must
+never use it.
 
 ## Known Architectural Tensions
 

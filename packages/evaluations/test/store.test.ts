@@ -249,7 +249,10 @@ test('scoring run normalization drops a graph-facing score from stored aggregate
     missingScoreTrialCount: 0,
     passRate: 0,
     meanScore: 85,
+    medianScore: 85,
+    p95Score: 85,
     averageLatencyMs: 2,
+    medianLatencyMs: -2,
     p95LatencyMs: 2,
     targetErrorRate: 0,
     evaluatorErrorRate: 0,
@@ -260,6 +263,9 @@ test('scoring run normalization drops a graph-facing score from stored aggregate
   const normalized = normalizeEvaluationRun(scoringRun);
   assert.equal(normalized.qualityStatus, 'unable-to-evaluate');
   assert.equal(normalized.aggregate?.meanScore, undefined);
+  assert.equal(normalized.aggregate?.medianScore, undefined);
+  assert.equal(normalized.aggregate?.p95Score, undefined);
+  assert.equal(normalized.aggregate?.medianLatencyMs, undefined);
   assert.equal(normalized.aggregate?.scoredTrialCount, 0);
   assert.equal(normalized.aggregate?.missingScoreTrialCount, 1);
 });
