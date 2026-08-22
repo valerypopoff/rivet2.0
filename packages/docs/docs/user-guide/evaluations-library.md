@@ -1,8 +1,8 @@
 # Evaluations library and CLI
 
-The desktop/browser workspace and the public package share the same portable evaluation model, but they do not share a storage backend automatically.
+The desktop/browser workspace and the public package share the same portable evaluation model, but separate Rivet installations do not share a storage backend automatically.
 
-Rivet's application-local library owns reusable suites, datasets, and compact baselines. An `EvaluationRunStore` owns project-scoped run history, immutable dataset snapshots, recording references, and recording artifacts. The public package does not assume a browser, filesystem, executor, or hosted store.
+The app-level `EvaluationStore` owns the complete Evaluations database: reusable suites, datasets, compact baselines, legacy migration markers, project-scoped run history, immutable dataset snapshots, recording references, and recording artifacts. Desktop Rivet backs it with app-local SQLite; browser Rivet uses IndexedDB. A hosted wrapper can supply one implementation backed by its own tenant database, so Rivet does not require that database to be exposed through a separate server. The narrower `EvaluationRunStore` remains useful to CLI and programmatic callers that persist only run evidence. The public package does not assume a browser, filesystem, executor, or hosted store.
 
 ## Programmatic API
 
@@ -21,7 +21,7 @@ The result keeps these concerns separate:
 - `accountingStatus`: whether requested usage and cost evidence is complete;
 - trials, observations, aggregates, thresholds, provenance, warnings, and recording references.
 
-Use `onUpdate` when a UI needs detached in-memory progress snapshots. Persistence stays outside the runner: a host uses the separate `EvaluationRunStore` contract to save terminal runs, immutable dataset snapshots, and replay artifacts. The engine validates bindings, enabled-case values, evaluator contracts, assertions, thresholds, and execution settings before allocating workers.
+Use `onUpdate` when a UI needs detached in-memory progress snapshots. Persistence stays outside the runner: a non-UI caller can use `EvaluationRunStore` for terminal runs and their evidence, while a full app or wrapper uses `EvaluationStore` for those artifacts and its reusable library. The engine validates bindings, enabled-case values, evaluator contracts, assertions, thresholds, and execution settings before allocating workers.
 
 See the package exports for transfer helpers, normalization, baseline creation, assertion evaluation, bounded work-pool scheduling, and store implementations.
 
@@ -49,7 +49,7 @@ const run = await runEvaluationSuite({
 await evaluationRunStore.put(run);
 ```
 
-The adapter must return portable outputs and valid non-negative finite metrics. `metadata` identifies the evaluation run, suite, case, trial, and target/evaluator phase without adding reserved Graph Inputs to the graph. Hosts that persist historical datasets or recordings write those artifacts through `EvaluationRunStore` at their own lifecycle boundaries; `runEvaluationSuite()` does not do that implicitly.
+The adapter must return portable outputs and valid non-negative finite metrics. `metadata` identifies the evaluation run, suite, case, trial, and target/evaluator phase without adding reserved Graph Inputs to the graph. Hosts that persist historical datasets or recordings write those artifacts through `EvaluationRunStore` or its complete `EvaluationStore` extension at their own lifecycle boundaries; `runEvaluationSuite()` does not do that implicitly.
 
 ## CLI
 

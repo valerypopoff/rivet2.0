@@ -39,6 +39,17 @@ function isTerminalRunExecutionStatus(status: EvaluationRun['executionStatus']):
   return status === 'completed' || status === 'canceled' || status === 'error';
 }
 
+function reconcileRecordingReference(
+  primary: EvaluationTrial['recording'],
+  secondary: EvaluationTrial['recording'],
+): EvaluationTrial['recording'] {
+  if (!primary) return secondary;
+  if (!secondary) return primary;
+  const rank = (retention: NonNullable<EvaluationTrial['recording']>['retention']): number =>
+    retention === 'temporary' ? 0 : retention === 'failure' ? 1 : 2;
+  return rank(secondary.retention) > rank(primary.retention) ? secondary : primary;
+}
+
 /**
  * Orders snapshots for one run without allowing an equal-revision progress
  * update to demote a terminal result. Writers and delayed UI reads share this
@@ -52,7 +63,9 @@ export function shouldReplaceEvaluationRun(
   const existingRevision = existing.revision ?? 0;
   const incomingRevision = incoming.revision ?? 0;
   if (incomingRevision !== existingRevision) return incomingRevision > existingRevision;
-  return !isTerminalRunExecutionStatus(existing.executionStatus) || isTerminalRunExecutionStatus(incoming.executionStatus);
+  return (
+    !isTerminalRunExecutionStatus(existing.executionStatus) || isTerminalRunExecutionStatus(incoming.executionStatus)
+  );
 }
 
 /**
@@ -64,6 +77,80 @@ export function preserveEvaluationRunName(
   incoming: EvaluationRun,
 ): EvaluationRun {
   return existing?.name !== undefined && incoming.name === undefined ? { ...incoming, name: existing.name } : incoming;
+}
+
+/**
+ * Reconciles two snapshots of the same run without discarding evidence.
+ *
+ * Revisions remain authoritative. Within one revision, however, persistence
+ * and recording-retention updates can race with a terminal UI snapshot. Keep
+ * the snapshot with the fuller trial set, while still allowing a terminal
+ * snapshot to complete a progress snapshot and allowing recording references
+ * and warnings to enrich already-settled evidence.
+ */
+export function reconcileEvaluationRunSnapshots(
+  existing: EvaluationRun | undefined,
+  incoming: EvaluationRun,
+): EvaluationRun {
+  if (!existing) return incoming;
+
+  const existingRevision = existing.revision ?? 0;
+  const incomingRevision = incoming.revision ?? 0;
+  if (incomingRevision < existingRevision) return existing;
+  if (incomingRevision > existingRevision) return preserveEvaluationRunName(existing, incoming);
+  if (!shouldReplaceEvaluationRun(existing, incoming)) return existing;
+
+  const existingTerminal = isTerminalRunExecutionStatus(existing.executionStatus);
+  const incomingTerminal = isTerminalRunExecutionStatus(incoming.executionStatus);
+  const existingTrials = existing.trials ?? [];
+  const incomingTrials = incoming.trials ?? [];
+  const incomingIsPrimary =
+    incomingTerminal !== existingTerminal ? incomingTerminal : incomingTrials.length >= existingTrials.length;
+  const primary = preserveEvaluationRunName(existing, incomingIsPrimary ? incoming : existing);
+  const secondary = incomingIsPrimary ? existing : incoming;
+  const primaryTrials = primary.trials ?? [];
+  const secondaryTrialList = secondary.trials ?? [];
+  const name = existing.name ?? incoming.name;
+  const primaryTrialIds = new Set(primaryTrials.map((trial) => trial.id));
+  const secondaryTrials = new Map(secondaryTrialList.map((trial) => [trial.id, trial] as const));
+
+  return {
+    ...primary,
+    trials: [
+      ...primaryTrials.map((trial) => {
+        const other = secondaryTrials.get(trial.id);
+        if (!other) return trial;
+        const secondaryObservations = new Map(
+          (other.observations ?? []).map((observation) => [observation.id, observation] as const),
+        );
+        const primaryObservationIds = new Set((trial.observations ?? []).map((observation) => observation.id));
+        const recording = reconcileRecordingReference(trial.recording, other.recording);
+        return {
+          ...trial,
+          ...(recording === undefined ? {} : { recording }),
+          observations: [
+            ...(trial.observations ?? []).map((observation) => {
+              const otherObservation = secondaryObservations.get(observation.id);
+              const observationRecording = reconcileRecordingReference(
+                observation.recording,
+                otherObservation?.recording,
+              );
+              return observationRecording === observation.recording
+                ? observation
+                : {
+                    ...observation,
+                    ...(observationRecording === undefined ? {} : { recording: observationRecording }),
+                  };
+            }),
+            ...(other.observations ?? []).filter((observation) => !primaryObservationIds.has(observation.id)),
+          ],
+        };
+      }),
+      ...secondaryTrialList.filter((trial) => !primaryTrialIds.has(trial.id)),
+    ],
+    ...(name === undefined ? {} : { name }),
+    warnings: [...new Set([...(primary.warnings ?? []), ...(secondary.warnings ?? [])])],
+  };
 }
 
 function isPurpose(value: unknown): value is EvaluationRunPurpose {

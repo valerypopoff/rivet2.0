@@ -6,7 +6,7 @@ sidebar_position: 1
 
 Evaluations run complete Rivet graphs against reusable, typed datasets. A suite maps dataset fields to a target graph, runs every enabled case for one or more trials, and then judges the resulting outputs with deterministic checks or ordinary Rivet evaluator graphs.
 
-Suites, datasets, and compact baselines belong to Rivet's application-local Evaluations library. They remain available when projects close or change and are not written into `.rivet-project` or `.rivet-data` files. Open a project when you need to select or execute its target and evaluator graphs. Run history, historical dataset snapshots, and replayable recordings stay scoped to the project that produced them.
+Suites, datasets, compact baselines, run history, historical dataset snapshots, and replayable recordings live in Rivet's application-local Evaluations database. They remain available when projects close or change and are not written into `.rivet-project` or `.rivet-data` files. Desktop Rivet uses its native local database; browser Rivet uses browser storage. Those are separate Rivet installations and do not synchronize automatically. Open a project when you need to select or execute its target and evaluator graphs; historical evidence stays scoped to the project that produced it.
 
 A suite has one of two quality modes:
 

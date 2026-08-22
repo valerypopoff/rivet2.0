@@ -6,11 +6,18 @@ import {
   type RivetLLMProfileCircuitBreakerPolicy,
   type RivetLLMProfileHealthIdentity,
 } from '@valerypopoff/rivet2-core';
+import { InMemoryEvaluationRunStore } from '@valerypopoff/rivet2-evaluations';
 import {
   createLLMProfileHealthAdminProvider,
   resolveLLMProfileHealthProviders,
+  resolveEvaluationStoreProvider,
   type LLMProfileHealthAdminProvider,
 } from './ProvidersContext.js';
+
+test('a hosted wrapper can replace the complete evaluation persistence boundary', () => {
+  const evaluationStore = new InMemoryEvaluationRunStore();
+  assert.equal(resolveEvaluationStoreProvider({ evaluationStore }), evaluationStore);
+});
 
 const projectId = 'project-1' as ProjectId;
 const otherProjectId = 'project-2' as ProjectId;

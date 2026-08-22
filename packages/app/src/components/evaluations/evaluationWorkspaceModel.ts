@@ -3,8 +3,7 @@ import {
   getEvaluationTopLevelOutputId,
   isEvaluationValueCompatibleWithDataType,
   isEvaluationOutputPathSyntaxValid,
-  preserveEvaluationRunName,
-  shouldReplaceEvaluationRun,
+  reconcileEvaluationRunSnapshots,
   validateEvaluationAssertionExpectedValue,
   LEGACY_EVALUATOR_INPUT_IDS,
   usesLegacyEvaluatorInputEnvelope,
@@ -45,6 +44,26 @@ export type EvaluationRunQualityPresentation = {
 
 /** UI-only ordering; stored run and trial history always keeps its execution order. */
 export type EvaluationScoreSort = 'default' | 'score-desc' | 'score-asc';
+
+/**
+ * A durable history read is independent from runner progress. The Runs pane
+ * must retain either warm history or the runner's latest in-memory snapshot
+ * while that read settles.
+ */
+export type EvaluationRunHistoryLoadStatus = 'idle' | 'loading' | 'ready' | 'error';
+
+export function getEvaluationRunHistoryPresentation(
+  loadStatus: EvaluationRunHistoryLoadStatus,
+  hasScope: boolean,
+  hasCachedHistory: boolean,
+  hasInMemoryRun: boolean,
+): { status: EvaluationRunHistoryLoadStatus; hasEvidence: boolean } {
+  const hasEvidence = hasScope && (hasCachedHistory || hasInMemoryRun);
+  return {
+    status: hasEvidence ? 'ready' : loadStatus === 'idle' && hasScope ? 'loading' : loadStatus,
+    hasEvidence,
+  };
+}
 
 export const evaluationAssertionOperatorOptions: ReadonlyArray<{
   label: string;
@@ -709,6 +728,36 @@ export function getEvaluationRunQualityPresentation(run: EvaluationRun): Evaluat
   };
 }
 
+/** Scores are normalized in stored records but shown on the 0–100 UI scale. */
+export function formatEvaluationScore(value: number | undefined): string {
+  if (value === undefined) return 'Unavailable';
+  const score = value * 100;
+  return `${score.toFixed(score === Math.round(score) ? 0 : 1)}/100`;
+}
+
+/**
+ * Builds the compact label shown in the retained-run picker. EvaluationStore
+ * implementations already normalize records on their persistence boundary, so
+ * this intentionally reads the typed snapshot without cloning its trial
+ * payloads. The Runs view can therefore switch tabs without touching every
+ * input, output, evidence object, or recording reference in history.
+ */
+export function formatEvaluationRunOptionLabel(run: EvaluationRun): string {
+  const liveLabel =
+    run.executionStatus === 'queued' ? 'Queued' : run.executionStatus === 'running' ? 'Running' : undefined;
+  const result =
+    run.purpose === 'execution-benchmark'
+      ? `Execution benchmark · ${run.executionStatus}`
+      : `Evaluation · ${liveLabel ?? getEvaluationRunQualityPresentation(run).label}`;
+  const score = run.aggregate?.meanScore;
+  const scoreLabel =
+    run.evaluationMode === 'scoring' && typeof score === 'number'
+      ? ` · Score ${formatEvaluationScore(score)}`
+      : '';
+  const name = typeof run.name === 'string' && run.name.trim().length > 0 ? run.name.trim() : 'Unnamed';
+  return `${name} · ${run.suiteName} · ${new Date(run.startedAt).toLocaleString()} · ${result}${scoreLabel}`;
+}
+
 /**
  * Scores are normalized internally, but the Runs view displays them on Rivet's
  * 0–100 scale. Keep missing scores last so partial scoring runs stay useful.
@@ -748,16 +797,6 @@ export function sortEvaluationTrialsByScore(
   sort: EvaluationScoreSort,
 ): EvaluationRun['trials'][number][] {
   return sortByOptionalScore(trials, sort, meanEvaluationTrialScore);
-}
-
-export function sortEvaluationRunsByScore(
-  runs: readonly EvaluationRun[],
-  sort: EvaluationScoreSort,
-): EvaluationRun[] {
-  return sortByOptionalScore(runs, sort, (run) => {
-    const score = run.aggregate?.meanScore;
-    return typeof score === 'number' && Number.isFinite(score) ? score : undefined;
-  });
 }
 
 /** Evaluation timings are stored in milliseconds but presented in seconds. */
@@ -926,9 +965,9 @@ export function mergeEvaluationRunHistory(
   const existingIndex = persistedRuns.findIndex((run) => run.id === currentRun.id);
   if (existingIndex === -1) return [currentRun, ...persistedRuns];
 
-  if (!shouldReplaceEvaluationRun(persistedRuns[existingIndex], currentRun)) return [...persistedRuns];
-
-  return persistedRuns.map((run, index) => (index === existingIndex ? preserveEvaluationRunName(run, currentRun) : run));
+  return persistedRuns.map((run, index) =>
+    index === existingIndex ? reconcileEvaluationRunSnapshots(run, currentRun) : run,
+  );
 }
 
 /**

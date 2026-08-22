@@ -7,7 +7,7 @@ import DeleteIcon from 'majesticons/line/delete-bin-line.svg?react';
 import EditIcon from 'majesticons/line/edit-pen-2-line.svg?react';
 import CrossIcon from 'majesticons/line/multiply-line.svg?react';
 import { nanoid } from 'nanoid/non-secure';
-import { type FC, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { type FC, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { toast } from 'react-toastify';
 import {
   createEvaluationBaselineSnapshot,
@@ -18,6 +18,7 @@ import {
   isEvaluationValueCompatibleWithDataType,
   normalizeEvaluationBaselineSnapshot,
   normalizeEvaluationRun,
+  reconcileEvaluationRunSnapshots,
   hasAuthoritativeEvaluationCriteria,
   getEvaluationSuiteMode,
   LEGACY_EVALUATOR_INPUT_IDS,
@@ -32,7 +33,6 @@ import {
   type EvaluationAssertionOperator,
   type EvaluationRun,
   type EvaluationRunPurpose,
-  type EvaluationRecordingReference,
   type EvaluationSuite,
   type EvaluationThreshold,
   type PortableJson,
@@ -40,7 +40,13 @@ import {
 import type { GraphInputNode, Project } from '@valerypopoff/rivet2-core';
 import { graphState } from '../../state/graph.js';
 import { projectsState, projectState } from '../../state/savedGraphs.js';
-import { evaluationsState } from '../../state/evaluations.js';
+import {
+  evaluationsState,
+  getEvaluationRunHistoryScopeKey,
+  isEvaluationRunHistoryCached,
+  type EvaluationRunHistoryScope,
+  type EvaluationRunTrialExpansion,
+} from '../../state/evaluations.js';
 import { overlayOpenState } from '../../state/ui.js';
 import { useEvaluationRunStore, useIOProvider } from '../../providers/ProvidersContext.js';
 import { useLoadRecording } from '../../hooks/useLoadRecording.js';
@@ -61,6 +67,7 @@ import { EvaluationSectionTabs } from './EvaluationSectionTabs.js';
 import { EvaluationSelect as Select } from './EvaluationSelect.js';
 import { EvaluationSuiteSidebar } from './EvaluationSuiteSidebar.js';
 import { EvaluationSuiteRunStatus, getEvaluationSuiteWarnings } from './EvaluationSuiteRunStatus.js';
+import { EvaluationTrialDetails } from './EvaluationTrialDetails.js';
 import { replaceEvaluationDatasetCasesFromCsv, serializeEvaluationDatasetCsv } from './evaluationDatasetCsv.js';
 import {
   canCompareEvaluationSuite,
@@ -78,6 +85,9 @@ import {
   getEvaluationThresholdAuthoringIssue,
   getUnusedExpectedFields,
   formatEvaluationDurationSeconds,
+  formatEvaluationScore,
+  formatEvaluationRunOptionLabel,
+  getEvaluationRunHistoryPresentation,
   mergeEvaluationRunHistory,
   meanEvaluationTrialScore,
   resolveComparableEvaluationRun,
@@ -90,9 +100,9 @@ import {
   removeEvaluationDatasetField,
   removeEvaluationDatasetFieldReferences,
   suggestEvaluationAssertionOperator,
-  sortEvaluationRunsByScore,
   sortEvaluationTrialsByScore,
   type EvaluationScoreSort,
+  type EvaluationRunHistoryLoadStatus,
   type EvaluationTargetOutput,
   type EvaluationWorkspaceView,
 } from './evaluationWorkspaceModel.js';
@@ -102,6 +112,23 @@ const evaluationScoreSortOptions: Array<{ label: string; value: EvaluationScoreS
   { label: 'Score: highest first', value: 'score-desc' },
   { label: 'Score: lowest first', value: 'score-asc' },
 ];
+
+type EvaluationRunSummary = NonNullable<ReturnType<typeof summarizeEvaluationRun>>;
+
+// Completed run snapshots are immutable after they cross the store/runner
+// boundary. Keep the score-by-case derivation by snapshot identity so a Runs
+// tab remount does not repeat its observation walk. The summary intentionally
+// re-derives newer factoids for legacy persisted aggregates that predate them.
+const evaluationRunSummaryCache = new WeakMap<EvaluationRun, EvaluationRunSummary>();
+
+function getCachedEvaluationRunSummary(run: EvaluationRun): EvaluationRunSummary | undefined {
+  if (!run.aggregate) return undefined;
+  const cached = evaluationRunSummaryCache.get(run);
+  if (cached) return cached;
+  const summary = summarizeEvaluationRun(run);
+  if (summary) evaluationRunSummaryCache.set(run, summary);
+  return summary;
+}
 
 const styles = css`
   position: fixed;
@@ -840,7 +867,6 @@ const styles = css`
   }
   .evaluation-run-explanation,
   .evaluation-run-no-checks {
-    max-width: 850px;
     margin: 24px 0 0;
     padding: 12px 14px;
     border-radius: 6px;
@@ -853,10 +879,21 @@ const styles = css`
     margin-top: 0;
   }
   .evaluation-run-explanation {
-    background: color-mix(in srgb, var(--warning) 12%, transparent);
+    width: 100%;
+    max-width: none;
+    background: color-mix(in srgb, var(--foreground) 7%, transparent);
     color: var(--foreground);
   }
+  .evaluation-run-explanation-warning {
+    background: color-mix(in srgb, var(--warning) 12%, transparent);
+  }
+  .evaluation-run-history-refresh-warning {
+    margin: 0 0 16px;
+    color: var(--warning);
+    font-size: var(--ui-font-size-sm);
+  }
   .evaluation-run-no-checks {
+    max-width: 850px;
     background: color-mix(in srgb, var(--grey-light) 9%, transparent);
     color: var(--grey-light);
   }
@@ -910,6 +947,18 @@ const styles = css`
   }
   .evaluation-trial-sort + .evaluation-trial-list {
     margin-top: 12px;
+  }
+  .evaluation-run-delete-action {
+    position: fixed;
+    right: 32px;
+    bottom: 24px;
+    z-index: 55;
+  }
+  @media (max-width: 720px) {
+    .evaluation-run-delete-action {
+      right: 16px;
+      bottom: 16px;
+    }
   }
   .evaluation-trial-toggle-summary {
     display: grid;
@@ -1137,7 +1186,17 @@ const ResourceTitle: FC<{
   onFinishEditing: () => void;
   onStartEditing: () => void;
   value: string;
-}> = ({ className, editing, fallback, headingLevel = 'h1', label, onCommit, onFinishEditing, onStartEditing, value }) => {
+}> = ({
+  className,
+  editing,
+  fallback,
+  headingLevel = 'h1',
+  label,
+  onCommit,
+  onFinishEditing,
+  onStartEditing,
+  value,
+}) => {
   const [draft, setDraft] = useState(value);
   const didFinishEditing = useRef(false);
   const Heading = headingLevel;
@@ -1307,7 +1366,11 @@ function getEvaluationCaseGridTemplate(fields: EvaluationDatasetField[]): string
   ].join(' ');
 }
 
-const RemoveButton: FC<{ className?: string; label: string; onClick: () => void }> = ({ className, label, onClick }) => (
+const RemoveButton: FC<{ className?: string; label: string; onClick: () => void }> = ({
+  className,
+  label,
+  onClick,
+}) => (
   <button
     className={`evaluation-remove-button${className ? ` ${className}` : ''}`}
     type="button"
@@ -1457,39 +1520,6 @@ function formatEvaluationMetricValue(metric: string, value: number | undefined):
   return Number.isInteger(value) ? String(value) : value.toFixed(4);
 }
 
-/**
- * Keeps persisted execution diagnostics in their stable millisecond schema while
- * presenting their elapsed-time values consistently with the Evaluations UI.
- */
-function formatEvaluationTimingDiagnostics(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(formatEvaluationTimingDiagnostics);
-  if (value === null || typeof value !== 'object') return value;
-
-  return Object.fromEntries(
-    Object.entries(value).map(([key, nestedValue]) => {
-      if (key === 'durationMs' && typeof nestedValue === 'number') {
-        return ['duration', formatEvaluationDurationSeconds(nestedValue)];
-      }
-      if (key === 'averageLatencyMs' && typeof nestedValue === 'number') {
-        return ['averageLatency', formatEvaluationDurationSeconds(nestedValue)];
-      }
-      if (key === 'medianLatencyMs' && typeof nestedValue === 'number') {
-        return ['medianLatency', formatEvaluationDurationSeconds(nestedValue)];
-      }
-      if (key === 'p95LatencyMs' && typeof nestedValue === 'number') {
-        return ['p95Latency', formatEvaluationDurationSeconds(nestedValue)];
-      }
-      return [key, formatEvaluationTimingDiagnostics(nestedValue)];
-    }),
-  );
-}
-
-function formatEvaluationScore(value: number | undefined): string {
-  if (value === undefined) return 'Unavailable';
-  const score = value * 100;
-  return `${score.toFixed(score === Math.round(score) ? 0 : 1)}/100`;
-}
-
 function evaluatorInputSourceKey(source: EvaluationEvaluatorInputSource): string {
   if (source.kind === 'dataset-field') return `dataset-field:${source.fieldId}`;
   if (source.kind === 'target-output') return `target-output:${source.outputId}`;
@@ -1556,11 +1586,36 @@ const EvaluationsContainer: FC<{ tryRunEvaluation: TryRunEvaluation; abortEvalua
   const [renamingDatasetId, setRenamingDatasetId] = useState<string>();
   const [renamingSuiteId, setRenamingSuiteId] = useState<string>();
   const [datasetUsageExpanded, setDatasetUsageExpanded] = useState(false);
-  const [runsStatus, setRunsStatus] = useState<'idle' | 'loading' | 'ready' | 'error'>('idle');
+  const [runsStatus, setRunsStatus] = useState<EvaluationRunHistoryLoadStatus>('idle');
   const [runsError, setRunsError] = useState<string>();
-  const [runScoreSort, setRunScoreSort] = useState<EvaluationScoreSort>('default');
+  // Reading history is asynchronous, while deleting a run updates the store
+  // and local selection immediately. A request generation prevents an older
+  // read from putting the deleted record back into the Runs view afterward.
+  const runHistoryReadGeneration = useRef(0);
+  const evaluationMainRef = useRef<HTMLElement>(null);
+  const runScrollTopRef = useRef(0);
+  const restoredRunScrollScopeRef = useRef<string>();
+  // The refresh effect intentionally runs only for a changed project/suite
+  // scope. Keep the latest cache marker in a ref so a successful read does not
+  // schedule a redundant second read merely because it marked the scope warm.
+  const runHistoryScopeRef = useRef(state.runHistoryScope);
+  runHistoryScopeRef.current = state.runHistoryScope;
   const selectedSuite = resolveSelectedEvaluationSuite(state.data.suites, state.selectedSuiteId);
   const selectedSuiteId = selectedSuite?.id;
+  const runHistoryScope: EvaluationRunHistoryScope | undefined =
+    selectedSuiteId && projectAvailable ? { projectId: project.metadata.id, suiteId: selectedSuiteId } : undefined;
+  const runHistoryProjectId = runHistoryScope?.projectId;
+  const runHistorySuiteId = runHistoryScope?.suiteId;
+  const runHistoryScopeKey = runHistoryScope ? getEvaluationRunHistoryScopeKey(runHistoryScope) : undefined;
+  const hasCachedRunHistory = isEvaluationRunHistoryCached(state, runHistoryScope);
+  const visibleRunTrialExpansion =
+    state.runTrialExpansion?.scope.projectId === runHistoryProjectId &&
+    state.runTrialExpansion?.scope.suiteId === runHistorySuiteId
+      ? state.runTrialExpansion
+      : undefined;
+  const runScoreSort: EvaluationScoreSort = runHistoryScopeKey
+    ? (state.runScoreSortByScope[runHistoryScopeKey] ?? 'default')
+    : 'default';
   const localDatasets = state.datasets;
   const selectedDataset = resolveEvaluationDataset(state.datasets, state.selectedDatasetId);
   const selectedDatasetSuites = selectedDataset
@@ -1617,9 +1672,7 @@ const EvaluationsContainer: FC<{ tryRunEvaluation: TryRunEvaluation; abortEvalua
   const addSuite = ({ datasetId, graphId, name }: CreateEvaluationSuiteValue) =>
     setState((current) => {
       const existingDataset =
-        datasetId == null
-          ? undefined
-          : current.datasets.find((dataset) => dataset.id === datasetId);
+        datasetId == null ? undefined : current.datasets.find((dataset) => dataset.id === datasetId);
       const dataset = existingDataset ?? createDataset(name);
       const suite = createSuite(dataset, graphId, name);
       return {
@@ -1632,6 +1685,8 @@ const EvaluationsContainer: FC<{ tryRunEvaluation: TryRunEvaluation; abortEvalua
         selectedSuiteId: suite.id,
         selectedDatasetId: undefined,
         runs: [],
+        runHistoryScope: undefined,
+        runTrialExpansion: undefined,
         selectedRunId: undefined,
       };
     });
@@ -1654,10 +1709,7 @@ const EvaluationsContainer: FC<{ tryRunEvaluation: TryRunEvaluation; abortEvalua
       const remainingRuns = current.runs.filter((run) => !removedSuiteIds.has(run.suiteId));
       return {
         ...current,
-        datasets:
-          datasetId == null
-            ? current.datasets
-            : current.datasets.filter((dataset) => dataset.id !== datasetId),
+        datasets: datasetId == null ? current.datasets : current.datasets.filter((dataset) => dataset.id !== datasetId),
         data: {
           ...current.data,
           suites: current.data.suites.filter((suite) => !removedSuiteIds.has(suite.id)),
@@ -1672,6 +1724,14 @@ const EvaluationsContainer: FC<{ tryRunEvaluation: TryRunEvaluation; abortEvalua
             : undefined,
         currentRun:
           current.currentRun && !removedSuiteIds.has(current.currentRun.suiteId) ? current.currentRun : undefined,
+        runHistoryScope:
+          current.runHistoryScope && !removedSuiteIds.has(current.runHistoryScope.suiteId)
+            ? current.runHistoryScope
+            : undefined,
+        runTrialExpansion:
+          current.runTrialExpansion && !removedSuiteIds.has(current.runTrialExpansion.scope.suiteId)
+            ? current.runTrialExpansion
+            : undefined,
       };
     });
     if (deletionWasBlocked) {
@@ -1725,6 +1785,8 @@ const EvaluationsContainer: FC<{ tryRunEvaluation: TryRunEvaluation; abortEvalua
       selectedSuiteId: suiteId,
       selectedDatasetId: undefined,
       runs: [],
+      runHistoryScope: undefined,
+      runTrialExpansion: undefined,
       selectedRunId: undefined,
     }));
   };
@@ -1736,6 +1798,8 @@ const EvaluationsContainer: FC<{ tryRunEvaluation: TryRunEvaluation; abortEvalua
       selectedSuiteId: undefined,
       selectedDatasetId: datasetId,
       runs: [],
+      runHistoryScope: undefined,
+      runTrialExpansion: undefined,
       selectedRunId: undefined,
     }));
   };
@@ -1748,6 +1812,8 @@ const EvaluationsContainer: FC<{ tryRunEvaluation: TryRunEvaluation; abortEvalua
       selectedSuiteId: undefined,
       selectedDatasetId: dataset.id,
       runs: [],
+      runHistoryScope: undefined,
+      runTrialExpansion: undefined,
       selectedRunId: undefined,
     }));
     setView('dataset');
@@ -1764,6 +1830,8 @@ const EvaluationsContainer: FC<{ tryRunEvaluation: TryRunEvaluation; abortEvalua
             selectedSuiteId: undefined,
             selectedDatasetId: dataset.id,
             runs: [],
+            runHistoryScope: undefined,
+            runTrialExpansion: undefined,
             selectedRunId: undefined,
             currentRun: undefined,
           }));
@@ -1797,6 +1865,8 @@ const EvaluationsContainer: FC<{ tryRunEvaluation: TryRunEvaluation; abortEvalua
             selectedSuiteId: imported.suite.id,
             selectedDatasetId: undefined,
             runs: [],
+            runHistoryScope: undefined,
+            runTrialExpansion: undefined,
             selectedRunId: undefined,
             currentRun: undefined,
           }));
@@ -1825,9 +1895,7 @@ const EvaluationsContainer: FC<{ tryRunEvaluation: TryRunEvaluation; abortEvalua
     setState((current) => ({
       ...current,
       datasets: current.datasets.map((dataset) =>
-        dataset.id === sourceDataset.id
-          ? { ...dataset, cases: [...dataset.cases, testCase] }
-          : dataset,
+        dataset.id === sourceDataset.id ? { ...dataset, cases: [...dataset.cases, testCase] } : dataset,
       ),
     }));
   };
@@ -1839,9 +1907,7 @@ const EvaluationsContainer: FC<{ tryRunEvaluation: TryRunEvaluation; abortEvalua
       return {
         ...current,
         datasets: current.datasets.map((candidate) =>
-          candidate.id === dataset.id
-            ? removeEvaluationDatasetField(candidate, fieldId)
-            : candidate,
+          candidate.id === dataset.id ? removeEvaluationDatasetField(candidate, fieldId) : candidate,
         ),
         data: {
           ...current.data,
@@ -2038,8 +2104,7 @@ const EvaluationsContainer: FC<{ tryRunEvaluation: TryRunEvaluation; abortEvalua
         usesPromptDesignerDraft,
         hasDormantPassFailConfiguration:
           isScoringSuite && (selectedSuite.assertions.length > 0 || (selectedSuite.thresholds?.length ?? 0) > 0),
-        anotherEvaluationRunning:
-          state.runningSuiteId !== undefined && state.runningSuiteId !== selectedSuite.id,
+        anotherEvaluationRunning: state.runningSuiteId !== undefined && state.runningSuiteId !== selectedSuite.id,
       })
     : [];
 
@@ -2060,7 +2125,7 @@ const EvaluationsContainer: FC<{ tryRunEvaluation: TryRunEvaluation; abortEvalua
     hasInvalidEvaluationConfiguration ||
     !referenceStatus?.evaluatorGraphsExist;
   const evaluationDisabledTitle = !projectAvailable
-    ? 'Open a project containing this suite\'s target graph and any evaluator graphs before running it.'
+    ? "Open a project containing this suite's target graph and any evaluator graphs before running it."
     : !referenceStatus?.datasetExists
       ? 'Select an available evaluation dataset before running this suite.'
       : !referenceStatus?.targetGraphExists
@@ -2075,45 +2140,65 @@ const EvaluationsContainer: FC<{ tryRunEvaluation: TryRunEvaluation; abortEvalua
               ? 'Fix invalid dataset values before running this evaluation.'
               : hasInvalidDatasetValues
                 ? 'Fix dataset values that do not match their declared field types before running.'
-              : hasInvalidExecutionSetup
-                ? 'Fix target input bindings, missing case input values, and execution settings before running.'
-                : hasInvalidQualityChecks
-                  ? 'Fix the highlighted deterministic quality checks before running this evaluation.'
-                  : hasInvalidExpectedValues
-                    ? isScoringSuite
-                      ? 'Add missing required dataset values and fix values that do not match their declared field types.'
-                      : 'Add the required expected values and fix values that do not match their quality checks.'
-                    : !referenceStatus?.evaluatorGraphsExist
-                      ? 'Repair or remove missing evaluator graphs before running this suite.'
-                      : hasInvalidEvaluationConfiguration
-                        ? hasInvalidEvaluatorConfiguration && hasInvalidThresholdConfiguration
-                          ? 'Fix the highlighted evaluator graph and aggregate threshold settings before running this evaluation.'
-                          : hasInvalidEvaluatorConfiguration
-                            ? 'Fix the highlighted evaluator graph settings before running this evaluation.'
-                            : 'Fix the highlighted aggregate threshold settings before running this evaluation.'
-                        : state.runningSuiteId !== undefined
-                          ? 'Another evaluation is already running for this project.'
-                          : undefined;
+                : hasInvalidExecutionSetup
+                  ? 'Fix target input bindings, missing case input values, and execution settings before running.'
+                  : hasInvalidQualityChecks
+                    ? 'Fix the highlighted deterministic quality checks before running this evaluation.'
+                    : hasInvalidExpectedValues
+                      ? isScoringSuite
+                        ? 'Add missing required dataset values and fix values that do not match their declared field types.'
+                        : 'Add the required expected values and fix values that do not match their quality checks.'
+                      : !referenceStatus?.evaluatorGraphsExist
+                        ? 'Repair or remove missing evaluator graphs before running this suite.'
+                        : hasInvalidEvaluationConfiguration
+                          ? hasInvalidEvaluatorConfiguration && hasInvalidThresholdConfiguration
+                            ? 'Fix the highlighted evaluator graph and aggregate threshold settings before running this evaluation.'
+                            : hasInvalidEvaluatorConfiguration
+                              ? 'Fix the highlighted evaluator graph settings before running this evaluation.'
+                              : 'Fix the highlighted aggregate threshold settings before running this evaluation.'
+                          : state.runningSuiteId !== undefined
+                            ? 'Another evaluation is already running for this project.'
+                            : undefined;
 
   useEffect(() => {
+    const readGeneration = ++runHistoryReadGeneration.current;
     if (!selectedSuiteId || !projectAvailable) {
       setRunsStatus('idle');
       setRunsError(undefined);
       setState((current) =>
-        current.runs.length === 0 && current.selectedRunId == null && current.currentRun == null
+        current.runs.length === 0 &&
+        current.selectedRunId == null &&
+        current.currentRun == null &&
+        current.runHistoryScope == null &&
+        current.runTrialExpansion == null
           ? current
-          : { ...current, runs: [], selectedRunId: undefined, currentRun: undefined },
+          : {
+              ...current,
+              runs: [],
+              runHistoryScope: undefined,
+              runTrialExpansion: undefined,
+              selectedRunId: undefined,
+              currentRun: undefined,
+            },
       );
       return;
     }
 
+    const scope: EvaluationRunHistoryScope = { projectId: project.metadata.id, suiteId: selectedSuiteId };
+    const hadCachedHistory = isEvaluationRunHistoryCached(
+      { runHistoryScope: runHistoryScopeRef.current },
+      scope,
+    );
     let active = true;
-    setRunsStatus('loading');
+    // A complete cached list is safe to show while its durable history is
+    // refreshed. Do not replace a usable Runs pane with a blocking loader just
+    // because the Evaluations workspace was temporarily unmounted.
+    setRunsStatus(hadCachedHistory ? 'ready' : 'loading');
     setRunsError(undefined);
     void runStore
       .list({ projectId: project.metadata.id, suiteId: selectedSuiteId })
       .then((runs) => {
-        if (!active) return;
+        if (!active || readGeneration !== runHistoryReadGeneration.current) return;
         setRunsStatus('ready');
         setState((current) => {
           // The store contract accepts a suite filter, but retain the client
@@ -2125,25 +2210,143 @@ const EvaluationsContainer: FC<{ tryRunEvaluation: TryRunEvaluation; abortEvalua
             persistedSuiteRuns,
             current.currentRun?.suiteId === selectedSuiteId ? current.currentRun : undefined,
           );
+          const selectedRunId =
+            current.selectedRunId && mergedRuns.some((run) => run.id === current.selectedRunId)
+              ? current.selectedRunId
+              : mergedRuns[0]?.id;
           return {
             ...current,
             runs: mergedRuns,
-            selectedRunId:
-              current.selectedRunId && mergedRuns.some((run) => run.id === current.selectedRunId)
-                ? current.selectedRunId
-                : mergedRuns[0]?.id,
+            // Only a successful list proves the full stored history is warm.
+            // Progress and terminal snapshots intentionally do not set this.
+            runHistoryScope: scope,
+            runTrialExpansion:
+              current.runTrialExpansion?.scope.projectId === scope.projectId &&
+              current.runTrialExpansion.scope.suiteId === scope.suiteId &&
+              current.runTrialExpansion.runId === selectedRunId
+                ? current.runTrialExpansion
+                : undefined,
+            selectedRunId,
           };
         });
       })
       .catch((error: unknown) => {
-        if (!active) return;
-        setRunsStatus('error');
+        if (!active || readGeneration !== runHistoryReadGeneration.current) return;
+        // A stale-but-complete cache remains more useful than a blank error
+        // panel. Surface this as a non-blocking warning next to the evidence.
+        setRunsStatus(hadCachedHistory ? 'ready' : 'error');
         setRunsError(error instanceof Error ? error.message : String(error));
       });
     return () => {
       active = false;
     };
-  }, [project.metadata.id, projectAvailable, runStore, selectedSuiteId, setState, state.runningSuiteId]);
+    // Run lifecycle changes are delivered directly by the executor. In
+    // particular, a terminal update atomically installs and selects the final
+    // in-memory run before recording retention and persistence. Reloading
+    // history when `runningSuiteId` changes would briefly replace that selection
+    // with whichever old run the store returned first.
+  }, [project.metadata.id, projectAvailable, runStore, selectedSuiteId, setState]);
+
+  // An in-memory snapshot is authoritative while the runner is active and
+  // remains useful for the terminal hand-off to durable history. Keep it
+  // visible rather than replacing it with a loader (or a history-read error);
+  // the failed read is still surfaced as a non-blocking warning.
+  const runsHistoryPresentation = getEvaluationRunHistoryPresentation(
+    runsStatus,
+    runHistoryScope !== undefined,
+    hasCachedRunHistory,
+    suiteCurrentRun !== undefined,
+  );
+  const visibleRunsStatus = runsHistoryPresentation.status;
+  const runHistoryRefreshError = runsHistoryPresentation.hasEvidence ? runsError : undefined;
+
+  const updateRunScoreSort = useCallback(
+    (scoreSort: EvaluationScoreSort) => {
+      if (!runHistoryScopeKey) return;
+      setState((current) =>
+        current.runScoreSortByScope[runHistoryScopeKey] === scoreSort
+          ? current
+          : {
+              ...current,
+              runScoreSortByScope: { ...current.runScoreSortByScope, [runHistoryScopeKey]: scoreSort },
+            },
+      );
+    },
+    [runHistoryScopeKey, setState],
+  );
+
+  const updateExpandedTrials = useCallback(
+    (runId: string | undefined, trialIds: readonly string[]) => {
+      if (!runHistoryProjectId || !runHistorySuiteId) return;
+      const scope: EvaluationRunHistoryScope = {
+        projectId: runHistoryProjectId,
+        suiteId: runHistorySuiteId,
+      };
+      const nextTrialIds = [...new Set(trialIds)];
+      setState((current) => {
+        if (!runId || nextTrialIds.length === 0) {
+          return current.runTrialExpansion === undefined ? current : { ...current, runTrialExpansion: undefined };
+        }
+        const currentExpansion = current.runTrialExpansion;
+        if (
+          currentExpansion?.scope.projectId === scope.projectId &&
+          currentExpansion.scope.suiteId === scope.suiteId &&
+          currentExpansion.runId === runId &&
+          currentExpansion.trialIds.length === nextTrialIds.length &&
+          currentExpansion.trialIds.every((trialId, index) => trialId === nextTrialIds[index])
+        ) {
+          return current;
+        }
+        return {
+          ...current,
+          runTrialExpansion: { scope, runId, trialIds: nextTrialIds },
+        };
+      });
+    },
+    [runHistoryProjectId, runHistorySuiteId, setState],
+  );
+
+  const selectRun = useCallback(
+    (runId: string) =>
+      setState((current) => ({
+        ...current,
+        selectedRunId: runId,
+        // A trial card belongs to one run. Match the previous in-component
+        // behaviour and never carry it to the newly selected history entry.
+        runTrialExpansion: undefined,
+      })),
+    [setState],
+  );
+
+  const persistRunScrollPosition = useCallback(() => {
+    if (view !== 'runs' || !runHistoryScopeKey) return;
+    const scrollTop = Math.max(0, runScrollTopRef.current);
+    setState((current) =>
+      current.runScrollTopByScope[runHistoryScopeKey] === scrollTop
+        ? current
+        : {
+            ...current,
+            runScrollTopByScope: { ...current.runScrollTopByScope, [runHistoryScopeKey]: scrollTop },
+          },
+    );
+  }, [runHistoryScopeKey, setState, view]);
+
+  useEffect(() => {
+    return () => persistRunScrollPosition();
+  }, [persistRunScrollPosition]);
+
+  useLayoutEffect(() => {
+    if (view !== 'runs' || !runHistoryScopeKey || !hasCachedRunHistory) {
+      restoredRunScrollScopeRef.current = undefined;
+      return;
+    }
+    if (restoredRunScrollScopeRef.current === runHistoryScopeKey) return;
+
+    const scrollTop = state.runScrollTopByScope[runHistoryScopeKey] ?? 0;
+    if (evaluationMainRef.current) evaluationMainRef.current.scrollTop = scrollTop;
+    runScrollTopRef.current = scrollTop;
+    restoredRunScrollScopeRef.current = runHistoryScopeKey;
+  }, [hasCachedRunHistory, runHistoryScopeKey, state.runScrollTopByScope, view]);
 
   useEffect(() => {
     if (view === 'dataset' && !selectedDataset) setView('definition');
@@ -2166,7 +2369,7 @@ const EvaluationsContainer: FC<{ tryRunEvaluation: TryRunEvaluation; abortEvalua
 
   const runSelectedEvaluation = (purpose: EvaluationRunPurpose) => {
     if (!selectedSuite || !projectAvailable) {
-      toast.info('Open a project containing this suite\'s target graph and any evaluator graphs before running it.');
+      toast.info("Open a project containing this suite's target graph and any evaluator graphs before running it.");
       return;
     }
     const promptDesignerCandidate = resolvePromptDesignerEvaluationProject(
@@ -2276,6 +2479,54 @@ const EvaluationsContainer: FC<{ tryRunEvaluation: TryRunEvaluation; abortEvalua
     }
   };
 
+  const deleteEvaluationRun = async (run: EvaluationRun) => {
+    const isLiveRun =
+      state.currentRun?.id === run.id &&
+      (state.currentRun.executionStatus === 'queued' || state.currentRun.executionStatus === 'running');
+    if (isLiveRun) {
+      toast.warn('A running evaluation cannot be deleted. Cancel it or wait for it to finish first.');
+      return;
+    }
+
+    try {
+      await runStore.delete({ projectId: project.metadata.id, runId: run.id });
+      // A history read started before the delete may still resolve with the
+      // removed run. Invalidate it before updating the locally selected list.
+      runHistoryReadGeneration.current += 1;
+      setRunsStatus('ready');
+      setRunsError(undefined);
+      setState((current) => {
+        const runs = current.runs.filter((candidate) => candidate.id !== run.id);
+        const replacement = runs.find((candidate) => candidate.suiteId === run.suiteId);
+        return {
+          ...current,
+          currentRun: current.currentRun?.id === run.id ? undefined : current.currentRun,
+          runs,
+          selectedRunId: current.selectedRunId === run.id ? replacement?.id : current.selectedRunId,
+        };
+      });
+    } catch (error) {
+      toast.error(`Could not delete the evaluation run: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  };
+
+  const requestDeleteEvaluationRun = (run: EvaluationRun) => {
+    const isLiveRun =
+      state.currentRun?.id === run.id &&
+      (state.currentRun.executionStatus === 'queued' || state.currentRun.executionStatus === 'running');
+    if (isLiveRun) {
+      toast.warn('A running evaluation cannot be deleted. Cancel it or wait for it to finish first.');
+      return;
+    }
+    setConfirmation({
+      appearance: 'danger',
+      title: 'Delete evaluation run?',
+      description: `Delete "${run.name?.trim() || 'Unnamed'}"? This permanently removes its local run history and any retained replay recordings. A baseline already promoted from this run remains available.`,
+      confirmLabel: 'Delete run',
+      onConfirm: () => void deleteEvaluationRun(run),
+    });
+  };
+
   const promoteBaseline = async () => {
     const run = comparableRun;
     if (!run || !selectedSuite) return;
@@ -2376,10 +2627,7 @@ const EvaluationsContainer: FC<{ tryRunEvaluation: TryRunEvaluation; abortEvalua
   const exportSelectedDatasetCsv = () => {
     if (!selectedDataset) return;
     void io
-      .saveString(
-        serializeEvaluationDatasetCsv(selectedDataset),
-        `${selectedDataset.name || 'evaluation-dataset'}.csv`,
-      )
+      .saveString(serializeEvaluationDatasetCsv(selectedDataset), `${selectedDataset.name || 'evaluation-dataset'}.csv`)
       .catch((error) =>
         toast.error(`Could not export the evaluation cases: ${error instanceof Error ? error.message : String(error)}`),
       );
@@ -2426,7 +2674,8 @@ const EvaluationsContainer: FC<{ tryRunEvaluation: TryRunEvaluation; abortEvalua
         getGraphName={(suite) =>
           projectAvailable
             ? project.graphs[suite.targetGraphId]?.metadata?.name ?? 'Missing target graph'
-            : 'Open a project to resolve graph'}
+            : 'Open a project to resolve graph'
+        }
         getReferenceStatus={(suite) => getEvaluationSuiteReferenceStatus(suite, project, state.datasets)}
         onCreateDataset={createDatasetResource}
         onCreateSuite={() => setCreateSuiteOpen(true)}
@@ -2438,7 +2687,13 @@ const EvaluationsContainer: FC<{ tryRunEvaluation: TryRunEvaluation; abortEvalua
         onSelectSuite={selectSuite}
         runningSuiteId={state.runningSuiteId}
       />
-      <main className="evaluation-main">
+      <main
+        className="evaluation-main"
+        ref={evaluationMainRef}
+        onScroll={(event) => {
+          if (view === 'runs' && runHistoryScopeKey) runScrollTopRef.current = event.currentTarget.scrollTop;
+        }}
+      >
         {showingDataset ? (
           <>
             <header className="evaluation-suite-header evaluation-dataset-header">
@@ -2468,11 +2723,7 @@ const EvaluationsContainer: FC<{ tryRunEvaluation: TryRunEvaluation; abortEvalua
                   >
                     Export CSV
                   </Button>
-                  <Button
-                    appearance="subtle"
-                    className="evaluation-secondary-action"
-                    onClick={importSelectedDataset}
-                  >
+                  <Button appearance="subtle" className="evaluation-secondary-action" onClick={importSelectedDataset}>
                     Import (replace)
                   </Button>
                 </div>
@@ -2536,7 +2787,7 @@ const EvaluationsContainer: FC<{ tryRunEvaluation: TryRunEvaluation; abortEvalua
                     ? 'Create or import reusable datasets here, or import a suite. Open a project when you are ready to create, bind, and run a suite.'
                     : graphOptions.length === 0
                       ? 'Create an evaluation dataset now, then create a graph before adding a suite that runs it.'
-                    : 'Create a suite for a graph, or create a reusable dataset first.'
+                      : 'Create a suite for a graph, or create a reusable dataset first.'
                   : 'Suites run graphs against datasets. Select either resource from the left to edit it.'}
               </p>
               <div className="workspace-empty-actions">
@@ -2635,11 +2886,15 @@ const EvaluationsContainer: FC<{ tryRunEvaluation: TryRunEvaluation; abortEvalua
                   currentRun={suiteCurrentRun}
                   selectedRunId={state.selectedRunId}
                   scoreSort={runScoreSort}
-                  status={runsStatus}
-                  error={runsError}
-                  onSelect={(runId) => setState((current) => ({ ...current, selectedRunId: runId }))}
-                  onScoreSortChange={setRunScoreSort}
+                  status={visibleRunsStatus}
+                  error={visibleRunsStatus === 'error' ? runsError : undefined}
+                  refreshError={runHistoryRefreshError}
+                  expandedTrialExpansion={visibleRunTrialExpansion}
+                  onSelect={selectRun}
+                  onScoreSortChange={updateRunScoreSort}
+                  onExpandedTrialsChange={updateExpandedTrials}
                   onRename={(runId, name) => void renameEvaluationRun(runId, name)}
+                  onDelete={requestDeleteEvaluationRun}
                   onOpenRecording={(recordingId) => void openRecording(recordingId)}
                 />
               )}
@@ -2883,625 +3138,625 @@ const Definition: FC<{
               id="evaluation-definition-panel-deterministic-checks"
               aria-labelledby="evaluation-definition-tab-deterministic-checks"
             >
-                <p className="muted">
-                  Quality checks decide whether completed graph outputs meet your requirements. Deterministic check
-                  reference fields do not judge a run until a check or evaluator input binding uses them. Evaluator
-                  graphs can receive individual dataset fields, target outputs, or complete evaluation-context objects.
+              <p className="muted">
+                Quality checks decide whether completed graph outputs meet your requirements. Deterministic check
+                reference fields do not judge a run until a check or evaluator input binding uses them. Evaluator graphs
+                can receive individual dataset fields, target outputs, or complete evaluation-context objects.
+              </p>
+              {targetOutputs.length === 0 ? (
+                <p className="warning">
+                  The target graph has no Graph Output nodes to inspect with a deterministic check.
                 </p>
-                {targetOutputs.length === 0 ? (
-                  <p className="warning">
-                    The target graph has no Graph Output nodes to inspect with a deterministic check.
-                  </p>
-                ) : null}
-                {expectedValueIssues.length > 0 ? (
-                  <div className="evaluation-authoring-issues" role="alert">
-                    <strong>Dataset cases need attention</strong>
-                    <ul>
-                      {expectedValueIssues.map((issue, index) => (
-                        <li key={`${index}:${issue}`}>{issue}</li>
-                      ))}
-                    </ul>
-                  </div>
-                ) : null}
-                {unusedExpectedFields.length > 0 ? (
-                  <div className="evaluation-unused-fields">
-                    <strong>Deterministic check reference fields not used by a quality check</strong>
-                    {unusedExpectedFields.map((field) => {
-                      const suggestedOutput =
-                        targetOutputs.find((output) => output.id === field.name) ??
-                        (targetOutputs.length === 1 ? targetOutputs[0] : undefined);
-                      const suggestedOperator = suggestedOutput
-                        ? suggestEvaluationAssertionOperator(suggestedOutput.dataType, field.dataType)
-                        : undefined;
-                      const suggestedOperatorLabel = evaluationAssertionOperatorOptions.find(
-                        (option) => option.value === suggestedOperator,
-                      )?.label;
-                      return (
-                        <div className="evaluation-unused-field" key={field.id}>
-                          <div className="evaluation-unused-field-copy">
-                            <strong>{field.name}</strong>
-                            <span>
-                              {suggestedOutput
-                                ? `Suggested target: ${suggestedOutput.id} · ${suggestedOperatorLabel ?? suggestedOperator}`
-                                : 'Create a check, then choose which target output it should inspect.'}
-                            </span>
-                          </div>
-                          <Button
-                            isDisabled={suggestedOutput === undefined}
-                            title={
-                              suggestedOutput
-                                ? undefined
-                                : 'This field does not unambiguously match a target output. Add a quality check below and choose the output explicitly.'
-                            }
-                            onClick={() => addAssertion(field, suggestedOutput)}
-                          >
-                            Create deterministic quality check
-                          </Button>
-                        </div>
-                      );
-                    })}
-                  </div>
-                ) : null}
-                <p className="muted">
-                  Compare a target output with a fixed JSON value or a different expected value from each dataset case.
-                </p>
-                <div className="evaluation-editor-list">
-                  {suite.assertions.map((assertion) => {
-                    const expectedFields = expectedDatasetFields.map((field) => ({
-                      label: field.name,
-                      value: field.id,
-                    }));
-                    const sourceOptions = [
-                      { label: 'Literal JSON', value: 'literal' },
-                      ...(expectedFields.length > 0
-                        ? [{ label: 'Dataset field of "Deterministic check reference" type', value: 'dataset-field' }]
-                        : []),
-                    ];
-                    const expected = assertion.expected;
-                    const selectedOutput = resolveEvaluationTargetOutput(assertion.outputPath, targetOutputs);
-                    const selectedOperator = evaluationAssertionOperatorOptions.find(
-                      (option) => option.value === assertion.operator,
-                    );
-                    const authoringIssue = getEvaluationAssertionAuthoringIssue(
-                      assertion,
-                      targetOutputs,
-                      expectedDatasetFields,
-                    );
-                    const expectedFieldIssue =
-                      expected.kind === 'dataset-field' &&
-                      (authoringIssue?.code === 'missing-expected-field' ||
-                        authoringIssue?.code === 'incompatible-expected-value')
-                        ? authoringIssue
-                        : undefined;
-                    const remainingAuthoringIssue =
-                      expectedFieldIssue === undefined ? authoringIssue : undefined;
+              ) : null}
+              {expectedValueIssues.length > 0 ? (
+                <div className="evaluation-authoring-issues" role="alert">
+                  <strong>Dataset cases need attention</strong>
+                  <ul>
+                    {expectedValueIssues.map((issue, index) => (
+                      <li key={`${index}:${issue}`}>{issue}</li>
+                    ))}
+                  </ul>
+                </div>
+              ) : null}
+              {unusedExpectedFields.length > 0 ? (
+                <div className="evaluation-unused-fields">
+                  <strong>Deterministic check reference fields not used by a quality check</strong>
+                  {unusedExpectedFields.map((field) => {
+                    const suggestedOutput =
+                      targetOutputs.find((output) => output.id === field.name) ??
+                      (targetOutputs.length === 1 ? targetOutputs[0] : undefined);
+                    const suggestedOperator = suggestedOutput
+                      ? suggestEvaluationAssertionOperator(suggestedOutput.dataType, field.dataType)
+                      : undefined;
+                    const suggestedOperatorLabel = evaluationAssertionOperatorOptions.find(
+                      (option) => option.value === suggestedOperator,
+                    )?.label;
                     return (
-                      <div className="evaluation-editor-card" key={assertion.id}>
-                        <ResourceTitle
-                          className="evaluation-assertion-title"
-                          editing={renamingAssertionId === assertion.id}
-                          fallback="Untitled quality check"
-                          headingLevel="h4"
-                          label="quality check"
-                          value={assertion.name}
-                          onStartEditing={() => setRenamingAssertionId(assertion.id)}
-                          onFinishEditing={() => setRenamingAssertionId(undefined)}
-                          onCommit={(name) =>
-                            onUpdate((current) => ({
-                              ...current,
-                              assertions: current.assertions.map((item) =>
-                                item.id === assertion.id ? { ...item, name } : item,
-                              ),
-                            }))
-                          }
-                        />
-                        <EvaluationFormField className="field" label="Target graph output">
-                          <Select
-                            options={[...outputOptions, { label: 'Advanced path…', value: '__advanced__' }]}
-                            value={
-                              selectedOutput
-                                ? outputOptions.find((option) => option.value === selectedOutput.outputPath)
-                                : { label: 'Advanced path…', value: '__advanced__' }
-                            }
-                            onChange={(value) => {
-                              if (!value) return;
-                              onUpdate((current) => ({
-                                ...current,
-                                assertions: current.assertions.map((item) =>
-                                  item.id === assertion.id
-                                    ? { ...item, outputPath: value.value === '__advanced__' ? '$' : value.value }
-                                    : item,
-                                ),
-                              }));
-                            }}
-                          />
-                        </EvaluationFormField>
-                        <EvaluationFormField className="field" label="Comparison">
-                          <Select
-                            options={evaluationAssertionOperatorOptions}
-                            value={selectedOperator}
-                            onChange={(value) =>
-                              onUpdate((current) => ({
-                                ...current,
-                                assertions: current.assertions.map((item) =>
-                                  item.id === assertion.id
-                                    ? { ...item, operator: value!.value as typeof item.operator }
-                                    : item,
-                                ),
-                              }))
-                            }
-                          />
-                        </EvaluationFormField>
-                        <EvaluationFormField className="field" label="Expected value source">
-                          <Select
-                            options={sourceOptions}
-                            value={sourceOptions.find((option) => option.value === expected.kind)}
-                            onChange={(value) =>
-                              onUpdate((current) => ({
-                                ...current,
-                                assertions: current.assertions.map((item) =>
-                                  item.id !== assertion.id
-                                    ? item
-                                    : {
-                                        ...item,
-                                        expected:
-                                          value!.value === 'dataset-field'
-                                            ? { kind: 'dataset-field', fieldId: expectedFields[0]?.value ?? '' }
-                                            : { kind: 'literal', value: null },
-                                      },
-                                ),
-                              }))
-                            }
-                          />
-                        </EvaluationFormField>
-                        {expected.kind === 'literal' ? (
-                          <EvaluationFormField className="field wide" label="Expected JSON">
-                            <JsonValueEditor
-                              value={expected.value}
-                              placeholder="Expected JSON"
-                              allowEmpty={false}
-                              onCommit={(value) => {
-                                if (value !== undefined)
-                                  onUpdate((current) => ({
-                                    ...current,
-                                    assertions: current.assertions.map((item) =>
-                                      item.id === assertion.id
-                                        ? { ...item, expected: { kind: 'literal', value } }
-                                        : item,
-                                    ),
-                                  }));
-                              }}
-                            />
-                          </EvaluationFormField>
-                        ) : (
-                          <EvaluationFormField className="field wide" label="Dataset field">
-                            <Select
-                              options={expectedFields}
-                              value={expectedFields.find((option) => option.value === expected.fieldId)}
-                              onChange={(value) =>
-                                onUpdate((current) => ({
-                                  ...current,
-                                  assertions: current.assertions.map((item) =>
-                                    item.id === assertion.id
-                                      ? { ...item, expected: { kind: 'dataset-field', fieldId: value?.value ?? '' } }
-                                      : item,
-                                  ),
-                                }))
-                              }
-                            />
-                          </EvaluationFormField>
-                        )}
-                        {expectedFieldIssue ? (
-                          <p className="warning field full" role="alert">
-                            {expectedFieldIssue.message}
-                          </p>
-                        ) : null}
-                        <details className="evaluation-advanced-path" open={selectedOutput === undefined}>
-                          <summary>Advanced: inspect a nested output value</summary>
-                          <EvaluationFormField
-                            className="field"
-                            label="Output JSON path"
-                            description="Use JSONPath, for example $['output'].items[0].name."
-                          >
-                            <Textfield
-                              value={assertion.outputPath}
-                              placeholder="$['output']"
-                              onChange={(event) =>
-                                onUpdate((current) => ({
-                                  ...current,
-                                  assertions: current.assertions.map((item) =>
-                                    item.id === assertion.id
-                                      ? { ...item, outputPath: event.currentTarget.value }
-                                      : item,
-                                  ),
-                                }))
-                              }
-                            />
-                          </EvaluationFormField>
-                        </details>
-                        {remainingAuthoringIssue ? (
-                          <p className="warning field full" role="alert">
-                            {remainingAuthoringIssue.message}
-                          </p>
-                        ) : null}
-                        <div className="evaluation-editor-card-actions">
-                          <div className="evaluation-checkboxes">
-                            <LabeledToggle
-                              id={`evaluation-assertion-required-${assertion.id}`}
-                              isChecked={assertion.required !== false}
-                              label="Required"
-                              onChange={(required) =>
-                                onUpdate((current) => ({
-                                  ...current,
-                                  assertions: current.assertions.map((item) =>
-                                    item.id === assertion.id ? { ...item, required } : item,
-                                  ),
-                                }))
-                              }
-                            />
-                          </div>
+                      <div className="evaluation-unused-field" key={field.id}>
+                        <div className="evaluation-unused-field-copy">
+                          <strong>{field.name}</strong>
+                          <span>
+                            {suggestedOutput
+                              ? `Suggested target: ${suggestedOutput.id} · ${suggestedOperatorLabel ?? suggestedOperator}`
+                              : 'Create a check, then choose which target output it should inspect.'}
+                          </span>
                         </div>
-                        <RemoveButton
-                          className="evaluation-editor-card-remove"
-                          label="Remove quality check"
-                          onClick={() =>
-                            onUpdate((current) => ({
-                              ...current,
-                              assertions: current.assertions.filter((item) => item.id !== assertion.id),
-                            }))
+                        <Button
+                          isDisabled={suggestedOutput === undefined}
+                          title={
+                            suggestedOutput
+                              ? undefined
+                              : 'This field does not unambiguously match a target output. Add a quality check below and choose the output explicitly.'
                           }
-                        />
+                          onClick={() => addAssertion(field, suggestedOutput)}
+                        >
+                          Create deterministic quality check
+                        </Button>
                       </div>
                     );
                   })}
                 </div>
-                <div className="evaluation-section-actions">
-                  <Button appearance="primary" isDisabled={targetOutputs.length === 0} onClick={() => addAssertion()}>
-                    + Add quality check
-                  </Button>
-                </div>
+              ) : null}
+              <p className="muted">
+                Compare a target output with a fixed JSON value or a different expected value from each dataset case.
+              </p>
+              <div className="evaluation-editor-list">
+                {suite.assertions.map((assertion) => {
+                  const expectedFields = expectedDatasetFields.map((field) => ({
+                    label: field.name,
+                    value: field.id,
+                  }));
+                  const sourceOptions = [
+                    { label: 'Literal JSON', value: 'literal' },
+                    ...(expectedFields.length > 0
+                      ? [{ label: 'Dataset field of "Deterministic check reference" type', value: 'dataset-field' }]
+                      : []),
+                  ];
+                  const expected = assertion.expected;
+                  const selectedOutput = resolveEvaluationTargetOutput(assertion.outputPath, targetOutputs);
+                  const selectedOperator = evaluationAssertionOperatorOptions.find(
+                    (option) => option.value === assertion.operator,
+                  );
+                  const authoringIssue = getEvaluationAssertionAuthoringIssue(
+                    assertion,
+                    targetOutputs,
+                    expectedDatasetFields,
+                  );
+                  const expectedFieldIssue =
+                    expected.kind === 'dataset-field' &&
+                    (authoringIssue?.code === 'missing-expected-field' ||
+                      authoringIssue?.code === 'incompatible-expected-value')
+                      ? authoringIssue
+                      : undefined;
+                  const remainingAuthoringIssue = expectedFieldIssue === undefined ? authoringIssue : undefined;
+                  return (
+                    <div className="evaluation-editor-card" key={assertion.id}>
+                      <ResourceTitle
+                        className="evaluation-assertion-title"
+                        editing={renamingAssertionId === assertion.id}
+                        fallback="Untitled quality check"
+                        headingLevel="h4"
+                        label="quality check"
+                        value={assertion.name}
+                        onStartEditing={() => setRenamingAssertionId(assertion.id)}
+                        onFinishEditing={() => setRenamingAssertionId(undefined)}
+                        onCommit={(name) =>
+                          onUpdate((current) => ({
+                            ...current,
+                            assertions: current.assertions.map((item) =>
+                              item.id === assertion.id ? { ...item, name } : item,
+                            ),
+                          }))
+                        }
+                      />
+                      <EvaluationFormField className="field" label="Target graph output">
+                        <Select
+                          options={[...outputOptions, { label: 'Advanced path…', value: '__advanced__' }]}
+                          value={
+                            selectedOutput
+                              ? outputOptions.find((option) => option.value === selectedOutput.outputPath)
+                              : { label: 'Advanced path…', value: '__advanced__' }
+                          }
+                          onChange={(value) => {
+                            if (!value) return;
+                            onUpdate((current) => ({
+                              ...current,
+                              assertions: current.assertions.map((item) =>
+                                item.id === assertion.id
+                                  ? { ...item, outputPath: value.value === '__advanced__' ? '$' : value.value }
+                                  : item,
+                              ),
+                            }));
+                          }}
+                        />
+                      </EvaluationFormField>
+                      <EvaluationFormField className="field" label="Comparison">
+                        <Select
+                          options={evaluationAssertionOperatorOptions}
+                          value={selectedOperator}
+                          onChange={(value) =>
+                            onUpdate((current) => ({
+                              ...current,
+                              assertions: current.assertions.map((item) =>
+                                item.id === assertion.id
+                                  ? { ...item, operator: value!.value as typeof item.operator }
+                                  : item,
+                              ),
+                            }))
+                          }
+                        />
+                      </EvaluationFormField>
+                      <EvaluationFormField className="field" label="Expected value source">
+                        <Select
+                          options={sourceOptions}
+                          value={sourceOptions.find((option) => option.value === expected.kind)}
+                          onChange={(value) =>
+                            onUpdate((current) => ({
+                              ...current,
+                              assertions: current.assertions.map((item) =>
+                                item.id !== assertion.id
+                                  ? item
+                                  : {
+                                      ...item,
+                                      expected:
+                                        value!.value === 'dataset-field'
+                                          ? { kind: 'dataset-field', fieldId: expectedFields[0]?.value ?? '' }
+                                          : { kind: 'literal', value: null },
+                                    },
+                              ),
+                            }))
+                          }
+                        />
+                      </EvaluationFormField>
+                      {expected.kind === 'literal' ? (
+                        <EvaluationFormField className="field wide" label="Expected JSON">
+                          <JsonValueEditor
+                            value={expected.value}
+                            placeholder="Expected JSON"
+                            allowEmpty={false}
+                            onCommit={(value) => {
+                              if (value !== undefined)
+                                onUpdate((current) => ({
+                                  ...current,
+                                  assertions: current.assertions.map((item) =>
+                                    item.id === assertion.id ? { ...item, expected: { kind: 'literal', value } } : item,
+                                  ),
+                                }));
+                            }}
+                          />
+                        </EvaluationFormField>
+                      ) : (
+                        <EvaluationFormField className="field wide" label="Dataset field">
+                          <Select
+                            options={expectedFields}
+                            value={expectedFields.find((option) => option.value === expected.fieldId)}
+                            onChange={(value) =>
+                              onUpdate((current) => ({
+                                ...current,
+                                assertions: current.assertions.map((item) =>
+                                  item.id === assertion.id
+                                    ? { ...item, expected: { kind: 'dataset-field', fieldId: value?.value ?? '' } }
+                                    : item,
+                                ),
+                              }))
+                            }
+                          />
+                        </EvaluationFormField>
+                      )}
+                      {expectedFieldIssue ? (
+                        <p className="warning field full" role="alert">
+                          {expectedFieldIssue.message}
+                        </p>
+                      ) : null}
+                      <details className="evaluation-advanced-path" open={selectedOutput === undefined}>
+                        <summary>Advanced: inspect a nested output value</summary>
+                        <EvaluationFormField
+                          className="field"
+                          label="Output JSON path"
+                          description="Use JSONPath, for example $['output'].items[0].name."
+                        >
+                          <Textfield
+                            value={assertion.outputPath}
+                            placeholder="$['output']"
+                            onChange={(event) =>
+                              onUpdate((current) => ({
+                                ...current,
+                                assertions: current.assertions.map((item) =>
+                                  item.id === assertion.id ? { ...item, outputPath: event.currentTarget.value } : item,
+                                ),
+                              }))
+                            }
+                          />
+                        </EvaluationFormField>
+                      </details>
+                      {remainingAuthoringIssue ? (
+                        <p className="warning field full" role="alert">
+                          {remainingAuthoringIssue.message}
+                        </p>
+                      ) : null}
+                      <div className="evaluation-editor-card-actions">
+                        <div className="evaluation-checkboxes">
+                          <LabeledToggle
+                            id={`evaluation-assertion-required-${assertion.id}`}
+                            isChecked={assertion.required !== false}
+                            label="Required"
+                            onChange={(required) =>
+                              onUpdate((current) => ({
+                                ...current,
+                                assertions: current.assertions.map((item) =>
+                                  item.id === assertion.id ? { ...item, required } : item,
+                                ),
+                              }))
+                            }
+                          />
+                        </div>
+                      </div>
+                      <RemoveButton
+                        className="evaluation-editor-card-remove"
+                        label="Remove quality check"
+                        onClick={() =>
+                          onUpdate((current) => ({
+                            ...current,
+                            assertions: current.assertions.filter((item) => item.id !== assertion.id),
+                          }))
+                        }
+                      />
+                    </div>
+                  );
+                })}
+              </div>
+              <div className="evaluation-section-actions">
+                <Button appearance="primary" isDisabled={targetOutputs.length === 0} onClick={() => addAssertion()}>
+                  + Add quality check
+                </Button>
+              </div>
             </section>
           ) : null}
           {activeDefinitionTab === 'evaluator-graphs' ? (
-          <section
-            className="section"
-            role="tabpanel"
-            id="evaluation-definition-panel-evaluator-graphs"
-            aria-labelledby="evaluation-definition-tab-evaluator-graphs"
-          >
-            <p className="muted">
-              {isScoringSuite ? (
-                <>
-                  <p>
-                    An evaluator graph is supposed to judge the already-computed target graph output. Map
-                    evaluator graph inputs from target outputs, dataset fields, or evaluation context.
-                  </p>
-                  <p>
-                    The graph output must be named <code>result</code> and return{' '}
-                    <code>{'{ score: scoreOutOf100, message?, evidence?, metrics? }'}</code>. For example, return{' '}
-                    <code>{'{ score: 85 }'}</code> for 85/100.
-                  </p>
-                  <p>
-                    Rivet averages evaluator scores within each trial,
-                    averages the N trials for each case, then gives each case equal weight in the overall score.
-                  </p>
-                </>
-              ) : (
-                <>
-                  <p>Ordinary Rivet graphs return a <code>result</code> object for custom checks and LLM judges. Required
-                  evaluator errors make the run unable to evaluate; they never become a false quality pass.</p>
-                </>
-              )}
-            </p>
-            <div className="evaluation-editor-list">
-              {suite.evaluators.map((evaluator) => {
-                const evaluatorIssue = getEvaluationEvaluatorAuthoringIssue(evaluator, project, suite, dataset);
-                const evaluatorGraphIssue =
-                  evaluatorIssue?.startsWith('Choose an existing evaluator graph.') ||
-                  evaluatorIssue?.startsWith('Evaluator graph must declare') ||
-                  evaluatorIssue?.startsWith('Evaluator graph output “result”') ||
-                  evaluatorIssue?.startsWith('Evaluator graph has duplicate Graph Input ids.')
+            <section
+              className="section"
+              role="tabpanel"
+              id="evaluation-definition-panel-evaluator-graphs"
+              aria-labelledby="evaluation-definition-tab-evaluator-graphs"
+            >
+              <p className="muted">
+                {isScoringSuite ? (
+                  <>
+                    <p>
+                      An evaluator graph is supposed to judge the already-computed target graph output. Map evaluator
+                      graph inputs from target outputs, dataset fields, or evaluation context.
+                    </p>
+                    <p>
+                      The graph output must be named <code>result</code> and return{' '}
+                      <code>{'{ score: scoreOutOf100, message?, evidence?, metrics? }'}</code>. For example, return{' '}
+                      <code>{'{ score: 85 }'}</code> for 85/100.
+                    </p>
+                    <p>
+                      Rivet averages evaluator scores within each trial, averages the N trials for each case, then gives
+                      each case equal weight in the overall score.
+                    </p>
+                  </>
+                ) : (
+                  <>
+                    <p>
+                      Ordinary Rivet graphs return a <code>result</code> object for custom checks and LLM judges.
+                      Required evaluator errors make the run unable to evaluate; they never become a false quality pass.
+                    </p>
+                  </>
+                )}
+              </p>
+              <div className="evaluation-editor-list">
+                {suite.evaluators.map((evaluator) => {
+                  const evaluatorIssue = getEvaluationEvaluatorAuthoringIssue(evaluator, project, suite, dataset);
+                  const evaluatorGraphIssue =
+                    evaluatorIssue?.startsWith('Choose an existing evaluator graph.') ||
+                    evaluatorIssue?.startsWith('Evaluator graph must declare') ||
+                    evaluatorIssue?.startsWith('Evaluator graph output “result”') ||
+                    evaluatorIssue?.startsWith('Evaluator graph has duplicate Graph Input ids.')
+                      ? evaluatorIssue
+                      : undefined;
+                  const evaluatorWeightIssue = evaluatorIssue?.startsWith('Score weight must')
                     ? evaluatorIssue
                     : undefined;
-                const evaluatorWeightIssue = evaluatorIssue?.startsWith('Score weight must')
-                  ? evaluatorIssue
-                  : undefined;
-                const evaluatorBindingIssue =
-                  evaluatorGraphIssue === undefined && evaluatorWeightIssue === undefined ? evaluatorIssue : undefined;
-                const evaluatorGraphInputs =
-                  project.graphs[evaluator.graphId]?.nodes.filter(
-                    (node): node is GraphInputNode => node.type === 'graphInput',
-                  ) ?? [];
-                const usesLegacyInputs = usesLegacyEvaluatorInputEnvelope(
-                  evaluator,
-                  evaluatorGraphInputs.map((input) => input.data.id),
-                );
-                return (
-                  <div className="evaluation-editor-card" key={evaluator.id}>
-                    <ResourceTitle
-                      className="evaluation-evaluator-title"
-                      editing={renamingEvaluatorId === evaluator.id}
-                      fallback="Untitled evaluator"
-                      headingLevel="h4"
-                      label="evaluator"
-                      value={evaluator.name}
-                      onStartEditing={() => setRenamingEvaluatorId(evaluator.id)}
-                      onFinishEditing={() => setRenamingEvaluatorId(undefined)}
-                      onCommit={(name) =>
-                        onUpdate((current) => ({
-                          ...current,
-                          evaluators: current.evaluators.map((item) =>
-                            item.id === evaluator.id ? { ...item, name } : item,
-                          ),
-                        }))
-                      }
-                    />
-                    {!isScoringSuite ? (
-                      <div className="evaluation-evaluator-required">
-                        <LabeledToggle
-                          id={`evaluation-evaluator-required-${evaluator.id}`}
-                          isChecked={evaluator.required !== false}
-                          label="Required"
-                          onChange={(required) =>
-                            onUpdate((current) => ({
-                              ...current,
-                              evaluators: current.evaluators.map((item) =>
-                                item.id === evaluator.id ? { ...item, required } : item,
-                              ),
-                            }))
-                          }
-                        />
-                      </div>
-                    ) : null}
-                    <EvaluationFormField className="field evaluation-evaluator-graph" label="Evaluator graph">
-                      <Select
-                        options={graphOptions}
-                        value={graphOptions.find((item) => item.value === evaluator.graphId)}
-                        onChange={(value) =>
+                  const evaluatorBindingIssue =
+                    evaluatorGraphIssue === undefined && evaluatorWeightIssue === undefined
+                      ? evaluatorIssue
+                      : undefined;
+                  const evaluatorGraphInputs =
+                    project.graphs[evaluator.graphId]?.nodes.filter(
+                      (node): node is GraphInputNode => node.type === 'graphInput',
+                    ) ?? [];
+                  const usesLegacyInputs = usesLegacyEvaluatorInputEnvelope(
+                    evaluator,
+                    evaluatorGraphInputs.map((input) => input.data.id),
+                  );
+                  return (
+                    <div className="evaluation-editor-card" key={evaluator.id}>
+                      <ResourceTitle
+                        className="evaluation-evaluator-title"
+                        editing={renamingEvaluatorId === evaluator.id}
+                        fallback="Untitled evaluator"
+                        headingLevel="h4"
+                        label="evaluator"
+                        value={evaluator.name}
+                        onStartEditing={() => setRenamingEvaluatorId(evaluator.id)}
+                        onFinishEditing={() => setRenamingEvaluatorId(undefined)}
+                        onCommit={(name) =>
                           onUpdate((current) => ({
                             ...current,
                             evaluators: current.evaluators.map((item) =>
-                              item.id === evaluator.id
-                                ? { ...item, graphId: value!.value as typeof item.graphId, inputBindings: [] }
-                                : item,
+                              item.id === evaluator.id ? { ...item, name } : item,
                             ),
                           }))
                         }
                       />
-                    </EvaluationFormField>
-                    {evaluatorGraphIssue ? (
-                      <p className="warning field full" role="alert">
-                        {evaluatorGraphIssue}
-                      </p>
-                    ) : null}
-                    <div className="field full">
-                      {usesLegacyInputs ? (
-                        <p className="muted">
-                          This existing evaluator uses the legacy automatic context inputs:{' '}
-                          <code>{LEGACY_EVALUATOR_INPUT_IDS.join(', ')}</code>. New evaluator graphs can use ordinary
-                          Graph Input names and map them directly below.
+                      {!isScoringSuite ? (
+                        <div className="evaluation-evaluator-required">
+                          <LabeledToggle
+                            id={`evaluation-evaluator-required-${evaluator.id}`}
+                            isChecked={evaluator.required !== false}
+                            label="Required"
+                            onChange={(required) =>
+                              onUpdate((current) => ({
+                                ...current,
+                                evaluators: current.evaluators.map((item) =>
+                                  item.id === evaluator.id ? { ...item, required } : item,
+                                ),
+                              }))
+                            }
+                          />
+                        </div>
+                      ) : null}
+                      <EvaluationFormField className="field evaluation-evaluator-graph" label="Evaluator graph">
+                        <Select
+                          options={graphOptions}
+                          value={graphOptions.find((item) => item.value === evaluator.graphId)}
+                          onChange={(value) =>
+                            onUpdate((current) => ({
+                              ...current,
+                              evaluators: current.evaluators.map((item) =>
+                                item.id === evaluator.id
+                                  ? { ...item, graphId: value!.value as typeof item.graphId, inputBindings: [] }
+                                  : item,
+                              ),
+                            }))
+                          }
+                        />
+                      </EvaluationFormField>
+                      {evaluatorGraphIssue ? (
+                        <p className="warning field full" role="alert">
+                          {evaluatorGraphIssue}
                         </p>
-                      ) : evaluatorGraphInputs.length === 0 ? (
-                        <p className="muted">This evaluator graph has no Graph Inputs to bind.</p>
-                      ) : (
-                        <table className="table evaluation-binding-table evaluation-evaluator-binding-table">
-                          <thead>
-                            <tr>
-                              <th>Evaluator graph input</th>
-                              <th>Value source</th>
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {evaluatorGraphInputs.map((evaluatorInput) => {
-                              const targetOutputSourceOptions: Array<{
-                                label: string;
-                                value: string;
-                                source: EvaluationEvaluatorInputSource;
-                              }> = targetOutputs
-                                .filter((output) =>
-                                  areEvaluationDataTypesCompatible(output.dataType, evaluatorInput.data.dataType),
-                                )
-                                .map((output) => {
-                                  const source = { kind: 'target-output' as const, outputId: output.id };
-                                  return {
-                                    label: `${output.id} (${output.dataType})`,
-                                    value: evaluatorInputSourceKey(source),
-                                    source,
-                                  };
-                                });
-                              const datasetFieldSourceOptions: typeof targetOutputSourceOptions = dataset.fields
-                                .filter((field) =>
-                                  areEvaluationDataTypesCompatible(field.dataType, evaluatorInput.data.dataType),
-                                )
-                                .map((field) => {
-                                  const source = { kind: 'dataset-field' as const, fieldId: field.id };
-                                  return {
-                                    label: `${field.name} (${field.dataType}, ${field.role})`,
-                                    value: evaluatorInputSourceKey(source),
-                                    source,
-                                  };
-                                });
-                              const evaluationContextSourceOptions: typeof targetOutputSourceOptions =
-                                evaluatorInput.data.dataType === 'object' || evaluatorInput.data.dataType === 'any'
-                                  ? LEGACY_EVALUATOR_INPUT_IDS.map((context) => {
-                                      const source = { kind: 'context' as const, context };
-                                      return {
-                                        label: evaluatorContextLabels[context],
-                                        value: evaluatorInputSourceKey(source),
-                                        source,
-                                      };
-                                    })
-                                  : [];
-                              const sourceOptions = [
-                                ...targetOutputSourceOptions,
-                                ...datasetFieldSourceOptions,
-                                ...evaluationContextSourceOptions,
-                              ];
-                              const sourceOptionGroups = [
-                                ...(targetOutputSourceOptions.length > 0
-                                  ? [{ label: 'Target outputs', options: targetOutputSourceOptions }]
-                                  : []),
-                                ...(datasetFieldSourceOptions.length > 0
-                                  ? [{ label: 'Dataset fields', options: datasetFieldSourceOptions }]
-                                  : []),
-                                ...(evaluationContextSourceOptions.length > 0
-                                  ? [{ label: 'Evaluation context', options: evaluationContextSourceOptions }]
-                                  : []),
-                              ];
-                              const binding = evaluator.inputBindings?.find(
-                                (candidate) => candidate.graphInputId === evaluatorInput.data.id,
-                              );
-                              return (
-                                <tr key={evaluatorInput.id}>
-                                  <td>{`${evaluatorInput.data.id} (${evaluatorInput.data.dataType})`}</td>
-                                  <td>
-                                    <Select
-                                      isClearable
-                                      options={sourceOptionGroups}
-                                      styles={{
-                                        groupHeading: (base) => ({
-                                          ...base,
-                                          margin: '6px 8px 4px',
-                                          padding: '0 0 4px',
-                                          borderBottom: '1px solid var(--grey-darkish)',
-                                          color: 'var(--grey-light)',
-                                          fontWeight: 600,
-                                        }),
-                                      }}
-                                      value={sourceOptions.find(
-                                        (option) =>
-                                          binding !== undefined &&
-                                          option.value === evaluatorInputSourceKey(binding.source),
-                                      )}
-                                      placeholder={
-                                        hasStaticGraphInputDefault(evaluatorInput)
-                                          ? 'Uses graph default'
-                                          : sourceOptions.length === 0
-                                            ? 'No compatible value sources'
-                                            : 'Select value source'
-                                      }
-                                      onChange={(value) => {
-                                        const source = sourceOptions.find(
-                                          (option) => option.value === value?.value,
-                                        )?.source;
-                                        onUpdate((current) => ({
-                                          ...current,
-                                          evaluators: current.evaluators.map((item) =>
-                                            item.id === evaluator.id
-                                              ? {
-                                                  ...item,
-                                                  inputBindings: [
-                                                    ...(item.inputBindings ?? []).filter(
-                                                      (candidate) => candidate.graphInputId !== evaluatorInput.data.id,
-                                                    ),
-                                                    ...(source
-                                                      ? [{ graphInputId: evaluatorInput.data.id, source }]
-                                                      : []),
-                                                  ],
-                                                }
-                                              : item,
-                                          ),
-                                        }));
-                                      }}
-                                    />
-                                  </td>
-                                </tr>
-                              );
-                            })}
-                          </tbody>
-                        </table>
-                      )}
-                    </div>
-                    {evaluatorBindingIssue ? (
-                      <p className="warning field full" role="alert">
-                        {evaluatorBindingIssue}
-                      </p>
-                    ) : null}
-                    <EvaluationFormField
-                      className="field"
-                      label="Relative score weight"
-                      description="Influence when combining evaluator scores. Weight 2 counts twice as much as weight 1; with one evaluator it has no effect. Defaults to 1."
-                    >
-                      <Textfield
-                        type="number"
-                        value={evaluator.scoreWeight == null ? '' : String(evaluator.scoreWeight)}
-                        placeholder="1"
-                        onChange={(event) =>
-                          onUpdate((current) => ({
-                            ...current,
-                            evaluators: current.evaluators.map((item) =>
-                              item.id === evaluator.id
-                                ? {
-                                    ...item,
-                                    ...(event.currentTarget.value === ''
-                                      ? { scoreWeight: undefined }
-                                      : { scoreWeight: Number(event.currentTarget.value) }),
-                                  }
-                                : item,
-                            ),
-                          }))
-                        }
-                      />
-                    </EvaluationFormField>
-                    {evaluatorWeightIssue ? (
-                      <p className="warning field full" role="alert">
-                        {evaluatorWeightIssue}
-                      </p>
-                    ) : null}
-                    {!isScoringSuite ? (
-                      <div className="evaluation-evaluator-run-on-error">
-                        <LabeledToggle
-                          id={`evaluation-evaluator-run-on-target-error-${evaluator.id}`}
-                          isChecked={evaluator.runOnTargetError === true}
-                          label="Run after target error"
-                          onChange={(runOnTargetError) =>
+                      ) : null}
+                      <div className="field full">
+                        {usesLegacyInputs ? (
+                          <p className="muted">
+                            This existing evaluator uses the legacy automatic context inputs:{' '}
+                            <code>{LEGACY_EVALUATOR_INPUT_IDS.join(', ')}</code>. New evaluator graphs can use ordinary
+                            Graph Input names and map them directly below.
+                          </p>
+                        ) : evaluatorGraphInputs.length === 0 ? (
+                          <p className="muted">This evaluator graph has no Graph Inputs to bind.</p>
+                        ) : (
+                          <table className="table evaluation-binding-table evaluation-evaluator-binding-table">
+                            <thead>
+                              <tr>
+                                <th>Evaluator graph input</th>
+                                <th>Value source</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {evaluatorGraphInputs.map((evaluatorInput) => {
+                                const targetOutputSourceOptions: Array<{
+                                  label: string;
+                                  value: string;
+                                  source: EvaluationEvaluatorInputSource;
+                                }> = targetOutputs
+                                  .filter((output) =>
+                                    areEvaluationDataTypesCompatible(output.dataType, evaluatorInput.data.dataType),
+                                  )
+                                  .map((output) => {
+                                    const source = { kind: 'target-output' as const, outputId: output.id };
+                                    return {
+                                      label: `${output.id} (${output.dataType})`,
+                                      value: evaluatorInputSourceKey(source),
+                                      source,
+                                    };
+                                  });
+                                const datasetFieldSourceOptions: typeof targetOutputSourceOptions = dataset.fields
+                                  .filter((field) =>
+                                    areEvaluationDataTypesCompatible(field.dataType, evaluatorInput.data.dataType),
+                                  )
+                                  .map((field) => {
+                                    const source = { kind: 'dataset-field' as const, fieldId: field.id };
+                                    return {
+                                      label: `${field.name} (${field.dataType}, ${field.role})`,
+                                      value: evaluatorInputSourceKey(source),
+                                      source,
+                                    };
+                                  });
+                                const evaluationContextSourceOptions: typeof targetOutputSourceOptions =
+                                  evaluatorInput.data.dataType === 'object' || evaluatorInput.data.dataType === 'any'
+                                    ? LEGACY_EVALUATOR_INPUT_IDS.map((context) => {
+                                        const source = { kind: 'context' as const, context };
+                                        return {
+                                          label: evaluatorContextLabels[context],
+                                          value: evaluatorInputSourceKey(source),
+                                          source,
+                                        };
+                                      })
+                                    : [];
+                                const sourceOptions = [
+                                  ...targetOutputSourceOptions,
+                                  ...datasetFieldSourceOptions,
+                                  ...evaluationContextSourceOptions,
+                                ];
+                                const sourceOptionGroups = [
+                                  ...(targetOutputSourceOptions.length > 0
+                                    ? [{ label: 'Target outputs', options: targetOutputSourceOptions }]
+                                    : []),
+                                  ...(datasetFieldSourceOptions.length > 0
+                                    ? [{ label: 'Dataset fields', options: datasetFieldSourceOptions }]
+                                    : []),
+                                  ...(evaluationContextSourceOptions.length > 0
+                                    ? [{ label: 'Evaluation context', options: evaluationContextSourceOptions }]
+                                    : []),
+                                ];
+                                const binding = evaluator.inputBindings?.find(
+                                  (candidate) => candidate.graphInputId === evaluatorInput.data.id,
+                                );
+                                return (
+                                  <tr key={evaluatorInput.id}>
+                                    <td>{`${evaluatorInput.data.id} (${evaluatorInput.data.dataType})`}</td>
+                                    <td>
+                                      <Select
+                                        isClearable
+                                        options={sourceOptionGroups}
+                                        styles={{
+                                          groupHeading: (base) => ({
+                                            ...base,
+                                            margin: '6px 8px 4px',
+                                            padding: '0 0 4px',
+                                            borderBottom: '1px solid var(--grey-darkish)',
+                                            color: 'var(--grey-light)',
+                                            fontWeight: 600,
+                                          }),
+                                        }}
+                                        value={sourceOptions.find(
+                                          (option) =>
+                                            binding !== undefined &&
+                                            option.value === evaluatorInputSourceKey(binding.source),
+                                        )}
+                                        placeholder={
+                                          hasStaticGraphInputDefault(evaluatorInput)
+                                            ? 'Uses graph default'
+                                            : sourceOptions.length === 0
+                                              ? 'No compatible value sources'
+                                              : 'Select value source'
+                                        }
+                                        onChange={(value) => {
+                                          const source = sourceOptions.find(
+                                            (option) => option.value === value?.value,
+                                          )?.source;
+                                          onUpdate((current) => ({
+                                            ...current,
+                                            evaluators: current.evaluators.map((item) =>
+                                              item.id === evaluator.id
+                                                ? {
+                                                    ...item,
+                                                    inputBindings: [
+                                                      ...(item.inputBindings ?? []).filter(
+                                                        (candidate) =>
+                                                          candidate.graphInputId !== evaluatorInput.data.id,
+                                                      ),
+                                                      ...(source
+                                                        ? [{ graphInputId: evaluatorInput.data.id, source }]
+                                                        : []),
+                                                    ],
+                                                  }
+                                                : item,
+                                            ),
+                                          }));
+                                        }}
+                                      />
+                                    </td>
+                                  </tr>
+                                );
+                              })}
+                            </tbody>
+                          </table>
+                        )}
+                      </div>
+                      {evaluatorBindingIssue ? (
+                        <p className="warning field full" role="alert">
+                          {evaluatorBindingIssue}
+                        </p>
+                      ) : null}
+                      <EvaluationFormField
+                        className="field"
+                        label="Relative score weight"
+                        description="Influence when combining evaluator scores. Weight 2 counts twice as much as weight 1; with one evaluator it has no effect. Defaults to 1."
+                      >
+                        <Textfield
+                          type="number"
+                          value={evaluator.scoreWeight == null ? '' : String(evaluator.scoreWeight)}
+                          placeholder="1"
+                          onChange={(event) =>
                             onUpdate((current) => ({
                               ...current,
                               evaluators: current.evaluators.map((item) =>
-                                item.id === evaluator.id ? { ...item, runOnTargetError } : item,
+                                item.id === evaluator.id
+                                  ? {
+                                      ...item,
+                                      ...(event.currentTarget.value === ''
+                                        ? { scoreWeight: undefined }
+                                        : { scoreWeight: Number(event.currentTarget.value) }),
+                                    }
+                                  : item,
                               ),
                             }))
                           }
                         />
-                      </div>
-                    ) : null}
-                    <RemoveButton
-                      className="evaluation-editor-card-remove"
-                      label="Remove evaluator"
-                      onClick={() =>
-                        onUpdate((current) => ({
-                          ...current,
-                          evaluators: current.evaluators.filter((item) => item.id !== evaluator.id),
-                        }))
-                      }
-                    />
-                  </div>
-                );
-              })}
-            </div>
-            <div className="evaluation-section-actions">
-              <Button
-                appearance="primary"
-                onClick={() =>
-                  onUpdate((current) => ({
-                    ...current,
-                    evaluators: [
-                      ...current.evaluators,
-                      {
-                        id: nanoid(),
-                        name: `Evaluator ${current.evaluators.length + 1}`,
-                        graphId: suite.targetGraphId,
-                        inputBindings: [],
-                        required: true,
-                      },
-                    ],
-                  }))
-                }
-              >
-                + Add evaluator graph
-              </Button>
-            </div>
-          </section>
+                      </EvaluationFormField>
+                      {evaluatorWeightIssue ? (
+                        <p className="warning field full" role="alert">
+                          {evaluatorWeightIssue}
+                        </p>
+                      ) : null}
+                      {!isScoringSuite ? (
+                        <div className="evaluation-evaluator-run-on-error">
+                          <LabeledToggle
+                            id={`evaluation-evaluator-run-on-target-error-${evaluator.id}`}
+                            isChecked={evaluator.runOnTargetError === true}
+                            label="Run after target error"
+                            onChange={(runOnTargetError) =>
+                              onUpdate((current) => ({
+                                ...current,
+                                evaluators: current.evaluators.map((item) =>
+                                  item.id === evaluator.id ? { ...item, runOnTargetError } : item,
+                                ),
+                              }))
+                            }
+                          />
+                        </div>
+                      ) : null}
+                      <RemoveButton
+                        className="evaluation-editor-card-remove"
+                        label="Remove evaluator"
+                        onClick={() =>
+                          onUpdate((current) => ({
+                            ...current,
+                            evaluators: current.evaluators.filter((item) => item.id !== evaluator.id),
+                          }))
+                        }
+                      />
+                    </div>
+                  );
+                })}
+              </div>
+              <div className="evaluation-section-actions">
+                <Button
+                  appearance="primary"
+                  onClick={() =>
+                    onUpdate((current) => ({
+                      ...current,
+                      evaluators: [
+                        ...current.evaluators,
+                        {
+                          id: nanoid(),
+                          name: `Evaluator ${current.evaluators.length + 1}`,
+                          graphId: suite.targetGraphId,
+                          inputBindings: [],
+                          required: true,
+                        },
+                      ],
+                    }))
+                  }
+                >
+                  + Add evaluator graph
+                </Button>
+              </div>
+            </section>
           ) : null}
           {activeDefinitionTab === 'thresholds' && !isScoringSuite ? (
             <Thresholds
@@ -3513,14 +3768,7 @@ const Definition: FC<{
           <section className="section">
             <h2>Execution settings</h2>
             <div className="evaluation-execution-primary-grid">
-              <EvaluationFormField
-                label="Trials per enabled case"
-                description={
-                  isScoringSuite
-                    ? ''
-                    : ''
-                }
-              >
+              <EvaluationFormField label="Trials per enabled case" description={isScoringSuite ? '' : ''}>
                 <Textfield
                   type="number"
                   value={String(suite.configuration?.trialCount ?? 1)}
@@ -3584,96 +3832,97 @@ const Definition: FC<{
                   </button>
                 </div>
                 <div className="evaluation-additional-execution-settings-fields">
-              <EvaluationFormField
-                label="Per-graph timeout, sec"
-                description="Seconds allowed for each target or evaluator graph."
-                descriptionPlacement="after-label"
-              >
-                <Textfield
-                  type="number"
-                  value={suite.configuration?.timeoutMs == null ? '' : String(suite.configuration.timeoutMs / 1000)}
-                  placeholder="No timeout"
-                  onChange={(event) =>
-                    onUpdate((current) => ({
-                      ...current,
-                      configuration: {
-                        ...current.configuration,
-                        ...(event.currentTarget.value === ''
-                          ? { timeoutMs: undefined }
-                          : { timeoutMs: Math.max(1, Number(event.currentTarget.value) || 0) * 1000 }),
-                      },
-                    }))
-                  }
-                />
-              </EvaluationFormField>
-              <EvaluationFormField label="Recording retention">
-                <Select
-                  options={[
-                    { label: 'Keep failed and baseline recordings', value: 'failures-and-baselines' },
-                    { label: 'Keep every recording', value: 'all' },
-                  ]}
-                  value={[
-                    { label: 'Keep failed and baseline recordings', value: 'failures-and-baselines' },
-                    { label: 'Keep every recording', value: 'all' },
-                  ].find(
-                    (option) => option.value === (suite.configuration?.recordingRetention ?? 'failures-and-baselines'),
-                  )}
-                  onChange={(value) =>
-                    onUpdate((current) => ({
-                      ...current,
-                      configuration: {
-                        ...current.configuration,
-                        recordingRetention: value?.value as 'failures-and-baselines' | 'all',
-                      },
-                    }))
-                  }
-                />
-              </EvaluationFormField>
-              <EvaluationFormField label="Target graph seed">
-                <Textfield
-                  type="number"
-                  value={suite.configuration?.seed == null ? '' : String(suite.configuration.seed)}
-                  placeholder="Optional seed"
-                  onChange={(event) =>
-                    onUpdate((current) => ({
-                      ...current,
-                      configuration: {
-                        ...current.configuration,
-                        ...(event.currentTarget.value === ''
-                          ? { seed: undefined, seedGraphInputId: undefined }
-                          : { seed: Number(event.currentTarget.value) }),
-                      },
-                    }))
-                  }
-                />
-              </EvaluationFormField>
-              <EvaluationFormField
-                label="Seed target graph input"
-                description="Numeric Graph Input that receives each derived seed."
-                descriptionPlacement="after-label"
-              >
-                <Select
-                  placeholder="Choose numeric input"
-                  isDisabled={suite.configuration?.seed === undefined}
-                  options={targetInputs
-                    .filter(
-                      (input) =>
-                        (input.data.dataType === 'number' || input.data.dataType === 'any') &&
-                        !suite.inputBindings.some((binding) => binding.graphInputId === input.data.id),
-                    )
-                    .map((input) => ({ label: input.data.id, value: input.data.id }))}
-                  value={targetInputs
-                    .filter((input) => input.data.dataType === 'number' || input.data.dataType === 'any')
-                    .map((input) => ({ label: input.data.id, value: input.data.id }))
-                    .find((option) => option.value === suite.configuration?.seedGraphInputId)}
-                  onChange={(value) =>
-                    onUpdate((current) => ({
-                      ...current,
-                      configuration: { ...current.configuration, seedGraphInputId: value?.value },
-                    }))
-                  }
-                />
-              </EvaluationFormField>
+                  <EvaluationFormField
+                    label="Per-graph timeout, sec"
+                    description="Seconds allowed for each target or evaluator graph."
+                    descriptionPlacement="after-label"
+                  >
+                    <Textfield
+                      type="number"
+                      value={suite.configuration?.timeoutMs == null ? '' : String(suite.configuration.timeoutMs / 1000)}
+                      placeholder="No timeout"
+                      onChange={(event) =>
+                        onUpdate((current) => ({
+                          ...current,
+                          configuration: {
+                            ...current.configuration,
+                            ...(event.currentTarget.value === ''
+                              ? { timeoutMs: undefined }
+                              : { timeoutMs: Math.max(1, Number(event.currentTarget.value) || 0) * 1000 }),
+                          },
+                        }))
+                      }
+                    />
+                  </EvaluationFormField>
+                  <EvaluationFormField label="Recording retention">
+                    <Select
+                      options={[
+                        { label: 'Keep failed and baseline recordings', value: 'failures-and-baselines' },
+                        { label: 'Keep every recording', value: 'all' },
+                      ]}
+                      value={[
+                        { label: 'Keep failed and baseline recordings', value: 'failures-and-baselines' },
+                        { label: 'Keep every recording', value: 'all' },
+                      ].find(
+                        (option) =>
+                          option.value === (suite.configuration?.recordingRetention ?? 'failures-and-baselines'),
+                      )}
+                      onChange={(value) =>
+                        onUpdate((current) => ({
+                          ...current,
+                          configuration: {
+                            ...current.configuration,
+                            recordingRetention: value?.value as 'failures-and-baselines' | 'all',
+                          },
+                        }))
+                      }
+                    />
+                  </EvaluationFormField>
+                  <EvaluationFormField label="Target graph seed">
+                    <Textfield
+                      type="number"
+                      value={suite.configuration?.seed == null ? '' : String(suite.configuration.seed)}
+                      placeholder="Optional seed"
+                      onChange={(event) =>
+                        onUpdate((current) => ({
+                          ...current,
+                          configuration: {
+                            ...current.configuration,
+                            ...(event.currentTarget.value === ''
+                              ? { seed: undefined, seedGraphInputId: undefined }
+                              : { seed: Number(event.currentTarget.value) }),
+                          },
+                        }))
+                      }
+                    />
+                  </EvaluationFormField>
+                  <EvaluationFormField
+                    label="Seed target graph input"
+                    description="Numeric Graph Input that receives each derived seed."
+                    descriptionPlacement="after-label"
+                  >
+                    <Select
+                      placeholder="Choose numeric input"
+                      isDisabled={suite.configuration?.seed === undefined}
+                      options={targetInputs
+                        .filter(
+                          (input) =>
+                            (input.data.dataType === 'number' || input.data.dataType === 'any') &&
+                            !suite.inputBindings.some((binding) => binding.graphInputId === input.data.id),
+                        )
+                        .map((input) => ({ label: input.data.id, value: input.data.id }))}
+                      value={targetInputs
+                        .filter((input) => input.data.dataType === 'number' || input.data.dataType === 'any')
+                        .map((input) => ({ label: input.data.id, value: input.data.id }))
+                        .find((option) => option.value === suite.configuration?.seedGraphInputId)}
+                      onChange={(value) =>
+                        onUpdate((current) => ({
+                          ...current,
+                          configuration: { ...current.configuration, seedGraphInputId: value?.value },
+                        }))
+                      }
+                    />
+                  </EvaluationFormField>
                 </div>
               </div>
             )}
@@ -3833,16 +4082,17 @@ const Thresholds: FC<{
                   onChange={(event) =>
                     updateThreshold(
                       threshold.id,
-                      (current) => ({
-                        ...current,
-                        value:
-                          (Number(event.currentTarget.value) || 0) *
-                          (thresholdUsesPercentageValue(current.metric, current.operator)
-                            ? 0.01
-                            : isLatencyThresholdMetric(current.metric)
-                              ? 1_000
-                              : 1),
-                      }) as EvaluationThreshold,
+                      (current) =>
+                        ({
+                          ...current,
+                          value:
+                            (Number(event.currentTarget.value) || 0) *
+                            (thresholdUsesPercentageValue(current.metric, current.operator)
+                              ? 0.01
+                              : isLatencyThresholdMetric(current.metric)
+                                ? 1_000
+                                : 1),
+                        }) as EvaluationThreshold,
                     )
                   }
                 />
@@ -4163,9 +4413,13 @@ const Runs: FC<{
   scoreSort: EvaluationScoreSort;
   status: 'idle' | 'loading' | 'ready' | 'error';
   error?: string;
+  refreshError?: string;
+  expandedTrialExpansion?: EvaluationRunTrialExpansion;
   onSelect: (runId: string) => void;
   onScoreSortChange: (scoreSort: EvaluationScoreSort) => void;
+  onExpandedTrialsChange: (runId: string | undefined, trialIds: readonly string[]) => void;
   onRename: (runId: string, name: string) => void;
+  onDelete: (run: EvaluationRun) => void;
   onOpenRecording: (recordingId: string) => void;
 }> = ({
   dataset,
@@ -4175,40 +4429,85 @@ const Runs: FC<{
   scoreSort,
   status,
   error,
+  refreshError,
+  expandedTrialExpansion,
   onSelect,
   onScoreSortChange,
+  onExpandedTrialsChange,
   onRename,
+  onDelete,
   onOpenRecording,
 }) => {
   const liveRun =
     currentRun?.executionStatus === 'queued' || currentRun?.executionStatus === 'running' ? currentRun : undefined;
-  const selectedRun = runs.find((candidate) => candidate.id === selectedRunId);
-  const sortedRuns = useMemo(() => sortEvaluationRunsByScore(runs, scoreSort), [runs, scoreSort]);
-  const rawRun =
-    liveRun ?? (currentRun?.id === selectedRunId ? currentRun : selectedRun ?? currentRun ?? sortedRuns[0]);
-  const run = rawRun ? normalizeEvaluationRun(rawRun) : undefined;
-  const sortedTrials = useMemo(
-    () => (run ? sortEvaluationTrialsByScore(run.trials, scoreSort) : []),
-    [run, scoreSort],
+  const selectedRun = useMemo(() => runs.find((candidate) => candidate.id === selectedRunId), [runs, selectedRunId]);
+  const selectedRunSnapshot = useMemo(
+    () =>
+      selectedRun && currentRun?.id === selectedRun.id && selectedRun !== currentRun
+        ? reconcileEvaluationRunSnapshots(selectedRun, currentRun)
+        : selectedRun,
+    [currentRun, selectedRun],
   );
-  const [expandedTrialIds, setExpandedTrialIds] = useState<Set<string>>(new Set());
+  const run = useMemo(() => liveRun ?? selectedRunSnapshot ?? currentRun ?? runs[0], [currentRun, liveRun, runs, selectedRunSnapshot]);
+  const sortedTrials = useMemo(() => (run ? sortEvaluationTrialsByScore(run.trials, scoreSort) : []), [run, scoreSort]);
+  const runSummary = useMemo(() => (run ? getCachedEvaluationRunSummary(run) : undefined), [run]);
+  const expectedFieldLabels = useMemo(() => {
+    const expectedFieldNameCounts = new Map<string, number>();
+    for (const field of dataset?.fields ?? []) {
+      expectedFieldNameCounts.set(field.name, (expectedFieldNameCounts.get(field.name) ?? 0) + 1);
+    }
+    return new Map(
+      (dataset?.fields ?? []).map((field) => [
+        field.id,
+        expectedFieldNameCounts.get(field.name) === 1 ? field.name : `${field.name} (${field.id})`,
+      ]),
+    );
+  }, [dataset?.fields]);
+  const runOptions = useMemo(
+    () => runs.map((candidate) => ({ label: formatEvaluationRunOptionLabel(candidate), value: candidate.id })),
+    [runs],
+  );
+  const selectedRunOption = useMemo(
+    () => (run ? runOptions.find((option) => option.value === run.id) ?? { label: formatEvaluationRunOptionLabel(run), value: run.id } : undefined),
+    [run, runOptions],
+  );
+  const expandedTrialIds = useMemo(
+    () =>
+      new Set(
+        expandedTrialExpansion !== undefined && expandedTrialExpansion.runId === run?.id
+          ? expandedTrialExpansion.trialIds
+          : [],
+      ),
+    [expandedTrialExpansion, run?.id],
+  );
   const [renamingRunId, setRenamingRunId] = useState<string>();
 
   // Trial ids are run-scoped. Clearing an old run's explicit expansion when
   // the selected run changes avoids a stale card state leaking into a newly
   // selected history entry while still keeping every panel initially closed.
   useEffect(() => {
-    setExpandedTrialIds(new Set());
+    if (expandedTrialExpansion?.runId && expandedTrialExpansion.runId !== run?.id) {
+      onExpandedTrialsChange(run?.id, []);
+    }
     setRenamingRunId(undefined);
-  }, [run?.id]);
+  }, [expandedTrialExpansion?.runId, onExpandedTrialsChange, run?.id]);
 
   if (status === 'loading') return <div className="empty">Loading evaluation runs…</div>;
   if (status === 'error') return <div className="empty danger">Could not load evaluation runs: {error}</div>;
-  if (!run) return <div className="empty">Run a suite to inspect trials, metrics, and retained recordings here.</div>;
+  if (!run) {
+    return (
+      <section className="section">
+        <h2>Runs</h2>
+        {refreshError ? (
+          <p className="evaluation-run-history-refresh-warning">Could not refresh run history: {refreshError}</p>
+        ) : null}
+        <p className="empty">Run a suite to inspect trials, metrics, and retained recordings here.</p>
+      </section>
+    );
+  }
 
   const quality = getEvaluationRunQualityPresentation(run);
   const aggregate = run.aggregate;
-  const runSummary = aggregate ? summarizeEvaluationRun(run) : undefined;
   const summaryAggregate = runSummary?.aggregate ?? aggregate;
   const isScoringRun = run.evaluationMode === 'scoring';
   const isRunInProgress = run.executionStatus === 'queued' || run.executionStatus === 'running';
@@ -4244,6 +4543,7 @@ const Runs: FC<{
       summaryAggregate.p95LatencyMs < 0);
   const hasLatencyProblem =
     isExecutionSettled && (hasIncompleteExecution || summaryAggregate === undefined || hasInvalidLatencySummary);
+  const hasExplanationWarning = hasQualityProblem || hasIncompleteExecution;
   const pendingSummaryValue = '…';
   const formatScoreStatistic = (value: number | undefined) =>
     isRunInProgress ? pendingSummaryValue : formatEvaluationScore(value);
@@ -4270,53 +4570,20 @@ const Runs: FC<{
     (warning) =>
       !(
         isAccountingPartial &&
-        warning === 'Some provider pricing was unavailable. Cost totals are unavailable, and cost requirements cannot be evaluated.'
+        warning ===
+          'Some provider pricing was unavailable. Cost totals are unavailable, and cost requirements cannot be evaluated.'
       ),
   );
-  const runOptionLabel = (candidate: EvaluationRun) => {
-    const normalized = normalizeEvaluationRun(candidate);
-    const liveLabel =
-      normalized.executionStatus === 'queued'
-        ? 'Queued'
-        : normalized.executionStatus === 'running'
-          ? 'Running'
-          : undefined;
-    const result =
-      normalized.purpose === 'execution-benchmark'
-        ? `Execution benchmark · ${normalized.executionStatus}`
-        : `Evaluation · ${liveLabel ?? getEvaluationRunQualityPresentation(normalized).label}`;
-    const score = normalized.aggregate?.meanScore;
-    const scoreLabel =
-      normalized.evaluationMode === 'scoring' && typeof score === 'number' ? ` · Score ${formatEvaluationScore(score)}` : '';
-    return `${normalized.name ?? 'Unnamed'} · ${normalized.suiteName} · ${new Date(normalized.startedAt).toLocaleString()} · ${result}${scoreLabel}`;
-  };
-  const formatValue = (value: unknown) => JSON.stringify(value, null, 2) ?? String(value);
-  const expectedFieldNameCounts = new Map<string, number>();
-  for (const field of dataset?.fields ?? []) {
-    expectedFieldNameCounts.set(field.name, (expectedFieldNameCounts.get(field.name) ?? 0) + 1);
-  }
-  const expectedFieldLabels = new Map(
-    (dataset?.fields ?? []).map((field) => [
-      field.id,
-      expectedFieldNameCounts.get(field.name) === 1 ? field.name : `${field.name} (${field.id})`,
-    ]),
-  );
-
   return (
     <section className="section">
       <h2>Runs</h2>
+      {refreshError ? <p className="evaluation-run-history-refresh-warning">Could not refresh run history: {refreshError}</p> : null}
       {runs.length > 1 && (
         <div className="row">
           <Select
             className="field"
-            options={sortedRuns.map((candidate) => ({
-              label: runOptionLabel(candidate),
-              value: candidate.id,
-            }))}
-            value={{
-              label: runOptionLabel(run),
-              value: run.id,
-            }}
+            options={runOptions}
+            value={selectedRunOption}
             onChange={(value) => onSelect(value!.value)}
           />
         </div>
@@ -4350,12 +4617,13 @@ const Runs: FC<{
               {isRunInProgress
                 ? pendingSummaryValue
                 : isAccountingPartial || summaryAggregate?.totalCostUsd === undefined
-                ? 'Unavailable'
-                : `$${summaryAggregate.totalCostUsd.toFixed(4)}`}
+                  ? 'Unavailable'
+                  : `$${summaryAggregate.totalCostUsd.toFixed(4)}`}
             </span>
             {isAccountingPartial ? (
               <span className="evaluation-run-summary-cost-warning">
-                Provider pricing was unavailable. Cost thresholds cannot be evaluated and cost comparisons are unavailable.
+                Provider pricing was unavailable. Cost thresholds cannot be evaluated and cost comparisons are
+                unavailable.
               </span>
             ) : null}
           </div>
@@ -4416,7 +4684,11 @@ const Runs: FC<{
       </div>
 
       <div className="evaluation-run-summary-notice">
-        <p className="evaluation-run-explanation">{quality.explanation}</p>
+        <p
+          className={`evaluation-run-explanation${hasExplanationWarning ? ' evaluation-run-explanation-warning' : ''}`}
+        >
+          {quality.explanation}
+        </p>
       </div>
       {isScoringRun && runSummary ? (
         <div className="evaluation-threshold-results">
@@ -4503,23 +4775,7 @@ const Runs: FC<{
 
       <div className="evaluation-trial-list">
         {sortedTrials.map((trial) => {
-          const recordings: Array<{ label: string; reference: EvaluationRecordingReference }> = [];
-          if (trial.recording) recordings.push({ label: 'Load target graph recording', reference: trial.recording });
-          for (const observation of trial.observations) {
-            if (observation.recording) {
-              recordings.push({
-                label: `Load '${observation.name}' graph recording`,
-                reference: observation.recording,
-              });
-            }
-          }
           const isOpen = expandedTrialIds.has(trial.id);
-          const expectedValues = Object.fromEntries(
-            Object.entries(trial.expected).map(([fieldId, value]) => [
-              expectedFieldLabels.get(fieldId) ?? fieldId,
-              value,
-            ]),
-          );
           const trialQualityLabel =
             trial.qualityStatus === 'passed'
               ? 'Quality passed'
@@ -4538,13 +4794,12 @@ const Runs: FC<{
                 : trial.qualityStatus === 'scored'
                   ? 'scored'
                   : trial.qualityStatus;
-          const toggleTrial = () =>
-            setExpandedTrialIds((current) => {
-              const next = new Set(current);
-              if (next.has(trial.id)) next.delete(trial.id);
-              else next.add(trial.id);
-              return next;
-            });
+          const toggleTrial = () => {
+            const next = new Set(expandedTrialIds);
+            if (next.has(trial.id)) next.delete(trial.id);
+            else next.add(trial.id);
+            onExpandedTrialsChange(run.id, [...next]);
+          };
           return (
             <CollapsiblePanel
               key={trial.id}
@@ -4563,189 +4818,25 @@ const Runs: FC<{
                   >
                     {trial.executionStatus === 'completed' ? 'Executed' : `Execution ${trial.executionStatus}`}
                   </span>
-                  <span
-                    className={`trial-quality status-${trialStatusClass}`}
-                    title={trial.qualityReason.message}
-                  >
+                  <span className={`trial-quality status-${trialStatusClass}`} title={trial.qualityReason.message}>
                     {trialQualityLabel}
                   </span>
-                  <span className="trial-duration" title={formatEvaluationDurationSeconds(trial.totalMetrics.durationMs)}>
+                  <span
+                    className="trial-duration"
+                    title={formatEvaluationDurationSeconds(trial.totalMetrics.durationMs)}
+                  >
                     {formatEvaluationDurationSeconds(trial.totalMetrics.durationMs)}
                   </span>
                 </span>
               }
             >
-              <div className="evaluation-trial-content" id={`evaluation-trial-${trial.id}`}>
-                <div className="evaluation-trial-results">
-                  <div className="evaluation-result-block">
-                    <h4>Inputs</h4>
-                    <pre>{formatValue(trial.inputs)}</pre>
-                  </div>
-                  <div className="evaluation-result-block">
-                    <h4>Target outputs</h4>
-                    <pre>{formatValue(trial.outputs)}</pre>
-                  </div>
-                  <div className="evaluation-result-block">
-                    <h4>Expected values</h4>
-                    <pre>{formatValue(expectedValues)}</pre>
-                  </div>
-                  <div className="evaluation-result-block">
-                    <h4>Metrics</h4>
-                    <pre>
-                      {formatValue({
-                        duration: formatEvaluationDurationSeconds(trial.totalMetrics.durationMs),
-                        ...Object.fromEntries(
-                          Object.entries(trial.totalMetrics).filter(([key]) => key !== 'durationMs'),
-                        ),
-                      })}
-                    </pre>
-                  </div>
-                </div>
-
-                <div className="evaluation-checks">
-                  <h4>Checks</h4>
-                  {trial.observations.length === 0 ? (
-                    <p className="muted">
-                      {run.purpose === 'execution-benchmark'
-                        ? 'This execution benchmark did not judge output quality.'
-                        : 'No deterministic checks or evaluator graphs ran for this trial.'}
-                    </p>
-                  ) : (
-                    <div className="evaluation-observation-list">
-                      {trial.observations.map((observation) => {
-                        const evidenceRecord =
-                          observation.evidence !== null &&
-                          typeof observation.evidence === 'object' &&
-                          !Array.isArray(observation.evidence)
-                            ? observation.evidence
-                            : undefined;
-                        const hasActualExpected =
-                          evidenceRecord !== undefined &&
-                          (Object.hasOwn(evidenceRecord, 'actual') || Object.hasOwn(evidenceRecord, 'expected'));
-                        const assertionOperator =
-                          observation.kind === 'assertion' && typeof evidenceRecord?.operator === 'string'
-                            ? evaluationAssertionOperatorOptions.find(
-                                (option) => option.value === evidenceRecord.operator,
-                              )?.label
-                            : undefined;
-                        const assertionOutputPath =
-                          observation.kind === 'assertion' && typeof evidenceRecord?.outputPath === 'string'
-                            ? evidenceRecord.outputPath
-                            : undefined;
-                        const rawExpectedSource = evidenceRecord?.expectedSource;
-                        const structuredExpectedSource =
-                          rawExpectedSource !== null &&
-                          typeof rawExpectedSource === 'object' &&
-                          !Array.isArray(rawExpectedSource)
-                            ? rawExpectedSource
-                            : undefined;
-                        const expectedSourceKind =
-                          typeof rawExpectedSource === 'string'
-                            ? rawExpectedSource
-                            : typeof structuredExpectedSource?.kind === 'string'
-                              ? structuredExpectedSource.kind
-                              : undefined;
-                        const assertionExpectedFieldId =
-                          typeof structuredExpectedSource?.fieldId === 'string'
-                            ? structuredExpectedSource.fieldId
-                            : typeof evidenceRecord?.expectedFieldId === 'string'
-                              ? evidenceRecord.expectedFieldId
-                              : undefined;
-                        const expectedSource =
-                          observation.kind === 'assertion' && expectedSourceKind === 'dataset-field'
-                            ? assertionExpectedFieldId
-                              ? `Dataset field: ${expectedFieldLabels.get(assertionExpectedFieldId) ?? assertionExpectedFieldId}`
-                              : 'Dataset field'
-                            : observation.kind === 'assertion' && expectedSourceKind === 'literal'
-                              ? 'Literal JSON'
-                              : undefined;
-                        const actualFound =
-                          typeof evidenceRecord?.actualFound === 'boolean' ? evidenceRecord.actualFound : undefined;
-                        return (
-                          <div className="evaluation-observation" key={observation.id}>
-                            <div className="evaluation-observation-heading">
-                              <h5>{observation.name}</h5>
-                              <span
-                                className={`status-${observation.status === 'passed' ? 'pass' : observation.status === 'scored' ? 'scored' : observation.status === 'failed' || observation.status === 'error' ? 'fail' : 'not-evaluated'}`}
-                              >
-                                {observation.status.charAt(0).toUpperCase() + observation.status.slice(1)}
-                              </span>
-                            </div>
-                            <span className="muted">
-                              {observation.kind === 'graph' ? 'Evaluator graph' : 'Deterministic check'} ·{' '}
-                              {observation.required ? 'required' : 'informational'}
-                              {observation.score === undefined
-                                ? ''
-                                : ` · score ${formatEvaluationScore(observation.score)}`}
-                            </span>
-                            {assertionOutputPath || assertionOperator || expectedSource ? (
-                              <p className="muted">
-                                {assertionOutputPath ? `Target: ${assertionOutputPath}` : ''}
-                                {assertionOperator ? ` · Comparison: ${assertionOperator}` : ''}
-                                {expectedSource ? ` · Expected source: ${expectedSource}` : ''}
-                              </p>
-                            ) : null}
-                            {observation.message ? <p>{observation.message}</p> : null}
-                            {observation.evidence === undefined ? null : hasActualExpected ? (
-                              <div className="evaluation-observation-evidence">
-                                <div>
-                                  <h6>Actual output value</h6>
-                                  <pre>
-                                    {actualFound === false
-                                      ? 'Output path was not found.'
-                                      : formatValue(evidenceRecord.actual)}
-                                  </pre>
-                                </div>
-                                <div>
-                                  <h6>Expected value</h6>
-                                  <pre>{formatValue(evidenceRecord.expected)}</pre>
-                                </div>
-                              </div>
-                            ) : (
-                              <>
-                                <p className="muted">Evidence</p>
-                                <pre>{formatValue(observation.evidence)}</pre>
-                              </>
-                            )}
-                            {observation.metrics === undefined ? null : (
-                              <>
-                                <p className="muted">Custom metrics</p>
-                                <pre>{formatValue(observation.metrics)}</pre>
-                              </>
-                            )}
-                          </div>
-                        );
-                      })}
-                    </div>
-                  )}
-                </div>
-
-                {trial.error ? <p className="danger">{trial.error}</p> : null}
-                {trial.targetProviderAttempts === undefined ? null : (
-                  <div className="evaluation-checks evaluation-result-block">
-                    <h4>Provider attempts</h4>
-                    <pre>{formatValue(formatEvaluationTimingDiagnostics(trial.targetProviderAttempts))}</pre>
-                  </div>
-                )}
-                <div className="evaluation-trial-footer">
-                  {recordings.length === 0 ? (
-                    <span className="muted">No replay recording is retained for this trial.</span>
-                  ) : (
-                    recordings.map((recording) => (
-                      <span key={recording.reference.id}>
-                        <span className="pill">{recording.reference.retention}</span>{' '}
-                        <Button
-                          appearance="subtle"
-                          className="evaluation-secondary-action"
-                          onClick={() => onOpenRecording(recording.reference.id)}
-                        >
-                          {recording.label}
-                        </Button>
-                      </span>
-                    ))
-                  )}
-                </div>
-              </div>
+              <EvaluationTrialDetails
+                expectedFieldLabels={expectedFieldLabels}
+                expanded={isOpen}
+                onOpenRecording={onOpenRecording}
+                runPurpose={run.purpose}
+                trial={trial}
+              />
             </CollapsiblePanel>
           );
         })}
@@ -4757,6 +4848,20 @@ const Runs: FC<{
           ))}
         </ul>
       ) : null}
+      <div className="evaluation-run-delete-action">
+        <Button
+          appearance="danger"
+          isDisabled={isRunInProgress}
+          title={
+            isRunInProgress
+              ? 'A running evaluation cannot be deleted.'
+              : 'Permanently delete this run and its retained recordings.'
+          }
+          onClick={() => onDelete(run)}
+        >
+          Delete run
+        </Button>
+      </div>
     </section>
   );
 };

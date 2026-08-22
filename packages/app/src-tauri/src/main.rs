@@ -14,6 +14,7 @@ use tauri::{AppHandle, InvokeError, Manager};
 use tauri::{CustomMenuItem, Menu, Submenu};
 #[cfg(target_os = "windows")]
 use tauri_plugin_window_state::StateFlags;
+mod evaluation_store;
 mod plugins;
 
 #[cfg(target_os = "windows")]
@@ -34,6 +35,11 @@ fn main() {
         .plugin(create_window_state_plugin_builder().build())
         .invoke_handler(tauri::generate_handler![
             get_environment_variable,
+            evaluation_store::evaluation_store_get,
+            evaluation_store::evaluation_store_set,
+            evaluation_store::evaluation_store_delete,
+            evaluation_store::evaluation_store_migration_completed,
+            evaluation_store::evaluation_store_import_legacy,
             plugins::extract_package_plugin_tarball,
             allow_data_file_scope,
             read_relative_project_file

@@ -199,7 +199,10 @@ test('an execution benchmark runs only the target and never claims a quality res
 
 test('live project optional fields do not prevent evaluation provenance fingerprinting', async () => {
   const withExplicitUndefined = structuredClone(project);
-  const targetNode = withExplicitUndefined.graphs.target!.nodes[0]! as { description?: string; data: Record<string, unknown> };
+  const targetNode = withExplicitUndefined.graphs.target!.nodes[0]! as {
+    description?: string;
+    data: Record<string, unknown>;
+  };
   targetNode.description = undefined;
   targetNode.data.defaultValue = undefined;
   const evaluatorNode = withExplicitUndefined.graphs.evaluator!.nodes[0]! as { description?: string };
@@ -209,7 +212,9 @@ test('live project optional fields do not prevent evaluation provenance fingerpr
     [project, withExplicitUndefined].map((projectForRun) =>
       runEvaluationSuite({
         project: projectForRun,
-        evaluationData: data(suite({ evaluators: [{ id: 'judge', name: 'Judge', graphId: 'evaluator', required: true }] })),
+        evaluationData: data(
+          suite({ evaluators: [{ id: 'judge', name: 'Judge', graphId: 'evaluator', required: true }] }),
+        ),
         dataset: dataset(),
         suiteId: 'suite',
         runGraph: async ({ graphId }) =>
@@ -223,7 +228,10 @@ test('live project optional fields do not prevent evaluation provenance fingerpr
   assert.equal(withOptionalFields.executionStatus, 'completed');
   assert.equal(withOptionalFields.provenance.projectFingerprint, withoutOptionalFields.provenance.projectFingerprint);
   assert.equal(withOptionalFields.provenance.targetFingerprint, withoutOptionalFields.provenance.targetFingerprint);
-  assert.deepEqual(withOptionalFields.provenance.evaluatorFingerprints, withoutOptionalFields.provenance.evaluatorFingerprints);
+  assert.deepEqual(
+    withOptionalFields.provenance.evaluatorFingerprints,
+    withoutOptionalFields.provenance.evaluatorFingerprints,
+  );
 });
 
 test('provenance ignores graph presentation edits but tracks executable graph changes', async () => {
@@ -247,7 +255,11 @@ test('provenance ignores graph presentation edits but tracks executable graph ch
       suiteId: 'suite',
       runGraph: async () => ({ outputs: { result: 'ok' }, metrics: { durationMs: 1 } }),
     });
-  const [base, cosmetic, material] = await Promise.all([execute(project), execute(cosmeticProject), execute(materialProject)]);
+  const [base, cosmetic, material] = await Promise.all([
+    execute(project),
+    execute(cosmeticProject),
+    execute(materialProject),
+  ]);
 
   assert.equal(cosmetic.provenance.projectFingerprint, base.provenance.projectFingerprint);
   assert.equal(cosmetic.provenance.targetFingerprint, base.provenance.targetFingerprint);
@@ -276,6 +288,12 @@ test('progress updates are detached immutable revisions', async () => {
   assert.equal(updates[0]?.provenance.accountingComplete, true);
   assert.deepEqual(updates[0]?.warnings, []);
   assert.equal(updates.at(-1)?.provenance.accountingComplete, false);
+
+  // The last running snapshot already contains every settled trial. Terminal
+  // aggregation may add run-level facts, but it must never revise individual
+  // trial scores or total durations after those cards have been published.
+  assert.deepEqual(updates.at(-2)?.trials, updates.at(-1)?.trials);
+  assert.deepEqual(updates.at(-1)?.trials, result.trials);
 
   result.provenance.accountingComplete = true;
   result.warnings.push('mutation after completion');
@@ -1310,7 +1328,12 @@ test('scoring suites average trials per case before averaging equally across cas
       // pass/fail contract.
       return {
         outputs: { result: { score: scores[run.caseIndex]![run.trialIndex], passed: 'ignored' } },
-        metrics: { durationMs: [[10, 20], [30, 40]][run.caseIndex]![run.trialIndex]! },
+        metrics: {
+          durationMs: [
+            [10, 20],
+            [30, 40],
+          ][run.caseIndex]![run.trialIndex]!,
+        },
       };
     },
   });

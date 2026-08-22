@@ -15,6 +15,8 @@ import {
   getUnusedExpectedFields,
   getEvaluationSuiteReferenceStatus,
   getEvaluationRunQualityPresentation,
+  getEvaluationRunHistoryPresentation,
+  formatEvaluationRunOptionLabel,
   formatEvaluationDurationSeconds,
   getEvaluationAssertionAuthoringIssue,
   getEvaluationEvaluatorAuthoringIssue,
@@ -34,7 +36,6 @@ import {
   removeEvaluationDatasetField,
   removeEvaluationDatasetFieldReferences,
   suggestEvaluationAssertionOperator,
-  sortEvaluationRunsByScore,
   sortEvaluationTrialsByScore,
 } from './evaluationWorkspaceModel.js';
 
@@ -51,7 +52,7 @@ test('suite selection is explicit and never falls back to the first suite', () =
   assert.equal(resolveSelectedEvaluationSuite([suite], suite.id), suite);
 });
 
-test('runs and trials sort by score without mutating their execution order', () => {
+test('trials sort by score without mutating their execution order', () => {
   const weighted = {
     id: 'weighted',
     observations: [
@@ -72,18 +73,10 @@ test('runs and trials sort by score without mutating their execution order', () 
     sortEvaluationTrialsByScore(trials, 'score-asc').map((trial) => trial.id),
     ['low', 'weighted', 'missing'],
   );
-  assert.deepEqual(trials.map((trial) => trial.id), ['low', 'missing', 'weighted']);
-
-  const runs = [
-    { id: 'low-run', aggregate: { meanScore: 0.2 } },
-    { id: 'unscored-run', aggregate: {} },
-    { id: 'high-run', aggregate: { meanScore: 0.9 } },
-  ] as unknown as EvaluationRun[];
   assert.deepEqual(
-    sortEvaluationRunsByScore(runs, 'score-desc').map((run) => run.id),
-    ['high-run', 'low-run', 'unscored-run'],
+    trials.map((trial) => trial.id),
+    ['low', 'missing', 'weighted'],
   );
-  assert.deepEqual(runs.map((run) => run.id), ['low-run', 'unscored-run', 'high-run']);
 });
 
 test('evaluation durations are consistently presented in seconds', () => {
@@ -91,6 +84,63 @@ test('evaluation durations are consistently presented in seconds', () => {
   assert.equal(formatEvaluationDurationSeconds(13_799), '13.8 sec');
   assert.equal(formatEvaluationDurationSeconds(undefined), 'Unavailable');
   assert.equal(formatEvaluationDurationSeconds(-1), 'Unavailable');
+});
+
+test('retained-run labels read trusted history without changing its evidence', () => {
+  const run = {
+    id: 'run-1',
+    name: '  Release candidate  ',
+    suiteName: 'Glossary suite',
+    startedAt: '2026-08-23T10:00:00.000Z',
+    purpose: 'evaluation',
+    evaluationMode: 'scoring',
+    executionStatus: 'completed',
+    qualityStatus: 'scored',
+    qualityReason: { code: 'scores-complete', message: 'Every requested trial produced a score.' },
+    aggregate: { meanScore: 0.875 },
+    trials: [
+      {
+        id: 'trial-1',
+        inputs: { story: 'large retained input' },
+        outputs: { glossary: ['large retained output'] },
+      },
+    ],
+  } as unknown as EvaluationRun;
+  const before = structuredClone(run);
+
+  const label = formatEvaluationRunOptionLabel(run);
+
+  assert.match(label, /^Release candidate · Glossary suite · /u);
+  assert.match(label, /Evaluation · Scored · Score 87\.5\/100$/u);
+  assert.deepEqual(run, before);
+
+  assert.match(
+    formatEvaluationRunOptionLabel({ ...run, name: ' ', executionStatus: 'running' }),
+    /^Unnamed · Glossary suite · .* · Evaluation · Running · Score 87\.5\/100$/u,
+  );
+});
+
+test('Runs keeps cached or in-memory evidence visible while durable history settles', () => {
+  assert.deepEqual(getEvaluationRunHistoryPresentation('idle', true, false, false), {
+    status: 'loading',
+    hasEvidence: false,
+  });
+  assert.deepEqual(getEvaluationRunHistoryPresentation('loading', true, true, false), {
+    status: 'ready',
+    hasEvidence: true,
+  });
+  assert.deepEqual(getEvaluationRunHistoryPresentation('error', true, false, true), {
+    status: 'ready',
+    hasEvidence: true,
+  });
+  assert.deepEqual(getEvaluationRunHistoryPresentation('error', true, false, false), {
+    status: 'error',
+    hasEvidence: false,
+  });
+  assert.deepEqual(getEvaluationRunHistoryPresentation('idle', false, false, true), {
+    status: 'idle',
+    hasEvidence: false,
+  });
 });
 
 test('resource reassignment clears only evaluator bindings owned by the changed resource', () => {
@@ -309,7 +359,10 @@ test('run history keeps the terminal in-memory run when a delayed store read is 
     aggregate: {},
   } as EvaluationRun;
 
-  assert.deepEqual(mergeEvaluationRunHistory([stalePersistedRun], completedRun), [completedRun]);
+  const [merged] = mergeEvaluationRunHistory([stalePersistedRun], completedRun);
+
+  assert.equal(merged?.executionStatus, 'completed');
+  assert.deepEqual(merged?.aggregate, {});
 });
 
 test('run history favors a terminal snapshot when revisions are equal', () => {
@@ -325,7 +378,36 @@ test('run history favors a terminal snapshot when revisions are equal', () => {
     aggregate: {},
   } as EvaluationRun;
 
-  assert.deepEqual(mergeEvaluationRunHistory([stalePersistedRun], completedRun), [completedRun]);
+  const [merged] = mergeEvaluationRunHistory([stalePersistedRun], completedRun);
+
+  assert.equal(merged?.executionStatus, 'completed');
+  assert.deepEqual(merged?.aggregate, {});
+});
+
+test('run history keeps all persisted trials when an equal-revision terminal snapshot is partial', () => {
+  const persistedRun = {
+    id: 'run-1',
+    suiteId: suite.id,
+    revision: 5,
+    executionStatus: 'completed',
+    warnings: [],
+    trials: [
+      { id: 'first', observations: [] },
+      { id: 'second', observations: [] },
+    ],
+  } as unknown as EvaluationRun;
+  const partialRun = {
+    ...persistedRun,
+    trials: [{ id: 'first', observations: [], recording: { id: 'first-recording', retention: 'temporary' } }],
+  } as unknown as EvaluationRun;
+
+  const [merged] = mergeEvaluationRunHistory([persistedRun], partialRun);
+
+  assert.deepEqual(
+    merged?.trials.map((trial) => trial.id),
+    ['first', 'second'],
+  );
+  assert.equal(merged?.trials[0]?.recording?.id, 'first-recording');
 });
 
 test('run history preserves a stored user-assigned name while merging a live execution snapshot', () => {

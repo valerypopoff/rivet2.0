@@ -11,6 +11,7 @@ import {
   deserializeEvaluationProjectData,
   fingerprintEvaluationDataset,
   InMemoryEvaluationRunStore,
+  normalizeEvaluationLibrary,
   normalizeEvaluationBaselineSnapshot,
   normalizeEvaluationRun,
   normalizeEvaluationTrial,
@@ -43,6 +44,27 @@ function run(revision: number, status: EvaluationRun['executionStatus']): Evalua
     thresholdResults: [],
     trials: [],
     warnings: [],
+  };
+}
+
+function trial(id: string, recordingId?: string): EvaluationRun['trials'][number] {
+  return {
+    id,
+    caseId: id,
+    caseName: id,
+    caseIndex: 0,
+    trialIndex: 0,
+    executionStatus: 'completed',
+    qualityStatus: 'not-evaluated',
+    qualityReason: { code: 'no-trial-quality-checks', message: 'No quality checks evaluated this trial.' },
+    inputs: {},
+    expected: {},
+    outputs: {},
+    observations: [],
+    targetMetrics: { durationMs: 1 },
+    evaluatorMetrics: { durationMs: 0 },
+    totalMetrics: { durationMs: 1 },
+    ...(recordingId === undefined ? {} : { recording: { id: recordingId, retention: 'temporary' as const } }),
   };
 }
 
@@ -85,6 +107,58 @@ test('in-memory run stores normalize an unchecked legacy pass as not evaluated',
   assert.equal(stored?.trials[0]?.executionStatus, 'completed');
   assert.equal(stored?.trials[0]?.qualityStatus, 'not-evaluated');
   assert.equal('status' in (stored?.trials[0] ?? {}), false);
+});
+
+test('in-memory evaluation stores keep library values detached from callers', async () => {
+  const store = new InMemoryEvaluationRunStore();
+  const library = await store.getLibrary();
+  library.migratedLegacyProjectIds.push('project' as ProjectId, 'project' as ProjectId);
+  await store.putLibrary(library);
+  library.migratedLegacyProjectIds.push('mutated-after-write' as ProjectId);
+
+  assert.deepEqual((await store.getLibrary()).migratedLegacyProjectIds, ['project']);
+});
+
+test('library normalization removes baselines whose suites no longer exist', () => {
+  const completed = run(1, 'completed');
+  const aggregate = {
+    trialCount: 0,
+    evaluatedTrialCount: 0,
+    notEvaluatedTrialCount: 0,
+    unableToEvaluateTrialCount: 0,
+    passedTrialCount: 0,
+    failedTrialCount: 0,
+    erroredTrialCount: 0,
+    canceledTrialCount: 0,
+    passRate: 0,
+    averageLatencyMs: 0,
+    p95LatencyMs: 0,
+    targetErrorRate: 0,
+    evaluatorErrorRate: 0,
+    toolFailureRate: 0,
+    metrics: {},
+  };
+  const normalized = normalizeEvaluationLibrary({
+    version: 1,
+    data: {
+      version: 1,
+      suites: [],
+      baselines: [
+        {
+          id: 'orphan-baseline',
+          suiteId: 'missing-suite',
+          createdAt: completed.startedAt,
+          provenance: completed.provenance,
+          aggregate,
+          cases: [],
+        },
+      ],
+    },
+    datasets: [],
+    migratedLegacyProjectIds: [],
+  });
+
+  assert.deepEqual(normalized.data.baselines, []);
 });
 
 test('normalization replaces quality reasons that contradict normalized purpose or status', () => {
@@ -503,6 +577,59 @@ test('run stores do not let an equal-revision progress snapshot demote a termina
   assert.equal(stored?.executionStatus, 'completed');
 });
 
+test('run stores never replace fuller equal-revision evidence with a partial terminal snapshot', async () => {
+  const store = new InMemoryEvaluationRunStore();
+  const complete = { ...run(4, 'completed'), trials: [trial('first'), trial('second')] };
+  const partial = { ...run(4, 'completed'), trials: [trial('first', 'recording-first')] };
+
+  await store.put(complete);
+  await store.put(partial);
+
+  const stored = await store.get({ projectId: 'project' as ProjectId, runId: 'run' });
+  assert.deepEqual(
+    stored?.trials.map((candidate) => candidate.id),
+    ['first', 'second'],
+  );
+  assert.equal(stored?.trials[0]?.recording?.id, 'recording-first');
+});
+
+test('run stores preserve missing evaluator observations from equal-revision snapshots', async () => {
+  const store = new InMemoryEvaluationRunStore();
+  const firstObservation = {
+    id: 'first-evaluator',
+    kind: 'graph' as const,
+    name: 'First evaluator',
+    status: 'scored' as const,
+    required: true,
+    score: 0.8,
+  };
+  const secondObservation = {
+    id: 'second-evaluator',
+    kind: 'graph' as const,
+    name: 'Second evaluator',
+    status: 'scored' as const,
+    required: true,
+    score: 0.9,
+  };
+  const complete = {
+    ...run(4, 'completed'),
+    trials: [{ ...trial('trial'), observations: [firstObservation, secondObservation] }],
+  };
+  const partial = {
+    ...complete,
+    trials: [{ ...complete.trials[0]!, observations: [firstObservation] }],
+  };
+
+  await store.put(complete);
+  await store.put(partial);
+
+  const stored = await store.get({ projectId: 'project' as ProjectId, runId: 'run' });
+  assert.deepEqual(
+    stored?.trials[0]?.observations.map((observation) => observation.id),
+    ['first-evaluator', 'second-evaluator'],
+  );
+});
+
 test('run normalization preserves only a valid planned target-execution count', () => {
   const valid = normalizeEvaluationRun({ ...run(1, 'running'), requestedTrialCount: 3 });
   const invalid = normalizeEvaluationRun({ ...run(1, 'running'), requestedTrialCount: -1 });
@@ -547,6 +674,25 @@ test('temporary recordings expire without affecting durable run summaries', asyn
 
   assert.equal(await store.getRecording({ projectId: 'project' as ProjectId, recordingId: 'expired' }), undefined);
   assert.equal((await store.get({ projectId: 'project' as ProjectId, runId: 'run' }))?.id, 'run');
+});
+
+test('recording stores reject malformed durable evidence at the write boundary', async () => {
+  const store = new InMemoryEvaluationRunStore();
+  const malformed = {
+    ...recording(),
+    createdAt: 'not-a-date',
+  };
+
+  await assert.rejects(store.putRecording(malformed), /invalid identity, payload, or creation time/);
+});
+
+test('dataset snapshot stores reject unscoped or invalidly dated evidence', async () => {
+  const store = new InMemoryEvaluationRunStore();
+  const valid = snapshot();
+  const { projectId: _projectId, ...unscopedDataset } = valid.dataset;
+
+  await assert.rejects(store.putDatasetSnapshot({ ...valid, dataset: unscopedDataset }), /must belong to its project/);
+  await assert.rejects(store.putDatasetSnapshot({ ...valid, createdAt: 'not-a-date' }), /invalid identity or creation/);
 });
 
 test('dataset snapshots are content-addressed, project-scoped, and detached from caller mutation', async () => {

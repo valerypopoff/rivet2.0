@@ -1,12 +1,13 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import type { EvaluationDataset, EvaluationSuite } from '@valerypopoff/rivet2-evaluations';
+import type { EvaluationDataset, EvaluationRun, EvaluationSuite } from '@valerypopoff/rivet2-evaluations';
 import type { ProjectId } from '@valerypopoff/rivet2-core';
 import { JSDOM } from 'jsdom';
 import { createRoot } from 'react-dom/client';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { act } from 'react-dom/test-utils';
 import { EvaluationDefinitionTabs } from './EvaluationDefinitionTabs.js';
+import { EvaluationTrialDetails } from './EvaluationTrialDetails.js';
 import { EvaluationFormField } from './EvaluationFormField.js';
 import { EvaluationSectionTabs } from './EvaluationSectionTabs.js';
 import { EvaluationSuiteSidebar } from './EvaluationSuiteSidebar.js';
@@ -108,6 +109,88 @@ test('suite tabs expose definition, runs, and comparison availability without bu
   assert.match(html, /role="tab"[^>]*aria-selected="true"[^>]*>Definition/u);
   assert.doesNotMatch(html, />Dataset</u);
   assert.match(html, /disabled=""[^>]*>Compare/u);
+});
+
+test('closed trial rows defer payload-heavy details until the row is expanded', () => {
+  const run = {
+    version: 2,
+    id: 'run-1',
+    projectId: 'project-1',
+    suiteId: 'suite-1',
+    suiteName: 'Payload suite',
+    startedAt: '2026-08-23T10:00:00.000Z',
+    purpose: 'evaluation',
+    evaluationMode: 'scoring',
+    executionStatus: 'completed',
+    qualityStatus: 'scored',
+    qualityReason: { code: 'scores-complete', message: 'Every requested trial produced a score.' },
+    accountingStatus: 'complete',
+    provenance: {
+      projectFingerprint: 'project',
+      suiteFingerprint: 'suite',
+      datasetFingerprint: 'dataset',
+      targetFingerprint: 'target',
+      evaluatorFingerprints: {},
+      executionMode: 'evaluation',
+      accountingComplete: true,
+    },
+    thresholdResults: [],
+    warnings: [],
+    trials: [
+      {
+        id: 'trial-1',
+        caseId: 'case-1',
+        caseName: 'Payload case',
+        caseIndex: 0,
+        trialIndex: 0,
+        executionStatus: 'completed',
+        qualityStatus: 'scored',
+        qualityReason: { code: 'scores-complete', message: 'Scored.' },
+        inputs: { source: 'payload-only-after-expansion' },
+        expected: { expected: 'retained expected value' },
+        outputs: { output: 'retained target output' },
+        observations: [
+          {
+            id: 'evaluator-1',
+            name: 'Evaluator 1',
+            kind: 'graph',
+            required: true,
+            status: 'scored',
+            score: 0.9,
+            evidence: { note: 'retained evaluator evidence' },
+            recording: { id: 'evaluator-recording', retention: 'retained' },
+          },
+        ],
+        targetMetrics: { durationMs: 1000 },
+        evaluatorMetrics: { durationMs: 500 },
+        totalMetrics: { durationMs: 1500 },
+        targetProviderAttempts: { attempt: 'retained provider diagnostics' },
+        recording: { id: 'target-recording', retention: 'retained' },
+      },
+    ],
+  } as unknown as EvaluationRun;
+  const props = {
+    expectedFieldLabels: new Map<string, string>(),
+    onOpenRecording: () => undefined,
+    runPurpose: 'evaluation' as const,
+    trial: run.trials[0]!,
+  };
+
+  const collapsed = renderToStaticMarkup(<EvaluationTrialDetails {...props} expanded={false} />);
+
+  assert.match(collapsed, /id="evaluation-trial-trial-1"/u);
+  assert.doesNotMatch(collapsed, /payload-only-after-expansion/u);
+  assert.doesNotMatch(collapsed, /retained evaluator evidence/u);
+  assert.doesNotMatch(collapsed, /Load target graph recording/u);
+
+  const expanded = renderToStaticMarkup(<EvaluationTrialDetails {...props} expanded />);
+
+  assert.match(expanded, /payload-only-after-expansion/u);
+  assert.match(expanded, /retained target output/u);
+  assert.match(expanded, /retained evaluator evidence/u);
+  assert.match(expanded, /retained provider diagnostics/u);
+  assert.match(expanded, /Load target graph recording/u);
+  assert.match(expanded, /Load &#x27;Evaluator 1&#x27; graph recording/u);
 });
 
 test('definition editor tabs expose counted quality editors with the active panel relationship', () => {

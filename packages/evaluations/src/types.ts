@@ -30,7 +30,7 @@ export type EvaluationDataset = {
    * Legacy project ownership retained only while importing older project
    * files. Locally persisted evaluation datasets intentionally omit it so
    * they can be reused with any currently open project.
-  */
+   */
   projectId?: ProjectId;
   name: string;
   fields: EvaluationDatasetField[];
@@ -191,6 +191,19 @@ export type EvaluationProjectData = {
   version: 1;
   suites: EvaluationSuite[];
   baselines: EvaluationBaselineSnapshot[];
+};
+
+/**
+ * Rivet-local evaluation resources. This is deliberately outside project
+ * files so one Rivet instance can retain its evaluation library independently
+ * of whichever project is currently open.
+ */
+export type EvaluationLibrary = {
+  version: 1;
+  data: EvaluationProjectData;
+  datasets: EvaluationDataset[];
+  /** Legacy project IDs whose embedded evaluation resources were imported. */
+  migratedLegacyProjectIds: ProjectId[];
 };
 
 export type EvaluationObservationStatus = 'passed' | 'failed' | 'scored' | 'error' | 'skipped';
@@ -501,6 +514,22 @@ export type EvaluationRunStore = {
   }): Promise<void>;
   /** Pins all artifacts belonging to the run before its compact baseline is saved in the project. */
   promoteBaseline(input: { projectId: ProjectId; runId: string }): Promise<void>;
+};
+
+export type EvaluationStoreInitialization = {
+  /** A recoverable persistence warning that a host may surface to the user. */
+  warning?: string;
+};
+
+/**
+ * Complete persistence boundary for Evaluations. Desktop, browser, and hosted
+ * Rivet instances implement this same contract so definitions and operational
+ * evidence cannot silently land in different stores.
+ */
+export type EvaluationStore = EvaluationRunStore & {
+  initialize?(): Promise<EvaluationStoreInitialization | void>;
+  getLibrary(): Promise<EvaluationLibrary>;
+  putLibrary(library: EvaluationLibrary): Promise<void>;
 };
 
 export type EvaluationReporter = {

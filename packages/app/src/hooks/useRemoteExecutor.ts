@@ -24,7 +24,7 @@ import { fillMissingSettingsFromEnvironmentVariables } from '../utils/tauri';
 import { loadedProjectState, projectContextState, projectDataState, projectState } from '../state/savedGraphs';
 import { useStableCallback } from './useStableCallback';
 import { toast, type Id as ToastId } from 'react-toastify';
-import { evaluationsState } from '../state/evaluations';
+import { applyEvaluationRunSnapshot, evaluationsState } from '../state/evaluations';
 import {
   EvaluationGraphExecutionError,
   fingerprintEvaluationDataset,
@@ -754,10 +754,11 @@ export function useRemoteExecutor() {
       if (!evaluationGraph) {
         throw new Error(`Evaluation target graph "${suite.targetGraphId}" no longer exists.`);
       }
-      const projectForEvaluation = withDerivedProjectPluginSpecs(
-        evaluationBaseProject,
-        { appPluginStates: pluginStates, currentGraph: evaluationGraph, registry: projectNodeRegistry },
-      );
+      const projectForEvaluation = withDerivedProjectPluginSpecs(evaluationBaseProject, {
+        appPluginStates: pluginStates,
+        currentGraph: evaluationGraph,
+        registry: projectNodeRegistry,
+      });
       const evaluationProjectId = projectForEvaluation.metadata.id;
       if (!evaluationProjectId)
         throw new Error('The loaded project is missing its project ID, so the evaluation cannot be stored.');
@@ -838,6 +839,7 @@ export function useRemoteExecutor() {
         runningToastId = toast.info(`Running ${runKind}: ${suite.name}`);
         currentExecution.onEvaluationStart();
         updateActiveProjectEvaluationState((state) => ({ ...state, runningSuiteId: suiteId, currentRun: undefined }));
+        let recordingPersistenceFailureCount = 0;
         const result = await runEvaluationSuite({
           project: projectForEvaluation,
           evaluationData: evaluations.data,
@@ -847,11 +849,9 @@ export function useRemoteExecutor() {
           executionMode: 'remote',
           signal: evaluationAbortController.signal,
           onUpdate: (run) => {
-            updateActiveProjectEvaluationState((state) => {
-              const existing =
-                state.currentRun?.id === run.id ? state.currentRun : state.runs.find((candidate) => candidate.id === run.id);
-              return { ...state, currentRun: preserveEvaluationRunName(existing, run) };
-            });
+            // Keep the selected run continuous across the terminal snapshot
+            // and the asynchronous recording/history persistence that follows.
+            updateActiveProjectEvaluationState((state) => applyEvaluationRunSnapshot(state, run));
           },
           runGraph: async ({ graphId, inputs, project: evaluationProject, signal, metadata }) => {
             const startedAt = Date.now();
@@ -875,6 +875,7 @@ export function useRemoteExecutor() {
                 });
                 return recording;
               } catch (error) {
+                recordingPersistenceFailureCount += 1;
                 logRuntimeDebug('Remote evaluation recording was not retained.', {
                   error,
                   graphId,
@@ -949,6 +950,11 @@ export function useRemoteExecutor() {
           finalizedResult,
         );
         if (datasetSnapshotWarning) finalizedRun.warnings.push(datasetSnapshotWarning);
+        if (recordingPersistenceFailureCount > 0) {
+          finalizedRun.warnings.push(
+            `${recordingPersistenceFailureCount} replay recording${recordingPersistenceFailureCount === 1 ? '' : 's'} could not be retained by application storage.`,
+          );
+        }
         try {
           await Promise.all(
             evaluationRecordingRetentionUpdates(evaluationProjectId, finalizedRun.trials).map((update) =>
@@ -973,21 +979,10 @@ export function useRemoteExecutor() {
             projectId: evaluationProjectId,
           });
         }
-        updateActiveProjectEvaluationState((state) => {
-          const namedFinalRun = preserveEvaluationRunName(
-            state.currentRun?.id === finalizedRun.id
-              ? state.currentRun
-              : state.runs.find((candidate) => candidate.id === finalizedRun.id),
-            finalizedRun,
-          );
-          return {
-            ...state,
-            runningSuiteId: undefined,
-            currentRun: namedFinalRun,
-            selectedRunId: finalizedRun.id,
-            runs: [namedFinalRun, ...state.runs.filter((run) => run.id !== finalizedRun.id)],
-          };
-        });
+        updateActiveProjectEvaluationState((state) => ({
+          ...applyEvaluationRunSnapshot(state, finalizedRun),
+          runningSuiteId: undefined,
+        }));
         if (store.get(projectState).metadata.id === evaluationProjectId) {
           toast.info(formatEvaluationCompletionToast(finalizedRun));
         }

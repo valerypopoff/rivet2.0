@@ -8,8 +8,9 @@ import {
   type RivetLLMProfileHealthSnapshot,
   type RivetLLMProfileHealthStore,
 } from '@valerypopoff/rivet2-core';
-import { type EvaluationRunStore } from '@valerypopoff/rivet2-evaluations';
+import { type EvaluationRunStore, type EvaluationStore } from '@valerypopoff/rivet2-evaluations';
 import { LocalEvaluationRunStore } from './EvaluationRunStore.js';
+import { TauriEvaluationStore } from './TauriEvaluationStore.js';
 import { BrowserIOProvider } from '../io/BrowserIOProvider.js';
 import { LegacyBrowserIOProvider } from '../io/LegacyBrowserIOProvider.js';
 import { TauriIOProvider } from '../io/TauriIOProvider.js';
@@ -69,10 +70,9 @@ export type Providers = {
   staticData: StaticDataStore;
   llmProfileHealthAdmin?: LLMProfileHealthAdminProvider;
   llmProfileHealthStore?: RivetLLMProfileHealthStore;
-  /**
-   * Operational evaluation history is deliberately separate from project YAML.
-   * Hosts can replace this ephemeral editor default with a durable shared store.
-   */
+  /** Complete persistence boundary for local evaluation resources and evidence. */
+  evaluationStore: EvaluationStore;
+  /** @deprecated Supply and consume evaluationStore instead. */
   evaluationRunStore: EvaluationRunStore;
 };
 
@@ -128,7 +128,11 @@ export function useLLMProfileHealthStore(): RivetLLMProfileHealthStore | undefin
 }
 
 export function useEvaluationRunStore(): EvaluationRunStore {
-  return useProviders().evaluationRunStore;
+  return useProviders().evaluationStore;
+}
+
+export function useEvaluationStore(): EvaluationStore {
+  return useProviders().evaluationStore;
 }
 
 export function createLLMProfileHealthAdminProvider(
@@ -181,15 +185,52 @@ function createDefaultDataRefs(): DataRefStore {
   };
 }
 
+function combineLegacyEvaluationRunStore(runStore: EvaluationRunStore, libraryStore: EvaluationStore): EvaluationStore {
+  return {
+    initialize: () => libraryStore.initialize?.() ?? Promise.resolve(),
+    getLibrary: () => libraryStore.getLibrary(),
+    putLibrary: (library) => libraryStore.putLibrary(library),
+    put: (run) => runStore.put(run),
+    updateRunName: (input) => runStore.updateRunName(input),
+    get: (input) => runStore.get(input),
+    list: (input) => runStore.list(input),
+    delete: (input) => runStore.delete(input),
+    putDatasetSnapshot: (snapshot) => runStore.putDatasetSnapshot(snapshot),
+    getDatasetSnapshot: (input) => runStore.getDatasetSnapshot(input),
+    putRecording: (artifact) => runStore.putRecording(artifact),
+    getRecording: (input) => runStore.getRecording(input),
+    updateRecordingRetention: (input) => runStore.updateRecordingRetention(input),
+    promoteBaseline: (input) => runStore.promoteBaseline(input),
+  };
+}
+
+export function resolveEvaluationStoreProvider(
+  overrides: Pick<ProviderOverrides, 'evaluationRunStore' | 'evaluationStore'>,
+): EvaluationStore {
+  if (overrides.evaluationStore) return overrides.evaluationStore;
+
+  const localStore = TauriEvaluationStore.isSupported() ? new TauriEvaluationStore() : new LocalEvaluationRunStore();
+  return overrides.evaluationRunStore
+    ? combineLegacyEvaluationRunStore(overrides.evaluationRunStore, localStore)
+    : localStore;
+}
+
 function createDefaultProviders(
   overrides: Pick<
     ProviderOverrides,
-    'datasets' | 'evaluationRunStore' | 'llmProfileHealthAdmin' | 'llmProfileHealthStore' | 'pathPolicy' | 'staticData'
+    | 'datasets'
+    | 'evaluationRunStore'
+    | 'evaluationStore'
+    | 'llmProfileHealthAdmin'
+    | 'llmProfileHealthStore'
+    | 'pathPolicy'
+    | 'staticData'
   > = {},
 ): Providers {
   const datasets = overrides.datasets ?? new BrowserDatasetProvider();
   const pathPolicy = overrides.pathPolicy ?? getDefaultPathPolicyProvider();
   const staticData = overrides.staticData ?? new BrowserStaticDataStore();
+  const evaluationStore = resolveEvaluationStoreProvider(overrides);
 
   let io: IOProvider;
   if (TauriIOProvider.isSupported()) {
@@ -208,7 +249,8 @@ function createDefaultProviders(
     environment: getDefaultEnvironmentProvider(),
     pathPolicy,
     staticData,
-    evaluationRunStore: overrides.evaluationRunStore ?? new LocalEvaluationRunStore(),
+    evaluationStore,
+    evaluationRunStore: evaluationStore,
     ...resolveLLMProfileHealthProviders(overrides),
   };
 }
@@ -237,6 +279,11 @@ export const ProvidersProvider: FC<{ providers?: ProviderOverrides; children: Re
     return {
       ...defaults,
       ...runtimeProviders,
+      // Keep both public names on the same resolved boundary. In particular,
+      // a legacy run-only override must not leak back out after it has been
+      // combined with the local library store above.
+      evaluationStore: defaults.evaluationStore,
+      evaluationRunStore: defaults.evaluationStore,
       dataRefs: {
         ...defaults.dataRefs,
         ...runtimeProviders.dataRefs,

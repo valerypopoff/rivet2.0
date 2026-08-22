@@ -962,10 +962,11 @@ Important nuance:
 - Library nodes live in `projectState.nodePrefabs`, not in `graphState`. The selected Node library resource and its canvas position are transient, project-keyed state owned by [`state/workspaceTarget.ts`](../packages/app/src/state/workspaceTarget.ts). Closing a project clears that project's resource state, while tab restoration may return to the same project's last resource without leaking Node library selection into another project. Library nodes are serialized with the project through core `Project.nodePrefabs`, while the Node library editor itself is not a graph and should not be added to graph lists, reachability, main-graph selection, execution, or graph-history restoration.
 - when replacing the current project, `projectDataState` is replaced for the new project and the active static-data store is cleared before loading the new project's data
 
-### App-owned IndexedDB databases
+### App-owned local databases
 
-The desktop/browser app uses the app-local `idb` dependency for its three
-IndexedDB owners. Their persisted identities are compatibility contracts:
+The browser app uses the app-local `idb` dependency for its IndexedDB owners.
+The desktop app additionally owns a native SQLite database for Evaluations.
+Their persisted identities are compatibility contracts:
 
 - [`state/storage/indexedDB.ts`](../packages/app/src/state/storage/indexedDB.ts)
   owns `jotai-store` version 1 and its `state` object store. Missing values
@@ -984,6 +985,24 @@ IndexedDB owners. Their persisted identities are compatibility contracts:
   provider caches one internal connection, resets it after blocking or
   termination, and continues returning a fresh native `IDBDatabase` from the
   public `getDatasetDatabase()` compatibility method.
+- [`providers/EvaluationRunStore.ts`](../packages/app/src/providers/EvaluationRunStore.ts)
+  owns browser database `rivet_evaluation_history` version 1 and its `values`
+  object store. Despite the historical class name, `LocalEvaluationRunStore`
+  implements the complete `EvaluationStore`: reusable library data and
+  project-scoped runs, snapshots, recording manifests, and recording artifacts
+  are separate keyed values in the same backend. On upgrade it adopts the old
+  `evaluation-library` Jotai value and legacy local-storage run keys without
+  deleting the source until the destination write succeeds.
+- [`src-tauri/src/evaluation_store.rs`](../packages/app/src-tauri/src/evaluation_store.rs)
+  owns desktop `evaluations.sqlite3` in Tauri's application-local-data
+  directory. It uses WAL mode, a busy timeout, one key/value table for the same
+  serialized records as the browser store, and a migration-metadata table. On
+  first native use, `TauriEvaluationStore` exports the browser-era values and
+  asks one SQLite transaction to insert, verify, mark, and commit them. A
+  conflict, native failure, or temporarily inaccessible source IndexedDB leaves
+  the source intact and keeps the complete session on the browser backend; the
+  migration remains pending for a later launch. A session must never mix
+  library writes in one backend with run or recording writes in another.
 
 Do not rename these databases/stores, change their versions or key shapes, make
 `deleteDataset` atomic across its currently separate transactions, or split
@@ -991,7 +1010,7 @@ the existing multi-store import transaction without a separately reviewed data
 migration. Dataset methods intentionally update their in-memory cache before
 the persistence request, matching the existing failure behavior.
 
-These owners resolve their public methods when the individual IndexedDB request
+The IndexedDB owners resolve their public methods when the individual request
 settles rather than awaiting transaction completion.
 [`utils/indexedDb.ts`](../packages/app/src/utils/indexedDb.ts) observes `idb`'s
 additional transaction promise to prevent a request failure from also becoming
@@ -1884,6 +1903,13 @@ of [`RivetApp`](../packages/app/src/components/RivetApp.tsx) directly:
 - a custom `providers.storage` backend is applied before storage-backed atoms
   initialize; omitting it uses Rivet's built-in IndexedDB/memory backend rather
   than carrying a previous hosted backend across remounts
+- `providers.evaluationStore` replaces the complete Evaluations persistence
+  boundary: reusable suites/datasets/baselines, migration metadata, run history,
+  dataset snapshots, and replay recordings all use that implementation. A
+  hosted wrapper can therefore bind Rivet directly to its tenant database
+  without exposing an evaluation HTTP service and without Rivet opening a local
+  evaluation database. The deprecated run-only `evaluationRunStore` provider is
+  compatibility-only and must not be used for new wrappers
 - it accepts optional `ui` host policy for wrapper-controlled UI visibility.
   `ui.fileMenu.visibleItems` filters the in-app Menu dropdown by stable typed
   item ids and rejects hidden file-menu commands from keyboard or programmatic
@@ -1905,7 +1931,8 @@ of [`RivetApp`](../packages/app/src/components/RivetApp.tsx) directly:
 The local source host barrel also re-exports the provider/session types, host UI
 config types, `FileMenuItemId` item-id types for the Menu dropdown, executor-session runtime factory, sidecar
 lifecycle helpers, storage backend type, IO provider types, environment/path-policy
-provider types, the project-comparison helpers/types from core, and LLM Chat custom-provider env-var discovery helper that hosted
+provider types, the `EvaluationStore` type and `useEvaluationStore` hook, the
+project-comparison helpers/types from core, and LLM Chat custom-provider env-var discovery helper that hosted
 shells need to stay aligned with current app execution behavior. This is the
 preferred seam for projects such as Self-hosted Rivet; direct imports of other
 private app components, direct aliasing of globals such as `ioProvider`, or old
