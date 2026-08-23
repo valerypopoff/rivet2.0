@@ -39,11 +39,17 @@ import type { GraphInputNode, Project } from '@valerypopoff/rivet2-core';
 import { graphState } from '../../state/graph.js';
 import { projectsState, projectState } from '../../state/savedGraphs.js';
 import {
+  discardEvaluationSuiteWorkspaceState,
   evaluationsState,
+  getEvaluationSuitePresentation,
   getEvaluationRunHistoryScopeKey,
   isEvaluationRunHistoryCached,
+  selectEvaluationDatasetResource,
+  selectEvaluationSuiteResource,
+  updateEvaluationSuitePresentation,
   type EvaluationRunHistoryScope,
   type EvaluationRunTrialExpansion,
+  type EvaluationSuitePresentation,
 } from '../../state/evaluations.js';
 import { overlayOpenState } from '../../state/ui.js';
 import { useEvaluationRunStore, useIOProvider } from '../../providers/ProvidersContext.js';
@@ -1575,8 +1581,18 @@ const EvaluationsContainer: FC<{ tryRunEvaluation: TryRunEvaluation; abortEvalua
   const view = state.activeView ?? 'definition';
   const setView = useCallback(
     (nextView: EvaluationWorkspaceView) =>
-      setState((current) => (current.activeView === nextView ? current : { ...current, activeView: nextView })),
-    [setState],
+      setState((current) => {
+        let next = current.activeView === nextView ? current : { ...current, activeView: nextView };
+        if (nextView !== 'dataset' && current.selectedSuiteId) {
+          next = updateEvaluationSuitePresentation(
+            next,
+            { projectId: project.metadata.id, suiteId: current.selectedSuiteId },
+            { activeView: nextView },
+          );
+        }
+        return next;
+      }),
+    [project.metadata.id, setState],
   );
   const [createSuiteOpen, setCreateSuiteOpen] = useState(false);
   const [confirmation, setConfirmation] = useState<EvaluationConfirmation>();
@@ -1600,11 +1616,19 @@ const EvaluationsContainer: FC<{ tryRunEvaluation: TryRunEvaluation; abortEvalua
   runHistoryScopeRef.current = state.runHistoryScope;
   const selectedSuite = resolveSelectedEvaluationSuite(state.data.suites, state.selectedSuiteId);
   const selectedSuiteId = selectedSuite?.id;
-  const runHistoryScope: EvaluationRunHistoryScope | undefined =
-    selectedSuiteId && projectAvailable ? { projectId: project.metadata.id, suiteId: selectedSuiteId } : undefined;
+  const suitePresentationScope = useMemo<EvaluationRunHistoryScope | undefined>(
+    () => (selectedSuiteId ? { projectId: project.metadata.id, suiteId: selectedSuiteId } : undefined),
+    [project.metadata.id, selectedSuiteId],
+  );
+  const runHistoryScope = useMemo<EvaluationRunHistoryScope | undefined>(
+    () =>
+      selectedSuiteId && projectAvailable ? { projectId: project.metadata.id, suiteId: selectedSuiteId } : undefined,
+    [project.metadata.id, projectAvailable, selectedSuiteId],
+  );
   const runHistoryProjectId = runHistoryScope?.projectId;
   const runHistorySuiteId = runHistoryScope?.suiteId;
   const runHistoryScopeKey = runHistoryScope ? getEvaluationRunHistoryScopeKey(runHistoryScope) : undefined;
+  const suitePresentation = getEvaluationSuitePresentation(state, suitePresentationScope);
   const hasCachedRunHistory = isEvaluationRunHistoryCached(state, runHistoryScope);
   const visibleRunTrialExpansion =
     state.runTrialExpansion?.scope.projectId === runHistoryProjectId &&
@@ -1612,7 +1636,7 @@ const EvaluationsContainer: FC<{ tryRunEvaluation: TryRunEvaluation; abortEvalua
       ? state.runTrialExpansion
       : undefined;
   const runScoreSort: EvaluationScoreSort = runHistoryScopeKey
-    ? (state.runScoreSortByScope[runHistoryScopeKey] ?? 'default')
+    ? state.runScoreSortByScope[runHistoryScopeKey] ?? 'default'
     : 'default';
   const localDatasets = state.datasets;
   const selectedDataset = resolveEvaluationDataset(state.datasets, state.selectedDatasetId);
@@ -1643,7 +1667,8 @@ const EvaluationsContainer: FC<{ tryRunEvaluation: TryRunEvaluation; abortEvalua
   );
   const suiteCurrentRun = state.currentRun?.suiteId === selectedSuite?.id ? state.currentRun : undefined;
   const suiteBaseline = useMemo(
-    () => (selectedSuiteId ? state.data.baselines.find((candidate) => candidate.suiteId === selectedSuiteId) : undefined),
+    () =>
+      selectedSuiteId ? state.data.baselines.find((candidate) => candidate.suiteId === selectedSuiteId) : undefined,
     [selectedSuiteId, state.data.baselines],
   );
   const compareAvailable = useMemo(
@@ -1675,6 +1700,14 @@ const EvaluationsContainer: FC<{ tryRunEvaluation: TryRunEvaluation; abortEvalua
         suites: current.data.suites.map((suite) => (suite.id === selectedSuite?.id ? update(suite) : suite)),
       },
     }));
+
+  const updateSelectedSuitePresentation = useCallback(
+    (update: Partial<EvaluationSuitePresentation>) => {
+      if (!suitePresentationScope) return;
+      setState((current) => updateEvaluationSuitePresentation(current, suitePresentationScope, update));
+    },
+    [setState, suitePresentationScope],
+  );
 
   const addSuite = ({ datasetId, graphId, name }: CreateEvaluationSuiteValue) =>
     setState((current) => {
@@ -1713,32 +1746,18 @@ const EvaluationsContainer: FC<{ tryRunEvaluation: TryRunEvaluation; abortEvalua
         deletionWasBlocked = true;
         return current;
       }
-      const remainingRuns = current.runs.filter((run) => !removedSuiteIds.has(run.suiteId));
+      const workspace = discardEvaluationSuiteWorkspaceState(current, removedSuiteIds);
       return {
-        ...current,
-        datasets: datasetId == null ? current.datasets : current.datasets.filter((dataset) => dataset.id !== datasetId),
+        ...workspace,
+        datasets:
+          datasetId == null ? workspace.datasets : workspace.datasets.filter((dataset) => dataset.id !== datasetId),
         data: {
-          ...current.data,
-          suites: current.data.suites.filter((suite) => !removedSuiteIds.has(suite.id)),
-          baselines: current.data.baselines.filter((baseline) => !removedSuiteIds.has(baseline.suiteId)),
+          ...workspace.data,
+          suites: workspace.data.suites.filter((suite) => !removedSuiteIds.has(suite.id)),
+          baselines: workspace.data.baselines.filter((baseline) => !removedSuiteIds.has(baseline.suiteId)),
         },
-        selectedSuiteId: removedSuiteIds.has(current.selectedSuiteId ?? '') ? undefined : current.selectedSuiteId,
-        selectedDatasetId: datasetId === current.selectedDatasetId ? undefined : current.selectedDatasetId,
-        runs: remainingRuns,
-        selectedRunId:
-          current.selectedRunId && remainingRuns.some((run) => run.id === current.selectedRunId)
-            ? current.selectedRunId
-            : undefined,
-        currentRun:
-          current.currentRun && !removedSuiteIds.has(current.currentRun.suiteId) ? current.currentRun : undefined,
-        runHistoryScope:
-          current.runHistoryScope && !removedSuiteIds.has(current.runHistoryScope.suiteId)
-            ? current.runHistoryScope
-            : undefined,
-        runTrialExpansion:
-          current.runTrialExpansion && !removedSuiteIds.has(current.runTrialExpansion.scope.suiteId)
-            ? current.runTrialExpansion
-            : undefined,
+        selectedSuiteId: removedSuiteIds.has(workspace.selectedSuiteId ?? '') ? undefined : workspace.selectedSuiteId,
+        selectedDatasetId: datasetId === workspace.selectedDatasetId ? undefined : workspace.selectedDatasetId,
       };
     });
     if (deletionWasBlocked) {
@@ -1786,52 +1805,28 @@ const EvaluationsContainer: FC<{ tryRunEvaluation: TryRunEvaluation; abortEvalua
   };
 
   const selectSuite = (suiteId: string) => {
-    setView('definition');
-    setState((current) =>
-      current.selectedSuiteId === suiteId && current.selectedDatasetId === undefined
-        ? current
-        : {
-            ...current,
-            selectedSuiteId: suiteId,
-            selectedDatasetId: undefined,
-            runs: [],
-            runHistoryScope: undefined,
-            runTrialExpansion: undefined,
-            selectedRunId: undefined,
-          },
-    );
+    const scope: EvaluationRunHistoryScope = { projectId: project.metadata.id, suiteId };
+    setState((current) => {
+      const cachedSuiteRuns = isEvaluationRunHistoryCached(current, scope)
+        ? current.runs.filter((run) => run.suiteId === suiteId)
+        : [];
+      return selectEvaluationSuiteResource(
+        current,
+        scope,
+        canCompareEvaluationSuite(suiteId, cachedSuiteRuns, current.data.baselines),
+      );
+    });
   };
 
   const selectDataset = (datasetId: string) => {
-    setView('dataset');
-    setState((current) =>
-      current.selectedDatasetId === datasetId && current.selectedSuiteId === undefined
-        ? current
-        : {
-            ...current,
-            selectedSuiteId: undefined,
-            selectedDatasetId: datasetId,
-            runs: [],
-            runHistoryScope: undefined,
-            runTrialExpansion: undefined,
-            selectedRunId: undefined,
-          },
-    );
+    setState((current) => selectEvaluationDatasetResource(current, datasetId));
   };
 
   const createDatasetResource = () => {
     const dataset = createStandaloneDataset();
-    setState((current) => ({
-      ...current,
-      datasets: [...current.datasets, dataset],
-      selectedSuiteId: undefined,
-      selectedDatasetId: dataset.id,
-      runs: [],
-      runHistoryScope: undefined,
-      runTrialExpansion: undefined,
-      selectedRunId: undefined,
-    }));
-    setView('dataset');
+    setState((current) =>
+      selectEvaluationDatasetResource({ ...current, datasets: [...current.datasets, dataset] }, dataset.id),
+    );
   };
 
   const importDatasetResource = () => {
@@ -1839,18 +1834,9 @@ const EvaluationsContainer: FC<{ tryRunEvaluation: TryRunEvaluation; abortEvalua
       .readFileAsString((source, fileName) => {
         try {
           const dataset = deserializeEvaluationDatasetJson(source, { id: nanoid() });
-          setState((current) => ({
-            ...current,
-            datasets: [...current.datasets, dataset],
-            selectedSuiteId: undefined,
-            selectedDatasetId: dataset.id,
-            runs: [],
-            runHistoryScope: undefined,
-            runTrialExpansion: undefined,
-            selectedRunId: undefined,
-            currentRun: undefined,
-          }));
-          setView('dataset');
+          setState((current) =>
+            selectEvaluationDatasetResource({ ...current, datasets: [...current.datasets, dataset] }, dataset.id),
+          );
           toast.success(`Imported evaluation dataset from ${fileName}.`);
         } catch (error) {
           toast.error(
@@ -2177,7 +2163,7 @@ const EvaluationsContainer: FC<{ tryRunEvaluation: TryRunEvaluation; abortEvalua
 
   useEffect(() => {
     const readGeneration = ++runHistoryReadGeneration.current;
-    if (!selectedSuiteId || !projectAvailable) {
+    if (!projectAvailable) {
       setRunsStatus('idle');
       setRunsError(undefined);
       setState((current) =>
@@ -2198,12 +2184,17 @@ const EvaluationsContainer: FC<{ tryRunEvaluation: TryRunEvaluation; abortEvalua
       );
       return;
     }
+    if (!selectedSuiteId) {
+      // A dataset is a peer editor, not a new run-history scope. Keep the
+      // last suite's fully hydrated history and presentation warm so a quick
+      // resource switch does not reread and rebuild the Runs pane.
+      setRunsStatus('idle');
+      setRunsError(undefined);
+      return;
+    }
 
     const scope: EvaluationRunHistoryScope = { projectId: project.metadata.id, suiteId: selectedSuiteId };
-    const hadCachedHistory = isEvaluationRunHistoryCached(
-      { runHistoryScope: runHistoryScopeRef.current },
-      scope,
-    );
+    const hadCachedHistory = isEvaluationRunHistoryCached({ runHistoryScope: runHistoryScopeRef.current }, scope);
     // A successfully listed exact scope is complete for this session. Reuse it
     // on an overlay remount instead of doing a synchronous-heavy durable read
     // before Definition, Runs, or Compare can respond to a tab click.
@@ -2518,6 +2509,7 @@ const EvaluationsContainer: FC<{ tryRunEvaluation: TryRunEvaluation; abortEvalua
           currentRun: current.currentRun?.id === run.id ? undefined : current.currentRun,
           runs,
           selectedRunId: current.selectedRunId === run.id ? replacement?.id : current.selectedRunId,
+          runTrialExpansion: current.runTrialExpansion?.runId === run.id ? undefined : current.runTrialExpansion,
         };
       });
     } catch (error) {
@@ -2889,9 +2881,17 @@ const EvaluationsContainer: FC<{ tryRunEvaluation: TryRunEvaluation; abortEvalua
                   targetInputs={targetInputs}
                   targetOutputs={targetOutputs}
                   targetGraphExists={referenceStatus?.targetGraphExists === true}
+                  selectedDefinitionTab={suitePresentation.definitionView}
+                  showAdditionalExecutionSettings={suitePresentation.additionalExecutionSettingsExpanded}
                   onUpdate={updateSuite}
                   onAssignDataset={assignSuiteDataset}
                   onAssignTargetGraph={assignTargetGraph}
+                  onSelectedDefinitionTabChange={(definitionView) =>
+                    updateSelectedSuitePresentation({ definitionView })
+                  }
+                  onShowAdditionalExecutionSettingsChange={(additionalExecutionSettingsExpanded) =>
+                    updateSelectedSuitePresentation({ additionalExecutionSettingsExpanded })
+                  }
                 />
               )}
               {view === 'runs' && (
@@ -2948,9 +2948,13 @@ const Definition: FC<{
   targetInputs: GraphInputNode[];
   targetOutputs: EvaluationTargetOutput[];
   targetGraphExists: boolean;
+  selectedDefinitionTab: EvaluationDefinitionTabId;
+  showAdditionalExecutionSettings: boolean;
   onUpdate: (update: (suite: EvaluationSuite) => EvaluationSuite) => void;
   onAssignDataset: (datasetId: string) => void;
   onAssignTargetGraph: (graphId: string) => void;
+  onSelectedDefinitionTabChange: (tab: EvaluationDefinitionTabId) => void;
+  onShowAdditionalExecutionSettingsChange: (expanded: boolean) => void;
 }> = ({
   suite,
   project,
@@ -2960,17 +2964,17 @@ const Definition: FC<{
   targetInputs,
   targetOutputs,
   targetGraphExists,
+  selectedDefinitionTab,
+  showAdditionalExecutionSettings,
   onUpdate,
   onAssignDataset,
   onAssignTargetGraph,
+  onSelectedDefinitionTabChange,
+  onShowAdditionalExecutionSettingsChange,
 }) => {
   const isScoringSuite = getEvaluationSuiteMode(suite) === 'scoring';
   const [renamingAssertionId, setRenamingAssertionId] = useState<string>();
   const [renamingEvaluatorId, setRenamingEvaluatorId] = useState<string>();
-  const [selectedDefinitionTab, setSelectedDefinitionTab] = useState<EvaluationDefinitionTabId>(
-    isScoringSuite ? 'evaluator-graphs' : 'deterministic-checks',
-  );
-  const [showAdditionalExecutionSettings, setShowAdditionalExecutionSettings] = useState(false);
   const definitionTabs: readonly EvaluationDefinitionTab[] = isScoringSuite
     ? [{ id: 'evaluator-graphs', label: 'Custom evaluator graphs', count: suite.evaluators.length }]
     : [
@@ -2985,10 +2989,10 @@ const Definition: FC<{
   const expectedValueIssues = dataset ? getEvaluationExpectedValueAuthoringIssues(suite, dataset) : [];
   const executionConfigurationIssues = getEvaluationExecutionConfigurationAuthoringIssues(suite, targetInputs);
   useEffect(() => {
-    if (executionConfigurationIssues.length > 0) {
-      setShowAdditionalExecutionSettings(true);
+    if (executionConfigurationIssues.length > 0 && !showAdditionalExecutionSettings) {
+      onShowAdditionalExecutionSettingsChange(true);
     }
-  }, [executionConfigurationIssues.length]);
+  }, [executionConfigurationIssues.length, onShowAdditionalExecutionSettingsChange, showAdditionalExecutionSettings]);
   const outputOptions = targetOutputs.map((output) => ({
     label: `${output.id} (${output.dataType})`,
     value: output.outputPath,
@@ -3141,7 +3145,7 @@ const Definition: FC<{
         <EvaluationDefinitionTabs
           activeTab={activeDefinitionTab}
           tabs={definitionTabs}
-          onSelect={setSelectedDefinitionTab}
+          onSelect={onSelectedDefinitionTabChange}
         />
       </section>
       {!dataset || !targetGraphExists ? null : (
@@ -3828,7 +3832,7 @@ const Definition: FC<{
                 appearance="subtle"
                 className="evaluation-additional-settings-button"
                 aria-expanded={false}
-                onClick={() => setShowAdditionalExecutionSettings(true)}
+                onClick={() => onShowAdditionalExecutionSettingsChange(true)}
               >
                 Additional settings
               </Button>
@@ -3841,7 +3845,7 @@ const Definition: FC<{
                     className="evaluation-additional-settings-close"
                     aria-label="Close additional settings"
                     title="Close additional settings"
-                    onClick={() => setShowAdditionalExecutionSettings(false)}
+                    onClick={() => onShowAdditionalExecutionSettingsChange(false)}
                   >
                     <CrossIcon aria-hidden="true" />
                   </button>
@@ -4463,7 +4467,10 @@ const Runs: FC<{
         : selectedRun,
     [currentRun, selectedRun],
   );
-  const run = useMemo(() => liveRun ?? selectedRunSnapshot ?? currentRun ?? runs[0], [currentRun, liveRun, runs, selectedRunSnapshot]);
+  const run = useMemo(
+    () => liveRun ?? selectedRunSnapshot ?? currentRun ?? runs[0],
+    [currentRun, liveRun, runs, selectedRunSnapshot],
+  );
   const sortedTrials = useMemo(() => (run ? sortEvaluationTrialsByScore(run.trials, scoreSort) : []), [run, scoreSort]);
   const runSummary = useMemo(() => (run ? getCachedEvaluationRunSummary(run) : undefined), [run]);
   const expectedFieldLabels = useMemo(() => {
@@ -4483,7 +4490,13 @@ const Runs: FC<{
     [runs],
   );
   const selectedRunOption = useMemo(
-    () => (run ? runOptions.find((option) => option.value === run.id) ?? { label: formatEvaluationRunOptionLabel(run), value: run.id } : undefined),
+    () =>
+      run
+        ? runOptions.find((option) => option.value === run.id) ?? {
+            label: formatEvaluationRunOptionLabel(run),
+            value: run.id,
+          }
+        : undefined,
     [run, runOptions],
   );
   const expandedTrialIds = useMemo(
@@ -4592,7 +4605,9 @@ const Runs: FC<{
   return (
     <section className="section">
       <h2>Runs</h2>
-      {refreshError ? <p className="evaluation-run-history-refresh-warning">Could not refresh run history: {refreshError}</p> : null}
+      {refreshError ? (
+        <p className="evaluation-run-history-refresh-warning">Could not refresh run history: {refreshError}</p>
+      ) : null}
       {runs.length > 1 && (
         <div className="row">
           <Select
@@ -4931,8 +4946,7 @@ const Compare: FC<{
     [comparisonRuns, selectedBaseline],
   );
   const effectiveReferenceId =
-    (referenceId === 'baseline' && selectedBaseline) ||
-    comparisonRuns.some((candidate) => candidate.id === referenceId)
+    (referenceId === 'baseline' && selectedBaseline) || comparisonRuns.some((candidate) => candidate.id === referenceId)
       ? referenceId
       : selectedBaseline
         ? 'baseline'

@@ -9,6 +9,7 @@ import {
   type EvaluationDatasetSnapshot,
   type EvaluationRecordingArtifact,
   type EvaluationRun,
+  type EvaluationTrial,
 } from '@valerypopoff/rivet2-evaluations';
 
 import { LocalEvaluationRunStore } from './EvaluationRunStore.js';
@@ -225,6 +226,26 @@ function makeRecording(projectId: ProjectId, recordingId = 'recording-1'): Evalu
   };
 }
 
+function makeTrial(id = 'trial-1'): EvaluationTrial {
+  return {
+    id,
+    caseId: 'case-1',
+    caseName: 'Case 1',
+    caseIndex: 0,
+    trialIndex: 0,
+    executionStatus: 'completed',
+    qualityStatus: 'passed',
+    qualityReason: { code: 'checks-passed', message: 'All checks passed.' },
+    inputs: { input: 'value' },
+    expected: {},
+    outputs: { output: 'value' },
+    observations: [],
+    targetMetrics: { durationMs: 1 },
+    evaluatorMetrics: { durationMs: 0 },
+    totalMetrics: { durationMs: 1 },
+  };
+}
+
 test('does not let an equal-revision local progress write demote a completed run', async () => {
   const store = new LocalEvaluationRunStore();
   const projectId = 'equal-revision-project' as ProjectId;
@@ -248,6 +269,40 @@ test('persists a user-assigned run name across newer execution snapshots', async
   await store.put(makeRun('run-1', projectId, 2));
 
   assert.equal((await store.get({ projectId, runId: running.id }))?.name, 'Regression check');
+});
+
+test('persists incremental run events idempotently across store instances', async () => {
+  const projectId = 'checkpoint-project' as ProjectId;
+  const store = new LocalEvaluationRunStore();
+  const running = {
+    ...makeRun('run-1', projectId, 1),
+    completedAt: undefined,
+    executionStatus: 'running' as const,
+    qualityStatus: 'not-evaluated' as const,
+    qualityReason: { code: 'in-progress' as const, message: 'Evaluation is running.' },
+    requestedTrialCount: 1,
+    trials: [],
+  };
+  const trial = makeTrial();
+
+  await store.applyRunEvent({ type: 'run-started', revision: 1, run: running });
+  const settledEvent = {
+    type: 'trial-settled' as const,
+    revision: 2,
+    runId: running.id,
+    projectId,
+    suiteId: running.suiteId,
+    requestedTrialCount: 1,
+    settledTrialCount: 1,
+    trial,
+  };
+  await store.applyRunEvent(settledEvent);
+  await store.applyRunEvent(settledEvent);
+
+  const reopened = new LocalEvaluationRunStore();
+  const checkpoint = await reopened.get({ projectId, runId: running.id });
+  assert.equal(checkpoint?.revision, 2);
+  assert.deepEqual(checkpoint?.trials, [trial]);
 });
 
 test('deleting a run removes only that run and its retained recordings', async () => {
@@ -384,6 +439,33 @@ test('keeps local evaluation dataset snapshots separate by project and fingerpri
   }
 });
 
+test('lazily imports a legacy aggregate dataset snapshot into its V2 artifact record', async () => {
+  const projectId = 'legacy-snapshot-project' as ProjectId;
+  const dataset = {
+    id: 'dataset',
+    projectId,
+    name: 'Dataset',
+    fields: [{ id: 'input', name: 'Input', dataType: 'string', role: 'input' as const }],
+    cases: [{ id: 'case', name: 'Case', values: { input: 'legacy value' } }],
+  };
+  const fingerprint = fingerprintEvaluationDataset(dataset);
+  const snapshot: EvaluationDatasetSnapshot = {
+    projectId,
+    fingerprint,
+    createdAt: '2026-08-15T00:00:00.000Z',
+    dataset,
+  };
+  const legacyKey = `rivet-evaluation-dataset-snapshots:${projectId}`;
+  const backend = makeBackend(new Map([[legacyKey, JSON.stringify({ [fingerprint]: snapshot })]]));
+
+  const restored = await new LocalEvaluationRunStore({ backend }).getDatasetSnapshot({ projectId, fingerprint });
+
+  assert.equal(restored?.dataset.cases[0]?.values.input, 'legacy value');
+  const artifactKey = `rivet-evaluation-dataset-snapshot:v2:${encodeURIComponent(projectId)}:${encodeURIComponent(fingerprint)}`;
+  assert.deepEqual(JSON.parse(backend.values.get(artifactKey) ?? 'null'), snapshot);
+  assert.ok(backend.values.has(legacyKey));
+});
+
 test('reports local-storage failures instead of claiming an evaluation run was saved', async () => {
   const originalStorage = globalThis.localStorage;
   const originalIndexedDb = globalThis.indexedDB;
@@ -428,7 +510,7 @@ test('uses legacy localStorage only when IndexedDB cannot initialize', async () 
       (await store.list({ projectId })).map((run) => run.id),
       ['run-1'],
     );
-    assert.ok(storage.getItem(`rivet-evaluation-runs:${projectId}`));
+    assert.ok(storage.getItem(`rivet-evaluation-run-index:v2:${encodeURIComponent(projectId)}`));
   } finally {
     Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: originalStorage });
     Object.defineProperty(globalThis, 'indexedDB', { configurable: true, value: originalIndexedDb, writable: true });
@@ -627,6 +709,105 @@ test('does not let a delayed provisional write demote or reassign a local record
       retention: 'failure',
     });
     await assert.rejects(store.putRecording({ ...provisional, runId: 'run-2' }), /cannot be reassigned/u);
+  } finally {
+    Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: originalStorage });
+  }
+});
+
+test('two IndexedDB store instances retain concurrent run inserts without losing either run', async () => {
+  const originalStorage = globalThis.localStorage;
+  Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: makeStorage() });
+  try {
+    const projectId = 'concurrent-project' as ProjectId;
+    const first = new LocalEvaluationRunStore();
+    const second = new LocalEvaluationRunStore();
+
+    await Promise.all([first.put(makeRun('run-1', projectId)), second.put(makeRun('run-2', projectId))]);
+
+    assert.deepEqual(new Set((await first.list({ projectId })).map((run) => run.id)), new Set(['run-1', 'run-2']));
+  } finally {
+    Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: originalStorage });
+  }
+});
+
+test('two IndexedDB store instances retain concurrent recording inserts without losing either artifact', async () => {
+  const originalStorage = globalThis.localStorage;
+  Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: makeStorage() });
+  try {
+    const projectId = 'concurrent-recordings-project' as ProjectId;
+    const first = new LocalEvaluationRunStore();
+    const second = new LocalEvaluationRunStore();
+
+    await Promise.all([
+      first.putRecording(makeRecording(projectId, 'recording-1')),
+      second.putRecording(makeRecording(projectId, 'recording-2')),
+    ]);
+
+    assert.equal((await first.getRecording({ projectId, recordingId: 'recording-1' }))?.reference.id, 'recording-1');
+    assert.equal((await first.getRecording({ projectId, recordingId: 'recording-2' }))?.reference.id, 'recording-2');
+  } finally {
+    Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: originalStorage });
+  }
+});
+
+test('does not fall back to stale legacy history when a committed V2 run index is corrupt', async () => {
+  const projectId = 'corrupt-v2-index-project' as ProjectId;
+  const legacyKey = `rivet-evaluation-runs:${projectId}`;
+  const indexKey = `rivet-evaluation-run-index:v2:${encodeURIComponent(projectId)}`;
+  const backend = makeBackend(
+    new Map([
+      [legacyKey, JSON.stringify([makeRun('legacy-run', projectId)])],
+      [indexKey, '{not-json'],
+    ]),
+  );
+
+  await assert.rejects(
+    new LocalEvaluationRunStore({ backend }).list({ projectId }),
+    /unreadable evaluation run index/u,
+  );
+  assert.equal(backend.values.get(indexKey), '{not-json');
+  assert.ok(backend.values.has(legacyKey));
+});
+
+test('does not silently omit a run when the committed V2 index references a missing record', async () => {
+  const projectId = 'missing-v2-run-project' as ProjectId;
+  const legacyKey = `rivet-evaluation-runs:${projectId}`;
+  const indexKey = `rivet-evaluation-run-index:v2:${encodeURIComponent(projectId)}`;
+  const backend = makeBackend(
+    new Map([
+      [legacyKey, JSON.stringify([makeRun('legacy-run', projectId)])],
+      [indexKey, JSON.stringify({ version: 2, runIds: ['missing-run'] })],
+    ]),
+  );
+
+  await assert.rejects(
+    new LocalEvaluationRunStore({ backend }).list({ projectId }),
+    /references missing run "missing-run"/u,
+  );
+  assert.ok(backend.values.has(legacyKey));
+  assert.ok(backend.values.has(indexKey));
+});
+
+test('revisioned evaluation libraries reject a stale cross-instance replacement', async () => {
+  const originalStorage = globalThis.localStorage;
+  Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: makeStorage() });
+  try {
+    const first = new LocalEvaluationRunStore();
+    const second = new LocalEvaluationRunStore();
+    const initialFirst = await first.getLibrary();
+    const initialSecond = await second.getLibrary();
+
+    await first.putLibrary({
+      ...initialFirst,
+      migratedLegacyProjectIds: ['first' as ProjectId],
+    });
+    await assert.rejects(
+      second.putLibrary({
+        ...initialSecond,
+        migratedLegacyProjectIds: ['second' as ProjectId],
+      }),
+      /changed in another window/u,
+    );
   } finally {
     Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: originalStorage });
   }

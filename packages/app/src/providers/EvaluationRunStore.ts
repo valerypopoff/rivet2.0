@@ -10,6 +10,7 @@ import {
   type EvaluationLibrary,
   type EvaluationRecordingArtifact,
   type EvaluationRun,
+  type EvaluationRunEvent,
   type EvaluationStore,
 } from '@valerypopoff/rivet2-evaluations';
 import type { ProjectId } from '@valerypopoff/rivet2-core';
@@ -18,9 +19,12 @@ import { IndexedDBStorage } from '../state/storage/indexedDB.js';
 import { createRecoverableIndexedDbConnection, preserveIndexedDbRequestTiming } from '../utils/indexedDb.js';
 
 const PREFIX = 'rivet-evaluation-runs:';
+const RUN_INDEX_PREFIX = 'rivet-evaluation-run-index:v2:';
+const RUN_ARTIFACT_PREFIX = 'rivet-evaluation-run:v2:';
 const RECORDING_PREFIX = 'rivet-evaluation-recordings:';
 const RECORDING_ARTIFACT_PREFIX = 'rivet-evaluation-recording:';
 const DATASET_SNAPSHOT_PREFIX = 'rivet-evaluation-dataset-snapshots:';
+const DATASET_SNAPSHOT_ARTIFACT_PREFIX = 'rivet-evaluation-dataset-snapshot:v2:';
 const LIBRARY_KEY = 'rivet-evaluation-library:v1';
 const LEGACY_LIBRARY_KEY = 'evaluation-library';
 const DATABASE_NAME = 'rivet_evaluation_history';
@@ -32,6 +36,17 @@ type EvaluationRecordingManifest = {
   recordingIds: string[];
 };
 
+type EvaluationRunIndex = {
+  version: 2;
+  runIds: string[];
+};
+
+type RevisionedEvaluationLibrary = {
+  version: 2;
+  revision: number;
+  library: EvaluationLibrary;
+};
+
 interface EvaluationRunDatabase extends DBSchema {
   values: {
     key: string;
@@ -41,11 +56,21 @@ interface EvaluationRunDatabase extends DBSchema {
 
 export type EvaluationStoreEntry = { key: string; value: string };
 
+export type EvaluationStoreBatchCheck = { key: string; expected: string | null };
+export type EvaluationStoreBatchMutation =
+  | { type: 'set'; key: string; value: string }
+  | { type: 'delete'; key: string };
+
 export type EvaluationKeyValueBackend = {
   get(key: string): Promise<string | null>;
   set(key: string, value: string): Promise<void>;
   delete(key: string): Promise<void>;
   entries?(): Promise<readonly EvaluationStoreEntry[]>;
+  /** Applies all mutations only when every expected value still matches. */
+  applyBatch?(input: {
+    checks: readonly EvaluationStoreBatchCheck[];
+    mutations: readonly EvaluationStoreBatchMutation[];
+  }): Promise<boolean>;
 };
 
 type LegacyEvaluationLibraryStorage = Pick<IndexedDBStorage, 'getItem'>;
@@ -100,6 +125,7 @@ export class LocalEvaluationRunStore implements EvaluationStore {
   #storageBackend: 'unknown' | 'indexeddb' | 'legacy' = 'unknown';
   #initializePromise?: Promise<void>;
   #libraryWrite = Promise.resolve();
+  #observedLibrarySerialized: string | null | undefined;
 
   constructor(
     options: {
@@ -126,11 +152,16 @@ export class LocalEvaluationRunStore implements EvaluationStore {
     } catch (error) {
       throw this.storageError(`The ${this.#storageLabel} could not read the evaluation library`, error);
     }
-    if (serialized === null) return createEmptyEvaluationLibrary();
+    if (serialized === null) {
+      this.#observedLibrarySerialized = null;
+      return createEmptyEvaluationLibrary();
+    }
     try {
       const parsed: unknown = JSON.parse(serialized);
-      if (!isEvaluationLibraryEnvelope(parsed)) throw new Error('The stored library envelope is invalid.');
-      return normalizeEvaluationLibrary(parsed);
+      const library = this.isRevisionedLibrary(parsed) ? parsed.library : parsed;
+      if (!isEvaluationLibraryEnvelope(library)) throw new Error('The stored library envelope is invalid.');
+      this.#observedLibrarySerialized = serialized;
+      return normalizeEvaluationLibrary(library);
     } catch (error) {
       throw this.storageError(`The ${this.#storageLabel} contains an unreadable evaluation library`, error);
     }
@@ -138,18 +169,55 @@ export class LocalEvaluationRunStore implements EvaluationStore {
 
   async putLibrary(library: EvaluationLibrary): Promise<void> {
     await this.initialize();
-    const serialized = JSON.stringify(normalizeEvaluationLibrary(library));
     const write = this.#libraryWrite
       .catch(() => undefined)
       .then(async () => {
         try {
-          await this.writeSerialized(LIBRARY_KEY, serialized);
+          const currentSerialized = await this.readSerialized(LIBRARY_KEY);
+          if (this.#observedLibrarySerialized !== undefined && currentSerialized !== this.#observedLibrarySerialized) {
+            throw new Error('The evaluation library changed in another window. Reload before saving your changes.');
+          }
+          const currentRevision = this.parseLibraryRevision(currentSerialized);
+          const serialized = JSON.stringify({
+            version: 2,
+            revision: currentRevision + 1,
+            library: normalizeEvaluationLibrary(library),
+          } satisfies RevisionedEvaluationLibrary);
+          const committed = await this.applyBatch(
+            [{ key: LIBRARY_KEY, expected: currentSerialized }],
+            [{ type: 'set', key: LIBRARY_KEY, value: serialized }],
+          );
+          if (!committed) {
+            throw new Error('The evaluation library changed in another window. Reload before saving your changes.');
+          }
+          this.#observedLibrarySerialized = serialized;
         } catch (error) {
           throw this.storageError(`The ${this.#storageLabel} could not retain the evaluation library`, error);
         }
       });
     this.#libraryWrite = write;
     await write;
+  }
+
+  private isRevisionedLibrary(value: unknown): value is RevisionedEvaluationLibrary {
+    return (
+      typeof value === 'object' &&
+      value !== null &&
+      !Array.isArray(value) &&
+      (value as Partial<RevisionedEvaluationLibrary>).version === 2 &&
+      Number.isInteger((value as Partial<RevisionedEvaluationLibrary>).revision) &&
+      (value as Partial<RevisionedEvaluationLibrary>).library !== undefined
+    );
+  }
+
+  private parseLibraryRevision(serialized: string | null): number {
+    if (serialized === null) return 0;
+    try {
+      const parsed: unknown = JSON.parse(serialized);
+      return this.isRevisionedLibrary(parsed) ? parsed.revision : 0;
+    } catch {
+      return 0;
+    }
   }
 
   /** Raw, lossless migration payload used only when the desktop store adopts browser-era data. */
@@ -183,21 +251,27 @@ export class LocalEvaluationRunStore implements EvaluationStore {
 
   async put(run: EvaluationRun): Promise<void> {
     const normalized = normalizeEvaluationRun(run);
-    await this.queueProjectOperation(normalized.projectId, async () => {
-      const storedRecordings = await this.readRecordings(normalized.projectId);
-      const recordings = storedRecordings.filter((artifact) => !this.isExpired(artifact, Date.now()));
-      const protectedRunIds = new Set(
-        recordings.filter((artifact) => artifact.reference.retention !== 'temporary').map((artifact) => artifact.runId),
-      );
-      const prunedRunIds = await this.putSerialized(normalized, protectedRunIds);
-      if (prunedRunIds.length > 0 || recordings.length !== storedRecordings.length) {
-        await this.writeRecordings(
-          normalized.projectId,
-          storedRecordings,
-          recordings.filter((artifact) => !prunedRunIds.includes(artifact.runId)),
+    try {
+      await this.queueProjectOperation(normalized.projectId, async () => {
+        const storedRecordings = await this.readRecordings(normalized.projectId);
+        const recordings = storedRecordings.filter((artifact) => !this.isExpired(artifact, Date.now()));
+        const protectedRunIds = new Set(
+          recordings
+            .filter((artifact) => artifact.reference.retention !== 'temporary')
+            .map((artifact) => artifact.runId),
         );
-      }
-    });
+        const prunedRunIds = await this.putRunRecord(normalized, protectedRunIds);
+        if (prunedRunIds.length > 0 || recordings.length !== storedRecordings.length) {
+          await this.writeRecordings(
+            normalized.projectId,
+            storedRecordings,
+            recordings.filter((artifact) => !prunedRunIds.includes(artifact.runId)),
+          );
+        }
+      });
+    } catch (error) {
+      throw this.storageError(`The ${this.#storageLabel} could not retain this evaluation run`, error);
+    }
   }
 
   async updateRunName(input: {
@@ -207,13 +281,8 @@ export class LocalEvaluationRunStore implements EvaluationStore {
   }): Promise<EvaluationRun | undefined> {
     let renamed: EvaluationRun | undefined;
     await this.queueProjectOperation(input.projectId, async () => {
-      const runs = await this.readRuns(input.projectId);
-      const index = runs.findIndex((candidate) => candidate.id === input.runId);
-      if (index === -1) return;
-      renamed = normalizeEvaluationRun({ ...runs[index]!, name: input.name });
-      await this.write(
-        input.projectId,
-        runs.map((candidate, candidateIndex) => (candidateIndex === index ? renamed! : candidate)),
+      renamed = await this.updateRunRecord(input.projectId, input.runId, (run) =>
+        normalizeEvaluationRun({ ...run, name: input.name }),
       );
     });
     return renamed ? structuredClone(renamed) : undefined;
@@ -238,10 +307,7 @@ export class LocalEvaluationRunStore implements EvaluationStore {
 
   async delete(input: { projectId: ProjectId; runId: string }): Promise<void> {
     await this.queueProjectOperation(input.projectId, async () => {
-      await this.write(
-        input.projectId,
-        (await this.readRuns(input.projectId)).filter((candidate) => candidate.id !== input.runId),
-      );
+      await this.deleteRunRecord(input.projectId, input.runId);
       const recordings = await this.readRecordings(input.projectId);
       await this.writeRecordings(
         input.projectId,
@@ -254,10 +320,24 @@ export class LocalEvaluationRunStore implements EvaluationStore {
   async putDatasetSnapshot(snapshot: EvaluationDatasetSnapshot): Promise<void> {
     assertEvaluationDatasetSnapshot(snapshot);
     await this.queueProjectOperation(snapshot.projectId, async () => {
-      const snapshots = await this.readDatasetSnapshots(snapshot.projectId);
-      if (snapshots[snapshot.fingerprint] !== undefined) return;
-      snapshots[snapshot.fingerprint] = structuredClone(snapshot);
-      await this.writeDatasetSnapshots(snapshot.projectId, snapshots);
+      const key = this.datasetSnapshotArtifactKey(snapshot.projectId, snapshot.fingerprint);
+      const existingSerialized = await this.readSerialized(key);
+      if (existingSerialized !== null) {
+        this.parseDatasetSnapshot(existingSerialized, snapshot.projectId, snapshot.fingerprint);
+        return;
+      }
+
+      const legacy = await this.readLegacyDatasetSnapshot(snapshot.projectId, snapshot.fingerprint);
+      const value = legacy ?? structuredClone(snapshot);
+      const committed = await this.applyBatch(
+        [{ key, expected: null }],
+        [{ type: 'set', key, value: JSON.stringify(value) }],
+      );
+      if (!committed) {
+        const concurrent = await this.readSerialized(key);
+        if (concurrent === null) throw new Error('The evaluation dataset snapshot changed concurrently.');
+        this.parseDatasetSnapshot(concurrent, snapshot.projectId, snapshot.fingerprint);
+      }
     });
   }
 
@@ -265,32 +345,61 @@ export class LocalEvaluationRunStore implements EvaluationStore {
     projectId: ProjectId;
     fingerprint: string;
   }): Promise<EvaluationDatasetSnapshot | undefined> {
-    // Join an in-flight snapshot write for this project before returning a
-    // historical dataset. This is also harmless when there is no write.
     await this.queueProjectOperation(input.projectId, () => undefined);
-    const snapshot = (await this.readDatasetSnapshots(input.projectId))[input.fingerprint];
-    return snapshot ? structuredClone(snapshot) : undefined;
+    const key = this.datasetSnapshotArtifactKey(input.projectId, input.fingerprint);
+    const serialized = await this.readSerialized(key);
+    if (serialized !== null) {
+      return structuredClone(this.parseDatasetSnapshot(serialized, input.projectId, input.fingerprint));
+    }
+
+    const legacy = await this.readLegacyDatasetSnapshot(input.projectId, input.fingerprint);
+    if (!legacy) return undefined;
+    const committed = await this.applyBatch(
+      [{ key, expected: null }],
+      [{ type: 'set', key, value: JSON.stringify(legacy) }],
+    );
+    if (committed) return structuredClone(legacy);
+    const concurrent = await this.readSerialized(key);
+    if (concurrent === null) throw new Error('The evaluation dataset snapshot changed concurrently.');
+    return structuredClone(this.parseDatasetSnapshot(concurrent, input.projectId, input.fingerprint));
   }
 
   async putRecording(artifact: EvaluationRecordingArtifact): Promise<void> {
     assertEvaluationRecordingArtifact(artifact);
     await this.queueProjectOperation(artifact.projectId, async () => {
-      const recordingIds = await this.readRecordingIds(artifact.projectId);
-      const existing = await this.readRecordingArtifact(artifact.projectId, artifact.reference.id);
-      if (existing && (existing.runId !== artifact.runId || existing.trialId !== artifact.trialId)) {
-        throw new Error('An evaluation recording ID cannot be reassigned to another run or trial.');
-      }
-      const next = structuredClone(artifact);
-      if (existing) next.reference = structuredClone(existing.reference);
-      try {
-        await this.writeSerialized(
-          this.recordingArtifactKey(artifact.projectId, artifact.reference.id),
-          JSON.stringify(next),
+      for (let attempt = 0; attempt < 5; attempt += 1) {
+        const manifestKey = this.recordingKey(artifact.projectId);
+        const { serialized: manifestSerialized, recordingIds } = await this.readRecordingManifestState(
+          artifact.projectId,
         );
-        await this.writeRecordingManifest(artifact.projectId, [...recordingIds, artifact.reference.id]);
-      } catch (error) {
-        throw this.storageError(`The ${this.#storageLabel} could not retain evaluation recordings`, error);
+        const artifactKey = this.recordingArtifactKey(artifact.projectId, artifact.reference.id);
+        const existingSerialized = await this.readSerialized(artifactKey);
+        const existing =
+          existingSerialized === null
+            ? undefined
+            : this.parseRecordingArtifact(existingSerialized, artifact.projectId, artifact.reference.id);
+        if (existing && (existing.runId !== artifact.runId || existing.trialId !== artifact.trialId)) {
+          throw new Error('An evaluation recording ID cannot be reassigned to another run or trial.');
+        }
+        const next = structuredClone(artifact);
+        if (existing) next.reference = structuredClone(existing.reference);
+        const manifest: EvaluationRecordingManifest = {
+          version: 1,
+          recordingIds: [...new Set([...recordingIds, artifact.reference.id])],
+        };
+        const committed = await this.applyBatch(
+          [
+            { key: manifestKey, expected: manifestSerialized },
+            { key: artifactKey, expected: existingSerialized },
+          ],
+          [
+            { type: 'set', key: artifactKey, value: JSON.stringify(next) },
+            { type: 'set', key: manifestKey, value: JSON.stringify(manifest) },
+          ],
+        );
+        if (committed) return;
       }
+      throw new Error('Evaluation recordings changed concurrently; retry the operation.');
     });
   }
 
@@ -300,18 +409,39 @@ export class LocalEvaluationRunStore implements EvaluationStore {
   }): Promise<EvaluationRecordingArtifact | undefined> {
     let found: EvaluationRecordingArtifact | undefined;
     await this.queueProjectOperation(input.projectId, async () => {
-      const recordingIds = await this.readRecordingIds(input.projectId);
-      if (!recordingIds.includes(input.recordingId)) return;
-      const artifact = await this.readRecordingArtifact(input.projectId, input.recordingId);
-      if (artifact && !this.isExpired(artifact, Date.now())) {
-        found = artifact;
-        return;
+      for (let attempt = 0; attempt < 5; attempt += 1) {
+        const { serialized: manifestSerialized, recordingIds } = await this.readRecordingManifestState(input.projectId);
+        if (!recordingIds.includes(input.recordingId)) return;
+        const artifactKey = this.recordingArtifactKey(input.projectId, input.recordingId);
+        const artifactSerialized = await this.readSerialized(artifactKey);
+        const artifact =
+          artifactSerialized === null
+            ? undefined
+            : this.parseRecordingArtifact(artifactSerialized, input.projectId, input.recordingId);
+        if (artifact && !this.isExpired(artifact, Date.now())) {
+          found = artifact;
+          return;
+        }
+        const manifest: EvaluationRecordingManifest = {
+          version: 1,
+          recordingIds: recordingIds.filter((recordingId) => recordingId !== input.recordingId),
+        };
+        if (
+          await this.applyBatch(
+            [
+              { key: this.recordingKey(input.projectId), expected: manifestSerialized },
+              { key: artifactKey, expected: artifactSerialized },
+            ],
+            [
+              { type: 'set', key: this.recordingKey(input.projectId), value: JSON.stringify(manifest) },
+              { type: 'delete', key: artifactKey },
+            ],
+          )
+        ) {
+          return;
+        }
       }
-      await this.writeRecordingManifest(
-        input.projectId,
-        recordingIds.filter((recordingId) => recordingId !== input.recordingId),
-      );
-      await this.deleteSerialized(this.recordingArtifactKey(input.projectId, input.recordingId));
+      throw new Error('Evaluation recordings changed concurrently; retry the operation.');
     });
     return found ? structuredClone(found) : undefined;
   }
@@ -323,24 +453,26 @@ export class LocalEvaluationRunStore implements EvaluationStore {
     expiresAt?: string;
   }): Promise<void> {
     await this.queueProjectOperation(input.projectId, async () => {
-      const artifact = await this.readRecordingArtifact(input.projectId, input.recordingId);
-      if (!artifact) return;
-      const updated: EvaluationRecordingArtifact = {
-        ...artifact,
-        reference: {
-          id: artifact.reference.id,
-          retention: input.retention,
-          ...(input.expiresAt === undefined ? {} : { expiresAt: input.expiresAt }),
-        },
-      };
-      try {
-        await this.writeSerialized(
-          this.recordingArtifactKey(input.projectId, input.recordingId),
-          JSON.stringify(updated),
-        );
-      } catch (error) {
-        throw this.storageError(`The ${this.#storageLabel} could not retain evaluation recordings`, error);
+      const key = this.recordingArtifactKey(input.projectId, input.recordingId);
+      for (let attempt = 0; attempt < 5; attempt += 1) {
+        const serialized = await this.readSerialized(key);
+        if (serialized === null) return;
+        const artifact = this.parseRecordingArtifact(serialized, input.projectId, input.recordingId);
+        const updated: EvaluationRecordingArtifact = {
+          ...artifact,
+          reference: {
+            id: artifact.reference.id,
+            retention: input.retention,
+            ...(input.expiresAt === undefined ? {} : { expiresAt: input.expiresAt }),
+          },
+        };
+        if (
+          await this.applyBatch([{ key, expected: serialized }], [{ type: 'set', key, value: JSON.stringify(updated) }])
+        ) {
+          return;
+        }
       }
+      throw new Error('Evaluation recording retention changed concurrently; retry the operation.');
     });
   }
 
@@ -362,8 +494,40 @@ export class LocalEvaluationRunStore implements EvaluationStore {
     });
   }
 
+  async applyRunEvent(event: EvaluationRunEvent): Promise<void> {
+    if (event.type === 'run-started' || event.type === 'run-finalized') {
+      await this.put(event.run);
+      return;
+    }
+
+    await this.queueProjectOperation(event.projectId, async () => {
+      await this.updateRunRecord(event.projectId, event.runId, (existing) => {
+        if ((existing.revision ?? 0) >= event.revision) return existing;
+        const trialIndex = existing.trials.findIndex(
+          (trial) => trial.caseId === event.trial.caseId && trial.trialIndex === event.trial.trialIndex,
+        );
+        const trials = [...existing.trials];
+        if (trialIndex >= 0) trials[trialIndex] = event.trial;
+        else trials.push(event.trial);
+        trials.sort((left, right) => left.caseIndex - right.caseIndex || left.trialIndex - right.trialIndex);
+        return normalizeEvaluationRun({
+          ...existing,
+          revision: event.revision,
+          requestedTrialCount: event.requestedTrialCount,
+          trials,
+        });
+      });
+    });
+  }
+
   private key(projectId: ProjectId): string {
     return `${PREFIX}${projectId}`;
+  }
+  private runIndexKey(projectId: ProjectId): string {
+    return `${RUN_INDEX_PREFIX}${encodeURIComponent(projectId)}`;
+  }
+  private runArtifactKey(projectId: ProjectId, runId: string): string {
+    return `${RUN_ARTIFACT_PREFIX}${encodeURIComponent(projectId)}:${encodeURIComponent(runId)}`;
   }
   private recordingKey(projectId: ProjectId): string {
     return `${RECORDING_PREFIX}${projectId}`;
@@ -374,21 +538,144 @@ export class LocalEvaluationRunStore implements EvaluationStore {
   private datasetSnapshotKey(projectId: ProjectId): string {
     return `${DATASET_SNAPSHOT_PREFIX}${projectId}`;
   }
-  private async putSerialized(run: EvaluationRun, protectedRunIds: ReadonlySet<string>): Promise<string[]> {
-    const runs = await this.readRuns(run.projectId);
-    const existing = runs.find((candidate) => candidate.id === run.id);
-    const nextRun = reconcileEvaluationRunSnapshots(existing, run);
-    if (nextRun === existing) return [];
-    const ordered = [nextRun, ...runs.filter((candidate) => candidate.id !== run.id)];
-    let unprotectedCount = 0;
-    const next = ordered.filter((candidate) => {
-      if (protectedRunIds.has(candidate.id)) return true;
-      unprotectedCount += 1;
-      return unprotectedCount <= MAX_RUNS_PER_PROJECT;
-    });
-    await this.write(run.projectId, next);
-    const kept = new Set(next.map((candidate) => candidate.id));
-    return runs.filter((candidate) => !kept.has(candidate.id)).map((candidate) => candidate.id);
+  private datasetSnapshotArtifactKey(projectId: ProjectId, fingerprint: string): string {
+    return `${DATASET_SNAPSHOT_ARTIFACT_PREFIX}${encodeURIComponent(projectId)}:${encodeURIComponent(fingerprint)}`;
+  }
+
+  private async putRunRecord(run: EvaluationRun, protectedRunIds: ReadonlySet<string>): Promise<string[]> {
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      const { serialized: indexSerialized, index } = await this.readRunIndex(run.projectId);
+      const runKey = this.runArtifactKey(run.projectId, run.id);
+      const existingSerialized = await this.readSerialized(runKey);
+      const existing =
+        existingSerialized === null ? undefined : this.parseRun(existingSerialized, run.projectId, run.id);
+      const nextRun = reconcileEvaluationRunSnapshots(existing, run);
+      if (nextRun === existing) return [];
+
+      const orderedIds = [run.id, ...index.runIds.filter((runId) => runId !== run.id)];
+      let unprotectedCount = 0;
+      const nextRunIds = orderedIds.filter((runId) => {
+        if (protectedRunIds.has(runId)) return true;
+        unprotectedCount += 1;
+        return unprotectedCount <= MAX_RUNS_PER_PROJECT;
+      });
+      const kept = new Set(nextRunIds);
+      const prunedRunIds = index.runIds.filter((runId) => !kept.has(runId));
+      const nextIndex: EvaluationRunIndex = { version: 2, runIds: nextRunIds };
+      const committed = await this.applyBatch(
+        [
+          { key: this.runIndexKey(run.projectId), expected: indexSerialized },
+          { key: runKey, expected: existingSerialized },
+        ],
+        [
+          { type: 'set', key: runKey, value: JSON.stringify(nextRun) },
+          { type: 'set', key: this.runIndexKey(run.projectId), value: JSON.stringify(nextIndex) },
+          ...prunedRunIds.map(
+            (runId): EvaluationStoreBatchMutation => ({
+              type: 'delete',
+              key: this.runArtifactKey(run.projectId, runId),
+            }),
+          ),
+        ],
+      );
+      if (committed) return prunedRunIds;
+    }
+    throw new Error('Evaluation run history changed concurrently; retry the operation.');
+  }
+
+  private async updateRunRecord(
+    projectId: ProjectId,
+    runId: string,
+    update: (run: EvaluationRun) => EvaluationRun,
+  ): Promise<EvaluationRun | undefined> {
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      const { index } = await this.readRunIndex(projectId);
+      if (!index.runIds.includes(runId)) return undefined;
+      const runKey = this.runArtifactKey(projectId, runId);
+      const existingSerialized = await this.readSerialized(runKey);
+      if (existingSerialized === null) return undefined;
+      const existing = this.parseRun(existingSerialized, projectId, runId);
+      const updated = update(existing);
+      if (updated === existing) return existing;
+      const committed = await this.applyBatch(
+        [{ key: runKey, expected: existingSerialized }],
+        [{ type: 'set', key: runKey, value: JSON.stringify(updated) }],
+      );
+      if (committed) return updated;
+    }
+    throw new Error('Evaluation run changed concurrently; retry the operation.');
+  }
+
+  private async deleteRunRecord(projectId: ProjectId, runId: string): Promise<void> {
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      const { serialized, index } = await this.readRunIndex(projectId);
+      if (!index.runIds.includes(runId)) return;
+      const nextIndex: EvaluationRunIndex = {
+        version: 2,
+        runIds: index.runIds.filter((candidate) => candidate !== runId),
+      };
+      const committed = await this.applyBatch(
+        [{ key: this.runIndexKey(projectId), expected: serialized }],
+        [
+          { type: 'set', key: this.runIndexKey(projectId), value: JSON.stringify(nextIndex) },
+          { type: 'delete', key: this.runArtifactKey(projectId, runId) },
+        ],
+      );
+      if (committed) return;
+    }
+    throw new Error('Evaluation run history changed concurrently; retry the deletion.');
+  }
+
+  private async readRunIndex(projectId: ProjectId): Promise<{ serialized: string | null; index: EvaluationRunIndex }> {
+    const key = this.runIndexKey(projectId);
+    let serialized = await this.readSerialized(key);
+    if (serialized === null) {
+      serialized = await this.migrateLegacyRuns(projectId);
+      if (serialized === null) return { serialized: null, index: { version: 2, runIds: [] } };
+    }
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(serialized);
+    } catch (error) {
+      throw this.storageError(`The ${this.#storageLabel} contains an unreadable evaluation run index`, error);
+    }
+    if (!this.isRunIndex(parsed)) {
+      throw new Error(`The ${this.#storageLabel} contains an invalid evaluation run index.`);
+    }
+    return { serialized, index: { version: 2, runIds: [...new Set(parsed.runIds)] } };
+  }
+
+  private async migrateLegacyRuns(projectId: ProjectId): Promise<string | null> {
+    const legacySerialized = await this.readSerialized(this.key(projectId));
+    if (legacySerialized === null) return null;
+    const runs = this.parseLegacyRuns(legacySerialized, projectId);
+    const index: EvaluationRunIndex = { version: 2, runIds: runs.map((run) => run.id) };
+    const serializedIndex = JSON.stringify(index);
+    const committed = await this.applyBatch(
+      [{ key: this.runIndexKey(projectId), expected: null }],
+      [
+        ...runs.map(
+          (run): EvaluationStoreBatchMutation => ({
+            type: 'set',
+            key: this.runArtifactKey(projectId, run.id),
+            value: JSON.stringify(run),
+          }),
+        ),
+        { type: 'set', key: this.runIndexKey(projectId), value: serializedIndex },
+      ],
+    );
+    return committed ? serializedIndex : this.readSerialized(this.runIndexKey(projectId));
+  }
+
+  private isRunIndex(value: unknown): value is EvaluationRunIndex {
+    return (
+      typeof value === 'object' &&
+      value !== null &&
+      !Array.isArray(value) &&
+      (value as Partial<EvaluationRunIndex>).version === 2 &&
+      Array.isArray((value as Partial<EvaluationRunIndex>).runIds) &&
+      (value as EvaluationRunIndex).runIds.every((runId) => typeof runId === 'string')
+    );
   }
 
   private legacyStorage(): Storage | undefined {
@@ -420,9 +707,12 @@ export class LocalEvaluationRunStore implements EvaluationStore {
     return (
       key === LIBRARY_KEY ||
       key.startsWith(PREFIX) ||
+      key.startsWith(RUN_INDEX_PREFIX) ||
+      key.startsWith(RUN_ARTIFACT_PREFIX) ||
       key.startsWith(RECORDING_PREFIX) ||
       key.startsWith(RECORDING_ARTIFACT_PREFIX) ||
-      key.startsWith(DATASET_SNAPSHOT_PREFIX)
+      key.startsWith(DATASET_SNAPSHOT_PREFIX) ||
+      key.startsWith(DATASET_SNAPSHOT_ARTIFACT_PREFIX)
     );
   }
 
@@ -559,27 +849,56 @@ export class LocalEvaluationRunStore implements EvaluationStore {
     }
   }
 
-  private async deleteSerialized(key: string): Promise<void> {
+  private async applyBatch(
+    checks: readonly EvaluationStoreBatchCheck[],
+    mutations: readonly EvaluationStoreBatchMutation[],
+  ): Promise<boolean> {
+    if (this.#backend?.applyBatch) return this.#backend.applyBatch({ checks, mutations });
     if (this.#backend) {
-      await this.#backend.delete(key);
-      return;
+      for (const check of checks) {
+        if ((await this.#backend.get(check.key)) !== check.expected) return false;
+      }
+      for (const mutation of mutations) {
+        if (mutation.type === 'set') await this.#backend.set(mutation.key, mutation.value);
+        else await this.#backend.delete(mutation.key);
+      }
+      return true;
     }
+
     const database = await this.database();
     if (!database) {
-      this.legacyStorage()?.removeItem(key);
-      return;
+      const storage = this.legacyStorage();
+      if (!storage) throw new Error(`${this.#storageLabel} is unavailable`);
+      for (const check of checks) {
+        if (storage.getItem(check.key) !== check.expected) return false;
+      }
+      for (const mutation of mutations) {
+        if (mutation.type === 'set') storage.setItem(mutation.key, mutation.value);
+        else storage.removeItem(mutation.key);
+      }
+      return true;
     }
 
     const transaction = preserveIndexedDbRequestTiming(database.transaction(DATABASE_STORE, 'readwrite'));
-    await transaction.store.delete(key);
-    await transaction.done;
-    this.#migratedLegacyKeys.add(key);
-    try {
-      this.legacyStorage()?.removeItem(key);
-    } catch {
-      // IndexedDB no longer references the artifact. A fallback copy can be
-      // ignored because this store never switches backends after first use.
+    for (const check of checks) {
+      const actual = (await transaction.store.get(check.key)) ?? null;
+      if (actual !== check.expected) {
+        transaction.abort();
+        try {
+          await transaction.done;
+        } catch {
+          // An aborted compare-and-swap is an ordinary conflict.
+        }
+        return false;
+      }
     }
+    for (const mutation of mutations) {
+      if (mutation.type === 'set') await transaction.store.put(mutation.value, mutation.key);
+      else await transaction.store.delete(mutation.key);
+    }
+    await transaction.done;
+    for (const mutation of mutations) this.#migratedLegacyKeys.add(mutation.key);
+    return true;
   }
 
   private storageError(message: string, error: unknown): Error {
@@ -587,22 +906,33 @@ export class LocalEvaluationRunStore implements EvaluationStore {
     return new Error(detail ? `${message}: ${detail}` : message);
   }
 
-  private async write(projectId: ProjectId, runs: readonly EvaluationRun[]): Promise<void> {
+  private async readRuns(projectId: ProjectId): Promise<EvaluationRun[]> {
     try {
-      await this.writeSerialized(this.key(projectId), JSON.stringify(runs));
+      const { index } = await this.readRunIndex(projectId);
+      const runs = await Promise.all(
+        index.runIds.map(async (runId) => {
+          const serialized = await this.readSerialized(this.runArtifactKey(projectId, runId));
+          if (serialized === null) {
+            throw new Error(`The evaluation run index references missing run "${runId}".`);
+          }
+          return this.parseRun(serialized, projectId, runId);
+        }),
+      );
+      return runs;
     } catch (error) {
-      throw this.storageError(`The ${this.#storageLabel} could not retain this evaluation run`, error);
+      // V1 remains authoritative until a complete V2 index commit succeeds.
+      // This makes a quota/disk failure during the one-way migration safely
+      // retryable on the next read without hiding existing history.
+      if ((await this.readSerialized(this.runIndexKey(projectId))) !== null) {
+        throw this.storageError(`The ${this.#storageLabel} could not read evaluation run history`, error);
+      }
+      const legacySerialized = await this.readSerialized(this.key(projectId));
+      if (legacySerialized !== null) return this.parseLegacyRuns(legacySerialized, projectId);
+      throw this.storageError(`The ${this.#storageLabel} could not read evaluation run history`, error);
     }
   }
 
-  private async readRuns(projectId: ProjectId): Promise<EvaluationRun[]> {
-    let serialized: string | null;
-    try {
-      serialized = await this.readSerialized(this.key(projectId));
-    } catch (error) {
-      throw this.storageError(`The ${this.#storageLabel} could not read evaluation run history`, error);
-    }
-    if (serialized === null) return [];
+  private parseLegacyRuns(serialized: string, projectId: ProjectId): EvaluationRun[] {
     let parsed: unknown;
     try {
       parsed = JSON.parse(serialized);
@@ -613,7 +943,7 @@ export class LocalEvaluationRunStore implements EvaluationStore {
       throw new Error(`The ${this.#storageLabel} contains an invalid evaluation run-history envelope.`);
     }
     try {
-      return parsed.map((candidate) => {
+      return parsed.map((candidate: unknown) => {
         if (!this.isRunForProject(candidate, projectId)) {
           throw new Error('A stored run does not belong to its project-scoped history record.');
         }
@@ -622,6 +952,19 @@ export class LocalEvaluationRunStore implements EvaluationStore {
     } catch (error) {
       throw this.storageError(`The ${this.#storageLabel} contains invalid evaluation run history`, error);
     }
+  }
+
+  private parseRun(serialized: string, projectId: ProjectId, runId: string): EvaluationRun {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(serialized);
+    } catch (error) {
+      throw this.storageError(`The ${this.#storageLabel} contains an unreadable evaluation run`, error);
+    }
+    if (!this.isRunForProject(parsed, projectId) || parsed.id !== runId) {
+      throw new Error(`The ${this.#storageLabel} contains an invalid evaluation run record.`);
+    }
+    return normalizeEvaluationRun(parsed);
   }
   private isRunForProject(value: unknown, projectId: ProjectId): value is Record<string, unknown> {
     return (
@@ -669,32 +1012,41 @@ export class LocalEvaluationRunStore implements EvaluationStore {
       throw this.storageError(`The ${this.#storageLabel} could not read evaluation recordings`, error);
     }
     if (recordings.length !== parsed.recordingIds.length) {
-      await this.writeRecordingManifest(
-        projectId,
-        recordings.map((artifact) => artifact.reference.id),
+      const manifest: EvaluationRecordingManifest = {
+        version: 1,
+        recordingIds: recordings.map((artifact) => artifact.reference.id),
+      };
+      await this.applyBatch(
+        [{ key: this.recordingKey(projectId), expected: serialized }],
+        [{ type: 'set', key: this.recordingKey(projectId), value: JSON.stringify(manifest) }],
       );
     }
     return recordings;
   }
 
-  private async readRecordingIds(projectId: ProjectId): Promise<string[]> {
+  private async readRecordingManifestState(
+    projectId: ProjectId,
+  ): Promise<{ serialized: string | null; recordingIds: string[] }> {
     let serialized: string | null;
     try {
       serialized = await this.readSerialized(this.recordingKey(projectId));
     } catch (error) {
       throw this.storageError(`The ${this.#storageLabel} could not read evaluation recordings`, error);
     }
-    if (serialized === null) return [];
+    if (serialized === null) return { serialized, recordingIds: [] };
     let parsed: unknown;
     try {
       parsed = JSON.parse(serialized);
     } catch (error) {
       throw this.storageError(`The ${this.#storageLabel} contains unreadable evaluation recordings`, error);
     }
-    if (this.isRecordingManifest(parsed)) return [...new Set(parsed.recordingIds)];
-    // The old format is an aggregate artifact array. The full reader validates
-    // and migrates it once; subsequent operations read only the small manifest.
-    if (Array.isArray(parsed)) return (await this.readRecordings(projectId)).map((artifact) => artifact.reference.id);
+    if (this.isRecordingManifest(parsed)) {
+      return { serialized, recordingIds: [...new Set(parsed.recordingIds)] };
+    }
+    if (Array.isArray(parsed)) {
+      await this.readRecordings(projectId);
+      return this.readRecordingManifestState(projectId);
+    }
     throw new Error(`The ${this.#storageLabel} contains an invalid evaluation recording manifest.`);
   }
 
@@ -709,6 +1061,14 @@ export class LocalEvaluationRunStore implements EvaluationStore {
       throw this.storageError(`The ${this.#storageLabel} could not read evaluation recordings`, error);
     }
     if (serialized === null) return undefined;
+    return this.parseRecordingArtifact(serialized, projectId, recordingId);
+  }
+
+  private parseRecordingArtifact(
+    serialized: string,
+    projectId: ProjectId,
+    recordingId: string,
+  ): EvaluationRecordingArtifact {
     let parsed: unknown;
     try {
       parsed = JSON.parse(serialized);
@@ -729,29 +1089,31 @@ export class LocalEvaluationRunStore implements EvaluationStore {
     try {
       const previousById = new Map(previous.map((artifact) => [artifact.reference.id, artifact] as const));
       const nextById = new Map(recordings.map((artifact) => [artifact.reference.id, artifact] as const));
+      const manifestKey = this.recordingKey(projectId);
+      const manifestSerialized = await this.readSerialized(manifestKey);
+      const checks: EvaluationStoreBatchCheck[] = [{ key: manifestKey, expected: manifestSerialized }];
+      const mutations: EvaluationStoreBatchMutation[] = [];
       for (const artifact of recordings) {
         const prior = previousById.get(artifact.reference.id);
         if (prior === artifact) continue;
-        await this.writeSerialized(
-          this.recordingArtifactKey(projectId, artifact.reference.id),
-          JSON.stringify(artifact),
-        );
+        const key = this.recordingArtifactKey(projectId, artifact.reference.id);
+        checks.push({ key, expected: prior === undefined ? null : JSON.stringify(prior) });
+        mutations.push({ type: 'set', key, value: JSON.stringify(artifact) });
       }
-      // The manifest is the commit point. New artifacts written before it are
-      // harmless orphans after an interrupted write; removed artifacts stay
-      // reachable until this update commits.
-      await this.writeRecordingManifest(projectId, [...nextById.keys()]);
       for (const recordingId of previousById.keys()) {
-        if (!nextById.has(recordingId)) await this.deleteSerialized(this.recordingArtifactKey(projectId, recordingId));
+        if (nextById.has(recordingId)) continue;
+        const key = this.recordingArtifactKey(projectId, recordingId);
+        checks.push({ key, expected: JSON.stringify(previousById.get(recordingId)) });
+        mutations.push({ type: 'delete', key });
+      }
+      const manifest: EvaluationRecordingManifest = { version: 1, recordingIds: [...nextById.keys()] };
+      mutations.push({ type: 'set', key: manifestKey, value: JSON.stringify(manifest) });
+      if (!(await this.applyBatch(checks, mutations))) {
+        throw new Error('Evaluation recordings changed concurrently; retry the operation.');
       }
     } catch (error) {
       throw this.storageError(`The ${this.#storageLabel} could not retain evaluation recordings`, error);
     }
-  }
-
-  private async writeRecordingManifest(projectId: ProjectId, recordingIds: readonly string[]): Promise<void> {
-    const manifest: EvaluationRecordingManifest = { version: 1, recordingIds: [...new Set(recordingIds)] };
-    await this.writeSerialized(this.recordingKey(projectId), JSON.stringify(manifest));
   }
 
   private isRecordingManifest(value: unknown): value is EvaluationRecordingManifest {
@@ -774,14 +1136,17 @@ export class LocalEvaluationRunStore implements EvaluationStore {
     }
   }
 
-  private async readDatasetSnapshots(projectId: ProjectId): Promise<Record<string, EvaluationDatasetSnapshot>> {
+  private async readLegacyDatasetSnapshot(
+    projectId: ProjectId,
+    fingerprint: string,
+  ): Promise<EvaluationDatasetSnapshot | undefined> {
     let serialized: string | null;
     try {
       serialized = await this.readSerialized(this.datasetSnapshotKey(projectId));
     } catch (error) {
       throw this.storageError(`The ${this.#storageLabel} could not read evaluation dataset snapshots`, error);
     }
-    if (serialized === null) return {};
+    if (serialized === null) return undefined;
     let parsed: unknown;
     try {
       parsed = JSON.parse(serialized);
@@ -795,18 +1160,25 @@ export class LocalEvaluationRunStore implements EvaluationStore {
     if (entries.some(([fingerprint, value]) => !this.isDatasetSnapshotForProject(value, projectId, fingerprint))) {
       throw new Error(`The ${this.#storageLabel} contains invalid evaluation dataset snapshots.`);
     }
-    return Object.fromEntries(entries) as Record<string, EvaluationDatasetSnapshot>;
+    const snapshot = Object.fromEntries(entries)[fingerprint];
+    return snapshot as EvaluationDatasetSnapshot | undefined;
   }
 
-  private async writeDatasetSnapshots(
+  private parseDatasetSnapshot(
+    serialized: string,
     projectId: ProjectId,
-    snapshots: Readonly<Record<string, EvaluationDatasetSnapshot>>,
-  ): Promise<void> {
+    fingerprint: string,
+  ): EvaluationDatasetSnapshot {
+    let parsed: unknown;
     try {
-      await this.writeSerialized(this.datasetSnapshotKey(projectId), JSON.stringify(snapshots));
+      parsed = JSON.parse(serialized);
     } catch (error) {
-      throw this.storageError(`The ${this.#storageLabel} could not retain this evaluation dataset snapshot`, error);
+      throw this.storageError(`The ${this.#storageLabel} contains an unreadable evaluation dataset snapshot`, error);
     }
+    if (!this.isDatasetSnapshotForProject(parsed, projectId, fingerprint)) {
+      throw new Error(`The ${this.#storageLabel} contains an invalid evaluation dataset snapshot.`);
+    }
+    return parsed;
   }
 
   private isDatasetSnapshotForProject(

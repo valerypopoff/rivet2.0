@@ -13,6 +13,27 @@ pub struct EvaluationStoreEntry {
     value: String,
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EvaluationStoreBatchCheck {
+    key: String,
+    expected: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(tag = "type", rename_all = "kebab-case")]
+pub enum EvaluationStoreBatchMutation {
+    Set { key: String, value: String },
+    Delete { key: String },
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EvaluationStoreBatch {
+    checks: Vec<EvaluationStoreBatchCheck>,
+    mutations: Vec<EvaluationStoreBatchMutation>,
+}
+
 fn database_path(app_handle: &AppHandle) -> Result<PathBuf, String> {
     let directory = app_handle
         .path_resolver()
@@ -86,6 +107,60 @@ pub fn evaluation_store_delete(app_handle: AppHandle, key: String) -> Result<(),
         .execute("DELETE FROM evaluation_values WHERE key = ?1", params![key])
         .map(|_| ())
         .map_err(|error| format!("Failed to update the evaluation database: {}", error))
+}
+
+#[tauri::command]
+pub fn evaluation_store_apply_batch(
+    app_handle: AppHandle,
+    input: EvaluationStoreBatch,
+) -> Result<bool, String> {
+    let mut connection = open_database(&app_handle)?;
+    apply_batch(&mut connection, &input)
+}
+
+fn apply_batch(connection: &mut Connection, input: &EvaluationStoreBatch) -> Result<bool, String> {
+    let transaction = connection
+        .transaction()
+        .map_err(|error| format!("Failed to start evaluation transaction: {}", error))?;
+    for check in &input.checks {
+        let actual: Option<String> = transaction
+            .query_row(
+                "SELECT value FROM evaluation_values WHERE key = ?1",
+                params![check.key],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|error| format!("Failed to verify evaluation transaction: {}", error))?;
+        if actual != check.expected {
+            return Ok(false);
+        }
+    }
+    for mutation in &input.mutations {
+        match mutation {
+            EvaluationStoreBatchMutation::Set { key, value } => {
+                transaction
+                    .execute(
+                        "INSERT INTO evaluation_values(key, value) VALUES (?1, ?2)
+                         ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                        params![key, value],
+                    )
+                    .map_err(|error| {
+                        format!("Failed to write evaluation transaction: {}", error)
+                    })?;
+            }
+            EvaluationStoreBatchMutation::Delete { key } => {
+                transaction
+                    .execute("DELETE FROM evaluation_values WHERE key = ?1", params![key])
+                    .map_err(|error| {
+                        format!("Failed to update evaluation transaction: {}", error)
+                    })?;
+            }
+        }
+    }
+    transaction
+        .commit()
+        .map_err(|error| format!("Failed to commit evaluation transaction: {}", error))?;
+    Ok(true)
 }
 
 #[tauri::command]
@@ -182,6 +257,49 @@ mod tests {
             serde_json::from_str(r#"{"key":"runs","value":"[]"}"#).unwrap();
         assert_eq!(entry.key, "runs");
         assert_eq!(entry.value, "[]");
+    }
+
+    #[test]
+    fn batch_compare_and_swap_is_atomic() {
+        let mut connection = Connection::open_in_memory().unwrap();
+        initialize_database(&connection).unwrap();
+        let initial = EvaluationStoreBatch {
+            checks: vec![EvaluationStoreBatchCheck {
+                key: "index".to_string(),
+                expected: None,
+            }],
+            mutations: vec![
+                EvaluationStoreBatchMutation::Set {
+                    key: "run".to_string(),
+                    value: "one".to_string(),
+                },
+                EvaluationStoreBatchMutation::Set {
+                    key: "index".to_string(),
+                    value: "v1".to_string(),
+                },
+            ],
+        };
+        assert!(apply_batch(&mut connection, &initial).unwrap());
+
+        let conflict = EvaluationStoreBatch {
+            checks: vec![EvaluationStoreBatchCheck {
+                key: "index".to_string(),
+                expected: Some("stale".to_string()),
+            }],
+            mutations: vec![EvaluationStoreBatchMutation::Set {
+                key: "run".to_string(),
+                value: "overwritten".to_string(),
+            }],
+        };
+        assert!(!apply_batch(&mut connection, &conflict).unwrap());
+        let stored: String = connection
+            .query_row(
+                "SELECT value FROM evaluation_values WHERE key = 'run'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(stored, "one");
     }
 
     #[test]

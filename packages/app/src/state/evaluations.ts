@@ -5,6 +5,7 @@ import type {
   EvaluationLibrary,
   EvaluationProjectData,
   EvaluationRun,
+  EvaluationRunEvent,
   EvaluationSuite,
 } from '@valerypopoff/rivet2-evaluations';
 import {
@@ -30,6 +31,8 @@ export type EvaluationsState = {
    * the graph editor or another workspace.
    */
   activeView: 'definition' | 'dataset' | 'runs' | 'compare';
+  /** Suite editor presentation remembered independently from the dataset screen. */
+  suitePresentationByScope: Record<string, EvaluationSuitePresentation>;
   /** The active resource is session-only and must never be written to a project file. */
   selectedSuiteId?: string;
   selectedDatasetId?: string;
@@ -61,6 +64,16 @@ export type EvaluationsState = {
 
 export type EvaluationRunScoreSort = 'default' | 'score-desc' | 'score-asc';
 
+export type EvaluationSuiteWorkspaceView = Exclude<EvaluationsState['activeView'], 'dataset'>;
+
+export type EvaluationSuiteDefinitionView = 'deterministic-checks' | 'evaluator-graphs' | 'thresholds';
+
+export type EvaluationSuitePresentation = {
+  activeView: EvaluationSuiteWorkspaceView;
+  definitionView: EvaluationSuiteDefinitionView;
+  additionalExecutionSettingsExpanded: boolean;
+};
+
 export type EvaluationRunHistoryScope = {
   projectId: ProjectId;
   suiteId: string;
@@ -86,6 +99,177 @@ export function isEvaluationRunHistoryCached(
     state.runHistoryScope?.projectId === scope.projectId &&
     state.runHistoryScope.suiteId === scope.suiteId
   );
+}
+
+const defaultEvaluationSuitePresentation: EvaluationSuitePresentation = {
+  activeView: 'definition',
+  definitionView: 'deterministic-checks',
+  additionalExecutionSettingsExpanded: false,
+};
+
+export function getEvaluationSuitePresentation(
+  state: Pick<EvaluationsState, 'suitePresentationByScope'>,
+  scope: EvaluationRunHistoryScope | undefined,
+): EvaluationSuitePresentation {
+  if (!scope) return defaultEvaluationSuitePresentation;
+  return state.suitePresentationByScope[getEvaluationRunHistoryScopeKey(scope)] ?? defaultEvaluationSuitePresentation;
+}
+
+export function updateEvaluationSuitePresentation(
+  state: EvaluationsState,
+  scope: EvaluationRunHistoryScope,
+  update: Partial<EvaluationSuitePresentation>,
+): EvaluationsState {
+  const key = getEvaluationRunHistoryScopeKey(scope);
+  const current = getEvaluationSuitePresentation(state, scope);
+  const next = { ...current, ...update };
+  if (
+    current.activeView === next.activeView &&
+    current.definitionView === next.definitionView &&
+    current.additionalExecutionSettingsExpanded === next.additionalExecutionSettingsExpanded
+  ) {
+    return state;
+  }
+  return {
+    ...state,
+    suitePresentationByScope: { ...state.suitePresentationByScope, [key]: next },
+  };
+}
+
+function isEvaluationScopeForSuite(key: string, suiteIds: ReadonlySet<string>): boolean {
+  try {
+    const parsed = JSON.parse(key);
+    return Array.isArray(parsed) && typeof parsed[1] === 'string' && suiteIds.has(parsed[1]);
+  } catch {
+    // Scoped presentation state is session-only. Preserve a malformed legacy
+    // key rather than letting cleanup turn it into an unrelated data-loss path.
+    return false;
+  }
+}
+
+function omitEvaluationSuiteScopedEntries<T>(
+  entries: Record<string, T>,
+  suiteIds: ReadonlySet<string>,
+): Record<string, T> {
+  let changed = false;
+  const retained = Object.fromEntries(
+    Object.entries(entries).filter(([key]) => {
+      const remove = isEvaluationScopeForSuite(key, suiteIds);
+      changed ||= remove;
+      return !remove;
+    }),
+  ) as Record<string, T>;
+  return changed ? retained : entries;
+}
+
+/**
+ * Drops only session state that belongs to deleted suite resources. Durable
+ * runs remain in the run store, but no deleted suite can later inherit stale
+ * tab, sort, scroll, or disclosure preferences if an ID is ever reused.
+ */
+export function discardEvaluationSuiteWorkspaceState(
+  state: EvaluationsState,
+  deletedSuiteIds: ReadonlySet<string>,
+): EvaluationsState {
+  if (deletedSuiteIds.size === 0) return state;
+
+  const runs = state.runs.some((run) => deletedSuiteIds.has(run.suiteId))
+    ? state.runs.filter((run) => !deletedSuiteIds.has(run.suiteId))
+    : state.runs;
+  const currentRun = state.currentRun && !deletedSuiteIds.has(state.currentRun.suiteId) ? state.currentRun : undefined;
+  const runHistoryScope =
+    state.runHistoryScope && !deletedSuiteIds.has(state.runHistoryScope.suiteId) ? state.runHistoryScope : undefined;
+  const runTrialExpansion =
+    state.runTrialExpansion && !deletedSuiteIds.has(state.runTrialExpansion.scope.suiteId)
+      ? state.runTrialExpansion
+      : undefined;
+  const selectedRunId =
+    state.selectedRunId && runs.some((run) => run.id === state.selectedRunId) ? state.selectedRunId : undefined;
+  const suitePresentationByScope = omitEvaluationSuiteScopedEntries(state.suitePresentationByScope, deletedSuiteIds);
+  const runScoreSortByScope = omitEvaluationSuiteScopedEntries(state.runScoreSortByScope, deletedSuiteIds);
+  const runScrollTopByScope = omitEvaluationSuiteScopedEntries(state.runScrollTopByScope, deletedSuiteIds);
+
+  if (
+    runs === state.runs &&
+    currentRun === state.currentRun &&
+    runHistoryScope === state.runHistoryScope &&
+    runTrialExpansion === state.runTrialExpansion &&
+    selectedRunId === state.selectedRunId &&
+    suitePresentationByScope === state.suitePresentationByScope &&
+    runScoreSortByScope === state.runScoreSortByScope &&
+    runScrollTopByScope === state.runScrollTopByScope
+  ) {
+    return state;
+  }
+
+  return {
+    ...state,
+    runs,
+    currentRun,
+    runHistoryScope,
+    runTrialExpansion,
+    selectedRunId,
+    suitePresentationByScope,
+    runScoreSortByScope,
+    runScrollTopByScope,
+  };
+}
+
+/**
+ * Opens a dataset without discarding the last suite's warm history or editor
+ * presentation. Those values are invisible on the dataset screen and make a
+ * quick return to the suite synchronous.
+ */
+export function selectEvaluationDatasetResource(state: EvaluationsState, datasetId: string): EvaluationsState {
+  if (state.activeView === 'dataset' && state.selectedDatasetId === datasetId && state.selectedSuiteId === undefined) {
+    return state;
+  }
+  return {
+    ...state,
+    activeView: 'dataset',
+    selectedSuiteId: undefined,
+    selectedDatasetId: datasetId,
+  };
+}
+
+/**
+ * Opens a suite and reuses the exact warm history scope when possible. A
+ * different suite remains a cold scope and is hydrated by the workspace.
+ */
+export function selectEvaluationSuiteResource(
+  state: EvaluationsState,
+  scope: EvaluationRunHistoryScope,
+  compareAvailable: boolean,
+): EvaluationsState {
+  if (
+    state.activeView !== 'dataset' &&
+    state.selectedSuiteId === scope.suiteId &&
+    state.selectedDatasetId === undefined
+  ) {
+    return state;
+  }
+
+  const presentation = getEvaluationSuitePresentation(state, scope);
+  const activeView = presentation.activeView === 'compare' && !compareAvailable ? 'runs' : presentation.activeView;
+  if (isEvaluationRunHistoryCached(state, scope)) {
+    return {
+      ...state,
+      activeView,
+      selectedSuiteId: scope.suiteId,
+      selectedDatasetId: undefined,
+    };
+  }
+
+  return {
+    ...state,
+    activeView,
+    selectedSuiteId: scope.suiteId,
+    selectedDatasetId: undefined,
+    runs: [],
+    runHistoryScope: undefined,
+    runTrialExpansion: undefined,
+    selectedRunId: undefined,
+  };
 }
 
 type EvaluationWorkspaceState = Omit<EvaluationsState, 'data' | 'datasets' | 'migratedLegacyProjectIds'>;
@@ -212,6 +396,7 @@ export function createDefaultEvaluationsState(
     datasets,
     migratedLegacyProjectIds: [],
     activeView: 'definition',
+    suitePresentationByScope: {},
     runs: [],
     runScoreSortByScope: {},
     runScrollTopByScope: {},
@@ -243,10 +428,41 @@ export function applyEvaluationRunSnapshot(state: EvaluationsState, run: Evaluat
   };
 }
 
+/**
+ * Applies the runner's incremental protocol without cloning/replacing every
+ * previously settled trial. Terminal events still pass through the established
+ * snapshot reconciliation boundary so selection and persisted-history behavior
+ * remain unchanged.
+ */
+export function applyEvaluationRunEvent(state: EvaluationsState, event: EvaluationRunEvent): EvaluationsState {
+  if (event.type === 'run-started' || event.type === 'run-finalized') {
+    return applyEvaluationRunSnapshot(state, event.run);
+  }
+
+  const current = state.currentRun?.id === event.runId ? state.currentRun : undefined;
+  if (!current || (current.revision ?? 0) >= event.revision) return state;
+
+  const existingIndex = current.trials.findIndex(
+    (trial) => trial.caseId === event.trial.caseId && trial.trialIndex === event.trial.trialIndex,
+  );
+  const trials = [...current.trials];
+  if (existingIndex >= 0) trials[existingIndex] = event.trial;
+  else trials.push(event.trial);
+  trials.sort((left, right) => left.caseIndex - right.caseIndex || left.trialIndex - right.trialIndex);
+
+  return applyEvaluationRunSnapshot(state, {
+    ...current,
+    revision: event.revision,
+    requestedTrialCount: event.requestedTrialCount,
+    trials,
+  });
+}
+
 /** Hydrated and persisted by the active EvaluationStore provider. */
 export const evaluationLibraryState = atom<EvaluationLibrary>(createEmptyEvaluationLibrary());
 const evaluationWorkspaceState = atom<EvaluationWorkspaceState>({
   activeView: 'definition',
+  suitePresentationByScope: {},
   runs: [],
   runScoreSortByScope: {},
   runScrollTopByScope: {},

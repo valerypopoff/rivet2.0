@@ -417,6 +417,35 @@ export type EvaluationRun = {
   warnings: string[];
 };
 
+/**
+ * Incremental live-run protocol. A started event carries only the empty run
+ * shell, a settled event carries one immutable trial, and the terminal event
+ * carries the complete reporting shape once. Consumers that still need full
+ * snapshots can use RunEvaluationSuiteOptions.onUpdate during the compatibility
+ * period.
+ */
+export type EvaluationRunEvent =
+  | {
+      type: 'run-started';
+      revision: number;
+      run: EvaluationRun;
+    }
+  | {
+      type: 'trial-settled';
+      revision: number;
+      runId: string;
+      projectId: ProjectId;
+      suiteId: string;
+      requestedTrialCount: number;
+      settledTrialCount: number;
+      trial: EvaluationTrial;
+    }
+  | {
+      type: 'run-finalized';
+      revision: number;
+      run: EvaluationRun;
+    };
+
 export type EvaluationRecordingReference = {
   id: string;
   retention: 'temporary' | 'failure' | 'baseline' | 'retained';
@@ -514,6 +543,11 @@ export type EvaluationRunStore = {
   }): Promise<void>;
   /** Pins all artifacts belonging to the run before its compact baseline is saved in the project. */
   promoteBaseline(input: { projectId: ProjectId; runId: string }): Promise<void>;
+  /**
+   * Optional V2 capability. Persists an idempotent incremental lifecycle event
+   * so a host can recover settled work after a process interruption.
+   */
+  applyRunEvent?(event: EvaluationRunEvent): Promise<void>;
 };
 
 export type EvaluationStoreInitialization = {

@@ -14,6 +14,7 @@ import {
   type EvaluationGraphRunner,
   type EvaluationProjectData,
   type EvaluationRun,
+  type EvaluationRunEvent,
   type EvaluationSuite,
   type EvaluationTrial,
   type PortableJson,
@@ -301,6 +302,71 @@ test('progress updates are detached immutable revisions', async () => {
   assert.equal(updates.at(-1)?.provenance.accountingComplete, false);
   assert.equal(updates.at(-1)?.warnings.includes('mutation after completion'), false);
   assert.equal(updates.at(-1)?.trials[0]?.outputs.result, 'one');
+});
+
+test('incremental progress emits one trial at a time without accumulated payloads', async () => {
+  const events: EvaluationRunEvent[] = [];
+  const result = await runEvaluationSuite({
+    project,
+    evaluationData: data(suite()),
+    dataset: dataset(['one', 'two']),
+    suiteId: 'suite',
+    runGraph: async ({ inputs }) => ({
+      outputs: { result: inputs.input },
+      metrics: { durationMs: 1 },
+    }),
+    onEvent: (event) => events.push(event),
+  });
+
+  assert.equal(events[0]?.type, 'run-started');
+  assert.deepEqual(
+    events.map((event) => event.revision),
+    [1, 2, 3, 4],
+  );
+  const trialEvents = events.filter((event) => event.type === 'trial-settled');
+  assert.equal(trialEvents.length, 2);
+  assert.deepEqual(
+    trialEvents.map((event) => event.trial.outputs.result),
+    ['one', 'two'],
+  );
+  assert.deepEqual(
+    trialEvents.map((event) => event.settledTrialCount),
+    [1, 2],
+  );
+  const finalized = events.at(-1);
+  assert.equal(finalized?.type, 'run-finalized');
+  assert.deepEqual(result.trials, finalized?.type === 'run-finalized' ? finalized.run.trials : undefined);
+});
+
+test('awaits the started checkpoint before beginning graph execution', async () => {
+  let releaseStartedCheckpoint!: () => void;
+  let startedCheckpointPersisted = false;
+  let graphCalls = 0;
+  const startedCheckpoint = new Promise<void>((resolve) => {
+    releaseStartedCheckpoint = () => {
+      startedCheckpointPersisted = true;
+      resolve();
+    };
+  });
+
+  const runPromise = runEvaluationSuite({
+    project,
+    evaluationData: data(suite()),
+    dataset: dataset(),
+    suiteId: 'suite',
+    runGraph: async () => {
+      graphCalls += 1;
+      assert.equal(startedCheckpointPersisted, true);
+      return { outputs: { result: 'ok' }, metrics: { durationMs: 1 } };
+    },
+    onEvent: (event) => (event.type === 'run-started' ? startedCheckpoint : undefined),
+  });
+
+  await Promise.resolve();
+  assert.equal(graphCalls, 0);
+  releaseStartedCheckpoint();
+  await runPromise;
+  assert.equal(graphCalls, 1);
 });
 
 test('an execution benchmark ignores missing required reference fields but still requires bound inputs', async () => {

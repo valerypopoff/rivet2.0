@@ -38,6 +38,7 @@ fn main() {
             evaluation_store::evaluation_store_get,
             evaluation_store::evaluation_store_set,
             evaluation_store::evaluation_store_delete,
+            evaluation_store::evaluation_store_apply_batch,
             evaluation_store::evaluation_store_migration_completed,
             evaluation_store::evaluation_store_import_legacy,
             plugins::extract_package_plugin_tarball,

@@ -3,6 +3,7 @@ import type {
   EvaluationLibrary,
   EvaluationRecordingArtifact,
   EvaluationRun,
+  EvaluationRunEvent,
   EvaluationStore,
   EvaluationStoreInitialization,
 } from '@valerypopoff/rivet2-evaluations';
@@ -11,6 +12,8 @@ import { invokeNative, isInTauri } from '../utils/platform/core.js';
 import {
   LocalEvaluationRunStore,
   type EvaluationKeyValueBackend,
+  type EvaluationStoreBatchCheck,
+  type EvaluationStoreBatchMutation,
   type EvaluationStoreEntry,
 } from './EvaluationRunStore.js';
 
@@ -42,6 +45,13 @@ class TauriEvaluationKeyValueBackend implements EvaluationKeyValueBackend {
 
   async delete(key: string): Promise<void> {
     await invokeNative('evaluation_store_delete', { key });
+  }
+
+  async applyBatch(input: {
+    checks: readonly EvaluationStoreBatchCheck[];
+    mutations: readonly EvaluationStoreBatchMutation[];
+  }): Promise<boolean> {
+    return invokeNative<boolean>('evaluation_store_apply_batch', { input });
   }
 }
 
@@ -171,6 +181,11 @@ export class TauriEvaluationStore implements EvaluationStore {
 
   async promoteBaseline(input: { projectId: ProjectId; runId: string }): Promise<void> {
     await (await this.store()).promoteBaseline(input);
+  }
+
+  async applyRunEvent(event: EvaluationRunEvent): Promise<void> {
+    const store = await this.store();
+    await store.applyRunEvent?.(event);
   }
 }
 
