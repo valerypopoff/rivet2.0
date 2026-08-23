@@ -18,8 +18,8 @@ const __dirname = fileURLToPath(new URL('.', import.meta.url));
 const workspaceRoot = resolve(__dirname, '../..');
 const upstreamApp = resolve(__dirname, '../../rivet/packages/app');
 const upstreamCore = resolve(__dirname, '../../rivet/packages/core');
-const upstreamTrivet = resolve(__dirname, '../../rivet/packages/trivet');
-const normalizedVendoredRoots = [upstreamApp, upstreamCore, upstreamTrivet].map((root) => normalizePath(root));
+const upstreamEvaluations = resolve(__dirname, '../../rivet/packages/evaluations');
+const normalizedVendoredRoots = [upstreamApp, upstreamCore, upstreamEvaluations].map((root) => normalizePath(root));
 const shimDir = resolve(__dirname, 'shims');
 const overrideDir = resolve(__dirname, 'overrides');
 const webDistDir = resolve(__dirname, 'dist');
@@ -70,7 +70,7 @@ const hostedAppVersion = typeof rootPackageJson.version === 'string' && rootPack
   : 'unknown';
 const upstreamSourcePackageAliases = new Set([
   '@valerypopoff/rivet2-core',
-  '@valerypopoff/trivet',
+  '@valerypopoff/rivet2-evaluations',
 ]);
 
 const wrapperAliasedDependencies = Object.keys(wrapperPackageJson.dependencies ?? {}).filter(
@@ -343,7 +343,7 @@ export default defineConfig({
 
     optimizeDeps: {
       include: ['nspell'],
-      exclude: ['@valerypopoff/rivet2-core', '@valerypopoff/trivet', 'dictionary-en', 'rivet-cspell-words'],
+      exclude: ['@valerypopoff/rivet2-core', '@valerypopoff/rivet2-evaluations', 'dictionary-en', 'rivet-cspell-words'],
     },
 
     resolve: {
@@ -369,8 +369,8 @@ export default defineConfig({
           replacement: resolve(__dirname, '../../rivet/packages/core/src/index.ts'),
         },
         {
-          find: /^@valerypopoff\/trivet$/,
-          replacement: resolve(__dirname, '../../rivet/packages/trivet/src/index.ts'),
+          find: /^@valerypopoff\/rivet2-evaluations$/,
+          replacement: resolve(__dirname, '../../rivet/packages/evaluations/src/index.ts'),
         },
       ],
     },
@@ -446,7 +446,7 @@ export default defineConfig({
           normalizePath('/workspace'),
           normalizePath(upstreamApp),
           normalizePath(upstreamCore),
-          normalizePath(upstreamTrivet),
+          normalizePath(upstreamEvaluations),
         ],
       },
       port: 5174,

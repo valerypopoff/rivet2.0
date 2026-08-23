@@ -63,6 +63,37 @@ test('publish and unpublish keep workflow project behavior stable', async () => 
   assert.equal(await workflowPublication.findLatestWorkflowByEndpoint(workflowsRoot, 'demo-endpoint'), null);
 });
 
+test('publish rejects a saved project without a selected Main Graph', async () => {
+  const projectPath = await writeBlankProject('NoMainGraph');
+  const contents = await fs.readFile(projectPath, 'utf8');
+  await fs.writeFile(projectPath, contents.replace(/^[ \t]*mainGraphId:.*\r?\n/m, ''), 'utf8');
+
+  await assert.rejects(
+    workflowMutations.publishWorkflowProjectItem('NoMainGraph.rivet-project', {
+      endpointName: 'missing-main-graph',
+    }),
+    /Choose a Main Graph before publishing this endpoint/,
+  );
+
+  await withWorkflowApiServer(async (baseUrl) => {
+    const response = await fetch(`${baseUrl}/projects/publish`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        relativePath: 'NoMainGraph.rivet-project',
+        settings: { endpointName: 'missing-main-graph' },
+      }),
+    });
+
+    assert.equal(response.status, 400);
+    assert.deepEqual(await response.json(), {
+      error: 'Choose a Main Graph before publishing this endpoint.',
+    });
+  });
+
+  assert.equal(await workflowPublication.findPublishedWorkflowByEndpoint(workflowsRoot, 'missing-main-graph'), null);
+});
+
 test('workflow publish and unpublish routes preserve publication state over HTTP', async () => {
   await withWorkflowApiServer(async (baseUrl) => {
     const createdProject = await readJson<{ project: { relativePath: string } }>(await fetch(`${baseUrl}/projects`, {

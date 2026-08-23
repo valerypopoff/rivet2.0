@@ -1,4 +1,5 @@
 import type { ProjectId } from '@valerypopoff/rivet2-core';
+import { normalizeEvaluationRun } from '@valerypopoff/rivet2-evaluations';
 import type { ProviderOverrides } from '../../../rivet/packages/app/src/host';
 import { HostedDatasetProvider } from '../io/HostedDatasetProvider';
 import { HostedIOProvider } from '../io/HostedIOProvider';
@@ -11,6 +12,7 @@ import {
   createHttpLLMProfileHealthAdminProvider,
   createHttpRivetLLMProfileHealthStore,
 } from '../../shared/llmProfileHealthHttpStore';
+import { createHttpEvaluationRunStore } from '../../shared/evaluationRunHttpStore';
 
 const hostedDatasetProvider = new HostedDatasetProvider();
 const hostedLLMProfileHealthStore = createHttpRivetLLMProfileHealthStore({
@@ -18,6 +20,10 @@ const hostedLLMProfileHealthStore = createHttpRivetLLMProfileHealthStore({
 });
 export const hostedLLMProfileHealthAdmin = createHttpLLMProfileHealthAdminProvider({
   baseUrl: `${RIVET_API_BASE_URL}/workflows/llm-profile-health`,
+});
+const hostedEvaluationRunStore = createHttpEvaluationRunStore({
+  baseUrl: `${RIVET_API_BASE_URL}/workflows/evaluation-runs`,
+  normalizeRun: normalizeEvaluationRun,
 });
 
 export function clearHostedDatasetsForProject(projectId: ProjectId): Promise<void> {
@@ -30,4 +36,5 @@ export const hostedRivetProviders = {
   environment: getDefaultEnvironmentProvider(),
   pathPolicy: getDefaultPathPolicyProvider(),
   llmProfileHealthStore: hostedLLMProfileHealthStore,
+  evaluationRunStore: hostedEvaluationRunStore,
 } satisfies ProviderOverrides;

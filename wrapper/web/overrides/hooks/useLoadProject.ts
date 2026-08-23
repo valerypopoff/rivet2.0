@@ -10,7 +10,7 @@ import {
 import { isPathBasedIOProvider } from '../../../../rivet/packages/app/src/io/IOProvider.js';
 import { useIOProvider } from '../../../../rivet/packages/app/src/providers/ProvidersContext.js';
 import { useWorkspaceTransitions } from '../../../../rivet/packages/app/src/hooks/useWorkspaceTransitions.js';
-import type { TrivetState } from '../../../../rivet/packages/app/src/state/trivet.js';
+import type { EvaluationProjectFileData } from '../../../../rivet/packages/app/src/io/IOProvider.js';
 import { toast } from 'react-toastify';
 import { useStore } from 'jotai';
 import { getOpenedProjectSession, primeOpenedProjectSession } from '../../io/openedProjectSessionCache.js';
@@ -47,24 +47,24 @@ export function useLoadProject() {
       let project = storedSnapshot?.project;
       let data = storedSnapshot?.data;
       let markClean = false;
-      let testSuites: TrivetState['testSuites'] = [];
+      let evaluation: EvaluationProjectFileData | undefined;
 
       if (projectInfo.fsPath && isPathBasedIOProvider(ioProvider)) {
-        let testData = getOpenedProjectSession(projectInfo.projectId, projectInfo.fsPath);
+        let cachedEvaluation = getOpenedProjectSession(projectInfo.projectId, projectInfo.fsPath);
 
-        if (!testData) {
+        if (!cachedEvaluation) {
           const loadedProject = await ioProvider.loadProjectDataNoPrompt(projectInfo.fsPath);
           markClean = !project;
           project ??= loadedProject.project;
           data ??= loadedProject.project.data;
-          testData = loadedProject.testData;
+          cachedEvaluation = loadedProject.evaluation;
           primeOpenedProjectSession(projectInfo.projectId, {
             fsPath: projectInfo.fsPath,
-            testData,
+            evaluation: cachedEvaluation,
           });
         }
 
-        testSuites = testData.testSuites;
+        evaluation = cachedEvaluation;
       }
 
       if (!project) {
@@ -78,7 +78,8 @@ export function useLoadProject() {
         openedGraph: projectInfo.openedGraph,
         executorMode: normalizeHostedProjectExecutorMode(projectInfo.executorMode),
         markClean,
-        testSuites,
+        evaluationData: evaluation?.evaluationData,
+        evaluationDatasets: evaluation?.evaluationDatasets,
       });
     } catch (err) {
       toast.error(`Failed to load project: ${getError(err).message}`);

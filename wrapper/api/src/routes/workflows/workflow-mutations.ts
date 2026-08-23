@@ -44,6 +44,7 @@ import {
   ensureCurrentPublishedWorkflowVersionMetadata,
   writePublishedWorkflowVersionMetadata,
 } from './published-versions.js';
+import { requireProjectMainGraphForEndpoint } from './main-graph.js';
 import { normalizeHostedProjectTitle } from './hosted-project-contents.js';
 import { getWorkflowDuplicateProjectName } from './workflow-project-naming.js';
 import { deleteWorkflowRecordingsBySourceProjectPath, deleteWorkflowRecordingsByWorkflowId } from './recordings.js';
@@ -452,8 +453,8 @@ export async function publishWorkflowProjectItem(relativePath: unknown, settings
   const projectName = path.basename(projectPath, PROJECT_EXTENSION);
   const existingSettings = await readStoredWorkflowProjectSettings(projectPath, projectName);
   const normalizedSettings = normalizeWorkflowProjectSettingsDraft(settings);
+  requireProjectMainGraphForEndpoint(await loadProjectFromFile(projectPath));
   await ensureWorkflowEndpointNameIsUnique(root, projectPath, normalizedSettings.endpointName);
-  const publishedStateHash = await createWorkflowPublicationStateHash(projectPath, normalizedSettings.endpointName);
   const publishedSnapshotId = randomUUID();
   const lastPublishedAt = new Date().toISOString();
 
@@ -463,7 +464,12 @@ export async function publishWorkflowProjectItem(relativePath: unknown, settings
       projectPath,
       settings: existingSettings,
     });
-    await writePublishedWorkflowSnapshot(root, projectPath, publishedSnapshotId);
+    const publishedSnapshotPath = await writePublishedWorkflowSnapshot(root, projectPath, publishedSnapshotId);
+    requireProjectMainGraphForEndpoint(await loadProjectFromFile(publishedSnapshotPath));
+    const publishedStateHash = await createWorkflowPublicationStateHash(
+      publishedSnapshotPath,
+      normalizedSettings.endpointName,
+    );
     await writePublishedWorkflowVersionMetadata({
       root,
       projectPath,

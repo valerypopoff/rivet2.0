@@ -1,34 +1,35 @@
 import type { ProjectId } from '@valerypopoff/rivet2-core';
-import type { TrivetData } from '@valerypopoff/trivet';
+import type { EvaluationProjectFileData } from '../../../rivet/packages/app/src/io/IOProvider.js';
 
 type OpenedProjectSessionEntry = {
   fsPath: string | null;
-  testData: TrivetData;
+  evaluation: EvaluationProjectFileData;
 };
 
 const openedProjectSessionCache = new Map<ProjectId, OpenedProjectSessionEntry>();
 
-function cloneTestData(testData: TrivetData): TrivetData {
+function cloneEvaluation(evaluation: EvaluationProjectFileData): EvaluationProjectFileData {
   if (typeof structuredClone === 'function') {
-    return structuredClone(testData);
+    return structuredClone(evaluation);
   }
 
   return {
-    testSuites: JSON.parse(JSON.stringify(testData.testSuites ?? [])),
+    evaluationData: JSON.parse(JSON.stringify(evaluation.evaluationData)),
+    evaluationDatasets: JSON.parse(JSON.stringify(evaluation.evaluationDatasets)),
   };
 }
 
 export function primeOpenedProjectSession(projectId: ProjectId, options: {
   fsPath?: string | null;
-  testData: TrivetData;
+  evaluation: EvaluationProjectFileData;
 }): void {
   openedProjectSessionCache.set(projectId, {
     fsPath: options.fsPath ?? null,
-    testData: cloneTestData(options.testData),
+    evaluation: cloneEvaluation(options.evaluation),
   });
 }
 
-export function getOpenedProjectSession(projectId: ProjectId, fsPath?: string | null): TrivetData | null {
+export function getOpenedProjectSession(projectId: ProjectId, fsPath?: string | null): EvaluationProjectFileData | null {
   const entry = openedProjectSessionCache.get(projectId);
   if (!entry) {
     return null;
@@ -39,7 +40,7 @@ export function getOpenedProjectSession(projectId: ProjectId, fsPath?: string | 
     return null;
   }
 
-  return cloneTestData(entry.testData);
+  return cloneEvaluation(entry.evaluation);
 }
 
 export function clearOpenedProjectSession(projectId: ProjectId): void {

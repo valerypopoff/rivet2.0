@@ -48,6 +48,7 @@ export async function createFilesystemWorkflowSuiteHarness() {
     applyRootEnv();
     filesystemExecutionCache.resetFilesystemExecutionCacheForTests();
     await workflowRecordings.resetWorkflowRecordingStorageForTests();
+    await workflowStorageBackend.disposeWorkflowStorage();
     await resetWorkflowTestRoots({
       workflowsRoot: roots.workflowsRoot,
       recordingsRoot: roots.recordingsRoot,
@@ -65,6 +66,7 @@ export async function createFilesystemWorkflowSuiteHarness() {
 
   async function cleanupWorkflowSuite() {
     await workflowRecordings.resetWorkflowRecordingStorageForTests();
+    await workflowStorageBackend.disposeWorkflowStorage();
     await fs.rm(roots.tempRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   }
 

@@ -13,10 +13,11 @@ import {
 } from '@valerypopoff/rivet2-core';
 import { type IOProvider } from '../../../rivet/packages/app/src/io/IOProvider.js';
 import {
-  type TrivetData,
-  deserializeTrivetData,
-  serializeTrivetData,
-} from '@valerypopoff/trivet';
+  createEmptyEvaluationProjectData,
+  deserializeEvaluationProjectData,
+  serializeEvaluationProjectData,
+} from '@valerypopoff/rivet2-evaluations';
+import type { EvaluationProjectFileData } from '../../../rivet/packages/app/src/io/IOProvider.js';
 import { getDefaultStore } from 'jotai';
 import { RIVET_API_BASE_URL } from '../../shared/hosted-env';
 import { apiReadBinary, apiReadText } from '../../shared/api';
@@ -258,14 +259,17 @@ async function pickSingleFile(options: { accept?: string } = {}): Promise<File |
 async function deserializeHostedProjectPayload(
   contents: string,
   path: string,
-): Promise<{ project: Project; testData: TrivetData }> {
-  const { project, serializedTrivetData } = await deserializeHostedProjectPayloadAsync(contents, path);
+): Promise<{ project: Project; evaluation: EvaluationProjectFileData }> {
+  const { project, serializedEvaluationData } = await deserializeHostedProjectPayloadAsync(contents, path);
 
   return {
     project,
-    testData: serializedTrivetData
-      ? deserializeTrivetData(serializedTrivetData)
-      : { testSuites: [] },
+    evaluation: {
+      evaluationData: serializedEvaluationData
+        ? deserializeEvaluationProjectData(serializedEvaluationData)
+        : createEmptyEvaluationProjectData(),
+      evaluationDatasets: [],
+    },
   };
 }
 
@@ -307,7 +311,7 @@ export class HostedIOProvider implements IOProvider {
     URL.revokeObjectURL(url);
   }
 
-  async saveProjectData(project: Project, testData: TrivetData): Promise<string | undefined> {
+  async saveProjectData(project: Project, evaluation: EvaluationProjectFileData): Promise<string | undefined> {
     assertProjectIsWritable(project, getCurrentLoadedProjectPath());
 
     // Show a simple prompt for server path
@@ -317,13 +321,18 @@ export class HostedIOProvider implements IOProvider {
     if (!filePath) return undefined;
 
     const data = serializeProject(project, {
-      trivet: serializeTrivetData(testData),
+      evaluations: serializeEvaluationProjectData(evaluation.evaluationData),
     }) as string;
     const datasets = await this.#datasetProvider.exportDatasetsForProject(project.metadata.id);
+    const serializedDatasets = JSON.parse(serializeDatasets(datasets)) as { datasets: unknown };
+    const datasetsContents = JSON.stringify({
+      ...serializedDatasets,
+      evaluationDatasets: evaluation.evaluationDatasets,
+    });
     const saved = await apiSaveProject({
       path: filePath,
       contents: data,
-      datasetsContents: datasets.length > 0 ? serializeDatasets(datasets) : null,
+      datasetsContents: datasets.length > 0 || evaluation.evaluationDatasets.length > 0 ? datasetsContents : null,
       expectedRevisionId: projectRevisionIdByPath.get(filePath) ?? null,
     });
 
@@ -332,7 +341,7 @@ export class HostedIOProvider implements IOProvider {
     return saved.path;
   }
 
-  async saveProjectDataNoPrompt(project: Project, testData: TrivetData, path: string): Promise<void> {
+  async saveProjectDataNoPrompt(project: Project, evaluation: EvaluationProjectFileData, path: string): Promise<void> {
     assertProjectIsWritable(project, path);
 
     if (getWorkflowRecordingIdFromVirtualProjectPath(path)) {
@@ -340,13 +349,18 @@ export class HostedIOProvider implements IOProvider {
     }
 
     const data = serializeProject(project, {
-      trivet: serializeTrivetData(testData),
+      evaluations: serializeEvaluationProjectData(evaluation.evaluationData),
     }) as string;
     const datasets = await this.#datasetProvider.exportDatasetsForProject(project.metadata.id);
+    const serializedDatasets = JSON.parse(serializeDatasets(datasets)) as { datasets: unknown };
+    const datasetsContents = JSON.stringify({
+      ...serializedDatasets,
+      evaluationDatasets: evaluation.evaluationDatasets,
+    });
     const saved = await apiSaveProject({
       path,
       contents: data,
-      datasetsContents: datasets.length > 0 ? serializeDatasets(datasets) : null,
+      datasetsContents: datasets.length > 0 || evaluation.evaluationDatasets.length > 0 ? datasetsContents : null,
       expectedRevisionId: projectRevisionIdByPath.get(path) ?? null,
     });
 
@@ -377,7 +391,7 @@ export class HostedIOProvider implements IOProvider {
   }
 
   async loadProjectData(
-    callback: (data: { project: Project; testData: TrivetData; path: string }) => void,
+    callback: (data: { project: Project; evaluation: EvaluationProjectFileData; path: string }) => void,
   ): Promise<void> {
     // Try to list known server projects first so users can pick from an index when possible.
     // This stays separate from the manual path prompt because fresh installs still need a
@@ -415,14 +429,14 @@ export class HostedIOProvider implements IOProvider {
     callback({ ...projectData, path });
   }
 
-  async loadProjectDataNoPrompt(path: string): Promise<{ project: Project; testData: TrivetData }> {
+  async loadProjectDataNoPrompt(path: string): Promise<{ project: Project; evaluation: EvaluationProjectFileData }> {
     const previewReference = getWorkflowPublishedVersionPreviewFromVirtualProjectPath(path);
     if (previewReference) {
       const preview = await fetchWorkflowPublishedVersionPreview(
         previewReference.relativePath,
         previewReference.versionId,
       );
-      const { project: projectData, testData: trivetData } = await deserializeHostedProjectPayload(
+      const { project: projectData, evaluation } = await deserializeHostedProjectPayload(
         preview.contents,
         path,
       );
@@ -430,12 +444,14 @@ export class HostedIOProvider implements IOProvider {
 
       if (preview.datasetsContents) {
         const datasets = deserializeDatasets(preview.datasetsContents);
+        const evaluationDatasets = (JSON.parse(preview.datasetsContents) as { evaluationDatasets?: EvaluationProjectFileData['evaluationDatasets'] }).evaluationDatasets ?? [];
         await this.#datasetProvider.importDatasetsForProject(previewProject.metadata.id, datasets);
+        evaluation.evaluationDatasets = evaluationDatasets.map((dataset) => ({ ...dataset, projectId: previewProject.metadata.id }));
       } else {
         await this.#datasetProvider.importDatasetsForProject(previewProject.metadata.id, []);
       }
 
-      return { project: previewProject, testData: trivetData };
+      return { project: previewProject, evaluation };
     }
 
     const recordingId = getWorkflowRecordingIdFromVirtualProjectPath(path);
@@ -459,31 +475,33 @@ export class HostedIOProvider implements IOProvider {
             throw error;
           }),
       ]);
-      const { project: projectData, testData: trivetData } = await deserializeHostedProjectPayload(data, path);
+      const { project: projectData, evaluation } = await deserializeHostedProjectPayload(data, path);
 
       if (replayDatasetResult.datasetsText) {
         const datasets = deserializeDatasets(replayDatasetResult.datasetsText);
+        evaluation.evaluationDatasets = (JSON.parse(replayDatasetResult.datasetsText) as { evaluationDatasets?: EvaluationProjectFileData['evaluationDatasets'] }).evaluationDatasets ?? [];
         await this.#datasetProvider.importDatasetsForProject(projectData.metadata.id, datasets);
       } else {
         await this.#datasetProvider.importDatasetsForProject(projectData.metadata.id, []);
       }
 
-      return { project: projectData, testData: trivetData };
+      return { project: projectData, evaluation };
     }
 
     const loaded = await apiLoadProject(path);
     projectRevisionIdByPath.set(path, loaded.revisionId ?? null);
     const data = loaded.contents;
-    const { project: projectData, testData: trivetData } = await deserializeHostedProjectPayload(data, path);
+    const { project: projectData, evaluation } = await deserializeHostedProjectPayload(data, path);
 
     if (loaded.datasetsContents) {
       const datasets = deserializeDatasets(loaded.datasetsContents);
+      evaluation.evaluationDatasets = (JSON.parse(loaded.datasetsContents) as { evaluationDatasets?: EvaluationProjectFileData['evaluationDatasets'] }).evaluationDatasets ?? [];
       await this.#datasetProvider.importDatasetsForProject(projectData.metadata.id, datasets);
     } else {
       await this.#datasetProvider.importDatasetsForProject(projectData.metadata.id, []);
     }
 
-    return { project: projectData, testData: trivetData };
+    return { project: projectData, evaluation };
   }
 
   async loadRecordingData(callback: (data: { recorder: ExecutionRecorder; path: string }) => void): Promise<void> {

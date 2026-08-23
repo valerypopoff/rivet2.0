@@ -55,6 +55,7 @@ import {
 import { createWorkflowDownloadContentDisposition } from './workflow-download.js';
 import { getStatisticsQueryPeriod } from './recording-statistics.js';
 import { llmProfileHealthRouter } from './llm-profile-health.js';
+import { evaluationRunsRouter } from './evaluation-runs.js';
 import { readExecutionEnvironmentVariables } from '../../environment-variable-settings.js';
 import { isTrustedExecutorRequest } from '../../auth.js';
 
@@ -131,6 +132,7 @@ const publishProjectSchema = z.object({
 });
 
 workflowsRouter.use('/llm-profile-health', llmProfileHealthRouter);
+workflowsRouter.use('/evaluation-runs', evaluationRunsRouter);
 
 // The Node executor is a separate process. It asks the API for one immutable
 // overlay at run start, so saved UI variables apply immediately without

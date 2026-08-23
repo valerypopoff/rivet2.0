@@ -1,7 +1,7 @@
 import { useSetAtom, useStore } from 'jotai';
 import { toast } from 'react-toastify';
 import type { GraphId, NodeGraph, Project, ProjectId } from '@valerypopoff/rivet2-core';
-import type { TrivetData } from '@valerypopoff/trivet';
+import type { EvaluationProjectFileData } from '../../../rivet/packages/app/src/io/IOProvider.js';
 import {
   type OpenedProjectInfo,
   type OpenedProjectsInfo,
@@ -41,7 +41,7 @@ type OpenWorkflowProjectResult = {
 
 type ProjectSnapshot = Pick<RivetProjectSnapshotInput, 'project' | 'data'>;
 type ProjectPathLoader = {
-  loadProjectDataNoPrompt(path: string): Promise<{ project: Project; testData: TrivetData }>;
+  loadProjectDataNoPrompt(path: string): Promise<{ project: Project; evaluation: EvaluationProjectFileData }>;
 };
 
 function canLoadProjectByPath(provider: unknown): provider is ProjectPathLoader {
@@ -193,17 +193,17 @@ export function useOpenWorkflowProject(workspace: RivetWorkspaceHost) {
             openedProject: alreadyOpenByPath,
             snapshots: latestOpenedProjectSnapshots,
           });
-      let testSuites = reloadFromDisk
+      let evaluation = reloadFromDisk
         ? undefined
-        : getOpenedProjectSession(alreadyOpenByPath.projectId, filePath)?.testSuites;
-      let refreshedTestData: TrivetData | null = null;
+        : getOpenedProjectSession(alreadyOpenByPath.projectId, filePath);
+      let refreshedEvaluation: EvaluationProjectFileData | null = null;
       const projectPathLoader = canLoadProjectByPath(ioProvider) ? ioProvider : null;
 
       if (reloadFromDisk && !projectPathLoader) {
         throw new Error('The active IO provider does not support reloading projects by path.');
       }
 
-      if ((reloadFromDisk || !snapshot || !testSuites) && projectPathLoader) {
+      if ((reloadFromDisk || !snapshot || !evaluation) && projectPathLoader) {
         const loadedProject = await projectPathLoader.loadProjectDataNoPrompt(filePath);
         const reloadedProject = withHostedProjectTitle(loadedProject.project, filePath);
         if (reloadFromDisk && reloadedProject.metadata.id !== alreadyOpenByPath.projectId) {
@@ -213,8 +213,8 @@ export function useOpenWorkflowProject(workspace: RivetWorkspaceHost) {
         }
 
         snapshot = reloadFromDisk ? splitProjectSnapshot(reloadedProject) : snapshot ?? splitProjectSnapshot(reloadedProject);
-        testSuites = loadedProject.testData.testSuites;
-        refreshedTestData = loadedProject.testData;
+        evaluation = loadedProject.evaluation;
+        refreshedEvaluation = loadedProject.evaluation;
       }
 
       if (!snapshot) {
@@ -229,7 +229,8 @@ export function useOpenWorkflowProject(workspace: RivetWorkspaceHost) {
               ...snapshot,
               path: filePath,
               openedGraph,
-              testSuites,
+              evaluationData: evaluation?.evaluationData,
+              evaluationDatasets: evaluation?.evaluationDatasets,
             },
             tabUiOptions,
           )
@@ -238,7 +239,8 @@ export function useOpenWorkflowProject(workspace: RivetWorkspaceHost) {
               ...snapshot,
               path: filePath,
               openedGraph,
-              testSuites,
+              evaluationData: evaluation?.evaluationData,
+              evaluationDatasets: evaluation?.evaluationDatasets,
             },
             tabUiOptions,
           );
@@ -247,10 +249,10 @@ export function useOpenWorkflowProject(workspace: RivetWorkspaceHost) {
         throw new Error(`Failed to activate "${alreadyOpenByPath.title}".`);
       }
 
-      if (refreshedTestData) {
+      if (refreshedEvaluation) {
         primeOpenedProjectSession(alreadyOpenByPath.projectId, {
           fsPath: filePath,
-          testData: refreshedTestData,
+          evaluation: refreshedEvaluation,
         });
       }
 
@@ -273,7 +275,7 @@ export function useOpenWorkflowProject(workspace: RivetWorkspaceHost) {
       throw error;
     }
 
-    const { project: loadedProject, testData } = loadedProjectData;
+    const { project: loadedProject, evaluation } = loadedProjectData;
     const project = withHostedProjectTitle(loadedProject, filePath);
     const conflictingProject = activeOpenedProjects.find((projectInfo) => projectInfo.projectId === project.metadata.id);
 
@@ -292,7 +294,8 @@ export function useOpenWorkflowProject(workspace: RivetWorkspaceHost) {
       ...snapshot,
       path: filePath,
       openedGraph,
-      testSuites: testData.testSuites,
+      evaluationData: evaluation.evaluationData,
+      evaluationDatasets: evaluation.evaluationDatasets,
     } satisfies RivetProjectSnapshotInput;
 
     let opened = false;
@@ -318,7 +321,7 @@ export function useOpenWorkflowProject(workspace: RivetWorkspaceHost) {
 
     primeOpenedProjectSession(projectId, {
       fsPath: filePath,
-      testData,
+      evaluation,
     });
 
     if (resetOpenProjectState) {

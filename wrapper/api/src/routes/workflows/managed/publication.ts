@@ -15,6 +15,7 @@ import type {
 import { WORKFLOW_PUBLISHED_VERSION_COMMENT_MAX_LENGTH } from '../../../../../shared/workflow-types.js';
 import { badRequest, conflict, createHttpError } from '../../../utils/httpError.js';
 import { normalizeStoredEndpointName, normalizeWorkflowEndpointLookupName } from '../endpoint-names.js';
+import { hasProjectMainGraph, requireProjectMainGraphForEndpoint } from '../main-graph.js';
 import { normalizeEmailList } from '../publication.js';
 import { normalizeManagedWorkflowRelativePath } from '../virtual-paths.js';
 import type { ManagedWorkflowContext } from './context.js';
@@ -89,8 +90,7 @@ export function createManagedWorkflowPublicationService(options: ManagedWorkflow
     comment: normalizePublishedVersionCommentForStorage(row.comment),
   });
 
-  const getUiGraphsFromProjectContents = (contents: string): Array<{ uiGraphId: string; name: string }> => {
-    const project = loadProjectFromString(contents);
+  const getUiGraphsFromProject = (project: ReturnType<typeof loadProjectFromString>): Array<{ uiGraphId: string; name: string }> => {
     return Object.entries(project.uiGraphs ?? {}).map(([uiGraphId, uiGraph]) => ({
       uiGraphId,
       name: typeof uiGraph?.name === 'string' && uiGraph.name.trim()
@@ -98,6 +98,9 @@ export function createManagedWorkflowPublicationService(options: ManagedWorkflow
         : uiGraphId,
     }));
   };
+
+  const getUiGraphsFromProjectContents = (contents: string): Array<{ uiGraphId: string; name: string }> =>
+    getUiGraphsFromProject(loadProjectFromString(contents));
 
   const normalizeWebAppPublicationDrafts = (value: unknown): WorkflowProjectWebAppPublicationDraft[] => {
     if (!Array.isArray(value)) {
@@ -637,11 +640,13 @@ export function createManagedWorkflowPublicationService(options: ManagedWorkflow
         deps.readRevisionContents(revision),
         listWebAppPublicationRows(deps.pool, workflow.workflow_id),
       ]);
-      const currentUiGraphs = getUiGraphsFromProjectContents(contents.contents);
+      const currentProject = loadProjectFromString(contents.contents);
+      const currentUiGraphs = getUiGraphsFromProject(currentProject);
       const currentUiGraphIds = new Set(currentUiGraphs.map((uiGraph) => uiGraph.uiGraphId));
       const publishedByUiGraphId = new Map(publishedRows.map((row) => [row.ui_graph_id, row]));
 
       return {
+        hasMainGraph: hasProjectMainGraph(currentProject),
         webApps: [
           ...currentUiGraphs.map((uiGraph) => {
             const published = publishedByUiGraphId.get(uiGraph.uiGraphId);
@@ -824,6 +829,14 @@ export function createManagedWorkflowPublicationService(options: ManagedWorkflow
           throw createHttpError(404, 'Project not found');
         }
 
+        const currentDraftRevision = await deps.getRevision(client, workflow.current_draft_revision_id);
+        if (!currentDraftRevision) {
+          throw createHttpError(500, 'Current workflow revision could not be loaded');
+        }
+
+        const currentDraftContents = await deps.readRevisionContents(currentDraftRevision);
+        requireProjectMainGraphForEndpoint(loadProjectFromString(currentDraftContents.contents));
+
         const publishedVersionId = randomUUID();
         await backfillLegacyPublishedVersion(client, workflow);
 
@@ -831,11 +844,6 @@ export function createManagedWorkflowPublicationService(options: ManagedWorkflow
           draftEndpointName: normalizedSettings.endpointName,
           publishedEndpointName: normalizedSettings.endpointName,
         });
-
-        const currentDraftRevision = await deps.getRevision(client, workflow.current_draft_revision_id);
-        if (!currentDraftRevision) {
-          throw createHttpError(500, 'Current workflow revision could not be loaded');
-        }
 
         await client.query(
           `

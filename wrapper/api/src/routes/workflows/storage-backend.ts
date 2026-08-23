@@ -88,6 +88,8 @@ import {
   getFilesystemLLMProfileHealthDatabasePath,
 } from '../../llm-profile-health/filesystem-store.js';
 import type { RivetStudioLLMProfileHealthStore } from '../../llm-profile-health/store.js';
+import { FilesystemRivetEvaluationRunStore } from '../../evaluation-runs/filesystem-store.js';
+import type { RivetStudioEvaluationRunStore } from '../../evaluation-runs/store.js';
 
 function mapHostedProjectFilesystemError(
   error: unknown,
@@ -139,10 +141,16 @@ type ExecutionProjectResult = {
 
 let managedBackendPromise: Promise<ManagedWorkflowBackend> | null = null;
 let filesystemLLMProfileHealthStore: FilesystemRivetLLMProfileHealthStore | null = null;
+let filesystemEvaluationRunStore: FilesystemRivetEvaluationRunStore | null = null;
 
 function getFilesystemLLMProfileHealthStore(): FilesystemRivetLLMProfileHealthStore {
   filesystemLLMProfileHealthStore ??= new FilesystemRivetLLMProfileHealthStore();
   return filesystemLLMProfileHealthStore;
+}
+
+function getFilesystemEvaluationRunStore(): FilesystemRivetEvaluationRunStore {
+  filesystemEvaluationRunStore ??= new FilesystemRivetEvaluationRunStore();
+  return filesystemEvaluationRunStore;
 }
 
 async function resetFilesystemLLMProfileHealthForProject(projectId: ProjectId): Promise<void> {
@@ -495,6 +503,13 @@ export async function getLLMProfileHealthStore(): Promise<RivetStudioLLMProfileH
   );
 }
 
+export async function getEvaluationRunStore(): Promise<RivetStudioEvaluationRunStore> {
+  return delegate<RivetStudioEvaluationRunStore>(
+    async (backend) => backend.getEvaluationRunStore(),
+    async () => getFilesystemEvaluationRunStore(),
+  );
+}
+
 export async function listWorkflowRunStatisticsCatalogWithBackend(
   surface: WorkflowRunStatisticsSurface,
 ): Promise<WorkflowRunStatisticsCatalogResponse> {
@@ -517,10 +532,13 @@ export async function disposeWorkflowStorage(): Promise<void> {
   const backendPromise = managedBackendPromise;
   managedBackendPromise = null;
   const filesystemStore = filesystemLLMProfileHealthStore;
+  const evaluationStore = filesystemEvaluationRunStore;
   filesystemLLMProfileHealthStore = null;
+  filesystemEvaluationRunStore = null;
   await Promise.all([
     backendPromise?.then((backend) => backend.dispose()),
     filesystemStore?.dispose(),
+    evaluationStore?.dispose(),
   ]);
 }
 
@@ -787,6 +805,7 @@ export async function deleteWorkflowProjectItemWithBackend(relativePath: unknown
         beforeDelete: async (projectMetadataId) => {
           if (projectMetadataId != null) {
             await resetFilesystemLLMProfileHealthForProject(projectMetadataId as ProjectId);
+            await getFilesystemEvaluationRunStore().deleteProject(projectMetadataId as ProjectId);
           }
         },
       });

@@ -5,7 +5,8 @@
     "moduleResolution": "bundler",
     "baseUrl": ".",
     "paths": {
-      "@valerypopoff/rivet2-node": ["node_modules/@valerypopoff/rivet2-node"]
+      "@valerypopoff/rivet2-node": ["node_modules/@valerypopoff/rivet2-node"],
+      "@valerypopoff/rivet2-evaluations": ["node_modules/@valerypopoff/rivet2-evaluations"]
     },
     "esModuleInterop": true,
     "allowSyntheticDefaultImports": true,

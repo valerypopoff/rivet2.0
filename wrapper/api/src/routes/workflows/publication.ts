@@ -408,7 +408,7 @@ export async function createWorkflowProjectContentHash(projectPath: string): Pro
   return hash.digest('hex');
 }
 
-export async function writePublishedWorkflowSnapshot(root: string, projectPath: string, snapshotId: string): Promise<void> {
+export async function writePublishedWorkflowSnapshot(root: string, projectPath: string, snapshotId: string): Promise<string> {
   const publishedProjectPath = getPublishedWorkflowSnapshotPath(root, snapshotId);
   const sourceDatasetPath = getWorkflowDatasetPath(projectPath);
   const publishedDatasetPath = getPublishedWorkflowSnapshotDatasetPath(root, snapshotId);
@@ -420,6 +420,8 @@ export async function writePublishedWorkflowSnapshot(root: string, projectPath: 
   } else if (await pathExists(publishedDatasetPath)) {
     await fs.rm(publishedDatasetPath, { force: false });
   }
+
+  return publishedProjectPath;
 }
 
 export async function deletePublishedWorkflowSnapshot(root: string, snapshotId: string | null): Promise<void> {
