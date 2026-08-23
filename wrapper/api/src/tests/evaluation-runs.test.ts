@@ -264,6 +264,75 @@ test("hosted HTTP evaluation store normalizes legacy run responses", async () =>
   }
 });
 
+test("hosted HTTP evaluation store sends project-scoped run name updates", async () => {
+  const originalFetch = globalThis.fetch;
+  const originalWindow = globalThis.window;
+  const saved = { ...run(projectA, "renamed-http-run"), name: "Baseline" };
+  let request: { url: string; init: RequestInit | undefined } | undefined;
+  Object.defineProperty(globalThis, "window", {
+    configurable: true,
+    value: { location: { origin: "https://rivet.example" } },
+  });
+  globalThis.fetch = async (input, init) => {
+    request = { url: String(input), init };
+    return Response.json(saved);
+  };
+  try {
+    const store = createHttpEvaluationRunStore({
+      baseUrl: "/api/workflows/evaluation-runs",
+      normalizeRun: normalizeEvaluationRun,
+    });
+    const renamed = await store.updateRunName({
+      projectId: projectA,
+      runId: "renamed-http-run",
+      name: "  Baseline  ",
+    });
+    assert.equal(renamed?.name, "Baseline");
+    assert.equal(request?.url, "/api/workflows/evaluation-runs/renamed-http-run");
+    assert.equal(request?.init?.method, "PATCH");
+    assert.deepEqual(JSON.parse(String(request?.init?.body)), {
+      projectId: projectA,
+      name: "  Baseline  ",
+    });
+  } finally {
+    globalThis.fetch = originalFetch;
+    Object.defineProperty(globalThis, "window", {
+      configurable: true,
+      value: originalWindow,
+    });
+  }
+});
+
+test("filesystem evaluation store preserves user-assigned names across snapshots", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "rivet-evaluations-names-"));
+  const store = new FilesystemRivetEvaluationRunStore(path.join(root, "evaluations.sqlite"));
+  try {
+    const initial = run(projectA, "named-filesystem-run");
+    await store.put(initial);
+    assert.equal(
+      (await store.updateRunName({
+        projectId: projectA,
+        runId: initial.id,
+        name: "  Baseline  ",
+      }))?.name,
+      "Baseline",
+    );
+    await store.put({ ...initial, revision: 1 });
+    assert.equal(
+      (await store.get({ projectId: projectA, runId: initial.id }))?.name,
+      "Baseline",
+    );
+    await store.updateRunName({ projectId: projectA, runId: initial.id });
+    await store.put({ ...initial, revision: 2 });
+    assert.equal(
+      (await store.get({ projectId: projectA, runId: initial.id }))?.name,
+      undefined,
+    );
+  } finally {
+    await store.dispose();
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
 test("filesystem evaluation store normalizes legacy run history at its read boundary", async () => {
   const root = await fs.mkdtemp(
     path.join(os.tmpdir(), "rivet-evaluations-legacy-"),
@@ -645,6 +714,9 @@ class FakeManagedEvaluationPool {
     ) {
       return { rows: [], rowCount: 0 };
     }
+    if (normalized.startsWith("select pg_advisory_xact_lock")) {
+      return { rows: [], rowCount: 1 };
+    }
     if (
       normalized.startsWith(
         "delete from evaluation_recordings where project_id = $1 and artifact_json",
@@ -696,6 +768,24 @@ class FakeManagedEvaluationPool {
         rows: row === undefined ? [] : [{ run_json: row } as T],
         rowCount: row === undefined ? 0 : 1,
       };
+    }
+    if (normalized.startsWith("insert into evaluation_runs")) {
+      const projectId = String(values[0]);
+      const runId = String(values[1]);
+      this.runs.set(
+        this.key(projectId, runId),
+        JSON.parse(String(values[4])) as EvaluationRun,
+      );
+      return { rows: [], rowCount: 1 };
+    }
+    if (normalized.startsWith("update evaluation_runs set")) {
+      const projectId = String(values[0]);
+      const runId = String(values[1]);
+      this.runs.set(
+        this.key(projectId, runId),
+        JSON.parse(String(values.at(-1))) as EvaluationRun,
+      );
+      return { rows: [], rowCount: 1 };
     }
     if (
       normalized.startsWith(
@@ -834,6 +924,33 @@ test("managed evaluation recording upserts preserve durable retention and reject
   );
 });
 
+test("managed evaluation store preserves user-assigned names across snapshots", async () => {
+  const pool = new FakeManagedEvaluationPool();
+  const store = new PostgresRivetEvaluationRunStore(pool as unknown as Pool);
+  const initial = run(projectA, "named-managed-run");
+  await store.put(initial);
+  assert.equal(
+    (await store.updateRunName({
+      projectId: projectA,
+      runId: initial.id,
+      name: "  Candidate  ",
+    }))?.name,
+    "Candidate",
+  );
+  await store.put({ ...initial, revision: 1 });
+  assert.equal(
+    (await store.get({ projectId: projectA, runId: initial.id }))?.name,
+    "Candidate",
+  );
+  assert.equal(
+    (await store.updateRunName({
+      projectId: projectA,
+      runId: "missing-managed-run",
+      name: "Ignored",
+    })),
+    undefined,
+  );
+});
 test("managed evaluation store normalizes legacy run history at its read boundary", async () => {
   const pool = new FakeManagedEvaluationPool();
   const store = new PostgresRivetEvaluationRunStore(pool as unknown as Pool);

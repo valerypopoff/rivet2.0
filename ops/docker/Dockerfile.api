@@ -37,7 +37,8 @@ RUN --mount=type=cache,target=/root/.cache/yarn YARN_NODE_LINKER=node-modules YA
 
 COPY --from=rivet_source . /app/rivet/
 WORKDIR /app/rivet
-RUN YARN_NODE_LINKER=node-modules yarn build:runtime
+RUN YARN_NODE_LINKER=node-modules yarn build:runtime && \
+    YARN_NODE_LINKER=node-modules yarn build:hosted-web-deps
 
 WORKDIR /app
 COPY wrapper/api/package.json wrapper/api/package-lock.json wrapper/api/

@@ -1,8 +1,9 @@
-import type { Pool } from "pg";
+import type { Pool, PoolClient } from "pg";
 import type { ProjectId } from "@valerypopoff/rivet2-node";
 import {
   assertEvaluationDatasetSnapshot,
   normalizeEvaluationRun,
+  reconcileEvaluationRunSnapshots,
   type EvaluationDatasetSnapshot,
   type EvaluationRecordingArtifact,
   type EvaluationRun,
@@ -57,6 +58,28 @@ export class PostgresRivetEvaluationRunStore
     this.#pool = pool;
   }
 
+  async #withRunLock<T>(
+    input: { projectId: ProjectId; runId: string },
+    operation: (client: PoolClient) => Promise<T>,
+  ): Promise<T> {
+    const client = await this.#pool.connect();
+    try {
+      await client.query("BEGIN");
+      await client.query(
+        "SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2))",
+        [String(input.projectId), input.runId],
+      );
+      const result = await operation(client);
+      await client.query("COMMIT");
+      return result;
+    } catch (error) {
+      await client.query("ROLLBACK").catch(() => undefined);
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
   /** See the filesystem store: browsing a project's run history must also
    * reclaim expired temporary candidate artifacts. */
   async #deleteExpiredTemporaryRecordings(projectId: ProjectId): Promise<void> {
@@ -73,26 +96,71 @@ export class PostgresRivetEvaluationRunStore
   }
 
   async put(run: EvaluationRun): Promise<void> {
-    await this.#pool.query(
-      `
-      INSERT INTO evaluation_runs (project_id, run_id, suite_id, started_at, run_json, updated_at)
-      VALUES ($1, $2, $3, $4, $5::jsonb, NOW())
-      ON CONFLICT (project_id, run_id) DO UPDATE SET
-        suite_id = EXCLUDED.suite_id,
-        started_at = EXCLUDED.started_at,
-        run_json = EXCLUDED.run_json,
-        updated_at = NOW()
-      WHERE COALESCE((evaluation_runs.run_json->>'revision')::integer, 0) <= $6
-    `,
-      [
-        String(run.projectId),
-        run.id,
-        run.suiteId,
-        run.startedAt,
-        JSON.stringify(run),
-        run.revision ?? 0,
-      ],
-    );
+    const incoming = normalizeEvaluationRun(run);
+    await this.#withRunLock({ projectId: incoming.projectId, runId: incoming.id }, async (client) => {
+      const current = await client.query<Row>(
+        "SELECT run_json FROM evaluation_runs WHERE project_id = $1 AND run_id = $2 FOR UPDATE",
+        [String(incoming.projectId), incoming.id],
+      );
+      const existing = parseRun(current.rows[0]);
+      const next = reconcileEvaluationRunSnapshots(existing, incoming);
+      if (next === existing) return;
+      if (existing) {
+        await client.query(
+          `
+          UPDATE evaluation_runs
+          SET suite_id = $3, started_at = $4, run_json = $5::jsonb, updated_at = NOW()
+          WHERE project_id = $1 AND run_id = $2
+        `,
+          [
+            String(next.projectId),
+            next.id,
+            next.suiteId,
+            next.startedAt,
+            JSON.stringify(next),
+          ],
+        );
+        return;
+      }
+      await client.query(
+        `
+        INSERT INTO evaluation_runs (project_id, run_id, suite_id, started_at, run_json, updated_at)
+        VALUES ($1, $2, $3, $4, $5::jsonb, NOW())
+      `,
+        [
+          String(next.projectId),
+          next.id,
+          next.suiteId,
+          next.startedAt,
+          JSON.stringify(next),
+        ],
+      );
+    });
+  }
+
+  async updateRunName(input: {
+    projectId: ProjectId;
+    runId: string;
+    name?: string;
+  }): Promise<EvaluationRun | undefined> {
+    return this.#withRunLock(input, async (client) => {
+      const current = await client.query<Row>(
+        "SELECT run_json FROM evaluation_runs WHERE project_id = $1 AND run_id = $2 FOR UPDATE",
+        [String(input.projectId), input.runId],
+      );
+      const existing = parseRun(current.rows[0]);
+      if (!existing) return undefined;
+      const renamed = normalizeEvaluationRun({ ...existing, name: input.name });
+      await client.query(
+        `
+        UPDATE evaluation_runs
+        SET run_json = $3::jsonb, updated_at = NOW()
+        WHERE project_id = $1 AND run_id = $2
+      `,
+        [String(input.projectId), input.runId, JSON.stringify(renamed)],
+      );
+      return renamed;
+    });
   }
 
   async get(input: {
