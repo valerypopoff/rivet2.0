@@ -34,7 +34,8 @@ RUN --mount=type=cache,target=/root/.cache/yarn YARN_NODE_LINKER=node-modules YA
 
 COPY --from=rivet_source . /app/rivet/
 WORKDIR /app/rivet
-RUN YARN_NODE_LINKER=node-modules yarn build:runtime
+RUN YARN_NODE_LINKER=node-modules yarn build:runtime && \
+    YARN_NODE_LINKER=node-modules yarn build:hosted-web-deps
 
 WORKDIR /app
 COPY wrapper/api/package.json wrapper/api/package-lock.json wrapper/api/
@@ -88,6 +89,7 @@ COPY --from=builder --chown=10001:10001 /app/wrapper/shared /app/wrapper/shared
 COPY --from=builder --chown=10001:10001 /app/rivet/node_modules /app/rivet/node_modules
 COPY --from=builder --chown=10001:10001 /app/rivet/packages/core /app/rivet/packages/core
 COPY --from=builder --chown=10001:10001 /app/rivet/packages/node /app/rivet/packages/node
+COPY --from=builder --chown=10001:10001 /app/rivet/packages/evaluations /app/rivet/packages/evaluations
 COPY --chown=10001:10001 image/lib/load-env.sh /opt/rivet/lib/load-env.sh
 COPY --chown=10001:10001 image/lib/bootstrap-deployment-storage-settings.mjs /opt/rivet/lib/bootstrap-deployment-storage-settings.mjs
 COPY --chown=10001:10001 image/api/entrypoint.sh /opt/rivet/api-entrypoint.sh

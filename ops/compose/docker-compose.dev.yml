@@ -187,7 +187,8 @@ services:
         mkdir -p /tmp/rivet-source/packages &&
         cp -R /workspace/rivet/packages/core /tmp/rivet-source/packages/core &&
         cp -R /workspace/rivet/packages/node /tmp/rivet-source/packages/node &&
-        rm -rf /tmp/rivet-source/packages/core/node_modules /tmp/rivet-source/packages/node/node_modules &&
+        cp -R /workspace/rivet/packages/evaluations /tmp/rivet-source/packages/evaluations &&
+        rm -rf /tmp/rivet-source/packages/core/node_modules /tmp/rivet-source/packages/node/node_modules /tmp/rivet-source/packages/evaluations/node_modules &&
         ln -s /workspace/rivet/node_modules /tmp/rivet-source/node_modules &&
         RIVET_SOURCE_ROOT=/tmp/rivet-source RIVET_API_PACKAGE_ROOT=/app node /workspace/scripts/link-rivet-node-package.mjs &&
         NODE_OPTIONS='${NODE_OPTIONS:-} --import=/opt/proxy-bootstrap/bootstrap.mjs' npm run dev

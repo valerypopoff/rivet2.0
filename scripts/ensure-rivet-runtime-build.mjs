@@ -17,6 +17,10 @@ const packages = [
     label: '@valerypopoff/rivet2-node',
     sourceDir: path.join(rivetRootDir, 'packages', 'node'),
   },
+  {
+    label: '@valerypopoff/rivet2-evaluations',
+    sourceDir: path.join(rivetRootDir, 'packages', 'evaluations'),
+  },
 ];
 
 const importantRootFiles = [
@@ -119,20 +123,24 @@ function getConfiguredYarnPath() {
   return yarnPath;
 }
 
-function runRuntimeBuild() {
-  console.log('[ensure-rivet-runtime-build] Rebuilding Rivet runtime packages because source is newer than dist.');
+function runHostedApiBuild() {
+  console.log('[ensure-rivet-runtime-build] Rebuilding Rivet API packages because source is newer than dist.');
   const yarnPath = getConfiguredYarnPath();
-  const result = spawnSync(process.execPath, ['--max-old-space-size=8192', yarnPath, 'build:runtime'], {
-    cwd: rivetRootDir,
-    env: {
-      ...process.env,
-      ...getRivetYarnEnvironment(rootDir, rivetRootDir),
-    },
-    stdio: 'inherit',
-  });
+  const env = {
+    ...process.env,
+    ...getRivetYarnEnvironment(rootDir, rivetRootDir),
+  };
 
-  if (result.status !== 0) {
-    process.exit(result.status ?? 1);
+  for (const target of ['build:runtime', 'build:hosted-web-deps']) {
+    const result = spawnSync(process.execPath, ['--max-old-space-size=8192', yarnPath, target], {
+      cwd: rivetRootDir,
+      env,
+      stdio: 'inherit',
+    });
+
+    if (result.status !== 0) {
+      process.exit(result.status ?? 1);
+    }
   }
 }
 
@@ -143,7 +151,7 @@ for (const pkg of packages) {
 }
 
 if (packages.some(isPackageRuntimeBuildStale)) {
-  runRuntimeBuild();
+  runHostedApiBuild();
 } else {
-  console.log('[ensure-rivet-runtime-build] Rivet runtime dist is fresh.');
+  console.log('[ensure-rivet-runtime-build] Rivet API package dist is fresh.');
 }

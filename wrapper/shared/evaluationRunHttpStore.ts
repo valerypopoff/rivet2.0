@@ -38,7 +38,22 @@ export function createHttpEvaluationRunStore(options: {
       );
       await requireOk(response);
     },
-    async get(input) {
+    async updateRunName(input) {
+      const response = await fetch(
+        url(options.baseUrl, `/${encodeURIComponent(input.runId)}`),
+        {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            projectId: input.projectId,
+            ...(input.name === undefined ? {} : { name: input.name }),
+          }),
+        },
+      );
+      if (response.status === 404) return undefined;
+      await requireOk(response);
+      return options.normalizeRun(await response.json());
+    },    async get(input) {
       const requestUrl = new URL(
         url(options.baseUrl, `/${encodeURIComponent(input.runId)}`),
         window.location.origin,

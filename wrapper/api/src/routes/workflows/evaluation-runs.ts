@@ -172,6 +172,7 @@ const putSchema = z
 const deleteSchema = z
   .object({ projectId: z.string().min(1), runId: z.string().min(1) })
   .strict();
+const renameRunSchema = projectSchema.extend({ name: z.string().optional() }).strict();
 const recordingReferenceSchema = z
   .object({
     id: z.string().min(1),
@@ -364,6 +365,24 @@ evaluationRunsRouter.put(
     }
     await (await getEvaluationRunStore()).put(run as EvaluationRun);
     res.status(204).end();
+  }),
+);
+
+evaluationRunsRouter.patch(
+  "/:runId",
+  validateBody(renameRunSchema),
+  asyncHandler(async (req, res) => {
+    const input = req.body as z.infer<typeof renameRunSchema>;
+    const run = await (await getEvaluationRunStore()).updateRunName({
+      projectId: input.projectId as ProjectId,
+      runId: String(req.params.runId ?? ""),
+      ...(input.name === undefined ? {} : { name: input.name }),
+    });
+    if (!run) {
+      res.status(404).json({ error: "Evaluation run not found." });
+      return;
+    }
+    res.json(run);
   }),
 );
 

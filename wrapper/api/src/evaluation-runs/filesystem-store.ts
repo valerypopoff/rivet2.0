@@ -5,6 +5,7 @@ import type { ProjectId } from "@valerypopoff/rivet2-node";
 import {
   assertEvaluationDatasetSnapshot,
   normalizeEvaluationRun,
+  reconcileEvaluationRunSnapshots,
   type EvaluationDatasetSnapshot,
   type EvaluationRecordingArtifact,
   type EvaluationRun,
@@ -172,14 +173,17 @@ export class FilesystemRivetEvaluationRunStore
   async put(run: EvaluationRun): Promise<void> {
     const database = await this.#database();
     withImmediateTransaction(database, () => {
-      this.#assertProjectWritable(database, run.projectId);
-      const existing = database
-        .prepare(
-          "SELECT run_json FROM evaluation_runs WHERE project_id = ? AND run_id = ?",
-        )
-        .get<Row>(String(run.projectId), run.id);
-      const existingRun = parseRun(existing);
-      if ((existingRun?.revision ?? 0) > (run.revision ?? 0)) return;
+      const incoming = normalizeEvaluationRun(run);
+      this.#assertProjectWritable(database, incoming.projectId);
+      const existing = parseRun(
+        database
+          .prepare(
+            "SELECT run_json FROM evaluation_runs WHERE project_id = ? AND run_id = ?",
+          )
+          .get<Row>(String(incoming.projectId), incoming.id),
+      );
+      const next = reconcileEvaluationRunSnapshots(existing, incoming);
+      if (next === existing) return;
       database
         .prepare(
           `
@@ -193,13 +197,38 @@ export class FilesystemRivetEvaluationRunStore
       `,
         )
         .run(
-          String(run.projectId),
-          run.id,
-          run.suiteId,
-          run.startedAt,
-          JSON.stringify(run),
+          String(next.projectId),
+          next.id,
+          next.suiteId,
+          next.startedAt,
+          JSON.stringify(next),
           Date.now(),
         );
+    });
+  }
+
+  async updateRunName(input: {
+    projectId: ProjectId;
+    runId: string;
+    name?: string;
+  }): Promise<EvaluationRun | undefined> {
+    const database = await this.#database();
+    return withImmediateTransaction(database, () => {
+      const existing = parseRun(
+        database
+          .prepare(
+            "SELECT run_json FROM evaluation_runs WHERE project_id = ? AND run_id = ?",
+          )
+          .get<Row>(String(input.projectId), input.runId),
+      );
+      if (!existing) return undefined;
+      const renamed = normalizeEvaluationRun({ ...existing, name: input.name });
+      database
+        .prepare(
+          "UPDATE evaluation_runs SET run_json = ?, updated_at_ms = ? WHERE project_id = ? AND run_id = ?",
+        )
+        .run(JSON.stringify(renamed), Date.now(), String(input.projectId), input.runId);
+      return renamed;
     });
   }
 
