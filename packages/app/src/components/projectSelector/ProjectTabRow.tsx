@@ -1,6 +1,6 @@
 import { type FC, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react';
 
-import { DndContext, type DragEndEvent } from '@dnd-kit/core';
+import { DndContext, PointerSensor, type DragEndEvent, useSensor, useSensors } from '@dnd-kit/core';
 import { type SyntheticListenerMap } from '@dnd-kit/core/dist/hooks/utilities';
 import { horizontalListSortingStrategy, SortableContext, useSortable } from '@dnd-kit/sortable';
 import { type ProjectId } from '@valerypopoff/rivet2-core';
@@ -46,6 +46,12 @@ export const ProjectTabRow: FC<{
   tabItems,
   windowDragRegion,
 }) => {
+  const dragSensors = useSensors(
+    useSensor(PointerSensor, {
+      activationConstraint: { distance: 4 },
+    }),
+  );
+
   const handleDragEnd = ({ active, over }: DragEndEvent) => {
     if (over && active.id !== over.id) {
       onReorderProject(active.id as ProjectId, over.id as ProjectId);
@@ -60,7 +66,7 @@ export const ProjectTabRow: FC<{
       })}
     >
       <div className="projects">
-        <DndContext onDragEnd={handleDragEnd}>
+        <DndContext sensors={dragSensors} onDragEnd={handleDragEnd}>
           <SortableContext items={[...sortableProjectIds]} strategy={horizontalListSortingStrategy}>
             {tabItems.map((tabItem) =>
               tabItem.type === 'opening' ? (
@@ -230,12 +236,6 @@ const ProjectTabSurface: FC<{
   preview = false,
   unsaved = false,
 }) => {
-  const handleMouseDown = (e: ReactMouseEvent<HTMLDivElement>) => {
-    if (e.button === 0) {
-      onSelectProject?.();
-    }
-  };
-
   const closeProject = (e: ReactMouseEvent<HTMLButtonElement>) => {
     e.stopPropagation();
     onCloseProject?.();
@@ -244,7 +244,7 @@ const ProjectTabSurface: FC<{
   return (
     <div
       className={clsx('project', className, { active, preview, unsaved, 'has-unsaved-changes': hasUnsavedChanges })}
-      onMouseDown={handleMouseDown}
+      onClick={onSelectProject}
     >
       <div className="project-name" {...dragListeners}>
         <span>{displayName}</span>

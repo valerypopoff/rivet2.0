@@ -50,6 +50,8 @@ describe('workspaceTransitions', () => {
       migratedLegacyProjectIds: [],
       activeView: 'definition',
       runs: [],
+      runScoreSortByScope: {},
+      runScrollTopByScope: {},
       runningSuiteId: undefined,
     });
   });

@@ -265,17 +265,34 @@ export function getDefaultProviders(): Providers {
   return defaultProviders;
 }
 
-export const ProvidersProvider: FC<{ providers?: ProviderOverrides; children: ReactNode }> = ({
+export const ProvidersProvider: FC<{ providers?: ProviderOverrides; children?: ReactNode }> = ({
   providers,
   children,
 }) => {
+  const hasProviderOverrides = providers !== undefined;
+  // Evaluation evidence is durable application state. Its boundary is owned
+  // only by the two explicit store overrides, never by unrelated adapters
+  // such as path policy, data references, or static data.
+  const evaluationStore = useMemo(
+    () =>
+      hasProviderOverrides
+        ? resolveEvaluationStoreProvider({
+            evaluationRunStore: providers?.evaluationRunStore,
+            evaluationStore: providers?.evaluationStore,
+          })
+        : getDefaultProviders().evaluationStore,
+    [hasProviderOverrides, providers?.evaluationRunStore, providers?.evaluationStore],
+  );
   const value = useMemo(() => {
-    if (!providers) {
-      return getDefaultProviders();
-    }
+    if (!providers) return getDefaultProviders();
 
-    const { storage: _storage, ...runtimeProviders } = providers;
-    const defaults = createDefaultProviders(runtimeProviders);
+    const {
+      storage: _storage,
+      evaluationStore: _evaluationStore,
+      evaluationRunStore: _evaluationRunStore,
+      ...runtimeProviders
+    } = providers;
+    const defaults = createDefaultProviders({ ...runtimeProviders, evaluationStore });
     return {
       ...defaults,
       ...runtimeProviders,
@@ -289,7 +306,7 @@ export const ProvidersProvider: FC<{ providers?: ProviderOverrides; children: Re
         ...runtimeProviders.dataRefs,
       },
     } satisfies Providers;
-  }, [providers]);
+  }, [evaluationStore, providers]);
 
   return <ProvidersContext.Provider value={value}>{children}</ProvidersContext.Provider>;
 };

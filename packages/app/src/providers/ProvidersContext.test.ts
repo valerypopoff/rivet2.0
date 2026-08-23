@@ -1,5 +1,9 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import React from 'react';
+import { JSDOM } from 'jsdom';
+import { createRoot } from 'react-dom/client';
+import { act } from 'react-dom/test-utils';
 import {
   InMemoryRivetLLMProfileHealthStore,
   type ProjectId,
@@ -12,6 +16,9 @@ import {
   resolveLLMProfileHealthProviders,
   resolveEvaluationStoreProvider,
   type LLMProfileHealthAdminProvider,
+  type PathPolicyProvider,
+  ProvidersProvider,
+  useEvaluationStore,
 } from './ProvidersContext.js';
 
 test('a hosted wrapper can replace the complete evaluation persistence boundary', () => {
@@ -97,3 +104,98 @@ test('an admin-only host does not activate Browser health execution', () => {
   assert.equal(resolved.llmProfileHealthAdmin, admin);
   assert.equal(resolved.llmProfileHealthStore, undefined);
 });
+
+test('host override rerenders retain the resolved evaluation store when their store inputs do not change', async () => {
+  const dom = new JSDOM('<div id="root"></div>');
+  const restoreGlobals = installDomGlobals(dom);
+  const root = createRoot(dom.window.document.getElementById('root')!);
+  const observedStores: ReturnType<typeof useEvaluationStore>[] = [];
+  const firstPathPolicy: PathPolicyProvider = {
+    allowDataFileNeighbor: async () => undefined,
+  };
+  const secondPathPolicy: PathPolicyProvider = {
+    allowDataFileNeighbor: async () => undefined,
+  };
+
+  const Probe = () => {
+    observedStores.push(useEvaluationStore());
+    return null;
+  };
+  const firstDataRefs = { get: () => undefined };
+  const secondDataRefs = { get: () => undefined };
+  const render = (pathPolicy: PathPolicyProvider, dataRefs: typeof firstDataRefs) =>
+    root.render(
+      React.createElement(ProvidersProvider, { providers: { dataRefs, pathPolicy } }, React.createElement(Probe)),
+    );
+
+  try {
+    await act(async () => render(firstPathPolicy, firstDataRefs));
+    // A fresh wrapper object with equivalent values and a later change to an
+    // unrelated runtime adapter must not recreate the persistent store.
+    await act(async () => render(firstPathPolicy, firstDataRefs));
+    await act(async () => render(firstPathPolicy, secondDataRefs));
+    await act(async () => render(secondPathPolicy, secondDataRefs));
+
+    assert.equal(observedStores.length, 4);
+    assert.equal(observedStores[1], observedStores[0]);
+    assert.equal(observedStores[2], observedStores[0]);
+    assert.equal(observedStores[3], observedStores[0]);
+  } finally {
+    await act(async () => root.unmount());
+    restoreGlobals();
+    dom.window.close();
+  }
+});
+
+test('an explicit evaluation store remains stable across wrapper rerenders and changes only when replaced', async () => {
+  const dom = new JSDOM('<div id="root"></div>');
+  const restoreGlobals = installDomGlobals(dom);
+  const root = createRoot(dom.window.document.getElementById('root')!);
+  const observedStores: ReturnType<typeof useEvaluationStore>[] = [];
+  const firstStore = new InMemoryEvaluationRunStore();
+  const secondStore = new InMemoryEvaluationRunStore();
+
+  const Probe = () => {
+    observedStores.push(useEvaluationStore());
+    return null;
+  };
+  const render = (evaluationStore: InMemoryEvaluationRunStore) =>
+    root.render(
+      React.createElement(ProvidersProvider, { providers: { evaluationStore } }, React.createElement(Probe)),
+    );
+
+  try {
+    await act(async () => render(firstStore));
+    await act(async () => render(firstStore));
+    await act(async () => render(secondStore));
+
+    assert.equal(observedStores.length, 3);
+    assert.equal(observedStores[0], firstStore);
+    assert.equal(observedStores[1], firstStore);
+    assert.equal(observedStores[2], secondStore);
+  } finally {
+    await act(async () => root.unmount());
+    restoreGlobals();
+    dom.window.close();
+  }
+});
+
+function installDomGlobals(dom: JSDOM): () => void {
+  const keys = ['document', 'Element', 'navigator', 'window', 'IS_REACT_ACT_ENVIRONMENT'] as const;
+  const previousDescriptors = keys.map((key) => [key, Object.getOwnPropertyDescriptor(globalThis, key)] as const);
+
+  Object.defineProperties(globalThis, {
+    document: { configurable: true, value: dom.window.document },
+    Element: { configurable: true, value: dom.window.Element },
+    navigator: { configurable: true, value: dom.window.navigator },
+    window: { configurable: true, value: dom.window },
+    IS_REACT_ACT_ENVIRONMENT: { configurable: true, value: true },
+  });
+
+  return () => {
+    for (const [key, descriptor] of previousDescriptors) {
+      if (descriptor) Object.defineProperty(globalThis, key, descriptor);
+      else Reflect.deleteProperty(globalThis, key);
+    }
+  };
+}

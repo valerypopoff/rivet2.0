@@ -16,8 +16,6 @@ import {
   deserializeEvaluationSuiteBundleJson,
   areEvaluationDataTypesCompatible,
   isEvaluationValueCompatibleWithDataType,
-  normalizeEvaluationBaselineSnapshot,
-  normalizeEvaluationRun,
   reconcileEvaluationRunSnapshots,
   hasAuthoritativeEvaluationCriteria,
   getEvaluationSuiteMode,
@@ -1595,9 +1593,9 @@ const EvaluationsContainer: FC<{ tryRunEvaluation: TryRunEvaluation; abortEvalua
   const evaluationMainRef = useRef<HTMLElement>(null);
   const runScrollTopRef = useRef(0);
   const restoredRunScrollScopeRef = useRef<string>();
-  // The refresh effect intentionally runs only for a changed project/suite
-  // scope. Keep the latest cache marker in a ref so a successful read does not
-  // schedule a redundant second read merely because it marked the scope warm.
+  // The overlay unmounts while Canvas is active. Keep the latest cache marker
+  // in a ref so returning to the same suite does not replay every retained run
+  // payload from durable storage merely because this effect starts again.
   const runHistoryScopeRef = useRef(state.runHistoryScope);
   runHistoryScopeRef.current = state.runHistoryScope;
   const selectedSuite = resolveSelectedEvaluationSuite(state.data.suites, state.selectedSuiteId);
@@ -1639,17 +1637,26 @@ const EvaluationsContainer: FC<{ tryRunEvaluation: TryRunEvaluation; abortEvalua
   const referenceStatus = selectedSuite
     ? getEvaluationSuiteReferenceStatus(selectedSuite, project, state.datasets)
     : undefined;
-  const suiteRuns = selectedSuite ? state.runs.filter((run) => run.suiteId === selectedSuite.id) : [];
+  const suiteRuns = useMemo(
+    () => (selectedSuiteId ? state.runs.filter((run) => run.suiteId === selectedSuiteId) : []),
+    [selectedSuiteId, state.runs],
+  );
   const suiteCurrentRun = state.currentRun?.suiteId === selectedSuite?.id ? state.currentRun : undefined;
-  const suiteBaseline = selectedSuite
-    ? state.data.baselines.find((candidate) => candidate.suiteId === selectedSuite.id)
-    : undefined;
-  const compareAvailable = selectedSuite
-    ? canCompareEvaluationSuite(selectedSuite.id, suiteRuns, state.data.baselines)
-    : false;
-  const comparableRun = selectedSuite
-    ? resolveComparableEvaluationRun(selectedSuite.id, suiteRuns, state.selectedRunId, suiteCurrentRun)
-    : undefined;
+  const suiteBaseline = useMemo(
+    () => (selectedSuiteId ? state.data.baselines.find((candidate) => candidate.suiteId === selectedSuiteId) : undefined),
+    [selectedSuiteId, state.data.baselines],
+  );
+  const compareAvailable = useMemo(
+    () => (selectedSuiteId ? canCompareEvaluationSuite(selectedSuiteId, suiteRuns, state.data.baselines) : false),
+    [selectedSuiteId, state.data.baselines, suiteRuns],
+  );
+  const comparableRun = useMemo(
+    () =>
+      selectedSuiteId
+        ? resolveComparableEvaluationRun(selectedSuiteId, suiteRuns, state.selectedRunId, suiteCurrentRun)
+        : undefined,
+    [selectedSuiteId, state.selectedRunId, suiteCurrentRun, suiteRuns],
+  );
 
   useEffect(() => {
     setRenamingSuiteId(undefined);
@@ -1780,28 +1787,36 @@ const EvaluationsContainer: FC<{ tryRunEvaluation: TryRunEvaluation; abortEvalua
 
   const selectSuite = (suiteId: string) => {
     setView('definition');
-    setState((current) => ({
-      ...current,
-      selectedSuiteId: suiteId,
-      selectedDatasetId: undefined,
-      runs: [],
-      runHistoryScope: undefined,
-      runTrialExpansion: undefined,
-      selectedRunId: undefined,
-    }));
+    setState((current) =>
+      current.selectedSuiteId === suiteId && current.selectedDatasetId === undefined
+        ? current
+        : {
+            ...current,
+            selectedSuiteId: suiteId,
+            selectedDatasetId: undefined,
+            runs: [],
+            runHistoryScope: undefined,
+            runTrialExpansion: undefined,
+            selectedRunId: undefined,
+          },
+    );
   };
 
   const selectDataset = (datasetId: string) => {
     setView('dataset');
-    setState((current) => ({
-      ...current,
-      selectedSuiteId: undefined,
-      selectedDatasetId: datasetId,
-      runs: [],
-      runHistoryScope: undefined,
-      runTrialExpansion: undefined,
-      selectedRunId: undefined,
-    }));
+    setState((current) =>
+      current.selectedDatasetId === datasetId && current.selectedSuiteId === undefined
+        ? current
+        : {
+            ...current,
+            selectedSuiteId: undefined,
+            selectedDatasetId: datasetId,
+            runs: [],
+            runHistoryScope: undefined,
+            runTrialExpansion: undefined,
+            selectedRunId: undefined,
+          },
+    );
   };
 
   const createDatasetResource = () => {
@@ -2189,12 +2204,14 @@ const EvaluationsContainer: FC<{ tryRunEvaluation: TryRunEvaluation; abortEvalua
       { runHistoryScope: runHistoryScopeRef.current },
       scope,
     );
-    let active = true;
-    // A complete cached list is safe to show while its durable history is
-    // refreshed. Do not replace a usable Runs pane with a blocking loader just
-    // because the Evaluations workspace was temporarily unmounted.
+    // A successfully listed exact scope is complete for this session. Reuse it
+    // on an overlay remount instead of doing a synchronous-heavy durable read
+    // before Definition, Runs, or Compare can respond to a tab click.
     setRunsStatus(hadCachedHistory ? 'ready' : 'loading');
     setRunsError(undefined);
+    if (hadCachedHistory) return;
+
+    let active = true;
     void runStore
       .list({ projectId: project.metadata.id, suiteId: selectedSuiteId })
       .then((runs) => {
@@ -2232,9 +2249,7 @@ const EvaluationsContainer: FC<{ tryRunEvaluation: TryRunEvaluation; abortEvalua
       })
       .catch((error: unknown) => {
         if (!active || readGeneration !== runHistoryReadGeneration.current) return;
-        // A stale-but-complete cache remains more useful than a blank error
-        // panel. Surface this as a non-blocking warning next to the evidence.
-        setRunsStatus(hadCachedHistory ? 'ready' : 'error');
+        setRunsStatus('error');
         setRunsError(error instanceof Error ? error.message : String(error));
       });
     return () => {
@@ -4886,60 +4901,78 @@ const Compare: FC<{
   onPromote: () => void;
 }> = ({ suite, runs, run, baseline, onPromote }) => {
   const [referenceId, setReferenceId] = useState('baseline');
-  const normalizedRun = run ? normalizeEvaluationRun(run) : undefined;
-  const normalizedBaseline = baseline ? normalizeEvaluationBaselineSnapshot(baseline) : undefined;
-  const comparisonRuns = runs
-    .map(normalizeEvaluationRun)
-    .filter(
-      (candidate): candidate is EvaluationRun & { aggregate: NonNullable<EvaluationRun['aggregate']> } =>
-        candidate.id !== normalizedRun?.id &&
-        candidate.executionStatus === 'completed' &&
-        candidate.aggregate !== undefined,
-    );
+  // Store and runner boundaries normalize these immutable records before they
+  // reach the workspace. Re-normalizing here would clone every persisted run
+  // and all of its trial payloads each time Compare mounts.
+  const selectedRun = run;
+  const selectedBaseline = baseline;
+  const comparisonRuns = useMemo(
+    () =>
+      runs.filter(
+        (candidate): candidate is EvaluationRun & { aggregate: NonNullable<EvaluationRun['aggregate']> } =>
+          candidate.id !== selectedRun?.id &&
+          candidate.executionStatus === 'completed' &&
+          candidate.aggregate !== undefined,
+      ),
+    [runs, selectedRun?.id],
+  );
+  const comparisonOptions = useMemo(
+    () => [
+      ...(selectedBaseline ? [{ label: 'Suite baseline', value: 'baseline' }] : []),
+      ...comparisonRuns.map((candidate) => ({
+        label: `${candidate.suiteName} · ${new Date(candidate.startedAt).toLocaleString()} · ${
+          candidate.purpose === 'execution-benchmark'
+            ? 'Execution benchmark · no quality result'
+            : getEvaluationRunQualityPresentation(candidate).label
+        }`,
+        value: candidate.id,
+      })),
+    ],
+    [comparisonRuns, selectedBaseline],
+  );
   const effectiveReferenceId =
-    (referenceId === 'baseline' && normalizedBaseline) ||
+    (referenceId === 'baseline' && selectedBaseline) ||
     comparisonRuns.some((candidate) => candidate.id === referenceId)
       ? referenceId
-      : normalizedBaseline
+      : selectedBaseline
         ? 'baseline'
         : comparisonRuns[0]?.id ?? 'baseline';
   const referenceRun = comparisonRuns.find((candidate) => candidate.id === effectiveReferenceId);
-  const reference = effectiveReferenceId === 'baseline' ? normalizedBaseline : referenceRun;
+  const reference = effectiveReferenceId === 'baseline' ? selectedBaseline : referenceRun;
   const referenceAggregate = reference?.aggregate;
-  const compatible = normalizedRun && reference && compatibleProvenance(normalizedRun.provenance, reference.provenance);
-  const hasReplayArtifact =
-    normalizedRun?.trials.some(
-      (trial) => trial.recording != null || trial.observations.some((observation) => observation.recording != null),
-    ) ?? false;
+  const compatible = selectedRun && reference && compatibleProvenance(selectedRun.provenance, reference.provenance);
+  const hasReplayArtifact = useMemo(
+    () =>
+      selectedRun?.trials.some(
+        (trial) => trial.recording != null || trial.observations.some((observation) => observation.recording != null),
+      ) ?? false,
+    [selectedRun],
+  );
   const hasCompleteScoringBaseline =
-    normalizedRun === undefined ||
-    normalizedRun.purpose === 'execution-benchmark' ||
-    getEvaluationSuiteMode(normalizedRun) !== 'scoring' ||
-    normalizedRun.qualityStatus === 'scored';
+    selectedRun === undefined ||
+    selectedRun.purpose === 'execution-benchmark' ||
+    getEvaluationSuiteMode(selectedRun) !== 'scoring' ||
+    selectedRun.qualityStatus === 'scored';
   const canPromoteBaseline = hasReplayArtifact && hasCompleteScoringBaseline;
   const referenceLabel = effectiveReferenceId === 'baseline' ? 'Baseline' : 'Selected run';
-  const runLabel = (candidate: EvaluationRun) =>
-    candidate.purpose === 'execution-benchmark'
-      ? 'Execution benchmark · no quality result'
-      : getEvaluationRunQualityPresentation(candidate).label;
-  const baselinePurpose = normalizedBaseline?.purpose ?? 'evaluation';
+  const baselinePurpose = selectedBaseline?.purpose ?? 'evaluation';
   const baselineQualityLabel =
     baselinePurpose === 'execution-benchmark'
       ? 'Not evaluated'
-      : normalizedBaseline?.qualityStatus === 'passed'
+      : selectedBaseline?.qualityStatus === 'passed'
         ? 'Passed'
-        : normalizedBaseline?.qualityStatus === 'failed'
+        : selectedBaseline?.qualityStatus === 'failed'
           ? 'Failed'
-          : normalizedBaseline?.qualityStatus === 'scored'
+          : selectedBaseline?.qualityStatus === 'scored'
             ? 'Scored'
-            : normalizedBaseline?.qualityStatus === 'unable-to-evaluate'
+            : selectedBaseline?.qualityStatus === 'unable-to-evaluate'
               ? 'Unable to evaluate'
-              : normalizedBaseline?.qualityStatus === 'not-evaluated'
+              : selectedBaseline?.qualityStatus === 'not-evaluated'
                 ? 'Not evaluated'
                 : 'Legacy result';
-  const baselineAccountingLabel = normalizedBaseline?.accountingStatus === 'partial' ? 'Partial' : 'Complete';
-  const currentAggregate = normalizedRun?.aggregate;
-  const currentCost = normalizedRun?.accountingStatus === 'partial' ? undefined : currentAggregate?.totalCostUsd;
+  const baselineAccountingLabel = selectedBaseline?.accountingStatus === 'partial' ? 'Partial' : 'Complete';
+  const currentAggregate = selectedRun?.aggregate;
+  const currentCost = selectedRun?.accountingStatus === 'partial' ? undefined : currentAggregate?.totalCostUsd;
   const referenceAccountingPartial =
     reference != null && 'accountingStatus' in reference && reference.accountingStatus === 'partial';
   const referenceCost = referenceAccountingPartial ? undefined : referenceAggregate?.totalCostUsd;
@@ -4951,44 +4984,33 @@ const Compare: FC<{
         metrics and provenance in the project; raw output and replay artifacts remain in the run store. Threshold
         comparisons are authoritative only when target, dataset, bindings, and evaluator fingerprints match.
       </p>
-      {normalizedRun ? (
+      {selectedRun ? (
         <div className="row">
           <Select
             className="field"
-            options={[
-              ...(normalizedBaseline ? [{ label: 'Suite baseline', value: 'baseline' }] : []),
-              ...comparisonRuns.map((candidate) => ({
-                label: `${candidate.suiteName} · ${new Date(candidate.startedAt).toLocaleString()} · ${runLabel(candidate)}`,
-                value: candidate.id,
-              })),
-            ]}
+            options={comparisonOptions}
             value={
               effectiveReferenceId === 'baseline'
-                ? normalizedBaseline
+                ? selectedBaseline
                   ? { label: 'Suite baseline', value: 'baseline' }
                   : undefined
-                : comparisonRuns
-                    .map((candidate) => ({
-                      label: `${candidate.suiteName} · ${new Date(candidate.startedAt).toLocaleString()} · ${runLabel(candidate)}`,
-                      value: candidate.id,
-                    }))
-                    .find((option) => option.value === effectiveReferenceId)
+                : comparisonOptions.find((option) => option.value === effectiveReferenceId)
             }
             placeholder="Choose a run or baseline"
             onChange={(value) => setReferenceId(value?.value ?? 'baseline')}
           />
         </div>
       ) : null}
-      {normalizedBaseline ? (
+      {selectedBaseline ? (
         <p>
-          {`Baseline recorded ${new Date(normalizedBaseline.createdAt).toLocaleString()} · ${
+          {`Baseline recorded ${new Date(selectedBaseline.createdAt).toLocaleString()} · ${
             baselinePurpose === 'execution-benchmark' ? 'Execution benchmark' : 'Evaluation'
           } · Quality: ${baselineQualityLabel} · Accounting: ${baselineAccountingLabel}`}
-          {(normalizedBaseline.aggregate.evaluatedTrialCount ?? 0) > 0
-            ? ` · Pass rate ${Math.round(normalizedBaseline.aggregate.passRate * 100)}%`
-            : normalizedBaseline.aggregate.meanScore === undefined
+          {(selectedBaseline.aggregate.evaluatedTrialCount ?? 0) > 0
+            ? ` · Pass rate ${Math.round(selectedBaseline.aggregate.passRate * 100)}%`
+            : selectedBaseline.aggregate.meanScore === undefined
               ? ''
-              : ` · Score ${formatEvaluationScore(normalizedBaseline.aggregate.meanScore)}`}
+              : ` · Score ${formatEvaluationScore(selectedBaseline.aggregate.meanScore)}`}
         </p>
       ) : (
         <p>
@@ -4997,7 +5019,7 @@ const Compare: FC<{
             : 'Choose an evaluation suite first.'}
         </p>
       )}
-      {normalizedRun && reference && referenceAggregate && (
+      {selectedRun && reference && referenceAggregate && (
         <table className="table">
           <thead>
             <tr>
@@ -5033,7 +5055,7 @@ const Compare: FC<{
           This comparison is stale. You can inspect it, but baseline-relative thresholds will not be applied.
         </p>
       )}
-      {normalizedRun && normalizedRun.executionStatus === 'completed' && (
+      {selectedRun && selectedRun.executionStatus === 'completed' && (
         <>
           <Button isDisabled={!canPromoteBaseline} onClick={onPromote}>
             Use this run as baseline

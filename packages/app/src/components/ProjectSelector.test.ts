@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import { getInAppMenuHotkeyCommand } from '../utils/inAppMenuHotkeys.js';
 import {
@@ -6,6 +7,14 @@ import {
   resolveProjectSelectorPlatformPolicy,
   resolveProjectTabPresentation,
 } from './projectSelector/projectSelectorModel.js';
+
+const projectTabRowSource = readFileSync(new URL('./projectSelector/ProjectTabRow.tsx', import.meta.url), 'utf8');
+
+test('project tabs select after click completion rather than on mouse down', () => {
+  assert.match(projectTabRowSource, /onClick=\{onSelectProject\}/u);
+  assert.doesNotMatch(projectTabRowSource, /onMouseDown=\{handleMouseDown\}/u);
+  assert.match(projectTabRowSource, /activationConstraint: \{ distance: 4 \}/u);
+});
 
 test('project tab presentation owns active labels, unsaved state, and preview styling', () => {
   assert.deepEqual(
