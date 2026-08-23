@@ -1,19 +1,61 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
 import test from 'node:test';
+import React from 'react';
+import { JSDOM } from 'jsdom';
+import { createRoot } from 'react-dom/client';
+import { act } from 'react-dom/test-utils';
 import { getInAppMenuHotkeyCommand } from '../utils/inAppMenuHotkeys.js';
 import {
+  projectTabDragActivationConstraint,
   resolveOpeningProjectTabPresentation,
   resolveProjectSelectorPlatformPolicy,
   resolveProjectTabPresentation,
 } from './projectSelector/projectSelectorModel.js';
+import { ProjectTabSurface } from './projectSelector/ProjectTabSurface.js';
 
-const projectTabRowSource = readFileSync(new URL('./projectSelector/ProjectTabRow.tsx', import.meta.url), 'utf8');
+test('project tabs select after click completion while preserving close and drag behavior', async () => {
+  const dom = new JSDOM('<div id="root"></div>');
+  const restoreGlobals = installDomGlobals(dom);
+  const root = createRoot(dom.window.document.getElementById('root')!);
+  let selections = 0;
+  let closes = 0;
 
-test('project tabs select after click completion rather than on mouse down', () => {
-  assert.match(projectTabRowSource, /onClick=\{onSelectProject\}/u);
-  assert.doesNotMatch(projectTabRowSource, /onMouseDown=\{handleMouseDown\}/u);
-  assert.match(projectTabRowSource, /activationConstraint: \{ distance: 4 \}/u);
+  try {
+    await act(async () =>
+      root.render(
+        React.createElement(ProjectTabSurface, {
+          active: true,
+          closeIcon: React.createElement('span', undefined, 'Close'),
+          displayName: 'Project',
+          dragListeners: { onPointerDown: () => undefined },
+          onCloseProject: () => {
+            closes += 1;
+          },
+          onSelectProject: () => {
+            selections += 1;
+          },
+        }),
+      ),
+    );
+
+    const project = dom.window.document.querySelector<HTMLElement>('.project')!;
+    const close = dom.window.document.querySelector<HTMLButtonElement>('.close-project')!;
+
+    await act(async () => project.dispatchEvent(new dom.window.MouseEvent('mousedown', { bubbles: true })));
+    assert.equal(selections, 0);
+
+    await act(async () => project.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true })));
+    assert.equal(selections, 1);
+
+    await act(async () => close.click());
+    assert.equal(closes, 1);
+    assert.equal(selections, 1);
+    assert.deepEqual(projectTabDragActivationConstraint, { distance: 4 });
+  } finally {
+    await act(async () => root.unmount());
+    restoreGlobals();
+    dom.window.close();
+  }
 });
 
 test('project tab presentation owns active labels, unsaved state, and preview styling', () => {
@@ -87,3 +129,22 @@ test('save hotkey follows Ctrl on Windows and Cmd on macOS', () => {
   assert.equal(getInAppMenuHotkeyCommand({ ...base, ctrlKey: false, metaKey: true }, 'macos'), 'save_project');
   assert.equal(getInAppMenuHotkeyCommand({ ...base, ctrlKey: true, metaKey: false }, 'macos'), undefined);
 });
+
+function installDomGlobals(dom: JSDOM): () => void {
+  const keys = ['document', 'navigator', 'window', 'IS_REACT_ACT_ENVIRONMENT'] as const;
+  const previousDescriptors = keys.map((key) => [key, Object.getOwnPropertyDescriptor(globalThis, key)] as const);
+
+  Object.defineProperties(globalThis, {
+    document: { configurable: true, value: dom.window.document },
+    navigator: { configurable: true, value: dom.window.navigator },
+    window: { configurable: true, value: dom.window },
+    IS_REACT_ACT_ENVIRONMENT: { configurable: true, value: true },
+  });
+
+  return () => {
+    for (const [key, descriptor] of previousDescriptors) {
+      if (descriptor) Object.defineProperty(globalThis, key, descriptor);
+      else Reflect.deleteProperty(globalThis, key);
+    }
+  };
+}

@@ -1,4 +1,4 @@
-import { type FC, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react';
+import { type FC, type ReactNode } from 'react';
 
 import { DndContext, PointerSensor, type DragEndEvent, useSensor, useSensors } from '@dnd-kit/core';
 import { type SyntheticListenerMap } from '@dnd-kit/core/dist/hooks/utilities';
@@ -19,9 +19,11 @@ import { projectTabUiState } from '../../state/projectTabUi.js';
 import { hasProjectUnsavedChanges } from '../../utils/projectUnsavedChanges.js';
 import { type ProjectTabListItem } from '../../utils/openingProjectTabs.js';
 import {
+  projectTabDragActivationConstraint,
   resolveOpeningProjectTabPresentation,
   resolveProjectTabPresentation,
 } from './projectSelectorModel.js';
+import { ProjectTabSurface } from './ProjectTabSurface.js';
 
 export const ProjectTabRow: FC<{
   projectTabsSelected: boolean;
@@ -48,7 +50,7 @@ export const ProjectTabRow: FC<{
 }) => {
   const dragSensors = useSensors(
     useSensor(PointerSensor, {
-      activationConstraint: { distance: 4 },
+      activationConstraint: projectTabDragActivationConstraint,
     }),
   );
 
@@ -96,7 +98,6 @@ export const ProjectTabRow: FC<{
     </div>
   );
 };
-
 const SortableProject: FC<{
   projectId: ProjectId;
   projectTabsSelected: boolean;
@@ -131,7 +132,6 @@ const SortableProject: FC<{
     </div>
   );
 };
-
 const ProjectTab: FC<{
   projectId: ProjectId;
   projectTabsSelected: boolean;
@@ -168,6 +168,7 @@ const ProjectTab: FC<{
   return (
     <ProjectTabSurface
       active={presentation.active}
+      closeIcon={<CloseIcon />}
       displayName={presentation.displayName}
       dragListeners={dragListeners}
       hasUnsavedChanges={hasUnsavedChanges}
@@ -206,56 +207,12 @@ const OpeningProjectTab: FC<{
       <ProjectTabSurface
         active={presentation.active}
         className="opening"
+        closeIcon={<CloseIcon />}
         displayName={presentation.displayName}
         preview={presentation.preview}
         onCloseProject={onCloseProject}
         onSelectProject={onSelectProject}
       />
-    </div>
-  );
-};
-
-const ProjectTabSurface: FC<{
-  active: boolean;
-  className?: string;
-  displayName?: string;
-  dragListeners?: SyntheticListenerMap;
-  hasUnsavedChanges?: boolean;
-  preview?: boolean;
-  unsaved?: boolean;
-  onCloseProject?: () => void;
-  onSelectProject?: () => void;
-}> = ({
-  active,
-  className,
-  displayName,
-  dragListeners,
-  hasUnsavedChanges = false,
-  onCloseProject,
-  onSelectProject,
-  preview = false,
-  unsaved = false,
-}) => {
-  const closeProject = (e: ReactMouseEvent<HTMLButtonElement>) => {
-    e.stopPropagation();
-    onCloseProject?.();
-  };
-
-  return (
-    <div
-      className={clsx('project', className, { active, preview, unsaved, 'has-unsaved-changes': hasUnsavedChanges })}
-      onClick={onSelectProject}
-    >
-      <div className="project-name" {...dragListeners}>
-        <span>{displayName}</span>
-      </div>
-      {active && (
-        <div className="actions">
-          <button className="close-project" onMouseDown={(e) => e.stopPropagation()} onClick={closeProject}>
-            <CloseIcon />
-          </button>
-        </div>
-      )}
     </div>
   );
 };

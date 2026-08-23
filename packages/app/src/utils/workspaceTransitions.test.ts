@@ -49,6 +49,7 @@ describe('workspaceTransitions', () => {
       datasets: [],
       migratedLegacyProjectIds: [],
       activeView: 'definition',
+      suitePresentationByScope: {},
       runs: [],
       runScoreSortByScope: {},
       runScrollTopByScope: {},

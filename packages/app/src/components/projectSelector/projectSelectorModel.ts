@@ -5,6 +5,10 @@ export type ProjectTabPresentation = {
   unsaved: boolean;
 };
 
+// Ordinary tab presses should resolve as clicks. dnd-kit waits for this small
+// movement threshold before it turns the same gesture into a sortable drag.
+export const projectTabDragActivationConstraint = { distance: 4 };
+
 export function resolveProjectTabPresentation(options: {
   title: string;
   fsPath?: string | null | undefined;
@@ -42,11 +46,10 @@ export function resolveOpeningProjectTabPresentation(options: {
   };
 }
 
-export function resolveProjectSelectorPlatformPolicy(options: {
-  inTauri: boolean;
-  macOS: boolean;
-  windows: boolean;
-}): { showFileMenu: boolean; showWindowsWindowControls: boolean } {
+export function resolveProjectSelectorPlatformPolicy(options: { inTauri: boolean; macOS: boolean; windows: boolean }): {
+  showFileMenu: boolean;
+  showWindowsWindowControls: boolean;
+} {
   return {
     showFileMenu: !options.inTauri || options.windows || options.macOS,
     showWindowsWindowControls: options.inTauri && options.windows,
