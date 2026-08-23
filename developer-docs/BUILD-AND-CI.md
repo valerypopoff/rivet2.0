@@ -689,7 +689,10 @@ workspace. Keep that descriptor pinned until `rtlcss` or its owning Docusaurus
 dependency refreshes the transitive lock entry; do not replace that fix with an
 audit exception. The `nanoid@npm:^3.3.16` resolution keeps PostCSS's CommonJS
 dependency on the supported NanoID 3.3.18 security patch, while the workspace's
-direct NanoID dependencies use the same release. Likewise, keep the direct
+direct NanoID dependencies use the same release. The `tar@npm:^7.5.4`
+resolution keeps fsevents' optional `node-gyp` build helper on tar 7.5.22,
+which fixes the audited `filesFilter` recursion denial of service without
+changing node-gyp's supported major range. Likewise, keep the direct
 `brace-expansion` resolutions for the `^1.1.7`, `^2.0.2`, `^5.0.5`, and
 `^5.0.8` descriptors on their reviewed fixed releases. Keep the matching
 `fast-uri` and `ip-address` resolutions current as well: they patch the Ajv and
