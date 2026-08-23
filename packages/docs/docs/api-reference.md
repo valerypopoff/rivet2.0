@@ -33,7 +33,7 @@ See the [Rivet node overview](./api-reference/node/overview.mdx) for more inform
 
 ## `@valerypopoff/rivet2-evaluations`
 
-Evaluations is the executor-agnostic engine used by Rivet's Evaluations workspace, CLI, and host integrations. It provides suite/dataset/run types, `runEvaluationSuite(...)` and `runEvaluationCases(...)`, evaluator and assertion contracts, JSON suite/dataset transfer, canonical fingerprints, baseline snapshots, bounded scheduling, normalization, and `EvaluationRunStore` interfaces. Hosts supply the Rivet project and an `EvaluationGraphRunner`; the package does not assume Browser, Node, remote, or hosted execution.
+Evaluations is the executor-agnostic engine used by Rivet's Evaluations workspace, CLI, and host integrations. It provides suite/dataset/run types, `runEvaluationSuite(...)` and `runEvaluationCases(...)`, evaluator and assertion contracts, JSON suite/dataset transfer, canonical fingerprints, baseline snapshots, bounded scheduling, normalization, the run-evidence `EvaluationRunStore`, and its complete app-level `EvaluationStore` extension. Hosts supply the Rivet project and an `EvaluationGraphRunner`; the package does not assume Browser, Node, remote, or hosted execution or persistence.
 
 See the [Evaluations Library](./user-guide/evaluations-library.md) page for more information.
 

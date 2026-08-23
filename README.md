@@ -153,9 +153,9 @@ Package versions are lockstep and start at `2.x`. The `package.json` version in 
 
 On pushes to `main`, `.github/workflows/publish-npm-packages.yml` builds those four workspaces, stages package-manager-neutral npm package directories, rewrites internal `workspace:^` dependencies to the same public `^2.x` version, and publishes versions that do not already exist on npm. The npm package manifests are the source of truth for npm versions.
 
-Configure npm publishing with either an `NPM_TOKEN` repository secret or npm trusted publishing for the `publish-npm-packages.yml` workflow. Trusted publishing is preferred once the packages exist and npm package settings are configured for this repository. A token must be a granular token with package write access and Bypass 2FA enabled unless the package explicitly disallows token-based publishing. The workflow validates authentication through `npm publish`, not `npm whoami`, because npm restricts that identity operation for bypass-2FA tokens.
+Main-branch publishing is tokenless npm trusted publishing. Each package is configured on npm to trust the GitHub Actions publisher `valerypopoff/rivet2.0` and the `publish-npm-packages.yml` workflow for the `npm publish` action. The workflow grants `id-token: write`, uses npm `11.5.1`, and publishes provenance; it deliberately has no `NPM_TOKEN` repository secret or token environment variables. Do not restore one as a routine CI fallback.
 
-For local publishes, `scripts/publish-npm-packages.mjs` also reads `NPM_TOKEN` from a repo-root `.env` file and passes it to npm through a temporary `.npmrc` that is removed after the publish attempt. `.env` is ignored by Git and must stay local; GitHub Actions cannot read it, so CI publishing still needs a repository secret or trusted publishing.
+For exceptional local recovery or the first publish of a new package, `scripts/publish-npm-packages.mjs` can read `NPM_TOKEN` from a repo-root `.env` file and passes it to npm through a temporary `.npmrc` that is removed after the attempt. `.env` is ignored by Git and must stay local. A package must exist on npm before its trusted publisher can be configured, so bootstrap a new package once with a short-lived, scope-limited granular token, configure its trusted publisher immediately afterward, then revoke the token.
 
 ## Stable and Developer Releases
 

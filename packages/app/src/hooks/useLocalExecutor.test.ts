@@ -115,3 +115,13 @@ test('remote executor dispatch isolates Run Activity and primary UI projection f
   );
   assert.doesNotMatch(remoteExecutorHelpersSource, /nodeFinish: \(data: unknown\) => currentExecution\.onNodeFinish/);
 });
+
+test('both executors finalize through the shared lifecycle before applying the terminal snapshot', () => {
+  for (const source of [
+    useLocalExecutorSource,
+    readFileSync(new URL('./useRemoteExecutor.ts', import.meta.url), 'utf8'),
+  ]) {
+    assert.match(source, /const finalizedRun = await executeEvaluationRunLifecycle\(/);
+    assert.match(source, /applyEvaluationRunSnapshot\(state, finalizedRun\)/);
+  }
+});

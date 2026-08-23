@@ -19,10 +19,11 @@ const questionsAndAnswersStyles = css`
 export const UserInputNodeOutput: FC<{
   outputs: InputsOrOutputsWithRefs;
   isCompact: boolean;
+  renderMarkdown?: boolean;
   renderMode?: OutputRenderMode;
   allowLargeStoredValueActions?: boolean;
   wrapLines?: boolean;
-}> = ({ outputs, isCompact, renderMode, allowLargeStoredValueActions, wrapLines }) => {
+}> = ({ outputs, isCompact, renderMarkdown, renderMode, allowLargeStoredValueActions, wrapLines }) => {
   const questionsAndAnswers = outputs['questionsAndAnswers' as PortId];
 
   if (!questionsAndAnswers || getScalarTypeOf(questionsAndAnswers.type) === 'control-flow-excluded') {
@@ -34,6 +35,7 @@ export const UserInputNodeOutput: FC<{
       <RenderDataValue
         value={questionsAndAnswers}
         isCompact={isCompact}
+        renderMarkdown={renderMarkdown}
         mode={renderMode}
         allowLargeStoredValueActions={allowLargeStoredValueActions}
         wrapLines={wrapLines}

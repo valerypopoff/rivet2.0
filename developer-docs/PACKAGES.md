@@ -847,15 +847,15 @@ Portable, executor-agnostic evaluation engine shared by the app, CLI, and host i
 - strict portable-JSON, binding, assertion, evaluator-result, threshold, and run normalization
 - canonical execution provenance and compact baseline snapshots
 - versioned dataset JSON and suite-plus-dataset bundle transfer
-- executor-agnostic `EvaluationGraphRunner` and persistence-agnostic `EvaluationRunStore` interfaces
+- executor-agnostic `EvaluationGraphRunner`, run-evidence `EvaluationRunStore`, and complete instance-persistence `EvaluationStore` interfaces
 
 ### Runtime model
 
 The runner maps an evaluation dataset into a target graph, executes every enabled case for the configured trials, and then either applies pass/fail checks or combines evaluator-graph scores. Evaluators use explicit Graph Input bindings from target outputs, dataset fields, or evaluation-context objects; the five-input legacy context envelope remains a compatibility fallback. The graph-facing scoring contract is 0–100, while stored aggregates remain normalized internally.
 
-Execution, quality, and accounting are independent result dimensions. A benchmark runs only the target and deliberately reports quality as not evaluated. Hosts supply the actual graph runtime, recording storage, and run-history store; the package owns validation, bounded scheduling, cancellation, stable ordering, aggregation, provenance, and portable result contracts.
+Execution, quality, and accounting are independent result dimensions. A benchmark runs only the target and deliberately reports quality as not evaluated. Hosts supply the actual graph runtime and persistence. `EvaluationRunStore` is the narrow evidence/history contract used by non-UI callers; `EvaluationStore` extends it with the reusable library of suites, datasets, compact baselines, and legacy-project migration markers so an app or hosted wrapper has one database ownership seam. `normalizeEvaluationLibrary()` is the shared recovery/de-duplication boundary for built-in and hosted stores; it also removes baselines whose suite is absent. Dataset-snapshot validation enforces a matching nonempty project scope, a valid creation timestamp, and a fingerprint derived from the canonical dataset content before historical evidence can be stored. The package owns validation, bounded scheduling, cancellation, stable ordering, aggregation, provenance, and portable result contracts.
 
-The Rivet app keeps reusable suites, datasets, and compact baselines in its application-local evaluation library. That storage is app state, not package-global state and not project attachment data. The CLI therefore consumes an exported suite-plus-dataset bundle with `rivet evaluations run --project <file> --suite-file <bundle>`.
+The Rivet app keeps every evaluation resource and retained artifact in its active `EvaluationStore`, not package-global state and not project attachment data. Desktop Rivet supplies an app-local SQLite store, the standalone browser supplies IndexedDB, and a wrapper can inject one tenant/database-backed implementation. The CLI therefore consumes an exported suite-plus-dataset bundle with `rivet evaluations run --project <file> --suite-file <bundle>`.
 
 ## `packages/docs/`
 

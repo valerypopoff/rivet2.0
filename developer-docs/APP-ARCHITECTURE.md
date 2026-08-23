@@ -195,6 +195,7 @@ Current workspace behavior:
 - `useSyncCurrentStateIntoOpenedProjects` keeps tab metadata and inactive-project content snapshots in sync, while `useSyncCurrentProjectEditorState` mirrors the active project's navigation stack and canvas positions into `projectEditorStateByProjectIdState` after boot hydration
 - successful project saves clear any persisted inactive-project snapshot for that project and flush the grouped `project` storage so tab metadata and editor-view state are durable together
 - `ProjectSelector.tsx` is now the top-strip shell composer. It decides whether the current workspace is Canvas or a project-independent overlay, builds the visible project/opening-tab item list, wires selection/reorder/close callbacks, and delegates rendering/local control behavior to `components/projectSelector/*`.
+- Project tabs activate through the normal completed `click` event rather than mouse press. Their dnd-kit pointer sensor has a four-pixel activation distance, so a press-and-release selects after release while moving far enough still starts sortable-tab drag/reorder without changing the active project first. [`ProjectTabSurface`](../packages/app/src/components/projectSelector/ProjectTabSurface.tsx) owns the independently testable click/close boundary; keep it separate from the stateful tab row so interaction tests exercise real DOM events instead of matching component source text.
 - `ProjectSelector` only syncs the current in-memory project into the open-project tab store while real project mode is active. In no-project mode `RivetApp` renders it with `mode="workspace"` so the welcome screen gets project-independent workspace navigation and an explicit `Welcome screen` tab without creating an `Untitled Project` tab or exposing graph-scoped search.
 - open-project tabs are selected only while Canvas is the active workspace (`overlayOpenState === undefined`). Selecting Data Studio, Evaluations, or Prompt Designer deselects the project tab as product state, not just as styling: project-scoped menu commands are gated through `projectWorkspaceSelection.ts`, so hotkeys and native/browser menu actions such as `Ctrl/Cmd+S`, Run, Import/Export Graph, Load Recording, Remote Debugger, and Clear Outputs no-op until the user reselects a project tab/Canvas. Canvas hotkeys in `useCanvasHotkeys` are also inert while an auxiliary workspace is open because the canvas remains mounted behind those workspaces. Clicking any project tab returns to Canvas; if the tab is already the loaded project, it only clears the overlay. Tooltip strings may use generic shortcut text such as `Ctrl/Cmd+F` or equivalent alternatives such as `Ctrl+Q / Cmd+Q`; the shared [`Tooltip`](../packages/app/src/components/Tooltip.tsx) normalizes string content through [`keyboardShortcutLabels`](../packages/app/src/utils/keyboardShortcutLabels.ts) so macOS shows `Cmd` and Windows/Linux show `Ctrl`. Platform detection uses `navigator.userAgentData.platform` when available and falls back to `navigator.userAgent`/`navigator.platform`, keeping browser-hosted wrappers and Tauri windows on the same shortcut-label path.
 - Rivet-owned keyboard shortcuts must use [`keyboardShortcutMatcher`](../packages/app/src/utils/keyboardShortcutMatcher.ts), not a Latin-only `event.key` comparison. Letter shortcuts provide both their semantic key and physical `event.code`, so `Ctrl/Cmd+F`, undo/redo, clipboard, graph navigation, menu, fullscreen-output, and Chat-search commands keep working with non-Latin keyboard layouts while still supporting alternate physical layouts and synthetic browser events. Shortcut owners retain their existing event scope and focus guards; canvas graph commands treat inputs, textareas, and `contenteditable` editors as text-entry owners. The matcher only resolves key identity and explicitly rejects Alt/AltGr where a command does not require Alt. Use exact Shift policy per command, keep named keys such as Escape and Enter semantic, and do not replace the local capture/bubble precedence with a global dispatcher.
@@ -962,10 +963,11 @@ Important nuance:
 - Library nodes live in `projectState.nodePrefabs`, not in `graphState`. The selected Node library resource and its canvas position are transient, project-keyed state owned by [`state/workspaceTarget.ts`](../packages/app/src/state/workspaceTarget.ts). Closing a project clears that project's resource state, while tab restoration may return to the same project's last resource without leaking Node library selection into another project. Library nodes are serialized with the project through core `Project.nodePrefabs`, while the Node library editor itself is not a graph and should not be added to graph lists, reachability, main-graph selection, execution, or graph-history restoration.
 - when replacing the current project, `projectDataState` is replaced for the new project and the active static-data store is cleared before loading the new project's data
 
-### App-owned IndexedDB databases
+### App-owned local databases
 
-The desktop/browser app uses the app-local `idb` dependency for its three
-IndexedDB owners. Their persisted identities are compatibility contracts:
+The browser app uses the app-local `idb` dependency for its IndexedDB owners.
+The desktop app additionally owns a native SQLite database for Evaluations.
+Their persisted identities are compatibility contracts:
 
 - [`state/storage/indexedDB.ts`](../packages/app/src/state/storage/indexedDB.ts)
   owns `jotai-store` version 1 and its `state` object store. Missing values
@@ -984,6 +986,24 @@ IndexedDB owners. Their persisted identities are compatibility contracts:
   provider caches one internal connection, resets it after blocking or
   termination, and continues returning a fresh native `IDBDatabase` from the
   public `getDatasetDatabase()` compatibility method.
+- [`providers/EvaluationRunStore.ts`](../packages/app/src/providers/EvaluationRunStore.ts)
+  owns browser database `rivet_evaluation_history` version 1 and its `values`
+  object store. Despite the historical class name, `LocalEvaluationRunStore`
+  implements the complete `EvaluationStore`: reusable library data and
+  project-scoped runs, snapshots, recording manifests, and recording artifacts
+  are separate keyed values in the same backend. On upgrade it adopts the old
+  `evaluation-library` Jotai value and legacy local-storage run keys without
+  deleting the source until the destination write succeeds.
+- [`src-tauri/src/evaluation_store.rs`](../packages/app/src-tauri/src/evaluation_store.rs)
+  owns desktop `evaluations.sqlite3` in Tauri's application-local-data
+  directory. It uses WAL mode, a busy timeout, one key/value table for the same
+  serialized records as the browser store, and a migration-metadata table. On
+  first native use, `TauriEvaluationStore` exports the browser-era values and
+  asks one SQLite transaction to insert, verify, mark, and commit them. A
+  conflict, native failure, or temporarily inaccessible source IndexedDB leaves
+  the source intact and keeps the complete session on the browser backend; the
+  migration remains pending for a later launch. A session must never mix
+  library writes in one backend with run or recording writes in another.
 
 Do not rename these databases/stores, change their versions or key shapes, make
 `deleteDataset` atomic across its currently separate transactions, or split
@@ -991,7 +1011,7 @@ the existing multi-store import transaction without a separately reviewed data
 migration. Dataset methods intentionally update their in-memory cache before
 the persistence request, matching the existing failure behavior.
 
-These owners resolve their public methods when the individual IndexedDB request
+The IndexedDB owners resolve their public methods when the individual request
 settles rather than awaiting transaction completion.
 [`utils/indexedDb.ts`](../packages/app/src/utils/indexedDb.ts) observes `idb`'s
 additional transaction promise to prevent a request failure from also becoming
@@ -1819,6 +1839,7 @@ Current output-rendering rules that matter for performance-sensitive changes:
 - generic display-aligned `Copy value` projection is exported from [`packages/app/src/utils/executionDataCopyValue.ts`](../packages/app/src/utils/executionDataCopyValue.ts), but new implementation code should go under `executionDataCopy/`; explicit `any` payloads and `any[]` items with JavaScript `undefined` should copy as the same visible text, `undefined`, while raw JSON export stays tied to the original stored payload
 - node-specific output copy overrides should use the `getCopyValueData` descriptor path and live in [`packages/app/src/utils/nodeOutputCopyValueProjectors.ts`](../packages/app/src/utils/nodeOutputCopyValueProjectors.ts), not in UI component files
 - fullscreen search for large ref-backed previews should go through the provider/context path rather than falling back to generic DOM text search; `LargeStoredValuePreview` integrates through [`packages/app/src/components/renderDataValue/useLargeStoredValueFullscreenSearch.ts`](../packages/app/src/components/renderDataValue/useLargeStoredValueFullscreenSearch.ts), which searches the full restored text, drives chunk/page activation, and keeps provider-local highlights out of the parent active-match selector path. Its provider-local highlighting must translate full-text offsets through `collectHighlightTextSegments(..., { includeLineBreakElements: true })` before applying highlights, because loaded JSON previews are Monaco-colorized and rendered line breaks may be `<br>` elements rather than `\n` text nodes.
+- loaded text previews must receive the fullscreen `Render Markdown` state through `RenderDataValue` and render the visible full-text chunk with the same sanitized `useMarkdown` path as ordinary string outputs. `renderMarkdown` is a shared [`NodeOutputRenderPolicyProps`](../packages/app/src/components/nodeOutput/nodeOutputRendererTypes.ts) contract: [`renderNodeOutputBody`](../packages/app/src/components/nodeOutput/renderNodeOutputBody.tsx) forwards it to generic, simple, custom, and custom-fullscreen renderers, while specialized renderers forward it into each nested `RenderDataValue`. Search navigation remains indexed against the raw stored source, then maps the active match to Markdown-rendered text only for its final DOM highlight, preserving full-value search across loading and paging.
 - fullscreen search reveal must coordinate Monaco's internal line viewport with the outer Atlaskit modal scroll container. Provider activation uses an immediate Monaco reveal followed by a settled two-frame pass from [`fullscreenOutputSearchViewport.ts`](../packages/app/src/components/nodeOutput/fullscreenOutputSearchViewport.ts), which accounts for the sticky output toolbar and centers an out-of-view match before adjusting the modal scroll position. Keep DOM and large-stored-value providers on that same reveal path; `scrollIntoView({ block: 'nearest' })` alone can leave a highlighted match underneath the sticky toolbar or just outside the modal viewport after Monaco relayout. Oversized matches must anchor to the visible top rather than alternating between top and bottom corrections.
 - full-text derivation for searchable ref-backed previews belongs in [`packages/app/src/components/renderDataValue/largeStoredValuePreviewText.ts`](../packages/app/src/components/renderDataValue/largeStoredValuePreviewText.ts), not inline in the render component
 - fullscreen chunk paging for large previews is intentionally contiguous and shared through [`packages/app/src/components/renderDataValue/largeStoredValueChunks.ts`](../packages/app/src/components/renderDataValue/largeStoredValueChunks.ts); chunk boundaries must not skip or duplicate content because fullscreen search relies on deterministic offset-to-chunk mapping
@@ -1883,6 +1904,13 @@ of [`RivetApp`](../packages/app/src/components/RivetApp.tsx) directly:
 - a custom `providers.storage` backend is applied before storage-backed atoms
   initialize; omitting it uses Rivet's built-in IndexedDB/memory backend rather
   than carrying a previous hosted backend across remounts
+- `providers.evaluationStore` replaces the complete Evaluations persistence
+  boundary: reusable suites/datasets/baselines, migration metadata, run history,
+  dataset snapshots, and replay recordings all use that implementation. A
+  hosted wrapper can therefore bind Rivet directly to its tenant database
+  without exposing an evaluation HTTP service and without Rivet opening a local
+  evaluation database. The deprecated run-only `evaluationRunStore` provider is
+  compatibility-only and must not be used for new wrappers
 - it accepts optional `ui` host policy for wrapper-controlled UI visibility.
   `ui.fileMenu.visibleItems` filters the in-app Menu dropdown by stable typed
   item ids and rejects hidden file-menu commands from keyboard or programmatic
@@ -1904,7 +1932,8 @@ of [`RivetApp`](../packages/app/src/components/RivetApp.tsx) directly:
 The local source host barrel also re-exports the provider/session types, host UI
 config types, `FileMenuItemId` item-id types for the Menu dropdown, executor-session runtime factory, sidecar
 lifecycle helpers, storage backend type, IO provider types, environment/path-policy
-provider types, the project-comparison helpers/types from core, and LLM Chat custom-provider env-var discovery helper that hosted
+provider types, the `EvaluationStore` type and `useEvaluationStore` hook, the
+project-comparison helpers/types from core, and LLM Chat custom-provider env-var discovery helper that hosted
 shells need to stay aligned with current app execution behavior. This is the
 preferred seam for projects such as Self-hosted Rivet; direct imports of other
 private app components, direct aliasing of globals such as `ioProvider`, or old
@@ -2038,8 +2067,11 @@ Markdown structure and safe links while removing scripts, active elements, event
 attributes, inline styles, SVG, and unsafe protocols. Direct `marked(...)` calls and
 new raw HTML sinks are rejected by
 `scripts/checks/check-rich-text-sinks.mjs` unless the file is an audited renderer
-owner. `trusted-static` is reserved for checked-in constant prose; project or
-execution content must never use it.
+owner. `LargeStoredValuePreview` is one such owner: it receives the branded,
+sanitized result of `useMarkdown` when a user loads a long string value, so the
+full-value and ordinary-output paths preserve the same boundary. `trusted-static`
+is reserved for checked-in constant prose; project or execution content must
+never use it.
 
 ## Known Architectural Tensions
 

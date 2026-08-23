@@ -64,9 +64,18 @@ test('fullscreen object output uses foldable searchable JSON with stable display
   assert.doesNotMatch(runActivityDrawer, /from 'majesticons\/line\/chevron-/);
 });
 
-test('large stored JSON previews preserve safe wrapping and external search ownership', () => {
+test('large stored previews preserve safe wrapping, search ownership, and loaded Markdown routing', () => {
   const source = readComponent('renderDataValue', 'LargeStoredValuePreview.tsx');
   const searchSource = readComponent('renderDataValue', 'useLargeStoredValueFullscreenSearch.ts');
+  const renderDataValue = readComponent('RenderDataValue.tsx');
+  const outputRendererTypes = readComponent('nodeOutput', 'nodeOutputRendererTypes.ts');
+  const outputDispatcher = readComponent('nodeOutput', 'renderNodeOutputBody.tsx');
+  const codeNewOutput = readComponent('nodes', 'CodeNewNode.tsx');
+  const expressionOutput = readComponent('nodes', 'ExpressionNode.tsx');
+  const extractObjectPathOutput = readComponent('nodes', 'ExtractObjectPathNode.tsx');
+  const jsListOutput = readComponent('nodes', 'JSListNode.tsx');
+  const loopControllerOutput = readComponent('nodes', 'LoopControllerNode.tsx');
+  const userInputOutput = readComponent('nodes', 'UserInputNode.tsx');
   const wrapStyles =
     /\.fullscreen-output-body\.wrap-lines & \.json-preview-content pre \{(?<styles>[\s\S]*?)\n  \}/.exec(source)?.groups
       ?.styles;
@@ -75,7 +84,26 @@ test('large stored JSON previews preserve safe wrapping and external search owne
   assert.match(wrapStyles, /overflow-wrap: break-word;/);
   assert.doesNotMatch(wrapStyles, /overflow-wrap:\s*anywhere;/);
   assert.match(source, /highlightMode: usesFoldingJsonPreview \? 'external' : 'dom'/);
+  assert.match(renderDataValue, /<LargeStoredValuePreview[\s\S]*?renderMarkdown=\{renderMarkdown\}/);
+  assert.match(source, /const markdownEnabled = preview\.kind === 'text' && showFull && !!renderMarkdown;/);
+  assert.match(source, /useMarkdown\(activeChunkText, markdownEnabled\)/);
+  assert.match(searchSource, /mapSourceMatchRangeToRenderedText/);
   assert.match(searchSource, /scheduleFullscreenOutputSearchTargetReveal/);
+  assert.match(outputRendererTypes, /renderMarkdown\?: boolean;/);
+  assert.match(outputDispatcher, /<FullscreenOutput[\s\S]*?renderMarkdown=\{renderMarkdown\}/);
+  assert.match(outputDispatcher, /<Output[\s\S]*?renderMarkdown=\{renderMarkdown\}/);
+  assert.match(outputDispatcher, /<OutputSimple[\s\S]*?renderMarkdown=\{renderMarkdown\}/);
+
+  for (const specializedOutput of [
+    codeNewOutput,
+    expressionOutput,
+    extractObjectPathOutput,
+    jsListOutput,
+    loopControllerOutput,
+    userInputOutput,
+  ]) {
+    assert.match(specializedOutput, /renderMarkdown=\{renderMarkdown\}/);
+  }
 });
 
 test('decoded JSON string preview has separated range, geometry, state, and view owners', () => {

@@ -30,7 +30,7 @@ export type EvaluationDataset = {
    * Legacy project ownership retained only while importing older project
    * files. Locally persisted evaluation datasets intentionally omit it so
    * they can be reused with any currently open project.
-  */
+   */
   projectId?: ProjectId;
   name: string;
   fields: EvaluationDatasetField[];
@@ -193,6 +193,19 @@ export type EvaluationProjectData = {
   baselines: EvaluationBaselineSnapshot[];
 };
 
+/**
+ * Rivet-local evaluation resources. This is deliberately outside project
+ * files so one Rivet instance can retain its evaluation library independently
+ * of whichever project is currently open.
+ */
+export type EvaluationLibrary = {
+  version: 1;
+  data: EvaluationProjectData;
+  datasets: EvaluationDataset[];
+  /** Legacy project IDs whose embedded evaluation resources were imported. */
+  migratedLegacyProjectIds: ProjectId[];
+};
+
 export type EvaluationObservationStatus = 'passed' | 'failed' | 'scored' | 'error' | 'skipped';
 
 export type EvaluationObservation = {
@@ -346,7 +359,13 @@ export type EvaluationAggregate = {
   /** Normalized internal score in the closed 0..1 range. */
   meanScore?: number;
   averageLatencyMs: number;
+  /** Optional so historical persisted runs without this newer factoid remain readable. */
+  medianLatencyMs?: number;
   p95LatencyMs: number;
+  /** Score distribution statistics use equal-weight per-case mean scores. */
+  medianScore?: number;
+  /** Score distribution statistics use equal-weight per-case mean scores. */
+  p95Score?: number;
   totalCostUsd?: number;
   averageCostUsd?: number;
   targetErrorRate: number;
@@ -371,6 +390,8 @@ export type EvaluationRun = {
   projectId: ProjectId;
   suiteId: string;
   suiteName: string;
+  /** Optional user-assigned label for distinguishing retained runs. */
+  name?: string;
   /**
    * Monotonically increases while a run is persisted. Stores use it to reject
    * a delayed live-progress write after a newer completed snapshot.
@@ -382,6 +403,8 @@ export type EvaluationRun = {
   purpose: EvaluationRunPurpose;
   /** Captures the suite semantics that produced this run. */
   evaluationMode?: EvaluationSuiteMode;
+  /** Planned target executions, retained so live progress does not depend on a later suite edit. */
+  requestedTrialCount?: number;
   executionStatus: 'queued' | 'running' | 'completed' | 'canceled' | 'error';
   qualityStatus: EvaluationQualityStatus;
   qualityReason: EvaluationQualityReason;
@@ -393,6 +416,35 @@ export type EvaluationRun = {
   trials: EvaluationTrial[];
   warnings: string[];
 };
+
+/**
+ * Incremental live-run protocol. A started event carries only the empty run
+ * shell, a settled event carries one immutable trial, and the terminal event
+ * carries the complete reporting shape once. Consumers that still need full
+ * snapshots can use RunEvaluationSuiteOptions.onUpdate during the compatibility
+ * period.
+ */
+export type EvaluationRunEvent =
+  | {
+      type: 'run-started';
+      revision: number;
+      run: EvaluationRun;
+    }
+  | {
+      type: 'trial-settled';
+      revision: number;
+      runId: string;
+      projectId: ProjectId;
+      suiteId: string;
+      requestedTrialCount: number;
+      settledTrialCount: number;
+      trial: EvaluationTrial;
+    }
+  | {
+      type: 'run-finalized';
+      revision: number;
+      run: EvaluationRun;
+    };
 
 export type EvaluationRecordingReference = {
   id: string;
@@ -467,6 +519,8 @@ export type EvaluationGraphRunner = (input: {
 
 export type EvaluationRunStore = {
   put(run: EvaluationRun): Promise<void>;
+  /** Sets a user-assigned run name; omit the name to restore the Unnamed label. */
+  updateRunName(input: { projectId: ProjectId; runId: string; name?: string }): Promise<EvaluationRun | undefined>;
   get(input: { projectId: ProjectId; runId: string }): Promise<EvaluationRun | undefined>;
   list(input: { projectId: ProjectId; suiteId?: string }): Promise<readonly EvaluationRun[]>;
   delete(input: { projectId: ProjectId; runId: string }): Promise<void>;
@@ -489,6 +543,27 @@ export type EvaluationRunStore = {
   }): Promise<void>;
   /** Pins all artifacts belonging to the run before its compact baseline is saved in the project. */
   promoteBaseline(input: { projectId: ProjectId; runId: string }): Promise<void>;
+  /**
+   * Optional V2 capability. Persists an idempotent incremental lifecycle event
+   * so a host can recover settled work after a process interruption.
+   */
+  applyRunEvent?(event: EvaluationRunEvent): Promise<void>;
+};
+
+export type EvaluationStoreInitialization = {
+  /** A recoverable persistence warning that a host may surface to the user. */
+  warning?: string;
+};
+
+/**
+ * Complete persistence boundary for Evaluations. Desktop, browser, and hosted
+ * Rivet instances implement this same contract so definitions and operational
+ * evidence cannot silently land in different stores.
+ */
+export type EvaluationStore = EvaluationRunStore & {
+  initialize?(): Promise<EvaluationStoreInitialization | void>;
+  getLibrary(): Promise<EvaluationLibrary>;
+  putLibrary(library: EvaluationLibrary): Promise<void>;
 };
 
 export type EvaluationReporter = {

@@ -1,23 +1,44 @@
-import { assertEvaluationDatasetSnapshot } from './canonical.js';
-import { normalizeEvaluationRun, shouldReplaceEvaluationRun } from './normalization.js';
+import { assertEvaluationDatasetSnapshot, assertEvaluationRecordingArtifact } from './canonical.js';
+import { normalizeEvaluationRun, reconcileEvaluationRunSnapshots } from './normalization.js';
+import { createEmptyEvaluationLibrary, normalizeEvaluationLibrary } from './library.js';
 import type {
   EvaluationDatasetSnapshot,
+  EvaluationLibrary,
   EvaluationRecordingArtifact,
   EvaluationRun,
-  EvaluationRunStore,
+  EvaluationStore,
 } from './types.js';
 
-export class InMemoryEvaluationRunStore implements EvaluationRunStore {
+export class InMemoryEvaluationRunStore implements EvaluationStore {
   readonly #runs = new Map<string, EvaluationRun>();
   readonly #datasetSnapshots = new Map<string, EvaluationDatasetSnapshot>();
   readonly #recordings = new Map<string, EvaluationRecordingArtifact>();
+  #library: EvaluationLibrary = createEmptyEvaluationLibrary();
+
+  async getLibrary(): Promise<EvaluationLibrary> {
+    return structuredClone(this.#library);
+  }
+
+  async putLibrary(library: EvaluationLibrary): Promise<void> {
+    this.#library = structuredClone(normalizeEvaluationLibrary(library));
+  }
 
   async put(run: EvaluationRun): Promise<void> {
     const normalized = normalizeEvaluationRun(run);
     const key = `${normalized.projectId}/${normalized.id}`;
     const existing = this.#runs.get(key);
-    if (!shouldReplaceEvaluationRun(existing, normalized)) return;
-    this.#runs.set(key, structuredClone(normalized));
+    const next = reconcileEvaluationRunSnapshots(existing, normalized);
+    if (next === existing) return;
+    this.#runs.set(key, structuredClone(next));
+  }
+
+  async updateRunName(input: { projectId: string; runId: string; name?: string }): Promise<EvaluationRun | undefined> {
+    const key = `${input.projectId}/${input.runId}`;
+    const existing = this.#runs.get(key);
+    if (!existing) return undefined;
+    const renamed = normalizeEvaluationRun({ ...existing, name: input.name });
+    this.#runs.set(key, structuredClone(renamed));
+    return structuredClone(renamed);
   }
 
   async get(input: { projectId: string; runId: string }): Promise<EvaluationRun | undefined> {
@@ -59,6 +80,7 @@ export class InMemoryEvaluationRunStore implements EvaluationRunStore {
   }
 
   async putRecording(artifact: EvaluationRecordingArtifact): Promise<void> {
+    assertEvaluationRecordingArtifact(artifact);
     const key = `${artifact.projectId}/${artifact.reference.id}`;
     const existing = this.#recordings.get(key);
     if (existing && (existing.runId !== artifact.runId || existing.trialId !== artifact.trialId)) {

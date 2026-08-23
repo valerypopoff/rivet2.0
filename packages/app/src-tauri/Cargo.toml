@@ -17,6 +17,7 @@ tauri-build = { version = "1.2.1", features = [] }
 [dependencies]
 serde_json = "1.0"
 serde = { version = "1.0", features = ["derive"] }
+rusqlite = { version = "0.37.0", features = ["bundled"] }
 tauri = { version = "1.8.3", features = [
   "process-relaunch",
   "shell-execute",

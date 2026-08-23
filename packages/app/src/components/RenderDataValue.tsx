@@ -52,6 +52,7 @@ export function RenderDataValue({
       <LargeStoredValuePreview
         value={value}
         mode={effectiveMode}
+        renderMarkdown={renderMarkdown}
         allowLargeStoredValueActions={allowLargeStoredValueActions}
         wrapLines={wrapLines}
       />

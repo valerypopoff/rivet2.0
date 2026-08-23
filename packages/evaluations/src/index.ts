@@ -8,3 +8,4 @@ export * from './datasetTransfer.js';
 export * from './suiteTransfer.js';
 export * from './dataTypes.js';
 export * from './normalization.js';
+export * from './library.js';

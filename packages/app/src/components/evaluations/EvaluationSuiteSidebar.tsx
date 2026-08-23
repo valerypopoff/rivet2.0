@@ -7,6 +7,7 @@ import { useContextMenu } from '../../hooks/useContextMenu.js';
 import { leftSidebarLiveWidthState, leftSidebarWidthState } from '../../state/ui.js';
 import { clampLeftSidebarWidth } from '../../utils/leftSidebarWidth.js';
 import { resizeCursorStyles } from '../../utils/resizeCursors.js';
+import { NodeRunningIndicator } from '../visualNode/NodeRunningIndicator.js';
 import type { EvaluationSuiteReferenceStatus } from './evaluationWorkspaceModel.js';
 
 const styles = css`
@@ -167,6 +168,21 @@ const styles = css`
   .suite-warning {
     align-self: center;
     color: var(--warning);
+  }
+
+  .suite-indicators {
+    display: flex;
+    align-items: center;
+    align-self: center;
+    gap: 6px;
+  }
+
+  .suite-running {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: calc(16px * var(--ui-font-scale));
+    height: calc(16px * var(--ui-font-scale));
   }
 
   .empty-suite-list {
@@ -407,6 +423,7 @@ export const EvaluationSuiteSidebar: FC<{
             suites.map((suite) => {
               const status = getReferenceStatus(suite);
               const broken = !status.datasetExists || !status.targetGraphExists || !status.evaluatorGraphsExist;
+              const isRunning = suite.id === runningSuiteId;
               return (
                 <button
                   type="button"
@@ -421,12 +438,25 @@ export const EvaluationSuiteSidebar: FC<{
                     <span className="suite-name">{suite.name || 'Untitled evaluation suite'}</span>
                     <span className="suite-target">{getGraphName(suite)}</span>
                   </span>
-                  {broken ? (
-                    <span
-                      className="suite-warning"
-                      title="This suite has a missing target graph, evaluator graph, or dataset reference"
-                    >
-                      ⚠
+                  {isRunning || broken ? (
+                    <span className="suite-indicators">
+                      {isRunning ? (
+                        <span className="suite-running" title="Evaluation running">
+                          <NodeRunningIndicator
+                            isRunning
+                            delayMs={0}
+                            label={`Evaluation suite “${suite.name || 'Untitled evaluation suite'}” is running`}
+                          />
+                        </span>
+                      ) : null}
+                      {broken ? (
+                        <span
+                          className="suite-warning"
+                          title="This suite has a missing target graph, evaluator graph, or dataset reference"
+                        >
+                          ⚠
+                        </span>
+                      ) : null}
                     </span>
                   ) : null}
                 </button>

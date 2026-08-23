@@ -44,6 +44,12 @@ export function useLargeStoredValueFullscreenSearch(args: {
   chunkPage: number;
   setChunkPage: Dispatch<SetStateAction<number>>;
   highlightMode?: 'dom' | 'external';
+  /**
+   * Markdown changes the rendered text-node offsets by removing syntax and
+   * adding element boundaries. Search still indexes the stored source text,
+   * then maps the active source match onto those rendered text nodes.
+   */
+  renderMarkdown?: boolean;
 }): LargeStoredValueFullscreenSearchResult {
   const {
     providerId,
@@ -59,6 +65,7 @@ export function useLargeStoredValueFullscreenSearch(args: {
     chunkPage,
     setChunkPage,
     highlightMode = 'dom',
+    renderMarkdown = false,
   } = args;
 
   const fullscreenOutputSearch = useFullscreenOutputSearchContext();
@@ -180,9 +187,22 @@ export function useLargeStoredValueFullscreenSearch(args: {
       return;
     }
 
+    const textSegments = collectHighlightTextSegments(contentElement, { includeLineBreakElements: true });
+    const renderedMatchRange = renderMarkdown
+      ? mapSourceMatchRangeToRenderedText({
+          sourceText: activeChunkText,
+          sourceMatchRange: activeVisibleMatchRange,
+          renderedText: textSegments.map((segment) => segment.text).join(''),
+        })
+      : activeVisibleMatchRange;
+
+    if (!renderedMatchRange) {
+      return;
+    }
+
     const activeHighlightElement = applyHighlightsToTextSegments({
-      textSegments: collectHighlightTextSegments(contentElement, { includeLineBreakElements: true }),
-      matchRanges: [activeVisibleMatchRange],
+      textSegments,
+      matchRanges: [renderedMatchRange],
       matchIndices: [0],
       activeMatchIndex: 0,
       includeMatchIndexAttribute: false,
@@ -197,7 +217,7 @@ export function useLargeStoredValueFullscreenSearch(args: {
       cancelReveal();
       clearHighlights(contentElement);
     };
-  }, [activeChunkText, activeVisibleMatchRange, contentRef, highlightMode]);
+  }, [activeChunkText, activeVisibleMatchRange, contentRef, highlightMode, renderMarkdown]);
 
   return {
     providerRootProps: fullscreenOutputSearch
@@ -210,4 +230,32 @@ export function useLargeStoredValueFullscreenSearch(args: {
     },
     activeMatchRange: activeVisibleMatchRange,
   };
+}
+
+/**
+ * Maps an active source-text match onto its Markdown-rendered text. The source
+ * range remains the authority for provider navigation and large-value paging;
+ * only the final DOM highlight needs translated offsets.
+ */
+export function mapSourceMatchRangeToRenderedText({
+  sourceText,
+  sourceMatchRange,
+  renderedText,
+}: {
+  sourceText: string;
+  sourceMatchRange: SearchMatchRange;
+  renderedText: string;
+}): SearchMatchRange | null {
+  const matchedSourceText = sourceText.slice(sourceMatchRange.startOffset, sourceMatchRange.endOffset);
+  if (!matchedSourceText) {
+    return null;
+  }
+
+  const sourceMatches = findMatchRanges(sourceText, matchedSourceText);
+  const sourceMatchIndex = sourceMatches.findIndex(
+    (range) => range.startOffset === sourceMatchRange.startOffset && range.endOffset === sourceMatchRange.endOffset,
+  );
+  const renderedMatches = findMatchRanges(renderedText, matchedSourceText);
+
+  return renderedMatches[sourceMatchIndex] ?? renderedMatches[0] ?? null;
 }

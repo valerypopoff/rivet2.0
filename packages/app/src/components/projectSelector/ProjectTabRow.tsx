@@ -1,6 +1,6 @@
-import { type FC, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react';
+import { type FC, type ReactNode } from 'react';
 
-import { DndContext, type DragEndEvent } from '@dnd-kit/core';
+import { DndContext, PointerSensor, type DragEndEvent, useSensor, useSensors } from '@dnd-kit/core';
 import { type SyntheticListenerMap } from '@dnd-kit/core/dist/hooks/utilities';
 import { horizontalListSortingStrategy, SortableContext, useSortable } from '@dnd-kit/sortable';
 import { type ProjectId } from '@valerypopoff/rivet2-core';
@@ -19,9 +19,11 @@ import { projectTabUiState } from '../../state/projectTabUi.js';
 import { hasProjectUnsavedChanges } from '../../utils/projectUnsavedChanges.js';
 import { type ProjectTabListItem } from '../../utils/openingProjectTabs.js';
 import {
+  projectTabDragActivationConstraint,
   resolveOpeningProjectTabPresentation,
   resolveProjectTabPresentation,
 } from './projectSelectorModel.js';
+import { ProjectTabSurface } from './ProjectTabSurface.js';
 
 export const ProjectTabRow: FC<{
   projectTabsSelected: boolean;
@@ -46,6 +48,12 @@ export const ProjectTabRow: FC<{
   tabItems,
   windowDragRegion,
 }) => {
+  const dragSensors = useSensors(
+    useSensor(PointerSensor, {
+      activationConstraint: projectTabDragActivationConstraint,
+    }),
+  );
+
   const handleDragEnd = ({ active, over }: DragEndEvent) => {
     if (over && active.id !== over.id) {
       onReorderProject(active.id as ProjectId, over.id as ProjectId);
@@ -60,7 +68,7 @@ export const ProjectTabRow: FC<{
       })}
     >
       <div className="projects">
-        <DndContext onDragEnd={handleDragEnd}>
+        <DndContext sensors={dragSensors} onDragEnd={handleDragEnd}>
           <SortableContext items={[...sortableProjectIds]} strategy={horizontalListSortingStrategy}>
             {tabItems.map((tabItem) =>
               tabItem.type === 'opening' ? (
@@ -90,7 +98,6 @@ export const ProjectTabRow: FC<{
     </div>
   );
 };
-
 const SortableProject: FC<{
   projectId: ProjectId;
   projectTabsSelected: boolean;
@@ -125,7 +132,6 @@ const SortableProject: FC<{
     </div>
   );
 };
-
 const ProjectTab: FC<{
   projectId: ProjectId;
   projectTabsSelected: boolean;
@@ -162,6 +168,7 @@ const ProjectTab: FC<{
   return (
     <ProjectTabSurface
       active={presentation.active}
+      closeIcon={<CloseIcon />}
       displayName={presentation.displayName}
       dragListeners={dragListeners}
       hasUnsavedChanges={hasUnsavedChanges}
@@ -200,62 +207,12 @@ const OpeningProjectTab: FC<{
       <ProjectTabSurface
         active={presentation.active}
         className="opening"
+        closeIcon={<CloseIcon />}
         displayName={presentation.displayName}
         preview={presentation.preview}
         onCloseProject={onCloseProject}
         onSelectProject={onSelectProject}
       />
-    </div>
-  );
-};
-
-const ProjectTabSurface: FC<{
-  active: boolean;
-  className?: string;
-  displayName?: string;
-  dragListeners?: SyntheticListenerMap;
-  hasUnsavedChanges?: boolean;
-  preview?: boolean;
-  unsaved?: boolean;
-  onCloseProject?: () => void;
-  onSelectProject?: () => void;
-}> = ({
-  active,
-  className,
-  displayName,
-  dragListeners,
-  hasUnsavedChanges = false,
-  onCloseProject,
-  onSelectProject,
-  preview = false,
-  unsaved = false,
-}) => {
-  const handleMouseDown = (e: ReactMouseEvent<HTMLDivElement>) => {
-    if (e.button === 0) {
-      onSelectProject?.();
-    }
-  };
-
-  const closeProject = (e: ReactMouseEvent<HTMLButtonElement>) => {
-    e.stopPropagation();
-    onCloseProject?.();
-  };
-
-  return (
-    <div
-      className={clsx('project', className, { active, preview, unsaved, 'has-unsaved-changes': hasUnsavedChanges })}
-      onMouseDown={handleMouseDown}
-    >
-      <div className="project-name" {...dragListeners}>
-        <span>{displayName}</span>
-      </div>
-      {active && (
-        <div className="actions">
-          <button className="close-project" onMouseDown={(e) => e.stopPropagation()} onClick={closeProject}>
-            <CloseIcon />
-          </button>
-        </div>
-      )}
     </div>
   );
 };

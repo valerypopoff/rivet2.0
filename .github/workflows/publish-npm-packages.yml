@@ -74,6 +74,4 @@ jobs:
       - name: Publish packages
         run: node scripts/publish-npm-packages.mjs --skip-clean-check
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
           NPM_CONFIG_PROVENANCE: true

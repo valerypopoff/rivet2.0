@@ -51,6 +51,7 @@ export function renderNodeOutputBody(options: RenderNodeOutputBodyOptions): Reac
       <FullscreenOutput
         node={node}
         data={data}
+        renderMarkdown={renderMarkdown}
         renderMode={renderMode}
         allowLargeStoredValueActions={allowLargeStoredValueActions}
         wrapLines={wrapLines}
@@ -64,6 +65,7 @@ export function renderNodeOutputBody(options: RenderNodeOutputBodyOptions): Reac
         node={node}
         data={data}
         isCompact={isCompact}
+        renderMarkdown={renderMarkdown}
         renderMode={renderMode}
         allowLargeStoredValueActions={allowLargeStoredValueActions}
         wrapLines={wrapLines}
@@ -89,6 +91,7 @@ export function renderNodeOutputBody(options: RenderNodeOutputBodyOptions): Reac
               key={`outputs-${key}`}
               outputs={value as InputsOrOutputsWithRefs}
               isCompact={isCompact}
+              renderMarkdown={renderMarkdown}
               renderMode={renderMode}
               allowLargeStoredValueActions={allowLargeStoredValueActions}
               wrapLines={wrapLines}
@@ -132,6 +135,7 @@ export function renderNodeOutputBody(options: RenderNodeOutputBodyOptions): Reac
       <OutputSimple
         outputs={bodyViewModel.outputs}
         isCompact={isCompact}
+        renderMarkdown={renderMarkdown}
         renderMode={renderMode}
         allowLargeStoredValueActions={allowLargeStoredValueActions}
         wrapLines={wrapLines}

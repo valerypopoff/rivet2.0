@@ -14,6 +14,7 @@ import {
   type EvaluationGraphRunner,
   type EvaluationProjectData,
   type EvaluationRun,
+  type EvaluationRunEvent,
   type EvaluationSuite,
   type EvaluationTrial,
   type PortableJson,
@@ -199,7 +200,10 @@ test('an execution benchmark runs only the target and never claims a quality res
 
 test('live project optional fields do not prevent evaluation provenance fingerprinting', async () => {
   const withExplicitUndefined = structuredClone(project);
-  const targetNode = withExplicitUndefined.graphs.target!.nodes[0]! as { description?: string; data: Record<string, unknown> };
+  const targetNode = withExplicitUndefined.graphs.target!.nodes[0]! as {
+    description?: string;
+    data: Record<string, unknown>;
+  };
   targetNode.description = undefined;
   targetNode.data.defaultValue = undefined;
   const evaluatorNode = withExplicitUndefined.graphs.evaluator!.nodes[0]! as { description?: string };
@@ -209,7 +213,9 @@ test('live project optional fields do not prevent evaluation provenance fingerpr
     [project, withExplicitUndefined].map((projectForRun) =>
       runEvaluationSuite({
         project: projectForRun,
-        evaluationData: data(suite({ evaluators: [{ id: 'judge', name: 'Judge', graphId: 'evaluator', required: true }] })),
+        evaluationData: data(
+          suite({ evaluators: [{ id: 'judge', name: 'Judge', graphId: 'evaluator', required: true }] }),
+        ),
         dataset: dataset(),
         suiteId: 'suite',
         runGraph: async ({ graphId }) =>
@@ -223,7 +229,10 @@ test('live project optional fields do not prevent evaluation provenance fingerpr
   assert.equal(withOptionalFields.executionStatus, 'completed');
   assert.equal(withOptionalFields.provenance.projectFingerprint, withoutOptionalFields.provenance.projectFingerprint);
   assert.equal(withOptionalFields.provenance.targetFingerprint, withoutOptionalFields.provenance.targetFingerprint);
-  assert.deepEqual(withOptionalFields.provenance.evaluatorFingerprints, withoutOptionalFields.provenance.evaluatorFingerprints);
+  assert.deepEqual(
+    withOptionalFields.provenance.evaluatorFingerprints,
+    withoutOptionalFields.provenance.evaluatorFingerprints,
+  );
 });
 
 test('provenance ignores graph presentation edits but tracks executable graph changes', async () => {
@@ -247,7 +256,11 @@ test('provenance ignores graph presentation edits but tracks executable graph ch
       suiteId: 'suite',
       runGraph: async () => ({ outputs: { result: 'ok' }, metrics: { durationMs: 1 } }),
     });
-  const [base, cosmetic, material] = await Promise.all([execute(project), execute(cosmeticProject), execute(materialProject)]);
+  const [base, cosmetic, material] = await Promise.all([
+    execute(project),
+    execute(cosmeticProject),
+    execute(materialProject),
+  ]);
 
   assert.equal(cosmetic.provenance.projectFingerprint, base.provenance.projectFingerprint);
   assert.equal(cosmetic.provenance.targetFingerprint, base.provenance.targetFingerprint);
@@ -272,9 +285,16 @@ test('progress updates are detached immutable revisions', async () => {
   assert.ok(updates.length >= 3);
   assert.equal(updates[0]?.revision, 1);
   assert.equal(updates[0]?.trials.length, 0);
+  assert.equal(updates[0]?.requestedTrialCount, 2);
   assert.equal(updates[0]?.provenance.accountingComplete, true);
   assert.deepEqual(updates[0]?.warnings, []);
   assert.equal(updates.at(-1)?.provenance.accountingComplete, false);
+
+  // The last running snapshot already contains every settled trial. Terminal
+  // aggregation may add run-level facts, but it must never revise individual
+  // trial scores or total durations after those cards have been published.
+  assert.deepEqual(updates.at(-2)?.trials, updates.at(-1)?.trials);
+  assert.deepEqual(updates.at(-1)?.trials, result.trials);
 
   result.provenance.accountingComplete = true;
   result.warnings.push('mutation after completion');
@@ -282,6 +302,71 @@ test('progress updates are detached immutable revisions', async () => {
   assert.equal(updates.at(-1)?.provenance.accountingComplete, false);
   assert.equal(updates.at(-1)?.warnings.includes('mutation after completion'), false);
   assert.equal(updates.at(-1)?.trials[0]?.outputs.result, 'one');
+});
+
+test('incremental progress emits one trial at a time without accumulated payloads', async () => {
+  const events: EvaluationRunEvent[] = [];
+  const result = await runEvaluationSuite({
+    project,
+    evaluationData: data(suite()),
+    dataset: dataset(['one', 'two']),
+    suiteId: 'suite',
+    runGraph: async ({ inputs }) => ({
+      outputs: { result: inputs.input },
+      metrics: { durationMs: 1 },
+    }),
+    onEvent: (event) => events.push(event),
+  });
+
+  assert.equal(events[0]?.type, 'run-started');
+  assert.deepEqual(
+    events.map((event) => event.revision),
+    [1, 2, 3, 4],
+  );
+  const trialEvents = events.filter((event) => event.type === 'trial-settled');
+  assert.equal(trialEvents.length, 2);
+  assert.deepEqual(
+    trialEvents.map((event) => event.trial.outputs.result),
+    ['one', 'two'],
+  );
+  assert.deepEqual(
+    trialEvents.map((event) => event.settledTrialCount),
+    [1, 2],
+  );
+  const finalized = events.at(-1);
+  assert.equal(finalized?.type, 'run-finalized');
+  assert.deepEqual(result.trials, finalized?.type === 'run-finalized' ? finalized.run.trials : undefined);
+});
+
+test('awaits the started checkpoint before beginning graph execution', async () => {
+  let releaseStartedCheckpoint!: () => void;
+  let startedCheckpointPersisted = false;
+  let graphCalls = 0;
+  const startedCheckpoint = new Promise<void>((resolve) => {
+    releaseStartedCheckpoint = () => {
+      startedCheckpointPersisted = true;
+      resolve();
+    };
+  });
+
+  const runPromise = runEvaluationSuite({
+    project,
+    evaluationData: data(suite()),
+    dataset: dataset(),
+    suiteId: 'suite',
+    runGraph: async () => {
+      graphCalls += 1;
+      assert.equal(startedCheckpointPersisted, true);
+      return { outputs: { result: 'ok' }, metrics: { durationMs: 1 } };
+    },
+    onEvent: (event) => (event.type === 'run-started' ? startedCheckpoint : undefined),
+  });
+
+  await Promise.resolve();
+  assert.equal(graphCalls, 0);
+  releaseStartedCheckpoint();
+  await runPromise;
+  assert.equal(graphCalls, 1);
 });
 
 test('an execution benchmark ignores missing required reference fields but still requires bound inputs', async () => {
@@ -1309,7 +1394,12 @@ test('scoring suites average trials per case before averaging equally across cas
       // pass/fail contract.
       return {
         outputs: { result: { score: scores[run.caseIndex]![run.trialIndex], passed: 'ignored' } },
-        metrics: { durationMs: 1 },
+        metrics: {
+          durationMs: [
+            [10, 20],
+            [30, 40],
+          ][run.caseIndex]![run.trialIndex]!,
+        },
       };
     },
   });
@@ -1319,9 +1409,23 @@ test('scoring suites average trials per case before averaging equally across cas
   assert.equal(result.aggregate?.scoredTrialCount, 4);
   assert.equal(result.aggregate?.missingScoreTrialCount, 0);
   assert.ok(Math.abs((result.aggregate?.meanScore ?? 0) - 0.75) < 1e-12);
+  assert.ok(Math.abs((result.aggregate?.medianScore ?? 0) - 0.75) < 1e-12);
+  assert.ok(Math.abs((result.aggregate?.p95Score ?? 0) - 0.85) < 1e-12);
+  assert.equal(result.aggregate?.averageLatencyMs, 26);
+  assert.equal(result.aggregate?.medianLatencyMs, 26);
+  assert.equal(result.aggregate?.p95LatencyMs, 41);
   assert.ok(Math.abs((summary.cases[0]?.meanScore ?? 0) - 0.85) < 1e-12);
   assert.ok(Math.abs((summary.cases[1]?.meanScore ?? 0) - 0.65) < 1e-12);
   assert.equal(result.thresholdResults.length, 0);
+
+  const historicalRun = structuredClone(result);
+  delete historicalRun.aggregate?.medianScore;
+  delete historicalRun.aggregate?.p95Score;
+  delete historicalRun.aggregate?.medianLatencyMs;
+  const historicalSummary = summarizeEvaluationRun(historicalRun)!;
+  assert.ok(Math.abs((historicalSummary.aggregate.medianScore ?? 0) - 0.75) < 1e-12);
+  assert.ok(Math.abs((historicalSummary.aggregate.p95Score ?? 0) - 0.85) < 1e-12);
+  assert.equal(historicalSummary.aggregate.medianLatencyMs, 26);
 });
 
 test('scoring suites retain partial averages but report incomplete score coverage', async () => {
@@ -2091,6 +2195,7 @@ test('publishes the running shell before the first target graph starts', async (
       assert.equal(published, true);
       assert.equal(updates[0]?.executionStatus, 'running');
       assert.deepEqual(updates[0]?.trials, []);
+      assert.equal(updates[0]?.requestedTrialCount, 1);
       return { outputs: { result: 'ok' }, metrics: { durationMs: 1 } };
     },
   });

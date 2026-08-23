@@ -4,13 +4,13 @@ The **Evaluations** workspace brings reusable datasets, target-graph bindings, q
 
 ## Where Evaluations are stored
 
-Rivet saves evaluation suites, datasets, and compact baselines in an application-local library, like application settings. They are not saved in `.rivet-project` or `.rivet-data` files, and they remain visible when projects close or change.
+Rivet saves evaluation suites, datasets, compact baselines, run history, historical dataset snapshots, and retained recordings in one application-local Evaluations database. They are not saved in `.rivet-project` or `.rivet-data` files, and they remain visible when projects close or change. Desktop Rivet stores this database in its native app-data directory. Browser Rivet stores it in that browser profile. These are separate Rivet instances, so opening the same project in desktop and browser does not synchronize their Evaluations data.
 
 Copying or sharing a project file does not copy this local library. Use the resource export actions when you want a backup, source-controlled artifact, CLI input, or a suite that can be imported into another Rivet installation.
 
-An open project supplies the graphs and execution context for a suite. Without a project you can still inspect, edit, import, export, or delete local resources, but graph references are unresolved and running is disabled. Run history, historical dataset snapshots, and recordings remain scoped to the project that produced them.
+An open project supplies the graphs and execution context for a suite. Without a project you can still inspect, edit, import, export, or delete local resources, but graph references are unresolved and running is disabled. Run history, historical dataset snapshots, and recordings remain scoped to the project that produced them inside that instance database.
 
-Older project-attached Evaluations data is imported into the local library once when that project opens. Later project saves do not write the migrated resources back into the project or sidecar file.
+Older project-attached Evaluations data is imported into the local database once when that project opens. On the first upgraded desktop launch, Rivet also moves Evaluations data previously stored by its embedded browser into the native database; if that migration cannot be verified, Rivet keeps using the old browser store for the whole session instead of splitting data. Later project saves do not write migrated resources back into the project or sidecar file.
 
 ## Suites and datasets
 

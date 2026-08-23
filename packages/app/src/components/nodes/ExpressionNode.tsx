@@ -18,10 +18,11 @@ import { getSortedRenderableSplitOutputEntries } from '../nodeOutput/splitOutput
 const ExpressionNodeOutputBody: FC<{
   node: ExpressionNode;
   data: NodeRunDataWithRefs;
+  renderMarkdown?: boolean;
   renderMode: OutputRenderMode;
   allowLargeStoredValueActions?: boolean;
   wrapLines?: boolean;
-}> = ({ node, data, renderMode, allowLargeStoredValueActions, wrapLines }) => {
+}> = ({ node, data, renderMarkdown, renderMode, allowLargeStoredValueActions, wrapLines }) => {
   const errorMessage = data.status?.type === 'error' ? data.status.error : undefined;
   const hasError = data.status?.type === 'error';
   const dataRefs = useDataRefs();
@@ -51,6 +52,7 @@ const ExpressionNodeOutputBody: FC<{
       <RenderDataValue
         value={outputValue}
         isCompact={isCompactPreview}
+        renderMarkdown={renderMarkdown}
         mode={renderMode}
         allowLargeStoredValueActions={allowLargeStoredValueActions}
         wrapLines={wrapLines}
@@ -101,19 +103,21 @@ const ExpressionNodeOutputBody: FC<{
 };
 
 export const expressionNodeDescriptor: NodeComponentDescriptor<'expression'> = {
-  Output: ({ node, data, renderMode = 'compact', allowLargeStoredValueActions, wrapLines }) => (
+  Output: ({ node, data, renderMarkdown, renderMode = 'compact', allowLargeStoredValueActions, wrapLines }) => (
     <ExpressionNodeOutputBody
       node={node}
       data={data}
+      renderMarkdown={renderMarkdown}
       renderMode={renderMode}
       allowLargeStoredValueActions={allowLargeStoredValueActions}
       wrapLines={wrapLines}
     />
   ),
-  FullscreenOutput: ({ node, data, renderMode = 'expanded-preview', allowLargeStoredValueActions, wrapLines }) => (
+  FullscreenOutput: ({ node, data, renderMarkdown, renderMode = 'expanded-preview', allowLargeStoredValueActions, wrapLines }) => (
     <ExpressionNodeOutputBody
       node={node}
       data={data}
+      renderMarkdown={renderMarkdown}
       renderMode={renderMode}
       allowLargeStoredValueActions={allowLargeStoredValueActions}
       wrapLines={wrapLines}

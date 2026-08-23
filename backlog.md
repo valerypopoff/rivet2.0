@@ -1,3 +1,10 @@
+# Evaluations
+
+- On the dataset page, Ctrl/Cmd+click on any case's "enable" switcher should toggle all the cases enabled/disabled
+
+
+# Other
+
 - Montecarlo system to emulate using endpoints? To see how many tokens will be spent?
 
 

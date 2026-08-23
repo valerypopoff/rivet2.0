@@ -689,7 +689,10 @@ workspace. Keep that descriptor pinned until `rtlcss` or its owning Docusaurus
 dependency refreshes the transitive lock entry; do not replace that fix with an
 audit exception. The `nanoid@npm:^3.3.16` resolution keeps PostCSS's CommonJS
 dependency on the supported NanoID 3.3.18 security patch, while the workspace's
-direct NanoID dependencies use the same release. Likewise, keep the direct
+direct NanoID dependencies use the same release. The `tar@npm:^7.5.4`
+resolution keeps fsevents' optional `node-gyp` build helper on tar 7.5.22,
+which fixes the audited `filesFilter` recursion denial of service without
+changing node-gyp's supported major range. Likewise, keep the direct
 `brace-expansion` resolutions for the `^1.1.7`, `^2.0.2`, `^5.0.5`, and
 `^5.0.8` descriptors on their reviewed fixed releases. Keep the matching
 `fast-uri` and `ip-address` resolutions current as well: they patch the Ajv and
@@ -1022,7 +1025,7 @@ The workflow:
 7. runs `yarn build:npm-public`, which builds `@valerypopoff/rivet2-core`, `@valerypopoff/rivet2-node`, `@valerypopoff/rivet2-evaluations`, and `@valerypopoff/rivet2-cli`
 8. verifies that dependency install and package build touched only generated artifacts
 9. uses Node `22.21.1` and npm `11.5.1` for npm trusted-publishing compatibility
-10. runs `node scripts/publish-npm-packages.mjs --skip-clean-check`, using `NPM_TOKEN` when present or npm trusted publishing when configured
+10. runs `node scripts/publish-npm-packages.mjs --skip-clean-check` through npm trusted publishing with the GitHub Actions OIDC identity
 
 The publish step intentionally skips the script's clean-tree check because this
 job installs dependencies and builds ignored publish artifacts immediately
@@ -1051,31 +1054,56 @@ npm before publishing each package and skips package versions that are already
 present in the registry, so re-running the same main-branch workflow does not
 turn an already-published package into a hard failure.
 
-### npm authentication
+### npm trusted publishing
 
-The main-branch npm workflow supports either a repository `NPM_TOKEN` secret or
-npm trusted publishing. For token publishing, add a granular token under GitHub
-repository Settings -> Secrets and variables -> Actions with read/write package
-access for the `@valerypopoff` scope and **Bypass 2FA** enabled, unless a package
-explicitly disallows token-based publishing. For trusted publishing, configure
-npm's trusted-publisher settings for this repository and workflow; the workflow
-already grants `id-token: write` and sets npm provenance.
+Main-branch npm publishing uses tokenless npm trusted publishing. The workflow
+has `id-token: write`, uses npm `11.5.1`, and sets `NPM_CONFIG_PROVENANCE=true`;
+it intentionally does **not** receive `NPM_TOKEN` or `NODE_AUTH_TOKEN` from
+GitHub Actions. Do not add an npm token secret as a routine fallback.
 
-The workflow deliberately does not call `npm whoami` before publishing.
-`whoami` is an account-identity operation that npm rejects for bypass-2FA
-granular tokens even when the same token can publish. Authentication is checked
-by the actual `npm publish` command: it uses the configured token when present,
-or the GitHub OIDC identity for trusted publishing.
+Configure the following four existing npm packages independently through npmjs.com
+**Package settings -> Trusted publishing**:
 
-For local publishes, `scripts/publish-npm-packages.mjs` reads repo-root `.env`
-before it stages packages. A local `NPM_TOKEN=...` entry is mapped to
-`NODE_AUTH_TOKEN` and written only to a temporary npm user config inside the
-staging directory while `npm view` / `npm publish` run. The temporary `.npmrc` is
-removed before the script exits, including when `--keep-stage` leaves staged
-packages available for inspection. The repo-root `.env` file is ignored by Git
-and must not be committed. GitHub Actions does not receive local `.env` values;
-CI publishing needs either `NPM_TOKEN` or trusted publishing configured for each
-published package.
+- `@valerypopoff/rivet2-core`
+- `@valerypopoff/rivet2-node`
+- `@valerypopoff/rivet2-evaluations`
+- `@valerypopoff/rivet2-cli`
+
+Every package configuration must allow the GitHub Actions publisher with these
+exact values:
+
+- organization or user: `valerypopoff`
+- repository: `rivet2.0`
+- workflow filename: `publish-npm-packages.yml`
+- allowed action: `npm publish`
+- environment: unset (the workflow does not use a GitHub environment)
+
+The package `repository.url` must remain
+`https://github.com/valerypopoff/rivet2.0`, and the workflow must remain on a
+GitHub-hosted runner. npm validates the configuration only when `npm publish`
+runs, so a package-level mismatch appears as a publish failure rather than when
+the setting is saved. The workflow deliberately does not call `npm whoami`:
+OIDC authentication occurs only for publish operations, and `whoami` cannot
+validate it.
+
+#### First publish of a new package
+
+npm only permits trusted-publisher configuration after a package exists. To
+introduce a new public package, use a short-lived granular token with scoped
+write permission and Bypass 2FA for exactly its first release. Set it only in a
+local ignored `.env` or temporarily in the CI secret, publish through
+`scripts/publish-npm-packages.mjs`, configure the package's trusted publisher
+immediately after it exists, then revoke the token and remove any temporary CI
+secret. Do not create a dummy version solely to create the trusted-publisher
+setting; bootstrap with the first real lockstep release.
+
+For exceptional local publishing, `scripts/publish-npm-packages.mjs` reads a
+repo-root `.env` before it stages packages. A local `NPM_TOKEN=...` entry is
+mapped to `NODE_AUTH_TOKEN` and written only to a temporary npm user config
+inside the staging directory while `npm view` / `npm publish` run. The temporary
+`.npmrc` is removed before the script exits, including when `--keep-stage`
+leaves staged packages available for inspection. The repo-root `.env` is ignored
+by Git and must not be committed.
 
 ### Package staging
 

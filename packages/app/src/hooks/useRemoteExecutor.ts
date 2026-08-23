@@ -24,12 +24,9 @@ import { fillMissingSettingsFromEnvironmentVariables } from '../utils/tauri';
 import { loadedProjectState, projectContextState, projectDataState, projectState } from '../state/savedGraphs';
 import { useStableCallback } from './useStableCallback';
 import { toast, type Id as ToastId } from 'react-toastify';
-import { evaluationsState } from '../state/evaluations';
+import { applyEvaluationRunEvent, applyEvaluationRunSnapshot, evaluationsState } from '../state/evaluations';
 import {
   EvaluationGraphExecutionError,
-  fingerprintEvaluationDataset,
-  finalizeEvaluationRecordingRetention,
-  runEvaluationSuite,
   type EvaluationExecutionMetrics,
   type EvaluationRecordingReference,
   type EvaluationRunPurpose,
@@ -80,11 +77,8 @@ import {
 } from './remoteDebuggerDiagnostics.js';
 import type { EditorGraphRunOptions } from './editorGraphRunOptions.js';
 import { waitForExecutorSessionRunCapability } from './executorSessionRunReadiness.js';
-import {
-  formatEvaluationCompletionToast,
-  formatEvaluationRunHistoryPersistenceWarning,
-} from '../utils/evaluationRunSummary.js';
-import { evaluationRecordingRetentionUpdates } from '../utils/evaluationRecordingRetentionUpdates.js';
+import { formatEvaluationCompletionToast } from '../utils/evaluationRunSummary.js';
+import { executeEvaluationRunLifecycle } from '../utils/evaluationExecutionLifecycle.js';
 import {
   captureRemoteResponseTraceRootExecution,
   collectRemoteAgentTraceEvent,
@@ -753,10 +747,11 @@ export function useRemoteExecutor() {
       if (!evaluationGraph) {
         throw new Error(`Evaluation target graph "${suite.targetGraphId}" no longer exists.`);
       }
-      const projectForEvaluation = withDerivedProjectPluginSpecs(
-        evaluationBaseProject,
-        { appPluginStates: pluginStates, currentGraph: evaluationGraph, registry: projectNodeRegistry },
-      );
+      const projectForEvaluation = withDerivedProjectPluginSpecs(evaluationBaseProject, {
+        appPluginStates: pluginStates,
+        currentGraph: evaluationGraph,
+        registry: projectNodeRegistry,
+      });
       const evaluationProjectId = projectForEvaluation.metadata.id;
       if (!evaluationProjectId)
         throw new Error('The loaded project is missing its project ID, so the evaluation cannot be stored.');
@@ -784,69 +779,70 @@ export function useRemoteExecutor() {
       };
       let runningToastId: ToastId | undefined;
       try {
-        let datasetSnapshotWarning: string | undefined;
-        try {
-          await evaluationRunStore.putDatasetSnapshot({
-            projectId: evaluationProjectId,
-            fingerprint: fingerprintEvaluationDataset(dataset),
-            dataset: structuredClone({ ...dataset, projectId: evaluationProjectId }),
-            createdAt: new Date().toISOString(),
-          });
-          ensureActiveEvaluationProject();
-        } catch (error) {
-          if (evaluationAbortController.signal.aborted) throw evaluationAbortController.signal.reason;
-          datasetSnapshotWarning =
-            'The exact evaluation dataset snapshot could not be retained; later replay may not have the original cases.';
-          logRuntimeDebug('Remote evaluation dataset snapshot was not retained.', {
-            error,
-            suiteId,
-            projectId: evaluationProjectId,
-          });
-        }
-
-        const sessionState = executorSession.getRuntimeState();
-        if (!sessionState.capabilities.canSendRun) {
-          throw new Error(
-            `Remote executor cannot accept an evaluation run right now (status: ${sessionState.status}, target: ${sessionState.target?.type ?? 'none'}).`,
-          );
-        }
-        if (sessionState.capabilities.canUploadProject) {
-          const settings = await fillMissingSettingsFromEnvironmentVariables(
-            savedSettings,
-            projectNodeRegistry.getPlugins(),
-            {
-              environmentProvider,
-              extraEnvVarNames: getLLMChatV2ApiKeyEnvVarNames(projectForEvaluation),
-            },
-          );
-          ensureActiveEvaluationProject();
-          uploadRemoteExecutorProjectIfNeeded({
-            cache: uploadCacheRef.current,
-            project: projectForEvaluation,
-            sessionKey: getRemoteExecutorUploadSessionKey(sessionState),
-            settings,
-            transport: {
-              sendDynamicData: (payload) => remoteDebugger.send('set-dynamic-data', payload),
-              sendStaticData: (id, dataValue) => remoteDebugger.sendRaw(`set-static-data:${id}:${dataValue}`),
-            },
-          });
-        }
-
         ensureActiveEvaluationProject();
         const runKind = purpose === 'evaluation' ? 'evaluation' : 'execution benchmark';
         runningToastId = toast.info(`Running ${runKind}: ${suite.name}`);
         currentExecution.onEvaluationStart();
         updateActiveProjectEvaluationState((state) => ({ ...state, runningSuiteId: suiteId, currentRun: undefined }));
-        const result = await runEvaluationSuite({
+        let recordingPersistenceFailureCount = 0;
+        const finalizedRun = await executeEvaluationRunLifecycle({
           project: projectForEvaluation,
+          projectId: evaluationProjectId,
           evaluationData: evaluations.data,
           dataset,
-          suiteId,
+          suite,
           purpose,
           executionMode: 'remote',
           signal: evaluationAbortController.signal,
-          onUpdate: (run) => {
-            updateActiveProjectEvaluationState((state) => ({ ...state, currentRun: run }));
+          runStore: evaluationRunStore,
+          assertActive: ensureActiveEvaluationProject,
+          prepare: async () => {
+            const sessionState = executorSession.getRuntimeState();
+            if (!sessionState.capabilities.canSendRun) {
+              throw new Error(
+                `Remote executor cannot accept an evaluation run right now (status: ${sessionState.status}, target: ${sessionState.target?.type ?? 'none'}).`,
+              );
+            }
+            if (!sessionState.capabilities.canUploadProject) return;
+
+            const settings = await fillMissingSettingsFromEnvironmentVariables(
+              savedSettings,
+              projectNodeRegistry.getPlugins(),
+              {
+                environmentProvider,
+                extraEnvVarNames: getLLMChatV2ApiKeyEnvVarNames(projectForEvaluation),
+              },
+            );
+            ensureActiveEvaluationProject();
+            uploadRemoteExecutorProjectIfNeeded({
+              cache: uploadCacheRef.current,
+              project: projectForEvaluation,
+              sessionKey: getRemoteExecutorUploadSessionKey(sessionState),
+              settings,
+              transport: {
+                sendDynamicData: (payload) => remoteDebugger.send('set-dynamic-data', payload),
+                sendStaticData: (id, dataValue) => remoteDebugger.sendRaw(`set-static-data:${id}:${dataValue}`),
+              },
+            });
+          },
+          getExistingRun: (runId) => {
+            const state = store.get(evaluationsState);
+            return state.currentRun?.id === runId
+              ? state.currentRun
+              : state.runs.find((candidate) => candidate.id === runId);
+          },
+          getRecordingPersistenceFailureCount: () => recordingPersistenceFailureCount,
+          onStorageFault: (kind, error) => {
+            logRuntimeDebug(`Remote evaluation ${kind} persistence failed.`, {
+              error,
+              suiteId,
+              projectId: evaluationProjectId,
+            });
+          },
+          onEvent: (event) => {
+            // Keep the selected run continuous across the terminal snapshot
+            // and the asynchronous recording/history persistence that follows.
+            updateActiveProjectEvaluationState((state) => applyEvaluationRunEvent(state, event));
           },
           runGraph: async ({ graphId, inputs, project: evaluationProject, signal, metadata }) => {
             const startedAt = Date.now();
@@ -870,6 +866,7 @@ export function useRemoteExecutor() {
                 });
                 return recording;
               } catch (error) {
+                recordingPersistenceFailureCount += 1;
                 logRuntimeDebug('Remote evaluation recording was not retained.', {
                   error,
                   graphId,
@@ -932,46 +929,14 @@ export function useRemoteExecutor() {
             }
           },
         });
-        const finalizedResult = finalizeEvaluationRecordingRetention(
-          result,
-          suite.configuration?.recordingRetention ?? 'failures-and-baselines',
-        );
-        if (datasetSnapshotWarning) finalizedResult.warnings.push(datasetSnapshotWarning);
-        try {
-          await Promise.all(
-            evaluationRecordingRetentionUpdates(evaluationProjectId, finalizedResult.trials).map((update) =>
-              evaluationRunStore.updateRecordingRetention(update),
-            ),
-          );
-        } catch (error) {
-          finalizedResult.warnings.push('Some evaluation recording retention updates could not be saved.');
-          logRuntimeDebug('Remote evaluation recording retention was not persisted.', {
-            error,
-            suiteId,
-            projectId: evaluationProjectId,
-          });
-        }
-        try {
-          await evaluationRunStore.put(finalizedResult);
-        } catch (error) {
-          finalizedResult.warnings.push(formatEvaluationRunHistoryPersistenceWarning(error));
-          logRuntimeDebug('Completed remote evaluation was not retained.', {
-            error,
-            suiteId,
-            projectId: evaluationProjectId,
-          });
-        }
         updateActiveProjectEvaluationState((state) => ({
-          ...state,
+          ...applyEvaluationRunSnapshot(state, finalizedRun),
           runningSuiteId: undefined,
-          currentRun: finalizedResult,
-          selectedRunId: finalizedResult.id,
-          runs: [finalizedResult, ...state.runs.filter((run) => run.id !== finalizedResult.id)],
         }));
         if (store.get(projectState).metadata.id === evaluationProjectId) {
-          toast.info(formatEvaluationCompletionToast(finalizedResult));
+          toast.info(formatEvaluationCompletionToast(finalizedRun));
         }
-        return finalizedResult;
+        return finalizedRun;
       } catch (error) {
         updateActiveProjectEvaluationState((state) => ({ ...state, runningSuiteId: undefined }));
         if (!evaluationAbortController.signal.aborted && isActiveEvaluationProject()) {

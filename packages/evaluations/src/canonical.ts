@@ -1,4 +1,4 @@
-import type { EvaluationDatasetSnapshot, PortableJson } from './types.js';
+import type { EvaluationDatasetSnapshot, EvaluationRecordingArtifact, PortableJson } from './types.js';
 
 export function assertPortableJson(
   value: unknown,
@@ -105,10 +105,53 @@ export function fingerprintEvaluationDataset(value: { id: unknown; fields: unkno
  * accepting a snapshot that can no longer prove which cases were run.
  */
 export function assertEvaluationDatasetSnapshot(snapshot: EvaluationDatasetSnapshot): void {
-  if (snapshot.dataset.projectId !== undefined && snapshot.dataset.projectId !== snapshot.projectId) {
+  if (
+    typeof snapshot.projectId !== 'string' ||
+    snapshot.projectId.length === 0 ||
+    typeof snapshot.fingerprint !== 'string' ||
+    snapshot.fingerprint.length === 0 ||
+    typeof snapshot.createdAt !== 'string' ||
+    !Number.isFinite(Date.parse(snapshot.createdAt))
+  ) {
+    throw new Error('An evaluation dataset snapshot has invalid identity or creation time.');
+  }
+  if (snapshot.dataset.projectId !== snapshot.projectId) {
     throw new Error('An evaluation dataset snapshot must belong to its project.');
   }
   if (fingerprintEvaluationDataset(snapshot.dataset) !== snapshot.fingerprint) {
     throw new Error('An evaluation dataset snapshot fingerprint must match its dataset ID, fields, and cases.');
+  }
+}
+
+/** Rejects malformed replay evidence at both write and durable-read boundaries. */
+export function assertEvaluationRecordingArtifact(value: unknown): asserts value is EvaluationRecordingArtifact {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    throw new Error('An evaluation recording artifact must be an object.');
+  }
+  const artifact = value as Partial<EvaluationRecordingArtifact>;
+  if (
+    typeof artifact.projectId !== 'string' ||
+    artifact.projectId.length === 0 ||
+    typeof artifact.runId !== 'string' ||
+    artifact.runId.length === 0 ||
+    typeof artifact.trialId !== 'string' ||
+    artifact.trialId.length === 0 ||
+    typeof artifact.serialized !== 'string' ||
+    typeof artifact.createdAt !== 'string' ||
+    !Number.isFinite(Date.parse(artifact.createdAt))
+  ) {
+    throw new Error('An evaluation recording artifact has invalid identity, payload, or creation time.');
+  }
+  const reference = artifact.reference;
+  if (
+    typeof reference !== 'object' ||
+    reference === null ||
+    typeof reference.id !== 'string' ||
+    reference.id.length === 0 ||
+    !['temporary', 'failure', 'baseline', 'retained'].includes(reference.retention ?? '') ||
+    (reference.expiresAt !== undefined &&
+      (typeof reference.expiresAt !== 'string' || !Number.isFinite(Date.parse(reference.expiresAt))))
+  ) {
+    throw new Error('An evaluation recording artifact has an invalid retention reference.');
   }
 }
