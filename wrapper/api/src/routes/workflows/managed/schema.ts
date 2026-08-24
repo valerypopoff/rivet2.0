@@ -346,9 +346,23 @@ CREATE INDEX IF NOT EXISTS llm_profile_health_project_id_idx
 CREATE INDEX IF NOT EXISTS llm_profile_health_updated_at_idx
   ON llm_profile_health(updated_at DESC);
 
--- Evaluation definitions stay in project revisions; complete run summaries are
--- durable operational data. Project deletion cascades these rows alongside
--- existing recordings and never leaks historical results into project YAML.
+-- Rivet owns one reusable Evaluations library per server instance. Revisioned
+-- replacement prevents concurrent browser sessions from silently losing suite,
+-- dataset, baseline, or legacy-migration changes.
+CREATE TABLE IF NOT EXISTS evaluation_library (
+  singleton_key BOOLEAN PRIMARY KEY DEFAULT TRUE CHECK (singleton_key),
+  revision BIGINT NOT NULL,
+  library_json JSONB NOT NULL,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS evaluation_library_imports (
+  source_fingerprint TEXT PRIMARY KEY,
+  imported_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- Complete run summaries are project-scoped durable operational data. Project
+-- deletion cascades them alongside recordings and historical dataset snapshots.
 CREATE TABLE IF NOT EXISTS evaluation_runs (
   project_id TEXT NOT NULL REFERENCES workflows(workflow_id) ON DELETE CASCADE,
   run_id TEXT NOT NULL,

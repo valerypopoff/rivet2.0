@@ -1,6 +1,10 @@
 import type { ProjectId } from '@valerypopoff/rivet2-core';
-import { normalizeEvaluationRun } from '@valerypopoff/rivet2-evaluations';
+import {
+  normalizeEvaluationLibrary,
+  normalizeEvaluationRun,
+} from '@valerypopoff/rivet2-evaluations';
 import type { ProviderOverrides } from '../../../rivet/packages/app/src/host';
+import { LocalEvaluationRunStore } from '../../../rivet/packages/app/src/providers/EvaluationRunStore';
 import { HostedDatasetProvider } from '../io/HostedDatasetProvider';
 import { HostedIOProvider } from '../io/HostedIOProvider';
 import {
@@ -12,7 +16,7 @@ import {
   createHttpLLMProfileHealthAdminProvider,
   createHttpRivetLLMProfileHealthStore,
 } from '../../shared/llmProfileHealthHttpStore';
-import { createHttpEvaluationRunStore } from '../../shared/evaluationRunHttpStore';
+import { createHttpEvaluationStore } from '../../shared/evaluationRunHttpStore';
 
 const hostedDatasetProvider = new HostedDatasetProvider();
 const hostedLLMProfileHealthStore = createHttpRivetLLMProfileHealthStore({
@@ -21,9 +25,13 @@ const hostedLLMProfileHealthStore = createHttpRivetLLMProfileHealthStore({
 export const hostedLLMProfileHealthAdmin = createHttpLLMProfileHealthAdminProvider({
   baseUrl: `${RIVET_API_BASE_URL}/workflows/llm-profile-health`,
 });
-const hostedEvaluationRunStore = createHttpEvaluationRunStore({
+const hostedEvaluationStore = createHttpEvaluationStore({
   baseUrl: `${RIVET_API_BASE_URL}/workflows/evaluation-runs`,
   normalizeRun: normalizeEvaluationRun,
+  normalizeLibrary: normalizeEvaluationLibrary,
+  // Versions before the full hosted store kept suite/dataset definitions in
+  // this browser database. The HTTP store imports that library idempotently.
+  legacyLibrarySource: new LocalEvaluationRunStore(),
 });
 
 export function clearHostedDatasetsForProject(projectId: ProjectId): Promise<void> {
@@ -31,10 +39,10 @@ export function clearHostedDatasetsForProject(projectId: ProjectId): Promise<voi
 }
 
 export const hostedRivetProviders = {
-  io: new HostedIOProvider(hostedDatasetProvider),
+  io: new HostedIOProvider(hostedDatasetProvider, hostedEvaluationStore),
   datasets: hostedDatasetProvider,
   environment: getDefaultEnvironmentProvider(),
   pathPolicy: getDefaultPathPolicyProvider(),
   llmProfileHealthStore: hostedLLMProfileHealthStore,
-  evaluationRunStore: hostedEvaluationRunStore,
+  evaluationStore: hostedEvaluationStore,
 } satisfies ProviderOverrides;

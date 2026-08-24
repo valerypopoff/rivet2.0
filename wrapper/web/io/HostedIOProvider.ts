@@ -8,16 +8,16 @@ import {
   ExecutionRecorder,
   deserializeDatasets,
   deserializeGraph,
+  serializeDatasets,
   serializeGraph,
   serializeProject,
 } from '@valerypopoff/rivet2-core';
-import { type IOProvider } from '../../../rivet/packages/app/src/io/IOProvider.js';
 import {
-  createEmptyEvaluationProjectData,
-  deserializeEvaluationProjectData,
-  serializeEvaluationProjectData,
-} from '@valerypopoff/rivet2-evaluations';
-import type { EvaluationProjectFileData } from '../../../rivet/packages/app/src/io/IOProvider.js';
+  deserializeLegacyEvaluationProjectData,
+  type EvaluationProjectFileData,
+  type IOProvider,
+} from '../../../rivet/packages/app/src/io/IOProvider.js';
+import type { EvaluationStore } from '@valerypopoff/rivet2-evaluations';
 import { getDefaultStore } from 'jotai';
 import { RIVET_API_BASE_URL } from '../../shared/hosted-env';
 import { apiReadBinary, apiReadText } from '../../shared/api';
@@ -28,6 +28,7 @@ import {
 } from '../../shared/workflow-types';
 import { getWorkflowRecordingIdFromVirtualProjectPath } from '../../shared/workflow-recording-types';
 import { loadedProjectState } from '../../../rivet/packages/app/src/state/savedGraphs.js';
+import { evaluationLibraryState } from '../../../rivet/packages/app/src/state/evaluations.js';
 import type { AppDatasetProvider } from '../../../rivet/packages/app/src/host';
 import {
   fetchWorkflowPublishedVersionPreview,
@@ -265,9 +266,7 @@ async function deserializeHostedProjectPayload(
   return {
     project,
     evaluation: {
-      evaluationData: serializedEvaluationData
-        ? deserializeEvaluationProjectData(serializedEvaluationData)
-        : createEmptyEvaluationProjectData(),
+      evaluationData: deserializeLegacyEvaluationProjectData(serializedEvaluationData),
       evaluationDatasets: [],
     },
   };
@@ -275,9 +274,15 @@ async function deserializeHostedProjectPayload(
 
 export class HostedIOProvider implements IOProvider {
   readonly #datasetProvider: HostedDatasetProvider;
+  readonly #evaluationStore: EvaluationStore;
 
-  constructor(datasetProvider: HostedDatasetProvider) {
+  constructor(datasetProvider: HostedDatasetProvider, evaluationStore: EvaluationStore) {
     this.#datasetProvider = datasetProvider;
+    this.#evaluationStore = evaluationStore;
+  }
+
+  async #flushEvaluationLibrary(): Promise<void> {
+    await this.#evaluationStore.putLibrary(structuredClone(jotaiStore.get(evaluationLibraryState)));
   }
 
   static isSupported(): boolean {
@@ -311,28 +316,19 @@ export class HostedIOProvider implements IOProvider {
     URL.revokeObjectURL(url);
   }
 
-  async saveProjectData(project: Project, evaluation: EvaluationProjectFileData): Promise<string | undefined> {
+  async saveProjectData(project: Project): Promise<string | undefined> {
     assertProjectIsWritable(project, getCurrentLoadedProjectPath());
 
-    // Show a simple prompt for server path
     const defaultName = `${project.metadata?.title ?? 'project'}.rivet-project`;
     const filePath = prompt('Save project to server path:', await getSuggestedProjectPath(defaultName));
-
     if (!filePath) return undefined;
 
-    const data = serializeProject(project, {
-      evaluations: serializeEvaluationProjectData(evaluation.evaluationData),
-    }) as string;
+    await this.#flushEvaluationLibrary();
     const datasets = await this.#datasetProvider.exportDatasetsForProject(project.metadata.id);
-    const serializedDatasets = JSON.parse(serializeDatasets(datasets)) as { datasets: unknown };
-    const datasetsContents = JSON.stringify({
-      ...serializedDatasets,
-      evaluationDatasets: evaluation.evaluationDatasets,
-    });
     const saved = await apiSaveProject({
       path: filePath,
-      contents: data,
-      datasetsContents: datasets.length > 0 || evaluation.evaluationDatasets.length > 0 ? datasetsContents : null,
+      contents: serializeProject(project) as string,
+      datasetsContents: datasets.length > 0 ? serializeDatasets(datasets) : null,
       expectedRevisionId: projectRevisionIdByPath.get(filePath) ?? null,
     });
 
@@ -341,26 +337,19 @@ export class HostedIOProvider implements IOProvider {
     return saved.path;
   }
 
-  async saveProjectDataNoPrompt(project: Project, evaluation: EvaluationProjectFileData, path: string): Promise<void> {
+  async saveProjectDataNoPrompt(project: Project, path: string): Promise<void> {
     assertProjectIsWritable(project, path);
 
     if (getWorkflowRecordingIdFromVirtualProjectPath(path)) {
       throw new Error('Recording replay projects are read-only. Use Save As to create a new project file.');
     }
 
-    const data = serializeProject(project, {
-      evaluations: serializeEvaluationProjectData(evaluation.evaluationData),
-    }) as string;
+    await this.#flushEvaluationLibrary();
     const datasets = await this.#datasetProvider.exportDatasetsForProject(project.metadata.id);
-    const serializedDatasets = JSON.parse(serializeDatasets(datasets)) as { datasets: unknown };
-    const datasetsContents = JSON.stringify({
-      ...serializedDatasets,
-      evaluationDatasets: evaluation.evaluationDatasets,
-    });
     const saved = await apiSaveProject({
       path,
-      contents: data,
-      datasetsContents: datasets.length > 0 || evaluation.evaluationDatasets.length > 0 ? datasetsContents : null,
+      contents: serializeProject(project) as string,
+      datasetsContents: datasets.length > 0 ? serializeDatasets(datasets) : null,
       expectedRevisionId: projectRevisionIdByPath.get(path) ?? null,
     });
 

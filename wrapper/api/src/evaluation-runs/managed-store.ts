@@ -2,18 +2,32 @@ import type { Pool, PoolClient } from "pg";
 import type { ProjectId } from "@valerypopoff/rivet2-node";
 import {
   assertEvaluationDatasetSnapshot,
+  assertEvaluationRecordingArtifact,
+  createEmptyEvaluationLibrary,
+  normalizeEvaluationLibrary,
   normalizeEvaluationRun,
   reconcileEvaluationRunSnapshots,
   type EvaluationDatasetSnapshot,
+  type EvaluationLibrary,
   type EvaluationRecordingArtifact,
   type EvaluationRun,
+  type EvaluationRunEvent,
 } from "@valerypopoff/rivet2-evaluations";
 
-import type { RivetStudioEvaluationRunStore } from "./store.js";
+import {
+  EvaluationLibraryConflictError,
+  mergeEvaluationLibraries,
+  type EvaluationLibrarySnapshot,
+  type RivetStudioEvaluationStore,
+} from "./store.js";
 
 type Row = { run_json: EvaluationRun | string };
 type RecordingRow = { artifact_json: EvaluationRecordingArtifact | string };
 type DatasetSnapshotRow = { snapshot_json: EvaluationDatasetSnapshot | string };
+type LibraryRow = {
+  revision: number;
+  library_json: EvaluationLibrary | string;
+};
 
 function parseRun(row: Row | undefined): EvaluationRun | undefined {
   if (!row) return undefined;
@@ -26,18 +40,24 @@ function parseRecording(
   row: RecordingRow | undefined,
 ): EvaluationRecordingArtifact | undefined {
   if (!row) return undefined;
-  return typeof row.artifact_json === "string"
-    ? (JSON.parse(row.artifact_json) as EvaluationRecordingArtifact)
-    : row.artifact_json;
+  const artifact =
+    typeof row.artifact_json === "string"
+      ? (JSON.parse(row.artifact_json) as EvaluationRecordingArtifact)
+      : row.artifact_json;
+  assertEvaluationRecordingArtifact(artifact);
+  return artifact;
 }
 
 function parseDatasetSnapshot(
   row: DatasetSnapshotRow | undefined,
 ): EvaluationDatasetSnapshot | undefined {
   if (!row) return undefined;
-  return typeof row.snapshot_json === "string"
-    ? (JSON.parse(row.snapshot_json) as EvaluationDatasetSnapshot)
-    : row.snapshot_json;
+  const snapshot =
+    typeof row.snapshot_json === "string"
+      ? (JSON.parse(row.snapshot_json) as EvaluationDatasetSnapshot)
+      : row.snapshot_json;
+  assertEvaluationDatasetSnapshot(snapshot);
+  return snapshot;
 }
 
 function isExpired(artifact: EvaluationRecordingArtifact): boolean {
@@ -49,13 +69,142 @@ function isExpired(artifact: EvaluationRecordingArtifact): boolean {
 }
 
 /** PostgreSQL implementation shared by every Studio Server execution pod. */
-export class PostgresRivetEvaluationRunStore
-  implements RivetStudioEvaluationRunStore
+export class PostgresRivetEvaluationStore
+  implements RivetStudioEvaluationStore
 {
   readonly #pool: Pool;
+  #observedLibraryRevision: number | undefined;
 
   constructor(pool: Pool) {
     this.#pool = pool;
+  }
+
+  async #withLibraryLock<T>(
+    operation: (client: PoolClient) => Promise<T>,
+  ): Promise<T> {
+    const client = await this.#pool.connect();
+    try {
+      await client.query("BEGIN");
+      await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [
+        "rivet-evaluation-library",
+      ]);
+      const result = await operation(client);
+      await client.query("COMMIT");
+      return result;
+    } catch (error) {
+      await client.query("ROLLBACK").catch(() => undefined);
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  async #readLibrarySnapshot(
+    queryable: Pick<Pool, "query"> | Pick<PoolClient, "query">,
+  ): Promise<EvaluationLibrarySnapshot> {
+    const result = await queryable.query<LibraryRow>(
+      "SELECT revision, library_json FROM evaluation_library WHERE singleton_key = TRUE",
+    );
+    const row = result.rows[0];
+    if (!row) return { revision: 0, library: createEmptyEvaluationLibrary() };
+    try {
+      return {
+        revision: Number(row.revision),
+        library: normalizeEvaluationLibrary(
+          typeof row.library_json === "string"
+            ? JSON.parse(row.library_json)
+            : row.library_json,
+        ),
+      };
+    } catch (error) {
+      throw new Error("The managed evaluation library is unreadable.", {
+        cause: error,
+      });
+    }
+  }
+
+  async #writeLibrary(
+    client: PoolClient,
+    revision: number,
+    library: EvaluationLibrary,
+  ): Promise<EvaluationLibrarySnapshot> {
+    const normalized = normalizeEvaluationLibrary(library);
+    await client.query(
+      `
+      INSERT INTO evaluation_library (singleton_key, revision, library_json, updated_at)
+      VALUES (TRUE, $1, $2::jsonb, NOW())
+      ON CONFLICT (singleton_key) DO UPDATE SET
+        revision = EXCLUDED.revision,
+        library_json = EXCLUDED.library_json,
+        updated_at = NOW()
+    `,
+      [revision, JSON.stringify(normalized)],
+    );
+    return { revision, library: structuredClone(normalized) };
+  }
+
+  async getLibrarySnapshot(): Promise<EvaluationLibrarySnapshot> {
+    return structuredClone(await this.#readLibrarySnapshot(this.#pool));
+  }
+
+  async getLibrary(): Promise<EvaluationLibrary> {
+    const snapshot = await this.getLibrarySnapshot();
+    this.#observedLibraryRevision = snapshot.revision;
+    return snapshot.library;
+  }
+
+  async replaceLibrary(input: {
+    expectedRevision: number;
+    library: EvaluationLibrary;
+  }): Promise<EvaluationLibrarySnapshot> {
+    const snapshot = await this.#withLibraryLock(async (client) => {
+      const current = await this.#readLibrarySnapshot(client);
+      if (current.revision !== input.expectedRevision) {
+        throw new EvaluationLibraryConflictError();
+      }
+      const normalized = normalizeEvaluationLibrary(input.library);
+      if (JSON.stringify(normalized) === JSON.stringify(current.library)) {
+        return current;
+      }
+      return this.#writeLibrary(client, current.revision + 1, normalized);
+    });
+    this.#observedLibraryRevision = snapshot.revision;
+    return snapshot;
+  }
+
+  async putLibrary(library: EvaluationLibrary): Promise<void> {
+    const expectedRevision =
+      this.#observedLibraryRevision ??
+      (await this.getLibrarySnapshot()).revision;
+    await this.replaceLibrary({ expectedRevision, library });
+  }
+
+  async importLegacyLibrary(input: {
+    sourceFingerprint: string;
+    library: EvaluationLibrary;
+  }): Promise<EvaluationLibrarySnapshot> {
+    const snapshot = await this.#withLibraryLock(async (client) => {
+      const current = await this.#readLibrarySnapshot(client);
+      const imported = await client.query(
+        "SELECT 1 FROM evaluation_library_imports WHERE source_fingerprint = $1",
+        [input.sourceFingerprint],
+      );
+      if (imported.rowCount) return current;
+
+      const merged = mergeEvaluationLibraries(current.library, input.library);
+      const changed =
+        JSON.stringify(merged) !== JSON.stringify(current.library);
+      const next = changed
+        ? await this.#writeLibrary(client, current.revision + 1, merged)
+        : current;
+      await client.query(
+        "INSERT INTO evaluation_library_imports (source_fingerprint, imported_at) VALUES ($1, NOW())",
+        [input.sourceFingerprint],
+      );
+      return next;
+    });
+    this.#observedLibraryRevision = snapshot.revision;
+    return structuredClone(snapshot);
   }
 
   async #withRunLock<T>(
@@ -97,21 +246,38 @@ export class PostgresRivetEvaluationRunStore
 
   async put(run: EvaluationRun): Promise<void> {
     const incoming = normalizeEvaluationRun(run);
-    await this.#withRunLock({ projectId: incoming.projectId, runId: incoming.id }, async (client) => {
-      const current = await client.query<Row>(
-        "SELECT run_json FROM evaluation_runs WHERE project_id = $1 AND run_id = $2 FOR UPDATE",
-        [String(incoming.projectId), incoming.id],
-      );
-      const existing = parseRun(current.rows[0]);
-      const next = reconcileEvaluationRunSnapshots(existing, incoming);
-      if (next === existing) return;
-      if (existing) {
-        await client.query(
-          `
+    await this.#withRunLock(
+      { projectId: incoming.projectId, runId: incoming.id },
+      async (client) => {
+        const current = await client.query<Row>(
+          "SELECT run_json FROM evaluation_runs WHERE project_id = $1 AND run_id = $2 FOR UPDATE",
+          [String(incoming.projectId), incoming.id],
+        );
+        const existing = parseRun(current.rows[0]);
+        const next = reconcileEvaluationRunSnapshots(existing, incoming);
+        if (next === existing) return;
+        if (existing) {
+          await client.query(
+            `
           UPDATE evaluation_runs
           SET suite_id = $3, started_at = $4, run_json = $5::jsonb, updated_at = NOW()
           WHERE project_id = $1 AND run_id = $2
         `,
+            [
+              String(next.projectId),
+              next.id,
+              next.suiteId,
+              next.startedAt,
+              JSON.stringify(next),
+            ],
+          );
+          return;
+        }
+        await client.query(
+          `
+        INSERT INTO evaluation_runs (project_id, run_id, suite_id, started_at, run_json, updated_at)
+        VALUES ($1, $2, $3, $4, $5::jsonb, NOW())
+      `,
           [
             String(next.projectId),
             next.id,
@@ -120,22 +286,8 @@ export class PostgresRivetEvaluationRunStore
             JSON.stringify(next),
           ],
         );
-        return;
-      }
-      await client.query(
-        `
-        INSERT INTO evaluation_runs (project_id, run_id, suite_id, started_at, run_json, updated_at)
-        VALUES ($1, $2, $3, $4, $5::jsonb, NOW())
-      `,
-        [
-          String(next.projectId),
-          next.id,
-          next.suiteId,
-          next.startedAt,
-          JSON.stringify(next),
-        ],
-      );
-    });
+      },
+    );
   }
 
   async updateRunName(input: {
@@ -242,6 +394,7 @@ export class PostgresRivetEvaluationRunStore
   }
 
   async putRecording(artifact: EvaluationRecordingArtifact): Promise<void> {
+    assertEvaluationRecordingArtifact(artifact);
     // Expire temporary artifacts during ordinary writes, rather than relying
     // on a later read of the exact recording id to perform cleanup.
     await this.#deleteExpiredTemporaryRecordings(artifact.projectId);
@@ -366,6 +519,58 @@ export class PostgresRivetEvaluationRunStore
     } finally {
       client.release();
     }
+  }
+
+  async applyRunEvent(event: EvaluationRunEvent): Promise<void> {
+    if (event.type === "run-started" || event.type === "run-finalized") {
+      await this.put(event.run);
+      return;
+    }
+
+    await this.#withRunLock(event, async (client) => {
+      const result = await client.query<Row>(
+        "SELECT run_json FROM evaluation_runs WHERE project_id = $1 AND run_id = $2 FOR UPDATE",
+        [String(event.projectId), event.runId],
+      );
+      const existing = parseRun(result.rows[0]);
+      if (!existing) {
+        throw new Error(
+          "Evaluation run checkpoint arrived before its run-started event.",
+        );
+      }
+      if (existing.suiteId !== event.suiteId) {
+        throw new Error("Evaluation run checkpoint does not match its suite.");
+      }
+      if ((existing.revision ?? 0) >= event.revision) return;
+
+      const trials = [...existing.trials];
+      const trialIndex = trials.findIndex(
+        (trial) =>
+          trial.caseId === event.trial.caseId &&
+          trial.trialIndex === event.trial.trialIndex,
+      );
+      if (trialIndex >= 0) trials[trialIndex] = event.trial;
+      else trials.push(event.trial);
+      trials.sort(
+        (left, right) =>
+          left.caseIndex - right.caseIndex ||
+          left.trialIndex - right.trialIndex,
+      );
+      const next = normalizeEvaluationRun({
+        ...existing,
+        revision: event.revision,
+        requestedTrialCount: event.requestedTrialCount,
+        trials,
+      });
+      await client.query(
+        `
+        UPDATE evaluation_runs
+        SET run_json = $3::jsonb, updated_at = NOW()
+        WHERE project_id = $1 AND run_id = $2
+      `,
+        [String(event.projectId), event.runId, JSON.stringify(next)],
+      );
+    });
   }
 
   async deleteProject(projectId: ProjectId): Promise<void> {

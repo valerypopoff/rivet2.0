@@ -16,7 +16,6 @@ import {
   projectsState,
   savedProjectContentDigestsState,
 } from '../../../../rivet/packages/app/src/state/savedGraphs';
-import { evaluationsState } from '../../../../rivet/packages/app/src/state/evaluations';
 import { addOpenedProject } from '../../../../rivet/packages/app/src/utils/openedProjects.js';
 import { useExecutorSessionState } from '../../../../rivet/packages/app/src/hooks/useExecutorSession.js';
 import {
@@ -33,7 +32,7 @@ import {
 import { selectedExecutorState } from '../state/settings';
 import { normalizeHostedProjectExecutorMode } from '../utils/hostedExecutorMode';
 import { resolveHostedProjectTitle, withHostedProjectTitle } from '../../dashboard/openedProjectMetadata';
-import { primeOpenedProjectSession, syncOpenedProjectSessionIds } from '../../io/openedProjectSessionCache';
+import { syncOpenedProjectSessionIds } from '../../io/openedProjectSessionCache';
 
 type LegacyOpenedProjectInfo = Partial<OpenedProjectInfo> & {
   project?: (Omit<Project, 'data'> & { data?: Project['data'] }) | null;
@@ -182,7 +181,6 @@ export function useSyncCurrentStateIntoOpenedProjects({ enabled = true }: { enab
   const currentProjectData = useAtomValue(projectDataState);
   const loadedProject = useAtomValue(loadedProjectState);
   const currentGraph = useAtomValue(graphState);
-  const currentEvaluationsState = useAtomValue(evaluationsState);
   const selectedExecutor = useAtomValue(selectedExecutorState);
   const executorSession = useExecutorSessionState();
   const executorTargetType = executorSession.target?.type;
@@ -373,39 +371,6 @@ export function useSyncCurrentStateIntoOpenedProjects({ enabled = true }: { enab
     setProjects,
   ]);
 
-  useEffect(() => {
-    if (!enabled) {
-      return;
-    }
-
-    const currentProjectId = currentProject.metadata.id as ProjectId | undefined;
-    if (!currentProjectId || !openedProjectIds.includes(currentProjectId)) {
-      return;
-    }
-
-    const expectedProjectPath = openedProjects[currentProjectId]?.fsPath ?? null;
-    const loadedProjectPath = loadedProject.path ?? null;
-
-    if (expectedProjectPath && loadedProjectPath && expectedProjectPath !== loadedProjectPath) {
-      return;
-    }
-
-    primeOpenedProjectSession(currentProjectId, {
-      fsPath: expectedProjectPath ?? loadedProjectPath,
-      evaluation: {
-        evaluationData: currentEvaluationsState.data,
-        evaluationDatasets: currentEvaluationsState.datasets,
-      },
-    });
-  }, [
-    currentProject.metadata.id,
-    currentEvaluationsState.data,
-    currentEvaluationsState.datasets,
-    enabled,
-    loadedProject.path,
-    openedProjectIds,
-    openedProjects,
-  ]);
 
   useEffect(() => {
     if (!enabled) {

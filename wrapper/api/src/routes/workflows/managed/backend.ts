@@ -22,7 +22,7 @@ import type {
 } from '../../../../../shared/workflow-recording-types.js';
 import type { ManagedWorkflowStorageConfig } from '../storage-config.js';
 import { PostgresRivetLLMProfileHealthStore } from '../../../llm-profile-health/managed-store.js';
-import { PostgresRivetEvaluationRunStore } from '../../../evaluation-runs/managed-store.js';
+import { PostgresRivetEvaluationStore } from '../../../evaluation-runs/managed-store.js';
 import type { ManagedWorkflowBlobStore } from './blob-store.js';
 import { createManagedWorkflowCatalogService } from './catalog.js';
 import { createManagedWorkflowContext } from './context.js';
@@ -49,7 +49,7 @@ export class ManagedWorkflowBackend {
   readonly #publication: ReturnType<typeof createManagedWorkflowPublicationService>;
   readonly #recordings: ReturnType<typeof createManagedWorkflowRecordingService>;
   readonly #llmProfileHealthStore: PostgresRivetLLMProfileHealthStore;
-  readonly #evaluationRunStore: PostgresRivetEvaluationRunStore;
+  readonly #evaluationStore: PostgresRivetEvaluationStore;
 
   constructor(config: ManagedWorkflowStorageConfig, blobStore?: ManagedWorkflowBlobStore) {
     this.#context = createManagedWorkflowContext(config, blobStore);
@@ -70,7 +70,7 @@ export class ManagedWorkflowBackend {
       context: this.#context,
     });
     this.#llmProfileHealthStore = new PostgresRivetLLMProfileHealthStore(this.#context.pool);
-    this.#evaluationRunStore = new PostgresRivetEvaluationRunStore(this.#context.pool);
+    this.#evaluationStore = new PostgresRivetEvaluationStore(this.#context.pool);
   }
 
   async initialize(): Promise<void> {
@@ -163,9 +163,9 @@ export class ManagedWorkflowBackend {
     return this.#llmProfileHealthStore;
   }
 
-  async getEvaluationRunStore(): Promise<PostgresRivetEvaluationRunStore> {
+  async getEvaluationStore(): Promise<PostgresRivetEvaluationStore> {
     await this.initialize();
-    return this.#evaluationRunStore;
+    return this.#evaluationStore;
   }
 
   async listWorkflowPublishedVersions(relativePath: unknown): Promise<WorkflowPublishedVersionsResponse> {

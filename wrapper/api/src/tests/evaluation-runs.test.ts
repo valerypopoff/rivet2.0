@@ -11,20 +11,23 @@ import type { Pool } from "pg";
 import type { ProjectId } from "@valerypopoff/rivet2-node";
 import {
   fingerprintEvaluationDataset,
+  normalizeEvaluationLibrary,
   normalizeEvaluationRun,
   type EvaluationDatasetSnapshot,
+  type EvaluationLibrary,
   type EvaluationRecordingArtifact,
   type EvaluationRun,
 } from "@valerypopoff/rivet2-evaluations";
 
-import { FilesystemRivetEvaluationRunStore } from "../evaluation-runs/filesystem-store.js";
-import { PostgresRivetEvaluationRunStore } from "../evaluation-runs/managed-store.js";
+import { FilesystemRivetEvaluationStore } from "../evaluation-runs/filesystem-store.js";
+import type { RivetStudioEvaluationStore } from "../evaluation-runs/store.js";
+import { PostgresRivetEvaluationStore } from "../evaluation-runs/managed-store.js";
 import {
   evaluationRecordingSchema,
   evaluationRunSchema,
   MAX_EVALUATION_RECORDING_BYTES,
 } from "../routes/workflows/evaluation-runs.js";
-import { createHttpEvaluationRunStore } from "../../../shared/evaluationRunHttpStore.js";
+import { createHttpEvaluationStore } from "../../../shared/evaluationRunHttpStore.js";
 import { createApiApp } from "../app.js";
 
 const projectA = "project-a" as ProjectId;
@@ -143,6 +146,181 @@ function legacyRun(projectId: ProjectId, id: string): EvaluationRun {
   return legacy as unknown as EvaluationRun;
 }
 
+function library(
+  suiteId = "library-suite",
+  datasetId = "library-dataset",
+): EvaluationLibrary {
+  return {
+    version: 1,
+    data: {
+      version: 1,
+      suites: [
+        {
+          id: suiteId,
+          name: `Suite ${suiteId}`,
+          targetGraphId:
+            "target-graph" as EvaluationLibrary["data"]["suites"][number]["targetGraphId"],
+          datasetId,
+          inputBindings: [],
+          assertions: [],
+          evaluators: [],
+        },
+      ],
+      baselines: [],
+    },
+    datasets: [
+      {
+        id: datasetId,
+        name: `Dataset ${datasetId}`,
+        fields: [
+          {
+            id: "input",
+            name: "Input",
+            dataType: "string",
+            role: "input",
+          },
+        ],
+        cases: [
+          {
+            id: "case",
+            name: "Case",
+            values: { input: "hello" },
+          },
+        ],
+      },
+    ],
+    migratedLegacyProjectIds: [],
+  };
+}
+
+async function assertCompleteEvaluationStoreContract(
+  store: RivetStudioEvaluationStore,
+): Promise<void> {
+  assert.deepEqual(await store.getLibrarySnapshot(), {
+    revision: 0,
+    library: {
+      version: 1,
+      data: { version: 1, suites: [], baselines: [] },
+      datasets: [],
+      migratedLegacyProjectIds: [],
+    },
+  });
+
+  const imported = await store.importLegacyLibrary({
+    sourceFingerprint: "legacy-library-a",
+    library: library(),
+  });
+  assert.equal(imported.revision, 1);
+  assert.equal(imported.library.data.suites[0]?.id, "library-suite");
+
+  const duplicateImport = await store.importLegacyLibrary({
+    sourceFingerprint: "legacy-library-a",
+    library: library(),
+  });
+  assert.equal(duplicateImport.revision, 1);
+
+  const secondLibrary = library("second-suite", "second-dataset");
+  secondLibrary.data.suites.unshift({
+    ...library().data.suites[0]!,
+    name: "A stale browser copy must not replace the server suite",
+  });
+  secondLibrary.datasets.unshift({
+    ...library().datasets[0]!,
+    name: "A stale browser copy must not replace the server dataset",
+  });
+  const merged = await store.importLegacyLibrary({
+    sourceFingerprint: "legacy-library-b",
+    library: secondLibrary,
+  });
+  assert.equal(merged.revision, 2);
+  assert.deepEqual(
+    merged.library.data.suites.map((suite) => suite.name),
+    ["Suite library-suite", "Suite second-suite"],
+  );
+  assert.deepEqual(
+    merged.library.datasets.map((dataset) => dataset.name),
+    ["Dataset library-dataset", "Dataset second-dataset"],
+  );
+
+  await assert.rejects(
+    store.replaceLibrary({
+      expectedRevision: 1,
+      library: merged.library,
+    }),
+    /changed in another browser/u,
+  );
+  const replaced = await store.replaceLibrary({
+    expectedRevision: merged.revision,
+    library: {
+      ...merged.library,
+      migratedLegacyProjectIds: [projectA],
+    },
+  });
+  assert.equal(replaced.revision, 3);
+  const unchanged = await store.replaceLibrary({
+    expectedRevision: replaced.revision,
+    library: replaced.library,
+  });
+  assert.equal(unchanged.revision, replaced.revision);
+  assert.deepEqual((await store.getLibrary()).migratedLegacyProjectIds, [
+    projectA,
+  ]);
+
+  const finalized = run(projectA, "checkpoint-run");
+  const started: EvaluationRun = {
+    ...finalized,
+    revision: 1,
+    completedAt: undefined,
+    executionStatus: "running",
+    qualityStatus: "not-evaluated",
+    qualityReason: { code: "in-progress", message: "Evaluation is running." },
+    accountingStatus: "partial",
+    aggregate: undefined,
+    trials: [],
+  };
+  await store.applyRunEvent({ type: "run-started", revision: 1, run: started });
+  const settledEvent = {
+    type: "trial-settled" as const,
+    revision: 2,
+    runId: started.id,
+    projectId: projectA,
+    suiteId: started.suiteId,
+    requestedTrialCount: 1,
+    settledTrialCount: 1,
+    trial: finalized.trials[0]!,
+  };
+  await store.applyRunEvent(settledEvent);
+  await store.applyRunEvent(settledEvent);
+  const checkpoint = await store.get({
+    projectId: projectA,
+    runId: started.id,
+  });
+  assert.equal(checkpoint?.revision, 2);
+  assert.equal(checkpoint?.trials.length, 1);
+  await assert.rejects(
+    store.applyRunEvent({
+      ...settledEvent,
+      revision: 3,
+      suiteId: "other-suite",
+    }),
+    /does not match its suite/u,
+  );
+
+  await store.updateRunName({
+    projectId: projectA,
+    runId: started.id,
+    name: "Checkpoint baseline",
+  });
+  await store.applyRunEvent({
+    type: "run-finalized",
+    revision: 3,
+    run: { ...finalized, revision: 3 },
+  });
+  const completed = await store.get({ projectId: projectA, runId: started.id });
+  assert.equal(completed?.executionStatus, "completed");
+  assert.equal(completed?.name, "Checkpoint baseline");
+  assert.equal(completed?.trials.length, 1);
+}
 test("evaluation run API accepts v2 writes and rejects legacy write envelopes", () => {
   const current = run(projectA, "run-v2");
   assert.equal(evaluationRunSchema.safeParse(current).success, true);
@@ -211,10 +389,15 @@ test("evaluation recording API enforces UTF-8 byte limits and coherent temporary
     false,
   );
 
-  const nonAsciiPayload = "€".repeat(Math.floor(MAX_EVALUATION_RECORDING_BYTES / 3) + 1);
+  const nonAsciiPayload = "€".repeat(
+    Math.floor(MAX_EVALUATION_RECORDING_BYTES / 3) + 1,
+  );
   assert.equal(nonAsciiPayload.length < MAX_EVALUATION_RECORDING_BYTES, true);
   assert.equal(
-    evaluationRecordingSchema.safeParse({ ...artifact, serialized: nonAsciiPayload }).success,
+    evaluationRecordingSchema.safeParse({
+      ...artifact,
+      serialized: nonAsciiPayload,
+    }).success,
     false,
   );
 });
@@ -234,9 +417,10 @@ test("hosted HTTP evaluation store normalizes legacy run responses", async () =>
     );
   };
   try {
-    const store = createHttpEvaluationRunStore({
+    const store = createHttpEvaluationStore({
       baseUrl: "/api/workflows/evaluation-runs",
       normalizeRun: normalizeEvaluationRun,
+      normalizeLibrary: normalizeEvaluationLibrary,
     });
     const [normalized] = await store.list({
       projectId: projectA,
@@ -278,9 +462,10 @@ test("hosted HTTP evaluation store sends project-scoped run name updates", async
     return Response.json(saved);
   };
   try {
-    const store = createHttpEvaluationRunStore({
+    const store = createHttpEvaluationStore({
       baseUrl: "/api/workflows/evaluation-runs",
       normalizeRun: normalizeEvaluationRun,
+      normalizeLibrary: normalizeEvaluationLibrary,
     });
     const renamed = await store.updateRunName({
       projectId: projectA,
@@ -288,7 +473,10 @@ test("hosted HTTP evaluation store sends project-scoped run name updates", async
       name: "  Baseline  ",
     });
     assert.equal(renamed?.name, "Baseline");
-    assert.equal(request?.url, "/api/workflows/evaluation-runs/renamed-http-run");
+    assert.equal(
+      request?.url,
+      "/api/workflows/evaluation-runs/renamed-http-run",
+    );
     assert.equal(request?.init?.method, "PATCH");
     assert.deepEqual(JSON.parse(String(request?.init?.body)), {
       projectId: projectA,
@@ -303,18 +491,132 @@ test("hosted HTTP evaluation store sends project-scoped run name updates", async
   }
 });
 
+test("hosted HTTP evaluation store migrates legacy libraries and serializes writes", async () => {
+  const originalFetch = globalThis.fetch;
+  let revision = 0;
+  let currentLibrary = normalizeEvaluationLibrary(undefined);
+  const expectedRevisions: number[] = [];
+  let importRequests = 0;
+
+  globalThis.fetch = async (input, init) => {
+    const requestUrl = new URL(String(input), "https://rivet.example");
+    const method = init?.method ?? "GET";
+    if (requestUrl.pathname.endsWith("/library/import") && method === "POST") {
+      importRequests += 1;
+      const body = JSON.parse(String(init?.body)) as {
+        library: EvaluationLibrary;
+      };
+      currentLibrary = normalizeEvaluationLibrary(body.library);
+      revision += 1;
+      return Response.json({ revision, library: currentLibrary });
+    }
+    if (requestUrl.pathname.endsWith("/library") && method === "GET") {
+      return Response.json({ revision, library: currentLibrary });
+    }
+    if (requestUrl.pathname.endsWith("/library") && method === "PUT") {
+      const body = JSON.parse(String(init?.body)) as {
+        expectedRevision: number;
+        library: EvaluationLibrary;
+      };
+      expectedRevisions.push(body.expectedRevision);
+      if (body.expectedRevision !== revision) {
+        return Response.json(
+          { error: "The evaluation library changed in another browser." },
+          { status: 409 },
+        );
+      }
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      currentLibrary = normalizeEvaluationLibrary(body.library);
+      revision += 1;
+      return Response.json({ revision, library: currentLibrary });
+    }
+    throw new Error(
+      `Unexpected evaluation HTTP request: ${method} ${requestUrl.pathname}`,
+    );
+  };
+
+  try {
+    const legacyLibrary = library("legacy-suite", "legacy-dataset");
+    const store = createHttpEvaluationStore({
+      baseUrl: "/api/workflows/evaluation-runs",
+      normalizeRun: normalizeEvaluationRun,
+      normalizeLibrary: normalizeEvaluationLibrary,
+      legacyLibrarySource: {
+        async getLibrary() {
+          return legacyLibrary;
+        },
+      },
+    });
+
+    await store.initialize?.();
+    assert.equal(importRequests, 1);
+    assert.equal((await store.getLibrary()).data.suites[0]?.id, "legacy-suite");
+
+    const second = library("second-http-suite", "second-http-dataset");
+    const third = library("third-http-suite", "third-http-dataset");
+    await Promise.all([store.putLibrary(second), store.putLibrary(third)]);
+
+    assert.deepEqual(expectedRevisions, [1, 2]);
+    assert.equal(revision, 3);
+    assert.equal(
+      (await store.getLibrary()).data.suites[0]?.id,
+      "third-http-suite",
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("hosted HTTP evaluation store does not hide failed legacy imports", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (input, init) => {
+    const requestUrl = new URL(String(input), "https://rivet.example");
+    if (
+      requestUrl.pathname.endsWith("/library/import") &&
+      init?.method === "POST"
+    ) {
+      return Response.json({ error: "Storage unavailable" }, { status: 503 });
+    }
+    throw new Error(
+      `Unexpected evaluation HTTP request: ${requestUrl.pathname}`,
+    );
+  };
+
+  try {
+    const store = createHttpEvaluationStore({
+      baseUrl: "/api/workflows/evaluation-runs",
+      normalizeRun: normalizeEvaluationRun,
+      normalizeLibrary: normalizeEvaluationLibrary,
+      legacyLibrarySource: {
+        async getLibrary() {
+          return library();
+        },
+      },
+    });
+    assert.ok(store.initialize);
+    await assert.rejects(store.initialize(), /Storage unavailable/u);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
 test("filesystem evaluation store preserves user-assigned names across snapshots", async () => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "rivet-evaluations-names-"));
-  const store = new FilesystemRivetEvaluationRunStore(path.join(root, "evaluations.sqlite"));
+  const root = await fs.mkdtemp(
+    path.join(os.tmpdir(), "rivet-evaluations-names-"),
+  );
+  const store = new FilesystemRivetEvaluationStore(
+    path.join(root, "evaluations.sqlite"),
+  );
   try {
     const initial = run(projectA, "named-filesystem-run");
     await store.put(initial);
     assert.equal(
-      (await store.updateRunName({
-        projectId: projectA,
-        runId: initial.id,
-        name: "  Baseline  ",
-      }))?.name,
+      (
+        await store.updateRunName({
+          projectId: projectA,
+          runId: initial.id,
+          name: "  Baseline  ",
+        })
+      )?.name,
       "Baseline",
     );
     await store.put({ ...initial, revision: 1 });
@@ -337,7 +639,7 @@ test("filesystem evaluation store normalizes legacy run history at its read boun
   const root = await fs.mkdtemp(
     path.join(os.tmpdir(), "rivet-evaluations-legacy-"),
   );
-  const store = new FilesystemRivetEvaluationRunStore(
+  const store = new FilesystemRivetEvaluationStore(
     path.join(root, "evaluations.sqlite"),
   );
   try {
@@ -407,7 +709,7 @@ function datasetSnapshot(projectId: ProjectId): EvaluationDatasetSnapshot {
 
 test("filesystem evaluation store isolates projects, expires temporary artifacts during history reads, and pins baseline artifacts", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "rivet-evaluations-"));
-  const store = new FilesystemRivetEvaluationRunStore(
+  const store = new FilesystemRivetEvaluationStore(
     path.join(root, "evaluations.sqlite"),
   );
   try {
@@ -544,7 +846,7 @@ test("filesystem project cleanup rolls back every row and its write fence when d
     path.join(os.tmpdir(), "rivet-evaluations-rollback-"),
   );
   const databasePath = path.join(root, "evaluations.sqlite");
-  const store = new FilesystemRivetEvaluationRunStore(databasePath);
+  const store = new FilesystemRivetEvaluationStore(databasePath);
   try {
     await store.put(run(projectA, "run-project-a"));
     await store.putRecording(recording(projectA, "retained-a", "retained"));
@@ -598,10 +900,8 @@ test("filesystem project cleanup fences delayed run, snapshot, and recording wri
     path.join(os.tmpdir(), "rivet-evaluations-delete-fence-"),
   );
   const databasePath = path.join(root, "evaluations.sqlite");
-  const store = new FilesystemRivetEvaluationRunStore(
-    databasePath,
-  );
-  let reopenedStore: FilesystemRivetEvaluationRunStore | undefined;
+  const store = new FilesystemRivetEvaluationStore(databasePath);
+  let reopenedStore: FilesystemRivetEvaluationStore | undefined;
   let releaseLateWrite!: () => void;
   let markLateWriteStarted!: () => void;
   const release = new Promise<void>((resolve) => {
@@ -639,7 +939,7 @@ test("filesystem project cleanup fences delayed run, snapshot, and recording wri
     );
 
     await store.dispose();
-    reopenedStore = new FilesystemRivetEvaluationRunStore(databasePath);
+    reopenedStore = new FilesystemRivetEvaluationStore(databasePath);
     await assert.rejects(
       reopenedStore.put(run(projectA, "run-after-restart")),
       /after its project was deleted/u,
@@ -653,11 +953,38 @@ test("filesystem project cleanup fences delayed run, snapshot, and recording wri
   }
 });
 
+test("filesystem evaluation store persists the complete upstream contract", async () => {
+  const root = await fs.mkdtemp(
+    path.join(os.tmpdir(), "rivet-evaluations-complete-filesystem-"),
+  );
+  const databasePath = path.join(root, "evaluations.sqlite");
+  const store = new FilesystemRivetEvaluationStore(databasePath);
+  try {
+    await assertCompleteEvaluationStoreContract(store);
+    await store.dispose();
+    const reopened = new FilesystemRivetEvaluationStore(databasePath);
+    try {
+      const snapshot = await reopened.getLibrarySnapshot();
+      assert.equal(snapshot.revision, 3);
+      assert.deepEqual(snapshot.library.migratedLegacyProjectIds, [projectA]);
+      assert.equal(
+        (await reopened.get({ projectId: projectA, runId: "checkpoint-run" }))
+          ?.name,
+        "Checkpoint baseline",
+      );
+    } finally {
+      await reopened.dispose();
+    }
+  } finally {
+    await store.dispose();
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
 test("disposed filesystem evaluation stores cannot silently reopen their database", async () => {
   const root = await fs.mkdtemp(
     path.join(os.tmpdir(), "rivet-evaluations-dispose-"),
   );
-  const store = new FilesystemRivetEvaluationRunStore(
+  const store = new FilesystemRivetEvaluationStore(
     path.join(root, "evaluations.sqlite"),
   );
   try {
@@ -684,6 +1011,8 @@ class FakeManagedEvaluationPool {
   readonly recordings = new Map<string, ManagedRecordingRow>();
   readonly runs = new Map<string, EvaluationRun>();
   readonly datasetSnapshots = new Set<string>();
+  library: { revision: number; library: EvaluationLibrary } | undefined;
+  readonly libraryImports = new Set<string>();
 
   private key(projectId: unknown, recordingId: unknown): string {
     return `${String(projectId)}:${String(recordingId)}`;
@@ -718,6 +1047,45 @@ class FakeManagedEvaluationPool {
       return { rows: [], rowCount: 1 };
     }
     if (
+      normalized ===
+      "select revision, library_json from evaluation_library where singleton_key = true"
+    ) {
+      return {
+        rows:
+          this.library === undefined
+            ? []
+            : [
+                {
+                  revision: this.library.revision,
+                  library_json: this.library.library,
+                } as T,
+              ],
+        rowCount: this.library === undefined ? 0 : 1,
+      };
+    }
+    if (normalized.startsWith("insert into evaluation_library (")) {
+      this.library = {
+        revision: Number(values[0]),
+        library: JSON.parse(String(values[1])) as EvaluationLibrary,
+      };
+      return { rows: [], rowCount: 1 };
+    }
+    if (
+      normalized.startsWith(
+        "select 1 from evaluation_library_imports where source_fingerprint = $1",
+      )
+    ) {
+      const imported = this.libraryImports.has(String(values[0]));
+      return {
+        rows: imported ? ([{ "?column?": 1 }] as T[]) : [],
+        rowCount: imported ? 1 : 0,
+      };
+    }
+    if (normalized.startsWith("insert into evaluation_library_imports")) {
+      this.libraryImports.add(String(values[0]));
+      return { rows: [], rowCount: 1 };
+    }
+    if (
       normalized.startsWith(
         "delete from evaluation_recordings where project_id = $1 and artifact_json",
       )
@@ -729,12 +1097,15 @@ class FakeManagedEvaluationPool {
       const projectId = String(values[0]);
       const recordingId = String(values[1]);
       const runId = String(values[2]);
-      const incoming = JSON.parse(String(values[3])) as EvaluationRecordingArtifact;
+      const incoming = JSON.parse(
+        String(values[3]),
+      ) as EvaluationRecordingArtifact;
       const key = this.key(projectId, recordingId);
       const existing = this.recordings.get(key);
       if (
         existing !== undefined &&
-        (existing.runId !== runId || existing.artifact.trialId !== incoming.trialId)
+        (existing.runId !== runId ||
+          existing.artifact.trialId !== incoming.trialId)
       ) {
         return { rows: [], rowCount: 0 };
       }
@@ -830,9 +1201,16 @@ class FakeManagedEvaluationPool {
   }
 }
 
+test("managed evaluation store persists the complete upstream contract", async () => {
+  const pool = new FakeManagedEvaluationPool();
+  const store = new PostgresRivetEvaluationStore(pool as unknown as Pool);
+  await assertCompleteEvaluationStoreContract(store);
+  assert.equal(pool.library?.revision, 3);
+  assert.equal(pool.libraryImports.size, 2);
+});
 test("managed evaluation store applies temporary-artifact cleanup and project scope independently", async () => {
   const pool = new FakeManagedEvaluationPool();
-  const store = new PostgresRivetEvaluationRunStore(pool as unknown as Pool);
+  const store = new PostgresRivetEvaluationStore(pool as unknown as Pool);
   const expiredA = recording(
     projectA,
     "expired-a",
@@ -900,7 +1278,7 @@ test("managed evaluation store applies temporary-artifact cleanup and project sc
 
 test("managed evaluation recording upserts preserve durable retention and reject ID reassignment", async () => {
   const pool = new FakeManagedEvaluationPool();
-  const store = new PostgresRivetEvaluationRunStore(pool as unknown as Pool);
+  const store = new PostgresRivetEvaluationStore(pool as unknown as Pool);
   const provisional = recording(
     projectA,
     "managed-recording",
@@ -926,15 +1304,17 @@ test("managed evaluation recording upserts preserve durable retention and reject
 
 test("managed evaluation store preserves user-assigned names across snapshots", async () => {
   const pool = new FakeManagedEvaluationPool();
-  const store = new PostgresRivetEvaluationRunStore(pool as unknown as Pool);
+  const store = new PostgresRivetEvaluationStore(pool as unknown as Pool);
   const initial = run(projectA, "named-managed-run");
   await store.put(initial);
   assert.equal(
-    (await store.updateRunName({
-      projectId: projectA,
-      runId: initial.id,
-      name: "  Candidate  ",
-    }))?.name,
+    (
+      await store.updateRunName({
+        projectId: projectA,
+        runId: initial.id,
+        name: "  Candidate  ",
+      })
+    )?.name,
     "Candidate",
   );
   await store.put({ ...initial, revision: 1 });
@@ -943,17 +1323,17 @@ test("managed evaluation store preserves user-assigned names across snapshots", 
     "Candidate",
   );
   assert.equal(
-    (await store.updateRunName({
+    await store.updateRunName({
       projectId: projectA,
       runId: "missing-managed-run",
       name: "Ignored",
-    })),
+    }),
     undefined,
   );
 });
 test("managed evaluation store normalizes legacy run history at its read boundary", async () => {
   const pool = new FakeManagedEvaluationPool();
-  const store = new PostgresRivetEvaluationRunStore(pool as unknown as Pool);
+  const store = new PostgresRivetEvaluationStore(pool as unknown as Pool);
   pool.runs.set(
     `${projectA}:legacy-managed-run`,
     legacyRun(projectA, "legacy-managed-run"),

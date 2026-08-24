@@ -37,13 +37,15 @@ test('hosted editor shell mounts RivetAppHost with wrapper providers, executor U
     assert.doesNotMatch(hostedEditorApp, new RegExp(`'${hiddenItem}'`));
   }
 
-  assert.match(hostedProviders, /io: new HostedIOProvider\(hostedDatasetProvider\)/);
+  assert.match(hostedProviders, /io: new HostedIOProvider\(hostedDatasetProvider, hostedEvaluationStore\)/);
   assert.match(hostedProviders, /datasets: hostedDatasetProvider/);
   assert.match(hostedProviders, /environment: getDefaultEnvironmentProvider\(\)/);
   assert.match(hostedProviders, /pathPolicy: getDefaultPathPolicyProvider\(\)/);
   assert.match(hostedProviders, /createHttpRivetLLMProfileHealthStore/);
   assert.match(hostedProviders, /createHttpLLMProfileHealthAdminProvider/);
   assert.match(hostedProviders, /llmProfileHealthStore: hostedLLMProfileHealthStore/);
+  assert.match(hostedProviders, /evaluationStore: hostedEvaluationStore/);
+  assert.doesNotMatch(hostedProviders, /evaluationRunStore:/);
   assert.doesNotMatch(hostedProviders, /llmProfileHealthAdmin:/);
   assert.doesNotMatch(hostedProviders, /utils\/globals\/datasetProvider|utils\/globals\/ioProvider/);
   assert.match(editorMessageBridge, /workspaceHost: RivetWorkspaceHost/);
@@ -118,6 +120,9 @@ test('hosted project IO keeps app-state cleanup and workspace commands on wrappe
   assert.match(syncOpenedProjectsOverride, /buildCurrentProjectContentSnapshot/);
   assert.match(syncOpenedProjectsOverride, /markProjectClean/);
   assert.match(syncOpenedProjectsOverride, /markProjectDirtyFlag/);
+  assert.doesNotMatch(syncOpenedProjectsOverride, /evaluationsState|primeOpenedProjectSession/);
+  assert.match(loadProjectOverride, /primeOpenedProjectSession\(projectInfo\.projectId/);
+  assert.match(loadProjectOverride, /evaluation: cachedEvaluation/);
   assert.match(savedGraphsOverride, /createHybridStorage\('project'\)/);
   assert.match(
     savedGraphsOverride,
@@ -129,6 +134,12 @@ test('hosted project IO keeps app-state cleanup and workspace commands on wrappe
   );
   assert.doesNotMatch(savedGraphsOverride, /clearProjectContextState as/);
 
+  assert.match(hostedIOProvider, /this\.#evaluationStore\.putLibrary/);
+  assert.match(hostedIOProvider, /jotaiStore\.get\(evaluationLibraryState\)/);
+  assert.match(hostedIOProvider, /await this\.#flushEvaluationLibrary\(\)/);
+  assert.doesNotMatch(hostedIOProvider, /serializeEvaluationProjectData/);
+  assert.match(hostedIOProvider, /contents: serializeProject\(project\) as string/);
+  assert.match(hostedIOProvider, /datasetsContents: datasets\.length > 0 \? serializeDatasets\(datasets\) : null/);
   assert.match(hostedIOProvider, /this\.#datasetProvider\.exportDatasetsForProject/);
   assert.match(hostedIOProvider, /this\.#datasetProvider\.importDatasetsForProject/);
   assert.doesNotMatch(hostedIOProvider, /utils\/globals\/datasetProvider/);
