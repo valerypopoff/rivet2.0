@@ -129,6 +129,14 @@ test('managed schema persists shared LLM Profile health with project-scoped admi
   assert.ok(MANAGED_WORKFLOW_SCHEMA_SQL.includes('llm_profile_health_updated_at_idx'));
 });
 
+test('managed schema persists the instance evaluation library and idempotent imports', () => {
+  assert.ok(MANAGED_WORKFLOW_SCHEMA_SQL.includes('CREATE TABLE IF NOT EXISTS evaluation_library'));
+  assert.ok(MANAGED_WORKFLOW_SCHEMA_SQL.includes('singleton_key BOOLEAN PRIMARY KEY DEFAULT TRUE'));
+  assert.ok(MANAGED_WORKFLOW_SCHEMA_SQL.includes('revision BIGINT NOT NULL'));
+  assert.ok(MANAGED_WORKFLOW_SCHEMA_SQL.includes('library_json JSONB NOT NULL'));
+  assert.ok(MANAGED_WORKFLOW_SCHEMA_SQL.includes('CREATE TABLE IF NOT EXISTS evaluation_library_imports'));
+  assert.ok(MANAGED_WORKFLOW_SCHEMA_SQL.includes('source_fingerprint TEXT PRIMARY KEY'));
+});
 test('managed recording schema supports endpoint-scoped retention scans', () => {
   assert.ok(MANAGED_WORKFLOW_SCHEMA_SQL.includes('workflow_recordings_endpoint_created_at_idx'));
   assert.ok(MANAGED_WORKFLOW_SCHEMA_SQL.includes('ON workflow_recordings(workflow_id,'));

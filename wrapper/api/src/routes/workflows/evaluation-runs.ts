@@ -1,11 +1,14 @@
 import { Router } from "express";
 import { Buffer } from "node:buffer";
+import { createHash } from "node:crypto";
 import { z } from "zod";
 import type { ProjectId } from "@valerypopoff/rivet2-node";
 import {
   fingerprintEvaluationDataset,
+  normalizeEvaluationLibrary,
   validateEvaluationDataset,
   type EvaluationDatasetSnapshot,
+  type EvaluationRunEvent,
   type EvaluationQualityReasonCode,
   type EvaluationQualityStatus,
   type EvaluationRecordingArtifact,
@@ -13,9 +16,10 @@ import {
 } from "@valerypopoff/rivet2-evaluations";
 
 import { asyncHandler } from "../../utils/asyncHandler.js";
-import { badRequest } from "../../utils/httpError.js";
+import { badRequest, conflict } from "../../utils/httpError.js";
 import { validateBody } from "../../middleware/validate.js";
-import { getEvaluationRunStore } from "./storage-backend.js";
+import { getEvaluationStore } from "./storage-backend.js";
+import { EvaluationLibraryConflictError } from "../../evaluation-runs/store.js";
 
 export const evaluationRunsRouter = Router();
 /** Keeps evaluation replay artifacts below the API's broader 100 MiB JSON limit. */
@@ -46,7 +50,12 @@ const evaluationQualityStatuses = [
 ] as const satisfies readonly EvaluationQualityStatus[];
 type Assert<T extends true> = T;
 type EvaluationQualityStatusContractIsExhaustive = Assert<
-  [Exclude<EvaluationQualityStatus, (typeof evaluationQualityStatuses)[number]>] extends [never]
+  [
+    Exclude<
+      EvaluationQualityStatus,
+      (typeof evaluationQualityStatuses)[number]
+    >,
+  ] extends [never]
     ? true
     : false
 >;
@@ -69,7 +78,12 @@ const evaluationQualityReasonCodes = [
   "no-completed-trials",
 ] as const satisfies readonly EvaluationQualityReasonCode[];
 type EvaluationQualityReasonCodeContractIsExhaustive = Assert<
-  [Exclude<EvaluationQualityReasonCode, (typeof evaluationQualityReasonCodes)[number]>] extends [never]
+  [
+    Exclude<
+      EvaluationQualityReasonCode,
+      (typeof evaluationQualityReasonCodes)[number]
+    >,
+  ] extends [never]
     ? true
     : false
 >;
@@ -191,7 +205,9 @@ const putSchema = z
 const deleteSchema = z
   .object({ projectId: z.string().min(1), runId: z.string().min(1) })
   .strict();
-const renameRunSchema = projectSchema.extend({ name: z.string().optional() }).strict();
+const renameRunSchema = projectSchema
+  .extend({ name: z.string().optional() })
+  .strict();
 const recordingReferenceSchema = z
   .object({
     id: z.string().min(1),
@@ -200,18 +216,25 @@ const recordingReferenceSchema = z
   })
   .strict()
   .superRefine((reference, context) => {
-    if (reference.retention === "temporary" && reference.expiresAt === undefined) {
+    if (
+      reference.retention === "temporary" &&
+      reference.expiresAt === undefined
+    ) {
       context.addIssue({
         code: z.ZodIssueCode.custom,
         path: ["expiresAt"],
         message: "Temporary evaluation recordings require an expiry timestamp.",
       });
     }
-    if (reference.retention !== "temporary" && reference.expiresAt !== undefined) {
+    if (
+      reference.retention !== "temporary" &&
+      reference.expiresAt !== undefined
+    ) {
       context.addIssue({
         code: z.ZodIssueCode.custom,
         path: ["expiresAt"],
-        message: "Durable evaluation recordings cannot have an expiry timestamp.",
+        message:
+          "Durable evaluation recordings cannot have an expiry timestamp.",
       });
     }
   });
@@ -226,7 +249,10 @@ export const evaluationRecordingSchema = z
   })
   .strict()
   .superRefine((artifact, context) => {
-    if (Buffer.byteLength(artifact.serialized, "utf8") > MAX_EVALUATION_RECORDING_BYTES) {
+    if (
+      Buffer.byteLength(artifact.serialized, "utf8") >
+      MAX_EVALUATION_RECORDING_BYTES
+    ) {
       context.addIssue({
         code: z.ZodIssueCode.too_big,
         maximum: MAX_EVALUATION_RECORDING_BYTES,
@@ -247,18 +273,25 @@ const updateRecordingSchema = recordingScopeSchema
   })
   .strict()
   .superRefine((reference, context) => {
-    if (reference.retention === "temporary" && reference.expiresAt === undefined) {
+    if (
+      reference.retention === "temporary" &&
+      reference.expiresAt === undefined
+    ) {
       context.addIssue({
         code: z.ZodIssueCode.custom,
         path: ["expiresAt"],
         message: "Temporary evaluation recordings require an expiry timestamp.",
       });
     }
-    if (reference.retention !== "temporary" && reference.expiresAt !== undefined) {
+    if (
+      reference.retention !== "temporary" &&
+      reference.expiresAt !== undefined
+    ) {
       context.addIssue({
         code: z.ZodIssueCode.custom,
         path: ["expiresAt"],
-        message: "Durable evaluation recordings cannot have an expiry timestamp.",
+        message:
+          "Durable evaluation recordings cannot have an expiry timestamp.",
       });
     }
   });
@@ -277,13 +310,130 @@ const datasetSnapshotScopeSchema = z
   .object({ projectId: z.string().min(1), fingerprint: z.string().min(1) })
   .strict();
 
+const evaluationLibrarySchema = z
+  .object({
+    version: z.literal(1),
+    data: z
+      .object({
+        version: z.literal(1),
+        suites: z.array(z.unknown()),
+        baselines: z.array(z.unknown()),
+      })
+      .passthrough(),
+    datasets: z.array(z.unknown()),
+    migratedLegacyProjectIds: z.array(z.string()),
+  })
+  .passthrough();
+const replaceLibrarySchema = z
+  .object({
+    expectedRevision: z.number().int().nonnegative(),
+    library: evaluationLibrarySchema,
+  })
+  .strict();
+const importLibrarySchema = z
+  .object({ library: evaluationLibrarySchema })
+  .strict();
+const runEventSchema = z.discriminatedUnion("type", [
+  z
+    .object({
+      type: z.literal("run-started"),
+      revision: z.number().int().nonnegative(),
+      run: evaluationRunSchema,
+    })
+    .strict(),
+  z
+    .object({
+      type: z.literal("trial-settled"),
+      revision: z.number().int().nonnegative(),
+      runId: z.string().min(1),
+      projectId: z.string().min(1),
+      suiteId: z.string().min(1),
+      requestedTrialCount: z.number().int().positive(),
+      settledTrialCount: z.number().int().positive(),
+      trial: evaluationTrialSchema,
+    })
+    .strict(),
+  z
+    .object({
+      type: z.literal("run-finalized"),
+      revision: z.number().int().nonnegative(),
+      run: evaluationRunSchema,
+    })
+    .strict(),
+]);
+
+evaluationRunsRouter.get(
+  "/library",
+  asyncHandler(async (_req, res) => {
+    res.json(await (await getEvaluationStore()).getLibrarySnapshot());
+  }),
+);
+
+evaluationRunsRouter.put(
+  "/library",
+  validateBody(replaceLibrarySchema),
+  asyncHandler(async (req, res) => {
+    const input = req.body as z.infer<typeof replaceLibrarySchema>;
+    try {
+      res.json(
+        await (
+          await getEvaluationStore()
+        ).replaceLibrary({
+          expectedRevision: input.expectedRevision,
+          library: normalizeEvaluationLibrary(input.library),
+        }),
+      );
+    } catch (error) {
+      if (error instanceof EvaluationLibraryConflictError) {
+        throw conflict(error.message);
+      }
+      throw error;
+    }
+  }),
+);
+
+evaluationRunsRouter.post(
+  "/library/import",
+  validateBody(importLibrarySchema),
+  asyncHandler(async (req, res) => {
+    const { library: rawLibrary } = req.body as z.infer<
+      typeof importLibrarySchema
+    >;
+    const library = normalizeEvaluationLibrary(rawLibrary);
+    const sourceFingerprint = createHash("sha256")
+      .update(JSON.stringify(library))
+      .digest("hex");
+    res.json(
+      await (
+        await getEvaluationStore()
+      ).importLegacyLibrary({ sourceFingerprint, library }),
+    );
+  }),
+);
+
+evaluationRunsRouter.put(
+  "/events/:runId",
+  validateBody(runEventSchema),
+  asyncHandler(async (req, res) => {
+    const event = req.body as EvaluationRunEvent;
+    const eventRunId =
+      event.type === "trial-settled" ? event.runId : event.run.id;
+    if (String(req.params.runId ?? "") !== eventRunId) {
+      throw badRequest(
+        "The evaluation event run ID must match the request path.",
+      );
+    }
+    await (await getEvaluationStore()).applyRunEvent(event);
+    res.status(204).end();
+  }),
+);
 evaluationRunsRouter.get(
   "/",
   asyncHandler(async (req, res) => {
     const parsed = listSchema.safeParse(req.query);
     if (!parsed.success)
       throw badRequest("projectId query parameter is required.");
-    const store = await getEvaluationRunStore();
+    const store = await getEvaluationStore();
     res.json(
       await store.list({
         ...parsed.data,
@@ -315,7 +465,7 @@ evaluationRunsRouter.put(
       );
     }
     await (
-      await getEvaluationRunStore()
+      await getEvaluationStore()
     ).putDatasetSnapshot({
       projectId: input.projectId as ProjectId,
       fingerprint: input.fingerprint,
@@ -336,7 +486,7 @@ evaluationRunsRouter.get(
     if (!parsed.success)
       throw badRequest("projectId query parameter is required.");
     const snapshot = await (
-      await getEvaluationRunStore()
+      await getEvaluationStore()
     ).getDatasetSnapshot({
       projectId: parsed.data.projectId as ProjectId,
       fingerprint: parsed.data.fingerprint,
@@ -356,7 +506,7 @@ evaluationRunsRouter.get(
     if (!parsed.success)
       throw badRequest("projectId query parameter is required.");
     const run = await (
-      await getEvaluationRunStore()
+      await getEvaluationStore()
     ).get({
       projectId: parsed.data.projectId as ProjectId,
       runId: String(req.params.runId ?? ""),
@@ -382,7 +532,7 @@ evaluationRunsRouter.put(
         "The evaluation run ID and project ID must match the request scope.",
       );
     }
-    await (await getEvaluationRunStore()).put(run as EvaluationRun);
+    await (await getEvaluationStore()).put(run as EvaluationRun);
     res.status(204).end();
   }),
 );
@@ -392,7 +542,9 @@ evaluationRunsRouter.patch(
   validateBody(renameRunSchema),
   asyncHandler(async (req, res) => {
     const input = req.body as z.infer<typeof renameRunSchema>;
-    const run = await (await getEvaluationRunStore()).updateRunName({
+    const run = await (
+      await getEvaluationStore()
+    ).updateRunName({
       projectId: input.projectId as ProjectId,
       runId: String(req.params.runId ?? ""),
       ...(input.name === undefined ? {} : { name: input.name }),
@@ -413,7 +565,7 @@ evaluationRunsRouter.delete(
     if (String(req.params.runId ?? "") !== runId)
       throw badRequest("The evaluation run ID must match the request path.");
     await (
-      await getEvaluationRunStore()
+      await getEvaluationStore()
     ).delete({ projectId: projectId as ProjectId, runId });
     res.status(204).end();
   }),
@@ -429,7 +581,7 @@ evaluationRunsRouter.put(
         "The evaluation recording ID must match the request path.",
       );
     await (
-      await getEvaluationRunStore()
+      await getEvaluationStore()
     ).putRecording({ ...artifact, projectId: artifact.projectId as ProjectId });
     res.status(204).end();
   }),
@@ -445,7 +597,7 @@ evaluationRunsRouter.get(
     if (!parsed.success)
       throw badRequest("projectId query parameter is required.");
     const recording = await (
-      await getEvaluationRunStore()
+      await getEvaluationStore()
     ).getRecording({
       projectId: parsed.data.projectId as ProjectId,
       recordingId: parsed.data.recordingId,
@@ -468,7 +620,7 @@ evaluationRunsRouter.patch(
         "The evaluation recording ID must match the request path.",
       );
     await (
-      await getEvaluationRunStore()
+      await getEvaluationStore()
     ).updateRecordingRetention({
       ...input,
       projectId: input.projectId as ProjectId,
@@ -485,7 +637,7 @@ evaluationRunsRouter.post(
     if (String(req.params.runId ?? "") !== input.runId)
       throw badRequest("The evaluation run ID must match the request path.");
     await (
-      await getEvaluationRunStore()
+      await getEvaluationStore()
     ).promoteBaseline({
       projectId: input.projectId as ProjectId,
       runId: input.runId,
