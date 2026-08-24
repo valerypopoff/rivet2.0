@@ -6,6 +6,8 @@ import {
   fingerprintEvaluationDataset,
   validateEvaluationDataset,
   type EvaluationDatasetSnapshot,
+  type EvaluationQualityReasonCode,
+  type EvaluationQualityStatus,
   type EvaluationRecordingArtifact,
   type EvaluationRun,
 } from "@valerypopoff/rivet2-evaluations";
@@ -35,28 +37,45 @@ const evaluationTrialExecutionStatusSchema = z.enum([
   "error",
   "canceled",
 ]);
-const evaluationQualityStatusSchema = z.enum([
+const evaluationQualityStatuses = [
   "passed",
   "failed",
+  "scored",
   "not-evaluated",
   "unable-to-evaluate",
-]);
+] as const satisfies readonly EvaluationQualityStatus[];
+type Assert<T extends true> = T;
+type EvaluationQualityStatusContractIsExhaustive = Assert<
+  [Exclude<EvaluationQualityStatus, (typeof evaluationQualityStatuses)[number]>] extends [never]
+    ? true
+    : false
+>;
+const evaluationQualityStatusSchema = z.enum(evaluationQualityStatuses);
+
+const evaluationQualityReasonCodes = [
+  "in-progress",
+  "checks-passed",
+  "checks-failed",
+  "scores-complete",
+  "scores-incomplete",
+  "benchmark",
+  "no-trial-quality-checks",
+  "target-error",
+  "required-check-error",
+  "required-metric-unavailable",
+  "thresholds-passed",
+  "thresholds-failed",
+  "canceled",
+  "no-completed-trials",
+] as const satisfies readonly EvaluationQualityReasonCode[];
+type EvaluationQualityReasonCodeContractIsExhaustive = Assert<
+  [Exclude<EvaluationQualityReasonCode, (typeof evaluationQualityReasonCodes)[number]>] extends [never]
+    ? true
+    : false
+>;
 const evaluationQualityReasonSchema = z
   .object({
-    code: z.enum([
-      "in-progress",
-      "checks-passed",
-      "checks-failed",
-      "benchmark",
-      "no-trial-quality-checks",
-      "target-error",
-      "required-check-error",
-      "required-metric-unavailable",
-      "thresholds-passed",
-      "thresholds-failed",
-      "canceled",
-      "no-completed-trials",
-    ]),
+    code: z.enum(evaluationQualityReasonCodes),
     message: z.string(),
   })
   .strict();
