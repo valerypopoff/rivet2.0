@@ -3,8 +3,16 @@ set -eu
 
 . /opt/rivet/lib/load-env.sh
 
+deployment_managed_workflow_schema_mode="${RIVET_DEPLOYMENT_MANAGED_WORKFLOW_SCHEMA_MODE:-}"
 load_optional_dotenv /vault/dotenv
 append_proxy_bootstrap_node_options
+
+# Kubernetes sets this deployment-owned policy separately from user/Vault env.
+# Apply it after dotenv loading so API replicas remain verify-only even if a
+# stale secret contains the public schema mode variable.
+if [ -n "$deployment_managed_workflow_schema_mode" ]; then
+  export RIVET_MANAGED_WORKFLOW_SCHEMA_MODE="$deployment_managed_workflow_schema_mode"
+fi
 
 export PORT="${PORT:-8080}"
 export RIVET_WORKSPACE_ROOT="${RIVET_WORKSPACE_ROOT:-/workspace}"

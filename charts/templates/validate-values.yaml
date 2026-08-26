@@ -14,6 +14,22 @@
 {{- fail "runtimeLibraries.objectStoragePrefix must remain runtime-libraries/ in phase 3 because the current managed runtime-library backend uses a fixed object-storage prefix" -}}
 {{- end -}}
 
+{{- if hasKey .Values.env "RIVET_MANAGED_WORKFLOW_SCHEMA_MODE" -}}
+{{- fail "env.RIVET_MANAGED_WORKFLOW_SCHEMA_MODE is chart-owned; use workflowSchema.migrationJob.enabled and keep API workloads verify-only" -}}
+{{- end -}}
+
+{{- if hasKey .Values.env "RIVET_DEPLOYMENT_MANAGED_WORKFLOW_SCHEMA_MODE" -}}
+{{- fail "env.RIVET_DEPLOYMENT_MANAGED_WORKFLOW_SCHEMA_MODE is an internal chart-owned startup policy and cannot be overridden" -}}
+{{- end -}}
+
+{{- if lt (int .Values.workflowSchema.migrationJob.backoffLimit) 0 -}}
+{{- fail "workflowSchema.migrationJob.backoffLimit must be zero or greater" -}}
+{{- end -}}
+
+{{- if lt (int .Values.workflowSchema.migrationJob.activeDeadlineSeconds) 1 -}}
+{{- fail "workflowSchema.migrationJob.activeDeadlineSeconds must be greater than zero" -}}
+{{- end -}}
+
 {{- if empty (index .Values.env "RIVET_PROXY_RESOLVER") -}}
 {{- fail "env.RIVET_PROXY_RESOLVER is required so nginx can resolve in-cluster service names dynamically" -}}
 {{- end -}}

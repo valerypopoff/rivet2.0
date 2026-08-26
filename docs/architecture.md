@@ -97,6 +97,7 @@ LLM Profile suspension state is wrapper-owned operational state, not project con
 
 - filesystem mode keeps `llm-profile-health.sqlite` under `RIVET_APP_DATA_ROOT`; this is appropriate for the supported single-host filesystem topology
 - managed mode keeps `llm_profile_health` rows in the shared Postgres database, so control-plane and execution replicas observe the same suspensions and recovery attempts
+- managed workflow schema ownership is explicit: Docker/simple-host API startup may migrate, while Kubernetes runs one versioned/checksummed Helm hook migration and starts every serving API replica in verify-only mode. The hook bootstraps candidate database settings under an isolated ephemeral app-data root rather than mutating the shared settings claim while old pods still serve. Both paths share the same transactional advisory-lock library; process-local initialization promises are only an optimization, never the cross-replica lock.
 - each run receives the selected store through Rivet's `llmProfileHealthStore` processor option; published/latest workflow requests and HTTP/WebSocket web-app actions therefore share the same reliability history
 - the hosted Browser executor uses the authenticated `/api/workflows/llm-profile-health` bridge, while the hosted Node executor uses the wrapper-specific executor entrypoint and the same bridge
 

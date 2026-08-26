@@ -21,7 +21,11 @@ import { ManagedWorkflowExecutionCache } from './execution-cache.js';
 import { ManagedWorkflowExecutionInvalidationController } from './execution-invalidation.js';
 import * as mappers from './mappers.js';
 import { createManagedWorkflowRevisionFactory } from './revision-factory.js';
-import { MANAGED_WORKFLOW_SCHEMA_SQL } from './schema.js';
+import {
+  getManagedWorkflowSchemaMode,
+  migrateManagedWorkflowSchema,
+  verifyManagedWorkflowSchema,
+} from './schema-migrations.js';
 import { createManagedWorkflowTransactionRunner } from './transactions.js';
 import type { TransactionHooks } from './types.js';
 
@@ -83,9 +87,15 @@ export function createManagedWorkflowContext(
       schemaReadyPromise = (async () => {
         // Blob storage must exist before the schema can reference uploaded objects.
         await resolvedBlobStore.initialize?.();
-        // Schema initialization must complete before the LISTEN-based invalidation
-        // controller starts consuming notifications.
-        await withManagedDbRetry('managed schema initialization', () => pool.query(MANAGED_WORKFLOW_SCHEMA_SQL));
+        // Every API process reaches this path. The database-wide migration protocol
+        // serializes mutation, while Kubernetes API pods can use verify-only mode
+        // after the dedicated migration Job has completed.
+        const schemaMode = getManagedWorkflowSchemaMode();
+        await withManagedDbRetry(`managed schema ${schemaMode}`, () =>
+          schemaMode === 'migrate'
+            ? migrateManagedWorkflowSchema(pool)
+            : verifyManagedWorkflowSchema(pool),
+        );
       })().catch((error) => {
         schemaReadyPromise = null;
         throw error;

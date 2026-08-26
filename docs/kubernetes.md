@@ -1,5 +1,8 @@
 # Kubernetes
 
+Open managed-mode risks and recommended remediation work are tracked in
+[`kubernetes_managed_mode_audit.md`](../kubernetes_managed_mode_audit.md).
+
 This repo supports one Kubernetes topology today:
 
 - `proxy`: scalable
@@ -104,6 +107,46 @@ For local rehearsal, the launcher also creates a namespace-scoped app-data PVC a
 The local overlay at [charts/overlays/local-kubernetes.yaml](../charts/overlays/local-kubernetes.yaml) is not a standalone values file. It is meant to be merged with the generated values file from `scripts/dev-kubernetes.mjs`.
 
 Managed runtime-library startup now serializes its shared Postgres schema initialization behind a PostgreSQL advisory lock. That avoids first-boot deadlocks when the control-plane API and execution/editor processes start against the same managed database at the same time.
+
+## Managed workflow schema migrations
+
+Managed workflow DDL is versioned and serialized separately from ordinary API startup:
+
+- `managed_workflow_schema_migrations` records each immutable migration version, name, SHA-256 checksum, application version, and application time.
+- Each migration runs in a PostgreSQL transaction behind a repository-specific `pg_advisory_xact_lock`, with bounded lock and statement timeouts. The migration library retries only PostgreSQL lock-timeout, deadlock, and serialization failures, and every retry starts a new transaction; callers retain the existing bounded retry for connection-level network failures.
+- Existing databases from releases before the ledger are baselined by rerunning migration 1 idempotently, validating every migration-1 table column type/nullability and required default, required table DML privileges with row-level security disabled, exact operational-index signature and usable catalog state, semantic and validated primary/unique/foreign-key/check constraint with usable primary/unique backing indexes, plus the schema-qualified folder-move function's body, execution signature, and API-role execute privilege, and then recording version 1 in the same transaction.
+- Local Docker and simple managed single-process deployments default to startup mode `migrate`, preserving their automatic first-run behavior.
+- Kubernetes API pods are forced into `verify` mode after Vault dotenv loading. They take a shared advisory lock, validate the ledger/checksum and critical schema shape, and fail startup with a precise compatibility error instead of applying DDL.
+
+The chart owns migration execution through the `workflow-schema-migration` Helm hook Job. It runs `pre-install,pre-upgrade` with the same API image as the release, bootstraps the candidate deployment-storage settings into an isolated `emptyDir` app-data root, and applies pending migrations before backend or execution pods roll. The Job deliberately does not mount the shared app-data claim: during `pre-upgrade`, old serving pods may still be watching that claim and must not observe candidate database/object-storage settings before the migration and rollout succeed. Candidate backend and execution pods bootstrap the shared deployment settings only when their workloads start. When Vault is enabled, the shared annotations use pre-populate-only injection, so no long-lived Vault sidecar can keep the one-shot Job alive after migration. A successful hook is deleted; a failed hook remains available for logs, and Helm does not continue the release.
+
+For a normal chart install, keep:
+
+```yaml
+workflowSchema:
+  migrationJob:
+    enabled: true
+    backoffLimit: 2
+    activeDeadlineSeconds: 600
+```
+
+Set `workflowSchema.migrationJob.enabled=false` only when an external delivery pipeline runs the exact candidate API image's schema command before Helm rolls API pods. API pods remain verify-only in that mode; disabling the Job without an external migration makes an install or upgrade fail closed.
+
+Outside Kubernetes, the equivalent operator commands are:
+
+```bash
+npm run workflow-schema:migrate
+npm run workflow-schema:verify
+```
+
+These commands migrate PostgreSQL schema only. They are distinct from `workflow-storage:migrate` / `workflow-storage:verify`, which copy and compare workflow data between filesystem and managed storage.
+
+Recovery rules:
+
+- If the hook times out or loses its database connection, inspect the retained Job logs and rerun the release after fixing connectivity. Transaction rollback plus migration ids/checksums make a retry safe.
+- Do not edit migration ledger rows or change released migration SQL to bypass a checksum mismatch. Deploy a compatible image or add a new corrective migration.
+- A database with a future migration version must not be served by an older image. Roll forward to a compatible image; database rollback requires an explicitly designed backward migration and should not be improvised.
+- Add future schema work as a new ordered migration in `schema-migrations.ts`. Keep overlapping releases compatible with expand-and-contract changes; defer destructive contraction until old pods cannot still be running.
 
 Useful commands:
 
@@ -521,6 +564,13 @@ kubectl -n your-namespace rollout status deployment/rivet-proxy
 kubectl -n your-namespace rollout status deployment/rivet-web
 kubectl -n your-namespace rollout status deployment/rivet-execution
 kubectl -n your-namespace rollout status statefulset/rivet-backend
+```
+
+If Helm stops on the schema hook, inspect the retained Job before retrying:
+
+```bash
+kubectl -n your-namespace get jobs -l app.kubernetes.io/component=workflow-schema-migration
+kubectl -n your-namespace logs job/<release>-rivet-workflow-schema-migration
 ```
 
 Then port-forward the proxy service and verify the proxy-facing routes:

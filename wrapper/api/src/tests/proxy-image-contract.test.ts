@@ -344,6 +344,11 @@ test('API images and launchers use the filtered Rivet source context and symlink
   assert.match(apiPackageJson, /run-preserve-symlinks\.mjs tsx/);
   assert.match(apiPackageJson, /node --preserve-symlinks dist\/api\/src\/server\.js/);
   assert.match(preserveSymlinksRunner, /--preserve-symlinks/);
+  assert.match(apiEntrypoint, /load_optional_dotenv \/vault\/dotenv/);
+  assert.match(
+    apiEntrypoint,
+    /deployment_managed_workflow_schema_mode="\$\{RIVET_DEPLOYMENT_MANAGED_WORKFLOW_SCHEMA_MODE:-\}"[\s\S]*load_optional_dotenv \/vault\/dotenv[\s\S]*RIVET_MANAGED_WORKFLOW_SCHEMA_MODE="\$deployment_managed_workflow_schema_mode"/,
+  );
   assert.match(apiEntrypoint, /exec node --preserve-symlinks \/app\/wrapper\/api\/dist\/api\/src\/server\.js/);
   assert.match(composeApiDockerfile, /node --preserve-symlinks dist\/api\/src\/server\.js/);
 

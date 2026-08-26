@@ -108,6 +108,72 @@ test('rendered chart keeps control-plane and execution-plane API env contracts d
   assert.doesNotMatch(renderedChart, /RIVET_WEB_APPS_AUTH_MODE|OAUTH_CLIENT_SECRET|OAUTH_AUTHORIZE_URL/);
 });
 
+test('chart serializes managed workflow migrations before verify-only API workloads start', async () => {
+  const renderedChart = await renderLocalKubernetesChart();
+  const migrationJobDocument = renderedChart
+    .split('# Source: rivet/templates/workflow-schema-migration-job.yaml')[1]
+    ?.split('\n---\n')[0];
+  const chartHelpers = readRepoFile('charts/templates/_helpers.tpl');
+  const migrationJobTemplate = readRepoFile('charts/templates/workflow-schema-migration-job.yaml');
+
+  assert.ok(migrationJobDocument, 'rendered chart should contain the workflow schema migration Job');
+
+  assert.match(
+    renderedChart,
+    /kind: Job[\s\S]*?app\.kubernetes\.io\/component: workflow-schema-migration/,
+  );
+  assert.match(renderedChart, /helm\.sh\/hook: pre-install,pre-upgrade/);
+  assert.match(renderedChart, /helm\.sh\/hook-delete-policy: before-hook-creation,hook-succeeded/);
+  assert.match(migrationJobTemplate, /include "rivet\.vaultAnnotations"/);
+  assert.match(chartHelpers, /vault\.hashicorp\.com\/agent-pre-populate-only: "true"/);
+  assert.match(
+    renderedChart,
+    /bootstrap-deployment-storage-settings\.mjs; node --preserve-symlinks \/app\/wrapper\/api\/dist\/api\/src\/scripts\/migrate-managed-workflow-schema\.js migrate/,
+  );
+  assert.match(
+    migrationJobDocument,
+    /name: RIVET_APP_DATA_ROOT\s*\n\s*value: "\/var\/tmp\/rivet-migration-app-data"/,
+  );
+  assert.doesNotMatch(migrationJobDocument, /persistentVolumeClaim:|claimName:|mountPath: \/data\/rivet-app/);
+  assert.match(
+    renderedChart,
+    /app\.kubernetes\.io\/component: workflow-schema-migration[\s\S]*?name: RIVET_BUILD_VERSION\s*\n\s*value: "rivet-local\/api:dev"/,
+  );
+  assert.match(
+    renderedChart,
+    /app\.kubernetes\.io\/component: workflow-schema-migration[\s\S]*?name: migrate[\s\S]*?resources:\s*\n\s*\{\}/,
+  );
+  assert.equal(
+    (renderedChart.match(/name: RIVET_DEPLOYMENT_MANAGED_WORKFLOW_SCHEMA_MODE\s*\n\s*value: verify/g) ?? []).length,
+    2,
+    'control and execution API pods must verify the schema instead of mutating it',
+  );
+  assert.match(
+    readRepoFile('image/api/entrypoint.sh'),
+    /deployment_managed_workflow_schema_mode="\$\{RIVET_DEPLOYMENT_MANAGED_WORKFLOW_SCHEMA_MODE:-\}"[\s\S]*load_optional_dotenv \/vault\/dotenv[\s\S]*RIVET_MANAGED_WORKFLOW_SCHEMA_MODE="\$deployment_managed_workflow_schema_mode"/,
+  );
+});
+
+test('chart can delegate migration execution but never lets API replicas become schema writers', async () => {
+  const renderedChart = await renderLocalKubernetesChartWithOverrides([
+    'workflowSchema.migrationJob.enabled=false',
+  ]);
+
+  assert.doesNotMatch(renderedChart, /app\.kubernetes\.io\/component: workflow-schema-migration/);
+  assert.equal(
+    (renderedChart.match(/name: RIVET_DEPLOYMENT_MANAGED_WORKFLOW_SCHEMA_MODE\s*\n\s*value: verify/g) ?? []).length,
+    2,
+  );
+  await assertHelmTemplateFails(
+    ['env.RIVET_MANAGED_WORKFLOW_SCHEMA_MODE=migrate'],
+    /env\.RIVET_MANAGED_WORKFLOW_SCHEMA_MODE is chart-owned/,
+  );
+  await assertHelmTemplateFails(
+    ['env.RIVET_DEPLOYMENT_MANAGED_WORKFLOW_SCHEMA_MODE=migrate'],
+    /internal chart-owned startup policy/,
+  );
+});
+
 test('chart validation keeps the supported managed singleton control-plane boundaries', () => {
   const validateValuesTemplate = readRepoFile('charts/templates/validate-values.yaml');
 

@@ -89,6 +89,12 @@ vault:
 workflowStorage:
   backend: managed
 
+workflowSchema:
+  migrationJob:
+    enabled: true
+    backoffLimit: 2
+    activeDeadlineSeconds: 600
+
 runtimeLibraries:
   backend: managed
   objectStoragePrefix: runtime-libraries/
@@ -163,6 +169,7 @@ podAnnotations:
   web: {}
   backend: {}
   execution: {}
+  workflowSchemaMigration: {}
 
 resources:
   proxy: {}

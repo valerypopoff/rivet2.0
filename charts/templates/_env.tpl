@@ -5,9 +5,14 @@
 
 {{- define "rivet.env.deploymentStorageBootstrap" -}}
 {{- $root := . -}}
+{{- $appDataRoot := "/data/rivet-app" -}}
+{{- if hasKey . "root" -}}
+{{- $root = .root -}}
+{{- $appDataRoot = default $appDataRoot .appDataRoot -}}
+{{- end -}}
 {{- include "rivet.env.vaultDotenv" $root }}
 - name: RIVET_APP_DATA_ROOT
-  value: /data/rivet-app
+  value: {{ $appDataRoot | quote }}
 - name: RIVET_DEPLOYMENT_STORAGE_MODE
   value: {{ $root.Values.workflowStorage.backend | quote }}
 - name: RIVET_DEPLOYMENT_DATABASE_MODE
@@ -109,6 +114,8 @@
   value: {{ .replicaTier | quote }}
 - name: RIVET_RUNTIME_LIBRARIES_JOB_WORKER_ENABLED
   value: {{ .jobWorkerEnabled | quote }}
+- name: RIVET_DEPLOYMENT_MANAGED_WORKFLOW_SCHEMA_MODE
+  value: verify
 {{ include "rivet.env.authKey" $root }}
 {{ include "rivet.env.globalValues" $root }}
 {{- end -}}
