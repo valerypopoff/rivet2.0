@@ -50,8 +50,6 @@ test('kubernetes launcher config uses managed canonical envs and local rehearsal
   assert.equal(config.replicas.execution, 4);
   assert.equal(config.objectStorage.bucket, 'rivet-prod');
   assert.equal(config.objectStorage.region, 'us-east-1');
-  assert.equal(config.appData.claimName, 'rivet-local-app-data');
-  assert.equal(config.appData.size, '10Gi');
   assert.equal(config.routeConfig.webAppsBasePath, '/apps');
   assert.equal(config.routeConfig.latestWebAppsBasePath, '/apps-latest');
   assert.equal(config.routeConfig.enableLatestRemoteDebugger, true);
@@ -95,7 +93,8 @@ test('kubernetes launcher renderer emits chart values and secrets compatible wit
 
   assert.match(valuesYaml, /connectionStringSecretName: "rivet-postgres-conn"/);
   assert.match(valuesYaml, /accessKeySecretName: "rivet-object-storage"/);
-  assert.match(valuesYaml, /storage:\s*\n\s*appData:\s*\n\s*existingClaimName: "rivet-local-app-data"/);
+  assert.match(valuesYaml, /appSettings:\s*\n\s*backend: postgres/);
+  assert.doesNotMatch(valuesYaml, /storage:\s*\n\s*appData:|rivet-local-app-data/);
   assert.match(valuesYaml, /clusterDomain: "cluster\.local"/);
   assert.match(valuesYaml, /RIVET_ENABLE_LATEST_REMOTE_DEBUGGER: "true"/);
   assert.match(valuesYaml, /RIVET_PUBLISHED_APPS_BASE_PATH: "\/apps"/);
@@ -111,9 +110,7 @@ test('kubernetes launcher renderer emits chart values and secrets compatible wit
   assert.match(secretManifest, /name: rivet-postgres-conn/);
   assert.match(secretManifest, /name: rivet-object-storage/);
   assert.match(secretManifest, /connectionString: "postgresql:\/\/db-user:db-pass@example-db:5432\/rivet\?sslmode=require"/);
-  assert.match(secretManifest, /kind: PersistentVolumeClaim/);
-  assert.match(secretManifest, /name: rivet-local-app-data/);
-  assert.match(secretManifest, /storage: 10Gi/);
+  assert.doesNotMatch(secretManifest, /kind: PersistentVolumeClaim|rivet-local-app-data/);
 });
 
 test('kubernetes launcher config requires managed-service inputs', async () => {

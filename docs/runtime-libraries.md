@@ -6,7 +6,7 @@ The dashboard exposes this through the `Runtime libraries` button in the left pa
 
 ## Backend modes
 
-Runtime libraries now follow the same storage mode as workflow storage. Operators should set it in `Settings` -> `Storage`, which writes `settings/deployment-storage.json` under app data. API and executor processes read that file at startup and prefer it over storage/database env defaults.
+Runtime libraries follow the same storage mode as workflow storage. Operators set it in `Settings` -> `Storage`. Single-host deployments persist `settings/deployment-storage.json` under app data; Kubernetes stores the same typed domain in encrypted PostgreSQL settings and projects a pod-local compatibility file before the API and editor executor start.
 
 - `filesystem`
 - `managed`
@@ -51,7 +51,7 @@ Canonical managed config lives in App Settings -> `Storage`:
 - managed PostgreSQL connection string and SSL mode
 - S3-compatible object-storage URL, access key ID, and secret access key
 
-The API, executor, and Docker runtime do not read storage/database choices from `.env`. If `settings/deployment-storage.json` is missing, the runtime uses the built-in `Local folders` + `Local Docker Postgres` defaults. After the Storage tab is saved, the app-data settings file is the source of truth and storage changes require a process/container restart. In Kubernetes, the chart bootstraps that same settings file from Helm/Vault values only when the file is absent, runtime pods still read the app-settings file, and storage/database changes require rolling out the API/executor pods that own singleton backend state or endpoint execution. The runtime-library object key prefix stays fixed at `runtime-libraries/`.
+The API, executor, and Docker runtime do not read storage/database choices from `.env`. In single-host file mode, a missing `settings/deployment-storage.json` uses the built-in `Local folders` + `Local Docker Postgres` defaults. In Kubernetes, Helm/Vault values seed PostgreSQL only when the deployment-storage row is absent; PostgreSQL is authoritative afterward, and pod-local files are disposable startup projections. Storage/database changes require restarting containers or rolling out Kubernetes API/executor pods because backend and runtime-library state are process singletons. The runtime-library object key prefix stays fixed at `runtime-libraries/`.
 
 Still-env-owned runtime-library process tuning:
 
@@ -281,7 +281,7 @@ Both execution paths resolve managed libraries from `current/node_modules`:
 
 - the API uses `ManagedCodeRunner`
 - the production and local-development executor images set `RIVET_CODE_RUNNER_REQUIRE_ROOT` to `.../current/node_modules` and rely on Rivet 2.0's app-executor `CodeRunner` seam instead of patching Rivet source; this keeps `require('package-name')` in editor Node runs pointed at the same UI-installed libraries as headless endpoint runs
-- the shared proxy bootstrap also applies UI-managed Node executor proxy settings before installing Undici's proxy dispatcher: it clears process proxy env first, API processes read `settings/node-executor-proxy.json` under `RIVET_APP_DATA_ROOT` for headless endpoint execution, and the editor executor reads the same relative file from its desktop-style app-data mount
+- the shared proxy bootstrap also applies UI-managed Node executor proxy settings before installing Undici's proxy dispatcher: it clears process proxy env first; API processes use the active settings repository for headless execution, while the editor executor reads the pod-local `settings/node-executor-proxy.json` compatibility projection from its desktop-style app-data mount
 - the API image links `@valerypopoff/rivet2-node`, `@valerypopoff/rivet2-core`, and Rivet 2's `@rivet2/*` runtime aliases to the built embedded `rivet/` packages before compiling the API, so hosted endpoint execution and editor-side execution use the same Rivet 2.0 runtime behavior
 
 That means newly activated libraries take effect on the next workflow execution without restarting the API container.

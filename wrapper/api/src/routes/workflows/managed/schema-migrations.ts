@@ -5,12 +5,26 @@ import type { Pool, PoolClient, QueryResultRow } from 'pg';
 import { MANAGED_WORKFLOW_SCHEMA_SQL } from './schema.js';
 
 export const MANAGED_WORKFLOW_SCHEMA_MIGRATIONS_TABLE = 'managed_workflow_schema_migrations';
-export const CURRENT_MANAGED_WORKFLOW_SCHEMA_VERSION = 1;
+export const CURRENT_MANAGED_WORKFLOW_SCHEMA_VERSION = 2;
 
 const MANAGED_WORKFLOW_SCHEMA_LOCK = {
   classId: 8_071,
   objectId: 24_002,
 } as const;
+
+const MANAGED_APP_SETTINGS_SCHEMA_SQL = `
+CREATE TABLE IF NOT EXISTS app_settings (
+  setting_key TEXT PRIMARY KEY CHECK (char_length(setting_key) > 0),
+  revision BIGINT NOT NULL CHECK (revision > 0),
+  schema_version INTEGER NOT NULL CHECK (schema_version >= 0),
+  ciphertext BYTEA NOT NULL CHECK (octet_length(ciphertext) > 0),
+  iv BYTEA NOT NULL CHECK (octet_length(iv) = 12),
+  auth_tag BYTEA NOT NULL CHECK (octet_length(auth_tag) = 16),
+  key_id TEXT NOT NULL CHECK (char_length(key_id) = 16),
+  source_hash TEXT NULL CHECK (source_hash IS NULL OR char_length(source_hash) = 64),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+`;
 
 const MIGRATION_LOCK_TIMEOUT = '30s';
 const MIGRATION_STATEMENT_TIMEOUT = '5min';
@@ -108,6 +122,12 @@ export const MANAGED_WORKFLOW_SCHEMA_MIGRATIONS: readonly ManagedWorkflowSchemaM
     sql: MANAGED_WORKFLOW_SCHEMA_SQL,
     checksum: '692f720796964d6ae4f25bcbfc7b1f11616fcc1012e7bcf506dec9428c9ce3b6',
   },
+  {
+    version: 2,
+    name: 'encrypted-app-settings',
+    sql: MANAGED_APP_SETTINGS_SCHEMA_SQL,
+    checksum: '4b531b5c4404eef0ddef0b08ed3a85f31f88a203151a5452986565536a04fe80',
+  },
 ];
 
 function assertMigrationDefinitions(): void {
@@ -137,6 +157,7 @@ function assertMigrationDefinitions(): void {
 assertMigrationDefinitions();
 
 export const MANAGED_WORKFLOW_SCHEMA_REQUIRED_TABLES = [
+  'app_settings',
   'workflow_folders',
   'workflows',
   'workflow_revisions',
@@ -156,6 +177,15 @@ export const MANAGED_WORKFLOW_SCHEMA_REQUIRED_TABLES = [
 ] as const;
 
 export const MANAGED_WORKFLOW_SCHEMA_REQUIRED_COLUMNS = [
+  ['app_settings', 'setting_key', 'text', 'NO'],
+  ['app_settings', 'revision', 'int8', 'NO'],
+  ['app_settings', 'schema_version', 'int4', 'NO'],
+  ['app_settings', 'ciphertext', 'bytea', 'NO'],
+  ['app_settings', 'iv', 'bytea', 'NO'],
+  ['app_settings', 'auth_tag', 'bytea', 'NO'],
+  ['app_settings', 'key_id', 'text', 'NO'],
+  ['app_settings', 'source_hash', 'text', 'YES'],
+  ['app_settings', 'updated_at', 'timestamptz', 'NO'],
   ['evaluation_dataset_snapshots', 'project_id', 'text', 'NO'],
   ['evaluation_dataset_snapshots', 'dataset_fingerprint', 'text', 'NO'],
   ['evaluation_dataset_snapshots', 'snapshot_json', 'jsonb', 'NO'],
@@ -284,6 +314,7 @@ export const MANAGED_WORKFLOW_SCHEMA_REQUIRED_COLUMNS = [
 ] as const;
 
 export const MANAGED_WORKFLOW_SCHEMA_REQUIRED_COLUMN_DEFAULTS = [
+  ['app_settings', 'updated_at', 'now()'],
   ['evaluation_dataset_snapshots', 'created_at', 'now()'],
   ['evaluation_library', 'singleton_key', 'true'],
   ['evaluation_library', 'updated_at', 'now()'],
@@ -404,6 +435,15 @@ export const MANAGED_WORKFLOW_SCHEMA_REQUIRED_INDEXES = [
 ] as const;
 
 export const MANAGED_WORKFLOW_SCHEMA_REQUIRED_CONSTRAINTS = [
+  ['app_settings', 'p', 'PRIMARY KEY (setting_key)'],
+  ['app_settings', 'c', 'CHECK ((char_length(setting_key) > 0))'],
+  ['app_settings', 'c', 'CHECK ((revision > 0))'],
+  ['app_settings', 'c', 'CHECK ((schema_version >= 0))'],
+  ['app_settings', 'c', 'CHECK ((octet_length(ciphertext) > 0))'],
+  ['app_settings', 'c', 'CHECK ((octet_length(iv) = 12))'],
+  ['app_settings', 'c', 'CHECK ((octet_length(auth_tag) = 16))'],
+  ['app_settings', 'c', 'CHECK ((char_length(key_id) = 16))'],
+  ['app_settings', 'c', 'CHECK (((source_hash IS NULL) OR (char_length(source_hash) = 64)))'],
   ['evaluation_dataset_snapshots', 'p', 'PRIMARY KEY (project_id, dataset_fingerprint)'],
   [
     'evaluation_dataset_snapshots',

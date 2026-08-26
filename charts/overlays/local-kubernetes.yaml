@@ -38,9 +38,6 @@ vault:
 auth:
   keySecretName: rivet-auth
 
-storage:
-  appData:
-    existingClaimName: rivet-local-app-data
 
 workflowStorage:
   backend: managed

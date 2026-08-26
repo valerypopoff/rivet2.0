@@ -108,6 +108,52 @@ resolve_proxy_resolver() {
   printf '%s' "$resolved"
 }
 
+fetch_proxy_settings() {
+  if [ -z "${RIVET_PROXY_SETTINGS_URL:-}" ]; then
+    return 0
+  fi
+
+  target_file="${RIVET_PROXY_SETTINGS_FILE:-/tmp/nginx/rivet-proxy-settings.json}"
+  temp_file="${target_file}.tmp"
+  mkdir -p "$(dirname "$target_file")"
+  if ! curl --fail --silent --show-error --max-time 5 \
+    -H "X-Rivet-Proxy-Auth: ${RIVET_PROXY_AUTH_TOKEN}" \
+    "$RIVET_PROXY_SETTINGS_URL" \
+    -o "$temp_file"; then
+    rm -f "$temp_file"
+    return 1
+  fi
+
+  if [ -z "$(read_json_string_property "$temp_file" "revision")" ]; then
+    >&2 printf 'Warning: proxy settings response did not contain a revision.\n'
+    rm -f "$temp_file"
+    return 1
+  fi
+
+  mv "$temp_file" "$target_file"
+  export RIVET_PROXY_SETTINGS_FILE="$target_file"
+}
+
+fetch_initial_proxy_settings() {
+  if [ -z "${RIVET_PROXY_SETTINGS_URL:-}" ]; then
+    return
+  fi
+
+  attempts="${RIVET_PROXY_SETTINGS_INITIAL_RETRY_ATTEMPTS:-60}"
+  case "$attempts" in
+    ''|*[!0123456789]*|0) attempts=60 ;;
+  esac
+
+  attempt=1
+  while ! fetch_proxy_settings; do
+    if [ "$attempt" -ge "$attempts" ]; then
+      >&2 printf 'Error: control API proxy settings remained unavailable after %s attempts.\n' "$attempts"
+      exit 1
+    fi
+    attempt=$((attempt + 1))
+    sleep 1
+  done
+}
 sha256_hex() {
   value="$1"
   if command -v sha256sum >/dev/null 2>&1; then
@@ -234,7 +280,7 @@ read_runtime_limit_settings() {
   RIVET_RUNTIME_LIMIT_SETTINGS_VALID=1
   set_default_runtime_limits
 
-  runtime_limit_settings_file="${RIVET_APP_DATA_ROOT:-/data/rivet-app}/settings/runtime-limits.json"
+  runtime_limit_settings_file="${RIVET_PROXY_SETTINGS_FILE:-${RIVET_APP_DATA_ROOT:-/data/rivet-app}/settings/runtime-limits.json}"
   if [ ! -f "$runtime_limit_settings_file" ]; then
     return
   fi
@@ -307,7 +353,7 @@ read_public_route_settings() {
   RIVET_PUBLIC_ROUTES_SETTINGS_VALID=1
   set_default_public_routes
 
-  public_route_settings_file="${RIVET_APP_DATA_ROOT:-/data/rivet-app}/settings/public-routes.json"
+  public_route_settings_file="${RIVET_PROXY_SETTINGS_FILE:-${RIVET_APP_DATA_ROOT:-/data/rivet-app}/settings/public-routes.json}"
   legacy_web_app_route_settings_file="${RIVET_APP_DATA_ROOT:-/data/rivet-app}/settings/web-app-routes.json"
   settings_file=''
 
@@ -390,7 +436,7 @@ set_default_trusted_hosts() {
 read_trusted_host_settings() {
   set_default_trusted_hosts
 
-  trusted_host_settings_file="${RIVET_APP_DATA_ROOT:-/data/rivet-app}/settings/trusted-hosts.json"
+  trusted_host_settings_file="${RIVET_PROXY_SETTINGS_FILE:-${RIVET_APP_DATA_ROOT:-/data/rivet-app}/settings/trusted-hosts.json}"
   if [ ! -f "$trusted_host_settings_file" ]; then
     return
   fi
@@ -549,6 +595,11 @@ start_public_routes_reload_watcher() {
     esac
 
     while sleep "$interval"; do
+      if ! fetch_proxy_settings; then
+        >&2 printf 'Warning: control API proxy settings refresh failed; keeping the last valid nginx configuration.\n'
+        continue
+      fi
+
       read_runtime_limit_settings
       if [ "${RIVET_RUNTIME_LIMIT_SETTINGS_VALID:-1}" != "1" ]; then
         continue
@@ -595,7 +646,9 @@ export NGINX_ENVSUBST_OUTPUT_DIR="${NGINX_ENVSUBST_OUTPUT_DIR:-/etc/nginx/conf.d
 export RIVET_PUBLIC_ROUTES_INCLUDE_FILE="${RIVET_PUBLIC_ROUTES_INCLUDE_FILE:-/tmp/nginx/rivet-public-routes.inc}"
 export RIVET_PROXY_TIMEOUT_INCLUDE_FILE="${RIVET_PROXY_TIMEOUT_INCLUDE_FILE:-/tmp/nginx/rivet-proxy-timeout.inc}"
 export RIVET_TRUSTED_HOSTS_INCLUDE_FILE="${RIVET_TRUSTED_HOSTS_INCLUDE_FILE:-/tmp/nginx/rivet-trusted-hosts.inc}"
+export RIVET_PROXY_AUTH_TOKEN="$(sha256_hex "${RIVET_KEY:-}:proxy-auth")"
 
+fetch_initial_proxy_settings
 read_runtime_limit_settings
 if [ "${RIVET_RUNTIME_LIMIT_SETTINGS_VALID:-1}" != "1" ]; then
   >&2 printf 'Error: invalid runtime limit settings; refusing to start nginx with unsafe proxy limits.\n'
@@ -613,7 +666,6 @@ export RIVET_PUBLISHED_APPS_BASE_PATH="$RIVET_WEB_APPS_BASE_PATH"
 export RIVET_LATEST_APPS_BASE_PATH="$RIVET_LATEST_WEB_APPS_BASE_PATH"
 export RIVET_TRUST_INCOMING_FORWARDED_HEADERS="$(normalize_bool "${RIVET_TRUST_INCOMING_FORWARDED_HEADERS:-}" "0")"
 export RIVET_PROXY_RESOLVER="$(resolve_proxy_resolver "${RIVET_PROXY_RESOLVER:-}")"
-export RIVET_PROXY_AUTH_TOKEN="$(sha256_hex "${RIVET_KEY:-}:proxy-auth")"
 
 write_proxy_timeout_include "$RIVET_PROXY_TIMEOUT_INCLUDE_FILE"
 write_public_routes_include "$RIVET_PUBLIC_ROUTES_INCLUDE_FILE"

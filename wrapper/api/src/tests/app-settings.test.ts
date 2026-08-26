@@ -1841,8 +1841,8 @@ test('UI-managed environment variables override runtime values while list and br
         value: 'ui-value',
       });
 
-      // Simulate another API replica updating the shared app-data volume. The
-      // browser route must not wait for its background settings poll.
+      // Simulate an external writer in the single-host file backend. The browser
+      // route must not wait for its background settings poll.
       const storedSettingsPath = getEnvironmentVariableSettingsPath();
       const storedSettings = JSON.parse(fs.readFileSync(storedSettingsPath, 'utf8')) as {
         variables: Array<{ name: string; value: string }>;

@@ -33,6 +33,7 @@ import {
 } from './workflowEndpointPaths.js';
 import { getWorkflowStorageBackendMode } from './routes/workflows/storage-config.js';
 import { requireAuth } from './middleware/auth.js';
+import { createProxySettingsSnapshot } from './proxy-settings-snapshot.js';
 import { isTrustedProxyRequest } from './auth.js';
 import { getApiRuntimeProfile, isControlPlaneApiProfile, isExecutionOnlyApiProfile } from './runtime-profile.js';
 import { readRuntimeLimitSettingsSync } from './runtime-limit-settings.js';
@@ -174,6 +175,7 @@ export function getApiRouteExposureMatrix(profile = getApiRuntimeProfile()): str
       '/api/runtime-libraries/*',
       '/api/app-settings/*',
       '/api/config*',
+      '/internal/app-settings/proxy-config',
     );
   }
 
@@ -228,6 +230,10 @@ function dispatchDynamicBasePath(
 }
 
 function mountControlPlaneRoutes(app: Express): void {
+  app.get('/internal/app-settings/proxy-config', requireAuth, (_req, res) => {
+    res.set('Cache-Control', 'no-store');
+    res.json(createProxySettingsSnapshot());
+  });
   app.use('/', uiAuthRouter);
   app.use(dispatchDynamicBasePath(getLatestWorkflowsBasePath, latestWorkflowsRouter));
   app.use(dispatchDynamicBasePath(getLatestWebAppsBasePath, latestWebAppsRouter));

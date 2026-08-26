@@ -47,8 +47,13 @@ test('proxy templates route public workflow traffic to the right API plane', () 
 
   assert.ok(!imageProxyTemplate.includes('location /internal/workflows'));
   assert.match(proxyBootstrap, /resolve_proxy_resolver\(\)/);
-  assert.match(proxyBootstrap, /public_route_settings_file="\$\{RIVET_APP_DATA_ROOT:-\/data\/rivet-app\}\/settings\/public-routes\.json"/);
-  assert.match(proxyBootstrap, /trusted_host_settings_file="\$\{RIVET_APP_DATA_ROOT:-\/data\/rivet-app\}\/settings\/trusted-hosts\.json"/);
+  assert.match(proxyBootstrap, /fetch_proxy_settings\(\)/);
+  assert.match(proxyBootstrap, /X-Rivet-Proxy-Auth: \$\{RIVET_PROXY_AUTH_TOKEN\}/);
+  assert.match(proxyBootstrap, /RIVET_PROXY_SETTINGS_URL/);
+  assert.match(proxyBootstrap, /proxy settings refresh failed; keeping the last valid nginx configuration/);
+  assert.doesNotMatch(proxyBootstrap, /export RIVET_PROXY_SETTINGS_FILE="\$\{RIVET_PROXY_SETTINGS_FILE:-\/tmp\/nginx\/rivet-proxy-settings\.json\}"/);
+  assert.match(proxyBootstrap, /public_route_settings_file="\$\{RIVET_PROXY_SETTINGS_FILE:-\$\{RIVET_APP_DATA_ROOT:-\/data\/rivet-app\}\/settings\/public-routes\.json\}"/);
+  assert.match(proxyBootstrap, /trusted_host_settings_file="\$\{RIVET_PROXY_SETTINGS_FILE:-\$\{RIVET_APP_DATA_ROOT:-\/data\/rivet-app\}\/settings\/trusted-hosts\.json\}"/);
   assert.match(proxyBootstrap, /legacy_web_app_route_settings_file="\$\{RIVET_APP_DATA_ROOT:-\/data\/rivet-app\}\/settings\/web-app-routes\.json"/);
   assert.match(proxyBootstrap, /normalize_public_route_setting\(\) \{/);
   assert.match(proxyBootstrap, /read_json_string_property "\$settings_file" "publishedWorkflowsBasePath"/);
@@ -195,7 +200,7 @@ test('proxy templates keep HTTP workflow routes bounded and websocket routes lon
   }
 
   const proxyBootstrap = readRepoFile('image/proxy/normalize-workflow-paths.sh');
-  assert.match(proxyBootstrap, /runtime_limit_settings_file="\$\{RIVET_APP_DATA_ROOT:-\/data\/rivet-app\}\/settings\/runtime-limits\.json"/);
+  assert.match(proxyBootstrap, /runtime_limit_settings_file="\$\{RIVET_PROXY_SETTINGS_FILE:-\$\{RIVET_APP_DATA_ROOT:-\/data\/rivet-app\}\/settings\/runtime-limits\.json\}"/);
   assert.match(proxyBootstrap, /read_json_scalar_property "\$runtime_limit_settings_file" "proxyReadTimeoutSeconds"/);
   assert.match(proxyBootstrap, /read_json_scalar_property "\$runtime_limit_settings_file" "webAppActionRequestLimitBytes"/);
   assert.match(proxyBootstrap, /\*\[!0123456789\]\*/);

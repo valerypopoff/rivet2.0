@@ -127,6 +127,7 @@ test('Phase 4 route exposure matrix stays stable across API runtime profiles', (
     '/api/runtime-libraries/*',
     '/api/app-settings/*',
     '/api/config*',
+    '/internal/app-settings/proxy-config',
   ]);
 
   assert.deepEqual(getApiRouteExposureMatrix('execution'), [
@@ -158,6 +159,7 @@ test('Phase 4 route exposure matrix stays stable across API runtime profiles', (
     '/api/runtime-libraries/*',
     '/api/app-settings/*',
     '/api/config*',
+    '/internal/app-settings/proxy-config',
     '/workflows/:endpointName',
     '/apps/:slug',
     '/apps/:slug/actions/ws',
@@ -306,6 +308,24 @@ test('control profile exposes control-plane routes and does not expose published
       assert.equal(configPayload.publishedAppsBasePath, '/apps');
       assert.equal(configPayload.latestAppsBasePath, '/apps-latest');
 
+      const unauthenticatedProxySettings = await fetch(`${server.baseUrl}/internal/app-settings/proxy-config`);
+      assert.equal(unauthenticatedProxySettings.status, 403);
+
+      const proxySettingsResponse = await fetch(`${server.baseUrl}/internal/app-settings/proxy-config`, {
+        headers: trustedProxyHeaders(),
+      });
+      assert.equal(proxySettingsResponse.status, 200);
+      assert.equal(proxySettingsResponse.headers.get('cache-control'), 'no-store');
+      const proxySettingsText = await proxySettingsResponse.text();
+      assert.doesNotMatch(proxySettingsText, /phase4-shared-key|clientSecret|storageAccessKey/);
+      const proxySettings = JSON.parse(proxySettingsText) as {
+        revision: string;
+        publishedWorkflowsBasePath: string;
+        latestAppsBasePath: string;
+      };
+      assert.match(proxySettings.revision, /^[A-Za-z0-9_-]{43}$/);
+      assert.equal(proxySettings.publishedWorkflowsBasePath, '/workflows');
+      assert.equal(proxySettings.latestAppsBasePath, '/apps-latest');
       const publishedResponse = await fetch(`${server.baseUrl}/workflows/phase4-missing`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
@@ -424,6 +444,24 @@ test('combined profile preserves both control-plane and published/latest executi
       });
       assert.equal(configResponse.status, 200);
 
+      const unauthenticatedProxySettings = await fetch(`${server.baseUrl}/internal/app-settings/proxy-config`);
+      assert.equal(unauthenticatedProxySettings.status, 403);
+
+      const proxySettingsResponse = await fetch(`${server.baseUrl}/internal/app-settings/proxy-config`, {
+        headers: trustedProxyHeaders(),
+      });
+      assert.equal(proxySettingsResponse.status, 200);
+      assert.equal(proxySettingsResponse.headers.get('cache-control'), 'no-store');
+      const proxySettingsText = await proxySettingsResponse.text();
+      assert.doesNotMatch(proxySettingsText, /phase4-shared-key|clientSecret|storageAccessKey/);
+      const proxySettings = JSON.parse(proxySettingsText) as {
+        revision: string;
+        publishedWorkflowsBasePath: string;
+        latestAppsBasePath: string;
+      };
+      assert.match(proxySettings.revision, /^[A-Za-z0-9_-]{43}$/);
+      assert.equal(proxySettings.publishedWorkflowsBasePath, '/workflows');
+      assert.equal(proxySettings.latestAppsBasePath, '/apps-latest');
       const publishedResponse = await fetch(`${server.baseUrl}/workflows/phase4-missing`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },

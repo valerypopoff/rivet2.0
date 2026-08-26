@@ -8,7 +8,7 @@ import { disposeWorkflowStorage, initializeWorkflowStorage } from './routes/work
 import { flushWorkflowExecutionRecordingPersistence } from './routes/workflows/recordings.js';
 import { getApiRuntimeProfile, isControlPlaneApiProfile } from './runtime-profile.js';
 import { assertApiRuntimeProfileStartupPreconditions, createApiApp } from './app.js';
-import { initializeAppSettingsRepositories } from './app-settings/settings-repository.js';
+import { disposeAppSettingsRepositories, initializeAppSettingsRepositories } from './app-settings/settings-repository.js';
 
 const app = createApiApp();
 const server = createServer(app);
@@ -74,6 +74,10 @@ async function shutdown(signal: string): Promise<void> {
 
   await disposeRuntimeLibrariesBackend().catch((error) => {
     console.error('[runtime-libraries] Failed to dispose backend during shutdown:', error);
+  });
+
+  await disposeAppSettingsRepositories().catch((error) => {
+    console.error('[app-settings] Failed to dispose settings backend during shutdown:', error);
   });
 
   process.exitCode = 0;

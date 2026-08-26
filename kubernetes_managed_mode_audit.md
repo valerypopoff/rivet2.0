@@ -9,12 +9,12 @@
 
 The repository has substantial managed-mode support: workflow revisions and publication metadata use PostgreSQL, large workflow and recording artifacts use object storage, evaluation history has a PostgreSQL implementation, runtime-library archives use object storage, and web-app WebSocket runs have PostgreSQL-backed ownership and recovery support. Those are confirmed capabilities, not assumptions.
 
-Problem 1 from the original audit is now implemented: workflow schema initialization is serialized, versioned, and owned by a Helm migration Job in Kubernetes. The two most prominent remaining production risks are:
+Problems 1 and 2 from the original audit are now implemented:
 
-1. App settings and bootstrap state still use a shared filesystem as a distributed coordination boundary, which forces an RWX claim and leaves multiple writers coordinated only inside each process.
-2. Health, readiness, shutdown, and replica policy are not yet strong enough for dependable rolling updates and backend high availability.
+1. Workflow schema initialization is serialized, versioned, and owned by a Helm migration Job in Kubernetes.
+2. App Settings authority has moved from a shared RWX filesystem to encrypted, revisioned PostgreSQL rows. Runtime pods use only disposable local compatibility projections, and the proxy consumes an authenticated non-secret API snapshot.
 
-A fourth issue limits confidence in all three areas: automated Kubernetes verification is static. It validates templates and contracts but does not run a managed-mode stack in a cluster or exercise failover, concurrent startup, or persistence.
+The most prominent remaining production risk is Problem 3: health, readiness, shutdown, and replica policy are not yet strong enough for dependable rolling updates and backend high availability. Problem 4 still limits confidence in all areas because automated Kubernetes verification is static; it does not yet run the complete managed stack in a live cluster or exercise failover, concurrent startup, key rotation, or persistence.
 
 ## Evidence Standard
 
@@ -83,7 +83,7 @@ Repeatedly running a monolithic current-schema script also provides no durable r
 
 1. Root and API-package commands expose the same explicit `workflow-schema:migrate` and `workflow-schema:verify` entrypoint.
 2. Docker and simple single-process managed deployments retain automatic migration mode.
-3. Helm runs the candidate API image as a `pre-install,pre-upgrade` hook Job. The Job consumes chart/Vault database settings from an isolated `emptyDir` app-data root and does not mount or mutate the shared app-data claim observed by old pods.
+3. Helm runs the candidate API image as a `pre-install,pre-upgrade` hook Job. The Job consumes chart/Vault database settings from an isolated `emptyDir` app-data root and does not mutate settings observed by old pods.
 4. Backend and execution API workloads receive a chart-owned verify-only setting. The API entrypoint reapplies it after Vault dotenv loading so a stale or user-controlled dotenv value cannot turn serving replicas back into schema writers.
 5. Disabling the chart Job requires an explicit external-migration acknowledgement; serving workloads remain verify-only and therefore fail closed when the external step is missing.
 
@@ -107,79 +107,65 @@ Repeatedly running a monolithic current-schema script also provides no durable r
 - Automated fake-PostgreSQL tests start four contenders; exactly one applies migration 1 and all four observe version 1.
 - A disposable PostgreSQL 16 check started four real connection pools concurrently; exactly one applied migration 1, the other contenders waited and observed version 1, and a separate verify-only connection accepted the resulting schema.
 - Automated tests cover a fresh database, the only pre-ledger baseline, missing metadata, checksum mismatch, future versions, missing or malformed objects, all required column defaults, table DML privileges, row-level-security drift, exact index and constraint definitions, invalid/unready indexes, unvalidated constraints, folder-function body drift, logger isolation, transactional rollback, and clean retry.
-- Helm contracts prove one pre-install/pre-upgrade Job, isolated candidate settings without the shared app-data PVC, pre-populate-only Vault injection, verify-only backend/execution pods, and fail-closed behavior when migration ownership is delegated externally.
+- Helm contracts prove one pre-install/pre-upgrade Job, isolated candidate settings before managed settings import, pre-populate-only Vault injection, verify-only backend/execution pods, and fail-closed behavior when migration ownership is delegated externally.
 - A live Kubernetes disruption gate is still part of Problem 4. It should exercise lock timeout/deadlock/connection loss/process termination and mixed-image rollout behavior across real pods; the local PostgreSQL check and static Helm render do not prove those cluster/provider properties.
 
-## Problem 2: Remove the Shared RWX App-Data Volume as a Distributed State Boundary
+## Resolved Problem 2: Remove the Shared RWX App-Data Volume as a Distributed State Boundary
 
-### Observed Evidence
+**Implementation status (2026-08-26): resolved in code, focused fault tests, full repository verification, and static Helm render/contracts. No live multi-node Kubernetes rollout was performed.**
 
-1. Helm validation requires `storage.appData.existingClaimName`; its message says the claim must support `ReadWriteMany` when proxy/execution scale. Evidence: [`validate-values.yaml`](charts/templates/validate-values.yaml).
-2. Backend and execution pods mount the app-data claim read/write, while the proxy mounts it read-only. Evidence: [`backend-statefulset.yaml`](charts/templates/backend-statefulset.yaml), [`execution-deployment.yaml`](charts/templates/execution-deployment.yaml), and [`proxy-deployment.yaml`](charts/templates/proxy-deployment.yaml).
-3. Saved app settings remain individual JSON files under app data, including public routes, OAuth, trusted hosts, runtime limits, recording policy, executor proxy/URL overrides, environment overlays, and deployment storage. Evidence: [`app-settings/schema.ts`](wrapper/api/src/app-settings/schema.ts) and [`deployment-storage-settings.ts`](wrapper/api/src/deployment-storage-settings.ts).
-4. The settings repository serializes writes with a process-local operation queue, writes temp files followed by rename, polls for changes every five seconds, and captures immutable per-request snapshots. Evidence: [`app-settings/settings-repository.ts`](wrapper/api/src/app-settings/settings-repository.ts), [`settings-file-writer.ts`](wrapper/api/src/settings-file-writer.ts), and [`middleware/app-settings-snapshot.ts`](wrapper/api/src/middleware/app-settings-snapshot.ts).
-5. That queue coordinates callers in one process only; it is not a filesystem or distributed lock shared across pods. This follows directly from the module-local queue implementation in [`app-settings/settings-repository.ts`](wrapper/api/src/app-settings/settings-repository.ts).
-6. Normal settings mutation routes are mounted only by the control-plane profile. Evidence: `mountControlPlaneRoutes()` in [`app.ts`](wrapper/api/src/app.ts) and profile ownership in [`runtime-profile.ts`](wrapper/api/src/runtime-profile.ts). This reduces normal multi-writer exposure but does not make the file format itself multi-writer safe.
-7. Backend and execution deployments both run the deployment-storage bootstrap init container. Its create-if-missing path checks existence and then writes the final file directly; it has no distributed lock and no temp-file rename. Evidence: deployment templates above and [`bootstrap-deployment-storage-settings.mjs`](image/lib/bootstrap-deployment-storage-settings.mjs).
-8. The proxy is a separate process that reads route/runtime configuration from the same volume and reloads independently. Evidence: [`image/proxy/entrypoint.sh`](image/proxy/entrypoint.sh), [`proxy-bootstrap/bootstrap.mjs`](wrapper/bootstrap/proxy-bootstrap/bootstrap.mjs), and the proxy deployment template.
+### Implemented Evidence
 
-### Risk Inference
+1. Managed workflow migration 2 creates `app_settings` with a domain key, monotonic revision, payload schema version, AES-GCM ciphertext/IV/authentication tag, encryption key id, legacy source hash, and update time. Its table, columns, default, primary key, and field-shape checks are part of verify-mode's required manifest. The migration is immutable and checksummed with the rest of the managed schema. Evidence: [`schema-migrations.ts`](wrapper/api/src/routes/workflows/managed/schema-migrations.ts).
+2. `VersionedSettingsRepository` now selects a file backend for single-host compatibility or a PostgreSQL backend when `RIVET_APP_SETTINGS_BACKEND=postgres`. Managed writes use revision compare-and-swap; stale explicit revisions fail with `409`. Reads retain the existing immutable per-request snapshot contract. Evidence: [`settings-repository.ts`](wrapper/api/src/app-settings/settings-repository.ts) and [`middleware/app-settings-snapshot.ts`](wrapper/api/src/middleware/app-settings-snapshot.ts).
+3. Managed payloads are encrypted with AES-256-GCM and authenticated against the settings domain key and schema version, preventing ciphertext from being replayed as another domain/version. A dedicated primary key is preferred, `RIVET_KEY` is a compatibility fallback, and one previous key may decrypt old rows during rotation. A fallback-key read rewrites the row with the primary key. Missing key material fails explicitly instead of replacing settings with defaults. Evidence: [`managed-settings-crypto.ts`](wrapper/api/src/app-settings/managed-settings-crypto.ts) and [`managed-settings-store.ts`](wrapper/api/src/app-settings/managed-settings-store.ts).
+4. PostgreSQL `LISTEN`/`NOTIFY` accelerates cross-replica invalidation, while a five-second revision poll remains the durable convergence mechanism after listener disconnects or dropped notifications. Notification delivery is isolated from the already-committed compare-and-swap write, and a replica acknowledges a revision only after every matching repository refresh succeeds; failed refreshes therefore remain eligible for the next poll. Overlapping poll cycles are suppressed and shutdown waits for the active poll before closing the pool. Same-process backend initialization is promise-deduplicated, and settings-domain updates remain serialized per repository. Evidence: [`managed-settings-store.ts`](wrapper/api/src/app-settings/managed-settings-store.ts) and [`settings-repository.ts`](wrapper/api/src/app-settings/settings-repository.ts).
+5. The Helm migration Job deliberately runs workflow schema migration with `RIVET_APP_SETTINGS_BACKEND=file` before importing managed settings, because the database settings table does not exist before migration 2. Both phases reuse one rendered database credential set rather than declaring duplicate environment names. An optional legacy app-data claim is mounted only by that Job, read-only. Missing rows are seeded independently: a matching regular, valid legacy JSON file wins for that domain, while missing or unusable legacy entries preserve the candidate bootstrap/default. Imported rows retain a source hash and existing database rows always win. Evidence: [`workflow-schema-migration-job.yaml`](charts/templates/workflow-schema-migration-job.yaml), [`_env.tpl`](charts/templates/_env.tpl), [`import-managed-app-settings.ts`](wrapper/api/src/scripts/import-managed-app-settings.ts), and [`settings-repository.ts`](wrapper/api/src/app-settings/settings-repository.ts).
+6. Backend and execution workloads now use independent `emptyDir` app-data volumes. Init containers hydrate only deployment-storage and node-proxy compatibility files for consumers that still require local files. PostgreSQL remains authoritative, and repository subscriptions refresh those projections. Hosted package-plugin directories are explicitly reconstructible pod-local caches: both install and load routes ensure the package is ready under a per-package process lock, so consecutive browser requests remain correct when a Service sends them to different control replicas. Evidence: [`backend-statefulset.yaml`](charts/templates/backend-statefulset.yaml), [`execution-deployment.yaml`](charts/templates/execution-deployment.yaml), [`project-managed-app-settings.ts`](wrapper/api/src/scripts/project-managed-app-settings.ts), [`deployment-storage-settings.ts`](wrapper/api/src/deployment-storage-settings.ts), [`node-executor-proxy-settings.ts`](wrapper/api/src/node-executor-proxy-settings.ts), and [`plugin-installer.ts`](wrapper/api/src/routes/plugin-installer.ts).
+7. The proxy no longer mounts app data. It fetches a revisioned, deliberately non-secret snapshot from the control API through the existing `RIVET_KEY`-derived trusted-proxy credential. Fetch failure preserves the last valid include; startup fails if no valid initial snapshot is available; nginx reload still requires `nginx -t`. Evidence: [`proxy-settings-snapshot.ts`](wrapper/api/src/proxy-settings-snapshot.ts), [`app.ts`](wrapper/api/src/app.ts), [`proxy-deployment.yaml`](charts/templates/proxy-deployment.yaml), and [`normalize-workflow-paths.sh`](image/proxy/normalize-workflow-paths.sh).
+8. The chart rejects any Kubernetes settings backend other than PostgreSQL and no longer exposes `storage.appData`. The local Kubernetes launcher and overlays no longer create or require an app-data PVC. Evidence: [`validate-values.yaml`](charts/templates/validate-values.yaml), [`values.yaml`](charts/values.yaml), chart overlays, and [`kubernetes-launcher-config.mjs`](scripts/lib/kubernetes-launcher-config.mjs).
 
-The current design can work with a correctly provisioned RWX filesystem and one effective settings writer. Its weaknesses are portability and coordination: not every cluster has a reliable RWX storage class, filesystem rename/cache semantics vary across network filesystems, and the concurrent init-container create path can race on a fresh deployment.
+### Resulting Guarantees
 
-Settings are also outside the managed PostgreSQL/object-storage control plane. A transient volume problem can therefore affect route generation, auth policy, runtime credentials, and startup even when the database and object store are healthy.
+- PostgreSQL is the only writable App Settings authority after cutover; there is no dual-write mode.
+- Two administrators cannot silently overwrite the same revision.
+- Each settings domain is pinned to the immutable snapshot captured at request start; a notification or concurrent save cannot change that domain midway through the request.
+- A dropped PostgreSQL notification can delay convergence by at most the polling interval under normal database availability; it cannot make stale cache state permanent.
+- Security-sensitive settings are encrypted before storage, and the proxy endpoint cannot return OAuth, environment, database, object-storage, or signing secrets.
+- Normal Kubernetes runtime no longer needs an RWX storage class for App Settings.
+- Docker and other single-host deployments retain the existing atomic JSON-file behavior.
 
-### Detailed Suggested Plan
+### Migration and Rollback Contract
 
-#### Phase 1: Harden the Existing PVC Design
+1. Back up PostgreSQL and keep the old app-data claim before upgrading.
+2. Set `appSettings.legacyImport.existingClaimName` only for the cutover release. The migration Job mounts it read-only and imports only absent rows.
+3. Verify the backend, execution replicas, proxy routes, OAuth, environment overlays, and executor proxy behavior before changing settings.
+4. Keep the legacy claim through the rollback window, then remove the chart value in a later release. Old images cannot see settings changed after PostgreSQL cutover, so rolling back after new settings writes requires an operator-approved restore/reconciliation plan.
+5. Key rotation requires two compatibility rollouts. First deploy every replica with the old key still primary and the new key supplied as the previous/secondary key, so every old-generation pod is replaced by a pod that can decrypt both keys. Then deploy the new key as primary and the old key as previous, wait for every replica to initialize every domain, and remove the old key only in a later rollout. Fallback-key reads rewrite rows with the local primary, so the second rolling overlap may produce extra revisions but remains decryptable. Back up database data and key material separately but restore them together.
 
-1. Make one workload the bootstrap owner. The backend should create initial settings; execution pods should wait for a valid settings document instead of racing to create it.
-2. Change bootstrap writes to temp-file-plus-atomic-rename and validate the complete document before publishing it.
-3. Add a settings manifest containing format version and revision. Reject malformed, unsupported, or partially written documents with a precise startup/readiness error.
-4. Expose active settings revision and last reload time in diagnostics without exposing secret values.
-5. Document tested storage classes and required semantics: RWX, atomic rename within a directory, coherent reads after rename, ownership, and backup expectations.
+### Residual Risks and Follow-Up
 
-#### Phase 2: Add a Managed Settings Repository
+- PostgreSQL availability now gates uncached settings startup and updates. Existing in-process snapshots can serve active requests, but a fresh pod cannot safely invent defaults when the database or decryption key is unavailable.
+- Losing all valid encryption keys makes secret-bearing settings unrecoverable. Key backup and the two-rollout compatibility sequence are operational requirements, not optional hardening; skipping the first compatibility rollout can make new-key rows unreadable to old pods during a rolling update.
+- The proxy's last-known-good behavior protects an already-running pod, but a new proxy pod fails closed when it cannot obtain its first authenticated snapshot.
+- Pod-local projections are compatibility seams, not general caches. New consumers must use the typed repository or an authenticated narrow API rather than adding another file authority.
+- Static tests prove rendered topology and repository contracts, not a real multi-node provider. Problem 4 must still exercise legacy import, concurrent replicas, listener reconnect, key rotation, proxy/API interruption, and rollback in a live managed cluster.
 
-1. Add a PostgreSQL `app_settings` table with setting domain, encrypted payload, monotonic revision, update timestamp, and actor/change-source metadata.
-2. Use compare-and-swap updates (`WHERE revision = expected_revision`) so two administrators cannot silently overwrite each other.
-3. Publish change notifications with PostgreSQL `NOTIFY`, but retain revision polling because notifications are not durable.
-4. Keep the existing immutable request-snapshot contract: one request must resolve all settings from one captured revision.
-5. Encrypt secret-bearing fields at the application layer using a deployment master key supplied by Kubernetes Secret or Vault. Do not store the encryption key in the same table.
-6. Add schema versioning and domain-specific migrations for settings payloads.
+### Automated Coverage
 
-#### Phase 3: Remove Runtime Dependence on the Shared Volume
+- Settings tests cover one-time and partial legacy import, malformed/non-file fallback, database-wins semantics, compare-and-swap retry/conflict behavior, replica invalidation, notification-failure isolation, refresh acknowledgement/retry, immutable request snapshots, subscriber failure isolation, ciphertext/no-plaintext storage, domain/version authentication, fallback-key reads, and missing-key failure. Plugin tests cover deduplicated pod-local preparation and complete packages that intentionally skip dependency installation.
+- Managed schema tests cover migration 2's immutable checksum and complete table manifest alongside concurrent migration ownership.
+- API profile tests cover authentication and secret exclusion for the internal proxy snapshot.
+- Proxy image contracts cover API-snapshot polling plus the retained single-host file fallback.
+- Helm and launcher contracts prove no runtime shared app-data claim, pod-local projections, a proxy with no app-data mount, optional read-only legacy import, schema-before-settings migration ordering, and unique Rivet environment names in the migration Job.
 
-1. Move API and executor settings reads to the managed repository behind the existing typed settings interfaces.
-2. Replace proxy file watching with a small authenticated configuration endpoint or generated ConfigMap/controller flow. Preserve "validate nginx config before reload" behavior.
-3. Keep pod-local filesystem cache only as an availability optimization; PostgreSQL remains authoritative and cached revisions must never accept writes.
-4. After all consumers report database-backed settings readiness, remove the app-data mount from execution and proxy pods, then make it optional for backend compatibility/migration only.
+### Verification Record
 
-#### Migration and Rollback
-
-1. Import existing files once, preserving a hash of each source file and recording the imported revision.
-2. Run a read-compare period in which database and file projections are compared but only the existing source is authoritative.
-3. Switch to PostgreSQL authority with optional one-way file projection for rollback diagnostics.
-4. Never support unconstrained dual writes. Rollback should select one authority explicitly and verify revisions before changing it.
-
-### Risks of Fixing
-
-- Moving settings into PostgreSQL increases the blast radius of a database outage. Cached last-known-good settings need explicit freshness and security semantics.
-- Application-level encryption introduces key rotation and disaster-recovery obligations. Losing the master key can make stored OAuth and environment secrets unrecoverable.
-- A proxy configuration API is security-sensitive. It must be internal, authenticated, revisioned, and unable to return unrelated secrets.
-- `NOTIFY` can be dropped during disconnects; using it without revision polling would reintroduce stale settings.
-- A dual-authority migration can create split brain. The implementation must identify exactly one writer/source at every stage.
-- Some upstream/editor execution paths may assume files exist. Remove the PVC only after every consumer has contract coverage.
-- Removing RWX too early can break rollback to old images that still read settings files.
-
-### Tests and Acceptance Criteria
-
-- Concurrent initialization from backend and execution replicas produces one valid initial settings revision.
-- Two updates against the same expected revision yield one success and one explicit conflict.
-- Every request sees one settings revision even if an update occurs mid-request.
-- Kill and reconnect the notification listener; polling must converge to the newest revision.
-- Rotate the encryption key through the documented procedure and verify old and new secrets remain readable during the transition.
-- Run with no app-data volume after migration and verify API, execution, proxy routes, OAuth, runtime libraries, recordings, and environment overlays.
+- `npm run test` completed with 545 passing tests, zero failures, and two optional fixture skips. The command also completed the API build, web pure tests, style checks, repository-structure checks, and Kubernetes verification.
+- Focused managed-settings and plugin-cache regression tests passed, including committed-write notification failure, failed-refresh retry, and pod-local plugin preparation deduplication.
+- `npm run verify:kubernetes` completed all Kubernetes contract tests plus Helm lint and local/production render checks.
+- `git diff --check` completed without whitespace errors. Line-ending conversion warnings on this Windows checkout are informational.
+- This verification remains static/single-host evidence. Live legacy import, multi-replica convergence, key rotation, proxy interruption, and rollback remain acceptance work under Problem 4.
 
 ## Problem 3: Strengthen Lifecycle, Readiness, and Replica Safety
 
@@ -288,7 +274,7 @@ Static rendering cannot prove runtime behavior that depends on Kubernetes schedu
 1. Create an ephemeral Kind cluster in CI. Keep Minikube as the documented local equivalent.
 2. Deploy PostgreSQL and MinIO (or compatible test services) and the exact images produced by the workflow.
 3. Deploy at least two proxy and two execution replicas. Backend remains one until Problem 3 is resolved.
-4. If the current chart still requires RWX, use a CI storage solution that genuinely exercises shared semantics. A hostPath shortcut may test wiring but must not be reported as RWX portability proof.
+4. Verify that App Settings survive pod replacement and propagate across control/execution replicas without any shared app-data claim.
 5. Exercise only through the public proxy:
    - health/readiness;
    - open/save/publish a project;
@@ -309,7 +295,7 @@ Static rendering cannot prove runtime behavior that depends on Kubernetes schedu
 
 #### Stage 4: Validate the Production Topology Separately
 
-1. Periodically run the same suite against the real managed PostgreSQL provider, S3-compatible provider, ingress controller, TLS setup, and RWX storage class used in production.
+1. Periodically run the same suite against the real managed PostgreSQL provider, S3-compatible provider, ingress controller, TLS setup, and ingress/TLS topology used in production.
 2. Treat this as a release/staging certification, not a replacement for the fast PR job.
 
 #### Harness Requirements
@@ -324,7 +310,7 @@ Static rendering cannot prove runtime behavior that depends on Kubernetes schedu
 ### Risks of Fixing
 
 - A full live-cluster gate increases CI time, cost, and flakiness. Separate fast PR smoke from slower scheduled/release disruption suites.
-- Kind/Minikube networking and storage differ from production; passing locally is not proof of cloud ingress or RWX behavior.
+- Kind/Minikube networking and storage differ from production; passing locally is not proof of cloud ingress or managed-service behavior.
 - Broad retries can turn deterministic defects into intermittent green builds. Retry only named transient setup operations and publish retry counts.
 - Logs and manifests can leak credentials. Test-secret generation and artifact redaction are mandatory.
 - Cleanup scripts can target the wrong cluster. Require an ephemeral-context marker and namespace ownership label.
@@ -336,7 +322,7 @@ Static rendering cannot prove runtime behavior that depends on Kubernetes schedu
 - A live managed smoke suite passes from a clean cluster using the exact candidate images.
 - The suite proves persistence after pod restarts and exposes artifacts for every failure.
 - Scheduled disruption tests cover concurrent startup, execution-pod loss, rolling update, and node drain.
-- Production topology is separately certified before relying on provider-specific ingress, object storage, PostgreSQL, or RWX behavior.
+- Production topology is separately certified before relying on provider-specific ingress, object storage, or PostgreSQL behavior.
 
 ## Assumptions Checked
 
@@ -344,10 +330,10 @@ Static rendering cannot prove runtime behavior that depends on Kubernetes schedu
 | ------------------------------------------------------------------------------ | ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | Recent features have managed persistence implementations.                      | Supported.                | Workflow revisions/publications, recordings, evaluations, runtime libraries, LLM health, and web-app WebSocket run state have managed stores cited above.                                                                                  |
 | All evaluation artifacts are stored in object storage.                         | Not supported; corrected. | The managed evaluation store persists its definitions and run payloads in PostgreSQL. Recording artifacts referenced by evaluation runs follow the recording store, but the evaluation store itself is not an object-store implementation. |
-| Any API replica can normally edit app settings.                                | Not supported; corrected. | Settings mutation routes are control-plane-only. Execution replicas still read shared settings and participate in deployment-storage bootstrap.                                                                                            |
+| Any API replica can normally edit app settings.                                | Not supported; corrected. | Settings mutation routes are control-plane-only. Execution replicas read the PostgreSQL settings repository and receive pod-local compatibility projections; they do not share a writable settings filesystem.                              |
 | Workflow-schema startup retries protect against PostgreSQL DDL deadlocks.      | Supported, narrowly.       | The migration library serializes DDL with an advisory lock and retries only PostgreSQL `40P01`, `40001`, and `55P03`; the common query retry policy remains network-only.                                                                    |
 | A web-app coordinator listener disconnect necessarily makes the pod unhealthy. | Not supported; removed.   | The coordinator reconnects and polls. No readiness integration was found, so listener state is an observability/readiness design question rather than a confirmed outage behavior.                                                         |
-| The chart currently depends on shared app-data storage.                        | Supported.                | Helm requires an existing claim and mounts it into backend, execution, and proxy workloads; validation calls out RWX for scaled consumers.                                                                                                 |
+| The chart currently depends on shared app-data storage.                        | No; fixed.                | App Settings are encrypted PostgreSQL rows. Backend/execution app data is pod-local `emptyDir`, proxy has no app-data mount, and a legacy PVC is optional migration-only input. |
 | `verify:kubernetes` is a live cluster test.                                    | Not supported; corrected. | It is a static Helm/template/contract gate. Manual cluster tooling exists separately.                                                                                                                                                      |
 | Current Kubernetes managed mode is definitely broken.                          | Not established.          | Static verification passes and managed stores exist. The report identifies unproven HA/operations paths and concrete design risks, not a reproduced blanket failure.                                                                       |
 
@@ -356,10 +342,10 @@ Static rendering cannot prove runtime behavior that depends on Kubernetes schedu
 1. Add `verify:kubernetes` to GitHub verification so the current static contract becomes a release gate.
 2. Add live managed smoke coverage before making larger storage or replica changes; it provides the runtime regression harness for the now-versioned schema path and later changes.
 3. Introduce profile-specific startup/readiness endpoints and align graceful termination.
-4. Harden the existing settings/bootstrap filesystem path, especially single-writer initialization and atomic publication.
-5. Move settings authority to PostgreSQL, remove the RWX runtime dependency, and only then pursue multi-backend control-plane replicas.
+4. Exercise the implemented PostgreSQL App Settings cutover, key rotation, proxy interruption, and legacy-import rollback in the live managed smoke suite.
+5. After lifecycle/readiness and live-cluster evidence are in place, reassess whether the singleton control-plane constraint can be relaxed.
 
-This order keeps behavior stable while adding evidence and containment before the largest architectural migration.
+This order now focuses on runtime evidence and lifecycle safety after the two largest architectural migrations have landed.
 
 ## Useful Verification Commands
 

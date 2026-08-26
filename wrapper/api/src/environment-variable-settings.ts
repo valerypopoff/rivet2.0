@@ -252,9 +252,8 @@ export async function resolveBrowserEnvironmentVariable(name: string): Promise<{
   configured: boolean;
   value: string | undefined;
 }> {
-  // A different API replica can have just written the shared settings file.
-  // Refresh here so browser-enabled values do not wait for the five-second
-  // background settings poll before they become available to a new editor run.
+  // Refresh here so a database notification/poll or an external file-backend
+  // writer is visible to a new editor run without waiting for the background poll.
   await environmentVariableSettingsRepository.refreshIfChanged();
   const managedEntry = environmentVariableSettingsRepository
     .readSync()

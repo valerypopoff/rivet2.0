@@ -100,10 +100,21 @@ test('rendered chart keeps control-plane and execution-plane API env contracts d
   assert.match(renderedChart, /name: RIVET_DEPLOYMENT_STORAGE_MODE\s*\n\s*value: "managed"/);
   assert.match(renderedChart, /name: RIVET_DEPLOYMENT_DATABASE_CONNECTION_STRING/);
   assert.match(renderedChart, /name: RIVET_DEPLOYMENT_STORAGE_ACCESS_KEY_ID/);
-  assert.ok(
-    (renderedChart.match(/\s+name: app-data\s*\n\s*persistentVolumeClaim:\s*\n\s*claimName: "?rivet-local-app-data"?/g) ?? []).length >= 3,
-    'backend, proxy, and execution workloads should all mount the shared app-data claim',
+  assert.equal(
+    (renderedChart.match(/\s+name: app-data\s*\n\s*emptyDir: \{\}/g) ?? []).length,
+    2,
+    'control and execution pods should use separate pod-local app-data volumes',
   );
+  assert.equal(
+    (renderedChart.match(/- name: managed-app-settings-projection/g) ?? []).length,
+    2,
+    'control and execution pods should project managed settings before containers start',
+  );
+  assert.match(renderedChart, /project-managed-app-settings\.js/);
+  assert.match(renderedChart, /name: RIVET_APP_SETTINGS_BACKEND\s*\n\s*value: "postgres"/);
+  assert.match(renderedChart, /name: RIVET_PROXY_SETTINGS_URL\s*\n\s*value: "http:\/\/[^\"]+\/internal\/app-settings\/proxy-config"/);
+  assert.doesNotMatch(renderedChart, /rivet-local-app-data|persistentVolumeClaim:[\s\S]{0,80}name: app-data/);
+  assert.doesNotMatch(readRepoFile('charts/templates/proxy-deployment.yaml'), /mountPath: \/data\/rivet-app|name: app-data/);
   assert.doesNotMatch(renderedChart, /name: RIVET_STORAGE_MODE\b|name: RIVET_DATABASE_MODE\b|name: RIVET_DATABASE_CONNECTION_STRING\b|name: RIVET_STORAGE_ACCESS_KEY_ID\b/);
   assert.doesNotMatch(renderedChart, /RIVET_WEB_APPS_AUTH_MODE|OAUTH_CLIENT_SECRET|OAUTH_AUTHORIZE_URL/);
 });
@@ -128,11 +139,19 @@ test('chart serializes managed workflow migrations before verify-only API worklo
   assert.match(chartHelpers, /vault\.hashicorp\.com\/agent-pre-populate-only: "true"/);
   assert.match(
     renderedChart,
-    /bootstrap-deployment-storage-settings\.mjs; node --preserve-symlinks \/app\/wrapper\/api\/dist\/api\/src\/scripts\/migrate-managed-workflow-schema\.js migrate/,
+    /bootstrap-deployment-storage-settings\.mjs; RIVET_APP_SETTINGS_BACKEND=file node --preserve-symlinks \/app\/wrapper\/api\/dist\/api\/src\/scripts\/migrate-managed-workflow-schema\.js migrate; node --preserve-symlinks \/app\/wrapper\/api\/dist\/api\/src\/scripts\/import-managed-app-settings\.js/,
   );
   assert.match(
     migrationJobDocument,
     /name: RIVET_APP_DATA_ROOT\s*\n\s*value: "\/var\/tmp\/rivet-migration-app-data"/,
+  );
+  const migrationEnvironmentNames = [
+    ...migrationJobDocument.matchAll(/^\s+- name: (RIVET_[A-Z0-9_]+)\s*$/gm),
+  ].map((match) => match[1]);
+  assert.equal(
+    new Set(migrationEnvironmentNames).size,
+    migrationEnvironmentNames.length,
+    'the migration Job must not declare duplicate Rivet environment variables',
   );
   assert.doesNotMatch(migrationJobDocument, /persistentVolumeClaim:|claimName:|mountPath: \/data\/rivet-app/);
   assert.match(
@@ -180,7 +199,7 @@ test('chart validation keeps the supported managed singleton control-plane bound
   assert.match(validateValuesTemplate, /workflowStorage\.backend=managed and runtimeLibraries\.backend=managed/);
   assert.match(validateValuesTemplate, /replicaCount\.backend=1 because latest workflow execution, latest web-app action execution, and \/ws\/latest-debugger are still process-local control-plane features/);
   assert.match(validateValuesTemplate, /autoscaling\.backend\.enabled=false because latest workflow execution, latest web-app action execution, and \/ws\/latest-debugger are still process-local control-plane features/);
-  assert.match(validateValuesTemplate, /storage\.appData\.existingClaimName is required so backend, execution, executor, and proxy pods share UI-managed app settings/);
+  assert.match(validateValuesTemplate, /appSettings\.backend=postgres so settings remain consistent across replicas without a shared app-data volume/);
 });
 
 test('production overlay keeps the supported ingress, Vault, and scale boundaries for the real cluster topology', () => {
@@ -191,7 +210,8 @@ test('production overlay keeps the supported ingress, Vault, and scale boundarie
   assert.match(prodOverlay, /backend:\s*1/);
   assert.match(prodOverlay, /web:\s*1/);
   assert.match(prodOverlay, /execution:\s*[2-9]\d*/);
-  assert.match(prodOverlay, /existingClaimName:\s*rivet-prod-app-data/);
+  assert.match(prodOverlay, /workflowStorage:\s*\n\s*backend:\s*managed/);
+  assert.doesNotMatch(prodOverlay, /rivet-prod-app-data|storage:\s*\n\s*appData:/);
   assert.match(prodOverlay, /autoscaling:[\s\S]*proxy:\s*\n\s*enabled:\s*true/);
   assert.match(prodOverlay, /autoscaling:[\s\S]*web:\s*\n\s*enabled:\s*false/);
   assert.match(prodOverlay, /autoscaling:[\s\S]*backend:\s*\n\s*enabled:\s*false/);
@@ -207,7 +227,8 @@ test('local Kubernetes overlay keeps the backend singleton while scaling endpoin
   assert.match(localOverlay, /backend:\s*1/);
   assert.match(localOverlay, /web:\s*1/);
   assert.match(localOverlay, /execution:\s*2/);
-  assert.match(localOverlay, /existingClaimName:\s*rivet-local-app-data/);
+  assert.match(localOverlay, /workflowStorage:\s*\n\s*backend:\s*managed/);
+  assert.doesNotMatch(localOverlay, /rivet-local-app-data|storage:\s*\n\s*appData:/);
   assert.match(localOverlay, /RIVET_ENABLE_LATEST_REMOTE_DEBUGGER:\s*"true"/);
   assert.doesNotMatch(localOverlay, /RIVET_REQUIRE_WORKFLOW_KEY/);
   assert.match(localOverlay, /RIVET_REQUIRE_UI_GATE_KEY:\s*"false"/);
@@ -279,7 +300,7 @@ test('chart validation rejects placeholder images and unsupported filesystem top
     /workflowStorage\.backend=managed and runtimeLibraries\.backend=managed/,
   );
   await assertHelmTemplateFails(
-    ['storage.appData.existingClaimName='],
-    /storage\.appData\.existingClaimName is required so backend, execution, executor, and proxy pods share UI-managed app settings/,
+    ['appSettings.backend=file'],
+    /appSettings\.backend=postgres so settings remain consistent across replicas without a shared app-data volume/,
   );
 });

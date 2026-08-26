@@ -8,8 +8,7 @@ import { asyncHandler } from '../utils/asyncHandler.js';
 import { badRequest } from '../utils/httpError.js';
 import {
   appendInstallLog,
-  checkPluginForUpdate,
-  downloadAndExtractPlugin,
+  ensurePluginReady,
   getPluginDir,
   normalizePluginPackageName,
   normalizePluginTag,
@@ -51,12 +50,10 @@ pluginsRouter.post('/install-package', validateBody(pluginRequestSchema), asyncH
     log += `${message}\n`;
   };
 
-  if (await checkPluginForUpdate(pkg, tag, addLog)) {
-    try {
-      await downloadAndExtractPlugin(pkg, tag, addLog);
-    } catch (error) {
-      throw appendInstallLog(error, log);
-    }
+  try {
+    await ensurePluginReady(pkg, tag, addLog);
+  } catch (error) {
+    throw appendInstallLog(error, log);
   }
 
   addLog(`Plugin ready: ${pkg}@${tag}`);
@@ -65,6 +62,7 @@ pluginsRouter.post('/install-package', validateBody(pluginRequestSchema), asyncH
 
 pluginsRouter.post('/load-package-main', validateBody(pluginRequestSchema), asyncHandler(async (req, res) => {
   const { package: pkg, tag } = req.body as z.infer<typeof pluginRequestSchema>;
+  await ensurePluginReady(pkg, tag, () => undefined);
   const pluginDir = getPluginDir(pkg, tag);
   const pluginFilesPath = path.join(pluginDir, 'package');
   const pkgJsonPath = path.join(pluginFilesPath, 'package.json');

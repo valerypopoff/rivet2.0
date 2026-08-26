@@ -84,8 +84,8 @@
 {{- fail "managed storage requires either postgres.connectionStringSecretName, a postgres host/database/username tuple plus passwordSecretName, or Vault-provided database envs" -}}
 {{- end -}}
 
-{{- if empty .Values.storage.appData.existingClaimName -}}
-{{- fail "storage.appData.existingClaimName is required so backend, execution, executor, and proxy pods share UI-managed app settings; use an RWX-capable PVC for scaled proxy/execution deployments" -}}
+{{- if ne .Values.appSettings.backend "postgres" -}}
+{{- fail "The Kubernetes chart requires appSettings.backend=postgres so settings remain consistent across replicas without a shared app-data volume" -}}
 {{- end -}}
 
 {{- if and (not .Values.vault.enabled) (empty .Values.auth.keySecretName) -}}

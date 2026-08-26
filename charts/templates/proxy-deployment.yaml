@@ -67,8 +67,8 @@ spec:
               value: {{ include "rivet.serviceFqdn" (dict "root" . "serviceName" (include "rivet.executorServiceName" .)) | quote }}
             - name: RIVET_EXECUTOR_UPSTREAM_PORT
               value: {{ .Values.service.executor.port | quote }}
-            - name: RIVET_APP_DATA_ROOT
-              value: /data/rivet-app
+            - name: RIVET_PROXY_SETTINGS_URL
+              value: {{ printf "http://%s:%v/internal/app-settings/proxy-config" (include "rivet.serviceFqdn" (dict "root" . "serviceName" (include "rivet.apiServiceName" .))) .Values.service.api.port | quote }}
             {{- if .Values.auth.keySecretName }}
             - name: RIVET_KEY
               valueFrom:
@@ -78,9 +78,6 @@ spec:
             {{- end }}
 {{ include "rivet.env.proxyValues" . | nindent 12 }}
           volumeMounts:
-            - name: app-data
-              mountPath: /data/rivet-app
-              readOnly: true
             {{- if .Values.tmpVolume.enabled }}
             - name: {{ .Values.tmpVolume.name }}
               mountPath: {{ .Values.tmpVolume.path }}
@@ -88,9 +85,6 @@ spec:
           resources:
 {{ toYaml .Values.resources.proxy | nindent 12 }}
       volumes:
-        - name: app-data
-          persistentVolumeClaim:
-            claimName: {{ .Values.storage.appData.existingClaimName | quote }}
         {{- if .Values.tmpVolume.enabled }}
         - name: {{ .Values.tmpVolume.name }}
           emptyDir:

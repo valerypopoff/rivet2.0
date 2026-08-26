@@ -35,15 +35,31 @@ spec:
             - /bin/sh
             - -ec
           args:
-            - . /opt/rivet/lib/load-env.sh; load_optional_dotenv /vault/dotenv; node /opt/rivet/lib/bootstrap-deployment-storage-settings.mjs; node --preserve-symlinks /app/wrapper/api/dist/api/src/scripts/migrate-managed-workflow-schema.js migrate
+            - . /opt/rivet/lib/load-env.sh; load_optional_dotenv /vault/dotenv; node /opt/rivet/lib/bootstrap-deployment-storage-settings.mjs; RIVET_APP_SETTINGS_BACKEND=file node --preserve-symlinks /app/wrapper/api/dist/api/src/scripts/migrate-managed-workflow-schema.js migrate; node --preserve-symlinks /app/wrapper/api/dist/api/src/scripts/import-managed-app-settings.js
           env:
 {{ include "rivet.env.deploymentStorageBootstrap" (dict "root" . "appDataRoot" "/var/tmp/rivet-migration-app-data") | nindent 12 }}
+{{ include "rivet.env.appSettings" (dict "root" . "includeDatabase" false) | nindent 12 }}
+{{ include "rivet.env.authKey" . | nindent 12 }}
+            {{- if .Values.appSettings.legacyImport.existingClaimName }}
+            - name: RIVET_APP_SETTINGS_LEGACY_ROOT
+              value: /legacy-rivet-app
+            {{- end }}
             - name: RIVET_BUILD_VERSION
               value: {{ include "rivet.image" (dict "root" . "image" .Values.images.api) | quote }}
           volumeMounts:
+            {{- if .Values.appSettings.legacyImport.existingClaimName }}
+            - name: legacy-app-data
+              mountPath: /legacy-rivet-app
+              readOnly: true
+            {{- end }}
 {{ include "rivet.pod.tmpVolumeMount" . | nindent 12 }}
           resources:
 {{ toYaml .Values.resources.api | nindent 12 }}
       volumes:
+        {{- if .Values.appSettings.legacyImport.existingClaimName }}
+        - name: legacy-app-data
+          persistentVolumeClaim:
+            claimName: {{ .Values.appSettings.legacyImport.existingClaimName | quote }}
+        {{- end }}
 {{ include "rivet.pod.tmpVolume" . | nindent 8 }}
 {{- end }}

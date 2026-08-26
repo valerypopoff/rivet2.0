@@ -36,6 +36,25 @@ securityContext:
 {{- end }}
 {{- end -}}
 
+{{- define "rivet.pod.appSettingsProjectionInitContainer" -}}
+- name: managed-app-settings-projection
+  image: {{ include "rivet.image" (dict "root" . "image" .Values.images.api) }}
+  imagePullPolicy: {{ .Values.images.api.pullPolicy }}
+  {{- include "rivet.pod.containerSecurityContext" . | nindent 2 }}
+  command:
+    - /bin/sh
+    - -ec
+  args:
+    - . /opt/rivet/lib/load-env.sh; load_optional_dotenv /vault/dotenv; node --preserve-symlinks /app/wrapper/api/dist/api/src/scripts/project-managed-app-settings.js
+  env:
+{{ include "rivet.env.deploymentStorageBootstrap" . | nindent 4 }}
+{{ include "rivet.env.appSettings" . | nindent 4 }}
+{{ include "rivet.env.authKey" . | nindent 4 }}
+  volumeMounts:
+    - name: app-data
+      mountPath: /data/rivet-app
+{{ include "rivet.pod.tmpVolumeMount" . | nindent 4 }}
+{{- end -}}
 {{- define "rivet.pod.apiVolumeMounts" -}}
 - name: workspace
   mountPath: /workspace

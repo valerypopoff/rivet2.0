@@ -42,9 +42,6 @@ objectStorage:
 auth:
   keySecretName: rivet-shared-key
 
-storage:
-  appData:
-    existingClaimName: rivet-test-app-data
 
 replicaCount:
   proxy: 1

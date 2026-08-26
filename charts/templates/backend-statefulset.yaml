@@ -40,6 +40,7 @@ spec:
             - name: app-data
               mountPath: /data/rivet-app
 {{ include "rivet.pod.tmpVolumeMount" . | nindent 12 }}
+{{ include "rivet.pod.appSettingsProjectionInitContainer" . | nindent 8 }}
       containers:
         - name: api
           image: {{ include "rivet.image" (dict "root" . "image" .Values.images.api) }}
@@ -105,8 +106,7 @@ spec:
           emptyDir: {}
         {{- end }}
         - name: app-data
-          persistentVolumeClaim:
-            claimName: {{ .Values.storage.appData.existingClaimName }}
+          emptyDir: {}
         {{- if eq .Values.runtimeLibraries.backend "filesystem" }}
         - name: runtime-libraries
           persistentVolumeClaim:

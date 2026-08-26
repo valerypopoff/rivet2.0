@@ -5,7 +5,8 @@ import type {
   NodeExecutorProxySettingsDraft,
 } from '../../shared/app-settings-types.js';
 import { hasSetting, normalizeBoundedSingleLineString, toSettingsRecord } from './app-settings/schema.js';
-import { VersionedSettingsRepository } from './app-settings/settings-repository.js';
+import { getAppSettingsBackendKind, VersionedSettingsRepository } from './app-settings/settings-repository.js';
+import { writeJsonSettingsFile } from './settings-file-writer.js';
 import { getAppDataRoot } from './security.js';
 import { badRequest } from './utils/httpError.js';
 
@@ -79,11 +80,25 @@ export async function readNodeExecutorProxySettings(): Promise<NodeExecutorProxy
   return (await nodeExecutorProxySettingsRepository.read()).value;
 }
 
+export async function projectNodeExecutorProxySettings(): Promise<void> {
+  if (getAppSettingsBackendKind() !== 'postgres') {
+    return;
+  }
+  const settings = nodeExecutorProxySettingsRepository.readSync().value;
+  await writeJsonSettingsFile(getNodeExecutorProxySettingsPath(), {
+    version: 1,
+    httpProxy: settings.httpProxy,
+    httpsProxy: settings.httpsProxy,
+    noProxy: settings.noProxy,
+    updatedAt: settings.updatedAt,
+  }, 0o600);
+}
+
 export async function writeNodeExecutorProxySettings(
   draft: unknown,
   expectedRevision?: string,
 ): Promise<NodeExecutorProxySettings> {
-  return (await nodeExecutorProxySettingsRepository.update((previous) => ({
+  const settings = (await nodeExecutorProxySettingsRepository.update((previous) => ({
     ...normalizeNodeExecutorProxySettingsDraft({
       ...previous,
       ...toSettingsRecord(draft),
@@ -91,4 +106,12 @@ export async function writeNodeExecutorProxySettings(
     updatedAt: new Date().toISOString(),
     source: 'app-settings',
   }), expectedRevision)).value;
+  await projectNodeExecutorProxySettings();
+  return settings;
 }
+
+nodeExecutorProxySettingsRepository.subscribe(() => {
+  void projectNodeExecutorProxySettings().catch((error) => {
+    console.error('[node-executor-proxy] Failed to refresh the pod-local settings projection:', error);
+  });
+});

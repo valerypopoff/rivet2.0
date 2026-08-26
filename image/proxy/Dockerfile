@@ -1,7 +1,8 @@
 # syntax=docker/dockerfile:1.7
 FROM nginx:1.27-alpine
 
-RUN addgroup -g 10001 -S rivet && \
+RUN apk add --no-cache curl && \
+    addgroup -g 10001 -S rivet && \
     adduser -u 10001 -S -D -h /home/rivet -G rivet rivet && \
     mkdir -p /opt/rivet/lib /opt/rivet/proxy /tmp/nginx/conf.d /tmp/nginx/client_temp /tmp/nginx/proxy_temp /tmp/nginx/fastcgi_temp /tmp/nginx/uwsgi_temp /tmp/nginx/scgi_temp && \
     chown -R 10001:10001 /opt/rivet /tmp/nginx /usr/share/nginx/html

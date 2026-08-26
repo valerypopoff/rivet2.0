@@ -133,10 +133,16 @@ objectStorage:
   secretKeySecretKey: secretAccessKey
   forcePathStyle: false
 
-storage:
-  appData:
-    # Required: provide a PVC that backend, proxy, execution, and executor pods can all mount.
-    # Use RWX-capable storage for multi-node or scaled proxy/execution deployments.
+appSettings:
+  backend: postgres
+  # Prefer a dedicated 32+ character secret. RIVET_KEY remains a compatibility fallback.
+  encryptionKeySecretName: ""
+  encryptionKeySecretKey: encryptionKey
+  # Rotation is two compatibility phases: new secondary first, then old secondary after the primary swap.
+  previousEncryptionKeySecretName: ""
+  previousEncryptionKeySecretKey: encryptionKey
+  legacyImport:
+    # Optional one-time source from deployments that used the old shared app-data PVC.
     existingClaimName: ""
 
 tmpVolume:
