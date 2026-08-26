@@ -1,4 +1,10 @@
+import { constants as fsConstants } from 'node:fs';
+import fs from 'node:fs/promises';
+
 import type { Request, Response } from 'express';
+
+import { checkPostgresPoolHealth } from '../../managed-health.js';
+import type { RuntimeHealthCheckContext } from '../../runtime-health.js';
 
 import type {
   RuntimeLibraryPackageSpec,
@@ -20,6 +26,7 @@ import {
   normalizeJobPackages,
 } from './schema.js';
 import { getManagedJob, getManagedRuntimeLibrariesState } from './state.js';
+import { getRootPath } from '../manifest.js';
 import type { RuntimeLibrariesBlobStore } from './blob-store.js';
 
 export class ManagedRuntimeLibrariesBackend implements RuntimeLibrariesBackend {
@@ -30,6 +37,7 @@ export class ManagedRuntimeLibrariesBackend implements RuntimeLibrariesBackend {
   readonly #jobWorker: ReturnType<typeof createManagedRuntimeLibrariesJobWorker>;
 
   #initializePromise: Promise<void> | null = null;
+  #disposePromise: Promise<void> | null = null;
   #stopped = false;
 
   constructor(blobStore?: RuntimeLibrariesBlobStore) {
@@ -57,16 +65,19 @@ export class ManagedRuntimeLibrariesBackend implements RuntimeLibrariesBackend {
   }
 
   async initialize(): Promise<void> {
+    if (this.#stopped) {
+      throw new Error('Managed runtime-library backend is shutting down.');
+    }
     if (this.#initializePromise) {
       return this.#initializePromise;
     }
 
-    this.#stopped = false;
     this.#initializePromise = (async () => {
       this.#context.ensureLocalFilesystemReady();
       await this.#context.blobStore.initialize?.();
       await ensureManagedRuntimeLibrariesSchema(this.#context.pool);
       await this.#context.syncForLocalUse(true);
+      if (this.#stopped) return;
       if (this.#context.config.jobWorkerEnabled) {
         this.#jobWorker.startWorkerLoop();
       } else {
@@ -82,19 +93,38 @@ export class ManagedRuntimeLibrariesBackend implements RuntimeLibrariesBackend {
     }
   }
 
+  async checkHealth(context?: RuntimeHealthCheckContext): Promise<void> {
+    await this.initialize();
+    await Promise.all([
+      checkPostgresPoolHealth(this.#context.pool, context),
+      this.#context.blobStore.checkHealth?.(context),
+      fs.access(getRootPath(), fsConstants.R_OK | fsConstants.W_OK),
+    ]);
+  }
+
   async prepareForExecution(): Promise<void> {
     await this.initialize();
     await this.#context.syncForLocalUse(true);
   }
 
-  async dispose(): Promise<void> {
+  dispose(): Promise<void> {
+    if (this.#disposePromise) return this.#disposePromise;
+
     this.#stopped = true;
     this.#jobWorker.reset();
-    this.#initializePromise = null;
-    this.#context.localCache.reset();
     this.#processRegistry.terminateAll('Runtime-library backend is shutting down.');
-    this.#processRegistry.clear();
-    await this.#context.pool.end();
+    this.#disposePromise = (async () => {
+      await this.#initializePromise?.catch(() => undefined);
+      this.#initializePromise = null;
+      this.#context.localCache.reset();
+      this.#processRegistry.clear();
+      try {
+        await this.#context.pool.end();
+      } finally {
+        this.#context.blobStore.dispose?.();
+      }
+    })();
+    return this.#disposePromise;
   }
 
   async getState() {

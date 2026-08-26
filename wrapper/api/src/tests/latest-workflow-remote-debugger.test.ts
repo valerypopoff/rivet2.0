@@ -277,6 +277,23 @@ test('latest debugger defaults on unless explicitly disabled', () => {
   }
 });
 
+test('disposing latest debugger removes its HTTP upgrade listener', async () => {
+  const server = http.createServer();
+  const initialUpgradeListeners = server.listenerCount('upgrade');
+
+  initializeLatestWorkflowRemoteDebugger(server);
+  assert.equal(server.listenerCount('upgrade'), initialUpgradeListeners + 1);
+
+  await resetLatestWorkflowRemoteDebuggerForTests();
+  assert.equal(server.listenerCount('upgrade'), initialUpgradeListeners);
+
+  initializeLatestWorkflowRemoteDebugger(server);
+  assert.equal(server.listenerCount('upgrade'), initialUpgradeListeners + 1);
+
+  await resetLatestWorkflowRemoteDebuggerForTests();
+  assert.equal(server.listenerCount('upgrade'), initialUpgradeListeners);
+});
+
 test('latest debugger receives events for latest endpoint execution', async () => {
   await createPublishedWorkflow('Latest Debugger Fixture', 'latest-debugger-endpoint');
   const server = await startApiServer('control');

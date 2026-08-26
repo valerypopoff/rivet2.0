@@ -13,7 +13,8 @@ import {
   normalizeStrictEnumSetting,
   toSettingsRecord,
 } from './app-settings/schema.js';
-import { VersionedSettingsRepository } from './app-settings/settings-repository.js';
+import { getAppSettingsBackendKind, VersionedSettingsRepository } from './app-settings/settings-repository.js';
+import { writeJsonSettingsFile } from './settings-file-writer.js';
 import { getAppDataRoot } from './security.js';
 import { badRequest } from './utils/httpError.js';
 
@@ -242,6 +243,17 @@ export const deploymentStorageSettingsRepository = new VersionedSettingsReposito
   }),
 });
 
+export async function projectDeploymentStorageSettings(): Promise<void> {
+  if (getAppSettingsBackendKind() !== 'postgres') {
+    return;
+  }
+  const settings = deploymentStorageSettingsRepository.readSync().value;
+  await writeJsonSettingsFile(getDeploymentStorageSettingsPath(), {
+    version: 1,
+    ...deploymentStorageSettingsRepository.descriptor.serialize(settings),
+  }, 0o600);
+}
+
 export function readDeploymentStorageRuntimeSettingsSync(): DeploymentStorageRuntimeSettings {
   return deploymentStorageSettingsRepository.readSync().value;
 }
@@ -261,3 +273,9 @@ export async function writeDeploymentStorageSettings(
   }), expectedRevision);
   return toPublicSettings(saved.value);
 }
+
+deploymentStorageSettingsRepository.subscribe(() => {
+  void projectDeploymentStorageSettings().catch((error) => {
+    console.error('[deployment-storage] Failed to refresh the pod-local settings projection:', error);
+  });
+});

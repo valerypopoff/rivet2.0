@@ -32,3 +32,5 @@ rivet/
 Thumbs.db
 .vscode/
 .codex/
+artifacts/kubernetes-managed-release-gate/
+artifacts/kubernetes-managed-provider-gate/

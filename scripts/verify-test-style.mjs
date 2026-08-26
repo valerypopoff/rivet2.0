@@ -8,6 +8,7 @@ const launcherName = 'verify:test-style';
 const kubernetesApiTests = [
   'src/tests/kubernetes-contract.test.ts',
   'src/tests/kubernetes-launcher-config.test.ts',
+  'src/tests/kubernetes-managed-release-gate.test.ts',
 ];
 
 const retiredTestNames = [

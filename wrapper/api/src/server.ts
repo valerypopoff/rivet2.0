@@ -1,81 +1,196 @@
 import 'dotenv/config';
 import { createServer } from 'node:http';
 import { reconcileRuntimeLibraries } from './runtime-libraries/startup.js';
-import { disposeRuntimeLibrariesBackend } from './runtime-libraries/backend.js';
-import { initializeLatestWorkflowRemoteDebugger } from './latestWorkflowRemoteDebugger.js';
+import {
+  checkRuntimeLibrariesHealth,
+  disposeRuntimeLibrariesBackend,
+} from './runtime-libraries/backend.js';
+import {
+  disposeLatestWorkflowRemoteDebugger,
+  initializeLatestWorkflowRemoteDebugger,
+} from './latestWorkflowRemoteDebugger.js';
 import { initializeWebAppActionWebSockets, type WebAppActionWebSocketRuntime } from './web-app-action-websocket.js';
-import { disposeWorkflowStorage, initializeWorkflowStorage } from './routes/workflows/storage-backend.js';
+import {
+  checkWorkflowStorageHealth,
+  disposeWorkflowStorage,
+  initializeWorkflowStorage,
+} from './routes/workflows/storage-backend.js';
 import { flushWorkflowExecutionRecordingPersistence } from './routes/workflows/recordings.js';
 import { getApiRuntimeProfile, isControlPlaneApiProfile } from './runtime-profile.js';
 import { assertApiRuntimeProfileStartupPreconditions, createApiApp } from './app.js';
-import { initializeAppSettingsRepositories } from './app-settings/settings-repository.js';
+import {
+  checkAppSettingsRepositoriesHealth,
+  disposeAppSettingsRepositories,
+  initializeAppSettingsRepositories,
+} from './app-settings/settings-repository.js';
+import { getRuntimeHealthOptionsFromEnv, RuntimeHealthController } from './runtime-health.js';
 
-const app = createApiApp();
-const server = createServer(app);
 const PORT = parseInt(process.env.PORT ?? '3100', 10);
 const apiRuntimeProfile = getApiRuntimeProfile();
+let webAppActionWebSockets: WebAppActionWebSocketRuntime | null = null;
+const runtimeHealth = new RuntimeHealthController(apiRuntimeProfile, [
+  {
+    name: 'app-settings',
+    failureCode: 'app_settings_unavailable',
+    check: checkAppSettingsRepositoriesHealth,
+  },
+  {
+    name: 'workflow-storage',
+    failureCode: 'workflow_storage_unavailable',
+    check: checkWorkflowStorageHealth,
+  },
+  {
+    name: 'runtime-libraries',
+    failureCode: 'runtime_libraries_unavailable',
+    check: checkRuntimeLibrariesHealth,
+  },
+  {
+    name: 'web-app-actions',
+    failureCode: 'web_app_gateway_unavailable',
+    async check(context) {
+      if (!webAppActionWebSockets) {
+        throw new Error('Web-app action gateway is not initialized.');
+      }
+      await webAppActionWebSockets.checkHealth(context);
+    },
+  },
+], getRuntimeHealthOptionsFromEnv());
+const app = createApiApp(apiRuntimeProfile, { health: runtimeHealth });
+const server = createServer(app);
 
 if (isControlPlaneApiProfile(apiRuntimeProfile)) {
   initializeLatestWorkflowRemoteDebugger(server);
 }
 
 let shuttingDown = false;
-const SHUTDOWN_GRACE_MS = 5_000;
-let webAppActionWebSockets: WebAppActionWebSocketRuntime | null = null;
+let startupPromise: Promise<void> | null = null;
+let resourceDisposalQueue = Promise.resolve();
 
-async function shutdown(signal: string): Promise<void> {
-  if (shuttingDown) {
-    return;
+class StartupCancelledError extends Error {}
+
+function assertStartupActive(): void {
+  if (shuttingDown) throw new StartupCancelledError();
+}
+
+function readShutdownGraceMs(): number {
+  const seconds = Number(process.env.RIVET_SHUTDOWN_GRACE_SECONDS);
+  if (!Number.isFinite(seconds) || seconds < 1) return 120_000;
+  return Math.min(Math.floor(seconds * 1_000), 3_600_000);
+}
+
+function wait(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function waitForActiveWebAppRuns(deadline: number): Promise<boolean> {
+  while ((webAppActionWebSockets?.getActiveRunCount() ?? 0) > 0) {
+    const remainingMs = deadline - Date.now();
+    if (remainingMs <= 0) return false;
+    await wait(Math.min(250, remainingMs));
   }
+  return true;
+}
 
-  shuttingDown = true;
-  console.log(`[rivet-api] Received ${signal}, shutting down...`);
-  webAppActionWebSockets?.drain();
+async function closeHttpServer(deadline: number): Promise<boolean> {
+  if (!server.listening) return true;
 
-  try {
-    let resolved = false;
-    await Promise.race([
-      new Promise<void>((resolve) => {
-        server.close(() => {
-          resolved = true;
-          resolve();
-        });
-      }),
-      new Promise<void>((resolve) => {
-        const timer = setTimeout(() => {
-          if (!resolved) {
-            console.warn(`[rivet-api] HTTP server did not close within ${SHUTDOWN_GRACE_MS}ms; forcing connection shutdown.`);
-            server.closeAllConnections?.();
-            server.closeIdleConnections?.();
-          }
-          resolve();
-        }, SHUTDOWN_GRACE_MS);
-        timer.unref?.();
-      }),
-    ]);
-  } catch (error) {
-    console.error('[rivet-api] Failed to close HTTP server:', error);
-  }
+  let closed = false;
+  const closedPromise = new Promise<void>((resolve) => {
+    server.close(() => {
+      closed = true;
+      resolve();
+    });
+    server.closeIdleConnections?.();
+  });
+  const remainingMs = Math.max(0, deadline - Date.now());
+  await Promise.race([closedPromise, wait(remainingMs)]);
+  return closed;
+}
 
+function disposeResources(interruptWebAppRuns: boolean): Promise<void> {
+  const disposal = resourceDisposalQueue.then(() => disposeResourcesOnce(interruptWebAppRuns));
+  resourceDisposalQueue = disposal;
+  return disposal;
+}
+
+async function disposeResourcesOnce(interruptWebAppRuns: boolean): Promise<void> {
   if (webAppActionWebSockets) {
-    await webAppActionWebSockets.dispose({ interrupt: true }).catch((error) => {
+    await webAppActionWebSockets.dispose({ interrupt: interruptWebAppRuns }).catch((error) => {
       console.error('[web-app-actions] Failed to dispose WebSocket actions during shutdown:', error);
     });
   }
   webAppActionWebSockets = null;
 
+  await disposeLatestWorkflowRemoteDebugger().catch((error) => {
+    console.error('[latest-debugger] Failed to dispose during shutdown:', error);
+  });
+
   await flushWorkflowExecutionRecordingPersistence().catch((error) => {
     console.error('[workflow-recordings] Failed to flush recording persistence during shutdown:', error);
   });
-
   await disposeWorkflowStorage().catch((error) => {
     console.error('[managed-workflows] Failed to dispose storage backend during shutdown:', error);
   });
-
   await disposeRuntimeLibrariesBackend().catch((error) => {
     console.error('[runtime-libraries] Failed to dispose backend during shutdown:', error);
   });
+  await disposeAppSettingsRepositories().catch((error) => {
+    console.error('[app-settings] Failed to dispose settings backend during shutdown:', error);
+  });
+}
 
+async function listenHttpServer(): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    const onError = (error: Error): void => {
+      server.off('listening', onListening);
+      reject(error);
+    };
+    const onListening = (): void => {
+      server.off('error', onError);
+      resolve();
+    };
+
+    server.once('error', onError);
+    server.once('listening', onListening);
+    server.listen(PORT);
+  });
+}
+
+async function shutdown(signal: string): Promise<void> {
+  if (shuttingDown) return;
+
+  shuttingDown = true;
+  runtimeHealth.beginDrain();
+  webAppActionWebSockets?.drain();
+  const shutdownGraceMs = readShutdownGraceMs();
+  const deadline = Date.now() + shutdownGraceMs;
+  console.log(`[rivet-api] Received ${signal}; draining for up to ${shutdownGraceMs}ms...`);
+
+  if (startupPromise && !server.listening) {
+    await Promise.race([
+      startupPromise.catch(() => undefined),
+      wait(Math.max(0, deadline - Date.now())),
+    ]);
+  }
+
+  const [httpClosed, runsCompleted] = await Promise.all([
+    closeHttpServer(deadline),
+    waitForActiveWebAppRuns(deadline),
+  ]);
+
+  if (!httpClosed) {
+    console.warn('[rivet-api] HTTP connections exceeded the shutdown grace period; forcing them closed.');
+    server.closeAllConnections?.();
+    server.closeIdleConnections?.();
+  }
+  if (!runsCompleted) {
+    console.warn(
+      `[web-app-actions] ${webAppActionWebSockets?.getActiveRunCount() ?? 0} active run(s) exceeded the shutdown grace period and will be interrupted.`,
+    );
+  }
+
+  await disposeResources(!runsCompleted);
+  runtimeHealth.stop();
   process.exitCode = 0;
 }
 
@@ -87,26 +202,38 @@ process.once('SIGTERM', () => {
   void shutdown('SIGTERM');
 });
 
-async function startServer() {
+async function startServer(): Promise<void> {
   try {
     await initializeAppSettingsRepositories();
+    assertStartupActive();
     assertApiRuntimeProfileStartupPreconditions(apiRuntimeProfile);
     await reconcileRuntimeLibraries();
+    assertStartupActive();
     await initializeWorkflowStorage();
+    assertStartupActive();
     webAppActionWebSockets = await initializeWebAppActionWebSockets(server);
+    assertStartupActive();
+    await runtimeHealth.start();
+    assertStartupActive();
+    await listenHttpServer();
+    assertStartupActive();
   } catch (error) {
+    if (error instanceof StartupCancelledError) {
+      await disposeResources(true);
+      return;
+    }
     console.error('[rivet-api] Startup reconciliation failed:', error);
+    runtimeHealth.stop();
+    await disposeResources(true);
     process.exitCode = 1;
     return;
   }
 
-  server.listen(PORT, () => {
-    console.log(`[rivet-api] Listening on port ${PORT}`);
-    console.log(`[rivet-api] Runtime profile: ${apiRuntimeProfile}`);
-    console.log(`[rivet-api] Workspace root: ${process.env.RIVET_WORKSPACE_ROOT ?? '/workspace'}`);
-    console.log(`[rivet-api] App data root: ${process.env.RIVET_APP_DATA_ROOT ?? '/data/rivet-app'}`);
-    console.log(`[rivet-api] Runtime libraries root: ${process.env.RIVET_RUNTIME_LIBRARIES_ROOT ?? '(not set)'}`);
-  });
+  console.log(`[rivet-api] Listening on port ${PORT}`);
+  console.log(`[rivet-api] Runtime profile: ${apiRuntimeProfile}`);
+  console.log(`[rivet-api] Workspace root: ${process.env.RIVET_WORKSPACE_ROOT ?? '/workspace'}`);
+  console.log(`[rivet-api] App data root: ${process.env.RIVET_APP_DATA_ROOT ?? '/data/rivet-app'}`);
+  console.log(`[rivet-api] Runtime libraries root: ${process.env.RIVET_RUNTIME_LIBRARIES_ROOT ?? '(not set)'}`);
 }
 
-void startServer();
+startupPromise = startServer();

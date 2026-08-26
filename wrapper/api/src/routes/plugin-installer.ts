@@ -7,6 +7,7 @@ import { exec } from '../utils/exec.js';
 
 const pluginPackagePattern = /^(@[a-z0-9-~][a-z0-9-._~]*\/)?[a-z0-9-~][a-z0-9-._~]*$/;
 const pluginTagPattern = /^(?![./])(?!.*[\\/])[\w.-]{1,128}$/;
+const pluginPreparationPromises = new Map<string, Promise<void>>();
 
 export function normalizePluginPackageName(value: string): string {
   const trimmed = value.trim();
@@ -75,7 +76,10 @@ export async function checkPluginForUpdate(pkg: string, tag: string, addLog: (ms
   addLog(`Checking for plugin updates: ${packageName}@${packageTag}`);
 
   try {
-    const pkgJsonData = JSON.parse(await fs.readFile(pkgJsonPath, 'utf-8')) as { version?: string };
+    const pkgJsonData = JSON.parse(await fs.readFile(pkgJsonPath, 'utf-8')) as {
+      version?: string;
+      rivet?: { skipInstall?: boolean };
+    };
     const npmResp = await fetch(getPluginRegistryMetadataUrl(packageName, packageTag));
     if (!npmResp.ok) {
       return true;
@@ -87,11 +91,39 @@ export async function checkPluginForUpdate(pkg: string, tag: string, addLog: (ms
       return true;
     }
 
-    await fs.access(path.join(pluginFilesPath, 'node_modules'));
+    if (!pkgJsonData.rivet?.skipInstall) {
+      await fs.access(path.join(pluginFilesPath, 'node_modules'));
+    }
     const versionMarker = await fs.readFile(completedVersionFile, 'utf-8');
     return versionMarker.trim() !== packageTag;
   } catch {
     return true;
+  }
+}
+
+export async function ensurePluginReady(pkg: string, tag: string, addLog: (msg: string) => void): Promise<void> {
+  const packageName = normalizePluginPackageName(pkg);
+  const packageTag = normalizePluginTag(tag);
+  const preparationKey = `${packageName}@${packageTag}`;
+  const existingPreparation = pluginPreparationPromises.get(preparationKey);
+  if (existingPreparation) {
+    addLog(`Waiting for plugin preparation already in progress: ${preparationKey}`);
+    await existingPreparation;
+    return;
+  }
+
+  const preparation = (async () => {
+    if (await checkPluginForUpdate(packageName, packageTag, addLog)) {
+      await downloadAndExtractPlugin(packageName, packageTag, addLog);
+    }
+  })();
+  pluginPreparationPromises.set(preparationKey, preparation);
+  try {
+    await preparation;
+  } finally {
+    if (pluginPreparationPromises.get(preparationKey) === preparation) {
+      pluginPreparationPromises.delete(preparationKey);
+    }
   }
 }
 

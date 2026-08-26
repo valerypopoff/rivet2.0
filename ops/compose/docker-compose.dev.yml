@@ -199,12 +199,13 @@ services:
           "CMD",
           "node",
           "-e",
-          "require('node:http').get('http://127.0.0.1:80/healthz', (res) => process.exit(res.statusCode === 200 ? 0 : 1)).on('error', () => process.exit(1))",
+          "require('node:http').get('http://127.0.0.1:80/readyz', (res) => process.exit(res.statusCode === 200 ? 0 : 1)).on('error', () => process.exit(1))",
         ]
       start_period: 360s
       interval: 10s
       timeout: 5s
       retries: 12
+    stop_grace_period: 150s
     restart: unless-stopped
 
   executor:

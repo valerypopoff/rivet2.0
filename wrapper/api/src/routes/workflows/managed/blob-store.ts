@@ -8,13 +8,16 @@ import {
   type S3ClientConfig,
 } from '@aws-sdk/client-s3';
 import { randomUUID } from 'node:crypto';
-import { Agent as HttpsAgent } from 'node:https';
 import { NodeHttpHandler } from '@smithy/node-http-handler';
 
+import { createManagedObjectStorageHttpHandlerOptions } from '../../../managed-health.js';
+import type { RuntimeHealthCheckContext } from '../../../runtime-health.js';
 import type { ManagedWorkflowStorageConfig } from '../storage-config.js';
 
 export interface ManagedWorkflowBlobStore {
   initialize?(): Promise<void>;
+  checkHealth?(context?: RuntimeHealthCheckContext): Promise<void>;
+  dispose?(): void;
   putText(key: string, contents: string, contentType?: string): Promise<void>;
   getText(key: string): Promise<string>;
   delete(key: string | null | undefined): Promise<void>;
@@ -40,34 +43,33 @@ export function createManagedWorkflowBlobKey(...segments: string[]): string {
     .join('/');
 }
 
+export function createManagedWorkflowS3ClientConfig(
+  config: ManagedWorkflowStorageConfig,
+): S3ClientConfig {
+  const clientConfig: S3ClientConfig = {
+    region: config.objectStorageRegion,
+    forcePathStyle: config.objectStorageForcePathStyle,
+    requestHandler: new NodeHttpHandler(createManagedObjectStorageHttpHandlerOptions()),
+    credentials: {
+      accessKeyId: config.objectStorageAccessKeyId,
+      secretAccessKey: config.objectStorageSecretAccessKey,
+    },
+  };
+
+  if (config.objectStorageEndpoint) {
+    clientConfig.endpoint = config.objectStorageEndpoint;
+  }
+
+  return clientConfig;
+}
+
 export class S3ManagedWorkflowBlobStore implements ManagedWorkflowBlobStore {
   readonly #client;
   readonly #bucket;
   readonly #prefix;
-  static readonly #httpsAgent = new HttpsAgent({
-    keepAlive: true,
-    maxSockets: 64,
-    keepAliveMsecs: 30_000,
-  });
 
   constructor(config: ManagedWorkflowStorageConfig) {
-    const clientConfig: S3ClientConfig = {
-      region: config.objectStorageRegion,
-      forcePathStyle: config.objectStorageForcePathStyle,
-      requestHandler: new NodeHttpHandler({
-        httpsAgent: S3ManagedWorkflowBlobStore.#httpsAgent,
-      }),
-      credentials: {
-        accessKeyId: config.objectStorageAccessKeyId,
-        secretAccessKey: config.objectStorageSecretAccessKey,
-      },
-    };
-
-    if (config.objectStorageEndpoint) {
-      clientConfig.endpoint = config.objectStorageEndpoint;
-    }
-
-    this.#client = new S3Client(clientConfig);
+    this.#client = new S3Client(createManagedWorkflowS3ClientConfig(config));
     this.#bucket = config.objectStorageBucket;
     this.#prefix = normalizeKeyPrefix(config.objectStoragePrefix);
   }
@@ -97,6 +99,16 @@ export class S3ManagedWorkflowBlobStore implements ManagedWorkflowBlobStore {
         Bucket: this.#bucket,
       }));
     }
+  }
+
+  async checkHealth(context?: RuntimeHealthCheckContext): Promise<void> {
+    await this.#client.send(new HeadBucketCommand({
+      Bucket: this.#bucket,
+    }), context ? { abortSignal: context.signal } : undefined);
+  }
+
+  dispose(): void {
+    this.#client.destroy();
   }
 
   async putText(key: string, contents: string, contentType = 'text/plain; charset=utf-8'): Promise<void> {

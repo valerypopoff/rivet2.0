@@ -7,6 +7,11 @@ metadata:
     app.kubernetes.io/component: web
 spec:
   replicas: {{ .Values.replicaCount.web }}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: {{ .Values.rollout.maxUnavailable }}
+      maxSurge: {{ .Values.rollout.maxSurge }}
   selector:
     matchLabels:
       {{- include "rivet.componentLabels" (dict "root" . "component" "web") | nindent 6 }}
@@ -23,6 +28,8 @@ spec:
       imagePullSecrets:
 {{ toYaml . | nindent 8 }}
       {{- end }}
+      terminationGracePeriodSeconds: {{ .Values.lifecycle.terminationGracePeriodSeconds }}
+      {{- include "rivet.pod.placement" (dict "root" . "component" "web") | nindent 6 }}
       securityContext:
         fsGroup: 10001
       containers:
@@ -37,17 +44,27 @@ spec:
           ports:
             - name: http
               containerPort: {{ .Values.service.web.targetPort }}
+          startupProbe:
+            httpGet:
+              path: /
+              port: http
+            periodSeconds: 5
+            timeoutSeconds: 2
+            failureThreshold: 60
           livenessProbe:
             httpGet:
               path: /
               port: http
-            initialDelaySeconds: 10
             periodSeconds: 20
+            timeoutSeconds: 2
+            failureThreshold: 3
           readinessProbe:
             httpGet:
               path: /
               port: http
-            initialDelaySeconds: 5
-            periodSeconds: 10
+            periodSeconds: 5
+            timeoutSeconds: 2
+            failureThreshold: 2
+          {{- include "rivet.pod.preStop" . | nindent 10 }}
           resources:
 {{ toYaml .Values.resources.web | nindent 12 }}

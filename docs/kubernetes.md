@@ -1,5 +1,8 @@
 # Kubernetes
 
+Open managed-mode risks and recommended remediation work are tracked in
+[`kubernetes_managed_mode_audit.md`](../kubernetes_managed_mode_audit.md).
+
 This repo supports one Kubernetes topology today:
 
 - `proxy`: scalable
@@ -99,11 +102,143 @@ The launcher expects:
 - external S3 or S3-compatible storage
 - local renderer inputs named `RIVET_K8S_DATABASE_*` and `RIVET_K8S_STORAGE_*`
 
-For local rehearsal, the launcher also creates a namespace-scoped app-data PVC and wires the chart to it with `storage.appData.existingClaimName`. The defaults are `RIVET_K8S_APP_DATA_CLAIM_NAME=rivet-local-app-data` and `RIVET_K8S_APP_DATA_SIZE=10Gi`; override them only when you need a different local claim name or storage request.
-
 The local overlay at [charts/overlays/local-kubernetes.yaml](../charts/overlays/local-kubernetes.yaml) is not a standalone values file. It is meant to be merged with the generated values file from `scripts/dev-kubernetes.mjs`.
 
 Managed runtime-library startup now serializes its shared Postgres schema initialization behind a PostgreSQL advisory lock. That avoids first-boot deadlocks when the control-plane API and execution/editor processes start against the same managed database at the same time.
+
+## Managed Release Gate
+
+`npm run verify:kubernetes` is the fast deterministic gate. It renders and validates the chart plus Kubernetes contracts, but it does not start a cluster.
+
+The image workflow now also runs a disposable live managed-mode gate before it promotes public tags. It creates a four-node Kind cluster (one control plane plus three workers), starts isolated PostgreSQL and MinIO dependencies, installs the real chart with the exact OCI digest for every candidate image, and accesses the app only through the proxy. The smoke suite verifies:
+
+- singleton backend plus two proxy and two execution replicas;
+- Helm schema migration, managed PostgreSQL App Settings with execution-runtime propagation through a replacement pod, and managed object storage;
+- published/latest workflow requests;
+- published/latest web-app HTML and HTTP actions;
+- a web-app WebSocket action;
+- recordings, replay-project retrieval, and the statistics catalog;
+- the release mode additionally proves long-running web-app WebSocket owner loss, reconnect replay as an explicit interruption, App Settings encryption-key rotation, and PostgreSQL/MinIO readiness failure then recovery;
+- persistence after backend and execution-pod replacement.
+
+The `run_managed_kubernetes_disruption` workflow-dispatch input adds the controlled proxy rollout, execution-node drain, deliberately long web-app WebSocket forced-owner-loss/reconnect check, App Settings encryption-key rotation, and PostgreSQL/MinIO outage/recovery checks. GitHub executes scheduled workflows only from the repository default branch. This workflow is maintained on `main-rivet2`, while the currently recorded default branch is `main`, so the weekly disruption gate is not active until administrators either make `main-rivet2` the default branch or place a default-branch dispatcher that targets it. Each run uploads non-secret manifests, Kubernetes events, pod descriptions, and logs. Generated credentials are supplied only to Kubernetes and are never placed in artifacts.
+
+For a deliberate local run, first create the disposable Kind topology and then provide the exact candidate image repositories and digests. The runner will refuse to run unless both context variables exactly match the active context; it also deletes only a namespace carrying its own ownership label.
+
+```bash
+kind create cluster --name rivet-managed-release --config scripts/kind-managed-release-cluster.yaml
+export RIVET_K8S_RELEASE_GATE_CONTEXT=kind-rivet-managed-release
+export RIVET_K8S_RELEASE_GATE_ALLOW_CONTEXT=kind-rivet-managed-release
+export RIVET_K8S_RELEASE_GATE_PROXY_IMAGE_REPOSITORY=ghcr.io/<owner>/<repo>/proxy
+export RIVET_K8S_RELEASE_GATE_PROXY_IMAGE_DIGEST=sha256:<digest>
+# Set the corresponding WEB, API, and EXECUTOR repository/digest variables too.
+export RIVET_K8S_RELEASE_GATE_REGISTRY_USERNAME=<registry-user>
+export RIVET_K8S_RELEASE_GATE_REGISTRY_PASSWORD=<registry-token>
+npm run verify:kubernetes:managed-live
+```
+
+Use `npm run verify:kubernetes:managed-disruption` only against this disposable Kind context. Set `RIVET_K8S_RELEASE_GATE_KEEP_NAMESPACE=true` when investigating a failure; otherwise the owned namespace is removed after artifacts are collected.
+
+This gate proves the repository's chart/runtime interaction on Kind. It does not replace staging certification against the real managed PostgreSQL service, object store, ingress controller, TLS, DNS, and network policies used by production.
+
+### Provider-backed staging gate
+
+The disposable Kind gate is the release candidate's cluster contract. The protected provider gate is the separate, manual certification path for the actual ingress controller, DNS, TLS, managed PostgreSQL, S3-compatible storage, and network policy implementation used by a staging environment. It is deliberately not run on every image push: it mutates the selected staging Helm release, so it requires a protected GitHub environment approval and an explicit workflow-dispatch choice.
+
+Create the GitHub environment `rivet-managed-staging`, require the appropriate approvers, and configure:
+
+- repository variable `RIVET_K8S_STAGING_CONTEXT` with the exact kube-context name;
+- environment secrets `RIVET_K8S_STAGING_KUBECONFIG_B64`, `RIVET_K8S_STAGING_VALUES_B64`, and `RIVET_K8S_STAGING_CONFIG_B64` as base64-encoded kubeconfig, Helm values, and gate configuration respectively; and, when outage drills are configured, `RIVET_K8S_STAGING_INTERRUPTION_MANIFESTS_TGZ_B64` as a base64-encoded gzip tarball of the referenced NetworkPolicy manifests;
+- a protected job token with `packages: write`, plus GHCR package policy that permits the staging cluster to pull the immutable candidate images.
+
+The values file remains an environment-owned Helm overlay. It should reference existing Secrets or Vault paths, not contain plaintext production credentials. The gate configuration is also restored only into the GitHub runner temporary directory and is never uploaded. Its shape is:
+
+```json
+{
+  "namespace": "rivet-staging-rivet",
+  "release": "rivet-staging",
+  "baseUrl": "https://rivet-staging.example.test",
+  "requestHeaders": { "authorization": "Bearer <staging-key-or-session>" },
+  "workflowProbe": {
+    "path": "/workflows/provider-gate",
+    "method": "POST",
+    "body": { "input": "provider-gate" },
+    "contains": "provider-gate"
+  },
+  "webAppProbe": {
+    "path": "/apps/provider-gate",
+    "contains": "Provider gate"
+  },
+  "keyRotation": {
+    "currentSecretName": "rivet-settings-old",
+    "nextSecretName": "rivet-settings-new",
+    "secretKey": "encryptionKey"
+  },
+  "legacyImport": {
+    "probe": {
+      "path": "/workflows/legacy-import",
+      "method": "POST",
+      "body": { "input": "legacy" },
+      "contains": "legacy"
+    }
+  },
+  "interruptionManifests": {
+    "postgres": {
+      "applyFile": "block-postgres.yaml",
+      "restoreFile": "block-postgres.yaml",
+      "restoreAction": "delete"
+    }
+  }
+}
+```
+
+`namespace` must begin with `rivet-staging-`; the runner requires both configured context values to exactly equal the active context and requires `RIVET_K8S_PROVIDER_GATE_CONFIRM=deploy-staging`. It accepts only same-origin HTTPS probes. Each workflow and web-app probe must include a response marker, so a generic 200 page cannot pass as execution evidence.
+
+For each configured dependency outage, put the config-relative Kubernetes manifests in the optional interruption archive under the same relative paths. The workflow rejects archive path traversal and symbolic or hard links before extracting into the runner temporary directory; the runner also rejects missing or symlinked referenced manifests. Each manifest may contain only a `NetworkPolicy` explicitly in that staging namespace. `restoreAction: "delete"` deletes the named test policy after the readiness-failure assertion; `"apply"` applies a separate restoring policy. The runner attempts the restore even if the apply command fails after changing an earlier resource, so a later rejection does not normally leave the configured staging outage in place. This is intentionally narrow: the runner will not execute arbitrary shell commands or apply cluster-scoped resources. Configure the policies to sever only the selected staging dependency, then the gate verifies `/readyz` becomes unready, restores the policy, waits for recovery, and re-runs both workflow and web-app probes.
+
+When `keyRotation` is supplied, the gate writes an unchanged Run recordings settings snapshot to ensure an encrypted row exists, performs the documented old/new, new/old, and new-only Helm rollouts, and reads the same settings after every phase. When `legacyImport` is supplied, the staging release must already exist and retain its legacy PVC during the test. The gate checks the supplied legacy-data probe, rolls back to the preceding Helm revision, checks it again, then reinstalls the candidate and checks both current and legacy probes. This is a staging-only destructive acceptance test, not a recovery recipe for production.
+
+Run it from **Build Images** -> **Run workflow**, enabling `run_managed_kubernetes_provider_gate`. The protected job allows up to 180 minutes because candidate deployment, optional three-phase key rotation, legacy rollback, and outage recovery are each bounded independently; the default Helm operation bound is 15 minutes. The job resolves the candidate images to digests, verifies the rendered release uses them, checks the public ingress host and TLS endpoint, and uploads only workload/manifest/log artifacts under `artifacts/kubernetes-managed-provider-gate`. Candidate Helm upgrades are atomic: a failed rollout rolls the release back instead of leaving a partial failed candidate deployed. The ingress check is restricted to objects owned by the selected Helm release, so an unrelated staging ingress cannot satisfy it. When upgrading an existing staging release, the gate reuses its existing Helm values so omitted values are not reset; a new staging release uses only the supplied values. The gate treats any Helm history error other than an explicitly absent release as a failure, rather than risking an install-style upgrade with no inherited values. The gate labels and owns only its configured registry pull secret (by default, `rivet-managed-provider-gate-registry`) and refuses to overwrite a same-named secret without its ownership label. A first green run is required operational evidence; repository tests can validate this harness but cannot substitute for access to the real provider services.
+
+## Managed workflow schema migrations
+
+Managed workflow DDL is versioned and serialized separately from ordinary API startup:
+
+- `managed_workflow_schema_migrations` records each immutable migration version, name, SHA-256 checksum, application version, and application time.
+- Each migration runs in a PostgreSQL transaction behind a repository-specific `pg_advisory_xact_lock`, with bounded lock and statement timeouts. The migration library retries only PostgreSQL lock-timeout, deadlock, and serialization failures, and every retry starts a new transaction; callers retain the existing bounded retry for connection-level network failures.
+- Existing databases from releases before the ledger are baselined by rerunning migration 1 idempotently, validating every migration-1 table column type/nullability and required default, required table DML privileges with row-level security disabled, exact operational-index signature and usable catalog state, semantic and validated primary/unique/foreign-key/check constraint with usable primary/unique backing indexes, plus the schema-qualified folder-move function's body, execution signature, and API-role execute privilege, and then recording version 1 in the same transaction.
+- Local Docker and simple managed single-process deployments default to startup mode `migrate`, preserving their automatic first-run behavior.
+- Kubernetes API pods are forced into `verify` mode after Vault dotenv loading. They take a shared advisory lock, validate the ledger/checksum and critical schema shape, and fail startup with a precise compatibility error instead of applying DDL.
+
+The chart owns migration execution through the `workflow-schema-migration` Helm hook Job. It runs `pre-install,pre-upgrade` with the candidate API image. The Job bootstraps candidate deployment-storage settings into an isolated `emptyDir`, runs workflow schema migration with the file settings backend so migration 2 can create `app_settings`, then enables the PostgreSQL backend and seeds each absent domain from its matching regular, valid legacy JSON file when available. Both phases reuse one rendered database credential set; the Job does not declare duplicate database environment names. A missing, malformed, symlinked, or non-file legacy entry leaves that domain on the candidate bootstrap/default instead of replacing the whole bootstrap root. Serving pods remain verify-only. Vault injection is pre-populate-only, so no sidecar can keep the one-shot Job alive. A successful hook is deleted; a failed hook remains for logs and blocks the release.
+
+For a normal chart install, keep:
+
+```yaml
+workflowSchema:
+  migrationJob:
+    enabled: true
+    backoffLimit: 2
+    activeDeadlineSeconds: 600
+```
+
+Set `workflowSchema.migrationJob.enabled=false` only when an external delivery pipeline runs the exact candidate API image's schema command before Helm rolls API pods. API pods remain verify-only in that mode; disabling the Job without an external migration makes an install or upgrade fail closed.
+
+Outside Kubernetes, the equivalent operator commands are:
+
+```bash
+npm run workflow-schema:migrate
+npm run workflow-schema:verify
+```
+
+These commands migrate PostgreSQL schema only. They are distinct from `workflow-storage:migrate` / `workflow-storage:verify`, which copy and compare workflow data between filesystem and managed storage.
+
+Recovery rules:
+
+- If the hook times out or loses its database connection, inspect the retained Job logs and rerun the release after fixing connectivity. Transaction rollback plus migration ids/checksums make a retry safe.
+- Do not edit migration ledger rows or change released migration SQL to bypass a checksum mismatch. Deploy a compatible image or add a new corrective migration.
+- A database with a future migration version must not be served by an older image. Roll forward to a compatible image; database rollback requires an explicitly designed backward migration and should not be improvised.
+- Add future schema work as a new ordered migration in `schema-migrations.ts`. Keep overlapping releases compatible with expand-and-contract changes; defer destructive contraction until old pods cannot still be running.
 
 Useful commands:
 
@@ -169,7 +304,7 @@ Have these ready before the first `helm upgrade --install`:
 - a `linux/amd64` node pool, unless the API and executor images are rebuilt for another platform
 - an ingress controller that supports websocket upgrades and long-lived websocket connections
 - DNS for the public Rivet hostname and a TLS secret or certificate-manager integration
-- a pre-created app-data PVC set as `storage.appData.existingClaimName`; use RWX-capable storage for multi-node or scaled proxy/execution deployments
+- a Kubernetes Secret or Vault value for the App Settings encryption key; the shared `RIVET_KEY` works only as a compatibility fallback
 - managed Postgres reachable from the cluster
 - S3 or S3-compatible object storage reachable from the cluster
 - Vault Injector installed when `vault.enabled=true`
@@ -237,16 +372,16 @@ imagePullSecrets:
 images:
   proxy:
     repository: ghcr.io/valerypopoff/cloud-hosted-rivet2-wrapper/proxy
-    tag: <published-tag>
+    tag: <published-tag> # Or set digest: sha256:<immutable-manifest>.
   web:
     repository: ghcr.io/valerypopoff/cloud-hosted-rivet2-wrapper/web
-    tag: <published-tag>
+    tag: <published-tag> # Or set digest: sha256:<immutable-manifest>.
   api:
     repository: ghcr.io/valerypopoff/cloud-hosted-rivet2-wrapper/api
-    tag: <published-tag>
+    tag: <published-tag> # Or set digest: sha256:<immutable-manifest>.
   executor:
     repository: ghcr.io/valerypopoff/cloud-hosted-rivet2-wrapper/executor
-    tag: <published-tag>
+    tag: <published-tag> # Or set digest: sha256:<immutable-manifest>.
 
 ingress:
   enabled: true
@@ -298,12 +433,6 @@ auth:
   # If Vault is enabled, /vault/dotenv may provide RIVET_KEY instead.
   keySecretName: ""
 
-storage:
-  appData:
-    enabled: true
-    size: 20Gi
-    storageClassName: <storage-class>
-
 resources:
   proxy:
     requests:
@@ -353,11 +482,11 @@ In Kubernetes, production should stay on managed storage:
 - workflow metadata, publication state, recording metadata, resumable web-app action state, and runtime-library state live in managed Postgres
 - workflow blobs, recording/replay blobs, and runtime-library artifacts live in object storage
 
-The chart requires `storage.appData.existingClaimName`. This PVC is the shared app-settings volume for the backend, proxy, execution, and executor pods. Use RWX-capable storage for multi-node or scaled proxy/execution deployments; a generated backend-only StatefulSet claim is not enough because Deployments cannot mount that private claim.
+Kubernetes requires `appSettings.backend=postgres`. Every App Settings domain is stored in the managed PostgreSQL `app_settings` table as an AES-256-GCM-encrypted payload with a monotonic revision. Compare-and-swap writes prevent silent administrative overwrites. PostgreSQL notifications invalidate replica caches quickly, and a five-second revision poll converges after dropped notifications. Notification failure cannot change the result of an already-committed save, and replicas acknowledge revisions only after successful repository refresh so transient failures remain retryable. Each HTTP request captures one immutable settings snapshot.
 
-The API and executor containers deliberately mount that same `app-data` volume at different paths: `/data/rivet-app` for the API and `/home/rivet/.local/share/com.valerypopoff.rivet2` for the executor. The proxy mounts the same claim read-only at `/data/rivet-app` so it can hot-reload public route, timeout, trusted-host, and web-app body-limit settings. App Settings -> `Storage` writes `settings/deployment-storage.json` from the API; App Settings -> `Run recordings` writes `settings/run-recordings.json` from the API; App Settings -> `General` -> `Trusted hosts` writes `settings/trusted-hosts.json` from the API; App Settings -> `Node executor proxy` writes `settings/node-executor-proxy.json` and `settings/executor-url-overrides.json` from the API; App Settings -> `Workflow endpoints` -> `Routes` and App Settings -> `Web apps` -> `Routes` both write `settings/public-routes.json` from the API; App Settings -> `Workflow endpoints` -> `Access control` writes `settings/workflow-endpoint-auth.json` from the API; App Settings -> `Web apps` -> `Auth`, App Settings -> `OAuth`, and App Settings -> `Server UI access` write `settings/web-app-auth.json` from the API; App Settings -> `Workflow endpoints` -> `HTTP request timeout` and App Settings -> `Web apps` -> `Button data` write `settings/runtime-limits.json`. API and executor startup read deployment storage settings from app data; runtime storage/database env values are ignored, and Kubernetes uses only the init container's `RIVET_DEPLOYMENT_*` bootstrap values when the settings file is absent. API bootstrap also clears process proxy env first and then reads the proxy settings file through `RIVET_APP_DATA_ROOT` for latest/headless execution paths that run in that process, while the editor executor bootstrap reads the same relative file from the desktop-style app-data mount. Hosted executor/default-debugger websocket URL overrides are read through `/api/config`; blank override settings keep the normal public-host-derived websocket URLs. Keep this claim persistent if operators use UI-managed storage, recording limits, public route slugs, trusted hosts, workflow endpoint auth, web-app auth, runtime limits, websocket overrides, or executor proxy settings.
+Backend and execution pods receive separate pod-local `emptyDir` app-data volumes. The control pod mounts its local volume at `/data/rivet-app` for the API and at `/home/rivet/.local/share/com.valerypopoff.rivet2` for the co-located executor. Init containers project deployment-storage and node-proxy compatibility JSON before startup; PostgreSQL remains authoritative, and repository subscriptions refresh those projections. Hosted package plugins are also pod-local, reconstructible caches: install and load routes independently ensure the requested package is ready, with same-pod concurrent preparation deduplicated, so requests routed to different control replicas do not depend on shared files. Execution API pods read the repository directly. The proxy mounts no app-data volume: it polls the authenticated control-plane `/internal/app-settings/proxy-config` endpoint, which returns only route prefixes, timeout/body limits, trusted hosts, backend kind, and a revision. Failed fetches preserve the last valid nginx config, and every candidate still passes `nginx -t` before reload.
 
-Published workflow endpoints and published web apps in the split `execution` deployment also consume this settings volume for UI-managed storage credentials, recording limits, workflow endpoint auth, web-app auth, runtime limits, and proxy values. Storage/database settings are read from `settings/deployment-storage.json` at process startup, while recording queue/retention limits, workflow endpoint bearer-token auth, trusted host bypasses, web-app auth/OAuth settings, runtime endpoint proxy values, workflow HTTP timeout settings, and web-app button-data limits are not read from `.env`, Vault dotenv, or deployment `RIVET_RECORDINGS_MAX_*` / `RIVET_REQUIRE_WORKFLOW_KEY` / `RIVET_UI_TOKEN_FREE_HOSTS` / `RIVET_WEB_APPS_AUTH_MODE` / `OAUTH_*` / `RIVET_SERVER_UI_OAUTH_*` / `HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY` / timeout variables. Server UI auth has one bootstrap env knob: `RIVET_SERVER_UI_AUTH_MODE` selects `none`, `key`, or `oauth`; OAuth provider settings and server UI admin emails still come from `settings/web-app-auth.json` on the shared app-data claim, but the UI shows provider/session controls in `Settings` -> `OAuth` and admin emails in `Settings` -> `Server UI access`. Bootstrap a fresh deployment with `none` or `key`, save the shared OAuth settings and admin allowlist from the UI, then switch `RIVET_SERVER_UI_AUTH_MODE=oauth` and roll out the API. Storage/database changes require pod restart or rollout so process singleton backends are rebuilt. Public route slugs are read by the API dynamically from `settings/public-routes.json`; the proxy hot-reloads its nginx public-route, trusted-host, timeout, and per-web-app-action body-limit config from the same app-data claim. The Docker startup wait timeout stored in the same runtime-limits settings file is intentionally ignored by Kubernetes; it only affects npm Docker launcher commands.
+Published/latest workflow and web-app processes therefore share storage credentials, recording policy, endpoint auth, OAuth, runtime limits, route slugs, environment overlays, websocket overrides, and proxy settings through PostgreSQL rather than a network filesystem. Storage/database changes still require a pod rollout because backend singletons are process-scoped. Dynamic route, timeout, trusted-host, auth, recording, and environment changes propagate without a shared-volume mount. The Docker-only startup wait setting remains ignored by Kubernetes.
 
 The managed schema also stores short-lived web-app action runs, sequenced replay/progress events, and cross-pod cancellation commands. Every API pod receives `RIVET_RUNNER_SLOT_ID` from its Kubernetes pod name. The gateway keeps the graph processor on that owning pod, renews its database lease while it is running, and uses Postgres notifications plus polling to deliver durable events/cancellation across pods. A browser reconnect can therefore land on another API pod and resume the same authorized action; a crashed or drained owner eventually emits an explicit interrupted terminal event. The database run ledger is intentionally short-lived (terminal rows are pruned after 24 hours) and separate from the long-term Run recordings artifacts. WebSocket action message limits are captured when the API process starts, so roll out API pods after raising or lowering `Settings` -> `Web apps` -> `Button data`.
 
@@ -386,23 +515,58 @@ Keep ingress body-size limits high enough for project import/export and keep web
 
 Do not route `/workflows` directly to `execution` from the external ingress. External traffic should still enter through `proxy`, because the proxy injects the trusted `X-Rivet-Proxy-Auth` header and handles the optional UI/public workflow auth policies consistently.
 
-### Health checks and probes
+### Health, lifecycle, and availability
 
-The chart already defines Kubernetes liveness and readiness probes. They are part of the chart templates today, not environment-overlay values.
+The chart owns health and lifecycle policy explicitly. Do not try to override it through arbitrary dotenv keys; use the typed `lifecycle`, `rollout`, and `availability` values. API containers capture the chart-owned lifecycle values before loading Vault dotenv and reapply them afterward, so a stale secret file cannot silently change probe timing or shutdown policy.
 
-| Workload | Container | Probe shape |
-|---|---|---|
-| `backend` StatefulSet | `api` | HTTP `GET /healthz` on the API port |
-| `backend` StatefulSet | `executor` | TCP probe on executor port `21889` |
-| `execution` Deployment | `api` | HTTP `GET /healthz` on the execution API port |
-| `proxy` Deployment | `proxy` | TCP probe on proxy HTTP port |
-| `web` Deployment | `web` | HTTP `GET /` on the static web server port |
+API health endpoints have separate meanings:
 
-The API server exposes `GET /healthz`. It starts listening only after startup reconciliation and workflow storage initialization finish, so the endpoint is a lightweight process-ready check rather than a deep Postgres/S3 transaction on every probe.
+- `GET /livez`: shallow process liveness. It remains `200` during a recoverable dependency outage and while the process is draining; it becomes unhealthy only after the runtime reaches its stopped state.
+- `GET /readyz`: startup/drain and required-dependency readiness. It returns `503` while starting, draining, stopped, stale, or unable to use a required dependency.
+- `GET /healthz`: backward-compatible alias for liveness. New probes should use `/livez` or `/readyz` according to intent.
 
-The app does not currently expose `/health`, `/readyz`, `/livez`, or `/up` aliases. If the target platform requires one of those conventional paths, add the aliases deliberately in the API/proxy/web runtimes and update the chart probes at the same time. Do not assume a generic overlay key named `probes` will change this chart; that key is not currently wired.
+Readiness does not open a new database/object-storage transaction for every kubelet request. Each API process refreshes a cached health snapshot in the background. The default required checks cover App Settings, workflow storage, runtime libraries, and web-app action coordination. In managed mode this includes PostgreSQL and S3-compatible object-storage checks; in filesystem mode it verifies the owned roots/cache state. Responses contain stable reason codes, check names, timestamps, and durations, but never raw dependency errors or secrets. A timed-out or draining health refresh aborts checked-out PostgreSQL probe clients and S3 `HeadBucket` requests. PostgreSQL connection acquisition is capped at 10 seconds, while S3 connection establishment is capped at 10 seconds and idle socket waits at 60 seconds; the socket limit is not a total upload-duration limit.
 
-No `startupProbe` is currently defined. If cold production startup needs a longer grace period than the current liveness/readiness delays, add explicit chart support rather than relying on unsupported environment overlay fields.
+Managed object-storage credentials must allow the S3-compatible `HeadBucket` operation used by readiness, in addition to the object operations used by normal storage. On AWS S3 this commonly requires bucket-level `s3:ListBucket`; verify the equivalent permission for the selected provider.
+
+Default health timing is controlled by:
+
+```yaml
+lifecycle:
+  health:
+    refreshSeconds: 5
+    checkTimeoutSeconds: 3
+    staleAfterSeconds: 20
+```
+
+Keep `staleAfterSeconds` greater than `refreshSeconds + checkTimeoutSeconds`. Short values can flap readiness during normal provider latency. The provider transport bounds are deliberately independent from the shorter readiness wait: a dependency implementation that ignores cancellation remains deduplicated until its bounded transport operation settles instead of accumulating retries. A provider-wide outage may make every execution pod unready because PostgreSQL/object storage are required to execute published work; liveness deliberately stays healthy so Kubernetes does not create a restart storm.
+
+The rendered probe contract is:
+
+| Workload | Container | Startup | Liveness | Readiness |
+|---|---|---|---|---|
+| `backend` StatefulSet | `api` | `GET /livez` | `GET /livez` | `GET /readyz` |
+| `backend` StatefulSet | `executor` | TCP `21889` | TCP `21889` | TCP `21889` |
+| `execution` Deployment | `api` | `GET /livez` | `GET /livez` | `GET /readyz` |
+| `proxy` Deployment | `proxy` | TCP proxy port | TCP proxy port | TCP proxy port |
+| `web` Deployment | `web` | `GET /` | `GET /` | `GET /` |
+
+Startup probes tolerate cold reconciliation without letting liveness restart a valid slow boot forever. Permanent failures remain bounded by `lifecycle.probes.startup.failureThreshold` and its period.
+
+Termination is coordinated across Kubernetes and the API:
+
+- `preStopDelaySeconds` defaults to `5` to give endpoint removal time to propagate before SIGTERM. It is only propagation margin, not the application drain mechanism.
+- SIGTERM immediately makes API readiness false, stops accepting new web-app actions, and closes HTTP acceptance. A concurrent initial health refresh cannot return the pod to ready.
+- accepted HTTP connections and active web-app actions may finish within `shutdownGraceSeconds`, default `120`.
+- cleanup is serialized and may run again after a late startup initializer settles; managed runtime-library initialization cannot start its worker once shutdown begins.
+- work still active at the deadline is force-closed or persisted as interrupted; recording persistence is flushed before managed resources close.
+- `terminationGracePeriodSeconds` defaults to `150` and validation requires room for shutdown grace, pre-stop delay, and a 25-second finalization margin.
+
+Tune shutdown and pod termination values together. Longer drain windows improve completion probability but slow rollouts and node maintenance.
+
+Every workload has an explicit rolling strategy and preferred topology spread plus pod anti-affinity. Proxy and execution default to `maxUnavailable: 0` and `maxSurge: 1`. PodDisruptionBudgets are emitted only when a tier's effective minimum replica count is greater than one; by default this protects proxy and execution. The singleton backend intentionally has no PDB, because a one-pod PDB would block voluntary disruption without creating high availability. Placement defaults are preferred rather than required so Minikube and small clusters remain schedulable.
+
+The backend remains a validated singleton. Managed web-app action run history/replay/cancellation is replica-safe, and execution replicas scale normally. The remaining control-plane blockers are process-local latest-debugger ownership and the co-located editor executor: their related Services could choose different backend pods if backend replicas were increased. Do not disable the singleton validation until those sessions have distributed ownership or stable fenced routing and are tested with owner loss.
 
 ### Vault dotenv contract
 
@@ -419,7 +583,7 @@ RIVET_DEPLOYMENT_STORAGE_ACCESS_KEY=<object-storage-secret-access-key>
 BILLING_OPENAI_KEY=<provider-api-key>
 ```
 
-You may provide `RIVET_DEPLOYMENT_DATABASE_CONNECTION_STRING` instead of `RIVET_DEPLOYMENT_DATABASE_PASSWORD`, but keep the non-secret `postgres.host`, `postgres.database`, and `postgres.username` values in the Helm values because chart validation uses them to catch incomplete managed-storage configuration. The chart bootstrap writes these values into `settings/deployment-storage.json` when that file is absent; API and executor runtime containers read the settings file rather than the dotenv variables.
+You may provide `RIVET_DEPLOYMENT_DATABASE_CONNECTION_STRING` instead of `RIVET_DEPLOYMENT_DATABASE_PASSWORD`, but keep the non-secret `postgres.host`, `postgres.database`, and `postgres.username` values in the Helm values because chart validation uses them to catch incomplete managed-storage configuration. The migration Job uses these bootstrap values to seed the encrypted deployment-storage row only when it is absent. API and execution replicas then read PostgreSQL; the editor executor sees only the pod-local compatibility projection created before startup.
 
 Vault dotenv injection is the preferred place for production LLM/provider credentials. The full injected file is sourced only by backend API, execution API, and editor executor workloads, so custom credential names do not require a fixed chart template list. The proxy receives a generated one-variable dotenv containing only `RIVET_KEY`; it does not receive provider credentials. Non-secret development values may use `env`, which is likewise projected into execution workloads while the proxy receives only its route/resolver settings. Do not commit provider keys in Helm values. Browser access remains separately restricted by `RIVET_ENV_ALLOWLIST`; server-side availability never makes a secret browser-readable.
 
@@ -462,31 +626,35 @@ objectStorage:
 
 Use `postgres.connectionStringSecretName` instead of the host/database/username/password tuple only if your operations standard prefers a single connection-string secret.
 
-Create or reference the shared app-data PVC before installing the chart. The claim name must match `storage.appData.existingClaimName` and must be mountable by backend, proxy, execution, and executor pods:
+### App Settings key rotation
 
-```bash
-kubectl -n your-namespace apply -f - <<'EOF'
-apiVersion: v1
-kind: PersistentVolumeClaim
-metadata:
-  name: rivet-app-data
-spec:
-  accessModes:
-    - ReadWriteMany
-  resources:
-    requests:
-      storage: 20Gi
-  storageClassName: <rwx-storage-class>
-EOF
-```
+1. Back up PostgreSQL and create the new key Secret.
+2. Compatibility rollout: keep the old key configured as `appSettings.encryptionKeySecretName` and expose the new key through `appSettings.previousEncryptionKeySecretName`. Wait until every old-generation pod has been replaced. All running pods can now decrypt either key, while writes still use the old key.
+3. Primary-key rollout: switch `appSettings.encryptionKeySecretName` to the new key and `appSettings.previousEncryptionKeySecretName` to the old key. Wait until the migration Job, backend, and every execution replica complete a healthy rollout. Startup initializes every registered settings domain, so fallback-encrypted rows are read and rewritten with each pod's primary. During the rolling overlap, old-primary and new-primary pods may rewrite a row more than once, but both generations can decrypt it.
+4. Removal rollout: only after every pod uses the new primary, remove `previousEncryptionKeySecretName`.
 
-Then set:
+Never perform the primary-key swap as the first rolling step: an old pod that knows only the old key cannot decrypt a row already rewritten by a new pod. Never remove the old key before all rows have been re-encrypted. A row encrypted by an unavailable key fails startup/read explicitly; it never falls back to defaults. PostgreSQL backup and the encryption keys must be backed up separately and restored together.
+
+Configure the App Settings backend and encryption key in environment values:
 
 ```yaml
-storage:
-  appData:
+appSettings:
+  backend: postgres
+  encryptionKeySecretName: rivet-app-settings
+  encryptionKeySecretKey: encryptionKey
+```
+
+Create `rivet-app-settings` as a Kubernetes Secret or supply the same variable through Vault. Prefer a dedicated random secret of at least 32 characters. If no dedicated key is configured, the API falls back to `RIVET_KEY` for compatibility; do not rotate that shared key casually when it is also the only settings decryption key.
+
+For a one-time upgrade from a chart release that used the shared app-data PVC, keep the old claim provisioned and add:
+
+```yaml
+appSettings:
+  legacyImport:
     existingClaimName: rivet-app-data
 ```
+
+Only the migration Job mounts that claim, read-only. Each JSON domain seeds PostgreSQL only when its row is absent. Legacy files are considered independently, so a partial old claim cannot discard candidate bootstrap settings for domains it does not contain; unusable legacy entries are ignored with a warning. Rerunning the hook therefore cannot replace newer database settings. Keep the old claim intact through the rollback window, then remove `legacyImport.existingClaimName` in a later release. A rollback to an old image can read the old PVC but cannot see settings changed after database cutover; take a PostgreSQL backup before upgrade and avoid changing settings until rollback acceptance is complete.
 
 ### Direct Helm commands
 
@@ -523,6 +691,13 @@ kubectl -n your-namespace rollout status deployment/rivet-execution
 kubectl -n your-namespace rollout status statefulset/rivet-backend
 ```
 
+If Helm stops on the schema hook, inspect the retained Job before retrying:
+
+```bash
+kubectl -n your-namespace get jobs -l app.kubernetes.io/component=workflow-schema-migration
+kubectl -n your-namespace logs job/<release>-rivet-workflow-schema-migration
+```
+
 Then port-forward the proxy service and verify the proxy-facing routes:
 
 ```bash
@@ -555,9 +730,9 @@ If server UI auth should use OAuth, do not provide retired `RIVET_SERVER_UI_OAUT
 4. Register `https://<public-host>/__rivet_auth/oauth/callback` with the provider for the server UI callback. If web-app OAuth is also enabled, register the app callback path configured in the same OAuth tab, usually `https://<public-host>/apps/auth/callback`.
 5. Change deployment env to `RIVET_SERVER_UI_AUTH_MODE=oauth` and roll out the backend API so the mode env is re-read.
 
-For GitOps-only installs, pre-seed `settings/web-app-auth.json` on the shared app-data claim before switching the mode to `oauth`; treat that file as secret-bearing app data because it can contain client and session secrets. Keep the server UI OAuth admin list separate from per-web-app allowed-email lists. The server UI list controls who can administer the Rivet editor/dashboard; web-app allowlists are saved per published web app in Project Settings.
+For a new GitOps install, bootstrap the server UI with `RIVET_SERVER_UI_AUTH_MODE=none` or `key`, then save OAuth and admin-email settings through the authenticated UI before switching the deployment mode to `oauth`. Do not insert plaintext JSON into `app_settings`; payload encryption and revisioning are application-owned. An upgrade may instead use the one-time read-only legacy PVC import described above.
 
-Public workflow execution routes require `Authorization: Bearer <RIVET_KEY>` when `Settings` -> `Workflow endpoints` -> `Access control` is enabled. It is enabled by default and persisted in `settings/workflow-endpoint-auth.json` on the shared app-data claim.
+Public workflow execution routes require `Authorization: Bearer <RIVET_KEY>` when `Settings` -> `Workflow endpoints` -> `Access control` is enabled. It is enabled by default and stored in the encrypted workflow-endpoint-auth settings domain.
 
 Web-app routes under `/apps/*` and `/apps-latest/*` follow the persisted `Settings` -> `Web apps` -> `Auth` mode:
 
@@ -565,7 +740,7 @@ Web-app routes under `/apps/*` and `/apps-latest/*` follow the persisted `Settin
 - `OAuth` redirects web-app page visitors through the configured OAuth provider, returns them to the originally requested app URL after callback, and then checks the per-web-app allowed-email list stored in Project Settings. The allowlist is fail-closed: leave it empty only when nobody should be able to open that app yet.
 - `No gate` leaves web-app routes open at the API layer and should only be used behind an external access-control layer.
 
-Hosts listed in `Settings` -> `General` -> `Trusted hosts` bypass web-app auth in every mode. In OAuth mode, configure the provider callback as `https://<public-host>/apps/auth/callback` unless `Settings` -> `Web apps` -> `Routes` changes the published app slug or the `OAuth` tab's callback URL intentionally changes it; the active published-app auth logout route, usually `${RIVET_PUBLISHED_APPS_BASE_PATH:-/apps}/auth/logout`, is also reserved by the API for local sign-out. That logout clears only the Rivet web-app OAuth session, then asks the provider for `prompt=select_account` on the next sign-in so users can choose another account when the provider supports it; it does not terminate the provider's own browser session. OAuth provider settings are vendor-neutral and are stored through the `OAuth` tab, including provider URLs, client credentials, scopes, email claim path, session lifetime, client-auth method, and profile debug logging. Server UI admin emails are stored through the `Server UI access` tab because they apply to the editor/dashboard gate, not to individual web-app visitors. External OAuth provider URLs must use `https`; `http` is accepted only for localhost development endpoints. `Local dummy` is only for local testing and must not be used in Kubernetes or production; it lets a localhost tester type an email at the active published-app dummy route, usually `/apps/auth/dummy`. Profile debug logging can be used briefly during integration to log the raw provider profile JSON, but should stay off in normal production because it can expose user profile data in pod logs. `RIVET_CORS_ALLOWED_ORIGINS` should stay empty unless a known external browser origin must call API or workflow routes directly. In production, treat `settings/web-app-auth.json` as secret-bearing app data, `settings/trusted-hosts.json` as the explicit gate-bypass policy, and `settings/public-routes.json` as the proxy/API route contract: persist them, back them up according to the app-data policy, and restrict pod/volume access appropriately. The proxy no longer needs web-app auth mode or trusted-host env vars; it forwards app routes to the API and keeps `RIVET_TRUST_INCOMING_FORWARDED_HEADERS=false` by default so browser-supplied forwarded headers cannot influence OAuth redirects or trusted-host matching.
+Hosts listed in `Settings` -> `General` -> `Trusted hosts` bypass web-app auth in every mode. OAuth provider/session settings and trusted hosts are encrypted App Settings rows; per-web-app email allowlists remain publication metadata. External OAuth URLs must use HTTPS, local dummy OAuth is development-only, and profile debug logging should stay off because it can expose profile data. Keep `RIVET_CORS_ALLOWED_ORIGINS` empty unless a known external browser origin needs direct API access. The proxy receives only a non-secret trusted-host projection and keeps `RIVET_TRUST_INCOMING_FORWARDED_HEADERS=false` unless a trusted ingress rewrites forwarded headers.
 
 If an ingress or gateway rewrites the upstream `Host` or terminates TLS before the Rivet proxy and the API must see the original public host/scheme, configure that ingress to strip any client-supplied `X-Forwarded-Host` / `X-Forwarded-Proto` headers and write its own trusted values, then set `env.RIVET_TRUST_INCOMING_FORWARDED_HEADERS: "true"`. Leave it false for directly internet-facing proxies or untrusted ingress chains. The effective host/proto feed OAuth callback construction, same-origin web-app action checks, trusted-host matching, server UI cookie security, and `/api/config` browser URLs.
 
@@ -574,7 +749,7 @@ If `fullnameOverride` is not set, replace `rivet-*` with the rendered object nam
 Common first-deploy failure patterns:
 
 - `ImagePullBackOff`: check GHCR visibility, tag names, and `imagePullSecrets`
-- `Pending`: check that `storage.appData.existingClaimName` exists in the namespace, can be mounted by backend/proxy/execution/executor pods, and uses access modes/storage class compatible with the replica topology; also check any runtime-library cache PVC choices
+- `Pending`: check image pulls, runtime-library cache PVC attachment when configured, and any optional legacy-import PVC; normal App Settings no longer require a shared claim
 - Vault injector never creates `/vault/dotenv`: check `vault.role`, `vault.authPath`, `vault.secretPath`, Vault auth policy, and Vault Injector installation
 - API pods crash during startup: check Postgres connection values, object-storage credentials, and whether the secret keys match the names in `postgres.*`, `objectStorage.*`, or `/vault/dotenv`
 - HPA shows missing metrics: install/fix `metrics-server` and set CPU requests for `resources.proxy` and `resources.execution`
@@ -597,8 +772,8 @@ The production contract today is:
 - `env.RIVET_PUBLISHED_APPS_BASE_PATH=/apps`
 - `env.RIVET_LATEST_APPS_BASE_PATH=/apps-latest`
 - `/ws/latest-debugger` is enabled by default for latest workflow and latest web-app action debugging; set `env.RIVET_ENABLE_LATEST_REMOTE_DEBUGGER=false` only for deployments that intentionally forbid this hosted debugger websocket
-- `storage.appData.existingClaimName=<shared-app-data-pvc>` is required; use an RWX-capable claim for multi-node or scaled proxy/execution deployments
-- storage/database settings are configured after deploy in `Settings` -> `Storage`; public route slugs are configured in `Settings` -> `Workflow endpoints` and `Settings` -> `Web apps`; trusted hosts are configured in `Settings` -> `General`; web-app auth mode is configured in `Settings` -> `Web apps`; shared OAuth provider/session settings are configured in `Settings` -> `OAuth`; server UI admin emails are configured in `Settings` -> `Server UI access`; Kubernetes-relevant runtime limits are configured in `Settings` -> `General` and `Workflow endpoints`; the `Docker` settings tab is harmless but Docker-launcher-only. The resulting app-settings files must be on persistent/shared app data for any API pod that serves workflow or web-app routes, storage changes require pod restart/rollout, and dynamic route-family/timeout/trusted-host changes require the proxy to mount that same app-data claim so it can hot-reload nginx
+- `appSettings.backend=postgres` is required; no shared app-data PVC or RWX storage class is required for App Settings
+- storage/database, routes, trusted hosts, endpoint/web-app auth, OAuth, runtime limits, recording policy, environment overlays, websocket overrides, and executor proxy settings are persisted as encrypted PostgreSQL App Settings. Storage changes require pod rollout; dynamic non-startup settings propagate by revision notification/polling. The proxy consumes only the authenticated non-secret projection and has no app-data mount
 - `clusterDomain=cluster.local` unless the cluster DNS suffix is different
 - `env.RIVET_PROXY_RESOLVER` must be set for in-cluster nginx DNS resolution
 - control-plane runtime-library reporting should stay at `RIVET_RUNTIME_LIBRARIES_REPLICA_TIER=none` with the job worker enabled there
@@ -611,7 +786,7 @@ Chart-maintainer note:
 
 - backend/execution chart reuse is intentionally shallow
 - shared env and pod fragments live in `_env.tpl` and `_pod.tpl`
-- API containers mount app-data at `/data/rivet-app`, while the executor keeps its app-data mount at `/home/rivet/.local/share/com.valerypopoff.rivet2` because it still expects the Rivet desktop storage layout
+- backend and execution pods use independent `emptyDir` app-data volumes; the control pod exposes its one local volume at `/data/rivet-app` to the API and at `/home/rivet/.local/share/com.valerypopoff.rivet2` to the co-located executor for compatibility projections
 - `proxy` and `web` remain mostly explicit so rendered pod shape stays operator-readable
 
 ## Repo-local verification

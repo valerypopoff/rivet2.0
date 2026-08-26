@@ -7,6 +7,11 @@ metadata:
     app.kubernetes.io/component: proxy
 spec:
   replicas: {{ .Values.replicaCount.proxy }}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: {{ .Values.rollout.maxUnavailable }}
+      maxSurge: {{ .Values.rollout.maxSurge }}
   selector:
     matchLabels:
       {{- include "rivet.componentLabels" (dict "root" . "component" "proxy") | nindent 6 }}
@@ -24,6 +29,8 @@ spec:
       imagePullSecrets:
 {{ toYaml . | nindent 8 }}
       {{- end }}
+      terminationGracePeriodSeconds: {{ .Values.lifecycle.terminationGracePeriodSeconds }}
+      {{- include "rivet.pod.placement" (dict "root" . "component" "proxy") | nindent 6 }}
       securityContext:
         fsGroup: 10001
       containers:
@@ -38,16 +45,25 @@ spec:
           ports:
             - name: http
               containerPort: {{ .Values.service.proxy.targetPort }}
+          startupProbe:
+            tcpSocket:
+              port: http
+            periodSeconds: 5
+            timeoutSeconds: 2
+            failureThreshold: 60
           livenessProbe:
             tcpSocket:
               port: http
-            initialDelaySeconds: 10
             periodSeconds: 20
+            timeoutSeconds: 2
+            failureThreshold: 3
           readinessProbe:
             tcpSocket:
               port: http
-            initialDelaySeconds: 5
-            periodSeconds: 10
+            periodSeconds: 5
+            timeoutSeconds: 2
+            failureThreshold: 2
+          {{- include "rivet.pod.preStop" . | nindent 10 }}
           env:
             - name: RIVET_VAULT_DOTENV_FILE_NAME
               value: {{ .Values.vault.dotenvFileName | quote }}
@@ -67,8 +83,8 @@ spec:
               value: {{ include "rivet.serviceFqdn" (dict "root" . "serviceName" (include "rivet.executorServiceName" .)) | quote }}
             - name: RIVET_EXECUTOR_UPSTREAM_PORT
               value: {{ .Values.service.executor.port | quote }}
-            - name: RIVET_APP_DATA_ROOT
-              value: /data/rivet-app
+            - name: RIVET_PROXY_SETTINGS_URL
+              value: {{ printf "http://%s:%v/internal/app-settings/proxy-config" (include "rivet.serviceFqdn" (dict "root" . "serviceName" (include "rivet.apiServiceName" .))) .Values.service.api.port | quote }}
             {{- if .Values.auth.keySecretName }}
             - name: RIVET_KEY
               valueFrom:
@@ -78,9 +94,6 @@ spec:
             {{- end }}
 {{ include "rivet.env.proxyValues" . | nindent 12 }}
           volumeMounts:
-            - name: app-data
-              mountPath: /data/rivet-app
-              readOnly: true
             {{- if .Values.tmpVolume.enabled }}
             - name: {{ .Values.tmpVolume.name }}
               mountPath: {{ .Values.tmpVolume.path }}
@@ -88,9 +101,6 @@ spec:
           resources:
 {{ toYaml .Values.resources.proxy | nindent 12 }}
       volumes:
-        - name: app-data
-          persistentVolumeClaim:
-            claimName: {{ .Values.storage.appData.existingClaimName | quote }}
         {{- if .Values.tmpVolume.enabled }}
         - name: {{ .Values.tmpVolume.name }}
           emptyDir:

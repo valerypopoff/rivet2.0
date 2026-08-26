@@ -2,8 +2,17 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
+import path from 'node:path';
 
+import type { RuntimeHealthCheckContext } from '../runtime-health.js';
 import { writeJsonSettingsFile } from '../settings-file-writer.js';
+import {
+  createPostgresAppSettingsBackendFromEnv,
+  getManagedSettingsWriteRetryLimit,
+  isPostgresAppSettingsBackendEnabled,
+  type AppSettingsBackend,
+  type ManagedSettingsRecord,
+} from './managed-settings-store.js';
 
 export type SettingsSnapshot<T> = {
   path: string;
@@ -40,6 +49,9 @@ type SettingsRequestStore = Map<VersionedSettingsRepository<unknown>, SettingsSn
 const repositories = new Set<VersionedSettingsRepository<unknown>>();
 const requestSettingsStorage = new AsyncLocalStorage<SettingsRequestStore>();
 let settingsPollTimer: NodeJS.Timeout | undefined;
+let sharedBackend: AppSettingsBackend | null = null;
+let sharedBackendInitialization: Promise<void> | null = null;
+let unsubscribeSharedBackend: (() => void) | undefined;
 
 function freezeValue<T>(value: T): Readonly<T> {
   const clone = structuredClone(value);
@@ -96,12 +108,42 @@ function isMissingFileError(error: unknown): boolean {
   return (error as NodeJS.ErrnoException).code === 'ENOENT';
 }
 
+function reportSettingsIssue(level: 'error' | 'warn', message: string, error?: unknown): void {
+  try {
+    if (error === undefined) console[level](message);
+    else console[level](message, error);
+  } catch {
+    // Diagnostics must not change settings persistence or refresh outcomes.
+  }
+}
+
+function getLegacySettingsPath(settingsPath: string): string | null {
+  const legacyRoot = process.env.RIVET_APP_SETTINGS_LEGACY_ROOT?.trim();
+  const appDataRoot = process.env.RIVET_APP_DATA_ROOT?.trim();
+  if (!legacyRoot || !appDataRoot) {
+    return null;
+  }
+
+  const relativePath = path.relative(path.resolve(appDataRoot), path.resolve(settingsPath));
+  const segments = relativePath.split(path.sep);
+  if (
+    segments.length !== 2
+    || segments[0] !== 'settings'
+    || path.extname(segments[1] ?? '') !== '.json'
+  ) {
+    return null;
+  }
+
+  return path.join(path.resolve(legacyRoot), 'settings', segments[1]!);
+}
+
 export class VersionedSettingsRepository<T> {
   readonly #cache = new Map<string, SettingsSnapshot<T>>();
   readonly #errors = new Map<string, unknown>();
   readonly #fileSignatures = new Map<string, string>();
   readonly #listeners = new Set<(snapshot: SettingsSnapshot<T>) => void>();
   readonly #operationQueues = new Map<string, Promise<unknown>>();
+  readonly #sharedRevisions = new Map<string, bigint>();
 
   constructor(readonly descriptor: SettingsRepositoryDescriptor<T>) {
     repositories.add(this as VersionedSettingsRepository<unknown>);
@@ -127,6 +169,12 @@ export class VersionedSettingsRepository<T> {
       return cached;
     }
 
+    if (sharedBackend) {
+      throw new Error(
+        `Managed app setting "${this.descriptor.key}" was read before repository initialization.`,
+      );
+    }
+
     return this.#loadSync(settingsPath);
   }
 
@@ -148,18 +196,29 @@ export class VersionedSettingsRepository<T> {
 
     return this.#enqueueOperation(settingsPath, async () => {
       const initialized = this.#cache.get(settingsPath);
-      return initialized ?? this.#refreshNow(settingsPath);
+      if (initialized) {
+        return initialized;
+      }
+      return sharedBackend
+        ? this.#initializeManaged(settingsPath)
+        : this.#refreshNow(settingsPath);
     });
   }
 
   async refresh(): Promise<SettingsSnapshot<T>> {
     const settingsPath = this.descriptor.getPath();
-    return this.#enqueueOperation(settingsPath, () => this.#refreshNow(settingsPath));
+    return this.#enqueueOperation(settingsPath, () =>
+      sharedBackend ? this.#refreshManagedNow(settingsPath) : this.#refreshNow(settingsPath));
   }
 
   async refreshIfChanged(): Promise<void> {
     const settingsPath = this.descriptor.getPath();
     await this.#enqueueOperation(settingsPath, async () => {
+      if (sharedBackend) {
+        await this.#refreshManagedNow(settingsPath);
+        return;
+      }
+
       const signature = await this.#readFileSignature(settingsPath);
       if (this.#fileSignatures.get(settingsPath) === signature) {
         return;
@@ -180,6 +239,10 @@ export class VersionedSettingsRepository<T> {
   ): Promise<SettingsSnapshot<T>> {
     const settingsPath = this.descriptor.getPath();
     return this.#enqueueOperation(settingsPath, async () => {
+      if (sharedBackend) {
+        return this.#updateManaged(settingsPath, updateValue, expectedRevision);
+      }
+
       const current = await this.#refreshNow(settingsPath);
       if (expectedRevision && expectedRevision !== current.revision) {
         throw new SettingsRevisionConflictError();
@@ -201,12 +264,14 @@ export class VersionedSettingsRepository<T> {
       this.#cache.delete(settingsPath);
       this.#errors.delete(settingsPath);
       this.#fileSignatures.delete(settingsPath);
+      this.#sharedRevisions.delete(settingsPath);
       return;
     }
 
     this.#cache.clear();
     this.#errors.clear();
     this.#fileSignatures.clear();
+    this.#sharedRevisions.clear();
   }
 
   subscribe(listener: (snapshot: SettingsSnapshot<T>) => void): () => void {
@@ -219,6 +284,7 @@ export class VersionedSettingsRepository<T> {
     this.#cache.clear();
     this.#errors.clear();
     this.#fileSignatures.clear();
+    this.#sharedRevisions.clear();
     this.#listeners.clear();
     this.#operationQueues.clear();
   }
@@ -233,6 +299,116 @@ export class VersionedSettingsRepository<T> {
         this.#operationQueues.delete(settingsPath);
       }
     });
+  }
+
+  async #initializeManaged(settingsPath: string): Promise<SettingsSnapshot<T>> {
+    const existing = await sharedBackend!.read(this.descriptor.key);
+    if (existing) {
+      return this.#rememberManaged(settingsPath, existing);
+    }
+
+    let initialValue: T | undefined;
+    let sourceHash: string | null = null;
+    const legacySettingsPath = getLegacySettingsPath(settingsPath);
+    if (legacySettingsPath) {
+      try {
+        const legacyStat = await fsp.lstat(legacySettingsPath);
+        if (legacyStat.isFile() && !legacyStat.isSymbolicLink()) {
+          const sourceText = await fsp.readFile(legacySettingsPath, 'utf8');
+          initialValue = this.#parse(sourceText);
+          sourceHash = createHash('sha256').update(sourceText).digest('hex');
+        }
+      } catch (error) {
+        if (!isMissingFileError(error)) {
+          reportSettingsIssue(
+            'warn',
+            `[app-settings] Ignoring unusable legacy ${this.descriptor.key} settings and using the candidate bootstrap.`,
+          );
+        }
+      }
+    }
+
+    if (initialValue === undefined) {
+      try {
+        const sourceText = await fsp.readFile(settingsPath, 'utf8');
+        initialValue = this.#parse(sourceText);
+        sourceHash = createHash('sha256').update(sourceText).digest('hex');
+      } catch (error) {
+        if (!isMissingFileError(error)) {
+          const recovered = this.descriptor.recoverReadError?.(error);
+          if (recovered === undefined) {
+            throw error;
+          }
+          initialValue = recovered;
+        } else {
+          initialValue = this.descriptor.getDefault();
+        }
+      }
+    }
+
+    const serialized = {
+      version: this.descriptor.currentVersion,
+      ...this.descriptor.serialize(initialValue),
+    };
+    const inserted = await sharedBackend!.write({
+      key: this.descriptor.key,
+      expectedRevision: null,
+      schemaVersion: this.descriptor.currentVersion,
+      value: serialized,
+      sourceHash,
+    });
+    return inserted
+      ? this.#rememberManaged(settingsPath, inserted)
+      : this.#refreshManagedNow(settingsPath);
+  }
+
+  async #refreshManagedNow(settingsPath: string): Promise<SettingsSnapshot<T>> {
+    const record = await sharedBackend!.read(this.descriptor.key);
+    if (!record) {
+      return this.#initializeManaged(settingsPath);
+    }
+    return this.#rememberManaged(settingsPath, record);
+  }
+
+  async #updateManaged(
+    settingsPath: string,
+    updateValue: (current: Readonly<T>) => T,
+    expectedRevision?: string,
+  ): Promise<SettingsSnapshot<T>> {
+    for (let attempt = 0; attempt < getManagedSettingsWriteRetryLimit(); attempt += 1) {
+      const current = await this.#refreshManagedNow(settingsPath);
+      if (expectedRevision && expectedRevision !== current.revision) {
+        throw new SettingsRevisionConflictError();
+      }
+
+      const nextValue = updateValue(current.value);
+      const serialized = {
+        version: this.descriptor.currentVersion,
+        ...this.descriptor.serialize(nextValue),
+      };
+      const persisted = await sharedBackend!.write({
+        key: this.descriptor.key,
+        expectedRevision: this.#sharedRevisions.get(settingsPath) ?? null,
+        schemaVersion: this.descriptor.currentVersion,
+        value: serialized,
+      });
+      if (persisted) {
+        return this.#rememberManaged(settingsPath, persisted);
+      }
+      if (expectedRevision) {
+        throw new SettingsRevisionConflictError();
+      }
+    }
+
+    throw new SettingsRevisionConflictError();
+  }
+
+  #rememberManaged(settingsPath: string, record: ManagedSettingsRecord): SettingsSnapshot<T> {
+    const parsed = this.descriptor.parseStored(
+      parseStoredObject(JSON.stringify(record.value), this.descriptor as SettingsRepositoryDescriptor<unknown>),
+    );
+    this.#sharedRevisions.set(settingsPath, record.revision);
+    return this.#remember(settingsPath, parsed);
   }
 
   async #refreshNow(settingsPath: string): Promise<SettingsSnapshot<T>> {
@@ -303,7 +479,11 @@ export class VersionedSettingsRepository<T> {
       snapshot as SettingsSnapshot<unknown>,
     );
     for (const listener of this.#listeners) {
-      listener(snapshot);
+      try {
+        listener(snapshot);
+      } catch (error) {
+        reportSettingsIssue('error', `[app-settings] ${this.descriptor.key} subscriber failed:`, error);
+      }
     }
     return snapshot;
   }
@@ -321,13 +501,58 @@ export class VersionedSettingsRepository<T> {
   }
 }
 
+function subscribeToSharedBackend(backend: AppSettingsBackend): void {
+  unsubscribeSharedBackend?.();
+  unsubscribeSharedBackend = backend.subscribe(async (key) => {
+    const refreshes: Promise<unknown>[] = [];
+    for (const repository of repositories) {
+      if (repository.descriptor.key !== key) {
+        continue;
+      }
+      refreshes.push(repository.refresh());
+    }
+    await Promise.all(refreshes);
+  });
+}
+async function initializeSharedBackend(): Promise<void> {
+  if (!isPostgresAppSettingsBackendEnabled() || sharedBackend) {
+    return;
+  }
+
+  sharedBackendInitialization ??= (async () => {
+    const backend = createPostgresAppSettingsBackendFromEnv();
+    try {
+      await backend.initialize();
+      sharedBackend = backend;
+      subscribeToSharedBackend(backend);
+    } catch (error) {
+      await backend.dispose().catch(() => undefined);
+      throw error;
+    }
+  })();
+
+  const initialization = sharedBackendInitialization;
+  try {
+    await initialization;
+  } finally {
+    if (sharedBackendInitialization === initialization) {
+      sharedBackendInitialization = null;
+    }
+  }
+}
+
 export async function initializeAppSettingsRepositories(): Promise<void> {
+  await initializeSharedBackend();
   await Promise.all([...repositories].map((repository) => repository.initialize()));
-  if (!settingsPollTimer) {
+  if (!sharedBackend && !settingsPollTimer) {
     settingsPollTimer = setInterval(() => {
       for (const repository of repositories) {
         void repository.refreshIfChanged().catch((error) => {
-          console.error(`[app-settings] Failed to refresh ${repository.descriptor.key} settings:`, error);
+          reportSettingsIssue(
+            'error',
+            `[app-settings] Failed to refresh ${repository.descriptor.key} settings:`,
+            error,
+          );
         });
       }
     }, 5_000);
@@ -347,4 +572,44 @@ export function invalidateAppSettingsRepositories(): void {
   for (const repository of repositories) {
     repository.invalidate();
   }
+}
+
+export async function checkAppSettingsRepositoriesHealth(
+  context?: RuntimeHealthCheckContext,
+): Promise<void> {
+  await sharedBackend?.checkHealth?.(context);
+  for (const repository of repositories) repository.readSync();
+}
+
+export function getAppSettingsBackendKind(): 'file' | 'postgres' {
+  return sharedBackend ? 'postgres' : 'file';
+}
+
+export async function configureAppSettingsBackendForTests(
+  backend: AppSettingsBackend | null,
+): Promise<void> {
+  await disposeAppSettingsRepositories();
+  sharedBackend = backend;
+  if (backend) {
+    await backend.initialize();
+    subscribeToSharedBackend(backend);
+  }
+  for (const repository of repositories) {
+    repository.invalidate();
+  }
+}
+
+export async function disposeAppSettingsRepositories(): Promise<void> {
+  if (settingsPollTimer) {
+    clearInterval(settingsPollTimer);
+    settingsPollTimer = undefined;
+  }
+  unsubscribeSharedBackend?.();
+  unsubscribeSharedBackend = undefined;
+  const initialization = sharedBackendInitialization;
+  sharedBackendInitialization = null;
+  await initialization?.catch(() => undefined);
+  const backend = sharedBackend;
+  sharedBackend = null;
+  await backend?.dispose();
 }

@@ -47,8 +47,13 @@ test('proxy templates route public workflow traffic to the right API plane', () 
 
   assert.ok(!imageProxyTemplate.includes('location /internal/workflows'));
   assert.match(proxyBootstrap, /resolve_proxy_resolver\(\)/);
-  assert.match(proxyBootstrap, /public_route_settings_file="\$\{RIVET_APP_DATA_ROOT:-\/data\/rivet-app\}\/settings\/public-routes\.json"/);
-  assert.match(proxyBootstrap, /trusted_host_settings_file="\$\{RIVET_APP_DATA_ROOT:-\/data\/rivet-app\}\/settings\/trusted-hosts\.json"/);
+  assert.match(proxyBootstrap, /fetch_proxy_settings\(\)/);
+  assert.match(proxyBootstrap, /X-Rivet-Proxy-Auth: \$\{RIVET_PROXY_AUTH_TOKEN\}/);
+  assert.match(proxyBootstrap, /RIVET_PROXY_SETTINGS_URL/);
+  assert.match(proxyBootstrap, /proxy settings refresh failed; keeping the last valid nginx configuration/);
+  assert.doesNotMatch(proxyBootstrap, /export RIVET_PROXY_SETTINGS_FILE="\$\{RIVET_PROXY_SETTINGS_FILE:-\/tmp\/nginx\/rivet-proxy-settings\.json\}"/);
+  assert.match(proxyBootstrap, /public_route_settings_file="\$\{RIVET_PROXY_SETTINGS_FILE:-\$\{RIVET_APP_DATA_ROOT:-\/data\/rivet-app\}\/settings\/public-routes\.json\}"/);
+  assert.match(proxyBootstrap, /trusted_host_settings_file="\$\{RIVET_PROXY_SETTINGS_FILE:-\$\{RIVET_APP_DATA_ROOT:-\/data\/rivet-app\}\/settings\/trusted-hosts\.json\}"/);
   assert.match(proxyBootstrap, /legacy_web_app_route_settings_file="\$\{RIVET_APP_DATA_ROOT:-\/data\/rivet-app\}\/settings\/web-app-routes\.json"/);
   assert.match(proxyBootstrap, /normalize_public_route_setting\(\) \{/);
   assert.match(proxyBootstrap, /read_json_string_property "\$settings_file" "publishedWorkflowsBasePath"/);
@@ -195,7 +200,7 @@ test('proxy templates keep HTTP workflow routes bounded and websocket routes lon
   }
 
   const proxyBootstrap = readRepoFile('image/proxy/normalize-workflow-paths.sh');
-  assert.match(proxyBootstrap, /runtime_limit_settings_file="\$\{RIVET_APP_DATA_ROOT:-\/data\/rivet-app\}\/settings\/runtime-limits\.json"/);
+  assert.match(proxyBootstrap, /runtime_limit_settings_file="\$\{RIVET_PROXY_SETTINGS_FILE:-\$\{RIVET_APP_DATA_ROOT:-\/data\/rivet-app\}\/settings\/runtime-limits\.json\}"/);
   assert.match(proxyBootstrap, /read_json_scalar_property "\$runtime_limit_settings_file" "proxyReadTimeoutSeconds"/);
   assert.match(proxyBootstrap, /read_json_scalar_property "\$runtime_limit_settings_file" "webAppActionRequestLimitBytes"/);
   assert.match(proxyBootstrap, /\*\[!0123456789\]\*/);
@@ -296,6 +301,8 @@ test('API images and launchers use the filtered Rivet source context and symlink
   const apiTsconfig = readRepoFile('wrapper/api/tsconfig.json');
   const preserveSymlinksRunner = readRepoFile('scripts/run-preserve-symlinks.mjs');
 
+  assert.doesNotMatch(apiEntrypoint, /\r/, 'API entrypoint must keep Unix LF line endings');
+
   for (const dockerfile of [apiDockerfile, composeApiDockerfile]) {
     assert.match(dockerfile, /COPY --from=rivet_dependency_metadata \. rivet\//);
     assert.match(dockerfile, /COPY --from=rivet_source \. \/app\/rivet\//);
@@ -344,6 +351,16 @@ test('API images and launchers use the filtered Rivet source context and symlink
   assert.match(apiPackageJson, /run-preserve-symlinks\.mjs tsx/);
   assert.match(apiPackageJson, /node --preserve-symlinks dist\/api\/src\/server\.js/);
   assert.match(preserveSymlinksRunner, /--preserve-symlinks/);
+  assert.match(apiEntrypoint, /load_optional_dotenv \/vault\/dotenv/);
+  assert.match(
+    apiEntrypoint,
+    /deployment_managed_workflow_schema_mode="\$\{RIVET_DEPLOYMENT_MANAGED_WORKFLOW_SCHEMA_MODE:-\}"[\s\S]*load_optional_dotenv \/vault\/dotenv[\s\S]*RIVET_MANAGED_WORKFLOW_SCHEMA_MODE="\$deployment_managed_workflow_schema_mode"/,
+  );
+  assert.match(
+    apiEntrypoint,
+    /deployment_health_refresh_seconds="\$\{RIVET_DEPLOYMENT_HEALTH_REFRESH_SECONDS:-\}"[\s\S]*load_optional_dotenv \/vault\/dotenv[\s\S]*apply_deployment_lifecycle_value RIVET_HEALTH_REFRESH_SECONDS "\$deployment_health_refresh_seconds"/,
+  );
+  assert.match(apiEntrypoint, /apply_deployment_lifecycle_value RIVET_SHUTDOWN_GRACE_SECONDS "\$deployment_shutdown_grace_seconds"/);
   assert.match(apiEntrypoint, /exec node --preserve-symlinks \/app\/wrapper\/api\/dist\/api\/src\/server\.js/);
   assert.match(composeApiDockerfile, /node --preserve-symlinks dist\/api\/src\/server\.js/);
 
@@ -378,6 +395,10 @@ test('API images and launchers use the filtered Rivet source context and symlink
   assert.match(prodCompose, /api:[\s\S]*healthcheck:[\s\S]*retries: 12/);
   assert.match(devCompose, /api:[\s\S]*healthcheck:[\s\S]*start_period: 360s/);
   assert.match(devCompose, /api:[\s\S]*healthcheck:[\s\S]*retries: 12/);
+  for (const compose of [prodCompose, devCompose]) {
+    assert.match(compose, /api:[\s\S]*healthcheck:[\s\S]*\/readyz/);
+    assert.match(compose, /api:[\s\S]*stop_grace_period: 150s/);
+  }
   assert.match(devDockerLauncher, /prepareRivetDockerContext\(rootDir, mergedEnv\)/);
   assert.match(devDockerLauncher, /readDockerWaitTimeoutSeconds/);
   assert.match(prodDockerLauncher, /readDockerWaitTimeoutSeconds/);

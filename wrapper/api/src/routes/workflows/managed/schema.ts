@@ -1,3 +1,9 @@
+/**
+ * Immutable migration 1 for managed workflow storage.
+ *
+ * Do not append schema changes here after release. Add a new ordered migration
+ * in schema-migrations.ts so deployed databases retain a verifiable history.
+ */
 export const MANAGED_WORKFLOW_SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS workflow_folders (
   relative_path TEXT PRIMARY KEY,

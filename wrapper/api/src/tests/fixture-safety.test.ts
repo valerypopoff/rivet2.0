@@ -76,3 +76,26 @@ test('graph speed fixture has a main graph default endpoint payload', { skip: gr
   assert.equal(typeof parsedPayload, 'object');
   assert.notEqual(parsedPayload, null);
 });
+test('managed Kubernetes release gate fixture deserializes its runtime environment assertion', async () => {
+  const fixturePath = path.resolve(
+    path.dirname(fileURLToPath(import.meta.url)),
+    '..',
+    '..',
+    '..',
+    '..',
+    'scripts',
+    'fixtures',
+    'managed-release-gate.rivet-project',
+  );
+  const project = loadProjectFromString(await fs.readFile(fixturePath, 'utf8'));
+  const mainGraphId = project.metadata.mainGraphId;
+  assert.ok(mainGraphId, 'fixture must declare a main graph');
+  const mainGraph = project.graphs[mainGraphId];
+  assert.ok(mainGraph, 'fixture main graph must exist');
+
+  const environmentNode = mainGraph.nodes.find((node) => node.id === 'environment-node');
+  assert.equal(environmentNode?.type, 'code');
+  const code = (environmentNode?.data as { code?: unknown } | undefined)?.code;
+  if (typeof code !== 'string') throw new Error('environment assertion must be code');
+  assert.match(code, /process\.env\.RIVET_RELEASE_GATE_VALUE/);
+});

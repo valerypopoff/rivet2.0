@@ -46,9 +46,6 @@ objectStorage:
   secretKeySecretName: rivet-object-storage
   forcePathStyle: false
 
-storage:
-  appData:
-    existingClaimName: rivet-prod-app-data
 
 auth:
   keySecretName: rivet-shared-key

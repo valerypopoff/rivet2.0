@@ -42,7 +42,7 @@ The nginx configs keep a `100 MiB` server-wide body limit for API/editor payload
 
 Current proxy timeout behavior:
 
-- `/api/*`, `${RIVET_PUBLISHED_WORKFLOWS_BASE_PATH}`, `${RIVET_PUBLISHED_APPS_BASE_PATH}`, `${RIVET_LATEST_WORKFLOWS_BASE_PATH}`, and `${RIVET_LATEST_APPS_BASE_PATH}` use the App Settings -> `Workflow endpoints` HTTP timeout, saved in seconds under `settings/runtime-limits.json` and defaulting to `180`; the proxy watches that file and rewrites a generated timeout include before reloading nginx
+- `/api/*`, `${RIVET_PUBLISHED_WORKFLOWS_BASE_PATH}`, `${RIVET_PUBLISHED_APPS_BASE_PATH}`, `${RIVET_LATEST_WORKFLOWS_BASE_PATH}`, and `${RIVET_LATEST_APPS_BASE_PATH}` use the App Settings -> `Workflow endpoints` HTTP timeout, saved in seconds and defaulting to `180`; a single-host proxy watches the file-backed settings, while a Kubernetes proxy polls the authenticated non-secret control-plane projection before rewriting its generated timeout include and reloading nginx
 - websocket routes stay long-lived at `86400s`; the workflow-endpoint timeout is only for the standard HTTP upstream routes
 - web-app action sockets use `Upgrade`/`Connection: upgrade`, disable proxy buffering, and stay on their route family: published actions reach execution and latest actions reach control
 - this proxy timeout is separate from App Settings -> `Shell execution` command limits, which only apply to hosted shell execution under `/api/shell/exec`
@@ -176,7 +176,7 @@ Current tree-response note:
 - that same project item also carries per-project `stats` (`graphCount`, `totalNodeCount`), which drive the active project summary shown in the dashboard
 - stats are cached as wrapper-owned metadata (`*.wrapper-stats.json` in filesystem mode, revision columns in managed mode), but publication status stays API-derived from settings/hash/revision state so save refreshes still show the correct `Published` or `Unpublished changes` state
 
-`GET /healthz` lives on the API service itself and is used by the Docker healthchecks. The API starts listening only after startup reconciliation and workflow storage initialization finish, so Docker Compose gives the API healthcheck a long startup grace period in both dev and production stacks.
+API health routes live on the API service itself. `GET /livez` is shallow liveness, `GET /readyz` is cached required-dependency readiness, and `GET /healthz` remains a legacy liveness alias. The API starts listening only after App Settings, runtime libraries, workflow storage, web-app action coordination, and the first health refresh initialize. Docker healthchecks use `/readyz` with a long cold-start grace period and a stop grace longer than the default application drain window.
 
 Current move-route behavior:
 
@@ -268,7 +268,7 @@ Server UI OAuth sessions are fail-closed. Empty admin email lists deny all OAuth
 
 Rivet web apps are browser surfaces with wrapper-owned route and auth policy. Web-app routes and auth live in `Settings` -> `Web apps`; workflow endpoint route families live in `Settings` -> `Workflow endpoints`.
 
-The `Workflow endpoints` tab's `Routes` section controls the published/latest workflow endpoint URL slugs. The `Web apps` tab's `Routes` section controls the published/latest web-app URL slugs. Both sections write `settings/public-routes.json` under `RIVET_APP_DATA_ROOT`. The API reads that file dynamically, and the proxy watches it, regenerates the nginx public-route include, validates it with `nginx -t`, and reloads nginx. Changing these slugs from Settings therefore does not require recreating/restarting the stack. If the settings file is missing, the deployment env defaults are used as first-run/bootstrap values: `RIVET_PUBLISHED_WORKFLOWS_BASE_PATH`, `RIVET_LATEST_WORKFLOWS_BASE_PATH`, `RIVET_PUBLISHED_APPS_BASE_PATH`, `RIVET_LATEST_APPS_BASE_PATH`, then the legacy web-app aliases, then `/workflows`, `/workflows-latest`, `/apps`, and `/apps-latest`. If the saved file exists but is malformed or invalid, route reads fail loudly rather than silently switching top-level route families. The saved slugs must be single top-level URL segments, unique across all four route families, and cannot use reserved top-level routes such as `api`, `ws`, `internal`, `ui-auth`, `assets`, `node_modules`, or `__rivet_auth`.
+The `Workflow endpoints` tab's `Routes` section controls the published/latest workflow endpoint URL slugs. The `Web apps` tab's `Routes` section controls the published/latest web-app URL slugs. Both sections update one typed `public-routes` settings domain. Single-host mode persists `settings/public-routes.json` under `RIVET_APP_DATA_ROOT` and the proxy watches that file; Kubernetes stores the domain in PostgreSQL and the proxy polls its authenticated non-secret API projection. The proxy regenerates the nginx public-route include, validates it with `nginx -t`, and reloads nginx, so changing these slugs does not require recreating/restarting the stack. If no saved value exists, deployment env defaults are used for first-run bootstrap: `RIVET_PUBLISHED_WORKFLOWS_BASE_PATH`, `RIVET_LATEST_WORKFLOWS_BASE_PATH`, `RIVET_PUBLISHED_APPS_BASE_PATH`, `RIVET_LATEST_APPS_BASE_PATH`, then the legacy web-app aliases, then `/workflows`, `/workflows-latest`, `/apps`, and `/apps-latest`. A malformed or invalid saved value fails loudly rather than silently switching top-level route families. The saved slugs must be single top-level URL segments, unique across all four route families, and cannot use reserved top-level routes such as `api`, `ws`, `internal`, `ui-auth`, `assets`, `node_modules`, or `__rivet_auth`.
 
 The `Auth` section controls the API-owned web-app auth mode, not `.env`:
 
@@ -476,14 +476,14 @@ The current runtime split does not make `RIVET_APP_DATA_ROOT` authoritative for 
 
 - workflow truth remains Postgres plus object storage
 - `Code` node package resolution comes from the managed runtime-library cache under `RIVET_RUNTIME_LIBRARIES_ROOT`
-- execution-plane `app-data` is required settings state in Kubernetes, not workflow blob storage; execution pods must mount the same app-data claim as the control plane so UI-managed storage, recording, workflow endpoint auth, web-app auth, runtime-limit, and outbound proxy settings are visible
+- execution-plane `app-data` is disposable compatibility state in Kubernetes, not workflow blob storage or settings authority; each execution pod uses its own `emptyDir`, reads encrypted settings from PostgreSQL, and receives only narrow pod-local projections where an external process still expects a file
 
 Important limitation:
 
 - API-hosted published/latest execution does not currently register package plugins from local app-data
 - package-plugin install/load remains a control-plane and editor/executor concern
 - the execution-plane `app-data` contract is therefore intentionally minimal today; plugin-backed published endpoint execution is not something the current split newly enables
-- App Settings -> `Storage`, `Run recordings`, `Web apps`, `Workflow endpoints`, and `Node executor proxy` write settings files under shared app data; those values are not read from `.env`, Vault dotenv, or legacy deployment variables in split execution pods. Optional hosted executor/default-debugger websocket URL overrides also live under app data and are blank by default, which keeps the normal request-host-derived websocket URLs.
+- App Settings -> `Storage`, `Run recordings`, `Web apps`, `Workflow endpoints`, and `Node executor proxy` use the active settings repository. Single-host deployments persist private JSON files under app data. Kubernetes stores the same typed domains as encrypted, revisioned PostgreSQL rows; execution replicas read them directly and the co-located editor executor receives a pod-local Node-proxy projection. Optional hosted executor/default-debugger websocket URL overrides remain blank by default, which keeps the normal request-host-derived websocket URLs.
 
 ## Latest Debugger Model
 

@@ -14,6 +14,7 @@ const requiredRootMarkdown = new Set([
 const allowedWorkingDocs = new Set([
   'backlog.md',
   'image-build-optimization-plan.md',
+  'kubernetes_managed_mode_audit.md',
   'loc_reduce_with_libs.md',
 ]);
 
@@ -206,6 +207,8 @@ function main() {
     'prod:prebuilt',
     'prod:restart',
     'prod:custom',
+    'workflow-schema:migrate',
+    'workflow-schema:verify',
     'dev:kubernetes-test:config',
   ];
   const missingScripts = requiredScripts.filter((scriptName) => !packageJson.scripts?.[scriptName]);

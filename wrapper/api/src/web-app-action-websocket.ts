@@ -11,6 +11,8 @@ import {
   type RivetWebAppWebSocketGateway,
 } from '@valerypopoff/rivet2-node';
 
+import { checkPostgresPoolHealth } from './managed-health.js';
+import type { RuntimeHealthCheckContext } from './runtime-health.js';
 import { getManagedDbConnectionConfig, getManagedDbPoolConfig } from './routes/workflows/managed/db.js';
 import { getManagedWorkflowStorageConfig, isManagedWorkflowStorageEnabled } from './routes/workflows/storage-config.js';
 import {
@@ -45,6 +47,8 @@ export type WebAppActionWebSocketRuntime = {
   dispose(options?: { interrupt?: boolean }): Promise<void>;
   drain(): void;
   getActiveRunCount(): number;
+  isAccepting(): boolean;
+  checkHealth(context?: RuntimeHealthCheckContext): Promise<void>;
 };
 
 let activeRuntime: WebAppActionWebSocketRuntime | null = null;
@@ -115,6 +119,7 @@ export async function initializeWebAppActionWebSockets(server: Server): Promise<
   const recorders = new Map<string, RecorderEntry>();
   let pool: Pool | null = null;
   let coordinator: PostgresRivetWebAppRunCoordinator | null = null;
+  let accepting = true;
 
   const gateway: RivetWebAppWebSocketGateway = (() => {
     if (!isManagedWorkflowStorageEnabled()) {
@@ -244,8 +249,17 @@ export async function initializeWebAppActionWebSockets(server: Server): Promise<
   server.on('upgrade', handleUpgrade);
   const runtime: WebAppActionWebSocketRuntime = {
     getActiveRunCount: () => gateway.getActiveRunCount(),
-    drain: () => gateway.drain(),
+    isAccepting: () => accepting,
+    async checkHealth(context) {
+      if (!accepting) throw new Error('Web-app action gateway is draining.');
+      if (pool) await checkPostgresPoolHealth(pool, context);
+    },
+    drain() {
+      accepting = false;
+      gateway.drain();
+    },
     async dispose(options = {}) {
+      accepting = false;
       server.off('upgrade', handleUpgrade);
       await gateway.dispose({ interrupt: options.interrupt ?? true });
       for (const [runId] of recorders) recorders.delete(runId);

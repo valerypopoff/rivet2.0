@@ -6,18 +6,23 @@ images:
   proxy:
     repository: example.invalid/rivet/proxy
     tag: latest
+    # Set digest to pin an exact OCI manifest. It takes precedence over tag.
+    digest: ""
     pullPolicy: IfNotPresent
   web:
     repository: example.invalid/rivet/web
     tag: latest
+    digest: ""
     pullPolicy: IfNotPresent
   api:
     repository: example.invalid/rivet/api
     tag: latest
+    digest: ""
     pullPolicy: IfNotPresent
   executor:
     repository: example.invalid/rivet/executor
     tag: latest
+    digest: ""
     pullPolicy: IfNotPresent
 
 replicaCount:
@@ -89,6 +94,51 @@ vault:
 workflowStorage:
   backend: managed
 
+workflowSchema:
+  migrationJob:
+    enabled: true
+    backoffLimit: 2
+    activeDeadlineSeconds: 600
+
+lifecycle:
+  health:
+    refreshSeconds: 5
+    checkTimeoutSeconds: 3
+    staleAfterSeconds: 20
+  shutdownGraceSeconds: 120
+  terminationGracePeriodSeconds: 150
+  preStopDelaySeconds: 5
+  probes:
+    startup:
+      periodSeconds: 5
+      timeoutSeconds: 2
+      failureThreshold: 60
+    liveness:
+      periodSeconds: 20
+      timeoutSeconds: 2
+      failureThreshold: 3
+    readiness:
+      periodSeconds: 5
+      timeoutSeconds: 2
+      failureThreshold: 2
+
+rollout:
+  maxUnavailable: 0
+  maxSurge: 1
+
+availability:
+  disruptionBudget:
+    enabled: true
+    maxUnavailable: 1
+  topologySpread:
+    enabled: true
+    maxSkew: 1
+    topologyKey: kubernetes.io/hostname
+    whenUnsatisfiable: ScheduleAnyway
+  podAntiAffinity:
+    enabled: true
+    topologyKey: kubernetes.io/hostname
+
 runtimeLibraries:
   backend: managed
   objectStoragePrefix: runtime-libraries/
@@ -127,10 +177,16 @@ objectStorage:
   secretKeySecretKey: secretAccessKey
   forcePathStyle: false
 
-storage:
-  appData:
-    # Required: provide a PVC that backend, proxy, execution, and executor pods can all mount.
-    # Use RWX-capable storage for multi-node or scaled proxy/execution deployments.
+appSettings:
+  backend: postgres
+  # Prefer a dedicated 32+ character secret. RIVET_KEY remains a compatibility fallback.
+  encryptionKeySecretName: ""
+  encryptionKeySecretKey: encryptionKey
+  # Rotation is two compatibility phases: new secondary first, then old secondary after the primary swap.
+  previousEncryptionKeySecretName: ""
+  previousEncryptionKeySecretKey: encryptionKey
+  legacyImport:
+    # Optional one-time source from deployments that used the old shared app-data PVC.
     existingClaimName: ""
 
 tmpVolume:
@@ -163,6 +219,7 @@ podAnnotations:
   web: {}
   backend: {}
   execution: {}
+  workflowSchemaMigration: {}
 
 resources:
   proxy: {}
