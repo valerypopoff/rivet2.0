@@ -311,6 +311,8 @@ test('API images and launchers use the filtered Rivet source context and symlink
     assert.doesNotMatch(dockerfile, /yarn workspace @valerypopoff\/rivet2-(core|node) run build/);
     assert.match(dockerfile, /RUN node \/app\/scripts\/link-rivet-node-package\.mjs/);
     assert.match(dockerfile, /COPY scripts\/lib\/rivet-local-dependencies\.mjs scripts\/lib\/rivet-local-dependencies\.d\.mts scripts\/lib\//);
+    assert.match(dockerfile, /COPY scripts\/lib\/kubernetes-managed-release-gate-config\.mjs scripts\/lib\/kubernetes-managed-release-gate-config\.d\.mts scripts\/lib\//);
+    assert.match(dockerfile, /COPY scripts\/lib\/kubernetes-managed-provider-gate-config\.mjs scripts\/lib\/kubernetes-managed-provider-gate-config\.d\.mts scripts\/lib\//);
   }
 
   for (const dockerfile of [
