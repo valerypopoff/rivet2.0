@@ -20,6 +20,7 @@ import type {
   WorkflowRunStatisticsResponse,
   WorkflowRunStatisticsSurface,
 } from '../../../../../shared/workflow-recording-types.js';
+import type { RuntimeHealthCheckContext } from '../../../runtime-health.js';
 import type { ManagedWorkflowStorageConfig } from '../storage-config.js';
 import { PostgresRivetLLMProfileHealthStore } from '../../../llm-profile-health/managed-store.js';
 import { PostgresRivetEvaluationStore } from '../../../evaluation-runs/managed-store.js';
@@ -79,6 +80,10 @@ export class ManagedWorkflowBackend {
 
   async dispose(): Promise<void> {
     await this.#context.dispose();
+  }
+
+  async checkHealth(context?: RuntimeHealthCheckContext): Promise<void> {
+    await this.#context.checkHealth(context);
   }
 
   async getTree(): Promise<{ root: string; folders: WorkflowFolderItem[]; projects: WorkflowProjectItem[] }> {

@@ -427,23 +427,58 @@ Keep ingress body-size limits high enough for project import/export and keep web
 
 Do not route `/workflows` directly to `execution` from the external ingress. External traffic should still enter through `proxy`, because the proxy injects the trusted `X-Rivet-Proxy-Auth` header and handles the optional UI/public workflow auth policies consistently.
 
-### Health checks and probes
+### Health, lifecycle, and availability
 
-The chart already defines Kubernetes liveness and readiness probes. They are part of the chart templates today, not environment-overlay values.
+The chart owns health and lifecycle policy explicitly. Do not try to override it through arbitrary dotenv keys; use the typed `lifecycle`, `rollout`, and `availability` values. API containers capture the chart-owned lifecycle values before loading Vault dotenv and reapply them afterward, so a stale secret file cannot silently change probe timing or shutdown policy.
 
-| Workload | Container | Probe shape |
-|---|---|---|
-| `backend` StatefulSet | `api` | HTTP `GET /healthz` on the API port |
-| `backend` StatefulSet | `executor` | TCP probe on executor port `21889` |
-| `execution` Deployment | `api` | HTTP `GET /healthz` on the execution API port |
-| `proxy` Deployment | `proxy` | TCP probe on proxy HTTP port |
-| `web` Deployment | `web` | HTTP `GET /` on the static web server port |
+API health endpoints have separate meanings:
 
-The API server exposes `GET /healthz`. It starts listening only after startup reconciliation and workflow storage initialization finish, so the endpoint is a lightweight process-ready check rather than a deep Postgres/S3 transaction on every probe.
+- `GET /livez`: shallow process liveness. It remains `200` during a recoverable dependency outage and while the process is draining; it becomes unhealthy only after the runtime reaches its stopped state.
+- `GET /readyz`: startup/drain and required-dependency readiness. It returns `503` while starting, draining, stopped, stale, or unable to use a required dependency.
+- `GET /healthz`: backward-compatible alias for liveness. New probes should use `/livez` or `/readyz` according to intent.
 
-The app does not currently expose `/health`, `/readyz`, `/livez`, or `/up` aliases. If the target platform requires one of those conventional paths, add the aliases deliberately in the API/proxy/web runtimes and update the chart probes at the same time. Do not assume a generic overlay key named `probes` will change this chart; that key is not currently wired.
+Readiness does not open a new database/object-storage transaction for every kubelet request. Each API process refreshes a cached health snapshot in the background. The default required checks cover App Settings, workflow storage, runtime libraries, and web-app action coordination. In managed mode this includes PostgreSQL and S3-compatible object-storage checks; in filesystem mode it verifies the owned roots/cache state. Responses contain stable reason codes, check names, timestamps, and durations, but never raw dependency errors or secrets. A timed-out or draining health refresh aborts checked-out PostgreSQL probe clients and S3 `HeadBucket` requests. PostgreSQL connection acquisition is capped at 10 seconds, while S3 connection establishment is capped at 10 seconds and idle socket waits at 60 seconds; the socket limit is not a total upload-duration limit.
 
-No `startupProbe` is currently defined. If cold production startup needs a longer grace period than the current liveness/readiness delays, add explicit chart support rather than relying on unsupported environment overlay fields.
+Managed object-storage credentials must allow the S3-compatible `HeadBucket` operation used by readiness, in addition to the object operations used by normal storage. On AWS S3 this commonly requires bucket-level `s3:ListBucket`; verify the equivalent permission for the selected provider.
+
+Default health timing is controlled by:
+
+```yaml
+lifecycle:
+  health:
+    refreshSeconds: 5
+    checkTimeoutSeconds: 3
+    staleAfterSeconds: 20
+```
+
+Keep `staleAfterSeconds` greater than `refreshSeconds + checkTimeoutSeconds`. Short values can flap readiness during normal provider latency. The provider transport bounds are deliberately independent from the shorter readiness wait: a dependency implementation that ignores cancellation remains deduplicated until its bounded transport operation settles instead of accumulating retries. A provider-wide outage may make every execution pod unready because PostgreSQL/object storage are required to execute published work; liveness deliberately stays healthy so Kubernetes does not create a restart storm.
+
+The rendered probe contract is:
+
+| Workload | Container | Startup | Liveness | Readiness |
+|---|---|---|---|---|
+| `backend` StatefulSet | `api` | `GET /livez` | `GET /livez` | `GET /readyz` |
+| `backend` StatefulSet | `executor` | TCP `21889` | TCP `21889` | TCP `21889` |
+| `execution` Deployment | `api` | `GET /livez` | `GET /livez` | `GET /readyz` |
+| `proxy` Deployment | `proxy` | TCP proxy port | TCP proxy port | TCP proxy port |
+| `web` Deployment | `web` | `GET /` | `GET /` | `GET /` |
+
+Startup probes tolerate cold reconciliation without letting liveness restart a valid slow boot forever. Permanent failures remain bounded by `lifecycle.probes.startup.failureThreshold` and its period.
+
+Termination is coordinated across Kubernetes and the API:
+
+- `preStopDelaySeconds` defaults to `5` to give endpoint removal time to propagate before SIGTERM. It is only propagation margin, not the application drain mechanism.
+- SIGTERM immediately makes API readiness false, stops accepting new web-app actions, and closes HTTP acceptance. A concurrent initial health refresh cannot return the pod to ready.
+- accepted HTTP connections and active web-app actions may finish within `shutdownGraceSeconds`, default `120`.
+- cleanup is serialized and may run again after a late startup initializer settles; managed runtime-library initialization cannot start its worker once shutdown begins.
+- work still active at the deadline is force-closed or persisted as interrupted; recording persistence is flushed before managed resources close.
+- `terminationGracePeriodSeconds` defaults to `150` and validation requires room for shutdown grace, pre-stop delay, and a 25-second finalization margin.
+
+Tune shutdown and pod termination values together. Longer drain windows improve completion probability but slow rollouts and node maintenance.
+
+Every workload has an explicit rolling strategy and preferred topology spread plus pod anti-affinity. Proxy and execution default to `maxUnavailable: 0` and `maxSurge: 1`. PodDisruptionBudgets are emitted only when a tier's effective minimum replica count is greater than one; by default this protects proxy and execution. The singleton backend intentionally has no PDB, because a one-pod PDB would block voluntary disruption without creating high availability. Placement defaults are preferred rather than required so Minikube and small clusters remain schedulable.
+
+The backend remains a validated singleton. Managed web-app action run history/replay/cancellation is replica-safe, and execution replicas scale normally. The remaining control-plane blockers are process-local latest-debugger ownership and the co-located editor executor: their related Services could choose different backend pods if backend replicas were increased. Do not disable the singleton validation until those sessions have distributed ownership or stable fenced routing and are tested with owner loss.
 
 ### Vault dotenv contract
 

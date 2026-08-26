@@ -1,3 +1,4 @@
+import { constants as fsConstants } from 'node:fs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
@@ -28,6 +29,7 @@ import type {
   WorkflowRunStatisticsSurface,
 } from '../../../../shared/workflow-recording-types.js';
 import { getWorkflowsRoot } from '../../security.js';
+import type { RuntimeHealthCheckContext } from '../../runtime-health.js';
 import { createHttpError } from '../../utils/httpError.js';
 import { getManagedWorkflowStorageConfig, getWorkflowStorageBackendMode, isManagedWorkflowStorageEnabled } from './storage-config.js';
 import { ManagedWorkflowBackend } from './managed/backend.js';
@@ -327,6 +329,16 @@ function invalidateFilesystemExecutionMove(movedProjectPaths: WorkflowProjectPat
   markFilesystemExecutionStructureDirty(
     movedProjectPaths.flatMap(({ fromAbsolutePath, toAbsolutePath }) => [fromAbsolutePath, toAbsolutePath]),
   );
+}
+
+export async function checkWorkflowStorageHealth(context?: RuntimeHealthCheckContext): Promise<void> {
+  if (isManagedWorkflowStorageEnabled()) {
+    await (await getManagedBackend()).checkHealth(context);
+    return;
+  }
+
+  const root = await ensureWorkflowsRoot();
+  await fs.access(root, fsConstants.R_OK | fsConstants.W_OK);
 }
 
 export async function initializeWorkflowStorage(): Promise<void> {

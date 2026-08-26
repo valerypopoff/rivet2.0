@@ -197,11 +197,59 @@ test('chart validation keeps the supported managed singleton control-plane bound
   const validateValuesTemplate = readRepoFile('charts/templates/validate-values.yaml');
 
   assert.match(validateValuesTemplate, /workflowStorage\.backend=managed and runtimeLibraries\.backend=managed/);
-  assert.match(validateValuesTemplate, /replicaCount\.backend=1 because latest workflow execution, latest web-app action execution, and \/ws\/latest-debugger are still process-local control-plane features/);
-  assert.match(validateValuesTemplate, /autoscaling\.backend\.enabled=false because latest workflow execution, latest web-app action execution, and \/ws\/latest-debugger are still process-local control-plane features/);
+  assert.match(validateValuesTemplate, /replicaCount\.backend=1 is required because \/ws\/latest-debugger and co-located editor executor session routing remain process-local control-plane features/);
+  assert.match(validateValuesTemplate, /autoscaling\.backend\.enabled=false is required because \/ws\/latest-debugger and co-located editor executor session routing remain process-local control-plane features/);
   assert.match(validateValuesTemplate, /appSettings\.backend=postgres so settings remain consistent across replicas without a shared app-data volume/);
 });
 
+test('chart renders profile-aware probes, graceful lifecycle, and replicated-tier availability policies', async () => {
+  const renderedChart = await renderLocalKubernetesChart();
+
+  assert.equal((renderedChart.match(/path: \/readyz/g) ?? []).length, 2);
+  assert.equal((renderedChart.match(/path: \/livez/g) ?? []).length, 4);
+  assert.equal((renderedChart.match(/startupProbe:/g) ?? []).length, 5);
+  assert.equal((renderedChart.match(/livenessProbe:/g) ?? []).length, 5);
+  assert.equal((renderedChart.match(/readinessProbe:/g) ?? []).length, 5);
+  assert.equal((renderedChart.match(/name: RIVET_DEPLOYMENT_SHUTDOWN_GRACE_SECONDS\s*\n\s*value: "120"/g) ?? []).length, 2);
+  assert.equal((renderedChart.match(/name: RIVET_DEPLOYMENT_HEALTH_REFRESH_SECONDS\s*\n\s*value: "5"/g) ?? []).length, 2);
+  assert.equal((renderedChart.match(/name: RIVET_DEPLOYMENT_HEALTH_CHECK_TIMEOUT_SECONDS\s*\n\s*value: "3"/g) ?? []).length, 2);
+  assert.equal((renderedChart.match(/name: RIVET_DEPLOYMENT_HEALTH_STALE_AFTER_SECONDS\s*\n\s*value: "20"/g) ?? []).length, 2);
+  assert.equal((renderedChart.match(/terminationGracePeriodSeconds: 150/g) ?? []).length, 4);
+  assert.equal((renderedChart.match(/command: \["\/bin\/sh", "-c", "sleep 5"\]/g) ?? []).length, 5);
+  assert.equal((renderedChart.match(/type: RollingUpdate/g) ?? []).length, 4);
+  assert.equal((renderedChart.match(/maxUnavailable: 0/g) ?? []).length, 3);
+  assert.equal((renderedChart.match(/topologySpreadConstraints:/g) ?? []).length, 4);
+  assert.equal((renderedChart.match(/preferredDuringSchedulingIgnoredDuringExecution:/g) ?? []).length, 4);
+  assert.equal((renderedChart.match(/kind: PodDisruptionBudget/g) ?? []).length, 2);
+  const disruptionBudgets = renderedChart
+    .split(/^---$/m)
+    .filter((document) => document.includes('kind: PodDisruptionBudget'))
+    .join('\\n---\\n');
+  assert.match(renderedChart, /kind: PodDisruptionBudget[\s\S]*?app\.kubernetes\.io\/component: proxy/);
+  assert.match(renderedChart, /kind: PodDisruptionBudget[\s\S]*?app\.kubernetes\.io\/component: execution/);
+  assert.doesNotMatch(disruptionBudgets, /app\.kubernetes\.io\/component: backend/);
+
+  await assertHelmTemplateFails(
+    ['lifecycle.terminationGracePeriodSeconds=149'],
+    /must allow shutdownGraceSeconds, preStopDelaySeconds, and a 25-second finalization margin/,
+  );
+  await assertHelmTemplateFails(
+    ['env.RIVET_SHUTDOWN_GRACE_SECONDS=10'],
+    /env\.RIVET_SHUTDOWN_GRACE_SECONDS is chart-owned/,
+  );
+  await assertHelmTemplateFails(
+    ['env.RIVET_DEPLOYMENT_SHUTDOWN_GRACE_SECONDS=10'],
+    /env\.RIVET_DEPLOYMENT_SHUTDOWN_GRACE_SECONDS is chart-owned/,
+  );
+  await assertHelmTemplateFails(
+    ['lifecycle.probes.readiness.periodSeconds=0'],
+    /lifecycle\.probes\.readiness periodSeconds, timeoutSeconds, and failureThreshold must be greater than zero/,
+  );
+  await assertHelmTemplateFails(
+    ['availability.disruptionBudget.maxUnavailable=2'],
+    /must be less than the effective minimum replica count for proxy/,
+  );
+});
 test('production overlay keeps the supported ingress, Vault, and scale boundaries for the real cluster topology', () => {
   const prodOverlay = readRepoFile('charts/overlays/prod.yaml');
 

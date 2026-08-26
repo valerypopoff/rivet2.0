@@ -1,5 +1,7 @@
 import type { Pool, PoolClient, QueryResultRow } from 'pg';
 
+import { MANAGED_POSTGRES_CONNECTION_TIMEOUT_MS } from '../../managed-health.js';
+
 import type {
   JobStatus,
   RuntimeLibraryEntry,
@@ -284,6 +286,7 @@ export function getPoolConfig(config: ManagedRuntimeLibrariesConfig) {
     keepAlive: true,
     keepAliveInitialDelayMillis: 30_000,
     idleTimeoutMillis: 30_000,
+    connectionTimeoutMillis: MANAGED_POSTGRES_CONNECTION_TIMEOUT_MS,
     max: 10,
   };
 

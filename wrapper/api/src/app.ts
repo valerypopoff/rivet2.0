@@ -36,6 +36,7 @@ import { requireAuth } from './middleware/auth.js';
 import { createProxySettingsSnapshot } from './proxy-settings-snapshot.js';
 import { isTrustedProxyRequest } from './auth.js';
 import { getApiRuntimeProfile, isControlPlaneApiProfile, isExecutionOnlyApiProfile } from './runtime-profile.js';
+import type { RuntimeHealthReader } from './runtime-health.js';
 import { readRuntimeLimitSettingsSync } from './runtime-limit-settings.js';
 import { captureAppSettingsSnapshot } from './middleware/app-settings-snapshot.js';
 
@@ -254,19 +255,37 @@ function mountPublishedExecutionRoutes(app: Express): void {
   app.use('/internal/workflows', internalPublishedWorkflowsRouter);
 }
 
-export function createApiApp(profile = getApiRuntimeProfile()): Express {
+export function createApiApp(
+  profile = getApiRuntimeProfile(),
+  options: { health?: RuntimeHealthReader } = {},
+): Express {
   const app = express();
 
-  app.use(captureAppSettingsSnapshot);
+  const fallbackHealth: RuntimeHealthReader = {
+    getLiveness: () => ({ ok: true, profile, state: 'ready', checkedAt: null, checks: [] }),
+    getReadiness: () => ({ ok: true, profile, state: 'ready', checkedAt: null, checks: [] }),
+  };
+  const health = options.health ?? fallbackHealth;
+  const sendHealth = (snapshot: ReturnType<RuntimeHealthReader['getLiveness']>, res: Response): void => {
+    res.setHeader('Cache-Control', 'no-store');
+    res.status(snapshot.ok ? 200 : 503).json(snapshot);
+  };
+
   app.use(cors((req, callback) => {
     callback(null, createCorsOptions(req));
   }));
-  app.use(createJsonBodyParser());
-  app.use(express.urlencoded({ extended: false }));
 
   app.get('/healthz', (_req, res) => {
-    res.status(200).json({ ok: true });
+    const snapshot = health.getLiveness();
+    res.setHeader('Cache-Control', 'no-store');
+    res.status(snapshot.ok ? 200 : 503).json({ ok: snapshot.ok });
   });
+  app.get('/livez', (_req, res) => sendHealth(health.getLiveness(), res));
+  app.get('/readyz', (_req, res) => sendHealth(health.getReadiness(), res));
+
+  app.use(captureAppSettingsSnapshot);
+  app.use(createJsonBodyParser());
+  app.use(express.urlencoded({ extended: false }));
 
   if (isControlPlaneApiProfile(profile) || profile === 'execution') {
     app.use(dispatchDynamicBasePath(getPublishedWebAppsBasePath, webAppOAuthRouter));

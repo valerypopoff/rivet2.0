@@ -73,6 +73,10 @@ class FilesystemRuntimeLibrariesBackend implements RuntimeLibrariesBackend {
     }
   }
 
+  async checkHealth(): Promise<void> {
+    await this.getState();
+  }
+
   async prepareForExecution(): Promise<void> {
     // Filesystem mode already resolves directly from the local runtime root.
   }

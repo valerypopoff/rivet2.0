@@ -5,7 +5,6 @@ import {
   DeleteObjectsCommand,
   ListObjectsV2Command,
   S3Client,
-  type S3ClientConfig,
 } from '@aws-sdk/client-s3';
 import { Pool } from 'pg';
 
@@ -13,6 +12,8 @@ import {
   getManagedWorkflowStorageConfig,
   getWorkflowStorageBackendMode,
 } from '../routes/workflows/storage-config.js';
+import { createManagedWorkflowS3ClientConfig } from '../routes/workflows/managed/blob-store.js';
+import { getManagedDbPoolConfig } from '../routes/workflows/managed/db.js';
 
 const WORKFLOW_TABLES = [
   'workflow_recordings',
@@ -55,40 +56,16 @@ function normalizePrefix(prefix: string): string {
 
 function createS3Client() {
   const config = getManagedWorkflowStorageConfig();
-  const clientConfig: S3ClientConfig = {
-    region: config.objectStorageRegion,
-    forcePathStyle: config.objectStorageForcePathStyle,
-    credentials: {
-      accessKeyId: config.objectStorageAccessKeyId,
-      secretAccessKey: config.objectStorageSecretAccessKey,
-    },
-  };
-
-  if (config.objectStorageEndpoint) {
-    clientConfig.endpoint = config.objectStorageEndpoint;
-  }
-
   return {
     config,
-    client: new S3Client(clientConfig),
+    client: new S3Client(createManagedWorkflowS3ClientConfig(config)),
     prefix: normalizePrefix(config.objectStoragePrefix),
   };
 }
 
 function createPool() {
   const config = getManagedWorkflowStorageConfig();
-  if (config.databaseSslMode === 'disable') {
-    return new Pool({
-      connectionString: config.databaseUrl,
-    });
-  }
-
-  return new Pool({
-    connectionString: config.databaseUrl,
-    ssl: {
-      rejectUnauthorized: config.databaseSslMode === 'verify-full',
-    },
-  });
+  return new Pool(getManagedDbPoolConfig(config));
 }
 
 async function deleteManagedObjects(): Promise<number> {

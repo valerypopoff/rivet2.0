@@ -9,13 +9,16 @@ import {
   S3Client,
   type S3ClientConfig,
 } from '@aws-sdk/client-s3';
-import { Agent as HttpsAgent } from 'node:https';
 import { NodeHttpHandler } from '@smithy/node-http-handler';
 
+import { createManagedObjectStorageHttpHandlerOptions } from '../../managed-health.js';
+import type { RuntimeHealthCheckContext } from '../../runtime-health.js';
 import type { ManagedRuntimeLibrariesConfig } from '../config.js';
 
 export interface RuntimeLibrariesBlobStore {
   initialize?(): Promise<void>;
+  checkHealth?(context?: RuntimeHealthCheckContext): Promise<void>;
+  dispose?(): void;
   putBuffer(key: string, contents: Buffer, contentType?: string): Promise<void>;
   getBuffer(key: string): Promise<Buffer>;
   delete(key: string | null | undefined): Promise<void>;
@@ -26,12 +29,6 @@ export type RuntimeLibrariesBlobObject = {
   size: number;
   lastModified: string | null;
 };
-
-const sharedHttpsAgent = new HttpsAgent({
-  keepAlive: true,
-  maxSockets: 64,
-  keepAliveMsecs: 30_000,
-});
 
 function normalizeKeyPrefix(prefix: string): string {
   const trimmed = prefix.trim().replace(/^\/+/, '');
@@ -74,9 +71,7 @@ export function createRuntimeLibrariesS3ClientConfig(config: ManagedRuntimeLibra
   const clientConfig: S3ClientConfig = {
     region: config.objectStorageRegion,
     forcePathStyle: config.objectStorageForcePathStyle,
-    requestHandler: new NodeHttpHandler({
-      httpsAgent: sharedHttpsAgent,
-    }),
+    requestHandler: new NodeHttpHandler(createManagedObjectStorageHttpHandlerOptions()),
     credentials: {
       accessKeyId: config.objectStorageAccessKeyId,
       secretAccessKey: config.objectStorageSecretAccessKey,
@@ -201,6 +196,16 @@ export class S3RuntimeLibrariesBlobStore implements RuntimeLibrariesBlobStore {
         Bucket: this.#bucket,
       }));
     }
+  }
+
+  async checkHealth(context?: RuntimeHealthCheckContext): Promise<void> {
+    await this.#client.send(new HeadBucketCommand({
+      Bucket: this.#bucket,
+    }), context ? { abortSignal: context.signal } : undefined);
+  }
+
+  dispose(): void {
+    this.#client.destroy();
   }
 
   async putBuffer(key: string, contents: Buffer, contentType = 'application/octet-stream'): Promise<void> {

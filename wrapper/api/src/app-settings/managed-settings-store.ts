@@ -1,5 +1,7 @@
 import { Client, Pool, type PoolConfig, type QueryResultRow } from 'pg';
 
+import { checkPostgresPoolHealth, MANAGED_POSTGRES_CONNECTION_TIMEOUT_MS } from '../managed-health.js';
+import type { RuntimeHealthCheckContext } from '../runtime-health.js';
 import {
   decryptManagedSettingsValue,
   deriveManagedSettingsEncryptionKey,
@@ -53,6 +55,7 @@ type ManagedSettingsStoreOptions = {
 
 export interface AppSettingsBackend {
   initialize(): Promise<void>;
+  checkHealth?(context?: RuntimeHealthCheckContext): Promise<void>;
   read(key: string): Promise<ManagedSettingsRecord | null>;
   write(value: ManagedSettingsWrite): Promise<ManagedSettingsRecord | null>;
   subscribe(listener: (key: string) => Promise<void> | void): () => void;
@@ -168,6 +171,13 @@ export class PostgresAppSettingsBackend implements AppSettingsBackend {
         });
     }, this.#pollIntervalMs);
     this.#pollTimer.unref?.();
+  }
+
+  async checkHealth(context?: RuntimeHealthCheckContext): Promise<void> {
+    if (!this.#initialized || this.#disposed) {
+      throw new Error('PostgreSQL app-settings backend is not available.');
+    }
+    await checkPostgresPoolHealth(this.#pool, context);
   }
 
   async read(key: string): Promise<ManagedSettingsRecord | null> {
@@ -459,6 +469,7 @@ export function createPostgresAppSettingsBackendFromEnv(
     keepAlive: true,
     keepAliveInitialDelayMillis: 30_000,
     idleTimeoutMillis: 30_000,
+    connectionTimeoutMillis: MANAGED_POSTGRES_CONNECTION_TIMEOUT_MS,
     ...(sslMode === 'disable'
       ? {}
       : { ssl: { rejectUnauthorized: sslMode === 'verify-full' } }),

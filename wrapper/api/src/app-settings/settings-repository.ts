@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 
+import type { RuntimeHealthCheckContext } from '../runtime-health.js';
 import { writeJsonSettingsFile } from '../settings-file-writer.js';
 import {
   createPostgresAppSettingsBackendFromEnv,
@@ -571,6 +572,13 @@ export function invalidateAppSettingsRepositories(): void {
   for (const repository of repositories) {
     repository.invalidate();
   }
+}
+
+export async function checkAppSettingsRepositoriesHealth(
+  context?: RuntimeHealthCheckContext,
+): Promise<void> {
+  await sharedBackend?.checkHealth?.(context);
+  for (const repository of repositories) repository.readSync();
 }
 
 export function getAppSettingsBackendKind(): 'file' | 'postgres' {

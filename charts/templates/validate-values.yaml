@@ -29,7 +29,62 @@
 {{- if lt (int .Values.workflowSchema.migrationJob.activeDeadlineSeconds) 1 -}}
 {{- fail "workflowSchema.migrationJob.activeDeadlineSeconds must be greater than zero" -}}
 {{- end -}}
+{{- range $key := list "RIVET_HEALTH_REFRESH_SECONDS" "RIVET_HEALTH_CHECK_TIMEOUT_SECONDS" "RIVET_HEALTH_STALE_AFTER_SECONDS" "RIVET_SHUTDOWN_GRACE_SECONDS" "RIVET_DEPLOYMENT_HEALTH_REFRESH_SECONDS" "RIVET_DEPLOYMENT_HEALTH_CHECK_TIMEOUT_SECONDS" "RIVET_DEPLOYMENT_HEALTH_STALE_AFTER_SECONDS" "RIVET_DEPLOYMENT_SHUTDOWN_GRACE_SECONDS" -}}
+{{- if hasKey $.Values.env $key -}}
+{{- fail (printf "env.%s is chart-owned; configure lifecycle values instead" $key) -}}
+{{- end -}}
+{{- end -}}
 
+{{- if lt (int .Values.lifecycle.health.refreshSeconds) 1 -}}
+{{- fail "lifecycle.health.refreshSeconds must be greater than zero" -}}
+{{- end -}}
+{{- if lt (int .Values.lifecycle.health.checkTimeoutSeconds) 1 -}}
+{{- fail "lifecycle.health.checkTimeoutSeconds must be greater than zero" -}}
+{{- end -}}
+{{- if le (int .Values.lifecycle.health.staleAfterSeconds) (add (int .Values.lifecycle.health.refreshSeconds) (int .Values.lifecycle.health.checkTimeoutSeconds)) -}}
+{{- fail "lifecycle.health.staleAfterSeconds must be greater than refreshSeconds plus checkTimeoutSeconds" -}}
+{{- end -}}
+{{- if lt (int .Values.lifecycle.shutdownGraceSeconds) 1 -}}
+{{- fail "lifecycle.shutdownGraceSeconds must be greater than zero" -}}
+{{- end -}}
+{{- if lt (int .Values.lifecycle.preStopDelaySeconds) 0 -}}
+{{- fail "lifecycle.preStopDelaySeconds must be zero or greater" -}}
+{{- end -}}
+{{- if lt (int .Values.lifecycle.terminationGracePeriodSeconds) (add (int .Values.lifecycle.shutdownGraceSeconds) (int .Values.lifecycle.preStopDelaySeconds) 25) -}}
+{{- fail "lifecycle.terminationGracePeriodSeconds must allow shutdownGraceSeconds, preStopDelaySeconds, and a 25-second finalization margin" -}}
+{{- end -}}
+{{- range $name, $probe := .Values.lifecycle.probes -}}
+{{- if or (lt (int $probe.periodSeconds) 1) (lt (int $probe.timeoutSeconds) 1) (lt (int $probe.failureThreshold) 1) -}}
+{{- fail (printf "lifecycle.probes.%s periodSeconds, timeoutSeconds, and failureThreshold must be greater than zero" $name) -}}
+{{- end -}}
+{{- end -}}
+{{- if .Values.availability.topologySpread.enabled -}}
+{{- if not (has .Values.availability.topologySpread.whenUnsatisfiable (list "ScheduleAnyway" "DoNotSchedule")) -}}
+{{- fail "availability.topologySpread.whenUnsatisfiable must be ScheduleAnyway or DoNotSchedule" -}}
+{{- end -}}
+{{- if lt (int .Values.availability.topologySpread.maxSkew) 1 -}}
+{{- fail "availability.topologySpread.maxSkew must be greater than zero" -}}
+{{- end -}}
+{{- if empty .Values.availability.topologySpread.topologyKey -}}
+{{- fail "availability.topologySpread.topologyKey is required" -}}
+{{- end -}}
+{{- end -}}
+{{- if and .Values.availability.podAntiAffinity.enabled (empty .Values.availability.podAntiAffinity.topologyKey) -}}
+{{- fail "availability.podAntiAffinity.topologyKey is required" -}}
+{{- end -}}
+{{- if .Values.availability.disruptionBudget.enabled -}}
+{{- if lt (int .Values.availability.disruptionBudget.maxUnavailable) 1 -}}
+{{- fail "availability.disruptionBudget.maxUnavailable must be greater than zero" -}}
+{{- end -}}
+{{- range $component := list "proxy" "web" "execution" -}}
+{{- $replicas := int (index $.Values.replicaCount $component) -}}
+{{- $autoscaling := index $.Values.autoscaling $component -}}
+{{- $minimumReplicas := ternary (int $autoscaling.minReplicas) $replicas $autoscaling.enabled -}}
+{{- if and (gt $minimumReplicas 1) (ge (int $.Values.availability.disruptionBudget.maxUnavailable) $minimumReplicas) -}}
+{{- fail (printf "availability.disruptionBudget.maxUnavailable must be less than the effective minimum replica count for %s" $component) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
 {{- if empty (index .Values.env "RIVET_PROXY_RESOLVER") -}}
 {{- fail "env.RIVET_PROXY_RESOLVER is required so nginx can resolve in-cluster service names dynamically" -}}
 {{- end -}}
@@ -41,11 +96,11 @@
 {{- end -}}
 
 {{- if ne (int .Values.replicaCount.backend) 1 -}}
-{{- fail "Phase 3 keeps replicaCount.backend=1 because latest workflow execution, latest web-app action execution, and /ws/latest-debugger are still process-local control-plane features" -}}
+{{- fail "replicaCount.backend=1 is required because /ws/latest-debugger and co-located editor executor session routing remain process-local control-plane features" -}}
 {{- end -}}
 
 {{- if .Values.autoscaling.backend.enabled -}}
-{{- fail "Phase 3 keeps autoscaling.backend.enabled=false because latest workflow execution, latest web-app action execution, and /ws/latest-debugger are still process-local control-plane features" -}}
+{{- fail "autoscaling.backend.enabled=false is required because /ws/latest-debugger and co-located editor executor session routing remain process-local control-plane features" -}}
 {{- end -}}
 
 {{- if and (eq .Values.workflowStorage.backend "filesystem") (ne (int .Values.replicaCount.backend) 1) -}}

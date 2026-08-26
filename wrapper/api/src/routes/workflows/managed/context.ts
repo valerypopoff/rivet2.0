@@ -1,6 +1,8 @@
 import type { PoolClient } from 'pg';
 import { Pool } from 'pg';
 
+import { checkPostgresPoolHealth } from '../../../managed-health.js';
+import type { RuntimeHealthCheckContext } from '../../../runtime-health.js';
 import type { ManagedWorkflowStorageConfig } from '../storage-config.js';
 import {
   S3ManagedWorkflowBlobStore,
@@ -47,6 +49,7 @@ export type ManagedWorkflowContext = {
   endpointSync: ReturnType<typeof createManagedWorkflowEndpointSync>;
   mappers: typeof mappers;
   initialize(): Promise<void>;
+  checkHealth(context?: RuntimeHealthCheckContext): Promise<void>;
   dispose(): Promise<void>;
   withTransaction<T>(run: (client: PoolClient, hooks: TransactionHooks) => Promise<T>): Promise<T>;
 };
@@ -106,6 +109,14 @@ export function createManagedWorkflowContext(
     await executionInvalidationController.initialize();
   };
 
+  const checkHealth = async (context?: RuntimeHealthCheckContext): Promise<void> => {
+    await initialize();
+    await Promise.all([
+      checkPostgresPoolHealth(pool, context),
+      resolvedBlobStore.checkHealth?.(context),
+    ]);
+  };
+
   const dispose = async (): Promise<void> => {
     if (disposePromise) {
       return disposePromise;
@@ -118,7 +129,11 @@ export function createManagedWorkflowContext(
       // Clear revision materializations before pool shutdown so test teardown does
       // not retain stale cached blobs across recreated contexts.
       executionCache.clearRevisionMaterializations();
-      await pool.end();
+      try {
+        await pool.end();
+      } finally {
+        resolvedBlobStore.dispose?.();
+      }
     })();
     await disposePromise;
   };
@@ -146,6 +161,7 @@ export function createManagedWorkflowContext(
     endpointSync,
     mappers,
     initialize,
+    checkHealth,
     dispose,
     withTransaction: transactionRunner.withTransaction,
   };

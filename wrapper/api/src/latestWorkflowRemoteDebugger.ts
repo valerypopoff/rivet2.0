@@ -1,4 +1,4 @@
-import type { Server as HttpServer } from 'node:http';
+import type { IncomingMessage, Server as HttpServer } from 'node:http';
 import type { Duplex } from 'node:stream';
 import { startDebuggerServer, type RivetDebuggerServer } from '@valerypopoff/rivet2-node';
 import { WebSocketServer } from 'ws';
@@ -9,7 +9,10 @@ export const LATEST_WORKFLOW_REMOTE_DEBUGGER_PATH = '/ws/latest-debugger';
 type RivetDebuggerServerOptions = NonNullable<Parameters<typeof startDebuggerServer>[0]>;
 
 let latestWorkflowRemoteDebugger: RivetDebuggerServer | null = null;
-let latestWorkflowRemoteDebuggerUpgradeHandlerInitialized = false;
+let latestWorkflowRemoteDebuggerHttpServer: HttpServer | null = null;
+let latestWorkflowRemoteDebuggerUpgradeHandler:
+  | ((request: IncomingMessage, socket: Duplex, head: Buffer) => void)
+  | null = null;
 
 export function isLatestWorkflowRemoteDebuggerEnabled(): boolean {
   const configuredValue = process.env.RIVET_ENABLE_LATEST_REMOTE_DEBUGGER?.trim().toLowerCase();
@@ -28,14 +31,14 @@ export function initializeLatestWorkflowRemoteDebugger(httpServer: HttpServer): 
 
   const debuggerEnabled = isLatestWorkflowRemoteDebuggerEnabled();
 
-  if (!debuggerEnabled && latestWorkflowRemoteDebuggerUpgradeHandlerInitialized) {
+  if (!debuggerEnabled && latestWorkflowRemoteDebuggerUpgradeHandler) {
     return null;
   }
 
   const webSocketServer = debuggerEnabled ? new WebSocketServer({ noServer: true }) : null;
 
-  if (!latestWorkflowRemoteDebuggerUpgradeHandlerInitialized) {
-    httpServer.on('upgrade', (request, socket, head) => {
+  if (!latestWorkflowRemoteDebuggerUpgradeHandler) {
+    latestWorkflowRemoteDebuggerUpgradeHandler = (request, socket, head) => {
       const url = new URL(request.url ?? '', 'http://localhost');
 
       if (url.pathname !== LATEST_WORKFLOW_REMOTE_DEBUGGER_PATH) {
@@ -57,9 +60,9 @@ export function initializeLatestWorkflowRemoteDebugger(httpServer: HttpServer): 
       };
 
       webSocketServer.handleUpgrade(request, socket, head, handleUpgradeComplete);
-    });
-
-    latestWorkflowRemoteDebuggerUpgradeHandlerInitialized = true;
+    };
+    latestWorkflowRemoteDebuggerHttpServer = httpServer;
+    httpServer.on('upgrade', latestWorkflowRemoteDebuggerUpgradeHandler);
   }
 
   if (!debuggerEnabled || !webSocketServer) {
@@ -95,15 +98,24 @@ async function closeWebSocketServer(server: WebSocketServer): Promise<void> {
   });
 }
 
-// Test-only reset seam for the module-scoped debugger singleton.
-export async function resetLatestWorkflowRemoteDebuggerForTests(): Promise<void> {
+export async function disposeLatestWorkflowRemoteDebugger(): Promise<void> {
   const debuggerServer = latestWorkflowRemoteDebugger;
+  const httpServer = latestWorkflowRemoteDebuggerHttpServer;
+  const upgradeHandler = latestWorkflowRemoteDebuggerUpgradeHandler;
   latestWorkflowRemoteDebugger = null;
-  latestWorkflowRemoteDebuggerUpgradeHandlerInitialized = false;
+  latestWorkflowRemoteDebuggerHttpServer = null;
+  latestWorkflowRemoteDebuggerUpgradeHandler = null;
 
-  if (!debuggerServer) {
-    return;
+  if (httpServer && upgradeHandler) {
+    httpServer.off('upgrade', upgradeHandler);
   }
 
-  await closeWebSocketServer(debuggerServer.webSocketServer);
+  if (debuggerServer) {
+    await closeWebSocketServer(debuggerServer.webSocketServer);
+  }
+}
+
+// Test-only reset seam for the module-scoped debugger singleton.
+export async function resetLatestWorkflowRemoteDebuggerForTests(): Promise<void> {
+  await disposeLatestWorkflowRemoteDebugger();
 }

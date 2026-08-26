@@ -142,11 +142,12 @@ services:
       - rivet_data:/data/rivet-app
       - ${RIVET_RUNTIME_LIBS_HOST_PATH:-../../.data/runtime-libraries}:/data/runtime-libraries
     healthcheck:
-      test: ["CMD-SHELL", "node -e \"require('http').get('http://127.0.0.1:80/healthz',r=>{process.exit(r.statusCode===200?0:1)}).on('error',()=>process.exit(1))\""]
+      test: ["CMD-SHELL", "node -e \"require('http').get('http://127.0.0.1:80/readyz',r=>{process.exit(r.statusCode===200?0:1)}).on('error',()=>process.exit(1))\""]
       interval: 10s
       timeout: 5s
       retries: 12
       start_period: 360s
+    stop_grace_period: 150s
     restart: unless-stopped
 
   executor:

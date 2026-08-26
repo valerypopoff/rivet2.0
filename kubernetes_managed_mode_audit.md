@@ -9,12 +9,13 @@
 
 The repository has substantial managed-mode support: workflow revisions and publication metadata use PostgreSQL, large workflow and recording artifacts use object storage, evaluation history has a PostgreSQL implementation, runtime-library archives use object storage, and web-app WebSocket runs have PostgreSQL-backed ownership and recovery support. Those are confirmed capabilities, not assumptions.
 
-Problems 1 and 2 from the original audit are now implemented:
+Problems 1, 2, and 3 from the original audit are now implemented:
 
 1. Workflow schema initialization is serialized, versioned, and owned by a Helm migration Job in Kubernetes.
 2. App Settings authority has moved from a shared RWX filesystem to encrypted, revisioned PostgreSQL rows. Runtime pods use only disposable local compatibility projections, and the proxy consumes an authenticated non-secret API snapshot.
+3. API lifecycle now separates liveness from dependency readiness, drains accepted work within an aligned termination budget, and gives replicated tiers explicit rollout, disruption, and placement policy.
 
-The most prominent remaining production risk is Problem 3: health, readiness, shutdown, and replica policy are not yet strong enough for dependable rolling updates and backend high availability. Problem 4 still limits confidence in all areas because automated Kubernetes verification is static; it does not yet run the complete managed stack in a live cluster or exercise failover, concurrent startup, key rotation, or persistence.
+The most prominent remaining production risk is Problem 4: automated Kubernetes verification is still static and does not yet run the complete managed stack in a live cluster or exercise failover, concurrent startup, key rotation, persistence, rolling drain, or node disruption. Problem 3 deliberately retains a singleton control-plane boundary until latest-debugger and co-located editor-executor session ownership become distributed or stably routed.
 
 ## Evidence Standard
 
@@ -167,82 +168,65 @@ Repeatedly running a monolithic current-schema script also provides no durable r
 - `git diff --check` completed without whitespace errors. Line-ending conversion warnings on this Windows checkout are informational.
 - This verification remains static/single-host evidence. Live legacy import, multi-replica convergence, key rotation, proxy interruption, and rollback remain acceptance work under Problem 4.
 
-## Problem 3: Strengthen Lifecycle, Readiness, and Replica Safety
+## Resolved Problem 3: Strengthen Lifecycle, Readiness, and Replica Safety
 
-### Observed Evidence
+**Implementation status (2026-08-26): resolved for the supported singleton-control/scalable-execution topology in code, focused lifecycle tests, Compose validation, and static Helm render/contracts. Live multi-node disruption testing remains under Problem 4.**
 
-1. `/healthz` always returns `{ ok: true }` once Express is serving; it does not inspect PostgreSQL, object storage, settings freshness, WebSocket coordinator state, or schema compatibility. Evidence: [`app.ts`](wrapper/api/src/app.ts).
-2. Backend and execution readiness/liveness probes both target `/healthz`. Evidence: [`backend-statefulset.yaml`](charts/templates/backend-statefulset.yaml) and [`execution-deployment.yaml`](charts/templates/execution-deployment.yaml).
-3. The chart has no `startupProbe`, PodDisruptionBudget, topology-spread constraints, affinity policy, explicit rollout strategy, pre-stop hook, or chart-controlled termination grace period. Evidence: the deployment templates and the unsupported-capabilities list in [`docs/kubernetes.md`](docs/kubernetes.md).
-4. Server shutdown starts WebSocket drain, waits a fixed five seconds, force-closes connections, interrupts remaining web-app runs, and flushes recording writes. Evidence: `SHUTDOWN_GRACE_MS` and `shutdown()` in [`server.ts`](wrapper/api/src/server.ts).
-5. Helm currently requires `backend.replicaCount: 1`. The validation message attributes this to process-local latest-workflow, latest-web-app, and debugger state. Evidence: [`validate-values.yaml`](charts/templates/validate-values.yaml).
-6. Execution replicas can scale independently and the proxy routes published workflow/web-app traffic to them. Evidence: [`values.yaml`](charts/values.yaml), [`execution-deployment.yaml`](charts/templates/execution-deployment.yaml), and proxy route generation in [`proxy-bootstrap/config.mjs`](wrapper/bootstrap/proxy-bootstrap/config.mjs).
-7. The web-app coordinator reconnects its PostgreSQL listener and retains polling fallback. The current code does not expose listener connectivity as readiness state, so this audit does not claim that a listener disconnect automatically makes a pod unready. Evidence: [`web-app-action-coordinator.ts`](wrapper/api/src/web-app-action-coordinator.ts).
+### Implemented Evidence
 
-### Risk Inference
+1. The API now exposes separate health contracts through [`runtime-health.ts`](wrapper/api/src/runtime-health.ts): `/livez` is shallow process liveness, `/readyz` reports startup/drain state plus required dependency health, and `/healthz` remains a backward-compatible liveness alias. Readiness responses use stable, secret-free reason codes and `Cache-Control: no-store`; dependency errors are logged server-side rather than serialized into probe responses. Evidence: [`app.ts`](wrapper/api/src/app.ts) and [`runtime-health.test.ts`](wrapper/api/src/tests/runtime-health.test.ts).
+2. Health checks run in the background on a configurable interval and the HTTP probe reads cached frozen check results. Concurrent starts and refreshes are promise-deduplicated. Each wait has a strict timeout and abort signal: cooperative dependency checks release their resources immediately, while a dependency that ignores cancellation remains deduplicated until its separately bounded transport operation settles instead of starting a pileup. Draining or stopping aborts pending checks, stale results make readiness fail, and failure/recovery logs are transition-based. The defaults are five-second refresh, three-second timeout, and twenty-second stale threshold. Evidence: `RuntimeHealthController` and `getRuntimeHealthOptionsFromEnv()` in [`runtime-health.ts`](wrapper/api/src/runtime-health.ts).
+3. The required checks cover the App Settings repository, workflow storage, runtime libraries, and the web-app action gateway. Managed settings and web-app coordination verify PostgreSQL with `SELECT 1`; managed workflow and runtime-library storage verify PostgreSQL plus S3-compatible object storage with `HeadBucket`; filesystem checks verify the owned root/cache state. PostgreSQL health cancellation destroys the checked-out probe client, S3 health cancellation reaches the AWS request, all managed PostgreSQL pools cap connection acquisition at 10 seconds, and each managed S3 client owns a handler with a 10-second connection bound and 60-second idle socket bound. The gateway check also refuses readiness after it stops accepting new actions. Evidence: [`managed-health.ts`](wrapper/api/src/managed-health.ts), [`managed-settings-store.ts`](wrapper/api/src/app-settings/managed-settings-store.ts), [`storage-backend.ts`](wrapper/api/src/routes/workflows/storage-backend.ts), [`runtime-libraries/backend.ts`](wrapper/api/src/runtime-libraries/backend.ts), and [`web-app-action-websocket.ts`](wrapper/api/src/web-app-action-websocket.ts).
+4. Startup is cancellation-aware. App Settings, runtime-library reconciliation, workflow storage, WebSocket coordination, and the initial health refresh complete before the HTTP listener opens; the listener bind and bind failure are part of the awaited startup operation. A signal cannot let the initial health refresh reopen readiness, and draining aborts its provider checks. Resource cleanup is serialized and repeatable, so an initializer that settles after an earlier cleanup pass receives a second pass instead of leaking its pool, listener, or worker. Managed runtime-library initialization is stop-aware and waits for its in-flight initialization before final cache/pool disposal. Evidence: `startServer()`, `StartupCancelledError`, and `assertStartupActive()` in [`server.ts`](wrapper/api/src/server.ts), plus [`runtime-libraries/managed/backend.ts`](wrapper/api/src/runtime-libraries/managed/backend.ts).
+5. `SIGTERM`/`SIGINT` immediately changes readiness to draining, aborts pending health checks, and rejects new web-app actions. The API closes HTTP acceptance while allowing accepted HTTP connections and active web-app runs to finish until `RIVET_SHUTDOWN_GRACE_SECONDS` (default 120 seconds). Only work still active at the deadline is force-closed/interrupted; recorder persistence is flushed before managed storage/settings resources are disposed. Managed PostgreSQL pools close explicitly, and managed workflow/runtime-library S3 clients each own and destroy their own handler/agent so temporary maintenance clients cannot tear down live backend sockets. The latest Remote Debugger now closes clients, closes its no-server WebSocket server, and detaches its HTTP upgrade listener. Evidence: `shutdown()` and `disposeResources()` in [`server.ts`](wrapper/api/src/server.ts), [`managed-health.ts`](wrapper/api/src/managed-health.ts), and [`latestWorkflowRemoteDebugger.ts`](wrapper/api/src/latestWorkflowRemoteDebugger.ts).
+6. Helm now renders startup, liveness, and readiness probes. API startup/liveness use `/livez`, readiness uses `/readyz`, and the co-located executor has corresponding TCP probes. Proxy and web also receive startup/liveness/readiness probes. Probe timing, cached health timing, application drain, pre-stop delay, and pod termination grace are explicit chart values with validation that preserves shutdown margin. The API entrypoint captures those chart-owned values before Vault dotenv loading and reapplies them afterward. Evidence: [`_pod.tpl`](charts/templates/_pod.tpl), [`values.yaml`](charts/values.yaml), and [`validate-values.yaml`](charts/templates/validate-values.yaml).
+7. Every workload has an explicit rolling-update strategy and preferred topology spread plus pod anti-affinity. Proxy and execution use zero unavailable/one surge by default. PodDisruptionBudgets are rendered only for tiers whose effective minimum replica count exceeds one; the singleton backend deliberately gets no PDB that would block voluntary node maintenance while pretending to provide HA. Evidence: the workload templates and [`disruption-budgets.yaml`](charts/templates/disruption-budgets.yaml).
+8. Docker Compose API healthchecks use `/readyz` and grant the API a 150-second stop grace period, leaving a 30-second finalization window after the default 120-second application drain. Both production and development Compose render successfully. Evidence: [`docker-compose.yml`](ops/compose/docker-compose.yml), [`docker-compose.dev.yml`](ops/compose/docker-compose.dev.yml), and [`proxy-image-contract.test.ts`](wrapper/api/src/tests/proxy-image-contract.test.ts).
 
-Kubernetes can route traffic to a process that is alive but cannot complete its assigned work because a required managed dependency or schema is unavailable. Conversely, making every optional dependency a hard readiness condition would cause unnecessary fleet-wide outages, so readiness must reflect each runtime profile's actual responsibilities.
+### Resulting Guarantees
 
-The fixed five-second shutdown window can be shorter than configured command or workflow durations. During rolling updates, accepted runs may be interrupted before Kubernetes removes and drains the pod unless termination grace and application drain behavior are coordinated.
+- A recoverable PostgreSQL or object-storage outage removes an affected API pod from service without asking Kubernetes to restart an otherwise live process.
+- Readiness is not a database/object-store transaction per kubelet request; probe pressure cannot amplify a provider outage.
+- Cold initialization is protected by startup probes, while permanent startup failures still hit a bounded failure threshold.
+- A terminating API stops advertising readiness and accepting new work, gives already accepted work a defined drain window, and records explicit interruption only when that window is exhausted.
+- Replicated proxy and execution tiers roll with no planned unavailability, receive preferred cross-node placement, and retain a disruption budget when their effective minimum scale is greater than one.
+- Docker uses the same readiness distinction and enough Compose stop grace to let the application execute its normal shutdown path.
 
-The single-backend restriction is an explicit availability limit for control-plane/editor features. It does not mean all published execution is single-replica: execution pods scale separately. Raising the backend count before removing process-local ownership would risk inconsistent latest/debugger sessions.
+### Deliberately Retained Control-Plane Boundary
 
-### Detailed Suggested Plan
+`backend.replicaCount=1` remains a validated supported constraint. This is no longer justified by web-app action history: managed web-app run ownership, replay, and cancellation are PostgreSQL-backed and execution replicas scale safely. The remaining blockers are process-local latest-debugger and co-located editor-executor session routing:
 
-#### Phase 1: Define Profile-Specific Health Contracts
+- `/ws/latest-debugger` terminates on one backend process and `maybeGetLatestWorkflowRemoteDebugger()` attaches latest executions to the debugger object in that same process.
+- `/ws/executor/internal` and `/ws/executor` terminate at the co-located executor selected through the singleton backend StatefulSet.
+- The backend Service and executor Service would select replicas independently if the count were raised, so accidental multi-replica deployment could split an editor/debugger session across owners.
 
-1. Keep `/livez` shallow: event loop responsive, startup completed, shutdown not terminally stuck.
-2. Add `/readyz` with checks selected by runtime profile:
-   - backend/control: compatible schema, settings snapshot loaded, required database connectivity, and control-plane initialization complete;
-   - execution: compatible schema, artifact-store access required for published execution, runtime-library readiness, and WebSocket gateway acceptance state;
-   - combined: union of the responsibilities above.
-3. Do not perform expensive object-store/database operations on every probe. Refresh dependency state periodically with strict timeouts and expose the cached result plus age.
-4. Add `startupProbe` so migrations, cache hydration, or initial object-store checks do not trigger liveness restarts.
-5. Expose structured reason codes and metrics for not-ready/degraded states without leaking connection strings or secrets.
+The chart therefore rejects backend scaling and backend HPA instead of exposing a topology that appears highly available but loses stateful sessions. Future backend HA should:
 
-#### Phase 2: Coordinate Shutdown and Placement
+1. Give latest-debugger and editor-executor sessions durable/distributed ownership, or route every related HTTP/WebSocket operation to one stable fenced owner.
+2. Define reconnect and takeover semantics, including fencing so a stale owner cannot emit after replacement.
+3. Exercise editor execution, latest workflow/web-app debugging, project save, settings update, and owner loss with at least two backend replicas.
+4. Remove the Helm singleton guard only after those tests pass.
 
-1. Make application drain timeout configurable and align `terminationGracePeriodSeconds` to exceed it plus recording flush and network-close margin.
-2. Mark readiness false immediately on SIGTERM, then drain new WebSocket/action acceptance before closing listeners.
-3. Add a small `preStop` delay only if endpoint propagation measurements show it is needed; do not use it as a substitute for readiness-first drain.
-4. Add PodDisruptionBudgets for workloads with more than one replica. Avoid a backend PDB that falsely implies HA while replicas are fixed at one.
-5. Add preferred topology spread/anti-affinity defaults, with configurable strictness for small clusters.
-6. Set and test an explicit rolling-update strategy (`maxUnavailable` and `maxSurge`) per workload.
+### Operational Risks and Tuning
 
-#### Phase 3: Remove the Single-Backend Constraint Deliberately
+- Too-short dependency timeouts or stale thresholds can flap readiness during ordinary provider latency. Tune `lifecycle.health` from observed PostgreSQL/S3 latency, while keeping stale-after greater than refresh plus timeout.
+- A provider-wide outage can make every execution replica unready because those dependencies are genuinely required. Liveness remains healthy so recovery does not create a restart storm.
+- The default 120-second drain improves completion probability but lengthens a rollout or node drain when work is slow. Increase or decrease it together with `terminationGracePeriodSeconds`, never independently.
+- The five-second pre-stop delay is endpoint-propagation margin, not the drain mechanism. The application still marks itself draining on the subsequent termination signal.
+- A PDB can delay voluntary maintenance when capacity is low. It is intentionally omitted for singleton workloads and configurable for replicated tiers.
+- Preferred topology rules improve placement without making a small single-node rehearsal cluster unschedulable. Changing them to hard constraints requires matching cluster capacity.
+- Health check timeouts abort the supported PostgreSQL and S3 probe operations. PostgreSQL acquisition and S3 transport waits have longer fixed bounds than the default three-second health wait, so a saturated pool or non-cooperative provider can retain one deduplicated operation briefly after readiness has failed, but cannot accumulate an unbounded probe pileup.
+- Managed object-storage readiness uses `HeadBucket`. Least-privilege credentials must include the provider's bucket-metadata permission (commonly `s3:ListBucket` on AWS S3) as well as ordinary object access, or pods will correctly remain unready even if some object operations happen to work.
 
-1. Inventory every process-local backend owner: active latest/debugger sessions, preview/open-project coordination, caches, and any background maintenance loops.
-2. Move authoritative state to PostgreSQL/object storage or introduce leases/leader election for singleton work.
-3. Define stable routing or reconnect semantics for stateful WebSockets; never rely on accidental service affinity.
-4. Add fencing tokens to leased work so a paused old leader cannot write after a new leader takes ownership.
-5. Only then remove the `backend.replicaCount == 1` validation and test two or more backend replicas.
+### Automated Coverage and Remaining Acceptance
 
-#### Rollout Sequence
-
-1. Ship observability-only dependency state.
-2. Add startup and readiness probes in warning mode/staging, tune timeouts, then enforce readiness.
-3. Align graceful termination and rolling strategy.
-4. Add disruption and topology policies.
-5. Resolve process-local ownership and finally enable backend scaling.
-
-### Risks of Fixing
-
-- Making a shared dependency a hard readiness check can remove every pod simultaneously during a provider outage. Required versus optional/degraded dependencies must be explicit.
-- An overly generous startup probe can hide a permanent configuration error for too long; failures still need a bounded deadline and clear events.
-- Long termination grace slows deployments and node drains. It must be based on measured run durations and cancellation semantics.
-- A strict PDB can block voluntary maintenance when capacity is already low.
-- Required anti-affinity can make small clusters unschedulable; preferred placement is the safer default.
-- Incorrect leader election can duplicate maintenance work or lose it. Leases need fencing and idempotent jobs.
-- Sticky routing can create hot pods and is insufficient by itself for restart recovery.
-
-### Tests and Acceptance Criteria
-
-- Readiness fails for each required dependency independently and reports the correct reason; liveness remains healthy for recoverable dependency outages.
-- Startup probes tolerate the measured slowest valid initialization but eventually fail permanent misconfiguration.
-- During a rolling update, stop a pod with active HTTP and WebSocket runs; new work routes elsewhere and accepted work reaches a defined completed/cancelled/interrupted terminal state.
-- Drain a node under the configured PDB/topology policy and verify service availability.
-- With multiple execution replicas, kill the current web-app run owner and verify explicit recovery behavior rather than an endless loading state.
-- Before enabling multiple backend replicas, run editor, latest endpoint, latest debugger, project save, and settings-update concurrency scenarios.
+- [`runtime-health.test.ts`](wrapper/api/src/tests/runtime-health.test.ts) covers failure, recovery, secret exclusion, frozen cached results, refresh deduplication, drain during the initial refresh, cancellable timeout recovery, PostgreSQL probe-client destruction, and independent liveness/readiness HTTP statuses.
+- [`managed-health.test.ts`](wrapper/api/src/tests/managed-health.test.ts) covers PostgreSQL acquisition bounds, S3 connection/socket bounds, and per-client S3 agent isolation for workflow and runtime-library storage.
+- [`latest-workflow-remote-debugger.test.ts`](wrapper/api/src/tests/latest-workflow-remote-debugger.test.ts) covers disposal and safe reinitialization of the HTTP upgrade listener in addition to existing debugger routing/auth behavior.
+- [`kubernetes-contract.test.ts`](wrapper/api/src/tests/kubernetes-contract.test.ts) covers rendered probes, lifecycle values, shutdown-margin validation, rollout strategy, placement, conditional disruption budgets, and the retained backend singleton guard.
+- [`proxy-image-contract.test.ts`](wrapper/api/src/tests/proxy-image-contract.test.ts) covers Compose readiness and stop-grace contracts; both Compose topologies also pass `docker compose ... config --quiet`.
+- `npm run test` passes the complete repository gate: API build and full API suite, web-pure tests, test-style/repository checks, and Kubernetes lint/render verification. The production and development Compose topologies pass `config --quiet`, and Alpine `sh -n` validates the API entrypoint used by Linux images.
+- Problem 4 still must run a real rolling update and node drain under HTTP/WebSocket load, kill an execution-run owner, interrupt PostgreSQL/object storage, and confirm ingress endpoint propagation. Static rendering and single-process tests do not certify those cluster/provider behaviors.
 
 ## Problem 4: Add a Live Managed-Kubernetes Release Gate
 
@@ -273,7 +257,7 @@ Static rendering cannot prove runtime behavior that depends on Kubernetes schedu
 
 1. Create an ephemeral Kind cluster in CI. Keep Minikube as the documented local equivalent.
 2. Deploy PostgreSQL and MinIO (or compatible test services) and the exact images produced by the workflow.
-3. Deploy at least two proxy and two execution replicas. Backend remains one until Problem 3 is resolved.
+3. Deploy at least two proxy and two execution replicas. Keep backend at one until the retained latest-debugger/editor-executor ownership boundary is removed and separately certified.
 4. Verify that App Settings survive pod replacement and propagate across control/execution replicas without any shared app-data claim.
 5. Exercise only through the public proxy:
    - health/readiness;
@@ -332,7 +316,7 @@ Static rendering cannot prove runtime behavior that depends on Kubernetes schedu
 | All evaluation artifacts are stored in object storage.                         | Not supported; corrected. | The managed evaluation store persists its definitions and run payloads in PostgreSQL. Recording artifacts referenced by evaluation runs follow the recording store, but the evaluation store itself is not an object-store implementation. |
 | Any API replica can normally edit app settings.                                | Not supported; corrected. | Settings mutation routes are control-plane-only. Execution replicas read the PostgreSQL settings repository and receive pod-local compatibility projections; they do not share a writable settings filesystem.                              |
 | Workflow-schema startup retries protect against PostgreSQL DDL deadlocks.      | Supported, narrowly.       | The migration library serializes DDL with an advisory lock and retries only PostgreSQL `40P01`, `40001`, and `55P03`; the common query retry policy remains network-only.                                                                    |
-| A web-app coordinator listener disconnect necessarily makes the pod unhealthy. | Not supported; removed.   | The coordinator reconnects and polls. No readiness integration was found, so listener state is an observability/readiness design question rather than a confirmed outage behavior.                                                         |
+| A web-app coordinator listener disconnect necessarily makes the pod unhealthy. | Not supported; corrected. | The coordinator reconnects and polls. Readiness checks gateway acceptance and its owned PostgreSQL pool, not the optional notification channel, so a recoverable listener reconnect does not remove the pod from service. |
 | The chart currently depends on shared app-data storage.                        | No; fixed.                | App Settings are encrypted PostgreSQL rows. Backend/execution app data is pod-local `emptyDir`, proxy has no app-data mount, and a legacy PVC is optional migration-only input. |
 | `verify:kubernetes` is a live cluster test.                                    | Not supported; corrected. | It is a static Helm/template/contract gate. Manual cluster tooling exists separately.                                                                                                                                                      |
 | Current Kubernetes managed mode is definitely broken.                          | Not established.          | Static verification passes and managed stores exist. The report identifies unproven HA/operations paths and concrete design risks, not a reproduced blanket failure.                                                                       |
@@ -340,12 +324,11 @@ Static rendering cannot prove runtime behavior that depends on Kubernetes schedu
 ## Recommended Work Order
 
 1. Add `verify:kubernetes` to GitHub verification so the current static contract becomes a release gate.
-2. Add live managed smoke coverage before making larger storage or replica changes; it provides the runtime regression harness for the now-versioned schema path and later changes.
-3. Introduce profile-specific startup/readiness endpoints and align graceful termination.
-4. Exercise the implemented PostgreSQL App Settings cutover, key rotation, proxy interruption, and legacy-import rollback in the live managed smoke suite.
-5. After lifecycle/readiness and live-cluster evidence are in place, reassess whether the singleton control-plane constraint can be relaxed.
+2. Add live managed smoke coverage for the now-versioned schema, PostgreSQL App Settings, and implemented lifecycle/readiness contracts.
+3. Exercise rolling termination, execution-owner loss, node drain, provider interruption, key rotation, proxy interruption, and legacy-import rollback in that live suite.
+4. Design distributed or stably routed latest-debugger/editor-executor ownership, then certify at least two backend replicas before relaxing the singleton guard.
 
-This order now focuses on runtime evidence and lifecycle safety after the two largest architectural migrations have landed.
+This order now focuses on live runtime evidence and the one deliberately retained control-plane ownership boundary after the three architectural fixes have landed.
 
 ## Useful Verification Commands
 

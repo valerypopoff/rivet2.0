@@ -1,0 +1,23 @@
+{{- if .Values.availability.disruptionBudget.enabled }}
+{{- $root := . }}
+{{- range $component := list "proxy" "web" "execution" }}
+{{- $replicas := int (index $root.Values.replicaCount $component) }}
+{{- $autoscaling := index $root.Values.autoscaling $component }}
+{{- $minimumReplicas := ternary (int $autoscaling.minReplicas) $replicas $autoscaling.enabled }}
+{{- if gt $minimumReplicas 1 }}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ printf "%s-%s" (include "rivet.fullname" $root) $component }}
+  labels:
+    {{- include "rivet.labels" $root | nindent 4 }}
+    app.kubernetes.io/component: {{ $component }}
+spec:
+  maxUnavailable: {{ $root.Values.availability.disruptionBudget.maxUnavailable }}
+  selector:
+    matchLabels:
+      {{- include "rivet.componentLabels" (dict "root" $root "component" $component) | nindent 6 }}
+{{- end }}
+{{- end }}
+{{- end }}

@@ -1,5 +1,6 @@
 import { Pool, type PoolClient, type QueryResultRow } from 'pg';
 
+import { MANAGED_POSTGRES_CONNECTION_TIMEOUT_MS } from '../../../managed-health.js';
 import { createHttpError } from '../../../utils/httpError.js';
 import type { ManagedWorkflowStorageConfig } from '../storage-config.js';
 import { WORKFLOW_COLUMNS, splitCurrentDraftRevisionRow } from './mappers.js';
@@ -41,6 +42,7 @@ export function getManagedDbConnectionConfig(config: ManagedWorkflowStorageConfi
     keepAlive: true,
     keepAliveInitialDelayMillis: 30_000,
     idleTimeoutMillis: 30_000,
+    connectionTimeoutMillis: MANAGED_POSTGRES_CONNECTION_TIMEOUT_MS,
   };
 
   if (config.databaseSslMode === 'disable') {

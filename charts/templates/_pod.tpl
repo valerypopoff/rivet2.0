@@ -78,3 +78,59 @@ securityContext:
   mountPath: /workspace
 {{- include "rivet.pod.tmpVolumeMount" . }}
 {{- end -}}
+
+{{- define "rivet.pod.placement" -}}
+{{- $root := .root -}}
+{{- $component := .component -}}
+{{- if $root.Values.availability.topologySpread.enabled }}
+topologySpreadConstraints:
+  - maxSkew: {{ $root.Values.availability.topologySpread.maxSkew }}
+    topologyKey: {{ $root.Values.availability.topologySpread.topologyKey | quote }}
+    whenUnsatisfiable: {{ $root.Values.availability.topologySpread.whenUnsatisfiable }}
+    labelSelector:
+      matchLabels:
+        {{- include "rivet.componentLabels" (dict "root" $root "component" $component) | nindent 8 }}
+{{- end }}
+{{- if $root.Values.availability.podAntiAffinity.enabled }}
+affinity:
+  podAntiAffinity:
+    preferredDuringSchedulingIgnoredDuringExecution:
+      - weight: 100
+        podAffinityTerm:
+          topologyKey: {{ $root.Values.availability.podAntiAffinity.topologyKey | quote }}
+          labelSelector:
+            matchLabels:
+              {{- include "rivet.componentLabels" (dict "root" $root "component" $component) | nindent 14 }}
+{{- end }}
+{{- end -}}
+
+{{- define "rivet.pod.apiProbes" -}}
+startupProbe:
+  httpGet:
+    path: /livez
+    port: {{ .port }}
+  periodSeconds: {{ .root.Values.lifecycle.probes.startup.periodSeconds }}
+  timeoutSeconds: {{ .root.Values.lifecycle.probes.startup.timeoutSeconds }}
+  failureThreshold: {{ .root.Values.lifecycle.probes.startup.failureThreshold }}
+livenessProbe:
+  httpGet:
+    path: /livez
+    port: {{ .port }}
+  periodSeconds: {{ .root.Values.lifecycle.probes.liveness.periodSeconds }}
+  timeoutSeconds: {{ .root.Values.lifecycle.probes.liveness.timeoutSeconds }}
+  failureThreshold: {{ .root.Values.lifecycle.probes.liveness.failureThreshold }}
+readinessProbe:
+  httpGet:
+    path: /readyz
+    port: {{ .port }}
+  periodSeconds: {{ .root.Values.lifecycle.probes.readiness.periodSeconds }}
+  timeoutSeconds: {{ .root.Values.lifecycle.probes.readiness.timeoutSeconds }}
+  failureThreshold: {{ .root.Values.lifecycle.probes.readiness.failureThreshold }}
+{{- end -}}
+
+{{- define "rivet.pod.preStop" -}}
+lifecycle:
+  preStop:
+    exec:
+      command: ["/bin/sh", "-c", {{ printf "sleep %v" .Values.lifecycle.preStopDelaySeconds | quote }}]
+{{- end -}}

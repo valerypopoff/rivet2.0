@@ -169,6 +169,14 @@
   value: {{ .jobWorkerEnabled | quote }}
 - name: RIVET_DEPLOYMENT_MANAGED_WORKFLOW_SCHEMA_MODE
   value: verify
+- name: RIVET_DEPLOYMENT_HEALTH_REFRESH_SECONDS
+  value: {{ $root.Values.lifecycle.health.refreshSeconds | quote }}
+- name: RIVET_DEPLOYMENT_HEALTH_CHECK_TIMEOUT_SECONDS
+  value: {{ $root.Values.lifecycle.health.checkTimeoutSeconds | quote }}
+- name: RIVET_DEPLOYMENT_HEALTH_STALE_AFTER_SECONDS
+  value: {{ $root.Values.lifecycle.health.staleAfterSeconds | quote }}
+- name: RIVET_DEPLOYMENT_SHUTDOWN_GRACE_SECONDS
+  value: {{ $root.Values.lifecycle.shutdownGraceSeconds | quote }}
 {{ include "rivet.env.appSettings" $root }}
 {{ include "rivet.env.authKey" $root }}
 {{ include "rivet.env.globalValues" $root }}

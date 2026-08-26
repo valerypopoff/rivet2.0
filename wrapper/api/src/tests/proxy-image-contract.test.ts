@@ -301,6 +301,8 @@ test('API images and launchers use the filtered Rivet source context and symlink
   const apiTsconfig = readRepoFile('wrapper/api/tsconfig.json');
   const preserveSymlinksRunner = readRepoFile('scripts/run-preserve-symlinks.mjs');
 
+  assert.doesNotMatch(apiEntrypoint, /\r/, 'API entrypoint must keep Unix LF line endings');
+
   for (const dockerfile of [apiDockerfile, composeApiDockerfile]) {
     assert.match(dockerfile, /COPY --from=rivet_dependency_metadata \. rivet\//);
     assert.match(dockerfile, /COPY --from=rivet_source \. \/app\/rivet\//);
@@ -354,6 +356,11 @@ test('API images and launchers use the filtered Rivet source context and symlink
     apiEntrypoint,
     /deployment_managed_workflow_schema_mode="\$\{RIVET_DEPLOYMENT_MANAGED_WORKFLOW_SCHEMA_MODE:-\}"[\s\S]*load_optional_dotenv \/vault\/dotenv[\s\S]*RIVET_MANAGED_WORKFLOW_SCHEMA_MODE="\$deployment_managed_workflow_schema_mode"/,
   );
+  assert.match(
+    apiEntrypoint,
+    /deployment_health_refresh_seconds="\$\{RIVET_DEPLOYMENT_HEALTH_REFRESH_SECONDS:-\}"[\s\S]*load_optional_dotenv \/vault\/dotenv[\s\S]*apply_deployment_lifecycle_value RIVET_HEALTH_REFRESH_SECONDS "\$deployment_health_refresh_seconds"/,
+  );
+  assert.match(apiEntrypoint, /apply_deployment_lifecycle_value RIVET_SHUTDOWN_GRACE_SECONDS "\$deployment_shutdown_grace_seconds"/);
   assert.match(apiEntrypoint, /exec node --preserve-symlinks \/app\/wrapper\/api\/dist\/api\/src\/server\.js/);
   assert.match(composeApiDockerfile, /node --preserve-symlinks dist\/api\/src\/server\.js/);
 
@@ -388,6 +395,10 @@ test('API images and launchers use the filtered Rivet source context and symlink
   assert.match(prodCompose, /api:[\s\S]*healthcheck:[\s\S]*retries: 12/);
   assert.match(devCompose, /api:[\s\S]*healthcheck:[\s\S]*start_period: 360s/);
   assert.match(devCompose, /api:[\s\S]*healthcheck:[\s\S]*retries: 12/);
+  for (const compose of [prodCompose, devCompose]) {
+    assert.match(compose, /api:[\s\S]*healthcheck:[\s\S]*\/readyz/);
+    assert.match(compose, /api:[\s\S]*stop_grace_period: 150s/);
+  }
   assert.match(devDockerLauncher, /prepareRivetDockerContext\(rootDir, mergedEnv\)/);
   assert.match(devDockerLauncher, /readDockerWaitTimeoutSeconds/);
   assert.match(prodDockerLauncher, /readDockerWaitTimeoutSeconds/);

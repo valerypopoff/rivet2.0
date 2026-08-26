@@ -1,5 +1,7 @@
 import type { Request, Response } from 'express';
 
+import type { RuntimeHealthCheckContext } from '../runtime-health.js';
+
 import type {
   RuntimeLibrariesState,
   RuntimeLibraryReplicaCleanupResult,
@@ -12,6 +14,7 @@ import { ManagedRuntimeLibrariesBackend } from './managed/backend.js';
 
 export interface RuntimeLibrariesBackend {
   initialize(): Promise<void>;
+  checkHealth?(context?: RuntimeHealthCheckContext): Promise<void>;
   prepareForExecution(): Promise<void>;
   getState(): Promise<RuntimeLibrariesState>;
   enqueueInstall(packages: RuntimeLibraryPackageSpec[]): Promise<RuntimeLibraryJobState>;
@@ -39,6 +42,12 @@ export function getRuntimeLibrariesBackend(): RuntimeLibrariesBackend {
 
 export async function initializeRuntimeLibrariesBackend(): Promise<void> {
   await getRuntimeLibrariesBackend().initialize();
+}
+
+export async function checkRuntimeLibrariesHealth(context?: RuntimeHealthCheckContext): Promise<void> {
+  if (!process.env.RIVET_RUNTIME_LIBRARIES_ROOT?.trim()) return;
+  const backend = getRuntimeLibrariesBackend();
+  await backend.checkHealth?.(context);
 }
 
 export async function prepareRuntimeLibrariesForExecution(): Promise<void> {

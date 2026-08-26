@@ -95,6 +95,45 @@ workflowSchema:
     backoffLimit: 2
     activeDeadlineSeconds: 600
 
+lifecycle:
+  health:
+    refreshSeconds: 5
+    checkTimeoutSeconds: 3
+    staleAfterSeconds: 20
+  shutdownGraceSeconds: 120
+  terminationGracePeriodSeconds: 150
+  preStopDelaySeconds: 5
+  probes:
+    startup:
+      periodSeconds: 5
+      timeoutSeconds: 2
+      failureThreshold: 60
+    liveness:
+      periodSeconds: 20
+      timeoutSeconds: 2
+      failureThreshold: 3
+    readiness:
+      periodSeconds: 5
+      timeoutSeconds: 2
+      failureThreshold: 2
+
+rollout:
+  maxUnavailable: 0
+  maxSurge: 1
+
+availability:
+  disruptionBudget:
+    enabled: true
+    maxUnavailable: 1
+  topologySpread:
+    enabled: true
+    maxSkew: 1
+    topologyKey: kubernetes.io/hostname
+    whenUnsatisfiable: ScheduleAnyway
+  podAntiAffinity:
+    enabled: true
+    topologyKey: kubernetes.io/hostname
+
 runtimeLibraries:
   backend: managed
   objectStoragePrefix: runtime-libraries/
