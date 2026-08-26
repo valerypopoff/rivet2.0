@@ -434,6 +434,7 @@ test('API images and launchers use the filtered Rivet source context and symlink
 
 test('CI and production launchers publish and run the Rivet 2 wrapper image set', () => {
   const imageBuildWorkflow = readRepoFile('.github/workflows/build-images.yml');
+  const developVerificationWorkflow = readRepoFile('.github/workflows/verify-develop.yml');
   const bootstrapRivet = readRepoFile('scripts/bootstrap-rivet.mjs');
   const ensureDevDeps = readRepoFile('scripts/ensure-dev-deps.mjs');
   const webDockerfile = readRepoFile('image/web/Dockerfile');
@@ -456,7 +457,15 @@ test('CI and production launchers publish and run the Rivet 2 wrapper image set'
   const legacyRepoPattern = new RegExp('Iron' + 'clad\\/rivet');
   const legacyImageNamespacePattern = new RegExp('cloud-hosted-' + 'rivet-wrapper');
 
-  assert.match(imageBuildWorkflow, /branches:\s*\n\s*- develop-rivet2\s*\n\s*- main-rivet2/);
+  const imagePushBranches = /on:\s*\n\s*push:\s*\n\s*branches:\s*\n((?:\s*-\s+[^\n]+\n?)+)/.exec(imageBuildWorkflow)?.[1] ?? '';
+  const developPushBranches = /on:\s*\n\s*push:\s*\n\s*branches:\s*\n((?:\s*-\s+[^\n]+\n?)+)/.exec(developVerificationWorkflow)?.[1] ?? '';
+  assert.equal(imagePushBranches.trim(), '- main-rivet2');
+  assert.equal(developPushBranches.trim(), '- develop-rivet2');
+  assert.match(developVerificationWorkflow, /node-version: 20/);
+  assert.match(developVerificationWorkflow, /^\s*run: npm run setup:k8s-tools\s*$/m);
+  assert.match(developVerificationWorkflow, /^\s*run: npm run test\s*$/m);
+  assert.doesNotMatch(developVerificationWorkflow, /^\s*run: npm run setup(?::rivet)?\s*$/m);
+  assert.doesNotMatch(developVerificationWorkflow, /docker\/(build-push|login|metadata)-action|kind create cluster|ghcr\.io/);
   assert.ok(imageBuildWorkflow.includes('RIVET_REPO_URL: https://github.com/valerypopoff/rivet2.0.git'));
   assert.ok(imageBuildWorkflow.includes('RIVET_REPO_REF: main'));
   for (const actionRef of [

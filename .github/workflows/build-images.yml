@@ -3,7 +3,6 @@ name: Build Images
 on:
   push:
     branches:
-      - develop-rivet2
       - main-rivet2
     tags:
       - 'v*'
