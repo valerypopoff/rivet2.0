@@ -9,7 +9,7 @@ See also: [Wrapper ManagedCodeRunner Speed Plan](./wrapper-managed-code-runner-s
 - `npm run setup`
   - ensures `wrapper/api` and `wrapper/web` dependencies exist
   - clones `rivet/` from the configured Rivet 2 repo if it is missing
-  - installs upstream Yarn dependencies and builds `@valerypopoff/rivet2-core`, `@valerypopoff/rivet2-node`, and `@valerypopoff/rivet2-evaluations` when needed; wrapper-owned snapshots use `YARN_NODE_LINKER=node-modules`, while a symlink/junction to an external checkout preserves that checkout's configured Yarn linker
+  - installs upstream Yarn dependencies and builds `@valerypopoff/rivet2-core`, `@valerypopoff/rivet2-node`, and `@valerypopoff/rivet2-evaluations` when needed; wrapper-owned snapshots use `YARN_NODE_LINKER=node-modules` consistently for both installation and package builds, while a symlink/junction to an external checkout preserves that checkout's configured Yarn linker
   - verifies the vendored Rivet workspace dependencies inside `rivet/node_modules`; an external PnP checkout instead uses its own `.pnp.cjs` plus Yarn install-state and is never converted to a physical `node_modules` install by wrapper setup
   - links `wrapper/api/node_modules/@valerypopoff/rivet2-core`, `@valerypopoff/rivet2-node`, `@valerypopoff/rivet2-evaluations`, and Rivet 2's `@rivet2/*` runtime aliases to generated package overlays under `wrapper/api/node_modules/.rivet-package-links`; those overlays point `dist` at the built packages under `rivet/` and build a generated dependency overlay from installed `rivet/`, API, and web package dependencies
   - removes retired generated API package links from older setup runs before writing the current Rivet 2 package links

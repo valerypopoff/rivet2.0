@@ -179,6 +179,7 @@ function ensureRivetRepo() {
 }
 
 ensureRivetRepo();
+const rivetYarnEnvironment = getRivetYarnEnvironment(rootDir, rivetDir);
 
 const needsApiDeps = !exists('wrapper/api/node_modules/.bin/tsx');
 const needsWebDeps =
@@ -229,24 +230,24 @@ if (needsWebDeps) {
 if (needsRivetDeps) {
   console.log('[predev] Installing rivet dependencies with Yarn via Corepack');
   run(corepackCmd, ['yarn', 'install', '--immutable'], rivetDir, {
-    ...getRivetYarnEnvironment(rootDir, rivetDir),
+    ...rivetYarnEnvironment,
     YARN_CHECKSUM_BEHAVIOR: 'ignore',
   });
 }
 
 if (needsRivetCoreBuild) {
   console.log('[predev] Building @valerypopoff/rivet2-core');
-  run(corepackCmd, ['yarn', 'workspace', '@valerypopoff/rivet2-core', 'run', 'build'], path.join(rootDir, 'rivet'));
+  run(corepackCmd, ['yarn', 'workspace', '@valerypopoff/rivet2-core', 'run', 'build'], rivetDir, rivetYarnEnvironment);
 }
 
 if (needsRivetNodeBuild) {
   console.log('[predev] Building @valerypopoff/rivet2-node');
-  run(corepackCmd, ['yarn', 'workspace', '@valerypopoff/rivet2-node', 'run', 'build'], path.join(rootDir, 'rivet'));
+  run(corepackCmd, ['yarn', 'workspace', '@valerypopoff/rivet2-node', 'run', 'build'], rivetDir, rivetYarnEnvironment);
 }
 
 if (needsRivetEvaluationsBuild) {
   console.log('[predev] Building @valerypopoff/rivet2-evaluations');
-  run(corepackCmd, ['yarn', 'workspace', '@valerypopoff/rivet2-evaluations', 'run', 'build'], path.join(rootDir, 'rivet'));
+  run(corepackCmd, ['yarn', 'workspace', '@valerypopoff/rivet2-evaluations', 'run', 'build'], rivetDir, rivetYarnEnvironment);
 }
 
 if (needsApiRivetLinks || needsApiDeps || needsRivetCoreBuild || needsRivetNodeBuild || needsRivetEvaluationsBuild) {

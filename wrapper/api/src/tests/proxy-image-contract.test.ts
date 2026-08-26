@@ -341,7 +341,13 @@ test('API images and launchers use the filtered Rivet source context and symlink
   assert.match(linkScript, /linkDependencyEntriesFromRoot\(dependencyRoot, destinationNodeModulesDir, skippedPackageNames\)/);
   assert.match(ensureDevDeps, /hasExpectedApiRivetLink\('rivet-core', 'rivet\/packages\/core', \[/);
   assert.match(ensureDevDeps, /hasExpectedApiRivetLink\('rivet-node', 'rivet\/packages\/node', \[/);
-  assert.match(ensureDevDeps, /getRivetYarnEnvironment\(rootDir, rivetDir\)/);
+  assert.match(ensureDevDeps, /const rivetYarnEnvironment = getRivetYarnEnvironment\(rootDir, rivetDir\);/);
+  for (const packageName of ['rivet2-core', 'rivet2-node', 'rivet2-evaluations']) {
+    assert.match(
+      ensureDevDeps,
+      new RegExp(`@valerypopoff/${packageName}', 'run', 'build'\\], rivetDir, rivetYarnEnvironment\\);`),
+    );
+  }
   assert.match(ensureRivetRuntimeBuild, /getRivetYarnEnvironment\(rootDir, rivetRootDir\)/);
   assert.match(localDependencyPolicy, /isExternalRivetWorkspace/);
   assert.match(localDependencyPolicy, /YARN_NODE_LINKER: 'node-modules'/);
