@@ -63,6 +63,7 @@
     "predev:local": "node scripts/ensure-dev-deps.mjs",
     "dev:local:api": "node scripts/run-with-env.mjs \"npm --prefix wrapper/api run dev\"",
     "dev:local:web": "node scripts/run-with-env.mjs \"npm --prefix wrapper/web run dev\"",
-    "dev:local:executor": "node scripts/run-with-env.mjs \"corepack yarn --cwd rivet tsx watch --inspect=9228 ../wrapper/executor/src/executor.mts\""
+    "predev:local:executor": "node scripts/ensure-dev-deps.mjs",
+    "dev:local:executor": "node scripts/run-with-env.mjs \"node scripts/run-rivet-yarn.mjs tsx watch --inspect=9228 ../wrapper/executor/src/executor.mts\""
   }
 }

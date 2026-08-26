@@ -290,13 +290,16 @@ test('API images and launchers use the filtered Rivet source context and symlink
   const prodCompose = readRepoFile('ops/compose/docker-compose.yml');
   const devCompose = readRepoFile('ops/compose/docker-compose.dev.yml');
   const devDockerLauncher = readRepoFile('scripts/dev-docker.mjs');
+  const devLocalLauncher = readRepoFile('scripts/dev.mjs');
   const prodDockerLauncher = readRepoFile('scripts/prod-docker.mjs');
   const dockerLauncherHelper = readRepoFile('scripts/lib/docker-launcher.mjs');
   const rivetContextHelper = readRepoFile('scripts/lib/rivet-source-context.mjs');
   const ensureRivetRuntimeBuild = readRepoFile('scripts/ensure-rivet-runtime-build.mjs');
   const linkScript = readRepoFile('scripts/link-rivet-node-package.mjs');
   const ensureDevDeps = readRepoFile('scripts/ensure-dev-deps.mjs');
+  const runRivetYarn = readRepoFile('scripts/run-rivet-yarn.mjs');
   const localDependencyPolicy = readRepoFile('scripts/lib/rivet-local-dependencies.mjs');
+  const rootPackageJson = readRepoJson<{ scripts: Record<string, string> }>('package.json');
   const apiPackageJson = readRepoFile('wrapper/api/package.json');
   const apiTsconfig = readRepoFile('wrapper/api/tsconfig.json');
   const preserveSymlinksRunner = readRepoFile('scripts/run-preserve-symlinks.mjs');
@@ -349,6 +352,12 @@ test('API images and launchers use the filtered Rivet source context and symlink
     );
   }
   assert.match(ensureRivetRuntimeBuild, /getRivetYarnEnvironment\(rootDir, rivetRootDir\)/);
+  assert.match(runRivetYarn, /getRivetYarnEnvironment\(rootDir, rivetDir\)/);
+  assert.match(runRivetYarn, /\['yarn', '--cwd', rivetDir, \.\.\.args\]/);
+  assert.match(runRivetYarn, /shell: process\.platform === 'win32'/);
+  assert.match(rootPackageJson.scripts['predev:local:executor'], /ensure-dev-deps/);
+  assert.match(rootPackageJson.scripts['dev:local:executor'], /node scripts\/run-rivet-yarn\.mjs/);
+  assert.match(devLocalLauncher, /node scripts\/run-rivet-yarn\.mjs tsx watch/);
   assert.match(localDependencyPolicy, /isExternalRivetWorkspace/);
   assert.match(localDependencyPolicy, /YARN_NODE_LINKER: 'node-modules'/);
   assert.match(ensureDevDeps, /'\.rivet-dependency-overlay'/);
