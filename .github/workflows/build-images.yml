@@ -326,9 +326,6 @@ jobs:
       RIVET_K8S_PROVIDER_GATE_CONTEXT: ${{ vars.RIVET_K8S_STAGING_CONTEXT }}
       RIVET_K8S_PROVIDER_GATE_ALLOW_CONTEXT: ${{ vars.RIVET_K8S_STAGING_CONTEXT }}
       RIVET_K8S_PROVIDER_GATE_CONFIRM: deploy-staging
-      KUBECONFIG: ${{ runner.temp }}/rivet-managed-staging.kubeconfig
-      RIVET_K8S_PROVIDER_GATE_CONFIG_FILE: ${{ runner.temp }}/rivet-managed-provider-gate.json
-      RIVET_K8S_PROVIDER_GATE_VALUES_FILE: ${{ runner.temp }}/rivet-managed-provider-values.yaml
       RIVET_K8S_PROVIDER_GATE_REGISTRY_SERVER: ghcr.io
       RIVET_K8S_PROVIDER_GATE_REGISTRY_USERNAME: ${{ github.actor }}
       RIVET_K8S_PROVIDER_GATE_REGISTRY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
@@ -346,6 +343,16 @@ jobs:
 
       - name: Set Up Kubernetes Tools
         run: npm run setup:k8s-tools
+
+      - name: Define Protected Staging File Paths
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            echo "KUBECONFIG=$RUNNER_TEMP/rivet-managed-staging.kubeconfig"
+            echo "RIVET_K8S_PROVIDER_GATE_CONFIG_FILE=$RUNNER_TEMP/rivet-managed-provider-gate.json"
+            echo "RIVET_K8S_PROVIDER_GATE_VALUES_FILE=$RUNNER_TEMP/rivet-managed-provider-values.yaml"
+          } >> "$GITHUB_ENV"
 
       - name: Restore Protected Staging Configuration
         shell: bash

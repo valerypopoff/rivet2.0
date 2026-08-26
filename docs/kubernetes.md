@@ -151,7 +151,7 @@ Create the GitHub environment `rivet-managed-staging`, require the appropriate a
 - environment secrets `RIVET_K8S_STAGING_KUBECONFIG_B64`, `RIVET_K8S_STAGING_VALUES_B64`, and `RIVET_K8S_STAGING_CONFIG_B64` as base64-encoded kubeconfig, Helm values, and gate configuration respectively; and, when outage drills are configured, `RIVET_K8S_STAGING_INTERRUPTION_MANIFESTS_TGZ_B64` as a base64-encoded gzip tarball of the referenced NetworkPolicy manifests;
 - a protected job token with `packages: write`, plus GHCR package policy that permits the staging cluster to pull the immutable candidate images.
 
-The values file remains an environment-owned Helm overlay. It should reference existing Secrets or Vault paths, not contain plaintext production credentials. The gate configuration is also restored only into the GitHub runner temporary directory and is never uploaded. Its shape is:
+The values file remains an environment-owned Helm overlay. It should reference existing Secrets or Vault paths, not contain plaintext production credentials. The workflow creates the protected file paths from `RUNNER_TEMP` in a shell step after the job starts, because GitHub does not expose `runner.temp` in job-level expressions. The gate configuration is restored only into that runner temporary directory and is never uploaded. Its shape is:
 
 ```json
 {

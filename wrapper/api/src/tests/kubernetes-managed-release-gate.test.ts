@@ -379,6 +379,12 @@ test("provider staging gate preserves secret inputs outside uploaded artifacts",
   assert.match(workflow, /managed-kubernetes-provider-gate:/);
   assert.match(workflow, /timeout-minutes: 180/);
   assert.match(workflow, /environment:\r?\n\s+name: rivet-managed-staging/);
+  assert.doesNotMatch(workflow, /\$\{\{\s*runner\.temp\s*\}\}/);
+  assert.match(workflow, /Define Protected Staging File Paths/);
+  assert.match(
+    workflow,
+    /echo "KUBECONFIG=\$RUNNER_TEMP\/rivet-managed-staging\.kubeconfig"/,
+  );
   assert.match(workflow, /RIVET_K8S_STAGING_KUBECONFIG_B64/);
   assert.match(workflow, /must not contain symbolic or hard links/);
   assert.match(workflow, /artifacts\/kubernetes-managed-provider-gate/);
