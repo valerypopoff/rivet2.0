@@ -1,0 +1,54 @@
+# Disposable managed-mode values for scripts/kubernetes-managed-release-gate.mjs.
+# The runner supplies generated namespace-specific secrets and immutable candidate
+# image digests. Do not use this overlay as a production deployment template.
+fullnameOverride: rivet-managed-release
+
+replicaCount:
+  proxy: 2
+  web: 1
+  backend: 1
+  execution: 2
+
+autoscaling:
+  proxy:
+    enabled: false
+  web:
+    enabled: false
+  backend:
+    enabled: false
+  execution:
+    enabled: false
+
+vault:
+  enabled: false
+
+workflowStorage:
+  backend: managed
+
+runtimeLibraries:
+  backend: managed
+
+appSettings:
+  backend: postgres
+
+postgres:
+  mode: managed
+  sslMode: disable
+
+objectStorage:
+  region: us-east-1
+  forcePathStyle: true
+
+env:
+  RIVET_PUBLISHED_WORKFLOWS_BASE_PATH: /workflows
+  RIVET_LATEST_WORKFLOWS_BASE_PATH: /workflows-latest
+  RIVET_PUBLISHED_APPS_BASE_PATH: /apps
+  RIVET_LATEST_APPS_BASE_PATH: /apps-latest
+  RIVET_WEB_APPS_BASE_PATH: /apps
+  RIVET_LATEST_WEB_APPS_BASE_PATH: /apps-latest
+  RIVET_PROXY_RESOLVER: kube-dns.kube-system.svc.cluster.local
+  RIVET_CORS_ALLOWED_ORIGINS: ""
+  RIVET_SERVER_UI_AUTH_MODE: none
+  RIVET_REQUIRE_UI_GATE_KEY: "false"
+  RIVET_TRUST_INCOMING_FORWARDED_HEADERS: "false"
+  RIVET_RECORDINGS_ENABLED: "true"

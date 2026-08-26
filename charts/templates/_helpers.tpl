@@ -72,8 +72,12 @@ app.kubernetes.io/component: {{ .component }}
 {{- end -}}
 
 {{- define "rivet.image" -}}
+{{- if .image.digest -}}
+{{- printf "%s@%s" .image.repository .image.digest -}}
+{{- else -}}
 {{- $tag := default .root.Chart.AppVersion .image.tag -}}
 {{- printf "%s:%s" .image.repository $tag -}}
+{{- end -}}
 {{- end -}}
 
 {{- define "rivet.vaultBaseAnnotations" -}}

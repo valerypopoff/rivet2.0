@@ -6,18 +6,23 @@ images:
   proxy:
     repository: example.invalid/rivet/proxy
     tag: latest
+    # Set digest to pin an exact OCI manifest. It takes precedence over tag.
+    digest: ""
     pullPolicy: IfNotPresent
   web:
     repository: example.invalid/rivet/web
     tag: latest
+    digest: ""
     pullPolicy: IfNotPresent
   api:
     repository: example.invalid/rivet/api
     tag: latest
+    digest: ""
     pullPolicy: IfNotPresent
   executor:
     repository: example.invalid/rivet/executor
     tag: latest
+    digest: ""
     pullPolicy: IfNotPresent
 
 replicaCount:

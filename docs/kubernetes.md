@@ -106,6 +106,40 @@ The local overlay at [charts/overlays/local-kubernetes.yaml](../charts/overlays/
 
 Managed runtime-library startup now serializes its shared Postgres schema initialization behind a PostgreSQL advisory lock. That avoids first-boot deadlocks when the control-plane API and execution/editor processes start against the same managed database at the same time.
 
+## Managed Release Gate
+
+`npm run verify:kubernetes` is the fast deterministic gate. It renders and validates the chart plus Kubernetes contracts, but it does not start a cluster.
+
+The image workflow now also runs a disposable live managed-mode gate before it promotes public tags. It creates a three-node Kind cluster, starts isolated PostgreSQL and MinIO dependencies, installs the real chart with the exact OCI digest for every candidate image, and accesses the app only through the proxy. The smoke suite verifies:
+
+- singleton backend plus two proxy and two execution replicas;
+- Helm schema migration, managed PostgreSQL App Settings with execution-runtime propagation through a replacement pod, and managed object storage;
+- published/latest workflow requests;
+- published/latest web-app HTML and HTTP actions;
+- a web-app WebSocket action;
+- recordings, replay-project retrieval, and the statistics catalog;
+- persistence after backend and execution-pod replacement.
+
+A weekly scheduled run, or the `run_managed_kubernetes_disruption` workflow-dispatch input, adds a proxy rollout and an execution-node drain. Each run uploads non-secret manifests, Kubernetes events, pod descriptions, and logs. Generated credentials are supplied only to Kubernetes and are never placed in artifacts.
+
+For a deliberate local run, first create the disposable Kind topology and then provide the exact candidate image repositories and digests. The runner will refuse to run unless both context variables exactly match the active context; it also deletes only a namespace carrying its own ownership label.
+
+```bash
+kind create cluster --name rivet-managed-release --config scripts/kind-managed-release-cluster.yaml
+export RIVET_K8S_RELEASE_GATE_CONTEXT=kind-rivet-managed-release
+export RIVET_K8S_RELEASE_GATE_ALLOW_CONTEXT=kind-rivet-managed-release
+export RIVET_K8S_RELEASE_GATE_PROXY_IMAGE_REPOSITORY=ghcr.io/<owner>/<repo>/proxy
+export RIVET_K8S_RELEASE_GATE_PROXY_IMAGE_DIGEST=sha256:<digest>
+# Set the corresponding WEB, API, and EXECUTOR repository/digest variables too.
+export RIVET_K8S_RELEASE_GATE_REGISTRY_USERNAME=<registry-user>
+export RIVET_K8S_RELEASE_GATE_REGISTRY_PASSWORD=<registry-token>
+npm run verify:kubernetes:managed-live
+```
+
+Use `npm run verify:kubernetes:managed-disruption` only against this disposable Kind context. Set `RIVET_K8S_RELEASE_GATE_KEEP_NAMESPACE=true` when investigating a failure; otherwise the owned namespace is removed after artifacts are collected.
+
+This gate proves the repository's chart/runtime interaction on Kind. It does not replace staging certification against the real managed PostgreSQL service, object store, ingress controller, TLS, DNS, and network policies used by production.
+
 ## Managed workflow schema migrations
 
 Managed workflow DDL is versioned and serialized separately from ordinary API startup:
@@ -278,16 +312,16 @@ imagePullSecrets:
 images:
   proxy:
     repository: ghcr.io/valerypopoff/cloud-hosted-rivet2-wrapper/proxy
-    tag: <published-tag>
+    tag: <published-tag> # Or set digest: sha256:<immutable-manifest>.
   web:
     repository: ghcr.io/valerypopoff/cloud-hosted-rivet2-wrapper/web
-    tag: <published-tag>
+    tag: <published-tag> # Or set digest: sha256:<immutable-manifest>.
   api:
     repository: ghcr.io/valerypopoff/cloud-hosted-rivet2-wrapper/api
-    tag: <published-tag>
+    tag: <published-tag> # Or set digest: sha256:<immutable-manifest>.
   executor:
     repository: ghcr.io/valerypopoff/cloud-hosted-rivet2-wrapper/executor
-    tag: <published-tag>
+    tag: <published-tag> # Or set digest: sha256:<immutable-manifest>.
 
 ingress:
   enabled: true
@@ -338,12 +372,6 @@ auth:
   # If Vault is disabled, set keySecretName/keySecretKey.
   # If Vault is enabled, /vault/dotenv may provide RIVET_KEY instead.
   keySecretName: ""
-
-storage:
-  appData:
-    enabled: true
-    size: 20Gi
-    storageClassName: <storage-class>
 
 resources:
   proxy:

@@ -6,7 +6,15 @@ on:
       - main-rivet2
     tags:
       - 'v*'
+  schedule:
+    - cron: '17 3 * * 2'
   workflow_dispatch:
+    inputs:
+      run_managed_kubernetes_disruption:
+        description: Run the slower managed Kubernetes disruption scenarios after the smoke gate.
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -37,9 +45,17 @@ jobs:
       - name: Verify Repo Structure
         run: npm run verify:repo-structure
 
+      - name: Install API Test Dependencies
+        run: npm ci --prefix wrapper/api
+
+      - name: Set Up Kubernetes Tools
+        run: npm run setup:k8s-tools
+
+      - name: Verify Kubernetes Contracts
+        run: npm run verify:kubernetes
+
       - name: Verify Test Style
         run: npm run verify:test-style
-
   resolve-rivet:
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -202,10 +218,100 @@ jobs:
           cache-from: type=gha,scope=${{ matrix.service }}
           cache-to: type=gha,mode=max,scope=${{ matrix.service }}
 
+  managed-kubernetes-release-gate:
+    needs:
+      - resolve-rivet
+      - build-and-push
+    runs-on: ubuntu-latest
+    timeout-minutes: 55
+    env:
+      SOURCE_TAG: build-${{ github.sha }}-${{ needs.resolve-rivet.outputs.rivet_commit }}
+    steps:
+      - name: Check Out Repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Set Up Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 20
+
+      - name: Install API Test Dependencies
+        run: npm ci --prefix wrapper/api
+
+      - name: Set Up Kubernetes Tools
+        run: npm run setup:k8s-tools
+
+      - name: Install Kind
+        shell: bash
+        run: |
+          set -euo pipefail
+          go install sigs.k8s.io/kind@v0.27.0
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+
+      - name: Log In to GHCR
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Resolve Candidate Image Digests
+        shell: bash
+        run: |
+          set -euo pipefail
+          for service in proxy web api executor; do
+            image="${IMAGE_NAMESPACE}/${service}:${SOURCE_TAG}"
+            digest="$(docker buildx imagetools inspect "$image" --format '{{.Manifest.Digest}}')"
+            if [[ ! "$digest" =~ ^sha256:[a-f0-9]{64}$ ]]; then
+              echo "::error::Could not resolve immutable digest for $image: $digest"
+              exit 1
+            fi
+            upper_service="$(tr '[:lower:]' '[:upper:]' <<< "$service")"
+            echo "RIVET_K8S_RELEASE_GATE_${upper_service}_IMAGE_REPOSITORY=${IMAGE_NAMESPACE}/${service}" >> "$GITHUB_ENV"
+            echo "RIVET_K8S_RELEASE_GATE_${upper_service}_IMAGE_DIGEST=$digest" >> "$GITHUB_ENV"
+          done
+
+      - name: Create Disposable Kind Cluster
+        shell: bash
+        run: |
+          set -euo pipefail
+          kind create cluster --name rivet-managed-release --config scripts/kind-managed-release-cluster.yaml
+          kubectl --context kind-rivet-managed-release cluster-info
+
+      - name: Run Managed Kubernetes Gate
+        shell: bash
+        env:
+          RIVET_K8S_RELEASE_GATE_CONTEXT: kind-rivet-managed-release
+          RIVET_K8S_RELEASE_GATE_ALLOW_CONTEXT: kind-rivet-managed-release
+          RIVET_K8S_RELEASE_GATE_REGISTRY_SERVER: ghcr.io
+          RIVET_K8S_RELEASE_GATE_REGISTRY_USERNAME: ${{ github.actor }}
+          RIVET_K8S_RELEASE_GATE_REGISTRY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          mode=smoke
+          if [[ "$GITHUB_EVENT_NAME" == "schedule" || "${{ inputs.run_managed_kubernetes_disruption }}" == "true" ]]; then
+            mode=release
+          fi
+          npm run "verify:kubernetes:managed-$mode"
+
+      - name: Upload Managed Kubernetes Gate Artifacts
+        if: ${{ always() }}
+        uses: actions/upload-artifact@65462800fd760344b1a7b4382951275a0abb4808 # v4
+        with:
+          name: managed-kubernetes-release-gate-${{ github.run_id }}
+          path: artifacts/kubernetes-managed-release-gate
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Delete Disposable Kind Cluster
+        if: ${{ always() }}
+        shell: bash
+        run: kind delete cluster --name rivet-managed-release
   promote-images:
     needs:
       - resolve-rivet
       - build-and-push
+      - managed-kubernetes-release-gate
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:

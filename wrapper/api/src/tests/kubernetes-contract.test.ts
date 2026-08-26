@@ -317,6 +317,19 @@ test('chart renders custom public route env defaults as bootstrap values', async
   assert.match(renderedChart, /name: RIVET_LATEST_APPS_BASE_PATH\s*\n\s*value: "\/custom-apps-latest"/);
 });
 
+test('chart uses an immutable image digest when a release gate supplies one', async () => {
+  const proxyDigest = `sha256:${'a'.repeat(64)}`;
+  const renderedChart = await renderLocalKubernetesChartWithOverrides([
+    `images.proxy.digest=${proxyDigest}`,
+    `images.web.digest=sha256:${'b'.repeat(64)}`,
+    `images.api.digest=sha256:${'c'.repeat(64)}`,
+    `images.executor.digest=sha256:${'d'.repeat(64)}`,
+  ]);
+
+  assert.match(renderedChart, new RegExp(`image: rivet-local/proxy@${proxyDigest}`));
+  assert.doesNotMatch(renderedChart, /image: rivet-local\/proxy:dev/);
+});
+
 test('chart forwards arbitrary runtime credentials without a provider-specific template list', async () => {
   const renderedChart = await renderLocalKubernetesChartWithOverrides([
     'env.BILLING_OPENAI_KEY=chart-test-secret',

@@ -9,13 +9,14 @@
 
 The repository has substantial managed-mode support: workflow revisions and publication metadata use PostgreSQL, large workflow and recording artifacts use object storage, evaluation history has a PostgreSQL implementation, runtime-library archives use object storage, and web-app WebSocket runs have PostgreSQL-backed ownership and recovery support. Those are confirmed capabilities, not assumptions.
 
-Problems 1, 2, and 3 from the original audit are now implemented:
+Problems 1 through 4 from the original audit are now implemented:
 
 1. Workflow schema initialization is serialized, versioned, and owned by a Helm migration Job in Kubernetes.
 2. App Settings authority has moved from a shared RWX filesystem to encrypted, revisioned PostgreSQL rows. Runtime pods use only disposable local compatibility projections, and the proxy consumes an authenticated non-secret API snapshot.
 3. API lifecycle now separates liveness from dependency readiness, drains accepted work within an aligned termination budget, and gives replicated tiers explicit rollout, disruption, and placement policy.
+4. A release gate now combines static chart validation with a disposable Kind managed-mode deployment using immutable candidate image digests before image promotion. Scheduled/manual runs add controlled disruption coverage and preserve non-secret diagnostics as CI artifacts.
 
-The most prominent remaining production risk is Problem 4: automated Kubernetes verification is still static and does not yet run the complete managed stack in a live cluster or exercise failover, concurrent startup, key rotation, persistence, rolling drain, or node disruption. Problem 3 deliberately retains a singleton control-plane boundary until latest-debugger and co-located editor-executor session ownership become distributed or stably routed.
+Problem 4 is now implemented in source and CI configuration, but this audit has not itself observed a completed remote CI run or a provider-backed staging run. The Kind gate supplies repeatable runtime evidence for the managed stack; it cannot certify production-specific ingress, TLS, DNS, managed Postgres, or object-store behavior. Problem 3 deliberately retains a singleton control-plane boundary until latest-debugger and co-located editor-executor session ownership become distributed or stably routed.
 
 ## Evidence Standard
 
@@ -226,88 +227,32 @@ The chart therefore rejects backend scaling and backend HPA instead of exposing 
 - [`kubernetes-contract.test.ts`](wrapper/api/src/tests/kubernetes-contract.test.ts) covers rendered probes, lifecycle values, shutdown-margin validation, rollout strategy, placement, conditional disruption budgets, and the retained backend singleton guard.
 - [`proxy-image-contract.test.ts`](wrapper/api/src/tests/proxy-image-contract.test.ts) covers Compose readiness and stop-grace contracts; both Compose topologies also pass `docker compose ... config --quiet`.
 - `npm run test` passes the complete repository gate: API build and full API suite, web-pure tests, test-style/repository checks, and Kubernetes lint/render verification. The production and development Compose topologies pass `config --quiet`, and Alpine `sh -n` validates the API entrypoint used by Linux images.
-- Problem 4 still must run a real rolling update and node drain under HTTP/WebSocket load, kill an execution-run owner, interrupt PostgreSQL/object storage, and confirm ingress endpoint propagation. Static rendering and single-process tests do not certify those cluster/provider behaviors.
+- Problem 4 now runs a proxy rollout and execution-node drain under published workflow traffic in a disposable Kind cluster. It still does not kill the owner of a deliberately long-running WebSocket action, interrupt PostgreSQL/object storage, or confirm ingress endpoint propagation; those remain separate scheduled/staging scenarios.
 
-## Problem 4: Add a Live Managed-Kubernetes Release Gate
+## Resolved Problem 4: Live Managed-Kubernetes Release Gate
 
-This is a confidence gap rather than proof that managed Kubernetes is broken.
+**Implementation status (2026-08-26): implemented in repository code and GitHub Actions configuration. The first successful remote CI execution and provider-backed staging certification remain operational evidence to collect after merge.**
 
-### Observed Evidence
+The image workflow now makes `verify:kubernetes` part of the fast verification job, then creates an ephemeral three-node Kind cluster after the four candidate images have been pushed under their unique staging tags. The live gate resolves each candidate to an immutable OCI digest, verifies that the Helm manifest uses that exact digest, deploys disposable PostgreSQL 16 and MinIO services, and installs the real managed-mode Helm chart with one backend, two proxy replicas, and two execution replicas. It exposes no direct API port: all smoke traffic uses a port-forward to the proxy Service.
 
-1. `npm run verify:kubernetes` runs Kubernetes contract tests and [`scripts/verify-kubernetes.mjs`](scripts/verify-kubernetes.mjs). The script performs Helm lint/template checks and static manifest assertions.
-2. The Kubernetes tests inspect chart/image/launcher contracts but do not create a cluster or make requests to running workloads. Evidence: Kubernetes-focused tests under [`wrapper/api/src/tests`](wrapper/api/src/tests) and [`scripts/verify-kubernetes.mjs`](scripts/verify-kubernetes.mjs).
-3. The repository provides manual Minikube commands through `dev:kubernetes-test`. Evidence: root [`package.json`](package.json) and [`scripts/dev-kubernetes.mjs`](scripts/dev-kubernetes.mjs).
-4. The GitHub image workflow's verification job currently runs repository-structure and test-style checks; it does not run the full test suite, `verify:kubernetes`, or a live cluster rehearsal. Evidence: [`.github/workflows/build-images.yml`](.github/workflows/build-images.yml).
-5. The current static verification passed during this audit, so the report is not alleging a known template-rendering failure.
+The runner requires `RIVET_K8S_RELEASE_GATE_CONTEXT` and `RIVET_K8S_RELEASE_GATE_ALLOW_CONTEXT` to be identical and to match `kubectl config current-context`; it limits generated artifacts to the repository's ignored artifact directory; it creates one labelled namespace; and it will delete only a namespace with its own ownership label. It generates per-run PostgreSQL, MinIO, App Settings encryption, and Rivet key material in memory, applies those only as Kubernetes Secrets, and excludes Secrets from captured artifacts. A successful gate also requires cleanup to succeed, so a leaked disposable namespace cannot produce a green result. Failure artifacts include rendered manifests, workload state, events, pod descriptions, and container logs.
 
-### Risk Inference
+The smoke scenario verifies managed schema initialization, object-store setup, proxy readiness, App Settings write/read plus execution-runtime propagation, project upload/publish, published/latest workflows, published/latest web-app HTML and HTTP actions, a web-app WebSocket action, recordings/replay-project, the statistics catalog, and persistence after backend and execution-pod replacement. Scheduled or manually selected release runs additionally restart the proxy and drain one execution node, then prove published workflow recovery. The runner bounds deployment, HTTP, recording-convergence, and disruption waits; it does not blanket-retry failed product assertions.
 
-Static rendering cannot prove runtime behavior that depends on Kubernetes scheduling, Services, persistent-volume semantics, DNS, rolling termination, multiple pods, or real PostgreSQL/object-store concurrency. Regressions in those areas can therefore reach an image build even while the current static checks pass.
+### Residual Coverage Boundaries
 
-### Detailed Suggested Plan
+- The gate uses Kind's in-cluster networking and disposable Postgres/MinIO. It does not prove production ingress, TLS, DNS, egress policy, cloud object-storage semantics, or managed-Postgres behavior.
+- The smoke uses a small checked-in Rivet project fixture. It proves workflow/web-app action paths and recording contracts, not every node type, runtime-library install, or evaluation-suite shape. Those have focused unit/API coverage and should gain live scenarios when their external dependencies can be made deterministic.
+- Execution-pod replacement proves durable publication recovery and that persisted App Settings environment values reach a replacement runtime through the proxy. It does not yet kill the owner of a deliberately long-running WebSocket action; upstream run-store interruption/reconnect behavior is covered separately and should be added to the scheduled gate with a stable long-running graph fixture.
+- The workflow makes release-image promotion wait for the Kind smoke job. A failed or unavailable GitHub runner can delay promotion; this is intentional release safety, and artifacts make environmental failures diagnosable.
 
-#### Stage 1: Strengthen the Fast Pull-Request Gate
+### Operational Commands
 
-1. Add `npm run verify:kubernetes` to the GitHub verification job.
-2. Keep Helm lint/template and contract tests fast and deterministic.
-3. Render at least local-managed and external-managed values, then validate image tags/digests, security contexts, probes, Services, volumes, environment sources, and route ownership.
-4. Fail if chart defaults and runtime profile assumptions diverge.
+- `npm run verify:kubernetes` runs the static chart and contract gate.
+- `npm run verify:kubernetes:managed-live` runs the disposable smoke gate after explicit context, image digest, and registry credentials are supplied.
+- `npm run verify:kubernetes:managed-disruption` adds the controlled proxy rollout and execution-node drain. It must be aimed only at the dedicated Kind context.
 
-#### Stage 2: Add a Live Managed Smoke Job
-
-1. Create an ephemeral Kind cluster in CI. Keep Minikube as the documented local equivalent.
-2. Deploy PostgreSQL and MinIO (or compatible test services) and the exact images produced by the workflow.
-3. Deploy at least two proxy and two execution replicas. Keep backend at one until the retained latest-debugger/editor-executor ownership boundary is removed and separately certified.
-4. Verify that App Settings survive pod replacement and propagate across control/execution replicas without any shared app-data claim.
-5. Exercise only through the public proxy:
-   - health/readiness;
-   - open/save/publish a project;
-   - published and latest workflow execution;
-   - published and latest web-app HTML, HTTP compatibility action, and WebSocket action;
-   - recording list/detail/replay and statistics;
-   - evaluation definition and scoring-run persistence;
-   - runtime-library install/use;
-   - settings propagation and dynamic routes.
-
-#### Stage 3: Add Persistence and Disruption Scenarios
-
-1. Restart every workload and verify projects, publications, evaluations, recordings, settings, and runtime-library metadata survive.
-2. Delete an execution pod during an active long web-app run and verify documented reconnect/interruption behavior.
-3. Start several pods against an empty database to exercise schema initialization.
-4. Perform a rolling update under load and a voluntary node drain.
-5. Run explicit data-migration tests from the oldest supported release.
-
-#### Stage 4: Validate the Production Topology Separately
-
-1. Periodically run the same suite against the real managed PostgreSQL provider, S3-compatible provider, ingress controller, TLS setup, and ingress/TLS topology used in production.
-2. Treat this as a release/staging certification, not a replacement for the fast PR job.
-
-#### Harness Requirements
-
-- Use unique namespaces and deterministic cleanup.
-- Capture pod events, logs, rendered manifests, probe failures, and failed HTTP/WebSocket transcripts as artifacts.
-- Bound every wait and retry. Record retries so they cannot hide flaky startup.
-- Use generated test secrets and redact them from logs/artifacts.
-- Assert the deployed image digest matches the image under test.
-- Require an explicit kube-context/namespace guard for local destructive commands.
-
-### Risks of Fixing
-
-- A full live-cluster gate increases CI time, cost, and flakiness. Separate fast PR smoke from slower scheduled/release disruption suites.
-- Kind/Minikube networking and storage differ from production; passing locally is not proof of cloud ingress or managed-service behavior.
-- Broad retries can turn deterministic defects into intermittent green builds. Retry only named transient setup operations and publish retry counts.
-- Logs and manifests can leak credentials. Test-secret generation and artifact redaction are mandatory.
-- Cleanup scripts can target the wrong cluster. Require an ephemeral-context marker and namespace ownership label.
-- Testing prebuilt tags instead of the just-built digest can certify the wrong image.
-
-### Tests and Acceptance Criteria
-
-- Every image release runs the static Kubernetes gate.
-- A live managed smoke suite passes from a clean cluster using the exact candidate images.
-- The suite proves persistence after pod restarts and exposes artifacts for every failure.
-- Scheduled disruption tests cover concurrent startup, execution-pod loss, rolling update, and node drain.
-- Production topology is separately certified before relying on provider-specific ingress, object storage, or PostgreSQL behavior.
-
+The full configuration and local safety requirements are documented in [`docs/kubernetes.md`](docs/kubernetes.md#managed-release-gate).
 ## Assumptions Checked
 
 | Assumption                                                                     | Audit result              | Evidence / qualification                                                                                                                                                                                                                   |
@@ -321,15 +266,14 @@ Static rendering cannot prove runtime behavior that depends on Kubernetes schedu
 | `verify:kubernetes` is a live cluster test.                                    | Not supported; corrected. | It is a static Helm/template/contract gate. Manual cluster tooling exists separately.                                                                                                                                                      |
 | Current Kubernetes managed mode is definitely broken.                          | Not established.          | Static verification passes and managed stores exist. The report identifies unproven HA/operations paths and concrete design risks, not a reproduced blanket failure.                                                                       |
 
-## Recommended Work Order
+## Recommended Follow-Up Order
 
-1. Add `verify:kubernetes` to GitHub verification so the current static contract becomes a release gate.
-2. Add live managed smoke coverage for the now-versioned schema, PostgreSQL App Settings, and implemented lifecycle/readiness contracts.
-3. Exercise rolling termination, execution-owner loss, node drain, provider interruption, key rotation, proxy interruption, and legacy-import rollback in that live suite.
+1. Observe and retain the first successful remote GitHub Actions execution of the live Kind gate, then use its artifacts to tune only named transient setup retries if the runner proves flaky.
+2. Extend the scheduled disruption scenario with a deliberately long-running WebSocket action, execution-owner loss, and reconnect/interruption assertions.
+3. Add a staging gate against the production-equivalent ingress controller, TLS, managed PostgreSQL service, and object-storage provider. Exercise provider interruption, key rotation, proxy interruption, and legacy-import rollback there.
 4. Design distributed or stably routed latest-debugger/editor-executor ownership, then certify at least two backend replicas before relaxing the singleton guard.
 
-This order now focuses on live runtime evidence and the one deliberately retained control-plane ownership boundary after the three architectural fixes have landed.
-
+This order focuses on collecting live runtime evidence beyond Kind and on the one deliberately retained control-plane ownership boundary.
 ## Useful Verification Commands
 
 ```powershell
