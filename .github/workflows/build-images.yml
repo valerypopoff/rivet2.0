@@ -3,6 +3,7 @@ name: Build Images
 on:
   push:
     branches:
+      - develop-rivet2
       - main-rivet2
     tags:
       - 'v*'
@@ -293,11 +294,11 @@ jobs:
           RIVET_K8S_RELEASE_GATE_REGISTRY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          mode=smoke
+          gate_script=verify:kubernetes:managed-live
           if [[ "$GITHUB_EVENT_NAME" == "schedule" || "${{ inputs.run_managed_kubernetes_disruption }}" == "true" ]]; then
-            mode=release
+            gate_script=verify:kubernetes:managed-disruption
           fi
-          npm run "verify:kubernetes:managed-$mode"
+          npm run "$gate_script"
 
       - name: Upload Managed Kubernetes Gate Artifacts
         if: ${{ always() }}

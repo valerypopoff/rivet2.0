@@ -456,7 +456,7 @@ test('CI and production launchers publish and run the Rivet 2 wrapper image set'
   const legacyRepoPattern = new RegExp('Iron' + 'clad\\/rivet');
   const legacyImageNamespacePattern = new RegExp('cloud-hosted-' + 'rivet-wrapper');
 
-  assert.match(imageBuildWorkflow, /branches:\s*\n\s*- main-rivet2/);
+  assert.match(imageBuildWorkflow, /branches:\s*\n\s*- develop-rivet2\s*\n\s*- main-rivet2/);
   assert.ok(imageBuildWorkflow.includes('RIVET_REPO_URL: https://github.com/valerypopoff/rivet2.0.git'));
   assert.ok(imageBuildWorkflow.includes('RIVET_REPO_REF: main'));
   for (const actionRef of [
@@ -492,6 +492,12 @@ test('CI and production launchers publish and run the Rivet 2 wrapper image set'
   assert.match(imageBuildWorkflow, /continue-on-error: true/);
   assert.match(imageBuildWorkflow, /steps\.build\.outcome == 'failure'/);
   assert.match(imageBuildWorkflow, /promote-images:[\s\S]*- build-and-push/);
+  assert.equal(packageJson.scripts['verify:kubernetes:managed-live'], 'node scripts/kubernetes-managed-release-gate.mjs smoke');
+  assert.equal(packageJson.scripts['verify:kubernetes:managed-disruption'], 'node scripts/kubernetes-managed-release-gate.mjs release');
+  assert.match(imageBuildWorkflow, /gate_script=verify:kubernetes:managed-live/);
+  assert.match(imageBuildWorkflow, /gate_script=verify:kubernetes:managed-disruption/);
+  assert.match(imageBuildWorkflow, /npm run "\$gate_script"/);
+  assert.doesNotMatch(imageBuildWorkflow, /verify:kubernetes:managed-\$mode/);
   assert.match(imageBuildWorkflow, /docker buildx imagetools create/);
   assert.match(imageBuildWorkflow, /for service in proxy web api executor/);
   assert.doesNotMatch(imageBuildPhase, /type=raw,value=latest/);
