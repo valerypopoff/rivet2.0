@@ -14,9 +14,9 @@ Problems 1 through 4 from the original audit are now implemented:
 1. Workflow schema initialization is serialized, versioned, and owned by a Helm migration Job in Kubernetes.
 2. App Settings authority has moved from a shared RWX filesystem to encrypted, revisioned PostgreSQL rows. Runtime pods use only disposable local compatibility projections, and the proxy consumes an authenticated non-secret API snapshot.
 3. API lifecycle now separates liveness from dependency readiness, drains accepted work within an aligned termination budget, and gives replicated tiers explicit rollout, disruption, and placement policy.
-4. A release gate now combines static chart validation with a disposable Kind managed-mode deployment using immutable candidate image digests before image promotion. Scheduled/manual runs add controlled disruption coverage and preserve non-secret diagnostics as CI artifacts.
+4. The release gate combines static chart validation with a disposable Kind managed-mode deployment using immutable candidate image digests before image promotion. Its release mode now covers WebSocket owner loss/reconnect, App Settings key rotation, and PostgreSQL/MinIO recovery; a separate protected provider-staging runner covers HTTPS ingress, provider-aware outage manifests, and legacy rollback.
 
-Problem 4 is now implemented in source and CI configuration, but this audit has not itself observed a completed remote CI run or a provider-backed staging run. The Kind gate supplies repeatable runtime evidence for the managed stack; it cannot certify production-specific ingress, TLS, DNS, managed Postgres, or object-store behavior. Problem 3 deliberately retains a singleton control-plane boundary until latest-debugger and co-located editor-executor session ownership become distributed or stably routed.
+Problem 4 is now implemented as a Kind gate plus a protected manual provider-staging gate in source and GitHub Actions configuration. This audit has not itself observed a completed remote CI or provider-staging execution. The Kind gate supplies repeatable runtime evidence for the managed stack; the provider runner is ready to collect the remaining ingress, TLS, DNS, managed-Postgres, and object-store evidence after staging secrets/configuration are installed. Problem 3 deliberately retains a singleton control-plane boundary until latest-debugger and co-located editor-executor session ownership become distributed or stably routed.
 
 ## Evidence Standard
 
@@ -110,7 +110,7 @@ Repeatedly running a monolithic current-schema script also provides no durable r
 - A disposable PostgreSQL 16 check started four real connection pools concurrently; exactly one applied migration 1, the other contenders waited and observed version 1, and a separate verify-only connection accepted the resulting schema.
 - Automated tests cover a fresh database, the only pre-ledger baseline, missing metadata, checksum mismatch, future versions, missing or malformed objects, all required column defaults, table DML privileges, row-level-security drift, exact index and constraint definitions, invalid/unready indexes, unvalidated constraints, folder-function body drift, logger isolation, transactional rollback, and clean retry.
 - Helm contracts prove one pre-install/pre-upgrade Job, isolated candidate settings before managed settings import, pre-populate-only Vault injection, verify-only backend/execution pods, and fail-closed behavior when migration ownership is delegated externally.
-- A live Kubernetes disruption gate is still part of Problem 4. It should exercise lock timeout/deadlock/connection loss/process termination and mixed-image rollout behavior across real pods; the local PostgreSQL check and static Helm render do not prove those cluster/provider properties.
+- The Kind release mode now exercises pod lifecycle, WebSocket owner interruption/replay, and local PostgreSQL/MinIO recovery. It cannot prove cloud-provider transport or mixed-image behavior; the protected provider gate must be run against the production-equivalent staging environment to collect that evidence.
 
 ## Resolved Problem 2: Remove the Shared RWX App-Data Volume as a Distributed State Boundary
 
@@ -151,7 +151,7 @@ Repeatedly running a monolithic current-schema script also provides no durable r
 - Losing all valid encryption keys makes secret-bearing settings unrecoverable. Key backup and the two-rollout compatibility sequence are operational requirements, not optional hardening; skipping the first compatibility rollout can make new-key rows unreadable to old pods during a rolling update.
 - The proxy's last-known-good behavior protects an already-running pod, but a new proxy pod fails closed when it cannot obtain its first authenticated snapshot.
 - Pod-local projections are compatibility seams, not general caches. New consumers must use the typed repository or an authenticated narrow API rather than adding another file authority.
-- Static tests prove rendered topology and repository contracts, not a real multi-node provider. Problem 4 must still exercise legacy import, concurrent replicas, listener reconnect, key rotation, proxy/API interruption, and rollback in a live managed cluster.
+- Static tests prove rendered topology and repository contracts. The release Kind gate now covers durable WebSocket interruption/replay and in-cluster key rotation/dependency recovery; provider ingress, key rotation, legacy import, and rollback remain operational acceptance until the protected staging gate has a successful recorded execution.
 
 ### Automated Coverage
 
@@ -167,7 +167,7 @@ Repeatedly running a monolithic current-schema script also provides no durable r
 - Focused managed-settings and plugin-cache regression tests passed, including committed-write notification failure, failed-refresh retry, and pod-local plugin preparation deduplication.
 - `npm run verify:kubernetes` completed all Kubernetes contract tests plus Helm lint and local/production render checks.
 - `git diff --check` completed without whitespace errors. Line-ending conversion warnings on this Windows checkout are informational.
-- This verification remains static/single-host evidence. Live legacy import, multi-replica convergence, key rotation, proxy interruption, and rollback remain acceptance work under Problem 4.
+- The static verification is supplemented by the committed Kind and provider-gate harnesses. A completed protected provider-stage run is still required before treating legacy import, external key rotation, proxy interruption, and rollback as certified operational behavior.
 
 ## Resolved Problem 3: Strengthen Lifecycle, Readiness, and Replica Safety
 
@@ -227,30 +227,33 @@ The chart therefore rejects backend scaling and backend HPA instead of exposing 
 - [`kubernetes-contract.test.ts`](wrapper/api/src/tests/kubernetes-contract.test.ts) covers rendered probes, lifecycle values, shutdown-margin validation, rollout strategy, placement, conditional disruption budgets, and the retained backend singleton guard.
 - [`proxy-image-contract.test.ts`](wrapper/api/src/tests/proxy-image-contract.test.ts) covers Compose readiness and stop-grace contracts; both Compose topologies also pass `docker compose ... config --quiet`.
 - `npm run test` passes the complete repository gate: API build and full API suite, web-pure tests, test-style/repository checks, and Kubernetes lint/render verification. The production and development Compose topologies pass `config --quiet`, and Alpine `sh -n` validates the API entrypoint used by Linux images.
-- Problem 4 now runs a proxy rollout and execution-node drain under published workflow traffic in a disposable Kind cluster. It still does not kill the owner of a deliberately long-running WebSocket action, interrupt PostgreSQL/object storage, or confirm ingress endpoint propagation; those remain separate scheduled/staging scenarios.
+- Problem 4 release mode now runs proxy rollout, execution-node drain, long-running web-app WebSocket forced owner loss/reconnect, three-phase App Settings encryption-key rotation, and PostgreSQL/MinIO outage/recovery in a disposable Kind cluster. Provider ingress/TLS/DNS/object-store semantics require the separate protected staging gate.
 
 ## Resolved Problem 4: Live Managed-Kubernetes Release Gate
 
-**Implementation status (2026-08-26): implemented in repository code and GitHub Actions configuration. The first successful remote CI execution and provider-backed staging certification remain operational evidence to collect after merge.**
+**Implementation status (2026-08-26): implemented in repository code and GitHub Actions configuration. The first successful remote CI execution and protected provider-backed staging certification remain operational evidence to collect after merge. The weekly schedule is not active in the currently recorded branch configuration: `origin/HEAD` is `main`, whose workflow does not contain this release gate.**
 
-The image workflow now makes `verify:kubernetes` part of the fast verification job, then creates an ephemeral three-node Kind cluster after the four candidate images have been pushed under their unique staging tags. The live gate resolves each candidate to an immutable OCI digest, verifies that the Helm manifest uses that exact digest, deploys disposable PostgreSQL 16 and MinIO services, and installs the real managed-mode Helm chart with one backend, two proxy replicas, and two execution replicas. It exposes no direct API port: all smoke traffic uses a port-forward to the proxy Service.
+The image workflow now makes `verify:kubernetes` part of the fast verification job, then creates an ephemeral four-node Kind cluster (one control plane plus three workers) after the four candidate images have been pushed under their unique staging tags. The live gate resolves each candidate to an immutable OCI digest, verifies that the Helm manifest uses that exact digest, deploys disposable PostgreSQL 16 and MinIO services, and installs the real managed-mode Helm chart with one backend, two proxy replicas, and two execution replicas. It exposes no direct API port: all smoke traffic uses a port-forward to the proxy Service.
 
 The runner requires `RIVET_K8S_RELEASE_GATE_CONTEXT` and `RIVET_K8S_RELEASE_GATE_ALLOW_CONTEXT` to be identical and to match `kubectl config current-context`; it limits generated artifacts to the repository's ignored artifact directory; it creates one labelled namespace; and it will delete only a namespace with its own ownership label. It generates per-run PostgreSQL, MinIO, App Settings encryption, and Rivet key material in memory, applies those only as Kubernetes Secrets, and excludes Secrets from captured artifacts. A successful gate also requires cleanup to succeed, so a leaked disposable namespace cannot produce a green result. Failure artifacts include rendered manifests, workload state, events, pod descriptions, and container logs.
 
-The smoke scenario verifies managed schema initialization, object-store setup, proxy readiness, App Settings write/read plus execution-runtime propagation, project upload/publish, published/latest workflows, published/latest web-app HTML and HTTP actions, a web-app WebSocket action, recordings/replay-project, the statistics catalog, and persistence after backend and execution-pod replacement. Scheduled or manually selected release runs additionally restart the proxy and drain one execution node, then prove published workflow recovery. The runner bounds deployment, HTTP, recording-convergence, and disruption waits; it does not blanket-retry failed product assertions.
+The smoke scenario verifies managed schema initialization, object-store setup, proxy readiness, App Settings write/read plus execution-runtime propagation, project upload/publish, published/latest workflows, published/latest web-app HTML and HTTP actions, a web-app WebSocket action, recordings/replay-project, the statistics catalog, and persistence after backend and execution-pod replacement. Manually selected release runs additionally restart the proxy, drain one execution node, force-delete the persisted owner of an accepted long-running web-app action and verify its reconnect emits `action.interrupted` after lease recovery, rotate the App Settings key through old/new, new/old, and new-only generations, and prove PostgreSQL/MinIO readiness failure then recovery. GitHub schedule events execute only the workflow from the repository default branch, so weekly disruption coverage is inactive until `main-rivet2` becomes the default branch or a workflow on the default branch dispatches this one. The runner bounds deployment, HTTP, recording-convergence, and disruption waits; it does not blanket-retry failed product assertions.
 
 ### Residual Coverage Boundaries
 
-- The gate uses Kind's in-cluster networking and disposable Postgres/MinIO. It does not prove production ingress, TLS, DNS, egress policy, cloud object-storage semantics, or managed-Postgres behavior.
+- The committed workflow includes a weekly schedule, but GitHub evaluates schedules only from the repository default branch. The locally recorded default is origin/main, whose older workflow lacks this job; the manual release dispatch works from main-rivet2, but activating the weekly gate requires a repository-default-branch change or a default-branch dispatcher.
+
+- The Kind gate uses in-cluster networking and disposable Postgres/MinIO. The protected provider runner deploys immutable candidates through the real staging ingress and checks HTTPS, DNS, workflows, web apps, persisted-settings key rotation, optional scoped NetworkPolicy outage/recovery, and optional legacy-import rollback. Until it completes successfully with the staging provider configuration, those remain unverified operational evidence rather than a certification claim.
 - The smoke uses a small checked-in Rivet project fixture. It proves workflow/web-app action paths and recording contracts, not every node type, runtime-library install, or evaluation-suite shape. Those have focused unit/API coverage and should gain live scenarios when their external dependencies can be made deterministic.
-- Execution-pod replacement proves durable publication recovery and that persisted App Settings environment values reach a replacement runtime through the proxy. It does not yet kill the owner of a deliberately long-running WebSocket action; upstream run-store interruption/reconnect behavior is covered separately and should be added to the scheduled gate with a stable long-running graph fixture.
-- The workflow makes release-image promotion wait for the Kind smoke job. A failed or unavailable GitHub runner can delay promotion; this is intentional release safety, and artifacts make environmental failures diagnosable.
+- The release Kind gate now kills the exact persisted WebSocket action owner for a deliberately long-running graph and reconnects as the same owner scope, asserting the durable interrupted terminal event. It does not prove cross-process live processor migration; the accepted contract is explicit interruption after owner loss.
+- The workflow makes release-image promotion wait for the Kind smoke job and, when manually selected, the protected provider gate. A failed or unavailable GitHub runner can delay promotion; this is intentional release safety, and artifacts make environmental failures diagnosable.
 
 ### Operational Commands
 
 - `npm run verify:kubernetes` runs the static chart and contract gate.
 - `npm run verify:kubernetes:managed-live` runs the disposable smoke gate after explicit context, image digest, and registry credentials are supplied.
-- `npm run verify:kubernetes:managed-disruption` adds the controlled proxy rollout and execution-node drain. It must be aimed only at the dedicated Kind context.
+- `npm run verify:kubernetes:managed-disruption` adds the controlled proxy rollout, execution-node drain, WebSocket owner-loss/reconnect, App Settings key rotation, and PostgreSQL/MinIO recovery. It must be aimed only at the dedicated Kind context.
+- `npm run verify:kubernetes:managed-provider` runs only with the explicit protected staging config, exact staging context, immutable candidate digests, and `RIVET_K8S_PROVIDER_GATE_CONFIRM=deploy-staging`.
 
 The full configuration and local safety requirements are documented in [`docs/kubernetes.md`](docs/kubernetes.md#managed-release-gate).
 ## Assumptions Checked
@@ -268,9 +271,9 @@ The full configuration and local safety requirements are documented in [`docs/ku
 
 ## Recommended Follow-Up Order
 
-1. Observe and retain the first successful remote GitHub Actions execution of the live Kind gate, then use its artifacts to tune only named transient setup retries if the runner proves flaky.
-2. Extend the scheduled disruption scenario with a deliberately long-running WebSocket action, execution-owner loss, and reconnect/interruption assertions.
-3. Add a staging gate against the production-equivalent ingress controller, TLS, managed PostgreSQL service, and object-storage provider. Exercise provider interruption, key rotation, proxy interruption, and legacy-import rollback there.
+1. Activate scheduled coverage first: make `main-rivet2` the repository default branch or add a default-branch dispatcher that targets this workflow. Then retain the first successful remote GitHub Actions execution of the live Kind gate and use its artifacts to tune only named transient setup retries if the runner proves flaky.
+2. Run and retain the first successful Kind release-mode artifact with the new long-running WebSocket owner-loss/reconnect and dependency-recovery scenarios. Tune only named transient setup waits if that evidence proves instability.
+3. Configure the protected `rivet-managed-staging` GitHub environment, then retain the first successful provider-gate artifact against the production-equivalent ingress controller, TLS, managed PostgreSQL service, object-storage provider, scoped dependency interruption policies, App Settings key rotation, and legacy-import rollback.
 4. Design distributed or stably routed latest-debugger/editor-executor ownership, then certify at least two backend replicas before relaxing the singleton guard.
 
 This order focuses on collecting live runtime evidence beyond Kind and on the one deliberately retained control-plane ownership boundary.

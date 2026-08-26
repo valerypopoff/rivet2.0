@@ -1,9 +1,10 @@
 # The release gate puts its disposable Postgres/MinIO dependencies on the
-# control plane. The two workers are then available for the application tiers
-# and a safe execution-node drain.
+# control plane. Three workers keep two execution replicas spread before one
+# worker is drained, leaving two workers available for rescheduling.
 kind: Cluster
 apiVersion: kind.x-k8s.io/v1alpha4
 nodes:
   - role: control-plane
+  - role: worker
   - role: worker
   - role: worker

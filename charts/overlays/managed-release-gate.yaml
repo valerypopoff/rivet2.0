@@ -31,6 +31,17 @@ runtimeLibraries:
 appSettings:
   backend: postgres
 
+# Keep redundant execution pods on different workers before draining one.
+availability:
+  topologySpread:
+    whenUnsatisfiable: DoNotSchedule
+
+# The release gate deliberately interrupts one long-lived WebSocket action.
+# Keep that test bounded without changing production lifecycle defaults.
+lifecycle:
+  shutdownGraceSeconds: 15
+  terminationGracePeriodSeconds: 40
+  preStopDelaySeconds: 0
 postgres:
   mode: managed
   sslMode: disable

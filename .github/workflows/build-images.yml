@@ -15,6 +15,11 @@ on:
         required: false
         default: false
         type: boolean
+      run_managed_kubernetes_provider_gate:
+        description: Deploy the immutable candidate images to the protected managed-Kubernetes staging environment and run the provider gate.
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -307,13 +312,109 @@ jobs:
         if: ${{ always() }}
         shell: bash
         run: kind delete cluster --name rivet-managed-release
+  managed-kubernetes-provider-gate:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.run_managed_kubernetes_provider_gate == true }}
+    needs:
+      - resolve-rivet
+      - build-and-push
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    environment:
+      name: rivet-managed-staging
+    env:
+      SOURCE_TAG: build-${{ github.sha }}-${{ needs.resolve-rivet.outputs.rivet_commit }}
+      RIVET_K8S_PROVIDER_GATE_CONTEXT: ${{ vars.RIVET_K8S_STAGING_CONTEXT }}
+      RIVET_K8S_PROVIDER_GATE_ALLOW_CONTEXT: ${{ vars.RIVET_K8S_STAGING_CONTEXT }}
+      RIVET_K8S_PROVIDER_GATE_CONFIRM: deploy-staging
+      KUBECONFIG: ${{ runner.temp }}/rivet-managed-staging.kubeconfig
+      RIVET_K8S_PROVIDER_GATE_CONFIG_FILE: ${{ runner.temp }}/rivet-managed-provider-gate.json
+      RIVET_K8S_PROVIDER_GATE_VALUES_FILE: ${{ runner.temp }}/rivet-managed-provider-values.yaml
+      RIVET_K8S_PROVIDER_GATE_REGISTRY_SERVER: ghcr.io
+      RIVET_K8S_PROVIDER_GATE_REGISTRY_USERNAME: ${{ github.actor }}
+      RIVET_K8S_PROVIDER_GATE_REGISTRY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - name: Check Out Repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Set Up Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 20
+
+      - name: Install API Test Dependencies
+        run: npm ci --prefix wrapper/api
+
+      - name: Set Up Kubernetes Tools
+        run: npm run setup:k8s-tools
+
+      - name: Restore Protected Staging Configuration
+        shell: bash
+        env:
+          RIVET_K8S_STAGING_KUBECONFIG_B64: ${{ secrets.RIVET_K8S_STAGING_KUBECONFIG_B64 }}
+          RIVET_K8S_STAGING_CONFIG_B64: ${{ secrets.RIVET_K8S_STAGING_CONFIG_B64 }}
+          RIVET_K8S_STAGING_VALUES_B64: ${{ secrets.RIVET_K8S_STAGING_VALUES_B64 }}
+          RIVET_K8S_STAGING_INTERRUPTION_MANIFESTS_TGZ_B64: ${{ secrets.RIVET_K8S_STAGING_INTERRUPTION_MANIFESTS_TGZ_B64 }}
+        run: |
+          set -euo pipefail
+          umask 077
+          : "${RIVET_K8S_STAGING_KUBECONFIG_B64:?Missing protected staging kubeconfig}"
+          : "${RIVET_K8S_STAGING_CONFIG_B64:?Missing protected staging gate config}"
+          : "${RIVET_K8S_STAGING_VALUES_B64:?Missing protected staging Helm values}"
+          if [ -n "${RIVET_K8S_STAGING_INTERRUPTION_MANIFESTS_TGZ_B64:-}" ]; then
+            archive="$RUNNER_TEMP/rivet-managed-provider-interruptions.tgz"
+            printf '%s' "$RIVET_K8S_STAGING_INTERRUPTION_MANIFESTS_TGZ_B64" | base64 --decode > "$archive"
+            if tar -tzf "$archive" | grep -Eq '(^/|(^|/)\.\.(/|$))'; then
+              echo "::error::Provider gate interruption archive contains an unsafe path"
+              exit 1
+            fi
+            if tar -tvzf "$archive" | grep -Eq '^[lh]'; then
+              echo "::error::Provider gate interruption archive must not contain symbolic or hard links"
+              exit 1
+            fi
+            tar -xzf "$archive" -C "$RUNNER_TEMP" --no-same-owner --no-same-permissions
+            rm -f "$archive"
+          fi
+          printf '%s' "$RIVET_K8S_STAGING_KUBECONFIG_B64" | base64 --decode > "$KUBECONFIG"
+          printf '%s' "$RIVET_K8S_STAGING_CONFIG_B64" | base64 --decode > "$RIVET_K8S_PROVIDER_GATE_CONFIG_FILE"
+          printf '%s' "$RIVET_K8S_STAGING_VALUES_B64" | base64 --decode > "$RIVET_K8S_PROVIDER_GATE_VALUES_FILE"
+
+      - name: Resolve Candidate Image Digests
+        shell: bash
+        run: |
+          set -euo pipefail
+          for service in proxy web api executor; do
+            image="${IMAGE_NAMESPACE}/${service}:${SOURCE_TAG}"
+            digest="$(docker buildx imagetools inspect "$image" --format '{{.Manifest.Digest}}')"
+            if [[ ! "$digest" =~ ^sha256:[a-f0-9]{64}$ ]]; then
+              echo "::error::Could not resolve immutable digest for $image: $digest"
+              exit 1
+            fi
+            upper_service="$(tr '[:lower:]' '[:upper:]' <<< "$service")"
+            echo "RIVET_K8S_PROVIDER_GATE_${upper_service}_IMAGE_REPOSITORY=${IMAGE_NAMESPACE}/${service}" >> "$GITHUB_ENV"
+            echo "RIVET_K8S_PROVIDER_GATE_${upper_service}_IMAGE_DIGEST=$digest" >> "$GITHUB_ENV"
+          done
+
+      - name: Run Managed Kubernetes Provider Gate
+        run: npm run verify:kubernetes:managed-provider
+
+      - name: Upload Managed Kubernetes Provider Gate Artifacts
+        if: ${{ always() }}
+        uses: actions/upload-artifact@65462800fd760344b1a7b4382951275a0abb4808 # v4
+        with:
+          name: managed-kubernetes-provider-gate-${{ github.run_id }}
+          path: artifacts/kubernetes-managed-provider-gate
+          if-no-files-found: warn
+          retention-days: 14
+
   promote-images:
     needs:
       - resolve-rivet
       - build-and-push
       - managed-kubernetes-release-gate
+      - managed-kubernetes-provider-gate
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    if: ${{ always() && needs.resolve-rivet.result == 'success' && needs.build-and-push.result == 'success' && needs.managed-kubernetes-release-gate.result == 'success' && (needs.managed-kubernetes-provider-gate.result == 'success' || needs.managed-kubernetes-provider-gate.result == 'skipped') }}
     env:
       SOURCE_TAG: build-${{ github.sha }}-${{ needs.resolve-rivet.outputs.rivet_commit }}
     steps:

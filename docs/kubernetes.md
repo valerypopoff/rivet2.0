@@ -110,7 +110,7 @@ Managed runtime-library startup now serializes its shared Postgres schema initia
 
 `npm run verify:kubernetes` is the fast deterministic gate. It renders and validates the chart plus Kubernetes contracts, but it does not start a cluster.
 
-The image workflow now also runs a disposable live managed-mode gate before it promotes public tags. It creates a three-node Kind cluster, starts isolated PostgreSQL and MinIO dependencies, installs the real chart with the exact OCI digest for every candidate image, and accesses the app only through the proxy. The smoke suite verifies:
+The image workflow now also runs a disposable live managed-mode gate before it promotes public tags. It creates a four-node Kind cluster (one control plane plus three workers), starts isolated PostgreSQL and MinIO dependencies, installs the real chart with the exact OCI digest for every candidate image, and accesses the app only through the proxy. The smoke suite verifies:
 
 - singleton backend plus two proxy and two execution replicas;
 - Helm schema migration, managed PostgreSQL App Settings with execution-runtime propagation through a replacement pod, and managed object storage;
@@ -118,9 +118,10 @@ The image workflow now also runs a disposable live managed-mode gate before it p
 - published/latest web-app HTML and HTTP actions;
 - a web-app WebSocket action;
 - recordings, replay-project retrieval, and the statistics catalog;
+- the release mode additionally proves long-running web-app WebSocket owner loss, reconnect replay as an explicit interruption, App Settings encryption-key rotation, and PostgreSQL/MinIO readiness failure then recovery;
 - persistence after backend and execution-pod replacement.
 
-A weekly scheduled run, or the `run_managed_kubernetes_disruption` workflow-dispatch input, adds a proxy rollout and an execution-node drain. Each run uploads non-secret manifests, Kubernetes events, pod descriptions, and logs. Generated credentials are supplied only to Kubernetes and are never placed in artifacts.
+The `run_managed_kubernetes_disruption` workflow-dispatch input adds the controlled proxy rollout, execution-node drain, deliberately long web-app WebSocket forced-owner-loss/reconnect check, App Settings encryption-key rotation, and PostgreSQL/MinIO outage/recovery checks. GitHub executes scheduled workflows only from the repository default branch. This workflow is maintained on `main-rivet2`, while the currently recorded default branch is `main`, so the weekly disruption gate is not active until administrators either make `main-rivet2` the default branch or place a default-branch dispatcher that targets it. Each run uploads non-secret manifests, Kubernetes events, pod descriptions, and logs. Generated credentials are supplied only to Kubernetes and are never placed in artifacts.
 
 For a deliberate local run, first create the disposable Kind topology and then provide the exact candidate image repositories and digests. The runner will refuse to run unless both context variables exactly match the active context; it also deletes only a namespace carrying its own ownership label.
 
@@ -139,6 +140,65 @@ npm run verify:kubernetes:managed-live
 Use `npm run verify:kubernetes:managed-disruption` only against this disposable Kind context. Set `RIVET_K8S_RELEASE_GATE_KEEP_NAMESPACE=true` when investigating a failure; otherwise the owned namespace is removed after artifacts are collected.
 
 This gate proves the repository's chart/runtime interaction on Kind. It does not replace staging certification against the real managed PostgreSQL service, object store, ingress controller, TLS, DNS, and network policies used by production.
+
+### Provider-backed staging gate
+
+The disposable Kind gate is the release candidate's cluster contract. The protected provider gate is the separate, manual certification path for the actual ingress controller, DNS, TLS, managed PostgreSQL, S3-compatible storage, and network policy implementation used by a staging environment. It is deliberately not run on every image push: it mutates the selected staging Helm release, so it requires a protected GitHub environment approval and an explicit workflow-dispatch choice.
+
+Create the GitHub environment `rivet-managed-staging`, require the appropriate approvers, and configure:
+
+- repository variable `RIVET_K8S_STAGING_CONTEXT` with the exact kube-context name;
+- environment secrets `RIVET_K8S_STAGING_KUBECONFIG_B64`, `RIVET_K8S_STAGING_VALUES_B64`, and `RIVET_K8S_STAGING_CONFIG_B64` as base64-encoded kubeconfig, Helm values, and gate configuration respectively; and, when outage drills are configured, `RIVET_K8S_STAGING_INTERRUPTION_MANIFESTS_TGZ_B64` as a base64-encoded gzip tarball of the referenced NetworkPolicy manifests;
+- a protected job token with `packages: write`, plus GHCR package policy that permits the staging cluster to pull the immutable candidate images.
+
+The values file remains an environment-owned Helm overlay. It should reference existing Secrets or Vault paths, not contain plaintext production credentials. The gate configuration is also restored only into the GitHub runner temporary directory and is never uploaded. Its shape is:
+
+```json
+{
+  "namespace": "rivet-staging-rivet",
+  "release": "rivet-staging",
+  "baseUrl": "https://rivet-staging.example.test",
+  "requestHeaders": { "authorization": "Bearer <staging-key-or-session>" },
+  "workflowProbe": {
+    "path": "/workflows/provider-gate",
+    "method": "POST",
+    "body": { "input": "provider-gate" },
+    "contains": "provider-gate"
+  },
+  "webAppProbe": {
+    "path": "/apps/provider-gate",
+    "contains": "Provider gate"
+  },
+  "keyRotation": {
+    "currentSecretName": "rivet-settings-old",
+    "nextSecretName": "rivet-settings-new",
+    "secretKey": "encryptionKey"
+  },
+  "legacyImport": {
+    "probe": {
+      "path": "/workflows/legacy-import",
+      "method": "POST",
+      "body": { "input": "legacy" },
+      "contains": "legacy"
+    }
+  },
+  "interruptionManifests": {
+    "postgres": {
+      "applyFile": "block-postgres.yaml",
+      "restoreFile": "block-postgres.yaml",
+      "restoreAction": "delete"
+    }
+  }
+}
+```
+
+`namespace` must begin with `rivet-staging-`; the runner requires both configured context values to exactly equal the active context and requires `RIVET_K8S_PROVIDER_GATE_CONFIRM=deploy-staging`. It accepts only same-origin HTTPS probes. Each workflow and web-app probe must include a response marker, so a generic 200 page cannot pass as execution evidence.
+
+For each configured dependency outage, put the config-relative Kubernetes manifests in the optional interruption archive under the same relative paths. The workflow rejects archive path traversal and symbolic or hard links before extracting into the runner temporary directory; the runner also rejects missing or symlinked referenced manifests. Each manifest may contain only a `NetworkPolicy` explicitly in that staging namespace. `restoreAction: "delete"` deletes the named test policy after the readiness-failure assertion; `"apply"` applies a separate restoring policy. The runner attempts the restore even if the apply command fails after changing an earlier resource, so a later rejection does not normally leave the configured staging outage in place. This is intentionally narrow: the runner will not execute arbitrary shell commands or apply cluster-scoped resources. Configure the policies to sever only the selected staging dependency, then the gate verifies `/readyz` becomes unready, restores the policy, waits for recovery, and re-runs both workflow and web-app probes.
+
+When `keyRotation` is supplied, the gate writes an unchanged Run recordings settings snapshot to ensure an encrypted row exists, performs the documented old/new, new/old, and new-only Helm rollouts, and reads the same settings after every phase. When `legacyImport` is supplied, the staging release must already exist and retain its legacy PVC during the test. The gate checks the supplied legacy-data probe, rolls back to the preceding Helm revision, checks it again, then reinstalls the candidate and checks both current and legacy probes. This is a staging-only destructive acceptance test, not a recovery recipe for production.
+
+Run it from **Build Images** -> **Run workflow**, enabling `run_managed_kubernetes_provider_gate`. The protected job allows up to 180 minutes because candidate deployment, optional three-phase key rotation, legacy rollback, and outage recovery are each bounded independently; the default Helm operation bound is 15 minutes. The job resolves the candidate images to digests, verifies the rendered release uses them, checks the public ingress host and TLS endpoint, and uploads only workload/manifest/log artifacts under `artifacts/kubernetes-managed-provider-gate`. Candidate Helm upgrades are atomic: a failed rollout rolls the release back instead of leaving a partial failed candidate deployed. The ingress check is restricted to objects owned by the selected Helm release, so an unrelated staging ingress cannot satisfy it. When upgrading an existing staging release, the gate reuses its existing Helm values so omitted values are not reset; a new staging release uses only the supplied values. The gate treats any Helm history error other than an explicitly absent release as a failure, rather than risking an install-style upgrade with no inherited values. The gate labels and owns only its configured registry pull secret (by default, `rivet-managed-provider-gate-registry`) and refuses to overwrite a same-named secret without its ownership label. A first green run is required operational evidence; repository tests can validate this harness but cannot substitute for access to the real provider services.
 
 ## Managed workflow schema migrations
 

@@ -27,6 +27,7 @@
     "verify:kubernetes": "npm --prefix wrapper/api exec -- tsx --test wrapper/api/src/tests/kubernetes-launcher-config.test.ts wrapper/api/src/tests/kubernetes-contract.test.ts wrapper/api/src/tests/kubernetes-managed-release-gate.test.ts && node scripts/verify-kubernetes.mjs",
     "verify:kubernetes:managed-live": "node scripts/kubernetes-managed-release-gate.mjs smoke",
     "verify:kubernetes:managed-disruption": "node scripts/kubernetes-managed-release-gate.mjs release",
+    "verify:kubernetes:managed-provider": "node scripts/kubernetes-managed-provider-gate.mjs",
     "ui:observe": "node scripts/playwright-observe.mjs test",
     "ui:observe:debug": "node scripts/playwright-observe.mjs debug",
     "ui:observe:install": "node scripts/playwright-observe.mjs install",
