@@ -644,14 +644,20 @@ export function createPublishedWorkflowProjectReferenceLoader(root: string, root
             continue;
           }
 
-          return await loadPublishedOrLiveProjectFromFilesystem(root, resolvedProjectPath);
+          const hintedProject = await loadPublishedOrLiveProjectFromFilesystem(root, resolvedProjectPath);
+          if (hintedProject.metadata.id === reference.id) {
+            return hintedProject;
+          }
         } catch {
         }
       }
 
       const resolvedProjectPathById = await findProjectPathByProjectId(reference.id);
       if (resolvedProjectPathById) {
-        return loadPublishedOrLiveProjectFromFilesystem(root, resolvedProjectPathById);
+        const referencedProject = await loadPublishedOrLiveProjectFromFilesystem(root, resolvedProjectPathById);
+        if (referencedProject.metadata.id === reference.id) {
+          return referencedProject;
+        }
       }
 
       throw new Error(

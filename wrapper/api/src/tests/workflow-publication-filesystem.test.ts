@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import test from 'node:test';
+import { fileURLToPath } from 'node:url';
 import { readJson } from './helpers/workflow-api-harness.js';
 import { createFilesystemWorkflowSuiteHarness } from './helpers/workflow-filesystem-suite-harness.js';
 
@@ -12,6 +13,7 @@ const {
   workflowFs,
   workflowPublication,
   workflowStorageBackend,
+  rivetNode,
   withWorkflowApiServer,
   withWorkflowExecutionServer,
   resetAndEnsureWorkflowsRoot,
@@ -315,10 +317,16 @@ test('legacy published settings without lastPublishedAt still expose a fallback 
 test('published workflow keeps referenced projects resolvable after the referenced project is moved', async () => {
   const referenced = await workflowMutations.createWorkflowProjectItem('', 'Referenced');
   const main = await workflowMutations.createWorkflowProjectItem('', 'Main');
-  const passthroughProject = await fs.readFile(
+  const passthroughProjectPath = fileURLToPath(
     new URL('../../../../rivet/packages/node/test/test-graphs.rivet-project', import.meta.url),
-    'utf8',
   );
+  const passthroughProject = await fs.readFile(passthroughProjectPath, 'utf8');
+  const passthroughFixture = await rivetNode.loadProjectFromFile(passthroughProjectPath);
+  const passthroughGraphId = Object.keys(passthroughFixture.graphs)[0];
+  if (!passthroughGraphId) {
+    throw new Error('Expected the passthrough fixture to contain a graph');
+  }
+
   const referencedProjectId = 'refProject123';
   const referencedGraphId = 'refGraph123';
   const mainProjectId = 'mainProject123';
@@ -330,8 +338,8 @@ test('published workflow keeps referenced projects resolvable after the referenc
         `    title: ${title}`,
         `    mainGraphId: ${graphId}`,
       ].join('\n'))
-      .replaceAll('ytCHmBvDFSkCnQ9L7DJLB', projectId)
-      .replaceAll('kqaNrBo0WpJ1EOc2hj0zK', graphId)
+      .replaceAll(passthroughFixture.metadata.id, projectId)
+      .replaceAll(passthroughGraphId, graphId)
       .replaceAll('dataType: string', 'dataType: any');
 
   const referencedContents = createAnyPassthroughProject(referencedProjectId, referencedGraphId, 'Referenced');
@@ -381,6 +389,9 @@ test('published workflow keeps referenced projects resolvable after the referenc
 
   await workflowMutations.createWorkflowFolderItem('Moved', '');
   await workflowStorageBackend.moveWorkflowItemWithBackend('project', referenced.relativePath, 'Moved');
+  const staleHintProject = await workflowMutations.createWorkflowProjectItem('', 'Referenced');
+  const staleHintContents = await rivetNode.loadProjectFromFile(staleHintProject.absolutePath);
+  assert.notEqual(staleHintContents.metadata.id, referencedProjectId);
 
   await withWorkflowExecutionServer(async ({ publishedBaseUrl }) => {
     const response = await fetch(`${publishedBaseUrl}/main-with-reference-endpoint`, {
