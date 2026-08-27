@@ -69,6 +69,13 @@ outputs are cycle-safe cloned at the event boundary, and synchronous or async
 snapshot-observer failures are isolated from graph execution so later message,
 usage, reasoning, or direct-result accumulation cannot mutate an earlier page.
 
+The invocation coordinator returns the graph-semantic pipeline result together
+with an optional terminal snapshot descriptor. The node boundary projects the
+result first and only then attaches the final output map to that descriptor.
+Provider-failure results retain their diagnostic output map but deliberately
+have no terminal snapshot, so output history never presents a failed or partial
+provider response as a completed model round.
+
 The payload is privacy-bounded to values the LLM Chat node already exposes:
 `Response`, `All Messages`, and enabled diagnostic output ports. It does not
 introduce any additional raw provider body, header, credential, or hidden trace

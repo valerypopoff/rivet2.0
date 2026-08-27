@@ -67,7 +67,8 @@ describe('LLM invocation coordinator', () => {
       toolCallContinuation: undefined,
     });
 
-    assert.strictEqual(actual, result);
+    assert.strictEqual(actual.result, result);
+    assert.equal(actual.terminalSnapshot, undefined);
     assert.deepEqual(journal.events, [{ type: 'terminal', kind: 'failed' }]);
   });
 });
