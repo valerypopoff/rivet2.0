@@ -45,7 +45,7 @@ jobs:
       - name: Set Up Node
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
-          node-version: 20
+          node-version: 24
 
       - name: Verify Repo Structure
         run: npm run verify:repo-structure
@@ -141,7 +141,7 @@ jobs:
         if: ${{ matrix.needsRivet }}
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
-          node-version: 20
+          node-version: 24
 
       - name: Bootstrap Upstream Rivet
         if: ${{ matrix.needsRivet }}
@@ -238,7 +238,7 @@ jobs:
       - name: Set Up Node
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
-          node-version: 20
+          node-version: 24
 
       - name: Install API Test Dependencies
         run: npm ci --prefix wrapper/api
@@ -336,7 +336,7 @@ jobs:
       - name: Set Up Node
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
-          node-version: 20
+          node-version: 24
 
       - name: Install API Test Dependencies
         run: npm ci --prefix wrapper/api

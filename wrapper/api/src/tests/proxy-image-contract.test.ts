@@ -494,7 +494,9 @@ test('CI and production launchers publish and run the Rivet 2 wrapper image set'
   const developPushBranches = /on:\s*\n\s*push:\s*\n\s*branches:\s*\n((?:\s*-\s+[^\n]+\n?)+)/.exec(developVerificationWorkflow)?.[1] ?? '';
   assert.equal(imagePushBranches.trim(), '- main-rivet2');
   assert.equal(developPushBranches.trim(), '- develop-rivet2');
-  assert.match(developVerificationWorkflow, /node-version: 20/);
+  assert.match(developVerificationWorkflow, /node-version: 24/);
+  assert.doesNotMatch(`${imageBuildWorkflow}\n${developVerificationWorkflow}`, /node-version: 20/);
+  assert.equal((imageBuildWorkflow.match(/node-version: 24/g) ?? []).length, 4);
   assert.match(developVerificationWorkflow, /^\s*run: npm run setup:k8s-tools\s*$/m);
   assert.match(developVerificationWorkflow, /^\s*run: npm run test\s*$/m);
   assert.doesNotMatch(developVerificationWorkflow, /^\s*run: npm run setup(?::rivet)?\s*$/m);

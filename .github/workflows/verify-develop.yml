@@ -28,7 +28,7 @@ jobs:
       - name: Set Up Node
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
-          node-version: 20
+          node-version: 24
 
       - name: Set Up Kubernetes Tools
         run: npm run setup:k8s-tools
