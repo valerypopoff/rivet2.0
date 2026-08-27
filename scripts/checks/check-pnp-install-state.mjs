@@ -5,6 +5,7 @@ import path from 'node:path';
 
 const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const loaderPaths = ['.pnp.cjs', '.pnp.loader.mjs'];
+const requireFreshLoaders = process.argv.includes('--fresh');
 
 function runGit(...args) {
   return execFileSync('git', ['-C', repositoryRoot, ...args], {
@@ -52,15 +53,32 @@ for (const loaderPath of loaderPaths) {
   }
 }
 
+if (requireFreshLoaders) {
+  const changedLoaderPaths = runGit('diff', '--no-ext-diff', '--name-only', '--', ...loaderPaths)
+    .split(/\r?\n/)
+    .filter(Boolean);
+
+  for (const loaderPath of changedLoaderPaths) {
+    problems.push(`${loaderPath} changed after dependency installation`);
+  }
+}
+
 if (problems.length > 0) {
-  console.error('Yarn PnP install state is incomplete.');
+  console.error(
+    requireFreshLoaders ? 'Yarn PnP install state is incomplete or stale.' : 'Yarn PnP install state is incomplete.',
+  );
   for (const problem of problems) console.error(`- ${problem}`);
   console.error('');
-  console.error('The root PnP loaders are tracked zero-install files and must not be deleted.');
+  console.error('The root PnP loaders are tracked zero-install files and must remain present and current.');
+  if (requireFreshLoaders) {
+    console.error('They must also match the dependency manifests and lockfile after a fresh immutable install.');
+  }
   console.error('Restore them with:');
   console.error('  node .yarn/releases/yarn-4.17.1.cjs install --immutable');
   console.error('  git add .pnp.cjs .pnp.loader.mjs');
   process.exitCode = 1;
 } else {
-  console.log('Yarn PnP install state is complete.');
+  console.log(
+    requireFreshLoaders ? 'Yarn PnP install state is complete and fresh.' : 'Yarn PnP install state is complete.',
+  );
 }

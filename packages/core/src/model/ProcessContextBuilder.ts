@@ -22,6 +22,7 @@ export type NodeProcessContextBase = Omit<
   | 'markResultAsEditorCacheHit'
   | 'setGlobal'
   | 'signal'
+  | 'splitIndex'
   | 'toolCallContinuation'
   | 'toolCallTraceSource'
   | 'waitEvent'
@@ -47,6 +48,7 @@ export function buildNodeProcessContext(options: {
   requestUserInput: (inputStrings: string[], renderingType: 'text' | 'markdown') => Promise<StringArrayDataValue>;
   reportProgress: InternalProcessContext['reportProgress'];
   setGlobal: (id: string, value: ScalarOrArrayDataValue) => void;
+  splitIndex: number;
   toolCallContinuation?: InternalProcessContext['toolCallContinuation'];
   toolCallTraceSource?: InternalProcessContext['toolCallTraceSource'];
   waitEvent: (event: string) => Promise<DataValue | undefined>;
@@ -68,6 +70,7 @@ export function buildNodeProcessContext(options: {
     requestUserInput,
     reportProgress,
     setGlobal,
+    splitIndex,
     toolCallContinuation,
     toolCallTraceSource,
     waitEvent,
@@ -85,6 +88,7 @@ export function buildNodeProcessContext(options: {
     onPartialOutputs,
     signal: nodeAbortController.signal,
     processId,
+    splitIndex,
     setGlobal,
     createSubProcessor: createSubProcessor as InternalProcessContext['createSubProcessor'],
     getPluginConfig,

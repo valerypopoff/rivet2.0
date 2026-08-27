@@ -19,6 +19,7 @@ import {
   rootGraphState,
   runningGraphsState,
   selectedGraphRunByViewState,
+  selectedLLMChatOutputPageByInvocationState,
   type GraphRunSelection,
   type GraphRunRecord,
 } from '../state/dataFlow';
@@ -42,6 +43,7 @@ import {
   removeRunningGraphEntry,
   updateSelectedGraphRunForGraphStart,
 } from './graphExecutionEventHelpers.js';
+import { removeLLMChatOutputHistorySelectionsForProcess } from '../utils/llmChatOutputHistory.js';
 
 export type GraphExecutionEventsApi = {
   onAbort: (data: ProcessEvents['abort']) => void;
@@ -84,6 +86,7 @@ export function useGraphExecutionEvents(
   const setGraphStartTime = useSetAtom(graphStartTimeState);
   const setGraphRunHistoryByView = useSetAtom(graphRunHistoryByViewState);
   const setSelectedGraphRunByView = useSetAtom(selectedGraphRunByViewState);
+  const setLLMChatOutputPageSelections = useSetAtom(selectedLLMChatOutputPageByInvocationState);
   const lastRunDataLatest = useLatest(lastRunData);
   const rootRunIdsForDoneReconciliationRef = useRef<RootRunId[]>([]);
 
@@ -266,6 +269,7 @@ export function useGraphExecutionEvents(
 
     if (!nodeIdsToPreserve?.length) {
       setLastRunData({});
+      setLLMChatOutputPageSelections({});
       clearExecutionDataRefs(dataRefs, currentLastRunData);
       return;
     }
@@ -273,6 +277,16 @@ export function useGraphExecutionEvents(
     const { preservedRunData, removedRunData } = splitRunDataByPreservedNodes(currentLastRunData, nodeIdsToPreserve);
 
     setLastRunData(preservedRunData);
+    const preservedNodeIds = new Set(nodeIdsToPreserve);
+    setLLMChatOutputPageSelections((previous) => {
+      let selections = previous;
+      for (const nodeId of Object.keys(removedRunData)) {
+        if (!preservedNodeIds.has(nodeId as NodeId)) {
+          selections = removeLLMChatOutputHistorySelectionsForProcess({ nodeId, selections });
+        }
+      }
+      return selections;
+    });
     clearRemovedExecutionDataRefs(dataRefs, removedRunData, preservedRunData);
   };
 

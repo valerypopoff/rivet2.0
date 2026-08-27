@@ -463,6 +463,11 @@ export function useRemoteExecutor() {
           eventDispatcher.llmCallFinished(data);
         }
         break;
+      case 'llmChatOutputSnapshot':
+        if (shouldDispatchExecutionEvent) {
+          eventDispatcher.llmChatOutputSnapshot(data);
+        }
+        break;
       case 'llmProfileAttempt':
         collectRemoteEvaluationEvent(
           requestId == null ? undefined : evaluationMetricsByRequestIdRef.current.get(requestId),

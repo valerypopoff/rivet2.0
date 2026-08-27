@@ -31,6 +31,7 @@ import {
   resolveLLMChatV2RuntimeProviderOptions,
 } from '../chat-v2/llmChatV2NodeRuntime.js';
 import { projectLLMChatV2EditorCacheHit, writeLLMChatV2EditorCache } from '../chat-v2/llmChatV2CacheBoundary.js';
+import { cloneLLMChatV2Outputs } from '../chat-v2/llmChatV2OutputClone.js';
 
 export type {
   LLMChatV2ApiKeySource,
@@ -363,9 +364,9 @@ export class LLMChatV2NodeImpl extends NodeImpl<LLMChatV2Node> {
       return cacheHit;
     }
 
-    let result: Awaited<ReturnType<typeof executeLLMInvocation>>;
+    let invocation: Awaited<ReturnType<typeof executeLLMInvocation>>;
     try {
-      result = await executeLLMInvocation({
+      invocation = await executeLLMInvocation({
         context,
         journal: invocationJournal,
         runtime,
@@ -391,6 +392,7 @@ export class LLMChatV2NodeImpl extends NodeImpl<LLMChatV2Node> {
       throw error;
     }
 
+    const { result, terminalSnapshot } = invocation;
     projectLLMInvocationResult({
       result,
       modelCalls: invocationJournal.modelCalls,
@@ -399,6 +401,23 @@ export class LLMChatV2NodeImpl extends NodeImpl<LLMChatV2Node> {
       llmAttempts: invocationJournal.llmAttempts,
       profileSummary: runtime.getProfileSummary?.(),
     });
+
+    // The final display page is taken after result projection, so it exactly
+    // matches the one graph-semantic output map returned below.
+    if (terminalSnapshot != null) {
+      try {
+        const observerResult = context.onLLMChatOutputSnapshot?.({
+          ...terminalSnapshot,
+          nodeId: context.node.id,
+          processId: context.processId,
+          splitIndex: context.splitIndex ?? 0,
+          outputs: cloneLLMChatV2Outputs(result.commonOutputs),
+        });
+        void Promise.resolve(observerResult).catch(() => undefined);
+      } catch {
+        // Display history is never allowed to affect graph execution.
+      }
+    }
 
     if (toolCallContinuation && !isChatV2PipelineProviderFailureResult(result) && result.functionCalls.length > 0) {
       toolCallContinuation.release();

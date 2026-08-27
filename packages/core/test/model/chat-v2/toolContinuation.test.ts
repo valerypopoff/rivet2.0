@@ -256,6 +256,57 @@ describe('runChatV2PipelineWithToolContinuation', () => {
     assert.equal((secondPromptMessages.at(-1) as any).toolName, 'bar');
   });
 
+  it('captures one immutable page per completed logical model round', async () => {
+    const firstToolCall = makeToolCall('call_1', 'foo');
+    const secondToolCall = makeToolCall('call_2', 'foo');
+    const completedPages: Array<{ entryId: string; roundIndex: number; response: string }> = [];
+    const terminalPages: Array<{ entryId: string; roundIndex: number; outcome: string }> = [];
+    let providerCalls = 0;
+
+    const result = await runChatV2PipelineWithToolContinuation(
+      baseOptions({
+        runPipeline: async (options) => {
+          providerCalls += 1;
+          if (providerCalls === 1) {
+            return makePipelineResult('first tool request', [firstToolCall], (options.prompt as any).value);
+          }
+          if (providerCalls === 2) {
+            return makePipelineResult('second tool request', [secondToolCall], (options.prompt as any).value);
+          }
+          return makePipelineResult('final answer', [], (options.prompt as any).value);
+        },
+        onCompletedModelRound: (snapshot) => {
+          completedPages.push({
+            entryId: snapshot.entryId,
+            roundIndex: snapshot.roundIndex,
+            response: String(snapshot.outputs.response?.value),
+          });
+        },
+        onTerminalRound: (snapshot) => {
+          terminalPages.push({
+            entryId: snapshot.entryId,
+            roundIndex: snapshot.roundIndex,
+            outcome: snapshot.outcome,
+          });
+        },
+      }),
+    );
+
+    assert.equal(providerCalls, 3);
+    assert.deepEqual(completedPages, [
+      { entryId: 'model-round:0', roundIndex: 0, response: 'first tool request' },
+      { entryId: 'model-round:1', roundIndex: 1, response: 'second tool request' },
+    ]);
+    assert.deepEqual(terminalPages, [{ entryId: 'model-round:2', roundIndex: 2, outcome: 'final-answer' }]);
+
+    // Mutating a later terminal result cannot rewrite an already emitted page.
+    (result.commonOutputs.response as any).value = 'mutated terminal output';
+    assert.deepEqual(completedPages, [
+      { entryId: 'model-round:0', roundIndex: 0, response: 'first tool request' },
+      { entryId: 'model-round:1', roundIndex: 1, response: 'second tool request' },
+    ]);
+  });
+
   it('returns the exact sole direct tool result without another provider request', async () => {
     const directMarkdown = 'Dear user, here is your JSON:\n\n```json\n{\n  "example": true\n}\n```';
     const firstUsage = makeUsage(12, 3, 15, 2, 1, 0.002);
@@ -263,6 +314,8 @@ describe('runChatV2PipelineWithToolContinuation', () => {
     let pipelineRunCount = 0;
     let delegationCount = 0;
 
+    const completedPages: string[] = [];
+    const terminalPages: Array<{ entryId: string; kind: string; outcome: string }> = [];
     const result = await runChatV2PipelineWithToolContinuation(
       baseOptions({
         functions: [makeFunction('exportJson', 'return-direct')],
@@ -285,6 +338,9 @@ describe('runChatV2PipelineWithToolContinuation', () => {
           delegationCount++;
           return makeDelegatedToolResultMessage(call, directMarkdown);
         },
+        onCompletedModelRound: (snapshot) => completedPages.push(snapshot.entryId),
+        onTerminalRound: (snapshot) =>
+          terminalPages.push({ entryId: snapshot.entryId, kind: snapshot.kind, outcome: snapshot.outcome }),
       }),
     );
 
@@ -310,6 +366,10 @@ describe('runChatV2PipelineWithToolContinuation', () => {
       (result.commonOutputs['function-calls']?.value as any[]).map(({ name, output }) => ({ name, output })),
       [{ name: 'exportJson', output: directMarkdown }],
     );
+    assert.deepEqual(completedPages, ['model-round:0']);
+    assert.deepEqual(terminalPages, [
+      { entryId: 'direct-tool-result:0', kind: 'direct-tool-result', outcome: 'direct-tool-result' },
+    ]);
   });
 
   it('supports direct return through the connected Delegate round callback', async () => {

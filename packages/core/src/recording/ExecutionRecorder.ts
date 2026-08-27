@@ -148,6 +148,7 @@ const toRecordedEventMap: {
       execution,
     ),
   llmCallFinished: ({ execution, ...event }) => ({ ...event, execution }),
+  llmChatOutputSnapshot: ({ execution, ...event }) => withExecution(event, execution),
   llmProfileAttempt: ({ execution, ...event }) => ({ ...event, execution }),
   toolCallFinished: ({ execution, ...event }) => ({ ...event, execution }),
   nodeOutputsCleared: ({ node, processId, execution }) =>

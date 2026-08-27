@@ -1,4 +1,4 @@
-import { type ComponentType, type ReactNode } from 'react';
+import { Fragment, type ComponentType, type ReactNode } from 'react';
 import { type InputsOrOutputsWithRefs, type NodeRunDataWithRefs } from '../../state/dataFlow.js';
 import { type ChartNode, type NodeOutputDefinition } from '@valerypopoff/rivet2-core';
 import { RenderDataOutputs } from './RenderDataOutputs.js';
@@ -21,6 +21,8 @@ type RenderNodeOutputBodyOptions = NodeOutputRenderPolicyProps & {
   definitions?: readonly Pick<NodeOutputDefinition, 'id' | 'title'>[];
   isCompact: boolean;
   renderMarkdown?: boolean;
+  /** Lets a node-specific display-only layer replace one split item's output view. */
+  renderSplitOutput?: (options: { splitIndex: number; outputs: InputsOrOutputsWithRefs }) => ReactNode;
 };
 
 export function renderNodeOutputBody(options: RenderNodeOutputBodyOptions): ReactNode {
@@ -34,6 +36,7 @@ export function renderNodeOutputBody(options: RenderNodeOutputBodyOptions): Reac
     definitions,
     isCompact,
     renderMarkdown,
+    renderSplitOutput,
     renderMode,
     allowLargeStoredValueActions,
     autoCollapseLlmChatDiagnosticOutputs,
@@ -76,8 +79,17 @@ export function renderNodeOutputBody(options: RenderNodeOutputBodyOptions): Reac
   if (bodyViewModel.kind === 'split-outputs') {
     return (
       <div className="split-output">
-        {bodyViewModel.splitOutputs.map(([key, value]) =>
-          FullscreenOutputSimple ? (
+        {bodyViewModel.splitOutputs.map(([key, value]) => {
+          const splitIndex = Number(key);
+          if (renderSplitOutput && Number.isInteger(splitIndex)) {
+            return (
+              <Fragment key={`outputs-${key}`}>
+                {renderSplitOutput({ splitIndex, outputs: value as InputsOrOutputsWithRefs })}
+              </Fragment>
+            );
+          }
+
+          return FullscreenOutputSimple ? (
             <FullscreenOutputSimple
               key={`outputs-${key}`}
               outputs={value as InputsOrOutputsWithRefs}
@@ -108,8 +120,8 @@ export function renderNodeOutputBody(options: RenderNodeOutputBodyOptions): Reac
               autoCollapseLlmChatDiagnosticOutputs={autoCollapseLlmChatDiagnosticOutputs}
               wrapLines={wrapLines}
             />
-          ),
-        )}
+          );
+        })}
       </div>
     );
   }

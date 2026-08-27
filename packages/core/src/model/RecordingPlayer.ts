@@ -534,6 +534,14 @@ export async function replayExecutionRecording(options: {
           });
           break;
         }
+        case 'llmChatOutputSnapshot': {
+          const { data } = event;
+          emitReplayExecutionEvent('llmChatOutputSnapshot', {
+            ...data,
+            execution: getExecution(data.execution?.graphId ?? getGraphIdForNode(data.nodeId), data.execution),
+          });
+          break;
+        }
         case 'llmProfileAttempt': {
           const { data } = event;
           emitReplayExecutionEvent('llmProfileAttempt', {

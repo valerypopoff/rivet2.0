@@ -194,8 +194,29 @@ That exact existing connection becomes bidirectional automatically for the
 duration of auto-continuation. The LLM sends each model tool-call round to the
 Delegate, receives its ordered results, and continues generating while both
 nodes stay **Running**. There is no extra execution mode, reverse wire, or
-waiting state to configure. Each model tool-call round appears as a separate run
-page on the Delegate.
+waiting state to configure.
+
+LLM Chat shows a nested **round pager** when an invocation has more than one
+completed logical model response: for example, **Round 1 · Requested tools**,
+**Round 2 · Requested tools**, then **Round 3 · Final answer**. A round is one
+completed model response after its provider retries and profile fallback have
+resolved; retries, fallback candidates, and individual parallel tool calls do
+not create extra LLM pages. A direct-return tool keeps the requesting model
+round and adds a terminal **Direct tool result** page. The final LLM page is the
+ordinary Response and other graph output that flows downstream. Selecting an
+older page is only a display choice: it does not rerun the model, alter ports,
+or change downstream execution. Cached, frozen, preloaded, legacy, and
+single-result invocations keep the compact one-page output.
+
+While a later model round is streaming, **Current response · Running** remains
+the latest page. You can inspect an older completed round and return to the
+current response without changing the running graph. If an invocation later
+fails, every completed round remains available, but Rivet does not invent a
+page for the incomplete round.
+
+Each model tool-call round also appears at the call level on the Delegate. One
+model round with several parallel calls is therefore one LLM Chat page but
+several selectable Delegate run pages.
 
 **Run per item** LLM Chat nodes are deliberately not upgraded to this connected
 continuation behavior. Their Tool Calls wire remains ordinary and each split

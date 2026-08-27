@@ -6,53 +6,15 @@ import type { ChatV2Provider, ChatV2ProviderOptions, ChatV2ToolChoice } from './
 import type { LLMChatV2EditorCacheKeyParts, LLMChatV2NodeData } from './llmChatV2NodeData.js';
 import type { LLMProfileValue } from './llmProfileTypes.js';
 import { parseCustomProviderApi } from './customProviderApi.js';
+import { cloneLLMChatV2Outputs } from './llmChatV2OutputClone.js';
 
 export function buildLLMChatV2EditorCacheKey(parts: LLMChatV2EditorCacheKeyParts): string {
   const { cacheVersion = 3, ...keyParts } = parts;
   return stableStringify({ cacheVersion, ...keyParts }) ?? '';
 }
 
-function cloneEditorCacheValue<T>(value: T, seen = new WeakMap<object, unknown>()): T {
-  if (value == null || typeof value !== 'object') {
-    return value;
-  }
-
-  if (value instanceof Uint8Array) {
-    return new Uint8Array(value) as T;
-  }
-
-  const existing = seen.get(value);
-  if (existing != null) {
-    return existing as T;
-  }
-
-  if (Array.isArray(value)) {
-    const clone: unknown[] = [];
-    seen.set(value, clone);
-    clone.push(...value.map((item) => cloneEditorCacheValue(item, seen)));
-    return clone as T;
-  }
-
-  const clone: Record<string, unknown> = {};
-  seen.set(value, clone);
-
-  for (const [key, item] of Object.entries(value)) {
-    clone[key] = cloneEditorCacheValue(item, seen);
-  }
-
-  return clone as T;
-}
-
 export function cloneLLMChatV2EditorCacheOutputs(outputs: Outputs): Outputs {
-  if (typeof structuredClone === 'function') {
-    try {
-      return structuredClone(outputs) as Outputs;
-    } catch {
-      // Fall through to the small object/array clone for values structuredClone cannot copy.
-    }
-  }
-
-  return cloneEditorCacheValue(outputs);
+  return cloneLLMChatV2Outputs(outputs);
 }
 
 function fingerprintSecret(secret: string | undefined): string | undefined {

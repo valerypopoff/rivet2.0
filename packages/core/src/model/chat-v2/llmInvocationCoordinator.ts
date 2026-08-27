@@ -3,7 +3,10 @@ import type { LLMChatV2RuntimeConfig } from './llmChatV2NodeRuntime.js';
 import type { InternalProcessContext } from '../ProcessContext.js';
 import type { ToolCallContinuation } from '../ToolCallContinuation.js';
 import { delegateToolCall } from '../nodes/toolCallDelegation.js';
-import { runChatV2PipelineWithToolContinuation } from './toolContinuation.js';
+import {
+  runChatV2PipelineWithToolContinuation,
+  type LLMChatOutputSnapshotDescriptor,
+} from './toolContinuation.js';
 import type { LLMInvocationJournal } from './llmInvocationJournal.js';
 import { isChatV2PipelineProviderFailureResult } from './chatV2Pipeline.js';
 
@@ -17,9 +20,10 @@ export async function executeLLMInvocation(params: {
   journal: LLMInvocationJournal;
   runtime: LLMChatV2RuntimeConfig;
   toolCallContinuation: ToolCallContinuation | undefined;
-}): Promise<ChatV2PipelineResult> {
+}): Promise<{ result: ChatV2PipelineResult; terminalSnapshot?: LLMChatOutputSnapshotDescriptor }> {
   const { context, journal, runtime, toolCallContinuation } = params;
   try {
+    let terminalSnapshot: LLMChatOutputSnapshotDescriptor | undefined;
     const result = runtime.shouldAutoContinueToolCalls
       ? await runChatV2PipelineWithToolContinuation({
           ...runtime.runOptions,
@@ -53,8 +57,36 @@ export async function executeLLMInvocation(params: {
             };
           },
           runPipeline: runtime.runPipeline,
+          onCompletedModelRound: (snapshot) => {
+            try {
+              const observerResult = context.onLLMChatOutputSnapshot?.({
+                ...snapshot,
+                nodeId: context.node.id,
+                processId: context.processId,
+                splitIndex: context.splitIndex ?? 0,
+              });
+              // GraphProcessor already isolates its own observer. Preserve the
+              // same guarantee for direct node callers that provide an async
+              // observer themselves.
+              void Promise.resolve(observerResult).catch(() => undefined);
+            } catch {
+              // History is observational; snapshot delivery cannot affect a graph run.
+            }
+          },
+          onTerminalRound: (snapshot) => {
+            terminalSnapshot = snapshot;
+          },
         })
       : await runtime.runPipeline(runtime.runOptions);
+
+    if (!runtime.shouldAutoContinueToolCalls && !isChatV2PipelineProviderFailureResult(result)) {
+      terminalSnapshot = {
+        entryId: 'model-round:0',
+        roundIndex: 0,
+        kind: 'model-round',
+        outcome: result.functionCalls.length > 0 ? 'unresolved-tool-calls' : 'final-answer',
+      };
+    }
 
     journal.recordTerminal({
       kind: isChatV2PipelineProviderFailureResult(result)
@@ -63,7 +95,7 @@ export async function executeLLMInvocation(params: {
           ? 'released-unresolved-calls'
           : 'final-model-answer',
     });
-    return result;
+    return { result, terminalSnapshot };
   } catch (error) {
     journal.recordTerminal({ kind: context.signal.aborted ? 'cancelled' : 'failed' });
     throw error;

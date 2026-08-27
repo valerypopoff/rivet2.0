@@ -13,6 +13,7 @@ import {
   splitRunDataByPreservedNodes,
   storeDataValueForHistory,
   storeInputsOrOutputsForHistory,
+  storeLLMChatOutputHistoryEntry,
   storeNodeDataForHistory,
 } from './executionDataStorage.js';
 import { REF_STORAGE_THRESHOLD_CHARS } from './outputStorageLimits.js';
@@ -59,6 +60,46 @@ test('storeDataValueForHistory includes split index in ref ids for split outputs
   assert.equal(stored.storage, 'ref');
   assert.equal(stored.refId, 'execution:node-split:process-split:output:2:output');
   assert.equal(dataRefs.values.has(stored.refId), true);
+});
+
+test('stores LLM Chat history refs in an entry-specific namespace', () => {
+  const dataRefs = createDataRefStore();
+  const largeOutput = { type: 'string', value: 'x'.repeat(REF_STORAGE_THRESHOLD_CHARS + 1) } as const;
+  const first = storeLLMChatOutputHistoryEntry(
+    {
+      entryId: 'model-round:0',
+      kind: 'model-round',
+      outcome: 'tool-calls',
+      roundIndex: 0,
+      splitIndex: 0,
+      outputData: { response: largeOutput } as any,
+    },
+    dataRefs,
+    { nodeId: 'node-chat', processId: 'process-chat' },
+  );
+  const second = storeLLMChatOutputHistoryEntry(
+    {
+      entryId: 'model-round:1',
+      kind: 'model-round',
+      outcome: 'final-answer',
+      roundIndex: 1,
+      splitIndex: 0,
+      outputData: { response: largeOutput } as any,
+    },
+    dataRefs,
+    { nodeId: 'node-chat', processId: 'process-chat' },
+  );
+
+  const firstRef = first.outputData['response' as PortId]!;
+  const secondRef = second.outputData['response' as PortId]!;
+  assert.equal(firstRef.storage, 'ref');
+  assert.equal(secondRef.storage, 'ref');
+  if (firstRef.storage !== 'ref' || secondRef.storage !== 'ref') {
+    throw new Error('Expected large LLM Chat history values to be ref-backed');
+  }
+  assert.equal(firstRef.refId, 'execution:node-chat:process-chat:llm-chat-output-history:0:model-round:0:response');
+  assert.equal(secondRef.refId, 'execution:node-chat:process-chat:llm-chat-output-history:0:model-round:1:response');
+  assert.notEqual(firstRef.refId, secondRef.refId);
 });
 
 test('isPreviewOnlyStoredValue folds only chat-message refs with text previews', () => {
@@ -141,7 +182,7 @@ test('restoreStoredDataValue tolerates malformed primitive legacy payloads', () 
   assert.doesNotThrow(() => restoreStoredDataValue(178 as never, dataRefs));
 });
 
-test('collectStoredRefIds collects input, output, and split-output refs from node run data', () => {
+test('collectStoredRefIds collects input, output, split-output, and LLM history refs from node run data', () => {
   const refIds = collectStoredRefIds({
     inputData: {
       input: {
@@ -183,9 +224,33 @@ test('collectStoredRefIds collects input, output, and split-output refs from nod
         },
       },
     },
+    llmChatOutputHistory: {
+      0: [
+        {
+          entryId: 'model-round:0',
+          kind: 'model-round',
+          outcome: 'tool-calls',
+          roundIndex: 0,
+          splitIndex: 0,
+          outputData: {
+            response: {
+              type: 'string',
+              storage: 'ref',
+              refId: 'llm-history-ref',
+              preview: {
+                kind: 'text',
+                excerpt: 'history',
+                totalChars: 7,
+                lineCount: 1,
+              },
+            },
+          },
+        },
+      ],
+    },
   } as never);
 
-  assert.deepEqual(refIds, ['input-ref', 'output-ref', 'split-ref']);
+  assert.deepEqual(refIds, ['input-ref', 'output-ref', 'split-ref', 'llm-history-ref']);
 });
 
 test('collectStoredRefIds tolerates legacy nullish split-output entries', () => {

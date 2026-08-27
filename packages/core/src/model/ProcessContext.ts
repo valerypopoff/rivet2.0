@@ -115,6 +115,35 @@ export type ChatV2CallFinishedEvent = {
 
 export type ChatV2CallFinishedObserver = (event: ChatV2CallFinishedEvent) => void;
 
+/** A completed logical LLM Chat round, as opposed to one physical provider attempt. */
+export type LLMChatOutputSnapshotKind = 'model-round' | 'direct-tool-result';
+
+/** The user-visible terminal state represented by one completed logical round. */
+export type LLMChatOutputSnapshotOutcome =
+  | 'tool-calls'
+  | 'final-answer'
+  | 'provider-failure'
+  | 'unresolved-tool-calls'
+  | 'max-rounds'
+  | 'direct-tool-result';
+
+/**
+ * Observational output page emitted by LLM Chat after a logical model round.
+ * It never changes the node's single graph-semantic terminal output.
+ */
+export type LLMChatOutputSnapshotEvent = {
+  entryId: string;
+  roundIndex: number;
+  splitIndex: number;
+  kind: LLMChatOutputSnapshotKind;
+  outcome: LLMChatOutputSnapshotOutcome;
+  nodeId: NodeId;
+  processId: ProcessId;
+  outputs: Outputs;
+};
+
+export type LLMChatOutputSnapshotObserver = (event: LLMChatOutputSnapshotEvent) => void | Promise<void>;
+
 /**
  * Portable, privacy-bounded subset of a completed physical Chat V2 call.
  * Provider-shaped raw usage is intentionally retained only by the host observer
@@ -212,6 +241,9 @@ export type ProcessContext = {
    */
   onChatV2CallFinished?: ChatV2CallFinishedObserver;
 
+  /** Host-only observer for completed, display-only LLM Chat output pages. */
+  onLLMChatOutputSnapshot?: LLMChatOutputSnapshotObserver;
+
   /** Host-only observer for profile fallback and circuit-health decisions. */
   onLLMProfileAttempt?: LLMProfileAttemptObserver;
 
@@ -286,6 +318,9 @@ export type InternalProcessContext<T extends ChartNode = ChartNode> = ProcessCon
 
   /** A unique ID for this specific execution of the node. */
   processId: ProcessId;
+
+  /** Zero-based split item index. GraphProcessor supplies zero for non-split runs. */
+  splitIndex?: number;
 
   /** Output ports with at least one active immediate downstream consumer in this graph run. */
   activeOutputPortIds: ReadonlySet<PortId>;

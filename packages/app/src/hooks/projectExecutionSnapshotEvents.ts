@@ -38,6 +38,11 @@ import { applyProcessEventToRunActivityJournal } from '../features/runActivity/r
 import { createRunActivityJournal } from '../features/runActivity/runActivityJournal.js';
 import { handleError } from '../utils/errorHandling.js';
 import { upsertAgentTraceEventForInvocation } from './agentTraceEventStorage.js';
+import {
+  removeLLMChatOutputHistorySelectionsForProcess,
+  toLLMChatOutputHistoryEntry,
+  upsertLLMChatOutputHistoryEntry,
+} from '../utils/llmChatOutputHistory.js';
 
 export type ProjectExecutionSnapshotEventResult = {
   changed: boolean;
@@ -182,6 +187,15 @@ function applyProcessEventToProjectExecutionSnapshotData<K extends keyof Process
         }),
       };
     }
+    case 'llmChatOutputSnapshot':
+      return {
+        changed: true,
+        snapshot: applyLLMChatOutputSnapshot(
+          snapshot,
+          options.data as ProcessEvents['llmChatOutputSnapshot'],
+          options,
+        ),
+      };
     case 'llmProfileAttempt': {
       const data = options.data as ProcessEvents['llmProfileAttempt'];
       return {
@@ -279,6 +293,42 @@ function applyAgentTraceEvent(snapshot: ProjectExecutionSnapshot, event: AgentTr
   return produce(snapshot, (draft) => {
     upsertAgentTraceEventForInvocation(draft.lastRunDataByNode, event);
   });
+}
+
+function applyLLMChatOutputSnapshot(
+  snapshot: ProjectExecutionSnapshot,
+  data: ProcessEvents['llmChatOutputSnapshot'],
+  options: { projectId: ProjectId; refStore: DataRefStore },
+): ProjectExecutionSnapshot {
+  const storedOutputData = storeInputsOrOutputsForHistory(sanitizeInputsOrOutputs(data.outputs), options.refStore, {
+    channel: 'llm-chat-output-history',
+    historyEntryId: data.entryId,
+    nodeId: data.nodeId,
+    processId: data.processId,
+    projectId: options.projectId,
+    splitIndex: data.splitIndex,
+  })!;
+  const entry = toLLMChatOutputHistoryEntry(data, storedOutputData);
+  const refIdsToDelete: string[] = [];
+  const nextSnapshot = produce(snapshot, (draft) => {
+    draft.lastRunDataByNode[data.nodeId] ??= [];
+    let process = draft.lastRunDataByNode[data.nodeId]!.find((candidate) => candidate.processId === data.processId);
+    if (!process) {
+      process = {
+        data: {},
+        graphId: data.execution.graphId,
+        graphRunId: data.execution.graphRunId,
+        processId: data.processId,
+        rootRunId: data.execution.rootRunId,
+      };
+      draft.lastRunDataByNode[data.nodeId]!.push(process);
+    }
+    const updated = upsertLLMChatOutputHistoryEntry(process.data, entry);
+    refIdsToDelete.push(...updated.replacedRefIds);
+    process.data = updated.data;
+  });
+  deleteStoredRefIds(options.refStore, refIdsToDelete);
+  return nextSnapshot;
 }
 
 function applyStart(
@@ -516,6 +566,11 @@ function applyNodeOutputsCleared(
     }
 
     draft.selectedProcessPageNodes[data.node.id] = 'latest';
+    draft.selectedLLMChatOutputPageByInvocation = removeLLMChatOutputHistorySelectionsForProcess({
+      nodeId: data.node.id,
+      processId: data.processId,
+      selections: draft.selectedLLMChatOutputPageByInvocation,
+    });
   });
 
   deleteStoredRefIds(refStore, refIdsToDelete);

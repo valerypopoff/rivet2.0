@@ -16,6 +16,7 @@ import {
   type NodeRunData,
   type NodeRunDataWithRefs,
   lastRunDataByNodeState,
+  selectedLLMChatOutputPageByInvocationState,
   selectedProcessPageNodesState,
 } from '../state/dataFlow';
 import { previousDataPerNodeToKeepState } from '../state/settings';
@@ -28,6 +29,7 @@ import {
   storeNodeDataForHistory,
 } from '../utils/executionDataStorage';
 import { projectState } from '../state/savedGraphs';
+import { removeLLMChatOutputHistorySelectionsForProcess } from '../utils/llmChatOutputHistory.js';
 
 export type ExecutionDataFlowApi = {
   clearNodeRunDataPreservationForNextStart: () => void;
@@ -50,6 +52,7 @@ export type ExecutionDataFlowApi = {
 export function useExecutionDataFlow(): ExecutionDataFlowApi {
   const dataRefs = useDataRefs();
   const setLastRunData = useSetAtom(lastRunDataByNodeState);
+  const setLLMChatOutputPageSelections = useSetAtom(selectedLLMChatOutputPageByInvocationState);
   const setSelectedPage = useSetAtom(selectedProcessPageNodesState);
   const setUserInputQuestions = useSetAtom(userInputModalQuestionsState);
   const setLastRecordingState = useSetAtom(lastRecordingState);
@@ -101,6 +104,7 @@ export function useExecutionDataFlow(): ExecutionDataFlowApi {
       projectId: project.metadata.id,
     });
     const refIdsToDelete: string[] = [];
+    const evictedProcessIds: ProcessId[] = [];
 
     setLastRunData((prev) =>
       produce(prev, (draft) => {
@@ -125,6 +129,7 @@ export function useExecutionDataFlow(): ExecutionDataFlowApi {
 
           for (const previousProcess of dataNotKept) {
             refIdsToDelete.push(...collectStoredRefIds(previousProcess.data));
+            evictedProcessIds.push(previousProcess.processId);
             if (previousProcess.data.inputData) {
               previousProcess.data.inputData = {};
             }
@@ -133,6 +138,9 @@ export function useExecutionDataFlow(): ExecutionDataFlowApi {
             }
             if (previousProcess.data.splitOutputData) {
               previousProcess.data.splitOutputData = {};
+            }
+            if (previousProcess.data.llmChatOutputHistory) {
+              previousProcess.data.llmChatOutputHistory = {};
             }
           }
         }
@@ -148,6 +156,19 @@ export function useExecutionDataFlow(): ExecutionDataFlowApi {
     );
 
     deleteStoredRefIds(dataRefs, refIdsToDelete);
+    if (evictedProcessIds.length > 0) {
+      setLLMChatOutputPageSelections((previous) =>
+        evictedProcessIds.reduce(
+          (selections, evictedProcessId) =>
+            removeLLMChatOutputHistorySelectionsForProcess({
+              nodeId,
+              processId: evictedProcessId,
+              selections,
+            }),
+          previous,
+        ),
+      );
+    }
   };
 
   const setSelectedNodePageLatest = (nodeId: NodeId, execution: GraphExecutionMetadata | undefined) => {
@@ -194,6 +215,7 @@ export function useExecutionDataFlow(): ExecutionDataFlowApi {
     setLastRecordingState(undefined);
     setUserInputQuestions({});
     setLastRunData({});
+    setLLMChatOutputPageSelections({});
     clearExecutionDataRefs(dataRefs, lastRunDataLatest.current ?? {});
   };
 

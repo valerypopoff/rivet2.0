@@ -1183,6 +1183,50 @@ export const nodeStyles = css`
     z-index: 2;
   }
 
+  .llm-chat-output-history-pager {
+    align-items: center;
+    border-bottom: 1px solid var(--node-output-picker-border);
+    display: flex;
+    font-size: var(--ui-font-size-xs);
+    gap: 8px;
+    margin: 0 -12px 10px;
+    min-height: 28px;
+    padding: 0 8px 8px;
+    position: relative;
+    z-index: 3;
+
+    button {
+      align-items: center;
+      background: transparent;
+      border: 0;
+      border-radius: 4px;
+      color: var(--foreground);
+      cursor: pointer;
+      display: inline-flex;
+      font: inherit;
+      height: 24px;
+      justify-content: center;
+      padding: 0;
+      width: 24px;
+
+      &:hover:not(:disabled) {
+        background: var(--node-output-picker-hover-bg);
+      }
+
+      &:disabled {
+        cursor: default;
+        opacity: 0.4;
+      }
+    }
+
+    .llm-chat-output-history-pager-label {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+  }
+
   .node-output-inner.has-output-actions .node-output-content-fade::before {
     content: '';
     float: right;

@@ -16,8 +16,10 @@ import { promptDesignerAttachedChatNodeState } from '../../state/promptDesigner.
 import {
   type NodeRunDataWithRefs,
   type ProcessDataForNode,
+  getLLMChatOutputHistorySelectionKey,
   lastRunDataState,
   resolvedGraphSelectionState,
+  selectedLLMChatOutputPageState,
   selectedProcessPageState,
 } from '../../state/dataFlow.js';
 import { showNodeRunDurationsState } from '../../state/settings.js';
@@ -38,12 +40,19 @@ import {
 } from './NodeOutputContentState.js';
 import { copyOutputValue } from './nodeOutputCopyActions.js';
 import { NodeOutputPager } from './NodeOutputPager.js';
+import { LLMChatOutputHistoryPager } from './LLMChatOutputHistoryPager.js';
+import { LLMChatSplitOutputHistory } from './LLMChatSplitOutputHistory.js';
 import { resolveNodeOutputPreviewMode } from './nodeOutputPreviewMode.js';
 import {
   createNodeOutputContentViewModel,
   getNodeOutputCopySource,
   getSelectedNodeOutputProcess,
 } from './nodeOutputViewModel.js';
+import {
+  getLLMChatSplitOutputHistoryPresentationData,
+  getSelectedLLMChatOutputHistoryData,
+  shouldShowLLMChatOutputHistoryPager,
+} from '../../utils/llmChatOutputHistory.js';
 import {
   NodeRunDurationMeta,
   NodeRunDurationSummaryMeta,
@@ -150,11 +159,32 @@ const NodeOutputSingleProcess: FC<{
 }) => {
   const dataRefs = useDataRefs();
   const [isInspectorOpen, setInspectorOpen] = useState(false);
+  const llmChatHistorySelectionKey = getLLMChatOutputHistorySelectionKey(node.id, processId, 0);
+  const [selectedLLMChatOutputPage, setSelectedLLMChatOutputPage] = useAtom(
+    selectedLLMChatOutputPageState(llmChatHistorySelectionKey),
+  );
   const { Output, OutputSimple, getCopyValueData } = useUnknownNodeComponentDescriptorFor(node);
 
   const setOverlayOpen = useSetAtom(overlayOpenState);
   const setPromptDesignerAttachedNode = useSetAtom(promptDesignerAttachedChatNodeState);
   const io = useNodeIO(node.id);
+  const presentationData = useMemo(
+    () => (node.type === 'llmChatV2' ? getLLMChatSplitOutputHistoryPresentationData(data) : data),
+    [data, node.type],
+  );
+  const hasSplitOutputData = presentationData.splitOutputData != null;
+  const llmChatOutputHistory =
+    node.type === 'llmChatV2' && !hasSplitOutputData ? data.llmChatOutputHistory?.[0] ?? [] : [];
+  const displayedData = useMemo(
+    () =>
+      hasSplitOutputData
+        ? presentationData
+        : getSelectedLLMChatOutputHistoryData({
+            data: presentationData,
+            selectedPage: selectedLLMChatOutputPage,
+          }),
+    [hasSplitOutputData, presentationData, selectedLLMChatOutputPage],
+  );
 
   const handleOpenPromptDesigner = () => {
     setOverlayOpen('promptDesigner');
@@ -168,23 +198,23 @@ const NodeOutputSingleProcess: FC<{
     () =>
       createNodeOutputContentViewModel({
         nodeType: node.type,
-        data,
+        data: displayedData,
         dataRefs,
         showNodeRunDuration,
       }),
-    [data, dataRefs, node.type, showNodeRunDuration],
+    [dataRefs, displayedData, node.type, showNodeRunDuration],
   );
-  const durationProcessData = useMemo(() => [{ processId, data }], [data, processId]);
+  const durationProcessData = useMemo(() => [{ processId, data: displayedData }], [displayedData, processId]);
   const showDurationSummary =
     !suppressDurationMeta && shouldShowNodeRunDurationSummary(node.type, durationProcessData, showNodeRunDuration);
   const showDurationMeta =
     !suppressDurationMeta &&
     !showDurationSummary &&
-    shouldShowNodeRunDurationMeta(node.type, data, showNodeRunDuration);
+    shouldShowNodeRunDurationMeta(node.type, displayedData, showNodeRunDuration);
 
   const copySource = getNodeOutputCopySource(content);
   const handleCopyToClipboard = useStableCallback(() =>
-    copyOutputValue(copySource, dataRefs, getCopyValueData, io.outputDefinitions),
+      copyOutputValue(copySource, dataRefs, getCopyValueData, io.outputDefinitions),
   );
   const hasPromptDesignerAction = node.type === 'llmChatV2' && (node as LLMChatV2Node).data.configurationMode !== 'profile';
   const hasResponseInspectorAction = node.type === 'llmChatV2';
@@ -192,6 +222,18 @@ const NodeOutputSingleProcess: FC<{
   const responseInspector = isInspectorOpen ? (
     <AgentResponseInspector trace={responseTrace} onClose={() => setInspectorOpen(false)} renderInPortal />
   ) : null;
+  const llmChatOutputHistoryPager = (
+    <LLMChatOutputHistoryPager
+      entries={llmChatOutputHistory}
+      forceVisible={shouldShowLLMChatOutputHistoryPager({
+        entries: llmChatOutputHistory,
+        hasTerminalOutput: data.outputData != null,
+      })}
+      showLivePage={data.status?.type === 'running' && data.outputData != null}
+      selectedPage={selectedLLMChatOutputPage}
+      onSelectPage={setSelectedLLMChatOutputPage}
+    />
+  );
   const outputInnerClassName =
     hasPromptDesignerAction || hasResponseInspectorAction
       ? 'node-output-inner has-output-actions has-extra-output-action'
@@ -199,7 +241,7 @@ const NodeOutputSingleProcess: FC<{
   const erroredOutputInnerClassName = `${outputInnerClassName} errored`;
 
   if (content.kind === 'code-error') {
-    const contentKey = getNodeOutputContentKey(processId, data, content.contentKeyKind);
+    const contentKey = getNodeOutputContentKey(processId, displayedData, content.contentKeyKind);
 
     return (
       <div className={erroredOutputInnerClassName}>
@@ -213,17 +255,18 @@ const NodeOutputSingleProcess: FC<{
           onToggleExpandedOutput={onToggleExpandedOutput}
         />
         {responseInspector}
+        {llmChatOutputHistoryPager}
         <NodeOutputContentFade key={contentKey} contentKey={contentKey}>
           {showDurationSummary && <NodeRunDurationSummaryMeta processData={durationProcessData} hasBody />}
-          {showDurationMeta && <NodeRunDurationMeta data={data} hasBody />}
-          <CodeNodeErrorOutput data={data} />
+          {showDurationMeta && <NodeRunDurationMeta data={displayedData} hasBody />}
+          <CodeNodeErrorOutput data={displayedData} />
         </NodeOutputContentFade>
       </div>
     );
   }
 
   if (content.kind === 'generic-error') {
-    const contentKey = getNodeOutputContentKey(processId, data, content.contentKeyKind);
+    const contentKey = getNodeOutputContentKey(processId, displayedData, content.contentKeyKind);
 
     return (
       <div className={erroredOutputInnerClassName}>
@@ -237,9 +280,10 @@ const NodeOutputSingleProcess: FC<{
           onToggleExpandedOutput={onToggleExpandedOutput}
         />
         {responseInspector}
+        {llmChatOutputHistoryPager}
         <NodeOutputContentFade key={contentKey} contentKey={contentKey}>
           {showDurationSummary && <NodeRunDurationSummaryMeta processData={durationProcessData} hasBody />}
-          {showDurationMeta && <NodeRunDurationMeta data={data} hasBody />}
+          {showDurationMeta && <NodeRunDurationMeta data={displayedData} hasBody />}
           <div className="node-output-error-message">{content.error}</div>
         </NodeOutputContentFade>
       </div>
@@ -259,13 +303,38 @@ const NodeOutputSingleProcess: FC<{
     Output,
     OutputSimple,
     node,
-    data,
+    data: displayedData,
     definitions: io.outputDefinitions,
     isCompact,
     renderMode,
+    renderSplitOutput:
+      node.type === 'llmChatV2' && hasSplitOutputData
+        ? ({ splitIndex, outputs }) => (
+            <LLMChatSplitOutputHistory
+              entries={data.llmChatOutputHistory?.[splitIndex]}
+              hasTerminalOutput={data.splitOutputData?.[splitIndex] != null}
+              isRunning={data.status?.type === 'running'}
+              latestOutputs={outputs}
+              nodeId={node.id}
+              processId={processId}
+              renderOutputs={(selectedOutputs) =>
+                renderNodeOutputBody({
+                  Output,
+                  OutputSimple,
+                  node,
+                  data: { ...displayedData, outputData: selectedOutputs, splitOutputData: undefined },
+                  definitions: io.outputDefinitions,
+                  isCompact,
+                  renderMode,
+                })
+              }
+              splitIndex={splitIndex}
+            />
+          )
+        : undefined,
   });
   const hasBody = body != null;
-  const contentKey = getNodeOutputContentKey(processId, data, content.contentKeyKind);
+  const contentKey = getNodeOutputContentKey(processId, displayedData, content.contentKeyKind);
 
   return (
     <div className={outputInnerClassName}>
@@ -280,9 +349,10 @@ const NodeOutputSingleProcess: FC<{
       />
       {responseInspector}
       {isFrozen && <FrozenOutputNotice />}
+      {llmChatOutputHistoryPager}
       <NodeOutputContentFade key={contentKey} contentKey={contentKey}>
         {showDurationSummary && <NodeRunDurationSummaryMeta processData={durationProcessData} hasBody={hasBody} />}
-        {showDurationMeta && <NodeRunDurationMeta data={data} hasBody={hasBody} />}
+        {showDurationMeta && <NodeRunDurationMeta data={displayedData} hasBody={hasBody} />}
         {content.kind === 'output' && content.errorMessage && (
           <div className="node-output-error-message">{content.errorMessage}</div>
         )}

@@ -344,6 +344,87 @@ void describe('ExecutionRecorder', () => {
     assert.notEqual(replayedExecutions[0]!.graphRunId, execution.graphRunId);
   });
 
+  void it('records and replays LLM Chat output snapshots without creating node lifecycle events', async () => {
+    const recorder = new ExecutionRecorder();
+    const sourceEmitter = new Emittery<ProcessEvents>();
+    recorder.record(sourceEmitter as unknown as GraphProcessor);
+    await sourceEmitter.emit('graphStart', { graph, inputs: {}, execution });
+    await sourceEmitter.emit('nodeStart', { node, inputs: {}, processId, execution });
+    await sourceEmitter.emit('llmChatOutputSnapshot', {
+      nodeId,
+      processId,
+      entryId: 'model-round:0',
+      roundIndex: 0,
+      splitIndex: 0,
+      kind: 'model-round',
+      outcome: 'tool-calls',
+      outputs: { response: { type: 'string', value: 'I will call a tool.' } },
+      execution,
+    });
+    await sourceEmitter.emit('nodeFinish', {
+      node,
+      outputs: { response: { type: 'string', value: 'final answer' } },
+      processId,
+      execution,
+    });
+    await sourceEmitter.emit('done', { results: {} });
+
+    assert.deepEqual(
+      recorder.events.map((event) => event.type),
+      ['graphStart', 'nodeStart', 'llmChatOutputSnapshot', 'nodeFinish', 'done'],
+    );
+
+    const replayEmitter = new Emittery<ProcessEvents>();
+    const replayedSnapshots: ProcessEvents['llmChatOutputSnapshot'][] = [];
+    let replayedNodeStarts = 0;
+    replayEmitter.on('llmChatOutputSnapshot', (data) => replayedSnapshots.push(data));
+    replayEmitter.on('nodeStart', () => {
+      replayedNodeStarts += 1;
+    });
+    await replayExecutionRecording({
+      emitter: replayEmitter,
+      erroredNodes: new Map(),
+      graphInputs: {},
+      graphOutputs: {},
+      isAborted: () => false,
+      nodeResults: new Map(),
+      project: {
+        metadata: { id: 'project-id', title: 'Project', description: '', mainGraphId: graph.metadata!.id! },
+        graphs: { [graph.metadata!.id!]: graph },
+      } as any,
+      recorder: ExecutionRecorder.deserializeFromString(recorder.serialize()),
+      recordingPlaybackChatLatency: 0,
+      setContextValues: () => {},
+      setGraphInputs: () => {},
+      setGraphOutputs: () => {},
+      setRunning: () => {},
+      visitedNodes: new Set(),
+      waitUntilUnpaused: async () => {},
+    });
+
+    assert.equal(replayedNodeStarts, 1);
+    assert.deepEqual(
+      replayedSnapshots.map(({ entryId, roundIndex, splitIndex, kind, outcome, outputs }) => ({
+        entryId,
+        roundIndex,
+        splitIndex,
+        kind,
+        outcome,
+        outputs,
+      })),
+      [
+        {
+          entryId: 'model-round:0',
+          roundIndex: 0,
+          splitIndex: 0,
+          kind: 'model-round',
+          outcome: 'tool-calls',
+          outputs: { response: { type: 'string', value: 'I will call a tool.' } },
+        },
+      ],
+    );
+  });
+
   void it('creates fresh replay identities per playback while preserving nested execution lineage', async () => {
     const subgraphId = 'subgraph-id' as GraphId;
     const rootNode = { id: 'root-node' as NodeId, type: 'test' } as ChartNode;
