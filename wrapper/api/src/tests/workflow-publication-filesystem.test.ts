@@ -380,7 +380,7 @@ test('published workflow keeps referenced projects resolvable after the referenc
   });
 
   await workflowMutations.createWorkflowFolderItem('Moved', '');
-  await workflowQuery.moveWorkflowProject(workflowsRoot, referenced.relativePath, 'Moved');
+  await workflowStorageBackend.moveWorkflowItemWithBackend('project', referenced.relativePath, 'Moved');
 
   await withWorkflowExecutionServer(async ({ publishedBaseUrl }) => {
     const response = await fetch(`${publishedBaseUrl}/main-with-reference-endpoint`, {
