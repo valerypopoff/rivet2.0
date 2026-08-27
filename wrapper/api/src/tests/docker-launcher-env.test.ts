@@ -49,6 +49,9 @@ function writeMinimalRivetSource(
   writeFile(path.join(sourceRoot, 'yarn.lock'), '');
   writeFile(path.join(sourceRoot, '.yarnrc.yml'), 'yarnPath: .yarn/releases/yarn-4.6.0.cjs\n');
   writeFile(path.join(sourceRoot, '.yarn', 'releases', 'yarn-4.6.0.cjs'), '');
+  writeFile(path.join(sourceRoot, '.pnp.cjs'), 'generated PnP loader');
+  writeFile(path.join(sourceRoot, '.pnp.loader.mjs'), 'generated PnP ESM loader');
+  writeFile(path.join(sourceRoot, '.yarn', 'install-state.gz'), 'generated PnP state');
 
   for (const packageName of ['app', 'app-executor', 'core', 'node', 'evaluations']) {
     writeFile(path.join(sourceRoot, 'packages', packageName, 'package.json'), JSON.stringify({ name: packageName }));
@@ -183,6 +186,11 @@ test('prepareRivetDockerContext copies source-only wrapper build scripts outside
     assert.equal(fs.existsSync(path.join(dependencyContextPath, 'scripts', 'build-wrapper-target.mjs')), false);
     assert.equal(fs.existsSync(path.join(dependencyContextPath, 'scripts', 'ci-timing.mjs')), false);
     assert.equal(fs.existsSync(path.join(dependencyContextPath, 'packages', 'evaluations', 'package.json')), true);
+    for (const contextRoot of [contextPath, dependencyContextPath]) {
+      assert.equal(fs.existsSync(path.join(contextRoot, '.pnp.cjs')), false);
+      assert.equal(fs.existsSync(path.join(contextRoot, '.pnp.loader.mjs')), false);
+      assert.equal(fs.existsSync(path.join(contextRoot, '.yarn', 'install-state.gz')), false);
+    }
   } finally {
     fs.rmSync(tempRoot, { recursive: true, force: true });
   }

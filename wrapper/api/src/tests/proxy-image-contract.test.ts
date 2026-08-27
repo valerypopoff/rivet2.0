@@ -299,6 +299,8 @@ test('API images and launchers use the filtered Rivet source context and symlink
   const ensureDevDeps = readRepoFile('scripts/ensure-dev-deps.mjs');
   const runRivetYarn = readRepoFile('scripts/run-rivet-yarn.mjs');
   const localDependencyPolicy = readRepoFile('scripts/lib/rivet-local-dependencies.mjs');
+  const rootGitignore = readRepoFile('.gitignore');
+  const rootYarnrc = readRepoFile('.yarnrc.yml');
   const rootPackageJson = readRepoJson<{ scripts: Record<string, string> }>('package.json');
   const apiPackageJson = readRepoFile('wrapper/api/package.json');
   const apiTsconfig = readRepoFile('wrapper/api/tsconfig.json');
@@ -344,6 +346,8 @@ test('API images and launchers use the filtered Rivet source context and symlink
   assert.match(linkScript, /linkDependencyEntriesFromRoot\(dependencyRoot, destinationNodeModulesDir, skippedPackageNames\)/);
   assert.match(ensureDevDeps, /hasExpectedApiRivetLink\('rivet-core', 'rivet\/packages\/core', \[/);
   assert.match(ensureDevDeps, /hasExpectedApiRivetLink\('rivet-node', 'rivet\/packages\/node', \[/);
+  assert.match(ensureDevDeps, /clearPnpLoaders\(rootDir\)/);
+  assert.match(ensureDevDeps, /ensureWorkspaceNodeModulesConfig\(rootDir\)/);
   assert.match(ensureDevDeps, /clearEmbeddedRivetPnpLoaders\(rootDir, rivetDir\)/);
   assert.match(ensureDevDeps, /const rivetYarnEnvironment = getRivetYarnEnvironment\(rootDir, rivetDir\);/);
   for (const packageName of ['rivet2-core', 'rivet2-node', 'rivet2-evaluations']) {
@@ -361,11 +365,19 @@ test('API images and launchers use the filtered Rivet source context and symlink
   assert.match(rootPackageJson.scripts['dev:local:executor'], /node scripts\/run-rivet-yarn\.mjs/);
   assert.match(devLocalLauncher, /node scripts\/run-rivet-yarn\.mjs tsx watch/);
   assert.match(localDependencyPolicy, /isExternalRivetWorkspace/);
+  assert.match(localDependencyPolicy, /clearPnpLoaders/);
   assert.match(localDependencyPolicy, /clearEmbeddedRivetPnpLoaders/);
+  assert.match(localDependencyPolicy, /ensureWorkspaceNodeModulesConfig/);
   assert.match(localDependencyPolicy, /ensureEmbeddedRivetNodeModulesConfig/);
   assert.match(localDependencyPolicy, /\.pnp\.loader\.mjs/);
   assert.match(localDependencyPolicy, /stripPnpNodeOptions\(process\.env\.NODE_OPTIONS\)/);
   assert.match(localDependencyPolicy, /YARN_NODE_LINKER: 'node-modules'/);
+  assert.match(ensureDevDeps, /NODE_OPTIONS: stripPnpNodeOptions\(process\.env\.NODE_OPTIONS\)/);
+  assert.match(rootYarnrc, /^nodeLinker: node-modules$/m);
+  assert.match(rootYarnrc, /^pnpEnableEsmLoader: false$/m);
+  for (const generatedPnpPattern of [/^\.pnp\.cjs$/m, /^\.pnp\.loader\.mjs$/m, /^\.yarn\/install-state\.gz$/m]) {
+    assert.match(rootGitignore, generatedPnpPattern);
+  }
   assert.match(ensureDevDeps, /'\.rivet-dependency-overlay'/);
   assert.match(ensureDevDeps, /!exists\('wrapper\/web\/node_modules\/\.bin\/vite'\)/);
   assert.match(ensureDevDeps, /path\.join\('rivet\/node_modules', packageNameToNodeModulesRelPath\(dependencyName\)\)/);

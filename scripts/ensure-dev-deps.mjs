@@ -4,11 +4,14 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import {
   clearEmbeddedRivetPnpLoaders,
+  clearPnpLoaders,
   ensureEmbeddedRivetNodeModulesConfig,
+  ensureWorkspaceNodeModulesConfig,
   getRivetYarnEnvironment,
   getRivetYarnInvocation,
   hasRivetPnpInstall,
   isExternalRivetWorkspace,
+  stripPnpNodeOptions,
 } from './lib/rivet-local-dependencies.mjs';
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
@@ -35,6 +38,7 @@ function run(command, args, cwd = rootDir, extraEnv = {}) {
     cwd,
     env: {
       ...process.env,
+      NODE_OPTIONS: stripPnpNodeOptions(process.env.NODE_OPTIONS),
       ...extraEnv,
     },
     stdio: 'inherit',
@@ -178,6 +182,14 @@ function ensureRivetRepo() {
 
   console.log(`[predev] Cloning rivet from ${rivetRepoUrl} (${rivetRepoRef})`);
   run(gitCmd, ['clone', '--branch', rivetRepoRef, rivetRepoUrl, 'rivet']);
+}
+
+if (ensureWorkspaceNodeModulesConfig(rootDir)) {
+  console.log('[predev] Configured the wrapper workspace for node-modules dependencies.');
+}
+
+if (clearPnpLoaders(rootDir)) {
+  console.log('[predev] Cleared stale PnP loader files from the wrapper workspace.');
 }
 
 ensureRivetRepo();

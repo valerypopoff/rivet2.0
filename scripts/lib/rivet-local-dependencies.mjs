@@ -2,11 +2,18 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 const pnpPreloadOptionPattern =
-  /(?:^|\s)(?:--require|--import|--experimental-loader)(?:=|\s+)(?:"[^"]*\.pnp(?:\.loader)?\.(?:cjs|mjs)"|'[^']*\.pnp(?:\.loader)?\.(?:cjs|mjs)'|[^\s]*\.pnp(?:\.loader)?\.(?:cjs|mjs))/gi;
+  /(?:^|\s)(?:-r|--require|--import|--loader|--experimental-loader)(?:=|\s+)(?:"[^"]*\.pnp(?:\.loader)?\.(?:cjs|mjs)"|'[^']*\.pnp(?:\.loader)?\.(?:cjs|mjs)'|[^\s]*\.pnp(?:\.loader)?\.(?:cjs|mjs))/gi;
 
 function isPathInside(parentPath, candidatePath) {
   const relativePath = path.relative(parentPath, candidatePath);
   return relativePath === '' || (!relativePath.startsWith('..') && !path.isAbsolute(relativePath));
+}
+
+function updateYamlSetting(yarnrc, key, value) {
+  const settingPattern = new RegExp(`^${key}:.*$`, 'm');
+  return settingPattern.test(yarnrc)
+    ? yarnrc.replace(settingPattern, `${key}: ${value}`)
+    : `${yarnrc.trimEnd()}\n\n${key}: ${value}\n`;
 }
 
 export function isExternalRivetWorkspace(wrapperRootDir, rivetRootDir) {
@@ -26,14 +33,10 @@ export function stripPnpNodeOptions(nodeOptions = '') {
   return nodeOptions.replace(pnpPreloadOptionPattern, ' ').replace(/\s+/g, ' ').trim();
 }
 
-export function clearEmbeddedRivetPnpLoaders(wrapperRootDir, rivetRootDir) {
-  if (isExternalRivetWorkspace(wrapperRootDir, rivetRootDir)) {
-    return false;
-  }
-
+export function clearPnpLoaders(workspaceRootDir) {
   const loaderPaths = [
-    path.join(rivetRootDir, '.pnp.cjs'),
-    path.join(rivetRootDir, '.pnp.loader.mjs'),
+    path.join(workspaceRootDir, '.pnp.cjs'),
+    path.join(workspaceRootDir, '.pnp.loader.mjs'),
   ];
   let cleared = false;
 
@@ -49,17 +52,22 @@ export function clearEmbeddedRivetPnpLoaders(wrapperRootDir, rivetRootDir) {
   return cleared;
 }
 
-export function ensureEmbeddedRivetNodeModulesConfig(wrapperRootDir, rivetRootDir) {
+export function clearEmbeddedRivetPnpLoaders(wrapperRootDir, rivetRootDir) {
   if (isExternalRivetWorkspace(wrapperRootDir, rivetRootDir)) {
     return false;
   }
 
-  const yarnrcPath = path.join(rivetRootDir, '.yarnrc.yml');
+  return clearPnpLoaders(rivetRootDir);
+}
+
+export function ensureWorkspaceNodeModulesConfig(workspaceRootDir) {
+  const yarnrcPath = path.join(workspaceRootDir, '.yarnrc.yml');
   const yarnrc = fs.readFileSync(yarnrcPath, 'utf8');
-  const nodeLinkerPattern = /^nodeLinker:.*$/m;
-  const nextYarnrc = nodeLinkerPattern.test(yarnrc)
-    ? yarnrc.replace(nodeLinkerPattern, 'nodeLinker: node-modules')
-    : `${yarnrc.trimEnd()}\n\nnodeLinker: node-modules\n`;
+  const nextYarnrc = updateYamlSetting(
+    updateYamlSetting(yarnrc, 'nodeLinker', 'node-modules'),
+    'pnpEnableEsmLoader',
+    'false',
+  );
 
   if (nextYarnrc === yarnrc) {
     return false;
@@ -67,6 +75,14 @@ export function ensureEmbeddedRivetNodeModulesConfig(wrapperRootDir, rivetRootDi
 
   fs.writeFileSync(yarnrcPath, nextYarnrc, 'utf8');
   return true;
+}
+
+export function ensureEmbeddedRivetNodeModulesConfig(wrapperRootDir, rivetRootDir) {
+  if (isExternalRivetWorkspace(wrapperRootDir, rivetRootDir)) {
+    return false;
+  }
+
+  return ensureWorkspaceNodeModulesConfig(rivetRootDir);
 }
 
 export function getRivetYarnEnvironment(wrapperRootDir, rivetRootDir) {

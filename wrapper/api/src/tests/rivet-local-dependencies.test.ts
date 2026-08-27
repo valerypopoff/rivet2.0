@@ -6,7 +6,9 @@ import test from 'node:test';
 
 import {
   clearEmbeddedRivetPnpLoaders,
+  clearPnpLoaders,
   ensureEmbeddedRivetNodeModulesConfig,
+  ensureWorkspaceNodeModulesConfig,
   getRivetYarnEnvironment,
   getRivetYarnInvocation,
   hasRivetPnpInstall,
@@ -14,16 +16,25 @@ import {
   stripPnpNodeOptions,
 } from '../../../../scripts/lib/rivet-local-dependencies.mjs';
 
+function readYarnrc(workspaceDir: string): string {
+  return fs.readFileSync(path.join(workspaceDir, '.yarnrc.yml'), 'utf8');
+}
+
+function assertNodeModulesConfig(workspaceDir: string): void {
+  const yarnrc = readYarnrc(workspaceDir);
+  assert.match(yarnrc, /^nodeLinker: node-modules$/m);
+  assert.match(yarnrc, /^pnpEnableEsmLoader: false$/m);
+}
+
 test('embedded Rivet workspaces keep the wrapper node-modules layout', () => {
   const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), 'rivet-wrapper-'));
   const rivetDir = path.join(rootDir, 'rivet');
   fs.mkdirSync(rivetDir);
 
   assert.equal(isExternalRivetWorkspace(rootDir, rivetDir), false);
-  assert.deepEqual(getRivetYarnEnvironment(rootDir, rivetDir), {
-    NODE_OPTIONS: '',
-    YARN_NODE_LINKER: 'node-modules',
-  });
+  const yarnEnvironment = getRivetYarnEnvironment(rootDir, rivetDir);
+  assert.equal(yarnEnvironment.YARN_NODE_LINKER, 'node-modules');
+  assert.equal(yarnEnvironment.NODE_OPTIONS, stripPnpNodeOptions(process.env.NODE_OPTIONS));
 });
 
 test('external Rivet workspaces preserve their configured Yarn linker', () => {
@@ -46,27 +57,33 @@ test('embedded snapshots preserve non-PnP Node options while removing PnP preloa
     stripPnpNodeOptions('--import="file:///workspace/.pnp.loader.mjs" --inspect=9229'),
     '--inspect=9229',
   );
+  assert.equal(stripPnpNodeOptions('-r /workspace/.pnp.cjs --trace-warnings'), '--trace-warnings');
+  assert.equal(stripPnpNodeOptions('--loader file:///workspace/.pnp.loader.mjs --inspect'), '--inspect');
   assert.equal(stripPnpNodeOptions('--require ./instrumentation.cjs'), '--require ./instrumentation.cjs');
 });
 
-test('embedded snapshots persist node-modules without changing linked checkouts', () => {
+test('wrapper and embedded snapshots persist node-modules without changing linked checkouts', () => {
   const baseDir = fs.mkdtempSync(path.join(os.tmpdir(), 'rivet-linker-config-'));
-  const embeddedRootDir = path.join(baseDir, 'wrapper');
-  const embeddedRivetDir = path.join(embeddedRootDir, 'rivet');
+  const wrapperRootDir = path.join(baseDir, 'wrapper');
+  const embeddedRivetDir = path.join(wrapperRootDir, 'rivet');
   const externalRivetDir = path.join(baseDir, 'upstream');
 
   try {
-    fs.mkdirSync(embeddedRivetDir, { recursive: true });
-    fs.mkdirSync(externalRivetDir, { recursive: true });
-    fs.writeFileSync(path.join(embeddedRivetDir, '.yarnrc.yml'), 'nodeLinker: pnp\npnpEnableEsmLoader: true\n');
-    fs.writeFileSync(path.join(externalRivetDir, '.yarnrc.yml'), 'nodeLinker: pnp\n');
+    for (const workspaceDir of [wrapperRootDir, embeddedRivetDir, externalRivetDir]) {
+      fs.mkdirSync(workspaceDir, { recursive: true });
+      fs.writeFileSync(path.join(workspaceDir, '.yarnrc.yml'), 'nodeLinker: pnp\npnpEnableEsmLoader: true\n');
+    }
 
-    assert.equal(ensureEmbeddedRivetNodeModulesConfig(embeddedRootDir, embeddedRivetDir), true);
-    assert.equal(ensureEmbeddedRivetNodeModulesConfig(embeddedRootDir, embeddedRivetDir), false);
-    assert.match(fs.readFileSync(path.join(embeddedRivetDir, '.yarnrc.yml'), 'utf8'), /^nodeLinker: node-modules$/m);
+    assert.equal(ensureWorkspaceNodeModulesConfig(wrapperRootDir), true);
+    assert.equal(ensureWorkspaceNodeModulesConfig(wrapperRootDir), false);
+    assertNodeModulesConfig(wrapperRootDir);
 
-    assert.equal(ensureEmbeddedRivetNodeModulesConfig(embeddedRootDir, externalRivetDir), false);
-    assert.equal(fs.readFileSync(path.join(externalRivetDir, '.yarnrc.yml'), 'utf8'), 'nodeLinker: pnp\n');
+    assert.equal(ensureEmbeddedRivetNodeModulesConfig(wrapperRootDir, embeddedRivetDir), true);
+    assert.equal(ensureEmbeddedRivetNodeModulesConfig(wrapperRootDir, embeddedRivetDir), false);
+    assertNodeModulesConfig(embeddedRivetDir);
+
+    assert.equal(ensureEmbeddedRivetNodeModulesConfig(wrapperRootDir, externalRivetDir), false);
+    assert.equal(readYarnrc(externalRivetDir), 'nodeLinker: pnp\npnpEnableEsmLoader: true\n');
   } finally {
     fs.rmSync(baseDir, { recursive: true, force: true });
   }
@@ -102,27 +119,33 @@ test('PnP readiness requires both the loader and install-state marker', () => {
   assert.equal(hasRivetPnpInstall(rivetDir), true);
 });
 
-test('embedded snapshots discard PnP loaders without touching linked workspaces or install state', () => {
+test('wrapper and embedded snapshots discard PnP loaders without touching linked workspaces or install state', () => {
   const baseDir = fs.mkdtempSync(path.join(os.tmpdir(), 'rivet-pnp-cleanup-'));
-  const embeddedRootDir = path.join(baseDir, 'wrapper');
-  const embeddedRivetDir = path.join(embeddedRootDir, 'rivet');
+  const wrapperRootDir = path.join(baseDir, 'wrapper');
+  const embeddedRivetDir = path.join(wrapperRootDir, 'rivet');
   const externalRivetDir = path.join(baseDir, 'upstream');
 
   try {
-    for (const rivetDir of [embeddedRivetDir, externalRivetDir]) {
-      fs.mkdirSync(path.join(rivetDir, '.yarn'), { recursive: true });
-      fs.writeFileSync(path.join(rivetDir, '.pnp.cjs'), 'loader');
-      fs.writeFileSync(path.join(rivetDir, '.pnp.loader.mjs'), 'loader');
-      fs.writeFileSync(path.join(rivetDir, '.yarn', 'install-state.gz'), 'state');
+    for (const workspaceDir of [wrapperRootDir, embeddedRivetDir, externalRivetDir]) {
+      fs.mkdirSync(path.join(workspaceDir, '.yarn'), { recursive: true });
+      fs.writeFileSync(path.join(workspaceDir, '.pnp.cjs'), 'loader');
+      fs.writeFileSync(path.join(workspaceDir, '.pnp.loader.mjs'), 'loader');
+      fs.writeFileSync(path.join(workspaceDir, '.yarn', 'install-state.gz'), 'state');
     }
 
-    assert.equal(clearEmbeddedRivetPnpLoaders(embeddedRootDir, embeddedRivetDir), true);
-    assert.equal(clearEmbeddedRivetPnpLoaders(embeddedRootDir, embeddedRivetDir), false);
+    assert.equal(clearPnpLoaders(wrapperRootDir), true);
+    assert.equal(clearPnpLoaders(wrapperRootDir), false);
+    assert.equal(fs.existsSync(path.join(wrapperRootDir, '.pnp.cjs')), false);
+    assert.equal(fs.existsSync(path.join(wrapperRootDir, '.pnp.loader.mjs')), false);
+    assert.equal(fs.existsSync(path.join(wrapperRootDir, '.yarn', 'install-state.gz')), true);
+
+    assert.equal(clearEmbeddedRivetPnpLoaders(wrapperRootDir, embeddedRivetDir), true);
+    assert.equal(clearEmbeddedRivetPnpLoaders(wrapperRootDir, embeddedRivetDir), false);
     assert.equal(fs.existsSync(path.join(embeddedRivetDir, '.pnp.cjs')), false);
     assert.equal(fs.existsSync(path.join(embeddedRivetDir, '.pnp.loader.mjs')), false);
     assert.equal(fs.existsSync(path.join(embeddedRivetDir, '.yarn', 'install-state.gz')), true);
 
-    assert.equal(clearEmbeddedRivetPnpLoaders(embeddedRootDir, externalRivetDir), false);
+    assert.equal(clearEmbeddedRivetPnpLoaders(wrapperRootDir, externalRivetDir), false);
     assert.equal(fs.existsSync(path.join(externalRivetDir, '.pnp.cjs')), true);
     assert.equal(fs.existsSync(path.join(externalRivetDir, '.pnp.loader.mjs')), true);
     assert.equal(fs.existsSync(path.join(externalRivetDir, '.yarn', 'install-state.gz')), true);
