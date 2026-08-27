@@ -577,6 +577,9 @@ test('CI and production launchers publish and run the Rivet 2 wrapper image set'
     `${apiDockerfile}\n${webDockerfile}\n${executorDockerfile}`,
     /yarn workspace @valerypopoff\/(rivet2-core|rivet2-node|rivet2-evaluations) run build/,
   );
+  assert.match(ensureDevDeps, /run\(npmCmd, \['--prefix', 'wrapper\/api', 'ci'\]\);/);
+  assert.match(ensureDevDeps, /run\(npmCmd, \['--prefix', 'wrapper\/web', 'ci', '--legacy-peer-deps'\]\);/);
+  assert.doesNotMatch(ensureDevDeps, /run\(npmCmd, \['--prefix', 'wrapper\/(?:api|web)', 'install'/);
   assert.doesNotMatch(webPackageJson, /"rivet-studio-server":\s*"file:\.\.\/\.\."/);
   assert.doesNotMatch(webPackageLock, /"node_modules\/rivet-studio-server"/);
   assert.doesNotMatch(imageBuildWorkflow, legacyImageNamespacePattern);

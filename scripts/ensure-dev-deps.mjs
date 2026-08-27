@@ -243,12 +243,12 @@ console.log('[predev] Installing missing dependencies...');
 
 if (needsApiDeps) {
   console.log('[predev] Installing wrapper/api dependencies');
-  run(npmCmd, ['--prefix', 'wrapper/api', 'install']);
+  run(npmCmd, ['--prefix', 'wrapper/api', 'ci']);
 }
 
 if (needsWebDeps) {
   console.log('[predev] Installing wrapper/web dependencies');
-  run(npmCmd, ['--prefix', 'wrapper/web', 'install', '--legacy-peer-deps']);
+  run(npmCmd, ['--prefix', 'wrapper/web', 'ci', '--legacy-peer-deps']);
 }
 
 if (needsRivetDeps) {

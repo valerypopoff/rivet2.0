@@ -7,7 +7,7 @@ See also: [Wrapper ManagedCodeRunner Speed Plan](./wrapper-managed-code-runner-s
 ## Setup commands
 
 - `npm run setup`
-  - ensures `wrapper/api` and `wrapper/web` dependencies exist
+  - ensures `wrapper/api` and `wrapper/web` dependencies exist with their committed `package-lock.json` files (`npm ci`), so setup never rewrites either package manifest or lockfile
   - clones `rivet/` from the configured Rivet 2 repo if it is missing
   - installs upstream Yarn dependencies and builds `@valerypopoff/rivet2-core`, `@valerypopoff/rivet2-node`, and `@valerypopoff/rivet2-evaluations` when needed; commands run through the exact Yarn release declared by that Rivet checkout, so Corepack/global Yarn selection cannot change the result
   - the wrapper root and wrapper-owned Rivet snapshots explicitly use `nodeLinker: node-modules` and disable PnP ESM loading; generated root PnP loader files are ignored and removed during setup so a parent workspace cannot leak its dependency map into the embedded build
