@@ -1,3 +1,6 @@
+- Image node should be able to accept base64
+
+
 # Evaluations
 
 - On the dataset page, Ctrl/Cmd+click on any case's "enable" switcher should toggle all the cases enabled/disabled
