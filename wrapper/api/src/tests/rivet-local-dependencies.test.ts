@@ -5,6 +5,7 @@ import path from 'node:path';
 import test from 'node:test';
 
 import {
+  clearEmbeddedRivetPnpArtifacts,
   getRivetYarnEnvironment,
   hasRivetPnpInstall,
   isExternalRivetWorkspace,
@@ -42,4 +43,33 @@ test('PnP readiness requires both the loader and install-state marker', () => {
   assert.equal(hasRivetPnpInstall(rivetDir), false);
   fs.writeFileSync(path.join(yarnDir, 'install-state.gz'), '');
   assert.equal(hasRivetPnpInstall(rivetDir), true);
+});
+
+test('embedded snapshots discard stale PnP artifacts without touching linked workspaces', () => {
+  const baseDir = fs.mkdtempSync(path.join(os.tmpdir(), 'rivet-pnp-cleanup-'));
+  const embeddedRootDir = path.join(baseDir, 'wrapper');
+  const embeddedRivetDir = path.join(embeddedRootDir, 'rivet');
+  const externalRivetDir = path.join(baseDir, 'upstream');
+
+  try {
+    for (const rivetDir of [embeddedRivetDir, externalRivetDir]) {
+      fs.mkdirSync(path.join(rivetDir, '.yarn'), { recursive: true });
+      fs.writeFileSync(path.join(rivetDir, '.pnp.cjs'), 'loader');
+      fs.writeFileSync(path.join(rivetDir, '.pnp.loader.mjs'), 'loader');
+      fs.writeFileSync(path.join(rivetDir, '.yarn', 'install-state.gz'), 'state');
+    }
+
+    assert.equal(clearEmbeddedRivetPnpArtifacts(embeddedRootDir, embeddedRivetDir), true);
+    assert.equal(clearEmbeddedRivetPnpArtifacts(embeddedRootDir, embeddedRivetDir), false);
+    assert.equal(fs.existsSync(path.join(embeddedRivetDir, '.pnp.cjs')), false);
+    assert.equal(fs.existsSync(path.join(embeddedRivetDir, '.pnp.loader.mjs')), false);
+    assert.equal(fs.existsSync(path.join(embeddedRivetDir, '.yarn', 'install-state.gz')), false);
+
+    assert.equal(clearEmbeddedRivetPnpArtifacts(embeddedRootDir, externalRivetDir), false);
+    assert.equal(fs.existsSync(path.join(externalRivetDir, '.pnp.cjs')), true);
+    assert.equal(fs.existsSync(path.join(externalRivetDir, '.pnp.loader.mjs')), true);
+    assert.equal(fs.existsSync(path.join(externalRivetDir, '.yarn', 'install-state.gz')), true);
+  } finally {
+    fs.rmSync(baseDir, { recursive: true, force: true });
+  }
 });

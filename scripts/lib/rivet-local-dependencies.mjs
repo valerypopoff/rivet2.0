@@ -19,6 +19,30 @@ export function hasRivetPnpInstall(rivetRootDir) {
   );
 }
 
+export function clearEmbeddedRivetPnpArtifacts(wrapperRootDir, rivetRootDir) {
+  if (isExternalRivetWorkspace(wrapperRootDir, rivetRootDir)) {
+    return false;
+  }
+
+  const artifactPaths = [
+    path.join(rivetRootDir, '.pnp.cjs'),
+    path.join(rivetRootDir, '.pnp.loader.mjs'),
+    path.join(rivetRootDir, '.yarn', 'install-state.gz'),
+  ];
+  let cleared = false;
+
+  for (const artifactPath of artifactPaths) {
+    if (!fs.existsSync(artifactPath)) {
+      continue;
+    }
+
+    fs.unlinkSync(artifactPath);
+    cleared = true;
+  }
+
+  return cleared;
+}
+
 export function getRivetYarnEnvironment(wrapperRootDir, rivetRootDir) {
   // An embedded snapshot belongs to this wrapper and keeps the node-modules
   // layout used by its Vite/runtime overlays. A linked checkout belongs to its

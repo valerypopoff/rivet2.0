@@ -3,6 +3,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import {
+  clearEmbeddedRivetPnpArtifacts,
   getRivetYarnEnvironment,
   hasRivetPnpInstall,
   isExternalRivetWorkspace,
@@ -179,6 +180,11 @@ function ensureRivetRepo() {
 }
 
 ensureRivetRepo();
+
+if (clearEmbeddedRivetPnpArtifacts(rootDir, rivetDir)) {
+  console.log('[predev] Cleared stale PnP artifacts from the embedded Rivet snapshot.');
+}
+
 const rivetYarnEnvironment = getRivetYarnEnvironment(rootDir, rivetDir);
 
 const needsApiDeps = !exists('wrapper/api/node_modules/.bin/tsx');
