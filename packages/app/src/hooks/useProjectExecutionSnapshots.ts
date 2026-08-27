@@ -14,6 +14,7 @@ import {
   runActivityJournalState,
   runningGraphsState,
   selectedGraphRunByViewState,
+  selectedLLMChatOutputPageByInvocationState,
   selectedProcessPageNodesState,
   type ProjectExecutionSnapshot,
 } from '../state/dataFlow.js';
@@ -41,6 +42,7 @@ export function useProjectExecutionSnapshots() {
       runActivityJournal: store.get(runActivityJournalState),
       runningGraphs: store.get(runningGraphsState),
       selectedGraphRunByView: store.get(selectedGraphRunByViewState),
+      selectedLLMChatOutputPageByInvocation: store.get(selectedLLMChatOutputPageByInvocationState),
       selectedProcessPageNodes: store.get(selectedProcessPageNodesState),
       userInputQuestions: store.get(userInputModalQuestionsState),
     };
@@ -61,6 +63,10 @@ export function useProjectExecutionSnapshots() {
       store.set(runActivityJournalState, nextSnapshot.runActivityJournal ?? createRunActivityJournal());
       store.set(runningGraphsState, nextSnapshot.runningGraphs);
       store.set(selectedGraphRunByViewState, nextSnapshot.selectedGraphRunByView);
+      store.set(
+        selectedLLMChatOutputPageByInvocationState,
+        nextSnapshot.selectedLLMChatOutputPageByInvocation ?? {},
+      );
       store.set(selectedProcessPageNodesState, nextSnapshot.selectedProcessPageNodes);
       store.set(userInputModalQuestionsState, nextSnapshot.userInputQuestions ?? {});
     },

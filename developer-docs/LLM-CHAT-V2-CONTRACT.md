@@ -40,6 +40,49 @@ frozen output, and recordings that predate the
 physical-call events truthfully show partial or unavailable data instead of
 inventing zero calls or cost.
 
+## Logical-round output history
+
+`llmChatOutputSnapshot` is an additive, display-only process event for LLM
+Chat. It carries a stable `entryId`, zero-based logical `roundIndex`,
+`splitIndex`, snapshot `kind` (`model-round` or `direct-tool-result`), outcome,
+and the user-visible output map for that page. It does **not** add a process,
+node lifecycle event, graph output, Run Activity row, duration, or accounting
+record.
+
+A page represents one completed logical model response after that round's
+provider retries and profile fallback have resolved—not a physical request,
+retry, fallback candidate, or individual parallel tool call. For an
+auto-continuing response that requests tools, LLM Chat snapshots that response
+before delegate side effects can alter the accumulated invocation result. A
+normal completion then emits its terminal snapshot only after
+`projectLLMInvocationResult` has produced the ordinary LLM Chat outputs. The
+last page is therefore byte-for-byte equivalent in meaning to the sole
+graph-semantic terminal output that enters the editor cache, drives output
+ports and downstream nodes, determines completion, and owns the invocation's
+total cost and duration.
+
+A single direct-return tool deliberately creates two pages: the completed model
+response that requested the tool and a terminal **Direct tool result** page.
+An abort, provider failure, or a tool failure after a completed model round
+keeps earlier pages but never fabricates a page for incomplete work. Snapshot
+outputs are cycle-safe cloned at the event boundary, and synchronous or async
+snapshot-observer failures are isolated from graph execution so later message,
+usage, reasoning, or direct-result accumulation cannot mutate an earlier page.
+
+The invocation coordinator returns the graph-semantic pipeline result together
+with an optional terminal snapshot descriptor. The node boundary projects the
+result first and only then attaches the final output map to that descriptor.
+Provider-failure results retain their diagnostic output map but deliberately
+have no terminal snapshot, so output history never presents a failed or partial
+provider response as a completed model round.
+
+The payload is privacy-bounded to values the LLM Chat node already exposes:
+`Response`, `All Messages`, and enabled diagnostic output ports. It does not
+introduce any additional raw provider body, header, credential, or hidden trace
+payload beyond an explicitly enabled existing node output, nor any new
+node/project schema. Consumers that do not understand the additive event
+continue to use the terminal output normally.
+
 ## Inline and profile configuration
 
 `LLM Chat` has one runtime pipeline and two configuration sources:

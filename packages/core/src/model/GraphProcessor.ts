@@ -28,6 +28,7 @@ import type {
   ProcessId,
   RootRunId,
   ChatV2CallTraceEvent,
+  LLMChatOutputSnapshotEvent,
   LLMProfileAttemptTraceEvent,
   ToolCallFinishedEvent,
 } from './ProcessContext.js';
@@ -245,6 +246,9 @@ export type ProcessEvents = {
 
   /** Privacy-bounded metadata for one physical LLM provider call. */
   llmCallFinished: WithExecution<ChatV2CallTraceEvent>;
+
+  /** Display-only output page for one completed logical LLM Chat round. */
+  llmChatOutputSnapshot: WithExecution<LLMChatOutputSnapshotEvent>;
 
   /** Privacy-bounded metadata for one LLM fallback/profile-health decision. */
   llmProfileAttempt: WithExecution<LLMProfileAttemptTraceEvent>;
@@ -1394,6 +1398,7 @@ export class GraphProcessor {
     // observer from the root run so nested LLM calls are not emitted once by
     // every ancestor before their own event is bridged to the root emitter.
     const hostChatV2Observer = this.getRootProcessor().#context.onChatV2CallFinished;
+    const hostLLMChatOutputSnapshotObserver = this.getRootProcessor().#context.onLLMChatOutputSnapshot;
     const hostLLMProfileAttemptObserver = this.getRootProcessor().#context.onLLMProfileAttempt;
     this.#nodeProcessContextBase = {
       ...this.#context,
@@ -1428,6 +1433,17 @@ export class GraphProcessor {
         // trace transport.
         const { rawUsage: _rawUsage, ...traceEvent } = event;
         emitDetached(this.#emitter, 'llmCallFinished', this.#withExecution(traceEvent));
+      },
+      onLLMChatOutputSnapshot: (event) => {
+        try {
+          const observerResult = hostLLMChatOutputSnapshotObserver?.(event);
+          if (observerResult != null && typeof (observerResult as PromiseLike<void>).then === 'function') {
+            void Promise.resolve(observerResult).catch(() => undefined);
+          }
+        } catch {
+          // Snapshot observers are display-only and must never affect execution.
+        }
+        emitDetached(this.#emitter, 'llmChatOutputSnapshot', this.#withExecution(event));
       },
       onLLMProfileAttempt: (event) => {
         try {
@@ -2831,6 +2847,7 @@ export class GraphProcessor {
           emitDetached(this.#emitter, 'progress', this.#withExecution({ node, processId, progress: normalized }));
         }
       },
+      splitIndex: node.isSplitRun ? index : 0,
       setGlobal: (id, value) => {
         this.#globals.set(id, value);
         emitDetached(this.#emitter, 'globalSet', this.#withExecution({ id, value, processId }));

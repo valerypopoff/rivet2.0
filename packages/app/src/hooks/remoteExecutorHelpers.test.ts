@@ -175,6 +175,7 @@ test('projects replay-shaped waiting, progress, model, profile-health, and tool 
   let primaryModelCallCount = 0;
   let primaryProfileAttemptCount = 0;
   let primaryToolCallCount = 0;
+  let primarySnapshotCount = 0;
   let primaryPauseCount = 0;
   let primaryResumeCount = 0;
   const projectRunActivityEvent = <K extends keyof ProcessEventMessageMap>(
@@ -196,6 +197,9 @@ test('projects replay-shaped waiting, progress, model, profile-health, and tool 
     },
     onLlmCallFinished: () => {
       primaryModelCallCount += 1;
+    },
+    onLlmChatOutputSnapshot: () => {
+      primarySnapshotCount += 1;
     },
     onLlmProfileAttempt: () => {
       primaryProfileAttemptCount += 1;
@@ -261,6 +265,20 @@ test('projects replay-shaped waiting, progress, model, profile-health, and tool 
     true,
   );
   assert.equal(
+    dispatcher.llmChatOutputSnapshot({
+      execution,
+      entryId: 'model-round:0',
+      kind: 'model-round',
+      nodeId: node.id,
+      outcome: 'tool-calls',
+      outputs: { ['response' as never]: { type: 'string', value: 'calling tool' } },
+      processId,
+      roundIndex: 0,
+      splitIndex: 0,
+    } satisfies ProcessEventMessageMap['llmChatOutputSnapshot']),
+    true,
+  );
+  assert.equal(
     dispatcher.llmProfileAttempt({
       execution,
       eventId: 'replayed-profile-attempt',
@@ -304,6 +322,7 @@ test('projects replay-shaped waiting, progress, model, profile-health, and tool 
 
   assert.equal(primaryUserInputCount, 1);
   assert.equal(primaryModelCallCount, 1);
+  assert.equal(primarySnapshotCount, 1);
   assert.equal(primaryProfileAttemptCount, 1);
   assert.equal(primaryToolCallCount, 1);
   assert.equal(primaryPauseCount, 0);

@@ -1627,6 +1627,41 @@ fast replay as though the original provider calls completed in milliseconds.
 `ExecutionRecorder` strips this provenance before serializing a new recording,
 so replaying and recording again creates one new, self-contained timeline.
 
+### LLM Chat logical-round output history
+
+LLM Chat additionally emits `llmChatOutputSnapshot` as an **observational**
+process event after a completed logical model round. It is routed through the
+same in-process emitter, subprocessor bridge, worker/desktop debugger protocol,
+remote executor dispatcher, project-snapshot projector, recorder, and playback
+path as other additive process events. It is intentionally not projected into
+Run Activity and never creates a lifecycle/timing/cost record. Recordings keep
+snapshot events in emitted order; replay of a new recording reconstructs the
+same LLM round pager, while a legacy recording simply shows its terminal output.
+
+The app stores each event in
+`NodeRunDataWithRefs.llmChatOutputHistory[splitIndex]`, upserting by stable
+entry id. Each snapshot output uses the ordinary ref-backed value store, but in
+the dedicated `llm-chat-output-history` namespace containing the project, node,
+process, split index, and history entry id. A page therefore cannot overwrite a
+terminal output, a page from another round, or a concurrent split invocation.
+Reference collection, unavailable-reference checks, process replacement,
+`nodeOutputsCleared`, evaluation/run reset, inactive-project snapshot clearing,
+and LRU process eviction all traverse and remove these history references.
+
+`llmChatOutputHistory.ts` contains the shared pure, ref-aware upsert reducer
+used by live state and offscreen project snapshots. The separate UI selection is
+keyed by `(nodeId, processId, splitIndex)` and is captured with project
+execution snapshots, so the inline view, fullscreen view, and project/workspace
+switches agree. `latest` follows live partial output and settles on the terminal
+output; an explicitly selected older page remains selected while later pages
+arrive. Selecting history changes only the displayed output map. Actual
+`outputData` remains authoritative for node ports, caching, frozen/preloaded
+data, drag/attachment behavior, and downstream execution.
+For a split invocation that fails before producing terminal `splitOutputData`,
+both the inline and fullscreen presentations synthesize the latest retained
+round only for display, so the completed-page pager remains available without
+writing a synthetic terminal output back into execution state.
+
 In the desktop app, replay is intentionally routed through the local executor
 path even when the selected live executor is Node. The ActionBar's `Play
 Recording` button still delegates to `useGraphExecutor`, but
@@ -1722,6 +1757,7 @@ Lifecycle and observability events relevant to editor data flow are replayed:
 | `graphStart`                                | Creates `GraphRunRecord` in history                                                                                                |
 | `graphFinish` / `graphError` / `graphAbort` | Updates run record status                                                                                                          |
 | `nodeStart` / `nodeFinish` / `nodeError`    | Stores per-node execution data                                                                                                     |
+| `llmChatOutputSnapshot`                     | Stores a display-only, ref-backed LLM Chat logical-round page; never creates Run Activity or a node lifecycle transition          |
 | `nodeExcluded`                              | Stores excluded status                                                                                                             |
 | `partialOutput`                             | Stores streaming/split-run output                                                                                                  |
 | `progress`                                  | Updates the exact invocation's latest progress                                                                                     |

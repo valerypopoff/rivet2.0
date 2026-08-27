@@ -7,6 +7,7 @@ import type {
   EvaluationExecutionMetadata,
   GraphExecutionMetadata,
   LLMProfileAttemptTraceEvent,
+  LLMChatOutputSnapshotEvent,
   ProcessId,
   ToolCallFinishedEvent,
 } from './ProcessContext.js';
@@ -97,6 +98,7 @@ export type SerializedProcessEventMap = {
     progress: GraphProgress;
   }>;
   llmCallFinished: WithExecution<ChatV2CallTraceEvent>;
+  llmChatOutputSnapshot: WithExecution<LLMChatOutputSnapshotEvent>;
   llmProfileAttempt: WithExecution<LLMProfileAttemptTraceEvent>;
   toolCallFinished: WithExecution<ToolCallFinishedEvent>;
   nodeOutputsCleared: WithExecution<{ node: ChartNode; processId?: ProcessId }>;
@@ -134,6 +136,7 @@ export type ProcessEventMessageMap = {
   partialOutput: SerializedProcessEventMap['partialOutput'];
   progress: SerializedProcessEventMap['progress'];
   llmCallFinished: SerializedProcessEventMap['llmCallFinished'];
+  llmChatOutputSnapshot: SerializedProcessEventMap['llmChatOutputSnapshot'];
   llmProfileAttempt: SerializedProcessEventMap['llmProfileAttempt'];
   toolCallFinished: SerializedProcessEventMap['toolCallFinished'];
   nodeOutputsCleared: SerializedProcessEventMap['nodeOutputsCleared'];

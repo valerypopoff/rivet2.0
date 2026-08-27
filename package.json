@@ -41,6 +41,7 @@
     "check:graph-builder-evaluation": "tsx scripts/checks/check-graph-builder-evaluation.mjs",
     "check:promo-catalog": "tsx scripts/checks/check-promo-catalog.mts",
     "check:pnp": "node scripts/checks/check-pnp-install-state.mjs",
+    "check:pnp:fresh": "node scripts/checks/check-pnp-install-state.mjs --fresh",
     "check:npm-publish-versions": "node scripts/publish-npm-packages.mjs --check-versions",
     "bench:runtime-speed": "yarn workspace @valerypopoff/rivet2-node run bench:runtime-speed",
     "bench:runtime-attribution": "yarn workspace @valerypopoff/rivet2-node run bench:runtime-attribution",

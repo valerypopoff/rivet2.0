@@ -364,6 +364,7 @@ export function createProcessEventDispatcher(currentExecution: {
   onNodeStart: (event: ProcessEvents['nodeStart']) => void;
   onPartialOutput: (event: ProcessEvents['partialOutput']) => void;
   onLlmCallFinished: (event: ProcessEvents['llmCallFinished']) => void;
+  onLlmChatOutputSnapshot: (event: ProcessEvents['llmChatOutputSnapshot']) => void;
   onLlmProfileAttempt: (event: ProcessEvents['llmProfileAttempt']) => void;
   onToolCallFinished: (event: ProcessEvents['toolCallFinished']) => void;
   onPause: () => void;
@@ -442,6 +443,11 @@ export function createProcessEventDispatcher(currentExecution: {
     llmCallFinished: (data: unknown) =>
       dispatchWithRunActivity('llmCallFinished', data as ProcessEvents['llmCallFinished'], () =>
         currentExecution.onLlmCallFinished(data as ProcessEvents['llmCallFinished']),
+      ),
+    // Logical round history is presentation state, never Run Activity.
+    llmChatOutputSnapshot: (data: unknown) =>
+      dispatchGraphExecutionEvent('llmChatOutputSnapshot', () =>
+        currentExecution.onLlmChatOutputSnapshot(data as ProcessEvents['llmChatOutputSnapshot']),
       ),
     llmProfileAttempt: (data: unknown) =>
       dispatchWithRunActivity('llmProfileAttempt', data as ProcessEvents['llmProfileAttempt'], () =>

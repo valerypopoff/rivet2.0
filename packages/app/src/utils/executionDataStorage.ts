@@ -13,6 +13,8 @@ import type {
   InputsOrOutputsWithRefs,
   NodeRunData,
   NodeRunDataWithRefs,
+  LLMChatOutputHistoryEntry,
+  LLMChatOutputHistoryEntryWithRefs,
   RunDataByNodeId,
   StoredDataPreview,
   StoredDataValue,
@@ -26,8 +28,9 @@ export type RefScope = {
   projectId?: string;
   nodeId: string;
   processId: string;
-  channel: 'input' | 'output';
+  channel: 'input' | 'output' | 'llm-chat-output-history';
   splitIndex?: number;
+  historyEntryId?: string;
 };
 
 export function storeNodeDataForHistory(
@@ -85,7 +88,34 @@ export function storeNodeDataForHistory(
     ) as NodeRunDataWithRefs['splitOutputData'];
   }
 
+  if (data.llmChatOutputHistory !== undefined) {
+    storedData.llmChatOutputHistory = mapValues(data.llmChatOutputHistory, (entries) =>
+      entries.map((entry) => storeLLMChatOutputHistoryEntry(entry, refStore, scope)),
+    ) as NodeRunDataWithRefs['llmChatOutputHistory'];
+  }
+
   return storedData;
+}
+
+/** Stores one LLM round in a namespace that can never collide with terminal output refs. */
+export function storeLLMChatOutputHistoryEntry(
+  entry: LLMChatOutputHistoryEntry,
+  refStore: DataRefStore,
+  scope: Omit<RefScope, 'channel' | 'historyEntryId' | 'splitIndex'>,
+): LLMChatOutputHistoryEntryWithRefs {
+  return {
+    entryId: entry.entryId,
+    kind: entry.kind,
+    outcome: entry.outcome,
+    roundIndex: entry.roundIndex,
+    splitIndex: entry.splitIndex,
+    outputData: storeInputsOrOutputsForHistory(entry.outputData, refStore, {
+      ...scope,
+      channel: 'llm-chat-output-history',
+      historyEntryId: entry.entryId,
+      splitIndex: entry.splitIndex,
+    })!,
+  };
 }
 
 export function storeInputsOrOutputsForHistory(
@@ -263,6 +293,11 @@ export function collectStoredRefIds(data: InputsOrOutputsWithRefs | NodeRunDataW
       ...(runData.splitOutputData
         ? Object.values(runData.splitOutputData).flatMap((value) => collectStoredRefIds(value))
         : []),
+      ...(runData.llmChatOutputHistory
+        ? Object.values(runData.llmChatOutputHistory).flatMap((entries) =>
+            entries.flatMap((entry) => collectStoredRefIds(entry.outputData)),
+          )
+        : []),
     ];
   }
 
@@ -332,6 +367,10 @@ export function deleteStoredRefIds(refStore: DataRefDeleter, refIds: Iterable<st
 function buildExecutionDataRefId(scope: RefScope, portId: PortId): string {
   const namespace = scope.projectId ? `${scope.projectId}:` : '';
 
+  if (scope.channel === 'llm-chat-output-history') {
+    return `execution:${namespace}${scope.nodeId}:${scope.processId}:${scope.channel}:${scope.splitIndex ?? 0}:${scope.historyEntryId ?? 'unknown'}:${portId}`;
+  }
+
   if (scope.splitIndex != null) {
     return `execution:${namespace}${scope.nodeId}:${scope.processId}:${scope.channel}:${scope.splitIndex}:${portId}`;
   }
@@ -352,7 +391,8 @@ function isStoredNodeRunData(value: InputsOrOutputsWithRefs | NodeRunDataWithRef
   return (
     isStoredPortMap(candidate.inputData) ||
     isStoredPortMap(candidate.outputData) ||
-    isStoredSplitOutputData(candidate.splitOutputData)
+    isStoredSplitOutputData(candidate.splitOutputData) ||
+    isStoredLLMChatOutputHistory(candidate.llmChatOutputHistory)
   );
 }
 
@@ -404,6 +444,27 @@ function isStoredSplitOutputData(value: unknown): value is NonNullable<NodeRunDa
   }
 
   return Object.values(value).every((splitOutputData) => splitOutputData == null || isStoredPortMap(splitOutputData));
+}
+
+function isStoredLLMChatOutputHistory(
+  value: unknown,
+): value is NonNullable<NodeRunDataWithRefs['llmChatOutputHistory']> {
+  if (!isPlainRecord(value)) {
+    return false;
+  }
+
+  return Object.values(value).every(
+    (entries) =>
+      Array.isArray(entries) &&
+      entries.every(
+        (entry) =>
+          isPlainRecord(entry) &&
+          typeof entry.entryId === 'string' &&
+          typeof entry.roundIndex === 'number' &&
+          typeof entry.splitIndex === 'number' &&
+          isStoredPortMap(entry.outputData),
+      ),
+  );
 }
 
 function isStoredPortMap(value: unknown): value is InputsOrOutputsWithRefs {

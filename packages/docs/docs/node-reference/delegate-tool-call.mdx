@@ -101,6 +101,10 @@ round.
   in progress. No extra waiting state is used.
 - The Delegate runs once per tool call. Multiple calls from one model round run
   concurrently and appear as separate selectable run pages on the Delegate node.
+- Those pages are **call-level** history. LLM Chat has its own independent
+  logical-round pager: several parallel Delegate pages from one model response
+  correspond to one LLM page, and provider retries/fallbacks do not add either
+  kind of page.
 - The LLM waits for the whole call set, receives one result for every declared
   call in original model order, and then starts its next model round.
 - When the model round has one call and its declared Tool uses **Return

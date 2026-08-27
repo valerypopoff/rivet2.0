@@ -343,6 +343,9 @@ export function useLocalExecutor() {
     processor.on('llmCallFinished', (data) => {
       routeLocalProcessEvent(runProjectId, 'llmCallFinished', data, () => eventDispatcher.llmCallFinished(data));
     });
+    processor.on('llmChatOutputSnapshot', (data) => {
+      routeLocalProcessEvent(runProjectId, 'llmChatOutputSnapshot', data, () => eventDispatcher.llmChatOutputSnapshot(data));
+    });
     processor.on('llmProfileAttempt', (data) => {
       routeLocalProcessEvent(runProjectId, 'llmProfileAttempt', data, () => eventDispatcher.llmProfileAttempt(data));
     });

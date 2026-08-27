@@ -368,12 +368,22 @@ check before dependency installation, which makes a commit that deletes either
 loader fail with a direct diagnostic instead of a later Yarn "project has not been
 installed" error.
 
+The build workflow then runs `yarn check:pnp:fresh` immediately after its immutable
+install. This second check requires the generated loaders to remain byte-for-byte
+unchanged. It catches the opposite failure mode: package manifests or the lockfile
+were updated without committing regenerated PnP dependency maps. The full build
+follows this check and starts with the Core and Node workspaces, so undeclared
+runtime imports fail under the same strict PnP resolution used by downstream
+wrappers. Both `develop` and `main` run this workflow because wrappers consume
+`main` directly.
+
 If a local checkout is missing either loader, run the direct check first, then
 restore the install state and stage the generated files:
 
 ```powershell
 node scripts/checks/check-pnp-install-state.mjs
 node .yarn/releases/yarn-4.17.1.cjs install --immutable
+node scripts/checks/check-pnp-install-state.mjs --fresh
 git add .pnp.cjs .pnp.loader.mjs
 ```
 
@@ -626,6 +636,12 @@ tracked source inputs, not cache outputs. Do not exclude them from clean-tree
 checks: if Yarn changes either file after dependency installation, commit the
 updated loader with the lock/cache changes so fresh checkouts can run `yarn dev`
 without regenerating install state first.
+
+The main build workflow enforces this contract after the immutable install
+(`yarn install --immutable --immutable-cache`) with `yarn check:pnp:fresh`, before
+building Core and Node.
+This prevents a stale committed loader from being masked by CI's install step and
+then failing in a consumer that uses the tracked zero-install state.
 
 The `.yarn/cache` package archives are also tracked repository inputs. Do not
 restore that directory from `actions/cache`; doing so can reintroduce stale

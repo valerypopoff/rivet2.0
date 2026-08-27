@@ -1,4 +1,5 @@
 import type { ChatMessageDataValue, GptFunction } from '../DataValue.js';
+import type { Outputs } from '../GraphProcessor.js';
 import type {
   ChatV2NormalizedUsage,
   ChatV2PipelineResult,
@@ -8,11 +9,20 @@ import type {
 import type { StreamedFunctionCall } from '../chat/streamChatResponse.js';
 import type { DelegatedToolCallRecord } from '../nodes/toolCallDelegation.js';
 import type { PortId } from '../NodeBase.js';
+import type { LLMChatOutputSnapshotKind, LLMChatOutputSnapshotOutcome } from '../ProcessContext.js';
 import { createRivetToolRegistry } from './rivetToolRegistry.js';
 import { materializeLLMResponse } from './llmResponseMaterializer.js';
 import { createCallbackToolRoundExecutor, type ToolRoundExecutor } from './toolRoundExecutor.js';
 import { decideLLMInvocationRound } from './llmInvocationDecision.js';
 import { isChatV2PipelineProviderFailureResult } from './chatV2Pipeline.js';
+import { cloneLLMChatV2Outputs } from './llmChatV2OutputClone.js';
+
+export type LLMChatOutputSnapshotDescriptor = {
+  entryId: string;
+  roundIndex: number;
+  kind: LLMChatOutputSnapshotKind;
+  outcome: LLMChatOutputSnapshotOutcome;
+};
 
 export type ToolContinuationOptions = ChatV2PipelineRoundOptions & {
   autoContinue: boolean;
@@ -24,6 +34,10 @@ export type ToolContinuationOptions = ChatV2PipelineRoundOptions & {
     preToolMessage: string,
   ) => Promise<ToolContinuationToolResult[]>;
   runPipeline: (options: ChatV2PipelineRoundOptions) => Promise<ChatV2PipelineResult>;
+  /** Emits an immutable completed model page before its delegated tools run. */
+  onCompletedModelRound?: (snapshot: LLMChatOutputSnapshotDescriptor & { outputs: Outputs }) => void;
+  /** Describes the terminal page; the node emits it after terminal projection. */
+  onTerminalRound?: (snapshot: LLMChatOutputSnapshotDescriptor) => void;
 };
 
 export type ToolContinuationToolResult = ChatMessageDataValue & {
@@ -144,6 +158,8 @@ export async function runChatV2PipelineWithToolContinuation(
     functions,
     delegateToolCall,
     delegateToolCallRound,
+    onCompletedModelRound,
+    onTerminalRound,
     runPipeline,
     ...pipelineOptions
   } = options;
@@ -205,9 +221,30 @@ export async function runChatV2PipelineWithToolContinuation(
         outputReasoning: pipelineOptions.outputReasoning,
         includeFunctionCalls: pipelineOptions.includeFunctionCalls,
       });
+      onTerminalRound?.({
+        entryId: `model-round:${completedRounds}`,
+        roundIndex: completedRounds,
+        kind: 'model-round',
+        outcome:
+          decision.kind === 'final-model-answer'
+            ? 'final-answer'
+            : decision.kind === 'release-unresolved-calls'
+              ? 'unresolved-tool-calls'
+              : 'max-rounds',
+      });
 
       return result;
     }
+
+    // Snapshot before delegate execution: subsequent rounds accumulate tool
+    // messages, usage, and reasoning that must not mutate this page.
+    onCompletedModelRound?.({
+      entryId: `model-round:${completedRounds}`,
+      roundIndex: completedRounds,
+      kind: 'model-round',
+      outcome: 'tool-calls',
+      outputs: cloneLLMChatV2Outputs(result.commonOutputs),
+    });
 
     const toolResultMessages = await toolRoundExecutor.executeRound({
       calls: result.functionCalls,
@@ -258,6 +295,12 @@ export async function runChatV2PipelineWithToolContinuation(
 
       applyAccumulatedUsage(result, accumulatedUsage, pipelineOptions.outputUsage);
       applyAccumulatedReasoning(result, reasoningRounds, pipelineOptions.outputReasoning);
+      onTerminalRound?.({
+        entryId: `direct-tool-result:${completedRounds}`,
+        roundIndex: completedRounds,
+        kind: 'direct-tool-result',
+        outcome: 'direct-tool-result',
+      });
       return result;
     }
 

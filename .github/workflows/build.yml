@@ -4,9 +4,11 @@ on:
   push:
     branches:
       - develop
+      - main
   pull_request:
     branches:
       - develop
+      - main
 
 jobs:
   build:
@@ -17,6 +19,8 @@ jobs:
       - uses: ./.github/actions/setup-yarn
       - name: Install dependencies
         run: node .yarn/releases/yarn-4.17.1.cjs install --immutable --immutable-cache
+      - name: Verify fresh Yarn PnP dependency map
+        run: yarn check:pnp:fresh
       - name: Audit JavaScript dependencies
         run: yarn security:audit
       - name: Verify AI graph builder assets

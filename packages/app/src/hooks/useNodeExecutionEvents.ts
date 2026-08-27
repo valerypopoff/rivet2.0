@@ -11,14 +11,23 @@ import {
   type AgentTraceEvent,
 } from '@valerypopoff/rivet2-core';
 import { type ExecutionDataFlowApi } from './useExecutionDataFlow';
-import { lastRunDataByNodeState } from '../state/dataFlow';
-import { collectStoredRefIds, deleteStoredRefIds, storeInputsOrOutputsForHistory } from '../utils/executionDataStorage';
+import { lastRunDataByNodeState, selectedLLMChatOutputPageByInvocationState } from '../state/dataFlow';
+import {
+  collectStoredRefIds,
+  deleteStoredRefIds,
+  storeInputsOrOutputsForHistory,
+} from '../utils/executionDataStorage';
 import { sanitizeInputsOrOutputs } from '../utils/executionDataSanitization';
 import { handleError } from '../utils/errorHandling';
 import { shouldToastAsyncBranchSafetyError } from '../utils/graphExecutionErrorPresentation';
 import { useDataRefs } from '../providers/ProvidersContext';
 import { projectState } from '../state/savedGraphs';
 import { upsertAgentTraceEventForInvocation } from './agentTraceEventStorage.js';
+import {
+  removeLLMChatOutputHistorySelectionsForProcess,
+  toLLMChatOutputHistoryEntry,
+  upsertLLMChatOutputHistoryEntry,
+} from '../utils/llmChatOutputHistory.js';
 
 export type NodeExecutionEventsApi = {
   onNodeError: (data: ProcessEvents['nodeError']) => void;
@@ -28,6 +37,7 @@ export type NodeExecutionEventsApi = {
   onNodeStart: (data: ProcessEvents['nodeStart']) => void;
   onPartialOutput: (data: ProcessEvents['partialOutput']) => void;
   onLlmCallFinished: (data: ProcessEvents['llmCallFinished']) => void;
+  onLlmChatOutputSnapshot: (data: ProcessEvents['llmChatOutputSnapshot']) => void;
   onLlmProfileAttempt: (data: ProcessEvents['llmProfileAttempt']) => void;
   onToolCallFinished: (data: ProcessEvents['toolCallFinished']) => void;
 };
@@ -42,6 +52,7 @@ export function useNodeExecutionEvents({
 >): NodeExecutionEventsApi {
   const dataRefs = useDataRefs();
   const setLastRunData = useSetAtom(lastRunDataByNodeState);
+  const setLLMChatOutputPageSelections = useSetAtom(selectedLLMChatOutputPageByInvocationState);
   const project = useAtomValue(projectState);
 
   const onNodeStart = ({ node, inputs, processId, execution }: ProcessEvents['nodeStart']) => {
@@ -185,7 +196,48 @@ export function useNodeExecutionEvents({
     );
 
     deleteStoredRefIds(dataRefs, refIdsToDelete);
+    setLLMChatOutputPageSelections((previous) =>
+      removeLLMChatOutputHistorySelectionsForProcess({
+        nodeId: node.id,
+        processId,
+        selections: previous,
+      }),
+    );
     setSelectedNodePageLatest(node.id, execution);
+  };
+
+  const onLlmChatOutputSnapshot = (data: ProcessEvents['llmChatOutputSnapshot']) => {
+    const outputData = storeInputsOrOutputsForHistory(sanitizeInputsOrOutputs(data.outputs), dataRefs, {
+      channel: 'llm-chat-output-history',
+      historyEntryId: data.entryId,
+      nodeId: data.nodeId,
+      processId: data.processId,
+      projectId: project.metadata.id,
+      splitIndex: data.splitIndex,
+    })!;
+    const storedEntry = toLLMChatOutputHistoryEntry(data, outputData);
+
+    const refIdsToDelete: string[] = [];
+    setLastRunData((previous) =>
+      produce(previous, (draft) => {
+        draft[data.nodeId] ??= [];
+        let process = draft[data.nodeId]!.find((candidate) => candidate.processId === data.processId);
+        if (!process) {
+          process = {
+            data: {},
+            graphId: data.execution.graphId,
+            graphRunId: data.execution.graphRunId,
+            processId: data.processId,
+            rootRunId: data.execution.rootRunId,
+          };
+          draft[data.nodeId]!.push(process);
+        }
+        const updated = upsertLLMChatOutputHistoryEntry(process.data, storedEntry);
+        refIdsToDelete.push(...updated.replacedRefIds);
+        process.data = updated.data;
+      }),
+    );
+    deleteStoredRefIds(dataRefs, refIdsToDelete);
   };
 
   const appendAgentTraceEvent = (event: AgentTraceEvent) => {
@@ -225,6 +277,7 @@ export function useNodeExecutionEvents({
     onNodeStart,
     onPartialOutput,
     onLlmCallFinished,
+    onLlmChatOutputSnapshot,
     onLlmProfileAttempt,
     onToolCallFinished,
   };

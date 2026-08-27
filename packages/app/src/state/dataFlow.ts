@@ -16,6 +16,8 @@ import {
   type ProjectId,
   type FrozenNodeOutputsByGraph,
   type AgentTraceEvent,
+  type LLMChatOutputSnapshotKind,
+  type LLMChatOutputSnapshotOutcome,
 } from '@valerypopoff/rivet2-core';
 import { graphNavigationStackState } from './graphBuilder.js';
 import type { GraphViewKey } from '../domain/graphEditing/navigationActions.js';
@@ -59,6 +61,7 @@ export type ProjectExecutionSnapshot = {
   runningGraphs: GraphId[];
   selectedGraphRunByView: Record<GraphViewKey, GraphRunSelection>;
   selectedProcessPageNodes: Record<NodeId, PageValue>;
+  selectedLLMChatOutputPageByInvocation: Record<string, LLMChatOutputPageValue>;
   userInputQuestions: Record<NodeId, ProcessQuestions[]>;
 };
 
@@ -85,6 +88,23 @@ export type NodeRunDataBase = {
     | { type: 'notRan'; reason: string };
 };
 
+/** Display-only completed logical LLM Chat pages, keyed by split item. */
+export type LLMChatOutputHistoryEntryBase = {
+  entryId: string;
+  roundIndex: number;
+  splitIndex: number;
+  kind: LLMChatOutputSnapshotKind;
+  outcome: LLMChatOutputSnapshotOutcome;
+};
+
+export type LLMChatOutputHistoryEntry = LLMChatOutputHistoryEntryBase & {
+  outputData: Outputs;
+};
+
+export type LLMChatOutputHistoryEntryWithRefs = LLMChatOutputHistoryEntryBase & {
+  outputData: StoredInputsOrOutputs;
+};
+
 export type NodeRunData = NodeRunDataBase & {
   inputData?: Inputs;
 
@@ -93,6 +113,8 @@ export type NodeRunData = NodeRunDataBase & {
   splitOutputData?: {
     [index: number]: Outputs;
   };
+
+  llmChatOutputHistory?: Record<number, LLMChatOutputHistoryEntry[]>;
 };
 
 export type StoredDataPreview =
@@ -148,6 +170,8 @@ export type NodeRunDataWithRefs = NodeRunDataBase & {
   splitOutputData?: {
     [index: number]: StoredInputsOrOutputs;
   };
+
+  llmChatOutputHistory?: Record<number, LLMChatOutputHistoryEntryWithRefs[]>;
 };
 
 export type InputsOrOutputsWithRefs = StoredInputsOrOutputs;
@@ -155,6 +179,8 @@ export type InputsOrOutputsWithRefs = StoredInputsOrOutputs;
 export type DataValueWithRefs = StoredDataValue;
 
 export type PageValue = number | 'latest';
+
+export type LLMChatOutputPageValue = string | 'latest';
 
 export type PageUpdater = (prev: PageValue) => PageValue;
 
@@ -204,6 +230,13 @@ export const resolvedGraphSelectionState = atom((get) => {
 
 export const selectedProcessPageNodesState = atom<Record<NodeId, PageValue>>({});
 
+/** UI-only round choice; history itself stays in NodeRunData and recordings. */
+export const selectedLLMChatOutputPageByInvocationState = atom<Record<string, LLMChatOutputPageValue>>({});
+
+export function getLLMChatOutputHistorySelectionKey(nodeId: NodeId, processId: ProcessId, splitIndex: number): string {
+  return `${nodeId}:${processId}:${splitIndex}`;
+}
+
 export const frozenNodeOutputsState = atom<FrozenNodeOutputsByGraph>({});
 
 export const projectExecutionSnapshotsState = atom<Record<ProjectId, ProjectExecutionSnapshot | undefined>>({});
@@ -221,6 +254,15 @@ export const selectedProcessPageState = atomFamily((nodeId: NodeId) =>
           [nodeId]: nextValue,
         };
       });
+    },
+  ),
+);
+
+export const selectedLLMChatOutputPageState = atomFamily((key: string) =>
+  atom(
+    (get) => get(selectedLLMChatOutputPageByInvocationState)[key] ?? 'latest',
+    (get, set, newValue: LLMChatOutputPageValue) => {
+      set(selectedLLMChatOutputPageByInvocationState, (previous) => ({ ...previous, [key]: newValue }));
     },
   ),
 );
@@ -243,6 +285,7 @@ export function createEmptyProjectExecutionSnapshot(): ProjectExecutionSnapshot 
     runActivityJournal: createRunActivityJournal(),
     runningGraphs: [],
     selectedGraphRunByView: {},
+    selectedLLMChatOutputPageByInvocation: {},
     selectedProcessPageNodes: {},
     userInputQuestions: {},
   };

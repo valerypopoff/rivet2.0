@@ -115,6 +115,13 @@ export function createDebuggerProcessorAttachments(options: {
         }),
       );
       cleanups.push(
+        processor.on('llmChatOutputSnapshot', (data) => {
+          // Logical LLM Chat pages are display-only, but remote debugger
+          // consumers need the same event stream as in-process execution.
+          options.broadcast(processor, 'llmChatOutputSnapshot', data);
+        }),
+      );
+      cleanups.push(
         processor.on('llmProfileAttempt', (data) => {
           options.broadcast(processor, 'llmProfileAttempt', data);
         }),

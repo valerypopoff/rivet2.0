@@ -55,6 +55,7 @@ export type RunGraphOptions = {
   concurrency?: GraphProcessorConcurrency;
   getChatNodeEndpoint?: ProcessContext['getChatNodeEndpoint'];
   onChatV2CallFinished?: ProcessContext['onChatV2CallFinished'];
+  onLLMChatOutputSnapshot?: ProcessContext['onLLMChatOutputSnapshot'];
   llmProfileHealthStore?: RivetLLMProfileHealthStore;
   evaluation?: ProcessContext['evaluation'];
   tokenizer?: Tokenizer;
@@ -248,6 +249,7 @@ export function coreCreateProcessor(
           settings: resolveProcessSettings(options),
           getChatNodeEndpoint: options.getChatNodeEndpoint,
           onChatV2CallFinished: options.onChatV2CallFinished,
+          onLLMChatOutputSnapshot: options.onLLMChatOutputSnapshot,
           llmProfileHealthStore: options.llmProfileHealthStore,
           evaluation: options.evaluation,
         },

@@ -110,6 +110,18 @@ export type RecordedEventsMap = OverrideProperties<
       progress: ProcessEvents['progress']['progress'];
     }>;
 
+    /** Display-only output page for one completed logical LLM Chat round. */
+    llmChatOutputSnapshot: WithOptionalExecution<{
+      nodeId: NodeId;
+      processId: ProcessId;
+      entryId: string;
+      roundIndex: number;
+      splitIndex: number;
+      kind: ProcessEvents['llmChatOutputSnapshot']['kind'];
+      outcome: ProcessEvents['llmChatOutputSnapshot']['outcome'];
+      outputs: Outputs;
+    }>;
+
     /** Called when the outputs of a node have been cleared entirely. If processId is present, only the one process() should be cleared. */
     nodeOutputsCleared: WithOptionalExecution<{ nodeId: NodeId; processId?: ProcessId }>;
 
