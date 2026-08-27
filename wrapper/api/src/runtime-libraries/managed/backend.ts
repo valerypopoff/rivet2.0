@@ -119,7 +119,7 @@ export class ManagedRuntimeLibrariesBackend implements RuntimeLibrariesBackend {
       this.#context.localCache.reset();
       this.#processRegistry.clear();
       try {
-        await this.#context.pool.end();
+        await this.#context.poolLease.release();
       } finally {
         this.#context.blobStore.dispose?.();
       }

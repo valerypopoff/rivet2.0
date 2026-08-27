@@ -30,6 +30,9 @@ runtimeLibraries:
 
 postgres:
   mode: managed
+  maxConnections: 200
+  reservedConnections: 30
+  poolMaxPerApiPod: 10
   host: postgres-prod.example.internal
   port: 5432
   database: rivet

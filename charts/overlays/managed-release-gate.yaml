@@ -44,6 +44,9 @@ lifecycle:
   preStopDelaySeconds: 0
 postgres:
   mode: managed
+  maxConnections: 100
+  reservedConnections: 30
+  poolMaxPerApiPod: 10
   sslMode: disable
 
 objectStorage:

@@ -1,7 +1,7 @@
 import { hostname } from 'node:os';
 import type { IncomingMessage, Server } from 'node:http';
 import { performance } from 'node:perf_hooks';
-import { Pool } from 'pg';
+import type { Pool } from 'pg';
 import { WebSocketServer } from 'ws';
 import {
   createInMemoryRivetWebAppRunCoordinator,
@@ -12,6 +12,10 @@ import {
 } from '@valerypopoff/rivet2-node';
 
 import { checkPostgresPoolHealth } from './managed-health.js';
+import {
+  acquireManagedPostgresPool,
+  type ManagedPostgresPoolLease,
+} from './managed-postgres-pool.js';
 import type { RuntimeHealthCheckContext } from './runtime-health.js';
 import { getManagedDbConnectionConfig, getManagedDbPoolConfig } from './routes/workflows/managed/db.js';
 import { getManagedWorkflowStorageConfig, isManagedWorkflowStorageEnabled } from './routes/workflows/storage-config.js';
@@ -118,6 +122,7 @@ export async function initializeWebAppActionWebSockets(server: Server): Promise<
   });
   const recorders = new Map<string, RecorderEntry>();
   let pool: Pool | null = null;
+  let poolLease: ManagedPostgresPoolLease | null = null;
   let coordinator: PostgresRivetWebAppRunCoordinator | null = null;
   let accepting = true;
 
@@ -133,7 +138,8 @@ export async function initializeWebAppActionWebSockets(server: Server): Promise<
     }
 
     const config = getManagedWorkflowStorageConfig();
-    pool = new Pool(getManagedDbPoolConfig(config));
+    poolLease = acquireManagedPostgresPool(getManagedDbPoolConfig(config));
+    pool = poolLease.pool;
     coordinator = new PostgresRivetWebAppRunCoordinator(
       pool,
       getManagedDbConnectionConfig(config),
@@ -265,7 +271,7 @@ export async function initializeWebAppActionWebSockets(server: Server): Promise<
       for (const [runId] of recorders) recorders.delete(runId);
       await closeWebSocketServer(webSocketServer);
       await coordinator?.dispose();
-      await pool?.end();
+      await poolLease?.release();
       if (activeRuntime === runtime) activeRuntime = null;
     },
   };

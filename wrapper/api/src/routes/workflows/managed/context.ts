@@ -1,7 +1,7 @@
-import type { PoolClient } from 'pg';
-import { Pool } from 'pg';
+import type { Pool, PoolClient } from 'pg';
 
 import { checkPostgresPoolHealth } from '../../../managed-health.js';
+import { acquireManagedPostgresPool } from '../../../managed-postgres-pool.js';
 import type { RuntimeHealthCheckContext } from '../../../runtime-health.js';
 import type { ManagedWorkflowStorageConfig } from '../storage-config.js';
 import {
@@ -58,7 +58,8 @@ export function createManagedWorkflowContext(
   config: ManagedWorkflowStorageConfig,
   blobStore?: ManagedWorkflowBlobStore,
 ): ManagedWorkflowContext {
-  const pool = new Pool(getManagedDbPoolConfig(config));
+  const poolLease = acquireManagedPostgresPool(getManagedDbPoolConfig(config));
+  const { pool } = poolLease;
   const resolvedBlobStore = blobStore ?? new S3ManagedWorkflowBlobStore(config);
   const executionCache = new ManagedWorkflowExecutionCache();
   const queries = createManagedWorkflowQueries(pool);
@@ -130,7 +131,7 @@ export function createManagedWorkflowContext(
       // not retain stale cached blobs across recreated contexts.
       executionCache.clearRevisionMaterializations();
       try {
-        await pool.end();
+        await poolLease.release();
       } finally {
         resolvedBlobStore.dispose?.();
       }

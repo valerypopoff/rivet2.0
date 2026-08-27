@@ -47,6 +47,9 @@ runtimeLibraries:
 
 postgres:
   mode: managed
+  maxConnections: 100
+  reservedConnections: 30
+  poolMaxPerApiPod: 10
   connectionStringSecretName: rivet-postgres-conn
   connectionStringSecretKey: connectionString
   sslMode: require

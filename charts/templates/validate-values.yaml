@@ -22,6 +22,36 @@
 {{- fail "env.RIVET_DEPLOYMENT_MANAGED_WORKFLOW_SCHEMA_MODE is an internal chart-owned startup policy and cannot be overridden" -}}
 {{- end -}}
 
+{{- if hasKey .Values.env "RIVET_DEPLOYMENT_DATABASE_POOL_MAX" -}}
+{{- fail "env.RIVET_DEPLOYMENT_DATABASE_POOL_MAX is chart-owned; configure postgres.poolMaxPerApiPod instead" -}}
+{{- end -}}
+
+{{- $postgresMaxConnections := int .Values.postgres.maxConnections -}}
+{{- $postgresReservedConnections := int .Values.postgres.reservedConnections -}}
+{{- $poolMaxPerApiPod := int .Values.postgres.poolMaxPerApiPod -}}
+{{- if lt $postgresMaxConnections 1 -}}
+{{- fail "postgres.maxConnections must be greater than zero" -}}
+{{- end -}}
+{{- if lt $postgresReservedConnections 0 -}}
+{{- fail "postgres.reservedConnections must be zero or greater" -}}
+{{- end -}}
+{{- if ge $postgresReservedConnections $postgresMaxConnections -}}
+{{- fail "postgres.reservedConnections must be less than postgres.maxConnections" -}}
+{{- end -}}
+{{- if lt $poolMaxPerApiPod 1 -}}
+{{- fail "postgres.poolMaxPerApiPod must be greater than zero" -}}
+{{- end -}}
+{{- $backendReplicas := int .Values.replicaCount.backend -}}
+{{- $executionReplicas := int .Values.replicaCount.execution -}}
+{{- if .Values.autoscaling.execution.enabled -}}
+{{- $executionReplicas = int .Values.autoscaling.execution.maxReplicas -}}
+{{- end -}}
+{{- $apiPodConnections := add $poolMaxPerApiPod 3 -}}
+{{- $requiredPostgresConnections := add $postgresReservedConnections (mul (add $backendReplicas $executionReplicas) $apiPodConnections) -}}
+{{- if gt $requiredPostgresConnections $postgresMaxConnections -}}
+{{- fail (printf "PostgreSQL capacity is too small: the chart requires %d connections (%d reserved + %d API pods * (%d pooled + 3 LISTEN)), but postgres.maxConnections is %d; raise database capacity, lower postgres.poolMaxPerApiPod, or lower execution autoscaling.maxReplicas" $requiredPostgresConnections $postgresReservedConnections (add $backendReplicas $executionReplicas) $poolMaxPerApiPod $postgresMaxConnections) -}}
+{{- end -}}
+
 {{- if lt (int .Values.workflowSchema.migrationJob.backoffLimit) 0 -}}
 {{- fail "workflowSchema.migrationJob.backoffLimit must be zero or greater" -}}
 {{- end -}}
@@ -87,6 +117,16 @@
 {{- end -}}
 {{- if empty (index .Values.env "RIVET_PROXY_RESOLVER") -}}
 {{- fail "env.RIVET_PROXY_RESOLVER is required so nginx can resolve in-cluster service names dynamically" -}}
+{{- end -}}
+
+{{- if and .Values.autoscaling.proxy.enabled (empty (dig "requests" "cpu" "" .Values.resources.proxy)) -}}
+{{- fail "resources.proxy.requests.cpu is required when proxy autoscaling is enabled" -}}
+{{- end -}}
+{{- if and .Values.autoscaling.web.enabled (empty (dig "requests" "cpu" "" .Values.resources.web)) -}}
+{{- fail "resources.web.requests.cpu is required when web autoscaling is enabled" -}}
+{{- end -}}
+{{- if and .Values.autoscaling.execution.enabled (empty (dig "requests" "cpu" "" .Values.resources.execution)) -}}
+{{- fail "resources.execution.requests.cpu is required when execution autoscaling is enabled" -}}
 {{- end -}}
 
 {{- if .Values.ingress.enabled -}}

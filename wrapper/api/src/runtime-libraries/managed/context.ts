@@ -2,8 +2,12 @@ import fs from 'node:fs';
 import os from 'node:os';
 import { randomUUID } from 'node:crypto';
 
-import { Pool } from 'pg';
+import type { Pool } from 'pg';
 
+import {
+  acquireManagedPostgresPool,
+  type ManagedPostgresPoolLease,
+} from '../../managed-postgres-pool.js';
 import { getManagedRuntimeLibrariesConfig } from '../config.js';
 import { ensureDirectories } from '../manifest.js';
 import {
@@ -16,6 +20,7 @@ import { getPoolConfig } from './schema.js';
 export type ManagedRuntimeLibrariesContext = {
   config: ReturnType<typeof getManagedRuntimeLibrariesConfig>;
   pool: Pool;
+  poolLease: ManagedPostgresPoolLease;
   blobStore: RuntimeLibrariesBlobStore;
   localCache: ManagedRuntimeLibrariesLocalCache;
   instanceId: string;
@@ -26,7 +31,8 @@ export type ManagedRuntimeLibrariesContext = {
 
 export function createManagedRuntimeLibrariesContext(blobStore?: RuntimeLibrariesBlobStore): ManagedRuntimeLibrariesContext {
   const config = getManagedRuntimeLibrariesConfig();
-  const pool = new Pool(getPoolConfig(config));
+  const poolLease = acquireManagedPostgresPool(getPoolConfig(config));
+  const { pool } = poolLease;
   const resolvedBlobStore = blobStore ?? new S3RuntimeLibrariesBlobStore(config);
   const localCache = new ManagedRuntimeLibrariesLocalCache(pool, resolvedBlobStore, config);
   const instanceId = `${os.hostname()}-${process.pid}-${randomUUID()}`;
@@ -49,6 +55,7 @@ export function createManagedRuntimeLibrariesContext(blobStore?: RuntimeLibrarie
   return {
     config,
     pool,
+    poolLease,
     blobStore: resolvedBlobStore,
     localCache,
     instanceId,

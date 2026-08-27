@@ -156,6 +156,14 @@ filesystem:
 
 postgres:
   mode: managed
+  # Provider-side PostgreSQL capacity used by chart validation. This does not
+  # configure PostgreSQL itself; keep it equal to the service's max_connections.
+  maxConnections: 200
+  # Leave room for migrations, provider administration, and incident access.
+  reservedConnections: 30
+  # Shared query-pool connections per API process. Three additional dedicated
+  # LISTEN connections per API pod are included by the chart capacity check.
+  poolMaxPerApiPod: 10
   host: ""
   port: 5432
   database: ""
@@ -222,8 +230,23 @@ podAnnotations:
   workflowSchemaMigration: {}
 
 resources:
-  proxy: {}
-  web: {}
-  api: {}
-  executor: {}
-  execution: {}
+  proxy:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+  web:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+  api:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+  executor:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+  execution:
+    requests:
+      cpu: 500m
+      memory: 1Gi

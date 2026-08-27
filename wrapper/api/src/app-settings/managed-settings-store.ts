@@ -1,6 +1,10 @@
 import { Client, Pool, type PoolConfig, type QueryResultRow } from 'pg';
 
 import { checkPostgresPoolHealth, MANAGED_POSTGRES_CONNECTION_TIMEOUT_MS } from '../managed-health.js';
+import {
+  acquireManagedPostgresPool,
+  type ManagedPostgresPoolLease,
+} from '../managed-postgres-pool.js';
 import type { RuntimeHealthCheckContext } from '../runtime-health.js';
 import {
   decryptManagedSettingsValue,
@@ -112,6 +116,7 @@ function normalizePollInterval(value: number | undefined): number {
 
 export class PostgresAppSettingsBackend implements AppSettingsBackend {
   readonly #pool: Pool;
+  readonly #poolLease: ManagedPostgresPoolLease;
   readonly #poolConfig: PoolConfig;
   readonly #primaryKey: ManagedSettingsEncryptionKey;
   readonly #keys: ReadonlyMap<string, ManagedSettingsEncryptionKey>;
@@ -128,7 +133,8 @@ export class PostgresAppSettingsBackend implements AppSettingsBackend {
 
   constructor(options: ManagedSettingsStoreOptions) {
     this.#poolConfig = options.poolConfig;
-    this.#pool = new Pool({ ...options.poolConfig, max: 5 });
+    this.#poolLease = acquireManagedPostgresPool(options.poolConfig);
+    this.#pool = this.#poolLease.pool;
     this.#primaryKey = deriveManagedSettingsEncryptionKey(options.encryptionSecret);
     const keys = [this.#primaryKey];
     if (options.previousEncryptionSecret?.trim()) {
@@ -299,7 +305,7 @@ export class PostgresAppSettingsBackend implements AppSettingsBackend {
     this.#pollInFlight = undefined;
     await Promise.allSettled([
       listener?.end(),
-      this.#pool.end(),
+      this.#poolLease.release(),
     ]);
     this.#listeners.clear();
     this.#knownRevisions.clear();

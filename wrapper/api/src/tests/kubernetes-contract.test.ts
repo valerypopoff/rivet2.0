@@ -99,6 +99,7 @@ test('rendered chart keeps control-plane and execution-plane API env contracts d
   assert.match(renderedChart, /node \/opt\/rivet\/lib\/bootstrap-deployment-storage-settings\.mjs/);
   assert.match(renderedChart, /name: RIVET_DEPLOYMENT_STORAGE_MODE\s*\n\s*value: "managed"/);
   assert.match(renderedChart, /name: RIVET_DEPLOYMENT_DATABASE_CONNECTION_STRING/);
+  assert.match(renderedChart, /name: RIVET_DEPLOYMENT_DATABASE_POOL_MAX\s*\n\s*value: "10"/);
   assert.match(renderedChart, /name: RIVET_DEPLOYMENT_STORAGE_ACCESS_KEY_ID/);
   assert.equal(
     (renderedChart.match(/\s+name: app-data\s*\n\s*emptyDir: \{\}/g) ?? []).length,
@@ -160,7 +161,7 @@ test('chart serializes managed workflow migrations before verify-only API worklo
   );
   assert.match(
     renderedChart,
-    /app\.kubernetes\.io\/component: workflow-schema-migration[\s\S]*?name: migrate[\s\S]*?resources:\s*\n\s*\{\}/,
+    /app\.kubernetes\.io\/component: workflow-schema-migration[\s\S]*?name: migrate[\s\S]*?resources:\s*\n\s*requests:\s*\n\s*cpu: 250m\s*\n\s*memory: 512Mi/,
   );
   assert.equal(
     (renderedChart.match(/name: RIVET_DEPLOYMENT_MANAGED_WORKFLOW_SCHEMA_MODE\s*\n\s*value: verify/g) ?? []).length,
@@ -200,6 +201,38 @@ test('chart validation keeps the supported managed singleton control-plane bound
   assert.match(validateValuesTemplate, /replicaCount\.backend=1 is required because \/ws\/latest-debugger and co-located editor executor session routing remain process-local control-plane features/);
   assert.match(validateValuesTemplate, /autoscaling\.backend\.enabled=false is required because \/ws\/latest-debugger and co-located editor executor session routing remain process-local control-plane features/);
   assert.match(validateValuesTemplate, /appSettings\.backend=postgres so settings remain consistent across replicas without a shared app-data volume/);
+});
+
+test('chart budgets PostgreSQL connections against the maximum execution replica count', async () => {
+  const renderedChart = await renderLocalKubernetesChartWithOverrides([
+    'autoscaling.execution.enabled=true',
+    'autoscaling.execution.minReplicas=2',
+    'autoscaling.execution.maxReplicas=4',
+  ]);
+
+  assert.match(renderedChart, /name: RIVET_DEPLOYMENT_DATABASE_POOL_MAX\s*\n\s*value: "10"/);
+  assert.match(renderedChart, /resources:\s*\n\s*requests:\s*\n\s*cpu: 500m\s*\n\s*memory: 1Gi/);
+
+  await assertHelmTemplateFails(
+    [
+      'postgres.maxConnections=100',
+      'autoscaling.execution.enabled=true',
+      'autoscaling.execution.maxReplicas=10',
+    ],
+    /requires 173 connections \(30 reserved \+ 11 API pods \* \(10 pooled \+ 3 LISTEN\)\), but postgres\.maxConnections is 100/,
+  );
+  await assertHelmTemplateFails(
+    ['env.RIVET_DEPLOYMENT_DATABASE_POOL_MAX=99'],
+    /configure postgres\.poolMaxPerApiPod instead/,
+  );
+  await assertHelmTemplateFails(
+    [
+      'autoscaling.execution.enabled=true',
+      'autoscaling.execution.maxReplicas=4',
+      'resources.execution.requests.cpu=',
+    ],
+    /resources\.execution\.requests\.cpu is required when execution autoscaling is enabled/,
+  );
 });
 
 test('chart renders profile-aware probes, graceful lifecycle, and replicated-tier availability policies', async () => {
@@ -264,6 +297,9 @@ test('production overlay keeps the supported ingress, Vault, and scale boundarie
   assert.match(prodOverlay, /autoscaling:[\s\S]*web:\s*\n\s*enabled:\s*false/);
   assert.match(prodOverlay, /autoscaling:[\s\S]*backend:\s*\n\s*enabled:\s*false/);
   assert.match(prodOverlay, /autoscaling:[\s\S]*execution:\s*\n\s*enabled:\s*true/);
+  assert.match(prodOverlay, /maxConnections:\s*200/);
+  assert.match(prodOverlay, /reservedConnections:\s*30/);
+  assert.match(prodOverlay, /poolMaxPerApiPod:\s*10/);
 });
 
 test('local Kubernetes overlay keeps the backend singleton while scaling endpoint-serving tiers and enabling latest debugger support', () => {

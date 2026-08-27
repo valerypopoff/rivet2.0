@@ -1,6 +1,7 @@
 import { Pool, type PoolClient, type QueryResultRow } from 'pg';
 
 import { MANAGED_POSTGRES_CONNECTION_TIMEOUT_MS } from '../../../managed-health.js';
+import { withManagedPostgresPoolMax } from '../../../managed-postgres-pool.js';
 import { createHttpError } from '../../../utils/httpError.js';
 import type { ManagedWorkflowStorageConfig } from '../storage-config.js';
 import { WORKFLOW_COLUMNS, splitCurrentDraftRevisionRow } from './mappers.js';
@@ -58,10 +59,7 @@ export function getManagedDbConnectionConfig(config: ManagedWorkflowStorageConfi
 }
 
 export function getManagedDbPoolConfig(config: ManagedWorkflowStorageConfig) {
-  return {
-    ...getManagedDbConnectionConfig(config),
-    max: 10,
-  };
+  return withManagedPostgresPoolMax(getManagedDbConnectionConfig(config));
 }
 
 export function isUniqueViolation(error: unknown): boolean {

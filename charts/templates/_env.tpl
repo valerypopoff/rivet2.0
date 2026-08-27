@@ -3,6 +3,11 @@
   value: {{ .Values.vault.dotenvFileName | quote }}
 {{- end -}}
 
+{{- define "rivet.env.databasePool" -}}
+- name: RIVET_DEPLOYMENT_DATABASE_POOL_MAX
+  value: {{ .Values.postgres.poolMaxPerApiPod | quote }}
+{{- end -}}
+
 {{- define "rivet.env.deploymentStorageBootstrap" -}}
 {{- $root := . -}}
 {{- $appDataRoot := "/data/rivet-app" -}}
@@ -11,6 +16,7 @@
 {{- $appDataRoot = default $appDataRoot .appDataRoot -}}
 {{- end -}}
 {{- include "rivet.env.vaultDotenv" $root }}
+{{ include "rivet.env.databasePool" $root }}
 - name: RIVET_APP_DATA_ROOT
   value: {{ $appDataRoot | quote }}
 - name: RIVET_DEPLOYMENT_STORAGE_MODE
@@ -149,6 +155,7 @@
 {{- define "rivet.env.apiWorkload" -}}
 {{- $root := .root -}}
 {{- include "rivet.env.vaultDotenv" $root }}
+{{ include "rivet.env.databasePool" $root }}
 - name: PORT
   value: {{ .port | quote }}
 - name: RIVET_API_PROFILE

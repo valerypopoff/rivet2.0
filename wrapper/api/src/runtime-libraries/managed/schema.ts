@@ -1,6 +1,7 @@
 import type { Pool, PoolClient, QueryResultRow } from 'pg';
 
 import { MANAGED_POSTGRES_CONNECTION_TIMEOUT_MS } from '../../managed-health.js';
+import { withManagedPostgresPoolMax } from '../../managed-postgres-pool.js';
 
 import type {
   JobStatus,
@@ -287,19 +288,18 @@ export function getPoolConfig(config: ManagedRuntimeLibrariesConfig) {
     keepAliveInitialDelayMillis: 30_000,
     idleTimeoutMillis: 30_000,
     connectionTimeoutMillis: MANAGED_POSTGRES_CONNECTION_TIMEOUT_MS,
-    max: 10,
   };
 
   if (config.databaseSslMode === 'disable') {
-    return sharedConfig;
+    return withManagedPostgresPoolMax(sharedConfig);
   }
 
-  return {
+  return withManagedPostgresPoolMax({
     ...sharedConfig,
     ssl: {
       rejectUnauthorized: config.databaseSslMode === 'verify-full',
     },
-  };
+  });
 }
 
 export async function queryRows<T extends QueryResultRow>(

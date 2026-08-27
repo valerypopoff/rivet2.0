@@ -306,6 +306,7 @@ Have these ready before the first `helm upgrade --install`:
 - DNS for the public Rivet hostname and a TLS secret or certificate-manager integration
 - a Kubernetes Secret or Vault value for the App Settings encryption key; the shared `RIVET_KEY` works only as a compatibility fallback
 - managed Postgres reachable from the cluster
+- the provider's PostgreSQL `max_connections` value, so `postgres.maxConnections` can describe real capacity instead of an estimate
 - S3 or S3-compatible object storage reachable from the cluster
 - Vault Injector installed when `vault.enabled=true`
 - `metrics-server` or equivalent resource metrics if the CPU HPAs are enabled
@@ -324,6 +325,7 @@ Before DevOps installs it, they must replace or confirm:
 - ingress hostnames and DNS annotations
 - Vault role, secret path, and dotenv template if Vault is used
 - managed Postgres secret wiring
+- `postgres.maxConnections`, `postgres.reservedConnections`, and `postgres.poolMaxPerApiPod` against the provider's actual database limit and the execution HPA maximum
 - object-storage bucket, region, endpoint, and secret wiring
 - `auth.keySecretName` or equivalent Vault-provided `RIVET_KEY`
 
@@ -413,6 +415,12 @@ vault:
 
 postgres:
   mode: managed
+  # Must equal the provider-side max_connections value.
+  maxConnections: 200
+  # Kept free for migration Jobs, provider administration, and incident access.
+  reservedConnections: 30
+  # Shared query-pool connections available to each API process.
+  poolMaxPerApiPod: 10
   host: <postgres-host>
   port: 5432
   database: <postgres-database>
@@ -436,19 +444,15 @@ auth:
 resources:
   proxy:
     requests:
-      cpu: <value>
-      memory: <value>
-    limits:
-      cpu: <value>
-      memory: <value>
+      cpu: 100m
+      memory: 128Mi
   execution:
     requests:
-      cpu: <value>
-      memory: <value>
-    limits:
-      cpu: <value>
-      memory: <value>
+      cpu: 500m
+      memory: 1Gi
 ```
+
+The chart ships baseline CPU and memory requests for every workload so CPU HPAs have a real denominator. Treat them as a starting point: load-test representative workflows, observe CPU, memory, request latency, and external-provider latency, then tune requests and HPA targets. Hard memory limits remain operator policy because a limit that is too small can kill long-running workflows during a temporary memory peak.
 
 The sample `service.type: NodePort` / single `service.targetPort` pattern from simple apps does not apply here. This chart creates component services internally, keeps them as `ClusterIP`, and routes ingress to the `proxy` service.
 
@@ -466,6 +470,31 @@ If you are adapting a standard single-app overlay, do not expect these sample ke
 - single-service `hpa`
 
 Use this chart's existing `autoscaling.proxy`, `autoscaling.execution`, `resources.*`, `ingress`, `vault`, and component `service.*` values instead. Add new chart support intentionally if the cluster standard requires one of the unsupported knobs.
+
+### PostgreSQL connection budget
+
+The number of registered or occasional endpoint users does not directly determine the database size. What matters is the peak number of requests running at the same time, how long their database work takes, and how many execution pods Kubernetes may create. Slow LLM calls do not hold a PostgreSQL connection for their whole duration; the pool checks connections out only for database operations.
+
+Each managed API process shares one query pool across workflow storage, runtime libraries, App Settings, and resumable web-app action state. `postgres.poolMaxPerApiPod` controls that pool and defaults to `10`. Each API pod may also own three dedicated `LISTEN` connections for settings invalidation, workflow cache invalidation, and web-app action coordination. The chart reserves separate headroom for migrations, provider maintenance, and emergency access.
+
+The chart validates this worst-case formula:
+
+```text
+required connections = reservedConnections
+                     + (backend replicas + maximum execution replicas)
+                       * (poolMaxPerApiPod + 3 LISTEN connections)
+```
+
+The production starting point is `30 + (1 + 10) * (10 + 3) = 173`, declared against `postgres.maxConnections=200`. The backend remains one pod for the small editor audience; only `execution` scales for `/workflows/*` and `/apps/*` traffic. A provider capped at 100 connections can support at most four execution pods with the same 30/10 settings: `30 + (1 + 4) * 13 = 95`. Helm refuses an unsafe combination before deployment.
+
+`postgres.maxConnections` is validation input only; Helm cannot change the provider's database setting. Confirm it on the target database or in the provider console. With sufficient privileges, the direct checks are:
+
+```sql
+SHOW max_connections;
+SELECT count(*) AS open_connections FROM pg_stat_activity;
+```
+
+When increasing `autoscaling.execution.maxReplicas`, either prove the existing database budget still fits, increase provider capacity, reduce the per-pod pool only after load testing, or introduce a carefully designed connection proxy. PostgreSQL notification listeners require session semantics, so do not place them behind transaction-pooling mode without a separate direct-listener path.
 
 ### Persistence and storage
 
@@ -753,6 +782,7 @@ Common first-deploy failure patterns:
 - Vault injector never creates `/vault/dotenv`: check `vault.role`, `vault.authPath`, `vault.secretPath`, Vault auth policy, and Vault Injector installation
 - API pods crash during startup: check Postgres connection values, object-storage credentials, and whether the secret keys match the names in `postgres.*`, `objectStorage.*`, or `/vault/dotenv`
 - HPA shows missing metrics: install/fix `metrics-server` and set CPU requests for `resources.proxy` and `resources.execution`
+- Helm reports `PostgreSQL capacity is too small`: confirm the provider's actual `max_connections`, then adjust provider capacity, execution `maxReplicas`, or `postgres.poolMaxPerApiPod`; do not raise `postgres.maxConnections` only to silence validation
 - browser loads but websockets disconnect through ingress: check websocket upgrade support and long read/send timeout annotations on the ingress controller
 
 The production contract today is:
@@ -767,6 +797,8 @@ The production contract today is:
 - `autoscaling.web.enabled=false`
 - `autoscaling.backend.enabled=false`
 - `autoscaling.execution.enabled=true`
+- `autoscaling.execution.maxReplicas=10`
+- `postgres.maxConnections=200`, `postgres.reservedConnections=30`, and `postgres.poolMaxPerApiPod=10`, which budget 173 worst-case connections for one backend plus ten execution pods
 - `env.RIVET_PUBLISHED_WORKFLOWS_BASE_PATH=/workflows`
 - `env.RIVET_LATEST_WORKFLOWS_BASE_PATH=/workflows-latest`
 - `env.RIVET_PUBLISHED_APPS_BASE_PATH=/apps`
@@ -780,7 +812,7 @@ The production contract today is:
 - execution-plane runtime-library reporting should stay at `RIVET_RUNTIME_LIBRARIES_REPLICA_TIER=endpoint` with `RIVET_RUNTIME_LIBRARIES_JOB_WORKER_ENABLED=false`
 - executor runtime-library reporting should stay at `RIVET_RUNTIME_LIBRARIES_REPLICA_TIER=editor`
 - `proxy` and `execution` scale independently; they are not a tied pair
-- production resource requests should be defined before relying on CPU-based HPA decisions
+- baseline resource requests are defined for every workload; tune them from production-like load tests before treating the HPA thresholds as final
 
 Chart-maintainer note:
 
@@ -823,7 +855,8 @@ Then validate:
 - keep `web` fixed at `1` unless real dashboard traffic becomes significant
 - keep the control plane conservative and do not scale `backend`
 - do not couple `proxy` and `execution` replica counts mechanically; let each tier scale for its own pressure
-- set concrete CPU and memory requests for `proxy` and `execution` before treating HPA as production-ready
+- keep `postgres.maxConnections` equal to the real provider limit and re-check the rendered connection formula whenever execution `maxReplicas` or the per-pod pool changes
+- load-test and tune the chart's baseline CPU and memory requests before treating HPA behavior as production-ready
 - keep the same `RIVET_KEY` available to both `proxy` and the API workloads
 - route `${RIVET_LATEST_WORKFLOWS_BASE_PATH}`, `${RIVET_LATEST_APPS_BASE_PATH}`, and `/ws/latest-debugger` to the singleton control plane
 - route `${RIVET_PUBLISHED_WORKFLOWS_BASE_PATH}` and `${RIVET_PUBLISHED_APPS_BASE_PATH}` to the execution plane
