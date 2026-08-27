@@ -11,3 +11,8 @@ export function getRivetYarnEnvironment(
   wrapperRootDir: string,
   rivetRootDir: string,
 ): Record<string, string>;
+
+export function getRivetYarnInvocation(rivetRootDir: string): {
+  command: string;
+  args: string[];
+};

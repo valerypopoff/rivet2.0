@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import {
   clearEmbeddedRivetPnpArtifacts,
   getRivetYarnEnvironment,
+  getRivetYarnInvocation,
   hasRivetPnpInstall,
   isExternalRivetWorkspace,
 } from './lib/rivet-local-dependencies.mjs';
@@ -16,7 +17,6 @@ const rivetRepoUrl = process.env.RIVET_REPO_URL || 'https://github.com/valerypop
 const rivetRepoRef = process.env.RIVET_REPO_REF || process.env.RIVET_BRANCH || 'main';
 
 const npmCmd = process.platform === 'win32' ? 'npm.cmd' : 'npm';
-const corepackCmd = process.platform === 'win32' ? 'corepack.cmd' : 'corepack';
 const gitCmd = process.platform === 'win32' ? 'git.exe' : 'git';
 
 function quoteArg(arg) {
@@ -186,6 +186,7 @@ if (clearEmbeddedRivetPnpArtifacts(rootDir, rivetDir)) {
 }
 
 const rivetYarnEnvironment = getRivetYarnEnvironment(rootDir, rivetDir);
+const rivetYarnInvocation = getRivetYarnInvocation(rivetDir);
 
 const needsApiDeps = !exists('wrapper/api/node_modules/.bin/tsx');
 const needsWebDeps =
@@ -234,26 +235,36 @@ if (needsWebDeps) {
 }
 
 if (needsRivetDeps) {
-  console.log('[predev] Installing rivet dependencies with Yarn via Corepack');
-  run(corepackCmd, ['yarn', 'install', '--immutable'], rivetDir, {
+  console.log("[predev] Installing rivet dependencies with Rivet's configured Yarn release");
+  run(rivetYarnInvocation.command, [...rivetYarnInvocation.args, 'install', '--immutable'], rivetDir, {
     ...rivetYarnEnvironment,
     YARN_CHECKSUM_BEHAVIOR: 'ignore',
   });
+
+  if (clearEmbeddedRivetPnpArtifacts(rootDir, rivetDir)) {
+    console.log('[predev] Cleared PnP artifacts left behind after the embedded Rivet install.');
+  }
+
+  if (!hasExpectedRivetDependencyInstall()) {
+    throw new Error(
+      '[predev] The embedded Rivet install did not produce its required node_modules layout. Refusing to build against a PnP loader.',
+    );
+  }
 }
 
 if (needsRivetCoreBuild) {
   console.log('[predev] Building @valerypopoff/rivet2-core');
-  run(corepackCmd, ['yarn', 'workspace', '@valerypopoff/rivet2-core', 'run', 'build'], rivetDir, rivetYarnEnvironment);
+  run(rivetYarnInvocation.command, [...rivetYarnInvocation.args, 'workspace', '@valerypopoff/rivet2-core', 'run', 'build'], rivetDir, rivetYarnEnvironment);
 }
 
 if (needsRivetNodeBuild) {
   console.log('[predev] Building @valerypopoff/rivet2-node');
-  run(corepackCmd, ['yarn', 'workspace', '@valerypopoff/rivet2-node', 'run', 'build'], rivetDir, rivetYarnEnvironment);
+  run(rivetYarnInvocation.command, [...rivetYarnInvocation.args, 'workspace', '@valerypopoff/rivet2-node', 'run', 'build'], rivetDir, rivetYarnEnvironment);
 }
 
 if (needsRivetEvaluationsBuild) {
   console.log('[predev] Building @valerypopoff/rivet2-evaluations');
-  run(corepackCmd, ['yarn', 'workspace', '@valerypopoff/rivet2-evaluations', 'run', 'build'], rivetDir, rivetYarnEnvironment);
+  run(rivetYarnInvocation.command, [...rivetYarnInvocation.args, 'workspace', '@valerypopoff/rivet2-evaluations', 'run', 'build'], rivetDir, rivetYarnEnvironment);
 }
 
 if (needsApiRivetLinks || needsApiDeps || needsRivetCoreBuild || needsRivetNodeBuild || needsRivetEvaluationsBuild) {

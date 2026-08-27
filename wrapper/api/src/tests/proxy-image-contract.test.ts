@@ -354,14 +354,16 @@ test('API images and launchers use the filtered Rivet source context and symlink
   }
   assert.match(ensureRivetRuntimeBuild, /getRivetYarnEnvironment\(rootDir, rivetRootDir\)/);
   assert.match(runRivetYarn, /getRivetYarnEnvironment\(rootDir, rivetDir\)/);
-  assert.match(runRivetYarn, /\['yarn', '--cwd', rivetDir, \.\.\.args\]/);
-  assert.match(runRivetYarn, /shell: process\.platform === 'win32'/);
+  assert.match(runRivetYarn, /getRivetYarnInvocation\(rivetDir\)/);
+  assert.match(runRivetYarn, /cwd: rivetDir/);
+  assert.match(runRivetYarn, /shell: false/);
   assert.match(rootPackageJson.scripts['predev:local:executor'], /ensure-dev-deps/);
   assert.match(rootPackageJson.scripts['dev:local:executor'], /node scripts\/run-rivet-yarn\.mjs/);
   assert.match(devLocalLauncher, /node scripts\/run-rivet-yarn\.mjs tsx watch/);
   assert.match(localDependencyPolicy, /isExternalRivetWorkspace/);
   assert.match(localDependencyPolicy, /clearEmbeddedRivetPnpArtifacts/);
   assert.match(localDependencyPolicy, /\.pnp\.loader\.mjs/);
+  assert.match(localDependencyPolicy, /NODE_OPTIONS: ''/);
   assert.match(localDependencyPolicy, /YARN_NODE_LINKER: 'node-modules'/);
   assert.match(ensureDevDeps, /'\.rivet-dependency-overlay'/);
   assert.match(ensureDevDeps, /!exists\('wrapper\/web\/node_modules\/\.bin\/vite'\)/);

@@ -7,6 +7,7 @@ import test from 'node:test';
 import {
   clearEmbeddedRivetPnpArtifacts,
   getRivetYarnEnvironment,
+  getRivetYarnInvocation,
   hasRivetPnpInstall,
   isExternalRivetWorkspace,
 } from '../../../../scripts/lib/rivet-local-dependencies.mjs';
@@ -18,6 +19,7 @@ test('embedded Rivet workspaces keep the wrapper node-modules layout', () => {
 
   assert.equal(isExternalRivetWorkspace(rootDir, rivetDir), false);
   assert.deepEqual(getRivetYarnEnvironment(rootDir, rivetDir), {
+    NODE_OPTIONS: '',
     YARN_NODE_LINKER: 'node-modules',
   });
 });
@@ -31,6 +33,24 @@ test('external Rivet workspaces preserve their configured Yarn linker', () => {
 
   assert.equal(isExternalRivetWorkspace(rootDir, rivetDir), true);
   assert.deepEqual(getRivetYarnEnvironment(rootDir, rivetDir), {});
+});
+
+test('Rivet commands use the upstream checkout\'s pinned Yarn release', () => {
+  const rivetDir = fs.mkdtempSync(path.join(os.tmpdir(), 'rivet-yarn-release-'));
+  const yarnReleasePath = path.join(rivetDir, '.yarn', 'releases', 'yarn-4.17.1.cjs');
+
+  try {
+    fs.mkdirSync(path.dirname(yarnReleasePath), { recursive: true });
+    fs.writeFileSync(path.join(rivetDir, '.yarnrc.yml'), 'yarnPath: .yarn/releases/yarn-4.17.1.cjs\n');
+    fs.writeFileSync(yarnReleasePath, '');
+
+    assert.deepEqual(getRivetYarnInvocation(rivetDir), {
+      command: process.execPath,
+      args: [yarnReleasePath],
+    });
+  } finally {
+    fs.rmSync(rivetDir, { recursive: true, force: true });
+  }
 });
 
 test('PnP readiness requires both the loader and install-state marker', () => {
