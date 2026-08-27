@@ -3,7 +3,8 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import {
-  clearEmbeddedRivetPnpArtifacts,
+  clearEmbeddedRivetPnpLoaders,
+  ensureEmbeddedRivetNodeModulesConfig,
   getRivetYarnEnvironment,
   getRivetYarnInvocation,
   hasRivetPnpInstall,
@@ -181,8 +182,12 @@ function ensureRivetRepo() {
 
 ensureRivetRepo();
 
-if (clearEmbeddedRivetPnpArtifacts(rootDir, rivetDir)) {
-  console.log('[predev] Cleared stale PnP artifacts from the embedded Rivet snapshot.');
+if (ensureEmbeddedRivetNodeModulesConfig(rootDir, rivetDir)) {
+  console.log('[predev] Configured the embedded Rivet snapshot for node-modules dependencies.');
+}
+
+if (clearEmbeddedRivetPnpLoaders(rootDir, rivetDir)) {
+  console.log('[predev] Cleared stale PnP loader files from the embedded Rivet snapshot.');
 }
 
 const rivetYarnEnvironment = getRivetYarnEnvironment(rootDir, rivetDir);
@@ -241,8 +246,8 @@ if (needsRivetDeps) {
     YARN_CHECKSUM_BEHAVIOR: 'ignore',
   });
 
-  if (clearEmbeddedRivetPnpArtifacts(rootDir, rivetDir)) {
-    console.log('[predev] Cleared PnP artifacts left behind after the embedded Rivet install.');
+  if (clearEmbeddedRivetPnpLoaders(rootDir, rivetDir)) {
+    console.log('[predev] Cleared PnP loader files left behind after the embedded Rivet install.');
   }
 
   if (!hasExpectedRivetDependencyInstall()) {

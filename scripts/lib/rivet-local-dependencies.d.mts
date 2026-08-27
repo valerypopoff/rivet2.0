@@ -2,7 +2,14 @@ export function isExternalRivetWorkspace(wrapperRootDir: string, rivetRootDir: s
 
 export function hasRivetPnpInstall(rivetRootDir: string): boolean;
 
-export function clearEmbeddedRivetPnpArtifacts(
+export function stripPnpNodeOptions(nodeOptions?: string): string;
+
+export function clearEmbeddedRivetPnpLoaders(
+  wrapperRootDir: string,
+  rivetRootDir: string,
+): boolean;
+
+export function ensureEmbeddedRivetNodeModulesConfig(
   wrapperRootDir: string,
   rivetRootDir: string,
 ): boolean;
