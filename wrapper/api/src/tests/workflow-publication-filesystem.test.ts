@@ -365,20 +365,22 @@ test('published workflow keeps referenced projects resolvable after the referenc
     .replace(
       '            - data->"Passthrough" hHAeA3eIMmdfGFOYeool0/input1',
       '            - data->"Referenced Passthrough" hHAeA3eIMmdfGFOYeool0/input',
-    )
-    .replace(
-      '  references: []',
-      [
-        '  references:',
-        `    - id: ${referencedProjectId}`,
-        '      hintPaths:',
-        '        - ./Referenced.rivet-project',
-        '      title: Referenced',
-      ].join('\n'),
     );
 
   await fs.writeFile(referenced.absolutePath, referencedContents, 'utf8');
   await fs.writeFile(main.absolutePath, mainContents, 'utf8');
+
+  const mainProject = await rivetNode.loadProjectFromFile(main.absolutePath);
+  mainProject.references = [{
+    id: referencedProjectId as never,
+    hintPaths: ['./Referenced.rivet-project'],
+    title: 'Referenced',
+  }];
+  const serializedMainProject = rivetNode.serializeProject(mainProject);
+  if (typeof serializedMainProject !== 'string') {
+    throw new TypeError('Expected serialized project to be a string');
+  }
+  await fs.writeFile(main.absolutePath, serializedMainProject, 'utf8');
 
   await workflowMutations.publishWorkflowProjectItem(referenced.relativePath, {
     endpointName: 'referenced-project-endpoint',
