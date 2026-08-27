@@ -1,0 +1,142 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "rivet.backendName" . }}
+  labels:
+    {{- include "rivet.labels" . | nindent 4 }}
+    app.kubernetes.io/component: backend
+spec:
+  serviceName: {{ include "rivet.backendHeadlessServiceName" . }}
+  replicas: {{ .Values.replicaCount.backend }}
+  podManagementPolicy: Parallel
+  updateStrategy:
+    type: RollingUpdate
+  selector:
+    matchLabels:
+      {{- include "rivet.componentLabels" (dict "root" . "component" "backend") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "rivet.componentLabels" (dict "root" . "component" "backend") | nindent 8 }}
+      annotations:
+        {{- with .Values.podAnnotations.backend }}
+{{ toYaml . | nindent 8 }}
+        {{- end }}
+        {{- include "rivet.vaultAnnotations" . | nindent 8 }}
+    spec:
+      {{- include "rivet.pod.imagePullSecrets" . | nindent 6 }}
+      terminationGracePeriodSeconds: {{ .Values.lifecycle.terminationGracePeriodSeconds }}
+      {{- include "rivet.pod.placement" (dict "root" . "component" "backend") | nindent 6 }}
+      {{- include "rivet.pod.workloadSecurityContext" . | nindent 6 }}
+      initContainers:
+        - name: deployment-storage-settings
+          image: {{ include "rivet.image" (dict "root" . "image" .Values.images.api) }}
+          imagePullPolicy: {{ .Values.images.api.pullPolicy }}
+          {{- include "rivet.pod.containerSecurityContext" . | nindent 10 }}
+          command:
+            - /bin/sh
+            - -ec
+          args:
+            - . /opt/rivet/lib/load-env.sh; load_optional_dotenv /vault/dotenv; node /opt/rivet/lib/bootstrap-deployment-storage-settings.mjs
+          env:
+{{ include "rivet.env.deploymentStorageBootstrap" . | nindent 12 }}
+          volumeMounts:
+            - name: app-data
+              mountPath: /data/rivet-app
+{{ include "rivet.pod.tmpVolumeMount" . | nindent 12 }}
+{{ include "rivet.pod.appSettingsProjectionInitContainer" . | nindent 8 }}
+      containers:
+        - name: api
+          image: {{ include "rivet.image" (dict "root" . "image" .Values.images.api) }}
+          imagePullPolicy: {{ .Values.images.api.pullPolicy }}
+          {{- include "rivet.pod.containerSecurityContext" . | nindent 10 }}
+          ports:
+            - name: api-http
+              containerPort: {{ .Values.service.api.targetPort }}
+
+          {{- include "rivet.pod.apiProbes" (dict "root" . "port" "api-http") | nindent 10 }}
+          {{- include "rivet.pod.preStop" . | nindent 10 }}
+          env:
+{{ include "rivet.env.apiWorkload" (dict "root" . "port" .Values.service.api.targetPort "profile" "control" "storageBackend" .Values.workflowStorage.backend "replicaTier" "none" "jobWorkerEnabled" "true") | nindent 12 }}
+            - name: RIVET_RUNNER_SLOT_ID
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+          volumeMounts:
+{{ include "rivet.pod.apiVolumeMounts" . | nindent 12 }}
+          resources:
+{{ toYaml .Values.resources.api | nindent 12 }}
+        - name: executor
+          image: {{ include "rivet.image" (dict "root" . "image" .Values.images.executor) }}
+          imagePullPolicy: {{ .Values.images.executor.pullPolicy }}
+          {{- include "rivet.pod.containerSecurityContext" . | nindent 10 }}
+          ports:
+            - name: executor-http
+              containerPort: {{ .Values.service.executor.targetPort }}
+          startupProbe:
+            tcpSocket:
+              port: executor-http
+            periodSeconds: 5
+            timeoutSeconds: 2
+            failureThreshold: 60
+          livenessProbe:
+            tcpSocket:
+              port: executor-http
+            periodSeconds: 20
+            timeoutSeconds: 2
+            failureThreshold: 3
+          readinessProbe:
+            tcpSocket:
+              port: executor-http
+            periodSeconds: 5
+            timeoutSeconds: 2
+            failureThreshold: 2
+          {{- include "rivet.pod.preStop" . | nindent 10 }}
+          env:
+{{ include "rivet.env.executorWorkload" (dict "root" . "port" .Values.service.executor.targetPort "apiPort" .Values.service.api.targetPort "storageBackend" .Values.runtimeLibraries.backend) | nindent 12 }}
+          volumeMounts:
+{{ include "rivet.pod.executorVolumeMounts" . | nindent 12 }}
+          resources:
+{{ toYaml .Values.resources.executor | nindent 12 }}
+      volumes:
+        - name: workspace
+          emptyDir: {}
+        {{- if eq .Values.workflowStorage.backend "filesystem" }}
+        - name: workflows
+          persistentVolumeClaim:
+            claimName: {{ .Values.filesystem.workflows.existingClaimName }}
+        {{- else }}
+        - name: workflows
+          emptyDir: {}
+        {{- end }}
+        - name: app-data
+          emptyDir: {}
+        {{- if eq .Values.runtimeLibraries.backend "filesystem" }}
+        - name: runtime-libraries
+          persistentVolumeClaim:
+            claimName: {{ .Values.filesystem.runtimeLibraries.existingClaimName }}
+        {{- else if .Values.runtimeLibraries.cache.existingClaimName }}
+        - name: runtime-libraries
+          persistentVolumeClaim:
+            claimName: {{ .Values.runtimeLibraries.cache.existingClaimName }}
+        {{- else if not .Values.runtimeLibraries.cache.enabled }}
+        - name: runtime-libraries
+          emptyDir: {}
+        {{- end }}
+{{ include "rivet.pod.tmpVolume" . | nindent 8 }}
+  {{- if and (eq .Values.runtimeLibraries.backend "managed") .Values.runtimeLibraries.cache.enabled (not .Values.runtimeLibraries.cache.existingClaimName) }}
+  volumeClaimTemplates:
+    - metadata:
+        name: runtime-libraries
+        labels:
+          {{- include "rivet.labels" . | nindent 10 }}
+          app.kubernetes.io/component: backend
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: {{ .Values.runtimeLibraries.cache.size }}
+        {{- if .Values.runtimeLibraries.cache.storageClassName }}
+        storageClassName: {{ .Values.runtimeLibraries.cache.storageClassName }}
+        {{- end }}
+  {{- end }}

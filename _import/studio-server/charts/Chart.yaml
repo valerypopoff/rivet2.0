@@ -1,0 +1,6 @@
+apiVersion: v2
+name: rivet
+description: Self-hosted Rivet managed-state Kubernetes deployment
+type: application
+version: 0.1.0
+appVersion: "0.1.0"

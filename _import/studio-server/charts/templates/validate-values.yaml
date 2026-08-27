@@ -1,0 +1,203 @@
+{{- if ne .Values.workflowStorage.backend .Values.runtimeLibraries.backend -}}
+{{- fail "workflowStorage.backend and runtimeLibraries.backend must stay unified in phase 3" -}}
+{{- end -}}
+
+{{- if or (ne .Values.workflowStorage.backend "managed") (ne .Values.runtimeLibraries.backend "managed") -}}
+{{- fail "The phase 4 chart shape requires workflowStorage.backend=managed and runtimeLibraries.backend=managed" -}}
+{{- end -}}
+
+{{- if hasKey .Values.vault "roleIdSecretName" -}}
+{{- fail "vault.roleIdSecretName is retired; use vault.role with the Vault Injector dotenv contract" -}}
+{{- end -}}
+
+{{- if ne .Values.runtimeLibraries.objectStoragePrefix "runtime-libraries/" -}}
+{{- fail "runtimeLibraries.objectStoragePrefix must remain runtime-libraries/ in phase 3 because the current managed runtime-library backend uses a fixed object-storage prefix" -}}
+{{- end -}}
+
+{{- if hasKey .Values.env "RIVET_MANAGED_WORKFLOW_SCHEMA_MODE" -}}
+{{- fail "env.RIVET_MANAGED_WORKFLOW_SCHEMA_MODE is chart-owned; use workflowSchema.migrationJob.enabled and keep API workloads verify-only" -}}
+{{- end -}}
+
+{{- if hasKey .Values.env "RIVET_DEPLOYMENT_MANAGED_WORKFLOW_SCHEMA_MODE" -}}
+{{- fail "env.RIVET_DEPLOYMENT_MANAGED_WORKFLOW_SCHEMA_MODE is an internal chart-owned startup policy and cannot be overridden" -}}
+{{- end -}}
+
+{{- if hasKey .Values.env "RIVET_DEPLOYMENT_DATABASE_POOL_MAX" -}}
+{{- fail "env.RIVET_DEPLOYMENT_DATABASE_POOL_MAX is chart-owned; configure postgres.poolMaxPerApiPod instead" -}}
+{{- end -}}
+
+{{- $postgresMaxConnections := int .Values.postgres.maxConnections -}}
+{{- $postgresReservedConnections := int .Values.postgres.reservedConnections -}}
+{{- $poolMaxPerApiPod := int .Values.postgres.poolMaxPerApiPod -}}
+{{- if lt $postgresMaxConnections 1 -}}
+{{- fail "postgres.maxConnections must be greater than zero" -}}
+{{- end -}}
+{{- if lt $postgresReservedConnections 0 -}}
+{{- fail "postgres.reservedConnections must be zero or greater" -}}
+{{- end -}}
+{{- if ge $postgresReservedConnections $postgresMaxConnections -}}
+{{- fail "postgres.reservedConnections must be less than postgres.maxConnections" -}}
+{{- end -}}
+{{- if lt $poolMaxPerApiPod 1 -}}
+{{- fail "postgres.poolMaxPerApiPod must be greater than zero" -}}
+{{- end -}}
+{{- $backendReplicas := int .Values.replicaCount.backend -}}
+{{- $executionReplicas := int .Values.replicaCount.execution -}}
+{{- if .Values.autoscaling.execution.enabled -}}
+{{- $executionReplicas = int .Values.autoscaling.execution.maxReplicas -}}
+{{- end -}}
+{{- $apiPodConnections := add $poolMaxPerApiPod 3 -}}
+{{- $requiredPostgresConnections := add $postgresReservedConnections (mul (add $backendReplicas $executionReplicas) $apiPodConnections) -}}
+{{- if gt $requiredPostgresConnections $postgresMaxConnections -}}
+{{- fail (printf "PostgreSQL capacity is too small: the chart requires %d connections (%d reserved + %d API pods * (%d pooled + 3 LISTEN)), but postgres.maxConnections is %d; raise database capacity, lower postgres.poolMaxPerApiPod, or lower execution autoscaling.maxReplicas" $requiredPostgresConnections $postgresReservedConnections (add $backendReplicas $executionReplicas) $poolMaxPerApiPod $postgresMaxConnections) -}}
+{{- end -}}
+
+{{- if lt (int .Values.workflowSchema.migrationJob.backoffLimit) 0 -}}
+{{- fail "workflowSchema.migrationJob.backoffLimit must be zero or greater" -}}
+{{- end -}}
+
+{{- if lt (int .Values.workflowSchema.migrationJob.activeDeadlineSeconds) 1 -}}
+{{- fail "workflowSchema.migrationJob.activeDeadlineSeconds must be greater than zero" -}}
+{{- end -}}
+{{- range $key := list "RIVET_HEALTH_REFRESH_SECONDS" "RIVET_HEALTH_CHECK_TIMEOUT_SECONDS" "RIVET_HEALTH_STALE_AFTER_SECONDS" "RIVET_SHUTDOWN_GRACE_SECONDS" "RIVET_DEPLOYMENT_HEALTH_REFRESH_SECONDS" "RIVET_DEPLOYMENT_HEALTH_CHECK_TIMEOUT_SECONDS" "RIVET_DEPLOYMENT_HEALTH_STALE_AFTER_SECONDS" "RIVET_DEPLOYMENT_SHUTDOWN_GRACE_SECONDS" -}}
+{{- if hasKey $.Values.env $key -}}
+{{- fail (printf "env.%s is chart-owned; configure lifecycle values instead" $key) -}}
+{{- end -}}
+{{- end -}}
+
+{{- if lt (int .Values.lifecycle.health.refreshSeconds) 1 -}}
+{{- fail "lifecycle.health.refreshSeconds must be greater than zero" -}}
+{{- end -}}
+{{- if lt (int .Values.lifecycle.health.checkTimeoutSeconds) 1 -}}
+{{- fail "lifecycle.health.checkTimeoutSeconds must be greater than zero" -}}
+{{- end -}}
+{{- if le (int .Values.lifecycle.health.staleAfterSeconds) (add (int .Values.lifecycle.health.refreshSeconds) (int .Values.lifecycle.health.checkTimeoutSeconds)) -}}
+{{- fail "lifecycle.health.staleAfterSeconds must be greater than refreshSeconds plus checkTimeoutSeconds" -}}
+{{- end -}}
+{{- if lt (int .Values.lifecycle.shutdownGraceSeconds) 1 -}}
+{{- fail "lifecycle.shutdownGraceSeconds must be greater than zero" -}}
+{{- end -}}
+{{- if lt (int .Values.lifecycle.preStopDelaySeconds) 0 -}}
+{{- fail "lifecycle.preStopDelaySeconds must be zero or greater" -}}
+{{- end -}}
+{{- if lt (int .Values.lifecycle.terminationGracePeriodSeconds) (add (int .Values.lifecycle.shutdownGraceSeconds) (int .Values.lifecycle.preStopDelaySeconds) 25) -}}
+{{- fail "lifecycle.terminationGracePeriodSeconds must allow shutdownGraceSeconds, preStopDelaySeconds, and a 25-second finalization margin" -}}
+{{- end -}}
+{{- range $name, $probe := .Values.lifecycle.probes -}}
+{{- if or (lt (int $probe.periodSeconds) 1) (lt (int $probe.timeoutSeconds) 1) (lt (int $probe.failureThreshold) 1) -}}
+{{- fail (printf "lifecycle.probes.%s periodSeconds, timeoutSeconds, and failureThreshold must be greater than zero" $name) -}}
+{{- end -}}
+{{- end -}}
+{{- if .Values.availability.topologySpread.enabled -}}
+{{- if not (has .Values.availability.topologySpread.whenUnsatisfiable (list "ScheduleAnyway" "DoNotSchedule")) -}}
+{{- fail "availability.topologySpread.whenUnsatisfiable must be ScheduleAnyway or DoNotSchedule" -}}
+{{- end -}}
+{{- if lt (int .Values.availability.topologySpread.maxSkew) 1 -}}
+{{- fail "availability.topologySpread.maxSkew must be greater than zero" -}}
+{{- end -}}
+{{- if empty .Values.availability.topologySpread.topologyKey -}}
+{{- fail "availability.topologySpread.topologyKey is required" -}}
+{{- end -}}
+{{- end -}}
+{{- if and .Values.availability.podAntiAffinity.enabled (empty .Values.availability.podAntiAffinity.topologyKey) -}}
+{{- fail "availability.podAntiAffinity.topologyKey is required" -}}
+{{- end -}}
+{{- if .Values.availability.disruptionBudget.enabled -}}
+{{- if lt (int .Values.availability.disruptionBudget.maxUnavailable) 1 -}}
+{{- fail "availability.disruptionBudget.maxUnavailable must be greater than zero" -}}
+{{- end -}}
+{{- range $component := list "proxy" "web" "execution" -}}
+{{- $replicas := int (index $.Values.replicaCount $component) -}}
+{{- $autoscaling := index $.Values.autoscaling $component -}}
+{{- $minimumReplicas := ternary (int $autoscaling.minReplicas) $replicas $autoscaling.enabled -}}
+{{- if and (gt $minimumReplicas 1) (ge (int $.Values.availability.disruptionBudget.maxUnavailable) $minimumReplicas) -}}
+{{- fail (printf "availability.disruptionBudget.maxUnavailable must be less than the effective minimum replica count for %s" $component) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- if empty (index .Values.env "RIVET_PROXY_RESOLVER") -}}
+{{- fail "env.RIVET_PROXY_RESOLVER is required so nginx can resolve in-cluster service names dynamically" -}}
+{{- end -}}
+
+{{- if and .Values.autoscaling.proxy.enabled (empty (dig "requests" "cpu" "" .Values.resources.proxy)) -}}
+{{- fail "resources.proxy.requests.cpu is required when proxy autoscaling is enabled" -}}
+{{- end -}}
+{{- if and .Values.autoscaling.web.enabled (empty (dig "requests" "cpu" "" .Values.resources.web)) -}}
+{{- fail "resources.web.requests.cpu is required when web autoscaling is enabled" -}}
+{{- end -}}
+{{- if and .Values.autoscaling.execution.enabled (empty (dig "requests" "cpu" "" .Values.resources.execution)) -}}
+{{- fail "resources.execution.requests.cpu is required when execution autoscaling is enabled" -}}
+{{- end -}}
+
+{{- if .Values.ingress.enabled -}}
+  {{- if empty .Values.ingress.host -}}
+    {{- fail "ingress.host is required when ingress.enabled=true" -}}
+  {{- end -}}
+{{- end -}}
+
+{{- if ne (int .Values.replicaCount.backend) 1 -}}
+{{- fail "replicaCount.backend=1 is required because /ws/latest-debugger and co-located editor executor session routing remain process-local control-plane features" -}}
+{{- end -}}
+
+{{- if .Values.autoscaling.backend.enabled -}}
+{{- fail "autoscaling.backend.enabled=false is required because /ws/latest-debugger and co-located editor executor session routing remain process-local control-plane features" -}}
+{{- end -}}
+
+{{- if and (eq .Values.workflowStorage.backend "filesystem") (ne (int .Values.replicaCount.backend) 1) -}}
+{{- fail "filesystem backend is only supported with replicaCount.backend=1" -}}
+{{- end -}}
+
+{{- if and (eq .Values.workflowStorage.backend "filesystem") .Values.autoscaling.backend.enabled -}}
+{{- fail "filesystem backend is only supported with autoscaling.backend.enabled=false" -}}
+{{- end -}}
+
+{{- if and (eq .Values.workflowStorage.backend "filesystem") (empty .Values.filesystem.workflows.existingClaimName) -}}
+{{- fail "filesystem workflow storage requires filesystem.workflows.existingClaimName" -}}
+{{- end -}}
+
+{{- if and (eq .Values.runtimeLibraries.backend "filesystem") (empty .Values.filesystem.runtimeLibraries.existingClaimName) -}}
+{{- fail "filesystem runtime libraries require filesystem.runtimeLibraries.existingClaimName" -}}
+{{- end -}}
+
+{{- if and (eq .Values.workflowStorage.backend "managed") (empty .Values.objectStorage.bucket) -}}
+{{- fail "managed storage requires objectStorage.bucket" -}}
+{{- end -}}
+
+{{- if and (eq .Values.workflowStorage.backend "managed") (not .Values.vault.enabled) (or (empty .Values.objectStorage.accessKeySecretName) (empty .Values.objectStorage.secretKeySecretName)) -}}
+{{- fail "managed storage requires objectStorage.accessKeySecretName and objectStorage.secretKeySecretName unless Vault provides RIVET_DEPLOYMENT_STORAGE_ACCESS_KEY_ID and RIVET_DEPLOYMENT_STORAGE_ACCESS_KEY" -}}
+{{- end -}}
+
+{{- if or (empty .Values.images.proxy.repository) (empty .Values.images.web.repository) (empty .Values.images.api.repository) (empty .Values.images.executor.repository) -}}
+{{- fail "all image repositories must be set before install" -}}
+{{- end -}}
+
+{{- if or (contains "example.invalid/" .Values.images.proxy.repository) (contains "example.invalid/" .Values.images.web.repository) (contains "example.invalid/" .Values.images.api.repository) (contains "example.invalid/" .Values.images.executor.repository) -}}
+{{- fail "replace the example.invalid image repositories with real image repositories before install" -}}
+{{- end -}}
+
+{{- if and (eq .Values.workflowStorage.backend "managed") (empty .Values.postgres.connectionStringSecretName) (or (empty .Values.postgres.host) (empty .Values.postgres.database) (empty .Values.postgres.username) (and (empty .Values.postgres.passwordSecretName) (not .Values.vault.enabled))) -}}
+{{- fail "managed storage requires either postgres.connectionStringSecretName, a postgres host/database/username tuple plus passwordSecretName, or Vault-provided database envs" -}}
+{{- end -}}
+
+{{- if ne .Values.appSettings.backend "postgres" -}}
+{{- fail "The Kubernetes chart requires appSettings.backend=postgres so settings remain consistent across replicas without a shared app-data volume" -}}
+{{- end -}}
+
+{{- if and (not .Values.vault.enabled) (empty .Values.auth.keySecretName) -}}
+{{- fail "auth.keySecretName is required when Vault is disabled because proxy-to-api trust and optional public-route/UI auth all depend on RIVET_KEY" -}}
+{{- end -}}
+
+{{- if .Values.vault.enabled -}}
+  {{- if empty .Values.vault.role -}}
+    {{- fail "vault.role is required when vault.enabled=true" -}}
+  {{- end -}}
+  {{- if empty .Values.vault.secretPath -}}
+    {{- fail "vault.secretPath is required when vault.enabled=true" -}}
+  {{- end -}}
+  {{- if empty .Values.vault.dotenvTemplate -}}
+    {{- fail "vault.dotenvTemplate is required when vault.enabled=true so /vault/dotenv is rendered as a sourceable env file" -}}
+  {{- end -}}
+  {{- if not (contains .Values.vault.secretPath .Values.vault.dotenvTemplate) -}}
+    {{- fail "vault.dotenvTemplate must reference vault.secretPath so the injected dotenv file stays aligned with the configured Vault secret path" -}}
+  {{- end -}}
+{{- end -}}

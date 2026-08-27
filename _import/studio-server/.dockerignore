@@ -1,0 +1,41 @@
+# VCS
+.git
+.gitignore
+rivet/.git
+rivet/.git/**
+**/.git
+**/.git/**
+
+# Dependencies
+# Excludes moved runtime/bootstrap package state such as wrapper/bootstrap/proxy-bootstrap/node_modules/
+**/node_modules
+
+# Build artifacts
+**/dist
+**/build
+**/.turbo
+**/.cache
+**/.vite
+# Keep the tracked executor build helper while excluding other build outputs.
+!wrapper/executor/build/
+!wrapper/executor/build/bundle-executor.cjs
+
+# Logs
+**/*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Local runtime data
+.data
+
+# Python / misc caches
+**/__pycache__
+**/.DS_Store
+
+
+
+# Editor/temp
+.vscode
+.idea
+*.tmp

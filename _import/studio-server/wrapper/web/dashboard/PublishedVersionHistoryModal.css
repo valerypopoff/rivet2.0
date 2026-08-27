@@ -1,0 +1,299 @@
+.published-version-history-modal-shell {
+  min-height: 360px;
+  max-height: calc(100vh - 32px);
+}
+
+.published-version-history-project-name {
+  max-width: 100%;
+  color: var(--grey-light);
+  font-size: var(--workflow-library-font-size-m);
+  line-height: 1.3;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.published-version-history-content {
+  flex: 1 1 auto;
+  gap: 16px;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.published-version-history-state {
+  padding: 10px 0;
+  color: var(--grey-light);
+  font-size: var(--workflow-library-font-size-m);
+  line-height: 1.4;
+}
+
+.published-version-history-error {
+  color: #ff9ba5;
+}
+
+.published-version-history-list {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 0;
+  overflow: auto;
+  padding-right: 2px;
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.22) transparent;
+}
+
+.published-version-history-list::-webkit-scrollbar {
+  width: 10px;
+}
+
+.published-version-history-list::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.published-version-history-list::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.2);
+  background-clip: padding-box;
+  border: 3px solid transparent;
+  border-radius: 999px;
+}
+
+.published-version-history-list::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.3);
+}
+
+.published-version-history-list::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+.published-version-history-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 10px 12px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.published-version-history-details {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  gap: 4px;
+}
+
+.published-version-history-date-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.published-version-history-date {
+  color: var(--grey-lightest);
+  font-size: var(--workflow-library-font-size-m);
+  font-weight: 700;
+  line-height: 1.3;
+}
+
+.published-version-history-current-badge {
+  flex: 0 0 auto;
+  border: 1px solid var(--workflow-status-published-color);
+  border-radius: 999px;
+  color: var(--workflow-status-published-color);
+  font-size: var(--workflow-library-font-size-xs);
+  font-weight: 700;
+  line-height: 1.2;
+  padding: 2px 7px;
+}
+
+.published-version-history-endpoint {
+  color: var(--grey-light);
+  font-size: var(--workflow-library-font-size-s);
+  line-height: 1.3;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.published-version-history-comment-link,
+.published-version-history-comment-text {
+  appearance: none;
+  align-self: flex-start;
+  border: none;
+  border-radius: 3px;
+  box-sizing: border-box;
+  font: inherit;
+  font-size: var(--workflow-library-font-size-s);
+  line-height: 1.3;
+  max-width: min(100%, 360px);
+  min-height: 20px;
+  padding: 0;
+  text-align: left;
+}
+
+.published-version-history-comment-link {
+  background: transparent;
+  color: var(--grey-light);
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.published-version-history-comment-link:hover:not(:disabled),
+.published-version-history-comment-link:focus-visible {
+  color: var(--grey-lightest);
+  outline: none;
+}
+
+.published-version-history-comment-text {
+  background: transparent;
+  color: var(--grey-lightest);
+  cursor: text;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.published-version-history-comment-text:hover:not(:disabled),
+.published-version-history-comment-text:focus-visible {
+  background: rgba(255, 255, 255, 0.06);
+  outline: none;
+}
+
+.published-version-history-comment-link:disabled,
+.published-version-history-comment-text:disabled {
+  cursor: not-allowed;
+  opacity: 0.65;
+}
+
+.published-version-history-comment-input {
+  appearance: none;
+  width: min(100%, 360px);
+  height: 28px;
+  box-sizing: border-box;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.14);
+  color: var(--grey-lightest);
+  font: inherit;
+  font-size: var(--workflow-library-font-size-s);
+  line-height: 1.3;
+  padding: 4px 8px;
+  transition: border-color 120ms ease, background-color 120ms ease, opacity 120ms ease;
+}
+
+.published-version-history-comment-input::placeholder {
+  color: var(--grey-light);
+}
+
+.published-version-history-comment-input:hover:not(:disabled),
+.published-version-history-comment-input:focus {
+  border-color: rgba(255, 255, 255, 0.2);
+  background: rgba(0, 0, 0, 0.2);
+  outline: none;
+}
+
+.published-version-history-comment-input:disabled {
+  cursor: not-allowed;
+  opacity: 0.65;
+}
+
+.published-version-history-actions {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.published-version-history-star-button {
+  appearance: none;
+  align-items: center;
+  background: transparent;
+  border: none;
+  border-radius: 4px;
+  color: var(--grey-light);
+  cursor: pointer;
+  display: inline-flex;
+  flex: 0 0 auto;
+  height: var(--workflow-button-height-m);
+  justify-content: center;
+  padding: 0;
+  transition: background-color 120ms ease, color 120ms ease, opacity 120ms ease;
+  width: var(--workflow-button-height-m);
+}
+
+.published-version-history-star-button svg {
+  display: block;
+  height: 18px;
+  width: 18px;
+}
+
+.published-version-history-star-button.starred {
+  color: var(--workflow-status-unpublished-changes-color);
+}
+
+.published-version-history-star-button:hover:not(:disabled),
+.published-version-history-star-button:focus-visible:not(:disabled) {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--grey-lightest);
+  outline: none;
+}
+
+.published-version-history-star-button.starred:hover:not(:disabled),
+.published-version-history-star-button.starred:focus-visible:not(:disabled) {
+  color: var(--workflow-status-unpublished-changes-color);
+}
+
+.published-version-history-star-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.65;
+}
+
+.published-version-history-preview-button,
+.published-version-history-restore-button,
+.published-version-history-download-button {
+  flex: 0 0 auto;
+}
+
+.published-version-history-pagination {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding-top: 4px;
+}
+
+.published-version-history-page-button {
+  border: none;
+  appearance: none;
+  background: transparent;
+  color: var(--grey-lightest);
+  cursor: pointer;
+  flex: 0 0 auto;
+  font: inherit;
+  font-weight: 700;
+  line-height: 1.2;
+  padding: 0;
+}
+
+.published-version-history-page-status {
+  flex: 0 0 auto;
+  color: var(--grey-light);
+  font-size: 13px;
+  line-height: 1.3;
+  min-width: 72px;
+  text-align: center;
+}
+
+.published-version-history-page-button:disabled {
+  color: var(--grey-light);
+  cursor: not-allowed;
+  opacity: 0.65;
+}

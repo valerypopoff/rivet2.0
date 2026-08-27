@@ -1,0 +1,252 @@
+imagePullSecrets: []
+
+clusterDomain: cluster.local
+
+images:
+  proxy:
+    repository: example.invalid/rivet/proxy
+    tag: latest
+    # Set digest to pin an exact OCI manifest. It takes precedence over tag.
+    digest: ""
+    pullPolicy: IfNotPresent
+  web:
+    repository: example.invalid/rivet/web
+    tag: latest
+    digest: ""
+    pullPolicy: IfNotPresent
+  api:
+    repository: example.invalid/rivet/api
+    tag: latest
+    digest: ""
+    pullPolicy: IfNotPresent
+  executor:
+    repository: example.invalid/rivet/executor
+    tag: latest
+    digest: ""
+    pullPolicy: IfNotPresent
+
+replicaCount:
+  proxy: 2
+  web: 1
+  backend: 1
+  execution: 2
+
+autoscaling:
+  proxy:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 5
+    targetCPUUtilizationPercentage: 75
+  web:
+    enabled: false
+    minReplicas: 1
+    maxReplicas: 1
+    targetCPUUtilizationPercentage: 80
+  backend:
+    enabled: false
+    minReplicas: 1
+    maxReplicas: 1
+    targetCPUUtilizationPercentage: 80
+  execution:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 10
+    targetCPUUtilizationPercentage: 75
+
+service:
+  proxy:
+    port: 80
+    targetPort: 8080
+  web:
+    port: 3000
+    targetPort: 3000
+  api:
+    port: 80
+    targetPort: 8080
+  execution:
+    port: 80
+    targetPort: 8080
+  executor:
+    port: 21889
+    targetPort: 21889
+
+ingress:
+  enabled: false
+  className: ""
+  host: ""
+  externalDNSHostname: ""
+  annotations: {}
+  tlsSecretName: ""
+  pathType: Prefix
+
+vault:
+  enabled: false
+  annotations: {}
+  role: ""
+  authPath: ""
+  secretPath: ""
+  tlsSkipVerify: false
+  caSecretName: ""
+  caCertPath: /vault/tls/ca.crt
+  dotenvFileName: dotenv
+  dotenvTemplate: ""
+
+workflowStorage:
+  backend: managed
+
+workflowSchema:
+  migrationJob:
+    enabled: true
+    backoffLimit: 2
+    activeDeadlineSeconds: 600
+
+lifecycle:
+  health:
+    refreshSeconds: 5
+    checkTimeoutSeconds: 3
+    staleAfterSeconds: 20
+  shutdownGraceSeconds: 120
+  terminationGracePeriodSeconds: 150
+  preStopDelaySeconds: 5
+  probes:
+    startup:
+      periodSeconds: 5
+      timeoutSeconds: 2
+      failureThreshold: 60
+    liveness:
+      periodSeconds: 20
+      timeoutSeconds: 2
+      failureThreshold: 3
+    readiness:
+      periodSeconds: 5
+      timeoutSeconds: 2
+      failureThreshold: 2
+
+rollout:
+  maxUnavailable: 0
+  maxSurge: 1
+
+availability:
+  disruptionBudget:
+    enabled: true
+    maxUnavailable: 1
+  topologySpread:
+    enabled: true
+    maxSkew: 1
+    topologyKey: kubernetes.io/hostname
+    whenUnsatisfiable: ScheduleAnyway
+  podAntiAffinity:
+    enabled: true
+    topologyKey: kubernetes.io/hostname
+
+runtimeLibraries:
+  backend: managed
+  objectStoragePrefix: runtime-libraries/
+  cache:
+    enabled: false
+    size: 10Gi
+    storageClassName: ""
+    existingClaimName: ""
+
+filesystem:
+  workflows:
+    existingClaimName: ""
+  runtimeLibraries:
+    existingClaimName: ""
+
+postgres:
+  mode: managed
+  # Provider-side PostgreSQL capacity used by chart validation. This does not
+  # configure PostgreSQL itself; keep it equal to the service's max_connections.
+  maxConnections: 200
+  # Leave room for migrations, provider administration, and incident access.
+  reservedConnections: 30
+  # Shared query-pool connections per API process. Three additional dedicated
+  # LISTEN connections per API pod are included by the chart capacity check.
+  poolMaxPerApiPod: 10
+  host: ""
+  port: 5432
+  database: ""
+  username: ""
+  passwordSecretName: ""
+  passwordSecretKey: password
+  sslMode: require
+  connectionStringSecretName: ""
+  connectionStringSecretKey: connectionString
+
+objectStorage:
+  endpoint: ""
+  bucket: ""
+  region: us-east-1
+  prefix: workflows/
+  accessKeySecretName: ""
+  accessKeySecretKey: accessKeyId
+  secretKeySecretName: ""
+  secretKeySecretKey: secretAccessKey
+  forcePathStyle: false
+
+appSettings:
+  backend: postgres
+  # Prefer a dedicated 32+ character secret. RIVET_KEY remains a compatibility fallback.
+  encryptionKeySecretName: ""
+  encryptionKeySecretKey: encryptionKey
+  # Rotation is two compatibility phases: new secondary first, then old secondary after the primary swap.
+  previousEncryptionKeySecretName: ""
+  previousEncryptionKeySecretKey: encryptionKey
+  legacyImport:
+    # Optional one-time source from deployments that used the old shared app-data PVC.
+    existingClaimName: ""
+
+tmpVolume:
+  enabled: true
+  name: var-tmp
+  path: /var/tmp
+  sizeLimit: 2Gi
+
+auth:
+  keySecretName: ""
+  keySecretKey: RIVET_KEY
+
+env:
+  RIVET_PUBLISHED_WORKFLOWS_BASE_PATH: /workflows
+  RIVET_LATEST_WORKFLOWS_BASE_PATH: /workflows-latest
+  RIVET_PUBLISHED_APPS_BASE_PATH: /apps
+  RIVET_LATEST_APPS_BASE_PATH: /apps-latest
+  RIVET_WEB_APPS_BASE_PATH: /apps
+  RIVET_LATEST_WEB_APPS_BASE_PATH: /apps-latest
+  RIVET_PROXY_RESOLVER: kube-dns.kube-system.svc.cluster.local
+  RIVET_ENABLE_LATEST_REMOTE_DEBUGGER: "true"
+  RIVET_CORS_ALLOWED_ORIGINS: ""
+  RIVET_SERVER_UI_AUTH_MODE: key
+  RIVET_REQUIRE_UI_GATE_KEY: "true"
+  RIVET_TRUST_INCOMING_FORWARDED_HEADERS: "false"
+  RIVET_RECORDINGS_ENABLED: "true"
+
+podAnnotations:
+  proxy: {}
+  web: {}
+  backend: {}
+  execution: {}
+  workflowSchemaMigration: {}
+
+resources:
+  proxy:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+  web:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+  api:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+  executor:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+  execution:
+    requests:
+      cpu: 500m
+      memory: 1Gi

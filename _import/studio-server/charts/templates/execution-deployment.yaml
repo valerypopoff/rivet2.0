@@ -1,0 +1,84 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "rivet.executionName" . }}
+  labels:
+    {{- include "rivet.labels" . | nindent 4 }}
+    app.kubernetes.io/component: execution
+spec:
+  replicas: {{ .Values.replicaCount.execution }}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: {{ .Values.rollout.maxUnavailable }}
+      maxSurge: {{ .Values.rollout.maxSurge }}
+  selector:
+    matchLabels:
+      {{- include "rivet.componentLabels" (dict "root" . "component" "execution") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "rivet.componentLabels" (dict "root" . "component" "execution") | nindent 8 }}
+      annotations:
+        {{- with .Values.podAnnotations.execution }}
+{{ toYaml . | nindent 8 }}
+        {{- end }}
+        {{- include "rivet.vaultAnnotations" . | nindent 8 }}
+    spec:
+      {{- include "rivet.pod.imagePullSecrets" . | nindent 6 }}
+      terminationGracePeriodSeconds: {{ .Values.lifecycle.terminationGracePeriodSeconds }}
+      {{- include "rivet.pod.placement" (dict "root" . "component" "execution") | nindent 6 }}
+      {{- include "rivet.pod.workloadSecurityContext" . | nindent 6 }}
+      initContainers:
+        - name: deployment-storage-settings
+          image: {{ include "rivet.image" (dict "root" . "image" .Values.images.api) }}
+          imagePullPolicy: {{ .Values.images.api.pullPolicy }}
+          {{- include "rivet.pod.containerSecurityContext" . | nindent 10 }}
+          command:
+            - /bin/sh
+            - -ec
+          args:
+            - . /opt/rivet/lib/load-env.sh; load_optional_dotenv /vault/dotenv; node /opt/rivet/lib/bootstrap-deployment-storage-settings.mjs
+          env:
+{{ include "rivet.env.deploymentStorageBootstrap" . | nindent 12 }}
+          volumeMounts:
+            - name: app-data
+              mountPath: /data/rivet-app
+{{ include "rivet.pod.tmpVolumeMount" . | nindent 12 }}
+{{ include "rivet.pod.appSettingsProjectionInitContainer" . | nindent 8 }}
+      containers:
+        - name: api
+          image: {{ include "rivet.image" (dict "root" . "image" .Values.images.api) }}
+          imagePullPolicy: {{ .Values.images.api.pullPolicy }}
+          {{- include "rivet.pod.containerSecurityContext" . | nindent 10 }}
+          ports:
+            - name: api-http
+              containerPort: {{ .Values.service.execution.targetPort }}
+          {{- include "rivet.pod.apiProbes" (dict "root" . "port" "api-http") | nindent 10 }}
+          {{- include "rivet.pod.preStop" . | nindent 10 }}
+          env:
+{{ include "rivet.env.apiWorkload" (dict "root" . "port" .Values.service.execution.targetPort "profile" "execution" "storageBackend" .Values.workflowStorage.backend "replicaTier" "endpoint" "jobWorkerEnabled" "false") | nindent 12 }}
+            - name: RIVET_RUNNER_SLOT_ID
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+          volumeMounts:
+{{ include "rivet.pod.apiVolumeMounts" . | nindent 12 }}
+          resources:
+{{ toYaml .Values.resources.execution | nindent 12 }}
+      volumes:
+        - name: workspace
+          emptyDir: {}
+        - name: workflows
+          emptyDir: {}
+        - name: app-data
+          emptyDir: {}
+        {{- if .Values.runtimeLibraries.cache.existingClaimName }}
+        - name: runtime-libraries
+          persistentVolumeClaim:
+            claimName: {{ .Values.runtimeLibraries.cache.existingClaimName }}
+        {{- else }}
+        - name: runtime-libraries
+          emptyDir: {}
+        {{- end }}
+{{ include "rivet.pod.tmpVolume" . | nindent 8 }}

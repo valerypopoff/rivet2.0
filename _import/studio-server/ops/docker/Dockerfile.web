@@ -1,0 +1,97 @@
+# syntax=docker/dockerfile:1.7
+ARG NODE_IMAGE=node:20-alpine
+
+FROM --platform=$BUILDPLATFORM ${NODE_IMAGE} AS builder
+
+ARG HTTP_PROXY
+ARG HTTPS_PROXY
+ARG ALL_PROXY
+ARG NO_PROXY
+ARG http_proxy
+ARG https_proxy
+ARG all_proxy
+ARG no_proxy
+
+ENV HTTP_PROXY=$HTTP_PROXY
+ENV HTTPS_PROXY=$HTTPS_PROXY
+ENV ALL_PROXY=$ALL_PROXY
+ENV NO_PROXY=$NO_PROXY
+ENV http_proxy=$http_proxy
+ENV https_proxy=$https_proxy
+ENV all_proxy=$all_proxy
+ENV no_proxy=$no_proxy
+
+RUN corepack enable
+
+WORKDIR /app
+
+COPY --from=rivet_dependency_metadata . rivet/
+
+WORKDIR /app/rivet
+RUN --mount=type=cache,target=/root/.cache/yarn YARN_NODE_LINKER=node-modules YARN_CHECKSUM_BEHAVIOR=ignore yarn install --immutable || YARN_NODE_LINKER=node-modules YARN_CHECKSUM_BEHAVIOR=ignore yarn install
+
+COPY --from=rivet_source . /app/rivet/
+WORKDIR /app/rivet
+RUN YARN_NODE_LINKER=node-modules yarn build:hosted-web-deps
+
+WORKDIR /app
+COPY package.json package.json
+COPY wrapper/web/package.json wrapper/web/package-lock.json wrapper/web/
+
+WORKDIR /app/wrapper/web
+RUN --mount=type=cache,target=/root/.npm npm install --legacy-peer-deps
+
+WORKDIR /app
+COPY wrapper/web/ wrapper/web/
+COPY wrapper/shared/ wrapper/shared/
+
+WORKDIR /app/wrapper/web
+
+ARG VITE_RIVET_DEBUG_LOGS=false
+ARG RIVET_PUBLISHED_WORKFLOWS_BASE_PATH=/workflows
+ARG RIVET_LATEST_WORKFLOWS_BASE_PATH=/workflows-latest
+ARG RIVET_PUBLISHED_APPS_BASE_PATH=/apps
+ARG RIVET_LATEST_APPS_BASE_PATH=/apps-latest
+ARG RIVET_WEB_APPS_BASE_PATH=/apps
+ARG RIVET_LATEST_WEB_APPS_BASE_PATH=/apps-latest
+ARG RIVET_WEB_BUILD_MAX_OLD_SPACE_SIZE=4096
+ENV VITE_RIVET_DEBUG_LOGS=$VITE_RIVET_DEBUG_LOGS
+ENV RIVET_PUBLISHED_WORKFLOWS_BASE_PATH=$RIVET_PUBLISHED_WORKFLOWS_BASE_PATH
+ENV RIVET_LATEST_WORKFLOWS_BASE_PATH=$RIVET_LATEST_WORKFLOWS_BASE_PATH
+ENV RIVET_PUBLISHED_APPS_BASE_PATH=$RIVET_PUBLISHED_APPS_BASE_PATH
+ENV RIVET_LATEST_APPS_BASE_PATH=$RIVET_LATEST_APPS_BASE_PATH
+ENV RIVET_WEB_APPS_BASE_PATH=$RIVET_WEB_APPS_BASE_PATH
+ENV RIVET_LATEST_WEB_APPS_BASE_PATH=$RIVET_LATEST_WEB_APPS_BASE_PATH
+RUN NODE_OPTIONS="--max-old-space-size=${RIVET_WEB_BUILD_MAX_OLD_SPACE_SIZE}" npx vite build --config vite.config.ts
+
+# --- Production stage ---
+FROM --platform=$BUILDPLATFORM ${NODE_IMAGE} AS serve-installer
+
+RUN npm install -g serve
+
+FROM --platform=$TARGETPLATFORM ${NODE_IMAGE}
+
+ARG HTTP_PROXY
+ARG HTTPS_PROXY
+ARG ALL_PROXY
+ARG NO_PROXY
+ARG http_proxy
+ARG https_proxy
+ARG all_proxy
+ARG no_proxy
+
+ENV HTTP_PROXY=$HTTP_PROXY
+ENV HTTPS_PROXY=$HTTPS_PROXY
+ENV ALL_PROXY=$ALL_PROXY
+ENV NO_PROXY=$NO_PROXY
+ENV http_proxy=$http_proxy
+ENV https_proxy=$https_proxy
+ENV all_proxy=$all_proxy
+ENV no_proxy=$no_proxy
+
+WORKDIR /app
+COPY --from=serve-installer /usr/local/lib/node_modules/serve /usr/local/lib/node_modules/serve
+COPY --from=builder /app/wrapper/web/dist ./dist
+
+EXPOSE 3000
+CMD ["node", "/usr/local/lib/node_modules/serve/build/main.js", "-s", "dist", "-l", "3000"]

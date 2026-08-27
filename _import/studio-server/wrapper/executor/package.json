@@ -1,0 +1,7 @@
+{
+  "name": "@self-hosted/executor-deps",
+  "private": true,
+  "version": "1.0.1",
+  "description": "Executor-only npm dependency bucket for hosted Rivet execution",
+  "dependencies": {}
+}

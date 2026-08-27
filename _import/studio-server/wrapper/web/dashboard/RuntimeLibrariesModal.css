@@ -1,0 +1,363 @@
+.runtime-libraries-shell {
+  min-height: 0;
+}
+
+.runtime-libraries-header-row {
+  position: relative;
+  padding: 16px 56px 0 18px;
+}
+
+.runtime-libraries-heading {
+  width: 100%;
+}
+
+.runtime-libraries-title-group {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.runtime-libraries-title {
+  font-size: 20px;
+  font-weight: 600;
+  color: var(--grey-lightest);
+  line-height: 1.2;
+}
+
+.runtime-libraries-status-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.runtime-libraries-count-badge,
+.runtime-libraries-job-badge {
+  text-transform: none;
+}
+
+.runtime-libraries-job-badge.running {
+  background: rgba(74, 158, 255, 0.18);
+  color: #8fc2ff;
+}
+
+.runtime-libraries-content {
+  min-height: 0;
+}
+
+.runtime-libraries-section {
+  gap: 10px;
+}
+
+.runtime-libraries-section-divider {
+  height: 1px;
+  width: 100%;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.runtime-libraries-section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.runtime-libraries-empty-state {
+  color: var(--grey-light);
+  font-size: 13px;
+}
+
+.runtime-libraries-installed-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.runtime-libraries-installed-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.03);
+  padding: 10px 12px;
+}
+
+.runtime-libraries-package-info {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.runtime-libraries-package-name {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--grey-lightest);
+}
+
+.runtime-libraries-package-version {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--grey-light);
+}
+
+.runtime-libraries-remove-button {
+  min-height: var(--workflow-button-height-s);
+  font-size: var(--workflow-button-font-size-s) !important;
+  white-space: nowrap;
+}
+
+.runtime-libraries-form-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: center;
+}
+
+.runtime-libraries-form-action {
+  display: flex;
+  align-items: center;
+}
+
+.runtime-libraries-field-label {
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.runtime-libraries-status {
+  padding: 10px 12px;
+  border-radius: 10px;
+  font-size: 13px;
+  font-weight: 500;
+  border: 1px solid transparent;
+}
+
+.runtime-libraries-status.succeeded {
+  background: rgba(80, 200, 120, 0.12);
+  color: #8de0a5;
+  border-color: rgba(80, 200, 120, 0.24);
+}
+
+.runtime-libraries-status.failed {
+  background: rgba(255, 107, 122, 0.12);
+  color: #ff9ba5;
+  border-color: rgba(255, 107, 122, 0.24);
+}
+
+.runtime-libraries-status.running {
+  background: rgba(74, 158, 255, 0.12);
+  color: #8fc2ff;
+  border-color: rgba(74, 158, 255, 0.24);
+}
+
+.runtime-libraries-status.warning {
+  background: rgba(255, 193, 7, 0.12);
+  color: #ffd36b;
+  border-color: rgba(255, 193, 7, 0.24);
+}
+
+.runtime-libraries-status.idle {
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--grey-light);
+  border-color: rgba(255, 255, 255, 0.12);
+}
+
+.runtime-libraries-status-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.runtime-libraries-status-detail {
+  margin-top: 6px;
+  font-size: 12px;
+  color: inherit;
+  opacity: 0.95;
+}
+
+.runtime-libraries-log-panel {
+  background: rgba(0, 0, 0, 0.24);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 10px;
+  padding: 10px 12px;
+  max-height: 220px;
+  overflow-y: auto;
+  font-family: 'Fira Code', 'Cascadia Code', 'Consolas', monospace;
+  font-size: 11px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.runtime-libraries-log-line {
+  color: var(--grey-light);
+}
+
+.runtime-libraries-log-line.error {
+  color: #ff9ba5;
+}
+
+.runtime-libraries-log-meta {
+  color: rgba(255, 255, 255, 0.52);
+}
+
+.runtime-libraries-job-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 8px;
+}
+
+.runtime-libraries-replica-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.runtime-libraries-readiness-help {
+  margin-bottom: 8px;
+}
+
+.runtime-libraries-replica-actions {
+  margin-top: 8px;
+}
+
+.runtime-libraries-clear-stale-button {
+  white-space: nowrap;
+}
+
+.runtime-libraries-replica-toggle {
+  white-space: nowrap;
+}
+
+.runtime-libraries-replica-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.runtime-libraries-replica-item {
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 10px;
+  background: rgba(0, 0, 0, 0.14);
+  padding: 10px 12px;
+}
+
+.runtime-libraries-replica-item.failed {
+  border-color: rgba(255, 107, 122, 0.24);
+}
+
+.runtime-libraries-replica-item.warning {
+  border-color: rgba(255, 193, 7, 0.24);
+}
+
+.runtime-libraries-replica-item.succeeded {
+  border-color: rgba(80, 200, 120, 0.24);
+}
+
+.runtime-libraries-replica-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.runtime-libraries-replica-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--grey-lightest);
+}
+
+.runtime-libraries-replica-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 72px;
+  padding: 4px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.runtime-libraries-replica-badge.ready {
+  background: rgba(80, 200, 120, 0.16);
+  color: #8de0a5;
+}
+
+.runtime-libraries-replica-badge.syncing,
+.runtime-libraries-replica-badge.starting {
+  background: rgba(255, 193, 7, 0.16);
+  color: #ffd36b;
+}
+
+.runtime-libraries-replica-badge.error {
+  background: rgba(255, 107, 122, 0.16);
+  color: #ff9ba5;
+}
+
+.runtime-libraries-replica-detail {
+  margin-top: 6px;
+  font-size: 12px;
+  color: var(--grey-light);
+}
+
+.runtime-libraries-cancel-button {
+  white-space: nowrap;
+}
+
+.runtime-libraries-actions {
+  align-items: flex-end;
+}
+
+.runtime-libraries-help {
+  color: var(--grey-light);
+  font-size: 15px;
+  max-width: 420px;
+}
+
+.runtime-libraries-header-help {
+  margin-top: 2px;
+}
+
+.runtime-libraries-install-button {
+  min-height: var(--workflow-button-height-m);
+  font-size: var(--workflow-button-font-size-m) !important;
+  white-space: nowrap;
+}
+
+.runtime-libraries-add-button {
+  align-self: flex-start;
+  width: auto;
+}
+
+@media (max-width: 720px) {
+  .runtime-libraries-replica-summary-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .runtime-libraries-form-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .runtime-libraries-form-action {
+    width: 100%;
+  }
+
+  .runtime-libraries-install-button {
+    width: 100%;
+  }
+
+  .runtime-libraries-actions {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .runtime-libraries-help {
+    max-width: none;
+  }
+}

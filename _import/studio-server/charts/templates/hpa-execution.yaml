@@ -1,0 +1,23 @@
+{{- if .Values.autoscaling.execution.enabled }}
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ include "rivet.executionName" . }}
+  labels:
+    {{- include "rivet.labels" . | nindent 4 }}
+    app.kubernetes.io/component: execution
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ include "rivet.executionName" . }}
+  minReplicas: {{ .Values.autoscaling.execution.minReplicas }}
+  maxReplicas: {{ .Values.autoscaling.execution.maxReplicas }}
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: {{ .Values.autoscaling.execution.targetCPUUtilizationPercentage }}
+{{- end }}

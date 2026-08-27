@@ -1,0 +1,37 @@
+name: Verify Develop
+
+on:
+  push:
+    branches:
+      - develop-rivet2
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: verify-develop-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  RIVET_REPO_URL: https://github.com/valerypopoff/rivet2.0.git
+  RIVET_REPO_REF: main
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - name: Check Out Repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Set Up Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24
+
+      - name: Set Up Kubernetes Tools
+        run: npm run setup:k8s-tools
+
+      - name: Run Repository Verification
+        run: npm run test

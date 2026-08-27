@@ -1,0 +1,63 @@
+ingress:
+  enabled: true
+  className: nginx
+  host: rivet-test.example.com
+  externalDNSHostname: rivet-test.example.com
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-body-size: 100m
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "86400"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "86400"
+
+vault:
+  enabled: false
+  annotations: {}
+  secretPath: ""
+
+workflowStorage:
+  backend: managed
+
+runtimeLibraries:
+  backend: managed
+  cache:
+    enabled: false
+
+postgres:
+  mode: managed
+  maxConnections: 100
+  reservedConnections: 30
+  poolMaxPerApiPod: 10
+  host: postgres-test.example.internal
+  port: 5432
+  database: rivet
+  username: rivet
+  passwordSecretName: rivet-postgres
+  sslMode: require
+
+objectStorage:
+  endpoint: https://sfo3.digitaloceanspaces.com
+  bucket: rivet-test
+  region: us-east-1
+  prefix: workflows/
+  accessKeySecretName: rivet-object-storage
+  secretKeySecretName: rivet-object-storage
+  forcePathStyle: false
+
+auth:
+  keySecretName: rivet-shared-key
+
+
+replicaCount:
+  proxy: 1
+  web: 1
+  backend: 1
+  execution: 1
+
+autoscaling:
+  proxy:
+    enabled: false
+  web:
+    enabled: false
+  backend:
+    enabled: false
+  execution:
+    enabled: false

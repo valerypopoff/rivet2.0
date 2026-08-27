@@ -1,0 +1,39 @@
+# Local env files
+.env
+.env-old
+.env.dev
+!.env.example
+.claude/
+.tools/
+
+.fixtures
+
+# Dependency + build artifacts
+node_modules/
+.pnp.cjs
+.pnp.loader.mjs
+.yarn/install-state.gz
+# Includes moved runtime/bootstrap package state such as wrapper/bootstrap/proxy-bootstrap/node_modules/
+wrapper/**/node_modules/
+wrapper/api/dist/
+wrapper/api/.rivet-source/
+wrapper/web/dist/
+artifacts/playwright/
+artifacts/benchmarks/
+artifacts/web-app-debug/
+artifacts/runtime-library-cleanup/
+artifacts/*.png
+tmp-*.png
+
+# Local runtime data
+.data/
+/workflows/
+rivet/
+
+# OS/editor files
+.DS_Store
+Thumbs.db
+.vscode/
+.codex/
+artifacts/kubernetes-managed-release-gate/
+artifacts/kubernetes-managed-provider-gate/
