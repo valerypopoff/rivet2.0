@@ -1,6 +1,6 @@
 services:
   proxy:
-    image: ${RIVET_PROXY_IMAGE:-ghcr.io/valerypopoff/cloud-hosted-rivet2-wrapper/proxy:${RIVET_IMAGE_TAG:-latest}}
+    image: ${RIVET_PROXY_IMAGE:-ghcr.io/valerypopoff/rivet2.0-studio-server/proxy:${RIVET_IMAGE_TAG:-latest}}
     build:
       context: ../../..
       dockerfile: deploy/studio-server/images/proxy/Dockerfile
@@ -37,7 +37,7 @@ services:
     restart: unless-stopped
 
   web:
-    image: ${RIVET_WEB_IMAGE:-ghcr.io/valerypopoff/cloud-hosted-rivet2-wrapper/web:${RIVET_IMAGE_TAG:-latest}}
+    image: ${RIVET_WEB_IMAGE:-ghcr.io/valerypopoff/rivet2.0-studio-server/web:${RIVET_IMAGE_TAG:-latest}}
     build:
       context: ../../..
       dockerfile: deploy/studio-server/compose/docker/Dockerfile.web
@@ -79,7 +79,7 @@ services:
     restart: unless-stopped
 
   api:
-    image: ${RIVET_API_IMAGE:-ghcr.io/valerypopoff/cloud-hosted-rivet2-wrapper/api:${RIVET_IMAGE_TAG:-latest}}
+    image: ${RIVET_API_IMAGE:-ghcr.io/valerypopoff/rivet2.0-studio-server/api:${RIVET_IMAGE_TAG:-latest}}
     build:
       context: ../../..
       dockerfile: deploy/studio-server/compose/docker/Dockerfile.api
@@ -145,7 +145,7 @@ services:
     restart: unless-stopped
 
   executor:
-    image: ${RIVET_EXECUTOR_IMAGE:-ghcr.io/valerypopoff/cloud-hosted-rivet2-wrapper/executor:${RIVET_IMAGE_TAG:-latest}}
+    image: ${RIVET_EXECUTOR_IMAGE:-ghcr.io/valerypopoff/rivet2.0-studio-server/executor:${RIVET_IMAGE_TAG:-latest}}
     build:
       context: ../../..
       dockerfile: deploy/studio-server/compose/docker/Dockerfile.executor

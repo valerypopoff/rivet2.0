@@ -229,6 +229,9 @@ assert.doesNotMatch(compatibilityScanner, /replacing rivet\//i);
 const imageWorkflow = readText('.github/workflows/studio-server-images.yml');
 assert.match(imageWorkflow, /Run Same-Commit Studio Server Verification[\s\S]*yarn studio-server:test/);
 assert.match(imageWorkflow, /verify-repository:[\s\S]*Check Out Repository[\s\S]*fetch-depth: 0/);
+assert.match(imageWorkflow, /permissions:\s*\n\s+contents: read\s*\n\s+packages: write/);
+assert.match(imageWorkflow, /IMAGE_NAMESPACE: ghcr\.io\/valerypopoff\/rivet2\.0-studio-server/);
+assert.doesNotMatch(imageWorkflow, /cloud-hosted-rivet2-wrapper/);
 
 const dockerfiles = [
   'deploy/studio-server/images/api/Dockerfile',

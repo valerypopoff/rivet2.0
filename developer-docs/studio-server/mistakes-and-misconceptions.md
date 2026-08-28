@@ -76,7 +76,7 @@ If behavior is correct in `yarn studio-server:dev`, it is effectively verified f
 ### Reality
 
 - `yarn studio-server:dev` uses the Docker dev stack with live workspace mounts and the Vite dev server
-- `yarn studio-server:prod` pulls the published `cloud-hosted-rivet2-wrapper/*` images and force-recreates the stack without building
+- `yarn studio-server:prod` pulls the published `rivet2.0-studio-server/*` images and force-recreates the stack without building
 - `yarn studio-server:prod:restart` force-recreates the stack from already-local images without pulling or building, which is only for picking up `.env` changes without changing the app version
 - `yarn studio-server:prod:custom` builds production images from the current monorepo commit
 
