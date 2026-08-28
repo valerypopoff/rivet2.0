@@ -78,6 +78,9 @@ jobs:
             packages/studio-server-web/dist
           if-no-files-found: error
           retention-days: 1
+          # Keep the name stable for isolated consumer-job re-runs, while
+          # allowing this single producer to replace an earlier attempt.
+          overwrite: true
       - name: Report timing
         if: always()
         run: node scripts/ci/job-timing.mjs finish "Build Studio Server"
@@ -116,7 +119,10 @@ jobs:
         uses: actions/download-artifact@v7
         with:
           name: studio-server-build-${{ github.sha }}
-          path: .
+          # upload-artifact stores these selected paths relative to their shared
+          # packages/ ancestor. Restore below packages/ so workspace exports
+          # remain at packages/<name>/dist.
+          path: packages
       - name: Run API test shard
         run: node deploy/studio-server/scripts/run-api-tests.mjs --shard-index ${{ matrix.shard }} --shard-count 4
       - name: Report timing
@@ -144,7 +150,8 @@ jobs:
         uses: actions/download-artifact@v7
         with:
           name: studio-server-build-${{ github.sha }}
-          path: .
+          # See the API shard restore above: preserve package-defined export paths.
+          path: packages
       - name: Run pure web tests
         run: yarn studio-server:verify:web-pure
       - name: Report timing
@@ -221,7 +228,8 @@ jobs:
         uses: actions/download-artifact@v7
         with:
           name: studio-server-build-${{ github.sha }}
-          path: .
+          # See the API shard restore above: preserve package-defined export paths.
+          path: packages
       - name: Set Up Kubernetes Tools
         run: yarn studio-server:setup:k8s-tools
       - name: Verify Kubernetes and deployment contracts

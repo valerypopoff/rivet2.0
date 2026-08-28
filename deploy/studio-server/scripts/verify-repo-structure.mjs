@@ -235,8 +235,19 @@ const imageWorkflow = readText('.github/workflows/studio-server-images.yml');
 assert.match(imageWorkflow, /verify-repository:\s*\r?\n\s+uses: \.\/\.github\/workflows\/studio-server-verify\.yml/);
 assert.match(imageWorkflow, /fast-container-smoke:[\s\S]*studio-server:verify:candidate-images/);
 assert.match(imageWorkflow, /managed-kubernetes-release-gate:[\s\S]*full_kubernetes/);
-assert.match(imageWorkflow, /permissions:\s*\n\s+contents: read\s*\n\s+packages: write/);
+const imageWorkflowPermissions = /^permissions:\r?\n((?:^[ \t]+[^\r\n]*\r?\n)+)/m.exec(imageWorkflow)?.[1] ?? '';
+assert.match(imageWorkflowPermissions, /^\s+actions:\s+read\s*$/m);
+assert.match(imageWorkflowPermissions, /^\s+contents:\s+read\s*$/m);
+assert.match(imageWorkflowPermissions, /^\s+packages:\s+write\s*$/m);
 assert.match(imageWorkflow, /IMAGE_NAMESPACE: ghcr\.io\/valerypopoff\/rivet2\.0-studio-server/);
+assert.match(
+  imageWorkflow,
+  /name: managed-kubernetes-release-gate-\$\{\{ github\.run_id \}\}-\$\{\{ github\.run_attempt \}\}/,
+);
+assert.match(
+  imageWorkflow,
+  /name: managed-kubernetes-provider-gate-\$\{\{ github\.run_id \}\}-\$\{\{ github\.run_attempt \}\}/,
+);
 assert.doesNotMatch(imageWorkflow, /cloud-hosted-rivet2-wrapper/);
 
 const dockerfiles = [

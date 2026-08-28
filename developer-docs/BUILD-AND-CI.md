@@ -811,7 +811,10 @@ work behind it is parallelized.
 
 1. `compiled-artifacts` runs the complete `yarn build`, then uploads only the
    compiled Core, Node, Evaluations, and App Executor dependencies required by
-   downstream package checks.
+   downstream package checks. GitHub Actions stores those selected paths relative
+   to their shared `packages/` ancestor, so `package-tests` restores the artifact
+   beneath `packages/`; this preserves each workspace package's declared
+   `packages/<name>/dist` export path.
 2. `package-tests` fans out Core, Node, Evaluations, App, App Executor, and CLI
    into six isolated jobs. Every suite always runs; changed-path selection is
    deliberately not used for the general correctness gate.
@@ -841,6 +844,23 @@ The artifact fan-out is an execution optimization, not a new build contract.
 `yarn build`, `yarn test`, and `yarn lint` remain the canonical complete local
 commands. Only test jobs restore compiled package exports, and only after the same commit
 has completed the full build.
+
+Artifact names deliberately stay stable within a workflow run: re-running only
+a failed consumer job must be able to download the previous producer artifact.
+Because `upload-artifact@v7` artifacts are immutable, each of these fan-outs
+has exactly one producer and that producer sets `overwrite: true`; a re-run of
+the producer then replaces its own stale artifact instead of failing. The same
+rule applies to the three desktop-release build artifacts. Diagnostic Kubernetes
+gate artifacts instead include `github.run_attempt`, preserving evidence from
+each retry rather than replacing it.
+
+The Studio Server verifier applies the same restore rule. Its build job uploads
+compiled workspace outputs from `packages/`; the API shards, pure-web tests, and
+deployment-contract jobs must download that artifact beneath `packages/`, never
+the repository root. `upload-artifact` preserves paths relative to their common
+ancestor, so restoring at the root would move `packages/core/dist` to
+`core/dist` and make consumers fail module resolution even though the build job
+succeeded. `check-ci-workflows.mjs` guards both fan-outs.
 
 ## `release.yml`
 

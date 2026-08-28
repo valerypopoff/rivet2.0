@@ -28,6 +28,12 @@ function assertIncludesAll(actual, expected, label) {
   }
 }
 
+function findStep(job, name, label) {
+  const step = job.steps?.find((candidate) => candidate.name === name);
+  assert.ok(step, `${label} must contain a ${JSON.stringify(name)} step.`);
+  return step;
+}
+
 const build = parseWorkflow('.github/workflows/build.yml');
 const buildJobs = build.workflow.jobs;
 assertIncludesAll(
@@ -46,6 +52,28 @@ assert.deepEqual(
   buildJobs['package-tests'].strategy.matrix.include.map((entry) => entry.command).sort(),
   ['test:app', 'test:app-executor', 'test:cli', 'test:core', 'test:evaluations', 'test:node'],
   'Build test matrix must retain all six package suites.',
+);
+const compiledArtifactUpload = findStep(
+  buildJobs['compiled-artifacts'],
+  'Upload compiled dependencies',
+  'Compiled-artifacts job',
+);
+const compiledArtifactDownload = findStep(
+  buildJobs['package-tests'],
+  'Download compiled dependencies',
+  'Package-tests job',
+);
+assert.equal(compiledArtifactUpload.with?.name, 'build-dependencies-${{ github.sha }}');
+assert.equal(
+  compiledArtifactUpload.with?.overwrite,
+  true,
+  'The sole compiled-artifact producer must replace an artifact when its job is re-run.',
+);
+assert.equal(compiledArtifactDownload.with?.name, compiledArtifactUpload.with?.name);
+assert.equal(
+  compiledArtifactDownload.with?.path,
+  'packages',
+  'Package tests must restore compiled exports beneath their package-defined paths.',
 );
 assert.equal(
   build.source.includes('run: yarn check:graph-builder-assets'),
@@ -98,6 +126,30 @@ assert.deepEqual(asArray(studioJobs['web-tests'].needs), ['changes', 'build-stud
 assert.deepEqual(asArray(studioJobs['host-compatibility'].needs), ['changes']);
 assert.deepEqual(asArray(studioJobs['repository-contracts'].needs), ['changes']);
 assert.deepEqual(asArray(studioJobs['deployment-contracts'].needs), ['changes', 'build-studio-server']);
+const compiledStudioArtifactUpload = findStep(
+  studioJobs['build-studio-server'],
+  'Upload compiled Studio Server dependencies',
+  'Build Studio Server job',
+);
+assert.equal(compiledStudioArtifactUpload.with?.name, 'studio-server-build-${{ github.sha }}');
+assert.equal(
+  compiledStudioArtifactUpload.with?.overwrite,
+  true,
+  'The sole Studio Server artifact producer must replace an artifact when its job is re-run.',
+);
+for (const jobName of ['api-tests', 'web-tests', 'deployment-contracts']) {
+  const compiledStudioArtifactDownload = findStep(
+    studioJobs[jobName],
+    'Download compiled Studio Server dependencies',
+    `${jobName} job`,
+  );
+  assert.equal(compiledStudioArtifactDownload.with?.name, compiledStudioArtifactUpload.with?.name);
+  assert.equal(
+    compiledStudioArtifactDownload.with?.path,
+    'packages',
+    `${jobName} must restore compiled workspace exports beneath packages/.`,
+  );
+}
 assertIncludesAll(
   asArray(studioJobs.verify.needs),
   [
@@ -194,6 +246,24 @@ assertIncludesAll(
 );
 assert.ok(images.workflow.on.push.paths.length > 0, 'Main image builds must be path-gated.');
 assert.ok(images.workflow.on.schedule, 'Weekly full image verification must remain configured.');
+assert.equal(
+  findStep(
+    imageJobs['managed-kubernetes-release-gate'],
+    'Upload Managed Kubernetes Gate Artifacts',
+    'Managed Kubernetes release gate',
+  ).with?.name,
+  'managed-kubernetes-release-gate-${{ github.run_id }}-${{ github.run_attempt }}',
+  'Managed Kubernetes release-gate diagnostics must remain distinct per workflow attempt.',
+);
+assert.equal(
+  findStep(
+    imageJobs['managed-kubernetes-provider-gate'],
+    'Upload Managed Kubernetes Provider Gate Artifacts',
+    'Managed Kubernetes provider gate',
+  ).with?.name,
+  'managed-kubernetes-provider-gate-${{ github.run_id }}-${{ github.run_attempt }}',
+  'Managed Kubernetes provider-gate diagnostics must remain distinct per workflow attempt.',
+);
 
 const reusableDesktop = parseWorkflow('.github/workflows/desktop-release.yml');
 const reusableJobs = reusableDesktop.workflow.jobs;
@@ -210,6 +280,17 @@ assertIncludesAll(
   ['verify-ai-graph-builder-assets', 'build-windows', 'build-macos', 'build-docs'],
   'Desktop publication gate',
 );
+for (const [jobName, stepName] of [
+  ['build-windows', 'Upload Windows bundles'],
+  ['build-macos', 'Upload macOS bundles'],
+  ['build-docs', 'Upload documentation site'],
+]) {
+  assert.equal(
+    findStep(reusableJobs[jobName], stepName, `${jobName} job`).with?.overwrite,
+    true,
+    `${jobName} must replace its immutable artifact when the build job is re-run.`,
+  );
+}
 assert.match(reusableDesktop.source, /git ls-remote origin/);
 assert.match(reusableDesktop.source, /steps\.freshness\.outputs\.current == 'true'/);
 assert.match(

@@ -44,6 +44,10 @@ jobs:
             packages/app-executor/bin/executor-bundle.cjs
           if-no-files-found: error
           retention-days: 1
+          # Artifact names stay stable so a re-run of only a test shard can
+          # consume the original build. A re-run of this sole producer must
+          # replace its immutable prior artifact instead of failing.
+          overwrite: true
       - name: Report timing
         if: always()
         run: node scripts/ci/job-timing.mjs finish "Compile workspace"
@@ -80,7 +84,10 @@ jobs:
         uses: actions/download-artifact@v7
         with:
           name: build-dependencies-${{ github.sha }}
-          path: .
+          # upload-artifact stores these paths relative to their common
+          # packages/ ancestor. Restore beneath packages/ to put every built
+          # workspace export back at its package-defined path.
+          path: packages
       - name: Test ${{ matrix.label }}
         run: yarn ${{ matrix.command }}
       - name: Report timing
