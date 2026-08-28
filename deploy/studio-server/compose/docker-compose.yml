@@ -78,6 +78,23 @@ services:
       start_period: 30s
     restart: unless-stopped
 
+  filesystem-artifacts-init:
+    image: ${RIVET_API_IMAGE:-ghcr.io/valerypopoff/rivet2.0-studio-server/api:${RIVET_IMAGE_TAG:-latest}}
+    user: "0:0"
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - |
+        for directory in /workflows /workflow-recordings /data/runtime-libraries; do
+          mkdir -p "$$directory"
+          if [ "$$(stat -c '%u:%g' "$$directory")" != "10001:10001" ]; then
+            find "$$directory" -xdev -exec chown -h 10001:10001 {} +
+          fi
+        done
+    volumes:
+      - ${RIVET_WORKFLOWS_HOST_PATH:-../../../.data/workflows}:/workflows
+      - ${RIVET_WORKFLOW_RECORDINGS_HOST_PATH:-../../../.data/workflow-recordings}:/workflow-recordings
+      - ${RIVET_RUNTIME_LIBS_HOST_PATH:-../../../.data/runtime-libraries}:/data/runtime-libraries
+    restart: "no"
   api:
     image: ${RIVET_API_IMAGE:-ghcr.io/valerypopoff/rivet2.0-studio-server/api:${RIVET_IMAGE_TAG:-latest}}
     build:
@@ -135,6 +152,9 @@ services:
       - ${RIVET_WORKFLOW_RECORDINGS_HOST_PATH:-../../../.data/workflow-recordings}:/workflow-recordings
       - rivet_data:/data/rivet-app
       - ${RIVET_RUNTIME_LIBS_HOST_PATH:-../../../.data/runtime-libraries}:/data/runtime-libraries
+    depends_on:
+      filesystem-artifacts-init:
+        condition: service_completed_successfully
     healthcheck:
       test: ["CMD-SHELL", "node -e \"require('http').get('http://127.0.0.1:80/readyz',r=>{process.exit(r.statusCode===200?0:1)}).on('error',()=>process.exit(1))\""]
       interval: 10s
@@ -176,6 +196,9 @@ services:
     volumes:
       - rivet_data:/home/rivet/.local/share/com.valerypopoff.rivet2
       - ${RIVET_RUNTIME_LIBS_HOST_PATH:-../../../.data/runtime-libraries}:/data/runtime-libraries
+    depends_on:
+      filesystem-artifacts-init:
+        condition: service_completed_successfully
     restart: unless-stopped
 
 volumes:
