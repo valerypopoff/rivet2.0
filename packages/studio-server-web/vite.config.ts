@@ -19,7 +19,9 @@ const workspaceRoot = resolve(__dirname, '../..');
 const upstreamApp = resolve(__dirname, '../app');
 const upstreamCore = resolve(__dirname, '../core');
 const upstreamEvaluations = resolve(__dirname, '../evaluations');
-const normalizedVendoredRoots = [upstreamApp, upstreamCore, upstreamEvaluations].map((root) => normalizePath(root));
+const normalizedWorkspaceSourceRoots = [upstreamApp, upstreamCore, upstreamEvaluations].map((root) =>
+  normalizePath(root),
+);
 const shimDir = resolve(__dirname, 'shims');
 const overrideDir = resolve(__dirname, 'overrides');
 const webDistDir = resolve(__dirname, 'dist');
@@ -152,7 +154,7 @@ const resolveUpstreamAppDependency = (specifier: string) => {
   }
 };
 
-const resolveVendoredImport = (specifier: string, importer: string) => {
+const resolveWorkspaceSourceImport = (specifier: string, importer: string) => {
   const importerRequire = createRequire(importer);
 
   if (specifier === 'assemblyai') {
@@ -334,7 +336,7 @@ const resolveWrapperDependency = (): PluginOption => ({
     }
 
     const normalizedImporter = normalizePath(importer);
-    if (!normalizedVendoredRoots.some((root) => normalizedImporter.startsWith(root))) {
+    if (!normalizedWorkspaceSourceRoots.some((root) => normalizedImporter.startsWith(root))) {
       return null;
     }
 
@@ -344,7 +346,7 @@ const resolveWrapperDependency = (): PluginOption => ({
 
     try {
       const { path, suffix } = splitImportSuffix(source);
-      const resolved = resolveVendoredImport(path, importer);
+      const resolved = resolveWorkspaceSourceImport(path, importer);
       return this.resolve(`${resolved}${suffix}`, importer, { skipSelf: true });
     } catch {
       return null;
@@ -456,7 +458,7 @@ export default defineConfig({
     server: {
       allowedHosts: true,
       fs: {
-        // Dev mode imports vendored Rivet source and workers from the mounted workspace tree.
+        // Dev mode imports shared Rivet source and workers from this workspace tree.
         strict: false,
         allow: [
           normalizePath(workspaceRoot),

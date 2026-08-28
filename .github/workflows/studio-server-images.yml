@@ -35,30 +35,28 @@ env:
 jobs:
   verify-repository:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 35
     steps:
       - name: Check Out Repository
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          fetch-depth: 0
 
       - name: Set Up Node
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 24
 
-      - name: Verify Repo Structure
+      - name: Install Workspace Dependencies
         run: |
           corepack enable
           yarn install --immutable
-          yarn studio-server:verify:repo-structure
 
       - name: Set Up Kubernetes Tools
         run: yarn studio-server:setup:k8s-tools
 
-      - name: Verify Kubernetes Contracts
-        run: yarn studio-server:verify:kubernetes
-
-      - name: Verify Test Style
-        run: yarn studio-server:verify:test-style
+      - name: Run Same-Commit Studio Server Verification
+        run: yarn studio-server:test
 
   build-and-push:
     needs:

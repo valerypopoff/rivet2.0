@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# Compatibility scanner for upstream rivet/ updates
-# Run after replacing rivet/ to detect breaking changes before deploying
+# Compatibility scanner for the hosted editor's Rivet integration seams.
+# Run after changing shared Rivet editor code or hosted module overrides.
 
 set -euo pipefail
 
 RIVET_APP_SRC="packages/app/src"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-ROOT_DIR="$(dirname "$SCRIPT_DIR")"
+ROOT_DIR="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 cd "$ROOT_DIR"
 
 ERRORS=0
@@ -30,8 +30,8 @@ else
   echo "  OK: No new Tauri import subpaths"
 fi
 
-# 2. Check that all aliased upstream files still exist
-echo "[2/7] Checking aliased upstream file paths..."
+# 2. Check that every shared Rivet source file overridden by the hosted editor still exists
+echo "[2/7] Checking hosted module override source paths..."
 ALIASED_FILES=(
   "state/savedGraphs.ts"
   "state/settings.ts"
@@ -87,8 +87,8 @@ else
   echo "  OK: No unexpected direct instantiation"
 fi
 
-# 5. Check upstream provider seams used by hosted mode
-echo "[5/7] Checking upstream provider seams..."
+# 5. Check shared provider seams used by hosted mode
+echo "[5/7] Checking shared provider seams..."
 PROVIDERS_CONTEXT="$RIVET_APP_SRC/providers/ProvidersContext.tsx"
 TAURI_UTILS="$RIVET_APP_SRC/utils/tauri.ts"
 PROJECT_REFERENCE_LOADER="$RIVET_APP_SRC/model/TauriProjectReferenceLoader.ts"
@@ -101,28 +101,28 @@ if ! grep -q "export type EnvironmentProvider" "$PROVIDERS_CONTEXT" ||
   ! grep -q "getDefaultPathPolicyProvider" "$TAURI_UTILS" ||
   ! grep -q "readRelativeProjectFile" "$PROJECT_REFERENCE_LOADER" ||
   ! grep -q "allowDataFileNeighbor" "$DATASETS_IO"; then
-  echo "  FAIL: Upstream provider seam changed; review hosted environment/path-policy overrides"
+  echo "  FAIL: Shared provider seam changed; review hosted environment/path-policy overrides"
   ERRORS=$((ERRORS + 1))
 else
   echo "  OK: Provider seams are present"
 fi
 
-# 6. Check upstream entry point exists
-echo "[6/7] Checking upstream entry point..."
+# 6. Check the shared editor entry point exists
+echo "[6/7] Checking shared editor entry point..."
 if [ ! -f "$RIVET_APP_SRC/index.tsx" ]; then
-  echo "  FAIL: Upstream entry point missing: $RIVET_APP_SRC/index.tsx"
+  echo "  FAIL: Shared editor entry point missing: $RIVET_APP_SRC/index.tsx"
   ERRORS=$((ERRORS + 1))
 else
   echo "  OK: Entry point exists"
 fi
 
-# 7. Check upstream vite config exists (for reference)
-echo "[7/7] Checking upstream vite config..."
+# 7. Check the shared editor Vite config exists (for reference)
+echo "[7/7] Checking shared editor Vite config..."
 if [ ! -f "packages/app/vite.config.ts" ]; then
-  echo "  FAIL: Upstream vite.config.ts missing"
+  echo "  FAIL: Shared editor vite.config.ts missing"
   ERRORS=$((ERRORS + 1))
 else
-  echo "  OK: Upstream vite.config.ts exists"
+  echo "  OK: Shared Vite config exists"
 fi
 
 echo ""

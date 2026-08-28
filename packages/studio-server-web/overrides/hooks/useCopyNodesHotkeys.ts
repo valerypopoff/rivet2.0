@@ -1,6 +1,6 @@
 // Override for packages/app/src/hooks/useCopyNodesHotkeys.ts
-// Keeps hosted clipboard behavior in tracked wrapper code so prod image builds
-// do not depend on local edits inside the ignored rivet/ tree.
+// Keeps hosted clipboard behavior in the Studio Server host layer so the
+// shared Rivet hook remains free of hosted-only behavior.
 
 import { getDefaultStore } from 'jotai';
 import {

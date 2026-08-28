@@ -52,8 +52,21 @@ overlay, or second dependency installation.
 Install the complete monorepo from the repository root:
 
 ```bash
+corepack enable
 yarn install --immutable
 ```
+
+The former standalone npm command surface is retired. Update existing VM
+automation as follows; no compatibility aliases are provided:
+
+| Former command        | Monorepo command                                   |
+| --------------------- | -------------------------------------------------- |
+| `npm install`         | `corepack enable`, then `yarn install --immutable` |
+| `npm run prod`        | `yarn studio-server:prod`                          |
+| `npm run prod:custom` | `yarn studio-server:prod:custom`                   |
+
+`yarn dev` remains the Rivet desktop/editor development command. Studio Server
+development and deployment always use the `studio-server:*` namespace.
 
 ## Production Docker
 
@@ -68,20 +81,35 @@ This pulls the published
 stack, and waits for it to become healthy. The default browser URL is
 `http://localhost:8080`; set `RIVET_PORT` to change it.
 
+The production launcher detects the one existing historical Studio Server
+app-data volume—either `compose_rivet_data` or `ops_rivet_data`—and uses the
+matching Compose project so an in-place upgrade retains server settings and
+filesystem-backed SQLite state. `compose` is the fresh-install default. If both
+legacy volumes exist, set `RIVET_STUDIO_SERVER_COMPOSE_PROJECT` in `.env` to the
+project that owns the production data; the launcher otherwise refuses the
+ambiguous startup. When the managed-storage profile is enabled, the matching
+PostgreSQL and object-storage volumes are reused too. Preserve the same `.env`
+and make sure
+`RIVET_ARTIFACTS_HOST_PATH` resolves to the same absolute host folder before
+starting the monorepo checkout. Never use `docker compose down -v`, remove
+these volumes, or run a volume prune during the cutover.
+
 Useful variants:
 
-| Command | Behavior |
-|---|---|
-| `yarn studio-server:prod` | Pull and run the published images |
-| `yarn studio-server:prod:restart` | Recreate containers from already-local images after an environment-only change |
-| `yarn studio-server:prod:custom` | Build production images from the current monorepo commit and run them |
-| `yarn studio-server:clean` | Remove unused Docker containers, networks, images, and build cache without pruning volumes |
+| Command                           | Behavior                                                                                   |
+| --------------------------------- | ------------------------------------------------------------------------------------------ |
+| `yarn studio-server:prod`         | Pull and run the published images                                                          |
+| `yarn studio-server:prod:restart` | Recreate containers from already-local images after an environment-only change             |
+| `yarn studio-server:prod:custom`  | Build production images from the current monorepo commit and run them                      |
+| `yarn studio-server:clean`        | Remove unused Docker containers, networks, images, and build cache without pruning volumes |
 
 For direct diagnostics:
 
 ```bash
-docker compose --env-file .env -f deploy/studio-server/compose/docker-compose.managed-services.yml -f deploy/studio-server/compose/docker-compose.yml ps
-docker compose --env-file .env -f deploy/studio-server/compose/docker-compose.managed-services.yml -f deploy/studio-server/compose/docker-compose.yml logs -f --tail=120 proxy web api executor
+# Replace <project> with the project printed by the production launcher.
+# A fresh installation uses compose; a migrated installation can use ops.
+docker compose -p <project> --env-file .env -f deploy/studio-server/compose/docker-compose.managed-services.yml -f deploy/studio-server/compose/docker-compose.yml ps
+docker compose -p <project> --env-file .env -f deploy/studio-server/compose/docker-compose.managed-services.yml -f deploy/studio-server/compose/docker-compose.yml logs -f --tail=120 proxy web api executor
 ```
 
 If an anonymous pull from public GHCR packages returns `denied`, clear stale

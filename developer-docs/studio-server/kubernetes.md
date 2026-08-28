@@ -1,7 +1,7 @@
 # Kubernetes
 
 Open managed-mode risks and recommended remediation work are tracked in
-[`kubernetes_managed_mode_audit.md`](../kubernetes_managed_mode_audit.md).
+[`kubernetes-managed-mode.md`](./audits/kubernetes-managed-mode.md).
 
 This repo supports one Kubernetes topology today:
 
@@ -288,7 +288,7 @@ This repo is already shaped like a Kubernetes application, but it is not the sin
 | Root `deploy/studio-server/images/` directory | Present. It contains four runtime images: `deploy/studio-server/images/proxy/Dockerfile`, `deploy/studio-server/images/web/Dockerfile`, `deploy/studio-server/images/api/Dockerfile`, and `deploy/studio-server/images/executor/Dockerfile`. |
 | Application user `uid/gid=10001` | Present. Runtime images and chart security contexts run workloads as `10001:10001`. |
 | Environment overlays | Present under [deploy/studio-server/helm/overlays](../../deploy/studio-server/helm/overlays). If your GitLab template requires `deploy/overlays`, point that wrapper at these values or copy environment overrides from here; do not replace the custom chart with a generic single-service chart. |
-| Helm chart | Present under [charts](../charts). It renders `proxy`, `web`, singleton `backend`, scalable `execution`, services, ingress, HPAs, Vault annotations, and validation guards. |
+| Helm chart | Present under [deploy/studio-server/helm](../../deploy/studio-server/helm). It renders `proxy`, `web`, singleton `backend`, scalable `execution`, services, ingress, HPAs, Vault annotations, and validation guards. |
 | CI image build | Current publishing is GitHub Actions at [.github/workflows/studio-server-images.yml](../../.github/workflows/studio-server-images.yml). If deploying from GitLab CI, create equivalent jobs for all four Dockerfiles or reuse the published GHCR images. |
 | Vault AppRole | The chart uses Vault Injector annotations through `vault.role`, `vault.authPath`, `vault.secretPath`, and `vault.dotenvTemplate`. The containers source `/vault/dotenv` during startup. |
 

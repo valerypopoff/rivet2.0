@@ -70,6 +70,12 @@ yarn dev
 
 The root `dev` script starts the Rivet app workspace and opens the Vite/Tauri development flow used by the desktop IDE.
 
+Studio Server uses the same root Yarn installation but keeps its commands
+explicitly namespaced: use `yarn studio-server:dev` for server development,
+`yarn studio-server:prod` for published production images, or
+`yarn studio-server:prod:custom` to build production images from this checkout.
+There is no bare `prod` command.
+
 ## Common Commands
 
 ```powershell

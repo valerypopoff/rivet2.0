@@ -2,12 +2,12 @@
 
 Rivet Studio Server is part of the Rivet monorepo. This document defines where
 its code and deployment assets belong and which root-level systems it shares
-with upstream Rivet packages.
+with the public Rivet packages in the same workspace graph.
 
 ## Top-Level Map
 
 - `packages/`
-  - upstream Rivet packages and the five private Studio Server workspaces
+  - public Rivet packages and the five private Studio Server workspaces
 - `deploy/studio-server/`
   - images, Docker Compose files, Helm chart, launchers, fixtures, and
     deployment verification
@@ -29,7 +29,7 @@ package or deployment source trees.
   - API profiles, settings, workflow storage and execution, publication,
     recordings, runtime libraries, auth, and guarded host capabilities
 - `packages/studio-server-web/`
-  - dashboard, hosted editor entrypoint, upstream editor aliases, browser
+  - dashboard, hosted editor entrypoint, shared-editor aliases, browser
     shims, pure tests, and Playwright specs
 - `packages/studio-server-executor/`
   - packaged Node executor websocket service
@@ -41,7 +41,7 @@ package or deployment source trees.
 The packages are private and use the normal root Yarn workspace. Dependencies
 on Rivet or another Studio Server package use `workspace:^`. Do not add nested
 lockfiles, nested package managers, generated package links, or a second copy
-of upstream source.
+of Rivet source.
 
 ## Deployment Ownership
 
@@ -54,7 +54,7 @@ proxy/Dockerfile assets. Runtime bootstrap code does not belong here.
 
 `deploy/studio-server/helm/` owns the Kubernetes chart and environment
 overlays. `deploy/studio-server/scripts/` owns Studio Server launchers, local
-Kubernetes gates, and deployment verification. Shared upstream build tooling
+Kubernetes gates, and deployment verification. Shared monorepo build tooling
 continues to live under the root `scripts/` directory.
 
 Linux shell scripts are LF-normalized by the root `.gitattributes` file.
@@ -73,6 +73,8 @@ Use the root Yarn command surface:
 ```bash
 yarn studio-server:build
 yarn studio-server:test
+yarn studio-server:verify:host-compatibility
+yarn studio-server:verify:migration-ledger
 yarn studio-server:verify:repo-structure
 yarn studio-server:verify:test-style
 yarn studio-server:verify:kubernetes
@@ -81,6 +83,17 @@ yarn studio-server:verify:kubernetes
 Use `yarn workspace <workspace-name> run <script>` only for a focused package
 check. There is one root `yarn.lock` and the root-pinned Yarn release is the
 only supported dependency installer.
+
+The root preinstall guard rejects npm and pnpm dependency installation with the
+fresh-machine recovery commands. The repository structure verifier also rejects
+secondary `yarn.lock`, `package-lock.json`, and `npm-shrinkwrap.json` files,
+per-workspace package-manager declarations, ambiguous root production aliases,
+and root or workspace scripts that dispatch monorepo work through `npm run`
+or `npm --prefix`.
+
+The intentional npm boundaries are narrower than dependency management for the
+monorepo: npm-registry publication, isolated synthetic Code-node runtime-library
+installation, and the exactly pinned static web-image helper.
 
 Helm resolution order for repository tooling is:
 
@@ -102,6 +115,9 @@ Install the pinned cached binary with
   deployment subdirectories
 - do not reintroduce clone/ref bootstrap variables, package-link overlays,
   nested installs, or dual-repository Git labels
+- keep `deploy/studio-server/migration/source-file-ledger.json` fresh when a
+  current destination is deliberately moved or retired; the ledger must still
+  account for every blob in the preserved import tree
 - keep test manifests explicit and protected by the repository verifiers
 
 The monorepo migration and history-preservation details are recorded in

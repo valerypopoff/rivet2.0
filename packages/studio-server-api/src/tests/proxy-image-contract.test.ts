@@ -1,11 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import {
-  extractBracedBlock,
-  readRepoFile,
-  readRepoJson,
-} from './helpers/repo-contract-helpers.js';
+import { extractBracedBlock, readRepoFile, readRepoJson } from './helpers/repo-contract-helpers.js';
 
 const proxyTemplatePaths = [
   'deploy/studio-server/images/proxy/default.conf.template',
@@ -25,21 +21,36 @@ test('proxy templates route public workflow traffic to the right API plane', () 
   const imageProxyTemplate = readRepoFile('deploy/studio-server/images/proxy/default.conf.template');
   const proxyBootstrap = readRepoFile('deploy/studio-server/images/proxy/normalize-workflow-paths.sh');
 
-  assert.match(proxyLocation(imageProxyTemplate, /location = \/__rivet_auth\s*\{/), /proxy_pass \$api_ui_auth_upstream;/);
+  assert.match(
+    proxyLocation(imageProxyTemplate, /location = \/__rivet_auth\s*\{/),
+    /proxy_pass \$api_ui_auth_upstream;/,
+  );
   assert.match(proxyLocation(imageProxyTemplate, /location \/api\/\s*\{/), /proxy_pass \$api_upstream;/);
   assert.match(imageProxyTemplate, /include \$\{RIVET_PUBLIC_ROUTES_INCLUDE_FILE\};/);
   assert.match(proxyBootstrap, /location \$\{RIVET_PUBLISHED_WORKFLOWS_BASE_PATH\}\/ \{/);
   assert.match(proxyBootstrap, /location \$\{RIVET_WEB_APPS_BASE_PATH\}\/ \{/);
   assert.match(proxyBootstrap, /location \$\{RIVET_LATEST_WORKFLOWS_BASE_PATH\}\/ \{/);
   assert.match(proxyBootstrap, /location \$\{RIVET_LATEST_WEB_APPS_BASE_PATH\}\/ \{/);
-  assert.match(proxyBootstrap, /proxy_pass \\\$execution_upstream;[\s\S]*proxy_pass \\\$execution_upstream;[\s\S]*proxy_pass \\\$api_upstream;[\s\S]*proxy_pass \\\$api_upstream;/);
+  assert.match(
+    proxyBootstrap,
+    /proxy_pass \\\$execution_upstream;[\s\S]*proxy_pass \\\$execution_upstream;[\s\S]*proxy_pass \\\$api_upstream;[\s\S]*proxy_pass \\\$api_upstream;/,
+  );
   assert.match(proxyBootstrap, /location ~ \^\$\{RIVET_WEB_APPS_BASE_PATH\}\/\[\^\/\]\+\/actions\/ws\$ \{/);
   assert.match(proxyBootstrap, /location ~ \^\$\{RIVET_LATEST_WEB_APPS_BASE_PATH\}\/\[\^\/\]\+\/actions\/ws\$ \{/);
-  assert.match(proxyBootstrap, /actions\/ws\$ \{[\s\S]*?proxy_pass \\\$execution_upstream;[\s\S]*?proxy_set_header Upgrade \\\$http_upgrade;[\s\S]*?proxy_read_timeout 86400s;[\s\S]*?proxy_buffering off;/);
-  assert.match(proxyBootstrap, /actions\/ws\$ \{[\s\S]*?proxy_pass \\\$api_upstream;[\s\S]*?proxy_set_header Upgrade \\\$http_upgrade;[\s\S]*?proxy_read_timeout 86400s;[\s\S]*?proxy_buffering off;/);
+  assert.match(
+    proxyBootstrap,
+    /actions\/ws\$ \{[\s\S]*?proxy_pass \\\$execution_upstream;[\s\S]*?proxy_set_header Upgrade \\\$http_upgrade;[\s\S]*?proxy_read_timeout 86400s;[\s\S]*?proxy_buffering off;/,
+  );
+  assert.match(
+    proxyBootstrap,
+    /actions\/ws\$ \{[\s\S]*?proxy_pass \\\$api_upstream;[\s\S]*?proxy_set_header Upgrade \\\$http_upgrade;[\s\S]*?proxy_read_timeout 86400s;[\s\S]*?proxy_buffering off;/,
+  );
 
   const latestDebuggerLocation = proxyLocation(imageProxyTemplate, /location \/ws\/latest-debugger\s*\{/);
-  assert.match(imageProxyTemplate, /set \$api_latest_debugger_upstream http:\/\/\$\{RIVET_API_UPSTREAM_HOST\}:\$\{RIVET_API_UPSTREAM_PORT\}\/ws\/latest-debugger;/);
+  assert.match(
+    imageProxyTemplate,
+    /set \$api_latest_debugger_upstream http:\/\/\$\{RIVET_API_UPSTREAM_HOST\}:\$\{RIVET_API_UPSTREAM_PORT\}\/ws\/latest-debugger;/,
+  );
   assert.match(latestDebuggerLocation, /proxy_pass \$api_latest_debugger_upstream;/);
   assert.match(latestDebuggerLocation, /proxy_set_header X-Rivet-Proxy-Auth \$\{RIVET_PROXY_AUTH_TOKEN\};/);
   assert.match(latestDebuggerLocation, /proxy_set_header Upgrade \$http_upgrade;/);
@@ -51,10 +62,22 @@ test('proxy templates route public workflow traffic to the right API plane', () 
   assert.match(proxyBootstrap, /X-Rivet-Proxy-Auth: \$\{RIVET_PROXY_AUTH_TOKEN\}/);
   assert.match(proxyBootstrap, /RIVET_PROXY_SETTINGS_URL/);
   assert.match(proxyBootstrap, /proxy settings refresh failed; keeping the last valid nginx configuration/);
-  assert.doesNotMatch(proxyBootstrap, /export RIVET_PROXY_SETTINGS_FILE="\$\{RIVET_PROXY_SETTINGS_FILE:-\/tmp\/nginx\/rivet-proxy-settings\.json\}"/);
-  assert.match(proxyBootstrap, /public_route_settings_file="\$\{RIVET_PROXY_SETTINGS_FILE:-\$\{RIVET_APP_DATA_ROOT:-\/data\/rivet-app\}\/settings\/public-routes\.json\}"/);
-  assert.match(proxyBootstrap, /trusted_host_settings_file="\$\{RIVET_PROXY_SETTINGS_FILE:-\$\{RIVET_APP_DATA_ROOT:-\/data\/rivet-app\}\/settings\/trusted-hosts\.json\}"/);
-  assert.match(proxyBootstrap, /legacy_web_app_route_settings_file="\$\{RIVET_APP_DATA_ROOT:-\/data\/rivet-app\}\/settings\/web-app-routes\.json"/);
+  assert.doesNotMatch(
+    proxyBootstrap,
+    /export RIVET_PROXY_SETTINGS_FILE="\$\{RIVET_PROXY_SETTINGS_FILE:-\/tmp\/nginx\/rivet-proxy-settings\.json\}"/,
+  );
+  assert.match(
+    proxyBootstrap,
+    /public_route_settings_file="\$\{RIVET_PROXY_SETTINGS_FILE:-\$\{RIVET_APP_DATA_ROOT:-\/data\/rivet-app\}\/settings\/public-routes\.json\}"/,
+  );
+  assert.match(
+    proxyBootstrap,
+    /trusted_host_settings_file="\$\{RIVET_PROXY_SETTINGS_FILE:-\$\{RIVET_APP_DATA_ROOT:-\/data\/rivet-app\}\/settings\/trusted-hosts\.json\}"/,
+  );
+  assert.match(
+    proxyBootstrap,
+    /legacy_web_app_route_settings_file="\$\{RIVET_APP_DATA_ROOT:-\/data\/rivet-app\}\/settings\/web-app-routes\.json"/,
+  );
   assert.match(proxyBootstrap, /normalize_public_route_setting\(\) \{/);
   assert.match(proxyBootstrap, /read_json_string_property "\$settings_file" "publishedWorkflowsBasePath"/);
   assert.match(proxyBootstrap, /read_json_string_property "\$settings_file" "latestWorkflowsBasePath"/);
@@ -70,12 +93,18 @@ test('proxy templates route public workflow traffic to the right API plane', () 
   assert.match(proxyBootstrap, /mkdir -p "\$output_dir"/);
   assert.match(proxyBootstrap, /RIVET_PUBLIC_ROUTES_INCLUDE_FILE:-\/tmp\/nginx\/rivet-public-routes\.inc/);
   assert.match(proxyBootstrap, /RIVET_TRUSTED_HOSTS_INCLUDE_FILE:-\/tmp\/nginx\/rivet-trusted-hosts\.inc/);
-  assert.doesNotMatch(proxyBootstrap, /RIVET_PUBLIC_ROUTES_INCLUDE_FILE:-\$NGINX_ENVSUBST_OUTPUT_DIR\/rivet-public-routes\.conf/);
+  assert.doesNotMatch(
+    proxyBootstrap,
+    /RIVET_PUBLIC_ROUTES_INCLUDE_FILE:-\$NGINX_ENVSUBST_OUTPUT_DIR\/rivet-public-routes\.conf/,
+  );
   assert.match(proxyBootstrap, /write_trusted_hosts_include\(\)/);
   assert.match(proxyBootstrap, /trustedHostsCsv/);
   assert.match(proxyBootstrap, /nginx -t/);
   assert.match(proxyBootstrap, /nginx -s reload/);
-  assert.match(proxyBootstrap, /export RIVET_PROXY_RESOLVER="\$\(resolve_proxy_resolver "\$\{RIVET_PROXY_RESOLVER:-\}"\)"/);
+  assert.match(
+    proxyBootstrap,
+    /export RIVET_PROXY_RESOLVER="\$\(resolve_proxy_resolver "\$\{RIVET_PROXY_RESOLVER:-\}"\)"/,
+  );
 });
 
 test('proxy UI gate prompt is API-rendered and receives the original route', () => {
@@ -116,10 +145,19 @@ test('proxy templates forward hosted web apps to the API-owned auth layer', () =
   const devCompose = readRepoFile('deploy/studio-server/compose/docker-compose.dev.yml');
   const managedCompose = readRepoFile('deploy/studio-server/compose/docker-compose.managed-services.yml');
   assert.doesNotMatch(proxyBootstrap, /normalize_web_apps_auth_mode\(\)/);
-  assert.match(proxyBootstrap, /RIVET_TRUST_INCOMING_FORWARDED_HEADERS="\$\(normalize_bool "\$\{RIVET_TRUST_INCOMING_FORWARDED_HEADERS:-\}" "0"\)"/);
+  assert.match(
+    proxyBootstrap,
+    /RIVET_TRUST_INCOMING_FORWARDED_HEADERS="\$\(normalize_bool "\$\{RIVET_TRUST_INCOMING_FORWARDED_HEADERS:-\}" "0"\)"/,
+  );
   assert.doesNotMatch(proxyBootstrap, /RIVET_WEB_APPS_AUTH_MODE/);
-  assert.match(prodCompose, /RIVET_TRUST_INCOMING_FORWARDED_HEADERS=\$\{RIVET_TRUST_INCOMING_FORWARDED_HEADERS:-false\}/);
-  assert.match(devCompose, /RIVET_TRUST_INCOMING_FORWARDED_HEADERS=\$\{RIVET_TRUST_INCOMING_FORWARDED_HEADERS:-false\}/);
+  assert.match(
+    prodCompose,
+    /RIVET_TRUST_INCOMING_FORWARDED_HEADERS=\$\{RIVET_TRUST_INCOMING_FORWARDED_HEADERS:-false\}/,
+  );
+  assert.match(
+    devCompose,
+    /RIVET_TRUST_INCOMING_FORWARDED_HEADERS=\$\{RIVET_TRUST_INCOMING_FORWARDED_HEADERS:-false\}/,
+  );
   assert.doesNotMatch(prodCompose, /RIVET_UI_TOKEN_FREE_HOSTS/);
   assert.doesNotMatch(devCompose, /RIVET_UI_TOKEN_FREE_HOSTS/);
   assert.match(prodCompose, /RIVET_CORS_ALLOWED_ORIGINS=\$\{RIVET_CORS_ALLOWED_ORIGINS:-\}/);
@@ -127,22 +165,37 @@ test('proxy templates forward hosted web apps to the API-owned auth layer', () =
   assert.match(prodCompose, /RIVET_APP_DATA_ROOT=\/data\/rivet-app[\s\S]*rivet_data:\/data\/rivet-app:ro/);
   assert.match(devCompose, /RIVET_APP_DATA_ROOT=\/data\/rivet-app[\s\S]*rivet_data:\/data\/rivet-app:ro/);
   assert.match(devCompose, /"\$\{RIVET_LOCAL_BIND_HOST:-127\.0\.0\.1\}:\$\{RIVET_API_PORT:-3100\}:80"/);
-  assert.match(managedCompose, /"\$\{RIVET_LOCAL_BIND_HOST:-127\.0\.0\.1\}:\$\{RIVET_WORKFLOWS_LOCAL_DOCKER_POSTGRES_PORT:-54329\}:5432"/);
-  assert.match(managedCompose, /"\$\{RIVET_LOCAL_BIND_HOST:-127\.0\.0\.1\}:\$\{RIVET_WORKFLOWS_LOCAL_DOCKER_OBJECT_STORAGE_PORT:-9000\}:9000"/);
-  assert.match(managedCompose, /"\$\{RIVET_LOCAL_BIND_HOST:-127\.0\.0\.1\}:\$\{RIVET_WORKFLOWS_LOCAL_DOCKER_OBJECT_STORAGE_CONSOLE_PORT:-9001\}:9001"/);
+  assert.match(
+    managedCompose,
+    /"\$\{RIVET_LOCAL_BIND_HOST:-127\.0\.0\.1\}:\$\{RIVET_WORKFLOWS_LOCAL_DOCKER_POSTGRES_PORT:-54329\}:5432"/,
+  );
+  assert.match(
+    managedCompose,
+    /"\$\{RIVET_LOCAL_BIND_HOST:-127\.0\.0\.1\}:\$\{RIVET_WORKFLOWS_LOCAL_DOCKER_OBJECT_STORAGE_PORT:-9000\}:9000"/,
+  );
+  assert.match(
+    managedCompose,
+    /"\$\{RIVET_LOCAL_BIND_HOST:-127\.0\.0\.1\}:\$\{RIVET_WORKFLOWS_LOCAL_DOCKER_OBJECT_STORAGE_CONSOLE_PORT:-9001\}:9001"/,
+  );
   const retiredAuthEnvPattern =
     /RIVET_WEB_APPS_AUTH_MODE|RIVET_SERVER_UI_OAUTH_|(^|\W)OAUTH_PROVIDER|(^|\W)OAUTH_CLIENT_SECRET|(^|\W)OAUTH_DEBUG_LOG_PROFILE/;
   assert.doesNotMatch(prodCompose, retiredAuthEnvPattern);
   assert.doesNotMatch(devCompose, retiredAuthEnvPattern);
 
   for (const template of readProxyTemplates()) {
-    assert.match(template, /map "\$\{RIVET_TRUST_INCOMING_FORWARDED_HEADERS\}:\$http_x_forwarded_host" \$rivet_forwarded_host/);
+    assert.match(
+      template,
+      /map "\$\{RIVET_TRUST_INCOMING_FORWARDED_HEADERS\}:\$http_x_forwarded_host" \$rivet_forwarded_host/,
+    );
     assert.match(template, /default \$http_host;/);
     assert.match(template, /\~\^1:\(\.\+\)\$ \$1;/);
     assert.match(template, /map \$rivet_forwarded_host \$rivet_forwarded_hostname/);
     assert.ok(template.includes('~^\\[(?<ipv6_host>[^\\]]+)\\](?::\\d+)?$ $ipv6_host;'));
     assert.ok(template.includes('~^(?<plain_host>[^:]+):\\d+$ $plain_host;'));
-    assert.match(template, /map "\$\{RIVET_TRUST_INCOMING_FORWARDED_HEADERS\}:\$http_x_forwarded_proto" \$rivet_forwarded_proto/);
+    assert.match(
+      template,
+      /map "\$\{RIVET_TRUST_INCOMING_FORWARDED_HEADERS\}:\$http_x_forwarded_proto" \$rivet_forwarded_proto/,
+    );
     assert.match(template, /default \$scheme;/);
     assert.match(template, /map \$rivet_forwarded_hostname \$rivet_ui_host_is_token_free/);
     assert.match(template, /include \$\{RIVET_TRUSTED_HOSTS_INCLUDE_FILE\};/);
@@ -163,7 +216,8 @@ test('dev Compose exposes the host machine to both Node execution paths', () => 
 
   assert.equal((devCompose.match(/host\.docker\.internal:host-gateway/g) ?? []).length, 2);
   assert.equal(
-    (devCompose.match(/RIVET_NODE_EXECUTOR_PROXY_BYPASS_HOSTS=\$\{RIVET_NODE_EXECUTOR_PROXY_BYPASS_HOSTS:-\}/g) ?? []).length,
+    (devCompose.match(/RIVET_NODE_EXECUTOR_PROXY_BYPASS_HOSTS=\$\{RIVET_NODE_EXECUTOR_PROXY_BYPASS_HOSTS:-\}/g) ?? [])
+      .length,
     2,
   );
 });
@@ -178,9 +232,15 @@ test('compose fallback artifact mounts stay isolated under app data', () => {
       compose,
       /\$\{RIVET_WORKFLOW_RECORDINGS_HOST_PATH:-\.\.\/\.\.\/\.\.\/\.data\/workflow-recordings\}:\/workflow-recordings/,
     );
-    assert.match(compose, /\$\{RIVET_RUNTIME_LIBS_HOST_PATH:-\.\.\/\.\.\/\.\.\/\.data\/runtime-libraries\}:\/data\/runtime-libraries/);
+    assert.match(
+      compose,
+      /\$\{RIVET_RUNTIME_LIBS_HOST_PATH:-\.\.\/\.\.\/\.\.\/\.data\/runtime-libraries\}:\/data\/runtime-libraries/,
+    );
     assert.doesNotMatch(compose, /\$\{RIVET_WORKFLOWS_HOST_PATH:-\.\.\/\.\.\/\.\.\/workflows\}:\/workflows/);
-    assert.doesNotMatch(compose, /\$\{RIVET_WORKFLOW_RECORDINGS_HOST_PATH:-\.\.\/\.\.\/\.\.\/workflow-recordings\}:\/workflow-recordings/);
+    assert.doesNotMatch(
+      compose,
+      /\$\{RIVET_WORKFLOW_RECORDINGS_HOST_PATH:-\.\.\/\.\.\/\.\.\/workflow-recordings\}:\/workflow-recordings/,
+    );
   }
 });
 
@@ -200,9 +260,15 @@ test('proxy templates keep HTTP workflow routes bounded and websocket routes lon
   }
 
   const proxyBootstrap = readRepoFile('deploy/studio-server/images/proxy/normalize-workflow-paths.sh');
-  assert.match(proxyBootstrap, /runtime_limit_settings_file="\$\{RIVET_PROXY_SETTINGS_FILE:-\$\{RIVET_APP_DATA_ROOT:-\/data\/rivet-app\}\/settings\/runtime-limits\.json\}"/);
+  assert.match(
+    proxyBootstrap,
+    /runtime_limit_settings_file="\$\{RIVET_PROXY_SETTINGS_FILE:-\$\{RIVET_APP_DATA_ROOT:-\/data\/rivet-app\}\/settings\/runtime-limits\.json\}"/,
+  );
   assert.match(proxyBootstrap, /read_json_scalar_property "\$runtime_limit_settings_file" "proxyReadTimeoutSeconds"/);
-  assert.match(proxyBootstrap, /read_json_scalar_property "\$runtime_limit_settings_file" "webAppActionRequestLimitBytes"/);
+  assert.match(
+    proxyBootstrap,
+    /read_json_scalar_property "\$runtime_limit_settings_file" "webAppActionRequestLimitBytes"/,
+  );
   assert.match(proxyBootstrap, /\*\[!0123456789\]\*/);
   assert.match(proxyBootstrap, /RIVET_PROXY_READ_TIMEOUT="\$\{proxy_read_timeout_seconds\}s"/);
   assert.match(proxyBootstrap, /RIVET_WEB_APP_ACTION_REQUEST_LIMIT_BYTES="\$web_app_action_request_limit_bytes"/);
@@ -230,7 +296,10 @@ test('executor image and compose contracts keep the websocket service independen
   const devCompose = readRepoFile('deploy/studio-server/compose/docker-compose.dev.yml');
 
   assert.match(executorEntrypoint, /RIVET_EXECUTOR_PORT="\$\{RIVET_EXECUTOR_PORT:-21889\}"/);
-  assert.match(executorEntrypoint, /executor-bundle\.cjs --host "\$\{RIVET_EXECUTOR_HOST\}" --port "\$\{RIVET_EXECUTOR_PORT\}"/);
+  assert.match(
+    executorEntrypoint,
+    /executor-bundle\.cjs --host "\$\{RIVET_EXECUTOR_HOST\}" --port "\$\{RIVET_EXECUTOR_PORT\}"/,
+  );
   assert.doesNotMatch(executorEntrypoint, /executor-bundle\.cjs --port "\$\{PORT\}"/);
 
   for (const dockerfile of [executorDockerfile, composeExecutorDockerfile]) {
@@ -248,8 +317,14 @@ test('executor image and compose contracts keep the websocket service independen
   assert.match(executorHost, /createHttpRivetLLMProfileHealthStore/);
 
   for (const compose of [prodCompose, devCompose]) {
-    assert.match(compose, /executor:[\s\S]*- PORT=21889[\s\S]*- RIVET_EXECUTOR_PORT=21889[\s\S]*- RIVET_EXECUTOR_HOST=0\.0\.0\.0/);
-    assert.match(compose, /RIVET_RUNTIME_PROCESS_ROLE=executor[\s\S]*RIVET_LLM_PROFILE_HEALTH_API_URL=http:\/\/api:80\/api\/workflows\/llm-profile-health/);
+    assert.match(
+      compose,
+      /executor:[\s\S]*- PORT=21889[\s\S]*- RIVET_EXECUTOR_PORT=21889[\s\S]*- RIVET_EXECUTOR_HOST=0\.0\.0\.0/,
+    );
+    assert.match(
+      compose,
+      /RIVET_RUNTIME_PROCESS_ROLE=executor[\s\S]*RIVET_LLM_PROFILE_HEALTH_API_URL=http:\/\/api:80\/api\/workflows\/llm-profile-health/,
+    );
   }
 });
 
@@ -275,6 +350,7 @@ test('Docker launchers attach the selected dotenv only to API and executor runti
 test('images and local launchers build directly from the monorepo workspace', () => {
   const apiDockerfile = readRepoFile('deploy/studio-server/images/api/Dockerfile');
   const webDockerfile = readRepoFile('deploy/studio-server/images/web/Dockerfile');
+  const composeWebDockerfile = readRepoFile('deploy/studio-server/compose/docker/Dockerfile.web');
   const executorDockerfile = readRepoFile('deploy/studio-server/images/executor/Dockerfile');
   const apiEntrypoint = readRepoFile('deploy/studio-server/images/api/entrypoint.sh');
   const prodCompose = readRepoFile('deploy/studio-server/compose/docker-compose.yml');
@@ -285,11 +361,16 @@ test('images and local launchers build directly from the monorepo workspace', ()
   for (const dockerfile of [apiDockerfile, webDockerfile, executorDockerfile]) {
     assert.match(dockerfile, /WORKDIR \/app[\s\S]*COPY \. \./);
     assert.match(dockerfile, /yarn install --immutable/);
-    assert.doesNotMatch(dockerfile, /wrapper\/|rivet_source|rivet_dependency_metadata|\.rivet-package-links|--preserve-symlinks/);
+    assert.doesNotMatch(
+      dockerfile,
+      /wrapper\/|rivet_source|rivet_dependency_metadata|\.rivet-package-links|--preserve-symlinks/,
+    );
   }
   assert.match(apiDockerfile, /yarn build:runtime/);
   assert.match(apiDockerfile, /yarn workspace @valerypopoff\/rivet-studio-server-api run build/);
   assert.match(webDockerfile, /yarn build:hosted-web-deps/);
+  assert.match(webDockerfile, /npm install -g serve@14\.2\.6/);
+  assert.match(composeWebDockerfile, /npm install -g serve@14\.2\.6/);
   assert.match(executorDockerfile, /yarn build:runtime/);
   assert.doesNotMatch(executorDockerfile, /build:executor-runtime|rivet-app-executor run build/);
   assert.match(apiEntrypoint, /exec node \/app\/packages\/studio-server-api\/dist\/studio-server-api\/src\/server\.js/);
@@ -302,19 +383,34 @@ test('images and local launchers build directly from the monorepo workspace', ()
     assert.match(compose, /api:[\s\S]*stop_grace_period: 150s/);
   }
   assert.match(devCompose, /node_modules\/\.studio-server-yarn-install-ok/);
-  assert.match(devCompose, /\.\/nginx\/default\.dev\.conf\.template:\/etc\/nginx\/templates\/default\.conf\.template:ro/);
+  assert.match(
+    devCompose,
+    /\.\/nginx\/default\.dev\.conf\.template:\/etc\/nginx\/templates\/default\.conf\.template:ro/,
+  );
   assert.doesNotMatch(devCompose, /\.\.\/nginx\/default\.dev\.conf\.template/);
   assert.equal(devCompose.match(/- YARN_NODE_LINKER=node-modules/g)?.length, 2);
   assert.equal(devCompose.match(/- YARN_CHECKSUM_BEHAVIOR=ignore/g)?.length, 2);
-  assert.equal(devCompose.match(/- YARN_INSTALL_STATE_PATH=\/workspace\/node_modules\/\.yarn-install-state\.gz/g)?.length, 2);
+  assert.equal(
+    devCompose.match(/- YARN_INSTALL_STATE_PATH=\/workspace\/node_modules\/\.yarn-install-state\.gz/g)?.length,
+    2,
+  );
   assert.match(devDockerLauncher, /node_modules\/\.studio-server-yarn-install-ok/);
   assert.match(devDockerLauncher, /const composeProject = 'rivet-studio-server-dev'/);
   assert.match(devDockerLauncher, /docker compose -p \$\{composeProject\}/);
   assert.match(devDockerLauncher, /readDockerWaitTimeoutSeconds/);
-  assert.match(prodDockerLauncher, /const composeProject = 'rivet-studio-server-prod'/);
-  assert.match(prodDockerLauncher, /docker compose -p \$\{composeProject\}/);
+  assert.match(
+    prodDockerLauncher,
+    /DEFAULT_PRODUCTION_COMPOSE_PROJECT = 'compose'/,
+    'the production launcher must retain the historical default while detecting the other standalone volume identity',
+  );
+  assert.match(prodDockerLauncher, /RIVET_STUDIO_SERVER_COMPOSE_PROJECT/);
+  assert.match(prodDockerLauncher, /LEGACY_PRODUCTION_COMPOSE_PROJECTS = \['ops', DEFAULT_PRODUCTION_COMPOSE_PROJECT\]/);
+  assert.match(prodDockerLauncher, /return `docker compose -p \$\{project\} \$\{suffix\}`/);
   assert.match(prodDockerLauncher, /readDockerWaitTimeoutSeconds/);
-  assert.doesNotMatch(`${devDockerLauncher}\n${prodDockerLauncher}`, /prepareRivetDockerContext|RIVET_SOURCE_|RIVET_DEPENDENCY_/);
+  assert.doesNotMatch(
+    `${devDockerLauncher}\n${prodDockerLauncher}`,
+    /prepareRivetDockerContext|RIVET_SOURCE_|RIVET_DEPENDENCY_/,
+  );
 });
 
 test('CI and production launchers publish and run the Studio Server image set from one commit', () => {
@@ -323,14 +419,27 @@ test('CI and production launchers publish and run the Studio Server image set fr
   const prodCompose = readRepoFile('deploy/studio-server/compose/docker-compose.yml');
   const prodDockerLauncher = readRepoFile('deploy/studio-server/scripts/prod-docker.mjs');
   const envExample = readRepoFile('deploy/studio-server/.env.example');
-  const packageJson = readRepoJson<{ scripts: Record<string, string> }>('package.json');
+  const packageJson = readRepoJson<{
+    packageManager: string;
+    scripts: Record<string, string>;
+  }>('package.json');
   const promotionIndex = /\r?\n  promote-images:\r?\n/.exec(imageBuildWorkflow)?.index ?? -1;
 
   assert.ok(promotionIndex > 0, 'expected a final image promotion job');
   assert.match(imageBuildWorkflow, /branches:\s*\n\s*- main/);
-  assert.match(verificationWorkflow, /branches:\s*\n\s*- develop\s*\n\s*- codex\/import-studio-server/);
+  assert.match(verificationWorkflow, /push:\r?\n\s+branches:\r?\n\s+- develop/);
+  assert.match(verificationWorkflow, /pull_request:\r?\n\s+branches:\r?\n\s+- develop/);
+  assert.doesNotMatch(verificationWorkflow, /codex\/import-studio-server/);
   assert.match(verificationWorkflow, /yarn install --immutable/);
   assert.match(verificationWorkflow, /yarn studio-server:test/);
+  assert.match(verificationWorkflow, /Check Out Repository[\s\S]*fetch-depth: 0/);
+  assert.match(imageBuildWorkflow, /Run Same-Commit Studio Server Verification[\s\S]*yarn studio-server:test/);
+  assert.match(imageBuildWorkflow, /verify-repository:[\s\S]*Check Out Repository[\s\S]*fetch-depth: 0/);
+  assert.match(packageJson.scripts['studio-server:test'], /studio-server:verify:migration-ledger/);
+  assert.equal(packageJson.packageManager, 'yarn@4.17.1');
+  assert.equal(packageJson.scripts.preinstall, 'node scripts/checks/check-package-manager.mjs');
+  assert.equal(packageJson.scripts['build:all'], 'yarn build');
+  assert.equal(packageJson.scripts.prod, undefined);
   assert.match(imageBuildWorkflow, /SOURCE_TAG: build-\$\{\{ github\.sha \}\}/);
   assert.match(imageBuildWorkflow, /type=raw,value=\$\{\{ env\.SOURCE_TAG \}\}/);
   assert.match(imageBuildWorkflow, /continue-on-error: true/);
@@ -352,17 +461,39 @@ test('CI and production launchers publish and run the Studio Server image set fr
   ] as const) {
     assert.match(
       imageBuildWorkflow,
-      new RegExp(`- service: ${service}\\s+dockerfile: deploy/studio-server/images/${service}/Dockerfile\\s+image: ghcr\\.io/valerypopoff/cloud-hosted-rivet2-wrapper/${service}\\s+platforms: ${platforms.replace(/\//g, '\\/')}`),
+      new RegExp(
+        `- service: ${service}\\s+dockerfile: deploy/studio-server/images/${service}/Dockerfile\\s+image: ghcr\\.io/valerypopoff/cloud-hosted-rivet2-wrapper/${service}\\s+platforms: ${platforms.replace(/\//g, '\\/')}`,
+      ),
     );
     assert.ok(prodCompose.includes(`ghcr.io/valerypopoff/cloud-hosted-rivet2-wrapper/${service}`));
     assert.ok(envExample.includes(`ghcr.io/valerypopoff/cloud-hosted-rivet2-wrapper/${service}:latest`));
   }
 
-  assert.equal(packageJson.scripts['studio-server:prod'], 'node deploy/studio-server/scripts/prod-docker.mjs prebuilt');
-  assert.equal(packageJson.scripts['studio-server:prod:config'], 'node deploy/studio-server/scripts/prod-docker.mjs config');
-  assert.equal(packageJson.scripts['studio-server:prod:services'], 'node deploy/studio-server/scripts/prod-docker.mjs services');
-  assert.equal(packageJson.scripts['studio-server:prod:restart'], 'node deploy/studio-server/scripts/prod-docker.mjs restart');
-  assert.equal(packageJson.scripts['studio-server:prod:custom'], 'node deploy/studio-server/scripts/prod-docker.mjs custom');
+  assert.equal(packageJson.scripts['studio-server:prod'], 'yarn studio-server:prod:prebuilt');
+  assert.equal(
+    packageJson.scripts['studio-server:prod:prebuilt'],
+    'node deploy/studio-server/scripts/prod-docker.mjs prebuilt',
+  );
+  assert.equal(
+    packageJson.scripts['studio-server:prod:config'],
+    'node deploy/studio-server/scripts/prod-docker.mjs config',
+  );
+  assert.equal(
+    packageJson.scripts['studio-server:prod:services'],
+    'node deploy/studio-server/scripts/prod-docker.mjs services',
+  );
+  assert.equal(
+    packageJson.scripts['studio-server:prod:restart'],
+    'node deploy/studio-server/scripts/prod-docker.mjs restart',
+  );
+  assert.equal(
+    packageJson.scripts['studio-server:prod:custom'],
+    'node deploy/studio-server/scripts/prod-docker.mjs custom',
+  );
+  assert.equal(packageJson.scripts['studio-server:dev'], 'yarn studio-server:dev:docker');
+  assert.equal(packageJson.scripts['studio-server:dev:docker'], 'node deploy/studio-server/scripts/dev-docker.mjs dev');
+  assert.equal(packageJson.scripts['studio-server:dev:down'], 'yarn studio-server:dev:docker:down');
+  assert.equal(packageJson.scripts['studio-server:dev:recreate'], 'yarn studio-server:dev:docker:recreate');
   assert.match(prodDockerLauncher, /pull proxy web api executor/);
   assert.match(prodDockerLauncher, /--no-build --force-recreate --remove-orphans --wait/);
   assert.match(prodDockerLauncher, /--build --force-recreate --remove-orphans --wait/);

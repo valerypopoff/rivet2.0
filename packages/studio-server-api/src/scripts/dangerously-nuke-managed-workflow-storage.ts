@@ -148,7 +148,7 @@ async function main() {
 
   if (!process.argv.includes('--yes')) {
     console.error('Refusing to nuke managed workflow storage without --yes.');
-    console.error('Run: npm run workflow-storage:dangerously-nuke-managed-state -- --yes');
+    console.error('Run: yarn studio-server:workflow-storage:dangerously-nuke-managed-state --yes');
     process.exit(1);
   }
 

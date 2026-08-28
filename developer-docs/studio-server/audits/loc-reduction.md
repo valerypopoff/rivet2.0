@@ -26,9 +26,10 @@ slightly different.
 ## What "functionality does not change" means
 
 For this plan, unchanged functionality includes more than matching the happy
-path:
+path. References to the former wrapper boundary below now mean the private
+Studio Server workspaces inside this monorepo:
 
-- no changes under the upstream `rivet/` checkout;
+- no changes to public Rivet packages outside the Studio Server host seams;
 - no changed API request/response shapes or HTTP status codes;
 - no changed settings defaults, persisted JSON shape, migration behavior, or
   secret-retention rules;
@@ -78,8 +79,8 @@ or an authentication compatibility/security project.
 The measured numbers exclude tests, documentation, lockfiles, and the existing
 domain-specific code that must remain. They supersede the original projections
 for the implemented work. The `idb` addition in `packages/studio-server-web` is not an LOC
-candidate: it is a direct host dependency required by the current vendored
-Rivet browser import graph.
+candidate: it is a direct host dependency required by the hosted build of the
+shared Rivet browser import graph.
 
 ## 1. Zod for App Settings
 

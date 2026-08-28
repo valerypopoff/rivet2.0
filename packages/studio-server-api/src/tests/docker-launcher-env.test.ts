@@ -116,12 +116,12 @@ test('Docker launcher env does not leak host NODE_OPTIONS unless explicitly conf
   const restoreEnvFile = setProcessEnvForTest('RIVET_ENV_FILE', envPath);
   const restoreNodeOptions = setProcessEnvForTest(
     'NODE_OPTIONS',
-    '--require F:\\Programming\\Self-hosted-rivet\\.pnp.cjs',
+    '--require C:\\repo\\.pnp.cjs',
   );
 
   try {
     const loaded = devEnv.loadDevEnv(tempRoot);
-    assert.equal(loaded.mergedEnv.NODE_OPTIONS, '--require F:\\Programming\\Self-hosted-rivet\\.pnp.cjs');
+    assert.equal(loaded.mergedEnv.NODE_OPTIONS, '--require C:\\repo\\.pnp.cjs');
     launcherEnv.dropAmbientNodeOptionsForDocker(loaded.mergedEnv, loaded.fileEnv);
     assert.equal(loaded.mergedEnv.NODE_OPTIONS, undefined);
   } finally {
@@ -142,7 +142,7 @@ test('Docker launcher env preserves explicit NODE_OPTIONS from the env file', ()
   const restoreEnvFile = setProcessEnvForTest('RIVET_ENV_FILE', envPath);
   const restoreNodeOptions = setProcessEnvForTest(
     'NODE_OPTIONS',
-    '--require F:\\Programming\\Self-hosted-rivet\\.pnp.cjs',
+    '--require C:\\repo\\.pnp.cjs',
   );
 
   try {

@@ -1,6 +1,6 @@
 // Override for packages/app/src/hooks/useContextMenu.ts
-// Keeps hosted clipboard recovery in tracked wrapper code so prod image builds
-// do not depend on local edits inside the ignored rivet/ tree.
+// Keeps hosted clipboard recovery in the Studio Server host layer so the
+// shared Rivet hook remains free of hosted-only behavior.
 
 import { useFloating, autoUpdate, shift, useMergeRefs } from '@floating-ui/react';
 import { useRef, useState, useCallback, useEffect } from 'react';

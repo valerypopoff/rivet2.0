@@ -1,4 +1,5 @@
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { loadDevEnv } from './lib/dev-env.mjs';
 import {
   assertValidPort,
@@ -7,27 +8,94 @@ import {
   printFailureDiagnostics,
   readDockerWaitTimeoutSeconds,
   run,
+  runCapture,
 } from './lib/docker-launcher.mjs';
-import {
-  assertNoRetiredEnv,
-  dropAmbientNodeOptionsForDocker,
-} from './lib/docker-launcher-env.mjs';
+import { assertNoRetiredEnv, dropAmbientNodeOptionsForDocker } from './lib/docker-launcher-env.mjs';
 const rootDir = process.cwd();
-const composeProject = 'rivet-studio-server-prod';
-let composeBase = `docker compose -p ${composeProject} -f deploy/studio-server/compose/docker-compose.managed-services.yml -f deploy/studio-server/compose/docker-compose.yml`;
+// Older standalone deployments used either Compose project name below, depending
+// on the Docker Compose version that first created their named volumes. Detect a
+// single legacy app-data volume so an in-place monorepo cutover keeps its state.
+export const DEFAULT_PRODUCTION_COMPOSE_PROJECT = 'compose';
+export const LEGACY_PRODUCTION_COMPOSE_PROJECTS = ['ops', DEFAULT_PRODUCTION_COMPOSE_PROJECT];
+const composeProjectNamePattern = /^[a-z0-9][a-z0-9_-]*$/;
 const diagnosticServices = 'api web executor proxy';
-let envFileLabel = '.env';
+
+export function appDataVolumeName(composeProject) {
+  return `${composeProject}_rivet_data`;
+}
+
+export async function resolveProductionComposeProject({ environment, volumeExists }) {
+  const explicitlyConfiguredProject = environment.RIVET_STUDIO_SERVER_COMPOSE_PROJECT?.trim();
+  if (explicitlyConfiguredProject) {
+    if (!composeProjectNamePattern.test(explicitlyConfiguredProject)) {
+      throw new Error(
+        'RIVET_STUDIO_SERVER_COMPOSE_PROJECT must be a lowercase Docker Compose project name containing only letters, numbers, hyphens, and underscores.',
+      );
+    }
+
+    return { composeProject: explicitlyConfiguredProject, source: 'configured' };
+  }
+
+  const detectedProjects = [];
+  for (const candidate of LEGACY_PRODUCTION_COMPOSE_PROJECTS) {
+    if (await volumeExists(appDataVolumeName(candidate))) {
+      detectedProjects.push(candidate);
+    }
+  }
+
+  if (detectedProjects.length > 1) {
+    const discoveredVolumes = detectedProjects.map(appDataVolumeName).join(', ');
+    throw new Error(
+      `Found multiple legacy Studio Server app-data volumes (${discoveredVolumes}). To protect persisted settings and evaluation history, set RIVET_STUDIO_SERVER_COMPOSE_PROJECT in .env to the project that owns the production data.`,
+    );
+  }
+
+  if (detectedProjects.length === 1) {
+    return { composeProject: detectedProjects[0], source: 'detected' };
+  }
+
+  return { composeProject: DEFAULT_PRODUCTION_COMPOSE_PROJECT, source: 'default' };
+}
+
+async function dockerVolumeExists(volumeName, environment) {
+  const result = await runCapture(`docker volume inspect ${volumeName}`, environment, {
+    allowFailure: true,
+    cwd: rootDir,
+  });
+  return result.exitCode === 0;
+}
+
+function composeCommand(project, suffix) {
+  return `docker compose -p ${project} ${suffix}`;
+}
 
 async function main() {
   const action = process.argv[2] == null ? 'prebuilt' : process.argv[2];
   const { mergedEnv, envPath, hasEnvFile, fileEnv } = loadDevEnv(rootDir);
   dropAmbientNodeOptionsForDocker(mergedEnv, fileEnv);
 
-  envFileLabel = path.basename(envPath);
+  const envFileLabel = path.basename(envPath);
+  const { composeProject, source } = await resolveProductionComposeProject({
+    environment: mergedEnv,
+    volumeExists: (volumeName) => dockerVolumeExists(volumeName, mergedEnv),
+  });
+  if (source === 'detected') {
+    console.log(
+      `[prod-docker] Reusing detected legacy app-data volume ${appDataVolumeName(composeProject)} (Compose project ${composeProject}).`,
+    );
+  }
+
+  let composeBase = composeCommand(
+    composeProject,
+    '-f deploy/studio-server/compose/docker-compose.managed-services.yml -f deploy/studio-server/compose/docker-compose.yml',
+  );
   if (hasEnvFile) {
     const relativeEnvPath = path.relative(rootDir, envPath) || envFileLabel;
     mergedEnv.RIVET_RUNTIME_ENV_FILE = envPath;
-    composeBase = `docker compose -p ${composeProject} --env-file "${relativeEnvPath}" -f deploy/studio-server/compose/docker-compose.managed-services.yml -f deploy/studio-server/compose/docker-compose.yml -f deploy/studio-server/compose/docker-compose.runtime-env.yml`;
+    composeBase = composeCommand(
+      composeProject,
+      `--env-file "${relativeEnvPath}" -f deploy/studio-server/compose/docker-compose.managed-services.yml -f deploy/studio-server/compose/docker-compose.yml -f deploy/studio-server/compose/docker-compose.runtime-env.yml`,
+    );
   }
 
   assertNoRetiredEnv(mergedEnv, { launcherName: 'prod-docker', envFileLabel });
@@ -98,7 +166,9 @@ async function main() {
   }
 }
 
-main().catch((error) => {
-  console.error(error.message);
-  process.exit(1);
-});
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  main().catch((error) => {
+    console.error(error.message);
+    process.exit(1);
+  });
+}

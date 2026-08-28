@@ -17,13 +17,13 @@ The target runtime is the usual headless backend path:
 - no project YAML change;
 - no change to workflow outputs, recordings, or public endpoint behavior.
 
-The implementation belongs in the wrapper repo, primarily under:
+The implementation belongs in the monorepo, primarily under:
 
 ```text
-F:\Programming\Self-hosted-rivet\wrapper\api\src\routes\workflows\execution.ts
-F:\Programming\Self-hosted-rivet\wrapper\api\src\runtime-libraries\managed-code-runner.ts
-F:\Programming\Self-hosted-rivet\wrapper\api\src\runtime-libraries\backend.ts
-F:\Programming\Self-hosted-rivet\wrapper\api\src\runtime-libraries\managed\backend.ts
+packages/studio-server-api/src/routes/workflows/execution.ts
+packages/studio-server-api/src/runtime-libraries/managed-code-runner.ts
+packages/studio-server-api/src/runtime-libraries/backend.ts
+packages/studio-server-api/src/runtime-libraries/managed/backend.ts
 ```
 
 ## Implementation Deliverables
@@ -308,8 +308,7 @@ Keep headers coarse; detailed per-node data belongs in logs.
 Baseline artifact to save before changing behavior:
 
 ```text
-wrapper commit:
-vendored Rivet commit:
+monorepo commit:
 Node version:
 storage mode:
 API CPU/RAM limits:
@@ -549,7 +548,7 @@ For each scenario, capture:
 - `x-workflow-materialize-ms`;
 - CodeRunner telemetry summary;
 - Node version and CPU/RAM/container limits;
-- commit SHAs for wrapper and vendored Rivet.
+- the monorepo commit SHA.
 
 Use enough runs to avoid noise:
 
@@ -663,7 +662,7 @@ Add or update wrapper API tests for `ManagedCodeRunner`:
 
 Also run the existing workflow endpoint tests and recording tests.
 
-Recommended commands from the `F:\Programming\Self-hosted-rivet` checkout:
+Recommended commands from the monorepo root:
 
 ```bash
 yarn workspace @valerypopoff/rivet-studio-server-api run build
@@ -675,7 +674,7 @@ yarn studio-server:verify:repo-structure
 
 ## Documentation Updates - DONE
 
-Update wrapper developer docs to explain:
+Update Studio Server developer docs to explain:
 
 - endpoint execution uses `createProcessor(...)` so recordings can attach before
   run start;

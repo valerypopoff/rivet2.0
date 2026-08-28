@@ -49,7 +49,7 @@ RUN NODE_OPTIONS="--max-old-space-size=${RIVET_WEB_BUILD_MAX_OLD_SPACE_SIZE}" \
     YARN_NODE_LINKER=node-modules yarn workspace @valerypopoff/rivet-studio-server-web run build
 
 FROM --platform=$BUILDPLATFORM ${NODE_IMAGE} AS serve-installer
-RUN npm install -g serve
+RUN npm install -g serve@14.2.6
 
 FROM --platform=$TARGETPLATFORM ${NODE_IMAGE}
 

@@ -173,7 +173,7 @@ export function resolveHelmBinOrThrow(rootDir, { env = process.env, launcherName
 
   throw new Error(
     `[${launcherName}] Helm is not available. Set RIVET_K8S_HELM_BIN, install Helm on PATH, ` +
-    'or run "npm run setup:k8s-tools" to install the pinned cached copy.',
+    'or run "yarn studio-server:setup:k8s-tools" to install the pinned cached copy.',
   );
 }
 

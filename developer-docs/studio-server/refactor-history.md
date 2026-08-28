@@ -157,7 +157,7 @@ The workflow API tests are now split by behavior domain so a future change has a
 ### Verification To Preserve
 
 - API build: `yarn workspace @valerypopoff/rivet-studio-server-api run build`
-- Focused split-suite run: `node ../../scripts/run-preserve-symlinks.mjs tsx --test src/tests/workflow-filesystem-tree.test.ts src/tests/workflow-publication-filesystem.test.ts src/tests/workflow-published-history-filesystem.test.ts src/tests/workflow-execution-filesystem.test.ts src/tests/workflow-recordings-http.test.ts` from `packages/studio-server-api`
+- Focused split-suite run: `yarn workspace @valerypopoff/rivet-studio-server-api run test:files src/tests/workflow-filesystem-tree.test.ts src/tests/workflow-publication-filesystem.test.ts src/tests/workflow-published-history-filesystem.test.ts src/tests/workflow-execution-filesystem.test.ts src/tests/workflow-recordings-http.test.ts` from the monorepo root
 - Full API suite: `yarn workspace @valerypopoff/rivet-studio-server-api run test`
 - Repo structure guard: `yarn studio-server:verify:repo-structure`
 

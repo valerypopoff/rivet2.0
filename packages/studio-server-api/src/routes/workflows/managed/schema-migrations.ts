@@ -573,7 +573,7 @@ async function assertMigrationTableExists(client: PoolClient): Promise<void> {
 
   if (!result.rows[0]?.object_name) {
     throw new ManagedWorkflowSchemaCompatibilityError(
-      `Managed workflow schema metadata is missing. Run "npm run workflow-schema:migrate" before starting verify-only API workloads.`,
+      `Managed workflow schema metadata is missing. Run "yarn studio-server:workflow-schema:migrate" before starting verify-only API workloads.`,
     );
   }
 }
@@ -940,7 +940,7 @@ async function runManagedWorkflowSchema(
 
     if (mode === 'verify' && currentVersion !== CURRENT_MANAGED_WORKFLOW_SCHEMA_VERSION) {
       throw new ManagedWorkflowSchemaCompatibilityError(
-        `Managed workflow schema is at version ${currentVersion}; this server requires version ${CURRENT_MANAGED_WORKFLOW_SCHEMA_VERSION}. Run "npm run workflow-schema:migrate" before starting verify-only API workloads.`,
+        `Managed workflow schema is at version ${currentVersion}; this server requires version ${CURRENT_MANAGED_WORKFLOW_SCHEMA_VERSION}. Run "yarn studio-server:workflow-schema:migrate" before starting verify-only API workloads.`,
       );
     }
 

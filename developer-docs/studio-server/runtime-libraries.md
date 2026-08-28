@@ -273,6 +273,11 @@ Install and remove both rebuild a complete candidate release:
 8. Activate the new release.
 9. Update the local `current/` cache and `manifest.json`.
 
+This npm invocation is intentionally isolated from monorepo dependency
+management. It installs a user-selected package set into a generated runtime
+directory; repository packages continue to use only the root Yarn workspace
+and immutable lockfile.
+
 If activation fails after moving the previous `current/` aside, the runtime-library backend restores the backup release.
 
 ## Resolution behavior
@@ -282,7 +287,7 @@ Both execution paths resolve managed libraries from `current/node_modules`:
 - the API uses `ManagedCodeRunner`
 - the production and local-development executor images set `RIVET_CODE_RUNNER_REQUIRE_ROOT` to `.../current/node_modules` and rely on Rivet 2.0's app-executor `CodeRunner` seam instead of patching Rivet source; this keeps `require('package-name')` in editor Node runs pointed at the same UI-installed libraries as headless endpoint runs
 - the shared proxy bootstrap also applies UI-managed Node executor proxy settings before installing Undici's proxy dispatcher: it clears process proxy env first; API processes use the active settings repository for headless execution, while the editor executor reads the pod-local `settings/node-executor-proxy.json` compatibility projection from its desktop-style app-data mount
-- the API image links `@valerypopoff/rivet2-node`, `@valerypopoff/rivet2-core`, and Rivet 2's `@rivet2/*` runtime aliases to the built embedded `rivet/` packages before compiling the API, so hosted endpoint execution and editor-side execution use the same Rivet 2.0 runtime behavior
+- the API image installs the root workspace graph with the `node-modules` linker and builds the shared Rivet runtime packages from the same monorepo revision before compiling the API, so hosted endpoint execution and editor-side execution use the same Rivet behavior
 
 That means newly activated libraries take effect on the next workflow execution without restarting the API container.
 In `managed` mode the executor bootstrap now reconciles the same active release into its own local `current/` cache before code-node `require()` resolution, so it no longer depends on a shared authoritative runtime-library mount.

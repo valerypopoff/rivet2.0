@@ -106,7 +106,7 @@ test('hosted Vite config mirrors upstream browser dependencies with provider sub
   assert.ok(viteConfig.includes("resolveWrapperPackageFile('@gentrace/core', '$1')"));
 });
 
-test('hosted Vite config resolves vendored Zod imports to the V4 API surface', () => {
+test('hosted Vite config resolves workspace-source Zod imports to the V4 API surface', () => {
   const zodAlias = createBrowserSubpathAliases(resolve('/repo/packages/studio-server-web')).find((alias) => alias.find.test('zod'));
 
   assert.match(zodAlias?.replacement.replace(/\\/g, '/') ?? '', /\/node_modules\/zod\/v4\/index\.js$/);
