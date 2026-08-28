@@ -108,6 +108,10 @@ async function openExecutorSocket(baseUrl, cookie) {
   });
 }
 
+export function createCandidateWorkflowRequestBody() {
+  return JSON.stringify('candidate-ok');
+}
+
 export function extractCandidateWorkflowValue(result) {
   return result?.value?.type === 'any' ? result.value.value : result;
 }
@@ -217,7 +221,7 @@ async function main() {
     const execution = await request(baseUrl, '/workflows/candidate-smoke', {
       method: 'POST',
       headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ input: 'candidate-ok' }),
+      body: createCandidateWorkflowRequestBody(),
       timeoutMs: 60_000,
     });
     const executionBody = await execution.json();
@@ -229,11 +233,17 @@ async function main() {
       '[candidate-image-smoke] Candidate images passed authentication, routing, executor, and workflow execution checks.',
     );
   } catch (error) {
+    console.error(
+      `[candidate-image-smoke] Failure before cleanup: ${error instanceof Error ? error.stack ?? error.message : String(error)}`,
+    );
     await run('docker', [...composeArgs, 'ps', '-a'], { env, allowFailure: true });
     await run('docker', [...composeArgs, 'logs', '--no-color', '--tail', '300'], { env, allowFailure: true });
     throw error;
   } finally {
-    await run('docker', [...composeArgs, 'down', '--volumes', '--remove-orphans'], { env, allowFailure: true });
+    await run('docker', [...composeArgs, 'down', '--timeout', '5', '--volumes', '--remove-orphans'], {
+      env,
+      allowFailure: true,
+    });
     await fs.rm(tempRoot, { recursive: true, force: true }).catch(() => {});
   }
 }

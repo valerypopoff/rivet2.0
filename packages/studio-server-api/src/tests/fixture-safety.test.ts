@@ -95,6 +95,11 @@ test('managed Kubernetes release gate fixture deserializes its runtime environme
   const mainGraph = project.graphs[mainGraphId];
   assert.ok(mainGraph, 'fixture main graph must exist');
 
+  const graphInputs = mainGraph.nodes.filter((node) => node.type === 'graphInput');
+  assert.equal(graphInputs.length, 1, 'fixture must have exactly one direct endpoint Graph Input');
+  const graphInputData = graphInputs[0]?.data as { id?: unknown; dataType?: unknown } | undefined;
+  assert.equal(graphInputData?.id, 'input');
+  assert.equal(graphInputData?.dataType, 'string');
   const environmentNode = mainGraph.nodes.find((node) => node.id === 'environment-node');
   assert.equal(environmentNode?.type, 'code');
   const code = (environmentNode?.data as { code?: unknown } | undefined)?.code;
