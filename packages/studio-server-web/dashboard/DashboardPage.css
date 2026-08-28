@@ -1,0 +1,202 @@
+.dashboard-page {
+  position: relative;
+  width: 100vw;
+  height: 100vh;
+  overflow: hidden;
+  display: flex;
+}
+
+.dashboard-page .dashboard-sidebar {
+  position: relative;
+  flex: 0 0 var(--workflow-dashboard-sidebar-width);
+  width: var(--workflow-dashboard-sidebar-width);
+  height: 100vh;
+  box-sizing: border-box;
+  background: var(--grey-darkest);
+  border-right: 1px solid var(--grey);
+  min-width: 0;
+  overflow: hidden;
+  transition:
+    flex-basis 180ms ease,
+    width 180ms ease;
+}
+
+.dashboard-page .dashboard-sidebar.dashboard-sidebar-resizing {
+  transition: none;
+}
+
+.dashboard-page .dashboard-sidebar.dashboard-sidebar-collapsed {
+  border-right: 0;
+  box-shadow: inset -1px 0 0 var(--grey);
+}
+
+.dashboard-page .dashboard-sidebar-resizer {
+  position: absolute;
+  top: 0;
+  left: calc(var(--workflow-dashboard-sidebar-width) - 2px);
+  width: 16px;
+  height: 100%;
+  cursor: col-resize;
+  touch-action: none;
+  user-select: none;
+  z-index: 6500;
+}
+
+.dashboard-page .dashboard-sidebar-resizer::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 1px;
+  width: 2px;
+  background: transparent;
+}
+
+.dashboard-page .dashboard-sidebar-resizer:hover::after,
+.dashboard-page.dashboard-page-resizing .dashboard-sidebar-resizer::after {
+  background: rgba(255, 255, 255, 0.16);
+}
+
+.dashboard-page.dashboard-page-resizing,
+.dashboard-page.dashboard-page-resizing * {
+  cursor: col-resize !important;
+  user-select: none;
+}
+
+.dashboard-page .dashboard-editor-frame {
+  flex: 1;
+  border: 0;
+  outline: 0 solid transparent;
+  outline-offset: 0;
+  box-shadow: none;
+  width: 0;
+  height: 100vh;
+}
+
+.dashboard-page .dashboard-editor-frame:focus,
+.dashboard-page .dashboard-editor-frame:focus-visible {
+  outline: 0 solid transparent;
+  outline-offset: 0;
+  box-shadow: none;
+}
+
+.dashboard-page .dashboard-editor-frame.dashboard-editor-frame-resizing {
+  pointer-events: none;
+}
+
+.dashboard-page .dashboard-editor-frame.dashboard-editor-frame-hidden {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.dashboard-page .dashboard-main {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  height: 100vh;
+  background: var(--grey-darker);
+}
+
+.dashboard-page .dashboard-editor-frame {
+  width: 100%;
+}
+
+.dashboard-page .dashboard-empty-state {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 32px;
+  color: var(--grey-light);
+  text-align: center;
+  background: var(--grey-darker);
+}
+
+.dashboard-page .dashboard-empty-state-message {
+  max-width: 420px;
+  font-size: 14px;
+  line-height: 1.6;
+}
+
+.dashboard-page .dashboard-app-loading {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  padding: 32px;
+  color: var(--grey-lightest);
+  text-align: center;
+  background: rgba(13, 17, 23, 0.9);
+  z-index: 500;
+  pointer-events: all;
+}
+
+.dashboard-page .dashboard-editor-loading-spinner {
+  width: 28px;
+  height: 28px;
+  border-radius: 999px;
+  border: 3px solid rgba(255, 255, 255, 0.18);
+  border-top-color: var(--grey-lightest);
+  animation: dashboard-editor-spinner 900ms linear infinite;
+}
+
+.dashboard-page .dashboard-editor-loading-message {
+  max-width: 420px;
+  font-size: 14px;
+  line-height: 1.6;
+}
+
+@keyframes dashboard-editor-spinner {
+  from {
+    transform: rotate(0deg);
+  }
+
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.Toastify__toast-container {
+  z-index: 7000;
+}
+
+.Toastify__toast-container--bottom-center {
+  left: 50%;
+  transform: translateX(-50%);
+  width: auto;
+  min-width: 0;
+  padding: 0;
+  bottom: 20px;
+}
+
+.dashboard-toast {
+  min-height: 0;
+  margin: 0;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 10px;
+  background: #1f1f22;
+  color: var(--grey-lightest);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.35);
+  padding: 0;
+}
+
+.dashboard-toast-body {
+  margin: 0;
+  padding: 10px 14px;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.4;
+  text-align: center;
+}
+
+.dashboard-toast-success {
+  border-color: rgba(126, 226, 148, 0.45);
+}
+
+.dashboard-toast-error {
+  border-color: rgba(255, 107, 122, 0.45);
+}

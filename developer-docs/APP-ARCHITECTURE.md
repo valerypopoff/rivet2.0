@@ -1871,14 +1871,13 @@ Current boundary expectation:
 
 ### Hosted/wrapper embedding seam
 
-Hosted applications that embed Rivet's editor from source should treat their
-local `rivet/` checkout as the source of truth and import the host seam directly
-from that checkout instead of depending on public npm packages. For a wrapper
-repo that vendors Rivet at `wrapper-repo/rivet`, the intended shape is:
+Hosted applications in this monorepo should import the host seam from the app
+workspace rather than private editor internals. From a sibling workspace under
+`packages/`, the intended shape is:
 
 ```ts
-import { RivetAppHost } from '../rivet/packages/app/src/host';
-import '../rivet/packages/app/src/host.css';
+import { RivetAppHost } from '../app/src/host';
+import '../app/src/host.css';
 ```
 
 The host style entrypoint owns the full-viewport shell contract. After

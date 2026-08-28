@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "rivet.executionServiceName" . }}
+  labels:
+    {{- include "rivet.labels" . | nindent 4 }}
+    app.kubernetes.io/component: execution
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "rivet.componentLabels" (dict "root" . "component" "execution") | nindent 4 }}
+  ports:
+    - name: http
+      port: {{ .Values.service.execution.port }}
+      targetPort: api-http

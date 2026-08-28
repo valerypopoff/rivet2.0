@@ -10,7 +10,7 @@ You create `.rivet-project` files by placing nodes on a canvas, connecting them 
 
 Rivet is built for creating AI workflows, but non-AI workflows work well too. You can build workflows without writing code at all, or use special code nodes when a particular operation is easier to express in JavaScript. That makes Rivet a low-code tool: visual by default, code-friendly when you want it.
 
-Rivet can be used for quick experiments and for production-ready workflows that power high-load products and features. It can also run as a self-hosted web app through [Rivet Studio Server](https://github.com/valerypopoff/Rivet-Studio-Server).
+Rivet can be used for quick experiments and for production-ready workflows that power high-load products and features. It can also run as a self-hosted web app through [Rivet Studio Server](https://github.com/valerypopoff/rivet2.0/tree/develop/deploy/studio-server).
 
 This guide is written for people using the Rivet desktop app. If you are integrating Rivet into another TypeScript, JavaScript, server, or wrapper application, start with the [Rivet API Reference](/api-reference).
 

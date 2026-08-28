@@ -219,6 +219,10 @@ and removing one requires removing its stale allowlist entry. `.skip` remains a
 visible review queue because several parked runtime optimizations intentionally keep
 characterization cases beside the active suite.
 
+The Studio Server monorepo import added its existing source-contract tests to this
+same shrinking baseline. They are migration debt, not precedent for new static tests;
+remove each entry when its contract moves behind an observable owner seam.
+
 `check-ai-runtime-boundaries.mjs` prevents Generate using AI and the graph builder
 from regaining legacy Chat/Azure endpoint seams. It also keeps the selectable
 legacy Graph Builder on `runLegacyGraphBuilderDraft` plus the atomic editor
@@ -571,6 +575,12 @@ name alone. The artifact helper records the resolved revision in
 Set `RIVET_SOURCE_REF=<branch-or-tag>` when the artifact manifest should record
 the configured source ref separately from the resolved revision.
 
+Studio Server images use the monorepo root as their Docker build context. Keep
+the root `.dockerignore` aligned with that boundary: local Yarn PnP state,
+Rust/Tauri targets, desktop sidecars, browser-test artifacts, and existing build
+outputs are never image inputs. The checked-in Yarn cache, Yarn release, patches,
+workspace manifests, and package source remain available to immutable installs.
+
 For cache-safe dependency install layers, copy only dependency metadata before
 `yarn install`:
 
@@ -688,6 +698,14 @@ resolution with `node .yarn/releases/yarn-4.17.1.cjs up -R <package>` instead of
 adding an exception. Commit the resulting `yarn.lock`, `.pnp.cjs`, and
 replacement `.yarn/cache` archive together so zero-install CI resolves the same
 patched dependency as local development.
+
+When a Studio Server workspace bundles a Rivet dependency that is also pinned by
+Rivet Core, use Core's exact tested version rather than a wider caret range. A
+separate range can silently select a different AI SDK adapter and introduce a
+second runtime dependency chain; this happened with the OpenAI-compatible
+adapter and its vulnerable Undici 5 dependency. Treat intentional adapter
+upgrades as coordinated Core-and-host changes with their own compatibility
+verification.
 
 For vulnerable descriptors that multiple upstream tools still constrain, a root
 `resolutions` override may be the safer refresh mechanism. Pin the reviewed

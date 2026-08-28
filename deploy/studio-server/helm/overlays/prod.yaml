@@ -1,0 +1,76 @@
+ingress:
+  enabled: true
+  className: nginx
+  host: rivet.example.com
+  externalDNSHostname: rivet.example.com
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-body-size: 100m
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "86400"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "86400"
+
+vault:
+  enabled: true
+  annotations: {}
+  role: rivet-prod
+  secretPath: secret/data/rivet/prod/dotenv
+  dotenvTemplate: |
+    {{- with secret "secret/data/rivet/prod/dotenv" -}}
+    {{- range $key, $value := .Data.data }}
+    {{ $key }}={{ $value | toJSON }}
+    {{- end }}
+    {{- end }}
+
+workflowStorage:
+  backend: managed
+
+runtimeLibraries:
+  backend: managed
+  cache:
+    enabled: false
+
+postgres:
+  mode: managed
+  maxConnections: 200
+  reservedConnections: 30
+  poolMaxPerApiPod: 10
+  host: postgres-prod.example.internal
+  port: 5432
+  database: rivet
+  username: rivet
+  passwordSecretName: rivet-postgres
+  sslMode: require
+
+objectStorage:
+  endpoint: https://s3.amazonaws.com
+  bucket: rivet-prod
+  region: us-east-1
+  prefix: workflows/
+  accessKeySecretName: rivet-object-storage
+  secretKeySecretName: rivet-object-storage
+  forcePathStyle: false
+
+
+auth:
+  keySecretName: rivet-shared-key
+
+replicaCount:
+  proxy: 2
+  web: 1
+  backend: 1
+  execution: 2
+
+autoscaling:
+  proxy:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 5
+    targetCPUUtilizationPercentage: 75
+  web:
+    enabled: false
+  backend:
+    enabled: false
+  execution:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 10
+    targetCPUUtilizationPercentage: 75

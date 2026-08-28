@@ -140,9 +140,8 @@ The Rivet Studio Server landing section is a factual product summary rather than
 a simulated server card. Its fact blocks cover the browser editor, server-owned
 project library, UI publication of workflows and web apps, Remote Debugger,
 recording replay, and run statistics. Keep that copy and its external link
-synchronized with the `develop-rivet2` branch of the official
-`Rivet-Studio-Server` repository; the repository's default branch describes the
-earlier server generation and does not contain every Rivet 2 surface. Remote
+synchronized with the Studio Server packages and deployment documentation on
+the `develop` branch of this monorepo. Remote
 debugging is described for latest server runs; published executions are
 represented through retained recordings instead of promising that every
 published run can attach live.

@@ -1,0 +1,308 @@
+# Kubernetes Managed Mode Audit
+
+- Audit date: 2026-08-26
+- Scope: managed storage and managed PostgreSQL on Kubernetes
+- Evidence basis: current repository source, Helm templates, contract tests, a disposable local PostgreSQL concurrency check, and developer documentation
+- Confidence boundary: source/static contracts plus a real single-host PostgreSQL check; no live multi-node Kubernetes cluster was exercised for this audit
+
+## Executive Summary
+
+The repository has substantial managed-mode support: workflow revisions and publication metadata use PostgreSQL, large workflow and recording artifacts use object storage, evaluation history has a PostgreSQL implementation, runtime-library archives use object storage, and web-app WebSocket runs have PostgreSQL-backed ownership and recovery support. Those are confirmed capabilities, not assumptions.
+
+Problems 1 through 4 from the original audit are now implemented:
+
+1. Workflow schema initialization is serialized, versioned, and owned by a Helm migration Job in Kubernetes.
+2. App Settings authority has moved from a shared RWX filesystem to encrypted, revisioned PostgreSQL rows. Runtime pods use only disposable local compatibility projections, and the proxy consumes an authenticated non-secret API snapshot.
+3. API lifecycle now separates liveness from dependency readiness, drains accepted work within an aligned termination budget, and gives replicated tiers explicit rollout, disruption, and placement policy.
+4. The release gate combines static chart validation with a disposable Kind managed-mode deployment using immutable candidate image digests before image promotion. Its release mode now covers WebSocket owner loss/reconnect, App Settings key rotation, and PostgreSQL/MinIO recovery; a separate protected provider-staging runner covers HTTPS ingress, provider-aware outage manifests, and legacy rollback.
+
+Problem 4 is now implemented as a Kind gate plus a protected manual provider-staging gate in source and GitHub Actions configuration. This audit has not itself observed a completed remote CI or provider-staging execution. The Kind gate supplies repeatable runtime evidence for the managed stack; the provider runner is ready to collect the remaining ingress, TLS, DNS, managed-Postgres, and object-store evidence after staging secrets/configuration are installed. Problem 3 deliberately retains a singleton control-plane boundary until latest-debugger and co-located editor-executor session ownership become distributed or stably routed.
+
+## Evidence Standard
+
+Each problem below separates four kinds of information:
+
+- **Observed evidence**: behavior directly visible in current code, templates, tests, or documentation.
+- **Risk inference**: a failure mode that follows from the observed design. It is not presented as a reproduced production incident unless explicitly stated.
+- **Suggested plan**: an implementation sequence with migration and acceptance criteria.
+- **Risks of fixing**: ways the remediation itself could cause regressions or operational problems.
+
+Line links may move as the repository changes. Symbol and file names are included so evidence remains findable after line drift.
+
+## Confirmed Managed Capabilities
+
+- Managed workflow storage persists projects, drafts, published revisions, endpoint mappings, and web-app publications in PostgreSQL and stores project/dataset payloads through the configured artifact store. Evidence: [`managed/context.ts`](../../../packages/studio-server-api/src/routes/workflows/managed/context.ts), [`managed/schema.ts`](../../../packages/studio-server-api/src/routes/workflows/managed/schema.ts), and [`managed/revisions.ts`](../../../packages/studio-server-api/src/routes/workflows/managed/revisions.ts).
+- Managed run recordings keep searchable metadata in PostgreSQL and recording/replay payloads in object storage. Evidence: [`managed/recordings.ts`](../../../packages/studio-server-api/src/routes/workflows/managed/recordings.ts) and the recording blob-key fields in [`managed/schema.ts`](../../../packages/studio-server-api/src/routes/workflows/managed/schema.ts).
+- Managed evaluation definitions and run history use the PostgreSQL evaluation store. Datasets, suites, run payloads, and recording references are JSON/columns in PostgreSQL; this audit does not assume evaluation payloads are separately written to object storage. Evidence: [`evaluation-runs/store.ts`](../../../packages/studio-server-api/src/evaluation-runs/store.ts) and [`evaluation-runs/managed-store.ts`](../../../packages/studio-server-api/src/evaluation-runs/managed-store.ts).
+- Managed runtime libraries keep metadata in PostgreSQL, archives in object storage, and extracted packages in a pod-local cache. Their schema initializer already uses a PostgreSQL advisory lock because concurrent DDL can deadlock. Evidence: [`runtime-libraries/managed/schema.ts`](../../../packages/studio-server-api/src/runtime-libraries/managed/schema.ts), [`runtime-libraries/managed/blob-store.ts`](../../../packages/studio-server-api/src/runtime-libraries/managed/blob-store.ts), and [`runtime-libraries/managed/local-cache.ts`](../../../packages/studio-server-api/src/runtime-libraries/managed/local-cache.ts).
+- LLM profile health state uses PostgreSQL locking rather than process-local state in managed mode. Evidence: [`llm-profile-health/managed-store.ts`](../../../packages/studio-server-api/src/llm-profile-health/managed-store.ts).
+- Rivet web-app WebSocket runs use a PostgreSQL run store, lease ownership, coordinator notifications with polling fallback, a stable pod host identity, and interrupted-run recovery. Evidence: [`web-app-action-websocket.ts`](../../../packages/studio-server-api/src/web-app-action-websocket.ts), [`web-app-action-run-store.ts`](../../../packages/studio-server-api/src/web-app-action-run-store.ts), and [`web-app-action-coordinator.ts`](../../../packages/studio-server-api/src/web-app-action-coordinator.ts).
+
+These implementations make managed mode credible. The problems below concern orchestration and shared-state boundaries around those stores.
+
+## Resolved Problem 1: Serialize and Version Workflow Schema Initialization
+
+**Implementation status (2026-08-26): resolved in code, static Kubernetes contracts, focused fault tests, and a disposable PostgreSQL 16 concurrency check. No live Kubernetes rollout was performed.**
+
+The wrapper now routes every managed workflow schema operation through [`schema-migrations.ts`](../../../packages/studio-server-api/src/routes/workflows/managed/schema-migrations.ts). Migration mode uses one checked-out PostgreSQL client, one transaction, a dedicated `pg_advisory_xact_lock`, bounded lock/statement timeouts, and migration-specific retries limited to PostgreSQL `40001`, `40P01`, and `55P03`; callers retain the existing bounded connection-error retry. The `managed_workflow_schema_migrations` ledger records version, name, SHA-256 checksum, application version, and application time. Existing unversioned databases rerun the idempotent baseline and are marked current only after every migration-1 table column type/nullability and required default, table DML privilege and row-level-security state, exact operational-index signature and valid/ready state, semantic and validated constraint with usable primary/unique backing indexes, and the schema-qualified folder-move function's body/language/volatility/security/result signature plus API-role execute privilege validate in the same transaction. Logging callbacks are isolated from migration control flow, so logger failures cannot rewrite committed, failed, or retried database outcomes.
+
+The explicit `workflow-schema:migrate` and `workflow-schema:verify` commands use that same library. The Helm chart runs the candidate API image in a `pre-install,pre-upgrade` migration Job, while backend and execution API pods are forced into verify-only mode after Vault dotenv loading. The Job reuses the chart's pre-populate-only Vault contract, avoiding an injected sidecar that would keep a one-shot hook alive. It bootstraps candidate deployment storage settings in an isolated `emptyDir` app-data root instead of mounting the shared claim, so old serving pods cannot observe candidate database or object-storage settings during a failed or still-pending upgrade. Docker retains automatic migration mode by default. Evidence: [`workflow-schema-migration-job.yaml`](../../../deploy/studio-server/helm/templates/workflow-schema-migration-job.yaml), [`_helpers.tpl`](../../../deploy/studio-server/helm/templates/_helpers.tpl), [`_env.tpl`](../../../deploy/studio-server/helm/templates/_env.tpl), [`deploy/studio-server/images/api/entrypoint.sh`](../../../deploy/studio-server/images/api/entrypoint.sh), and [`managed-workflow-schema-migrations.test.ts`](../../../packages/studio-server-api/src/tests/managed-workflow-schema-migrations.test.ts).
+
+The migration Job currently uses the chart's normal workload identity and configured managed-database credentials. This change did **not** add a dedicated Kubernetes service account or a narrower database migrator role. Those remain optional defense-in-depth work and must be designed together with the serving role's verify-time catalog access.
+
+### Pre-Fix Evidence
+
+1. Managed workflow initialization calls the complete `MANAGED_WORKFLOW_SCHEMA_SQL` string through a process-local `schemaReadyPromise`. Evidence: `ensureManagedWorkflowSchema()` in [`managed/context.ts`](../../../packages/studio-server-api/src/routes/workflows/managed/context.ts).
+2. That SQL contains both idempotent table/index statements and database-global DDL such as `DROP FUNCTION IF EXISTS` followed by `CREATE FUNCTION`. Evidence: [`managed/schema.ts`](../../../packages/studio-server-api/src/routes/workflows/managed/schema.ts).
+3. Every API process that initializes managed workflow storage can enter this initializer. The promise deduplicates calls only inside one Node process; it does not coordinate pods. Evidence: the module-local promise in [`managed/context.ts`](../../../packages/studio-server-api/src/routes/workflows/managed/context.ts) and startup initialization in [`server.ts`](../../../packages/studio-server-api/src/server.ts).
+4. The shared database helper retries connection/network failures only. Its retryable-code list includes `ECONNREFUSED`, `ECONNRESET`, `ETIMEDOUT`, `EHOSTUNREACH`, and `ENETUNREACH`; it does not include PostgreSQL deadlock, serialization, or lock-timeout codes such as `40P01`, `40001`, or `55P03`. Evidence: [`managed/db.ts`](../../../packages/studio-server-api/src/routes/workflows/managed/db.ts).
+5. The runtime-library subsystem already documents this class of issue and protects its own DDL with a PostgreSQL advisory lock. Evidence: `ensureManagedRuntimeLibrariesSchema()` and its advisory-lock implementation in [`runtime-libraries/managed/schema.ts`](../../../packages/studio-server-api/src/runtime-libraries/managed/schema.ts), plus the first-boot note in [`docs/kubernetes.md`](../kubernetes.md).
+
+### Pre-Fix Risk Inference
+
+If two backend or execution pods initialize the workflow schema concurrently, PostgreSQL may serialize the statements, block one initializer, or raise a DDL conflict/deadlock. The current code does not guarantee failure, but it also does not establish cross-pod serialization. Because startup treats initialization failure as fatal, a transient conflict can make a pod restart even when the schema itself is valid.
+
+Repeatedly running a monolithic current-schema script also provides no durable record of which schema version was applied. That makes mixed-version rollouts, rollback compatibility, and future non-idempotent migrations harder to reason about.
+
+### Implemented Design
+
+#### Transaction and Lock Ownership
+
+1. `createManagedWorkflowContext()` no longer executes the schema SQL directly. It selects `migrate` or `verify` and calls the shared migration library.
+2. Each attempt checks out one PostgreSQL client, starts one transaction, applies bounded lock and statement timeouts, and acquires the repository-specific transaction advisory lock before creating the ledger or executing workflow DDL.
+3. Migration retries are limited to `40001`, `40P01`, and `55P03`, with bounded backoff and a new transaction per attempt. Existing connection-level retries remain outside the migration library.
+4. Commit, rollback, uncertain-client disposal, and logger-failure paths have focused regression coverage. Logging cannot change a migration's database result.
+
+#### Ledger and Compatibility Contract
+
+1. Migration 1 wraps the previous full managed-workflow schema as an immutable checksummed baseline. New changes must be added as ordered migrations rather than modifying the released SQL.
+2. The ledger records version, name, checksum, application version, and application time.
+3. Baseline and verify mode check all 125 required columns, 34 required defaults, 20 operational indexes, and 35 semantic constraints. Index checks include relation ownership, access method, uniqueness, expressions, sort/null options, predicates, and valid/ready state. Constraint checks include normalized definition, validation state, and usable primary/unique backing indexes.
+4. Required data tables must be ordinary usable relations with row-level security disabled and `SELECT`, `INSERT`, `UPDATE`, and `DELETE` available to the current API role.
+5. The folder-move function is resolved by schema and argument types, then checked for stored-body checksum, language, volatility, security-definer state, result type, and execute privilege.
+
+#### Deployment Ownership
+
+1. Root and API-package commands expose the same explicit `workflow-schema:migrate` and `workflow-schema:verify` entrypoint.
+2. Docker and simple single-process managed deployments retain automatic migration mode.
+3. Helm runs the candidate API image as a `pre-install,pre-upgrade` hook Job. The Job consumes chart/Vault database settings from an isolated `emptyDir` app-data root and does not mutate settings observed by old pods.
+4. Backend and execution API workloads receive a chart-owned verify-only setting. The API entrypoint reapplies it after Vault dotenv loading so a stale or user-controlled dotenv value cannot turn serving replicas back into schema writers.
+5. Disabling the chart Job requires an explicit external-migration acknowledgement; serving workloads remain verify-only and therefore fail closed when the external step is missing.
+
+#### Deliberately Deferred
+
+1. No dedicated migrator Kubernetes service account or separate database role was introduced.
+2. No non-transactional or destructive migration exists yet. Future schema work still needs expand-and-contract design and a new migration version.
+3. No live Minikube/Kind or production-cluster rollout was run as part of this implementation.
+
+### Residual Risks and Guardrails
+
+- A successful pre-upgrade migration remains applied if a later Helm rollout step fails. Every future migration must therefore be backward-compatible with the old serving image until rollout completion; use expand-and-contract changes.
+- Hook deletion, retry, Vault injection, and provider-specific Job scheduling are only statically verified. Migration ids/checksums make database retries safe, but a live cluster gate is still needed to prove delivery behavior.
+- The migrator and serving processes currently share database credentials. Introducing separate roles later must preserve migrate-time DDL rights and serving-role catalog reads plus table/function runtime privileges.
+- Rolling back to an older image that predates verify-only ownership may reintroduce startup DDL behavior. Rollback compatibility must be evaluated per release rather than assumed.
+- Exact catalog compatibility was exercised on PostgreSQL 16. Other supported managed PostgreSQL versions still need release-environment coverage.
+- Destructive or non-transactional migrations are not covered by the current baseline-only implementation. Add explicit resumability and mixed-version tests before introducing either.
+
+### Coverage and Remaining Acceptance Criteria
+
+- Automated fake-PostgreSQL tests start four contenders; exactly one applies migration 1 and all four observe version 1.
+- A disposable PostgreSQL 16 check started four real connection pools concurrently; exactly one applied migration 1, the other contenders waited and observed version 1, and a separate verify-only connection accepted the resulting schema.
+- Automated tests cover a fresh database, the only pre-ledger baseline, missing metadata, checksum mismatch, future versions, missing or malformed objects, all required column defaults, table DML privileges, row-level-security drift, exact index and constraint definitions, invalid/unready indexes, unvalidated constraints, folder-function body drift, logger isolation, transactional rollback, and clean retry.
+- Helm contracts prove one pre-install/pre-upgrade Job, isolated candidate settings before managed settings import, pre-populate-only Vault injection, verify-only backend/execution pods, and fail-closed behavior when migration ownership is delegated externally.
+- The Kind release mode now exercises pod lifecycle, WebSocket owner interruption/replay, and local PostgreSQL/MinIO recovery. It cannot prove cloud-provider transport or mixed-image behavior; the protected provider gate must be run against the production-equivalent staging environment to collect that evidence.
+
+## Resolved Problem 2: Remove the Shared RWX App-Data Volume as a Distributed State Boundary
+
+**Implementation status (2026-08-26): resolved in code, focused fault tests, full repository verification, and static Helm render/contracts. No live multi-node Kubernetes rollout was performed.**
+
+### Implemented Evidence
+
+1. Managed workflow migration 2 creates `app_settings` with a domain key, monotonic revision, payload schema version, AES-GCM ciphertext/IV/authentication tag, encryption key id, legacy source hash, and update time. Its table, columns, default, primary key, and field-shape checks are part of verify-mode's required manifest. The migration is immutable and checksummed with the rest of the managed schema. Evidence: [`schema-migrations.ts`](../../../packages/studio-server-api/src/routes/workflows/managed/schema-migrations.ts).
+2. `VersionedSettingsRepository` now selects a file backend for single-host compatibility or a PostgreSQL backend when `RIVET_APP_SETTINGS_BACKEND=postgres`. Managed writes use revision compare-and-swap; stale explicit revisions fail with `409`. Reads retain the existing immutable per-request snapshot contract. Evidence: [`settings-repository.ts`](../../../packages/studio-server-api/src/app-settings/settings-repository.ts) and [`middleware/app-settings-snapshot.ts`](../../../packages/studio-server-api/src/middleware/app-settings-snapshot.ts).
+3. Managed payloads are encrypted with AES-256-GCM and authenticated against the settings domain key and schema version, preventing ciphertext from being replayed as another domain/version. A dedicated primary key is preferred, `RIVET_KEY` is a compatibility fallback, and one previous key may decrypt old rows during rotation. A fallback-key read rewrites the row with the primary key. Missing key material fails explicitly instead of replacing settings with defaults. Evidence: [`managed-settings-crypto.ts`](../../../packages/studio-server-api/src/app-settings/managed-settings-crypto.ts) and [`managed-settings-store.ts`](../../../packages/studio-server-api/src/app-settings/managed-settings-store.ts).
+4. PostgreSQL `LISTEN`/`NOTIFY` accelerates cross-replica invalidation, while a five-second revision poll remains the durable convergence mechanism after listener disconnects or dropped notifications. Notification delivery is isolated from the already-committed compare-and-swap write, and a replica acknowledges a revision only after every matching repository refresh succeeds; failed refreshes therefore remain eligible for the next poll. Overlapping poll cycles are suppressed and shutdown waits for the active poll before closing the pool. Same-process backend initialization is promise-deduplicated, and settings-domain updates remain serialized per repository. Evidence: [`managed-settings-store.ts`](../../../packages/studio-server-api/src/app-settings/managed-settings-store.ts) and [`settings-repository.ts`](../../../packages/studio-server-api/src/app-settings/settings-repository.ts).
+5. The Helm migration Job deliberately runs workflow schema migration with `RIVET_APP_SETTINGS_BACKEND=file` before importing managed settings, because the database settings table does not exist before migration 2. Both phases reuse one rendered database credential set rather than declaring duplicate environment names. An optional legacy app-data claim is mounted only by that Job, read-only. Missing rows are seeded independently: a matching regular, valid legacy JSON file wins for that domain, while missing or unusable legacy entries preserve the candidate bootstrap/default. Imported rows retain a source hash and existing database rows always win. Evidence: [`workflow-schema-migration-job.yaml`](../../../deploy/studio-server/helm/templates/workflow-schema-migration-job.yaml), [`_env.tpl`](../../../deploy/studio-server/helm/templates/_env.tpl), [`import-managed-app-settings.ts`](../../../packages/studio-server-api/src/scripts/import-managed-app-settings.ts), and [`settings-repository.ts`](../../../packages/studio-server-api/src/app-settings/settings-repository.ts).
+6. Backend and execution workloads now use independent `emptyDir` app-data volumes. Init containers hydrate only deployment-storage and node-proxy compatibility files for consumers that still require local files. PostgreSQL remains authoritative, and repository subscriptions refresh those projections. Hosted package-plugin directories are explicitly reconstructible pod-local caches: both install and load routes ensure the package is ready under a per-package process lock, so consecutive browser requests remain correct when a Service sends them to different control replicas. Evidence: [`backend-statefulset.yaml`](../../../deploy/studio-server/helm/templates/backend-statefulset.yaml), [`execution-deployment.yaml`](../../../deploy/studio-server/helm/templates/execution-deployment.yaml), [`project-managed-app-settings.ts`](../../../packages/studio-server-api/src/scripts/project-managed-app-settings.ts), [`deployment-storage-settings.ts`](../../../packages/studio-server-api/src/deployment-storage-settings.ts), [`node-executor-proxy-settings.ts`](../../../packages/studio-server-api/src/node-executor-proxy-settings.ts), and [`plugin-installer.ts`](../../../packages/studio-server-api/src/routes/plugin-installer.ts).
+7. The proxy no longer mounts app data. It fetches a revisioned, deliberately non-secret snapshot from the control API through the existing `RIVET_KEY`-derived trusted-proxy credential. Fetch failure preserves the last valid include; startup fails if no valid initial snapshot is available; nginx reload still requires `nginx -t`. Evidence: [`proxy-settings-snapshot.ts`](../../../packages/studio-server-api/src/proxy-settings-snapshot.ts), [`app.ts`](../../../packages/studio-server-api/src/app.ts), [`proxy-deployment.yaml`](../../../deploy/studio-server/helm/templates/proxy-deployment.yaml), and [`normalize-workflow-paths.sh`](../../../deploy/studio-server/images/proxy/normalize-workflow-paths.sh).
+8. The chart rejects any Kubernetes settings backend other than PostgreSQL and no longer exposes `storage.appData`. The local Kubernetes launcher and overlays no longer create or require an app-data PVC. Evidence: [`validate-values.yaml`](../../../deploy/studio-server/helm/templates/validate-values.yaml), [`values.yaml`](../../../deploy/studio-server/helm/values.yaml), chart overlays, and [`kubernetes-launcher-config.mjs`](../../../deploy/studio-server/scripts/lib/kubernetes-launcher-config.mjs).
+
+### Resulting Guarantees
+
+- PostgreSQL is the only writable App Settings authority after cutover; there is no dual-write mode.
+- Two administrators cannot silently overwrite the same revision.
+- Each settings domain is pinned to the immutable snapshot captured at request start; a notification or concurrent save cannot change that domain midway through the request.
+- A dropped PostgreSQL notification can delay convergence by at most the polling interval under normal database availability; it cannot make stale cache state permanent.
+- Security-sensitive settings are encrypted before storage, and the proxy endpoint cannot return OAuth, environment, database, object-storage, or signing secrets.
+- Normal Kubernetes runtime no longer needs an RWX storage class for App Settings.
+- Docker and other single-host deployments retain the existing atomic JSON-file behavior.
+
+### Migration and Rollback Contract
+
+1. Back up PostgreSQL and keep the old app-data claim before upgrading.
+2. Set `appSettings.legacyImport.existingClaimName` only for the cutover release. The migration Job mounts it read-only and imports only absent rows.
+3. Verify the backend, execution replicas, proxy routes, OAuth, environment overlays, and executor proxy behavior before changing settings.
+4. Keep the legacy claim through the rollback window, then remove the chart value in a later release. Old images cannot see settings changed after PostgreSQL cutover, so rolling back after new settings writes requires an operator-approved restore/reconciliation plan.
+5. Key rotation requires two compatibility rollouts. First deploy every replica with the old key still primary and the new key supplied as the previous/secondary key, so every old-generation pod is replaced by a pod that can decrypt both keys. Then deploy the new key as primary and the old key as previous, wait for every replica to initialize every domain, and remove the old key only in a later rollout. Fallback-key reads rewrite rows with the local primary, so the second rolling overlap may produce extra revisions but remains decryptable. Back up database data and key material separately but restore them together.
+
+### Residual Risks and Follow-Up
+
+- PostgreSQL availability now gates uncached settings startup and updates. Existing in-process snapshots can serve active requests, but a fresh pod cannot safely invent defaults when the database or decryption key is unavailable.
+- Losing all valid encryption keys makes secret-bearing settings unrecoverable. Key backup and the two-rollout compatibility sequence are operational requirements, not optional hardening; skipping the first compatibility rollout can make new-key rows unreadable to old pods during a rolling update.
+- The proxy's last-known-good behavior protects an already-running pod, but a new proxy pod fails closed when it cannot obtain its first authenticated snapshot.
+- Pod-local projections are compatibility seams, not general caches. New consumers must use the typed repository or an authenticated narrow API rather than adding another file authority.
+- Static tests prove rendered topology and repository contracts. The release Kind gate now covers durable WebSocket interruption/replay and in-cluster key rotation/dependency recovery; provider ingress, key rotation, legacy import, and rollback remain operational acceptance until the protected staging gate has a successful recorded execution.
+
+### Automated Coverage
+
+- Settings tests cover one-time and partial legacy import, malformed/non-file fallback, database-wins semantics, compare-and-swap retry/conflict behavior, replica invalidation, notification-failure isolation, refresh acknowledgement/retry, immutable request snapshots, subscriber failure isolation, ciphertext/no-plaintext storage, domain/version authentication, fallback-key reads, and missing-key failure. Plugin tests cover deduplicated pod-local preparation and complete packages that intentionally skip dependency installation.
+- Managed schema tests cover migration 2's immutable checksum and complete table manifest alongside concurrent migration ownership.
+- API profile tests cover authentication and secret exclusion for the internal proxy snapshot.
+- Proxy image contracts cover API-snapshot polling plus the retained single-host file fallback.
+- Helm and launcher contracts prove no runtime shared app-data claim, pod-local projections, a proxy with no app-data mount, optional read-only legacy import, schema-before-settings migration ordering, and unique Rivet environment names in the migration Job.
+
+### Verification Record
+
+- `yarn studio-server:test` completed with 545 passing tests, zero failures, and two optional fixture skips. The command also completed the API build, web pure tests, style checks, repository-structure checks, and Kubernetes verification.
+- Focused managed-settings and plugin-cache regression tests passed, including committed-write notification failure, failed-refresh retry, and pod-local plugin preparation deduplication.
+- `yarn studio-server:verify:kubernetes` completed all Kubernetes contract tests plus Helm lint and local/production render checks.
+- `git diff --check` completed without whitespace errors. Line-ending conversion warnings on this Windows checkout are informational.
+- The static verification is supplemented by the committed Kind and provider-gate harnesses. A completed protected provider-stage run is still required before treating legacy import, external key rotation, proxy interruption, and rollback as certified operational behavior.
+
+## Resolved Problem 3: Strengthen Lifecycle, Readiness, and Replica Safety
+
+**Implementation status (2026-08-26): resolved for the supported singleton-control/scalable-execution topology in code, focused lifecycle tests, Compose validation, and static Helm render/contracts. Live multi-node disruption testing remains under Problem 4.**
+
+### Implemented Evidence
+
+1. The API now exposes separate health contracts through [`runtime-health.ts`](../../../packages/studio-server-api/src/runtime-health.ts): `/livez` is shallow process liveness, `/readyz` reports startup/drain state plus required dependency health, and `/healthz` remains a backward-compatible liveness alias. Readiness responses use stable, secret-free reason codes and `Cache-Control: no-store`; dependency errors are logged server-side rather than serialized into probe responses. Evidence: [`app.ts`](../../../packages/studio-server-api/src/app.ts) and [`runtime-health.test.ts`](../../../packages/studio-server-api/src/tests/runtime-health.test.ts).
+2. Health checks run in the background on a configurable interval and the HTTP probe reads cached frozen check results. Concurrent starts and refreshes are promise-deduplicated. Each wait has a strict timeout and abort signal: cooperative dependency checks release their resources immediately, while a dependency that ignores cancellation remains deduplicated until its separately bounded transport operation settles instead of starting a pileup. Draining or stopping aborts pending checks, stale results make readiness fail, and failure/recovery logs are transition-based. The defaults are five-second refresh, three-second timeout, and twenty-second stale threshold. Evidence: `RuntimeHealthController` and `getRuntimeHealthOptionsFromEnv()` in [`runtime-health.ts`](../../../packages/studio-server-api/src/runtime-health.ts).
+3. The required checks cover the App Settings repository, workflow storage, runtime libraries, and the web-app action gateway. Managed settings and web-app coordination verify PostgreSQL with `SELECT 1`; managed workflow and runtime-library storage verify PostgreSQL plus S3-compatible object storage with `HeadBucket`; filesystem checks verify the owned root/cache state. PostgreSQL health cancellation destroys the checked-out probe client, S3 health cancellation reaches the AWS request, managed PostgreSQL acquisition is capped at 10 seconds, and each managed S3 client owns a handler with a 10-second connection bound and 60-second idle socket bound. The gateway check also refuses readiness after it stops accepting new actions. Evidence: [`managed-health.ts`](../../../packages/studio-server-api/src/managed-health.ts), [`managed-settings-store.ts`](../../../packages/studio-server-api/src/app-settings/managed-settings-store.ts), [`storage-backend.ts`](../../../packages/studio-server-api/src/routes/workflows/storage-backend.ts), [`runtime-libraries/backend.ts`](../../../packages/studio-server-api/src/runtime-libraries/backend.ts), and [`web-app-action-websocket.ts`](../../../packages/studio-server-api/src/web-app-action-websocket.ts).
+4. Startup is cancellation-aware. App Settings, runtime-library reconciliation, workflow storage, WebSocket coordination, and the initial health refresh complete before the HTTP listener opens; the listener bind and bind failure are part of the awaited startup operation. A signal cannot let the initial health refresh reopen readiness, and draining aborts its provider checks. Resource cleanup is serialized and repeatable, so an initializer that settles after an earlier cleanup pass receives a second pass instead of leaking its pool, listener, or worker. Managed runtime-library initialization is stop-aware and waits for its in-flight initialization before final cache/pool disposal. Evidence: `startServer()`, `StartupCancelledError`, and `assertStartupActive()` in [`server.ts`](../../../packages/studio-server-api/src/server.ts), plus [`runtime-libraries/managed/backend.ts`](../../../packages/studio-server-api/src/runtime-libraries/managed/backend.ts).
+5. `SIGTERM`/`SIGINT` immediately changes readiness to draining, aborts pending health checks, and rejects new web-app actions. The API closes HTTP acceptance while allowing accepted HTTP connections and active web-app runs to finish until `RIVET_SHUTDOWN_GRACE_SECONDS` (default 120 seconds). Only work still active at the deadline is force-closed/interrupted; recorder persistence is flushed before managed storage/settings resources are disposed. Managed subsystems release reference-counted PostgreSQL pool leases, the shared pool closes after its final owner releases it, and managed workflow/runtime-library S3 clients each own and destroy their own handler/agent so temporary maintenance clients cannot tear down live backend sockets. The latest Remote Debugger now closes clients, closes its no-server WebSocket server, and detaches its HTTP upgrade listener. Evidence: `shutdown()` and `disposeResources()` in [`server.ts`](../../../packages/studio-server-api/src/server.ts), [`managed-postgres-pool.ts`](../../../packages/studio-server-api/src/managed-postgres-pool.ts), [`managed-health.ts`](../../../packages/studio-server-api/src/managed-health.ts), and [`latestWorkflowRemoteDebugger.ts`](../../../packages/studio-server-api/src/latestWorkflowRemoteDebugger.ts).
+6. Helm now renders startup, liveness, and readiness probes. API startup/liveness use `/livez`, readiness uses `/readyz`, and the co-located executor has corresponding TCP probes. Proxy and web also receive startup/liveness/readiness probes. Probe timing, cached health timing, application drain, pre-stop delay, and pod termination grace are explicit chart values with validation that preserves shutdown margin. The API entrypoint captures those chart-owned values before Vault dotenv loading and reapplies them afterward. Evidence: [`_pod.tpl`](../../../deploy/studio-server/helm/templates/_pod.tpl), [`values.yaml`](../../../deploy/studio-server/helm/values.yaml), and [`validate-values.yaml`](../../../deploy/studio-server/helm/templates/validate-values.yaml).
+7. Every workload has an explicit rolling-update strategy and preferred topology spread plus pod anti-affinity. Proxy and execution use zero unavailable/one surge by default. PodDisruptionBudgets are rendered only for tiers whose effective minimum replica count exceeds one; the singleton backend deliberately gets no PDB that would block voluntary node maintenance while pretending to provide HA. Evidence: the workload templates and [`disruption-budgets.yaml`](../../../deploy/studio-server/helm/templates/disruption-budgets.yaml).
+8. Docker Compose API healthchecks use `/readyz` and grant the API a 150-second stop grace period, leaving a 30-second finalization window after the default 120-second application drain. Both production and development Compose render successfully. Evidence: [`docker-compose.yml`](../../../deploy/studio-server/compose/docker-compose.yml), [`docker-compose.dev.yml`](../../../deploy/studio-server/compose/docker-compose.dev.yml), and [`proxy-image-contract.test.ts`](../../../packages/studio-server-api/src/tests/proxy-image-contract.test.ts).
+
+### Resulting Guarantees
+
+- A recoverable PostgreSQL or object-storage outage removes an affected API pod from service without asking Kubernetes to restart an otherwise live process.
+- Readiness is not a database/object-store transaction per kubelet request; probe pressure cannot amplify a provider outage.
+- Cold initialization is protected by startup probes, while permanent startup failures still hit a bounded failure threshold.
+- A terminating API stops advertising readiness and accepting new work, gives already accepted work a defined drain window, and records explicit interruption only when that window is exhausted.
+- Replicated proxy and execution tiers roll with no planned unavailability, receive preferred cross-node placement, and retain a disruption budget when their effective minimum scale is greater than one.
+- Docker uses the same readiness distinction and enough Compose stop grace to let the application execute its normal shutdown path.
+
+### Deliberately Retained Control-Plane Boundary
+
+`backend.replicaCount=1` remains a validated supported constraint. This is no longer justified by web-app action history: managed web-app run ownership, replay, and cancellation are PostgreSQL-backed and execution replicas scale safely. The remaining blockers are process-local latest-debugger and co-located editor-executor session routing:
+
+- `/ws/latest-debugger` terminates on one backend process and `maybeGetLatestWorkflowRemoteDebugger()` attaches latest executions to the debugger object in that same process.
+- `/ws/executor/internal` and `/ws/executor` terminate at the co-located executor selected through the singleton backend StatefulSet.
+- The backend Service and executor Service would select replicas independently if the count were raised, so accidental multi-replica deployment could split an editor/debugger session across owners.
+
+The chart therefore rejects backend scaling and backend HPA instead of exposing a topology that appears highly available but loses stateful sessions. Future backend HA should:
+
+1. Give latest-debugger and editor-executor sessions durable/distributed ownership, or route every related HTTP/WebSocket operation to one stable fenced owner.
+2. Define reconnect and takeover semantics, including fencing so a stale owner cannot emit after replacement.
+3. Exercise editor execution, latest workflow/web-app debugging, project save, settings update, and owner loss with at least two backend replicas.
+4. Remove the Helm singleton guard only after those tests pass.
+
+### Operational Risks and Tuning
+
+- Too-short dependency timeouts or stale thresholds can flap readiness during ordinary provider latency. Tune `lifecycle.health` from observed PostgreSQL/S3 latency, while keeping stale-after greater than refresh plus timeout.
+- A provider-wide outage can make every execution replica unready because those dependencies are genuinely required. Liveness remains healthy so recovery does not create a restart storm.
+- The default 120-second drain improves completion probability but lengthens a rollout or node drain when work is slow. Increase or decrease it together with `terminationGracePeriodSeconds`, never independently.
+- The five-second pre-stop delay is endpoint-propagation margin, not the drain mechanism. The application still marks itself draining on the subsequent termination signal.
+- A PDB can delay voluntary maintenance when capacity is low. It is intentionally omitted for singleton workloads and configurable for replicated tiers.
+- Preferred topology rules improve placement without making a small single-node rehearsal cluster unschedulable. Changing them to hard constraints requires matching cluster capacity.
+- Health check timeouts abort the supported PostgreSQL and S3 probe operations. PostgreSQL acquisition and S3 transport waits have longer fixed bounds than the default three-second health wait, so a saturated pool or non-cooperative provider can retain one deduplicated operation briefly after readiness has failed, but cannot accumulate an unbounded probe pileup.
+- Managed object-storage readiness uses `HeadBucket`. Least-privilege credentials must include the provider's bucket-metadata permission (commonly `s3:ListBucket` on AWS S3) as well as ordinary object access, or pods will correctly remain unready even if some object operations happen to work.
+
+### Automated Coverage and Remaining Acceptance
+
+- [`runtime-health.test.ts`](../../../packages/studio-server-api/src/tests/runtime-health.test.ts) covers failure, recovery, secret exclusion, frozen cached results, refresh deduplication, drain during the initial refresh, cancellable timeout recovery, PostgreSQL probe-client destruction, and independent liveness/readiness HTTP statuses.
+- [`managed-health.test.ts`](../../../packages/studio-server-api/src/tests/managed-health.test.ts) covers PostgreSQL acquisition bounds, S3 connection/socket bounds, and per-client S3 agent isolation for workflow and runtime-library storage.
+- [`latest-workflow-remote-debugger.test.ts`](../../../packages/studio-server-api/src/tests/latest-workflow-remote-debugger.test.ts) covers disposal and safe reinitialization of the HTTP upgrade listener in addition to existing debugger routing/auth behavior.
+- [`kubernetes-contract.test.ts`](../../../packages/studio-server-api/src/tests/kubernetes-contract.test.ts) covers rendered probes, lifecycle values, shutdown-margin validation, rollout strategy, placement, conditional disruption budgets, and the retained backend singleton guard.
+- [`proxy-image-contract.test.ts`](../../../packages/studio-server-api/src/tests/proxy-image-contract.test.ts) covers Compose readiness and stop-grace contracts; both Compose topologies also pass `docker compose ... config --quiet`.
+- `yarn studio-server:test` passes the complete repository gate: API build and full API suite, web-pure tests, test-style/repository checks, and Kubernetes lint/render verification. The production and development Compose topologies pass `config --quiet`, and Alpine `sh -n` validates the API entrypoint used by Linux images.
+- Problem 4 release mode now runs proxy rollout, execution-node drain, long-running web-app WebSocket forced owner loss/reconnect, three-phase App Settings encryption-key rotation, and PostgreSQL/MinIO outage/recovery in a disposable Kind cluster. Provider ingress/TLS/DNS/object-store semantics require the separate protected staging gate.
+
+## Resolved Problem 4: Live Managed-Kubernetes Release Gate
+
+**Implementation status (2026-08-26): implemented in repository code and GitHub Actions configuration. The first successful remote CI execution and protected provider-backed staging certification remain operational evidence to collect after merge. The weekly schedule is not active in the currently recorded branch configuration: `origin/HEAD` is `main`, whose workflow does not contain this release gate.**
+
+The image workflow now makes `verify:kubernetes` part of the fast verification job, then creates an ephemeral four-node Kind cluster (one control plane plus three workers) after the four candidate images have been pushed under their unique staging tags. The live gate resolves each candidate to an immutable OCI digest, verifies that the Helm manifest uses that exact digest, deploys disposable PostgreSQL 16 and MinIO services, and installs the real managed-mode Helm chart with one backend, two proxy replicas, and two execution replicas. It exposes no direct API port: all smoke traffic uses a port-forward to the proxy Service.
+
+The runner requires `RIVET_K8S_RELEASE_GATE_CONTEXT` and `RIVET_K8S_RELEASE_GATE_ALLOW_CONTEXT` to be identical and to match `kubectl config current-context`; it limits generated artifacts to the repository's ignored artifact directory; it creates one labelled namespace; and it will delete only a namespace with its own ownership label. It generates per-run PostgreSQL, MinIO, App Settings encryption, and Rivet key material in memory, applies those only as Kubernetes Secrets, and excludes Secrets from captured artifacts. A successful gate also requires cleanup to succeed, so a leaked disposable namespace cannot produce a green result. Failure artifacts include rendered manifests, workload state, events, pod descriptions, and container logs.
+
+The smoke scenario verifies managed schema initialization, object-store setup, proxy readiness, App Settings write/read plus execution-runtime propagation, project upload/publish, published/latest workflows, published/latest web-app HTML and HTTP actions, a web-app WebSocket action, recordings/replay-project, the statistics catalog, and persistence after backend and execution-pod replacement. Manually selected release runs additionally restart the proxy, drain one execution node, force-delete the persisted owner of an accepted long-running web-app action and verify its reconnect emits `action.interrupted` after lease recovery, rotate the App Settings key through old/new, new/old, and new-only generations, and prove PostgreSQL/MinIO readiness failure then recovery. After the monorepo migration, `.github/workflows/studio-server-images.yml` carries the weekly schedule on `main`; the runner bounds deployment, HTTP, recording-convergence, and disruption waits and does not blanket-retry failed product assertions.
+
+### Residual Coverage Boundaries
+
+- The committed monorepo workflow includes the weekly schedule on `main`. The first successful scheduled run after merge remains required operational evidence; repository tests and a local Kind run validate the harness but cannot prove GitHub scheduling or provider behavior.
+
+- The Kind gate uses in-cluster networking and disposable Postgres/MinIO. The protected provider runner deploys immutable candidates through the real staging ingress and checks HTTPS, DNS, workflows, web apps, persisted-settings key rotation, optional scoped NetworkPolicy outage/recovery, and optional legacy-import rollback. Until it completes successfully with the staging provider configuration, those remain unverified operational evidence rather than a certification claim.
+- The smoke uses a small checked-in Rivet project fixture. It proves workflow/web-app action paths and recording contracts, not every node type, runtime-library install, or evaluation-suite shape. Those have focused unit/API coverage and should gain live scenarios when their external dependencies can be made deterministic.
+- The release Kind gate now kills the exact persisted WebSocket action owner for a deliberately long-running graph and reconnects as the same owner scope, asserting the durable interrupted terminal event. It does not prove cross-process live processor migration; the accepted contract is explicit interruption after owner loss.
+- The workflow makes release-image promotion wait for the Kind smoke job and, when manually selected, the protected provider gate. A failed or unavailable GitHub runner can delay promotion; this is intentional release safety, and artifacts make environmental failures diagnosable.
+
+### Operational Commands
+
+- `yarn studio-server:verify:kubernetes` runs the static chart and contract gate.
+- `yarn studio-server:verify:kubernetes:managed-live` runs the disposable smoke gate after explicit context, image digest, and registry credentials are supplied.
+- `yarn studio-server:verify:kubernetes:managed-disruption` adds the controlled proxy rollout, execution-node drain, WebSocket owner-loss/reconnect, App Settings key rotation, and PostgreSQL/MinIO recovery. It must be aimed only at the dedicated Kind context.
+- `yarn studio-server:verify:kubernetes:managed-provider` runs only with the explicit protected staging config, exact staging context, immutable candidate digests, and `RIVET_K8S_PROVIDER_GATE_CONFIRM=deploy-staging`.
+
+The full configuration and local safety requirements are documented in [`docs/kubernetes.md`](../kubernetes.md#managed-release-gate).
+
+## Resolved Problem 5: Bound Scaling by PostgreSQL and Workload Capacity
+
+**Implementation status (2026-08-28): resolved in process pool ownership, Helm defaults, render-time validation, focused tests, and operator documentation. Production-like load testing and confirmation of the provider's real `max_connections` remain deployment acceptance work.**
+
+The four managed query consumers that previously created independent pools in one API process now acquire leases from [`managed-postgres-pool.ts`](../../../packages/studio-server-api/src/managed-postgres-pool.ts). Identical database configurations share one bounded pool, controlled by chart-owned `RIVET_DEPLOYMENT_DATABASE_POOL_MAX`; app settings, workflow invalidation, and web-app action coordination retain three dedicated session connections for PostgreSQL `LISTEN`. Releasing one subsystem cannot close the pool while another still owns it, and the final release closes it exactly once.
+
+The chart now declares `postgres.maxConnections`, `postgres.reservedConnections`, and `postgres.poolMaxPerApiPod`. It computes the worst case from the singleton backend plus the execution HPA maximum and rejects any render where `reserved + API pods * (pool + 3 listeners)` exceeds the declared database capacity. The production overlay's `200/30/10` values support one backend plus ten execution pods at a worst-case budget of 173 connections. The chart also supplies baseline resource requests for every workload and rejects CPU autoscaling when the relevant CPU request is absent, so HPA percentages have a coherent denominator.
+
+This protects configuration consistency, not provider truth or application throughput. Helm cannot change or discover managed PostgreSQL capacity, and request volume is determined by peak concurrency and workflow behavior rather than registered-user count. Production acceptance must confirm the real provider limit, observe active connections and pool wait latency, and load-test representative endpoint graphs before treating ten execution replicas or the baseline CPU/memory requests as final sizing.
+
+Automated evidence is in [`managed-postgres-pool.test.ts`](../../../packages/studio-server-api/src/tests/managed-postgres-pool.test.ts) and [`kubernetes-contract.test.ts`](../../../packages/studio-server-api/src/tests/kubernetes-contract.test.ts). Operational calculation and provider checks are in [`docs/kubernetes.md`](../kubernetes.md#postgresql-connection-budget).
+
+## Assumptions Checked
+
+| Assumption                                                                     | Audit result              | Evidence / qualification                                                                                                                                                                                                                   |
+| ------------------------------------------------------------------------------ | ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Recent features have managed persistence implementations.                      | Supported.                | Workflow revisions/publications, recordings, evaluations, runtime libraries, LLM health, and web-app WebSocket run state have managed stores cited above.                                                                                  |
+| All evaluation artifacts are stored in object storage.                         | Not supported; corrected. | The managed evaluation store persists its definitions and run payloads in PostgreSQL. Recording artifacts referenced by evaluation runs follow the recording store, but the evaluation store itself is not an object-store implementation. |
+| Any API replica can normally edit app settings.                                | Not supported; corrected. | Settings mutation routes are control-plane-only. Execution replicas read the PostgreSQL settings repository and receive pod-local compatibility projections; they do not share a writable settings filesystem.                              |
+| Workflow-schema startup retries protect against PostgreSQL DDL deadlocks.      | Supported, narrowly.       | The migration library serializes DDL with an advisory lock and retries only PostgreSQL `40P01`, `40001`, and `55P03`; the common query retry policy remains network-only.                                                                    |
+| A web-app coordinator listener disconnect necessarily makes the pod unhealthy. | Not supported; corrected. | The coordinator reconnects and polls. Readiness checks gateway acceptance and its owned PostgreSQL pool, not the optional notification channel, so a recoverable listener reconnect does not remove the pod from service. |
+| The chart currently depends on shared app-data storage.                        | No; fixed.                | App Settings are encrypted PostgreSQL rows. Backend/execution app data is pod-local `emptyDir`, proxy has no app-data mount, and a legacy PVC is optional migration-only input. |
+| `verify:kubernetes` is a live cluster test.                                    | Not supported; corrected. | It is a static Helm/template/contract gate. Manual cluster tooling exists separately.                                                                                                                                                      |
+| Current Kubernetes managed mode is definitely broken.                          | Not established.          | Static verification passes and managed stores exist. The report identifies unproven HA/operations paths and concrete design risks, not a reproduced blanket failure.                                                                       |
+
+## Recommended Follow-Up Order
+
+1. Retain the first successful remote GitHub Actions execution of the live Kind gate after the monorepo branch merges, and use its artifacts to tune only named transient setup retries if the runner proves flaky.
+2. Run and retain the first successful Kind release-mode artifact with the new long-running WebSocket owner-loss/reconnect and dependency-recovery scenarios. Tune only named transient setup waits if that evidence proves instability.
+3. Configure the protected `rivet-managed-staging` GitHub environment, then retain the first successful provider-gate artifact against the production-equivalent ingress controller, TLS, managed PostgreSQL service, object-storage provider, scoped dependency interruption policies, App Settings key rotation, and legacy-import rollback.
+4. Design distributed or stably routed latest-debugger/editor-executor ownership, then certify at least two backend replicas before relaxing the singleton guard.
+
+This order focuses on collecting live runtime evidence beyond Kind and on the one deliberately retained control-plane ownership boundary.
+## Useful Verification Commands
+
+```powershell
+yarn studio-server:verify:kubernetes
+yarn studio-server:verify:repo-structure
+yarn studio-server:test
+git diff --check
+```
+
+For a local live rehearsal after the CI harness exists:
+
+```powershell
+yarn studio-server:dev:kubernetes-test
+```
+
+That manual command is useful operational evidence, but it should not be treated as a substitute for a repeatable automated managed-mode gate.

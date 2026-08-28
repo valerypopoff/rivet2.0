@@ -137,14 +137,12 @@ Used by the desktop app when the live `selectedExecutorState` is `nodejs`.
 
 ### Hosted editor embedding
 
-Hosted or wrapper applications that mount the Rivet editor from source should
-import directly from their embedded/custom `rivet/` checkout rather than from
-public npm packages. A wrapper that vendors Rivet at `wrapper-repo/rivet` should
-import the host component and styles from local source paths:
+Hosted applications in this monorepo should import the host component and
+styles from the app workspace. From a sibling workspace under `packages/`:
 
 ```ts
-import { RivetAppHost } from '../rivet/packages/app/src/host';
-import '../rivet/packages/app/src/host.css';
+import { RivetAppHost } from '../app/src/host';
+import '../app/src/host.css';
 ```
 
 `host.css` is the complete shared style entrypoint for both standalone and

@@ -1,0 +1,88 @@
+# syntax=docker/dockerfile:1.7
+ARG NODE_IMAGE=node:20-alpine
+
+FROM --platform=$BUILDPLATFORM ${NODE_IMAGE} AS builder
+
+ARG HTTP_PROXY
+ARG HTTPS_PROXY
+ARG ALL_PROXY
+ARG NO_PROXY
+ARG http_proxy
+ARG https_proxy
+ARG all_proxy
+ARG no_proxy
+
+ENV HTTP_PROXY=$HTTP_PROXY
+ENV HTTPS_PROXY=$HTTPS_PROXY
+ENV ALL_PROXY=$ALL_PROXY
+ENV NO_PROXY=$NO_PROXY
+ENV http_proxy=$http_proxy
+ENV https_proxy=$https_proxy
+ENV all_proxy=$all_proxy
+ENV no_proxy=$no_proxy
+
+RUN corepack enable
+
+WORKDIR /app
+COPY . .
+
+RUN --mount=type=cache,target=/root/.cache/yarn \
+    YARN_NODE_LINKER=node-modules YARN_CHECKSUM_BEHAVIOR=ignore yarn install --immutable
+RUN YARN_NODE_LINKER=node-modules yarn build:hosted-web-deps
+
+ARG VITE_RIVET_DEBUG_LOGS=false
+ARG RIVET_PUBLISHED_WORKFLOWS_BASE_PATH=/workflows
+ARG RIVET_LATEST_WORKFLOWS_BASE_PATH=/workflows-latest
+ARG RIVET_PUBLISHED_APPS_BASE_PATH=/apps
+ARG RIVET_LATEST_APPS_BASE_PATH=/apps-latest
+ARG RIVET_WEB_APPS_BASE_PATH=/apps
+ARG RIVET_LATEST_WEB_APPS_BASE_PATH=/apps-latest
+ARG RIVET_WEB_BUILD_MAX_OLD_SPACE_SIZE=4096
+ENV VITE_RIVET_DEBUG_LOGS=$VITE_RIVET_DEBUG_LOGS
+ENV RIVET_PUBLISHED_WORKFLOWS_BASE_PATH=$RIVET_PUBLISHED_WORKFLOWS_BASE_PATH
+ENV RIVET_LATEST_WORKFLOWS_BASE_PATH=$RIVET_LATEST_WORKFLOWS_BASE_PATH
+ENV RIVET_PUBLISHED_APPS_BASE_PATH=$RIVET_PUBLISHED_APPS_BASE_PATH
+ENV RIVET_LATEST_APPS_BASE_PATH=$RIVET_LATEST_APPS_BASE_PATH
+ENV RIVET_WEB_APPS_BASE_PATH=$RIVET_WEB_APPS_BASE_PATH
+ENV RIVET_LATEST_WEB_APPS_BASE_PATH=$RIVET_LATEST_WEB_APPS_BASE_PATH
+RUN NODE_OPTIONS="--max-old-space-size=${RIVET_WEB_BUILD_MAX_OLD_SPACE_SIZE}" \
+    YARN_NODE_LINKER=node-modules yarn workspace @valerypopoff/rivet-studio-server-web run build
+
+FROM --platform=$BUILDPLATFORM ${NODE_IMAGE} AS serve-installer
+RUN npm install -g serve@14.2.6
+
+FROM --platform=$TARGETPLATFORM ${NODE_IMAGE}
+
+ARG HTTP_PROXY
+ARG HTTPS_PROXY
+ARG ALL_PROXY
+ARG NO_PROXY
+ARG http_proxy
+ARG https_proxy
+ARG all_proxy
+ARG no_proxy
+
+ENV HTTP_PROXY=$HTTP_PROXY
+ENV HTTPS_PROXY=$HTTPS_PROXY
+ENV ALL_PROXY=$ALL_PROXY
+ENV NO_PROXY=$NO_PROXY
+ENV http_proxy=$http_proxy
+ENV https_proxy=$https_proxy
+ENV all_proxy=$all_proxy
+ENV no_proxy=$no_proxy
+
+RUN addgroup -g 10001 -S rivet && \
+    adduser -u 10001 -S -D -h /home/rivet -G rivet rivet && \
+    mkdir -p /app && \
+    chown -R 10001:10001 /app /home/rivet
+
+WORKDIR /app
+COPY --from=serve-installer /usr/local/lib/node_modules/serve /usr/local/lib/node_modules/serve
+COPY --from=builder --chown=10001:10001 /app/packages/studio-server-web/dist /app/dist
+
+ENV HOME=/home/rivet
+
+EXPOSE 3000
+USER 10001:10001
+
+CMD ["node", "/usr/local/lib/node_modules/serve/build/main.js", "-s", "dist", "-l", "3000"]

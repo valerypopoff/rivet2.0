@@ -2241,7 +2241,7 @@ data:
           visualData: 3883.9730559741065/489.1152144743757/300/73
         '[40B9nTkT_zAkzbA9Rhkpn]:text "Text"':
           data:
-            text: /Users/Shared/rivet2/rivet/packages
+            text: /Users/Shared/rivet2/packages
           outgoingConnections:
             - output->"Prompt" RGaXe9O2ty183OXol7_K2/input
           visualData: 232.485807860262/1022.3493449781658/300/6
@@ -2889,7 +2889,7 @@ data:
               - "**/dist/**"
               - "**/src-tauri/**"
             includeDirectories: false
-            path: /Users/shared/rivet2/rivet/packages
+            path: /Users/shared/rivet2/packages
             recursive: true
             relative: true
             useFilterGlobsInput: false
@@ -3114,7 +3114,7 @@ data:
               - "**/app-executor/bin/**"
               - "**/*.wasm"
             includeDirectories: false
-            path: /Users/Shared/rivet2/rivet/packages
+            path: /Users/Shared/rivet2/packages
             recursive: true
             relative: false
             useFilterGlobsInput: false

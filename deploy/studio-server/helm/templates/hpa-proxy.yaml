@@ -1,0 +1,23 @@
+{{- if .Values.autoscaling.proxy.enabled }}
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ include "rivet.proxyServiceName" . }}
+  labels:
+    {{- include "rivet.labels" . | nindent 4 }}
+    app.kubernetes.io/component: proxy
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ include "rivet.proxyServiceName" . }}
+  minReplicas: {{ .Values.autoscaling.proxy.minReplicas }}
+  maxReplicas: {{ .Values.autoscaling.proxy.maxReplicas }}
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: {{ .Values.autoscaling.proxy.targetCPUUtilizationPercentage }}
+{{- end }}

@@ -1,0 +1,1003 @@
+@import './app-settings/AppSettingsModal.css';
+@import './PublishedVersionHistoryModal.css';
+@import './ProjectSettingsModal.css';
+@import './WorkflowLibraryOverlays.css';
+
+:root {
+  --workflow-library-font-size-xs: 10px;
+  --workflow-library-font-size-s: 14px;
+  --workflow-library-font-size-m: 16px;
+  --workflow-library-font-size-l: 17px;
+  --workflow-library-font-size-xl: 20px;
+  --workflow-library-font-size-2xl: 23px;
+  --workflow-library-font-size-3xl: 36px;
+
+  /* Button size tiers: assign controls to s/m/l and tune here. */
+  --workflow-button-height-s: 25px;
+  --workflow-button-height-m: 30px;
+  --workflow-button-height-l: 40px;
+  --workflow-button-height-xl: 55px;
+  --workflow-button-radius-ratio: 0.2;
+  --workflow-button-font-size-s: 11px;
+  --workflow-button-font-size-m: 15px;
+  --workflow-button-font-size-l: 16px;
+  --workflow-button-font-size-xl: 30px;
+
+  --workflow-status-unpublished-color: var(--grey-light);
+  --workflow-status-published-color: #7ee294;
+  --workflow-status-published-bg: rgba(126, 226, 148, 0.12);
+  --workflow-status-published-bg-hover: rgba(126, 226, 148, 0.2);
+  --workflow-status-unpublished-changes-color: #ffd76a;
+  --workflow-status-unpublished-changes-bg: rgba(255, 215, 106, 0.12);
+  --workflow-status-unpublished-changes-bg-hover: rgba(255, 215, 106, 0.2);
+}
+
+.workflow-library-panel {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  color: var(--grey-light);
+}
+
+.workflow-library-panel-content {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  height: 100%;
+  min-height: 0;
+  min-width: 0;
+}
+
+.workflow-library-panel-content.workflow-library-panel-content-hidden {
+  visibility: hidden;
+  pointer-events: none;
+}
+
+.workflow-library-panel .header {
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  justify-content: flex-start;
+  flex: 0 0 37px;
+  width: 100%;
+  height: 37px;
+  margin: 0;
+  padding: 0 6px;
+  appearance: none;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--grey-lightest);
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+}
+
+.workflow-library-panel .header:hover,
+.workflow-library-panel .header:focus-visible {
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.workflow-library-panel .header-collapse-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 29px;
+  height: 29px;
+  min-width: 29px;
+  color: var(--grey-lightest);
+  pointer-events: none;
+}
+
+.workflow-library-panel .header-collapse-icon svg {
+  width: 16px;
+  height: 16px;
+}
+
+.workflow-library-panel .header-title {
+  font-size: var(--workflow-library-font-size-l);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--grey-lightest);
+}
+
+[data-testid='workflow-project-settings-modal--blanket'] {
+  background: rgba(0, 0, 0, 0.56) !important;
+  backdrop-filter: blur(2px);
+}
+
+[data-testid='runtime-libraries-modal--blanket'],
+[data-testid='run-recordings-modal--blanket'],
+[data-testid='run-statistics-modal--blanket'],
+[data-testid='workflow-project-version-modal--blanket'],
+[data-testid='workflow-published-version-history-modal--blanket'],
+[data-testid='app-settings-modal--blanket'] {
+  background: rgba(0, 0, 0, 0.56) !important;
+  backdrop-filter: blur(2px);
+}
+
+[data-testid='workflow-project-settings-modal'],
+[data-testid='runtime-libraries-modal'],
+[data-testid='run-recordings-modal'],
+[data-testid='run-statistics-modal'],
+[data-testid='workflow-project-version-modal'],
+[data-testid='workflow-published-version-history-modal'],
+[data-testid='app-settings-modal'] {
+  background: #1f1f22 !important;
+  border: 1px solid rgba(255, 255, 255, 0.08) !important;
+  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.38) !important;
+  color: var(--grey-lightest) !important;
+}
+
+[data-testid='app-settings-modal'] {
+  overflow: hidden !important;
+}
+
+[data-testid='workflow-project-settings-modal--header'],
+[data-testid='runtime-libraries-modal--header'],
+[data-testid='run-recordings-modal--header'],
+[data-testid='run-statistics-modal--header'],
+[data-testid='workflow-project-version-modal--header'],
+[data-testid='workflow-published-version-history-modal--header'],
+[data-testid='app-settings-modal--header'] {
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+[data-testid='workflow-project-settings-modal--body'],
+[data-testid='runtime-libraries-modal--body'],
+[data-testid='run-recordings-modal--body'],
+[data-testid='run-statistics-modal--body'],
+[data-testid='workflow-project-version-modal--body'],
+[data-testid='workflow-published-version-history-modal--body'],
+[data-testid='app-settings-modal--body'] {
+  padding: 0 !important;
+}
+
+[data-testid='app-settings-modal--body'] {
+  overflow: hidden !important;
+}
+
+.workflow-library-panel .active-project-slot {
+  margin: 13px 13px 0;
+  flex: 0 0 166px;
+  height: 166px;
+}
+
+.workflow-library-panel .active-project-section {
+  height: 100%;
+  padding: 10px 12px;
+  background: var(--active-project-section-bg, rgba(255, 255, 255, 0.07));
+  border: 1px solid var(--active-project-section-border, rgba(255, 255, 255, 0.05));
+  border-radius: 12px;
+  box-sizing: border-box;
+}
+
+.workflow-library-panel .active-project-section.published {
+  --active-project-section-bg: var(--workflow-status-published-bg);
+  --active-project-section-border: rgba(126, 226, 148, 0.18);
+}
+
+.workflow-library-panel .active-project-section.unpublished_changes {
+  --active-project-section-bg: var(--workflow-status-unpublished-changes-bg);
+  --active-project-section-border: rgba(255, 215, 106, 0.18);
+}
+
+.workflow-library-panel .active-project-section-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.workflow-library-panel .active-project-placeholder {
+  width: 100%;
+  font-size: var(--workflow-library-font-size-m);
+  line-height: 1.4;
+  color: var(--grey-light);
+  text-align: center;
+}
+
+.workflow-library-panel .active-project-section-content {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  overflow: visible;
+}
+
+.workflow-library-panel .active-project-details {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.button-size-s,
+.button-size-m,
+.button-size-l,
+.button-size-xl {
+  --workflow-button-current-height: var(--workflow-button-height-m);
+  padding-top: 0;
+  padding-bottom: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+  border-radius: calc(var(--workflow-button-current-height) * var(--workflow-button-radius-ratio)) !important;
+}
+
+.button-size-s {
+  --workflow-button-current-height: var(--workflow-button-height-s);
+  height: var(--workflow-button-height-s) !important;
+  min-height: var(--workflow-button-height-s) !important;
+  font-size: var(--workflow-button-font-size-s) !important;
+}
+
+.button-size-m {
+  --workflow-button-current-height: var(--workflow-button-height-m);
+  height: var(--workflow-button-height-m) !important;
+  min-height: var(--workflow-button-height-m) !important;
+  font-size: var(--workflow-button-font-size-m) !important;
+}
+
+.button-size-l {
+  --workflow-button-current-height: var(--workflow-button-height-l);
+  height: var(--workflow-button-height-l) !important;
+  min-height: var(--workflow-button-height-l) !important;
+  font-size: var(--workflow-button-font-size-l) !important;
+}
+
+.button-size-xl {
+  --workflow-button-current-height: var(--workflow-button-height-xl);
+  height: var(--workflow-button-height-xl) !important;
+  min-height: var(--workflow-button-height-xl) !important;
+  font-size: var(--workflow-button-font-size-xl) !important;
+}
+
+.button-size-s > span,
+.button-size-m > span,
+.button-size-l > span,
+.button-size-xl > span {
+  font-size: inherit !important;
+  min-height: 100%;
+  width: 100%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1.2;
+  border-radius: inherit;
+}
+
+.text-field-size-s[data-ds--text-field--container] {
+  min-height: var(--workflow-button-height-s) !important;
+  height: var(--workflow-button-height-s) !important;
+  box-sizing: border-box !important;
+}
+
+.text-field-size-s input {
+  min-height: 100% !important;
+  height: 100% !important;
+  box-sizing: border-box !important;
+  font-size: var(--workflow-button-font-size-s) !important;
+  line-height: 1 !important;
+  padding-top: 0 !important;
+  padding-bottom: 0 !important;
+}
+
+.text-field-size-m[data-ds--text-field--container] {
+  min-height: var(--workflow-button-height-m) !important;
+  height: var(--workflow-button-height-m) !important;
+  box-sizing: border-box !important;
+}
+
+.text-field-size-m input {
+  min-height: 100% !important;
+  height: 100% !important;
+  box-sizing: border-box !important;
+  font-size: var(--workflow-button-font-size-m) !important;
+  line-height: 1 !important;
+  padding-top: 0 !important;
+  padding-bottom: 0 !important;
+}
+
+.text-field-size-l[data-ds--text-field--container] {
+  min-height: var(--workflow-button-height-l) !important;
+  height: var(--workflow-button-height-l) !important;
+  box-sizing: border-box !important;
+}
+
+.text-field-size-l input {
+  min-height: 100% !important;
+  height: 100% !important;
+  box-sizing: border-box !important;
+  font-size: var(--workflow-button-font-size-l) !important;
+  line-height: 1 !important;
+  padding-top: 0 !important;
+  padding-bottom: 0 !important;
+}
+
+.text-field-size-xl[data-ds--text-field--container] {
+  min-height: var(--workflow-button-height-xl) !important;
+  height: var(--workflow-button-height-xl) !important;
+  box-sizing: border-box !important;
+}
+
+.text-field-size-xl input {
+  min-height: 100% !important;
+  height: 100% !important;
+  box-sizing: border-box !important;
+  font-size: var(--workflow-button-font-size-xl) !important;
+  line-height: 1 !important;
+  padding-top: 0 !important;
+  padding-bottom: 0 !important;
+}
+
+.workflow-library-panel .active-project-actions-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 8px;
+}
+
+.workflow-library-panel .active-project-status-list {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.workflow-library-panel .active-project-status-line {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  height: 22px;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.workflow-library-panel .active-project-status-line .project-status-badge {
+  box-sizing: border-box;
+  height: 22px;
+  min-height: 22px;
+}
+
+.workflow-library-panel .active-project-status-label,
+.workflow-library-panel .active-project-status-text {
+  font-size: var(--workflow-library-font-size-s);
+  color: var(--grey-light);
+  line-height: 1.3;
+  white-space: nowrap;
+}
+
+.workflow-library-panel .active-project-status-text {
+  display: inline-flex;
+  align-items: center;
+  height: 22px;
+  color: var(--grey-lighter);
+}
+
+.workflow-library-panel .active-project-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: var(--workflow-library-font-size-m);
+  font-weight: 600;
+  color: var(--grey-lightest);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
+  margin-top: 0;
+}
+
+.workflow-library-panel .active-project-name-row {
+  display: flex;
+  min-width: 0;
+  max-width: 100%;
+  gap: 8px;
+}
+
+.workflow-library-panel .active-project-stats {
+  font-size: var(--workflow-library-font-size-s);
+  color: var(--grey-light);
+  line-height: 1.3;
+}
+
+.workflow-library-panel .active-project-actions {
+  display: none;
+}
+
+.active-project-status-row {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.project-settings-status-block .project-status-badge {
+  zoom: 1.2;
+}
+
+.project-settings-last-published-at {
+  font-size: var(--workflow-library-font-size-l);
+  color: var(--grey-light);
+  line-height: 1.3;
+}
+
+.project-settings-status-note {
+  color: var(--grey-light);
+  font-size: var(--workflow-library-font-size-l);
+  line-height: 1.3;
+}
+
+.project-settings-endpoint-code {
+  display: inline-block;
+  padding: 2px 6px;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--grey-lightest);
+  font-family: 'Fira Code', 'Cascadia Code', 'Consolas', monospace;
+  font-size: 0.95em;
+  word-break: break-all;
+}
+
+.project-settings-endpoint-link {
+  display: inline-block;
+  color: inherit;
+  text-decoration: none;
+  border-radius: 6px;
+}
+
+.project-settings-endpoint-link:hover .project-settings-endpoint-code,
+.project-settings-endpoint-link:focus-visible .project-settings-endpoint-code {
+  background: rgba(255, 255, 255, 0.14);
+  color: var(--grey-lightest);
+  text-decoration: underline;
+}
+
+.project-settings-endpoint-link:focus-visible {
+  outline: 2px solid rgba(84, 169, 255, 0.9);
+  outline-offset: 2px;
+}
+
+.workflow-library-panel .active-project-save-button,
+.workflow-library-panel .active-project-more-button {
+  min-width: 72px;
+}
+
+.workflow-library-panel .active-project-more-button.project-settings-secondary-button {
+  border: 1px solid rgba(255, 255, 255, 0.18) !important;
+  background: rgba(255, 255, 255, 0.08) !important;
+}
+
+.workflow-library-panel .active-project-more-button.project-settings-secondary-button:hover:not(:disabled),
+.workflow-library-panel .active-project-more-button.project-settings-secondary-button:focus-visible:not(:disabled) {
+  border-color: rgba(255, 255, 255, 0.28) !important;
+  background: rgba(255, 255, 255, 0.12) !important;
+}
+
+.workflow-library-panel .active-project-save-button,
+.workflow-library-panel .active-project-more-button,
+.workflow-library-panel .project-settings-delete-button,
+.workflow-library-panel .project-settings-primary-button,
+.workflow-library-panel .project-settings-close-button {
+  justify-content: center;
+}
+
+.workflow-library-panel .header,
+.workflow-library-panel .header:hover,
+.workflow-library-panel .header:focus-visible,
+.workflow-library-panel .header svg {
+  color: var(--grey-lightest) !important;
+}
+
+.workflow-library-panel .collapsed-strip-button {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--grey-lightest);
+  cursor: pointer;
+}
+
+.workflow-library-panel .collapsed-strip-button svg {
+  width: 18px;
+  height: 18px;
+}
+
+.workflow-library-panel .collapsed-strip-status-dot {
+  position: absolute;
+  top: 12.5px;
+  left: 50%;
+  width: 12px;
+  height: 12px;
+  border-radius: 999px;
+  background: currentColor;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.35);
+  transform: translateX(-50%);
+  pointer-events: none;
+}
+
+.workflow-library-panel .collapsed-strip-status-dot.published {
+  color: var(--workflow-status-published-color);
+}
+
+.workflow-library-panel .collapsed-strip-status-dot.unpublished_changes {
+  color: var(--workflow-status-unpublished-changes-color);
+}
+
+.workflow-library-panel .collapsed-strip-status-dot.unpublished {
+  color: var(--workflow-status-unpublished-color);
+}
+
+.workflow-library-panel .collapsed-strip-button:hover,
+.workflow-library-panel .collapsed-strip-button:focus-visible {
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.project-status-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 20px;
+  padding: 0 8px 0 8px;
+  border-radius: 999px;
+  font-size: var(--workflow-library-font-size-xs);
+  font-weight: 700;
+  white-space: nowrap;
+  background: transparent;
+  border: 1px solid currentColor;
+  color: var(--grey-lightest);
+  margin-top: 0;
+  margin-left: -1px;
+}
+
+.project-status-badge.published {
+  color: var(--workflow-status-published-color);
+}
+
+.project-status-badge.unpublished_changes {
+  color: var(--workflow-status-unpublished-changes-color);
+}
+
+.project-status-badge.unpublished {
+  color: var(--workflow-status-unpublished-color);
+}
+
+.workflow-library-panel .icon-button,
+.workflow-library-panel .text-button {
+  border: none;
+  cursor: pointer;
+  color: var(--grey-lightest);
+  background: rgba(255, 255, 255, 0.06);
+  transition: background 120ms ease, opacity 120ms ease;
+}
+
+.workflow-library-panel .icon-button {
+  min-width: var(--workflow-button-height-s);
+  width: var(--workflow-button-height-s);
+  height: var(--workflow-button-height-s);
+  padding: 0;
+  border-radius: 6px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: var(--workflow-button-font-size-s);
+  font-weight: 700;
+  line-height: 1;
+}
+
+.workflow-library-panel .text-button {
+  padding: 4px 8px;
+  border-radius: 6px;
+  min-height: var(--workflow-button-height-s);
+  font-size: var(--workflow-button-font-size-s);
+  font-weight: 600;
+}
+
+.workflow-library-panel .icon-button:hover,
+.workflow-library-panel .text-button:hover {
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.workflow-library-panel .body {
+  position: relative;
+  flex: 1;
+  overflow: auto;
+  padding: 8px 8px 16px 8px;
+}
+
+.workflow-library-panel .panel-bottom-actions {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px 24px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.workflow-library-panel .panel-bottom-button {
+  width: 100%;
+  justify-content: flex-start;
+  text-align: left;
+}
+
+.workflow-library-panel .panel-bottom-button > span {
+  justify-content: flex-start;
+}
+
+.workflow-library-panel .panel-bottom-action-with-summary {
+  position: relative;
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+
+.workflow-library-panel .panel-bottom-action-with-summary.has-summary .panel-bottom-button > span {
+  box-sizing: border-box;
+  padding-right: 96px;
+}
+
+.workflow-library-panel .panel-bottom-action-summary {
+  position: absolute;
+  right: 8px;
+  top: 50%;
+  max-width: 92px;
+  transform: translateY(-50%);
+  padding: 1px 7px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--grey-light);
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 16px;
+  overflow: hidden;
+  pointer-events: none;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workflow-library-panel .body-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 16px;
+}
+
+.workflow-library-panel .body-status {
+  font-size: var(--workflow-library-font-size-s);
+  color: var(--grey-light);
+}
+
+.workflow-library-panel .body-status-top {
+  padding: 0 4px 8px 4px;
+}
+
+.workflow-library-panel .link-button {
+  border: none;
+  background: transparent;
+  appearance: none;
+  color: var(--grey-lightest);
+  margin: 0;
+  margin-left: 13px;
+  padding: 0;
+  min-height: 0;
+  vertical-align: middle;
+  display: inline-block;
+  font-size: var(--workflow-library-font-size-s);
+  font-weight: 300;
+  line-height: 1.4;
+  cursor: pointer;
+  color: gray;
+}
+
+.workflow-library-panel .link-button:hover,
+.workflow-library-panel .link-button:focus-visible {
+  color: white;
+}
+
+.workflow-library-panel .state {
+  padding: 12px;
+  font-size: var(--workflow-library-font-size-s);
+  color: var(--grey-light);
+}
+
+.workflow-library-panel .folder-empty-state {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.workflow-library-panel .state-action {
+  border: none;
+  background: transparent;
+  padding: 0;
+  margin: 0;
+  color: #ff6b7a;
+  font-size: var(--workflow-library-font-size-s);
+  font-weight: 600;
+  line-height: inherit;
+  vertical-align: baseline;
+  display: inline;
+  cursor: pointer;
+}
+
+.workflow-library-panel .state-action:hover,
+.workflow-library-panel .state-action:focus-visible {
+  text-decoration: underline;
+}
+
+
+.workflow-library-panel .folder-row,
+.workflow-library-panel .project-row {
+  width: 100%;
+  border: none;
+  appearance: none;
+  background: transparent;
+  color: inherit;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px;
+  border-radius: 6px;
+  text-align: left;
+  font-size: var(--workflow-library-font-size-s);
+  line-height: 1.4;
+}
+
+.workflow-library-panel .folder-row {
+  justify-content: space-between;
+  cursor: pointer;
+}
+
+.workflow-library-panel .folder-row.editing {
+  cursor: default;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.workflow-library-panel .folder-row.renaming {
+  cursor: progress;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.workflow-library-panel .project-row.editing {
+  cursor: default;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.workflow-library-panel .project-row.renaming {
+  cursor: progress;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.workflow-library-panel .folder-row:hover,
+.workflow-library-panel .project-row:hover,
+.workflow-library-panel .folder-row.active,
+.workflow-library-panel .project-row.active {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.workflow-library-panel .body.drag-over-root,
+.workflow-library-panel .folder-row.drag-over {
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.workflow-library-panel .folder-row.dragging,
+.workflow-library-panel .project-row.dragging {
+  opacity: 0.6;
+}
+
+.workflow-library-panel .folder-toggle {
+  color: inherit;
+  display: inline-flex;
+  align-items: center;
+  padding: 0;
+  justify-content: center;
+  width: var(--workflow-button-height-s);
+  min-width: var(--workflow-button-height-s);
+  height: var(--workflow-button-height-s);
+}
+
+.folder-toggle svg{
+  width: 100% !important;
+  height: 100% !important;
+  display: block;
+}
+
+.workflow-library-panel .folder-content {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0;
+}
+
+.workflow-library-panel .folder-name-button {
+  flex: 1;
+  min-width: 0;
+  border: none;
+  appearance: none;
+  background: transparent;
+  color: inherit;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0;
+  cursor: pointer;
+  text-align: left;
+  font: inherit;
+  line-height: inherit;
+}
+
+.workflow-library-panel .folder-row.editing .folder-name-button {
+  cursor: default;
+}
+
+.workflow-library-panel .folder-row.renaming .folder-name-button {
+  cursor: progress;
+}
+
+.workflow-library-panel .folder-main,
+.workflow-library-panel .project-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.workflow-library-panel .folder-label-wrap {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.workflow-library-panel .project-label-wrap {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.workflow-library-panel .folder-rename-spinner,
+.workflow-library-panel .project-rename-spinner {
+  flex: 0 0 auto;
+  width: 12px;
+  height: 12px;
+  border: 2px solid rgba(255, 255, 255, 0.22);
+  border-top-color: #9bb8ff;
+  border-radius: 50%;
+  animation: workflow-library-rename-spin 0.75s linear infinite;
+}
+
+@keyframes workflow-library-rename-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.workflow-library-panel .folder-rename-form,
+.workflow-library-panel .project-rename-form {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+}
+
+.workflow-library-panel .folder-rename-input,
+.workflow-library-panel .project-rename-input {
+  width: 100%;
+  min-width: 0;
+  height: 24px;
+  box-sizing: border-box;
+  border: 1px solid rgba(125, 166, 255, 0.72);
+  border-radius: 4px;
+  background: rgba(11, 15, 26, 0.96);
+  color: var(--grey-lightest);
+  font: inherit;
+  line-height: 1.2;
+  padding: 2px 6px;
+  outline: none;
+}
+
+.workflow-library-panel .folder-rename-input:focus,
+.workflow-library-panel .project-rename-input:focus {
+  border-color: #9bb8ff;
+  box-shadow: 0 0 0 2px rgba(125, 166, 255, 0.22);
+}
+
+.workflow-library-panel .folder-project-count {
+  flex: 0 0 auto;
+  min-width: 22px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--grey-light);
+  font-size: var(--workflow-library-font-size-xs);
+  font-weight: 700;
+  line-height: 1.4;
+  text-align: center;
+}
+
+.workflow-library-panel .project-status-dot {
+  width: 8px;
+  height: 8px;
+  min-width: 8px;
+  border-radius: 999px;
+  background: currentColor;
+}
+
+.workflow-library-panel .project-row-status-published {
+  color: var(--workflow-status-published-color);
+}
+
+.workflow-library-panel .project-row-status-unpublished_changes {
+  color: var(--workflow-status-unpublished-changes-color);
+}
+
+.workflow-library-panel .project-row-status-unpublished {
+  color: inherit;
+}
+
+.workflow-library-panel .project-row-status-published .label,
+.workflow-library-panel .project-row-status-unpublished_changes .label {
+  color: inherit;
+}
+
+.workflow-library-panel .project-row-status-unpublished .label {
+  color: var(--grey-light);
+}
+
+.workflow-library-panel .project-row-status-unpublished svg {
+  color: var(--grey-light);
+}
+
+.workflow-library-panel .label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--workflow-library-font-size-s);
+}
+
+.workflow-library-panel .projects {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-bottom: 15px;
+}
+
+.workflow-library-panel .folder-children {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-bottom: 15px;
+  padding-left: 24px;
+}
+
+.workflow-library-panel .project-row {
+  padding-left: 15px;
+}
+
+.workflow-library-panel .project-row {
+  border: none;
+  cursor: pointer;
+}

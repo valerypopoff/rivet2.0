@@ -1,0 +1,5 @@
+.node-canvas:focus,
+.node-canvas:focus-visible {
+  outline: none;
+  box-shadow: none;
+}

@@ -1,0 +1,108 @@
+version: 4
+data:
+  graphs:
+    59701e85-9052-43e1-a71d-af698ef7c1fe:
+      metadata:
+        description: ""
+        id: 59701e85-9052-43e1-a71d-af698ef7c1fe
+        name: Main Graph
+      nodes:
+        '[delay-node]:delay "Delay"':
+          data:
+            delay: 300
+            useDelayInput: false
+          outgoingConnections:
+            - output1->"Output" output-node/value
+          visualData: 360/0/300/null//
+        '[environment-node]:code "Environment"':
+          data:
+            code: |
+              return {
+                output: {
+                  type: 'any',
+                  value: {
+                    hostname: process.env.HOSTNAME,
+                    environmentValue: process.env.RIVET_RELEASE_GATE_VALUE ?? inputs.input.value
+                  }
+                }
+              };
+            inputNames:
+              - input
+            outputNames:
+              - output
+          outgoingConnections:
+            - output->"Delay" delay-node/input1
+          visualData: 180/0/300/null//
+        '[input-node]:graphInput "Input"':
+          data:
+            dataType: string
+            id: input
+          outgoingConnections:
+            - data->"Environment" environment-node/input
+          visualData: 0/0/300/null//
+        '[output-node]:graphOutput "Output"':
+          data:
+            dataType: any
+            id: value
+          visualData: 720/0/300/null//
+    d6d3c1cf-670d-4b8d-bf64-617be4e3df81:
+      metadata:
+        description: ""
+        id: d6d3c1cf-670d-4b8d-bf64-617be4e3df81
+        name: Long-running graph
+      nodes:
+        '[delay-node]:delay "Long delay"':
+          data:
+            delay: 60000
+            useDelayInput: false
+          outgoingConnections:
+            - output1->"Output" output-node/value
+          visualData: 360/0/300/null//
+        '[input-node]:graphInput "Input"':
+          data:
+            dataType: string
+            id: input
+          outgoingConnections:
+            - data->"Long delay" delay-node/input1
+          visualData: 0/0/300/null//
+        '[output-node]:graphOutput "Output"':
+          data:
+            dataType: any
+            id: value
+          visualData: 720/0/300/null//
+  metadata:
+    description: ""
+    id: 230bbbc2-f5ec-41ea-99d2-bcbb43e82f3b
+    mainGraphId: 59701e85-9052-43e1-a71d-af698ef7c1fe
+    title: Managed release gate
+  plugins: []
+  references: []
+  uiGraphs:
+    release-gate-web-app:
+      components:
+        - action:
+            graphId: 59701e85-9052-43e1-a71d-af698ef7c1fe
+            inputs:
+              input:
+                key: prompt
+                type: state
+            outputKey: value
+            outputStateKey: result
+            type: runGraph
+          id: release-gate-run-button
+          label: Run
+          type: button
+        - action:
+            graphId: d6d3c1cf-670d-4b8d-bf64-617be4e3df81
+            inputs:
+              input:
+                key: prompt
+                type: state
+            outputKey: value
+            outputStateKey: longResult
+            type: runGraph
+          id: release-gate-long-run-button
+          label: Long run
+          type: button
+      id: release-gate-web-app
+      name: Managed release gate app
