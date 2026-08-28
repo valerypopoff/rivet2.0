@@ -98,18 +98,6 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@ai-sdk/openai-compatible@npm:^1.0.17":
-  version: 1.0.52
-  resolution: "@ai-sdk/openai-compatible@npm:1.0.52"
-  dependencies:
-    "@ai-sdk/provider": "npm:2.0.3"
-    "@ai-sdk/provider-utils": "npm:3.0.35"
-  peerDependencies:
-    zod: ^3.25.76 || ^4.1.8
-  checksum: 10/16fa265090c0f1eb85634c365a6f7c6d37a738be32edd11bfc36a1290acba52736716581add89ee7e7e8858cebf4a02a277b0bc3de34a62f3de1ecc2d3ef7d9e
-  languageName: node
-  linkType: hard
-
 "@ai-sdk/openai@npm:3.0.41":
   version: 3.0.41
   resolution: "@ai-sdk/openai@npm:3.0.41"
@@ -131,20 +119,6 @@ __metadata:
   peerDependencies:
     zod: ^3.25.76 || ^4.1.8
   checksum: 10/bef9ad77b4e2172597fe1f3226f3c312fdd3d3591ea8186d661117aa0a7b2b79ae3310878936b0ded134e52d37860b45704077c410e554eeb128c0878cd68306
-  languageName: node
-  linkType: hard
-
-"@ai-sdk/provider-utils@npm:3.0.35":
-  version: 3.0.35
-  resolution: "@ai-sdk/provider-utils@npm:3.0.35"
-  dependencies:
-    "@ai-sdk/provider": "npm:2.0.3"
-    "@standard-schema/spec": "npm:^1.0.0"
-    eventsource-parser: "npm:^3.0.6"
-    undici: "npm:^5.29.0"
-  peerDependencies:
-    zod: ^3.25.76 || ^4.1.8
-  checksum: 10/46f230234af4ea032b53a8d36037b029e4270efd77c6bc63f7ab1f9646073d106cc06669edde2f8c064b1de75c00f048caae07ab7eeaf89c6991a603617912d7
   languageName: node
   linkType: hard
 
@@ -194,15 +168,6 @@ __metadata:
   dependencies:
     json-schema: "npm:^0.4.0"
   checksum: 10/e6d5460f0c52e64033ccc5d20787ab9ff5251646e6263daa76a006367fda8ad527dadc959110113c42796d293d4e669c3ae911062086574cd46f0707357dedb5
-  languageName: node
-  linkType: hard
-
-"@ai-sdk/provider@npm:2.0.3":
-  version: 2.0.3
-  resolution: "@ai-sdk/provider@npm:2.0.3"
-  dependencies:
-    json-schema: "npm:^0.4.0"
-  checksum: 10/98fa6f15d3437d47b32abadc8ca44aad9d8a212e80a6a60523528dc7a453584764cdf7455e0d92186b33d9a3b5a85746692c6ef28cd5051e5553b149030c235f
   languageName: node
   linkType: hard
 
@@ -5985,13 +5950,6 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@fastify/busboy@npm:^2.0.0":
-  version: 2.1.1
-  resolution: "@fastify/busboy@npm:2.1.1"
-  checksum: 10/2bb8a7eca8289ed14c9eb15239bc1019797454624e769b39a0b90ed204d032403adc0f8ed0d2aef8a18c772205fa7808cf5a1b91f21c7bfc7b6032150b1062c5
-  languageName: node
-  linkType: hard
-
 "@floating-ui/core@npm:^1.4.2":
   version: 1.5.0
   resolution: "@floating-ui/core@npm:1.5.0"
@@ -9586,7 +9544,7 @@ __metadata:
     "@ai-sdk/anthropic": "npm:^3.0.58"
     "@ai-sdk/google": "npm:^3.0.43"
     "@ai-sdk/openai": "npm:^3.0.41"
-    "@ai-sdk/openai-compatible": "npm:^1.0.17"
+    "@ai-sdk/openai-compatible": "npm:1.0.17"
     "@atlaskit/banner": "npm:^12.1.18"
     "@atlaskit/button": "npm:^16.11.0"
     "@atlaskit/checkbox": "npm:^12.6.11"
@@ -24007,15 +23965,6 @@ __metadata:
   version: 8.3.0
   resolution: "undici-types@npm:8.3.0"
   checksum: 10/6681d2837ac75a75ac1cc46090aa2b8ddc7c6b8ecc295a6cdb06838752a730da3d8afeecf05e5ab7903160eafad3a8b6ffa1927e5ded260590f4d4fef18646d5
-  languageName: node
-  linkType: hard
-
-"undici@npm:^5.29.0":
-  version: 5.29.0
-  resolution: "undici@npm:5.29.0"
-  dependencies:
-    "@fastify/busboy": "npm:^2.0.0"
-  checksum: 10/0ceca8924a32acdcc0cfb8dd2d368c217840970aa3f5e314fc169608474be6341c5b8e50cad7bd257dbe3b4e432bc5d0a0d000f83644b54fa11a48735ec52b93
   languageName: node
   linkType: hard
 

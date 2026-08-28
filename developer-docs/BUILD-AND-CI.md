@@ -699,6 +699,14 @@ adding an exception. Commit the resulting `yarn.lock`, `.pnp.cjs`, and
 replacement `.yarn/cache` archive together so zero-install CI resolves the same
 patched dependency as local development.
 
+When a Studio Server workspace bundles a Rivet dependency that is also pinned by
+Rivet Core, use Core's exact tested version rather than a wider caret range. A
+separate range can silently select a different AI SDK adapter and introduce a
+second runtime dependency chain; this happened with the OpenAI-compatible
+adapter and its vulnerable Undici 5 dependency. Treat intentional adapter
+upgrades as coordinated Core-and-host changes with their own compatibility
+verification.
+
 For vulnerable descriptors that multiple upstream tools still constrain, a root
 `resolutions` override may be the safer refresh mechanism. Pin the reviewed
 fixed release (rather than a floating caret), then run `yarn install` and the

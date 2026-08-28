@@ -321,28 +321,6 @@ const RAW_RUNTIME_STATE =
         ],\
         "linkType": "SOFT"\
       }],\
-      ["npm:1.0.52", {\
-        "packageLocation": "./.yarn/cache/@ai-sdk-openai-compatible-npm-1.0.52-0480722e35-16fa265090.zip/node_modules/@ai-sdk/openai-compatible/",\
-        "packageDependencies": [\
-          ["@ai-sdk/openai-compatible", "npm:1.0.52"]\
-        ],\
-        "linkType": "SOFT"\
-      }],\
-      ["virtual:03eccba7aea56c5e81dc44bb3b7187b016606939b3f527c4056e17155e51ec06ce171ac2805ac4d2757699808fe739f2fcab49bece2a8a6443ae58e07d01d007#npm:1.0.52", {\
-        "packageLocation": "./.yarn/__virtual__/@ai-sdk-openai-compatible-virtual-6939b674e2/0/cache/@ai-sdk-openai-compatible-npm-1.0.52-0480722e35-16fa265090.zip/node_modules/@ai-sdk/openai-compatible/",\
-        "packageDependencies": [\
-          ["@ai-sdk/openai-compatible", "virtual:03eccba7aea56c5e81dc44bb3b7187b016606939b3f527c4056e17155e51ec06ce171ac2805ac4d2757699808fe739f2fcab49bece2a8a6443ae58e07d01d007#npm:1.0.52"],\
-          ["@ai-sdk/provider", "npm:2.0.3"],\
-          ["@ai-sdk/provider-utils", "virtual:6939b674e2d0a8799e3fb4c54a3a7be89054117e60218e18a682362c1c7a25cd167c21d576264a6bee2689c1a19e942e35b1c24f19fd9b5459bcc5435cd455e8#npm:3.0.35"],\
-          ["@types/zod", null],\
-          ["zod", "npm:4.3.6"]\
-        ],\
-        "packagePeers": [\
-          "@types/zod",\
-          "zod"\
-        ],\
-        "linkType": "HARD"\
-      }],\
       ["virtual:cce41fb5932c708537e2c8102f67c1df8503bc7b0e98fe405b8d054c96ba0fd0ec3b4d44ffa2144f5379ff48b0cfcbb1215b2409bcf11998c11e7bcf45bd049f#npm:1.0.17", {\
         "packageLocation": "./.yarn/__virtual__/@ai-sdk-openai-compatible-virtual-dceca1b91e/0/cache/@ai-sdk-openai-compatible-npm-1.0.17-0d68ec1df3-8db4dbdd04.zip/node_modules/@ai-sdk/openai-compatible/",\
         "packageDependencies": [\
@@ -368,14 +346,6 @@ const RAW_RUNTIME_STATE =
         ],\
         "linkType": "HARD"\
       }],\
-      ["npm:2.0.3", {\
-        "packageLocation": "./.yarn/cache/@ai-sdk-provider-npm-2.0.3-367a88e4ea-98fa6f15d3.zip/node_modules/@ai-sdk/provider/",\
-        "packageDependencies": [\
-          ["@ai-sdk/provider", "npm:2.0.3"],\
-          ["json-schema", "npm:0.4.0"]\
-        ],\
-        "linkType": "HARD"\
-      }],\
       ["npm:3.0.15", {\
         "packageLocation": "./.yarn/cache/@ai-sdk-provider-npm-3.0.15-feb8f6cc3f-3efa96a4e5.zip/node_modules/@ai-sdk/provider/",\
         "packageDependencies": [\
@@ -394,13 +364,6 @@ const RAW_RUNTIME_STATE =
       }]\
     ]],\
     ["@ai-sdk/provider-utils", [\
-      ["npm:3.0.35", {\
-        "packageLocation": "./.yarn/cache/@ai-sdk-provider-utils-npm-3.0.35-8185ba839a-46f230234a.zip/node_modules/@ai-sdk/provider-utils/",\
-        "packageDependencies": [\
-          ["@ai-sdk/provider-utils", "npm:3.0.35"]\
-        ],\
-        "linkType": "SOFT"\
-      }],\
       ["npm:3.0.9", {\
         "packageLocation": "./.yarn/cache/@ai-sdk-provider-utils-npm-3.0.9-a1fcf189ea-a58d61502d.zip/node_modules/@ai-sdk/provider-utils/",\
         "packageDependencies": [\
@@ -421,23 +384,6 @@ const RAW_RUNTIME_STATE =
           ["@ai-sdk/provider-utils", "npm:4.0.49"]\
         ],\
         "linkType": "SOFT"\
-      }],\
-      ["virtual:6939b674e2d0a8799e3fb4c54a3a7be89054117e60218e18a682362c1c7a25cd167c21d576264a6bee2689c1a19e942e35b1c24f19fd9b5459bcc5435cd455e8#npm:3.0.35", {\
-        "packageLocation": "./.yarn/__virtual__/@ai-sdk-provider-utils-virtual-819aece563/0/cache/@ai-sdk-provider-utils-npm-3.0.35-8185ba839a-46f230234a.zip/node_modules/@ai-sdk/provider-utils/",\
-        "packageDependencies": [\
-          ["@ai-sdk/provider", "npm:2.0.3"],\
-          ["@ai-sdk/provider-utils", "virtual:6939b674e2d0a8799e3fb4c54a3a7be89054117e60218e18a682362c1c7a25cd167c21d576264a6bee2689c1a19e942e35b1c24f19fd9b5459bcc5435cd455e8#npm:3.0.35"],\
-          ["@standard-schema/spec", "npm:1.1.0"],\
-          ["@types/zod", null],\
-          ["eventsource-parser", "npm:3.0.6"],\
-          ["undici", "npm:5.29.0"],\
-          ["zod", "npm:4.3.6"]\
-        ],\
-        "packagePeers": [\
-          "@types/zod",\
-          "zod"\
-        ],\
-        "linkType": "HARD"\
       }],\
       ["virtual:a6652860f9b82b8458d2553f9a1fc7d72644330d221fb70be2872d56642c12a037924bd4d42dc5a481fe86d25aaa4ede04e904e206aee0308b9d1d4f42a28c4d#npm:4.0.49", {\
         "packageLocation": "./.yarn/__virtual__/@ai-sdk-provider-utils-virtual-031f77f9dc/0/cache/@ai-sdk-provider-utils-npm-4.0.49-2059075b6c-910fe82cd0.zip/node_modules/@ai-sdk/provider-utils/",\
@@ -11419,15 +11365,6 @@ const RAW_RUNTIME_STATE =
         "linkType": "HARD"\
       }]\
     ]],\
-    ["@fastify/busboy", [\
-      ["npm:2.1.1", {\
-        "packageLocation": "./.yarn/cache/@fastify-busboy-npm-2.1.1-455d8b6bf5-2bb8a7eca8.zip/node_modules/@fastify/busboy/",\
-        "packageDependencies": [\
-          ["@fastify/busboy", "npm:2.1.1"]\
-        ],\
-        "linkType": "HARD"\
-      }]\
-    ]],\
     ["@floating-ui/core", [\
       ["npm:1.5.0", {\
         "packageLocation": "./.yarn/cache/@floating-ui-core-npm-1.5.0-3cdde0a88b-3182715a30.zip/node_modules/@floating-ui/core/",\
@@ -16431,7 +16368,7 @@ const RAW_RUNTIME_STATE =
           ["@ai-sdk/anthropic", "virtual:03eccba7aea56c5e81dc44bb3b7187b016606939b3f527c4056e17155e51ec06ce171ac2805ac4d2757699808fe739f2fcab49bece2a8a6443ae58e07d01d007#npm:3.0.114"],\
           ["@ai-sdk/google", "virtual:03eccba7aea56c5e81dc44bb3b7187b016606939b3f527c4056e17155e51ec06ce171ac2805ac4d2757699808fe739f2fcab49bece2a8a6443ae58e07d01d007#npm:3.0.118"],\
           ["@ai-sdk/openai", "virtual:03eccba7aea56c5e81dc44bb3b7187b016606939b3f527c4056e17155e51ec06ce171ac2805ac4d2757699808fe739f2fcab49bece2a8a6443ae58e07d01d007#npm:3.0.104"],\
-          ["@ai-sdk/openai-compatible", "virtual:03eccba7aea56c5e81dc44bb3b7187b016606939b3f527c4056e17155e51ec06ce171ac2805ac4d2757699808fe739f2fcab49bece2a8a6443ae58e07d01d007#npm:1.0.52"],\
+          ["@ai-sdk/openai-compatible", "virtual:cce41fb5932c708537e2c8102f67c1df8503bc7b0e98fe405b8d054c96ba0fd0ec3b4d44ffa2144f5379ff48b0cfcbb1215b2409bcf11998c11e7bcf45bd049f#npm:1.0.17"],\
           ["@atlaskit/banner", "virtual:c72650afd8d8ecff5306990489065a4e0c34d2b88c4acd8d3577f92d5cf46b6fcfd28624afe640ea0bc70671a30a586d15077b1a64459cd4c0f76ed3d182f496#npm:12.1.18"],\
           ["@atlaskit/button", "virtual:c72650afd8d8ecff5306990489065a4e0c34d2b88c4acd8d3577f92d5cf46b6fcfd28624afe640ea0bc70671a30a586d15077b1a64459cd4c0f76ed3d182f496#npm:16.11.0"],\
           ["@atlaskit/checkbox", "virtual:c72650afd8d8ecff5306990489065a4e0c34d2b88c4acd8d3577f92d5cf46b6fcfd28624afe640ea0bc70671a30a586d15077b1a64459cd4c0f76ed3d182f496#npm:12.6.11"],\
@@ -34801,14 +34738,6 @@ const RAW_RUNTIME_STATE =
       }]\
     ]],\
     ["undici", [\
-      ["npm:5.29.0", {\
-        "packageLocation": "./.yarn/cache/undici-npm-5.29.0-caeb96c8ee-0ceca8924a.zip/node_modules/undici/",\
-        "packageDependencies": [\
-          ["@fastify/busboy", "npm:2.1.1"],\
-          ["undici", "npm:5.29.0"]\
-        ],\
-        "linkType": "HARD"\
-      }],\
       ["npm:6.27.0", {\
         "packageLocation": "./.yarn/cache/undici-npm-6.27.0-00a86409ac-30c18cdb23.zip/node_modules/undici/",\
         "packageDependencies": [\
