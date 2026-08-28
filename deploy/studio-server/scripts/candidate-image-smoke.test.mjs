@@ -1,7 +1,11 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { extractCandidateWorkflowValue } from './candidate-image-smoke.mjs';
+import { createCandidateWorkflowRequestBody, extractCandidateWorkflowValue } from './candidate-image-smoke.mjs';
+
+test('candidate smoke sends a direct JSON value to a single Graph Input', () => {
+  assert.equal(createCandidateWorkflowRequestBody(), '"candidate-ok"');
+});
 
 test('candidate smoke extracts Rivet any-data workflow responses', () => {
   assert.deepEqual(
