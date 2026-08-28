@@ -427,6 +427,8 @@ test('CI and production launchers publish and run the Studio Server image set fr
 
   assert.ok(promotionIndex > 0, 'expected a final image promotion job');
   assert.match(imageBuildWorkflow, /branches:\s*\n\s*- main/);
+  assert.match(imageBuildWorkflow, /permissions:\s*\n\s+contents: read\s*\n\s+packages: write/);
+  assert.doesNotMatch(imageBuildWorkflow, /cloud-hosted-rivet2-wrapper/);
   assert.match(verificationWorkflow, /push:\r?\n\s+branches:\r?\n\s+- develop/);
   assert.match(verificationWorkflow, /pull_request:\r?\n\s+branches:\r?\n\s+- develop/);
   assert.doesNotMatch(verificationWorkflow, /codex\/import-studio-server/);
@@ -462,11 +464,11 @@ test('CI and production launchers publish and run the Studio Server image set fr
     assert.match(
       imageBuildWorkflow,
       new RegExp(
-        `- service: ${service}\\s+dockerfile: deploy/studio-server/images/${service}/Dockerfile\\s+image: ghcr\\.io/valerypopoff/cloud-hosted-rivet2-wrapper/${service}\\s+platforms: ${platforms.replace(/\//g, '\\/')}`,
+        `- service: ${service}\\s+dockerfile: deploy/studio-server/images/${service}/Dockerfile\\s+image: ghcr\\.io/valerypopoff/rivet2\\.0-studio-server/${service}\\s+platforms: ${platforms.replace(/\//g, '\\/')}`,
       ),
     );
-    assert.ok(prodCompose.includes(`ghcr.io/valerypopoff/cloud-hosted-rivet2-wrapper/${service}`));
-    assert.ok(envExample.includes(`ghcr.io/valerypopoff/cloud-hosted-rivet2-wrapper/${service}:latest`));
+    assert.ok(prodCompose.includes(`ghcr.io/valerypopoff/rivet2.0-studio-server/${service}`));
+    assert.ok(envExample.includes(`ghcr.io/valerypopoff/rivet2.0-studio-server/${service}:latest`));
   }
 
   assert.equal(packageJson.scripts['studio-server:prod'], 'yarn studio-server:prod:prebuilt');

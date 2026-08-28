@@ -353,20 +353,20 @@ The Rivet 2 wrapper image pipeline publishes the default GitHub Container Regist
 ```yaml
 images:
   proxy:
-    repository: ghcr.io/valerypopoff/cloud-hosted-rivet2-wrapper/proxy
+    repository: ghcr.io/valerypopoff/rivet2.0-studio-server/proxy
     tag: latest
   web:
-    repository: ghcr.io/valerypopoff/cloud-hosted-rivet2-wrapper/web
+    repository: ghcr.io/valerypopoff/rivet2.0-studio-server/web
     tag: latest
   api:
-    repository: ghcr.io/valerypopoff/cloud-hosted-rivet2-wrapper/api
+    repository: ghcr.io/valerypopoff/rivet2.0-studio-server/api
     tag: latest
   executor:
-    repository: ghcr.io/valerypopoff/cloud-hosted-rivet2-wrapper/executor
+    repository: ghcr.io/valerypopoff/rivet2.0-studio-server/executor
     tag: latest
 ```
 
-The `latest` tag is promoted only for pushes to `main`; commit-SHA and version-tag image tags are produced by the same workflow. All four images build from one monorepo commit, first publish under the deterministic `build-<commit SHA>` candidate tag, and receive public tags only after the complete image matrix and release gates succeed. Runs for the same Git ref are serialized so overlapping pushes cannot race an older image set back onto `latest`.
+The `rivet2.0-studio-server/*` packages are owned by this monorepo; the retired `cloud-hosted-rivet2-wrapper/*` packages are not release targets. The `latest` tag is promoted only for pushes to `main`; commit-SHA and version-tag image tags are produced by the same workflow. All four images build from one monorepo commit, first publish under the deterministic `build-<commit SHA>` candidate tag, and receive public tags only after the complete image matrix and release gates succeed. Runs for the same Git ref are serialized so overlapping pushes cannot race an older image set back onto `latest`.
 For production, prefer pinning all four image tags to the same published commit SHA or release tag instead of leaving them on `latest`.
 If the GHCR packages are private, configure `imagePullSecrets`; public packages should pull anonymously.
 
@@ -390,16 +390,16 @@ imagePullSecrets:
 
 images:
   proxy:
-    repository: ghcr.io/valerypopoff/cloud-hosted-rivet2-wrapper/proxy
+    repository: ghcr.io/valerypopoff/rivet2.0-studio-server/proxy
     tag: <published-tag> # Or set digest: sha256:<immutable-manifest>.
   web:
-    repository: ghcr.io/valerypopoff/cloud-hosted-rivet2-packages/studio-server-web
+    repository: ghcr.io/valerypopoff/rivet2.0-studio-server/web
     tag: <published-tag> # Or set digest: sha256:<immutable-manifest>.
   api:
-    repository: ghcr.io/valerypopoff/cloud-hosted-rivet2-packages/studio-server-api
+    repository: ghcr.io/valerypopoff/rivet2.0-studio-server/api
     tag: <published-tag> # Or set digest: sha256:<immutable-manifest>.
   executor:
-    repository: ghcr.io/valerypopoff/cloud-hosted-rivet2-packages/studio-server-executor
+    repository: ghcr.io/valerypopoff/rivet2.0-studio-server/executor
     tag: <published-tag> # Or set digest: sha256:<immutable-manifest>.
 
 ingress:

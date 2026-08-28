@@ -77,8 +77,8 @@ yarn studio-server:prod
 ```
 
 This pulls the published
-`ghcr.io/valerypopoff/cloud-hosted-rivet2-wrapper/*` images, recreates the
-stack, and waits for it to become healthy. The default browser URL is
+`ghcr.io/valerypopoff/rivet2.0-studio-server/*` images, recreates the
+stack, and waits for it to become healthy. These are new, monorepo-owned packages; the retired `cloud-hosted-rivet2-wrapper/*` packages are not updated by this repository. The default browser URL is
 `http://localhost:8080`; set `RIVET_PORT` to change it.
 
 The production launcher detects the one existing historical Studio Server
