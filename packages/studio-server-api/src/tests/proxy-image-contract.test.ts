@@ -512,3 +512,50 @@ test('CI and production launchers publish and run the Studio Server image set fr
   assert.match(prodDockerLauncher, /--no-build --force-recreate --remove-orphans --wait/);
   assert.match(prodDockerLauncher, /--build --force-recreate --remove-orphans --wait/);
 });
+
+test('Compose initializes only filesystem artifact mounts before unprivileged services start', () => {
+  const getServiceBlock = (compose: string, service: string): string => {
+    const marker = `\n  ${service}:`;
+    const markerIndex = compose.indexOf(marker);
+    assert.notEqual(markerIndex, -1, `Expected ${service} service to exist.`);
+    const start = markerIndex + 1;
+    const afterMarker = start + marker.length - 1;
+    const nextService = /\r?\n  [a-z][a-z0-9-]*:/i.exec(compose.slice(afterMarker));
+    return compose.slice(start, nextService ? afterMarker + nextService.index : compose.length);
+  };
+
+  for (const [topology, compose, expectedImage] of [
+    [
+      'production',
+      readRepoFile('deploy/studio-server/compose/docker-compose.yml'),
+      /image: \$\{RIVET_API_IMAGE:-ghcr\.io\/valerypopoff\/rivet2\.0-studio-server\/api:\$\{RIVET_IMAGE_TAG:-latest\}\}/,
+    ],
+    ['development', readRepoFile('deploy/studio-server/compose/docker-compose.dev.yml'), /image: node:20-alpine/],
+  ] as const) {
+    const initializer = getServiceBlock(compose, 'filesystem-artifacts-init');
+
+    assert.match(initializer, expectedImage, `${topology} initializer image`);
+    assert.match(initializer, /user: "0:0"/);
+    assert.match(initializer, /entrypoint: \["\/bin\/sh", "-ec"\]/);
+    assert.match(initializer, /command:\s*\n\s*- \|/);
+    assert.match(initializer, /for directory in \/workflows \/workflow-recordings \/data\/runtime-libraries; do/);
+    assert.ok(initializer.includes("if [ \"$$(stat -c '%u:%g' \"$$directory\")\" != \"10001:10001\" ]; then"));
+    assert.ok(
+      initializer.includes(
+        'find "$$directory" -xdev -exec chown -h 10001:10001 {} +',
+      ),
+    );
+    assert.match(initializer, /RIVET_WORKFLOWS_HOST_PATH.*:\/workflows/);
+    assert.match(initializer, /RIVET_WORKFLOW_RECORDINGS_HOST_PATH.*:\/workflow-recordings/);
+    assert.match(initializer, /RIVET_RUNTIME_LIBS_HOST_PATH.*:\/data\/runtime-libraries/);
+    assert.match(initializer, /restart: "no"/);
+    assert.doesNotMatch(initializer, /rivet_data|rivet_workspace|\/workspace|\/data\/rivet-app/);
+
+    for (const service of ['api', 'executor']) {
+      assert.match(
+        getServiceBlock(compose, service),
+        /depends_on:[\s\S]*?\n\s*filesystem-artifacts-init:\s*\n\s*condition: service_completed_successfully/,
+      );
+    }
+  }
+});

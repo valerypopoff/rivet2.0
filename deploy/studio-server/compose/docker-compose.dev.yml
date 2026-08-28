@@ -86,6 +86,23 @@ services:
       retries: 12
     restart: unless-stopped
 
+  filesystem-artifacts-init:
+    image: node:20-alpine
+    user: "0:0"
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - |
+        for directory in /workflows /workflow-recordings /data/runtime-libraries; do
+          mkdir -p "$$directory"
+          if [ "$$(stat -c '%u:%g' "$$directory")" != "10001:10001" ]; then
+            find "$$directory" -xdev -exec chown -h 10001:10001 {} +
+          fi
+        done
+    volumes:
+      - ${RIVET_WORKFLOWS_HOST_PATH:-../../../.data/workflows}:/workflows
+      - ${RIVET_WORKFLOW_RECORDINGS_HOST_PATH:-../../../.data/workflow-recordings}:/workflow-recordings
+      - ${RIVET_RUNTIME_LIBS_HOST_PATH:-../../../.data/runtime-libraries}:/data/runtime-libraries
+    restart: "no"
   api:
     build:
       context: ../../..
@@ -102,6 +119,8 @@ services:
     depends_on:
       web:
         condition: service_healthy
+      filesystem-artifacts-init:
+        condition: service_completed_successfully
     user: "0:0"
     working_dir: /workspace
     ports:
@@ -200,6 +219,9 @@ services:
         https_proxy: ${https_proxy:-${HTTPS_PROXY:-}}
         all_proxy: ${all_proxy:-${ALL_PROXY:-}}
         no_proxy: ${no_proxy:-${NO_PROXY:-}}
+    depends_on:
+      filesystem-artifacts-init:
+        condition: service_completed_successfully
     environment:
       - HTTP_PROXY=${HTTP_PROXY:-}
       - HTTPS_PROXY=${HTTPS_PROXY:-}
