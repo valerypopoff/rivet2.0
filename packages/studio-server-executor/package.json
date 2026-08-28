@@ -1,0 +1,19 @@
+{
+  "name": "@valerypopoff/rivet-studio-server-executor",
+  "private": true,
+  "version": "1.8.6",
+  "description": "Hosted Rivet executor entry point and container bundle",
+  "dependencies": {
+    "@valerypopoff/rivet-app-executor": "workspace:^",
+    "@valerypopoff/rivet-studio-server-shared": "workspace:^"
+  },
+  "type": "module",
+  "scripts": {
+    "build": "node build/bundle-executor.cjs",
+    "dev": "tsx watch --inspect=9228 src/executor.mts"
+  },
+  "devDependencies": {
+    "esbuild": "0.25.12",
+    "tsx": "^4.23.0"
+  }
+}

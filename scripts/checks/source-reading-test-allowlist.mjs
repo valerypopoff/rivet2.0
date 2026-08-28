@@ -60,4 +60,23 @@ export const sourceReadingTestAllowlist = new Set([
   'packages/app/src/utils/platform/tauriViteOptimizeDeps.test.ts',
   'packages/cli/test/cli.test.ts',
   'packages/core/test/model/nodes/LLMChatV2Node.test.ts',
+  // Imported Studio Server migration baseline. Keep shrinking these entries as
+  // their static integration contracts gain observable owner seams.
+  'packages/studio-server-api/src/tests/app-settings.test.ts',
+  'packages/studio-server-api/src/tests/filesystem-execution-cache.test.ts',
+  'packages/studio-server-api/src/tests/filesystem-execution-source.test.ts',
+  'packages/studio-server-api/src/tests/fixture-safety.test.ts',
+  'packages/studio-server-api/src/tests/hosted-project-title.test.ts',
+  'packages/studio-server-api/src/tests/kubernetes-managed-release-gate.test.ts',
+  'packages/studio-server-api/src/tests/settings-repository.test.ts',
+  'packages/studio-server-api/src/tests/workflow-execution-filesystem.test.ts',
+  'packages/studio-server-api/src/tests/workflow-filesystem-tree.test.ts',
+  'packages/studio-server-api/src/tests/workflow-publication-filesystem.test.ts',
+  'packages/studio-server-api/src/tests/workflow-published-history-filesystem.test.ts',
+  'packages/studio-server-api/src/tests/workflow-recordings-http.test.ts',
+  'packages/studio-server-web/playwright-observe/rivet-web-app.spec.ts',
+  'packages/studio-server-web/tests/hosted-fonts.test.ts',
+  'packages/studio-server-web/tests/llm-profile-health-settings.test.ts',
+  'packages/studio-server-web/tests/modal-theme-contract.test.ts',
+  'packages/studio-server-web/tests/vite-aliases.test.ts',
 ]);

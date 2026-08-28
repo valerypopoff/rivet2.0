@@ -12,7 +12,7 @@ Rivet is a visual IDE and runtime for building AI workflows, agents, prompt chai
 
 This checkout is also designed to be embedded by wrapper applications that vendor Rivet source code. Wrappers can import from local source paths and use the supported app-host seams without depending on public npm packages.
 
-For a self-hosted Rivet 2 wrapper, see [Rivet Studio Server](https://github.com/valerypopoff/Rivet-Studio-Server/tree/main-rivet2).
+For the self-hosted Rivet 2 service, see [Rivet Studio Server](deploy/studio-server/README.md).
 
 ## Contents
 
@@ -121,13 +121,14 @@ Rivet 2 treats plugin installation as app-level state:
 
 The YAML project format remains unchanged; the app derives the `plugins` list from graph contents when saving, running, and uploading project data.
 
-## Embedding Rivet In A Wrapper
+## Embedding Rivet In A Host
 
-Wrapper apps that vendor this repository as a local `rivet/` folder should import from the vendored source tree they ship. For example:
+Hosted workspaces in this monorepo can import the source-level app host from the
+sibling app workspace. For example, from another workspace under `packages/`:
 
 ```ts
-import { RivetAppHost } from '../rivet/packages/app/src/host';
-import '../rivet/packages/app/src/host.css';
+import { RivetAppHost } from '../app/src/host';
+import '../app/src/host.css';
 ```
 
 `RivetAppHost` provides the app shell needed for embedding the full Rivet editor:
@@ -138,7 +139,9 @@ import '../rivet/packages/app/src/host.css';
 - Workspace host APIs for opening snapshots, opening path-backed projects, closing projects, moving project paths, and replacing the active project.
 - Provider-only integration points for IO, datasets, environment variables, storage, path policies, and wrapper bridge components.
 
-Wrappers should prefer these source-level seams over private editor internals. The npm package names describe the workspace boundaries, but a wrapper that ships a custom Rivet checkout should resolve those boundaries to its local `rivet/` source and build outputs.
+Hosts should prefer these source-level seams over private editor internals. The
+workspace package names describe ownership boundaries, while the monorepo keeps
+the host and editor source on the same commit.
 
 ## Rivet 2 NPM Packages
 

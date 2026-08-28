@@ -1,0 +1,52 @@
+# VCS
+.git
+.gitignore
+**/.git
+**/.git/**
+
+# Dependencies
+# Excludes workspace dependency state such as packages/studio-server-bootstrap/node_modules/
+**/node_modules
+
+# Build artifacts
+**/dist
+**/build
+**/target
+**/.turbo
+**/.cache
+**/.vite
+# Keep the tracked Studio Server executor build helper while excluding outputs.
+!packages/studio-server-executor/build/
+!packages/studio-server-executor/build/bundle-executor.cjs
+
+# Logs
+**/*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Local runtime data
+.data
+.pnp.cjs
+.pnp.loader.mjs
+.yarn/install-state.gz
+.yarn/global
+.yarn/sdks
+.yarn/unplugged
+artifacts
+playwright-report
+test-results
+
+# Native desktop assets are not inputs to the hosted server images.
+packages/app/sidecars
+
+# Python / misc caches
+**/__pycache__
+**/.DS_Store
+
+
+
+# Editor/temp
+.vscode
+.idea
+*.tmp

@@ -203,7 +203,7 @@ export const homepageContent = {
     ],
     action: {
       label: 'View Rivet Studio Server for Rivet 2 on GitHub',
-      to: 'https://github.com/valerypopoff/Rivet-Studio-Server/tree/develop-rivet2',
+      to: 'https://github.com/valerypopoff/rivet2.0/tree/develop/deploy/studio-server',
     },
   },
   boundaries: {

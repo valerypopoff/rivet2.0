@@ -1,0 +1,17 @@
+{
+  "name": "@valerypopoff/rivet-studio-server-shared",
+  "private": true,
+  "version": "1.8.6",
+  "description": "Shared browser and server contracts for Rivet Studio Server",
+  "type": "module",
+  "scripts": {
+    "build": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@valerypopoff/rivet2-evaluations": "workspace:^",
+    "@valerypopoff/rivet2-node": "workspace:^"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.3"
+  }
+}

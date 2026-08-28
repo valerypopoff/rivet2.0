@@ -1,7 +1,0 @@
-{
-  "name": "@self-hosted/wrapper-shared",
-  "private": true,
-  "version": "1.0.1",
-  "description": "Shared browser/server contracts for the hosted Rivet wrapper",
-  "type": "module"
-}

@@ -28,6 +28,8 @@
 # misc
 .DS_Store
 .env
+.env-old
+.env.dev
 .env.local
 .env.development.local
 .env.test.local
@@ -54,6 +56,24 @@ packages/app-executor/bin/executor-bundle.cjs
 .turbo
 
 .idea
+.vscode/
+.codex/
+.claude/
+.tools/
+
+# Studio Server local runtime and verification data
+/.data/
+/workflows/
+/artifacts/playwright/
+/artifacts/benchmarks/
+/artifacts/web-app-debug/
+/artifacts/runtime-library-cleanup/
+/artifacts/kubernetes-managed-release-gate/
+/artifacts/kubernetes-managed-provider-gate/
+/artifacts/
+/tmp-*.png
+
+Thumbs.db
 
 packages/app/stats.html
 packages/app/tmp-icon-test/

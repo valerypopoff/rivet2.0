@@ -346,7 +346,7 @@ const manifest = {
   generatedAt: new Date().toISOString(),
   target: includeArg ? 'custom' : targetName,
   revision,
-  sourceRef: process.env.RIVET_SOURCE_REF ?? process.env.RIVET_REPO_REF ?? null,
+  sourceRef: process.env.RIVET_SOURCE_REF ?? null,
   artifacts: preparedArtifacts,
 };
 

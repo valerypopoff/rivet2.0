@@ -219,6 +219,10 @@ and removing one requires removing its stale allowlist entry. `.skip` remains a
 visible review queue because several parked runtime optimizations intentionally keep
 characterization cases beside the active suite.
 
+The Studio Server monorepo import added its existing source-contract tests to this
+same shrinking baseline. They are migration debt, not precedent for new static tests;
+remove each entry when its contract moves behind an observable owner seam.
+
 `check-ai-runtime-boundaries.mjs` prevents Generate using AI and the graph builder
 from regaining legacy Chat/Azure endpoint seams. It also keeps the selectable
 legacy Graph Builder on `runLegacyGraphBuilderDraft` plus the atomic editor
@@ -570,6 +574,12 @@ name alone. The artifact helper records the resolved revision in
 `RIVET_SOURCE_REVISION=<sha>` when the source checkout does not have `.git`.
 Set `RIVET_SOURCE_REF=<branch-or-tag>` when the artifact manifest should record
 the configured source ref separately from the resolved revision.
+
+Studio Server images use the monorepo root as their Docker build context. Keep
+the root `.dockerignore` aligned with that boundary: local Yarn PnP state,
+Rust/Tauri targets, desktop sidecars, browser-test artifacts, and existing build
+outputs are never image inputs. The checked-in Yarn cache, Yarn release, patches,
+workspace manifests, and package source remain available to immutable installs.
 
 For cache-safe dependency install layers, copy only dependency metadata before
 `yarn install`:

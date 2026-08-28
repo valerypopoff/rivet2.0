@@ -1,0 +1,419 @@
+name: Build Images
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - 'v*'
+  schedule:
+    - cron: '17 3 * * 2'
+  workflow_dispatch:
+    inputs:
+      run_managed_kubernetes_disruption:
+        description: Run the slower managed Kubernetes disruption scenarios after the smoke gate.
+        required: false
+        default: false
+        type: boolean
+      run_managed_kubernetes_provider_gate:
+        description: Deploy the immutable candidate images to the protected managed-Kubernetes staging environment and run the provider gate.
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: build-images-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  IMAGE_NAMESPACE: ghcr.io/valerypopoff/cloud-hosted-rivet2-wrapper
+
+jobs:
+  verify-repository:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check Out Repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Set Up Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24
+
+      - name: Verify Repo Structure
+        run: |
+          corepack enable
+          yarn install --immutable
+          yarn studio-server:verify:repo-structure
+
+      - name: Set Up Kubernetes Tools
+        run: yarn studio-server:setup:k8s-tools
+
+      - name: Verify Kubernetes Contracts
+        run: yarn studio-server:verify:kubernetes
+
+      - name: Verify Test Style
+        run: yarn studio-server:verify:test-style
+
+  build-and-push:
+    needs:
+      - verify-repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      SOURCE_TAG: build-${{ github.sha }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - service: proxy
+            dockerfile: deploy/studio-server/images/proxy/Dockerfile
+            image: ghcr.io/valerypopoff/cloud-hosted-rivet2-wrapper/proxy
+            platforms: linux/amd64,linux/arm64
+          - service: web
+            dockerfile: deploy/studio-server/images/web/Dockerfile
+            image: ghcr.io/valerypopoff/cloud-hosted-rivet2-wrapper/web
+            platforms: linux/amd64,linux/arm64
+          - service: api
+            dockerfile: deploy/studio-server/images/api/Dockerfile
+            image: ghcr.io/valerypopoff/cloud-hosted-rivet2-wrapper/api
+            platforms: linux/amd64
+          - service: executor
+            dockerfile: deploy/studio-server/images/executor/Dockerfile
+            image: ghcr.io/valerypopoff/cloud-hosted-rivet2-wrapper/executor
+            platforms: linux/amd64
+
+    steps:
+      - name: Check Out Repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Set Up QEMU
+        if: ${{ contains(matrix.platforms, 'linux/arm64') }}
+        uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3
+
+      - name: Set Up Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+
+      - name: Log In to GHCR
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Prepare Docker Metadata
+        id: meta
+        uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5
+        with:
+          images: ${{ matrix.image }}
+          tags: |
+            type=raw,value=${{ env.SOURCE_TAG }}
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+
+      - name: Build and Push ${{ matrix.service }}
+        id: build
+        continue-on-error: true
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
+          platforms: ${{ matrix.platforms }}
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=${{ matrix.service }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.service }}
+
+      - name: Refresh GHCR Login Before Retry
+        if: ${{ steps.build.outcome == 'failure' }}
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Retry Build and Push ${{ matrix.service }}
+        if: ${{ steps.build.outcome == 'failure' }}
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
+          platforms: ${{ matrix.platforms }}
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=${{ matrix.service }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.service }}
+
+  managed-kubernetes-release-gate:
+    needs:
+      - build-and-push
+    runs-on: ubuntu-latest
+    timeout-minutes: 55
+    env:
+      SOURCE_TAG: build-${{ github.sha }}
+    steps:
+      - name: Check Out Repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Set Up Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24
+
+      - name: Install Workspace Dependencies
+        run: |
+          corepack enable
+          yarn install --immutable
+
+      - name: Set Up Kubernetes Tools
+        run: yarn studio-server:setup:k8s-tools
+
+      - name: Install Kind
+        shell: bash
+        run: |
+          set -euo pipefail
+          go install sigs.k8s.io/kind@v0.27.0
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+
+      - name: Log In to GHCR
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Resolve Candidate Image Digests
+        shell: bash
+        run: |
+          set -euo pipefail
+          for service in proxy web api executor; do
+            image="${IMAGE_NAMESPACE}/${service}:${SOURCE_TAG}"
+            digest="$(docker buildx imagetools inspect "$image" --format '{{.Manifest.Digest}}')"
+            if [[ ! "$digest" =~ ^sha256:[a-f0-9]{64}$ ]]; then
+              echo "::error::Could not resolve immutable digest for $image: $digest"
+              exit 1
+            fi
+            upper_service="$(tr '[:lower:]' '[:upper:]' <<< "$service")"
+            echo "RIVET_K8S_RELEASE_GATE_${upper_service}_IMAGE_REPOSITORY=${IMAGE_NAMESPACE}/${service}" >> "$GITHUB_ENV"
+            echo "RIVET_K8S_RELEASE_GATE_${upper_service}_IMAGE_DIGEST=$digest" >> "$GITHUB_ENV"
+          done
+
+      - name: Create Disposable Kind Cluster
+        shell: bash
+        run: |
+          set -euo pipefail
+          kind create cluster --name rivet-managed-release --config deploy/studio-server/scripts/kind-managed-release-cluster.yaml
+          kubectl --context kind-rivet-managed-release cluster-info
+
+      - name: Run Managed Kubernetes Gate
+        shell: bash
+        env:
+          RIVET_K8S_RELEASE_GATE_CONTEXT: kind-rivet-managed-release
+          RIVET_K8S_RELEASE_GATE_ALLOW_CONTEXT: kind-rivet-managed-release
+          RIVET_K8S_RELEASE_GATE_REGISTRY_SERVER: ghcr.io
+          RIVET_K8S_RELEASE_GATE_REGISTRY_USERNAME: ${{ github.actor }}
+          RIVET_K8S_RELEASE_GATE_REGISTRY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          gate_script=studio-server:verify:kubernetes:managed-live
+          if [[ "$GITHUB_EVENT_NAME" == "schedule" || "${{ inputs.run_managed_kubernetes_disruption }}" == "true" ]]; then
+            gate_script=studio-server:verify:kubernetes:managed-disruption
+          fi
+          yarn "$gate_script"
+
+      - name: Upload Managed Kubernetes Gate Artifacts
+        if: ${{ always() }}
+        uses: actions/upload-artifact@65462800fd760344b1a7b4382951275a0abb4808 # v4
+        with:
+          name: managed-kubernetes-release-gate-${{ github.run_id }}
+          path: artifacts/kubernetes-managed-release-gate
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Delete Disposable Kind Cluster
+        if: ${{ always() }}
+        shell: bash
+        run: kind delete cluster --name rivet-managed-release
+  managed-kubernetes-provider-gate:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.run_managed_kubernetes_provider_gate == true }}
+    needs:
+      - build-and-push
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    environment:
+      name: rivet-managed-staging
+    env:
+      SOURCE_TAG: build-${{ github.sha }}
+      RIVET_K8S_PROVIDER_GATE_CONTEXT: ${{ vars.RIVET_K8S_STAGING_CONTEXT }}
+      RIVET_K8S_PROVIDER_GATE_ALLOW_CONTEXT: ${{ vars.RIVET_K8S_STAGING_CONTEXT }}
+      RIVET_K8S_PROVIDER_GATE_CONFIRM: deploy-staging
+      RIVET_K8S_PROVIDER_GATE_REGISTRY_SERVER: ghcr.io
+      RIVET_K8S_PROVIDER_GATE_REGISTRY_USERNAME: ${{ github.actor }}
+      RIVET_K8S_PROVIDER_GATE_REGISTRY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - name: Check Out Repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Set Up Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24
+
+      - name: Install Workspace Dependencies
+        run: |
+          corepack enable
+          yarn install --immutable
+
+      - name: Set Up Kubernetes Tools
+        run: yarn studio-server:setup:k8s-tools
+
+      - name: Define Protected Staging File Paths
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            echo "KUBECONFIG=$RUNNER_TEMP/rivet-managed-staging.kubeconfig"
+            echo "RIVET_K8S_PROVIDER_GATE_CONFIG_FILE=$RUNNER_TEMP/rivet-managed-provider-gate.json"
+            echo "RIVET_K8S_PROVIDER_GATE_VALUES_FILE=$RUNNER_TEMP/rivet-managed-provider-values.yaml"
+          } >> "$GITHUB_ENV"
+
+      - name: Restore Protected Staging Configuration
+        shell: bash
+        env:
+          RIVET_K8S_STAGING_KUBECONFIG_B64: ${{ secrets.RIVET_K8S_STAGING_KUBECONFIG_B64 }}
+          RIVET_K8S_STAGING_CONFIG_B64: ${{ secrets.RIVET_K8S_STAGING_CONFIG_B64 }}
+          RIVET_K8S_STAGING_VALUES_B64: ${{ secrets.RIVET_K8S_STAGING_VALUES_B64 }}
+          RIVET_K8S_STAGING_INTERRUPTION_MANIFESTS_TGZ_B64: ${{ secrets.RIVET_K8S_STAGING_INTERRUPTION_MANIFESTS_TGZ_B64 }}
+        run: |
+          set -euo pipefail
+          umask 077
+          : "${RIVET_K8S_STAGING_KUBECONFIG_B64:?Missing protected staging kubeconfig}"
+          : "${RIVET_K8S_STAGING_CONFIG_B64:?Missing protected staging gate config}"
+          : "${RIVET_K8S_STAGING_VALUES_B64:?Missing protected staging Helm values}"
+          if [ -n "${RIVET_K8S_STAGING_INTERRUPTION_MANIFESTS_TGZ_B64:-}" ]; then
+            archive="$RUNNER_TEMP/rivet-managed-provider-interruptions.tgz"
+            printf '%s' "$RIVET_K8S_STAGING_INTERRUPTION_MANIFESTS_TGZ_B64" | base64 --decode > "$archive"
+            if tar -tzf "$archive" | grep -Eq '(^/|(^|/)\.\.(/|$))'; then
+              echo "::error::Provider gate interruption archive contains an unsafe path"
+              exit 1
+            fi
+            if tar -tvzf "$archive" | grep -Eq '^[lh]'; then
+              echo "::error::Provider gate interruption archive must not contain symbolic or hard links"
+              exit 1
+            fi
+            tar -xzf "$archive" -C "$RUNNER_TEMP" --no-same-owner --no-same-permissions
+            rm -f "$archive"
+          fi
+          printf '%s' "$RIVET_K8S_STAGING_KUBECONFIG_B64" | base64 --decode > "$KUBECONFIG"
+          printf '%s' "$RIVET_K8S_STAGING_CONFIG_B64" | base64 --decode > "$RIVET_K8S_PROVIDER_GATE_CONFIG_FILE"
+          printf '%s' "$RIVET_K8S_STAGING_VALUES_B64" | base64 --decode > "$RIVET_K8S_PROVIDER_GATE_VALUES_FILE"
+
+      - name: Resolve Candidate Image Digests
+        shell: bash
+        run: |
+          set -euo pipefail
+          for service in proxy web api executor; do
+            image="${IMAGE_NAMESPACE}/${service}:${SOURCE_TAG}"
+            digest="$(docker buildx imagetools inspect "$image" --format '{{.Manifest.Digest}}')"
+            if [[ ! "$digest" =~ ^sha256:[a-f0-9]{64}$ ]]; then
+              echo "::error::Could not resolve immutable digest for $image: $digest"
+              exit 1
+            fi
+            upper_service="$(tr '[:lower:]' '[:upper:]' <<< "$service")"
+            echo "RIVET_K8S_PROVIDER_GATE_${upper_service}_IMAGE_REPOSITORY=${IMAGE_NAMESPACE}/${service}" >> "$GITHUB_ENV"
+            echo "RIVET_K8S_PROVIDER_GATE_${upper_service}_IMAGE_DIGEST=$digest" >> "$GITHUB_ENV"
+          done
+
+      - name: Run Managed Kubernetes Provider Gate
+        run: yarn studio-server:verify:kubernetes:managed-provider
+
+      - name: Upload Managed Kubernetes Provider Gate Artifacts
+        if: ${{ always() }}
+        uses: actions/upload-artifact@65462800fd760344b1a7b4382951275a0abb4808 # v4
+        with:
+          name: managed-kubernetes-provider-gate-${{ github.run_id }}
+          path: artifacts/kubernetes-managed-provider-gate
+          if-no-files-found: warn
+          retention-days: 14
+
+  promote-images:
+    needs:
+      - build-and-push
+      - managed-kubernetes-release-gate
+      - managed-kubernetes-provider-gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    if: ${{ always() && needs.build-and-push.result == 'success' && needs.managed-kubernetes-release-gate.result == 'success' && (needs.managed-kubernetes-provider-gate.result == 'success' || needs.managed-kubernetes-provider-gate.result == 'skipped') }}
+    env:
+      SOURCE_TAG: build-${{ github.sha }}
+    steps:
+      - name: Set Up Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+
+      - name: Log In to GHCR
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Prepare Release Metadata
+        id: release-meta
+        uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5
+        with:
+          images: ${{ env.IMAGE_NAMESPACE }}/proxy
+          tags: |
+            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
+            type=ref,event=branch
+            type=ref,event=tag
+            type=sha,format=short
+
+      - name: Promote Complete Image Set
+        shell: bash
+        env:
+          PROXY_RELEASE_TAGS: ${{ steps.release-meta.outputs.tags }}
+        run: |
+          set -euo pipefail
+
+          tag_suffixes=()
+          while IFS= read -r tag; do
+            [ -n "$tag" ] || continue
+            prefix="${IMAGE_NAMESPACE}/proxy:"
+            if [[ "$tag" != "$prefix"* ]]; then
+              echo "::error::Unexpected release tag from metadata action: $tag"
+              exit 1
+            fi
+            tag_suffixes+=("${tag#"$prefix"}")
+          done <<< "$PROXY_RELEASE_TAGS"
+
+          if [ "${#tag_suffixes[@]}" -eq 0 ]; then
+            echo "::error::No release image tags were generated"
+            exit 1
+          fi
+
+          for service in proxy web api executor; do
+            source_image="${IMAGE_NAMESPACE}/${service}:${SOURCE_TAG}"
+            destination_args=()
+            for suffix in "${tag_suffixes[@]}"; do
+              destination_args+=(--tag "${IMAGE_NAMESPACE}/${service}:${suffix}")
+            done
+
+            for attempt in 1 2 3; do
+              if docker buildx imagetools create "${destination_args[@]}" "$source_image"; then
+                break
+              fi
+              if [ "$attempt" -eq 3 ]; then
+                echo "::error::Failed to promote $service after $attempt attempts"
+                exit 1
+              fi
+              sleep "$((attempt * 5))"
+            done
+          done
