@@ -16,7 +16,12 @@ services:
     volumes:
       - ./nginx/default.dev.conf.template:/etc/nginx/templates/default.conf.template:ro
       - ../images/proxy/normalize-workflow-paths.sh:/normalize-workflow-paths.sh:ro
-      - rivet_data:/data/rivet-app:ro
+      - type: volume
+        source: rivet_data
+        target: /data/rivet-app
+        read_only: true
+        volume:
+          nocopy: true
     entrypoint: ["/bin/sh", "/normalize-workflow-paths.sh"]
     depends_on:
       web:
@@ -92,7 +97,7 @@ services:
     entrypoint: ["/bin/sh", "-ec"]
     command:
       - |
-        for directory in /workflows /workflow-recordings /data/runtime-libraries; do
+        for directory in /workflows /workflow-recordings /data/runtime-libraries /data/rivet-app; do
           mkdir -p "$$directory"
           if [ "$$(stat -c '%u:%g' "$$directory")" != "10001:10001" ]; then
             find "$$directory" -xdev -exec chown -h 10001:10001 {} +
@@ -102,6 +107,11 @@ services:
       - ${RIVET_WORKFLOWS_HOST_PATH:-../../../.data/workflows}:/workflows
       - ${RIVET_WORKFLOW_RECORDINGS_HOST_PATH:-../../../.data/workflow-recordings}:/workflow-recordings
       - ${RIVET_RUNTIME_LIBS_HOST_PATH:-../../../.data/runtime-libraries}:/data/runtime-libraries
+      - type: volume
+        source: rivet_data
+        target: /data/rivet-app
+        volume:
+          nocopy: true
     restart: "no"
   api:
     build:
@@ -176,7 +186,11 @@ services:
       - npm_cache:/home/rivet/.npm
       - ${RIVET_WORKFLOWS_HOST_PATH:-../../../.data/workflows}:/workflows
       - ${RIVET_WORKFLOW_RECORDINGS_HOST_PATH:-../../../.data/workflow-recordings}:/workflow-recordings
-      - rivet_data:/data/rivet-app
+      - type: volume
+        source: rivet_data
+        target: /data/rivet-app
+        volume:
+          nocopy: true
       - ${RIVET_RUNTIME_LIBS_HOST_PATH:-../../../.data/runtime-libraries}:/data/runtime-libraries
     command: >
       sh -lc "
@@ -252,7 +266,11 @@ services:
     volumes:
       - npm_cache:/home/rivet/.npm
       - yarn_cache:/home/rivet/.cache/yarn
-      - rivet_data:/home/rivet/.local/share/com.valerypopoff.rivet2
+      - type: volume
+        source: rivet_data
+        target: /home/rivet/.local/share/com.valerypopoff.rivet2
+        volume:
+          nocopy: true
       - ${RIVET_RUNTIME_LIBS_HOST_PATH:-../../../.data/runtime-libraries}:/data/runtime-libraries
     restart: unless-stopped
 

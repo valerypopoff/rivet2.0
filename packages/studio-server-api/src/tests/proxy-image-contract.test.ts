@@ -162,8 +162,12 @@ test('proxy templates forward hosted web apps to the API-owned auth layer', () =
   assert.doesNotMatch(devCompose, /RIVET_UI_TOKEN_FREE_HOSTS/);
   assert.match(prodCompose, /RIVET_CORS_ALLOWED_ORIGINS=\$\{RIVET_CORS_ALLOWED_ORIGINS:-\}/);
   assert.match(devCompose, /RIVET_CORS_ALLOWED_ORIGINS=\$\{RIVET_CORS_ALLOWED_ORIGINS:-\}/);
-  assert.match(prodCompose, /RIVET_APP_DATA_ROOT=\/data\/rivet-app[\s\S]*rivet_data:\/data\/rivet-app:ro/);
-  assert.match(devCompose, /RIVET_APP_DATA_ROOT=\/data\/rivet-app[\s\S]*rivet_data:\/data\/rivet-app:ro/);
+  for (const compose of [prodCompose, devCompose]) {
+    assert.match(
+      compose,
+      /proxy:[\s\S]*?- type: volume\s+source: rivet_data\s+target: \/data\/rivet-app\s+read_only: true\s+volume:\s+nocopy: true/,
+    );
+  }
   assert.match(devCompose, /"\$\{RIVET_LOCAL_BIND_HOST:-127\.0\.0\.1\}:\$\{RIVET_API_PORT:-3100\}:80"/);
   assert.match(
     managedCompose,
@@ -324,6 +328,14 @@ test('executor image and compose contracts keep the websocket service independen
     assert.match(
       compose,
       /RIVET_RUNTIME_PROCESS_ROLE=executor[\s\S]*RIVET_LLM_PROFILE_HEALTH_API_URL=http:\/\/api:80\/api\/workflows\/llm-profile-health/,
+    );
+    assert.match(
+      compose,
+      /api:[\s\S]*?- type: volume\s+source: rivet_data\s+target: \/data\/rivet-app\s+volume:\s+nocopy: true/,
+    );
+    assert.match(
+      compose,
+      /executor:[\s\S]*?- type: volume\s+source: rivet_data\s+target: \/home\/rivet\/\.local\/share\/com\.valerypopoff\.rivet2\s+volume:\s+nocopy: true/,
     );
   }
 });
@@ -513,7 +525,7 @@ test('CI and production launchers publish and run the Studio Server image set fr
   assert.match(prodDockerLauncher, /--build --force-recreate --remove-orphans --wait/);
 });
 
-test('Compose initializes only filesystem artifact mounts before unprivileged services start', () => {
+test('Compose explicitly initializes every writable storage mount before runtime services start', () => {
   const getServiceBlock = (compose: string, service: string): string => {
     const marker = `\n  ${service}:`;
     const markerIndex = compose.indexOf(marker);
@@ -538,7 +550,7 @@ test('Compose initializes only filesystem artifact mounts before unprivileged se
     assert.match(initializer, /user: "0:0"/);
     assert.match(initializer, /entrypoint: \["\/bin\/sh", "-ec"\]/);
     assert.match(initializer, /command:\s*\n\s*- \|/);
-    assert.match(initializer, /for directory in \/workflows \/workflow-recordings \/data\/runtime-libraries; do/);
+    assert.match(initializer, /for directory in \/workflows \/workflow-recordings \/data\/runtime-libraries \/data\/rivet-app; do/);
     assert.ok(initializer.includes("if [ \"$$(stat -c '%u:%g' \"$$directory\")\" != \"10001:10001\" ]; then"));
     assert.ok(
       initializer.includes(
@@ -548,8 +560,12 @@ test('Compose initializes only filesystem artifact mounts before unprivileged se
     assert.match(initializer, /RIVET_WORKFLOWS_HOST_PATH.*:\/workflows/);
     assert.match(initializer, /RIVET_WORKFLOW_RECORDINGS_HOST_PATH.*:\/workflow-recordings/);
     assert.match(initializer, /RIVET_RUNTIME_LIBS_HOST_PATH.*:\/data\/runtime-libraries/);
+    assert.match(
+      initializer,
+      /- type: volume\s+source: rivet_data\s+target: \/data\/rivet-app\s+volume:\s+nocopy: true/,
+    );
     assert.match(initializer, /restart: "no"/);
-    assert.doesNotMatch(initializer, /rivet_data|rivet_workspace|\/workspace|\/data\/rivet-app/);
+    assert.doesNotMatch(initializer, /rivet_workspace|\/workspace/);
 
     for (const service of ['api', 'executor']) {
       assert.match(
