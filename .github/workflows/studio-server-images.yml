@@ -4,6 +4,25 @@ on:
   push:
     branches:
       - main
+    paths:
+      - '.github/actions/setup-yarn/**'
+      - '.github/workflows/studio-server-images.yml'
+      - '.github/workflows/studio-server-verify.yml'
+      - '.pnp.cjs'
+      - '.pnp.loader.mjs'
+      - '.yarn/**'
+      - '.yarnrc.yml'
+      - 'deploy/studio-server/**'
+      - 'package.json'
+      - 'packages/app/**'
+      - 'packages/app-executor/**'
+      - 'packages/core/**'
+      - 'packages/evaluations/**'
+      - 'packages/node/**'
+      - 'packages/studio-server-*/**'
+      - 'scripts/build-wrapper-target.mjs'
+      - 'scripts/ci/**'
+      - 'yarn.lock'
     tags:
       - 'v*'
   schedule:
@@ -22,49 +41,48 @@ on:
         type: boolean
 
 permissions:
+  actions: read
   contents: read
   packages: write
 
 concurrency:
   group: build-images-${{ github.ref }}
-  cancel-in-progress: false
+  cancel-in-progress: ${{ github.event_name == 'push' && github.ref_type == 'branch' }}
 
 env:
   IMAGE_NAMESPACE: ghcr.io/valerypopoff/rivet2.0-studio-server
 
 jobs:
-  verify-repository:
+  changes:
+    name: Classify image release
     runs-on: ubuntu-latest
-    timeout-minutes: 35
+    outputs:
+      full_kubernetes: ${{ steps.classify.outputs.full_kubernetes }}
     steps:
       - name: Check Out Repository
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           fetch-depth: 0
-
       - name: Set Up Node
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 24
+      - name: Classify changed paths
+        id: classify
+        env:
+          RIVET_CI_FORCE: ${{ github.event_name != 'push' || github.ref_type == 'tag' }}
+        run: node scripts/ci/ci-change-policy.mjs
 
-      - name: Install Workspace Dependencies
-        run: |
-          corepack enable
-          yarn install --immutable
-
-      - name: Set Up Kubernetes Tools
-        run: yarn studio-server:setup:k8s-tools
-
-      - name: Run Same-Commit Studio Server Verification
-        run: yarn studio-server:test
+  verify-repository:
+    uses: ./.github/workflows/studio-server-verify.yml
+    with:
+      force: true
 
   build-and-push:
-    needs:
-      - verify-repository
     runs-on: ubuntu-latest
     timeout-minutes: 90
     env:
-      SOURCE_TAG: build-${{ github.sha }}
+      SOURCE_TAG: candidate-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
     strategy:
       fail-fast: false
       matrix:
@@ -150,13 +168,39 @@ jobs:
           cache-from: type=gha,scope=${{ matrix.service }}
           cache-to: type=gha,mode=max,scope=${{ matrix.service }}
 
-  managed-kubernetes-release-gate:
+  fast-container-smoke:
+    name: Smoke candidate images
     needs:
+      - build-and-push
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      SOURCE_TAG: candidate-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+    steps:
+      - name: Check Out Repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: ./.github/actions/setup-yarn
+        with:
+          node-version: 24
+      - name: Install Workspace Dependencies
+        run: node .yarn/releases/yarn-4.17.1.cjs install --immutable --immutable-cache
+      - name: Log In to GHCR
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Exercise Candidate Image Set
+        run: yarn studio-server:verify:candidate-images
+  managed-kubernetes-release-gate:
+    if: needs.changes.outputs.full_kubernetes == 'true'
+    needs:
+      - changes
       - build-and-push
     runs-on: ubuntu-latest
     timeout-minutes: 55
     env:
-      SOURCE_TAG: build-${{ github.sha }}
+      SOURCE_TAG: candidate-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
     steps:
       - name: Check Out Repository
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
@@ -249,7 +293,7 @@ jobs:
     environment:
       name: rivet-managed-staging
     env:
-      SOURCE_TAG: build-${{ github.sha }}
+      SOURCE_TAG: candidate-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
       RIVET_K8S_PROVIDER_GATE_CONTEXT: ${{ vars.RIVET_K8S_STAGING_CONTEXT }}
       RIVET_K8S_PROVIDER_GATE_ALLOW_CONTEXT: ${{ vars.RIVET_K8S_STAGING_CONTEXT }}
       RIVET_K8S_PROVIDER_GATE_CONFIRM: deploy-staging
@@ -344,14 +388,17 @@ jobs:
 
   promote-images:
     needs:
+      - changes
+      - verify-repository
       - build-and-push
+      - fast-container-smoke
       - managed-kubernetes-release-gate
       - managed-kubernetes-provider-gate
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    if: ${{ always() && needs.build-and-push.result == 'success' && needs.managed-kubernetes-release-gate.result == 'success' && (needs.managed-kubernetes-provider-gate.result == 'success' || needs.managed-kubernetes-provider-gate.result == 'skipped') }}
+    if: ${{ always() && needs.changes.result == 'success' && needs.verify-repository.result == 'success' && needs.build-and-push.result == 'success' && needs.fast-container-smoke.result == 'success' && ((needs.changes.outputs.full_kubernetes == 'true' && needs.managed-kubernetes-release-gate.result == 'success') || (needs.changes.outputs.full_kubernetes != 'true' && needs.managed-kubernetes-release-gate.result == 'skipped')) && (needs.managed-kubernetes-provider-gate.result == 'success' || needs.managed-kubernetes-provider-gate.result == 'skipped') }}
     env:
-      SOURCE_TAG: build-${{ github.sha }}
+      SOURCE_TAG: candidate-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
     steps:
       - name: Set Up Buildx
         uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3

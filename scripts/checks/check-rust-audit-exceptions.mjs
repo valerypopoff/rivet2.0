@@ -137,6 +137,6 @@ if (problems.length > 0) {
 } else {
   const currentQualifier = auditReportPath ? ' and current' : '';
   console.log(
-    `Rust audit exception policy is${currentQualifier} (${exceptions.length} temporary ignore${exceptions.length === 1 ? '' : 's'}).`,
+    `Rust audit exception policy is valid${currentQualifier} (${exceptions.length} temporary ignore${exceptions.length === 1 ? '' : 's'}).`,
   );
 }

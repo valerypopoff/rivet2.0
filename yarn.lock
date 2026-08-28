@@ -9846,6 +9846,7 @@ __metadata:
     ts-node: "npm:^10.9.1"
     tsx: "npm:^4.23.0"
     typescript: "npm:^5.7.3"
+    yaml: "npm:^2.3.3"
     yargs: "npm:^17.7.2"
     zx: "npm:^8.5.4"
   languageName: unknown

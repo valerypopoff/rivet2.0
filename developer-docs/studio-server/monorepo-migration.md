@@ -153,7 +153,7 @@ The import branch passed the following monorepo checks on Windows:
 - a Playwright check of the documentation homepage and its Studio Server link
 - the full hosted-editor Playwright suite (45 passed, 1 optional test skipped)
 - filesystem and local managed Docker compatibility gates
-- same-commit `studio-server:test` verification before API, web, executor, and proxy image builds from the monorepo root
+- same-commit reusable Studio Server verification alongside immutable API, web, executor, and proxy candidate-image builds from the monorepo root, with promotion still gated on both
 - production Compose health checks, including a non-root API process
 - Helm rendering and linting for every checked-in overlay
 - the managed-Kubernetes smoke gate and full local disruption gate in Kind

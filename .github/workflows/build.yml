@@ -1,4 +1,4 @@
-﻿name: Build
+name: Build
 
 on:
   push:
@@ -10,48 +10,161 @@ on:
       - develop
       - main
 
-jobs:
-  build:
-    runs-on: ubuntu-latest
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
 
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  compiled-artifacts:
+    name: Compile workspace
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
       - uses: ./.github/actions/setup-yarn
+      - name: Start timing
+        run: node scripts/ci/job-timing.mjs start "Compile workspace"
+      - name: Install dependencies
+        run: node .yarn/releases/yarn-4.17.1.cjs install --immutable --immutable-cache
+      - name: Build
+        run: yarn build
+        env:
+          NODE_OPTIONS: --max_old_space_size=6000
+      - name: Upload compiled dependencies
+        uses: actions/upload-artifact@v7
+        with:
+          name: build-dependencies-${{ github.sha }}
+          path: |
+            packages/core/dist
+            packages/node/dist
+            packages/evaluations/dist
+            packages/app-executor/bin/executor-bundle.cjs
+          if-no-files-found: error
+          retention-days: 1
+      - name: Report timing
+        if: always()
+        run: node scripts/ci/job-timing.mjs finish "Compile workspace"
+
+  package-tests:
+    name: Test ${{ matrix.label }}
+    needs: compiled-artifacts
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      max-parallel: 6
+      matrix:
+        include:
+          - label: Core
+            command: test:core
+          - label: Node
+            command: test:node
+          - label: Evaluations
+            command: test:evaluations
+          - label: App
+            command: test:app
+          - label: App Executor
+            command: test:app-executor
+          - label: CLI
+            command: test:cli
+    steps:
+      - uses: actions/checkout@v6
+      - uses: ./.github/actions/setup-yarn
+      - name: Start timing
+        run: node scripts/ci/job-timing.mjs start "Test ${{ matrix.label }}"
+      - name: Install dependencies
+        run: node .yarn/releases/yarn-4.17.1.cjs install --immutable --immutable-cache
+      - name: Download compiled dependencies
+        uses: actions/download-artifact@v7
+        with:
+          name: build-dependencies-${{ github.sha }}
+          path: .
+      - name: Test ${{ matrix.label }}
+        run: yarn ${{ matrix.command }}
+      - name: Report timing
+        if: always()
+        run: node scripts/ci/job-timing.mjs finish "Test ${{ matrix.label }}"
+
+  package-lint:
+    name: Lint ${{ matrix.label }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      max-parallel: 6
+      matrix:
+        include:
+          - label: Core
+            workspace: '@valerypopoff/rivet2-core'
+          - label: Node
+            workspace: '@valerypopoff/rivet2-node'
+          - label: Evaluations
+            workspace: '@valerypopoff/rivet2-evaluations'
+          - label: App
+            workspace: '@valerypopoff/rivet-app'
+          - label: App Executor
+            workspace: '@valerypopoff/rivet-app-executor'
+          - label: CLI
+            workspace: '@valerypopoff/rivet2-cli'
+    steps:
+      - uses: actions/checkout@v6
+      - uses: ./.github/actions/setup-yarn
+      - name: Start timing
+        run: node scripts/ci/job-timing.mjs start "Lint ${{ matrix.label }}"
+      - name: Install dependencies
+        run: node .yarn/releases/yarn-4.17.1.cjs install --immutable --immutable-cache
+
+      - name: Lint ${{ matrix.label }}
+        run: yarn workspace ${{ matrix.workspace }} run lint
+      - name: Report timing
+        if: always()
+        run: node scripts/ci/job-timing.mjs finish "Lint ${{ matrix.label }}"
+
+  static-validation:
+    name: Static repository validation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: ./.github/actions/setup-yarn
+      - name: Start timing
+        run: node scripts/ci/job-timing.mjs start "Static repository validation"
       - name: Install dependencies
         run: node .yarn/releases/yarn-4.17.1.cjs install --immutable --immutable-cache
       - name: Verify fresh Yarn PnP dependency map
         run: yarn check:pnp:fresh
       - name: Audit JavaScript dependencies
         run: yarn security:audit
-      - name: Verify AI graph builder assets
-        run: yarn check:graph-builder-assets
-      - name: Build
-        run: yarn build
-        env:
-          NODE_OPTIONS: --max_old_space_size=6000
-      - name: Test
-        run: yarn test
       - name: Docs typecheck
         run: yarn test:docs
       - name: Test style
         run: yarn test:style
-      - name: Lint
-        run: yarn lint
       - name: Prettier
         run: yarn prettier:check
+      - name: Report timing
+        if: always()
+        run: node scripts/ci/job-timing.mjs finish "Static repository validation"
 
   rust-audit:
     name: Audit Rust dependencies
     runs-on: ubuntu-latest
     permissions:
       contents: read
-
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-node@v5
         with:
           node-version: 22.21.1
+      - name: Start timing
+        run: node scripts/ci/job-timing.mjs start "Audit Rust dependencies"
+      - name: Restore cargo-audit binary
+        id: cargo-audit-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/cargo-audit
+          key: cargo-audit-${{ runner.os }}-${{ runner.arch }}-0.22.2
       - name: Install Cargo audit
+        if: steps.cargo-audit-cache.outputs.cache-hit != 'true'
         run: cargo install cargo-audit --locked --version 0.22.2
       - name: Verify current Rust audit exception policy
         shell: bash
@@ -61,3 +174,39 @@ jobs:
       - name: Audit Rust dependencies
         working-directory: packages/app/src-tauri
         run: cargo audit --no-fetch
+      - name: Report timing
+        if: always()
+        run: node scripts/ci/job-timing.mjs finish "Audit Rust dependencies"
+
+  build:
+    if: always()
+    needs:
+      - compiled-artifacts
+      - package-tests
+      - package-lint
+      - static-validation
+      - rust-audit
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require every Build gate
+        env:
+          COMPILE_RESULT: ${{ needs.compiled-artifacts.result }}
+          TEST_RESULT: ${{ needs.package-tests.result }}
+          LINT_RESULT: ${{ needs.package-lint.result }}
+          STATIC_RESULT: ${{ needs.static-validation.result }}
+          RUST_RESULT: ${{ needs.rust-audit.result }}
+        run: |
+          for result in "$COMPILE_RESULT" "$TEST_RESULT" "$LINT_RESULT" "$STATIC_RESULT" "$RUST_RESULT"; do
+            test "$result" = success
+          done
+      - uses: actions/checkout@v6
+        if: always()
+      - name: Report Build critical path
+        if: always()
+        continue-on-error: true
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          started_at="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" --jq .run_started_at)"
+          node scripts/ci/job-timing.mjs finish-at "$started_at" "Build critical path"

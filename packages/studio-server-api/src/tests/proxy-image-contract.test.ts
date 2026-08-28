@@ -404,7 +404,10 @@ test('images and local launchers build directly from the monorepo workspace', ()
     'the production launcher must retain the historical default while detecting the other standalone volume identity',
   );
   assert.match(prodDockerLauncher, /RIVET_STUDIO_SERVER_COMPOSE_PROJECT/);
-  assert.match(prodDockerLauncher, /LEGACY_PRODUCTION_COMPOSE_PROJECTS = \['ops', DEFAULT_PRODUCTION_COMPOSE_PROJECT\]/);
+  assert.match(
+    prodDockerLauncher,
+    /LEGACY_PRODUCTION_COMPOSE_PROJECTS = \['ops', DEFAULT_PRODUCTION_COMPOSE_PROJECT\]/,
+  );
   assert.match(prodDockerLauncher, /return `docker compose -p \$\{project\} \$\{suffix\}`/);
   assert.match(prodDockerLauncher, /readDockerWaitTimeoutSeconds/);
   assert.doesNotMatch(
@@ -432,17 +435,26 @@ test('CI and production launchers publish and run the Studio Server image set fr
   assert.match(verificationWorkflow, /push:\r?\n\s+branches:\r?\n\s+- develop/);
   assert.match(verificationWorkflow, /pull_request:\r?\n\s+branches:\r?\n\s+- develop/);
   assert.doesNotMatch(verificationWorkflow, /codex\/import-studio-server/);
-  assert.match(verificationWorkflow, /yarn install --immutable/);
-  assert.match(verificationWorkflow, /yarn studio-server:test/);
+  assert.match(verificationWorkflow, /node \.yarn\/releases\/yarn-4\.17\.1\.cjs install --immutable --immutable-cache/);
   assert.match(verificationWorkflow, /Check Out Repository[\s\S]*fetch-depth: 0/);
-  assert.match(imageBuildWorkflow, /Run Same-Commit Studio Server Verification[\s\S]*yarn studio-server:test/);
-  assert.match(imageBuildWorkflow, /verify-repository:[\s\S]*Check Out Repository[\s\S]*fetch-depth: 0/);
+  assert.match(verificationWorkflow, /api-tests:[\s\S]*--shard-index \$\{\{ matrix\.shard \}\} --shard-count 4/);
+  assert.match(verificationWorkflow, /host-compatibility:[\s\S]*studio-server:verify:host-compatibility/);
+  assert.match(verificationWorkflow, /repository-contracts:[\s\S]*studio-server:verify:production-cutover/);
+  assert.match(verificationWorkflow, /deployment-contracts:[\s\S]*studio-server:verify:kubernetes/);
+  assert.match(verificationWorkflow, /\n  verify:\n[\s\S]*Require every applicable Studio Server gate/);
+  assert.match(
+    imageBuildWorkflow,
+    /verify-repository:\n\s+uses: \.\/\.github\/workflows\/studio-server-verify\.yml\n\s+with:\n\s+force: true/,
+  );
   assert.match(packageJson.scripts['studio-server:test'], /studio-server:verify:migration-ledger/);
   assert.equal(packageJson.packageManager, 'yarn@4.17.1');
   assert.equal(packageJson.scripts.preinstall, 'node scripts/checks/check-package-manager.mjs');
   assert.equal(packageJson.scripts['build:all'], 'yarn build');
   assert.equal(packageJson.scripts.prod, undefined);
-  assert.match(imageBuildWorkflow, /SOURCE_TAG: build-\$\{\{ github\.sha \}\}/);
+  assert.match(
+    imageBuildWorkflow,
+    /SOURCE_TAG: candidate-\$\{\{ github\.sha \}\}-\$\{\{ github\.run_id \}\}-\$\{\{ github\.run_attempt \}\}/,
+  );
   assert.match(imageBuildWorkflow, /type=raw,value=\$\{\{ env\.SOURCE_TAG \}\}/);
   assert.match(imageBuildWorkflow, /continue-on-error: true/);
   assert.match(imageBuildWorkflow, /steps\.build\.outcome == 'failure'/);

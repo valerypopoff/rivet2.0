@@ -4,6 +4,22 @@ on:
   push:
     branches:
       - main
+    paths:
+      - '.github/actions/setup-yarn/**'
+      - '.github/workflows/publish-npm-packages.yml'
+      - '.pnp.cjs'
+      - '.pnp.loader.mjs'
+      - '.yarn/**'
+      - '.yarnrc.yml'
+      - 'package.json'
+      - 'packages/cli/**'
+      - 'packages/core/**'
+      - 'packages/evaluations/**'
+      - 'packages/node/**'
+      - 'scripts/build-wrapper-target.mjs'
+      - 'scripts/create-built-package-artifacts.mjs'
+      - 'scripts/publish-npm-packages.mjs'
+      - 'yarn.lock'
   workflow_dispatch:
 
 permissions:

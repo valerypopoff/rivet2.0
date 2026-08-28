@@ -127,10 +127,14 @@ the same public workflow authentication contract as an external caller.
 During forced WebSocket owner loss, reconnect attempts tolerate transient proxy
 handshake failures while replacement pods converge, but the replay assertion
 remains bounded to two minutes and still requires the durable interrupted event.
+
 - persistence after backend and execution-pod replacement.
 
-`develop` uses `.github/workflows/studio-server-verify.yml`. `yarn studio-server:test` runs the Studio Server checks directly against sibling Rivet workspaces from the root lockfile, without cloning another repository, building images, pushing to GHCR, or creating a Kind cluster. The image workflow is reserved for pushes to `main`, version tags, schedules, and manual dispatches. It runs the managed-mode smoke suite through `yarn studio-server:verify:kubernetes:managed-live`; scheduled runs and the `run_managed_kubernetes_disruption` workflow-dispatch input run the broader `yarn studio-server:verify:kubernetes:managed-disruption` suite. The latter adds the controlled proxy rollout, execution-node drain, deliberately long web-app WebSocket forced-owner-loss/reconnect check, App Settings encryption-key rotation, and PostgreSQL/MinIO outage/recovery checks. GitHub executes scheduled workflows only from the repository default branch. Each image-gate run uploads non-secret manifests, Kubernetes events, pod descriptions, and logs. Generated credentials are supplied only to Kubernetes and are never placed in artifacts.
+`develop` uses `.github/workflows/studio-server-verify.yml`. The reusable verifier builds Studio Server once, then runs four isolated API shards, web tests, host compatibility, repository contracts, and Kubernetes render/contracts in parallel while preserving the final `verify` status. Its changed-path classifier skips heavy Studio Server jobs for unrelated commits; direct `yarn studio-server:test` remains the complete sequential local gate.
 
+The image workflow is path-gated to Studio Server and its Rivet runtime/deployment dependency closure. Repository verification and immutable candidate-image construction start concurrently. Every candidate set must pass the authenticated Compose smoke (`yarn studio-server:verify:candidate-images`), which verifies API/web routing, the key gate, executor WebSocket connectivity, and a published workflow execution through the production proxy.
+
+The disposable Kind gate remains mandatory when Helm, Kubernetes launchers, production Compose/deployment scripts, proxy or image contracts, or the image workflow changes, and for version tags, scheduled runs, and manual dispatches. Ordinary main-branch application changes may promote after repository verification, all four builds, and the Compose smoke without paying the Kind startup cost. Promotion accepts a skipped Kind job only when classification explicitly selected this fast path; a full-path release requires a successful Kind result. Scheduled runs and the `run_managed_kubernetes_disruption` workflow-dispatch input use `yarn studio-server:verify:kubernetes:managed-disruption`; the latter adds controlled proxy rollout, execution-node drain, long web-app WebSocket owner-loss/reconnect, App Settings encryption-key rotation, and PostgreSQL/MinIO outage/recovery checks. GitHub runs schedules only from the default branch. Full-gate artifacts remain non-secret manifests, events, pod descriptions, and logs.
 After an execution-node drain, the release gate retries the public workflow probe for a bounded 90-second recovery window. A connection that was already attached to the evicted pod may close once during endpoint turnover; the gate still fails if the public route does not recover within the window.
 
 For a deliberate local run, first create the disposable Kind topology and then provide the exact candidate image repositories and digests. The runner will refuse to run unless both context variables exactly match the active context; it also deletes only a namespace carrying its own ownership label.
@@ -283,14 +287,14 @@ If none of those exist, the launcher/verification flow fails with an explicit in
 
 This repo is already shaped like a Kubernetes application, but it is not the single-container sample chart shape. Treat it as a custom four-workload app:
 
-| DevOps expectation | This repo |
-|---|---|
-| Root `deploy/studio-server/images/` directory | Present. It contains four runtime images: `deploy/studio-server/images/proxy/Dockerfile`, `deploy/studio-server/images/web/Dockerfile`, `deploy/studio-server/images/api/Dockerfile`, and `deploy/studio-server/images/executor/Dockerfile`. |
-| Application user `uid/gid=10001` | Present. Runtime images and chart security contexts run workloads as `10001:10001`. |
-| Environment overlays | Present under [deploy/studio-server/helm/overlays](../../deploy/studio-server/helm/overlays). If your GitLab template requires `deploy/overlays`, point that wrapper at these values or copy environment overrides from here; do not replace the custom chart with a generic single-service chart. |
-| Helm chart | Present under [deploy/studio-server/helm](../../deploy/studio-server/helm). It renders `proxy`, `web`, singleton `backend`, scalable `execution`, services, ingress, HPAs, Vault annotations, and validation guards. |
-| CI image build | Current publishing is GitHub Actions at [.github/workflows/studio-server-images.yml](../../.github/workflows/studio-server-images.yml). If deploying from GitLab CI, create equivalent jobs for all four Dockerfiles or reuse the published GHCR images. |
-| Vault AppRole | The chart uses Vault Injector annotations through `vault.role`, `vault.authPath`, `vault.secretPath`, and `vault.dotenvTemplate`. The containers source `/vault/dotenv` during startup. |
+| DevOps expectation                            | This repo                                                                                                                                                                                                                                                                                          |
+| --------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Root `deploy/studio-server/images/` directory | Present. It contains four runtime images: `deploy/studio-server/images/proxy/Dockerfile`, `deploy/studio-server/images/web/Dockerfile`, `deploy/studio-server/images/api/Dockerfile`, and `deploy/studio-server/images/executor/Dockerfile`.                                                       |
+| Application user `uid/gid=10001`              | Present. Runtime images and chart security contexts run workloads as `10001:10001`.                                                                                                                                                                                                                |
+| Environment overlays                          | Present under [deploy/studio-server/helm/overlays](../../deploy/studio-server/helm/overlays). If your GitLab template requires `deploy/overlays`, point that wrapper at these values or copy environment overrides from here; do not replace the custom chart with a generic single-service chart. |
+| Helm chart                                    | Present under [deploy/studio-server/helm](../../deploy/studio-server/helm). It renders `proxy`, `web`, singleton `backend`, scalable `execution`, services, ingress, HPAs, Vault annotations, and validation guards.                                                                               |
+| CI image build                                | Current publishing is GitHub Actions at [.github/workflows/studio-server-images.yml](../../.github/workflows/studio-server-images.yml). If deploying from GitLab CI, create equivalent jobs for all four Dockerfiles or reuse the published GHCR images.                                           |
+| Vault AppRole                                 | The chart uses Vault Injector annotations through `vault.role`, `vault.authPath`, `vault.secretPath`, and `vault.dotenvTemplate`. The containers source `/vault/dotenv` during startup.                                                                                                            |
 
 Do not deploy this app with a generic one-Deployment chart unless that chart can faithfully express the four workload roles and their routing:
 
@@ -366,7 +370,7 @@ images:
     tag: latest
 ```
 
-The `rivet2.0-studio-server/*` packages are owned by this monorepo; the retired `cloud-hosted-rivet2-wrapper/*` packages are not release targets. The `latest` tag is promoted only for pushes to `main`; commit-SHA and version-tag image tags are produced by the same workflow. All four images build from one monorepo commit, first publish under the deterministic `build-<commit SHA>` candidate tag, and receive public tags only after the complete image matrix and release gates succeed. Runs for the same Git ref are serialized so overlapping pushes cannot race an older image set back onto `latest`.
+The `rivet2.0-studio-server/*` packages are owned by this monorepo; the retired `cloud-hosted-rivet2-wrapper/*` packages are not release targets. The `latest` tag is promoted only for pushes to `main`; commit-SHA and version-tag image tags are produced by the same workflow. All four images build from one monorepo commit, first publish under the attempt-isolated `candidate-<commit SHA>-<run ID>-<attempt>` tag, and receive public tags only after the complete image matrix and release gates succeed. This prevents a rerun from overwriting another candidate before its gates resolve; promotion then resolves each candidate to its immutable OCI digest. Runs for the same Git ref are serialized so overlapping pushes cannot race an older image set back onto `latest`.
 For production, prefer pinning all four image tags to the same published commit SHA or release tag instead of leaving them on `latest`.
 If the GHCR packages are private, configure `imagePullSecrets`; public packages should pull anonymously.
 
@@ -411,8 +415,8 @@ ingress:
   annotations:
     # Use the equivalent long-timeout/websocket annotations for the target ingress controller.
     nginx.ingress.kubernetes.io/proxy-body-size: 100m
-    nginx.ingress.kubernetes.io/proxy-read-timeout: "86400"
-    nginx.ingress.kubernetes.io/proxy-send-timeout: "86400"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: '86400'
+    nginx.ingress.kubernetes.io/proxy-send-timeout: '86400'
 
 vault:
   enabled: true
@@ -456,7 +460,7 @@ objectStorage:
 auth:
   # If Vault is disabled, set keySecretName/keySecretKey.
   # If Vault is enabled, /vault/dotenv may provide RIVET_KEY instead.
-  keySecretName: ""
+  keySecretName: ''
 
 resources:
   proxy:
@@ -544,17 +548,17 @@ Runtime-library local files are caches/workspaces, not the source of truth in ma
 
 Ingress should route all public traffic to the chart's `proxy` service. The proxy then routes internally:
 
-| Public path | Internal target |
-|---|---|
-| `/` | `web` |
-| `/api/*` and `/ui-auth` | singleton `backend` API |
-| `/workflows/*` | scalable `execution` API |
-| `/workflows-latest/*` | singleton `backend` API |
-| `/apps/*` | scalable `execution` API |
-| `/apps-latest/*` | singleton `backend` API |
-| `/apps/*/actions/ws` | scalable `execution` API websocket |
-| `/apps-latest/*/actions/ws` | singleton `backend` API websocket |
-| `/ws/latest-debugger` | singleton `backend` API websocket |
+| Public path                                | Internal target                                           |
+| ------------------------------------------ | --------------------------------------------------------- |
+| `/`                                        | `web`                                                     |
+| `/api/*` and `/ui-auth`                    | singleton `backend` API                                   |
+| `/workflows/*`                             | scalable `execution` API                                  |
+| `/workflows-latest/*`                      | singleton `backend` API                                   |
+| `/apps/*`                                  | scalable `execution` API                                  |
+| `/apps-latest/*`                           | singleton `backend` API                                   |
+| `/apps/*/actions/ws`                       | scalable `execution` API websocket                        |
+| `/apps-latest/*/actions/ws`                | singleton `backend` API websocket                         |
+| `/ws/latest-debugger`                      | singleton `backend` API websocket                         |
 | `/ws/executor/internal` and `/ws/executor` | executor container in the singleton `backend` StatefulSet |
 
 Keep ingress body-size limits high enough for project import/export and keep websocket timeouts long. The tracked nginx overlay examples use `100m` body size and `86400` second read/send timeouts. For non-nginx ingress controllers, translate those annotations to the controller-specific equivalents.
@@ -589,13 +593,13 @@ Keep `staleAfterSeconds` greater than `refreshSeconds + checkTimeoutSeconds`. Sh
 
 The rendered probe contract is:
 
-| Workload | Container | Startup | Liveness | Readiness |
-|---|---|---|---|---|
-| `backend` StatefulSet | `api` | `GET /livez` | `GET /livez` | `GET /readyz` |
-| `backend` StatefulSet | `executor` | TCP `21889` | TCP `21889` | TCP `21889` |
-| `execution` Deployment | `api` | `GET /livez` | `GET /livez` | `GET /readyz` |
-| `proxy` Deployment | `proxy` | TCP proxy port | TCP proxy port | TCP proxy port |
-| `web` Deployment | `web` | `GET /` | `GET /` | `GET /` |
+| Workload               | Container  | Startup        | Liveness       | Readiness      |
+| ---------------------- | ---------- | -------------- | -------------- | -------------- |
+| `backend` StatefulSet  | `api`      | `GET /livez`   | `GET /livez`   | `GET /readyz`  |
+| `backend` StatefulSet  | `executor` | TCP `21889`    | TCP `21889`    | TCP `21889`    |
+| `execution` Deployment | `api`      | `GET /livez`   | `GET /livez`   | `GET /readyz`  |
+| `proxy` Deployment     | `proxy`    | TCP proxy port | TCP proxy port | TCP proxy port |
+| `web` Deployment       | `web`      | `GET /`        | `GET /`        | `GET /`        |
 
 Startup probes tolerate cold reconciliation without letting liveness restart a valid slow boot forever. Permanent failures remain bounded by `lifecycle.probes.startup.failureThreshold` and its period.
 

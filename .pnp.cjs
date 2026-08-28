@@ -112,6 +112,7 @@ const RAW_RUNTIME_STATE =
           ["ts-node", "virtual:cce41fb5932c708537e2c8102f67c1df8503bc7b0e98fe405b8d054c96ba0fd0ec3b4d44ffa2144f5379ff48b0cfcbb1215b2409bcf11998c11e7bcf45bd049f#npm:10.9.1"],\
           ["tsx", "npm:4.23.0"],\
           ["typescript", "patch:typescript@npm%3A5.7.3#optional!builtin<compat/typescript>::version=5.7.3&hash=5786d5"],\
+          ["yaml", "npm:2.9.0"],\
           ["yargs", "npm:17.7.2"],\
           ["zx", "npm:8.5.4"]\
         ],\
@@ -16113,6 +16114,7 @@ const RAW_RUNTIME_STATE =
           ["ts-node", "virtual:cce41fb5932c708537e2c8102f67c1df8503bc7b0e98fe405b8d054c96ba0fd0ec3b4d44ffa2144f5379ff48b0cfcbb1215b2409bcf11998c11e7bcf45bd049f#npm:10.9.1"],\
           ["tsx", "npm:4.23.0"],\
           ["typescript", "patch:typescript@npm%3A5.7.3#optional!builtin<compat/typescript>::version=5.7.3&hash=5786d5"],\
+          ["yaml", "npm:2.9.0"],\
           ["yargs", "npm:17.7.2"],\
           ["zx", "npm:8.5.4"]\
         ],\
