@@ -2,14 +2,10 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 
+import { defaultApiTestFiles, kubernetesApiTestFiles } from './api-test-files.mjs';
+
 const rootDir = process.cwd();
 const launcherName = 'verify:test-style';
-
-const kubernetesApiTests = [
-  'src/tests/kubernetes-contract.test.ts',
-  'src/tests/kubernetes-launcher-config.test.ts',
-  'src/tests/kubernetes-managed-release-gate.test.ts',
-];
 
 const retiredTestNames = [
   'managed-backend-sql.test.ts',
@@ -18,9 +14,7 @@ const retiredTestNames = [
   'workflow-services.test.ts',
 ];
 
-const allowedRivetAppSourceRefs = new Set([
-  'packages/app/src/host.css',
-]);
+const allowedRivetAppSourceRefs = new Set(['packages/app/src/host.css']);
 
 function fail(message) {
   throw new Error(`[${launcherName}] ${message}`);
@@ -40,7 +34,8 @@ function toPosixPath(filePath) {
 
 function listTopLevelFiles(relativeDir, predicate) {
   const absoluteDir = path.join(rootDir, relativeDir);
-  return fs.readdirSync(absoluteDir, { withFileTypes: true })
+  return fs
+    .readdirSync(absoluteDir, { withFileTypes: true })
     .filter((entry) => entry.isFile() && predicate(entry.name))
     .map((entry) => `${relativeDir}/${entry.name}`)
     .map((filePath) => filePath.replaceAll('\\', '/'))
@@ -48,9 +43,7 @@ function listTopLevelFiles(relativeDir, predicate) {
 }
 
 function normalizeSourceForPathScan(source) {
-  return source
-    .replace(/\\([/.[\]{}()*+?^$|])/g, '$1')
-    .replace(/\\\\/g, '/');
+  return source.replace(/\\([/.[\]{}()*+?^$|])/g, '$1').replace(/\\\\/g, '/');
 }
 
 function normalizeRivetPackageRef(ref) {
@@ -133,11 +126,7 @@ function assertRootTestCommand(command) {
   ];
 
   for (const segment of requiredSegments) {
-    assert.equal(
-      command.includes(segment),
-      true,
-      `Root test command should run ${segment}.`,
-    );
+    assert.equal(command.includes(segment), true, `Root test command should run ${segment}.`);
   }
 
   assert.doesNotMatch(
@@ -244,46 +233,77 @@ function main() {
   const apiScripts = apiPackage.scripts ?? {};
   const webScripts = webPackage.scripts ?? {};
 
-  assert.equal(typeof rootScripts['studio-server:test'], 'string', 'Root package.json should expose studio-server:test.');
-  assert.equal(typeof rootScripts['studio-server:verify:test-style'], 'string', 'Root package.json should expose studio-server:verify:test-style.');
-  assert.equal(typeof apiScripts.test, 'string', 'packages/studio-server-api package.json should expose the default API test command.');
-  assert.equal(typeof apiScripts['test:files'], 'string', 'packages/studio-server-api package.json should expose test:files for focused API test runs.');
+  assert.equal(
+    typeof rootScripts['studio-server:test'],
+    'string',
+    'Root package.json should expose studio-server:test.',
+  );
+  assert.equal(
+    typeof rootScripts['studio-server:verify:test-style'],
+    'string',
+    'Root package.json should expose studio-server:verify:test-style.',
+  );
+  assert.equal(
+    typeof apiScripts.test,
+    'string',
+    'packages/studio-server-api package.json should expose the default API test command.',
+  );
+  assert.equal(
+    typeof apiScripts['test:files'],
+    'string',
+    'packages/studio-server-api package.json should expose test:files for focused API test runs.',
+  );
   assert.equal(typeof webScripts.test, 'string', 'packages/studio-server-web package.json should expose test.');
-  assert.equal(typeof rootScripts['studio-server:verify:web-pure'], 'string', 'Root package.json should expose studio-server:verify:web-pure.');
-  assert.equal(typeof rootScripts['studio-server:verify:kubernetes'], 'string', 'Root package.json should expose studio-server:verify:kubernetes.');
+  assert.equal(
+    typeof rootScripts['studio-server:verify:web-pure'],
+    'string',
+    'Root package.json should expose studio-server:verify:web-pure.',
+  );
+  assert.equal(
+    typeof rootScripts['studio-server:verify:kubernetes'],
+    'string',
+    'Root package.json should expose studio-server:verify:kubernetes.',
+  );
 
   const apiTestFiles = listTopLevelFiles('packages/studio-server-api/src/tests', (name) => name.endsWith('.test.ts'));
-  const apiTestFilesFromApiPackageRoot = apiTestFiles.map((filePath) => filePath.replace(/^packages\/studio-server-api\//, ''));
-  const detectedKubernetesApiTests = apiTestFilesFromApiPackageRoot.filter(
-    (filePath) => filePath.startsWith('src/tests/kubernetes-'),
+  const apiTestFilesFromApiPackageRoot = apiTestFiles.map((filePath) =>
+    filePath.replace(/^packages\/studio-server-api\//, ''),
   );
-  const defaultApiTestFiles = apiTestFilesFromApiPackageRoot.filter(
-    (filePath) => !kubernetesApiTests.includes(filePath),
+  const detectedKubernetesApiTests = apiTestFilesFromApiPackageRoot.filter((filePath) =>
+    filePath.startsWith('src/tests/kubernetes-'),
+  );
+  const detectedDefaultApiTestFiles = apiTestFilesFromApiPackageRoot.filter(
+    (filePath) => !kubernetesApiTestFiles.includes(filePath),
   );
   const webPureTestFiles = listTopLevelFiles('packages/studio-server-web/tests', (name) => name.endsWith('.test.ts'));
   const webPureTestFilesFromWebPackageRoot = webPureTestFiles.map((filePath) =>
     filePath.replace(/^packages\/studio-server-web\//, ''),
   );
-  const playwrightSpecFiles = listTopLevelFiles('packages/studio-server-web/playwright-observe', (name) => name.endsWith('.spec.ts'));
+  const playwrightSpecFiles = listTopLevelFiles('packages/studio-server-web/playwright-observe', (name) =>
+    name.endsWith('.spec.ts'),
+  );
 
   assertOnlyTopLevelTestFiles('packages/studio-server-api/src/tests', apiTestFiles, 'API tests');
   assertOnlyTopLevelTestFiles('packages/studio-server-web/tests', webPureTestFiles, 'pure web tests');
   assertOnlyTopLevelSpecFiles('packages/studio-server-web/playwright-observe', playwrightSpecFiles, 'Playwright specs');
 
-  assertCommandHasExplicitTestFiles(apiScripts.test, 'packages/studio-server-api test');
+  assert.equal(
+    apiScripts.test,
+    'node ../../deploy/studio-server/scripts/run-api-tests.mjs',
+    'packages/studio-server-api test should use the canonical manifest-driven runner.',
+  );
   assertCommandHasExplicitTestFiles(webScripts.test, 'packages/studio-server-web test');
   assertCommandHasExplicitTestFiles(rootScripts['studio-server:verify:kubernetes'], 'studio-server:verify:kubernetes');
-  assert.match(
-    apiScripts.test,
-    /--test-concurrency=1\b/,
-    'packages/studio-server-api test should keep API files serialized because many API tests intentionally mutate process-wide RIVET_* env before importing route modules.',
-  );
   assertRootTestCommand(rootScripts['studio-server:test']);
   assert.equal(apiScripts.pretest, undefined, 'The API workspace must not bootstrap a second repository in pretest.');
-  assert.equal(apiScripts['pretest:files'], undefined, 'Focused API tests must use the installed root workspace directly.');
+  assert.equal(
+    apiScripts['pretest:files'],
+    undefined,
+    'Focused API tests must use the installed root workspace directly.',
+  );
   assertApiFocusedTestCommand(apiScripts['test:files']);
 
-  const apiCommandFiles = extractTestPaths(apiScripts.test);
+  const apiCommandFiles = defaultApiTestFiles;
   const webCommandFiles = extractTestPaths(webScripts.test);
   const kubernetesCommandFiles = extractTestPaths(rootScripts['studio-server:verify:kubernetes']);
 
@@ -293,13 +313,13 @@ function main() {
 
   assert.deepEqual(
     sortValues(detectedKubernetesApiTests),
-    sortValues(kubernetesApiTests),
+    sortValues(kubernetesApiTestFiles),
     'Every kubernetes-*.test.ts API file should be owned by verify:kubernetes.',
   );
   assert.deepEqual(
     apiCommandFiles,
-    defaultApiTestFiles,
-    'packages/studio-server-api test should list every non-Kubernetes API test exactly once, in sorted order.',
+    detectedDefaultApiTestFiles,
+    'The API test manifest should list every non-Kubernetes API test exactly once, in sorted order.',
   );
   assert.deepEqual(
     webCommandFiles,
@@ -308,7 +328,7 @@ function main() {
   );
   assert.deepEqual(
     sortValues(kubernetesCommandFiles),
-    sortValues(kubernetesApiTests),
+    sortValues(kubernetesApiTestFiles),
     'studio-server:verify:kubernetes should own the Kubernetes API test files outside the default API suite.',
   );
 
@@ -320,10 +340,7 @@ function main() {
 
   assertNoRetiredTestFiles();
 
-  const nodeTestFiles = [
-    ...apiTestFiles,
-    ...webPureTestFiles,
-  ];
+  const nodeTestFiles = [...apiTestFiles, ...webPureTestFiles];
   const allTestFiles = [
     ...nodeTestFiles,
     ...playwrightSpecFiles,

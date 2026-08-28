@@ -8,34 +8,274 @@ on:
     branches:
       - develop
   workflow_dispatch:
+  workflow_call:
+    inputs:
+      force:
+        description: Run every Studio Server verification job regardless of changed paths.
+        required: false
+        default: false
+        type: boolean
 
 permissions:
+  actions: read
   contents: read
 
 concurrency:
   group: verify-studio-server-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ (github.event_name == 'push' && github.ref_type == 'branch') || github.event_name == 'pull_request' }}
 
 jobs:
-  verify:
+  changes:
+    name: Classify Studio Server changes
     runs-on: ubuntu-latest
-    timeout-minutes: 35
+    outputs:
+      relevant: ${{ steps.classify.outputs.studio_server }}
     steps:
       - name: Check Out Repository
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           fetch-depth: 0
-
       - name: Set Up Node
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 24
+      - name: Classify changed paths
+        id: classify
+        env:
+          RIVET_CI_FORCE: ${{ inputs.force == true }}
+        run: node scripts/ci/ci-change-policy.mjs
 
+  build-studio-server:
+    name: Build Studio Server
+    if: needs.changes.outputs.relevant == 'true'
+    needs: changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: ./.github/actions/setup-yarn
+        with:
+          node-version: 24
+      - name: Start timing
+        run: node scripts/ci/job-timing.mjs start "Build Studio Server"
+      - name: Install dependencies
+        run: node .yarn/releases/yarn-4.17.1.cjs install --immutable --immutable-cache
+      - name: Build Studio Server
+        run: yarn studio-server:build
+      - name: Upload compiled Studio Server dependencies
+        uses: actions/upload-artifact@v7
+        with:
+          name: studio-server-build-${{ github.sha }}
+          path: |
+            packages/core/dist
+            packages/node/dist
+            packages/evaluations/dist
+            packages/app-executor/bin/executor-bundle.cjs
+            packages/studio-server-shared/dist
+            packages/studio-server-bootstrap/dist
+            packages/studio-server-api/dist
+            packages/studio-server-executor/dist
+            packages/studio-server-web/dist
+          if-no-files-found: error
+          retention-days: 1
+          # Keep the name stable for isolated consumer-job re-runs, while
+          # allowing this single producer to replace an earlier attempt.
+          overwrite: true
+      - name: Report timing
+        if: always()
+        run: node scripts/ci/job-timing.mjs finish "Build Studio Server"
+
+  api-tests:
+    name: API tests ${{ matrix.label }}/4
+    if: needs.changes.outputs.relevant == 'true'
+    needs:
+      - changes
+      - build-studio-server
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix:
+        include:
+          - shard: 0
+            label: 1
+          - shard: 1
+            label: 2
+          - shard: 2
+            label: 3
+          - shard: 3
+            label: 4
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: ./.github/actions/setup-yarn
+        with:
+          node-version: 24
+      - name: Start timing
+        run: node scripts/ci/job-timing.mjs start "API tests ${{ matrix.label }}/4"
+      - name: Install dependencies
+        run: node .yarn/releases/yarn-4.17.1.cjs install --immutable --immutable-cache
+      - name: Download compiled Studio Server dependencies
+        uses: actions/download-artifact@v7
+        with:
+          name: studio-server-build-${{ github.sha }}
+          # upload-artifact stores these selected paths relative to their shared
+          # packages/ ancestor. Restore below packages/ so workspace exports
+          # remain at packages/<name>/dist.
+          path: packages
+      - name: Run API test shard
+        run: node deploy/studio-server/scripts/run-api-tests.mjs --shard-index ${{ matrix.shard }} --shard-count 4
+      - name: Report timing
+        if: always()
+        run: node scripts/ci/job-timing.mjs finish "API tests ${{ matrix.label }}/4"
+
+  web-tests:
+    name: Studio Server web tests
+    if: needs.changes.outputs.relevant == 'true'
+    needs:
+      - changes
+      - build-studio-server
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: ./.github/actions/setup-yarn
+        with:
+          node-version: 24
+      - name: Start timing
+        run: node scripts/ci/job-timing.mjs start "Studio Server web tests"
+      - name: Install dependencies
+        run: node .yarn/releases/yarn-4.17.1.cjs install --immutable --immutable-cache
+      - name: Download compiled Studio Server dependencies
+        uses: actions/download-artifact@v7
+        with:
+          name: studio-server-build-${{ github.sha }}
+          # See the API shard restore above: preserve package-defined export paths.
+          path: packages
+      - name: Run pure web tests
+        run: yarn studio-server:verify:web-pure
+      - name: Report timing
+        if: always()
+        run: node scripts/ci/job-timing.mjs finish "Studio Server web tests"
+
+  host-compatibility:
+    name: Studio Server host compatibility
+    if: needs.changes.outputs.relevant == 'true'
+    needs: changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: ./.github/actions/setup-yarn
+        with:
+          node-version: 24
+      - name: Start timing
+        run: node scripts/ci/job-timing.mjs start "Studio Server host compatibility"
+      - name: Verify hosted compatibility
+        run: node .yarn/releases/yarn-4.17.1.cjs studio-server:verify:host-compatibility
+      - name: Report timing
+        if: always()
+        run: node scripts/ci/job-timing.mjs finish "Studio Server host compatibility"
+
+  repository-contracts:
+    name: Studio Server repository contracts
+    if: needs.changes.outputs.relevant == 'true'
+    needs: changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check Out Repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          fetch-depth: 0
+      - uses: ./.github/actions/setup-yarn
+        with:
+          node-version: 24
+      - name: Start timing
+        run: node scripts/ci/job-timing.mjs start "Studio Server repository contracts"
+      - name: Install dependencies
+        run: node .yarn/releases/yarn-4.17.1.cjs install --immutable --immutable-cache
+      - name: Verify migration ledger
+        run: yarn studio-server:verify:migration-ledger
+      - name: Verify production cutover
+        run: yarn studio-server:verify:production-cutover
+      - name: Verify test style
+        run: yarn studio-server:verify:test-style
+      - name: Verify repository structure
+        run: yarn studio-server:verify:repo-structure
+      - name: Report timing
+        if: always()
+        run: node scripts/ci/job-timing.mjs finish "Studio Server repository contracts"
+
+  deployment-contracts:
+    name: Studio Server deployment contracts
+    if: needs.changes.outputs.relevant == 'true'
+    needs:
+      - changes
+      - build-studio-server
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: ./.github/actions/setup-yarn
+        with:
+          node-version: 24
+      - name: Start timing
+        run: node scripts/ci/job-timing.mjs start "Studio Server deployment contracts"
+      - name: Install dependencies
+        run: node .yarn/releases/yarn-4.17.1.cjs install --immutable --immutable-cache
+      - name: Download compiled Studio Server dependencies
+        uses: actions/download-artifact@v7
+        with:
+          name: studio-server-build-${{ github.sha }}
+          # See the API shard restore above: preserve package-defined export paths.
+          path: packages
       - name: Set Up Kubernetes Tools
-        run: |
-          corepack enable
-          yarn install --immutable
-          yarn studio-server:setup:k8s-tools
+        run: yarn studio-server:setup:k8s-tools
+      - name: Verify Kubernetes and deployment contracts
+        run: yarn studio-server:verify:kubernetes
+      - name: Report timing
+        if: always()
+        run: node scripts/ci/job-timing.mjs finish "Studio Server deployment contracts"
 
-      - name: Run Repository Verification
-        run: yarn studio-server:test
+  verify:
+    if: always()
+    needs:
+      - changes
+      - build-studio-server
+      - api-tests
+      - web-tests
+      - host-compatibility
+      - repository-contracts
+      - deployment-contracts
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require every applicable Studio Server gate
+        shell: bash
+        env:
+          RELEVANT: ${{ needs.changes.outputs.relevant }}
+          BUILD_RESULT: ${{ needs.build-studio-server.result }}
+          API_RESULT: ${{ needs.api-tests.result }}
+          WEB_RESULT: ${{ needs.web-tests.result }}
+          HOST_RESULT: ${{ needs.host-compatibility.result }}
+          REPOSITORY_RESULT: ${{ needs.repository-contracts.result }}
+          DEPLOYMENT_RESULT: ${{ needs.deployment-contracts.result }}
+        run: |
+          if [[ "$RELEVANT" != "true" ]]; then
+            echo "No Studio Server-affecting paths changed; heavy verification was skipped."
+            exit 0
+          fi
+          for result in "$BUILD_RESULT" "$API_RESULT" "$WEB_RESULT" "$HOST_RESULT" "$REPOSITORY_RESULT" "$DEPLOYMENT_RESULT"; do
+            test "$result" = success
+          done
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        if: always()
+      - name: Report Studio Server verification critical path
+        if: always()
+        continue-on-error: true
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          started_at="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" --jq .run_started_at)"
+          node scripts/ci/job-timing.mjs finish-at "$started_at" "Studio Server verification critical path"

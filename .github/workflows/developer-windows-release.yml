@@ -4,293 +4,45 @@ on:
   push:
     branches:
       - develop
+    paths:
+      - '.github/actions/**'
+      - '.github/scripts/**'
+      - '.github/workflows/desktop-release.yml'
+      - '.github/workflows/developer-windows-release.yml'
+      - '.pnp.cjs'
+      - '.pnp.loader.mjs'
+      - '.yarn/**'
+      - '.yarnrc.yml'
+      - 'package.json'
+      - 'packages/app/**'
+      - 'packages/app-executor/**'
+      - 'packages/core/**'
+      - 'packages/docs/**'
+      - 'packages/evaluations/**'
+      - 'packages/node/**'
+      - 'scripts/build-wrapper-target.mjs'
+      - 'scripts/checks/check-graph-builder*'
+      - 'scripts/sync-desktop-version.mjs'
+      - 'yarn.lock'
   workflow_dispatch:
 
 permissions:
-  contents: read
+  actions: read
+  contents: write
   pages: write
   id-token: write
 
 concurrency:
-  group: rivet-docs-pages
-  cancel-in-progress: false
+  group: developer-desktop-${{ github.ref }}-${{ github.event_name == 'push' && 'push' || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'push' }}
 
 jobs:
-  verify-ai-graph-builder-assets:
-    name: Verify AI Graph Builder assets
-    if: github.ref == 'refs/heads/develop'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-
-      - uses: ./.github/actions/setup-yarn
-
-      - name: Install dependencies
-        run: node .yarn/releases/yarn-4.17.1.cjs install --immutable --immutable-cache
-
-      - name: Verify AI graph builder assets
-        run: yarn check:graph-builder-assets
-
-  build-windows:
-    name: Developer Windows desktop bundle
-    if: github.ref == 'refs/heads/develop'
-    needs: verify-ai-graph-builder-assets
-    runs-on: windows-latest
-    steps:
-      - uses: actions/checkout@v6
-
-      - uses: ./.github/actions/setup-yarn
-
-      - uses: ./.github/actions/setup-pkg-cache
-
-      - uses: dtolnay/rust-toolchain@stable
-
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: packages/app/src-tauri -> target
-
-      - name: Install dependencies
-        run: node .yarn/releases/yarn-4.17.1.cjs install --immutable --immutable-cache
-
-      - name: Sync desktop version metadata
-        run: yarn sync:desktop-version
-
-      - name: Build desktop web dependencies
-        run: yarn build:hosted-web-deps
-        env:
-          NODE_OPTIONS: --max-old-space-size=6000
-
-      - name: Build Tauri Windows bundle
-        working-directory: packages/app
-        run: yarn tauri build --verbose --ci --bundles "msi,nsis"
-        env:
-          NODE_OPTIONS: --max-old-space-size=6000
-
-      - name: Upload Windows bundles
-        uses: actions/upload-artifact@v7
-        with:
-          name: rivet-developer-windows-bundles
-          path: packages/app/src-tauri/target/release/bundle
-          if-no-files-found: error
-          retention-days: 7
-
-  build-macos:
-    name: Developer macOS desktop bundle
-    if: github.ref == 'refs/heads/develop'
-    needs: verify-ai-graph-builder-assets
-    runs-on: macos-latest
-    steps:
-      - uses: actions/checkout@v6
-
-      - uses: ./.github/actions/setup-yarn
-
-      - uses: ./.github/actions/setup-pkg-cache
-
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: x86_64-apple-darwin,aarch64-apple-darwin
-
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: packages/app/src-tauri -> target
-
-      - name: Install dependencies
-        run: node .yarn/releases/yarn-4.17.1.cjs install --immutable --immutable-cache
-
-      - name: Sync desktop version metadata
-        run: yarn sync:desktop-version
-
-      - name: Build desktop web dependencies
-        run: yarn build:hosted-web-deps
-        env:
-          NODE_OPTIONS: --max-old-space-size=6000
-
-      - name: Prepare Apple signing and notarization
-        run: bash .github/scripts/prepare-macos-signing-env.sh
-        env:
-          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
-          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
-          APPLE_API_PRIVATE_KEY: ${{ secrets.APPLE_API_PRIVATE_KEY }}
-
-      - name: Build Tauri macOS bundle
-        working-directory: packages/app
-        run: yarn tauri build --verbose --ci --target universal-apple-darwin --bundles "dmg"
-        env:
-          NODE_OPTIONS: --max-old-space-size=6000
-          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
-          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
-
-      - name: Notarize macOS DMG
-        run: bash .github/scripts/notarize-macos-dmg.sh
-        env:
-          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
-          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
-
-      - name: Verify macOS signing and notarization
-        run: bash .github/scripts/verify-macos-dmg.sh
-
-      - name: Upload macOS bundles
-        uses: actions/upload-artifact@v7
-        with:
-          name: rivet-developer-macos-bundles
-          path: packages/app/src-tauri/target/universal-apple-darwin/release/bundle
-          if-no-files-found: error
-          retention-days: 7
-
-  build-docs:
-    name: Developer documentation site
-    if: github.ref == 'refs/heads/develop'
-    needs: verify-ai-graph-builder-assets
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-
-      - uses: ./.github/actions/setup-yarn
-
-      - name: Install dependencies
-        run: node .yarn/releases/yarn-4.17.1.cjs install --immutable --immutable-cache
-
-      - name: Build documentation site
-        run: node .yarn/releases/yarn-4.17.1.cjs workspace docs run build
-        env:
-          NODE_OPTIONS: --max-old-space-size=6000
-
-      - name: Upload documentation site
-        uses: actions/upload-artifact@v7
-        with:
-          name: rivet-developer-docs-site
-          path: packages/docs/build
-          if-no-files-found: error
-          retention-days: 7
-
-  build-pages:
-    name: Developer desktop download page
-    if: github.ref == 'refs/heads/develop'
-    needs:
-      - build-windows
-      - build-macos
-      - build-docs
-    runs-on: ubuntu-latest
-    permissions:
-      actions: read
-      contents: write
-    steps:
-      - uses: actions/checkout@v6
-
-      - uses: actions/setup-node@v5
-        with:
-          node-version: '22.21.1'
-
-      - name: Sync desktop version metadata
-        run: node scripts/sync-desktop-version.mjs
-
-      - name: Download documentation site
-        uses: actions/download-artifact@v7
-        with:
-          name: rivet-developer-docs-site
-          path: packages/docs/build
-
-      - name: Download Windows bundles
-        uses: actions/download-artifact@v7
-        with:
-          name: rivet-developer-windows-bundles
-          path: release-bundles/windows
-
-      - name: Download macOS bundles
-        uses: actions/download-artifact@v7
-        with:
-          name: rivet-developer-macos-bundles
-          path: release-bundles/macos
-
-      - name: Publish developer desktop release assets
-        run: node .github/scripts/publish-desktop-release-assets.mjs
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-          GITHUB_REPOSITORY: ${{ github.repository }}
-          GITHUB_SHA: ${{ github.sha }}
-          RELEASE_CHANNEL: developer
-          RELEASE_PLATFORMS: windows,macos
-          RELEASE_TARGET_COMMITISH: ${{ github.event.repository.default_branch }}
-          RELEASE_ASSETS_MANIFEST_PATH: release-assets-manifest.json
-          WINDOWS_BUNDLE_DIR: release-bundles/windows
-          MACOS_BUNDLE_DIR: release-bundles/macos
-
-      - name: Add developer release downloads to docs site
-        run: node .github/scripts/prepare-desktop-release-pages.mjs
-        env:
-          RELEASE_CHANNEL: developer
-          RELEASE_LABEL: develop-${{ github.run_number }}-${{ github.sha }}
-          RELEASE_PLATFORMS: windows,macos
-          PRESERVE_RELEASE_METADATA_FILES: official-release.json
-          PAGES_SITE_URL: https://valerypopoff.github.io/rivet2.0/
-          PAGES_OUT_DIR: packages/docs/build
-          RELEASE_ASSETS_MANIFEST_PATH: release-assets-manifest.json
-
-      - name: Upload Pages content
-        uses: actions/upload-artifact@v7
-        with:
-          name: rivet-docs-pages
-          path: packages/docs/build
-          if-no-files-found: error
-          retention-days: 7
-
-  publish-pages:
-    name: Publish developer desktop downloads
-    if: github.ref == 'refs/heads/develop'
-    needs: build-pages
-    runs-on: ubuntu-latest
-    environment:
-      name: developer-windows-pages
-      url: ${{ steps.deployment_first_attempt.outputs.page_url || steps.deployment.outputs.page_url }}
-    env:
-      PAGES_ENABLEMENT_TOKEN: ${{ secrets.PAGES_ENABLEMENT_TOKEN }}
-    steps:
-      - name: Download Pages content
-        uses: actions/download-artifact@v7
-        with:
-          name: rivet-docs-pages
-          path: rivet-docs-pages
-
-      - name: Configure Pages
-        if: env.PAGES_ENABLEMENT_TOKEN == ''
-        uses: actions/configure-pages@v6
-
-      - name: Configure Pages and enable site
-        if: env.PAGES_ENABLEMENT_TOKEN != ''
-        uses: actions/configure-pages@v6
-        with:
-          enablement: true
-          token: ${{ env.PAGES_ENABLEMENT_TOKEN }}
-
-      - name: Upload Pages artifact
-        uses: actions/upload-pages-artifact@v5
-        with:
-          path: rivet-docs-pages
-
-      # Pages can transiently leave an accepted artifact in deployment_queued.
-      # A healthy deployment is much faster, so bound each attempt to five
-      # minutes and retry once after the action cancels the first deployment.
-      - name: Deploy to GitHub Pages (attempt 1 of 2)
-        id: deployment_first_attempt
-        continue-on-error: true
-        uses: actions/deploy-pages@v5
-        with:
-          timeout: '300000'
-
-      - name: Wait for GitHub Pages cancellation to settle
-        if: steps.deployment_first_attempt.outcome == 'failure'
-        run: sleep 15
-
-      - name: Deploy to GitHub Pages (attempt 2 of 2)
-        if: steps.deployment_first_attempt.outcome == 'failure'
-        id: deployment
-        uses: actions/deploy-pages@v5
-        with:
-          timeout: '300000'
+  release:
+    uses: ./.github/workflows/desktop-release.yml
+    with:
+      branch_ref: refs/heads/develop
+      channel: developer
+      channel_label: Developer
+      environment_name: developer-windows-pages
+      preserve_metadata_file: official-release.json
+    secrets: inherit
