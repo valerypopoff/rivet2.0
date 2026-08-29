@@ -221,6 +221,61 @@ When `keyRotation` is supplied, the gate writes an unchanged Run recordings sett
 
 Run it from **Build Images** -> **Run workflow**, enabling `run_managed_kubernetes_provider_gate`. The protected job allows up to 180 minutes because candidate deployment, optional three-phase key rotation, legacy rollback, and outage recovery are each bounded independently; the default Helm operation bound is 15 minutes. The job resolves the candidate images to digests, verifies the rendered release uses them, checks the public ingress host and TLS endpoint, and uploads only workload/manifest/log artifacts under `artifacts/kubernetes-managed-provider-gate`. Candidate Helm upgrades are atomic: a failed rollout rolls the release back instead of leaving a partial failed candidate deployed. The ingress check is restricted to objects owned by the selected Helm release, so an unrelated staging ingress cannot satisfy it. When upgrading an existing staging release, the gate reuses its existing Helm values so omitted values are not reset; a new staging release uses only the supplied values. The gate treats any Helm history error other than an explicitly absent release as a failure, rather than risking an install-style upgrade with no inherited values. The gate labels and owns only its configured registry pull secret (by default, `rivet-managed-provider-gate-registry`) and refuses to overwrite a same-named secret without its ownership label. A first green run is required operational evidence; repository tests can validate this harness but cannot substitute for access to the real provider services.
 
+### Published execution capacity certificate
+
+`yarn studio-server:verify:kubernetes:managed-capacity` is the protected **staging capacity** command for the high-volume published execution plane. It is not a generic load-test utility and it must never be aimed at production. The GitHub **Build Images** manual-dispatch option `run_managed_kubernetes_capacity_gate` first runs the existing provider gate to deploy the current immutable candidate image set, then runs this command in the same protected `rivet-managed-staging` environment. A failed certificate blocks that manually requested candidate from promotion.
+
+The runner requires both the provider-gate acknowledgement (`RIVET_K8S_PROVIDER_GATE_CONFIRM=deploy-staging`) and its separate exact acknowledgement (`RIVET_K8S_CAPACITY_GATE_CONFIRM=certify-staging`). Both configured context variables must exactly match the active context, the namespace must begin `rivet-staging-`, and the live Helm manifest must contain all four requested `repository@sha256:digest` images. It does not upgrade an arbitrary release: the provider gate owns candidate deployment. The capacity runner only adds short-lived owned resources and removes them before returning:
+
+- two uniquely identified temporary projects based on the deterministic Code-plus-Delay fixture, published as one short and one long endpoint;
+- one uniquely named ConfigMap containing a non-secret worker configuration;
+- one single-attempt bounded Job using the candidate API image, explicitly non-root/read-only/capability-free and without a service-account token; and
+- the temporary projects, Job, and ConfigMap during cleanup. Cleanup failure fails the run rather than leaving undisclosed staging artifacts.
+
+The worker can construct only `POST /workflows/<safe-generated-endpoint>` URLs. It cannot accept a path, a `/workflows-latest/...` route, an internal execution-service target, arbitrary request headers (the schema rejects `requestHeaders`), or a retry policy. It sends neither a management credential nor a Kubernetes service-account token: the authenticated external staging `baseUrl` is used only by the host-side runner to publish and later delete its temporary fixture projects. This makes the load proof about the proxy-to-execution public-runtime route while keeping control credentials out of the Job and its report. Consequently, the runner reads the protected staging **Workflow endpoint access** setting before creating fixtures and refuses to run while bearer authentication is required. Do not put `RIVET_KEY` or another management credential in the Job merely to bypass that check; use staging configured for the public-route posture being certified. A protected-endpoint capacity certificate needs separately scoped workload credentials and is not implemented by this public-route gate.
+
+Add a `capacity` object to the existing protected provider-gate JSON. Keep the JSON, request headers, kubeconfig, and Helm values in the protected environment secrets; do not commit them.
+
+```json
+{
+  "capacity": {
+    "serviceNamePrefix": "rivet-staging",
+    "requestTimeoutMs": 30000,
+    "controlCanaryEveryRequests": 10,
+    "controlCanaryTimeoutMs": 5000,
+    "sampleIntervalMs": 5000,
+    "jobTimeoutSeconds": 900,
+    "requireExecutionMetrics": true,
+    "stages": [
+      { "name": "warmup", "scenario": "fast", "expect": "success", "concurrency": 4, "requests": 40 },
+      { "name": "steady", "scenario": "long", "expect": "success", "concurrency": 12, "requests": 120 },
+      { "name": "overload", "scenario": "long", "expect": "overload", "concurrency": 48, "requests": 160 }
+    ],
+    "thresholds": {
+      "maximumP95Ms": { "warmup": 3000, "steady": 10000, "overload": 15000 },
+      "maximumUnexpectedRate": 0.01,
+      "maximumControlCanaryFailureRate": 0,
+      "maximumRecordingDrops": 0
+    }
+  }
+}
+```
+
+`serviceNamePrefix` is optional: omit it when the chart service prefix is the Helm release name, or set it to the actual service prefix when the staging Helm values use `fullnameOverride`; it identifies the proxy and control API ClusterIP Services. Stage names are unique lowercase DNS fragments; each stage is capped at 256 concurrent workers and 20,000 requests, with a 50,000-request cap for the whole run. At least one stage must explicitly expect overload. `fast` uses a 75 ms deterministic graph and `long` uses a 1.5 s deterministic graph. They intentionally prove request scheduling, admission, recording persistence, proxy routing, and Code-node execution without invoking an external LLM, tool, or provider. Add provider/tool scenarios only after their data, idempotency, and cost boundaries are separately approved.
+
+Before certification, enable direct execution metrics in the staging values:
+
+```yaml
+metrics:
+  enabled: true
+```
+
+The operator identity also needs read access to execution Pods and Events plus Kubernetes API pod-proxy access for `pods/<name>:8080/proxy/metrics`. Metrics remain internal ClusterIP endpoints; this does not publish `/metrics` through the proxy. Each sample records bounded active-run/admission gauges, recording queue, and per-Pod drop counters compared with the pre-load baseline (a Pod first seen after the baseline uses zero), plus per-Pod restart/OOM evidence and eviction events. The Job makes a direct backend `/readyz` control canary at the configured interval while the proxy receives load. The report includes p50/p95/p99, exact status counts, rejected/failed/timeout counts, canary outcomes, metric samples, pod-event evidence, the selected stage thresholds, and the immutable candidate image references. It excludes request headers, raw request bodies, prompts, outputs, and provider credentials.
+
+The CI job always runs in `certify` mode. Certification requires `requireExecutionMetrics: true` and a complete report whose stage names, request totals, outcome totals, and control-canary counts exactly match the declared configuration. A scheduling-edge sample with no execution Pod is retained as evidence but does not require metrics; at least one sample taken while an execution Pod exists must expose every required metric. The gate otherwise fails if a required event sample is unavailable, a stage exceeds its p95 or unexpected-result limit, a control canary fails, recording drops increase beyond the limit, an overload stage never receives visible `429` admission rejection, or a new restart/OOM/eviction occurs after the baseline sample. Local protected use may set `RIVET_K8S_CAPACITY_GATE_MODE=observe`; that records the same evidence but does not turn threshold findings into success/failure. It still requires the exact staging acknowledgement and refuses non-staging contexts. On every normal finalization path, the gate writes `capacity-report.json`, including setup, scheduling, Job, and cleanup failures: it records the completed phase, available Pod snapshots and report data, plus cleanup outcome and only a failure class—not a raw exception, request header, or credential. If writing the local evidence artifact itself fails, the command fails explicitly rather than claiming a certificate. The separate diagnostic logs retain the bounded command context.
+
+This certificate is deliberately not proof of final production sizing. The initial runner does not collect node-ephemeral high-water usage, downstream provider concurrency, external tool correctness, or a simultaneous Evaluation batch. Use provider monitoring for memory/ephemeral high-water marks and retain its charts with the JSON report. Do not change HPA bounds, admission ceilings, or resource limits automatically from one run. First establish a stable staging envelope, then promote explicit values through normal review. Evaluation isolation remains blocked on the server-owned coordinator work; no result from this gate claims that editor-owned Evaluation execution is reserved or isolated.
+
 ### Cross-store backup and restore drill
 
 `yarn studio-server:verify:kubernetes:managed-restore` is the protected **operator** command for disaster-recovery evidence. It deliberately does not create database snapshots or object copies itself: PostgreSQL PITR/snapshot creation, object-store version retention, and encrypted-key backup are provider-owned controls. The command takes their recovery point as input, restores it through provider-owned Kubernetes Jobs, and verifies that the restored stores work together.

@@ -171,6 +171,13 @@ assert.match(
 
 const images = parseWorkflow('.github/workflows/studio-server-images.yml');
 const imageJobs = images.workflow.jobs;
+const capacityDispatchInput = images.workflow.on.workflow_dispatch?.inputs?.run_managed_kubernetes_capacity_gate;
+assert.equal(
+  capacityDispatchInput?.type,
+  'boolean',
+  'Image workflow must expose a boolean manual capacity-certificate input.',
+);
+assert.equal(capacityDispatchInput?.default, false, 'The capacity certificate must never run implicitly.');
 assert.equal(
   images.workflow.permissions.actions,
   'read',
@@ -291,6 +298,65 @@ assert.equal(
   ).with?.name,
   'managed-kubernetes-provider-gate-${{ github.run_id }}-${{ github.run_attempt }}',
   'Managed Kubernetes provider-gate diagnostics must remain distinct per workflow attempt.',
+);
+assert.ok(
+  imageJobs['managed-kubernetes-capacity-gate'],
+  'Image workflow must expose the protected published-capacity gate.',
+);
+assert.match(
+  String(imageJobs['managed-kubernetes-provider-gate'].if),
+  /run_managed_kubernetes_capacity_gate/,
+  'The provider gate must deploy immutable candidate images before the capacity gate runs.',
+);
+assert.deepEqual(
+  asArray(imageJobs['managed-kubernetes-capacity-gate'].needs),
+  ['build-and-push', 'managed-kubernetes-provider-gate'],
+  'The capacity gate must run only after the candidate images are built and deployed to protected staging.',
+);
+assert.equal(
+  imageJobs['managed-kubernetes-capacity-gate'].environment?.name,
+  'rivet-managed-staging',
+  'The capacity gate must remain protected by the staging environment.',
+);
+assert.match(
+  String(imageJobs['managed-kubernetes-capacity-gate'].if),
+  /workflow_dispatch.*run_managed_kubernetes_capacity_gate.*true/,
+  'The capacity gate must run only when manually requested.',
+);
+assert.equal(
+  imageJobs['managed-kubernetes-capacity-gate'].env?.RIVET_K8S_CAPACITY_GATE_CONFIRM,
+  'certify-staging',
+  'The capacity gate must supply its exact staging acknowledgement.',
+);
+assert.equal(
+  imageJobs['managed-kubernetes-capacity-gate'].env?.RIVET_K8S_CAPACITY_GATE_MODE,
+  'certify',
+  'The CI capacity gate must issue a real certificate rather than observations only.',
+);
+assert.match(
+  String(
+    findStep(
+      imageJobs['managed-kubernetes-capacity-gate'],
+      'Certify Published Endpoint Capacity',
+      'Managed Kubernetes capacity gate',
+    ).run,
+  ),
+  /studio-server:verify:kubernetes:managed-capacity/,
+  'The capacity gate must run the canonical bounded published-endpoint command.',
+);
+assert.equal(
+  findStep(
+    imageJobs['managed-kubernetes-capacity-gate'],
+    'Upload Published Capacity Evidence',
+    'Managed Kubernetes capacity gate',
+  ).with?.name,
+  'managed-kubernetes-capacity-gate-${{ github.run_id }}-${{ github.run_attempt }}',
+  'Capacity evidence must remain distinct per workflow attempt.',
+);
+assert.match(
+  promotionCondition,
+  /needs\.managed-kubernetes-capacity-gate\.result/,
+  'Image promotion must depend on an explicitly requested capacity certificate.',
 );
 
 const reusableDesktop = parseWorkflow('.github/workflows/desktop-release.yml');
