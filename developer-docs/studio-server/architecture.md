@@ -85,6 +85,18 @@ The current runtime keeps the control plane conservative while published executi
   - published Rivet web app HTML, app JSON, HTTP action compatibility, and resumable WebSocket action execution
   - internal published-only execution for trusted in-cluster callers
 
+Each execution-plane API process has one shared published-execution admission gate for
+published workflow endpoints and published web-app actions (HTTP and WebSocket). The gate
+has no per-pod waiting queue: it either admits work immediately or returns a structured
+overload response, so overload cannot become unbounded request memory and latency. Latest
+and editor/control execution remain on the backend and never consume these slots. The API
+switches the gate into drain mode before shutdown, which rejects new published work while
+already admitted work receives the normal shutdown deadline. HTTP graph processors are tracked
+independently of client sockets; any that remain after that deadline are aborted before their
+connections and shared storage resources are forced closed. Web-app clients are politely closed
+during drain so Node does not treat an idle upgraded socket as unfinished server work; their
+durable action stream can reconnect to a healthy execution replica.
+
 That control-plane singleton is intentional, not accidental. In the current supported Kubernetes topology:
 
 - `backend` stays at one replica

@@ -31,6 +31,13 @@ replicaCount:
   backend: 1
   execution: 2
 
+# Only execution-profile API pods receive this gate. It has no in-memory queue:
+# an overloaded published request receives a visible retry response instead.
+publishedExecutionAdmission:
+  mode: disabled
+  maxActiveRunsPerPod: 4
+  retryAfterSeconds: 1
+
 autoscaling:
   proxy:
     enabled: true

@@ -21,6 +21,14 @@ import {
 } from '@valerypopoff/rivet2-node';
 
 import { isLatestWorkflowRemoteDebuggerEnabled, maybeGetLatestWorkflowRemoteDebugger } from '../../latestWorkflowRemoteDebugger.js';
+import { registerActiveHttpExecution } from '../../active-http-executions.js';
+import {
+  getPublishedExecutionAdmission,
+  PublishedExecutionAdmissionError,
+  toPublishedExecutionAdmissionError,
+  type PublishedExecutionPermit,
+  type PublishedExecutionSurface,
+} from '../../published-execution-admission.js';
 import { asyncHandler } from '../../utils/asyncHandler.js';
 import { badRequest, createHttpError } from '../../utils/httpError.js';
 import { getLatestWebAppsBasePath, getPublishedWebAppsBasePath } from '../../workflowEndpointPaths.js';
@@ -223,14 +231,18 @@ function sendWorkflowErrorWithDuration(
     ? error.status
     : 500;
 
-  if (status >= 500) {
+  if (status >= 500 && !(error instanceof PublishedExecutionAdmissionError)) {
     console.error('Workflow execution failed:', error);
+  }
+  if (error instanceof PublishedExecutionAdmissionError) {
+    res.set('Retry-After', String(error.retryAfterSeconds));
   }
 
   const errorPayload = error instanceof Error
     ? {
         name: error.name,
         message: error.message,
+        ...(error instanceof PublishedExecutionAdmissionError ? { code: error.code } : {}),
       }
     : {
         message: String(error),
@@ -845,18 +857,31 @@ function sendWebAppActionErrorWithDuration(
   error: unknown,
   requestStartedAt: number,
 ): void {
-  const status = error instanceof RivetWebAppActionHttpError ? error.status : 500;
-  if (status >= 500) {
+  const status = error instanceof RivetWebAppActionHttpError || error instanceof PublishedExecutionAdmissionError
+    ? error.status
+    : 500;
+  if (status >= 500 && !(error instanceof PublishedExecutionAdmissionError)) {
     console.error('Rivet web app action failed:', error);
   }
-  const message = status >= 500 && !(error instanceof RivetWebAppActionHttpError)
+  if (error instanceof PublishedExecutionAdmissionError) {
+    res.set('Retry-After', String(error.retryAfterSeconds));
+  }
+  const message = status >= 500 && !(error instanceof RivetWebAppActionHttpError || error instanceof PublishedExecutionAdmissionError)
     ? 'Internal server error'
     : getWorkflowErrorMessage(error);
-  const code = error instanceof RivetWebAppActionHttpError ? error.code : undefined;
+  const code = error instanceof RivetWebAppActionHttpError || error instanceof PublishedExecutionAdmissionError
+    ? error.code
+    : undefined;
   sendJsonWithDuration(res, status, {
     error: message,
     ...(code ? { code } : {}),
   }, requestStartedAt);
+}
+
+function acquirePublishedExecutionPermit(surface: PublishedExecutionSurface): PublishedExecutionPermit {
+  const result = getPublishedExecutionAdmission().acquire(surface);
+  if (result.kind === 'accepted') return result.permit;
+  throw toPublishedExecutionAdmissionError(result);
 }
 
 function getWebAppActionComponentId(body: Record<string, unknown>): string {
@@ -932,6 +957,7 @@ async function runRecordedWebAppAction(
   req: Request,
   codeRunnerTelemetry: ManagedCodeRunnerTelemetry | null,
   options: {
+    abortSignal?: AbortSignal;
     enableRemoteDebugger?: boolean;
     webAppSlug: string;
   },
@@ -978,6 +1004,7 @@ async function runRecordedWebAppAction(
     : createRivetStoredValueSnapshotStore(actionStorage);
   const processor = createProcessor(executionProject.project, {
     ...processorOptions,
+    abortSignal: options.abortSignal,
     graph: component.action.graphId,
     inputs,
     storedValueStore: processorOptions.storedValueStore ?? browserStoredValues!.store,
@@ -1276,6 +1303,7 @@ async function executeWorkflowEndpoint(
   req: Request,
   res: Response,
   options: {
+    abortSignal?: AbortSignal;
     enableRemoteDebugger?: boolean;
     endpointName: string;
     runKind: 'published' | 'latest';
@@ -1289,6 +1317,7 @@ async function executeWorkflowEndpoint(
     ? createManagedCodeRunnerTelemetry()
     : null;
   const processor = createProcessor(project, {
+    abortSignal: options.abortSignal,
     codeRunner: new ManagedCodeRunner(
       getRootPath(),
       { ...(codeRunnerTelemetry ? { telemetry: codeRunnerTelemetry } : {}), executionEnvironment },
@@ -1375,17 +1404,25 @@ async function handlePublishedWorkflowRequest(
       return;
     }
 
-    await executeWorkflowEndpoint(
-      executionProject,
-      requestStartedAt,
-      req,
-      res,
-      {
-        enableRemoteDebugger: false,
-        endpointName,
-        runKind: 'published',
-      },
-    );
+    const permit = acquirePublishedExecutionPermit('workflow-endpoint');
+    const activeExecution = registerActiveHttpExecution();
+    try {
+      await executeWorkflowEndpoint(
+        executionProject,
+        requestStartedAt,
+        req,
+        res,
+        {
+          abortSignal: activeExecution.signal,
+          enableRemoteDebugger: false,
+          endpointName,
+          runKind: 'published',
+        },
+      );
+    } finally {
+      activeExecution.release();
+      permit.release();
+    }
   } catch (error) {
     sendWorkflowErrorWithDuration(res, error, requestStartedAt);
   }
@@ -1416,17 +1453,23 @@ latestWorkflowsRouter.post('/:endpointName', asyncHandler(async (req, res) => {
       return;
     }
 
-    await executeWorkflowEndpoint(
-      executionProject,
-      requestStartedAt,
-      req,
-      res,
-      {
-        enableRemoteDebugger: true,
-        endpointName,
-        runKind: 'latest',
-      },
-    );
+    const activeExecution = registerActiveHttpExecution();
+    try {
+      await executeWorkflowEndpoint(
+        executionProject,
+        requestStartedAt,
+        req,
+        res,
+        {
+          abortSignal: activeExecution.signal,
+          enableRemoteDebugger: true,
+          endpointName,
+          runKind: 'latest',
+        },
+      );
+    } finally {
+      activeExecution.release();
+    }
   } catch (error) {
     sendWorkflowErrorWithDuration(res, error, requestStartedAt);
   }
@@ -1517,10 +1560,21 @@ async function handleWebAppActionRequest(req: Request, res: Response, routeKind:
       ? createManagedCodeRunnerTelemetry()
       : null;
 
-    const execution = await runRecordedWebAppAction(resolved.executionProject, uiGraph, req, codeRunnerTelemetry, {
-      enableRemoteDebugger: routeKind === 'latest',
-      webAppSlug: resolved.slug,
-    });
+    const permit = routeKind === 'published'
+      ? acquirePublishedExecutionPermit('web-app-action')
+      : null;
+    const activeExecution = registerActiveHttpExecution();
+    let execution: WebAppActionExecutionSnapshot;
+    try {
+      execution = await runRecordedWebAppAction(resolved.executionProject, uiGraph, req, codeRunnerTelemetry, {
+        abortSignal: activeExecution.signal,
+        enableRemoteDebugger: routeKind === 'latest',
+        webAppSlug: resolved.slug,
+      });
+    } finally {
+      activeExecution.release();
+      permit?.release();
+    }
     enqueueExecutionRecording(resolved.executionProject, execution, {
       endpointName: getWebAppBasePath(routeKind, resolved.slug),
       runKind: routeKind,

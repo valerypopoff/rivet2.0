@@ -6,6 +6,7 @@ export const kubernetesApiTestFiles = [
 ];
 
 export const defaultApiTestFiles = [
+  'src/tests/active-http-executions.test.ts',
   'src/tests/api-profile.test.ts',
   'src/tests/app-settings.test.ts',
   'src/tests/docker-launcher-env.test.ts',
@@ -41,6 +42,7 @@ export const defaultApiTestFiles = [
   'src/tests/normalize-base-path.test.ts',
   'src/tests/plugin-installer.test.ts',
   'src/tests/proxy-image-contract.test.ts',
+  'src/tests/published-execution-admission.test.ts',
   'src/tests/recording-input-filter.test.ts',
   'src/tests/recording-statistics.test.ts',
   'src/tests/recordings-store.test.ts',

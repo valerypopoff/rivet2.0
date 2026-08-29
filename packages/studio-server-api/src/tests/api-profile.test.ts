@@ -15,6 +15,7 @@ import {
   getApiRouteExposureMatrix,
 } from '../app.js';
 import { disposeRuntimeLibrariesBackend } from '../runtime-libraries/backend.js';
+import { isWebAppSocketRouteEnabled } from '../web-app-action-websocket.js';
 import { createHttpError } from '../utils/httpError.js';
 import { writeWorkflowEndpointAuthSettings } from '../workflow-endpoint-auth-settings.js';
 
@@ -275,6 +276,15 @@ test('API CORS defaults to same-origin browser access and explicit allowlist ori
       await server.close();
     }
   });
+});
+
+test('web-app WebSocket routes follow the same profile split as their HTTP counterparts', () => {
+  assert.equal(isWebAppSocketRouteEnabled('published', 'control'), false);
+  assert.equal(isWebAppSocketRouteEnabled('latest', 'control'), true);
+  assert.equal(isWebAppSocketRouteEnabled('published', 'execution'), true);
+  assert.equal(isWebAppSocketRouteEnabled('latest', 'execution'), false);
+  assert.equal(isWebAppSocketRouteEnabled('published', 'combined'), true);
+  assert.equal(isWebAppSocketRouteEnabled('latest', 'combined'), true);
 });
 
 test('control profile exposes control-plane routes and does not expose published execution routes', async () => {

@@ -16,6 +16,12 @@ import {
   initializeWorkflowStorage,
 } from './routes/workflows/storage-backend.js';
 import { flushWorkflowExecutionRecordingPersistence } from './routes/workflows/recordings.js';
+import { getPublishedExecutionAdmission } from './published-execution-admission.js';
+import {
+  abortActiveHttpExecutions,
+  beginActiveHttpExecutionDrain,
+  getActiveHttpExecutionCount,
+} from './active-http-executions.js';
 import { getApiRuntimeProfile, isControlPlaneApiProfile } from './runtime-profile.js';
 import { assertApiRuntimeProfileStartupPreconditions, createApiApp } from './app.js';
 import {
@@ -82,13 +88,21 @@ function wait(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function waitForActiveWebAppRuns(deadline: number): Promise<boolean> {
-  while ((webAppActionWebSockets?.getActiveRunCount() ?? 0) > 0) {
+async function waitForActiveRuns(getActiveRunCount: () => number, deadline: number): Promise<boolean> {
+  while (getActiveRunCount() > 0) {
     const remainingMs = deadline - Date.now();
     if (remainingMs <= 0) return false;
     await wait(Math.min(250, remainingMs));
   }
   return true;
+}
+
+async function waitForActiveWebAppRuns(deadline: number): Promise<boolean> {
+  return waitForActiveRuns(() => webAppActionWebSockets?.getActiveRunCount() ?? 0, deadline);
+}
+
+async function waitForActiveHttpExecutions(deadline: number): Promise<boolean> {
+  return waitForActiveRuns(getActiveHttpExecutionCount, deadline);
 }
 
 async function closeHttpServer(deadline: number): Promise<boolean> {
@@ -161,6 +175,10 @@ async function shutdown(signal: string): Promise<void> {
 
   shuttingDown = true;
   runtimeHealth.beginDrain();
+  beginActiveHttpExecutionDrain();
+  if (apiRuntimeProfile !== 'control') {
+    getPublishedExecutionAdmission().beginDrain();
+  }
   webAppActionWebSockets?.drain();
   const shutdownGraceMs = readShutdownGraceMs();
   const deadline = Date.now() + shutdownGraceMs;
@@ -173,23 +191,38 @@ async function shutdown(signal: string): Promise<void> {
     ]);
   }
 
-  const [httpClosed, runsCompleted] = await Promise.all([
+  const [httpClosed, webAppRunsCompleted, httpRunsCompleted] = await Promise.all([
     closeHttpServer(deadline),
     waitForActiveWebAppRuns(deadline),
+    waitForActiveHttpExecutions(deadline),
   ]);
+
+  if (!webAppRunsCompleted) {
+    console.warn(
+      `[web-app-actions] ${webAppActionWebSockets?.getActiveRunCount() ?? 0} active run(s) exceeded the shutdown grace period and will be interrupted.`,
+    );
+  }
+  if (!httpRunsCompleted) {
+    const activeHttpRuns = getActiveHttpExecutionCount();
+    const aborted = abortActiveHttpExecutions();
+    console.warn(
+      `[workflow-executions] ${activeHttpRuns} active HTTP graph run(s) exceeded the shutdown grace period; aborting ${aborted}.`,
+    );
+    const finalized = await waitForActiveHttpExecutions(Date.now() + 5_000);
+    if (!finalized) {
+      console.warn(
+        `[workflow-executions] ${getActiveHttpExecutionCount()} HTTP graph run(s) did not settle after shutdown abort.`,
+      );
+    }
+  }
 
   if (!httpClosed) {
     console.warn('[rivet-api] HTTP connections exceeded the shutdown grace period; forcing them closed.');
     server.closeAllConnections?.();
     server.closeIdleConnections?.();
   }
-  if (!runsCompleted) {
-    console.warn(
-      `[web-app-actions] ${webAppActionWebSockets?.getActiveRunCount() ?? 0} active run(s) exceeded the shutdown grace period and will be interrupted.`,
-    );
-  }
 
-  await disposeResources(!runsCompleted);
+  await disposeResources(!webAppRunsCompleted);
   runtimeHealth.stop();
   process.exitCode = 0;
 }
@@ -204,6 +237,9 @@ process.once('SIGTERM', () => {
 
 async function startServer(): Promise<void> {
   try {
+    if (apiRuntimeProfile !== 'control') {
+      getPublishedExecutionAdmission();
+    }
     await initializeAppSettingsRepositories();
     assertStartupActive();
     assertApiRuntimeProfileStartupPreconditions(apiRuntimeProfile);

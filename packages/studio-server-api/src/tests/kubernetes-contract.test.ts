@@ -147,6 +147,48 @@ test('rendered chart keeps control-plane and execution-plane API env contracts d
   assert.doesNotMatch(renderedChart, /RIVET_WEB_APPS_AUTH_MODE|OAUTH_CLIENT_SECRET|OAUTH_AUTHORIZE_URL/);
 });
 
+test('chart owns the published execution admission policy only on execution API pods', async () => {
+  const renderedChart = await renderLocalKubernetesChart();
+  const apiEntrypoint = readRepoFile('deploy/studio-server/images/api/entrypoint.sh');
+  const validationTemplate = readRepoFile('deploy/studio-server/helm/templates/validate-values.yaml');
+  const productionOverlay = readRepoFile('deploy/studio-server/helm/overlays/prod.yaml');
+
+  assert.match(
+    renderedChart,
+    /name: RIVET_API_PROFILE\s*\n\s*value: "execution"[\s\S]*?name: RIVET_DEPLOYMENT_PUBLISHED_EXECUTION_ADMISSION_MODE\s*\n\s*value: "disabled"[\s\S]*?name: RIVET_DEPLOYMENT_PUBLISHED_EXECUTION_MAX_ACTIVE_RUNS\s*\n\s*value: "4"[\s\S]*?name: RIVET_DEPLOYMENT_PUBLISHED_EXECUTION_RETRY_AFTER_SECONDS\s*\n\s*value: "1"/,
+  );
+  assert.equal(
+    (renderedChart.match(/name: RIVET_DEPLOYMENT_PUBLISHED_EXECUTION_ADMISSION_MODE/g) ?? []).length,
+    1,
+    'only the execution API pod should receive the public admission policy',
+  );
+  assert.match(
+    productionOverlay,
+    /publishedExecutionAdmission:\s*\n\s*mode: enforce\s*\n\s*maxActiveRunsPerPod: 4\s*\n\s*retryAfterSeconds: 1/,
+  );
+  assert.match(
+    validationTemplate,
+    /RIVET_PUBLISHED_EXECUTION_ADMISSION_MODE[\s\S]*configure publishedExecutionAdmission instead/,
+  );
+  assert.match(
+    apiEntrypoint,
+    /deployment_published_execution_admission_mode="\$\{RIVET_DEPLOYMENT_PUBLISHED_EXECUTION_ADMISSION_MODE:-\}"[\s\S]*load_optional_dotenv \/vault\/dotenv[\s\S]*RIVET_PUBLISHED_EXECUTION_ADMISSION_MODE "\$deployment_published_execution_admission_mode"/,
+  );
+
+  await assertHelmTemplateFails(
+    ['publishedExecutionAdmission.mode=queue'],
+    /publishedExecutionAdmission\.mode must be disabled, observe, or enforce/,
+  );
+  await assertHelmTemplateFails(
+    ['publishedExecutionAdmission.maxActiveRunsPerPod=0'],
+    /publishedExecutionAdmission\.maxActiveRunsPerPod must be an integer between 1 and 10000/,
+  );
+  await assertHelmTemplateFails(
+    ['env.RIVET_PUBLISHED_EXECUTION_ADMISSION_MODE=enforce'],
+    /RIVET_PUBLISHED_EXECUTION_ADMISSION_MODE[\s\S]*configure publishedExecutionAdmission instead/,
+  );
+});
+
 test('chart serializes managed workflow migrations before verify-only API workloads start', async () => {
   const renderedChart = await renderLocalKubernetesChart();
   const renderedChartWithRollbackWindow = await renderLocalKubernetesChartWithOverrides([

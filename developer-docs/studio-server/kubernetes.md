@@ -655,6 +655,59 @@ Keep ingress body-size limits high enough for project import/export and keep web
 
 Do not route `/workflows` directly to `execution` from the external ingress. External traffic should still enter through `proxy`, because the proxy injects the trusted `X-Rivet-Proxy-Auth` header and handles the optional UI/public workflow auth policies consistently.
 
+### Published execution admission
+
+The execution API has a per-process admission gate for product-facing graph work. It is
+shared by published `/workflows/*`, trusted in-cluster `/internal/workflows/*`, published
+web-app HTTP actions, and published web-app WebSocket actions. It does not apply to
+`/workflows-latest/*`, `/apps-latest/*`, or editor/control traffic: those remain on the
+singleton backend, which preserves protected operator capacity. WebSocket upgrades also
+enforce the same API-profile split as their HTTP routes, so a direct request to a control
+pod cannot bypass the execution-plane policy.
+
+On shutdown, the execution runtime first becomes unready and rejects new public work, then sends
+server.draining and closes upgraded web-app client sockets. Accepted graph runs remain owned by
+the draining pod for the normal grace period; managed clients can reconnect and resume their
+durable action stream through a healthy replica. Closing the client socket prevents Node's HTTP
+server from waiting for an idle upgraded connection for the entire pod grace period. HTTP graph
+processors are tracked separately: if they still run at the deadline, Rivet aborts them before
+forcing their client connections closed, then uses the chart's reserved finalization margin to
+let processor cleanup and recording finalization settle before storage is disposed.
+
+The gate deliberately keeps **no local waiting queue**. Kubernetes may add execution pods,
+but a waiting queue in every existing pod would turn a burst into unbounded latency and
+memory use. Each `execution` API pod uses these typed values:
+
+```yaml
+publishedExecutionAdmission:
+  # disabled | observe | enforce
+  mode: disabled
+  maxActiveRunsPerPod: 4
+  retryAfterSeconds: 1
+```
+
+- `disabled` retains legacy admission behavior. It still rejects new published requests
+  while the API is draining for shutdown.
+- `observe` tracks active published graph runs and logs threshold crossings, but continues
+  admitting work. Use it to collect staging load evidence without changing caller behavior.
+- `enforce` rejects immediately once `maxActiveRunsPerPod` is active. A workflow or HTTP
+  web-app action receives `429`, `Retry-After`, and
+  `execution_capacity_exceeded`; drain returns `503` and `execution_draining`.
+  A WebSocket action receives the corresponding `action.rejected` code after its protocol
+  handshake. Rejected work is neither executed nor recorded, and Rivet does not retry it.
+
+Admission event logging is edge-triggered once per saturation or drain period, so an
+overload burst or a rolling shutdown cannot create its own log storm.
+
+The generic chart default is `disabled`; the production overlay selects the conservative
+initial envelope of four active runs per execution pod. With its current 2–10 execution
+replica range, that is 8–40 active public graph runs. Treat this as a safety ceiling, not
+proof of a production capacity target: first run the published-route staging load gate in
+`observe` mode, then tune requests, limits, HPA bounds, and the enforced value from actual
+provider, storage, and recording evidence. Helm owns these environment variables and
+reapplies them after Vault dotenv loading, so a stale secret cannot override the deployment
+policy.
+
 ### Health, lifecycle, and availability
 
 The chart owns health and lifecycle policy explicitly. Do not try to override it through arbitrary dotenv keys; use the typed `lifecycle`, `rollout`, and `availability` values. API containers capture the chart-owned lifecycle values before loading Vault dotenv and reapply them afterward, so a stale secret file cannot silently change probe timing or shutdown policy.

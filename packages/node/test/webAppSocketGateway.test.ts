@@ -8,6 +8,7 @@ import {
   createInMemoryRivetWebAppRunStore,
   createRivetWebAppWebSocketGateway,
   getUiGraphChatMessagesStateKey,
+  RivetWebAppActionHttpError,
   type Project,
   type RivetKnowledgeStore,
   type RivetWebAppServerMessage,
@@ -601,6 +602,21 @@ void describe('Rivet web app WebSocket gateway', () => {
     assert.equal(starts, 1);
   });
 
+  void it('closes draining client sockets without interrupting accepted graph runs', async () => {
+    const harness = await createHarness(makeProject(500));
+    const client = await harness.connect();
+    const messages = collectMessages(client);
+
+    client.send(JSON.stringify(makeStartMessage('request-close-draining-client')));
+    await messages.next('action.accepted');
+    const closed = waitForClose(client);
+    harness.gateway.drain({ closeConnections: true });
+
+    assert.equal((await closed).code, 1012);
+    assert.equal(harness.gateway.getActiveRunCount(), 1);
+    await delay(550);
+    assert.equal(harness.gateway.getActiveRunCount(), 0);
+  });
   void it('does not start an action that loses the race with gateway draining', async () => {
     const baseStore = createInMemoryRivetWebAppRunStore();
     let releaseCreate!: () => void;
@@ -1180,9 +1196,19 @@ void describe('Rivet web app WebSocket gateway', () => {
     assert.equal(rejected.code, 'run_unavailable');
   });
 
-  void it('cancels an accepted run without waiting for the graph to finish', async () => {
+  void it('cancels an accepted run without waiting for the graph to finish or retaining its admission permit', async () => {
+    let permitReleases = 0;
     const project = makeProject(2_000);
-    const harness = await createHarness(project);
+    const harness = await createHarness(
+      project,
+      undefined,
+      {},
+      {
+        acquireRunPermit() {
+          return { release: () => permitReleases++ };
+        },
+      },
+    );
     const client = await harness.connect();
     const messages = collectMessages(client);
 
@@ -1193,6 +1219,7 @@ void describe('Rivet web app WebSocket gateway', () => {
 
     assert.equal(cancelled.runId, accepted.runId);
     assert.equal(harness.gateway.getActiveRunCount(), 0);
+    assert.equal(permitReleases, 1);
   });
 
   void it('does not let another owner scope resume or cancel a run', async () => {
@@ -1265,6 +1292,47 @@ void describe('Rivet web app WebSocket gateway', () => {
         message.type === 'action.rejected',
     )!;
     assert.equal(rejected.error, 'Too many active web app actions.');
+  });
+
+  void it('rejects an admission permit before durable acceptance and releases accepted permits once', async () => {
+    let releaseCount = 0;
+    let rejectNextStart = true;
+    const harness = await createHarness(
+      makeProject(),
+      undefined,
+      {},
+      {
+        acquireRunPermit() {
+          if (rejectNextStart) {
+            throw new RivetWebAppActionHttpError(
+              'Published execution capacity is temporarily full. Retry later.',
+              429,
+              'execution_capacity_exceeded',
+            );
+          }
+          return {
+            release() {
+              releaseCount += 1;
+            },
+          };
+        },
+      },
+    );
+    const client = await harness.connect();
+    const messages = collectMessages(client);
+
+    client.send(JSON.stringify(makeStartMessage('request-rejected-by-admission')));
+    const rejected = await messages.next('action.rejected');
+    assert.equal(rejected.code, 'execution_capacity_exceeded');
+    assert.equal(harness.gateway.getActiveRunCount(), 0);
+    assert.equal(releaseCount, 0);
+
+    rejectNextStart = false;
+    client.send(JSON.stringify(makeStartMessage('request-admitted-by-admission')));
+    await messages.next('action.accepted');
+    await messages.next('action.progress');
+    await messages.next('action.completed');
+    assert.equal(releaseCount, 1);
   });
 
   void it('releases reserved capacity when run-store creation fails', async () => {

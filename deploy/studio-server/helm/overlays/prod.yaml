@@ -65,6 +65,14 @@ replicaCount:
   backend: 1
   execution: 2
 
+# A pod admits at most four active public graph/web-app runs. With the current
+# 2-10 execution pod range this makes the public envelope 8-40 active runs.
+# Tune only from the published-route load evidence documented in kubernetes.md.
+publishedExecutionAdmission:
+  mode: enforce
+  maxActiveRunsPerPod: 4
+  retryAfterSeconds: 1
+
 autoscaling:
   proxy:
     enabled: true

@@ -8,10 +8,15 @@ import {
   createInMemoryRivetWebAppRunStore,
   createRivetWebAppWebSocketGateway,
   ExecutionRecorder,
+  RivetWebAppActionHttpError,
   type RivetWebAppWebSocketGateway,
 } from '@valerypopoff/rivet2-node';
 
 import { checkPostgresPoolHealth } from './managed-health.js';
+import {
+  getPublishedExecutionAdmission,
+  toPublishedExecutionAdmissionError,
+} from './published-execution-admission.js';
 import {
   acquireManagedPostgresPool,
   type ManagedPostgresPoolLease,
@@ -32,6 +37,7 @@ import {
 } from './routes/workflows/execution.js';
 import { getWorkflowExecutionRecorderOptions, isWorkflowRecordingEnabled } from './routes/workflows/recordings-config.js';
 import { readRuntimeLimitSettingsSync } from './runtime-limit-settings.js';
+import { getApiRuntimeProfile, type ApiRuntimeProfile } from './runtime-profile.js';
 import { PostgresRivetWebAppRunCoordinator } from './web-app-action-coordinator.js';
 import { createPostgresRivetWebAppRunStore } from './web-app-action-run-store.js';
 import type { WorkflowRecordingExecutionIdentity } from '../../studio-server-shared/workflow-recording-types.js';
@@ -86,6 +92,15 @@ function matchWebAppSocketRoute(req: IncomingMessage): WebAppSocketRoute | null 
   return null;
 }
 
+export function isWebAppSocketRouteEnabled(
+  routeKind: WebAppRouteKind,
+  profile: ApiRuntimeProfile = getApiRuntimeProfile(),
+): boolean {
+  return routeKind === 'published'
+    ? profile === 'combined' || profile === 'execution'
+    : profile === 'combined' || profile === 'control';
+}
+
 function isWebAppSocketUpgradePath(req: IncomingMessage): boolean {
   try {
     const pathname = new URL(req.url || '/', 'http://rivet.local').pathname.replace(/\/+$/, '');
@@ -96,6 +111,13 @@ function isWebAppSocketUpgradePath(req: IncomingMessage): boolean {
   } catch {
     return false;
   }
+}
+
+function acquirePublishedWebAppActionPermit() {
+  const result = getPublishedExecutionAdmission().acquire('web-app-action');
+  if (result.kind === 'accepted') return result.permit;
+  const error = toPublishedExecutionAdmissionError(result);
+  throw new RivetWebAppActionHttpError(error.message, error.status, error.code);
 }
 
 function rejectUpgrade(socket: import('node:stream').Duplex, statusCode: number, message: string): void {
@@ -165,6 +187,14 @@ export async function initializeWebAppActionWebSockets(server: Server): Promise<
       }
       return;
     }
+    if (!isWebAppSocketRouteEnabled(route.routeKind)) {
+      rejectUpgrade(socket, 404, 'Not Found');
+      return;
+    }
+    if (!accepting) {
+      rejectUpgrade(socket, 503, 'Service Unavailable');
+      return;
+    }
 
     void (async () => {
       try {
@@ -178,6 +208,9 @@ export async function initializeWebAppActionWebSockets(server: Server): Promise<
           const endpointName = getWebAppBasePath(route.routeKind, route.slug);
           gateway.handleConnection(webSocket, {
             ownerScope: resolved.ownerScope,
+            ...(route.routeKind === 'published'
+              ? { acquireRunPermit: acquirePublishedWebAppActionPermit }
+              : {}),
             project: resolved.executionProject.project,
             uiGraph: resolved.uiGraph,
             revisionKey: resolved.executionProject.revisionKey,
@@ -262,7 +295,10 @@ export async function initializeWebAppActionWebSockets(server: Server): Promise<
     },
     drain() {
       accepting = false;
-      gateway.drain();
+      // Upgraded sockets otherwise keep node:http's close callback pending for
+      // the full shutdown grace period. The graph owner remains active and a
+      // reconnecting client can resume through the durable action ledger.
+      gateway.drain({ closeConnections: true });
     },
     async dispose(options = {}) {
       accepting = false;

@@ -10,6 +10,9 @@ deployment_health_refresh_seconds="${RIVET_DEPLOYMENT_HEALTH_REFRESH_SECONDS:-}"
 deployment_health_check_timeout_seconds="${RIVET_DEPLOYMENT_HEALTH_CHECK_TIMEOUT_SECONDS:-}"
 deployment_health_stale_after_seconds="${RIVET_DEPLOYMENT_HEALTH_STALE_AFTER_SECONDS:-}"
 deployment_shutdown_grace_seconds="${RIVET_DEPLOYMENT_SHUTDOWN_GRACE_SECONDS:-}"
+deployment_published_execution_admission_mode="${RIVET_DEPLOYMENT_PUBLISHED_EXECUTION_ADMISSION_MODE:-}"
+deployment_published_execution_max_active_runs="${RIVET_DEPLOYMENT_PUBLISHED_EXECUTION_MAX_ACTIVE_RUNS:-}"
+deployment_published_execution_retry_after_seconds="${RIVET_DEPLOYMENT_PUBLISHED_EXECUTION_RETRY_AFTER_SECONDS:-}"
 load_optional_dotenv /vault/dotenv
 append_proxy_bootstrap_node_options
 
@@ -26,7 +29,7 @@ if [ -n "$deployment_managed_workflow_schema_max_version" ]; then
   export RIVET_MANAGED_WORKFLOW_SCHEMA_MAX_VERSION="$deployment_managed_workflow_schema_max_version"
 fi
 
-apply_deployment_lifecycle_value() {
+apply_deployment_owned_value() {
   target_name="$1"
   value="$2"
   if [ -n "$value" ]; then
@@ -34,10 +37,13 @@ apply_deployment_lifecycle_value() {
   fi
 }
 
-apply_deployment_lifecycle_value RIVET_HEALTH_REFRESH_SECONDS "$deployment_health_refresh_seconds"
-apply_deployment_lifecycle_value RIVET_HEALTH_CHECK_TIMEOUT_SECONDS "$deployment_health_check_timeout_seconds"
-apply_deployment_lifecycle_value RIVET_HEALTH_STALE_AFTER_SECONDS "$deployment_health_stale_after_seconds"
-apply_deployment_lifecycle_value RIVET_SHUTDOWN_GRACE_SECONDS "$deployment_shutdown_grace_seconds"
+apply_deployment_owned_value RIVET_HEALTH_REFRESH_SECONDS "$deployment_health_refresh_seconds"
+apply_deployment_owned_value RIVET_HEALTH_CHECK_TIMEOUT_SECONDS "$deployment_health_check_timeout_seconds"
+apply_deployment_owned_value RIVET_HEALTH_STALE_AFTER_SECONDS "$deployment_health_stale_after_seconds"
+apply_deployment_owned_value RIVET_SHUTDOWN_GRACE_SECONDS "$deployment_shutdown_grace_seconds"
+apply_deployment_owned_value RIVET_PUBLISHED_EXECUTION_ADMISSION_MODE "$deployment_published_execution_admission_mode"
+apply_deployment_owned_value RIVET_PUBLISHED_EXECUTION_MAX_ACTIVE_RUNS "$deployment_published_execution_max_active_runs"
+apply_deployment_owned_value RIVET_PUBLISHED_EXECUTION_RETRY_AFTER_SECONDS "$deployment_published_execution_retry_after_seconds"
 
 export PORT="${PORT:-8080}"
 export RIVET_WORKSPACE_ROOT="${RIVET_WORKSPACE_ROOT:-/workspace}"

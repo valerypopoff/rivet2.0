@@ -32,6 +32,25 @@
 {{- fail "env.RIVET_DEPLOYMENT_DATABASE_POOL_MAX is chart-owned; configure postgres.poolMaxPerApiPod instead" -}}
 {{- end -}}
 
+{{- range $key := list "RIVET_PUBLISHED_EXECUTION_ADMISSION_MODE" "RIVET_PUBLISHED_EXECUTION_MAX_ACTIVE_RUNS" "RIVET_PUBLISHED_EXECUTION_RETRY_AFTER_SECONDS" "RIVET_DEPLOYMENT_PUBLISHED_EXECUTION_ADMISSION_MODE" "RIVET_DEPLOYMENT_PUBLISHED_EXECUTION_MAX_ACTIVE_RUNS" "RIVET_DEPLOYMENT_PUBLISHED_EXECUTION_RETRY_AFTER_SECONDS" -}}
+{{- if hasKey $.Values.env $key -}}
+{{- fail (printf "env.%s is chart-owned; configure publishedExecutionAdmission instead" $key) -}}
+{{- end -}}
+{{- end -}}
+
+{{- $publishedExecutionAdmissionMode := .Values.publishedExecutionAdmission.mode -}}
+{{- if not (has $publishedExecutionAdmissionMode (list "disabled" "observe" "enforce")) -}}
+{{- fail "publishedExecutionAdmission.mode must be disabled, observe, or enforce" -}}
+{{- end -}}
+{{- $publishedExecutionMaxActiveRuns := int .Values.publishedExecutionAdmission.maxActiveRunsPerPod -}}
+{{- if or (lt $publishedExecutionMaxActiveRuns 1) (gt $publishedExecutionMaxActiveRuns 10000) -}}
+{{- fail "publishedExecutionAdmission.maxActiveRunsPerPod must be an integer between 1 and 10000" -}}
+{{- end -}}
+{{- $publishedExecutionRetryAfterSeconds := int .Values.publishedExecutionAdmission.retryAfterSeconds -}}
+{{- if or (lt $publishedExecutionRetryAfterSeconds 1) (gt $publishedExecutionRetryAfterSeconds 3600) -}}
+{{- fail "publishedExecutionAdmission.retryAfterSeconds must be an integer between 1 and 3600" -}}
+{{- end -}}
+
 {{- $postgresMaxConnections := int .Values.postgres.maxConnections -}}
 {{- $postgresReservedConnections := int .Values.postgres.reservedConnections -}}
 {{- $poolMaxPerApiPod := int .Values.postgres.poolMaxPerApiPod -}}

@@ -431,14 +431,14 @@ First run the drill against synthetic data in a disposable provider project. The
 
 ## Open Problem 8: Execution Saturation Is Not Bounded by a Complete Capacity Envelope
 
-**Implementation status (2026-08-29): the chart already scales the correct high-load workloads—proxy and execution—while keeping web and backend fixed. PostgreSQL connection count and CPU-HPA denominators are validated. Published-execution concurrency, memory, ephemeral storage, queue wait, Evaluation batch isolation, and non-CPU autoscaling signals remain environment-owned or unbounded.**
+**Implementation status (2026-08-29): the chart already scales the correct high-load workloads—proxy and execution—while keeping web and backend fixed. PostgreSQL connection count and CPU-HPA denominators are validated. A typed, per-execution-pod published-work admission gate is now implemented for workflow endpoints and web-app actions, with no hidden queue, immediate overload responses, drain rejection, Helm ownership, and profile-safe WebSocket routing. Shutdown closes idle upgraded clients without interrupting accepted durable actions, and separately aborts HTTP graph processors that exceed their drain deadline before shared storage is disposed. Memory/ephemeral-storage policy, Evaluation batch isolation, non-CPU autoscaling, metrics, and production load evidence remain open.**
 
 ### Observed Evidence
 
 1. `deploy/studio-server/helm/values.yaml` supplies CPU and memory requests, but no default limits. This is deliberate: a generic hard memory limit can OOM-kill long graph runs and is not automatically safer.
 2. The backend and execution templates mount multiple unbounded `emptyDir` volumes for workspace, workflow materialization, app-data projections, and runtime-library caches. Only the dedicated `/var/tmp` volume has a default `2Gi` size limit.
 3. Proxy and execution HPAs use CPU utilization only. They do not observe active graph runs, request rejection, PostgreSQL pool wait, object-store latency, memory pressure, or runtime-library preparation.
-4. The recording persistence queue is intentionally bounded and drops new recordings when full. The owning endpoint/web-app execution path has no equivalent per-pod active-run admission contract visible in the current API/chart.
+4. The recording persistence queue is intentionally bounded and drops new recordings when full. Published endpoint and web-app execution now share a typed per-pod active-run admission gate; it has no in-memory queue, rejects excess work immediately in enforce mode, and prevents new public work during drain. The initial production bound is intentionally conservative and has not yet been validated by a representative load gate.
 5. PostgreSQL connection validation bounds one downstream resource, but increasing execution replicas can still amplify provider calls, memory use, temporary files, and object-storage traffic.
 6. Published workflows and web-app actions route to the execution Service, while UI/API and latest routes terminate on the backend. The topology is already separated, but there is no explicit batch-versus-public execution budget for Evaluation trials and no guard against treating `/workflows-latest/...` as a product endpoint.
 
@@ -449,7 +449,7 @@ A burst can fill memory or node ephemeral storage before CPU-based scaling react
 ### Proposed Solution
 
 1. Introduce an environment-specific production capacity profile. Require explicit memory and ephemeral-storage requests/limits, plus size limits for every writable `emptyDir`, or require a documented acknowledgement when a limit is intentionally omitted.
-2. Add per-execution-pod active-run admission for published routes with a short bounded queue or immediate `429/503` plus `Retry-After`. Do not add hidden graph/LLM retries; callers and graph retry settings remain authoritative.
+2. **Implemented:** add per-execution-pod active-run admission for published routes with immediate `429/503` plus `Retry-After`; do not use a local queue. Do not add hidden graph/LLM retries; callers and graph retry settings remain authoritative.
 3. Add a separate bounded batch quota for Evaluation target/evaluator trials. Published endpoints get reserved capacity and higher scheduling priority by default; both classes remain visible and configurable.
 4. Keep control/editor traffic on the existing backend topology. Do not introduce backend HPA or distributed debugger/editor ownership as part of this load work. Protect latest routes with documentation and an optional low concurrency/rate ceiling.
 5. Export published active runs, batch active runs, admission rejections, queue wait, memory/ephemeral usage, recording queue/drop rate, PostgreSQL pool wait, runtime-library preparation, and downstream error latency. Allow execution HPA/KEDA policies to use active/queued published work in addition to CPU.
@@ -457,14 +457,14 @@ A burst can fill memory or node ephemeral storage before CPU-based scaling react
 
 ### Required Change Surfaces and Rollout
 
-- **Admission:** add one bounded active-run limiter in the execution profile for published endpoint/web-app execution. Define queue length, queue timeout, overload response, cancellation, and shutdown behavior explicitly. Control/editor work already terminates on a separate backend and must not share this limiter.
+- **Admission (implemented):** one per-execution-process active-run limiter covers published endpoint/web-app HTTP and WebSocket execution, including trusted in-cluster published endpoints. It has no queue or queue timeout: enforce mode returns `429 execution_capacity_exceeded` with `Retry-After`, shutdown returns `503 execution_draining`, and WebSocket actions receive the matching protocol rejection code. Permits release on execution completion, setup failure, cancellation/interruption, and gateway disposal. During shutdown, the durable WebSocket gateway closes only its client sockets so accepted action processors can continue through the grace period; a separate HTTP-execution registry aborts remaining processors at the deadline before shared storage resources close. Latest/control work remains on its separate backend and cannot consume these slots.
 - **Work classes:** classify public endpoint work and Evaluation batch work at dispatch. Reserve public slots; give batch work a separate limit and lower default priority without creating hidden retries or silently preempting an accepted trial.
 - **Configuration:** expose limits through typed server configuration and Helm values; validate non-negative bounds and the relationship between queue timeout, request timeout, and shutdown grace.
 - **Storage:** define memory and ephemeral-storage policies for each workload and every writable `emptyDir`. A production profile must either supply a measured bound or record an explicit acknowledgement for an intentional omission.
 - **Autoscaling:** use the Problem 11 metrics to scale proxy and execution only, combining CPU with active/queued published work where the cluster supports Prometheus Adapter or KEDA. Keep hard maxima consistent with PostgreSQL and downstream-provider capacity; leave backend/web fixed for this load model.
 - **Load evidence:** drive the published proxy route, not the internal API or latest route. Report throughput, p50/p95/p99 latency, rejection rate, memory/ephemeral high-water marks, recording throughput/drops, database pool wait, provider concurrency, interrupted runs, and public latency while an Evaluation batch is active.
 
-Deploy admission in observe-only mode first, reporting what would have been queued or rejected. Establish measured limits in staging, enable rejection there, then enable production with conservative headroom. Never silently retry rejected or interrupted graph runs.
+The generic chart begins with admission disabled; the production overlay uses an initial four-run enforce ceiling per execution pod. Before a real deployment adopts or changes that value, deploy `observe` mode in staging, report threshold crossings, establish measured limits from published-route traffic, enable rejection there, then retain conservative production headroom. Never silently retry rejected or interrupted graph runs.
 
 ### Risks of Fixing
 
@@ -474,6 +474,7 @@ Deploy admission in observe-only mode first, reporting what would have been queu
 
 ### Acceptance Criteria
 
+- Published workflow and web-app overload is rejected immediately without a local queue, and shutdown rejects new public work while admitted work drains.
 - A production render cannot accidentally leave writable-volume and memory policy unspecified without an explicit acknowledgement.
 - Sustained overload produces bounded latency/rejection and no OOM/ephemeral-storage eviction in the load gate.
 - Administrative/control operations remain usable during published-endpoint saturation.

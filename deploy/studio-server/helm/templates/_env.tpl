@@ -188,6 +188,14 @@
   value: {{ $root.Values.lifecycle.health.staleAfterSeconds | quote }}
 - name: RIVET_DEPLOYMENT_SHUTDOWN_GRACE_SECONDS
   value: {{ $root.Values.lifecycle.shutdownGraceSeconds | quote }}
+{{- if eq .profile "execution" }}
+- name: RIVET_DEPLOYMENT_PUBLISHED_EXECUTION_ADMISSION_MODE
+  value: {{ $root.Values.publishedExecutionAdmission.mode | quote }}
+- name: RIVET_DEPLOYMENT_PUBLISHED_EXECUTION_MAX_ACTIVE_RUNS
+  value: {{ $root.Values.publishedExecutionAdmission.maxActiveRunsPerPod | quote }}
+- name: RIVET_DEPLOYMENT_PUBLISHED_EXECUTION_RETRY_AFTER_SECONDS
+  value: {{ $root.Values.publishedExecutionAdmission.retryAfterSeconds | quote }}
+{{- end }}
 {{ include "rivet.env.appSettings" $root }}
 {{ include "rivet.env.authKey" $root }}
 {{ include "rivet.env.globalValues" $root }}

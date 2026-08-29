@@ -31,7 +31,17 @@ import { createWebAppActiveRunRegistry, type ActiveWebAppRun } from './webAppAct
 
 export { createInMemoryRivetWebAppRunStore } from './webAppRunStore.js';
 
+export type RivetWebAppRunPermit = {
+  release(): void;
+};
+
 export type RivetWebAppSocketSession = {
+  acquireRunPermit?: (context: {
+    componentId: string;
+    ownerScope: string;
+    requestId: string;
+    runId: string;
+  }) => Promise<RivetWebAppRunPermit | void> | RivetWebAppRunPermit | void;
   createProcessorOptions?: RivetWebAppCreateProcessorOptions;
   onActionError?: RivetWebAppHandlerOptions['onActionError'];
   onActionFinish?: RivetWebAppHandlerOptions['onActionFinish'];
@@ -130,7 +140,7 @@ export type RivetWebAppRunStore = {
 
 export type RivetWebAppWebSocketGateway = {
   dispose(options?: { interrupt?: boolean }): Promise<void>;
-  drain(): void;
+  drain(options?: { closeConnections?: boolean }): void;
   getActiveRunCount(): number;
   handleConnection(socket: WebSocket, session: RivetWebAppSocketSession): void;
   recoverInterruptedRuns(error?: string): Promise<number>;
@@ -185,6 +195,7 @@ export function createRivetWebAppWebSocketGateway(
   const store = options.runStore ?? createInMemoryRivetWebAppRunStore();
   const coordinator = options.runCoordinator;
   const activeRuns = createWebAppActiveRunRegistry();
+  const runPermitReleases = new Map<string, () => void>();
   const pendingRunSetups = new Map<string, Promise<RivetWebAppStoredRun | undefined>>();
   const connections = new Set<WebSocket>();
   let draining = false;
@@ -209,7 +220,13 @@ export function createRivetWebAppWebSocketGateway(
   const { append: appendAndBroadcast, broadcast, subscribe, unsubscribe } = journal;
 
   const finishRun = (runId: string, fallbackOwnerScope?: string): void => {
-    activeRuns.finish(runId, fallbackOwnerScope);
+    const releasePermit = runPermitReleases.get(runId);
+    runPermitReleases.delete(runId);
+    try {
+      activeRuns.finish(runId, fallbackOwnerScope);
+    } finally {
+      releasePermit?.();
+    }
   };
   const replay = (socket: WebSocket, run: RivetWebAppStoredRun, afterSequence: number): number => {
     let lastSequence = afterSequence;
@@ -404,7 +421,9 @@ export function createRivetWebAppWebSocketGateway(
     pendingRunSetups.set(requestKey, setupPromise);
 
     let createdRunId: string | undefined;
+    let acquiredPermit: RivetWebAppRunPermit | undefined;
     let accepted = false;
+    let storedRunCreated = false;
     try {
       const existing = await store.getRunByRequestId(session.ownerScope, message.requestId);
       if (existing) {
@@ -430,6 +449,20 @@ export function createRivetWebAppWebSocketGateway(
         return;
       }
 
+      try {
+        const permit = await session.acquireRunPermit?.({
+          componentId: message.componentId,
+          ownerScope: session.ownerScope,
+          requestId: message.requestId,
+          runId,
+        });
+        if (permit) acquiredPermit = permit;
+      } catch (error) {
+        activeRuns.release(session.ownerScope, runId);
+        completeSetup(undefined);
+        throw error;
+      }
+
       createdRunId = runId;
       const created = await store.createRun({
         componentId: message.componentId,
@@ -443,6 +476,8 @@ export function createRivetWebAppWebSocketGateway(
       });
       if (!created.created) {
         activeRuns.release(session.ownerScope, runId);
+        acquiredPermit?.release();
+        acquiredPermit = undefined;
         createdRunId = undefined;
         completeSetup(created.run);
         if (created.run.componentId !== message.componentId) {
@@ -451,6 +486,12 @@ export function createRivetWebAppWebSocketGateway(
         }
         await attachRun(socket, created.run, 0);
         return;
+      }
+      storedRunCreated = true;
+      if (acquiredPermit) {
+        const permit = acquiredPermit;
+        runPermitReleases.set(runId, () => permit.release());
+        acquiredPermit = undefined;
       }
       if (draining) throw createServerDrainingError();
 
@@ -585,22 +626,29 @@ export function createRivetWebAppWebSocketGateway(
       }
     } catch (error) {
       if (createdRunId) {
-        try {
-          await appendAndBroadcast(createdRunId, {
-            type: 'action.interrupted',
-            error: 'Web app action setup failed before execution started.',
-            requestId: message.requestId,
-            runId: createdRunId,
-          });
-        } catch (storeError) {
-          handleTerminalPersistenceError(createdRunId, storeError);
+        if (storedRunCreated) {
+          try {
+            await appendAndBroadcast(createdRunId, {
+              type: 'action.interrupted',
+              error: 'Web app action setup failed before execution started.',
+              requestId: message.requestId,
+              runId: createdRunId,
+            });
+          } catch (storeError) {
+            handleTerminalPersistenceError(createdRunId, storeError);
+          }
         }
         finishRun(createdRunId, session.ownerScope);
       }
+      acquiredPermit?.release();
       completeSetup(undefined);
-      if (!isServerDrainingError(error)) reportError(error);
+      if (!isServerDrainingError(error) && !(error instanceof RivetWebAppActionHttpError)) reportError(error);
       if (!accepted) {
-        reject(socket, message.requestId, isServerDrainingError(error) ? error : createActionUnavailableError());
+        reject(
+          socket,
+          message.requestId,
+          error instanceof RivetWebAppActionHttpError ? error : createActionUnavailableError(),
+        );
       }
     }
   };
@@ -640,9 +688,12 @@ export function createRivetWebAppWebSocketGateway(
         journal.clearSubscribers();
       }
     },
-    drain() {
+    drain(options = {}) {
       draining = true;
-      for (const socket of connections) safeSend(socket, { type: 'server.draining' });
+      for (const socket of connections) {
+        safeSend(socket, { type: 'server.draining' });
+        if (options.closeConnections) socket.close(1012, 'Web app action server restarting');
+      }
     },
     getActiveRunCount() {
       return activeRuns.size();
