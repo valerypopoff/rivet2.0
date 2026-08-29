@@ -34,19 +34,19 @@ Status labels have deliberately narrow meanings:
 - **Implemented; certification pending** means the source, chart, and test work are complete but the plan still needs a retained remote/provider result before that capability is operationally certified.
 - **Open** may contain completed milestones. Those are marked inline; the problem stays open until its remaining acceptance criteria form one complete operational contract.
 
-| Problem                            | Status                                                       | Production meaning                                                                                                                            |
-| ---------------------------------- | ------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------- |
-| 1. Workflow schema ownership       | Resolved; retain compatibility discipline                    | One versioned migration owner serializes schema change; serving replicas verify only.                                                         |
-| 2. App Settings distributed state  | Resolved; key backup/rotation remains operationally critical | Encrypted PostgreSQL is authoritative; pod-local files are disposable projections.                                                            |
-| 3. Lifecycle and replica safety    | Resolved for the supported topology                          | Execution tiers drain and scale; the control backend intentionally remains a singleton.                                                       |
-| 4. Managed Kubernetes release gate | Implemented; remote Kind and provider-stage evidence pending | Static validation and candidate smoke always run; classified full releases add Kind, while staging must certify real provider semantics.      |
-| 5. PostgreSQL capacity budget      | Resolved as a configuration bound                            | The chart prevents an impossible connection budget, but production throughput still requires load evidence.                                   |
-| 6. Release identity and rollback   | Implemented; remote certification still required             | Production requires a promoted digest manifest; rollback is forward-only and schema-compatible by contract.                                   |
-| 7. Backup and restore              | Implemented in source; provider certification remains        | A strict fresh-target restore drill verifies cross-store recovery; provider evidence and an approved schedule remain required.                |
-| 8. Execution saturation            | Open; public admission completed; availability priority      | Per-pod public admission exists, but memory, ephemeral storage, Evaluation isolation, and downstream load lack one bounded capacity contract. |
-| 9. Retention and reconciliation    | Partially implemented; durability/cost priority              | A fenced owner and durable workflow-deletion retry now exist; reconciliation, other domains, and metrics remain open.                         |
-| 10. Hosted Evaluation continuation | Open; long-running-work priority                             | Evaluation history is durable, but queued work is not resumed by a server-owned coordinator.                                                  |
-| 11. Production observability       | Open; operational prerequisite                               | Health probes exist, but metrics, SLOs, alerts, and correlation are not first-class contracts.                                                |
+| Problem                            | Status                                                       | Production meaning                                                                                                                              |
+| ---------------------------------- | ------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1. Workflow schema ownership       | Resolved; retain compatibility discipline                    | One versioned migration owner serializes schema change; serving replicas verify only.                                                           |
+| 2. App Settings distributed state  | Resolved; key backup/rotation remains operationally critical | Encrypted PostgreSQL is authoritative; pod-local files are disposable projections.                                                              |
+| 3. Lifecycle and replica safety    | Resolved for the supported topology                          | Execution tiers drain and scale; the control backend intentionally remains a singleton.                                                         |
+| 4. Managed Kubernetes release gate | Implemented; remote Kind and provider-stage evidence pending | Static validation and candidate smoke always run; classified full releases add Kind, while staging must certify real provider semantics.        |
+| 5. PostgreSQL capacity budget      | Resolved as a configuration bound                            | The chart prevents an impossible connection budget, but production throughput still requires load evidence.                                     |
+| 6. Release identity and rollback   | Implemented; remote certification still required             | Production requires a promoted digest manifest; rollback is forward-only and schema-compatible by contract.                                     |
+| 7. Backup and restore              | Implemented in source; provider certification remains        | A strict fresh-target restore drill verifies cross-store recovery; provider evidence and an approved schedule remain required.                  |
+| 8. Execution saturation            | Open; public admission completed; availability priority      | Per-pod public admission exists, but memory, ephemeral storage, Evaluation isolation, and downstream load lack one bounded capacity contract.   |
+| 9. Retention and reconciliation    | Partially implemented; durability/cost priority              | A fenced owner and durable workflow-deletion retry now exist; reconciliation, other domains, and metrics remain open.                           |
+| 10. Hosted Evaluation continuation | Open; long-running-work priority                             | Evaluation history is durable, but queued work is not resumed by a server-owned coordinator.                                                    |
+| 11. Production observability       | Partially implemented; operational prerequisite              | Bounded API metrics and opt-in Prometheus resources exist; SLOs, dashboards, tuned alerts, correlation, and several signal domains remain open. |
 
 ## Expected Production Load Model
 
@@ -437,7 +437,7 @@ First run the drill against synthetic data in a disposable provider project. The
 
 ## Open Problem 8: Execution Saturation Is Not Bounded by a Complete Capacity Envelope
 
-**Implementation status (2026-08-29): the chart already scales the correct high-load workloads—proxy and execution—while keeping web and backend fixed. PostgreSQL connection count and CPU-HPA denominators are validated. A typed, per-execution-pod published-work admission gate is now implemented for workflow endpoints and web-app actions, with no hidden queue, immediate overload responses, drain rejection, Helm ownership, and profile-safe WebSocket routing. Shutdown closes idle upgraded clients without interrupting accepted durable actions, and separately aborts HTTP graph processors that exceed their drain deadline before shared storage is disposed. Memory/ephemeral-storage policy, Evaluation batch isolation, non-CPU autoscaling, metrics, and production load evidence remain open.**
+**Implementation status (2026-08-29): the chart already scales the correct high-load workloads—proxy and execution—while keeping web and backend fixed. PostgreSQL connection count and CPU-HPA denominators are validated. A typed, per-execution-pod published-work admission gate is now implemented for workflow endpoints and web-app actions, with no hidden queue, immediate overload responses, drain rejection, Helm ownership, and profile-safe WebSocket routing. Shutdown closes idle upgraded clients without interrupting accepted durable actions, and separately aborts HTTP graph processors that exceed their drain deadline before shared storage is disposed. Memory/ephemeral-storage policy, Evaluation batch isolation, non-CPU autoscaling, production load evidence, and the remaining Problem 11 metrics/dashboard work remain open.**
 
 ### Observed Evidence
 
@@ -574,15 +574,16 @@ Introduce the server coordinator behind a hosted capability flag. Start new runs
 - Cancellation prevents new claims and retains already settled observations.
 - Retention never deletes a baseline, manual pin, active-run snapshot, or artifact referenced by another retained run.
 
-## Open Problem 11: Readiness Exists, but Production SLO Telemetry and Alerts Do Not
+## Partially Implemented Problem 11: Production SLO Telemetry and Alerts Need Completion
 
-**Implementation status (2026-08-29): `/livez` and `/readyz` are well defined and secret-safe. The chart has no first-class Prometheus/OpenTelemetry metrics endpoint, ServiceMonitor/PodMonitor, alert rules, or dashboard contract. The required telemetry must distinguish the high-load published execution plane from the low-volume operator control plane.**
+**Implementation status (2026-08-30): implemented a bounded in-process Prometheus text surface for the direct control and execution API services. It instruments finite-label HTTP, health, public admission, recording persistence, PostgreSQL-pool, managed object-storage, and runtime-library-job signals; normal execution is protected from telemetry failures. The Helm chart now has opt-in ServiceMonitor and conservative PrometheusRule templates. It has not been enabled in a production overlay, validated under the Problem 8 load gate, connected to a dashboard/paging policy, or extended to settings, maintenance, evaluations, proxy/executor correlation, and integrity signals.**
 
 ### Observed Evidence
 
-1. `packages/studio-server-api/src/runtime-health.ts` provides cached liveness/readiness and transition logging. These signals answer whether a pod should receive traffic; they do not expose saturation trends or retention integrity.
-2. The chart depends on `metrics-server` only for CPU HPAs. There are no ServiceMonitor, PodMonitor, PrometheusRule, or equivalent templates in `deploy/studio-server/helm/templates`.
-3. Run statistics are product-facing historical execution metrics. Their UI read volume is low, but their write volume and recording persistence follow published execution traffic. They do not cover HTTP saturation, database pool wait, object-store failures, maintenance lag, Kubernetes disruption, or recording drops.
+1. `packages/studio-server-api/src/metrics.ts` provides a pull-only Prometheus text registry. It has fixed route/method/status and domain/operation/outcome labels, adds only the bounded `control` or `execution` profile, and never records a project, graph, prompt, secret, raw input, request ID, or error message.
+2. `packages/studio-server-api/src/app.ts` serves `/metrics` only when `RIVET_METRICS_ENABLED=true`; the route refreshes cached health and reads process-local PostgreSQL/recording queue snapshots. Probe and scrape requests are explicitly excluded from application HTTP metrics.
+3. `deploy/studio-server/helm/templates/metrics.yaml` optionally renders two direct-Service `ServiceMonitor` resources and a small `PrometheusRule`; `_env.tpl`, `validate-values.yaml`, and the API entrypoint make the enablement chart-owned after Vault dotenv loading.
+4. Run statistics remain product-facing history. The first metrics slice exposes recording drops and operational dependencies, but does not yet cover maintenance/outbox lag, settings convergence, Evaluation batch scheduling, proxy/executor behavior, missing-reference integrity, restart/OOM/eviction, or correlation/tracing.
 
 ### Risk Inference
 
@@ -590,8 +591,8 @@ The system can fail closed correctly yet still provide too little warning before
 
 ### Proposed Solution
 
-1. Add a low-cardinality, secret-free metrics surface for HTTP rates/latency/status, ready state, active/rejected/interrupted runs, recording drops, PostgreSQL pool usage/wait, S3 errors/latency, runtime-library jobs, settings convergence, and maintenance/reconciliation state.
-2. Add optional chart templates for ServiceMonitor/PodMonitor and PrometheusRule without requiring Prometheus for minimal installations.
+1. Extend the implemented low-cardinality, secret-free metrics surface beyond its HTTP/health/admission/recording/PostgreSQL/object-storage/runtime-library baseline to settings convergence, maintenance/reconciliation, Evaluation batch work, proxy/executor behavior, and integrity state.
+2. Keep the implemented optional ServiceMonitor/PrometheusRule path disabled by default; add a PodMonitor only if the ClusterIP Service contract cannot be used in a target cluster.
 3. Define separate SLOs for published execution availability, latency, and overload; control/editor availability and recovery; recording durability; and maintenance freshness. The published execution SLO is the primary product SLO. The singleton backend must have an honest low-volume control-plane SLO rather than being presented as HA.
 4. Propagate a request/run correlation ID through proxy, API, executor, recording, and Evaluation logs/traces. Never attach prompts, secrets, arbitrary input values, workflow names, or unbounded IDs as metric labels.
 5. Add alert rules for missing ready replicas, restart/OOM/eviction, database pool saturation, object-store error bursts, recording drops, stuck runtime-library jobs, stale maintenance leases, missing referenced objects, and failed scheduled/provider gates.
@@ -604,7 +605,7 @@ The system can fail closed correctly yet still provide too little warning before
 - **SLO assets:** version separate dashboards and alert rules for the published execution plane and low-volume control plane. The execution dashboard must show public versus Evaluation-batch work, proxy/execution saturation, downstream dependencies, execution outcomes, recording ingestion/drops, and maintenance freshness.
 - **Failure policy:** telemetry exporters must be asynchronous and bounded. Export failure must never block execution, alter a quality verdict, or make a healthy dependency appear unhealthy.
 
-Roll out metrics without alerts, validate cardinality and overhead under the Problem 8 load gate, then publish dashboards. Enable recording alerts next, followed by paging alerts only after thresholds are tuned from observed staging/production behavior. Test every critical alert with controlled failure injection.
+Roll out the implemented endpoint and ServiceMonitors without PrometheusRule alerts first, validate cardinality and overhead under the Problem 8 load gate, then publish separate dashboards. Enable recording alerts next, followed by paging alerts only after thresholds are tuned from observed staging/production behavior. Test every critical alert with controlled failure injection.
 
 ### Risks of Fixing
 
@@ -614,10 +615,11 @@ Roll out metrics without alerts, validate cardinality and overhead under the Pro
 
 ### Acceptance Criteria
 
-- A synthetic database/object outage, overload burst, recording-queue overflow, and stuck maintenance job each produce a specific signal and actionable alert.
-- Metrics remain bounded in label cardinality under many projects/runs.
-- Telemetry failure cannot make the API unready or block graph execution.
-- Dashboards distinguish control-plane health from published execution-plane health.
+- [x] HTTP, readiness, published admission, recording persistence, PostgreSQL pool, managed object-storage, and runtime-library signals have bounded labels and a pull-only scrape endpoint.
+- [x] Metrics remain bounded in label cardinality under many projects/runs.
+- [x] Telemetry failure cannot make the API unready or block graph execution.
+- [ ] A synthetic database/object outage, overload burst, recording-queue overflow, and stuck maintenance job each produce a specific signal and tuned actionable alert.
+- [ ] Dashboards distinguish control-plane health from published execution-plane health.
 
 ## Cross-Problem Delivery Roadmap
 
@@ -633,7 +635,7 @@ Certify the already implemented Problem 6 immutable release manifest/mixed-versi
 
 Implement the foundational metrics from Problem 11, then complete Problem 8 around the already implemented published-route admission: Evaluation batch isolation, storage bounds, proxy/execution autoscaling signals, and load tests. Do not set hard production limits before the relevant high-water marks are observable. Do not add backend/web autoscaling for the stated operator load.
 
-**Exit gate:** a production-shaped overload remains bounded, produces intentional rejection rather than eviction/OOM collapse, and preserves control-plane usability.
+**Exit gate:** a production-shaped overload remains bounded, produces intentional rejection rather than eviction/OOM collapse, preserves control-plane usability, and is observable through the metrics/dashboard contract.
 
 ### Phase 3: Make Durability Maintenance Convergent
 

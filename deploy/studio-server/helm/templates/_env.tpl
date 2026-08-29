@@ -160,6 +160,8 @@
   value: {{ .port | quote }}
 - name: RIVET_API_PROFILE
   value: {{ .profile | quote }}
+- name: RIVET_DEPLOYMENT_METRICS_ENABLED
+  value: {{ $root.Values.metrics.enabled | quote }}
 - name: RIVET_WORKSPACE_ROOT
   value: /workspace
 - name: RIVET_WORKFLOWS_ROOT

@@ -1,3 +1,5 @@
+import { getStudioMetrics } from './metrics.js';
+
 /**
  * Per-process admission for public execution traffic.
  *
@@ -22,8 +24,14 @@ export type PublishedExecutionAdmissionConfig = {
 
 export type PublishedExecutionAdmissionSnapshot = PublishedExecutionAdmissionConfig & {
   activeRuns: number;
+  activeRunsBySurface: Readonly<Record<PublishedExecutionSurface, number>>;
   draining: boolean;
 };
+
+export type PublishedExecutionAdmissionDecision = Readonly<{
+  kind: 'accepted' | 'capacity-exceeded' | 'draining';
+  surface: PublishedExecutionSurface;
+}>;
 
 export type PublishedExecutionPermit = {
   release(): void;
@@ -78,11 +86,19 @@ export class PublishedExecutionAdmissionError extends Error {
 
 export function createPublishedExecutionAdmission(
   config: PublishedExecutionAdmissionConfig,
-  options: { onEvent?: (event: PublishedExecutionAdmissionEvent) => void } = {},
+  options: {
+    onDecision?: (decision: PublishedExecutionAdmissionDecision) => void;
+    onEvent?: (event: PublishedExecutionAdmissionEvent) => void;
+    onSnapshot?: (snapshot: PublishedExecutionAdmissionSnapshot) => void;
+  } = {},
 ): PublishedExecutionAdmission {
   validateConfig(config);
 
   let activeRuns = 0;
+  const activeRunsBySurface: Record<PublishedExecutionSurface, number> = {
+    'web-app-action': 0,
+    'workflow-endpoint': 0,
+  };
   let capacityExceeded = false;
   let draining = false;
   let observeOverCapacity = false;
@@ -95,6 +111,32 @@ export function createPublishedExecutionAdmission(
       // Reporting must never alter admission or permit cleanup.
     }
   };
+
+  const snapshot = (): PublishedExecutionAdmissionSnapshot =>
+    Object.freeze({
+      ...config,
+      activeRuns,
+      activeRunsBySurface: Object.freeze({ ...activeRunsBySurface }),
+      draining,
+    });
+
+  const reportDecision = (decision: PublishedExecutionAdmissionDecision): void => {
+    try {
+      options.onDecision?.(decision);
+    } catch {
+      // Reporting must never alter admission or permit cleanup.
+    }
+  };
+
+  const reportSnapshot = (): void => {
+    try {
+      options.onSnapshot?.(snapshot());
+    } catch {
+      // Reporting must never alter admission or permit cleanup.
+    }
+  };
+
+  reportSnapshot();
 
   return {
     acquire(surface) {
@@ -109,6 +151,8 @@ export function createPublishedExecutionAdmission(
             type: 'draining',
           });
         }
+        reportDecision({ kind: 'draining', surface });
+        reportSnapshot();
         return {
           activeRuns,
           kind: 'draining',
@@ -128,6 +172,8 @@ export function createPublishedExecutionAdmission(
             type: 'capacity-exceeded',
           });
         }
+        reportDecision({ kind: 'capacity-exceeded', surface });
+        reportSnapshot();
         return {
           activeRuns,
           kind: 'capacity-exceeded',
@@ -137,10 +183,15 @@ export function createPublishedExecutionAdmission(
       }
 
       if (config.mode === 'disabled') {
+        reportDecision({ kind: 'accepted', surface });
+        reportSnapshot();
         return { kind: 'accepted', permit: { release() {} } };
       }
 
       activeRuns += 1;
+      activeRunsBySurface[surface] += 1;
+      reportDecision({ kind: 'accepted', surface });
+      reportSnapshot();
       if (config.mode === 'observe' && activeRuns > config.maxActiveRuns && !observeOverCapacity) {
         observeOverCapacity = true;
         report({
@@ -160,7 +211,9 @@ export function createPublishedExecutionAdmission(
             if (released) return;
             released = true;
             activeRuns = Math.max(0, activeRuns - 1);
+            activeRunsBySurface[surface] = Math.max(0, activeRunsBySurface[surface] - 1);
             if (activeRuns < config.maxActiveRuns) capacityExceeded = false;
+            reportSnapshot();
             if (activeRuns <= config.maxActiveRuns) observeOverCapacity = false;
           },
         },
@@ -168,9 +221,10 @@ export function createPublishedExecutionAdmission(
     },
     beginDrain() {
       draining = true;
+      reportSnapshot();
     },
     getSnapshot() {
-      return { ...config, activeRuns, draining };
+      return snapshot();
     },
   };
 }
@@ -208,11 +262,20 @@ let defaultAdmission: PublishedExecutionAdmission | undefined;
 
 export function getPublishedExecutionAdmission(): PublishedExecutionAdmission {
   defaultAdmission ??= createPublishedExecutionAdmission(getPublishedExecutionAdmissionConfig(), {
+    onDecision(decision) {
+      getStudioMetrics().recordPublishedExecutionAdmission(
+        decision.kind === 'capacity-exceeded' ? 'capacity_exceeded' : decision.kind,
+        decision.surface === 'workflow-endpoint' ? 'workflow_endpoint' : 'web_app_action',
+      );
+    },
     onEvent(event) {
       console.warn(
         `[published-execution-admission] ${event.type}: ${event.activeRuns} active ${event.surface} run(s); ` +
           `per-pod limit ${event.maxActiveRuns} (${event.mode}).`,
       );
+    },
+    onSnapshot(admissionSnapshot) {
+      getStudioMetrics().setPublishedExecutionAdmission(admissionSnapshot);
     },
   });
   return defaultAdmission;

@@ -559,6 +559,14 @@ auth:
   # If Vault is enabled, /vault/dotenv may provide RIVET_KEY instead.
   keySecretName: ''
 
+metrics:
+  # Enable only with an internal scraper/NetworkPolicy plan.
+  enabled: false
+  serviceMonitor:
+    enabled: false
+  prometheusRule:
+    enabled: false
+
 resources:
   proxy:
     requests:
@@ -578,7 +586,6 @@ The sample `service.type: NodePort` / single `service.targetPort` pattern from s
 
 If you are adapting a standard single-app overlay, do not expect these sample keys to do anything until the chart explicitly supports them:
 
-- `metrics`
 - `writableDirs`
 - `sidecar`
 - `probes`
@@ -588,6 +595,44 @@ If you are adapting a standard single-app overlay, do not expect these sample ke
 - single-service `hpa`
 
 Use this chart's existing `autoscaling.proxy`, `autoscaling.execution`, `resources.*`, `ingress`, `vault`, and component `service.*` values instead. Add new chart support intentionally if the cluster standard requires one of the unsupported knobs.
+
+### Prometheus metrics and alerts
+
+The API has an opt-in, pull-only Prometheus text endpoint at `/metrics`. It is exposed by the direct `api` and `execution` **ClusterIP** Services only; the proxy and public Ingress do not route it. A scrape does not open PostgreSQL connections, call object storage, or create a worker. It reads process-local gauges plus the cached health state; each source is collected independently, and any collection failure is ignored so telemetry cannot change workflow execution, recording persistence, readiness, or the remaining scrape data.
+
+Enable the endpoint only after deciding how the monitoring namespace is allowed to reach those services:
+
+```yaml
+metrics:
+  enabled: true
+  serviceMonitor:
+    enabled: true
+    interval: 30s
+    scrapeTimeout: 10s
+    # Add the label required by the installed Prometheus Operator, if any.
+    additionalLabels:
+      release: kube-prometheus-stack
+  # Start disabled. Enable only after observing the rule thresholds in staging.
+  prometheusRule:
+    enabled: false
+    for: 10m
+    additionalLabels:
+      release: kube-prometheus-stack
+```
+
+`ServiceMonitor` and `PrometheusRule` are rendered only when their individual switches are true. They require the Prometheus Operator CRDs to be installed. Both switches require `metrics.enabled=true`; all three values are chart-owned, so Vault or `env` cannot override the final deployment policy after the API entrypoint loads dotenv. Their interval and alert hold values accept positive Prometheus durations such as `30s`, `10m`, or `1h30m`. Minimal installations can leave the whole block disabled and do not need Prometheus or its CRDs.
+
+The current metric families are intentionally low-cardinality and contain no project IDs, workflow names, prompts, inputs, secrets, request IDs, or error text:
+
+- HTTP request count and duration, labeled only by bounded route class, method, and status class;
+- process liveness/readiness and the fixed health-check names;
+- published execution admission decisions, active runs by public surface, draining, and forced shutdown interruptions;
+- recording persistence queue depth/active write count, drops, and write failures;
+- shared PostgreSQL pool totals/idle/waiting counts, read in memory without a database query;
+- managed workflow/runtime-library object-storage operation count and duration, labeled only by fixed domain, operation, and success/error;
+- runtime-library job activity and terminal outcome.
+
+The optional rule set is a conservative starting signal for an unready execution pod, sustained enforced public-admission saturation, recording drops, and object-storage errors. It does not replace Kubernetes restart/OOM/eviction alerts or the planned maintenance/integrity, evaluation-batch, settings-convergence, proxy, executor, and correlation/tracing signals. Enable it without paging first, validate cardinality and overhead during the published-route load gate, then tune thresholds from staging/production evidence. Keep the control-plane dashboard and objective separate from the high-load published execution plane: the singleton backend is intentionally a low-volume control service, not a throughput or HA claim.
 
 ### PostgreSQL connection budget
 

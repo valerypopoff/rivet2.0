@@ -17,6 +17,16 @@ function proxyLocation(template: string, locationPattern: RegExp): string {
   return extractBracedBlock(template, locationPattern);
 }
 
+function composeServiceBlock(compose: string, service: string): string {
+  const marker = `\n  ${service}:`;
+  const markerIndex = compose.indexOf(marker);
+  assert.notEqual(markerIndex, -1, `Expected ${service} service to exist.`);
+  const start = markerIndex + 1;
+  const afterMarker = start + marker.length - 1;
+  const nextService = /\r?\n  [a-z][a-z0-9-]*:/i.exec(compose.slice(afterMarker));
+  return compose.slice(start, nextService ? afterMarker + nextService.index : compose.length);
+}
+
 test('proxy templates route public workflow traffic to the right API plane', () => {
   const imageProxyTemplate = readRepoFile('deploy/studio-server/images/proxy/default.conf.template');
   const proxyBootstrap = readRepoFile('deploy/studio-server/images/proxy/normalize-workflow-paths.sh');
@@ -526,16 +536,6 @@ test('CI and production launchers publish and run the Studio Server image set fr
 });
 
 test('Compose explicitly initializes every writable storage mount before runtime services start', () => {
-  const getServiceBlock = (compose: string, service: string): string => {
-    const marker = `\n  ${service}:`;
-    const markerIndex = compose.indexOf(marker);
-    assert.notEqual(markerIndex, -1, `Expected ${service} service to exist.`);
-    const start = markerIndex + 1;
-    const afterMarker = start + marker.length - 1;
-    const nextService = /\r?\n  [a-z][a-z0-9-]*:/i.exec(compose.slice(afterMarker));
-    return compose.slice(start, nextService ? afterMarker + nextService.index : compose.length);
-  };
-
   for (const [topology, compose, expectedImage] of [
     [
       'production',
@@ -544,19 +544,18 @@ test('Compose explicitly initializes every writable storage mount before runtime
     ],
     ['development', readRepoFile('deploy/studio-server/compose/docker-compose.dev.yml'), /image: node:20-alpine/],
   ] as const) {
-    const initializer = getServiceBlock(compose, 'filesystem-artifacts-init');
+    const initializer = composeServiceBlock(compose, 'filesystem-artifacts-init');
 
     assert.match(initializer, expectedImage, `${topology} initializer image`);
     assert.match(initializer, /user: "0:0"/);
     assert.match(initializer, /entrypoint: \["\/bin\/sh", "-ec"\]/);
     assert.match(initializer, /command:\s*\n\s*- \|/);
-    assert.match(initializer, /for directory in \/workflows \/workflow-recordings \/data\/runtime-libraries \/data\/rivet-app; do/);
-    assert.ok(initializer.includes("if [ \"$$(stat -c '%u:%g' \"$$directory\")\" != \"10001:10001\" ]; then"));
-    assert.ok(
-      initializer.includes(
-        'find "$$directory" -xdev -exec chown -h 10001:10001 {} +',
-      ),
+    assert.match(
+      initializer,
+      /for directory in \/workflows \/workflow-recordings \/data\/runtime-libraries \/data\/rivet-app; do/,
     );
+    assert.ok(initializer.includes('if [ "$$(stat -c \'%u:%g\' "$$directory")" != "10001:10001" ]; then'));
+    assert.ok(initializer.includes('find "$$directory" -xdev -exec chown -h 10001:10001 {} +'));
     assert.match(initializer, /RIVET_WORKFLOWS_HOST_PATH.*:\/workflows/);
     assert.match(initializer, /RIVET_WORKFLOW_RECORDINGS_HOST_PATH.*:\/workflow-recordings/);
     assert.match(initializer, /RIVET_RUNTIME_LIBS_HOST_PATH.*:\/data\/runtime-libraries/);
@@ -569,9 +568,34 @@ test('Compose explicitly initializes every writable storage mount before runtime
 
     for (const service of ['api', 'executor']) {
       assert.match(
-        getServiceBlock(compose, service),
+        composeServiceBlock(compose, service),
         /depends_on:[\s\S]*?\n\s*filesystem-artifacts-init:\s*\n\s*condition: service_completed_successfully/,
       );
     }
   }
+});
+
+test('Compose and candidate smoke keep metrics enabled only on the direct API path', () => {
+  const composeTopologies = [
+    ['production', readRepoFile('deploy/studio-server/compose/docker-compose.yml')],
+    ['development', readRepoFile('deploy/studio-server/compose/docker-compose.dev.yml')],
+  ] as const;
+  const candidateSmoke = readRepoFile('deploy/studio-server/scripts/candidate-image-smoke.mjs');
+
+  for (const [topology, compose] of composeTopologies) {
+    assert.match(
+      composeServiceBlock(compose, 'api'),
+      /RIVET_METRICS_ENABLED=\$\{RIVET_METRICS_ENABLED:-false\}/,
+      `${topology} API enables metrics only through the explicit opt-in`,
+    );
+    assert.doesNotMatch(composeServiceBlock(compose, 'proxy'), /RIVET_METRICS_ENABLED/);
+    assert.doesNotMatch(composeServiceBlock(compose, 'executor'), /RIVET_METRICS_ENABLED/);
+  }
+
+  assert.match(candidateSmoke, /RIVET_METRICS_ENABLED: 'true'/);
+  assert.match(
+    candidateSmoke,
+    /async function assertDirectApiMetrics\([\s\S]*?http:\/\/127\.0\.0\.1:80\/metrics[\s\S]*?\[\.\.\.composeArgs, 'exec', '-T', 'api', 'node', '-e', probeScript\]/,
+  );
+  assert.match(candidateSmoke, /await assertDirectApiMetrics\(composeArgs, env\);/);
 });

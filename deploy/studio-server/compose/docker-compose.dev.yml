@@ -158,6 +158,8 @@ services:
       - RIVET_APP_DATA_ROOT=/data/rivet-app
       - RIVET_RUNTIME_LIBRARIES_ROOT=/data/runtime-libraries
       - RIVET_RUNTIME_PROCESS_ROLE=api
+      # Pull-only metrics stay on this direct internal API service; proxy does not route /metrics.
+      - RIVET_METRICS_ENABLED=${RIVET_METRICS_ENABLED:-false}
       - RIVET_KEY=${RIVET_KEY:-}
       - RIVET_SERVER_UI_AUTH_MODE=${RIVET_SERVER_UI_AUTH_MODE:-}
       - RIVET_REQUIRE_UI_GATE_KEY=${RIVET_REQUIRE_UI_GATE_KEY:-false}

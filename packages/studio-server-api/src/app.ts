@@ -1,3 +1,5 @@
+import { performance } from 'node:perf_hooks';
+
 import express, {
   type Express,
   type NextFunction,
@@ -39,12 +41,20 @@ import { getApiRuntimeProfile, isControlPlaneApiProfile, isExecutionOnlyApiProfi
 import type { RuntimeHealthReader } from './runtime-health.js';
 import { readRuntimeLimitSettingsSync } from './runtime-limit-settings.js';
 import { captureAppSettingsSnapshot } from './middleware/app-settings-snapshot.js';
+import { getManagedPostgresPoolMetrics } from './managed-postgres-pool.js';
+import { getStudioMetrics, type MetricsHttpRoute, type StudioMetrics } from './metrics.js';
+import { getWorkflowExecutionRecordingPersistenceMetrics } from './routes/workflows/recordings.js';
 
 type RuntimeExpressRouter = {
   handle: (req: Request, res: Response, next: NextFunction) => void;
 };
 
 const DEFAULT_JSON_BODY_LIMIT_BYTES = 100 * 1024 * 1024;
+
+type ApiAppOptions = {
+  health?: RuntimeHealthReader;
+  metrics?: StudioMetrics;
+};
 
 function isWebAppActionRequest(req: Request): boolean {
   const requestPath = req.path.replace(/\/+$/, '');
@@ -60,6 +70,62 @@ function isWebAppActionRequest(req: Request): boolean {
   });
 }
 
+function matchesPath(pathname: string, basePath: string): boolean {
+  return pathname === basePath || pathname.startsWith(`${basePath}/`);
+}
+
+function getMetricsHttpRoute(req: Request): MetricsHttpRoute {
+  const pathname = req.path.replace(/\/+$/, '') || '/';
+  if (matchesPath(pathname, getPublishedWorkflowsBasePath())) return 'published_workflow';
+  if (matchesPath(pathname, getPublishedWebAppsBasePath())) return 'published_web_app';
+  if (matchesPath(pathname, getLatestWorkflowsBasePath())) return 'latest_workflow';
+  if (matchesPath(pathname, getLatestWebAppsBasePath())) return 'latest_web_app';
+  if (matchesPath(pathname, '/internal/workflows')) return 'internal_workflow';
+  if (matchesPath(pathname, '/api')) return 'api';
+  return 'other';
+}
+
+function createMetricsRequestObserver(metrics: StudioMetrics): RequestHandler {
+  return (req, res, next) => {
+    if (!metrics.enabled) {
+      next();
+      return;
+    }
+
+    const startedAt = performance.now();
+    const route = getMetricsHttpRoute(req);
+    res.once('finish', () => {
+      metrics.observeHttpRequest({
+        durationMs: performance.now() - startedAt,
+        method: req.method,
+        route,
+        status: res.statusCode,
+      });
+    });
+    next();
+  };
+}
+
+function collectMetricsSnapshot(collect: () => void): void {
+  try {
+    collect();
+  } catch {
+    // Scrapes can race a subsystem starting or stopping. Keep every remaining
+    // process-local metric available and never surface dependency details.
+  }
+}
+
+function sendMetrics(metrics: StudioMetrics, health: RuntimeHealthReader, res: Response): void {
+  collectMetricsSnapshot(() => metrics.setRuntimeHealth(health.getLiveness(), health.getReadiness()));
+  collectMetricsSnapshot(() => metrics.setPostgresPool(getManagedPostgresPoolMetrics()));
+  collectMetricsSnapshot(() =>
+    metrics.setWorkflowRecordingPersistence(getWorkflowExecutionRecordingPersistenceMetrics()),
+  );
+
+  res.setHeader('Cache-Control', 'no-store');
+  res.setHeader('Content-Type', 'text/plain; version=0.0.4; charset=utf-8');
+  res.status(200).send(metrics.render());
+}
 function createJsonBodyParser(): RequestHandler {
   const defaultParser = express.json({ limit: DEFAULT_JSON_BODY_LIMIT_BYTES, strict: false });
 
@@ -201,10 +267,7 @@ export function assertApiRuntimeProfileStartupPreconditions(profile = getApiRunt
   }
 }
 
-function dispatchDynamicBasePath(
-  getBasePath: () => string,
-  router: ExpressRouter,
-): RequestHandler {
+function dispatchDynamicBasePath(getBasePath: () => string, router: ExpressRouter): RequestHandler {
   const runtimeRouter = router as unknown as RuntimeExpressRouter;
 
   return (req, res, next) => {
@@ -255,11 +318,9 @@ function mountPublishedExecutionRoutes(app: Express): void {
   app.use('/internal/workflows', internalPublishedWorkflowsRouter);
 }
 
-export function createApiApp(
-  profile = getApiRuntimeProfile(),
-  options: { health?: RuntimeHealthReader } = {},
-): Express {
+export function createApiApp(profile = getApiRuntimeProfile(), options: ApiAppOptions = {}): Express {
   const app = express();
+  const metrics = options.metrics ?? getStudioMetrics();
 
   const fallbackHealth: RuntimeHealthReader = {
     getLiveness: () => ({ ok: true, profile, state: 'ready', checkedAt: null, checks: [] }),
@@ -271,9 +332,15 @@ export function createApiApp(
     res.status(snapshot.ok ? 200 : 503).json(snapshot);
   };
 
-  app.use(cors((req, callback) => {
-    callback(null, createCorsOptions(req));
-  }));
+  app.use(
+    cors((req, callback) => {
+      callback(null, createCorsOptions(req));
+    }),
+  );
+
+  if (metrics.enabled) {
+    app.get('/metrics', (_req, res) => sendMetrics(metrics, health, res));
+  }
 
   app.get('/healthz', (_req, res) => {
     const snapshot = health.getLiveness();
@@ -282,6 +349,9 @@ export function createApiApp(
   });
   app.get('/livez', (_req, res) => sendHealth(health.getLiveness(), res));
   app.get('/readyz', (_req, res) => sendHealth(health.getReadiness(), res));
+
+  // Do not count platform probes or Prometheus scrapes as application traffic.
+  app.use(createMetricsRequestObserver(metrics));
 
   app.use(captureAppSettingsSnapshot);
   app.use(createJsonBodyParser());

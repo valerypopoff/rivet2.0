@@ -11,6 +11,7 @@ import { randomUUID } from 'node:crypto';
 import { NodeHttpHandler } from '@smithy/node-http-handler';
 
 import { createManagedObjectStorageHttpHandlerOptions } from '../../../managed-health.js';
+import { observeObjectStorageOperation } from '../../../metrics.js';
 import type { RuntimeHealthCheckContext } from '../../../runtime-health.js';
 import type { ManagedWorkflowStorageConfig } from '../storage-config.js';
 
@@ -43,9 +44,7 @@ export function createManagedWorkflowBlobKey(...segments: string[]): string {
     .join('/');
 }
 
-export function createManagedWorkflowS3ClientConfig(
-  config: ManagedWorkflowStorageConfig,
-): S3ClientConfig {
+export function createManagedWorkflowS3ClientConfig(config: ManagedWorkflowStorageConfig): S3ClientConfig {
   const clientConfig: S3ClientConfig = {
     region: config.objectStorageRegion,
     forcePathStyle: config.objectStorageForcePathStyle,
@@ -79,32 +78,42 @@ export class S3ManagedWorkflowBlobStore implements ManagedWorkflowBlobStore {
   }
 
   async initialize(): Promise<void> {
-    try {
-      await this.#client.send(new HeadBucketCommand({
-        Bucket: this.#bucket,
-      }));
-    } catch (error) {
-      const statusCode = typeof error === 'object' &&
-        error != null &&
-        '$metadata' in error &&
-        typeof (error as { $metadata?: { httpStatusCode?: unknown } }).$metadata?.httpStatusCode === 'number'
-        ? (error as { $metadata: { httpStatusCode: number } }).$metadata.httpStatusCode
-        : undefined;
+    await observeObjectStorageOperation('workflows', 'health', async () => {
+      try {
+        await this.#client.send(
+          new HeadBucketCommand({
+            Bucket: this.#bucket,
+          }),
+        );
+      } catch (error) {
+        const statusCode =
+          typeof error === 'object' &&
+          error != null &&
+          '$metadata' in error &&
+          typeof (error as { $metadata?: { httpStatusCode?: unknown } }).$metadata?.httpStatusCode === 'number'
+            ? (error as { $metadata: { httpStatusCode: number } }).$metadata.httpStatusCode
+            : undefined;
 
-      if (statusCode && statusCode !== 404) {
-        throw error;
+        if (statusCode && statusCode !== 404) {
+          throw error;
+        }
+
+        await this.#client.send(
+          new CreateBucketCommand({
+            Bucket: this.#bucket,
+          }),
+        );
       }
-
-      await this.#client.send(new CreateBucketCommand({
-        Bucket: this.#bucket,
-      }));
-    }
+    });
   }
 
   async checkHealth(context?: RuntimeHealthCheckContext): Promise<void> {
-    await this.#client.send(new HeadBucketCommand({
-      Bucket: this.#bucket,
-    }), context ? { abortSignal: context.signal } : undefined);
+    await observeObjectStorageOperation('workflows', 'health', () =>
+      this.#client.send(
+        new HeadBucketCommand({ Bucket: this.#bucket }),
+        context ? { abortSignal: context.signal } : undefined,
+      ),
+    );
   }
 
   dispose(): void {
@@ -112,25 +121,33 @@ export class S3ManagedWorkflowBlobStore implements ManagedWorkflowBlobStore {
   }
 
   async putText(key: string, contents: string, contentType = 'text/plain; charset=utf-8'): Promise<void> {
-    await this.#client.send(new PutObjectCommand({
-      Bucket: this.#bucket,
-      Key: this.#key(key),
-      Body: contents,
-      ContentType: contentType,
-    }));
+    await observeObjectStorageOperation('workflows', 'put', () =>
+      this.#client.send(
+        new PutObjectCommand({
+          Bucket: this.#bucket,
+          Key: this.#key(key),
+          Body: contents,
+          ContentType: contentType,
+        }),
+      ),
+    );
   }
 
   async getText(key: string): Promise<string> {
-    const response = await this.#client.send(new GetObjectCommand({
-      Bucket: this.#bucket,
-      Key: this.#key(key),
-    }));
+    return observeObjectStorageOperation('workflows', 'get', async () => {
+      const response = await this.#client.send(
+        new GetObjectCommand({
+          Bucket: this.#bucket,
+          Key: this.#key(key),
+        }),
+      );
 
-    if (!response.Body) {
-      throw new Error(`Object body missing for key ${key}`);
-    }
+      if (!response.Body) {
+        throw new Error(`Object body missing for key ${key}`);
+      }
 
-    return response.Body.transformToString();
+      return response.Body.transformToString();
+    });
   }
 
   async delete(key: string | null | undefined): Promise<void> {
@@ -138,10 +155,14 @@ export class S3ManagedWorkflowBlobStore implements ManagedWorkflowBlobStore {
       return;
     }
 
-    await this.#client.send(new DeleteObjectCommand({
-      Bucket: this.#bucket,
-      Key: this.#key(key),
-    }));
+    await observeObjectStorageOperation('workflows', 'delete', () =>
+      this.#client.send(
+        new DeleteObjectCommand({
+          Bucket: this.#bucket,
+          Key: this.#key(key),
+        }),
+      ),
+    );
   }
 }
 
@@ -172,15 +193,25 @@ export class InMemoryManagedWorkflowBlobStore implements ManagedWorkflowBlobStor
 }
 
 export function createRevisionBlobKey(workflowId: string, revisionId: string, kind: 'project' | 'dataset'): string {
-  return createManagedWorkflowBlobKey(workflowId, 'revisions', revisionId, kind === 'project' ? 'project.rivet-project' : 'dataset.rivet-data');
+  return createManagedWorkflowBlobKey(
+    workflowId,
+    'revisions',
+    revisionId,
+    kind === 'project' ? 'project.rivet-project' : 'dataset.rivet-data',
+  );
 }
 
-export function createRecordingBlobKey(workflowId: string, recordingId: string, kind: 'recording' | 'replay-project' | 'replay-dataset'): string {
-  const fileName = kind === 'recording'
-    ? 'recording.rivet-recording'
-    : kind === 'replay-project'
-      ? 'replay.rivet-project'
-      : 'replay.rivet-data';
+export function createRecordingBlobKey(
+  workflowId: string,
+  recordingId: string,
+  kind: 'recording' | 'replay-project' | 'replay-dataset',
+): string {
+  const fileName =
+    kind === 'recording'
+      ? 'recording.rivet-recording'
+      : kind === 'replay-project'
+        ? 'replay.rivet-project'
+        : 'replay.rivet-data';
 
   return createManagedWorkflowBlobKey(workflowId, 'recordings', recordingId, fileName);
 }

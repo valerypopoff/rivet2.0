@@ -38,6 +38,20 @@ publishedExecutionAdmission:
   maxActiveRunsPerPod: 4
   retryAfterSeconds: 1
 
+# Metrics stay disabled until a monitoring system is explicitly configured to
+# scrape the API ClusterIP services. They are never routed through the proxy.
+metrics:
+  enabled: false
+  serviceMonitor:
+    enabled: false
+    interval: 30s
+    scrapeTimeout: 10s
+    additionalLabels: {}
+  prometheusRule:
+    enabled: false
+    for: 10m
+    additionalLabels: {}
+
 autoscaling:
   proxy:
     enabled: true

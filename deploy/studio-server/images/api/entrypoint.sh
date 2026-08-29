@@ -13,6 +13,7 @@ deployment_shutdown_grace_seconds="${RIVET_DEPLOYMENT_SHUTDOWN_GRACE_SECONDS:-}"
 deployment_published_execution_admission_mode="${RIVET_DEPLOYMENT_PUBLISHED_EXECUTION_ADMISSION_MODE:-}"
 deployment_published_execution_max_active_runs="${RIVET_DEPLOYMENT_PUBLISHED_EXECUTION_MAX_ACTIVE_RUNS:-}"
 deployment_published_execution_retry_after_seconds="${RIVET_DEPLOYMENT_PUBLISHED_EXECUTION_RETRY_AFTER_SECONDS:-}"
+deployment_metrics_enabled="${RIVET_DEPLOYMENT_METRICS_ENABLED:-}"
 load_optional_dotenv /vault/dotenv
 append_proxy_bootstrap_node_options
 
@@ -44,6 +45,7 @@ apply_deployment_owned_value RIVET_SHUTDOWN_GRACE_SECONDS "$deployment_shutdown_
 apply_deployment_owned_value RIVET_PUBLISHED_EXECUTION_ADMISSION_MODE "$deployment_published_execution_admission_mode"
 apply_deployment_owned_value RIVET_PUBLISHED_EXECUTION_MAX_ACTIVE_RUNS "$deployment_published_execution_max_active_runs"
 apply_deployment_owned_value RIVET_PUBLISHED_EXECUTION_RETRY_AFTER_SECONDS "$deployment_published_execution_retry_after_seconds"
+apply_deployment_owned_value RIVET_METRICS_ENABLED "$deployment_metrics_enabled"
 
 export PORT="${PORT:-8080}"
 export RIVET_WORKSPACE_ROOT="${RIVET_WORKSPACE_ROOT:-/workspace}"

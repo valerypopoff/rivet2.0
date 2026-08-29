@@ -1,10 +1,7 @@
 import 'dotenv/config';
 import { createServer } from 'node:http';
 import { reconcileRuntimeLibraries } from './runtime-libraries/startup.js';
-import {
-  checkRuntimeLibrariesHealth,
-  disposeRuntimeLibrariesBackend,
-} from './runtime-libraries/backend.js';
+import { checkRuntimeLibrariesHealth, disposeRuntimeLibrariesBackend } from './runtime-libraries/backend.js';
 import {
   disposeLatestWorkflowRemoteDebugger,
   initializeLatestWorkflowRemoteDebugger,
@@ -30,38 +27,44 @@ import {
   initializeAppSettingsRepositories,
 } from './app-settings/settings-repository.js';
 import { getRuntimeHealthOptionsFromEnv, RuntimeHealthController } from './runtime-health.js';
+import { configureStudioMetrics } from './metrics.js';
 
 const PORT = parseInt(process.env.PORT ?? '3100', 10);
 const apiRuntimeProfile = getApiRuntimeProfile();
+const metrics = configureStudioMetrics(apiRuntimeProfile);
 let webAppActionWebSockets: WebAppActionWebSocketRuntime | null = null;
-const runtimeHealth = new RuntimeHealthController(apiRuntimeProfile, [
-  {
-    name: 'app-settings',
-    failureCode: 'app_settings_unavailable',
-    check: checkAppSettingsRepositoriesHealth,
-  },
-  {
-    name: 'workflow-storage',
-    failureCode: 'workflow_storage_unavailable',
-    check: checkWorkflowStorageHealth,
-  },
-  {
-    name: 'runtime-libraries',
-    failureCode: 'runtime_libraries_unavailable',
-    check: checkRuntimeLibrariesHealth,
-  },
-  {
-    name: 'web-app-actions',
-    failureCode: 'web_app_gateway_unavailable',
-    async check(context) {
-      if (!webAppActionWebSockets) {
-        throw new Error('Web-app action gateway is not initialized.');
-      }
-      await webAppActionWebSockets.checkHealth(context);
+const runtimeHealth = new RuntimeHealthController(
+  apiRuntimeProfile,
+  [
+    {
+      name: 'app-settings',
+      failureCode: 'app_settings_unavailable',
+      check: checkAppSettingsRepositoriesHealth,
     },
-  },
-], getRuntimeHealthOptionsFromEnv());
-const app = createApiApp(apiRuntimeProfile, { health: runtimeHealth });
+    {
+      name: 'workflow-storage',
+      failureCode: 'workflow_storage_unavailable',
+      check: checkWorkflowStorageHealth,
+    },
+    {
+      name: 'runtime-libraries',
+      failureCode: 'runtime_libraries_unavailable',
+      check: checkRuntimeLibrariesHealth,
+    },
+    {
+      name: 'web-app-actions',
+      failureCode: 'web_app_gateway_unavailable',
+      async check(context) {
+        if (!webAppActionWebSockets) {
+          throw new Error('Web-app action gateway is not initialized.');
+        }
+        await webAppActionWebSockets.checkHealth(context);
+      },
+    },
+  ],
+  getRuntimeHealthOptionsFromEnv(),
+);
+const app = createApiApp(apiRuntimeProfile, { health: runtimeHealth, metrics });
 const server = createServer(app);
 
 if (isControlPlaneApiProfile(apiRuntimeProfile)) {
@@ -185,10 +188,7 @@ async function shutdown(signal: string): Promise<void> {
   console.log(`[rivet-api] Received ${signal}; draining for up to ${shutdownGraceMs}ms...`);
 
   if (startupPromise && !server.listening) {
-    await Promise.race([
-      startupPromise.catch(() => undefined),
-      wait(Math.max(0, deadline - Date.now())),
-    ]);
+    await Promise.race([startupPromise.catch(() => undefined), wait(Math.max(0, deadline - Date.now()))]);
   }
 
   const [httpClosed, webAppRunsCompleted, httpRunsCompleted] = await Promise.all([
@@ -198,13 +198,16 @@ async function shutdown(signal: string): Promise<void> {
   ]);
 
   if (!webAppRunsCompleted) {
+    const interruptedWebAppRuns = webAppActionWebSockets?.getActiveRunCount() ?? 0;
     console.warn(
-      `[web-app-actions] ${webAppActionWebSockets?.getActiveRunCount() ?? 0} active run(s) exceeded the shutdown grace period and will be interrupted.`,
+      `[web-app-actions] ${interruptedWebAppRuns} active run(s) exceeded the shutdown grace period and will be interrupted.`,
     );
+    metrics.recordPublishedExecutionInterruptions('web_app_action', interruptedWebAppRuns);
   }
   if (!httpRunsCompleted) {
     const activeHttpRuns = getActiveHttpExecutionCount();
     const aborted = abortActiveHttpExecutions();
+    metrics.recordPublishedExecutionInterruptions('workflow_endpoint', aborted);
     console.warn(
       `[workflow-executions] ${activeHttpRuns} active HTTP graph run(s) exceeded the shutdown grace period; aborting ${aborted}.`,
     );

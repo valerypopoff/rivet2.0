@@ -7,6 +7,8 @@ import {
   wait,
   type RuntimeLibraryJobRow,
 } from './schema.js';
+import { recordStudioMetrics } from '../../metrics.js';
+
 import type { ManagedRuntimeLibrariesContext } from './context.js';
 
 export function createManagedRuntimeLibrariesJobWorker(options: {
@@ -59,7 +61,10 @@ export function createManagedRuntimeLibrariesJobWorker(options: {
     );
 
     for (const row of rows) {
-      await options.jobStore.appendJobLog(row.job_id, 'ERROR: Job heartbeat timed out; marking job as failed.').catch(() => {});
+      recordStudioMetrics((metrics) => metrics.recordRuntimeLibraryJob('failed'));
+      await options.jobStore
+        .appendJobLog(row.job_id, 'ERROR: Job heartbeat timed out; marking job as failed.')
+        .catch(() => {});
       await options.jobStore.appendJobLog(row.job_id, '--- Job failed ---').catch(() => {});
     }
   };
@@ -113,11 +118,18 @@ export function createManagedRuntimeLibrariesJobWorker(options: {
           continue;
         }
 
-        await withJobHeartbeat(job.job_id, async () => {
-          await options.artifactActivation.processJob(job);
-        }).catch(async (error) => {
+        recordStudioMetrics((metrics) => metrics.setRuntimeLibraryJobActive(1));
+        try {
+          await withJobHeartbeat(job.job_id, async () => {
+            await options.artifactActivation.processJob(job);
+          });
+          recordStudioMetrics((metrics) => metrics.recordRuntimeLibraryJob('succeeded'));
+        } catch (error) {
+          recordStudioMetrics((metrics) => metrics.recordRuntimeLibraryJob('failed'));
           await options.jobStore.failJob(job.job_id, error);
-        });
+        } finally {
+          recordStudioMetrics((metrics) => metrics.setRuntimeLibraryJobActive(0));
+        }
       } catch (error) {
         if (options.isStopped()) {
           break;
@@ -136,6 +148,7 @@ export function createManagedRuntimeLibrariesJobWorker(options: {
       }
 
       workerStarted = true;
+      recordStudioMetrics((metrics) => metrics.setRuntimeLibraryJobActive(0));
       void workerLoop();
     },
 

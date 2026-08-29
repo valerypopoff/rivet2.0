@@ -135,6 +135,11 @@ export async function flushWorkflowExecutionRecordingPersistence(): Promise<void
   await workflowRecordingStore.flush();
 }
 
+/** A process-local queue snapshot; it never performs I/O during a metrics scrape. */
+export function getWorkflowExecutionRecordingPersistenceMetrics() {
+  return workflowRecordingStore.getPersistenceMetrics();
+}
+
 function toWorkflowRecordingRunSummary(row: WorkflowRecordingRunRow): WorkflowRecordingRunSummary {
   return {
     id: row.id,

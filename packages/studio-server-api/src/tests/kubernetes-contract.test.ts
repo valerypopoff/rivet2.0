@@ -207,6 +207,59 @@ test('chart owns the published execution admission policy only on execution API 
   );
 });
 
+test('chart makes pull-only metrics and Prometheus Operator resources explicit opt-ins', async () => {
+  const defaultChart = await renderLocalKubernetesChart();
+  const metricsChart = await renderLocalKubernetesChartWithOverrides([
+    'metrics.enabled=true',
+    'metrics.serviceMonitor.enabled=true',
+    'metrics.prometheusRule.enabled=true',
+    'metrics.serviceMonitor.interval=1h30m',
+    'metrics.serviceMonitor.additionalLabels.release=prometheus',
+  ]);
+  const apiEntrypoint = readRepoFile('deploy/studio-server/images/api/entrypoint.sh');
+  const validationTemplate = readRepoFile('deploy/studio-server/helm/templates/validate-values.yaml');
+
+  assert.doesNotMatch(defaultChart, /kind: ServiceMonitor|kind: PrometheusRule/);
+  assert.equal((metricsChart.match(/kind: ServiceMonitor/g) ?? []).length, 2);
+  assert.match(metricsChart, /interval: "1h30m"/);
+  assert.match(
+    metricsChart,
+    /name: rivet-rivet-api-metrics[\s\S]*?app\.kubernetes\.io\/component: api[\s\S]*?path: \/metrics/,
+  );
+  assert.match(
+    metricsChart,
+    /name: rivet-rivet-execution-metrics[\s\S]*?app\.kubernetes\.io\/component: execution[\s\S]*?path: \/metrics/,
+  );
+  assert.match(metricsChart, /kind: PrometheusRule[\s\S]*?alert: RivetExecutionReadinessUnavailable/);
+  assert.match(metricsChart, /alert: RivetPublishedExecutionAdmissionSaturated/);
+  assert.equal(
+    (metricsChart.match(/name: RIVET_DEPLOYMENT_METRICS_ENABLED\s*\n\s*value: "true"/g) ?? []).length,
+    2,
+    'both direct API services must opt in before they expose /metrics',
+  );
+  assert.match(
+    apiEntrypoint,
+    /deployment_metrics_enabled="\$\{RIVET_DEPLOYMENT_METRICS_ENABLED:-\}"[\s\S]*?load_optional_dotenv \/vault\/dotenv[\s\S]*?RIVET_METRICS_ENABLED "\$deployment_metrics_enabled"/,
+  );
+  assert.match(validationTemplate, /RIVET_METRICS_ENABLED[\s\S]*?configure metrics instead/);
+
+  await assertHelmTemplateFails(
+    ['metrics.serviceMonitor.enabled=true'],
+    /metrics\.serviceMonitor\.enabled requires metrics\.enabled=true/,
+  );
+  await assertHelmTemplateFails(
+    ['env.RIVET_METRICS_ENABLED=true'],
+    /RIVET_METRICS_ENABLED[\s\S]*configure metrics instead/,
+  );
+  await assertHelmTemplateFails(
+    ['metrics.serviceMonitor.interval=0s'],
+    /metrics\.serviceMonitor\.interval must be a positive Prometheus duration/,
+  );
+  await assertHelmTemplateFails(
+    ['metrics.serviceMonitor.additionalLabels=invalid'],
+    /metrics\.serviceMonitor\.additionalLabels must be a map/,
+  );
+});
 test('chart serializes managed workflow migrations before verify-only API workloads start', async () => {
   const renderedChart = await renderLocalKubernetesChart();
   const renderedChartWithRollbackWindow = await renderLocalKubernetesChartWithOverrides([

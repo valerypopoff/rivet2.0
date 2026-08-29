@@ -37,6 +37,7 @@ export const defaultApiTestFiles = [
   'src/tests/managed-workflow-schema-migrations.test.ts',
   'src/tests/managed-workflow-schema.test.ts',
   'src/tests/migrate-workflow-storage.test.ts',
+  'src/tests/metrics.test.ts',
   'src/tests/native-io.test.ts',
   'src/tests/node-executor-proxy-settings.test.ts',
   'src/tests/normalize-base-path.test.ts',

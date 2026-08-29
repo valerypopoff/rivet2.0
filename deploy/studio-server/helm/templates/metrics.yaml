@@ -1,0 +1,85 @@
+{{- if .Values.metrics.serviceMonitor.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "rivet.fullname" . }}-api-metrics
+  labels:
+    {{- include "rivet.labels" . | nindent 4 }}
+    {{- with .Values.metrics.serviceMonitor.additionalLabels }}
+{{ toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "rivet.componentLabels" (dict "root" . "component" "api") | nindent 6 }}
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: {{ .Values.metrics.serviceMonitor.interval | quote }}
+      scrapeTimeout: {{ .Values.metrics.serviceMonitor.scrapeTimeout | quote }}
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "rivet.fullname" . }}-execution-metrics
+  labels:
+    {{- include "rivet.labels" . | nindent 4 }}
+    {{- with .Values.metrics.serviceMonitor.additionalLabels }}
+{{ toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "rivet.componentLabels" (dict "root" . "component" "execution") | nindent 6 }}
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: {{ .Values.metrics.serviceMonitor.interval | quote }}
+      scrapeTimeout: {{ .Values.metrics.serviceMonitor.scrapeTimeout | quote }}
+{{- end }}
+{{- if .Values.metrics.prometheusRule.enabled }}
+{{- if .Values.metrics.serviceMonitor.enabled }}
+---
+{{- end }}
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: {{ include "rivet.fullname" . }}-metrics
+  labels:
+    {{- include "rivet.labels" . | nindent 4 }}
+    {{- with .Values.metrics.prometheusRule.additionalLabels }}
+{{ toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  groups:
+    - name: {{ include "rivet.fullname" . }}.metrics
+      rules:
+        - alert: RivetExecutionReadinessUnavailable
+          expr: max by (namespace, pod) (rivet_runtime_readiness{profile="execution"}) == 0
+          for: {{ index .Values.metrics.prometheusRule "for" | quote }}
+          labels:
+            severity: warning
+          annotations:
+            summary: A Rivet execution API pod is not ready.
+        - alert: RivetPublishedExecutionAdmissionSaturated
+          expr: rivet_published_execution_active_runs{profile="execution"} >= ignoring(mode) rivet_published_execution_admission_limit{profile="execution",mode="enforce"}
+          for: {{ index .Values.metrics.prometheusRule "for" | quote }}
+          labels:
+            severity: warning
+          annotations:
+            summary: A Rivet execution API pod has reached its configured public-run limit.
+        - alert: RivetRecordingPersistenceDrops
+          expr: increase(rivet_workflow_recording_persistence_dropped_total{profile="execution"}[10m]) > 0
+          for: {{ index .Values.metrics.prometheusRule "for" | quote }}
+          labels:
+            severity: warning
+          annotations:
+            summary: Rivet dropped one or more recording persistence writes.
+        - alert: RivetObjectStorageOperationErrors
+          expr: sum by (profile, domain) (increase(rivet_object_storage_operations_total{outcome="error"}[10m])) > 0
+          for: {{ index .Values.metrics.prometheusRule "for" | quote }}
+          labels:
+            severity: warning
+          annotations:
+            summary: Rivet object storage reported an operation error.
+{{- end }}

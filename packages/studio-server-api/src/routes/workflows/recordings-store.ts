@@ -1,6 +1,13 @@
 import { getWorkflowRecordingConfig, isWorkflowRecordingEnabled } from './recordings-config.js';
+import { recordStudioMetrics } from '../../metrics.js';
 
 type WorkflowRecordingPersistenceTask = () => Promise<void>;
+
+export type WorkflowRecordingPersistenceMetrics = Readonly<{
+  activeWrites: number;
+  maxPendingWrites: number;
+  pendingWrites: number;
+}>;
 
 const PERSISTENCE_DROP_LOG_INTERVAL_MS = 60_000;
 
@@ -67,6 +74,15 @@ export function createWorkflowRecordingStore(options: {
     return Math.max(0, persistenceQueue.length - (persistenceQueueStartImmediate ? 1 : 0));
   };
 
+  const getPersistenceMetrics = (): WorkflowRecordingPersistenceMetrics => {
+    const { maxPendingWrites } = getWorkflowRecordingConfig();
+    return Object.freeze({
+      activeWrites: persistenceQueuePromise ? 1 : 0,
+      maxPendingWrites,
+      pendingWrites: persistenceQueue.length,
+    });
+  };
+
   const runWorkflowRecordingPersistenceQueue = (): void => {
     persistenceQueueStartImmediate = null;
     if (persistenceQueuePromise) {
@@ -83,6 +99,7 @@ export function createWorkflowRecordingStore(options: {
         try {
           await task();
         } catch (error) {
+          recordStudioMetrics((metrics) => metrics.recordWorkflowRecordingPersistenceFailure());
           console.error('[workflow-recordings] Failed to persist queued recording:', error);
         }
       }
@@ -127,6 +144,7 @@ export function createWorkflowRecordingStore(options: {
   return {
     scheduleCleanup: scheduleWorkflowRecordingCleanup,
     flush: flushWorkflowRecordingStore,
+    getPersistenceMetrics,
 
     enqueuePersistence(task: WorkflowRecordingPersistenceTask): boolean {
       if (!isWorkflowRecordingEnabled() || resettingWorkflowRecordingStorageForTests) {
@@ -135,6 +153,7 @@ export function createWorkflowRecordingStore(options: {
 
       const { maxPendingWrites } = getWorkflowRecordingConfig();
       if (maxPendingWrites > 0 && getPendingPersistenceWriteCount() >= maxPendingWrites) {
+        recordStudioMetrics((metrics) => metrics.recordWorkflowRecordingPersistenceDrop());
         logDroppedWorkflowRecordingPersistence(maxPendingWrites);
         return false;
       }

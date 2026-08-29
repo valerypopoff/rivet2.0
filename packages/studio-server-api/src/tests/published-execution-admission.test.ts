@@ -124,3 +124,41 @@ test('draining reports once while consistently rejecting new public work', () =>
   assert.equal(admission.acquire('web-app-action').kind, 'draining');
   assert.deepEqual(events, ['draining']);
 });
+test('admission snapshots expose fixed public surfaces and never change permit decisions when observers fail', () => {
+  const decisions: string[] = [];
+  const snapshots: Array<{ activeRuns: number; webApps: number; workflows: number }> = [];
+  const admission = createPublishedExecutionAdmission(
+    { maxActiveRuns: 2, mode: 'enforce', retryAfterSeconds: 1 },
+    {
+      onDecision: (decision) => decisions.push(`${decision.kind}:${decision.surface}`),
+      onSnapshot: (snapshot) =>
+        snapshots.push({
+          activeRuns: snapshot.activeRuns,
+          webApps: snapshot.activeRunsBySurface['web-app-action'],
+          workflows: snapshot.activeRunsBySurface['workflow-endpoint'],
+        }),
+      onEvent: () => {
+        throw new Error('observability must not alter admission');
+      },
+    },
+  );
+
+  const workflow = admission.acquire('workflow-endpoint');
+  const webApp = admission.acquire('web-app-action');
+  assert.equal(workflow.kind, 'accepted');
+  assert.equal(webApp.kind, 'accepted');
+  assert.equal(admission.acquire('workflow-endpoint').kind, 'capacity-exceeded');
+  assert.deepEqual(decisions, [
+    'accepted:workflow-endpoint',
+    'accepted:web-app-action',
+    'capacity-exceeded:workflow-endpoint',
+  ]);
+  assert.deepEqual(snapshots.at(-1), { activeRuns: 2, webApps: 1, workflows: 1 });
+
+  if (workflow.kind === 'accepted') workflow.permit.release();
+  if (webApp.kind === 'accepted') webApp.permit.release();
+  assert.deepEqual(admission.getSnapshot().activeRunsBySurface, {
+    'web-app-action': 0,
+    'workflow-endpoint': 0,
+  });
+});

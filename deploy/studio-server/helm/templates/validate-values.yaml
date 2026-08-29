@@ -51,6 +51,43 @@
 {{- fail "publishedExecutionAdmission.retryAfterSeconds must be an integer between 1 and 3600" -}}
 {{- end -}}
 
+{{- range $key := list "RIVET_METRICS_ENABLED" "RIVET_DEPLOYMENT_METRICS_ENABLED" -}}
+{{- if hasKey $.Values.env $key -}}
+{{- fail (printf "env.%s is chart-owned; configure metrics instead" $key) -}}
+{{- end -}}
+{{- end -}}
+
+{{- if not (kindIs "bool" .Values.metrics.enabled) -}}
+{{- fail "metrics.enabled must be a boolean" -}}
+{{- end -}}
+{{- if not (kindIs "bool" .Values.metrics.serviceMonitor.enabled) -}}
+{{- fail "metrics.serviceMonitor.enabled must be a boolean" -}}
+{{- end -}}
+{{- if not (kindIs "bool" .Values.metrics.prometheusRule.enabled) -}}
+{{- fail "metrics.prometheusRule.enabled must be a boolean" -}}
+{{- end -}}
+{{- range $key := list "serviceMonitor" "prometheusRule" -}}
+{{- if not (kindIs "map" (index $.Values.metrics $key).additionalLabels) -}}
+{{- fail (printf "metrics.%s.additionalLabels must be a map" $key) -}}
+{{- end -}}
+{{- end -}}
+{{- range $key := list "interval" "scrapeTimeout" -}}
+{{- $value := index $.Values.metrics.serviceMonitor $key -}}
+{{- if or (not (kindIs "string" $value)) (not (regexMatch "^([1-9][0-9]*(ms|s|m|h|d|w|y))([0-9]+(ms|s|m|h|d|w|y))*$" $value)) -}}
+{{- fail (printf "metrics.serviceMonitor.%s must be a positive Prometheus duration" $key) -}}
+{{- end -}}
+{{- end -}}
+{{- $metricsRuleFor := index .Values.metrics.prometheusRule "for" -}}
+{{- if or (not (kindIs "string" $metricsRuleFor)) (not (regexMatch "^([1-9][0-9]*(ms|s|m|h|d|w|y))([0-9]+(ms|s|m|h|d|w|y))*$" $metricsRuleFor)) -}}
+{{- fail "metrics.prometheusRule.for must be a positive Prometheus duration" -}}
+{{- end -}}
+{{- if and .Values.metrics.serviceMonitor.enabled (not .Values.metrics.enabled) -}}
+{{- fail "metrics.serviceMonitor.enabled requires metrics.enabled=true" -}}
+{{- end -}}
+{{- if and .Values.metrics.prometheusRule.enabled (not .Values.metrics.enabled) -}}
+{{- fail "metrics.prometheusRule.enabled requires metrics.enabled=true" -}}
+{{- end -}}
+
 {{- $postgresMaxConnections := int .Values.postgres.maxConnections -}}
 {{- $postgresReservedConnections := int .Values.postgres.reservedConnections -}}
 {{- $poolMaxPerApiPod := int .Values.postgres.poolMaxPerApiPod -}}
