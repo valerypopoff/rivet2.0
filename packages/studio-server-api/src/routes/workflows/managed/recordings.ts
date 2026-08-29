@@ -20,6 +20,7 @@ import { getWorkflowRecordingConfig, type WorkflowRecordingConfig } from '../rec
 import { parseManagedWorkflowProjectVirtualPath } from '../virtual-paths.js';
 import type { ManagedWorkflowBlobStore } from './blob-store.js';
 import type { ManagedWorkflowContext } from './context.js';
+import type { ManagedWorkflowMaintenanceLease } from './maintenance.js';
 import type {
   ImportManagedWorkflowRecordingOptions,
   PersistWorkflowExecutionRecordingOptions,
@@ -54,9 +55,7 @@ function getCompressedBundleSize(row: RecordingRow): number {
 }
 
 function getCreatedAtMs(row: RecordingRow): number {
-  const timestamp = row.created_at instanceof Date
-    ? row.created_at.getTime()
-    : Date.parse(String(row.created_at));
+  const timestamp = row.created_at instanceof Date ? row.created_at.getTime() : Date.parse(String(row.created_at));
   return Number.isFinite(timestamp) ? timestamp : 0;
 }
 
@@ -115,7 +114,10 @@ function getManagedStatisticsTargetClause(target: WorkflowRunStatisticsTarget | 
   };
 }
 
-function toStatisticsRow(row: RecordingRow, toIsoString: (value: Date | string | null | undefined) => string | null): WorkflowRecordingStatisticsRow {
+function toStatisticsRow(
+  row: RecordingRow,
+  toIsoString: (value: Date | string | null | undefined) => string | null,
+): WorkflowRecordingStatisticsRow {
   return {
     workflowId: row.workflow_id,
     sourceProjectName: row.source_project_name,
@@ -225,46 +227,107 @@ export function createManagedWorkflowRecordingService(options: ManagedWorkflowRe
     queryOne: options.context.db.queryOne,
     queryRows: options.context.db.queryRows,
     blobStore: options.context.blobStore,
-    deleteBlobKeysBestEffort: options.context.revisions.deleteBlobKeysBestEffort,
+    maintenance: options.context.maintenance,
     getWorkflowStatus: options.context.mappers.getWorkflowStatus,
     mapWorkflowRowToProjectItem: options.context.mappers.mapWorkflowRowToProjectItem,
     toIsoString: options.context.mappers.toIsoString,
     workflowColumnsQualified: options.context.mappers.WORKFLOW_COLUMNS_QUALIFIED,
     recordingColumns: options.context.mappers.RECORDING_COLUMNS,
   };
-  let initialCleanupPromise: Promise<void> | null = null;
-
-  const cleanupWorkflowRecordingStorage = async (workflowId?: string, endpointName?: string): Promise<void> => {
+  const cleanupWorkflowRecordingStorage = async (lease: ManagedWorkflowMaintenanceLease): Promise<void> => {
     const config = options.getRecordingConfig?.() ?? getWorkflowRecordingConfig();
     if (config.retentionDays <= 0 && config.maxRunsPerEndpoint <= 0 && config.maxTotalBytes <= 0) {
       return;
     }
 
-    const cutoff = config.retentionDays > 0
-      ? new Date(Date.now() - config.retentionDays * DAY_MS).toISOString()
-      : null;
-    const normalizedEndpointName = endpointName?.trim().toLowerCase() || null;
-    const endpointScoped = Boolean(workflowId && normalizedEndpointName);
-    const rows = await deps.queryRows<RecordingRow>(
-      deps.pool,
-      config.maxTotalBytes > 0 || !endpointScoped
-        ? `SELECT ${deps.recordingColumns} FROM workflow_recordings ORDER BY created_at ASC, recording_id ASC`
-        : `
-          SELECT ${deps.recordingColumns}
-          FROM workflow_recordings
-          WHERE ($1::timestamptz IS NOT NULL AND created_at < $1::timestamptz)
-             OR (workflow_id = $2 AND LOWER(BTRIM(endpoint_name_at_execution)) = $3)
-          ORDER BY created_at ASC, recording_id ASC
-        `,
-      config.maxTotalBytes > 0 || !endpointScoped ? [] : [cutoff, workflowId, normalizedEndpointName],
-    );
-    const rowsToDelete = selectManagedRecordingRowsForCleanup(rows, config);
-    if (rowsToDelete.length === 0) {
-      return;
+    // Keep retention selection in PostgreSQL. Loading a long-lived endpoint's
+    // full recording history into the control-plane process would defeat the
+    // batch limit and can outlive its fencing lease. The window functions use
+    // the same precedence as selectManagedRecordingRowsForCleanup(): discard
+    // age-expired rows first, then apply per-endpoint and total-byte limits to
+    // the remaining history.
+    const retentionParameters: number[] = [Math.max(0, config.retentionDays)];
+    const retentionConditions = ['age_expired'];
+    let endpointRetentionSql: string;
+    if (config.maxRunsPerEndpoint > 0) {
+      retentionParameters.push(config.maxRunsPerEndpoint);
+      const endpointLimitParameter = retentionParameters.length;
+      retentionConditions.push('endpoint_excess');
+      endpointRetentionSql = `
+        endpoint_ranked AS (
+          SELECT classified.*,
+                 COUNT(*) FILTER (WHERE NOT age_expired) OVER (
+                   PARTITION BY workflow_id, LOWER(BTRIM(endpoint_name_at_execution))
+                   ORDER BY created_at DESC, recording_id DESC
+                 ) AS retained_endpoint_rank
+          FROM classified
+        ), endpoint_classified AS (
+          SELECT endpoint_ranked.*,
+                 (NOT age_expired AND retained_endpoint_rank > $${endpointLimitParameter}) AS endpoint_excess
+          FROM endpoint_ranked
+        )`;
+    } else {
+      endpointRetentionSql = `
+        endpoint_classified AS (
+          SELECT classified.*, false AS endpoint_excess
+          FROM classified
+        )`;
     }
 
-    const recordingIds = rowsToDelete.map((row) => row.recording_id);
-    await deps.withTransaction(async (client, hooks) => {
+    let totalBytesRetentionSql: string;
+    if (config.maxTotalBytes > 0) {
+      retentionParameters.push(config.maxTotalBytes);
+      const totalBytesLimitParameter = retentionParameters.length;
+      retentionConditions.push(
+        `(NOT age_expired AND NOT endpoint_excess AND retained_newer_bytes > $${totalBytesLimitParameter})`,
+      );
+      totalBytesRetentionSql = `
+        ranked AS (
+          SELECT endpoint_classified.*,
+                 SUM(
+                   recording_compressed_bytes + project_compressed_bytes + dataset_compressed_bytes
+                 ) FILTER (WHERE NOT age_expired AND NOT endpoint_excess) OVER (
+                   ORDER BY created_at DESC, recording_id DESC
+                 ) AS retained_newer_bytes
+          FROM endpoint_classified
+        )`;
+    } else {
+      totalBytesRetentionSql = `
+        ranked AS (
+          SELECT endpoint_classified.*
+          FROM endpoint_classified
+        )`;
+    }
+    retentionParameters.push(deps.maintenance.config.batchSize);
+    await deps.withTransaction(async (client) => {
+      // The fence is held before candidate selection. The row lock prevents a
+      // successor from taking the lease while this bounded selection and its
+      // metadata/outbox mutation commit together.
+      await lease.assertCurrent(client);
+      const rowsToDelete = await deps.queryRows<RecordingRow>(
+        client,
+        `
+          WITH classified AS (
+            SELECT ${deps.recordingColumns},
+                   CASE
+                     WHEN $1::int > 0
+                       THEN created_at < NOW() - ($1::bigint * INTERVAL '1 day')
+                     ELSE false
+                   END AS age_expired
+            FROM workflow_recordings
+          ), ${endpointRetentionSql}, ${totalBytesRetentionSql}
+          SELECT ${deps.recordingColumns}
+          FROM ranked
+          WHERE ${retentionConditions.join('\n             OR ')}
+          ORDER BY created_at ASC, recording_id ASC
+          LIMIT $${retentionParameters.length}
+        `,
+        retentionParameters,
+      );
+      if (rowsToDelete.length === 0) {
+        return;
+      }
+
       const deletedRows = await deps.queryRows<RecordingRow>(
         client,
         `
@@ -272,36 +335,36 @@ export function createManagedWorkflowRecordingService(options: ManagedWorkflowRe
           WHERE recording_id = ANY($1::text[])
           RETURNING ${deps.recordingColumns}
         `,
-        [recordingIds],
+        [rowsToDelete.map((row) => row.recording_id)],
       );
       if (deletedRows.length > 0) {
-        hooks.onCommit(() => deps.deleteBlobKeysBestEffort(
-          `recording retention cleanup (${deletedRows.length} recordings)`,
+        await deps.maintenance.enqueueObjectDeletions(
+          client,
+          'workflow-recording-retention',
           deletedRows.flatMap((row) => [
             row.recording_blob_key,
             row.replay_project_blob_key,
             row.replay_dataset_blob_key,
           ]),
-        ));
+        );
       }
     });
   };
 
-  const cleanupAfterWrite = async (workflowId: string, endpointName: string): Promise<void> => {
-    try {
-      await cleanupWorkflowRecordingStorage(workflowId, endpointName);
-    } catch (error) {
-      console.error('[workflow-recordings] Managed recording cleanup failed:', error);
-    }
+  let maintenanceTaskRegistered = false;
+  const ensureMaintenanceTaskRegistered = (): void => {
+    if (maintenanceTaskRegistered) return;
+    deps.maintenance.registerTask('workflow-recording-retention', cleanupWorkflowRecordingStorage);
+    maintenanceTaskRegistered = true;
   };
 
   return {
     async initialize(): Promise<void> {
       await deps.initialize();
-      initialCleanupPromise ??= cleanupWorkflowRecordingStorage().catch((error) => {
-        console.error('[workflow-recordings] Managed startup cleanup failed:', error);
-      });
-      await initialCleanupPromise;
+      ensureMaintenanceTaskRegistered();
+      // Preserve the former startup reconciliation, then use the durable timer
+      // so retention also runs when a managed installation is completely idle.
+      await deps.maintenance.runNow();
     },
 
     async importWorkflowRecording(options: ImportManagedWorkflowRecordingOptions): Promise<void> {
@@ -383,7 +446,10 @@ export function createManagedWorkflowRecordingService(options: ManagedWorkflowRe
       );
 
       const workflows = rows
-        .filter((row) => (row.total_runs ?? 0) > 0 || (deps.getWorkflowStatus(row) !== 'unpublished' && Boolean(row.endpoint_name)))
+        .filter(
+          (row) =>
+            (row.total_runs ?? 0) > 0 || (deps.getWorkflowStatus(row) !== 'unpublished' && Boolean(row.endpoint_name)),
+        )
         .map((row) => ({
           workflowId: row.workflow_id,
           project: deps.mapWorkflowRowToProjectItem(row),
@@ -426,17 +492,15 @@ export function createManagedWorkflowRecordingService(options: ManagedWorkflowRe
       const normalizedPage = Math.max(1, Math.floor(page));
       const normalizedPageSize = Math.min(100, Math.max(1, Math.floor(pageSize)));
       const offset = (normalizedPage - 1) * normalizedPageSize;
-      const filterClause = statusFilter === 'failed'
-        ? `AND status IN ('failed', 'suspicious')`
-        : '';
+      const filterClause = statusFilter === 'failed' ? `AND status IN ('failed', 'suspicious')` : '';
 
       const countRow = inputFilter
         ? null
         : await deps.queryOne<{ total_runs: number }>(
-          deps.pool,
-          `SELECT COUNT(*)::int AS total_runs FROM workflow_recordings WHERE workflow_id = $1 ${filterClause}`,
-          [workflowId],
-        );
+            deps.pool,
+            `SELECT COUNT(*)::int AS total_runs FROM workflow_recordings WHERE workflow_id = $1 ${filterClause}`,
+            [workflowId],
+          );
       const rows = await deps.queryRows<RecordingRow>(
         deps.pool,
         inputFilter
@@ -456,7 +520,14 @@ export function createManagedWorkflowRecordingService(options: ManagedWorkflowRe
         inputFilter ? [workflowId] : [workflowId, normalizedPageSize, offset],
       );
       const filteredPage = inputFilter
-        ? await filterManagedRecordingRowsByInput(rows, inputFilter, deps.blobStore, inputCursor, normalizedPageSize, signal)
+        ? await filterManagedRecordingRowsByInput(
+            rows,
+            inputFilter,
+            deps.blobStore,
+            inputCursor,
+            normalizedPageSize,
+            signal,
+          )
         : null;
       const pageRows = filteredPage?.rows ?? rows;
 
@@ -526,10 +597,16 @@ export function createManagedWorkflowRecordingService(options: ManagedWorkflowRe
         `,
         [query.period.from, query.period.to, ...target.parameters],
       );
-      return buildWorkflowRunStatistics(rows.map((row) => toStatisticsRow(row, deps.toIsoString)), query);
+      return buildWorkflowRunStatistics(
+        rows.map((row) => toStatisticsRow(row, deps.toIsoString)),
+        query,
+      );
     },
 
-    async readWorkflowRecordingArtifact(recordingId: string, artifact: 'recording' | 'replay-project' | 'replay-dataset'): Promise<string> {
+    async readWorkflowRecordingArtifact(
+      recordingId: string,
+      artifact: 'recording' | 'replay-project' | 'replay-dataset',
+    ): Promise<string> {
       await deps.initialize();
       const row = await deps.queryOne<RecordingRow>(
         deps.pool,
@@ -556,7 +633,7 @@ export function createManagedWorkflowRecordingService(options: ManagedWorkflowRe
     },
 
     async deleteWorkflowRecording(recordingId: string): Promise<void> {
-      await deps.withTransaction(async (client, hooks) => {
+      await deps.withTransaction(async (client) => {
         const row = await deps.queryOne<RecordingRow>(
           client,
           `
@@ -572,10 +649,11 @@ export function createManagedWorkflowRecordingService(options: ManagedWorkflowRe
         }
 
         await client.query('DELETE FROM workflow_recordings WHERE recording_id = $1', [recordingId]);
-        hooks.onCommit(() => deps.deleteBlobKeysBestEffort(
-          `recording deletion (${recordingId})`,
-          [row.recording_blob_key, row.replay_project_blob_key, row.replay_dataset_blob_key],
-        ));
+        await deps.maintenance.enqueueObjectDeletions(client, 'workflow-recording-deletion', [
+          row.recording_blob_key,
+          row.replay_project_blob_key,
+          row.replay_dataset_blob_key,
+        ]);
       });
     },
 
@@ -600,9 +678,8 @@ export function createManagedWorkflowRecordingService(options: ManagedWorkflowRe
         throw new Error('Serialized replay project is not a string');
       }
 
-      const replayDatasetSerialized = options.executedDatasets.length > 0
-        ? serializeDatasets(options.executedDatasets)
-        : null;
+      const replayDatasetSerialized =
+        options.executedDatasets.length > 0 ? serializeDatasets(options.executedDatasets) : null;
       const uploadedBlobs = await deps.uploadRecordingBlobs(
         workflowId,
         recordingId,
@@ -644,12 +721,14 @@ export function createManagedWorkflowRecordingService(options: ManagedWorkflowRe
           cleanupContext: 'recording persistence failure',
         },
       );
-      await cleanupAfterWrite(workflowId, options.endpointName);
+      // Do not force a global cleanup scan onto a published endpoint request.
+      // The control-plane maintenance owner enforces retention independently.
     },
 
     async cleanupWorkflowRecordingStorage(): Promise<void> {
       await deps.initialize();
-      await cleanupWorkflowRecordingStorage();
+      ensureMaintenanceTaskRegistered();
+      await deps.maintenance.runNow();
     },
   };
 }

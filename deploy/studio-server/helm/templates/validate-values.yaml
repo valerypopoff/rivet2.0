@@ -77,6 +77,25 @@
 {{- fail (printf "PostgreSQL capacity is too small: the chart requires %d connections (%d reserved + %d API pods * (%d pooled + 3 LISTEN)), but postgres.maxConnections is %d; raise database capacity, lower postgres.poolMaxPerApiPod, or lower execution autoscaling.maxReplicas" $requiredPostgresConnections $postgresReservedConnections (add $backendReplicas $executionReplicas) $poolMaxPerApiPod $postgresMaxConnections) -}}
 {{- end -}}
 
+{{- range $key := list "RIVET_MANAGED_MAINTENANCE_ENABLED" "RIVET_MANAGED_MAINTENANCE_INTERVAL_MS" "RIVET_MANAGED_MAINTENANCE_LEASE_MS" "RIVET_MANAGED_MAINTENANCE_BATCH_SIZE" -}}
+{{- if hasKey $.Values.env $key -}}
+{{- fail (printf "env.%s is chart-owned; configure managedMaintenance instead" $key) -}}
+{{- end -}}
+{{- end -}}
+
+{{- $managedMaintenanceIntervalMs := int .Values.managedMaintenance.intervalMs -}}
+{{- if or (lt $managedMaintenanceIntervalMs 15000) (gt $managedMaintenanceIntervalMs 86400000) -}}
+{{- fail "managedMaintenance.intervalMs must be an integer between 15000 and 86400000" -}}
+{{- end -}}
+{{- $managedMaintenanceLeaseMs := int .Values.managedMaintenance.leaseMs -}}
+{{- if or (lt $managedMaintenanceLeaseMs 15000) (gt $managedMaintenanceLeaseMs 600000) -}}
+{{- fail "managedMaintenance.leaseMs must be an integer between 15000 and 600000" -}}
+{{- end -}}
+{{- $managedMaintenanceBatchSize := int .Values.managedMaintenance.batchSize -}}
+{{- if or (lt $managedMaintenanceBatchSize 1) (gt $managedMaintenanceBatchSize 500) -}}
+{{- fail "managedMaintenance.batchSize must be an integer between 1 and 500" -}}
+{{- end -}}
+
 {{- if lt (int .Values.workflowSchema.migrationJob.backoffLimit) 0 -}}
 {{- fail "workflowSchema.migrationJob.backoffLimit must be zero or greater" -}}
 {{- end -}}

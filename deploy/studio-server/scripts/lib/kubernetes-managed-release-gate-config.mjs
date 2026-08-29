@@ -182,7 +182,7 @@ export function renderManagedReleaseGateValues(config) {
     ),
     workflowSchema: {
       compatibility: {
-        minimumVersion: config.managedWorkflowSchema.minimumRollbackCompatibleVersion,
+        minimumVersion: config.managedWorkflowSchema.version,
         maximumVersion: config.managedWorkflowSchema.version,
       },
     },

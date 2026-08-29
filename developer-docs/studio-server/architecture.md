@@ -236,13 +236,13 @@ Filesystem deployments use upstream's process-local action ledger. Managed deplo
 
 ## Storage model
 
-| Area | Purpose | Local direct-process default | Docker default |
-|---|---|---|---|
-| `RIVET_WORKSPACE_ROOT` | Allowed workspace root for general hosted file operations | repo root | `/workspace` |
-| `RIVET_WORKFLOWS_ROOT` | Filesystem-mode workflow tree plus filesystem-mode `.published/` snapshots | `<repo>/workflows` | `/workflows` |
-| `RIVET_WORKFLOW_RECORDINGS_ROOT` | Filesystem-mode recording bundles | `<repo>/workflows/.recordings` by default, or a separate configured root | `/workflow-recordings` in Docker when split |
-| `RIVET_APP_DATA_ROOT` | App-level state such as plugins, logs, app-settings JSON files, and filesystem-mode `recordings.sqlite` | `<repo>/.data/rivet-app` | `/data/rivet-app` |
-| `RIVET_RUNTIME_LIBRARIES_ROOT` | Runtime-library local cache, manifest, and job workspace | `<repo>/.data/runtime-libraries` | `/data/runtime-libraries` |
+| Area                             | Purpose                                                                                                 | Local direct-process default                                             | Docker default                              |
+| -------------------------------- | ------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------ | ------------------------------------------- |
+| `RIVET_WORKSPACE_ROOT`           | Allowed workspace root for general hosted file operations                                               | repo root                                                                | `/workspace`                                |
+| `RIVET_WORKFLOWS_ROOT`           | Filesystem-mode workflow tree plus filesystem-mode `.published/` snapshots                              | `<repo>/workflows`                                                       | `/workflows`                                |
+| `RIVET_WORKFLOW_RECORDINGS_ROOT` | Filesystem-mode recording bundles                                                                       | `<repo>/workflows/.recordings` by default, or a separate configured root | `/workflow-recordings` in Docker when split |
+| `RIVET_APP_DATA_ROOT`            | App-level state such as plugins, logs, app-settings JSON files, and filesystem-mode `recordings.sqlite` | `<repo>/.data/rivet-app`                                                 | `/data/rivet-app`                           |
+| `RIVET_RUNTIME_LIBRARIES_ROOT`   | Runtime-library local cache, manifest, and job workspace                                                | `<repo>/.data/runtime-libraries`                                         | `/data/runtime-libraries`                   |
 
 In Docker-based modes:
 
@@ -288,12 +288,12 @@ The saved `Settings` -> `Storage` mode decides which paths are authoritative:
 
 Outside Kubernetes, the app still supports two non-cluster compatibility shapes:
 
-| Shape | Status | Notes |
-|---|---|---|
-| `filesystem + combined` | Supported | Primary backward-compatible single-host mode |
-| `filesystem + control` | Supported | Useful for control-plane/admin validation without managed services |
-| `filesystem + execution` | Unsupported | Execution-only API requires managed storage |
-| `managed + local-docker + combined` | Supported | Existing Docker rehearsal path backed by local Postgres plus explicitly configured object storage, often local MinIO |
+| Shape                                        | Status                                                                        | Notes                                                                                                                 |
+| -------------------------------------------- | ----------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| `filesystem + combined`                      | Supported                                                                     | Primary backward-compatible single-host mode                                                                          |
+| `filesystem + control`                       | Supported                                                                     | Useful for control-plane/admin validation without managed services                                                    |
+| `filesystem + execution`                     | Unsupported                                                                   | Execution-only API requires managed storage                                                                           |
+| `managed + local-docker + combined`          | Supported                                                                     | Existing Docker rehearsal path backed by local Postgres plus explicitly configured object storage, often local MinIO  |
 | `managed + local-docker + control/execution` | Supported through repo-local split validation plus local dependency rehearsal | Use this to keep split-era contracts honest without treating Docker combined mode as proof of the real split topology |
 
 Interpretation rules:
@@ -360,16 +360,16 @@ Workflow recording settings are documented in detail in [workflow-publication.md
 - dataset snapshots disabled by default
 - trace and partial-output capture disabled by default
 
-These retention limits have the same meaning in both storage modes. The per-endpoint cap is keyed by workflow plus historical endpoint name, so reusing an unpublished slug for another project cannot evict the first project's history. Filesystem mode removes SQLite rows and bundle directories; managed mode removes Postgres rows transactionally and then deletes only the corresponding object-storage blobs claimed by that transaction. Managed cleanup uses a workflow/endpoint/time index for ordinary writes and scans the full history only for startup reconciliation or when the optional global byte cap is enabled.
+These retention limits have the same meaning in both storage modes. The per-endpoint cap is keyed by workflow plus historical endpoint name, so reusing an unpublished slug for another project cannot evict the first project's history. Filesystem mode removes SQLite rows and bundle directories. In managed mode, the singleton control-plane API runs retention at startup and on a bounded timer (five minutes by default); endpoint-serving replicas do not scan global history. The maintenance worker selects and deletes at most one configured batch of PostgreSQL rows per pass after validating and holding its PostgreSQL fencing lease in the same transaction and enqueues the resulting recording/replay blob keys in a durable outbox. It then rechecks that each key has no remaining database reference immediately before deleting it from object storage. Transient object-store failures stay pending with exponential backoff; a key still referenced is marked `blocked` for investigation rather than being deleted; a later deletion intent reopens it after its final reference is removed. Explicit recording and project deletion use the same outbox. Completed outbox rows are retained for seven days for auditability. Known pre-commit upload failures also use this outbox rather than immediately deleting: the worker validates ownership first, and a PostgreSQL outage leaves the object for reconciliation instead of risking a duplicate-key delete. This deliberately does **not** claim a generic object-prefix reconciler: crash-window orphan discovery, Evaluation retention, runtime-library cleanup, and historical orphan discovery still have their own planned domain adapters.
 
 ## Dev and production modes
 
-| Mode | Entry command | Browser entry | Notes |
-|---|---|---|---|
-| Local direct-process | `yarn studio-server:dev:local` | `http://localhost:5174` | Runs API, web, and executor directly. Good for process-level work, but it does not recreate nginx's trusted-proxy wiring, so browser-driven `/api/*`, `/ui-auth`, and `/ws/latest-debugger` behavior is not representative there. |
-| Docker dev | `yarn studio-server:dev` | `http://localhost:8080` by default | Closest to production while still using bind mounts and a Vite dev server. The proxy port can be overridden with `RIVET_PORT`; diagnostic API/Postgres/MinIO host ports bind to `127.0.0.1` by default through `RIVET_LOCAL_BIND_HOST`. |
-| Local Kubernetes rehearsal | `yarn studio-server:dev:kubernetes-test` | `http://127.0.0.1:8080` by default | Builds local images, deploys the real Helm chart against the local Kubernetes cluster, keeps `web=1`, keeps `backend=1`, scales `proxy` and `execution`, and port-forwards the proxy service for browser testing. This is the closest local rehearsal of the supported Kubernetes topology. |
-| Production-style Docker | `yarn studio-server:prod` | `http://localhost:8080` by default | Pulls and force-recreates the prebuilt `rivet2.0-studio-server/*` images. Use `yarn studio-server:prod:restart` to recreate from already-local images after `.env` changes, or `yarn studio-server:prod:custom` to build from the current monorepo commit. The proxy port can be overridden with `RIVET_PORT`, while the executor websocket stays pinned to internal port `21889`. |
+| Mode                       | Entry command                            | Browser entry                      | Notes                                                                                                                                                                                                                                                                                                                                                                              |
+| -------------------------- | ---------------------------------------- | ---------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Local direct-process       | `yarn studio-server:dev:local`           | `http://localhost:5174`            | Runs API, web, and executor directly. Good for process-level work, but it does not recreate nginx's trusted-proxy wiring, so browser-driven `/api/*`, `/ui-auth`, and `/ws/latest-debugger` behavior is not representative there.                                                                                                                                                  |
+| Docker dev                 | `yarn studio-server:dev`                 | `http://localhost:8080` by default | Closest to production while still using bind mounts and a Vite dev server. The proxy port can be overridden with `RIVET_PORT`; diagnostic API/Postgres/MinIO host ports bind to `127.0.0.1` by default through `RIVET_LOCAL_BIND_HOST`.                                                                                                                                            |
+| Local Kubernetes rehearsal | `yarn studio-server:dev:kubernetes-test` | `http://127.0.0.1:8080` by default | Builds local images, deploys the real Helm chart against the local Kubernetes cluster, keeps `web=1`, keeps `backend=1`, scales `proxy` and `execution`, and port-forwards the proxy service for browser testing. This is the closest local rehearsal of the supported Kubernetes topology.                                                                                        |
+| Production-style Docker    | `yarn studio-server:prod`                | `http://localhost:8080` by default | Pulls and force-recreates the prebuilt `rivet2.0-studio-server/*` images. Use `yarn studio-server:prod:restart` to recreate from already-local images after `.env` changes, or `yarn studio-server:prod:custom` to build from the current monorepo commit. The proxy port can be overridden with `RIVET_PORT`, while the executor websocket stays pinned to internal port `21889`. |
 
 The API now depends on Node's built-in `node:sqlite`, so host-based API execution requires Node 24+.
 

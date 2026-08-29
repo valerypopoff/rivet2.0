@@ -180,6 +180,14 @@
   value: {{ $root.Values.workflowSchema.compatibility.minimumVersion | quote }}
 - name: RIVET_DEPLOYMENT_MANAGED_WORKFLOW_SCHEMA_MAX_VERSION
   value: {{ $root.Values.workflowSchema.compatibility.maximumVersion | quote }}
+- name: RIVET_MANAGED_MAINTENANCE_ENABLED
+  value: {{ if eq .profile "control" }}"true"{{ else }}"false"{{ end }}
+- name: RIVET_MANAGED_MAINTENANCE_INTERVAL_MS
+  value: {{ $root.Values.managedMaintenance.intervalMs | quote }}
+- name: RIVET_MANAGED_MAINTENANCE_LEASE_MS
+  value: {{ $root.Values.managedMaintenance.leaseMs | quote }}
+- name: RIVET_MANAGED_MAINTENANCE_BATCH_SIZE
+  value: {{ $root.Values.managedMaintenance.batchSize | quote }}
 - name: RIVET_DEPLOYMENT_HEALTH_REFRESH_SECONDS
   value: {{ $root.Values.lifecycle.health.refreshSeconds | quote }}
 - name: RIVET_DEPLOYMENT_HEALTH_CHECK_TIMEOUT_SECONDS

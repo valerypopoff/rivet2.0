@@ -298,7 +298,7 @@ The restore configuration supplies the manifest, distinct target, objective, aut
 Every `applyFile` is a regular, non-symlink file below the config directory. It must render exactly one `batch/v1` Job in the restore namespace, with `backoffLimit: 0`, `restartPolicy: Never`, `rivet.restore-drill/owned: "true"`, and the matching `rivet.restore-drill/role` of `restore`, `integrity`, or `cleanup`. The restore driver uses environment-owned workload identity/Vault/provider credentials to restore the named PostgreSQL point and object version set to the target. It writes one non-secret final log line:
 
 ```text
-RIVET_RESTORE_DRIVER_REPORT={"formatVersion":1,"completedAt":"...","database":{"recoveryPointId":"...","targetId":"...","managedWorkflowSchemaVersion":2},"objectStorage":{"recoveryPointId":"...","bucket":"...","prefix":"...","objectsRestored":42},"encryptionKeyIds":["0123456789abcdef"]}
+RIVET_RESTORE_DRIVER_REPORT={"formatVersion":1,"completedAt":"...","database":{"recoveryPointId":"...","targetId":"...","managedWorkflowSchemaVersion":3},"objectStorage":{"recoveryPointId":"...","bucket":"...","prefix":"...","objectsRestored":42},"encryptionKeyIds":["0123456789abcdef"]}
 ```
 
 The integrity driver must inspect database-owned object references against the restored object store, report missing references and orphan count, and run a negative fixture: remove one known synthetic referenced object, prove it is reported missing, restore it, then emit:
@@ -335,6 +335,13 @@ workflowSchema:
 
 Set `workflowSchema.migrationJob.enabled=false` only when an external delivery pipeline runs the exact candidate API image's schema command before Helm rolls API pods. API pods remain verify-only in that mode; disabling the Job without an external migration makes an install or upgrade fail closed.
 
+### Managed maintenance
+
+Migration 3 adds the managed-maintenance lease and durable object-deletion outbox. A normal release verifies exactly schema `3` and its migration Job also runs at that exact version. The migration is additive, so a guarded **forward rollback** renders the previous v2 image with compatibility `2..3`; that old image can verify the migrated database without trying to reverse DDL. Do not give a normal v3 release that widened window: a v3 pod must fail if its required v3 objects are absent.
+
+Only the singleton `control` API pod receives `RIVET_MANAGED_MAINTENANCE_ENABLED=true`. The scalable `execution` Deployment receives `false`, so published endpoint traffic cannot create one global retention scan per replica. Helm owns this boundary and the `managedMaintenance.intervalMs` (default `300000`), `leaseMs` (default `60000`), and `batchSize` (default `100`) values; `env` overrides for those variables are rejected. The worker uses a PostgreSQL fencing token, so a stale control pod cannot commit the recording-retention mutation after a successor owns the lease. Each pass selects candidates in PostgreSQL and removes at most `batchSize` recording rows while holding the fence, so a large backlog converges without loading its history into the API process or using one unbounded transaction. Recording/replay object keys are queued in the same transaction as removed metadata, then deleted only after a fresh database-reference recheck. Temporary blob-store failures retry with exponential backoff; still-referenced keys become `blocked` rather than being removed. A later deletion intent reopens a blocked key, because its final reference may have been removed after the earlier safety check.
+
+This timer owns managed endpoint-recording retention plus explicit recording/project deletion. Known blobs that a request uploaded but failed to attach to durable metadata also enter this outbox before any direct delete is attempted; if PostgreSQL cannot accept that intent, Rivet leaves the object untouched rather than risking a duplicate-key delete of a live artifact. It does not yet replace the runtime-library cleanup command, add an Evaluation retention policy, or safely sweep unknown object-store prefixes; a crash between upload and durable queueing still needs the planned age-gated reconciliation audit.
 Outside Kubernetes, the equivalent operator commands are:
 
 ```bash

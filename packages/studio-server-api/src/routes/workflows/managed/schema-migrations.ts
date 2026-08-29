@@ -5,7 +5,7 @@ import type { Pool, PoolClient, QueryResultRow } from 'pg';
 import { MANAGED_WORKFLOW_SCHEMA_SQL } from './schema.js';
 
 export const MANAGED_WORKFLOW_SCHEMA_MIGRATIONS_TABLE = 'managed_workflow_schema_migrations';
-export const CURRENT_MANAGED_WORKFLOW_SCHEMA_VERSION = 2;
+export const CURRENT_MANAGED_WORKFLOW_SCHEMA_VERSION = 3;
 // A serving release may verify an additive schema created by its immediate
 // successor only when the chart deliberately supplies that compatibility
 // window. Keep this constant explicit: raising it is the release-engineering
@@ -33,6 +33,34 @@ CREATE TABLE IF NOT EXISTS app_settings (
 `;
 
 const MIGRATION_LOCK_TIMEOUT = '30s';
+
+const MANAGED_MAINTENANCE_SCHEMA_SQL = `
+CREATE TABLE IF NOT EXISTS managed_maintenance_leases (
+  lease_name TEXT PRIMARY KEY CHECK (char_length(lease_name) > 0),
+  holder_id TEXT NOT NULL CHECK (char_length(holder_id) > 0),
+  fencing_token BIGINT NOT NULL CHECK (fencing_token > 0),
+  expires_at TIMESTAMPTZ NOT NULL,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS managed_object_deletion_outbox (
+  object_key TEXT PRIMARY KEY CHECK (char_length(object_key) > 0),
+  domain TEXT NOT NULL CHECK (char_length(domain) > 0),
+  status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'completed', 'blocked')),
+  enqueued_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  next_attempt_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  attempt_count INTEGER NOT NULL DEFAULT 0 CHECK (attempt_count >= 0),
+  claim_holder_id TEXT NULL,
+  claim_fencing_token BIGINT NULL,
+  claim_expires_at TIMESTAMPTZ NULL,
+  last_error TEXT NULL,
+  completed_at TIMESTAMPTZ NULL,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS managed_object_deletion_outbox_pending_idx
+  ON managed_object_deletion_outbox(status, next_attempt_at, enqueued_at, object_key);
+`;
 const MIGRATION_STATEMENT_TIMEOUT = '5min';
 const VERIFY_STATEMENT_TIMEOUT = '30s';
 const TRANSIENT_SCHEMA_ERROR_CODES = new Set(['40001', '40P01', '55P03']);
@@ -139,6 +167,12 @@ export const MANAGED_WORKFLOW_SCHEMA_MIGRATIONS: readonly ManagedWorkflowSchemaM
     sql: MANAGED_APP_SETTINGS_SCHEMA_SQL,
     checksum: '4b531b5c4404eef0ddef0b08ed3a85f31f88a203151a5452986565536a04fe80',
   },
+  {
+    version: 3,
+    name: 'managed-maintenance-outbox',
+    sql: MANAGED_MAINTENANCE_SCHEMA_SQL,
+    checksum: 'bd4cc69a896623c0e6fb56ab47ea087d1791137348afaabc3c31399ccf56bd3e',
+  },
 ];
 
 function assertMigrationDefinitions(): void {
@@ -169,6 +203,8 @@ assertMigrationDefinitions();
 
 export const MANAGED_WORKFLOW_SCHEMA_REQUIRED_TABLES = [
   'app_settings',
+  'managed_maintenance_leases',
+  'managed_object_deletion_outbox',
   'workflow_folders',
   'workflows',
   'workflow_revisions',
@@ -188,6 +224,23 @@ export const MANAGED_WORKFLOW_SCHEMA_REQUIRED_TABLES = [
 ] as const;
 
 export const MANAGED_WORKFLOW_SCHEMA_REQUIRED_COLUMNS = [
+  ['managed_maintenance_leases', 'lease_name', 'text', 'NO'],
+  ['managed_maintenance_leases', 'holder_id', 'text', 'NO'],
+  ['managed_maintenance_leases', 'fencing_token', 'int8', 'NO'],
+  ['managed_maintenance_leases', 'expires_at', 'timestamptz', 'NO'],
+  ['managed_maintenance_leases', 'updated_at', 'timestamptz', 'NO'],
+  ['managed_object_deletion_outbox', 'object_key', 'text', 'NO'],
+  ['managed_object_deletion_outbox', 'domain', 'text', 'NO'],
+  ['managed_object_deletion_outbox', 'status', 'text', 'NO'],
+  ['managed_object_deletion_outbox', 'enqueued_at', 'timestamptz', 'NO'],
+  ['managed_object_deletion_outbox', 'next_attempt_at', 'timestamptz', 'NO'],
+  ['managed_object_deletion_outbox', 'attempt_count', 'int4', 'NO'],
+  ['managed_object_deletion_outbox', 'claim_holder_id', 'text', 'YES'],
+  ['managed_object_deletion_outbox', 'claim_fencing_token', 'int8', 'YES'],
+  ['managed_object_deletion_outbox', 'claim_expires_at', 'timestamptz', 'YES'],
+  ['managed_object_deletion_outbox', 'last_error', 'text', 'YES'],
+  ['managed_object_deletion_outbox', 'completed_at', 'timestamptz', 'YES'],
+  ['managed_object_deletion_outbox', 'updated_at', 'timestamptz', 'NO'],
   ['app_settings', 'setting_key', 'text', 'NO'],
   ['app_settings', 'revision', 'int8', 'NO'],
   ['app_settings', 'schema_version', 'int4', 'NO'],
@@ -325,6 +378,12 @@ export const MANAGED_WORKFLOW_SCHEMA_REQUIRED_COLUMNS = [
 ] as const;
 
 export const MANAGED_WORKFLOW_SCHEMA_REQUIRED_COLUMN_DEFAULTS = [
+  ['managed_maintenance_leases', 'updated_at', 'now()'],
+  ['managed_object_deletion_outbox', 'status', "'pending'::text"],
+  ['managed_object_deletion_outbox', 'enqueued_at', 'now()'],
+  ['managed_object_deletion_outbox', 'next_attempt_at', 'now()'],
+  ['managed_object_deletion_outbox', 'attempt_count', '0'],
+  ['managed_object_deletion_outbox', 'updated_at', 'now()'],
   ['app_settings', 'updated_at', 'now()'],
   ['evaluation_dataset_snapshots', 'created_at', 'now()'],
   ['evaluation_library', 'singleton_key', 'true'],
@@ -363,6 +422,13 @@ export const MANAGED_WORKFLOW_SCHEMA_REQUIRED_COLUMN_DEFAULTS = [
 ] as const;
 
 export const MANAGED_WORKFLOW_SCHEMA_REQUIRED_INDEXES = [
+  [
+    'managed_object_deletion_outbox',
+    'managed_object_deletion_outbox_pending_idx',
+    ['status', 'next_attempt_at', 'enqueued_at', 'object_key'],
+    null,
+    [0, 0, 0, 0],
+  ],
   ['workflows', 'workflows_folder_relative_path_idx', ['folder_relative_path'], null, [0]],
   ['workflows', 'workflows_published_endpoint_name_idx', ['published_endpoint_name'], null, [0]],
   ['workflow_revisions', 'workflow_revisions_workflow_id_idx', ['workflow_id'], null, [0]],
@@ -417,6 +483,19 @@ export const MANAGED_WORKFLOW_SCHEMA_REQUIRED_INDEXES = [
 ] as const;
 
 export const MANAGED_WORKFLOW_SCHEMA_REQUIRED_CONSTRAINTS = [
+  ['managed_maintenance_leases', 'p', 'PRIMARY KEY (lease_name)'],
+  ['managed_maintenance_leases', 'c', 'CHECK ((char_length(lease_name) > 0))'],
+  ['managed_maintenance_leases', 'c', 'CHECK ((char_length(holder_id) > 0))'],
+  ['managed_maintenance_leases', 'c', 'CHECK ((fencing_token > 0))'],
+  ['managed_object_deletion_outbox', 'p', 'PRIMARY KEY (object_key)'],
+  ['managed_object_deletion_outbox', 'c', 'CHECK ((char_length(object_key) > 0))'],
+  ['managed_object_deletion_outbox', 'c', 'CHECK ((char_length(domain) > 0))'],
+  ['managed_object_deletion_outbox', 'c', 'CHECK ((attempt_count >= 0))'],
+  [
+    'managed_object_deletion_outbox',
+    'c',
+    "CHECK ((status = ANY (ARRAY['pending'::text, 'completed'::text, 'blocked'::text])))",
+  ],
   ['app_settings', 'p', 'PRIMARY KEY (setting_key)'],
   ['app_settings', 'c', 'CHECK ((char_length(setting_key) > 0))'],
   ['app_settings', 'c', 'CHECK ((revision > 0))'],

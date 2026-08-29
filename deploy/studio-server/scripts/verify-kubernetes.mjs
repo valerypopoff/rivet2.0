@@ -105,7 +105,7 @@ async function verifyProdRender(helmBin) {
     '--set',
     `release.production.chart.contentDigest=sha256:${'f'.repeat(64)}`,
     '--set',
-    'release.production.database.managedWorkflowSchemaVersion=2',
+    'release.production.database.managedWorkflowSchemaVersion=3',
   ];
 
   await spawnProgram(helmBin, [

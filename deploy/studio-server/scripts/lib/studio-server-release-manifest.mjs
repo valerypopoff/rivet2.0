@@ -324,8 +324,11 @@ export function createProductionHelmValues(manifest) {
     manifest: release,
     chart: release.chart,
     images: release.images,
+    // A normal release must verify exactly the candidate schema. The declared
+    // rollback floor is consumed only by createForwardRollbackHelmValues(),
+    // where the previous image verifies the already-migrated schema.
     compatibility: {
-      minimumVersion: schema.minimumRollbackCompatibleVersion,
+      minimumVersion: schema.version,
       maximumVersion: schema.version,
     },
     migrationJobEnabled: true,

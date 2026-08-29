@@ -4,10 +4,7 @@ import { checkPostgresPoolHealth } from '../../../managed-health.js';
 import { acquireManagedPostgresPool } from '../../../managed-postgres-pool.js';
 import type { RuntimeHealthCheckContext } from '../../../runtime-health.js';
 import type { ManagedWorkflowStorageConfig } from '../storage-config.js';
-import {
-  S3ManagedWorkflowBlobStore,
-  type ManagedWorkflowBlobStore,
-} from './blob-store.js';
+import { S3ManagedWorkflowBlobStore, type ManagedWorkflowBlobStore } from './blob-store.js';
 import {
   createManagedWorkflowQueries,
   getManagedDbConnectionConfig,
@@ -21,6 +18,7 @@ import {
 import { createManagedWorkflowEndpointSync } from './endpoint-sync.js';
 import { ManagedWorkflowExecutionCache } from './execution-cache.js';
 import { ManagedWorkflowExecutionInvalidationController } from './execution-invalidation.js';
+import { createManagedWorkflowMaintenance } from './maintenance.js';
 import * as mappers from './mappers.js';
 import { createManagedWorkflowRevisionFactory } from './revision-factory.js';
 import {
@@ -47,6 +45,7 @@ export type ManagedWorkflowContext = {
   queries: ManagedWorkflowQueries;
   revisions: ReturnType<typeof createManagedWorkflowRevisionFactory>;
   endpointSync: ReturnType<typeof createManagedWorkflowEndpointSync>;
+  maintenance: ReturnType<typeof createManagedWorkflowMaintenance>;
   mappers: typeof mappers;
   initialize(): Promise<void>;
   checkHealth(context?: RuntimeHealthCheckContext): Promise<void>;
@@ -63,8 +62,13 @@ export function createManagedWorkflowContext(
   const resolvedBlobStore = blobStore ?? new S3ManagedWorkflowBlobStore(config);
   const executionCache = new ManagedWorkflowExecutionCache();
   const queries = createManagedWorkflowQueries(pool);
+  const maintenance = createManagedWorkflowMaintenance({
+    pool,
+    blobStore: resolvedBlobStore,
+  });
   const revisions = createManagedWorkflowRevisionFactory({
     blobStore: resolvedBlobStore,
+    queueObjectDeletions: (domain, keys) => maintenance.queueObjectDeletions(domain, keys),
   });
   const endpointSync = createManagedWorkflowEndpointSync();
   let schemaReadyPromise: Promise<void> | null = null;
@@ -96,9 +100,7 @@ export function createManagedWorkflowContext(
         // after the dedicated migration Job has completed.
         const schemaMode = getManagedWorkflowSchemaMode();
         await withManagedDbRetry(`managed schema ${schemaMode}`, () =>
-          schemaMode === 'migrate'
-            ? migrateManagedWorkflowSchema(pool)
-            : verifyManagedWorkflowSchema(pool),
+          schemaMode === 'migrate' ? migrateManagedWorkflowSchema(pool) : verifyManagedWorkflowSchema(pool),
         );
       })().catch((error) => {
         schemaReadyPromise = null;
@@ -108,14 +110,15 @@ export function createManagedWorkflowContext(
 
     await schemaReadyPromise;
     await executionInvalidationController.initialize();
+    // Starting the timer is intentionally separate from running a pass. A
+    // registered domain task may use withTransaction(), which itself waits for
+    // initialize(); starting it synchronously here would create a cycle.
+    await maintenance.initialize();
   };
 
   const checkHealth = async (context?: RuntimeHealthCheckContext): Promise<void> => {
     await initialize();
-    await Promise.all([
-      checkPostgresPoolHealth(pool, context),
-      resolvedBlobStore.checkHealth?.(context),
-    ]);
+    await Promise.all([checkPostgresPoolHealth(pool, context), resolvedBlobStore.checkHealth?.(context)]);
   };
 
   const dispose = async (): Promise<void> => {
@@ -125,6 +128,7 @@ export function createManagedWorkflowContext(
 
     disposed = true;
     disposePromise = (async () => {
+      await maintenance.dispose();
       // Stop LISTEN/reconnect activity before clearing caches or closing the pool.
       await executionInvalidationController.dispose();
       // Clear revision materializations before pool shutdown so test teardown does
@@ -160,6 +164,7 @@ export function createManagedWorkflowContext(
     queries,
     revisions,
     endpointSync,
+    maintenance,
     mappers,
     initialize,
     checkHealth,

@@ -388,8 +388,8 @@ test('managed schema mode defaults to migrate and accepts only migrate or verify
 
 test('managed schema compatibility windows are explicit and reject invalid bounds', () => {
   assert.deepEqual(getManagedWorkflowSchemaCompatibilityWindow({}), {
-    minimumVersion: 2,
-    maximumVersion: 2,
+    minimumVersion: 3,
+    maximumVersion: 3,
   });
   assert.deepEqual(
     getManagedWorkflowSchemaCompatibilityWindow({
@@ -413,10 +413,10 @@ test('managed schema compatibility windows are explicit and reject invalid bound
 });
 
 test('managed schema migration definitions and compatibility probes remain coherent', () => {
-  assert.equal(CURRENT_MANAGED_WORKFLOW_SCHEMA_VERSION, 2);
+  assert.equal(CURRENT_MANAGED_WORKFLOW_SCHEMA_VERSION, 3);
   assert.deepEqual(
     MANAGED_WORKFLOW_SCHEMA_MIGRATIONS.map(({ version }) => version),
-    [1, 2],
+    [1, 2, 3],
   );
   assert.equal(
     MANAGED_WORKFLOW_SCHEMA_MIGRATIONS[0]?.checksum,
@@ -426,13 +426,17 @@ test('managed schema migration definitions and compatibility probes remain coher
     MANAGED_WORKFLOW_SCHEMA_MIGRATIONS[1]?.checksum,
     '4b531b5c4404eef0ddef0b08ed3a85f31f88a203151a5452986565536a04fe80',
   );
+  assert.equal(
+    MANAGED_WORKFLOW_SCHEMA_MIGRATIONS[2]?.checksum,
+    'bd4cc69a896623c0e6fb56ab47ea087d1791137348afaabc3c31399ccf56bd3e',
+  );
   assert.ok(MANAGED_WORKFLOW_SCHEMA_REQUIRED_TABLES.length > 10);
-  assert.equal(MANAGED_WORKFLOW_SCHEMA_REQUIRED_COLUMNS.length, 134);
+  assert.equal(MANAGED_WORKFLOW_SCHEMA_REQUIRED_COLUMNS.length, 151);
   const requiredColumnKeys = MANAGED_WORKFLOW_SCHEMA_REQUIRED_COLUMNS.map(
     ([tableName, columnName]) => `${tableName}.${columnName}`,
   );
   assert.equal(new Set(requiredColumnKeys).size, requiredColumnKeys.length);
-  assert.equal(MANAGED_WORKFLOW_SCHEMA_REQUIRED_COLUMN_DEFAULTS.length, 35);
+  assert.equal(MANAGED_WORKFLOW_SCHEMA_REQUIRED_COLUMN_DEFAULTS.length, 41);
   const requiredDefaultKeys = MANAGED_WORKFLOW_SCHEMA_REQUIRED_COLUMN_DEFAULTS.map(
     ([tableName, columnName]) => `${tableName}.${columnName}`,
   );
@@ -442,7 +446,7 @@ test('managed schema migration definitions and compatibility probes remain coher
     new Set(MANAGED_WORKFLOW_SCHEMA_REQUIRED_COLUMNS.map(([tableName]) => tableName)),
     new Set([...MANAGED_WORKFLOW_SCHEMA_REQUIRED_TABLES, 'managed_workflow_schema_migrations']),
   );
-  assert.equal(MANAGED_WORKFLOW_SCHEMA_REQUIRED_INDEXES.length, 20);
+  assert.equal(MANAGED_WORKFLOW_SCHEMA_REQUIRED_INDEXES.length, 21);
   const requiredIndexNames = MANAGED_WORKFLOW_SCHEMA_REQUIRED_INDEXES.map(([, indexName]) => indexName);
   assert.equal(new Set(requiredIndexNames).size, requiredIndexNames.length);
   assert.ok(MANAGED_WORKFLOW_SCHEMA_REQUIRED_INDEXES.every(([, , keyExpressions]) => keyExpressions.length > 0));
@@ -451,7 +455,7 @@ test('managed schema migration definitions and compatibility probes remain coher
       ([, , keyExpressions, , keyOptions]) => keyOptions.length === keyExpressions.length,
     ),
   );
-  assert.equal(MANAGED_WORKFLOW_SCHEMA_REQUIRED_CONSTRAINTS.length, 44);
+  assert.equal(MANAGED_WORKFLOW_SCHEMA_REQUIRED_CONSTRAINTS.length, 53);
   const requiredConstraintSignatures = MANAGED_WORKFLOW_SCHEMA_REQUIRED_CONSTRAINTS.map((constraint) =>
     JSON.stringify(constraint),
   );
@@ -465,11 +469,11 @@ test('concurrent schema migrators serialize and apply each migration once', asyn
     Array.from({ length: 4 }, () => migrateManagedWorkflowSchema(createPool(database), { logger: quietLogger })),
   );
 
-  assert.equal(database.applyCount, 2);
-  assert.deepEqual([...database.migrations.keys()], [1, 2]);
-  assert.ok(results.every(({ currentVersion }) => currentVersion === 2));
+  assert.equal(database.applyCount, 3);
+  assert.deepEqual([...database.migrations.keys()], [1, 2, 3]);
+  assert.ok(results.every(({ currentVersion }) => currentVersion === 3));
   assert.equal(results.filter(({ appliedVersions }) => appliedVersions.length === 0).length, 3);
-  assert.equal(results.filter(({ appliedVersions }) => appliedVersions.join(',') === '1,2').length, 1);
+  assert.equal(results.filter(({ appliedVersions }) => appliedVersions.join(',') === '1,2,3').length, 1);
   assert.equal(database.queryLog.filter((sql) => sql.includes('pg_advisory_xact_lock(')).length, 4);
 });
 
@@ -477,17 +481,17 @@ test('migration baselines an existing unversioned schema without losing compatib
   const database = createDatabase({ schemaReady: true });
   const result = await migrateManagedWorkflowSchema(createPool(database), { logger: quietLogger });
 
-  assert.deepEqual(result, { currentVersion: 2, appliedVersions: [1, 2] });
+  assert.deepEqual(result, { currentVersion: 3, appliedVersions: [1, 2, 3] });
   assert.equal(database.migrationTableExists, true);
   assert.equal(database.schemaReady, true);
-  assert.equal(database.migrations.get(2)?.checksum, currentMigration().checksum);
+  assert.equal(database.migrations.get(3)?.checksum, currentMigration().checksum);
 });
 
 test('verify mode takes a shared lock and never applies schema SQL', async () => {
   const database = createCurrentDatabase();
   const result = await verifyManagedWorkflowSchema(createPool(database), { logger: quietLogger });
 
-  assert.deepEqual(result, { currentVersion: 2, appliedVersions: [] });
+  assert.deepEqual(result, { currentVersion: 3, appliedVersions: [] });
   assert.equal(database.applyCount, 0);
   assert.ok(database.queryLog.some((sql) => sql.includes('pg_advisory_xact_lock_shared')));
   assert.ok(
@@ -509,7 +513,7 @@ test('verify mode rejects a database that has not been migrated', async () => {
 test('schema compatibility rejects future and modified migration histories', async (t) => {
   await t.test('future version', async () => {
     const database = createCurrentDatabase();
-    database.migrations.set(3, { version: 3, name: 'future', checksum: 'f'.repeat(64) });
+    database.migrations.set(4, { version: 4, name: 'future', checksum: 'f'.repeat(64) });
     await assert.rejects(
       verifyManagedWorkflowSchema(createPool(database), { logger: quietLogger }),
       /newer than this server supports/,
@@ -531,7 +535,7 @@ test('schema compatibility rejects future and modified migration histories', asy
 
 test('verify mode accepts only an explicitly declared additive successor schema', async () => {
   const database = createCurrentDatabase();
-  database.migrations.set(3, { version: 3, name: 'successor', checksum: 'f'.repeat(64) });
+  database.migrations.set(4, { version: 4, name: 'successor', checksum: 'f'.repeat(64) });
 
   await assert.rejects(
     verifyManagedWorkflowSchema(createPool(database), { logger: quietLogger }),
@@ -540,9 +544,9 @@ test('verify mode accepts only an explicitly declared additive successor schema'
 
   const result = await verifyManagedWorkflowSchema(createPool(database), {
     logger: quietLogger,
-    compatibilityWindow: { minimumVersion: 2, maximumVersion: 3 },
+    compatibilityWindow: { minimumVersion: 3, maximumVersion: 4 },
   });
-  assert.deepEqual(result, { currentVersion: 3, appliedVersions: [] });
+  assert.deepEqual(result, { currentVersion: 4, appliedVersions: [] });
   assert.equal(database.applyCount, 0);
 });
 
@@ -605,7 +609,7 @@ test('schema compatibility rejects a ledger marked current when required objects
     database.invalidIndexTable = MANAGED_WORKFLOW_SCHEMA_REQUIRED_INDEXES[0]?.[1] ?? null;
     await assert.rejects(
       verifyManagedWorkflowSchema(createPool(database), { logger: quietLogger }),
-      /"tableName":"workflows".*"tableName":"wrong_table"/,
+      /"tableName":"[^"]+".*"tableName":"wrong_table"/,
     );
   });
 
@@ -614,7 +618,7 @@ test('schema compatibility rejects a ledger marked current when required objects
     database.invalidIndexDefinition = MANAGED_WORKFLOW_SCHEMA_REQUIRED_INDEXES[0]?.[1] ?? null;
     await assert.rejects(
       verifyManagedWorkflowSchema(createPool(database), { logger: quietLogger }),
-      /"keyExpressions":\["folder_relative_path"\].*"keyExpressions":\["wrong_column"\]/,
+      /"keyExpressions":\[[^\]]+\].*"keyExpressions":\["wrong_column"\]/,
     );
   });
 
@@ -698,8 +702,8 @@ test('failed migration rolls back its ledger and can be retried cleanly', async 
   assert.equal(database.migrations.size, 0);
 
   const result = await migrateManagedWorkflowSchema(createPool(database), { logger: quietLogger });
-  assert.deepEqual(result, { currentVersion: 2, appliedVersions: [1, 2] });
-  assert.equal(database.applyCount, 3);
+  assert.deepEqual(result, { currentVersion: 3, appliedVersions: [1, 2, 3] });
+  assert.equal(database.applyCount, 4);
 });
 
 test('failed rollback preserves the migration error and destroys the uncertain client', async () => {
@@ -736,7 +740,7 @@ test('migration retries only a transient PostgreSQL lock failure in a fresh tran
     },
   });
 
-  assert.deepEqual(result, { currentVersion: 2, appliedVersions: [1, 2] });
+  assert.deepEqual(result, { currentVersion: 3, appliedVersions: [1, 2, 3] });
   assert.equal(database.queryLog.filter((sql) => sql === 'BEGIN').length, 2);
   assert.equal(database.queryLog.filter((sql) => sql === 'ROLLBACK').length, 1);
   assert.match(warnings[0] ?? '', /transient PostgreSQL error 55P03/);
@@ -756,7 +760,7 @@ test('logger failures cannot change committed, failed, or retried migration outc
     const result = await migrateManagedWorkflowSchema(createPool(createDatabase()), {
       logger: throwingLogger,
     });
-    assert.deepEqual(result, { currentVersion: 2, appliedVersions: [1, 2] });
+    assert.deepEqual(result, { currentVersion: 3, appliedVersions: [1, 2, 3] });
   });
 
   await t.test('failed migration and rollback', async () => {
@@ -773,6 +777,6 @@ test('logger failures cannot change committed, failed, or retried migration outc
     const result = await migrateManagedWorkflowSchema(createPool(database), {
       logger: throwingLogger,
     });
-    assert.deepEqual(result, { currentVersion: 2, appliedVersions: [1, 2] });
+    assert.deepEqual(result, { currentVersion: 3, appliedVersions: [1, 2, 3] });
   });
 });
