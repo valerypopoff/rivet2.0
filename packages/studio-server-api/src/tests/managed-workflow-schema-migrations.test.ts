@@ -5,6 +5,7 @@ import type { Pool } from 'pg';
 
 import {
   CURRENT_MANAGED_WORKFLOW_SCHEMA_VERSION,
+  getManagedWorkflowSchemaCompatibilityWindow,
   getManagedWorkflowSchemaMode,
   MANAGED_WORKFLOW_SCHEMA_MIGRATIONS,
   MANAGED_WORKFLOW_SCHEMA_REQUIRED_COLUMN_DEFAULTS,
@@ -97,14 +98,16 @@ function createCurrentDatabase(): FakeSchemaDatabase {
   return createDatabase({
     migrationTableExists: true,
     schemaReady: true,
-    migrations: new Map(MANAGED_WORKFLOW_SCHEMA_MIGRATIONS.map((migration) => [
-      migration.version,
-      {
-        version: migration.version,
-        name: migration.name,
-        checksum: migration.checksum,
-      },
-    ])),
+    migrations: new Map(
+      MANAGED_WORKFLOW_SCHEMA_MIGRATIONS.map((migration) => [
+        migration.version,
+        {
+          version: migration.version,
+          name: migration.name,
+          checksum: migration.checksum,
+        },
+      ]),
+    ),
   });
 }
 
@@ -191,9 +194,7 @@ function createPool(database: FakeSchemaDatabase): Pick<Pool, 'connect'> {
           }
 
           if (sql.startsWith('SELECT version, name, checksum')) {
-            return queryResult(
-              [...database.migrations.values()].sort((left, right) => left.version - right.version),
-            );
+            return queryResult([...database.migrations.values()].sort((left, right) => left.version - right.version));
           }
 
           if (MANAGED_WORKFLOW_SCHEMA_MIGRATIONS.some((migration) => migration.sql.trim() === sql)) {
@@ -234,31 +235,29 @@ function createPool(database: FakeSchemaDatabase): Pick<Pool, 'connect'> {
           if (sql.includes('FROM information_schema.columns')) {
             const requestedTables = new Set(params[0] as string[]);
             const expectedDefaults = new Map(
-              MANAGED_WORKFLOW_SCHEMA_REQUIRED_COLUMN_DEFAULTS.map(
-                ([tableName, columnName, defaultValue]) => [
-                  `${tableName}.${columnName}`,
-                  defaultValue,
-                ],
-              ),
+              MANAGED_WORKFLOW_SCHEMA_REQUIRED_COLUMN_DEFAULTS.map(([tableName, columnName, defaultValue]) => [
+                `${tableName}.${columnName}`,
+                defaultValue,
+              ]),
             );
             return queryResult(
               database.schemaReady
-                ? MANAGED_WORKFLOW_SCHEMA_REQUIRED_COLUMNS
-                    .filter(([tableName, columnName]) =>
-                      requestedTables.has(tableName) &&
-                      database.missingObject !== `column:${tableName}.${columnName}`)
-                    .map(([table_name, column_name, udt_name, is_nullable]) => {
-                      const qualifiedName = `${table_name}.${column_name}`;
-                      return {
-                        table_name,
-                        column_name,
-                        udt_name: database.invalidColumnShape === qualifiedName ? 'bytea' : udt_name,
-                        is_nullable,
-                        column_default: database.invalidColumnDefault === qualifiedName
+                ? MANAGED_WORKFLOW_SCHEMA_REQUIRED_COLUMNS.filter(
+                    ([tableName, columnName]) =>
+                      requestedTables.has(tableName) && database.missingObject !== `column:${tableName}.${columnName}`,
+                  ).map(([table_name, column_name, udt_name, is_nullable]) => {
+                    const qualifiedName = `${table_name}.${column_name}`;
+                    return {
+                      table_name,
+                      column_name,
+                      udt_name: database.invalidColumnShape === qualifiedName ? 'bytea' : udt_name,
+                      is_nullable,
+                      column_default:
+                        database.invalidColumnDefault === qualifiedName
                           ? null
-                          : (expectedDefaults.get(qualifiedName) ?? null),
-                      };
-                    })
+                          : expectedDefaults.get(qualifiedName) ?? null,
+                    };
+                  })
                 : [],
             );
           }
@@ -289,19 +288,17 @@ function createPool(database: FakeSchemaDatabase): Pick<Pool, 'connect'> {
                       const expected = expectedIndexes.get(name);
                       return {
                         name,
-                        table_name: database.invalidIndexTable === name
-                          ? 'wrong_table'
-                          : expected?.tableName,
+                        table_name: database.invalidIndexTable === name ? 'wrong_table' : expected?.tableName,
                         method: 'btree',
                         is_unique: false,
                         is_valid: database.invalidIndexState !== name,
                         is_ready: database.invalidIndexState !== name,
-                        key_expressions: database.invalidIndexDefinition === name
-                          ? ['wrong_column']
-                          : expected?.keyExpressions,
-                        key_options: database.invalidIndexOptions === name
-                          ? expected?.keyOptions.map(() => 0)
-                          : expected?.keyOptions,
+                        key_expressions:
+                          database.invalidIndexDefinition === name ? ['wrong_column'] : expected?.keyExpressions,
+                        key_options:
+                          database.invalidIndexOptions === name
+                            ? expected?.keyOptions.map(() => 0)
+                            : expected?.keyOptions,
                         predicate: expected?.predicate,
                       };
                     })
@@ -313,25 +310,21 @@ function createPool(database: FakeSchemaDatabase): Pick<Pool, 'connect'> {
             const requestedTables = new Set(params[0] as string[]);
             return queryResult(
               database.schemaReady
-                ? MANAGED_WORKFLOW_SCHEMA_REQUIRED_CONSTRAINTS
-                    .filter(([tableName, type, definition]) =>
+                ? MANAGED_WORKFLOW_SCHEMA_REQUIRED_CONSTRAINTS.filter(
+                    ([tableName, type, definition]) =>
                       requestedTables.has(tableName) &&
-                      database.missingObject !==
-                        `constraint:${tableName}/${type}/${definition}`)
-                    .map(([table_name, type, definition]) => ({
-                      table_name,
-                      type,
-                      definition: database.invalidConstraint ===
-                        `${table_name}/${type}/${definition}`
+                      database.missingObject !== `constraint:${tableName}/${type}/${definition}`,
+                  ).map(([table_name, type, definition]) => ({
+                    table_name,
+                    type,
+                    definition:
+                      database.invalidConstraint === `${table_name}/${type}/${definition}`
                         ? 'PRIMARY KEY (wrong_column)'
                         : definition,
-                      is_validated: database.invalidConstraintValidation !==
-                        `${table_name}/${type}/${definition}`,
-                      backing_index_valid: database.invalidConstraintIndex !==
-                        `${table_name}/${type}/${definition}`,
-                      backing_index_ready: database.invalidConstraintIndex !==
-                        `${table_name}/${type}/${definition}`,
-                    }))
+                    is_validated: database.invalidConstraintValidation !== `${table_name}/${type}/${definition}`,
+                    backing_index_valid: database.invalidConstraintIndex !== `${table_name}/${type}/${definition}`,
+                    backing_index_ready: database.invalidConstraintIndex !== `${table_name}/${type}/${definition}`,
+                  }))
                 : [],
             );
           }
@@ -344,18 +337,20 @@ function createPool(database: FakeSchemaDatabase): Pick<Pool, 'connect'> {
             ]);
             return queryResult(
               database.schemaReady && database.missingObject !== 'function'
-                ? [{
-                    source_checksum: database.invalidFunctionBody
-                      ? '0'.repeat(32)
-                      : MANAGED_WORKFLOW_SCHEMA_REQUIRED_FUNCTION.sourceChecksum,
-                    language: MANAGED_WORKFLOW_SCHEMA_REQUIRED_FUNCTION.language,
-                    volatility: MANAGED_WORKFLOW_SCHEMA_REQUIRED_FUNCTION.volatility,
-                    security_definer: MANAGED_WORKFLOW_SCHEMA_REQUIRED_FUNCTION.securityDefiner,
-                    can_execute: database.invalidFunctionExecute
-                      ? false
-                      : MANAGED_WORKFLOW_SCHEMA_REQUIRED_FUNCTION.canExecute,
-                    result_type: MANAGED_WORKFLOW_SCHEMA_REQUIRED_FUNCTION.resultType,
-                  }]
+                ? [
+                    {
+                      source_checksum: database.invalidFunctionBody
+                        ? '0'.repeat(32)
+                        : MANAGED_WORKFLOW_SCHEMA_REQUIRED_FUNCTION.sourceChecksum,
+                      language: MANAGED_WORKFLOW_SCHEMA_REQUIRED_FUNCTION.language,
+                      volatility: MANAGED_WORKFLOW_SCHEMA_REQUIRED_FUNCTION.volatility,
+                      security_definer: MANAGED_WORKFLOW_SCHEMA_REQUIRED_FUNCTION.securityDefiner,
+                      can_execute: database.invalidFunctionExecute
+                        ? false
+                        : MANAGED_WORKFLOW_SCHEMA_REQUIRED_FUNCTION.canExecute,
+                      result_type: MANAGED_WORKFLOW_SCHEMA_REQUIRED_FUNCTION.resultType,
+                    },
+                  ]
                 : [],
             );
           }
@@ -391,9 +386,38 @@ test('managed schema mode defaults to migrate and accepts only migrate or verify
   );
 });
 
+test('managed schema compatibility windows are explicit and reject invalid bounds', () => {
+  assert.deepEqual(getManagedWorkflowSchemaCompatibilityWindow({}), {
+    minimumVersion: 2,
+    maximumVersion: 2,
+  });
+  assert.deepEqual(
+    getManagedWorkflowSchemaCompatibilityWindow({
+      RIVET_MANAGED_WORKFLOW_SCHEMA_MIN_VERSION: '2',
+      RIVET_MANAGED_WORKFLOW_SCHEMA_MAX_VERSION: '3',
+    }),
+    { minimumVersion: 2, maximumVersion: 3 },
+  );
+  assert.throws(
+    () => getManagedWorkflowSchemaCompatibilityWindow({ RIVET_MANAGED_WORKFLOW_SCHEMA_MIN_VERSION: 'zero' }),
+    /Expected a positive integer schema version/,
+  );
+  assert.throws(
+    () =>
+      getManagedWorkflowSchemaCompatibilityWindow({
+        RIVET_MANAGED_WORKFLOW_SCHEMA_MIN_VERSION: '3',
+        RIVET_MANAGED_WORKFLOW_SCHEMA_MAX_VERSION: '2',
+      }),
+    /minimum version cannot exceed maximum version/,
+  );
+});
+
 test('managed schema migration definitions and compatibility probes remain coherent', () => {
   assert.equal(CURRENT_MANAGED_WORKFLOW_SCHEMA_VERSION, 2);
-  assert.deepEqual(MANAGED_WORKFLOW_SCHEMA_MIGRATIONS.map(({ version }) => version), [1, 2]);
+  assert.deepEqual(
+    MANAGED_WORKFLOW_SCHEMA_MIGRATIONS.map(({ version }) => version),
+    [1, 2],
+  );
   assert.equal(
     MANAGED_WORKFLOW_SCHEMA_MIGRATIONS[0]?.checksum,
     '692f720796964d6ae4f25bcbfc7b1f11616fcc1012e7bcf506dec9428c9ce3b6',
@@ -416,49 +440,37 @@ test('managed schema migration definitions and compatibility probes remain coher
   assert.ok(requiredDefaultKeys.every((key) => requiredColumnKeys.includes(key)));
   assert.deepEqual(
     new Set(MANAGED_WORKFLOW_SCHEMA_REQUIRED_COLUMNS.map(([tableName]) => tableName)),
-    new Set([
-      ...MANAGED_WORKFLOW_SCHEMA_REQUIRED_TABLES,
-      'managed_workflow_schema_migrations',
-    ]),
+    new Set([...MANAGED_WORKFLOW_SCHEMA_REQUIRED_TABLES, 'managed_workflow_schema_migrations']),
   );
   assert.equal(MANAGED_WORKFLOW_SCHEMA_REQUIRED_INDEXES.length, 20);
   const requiredIndexNames = MANAGED_WORKFLOW_SCHEMA_REQUIRED_INDEXES.map(([, indexName]) => indexName);
   assert.equal(new Set(requiredIndexNames).size, requiredIndexNames.length);
-  assert.ok(MANAGED_WORKFLOW_SCHEMA_REQUIRED_INDEXES.every(([, , keyExpressions]) =>
-    keyExpressions.length > 0));
-  assert.ok(MANAGED_WORKFLOW_SCHEMA_REQUIRED_INDEXES.every(
-    ([, , keyExpressions, , keyOptions]) => keyOptions.length === keyExpressions.length,
-  ));
+  assert.ok(MANAGED_WORKFLOW_SCHEMA_REQUIRED_INDEXES.every(([, , keyExpressions]) => keyExpressions.length > 0));
+  assert.ok(
+    MANAGED_WORKFLOW_SCHEMA_REQUIRED_INDEXES.every(
+      ([, , keyExpressions, , keyOptions]) => keyOptions.length === keyExpressions.length,
+    ),
+  );
   assert.equal(MANAGED_WORKFLOW_SCHEMA_REQUIRED_CONSTRAINTS.length, 44);
-  const requiredConstraintSignatures = MANAGED_WORKFLOW_SCHEMA_REQUIRED_CONSTRAINTS.map(
-    (constraint) => JSON.stringify(constraint),
+  const requiredConstraintSignatures = MANAGED_WORKFLOW_SCHEMA_REQUIRED_CONSTRAINTS.map((constraint) =>
+    JSON.stringify(constraint),
   );
-  assert.equal(
-    new Set(requiredConstraintSignatures).size,
-    requiredConstraintSignatures.length,
-  );
+  assert.equal(new Set(requiredConstraintSignatures).size, requiredConstraintSignatures.length);
   assert.match(MANAGED_WORKFLOW_SCHEMA_REQUIRED_FUNCTION.sourceChecksum, /^[a-f0-9]{32}$/);
 });
 
 test('concurrent schema migrators serialize and apply each migration once', async () => {
   const database = createDatabase();
   const results = await Promise.all(
-    Array.from({ length: 4 }, () =>
-      migrateManagedWorkflowSchema(createPool(database), { logger: quietLogger })),
+    Array.from({ length: 4 }, () => migrateManagedWorkflowSchema(createPool(database), { logger: quietLogger })),
   );
 
   assert.equal(database.applyCount, 2);
   assert.deepEqual([...database.migrations.keys()], [1, 2]);
   assert.ok(results.every(({ currentVersion }) => currentVersion === 2));
   assert.equal(results.filter(({ appliedVersions }) => appliedVersions.length === 0).length, 3);
-  assert.equal(
-    results.filter(({ appliedVersions }) => appliedVersions.join(',') === '1,2').length,
-    1,
-  );
-  assert.equal(
-    database.queryLog.filter((sql) => sql.includes('pg_advisory_xact_lock(')).length,
-    4,
-  );
+  assert.equal(results.filter(({ appliedVersions }) => appliedVersions.join(',') === '1,2').length, 1);
+  assert.equal(database.queryLog.filter((sql) => sql.includes('pg_advisory_xact_lock(')).length, 4);
 });
 
 test('migration baselines an existing unversioned schema without losing compatibility', async () => {
@@ -478,7 +490,9 @@ test('verify mode takes a shared lock and never applies schema SQL', async () =>
   assert.deepEqual(result, { currentVersion: 2, appliedVersions: [] });
   assert.equal(database.applyCount, 0);
   assert.ok(database.queryLog.some((sql) => sql.includes('pg_advisory_xact_lock_shared')));
-  assert.ok(!database.queryLog.some((sql) => sql.startsWith('CREATE TABLE IF NOT EXISTS managed_workflow_schema_migrations')));
+  assert.ok(
+    !database.queryLog.some((sql) => sql.startsWith('CREATE TABLE IF NOT EXISTS managed_workflow_schema_migrations')),
+  );
 });
 
 test('verify mode rejects a database that has not been migrated', async () => {
@@ -515,29 +529,35 @@ test('schema compatibility rejects future and modified migration histories', asy
   });
 });
 
+test('verify mode accepts only an explicitly declared additive successor schema', async () => {
+  const database = createCurrentDatabase();
+  database.migrations.set(3, { version: 3, name: 'successor', checksum: 'f'.repeat(64) });
+
+  await assert.rejects(
+    verifyManagedWorkflowSchema(createPool(database), { logger: quietLogger }),
+    /newer than this server supports/,
+  );
+
+  const result = await verifyManagedWorkflowSchema(createPool(database), {
+    logger: quietLogger,
+    compatibilityWindow: { minimumVersion: 2, maximumVersion: 3 },
+  });
+  assert.deepEqual(result, { currentVersion: 3, appliedVersions: [] });
+  assert.equal(database.applyCount, 0);
+});
+
 test('schema compatibility rejects a ledger marked current when required objects are missing', async (t) => {
   for (const [label, missingObject, expected] of [
     ['table', `table:${MANAGED_WORKFLOW_SCHEMA_REQUIRED_TABLES[0]}`, /tables:/],
-    [
-      'column',
-      `column:${MANAGED_WORKFLOW_SCHEMA_REQUIRED_COLUMNS[0]?.slice(0, 2).join('.')}`,
-      /columns:/,
-    ],
+    ['column', `column:${MANAGED_WORKFLOW_SCHEMA_REQUIRED_COLUMNS[0]?.slice(0, 2).join('.')}`, /columns:/],
     ['index', `index:${MANAGED_WORKFLOW_SCHEMA_REQUIRED_INDEXES[0]?.[1]}`, /indexes:/],
-    [
-      'constraint',
-      `constraint:${MANAGED_WORKFLOW_SCHEMA_REQUIRED_CONSTRAINTS[0]?.join('/')}`,
-      /constraints:/,
-    ],
+    ['constraint', `constraint:${MANAGED_WORKFLOW_SCHEMA_REQUIRED_CONSTRAINTS[0]?.join('/')}`, /constraints:/],
     ['function', 'function', /function:/],
   ] as const) {
     await t.test(label, async () => {
       const database = createCurrentDatabase();
       database.missingObject = missingObject;
-      await assert.rejects(
-        verifyManagedWorkflowSchema(createPool(database), { logger: quietLogger }),
-        expected,
-      );
+      await assert.rejects(verifyManagedWorkflowSchema(createPool(database), { logger: quietLogger }), expected);
     });
   }
 
@@ -554,8 +574,7 @@ test('schema compatibility rejects a ledger marked current when required objects
 
   await t.test('column default', async () => {
     const database = createCurrentDatabase();
-    const [tableName, columnName, expectedDefault] =
-      MANAGED_WORKFLOW_SCHEMA_REQUIRED_COLUMN_DEFAULTS[0] ?? [];
+    const [tableName, columnName, expectedDefault] = MANAGED_WORKFLOW_SCHEMA_REQUIRED_COLUMN_DEFAULTS[0] ?? [];
     database.invalidColumnDefault = `${tableName}.${columnName}`;
     await assert.rejects(
       verifyManagedWorkflowSchema(createPool(database), { logger: quietLogger }),
@@ -619,9 +638,10 @@ test('schema compatibility rejects a ledger marked current when required objects
 
   await t.test('constraint definition', async () => {
     const database = createCurrentDatabase();
-    database.invalidConstraint = MANAGED_WORKFLOW_SCHEMA_REQUIRED_CONSTRAINTS.find(
-      ([tableName, type]) => tableName === 'evaluation_dataset_snapshots' && type === 'p',
-    )?.join('/') ?? null;
+    database.invalidConstraint =
+      MANAGED_WORKFLOW_SCHEMA_REQUIRED_CONSTRAINTS.find(
+        ([tableName, type]) => tableName === 'evaluation_dataset_snapshots' && type === 'p',
+      )?.join('/') ?? null;
     await assert.rejects(
       verifyManagedWorkflowSchema(createPool(database), { logger: quietLogger }),
       /constraints:.*PRIMARY KEY \(project_id, dataset_fingerprint\)/,
@@ -630,8 +650,7 @@ test('schema compatibility rejects a ledger marked current when required objects
 
   await t.test('unvalidated constraint', async () => {
     const database = createCurrentDatabase();
-    database.invalidConstraintValidation =
-      MANAGED_WORKFLOW_SCHEMA_REQUIRED_CONSTRAINTS[0]?.join('/') ?? null;
+    database.invalidConstraintValidation = MANAGED_WORKFLOW_SCHEMA_REQUIRED_CONSTRAINTS[0]?.join('/') ?? null;
     await assert.rejects(
       verifyManagedWorkflowSchema(createPool(database), { logger: quietLogger }),
       /constraints:.*not validated/,

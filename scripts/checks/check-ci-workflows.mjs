@@ -198,6 +198,7 @@ assertIncludesAll(
     'changes',
     'verify-repository',
     'build-and-push',
+    'release-manifest',
     'fast-container-smoke',
     'managed-kubernetes-release-gate',
     'promote-images',
@@ -244,6 +245,33 @@ assertIncludesAll(
   ],
   'Image promotion dependencies',
 );
+const mainFreshness = findStep(
+  imageJobs['promote-images'],
+  'Confirm main still points to this release',
+  'Image promotion job',
+);
+assert.equal(mainFreshness.id, 'main_freshness');
+assert.match(
+  String(mainFreshness.if),
+  /github\.ref == 'refs\/heads\/main'/,
+  'Image promotion freshness applies to mutable main aliases only.',
+);
+assert.match(
+  mainFreshness.run,
+  /git ls-remote origin refs\/heads\/main/,
+  'Image promotion must re-read the current main head immediately before alias publication.',
+);
+for (const stepName of [
+  'Promote Complete Image Set',
+  'Attest promoted release manifest',
+  'Upload promoted release manifest',
+]) {
+  assert.match(
+    String(findStep(imageJobs['promote-images'], stepName, 'Image promotion job').if),
+    /steps\.main_freshness\.outputs\.current == 'true'/,
+    `${stepName} must not run for a stale main release.`,
+  );
+}
 assert.ok(images.workflow.on.push.paths.length > 0, 'Main image builds must be path-gated.');
 assert.ok(images.workflow.on.schedule, 'Weekly full image verification must remain configured.');
 assert.equal(

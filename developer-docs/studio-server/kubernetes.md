@@ -370,8 +370,8 @@ images:
     tag: latest
 ```
 
-The `rivet2.0-studio-server/*` packages are owned by this monorepo; the retired `cloud-hosted-rivet2-wrapper/*` packages are not release targets. The `latest` tag is promoted only for pushes to `main`; commit-SHA and version-tag image tags are produced by the same workflow. All four images build from one monorepo commit, first publish under the attempt-isolated `candidate-<commit SHA>-<run ID>-<attempt>` tag, and receive public tags only after the complete image matrix and release gates succeed. This prevents a rerun from overwriting another candidate before its gates resolve; promotion then resolves each candidate to its immutable OCI digest. Runs for the same Git ref are serialized so overlapping pushes cannot race an older image set back onto `latest`.
-For production, prefer pinning all four image tags to the same published commit SHA or release tag instead of leaving them on `latest`.
+The `rivet2.0-studio-server/*` packages are owned by this monorepo; the retired `cloud-hosted-rivet2-wrapper/*` packages are not release targets. The `latest` tag is promoted only from the current `main` head; commit-SHA and version-tag image tags are produced by the same workflow. All four images build from one monorepo commit, first publish under the attempt-isolated `candidate-<commit SHA>-<run ID>-<attempt>` tag, and receive public tags only after the complete image matrix and release gates succeed. This prevents a rerun from overwriting another candidate before its gates resolve; promotion then resolves each candidate to its immutable OCI digest. Runs for the same Git ref are serialized, and the final alias step re-reads `main`, so overlapping pushes or a delayed scheduled/manual run cannot race an older image set back onto `latest`.
+Tags remain convenient for local and rehearsal installs. Production must use the promoted release manifest described below; it supplies the exact digest for every image and the chart rejects tag-only production values.
 If the GHCR packages are private, configure `imagePullSecrets`; public packages should pull anonymously.
 
 Current published image platforms:
@@ -708,26 +708,49 @@ appSettings:
 
 Only the migration Job mounts that claim, read-only. Each JSON domain seeds PostgreSQL only when its row is absent. Legacy files are considered independently, so a partial old claim cannot discard candidate bootstrap settings for domains it does not contain; unusable legacy entries are ignored with a warning. Rerunning the hook therefore cannot replace newer database settings. Keep the old claim intact through the rollback window, then remove `legacyImport.existingClaimName` in a later release. A rollback to an old image can read the old PVC but cannot see settings changed after database cutover; take a PostgreSQL backup before upgrade and avoid changing settings until rollback acceptance is complete.
 
-### Direct Helm commands
+### Immutable production release and rollback
 
-Use these commands as the raw Helm equivalent of a CI deploy step:
+Do not deploy the production overlay with ad hoc image tags or a raw `helm upgrade`. A successful **Build Images** workflow retains one promoted Studio Server release-manifest artifact. It binds the source commit, a canonical digest of the complete Helm chart, managed-workflow schema contract, CI run, and the exact OCI digest for proxy, web, API, and executor. The production chart rejects any release missing that identity, and the deployment command rejects a manifest whose chart contents do not match the checked-out chart.
+
+Download the artifact from the successful workflow run into this repository, for example as `artifacts/releases/<run-id>/release-manifest.json`, then check out the artifact's exact `source.sha`. Both manifest commands and the deployment command reject paths outside this checkout; the deployment command also rejects a different Git `HEAD`, tracked local modifications, or chart contents, so an operator cannot run an old artifact through newer release tooling by accident. Untracked environment values and generated release diagnostics remain allowed. Keep the environment values file limited to cluster-specific configuration and secret references; do not put `images.*`, `release.*`, or `workflowSchema.compatibility.*` in it.
+
+First render exactly what would be installed. This changes no cluster state and retains the rendered manifest plus values under `artifacts/kubernetes-production-release/<release>/`:
 
 ```bash
-helm lint ./charts \
-  -f deploy/studio-server/helm/overlays/prod.yaml \
-  -f path/to/environment-values.yaml
-
-helm template rivet ./charts \
+yarn studio-server:kubernetes:release -- \
+  --manifest artifacts/releases/<run-id>/release-manifest.json \
+  --values path/to/environment-values.yaml \
+  --release rivet \
   --namespace your-namespace \
-  -f deploy/studio-server/helm/overlays/prod.yaml \
-  -f path/to/environment-values.yaml
-
-helm upgrade --install rivet ./charts \
-  --namespace your-namespace \
-  --create-namespace \
-  -f deploy/studio-server/helm/overlays/prod.yaml \
-  -f path/to/environment-values.yaml
+  --dry-run
 ```
+
+After reviewing the generated artifacts, deploy with the explicit release-name confirmation:
+
+```bash
+yarn studio-server:kubernetes:release -- \
+  --manifest artifacts/releases/<run-id>/release-manifest.json \
+  --values path/to/environment-values.yaml \
+  --release rivet \
+  --namespace your-namespace \
+  --confirm rivet
+```
+
+The command always layers `deploy/studio-server/helm/overlays/prod.yaml`, then the environment values, then generated digest-pinned manifest values. It runs Helm lint/template preflight, captures release history, and uses `helm upgrade --install --wait --wait-for-jobs --timeout 15m` for a normal release. It deliberately does **not** add `--atomic`: once the pre-upgrade migration Job commits, automatically restoring an older workload would leave that workload pointed at a newer database schema. On failure, inspect the saved history, rendered values, and migration diagnostics; repair forward or use the explicit forward rollback below. The forward-rollback command may use `--atomic` because it disables the migration Job and does not change the database schema.
+
+Never use ordinary `helm rollback` after a migration Job may have committed. To restore a compatible previous image set while deliberately preserving the newer database schema, use a **forward rollback**. It succeeds only when the failed release's promoted manifest explicitly declares its schema compatible with the target release's schema:
+
+```bash
+yarn studio-server:kubernetes:release -- \
+  --manifest artifacts/releases/<failed-run-id>/release-manifest.json \
+  --rollback-to artifacts/releases/<previous-run-id>/release-manifest.json \
+  --values path/to/environment-values.yaml \
+  --release rivet \
+  --namespace your-namespace \
+  --confirm rivet
+```
+
+That operation disables the schema-migration Job, uses the previous release's immutable images, and widens only the previous API's verify-only schema upper bound to the candidate schema version. It is valid only for declared expand-only migrations. If the command rejects the compatibility relationship, do not force Helm rollback: use a forward repair release or the provider-backed database restore procedure.
 
 With release name `rivet`, the default Kubernetes object names are prefixed as `rivet-rivet-*` because the chart name is also `rivet`. Set `fullnameOverride: rivet` in the environment values if the desired object prefix is just `rivet-*`.
 

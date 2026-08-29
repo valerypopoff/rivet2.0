@@ -7,22 +7,22 @@ images:
     repository: example.invalid/rivet/proxy
     tag: latest
     # Set digest to pin an exact OCI manifest. It takes precedence over tag.
-    digest: ""
+    digest: ''
     pullPolicy: IfNotPresent
   web:
     repository: example.invalid/rivet/web
     tag: latest
-    digest: ""
+    digest: ''
     pullPolicy: IfNotPresent
   api:
     repository: example.invalid/rivet/api
     tag: latest
-    digest: ""
+    digest: ''
     pullPolicy: IfNotPresent
   executor:
     repository: example.invalid/rivet/executor
     tag: latest
-    digest: ""
+    digest: ''
     pullPolicy: IfNotPresent
 
 replicaCount:
@@ -72,33 +72,56 @@ service:
 
 ingress:
   enabled: false
-  className: ""
-  host: ""
-  externalDNSHostname: ""
+  className: ''
+  host: ''
+  externalDNSHostname: ''
   annotations: {}
-  tlsSecretName: ""
+  tlsSecretName: ''
   pathType: Prefix
 
 vault:
   enabled: false
   annotations: {}
-  role: ""
-  authPath: ""
-  secretPath: ""
+  role: ''
+  authPath: ''
+  secretPath: ''
   tlsSkipVerify: false
-  caSecretName: ""
+  caSecretName: ''
   caCertPath: /vault/tls/ca.crt
   dotenvFileName: dotenv
-  dotenvTemplate: ""
+  dotenvTemplate: ''
 
 workflowStorage:
   backend: managed
 
 workflowSchema:
+  # Serving API pods are verify-only. A normal release accepts exactly this
+  # schema. The managed release command widens maximumVersion only for a
+  # documented expand-only rollback; the migration Job always stays exact.
+  compatibility:
+    minimumVersion: 2
+    maximumVersion: 2
   migrationJob:
     enabled: true
     backoffLimit: 2
     activeDeadlineSeconds: 600
+
+# Production deployments must be materialized from an immutable release
+# manifest. Local Kubernetes rehearsal and disposable CI gates leave this off.
+release:
+  production:
+    enabled: false
+    sourceSha: ''
+    verification:
+      workflow: ''
+      runId: ''
+      runAttempt: 0
+    chart:
+      name: ''
+      version: ''
+      contentDigest: ''
+    database:
+      managedWorkflowSchemaVersion: 0
 
 lifecycle:
   health:
@@ -145,14 +168,14 @@ runtimeLibraries:
   cache:
     enabled: false
     size: 10Gi
-    storageClassName: ""
-    existingClaimName: ""
+    storageClassName: ''
+    existingClaimName: ''
 
 filesystem:
   workflows:
-    existingClaimName: ""
+    existingClaimName: ''
   runtimeLibraries:
-    existingClaimName: ""
+    existingClaimName: ''
 
 postgres:
   mode: managed
@@ -164,38 +187,38 @@ postgres:
   # Shared query-pool connections per API process. Three additional dedicated
   # LISTEN connections per API pod are included by the chart capacity check.
   poolMaxPerApiPod: 10
-  host: ""
+  host: ''
   port: 5432
-  database: ""
-  username: ""
-  passwordSecretName: ""
+  database: ''
+  username: ''
+  passwordSecretName: ''
   passwordSecretKey: password
   sslMode: require
-  connectionStringSecretName: ""
+  connectionStringSecretName: ''
   connectionStringSecretKey: connectionString
 
 objectStorage:
-  endpoint: ""
-  bucket: ""
+  endpoint: ''
+  bucket: ''
   region: us-east-1
   prefix: workflows/
-  accessKeySecretName: ""
+  accessKeySecretName: ''
   accessKeySecretKey: accessKeyId
-  secretKeySecretName: ""
+  secretKeySecretName: ''
   secretKeySecretKey: secretAccessKey
   forcePathStyle: false
 
 appSettings:
   backend: postgres
   # Prefer a dedicated 32+ character secret. RIVET_KEY remains a compatibility fallback.
-  encryptionKeySecretName: ""
+  encryptionKeySecretName: ''
   encryptionKeySecretKey: encryptionKey
   # Rotation is two compatibility phases: new secondary first, then old secondary after the primary swap.
-  previousEncryptionKeySecretName: ""
+  previousEncryptionKeySecretName: ''
   previousEncryptionKeySecretKey: encryptionKey
   legacyImport:
     # Optional one-time source from deployments that used the old shared app-data PVC.
-    existingClaimName: ""
+    existingClaimName: ''
 
 tmpVolume:
   enabled: true
@@ -204,7 +227,7 @@ tmpVolume:
   sizeLimit: 2Gi
 
 auth:
-  keySecretName: ""
+  keySecretName: ''
   keySecretKey: RIVET_KEY
 
 env:
@@ -215,12 +238,12 @@ env:
   RIVET_WEB_APPS_BASE_PATH: /apps
   RIVET_LATEST_WEB_APPS_BASE_PATH: /apps-latest
   RIVET_PROXY_RESOLVER: kube-dns.kube-system.svc.cluster.local
-  RIVET_ENABLE_LATEST_REMOTE_DEBUGGER: "true"
-  RIVET_CORS_ALLOWED_ORIGINS: ""
+  RIVET_ENABLE_LATEST_REMOTE_DEBUGGER: 'true'
+  RIVET_CORS_ALLOWED_ORIGINS: ''
   RIVET_SERVER_UI_AUTH_MODE: key
-  RIVET_REQUIRE_UI_GATE_KEY: "true"
-  RIVET_TRUST_INCOMING_FORWARDED_HEADERS: "false"
-  RIVET_RECORDINGS_ENABLED: "true"
+  RIVET_REQUIRE_UI_GATE_KEY: 'true'
+  RIVET_TRUST_INCOMING_FORWARDED_HEADERS: 'false'
+  RIVET_RECORDINGS_ENABLED: 'true'
 
 podAnnotations:
   proxy: {}

@@ -1,0 +1,19 @@
+{{- if .Values.release.production.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "rivet.fullname" . }}-release-identity
+  labels:
+    {{- include "rivet.labels" . | nindent 4 }}
+    app.kubernetes.io/component: release-identity
+data:
+  source-sha: {{ .Values.release.production.sourceSha | quote }}
+  verification-workflow: {{ .Values.release.production.verification.workflow | quote }}
+  verification-run-id: {{ .Values.release.production.verification.runId | quote }}
+  verification-run-attempt: {{ .Values.release.production.verification.runAttempt | quote }}
+  chart-name: {{ .Values.release.production.chart.name | quote }}
+  chart-version: {{ .Values.release.production.chart.version | quote }}
+  chart-content-digest: {{ .Values.release.production.chart.contentDigest | quote }}
+  managed-workflow-schema-version: {{ .Values.release.production.database.managedWorkflowSchemaVersion | quote }}
+  images.json: {{ dict "proxy" (include "rivet.image" (dict "root" . "image" .Values.images.proxy)) "web" (include "rivet.image" (dict "root" . "image" .Values.images.web)) "api" (include "rivet.image" (dict "root" . "image" .Values.images.api)) "executor" (include "rivet.image" (dict "root" . "image" .Values.images.executor)) | toJson | quote }}
+{{- end }}

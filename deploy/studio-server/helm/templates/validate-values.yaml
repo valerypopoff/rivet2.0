@@ -22,6 +22,12 @@
 {{- fail "env.RIVET_DEPLOYMENT_MANAGED_WORKFLOW_SCHEMA_MODE is an internal chart-owned startup policy and cannot be overridden" -}}
 {{- end -}}
 
+{{- range $key := list "RIVET_MANAGED_WORKFLOW_SCHEMA_MIN_VERSION" "RIVET_MANAGED_WORKFLOW_SCHEMA_MAX_VERSION" "RIVET_DEPLOYMENT_MANAGED_WORKFLOW_SCHEMA_MIN_VERSION" "RIVET_DEPLOYMENT_MANAGED_WORKFLOW_SCHEMA_MAX_VERSION" -}}
+{{- if hasKey $.Values.env $key -}}
+{{- fail (printf "env.%s is chart-owned; configure workflowSchema.compatibility through the immutable release manifest" $key) -}}
+{{- end -}}
+{{- end -}}
+
 {{- if hasKey .Values.env "RIVET_DEPLOYMENT_DATABASE_POOL_MAX" -}}
 {{- fail "env.RIVET_DEPLOYMENT_DATABASE_POOL_MAX is chart-owned; configure postgres.poolMaxPerApiPod instead" -}}
 {{- end -}}
@@ -58,6 +64,15 @@
 
 {{- if lt (int .Values.workflowSchema.migrationJob.activeDeadlineSeconds) 1 -}}
 {{- fail "workflowSchema.migrationJob.activeDeadlineSeconds must be greater than zero" -}}
+{{- end -}}
+
+{{- $schemaMinimumVersion := int .Values.workflowSchema.compatibility.minimumVersion -}}
+{{- $schemaMaximumVersion := int .Values.workflowSchema.compatibility.maximumVersion -}}
+{{- if lt $schemaMinimumVersion 1 -}}
+{{- fail "workflowSchema.compatibility.minimumVersion must be greater than zero" -}}
+{{- end -}}
+{{- if lt $schemaMaximumVersion $schemaMinimumVersion -}}
+{{- fail "workflowSchema.compatibility.maximumVersion must be greater than or equal to minimumVersion" -}}
 {{- end -}}
 {{- range $key := list "RIVET_HEALTH_REFRESH_SECONDS" "RIVET_HEALTH_CHECK_TIMEOUT_SECONDS" "RIVET_HEALTH_STALE_AFTER_SECONDS" "RIVET_SHUTDOWN_GRACE_SECONDS" "RIVET_DEPLOYMENT_HEALTH_REFRESH_SECONDS" "RIVET_DEPLOYMENT_HEALTH_CHECK_TIMEOUT_SECONDS" "RIVET_DEPLOYMENT_HEALTH_STALE_AFTER_SECONDS" "RIVET_DEPLOYMENT_SHUTDOWN_GRACE_SECONDS" -}}
 {{- if hasKey $.Values.env $key -}}
@@ -173,6 +188,39 @@
 
 {{- if or (contains "example.invalid/" .Values.images.proxy.repository) (contains "example.invalid/" .Values.images.web.repository) (contains "example.invalid/" .Values.images.api.repository) (contains "example.invalid/" .Values.images.executor.repository) -}}
 {{- fail "replace the example.invalid image repositories with real image repositories before install" -}}
+{{- end -}}
+
+{{- if .Values.release.production.enabled -}}
+{{- if not (regexMatch "^[a-f0-9]{40}$" .Values.release.production.sourceSha) -}}
+{{- fail "release.production.sourceSha must be the 40-character lowercase Git commit from a promoted release manifest" -}}
+{{- end -}}
+{{- if empty .Values.release.production.verification.workflow -}}
+{{- fail "release.production.verification.workflow is required for a production release manifest" -}}
+{{- end -}}
+{{- if empty .Values.release.production.verification.runId -}}
+{{- fail "release.production.verification.runId is required for a production release manifest" -}}
+{{- end -}}
+{{- if lt (int .Values.release.production.verification.runAttempt) 1 -}}
+{{- fail "release.production.verification.runAttempt must be greater than zero for a production release manifest" -}}
+{{- end -}}
+{{- if ne .Values.release.production.chart.name .Chart.Name -}}
+{{- fail "release.production.chart.name must equal the deployed chart name from a promoted release manifest" -}}
+{{- end -}}
+{{- if ne .Values.release.production.chart.version .Chart.Version -}}
+{{- fail "release.production.chart.version must equal the deployed chart version from a promoted release manifest" -}}
+{{- end -}}
+{{- if not (regexMatch "^sha256:[a-f0-9]{64}$" .Values.release.production.chart.contentDigest) -}}
+{{- fail "release.production.chart.contentDigest must be a sha256 digest from a promoted release manifest" -}}
+{{- end -}}
+{{- if ne (int .Values.release.production.database.managedWorkflowSchemaVersion) $schemaMaximumVersion -}}
+{{- fail "release.production.database.managedWorkflowSchemaVersion must equal workflowSchema.compatibility.maximumVersion" -}}
+{{- end -}}
+{{- range $component := list "proxy" "web" "api" "executor" -}}
+{{- $image := index $.Values.images $component -}}
+{{- if not (regexMatch "^sha256:[a-f0-9]{64}$" (default "" $image.digest)) -}}
+{{- fail (printf "images.%s.digest must be a sha256 OCI manifest digest for a production release; mutable tags are not accepted" $component) -}}
+{{- end -}}
+{{- end -}}
 {{- end -}}
 
 {{- if and (eq .Values.workflowStorage.backend "managed") (empty .Values.postgres.connectionStringSecretName) (or (empty .Values.postgres.host) (empty .Values.postgres.database) (empty .Values.postgres.username) (and (empty .Values.postgres.passwordSecretName) (not .Values.vault.enabled))) -}}

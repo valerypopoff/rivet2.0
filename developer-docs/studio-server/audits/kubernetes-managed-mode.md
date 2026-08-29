@@ -1,22 +1,28 @@
 # Kubernetes Managed Mode Audit
 
-- Audit date: 2026-08-26
+- Original audit date: 2026-08-26
+- Reassessment date: 2026-08-29
 - Scope: managed storage and managed PostgreSQL on Kubernetes
 - Evidence basis: current repository source, Helm templates, contract tests, a disposable local PostgreSQL concurrency check, and developer documentation
-- Confidence boundary: source/static contracts plus a real single-host PostgreSQL check; no live multi-node Kubernetes cluster was exercised for this audit
+- Confidence boundary: source/static contracts plus a real single-host PostgreSQL check and a current successful `yarn studio-server:verify:kubernetes` run; this reassessment did not itself execute Kind or the protected provider-backed staging gate
 
 ## Executive Summary
 
 The repository has substantial managed-mode support: workflow revisions and publication metadata use PostgreSQL, large workflow and recording artifacts use object storage, evaluation history has a PostgreSQL implementation, runtime-library archives use object storage, and web-app WebSocket runs have PostgreSQL-backed ownership and recovery support. Those are confirmed capabilities, not assumptions.
 
-Problems 1 through 4 from the original audit are now implemented:
+Problems 1 through 5 from the original audit are now implemented:
 
 1. Workflow schema initialization is serialized, versioned, and owned by a Helm migration Job in Kubernetes.
 2. App Settings authority has moved from a shared RWX filesystem to encrypted, revisioned PostgreSQL rows. Runtime pods use only disposable local compatibility projections, and the proxy consumes an authenticated non-secret API snapshot.
 3. API lifecycle now separates liveness from dependency readiness, drains accepted work within an aligned termination budget, and gives replicated tiers explicit rollout, disruption, and placement policy.
 4. The release gate combines static chart validation with a disposable Kind managed-mode deployment using immutable candidate image digests before image promotion. Its release mode now covers WebSocket owner loss/reconnect, App Settings key rotation, and PostgreSQL/MinIO recovery; a separate protected provider-staging runner covers HTTPS ingress, provider-aware outage manifests, and legacy rollback.
+5. Managed PostgreSQL clients share a bounded per-process query pool, and the chart validates the maximum API replica connection budget against operator-declared provider capacity.
 
-Problem 4 is now implemented as a Kind gate plus a protected manual provider-staging gate in source and GitHub Actions configuration. This audit has not itself observed a completed remote CI or provider-staging execution. The Kind gate supplies repeatable runtime evidence for the managed stack; the provider runner is ready to collect the remaining ingress, TLS, DNS, managed-Postgres, and object-store evidence after staging secrets/configuration are installed. Problem 3 deliberately retains a singleton control-plane boundary until latest-debugger and co-located editor-executor session ownership become distributed or stably routed.
+Problem 4 is now implemented as a Kind gate plus a protected manual provider-staging gate in source and GitHub Actions configuration. Problem 6 now adds a digest-pinned promoted release manifest with a canonical chart-content digest, a manifest-only production Helm path, forward-only rollback values, and an optional exact-prior-image schema verification Job. This audit has not itself observed a completed remote CI or provider-staging execution. The Kind gate supplies repeatable runtime evidence for the managed stack; the provider runner is ready to collect the remaining ingress, TLS, DNS, managed-Postgres, and object-store evidence after staging secrets/configuration are installed. Problem 3 deliberately retains a singleton control-plane boundary until latest-debugger and co-located editor-executor session ownership become distributed or stably routed.
+
+The 2026-08-29 reassessment identified six additional reliability boundaries: release identity and rollback compatibility, cross-store disaster recovery, saturation control, durable maintenance/reconciliation, resumable hosted Evaluations, and production observability. The release/rollback boundary is implemented in source and awaits remote certification; the remaining five are planned work. These are specific remaining boundaries, not evidence that managed mode as a whole is broken.
+
+The production load model is deliberately asymmetric: approximately three operators use the Studio UI and control features, while product traffic from tens of thousands of users reaches published `/workflows/...` endpoints. The proxy routes those published endpoints to the independently scalable execution Deployment; UI/API, project operations, recording/statistics inspection, latest debugging, and `/workflows-latest/...` remain on the singleton backend. Capacity work therefore targets proxy/execution, recording ingestion, PostgreSQL/object storage, and downstream providers—not backend/web HPA. Evaluations need durable coordination and a separate bounded batch quota because a few authors can still fan out many graph executions.
 
 ## Evidence Standard
 
@@ -231,7 +237,7 @@ The chart therefore rejects backend scaling and backend HPA instead of exposing 
 
 ## Resolved Problem 4: Live Managed-Kubernetes Release Gate
 
-**Implementation status (2026-08-26): implemented in repository code and GitHub Actions configuration. The first successful remote CI execution and protected provider-backed staging certification remain operational evidence to collect after merge. The weekly schedule is not active in the currently recorded branch configuration: `origin/HEAD` is `main`, whose workflow does not contain this release gate.**
+**Implementation status (reassessed 2026-08-29): implemented in monorepo code and GitHub Actions configuration. The image workflow is present on `main` and carries the weekly schedule. This audit still has no retained evidence of a successful protected provider-backed staging certification.**
 
 The image workflow now makes `verify:kubernetes` part of the fast verification job, then creates an ephemeral four-node Kind cluster (one control plane plus three workers) after the four candidate images have been pushed under their unique staging tags. The live gate resolves each candidate to an immutable OCI digest, verifies that the Helm manifest uses that exact digest, deploys disposable PostgreSQL 16 and MinIO services, and installs the real managed-mode Helm chart with one backend, two proxy replicas, and two execution replicas. It exposes no direct API port: all smoke traffic uses a port-forward to the proxy Service.
 
@@ -269,27 +275,51 @@ This protects configuration consistency, not provider truth or application throu
 
 Automated evidence is in [`managed-postgres-pool.test.ts`](../../../packages/studio-server-api/src/tests/managed-postgres-pool.test.ts) and [`kubernetes-contract.test.ts`](../../../packages/studio-server-api/src/tests/kubernetes-contract.test.ts). Operational calculation and provider checks are in [`docs/kubernetes.md`](../kubernetes.md#postgresql-connection-budget).
 
+## 2026-08-29 Reassessment: Additional Open Problems
+
+The current implementation and static Kubernetes gate were reassessed after Problems 1 through 5 were completed. Six additional reliability boundaries were identified; release identity/rollback is now implemented in source and the remaining five are planned work. The comprehensive implementation authority—including required change surfaces, safe rollout order, dependencies, risks, acceptance criteria, phased delivery, and the production-ready definition of done—is [`kubernetes_managed_mode_audit.md`](../../../kubernetes_managed_mode_audit.md#document-purpose-and-status-register).
+
+| Open problem                                                 | Current boundary                                                                                                                                                                         | Proposed control                                                                                                                                     |
+| ------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Production release identity and database-compatible rollback | Implemented in source; remote/staging certification remains. Production values require a promoted digest manifest and Helm rollback is replaced by guarded forward rollback.             | Retain promoted manifests outside expiring CI artifacts and observe the prior-image compatibility Job in a remote full gate.                         |
+| Cross-store backup and restore                               | PostgreSQL, object storage, and App Settings encryption keys must be restored consistently, but provider outage recovery is not a clean-environment restore drill.                       | Define RPO/RTO, create a non-secret backup manifest, and run a protected fresh-namespace restore that verifies every representative durable surface. |
+| Execution saturation                                         | PostgreSQL connections and CPU-HPA denominators are bounded, but active runs, memory, ephemeral storage, queue wait, and downstream-provider concurrency are not one validated envelope. | Add measured production capacity profiles, bounded admission, workload metrics, and a representative overload gate.                                  |
+| Retention and object reconciliation                          | Cleanup ownership varies by subsystem; some cleanup is startup/write-driven, and workflow object deletion has no durable retry outbox.                                                   | Add one fenced maintenance owner, transactional deletion work, scheduled reconciliation, and domain-specific retention policies.                     |
+| Hosted Evaluation continuation                               | Evaluation observations are durable, but the initiating client still owns scheduling and queued trials do not automatically continue after owner loss.                                   | Add a durable server-owned coordinator with leases, deterministic trial identities, explicit interruption semantics, and disruption coverage.        |
+| Production observability                                     | Liveness/readiness are sound binary routing signals, but the chart has no first-class low-cardinality metrics, monitor resources, SLOs, or alert contract.                               | Add optional Prometheus/OpenTelemetry integration, correlation IDs, SLOs, and alerts for saturation, durability, and maintenance integrity.          |
+
+This reassessment also corrects two tempting overstatements. The singleton backend is already an intentionally enforced ownership boundary, not a newly discovered chart defect. Likewise, generic hard memory limits are not automatically safer; the actionable gap is an environment-specific, load-tested capacity and admission policy.
+
 ## Assumptions Checked
 
 | Assumption                                                                     | Audit result              | Evidence / qualification                                                                                                                                                                                                                   |
 | ------------------------------------------------------------------------------ | ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | Recent features have managed persistence implementations.                      | Supported.                | Workflow revisions/publications, recordings, evaluations, runtime libraries, LLM health, and web-app WebSocket run state have managed stores cited above.                                                                                  |
 | All evaluation artifacts are stored in object storage.                         | Not supported; corrected. | The managed evaluation store persists its definitions and run payloads in PostgreSQL. Recording artifacts referenced by evaluation runs follow the recording store, but the evaluation store itself is not an object-store implementation. |
-| Any API replica can normally edit app settings.                                | Not supported; corrected. | Settings mutation routes are control-plane-only. Execution replicas read the PostgreSQL settings repository and receive pod-local compatibility projections; they do not share a writable settings filesystem.                              |
-| Workflow-schema startup retries protect against PostgreSQL DDL deadlocks.      | Supported, narrowly.       | The migration library serializes DDL with an advisory lock and retries only PostgreSQL `40P01`, `40001`, and `55P03`; the common query retry policy remains network-only.                                                                    |
-| A web-app coordinator listener disconnect necessarily makes the pod unhealthy. | Not supported; corrected. | The coordinator reconnects and polls. Readiness checks gateway acceptance and its owned PostgreSQL pool, not the optional notification channel, so a recoverable listener reconnect does not remove the pod from service. |
-| The chart currently depends on shared app-data storage.                        | No; fixed.                | App Settings are encrypted PostgreSQL rows. Backend/execution app data is pod-local `emptyDir`, proxy has no app-data mount, and a legacy PVC is optional migration-only input. |
+| Any API replica can normally edit app settings.                                | Not supported; corrected. | Settings mutation routes are control-plane-only. Execution replicas read the PostgreSQL settings repository and receive pod-local compatibility projections; they do not share a writable settings filesystem.                             |
+| Workflow-schema startup retries protect against PostgreSQL DDL deadlocks.      | Supported, narrowly.      | The migration library serializes DDL with an advisory lock and retries only PostgreSQL `40P01`, `40001`, and `55P03`; the common query retry policy remains network-only.                                                                  |
+| A web-app coordinator listener disconnect necessarily makes the pod unhealthy. | Not supported; corrected. | The coordinator reconnects and polls. Readiness checks gateway acceptance and its owned PostgreSQL pool, not the optional notification channel, so a recoverable listener reconnect does not remove the pod from service.                  |
+| The chart currently depends on shared app-data storage.                        | No; fixed.                | App Settings are encrypted PostgreSQL rows. Backend/execution app data is pod-local `emptyDir`, proxy has no app-data mount, and a legacy PVC is optional migration-only input.                                                            |
 | `verify:kubernetes` is a live cluster test.                                    | Not supported; corrected. | It is a static Helm/template/contract gate. Manual cluster tooling exists separately.                                                                                                                                                      |
 | Current Kubernetes managed mode is definitely broken.                          | Not established.          | Static verification passes and managed stores exist. The report identifies unproven HA/operations paths and concrete design risks, not a reproduced blanket failure.                                                                       |
+| The backend can safely scale beyond one replica today.                         | Not supported.            | The chart intentionally enforces one backend because latest-debugger and co-located editor-executor sessions still have process-local ownership. This is an explicit topology boundary.                                                    |
+| The PostgreSQL connection formula and CPU HPA fully bound execution load.      | Not supported.            | They bound database connections and give CPU scaling a valid denominator, but do not bound active runs, memory, ephemeral storage, queue wait, or downstream concurrency.                                                                  |
+| Provider-outage recovery proves disaster recovery.                             | Not supported.            | The disruption gate recovers the same live services. It does not restore a mutually consistent historical database, object set, and encryption-key set into a clean environment.                                                           |
+| Durable Evaluation rows imply resumable Evaluation execution.                  | Not supported.            | Settled observations survive, but the client-owned scheduler does not automatically continue queued trials after its owner disappears.                                                                                                     |
+| Omitting default hard memory limits is necessarily a chart defect.             | Not established.          | Generic limits can OOM-kill legitimate long runs. Production needs a load-tested capacity and admission envelope, with explicit acknowledgement for intentional omissions.                                                                 |
 
 ## Recommended Follow-Up Order
 
-1. Retain the first successful remote GitHub Actions execution of the live Kind gate after the monorepo branch merges, and use its artifacts to tune only named transient setup retries if the runner proves flaky.
-2. Run and retain the first successful Kind release-mode artifact with the new long-running WebSocket owner-loss/reconnect and dependency-recovery scenarios. Tune only named transient setup waits if that evidence proves instability.
-3. Configure the protected `rivet-managed-staging` GitHub environment, then retain the first successful provider-gate artifact against the production-equivalent ingress controller, TLS, managed PostgreSQL service, object-storage provider, scoped dependency interruption policies, App Settings key rotation, and legacy-import rollback.
-4. Design distributed or stably routed latest-debugger/editor-executor ownership, then certify at least two backend replicas before relaxing the singleton guard.
+1. Enforce immutable production release identity and database-compatible rollback.
+2. Define production RPO/RTO and certify a cross-store restore into a clean environment.
+3. Establish observability and an evidence-backed capacity/admission envelope together.
+4. Add one fenced maintenance owner, a durable deletion outbox, and scheduled reconciliation/retention.
+5. Move hosted Evaluation scheduling to a durable server-owned coordinator and certify owner-loss behavior.
+6. Retain successful Kind release and protected provider-staging artifacts on their required schedules.
+7. Revisit distributed latest-debugger/editor-executor ownership only if a future control-plane availability requirement justifies relaxing the singleton backend guard; it is not needed for the stated load model.
 
-This order focuses on collecting live runtime evidence beyond Kind and on the one deliberately retained control-plane ownership boundary.
+This order addresses irreversible data/release risks first, then overload and lifecycle reliability, and only then expands the deliberately singleton control plane.
+
 ## Useful Verification Commands
 
 ```powershell
@@ -299,7 +329,7 @@ yarn studio-server:test
 git diff --check
 ```
 
-For a local live rehearsal after the CI harness exists:
+For a local live rehearsal:
 
 ```powershell
 yarn studio-server:dev:kubernetes-test

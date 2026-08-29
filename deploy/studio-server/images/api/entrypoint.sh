@@ -4,6 +4,8 @@ set -eu
 . /opt/rivet/lib/load-env.sh
 
 deployment_managed_workflow_schema_mode="${RIVET_DEPLOYMENT_MANAGED_WORKFLOW_SCHEMA_MODE:-}"
+deployment_managed_workflow_schema_min_version="${RIVET_DEPLOYMENT_MANAGED_WORKFLOW_SCHEMA_MIN_VERSION:-}"
+deployment_managed_workflow_schema_max_version="${RIVET_DEPLOYMENT_MANAGED_WORKFLOW_SCHEMA_MAX_VERSION:-}"
 deployment_health_refresh_seconds="${RIVET_DEPLOYMENT_HEALTH_REFRESH_SECONDS:-}"
 deployment_health_check_timeout_seconds="${RIVET_DEPLOYMENT_HEALTH_CHECK_TIMEOUT_SECONDS:-}"
 deployment_health_stale_after_seconds="${RIVET_DEPLOYMENT_HEALTH_STALE_AFTER_SECONDS:-}"
@@ -16,6 +18,12 @@ append_proxy_bootstrap_node_options
 # stale secret contains the public schema mode variable.
 if [ -n "$deployment_managed_workflow_schema_mode" ]; then
   export RIVET_MANAGED_WORKFLOW_SCHEMA_MODE="$deployment_managed_workflow_schema_mode"
+fi
+if [ -n "$deployment_managed_workflow_schema_min_version" ]; then
+  export RIVET_MANAGED_WORKFLOW_SCHEMA_MIN_VERSION="$deployment_managed_workflow_schema_min_version"
+fi
+if [ -n "$deployment_managed_workflow_schema_max_version" ]; then
+  export RIVET_MANAGED_WORKFLOW_SCHEMA_MAX_VERSION="$deployment_managed_workflow_schema_max_version"
 fi
 
 apply_deployment_lifecycle_value() {

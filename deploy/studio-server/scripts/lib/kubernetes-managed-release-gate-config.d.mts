@@ -5,6 +5,11 @@ export type ManagedReleaseGateImage = {
   digest: string;
 };
 
+export type ManagedWorkflowSchemaReleaseContract = {
+  version: number;
+  minimumRollbackCompatibleVersion: number;
+};
+
 export type ManagedReleaseGateConfig = {
   mode: ManagedReleaseGateMode;
   context: string;
@@ -12,6 +17,8 @@ export type ManagedReleaseGateConfig = {
   namespace: string;
   release: string;
   images: Record<'proxy' | 'web' | 'api' | 'executor', ManagedReleaseGateImage>;
+  previousApiImage: ManagedReleaseGateImage | null;
+  managedWorkflowSchema: ManagedWorkflowSchemaReleaseContract;
   imagePullPolicy: 'Always' | 'IfNotPresent';
   registry: {
     server: string;
@@ -27,9 +34,32 @@ export type ManagedReleaseGateConfig = {
 export type ManagedReleaseGateValues = {
   fullnameOverride: string;
   imagePullSecrets: Array<{ name: string }>;
-  images: Record<'proxy' | 'web' | 'api' | 'executor', ManagedReleaseGateImage & { pullPolicy: 'Always' | 'IfNotPresent' }>;
-  postgres: { host: string; port: number; database: string; username: string; passwordSecretName: string; passwordSecretKey: string };
-  objectStorage: { endpoint: string; bucket: string; accessKeySecretName: string; accessKeySecretKey: string; secretKeySecretName: string; secretKeySecretKey: string };
+  images: Record<
+    'proxy' | 'web' | 'api' | 'executor',
+    ManagedReleaseGateImage & { pullPolicy: 'Always' | 'IfNotPresent' }
+  >;
+  workflowSchema: {
+    compatibility: {
+      minimumVersion: number;
+      maximumVersion: number;
+    };
+  };
+  postgres: {
+    host: string;
+    port: number;
+    database: string;
+    username: string;
+    passwordSecretName: string;
+    passwordSecretKey: string;
+  };
+  objectStorage: {
+    endpoint: string;
+    bucket: string;
+    accessKeySecretName: string;
+    accessKeySecretKey: string;
+    secretKeySecretName: string;
+    secretKeySecretKey: string;
+  };
   appSettings: { encryptionKeySecretName: string; encryptionKeySecretKey: string };
   auth: { keySecretName: string; keySecretKey: string };
 };

@@ -5,8 +5,15 @@ ingress:
   externalDNSHostname: rivet.example.com
   annotations:
     nginx.ingress.kubernetes.io/proxy-body-size: 100m
-    nginx.ingress.kubernetes.io/proxy-read-timeout: "86400"
-    nginx.ingress.kubernetes.io/proxy-send-timeout: "86400"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: '86400'
+    nginx.ingress.kubernetes.io/proxy-send-timeout: '86400'
+
+release:
+  production:
+    # The canonical deployment command fills the immutable source SHA, CI
+    # evidence, schema version, and all four image digests from a promoted
+    # release manifest. Do not put mutable image tags in this file.
+    enabled: true
 
 vault:
   enabled: true
@@ -48,7 +55,6 @@ objectStorage:
   accessKeySecretName: rivet-object-storage
   secretKeySecretName: rivet-object-storage
   forcePathStyle: false
-
 
 auth:
   keySecretName: rivet-shared-key

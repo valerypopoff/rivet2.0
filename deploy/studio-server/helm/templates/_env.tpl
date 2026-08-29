@@ -176,6 +176,10 @@
   value: {{ .jobWorkerEnabled | quote }}
 - name: RIVET_DEPLOYMENT_MANAGED_WORKFLOW_SCHEMA_MODE
   value: verify
+- name: RIVET_DEPLOYMENT_MANAGED_WORKFLOW_SCHEMA_MIN_VERSION
+  value: {{ $root.Values.workflowSchema.compatibility.minimumVersion | quote }}
+- name: RIVET_DEPLOYMENT_MANAGED_WORKFLOW_SCHEMA_MAX_VERSION
+  value: {{ $root.Values.workflowSchema.compatibility.maximumVersion | quote }}
 - name: RIVET_DEPLOYMENT_HEALTH_REFRESH_SECONDS
   value: {{ $root.Values.lifecycle.health.refreshSeconds | quote }}
 - name: RIVET_DEPLOYMENT_HEALTH_CHECK_TIMEOUT_SECONDS

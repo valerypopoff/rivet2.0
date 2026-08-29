@@ -6,6 +6,12 @@ import { MANAGED_WORKFLOW_SCHEMA_SQL } from './schema.js';
 
 export const MANAGED_WORKFLOW_SCHEMA_MIGRATIONS_TABLE = 'managed_workflow_schema_migrations';
 export const CURRENT_MANAGED_WORKFLOW_SCHEMA_VERSION = 2;
+// A serving release may verify an additive schema created by its immediate
+// successor only when the chart deliberately supplies that compatibility
+// window. Keep this constant explicit: raising it is the release-engineering
+// declaration that the current build can safely be used as a rollback target
+// for a newer schema.
+export const MINIMUM_ROLLBACK_COMPATIBLE_MANAGED_WORKFLOW_SCHEMA_VERSION = 2;
 
 const MANAGED_WORKFLOW_SCHEMA_LOCK = {
   classId: 8_071,
@@ -33,6 +39,11 @@ const TRANSIENT_SCHEMA_ERROR_CODES = new Set(['40001', '40P01', '55P03']);
 const TRANSIENT_SCHEMA_RETRY_ATTEMPTS = 3;
 
 export type ManagedWorkflowSchemaMode = 'migrate' | 'verify';
+
+export type ManagedWorkflowSchemaCompatibilityWindow = {
+  minimumVersion: number;
+  maximumVersion: number;
+};
 
 type ManagedWorkflowSchemaMigration = {
   version: number;
@@ -371,12 +382,7 @@ export const MANAGED_WORKFLOW_SCHEMA_REQUIRED_INDEXES = [
   [
     'workflow_recordings',
     'workflow_recordings_endpoint_created_at_idx',
-    [
-      'workflow_id',
-      'lower(btrim(endpoint_name_at_execution))',
-      'created_at',
-      'recording_id',
-    ],
+    ['workflow_id', 'lower(btrim(endpoint_name_at_execution))', 'created_at', 'recording_id'],
     null,
     [0, 0, 3, 3],
   ],
@@ -394,13 +400,7 @@ export const MANAGED_WORKFLOW_SCHEMA_REQUIRED_INDEXES = [
     null,
     [0, 0, 0, 0, 0, 3],
   ],
-  [
-    'web_app_action_runs',
-    'web_app_action_runs_lease_idx',
-    ['status', 'lease_expires_at'],
-    null,
-    [0, 0],
-  ],
+  ['web_app_action_runs', 'web_app_action_runs_lease_idx', ['status', 'lease_expires_at'], null, [0, 0]],
   ['web_app_action_runs', 'web_app_action_runs_host_idx', ['host_id', 'status'], null, [0, 0]],
   [
     'web_app_action_cancel_commands',
@@ -411,27 +411,9 @@ export const MANAGED_WORKFLOW_SCHEMA_REQUIRED_INDEXES = [
   ],
   ['llm_profile_health', 'llm_profile_health_project_id_idx', ['project_id'], null, [0]],
   ['llm_profile_health', 'llm_profile_health_updated_at_idx', ['updated_at'], null, [3]],
-  [
-    'evaluation_runs',
-    'evaluation_runs_project_started_idx',
-    ['project_id', 'started_at'],
-    null,
-    [0, 3],
-  ],
-  [
-    'evaluation_runs',
-    'evaluation_runs_project_suite_idx',
-    ['project_id', 'suite_id'],
-    null,
-    [0, 0],
-  ],
-  [
-    'evaluation_recordings',
-    'evaluation_recordings_project_run_idx',
-    ['project_id', 'run_id'],
-    null,
-    [0, 0],
-  ],
+  ['evaluation_runs', 'evaluation_runs_project_started_idx', ['project_id', 'started_at'], null, [0, 3]],
+  ['evaluation_runs', 'evaluation_runs_project_suite_idx', ['project_id', 'suite_id'], null, [0, 0]],
+  ['evaluation_recordings', 'evaluation_recordings_project_run_idx', ['project_id', 'run_id'], null, [0, 0]],
 ] as const;
 
 export const MANAGED_WORKFLOW_SCHEMA_REQUIRED_CONSTRAINTS = [
@@ -445,32 +427,16 @@ export const MANAGED_WORKFLOW_SCHEMA_REQUIRED_CONSTRAINTS = [
   ['app_settings', 'c', 'CHECK ((char_length(key_id) = 16))'],
   ['app_settings', 'c', 'CHECK (((source_hash IS NULL) OR (char_length(source_hash) = 64)))'],
   ['evaluation_dataset_snapshots', 'p', 'PRIMARY KEY (project_id, dataset_fingerprint)'],
-  [
-    'evaluation_dataset_snapshots',
-    'f',
-    'FOREIGN KEY (project_id) REFERENCES workflows(workflow_id) ON DELETE CASCADE',
-  ],
+  ['evaluation_dataset_snapshots', 'f', 'FOREIGN KEY (project_id) REFERENCES workflows(workflow_id) ON DELETE CASCADE'],
   ['evaluation_library', 'p', 'PRIMARY KEY (singleton_key)'],
   ['evaluation_library', 'c', 'CHECK (singleton_key)'],
   ['evaluation_library_imports', 'p', 'PRIMARY KEY (source_fingerprint)'],
   ['evaluation_recordings', 'p', 'PRIMARY KEY (project_id, recording_id)'],
-  [
-    'evaluation_recordings',
-    'f',
-    'FOREIGN KEY (project_id) REFERENCES workflows(workflow_id) ON DELETE CASCADE',
-  ],
+  ['evaluation_recordings', 'f', 'FOREIGN KEY (project_id) REFERENCES workflows(workflow_id) ON DELETE CASCADE'],
   ['evaluation_runs', 'p', 'PRIMARY KEY (project_id, run_id)'],
-  [
-    'evaluation_runs',
-    'f',
-    'FOREIGN KEY (project_id) REFERENCES workflows(workflow_id) ON DELETE CASCADE',
-  ],
+  ['evaluation_runs', 'f', 'FOREIGN KEY (project_id) REFERENCES workflows(workflow_id) ON DELETE CASCADE'],
   ['llm_profile_health', 'p', 'PRIMARY KEY (key)'],
-  [
-    MANAGED_WORKFLOW_SCHEMA_MIGRATIONS_TABLE,
-    'c',
-    'CHECK ((char_length(checksum) = 64))',
-  ],
+  [MANAGED_WORKFLOW_SCHEMA_MIGRATIONS_TABLE, 'c', 'CHECK ((char_length(checksum) = 64))'],
   [MANAGED_WORKFLOW_SCHEMA_MIGRATIONS_TABLE, 'p', 'PRIMARY KEY (version)'],
   [MANAGED_WORKFLOW_SCHEMA_MIGRATIONS_TABLE, 'c', 'CHECK ((version > 0))'],
   ['web_app_action_cancel_commands', 'p', 'PRIMARY KEY (run_id)'],
@@ -480,19 +446,11 @@ export const MANAGED_WORKFLOW_SCHEMA_REQUIRED_CONSTRAINTS = [
     'FOREIGN KEY (run_id) REFERENCES web_app_action_runs(run_id) ON DELETE CASCADE',
   ],
   ['web_app_action_run_events', 'p', 'PRIMARY KEY (run_id, sequence)'],
-  [
-    'web_app_action_run_events',
-    'f',
-    'FOREIGN KEY (run_id) REFERENCES web_app_action_runs(run_id) ON DELETE CASCADE',
-  ],
+  ['web_app_action_run_events', 'f', 'FOREIGN KEY (run_id) REFERENCES web_app_action_runs(run_id) ON DELETE CASCADE'],
   ['web_app_action_runs', 'u', 'UNIQUE (owner_scope, request_id)'],
   ['web_app_action_runs', 'p', 'PRIMARY KEY (run_id)'],
   ['workflow_endpoints', 'p', 'PRIMARY KEY (lookup_name)'],
-  [
-    'workflow_endpoints',
-    'f',
-    'FOREIGN KEY (workflow_id) REFERENCES workflows(workflow_id) ON DELETE CASCADE',
-  ],
+  ['workflow_endpoints', 'f', 'FOREIGN KEY (workflow_id) REFERENCES workflows(workflow_id) ON DELETE CASCADE'],
   ['workflow_folders', 'p', 'PRIMARY KEY (relative_path)'],
   ['workflow_published_versions', 'p', 'PRIMARY KEY (version_id)'],
   [
@@ -500,30 +458,14 @@ export const MANAGED_WORKFLOW_SCHEMA_REQUIRED_CONSTRAINTS = [
     'f',
     'FOREIGN KEY (revision_id) REFERENCES workflow_revisions(revision_id) ON DELETE CASCADE',
   ],
-  [
-    'workflow_published_versions',
-    'f',
-    'FOREIGN KEY (workflow_id) REFERENCES workflows(workflow_id) ON DELETE CASCADE',
-  ],
+  ['workflow_published_versions', 'f', 'FOREIGN KEY (workflow_id) REFERENCES workflows(workflow_id) ON DELETE CASCADE'],
   ['workflow_recordings', 'p', 'PRIMARY KEY (recording_id)'],
   ['workflow_revisions', 'p', 'PRIMARY KEY (revision_id)'],
-  [
-    'workflow_revisions',
-    'f',
-    'FOREIGN KEY (workflow_id) REFERENCES workflows(workflow_id) ON DELETE CASCADE',
-  ],
+  ['workflow_revisions', 'f', 'FOREIGN KEY (workflow_id) REFERENCES workflows(workflow_id) ON DELETE CASCADE'],
   ['workflow_web_apps', 'p', 'PRIMARY KEY (app_id)'],
-  [
-    'workflow_web_apps',
-    'f',
-    'FOREIGN KEY (revision_id) REFERENCES workflow_revisions(revision_id) ON DELETE CASCADE',
-  ],
+  ['workflow_web_apps', 'f', 'FOREIGN KEY (revision_id) REFERENCES workflow_revisions(revision_id) ON DELETE CASCADE'],
   ['workflow_web_apps', 'u', 'UNIQUE (slug_lookup_name)'],
-  [
-    'workflow_web_apps',
-    'f',
-    'FOREIGN KEY (workflow_id) REFERENCES workflows(workflow_id) ON DELETE CASCADE',
-  ],
+  ['workflow_web_apps', 'f', 'FOREIGN KEY (workflow_id) REFERENCES workflows(workflow_id) ON DELETE CASCADE'],
   ['workflow_web_apps', 'u', 'UNIQUE (workflow_id, ui_graph_id)'],
   ['workflows', 'p', 'PRIMARY KEY (workflow_id)'],
   ['workflows', 'u', 'UNIQUE (relative_path)'],
@@ -578,7 +520,10 @@ async function assertMigrationTableExists(client: PoolClient): Promise<void> {
   }
 }
 
-function validateAppliedMigrations(rows: AppliedMigrationRow[]): number {
+function validateAppliedMigrations(
+  rows: AppliedMigrationRow[],
+  maximumSupportedVersion = CURRENT_MANAGED_WORKFLOW_SCHEMA_VERSION,
+): number {
   const migrationsByVersion = new Map(
     MANAGED_WORKFLOW_SCHEMA_MIGRATIONS.map((migration) => [migration.version, migration]),
   );
@@ -586,8 +531,14 @@ function validateAppliedMigrations(rows: AppliedMigrationRow[]): number {
   for (const row of rows) {
     const expected = migrationsByVersion.get(row.version);
     if (!expected) {
+      if (row.version > CURRENT_MANAGED_WORKFLOW_SCHEMA_VERSION && row.version <= maximumSupportedVersion) {
+        // A rollback target cannot know a successor's checksum. The canonical
+        // release tool reaches this branch only after the successor manifest
+        // declares the migration expand-only and sets the serving upper bound.
+        continue;
+      }
       throw new ManagedWorkflowSchemaCompatibilityError(
-        `Managed workflow schema version ${row.version} is newer than this server supports (${CURRENT_MANAGED_WORKFLOW_SCHEMA_VERSION}).`,
+        `Managed workflow schema version ${row.version} is newer than this server supports (${maximumSupportedVersion}).`,
       );
     }
 
@@ -641,9 +592,7 @@ async function validateManagedWorkflowSchemaObjects(client: PoolClient): Promise
       actual.can_update ? null : 'UPDATE',
       actual.can_delete ? null : 'DELETE',
     ].filter((privilege): privilege is string => privilege != null);
-    return missingPrivileges.length > 0
-      ? [`${tableName} (current role lacks ${missingPrivileges.join('/')})`]
-      : [];
+    return missingPrivileges.length > 0 ? [`${tableName} (current role lacks ${missingPrivileges.join('/')})`] : [];
   });
 
   const columnResult = await client.query<ColumnRow>(
@@ -659,8 +608,8 @@ async function validateManagedWorkflowSchemaObjects(client: PoolClient): Promise
       { udtName: row.udt_name, nullable: row.is_nullable, defaultValue: row.column_default },
     ]),
   );
-  const missingColumns = MANAGED_WORKFLOW_SCHEMA_REQUIRED_COLUMNS
-    .flatMap(([tableName, columnName, expectedUdtName, expectedNullable]) => {
+  const missingColumns = MANAGED_WORKFLOW_SCHEMA_REQUIRED_COLUMNS.flatMap(
+    ([tableName, columnName, expectedUdtName, expectedNullable]) => {
       const qualifiedName = `${tableName}.${columnName}`;
       const actual = presentColumns.get(qualifiedName);
       if (!actual) {
@@ -672,15 +621,17 @@ async function validateManagedWorkflowSchemaObjects(client: PoolClient): Promise
         ];
       }
       return [];
-    });
-  const invalidColumnDefaults = MANAGED_WORKFLOW_SCHEMA_REQUIRED_COLUMN_DEFAULTS
-    .flatMap(([tableName, columnName, expectedDefault]) => {
+    },
+  );
+  const invalidColumnDefaults = MANAGED_WORKFLOW_SCHEMA_REQUIRED_COLUMN_DEFAULTS.flatMap(
+    ([tableName, columnName, expectedDefault]) => {
       const qualifiedName = `${tableName}.${columnName}`;
       const actualDefault = presentColumns.get(qualifiedName)?.defaultValue ?? null;
       return actualDefault === expectedDefault
         ? []
         : [`${qualifiedName} (expected ${expectedDefault}, received ${actualDefault ?? 'missing'})`];
-    });
+    },
+  );
 
   const indexResult = await client.query<IndexRow>(
     `SELECT index_relation.relname AS name,
@@ -706,14 +657,8 @@ async function validateManagedWorkflowSchemaObjects(client: PoolClient): Promise
     [[...MANAGED_WORKFLOW_SCHEMA_REQUIRED_INDEXES.map(([, indexName]) => indexName)]],
   );
   const presentIndexes = new Map(indexResult.rows.map((row) => [row.name, row]));
-  const missingIndexes = MANAGED_WORKFLOW_SCHEMA_REQUIRED_INDEXES
-    .flatMap(([
-      expectedTableName,
-      indexName,
-      expectedKeys,
-      expectedPredicate,
-      expectedKeyOptions,
-    ]) => {
+  const missingIndexes = MANAGED_WORKFLOW_SCHEMA_REQUIRED_INDEXES.flatMap(
+    ([expectedTableName, indexName, expectedKeys, expectedPredicate, expectedKeyOptions]) => {
       const actual = presentIndexes.get(indexName);
       if (!actual) {
         return [indexName];
@@ -743,7 +688,8 @@ async function validateManagedWorkflowSchemaObjects(client: PoolClient): Promise
         return [`${indexName} (expected ${expectedSignature}, received ${actualSignature})`];
       }
       return [];
-    });
+    },
+  );
 
   const constraintResult = await client.query<ConstraintRow>(
     `SELECT table_relation.relname AS table_name,
@@ -770,26 +716,22 @@ async function validateManagedWorkflowSchemaObjects(client: PoolClient): Promise
     [[...new Set(MANAGED_WORKFLOW_SCHEMA_REQUIRED_CONSTRAINTS.map(([tableName]) => tableName))]],
   );
   const presentConstraints = new Map(
-    constraintResult.rows.map((row) => [
-      JSON.stringify([row.table_name, row.type, row.definition]),
-      row,
-    ]),
+    constraintResult.rows.map((row) => [JSON.stringify([row.table_name, row.type, row.definition]), row]),
   );
-  const missingConstraints = MANAGED_WORKFLOW_SCHEMA_REQUIRED_CONSTRAINTS
-    .flatMap(([tableName, type, definition]) => {
-      const signature = `${tableName}/${type}/${definition}`;
-      const actual = presentConstraints.get(JSON.stringify([tableName, type, definition]));
-      if (!actual) {
-        return [signature];
-      }
-      if (!actual.is_validated) {
-        return [`${signature} (not validated)`];
-      }
-      if (!actual.backing_index_valid || !actual.backing_index_ready) {
-        return [`${signature} (backing index is invalid or unready)`];
-      }
-      return [];
-    });
+  const missingConstraints = MANAGED_WORKFLOW_SCHEMA_REQUIRED_CONSTRAINTS.flatMap(([tableName, type, definition]) => {
+    const signature = `${tableName}/${type}/${definition}`;
+    const actual = presentConstraints.get(JSON.stringify([tableName, type, definition]));
+    if (!actual) {
+      return [signature];
+    }
+    if (!actual.is_validated) {
+      return [`${signature} (not validated)`];
+    }
+    if (!actual.backing_index_valid || !actual.backing_index_ready) {
+      return [`${signature} (backing index is invalid or unready)`];
+    }
+    return [];
+  });
 
   const functionResult = await client.query<FunctionRow>(
     `SELECT md5(function_relation.prosrc) AS source_checksum,
@@ -805,10 +747,7 @@ async function validateManagedWorkflowSchemaObjects(client: PoolClient): Promise
         AND function_relation.oid = to_regprocedure(
           format('%I.%I(%s)', current_schema(), $1::text, $2::text)
         )`,
-    [
-      MANAGED_WORKFLOW_SCHEMA_REQUIRED_FUNCTION.name,
-      MANAGED_WORKFLOW_SCHEMA_REQUIRED_FUNCTION.argumentTypes,
-    ],
+    [MANAGED_WORKFLOW_SCHEMA_REQUIRED_FUNCTION.name, MANAGED_WORKFLOW_SCHEMA_REQUIRED_FUNCTION.argumentTypes],
   );
   const actualFunction = functionResult.rows[0];
   const expectedFunctionSignature = JSON.stringify({
@@ -829,20 +768,17 @@ async function validateManagedWorkflowSchemaObjects(client: PoolClient): Promise
         resultType: actualFunction.result_type,
       })
     : null;
-  const functionProblem = actualFunctionSignature === expectedFunctionSignature
-    ? null
-    : `${MANAGED_WORKFLOW_SCHEMA_REQUIRED_FUNCTION.name}(${MANAGED_WORKFLOW_SCHEMA_REQUIRED_FUNCTION.argumentTypes}) (expected ${expectedFunctionSignature}, received ${actualFunctionSignature ?? 'missing'})`;
+  const functionProblem =
+    actualFunctionSignature === expectedFunctionSignature
+      ? null
+      : `${MANAGED_WORKFLOW_SCHEMA_REQUIRED_FUNCTION.name}(${MANAGED_WORKFLOW_SCHEMA_REQUIRED_FUNCTION.argumentTypes}) (expected ${expectedFunctionSignature}, received ${actualFunctionSignature ?? 'missing'})`;
 
   const problems = [
     tableProblems.length > 0 ? `tables: ${describeMissing(tableProblems)}` : null,
     missingColumns.length > 0 ? `columns: ${describeMissing(missingColumns)}` : null,
-    invalidColumnDefaults.length > 0
-      ? `column defaults: ${describeMissing(invalidColumnDefaults)}`
-      : null,
+    invalidColumnDefaults.length > 0 ? `column defaults: ${describeMissing(invalidColumnDefaults)}` : null,
     missingIndexes.length > 0 ? `indexes: ${describeMissing(missingIndexes)}` : null,
-    missingConstraints.length > 0
-      ? `constraints: ${describeMissing(missingConstraints)}`
-      : null,
+    missingConstraints.length > 0 ? `constraints: ${describeMissing(missingConstraints)}` : null,
     functionProblem ? `function: ${functionProblem}` : null,
   ].filter((problem): problem is string => problem != null);
 
@@ -853,9 +789,7 @@ async function validateManagedWorkflowSchemaObjects(client: PoolClient): Promise
   }
 }
 
-export function getManagedWorkflowSchemaMode(
-  env: NodeJS.ProcessEnv = process.env,
-): ManagedWorkflowSchemaMode {
+export function getManagedWorkflowSchemaMode(env: NodeJS.ProcessEnv = process.env): ManagedWorkflowSchemaMode {
   const configured = env.RIVET_MANAGED_WORKFLOW_SCHEMA_MODE?.trim().toLowerCase();
   if (!configured || configured === 'migrate') {
     return 'migrate';
@@ -864,13 +798,53 @@ export function getManagedWorkflowSchemaMode(
     return 'verify';
   }
 
-  throw new Error(
-    `Invalid RIVET_MANAGED_WORKFLOW_SCHEMA_MODE "${configured}". Expected "migrate" or "verify".`,
+  throw new Error(`Invalid RIVET_MANAGED_WORKFLOW_SCHEMA_MODE "${configured}". Expected "migrate" or "verify".`);
+}
+
+function parseCompatibilityVersion(value: string | undefined, variableName: string, fallback: number): number {
+  const configured = value?.trim();
+  if (!configured) {
+    return fallback;
+  }
+
+  const parsed = Number(configured);
+  if (!Number.isInteger(parsed) || parsed < 1) {
+    throw new Error(`Invalid ${variableName} "${configured}". Expected a positive integer schema version.`);
+  }
+  return parsed;
+}
+
+/**
+ * Serving API pods are verify-only. The Helm release, rather than a user
+ * secret, supplies this window after dotenv loading. A normal release accepts
+ * only its own schema. During a documented expand-only rollback, the release
+ * tool may widen the upper bound so the older image verifies the newer
+ * additive schema without trying to mutate it.
+ */
+export function getManagedWorkflowSchemaCompatibilityWindow(
+  env: NodeJS.ProcessEnv = process.env,
+): ManagedWorkflowSchemaCompatibilityWindow {
+  const minimumVersion = parseCompatibilityVersion(
+    env.RIVET_MANAGED_WORKFLOW_SCHEMA_MIN_VERSION,
+    'RIVET_MANAGED_WORKFLOW_SCHEMA_MIN_VERSION',
+    CURRENT_MANAGED_WORKFLOW_SCHEMA_VERSION,
   );
+  const maximumVersion = parseCompatibilityVersion(
+    env.RIVET_MANAGED_WORKFLOW_SCHEMA_MAX_VERSION,
+    'RIVET_MANAGED_WORKFLOW_SCHEMA_MAX_VERSION',
+    CURRENT_MANAGED_WORKFLOW_SCHEMA_VERSION,
+  );
+  if (minimumVersion > maximumVersion) {
+    throw new Error(
+      `Invalid managed workflow schema compatibility window ${minimumVersion}-${maximumVersion}: minimum version cannot exceed maximum version.`,
+    );
+  }
+  return { minimumVersion, maximumVersion };
 }
 
 type RunSchemaOptions = {
   applicationVersion?: string | null;
+  compatibilityWindow?: ManagedWorkflowSchemaCompatibilityWindow;
   logger?: Pick<Console, 'log' | 'warn'>;
 };
 
@@ -882,19 +856,13 @@ function safelyLog(run: () => void): void {
   }
 }
 
-async function rollbackAfterSchemaError(
-  client: PoolClient,
-  logger: Pick<Console, 'warn'>,
-): Promise<boolean> {
+async function rollbackAfterSchemaError(client: PoolClient, logger: Pick<Console, 'warn'>): Promise<boolean> {
   try {
     await client.query('ROLLBACK');
     return false;
   } catch (rollbackError) {
     safelyLog(() =>
-      logger.warn(
-        '[managed-workflow-schema] Failed to roll back after a schema migration error:',
-        rollbackError,
-      ),
+      logger.warn('[managed-workflow-schema] Failed to roll back after a schema migration error:', rollbackError),
     );
     return true;
   }
@@ -906,6 +874,16 @@ async function runManagedWorkflowSchema(
   options: RunSchemaOptions = {},
 ): Promise<ManagedWorkflowSchemaResult> {
   const logger = options.logger ?? console;
+  const compatibilityWindow = options.compatibilityWindow ?? getManagedWorkflowSchemaCompatibilityWindow();
+  if (
+    mode === 'migrate' &&
+    (compatibilityWindow.minimumVersion !== CURRENT_MANAGED_WORKFLOW_SCHEMA_VERSION ||
+      compatibilityWindow.maximumVersion !== CURRENT_MANAGED_WORKFLOW_SCHEMA_VERSION)
+  ) {
+    throw new Error(
+      'Managed workflow schema migrations require the exact schema version for this build. Compatibility windows are only valid for verify-only serving workloads.',
+    );
+  }
   const client = await pool.connect();
   const appliedVersions: number[] = [];
   const startedAt = Date.now();
@@ -935,12 +913,18 @@ async function runManagedWorkflowSchema(
     }
 
     const appliedResult = await client.query<AppliedMigrationRow>(LIST_MIGRATIONS_SQL);
-    let currentVersion = validateAppliedMigrations(appliedResult.rows);
+    let currentVersion = validateAppliedMigrations(
+      appliedResult.rows,
+      mode === 'verify' ? compatibilityWindow.maximumVersion : CURRENT_MANAGED_WORKFLOW_SCHEMA_VERSION,
+    );
     observedVersion = currentVersion;
 
-    if (mode === 'verify' && currentVersion !== CURRENT_MANAGED_WORKFLOW_SCHEMA_VERSION) {
+    if (
+      mode === 'verify' &&
+      (currentVersion < compatibilityWindow.minimumVersion || currentVersion > compatibilityWindow.maximumVersion)
+    ) {
       throw new ManagedWorkflowSchemaCompatibilityError(
-        `Managed workflow schema is at version ${currentVersion}; this server requires version ${CURRENT_MANAGED_WORKFLOW_SCHEMA_VERSION}. Run "yarn studio-server:workflow-schema:migrate" before starting verify-only API workloads.`,
+        `Managed workflow schema is at version ${currentVersion}; this server supports versions ${compatibilityWindow.minimumVersion}-${compatibilityWindow.maximumVersion}. Run "yarn studio-server:workflow-schema:migrate" before starting verify-only API workloads, or use the documented expand-only rollback release values.`,
       );
     }
 
@@ -960,12 +944,7 @@ async function runManagedWorkflowSchema(
           `INSERT INTO ${MANAGED_WORKFLOW_SCHEMA_MIGRATIONS_TABLE}
              (version, name, checksum, application_version)
            VALUES ($1, $2, $3, $4)`,
-          [
-            migration.version,
-            migration.name,
-            migration.checksum,
-            options.applicationVersion?.trim() || null,
-          ],
+          [migration.version, migration.name, migration.checksum, options.applicationVersion?.trim() || null],
         );
         appliedVersions.push(migration.version);
         currentVersion = migration.version;
@@ -1011,7 +990,7 @@ async function runManagedWorkflowSchemaWithRetry(
         throw error;
       }
 
-      const delayMs = 250 * (2 ** (attempt - 1)) + Math.floor(Math.random() * 100);
+      const delayMs = 250 * 2 ** (attempt - 1) + Math.floor(Math.random() * 100);
       safelyLog(() =>
         logger.warn(
           `[managed-workflow-schema] ${mode} failed with transient PostgreSQL error ${code}; retrying in ${delayMs}ms (${attempt}/${TRANSIENT_SCHEMA_RETRY_ATTEMPTS}).`,
