@@ -2,6 +2,7 @@ export const kubernetesApiTestFiles = [
   'src/tests/kubernetes-contract.test.ts',
   'src/tests/kubernetes-launcher-config.test.ts',
   'src/tests/kubernetes-managed-release-gate.test.ts',
+  'src/tests/kubernetes-managed-restore-drill.test.ts',
 ];
 
 export const defaultApiTestFiles = [

@@ -221,6 +221,96 @@ When `keyRotation` is supplied, the gate writes an unchanged Run recordings sett
 
 Run it from **Build Images** -> **Run workflow**, enabling `run_managed_kubernetes_provider_gate`. The protected job allows up to 180 minutes because candidate deployment, optional three-phase key rotation, legacy rollback, and outage recovery are each bounded independently; the default Helm operation bound is 15 minutes. The job resolves the candidate images to digests, verifies the rendered release uses them, checks the public ingress host and TLS endpoint, and uploads only workload/manifest/log artifacts under `artifacts/kubernetes-managed-provider-gate`. Candidate Helm upgrades are atomic: a failed rollout rolls the release back instead of leaving a partial failed candidate deployed. The ingress check is restricted to objects owned by the selected Helm release, so an unrelated staging ingress cannot satisfy it. When upgrading an existing staging release, the gate reuses its existing Helm values so omitted values are not reset; a new staging release uses only the supplied values. The gate treats any Helm history error other than an explicitly absent release as a failure, rather than risking an install-style upgrade with no inherited values. The gate labels and owns only its configured registry pull secret (by default, `rivet-managed-provider-gate-registry`) and refuses to overwrite a same-named secret without its ownership label. A first green run is required operational evidence; repository tests can validate this harness but cannot substitute for access to the real provider services.
 
+### Cross-store backup and restore drill
+
+`yarn studio-server:verify:kubernetes:managed-restore` is the protected **operator** command for disaster-recovery evidence. It deliberately does not create database snapshots or object copies itself: PostgreSQL PITR/snapshot creation, object-store version retention, and encrypted-key backup are provider-owned controls. The command takes their recovery point as input, restores it through provider-owned Kubernetes Jobs, and verifies that the restored stores work together.
+
+Run the command only from the exact clean checkout named by the promoted release manifest captured with the backup. The runner rejects a dirty or different checkout, a chart-digest mismatch, a non-promoted release, a context that does not exactly match its allowlist, a missing `RIVET_K8S_RESTORE_DRILL_CONFIRM=restore-disposable-target` acknowledgement, or any target namespace that already exists. It creates only a namespace beginning `rivet-restore-` with the drill ownership label in the same Kubernetes create request, deploys only the manifest's immutable image digests, then rechecks that live ownership label before it removes the Helm release, runs the provider cleanup Job, deletes the namespace, and waits up to five minutes for that deletion to finish. The runner reads each provider driver YAML once, validates that exact in-memory document as one owned no-retry Job, then applies that same document; a driver Job that reports failure fails immediately instead of consuming its full timeout. It never contacts the source namespace, database, bucket/prefix, or hostname after the provider driver has received its declared recovery point.
+
+The protected, non-secret configuration file and Helm values are environment-owned. Keep credentials, kubeconfigs, authenticated probe headers, backup credentials, and key values out of Git. A restore target must use all-new identities: namespace, Helm release, a non-local HTTPS DNS hostname (including a non-production OAuth callback configuration), database identifier, and object-storage bucket/prefix. Hostname, database identifier, and bucket separation are checked without trusting letter case; hostname comparison also canonicalizes DNS trailing dots, so reusing the source hostname on another HTTPS port or as a fully-qualified DNS name is still rejected. Every HTTP probe refuses redirects, so a misrouted target cannot obtain success from another host. The backup manifest has this exact shape; `release` is the existing promoted Studio Server release manifest, not a tag:
+
+```json
+{
+  "formatVersion": 1,
+  "createdAt": "2026-08-29T04:00:00.000Z",
+  "source": {
+    "namespace": "rivet-production",
+    "baseUrl": "https://rivet.example.com"
+  },
+  "release": "<complete promoted Studio Server release manifest>",
+  "database": {
+    "provider": "managed-postgres",
+    "sourceId": "rivet-production-postgres",
+    "recoveryPointId": "provider-snapshot-or-pitr-id",
+    "recoveryPointAt": "2026-08-29T03:55:00.000Z"
+  },
+  "objectStorage": {
+    "provider": "s3-compatible",
+    "bucket": "rivet-production-artifacts",
+    "prefix": "rivet/production",
+    "recoveryPointId": "object-version-set-id",
+    "recoveryPointAt": "2026-08-29T03:55:00.000Z",
+    "versioningRetentionSeconds": 604800
+  },
+  "appSettings": {
+    "encryptionKeyIds": ["0123456789abcdef"]
+  }
+}
+```
+
+`release` must be an object with the complete promoted manifest created by the release pipeline; the string above is only a documentation placeholder. The manifest accepts no extra fields, so credentials and key material cannot be accidentally placed in the backup receipt. Object version retention must be at least the requested maximum RPO. The App Settings identifiers are the 16-character derived key IDs stored in PostgreSQL, never the key values themselves.
+
+The restore configuration supplies the manifest, distinct target, objective, authenticated probes, and three provider Jobs:
+
+```json
+{
+  "backup": "<backup-manifest object above>",
+  "target": {
+    "namespace": "rivet-restore-20260829",
+    "release": "rivet-restore",
+    "baseUrl": "https://rivet-restore.example.net",
+    "databaseId": "rivet-restore-postgres",
+    "objectStorage": { "bucket": "rivet-drills", "prefix": "2026-08-29" }
+  },
+  "objectives": { "maximumRpoSeconds": 86400, "maximumRtoSeconds": 7200 },
+  "requestHeaders": { "authorization": "Bearer <restore-target-only credential>" },
+  "probes": {
+    "appSettings": { "path": "/api/app-settings/run-recordings", "contains": "retentionDays" },
+    "oauth": { "path": "/api/app-settings/web-app-auth", "contains": "provider" },
+    "project": { "path": "/api/...", "contains": "synthetic-restored-project" },
+    "workflow": {
+      "path": "/workflows/restored",
+      "method": "POST",
+      "body": { "input": "restore" },
+      "contains": "restored-workflow"
+    },
+    "webApp": { "path": "/apps/restored", "contains": "Restored web app" },
+    "recording": { "path": "/api/...", "contains": "synthetic-restored-recording" },
+    "evaluation": { "path": "/api/...", "contains": "synthetic-restored-evaluation" },
+    "runtimeLibrary": { "path": "/api/...", "contains": "synthetic-restored-library" }
+  },
+  "restoreDriver": { "applyFile": "restore.yaml", "jobName": "restore-driver", "timeoutSeconds": 1800 },
+  "integrityDriver": { "applyFile": "integrity.yaml", "jobName": "integrity-driver", "timeoutSeconds": 900 },
+  "cleanupDriver": { "applyFile": "cleanup.yaml", "jobName": "cleanup-driver", "timeoutSeconds": 900 }
+}
+```
+
+Every `applyFile` is a regular, non-symlink file below the config directory. It must render exactly one `batch/v1` Job in the restore namespace, with `backoffLimit: 0`, `restartPolicy: Never`, `rivet.restore-drill/owned: "true"`, and the matching `rivet.restore-drill/role` of `restore`, `integrity`, or `cleanup`. The restore driver uses environment-owned workload identity/Vault/provider credentials to restore the named PostgreSQL point and object version set to the target. It writes one non-secret final log line:
+
+```text
+RIVET_RESTORE_DRIVER_REPORT={"formatVersion":1,"completedAt":"...","database":{"recoveryPointId":"...","targetId":"...","managedWorkflowSchemaVersion":2},"objectStorage":{"recoveryPointId":"...","bucket":"...","prefix":"...","objectsRestored":42},"encryptionKeyIds":["0123456789abcdef"]}
+```
+
+The integrity driver must inspect database-owned object references against the restored object store, report missing references and orphan count, and run a negative fixture: remove one known synthetic referenced object, prove it is reported missing, restore it, then emit:
+
+```text
+RIVET_RESTORE_INTEGRITY_REPORT={"formatVersion":1,"checkedAt":"...","referencedObjectCount":42,"missingReferences":[],"orphanObjectCount":3,"negativeProbe":{"missingReference":"...","detected":true,"restored":true}}
+```
+
+The restore and integrity reports must each prove positive object recovery/reference counts; this prevents a nominal drill from skipping object-backed recordings and runtime libraries. Any nonempty `missingReferences` fails the drill with the exact object IDs. Orphans are counted rather than automatically deleted. The app-settings and OAuth probes must read restored encrypted rows, so a missing declared App Settings key cannot be hidden by a nominal HTTP success. The report records exact release/schema/key IDs, both provider recovery IDs, target identity, actual RPO from the oldest restored store point, and end-to-end RTO. A run is marked passed only after the owned namespace deletion is confirmed; a failure report records only the controlled failure stage and cleanup status, while raw command diagnostics stay in protected operator logs. It never contains request headers, credentials, key material, or raw provider-driver logs.
+
+Start with a synthetic disposable provider project, then a sanitized production-shaped backup. Preserve the last successful JSON report in the operations evidence store and record the owner, frequency, retention windows, RPO/RTO objectives, and source release. Do **not** schedule the command until that protected operating procedure and target-cleanup ownership are approved: scheduling a provider-credentialed restore is an operational authorization, not a source-code default.
+
 ## Managed workflow schema migrations
 
 Managed workflow DDL is versioned and serialized separately from ordinary API startup:

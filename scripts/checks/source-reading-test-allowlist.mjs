@@ -60,6 +60,9 @@ export const sourceReadingTestAllowlist = new Set([
   'packages/app/src/utils/platform/tauriViteOptimizeDeps.test.ts',
   'packages/cli/test/cli.test.ts',
   'packages/core/test/model/nodes/LLMChatV2Node.test.ts',
+  // Static release-deployment contract: the script intentionally guards
+  // source checkout and Helm argument ordering before it touches a cluster.
+  'deploy/studio-server/scripts/studio-server-release-manifest.test.mjs',
   // Imported Studio Server migration baseline. Keep shrinking these entries as
   // their static integration contracts gain observable owner seams.
   'packages/studio-server-api/src/tests/app-settings.test.ts',
