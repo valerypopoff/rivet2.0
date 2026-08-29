@@ -321,7 +321,7 @@ Managed workflow DDL is versioned and serialized separately from ordinary API st
 - Local Docker and simple managed single-process deployments default to startup mode `migrate`, preserving their automatic first-run behavior.
 - Kubernetes API pods are forced into `verify` mode after Vault dotenv loading. They take a shared advisory lock, validate the ledger/checksum and critical schema shape, and fail startup with a precise compatibility error instead of applying DDL.
 
-The chart owns migration execution through the `workflow-schema-migration` Helm hook Job. It runs `pre-install,pre-upgrade` with the candidate API image. The Job bootstraps candidate deployment-storage settings into an isolated `emptyDir`, runs workflow schema migration with the file settings backend so migration 2 can create `app_settings`, then enables the PostgreSQL backend and seeds each absent domain from its matching regular, valid legacy JSON file when available. Both phases reuse one rendered database credential set; the Job does not declare duplicate database environment names. A missing, malformed, symlinked, or non-file legacy entry leaves that domain on the candidate bootstrap/default instead of replacing the whole bootstrap root. Serving pods remain verify-only. Vault injection is pre-populate-only, so no sidecar can keep the one-shot Job alive. A successful hook is deleted; a failed hook remains for logs and blocks the release.
+The chart owns migration execution through the `workflow-schema-migration` Helm hook Job. It runs `pre-install,pre-upgrade` with the candidate API image. The Job bootstraps candidate deployment-storage settings into an isolated `emptyDir`, runs workflow schema migration with the file settings backend so migration 2 can create `app_settings`, then enables the PostgreSQL backend and seeds each absent domain from its matching regular, valid legacy JSON file when available. Both phases reuse one rendered database credential set; the Job does not declare duplicate database environment names. A missing, malformed, symlinked, or non-file legacy entry leaves that domain on the candidate bootstrap/default instead of replacing the whole bootstrap root. Serving pods remain verify-only. Vault injection is pre-populate-only and explicitly init-first, so the injected agent renders `/vault/dotenv` before this Job sources it and no sidecar can keep the one-shot hook alive. A successful hook is deleted; a failed hook remains for logs and blocks the release.
 
 For a normal chart install, keep:
 
@@ -446,6 +446,8 @@ Before DevOps installs it, they must replace or confirm:
 - `postgres.maxConnections`, `postgres.reservedConnections`, and `postgres.poolMaxPerApiPod` against the provider's actual database limit and the execution HPA maximum
 - object-storage bucket, region, endpoint, and secret wiring
 - `auth.keySecretName` or equivalent Vault-provided `RIVET_KEY`
+- `writableVolumeLimits.*` from measured workspace, workflow, app-data, and runtime-library high-water marks
+- for every workload, complete memory and node-ephemeral-storage request/limit pairs, or the documented temporary rationale under `resourceLimitAcknowledgements`; remove an acknowledgement as soon as its measured limit is supplied
 
 The chart defaults deliberately use `example.invalid/...` image repositories and the templates fail validation until those placeholders are replaced. This keeps production installs from silently using stale or accidental images.
 
@@ -530,6 +532,16 @@ vault:
     {{ $key }}={{ $value | toJSON }}
     {{- end }}
     {{- end }}
+  # Keep this small-dotenv injector bounded; do not use it for large files.
+  agentResources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+      ephemeral-storage: 64Mi
+    limits:
+      cpu: 250m
+      memory: 128Mi
+      ephemeral-storage: 256Mi
 
 postgres:
   mode: managed
@@ -578,7 +590,11 @@ resources:
       memory: 1Gi
 ```
 
-The chart ships baseline CPU and memory requests for every workload so CPU HPAs have a real denominator. Treat them as a starting point: load-test representative workflows, observe CPU, memory, request latency, and external-provider latency, then tune requests and HPA targets. Hard memory limits remain operator policy because a limit that is too small can kill long-running workflows during a temporary memory peak.
+The chart ships baseline CPU and memory requests for every workload so CPU HPAs have a real denominator. Treat them as a starting point: load-test representative workflows, observe CPU, memory, temporary-storage use, request latency, and external-provider latency, then tune requests and HPA targets. A generic hard memory limit can kill a valid long-running workflow during a temporary peak, so the chart does not pretend that one default fits every environment.
+
+Every chart-managed disposable writable volume is nevertheless bounded: `writableVolumeLimits` caps workspace, workflow materialization, app-data projections, and runtime-library cache storage; the existing `tmpVolume.sizeLimit` caps `/var/tmp`. These prevent a single pod from consuming unbounded node ephemeral storage, but their starting values are not capacity evidence.
+
+For a production release, Helm requires each of `proxy`, `web`, `api`, `executor`, and `execution` to provide either both memory request/limit and both `ephemeral-storage` request/limit values, or a non-trivial component-specific explanation under `resourceLimitAcknowledgements`. Those values must be Kubernetes quantity strings (for example `750Mi`, `2Gi`, or `1G`); Helm rejects non-string values and common unsupported quantity forms before a release reaches the cluster, while Kubernetes remains the final admission authority. The acknowledgement is a deliberate temporary decision, not a second configuration source: Helm rejects it once the corresponding complete resource policy exists. The supplied production overlay records the current measured-limit deferral explicitly. Replace those explanations with tested values after the published-route capacity gate.
 
 The sample `service.type: NodePort` / single `service.targetPort` pattern from simple apps does not apply here. This chart creates component services internally, keeps them as `ClusterIP`, and routes ingress to the `proxy` service.
 
@@ -760,6 +776,30 @@ provider, storage, and recording evidence. Helm owns these environment variables
 reapplies them after Vault dotenv loading, so a stale secret cannot override the deployment
 policy.
 
+### Writable-volume and pod-resource policy
+
+`emptyDir` limits and pod resource limits solve different failure modes. The former bounds a particular disposable filesystem; the latter gives the scheduler an honest memory/node-ephemeral reservation and ceiling for the entire container. Configure both from the published-route load gate rather than copying the starting values into production unchanged:
+
+```yaml
+writableVolumeLimits:
+  workspace: 2Gi
+  workflows: 2Gi
+  appData: 1Gi
+  runtimeLibraries: 8Gi
+
+resources:
+  execution:
+    requests:
+      cpu: 500m
+      memory: <measured-reservation>
+      ephemeral-storage: <measured-reservation>
+    limits:
+      memory: <measured-ceiling>
+      ephemeral-storage: <measured-ceiling>
+```
+
+The same component resource map is applied to its startup init containers. This keeps Kubernetes scheduling and a future measured ceiling honest across storage bootstrap, settings projection, and the running API process rather than limiting only the final container. While a safe measured ceiling is not yet available, production may instead retain a component-specific `resourceLimitAcknowledgements.execution.memory` and `.ephemeralStorage` rationale. It must explain the deferral; the production chart rejects a missing/short rationale, and it also rejects a stale rationale once both request and limit are set. This makes a deferred limit reviewable without silently claiming that the chart has a tested capacity envelope. Do not use an acknowledgement to bypass a known safe limit.
+
 ### Health, lifecycle, and availability
 
 The chart owns health and lifecycle policy explicitly. Do not try to override it through arbitrary dotenv keys; use the typed `lifecycle`, `rollout`, and `availability` values. API containers capture the chart-owned lifecycle values before loading Vault dotenv and reapply them afterward, so a stale secret file cannot silently change probe timing or shutdown policy.
@@ -816,6 +856,10 @@ The backend remains a validated singleton. Managed web-app action run history/re
 ### Vault dotenv contract
 
 Runtime images source `/vault/dotenv` at startup and also accept the Vault Injector default fallback path `/vault/secrets/<dotenvFileName>`. API and executor workloads receive the configured full dotenv; the proxy's chart-owned template writes only `RIVET_KEY` to that path.
+
+The chart's typed dotenv contract emits `agent-pre-populate-only: "true"` and `agent-init-first: "true"`. The latter is essential: backend/execution bootstrap and settings-projection init containers, plus the schema-migration Job, source `/vault/dotenv`; the Vault Agent must therefore complete before them. It also emits explicit CPU, memory, and node-ephemeral requests and limits from `vault.agentResources` (`50m`/`64Mi`/`64Mi` requested and `250m`/`128Mi`/`256Mi` limited by default). These small bounds are intentionally separate from the long-running graph workloads, because the injected agent only renders the dotenv file. The Injector owns the shared in-memory secret volume and its standard annotations do not expose a chart-owned `sizeLimit`; do not use this dotenv contract for large rendered payloads.
+
+`vault.annotations` remains available for extra Injector configuration, but chart-owned dotenv injection, ordering, and agent-resource annotations render afterward and take precedence over the same annotation keys. The chart validates all six `vault.agentResources` quantities as positive Kubernetes quantities whenever its typed injector is active. Helm can prove only the admission annotations; a provider-backed staging release must inspect a resulting Pod and confirm that `vault-agent-init` is first, has those resources, and rendered the expected file. See HashiCorp's [Vault Agent Injector annotation reference](https://developer.hashicorp.com/vault/docs/deploy/kubernetes/injector/annotations) before changing the injector implementation or annotation names.
 
 When Vault is enabled, the dotenv file should provide the sensitive values that should not live directly in Helm values:
 
@@ -1020,7 +1064,7 @@ Common first-deploy failure patterns:
 
 - `ImagePullBackOff`: check GHCR visibility, tag names, and `imagePullSecrets`
 - `Pending`: check image pulls, runtime-library cache PVC attachment when configured, and any optional legacy-import PVC; normal App Settings no longer require a shared claim
-- Vault injector never creates `/vault/dotenv`: check `vault.role`, `vault.authPath`, `vault.secretPath`, Vault auth policy, and Vault Injector installation
+- Vault injector never creates `/vault/dotenv`, or a chart init container starts before it exists: check `vault.role`, `vault.authPath`, `vault.secretPath`, Vault auth policy, Injector installation, and the mutated Pod's first `vault-agent-init` container plus its `vault.agentResources` reservations
 - API pods crash during startup: check Postgres connection values, object-storage credentials, and whether the secret keys match the names in `postgres.*`, `objectStorage.*`, or `/vault/dotenv`
 - HPA shows missing metrics: install/fix `metrics-server` and set CPU requests for `resources.proxy` and `resources.execution`
 - Helm reports `PostgreSQL capacity is too small`: confirm the provider's actual `max_connections`, then adjust provider capacity, execution `maxReplicas`, or `postgres.poolMaxPerApiPod`; do not raise `postgres.maxConnections` only to silence validation

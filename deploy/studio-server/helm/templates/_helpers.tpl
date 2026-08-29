@@ -82,12 +82,23 @@ app.kubernetes.io/component: {{ .component }}
 
 {{- define "rivet.vaultBaseAnnotations" -}}
 {{- if .Values.vault.enabled -}}
+{{- /* Preserve extension annotations, but render chart-owned injection policy after them. */ -}}
+{{- range $key, $value := .Values.vault.annotations }}
+{{ $key }}: {{ tpl (printf "%v" $value) $ | quote }}
+{{- end }}
 {{- if .Values.vault.secretPath }}
 vault.hashicorp.com/agent-inject: "true"
 vault.hashicorp.com/agent-pre-populate-only: "true"
+vault.hashicorp.com/agent-init-first: "true"
 vault.hashicorp.com/agent-inject-secret-{{ .Values.vault.dotenvFileName }}: {{ .Values.vault.secretPath | quote }}
 vault.hashicorp.com/secret-volume-path-{{ .Values.vault.dotenvFileName }}: "/vault"
 vault.hashicorp.com/agent-inject-file-{{ .Values.vault.dotenvFileName }}: {{ .Values.vault.dotenvFileName | quote }}
+vault.hashicorp.com/agent-requests-cpu: {{ .Values.vault.agentResources.requests.cpu | quote }}
+vault.hashicorp.com/agent-requests-mem: {{ .Values.vault.agentResources.requests.memory | quote }}
+vault.hashicorp.com/agent-requests-ephemeral: {{ index .Values.vault.agentResources.requests "ephemeral-storage" | quote }}
+vault.hashicorp.com/agent-limits-cpu: {{ .Values.vault.agentResources.limits.cpu | quote }}
+vault.hashicorp.com/agent-limits-mem: {{ .Values.vault.agentResources.limits.memory | quote }}
+vault.hashicorp.com/agent-limits-ephemeral: {{ index .Values.vault.agentResources.limits "ephemeral-storage" | quote }}
 {{- end }}
 {{- if .Values.vault.role }}
 vault.hashicorp.com/role: {{ .Values.vault.role | quote }}
@@ -102,12 +113,8 @@ vault.hashicorp.com/ca-cert: {{ .Values.vault.caCertPath | quote }}
 {{- if .Values.vault.tlsSkipVerify }}
 vault.hashicorp.com/tls-skip-verify: "true"
 {{- end }}
-{{- range $key, $value := .Values.vault.annotations }}
-{{ $key }}: {{ tpl (printf "%v" $value) $ | quote }}
-{{- end }}
 {{- end -}}
 {{- end -}}
-
 {{- define "rivet.vaultAnnotations" -}}
 {{- include "rivet.vaultBaseAnnotations" . }}
 {{- if and .Values.vault.enabled .Values.vault.secretPath .Values.vault.dotenvTemplate }}

@@ -73,6 +73,35 @@ publishedExecutionAdmission:
   maxActiveRunsPerPod: 4
   retryAfterSeconds: 1
 
+# Initial node-ephemeral caps for disposable content. Tune from the
+# published-route load gate; use a persistent cache claim when a larger
+# runtime-library cache is deliberately required.
+writableVolumeLimits:
+  workspace: 2Gi
+  workflows: 2Gi
+  appData: 1Gi
+  runtimeLibraries: 8Gi
+
+# No generic memory/node-ephemeral resource limits are assumed to be safe for
+# long-running graphs. These acknowledgements make that temporary decision
+# deliberate; replace each with measured limits after the capacity load gate.
+resourceLimitAcknowledgements:
+  proxy:
+    memory: "Proxy memory limit deferred until ingress load evidence is retained."
+    ephemeralStorage: "Proxy node-ephemeral limit deferred until ingress and log-volume evidence is retained."
+  web:
+    memory: "Web memory limit deferred until the low-volume control-plane profile is measured."
+    ephemeralStorage: "Web node-ephemeral limit deferred until the low-volume control-plane profile is measured."
+  api:
+    memory: "Control API memory limit deferred until editor and maintenance high-water marks are measured."
+    ephemeralStorage: "Control API node-ephemeral limit deferred until projection, workspace, and maintenance high-water marks are measured."
+  executor:
+    memory: "Editor executor memory limit deferred until remote-debugger graph high-water marks are measured."
+    ephemeralStorage: "Editor executor node-ephemeral limit deferred until shared workspace and runtime-library high-water marks are measured."
+  execution:
+    memory: "Execution API memory limit deferred until the published-route load gate establishes a safe ceiling."
+    ephemeralStorage: "Execution API node-ephemeral limit deferred until the published-route load gate establishes a safe ceiling."
+
 autoscaling:
   proxy:
     enabled: true

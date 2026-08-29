@@ -113,10 +113,31 @@ test('rendered chart keeps control-plane and execution-plane API env contracts d
   assert.match(renderedChart, /name: RIVET_DEPLOYMENT_DATABASE_CONNECTION_STRING/);
   assert.match(renderedChart, /name: RIVET_DEPLOYMENT_DATABASE_POOL_MAX\s*\n\s*value: "10"/);
   assert.match(renderedChart, /name: RIVET_DEPLOYMENT_STORAGE_ACCESS_KEY_ID/);
+  const boundedWritableVolumes = [
+    ['workspace', '2Gi', 2],
+    ['workflows', '2Gi', 2],
+    ['app-data', '1Gi', 2],
+    ['runtime-libraries', '8Gi', 2],
+    ['var-tmp', '2Gi', 4],
+  ] as const;
+  for (const [volumeName, sizeLimit, expectedOccurrences] of boundedWritableVolumes) {
+    assert.equal(
+      (
+        renderedChart.match(
+          new RegExp(`- name: ${volumeName}\\s*\\n\\s*emptyDir:\\s*\\n\\s*sizeLimit: ${sizeLimit}`, 'g'),
+        ) ?? []
+      ).length,
+      expectedOccurrences,
+      `${volumeName} should have a bounded emptyDir wherever the local managed topology creates it`,
+    );
+  }
+  assert.doesNotMatch(renderedChart, /emptyDir: \{\}/, 'the managed local render must not leave writable emptyDirs unbounded');
+  const initContainersWithResources =
+    renderedChart.match(/- name: (?:deployment-storage-settings|managed-app-settings-projection)[\s\S]*?resources:\s*\n\s*requests:/g) ?? [];
   assert.equal(
-    (renderedChart.match(/\s+name: app-data\s*\n\s*emptyDir: \{\}/g) ?? []).length,
-    2,
-    'control and execution pods should use separate pod-local app-data volumes',
+    initContainersWithResources.length,
+    4,
+    'every managed-storage init container should inherit the owning workload resource policy',
   );
   assert.equal(
     (renderedChart.match(/- name: managed-app-settings-projection/g) ?? []).length,
@@ -192,6 +213,26 @@ test('chart owns the published execution admission policy only on execution API 
   await assertHelmTemplateFails(
     ['publishedExecutionAdmission.maxActiveRunsPerPod=0'],
     /publishedExecutionAdmission\.maxActiveRunsPerPod must be an integer between 1 and 10000/,
+  );
+  await assertHelmTemplateFails(
+    ['writableVolumeLimits.workspace=0Gi'],
+    /writableVolumeLimits\.workspace must be a positive binary Kubernetes quantity such as 2Gi/,
+  );
+  await assertHelmTemplateFails(
+    ['resources.execution.requests.memory=not-a-quantity'],
+    /resources\.execution\.requests\.memory must be a positive Kubernetes quantity string when set/,
+  );
+  await assertHelmTemplateFails(
+    ['resources.execution.requests.memory=1..Gi'],
+    /resources\.execution\.requests\.memory must be a positive Kubernetes quantity string when set/,
+  );
+  await assertHelmTemplateFails(
+    ['resources.execution.limits.ephemeral-storage=1'],
+    /resources\.execution\.limits\.ephemeral-storage must be a positive Kubernetes quantity string when set/,
+  );
+  await assertHelmTemplateFails(
+    ['resources.execution.requests.memory=0Mi'],
+    /resources\.execution\.requests\.memory must be a positive Kubernetes quantity string when set/,
   );
   await assertHelmTemplateFails(
     ['env.RIVET_PUBLISHED_EXECUTION_ADMISSION_MODE=enforce'],
@@ -313,6 +354,58 @@ test('chart serializes managed workflow migrations before verify-only API worklo
   assert.match(
     readRepoFile('deploy/studio-server/images/api/entrypoint.sh'),
     /deployment_managed_workflow_schema_mode="\$\{RIVET_DEPLOYMENT_MANAGED_WORKFLOW_SCHEMA_MODE:-\}"[\s\S]*load_optional_dotenv \/vault\/dotenv[\s\S]*RIVET_MANAGED_WORKFLOW_SCHEMA_MODE="\$deployment_managed_workflow_schema_mode"/,
+  );
+});
+
+test('Vault dotenv injection runs before chart init containers and reserves bounded agent resources', async () => {
+  const chartHelpers = readRepoFile('deploy/studio-server/helm/templates/_helpers.tpl');
+  const renderedChart = await renderLocalKubernetesChartWithOverrides([
+    'vault.enabled=true',
+    'vault.role=contract-test',
+    'vault.secretPath=secret/data/rivet/contract-test',
+    'vault.dotenvTemplate=RIVET_KEY=secret/data/rivet/contract-test',
+  ]);
+
+  assert.match(chartHelpers, /range \$key, \$value := \.Values\.vault\.annotations[\s\S]*?vault\.hashicorp\.com\/agent-init-first: "true"/);
+  assert.match(
+    chartHelpers,
+    /agent-init-first: "true"[\s\S]*?agent-requests-cpu:[\s\S]*?agent-requests-mem:[\s\S]*?agent-requests-ephemeral:[\s\S]*?agent-limits-cpu:[\s\S]*?agent-limits-mem:[\s\S]*?agent-limits-ephemeral:/,
+  );
+  for (const annotation of [
+    'agent-init-first: "true"',
+    'agent-requests-cpu: "50m"',
+    'agent-requests-mem: "64Mi"',
+    'agent-requests-ephemeral: "64Mi"',
+    'agent-limits-cpu: "250m"',
+    'agent-limits-mem: "128Mi"',
+    'agent-limits-ephemeral: "256Mi"',
+  ]) {
+    assert.equal(
+      (renderedChart.match(new RegExp(`vault\\.hashicorp\\.com/${annotation}`, 'g')) ?? []).length,
+      4,
+      `every Vault-injected workload should emit ${annotation}`,
+    );
+  }
+
+  await assertHelmTemplateFails(
+    [
+      'vault.enabled=true',
+      'vault.role=contract-test',
+      'vault.secretPath=secret/data/rivet/contract-test',
+      'vault.dotenvTemplate=RIVET_KEY=secret/data/rivet/contract-test',
+      'vault.agentResources.requests.cpu=not-a-quantity',
+    ],
+    /vault\.agentResources\.requests\.cpu must be a positive Kubernetes quantity string/,
+  );
+  await assertHelmTemplateFails(
+    [
+      'vault.enabled=true',
+      'vault.role=contract-test',
+      'vault.secretPath=secret/data/rivet/contract-test',
+      'vault.dotenvTemplate=RIVET_KEY=secret/data/rivet/contract-test',
+      'vault.agentResources.limits.ephemeral-storage=0Mi',
+    ],
+    /vault\.agentResources\.limits\.ephemeral-storage must be a positive Kubernetes quantity string/,
   );
 });
 
@@ -453,6 +546,11 @@ test('production overlay keeps the supported ingress, Vault, and scale boundarie
   assert.match(prodOverlay, /maxConnections:\s*200/);
   assert.match(prodOverlay, /reservedConnections:\s*30/);
   assert.match(prodOverlay, /poolMaxPerApiPod:\s*10/);
+  assert.match(prodOverlay, /writableVolumeLimits:\s*\n\s*workspace:\s*2Gi[\s\S]*?runtimeLibraries:\s*8Gi/);
+  assert.match(
+    prodOverlay,
+    /resourceLimitAcknowledgements:[\s\S]*?execution:[\s\S]*?memory:\s*"[^"]{24,}"[\s\S]*?ephemeralStorage:\s*"[^"]{24,}"/,
+  );
   assert.match(prodOverlay, /release:\s*\n\s*production:[\s\S]*?enabled:\s*true/);
 });
 
@@ -475,45 +573,63 @@ test('production rendering requires a fully identified digest-pinned release', a
     '--set',
     'images.executor.repository=ghcr.io/example/executor',
   ];
+  const identifiedReleaseArgs = [
+    '--set',
+    `images.proxy.digest=sha256:${'a'.repeat(64)}`,
+    '--set',
+    `images.web.digest=sha256:${'b'.repeat(64)}`,
+    '--set',
+    `images.api.digest=sha256:${'c'.repeat(64)}`,
+    '--set',
+    `images.executor.digest=sha256:${'d'.repeat(64)}`,
+    '--set',
+    `release.production.sourceSha=${'e'.repeat(40)}`,
+    '--set',
+    'release.production.verification.workflow=Build-Images',
+    '--set',
+    'release.production.verification.runId=12345',
+    '--set',
+    'release.production.verification.runAttempt=1',
+    '--set',
+    'release.production.chart.name=rivet',
+    '--set',
+    'release.production.chart.version=0.1.0',
+    '--set',
+    `release.production.chart.contentDigest=sha256:${'f'.repeat(64)}`,
+    '--set',
+    'release.production.database.managedWorkflowSchemaVersion=3',
+  ];
+  const renderProduction = (overrides: string[] = []) =>
+    execFileSync(helmBin, [...baseArgs, ...identifiedReleaseArgs, ...overrides], {
+      cwd: repoRoot,
+      encoding: 'utf8',
+      stdio: 'pipe',
+    });
+
   assert.throws(
     () => execFileSync(helmBin, baseArgs, { cwd: repoRoot, encoding: 'utf8', stdio: 'pipe' }),
     /release\.production\.sourceSha must be the 40-character lowercase Git commit/,
   );
 
-  const rendered = execFileSync(
-    helmBin,
-    [
-      ...baseArgs,
-      '--set',
-      `images.proxy.digest=sha256:${'a'.repeat(64)}`,
-      '--set',
-      `images.web.digest=sha256:${'b'.repeat(64)}`,
-      '--set',
-      `images.api.digest=sha256:${'c'.repeat(64)}`,
-      '--set',
-      `images.executor.digest=sha256:${'d'.repeat(64)}`,
-      '--set',
-      `release.production.sourceSha=${'e'.repeat(40)}`,
-      '--set',
-      'release.production.verification.workflow=Build-Images',
-      '--set',
-      'release.production.verification.runId=12345',
-      '--set',
-      'release.production.verification.runAttempt=1',
-      '--set',
-      'release.production.chart.name=rivet',
-      '--set',
-      'release.production.chart.version=0.1.0',
-      '--set',
-      `release.production.chart.contentDigest=sha256:${'f'.repeat(64)}`,
-      '--set',
-      'release.production.database.managedWorkflowSchemaVersion=3',
-    ],
-    { cwd: repoRoot, encoding: 'utf8' },
-  );
+  const rendered = renderProduction();
   assert.match(rendered, /kind: ConfigMap[\s\S]*?name: rivet-prod-rivet-release-identity/);
   assert.match(rendered, new RegExp(`chart-content-digest: "sha256:${'f'.repeat(64)}"`));
   assert.match(rendered, new RegExp(`image: ghcr.io/example/api@sha256:${'c'.repeat(64)}`));
+
+  assert.throws(
+    () => renderProduction(['--set-string', 'resourceLimitAcknowledgements.execution.memory=']),
+    /production requires resources\.execution memory request and limit or a 24-character resourceLimitAcknowledgements\.execution\.memory rationale/,
+  );
+  assert.throws(
+    () =>
+      renderProduction([
+        '--set',
+        'resources.execution.requests.memory=1Gi',
+        '--set',
+        'resources.execution.limits.memory=2Gi',
+      ]),
+    /resourceLimitAcknowledgements\.execution\.memory must be empty when resources\.execution has memory request and limit/,
+  );
 });
 
 test('local Kubernetes overlay keeps the backend singleton while scaling endpoint-serving tiers and enabling latest debugger support', () => {

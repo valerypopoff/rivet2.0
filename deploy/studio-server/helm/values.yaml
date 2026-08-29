@@ -102,6 +102,9 @@ ingress:
 
 vault:
   enabled: false
+  # Extra Injector annotations are allowed, but typed dotenv-injection values
+  # below win over same-name keys so they cannot weaken init ordering or
+  # resource reservations.
   annotations: {}
   role: ''
   authPath: ''
@@ -111,6 +114,19 @@ vault:
   caCertPath: /vault/tls/ca.crt
   dotenvFileName: dotenv
   dotenvTemplate: ''
+  # The chart injects a pre-population-only Vault Agent that renders one dotenv
+  # file. Keep this separately bounded from long-running application workloads.
+  # Values are emitted as Vault Injector resource annotations only when
+  # vault.enabled and vault.secretPath are both set.
+  agentResources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+      ephemeral-storage: 64Mi
+    limits:
+      cpu: 250m
+      memory: 128Mi
+      ephemeral-storage: 256Mi
 
 workflowStorage:
   backend: managed
@@ -255,6 +271,14 @@ tmpVolume:
   path: /var/tmp
   sizeLimit: 2Gi
 
+# Every disposable writable volume receives a bounded starting capacity. Tune
+# these from the published-route load gate before raising them for production.
+writableVolumeLimits:
+  workspace: 2Gi
+  workflows: 2Gi
+  appData: 1Gi
+  runtimeLibraries: 8Gi
+
 auth:
   keySecretName: ''
   keySecretKey: RIVET_KEY
@@ -302,3 +326,24 @@ resources:
     requests:
       cpu: 500m
       memory: 1Gi
+
+# Generic memory and node-ephemeral limits can interrupt valid long graph runs.
+# A production render therefore requires an actual limit or a component-level
+# acknowledgement that records why the limit is intentionally deferred pending
+# capacity evidence. Remove an acknowledgement when that resource limit is set.
+resourceLimitAcknowledgements:
+  proxy:
+    memory: ''
+    ephemeralStorage: ''
+  web:
+    memory: ''
+    ephemeralStorage: ''
+  api:
+    memory: ''
+    ephemeralStorage: ''
+  executor:
+    memory: ''
+    ephemeralStorage: ''
+  execution:
+    memory: ''
+    ephemeralStorage: ''

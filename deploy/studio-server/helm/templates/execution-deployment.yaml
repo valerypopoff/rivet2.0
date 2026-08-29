@@ -45,7 +45,9 @@ spec:
             - name: app-data
               mountPath: /data/rivet-app
 {{ include "rivet.pod.tmpVolumeMount" . | nindent 12 }}
-{{ include "rivet.pod.appSettingsProjectionInitContainer" . | nindent 8 }}
+          resources:
+{{ toYaml .Values.resources.execution | nindent 12 }}
+{{ include "rivet.pod.appSettingsProjectionInitContainer" (dict "root" . "resources" .Values.resources.execution) | nindent 8 }}
       containers:
         - name: api
           image: {{ include "rivet.image" (dict "root" . "image" .Values.images.api) }}
@@ -68,17 +70,21 @@ spec:
 {{ toYaml .Values.resources.execution | nindent 12 }}
       volumes:
         - name: workspace
-          emptyDir: {}
+          emptyDir:
+            sizeLimit: {{ .Values.writableVolumeLimits.workspace }}
         - name: workflows
-          emptyDir: {}
+          emptyDir:
+            sizeLimit: {{ .Values.writableVolumeLimits.workflows }}
         - name: app-data
-          emptyDir: {}
+          emptyDir:
+            sizeLimit: {{ .Values.writableVolumeLimits.appData }}
         {{- if .Values.runtimeLibraries.cache.existingClaimName }}
         - name: runtime-libraries
           persistentVolumeClaim:
             claimName: {{ .Values.runtimeLibraries.cache.existingClaimName }}
         {{- else }}
         - name: runtime-libraries
-          emptyDir: {}
+          emptyDir:
+            sizeLimit: {{ .Values.writableVolumeLimits.runtimeLibraries }}
         {{- end }}
 {{ include "rivet.pod.tmpVolume" . | nindent 8 }}

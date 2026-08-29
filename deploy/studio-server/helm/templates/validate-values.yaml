@@ -1,3 +1,6 @@
+{{- $kubernetesQuantityPattern := "^[+]?([0-9]+([.][0-9]*)?|[.][0-9]+)([eE][+-]?[0-9]+|[numkMGTPE]|[KMGTPE]i)?$" -}}
+{{- $zeroKubernetesQuantityPattern := "^[+]?0+([.]0+)?([eE][+-]?[0-9]+)?([numkMGTPE]|[KMGTPE]i)?$" -}}
+
 {{- if ne .Values.workflowStorage.backend .Values.runtimeLibraries.backend -}}
 {{- fail "workflowStorage.backend and runtimeLibraries.backend must stay unified in phase 3" -}}
 {{- end -}}
@@ -8,6 +11,26 @@
 
 {{- if hasKey .Values.vault "roleIdSecretName" -}}
 {{- fail "vault.roleIdSecretName is retired; use vault.role with the Vault Injector dotenv contract" -}}
+{{- end -}}
+
+{{- $vaultInjectionEnabled := and .Values.vault.enabled (not (empty .Values.vault.secretPath)) -}}
+{{- if $vaultInjectionEnabled -}}
+{{- $vaultAgentResources := .Values.vault.agentResources -}}
+{{- if not (kindIs "map" $vaultAgentResources) -}}
+{{- fail "vault.agentResources must be a map when Vault dotenv injection is enabled" -}}
+{{- end -}}
+{{- range $tier := list "requests" "limits" -}}
+{{- $tierResources := default (dict) (index $vaultAgentResources $tier) -}}
+{{- if not (kindIs "map" $tierResources) -}}
+{{- fail (printf "vault.agentResources.%s must be a map when Vault dotenv injection is enabled" $tier) -}}
+{{- end -}}
+{{- range $resourceName := list "cpu" "memory" "ephemeral-storage" -}}
+{{- $quantity := default "" (index $tierResources $resourceName) -}}
+{{- if or (not (kindIs "string" $quantity)) (empty $quantity) (not (regexMatch $kubernetesQuantityPattern $quantity)) (regexMatch $zeroKubernetesQuantityPattern $quantity) -}}
+{{- fail (printf "vault.agentResources.%s.%s must be a positive Kubernetes quantity string when Vault dotenv injection is enabled" $tier $resourceName) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
 {{- end -}}
 
 {{- if ne .Values.runtimeLibraries.objectStoragePrefix "runtime-libraries/" -}}
@@ -49,6 +72,74 @@
 {{- $publishedExecutionRetryAfterSeconds := int .Values.publishedExecutionAdmission.retryAfterSeconds -}}
 {{- if or (lt $publishedExecutionRetryAfterSeconds 1) (gt $publishedExecutionRetryAfterSeconds 3600) -}}
 {{- fail "publishedExecutionAdmission.retryAfterSeconds must be an integer between 1 and 3600" -}}
+{{- end -}}
+
+{{- $writableVolumeLimits := .Values.writableVolumeLimits -}}
+{{- if not (kindIs "map" $writableVolumeLimits) -}}
+{{- fail "writableVolumeLimits must be a map" -}}
+{{- end -}}
+{{- range $volume := list "workspace" "workflows" "appData" "runtimeLibraries" -}}
+{{- $sizeLimit := default "" (index $writableVolumeLimits $volume) -}}
+{{- if or (not (kindIs "string" $sizeLimit)) (not (regexMatch "^[1-9][0-9]*(Ki|Mi|Gi|Ti|Pi|Ei)$" $sizeLimit)) -}}
+{{- fail (printf "writableVolumeLimits.%s must be a positive binary Kubernetes quantity such as 2Gi" $volume) -}}
+{{- end -}}
+{{- end -}}
+{{- if and .Values.tmpVolume.enabled (or (not (kindIs "string" .Values.tmpVolume.sizeLimit)) (not (regexMatch "^[1-9][0-9]*(Ki|Mi|Gi|Ti|Pi|Ei)$" .Values.tmpVolume.sizeLimit))) -}}
+{{- fail "tmpVolume.sizeLimit must be a positive binary Kubernetes quantity such as 2Gi when tmpVolume.enabled=true" -}}
+{{- end -}}
+
+{{- $resourceLimitAcknowledgements := .Values.resourceLimitAcknowledgements -}}
+{{- $productionReleaseEnabled := .Values.release.production.enabled -}}
+{{- if not (kindIs "map" $resourceLimitAcknowledgements) -}}
+{{- fail "resourceLimitAcknowledgements must be a map" -}}
+{{- end -}}
+{{- range $component := list "proxy" "web" "api" "executor" "execution" -}}
+{{- $resources := index $.Values.resources $component -}}
+{{- if not (kindIs "map" $resources) -}}
+{{- fail (printf "resources.%s must be a map" $component) -}}
+{{- end -}}
+{{- $requests := default (dict) (index $resources "requests") -}}
+{{- $limits := default (dict) (index $resources "limits") -}}
+{{- $acknowledgements := default (dict) (index $resourceLimitAcknowledgements $component) -}}
+{{- if or (not (kindIs "map" $requests)) (not (kindIs "map" $limits)) (not (kindIs "map" $acknowledgements)) -}}
+{{- fail (printf "resources.%s requests/limits and resourceLimitAcknowledgements.%s must be maps" $component $component) -}}
+{{- end -}}
+{{- $memoryRequest := default "" (index $requests "memory") -}}
+{{- $memoryLimit := default "" (index $limits "memory") -}}
+{{- $ephemeralStorageRequest := default "" (index $requests "ephemeral-storage") -}}
+{{- $ephemeralStorageLimit := default "" (index $limits "ephemeral-storage") -}}
+{{- $memoryAcknowledgement := default "" (index $acknowledgements "memory") -}}
+{{- $ephemeralStorageAcknowledgement := default "" (index $acknowledgements "ephemeralStorage") -}}
+{{- if or (not (kindIs "string" $memoryAcknowledgement)) (not (kindIs "string" $ephemeralStorageAcknowledgement)) -}}
+{{- fail (printf "resourceLimitAcknowledgements.%s.memory and .ephemeralStorage must be strings" $component) -}}
+{{- end -}}
+{{- $resourceQuantities := dict
+  (printf "resources.%s.requests.memory" $component) $memoryRequest
+  (printf "resources.%s.limits.memory" $component) $memoryLimit
+  (printf "resources.%s.requests.ephemeral-storage" $component) $ephemeralStorageRequest
+  (printf "resources.%s.limits.ephemeral-storage" $component) $ephemeralStorageLimit
+-}}
+{{- range $quantityPath, $quantity := $resourceQuantities -}}
+{{- if and (not (empty $quantity)) (or (not (kindIs "string" $quantity)) (not (regexMatch $kubernetesQuantityPattern $quantity)) (regexMatch $zeroKubernetesQuantityPattern $quantity)) -}}
+{{- fail (printf "%s must be a positive Kubernetes quantity string when set" $quantityPath) -}}
+{{- end -}}
+{{- end -}}
+{{- $hasMemoryLimit := and (not (empty $memoryRequest)) (not (empty $memoryLimit)) -}}
+{{- $hasEphemeralStorageLimit := and (not (empty $ephemeralStorageRequest)) (not (empty $ephemeralStorageLimit)) -}}
+{{- if and $hasMemoryLimit (not (empty $memoryAcknowledgement)) -}}
+{{- fail (printf "resourceLimitAcknowledgements.%s.memory must be empty when resources.%s has memory request and limit" $component $component) -}}
+{{- end -}}
+{{- if and $hasEphemeralStorageLimit (not (empty $ephemeralStorageAcknowledgement)) -}}
+{{- fail (printf "resourceLimitAcknowledgements.%s.ephemeralStorage must be empty when resources.%s has ephemeral-storage request and limit" $component $component) -}}
+{{- end -}}
+{{- if $productionReleaseEnabled -}}
+{{- if and (not $hasMemoryLimit) (lt (len (trim $memoryAcknowledgement)) 24) -}}
+{{- fail (printf "production requires resources.%s memory request and limit or a 24-character resourceLimitAcknowledgements.%s.memory rationale" $component $component) -}}
+{{- end -}}
+{{- if and (not $hasEphemeralStorageLimit) (lt (len (trim $ephemeralStorageAcknowledgement)) 24) -}}
+{{- fail (printf "production requires resources.%s ephemeral-storage request and limit or a 24-character resourceLimitAcknowledgements.%s.ephemeralStorage rationale" $component $component) -}}
+{{- end -}}
+{{- end -}}
 {{- end -}}
 
 {{- range $key := list "RIVET_METRICS_ENABLED" "RIVET_DEPLOYMENT_METRICS_ENABLED" -}}
