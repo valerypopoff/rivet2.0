@@ -5,7 +5,7 @@ import type { Pool, PoolClient, QueryResultRow } from 'pg';
 import { MANAGED_WORKFLOW_SCHEMA_SQL } from './schema.js';
 
 export const MANAGED_WORKFLOW_SCHEMA_MIGRATIONS_TABLE = 'managed_workflow_schema_migrations';
-export const CURRENT_MANAGED_WORKFLOW_SCHEMA_VERSION = 8;
+export const CURRENT_MANAGED_WORKFLOW_SCHEMA_VERSION = 9;
 // A serving release may verify an additive schema created by its immediate
 // successor only when the chart deliberately supplies that compatibility
 // window. Keep this constant explicit: raising it is the release-engineering
@@ -177,6 +177,16 @@ CREATE INDEX IF NOT EXISTS evaluation_recordings_temporary_created_idx
 CREATE INDEX IF NOT EXISTS evaluation_dataset_snapshots_created_idx
   ON evaluation_dataset_snapshots(created_at, project_id, dataset_fingerprint);
 `;
+const MANAGED_RECONCILIATION_SCAN_ACCOUNTING_SQL = `
+-- A completed reconciliation generation needs a durable aggregate for the
+-- object metadata it enumerated. This is deliberately inventory size, not
+-- downloaded payload bytes or provider-billing usage.
+ALTER TABLE managed_reconciliation_state
+  ADD COLUMN IF NOT EXISTS active_object_bytes BIGINT NOT NULL DEFAULT 0
+    CHECK (active_object_bytes >= 0),
+  ADD COLUMN IF NOT EXISTS last_completed_object_bytes BIGINT NOT NULL DEFAULT 0
+    CHECK (last_completed_object_bytes >= 0);
+`;
 const MIGRATION_STATEMENT_TIMEOUT = '5min';
 const VERIFY_STATEMENT_TIMEOUT = '30s';
 const TRANSIENT_SCHEMA_ERROR_CODES = new Set(['40001', '40P01', '55P03']);
@@ -326,6 +336,12 @@ export const MANAGED_WORKFLOW_SCHEMA_MIGRATIONS: readonly ManagedWorkflowSchemaM
     sql: MANAGED_WORKFLOW_RECORDING_CORRELATION_SQL,
     checksum: '5e58ca90c2f9f0233e5933ea7055614b61ce804cb67f8c1729fbe7d18084e207',
   },
+  {
+    version: 9,
+    name: 'managed-reconciliation-scan-accounting',
+    sql: MANAGED_RECONCILIATION_SCAN_ACCOUNTING_SQL,
+    checksum: '23643af7d68c3dfa75d061c2b0348b97ec06ebcbc3d7032afecf81cf10cf364f',
+  },
 ];
 
 function assertMigrationDefinitions(): void {
@@ -404,6 +420,8 @@ export const MANAGED_WORKFLOW_SCHEMA_REQUIRED_COLUMNS = [
   ['managed_reconciliation_state', 'cursor', 'text', 'YES'],
   ['managed_reconciliation_state', 'active_generation', 'int8', 'NO'],
   ['managed_reconciliation_state', 'completed_generation', 'int8', 'NO'],
+  ['managed_reconciliation_state', 'active_object_bytes', 'int8', 'NO'],
+  ['managed_reconciliation_state', 'last_completed_object_bytes', 'int8', 'NO'],
   ['managed_reconciliation_state', 'scan_started_at', 'timestamptz', 'YES'],
   ['managed_reconciliation_state', 'last_completed_at', 'timestamptz', 'YES'],
   ['managed_reconciliation_state', 'last_error_at', 'timestamptz', 'YES'],
@@ -597,6 +615,8 @@ export const MANAGED_WORKFLOW_SCHEMA_REQUIRED_COLUMN_DEFAULTS = [
   ['managed_reconciliation_state', 'phase', "'metadata'::text"],
   ['managed_reconciliation_state', 'active_generation', '1'],
   ['managed_reconciliation_state', 'completed_generation', '0'],
+  ['managed_reconciliation_state', 'active_object_bytes', '0'],
+  ['managed_reconciliation_state', 'last_completed_object_bytes', '0'],
   ['managed_reconciliation_state', 'updated_at', 'now()'],
   ['managed_reconciliation_findings', 'first_seen_at', 'now()'],
   ['managed_reconciliation_findings', 'last_seen_at', 'now()'],
@@ -744,6 +764,8 @@ export const MANAGED_WORKFLOW_SCHEMA_REQUIRED_CONSTRAINTS = [
   ['managed_reconciliation_state', 'c', "CHECK ((phase = ANY (ARRAY['metadata'::text, 'objects'::text])))"],
   ['managed_reconciliation_state', 'c', 'CHECK ((active_generation > 0))'],
   ['managed_reconciliation_state', 'c', 'CHECK ((completed_generation >= 0))'],
+  ['managed_reconciliation_state', 'c', 'CHECK ((active_object_bytes >= 0))'],
+  ['managed_reconciliation_state', 'c', 'CHECK ((last_completed_object_bytes >= 0))'],
   ['managed_reconciliation_findings', 'p', 'PRIMARY KEY (domain, kind, subject_key)'],
   [
     'managed_reconciliation_findings',

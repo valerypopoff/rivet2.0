@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
+import { configureStudioMetrics, getStudioMetrics, resetStudioMetricsForTests } from '../metrics.js';
 import { InMemoryManagedWorkflowBlobStore } from '../routes/workflows/managed/blob-store.js';
 import {
   createManagedReconciliationTask,
@@ -11,9 +12,11 @@ const domains = ['workflows', 'runtime_libraries', 'evaluations'] as const;
 type Domain = (typeof domains)[number];
 type State = {
   active_generation: number;
+  active_object_bytes: number;
   completed_generation: number;
   cursor: string | null;
   domain: Domain;
+  last_completed_object_bytes: number;
   phase: 'metadata' | 'objects';
 };
 type Finding = {
@@ -31,15 +34,18 @@ function createReconciliationPool() {
   const findings = new Map<string, Finding>();
   const deleted: string[] = [];
   const workflowReferences = ['missing/project.rivet-project', 'present/project.rivet-project'];
+  let staleNextCommit = false;
 
   const ensure = (domain: Domain): State => {
     const existing = states.get(domain);
     if (existing) return existing;
     const created: State = {
       active_generation: 1,
+      active_object_bytes: 0,
       completed_generation: 0,
       cursor: null,
       domain,
+      last_completed_object_bytes: 0,
       phase: 'metadata',
     };
     states.set(domain, created);
@@ -52,7 +58,12 @@ function createReconciliationPool() {
       return { rows: [] };
     }
     if (sql.includes('FROM managed_reconciliation_state') && sql.includes('WHERE domain = $1')) {
-      return { rows: [ensure(parameters[0] as Domain)] };
+      const state = ensure(parameters[0] as Domain);
+      if (sql.includes('FOR UPDATE') && staleNextCommit) {
+        staleNextCommit = false;
+        return { rows: [{ ...state, cursor: 'newer-page' }] };
+      }
+      return { rows: [state] };
     }
     if (sql.includes("to_regclass('runtime_library_releases')")) {
       return { rows: [{ present: false }] };
@@ -105,13 +116,23 @@ function createReconciliationPool() {
       return { rows: [] };
     }
     if (sql.includes('UPDATE managed_reconciliation_state') && sql.includes('SET phase = $2')) {
-      const [domain, phase, cursor, completion] = parameters as [Domain, State['phase'], string | null, boolean];
+      const [domain, phase, cursor, completion, scannedObjectBytes] = parameters as [
+        Domain,
+        State['phase'],
+        string | null,
+        boolean,
+        number,
+      ];
       const state = ensure(domain);
       state.phase = phase;
       state.cursor = cursor;
       if (completion) {
+        state.last_completed_object_bytes = state.active_object_bytes + scannedObjectBytes;
+        state.active_object_bytes = 0;
         state.completed_generation = state.active_generation;
         state.active_generation += 1;
+      } else {
+        state.active_object_bytes += scannedObjectBytes;
       }
       return { rows: [] };
     }
@@ -155,7 +176,16 @@ function createReconciliationPool() {
       ],
     }),
   };
-  return { deleted, findings, pool, states, workflowBlobStore };
+  return {
+    deleted,
+    findings,
+    makeNextCommitStale: () => {
+      staleNextCommit = true;
+    },
+    pool,
+    states,
+    workflowBlobStore,
+  };
 }
 
 test('managed reconciliation is bounded, reports missing and two-pass orphan evidence, and never deletes objects', async () => {
@@ -188,8 +218,15 @@ test('managed reconciliation is bounded, reports missing and two-pass orphan evi
   assert.equal(missing?.consecutive, 2);
   assert.equal(orphan?.consecutive, 2);
   assert.equal(orphan?.resolved, false);
+  assert.equal(
+    driver.states.get('workflows')?.last_completed_object_bytes,
+    42,
+    'only the completed object-prefix page contributes its returned inventory size',
+  );
+  assert.equal(driver.states.get('workflows')?.active_object_bytes, 0);
 });
 test('managed reconciliation status is aggregate-only and never selects raw object keys', async () => {
+
   const queries: string[] = [];
   const pool = {
     query: async (sql: string, parameters: unknown[] = []) => {
@@ -201,7 +238,9 @@ test('managed reconciliation status is aggregate-only and never selects raw obje
               domain: 'workflows',
               phase: 'objects',
               active_generation: 3,
+              active_object_bytes: 420,
               completed_generation: 2,
+              last_completed_object_bytes: 84,
               scan_started_at: '2026-08-30T12:00:00.000Z',
               last_completed_at: '2026-08-30T11:59:00.000Z',
               last_error_at: null,
@@ -211,7 +250,9 @@ test('managed reconciliation status is aggregate-only and never selects raw obje
               domain: 'evaluations',
               phase: 'metadata',
               active_generation: 1,
+              active_object_bytes: 0,
               completed_generation: 0,
+              last_completed_object_bytes: 0,
               scan_started_at: null,
               last_completed_at: null,
               last_error_at: null,
@@ -256,15 +297,19 @@ test('managed reconciliation status is aggregate-only and never selects raw obje
     },
   ]);
   assert.equal(status.states.find((state) => state.domain === 'workflows')?.openFindingCount, 2);
+  assert.equal(status.states.find((state) => state.domain === 'workflows')?.activeObjectBytes, 420);
+  assert.equal(status.states.find((state) => state.domain === 'workflows')?.lastCompletedObjectBytes, 84);
   assert.equal(status.states.find((state) => state.domain === 'workflows')?.scanStatus, 'running');
   assert.equal(status.states.find((state) => state.domain === 'evaluations')?.scanStatus, 'not-started');
   assert.deepEqual(
     status.states.find((state) => state.domain === 'runtime_libraries'),
     {
       activeGeneration: 1,
+      activeObjectBytes: 0,
       completedGeneration: 0,
       domain: 'runtime_libraries',
       lastCompletedAt: null,
+      lastCompletedObjectBytes: 0,
       lastErrorAt: null,
       lastErrorCode: null,
       openFindingCount: 0,
@@ -298,6 +343,37 @@ test('evaluation reconciliation recovers from a malformed persisted cursor', asy
 
   assert.equal(state.cursor, null);
   assert.equal(state.completed_generation, 2);
+});
+test('a stale fenced reconciliation page does not advance durable byte accounting or successful metrics', async () => {
+  resetStudioMetricsForTests();
+  configureStudioMetrics('control', { RIVET_METRICS_ENABLED: 'true' });
+  const driver = createReconciliationPool();
+  const task = createManagedReconciliationTask({
+    pageSize: 100,
+    pool: driver.pool,
+    workflowBlobStore: driver.workflowBlobStore,
+  });
+  const lease = { assertCurrent: async () => {}, fencingToken: 1, holderId: 'test' };
+
+  try {
+    await task(lease); // Complete the workflow metadata half of the generation.
+    driver.makeNextCommitStale();
+    await task(lease); // The object listing is observed but its fenced commit loses the race.
+
+    assert.equal(driver.states.get('workflows')?.active_object_bytes, 0);
+    assert.equal(driver.states.get('workflows')?.last_completed_object_bytes, 0);
+    const rendered = getStudioMetrics().render();
+    assert.doesNotMatch(
+      rendered,
+      /rivet_managed_reconciliation_scanned_object_bytes_total\{domain="workflows",outcome="skipped",phase="objects",profile="control"\}/,
+    );
+    assert.doesNotMatch(
+      rendered,
+      /rivet_managed_reconciliation_scanned_object_bytes_total\{domain="workflows",outcome="success",phase="objects",profile="control"\}/,
+    );
+  } finally {
+    resetStudioMetricsForTests();
+  }
 });
 test('in-memory reconciliation pages do not invent a terminal cursor', async () => {
   const store = new InMemoryManagedWorkflowBlobStore();

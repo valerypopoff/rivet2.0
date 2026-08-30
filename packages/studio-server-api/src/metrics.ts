@@ -261,16 +261,21 @@ export class StudioMetrics {
     outcome: 'error' | 'skipped' | 'success';
     phase: MetricsManagedReconciliationPhase;
     returnedItems: number;
+    /** Object metadata sizes returned by this bounded object-prefix page. */
+    scannedObjectBytes: number;
   }): void {
-    const { returnedItems, ...labels } = input;
+    const { returnedItems, scannedObjectBytes, ...labels } = input;
     this.incrementCounter('rivet_managed_reconciliation_pages_total', labels);
     this.incrementCounter('rivet_managed_reconciliation_returned_items_total', labels, returnedItems);
+    this.incrementCounter('rivet_managed_reconciliation_scanned_object_bytes_total', labels, scannedObjectBytes);
   }
 
   setManagedReconciliationState(input: {
+    activeObjectBytes: number;
     completedGeneration: number;
     domain: MetricsManagedReconciliationDomain;
     lastCompletedAtMs: number | null;
+    lastCompletedObjectBytes: number;
     lastErrorAtMs: number | null;
     openFindings: number;
   }): void {
@@ -280,6 +285,16 @@ export class StudioMetrics {
       input.completedGeneration,
     );
     this.setGauge('rivet_managed_reconciliation_open_findings', { domain: input.domain }, input.openFindings);
+    this.setGauge(
+      'rivet_managed_reconciliation_active_object_bytes',
+      { domain: input.domain },
+      input.activeObjectBytes,
+    );
+    this.setGauge(
+      'rivet_managed_reconciliation_last_completed_object_bytes',
+      { domain: input.domain },
+      input.lastCompletedObjectBytes,
+    );
     if (input.lastCompletedAtMs != null) {
       this.setGauge(
         'rivet_managed_reconciliation_last_completed_timestamp_seconds',

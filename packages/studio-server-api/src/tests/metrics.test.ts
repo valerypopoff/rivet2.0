@@ -70,11 +70,14 @@ test('metrics registry renders only finite, fixed-label metric families', () => 
     outcome: 'success',
     phase: 'objects',
     returnedItems: 4,
+    scannedObjectBytes: 5_120,
   });
   metrics.setManagedReconciliationState({
+    activeObjectBytes: 64,
     completedGeneration: 2,
     domain: 'runtime_libraries',
     lastCompletedAtMs: 900,
+    lastCompletedObjectBytes: 4_096,
     lastErrorAtMs: 800,
     openFindings: 3,
   });
@@ -140,6 +143,15 @@ test('metrics registry renders only finite, fixed-label metric families', () => 
   assert.match(
     rendered,
     /rivet_managed_reconciliation_returned_items_total\{domain="runtime_libraries",outcome="success",phase="objects",profile="execution"\} 4/,
+  );
+  assert.match(
+    rendered,
+    /rivet_managed_reconciliation_scanned_object_bytes_total\{domain="runtime_libraries",outcome="success",phase="objects",profile="execution"\} 5120/,
+  );
+  assert.match(rendered, /rivet_managed_reconciliation_active_object_bytes\{domain="runtime_libraries",profile="execution"\} 64/);
+  assert.match(
+    rendered,
+    /rivet_managed_reconciliation_last_completed_object_bytes\{domain="runtime_libraries",profile="execution"\} 4096/,
   );
   assert.match(
     rendered,

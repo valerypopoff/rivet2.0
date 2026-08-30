@@ -14,11 +14,13 @@ type ReconciliationFinding = {
 };
 type ReconciliationStateRow = QueryResultRow & {
   active_generation: number | string;
+  active_object_bytes: number | string;
   completed_generation: number | string;
   cursor: string | null;
   domain: ManagedReconciliationDomain;
   phase: ManagedReconciliationPhase;
   last_completed_at: Date | string | null;
+  last_completed_object_bytes: number | string;
   last_error_at: Date | string | null;
 };
 type WorkflowReferenceRow = QueryResultRow & { object_key: string };
@@ -27,9 +29,11 @@ type OpenFindingCountRow = QueryResultRow & { count: string };
 type OpenFindingCountByDomainRow = QueryResultRow & { count: string; domain: ManagedReconciliationDomain };
 type ReconciliationStatusRow = QueryResultRow & {
   active_generation: number | string;
+  active_object_bytes: number | string;
   completed_generation: number | string;
   domain: ManagedReconciliationDomain;
   last_completed_at: Date | string | null;
+  last_completed_object_bytes: number | string;
   last_error_at: Date | string | null;
   last_error_code: string | null;
   phase: ManagedReconciliationPhase;
@@ -38,9 +42,13 @@ type ReconciliationStatusRow = QueryResultRow & {
 
 export type ManagedReconciliationStatus = {
   activeGeneration: number;
+  /** Bytes enumerated by the current in-progress object-prefix generation. */
+  activeObjectBytes: number;
   completedGeneration: number;
   domain: ManagedReconciliationDomain;
   lastCompletedAt: string | null;
+  /** Object inventory bytes from the most recent fully committed generation. */
+  lastCompletedObjectBytes: number;
   lastErrorAt: string | null;
   lastErrorCode: string | null;
   openFindingCount: number;
@@ -103,7 +111,9 @@ async function ensureState(pool: Pool, domain: ManagedReconciliationDomain): Pro
   );
   const result = await pool.query<ReconciliationStateRow>(
     `
-      SELECT domain, phase, cursor, active_generation, completed_generation, last_completed_at, last_error_at
+      SELECT domain, phase, cursor, active_generation, completed_generation,
+             active_object_bytes, last_completed_object_bytes,
+             last_completed_at, last_error_at
       FROM managed_reconciliation_state
       WHERE domain = $1
     `,
@@ -118,6 +128,15 @@ function hasObjectScanner(
   store: ManagedWorkflowBlobStore | undefined,
 ): store is ManagedWorkflowBlobStore & Required<Pick<ManagedWorkflowBlobStore, 'exists' | 'listPage'>> {
   return Boolean(store?.exists && store?.listPage);
+}
+
+function getPageObjectBytes(objects: ReadonlyArray<{ size: number }>): number {
+  return objects.reduce((total, object) => {
+    if (!Number.isSafeInteger(object.size) || object.size < 0 || total > Number.MAX_SAFE_INTEGER - object.size) {
+      throw new Error('Managed reconciliation object listing contained an invalid byte size.');
+    }
+    return total + object.size;
+  }, 0);
 }
 
 async function listWorkflowReferencePage(
@@ -347,14 +366,19 @@ async function commitPage(input: {
   nextCursor: string | null;
   nextPhase: ManagedReconciliationPhase;
   pool: Pool;
+  scannedObjectBytes: number;
 }): Promise<{ committed: boolean; completedGeneration: number; openFindings: number }> {
+  if (!Number.isSafeInteger(input.scannedObjectBytes) || input.scannedObjectBytes < 0) {
+    throw new Error('Managed reconciliation page contained an invalid object-byte total.');
+  }
   const client = await input.pool.connect();
   try {
     await client.query('BEGIN');
     await input.lease.assertCurrent(client);
     const currentResult = await client.query<ReconciliationStateRow>(
       `
-        SELECT domain, phase, cursor, active_generation, completed_generation
+        SELECT domain, phase, cursor, active_generation, completed_generation,
+               active_object_bytes, last_completed_object_bytes
         FROM managed_reconciliation_state
         WHERE domain = $1
         FOR UPDATE
@@ -396,6 +420,11 @@ async function commitPage(input: {
               ELSE scan_started_at
             END,
             completed_generation = CASE WHEN $4 THEN active_generation ELSE completed_generation END,
+            active_object_bytes = CASE WHEN $4 THEN 0 ELSE active_object_bytes + $5 END,
+            last_completed_object_bytes = CASE
+              WHEN $4 THEN active_object_bytes + $5
+              ELSE last_completed_object_bytes
+            END,
             active_generation = CASE WHEN $4 THEN active_generation + 1 ELSE active_generation END,
             last_completed_at = CASE WHEN $4 THEN NOW() ELSE last_completed_at END,
             last_error_at = NULL,
@@ -403,7 +432,7 @@ async function commitPage(input: {
             updated_at = NOW()
         WHERE domain = $1
       `,
-      [input.domain, input.nextPhase, input.nextCursor, input.completion],
+      [input.domain, input.nextPhase, input.nextCursor, input.completion, input.scannedObjectBytes],
     );
     const openFindings = await countOpenFindings(client, input.domain);
     await client.query('COMMIT');
@@ -456,14 +485,14 @@ async function runObjectBackedDomain(input: {
   lease: ManagedWorkflowMaintenanceLease;
   pageSize: number;
   pool: Pool;
-}): Promise<{ outcome: 'skipped' | 'success'; returnedItems: number }> {
-  if (!hasObjectScanner(input.store)) return { outcome: 'skipped', returnedItems: 0 };
+}): Promise<{ outcome: 'skipped' | 'success'; returnedItems: number; scannedObjectBytes: number }> {
+  if (!hasObjectScanner(input.store)) return { outcome: 'skipped', returnedItems: 0, scannedObjectBytes: 0 };
   const state = await ensureState(input.pool, input.domain);
   if (state.phase === 'metadata') {
     const page = await input.listReferencePage(state.cursor, input.pageSize);
-    if (page.schemaPresent === false) return { outcome: 'skipped', returnedItems: 0 };
+    if (page.schemaPresent === false) return { outcome: 'skipped', returnedItems: 0, scannedObjectBytes: 0 };
     const missing = await findMissingKeys(input.store, page.keys);
-    await commitPage({
+    const commit = await commitPage({
       completion: false,
       domain: input.domain,
       expected: state,
@@ -472,11 +501,17 @@ async function runObjectBackedDomain(input: {
       nextCursor: page.nextCursor,
       nextPhase: page.nextCursor == null ? 'objects' : 'metadata',
       pool: input.pool,
+      scannedObjectBytes: 0,
     });
-    return { outcome: 'success', returnedItems: page.keys.length };
+    return {
+      outcome: commit.committed ? 'success' : 'skipped',
+      returnedItems: commit.committed ? page.keys.length : 0,
+      scannedObjectBytes: 0,
+    };
   }
 
   const page = await input.store.listPage({ cursor: state.cursor ?? undefined, pageSize: input.pageSize });
+  const scannedObjectBytes = getPageObjectBytes(page.objects);
   const nowMs = Date.now();
   const oldEnoughKeys = page.objects
     .filter(
@@ -493,7 +528,7 @@ async function runObjectBackedDomain(input: {
     client.release();
   }
   const completion = page.nextCursor == null;
-  await commitPage({
+  const commit = await commitPage({
     completion,
     domain: input.domain,
     expected: state,
@@ -504,19 +539,24 @@ async function runObjectBackedDomain(input: {
     nextCursor: page.nextCursor ?? null,
     nextPhase: completion ? 'metadata' : 'objects',
     pool: input.pool,
+    scannedObjectBytes,
   });
-  return { outcome: 'success', returnedItems: page.objects.length };
+  return {
+    outcome: commit.committed ? 'success' : 'skipped',
+    returnedItems: commit.committed ? page.objects.length : 0,
+    scannedObjectBytes: commit.committed ? scannedObjectBytes : 0,
+  };
 }
 
 async function runEvaluationDomain(input: {
   lease: ManagedWorkflowMaintenanceLease;
   pageSize: number;
   pool: Pool;
-}): Promise<{ outcome: 'success'; returnedItems: number }> {
+}): Promise<{ outcome: 'success' | 'skipped'; returnedItems: number; scannedObjectBytes: number }> {
   const state = await ensureState(input.pool, 'evaluations');
   const page = await listEvaluationReferencePage(input.pool, state.cursor, input.pageSize);
   const completion = page.nextCursor == null;
-  await commitPage({
+  const commit = await commitPage({
     completion,
     domain: 'evaluations',
     expected: state,
@@ -525,8 +565,13 @@ async function runEvaluationDomain(input: {
     nextCursor: page.nextCursor,
     nextPhase: 'metadata',
     pool: input.pool,
+    scannedObjectBytes: 0,
   });
-  return { outcome: 'success', returnedItems: page.findings.length };
+  return {
+    outcome: commit.committed ? 'success' : 'skipped',
+    returnedItems: commit.committed ? page.findings.length : 0,
+    scannedObjectBytes: 0,
+  };
 }
 
 /**
@@ -576,6 +621,7 @@ export function createManagedReconciliationTask(options: {
             outcome: result.outcome,
             phase,
             returnedItems: result.returnedItems,
+            scannedObjectBytes: result.scannedObjectBytes,
           }),
         );
       } catch {
@@ -585,7 +631,7 @@ export function createManagedReconciliationTask(options: {
         // and authorized database findings instead.
         console.warn(`[managed-reconciliation] ${domain} audit page failed; a later fenced pass will retry.`);
         recordStudioMetrics((metrics) =>
-          metrics.recordManagedReconciliationPage({ domain, outcome: 'error', phase, returnedItems: 0 }),
+          metrics.recordManagedReconciliationPage({ domain, outcome: 'error', phase, returnedItems: 0, scannedObjectBytes: 0 }),
         );
       }
       const state = await ensureState(options.pool, domain);
@@ -596,7 +642,9 @@ export function createManagedReconciliationTask(options: {
           metrics.setManagedReconciliationState({
             completedGeneration: toFiniteInteger(state.completed_generation),
             domain,
+            activeObjectBytes: toFiniteInteger(state.active_object_bytes),
             lastCompletedAtMs: toEpochMs(state.last_completed_at),
+            lastCompletedObjectBytes: toFiniteInteger(state.last_completed_object_bytes),
             lastErrorAtMs: toEpochMs(state.last_error_at),
             openFindings,
           }),
@@ -620,6 +668,7 @@ export async function getManagedReconciliationStatus(pool: Pool): Promise<{
   const [statesResult, findingsResult, openCountsResult] = await Promise.all([
     pool.query<ReconciliationStatusRow>(`
       SELECT domain, phase, active_generation, completed_generation,
+             active_object_bytes, last_completed_object_bytes,
              scan_started_at, last_completed_at, last_error_at, last_error_code
       FROM managed_reconciliation_state
       ORDER BY domain ASC
@@ -660,9 +709,11 @@ export async function getManagedReconciliationStatus(pool: Pool): Promise<{
     if (!state) {
       return {
         activeGeneration: 1,
+        activeObjectBytes: 0,
         completedGeneration: 0,
         domain,
         lastCompletedAt: null,
+        lastCompletedObjectBytes: 0,
         lastErrorAt: null,
         lastErrorCode: null,
         openFindingCount: 0,
@@ -675,9 +726,11 @@ export async function getManagedReconciliationStatus(pool: Pool): Promise<{
     const scanStartedAt = toIso(state.scan_started_at);
     return {
       activeGeneration: toFiniteInteger(state.active_generation),
+      activeObjectBytes: toFiniteInteger(state.active_object_bytes),
       completedGeneration: toFiniteInteger(state.completed_generation),
       domain: state.domain,
       lastCompletedAt: toIso(state.last_completed_at),
+      lastCompletedObjectBytes: toFiniteInteger(state.last_completed_object_bytes),
       lastErrorAt,
       lastErrorCode: state.last_error_code,
       openFindingCount: countByDomain.get(state.domain) ?? 0,
