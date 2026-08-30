@@ -4,6 +4,7 @@ import test from "node:test";
 import type { ProjectId } from "@valerypopoff/rivet2-node";
 import type {
   EvaluationLibrary,
+  EvaluationRecordingArtifact,
   EvaluationRun,
 } from "@valerypopoff/rivet2-evaluations";
 
@@ -139,6 +140,47 @@ test("evaluation history API persists and renames completed scoring runs", async
     assert.equal(renamedGetResponse.status, 200);
     const renamedStored = (await renamedGetResponse.json()) as EvaluationRun;
     assert.equal(renamedStored.name, "Scoring baseline");
+  });
+});
+
+test("evaluation API confirms whether a recording-retention update found an artifact", async () => {
+  const artifact: EvaluationRecordingArtifact = {
+    projectId,
+    runId: "scored-run",
+    trialId: "scored-trial",
+    reference: {
+      id: "retention-recording",
+      retention: "temporary",
+      expiresAt: "2099-01-01T00:00:00.000Z",
+    },
+    serialized: "{}",
+    createdAt: "2026-08-30T00:00:00.000Z",
+  };
+
+  await withWorkflowApiServer(async (baseUrl) => {
+    const evaluationBaseUrl = `${baseUrl}/evaluation-runs`;
+    const writeResponse = await fetch(`${evaluationBaseUrl}/recordings/${artifact.reference.id}`, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(artifact),
+    });
+    assert.equal(writeResponse.status, 204);
+
+    const updatedResponse = await fetch(`${evaluationBaseUrl}/recordings/${artifact.reference.id}`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ projectId, recordingId: artifact.reference.id, retention: "retained" }),
+    });
+    assert.equal(updatedResponse.status, 200);
+    assert.deepEqual(await updatedResponse.json(), { updated: true });
+
+    const missingResponse = await fetch(`${evaluationBaseUrl}/recordings/missing-recording`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ projectId, recordingId: "missing-recording", retention: "retained" }),
+    });
+    assert.equal(missingResponse.status, 200);
+    assert.deepEqual(await missingResponse.json(), { updated: false });
   });
 });
 

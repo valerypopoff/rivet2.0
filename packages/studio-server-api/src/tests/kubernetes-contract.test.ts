@@ -78,7 +78,7 @@ test('rendered chart keeps control-plane and execution-plane API env contracts d
   );
   assert.match(
     renderedChart,
-    /name: RIVET_API_PROFILE\s*\n\s*value: "control"[\s\S]*?name: RIVET_MANAGED_MAINTENANCE_ENABLED\s*\n\s*value: "true"[\s\S]*?name: RIVET_MANAGED_MAINTENANCE_INTERVAL_MS\s*\n\s*value: "300000"[\s\S]*?name: RIVET_MANAGED_MAINTENANCE_LEASE_MS\s*\n\s*value: "60000"[\s\S]*?name: RIVET_MANAGED_MAINTENANCE_BATCH_SIZE\s*\n\s*value: "100"/,
+    /name: RIVET_API_PROFILE\s*\n\s*value: "control"[\s\S]*?name: RIVET_MANAGED_MAINTENANCE_ENABLED\s*\n\s*value: "true"[\s\S]*?name: RIVET_MANAGED_MAINTENANCE_INTERVAL_MS\s*\n\s*value: "300000"[\s\S]*?name: RIVET_MANAGED_MAINTENANCE_LEASE_MS\s*\n\s*value: "60000"[\s\S]*?name: RIVET_MANAGED_MAINTENANCE_BATCH_SIZE\s*\n\s*value: "100"[\s\S]*?name: RIVET_MANAGED_EVALUATION_RETENTION_MODE\s*\n\s*value: "audit"/,
     'only the singleton control-plane API pod may schedule global managed maintenance',
   );
   assert.match(
@@ -317,6 +317,14 @@ test('chart owns the published execution admission policy only on execution API 
     ['managedMaintenance.leaseMs=1'],
     /managedMaintenance\.leaseMs must be an integer between 15000 and 600000/,
   );
+  await assertHelmTemplateFails(
+    ['evaluationRetention.mode=remove'],
+    /evaluationRetention\.mode must be audit, enforce, or disabled/,
+  );
+  await assertHelmTemplateFails(
+    ['env.RIVET_MANAGED_EVALUATION_RETENTION_MODE=enforce'],
+    /RIVET_MANAGED_EVALUATION_RETENTION_MODE[\s\S]*configure evaluationRetention\.mode instead/,
+  );
 });
 
 test('chart makes pull-only metrics and Prometheus Operator resources explicit opt-ins', async () => {
@@ -402,11 +410,11 @@ test('chart serializes managed workflow migrations before verify-only API worklo
   assert.match(chartHelpers, /vault\.hashicorp\.com\/agent-pre-populate-only: "true"/);
   assert.match(
     renderedChart,
-    /bootstrap-deployment-storage-settings\.mjs; RIVET_APP_SETTINGS_BACKEND=file RIVET_MANAGED_WORKFLOW_SCHEMA_MIN_VERSION="6" RIVET_MANAGED_WORKFLOW_SCHEMA_MAX_VERSION="6" node \/app\/packages\/studio-server-api\/dist\/studio-server-api\/src\/scripts\/migrate-managed-workflow-schema\.js migrate; node \/app\/packages\/studio-server-api\/dist\/studio-server-api\/src\/scripts\/import-managed-app-settings\.js/,
+    /bootstrap-deployment-storage-settings\.mjs; RIVET_APP_SETTINGS_BACKEND=file RIVET_MANAGED_WORKFLOW_SCHEMA_MIN_VERSION="7" RIVET_MANAGED_WORKFLOW_SCHEMA_MAX_VERSION="7" node \/app\/packages\/studio-server-api\/dist\/studio-server-api\/src\/scripts\/migrate-managed-workflow-schema\.js migrate; node \/app\/packages\/studio-server-api\/dist\/studio-server-api\/src\/scripts\/import-managed-app-settings\.js/,
   );
   assert.match(
     renderedChartWithRollbackWindow,
-    /RIVET_MANAGED_WORKFLOW_SCHEMA_MIN_VERSION="6" RIVET_MANAGED_WORKFLOW_SCHEMA_MAX_VERSION="6" node \/app\/packages\/studio-server-api\/dist\/studio-server-api\/src\/scripts\/migrate-managed-workflow-schema\.js migrate/,
+    /RIVET_MANAGED_WORKFLOW_SCHEMA_MIN_VERSION="7" RIVET_MANAGED_WORKFLOW_SCHEMA_MAX_VERSION="7" node \/app\/packages\/studio-server-api\/dist\/studio-server-api\/src\/scripts\/migrate-managed-workflow-schema\.js migrate/,
     'the migration Job must use the exact candidate version even when serving pods support a lower rollback version',
   );
   assert.match(migrationJobDocument, /name: RIVET_APP_DATA_ROOT\s*\n\s*value: "\/var\/tmp\/rivet-migration-app-data"/);
@@ -684,7 +692,7 @@ test('production rendering requires a fully identified digest-pinned release', a
     '--set',
     `release.production.chart.contentDigest=sha256:${'f'.repeat(64)}`,
     '--set',
-    'release.production.database.managedWorkflowSchemaVersion=6',
+    'release.production.database.managedWorkflowSchemaVersion=7',
   ];
   const renderProduction = (overrides: string[] = []) =>
     execFileSync(helmBin, [...baseArgs, ...identifiedReleaseArgs, ...overrides], {

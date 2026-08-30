@@ -5,7 +5,7 @@ import type { Pool, PoolClient, QueryResultRow } from 'pg';
 import { MANAGED_WORKFLOW_SCHEMA_SQL } from './schema.js';
 
 export const MANAGED_WORKFLOW_SCHEMA_MIGRATIONS_TABLE = 'managed_workflow_schema_migrations';
-export const CURRENT_MANAGED_WORKFLOW_SCHEMA_VERSION = 6;
+export const CURRENT_MANAGED_WORKFLOW_SCHEMA_VERSION = 7;
 // A serving release may verify an additive schema created by its immediate
 // successor only when the chart deliberately supplies that compatibility
 // window. Keep this constant explicit: raising it is the release-engineering
@@ -167,6 +167,16 @@ CREATE INDEX IF NOT EXISTS evaluation_hosted_trial_jobs_outstanding_idx
   ON evaluation_hosted_trial_jobs(status)
   WHERE status IN ('queued', 'claimed', 'accepted');
 `;
+const MANAGED_EVALUATION_RETENTION_INDEX_SQL = `
+-- Bounded global retention scans must not compete with growing permanent
+-- Evaluation history. Replay payloads remain PostgreSQL-owned metadata.
+CREATE INDEX IF NOT EXISTS evaluation_recordings_temporary_created_idx
+  ON evaluation_recordings(created_at, project_id, run_id, recording_id)
+  WHERE artifact_json->'reference'->>'retention' = 'temporary';
+
+CREATE INDEX IF NOT EXISTS evaluation_dataset_snapshots_created_idx
+  ON evaluation_dataset_snapshots(created_at, project_id, dataset_fingerprint);
+`;
 const MIGRATION_STATEMENT_TIMEOUT = '5min';
 const VERIFY_STATEMENT_TIMEOUT = '30s';
 const TRANSIENT_SCHEMA_ERROR_CODES = new Set(['40001', '40P01', '55P03']);
@@ -296,6 +306,12 @@ export const MANAGED_WORKFLOW_SCHEMA_MIGRATIONS: readonly ManagedWorkflowSchemaM
     name: 'hosted-evaluation-outstanding-index',
     sql: MANAGED_HOSTED_EVALUATION_OUTSTANDING_INDEX_SQL,
     checksum: '29e225e645272fced8e1c8e8be268a8667a7f069bb3fba3ee1213759815d1e05',
+  },
+  {
+    version: 7,
+    name: 'managed-evaluation-retention-indexes',
+    sql: MANAGED_EVALUATION_RETENTION_INDEX_SQL,
+    checksum: 'f59063f1e999390b488d409eebe3c8c36880943b2848e655fb81b39fb027b4a9',
   },
 ];
 
@@ -686,6 +702,14 @@ export const MANAGED_WORKFLOW_SCHEMA_REQUIRED_INDEXES = [
   ['evaluation_hosted_trial_jobs', 'evaluation_hosted_trial_jobs_outstanding_idx', ['status'], "(status = ANY (ARRAY['queued'::text, 'claimed'::text, 'accepted'::text]))", [0]],
   ['evaluation_hosted_trial_attempts', 'evaluation_hosted_trial_attempts_run_idx', ['project_id', 'run_id', 'created_at', 'job_id'], null, [0, 0, 0, 0]],
   ['evaluation_recordings', 'evaluation_recordings_project_run_idx', ['project_id', 'run_id'], null, [0, 0]],
+  [
+    'evaluation_recordings',
+    'evaluation_recordings_temporary_created_idx',
+    ['created_at', 'project_id', 'run_id', 'recording_id'],
+    "((artifact_json -> 'reference'::text) ->> 'retention'::text) = 'temporary'::text",
+    [0, 0, 0, 0],
+  ],
+  ['evaluation_dataset_snapshots', 'evaluation_dataset_snapshots_created_idx', ['created_at', 'project_id', 'dataset_fingerprint'], null, [0, 0, 0]],
 ] as const;
 
 export const MANAGED_WORKFLOW_SCHEMA_REQUIRED_CONSTRAINTS = [

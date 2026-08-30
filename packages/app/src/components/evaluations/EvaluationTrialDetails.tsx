@@ -39,6 +39,16 @@ export const EvaluationTrialDetails = memo<EvaluationTrialDetailsProps>(
         });
       }
     }
+    const expiredRecordingIds = new Set(
+      recordings
+        .filter(
+          ({ reference }) =>
+            reference.retention === 'temporary' &&
+            reference.expiresAt !== undefined &&
+            Date.parse(reference.expiresAt) <= Date.now(),
+        )
+        .map(({ reference }) => reference.id),
+    );
     const expectedValues = Object.fromEntries(
       Object.entries(trial.expected).map(([fieldId, value]) => [expectedFieldLabels.get(fieldId) ?? fieldId, value]),
     );
@@ -198,18 +208,24 @@ export const EvaluationTrialDetails = memo<EvaluationTrialDetailsProps>(
           {recordings.length === 0 ? (
             <span className="muted">No replay recording is retained for this trial.</span>
           ) : (
-            recordings.map((recording) => (
-              <span key={recording.reference.id}>
-                <span className="pill">{recording.reference.retention}</span>{' '}
-                <Button
-                  appearance="subtle"
-                  className="evaluation-secondary-action"
-                  onClick={() => onOpenRecording(recording.reference.id)}
-                >
-                  {recording.label}
-                </Button>
-              </span>
-            ))
+            recordings.map((recording) =>
+              expiredRecordingIds.has(recording.reference.id) ? (
+                <span key={recording.reference.id} className="muted">
+                  <span className="pill">expired</span> Temporary replay recording expired
+                </span>
+              ) : (
+                <span key={recording.reference.id}>
+                  <span className="pill">{recording.reference.retention}</span>{' '}
+                  <Button
+                    appearance="subtle"
+                    className="evaluation-secondary-action"
+                    onClick={() => onOpenRecording(recording.reference.id)}
+                  >
+                    {recording.label}
+                  </Button>
+                </span>
+              ),
+            )
           )}
         </div>
       </div>

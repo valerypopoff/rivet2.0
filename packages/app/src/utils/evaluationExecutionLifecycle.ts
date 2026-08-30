@@ -132,11 +132,14 @@ export async function executeEvaluationRunLifecycle(
 
     options.onStageChange?.('persisting');
     try {
-      await Promise.all(
+      const retentionUpdates = await Promise.all(
         evaluationRecordingRetentionUpdates(projectId, finalizedRun.trials).map((update) =>
           runStore.updateRecordingRetention(update),
         ),
       );
+      if (retentionUpdates.some((updated) => !updated)) {
+        throw new Error('One or more replay recordings disappeared before their retention policy could be finalized.');
+      }
     } catch (error) {
       finalizedRun.warnings.push(RECORDING_RETENTION_WARNING);
       options.onStorageFault?.('recording-retention', error);

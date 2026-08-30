@@ -115,15 +115,16 @@ export class InMemoryEvaluationRunStore implements EvaluationStore {
     recordingId: string;
     retention: EvaluationRecordingArtifact['reference']['retention'];
     expiresAt?: string;
-  }): Promise<void> {
+  }): Promise<boolean> {
     const key = `${input.projectId}/${input.recordingId}`;
     const artifact = this.#recordings.get(key);
-    if (!artifact) return;
+    if (!artifact) return false;
     artifact.reference = {
       id: artifact.reference.id,
       retention: input.retention,
       ...(input.expiresAt === undefined ? {} : { expiresAt: input.expiresAt }),
     };
+    return true;
   }
 
   async promoteBaseline(input: { projectId: string; runId: string }): Promise<void> {

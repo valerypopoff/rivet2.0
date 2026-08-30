@@ -45,6 +45,7 @@ export type MetricsObjectStorageDomain = 'runtime_libraries' | 'workflows';
 export type MetricsObjectStorageOperation = 'delete' | 'delete_many' | 'get' | 'head' | 'health' | 'list' | 'put';
 export type MetricsManagedReconciliationDomain = 'evaluations' | 'runtime_libraries' | 'workflows';
 export type MetricsManagedReconciliationPhase = 'metadata' | 'objects';
+export type MetricsManagedEvaluationRetentionMode = 'audit' | 'enforce';
 
 export function getMetricsConfig(
   env: NodeJS.ProcessEnv = process.env,
@@ -220,6 +221,43 @@ export class StudioMetrics {
     this.setGauge('rivet_managed_reconciliation_open_findings', { domain: input.domain }, input.openFindings);
   }
 
+  /**
+   * Evaluation replay artifacts are PostgreSQL-owned today. These bounded
+   * lifecycle metrics deliberately carry no project, suite, or recording ids.
+   */
+  setManagedEvaluationRetention(input: {
+    mode: MetricsManagedEvaluationRetentionMode;
+    expiredRecordingCandidates: number;
+    orphanedSnapshotCandidates: number;
+  }): void {
+    this.setGauge(
+      'rivet_managed_evaluation_retention_candidates',
+      { kind: 'expired_recording', mode: input.mode },
+      input.expiredRecordingCandidates,
+    );
+    this.setGauge(
+      'rivet_managed_evaluation_retention_candidates',
+      { kind: 'orphaned_snapshot', mode: input.mode },
+      input.orphanedSnapshotCandidates,
+    );
+  }
+
+  recordManagedEvaluationRetention(input: {
+    mode: MetricsManagedEvaluationRetentionMode;
+    expiredRecordings: number;
+    orphanedSnapshots: number;
+  }): void {
+    this.incrementCounter(
+      'rivet_managed_evaluation_retention_deleted_total',
+      { kind: 'expired_recording', mode: input.mode },
+      input.expiredRecordings,
+    );
+    this.incrementCounter(
+      'rivet_managed_evaluation_retention_deleted_total',
+      { kind: 'orphaned_snapshot', mode: input.mode },
+      input.orphanedSnapshots,
+    );
+  }
   render(): string {
     if (!this.#enabled) return '';
     try {

@@ -31,6 +31,7 @@ import {
   type EvaluationAssertionOperator,
   type EvaluationRun,
   type EvaluationRunPurpose,
+  type EvaluationRecordingReference,
   type EvaluationSuite,
   type EvaluationThreshold,
   type PortableJson,
@@ -132,6 +133,41 @@ function getCachedEvaluationRunSummary(run: EvaluationRun): EvaluationRunSummary
   const summary = summarizeEvaluationRun(run);
   if (summary) evaluationRunSummaryCache.set(run, summary);
   return summary;
+}
+
+function getEvaluationRunRecordingReferences(run: EvaluationRun): EvaluationRecordingReference[] {
+  return run.trials.flatMap((trial) => [
+    ...(trial.recording === undefined ? [] : [trial.recording]),
+    ...trial.observations.flatMap((observation) =>
+      observation.recording === undefined ? [] : [observation.recording],
+    ),
+  ]);
+}
+
+function withEvaluationRunRecordingRetention(
+  run: EvaluationRun,
+  recordingIds: ReadonlySet<string>,
+  retention: EvaluationRecordingReference['retention'],
+  expiresAt?: string,
+): EvaluationRun {
+  const update = (reference: EvaluationRecordingReference): EvaluationRecordingReference =>
+    !recordingIds.has(reference.id)
+      ? reference
+      : {
+          id: reference.id,
+          retention,
+          ...(expiresAt === undefined ? {} : { expiresAt }),
+        };
+  return {
+    ...run,
+    trials: run.trials.map((trial) => ({
+      ...trial,
+      ...(trial.recording === undefined ? {} : { recording: update(trial.recording) }),
+      observations: trial.observations.map((observation) =>
+        observation.recording === undefined ? observation : { ...observation, recording: update(observation.recording) },
+      ),
+    })),
+  };
 }
 
 const styles = css`
@@ -951,6 +987,13 @@ const styles = css`
   }
   .evaluation-trial-sort + .evaluation-trial-list {
     margin-top: 12px;
+  }
+  .evaluation-run-recording-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 16px;
+    flex-wrap: wrap;
   }
   .evaluation-run-delete-action {
     position: fixed;
@@ -2485,6 +2528,79 @@ const EvaluationsContainer: FC<{ tryRunEvaluation: TryRunEvaluation; abortEvalua
     }
   };
 
+  const updateEvaluationRunRecordingRetention = async (
+    run: EvaluationRun,
+    action: 'keep' | 'release',
+  ) => {
+    const now = Date.now();
+    const sourceRetention = action === 'keep' ? 'temporary' : 'retained';
+    const references = [
+      ...new Map(
+        getEvaluationRunRecordingReferences(run)
+          .filter(
+            (reference) =>
+              reference.retention === sourceRetention &&
+              (action !== 'keep' || reference.expiresAt === undefined || Date.parse(reference.expiresAt) > now),
+          )
+          .map((reference) => [reference.id, reference]),
+      ).values(),
+    ];
+    if (references.length === 0) {
+      toast.info(
+        action === 'keep'
+          ? 'This run has no unexpired temporary replay recordings to keep.'
+          : 'This run has no manually retained replay recordings to release.',
+      );
+      return;
+    }
+
+    const expiresAt = action === 'release' ? new Date(now + 24 * 60 * 60 * 1000).toISOString() : undefined;
+    const changedIds = new Set<string>();
+    let failure: unknown;
+    for (const reference of references) {
+      try {
+        const updated = await runStore.updateRecordingRetention({
+          expiresAt,
+          projectId: project.metadata.id,
+          recordingId: reference.id,
+          retention: action === 'keep' ? 'retained' : 'temporary',
+        });
+        if (updated) changedIds.add(reference.id);
+      } catch (error) {
+        failure = error;
+        break;
+      }
+    }
+
+    if (changedIds.size > 0) {
+      const update = (candidate: EvaluationRun) =>
+        candidate.id === run.id
+          ? withEvaluationRunRecordingRetention(candidate, changedIds, action === 'keep' ? 'retained' : 'temporary', expiresAt)
+          : candidate;
+      setState((current) => ({
+        ...current,
+        currentRun: current.currentRun ? update(current.currentRun) : undefined,
+        runs: current.runs.map(update),
+      }));
+    }
+    if (failure !== undefined || changedIds.size !== references.length) {
+      const detail =
+        failure === undefined
+          ? 'One or more recordings expired or were removed before the change could be saved.'
+          : failure instanceof Error
+            ? failure.message
+            : String(failure);
+      toast.warn(
+        `Only ${changedIds.size} of ${references.length} replay recordings were updated. Refresh Runs before trying again: ${detail}`,
+      );
+      return;
+    }
+    toast.success(
+      action === 'keep'
+        ? `${changedIds.size} replay recording${changedIds.size === 1 ? '' : 's'} will be kept until you release them.`
+        : `${changedIds.size} replay recording${changedIds.size === 1 ? '' : 's'} will expire in 24 hours.`,
+    );
+  };
   const deleteEvaluationRun = async (run: EvaluationRun) => {
     const isLiveRun =
       state.currentRun?.id === run.id &&
@@ -2528,7 +2644,7 @@ const EvaluationsContainer: FC<{ tryRunEvaluation: TryRunEvaluation; abortEvalua
     setConfirmation({
       appearance: 'danger',
       title: 'Delete evaluation run?',
-      description: `Delete "${run.name?.trim() || 'Unnamed'}"? This permanently removes its local run history and any retained replay recordings. A baseline already promoted from this run remains available.`,
+      description: `Delete "${run.name?.trim() || 'Unnamed'}"? This permanently removes its run history and every replay recording for the run, including manually kept and baseline recordings. A compact baseline snapshot remains available for comparison, but its replay recordings will be gone.`,
       confirmLabel: 'Delete run',
       onConfirm: () => void deleteEvaluationRun(run),
     });
@@ -2910,6 +3026,8 @@ const EvaluationsContainer: FC<{ tryRunEvaluation: TryRunEvaluation; abortEvalua
                   onExpandedTrialsChange={updateExpandedTrials}
                   onRename={(runId, name) => void renameEvaluationRun(runId, name)}
                   onDelete={requestDeleteEvaluationRun}
+                  onKeepRecordings={(run) => void updateEvaluationRunRecordingRetention(run, 'keep')}
+                  onReleaseRecordings={(run) => void updateEvaluationRunRecordingRetention(run, 'release')}
                   onOpenRecording={(recordingId) => void openRecording(recordingId)}
                 />
               )}
@@ -4439,6 +4557,8 @@ const Runs: FC<{
   onExpandedTrialsChange: (runId: string | undefined, trialIds: readonly string[]) => void;
   onRename: (runId: string, name: string) => void;
   onDelete: (run: EvaluationRun) => void;
+  onKeepRecordings: (run: EvaluationRun) => void;
+  onReleaseRecordings: (run: EvaluationRun) => void;
   onOpenRecording: (recordingId: string) => void;
 }> = ({
   dataset,
@@ -4455,6 +4575,8 @@ const Runs: FC<{
   onExpandedTrialsChange,
   onRename,
   onDelete,
+  onKeepRecordings,
+  onReleaseRecordings,
   onOpenRecording,
 }) => {
   const liveRun =
@@ -4539,6 +4661,13 @@ const Runs: FC<{
   const summaryAggregate = runSummary?.aggregate ?? aggregate;
   const isScoringRun = run.evaluationMode === 'scoring';
   const isRunInProgress = run.executionStatus === 'queued' || run.executionStatus === 'running';
+  const recordingReferences = getEvaluationRunRecordingReferences(run);
+  const hasKeepableReplayRecordings = recordingReferences.some(
+    (reference) =>
+      reference.retention === 'temporary' &&
+      (reference.expiresAt === undefined || Date.parse(reference.expiresAt) > Date.now()),
+  );
+  const hasRetainedReplayRecordings = recordingReferences.some((reference) => reference.retention === 'retained');
   const executionLabel = `${run.executionStatus.charAt(0).toUpperCase()}${run.executionStatus.slice(1)}`;
   const isExecutionSettled = !isRunInProgress;
   const isAccountingPartial = run.accountingStatus === 'partial';
@@ -4878,6 +5007,20 @@ const Runs: FC<{
           ))}
         </ul>
       ) : null}
+      {isRunInProgress || (!hasKeepableReplayRecordings && !hasRetainedReplayRecordings) ? null : (
+        <div className="evaluation-run-recording-actions">
+          {hasKeepableReplayRecordings ? (
+            <Button appearance="primary" onClick={() => onKeepRecordings(run)}>
+              Keep replay recordings
+            </Button>
+          ) : null}
+          {hasRetainedReplayRecordings ? (
+            <Button appearance="subtle" className="evaluation-secondary-action" onClick={() => onReleaseRecordings(run)}>
+              Release replay recordings
+            </Button>
+          ) : null}
+        </div>
+      )}
       <div className="evaluation-run-delete-action">
         <Button
           appearance="danger"

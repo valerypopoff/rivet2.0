@@ -29,6 +29,7 @@ export const defaultApiTestFiles = [
   'src/tests/managed-catalog.test.ts',
   'src/tests/managed-code-runner.test.ts',
   'src/tests/managed-endpoint-sync.test.ts',
+  'src/tests/managed-evaluation-retention.test.ts',
   'src/tests/managed-execution-cache.test.ts',
   'src/tests/managed-execution-invalidation.test.ts',
   'src/tests/managed-execution-service.test.ts',

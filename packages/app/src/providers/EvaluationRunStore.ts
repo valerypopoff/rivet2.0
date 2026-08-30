@@ -451,14 +451,15 @@ export class LocalEvaluationRunStore implements EvaluationStore {
     recordingId: string;
     retention: EvaluationRecordingArtifact['reference']['retention'];
     expiresAt?: string;
-  }): Promise<void> {
+  }): Promise<boolean> {
+    let updated = false;
     await this.queueProjectOperation(input.projectId, async () => {
       const key = this.recordingArtifactKey(input.projectId, input.recordingId);
       for (let attempt = 0; attempt < 5; attempt += 1) {
         const serialized = await this.readSerialized(key);
         if (serialized === null) return;
         const artifact = this.parseRecordingArtifact(serialized, input.projectId, input.recordingId);
-        const updated: EvaluationRecordingArtifact = {
+        const next: EvaluationRecordingArtifact = {
           ...artifact,
           reference: {
             id: artifact.reference.id,
@@ -467,13 +468,15 @@ export class LocalEvaluationRunStore implements EvaluationStore {
           },
         };
         if (
-          await this.applyBatch([{ key, expected: serialized }], [{ type: 'set', key, value: JSON.stringify(updated) }])
+          await this.applyBatch([{ key, expected: serialized }], [{ type: 'set', key, value: JSON.stringify(next) }])
         ) {
+          updated = true;
           return;
         }
       }
       throw new Error('Evaluation recording retention changed concurrently; retry the operation.');
     });
+    return updated;
   }
 
   async promoteBaseline(input: { projectId: ProjectId; runId: string }): Promise<void> {

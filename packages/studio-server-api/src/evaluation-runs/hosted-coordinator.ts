@@ -50,10 +50,7 @@ type HostedEvaluationSnapshot = {
 type HostedRunState = 'queued' | 'running' | 'completed' | 'canceled' | 'interrupted';
 type HostedJobState = 'queued' | 'claimed' | 'accepted' | 'settled' | 'interrupted' | 'canceled';
 type RecordingRetentionUpdate = Parameters<PostgresRivetEvaluationStore['updateRecordingRetention']>[0];
-type ProjectionUpdate = {
-  run: EvaluationRun;
-  recordingRetentionUpdates: RecordingRetentionUpdate[];
-};
+
 type HostedRunRow = QueryResultRow & {
   project_id: string;
   run_id: string;
@@ -180,16 +177,19 @@ function projectId(value: string): ProjectId {
 }
 
 function recordingRetentionUpdates(project: ProjectId, trials: readonly EvaluationTrial[]): RecordingRetentionUpdate[] {
-  return trials.flatMap((trial) =>
-    [trial.recording, ...trial.observations.map((observation) => observation.recording)]
-      .filter((reference): reference is NonNullable<typeof reference> => reference !== undefined)
-      .map((reference) => ({
+  const updates = new Map<string, RecordingRetentionUpdate>();
+  for (const trial of trials) {
+    for (const reference of [trial.recording, ...trial.observations.map((observation) => observation.recording)]) {
+      if (!reference) continue;
+      updates.set(reference.id, {
         projectId: project,
         recordingId: reference.id,
         retention: reference.retention,
         ...(reference.expiresAt === undefined ? {} : { expiresAt: reference.expiresAt }),
-      })),
-  );
+      });
+    }
+  }
+  return [...updates.values()];
 }
 
 function terminalTrial(
@@ -459,7 +459,7 @@ export class HostedEvaluationCoordinator {
         [String(input.projectId), input.runId],
       );
       const snapshot = parseSnapshot(hosted.snapshot_json);
-      const run = await this.#getRunForUpdate(client, input.projectId, input.runId);
+      const currentRun = await this.#getRunForUpdate(client, input.projectId, input.runId);
       for (const job of pending.rows) {
         const canceled = await client.query(
           `UPDATE evaluation_hosted_trial_jobs
@@ -478,7 +478,7 @@ export class HostedEvaluationCoordinator {
           job,
           'canceled',
           snapshot.purpose,
-          run.evaluationMode,
+          currentRun.evaluationMode,
           'The hosted evaluation was canceled before dispatch.',
         );
         await client.query(
@@ -486,12 +486,11 @@ export class HostedEvaluationCoordinator {
           [String(input.projectId), input.runId, job.job_id, JSON.stringify(trial)],
         );
       }
-      const projection = await this.#updateProjection(client, input.projectId, input.runId, snapshot);
+      const run = await this.#updateProjection(client, input.projectId, input.runId, snapshot);
       await client.query('COMMIT');
-      await this.#persistRecordingRetention(projection);
       this.#abortRun(input.projectId, input.runId, 'Hosted evaluation cancellation requested.');
       this.#notify();
-      return projection.run;
+      return run;
     } catch (error) {
       await client.query('ROLLBACK').catch(() => undefined);
       throw error;
@@ -1006,14 +1005,13 @@ export class HostedEvaluationCoordinator {
         ],
       );
       const hosted = await this.#getHostedRunForUpdate(client, interrupted.project_id, interrupted.run_id);
-      const projection = await this.#updateProjection(
+      await this.#updateProjection(
         client,
         projectId(interrupted.project_id),
         interrupted.run_id,
         parseSnapshot(hosted.snapshot_json),
       );
       await client.query('COMMIT');
-      await this.#persistRecordingRetention(projection);
     } catch (error) {
       await client.query('ROLLBACK').catch(() => undefined);
       throw error;
@@ -1053,14 +1051,13 @@ export class HostedEvaluationCoordinator {
         ],
       );
       const hosted = await this.#getHostedRunForUpdate(client, settled.project_id, settled.run_id);
-      const projection = await this.#updateProjection(
+      await this.#updateProjection(
         client,
         projectId(settled.project_id),
         settled.run_id,
         parseSnapshot(hosted.snapshot_json),
       );
       await client.query('COMMIT');
-      await this.#persistRecordingRetention(projection);
     } catch (error) {
       await client.query('ROLLBACK').catch(() => undefined);
       throw error;
@@ -1139,12 +1136,10 @@ export class HostedEvaluationCoordinator {
           snapshot,
         });
       }
-      const projections: ProjectionUpdate[] = [];
       for (const entry of dirty.values()) {
-        projections.push(await this.#updateProjection(client, entry.projectId, entry.runId, entry.snapshot));
+        await this.#updateProjection(client, entry.projectId, entry.runId, entry.snapshot);
       }
       await client.query('COMMIT');
-      await Promise.all(projections.map((projection) => this.#persistRecordingRetention(projection)));
     } catch (error) {
       await client.query('ROLLBACK').catch(() => undefined);
       throw error;
@@ -1186,32 +1181,12 @@ export class HostedEvaluationCoordinator {
     );
   }
 
-  async #persistRecordingRetention(update: ProjectionUpdate): Promise<void> {
-    if (update.recordingRetentionUpdates.length === 0) return;
-    try {
-      await Promise.all(
-        update.recordingRetentionUpdates.map((input) => this.#runStore.updateRecordingRetention(input)),
-      );
-    } catch (error) {
-      console.error('[hosted-evaluations] Failed to finalize recording retention:', error);
-      const latest = await this.#runStore
-        .get({ projectId: update.run.projectId, runId: update.run.id })
-        .catch(() => undefined);
-      if (!latest || latest.warnings.includes('Some hosted evaluation recording retention updates could not be saved.'))
-        return;
-      latest.warnings.push('Some hosted evaluation recording retention updates could not be saved.');
-      await this.#runStore.put(latest).catch((warningError) => {
-        console.error('[hosted-evaluations] Failed to persist recording retention warning:', warningError);
-      });
-    }
-  }
-
   async #updateProjection(
     client: PoolClient,
     project: ProjectId,
     runId: string,
     snapshot: HostedEvaluationSnapshot,
-  ): Promise<ProjectionUpdate> {
+  ): Promise<EvaluationRun> {
     const run = await this.#getRunForUpdate(client, project, runId);
     const result = await client.query<HostedJobRow>(
       `SELECT project_id, run_id, job_id, case_id, case_name, case_index, trial_index, status, attempt, fencing_token, worker_id, trial_json
@@ -1227,7 +1202,6 @@ export class HostedEvaluationCoordinator {
     const hosted = await this.#getHostedRunForUpdate(client, String(project), runId);
     const canceled = hosted.cancel_requested_at != null;
     let next: EvaluationRun = { ...run, revision: (run.revision ?? 0) + 1, trials, requestedTrialCount: jobs.length };
-    let finalRetentionUpdates: RecordingRetentionUpdate[] = [];
     if (allTerminal) {
       const suite = snapshot.evaluationData.suites.find((candidate) => candidate.id === snapshot.suiteId);
       if (!suite) throw new Error('The hosted Evaluation snapshot no longer contains its suite.');
@@ -1236,7 +1210,12 @@ export class HostedEvaluationCoordinator {
         next,
         suite.configuration?.recordingRetention ?? 'failures-and-baselines',
       );
-      finalRetentionUpdates = recordingRetentionUpdates(project, next.trials);
+      for (const update of recordingRetentionUpdates(project, next.trials)) {
+        const updated = await this.#runStore.updateRecordingRetentionInTransaction(client, update);
+        if (!updated) {
+          throw new Error('A replay recording disappeared before its terminal retention policy could be finalized.');
+        }
+      }
       if (interrupted && !canceled) {
         next.executionStatus = 'error';
         next.qualityStatus = suite.evaluationMode === 'scoring' ? 'unable-to-evaluate' : 'failed';
@@ -1264,6 +1243,6 @@ export class HostedEvaluationCoordinator {
       next.qualityReason = { code: 'in-progress', message: 'The hosted evaluation is running.' };
     }
     await this.#writeRun(client, next);
-    return { run: next, recordingRetentionUpdates: finalRetentionUpdates };
+    return next;
   }
 }

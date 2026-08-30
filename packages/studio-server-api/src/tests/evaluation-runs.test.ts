@@ -7,7 +7,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
 
-import type { Pool } from "pg";
+import type { Pool, PoolClient } from "pg";
 import type { ProjectId } from "@valerypopoff/rivet2-node";
 import {
   fingerprintEvaluationDataset,
@@ -510,6 +510,43 @@ test("hosted HTTP evaluation store sends project-scoped run name updates", async
   }
 });
 
+test('hosted HTTP evaluation store returns confirmed recording-retention outcomes', async () => {
+  const originalFetch = globalThis.fetch;
+  const originalWindow = globalThis.window;
+  let request: { url: string; init: RequestInit | undefined } | undefined;
+  Object.defineProperty(globalThis, 'window', {
+    configurable: true,
+    value: { location: { origin: 'https://rivet.example' } },
+  });
+  globalThis.fetch = async (input, init) => {
+    request = { url: String(input), init };
+    return Response.json({ updated: false });
+  };
+  try {
+    const store = createHttpEvaluationStore({
+      baseUrl: '/api/workflows/evaluation-runs',
+      normalizeRun: normalizeEvaluationRun,
+      normalizeLibrary: normalizeEvaluationLibrary,
+    });
+    assert.equal(
+      await store.updateRecordingRetention({
+        projectId: projectA,
+        recordingId: 'missing-recording',
+        retention: 'retained',
+      }),
+      false,
+    );
+    assert.equal(request?.url, '/api/workflows/evaluation-runs/recordings/missing-recording');
+    assert.equal(request?.init?.method, 'PATCH');
+  } finally {
+    globalThis.fetch = originalFetch;
+    Object.defineProperty(globalThis, 'window', {
+      configurable: true,
+      value: originalWindow,
+    });
+  }
+});
+
 test("hosted HTTP evaluation store migrates legacy libraries and serializes writes", async () => {
   const originalFetch = globalThis.fetch;
   let revision = 0;
@@ -700,6 +737,35 @@ function recording(
     createdAt: "2026-08-15T00:00:00.000Z",
   };
 }
+
+async function assertRecordingRetentionUpdateOutcomes(
+  store: Pick<RivetStudioEvaluationStore, 'putRecording' | 'getRecording' | 'updateRecordingRetention'>,
+): Promise<void> {
+  const artifact = recording(projectA, 'retention-outcome', 'temporary', '2099-01-01T00:00:00.000Z');
+  await store.putRecording(artifact);
+  assert.equal(
+    await store.updateRecordingRetention({
+      projectId: projectA,
+      recordingId: artifact.reference.id,
+      retention: 'retained',
+    }),
+    true,
+  );
+  assert.equal(
+    (await store.getRecording({ projectId: projectA, recordingId: artifact.reference.id }))?.reference.retention,
+    'retained',
+  );
+  assert.equal(
+    await store.updateRecordingRetention({
+      projectId: projectA,
+      recordingId: 'missing-recording',
+      retention: 'retained',
+    }),
+    false,
+  );
+}
+
+
 
 function datasetSnapshot(projectId: ProjectId): EvaluationDatasetSnapshot {
   const dataset = {
@@ -980,6 +1046,7 @@ test("filesystem evaluation store persists the complete upstream contract", asyn
   const store = new FilesystemRivetEvaluationStore(databasePath);
   try {
     await assertCompleteEvaluationStoreContract(store);
+    await assertRecordingRetentionUpdateOutcomes(store);
     await store.dispose();
     const reopened = new FilesystemRivetEvaluationStore(databasePath);
     try {
@@ -1027,7 +1094,9 @@ type ManagedRecordingRow = {
 
 /** Small behavioral PostgreSQL double: it models only evaluation SQL used by this test. */
 class FakeManagedEvaluationPool {
+  readonly queries: string[] = [];
   readonly recordings = new Map<string, ManagedRecordingRow>();
+  readonly activeRecordingIds = new Set<string>();
   readonly runs = new Map<string, EvaluationRun>();
   readonly datasetSnapshots = new Set<string>();
   library: { revision: number; library: EvaluationLibrary } | undefined;
@@ -1037,23 +1106,11 @@ class FakeManagedEvaluationPool {
     return `${String(projectId)}:${String(recordingId)}`;
   }
 
-  private removeExpired(projectId: unknown): void {
-    for (const [key, row] of this.recordings) {
-      if (
-        row.projectId === String(projectId) &&
-        row.artifact.reference.retention === "temporary" &&
-        row.artifact.reference.expiresAt !== undefined &&
-        Date.parse(row.artifact.reference.expiresAt) <= Date.now()
-      ) {
-        this.recordings.delete(key);
-      }
-    }
-  }
-
   async query<T = Record<string, unknown>>(
     sql: string,
     values: unknown[] = [],
   ): Promise<{ rows: T[]; rowCount: number }> {
+    this.queries.push(sql);
     const normalized = sql.replace(/\s+/gu, " ").trim().toLowerCase();
     if (
       normalized === "begin" ||
@@ -1104,14 +1161,6 @@ class FakeManagedEvaluationPool {
       this.libraryImports.add(String(values[0]));
       return { rows: [], rowCount: 1 };
     }
-    if (
-      normalized.startsWith(
-        "delete from evaluation_recordings where project_id = $1 and artifact_json",
-      )
-    ) {
-      this.removeExpired(values[0]);
-      return { rows: [], rowCount: 0 };
-    }
     if (normalized.startsWith("insert into evaluation_recordings")) {
       const projectId = String(values[0]);
       const recordingId = String(values[1]);
@@ -1138,13 +1187,23 @@ class FakeManagedEvaluationPool {
       };
     }
     if (
+      normalized.startsWith("select recording.artifact_json") ||
       normalized.startsWith(
         "select artifact_json from evaluation_recordings where project_id = $1 and recording_id = $2",
       )
     ) {
-      const row = this.recordings.get(this.key(values[0], values[1]));
+      const key = this.key(values[0], values[1]);
+      const row = this.recordings.get(key);
       return {
-        rows: row === undefined ? [] : [{ artifact_json: row.artifact } as T],
+        rows:
+          row === undefined
+            ? []
+            : [
+                {
+                  artifact_json: row.artifact,
+                  protected_from_expiry: this.activeRecordingIds.has(key),
+                } as T,
+              ],
         rowCount: row === undefined ? 0 : 1,
       };
     }
@@ -1166,6 +1225,13 @@ class FakeManagedEvaluationPool {
         this.key(projectId, runId),
         JSON.parse(String(values[4])) as EvaluationRun,
       );
+      return { rows: [], rowCount: 1 };
+    }
+    if (normalized.startsWith('update evaluation_recordings set artifact_json = $1::jsonb')) {
+      const key = this.key(values[1], values[2]);
+      const existing = this.recordings.get(key);
+      if (!existing) return { rows: [], rowCount: 0 };
+      existing.artifact = JSON.parse(String(values[0])) as EvaluationRecordingArtifact;
       return { rows: [], rowCount: 1 };
     }
     if (normalized.startsWith("update evaluation_runs set")) {
@@ -1224,10 +1290,35 @@ test("managed evaluation store persists the complete upstream contract", async (
   const pool = new FakeManagedEvaluationPool();
   const store = new PostgresRivetEvaluationStore(pool as unknown as Pool);
   await assertCompleteEvaluationStoreContract(store);
+  await assertRecordingRetentionUpdateOutcomes(store);
   assert.equal(pool.library?.revision, 3);
   assert.equal(pool.libraryImports.size, 2);
 });
-test("managed evaluation store applies temporary-artifact cleanup and project scope independently", async () => {
+test('managed Evaluation terminal retention can join the caller transaction', async () => {
+  const pool = new FakeManagedEvaluationPool();
+  const store = new PostgresRivetEvaluationStore(pool as unknown as Pool);
+  const artifact = recording(projectA, 'terminal-retention', 'temporary', '2020-01-01T00:00:00.000Z');
+  await store.putRecording(artifact);
+
+  const client = await pool.connect();
+  await client.query('BEGIN');
+  assert.equal(
+    await store.updateRecordingRetentionInTransaction(client as unknown as PoolClient, {
+      projectId: projectA,
+      recordingId: artifact.reference.id,
+      retention: 'retained',
+    }),
+    true,
+  );
+  assert.equal(
+    pool.queries.slice(pool.queries.lastIndexOf('BEGIN') + 1).some((query) => query === 'COMMIT'),
+    false,
+    'the helper must not create or commit an independent transaction',
+  );
+  assert.equal(pool.recordings.get(`${projectA}:terminal-retention`)?.artifact.reference.retention, 'retained');
+  await client.query('COMMIT');
+});
+test("managed evaluation store hides expired artifacts without mutating shared retention state", async () => {
   const pool = new FakeManagedEvaluationPool();
   const store = new PostgresRivetEvaluationStore(pool as unknown as Pool);
   const expiredA = recording(
@@ -1266,6 +1357,17 @@ test("managed evaluation store applies temporary-artifact cleanup and project sc
   assert.equal(
     await store.getRecording({ projectId: projectA, recordingId: "expired-a" }),
     undefined,
+  );
+  pool.activeRecordingIds.add(`${projectA}:expired-a`);
+  assert.equal(
+    (
+      await store.getRecording({
+        projectId: projectA,
+        recordingId: "expired-a",
+      })
+    )?.serialized,
+    "recording:expired-a",
+    "a hosted parent or outstanding job keeps an expired provisional replay visible until terminal finalization",
   );
   assert.equal(
     (

@@ -740,13 +740,13 @@ evaluationRunsRouter.patch(
       throw badRequest(
         "The evaluation recording ID must match the request path.",
       );
-    await (
+    const updated = await (
       await getEvaluationStore()
     ).updateRecordingRetention({
       ...input,
       projectId: input.projectId as ProjectId,
     });
-    res.status(204).end();
+    res.json({ updated });
   }),
 );
 

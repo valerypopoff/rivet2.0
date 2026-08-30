@@ -202,6 +202,8 @@
   value: {{ $root.Values.managedMaintenance.leaseMs | quote }}
 - name: RIVET_MANAGED_MAINTENANCE_BATCH_SIZE
   value: {{ $root.Values.managedMaintenance.batchSize | quote }}
+- name: RIVET_MANAGED_EVALUATION_RETENTION_MODE
+  value: {{ $root.Values.evaluationRetention.mode | quote }}
 - name: RIVET_DEPLOYMENT_HEALTH_REFRESH_SECONDS
   value: {{ $root.Values.lifecycle.health.refreshSeconds | quote }}
 - name: RIVET_DEPLOYMENT_HEALTH_CHECK_TIMEOUT_SECONDS

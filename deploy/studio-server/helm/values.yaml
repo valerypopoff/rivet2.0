@@ -159,8 +159,8 @@ workflowSchema:
   # schema. The managed release command widens maximumVersion only for a
   # documented expand-only rollback; the migration Job always stays exact.
   compatibility:
-    minimumVersion: 6
-    maximumVersion: 6
+    minimumVersion: 7
+    maximumVersion: 7
   migrationJob:
     enabled: true
     backoffLimit: 2
@@ -173,6 +173,12 @@ managedMaintenance:
   intervalMs: 300000
   leaseMs: 60000
   batchSize: 100
+
+# Evaluate the global PostgreSQL-owned Evaluation retention candidates first.
+# Change to enforce only after candidate metrics show expected temporary replay
+# and orphaned-snapshot volume for the managed installation.
+evaluationRetention:
+  mode: audit
 
 # Production deployments must be materialized from an immutable release
 # manifest. Local Kubernetes rehearsal and disposable CI gates leave this off.

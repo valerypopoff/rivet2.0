@@ -66,7 +66,7 @@ function createStore(overrides: Partial<EvaluationRunStore> = {}): EvaluationRun
     getDatasetSnapshot: async () => undefined,
     putRecording: async () => undefined,
     getRecording: async () => undefined,
-    updateRecordingRetention: async () => undefined,
+    updateRecordingRetention: async () => true,
     promoteBaseline: async () => undefined,
     ...overrides,
   };
@@ -129,6 +129,31 @@ test('evaluation lifecycle keeps a successful run usable and reports non-fatal s
   assert.ok(result.warnings.some((warning) => warning.includes('dataset snapshot could not be retained')));
   assert.ok(result.warnings.some((warning) => warning.includes('2 replay recordings could not be retained')));
   assert.ok(result.warnings.some((warning) => warning.includes('could not be saved to run history: history failed')));
+});
+
+test('evaluation lifecycle records a warning when a replay disappears before its retention policy is finalized', async () => {
+  const faults: string[] = [];
+  const result = await executeEvaluationRunLifecycle({
+    project,
+    projectId,
+    evaluationData,
+    dataset,
+    suite,
+    purpose: 'execution-benchmark',
+    executionMode: 'test',
+    signal: new AbortController().signal,
+    runGraph: async () => ({
+      outputs: { output: 'result' },
+      metrics: { durationMs: 1 },
+      recording: { id: 'disappeared-recording', retention: 'temporary' },
+    }),
+    runStore: createStore({ updateRecordingRetention: async () => false }),
+    getExistingRun: () => undefined,
+    onStorageFault: (kind) => faults.push(kind),
+  });
+
+  assert.deepEqual(faults, ['recording-retention']);
+  assert.ok(result.warnings.includes('Some evaluation recording retention updates could not be saved.'));
 });
 
 test('evaluation lifecycle preserves a user-assigned live run name when finalizing', async () => {

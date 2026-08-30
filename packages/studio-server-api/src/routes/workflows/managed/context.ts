@@ -18,6 +18,10 @@ import {
 import { createManagedWorkflowEndpointSync } from './endpoint-sync.js';
 import { ManagedWorkflowExecutionCache } from './execution-cache.js';
 import { ManagedWorkflowExecutionInvalidationController } from './execution-invalidation.js';
+import {
+  createManagedEvaluationRetentionTask,
+  getManagedEvaluationRetentionConfig,
+} from '../../../evaluation-runs/managed-retention.js';
 import { createManagedWorkflowMaintenance } from './maintenance.js';
 import { createManagedReconciliationTask, getManagedReconciliationStatus } from './reconciliation.js';
 import { MANAGED_RUNTIME_LIBRARIES_OBJECT_STORAGE_PREFIX } from '../../../runtime-libraries/config.js';
@@ -83,6 +87,13 @@ export function createManagedWorkflowContext(
         )
       : undefined;
   if (maintenance.config.enabled) {
+    maintenance.registerTask(
+      'managed-evaluation-retention',
+      createManagedEvaluationRetentionTask({
+        config: getManagedEvaluationRetentionConfig(process.env, maintenance.config.batchSize),
+        pool,
+      }),
+    );
     maintenance.registerTask(
       'managed-reconciliation-audit',
       createManagedReconciliationTask({

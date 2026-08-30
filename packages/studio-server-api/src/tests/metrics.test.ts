@@ -61,6 +61,16 @@ test('metrics registry renders only finite, fixed-label metric families', () => 
     domain: 'runtime_libraries',
     openFindings: 3,
   });
+  metrics.setManagedEvaluationRetention({
+    expiredRecordingCandidates: 2,
+    mode: 'audit',
+    orphanedSnapshotCandidates: 1,
+  });
+  metrics.recordManagedEvaluationRetention({
+    expiredRecordings: 2,
+    mode: 'enforce',
+    orphanedSnapshots: 1,
+  });
 
   const rendered = metrics.render();
   assert.match(
@@ -92,6 +102,14 @@ test('metrics registry renders only finite, fixed-label metric families', () => 
   assert.match(
     rendered,
     /rivet_managed_reconciliation_open_findings\{domain="runtime_libraries",profile="execution"\} 3/,
+  );
+  assert.match(
+    rendered,
+    /rivet_managed_evaluation_retention_candidates\{kind="expired_recording",mode="audit",profile="execution"\} 2/,
+  );
+  assert.match(
+    rendered,
+    /rivet_managed_evaluation_retention_deleted_total\{kind="orphaned_snapshot",mode="enforce",profile="execution"\} 1/,
   );
   assert.doesNotMatch(rendered, /workflow name|prompt|secret|http:\/\//i);
 });

@@ -260,6 +260,11 @@ export function createHttpEvaluationStore(options: {
         },
       );
       await requireOk(response);
+      const payload = (await response.json()) as { updated?: unknown };
+      if (typeof payload.updated !== "boolean") {
+        throw new Error("The Evaluation recording retention response is invalid.");
+      }
+      return payload.updated;
     },
     async promoteBaseline(input) {
       const response = await fetch(
