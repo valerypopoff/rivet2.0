@@ -8,7 +8,6 @@ import type {
 } from '@valerypopoff/rivet2-node';
 
 const MAX_EVENTS_PER_RUN = 256;
-const TERMINAL_RUN_RETENTION_MS = 24 * 60 * 60 * 1000;
 
 type RunRow = {
   component_id: string;
@@ -113,17 +112,6 @@ export async function readStoredWebAppActionEvent(
 }
 
 export function createPostgresRivetWebAppRunStore(pool: Pool): RivetWebAppRunStore {
-  let createCount = 0;
-
-  const cleanupRetainedRuns = async (): Promise<void> => {
-    createCount += 1;
-    if (createCount % 64 !== 0) return;
-    await pool.query(`
-      DELETE FROM web_app_action_runs
-      WHERE status <> 'running'
-        AND updated_at < NOW() - ($1::bigint * INTERVAL '1 millisecond')
-    `, [TERMINAL_RUN_RETENTION_MS]);
-  };
 
   const interruptRuns = async (
     predicateSql: string,
@@ -224,7 +212,6 @@ export function createPostgresRivetWebAppRunStore(pool: Pool): RivetWebAppRunSto
     },
 
     async createRun(input) {
-      await cleanupRetainedRuns();
       const { rows } = await pool.query<RunRow>(`
         INSERT INTO web_app_action_runs (
           run_id, owner_scope, request_id, component_id, host_id, lease_id,

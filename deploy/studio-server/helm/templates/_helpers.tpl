@@ -14,6 +14,20 @@
 {{- printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" -}}
 {{- end -}}
 
+{{/*
+Validate a value that this chart later passes to Helm's `int` function or a
+Kubernetes integer field. Helm silently truncates native floating-point YAML
+values; rejecting them here keeps the rendered manifest and runtime config
+identical to the operator's declared value.
+*/}}
+{{- define "rivet.assertNonNegativeWholeNumber" -}}
+{{- $path := .path -}}
+{{- $value := toString .value -}}
+{{- if not (regexMatch "^(0|[1-9][0-9]*)$" $value) -}}
+{{- fail (printf "%s must be a non-negative whole number" $path) -}}
+{{- end -}}
+{{- end -}}
+
 {{- define "rivet.labels" -}}
 helm.sh/chart: {{ include "rivet.chart" . }}
 app.kubernetes.io/name: {{ include "rivet.name" . }}

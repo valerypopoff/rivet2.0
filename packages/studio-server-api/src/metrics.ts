@@ -46,6 +46,7 @@ export type MetricsObjectStorageOperation = 'delete' | 'delete_many' | 'get' | '
 export type MetricsManagedReconciliationDomain = 'evaluations' | 'runtime_libraries' | 'workflows';
 export type MetricsManagedReconciliationPhase = 'metadata' | 'objects';
 export type MetricsManagedEvaluationRetentionMode = 'audit' | 'enforce';
+export type MetricsManagedWebAppActionRetentionMode = MetricsManagedEvaluationRetentionMode;
 export type MetricsManagedMaintenancePassOutcome = 'completed' | 'failed' | 'lease_lost' | 'not_owner';
 export type MetricsManagedObjectDeletionOutboxState = 'blocked' | 'claimed' | 'pending';
 export type MetricsManagedObjectDeletionOutboxOutcome = 'blocked' | 'completed' | 'retry';
@@ -348,6 +349,15 @@ export class StudioMetrics {
       input.orphanedSnapshots,
     );
   }
+
+  setManagedWebAppActionRetention(input: { candidates: number; mode: MetricsManagedWebAppActionRetentionMode }): void {
+    this.setGauge('rivet_managed_web_app_action_retention_candidates', { mode: input.mode }, input.candidates);
+  }
+
+  recordManagedWebAppActionRetention(input: { deleted: number; mode: MetricsManagedWebAppActionRetentionMode }): void {
+    this.incrementCounter('rivet_managed_web_app_action_retention_deleted_total', { mode: input.mode }, input.deleted);
+  }
+
   render(): string {
     if (!this.#enabled) return '';
     try {

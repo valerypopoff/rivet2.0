@@ -91,6 +91,14 @@ test('metrics registry renders only finite, fixed-label metric families', () => 
     mode: 'enforce',
     orphanedSnapshots: 1,
   });
+  metrics.setManagedWebAppActionRetention({
+    candidates: 3,
+    mode: 'audit',
+  });
+  metrics.recordManagedWebAppActionRetention({
+    deleted: 2,
+    mode: 'enforce',
+  });
 
   const rendered = metrics.render();
   assert.match(
@@ -148,7 +156,10 @@ test('metrics registry renders only finite, fixed-label metric families', () => 
     rendered,
     /rivet_managed_reconciliation_scanned_object_bytes_total\{domain="runtime_libraries",outcome="success",phase="objects",profile="execution"\} 5120/,
   );
-  assert.match(rendered, /rivet_managed_reconciliation_active_object_bytes\{domain="runtime_libraries",profile="execution"\} 64/);
+  assert.match(
+    rendered,
+    /rivet_managed_reconciliation_active_object_bytes\{domain="runtime_libraries",profile="execution"\} 64/,
+  );
   assert.match(
     rendered,
     /rivet_managed_reconciliation_last_completed_object_bytes\{domain="runtime_libraries",profile="execution"\} 4096/,
@@ -164,6 +175,11 @@ test('metrics registry renders only finite, fixed-label metric families', () => 
   assert.match(
     rendered,
     /rivet_managed_evaluation_retention_deleted_total\{kind="orphaned_snapshot",mode="enforce",profile="execution"\} 1/,
+  );
+  assert.match(rendered, /rivet_managed_web_app_action_retention_candidates\{mode="audit",profile="execution"\} 3/);
+  assert.match(
+    rendered,
+    /rivet_managed_web_app_action_retention_deleted_total\{mode="enforce",profile="execution"\} 2/,
   );
   assert.doesNotMatch(rendered, /workflow name|prompt|secret|http:\/\//i);
 });

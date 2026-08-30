@@ -100,6 +100,26 @@ spec:
             {{- end }}
           resources:
 {{ toYaml .Values.resources.proxy | nindent 12 }}
+        {{- if .Values.metrics.proxyExporter.enabled }}
+        - name: metrics-exporter
+          image: {{ include "rivet.image" (dict "root" . "image" .Values.metrics.proxyExporter.image) }}
+          imagePullPolicy: {{ .Values.metrics.proxyExporter.image.pullPolicy }}
+          args:
+            - --nginx.scrape-uri=http://127.0.0.1:18080/stub_status
+            - --web.listen-address=:{{ .Values.metrics.proxyExporter.port }}
+            - --log.level=warn
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 65534
+            runAsGroup: 65534
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+          ports:
+            - name: metrics
+              containerPort: {{ .Values.metrics.proxyExporter.port }}
+          resources:
+{{ toYaml .Values.metrics.proxyExporter.resources | nindent 12 }}
+        {{- end }}
       volumes:
         {{- if .Values.tmpVolume.enabled }}
         - name: {{ .Values.tmpVolume.name }}

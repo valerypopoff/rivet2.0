@@ -13,3 +13,8 @@ spec:
     - name: http
       port: {{ .Values.service.proxy.port }}
       targetPort: http
+    {{- if .Values.metrics.proxyExporter.enabled }}
+    - name: metrics
+      port: {{ .Values.metrics.proxyExporter.port }}
+      targetPort: metrics
+    {{- end }}

@@ -38,7 +38,11 @@ async function renderLocalKubernetesChartWithOverrides(overrides: string[]): Pro
   );
 }
 
-async function assertHelmTemplateFails(overrides: string[], expectedMessage: RegExp): Promise<void> {
+async function assertHelmTemplateFails(
+  overrides: string[],
+  expectedMessage: RegExp,
+  overrideFlag: '--set' | '--set-json' = '--set',
+): Promise<void> {
   const helmBin = await resolveHelmBin();
   const args = [
     'template',
@@ -48,7 +52,7 @@ async function assertHelmTemplateFails(overrides: string[], expectedMessage: Reg
     'deploy/studio-server/helm/overlays/local-kubernetes.yaml',
     '--set',
     'objectStorage.bucket=test-bucket',
-    ...overrides.flatMap((override) => ['--set', override]),
+    ...overrides.flatMap((override) => [overrideFlag, override]),
   ];
 
   assert.throws(
@@ -337,10 +341,21 @@ test('chart makes pull-only metrics and Prometheus Operator resources explicit o
     'metrics.serviceMonitor.additionalLabels.release=prometheus',
   ]);
   const apiEntrypoint = readRepoFile('deploy/studio-server/images/api/entrypoint.sh');
+  const dashboardChart = await renderLocalKubernetesChartWithOverrides([
+    'metrics.enabled=true',
+    'metrics.grafanaDashboards.enabled=true',
+  ]);
   const validationTemplate = readRepoFile('deploy/studio-server/helm/templates/validate-values.yaml');
 
   assert.doesNotMatch(defaultChart, /kind: ServiceMonitor|kind: PrometheusRule/);
   assert.equal((metricsChart.match(/kind: ServiceMonitor/g) ?? []).length, 2);
+  assert.doesNotMatch(defaultChart, /name: rivet-rivet-grafana-dashboards/);
+  assert.match(
+    dashboardChart,
+    /kind: ConfigMap[\s\S]*?name: rivet-rivet-grafana-dashboards[\s\S]*?grafana_dashboard: "1"[\s\S]*?rivet-control-plane\.json:[\s\S]*?uid": "rivet-published-execution"/,
+  );
+  assert.doesNotMatch(dashboardChart, /DS_PROMETHEUS/);
+  assert.match(dashboardChart, /"uid": "\$datasource"[\s\S]*?"type": "datasource"/);
   const evaluationMetricsChart = await renderLocalKubernetesChartWithOverrides([
     'hostedEvaluations.enabled=true',
     'metrics.enabled=true',
@@ -389,7 +404,87 @@ test('chart makes pull-only metrics and Prometheus Operator resources explicit o
     ['metrics.serviceMonitor.additionalLabels=invalid'],
     /metrics\.serviceMonitor\.additionalLabels must be a map/,
   );
+  await assertHelmTemplateFails(
+    ['metrics.grafanaDashboards.enabled=true'],
+    /metrics\.grafanaDashboards\.enabled requires metrics\.enabled=true/,
+  );
 });
+test('chart exposes aggregate proxy metrics only through opt-in internal resources', async () => {
+  const defaultChart = await renderLocalKubernetesChart();
+  const proxyMetricsChart = await renderLocalKubernetesChartWithOverrides([
+    'metrics.enabled=true',
+    'metrics.proxyExporter.enabled=true',
+    'metrics.serviceMonitor.enabled=true',
+  ]);
+  const proxyTemplate = readRepoFile('deploy/studio-server/images/proxy/default.conf.template');
+
+  assert.doesNotMatch(defaultChart, /name: metrics-exporter/);
+  assert.doesNotMatch(defaultChart, /name: rivet-rivet-proxy-metrics/);
+  assert.match(
+    proxyTemplate,
+    /server \{\s*listen 127\.0\.0\.1:18080;[\s\S]*?location = \/stub_status \{\s*stub_status;/,
+  );
+  assert.match(proxyTemplate, /server \{\s*listen 8080;[\s\S]*?include \$\{RIVET_PUBLIC_ROUTES_INCLUDE_FILE\};/);
+  assert.doesNotMatch(proxyTemplate, /listen 8080;[\s\S]*?location = \/metrics/);
+
+  assert.match(
+    proxyMetricsChart,
+    /name: metrics-exporter[\s\S]*?image: nginx\/nginx-prometheus-exporter@sha256:9f6d963bb2b19d706d401cc3e2c3ea8de2f1c471b96a2156ca45e76f650b1625[\s\S]*?--nginx\.scrape-uri=http:\/\/127\.0\.0\.1:18080\/stub_status/,
+  );
+  assert.match(
+    proxyMetricsChart,
+    /name: rivet-rivet-proxy[\s\S]*?name: metrics\s*\n\s*port: 9113\s*\n\s*targetPort: metrics/,
+  );
+  assert.match(
+    proxyMetricsChart,
+    /name: rivet-rivet-proxy-metrics[\s\S]*?app\.kubernetes\.io\/component: proxy[\s\S]*?port: metrics[\s\S]*?path: \/metrics/,
+  );
+
+  await assertHelmTemplateFails(
+    ['metrics.proxyExporter.enabled=true'],
+    /metrics\.proxyExporter\.enabled requires metrics\.enabled=true/,
+  );
+  await assertHelmTemplateFails(
+    ['metrics.enabled=true', 'metrics.proxyExporter.enabled=true', 'metrics.proxyExporter.port=80'],
+    /metrics\.proxyExporter\.port must be an unprivileged TCP port between 1024 and 65535/,
+  );
+  await assertHelmTemplateFails(
+    [
+      'metrics.enabled=true',
+      'metrics.proxyExporter.enabled=true',
+      'metrics.proxyExporter.resources.requests.memory=',
+    ],
+    /metrics\.proxyExporter\.resources\.requests\.memory must be a positive Kubernetes quantity string/,
+  );
+  await assertHelmTemplateFails(
+    ['metrics.enabled=true', 'metrics.proxyExporter.enabled=true', 'metrics.proxyExporter.port=9113.5'],
+    /metrics\.proxyExporter\.port must be a positive whole-number TCP port/,
+    '--set-json',
+  );
+  await assertHelmTemplateFails(
+    ['webAppActionRetention.retentionHours=1.5'],
+    /webAppActionRetention\.retentionHours must be a positive whole number of hours/,
+    '--set-json',
+  );
+});
+
+test('chart rejects fractional native values for integral runtime and Kubernetes controls', async () => {
+  for (const [override, expectedMessage] of [
+    ['hostedEvaluations.workerConcurrency=1.5', /hostedEvaluations\.workerConcurrency must be a non-negative whole number/],
+    ['publishedExecutionAdmission.maxActiveRunsPerPod=4.5', /publishedExecutionAdmission\.maxActiveRunsPerPod must be a non-negative whole number/],
+    ['postgres.poolMaxPerApiPod=10.5', /postgres\.poolMaxPerApiPod must be a non-negative whole number/],
+    ['postgres.port=5432.5', /postgres\.port must be a non-negative whole number/],
+    ['service.api.targetPort=8080.5', /service\.api\.targetPort must be a non-negative whole number/],
+    ['autoscaling.execution.maxReplicas=10.5', /autoscaling\.execution\.maxReplicas must be a non-negative whole number/],
+    ['managedMaintenance.batchSize=100.5', /managedMaintenance\.batchSize must be a non-negative whole number/],
+    ['workflowSchema.compatibility.maximumVersion=10.5', /workflowSchema\.compatibility\.maximumVersion must be a non-negative whole number/],
+    ['lifecycle.probes.readiness.failureThreshold=2.5', /lifecycle\.probes\.readiness\.failureThreshold must be a non-negative whole number/],
+    ['availability.topologySpread.maxSkew=1.5', /availability\.topologySpread\.maxSkew must be a non-negative whole number/],
+  ] as const) {
+    await assertHelmTemplateFails([override], expectedMessage, '--set-json');
+  }
+});
+
 test('chart serializes managed workflow migrations before verify-only API workloads start', async () => {
   const renderedChart = await renderLocalKubernetesChart();
   const renderedChartWithRollbackWindow = await renderLocalKubernetesChartWithOverrides([
@@ -410,11 +505,11 @@ test('chart serializes managed workflow migrations before verify-only API worklo
   assert.match(chartHelpers, /vault\.hashicorp\.com\/agent-pre-populate-only: "true"/);
   assert.match(
     renderedChart,
-    /bootstrap-deployment-storage-settings\.mjs; RIVET_APP_SETTINGS_BACKEND=file RIVET_MANAGED_WORKFLOW_SCHEMA_MIN_VERSION="9" RIVET_MANAGED_WORKFLOW_SCHEMA_MAX_VERSION="9" node \/app\/packages\/studio-server-api\/dist\/studio-server-api\/src\/scripts\/migrate-managed-workflow-schema\.js migrate; node \/app\/packages\/studio-server-api\/dist\/studio-server-api\/src\/scripts\/import-managed-app-settings\.js/,
+    /bootstrap-deployment-storage-settings\.mjs; RIVET_APP_SETTINGS_BACKEND=file RIVET_MANAGED_WORKFLOW_SCHEMA_MIN_VERSION="10" RIVET_MANAGED_WORKFLOW_SCHEMA_MAX_VERSION="10" node \/app\/packages\/studio-server-api\/dist\/studio-server-api\/src\/scripts\/migrate-managed-workflow-schema\.js migrate; node \/app\/packages\/studio-server-api\/dist\/studio-server-api\/src\/scripts\/import-managed-app-settings\.js/,
   );
   assert.match(
     renderedChartWithRollbackWindow,
-    /RIVET_MANAGED_WORKFLOW_SCHEMA_MIN_VERSION="9" RIVET_MANAGED_WORKFLOW_SCHEMA_MAX_VERSION="9" node \/app\/packages\/studio-server-api\/dist\/studio-server-api\/src\/scripts\/migrate-managed-workflow-schema\.js migrate/,
+    /RIVET_MANAGED_WORKFLOW_SCHEMA_MIN_VERSION="10" RIVET_MANAGED_WORKFLOW_SCHEMA_MAX_VERSION="10" node \/app\/packages\/studio-server-api\/dist\/studio-server-api\/src\/scripts\/migrate-managed-workflow-schema\.js migrate/,
     'the migration Job must use the exact candidate version even when serving pods support a lower rollback version',
   );
   assert.match(migrationJobDocument, /name: RIVET_APP_DATA_ROOT\s*\n\s*value: "\/var\/tmp\/rivet-migration-app-data"/);
@@ -692,7 +787,7 @@ test('production rendering requires a fully identified digest-pinned release', a
     '--set',
     `release.production.chart.contentDigest=sha256:${'f'.repeat(64)}`,
     '--set',
-    'release.production.database.managedWorkflowSchemaVersion=9',
+    'release.production.database.managedWorkflowSchemaVersion=10',
   ];
   const renderProduction = (overrides: string[] = []) =>
     execFileSync(helmBin, [...baseArgs, ...identifiedReleaseArgs, ...overrides], {

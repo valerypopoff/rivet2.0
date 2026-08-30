@@ -562,7 +562,10 @@ test('runtime-libraries route exposes permission errors for an unwritable runtim
         error: `Runtime-library storage is not writable. Check server permissions for ${normalizedRoot}.`,
       });
       assert.equal(loggedErrors.length, 1);
-      assert.equal(loggedErrors[0]?.[0], 'Unhandled API error:');
+      assert.match(
+        String(loggedErrors[0]?.[0]),
+        /^\[rvt-[a-f0-9-]{36}\] Unhandled API error:$/,
+      );
       assert.match((loggedErrors[0]?.[1] as Error).message, /Runtime-library storage is not writable/);
     } finally {
       await disposeRuntimeLibrariesBackend();

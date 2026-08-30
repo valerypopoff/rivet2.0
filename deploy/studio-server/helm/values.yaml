@@ -42,9 +42,28 @@ publishedExecutionAdmission:
   retryAfterSeconds: 1
 
 # Metrics stay disabled until a monitoring system is explicitly configured to
-# scrape the API ClusterIP services. They are never routed through the proxy.
+# scrape their internal ClusterIP Services. The API surfaces and optional proxy
+# exporter are never routed through the public proxy listener or Ingress.
 metrics:
   enabled: false
+  proxyExporter:
+    # When enabled, this sidecar reads NGINX stub_status over Pod-local
+    # loopback and exposes aggregate proxy behavior on a separate ClusterIP
+    # Service port. Update the descriptive tag and immutable digest together.
+    enabled: false
+    image:
+      repository: nginx/nginx-prometheus-exporter
+      tag: 1.5.1
+      digest: sha256:9f6d963bb2b19d706d401cc3e2c3ea8de2f1c471b96a2156ca45e76f650b1625
+      pullPolicy: IfNotPresent
+    port: 9113
+    resources:
+      requests:
+        cpu: 25m
+        memory: 32Mi
+      limits:
+        cpu: 100m
+        memory: 64Mi
   serviceMonitor:
     enabled: false
     interval: 30s
@@ -53,6 +72,11 @@ metrics:
   prometheusRule:
     enabled: false
     for: 10m
+    additionalLabels: {}
+  # Emits two ConfigMap dashboard definitions for Grafana sidecar/import
+  # workflows. This does not install Grafana or enable a scrape by itself.
+  grafanaDashboards:
+    enabled: false
     additionalLabels: {}
 
 # Disabled unless every API process uses managed PostgreSQL. Control accepts
@@ -159,8 +183,8 @@ workflowSchema:
   # schema. The managed release command widens maximumVersion only for a
   # documented expand-only rollback; the migration Job always stays exact.
   compatibility:
-    minimumVersion: 9
-    maximumVersion: 9
+    minimumVersion: 10
+    maximumVersion: 10
   migrationJob:
     enabled: true
     backoffLimit: 2
@@ -179,6 +203,13 @@ managedMaintenance:
 # and orphaned-snapshot volume for the managed installation.
 evaluationRetention:
   mode: audit
+
+# Web-app action rows are short-lived reconnect/cancellation transport state.
+# Review candidate volume through the control-plane metrics before selecting
+# enforce. This policy never removes workflow recordings.
+webAppActionRetention:
+  mode: audit
+  retentionHours: 24
 
 # Production deployments must be materialized from an immutable release
 # manifest. Local Kubernetes rehearsal and disposable CI gates leave this off.

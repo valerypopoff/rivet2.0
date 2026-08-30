@@ -29,6 +29,10 @@ import { createHostedEvaluationGraphRunner } from '../../../evaluation-runs/host
 import { getHostedEvaluationsCoordinatorConfig } from '../../../hosted-evaluations-config.js';
 import type { ManagedWorkflowBlobStore } from './blob-store.js';
 import { createManagedWorkflowCatalogService } from './catalog.js';
+import {
+  listManagedReconciliationFindingDetails,
+  type ManagedReconciliationFindingDetailQuery,
+} from './reconciliation.js';
 import { createManagedWorkflowContext } from './context.js';
 import type { ManagedExecutionProjectResult } from './execution-types.js';
 import { ManagedWorkflowExecutionService } from './execution-service.js';
@@ -209,6 +213,11 @@ export class ManagedWorkflowBackend {
   async getManagedReconciliationStatus() {
     await this.initialize();
     return this.#context.getReconciliationStatus();
+  }
+
+  async listManagedReconciliationFindingDetails(query: ManagedReconciliationFindingDetailQuery) {
+    await this.initialize();
+    return listManagedReconciliationFindingDetails(this.#context.pool, query);
   }
 
   async getEvaluationStore(): Promise<PostgresRivetEvaluationStore> {

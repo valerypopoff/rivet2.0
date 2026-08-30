@@ -33,6 +33,7 @@ import type { RuntimeHealthCheckContext } from '../../runtime-health.js';
 import { createHttpError } from '../../utils/httpError.js';
 import { getManagedWorkflowStorageConfig, getWorkflowStorageBackendMode, isManagedWorkflowStorageEnabled } from './storage-config.js';
 import { ManagedWorkflowBackend } from './managed/backend.js';
+import type { ManagedReconciliationFindingDetailQuery } from './managed/reconciliation.js';
 import {
   ensureWorkflowsRoot,
   getWorkflowDatasetPath,
@@ -186,6 +187,15 @@ async function getManagedBackend(): Promise<ManagedWorkflowBackend> {
   }
 
   return managedBackendPromise;
+}
+
+export async function listManagedReconciliationFindingDetailsWithBackend(
+  query: ManagedReconciliationFindingDetailQuery,
+) {
+  if (!isManagedWorkflowStorageEnabled()) {
+    throw createHttpError(409, 'Detailed reconciliation findings require managed workflow storage.', { expose: true });
+  }
+  return (await getManagedBackend()).listManagedReconciliationFindingDetails(query);
 }
 
 async function delegate<T>(

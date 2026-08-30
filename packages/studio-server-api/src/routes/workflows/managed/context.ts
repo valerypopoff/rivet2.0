@@ -22,6 +22,10 @@ import {
   createManagedEvaluationRetentionTask,
   getManagedEvaluationRetentionConfig,
 } from '../../../evaluation-runs/managed-retention.js';
+import {
+  createManagedWebAppActionRetentionTask,
+  getManagedWebAppActionRetentionConfig,
+} from '../../../web-app-action-managed-retention.js';
 import { createManagedWorkflowMaintenance } from './maintenance.js';
 import { createManagedReconciliationTask, getManagedReconciliationStatus } from './reconciliation.js';
 import { MANAGED_RUNTIME_LIBRARIES_OBJECT_STORAGE_PREFIX } from '../../../runtime-libraries/config.js';
@@ -91,6 +95,13 @@ export function createManagedWorkflowContext(
       'managed-evaluation-retention',
       createManagedEvaluationRetentionTask({
         config: getManagedEvaluationRetentionConfig(process.env, maintenance.config.batchSize),
+        pool,
+      }),
+    );
+    maintenance.registerTask(
+      'managed-web-app-action-retention',
+      createManagedWebAppActionRetentionTask({
+        config: getManagedWebAppActionRetentionConfig(process.env, maintenance.config.batchSize),
         pool,
       }),
     );

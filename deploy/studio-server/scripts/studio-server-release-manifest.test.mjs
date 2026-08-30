@@ -55,7 +55,7 @@ function promoted(overrides = {}) {
 
 test('release manifest reads the source-owned managed schema contract', () => {
   assert.deepEqual(readManagedWorkflowSchemaReleaseContract(rootDir), {
-    version: 9,
+    version: 10,
     minimumRollbackCompatibleVersion: 2,
   });
 });
@@ -138,7 +138,7 @@ test('only promoted manifests can produce production Helm values', () => {
   const values = createProductionHelmValues(promoted());
   assert.equal(values.release.production.enabled, true);
   assert.equal(values.images.api.digest, digest('c'));
-  assert.deepEqual(values.workflowSchema.compatibility, { minimumVersion: 9, maximumVersion: 9 });
+  assert.deepEqual(values.workflowSchema.compatibility, { minimumVersion: 10, maximumVersion: 10 });
   assert.equal(values.workflowSchema.migrationJob.enabled, true);
 });
 
@@ -157,7 +157,7 @@ test('forward rollback retains the migrated schema and restores only a compatibl
       chart: { ...rollbackRelease.chart, contentDigest: digest('f') },
       database: {
         managedWorkflowSchema: {
-          version: 9,
+          version: 10,
           minimumRollbackCompatibleVersion: 8,
         },
       },
@@ -167,8 +167,8 @@ test('forward rollback retains the migrated schema and restores only a compatibl
 
   const values = createForwardRollbackHelmValues({ failedRelease, rollbackRelease });
   assert.equal(values.workflowSchema.migrationJob.enabled, false);
-  assert.deepEqual(values.workflowSchema.compatibility, { minimumVersion: 2, maximumVersion: 9 });
-  assert.equal(values.release.production.database.managedWorkflowSchemaVersion, 9);
+  assert.deepEqual(values.workflowSchema.compatibility, { minimumVersion: 2, maximumVersion: 10 });
+  assert.equal(values.release.production.database.managedWorkflowSchemaVersion, 10);
   assert.equal(values.release.production.chart.contentDigest, digest('f'));
   assert.equal(values.images.api.repository, 'example.test/rivet/api');
 });
@@ -184,7 +184,16 @@ test('normal deployment never asks Helm to roll back a possibly migrated schema 
 });
 
 test('forward rollback refuses a schema that did not declare the previous release compatible', () => {
-  const rollbackRelease = promoted();
+  const previous = promoted();
+  const rollbackRelease = {
+    ...previous,
+    database: {
+      managedWorkflowSchema: {
+        version: 9,
+        minimumRollbackCompatibleVersion: previous.database.managedWorkflowSchema.minimumRollbackCompatibleVersion,
+      },
+    },
+  };
   const failedRelease = assertStudioServerReleaseManifest(
     {
       ...promoted(),

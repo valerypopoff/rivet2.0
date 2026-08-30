@@ -5,7 +5,7 @@ import type { Pool, PoolClient, QueryResultRow } from 'pg';
 import { MANAGED_WORKFLOW_SCHEMA_SQL } from './schema.js';
 
 export const MANAGED_WORKFLOW_SCHEMA_MIGRATIONS_TABLE = 'managed_workflow_schema_migrations';
-export const CURRENT_MANAGED_WORKFLOW_SCHEMA_VERSION = 9;
+export const CURRENT_MANAGED_WORKFLOW_SCHEMA_VERSION = 10;
 // A serving release may verify an additive schema created by its immediate
 // successor only when the chart deliberately supplies that compatibility
 // window. Keep this constant explicit: raising it is the release-engineering
@@ -187,6 +187,14 @@ ALTER TABLE managed_reconciliation_state
   ADD COLUMN IF NOT EXISTS last_completed_object_bytes BIGINT NOT NULL DEFAULT 0
     CHECK (last_completed_object_bytes >= 0);
 `;
+const MANAGED_WEB_APP_ACTION_RETENTION_INDEX_SQL = `
+-- Web-app transport records are short-lived terminal reconnect state. The
+-- control-plane maintenance owner uses this partial index for bounded, fenced
+-- audit or deletion passes without scanning active actions.
+CREATE INDEX IF NOT EXISTS web_app_action_runs_terminal_retention_idx
+  ON web_app_action_runs(updated_at, run_id)
+  WHERE status <> 'running';
+`;
 const MIGRATION_STATEMENT_TIMEOUT = '5min';
 const VERIFY_STATEMENT_TIMEOUT = '30s';
 const TRANSIENT_SCHEMA_ERROR_CODES = new Set(['40001', '40P01', '55P03']);
@@ -341,6 +349,12 @@ export const MANAGED_WORKFLOW_SCHEMA_MIGRATIONS: readonly ManagedWorkflowSchemaM
     name: 'managed-reconciliation-scan-accounting',
     sql: MANAGED_RECONCILIATION_SCAN_ACCOUNTING_SQL,
     checksum: '23643af7d68c3dfa75d061c2b0348b97ec06ebcbc3d7032afecf81cf10cf364f',
+  },
+  {
+    version: 10,
+    name: 'managed-web-app-action-retention-index',
+    sql: MANAGED_WEB_APP_ACTION_RETENTION_INDEX_SQL,
+    checksum: 'bf0c0eadd2b170a6c8796ca28dfcc4afa7034b54a22198ef25a9e086884288ce',
   },
 ];
 
@@ -719,6 +733,13 @@ export const MANAGED_WORKFLOW_SCHEMA_REQUIRED_INDEXES = [
   ],
   ['web_app_action_runs', 'web_app_action_runs_lease_idx', ['status', 'lease_expires_at'], null, [0, 0]],
   ['web_app_action_runs', 'web_app_action_runs_host_idx', ['host_id', 'status'], null, [0, 0]],
+  [
+    'web_app_action_runs',
+    'web_app_action_runs_terminal_retention_idx',
+    ['updated_at', 'run_id'],
+    "(status <> 'running'::text)",
+    [0, 0],
+  ],
   [
     'web_app_action_cancel_commands',
     'web_app_action_cancel_commands_pending_idx',

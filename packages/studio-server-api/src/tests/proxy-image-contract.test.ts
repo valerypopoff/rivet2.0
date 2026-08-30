@@ -17,6 +17,11 @@ function proxyLocation(template: string, locationPattern: RegExp): string {
   return extractBracedBlock(template, locationPattern);
 }
 
+function proxyPublicLocation(template: string, locationPattern: RegExp): string {
+  const publicServer = extractBracedBlock(template, /server\s*\{\s*listen (?:80|8080);/);
+  return extractBracedBlock(publicServer, locationPattern);
+}
+
 function composeServiceBlock(compose: string, service: string): string {
   const marker = `\n  ${service}:`;
   const markerIndex = compose.indexOf(marker);
@@ -130,7 +135,7 @@ test('proxy UI gate prompt is API-rendered and receives the original route', () 
   const devCompose = readRepoFile('deploy/studio-server/compose/docker-compose.dev.yml');
 
   for (const template of readProxyTemplates()) {
-    const rootLocation = proxyLocation(template, /location \/\s*\{/);
+    const rootLocation = proxyPublicLocation(template, /location \/\s*\{/);
     const apiLocation = proxyLocation(template, /location \/api\/\s*\{/);
     const authCheckLocation = proxyLocation(template, /location = \/__rivet_ui_auth_check\s*\{/);
     const promptLocation = proxyLocation(template, /location @web_with_ui_gate_prompt\s*\{/);

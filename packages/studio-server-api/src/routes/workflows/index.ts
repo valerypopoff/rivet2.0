@@ -3,6 +3,7 @@ import { z } from 'zod';
 
 import { validateBody } from '../../middleware/validate.js';
 import { asyncHandler } from '../../utils/asyncHandler.js';
+import { requireAuth } from '../../middleware/auth.js';
 import { badRequest, createHttpError } from '../../utils/httpError.js';
 import { createResponseTimingMiddleware } from '../../utils/responseTiming.js';
 import {
@@ -31,6 +32,7 @@ import {
   getWorkflowTree,
   getWorkflowRunStatisticsWithBackend,
   listWorkflowProjectWebAppsWithBackend,
+  listManagedReconciliationFindingDetailsWithBackend,
   listWorkflowRecordingRunsPageWithBackend,
   listWorkflowRecordingWorkflowsWithBackend,
   listWorkflowRunStatisticsCatalogWithBackend,
@@ -211,6 +213,15 @@ const recordingsRunsQuerySchema = z.object({
   inputCursor: z.coerce.number().int().min(0).optional().default(0),
 });
 
+const reconciliationFindingQuerySchema = z
+  .object({
+    domain: z.enum(['evaluations', 'runtime_libraries', 'workflows']).optional(),
+    offset: z.coerce.number().int().min(0).max(10_000).optional().default(0),
+    pageSize: z.coerce.number().int().min(1).max(100).optional().default(50),
+    state: z.enum(['open', 'resolved']).optional().default('open'),
+  })
+  .strict();
+
 const runStatisticsTargetSchema = z.union([
   z.object({ surface: z.literal('endpoint'), workflowId: z.string().min(1) }),
   z.object({
@@ -246,6 +257,12 @@ const runStatisticsQuerySchema = z.object({
 
 workflowsRouter.get('/tree', timing, asyncHandler(async (_req, res) => {
   res.json(await getWorkflowTree());
+}));
+
+// The parent /api mount is authenticated; repeat it here so raw object keys
+// cannot become available if this router is ever mounted differently.
+workflowsRouter.get('/maintenance/reconciliation/findings', requireAuth, asyncHandler(async (req, res) => {
+  res.json(await listManagedReconciliationFindingDetailsWithBackend(reconciliationFindingQuerySchema.parse(req.query)));
 }));
 
 workflowsRouter.get('/recordings', asyncHandler(async (_req, res) => {

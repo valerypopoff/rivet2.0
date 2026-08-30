@@ -68,6 +68,27 @@ export type ManagedReconciliationFindingSummary = {
   state: 'open' | 'resolved';
 };
 
+/**
+ * Detailed subjects are deliberately available only through the authenticated
+ * control-plane route. They are never logged, exposed by metrics, or used as
+ * pagination cursors.
+ */
+export type ManagedReconciliationFindingDetail = {
+  domain: ManagedReconciliationDomain;
+  firstSeenAt: string;
+  kind: string;
+  lastSeenAt: string;
+  state: 'open' | 'resolved';
+  subjectKey: string;
+};
+
+export type ManagedReconciliationFindingDetailQuery = {
+  domain?: ManagedReconciliationDomain;
+  offset: number;
+  pageSize: number;
+  state: 'open' | 'resolved';
+};
+
 const RECONCILIATION_DOMAINS: readonly ManagedReconciliationDomain[] = [
   'workflows',
   'runtime_libraries',
@@ -631,7 +652,13 @@ export function createManagedReconciliationTask(options: {
         // and authorized database findings instead.
         console.warn(`[managed-reconciliation] ${domain} audit page failed; a later fenced pass will retry.`);
         recordStudioMetrics((metrics) =>
-          metrics.recordManagedReconciliationPage({ domain, outcome: 'error', phase, returnedItems: 0, scannedObjectBytes: 0 }),
+          metrics.recordManagedReconciliationPage({
+            domain,
+            outcome: 'error',
+            phase,
+            returnedItems: 0,
+            scannedObjectBytes: 0,
+          }),
         );
       }
       const state = await ensureState(options.pool, domain);
@@ -756,5 +783,59 @@ export async function getManagedReconciliationStatus(pool: Pool): Promise<{
       oldestFirstSeenAt: toIso(finding.oldest_first_seen_at) ?? new Date(0).toISOString(),
       state: finding.state,
     })),
+  };
+}
+
+/**
+ * Returns a small, offset-paged operator view of raw finding subjects. Offset
+ * pagination keeps object keys out of request URLs, cursors, metrics, and
+ * standard access logs. The route validates the bounded page/offset values.
+ */
+export async function listManagedReconciliationFindingDetails(
+  pool: Pool,
+  query: ManagedReconciliationFindingDetailQuery,
+): Promise<{ findings: ManagedReconciliationFindingDetail[]; offset: number; pageSize: number }> {
+  const predicates: string[] = [];
+  const values: unknown[] = [];
+  if (query.domain) {
+    values.push(query.domain);
+    predicates.push(`domain = $${values.length}`);
+  }
+  if (query.state === 'open') {
+    predicates.push('resolved_at IS NULL');
+  } else {
+    predicates.push('resolved_at IS NOT NULL');
+  }
+  values.push(query.pageSize, query.offset);
+  const result = await pool.query<
+    QueryResultRow & {
+      domain: ManagedReconciliationDomain;
+      first_seen_at: Date | string;
+      kind: string;
+      last_seen_at: Date | string;
+      resolved_at: Date | string | null;
+      subject_key: string;
+    }
+  >(
+    `
+      SELECT domain, kind, subject_key, first_seen_at, last_seen_at, resolved_at
+      FROM managed_reconciliation_findings
+      WHERE ${predicates.join(' AND ')}
+      ORDER BY last_seen_at DESC, domain ASC, kind ASC, subject_key ASC
+      LIMIT $${values.length - 1} OFFSET $${values.length}
+    `,
+    values,
+  );
+  return {
+    findings: result.rows.map((finding) => ({
+      domain: finding.domain,
+      firstSeenAt: toIso(finding.first_seen_at) ?? new Date(0).toISOString(),
+      kind: finding.kind,
+      lastSeenAt: toIso(finding.last_seen_at) ?? new Date(0).toISOString(),
+      state: finding.resolved_at ? 'resolved' : 'open',
+      subjectKey: finding.subject_key,
+    })),
+    offset: query.offset,
+    pageSize: query.pageSize,
   };
 }

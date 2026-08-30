@@ -28,6 +28,23 @@ map $rivet_forwarded_hostname $rivet_ui_host_is_token_free {
     include ${RIVET_TRUSTED_HOSTS_INCLUDE_FILE};
 }
 
+# This listener is reachable only inside the proxy Pod. It exposes NGINX's
+# intentionally aggregate stub-status counters to the optional exporter
+# sidecar; it is not a route on the public proxy listener.
+server {
+    listen 127.0.0.1:18080;
+    server_name localhost;
+    access_log off;
+
+    location = /stub_status {
+        stub_status;
+    }
+
+    location / {
+        return 404;
+    }
+}
+
 server {
     listen 8080;
     server_name _;

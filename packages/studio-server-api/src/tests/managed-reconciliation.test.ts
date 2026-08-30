@@ -6,6 +6,7 @@ import { InMemoryManagedWorkflowBlobStore } from '../routes/workflows/managed/bl
 import {
   createManagedReconciliationTask,
   getManagedReconciliationStatus,
+  listManagedReconciliationFindingDetails,
 } from '../routes/workflows/managed/reconciliation.js';
 
 const domains = ['workflows', 'runtime_libraries', 'evaluations'] as const;
@@ -226,7 +227,6 @@ test('managed reconciliation is bounded, reports missing and two-pass orphan evi
   assert.equal(driver.states.get('workflows')?.active_object_bytes, 0);
 });
 test('managed reconciliation status is aggregate-only and never selects raw object keys', async () => {
-
   const queries: string[] = [];
   const pool = {
     query: async (sql: string, parameters: unknown[] = []) => {
@@ -397,6 +397,7 @@ test('object reconciliation treats an empty marker cursor as a continuation', as
   let objectPage = 0;
   const workflowBlobStore = {
     ...driver.workflowBlobStore,
+
     listPage: async (input: { cursor?: string; pageSize: number }) => {
       cursors.push(input.cursor);
       objectPage += 1;
@@ -420,4 +421,49 @@ test('object reconciliation treats an empty marker cursor as a continuation', as
 
   assert.deepEqual(cursors, [undefined, '']);
   assert.equal(driver.states.get('workflows')?.completed_generation, 1);
+});
+
+test('detailed reconciliation findings are bounded, filtered, and separate from aggregate status', async () => {
+  let captured: { parameters: unknown[]; sql: string } | undefined;
+  const pool = {
+    query: async (sql: string, parameters: unknown[]) => {
+      captured = { parameters, sql };
+      return {
+        rows: [
+          {
+            domain: 'workflows',
+            first_seen_at: '2026-08-30T12:00:00.000Z',
+            kind: 'missing-referenced-object',
+            last_seen_at: '2026-08-31T12:00:00.000Z',
+            resolved_at: null,
+            subject_key: 'private/project.rivet-project',
+          },
+        ],
+      };
+    },
+  } as never;
+  const page = await listManagedReconciliationFindingDetails(pool, {
+    domain: 'workflows',
+    offset: 100,
+    pageSize: 25,
+    state: 'open',
+  });
+
+  assert.deepEqual(page, {
+    findings: [
+      {
+        domain: 'workflows',
+        firstSeenAt: '2026-08-30T12:00:00.000Z',
+        kind: 'missing-referenced-object',
+        lastSeenAt: '2026-08-31T12:00:00.000Z',
+        state: 'open',
+        subjectKey: 'private/project.rivet-project',
+      },
+    ],
+    offset: 100,
+    pageSize: 25,
+  });
+  assert.match(captured?.sql ?? '', /resolved_at IS NULL/);
+  assert.match(captured?.sql ?? '', /LIMIT \$2 OFFSET \$3/);
+  assert.deepEqual(captured?.parameters, ['workflows', 25, 100]);
 });
