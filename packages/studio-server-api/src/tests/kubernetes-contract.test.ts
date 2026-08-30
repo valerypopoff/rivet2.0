@@ -194,7 +194,35 @@ test('rendered chart keeps control-plane and execution-plane API env contracts d
   assert.doesNotMatch(renderedChart, /RIVET_WEB_APPS_AUTH_MODE|OAUTH_CLIENT_SECRET|OAUTH_AUTHORIZE_URL/);
 });
 
-test('chart validates hosted Evaluation scheduler settings and keeps its environment chart-owned', async () => {
+test('chart isolates hosted Evaluation workers with chart-owned quotas and a dedicated internal Service', async () => {
+  const renderedChart = await renderLocalKubernetesChartWithOverrides([
+    'hostedEvaluations.enabled=true',
+    'metrics.enabled=true',
+    'metrics.serviceMonitor.enabled=true',
+  ]);
+
+  assert.match(
+    renderedChart,
+    /app\.kubernetes\.io\/component: evaluation[\s\S]*?name: RIVET_API_PROFILE\s*\n\s*value: "evaluation"[\s\S]*?name: RIVET_HOSTED_EVALUATIONS_MAX_JOBS_PER_RUN\s*\n\s*value: "2000"[\s\S]*?name: RIVET_HOSTED_EVALUATIONS_MAX_OUTSTANDING_JOBS\s*\n\s*value: "10000"/,
+  );
+  assert.match(
+    renderedChart,
+    /app\.kubernetes\.io\/component: evaluation[\s\S]*?name: RIVET_RUNTIME_LIBRARIES_REPLICA_TIER\s*\n\s*value: "endpoint"[\s\S]*?name: RIVET_RUNTIME_LIBRARIES_JOB_WORKER_ENABLED\s*\n\s*value: "false"/,
+  );
+  assert.match(
+    renderedChart,
+    /kind: Service[\s\S]*?name: rivet-rivet-evaluation[\s\S]*?app\.kubernetes\.io\/component: evaluation/,
+  );
+  assert.match(
+    renderedChart,
+    /name: rivet-rivet-evaluation-metrics[\s\S]*?app\.kubernetes\.io\/component: evaluation[\s\S]*?path: \/metrics/,
+  );
+  assert.doesNotMatch(
+    renderedChart,
+    /name: RIVET_EVALUATION_UPSTREAM_HOST/,
+    'the public proxy must not receive an Evaluation-worker upstream',
+  );
+
   await assertHelmTemplateFails(
     ['hostedEvaluations.workerConcurrency=0'],
     /hostedEvaluations\.workerConcurrency must be an integer between 1 and 8/,
@@ -204,16 +232,20 @@ test('chart validates hosted Evaluation scheduler settings and keeps its environ
     /hostedEvaluations\.leaseMs must be an integer between 15000 and 600000/,
   );
   await assertHelmTemplateFails(
+    ['hostedEvaluations.maxJobsPerRun=0'],
+    /hostedEvaluations\.maxJobsPerRun must be an integer between 1 and 100000/,
+  );
+  await assertHelmTemplateFails(
+    ['hostedEvaluations.maxJobsPerRun=20', 'hostedEvaluations.maxOutstandingJobs=19'],
+    /hostedEvaluations\.maxOutstandingJobs must be an integer between maxJobsPerRun and 1000000/,
+  );
+  await assertHelmTemplateFails(
     ['env.RIVET_HOSTED_EVALUATIONS_ENABLED=true'],
     /env\.RIVET_HOSTED_EVALUATIONS_ENABLED is chart-owned; configure hostedEvaluations instead/,
   );
   await assertHelmTemplateFails(
-    ['hostedEvaluations.enabled=true', 'autoscaling.execution.enabled=false', 'replicaCount.execution=0'],
-    /hostedEvaluations\.enabled requires at least one execution API replica/,
-  );
-  await assertHelmTemplateFails(
-    ['hostedEvaluations.enabled=true', 'autoscaling.execution.enabled=true', 'autoscaling.execution.minReplicas=0'],
-    /hostedEvaluations\.enabled requires at least one execution API replica/,
+    ['hostedEvaluations.enabled=true', 'replicaCount.evaluation=0'],
+    /hostedEvaluations\.enabled requires replicaCount\.evaluation >= 1/,
   );
 });
 
@@ -301,6 +333,16 @@ test('chart makes pull-only metrics and Prometheus Operator resources explicit o
 
   assert.doesNotMatch(defaultChart, /kind: ServiceMonitor|kind: PrometheusRule/);
   assert.equal((metricsChart.match(/kind: ServiceMonitor/g) ?? []).length, 2);
+  const evaluationMetricsChart = await renderLocalKubernetesChartWithOverrides([
+    'hostedEvaluations.enabled=true',
+    'metrics.enabled=true',
+    'metrics.serviceMonitor.enabled=true',
+  ]);
+  assert.equal((evaluationMetricsChart.match(/kind: ServiceMonitor/g) ?? []).length, 3);
+  assert.match(
+    evaluationMetricsChart,
+    /name: rivet-rivet-evaluation-metrics[\s\S]*?app\.kubernetes\.io\/component: evaluation[\s\S]*?path: \/metrics/,
+  );
   assert.match(metricsChart, /interval: "1h30m"/);
   assert.match(
     metricsChart,
@@ -360,11 +402,11 @@ test('chart serializes managed workflow migrations before verify-only API worklo
   assert.match(chartHelpers, /vault\.hashicorp\.com\/agent-pre-populate-only: "true"/);
   assert.match(
     renderedChart,
-    /bootstrap-deployment-storage-settings\.mjs; RIVET_APP_SETTINGS_BACKEND=file RIVET_MANAGED_WORKFLOW_SCHEMA_MIN_VERSION="5" RIVET_MANAGED_WORKFLOW_SCHEMA_MAX_VERSION="5" node \/app\/packages\/studio-server-api\/dist\/studio-server-api\/src\/scripts\/migrate-managed-workflow-schema\.js migrate; node \/app\/packages\/studio-server-api\/dist\/studio-server-api\/src\/scripts\/import-managed-app-settings\.js/,
+    /bootstrap-deployment-storage-settings\.mjs; RIVET_APP_SETTINGS_BACKEND=file RIVET_MANAGED_WORKFLOW_SCHEMA_MIN_VERSION="6" RIVET_MANAGED_WORKFLOW_SCHEMA_MAX_VERSION="6" node \/app\/packages\/studio-server-api\/dist\/studio-server-api\/src\/scripts\/migrate-managed-workflow-schema\.js migrate; node \/app\/packages\/studio-server-api\/dist\/studio-server-api\/src\/scripts\/import-managed-app-settings\.js/,
   );
   assert.match(
     renderedChartWithRollbackWindow,
-    /RIVET_MANAGED_WORKFLOW_SCHEMA_MIN_VERSION="5" RIVET_MANAGED_WORKFLOW_SCHEMA_MAX_VERSION="5" node \/app\/packages\/studio-server-api\/dist\/studio-server-api\/src\/scripts\/migrate-managed-workflow-schema\.js migrate/,
+    /RIVET_MANAGED_WORKFLOW_SCHEMA_MIN_VERSION="6" RIVET_MANAGED_WORKFLOW_SCHEMA_MAX_VERSION="6" node \/app\/packages\/studio-server-api\/dist\/studio-server-api\/src\/scripts\/migrate-managed-workflow-schema\.js migrate/,
     'the migration Job must use the exact candidate version even when serving pods support a lower rollback version',
   );
   assert.match(migrationJobDocument, /name: RIVET_APP_DATA_ROOT\s*\n\s*value: "\/var\/tmp\/rivet-migration-app-data"/);
@@ -642,7 +684,7 @@ test('production rendering requires a fully identified digest-pinned release', a
     '--set',
     `release.production.chart.contentDigest=sha256:${'f'.repeat(64)}`,
     '--set',
-    'release.production.database.managedWorkflowSchemaVersion=5',
+    'release.production.database.managedWorkflowSchemaVersion=6',
   ];
   const renderProduction = (overrides: string[] = []) =>
     execFileSync(helmBin, [...baseArgs, ...identifiedReleaseArgs, ...overrides], {

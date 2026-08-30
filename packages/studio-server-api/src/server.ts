@@ -19,49 +19,56 @@ import {
   beginActiveHttpExecutionDrain,
   getActiveHttpExecutionCount,
 } from './active-http-executions.js';
-import { getApiRuntimeProfile, isControlPlaneApiProfile } from './runtime-profile.js';
+import { getApiRuntimeProfile, isControlPlaneApiProfile, isPublishedExecutionApiProfile } from './runtime-profile.js';
 import { assertApiRuntimeProfileStartupPreconditions, createApiApp } from './app.js';
 import {
   checkAppSettingsRepositoriesHealth,
   disposeAppSettingsRepositories,
   initializeAppSettingsRepositories,
 } from './app-settings/settings-repository.js';
-import { getRuntimeHealthOptionsFromEnv, RuntimeHealthController } from './runtime-health.js';
+import { getRuntimeHealthOptionsFromEnv, RuntimeHealthController, type RuntimeHealthCheck } from './runtime-health.js';
 import { configureStudioMetrics } from './metrics.js';
 
 const PORT = parseInt(process.env.PORT ?? '3100', 10);
 const apiRuntimeProfile = getApiRuntimeProfile();
 const metrics = configureStudioMetrics(apiRuntimeProfile);
 let webAppActionWebSockets: WebAppActionWebSocketRuntime | null = null;
+const runtimeHealthChecks: RuntimeHealthCheck[] = [
+  {
+    name: 'app-settings',
+    failureCode: 'app_settings_unavailable',
+    check: checkAppSettingsRepositoriesHealth,
+  },
+  {
+    name: 'workflow-storage',
+    failureCode: 'workflow_storage_unavailable',
+    check: checkWorkflowStorageHealth,
+  },
+  {
+    name: 'runtime-libraries',
+    failureCode: 'runtime_libraries_unavailable',
+    check: checkRuntimeLibrariesHealth,
+  },
+];
+
+// The internal Evaluation profile exposes no web-app routes, so it must not
+// allocate a WebSocket gateway or an extra managed PostgreSQL listener.
+if (apiRuntimeProfile !== 'evaluation') {
+  runtimeHealthChecks.push({
+    name: 'web-app-actions',
+    failureCode: 'web_app_gateway_unavailable',
+    async check(context) {
+      if (!webAppActionWebSockets) {
+        throw new Error('Web-app action gateway is not initialized.');
+      }
+      await webAppActionWebSockets.checkHealth(context);
+    },
+  });
+}
+
 const runtimeHealth = new RuntimeHealthController(
   apiRuntimeProfile,
-  [
-    {
-      name: 'app-settings',
-      failureCode: 'app_settings_unavailable',
-      check: checkAppSettingsRepositoriesHealth,
-    },
-    {
-      name: 'workflow-storage',
-      failureCode: 'workflow_storage_unavailable',
-      check: checkWorkflowStorageHealth,
-    },
-    {
-      name: 'runtime-libraries',
-      failureCode: 'runtime_libraries_unavailable',
-      check: checkRuntimeLibrariesHealth,
-    },
-    {
-      name: 'web-app-actions',
-      failureCode: 'web_app_gateway_unavailable',
-      async check(context) {
-        if (!webAppActionWebSockets) {
-          throw new Error('Web-app action gateway is not initialized.');
-        }
-        await webAppActionWebSockets.checkHealth(context);
-      },
-    },
-  ],
+  runtimeHealthChecks,
   getRuntimeHealthOptionsFromEnv(),
 );
 const app = createApiApp(apiRuntimeProfile, { health: runtimeHealth, metrics });
@@ -179,7 +186,7 @@ async function shutdown(signal: string): Promise<void> {
   shuttingDown = true;
   runtimeHealth.beginDrain();
   beginActiveHttpExecutionDrain();
-  if (apiRuntimeProfile !== 'control') {
+  if (isPublishedExecutionApiProfile(apiRuntimeProfile)) {
     getPublishedExecutionAdmission().beginDrain();
   }
   webAppActionWebSockets?.drain();
@@ -240,7 +247,7 @@ process.once('SIGTERM', () => {
 
 async function startServer(): Promise<void> {
   try {
-    if (apiRuntimeProfile !== 'control') {
+    if (isPublishedExecutionApiProfile(apiRuntimeProfile)) {
       getPublishedExecutionAdmission();
     }
     await initializeAppSettingsRepositories();
@@ -250,7 +257,9 @@ async function startServer(): Promise<void> {
     assertStartupActive();
     await initializeWorkflowStorage();
     assertStartupActive();
-    webAppActionWebSockets = await initializeWebAppActionWebSockets(server);
+    if (apiRuntimeProfile !== 'evaluation') {
+      webAppActionWebSockets = await initializeWebAppActionWebSockets(server);
+    }
     assertStartupActive();
     await runtimeHealth.start();
     assertStartupActive();

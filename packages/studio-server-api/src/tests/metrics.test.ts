@@ -47,6 +47,10 @@ test('metrics registry renders only finite, fixed-label metric families', () => 
     mode: 'enforce',
   });
   metrics.recordPublishedExecutionAdmission('capacity_exceeded', 'workflow_endpoint');
+  metrics.recordHostedEvaluationSubmission('accepted');
+  metrics.recordHostedEvaluationSubmission('outstanding_capacity_exceeded');
+  metrics.setHostedEvaluationQueue({ accepted: 1, claimed: 2, maxOutstandingJobs: 24, queued: 3 });
+  metrics.setHostedEvaluationWorkers({ activeTrials: 2, workerConcurrency: 4 });
   metrics.recordManagedReconciliationPage({
     domain: 'runtime_libraries',
     outcome: 'success',
@@ -72,6 +76,15 @@ test('metrics registry renders only finite, fixed-label metric families', () => 
     rendered,
     /rivet_published_execution_admission_total\{profile="execution",result="capacity_exceeded",surface="workflow_endpoint"\} 1/,
   );
+  assert.match(rendered, /rivet_hosted_evaluation_submissions_total\{profile="execution",result="accepted"\} 1/);
+  assert.match(
+    rendered,
+    /rivet_hosted_evaluation_submissions_total\{profile="execution",result="outstanding_capacity_exceeded"\} 1/,
+  );
+  assert.match(rendered, /rivet_hosted_evaluation_jobs_outstanding\{profile="execution",state="queued"\} 3/);
+  assert.match(rendered, /rivet_hosted_evaluation_jobs_outstanding_limit\{profile="execution"\} 24/);
+  assert.match(rendered, /rivet_hosted_evaluation_workers_active_trials\{profile="execution"\} 2/);
+  assert.match(rendered, /rivet_hosted_evaluation_workers_concurrency_limit\{profile="execution"\} 4/);
   assert.match(
     rendered,
     /rivet_managed_reconciliation_pages_total\{domain="runtime_libraries",outcome="success",phase="objects",profile="execution"\} 1/,

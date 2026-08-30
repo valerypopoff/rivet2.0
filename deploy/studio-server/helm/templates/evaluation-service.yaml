@@ -1,0 +1,20 @@
+{{- if .Values.hostedEvaluations.enabled }}
+# Internal-only Service: it exists solely for health/metrics discovery. The
+# proxy has no upstream for this selector, so batch workers cannot receive
+# product-facing workflow traffic.
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "rivet.evaluationServiceName" . }}
+  labels:
+    {{- include "rivet.labels" . | nindent 4 }}
+    app.kubernetes.io/component: evaluation
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "rivet.componentLabels" (dict "root" . "component" "evaluation") | nindent 4 }}
+  ports:
+    - name: http
+      port: {{ .Values.service.evaluation.port }}
+      targetPort: api-http
+{{- end }}

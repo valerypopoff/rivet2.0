@@ -37,7 +37,12 @@ import { getWorkflowStorageBackendMode } from './routes/workflows/storage-config
 import { requireAuth } from './middleware/auth.js';
 import { createProxySettingsSnapshot } from './proxy-settings-snapshot.js';
 import { isTrustedProxyRequest } from './auth.js';
-import { getApiRuntimeProfile, isControlPlaneApiProfile, isExecutionOnlyApiProfile } from './runtime-profile.js';
+import {
+  getApiRuntimeProfile,
+  isControlPlaneApiProfile,
+  isExecutionOnlyApiProfile,
+  isPublishedExecutionApiProfile,
+} from './runtime-profile.js';
 import type { RuntimeHealthReader } from './runtime-health.js';
 import { readRuntimeLimitSettingsSync } from './runtime-limit-settings.js';
 import { captureAppSettingsSnapshot } from './middleware/app-settings-snapshot.js';
@@ -246,7 +251,7 @@ export function getApiRouteExposureMatrix(profile = getApiRuntimeProfile()): str
     );
   }
 
-  if (profile === 'combined' || profile === 'execution') {
+  if (isPublishedExecutionApiProfile(profile)) {
     surfaces.push(
       `${publishedAppsBasePath}/auth/callback`,
       `${publishedAppsBasePath}/auth/dummy`,
@@ -263,7 +268,7 @@ export function getApiRouteExposureMatrix(profile = getApiRuntimeProfile()): str
 
 export function assertApiRuntimeProfileStartupPreconditions(profile = getApiRuntimeProfile()): void {
   if (isExecutionOnlyApiProfile(profile) && getWorkflowStorageBackendMode() !== 'managed') {
-    throw new Error('RIVET_API_PROFILE=execution requires Settings -> Storage to use Object storage');
+    throw new Error(`RIVET_API_PROFILE=${profile} requires Settings -> Storage to use Object storage`);
   }
 }
 
@@ -365,7 +370,7 @@ export function createApiApp(profile = getApiRuntimeProfile(), options: ApiAppOp
     mountControlPlaneRoutes(app);
   }
 
-  if (profile === 'combined' || profile === 'execution') {
+  if (isPublishedExecutionApiProfile(profile)) {
     mountPublishedExecutionRoutes(app);
   }
 

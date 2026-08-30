@@ -36,6 +36,10 @@ export type MetricsHttpRoute =
   | 'published_workflow';
 
 export type MetricsPublishedExecutionSurface = 'web_app_action' | 'workflow_endpoint';
+export type MetricsHostedEvaluationSubmissionResult =
+  | 'accepted'
+  | 'outstanding_capacity_exceeded'
+  | 'per_run_capacity_exceeded';
 export type MetricsPublishedAdmissionResult = 'accepted' | 'capacity_exceeded' | 'draining';
 export type MetricsObjectStorageDomain = 'runtime_libraries' | 'workflows';
 export type MetricsObjectStorageOperation = 'delete' | 'delete_many' | 'get' | 'head' | 'health' | 'list' | 'put';
@@ -127,6 +131,26 @@ export class StudioMetrics {
     this.incrementCounter('rivet_published_execution_interruptions_total', { surface }, count);
   }
 
+  recordHostedEvaluationSubmission(result: MetricsHostedEvaluationSubmissionResult): void {
+    this.incrementCounter('rivet_hosted_evaluation_submissions_total', { result });
+  }
+
+  setHostedEvaluationQueue(input: {
+    accepted: number;
+    claimed: number;
+    maxOutstandingJobs: number;
+    queued: number;
+  }): void {
+    this.setGauge('rivet_hosted_evaluation_jobs_outstanding', { state: 'queued' }, input.queued);
+    this.setGauge('rivet_hosted_evaluation_jobs_outstanding', { state: 'claimed' }, input.claimed);
+    this.setGauge('rivet_hosted_evaluation_jobs_outstanding', { state: 'accepted' }, input.accepted);
+    this.setGauge('rivet_hosted_evaluation_jobs_outstanding_limit', {}, input.maxOutstandingJobs);
+  }
+
+  setHostedEvaluationWorkers(input: { activeTrials: number; workerConcurrency: number }): void {
+    this.setGauge('rivet_hosted_evaluation_workers_active_trials', {}, input.activeTrials);
+    this.setGauge('rivet_hosted_evaluation_workers_concurrency_limit', {}, input.workerConcurrency);
+  }
   setWorkflowRecordingPersistence(input: {
     activeWrites: number;
     maxPendingWrites: number;

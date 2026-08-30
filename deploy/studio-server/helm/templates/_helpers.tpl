@@ -52,6 +52,10 @@ app.kubernetes.io/component: {{ .component }}
 {{- printf "%s-execution" (include "rivet.fullname" .) -}}
 {{- end -}}
 
+{{- define "rivet.evaluationServiceName" -}}
+{{- printf "%s-evaluation" (include "rivet.fullname" .) -}}
+{{- end -}}
+
 {{- define "rivet.serviceFqdn" -}}
 {{- $serviceName := .serviceName -}}
 {{- $namespace := .root.Release.Namespace -}}
@@ -65,6 +69,10 @@ app.kubernetes.io/component: {{ .component }}
 
 {{- define "rivet.executionName" -}}
 {{- printf "%s-execution" (include "rivet.fullname" .) -}}
+{{- end -}}
+
+{{- define "rivet.evaluationName" -}}
+{{- printf "%s-evaluation" (include "rivet.fullname" .) -}}
 {{- end -}}
 
 {{- define "rivet.backendHeadlessServiceName" -}}

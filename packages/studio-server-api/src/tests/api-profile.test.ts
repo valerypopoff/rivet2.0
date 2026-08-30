@@ -82,7 +82,7 @@ async function writeManagedDeploymentStorageSettings(): Promise<void> {
   });
 }
 
-async function startServer(profile: 'combined' | 'control' | 'execution') {
+async function startServer(profile: 'combined' | 'control' | 'evaluation' | 'execution') {
   const app = createApiApp(profile);
   const server = http.createServer(app);
   server.listen(0, '127.0.0.1');
@@ -131,6 +131,8 @@ test('Phase 4 route exposure matrix stays stable across API runtime profiles', (
     '/internal/app-settings/proxy-config',
   ]);
 
+  assert.deepEqual(getApiRouteExposureMatrix('evaluation'), []);
+
   assert.deepEqual(getApiRouteExposureMatrix('execution'), [
     '/apps/auth/callback',
     '/apps/auth/dummy',
@@ -168,17 +170,20 @@ test('Phase 4 route exposure matrix stays stable across API runtime profiles', (
   ]);
 });
 
-test('execution profile startup preconditions require managed storage mode', async () => {
+test('execution-only runtime profiles require managed storage mode', async () => {
   await withApiEnv({}, () => {
-    assert.throws(
-      () => assertApiRuntimeProfileStartupPreconditions('execution'),
-      /RIVET_API_PROFILE=execution requires Settings -> Storage to use Object storage/,
-    );
+    for (const profile of ['execution', 'evaluation'] as const) {
+      assert.throws(
+        () => assertApiRuntimeProfileStartupPreconditions(profile),
+        new RegExp(`RIVET_API_PROFILE=${profile} requires Settings -> Storage to use Object storage`),
+      );
+    }
   });
 
   await withApiEnv({}, async () => {
     await writeManagedDeploymentStorageSettings();
     assert.doesNotThrow(() => assertApiRuntimeProfileStartupPreconditions('execution'));
+    assert.doesNotThrow(() => assertApiRuntimeProfileStartupPreconditions('evaluation'));
   });
 });
 
@@ -190,29 +195,20 @@ test('combined and control profiles keep filesystem mode as a supported startup 
 });
 
 test('API error responses expose only explicitly marked 500 messages', () => {
-  assert.deepEqual(
-    getApiErrorResponse(new Error('boom')),
-    {
-      status: 500,
-      body: { error: 'Internal server error' },
-    },
-  );
+  assert.deepEqual(getApiErrorResponse(new Error('boom')), {
+    status: 500,
+    body: { error: 'Internal server error' },
+  });
 
-  assert.deepEqual(
-    getApiErrorResponse(createHttpError(500, 'Workflow storage is not writable.', { expose: true })),
-    {
-      status: 500,
-      body: { error: 'Workflow storage is not writable.' },
-    },
-  );
+  assert.deepEqual(getApiErrorResponse(createHttpError(500, 'Workflow storage is not writable.', { expose: true })), {
+    status: 500,
+    body: { error: 'Workflow storage is not writable.' },
+  });
 
-  assert.deepEqual(
-    getApiErrorResponse(createHttpError(403, 'Forbidden')),
-    {
-      status: 403,
-      body: { error: 'Forbidden' },
-    },
-  );
+  assert.deepEqual(getApiErrorResponse(createHttpError(403, 'Forbidden')), {
+    status: 403,
+    body: { error: 'Forbidden' },
+  });
 });
 
 test('API CORS defaults to same-origin browser access and explicit allowlist origins', async () => {
@@ -257,30 +253,35 @@ test('API CORS defaults to same-origin browser access and explicit allowlist ori
     }
   });
 
-  await withApiEnv({
-    RIVET_CORS_ALLOWED_ORIGINS: 'https://client.example.test,not-a-url',
-  }, async () => {
-    const server = await startServer('combined');
-    try {
-      const allowlistedResponse = await fetch(`${server.baseUrl}/healthz`, {
-        headers: {
-          Origin: 'https://client.example.test',
-          'X-Forwarded-Host': 'rivet.example.test',
-          'X-Forwarded-Proto': 'https',
-        },
-      });
-      assert.equal(allowlistedResponse.status, 200);
-      assert.equal(allowlistedResponse.headers.get('access-control-allow-origin'), 'https://client.example.test');
-      assert.equal(allowlistedResponse.headers.get('access-control-allow-credentials'), 'true');
-    } finally {
-      await server.close();
-    }
-  });
+  await withApiEnv(
+    {
+      RIVET_CORS_ALLOWED_ORIGINS: 'https://client.example.test,not-a-url',
+    },
+    async () => {
+      const server = await startServer('combined');
+      try {
+        const allowlistedResponse = await fetch(`${server.baseUrl}/healthz`, {
+          headers: {
+            Origin: 'https://client.example.test',
+            'X-Forwarded-Host': 'rivet.example.test',
+            'X-Forwarded-Proto': 'https',
+          },
+        });
+        assert.equal(allowlistedResponse.status, 200);
+        assert.equal(allowlistedResponse.headers.get('access-control-allow-origin'), 'https://client.example.test');
+        assert.equal(allowlistedResponse.headers.get('access-control-allow-credentials'), 'true');
+      } finally {
+        await server.close();
+      }
+    },
+  );
 });
 
 test('web-app WebSocket routes follow the same profile split as their HTTP counterparts', () => {
   assert.equal(isWebAppSocketRouteEnabled('published', 'control'), false);
   assert.equal(isWebAppSocketRouteEnabled('latest', 'control'), true);
+  assert.equal(isWebAppSocketRouteEnabled('published', 'evaluation'), false);
+  assert.equal(isWebAppSocketRouteEnabled('latest', 'evaluation'), false);
   assert.equal(isWebAppSocketRouteEnabled('published', 'execution'), true);
   assert.equal(isWebAppSocketRouteEnabled('latest', 'execution'), false);
   assert.equal(isWebAppSocketRouteEnabled('published', 'combined'), true);
@@ -309,7 +310,7 @@ test('control profile exposes control-plane routes and does not expose published
         },
       });
       assert.equal(configResponse.status, 200);
-      const configPayload = await configResponse.json() as {
+      const configPayload = (await configResponse.json()) as {
         executorWsUrl: string;
         publishedAppsBasePath: string;
         latestAppsBasePath: string;
@@ -374,6 +375,30 @@ test('control profile exposes control-plane routes and does not expose published
   });
 });
 
+test('evaluation profile exposes neither control nor published execution routes', async () => {
+  await withApiEnv({}, async () => {
+    const server = await startServer('evaluation');
+    try {
+      const routes = [
+        { path: '/api/config', init: {} },
+        { path: '/ui-auth', init: { method: 'POST' } },
+        { path: '/workflows/phase4-missing', init: { method: 'POST' } },
+        { path: '/apps/phase4-missing', init: {} },
+        { path: '/apps-latest/phase4-missing', init: {} },
+        { path: '/internal/workflows/phase4-missing', init: { method: 'POST' } },
+      ] as const;
+      for (const route of routes) {
+        const response = await fetch(`${server.baseUrl}${route.path}`, route.init);
+        assert.equal(response.status, 404, `Expected ${route.path} to be unavailable on the evaluation profile.`);
+      }
+
+      const healthResponse = await fetch(`${server.baseUrl}/healthz`);
+      assert.equal(healthResponse.status, 200);
+    } finally {
+      await server.close();
+    }
+  });
+});
 test('execution profile exposes published execution routes and hides control-plane routes', async () => {
   await withApiEnv({}, async () => {
     await writeWorkflowEndpointAuthSettings({ requireBearerAuth: false });
@@ -412,14 +437,14 @@ test('execution profile exposes published execution routes and hides control-pla
       });
       assert.equal(publishedResponse.status, 404);
       assert.match(publishedResponse.headers.get('x-duration-ms') ?? '', /^\d+$/);
-      const publishedPayload = await publishedResponse.json() as { error: string; durationMs: number };
+      const publishedPayload = (await publishedResponse.json()) as { error: string; durationMs: number };
       assert.equal(publishedPayload.error, 'Published workflow not found');
       assert.equal(typeof publishedPayload.durationMs, 'number');
 
       const webAppResponse = await fetch(`${server.baseUrl}/apps/phase4-missing`);
       assert.equal(webAppResponse.status, 404);
       assert.match(webAppResponse.headers.get('x-duration-ms') ?? '', /^\d+$/);
-      const webAppPayload = await webAppResponse.json() as { error: string; durationMs: number };
+      const webAppPayload = (await webAppResponse.json()) as { error: string; durationMs: number };
       assert.equal(webAppPayload.error, 'Published Rivet web app not found');
       assert.equal(typeof webAppPayload.durationMs, 'number');
 
@@ -435,7 +460,7 @@ test('execution profile exposes published execution routes and hides control-pla
       });
       assert.equal(internalResponse.status, 404);
       assert.match(internalResponse.headers.get('x-duration-ms') ?? '', /^\d+$/);
-      const internalPayload = await internalResponse.json() as { error: string; durationMs: number };
+      const internalPayload = (await internalResponse.json()) as { error: string; durationMs: number };
       assert.equal(internalPayload.error, 'Published workflow not found');
       assert.equal(typeof internalPayload.durationMs, 'number');
     } finally {

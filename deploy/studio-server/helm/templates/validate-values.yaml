@@ -61,7 +61,7 @@
 {{- end -}}
 {{- end -}}
 
-{{- range $key := list "RIVET_HOSTED_EVALUATIONS_ENABLED" "RIVET_HOSTED_EVALUATIONS_WORKER_CONCURRENCY" "RIVET_HOSTED_EVALUATIONS_LEASE_MS" "RIVET_HOSTED_EVALUATIONS_POLL_MS" -}}
+{{- range $key := list "RIVET_HOSTED_EVALUATIONS_ENABLED" "RIVET_HOSTED_EVALUATIONS_WORKER_CONCURRENCY" "RIVET_HOSTED_EVALUATIONS_LEASE_MS" "RIVET_HOSTED_EVALUATIONS_POLL_MS" "RIVET_HOSTED_EVALUATIONS_MAX_JOBS_PER_RUN" "RIVET_HOSTED_EVALUATIONS_MAX_OUTSTANDING_JOBS" -}}
 {{- if hasKey $.Values.env $key -}}
 {{- fail (printf "env.%s is chart-owned; configure hostedEvaluations instead" $key) -}}
 {{- end -}}
@@ -84,6 +84,29 @@
 {{- $hostedEvaluationPollMs := int .Values.hostedEvaluations.pollMs -}}
 {{- if or (lt $hostedEvaluationPollMs 250) (gt $hostedEvaluationPollMs 30000) -}}
 {{- fail "hostedEvaluations.pollMs must be an integer between 250 and 30000" -}}
+{{- end -}}
+{{- $hostedEvaluationMaxJobsPerRun := int .Values.hostedEvaluations.maxJobsPerRun -}}
+{{- if or (lt $hostedEvaluationMaxJobsPerRun 1) (gt $hostedEvaluationMaxJobsPerRun 100000) -}}
+{{- fail "hostedEvaluations.maxJobsPerRun must be an integer between 1 and 100000" -}}
+{{- end -}}
+{{- $hostedEvaluationMaxOutstandingJobs := int .Values.hostedEvaluations.maxOutstandingJobs -}}
+{{- if or (lt $hostedEvaluationMaxOutstandingJobs $hostedEvaluationMaxJobsPerRun) (gt $hostedEvaluationMaxOutstandingJobs 1000000) -}}
+{{- fail "hostedEvaluations.maxOutstandingJobs must be an integer between maxJobsPerRun and 1000000" -}}
+{{- end -}}
+{{- if not (kindIs "map" .Values.hostedEvaluations.scheduling) -}}
+{{- fail "hostedEvaluations.scheduling must be a map" -}}
+{{- end -}}
+{{- if not (kindIs "map" .Values.hostedEvaluations.scheduling.nodeSelector) -}}
+{{- fail "hostedEvaluations.scheduling.nodeSelector must be a map" -}}
+{{- end -}}
+{{- if not (kindIs "string" .Values.hostedEvaluations.scheduling.priorityClassName) -}}
+{{- fail "hostedEvaluations.scheduling.priorityClassName must be a string" -}}
+{{- end -}}
+{{- if and .Values.hostedEvaluations.enabled (lt (int .Values.replicaCount.evaluation) 1) -}}
+{{- fail "hostedEvaluations.enabled requires replicaCount.evaluation >= 1" -}}
+{{- end -}}
+{{- if and .Values.hostedEvaluations.enabled .Values.release.production.enabled (empty .Values.hostedEvaluations.scheduling.priorityClassName) (eq (len .Values.hostedEvaluations.scheduling.nodeSelector) 0) -}}
+{{- fail "production hostedEvaluations require scheduling.nodeSelector or a lower-priority scheduling.priorityClassName so batch pods cannot consume reserved public capacity" -}}
 {{- end -}}
 
 {{- $publishedExecutionAdmissionMode := .Values.publishedExecutionAdmission.mode -}}
@@ -118,7 +141,11 @@
 {{- if not (kindIs "map" $resourceLimitAcknowledgements) -}}
 {{- fail "resourceLimitAcknowledgements must be a map" -}}
 {{- end -}}
-{{- range $component := list "proxy" "web" "api" "executor" "execution" -}}
+{{- $resourceComponents := list "proxy" "web" "api" "executor" "execution" -}}
+{{- if .Values.hostedEvaluations.enabled -}}
+{{- $resourceComponents = append $resourceComponents "evaluation" -}}
+{{- end -}}
+{{- range $component := $resourceComponents -}}
 {{- $resources := index $.Values.resources $component -}}
 {{- if not (kindIs "map" $resources) -}}
 {{- fail (printf "resources.%s must be a map" $component) -}}
@@ -221,18 +248,19 @@
 {{- end -}}
 {{- $backendReplicas := int .Values.replicaCount.backend -}}
 {{- $executionReplicas := int .Values.replicaCount.execution -}}
-{{- $executionMinimumReplicas := $executionReplicas -}}
 {{- if .Values.autoscaling.execution.enabled -}}
 {{- $executionReplicas = int .Values.autoscaling.execution.maxReplicas -}}
-{{- $executionMinimumReplicas = int .Values.autoscaling.execution.minReplicas -}}
 {{- end -}}
-{{- if and .Values.hostedEvaluations.enabled (lt $executionMinimumReplicas 1) -}}
-{{- fail "hostedEvaluations.enabled requires at least one execution API replica; set replicaCount.execution >= 1 or autoscaling.execution.minReplicas >= 1" -}}
+{{- $evaluationReplicas := ternary (int .Values.replicaCount.evaluation) 0 .Values.hostedEvaluations.enabled -}}
+{{- $evaluationCapacityDetail := "" -}}
+{{- if .Values.hostedEvaluations.enabled -}}
+{{- $evaluationCapacityDetail = printf ", including %d Evaluation worker pod(s)" $evaluationReplicas -}}
 {{- end -}}
 {{- $apiPodConnections := add $poolMaxPerApiPod 3 -}}
-{{- $requiredPostgresConnections := add $postgresReservedConnections (mul (add $backendReplicas $executionReplicas) $apiPodConnections) -}}
+{{- $apiPods := add $backendReplicas $executionReplicas $evaluationReplicas -}}
+{{- $requiredPostgresConnections := add $postgresReservedConnections (mul $apiPods $apiPodConnections) -}}
 {{- if gt $requiredPostgresConnections $postgresMaxConnections -}}
-{{- fail (printf "PostgreSQL capacity is too small: the chart requires %d connections (%d reserved + %d API pods * (%d pooled + 3 LISTEN)), but postgres.maxConnections is %d; raise database capacity, lower postgres.poolMaxPerApiPod, or lower execution autoscaling.maxReplicas" $requiredPostgresConnections $postgresReservedConnections (add $backendReplicas $executionReplicas) $poolMaxPerApiPod $postgresMaxConnections) -}}
+{{- fail (printf "PostgreSQL capacity is too small: the chart requires %d connections (%d reserved + %d API pods * (%d pooled + 3 LISTEN)%s), but postgres.maxConnections is %d; raise database capacity, lower postgres.poolMaxPerApiPod, lower execution autoscaling.maxReplicas, or lower replicaCount.evaluation" $requiredPostgresConnections $postgresReservedConnections $apiPods $poolMaxPerApiPod $evaluationCapacityDetail $postgresMaxConnections) -}}
 {{- end -}}
 
 {{- range $key := list "RIVET_MANAGED_MAINTENANCE_ENABLED" "RIVET_MANAGED_MAINTENANCE_INTERVAL_MS" "RIVET_MANAGED_MAINTENANCE_LEASE_MS" "RIVET_MANAGED_MAINTENANCE_BATCH_SIZE" -}}

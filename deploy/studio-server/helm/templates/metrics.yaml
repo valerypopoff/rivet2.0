@@ -37,6 +37,27 @@ spec:
       interval: {{ .Values.metrics.serviceMonitor.interval | quote }}
       scrapeTimeout: {{ .Values.metrics.serviceMonitor.scrapeTimeout | quote }}
 {{- end }}
+{{- if and .Values.metrics.serviceMonitor.enabled .Values.hostedEvaluations.enabled }}
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "rivet.fullname" . }}-evaluation-metrics
+  labels:
+    {{- include "rivet.labels" . | nindent 4 }}
+    {{- with .Values.metrics.serviceMonitor.additionalLabels }}
+{{ toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "rivet.componentLabels" (dict "root" . "component" "evaluation") | nindent 6 }}
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: {{ .Values.metrics.serviceMonitor.interval | quote }}
+      scrapeTimeout: {{ .Values.metrics.serviceMonitor.scrapeTimeout | quote }}
+{{- end }}
 {{- if .Values.metrics.prometheusRule.enabled }}
 {{- if .Values.metrics.serviceMonitor.enabled }}
 ---

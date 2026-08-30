@@ -168,6 +168,10 @@
   value: {{ $root.Values.hostedEvaluations.leaseMs | quote }}
 - name: RIVET_HOSTED_EVALUATIONS_POLL_MS
   value: {{ $root.Values.hostedEvaluations.pollMs | quote }}
+- name: RIVET_HOSTED_EVALUATIONS_MAX_JOBS_PER_RUN
+  value: {{ $root.Values.hostedEvaluations.maxJobsPerRun | quote }}
+- name: RIVET_HOSTED_EVALUATIONS_MAX_OUTSTANDING_JOBS
+  value: {{ $root.Values.hostedEvaluations.maxOutstandingJobs | quote }}
 - name: RIVET_DEPLOYMENT_METRICS_ENABLED
   value: {{ $root.Values.metrics.enabled | quote }}
 - name: RIVET_WORKSPACE_ROOT

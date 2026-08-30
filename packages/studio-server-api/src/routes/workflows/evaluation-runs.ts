@@ -1,4 +1,4 @@
-import { Router } from "express";
+import { Router, type Response } from "express";
 import { Buffer } from "node:buffer";
 import { createHash } from "node:crypto";
 import { z } from "zod";
@@ -21,10 +21,20 @@ import { badRequest, conflict } from "../../utils/httpError.js";
 import { validateBody } from "../../middleware/validate.js";
 import { getEvaluationStore, getHostedEvaluationCoordinator } from "./storage-backend.js";
 import { EvaluationLibraryConflictError } from "../../evaluation-runs/store.js";
+import { HostedEvaluationCapacityError, HostedEvaluationRunConflictError } from "../../evaluation-runs/hosted-coordinator.js";
 
 export const evaluationRunsRouter = Router();
 /** Keeps evaluation replay artifacts below the API's broader 100 MiB JSON limit. */
 export const MAX_EVALUATION_RECORDING_BYTES = 24 * 1024 * 1024;
+
+function sendHostedEvaluationCapacityError(res: Response, error: HostedEvaluationCapacityError): void {
+  res.set("Retry-After", String(error.retryAfterSeconds));
+  res.status(429).json({
+    error: error.message,
+    code: "evaluation_batch_capacity_exceeded",
+    limit: error.limit,
+  });
+}
 
 const projectSchema = z.object({ projectId: z.string().min(1) }).strict();
 const listSchema = projectSchema.extend({
@@ -406,13 +416,19 @@ evaluationRunsRouter.post(
     const coordinator = await requireHostedSubmissionCoordinator();
     const evaluationData = deserializeEvaluationProjectData(input.evaluationData);
     const dataset = validateEvaluationDataset(input.dataset);
-    const run = await coordinator.submit({
-      ...input,
-      evaluationData,
-      dataset,
-      contextValues: input.contextValues as Record<string, import('@valerypopoff/rivet2-evaluations').PortableJson> | undefined,
-    });
-    res.status(202).json(run);
+    try {
+      const run = await coordinator.submit({
+        ...input,
+        evaluationData,
+        dataset,
+        contextValues: input.contextValues as Record<string, import('@valerypopoff/rivet2-evaluations').PortableJson> | undefined,
+      });
+      res.status(202).json(run);
+    } catch (error) {
+      if (error instanceof HostedEvaluationRunConflictError) throw conflict(error.message);
+      if (!(error instanceof HostedEvaluationCapacityError)) throw error;
+      sendHostedEvaluationCapacityError(res, error);
+    }
   }),
 );
 
@@ -446,11 +462,21 @@ evaluationRunsRouter.post(
   asyncHandler(async (req, res) => {
     const input = req.body as z.infer<typeof hostedRetrySchema>;
     if (String(req.params.runId ?? '') !== input.runId) throw badRequest('The evaluation run ID must match the request path.');
-    const run = await (await requireHostedSubmissionCoordinator()).retryInterrupted({
-      projectId: input.projectId as ProjectId, runId: input.runId, jobIds: input.jobIds,
-    });
-    if (!run) { res.status(404).json({ error: 'Hosted Evaluation run not found.' }); return; }
-    res.json(run);
+    try {
+      const run = await (await requireHostedSubmissionCoordinator()).retryInterrupted({
+        projectId: input.projectId as ProjectId,
+        runId: input.runId,
+        jobIds: input.jobIds,
+      });
+      if (!run) {
+        res.status(404).json({ error: 'Hosted Evaluation run not found.' });
+        return;
+      }
+      res.json(run);
+    } catch (error) {
+      if (!(error instanceof HostedEvaluationCapacityError)) throw error;
+      sendHostedEvaluationCapacityError(res, error);
+    }
   }),
 );
 evaluationRunsRouter.get(

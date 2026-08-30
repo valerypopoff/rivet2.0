@@ -5,7 +5,7 @@ import type { Pool, PoolClient, QueryResultRow } from 'pg';
 import { MANAGED_WORKFLOW_SCHEMA_SQL } from './schema.js';
 
 export const MANAGED_WORKFLOW_SCHEMA_MIGRATIONS_TABLE = 'managed_workflow_schema_migrations';
-export const CURRENT_MANAGED_WORKFLOW_SCHEMA_VERSION = 5;
+export const CURRENT_MANAGED_WORKFLOW_SCHEMA_VERSION = 6;
 // A serving release may verify an additive schema created by its immediate
 // successor only when the chart deliberately supplies that compatibility
 // window. Keep this constant explicit: raising it is the release-engineering
@@ -159,6 +159,14 @@ CREATE TABLE IF NOT EXISTS evaluation_hosted_trial_attempts (
 CREATE INDEX IF NOT EXISTS evaluation_hosted_trial_attempts_run_idx
   ON evaluation_hosted_trial_attempts(project_id, run_id, created_at, job_id);
 `;
+
+const MANAGED_HOSTED_EVALUATION_OUTSTANDING_INDEX_SQL = `
+-- Keep the installation-wide submission quota check bounded by outstanding
+-- work rather than by the complete historical Evaluation job ledger.
+CREATE INDEX IF NOT EXISTS evaluation_hosted_trial_jobs_outstanding_idx
+  ON evaluation_hosted_trial_jobs(status)
+  WHERE status IN ('queued', 'claimed', 'accepted');
+`;
 const MIGRATION_STATEMENT_TIMEOUT = '5min';
 const VERIFY_STATEMENT_TIMEOUT = '30s';
 const TRANSIENT_SCHEMA_ERROR_CODES = new Set(['40001', '40P01', '55P03']);
@@ -276,11 +284,18 @@ export const MANAGED_WORKFLOW_SCHEMA_MIGRATIONS: readonly ManagedWorkflowSchemaM
     name: 'managed-reconciliation-audit',
     sql: MANAGED_RECONCILIATION_SCHEMA_SQL,
     checksum: '6c6965c2d883e38d452345ab7730cb5704bc773275db41d9e7f3de00622cd330',
-  },  {
+  },
+  {
     version: 5,
     name: 'hosted-evaluation-coordinator',
     sql: MANAGED_HOSTED_EVALUATIONS_SCHEMA_SQL,
     checksum: '77cc68364a05ba7afadaa0634ea1945353d120dd3d338cd5c9ef09111f756bbf',
+  },
+  {
+    version: 6,
+    name: 'hosted-evaluation-outstanding-index',
+    sql: MANAGED_HOSTED_EVALUATION_OUTSTANDING_INDEX_SQL,
+    checksum: '29e225e645272fced8e1c8e8be268a8667a7f069bb3fba3ee1213759815d1e05',
   },
 ];
 
@@ -668,6 +683,7 @@ export const MANAGED_WORKFLOW_SCHEMA_REQUIRED_INDEXES = [
   ['evaluation_hosted_runs', 'evaluation_hosted_runs_active_idx', ['status', 'created_at', 'project_id', 'run_id'], "(status = ANY (ARRAY['queued'::text, 'running'::text]))", [0, 0, 0, 0]],
   ['evaluation_hosted_trial_jobs', 'evaluation_hosted_trial_jobs_claim_idx', ['status', 'case_index', 'trial_index', 'project_id', 'run_id'], "(status = 'queued'::text)", [0, 0, 0, 0, 0]],
   ['evaluation_hosted_trial_jobs', 'evaluation_hosted_trial_jobs_lease_idx', ['status', 'lease_expires_at', 'project_id', 'run_id'], "(status = ANY (ARRAY['claimed'::text, 'accepted'::text]))", [0, 0, 0, 0]],
+  ['evaluation_hosted_trial_jobs', 'evaluation_hosted_trial_jobs_outstanding_idx', ['status'], "(status = ANY (ARRAY['queued'::text, 'claimed'::text, 'accepted'::text]))", [0]],
   ['evaluation_hosted_trial_attempts', 'evaluation_hosted_trial_attempts_run_idx', ['project_id', 'run_id', 'created_at', 'job_id'], null, [0, 0, 0, 0]],
   ['evaluation_recordings', 'evaluation_recordings_project_run_idx', ['project_id', 'run_id'], null, [0, 0]],
 ] as const;

@@ -30,6 +30,9 @@ replicaCount:
   web: 1
   backend: 1
   execution: 2
+  # Only rendered when hostedEvaluations.enabled=true. This is a bounded
+  # batch tier, not spare capacity for published workflow traffic.
+  evaluation: 1
 
 # Only execution-profile API pods receive this gate. It has no in-memory queue:
 # an overloaded published request receives a visible retry response instead.
@@ -53,12 +56,22 @@ metrics:
     additionalLabels: {}
 
 # Disabled unless every API process uses managed PostgreSQL. Control accepts
-# submissions; only execution/combined processes claim durable batch trials.
+# submissions; only the isolated evaluation/combined development profile
+# claims durable batch trials. `execution` capacity remains public-only.
 hostedEvaluations:
   enabled: false
   workerConcurrency: 1
   leaseMs: 60000
   pollMs: 1000
+  # Submission is rejected atomically before a partial run is persisted when
+  # either durable queue bound would be exceeded.
+  maxJobsPerRun: 2000
+  maxOutstandingJobs: 10000
+  # In production, enabling batch work requires either dedicated placement or
+  # an operator-provided lower-priority class. The class is cluster-owned.
+  scheduling:
+    nodeSelector: {}
+    priorityClassName: ''
 autoscaling:
   proxy:
     enabled: true
@@ -92,6 +105,9 @@ service:
     port: 80
     targetPort: 8080
   execution:
+    port: 80
+    targetPort: 8080
+  evaluation:
     port: 80
     targetPort: 8080
   executor:
@@ -143,8 +159,8 @@ workflowSchema:
   # schema. The managed release command widens maximumVersion only for a
   # documented expand-only rollback; the migration Job always stays exact.
   compatibility:
-    minimumVersion: 5
-    maximumVersion: 5
+    minimumVersion: 6
+    maximumVersion: 6
   migrationJob:
     enabled: true
     backoffLimit: 2
@@ -310,6 +326,7 @@ podAnnotations:
   web: {}
   backend: {}
   execution: {}
+  evaluation: {}
   workflowSchemaMigration: {}
 
 resources:
@@ -333,6 +350,10 @@ resources:
     requests:
       cpu: 500m
       memory: 1Gi
+  evaluation:
+    requests:
+      cpu: 500m
+      memory: 1Gi
 
 # Generic memory and node-ephemeral limits can interrupt valid long graph runs.
 # A production render therefore requires an actual limit or a component-level
@@ -352,5 +373,8 @@ resourceLimitAcknowledgements:
     memory: ''
     ephemeralStorage: ''
   execution:
+    memory: ''
+    ephemeralStorage: ''
+  evaluation:
     memory: ''
     ephemeralStorage: ''

@@ -55,7 +55,7 @@ function promoted(overrides = {}) {
 
 test('release manifest reads the source-owned managed schema contract', () => {
   assert.deepEqual(readManagedWorkflowSchemaReleaseContract(rootDir), {
-    version: 5,
+    version: 6,
     minimumRollbackCompatibleVersion: 2,
   });
 });
@@ -138,7 +138,7 @@ test('only promoted manifests can produce production Helm values', () => {
   const values = createProductionHelmValues(promoted());
   assert.equal(values.release.production.enabled, true);
   assert.equal(values.images.api.digest, digest('c'));
-  assert.deepEqual(values.workflowSchema.compatibility, { minimumVersion: 5, maximumVersion: 5 });
+  assert.deepEqual(values.workflowSchema.compatibility, { minimumVersion: 6, maximumVersion: 6 });
   assert.equal(values.workflowSchema.migrationJob.enabled, true);
 });
 
@@ -157,8 +157,8 @@ test('forward rollback retains the migrated schema and restores only a compatibl
       chart: { ...rollbackRelease.chart, contentDigest: digest('f') },
       database: {
         managedWorkflowSchema: {
-          version: 6,
-          minimumRollbackCompatibleVersion: 5,
+          version: 7,
+          minimumRollbackCompatibleVersion: 6,
         },
       },
     },
@@ -167,8 +167,8 @@ test('forward rollback retains the migrated schema and restores only a compatibl
 
   const values = createForwardRollbackHelmValues({ failedRelease, rollbackRelease });
   assert.equal(values.workflowSchema.migrationJob.enabled, false);
-  assert.deepEqual(values.workflowSchema.compatibility, { minimumVersion: 2, maximumVersion: 6 });
-  assert.equal(values.release.production.database.managedWorkflowSchemaVersion, 6);
+  assert.deepEqual(values.workflowSchema.compatibility, { minimumVersion: 2, maximumVersion: 7 });
+  assert.equal(values.release.production.database.managedWorkflowSchemaVersion, 7);
   assert.equal(values.release.production.chart.contentDigest, digest('f'));
   assert.equal(values.images.api.repository, 'example.test/rivet/api');
 });
@@ -190,8 +190,8 @@ test('forward rollback refuses a schema that did not declare the previous releas
       ...promoted(),
       database: {
         managedWorkflowSchema: {
-          version: 6,
-          minimumRollbackCompatibleVersion: 6,
+          version: 7,
+          minimumRollbackCompatibleVersion: 7,
         },
       },
     },

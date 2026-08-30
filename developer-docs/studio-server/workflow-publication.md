@@ -73,10 +73,10 @@ Important current behavior:
 
 Each project has a derived status:
 
-| Status | Meaning |
-|---|---|
-| `unpublished` | No published endpoint is currently active |
-| `published` | The live file matches the published snapshot/hash |
+| Status                | Meaning                                                                           |
+| --------------------- | --------------------------------------------------------------------------------- |
+| `unpublished`         | No published endpoint is currently active                                         |
+| `published`           | The live file matches the published snapshot/hash                                 |
 | `unpublished_changes` | An endpoint is published, but the live file has diverged from the published state |
 
 Status is derived from the stored settings plus a fresh state hash; it is not stored as the source of truth.
@@ -504,7 +504,7 @@ Rivet intentionally does not enforce the policy. Every Studio Server profile
 attempt consults the backend selected for the workflow deployment:
 
 - filesystem mode uses the single-host SQLite health store under `RIVET_APP_DATA_ROOT`
-- managed mode uses shared Postgres state across control and execution replicas
+- managed mode uses shared Postgres state across control, execution, and internal Evaluation-worker replicas
 - published and latest workflow endpoints receive the store through their processor options
 - HTTP compatibility and resumable WebSocket web-app actions receive the same store; reconnecting a web-app action does not create a browser-local health island
 
@@ -691,25 +691,25 @@ Legacy uncompressed bundles are still readable in `filesystem` mode. Startup rec
 
 Recording history limits are wrapper-owned app settings, not deployment env. The dashboard exposes them under `Settings` -> `Run recordings`, and the API stores them as `settings/run-recordings.json` under `RIVET_APP_DATA_ROOT`. The saved settings are:
 
-| Setting | Purpose | Default |
-|---|---|---|
-| `Queued recording writes` | How many recording save jobs can wait in memory before new recordings are skipped | `100` |
-| `Runs kept per workflow endpoint` | Choose whether to keep every run for each endpoint or keep only the newest N runs | `Keep latest runs: 100` |
-| `Days to keep recordings` | Choose whether to keep recordings forever or delete them after N days | `Keep for some time: 14 days` |
+| Setting                           | Purpose                                                                           | Default                       |
+| --------------------------------- | --------------------------------------------------------------------------------- | ----------------------------- |
+| `Queued recording writes`         | How many recording save jobs can wait in memory before new recordings are skipped | `100`                         |
+| `Runs kept per workflow endpoint` | Choose whether to keep every run for each endpoint or keep only the newest N runs | `Keep latest runs: 100`       |
+| `Days to keep recordings`         | Choose whether to keep recordings forever or delete them after N days             | `Keep for some time: 14 days` |
 
 The legacy `RIVET_RECORDINGS_MAX_PENDING_WRITES`, `RIVET_RECORDINGS_MAX_RUNS_PER_ENDPOINT`, and `RIVET_RECORDINGS_RETENTION_DAYS` env vars are ignored so runtime retention policy comes only from the App Settings UI.
 
 The remaining recording behavior is controlled by env vars:
 
-| Variable | Purpose | Default |
-|---|---|---|
-| `RIVET_RECORDINGS_ENABLED` | Enable workflow recording persistence | `true` |
-| `RIVET_RECORDINGS_COMPRESS` | Blob encoding (`gzip` or `identity`) | `gzip` |
-| `RIVET_RECORDINGS_GZIP_LEVEL` | Gzip compression level | `4` |
-| `RIVET_RECORDINGS_INCLUDE_PARTIAL_OUTPUTS` | Include partial outputs in recorder payloads | `false` |
-| `RIVET_RECORDINGS_INCLUDE_TRACE` | Include trace data in recorder payloads | `false` |
-| `RIVET_RECORDINGS_DATASET_MODE` | Dataset snapshot mode (`none` or `all`) | `none` |
-| `RIVET_RECORDINGS_MAX_TOTAL_BYTES` | Global compressed-byte cap across recordings (`0` disables) | `0` |
+| Variable                                   | Purpose                                                     | Default |
+| ------------------------------------------ | ----------------------------------------------------------- | ------- |
+| `RIVET_RECORDINGS_ENABLED`                 | Enable workflow recording persistence                       | `true`  |
+| `RIVET_RECORDINGS_COMPRESS`                | Blob encoding (`gzip` or `identity`)                        | `gzip`  |
+| `RIVET_RECORDINGS_GZIP_LEVEL`              | Gzip compression level                                      | `4`     |
+| `RIVET_RECORDINGS_INCLUDE_PARTIAL_OUTPUTS` | Include partial outputs in recorder payloads                | `false` |
+| `RIVET_RECORDINGS_INCLUDE_TRACE`           | Include trace data in recorder payloads                     | `false` |
+| `RIVET_RECORDINGS_DATASET_MODE`            | Dataset snapshot mode (`none` or `all`)                     | `none`  |
+| `RIVET_RECORDINGS_MAX_TOTAL_BYTES`         | Global compressed-byte cap across recordings (`0` disables) | `0`     |
 
 Operational defaults are intentionally conservative:
 

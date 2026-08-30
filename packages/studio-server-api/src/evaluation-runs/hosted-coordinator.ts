@@ -19,6 +19,7 @@ import {
 import { deserializeDatasets, loadProjectFromString, type ProjectId } from '@valerypopoff/rivet2-node';
 
 import type { HostedEvaluationsCoordinatorConfig } from '../hosted-evaluations-config.js';
+import { getStudioMetrics } from '../metrics.js';
 import type { PostgresRivetEvaluationStore } from './managed-store.js';
 
 export type HostedEvaluationSubmission = {
@@ -94,7 +95,28 @@ export type HostedEvaluationCoordinatorStatus = {
   enabled: boolean;
   workerEnabled: boolean;
   workerConcurrency: number;
+  maxJobsPerRun: number;
+  maxOutstandingJobs: number;
 };
+
+export class HostedEvaluationCapacityError extends Error {
+  readonly retryAfterSeconds = 5;
+
+  constructor(
+    readonly limit: 'outstanding' | 'per-run',
+    message: string,
+  ) {
+    super(message);
+    this.name = 'HostedEvaluationCapacityError';
+  }
+}
+
+export class HostedEvaluationRunConflictError extends Error {
+  constructor() {
+    super('Hosted Evaluation run ID already exists. Start the run again to generate a fresh ID.');
+    this.name = 'HostedEvaluationRunConflictError';
+  }
+}
 export type HostedEvaluationRunState = {
   status: HostedRunState;
   cancelRequested: boolean;
@@ -115,6 +137,10 @@ export type HostedEvaluationRunState = {
 };
 
 const TERMINAL_JOB_STATES = new Set<HostedJobState>(['settled', 'interrupted', 'canceled']);
+// Submission and interrupted-job retries both increase the durable outstanding
+// queue. Guard both paths with the same transaction-scoped lock so the global
+// capacity remains an invariant instead of a best-effort admission check.
+const HOSTED_EVALUATION_CAPACITY_ADVISORY_LOCK = 5_611_002;
 
 function parseSnapshot(value: HostedRunRow['snapshot_json']): HostedEvaluationSnapshot {
   const parsed = typeof value === 'string' ? JSON.parse(value) : value;
@@ -220,6 +246,7 @@ export class HostedEvaluationCoordinator {
   readonly #runStore: PostgresRivetEvaluationStore;
   readonly #workerId = `evaluation-worker:${process.env.HOSTNAME?.trim() || 'local'}:${process.pid}:${randomUUID()}`;
   #loopPromise: Promise<void> | undefined;
+  #metricsRefreshPromise: Promise<void> | undefined;
   #stopping = false;
   #wake: (() => void) | undefined;
 
@@ -240,6 +267,8 @@ export class HostedEvaluationCoordinator {
       enabled: this.#config.enabled,
       workerEnabled: this.#config.workerEnabled,
       workerConcurrency: this.#config.workerConcurrency,
+      maxJobsPerRun: this.#config.maxJobsPerRun,
+      maxOutstandingJobs: this.#config.maxOutstandingJobs,
     };
   }
   async getRunState(input: { projectId: ProjectId; runId: string }): Promise<HostedEvaluationRunState | undefined> {
@@ -286,10 +315,7 @@ export class HostedEvaluationCoordinator {
     // Validate the sidecar before queuing work. A malformed `.rivet-data`
     // snapshot is an authoring error, never a post-acceptance worker failure.
     if (input.datasetsContents !== undefined) deserializeDatasets(input.datasetsContents);
-    const requestedRunId = input.runId?.trim();
-    if (requestedRunId && (await this.#runStore.get({ projectId: project.metadata.id, runId: requestedRunId }))) {
-      throw new Error('Hosted Evaluation run ID already exists. Start the run again to generate a fresh ID.');
-    }
+
     const { run, plan } = createEvaluationRunShell({
       project,
       evaluationData: input.evaluationData,
@@ -301,8 +327,16 @@ export class HostedEvaluationCoordinator {
     });
     // Local callers enter a worker pool immediately; the durable scheduler
     // does not. Keep the externally visible execution state honest until an
-    // execution-tier worker accepts the first trial. The upstream planner
+    // Evaluation-tier worker accepts the first trial. The upstream planner
     // rejects datasets with no enabled cases before this point.
+    const plannedJobCount = plan.work.length;
+    if (plannedJobCount > this.#config.maxJobsPerRun) {
+      getStudioMetrics().recordHostedEvaluationSubmission('per_run_capacity_exceeded');
+      throw new HostedEvaluationCapacityError(
+        'per-run',
+        `This Evaluation would schedule ${plannedJobCount} trials, exceeding the configured per-run limit of ${this.#config.maxJobsPerRun}.`,
+      );
+    }
     run.executionStatus = 'queued';
     const snapshot: HostedEvaluationSnapshot = {
       version: 1,
@@ -318,6 +352,23 @@ export class HostedEvaluationCoordinator {
     const client = await this.#pool.connect();
     try {
       await client.query('BEGIN');
+      // Evaluation authoring is low-volume, so a transaction-scoped advisory
+      // lock gives concurrent submitters one exact installation-wide capacity
+      // decision without introducing a second queue or scheduler state.
+      await client.query(`SELECT pg_advisory_xact_lock(${HOSTED_EVALUATION_CAPACITY_ADVISORY_LOCK}::bigint)`);
+      const outstandingResult = await client.query<{ outstanding_count: number }>(
+        `SELECT COUNT(*)::integer AS outstanding_count
+           FROM evaluation_hosted_trial_jobs
+          WHERE status IN ('queued', 'claimed', 'accepted')`,
+      );
+      const outstandingJobs = Number(outstandingResult.rows[0]?.outstanding_count ?? 0);
+      if (outstandingJobs + plannedJobCount > this.#config.maxOutstandingJobs) {
+        getStudioMetrics().recordHostedEvaluationSubmission('outstanding_capacity_exceeded');
+        throw new HostedEvaluationCapacityError(
+          'outstanding',
+          `Hosted Evaluation capacity is full: ${outstandingJobs} trial jobs are already outstanding, and this run needs ${plannedJobCount} more (limit ${this.#config.maxOutstandingJobs}).`,
+        );
+      }
       // The user-visible run projection, its content-addressed dataset, and
       // scheduler rows must commit together. Otherwise a process crash between
       // independent store writes could leave a permanently queued run with no
@@ -338,11 +389,14 @@ export class HostedEvaluationCoordinator {
           }),
         ],
       );
-      await client.query(
+      const insertedRun = await client.query(
         `INSERT INTO evaluation_runs (project_id, run_id, suite_id, started_at, run_json, updated_at)
-         VALUES ($1, $2, $3, $4, $5::jsonb, NOW())`,
+         VALUES ($1, $2, $3, $4, $5::jsonb, NOW())
+         ON CONFLICT (project_id, run_id) DO NOTHING
+         RETURNING run_id`,
         [String(run.projectId), run.id, run.suiteId, run.startedAt, JSON.stringify(run)],
       );
+      if (insertedRun.rowCount !== 1) throw new HostedEvaluationRunConflictError();
       await client.query(
         `INSERT INTO evaluation_hosted_runs (project_id, run_id, status, snapshot_json, created_at, updated_at)
          VALUES ($1, $2, 'queued', $3::jsonb, NOW(), NOW())`,
@@ -371,6 +425,7 @@ export class HostedEvaluationCoordinator {
     } finally {
       client.release();
     }
+    getStudioMetrics().recordHostedEvaluationSubmission('accepted');
     this.#notify();
     return run;
   }
@@ -456,6 +511,11 @@ export class HostedEvaluationCoordinator {
     const client = await this.#pool.connect();
     try {
       await client.query('BEGIN');
+      // Retrying interrupted work returns terminal jobs to the same global
+      // outstanding queue as a new submission. Share its advisory lock and
+      // capacity accounting; otherwise retries can silently exceed the chart
+      // owned safety limit during an incident.
+      await client.query(`SELECT pg_advisory_xact_lock(${HOSTED_EVALUATION_CAPACITY_ADVISORY_LOCK}::bigint)`);
       const interrupted = await client.query<HostedJobRow>(
         `SELECT project_id, run_id, job_id, case_id, case_name, case_index, trial_index,
                 status, attempt, fencing_token, worker_id, trial_json
@@ -474,6 +534,19 @@ export class HostedEvaluationCoordinator {
       }
       if (hosted.cancel_requested_at)
         throw new Error('Canceled hosted evaluations cannot be retried. Start a new run instead.');
+      const outstandingResult = await client.query<{ outstanding_count: number }>(
+        `SELECT COUNT(*)::integer AS outstanding_count
+           FROM evaluation_hosted_trial_jobs
+          WHERE status IN ('queued', 'claimed', 'accepted')`,
+      );
+      const outstandingJobs = Number(outstandingResult.rows[0]?.outstanding_count ?? 0);
+      if (outstandingJobs + interrupted.rowCount > this.#config.maxOutstandingJobs) {
+        getStudioMetrics().recordHostedEvaluationSubmission('outstanding_capacity_exceeded');
+        throw new HostedEvaluationCapacityError(
+          'outstanding',
+          `Hosted Evaluation capacity is full: ${outstandingJobs} trial jobs are already outstanding, and retrying ${interrupted.rowCount} more would exceed the configured limit of ${this.#config.maxOutstandingJobs}.`,
+        );
+      }
       for (const job of interrupted.rows) {
         await client.query(
           `UPDATE evaluation_hosted_trial_jobs
@@ -597,9 +670,39 @@ export class HostedEvaluationCoordinator {
     }
   }
 
+  #refreshMetrics(): void {
+    if (this.#metricsRefreshPromise) return;
+    const metrics = getStudioMetrics();
+    if (!metrics.enabled) return;
+
+    this.#metricsRefreshPromise = (async () => {
+      try {
+        const queued = await this.#pool.query<{ status: 'accepted' | 'claimed' | 'queued'; count: number }>(
+          `SELECT status, COUNT(*)::integer AS count
+             FROM evaluation_hosted_trial_jobs
+            WHERE status IN ('queued', 'claimed', 'accepted')
+            GROUP BY status`,
+        );
+        const counts = { accepted: 0, claimed: 0, queued: 0 };
+        for (const row of queued.rows) counts[row.status] = Number(row.count);
+        metrics.setHostedEvaluationQueue({ ...counts, maxOutstandingJobs: this.#config.maxOutstandingJobs });
+        metrics.setHostedEvaluationWorkers({
+          activeTrials: this.#active.size,
+          workerConcurrency: this.#config.workerConcurrency,
+        });
+      } catch {
+        // Metrics are strictly observational. A failed aggregate read must not
+        // delay claims or turn a healthy worker unready.
+      }
+    })().finally(() => {
+      this.#metricsRefreshPromise = undefined;
+    });
+  }
+
   async #runLoop(): Promise<void> {
     while (!this.#stopping) {
       try {
+        void this.#refreshMetrics();
         await this.#recoverExpiredLeases();
         while (!this.#stopping && this.#active.size < this.#config.workerConcurrency) {
           const claim = await this.#claimNext();
@@ -615,6 +718,7 @@ export class HostedEvaluationCoordinator {
           task = this.#executeClaim(claim, controller).finally(() => {
             this.#active.delete(key);
             this.#activeTasks.delete(task);
+            void this.#refreshMetrics();
             this.#notify();
           });
           this.#activeTasks.add(task);
@@ -1142,7 +1246,7 @@ export class HostedEvaluationCoordinator {
             'One or more hosted trial workers were interrupted after dispatch. Those trials were not retried automatically.',
         };
         next.warnings.push(
-          'One or more hosted trial workers were interrupted after dispatch. A privileged operator must explicitly retry those trials if repeating the work is safe.',
+          'One or more hosted trial workers were interrupted after dispatch. An authenticated operator must explicitly retry those trials if repeating the work is safe.',
         );
         await client.query(
           `UPDATE evaluation_hosted_runs SET status = 'interrupted', updated_at = NOW() WHERE project_id = $1 AND run_id = $2`,
