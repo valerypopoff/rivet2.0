@@ -753,9 +753,49 @@ The current metric families are intentionally low-cardinality and contain no pro
 - recording persistence queue depth/active write count, drops, and write failures;
 - shared PostgreSQL pool totals/idle/waiting counts, read in memory without a database query;
 - managed workflow/runtime-library object-storage operation count and duration, labeled only by fixed domain, operation, and success/error;
-- runtime-library job activity and terminal outcome.
+- runtime-library job activity and terminal outcome;
+- control-plane maintenance attempt/success timestamps and bounded pass outcomes;
+- durable deletion-outbox entries and oldest entry age by the fixed pending, claimed, and blocked states;
+- managed App Settings synchronization timestamps, listener/poll state, and bounded source/outcome counters; and
+- reconciliation page outcomes, returned work-item counts, durable completion/error timestamps, and open finding counts.
 
-The optional rule set is a conservative starting signal for an unready execution pod, sustained enforced public-admission saturation, recording drops, and object-storage errors. Reconciliation progress/open-finding and Evaluation-retention candidate/deletion metrics are also available, but they do not yet have tuned incident rules. The baseline does not replace Kubernetes restart/OOM/eviction alerts or the planned maintenance lease/pass and deletion-outbox freshness, evaluation-batch alerting, settings-convergence, proxy, executor, and correlation/tracing signals. Enable it without paging first, validate cardinality and overhead during the published-route load gate, then tune thresholds from staging/production evidence. Keep the control-plane dashboard and objective separate from the high-load published execution plane: the singleton backend is intentionally a low-volume control service, not a throughput or HA claim.
+#### Control-plane freshness and backlog reference
+
+These metric families are updated by the existing maintenance worker, reconciliation task, and App Settings notification/poll paths. /metrics only renders their in-process state: it does **not** query PostgreSQL, list object storage, or run a worker. The outbox snapshot is scheduled only after the outbox-drain stage completes; one snapshot per control process may be in flight, and its outcome cannot delay or change deletion behavior.
+
+| Metric family                                                                                                                                                                                                                                | Meaning and scope                                                                                                                                                                                                                                                                            |
+| -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| rivet_managed_maintenance_passes_total, rivet_managed_maintenance_last_attempt_timestamp_seconds, rivet_managed_maintenance_last_success_timestamp_seconds                                                                                   | The control API's fenced maintenance attempts. A completed pass ran every registered task and drained the outbox; failed, lease_lost, and not_owner are distinct bounded outcomes. Timestamps are process-local and reset when the pod is replaced.                                          |
+| rivet_managed_object_deletion_outbox_entries, rivet_managed_object_deletion_outbox_oldest_entry_age_seconds, rivet_managed_object_deletion_outbox_operations_total                                                                           | Durable deletion backlog state. claimed means a pending row currently has an unexpired claim; blocked is intentionally retained for investigation. An age of 0 means that state currently has no rows, not that the outbox was never sampled.                                                |
+| rivet_managed_reconciliation_pages_total, rivet_managed_reconciliation_returned_items_total, rivet_managed_reconciliation_last_completed_timestamp_seconds, rivet_managed_reconciliation_last_error_timestamp_seconds                        | One bounded audit page per domain. “Returned items” means keys/objects returned by workflow/runtime pages or candidate integrity rows returned by the Evaluation query; it is not a full-prefix byte count. The durable status command remains the authoritative per-domain checkpoint view. |
+| rivet_managed_settings_listener_connected, rivet_managed_settings_poll_in_flight, rivet_managed_settings_synchronization_total, rivet_managed_settings_last_success_timestamp_seconds, rivet_managed_settings_last_failure_timestamp_seconds | One API process's PostgreSQL LISTEN and poll synchronization activity. A successful local poll proves that replica refreshed its revision index; it does not prove that every replica has converged.                                                                                         |
+
+Use the target's normal instance/Pod labels to inspect every API replica. The maintenance/outbox series normally come from profile="control"; managed App Settings series can appear on each API profile. A new or restarted pod has no maintenance-success timestamp until it completes a pass, so pair freshness queries with target availability/readiness rather than treating an absent series as a successful timestamp.
+
+Useful starting PromQL, to be tuned from staged evidence rather than paged immediately:
+
+```promql
+# Seconds since the latest successful control-plane maintenance pass.
+time() - max(rivet_managed_maintenance_last_success_timestamp_seconds{profile="control"})
+
+# Backlog by safety state; investigate blocked rows rather than retrying them blindly.
+sum by (state) (rivet_managed_object_deletion_outbox_entries{profile="control"})
+
+# Oldest outstanding work in each nonempty state.
+max by (state) (
+  rivet_managed_object_deletion_outbox_oldest_entry_age_seconds{profile="control"}
+  * on (state) group_left
+  (rivet_managed_object_deletion_outbox_entries{profile="control"} > 0)
+)
+
+# Domain freshness and recent local App Settings synchronization failures.
+time() - max by (domain) (rivet_managed_reconciliation_last_completed_timestamp_seconds{profile="control"})
+sum by (profile, source) (
+  increase(rivet_managed_settings_synchronization_total{outcome="failure"}[15m])
+)
+```
+
+The optional rule set is a conservative starting signal for an unready execution pod, sustained enforced public-admission saturation, recording drops, and object-storage errors. Reconciliation progress/open-finding and Evaluation-retention candidate/deletion metrics are also available, but they do not yet have tuned incident rules. The baseline still does not replace Kubernetes restart/OOM/eviction alerts, proxy/executor telemetry, or end-to-end correlation/tracing. Enable it without paging first, validate cardinality and overhead during the published-route load gate, then create separate control-plane and high-load execution-plane dashboards and tune thresholds from staging/production evidence. The singleton backend remains a low-volume control service, not a throughput or HA claim.
 
 ### PostgreSQL connection budget
 

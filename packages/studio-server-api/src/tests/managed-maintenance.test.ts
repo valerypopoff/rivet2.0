@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
+import { configureStudioMetrics, getStudioMetrics, resetStudioMetricsForTests } from '../metrics.js';
 import {
   createManagedWorkflowMaintenance,
   getManagedWorkflowMaintenanceConfig,
@@ -109,6 +110,123 @@ test('managed maintenance claims an orphaned key once and marks it completed aft
   assert.ok(
     queries.some(({ sql, parameters }) => sql.includes("SET status = 'completed'") && parameters?.[0] === 'orphan/key'),
   );
+});
+test('managed maintenance publishes bounded pass and durable outbox observations outside the scrape path', async () => {
+  configureStudioMetrics('control', { RIVET_METRICS_ENABLED: 'true' });
+  const pool = {
+    query: async (sql: string) => {
+      if (sql.includes('INSERT INTO managed_maintenance_leases')) return { rows: [{ fencing_token: 5 }] };
+      if (sql.includes('WITH next_object')) return { rows: [] };
+      if (sql.includes('WITH observable_outbox')) {
+        return {
+          rows: [
+            { entries: '3', oldest_age_seconds: '12.5', state: 'pending' },
+            { entries: '1', oldest_age_seconds: '30', state: 'blocked' },
+          ],
+        };
+      }
+      return { rows: [] };
+    },
+  } as never;
+  const maintenance = createManagedWorkflowMaintenance({
+    pool,
+    blobStore: { delete: async () => {} } as never,
+    config: { enabled: true, intervalMs: 60_000, leaseMs: 60_000, batchSize: 1 },
+    logger: createMaintenanceLogger(),
+  });
+
+  try {
+    await maintenance.runNow();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    const rendered = getStudioMetrics().render();
+    assert.match(rendered, /rivet_managed_maintenance_passes_total\{outcome="completed",profile="control"\} 1/);
+    assert.match(rendered, /rivet_managed_maintenance_last_success_timestamp_seconds\{profile="control"\} \d/);
+    assert.match(rendered, /rivet_managed_object_deletion_outbox_entries\{profile="control",state="pending"\} 3/);
+    assert.match(
+      rendered,
+      /rivet_managed_object_deletion_outbox_oldest_entry_age_seconds\{profile="control",state="blocked"\} 30/,
+    );
+    assert.match(rendered, /rivet_managed_object_deletion_outbox_entries\{profile="control",state="claimed"\} 0/);
+  } finally {
+    resetStudioMetricsForTests();
+  }
+});
+
+test('managed maintenance keeps a successful pass successful when its observational outbox snapshot fails', async () => {
+  resetStudioMetricsForTests();
+  configureStudioMetrics('control', { RIVET_METRICS_ENABLED: 'true' });
+  const maintenance = createManagedWorkflowMaintenance({
+    pool: {
+      query: async (sql: string) => {
+        if (sql.includes('INSERT INTO managed_maintenance_leases')) return { rows: [{ fencing_token: 6 }] };
+        if (sql.includes('WITH next_object')) return { rows: [] };
+        if (sql.includes('WITH observable_outbox')) throw new Error('metrics query unavailable');
+        return { rows: [] };
+      },
+    } as never,
+    blobStore: { delete: async () => {} } as never,
+    config: { enabled: true, intervalMs: 60_000, leaseMs: 60_000, batchSize: 1 },
+    logger: createMaintenanceLogger(),
+  });
+
+  try {
+    await maintenance.runNow();
+    assert.match(
+      getStudioMetrics().render(),
+      /rivet_managed_maintenance_passes_total\{outcome="completed",profile="control"\} 1/,
+    );
+  } finally {
+    resetStudioMetricsForTests();
+  }
+});
+
+test('managed maintenance does not wait for an in-flight outbox metrics snapshot', async () => {
+  resetStudioMetricsForTests();
+  configureStudioMetrics('control', { RIVET_METRICS_ENABLED: 'true' });
+
+  let startSnapshot: () => void = () => {};
+  let releaseSnapshot: () => void = () => {};
+  const snapshotStarted = new Promise<void>((resolve) => {
+    startSnapshot = resolve;
+  });
+  const snapshotResult = new Promise<{ rows: unknown[] }>((resolve) => {
+    releaseSnapshot = () => resolve({ rows: [] });
+  });
+  const maintenance = createManagedWorkflowMaintenance({
+    pool: {
+      query: async (sql: string) => {
+        if (sql.includes('INSERT INTO managed_maintenance_leases')) return { rows: [{ fencing_token: 7 }] };
+        if (sql.includes('WITH next_object')) return { rows: [] };
+        if (sql.includes('WITH observable_outbox')) {
+          startSnapshot();
+          return snapshotResult;
+        }
+        return { rows: [] };
+      },
+    } as never,
+    blobStore: { delete: async () => {} } as never,
+    config: { enabled: true, intervalMs: 60_000, leaseMs: 60_000, batchSize: 1 },
+    logger: createMaintenanceLogger(),
+  });
+
+  let timeout: NodeJS.Timeout | undefined;
+  const run = maintenance.runNow();
+  try {
+    await snapshotStarted;
+    const completion = await Promise.race([
+      run.then(() => 'completed' as const),
+      new Promise<'timed_out'>((resolve) => {
+        timeout = setTimeout(() => resolve('timed_out'), 1_000);
+      }),
+    ]);
+    assert.equal(completion, 'completed');
+  } finally {
+    if (timeout) clearTimeout(timeout);
+    releaseSnapshot();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    await run;
+    resetStudioMetricsForTests();
+  }
 });
 
 test('managed maintenance blocks live references and retains transient object-store failures for retry', async (context) => {

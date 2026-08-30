@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 
 import type { Pool, PoolClient, QueryResultRow } from 'pg';
 
+import { getStudioMetrics, recordStudioMetrics, type MetricsManagedMaintenancePassOutcome } from '../../../metrics.js';
 import type { ManagedWorkflowBlobStore } from './blob-store.js';
 import { queryOne } from './db.js';
 
@@ -40,6 +41,14 @@ type OutboxRow = QueryResultRow & {
   object_key: string;
   attempt_count: number;
 };
+
+type OutboxMetricsRow = QueryResultRow & {
+  entries: string;
+  oldest_age_seconds: string | null;
+  state: 'blocked' | 'claimed' | 'pending';
+};
+
+const OUTBOX_METRICS_STATES = ['pending', 'claimed', 'blocked'] as const;
 
 const MANAGED_OBJECT_DELETION_ENQUEUE_SQL = `
   INSERT INTO managed_object_deletion_outbox (object_key, domain)
@@ -175,6 +184,67 @@ export function createManagedWorkflowMaintenance(options: {
   let initialized = false;
   let disposed = false;
   let running: Promise<void> | null = null;
+  let lastSuccessfulPassAtMs: number | null = null;
+  let outboxMetricsRefresh: Promise<void> | null = null;
+
+  const recordPass = (outcome: MetricsManagedMaintenancePassOutcome, attemptedAtMs: number): void => {
+    recordStudioMetrics((metrics) => {
+      metrics.setManagedMaintenance({ lastAttemptAtMs: attemptedAtMs, lastSuccessAtMs: lastSuccessfulPassAtMs });
+      metrics.recordManagedMaintenancePass(outcome);
+    });
+  };
+
+  const refreshOutboxMetrics = async (): Promise<void> => {
+    let metrics;
+    try {
+      metrics = getStudioMetrics();
+    } catch {
+      return;
+    }
+    if (!metrics.enabled) return;
+
+    try {
+      const result = await options.pool.query<OutboxMetricsRow>(`
+        WITH observable_outbox AS (
+          SELECT
+            CASE
+              WHEN status = 'pending' AND claim_expires_at > NOW() THEN 'claimed'
+              ELSE status
+            END AS state,
+            enqueued_at
+          FROM managed_object_deletion_outbox
+          WHERE status IN ('pending', 'blocked')
+        )
+        SELECT
+          state,
+          COUNT(*)::text AS entries,
+          GREATEST(0, EXTRACT(EPOCH FROM NOW() - MIN(enqueued_at)))::text AS oldest_age_seconds
+        FROM observable_outbox
+        GROUP BY state
+      `);
+      const entries = { blocked: 0, claimed: 0, pending: 0 };
+      const oldestAgeSeconds = { blocked: 0, claimed: 0, pending: 0 };
+      for (const row of result.rows) {
+        if (!OUTBOX_METRICS_STATES.includes(row.state)) continue;
+        const count = Number(row.entries);
+        const oldestAge = Number(row.oldest_age_seconds ?? '0');
+        entries[row.state] = Number.isFinite(count) && count >= 0 ? count : 0;
+        oldestAgeSeconds[row.state] = Number.isFinite(oldestAge) && oldestAge >= 0 ? oldestAge : 0;
+      }
+      metrics.setManagedObjectDeletionOutbox({ entries, oldestAgeSeconds });
+    } catch {
+      // The snapshot is observational. A transient pool/query failure must not
+      // change the fenced maintenance pass or add an error path to deletion.
+    }
+  };
+  const scheduleOutboxMetricsRefresh = (): void => {
+    if (disposed || outboxMetricsRefresh) return;
+    outboxMetricsRefresh = refreshOutboxMetrics()
+      .catch(() => undefined)
+      .finally(() => {
+        outboxMetricsRefresh = null;
+      });
+  };
 
   const assertCurrent = async (client: PoolClient, fencingToken: number): Promise<void> => {
     const lease = await queryOne<LeaseRow>(
@@ -257,7 +327,7 @@ export function createManagedWorkflowMaintenance(options: {
     errorMessage?: string,
   ): Promise<void> => {
     if (result === 'completed') {
-      await options.pool.query(
+      const updated = await options.pool.query<{ object_key: string }>(
         `
           UPDATE managed_object_deletion_outbox
           SET status = 'completed', completed_at = NOW(), last_error = NULL,
@@ -265,13 +335,17 @@ export function createManagedWorkflowMaintenance(options: {
               updated_at = NOW()
           WHERE object_key = $1 AND status = 'pending'
             AND claim_holder_id = $2 AND claim_fencing_token = $3
+          RETURNING object_key
         `,
         [objectKey, lease.holderId, lease.fencingToken],
       );
+      if (updated.rows.length > 0) {
+        recordStudioMetrics((metrics) => metrics.recordManagedObjectDeletionOutbox('completed'));
+      }
       return;
     }
     if (result === 'blocked') {
-      await options.pool.query(
+      const updated = await options.pool.query<{ object_key: string }>(
         `
           UPDATE managed_object_deletion_outbox
           SET status = 'blocked', last_error = $2,
@@ -279,6 +353,7 @@ export function createManagedWorkflowMaintenance(options: {
               updated_at = NOW()
           WHERE object_key = $1 AND status = 'pending'
             AND claim_holder_id = $3 AND claim_fencing_token = $4
+          RETURNING object_key
         `,
         [
           objectKey,
@@ -287,6 +362,9 @@ export function createManagedWorkflowMaintenance(options: {
           lease.fencingToken,
         ],
       );
+      if (updated.rows.length > 0) {
+        recordStudioMetrics((metrics) => metrics.recordManagedObjectDeletionOutbox('blocked'));
+      }
       return;
     }
   };
@@ -331,7 +409,7 @@ export function createManagedWorkflowMaintenance(options: {
         await markOutboxResult(lease, row.object_key, 'completed');
       } catch (error) {
         const nextDelay = getManagedWorkflowMaintenanceRetryDelayMs(row.attempt_count + 1);
-        await options.pool.query(
+        const retried = await options.pool.query<{ object_key: string }>(
           `
             UPDATE managed_object_deletion_outbox
             SET attempt_count = attempt_count + 1,
@@ -341,6 +419,7 @@ export function createManagedWorkflowMaintenance(options: {
                 updated_at = NOW()
             WHERE object_key = $1 AND status = 'pending'
               AND claim_holder_id = $4 AND claim_fencing_token = $5
+            RETURNING object_key
           `,
           [
             row.object_key,
@@ -350,6 +429,9 @@ export function createManagedWorkflowMaintenance(options: {
             lease.fencingToken,
           ],
         );
+        if (retried.rows.length > 0) {
+          recordStudioMetrics((metrics) => metrics.recordManagedObjectDeletionOutbox('retry'));
+        }
         logger.warn(
           `[managed-maintenance] Object deletion failed for ${row.object_key}; retrying in ${nextDelay}ms.`,
           error,
@@ -369,21 +451,44 @@ export function createManagedWorkflowMaintenance(options: {
 
   const runOnce = async (): Promise<void> => {
     if (!config.enabled || disposed) return;
-    const lease = await acquireLease();
-    if (!lease) return;
 
-    for (const [name, task] of [...tasks.entries()].sort(([left], [right]) => left.localeCompare(right))) {
-      try {
-        await task(lease);
-      } catch (error) {
-        if (error instanceof ManagedWorkflowMaintenanceLeaseLostError) {
-          logger.warn(`[managed-maintenance] Lease was lost while running ${name}; another owner will retry.`);
-          return;
+    const attemptedAtMs = Date.now();
+    let outboxDrained = false;
+    let outcome: MetricsManagedMaintenancePassOutcome = 'not_owner';
+    try {
+      const lease = await acquireLease();
+      if (!lease) return;
+
+      let taskFailed = false;
+      for (const [name, task] of [...tasks.entries()].sort(([left], [right]) => left.localeCompare(right))) {
+        try {
+          await task(lease);
+        } catch (error) {
+          if (error instanceof ManagedWorkflowMaintenanceLeaseLostError) {
+            outcome = 'lease_lost';
+            logger.warn(`[managed-maintenance] Lease was lost while running ${name}; another owner will retry.`);
+            return;
+          }
+          taskFailed = true;
+          logger.error(`[managed-maintenance] Task ${name} failed; the next scheduled pass will retry.`, error);
         }
-        logger.error(`[managed-maintenance] Task ${name} failed; the next scheduled pass will retry.`, error);
       }
+
+      await drainOutbox(lease);
+      outboxDrained = true;
+      if (taskFailed) {
+        outcome = 'failed';
+      } else {
+        outcome = 'completed';
+        lastSuccessfulPassAtMs = Date.now();
+      }
+    } catch (error) {
+      outcome = 'failed';
+      throw error;
+    } finally {
+      recordPass(outcome, attemptedAtMs);
+      if (outboxDrained) scheduleOutboxMetricsRefresh();
     }
-    await drainOutbox(lease);
   };
 
   const schedule = (): void => {

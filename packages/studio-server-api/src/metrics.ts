@@ -46,6 +46,11 @@ export type MetricsObjectStorageOperation = 'delete' | 'delete_many' | 'get' | '
 export type MetricsManagedReconciliationDomain = 'evaluations' | 'runtime_libraries' | 'workflows';
 export type MetricsManagedReconciliationPhase = 'metadata' | 'objects';
 export type MetricsManagedEvaluationRetentionMode = 'audit' | 'enforce';
+export type MetricsManagedMaintenancePassOutcome = 'completed' | 'failed' | 'lease_lost' | 'not_owner';
+export type MetricsManagedObjectDeletionOutboxState = 'blocked' | 'claimed' | 'pending';
+export type MetricsManagedObjectDeletionOutboxOutcome = 'blocked' | 'completed' | 'retry';
+export type MetricsManagedSettingsSynchronizationOutcome = 'failure' | 'success';
+export type MetricsManagedSettingsSynchronizationSource = 'initialization' | 'notification' | 'poll';
 
 export function getMetricsConfig(
   env: NodeJS.ProcessEnv = process.env,
@@ -199,18 +204,74 @@ export class StudioMetrics {
   recordRuntimeLibraryJob(outcome: 'failed' | 'succeeded'): void {
     this.incrementCounter('rivet_runtime_library_jobs_total', { outcome });
   }
+  setManagedMaintenance(input: { lastAttemptAtMs: number; lastSuccessAtMs: number | null }): void {
+    this.setGauge('rivet_managed_maintenance_last_attempt_timestamp_seconds', {}, input.lastAttemptAtMs / 1_000);
+    if (input.lastSuccessAtMs != null) {
+      this.setGauge('rivet_managed_maintenance_last_success_timestamp_seconds', {}, input.lastSuccessAtMs / 1_000);
+    }
+  }
+
+  recordManagedMaintenancePass(outcome: MetricsManagedMaintenancePassOutcome): void {
+    this.incrementCounter('rivet_managed_maintenance_passes_total', { outcome });
+  }
+
+  setManagedObjectDeletionOutbox(input: {
+    entries: Readonly<Record<MetricsManagedObjectDeletionOutboxState, number>>;
+    oldestAgeSeconds: Readonly<Record<MetricsManagedObjectDeletionOutboxState, number>>;
+  }): void {
+    for (const state of ['pending', 'claimed', 'blocked'] as const) {
+      this.setGauge('rivet_managed_object_deletion_outbox_entries', { state }, input.entries[state]);
+      this.setGauge(
+        'rivet_managed_object_deletion_outbox_oldest_entry_age_seconds',
+        { state },
+        input.oldestAgeSeconds[state],
+      );
+    }
+  }
+
+  recordManagedObjectDeletionOutbox(outcome: MetricsManagedObjectDeletionOutboxOutcome): void {
+    this.incrementCounter('rivet_managed_object_deletion_outbox_operations_total', { outcome });
+  }
+
+  setManagedSettingsSynchronization(input: {
+    lastFailureAtMs: number | null;
+    lastSuccessAtMs: number | null;
+    listenerConnected: boolean;
+    pollInFlight: boolean;
+  }): void {
+    this.setGauge('rivet_managed_settings_listener_connected', {}, input.listenerConnected ? 1 : 0);
+    this.setGauge('rivet_managed_settings_poll_in_flight', {}, input.pollInFlight ? 1 : 0);
+    if (input.lastSuccessAtMs != null) {
+      this.setGauge('rivet_managed_settings_last_success_timestamp_seconds', {}, input.lastSuccessAtMs / 1_000);
+    }
+    if (input.lastFailureAtMs != null) {
+      this.setGauge('rivet_managed_settings_last_failure_timestamp_seconds', {}, input.lastFailureAtMs / 1_000);
+    }
+  }
+
+  recordManagedSettingsSynchronization(input: {
+    outcome: MetricsManagedSettingsSynchronizationOutcome;
+    source: MetricsManagedSettingsSynchronizationSource;
+  }): void {
+    this.incrementCounter('rivet_managed_settings_synchronization_total', input);
+  }
 
   recordManagedReconciliationPage(input: {
     domain: MetricsManagedReconciliationDomain;
     outcome: 'error' | 'skipped' | 'success';
     phase: MetricsManagedReconciliationPhase;
+    returnedItems: number;
   }): void {
-    this.incrementCounter('rivet_managed_reconciliation_pages_total', input);
+    const { returnedItems, ...labels } = input;
+    this.incrementCounter('rivet_managed_reconciliation_pages_total', labels);
+    this.incrementCounter('rivet_managed_reconciliation_returned_items_total', labels, returnedItems);
   }
 
   setManagedReconciliationState(input: {
     completedGeneration: number;
     domain: MetricsManagedReconciliationDomain;
+    lastCompletedAtMs: number | null;
+    lastErrorAtMs: number | null;
     openFindings: number;
   }): void {
     this.setGauge(
@@ -219,6 +280,20 @@ export class StudioMetrics {
       input.completedGeneration,
     );
     this.setGauge('rivet_managed_reconciliation_open_findings', { domain: input.domain }, input.openFindings);
+    if (input.lastCompletedAtMs != null) {
+      this.setGauge(
+        'rivet_managed_reconciliation_last_completed_timestamp_seconds',
+        { domain: input.domain },
+        input.lastCompletedAtMs / 1_000,
+      );
+    }
+    if (input.lastErrorAtMs != null) {
+      this.setGauge(
+        'rivet_managed_reconciliation_last_error_timestamp_seconds',
+        { domain: input.domain },
+        input.lastErrorAtMs / 1_000,
+      );
+    }
   }
 
   /**

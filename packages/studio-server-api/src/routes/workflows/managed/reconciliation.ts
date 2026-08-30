@@ -18,6 +18,8 @@ type ReconciliationStateRow = QueryResultRow & {
   cursor: string | null;
   domain: ManagedReconciliationDomain;
   phase: ManagedReconciliationPhase;
+  last_completed_at: Date | string | null;
+  last_error_at: Date | string | null;
 };
 type WorkflowReferenceRow = QueryResultRow & { object_key: string };
 type EvaluationReferenceRow = QueryResultRow & { project_id: string; recording_id: string };
@@ -76,6 +78,11 @@ function toIso(value: Date | string | null): string | null {
   if (!value) return null;
   return value instanceof Date ? value.toISOString() : new Date(value).toISOString();
 }
+function toEpochMs(value: Date | string | null): number | null {
+  if (!value) return null;
+  const parsed = value instanceof Date ? value.getTime() : Date.parse(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
 
 function sameState(left: ReconciliationStateRow, right: ReconciliationStateRow): boolean {
   return (
@@ -96,7 +103,7 @@ async function ensureState(pool: Pool, domain: ManagedReconciliationDomain): Pro
   );
   const result = await pool.query<ReconciliationStateRow>(
     `
-      SELECT domain, phase, cursor, active_generation, completed_generation
+      SELECT domain, phase, cursor, active_generation, completed_generation, last_completed_at, last_error_at
       FROM managed_reconciliation_state
       WHERE domain = $1
     `,
@@ -449,12 +456,12 @@ async function runObjectBackedDomain(input: {
   lease: ManagedWorkflowMaintenanceLease;
   pageSize: number;
   pool: Pool;
-}): Promise<'skipped' | 'success'> {
-  if (!hasObjectScanner(input.store)) return 'skipped';
+}): Promise<{ outcome: 'skipped' | 'success'; returnedItems: number }> {
+  if (!hasObjectScanner(input.store)) return { outcome: 'skipped', returnedItems: 0 };
   const state = await ensureState(input.pool, input.domain);
   if (state.phase === 'metadata') {
     const page = await input.listReferencePage(state.cursor, input.pageSize);
-    if (page.schemaPresent === false) return 'skipped';
+    if (page.schemaPresent === false) return { outcome: 'skipped', returnedItems: 0 };
     const missing = await findMissingKeys(input.store, page.keys);
     await commitPage({
       completion: false,
@@ -466,7 +473,7 @@ async function runObjectBackedDomain(input: {
       nextPhase: page.nextCursor == null ? 'objects' : 'metadata',
       pool: input.pool,
     });
-    return 'success';
+    return { outcome: 'success', returnedItems: page.keys.length };
   }
 
   const page = await input.store.listPage({ cursor: state.cursor ?? undefined, pageSize: input.pageSize });
@@ -498,14 +505,14 @@ async function runObjectBackedDomain(input: {
     nextPhase: completion ? 'metadata' : 'objects',
     pool: input.pool,
   });
-  return 'success';
+  return { outcome: 'success', returnedItems: page.objects.length };
 }
 
 async function runEvaluationDomain(input: {
   lease: ManagedWorkflowMaintenanceLease;
   pageSize: number;
   pool: Pool;
-}): Promise<'success'> {
+}): Promise<{ outcome: 'success'; returnedItems: number }> {
   const state = await ensureState(input.pool, 'evaluations');
   const page = await listEvaluationReferencePage(input.pool, state.cursor, input.pageSize);
   const completion = page.nextCursor == null;
@@ -519,7 +526,7 @@ async function runEvaluationDomain(input: {
     nextPhase: 'metadata',
     pool: input.pool,
   });
-  return 'success';
+  return { outcome: 'success', returnedItems: page.findings.length };
 }
 
 /**
@@ -563,14 +570,23 @@ export function createManagedReconciliationTask(options: {
                   store: options.runtimeLibrariesBlobStore,
                 })
               : await runEvaluationDomain({ lease, pageSize, pool: options.pool });
-        recordStudioMetrics((metrics) => metrics.recordManagedReconciliationPage({ domain, outcome: result, phase }));
+        recordStudioMetrics((metrics) =>
+          metrics.recordManagedReconciliationPage({
+            domain,
+            outcome: result.outcome,
+            phase,
+            returnedItems: result.returnedItems,
+          }),
+        );
       } catch {
         await markDomainFailure(options.pool, lease, domain);
         // Do not include raw object keys or provider exceptions in logs: those
         // values can contain tenant data. Operators inspect bounded summaries
         // and authorized database findings instead.
         console.warn(`[managed-reconciliation] ${domain} audit page failed; a later fenced pass will retry.`);
-        recordStudioMetrics((metrics) => metrics.recordManagedReconciliationPage({ domain, outcome: 'error', phase }));
+        recordStudioMetrics((metrics) =>
+          metrics.recordManagedReconciliationPage({ domain, outcome: 'error', phase, returnedItems: 0 }),
+        );
       }
       const state = await ensureState(options.pool, domain);
       const client = await options.pool.connect();
@@ -580,6 +596,8 @@ export function createManagedReconciliationTask(options: {
           metrics.setManagedReconciliationState({
             completedGeneration: toFiniteInteger(state.completed_generation),
             domain,
+            lastCompletedAtMs: toEpochMs(state.last_completed_at),
+            lastErrorAtMs: toEpochMs(state.last_error_at),
             openFindings,
           }),
         );
@@ -665,14 +683,13 @@ export async function getManagedReconciliationStatus(pool: Pool): Promise<{
       openFindingCount: countByDomain.get(state.domain) ?? 0,
       phase: state.phase,
       scanStartedAt,
-      scanStatus:
-        lastErrorAt
-          ? 'error'
-          : scanStartedAt
-            ? 'running'
-            : toFiniteInteger(state.completed_generation) > 0
-              ? 'idle'
-              : 'not-started',
+      scanStatus: lastErrorAt
+        ? 'error'
+        : scanStartedAt
+          ? 'running'
+          : toFiniteInteger(state.completed_generation) > 0
+            ? 'idle'
+            : 'not-started',
     };
   });
   return {

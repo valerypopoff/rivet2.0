@@ -51,14 +51,31 @@ test('metrics registry renders only finite, fixed-label metric families', () => 
   metrics.recordHostedEvaluationSubmission('outstanding_capacity_exceeded');
   metrics.setHostedEvaluationQueue({ accepted: 1, claimed: 2, maxOutstandingJobs: 24, queued: 3 });
   metrics.setHostedEvaluationWorkers({ activeTrials: 2, workerConcurrency: 4 });
+  metrics.setManagedMaintenance({ lastAttemptAtMs: 1_000, lastSuccessAtMs: 900 });
+  metrics.recordManagedMaintenancePass('completed');
+  metrics.setManagedObjectDeletionOutbox({
+    entries: { blocked: 1, claimed: 2, pending: 3 },
+    oldestAgeSeconds: { blocked: 12, claimed: 8, pending: 4 },
+  });
+  metrics.recordManagedObjectDeletionOutbox('blocked');
+  metrics.setManagedSettingsSynchronization({
+    lastFailureAtMs: 800,
+    lastSuccessAtMs: 1_000,
+    listenerConnected: true,
+    pollInFlight: false,
+  });
+  metrics.recordManagedSettingsSynchronization({ outcome: 'success', source: 'poll' });
   metrics.recordManagedReconciliationPage({
     domain: 'runtime_libraries',
     outcome: 'success',
     phase: 'objects',
+    returnedItems: 4,
   });
   metrics.setManagedReconciliationState({
     completedGeneration: 2,
     domain: 'runtime_libraries',
+    lastCompletedAtMs: 900,
+    lastErrorAtMs: 800,
     openFindings: 3,
   });
   metrics.setManagedEvaluationRetention({
@@ -102,6 +119,31 @@ test('metrics registry renders only finite, fixed-label metric families', () => 
   assert.match(
     rendered,
     /rivet_managed_reconciliation_open_findings\{domain="runtime_libraries",profile="execution"\} 3/,
+  );
+  assert.match(rendered, /rivet_managed_maintenance_passes_total\{outcome="completed",profile="execution"\} 1/);
+  assert.match(rendered, /rivet_managed_maintenance_last_attempt_timestamp_seconds\{profile="execution"\} 1/);
+  assert.match(rendered, /rivet_managed_maintenance_last_success_timestamp_seconds\{profile="execution"\} 0\.9/);
+  assert.match(rendered, /rivet_managed_object_deletion_outbox_entries\{profile="execution",state="blocked"\} 1/);
+  assert.match(
+    rendered,
+    /rivet_managed_object_deletion_outbox_oldest_entry_age_seconds\{profile="execution",state="pending"\} 4/,
+  );
+  assert.match(
+    rendered,
+    /rivet_managed_object_deletion_outbox_operations_total\{outcome="blocked",profile="execution"\} 1/,
+  );
+  assert.match(rendered, /rivet_managed_settings_listener_connected\{profile="execution"\} 1/);
+  assert.match(
+    rendered,
+    /rivet_managed_settings_synchronization_total\{outcome="success",profile="execution",source="poll"\} 1/,
+  );
+  assert.match(
+    rendered,
+    /rivet_managed_reconciliation_returned_items_total\{domain="runtime_libraries",outcome="success",phase="objects",profile="execution"\} 4/,
+  );
+  assert.match(
+    rendered,
+    /rivet_managed_reconciliation_last_completed_timestamp_seconds\{domain="runtime_libraries",profile="execution"\} 0\.9/,
   );
   assert.match(
     rendered,
