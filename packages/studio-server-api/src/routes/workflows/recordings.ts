@@ -149,6 +149,7 @@ function toWorkflowRecordingRunSummary(row: WorkflowRecordingRunRow): WorkflowRe
     status: row.status,
     durationMs: row.durationMs,
     endpointNameAtExecution: row.endpointNameAtExecution,
+    executionIdentity: row.executionIdentity,
     errorMessage: row.errorMessage,
     hasReplayDataset: row.hasReplayDataset,
     recordingCompressedBytes: row.recordingCompressedBytes,

@@ -55,7 +55,7 @@ function promoted(overrides = {}) {
 
 test('release manifest reads the source-owned managed schema contract', () => {
   assert.deepEqual(readManagedWorkflowSchemaReleaseContract(rootDir), {
-    version: 7,
+    version: 8,
     minimumRollbackCompatibleVersion: 2,
   });
 });
@@ -138,7 +138,7 @@ test('only promoted manifests can produce production Helm values', () => {
   const values = createProductionHelmValues(promoted());
   assert.equal(values.release.production.enabled, true);
   assert.equal(values.images.api.digest, digest('c'));
-  assert.deepEqual(values.workflowSchema.compatibility, { minimumVersion: 7, maximumVersion: 7 });
+  assert.deepEqual(values.workflowSchema.compatibility, { minimumVersion: 8, maximumVersion: 8 });
   assert.equal(values.workflowSchema.migrationJob.enabled, true);
 });
 
@@ -190,8 +190,8 @@ test('forward rollback refuses a schema that did not declare the previous releas
       ...promoted(),
       database: {
         managedWorkflowSchema: {
-          version: 8,
-          minimumRollbackCompatibleVersion: 8,
+          version: 9,
+          minimumRollbackCompatibleVersion: 9,
         },
       },
     },

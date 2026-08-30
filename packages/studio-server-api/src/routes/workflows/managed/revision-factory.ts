@@ -9,6 +9,7 @@ import {
 import { withManagedDbRetry, type ManagedWorkflowDbClient } from './db.js';
 import { RECORDING_COLUMNS } from './mappers.js';
 import { resolveManagedHostedProjectSaveTarget } from './save-target.js';
+import { normalizeRivetCorrelationId } from '../../../request-correlation.js';
 import { getWorkflowProjectStatsFromContents } from '../project-stats.js';
 import type {
   ManagedRevisionContents,
@@ -178,8 +179,8 @@ export function createManagedWorkflowRevisionFactory(options: {
       const identity = row.executionIdentity;
       const valuesClause =
         options.timestampMode === 'provided'
-          ? 'VALUES ($1, $2, $3, $4, $5::timestamptz, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30)'
-          : 'VALUES ($1, $2, $3, $4, NOW(), $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29)';
+          ? 'VALUES ($1, $2, $3, $4, $5::timestamptz, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31)'
+          : 'VALUES ($1, $2, $3, $4, NOW(), $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30)';
       const params =
         options.timestampMode === 'provided'
           ? [
@@ -202,6 +203,7 @@ export function createManagedWorkflowRevisionFactory(options: {
               identity?.componentId ?? null,
               identity?.componentType ?? null,
               identity?.componentLabel ?? null,
+              normalizeRivetCorrelationId(identity?.correlationId) ?? null,
               row.errorMessage,
               row.recordingBlobKey,
               row.replayProjectBlobKey,
@@ -233,6 +235,7 @@ export function createManagedWorkflowRevisionFactory(options: {
               identity?.componentId ?? null,
               identity?.componentType ?? null,
               identity?.componentLabel ?? null,
+              normalizeRivetCorrelationId(identity?.correlationId) ?? null,
               row.errorMessage,
               row.recordingBlobKey,
               row.replayProjectBlobKey,

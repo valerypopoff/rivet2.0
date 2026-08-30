@@ -16,6 +16,7 @@ import type {
 } from '../../../../../studio-server-shared/workflow-recording-types.js';
 import { WORKFLOW_PROJECT_EXTENSION } from '../../../../../studio-server-shared/workflow-types.js';
 import { createHttpError } from '../../../utils/httpError.js';
+import { normalizeRivetCorrelationId } from '../../../request-correlation.js';
 import { getWorkflowRecordingConfig, type WorkflowRecordingConfig } from '../recordings-config.js';
 import { parseManagedWorkflowProjectVirtualPath } from '../virtual-paths.js';
 import type { ManagedWorkflowBlobStore } from './blob-store.js';
@@ -75,6 +76,7 @@ function getExecutionIdentity(row: RecordingRow) {
     componentId: row.component_id_at_execution ?? undefined,
     componentType: row.component_type_at_execution ?? undefined,
     componentLabel: row.component_label_at_execution ?? undefined,
+    correlationId: normalizeRivetCorrelationId(row.correlation_id) ?? undefined,
   } as const;
 }
 

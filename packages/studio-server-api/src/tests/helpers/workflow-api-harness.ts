@@ -5,6 +5,7 @@ import type { NextFunction, Request, Response as ExpressResponse, Router } from 
 
 import type { WebAppActionWebSocketRuntime } from '../../web-app-action-websocket.js';
 
+import { createRequestCorrelationMiddleware } from '../../request-correlation.js';
 import { listenTestServer } from './http-server-harness.js';
 
 type InitializeWorkflowStorage = () => Promise<void>;
@@ -107,6 +108,7 @@ export function createWorkflowApiServerHarness(options: WorkflowApiServerHarness
 
     const app = express();
     app.use(express.json({ strict: false }));
+    app.use(createRequestCorrelationMiddleware());
     app.use('/workflows', options.workflowsRouter);
     attachJsonFallbackHandlers(app);
 
@@ -127,6 +129,7 @@ export function createWorkflowExecutionServerHarness(options: WorkflowExecutionS
 
     const app = express();
     app.use(express.json({ strict: false }));
+    app.use(createRequestCorrelationMiddleware());
     app.use('/api/workflows', options.workflowsRouter);
     app.use('/workflows', options.publishedWorkflowsRouter);
     if (options.publishedWebAppsRouter) {

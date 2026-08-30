@@ -5,7 +5,7 @@ import type { Pool, PoolClient, QueryResultRow } from 'pg';
 import { MANAGED_WORKFLOW_SCHEMA_SQL } from './schema.js';
 
 export const MANAGED_WORKFLOW_SCHEMA_MIGRATIONS_TABLE = 'managed_workflow_schema_migrations';
-export const CURRENT_MANAGED_WORKFLOW_SCHEMA_VERSION = 7;
+export const CURRENT_MANAGED_WORKFLOW_SCHEMA_VERSION = 8;
 // A serving release may verify an additive schema created by its immediate
 // successor only when the chart deliberately supplies that compatibility
 // window. Keep this constant explicit: raising it is the release-engineering
@@ -270,6 +270,13 @@ function checksumSql(sql: string): string {
   return createHash('sha256').update(sql).digest('hex');
 }
 
+const MANAGED_WORKFLOW_RECORDING_CORRELATION_SQL = [
+  '',
+  'ALTER TABLE workflow_recordings',
+  '  ADD COLUMN IF NOT EXISTS correlation_id TEXT NULL',
+  '  CHECK (correlation_id IS NULL OR char_length(correlation_id) BETWEEN 16 AND 96);',
+  '',
+].join('\n');
 export const MANAGED_WORKFLOW_SCHEMA_MIGRATIONS: readonly ManagedWorkflowSchemaMigration[] = [
   {
     version: 1,
@@ -312,6 +319,12 @@ export const MANAGED_WORKFLOW_SCHEMA_MIGRATIONS: readonly ManagedWorkflowSchemaM
     name: 'managed-evaluation-retention-indexes',
     sql: MANAGED_EVALUATION_RETENTION_INDEX_SQL,
     checksum: 'f59063f1e999390b488d409eebe3c8c36880943b2848e655fb81b39fb027b4a9',
+  },
+  {
+    version: 8,
+    name: 'workflow-recording-correlation',
+    sql: MANAGED_WORKFLOW_RECORDING_CORRELATION_SQL,
+    checksum: '5e58ca90c2f9f0233e5933ea7055614b61ce804cb67f8c1729fbe7d18084e207',
   },
 ];
 
@@ -526,6 +539,7 @@ export const MANAGED_WORKFLOW_SCHEMA_REQUIRED_COLUMNS = [
   ['workflow_recordings', 'graph_id_at_execution', 'text', 'YES'],
   ['workflow_recordings', 'graph_name_at_execution', 'text', 'YES'],
   ['workflow_recordings', 'revision_key_at_execution', 'text', 'YES'],
+  ['workflow_recordings', 'correlation_id', 'text', 'YES'],
   ['workflow_recordings', 'ui_graph_id_at_execution', 'text', 'YES'],
   ['workflow_recordings', 'ui_graph_name_at_execution', 'text', 'YES'],
   ['workflow_recordings', 'web_app_slug_at_execution', 'text', 'YES'],

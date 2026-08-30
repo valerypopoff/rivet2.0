@@ -722,6 +722,8 @@ test('published and latest workflows inject request headers into context', async
   await withWorkflowExecutionServer(async ({ publishedBaseUrl, latestBaseUrl }) => {
     const requestHeaders = {
       'Content-Type': 'application/json',
+      'X-Rivet-Correlation-Id': 'client-selected-correlation-id',
+      'X-Rivet-Proxy-Auth': 'client-selected-proxy-auth',
       'X-Storyteller-Header': 'published-request-header',
     };
 
@@ -733,10 +735,14 @@ test('published and latest workflows inject request headers into context', async
     });
 
     assert.equal(publishedResponse.ok, true);
+    const publishedCorrelationId = publishedResponse.headers.get('x-rivet-correlation-id');
+    assert.match(publishedCorrelationId ?? '', /^rvt-[a-f0-9-]{36}$/);
 
     const publishedBody = await publishedResponse.json() as Record<string, unknown>;
     assert.equal(publishedBody['x-storyteller-header'], 'published-request-header');
     assert.equal(publishedBody['content-type'], 'application/json');
+    assert.equal(publishedBody['x-rivet-correlation-id'], publishedCorrelationId);
+    assert.equal(Object.hasOwn(publishedBody, 'x-rivet-proxy-auth'), false);
     assert.equal(typeof publishedBody.durationMs, 'number');
 
     const latestResponse = await fetch(`${latestBaseUrl}/headers-context-endpoint`, {
@@ -747,10 +753,15 @@ test('published and latest workflows inject request headers into context', async
     });
 
     assert.equal(latestResponse.ok, true);
+    const latestCorrelationId = latestResponse.headers.get('x-rivet-correlation-id');
+    assert.match(latestCorrelationId ?? '', /^rvt-[a-f0-9-]{36}$/);
+    assert.notEqual(latestCorrelationId, publishedCorrelationId);
 
     const latestBody = await latestResponse.json() as Record<string, unknown>;
     assert.equal(latestBody['x-storyteller-header'], 'published-request-header');
     assert.equal(latestBody['content-type'], 'application/json');
+    assert.equal(latestBody['x-rivet-correlation-id'], latestCorrelationId);
+    assert.equal(Object.hasOwn(latestBody, 'x-rivet-proxy-auth'), false);
     assert.equal(typeof latestBody.durationMs, 'number');
   });
 });

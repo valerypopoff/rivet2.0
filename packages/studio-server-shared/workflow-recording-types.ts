@@ -20,6 +20,7 @@ export type WorkflowRecordingExecutionIdentity = {
   componentId?: string;
   componentType?: 'button' | 'chat';
   componentLabel?: string;
+  correlationId?: string;
 };
 
 export type WorkflowRecordingFilterStatus = 'all' | 'failed';

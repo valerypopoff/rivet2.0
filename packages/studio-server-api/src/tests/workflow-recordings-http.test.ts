@@ -39,6 +39,8 @@ test('published and latest workflow execution create replayable recordings that 
     });
     assert.equal(publishedResponse.ok, true);
 
+    const publishedCorrelationId = publishedResponse.headers.get('x-rivet-correlation-id');
+    assert.match(publishedCorrelationId ?? '', /^rvt-[a-f0-9-]{36}$/);
     const latestResponse = await fetch(`${latestBaseUrl}/recorded-endpoint`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -46,6 +48,8 @@ test('published and latest workflow execution create replayable recordings that 
     });
     assert.equal(latestResponse.ok, true);
 
+    const latestCorrelationId = latestResponse.headers.get('x-rivet-correlation-id');
+    assert.match(latestCorrelationId ?? '', /^rvt-[a-f0-9-]{36}$/);
     const workflowsResponse = await waitForRecordingWorkflows(
       apiBaseUrl,
       (workflows) => workflows[0]?.totalRuns === 2,
@@ -69,6 +73,7 @@ test('published and latest workflow execution create replayable recordings that 
         id: string;
         runKind: string;
         status: string;
+        executionIdentity?: { correlationId?: string };
       }>;
     }>(await fetch(`${apiBaseUrl}/recordings/workflows/${encodeURIComponent(workflowId)}/runs?page=1&pageSize=20&status=all`));
 
@@ -86,6 +91,10 @@ test('published and latest workflow execution create replayable recordings that 
     const sourceProject = await rivetNode.loadProjectFromFile(created.absolutePath);
     const recordingsRoot = workflowFs.getWorkflowProjectRecordingsRoot(workflowFs.getWorkflowRecordingsRoot(workflowsRoot), sourceProject.metadata.id);
 
+    assert.deepEqual(
+      runsResponse.runs.map((recording) => recording.executionIdentity?.correlationId).sort(),
+      [latestCorrelationId, publishedCorrelationId].sort(),
+    );
     for (const recording of runsResponse.runs) {
       const bundlePath = path.join(recordingsRoot, recording.id);
       const recordingPath = workflowFs.getWorkflowRecordingPath(bundlePath);

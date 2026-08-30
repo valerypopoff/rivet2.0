@@ -439,7 +439,7 @@ Set `workflowSchema.migrationJob.enabled=false` only when an external delivery p
 
 ### Managed maintenance
 
-Migration 3 adds the managed-maintenance lease and durable object-deletion outbox. Migration 4 adds durable reconciliation checkpoints and integrity findings. A normal release verifies exactly schema `4` and its migration Job also runs at that exact version. Migration 4 is additive, so a guarded **forward rollback** may render the prior v3 image with compatibility `2..4`; that old image can verify the newer additive schema without attempting to reverse DDL. Do not give a normal v4 release that widened window: a v4 pod must fail if its required v4 objects are absent.
+Migration 3 adds the managed-maintenance lease and durable object-deletion outbox. Migration 4 adds durable reconciliation checkpoints and integrity findings. Migrations 5 through 7 add the hosted-Evaluation coordinator, outstanding-work index, and Evaluation-retention indexes. Migration 8 adds the nullable workflow-recordings correlation_id with a 16-to-96-character database check. A normal release verifies exactly the current schema version, presently `8`, and its migration Job applies that exact version before serving pods start. Every current migration is additive, but a guarded **forward rollback** must use only the compatibility window declared by the promoted release manifest; never copy a historical `2..4` window or widen a normal serving release merely to bypass verification.
 
 Only the singleton `control` API pod receives `RIVET_MANAGED_MAINTENANCE_ENABLED=true`. The scalable `execution` Deployment receives `false`, so published endpoint traffic cannot create one global retention scan per replica or allocate the reconciliation-only runtime-library S3 client. Helm owns this boundary and the `managedMaintenance.intervalMs` (default `300000`), `leaseMs` (default `60000`), and `batchSize` (default `100`) values; `env` overrides for those variables are rejected. The worker uses a PostgreSQL fencing token, so a stale control pod cannot commit the recording-retention mutation after a successor owns the lease. Each pass selects candidates in PostgreSQL and removes at most `batchSize` recording rows while holding the fence, so a large backlog converges without loading its history into the API process or using one unbounded transaction. Recording/replay object keys are queued in the same transaction as removed metadata, then deleted only after a fresh database-reference recheck. Temporary blob-store failures retry with exponential backoff; still-referenced keys become `blocked` rather than being removed. A later deletion intent reopens a blocked key, because its final reference may have been removed after the earlier safety check.
 
@@ -758,6 +758,12 @@ The current metric families are intentionally low-cardinality and contain no pro
 - durable deletion-outbox entries and oldest entry age by the fixed pending, claimed, and blocked states;
 - managed App Settings synchronization timestamps, listener/poll state, and bounded source/outcome counters; and
 - reconciliation page outcomes, returned work-item counts, durable completion/error timestamps, and open finding counts.
+
+#### Request correlation
+
+Each proxy template overwrites any client-provided `X-Rivet-Correlation-Id` with Nginx's `$request_id`. The API accepts the forwarded value only when the internal proxy-auth header validates; direct callers receive a generated `rvt-UUID`. The API echoes the ID in its response header, exposes it to CORS callers, adds it to sanitized graph request context, and retains it in filesystem SQLite or managed PostgreSQL recording identity. The proxy-auth header itself is never passed to graph context.
+
+The correlation ID is a bounded diagnostic field, not a Prometheus label. Do not add it, a workflow name, prompts, input values, credentials, or error text to metrics. Executor and hosted-Evaluation structured-log/trace propagation are planned follow-up work, so today the reliable join is proxy/API log or retained recording identity rather than a distributed trace.
 
 #### Control-plane freshness and backlog reference
 

@@ -33,6 +33,7 @@ server {
     server_name _;
 
     client_max_body_size 100m;
+    proxy_set_header X-Rivet-Correlation-Id $request_id;
 
     set $api_upstream http://api:80;
     set $execution_upstream http://api:80;

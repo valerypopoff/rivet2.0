@@ -7,6 +7,7 @@ import type {
   WorkflowRecordingStatus,
 } from '../../../../studio-server-shared/workflow-recording-types.js';
 import type { WorkflowRecordingRunRow } from './recordings-db.js';
+import { normalizeRivetCorrelationId } from '../../request-correlation.js';
 import {
   getWorkflowRecordingMetadataPath,
   pathExists,
@@ -126,6 +127,7 @@ function normalizeExecutionIdentity(value: unknown): WorkflowRecordingExecutionI
     componentId: optionalString('componentId'),
     componentType: componentType === 'button' || componentType === 'chat' ? componentType : undefined,
     componentLabel: optionalString('componentLabel'),
+    correlationId: normalizeRivetCorrelationId(optionalString('correlationId')) ?? undefined,
   };
 }
 

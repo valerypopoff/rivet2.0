@@ -51,6 +51,7 @@ const RECORDING_COLUMN_NAMES = [
   'component_id_at_execution',
   'component_type_at_execution',
   'component_label_at_execution',
+  'correlation_id',
   'error_message',
   'recording_blob_key',
   'replay_project_blob_key',

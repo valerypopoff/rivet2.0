@@ -39,6 +39,7 @@ function createRecordingRow(
     component_id_at_execution: null,
     component_type_at_execution: null,
     component_label_at_execution: null,
+    correlation_id: null,
     error_message: null,
     recording_blob_key: `${recordingId}/recording`,
     replay_project_blob_key: `${recordingId}/project`,
@@ -108,6 +109,7 @@ test('managed recording statistics preserve web-app action identity and run-kind
     component_id_at_execution: 'generate',
     component_type_at_execution: 'button',
     component_label_at_execution: 'Generate report',
+    correlation_id: 'rvt-managed-recording-12345',
   };
   const context = {
     pool: {},
@@ -158,6 +160,10 @@ test('managed recording statistics preserve web-app action identity and run-kind
     [{ surface: 'web_app', workflowId: 'workflow-a', uiGraphId: 'ui-report', componentId: 'generate' }],
   );
   assert.equal(catalog.targets[0]?.componentLabel, 'Generate report');
+  const page = await service.listWorkflowRecordingRunsPage('workflow-a', 1, 20, 'all');
+  assert.equal(page.runs.length, 1);
+  assert.equal(page.runs[0]?.executionIdentity?.correlationId, 'rvt-managed-recording-12345');
+
 });
 
 test('managed startup cleanup queues only the bounded claimed recording batch', async () => {

@@ -33,6 +33,7 @@ server {
     server_name _;
 
     client_max_body_size 100m;
+    proxy_set_header X-Rivet-Correlation-Id $request_id;
 
     set $web_upstream http://${RIVET_WEB_UPSTREAM_HOST}:${RIVET_WEB_UPSTREAM_PORT};
     set $api_upstream http://${RIVET_API_UPSTREAM_HOST}:${RIVET_API_UPSTREAM_PORT};

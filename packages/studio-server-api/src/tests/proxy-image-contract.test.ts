@@ -117,6 +117,12 @@ test('proxy templates route public workflow traffic to the right API plane', () 
   );
 });
 
+test('proxy templates replace client correlation IDs before forwarding requests', () => {
+  for (const template of readProxyTemplates()) {
+    assert.match(template, /proxy_set_header X-Rivet-Correlation-Id \$request_id;/);
+  }
+});
+
 test('proxy UI gate prompt is API-rendered and receives the original route', () => {
   const proxyBootstrap = readRepoFile('deploy/studio-server/images/proxy/normalize-workflow-paths.sh');
   const proxyDockerfile = readRepoFile('deploy/studio-server/images/proxy/Dockerfile');

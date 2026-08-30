@@ -22,6 +22,7 @@ import {
   type ManagedPostgresPoolLease,
 } from './managed-postgres-pool.js';
 import type { RuntimeHealthCheckContext } from './runtime-health.js';
+import { getRequestCorrelationId } from './request-correlation.js';
 import { getManagedDbConnectionConfig, getManagedDbPoolConfig } from './routes/workflows/managed/db.js';
 import { getManagedWorkflowStorageConfig, isManagedWorkflowStorageEnabled } from './routes/workflows/storage-config.js';
 import {
@@ -234,6 +235,7 @@ export async function initializeWebAppActionWebSockets(server: Server): Promise<
                   actionContext.uiGraph,
                   actionContext.component,
                   route.slug,
+                  getRequestCorrelationId(req),
                 ),
               });
             },

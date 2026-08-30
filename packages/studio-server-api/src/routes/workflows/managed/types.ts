@@ -117,6 +117,7 @@ export type RecordingRow = {
   component_id_at_execution: string | null;
   component_type_at_execution: 'button' | 'chat' | null;
   component_label_at_execution: string | null;
+  correlation_id: string | null;
   error_message: string | null;
   recording_blob_key: string;
   replay_project_blob_key: string;

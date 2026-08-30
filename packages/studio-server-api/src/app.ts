@@ -49,6 +49,11 @@ import { captureAppSettingsSnapshot } from './middleware/app-settings-snapshot.j
 import { getManagedPostgresPoolMetrics } from './managed-postgres-pool.js';
 import { getStudioMetrics, type MetricsHttpRoute, type StudioMetrics } from './metrics.js';
 import { getWorkflowExecutionRecordingPersistenceMetrics } from './routes/workflows/recordings.js';
+import {
+  createRequestCorrelationMiddleware,
+  getRequestCorrelationId,
+  RIVET_CORRELATION_HEADER,
+} from './request-correlation.js';
 
 type RuntimeExpressRouter = {
   handle: (req: Request, res: Response, next: NextFunction) => void;
@@ -217,6 +222,7 @@ function createCorsOptions(req: Request) {
     credentials: true,
     origin: origin && isCorsOriginAllowed(req, origin) ? origin : false,
     optionsSuccessStatus: 204,
+    exposedHeaders: [RIVET_CORRELATION_HEADER],
   };
 }
 
@@ -342,6 +348,7 @@ export function createApiApp(profile = getApiRuntimeProfile(), options: ApiAppOp
       callback(null, createCorsOptions(req));
     }),
   );
+  app.use(createRequestCorrelationMiddleware());
 
   if (metrics.enabled) {
     app.get('/metrics', (_req, res) => sendMetrics(metrics, health, res));
@@ -378,10 +385,10 @@ export function createApiApp(profile = getApiRuntimeProfile(), options: ApiAppOp
     res.status(404).json({ error: 'Not found' });
   });
 
-  app.use((err: Error, _req: Request, res: Response, _next: NextFunction) => {
+  app.use((err: Error, req: Request, res: Response, _next: NextFunction) => {
     const response = getApiErrorResponse(err);
     if (response.status >= 500) {
-      console.error('Unhandled API error:', err);
+      console.error('[' + getRequestCorrelationId(req) + '] Unhandled API error:', err);
     }
     res.status(response.status).json(response.body);
   });
