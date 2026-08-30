@@ -25,6 +25,7 @@ import { PostgresRivetEvaluationStore } from "../evaluation-runs/managed-store.j
 import {
   evaluationRecordingSchema,
   evaluationRunSchema,
+  hostedSubmissionSchema,
   MAX_EVALUATION_RECORDING_BYTES,
 } from "../routes/workflows/evaluation-runs.js";
 import { createHttpEvaluationStore } from "../../../studio-server-shared/evaluationRunHttpStore.js";
@@ -358,6 +359,24 @@ test("evaluation run API accepts v2 writes and rejects legacy write envelopes", 
   ];
   assert.equal(
     evaluationRunSchema.safeParse(missingTrialQuality).success,
+    false,
+  );
+});
+
+test("hosted Evaluation submission preserves the immutable normal-dataset sidecar", () => {
+  const submission = {
+    projectContents: "---\nmetadata: {}\n",
+    projectPath: "tests/evaluation.rivet-project",
+    datasetsContents: "version: 1\ndatasets: []\n",
+    evaluationData: { version: 1, suites: [], baselines: [] },
+    dataset: { id: "dataset", name: "Dataset", fields: [], cases: [] },
+    suiteId: "suite",
+    purpose: "evaluation",
+    contextValues: { profile: { type: "string", value: "production" } },
+  };
+  assert.equal(hostedSubmissionSchema.safeParse(submission).success, true);
+  assert.equal(
+    hostedSubmissionSchema.safeParse({ ...submission, datasetsContents: "" }).success,
     false,
   );
 });

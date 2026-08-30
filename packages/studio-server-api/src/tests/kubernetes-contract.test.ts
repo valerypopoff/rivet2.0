@@ -87,6 +87,16 @@ test('rendered chart keeps control-plane and execution-plane API env contracts d
     'endpoint-serving replicas must never each schedule global managed maintenance',
   );
   assert.equal(
+    (renderedChart.match(/name: RIVET_HOSTED_EVALUATIONS_ENABLED\s*\n\s*value: "false"/g) ?? []).length,
+    2,
+    'hosted Evaluation dispatch stays explicitly disabled until the managed execution tier is provisioned for it',
+  );
+  assert.match(
+    renderedChart,
+    /name: RIVET_API_PROFILE\s*\n\s*value: "execution"[\s\S]*?name: RIVET_HOSTED_EVALUATIONS_WORKER_CONCURRENCY\s*\n\s*value: "1"[\s\S]*?name: RIVET_HOSTED_EVALUATIONS_LEASE_MS\s*\n\s*value: "60000"[\s\S]*?name: RIVET_HOSTED_EVALUATIONS_POLL_MS\s*\n\s*value: "1000"/,
+    'execution pods receive the bounded hosted Evaluation scheduler policy',
+  );
+  assert.equal(
     (
       renderedChart.match(
         /name: RIVET_RUNNER_SLOT_ID\s*\n\s*valueFrom:\s*\n\s*fieldRef:\s*\n\s*fieldPath: metadata\.name/g,
@@ -182,6 +192,29 @@ test('rendered chart keeps control-plane and execution-plane API env contracts d
     /name: RIVET_STORAGE_MODE\b|name: RIVET_DATABASE_MODE\b|name: RIVET_DATABASE_CONNECTION_STRING\b|name: RIVET_STORAGE_ACCESS_KEY_ID\b/,
   );
   assert.doesNotMatch(renderedChart, /RIVET_WEB_APPS_AUTH_MODE|OAUTH_CLIENT_SECRET|OAUTH_AUTHORIZE_URL/);
+});
+
+test('chart validates hosted Evaluation scheduler settings and keeps its environment chart-owned', async () => {
+  await assertHelmTemplateFails(
+    ['hostedEvaluations.workerConcurrency=0'],
+    /hostedEvaluations\.workerConcurrency must be an integer between 1 and 8/,
+  );
+  await assertHelmTemplateFails(
+    ['hostedEvaluations.leaseMs=14000'],
+    /hostedEvaluations\.leaseMs must be an integer between 15000 and 600000/,
+  );
+  await assertHelmTemplateFails(
+    ['env.RIVET_HOSTED_EVALUATIONS_ENABLED=true'],
+    /env\.RIVET_HOSTED_EVALUATIONS_ENABLED is chart-owned; configure hostedEvaluations instead/,
+  );
+  await assertHelmTemplateFails(
+    ['hostedEvaluations.enabled=true', 'autoscaling.execution.enabled=false', 'replicaCount.execution=0'],
+    /hostedEvaluations\.enabled requires at least one execution API replica/,
+  );
+  await assertHelmTemplateFails(
+    ['hostedEvaluations.enabled=true', 'autoscaling.execution.enabled=true', 'autoscaling.execution.minReplicas=0'],
+    /hostedEvaluations\.enabled requires at least one execution API replica/,
+  );
 });
 
 test('chart owns the published execution admission policy only on execution API pods', async () => {
@@ -327,11 +360,11 @@ test('chart serializes managed workflow migrations before verify-only API worklo
   assert.match(chartHelpers, /vault\.hashicorp\.com\/agent-pre-populate-only: "true"/);
   assert.match(
     renderedChart,
-    /bootstrap-deployment-storage-settings\.mjs; RIVET_APP_SETTINGS_BACKEND=file RIVET_MANAGED_WORKFLOW_SCHEMA_MIN_VERSION="4" RIVET_MANAGED_WORKFLOW_SCHEMA_MAX_VERSION="4" node \/app\/packages\/studio-server-api\/dist\/studio-server-api\/src\/scripts\/migrate-managed-workflow-schema\.js migrate; node \/app\/packages\/studio-server-api\/dist\/studio-server-api\/src\/scripts\/import-managed-app-settings\.js/,
+    /bootstrap-deployment-storage-settings\.mjs; RIVET_APP_SETTINGS_BACKEND=file RIVET_MANAGED_WORKFLOW_SCHEMA_MIN_VERSION="5" RIVET_MANAGED_WORKFLOW_SCHEMA_MAX_VERSION="5" node \/app\/packages\/studio-server-api\/dist\/studio-server-api\/src\/scripts\/migrate-managed-workflow-schema\.js migrate; node \/app\/packages\/studio-server-api\/dist\/studio-server-api\/src\/scripts\/import-managed-app-settings\.js/,
   );
   assert.match(
     renderedChartWithRollbackWindow,
-    /RIVET_MANAGED_WORKFLOW_SCHEMA_MIN_VERSION="4" RIVET_MANAGED_WORKFLOW_SCHEMA_MAX_VERSION="4" node \/app\/packages\/studio-server-api\/dist\/studio-server-api\/src\/scripts\/migrate-managed-workflow-schema\.js migrate/,
+    /RIVET_MANAGED_WORKFLOW_SCHEMA_MIN_VERSION="5" RIVET_MANAGED_WORKFLOW_SCHEMA_MAX_VERSION="5" node \/app\/packages\/studio-server-api\/dist\/studio-server-api\/src\/scripts\/migrate-managed-workflow-schema\.js migrate/,
     'the migration Job must use the exact candidate version even when serving pods support a lower rollback version',
   );
   assert.match(migrationJobDocument, /name: RIVET_APP_DATA_ROOT\s*\n\s*value: "\/var\/tmp\/rivet-migration-app-data"/);
@@ -609,7 +642,7 @@ test('production rendering requires a fully identified digest-pinned release', a
     '--set',
     `release.production.chart.contentDigest=sha256:${'f'.repeat(64)}`,
     '--set',
-    'release.production.database.managedWorkflowSchemaVersion=4',
+    'release.production.database.managedWorkflowSchemaVersion=5',
   ];
   const renderProduction = (overrides: string[] = []) =>
     execFileSync(helmBin, [...baseArgs, ...identifiedReleaseArgs, ...overrides], {

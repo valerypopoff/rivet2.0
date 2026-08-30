@@ -17,6 +17,7 @@ import {
   createHttpRivetLLMProfileHealthStore,
 } from '../../studio-server-shared/llmProfileHealthHttpStore';
 import { createHttpEvaluationStore } from '../../studio-server-shared/evaluationRunHttpStore';
+import { createHostedEvaluationCoordinator } from './hostedEvaluationCoordinator';
 
 const hostedDatasetProvider = new HostedDatasetProvider();
 const hostedLLMProfileHealthStore = createHttpRivetLLMProfileHealthStore({
@@ -45,4 +46,5 @@ export const hostedRivetProviders = {
   pathPolicy: getDefaultPathPolicyProvider(),
   llmProfileHealthStore: hostedLLMProfileHealthStore,
   evaluationStore: hostedEvaluationStore,
+  hostedEvaluationCoordinator: createHostedEvaluationCoordinator(),
 } satisfies ProviderOverrides;

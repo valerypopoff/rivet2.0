@@ -8,7 +8,15 @@ import {
   type RivetLLMProfileHealthSnapshot,
   type RivetLLMProfileHealthStore,
 } from '@valerypopoff/rivet2-core';
-import { type EvaluationRunStore, type EvaluationStore } from '@valerypopoff/rivet2-evaluations';
+import {
+  type EvaluationDataset,
+  type EvaluationProjectData,
+  type EvaluationRun,
+  type EvaluationRunPurpose,
+  type EvaluationRunStore,
+  type EvaluationStore,
+  type PortableJson,
+} from '@valerypopoff/rivet2-evaluations';
 import { LocalEvaluationRunStore } from './EvaluationRunStore.js';
 import { TauriEvaluationStore } from './TauriEvaluationStore.js';
 import { BrowserIOProvider } from '../io/BrowserIOProvider.js';
@@ -48,6 +56,26 @@ export type PathPolicyProvider = {
 };
 
 /**
+ * Optional managed-server execution path. Its submission is immutable and
+ * returns immediately; the editor only observes the durable run afterwards.
+ * Browser and ordinary remote executors deliberately omit this provider.
+ */
+export type HostedEvaluationCoordinatorProvider = {
+  getCapability(): Promise<{ enabled: boolean; workerEnabled: boolean; workerConcurrency: number }>;
+  submit(input: {
+    projectContents: string;
+    projectPath: string;
+    datasetsContents?: string;
+    evaluationData: EvaluationProjectData;
+    dataset: EvaluationDataset;
+    suiteId: string;
+    purpose: EvaluationRunPurpose;
+    contextValues: Record<string, PortableJson>;
+  }): Promise<EvaluationRun>;
+  requestCancel(input: { projectId: ProjectId; runId: string }): Promise<EvaluationRun | undefined>;
+};
+
+/**
  * Optional operational surface supplied by a host that owns shared LLM
  * profile health. It is intentionally separate from the execution store so a
  * browser host can expose permissioned HTTP list/reset operations without
@@ -70,6 +98,7 @@ export type Providers = {
   staticData: StaticDataStore;
   llmProfileHealthAdmin?: LLMProfileHealthAdminProvider;
   llmProfileHealthStore?: RivetLLMProfileHealthStore;
+  hostedEvaluationCoordinator?: HostedEvaluationCoordinatorProvider;
   /** Complete persistence boundary for local evaluation resources and evidence. */
   evaluationStore: EvaluationStore;
   /** @deprecated Supply and consume evaluationStore instead. */
@@ -125,6 +154,10 @@ export function useLLMProfileHealthAdmin(): LLMProfileHealthAdminProvider | unde
 
 export function useLLMProfileHealthStore(): RivetLLMProfileHealthStore | undefined {
   return useProviders().llmProfileHealthStore;
+}
+
+export function useHostedEvaluationCoordinator(): HostedEvaluationCoordinatorProvider | undefined {
+  return useProviders().hostedEvaluationCoordinator;
 }
 
 export function useEvaluationRunStore(): EvaluationRunStore {

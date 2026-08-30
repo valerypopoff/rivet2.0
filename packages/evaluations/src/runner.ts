@@ -947,7 +947,7 @@ async function runWithTimeout<T>(
   }
 }
 
-async function runTrial(input: {
+export type RunEvaluationTrialOptions = {
   project: Project;
   suite: EvaluationSuite;
   dataset: EvaluationDataset;
@@ -958,8 +958,12 @@ async function runTrial(input: {
   runId: string;
   runGraph: EvaluationGraphRunner;
   signal?: AbortSignal;
-}): Promise<EvaluationTrial> {
-  const { project, suite, dataset, purpose, testCase, caseIndex, trialIndex, runId, runGraph, signal } = input;
+  /** Stable server-owned job id. Local callers may omit it. */
+  trialId?: string;
+};
+
+export async function runEvaluationTrial(input: RunEvaluationTrialOptions): Promise<EvaluationTrial> {
+  const { project, suite, dataset, purpose, testCase, caseIndex, trialIndex, runId, runGraph, signal, trialId } = input;
   const evaluationMode = getEvaluationSuiteMode(suite);
   const { inputs, expected } = resolveCaseInputs(suite, dataset, testCase, purpose);
   const seed = deriveSeed(suite.configuration?.seed, testCase.id, trialIndex);
@@ -1007,7 +1011,7 @@ async function runTrial(input: {
       const executionStatus = 'canceled' as const;
       const qualityStatus = 'not-evaluated' as const;
       return {
-        id: makeId('trial'),
+        id: trialId ?? makeId('trial'),
         caseId: testCase.id,
         caseName: testCase.name,
         caseIndex,
@@ -1148,7 +1152,7 @@ async function runTrial(input: {
         const executionStatus = 'canceled' as const;
         const qualityStatus = 'not-evaluated' as const;
         return {
-          id: makeId('trial'),
+          id: trialId ?? makeId('trial'),
           caseId: testCase.id,
           caseName: testCase.name,
           caseIndex,
@@ -1240,7 +1244,7 @@ async function runTrial(input: {
   }
   const totalMetrics = mergeMetrics(targetMetrics, evaluatorMetrics);
   return {
-    id: makeId('trial'),
+    id: trialId ?? makeId('trial'),
     caseId: testCase.id,
     caseName: testCase.name,
     caseIndex,
@@ -1776,7 +1780,7 @@ function createProvenance(
   project: Project,
   suite: EvaluationSuite,
   dataset: EvaluationDataset,
-  options: RunEvaluationSuiteOptions,
+  options: Pick<RunEvaluationSuiteOptions, 'purpose' | 'projectFingerprint' | 'executionMode'>,
 ): EvaluationRunProvenance {
   const purpose = options.purpose ?? 'evaluation';
   const evaluationMode = getEvaluationSuiteMode(suite);
@@ -1844,7 +1848,27 @@ function createProvenance(
   };
 }
 
-export async function runEvaluationSuite(options: RunEvaluationSuiteOptions): Promise<EvaluationRun> {
+export type EvaluationRunWorkItem = {
+  testCase: EvaluationDataset['cases'][number];
+  caseIndex: number;
+  trialIndex: number;
+};
+
+export type EvaluationRunPlan = {
+  suite: EvaluationSuite;
+  purpose: EvaluationRunPurpose;
+  evaluationMode: EvaluationSuiteMode;
+  work: readonly EvaluationRunWorkItem[];
+};
+
+/**
+ * Validates an immutable Evaluation submission and expands its enabled cases
+ * into deterministic work. Hosts can persist this plan before any graph side
+ * effect, while local callers continue to use runEvaluationSuite.
+ */
+export function createEvaluationRunPlan(
+  options: Pick<RunEvaluationSuiteOptions, 'project' | 'evaluationData' | 'dataset' | 'suiteId' | 'purpose'>,
+): EvaluationRunPlan {
   const suite = resolveSuite(options.evaluationData, options.suiteId);
   const purpose = options.purpose ?? 'evaluation';
   const evaluationMode = getEvaluationSuiteMode(suite);
@@ -1856,6 +1880,135 @@ export async function runEvaluationSuite(options: RunEvaluationSuiteOptions): Pr
     );
   }
   validateSuite(options.project, suite, options.dataset, purpose);
+  const trialCount = Math.max(1, Math.floor(suite.configuration?.trialCount ?? 1));
+  const work = options.dataset.cases
+    .filter((testCase) => testCase.enabled !== false)
+    .flatMap((testCase, caseIndex) =>
+      Array.from({ length: trialCount }, (_, trialIndex) => ({ testCase, caseIndex, trialIndex })),
+    );
+  return { suite, purpose, evaluationMode, work };
+}
+
+export type FinalizeEvaluationRunOptions = {
+  run: EvaluationRun;
+  trials: readonly EvaluationTrial[];
+  suite: EvaluationSuite;
+  evaluationData: EvaluationProjectData;
+  baseline?: EvaluationBaselineSnapshot;
+  canceled?: boolean;
+  completedAt?: string;
+};
+
+/**
+ * Applies the same aggregate, quality, accounting, and baseline semantics to
+ * locally scheduled and durably hosted trials. Callers must provide every
+ * settled trial in deterministic case/trial order; never synthesize retries.
+ */
+export function finalizeEvaluationRun(options: FinalizeEvaluationRunOptions): EvaluationRun {
+  const run = options.run;
+  const evaluationMode = getEvaluationSuiteMode(options.suite);
+  run.trials = options.trials.slice();
+  run.completedAt = options.completedAt ?? new Date().toISOString();
+  const outcome = aggregate(run.trials, evaluationMode);
+  run.aggregate = outcome.aggregate;
+  run.provenance.accountingComplete = !run.trials.some((trial) => trial.totalMetrics.hasUnknownCost);
+  run.accountingStatus = run.provenance.accountingComplete ? 'complete' : 'partial';
+  if (run.accountingStatus === 'partial' && !run.warnings.includes('Some provider pricing was unavailable. Cost totals are unavailable, and cost requirements cannot be evaluated.')) {
+    run.warnings.push('Some provider pricing was unavailable. Cost totals are unavailable, and cost requirements cannot be evaluated.');
+  }
+  if (options.canceled) {
+    run.executionStatus = 'canceled';
+    run.qualityStatus = 'not-evaluated';
+    run.qualityReason = { code: 'canceled', message: 'The evaluation run was canceled.' };
+    return run;
+  }
+  if (run.purpose === 'execution-benchmark') {
+    run.executionStatus = 'completed';
+    run.qualityStatus = 'not-evaluated';
+    run.qualityReason = { code: 'benchmark', message: 'This run measured execution without evaluating output quality.' };
+    return run;
+  }
+  if (evaluationMode === 'scoring') {
+    run.executionStatus = 'completed';
+    if ((outcome.aggregate.missingScoreTrialCount ?? run.trials.length) > 0) {
+      run.qualityStatus = 'unable-to-evaluate';
+      run.qualityReason = { code: 'scores-incomplete', message: 'One or more requested trials did not produce a usable score. Available averages are shown with coverage.' };
+      run.warnings.push(`Score coverage is ${outcome.aggregate.scoredTrialCount ?? 0} of ${outcome.aggregate.trialCount} requested trials.`);
+    } else if ((outcome.aggregate.scoredTrialCount ?? 0) > 0) {
+      run.qualityStatus = 'scored';
+      run.qualityReason = { code: 'scores-complete', message: 'Every requested trial produced a score. Overall score is the equal-weight average of case averages.' };
+    } else {
+      run.qualityStatus = 'unable-to-evaluate';
+      run.qualityReason = { code: 'scores-incomplete', message: 'No requested trial produced a usable score.' };
+    }
+    return run;
+  }
+  const baseline = options.baseline ?? options.evaluationData.baselines.find((candidate) => candidate.suiteId === options.suite.id);
+  const usableBaseline = baseline && baselineCompatible(run.provenance, baseline) ? baseline : undefined;
+  if (baseline && !usableBaseline && !run.warnings.includes('The suite baseline is stale because its target, dataset, bindings, or evaluator definition changed.')) {
+    run.warnings.push('The suite baseline is stale because its target, dataset, bindings, or evaluator definition changed.');
+  }
+  run.thresholdResults = evaluateThresholdResults(outcome.aggregate, options.suite.thresholds, usableBaseline);
+  const hasPassRateThreshold = options.suite.thresholds?.some((threshold) => threshold.metric === 'pass-rate') ?? false;
+  const hasTargetErrorRateThreshold = options.suite.thresholds?.some((threshold) => threshold.metric === 'target-error-rate') ?? false;
+  const hasUngovernedCheckFailure = !hasPassRateThreshold && run.trials.some((trial) => trial.executionStatus === 'completed' && trial.qualityStatus === 'failed');
+  const hasUngovernedTargetError = !hasTargetErrorRateThreshold && run.trials.some((trial) => trial.executionStatus === 'error');
+  const hasThresholdFailure = run.thresholdResults.some((result) => result.status === 'failed');
+  const hasUnavailableEvidence = run.trials.some((trial) => trial.qualityStatus === 'unable-to-evaluate') || run.thresholdResults.some((result) => result.status === 'unavailable');
+  const hasAuthoritativePass = run.trials.some((trial) => trial.executionStatus === 'completed' && trial.qualityStatus === 'passed') || run.thresholdResults.some((result) => result.status === 'passed');
+  run.executionStatus = 'completed';
+  if (hasUngovernedCheckFailure || hasUngovernedTargetError || hasThresholdFailure) {
+    run.qualityStatus = 'failed';
+    run.qualityReason = { code: hasThresholdFailure ? 'thresholds-failed' : 'checks-failed', message: hasThresholdFailure ? 'One or more required aggregate thresholds failed.' : 'One or more target executions or required quality checks failed.' };
+  } else if (hasUnavailableEvidence) {
+    run.qualityStatus = 'unable-to-evaluate';
+    run.qualityReason = { code: run.thresholdResults.some((result) => result.status === 'unavailable') ? 'required-metric-unavailable' : 'required-check-error', message: run.thresholdResults.some((result) => result.status === 'unavailable') ? 'A required aggregate metric could not be evaluated.' : 'A required quality check could not be evaluated.' };
+  } else if (hasAuthoritativePass) {
+    run.qualityStatus = 'passed';
+    run.qualityReason = { code: run.thresholdResults.length > 0 ? 'thresholds-passed' : 'checks-passed', message: run.thresholdResults.length > 0 ? 'All required quality checks and aggregate thresholds passed.' : 'All required quality checks passed.' };
+  } else {
+    run.qualityStatus = 'not-evaluated';
+    run.qualityReason = { code: 'no-completed-trials', message: 'No completed trial produced an authoritative quality result.' };
+  }
+  return run;
+}
+export type CreateEvaluationRunShellOptions = Pick<
+  RunEvaluationSuiteOptions,
+  'project' | 'evaluationData' | 'dataset' | 'suiteId' | 'purpose' | 'runId' | 'projectFingerprint' | 'executionMode'
+>;
+
+/** Creates a durable running shell only after the complete submission validates. */
+export function createEvaluationRunShell(options: CreateEvaluationRunShellOptions): {
+  run: EvaluationRun;
+  plan: EvaluationRunPlan;
+} {
+  const plan = createEvaluationRunPlan(options);
+  const runId = options.runId ?? makeId('evaluation');
+  const run: EvaluationRun = {
+    version: 2,
+    id: runId,
+    projectId: options.project.metadata.id,
+    suiteId: plan.suite.id,
+    suiteName: plan.suite.name,
+    revision: 0,
+    startedAt: new Date().toISOString(),
+    purpose: plan.purpose,
+    evaluationMode: plan.evaluationMode,
+    executionStatus: 'running',
+    qualityStatus: 'not-evaluated',
+    qualityReason: { code: 'in-progress', message: 'The run is still in progress.' },
+    accountingStatus: 'complete',
+    provenance: createProvenance(options.project, plan.suite, options.dataset, options),
+    trials: [],
+    thresholdResults: [],
+    warnings: [],
+    requestedTrialCount: plan.work.length,
+  };
+  return { run, plan };
+}
+export async function runEvaluationSuite(options: RunEvaluationSuiteOptions): Promise<EvaluationRun> {
+  const plan = createEvaluationRunPlan(options);
+  const { suite, purpose, evaluationMode } = plan;
   const runId = options.runId ?? makeId('evaluation');
   const run: EvaluationRun = {
     version: 2,
@@ -1876,16 +2029,11 @@ export async function runEvaluationSuite(options: RunEvaluationSuiteOptions): Pr
     thresholdResults: [],
     warnings: [],
   };
-  const trialCount = Math.max(1, Math.floor(suite.configuration?.trialCount ?? 1));
   const concurrency = Math.min(
     MAX_CONCURRENCY,
     Math.max(1, Math.floor(suite.configuration?.concurrency ?? DEFAULT_CONCURRENCY)),
   );
-  const work = options.dataset.cases
-    .filter((testCase) => testCase.enabled !== false)
-    .flatMap((testCase, caseIndex) =>
-      Array.from({ length: trialCount }, (_, trialIndex) => ({ testCase, caseIndex, trialIndex })),
-    );
+  const work = plan.work;
   run.requestedTrialCount = work.length;
   const settledTrials: Array<EvaluationTrial | undefined> = Array.from({ length: work.length });
   let settledTrialCount = 0;
@@ -1938,7 +2086,7 @@ export async function runEvaluationSuite(options: RunEvaluationSuiteOptions): Pr
     signal: options.signal,
     execute: async (task) => {
       try {
-        return await runTrial({
+        return await runEvaluationTrial({
           ...task,
           project: options.project,
           suite,
@@ -1991,115 +2139,14 @@ export async function runEvaluationSuite(options: RunEvaluationSuiteOptions): Pr
     },
   });
   const results = await workPool;
-  run.trials = results.filter((result): result is EvaluationTrial => result !== undefined);
-  run.completedAt = new Date().toISOString();
-  const outcome = aggregate(run.trials, evaluationMode);
-  run.aggregate = outcome.aggregate;
-  run.provenance.accountingComplete = !run.trials.some((trial) => trial.totalMetrics.hasUnknownCost);
-  run.accountingStatus = run.provenance.accountingComplete ? 'complete' : 'partial';
-  if (run.accountingStatus === 'partial') {
-    run.warnings.push(
-      'Some provider pricing was unavailable. Cost totals are unavailable, and cost requirements cannot be evaluated.',
-    );
-  }
-  if (options.signal?.aborted) {
-    run.executionStatus = 'canceled';
-    run.qualityStatus = 'not-evaluated';
-    run.qualityReason = { code: 'canceled', message: 'The evaluation run was canceled.' };
-  } else if (purpose === 'execution-benchmark') {
-    run.executionStatus = 'completed';
-    run.qualityStatus = 'not-evaluated';
-    run.qualityReason = {
-      code: 'benchmark',
-      message: 'This run measured execution without evaluating output quality.',
-    };
-  } else if (evaluationMode === 'scoring') {
-    run.executionStatus = 'completed';
-    if ((outcome.aggregate.missingScoreTrialCount ?? run.trials.length) > 0) {
-      run.qualityStatus = 'unable-to-evaluate';
-      run.qualityReason = {
-        code: 'scores-incomplete',
-        message:
-          'One or more requested trials did not produce a usable score. Available averages are shown with coverage.',
-      };
-      run.warnings.push(
-        `Score coverage is ${outcome.aggregate.scoredTrialCount ?? 0} of ${outcome.aggregate.trialCount} requested trials.`,
-      );
-    } else if ((outcome.aggregate.scoredTrialCount ?? 0) > 0) {
-      run.qualityStatus = 'scored';
-      run.qualityReason = {
-        code: 'scores-complete',
-        message: 'Every requested trial produced a score. Overall score is the equal-weight average of case averages.',
-      };
-    } else {
-      run.qualityStatus = 'unable-to-evaluate';
-      run.qualityReason = { code: 'scores-incomplete', message: 'No requested trial produced a usable score.' };
-    }
-  } else {
-    const baseline =
-      options.baseline ?? options.evaluationData.baselines.find((candidate) => candidate.suiteId === suite.id);
-    const usableBaseline = baseline && baselineCompatible(run.provenance, baseline) ? baseline : undefined;
-    if (baseline && !usableBaseline)
-      run.warnings.push(
-        'The suite baseline is stale because its target, dataset, bindings, or evaluator definition changed.',
-      );
-    run.thresholdResults = evaluateThresholdResults(outcome.aggregate, suite.thresholds, usableBaseline);
-    const hasPassRateThreshold = suite.thresholds?.some((threshold) => threshold.metric === 'pass-rate') ?? false;
-    const hasTargetErrorRateThreshold =
-      suite.thresholds?.some((threshold) => threshold.metric === 'target-error-rate') ?? false;
-    // Per-trial checks and target execution errors are strict by default. An
-    // author can deliberately replace either default with its matching
-    // aggregate tolerance, but one kind of threshold must never hide the
-    // other kind of failure.
-    const hasUngovernedCheckFailure =
-      !hasPassRateThreshold &&
-      run.trials.some((trial) => trial.executionStatus === 'completed' && trial.qualityStatus === 'failed');
-    const hasUngovernedTargetError =
-      !hasTargetErrorRateThreshold && run.trials.some((trial) => trial.executionStatus === 'error');
-    const hasThresholdFailure = run.thresholdResults.some((result) => result.status === 'failed');
-    const hasUnavailableEvidence =
-      run.trials.some((trial) => trial.qualityStatus === 'unable-to-evaluate') ||
-      run.thresholdResults.some((result) => result.status === 'unavailable');
-    const hasAuthoritativePass =
-      run.trials.some((trial) => trial.executionStatus === 'completed' && trial.qualityStatus === 'passed') ||
-      run.thresholdResults.some((result) => result.status === 'passed');
-
-    if (hasUngovernedCheckFailure || hasUngovernedTargetError || hasThresholdFailure) {
-      run.qualityStatus = 'failed';
-      run.qualityReason = {
-        code: hasThresholdFailure ? 'thresholds-failed' : 'checks-failed',
-        message: hasThresholdFailure
-          ? 'One or more required aggregate thresholds failed.'
-          : 'One or more target executions or required quality checks failed.',
-      };
-    } else if (hasUnavailableEvidence) {
-      run.qualityStatus = 'unable-to-evaluate';
-      run.qualityReason = {
-        code: run.thresholdResults.some((result) => result.status === 'unavailable')
-          ? 'required-metric-unavailable'
-          : 'required-check-error',
-        message: run.thresholdResults.some((result) => result.status === 'unavailable')
-          ? 'A required aggregate metric could not be evaluated.'
-          : 'A required quality check could not be evaluated.',
-      };
-    } else if (hasAuthoritativePass) {
-      run.qualityStatus = 'passed';
-      run.qualityReason = {
-        code: run.thresholdResults.length > 0 ? 'thresholds-passed' : 'checks-passed',
-        message:
-          run.thresholdResults.length > 0
-            ? 'All required quality checks and aggregate thresholds passed.'
-            : 'All required quality checks passed.',
-      };
-    } else {
-      run.qualityStatus = 'not-evaluated';
-      run.qualityReason = {
-        code: 'no-completed-trials',
-        message: 'No completed trial produced an authoritative quality result.',
-      };
-    }
-    run.executionStatus = 'completed';
-  }
+  finalizeEvaluationRun({
+    run,
+    trials: results.filter((result): result is EvaluationTrial => result !== undefined),
+    suite,
+    evaluationData: options.evaluationData,
+    baseline: options.baseline,
+    canceled: options.signal?.aborted === true,
+  });
   await publishFinalized();
   return run;
 }

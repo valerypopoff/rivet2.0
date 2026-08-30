@@ -24,6 +24,9 @@ import type { RuntimeHealthCheckContext } from '../../../runtime-health.js';
 import type { ManagedWorkflowStorageConfig } from '../storage-config.js';
 import { PostgresRivetLLMProfileHealthStore } from '../../../llm-profile-health/managed-store.js';
 import { PostgresRivetEvaluationStore } from '../../../evaluation-runs/managed-store.js';
+import { HostedEvaluationCoordinator } from '../../../evaluation-runs/hosted-coordinator.js';
+import { createHostedEvaluationGraphRunner } from '../../../evaluation-runs/hosted-execution.js';
+import { getHostedEvaluationsCoordinatorConfig } from '../../../hosted-evaluations-config.js';
 import type { ManagedWorkflowBlobStore } from './blob-store.js';
 import { createManagedWorkflowCatalogService } from './catalog.js';
 import { createManagedWorkflowContext } from './context.js';
@@ -51,6 +54,7 @@ export class ManagedWorkflowBackend {
   readonly #recordings: ReturnType<typeof createManagedWorkflowRecordingService>;
   readonly #llmProfileHealthStore: PostgresRivetLLMProfileHealthStore;
   readonly #evaluationStore: PostgresRivetEvaluationStore;
+  readonly #hostedEvaluationCoordinator: HostedEvaluationCoordinator;
 
   constructor(config: ManagedWorkflowStorageConfig, blobStore?: ManagedWorkflowBlobStore) {
     this.#context = createManagedWorkflowContext(config, blobStore);
@@ -72,13 +76,25 @@ export class ManagedWorkflowBackend {
     });
     this.#llmProfileHealthStore = new PostgresRivetLLMProfileHealthStore(this.#context.pool);
     this.#evaluationStore = new PostgresRivetEvaluationStore(this.#context.pool);
+    this.#hostedEvaluationCoordinator = new HostedEvaluationCoordinator({
+      pool: this.#context.pool,
+      runStore: this.#evaluationStore,
+      config: getHostedEvaluationsCoordinatorConfig(),
+      runGraph: createHostedEvaluationGraphRunner({
+        evaluationStore: this.#evaluationStore,
+        llmProfileHealthStore: this.#llmProfileHealthStore,
+        createProjectReferenceLoader: () => Promise.resolve(this.#executionService.createProjectReferenceLoader()),
+      }),
+    });
   }
 
   async initialize(): Promise<void> {
     await this.#recordings.initialize();
+    this.#hostedEvaluationCoordinator.start();
   }
 
   async dispose(): Promise<void> {
+    await this.#hostedEvaluationCoordinator.stop();
     await this.#context.dispose();
   }
 
@@ -198,6 +214,11 @@ export class ManagedWorkflowBackend {
   async getEvaluationStore(): Promise<PostgresRivetEvaluationStore> {
     await this.initialize();
     return this.#evaluationStore;
+  }
+
+  async getHostedEvaluationCoordinator(): Promise<HostedEvaluationCoordinator> {
+    await this.initialize();
+    return this.#hostedEvaluationCoordinator;
   }
 
   async listWorkflowPublishedVersions(relativePath: unknown): Promise<WorkflowPublishedVersionsResponse> {

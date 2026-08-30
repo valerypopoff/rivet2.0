@@ -5,7 +5,7 @@ import type { Pool, PoolClient, QueryResultRow } from 'pg';
 import { MANAGED_WORKFLOW_SCHEMA_SQL } from './schema.js';
 
 export const MANAGED_WORKFLOW_SCHEMA_MIGRATIONS_TABLE = 'managed_workflow_schema_migrations';
-export const CURRENT_MANAGED_WORKFLOW_SCHEMA_VERSION = 4;
+export const CURRENT_MANAGED_WORKFLOW_SCHEMA_VERSION = 5;
 // A serving release may verify an additive schema created by its immediate
 // successor only when the chart deliberately supplies that compatibility
 // window. Keep this constant explicit: raising it is the release-engineering
@@ -91,6 +91,73 @@ CREATE TABLE IF NOT EXISTS managed_reconciliation_findings (
 
 CREATE INDEX IF NOT EXISTS managed_reconciliation_findings_open_idx
   ON managed_reconciliation_findings(domain, resolved_at, kind, first_seen_at);
+`;
+const MANAGED_HOSTED_EVALUATIONS_SCHEMA_SQL = `
+-- Hosted Evaluation scheduling is separate from the durable user-facing run
+-- projection. The snapshot is immutable; jobs are claimed with fencing tokens
+-- so an accepted graph execution is never silently replayed after worker loss.
+CREATE TABLE IF NOT EXISTS evaluation_hosted_runs (
+  project_id TEXT NOT NULL,
+  run_id TEXT NOT NULL,
+  status TEXT NOT NULL CHECK (status IN ('queued', 'running', 'completed', 'canceled', 'interrupted')),
+  snapshot_json JSONB NOT NULL,
+  cancel_requested_at TIMESTAMPTZ NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (project_id, run_id),
+  FOREIGN KEY (project_id, run_id) REFERENCES evaluation_runs(project_id, run_id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS evaluation_hosted_runs_active_idx
+  ON evaluation_hosted_runs(status, created_at, project_id, run_id)
+  WHERE status IN ('queued', 'running');
+
+CREATE TABLE IF NOT EXISTS evaluation_hosted_trial_jobs (
+  project_id TEXT NOT NULL,
+  run_id TEXT NOT NULL,
+  job_id TEXT NOT NULL,
+  case_id TEXT NOT NULL,
+  case_name TEXT NOT NULL,
+  case_index INTEGER NOT NULL CHECK (case_index >= 0),
+  trial_index INTEGER NOT NULL CHECK (trial_index >= 0),
+  status TEXT NOT NULL CHECK (status IN ('queued', 'claimed', 'accepted', 'settled', 'interrupted', 'canceled')),
+  attempt INTEGER NOT NULL DEFAULT 0 CHECK (attempt >= 0),
+  fencing_token BIGINT NOT NULL DEFAULT 0 CHECK (fencing_token >= 0),
+  worker_id TEXT NULL,
+  lease_expires_at TIMESTAMPTZ NULL,
+  accepted_at TIMESTAMPTZ NULL,
+  settled_at TIMESTAMPTZ NULL,
+  trial_json JSONB NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (project_id, run_id, job_id),
+  FOREIGN KEY (project_id, run_id) REFERENCES evaluation_hosted_runs(project_id, run_id) ON DELETE CASCADE,
+  UNIQUE (project_id, run_id, case_id, trial_index)
+);
+
+CREATE INDEX IF NOT EXISTS evaluation_hosted_trial_jobs_claim_idx
+  ON evaluation_hosted_trial_jobs(status, case_index, trial_index, project_id, run_id)
+  WHERE status = 'queued';
+CREATE INDEX IF NOT EXISTS evaluation_hosted_trial_jobs_lease_idx
+  ON evaluation_hosted_trial_jobs(status, lease_expires_at, project_id, run_id)
+  WHERE status IN ('claimed', 'accepted');
+
+CREATE TABLE IF NOT EXISTS evaluation_hosted_trial_attempts (
+  project_id TEXT NOT NULL,
+  run_id TEXT NOT NULL,
+  job_id TEXT NOT NULL,
+  attempt INTEGER NOT NULL CHECK (attempt >= 0),
+  fencing_token BIGINT NOT NULL CHECK (fencing_token >= 0),
+  worker_id TEXT NULL,
+  event TEXT NOT NULL CHECK (event IN ('claimed', 'accepted', 'settled', 'interrupted', 'canceled', 'requeued')),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (project_id, run_id, job_id, attempt, event),
+  FOREIGN KEY (project_id, run_id, job_id)
+    REFERENCES evaluation_hosted_trial_jobs(project_id, run_id, job_id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS evaluation_hosted_trial_attempts_run_idx
+  ON evaluation_hosted_trial_attempts(project_id, run_id, created_at, job_id);
 `;
 const MIGRATION_STATEMENT_TIMEOUT = '5min';
 const VERIFY_STATEMENT_TIMEOUT = '30s';
@@ -209,6 +276,11 @@ export const MANAGED_WORKFLOW_SCHEMA_MIGRATIONS: readonly ManagedWorkflowSchemaM
     name: 'managed-reconciliation-audit',
     sql: MANAGED_RECONCILIATION_SCHEMA_SQL,
     checksum: '6c6965c2d883e38d452345ab7730cb5704bc773275db41d9e7f3de00622cd330',
+  },  {
+    version: 5,
+    name: 'hosted-evaluation-coordinator',
+    sql: MANAGED_HOSTED_EVALUATIONS_SCHEMA_SQL,
+    checksum: '77cc68364a05ba7afadaa0634ea1945353d120dd3d338cd5c9ef09111f756bbf',
   },
 ];
 
@@ -260,6 +332,9 @@ export const MANAGED_WORKFLOW_SCHEMA_REQUIRED_TABLES = [
   'evaluation_runs',
   'evaluation_recordings',
   'evaluation_dataset_snapshots',
+  'evaluation_hosted_runs',
+  'evaluation_hosted_trial_jobs',
+  'evaluation_hosted_trial_attempts',
 ] as const;
 
 export const MANAGED_WORKFLOW_SCHEMA_REQUIRED_COLUMNS = [
@@ -311,6 +386,38 @@ export const MANAGED_WORKFLOW_SCHEMA_REQUIRED_COLUMNS = [
   ['evaluation_dataset_snapshots', 'project_id', 'text', 'NO'],
   ['evaluation_dataset_snapshots', 'dataset_fingerprint', 'text', 'NO'],
   ['evaluation_dataset_snapshots', 'snapshot_json', 'jsonb', 'NO'],
+  ['evaluation_hosted_runs', 'project_id', 'text', 'NO'],
+  ['evaluation_hosted_runs', 'run_id', 'text', 'NO'],
+  ['evaluation_hosted_runs', 'status', 'text', 'NO'],
+  ['evaluation_hosted_runs', 'snapshot_json', 'jsonb', 'NO'],
+  ['evaluation_hosted_runs', 'cancel_requested_at', 'timestamptz', 'YES'],
+  ['evaluation_hosted_runs', 'created_at', 'timestamptz', 'NO'],
+  ['evaluation_hosted_runs', 'updated_at', 'timestamptz', 'NO'],
+  ['evaluation_hosted_trial_jobs', 'project_id', 'text', 'NO'],
+  ['evaluation_hosted_trial_jobs', 'run_id', 'text', 'NO'],
+  ['evaluation_hosted_trial_jobs', 'job_id', 'text', 'NO'],
+  ['evaluation_hosted_trial_jobs', 'case_id', 'text', 'NO'],
+  ['evaluation_hosted_trial_jobs', 'case_name', 'text', 'NO'],
+  ['evaluation_hosted_trial_jobs', 'case_index', 'int4', 'NO'],
+  ['evaluation_hosted_trial_jobs', 'trial_index', 'int4', 'NO'],
+  ['evaluation_hosted_trial_jobs', 'status', 'text', 'NO'],
+  ['evaluation_hosted_trial_jobs', 'attempt', 'int4', 'NO'],
+  ['evaluation_hosted_trial_jobs', 'fencing_token', 'int8', 'NO'],
+  ['evaluation_hosted_trial_jobs', 'worker_id', 'text', 'YES'],
+  ['evaluation_hosted_trial_jobs', 'lease_expires_at', 'timestamptz', 'YES'],
+  ['evaluation_hosted_trial_jobs', 'accepted_at', 'timestamptz', 'YES'],
+  ['evaluation_hosted_trial_jobs', 'settled_at', 'timestamptz', 'YES'],
+  ['evaluation_hosted_trial_jobs', 'trial_json', 'jsonb', 'YES'],
+  ['evaluation_hosted_trial_jobs', 'created_at', 'timestamptz', 'NO'],
+  ['evaluation_hosted_trial_jobs', 'updated_at', 'timestamptz', 'NO'],
+  ['evaluation_hosted_trial_attempts', 'project_id', 'text', 'NO'],
+  ['evaluation_hosted_trial_attempts', 'run_id', 'text', 'NO'],
+  ['evaluation_hosted_trial_attempts', 'job_id', 'text', 'NO'],
+  ['evaluation_hosted_trial_attempts', 'attempt', 'int4', 'NO'],
+  ['evaluation_hosted_trial_attempts', 'fencing_token', 'int8', 'NO'],
+  ['evaluation_hosted_trial_attempts', 'worker_id', 'text', 'YES'],
+  ['evaluation_hosted_trial_attempts', 'event', 'text', 'NO'],
+  ['evaluation_hosted_trial_attempts', 'created_at', 'timestamptz', 'NO'],
   ['evaluation_dataset_snapshots', 'created_at', 'timestamptz', 'NO'],
   ['evaluation_library', 'singleton_key', 'bool', 'NO'],
   ['evaluation_library', 'revision', 'int8', 'NO'],
@@ -450,6 +557,13 @@ export const MANAGED_WORKFLOW_SCHEMA_REQUIRED_COLUMN_DEFAULTS = [
   ['managed_reconciliation_findings', 'last_seen_at', 'now()'],
   ['managed_reconciliation_findings', 'consecutive_complete_scans', '0'],
   ['app_settings', 'updated_at', 'now()'],
+  ['evaluation_hosted_runs', 'created_at', 'now()'],
+  ['evaluation_hosted_runs', 'updated_at', 'now()'],
+  ['evaluation_hosted_trial_jobs', 'attempt', '0'],
+  ['evaluation_hosted_trial_jobs', 'fencing_token', '0'],
+  ['evaluation_hosted_trial_jobs', 'created_at', 'now()'],
+  ['evaluation_hosted_trial_jobs', 'updated_at', 'now()'],
+  ['evaluation_hosted_trial_attempts', 'created_at', 'now()'],
   ['evaluation_dataset_snapshots', 'created_at', 'now()'],
   ['evaluation_library', 'singleton_key', 'true'],
   ['evaluation_library', 'updated_at', 'now()'],
@@ -551,6 +665,10 @@ export const MANAGED_WORKFLOW_SCHEMA_REQUIRED_INDEXES = [
   ['llm_profile_health', 'llm_profile_health_updated_at_idx', ['updated_at'], null, [3]],
   ['evaluation_runs', 'evaluation_runs_project_started_idx', ['project_id', 'started_at'], null, [0, 3]],
   ['evaluation_runs', 'evaluation_runs_project_suite_idx', ['project_id', 'suite_id'], null, [0, 0]],
+  ['evaluation_hosted_runs', 'evaluation_hosted_runs_active_idx', ['status', 'created_at', 'project_id', 'run_id'], "(status = ANY (ARRAY['queued'::text, 'running'::text]))", [0, 0, 0, 0]],
+  ['evaluation_hosted_trial_jobs', 'evaluation_hosted_trial_jobs_claim_idx', ['status', 'case_index', 'trial_index', 'project_id', 'run_id'], "(status = 'queued'::text)", [0, 0, 0, 0, 0]],
+  ['evaluation_hosted_trial_jobs', 'evaluation_hosted_trial_jobs_lease_idx', ['status', 'lease_expires_at', 'project_id', 'run_id'], "(status = ANY (ARRAY['claimed'::text, 'accepted'::text]))", [0, 0, 0, 0]],
+  ['evaluation_hosted_trial_attempts', 'evaluation_hosted_trial_attempts_run_idx', ['project_id', 'run_id', 'created_at', 'job_id'], null, [0, 0, 0, 0]],
   ['evaluation_recordings', 'evaluation_recordings_project_run_idx', ['project_id', 'run_id'], null, [0, 0]],
 ] as const;
 
@@ -598,6 +716,13 @@ export const MANAGED_WORKFLOW_SCHEMA_REQUIRED_CONSTRAINTS = [
   ['app_settings', 'c', 'CHECK ((char_length(key_id) = 16))'],
   ['app_settings', 'c', 'CHECK (((source_hash IS NULL) OR (char_length(source_hash) = 64)))'],
   ['evaluation_dataset_snapshots', 'p', 'PRIMARY KEY (project_id, dataset_fingerprint)'],
+  ['evaluation_hosted_runs', 'p', 'PRIMARY KEY (project_id, run_id)'],
+  ['evaluation_hosted_runs', 'f', 'FOREIGN KEY (project_id, run_id) REFERENCES evaluation_runs(project_id, run_id) ON DELETE CASCADE'],
+  ['evaluation_hosted_trial_jobs', 'p', 'PRIMARY KEY (project_id, run_id, job_id)'],
+  ['evaluation_hosted_trial_jobs', 'u', 'UNIQUE (project_id, run_id, case_id, trial_index)'],
+  ['evaluation_hosted_trial_jobs', 'f', 'FOREIGN KEY (project_id, run_id) REFERENCES evaluation_hosted_runs(project_id, run_id) ON DELETE CASCADE'],
+  ['evaluation_hosted_trial_attempts', 'p', 'PRIMARY KEY (project_id, run_id, job_id, attempt, event)'],
+  ['evaluation_hosted_trial_attempts', 'f', 'FOREIGN KEY (project_id, run_id, job_id) REFERENCES evaluation_hosted_trial_jobs(project_id, run_id, job_id) ON DELETE CASCADE'],
   ['evaluation_dataset_snapshots', 'f', 'FOREIGN KEY (project_id) REFERENCES workflows(workflow_id) ON DELETE CASCADE'],
   ['evaluation_library', 'p', 'PRIMARY KEY (singleton_key)'],
   ['evaluation_library', 'c', 'CHECK (singleton_key)'],

@@ -61,6 +61,31 @@
 {{- end -}}
 {{- end -}}
 
+{{- range $key := list "RIVET_HOSTED_EVALUATIONS_ENABLED" "RIVET_HOSTED_EVALUATIONS_WORKER_CONCURRENCY" "RIVET_HOSTED_EVALUATIONS_LEASE_MS" "RIVET_HOSTED_EVALUATIONS_POLL_MS" -}}
+{{- if hasKey $.Values.env $key -}}
+{{- fail (printf "env.%s is chart-owned; configure hostedEvaluations instead" $key) -}}
+{{- end -}}
+{{- end -}}
+
+{{- if not (kindIs "map" .Values.hostedEvaluations) -}}
+{{- fail "hostedEvaluations must be a map" -}}
+{{- end -}}
+{{- if not (kindIs "bool" .Values.hostedEvaluations.enabled) -}}
+{{- fail "hostedEvaluations.enabled must be a boolean" -}}
+{{- end -}}
+{{- $hostedEvaluationWorkerConcurrency := int .Values.hostedEvaluations.workerConcurrency -}}
+{{- if or (lt $hostedEvaluationWorkerConcurrency 1) (gt $hostedEvaluationWorkerConcurrency 8) -}}
+{{- fail "hostedEvaluations.workerConcurrency must be an integer between 1 and 8" -}}
+{{- end -}}
+{{- $hostedEvaluationLeaseMs := int .Values.hostedEvaluations.leaseMs -}}
+{{- if or (lt $hostedEvaluationLeaseMs 15000) (gt $hostedEvaluationLeaseMs 600000) -}}
+{{- fail "hostedEvaluations.leaseMs must be an integer between 15000 and 600000" -}}
+{{- end -}}
+{{- $hostedEvaluationPollMs := int .Values.hostedEvaluations.pollMs -}}
+{{- if or (lt $hostedEvaluationPollMs 250) (gt $hostedEvaluationPollMs 30000) -}}
+{{- fail "hostedEvaluations.pollMs must be an integer between 250 and 30000" -}}
+{{- end -}}
+
 {{- $publishedExecutionAdmissionMode := .Values.publishedExecutionAdmission.mode -}}
 {{- if not (has $publishedExecutionAdmissionMode (list "disabled" "observe" "enforce")) -}}
 {{- fail "publishedExecutionAdmission.mode must be disabled, observe, or enforce" -}}
@@ -196,8 +221,13 @@
 {{- end -}}
 {{- $backendReplicas := int .Values.replicaCount.backend -}}
 {{- $executionReplicas := int .Values.replicaCount.execution -}}
+{{- $executionMinimumReplicas := $executionReplicas -}}
 {{- if .Values.autoscaling.execution.enabled -}}
 {{- $executionReplicas = int .Values.autoscaling.execution.maxReplicas -}}
+{{- $executionMinimumReplicas = int .Values.autoscaling.execution.minReplicas -}}
+{{- end -}}
+{{- if and .Values.hostedEvaluations.enabled (lt $executionMinimumReplicas 1) -}}
+{{- fail "hostedEvaluations.enabled requires at least one execution API replica; set replicaCount.execution >= 1 or autoscaling.execution.minReplicas >= 1" -}}
 {{- end -}}
 {{- $apiPodConnections := add $poolMaxPerApiPod 3 -}}
 {{- $requiredPostgresConnections := add $postgresReservedConnections (mul (add $backendReplicas $executionReplicas) $apiPodConnections) -}}

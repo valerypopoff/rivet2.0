@@ -53,6 +53,23 @@ Typical endpoint-heavy production shape:
 
 Do not treat that as a forced ratio. `execution=8` with `proxy=2` can be correct. The tiers scale independently.
 
+## Hosted Evaluations
+
+Managed hosted Evaluations are an opt-in server-owned scheduler, not a browser-executor feature. Enable them only with managed workflow storage and only after deciding how much execution capacity can be used for batch work:
+
+```yaml
+hostedEvaluations:
+  enabled: false # set true only for an approved managed deployment
+  workerConcurrency: 1 # per execution-profile API pod; 1..8
+  leaseMs: 60000 # 15,000..600,000
+  pollMs: 1000 # 250..30,000
+```
+
+The chart injects these values into all API profiles but the control-profile/backend API never runs workers. Execution-profile pods claim immutable PostgreSQL jobs; a combined local process may do so for development parity. When hosted Evaluations are enabled, Helm requires at least one effective execution replica (`replicaCount.execution`, or `autoscaling.execution.minReplicas`) so queued work always has an execution worker that can claim it. The editor submits project contents, the normal `.rivet-data` sidecar, Evaluation state, and context values as a snapshot, then reads the ordinary Evaluation history. Saving, switching tabs, closing the initiating browser, or an editor restart does not change queued work.
+
+The immutable dataset snapshot, visible run projection, scheduler parent, and all deterministic jobs are committed together before any worker can claim work; A job has a stable run/case/trial identity and fencing token. It is **claimed** first and becomes **accepted** immediately before graph execution. An expired pre-accept claim, or a claim observed while its worker is already shutting down, is automatically returned to the queue because no graph can have started. An accepted worker loss is shown as an interrupted trial and is never silently repeated; only a durable cancel request produces cancellation evidence. The process-local cancellation index is scoped by both project and run, matching the database isolation boundary even when a caller reuses a run ID in another project. During pod shutdown, active trials receive an abort signal and the coordinator waits only a bounded fraction of the lease before yielding to API resource disposal; a graph runner that ignores cancellation remains an accepted lease and is later recorded as an explicit interruption. Turning `hostedEvaluations.enabled` off stops new submissions and worker claims, but retained hosted runs remain inspectable and cancelable; an active hosted run cannot be deleted, so re-enabling the feature cannot resurrect an orphaned schedule. The authenticated `POST /api/workflows/evaluation-runs/:runId/retry-interrupted` route exists for a privileged operator to explicitly retry selected interrupted job ids. The Runs UI retry affordance is still planned.
+
+This first coordinator slice does **not** yet reserve public endpoint capacity: hosted Evaluation workers currently share the execution API tier with `/workflows/...`. Leave `enabled: false` in a high-volume production topology until the P10-B batch quota, reserved public admission capacity, batch metrics, and live worker-loss/cancellation certificate are complete. See the [managed-mode audit](./audits/kubernetes-managed-mode.md) for that boundary and the required operational evidence.
 ## Autoscaling prerequisites
 
 The current HPAs are CPU-based:
@@ -274,7 +291,7 @@ The operator identity also needs read access to execution Pods and Events plus K
 
 The CI job always runs in `certify` mode. Certification requires `requireExecutionMetrics: true` and a complete report whose stage names, request totals, outcome totals, and control-canary counts exactly match the declared configuration. A scheduling-edge sample with no execution Pod is retained as evidence but does not require metrics; at least one sample taken while an execution Pod exists must expose every required metric. The gate otherwise fails if a required event sample is unavailable, a stage exceeds its p95 or unexpected-result limit, a control canary fails, recording drops increase beyond the limit, an overload stage never receives visible `429` admission rejection, or a new restart/OOM/eviction occurs after the baseline sample. Local protected use may set `RIVET_K8S_CAPACITY_GATE_MODE=observe`; that records the same evidence but does not turn threshold findings into success/failure. It still requires the exact staging acknowledgement and refuses non-staging contexts. On every normal finalization path, the gate writes `capacity-report.json`, including setup, scheduling, Job, and cleanup failures: it records the completed phase, available Pod snapshots and report data, plus cleanup outcome and only a failure class—not a raw exception, request header, or credential. If writing the local evidence artifact itself fails, the command fails explicitly rather than claiming a certificate. The separate diagnostic logs retain the bounded command context.
 
-This certificate is deliberately not proof of final production sizing. The initial runner does not collect node-ephemeral high-water usage, downstream provider concurrency, external tool correctness, or a simultaneous Evaluation batch. Use provider monitoring for memory/ephemeral high-water marks and retain its charts with the JSON report. Do not change HPA bounds, admission ceilings, or resource limits automatically from one run. First establish a stable staging envelope, then promote explicit values through normal review. Evaluation isolation remains blocked on the server-owned coordinator work; no result from this gate claims that editor-owned Evaluation execution is reserved or isolated.
+This certificate is deliberately not proof of final production sizing. The initial runner does not collect node-ephemeral high-water usage, downstream provider concurrency, external tool correctness, or a simultaneous Evaluation batch. Use provider monitoring for memory/ephemeral high-water marks and retain its charts with the JSON report. Do not change HPA bounds, admission ceilings, or resource limits automatically from one run. First establish a stable staging envelope, then promote explicit values through normal review. P10-A now provides the server-owned coordinator; P10-B batch quota/reserved-public-capacity work remains open, so no result from this gate claims hosted Evaluation execution is reserved or isolated.
 
 ### Cross-store backup and restore drill
 

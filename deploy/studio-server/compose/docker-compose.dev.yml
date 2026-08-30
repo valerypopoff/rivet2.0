@@ -65,12 +65,13 @@ services:
       - web_yarn_unplugged:/workspace/.yarn/unplugged
       - npm_cache:/home/rivet/.npm
       - yarn_cache:/home/rivet/.cache/yarn
+      - ./docker/preserve-host-pnp-during-command.sh:/tmp/preserve-host-pnp-during-command.sh:ro
     command: >
       sh -lc "
         corepack enable &&
         cd /workspace &&
         if [ ! -f node_modules/.studio-server-yarn-install-ok ] || [ ! -f node_modules/.yarn.lock ] || ! cmp -s yarn.lock node_modules/.yarn.lock; then
-          YARN_NODE_LINKER=node-modules YARN_CHECKSUM_BEHAVIOR=ignore yarn install --immutable &&
+          sh /tmp/preserve-host-pnp-during-command.sh /workspace env YARN_NODE_LINKER=node-modules YARN_CHECKSUM_BEHAVIOR=ignore yarn install --immutable &&
           cp yarn.lock node_modules/.yarn.lock &&
           touch node_modules/.studio-server-yarn-install-ok;
         fi &&
@@ -186,6 +187,7 @@ services:
       - api_node_modules:/workspace/node_modules
       - api_yarn_unplugged:/workspace/.yarn/unplugged
       - npm_cache:/home/rivet/.npm
+      - ./docker/preserve-host-pnp-during-command.sh:/tmp/preserve-host-pnp-during-command.sh:ro
       - ${RIVET_WORKFLOWS_HOST_PATH:-../../../.data/workflows}:/workflows
       - ${RIVET_WORKFLOW_RECORDINGS_HOST_PATH:-../../../.data/workflow-recordings}:/workflow-recordings
       - type: volume
@@ -199,7 +201,7 @@ services:
         corepack enable &&
         cd /workspace &&
         if [ ! -f node_modules/.studio-server-yarn-install-ok ] || [ ! -f node_modules/.yarn.lock ] || ! cmp -s yarn.lock node_modules/.yarn.lock; then
-          YARN_NODE_LINKER=node-modules YARN_CHECKSUM_BEHAVIOR=ignore yarn install --immutable &&
+          sh /tmp/preserve-host-pnp-during-command.sh /workspace env YARN_NODE_LINKER=node-modules YARN_CHECKSUM_BEHAVIOR=ignore yarn install --immutable &&
           cp yarn.lock node_modules/.yarn.lock &&
           touch node_modules/.studio-server-yarn-install-ok;
         fi &&

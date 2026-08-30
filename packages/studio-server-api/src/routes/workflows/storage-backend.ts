@@ -92,6 +92,7 @@ import {
 import type { RivetStudioLLMProfileHealthStore } from '../../llm-profile-health/store.js';
 import { FilesystemRivetEvaluationStore } from '../../evaluation-runs/filesystem-store.js';
 import type { RivetStudioEvaluationStore } from '../../evaluation-runs/store.js';
+import type { HostedEvaluationCoordinator } from '../../evaluation-runs/hosted-coordinator.js';
 
 function mapHostedProjectFilesystemError(
   error: unknown,
@@ -520,6 +521,12 @@ export async function getEvaluationStore(): Promise<RivetStudioEvaluationStore> 
     async (backend) => backend.getEvaluationStore(),
     async () => getFilesystemEvaluationStore(),
   );
+}
+
+/** Returns the durable hosted-Evaluations scheduler only in managed storage mode. */
+export async function getHostedEvaluationCoordinator(): Promise<HostedEvaluationCoordinator | null> {
+  if (!isManagedWorkflowStorageEnabled()) return null;
+  return (await getManagedBackend()).getHostedEvaluationCoordinator();
 }
 
 export async function listWorkflowRunStatisticsCatalogWithBackend(

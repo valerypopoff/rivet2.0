@@ -14,6 +14,8 @@ import {
   type GraphId,
   type GraphInputNode,
   type Project,
+  serializeDatasets,
+  serializeProject,
 } from '@valerypopoff/rivet2-core';
 import { useCurrentExecution } from './useCurrentExecution';
 import { graphState } from '../state/graph';
@@ -26,6 +28,7 @@ import { useStableCallback } from './useStableCallback';
 import { toast, type Id as ToastId } from 'react-toastify';
 import { applyEvaluationRunEvent, applyEvaluationRunSnapshot, evaluationsState } from '../state/evaluations';
 import {
+  assertPortableJson,
   EvaluationGraphExecutionError,
   type EvaluationExecutionMetrics,
   type EvaluationRecordingReference,
@@ -49,7 +52,12 @@ import {
 } from './remoteExecutorHelpers.js';
 import { handleError } from '../utils/errorHandling.js';
 import { getLLMChatV2ApiKeyEnvVarNames } from '../utils/chatV2ProviderEnv.js';
-import { useEnvironmentProvider, useEvaluationRunStore } from '../providers/ProvidersContext.js';
+import {
+  useDatasetProvider,
+  useEnvironmentProvider,
+  useEvaluationRunStore,
+  useHostedEvaluationCoordinator,
+} from '../providers/ProvidersContext.js';
 import { pluginsState } from '../state/plugins.js';
 import { withDerivedProjectPluginSpecs } from '../utils/pluginUsage.js';
 import { getProjectContextValues } from '../utils/projectContextValues.js';
@@ -191,13 +199,16 @@ function createRemoteEvaluationRecordingReference(): EvaluationRecordingReferenc
 
 export function useRemoteExecutor() {
   const executorSession = useExecutorSessionRuntime();
+  const datasetProvider = useDatasetProvider();
   const environmentProvider = useEnvironmentProvider();
   const evaluationRunStore = useEvaluationRunStore();
+  const hostedEvaluationCoordinator = useHostedEvaluationCoordinator();
   const store = useStore();
   const activeGraphRequestIdRef = useRef<RemoteRunRequestId | null>(null);
   // An evaluation owns several remote graph requests at once, so it cannot
   // share the normal one-request editor abort state.
   const evaluationAbortControllerRef = useRef<AbortController | null>(null);
+  const hostedEvaluationRunRef = useRef<{ projectId: ProjectId; runId: string } | null>(null);
   const evaluationProjectIdRef = useRef<ProjectId | null>(null);
   const earlyResultRequestIdsRef = useRef(new Set<RemoteRunRequestId>());
   const webAppStoragePatchCallbacksByRequestIdRef = useRef(
@@ -760,6 +771,90 @@ export function useRemoteExecutor() {
       const evaluationProjectId = projectForEvaluation.metadata.id;
       if (!evaluationProjectId)
         throw new Error('The loaded project is missing its project ID, so the evaluation cannot be stored.');
+      const isActiveEvaluationProject = () => store.get(projectState).metadata.id === evaluationProjectId;
+      const updateActiveProjectEvaluationState = (update: Parameters<typeof setEvaluationsState>[0]): void => {
+        if (isActiveEvaluationProject()) setEvaluationsState(update);
+      };
+
+      // The editor currently tracks one durable hosted run so the global stop
+      // action always addresses the right server-side job. Keep that fence even
+      // if an operator disables the feature flag while the run is in flight;
+      // otherwise a fallback evaluation could start and become impossible to
+      // cancel from this editor session.
+      if (hostedEvaluationRunRef.current) {
+        throw new Error('A Studio Server evaluation is already queued or running for this editor session.');
+      }
+      const hostedCapability = hostedEvaluationCoordinator
+        ? await hostedEvaluationCoordinator.getCapability()
+        : undefined;
+      if (hostedCapability?.enabled && hostedEvaluationCoordinator) {
+        if (!loadedProject.path) {
+          throw new Error('Save this project before running it on Studio Server so the server can resolve project references safely.');
+        }
+
+        const runKind = purpose === 'evaluation' ? 'evaluation' : 'execution benchmark';
+        const projectSnapshot: Project = {
+          ...projectForEvaluation,
+          ...(projectData === undefined ? {} : { data: structuredClone(projectData) }),
+        };
+        const datasetsContents = serializeDatasets(
+          await datasetProvider.exportDatasetsForProject(evaluationProjectId),
+        );
+        const contextValues = getProjectContextValues(projectContext);
+        for (const [name, value] of Object.entries(contextValues)) {
+          assertPortableJson(value, `project context ${name}`);
+        }
+        const serializedProject = serializeProject(projectSnapshot);
+        if (typeof serializedProject !== 'string') {
+          throw new Error('Could not serialize the current project for Studio Server evaluation.');
+        }
+        const run = await hostedEvaluationCoordinator.submit({
+          projectContents: serializedProject,
+          projectPath: loadedProject.path,
+          datasetsContents,
+          evaluationData: evaluations.data,
+          dataset,
+          suiteId,
+          purpose,
+          contextValues: contextValues as Record<string, PortableJson>,
+        });
+        hostedEvaluationRunRef.current = { projectId: evaluationProjectId, runId: run.id };
+        updateActiveProjectEvaluationState((state) => ({
+          ...applyEvaluationRunSnapshot(state, run),
+          runningSuiteId: suiteId,
+        }));
+        toast.info(`Queued ${runKind} on Studio Server: ${suite.name}`);
+
+        void (async () => {
+          while (hostedEvaluationRunRef.current?.runId === run.id) {
+            await new Promise<void>((resolve) => setTimeout(resolve, 1_000));
+            try {
+              const refreshed = await evaluationRunStore.get({ projectId: evaluationProjectId, runId: run.id });
+              if (!refreshed) continue;
+              const terminal = refreshed.executionStatus === 'completed' ||
+                refreshed.executionStatus === 'canceled' || refreshed.executionStatus === 'error';
+              if (isActiveEvaluationProject()) {
+                updateActiveProjectEvaluationState((state) => ({
+                  ...applyEvaluationRunSnapshot(state, refreshed),
+                  ...(terminal ? { runningSuiteId: undefined } : {}),
+                }));
+              }
+              if (!terminal) continue;
+              if (hostedEvaluationRunRef.current?.runId === run.id) hostedEvaluationRunRef.current = null;
+              if (isActiveEvaluationProject()) toast.info(formatEvaluationCompletionToast(refreshed));
+              return;
+            } catch (error) {
+              logRuntimeDebug('Failed to refresh a Studio Server evaluation run.', {
+                error,
+                evaluationProjectId,
+                runId: run.id,
+              });
+            }
+          }
+        })();
+        return run;
+      }
+
       if (evaluationAbortControllerRef.current) {
         throw new Error('An evaluation is already running for this project.');
       }
@@ -770,7 +865,6 @@ export function useRemoteExecutor() {
       const evaluationAbortController = new AbortController();
       evaluationAbortControllerRef.current = evaluationAbortController;
       evaluationProjectIdRef.current = evaluationProjectId;
-      const isActiveEvaluationProject = () => store.get(projectState).metadata.id === evaluationProjectId;
       const ensureActiveEvaluationProject = () => {
         if (evaluationAbortController.signal.aborted) throw evaluationAbortController.signal.reason;
         if (isActiveEvaluationProject()) return;
@@ -778,9 +872,6 @@ export function useRemoteExecutor() {
         const reason = new DOMException('Active project changed.', 'AbortError');
         evaluationAbortController.abort(reason);
         throw reason;
-      };
-      const updateActiveProjectEvaluationState = (update: Parameters<typeof setEvaluationsState>[0]): void => {
-        if (isActiveEvaluationProject()) setEvaluationsState(update);
       };
       let runningToastId: ToastId | undefined;
       try {
@@ -822,6 +913,7 @@ export function useRemoteExecutor() {
             uploadRemoteExecutorProjectIfNeeded({
               cache: uploadCacheRef.current,
               project: projectForEvaluation,
+              projectData,
               sessionKey: getRemoteExecutorUploadSessionKey(sessionState),
               settings,
               transport: {
@@ -959,6 +1051,22 @@ export function useRemoteExecutor() {
   );
 
   function tryAbortGraph() {
+    const hostedRun = hostedEvaluationRunRef.current;
+    if (hostedRun?.projectId === project.metadata.id && hostedEvaluationCoordinator) {
+      void hostedEvaluationCoordinator.requestCancel(hostedRun).then((run) => {
+        if (!run || store.get(projectState).metadata.id !== hostedRun.projectId) return;
+        const terminal = run.executionStatus === 'completed' ||
+          run.executionStatus === 'canceled' || run.executionStatus === 'error';
+        if (terminal && hostedEvaluationRunRef.current?.runId === hostedRun.runId) {
+          hostedEvaluationRunRef.current = null;
+        }
+        setEvaluationsState((state) => ({
+          ...applyEvaluationRunSnapshot(state, run),
+          ...(terminal ? { runningSuiteId: undefined } : {}),
+        }));
+      }).catch((error) => handleError(error, 'Failed to cancel the Studio Server evaluation'));
+      return;
+    }
     if (evaluationAbortControllerRef.current) {
       evaluationAbortControllerRef.current.abort(new DOMException('Evaluation canceled.', 'AbortError'));
       return;
