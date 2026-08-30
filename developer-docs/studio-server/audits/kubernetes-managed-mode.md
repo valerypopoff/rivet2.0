@@ -277,7 +277,7 @@ This protects configuration consistency, not provider truth or application throu
 
 Automated evidence is in [`managed-postgres-pool.test.ts`](../../../packages/studio-server-api/src/tests/managed-postgres-pool.test.ts) and [`kubernetes-contract.test.ts`](../../../packages/studio-server-api/src/tests/kubernetes-contract.test.ts). Operational calculation and provider checks are in [`docs/kubernetes.md`](../kubernetes.md#postgresql-connection-budget).
 
-## 2026-08-30 Reassessment: Additional Open Problems
+## 2026-08-31 Reassessment: Operational Certification Work
 
 The current implementation and static Kubernetes gate were reassessed after Problems 1 through 5 were completed. Release identity/rollback, cross-store recovery, hosted-Evaluation controls, fenced maintenance, and bounded observability artifacts are implemented in source. The remaining execution/Evaluation work is environment-specific capacity and disruption certification plus audit-to-enforce retention rollout; maintenance and observability now need staged validation and named operational ownership. The comprehensive implementation authority—including required change surfaces, safe rollout order, dependencies, risks, acceptance criteria, phased delivery, and the production-ready definition of done—is [`kubernetes_managed_mode_audit.md`](../../../kubernetes_managed_mode_audit.md#document-purpose-and-status-register).
 
