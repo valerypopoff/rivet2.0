@@ -1,5 +1,8 @@
 import { normalizeEvaluationRun } from '@valerypopoff/rivet2-evaluations';
-import type { HostedEvaluationCoordinatorProvider } from '../../app/src/providers/ProvidersContext';
+import type {
+  HostedEvaluationCoordinatorProvider,
+  HostedEvaluationRunState,
+} from '../../app/src/providers/ProvidersContext';
 import { RIVET_API_BASE_URL } from '../../studio-server-shared/hosted-env';
 import { parseJsonResponse } from './apiRequest';
 
@@ -30,6 +33,21 @@ export function createHostedEvaluationCoordinator(): HostedEvaluationCoordinator
     },
     async requestCancel(input) {
       const response = await fetch(endpoint(`/${encodeURIComponent(input.runId)}/cancel-hosted`), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(input),
+      });
+      if (response.status === 404) return undefined;
+      return normalizeEvaluationRun(await parseJsonResponse<unknown>(response));
+    },
+    async getRunState(input) {
+      const query = new URLSearchParams({ projectId: String(input.projectId) });
+      const response = await fetch(endpoint(`/${encodeURIComponent(input.runId)}/hosted-state?${query.toString()}`));
+      if (response.status === 404) return undefined;
+      return await parseJsonResponse<HostedEvaluationRunState>(response);
+    },
+    async retryInterrupted(input) {
+      const response = await fetch(endpoint(`/${encodeURIComponent(input.runId)}/retry-interrupted`), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(input),

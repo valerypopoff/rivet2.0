@@ -126,7 +126,8 @@ export const RivetApp: FC = () => {
   }, [selectedExecutor, setSelectedExecutor]);
 
   useExecutorSessionCoordinator(selectedExecutor);
-  const { tryRunGraph, tryRunEvaluation, tryAbortGraph, tryPauseGraph, tryResumeGraph } = useGraphExecutor();
+  const { tryRunGraph, tryRunEvaluation, tryRetryInterruptedEvaluation, tryAbortGraph, tryPauseGraph, tryResumeGraph } =
+    useGraphExecutor();
   const theme = useAtomValue(themeState);
   const customThemePrimaryColor = useAtomValue(customThemePrimaryColorState);
   const customThemeSecondaryColor = useAtomValue(customThemeSecondaryColorState);
@@ -312,7 +313,11 @@ export const RivetApp: FC = () => {
         <>
           <ProjectSelector mode="workspace" />
           <NoProject />
-          <EvaluationsRenderer tryRunEvaluation={tryRunEvaluation} abortEvaluation={tryAbortGraph} />
+          <EvaluationsRenderer
+            tryRunEvaluation={tryRunEvaluation}
+            retryInterruptedEvaluation={tryRetryInterruptedEvaluation}
+            abortEvaluation={tryAbortGraph}
+          />
           <PromptDesignerRenderer />
           <NewProjectModalRenderer />
           <AppErrorBoundary context="Settings Modal" fallback={<div>Failed to render Settings</div>}>
@@ -347,7 +352,11 @@ export const RivetApp: FC = () => {
           </AppErrorBoundary>
           <PromptDesignerRenderer />
           {!openingProjectSelected && (
-            <EvaluationsRenderer tryRunEvaluation={tryRunEvaluation} abortEvaluation={tryAbortGraph} />
+            <EvaluationsRenderer
+              tryRunEvaluation={tryRunEvaluation}
+              retryInterruptedEvaluation={tryRetryInterruptedEvaluation}
+              abortEvaluation={tryAbortGraph}
+            />
           )}
           {!openingProjectSelected && <DataStudioRenderer />}
           <NewProjectModalRenderer />

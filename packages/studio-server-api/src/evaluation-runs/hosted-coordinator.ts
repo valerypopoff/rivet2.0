@@ -114,30 +114,70 @@ export class HostedEvaluationRunConflictError extends Error {
     this.name = 'HostedEvaluationRunConflictError';
   }
 }
+
+/**
+ * The client asked to retry a run/job state that changed after it was read.
+ * This is deliberately distinct from capacity errors: refreshing the run is
+ * the only safe resolution, rather than blindly submitting the work again.
+ */
+export class HostedEvaluationRetryConflictError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'HostedEvaluationRetryConflictError';
+  }
+}
+
+export type HostedEvaluationJobState = HostedJobState;
 export type HostedEvaluationRunState = {
   status: HostedRunState;
   cancelRequested: boolean;
-  jobs: ReadonlyArray<
-    Pick<
-      HostedJobRow,
-      | 'job_id'
-      | 'case_id'
-      | 'case_name'
-      | 'case_index'
-      | 'trial_index'
-      | 'status'
-      | 'attempt'
-      | 'accepted_at'
-      | 'settled_at'
-    >
-  >;
+  jobs: ReadonlyArray<{
+    jobId: string;
+    caseId: string;
+    caseName: string;
+    caseIndex: number;
+    trialIndex: number;
+    status: HostedJobState;
+    /** Number of times a worker has claimed this trial. */
+    attempt: number;
+    acceptedAt?: string;
+    settledAt?: string;
+  }>;
 };
+
+type HostedRunStateQueryRow = QueryResultRow & {
+  status: HostedRunState;
+  cancel_requested_at: Date | string | null;
+  job_id: string | null;
+  case_id: string | null;
+  case_name: string | null;
+  case_index: number | null;
+  trial_index: number | null;
+  job_status: HostedJobState | null;
+  attempt: number | null;
+  accepted_at: Date | string | null;
+  settled_at: Date | string | null;
+};
+
+function optionalIsoTimestamp(value: Date | string | null): string | undefined {
+  if (value == null) return undefined;
+  return value instanceof Date ? value.toISOString() : value;
+}
 
 const TERMINAL_JOB_STATES = new Set<HostedJobState>(['settled', 'interrupted', 'canceled']);
 // Submission and interrupted-job retries both increase the durable outstanding
 // queue. Guard both paths with the same transaction-scoped lock so the global
 // capacity remains an invariant instead of a best-effort admission check.
 const HOSTED_EVALUATION_CAPACITY_ADVISORY_LOCK = 5_611_002;
+
+// Cancellation and explicit retry both change a parent run and multiple job
+// rows. Serializing those two user mutations per durable run prevents cancel
+// from taking a pending-job snapshot just before retry returns an interrupted
+// job to the queue. Hash collisions only serialize unrelated mutations; they
+// cannot cross project/run data boundaries or weaken correctness.
+async function lockHostedEvaluationRunMutation(client: PoolClient, project: string, runId: string): Promise<void> {
+  await client.query('SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2))', [project, runId]);
+}
 
 function parseSnapshot(value: HostedRunRow['snapshot_json']): HostedEvaluationSnapshot {
   const parsed = typeof value === 'string' ? JSON.parse(value) : value;
@@ -272,7 +312,7 @@ export class HostedEvaluationCoordinator {
     };
   }
   async getRunState(input: { projectId: ProjectId; runId: string }): Promise<HostedEvaluationRunState | undefined> {
-    const result = await this.#pool.query<HostedJobRow & Pick<HostedRunRow, 'status' | 'cancel_requested_at'>>(
+    const result = await this.#pool.query<HostedRunStateQueryRow>(
       `SELECT run.status, run.cancel_requested_at, job.job_id, job.case_id, job.case_name, job.case_index, job.trial_index,
               job.status AS job_status, job.attempt, job.accepted_at, job.settled_at
          FROM evaluation_hosted_runs AS run
@@ -286,19 +326,34 @@ export class HostedEvaluationCoordinator {
     return {
       status: first.status,
       cancelRequested: first.cancel_requested_at != null,
-      jobs: result.rows
-        .filter((row) => row.job_id != null)
-        .map((row) => ({
-          job_id: row.job_id,
-          case_id: row.case_id,
-          case_name: row.case_name,
-          case_index: Number(row.case_index),
-          trial_index: Number(row.trial_index),
-          status: (row as unknown as { job_status: HostedJobState }).job_status,
-          attempt: Number(row.attempt),
-          accepted_at: row.accepted_at,
-          settled_at: row.settled_at,
-        })),
+      jobs: result.rows.flatMap((row) => {
+        if (
+          row.job_id == null ||
+          row.case_id == null ||
+          row.case_name == null ||
+          row.case_index == null ||
+          row.trial_index == null ||
+          row.job_status == null ||
+          row.attempt == null
+        ) {
+          return [];
+        }
+        const acceptedAt = optionalIsoTimestamp(row.accepted_at);
+        const settledAt = optionalIsoTimestamp(row.settled_at);
+        return [
+          {
+            jobId: row.job_id,
+            caseId: row.case_id,
+            caseName: row.case_name,
+            caseIndex: Number(row.case_index),
+            trialIndex: Number(row.trial_index),
+            status: row.job_status,
+            attempt: Number(row.attempt),
+            ...(acceptedAt === undefined ? {} : { acceptedAt }),
+            ...(settledAt === undefined ? {} : { settledAt }),
+          },
+        ];
+      }),
     };
   }
 
@@ -433,9 +488,10 @@ export class HostedEvaluationCoordinator {
     const client = await this.#pool.connect();
     try {
       await client.query('BEGIN');
-      // Every mutating scheduler path locks jobs before the run projection.
-      // Claims use that same order, avoiding a claim/cancel deadlock where each
-      // transaction owns one side of the relationship and waits for the other.
+      // Serialize cancellation with explicit retry before either path snapshots
+      // mutable jobs. Claims remain safe through their locked job transition
+      // and durable cancellation check before graph execution begins.
+      await lockHostedEvaluationRunMutation(client, String(input.projectId), input.runId);
       const pending = await client.query<HostedJobRow>(
         `SELECT project_id, run_id, job_id, case_id, case_name, case_index, trial_index,
                 status, attempt, fencing_token, worker_id, trial_json
@@ -506,10 +562,12 @@ export class HostedEvaluationCoordinator {
     if (!this.#config.enabled)
       throw new Error('Hosted Evaluations are disabled, so interrupted trials cannot be retried.');
     const jobIds = [...new Set(input.jobIds.filter((id) => typeof id === 'string' && id.length > 0))];
-    if (jobIds.length === 0) throw new Error('Select one or more interrupted trials to retry.');
+    if (jobIds.length === 0)
+      throw new HostedEvaluationRetryConflictError('Select one or more interrupted trials to retry.');
     const client = await this.#pool.connect();
     try {
       await client.query('BEGIN');
+      await lockHostedEvaluationRunMutation(client, String(input.projectId), input.runId);
       // Retrying interrupted work returns terminal jobs to the same global
       // outstanding queue as a new submission. Share its advisory lock and
       // capacity accounting; otherwise retries can silently exceed the chart
@@ -524,7 +582,9 @@ export class HostedEvaluationCoordinator {
         [String(input.projectId), input.runId, jobIds],
       );
       if (interrupted.rowCount !== jobIds.length) {
-        throw new Error('Only currently interrupted hosted trials can be retried. Refresh this run and try again.');
+        throw new HostedEvaluationRetryConflictError(
+          'Only currently interrupted hosted trials can be retried. Refresh this run and try again.',
+        );
       }
       const hosted = await this.#findHostedRunForUpdate(client, String(input.projectId), input.runId);
       if (!hosted) {
@@ -532,7 +592,14 @@ export class HostedEvaluationCoordinator {
         return undefined;
       }
       if (hosted.cancel_requested_at)
-        throw new Error('Canceled hosted evaluations cannot be retried. Start a new run instead.');
+        throw new HostedEvaluationRetryConflictError(
+          'Canceled hosted evaluations cannot be retried. Start a new run instead.',
+        );
+      if (hosted.status !== 'interrupted' && hosted.status !== 'running') {
+        throw new HostedEvaluationRetryConflictError(
+          'This hosted Evaluation is no longer retryable. Refresh this run and try again.',
+        );
+      }
       const outstandingResult = await client.query<{ outstanding_count: number }>(
         `SELECT COUNT(*)::integer AS outstanding_count
            FROM evaluation_hosted_trial_jobs
@@ -566,6 +633,21 @@ export class HostedEvaluationCoordinator {
       );
       const run = await this.#getRunForUpdate(client, input.projectId, input.runId);
       const retryIds = new Set(jobIds);
+      const retainedTrials = run.trials.filter((trial) => !retryIds.has(trial.id));
+      const accountingComplete = !retainedTrials.some((trial) => trial.totalMetrics.hasUnknownCost);
+      const remainingInterrupted = await client.query<{ has_remaining_interrupted: boolean }>(
+        `SELECT EXISTS (
+           SELECT 1
+             FROM evaluation_hosted_trial_jobs
+            WHERE project_id = $1 AND run_id = $2 AND status = 'interrupted'
+         ) AS has_remaining_interrupted`,
+        [String(input.projectId), input.runId],
+      );
+      const hasRemainingInterrupted = Boolean(remainingInterrupted.rows[0]?.has_remaining_interrupted);
+      const retainedWarnings = run.warnings.filter(
+        (warning) =>
+          !warning.startsWith('One or more hosted trial workers were interrupted') || hasRemainingInterrupted,
+      );
       const next: EvaluationRun = {
         ...run,
         revision: (run.revision ?? 0) + 1,
@@ -573,12 +655,14 @@ export class HostedEvaluationCoordinator {
         executionStatus: 'running',
         qualityStatus: 'not-evaluated',
         qualityReason: { code: 'in-progress', message: 'The hosted evaluation is running.' },
+        accountingStatus: accountingComplete ? 'complete' : 'partial',
+        provenance: { ...run.provenance, accountingComplete },
         aggregate: undefined,
         thresholdResults: [],
-        warnings: run.warnings.filter(
-          (warning) => !warning.startsWith('One or more hosted trial workers were interrupted'),
+        warnings: retainedWarnings.filter(
+          (warning) => !accountingComplete || !warning.startsWith('Some provider pricing was unavailable.'),
         ),
-        trials: run.trials.filter((trial) => !retryIds.has(trial.id)),
+        trials: retainedTrials,
       };
       await this.#writeRun(client, next);
       await client.query('COMMIT');
@@ -1217,6 +1301,8 @@ export class HostedEvaluationCoordinator {
         }
       }
       if (interrupted && !canceled) {
+        const interruptionWarning =
+          'One or more hosted trial workers were interrupted after dispatch. An authenticated operator must explicitly retry those trials if repeating the work is safe.';
         next.executionStatus = 'error';
         next.qualityStatus = suite.evaluationMode === 'scoring' ? 'unable-to-evaluate' : 'failed';
         next.qualityReason = {
@@ -1224,9 +1310,7 @@ export class HostedEvaluationCoordinator {
           message:
             'One or more hosted trial workers were interrupted after dispatch. Those trials were not retried automatically.',
         };
-        next.warnings.push(
-          'One or more hosted trial workers were interrupted after dispatch. An authenticated operator must explicitly retry those trials if repeating the work is safe.',
-        );
+        if (!next.warnings.includes(interruptionWarning)) next.warnings.push(interruptionWarning);
         await client.query(
           `UPDATE evaluation_hosted_runs SET status = 'interrupted', updated_at = NOW() WHERE project_id = $1 AND run_id = $2`,
           [String(project), runId],

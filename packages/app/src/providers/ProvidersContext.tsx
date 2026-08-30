@@ -55,6 +55,26 @@ export type PathPolicyProvider = {
   readRelativeProjectFile?(currentProjectPath: string, projectFilePath: string): Promise<string>;
 };
 
+export type HostedEvaluationJobState = 'queued' | 'claimed' | 'accepted' | 'settled' | 'interrupted' | 'canceled';
+
+/** Stable API state for a managed Evaluation scheduler run. */
+export type HostedEvaluationRunState = {
+  status: 'queued' | 'running' | 'completed' | 'canceled' | 'interrupted';
+  cancelRequested: boolean;
+  jobs: readonly {
+    jobId: string;
+    caseId: string;
+    caseName: string;
+    caseIndex: number;
+    trialIndex: number;
+    status: HostedEvaluationJobState;
+    /** Number of worker claims; a retry has not yet increased it until claimed. */
+    attempt: number;
+    acceptedAt?: string;
+    settledAt?: string;
+  }[];
+};
+
 /**
  * Optional managed-server execution path. Its submission is immutable and
  * returns immediately; the editor only observes the durable run afterwards.
@@ -73,6 +93,12 @@ export type HostedEvaluationCoordinatorProvider = {
     contextValues: Record<string, PortableJson>;
   }): Promise<EvaluationRun>;
   requestCancel(input: { projectId: ProjectId; runId: string }): Promise<EvaluationRun | undefined>;
+  getRunState(input: { projectId: ProjectId; runId: string }): Promise<HostedEvaluationRunState | undefined>;
+  retryInterrupted(input: {
+    projectId: ProjectId;
+    runId: string;
+    jobIds: readonly string[];
+  }): Promise<EvaluationRun | undefined>;
 };
 
 /**

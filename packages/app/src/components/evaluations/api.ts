@@ -12,5 +12,10 @@ export type TryRunEvaluation = (input: {
   projectOverride?: Project;
 }) => Promise<EvaluationRun | undefined>;
 
+/** Requeues selected server-confirmed interrupted hosted trials after user confirmation. */
+export type TryRetryInterruptedEvaluation = (input: {
+  runId: string;
+  jobIds: readonly string[];
+}) => Promise<EvaluationRun | undefined>;
 /** Cancels the active suite without discarding trials that already completed. */
 export type AbortEvaluation = () => void;
