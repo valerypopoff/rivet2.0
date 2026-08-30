@@ -256,6 +256,24 @@ test('managed reconciliation status is aggregate-only and never selects raw obje
     },
   ]);
   assert.equal(status.states.find((state) => state.domain === 'workflows')?.openFindingCount, 2);
+  assert.equal(status.states.find((state) => state.domain === 'workflows')?.scanStatus, 'running');
+  assert.equal(status.states.find((state) => state.domain === 'evaluations')?.scanStatus, 'not-started');
+  assert.deepEqual(
+    status.states.find((state) => state.domain === 'runtime_libraries'),
+    {
+      activeGeneration: 1,
+      completedGeneration: 0,
+      domain: 'runtime_libraries',
+      lastCompletedAt: null,
+      lastErrorAt: null,
+      lastErrorCode: null,
+      openFindingCount: 0,
+      phase: 'metadata',
+      scanStartedAt: null,
+      scanStatus: 'not-started',
+    },
+    'fresh databases report every reconciliation domain without creating state rows',
+  );
   assert.equal(
     queries.some((sql) => /subject_key/i.test(sql)),
     false,

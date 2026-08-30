@@ -69,27 +69,30 @@ export function createManagedWorkflowContext(
     pool,
     blobStore: resolvedBlobStore,
   });
-  // Reuse the same S3 contract with the fixed runtime prefix. This secondary
-  // client exists only in managed production; injected in-memory stores keep
-  // unit tests isolated from object storage.
-  const runtimeLibrariesBlobStore = blobStore
-    ? undefined
-    : new S3ManagedWorkflowBlobStore(
-        {
-          ...config,
-          objectStoragePrefix: MANAGED_RUNTIME_LIBRARIES_OBJECT_STORAGE_PREFIX,
-        },
-        'runtime_libraries',
-      );
-  maintenance.registerTask(
-    'managed-reconciliation-audit',
-    createManagedReconciliationTask({
-      pageSize: maintenance.config.batchSize,
-      pool,
-      runtimeLibrariesBlobStore,
-      workflowBlobStore: resolvedBlobStore,
-    }),
-  );
+  // Reuse the same S3 contract with the fixed runtime prefix only on the
+  // maintenance owner. Execution replicas must not allocate audit work or an
+  // extra object-store client for the high-volume published endpoint path.
+  const runtimeLibrariesBlobStore =
+    maintenance.config.enabled && !blobStore
+      ? new S3ManagedWorkflowBlobStore(
+          {
+            ...config,
+            objectStoragePrefix: MANAGED_RUNTIME_LIBRARIES_OBJECT_STORAGE_PREFIX,
+          },
+          'runtime_libraries',
+        )
+      : undefined;
+  if (maintenance.config.enabled) {
+    maintenance.registerTask(
+      'managed-reconciliation-audit',
+      createManagedReconciliationTask({
+        pageSize: maintenance.config.batchSize,
+        pool,
+        runtimeLibrariesBlobStore,
+        workflowBlobStore: resolvedBlobStore,
+      }),
+    );
+  }
   const revisions = createManagedWorkflowRevisionFactory({
     blobStore: resolvedBlobStore,
     queueObjectDeletions: (domain, keys) => maintenance.queueObjectDeletions(domain, keys),

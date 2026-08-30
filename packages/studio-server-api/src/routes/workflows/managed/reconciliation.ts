@@ -44,6 +44,8 @@ export type ManagedReconciliationStatus = {
   openFindingCount: number;
   phase: ManagedReconciliationPhase;
   scanStartedAt: string | null;
+  /** Explicitly distinguishes a new database from an idle completed scan. */
+  scanStatus: 'not-started' | 'running' | 'idle' | 'error';
 };
 
 export type ManagedReconciliationFindingSummary = {
@@ -634,18 +636,47 @@ export async function getManagedReconciliationStatus(pool: Pool): Promise<{
     `),
   ]);
   const countByDomain = new Map(openCountsResult.rows.map((row) => [row.domain, Number(row.count)]));
-  return {
-    states: statesResult.rows.map((state) => ({
+  const stateByDomain = new Map(statesResult.rows.map((state) => [state.domain, state]));
+  const states = RECONCILIATION_DOMAINS.map((domain): ManagedReconciliationStatus => {
+    const state = stateByDomain.get(domain);
+    if (!state) {
+      return {
+        activeGeneration: 1,
+        completedGeneration: 0,
+        domain,
+        lastCompletedAt: null,
+        lastErrorAt: null,
+        lastErrorCode: null,
+        openFindingCount: 0,
+        phase: 'metadata',
+        scanStartedAt: null,
+        scanStatus: 'not-started',
+      };
+    }
+    const lastErrorAt = toIso(state.last_error_at);
+    const scanStartedAt = toIso(state.scan_started_at);
+    return {
       activeGeneration: toFiniteInteger(state.active_generation),
       completedGeneration: toFiniteInteger(state.completed_generation),
       domain: state.domain,
       lastCompletedAt: toIso(state.last_completed_at),
-      lastErrorAt: toIso(state.last_error_at),
+      lastErrorAt,
       lastErrorCode: state.last_error_code,
       openFindingCount: countByDomain.get(state.domain) ?? 0,
       phase: state.phase,
-      scanStartedAt: toIso(state.scan_started_at),
-    })),
+      scanStartedAt,
+      scanStatus:
+        lastErrorAt
+          ? 'error'
+          : scanStartedAt
+            ? 'running'
+            : toFiniteInteger(state.completed_generation) > 0
+              ? 'idle'
+              : 'not-started',
+    };
+  });
+  return {
+    states,
     findings: findingsResult.rows.map((finding) => ({
       count: toFiniteInteger(finding.count),
       domain: finding.domain,
