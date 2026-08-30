@@ -19,6 +19,8 @@ import { createManagedWorkflowEndpointSync } from './endpoint-sync.js';
 import { ManagedWorkflowExecutionCache } from './execution-cache.js';
 import { ManagedWorkflowExecutionInvalidationController } from './execution-invalidation.js';
 import { createManagedWorkflowMaintenance } from './maintenance.js';
+import { createManagedReconciliationTask, getManagedReconciliationStatus } from './reconciliation.js';
+import { MANAGED_RUNTIME_LIBRARIES_OBJECT_STORAGE_PREFIX } from '../../../runtime-libraries/config.js';
 import * as mappers from './mappers.js';
 import { createManagedWorkflowRevisionFactory } from './revision-factory.js';
 import {
@@ -46,6 +48,7 @@ export type ManagedWorkflowContext = {
   revisions: ReturnType<typeof createManagedWorkflowRevisionFactory>;
   endpointSync: ReturnType<typeof createManagedWorkflowEndpointSync>;
   maintenance: ReturnType<typeof createManagedWorkflowMaintenance>;
+  getReconciliationStatus(): ReturnType<typeof getManagedReconciliationStatus>;
   mappers: typeof mappers;
   initialize(): Promise<void>;
   checkHealth(context?: RuntimeHealthCheckContext): Promise<void>;
@@ -66,6 +69,27 @@ export function createManagedWorkflowContext(
     pool,
     blobStore: resolvedBlobStore,
   });
+  // Reuse the same S3 contract with the fixed runtime prefix. This secondary
+  // client exists only in managed production; injected in-memory stores keep
+  // unit tests isolated from object storage.
+  const runtimeLibrariesBlobStore = blobStore
+    ? undefined
+    : new S3ManagedWorkflowBlobStore(
+        {
+          ...config,
+          objectStoragePrefix: MANAGED_RUNTIME_LIBRARIES_OBJECT_STORAGE_PREFIX,
+        },
+        'runtime_libraries',
+      );
+  maintenance.registerTask(
+    'managed-reconciliation-audit',
+    createManagedReconciliationTask({
+      pageSize: maintenance.config.batchSize,
+      pool,
+      runtimeLibrariesBlobStore,
+      workflowBlobStore: resolvedBlobStore,
+    }),
+  );
   const revisions = createManagedWorkflowRevisionFactory({
     blobStore: resolvedBlobStore,
     queueObjectDeletions: (domain, keys) => maintenance.queueObjectDeletions(domain, keys),
@@ -138,6 +162,7 @@ export function createManagedWorkflowContext(
         await poolLease.release();
       } finally {
         resolvedBlobStore.dispose?.();
+        runtimeLibrariesBlobStore?.dispose?.();
       }
     })();
     await disposePromise;
@@ -165,6 +190,7 @@ export function createManagedWorkflowContext(
     revisions,
     endpointSync,
     maintenance,
+    getReconciliationStatus: () => getManagedReconciliationStatus(pool),
     mappers,
     initialize,
     checkHealth,

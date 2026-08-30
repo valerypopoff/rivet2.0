@@ -56,6 +56,7 @@
     "studio-server:clean": "node deploy/studio-server/scripts/clean-docker.mjs",
     "studio-server:runtime-libraries:managed:audit": "node deploy/studio-server/scripts/run-with-env.mjs \"yarn workspace @valerypopoff/rivet-studio-server-api run runtime-libraries:managed:audit\"",
     "studio-server:runtime-libraries:managed:prune": "node deploy/studio-server/scripts/run-with-env.mjs \"yarn workspace @valerypopoff/rivet-studio-server-api run runtime-libraries:managed:prune --\"",
+    "studio-server:managed-reconciliation:status": "node deploy/studio-server/scripts/run-with-env.mjs \"yarn workspace @valerypopoff/rivet-studio-server-api run managed-reconciliation:status\"",
     "studio-server:workflow-schema:migrate": "node deploy/studio-server/scripts/run-with-env.mjs \"yarn workspace @valerypopoff/rivet-studio-server-api run workflow-schema:migrate\"",
     "studio-server:workflow-schema:verify": "node deploy/studio-server/scripts/run-with-env.mjs \"yarn workspace @valerypopoff/rivet-studio-server-api run workflow-schema:verify\"",
     "studio-server:workflow-storage:migrate": "node deploy/studio-server/scripts/run-with-env.mjs \"yarn workspace @valerypopoff/rivet-studio-server-api run workflow-storage:migrate\"",

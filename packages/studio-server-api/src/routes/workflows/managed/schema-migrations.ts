@@ -5,7 +5,7 @@ import type { Pool, PoolClient, QueryResultRow } from 'pg';
 import { MANAGED_WORKFLOW_SCHEMA_SQL } from './schema.js';
 
 export const MANAGED_WORKFLOW_SCHEMA_MIGRATIONS_TABLE = 'managed_workflow_schema_migrations';
-export const CURRENT_MANAGED_WORKFLOW_SCHEMA_VERSION = 3;
+export const CURRENT_MANAGED_WORKFLOW_SCHEMA_VERSION = 4;
 // A serving release may verify an additive schema created by its immediate
 // successor only when the chart deliberately supplies that compatibility
 // window. Keep this constant explicit: raising it is the release-engineering
@@ -60,6 +60,37 @@ CREATE TABLE IF NOT EXISTS managed_object_deletion_outbox (
 
 CREATE INDEX IF NOT EXISTS managed_object_deletion_outbox_pending_idx
   ON managed_object_deletion_outbox(status, next_attempt_at, enqueued_at, object_key);
+`;
+
+const MANAGED_RECONCILIATION_SCHEMA_SQL = `
+CREATE TABLE IF NOT EXISTS managed_reconciliation_state (
+  domain TEXT PRIMARY KEY CHECK (domain IN ('evaluations', 'runtime_libraries', 'workflows')),
+  phase TEXT NOT NULL DEFAULT 'metadata' CHECK (phase IN ('metadata', 'objects')),
+  cursor TEXT NULL,
+  active_generation BIGINT NOT NULL DEFAULT 1 CHECK (active_generation > 0),
+  completed_generation BIGINT NOT NULL DEFAULT 0 CHECK (completed_generation >= 0),
+  scan_started_at TIMESTAMPTZ NULL,
+  last_completed_at TIMESTAMPTZ NULL,
+  last_error_at TIMESTAMPTZ NULL,
+  last_error_code TEXT NULL,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS managed_reconciliation_findings (
+  domain TEXT NOT NULL CHECK (domain IN ('evaluations', 'runtime_libraries', 'workflows')),
+  kind TEXT NOT NULL CHECK (char_length(kind) > 0),
+  subject_key TEXT NOT NULL CHECK (char_length(subject_key) > 0),
+  first_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  last_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  last_observed_generation BIGINT NOT NULL CHECK (last_observed_generation > 0),
+  last_completed_observed_generation BIGINT NULL CHECK (last_completed_observed_generation > 0),
+  consecutive_complete_scans INTEGER NOT NULL DEFAULT 0 CHECK (consecutive_complete_scans >= 0),
+  resolved_at TIMESTAMPTZ NULL,
+  PRIMARY KEY (domain, kind, subject_key)
+);
+
+CREATE INDEX IF NOT EXISTS managed_reconciliation_findings_open_idx
+  ON managed_reconciliation_findings(domain, resolved_at, kind, first_seen_at);
 `;
 const MIGRATION_STATEMENT_TIMEOUT = '5min';
 const VERIFY_STATEMENT_TIMEOUT = '30s';
@@ -173,6 +204,12 @@ export const MANAGED_WORKFLOW_SCHEMA_MIGRATIONS: readonly ManagedWorkflowSchemaM
     sql: MANAGED_MAINTENANCE_SCHEMA_SQL,
     checksum: 'bd4cc69a896623c0e6fb56ab47ea087d1791137348afaabc3c31399ccf56bd3e',
   },
+  {
+    version: 4,
+    name: 'managed-reconciliation-audit',
+    sql: MANAGED_RECONCILIATION_SCHEMA_SQL,
+    checksum: '6c6965c2d883e38d452345ab7730cb5704bc773275db41d9e7f3de00622cd330',
+  },
 ];
 
 function assertMigrationDefinitions(): void {
@@ -205,6 +242,8 @@ export const MANAGED_WORKFLOW_SCHEMA_REQUIRED_TABLES = [
   'app_settings',
   'managed_maintenance_leases',
   'managed_object_deletion_outbox',
+  'managed_reconciliation_state',
+  'managed_reconciliation_findings',
   'workflow_folders',
   'workflows',
   'workflow_revisions',
@@ -241,6 +280,25 @@ export const MANAGED_WORKFLOW_SCHEMA_REQUIRED_COLUMNS = [
   ['managed_object_deletion_outbox', 'last_error', 'text', 'YES'],
   ['managed_object_deletion_outbox', 'completed_at', 'timestamptz', 'YES'],
   ['managed_object_deletion_outbox', 'updated_at', 'timestamptz', 'NO'],
+  ['managed_reconciliation_state', 'domain', 'text', 'NO'],
+  ['managed_reconciliation_state', 'phase', 'text', 'NO'],
+  ['managed_reconciliation_state', 'cursor', 'text', 'YES'],
+  ['managed_reconciliation_state', 'active_generation', 'int8', 'NO'],
+  ['managed_reconciliation_state', 'completed_generation', 'int8', 'NO'],
+  ['managed_reconciliation_state', 'scan_started_at', 'timestamptz', 'YES'],
+  ['managed_reconciliation_state', 'last_completed_at', 'timestamptz', 'YES'],
+  ['managed_reconciliation_state', 'last_error_at', 'timestamptz', 'YES'],
+  ['managed_reconciliation_state', 'last_error_code', 'text', 'YES'],
+  ['managed_reconciliation_state', 'updated_at', 'timestamptz', 'NO'],
+  ['managed_reconciliation_findings', 'domain', 'text', 'NO'],
+  ['managed_reconciliation_findings', 'kind', 'text', 'NO'],
+  ['managed_reconciliation_findings', 'subject_key', 'text', 'NO'],
+  ['managed_reconciliation_findings', 'first_seen_at', 'timestamptz', 'NO'],
+  ['managed_reconciliation_findings', 'last_seen_at', 'timestamptz', 'NO'],
+  ['managed_reconciliation_findings', 'last_observed_generation', 'int8', 'NO'],
+  ['managed_reconciliation_findings', 'last_completed_observed_generation', 'int8', 'YES'],
+  ['managed_reconciliation_findings', 'consecutive_complete_scans', 'int4', 'NO'],
+  ['managed_reconciliation_findings', 'resolved_at', 'timestamptz', 'YES'],
   ['app_settings', 'setting_key', 'text', 'NO'],
   ['app_settings', 'revision', 'int8', 'NO'],
   ['app_settings', 'schema_version', 'int4', 'NO'],
@@ -384,6 +442,13 @@ export const MANAGED_WORKFLOW_SCHEMA_REQUIRED_COLUMN_DEFAULTS = [
   ['managed_object_deletion_outbox', 'next_attempt_at', 'now()'],
   ['managed_object_deletion_outbox', 'attempt_count', '0'],
   ['managed_object_deletion_outbox', 'updated_at', 'now()'],
+  ['managed_reconciliation_state', 'phase', "'metadata'::text"],
+  ['managed_reconciliation_state', 'active_generation', '1'],
+  ['managed_reconciliation_state', 'completed_generation', '0'],
+  ['managed_reconciliation_state', 'updated_at', 'now()'],
+  ['managed_reconciliation_findings', 'first_seen_at', 'now()'],
+  ['managed_reconciliation_findings', 'last_seen_at', 'now()'],
+  ['managed_reconciliation_findings', 'consecutive_complete_scans', '0'],
   ['app_settings', 'updated_at', 'now()'],
   ['evaluation_dataset_snapshots', 'created_at', 'now()'],
   ['evaluation_library', 'singleton_key', 'true'],
@@ -426,6 +491,13 @@ export const MANAGED_WORKFLOW_SCHEMA_REQUIRED_INDEXES = [
     'managed_object_deletion_outbox',
     'managed_object_deletion_outbox_pending_idx',
     ['status', 'next_attempt_at', 'enqueued_at', 'object_key'],
+    null,
+    [0, 0, 0, 0],
+  ],
+  [
+    'managed_reconciliation_findings',
+    'managed_reconciliation_findings_open_idx',
+    ['domain', 'resolved_at', 'kind', 'first_seen_at'],
     null,
     [0, 0, 0, 0],
   ],
@@ -491,6 +563,26 @@ export const MANAGED_WORKFLOW_SCHEMA_REQUIRED_CONSTRAINTS = [
   ['managed_object_deletion_outbox', 'c', 'CHECK ((char_length(object_key) > 0))'],
   ['managed_object_deletion_outbox', 'c', 'CHECK ((char_length(domain) > 0))'],
   ['managed_object_deletion_outbox', 'c', 'CHECK ((attempt_count >= 0))'],
+  ['managed_reconciliation_state', 'p', 'PRIMARY KEY (domain)'],
+  [
+    'managed_reconciliation_state',
+    'c',
+    "CHECK ((domain = ANY (ARRAY['evaluations'::text, 'runtime_libraries'::text, 'workflows'::text])))",
+  ],
+  ['managed_reconciliation_state', 'c', "CHECK ((phase = ANY (ARRAY['metadata'::text, 'objects'::text])))"],
+  ['managed_reconciliation_state', 'c', 'CHECK ((active_generation > 0))'],
+  ['managed_reconciliation_state', 'c', 'CHECK ((completed_generation >= 0))'],
+  ['managed_reconciliation_findings', 'p', 'PRIMARY KEY (domain, kind, subject_key)'],
+  [
+    'managed_reconciliation_findings',
+    'c',
+    "CHECK ((domain = ANY (ARRAY['evaluations'::text, 'runtime_libraries'::text, 'workflows'::text])))",
+  ],
+  ['managed_reconciliation_findings', 'c', 'CHECK ((char_length(kind) > 0))'],
+  ['managed_reconciliation_findings', 'c', 'CHECK ((char_length(subject_key) > 0))'],
+  ['managed_reconciliation_findings', 'c', 'CHECK ((last_observed_generation > 0))'],
+  ['managed_reconciliation_findings', 'c', 'CHECK ((last_completed_observed_generation > 0))'],
+  ['managed_reconciliation_findings', 'c', 'CHECK ((consecutive_complete_scans >= 0))'],
   [
     'managed_object_deletion_outbox',
     'c',

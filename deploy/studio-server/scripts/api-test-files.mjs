@@ -35,6 +35,7 @@ export const defaultApiTestFiles = [
   'src/tests/managed-mappers.test.ts',
   'src/tests/managed-postgres-pool.test.ts',
   'src/tests/managed-publication-history.test.ts',
+  'src/tests/managed-reconciliation.test.ts',
   'src/tests/managed-recordings.test.ts',
   'src/tests/managed-revision-factory.test.ts',
   'src/tests/managed-workflow-schema-migrations.test.ts',

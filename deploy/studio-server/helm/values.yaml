@@ -136,8 +136,8 @@ workflowSchema:
   # schema. The managed release command widens maximumVersion only for a
   # documented expand-only rollback; the migration Job always stays exact.
   compatibility:
-    minimumVersion: 3
-    maximumVersion: 3
+    minimumVersion: 4
+    maximumVersion: 4
   migrationJob:
     enabled: true
     backoffLimit: 2

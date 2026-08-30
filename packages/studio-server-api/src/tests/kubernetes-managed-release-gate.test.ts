@@ -137,7 +137,7 @@ test('managed release gate accepts an exact prior API image only as a complete d
   });
   assert.equal(imageReference(config.previousApiImage!), `example.test/rivet/api@${digest('e')}`);
   assert.deepEqual(config.managedWorkflowSchema, {
-    version: 3,
+    version: 4,
     minimumRollbackCompatibleVersion: 2,
   });
 });
@@ -156,7 +156,7 @@ test('managed release gate renders managed storage and digest-pinned image value
   assert.equal(values.postgres.host, 'release-gate-postgres');
   assert.equal(values.objectStorage.endpoint, 'http://release-gate-minio:9000');
   assert.equal(values.objectStorage.bucket, 'rivet-release-gate');
-  assert.deepEqual(values.workflowSchema.compatibility, { minimumVersion: 3, maximumVersion: 3 });
+  assert.deepEqual(values.workflowSchema.compatibility, { minimumVersion: 4, maximumVersion: 4 });
   assert.equal(imageReference(config.images.executor), `example.test/rivet/executor@${digest('d')}`);
 });
 

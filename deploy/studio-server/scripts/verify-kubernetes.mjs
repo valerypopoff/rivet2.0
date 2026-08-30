@@ -3,6 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { resolveHelmBinOrThrow } from './lib/k8s-tools.mjs';
+import { readManagedWorkflowSchemaReleaseContract } from './lib/studio-server-release-manifest.mjs';
 
 const rootDir = process.cwd();
 const launcherName = 'verify-kubernetes';
@@ -70,7 +71,7 @@ async function verifyLocalRender(nodeBin, envPath) {
   });
 }
 
-async function verifyProdRender(helmBin) {
+async function verifyProdRender(helmBin, managedWorkflowSchemaVersion) {
   console.log(`[${launcherName}] Linting and rendering the production overlay...`);
 
   const prodImageArgs = [
@@ -105,7 +106,7 @@ async function verifyProdRender(helmBin) {
     '--set',
     `release.production.chart.contentDigest=sha256:${'f'.repeat(64)}`,
     '--set',
-    'release.production.database.managedWorkflowSchemaVersion=3',
+    `release.production.database.managedWorkflowSchemaVersion=${managedWorkflowSchemaVersion}`,
   ];
 
   await spawnProgram(helmBin, [
@@ -134,7 +135,7 @@ async function main() {
 
   try {
     await verifyLocalRender(nodeBin, envPath);
-    await verifyProdRender(helmBin);
+    await verifyProdRender(helmBin, readManagedWorkflowSchemaReleaseContract(rootDir).version);
     console.log(`[${launcherName}] Kubernetes local/prod render verification passed.`);
   } finally {
     fs.rmSync(tempDir, { recursive: true, force: true });

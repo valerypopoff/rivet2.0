@@ -47,6 +47,16 @@ test('metrics registry renders only finite, fixed-label metric families', () => 
     mode: 'enforce',
   });
   metrics.recordPublishedExecutionAdmission('capacity_exceeded', 'workflow_endpoint');
+  metrics.recordManagedReconciliationPage({
+    domain: 'runtime_libraries',
+    outcome: 'success',
+    phase: 'objects',
+  });
+  metrics.setManagedReconciliationState({
+    completedGeneration: 2,
+    domain: 'runtime_libraries',
+    openFindings: 3,
+  });
 
   const rendered = metrics.render();
   assert.match(
@@ -61,6 +71,14 @@ test('metrics registry renders only finite, fixed-label metric families', () => 
   assert.match(
     rendered,
     /rivet_published_execution_admission_total\{profile="execution",result="capacity_exceeded",surface="workflow_endpoint"\} 1/,
+  );
+  assert.match(
+    rendered,
+    /rivet_managed_reconciliation_pages_total\{domain="runtime_libraries",outcome="success",phase="objects",profile="execution"\} 1/,
+  );
+  assert.match(
+    rendered,
+    /rivet_managed_reconciliation_open_findings\{domain="runtime_libraries",profile="execution"\} 3/,
   );
   assert.doesNotMatch(rendered, /workflow name|prompt|secret|http:\/\//i);
 });

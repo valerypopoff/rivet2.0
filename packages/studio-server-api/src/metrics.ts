@@ -38,7 +38,9 @@ export type MetricsHttpRoute =
 export type MetricsPublishedExecutionSurface = 'web_app_action' | 'workflow_endpoint';
 export type MetricsPublishedAdmissionResult = 'accepted' | 'capacity_exceeded' | 'draining';
 export type MetricsObjectStorageDomain = 'runtime_libraries' | 'workflows';
-export type MetricsObjectStorageOperation = 'delete' | 'delete_many' | 'get' | 'health' | 'list' | 'put';
+export type MetricsObjectStorageOperation = 'delete' | 'delete_many' | 'get' | 'head' | 'health' | 'list' | 'put';
+export type MetricsManagedReconciliationDomain = 'evaluations' | 'runtime_libraries' | 'workflows';
+export type MetricsManagedReconciliationPhase = 'metadata' | 'objects';
 
 export function getMetricsConfig(
   env: NodeJS.ProcessEnv = process.env,
@@ -171,6 +173,27 @@ export class StudioMetrics {
 
   recordRuntimeLibraryJob(outcome: 'failed' | 'succeeded'): void {
     this.incrementCounter('rivet_runtime_library_jobs_total', { outcome });
+  }
+
+  recordManagedReconciliationPage(input: {
+    domain: MetricsManagedReconciliationDomain;
+    outcome: 'error' | 'skipped' | 'success';
+    phase: MetricsManagedReconciliationPhase;
+  }): void {
+    this.incrementCounter('rivet_managed_reconciliation_pages_total', input);
+  }
+
+  setManagedReconciliationState(input: {
+    completedGeneration: number;
+    domain: MetricsManagedReconciliationDomain;
+    openFindings: number;
+  }): void {
+    this.setGauge(
+      'rivet_managed_reconciliation_completed_generation',
+      { domain: input.domain },
+      input.completedGeneration,
+    );
+    this.setGauge('rivet_managed_reconciliation_open_findings', { domain: input.domain }, input.openFindings);
   }
 
   render(): string {

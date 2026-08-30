@@ -131,9 +131,15 @@ test('rendered chart keeps control-plane and execution-plane API env contracts d
       `${volumeName} should have a bounded emptyDir wherever the local managed topology creates it`,
     );
   }
-  assert.doesNotMatch(renderedChart, /emptyDir: \{\}/, 'the managed local render must not leave writable emptyDirs unbounded');
+  assert.doesNotMatch(
+    renderedChart,
+    /emptyDir: \{\}/,
+    'the managed local render must not leave writable emptyDirs unbounded',
+  );
   const initContainersWithResources =
-    renderedChart.match(/- name: (?:deployment-storage-settings|managed-app-settings-projection)[\s\S]*?resources:\s*\n\s*requests:/g) ?? [];
+    renderedChart.match(
+      /- name: (?:deployment-storage-settings|managed-app-settings-projection)[\s\S]*?resources:\s*\n\s*requests:/g,
+    ) ?? [];
   assert.equal(
     initContainersWithResources.length,
     4,
@@ -321,11 +327,11 @@ test('chart serializes managed workflow migrations before verify-only API worklo
   assert.match(chartHelpers, /vault\.hashicorp\.com\/agent-pre-populate-only: "true"/);
   assert.match(
     renderedChart,
-    /bootstrap-deployment-storage-settings\.mjs; RIVET_APP_SETTINGS_BACKEND=file RIVET_MANAGED_WORKFLOW_SCHEMA_MIN_VERSION="3" RIVET_MANAGED_WORKFLOW_SCHEMA_MAX_VERSION="3" node \/app\/packages\/studio-server-api\/dist\/studio-server-api\/src\/scripts\/migrate-managed-workflow-schema\.js migrate; node \/app\/packages\/studio-server-api\/dist\/studio-server-api\/src\/scripts\/import-managed-app-settings\.js/,
+    /bootstrap-deployment-storage-settings\.mjs; RIVET_APP_SETTINGS_BACKEND=file RIVET_MANAGED_WORKFLOW_SCHEMA_MIN_VERSION="4" RIVET_MANAGED_WORKFLOW_SCHEMA_MAX_VERSION="4" node \/app\/packages\/studio-server-api\/dist\/studio-server-api\/src\/scripts\/migrate-managed-workflow-schema\.js migrate; node \/app\/packages\/studio-server-api\/dist\/studio-server-api\/src\/scripts\/import-managed-app-settings\.js/,
   );
   assert.match(
     renderedChartWithRollbackWindow,
-    /RIVET_MANAGED_WORKFLOW_SCHEMA_MIN_VERSION="3" RIVET_MANAGED_WORKFLOW_SCHEMA_MAX_VERSION="3" node \/app\/packages\/studio-server-api\/dist\/studio-server-api\/src\/scripts\/migrate-managed-workflow-schema\.js migrate/,
+    /RIVET_MANAGED_WORKFLOW_SCHEMA_MIN_VERSION="4" RIVET_MANAGED_WORKFLOW_SCHEMA_MAX_VERSION="4" node \/app\/packages\/studio-server-api\/dist\/studio-server-api\/src\/scripts\/migrate-managed-workflow-schema\.js migrate/,
     'the migration Job must use the exact candidate version even when serving pods support a lower rollback version',
   );
   assert.match(migrationJobDocument, /name: RIVET_APP_DATA_ROOT\s*\n\s*value: "\/var\/tmp\/rivet-migration-app-data"/);
@@ -351,6 +357,9 @@ test('chart serializes managed workflow migrations before verify-only API worklo
     2,
     'control and execution API pods must verify the schema instead of mutating it',
   );
+  const kubernetesVerifier = readRepoFile('deploy/studio-server/scripts/verify-kubernetes.mjs');
+  assert.match(kubernetesVerifier, /readManagedWorkflowSchemaReleaseContract\(rootDir\)\.version/);
+  assert.doesNotMatch(kubernetesVerifier, /managedWorkflowSchemaVersion=3/);
   assert.match(
     readRepoFile('deploy/studio-server/images/api/entrypoint.sh'),
     /deployment_managed_workflow_schema_mode="\$\{RIVET_DEPLOYMENT_MANAGED_WORKFLOW_SCHEMA_MODE:-\}"[\s\S]*load_optional_dotenv \/vault\/dotenv[\s\S]*RIVET_MANAGED_WORKFLOW_SCHEMA_MODE="\$deployment_managed_workflow_schema_mode"/,
@@ -366,7 +375,10 @@ test('Vault dotenv injection runs before chart init containers and reserves boun
     'vault.dotenvTemplate=RIVET_KEY=secret/data/rivet/contract-test',
   ]);
 
-  assert.match(chartHelpers, /range \$key, \$value := \.Values\.vault\.annotations[\s\S]*?vault\.hashicorp\.com\/agent-init-first: "true"/);
+  assert.match(
+    chartHelpers,
+    /range \$key, \$value := \.Values\.vault\.annotations[\s\S]*?vault\.hashicorp\.com\/agent-init-first: "true"/,
+  );
   assert.match(
     chartHelpers,
     /agent-init-first: "true"[\s\S]*?agent-requests-cpu:[\s\S]*?agent-requests-mem:[\s\S]*?agent-requests-ephemeral:[\s\S]*?agent-limits-cpu:[\s\S]*?agent-limits-mem:[\s\S]*?agent-limits-ephemeral:/,
@@ -597,7 +609,7 @@ test('production rendering requires a fully identified digest-pinned release', a
     '--set',
     `release.production.chart.contentDigest=sha256:${'f'.repeat(64)}`,
     '--set',
-    'release.production.database.managedWorkflowSchemaVersion=3',
+    'release.production.database.managedWorkflowSchemaVersion=4',
   ];
   const renderProduction = (overrides: string[] = []) =>
     execFileSync(helmBin, [...baseArgs, ...identifiedReleaseArgs, ...overrides], {
