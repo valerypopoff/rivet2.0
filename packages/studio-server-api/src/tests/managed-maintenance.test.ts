@@ -6,6 +6,7 @@ import {
   createManagedWorkflowMaintenance,
   getManagedWorkflowMaintenanceConfig,
   getManagedWorkflowMaintenanceRetryDelayMs,
+  isManagedObjectDeletionReason,
   normalizeManagedObjectDeletionKeys,
 } from '../routes/workflows/managed/maintenance.js';
 
@@ -42,6 +43,8 @@ test('managed object deletions are normalized and failures back off without beco
   assert.equal(getManagedWorkflowMaintenanceRetryDelayMs(1), 1_000);
   assert.equal(getManagedWorkflowMaintenanceRetryDelayMs(4), 8_000);
   assert.equal(getManagedWorkflowMaintenanceRetryDelayMs(99), 60 * 60 * 1000);
+  assert.equal(isManagedObjectDeletionReason('workflow-recording-deletion'), true);
+  assert.equal(isManagedObjectDeletionReason('future-object-payload'), false);
 });
 test('managed deletion enqueue batches keys and reopens a blocked key after a new deletion intent', async () => {
   const queries: Array<{ sql: string; parameters: unknown[] | undefined }> = [];
@@ -53,17 +56,24 @@ test('managed deletion enqueue batches keys and reopens a blocked key after a ne
   const client = {
     query: async (sql: string, parameters?: unknown[]) => {
       queries.push({ sql, parameters });
-      return { rows: [] };
+      return { rows: [{ object_key: 'key-a' }, { object_key: 'key-b' }] };
     },
   } as never;
 
-  await maintenance.enqueueObjectDeletions(client, 'workflow-recording-deletion', [' key-a ', 'key-a', null, 'key-b']);
+  const queued = await maintenance.enqueueObjectDeletions(client, 'workflow-recording-deletion', [
+    ' key-a ',
+    'key-a',
+    null,
+    'key-b',
+  ]);
 
+  assert.equal(queued, 2);
   assert.equal(queries.length, 1);
   assert.deepEqual(queries[0]?.parameters, [['key-a', 'key-b'], 'workflow-recording-deletion']);
   assert.match(queries[0]?.sql ?? '', /UNNEST\(\$1::text\[\]\)/u);
   assert.match(queries[0]?.sql ?? '', /WHERE managed_object_deletion_outbox\.status = 'blocked'/u);
   assert.match(queries[0]?.sql ?? '', /status = 'pending'/u);
+  assert.match(queries[0]?.sql ?? '', /RETURNING object_key/u);
 });
 function createMaintenanceLogger() {
   return {
@@ -85,7 +95,12 @@ test('managed maintenance claims an orphaned key once and marks it completed aft
       }
       if (sql.includes('WITH next_object')) {
         claimCount += 1;
-        return { rows: claimCount === 1 ? [{ object_key: 'orphan/key', attempt_count: 0 }] : [] };
+        return {
+          rows:
+            claimCount === 1
+              ? [{ object_key: 'orphan/key', domain: 'workflow-recording-deletion', attempt_count: 0 }]
+              : [],
+        };
       }
       if (sql.includes('FROM (') && sql.includes('referenced_objects')) {
         return { rows: [] };
@@ -109,6 +124,53 @@ test('managed maintenance claims an orphaned key once and marks it completed aft
   assert.deepEqual(deletedKeys, ['orphan/key']);
   assert.ok(
     queries.some(({ sql, parameters }) => sql.includes("SET status = 'completed'") && parameters?.[0] === 'orphan/key'),
+  );
+});
+
+test('audit or disabled stale-upload policy blocks queued stale work instead of deleting after rollback', async () => {
+  const queries: Array<{ sql: string; parameters: unknown[] | undefined }> = [];
+  const deletedKeys: string[] = [];
+  let claimCount = 0;
+  const maintenance = createManagedWorkflowMaintenance({
+    pool: {
+      query: async (sql: string, parameters?: unknown[]) => {
+        queries.push({ sql, parameters });
+        if (sql.includes('INSERT INTO managed_maintenance_leases')) return { rows: [{ fencing_token: 8 }] };
+        if (sql.includes('WITH next_object')) {
+          claimCount += 1;
+          return {
+            rows:
+              claimCount === 1
+                ? [
+                    {
+                      object_key: 'workflow-a/revisions/revision-a/project.rivet-project',
+                      domain: 'workflow-stale-upload-reconciliation',
+                      attempt_count: 0,
+                    },
+                  ]
+                : [],
+          };
+        }
+        if (sql.includes("SET status = 'blocked'"))
+          return { rows: [{ object_key: 'workflow-a/revisions/revision-a/project.rivet-project' }] };
+        return { rows: [] };
+      },
+    } as never,
+    blobStore: { delete: async (key: string) => deletedKeys.push(key) } as never,
+    config: { enabled: true, intervalMs: 60_000, leaseMs: 60_000, batchSize: 1 },
+    logger: createMaintenanceLogger(),
+    staleUploadDeletionEnabled: false,
+  });
+
+  await maintenance.runNow();
+
+  assert.deepEqual(deletedKeys, []);
+  assert.ok(
+    queries.some(
+      ({ sql, parameters }) =>
+        sql.includes("SET status = 'blocked'") &&
+        parameters?.[1] === 'The current deletion policy is audit-only or disabled.',
+    ),
   );
 });
 test('managed maintenance publishes bounded pass and durable outbox observations outside the scrape path', async () => {
@@ -241,10 +303,14 @@ test('managed maintenance blocks live references and retains transient object-st
           if (sql.includes('INSERT INTO managed_maintenance_leases')) return { rows: [{ fencing_token: 3 }] };
           if (sql.includes('WITH next_object')) {
             claimCount += 1;
-            return { rows: claimCount === 1 ? [{ object_key: 'live/key', attempt_count: 0 }] : [] };
+            return {
+              rows:
+                claimCount === 1
+                  ? [{ object_key: 'live/key', domain: 'workflow-recording-deletion', attempt_count: 0 }]
+                  : [],
+            };
           }
-          if (sql.includes('FROM (') && sql.includes('referenced_objects'))
-            return { rows: [{ object_key: 'live/key' }] };
+          if (sql.includes('WITH referenced_objects')) return { rows: [{ object_key: 'live/key' }] };
           return { rows: [] };
         },
       } as never,
@@ -275,9 +341,14 @@ test('managed maintenance blocks live references and retains transient object-st
           if (sql.includes('INSERT INTO managed_maintenance_leases')) return { rows: [{ fencing_token: 4 }] };
           if (sql.includes('WITH next_object')) {
             claimCount += 1;
-            return { rows: claimCount === 1 ? [{ object_key: 'retry/key', attempt_count: 2 }] : [] };
+            return {
+              rows:
+                claimCount === 1
+                  ? [{ object_key: 'retry/key', domain: 'workflow-recording-deletion', attempt_count: 2 }]
+                  : [],
+            };
           }
-          if (sql.includes('FROM (') && sql.includes('referenced_objects')) return { rows: [] };
+          if (sql.includes('WITH referenced_objects')) return { rows: [] };
           return { rows: [] };
         },
       } as never,

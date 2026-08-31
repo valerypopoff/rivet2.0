@@ -325,6 +325,28 @@ export function createRecordingBlobKey(
   return createManagedWorkflowBlobKey(workflowId, 'recordings', recordingId, fileName);
 }
 
+/**
+ * A reconciliation finding is not by itself permission to delete a key. This
+ * narrow grammar recognizes only the immutable revision/recording artifacts
+ * that this module creates, preventing a future policy from sweeping an
+ * arbitrary object under the workflow-storage prefix.
+ */
+export function isManagedWorkflowArtifactObjectKey(key: string): boolean {
+  const segments = key.split('/');
+  if (segments.length !== 4 || segments.some((segment) => !segment || segment !== segment.trim())) return false;
+  const [workflowId, collection, objectId, fileName] = segments;
+  if (!workflowId || !objectId || workflowId === '.' || workflowId === '..' || objectId === '.' || objectId === '..') {
+    return false;
+  }
+  return (
+    (collection === 'revisions' && (fileName === 'project.rivet-project' || fileName === 'dataset.rivet-data')) ||
+    (collection === 'recordings' &&
+      (fileName === 'recording.rivet-recording' ||
+        fileName === 'replay.rivet-project' ||
+        fileName === 'replay.rivet-data'))
+  );
+}
+
 export function createManagedRevisionId(): string {
   return randomUUID();
 }

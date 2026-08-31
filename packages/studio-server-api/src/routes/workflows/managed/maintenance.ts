@@ -5,6 +5,7 @@ import type { Pool, PoolClient, QueryResultRow } from 'pg';
 import { getStudioMetrics, recordStudioMetrics, type MetricsManagedMaintenancePassOutcome } from '../../../metrics.js';
 import type { ManagedWorkflowBlobStore } from './blob-store.js';
 import { queryOne } from './db.js';
+import { findManagedWorkflowObjectReferences } from './workflow-object-references.js';
 
 const MAINTENANCE_LEASE_NAME = 'managed-workflow-maintenance';
 const DEFAULT_INTERVAL_MS = 5 * 60 * 1000;
@@ -33,6 +34,33 @@ export type ManagedWorkflowMaintenanceLease = {
 
 export type ManagedWorkflowMaintenanceTask = (lease: ManagedWorkflowMaintenanceLease) => Promise<void>;
 
+/**
+ * Each durable object deletion records an explicit, reviewed reason. The
+ * outbox intentionally has no generic domain: adding a new payload class
+ * requires its own policy, live-reference verifier, retention contract, and
+ * tests before it can reach blob storage.
+ */
+export type ManagedObjectDeletionReason =
+  | 'workflow-precommit-blob-cleanup'
+  | 'workflow-project-deletion'
+  | 'workflow-recording-deletion'
+  | 'workflow-recording-retention'
+  | 'workflow-stale-upload-reconciliation';
+
+const EXPLICIT_WORKFLOW_DELETION_REASONS = new Set<ManagedObjectDeletionReason>([
+  'workflow-precommit-blob-cleanup',
+  'workflow-project-deletion',
+  'workflow-recording-deletion',
+  'workflow-recording-retention',
+]);
+
+export function isManagedObjectDeletionReason(value: string): value is ManagedObjectDeletionReason {
+  return (
+    EXPLICIT_WORKFLOW_DELETION_REASONS.has(value as ManagedObjectDeletionReason) ||
+    value === 'workflow-stale-upload-reconciliation'
+  );
+}
+
 type LeaseRow = QueryResultRow & {
   fencing_token: number;
 };
@@ -40,6 +68,7 @@ type LeaseRow = QueryResultRow & {
 type OutboxRow = QueryResultRow & {
   object_key: string;
   attempt_count: number;
+  domain: string;
 };
 
 type OutboxMetricsRow = QueryResultRow & {
@@ -66,6 +95,7 @@ const MANAGED_OBJECT_DELETION_ENQUEUE_SQL = `
         completed_at = NULL,
         updated_at = NOW()
   WHERE managed_object_deletion_outbox.status = 'blocked'
+  RETURNING object_key
 `;
 
 export class ManagedWorkflowMaintenanceLeaseLostError extends Error {
@@ -159,14 +189,16 @@ export function normalizeManagedObjectDeletionKeys(keys: Array<string | null | u
  */
 async function enqueueManagedObjectDeletions(
   client: Pool | PoolClient,
-  domain: string,
+  reason: ManagedObjectDeletionReason,
   keys: Array<string | null | undefined>,
-): Promise<void> {
-  const normalizedDomain = domain.trim();
-  if (!normalizedDomain) throw new Error('Managed object deletion domains must not be empty.');
+): Promise<number> {
+  if (!isManagedObjectDeletionReason(reason)) {
+    throw new Error(`Unknown managed object deletion reason ${JSON.stringify(reason)}.`);
+  }
   const objectKeys = normalizeManagedObjectDeletionKeys(keys);
-  if (objectKeys.length === 0) return;
-  await client.query(MANAGED_OBJECT_DELETION_ENQUEUE_SQL, [objectKeys, normalizedDomain]);
+  if (objectKeys.length === 0) return 0;
+  const result = await client.query<{ object_key: string }>(MANAGED_OBJECT_DELETION_ENQUEUE_SQL, [objectKeys, reason]);
+  return result.rows.length;
 }
 
 export function createManagedWorkflowMaintenance(options: {
@@ -175,6 +207,8 @@ export function createManagedWorkflowMaintenance(options: {
   config?: ManagedWorkflowMaintenanceConfig;
   holderId?: string;
   logger?: Pick<Console, 'error' | 'info' | 'warn'>;
+  /** Audit/disabled stale-upload policy must block already queued stale work. */
+  staleUploadDeletionEnabled?: boolean;
 }) {
   const config = options.config ?? getManagedWorkflowMaintenanceConfig();
   const holderId = options.holderId?.trim() || randomUUID();
@@ -296,28 +330,17 @@ export function createManagedWorkflowMaintenance(options: {
     };
   };
 
+  const isDeletionReasonEnabled = (reason: string): boolean => {
+    if (!isManagedObjectDeletionReason(reason)) return false;
+    if (reason === 'workflow-stale-upload-reconciliation') {
+      return options.staleUploadDeletionEnabled === true;
+    }
+    return true;
+  };
+
   const isStillUnreferenced = async (objectKey: string): Promise<boolean> => {
-    const reference = await queryOne<{ object_key: string }>(
-      options.pool,
-      `
-        SELECT object_key
-        FROM (
-          SELECT project_blob_key AS object_key FROM workflow_revisions
-          UNION ALL
-          SELECT dataset_blob_key AS object_key FROM workflow_revisions WHERE dataset_blob_key IS NOT NULL
-          UNION ALL
-          SELECT recording_blob_key AS object_key FROM workflow_recordings
-          UNION ALL
-          SELECT replay_project_blob_key AS object_key FROM workflow_recordings
-          UNION ALL
-          SELECT replay_dataset_blob_key AS object_key FROM workflow_recordings WHERE replay_dataset_blob_key IS NOT NULL
-        ) AS referenced_objects
-        WHERE object_key = $1
-        LIMIT 1
-      `,
-      [objectKey],
-    );
-    return !reference;
+    const references = await findManagedWorkflowObjectReferences(options.pool, [objectKey]);
+    return !references.has(objectKey);
   };
 
   const markOutboxResult = async (
@@ -391,17 +414,29 @@ export function createManagedWorkflowMaintenance(options: {
               updated_at = NOW()
           FROM next_object
           WHERE outbox.object_key = next_object.object_key
-          RETURNING outbox.object_key, outbox.attempt_count
+          RETURNING outbox.object_key, outbox.domain, outbox.attempt_count
         `,
         [lease.holderId, lease.fencingToken, config.leaseMs],
       );
       if (!row) break;
 
       try {
+        if (!isDeletionReasonEnabled(row.domain)) {
+          await markOutboxResult(
+            lease,
+            row.object_key,
+            'blocked',
+            isManagedObjectDeletionReason(row.domain)
+              ? 'The current deletion policy is audit-only or disabled.'
+              : 'The deletion reason is not registered by this server version.',
+          );
+          logger.warn('[managed-maintenance] Blocked an outbox entry whose deletion policy is not enabled.');
+          continue;
+        }
         if (!(await isStillUnreferenced(row.object_key))) {
           await markOutboxResult(lease, row.object_key, 'blocked');
           logger.error(
-            `[managed-maintenance] Refusing to delete still-referenced object ${row.object_key}; marked the outbox entry blocked.`,
+            '[managed-maintenance] Refusing to delete a still-referenced object; marked its outbox entry blocked.',
           );
           continue;
         }
@@ -432,10 +467,10 @@ export function createManagedWorkflowMaintenance(options: {
         if (retried.rows.length > 0) {
           recordStudioMetrics((metrics) => metrics.recordManagedObjectDeletionOutbox('retry'));
         }
-        logger.warn(
-          `[managed-maintenance] Object deletion failed for ${row.object_key}; retrying in ${nextDelay}ms.`,
-          error,
-        );
+        // Keys and provider exceptions can contain tenant data. The durable,
+        // authenticated outbox holds retry details; ordinary process logs stay
+        // aggregate-only.
+        logger.warn(`[managed-maintenance] Object deletion failed; retrying in ${nextDelay}ms.`);
       }
     }
 
@@ -533,13 +568,16 @@ export function createManagedWorkflowMaintenance(options: {
     },
     async enqueueObjectDeletions(
       client: PoolClient,
-      domain: string,
+      reason: ManagedObjectDeletionReason,
       keys: Array<string | null | undefined>,
-    ): Promise<void> {
-      await enqueueManagedObjectDeletions(client, domain, keys);
+    ): Promise<number> {
+      return enqueueManagedObjectDeletions(client, reason, keys);
     },
-    async queueObjectDeletions(domain: string, keys: Array<string | null | undefined>): Promise<void> {
-      await enqueueManagedObjectDeletions(options.pool, domain, keys);
+    async queueObjectDeletions(
+      reason: ManagedObjectDeletionReason,
+      keys: Array<string | null | undefined>,
+    ): Promise<number> {
+      return enqueueManagedObjectDeletions(options.pool, reason, keys);
     },
     async initialize(): Promise<void> {
       if (initialized || disposed) return;

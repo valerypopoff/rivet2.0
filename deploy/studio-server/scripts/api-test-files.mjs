@@ -43,6 +43,7 @@ export const defaultApiTestFiles = [
   'src/tests/managed-reconciliation.test.ts',
   'src/tests/managed-recordings.test.ts',
   'src/tests/managed-revision-factory.test.ts',
+  'src/tests/managed-stale-upload-retention.test.ts',
   'src/tests/managed-web-app-action-retention.test.ts',
   'src/tests/managed-workflow-schema-migrations.test.ts',
   'src/tests/managed-workflow-schema.test.ts',

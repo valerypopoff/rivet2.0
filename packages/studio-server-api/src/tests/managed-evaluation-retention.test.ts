@@ -18,6 +18,7 @@ class FakeRetentionPool {
   readonly attemptedRecordingDeletes: string[] = [];
   readonly attemptedSnapshotDeletes: string[] = [];
   recordingDeleteRowCount = 1;
+  recordingDeleteRowCounts: number[] | undefined;
   snapshotDeleteRowCount = 1;
   expiredRecordings = [{ project_id: 'project-a', recording_id: 'recording-a', run_id: 'run-a' }];
   orphanedSnapshots = [{ project_id: 'project-a', dataset_fingerprint: 'dataset-a' }];
@@ -42,8 +43,9 @@ class FakeRetentionPool {
         }
         if (normalized.startsWith('delete from evaluation_recordings as recording')) {
           this.attemptedRecordingDeletes.push(String(parameters[1]));
-          if (this.recordingDeleteRowCount === 1) this.deletedRecordings.push(String(parameters[1]));
-          return { rows: [] as T[], rowCount: this.recordingDeleteRowCount };
+          const rowCount = this.recordingDeleteRowCounts?.shift() ?? this.recordingDeleteRowCount;
+          if (rowCount === 1) this.deletedRecordings.push(String(parameters[1]));
+          return { rows: [] as T[], rowCount };
         }
         if (normalized.startsWith('delete from evaluation_dataset_snapshots as snapshot')) {
           this.attemptedSnapshotDeletes.push(String(parameters[1]));
@@ -147,4 +149,28 @@ test('enforcement safely skips a candidate that no longer satisfies its delete p
   assert.deepEqual(pool.attemptedSnapshotDeletes, ['dataset-a']);
   assert.deepEqual(pool.deletedRecordings, []);
   assert.deepEqual(pool.deletedSnapshots, []);
+});
+
+test('enforcement locks a bounded page so a failed recheck cannot starve later Evaluation candidates', async () => {
+  const pool = new FakeRetentionPool();
+  pool.expiredRecordings = [
+    { project_id: 'project-a', recording_id: 'recording-a', run_id: 'run-a' },
+    { project_id: 'project-a', recording_id: 'recording-b', run_id: 'run-b' },
+  ];
+  pool.orphanedSnapshots = [];
+  pool.recordingDeleteRowCounts = [0, 1];
+  const task = createManagedEvaluationRetentionTask({
+    config: { batchSize: 2, mode: 'enforce' },
+    pool: pool as unknown as Pool,
+  });
+
+  await task(createLease({ count: 0 }));
+
+  assert.deepEqual(pool.attemptedRecordingDeletes, ['recording-a', 'recording-b']);
+  assert.deepEqual(pool.deletedRecordings, ['recording-b']);
+  const lockedCandidateQueries = pool.queries.filter(
+    (query) => query.sql.includes('FROM evaluation_recordings AS recording') && query.sql.includes('FOR UPDATE'),
+  );
+  assert.equal(lockedCandidateQueries.length, 1);
+  assert.deepEqual(lockedCandidateQueries[0]?.parameters, [2]);
 });

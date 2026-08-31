@@ -421,6 +421,11 @@
 {{- fail (printf "env.%s is chart-owned; configure webAppActionRetention instead" $key) -}}
 {{- end -}}
 {{- end -}}
+{{- range $key := list "RIVET_MANAGED_STALE_UPLOAD_RETENTION_MODE" "RIVET_MANAGED_STALE_UPLOAD_RETENTION_MINIMUM_CANDIDATE_AGE_HOURS" "RIVET_MANAGED_STALE_UPLOAD_RETENTION_REQUIRED_COMPLETED_SCANS" -}}
+{{- if hasKey $.Values.env $key -}}
+{{- fail (printf "env.%s is chart-owned; configure staleUploadRetention instead" $key) -}}
+{{- end -}}
+{{- end -}}
 {{- if not (kindIs "map" .Values.webAppActionRetention) -}}
 {{- fail "webAppActionRetention must be a map" -}}
 {{- end -}}
@@ -440,6 +445,28 @@
 {{- end -}}
 {{- if not (has .Values.evaluationRetention.mode (list "audit" "enforce" "disabled")) -}}
 {{- fail "evaluationRetention.mode must be audit, enforce, or disabled" -}}
+{{- end -}}
+{{- if not (kindIs "map" .Values.staleUploadRetention) -}}
+{{- fail "staleUploadRetention must be a map" -}}
+{{- end -}}
+{{- if not (has .Values.staleUploadRetention.mode (list "audit" "enforce" "disabled")) -}}
+{{- fail "staleUploadRetention.mode must be audit, enforce, or disabled" -}}
+{{- end -}}
+{{- $staleUploadCandidateHoursRaw := toString .Values.staleUploadRetention.minimumCandidateAgeHours -}}
+{{- if not (regexMatch "^[1-9][0-9]*$" $staleUploadCandidateHoursRaw) -}}
+{{- fail "staleUploadRetention.minimumCandidateAgeHours must be a positive whole number of hours" -}}
+{{- end -}}
+{{- $staleUploadCandidateHours := int $staleUploadCandidateHoursRaw -}}
+{{- if or (lt $staleUploadCandidateHours 24) (gt $staleUploadCandidateHours 720) -}}
+{{- fail "staleUploadRetention.minimumCandidateAgeHours must be an integer between 24 and 720" -}}
+{{- end -}}
+{{- $staleUploadCompletedScansRaw := toString .Values.staleUploadRetention.requiredCompletedScans -}}
+{{- if not (regexMatch "^[1-9][0-9]*$" $staleUploadCompletedScansRaw) -}}
+{{- fail "staleUploadRetention.requiredCompletedScans must be a positive whole number" -}}
+{{- end -}}
+{{- $staleUploadCompletedScans := int $staleUploadCompletedScansRaw -}}
+{{- if or (lt $staleUploadCompletedScans 2) (gt $staleUploadCompletedScans 10) -}}
+{{- fail "staleUploadRetention.requiredCompletedScans must be an integer between 2 and 10" -}}
 {{- end -}}
 
 {{- range $field := list

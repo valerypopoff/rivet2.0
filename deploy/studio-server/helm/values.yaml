@@ -225,6 +225,15 @@ webAppActionRetention:
   mode: audit
   retentionHours: 24
 
+# Reconciliation inventories unreferenced workflow uploads first. This policy
+# stays audit-only until the authenticated findings and bounded metrics have
+# been reviewed for this installation. Enforce only queues recognized Rivet
+# revision/recording artifacts; it never performs a prefix deletion.
+staleUploadRetention:
+  mode: audit
+  minimumCandidateAgeHours: 24
+  requiredCompletedScans: 2
+
 # Production deployments must be materialized from an immutable release
 # manifest. Local Kubernetes rehearsal and disposable CI gates leave this off.
 release:

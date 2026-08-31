@@ -34,6 +34,7 @@ function createReconciliationPool() {
   const states = new Map<Domain, State>();
   const findings = new Map<string, Finding>();
   const deleted: string[] = [];
+  const queries: string[] = [];
   const workflowReferences = ['missing/project.rivet-project', 'present/project.rivet-project'];
   let staleNextCommit = false;
 
@@ -54,6 +55,7 @@ function createReconciliationPool() {
   };
 
   const query = async (sql: string, parameters: unknown[] = []) => {
+    queries.push(sql);
     if (sql.includes('INSERT INTO managed_reconciliation_state')) {
       ensure(parameters[0] as Domain);
       return { rows: [] };
@@ -180,6 +182,7 @@ function createReconciliationPool() {
   return {
     deleted,
     findings,
+    queries,
     makeNextCommitStale: () => {
       staleNextCommit = true;
     },
@@ -219,6 +222,12 @@ test('managed reconciliation is bounded, reports missing and two-pass orphan evi
   assert.equal(missing?.consecutive, 2);
   assert.equal(orphan?.consecutive, 2);
   assert.equal(orphan?.resolved, false);
+  assert.ok(
+    driver.queries.some((sql) =>
+      sql.includes('WHEN managed_reconciliation_findings.resolved_at IS NOT NULL THEN NOW()'),
+    ),
+    'a reopened finding restarts its candidate-age clock instead of inheriting historical orphan age',
+  );
   assert.equal(
     driver.states.get('workflows')?.last_completed_object_bytes,
     42,

@@ -7,6 +7,7 @@ import {
   type ManagedWorkflowBlobStore,
 } from './blob-store.js';
 import { withManagedDbRetry, type ManagedWorkflowDbClient } from './db.js';
+import type { ManagedObjectDeletionReason } from './maintenance.js';
 import { RECORDING_COLUMNS } from './mappers.js';
 import { resolveManagedHostedProjectSaveTarget } from './save-target.js';
 import { normalizeRivetCorrelationId } from '../../../request-correlation.js';
@@ -29,7 +30,10 @@ export function createManagedWorkflowRevisionFactory(options: {
    * durable metadata. The maintenance worker rechecks references before it
    * deletes, so an unexpected duplicate-key error cannot erase a live blob.
    */
-  queueObjectDeletions: (domain: string, keys: Array<string | null | undefined>) => Promise<void>;
+  queueObjectDeletions: (
+    reason: ManagedObjectDeletionReason,
+    keys: Array<string | null | undefined>,
+  ) => Promise<number>;
 }) {
   const queueKnownBlobCleanup = async (context: string, keys: Array<string | null | undefined>): Promise<void> => {
     const objectKeys = [

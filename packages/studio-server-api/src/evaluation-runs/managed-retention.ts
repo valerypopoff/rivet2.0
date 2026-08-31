@@ -26,14 +26,11 @@ type SnapshotRow = QueryResultRow & {
   dataset_fingerprint: string;
 };
 
-
 function parseMode(value: string | undefined): ManagedEvaluationRetentionMode {
   const normalized = value?.trim().toLowerCase();
   if (!normalized) return 'enforce';
   if (normalized === 'disabled' || normalized === 'audit' || normalized === 'enforce') return normalized;
-  throw new Error(
-    `${MANAGED_EVALUATION_RETENTION_MODE_ENV} must be disabled, audit, or enforce when set.`,
-  );
+  throw new Error(`${MANAGED_EVALUATION_RETENTION_MODE_ENV} must be disabled, audit, or enforce when set.`);
 }
 
 /**
@@ -101,10 +98,7 @@ function orphanedSnapshotCandidatesSql(locking: boolean): string {
 `;
 }
 
-async function deleteExpiredRecording(
-  client: PoolClient,
-  candidate: ExpiredRecordingRow,
-): Promise<boolean> {
+async function deleteExpiredRecording(client: PoolClient, candidate: ExpiredRecordingRow): Promise<boolean> {
   const deleted = await client.query(
     `
       DELETE FROM evaluation_recordings AS recording
@@ -133,10 +127,7 @@ async function deleteExpiredRecording(
   return deleted.rowCount === 1;
 }
 
-async function deleteOrphanedSnapshot(
-  client: PoolClient,
-  candidate: SnapshotRow,
-): Promise<boolean> {
+async function deleteOrphanedSnapshot(client: PoolClient, candidate: SnapshotRow): Promise<boolean> {
   const deleted = await client.query(
     `
       DELETE FROM evaluation_dataset_snapshots AS snapshot
@@ -158,8 +149,9 @@ async function deleteOrphanedSnapshot(
 /**
  * Runs under the existing singleton PostgreSQL-fenced maintenance owner. It
  * intentionally handles only PostgreSQL-owned Evaluation metadata; if a
- * future artifact gains object-storage keys, it must use the generic object
- * deletion outbox rather than silently deleting its metadata here.
+ * future artifact gains object-storage keys, it must add a separately
+ * reviewed typed deletion reason and domain-specific reference verifier rather
+ * than silently deleting its metadata or reusing the workflow adapter here.
  */
 export function createManagedEvaluationRetentionTask(options: {
   config: ManagedEvaluationRetentionConfig;
@@ -192,14 +184,15 @@ export function createManagedEvaluationRetentionTask(options: {
           options.config.batchSize,
         ]);
         result.expiredRecordingCandidates = candidates.rows.length;
-      } else for (let index = 0; index < options.config.batchSize; index += 1) {
-        const candidate = (
-          await client.query<ExpiredRecordingRow>(expiredRecordingCandidatesSql(true), [1])
-        ).rows[0];
-        if (!candidate) break;
-        result.expiredRecordingCandidates += 1;
-        await lease.assertCurrent(client);
-        if (await deleteExpiredRecording(client, candidate)) result.expiredRecordings += 1;
+      } else {
+        const candidates = await client.query<ExpiredRecordingRow>(expiredRecordingCandidatesSql(true), [
+          options.config.batchSize,
+        ]);
+        for (const candidate of candidates.rows) {
+          result.expiredRecordingCandidates += 1;
+          await lease.assertCurrent(client);
+          if (await deleteExpiredRecording(client, candidate)) result.expiredRecordings += 1;
+        }
       }
 
       if (mode === 'audit') {
@@ -207,14 +200,15 @@ export function createManagedEvaluationRetentionTask(options: {
           options.config.batchSize,
         ]);
         result.orphanedSnapshotCandidates = candidates.rows.length;
-      } else for (let index = 0; index < options.config.batchSize; index += 1) {
-        const candidate = (
-          await client.query<SnapshotRow>(orphanedSnapshotCandidatesSql(true), [1])
-        ).rows[0];
-        if (!candidate) break;
-        result.orphanedSnapshotCandidates += 1;
-        await lease.assertCurrent(client);
-        if (await deleteOrphanedSnapshot(client, candidate)) result.orphanedSnapshots += 1;
+      } else {
+        const candidates = await client.query<SnapshotRow>(orphanedSnapshotCandidatesSql(true), [
+          options.config.batchSize,
+        ]);
+        for (const candidate of candidates.rows) {
+          result.orphanedSnapshotCandidates += 1;
+          await lease.assertCurrent(client);
+          if (await deleteOrphanedSnapshot(client, candidate)) result.orphanedSnapshots += 1;
+        }
       }
 
       await client.query('COMMIT');

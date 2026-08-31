@@ -28,6 +28,10 @@ import {
 } from '../../../web-app-action-managed-retention.js';
 import { createManagedWorkflowMaintenance } from './maintenance.js';
 import { createManagedReconciliationTask, getManagedReconciliationStatus } from './reconciliation.js';
+import {
+  createManagedStaleUploadRetentionTask,
+  getManagedStaleUploadRetentionConfig,
+} from './stale-upload-retention.js';
 import { MANAGED_RUNTIME_LIBRARIES_OBJECT_STORAGE_PREFIX } from '../../../runtime-libraries/config.js';
 import * as mappers from './mappers.js';
 import { createManagedWorkflowRevisionFactory } from './revision-factory.js';
@@ -73,9 +77,11 @@ export function createManagedWorkflowContext(
   const resolvedBlobStore = blobStore ?? new S3ManagedWorkflowBlobStore(config);
   const executionCache = new ManagedWorkflowExecutionCache();
   const queries = createManagedWorkflowQueries(pool);
+  const staleUploadRetentionConfig = getManagedStaleUploadRetentionConfig(process.env);
   const maintenance = createManagedWorkflowMaintenance({
     pool,
     blobStore: resolvedBlobStore,
+    staleUploadDeletionEnabled: staleUploadRetentionConfig.mode === 'enforce',
   });
   // Reuse the same S3 contract with the fixed runtime prefix only on the
   // maintenance owner. Execution replicas must not allocate audit work or an
@@ -112,6 +118,17 @@ export function createManagedWorkflowContext(
         pool,
         runtimeLibrariesBlobStore,
         workflowBlobStore: resolvedBlobStore,
+      }),
+    );
+    // Sorting of task names makes the reconciliation page run before this
+    // policy in each pass. The retention task accepts only fully completed
+    // generations, so an interrupted audit page cannot create delete intent.
+    maintenance.registerTask(
+      'managed-stale-workflow-upload-retention',
+      createManagedStaleUploadRetentionTask({
+        config: { ...staleUploadRetentionConfig, batchSize: maintenance.config.batchSize },
+        enqueueObjectDeletions: (client, reason, keys) => maintenance.enqueueObjectDeletions(client, reason, keys),
+        pool,
       }),
     );
   }

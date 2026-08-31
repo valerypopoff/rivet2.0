@@ -85,6 +85,15 @@ test('rendered chart keeps control-plane and execution-plane API env contracts d
     /name: RIVET_API_PROFILE\s*\n\s*value: "control"[\s\S]*?name: RIVET_MANAGED_MAINTENANCE_ENABLED\s*\n\s*value: "true"[\s\S]*?name: RIVET_MANAGED_MAINTENANCE_INTERVAL_MS\s*\n\s*value: "300000"[\s\S]*?name: RIVET_MANAGED_MAINTENANCE_LEASE_MS\s*\n\s*value: "60000"[\s\S]*?name: RIVET_MANAGED_MAINTENANCE_BATCH_SIZE\s*\n\s*value: "100"[\s\S]*?name: RIVET_MANAGED_EVALUATION_RETENTION_MODE\s*\n\s*value: "audit"/,
     'only the singleton control-plane API pod may schedule global managed maintenance',
   );
+  assert.equal(
+    (renderedChart.match(/name: RIVET_MANAGED_STALE_UPLOAD_RETENTION_MODE\s*\n\s*value: "audit"/g) ?? []).length,
+    2,
+    'all API workloads receive one chart-owned audit-first stale-upload policy',
+  );
+  assert.match(
+    renderedChart,
+    /name: RIVET_MANAGED_STALE_UPLOAD_RETENTION_MINIMUM_CANDIDATE_AGE_HOURS\s*\n\s*value: "24"[\s\S]*?name: RIVET_MANAGED_STALE_UPLOAD_RETENTION_REQUIRED_COMPLETED_SCANS\s*\n\s*value: "2"/,
+  );
   assert.match(
     renderedChart,
     /name: RIVET_API_PROFILE\s*\n\s*value: "execution"[\s\S]*?name: RIVET_MANAGED_MAINTENANCE_ENABLED\s*\n\s*value: "false"/,
@@ -328,6 +337,22 @@ test('chart owns the published execution admission policy only on execution API 
   await assertHelmTemplateFails(
     ['env.RIVET_MANAGED_EVALUATION_RETENTION_MODE=enforce'],
     /RIVET_MANAGED_EVALUATION_RETENTION_MODE[\s\S]*configure evaluationRetention\.mode instead/,
+  );
+  await assertHelmTemplateFails(
+    ['staleUploadRetention.mode=remove'],
+    /staleUploadRetention\.mode must be audit, enforce, or disabled/,
+  );
+  await assertHelmTemplateFails(
+    ['staleUploadRetention.minimumCandidateAgeHours=12'],
+    /staleUploadRetention\.minimumCandidateAgeHours must be an integer between 24 and 720/,
+  );
+  await assertHelmTemplateFails(
+    ['staleUploadRetention.requiredCompletedScans=1'],
+    /staleUploadRetention\.requiredCompletedScans must be an integer between 2 and 10/,
+  );
+  await assertHelmTemplateFails(
+    ['env.RIVET_MANAGED_STALE_UPLOAD_RETENTION_MODE=enforce'],
+    /RIVET_MANAGED_STALE_UPLOAD_RETENTION_MODE[\s\S]*configure staleUploadRetention instead/,
   );
 });
 

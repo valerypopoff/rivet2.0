@@ -47,6 +47,7 @@ export type MetricsManagedReconciliationDomain = 'evaluations' | 'runtime_librar
 export type MetricsManagedReconciliationPhase = 'metadata' | 'objects';
 export type MetricsManagedEvaluationRetentionMode = 'audit' | 'enforce';
 export type MetricsManagedWebAppActionRetentionMode = MetricsManagedEvaluationRetentionMode;
+export type MetricsManagedStaleUploadRetentionMode = 'audit' | 'disabled' | 'enforce';
 export type MetricsManagedMaintenancePassOutcome = 'completed' | 'failed' | 'lease_lost' | 'not_owner';
 export type MetricsManagedObjectDeletionOutboxState = 'blocked' | 'claimed' | 'pending';
 export type MetricsManagedObjectDeletionOutboxOutcome = 'blocked' | 'completed' | 'retry';
@@ -356,6 +357,28 @@ export class StudioMetrics {
 
   recordManagedWebAppActionRetention(input: { deleted: number; mode: MetricsManagedWebAppActionRetentionMode }): void {
     this.incrementCounter('rivet_managed_web_app_action_retention_deleted_total', { mode: input.mode }, input.deleted);
+  }
+
+  /** Candidate keys stay out of labels; operators inspect them only through the authenticated finding route. */
+  setManagedStaleUploadRetention(input: {
+    eligibleCandidates: number;
+    ineligibleCandidates: number;
+    mode: MetricsManagedStaleUploadRetentionMode;
+  }): void {
+    this.setGauge(
+      'rivet_managed_stale_upload_retention_candidates',
+      { eligibility: 'eligible', mode: input.mode },
+      input.eligibleCandidates,
+    );
+    this.setGauge(
+      'rivet_managed_stale_upload_retention_candidates',
+      { eligibility: 'ineligible', mode: input.mode },
+      input.ineligibleCandidates,
+    );
+  }
+
+  recordManagedStaleUploadRetention(input: { mode: MetricsManagedStaleUploadRetentionMode; queued: number }): void {
+    this.incrementCounter('rivet_managed_stale_upload_retention_queued_total', { mode: input.mode }, input.queued);
   }
 
   render(): string {

@@ -3,6 +3,10 @@ import type { Pool, PoolClient, QueryResultRow } from 'pg';
 import { recordStudioMetrics } from '../../../metrics.js';
 import type { ManagedWorkflowBlobStore } from './blob-store.js';
 import type { ManagedWorkflowMaintenanceLease, ManagedWorkflowMaintenanceTask } from './maintenance.js';
+import {
+  findManagedWorkflowObjectReferences,
+  MANAGED_WORKFLOW_OBJECT_REFERENCES_CTE,
+} from './workflow-object-references.js';
 
 const MIN_UNREFERENCED_OBJECT_AGE_MS = 24 * 60 * 60 * 1_000;
 
@@ -166,18 +170,7 @@ async function listWorkflowReferencePage(
   pageSize: number,
 ): Promise<{ keys: string[]; nextCursor: string | null }> {
   const result = await pool.query<WorkflowReferenceRow>(
-    `
-      WITH referenced_objects AS (
-        SELECT project_blob_key AS object_key FROM workflow_revisions
-        UNION
-        SELECT dataset_blob_key AS object_key FROM workflow_revisions WHERE dataset_blob_key IS NOT NULL
-        UNION
-        SELECT recording_blob_key AS object_key FROM workflow_recordings
-        UNION
-        SELECT replay_project_blob_key AS object_key FROM workflow_recordings
-        UNION
-        SELECT replay_dataset_blob_key AS object_key FROM workflow_recordings WHERE replay_dataset_blob_key IS NOT NULL
-      )
+    `${MANAGED_WORKFLOW_OBJECT_REFERENCES_CTE}
       SELECT object_key
       FROM referenced_objects
       WHERE $1::text IS NULL OR object_key > $1::text
@@ -260,25 +253,7 @@ async function listEvaluationReferencePage(
 }
 
 async function workflowKeysStillReferenced(client: PoolClient, keys: string[]): Promise<Set<string>> {
-  if (keys.length === 0) return new Set();
-  const result = await client.query<WorkflowReferenceRow>(
-    `
-      WITH referenced_objects AS (
-        SELECT project_blob_key AS object_key FROM workflow_revisions
-        UNION
-        SELECT dataset_blob_key AS object_key FROM workflow_revisions WHERE dataset_blob_key IS NOT NULL
-        UNION
-        SELECT recording_blob_key AS object_key FROM workflow_recordings
-        UNION
-        SELECT replay_project_blob_key AS object_key FROM workflow_recordings
-        UNION
-        SELECT replay_dataset_blob_key AS object_key FROM workflow_recordings WHERE replay_dataset_blob_key IS NOT NULL
-      )
-      SELECT object_key FROM referenced_objects WHERE object_key = ANY($1::text[])
-    `,
-    [keys],
-  );
-  return new Set(result.rows.map((row) => row.object_key));
+  return findManagedWorkflowObjectReferences(client, keys);
 }
 
 async function runtimeLibraryKeysStillReferenced(client: PoolClient, keys: string[]): Promise<Set<string>> {
@@ -329,7 +304,11 @@ async function upsertFindings(
         )
         VALUES ($1, $2, $3, $4)
         ON CONFLICT (domain, kind, subject_key) DO UPDATE
-          SET last_seen_at = NOW(),
+          SET first_seen_at = CASE
+                WHEN managed_reconciliation_findings.resolved_at IS NOT NULL THEN NOW()
+                ELSE managed_reconciliation_findings.first_seen_at
+              END,
+              last_seen_at = NOW(),
               last_observed_generation = EXCLUDED.last_observed_generation,
               resolved_at = NULL
       `,
@@ -598,8 +577,9 @@ async function runEvaluationDomain(input: {
 /**
  * Creates the audit-only reconciliation task that runs under the existing
  * fenced maintenance owner. It never deletes objects, never enqueues the
- * deletion outbox, and treats object listings only as candidates. Deletion is
- * deliberately deferred to a later reviewed maintenance phase.
+ * deletion outbox, and treats object listings only as candidates. A separate,
+ * reviewed domain policy may consume proven findings in a later maintenance
+ * task; this scanner itself has no destructive behavior.
  */
 export function createManagedReconciliationTask(options: {
   pageSize: number;

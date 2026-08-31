@@ -208,6 +208,12 @@
   value: {{ $root.Values.webAppActionRetention.mode | quote }}
 - name: RIVET_MANAGED_WEB_APP_ACTION_RETENTION_HOURS
   value: {{ $root.Values.webAppActionRetention.retentionHours | quote }}
+- name: RIVET_MANAGED_STALE_UPLOAD_RETENTION_MODE
+  value: {{ $root.Values.staleUploadRetention.mode | quote }}
+- name: RIVET_MANAGED_STALE_UPLOAD_RETENTION_MINIMUM_CANDIDATE_AGE_HOURS
+  value: {{ $root.Values.staleUploadRetention.minimumCandidateAgeHours | quote }}
+- name: RIVET_MANAGED_STALE_UPLOAD_RETENTION_REQUIRED_COMPLETED_SCANS
+  value: {{ $root.Values.staleUploadRetention.requiredCompletedScans | quote }}
 - name: RIVET_DEPLOYMENT_HEALTH_REFRESH_SECONDS
   value: {{ $root.Values.lifecycle.health.refreshSeconds | quote }}
 - name: RIVET_DEPLOYMENT_HEALTH_CHECK_TIMEOUT_SECONDS
