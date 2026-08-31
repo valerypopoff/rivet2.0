@@ -11,8 +11,9 @@ ingress:
 release:
   production:
     # The canonical deployment command fills the immutable source SHA, CI
-    # evidence, schema version, and all four image digests from a promoted
-    # release manifest. Do not put mutable image tags in this file.
+    # evidence, canonical manifest digest, schema version, and all four image
+    # digests from a promoted release manifest. Do not put mutable image tags
+    # in this file.
     enabled: true
 
 vault:

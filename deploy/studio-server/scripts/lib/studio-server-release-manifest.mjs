@@ -2,7 +2,8 @@ import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 
-export const STUDIO_SERVER_RELEASE_MANIFEST_VERSION = 1;
+export const STUDIO_SERVER_RELEASE_MANIFEST_VERSION = 2;
+export const STUDIO_SERVER_LEGACY_RELEASE_MANIFEST_VERSION = 1;
 export const STUDIO_SERVER_RELEASE_IMAGE_COMPONENTS = ['proxy', 'web', 'api', 'executor'];
 
 const digestPattern = /^sha256:[a-f0-9]{64}$/;
@@ -65,6 +66,51 @@ function assertImages(images) {
     normalized[component] = { repository, digest };
   }
   return normalized;
+}
+
+function assertLineage(lineage) {
+  if (!lineage || typeof lineage !== 'object' || Array.isArray(lineage)) {
+    throw new Error('[studio-server-release-manifest] lineage is required');
+  }
+  if (lineage.predecessor === null) {
+    return { predecessor: null };
+  }
+
+  const predecessor = lineage.predecessor;
+  if (!predecessor || typeof predecessor !== 'object' || Array.isArray(predecessor)) {
+    throw new Error('[studio-server-release-manifest] lineage.predecessor must be a release reference or null');
+  }
+  const sourceSha = requiredString(predecessor.sourceSha, 'lineage.predecessor.sourceSha').toLowerCase();
+  if (!sourceShaPattern.test(sourceSha)) {
+    throw new Error('[studio-server-release-manifest] lineage.predecessor.sourceSha must be a 40-character Git commit');
+  }
+  return {
+    predecessor: {
+      manifestDigest: sha256Digest(predecessor.manifestDigest, 'lineage.predecessor.manifestDigest'),
+      sourceSha,
+      managedWorkflowSchemaVersion: positiveInteger(
+        predecessor.managedWorkflowSchemaVersion,
+        'lineage.predecessor.managedWorkflowSchemaVersion',
+      ),
+      images: assertImages(predecessor.images),
+    },
+  };
+}
+
+function stableJsonValue(value) {
+  if (Array.isArray(value)) return value.map(stableJsonValue);
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(
+      Object.entries(value)
+        .sort(([left], [right]) => (left === right ? 0 : left < right ? -1 : 1))
+        .map(([key, child]) => [key, stableJsonValue(child)]),
+    );
+  }
+  return value;
+}
+
+function canonicalJson(value) {
+  return JSON.stringify(stableJsonValue(value));
 }
 
 /** Read the source-owned schema contract without a second hard-coded version. */
@@ -143,8 +189,13 @@ export function assertStudioServerReleaseManifest(manifest, { requirePromoted = 
   if (!manifest || typeof manifest !== 'object' || Array.isArray(manifest)) {
     throw new Error('[studio-server-release-manifest] manifest must be an object');
   }
-  if (manifest.formatVersion !== STUDIO_SERVER_RELEASE_MANIFEST_VERSION) {
-    throw new Error(`[studio-server-release-manifest] formatVersion must be ${STUDIO_SERVER_RELEASE_MANIFEST_VERSION}`);
+  if (
+    manifest.formatVersion !== STUDIO_SERVER_RELEASE_MANIFEST_VERSION &&
+    manifest.formatVersion !== STUDIO_SERVER_LEGACY_RELEASE_MANIFEST_VERSION
+  ) {
+    throw new Error(
+      `[studio-server-release-manifest] formatVersion must be ${STUDIO_SERVER_LEGACY_RELEASE_MANIFEST_VERSION} or ${STUDIO_SERVER_RELEASE_MANIFEST_VERSION}`,
+    );
   }
   if (!['candidate', 'promoted'].includes(manifest.state)) {
     throw new Error('[studio-server-release-manifest] state must be candidate or promoted');
@@ -175,7 +226,7 @@ export function assertStudioServerReleaseManifest(manifest, { requirePromoted = 
 
   const evidence = manifest.evidence ?? {};
   const normalized = {
-    formatVersion: STUDIO_SERVER_RELEASE_MANIFEST_VERSION,
+    formatVersion: manifest.formatVersion,
     state: manifest.state,
     createdAt: assertTimestamp(manifest.createdAt, 'createdAt'),
     source: {
@@ -195,6 +246,9 @@ export function assertStudioServerReleaseManifest(manifest, { requirePromoted = 
       },
     },
     images: assertImages(manifest.images),
+    ...(manifest.formatVersion === STUDIO_SERVER_RELEASE_MANIFEST_VERSION
+      ? { lineage: assertLineage(manifest.lineage) }
+      : {}),
     evidence: {
       candidate: assertEvidence(evidence.candidate, 'evidence.candidate'),
       ...(manifest.state === 'promoted'
@@ -208,6 +262,67 @@ export function assertStudioServerReleaseManifest(manifest, { requirePromoted = 
     },
   };
   return normalized;
+}
+
+/**
+ * Hash the normalized semantic manifest rather than its source bytes. This
+ * keeps lineage stable across harmless JSON indentation and object-key order
+ * while still changing for every release-relevant field.
+ */
+export function getStudioServerReleaseManifestDigest(manifest, { requirePromoted = false } = {}) {
+  const release = assertStudioServerReleaseManifest(manifest, { requirePromoted });
+  return `sha256:${createHash('sha256').update(canonicalJson(release)).digest('hex')}`;
+}
+
+function predecessorReferenceFor(manifest) {
+  const predecessor = assertStudioServerReleaseManifest(manifest, { requirePromoted: true });
+  return {
+    manifestDigest: getStudioServerReleaseManifestDigest(predecessor, { requirePromoted: true }),
+    sourceSha: predecessor.source.sha,
+    managedWorkflowSchemaVersion: predecessor.database.managedWorkflowSchema.version,
+    images: predecessor.images,
+  };
+}
+
+function assertPredecessorReferenceMatchesRelease(reference, release, description) {
+  const expected = predecessorReferenceFor(release);
+  if (canonicalJson(reference) !== canonicalJson(expected)) {
+    throw new Error(
+      `[studio-server-release-manifest] ${description} does not match the candidate's exact predecessor manifest. Refuse stale, sibling, ancestor, or modified rollback evidence.`,
+    );
+  }
+  return release;
+}
+
+/**
+ * Re-read the production lineage head immediately before promotion. A
+ * candidate tested against one predecessor must never be promoted after a
+ * different release has become production.
+ */
+export function assertStudioServerReleasePredecessor(candidateManifest, currentProductionManifest = null) {
+  const candidate = assertStudioServerReleaseManifest(candidateManifest);
+  if (candidate.state !== 'candidate') {
+    throw new Error('[studio-server-release-manifest] Predecessor validation requires a candidate release manifest');
+  }
+  if (candidate.formatVersion !== STUDIO_SERVER_RELEASE_MANIFEST_VERSION) {
+    throw new Error('[studio-server-release-manifest] Legacy candidates cannot be promoted without lineage evidence');
+  }
+  const predecessor = candidate.lineage.predecessor;
+  if (predecessor === null) {
+    if (currentProductionManifest !== null) {
+      throw new Error(
+        '[studio-server-release-manifest] Candidate was created as a bootstrap release, but a production predecessor now exists. Rebuild and retest the candidate against the current production release.',
+      );
+    }
+    return candidate;
+  }
+  if (currentProductionManifest === null) {
+    throw new Error(
+      '[studio-server-release-manifest] Candidate requires a production predecessor, but the production release-manifest pointer is missing. Restore the immutable predecessor evidence before promotion.',
+    );
+  }
+  assertPredecessorReferenceMatchesRelease(predecessor, currentProductionManifest, 'Current production release');
+  return candidate;
 }
 
 export function assertReleaseManifestMatchesCurrentChart(manifest, rootDir) {
@@ -250,6 +365,7 @@ export function createStudioServerReleaseManifest({
   source,
   images,
   candidateEvidence,
+  predecessorRelease = null,
   createdAt = new Date().toISOString(),
 }) {
   const schema = readManagedWorkflowSchemaReleaseContract(rootDir);
@@ -262,6 +378,9 @@ export function createStudioServerReleaseManifest({
     chart,
     database: { managedWorkflowSchema: schema },
     images,
+    lineage: {
+      predecessor: predecessorRelease === null ? null : predecessorReferenceFor(predecessorRelease),
+    },
     evidence: { candidate: candidateEvidence },
   });
 }
@@ -271,6 +390,12 @@ export function promoteStudioServerReleaseManifest(
   { promotionEvidence, promotedAt = new Date().toISOString() } = {},
 ) {
   const candidate = assertStudioServerReleaseManifest(manifest);
+  if (candidate.state !== 'candidate') {
+    throw new Error('[studio-server-release-manifest] Only a candidate release manifest can be promoted');
+  }
+  if (candidate.formatVersion !== STUDIO_SERVER_RELEASE_MANIFEST_VERSION) {
+    throw new Error('[studio-server-release-manifest] Legacy candidates cannot be promoted without lineage evidence');
+  }
   return assertStudioServerReleaseManifest(
     {
       ...candidate,
@@ -302,6 +427,7 @@ function releaseValuesFor({ manifest, chart, images, compatibility, migrationJob
     release: {
       production: {
         enabled: true,
+        manifestDigest: getStudioServerReleaseManifestDigest(manifest, { requirePromoted: true }),
         sourceSha: manifest.source.sha,
         verification: {
           workflow: manifest.evidence.promotion.workflow,
@@ -341,8 +467,19 @@ export function createProductionHelmValues(manifest) {
  * and preserves the candidate schema as the serving verifier's upper bound.
  */
 export function createForwardRollbackHelmValues({ failedRelease, rollbackRelease }) {
-  const failed = assertStudioServerReleaseManifest(failedRelease);
+  const failed = assertStudioServerReleaseManifest(failedRelease, { requirePromoted: true });
   const rollback = assertStudioServerReleaseManifest(rollbackRelease, { requirePromoted: true });
+  if (failed.formatVersion !== STUDIO_SERVER_RELEASE_MANIFEST_VERSION) {
+    throw new Error(
+      '[studio-server-release-manifest] Forward rollback requires a lineage-aware release manifest. Legacy releases are explicitly non-rollbackable through this command; use the tested restore or repair-forward procedure.',
+    );
+  }
+  if (failed.lineage.predecessor === null) {
+    throw new Error(
+      '[studio-server-release-manifest] Bootstrap releases have no verified predecessor and cannot use automated forward rollback.',
+    );
+  }
+  assertPredecessorReferenceMatchesRelease(failed.lineage.predecessor, rollback, 'Requested forward-rollback release');
   const activeSchema = failed.database.managedWorkflowSchema;
   const rollbackSchema = rollback.database.managedWorkflowSchema;
   if (activeSchema.version < rollbackSchema.version) {

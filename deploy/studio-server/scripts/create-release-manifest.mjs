@@ -4,8 +4,10 @@ import { fileURLToPath } from 'node:url';
 
 import {
   STUDIO_SERVER_RELEASE_IMAGE_COMPONENTS,
+  assertStudioServerReleasePredecessor,
   assertStudioServerReleaseManifest,
   createStudioServerReleaseManifest,
+  getStudioServerReleaseManifestDigest,
   promoteStudioServerReleaseManifest,
 } from './lib/studio-server-release-manifest.mjs';
 
@@ -24,12 +26,15 @@ function parseArgs(argv) {
           '--run-id',
           '--run-attempt',
           '--image',
+          '--predecessor',
         ])
       : command === 'promote'
-        ? new Set(['--input', '--output', '--workflow', '--run-id', '--run-attempt'])
-        : null;
+        ? new Set(['--input', '--output', '--workflow', '--run-id', '--run-attempt', '--current'])
+        : command === 'digest'
+          ? new Set(['--input'])
+          : null;
   if (!supportedOptions) {
-    throw new Error(`Unknown command "${command}". Expected create or promote.`);
+    throw new Error(`Unknown command "${command}". Expected create, promote, or digest.`);
   }
   const options = new Map();
   for (let index = 0; index < rest.length; index += 1) {
@@ -74,6 +79,14 @@ function repositoryPath(options, key) {
     throw new Error(`${key} must remain inside this repository`);
   }
   return resolved;
+}
+
+function optionalRepositoryPath(options, key) {
+  return options.has(key) ? repositoryPath(options, key) : null;
+}
+
+function readManifest(manifestPath, { requirePromoted = false } = {}) {
+  return assertStudioServerReleaseManifest(JSON.parse(fs.readFileSync(manifestPath, 'utf8')), { requirePromoted });
 }
 
 function parseRunAttempt(options) {
@@ -131,8 +144,15 @@ function evidenceFrom(options) {
 
 function main() {
   const { command, options } = parseArgs(process.argv.slice(2));
+  if (command === 'digest') {
+    const manifest = readManifest(repositoryPath(options, '--input'), { requirePromoted: true });
+    console.log(getStudioServerReleaseManifestDigest(manifest, { requirePromoted: true }));
+    return;
+  }
+
   const outputPath = repositoryPath(options, '--output');
   if (command === 'create') {
+    const predecessorPath = optionalRepositoryPath(options, '--predecessor');
     const manifest = createStudioServerReleaseManifest({
       rootDir,
       source: {
@@ -142,6 +162,7 @@ function main() {
       },
       images: parseImages(options),
       candidateEvidence: evidenceFrom(options),
+      predecessorRelease: predecessorPath ? readManifest(predecessorPath, { requirePromoted: true }) : null,
     });
     writeJson(outputPath, manifest);
     console.log(`Wrote candidate Studio Server release manifest to ${path.relative(rootDir, outputPath)}.`);
@@ -150,7 +171,12 @@ function main() {
 
   if (command === 'promote') {
     const inputPath = repositoryPath(options, '--input');
-    const candidate = assertStudioServerReleaseManifest(JSON.parse(fs.readFileSync(inputPath, 'utf8')));
+    const currentPath = optionalRepositoryPath(options, '--current');
+    const candidate = readManifest(inputPath);
+    assertStudioServerReleasePredecessor(
+      candidate,
+      currentPath ? readManifest(currentPath, { requirePromoted: true }) : null,
+    );
     const manifest = promoteStudioServerReleaseManifest(candidate, { promotionEvidence: evidenceFrom(options) });
     writeJson(outputPath, manifest);
     console.log(`Wrote promoted Studio Server release manifest to ${path.relative(rootDir, outputPath)}.`);

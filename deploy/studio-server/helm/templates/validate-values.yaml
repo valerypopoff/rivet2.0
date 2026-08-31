@@ -579,6 +579,9 @@
 {{- end -}}
 
 {{- if .Values.release.production.enabled -}}
+{{- if not (regexMatch "^sha256:[a-f0-9]{64}$" .Values.release.production.manifestDigest) -}}
+{{- fail "release.production.manifestDigest must be the canonical sha256 digest of a promoted release manifest" -}}
+{{- end -}}
 {{- if not (regexMatch "^[a-f0-9]{40}$" .Values.release.production.sourceSha) -}}
 {{- fail "release.production.sourceSha must be the 40-character lowercase Git commit from a promoted release manifest" -}}
 {{- end -}}

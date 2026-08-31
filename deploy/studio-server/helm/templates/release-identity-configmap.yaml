@@ -7,6 +7,7 @@ metadata:
     {{- include "rivet.labels" . | nindent 4 }}
     app.kubernetes.io/component: release-identity
 data:
+  release-manifest-digest: {{ .Values.release.production.manifestDigest | quote }}
   source-sha: {{ .Values.release.production.sourceSha | quote }}
   verification-workflow: {{ .Values.release.production.verification.workflow | quote }}
   verification-run-id: {{ .Values.release.production.verification.runId | quote }}

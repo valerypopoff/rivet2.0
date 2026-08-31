@@ -44,6 +44,11 @@ on:
         required: false
         default: false
         type: boolean
+      allow_release_lineage_bootstrap:
+        description: Explicitly start a new production release-manifest chain when no durable predecessor manifest exists.
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   actions: read
@@ -182,6 +187,9 @@ jobs:
     env:
       SOURCE_TAG: candidate-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
       RELEASE_MANIFEST: artifacts/studio-server-release-manifest/candidate-release-manifest.json
+      CURRENT_PRODUCTION_MANIFEST: artifacts/studio-server-release-manifest/current-production-release-manifest.json
+      RELEASE_MANIFEST_REPOSITORY: ghcr.io/valerypopoff/rivet2.0-studio-server/release-manifest
+      ALLOW_RELEASE_LINEAGE_BOOTSTRAP: ${{ github.event_name == 'workflow_dispatch' && inputs.allow_release_lineage_bootstrap == true }}
     steps:
       - name: Check Out Repository
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
@@ -193,6 +201,29 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Resolve exact production predecessor
+        shell: bash
+        run: |
+          set -euo pipefail
+          node deploy/studio-server/scripts/release-manifest-oci.mjs pull \
+            --reference "${RELEASE_MANIFEST_REPOSITORY}:production" \
+            --output "$CURRENT_PRODUCTION_MANIFEST" \
+            --allow-missing
+
+          if [[ -s "$CURRENT_PRODUCTION_MANIFEST" ]]; then
+            echo "Candidate will be bound to the durable production release-manifest pointer."
+            exit 0
+          fi
+
+          if docker buildx imagetools inspect "${IMAGE_NAMESPACE}/api:latest" >/dev/null 2>&1; then
+            if [[ "$ALLOW_RELEASE_LINEAGE_BOOTSTRAP" != "true" ]]; then
+              echo "::error::Promoted images exist, but the durable production release-manifest pointer is missing. Seed it from the matching promoted legacy manifest, or manually dispatch this workflow with allow_release_lineage_bootstrap after accepting that this transition has no automated rollback target."
+              exit 1
+            fi
+            echo "::warning::Explicitly starting a new release lineage while promoted images already exist. This transition is non-rollbackable through the automated forward-rollback command."
+          else
+            echo "::notice::No promoted images or release manifest exist; creating the initial bootstrap release."
+          fi
       - name: Materialize immutable candidate manifest
         shell: bash
         run: |
@@ -208,6 +239,10 @@ jobs:
             image_specs+=("${service}=${IMAGE_NAMESPACE}/${service}@${digest}")
           done
           image_specs_csv="$(IFS=,; echo "${image_specs[*]}")"
+          predecessor_args=()
+          if [[ -s "$CURRENT_PRODUCTION_MANIFEST" ]]; then
+            predecessor_args=(--predecessor "$CURRENT_PRODUCTION_MANIFEST")
+          fi
           node deploy/studio-server/scripts/create-release-manifest.mjs create \
             --output "$RELEASE_MANIFEST" \
             --source-repository "$GITHUB_REPOSITORY" \
@@ -216,7 +251,8 @@ jobs:
             --workflow "$GITHUB_WORKFLOW" \
             --run-id "$GITHUB_RUN_ID" \
             --run-attempt "$GITHUB_RUN_ATTEMPT" \
-            --image "$image_specs_csv"
+            --image "$image_specs_csv" \
+            "${predecessor_args[@]}"
       - name: Upload candidate release manifest
         uses: actions/upload-artifact@65462800fd760344b1a7b4382951275a0abb4808 # v4
         with:
@@ -254,10 +290,12 @@ jobs:
     needs:
       - changes
       - build-and-push
+      - release-manifest
     runs-on: ubuntu-latest
     timeout-minutes: 55
     env:
       SOURCE_TAG: candidate-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+      CANDIDATE_RELEASE_MANIFEST: artifacts/studio-server-release-manifest/candidate-release-manifest.json
     steps:
       - name: Check Out Repository
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
@@ -289,19 +327,30 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Resolve previous promoted API image when one exists
+      - name: Download candidate release manifest
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: studio-server-candidate-release-manifest-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifacts/studio-server-release-manifest
+
+      - name: Resolve manifest-bound predecessor API image
         shell: bash
         run: |
           set -euo pipefail
-          previous_image="${IMAGE_NAMESPACE}/api:latest"
-          if digest="$(docker buildx imagetools inspect "$previous_image" --format '{{.Manifest.Digest}}' 2>/dev/null)" && [[ "$digest" =~ ^sha256:[a-f0-9]{64}$ ]]; then
+          if jq -e '.lineage.predecessor != null' "$CANDIDATE_RELEASE_MANIFEST" >/dev/null; then
+            repository="$(jq -er '.lineage.predecessor.images.api.repository' "$CANDIDATE_RELEASE_MANIFEST")"
+            digest="$(jq -er '.lineage.predecessor.images.api.digest' "$CANDIDATE_RELEASE_MANIFEST")"
+            if [[ ! "$digest" =~ ^sha256:[a-f0-9]{64}$ ]]; then
+              echo "::error::Candidate predecessor API digest is invalid: $digest"
+              exit 1
+            fi
             {
-              echo "RIVET_K8S_RELEASE_GATE_PREVIOUS_API_IMAGE_REPOSITORY=${IMAGE_NAMESPACE}/api"
+              echo "RIVET_K8S_RELEASE_GATE_PREVIOUS_API_IMAGE_REPOSITORY=$repository"
               echo "RIVET_K8S_RELEASE_GATE_PREVIOUS_API_IMAGE_DIGEST=$digest"
             } >> "$GITHUB_ENV"
-            echo "Using previous promoted API image $previous_image@$digest for schema compatibility."
+            echo "Using exact predecessor API image $repository@$digest for schema compatibility."
           else
-            echo "::notice::No previous promoted API image is available; the bootstrap release has no rollback target to verify."
+            echo "::notice::The bootstrap candidate has no verified predecessor to exercise."
           fi
 
       - name: Resolve Candidate Image Digests
@@ -567,6 +616,8 @@ jobs:
       SOURCE_TAG: candidate-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
       CANDIDATE_RELEASE_MANIFEST: artifacts/studio-server-release-manifest/candidate-release-manifest.json
       PROMOTED_RELEASE_MANIFEST: artifacts/studio-server-release-manifest/promoted-release-manifest.json
+      CURRENT_PRODUCTION_MANIFEST: artifacts/studio-server-release-manifest/current-production-release-manifest.json
+      RELEASE_MANIFEST_REPOSITORY: ghcr.io/valerypopoff/rivet2.0-studio-server/release-manifest
     steps:
       - name: Check Out Repository
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
@@ -616,6 +667,39 @@ jobs:
           echo "current=false" >> "$GITHUB_OUTPUT"
           echo "::warning::Skipping mutable main image aliases: this run built $GITHUB_SHA, but main now points to $current_sha."
 
+      - name: Attest promoted release manifest
+        if: ${{ github.ref != 'refs/heads/main' || steps.main_freshness.outputs.current == 'true' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          node deploy/studio-server/scripts/release-manifest-oci.mjs pull \
+            --reference "${RELEASE_MANIFEST_REPOSITORY}:production" \
+            --output "$CURRENT_PRODUCTION_MANIFEST" \
+            --allow-missing
+          current_args=()
+          if [[ -s "$CURRENT_PRODUCTION_MANIFEST" ]]; then
+            current_args=(--current "$CURRENT_PRODUCTION_MANIFEST")
+          fi
+          node deploy/studio-server/scripts/create-release-manifest.mjs promote \
+            --input "$CANDIDATE_RELEASE_MANIFEST" \
+            --output "$PROMOTED_RELEASE_MANIFEST" \
+            --workflow "$GITHUB_WORKFLOW" \
+            --run-id "$GITHUB_RUN_ID" \
+            --run-attempt "$GITHUB_RUN_ATTEMPT" \
+            "${current_args[@]}"
+
+      - name: Publish immutable release manifest
+        if: ${{ github.ref != 'refs/heads/main' || steps.main_freshness.outputs.current == 'true' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          manifest_digest="$(node deploy/studio-server/scripts/create-release-manifest.mjs digest --input "$PROMOTED_RELEASE_MANIFEST")"
+          manifest_reference="${RELEASE_MANIFEST_REPOSITORY}:manifest-${manifest_digest#sha256:}"
+          node deploy/studio-server/scripts/release-manifest-oci.mjs push \
+            --reference "$manifest_reference" \
+            --input "$PROMOTED_RELEASE_MANIFEST"
+          echo "PROMOTED_MANIFEST_REFERENCE=$manifest_reference" >> "$GITHUB_ENV"
+
       - name: Promote Complete Image Set
         if: ${{ github.ref != 'refs/heads/main' || steps.main_freshness.outputs.current == 'true' }}
         shell: bash
@@ -659,15 +743,12 @@ jobs:
             done
           done
 
-      - name: Attest promoted release manifest
-        if: ${{ github.ref != 'refs/heads/main' || steps.main_freshness.outputs.current == 'true' }}
+      - name: Advance durable production release pointer
+        if: ${{ github.ref == 'refs/heads/main' && steps.main_freshness.outputs.current == 'true' }}
         run: |
-          node deploy/studio-server/scripts/create-release-manifest.mjs promote \
-            --input "$CANDIDATE_RELEASE_MANIFEST" \
-            --output "$PROMOTED_RELEASE_MANIFEST" \
-            --workflow "$GITHUB_WORKFLOW" \
-            --run-id "$GITHUB_RUN_ID" \
-            --run-attempt "$GITHUB_RUN_ATTEMPT"
+          node deploy/studio-server/scripts/release-manifest-oci.mjs retag \
+            --source "$PROMOTED_MANIFEST_REFERENCE" \
+            --destination "${RELEASE_MANIFEST_REPOSITORY}:production"
 
       - name: Upload promoted release manifest
         if: ${{ github.ref != 'refs/heads/main' || steps.main_freshness.outputs.current == 'true' }}

@@ -178,6 +178,12 @@ assert.equal(
   'Image workflow must expose a boolean manual capacity-certificate input.',
 );
 assert.equal(capacityDispatchInput?.default, false, 'The capacity certificate must never run implicitly.');
+const lineageBootstrapInput = images.workflow.on.workflow_dispatch?.inputs?.allow_release_lineage_bootstrap;
+assert.equal(
+  lineageBootstrapInput?.default,
+  false,
+  'Starting a new production release lineage must require an explicit manual acknowledgement.',
+);
 assert.equal(
   images.workflow.permissions.actions,
   'read',
@@ -238,7 +244,11 @@ assert.match(
   'A skipped Kind gate is acceptable only when classification selected the fast path.',
 );
 assert.deepEqual(asArray(imageJobs['fast-container-smoke'].needs), ['build-and-push']);
-assert.deepEqual(asArray(imageJobs['managed-kubernetes-release-gate'].needs), ['changes', 'build-and-push']);
+assert.deepEqual(
+  asArray(imageJobs['managed-kubernetes-release-gate'].needs),
+  ['changes', 'build-and-push', 'release-manifest'],
+  'The Kubernetes compatibility gate must consume the same manifest-bound predecessor that the candidate records.',
+);
 assert.deepEqual(asArray(imageJobs['managed-kubernetes-provider-gate'].needs), ['build-and-push']);
 assertIncludesAll(
   asArray(imageJobs['promote-images'].needs),
@@ -246,6 +256,7 @@ assertIncludesAll(
     'changes',
     'verify-repository',
     'build-and-push',
+    'release-manifest',
     'fast-container-smoke',
     'managed-kubernetes-release-gate',
     'managed-kubernetes-provider-gate',
@@ -271,6 +282,7 @@ assert.match(
 for (const stepName of [
   'Promote Complete Image Set',
   'Attest promoted release manifest',
+  'Publish immutable release manifest',
   'Upload promoted release manifest',
 ]) {
   assert.match(
@@ -279,6 +291,48 @@ for (const stepName of [
     `${stepName} must not run for a stale main release.`,
   );
 }
+const candidatePredecessor = findStep(
+  imageJobs['release-manifest'],
+  'Resolve exact production predecessor',
+  'Candidate release-manifest job',
+);
+assert.match(candidatePredecessor.run, /release-manifest-oci\.mjs pull/);
+assert.match(candidatePredecessor.run, /allow_release_lineage_bootstrap/i);
+assert.match(
+  findStep(
+    imageJobs['managed-kubernetes-release-gate'],
+    'Resolve manifest-bound predecessor API image',
+    'Managed Kubernetes release gate',
+  ).run,
+  /\.lineage\.predecessor\.images\.api\.digest/,
+  'The compatibility rehearsal must use the exact API digest bound into the candidate manifest.',
+);
+assert.doesNotMatch(
+  findStep(
+    imageJobs['managed-kubernetes-release-gate'],
+    'Resolve manifest-bound predecessor API image',
+    'Managed Kubernetes release gate',
+  ).run,
+  /api:latest/,
+  'A mutable API alias must not authorize predecessor compatibility.',
+);
+const promotionSteps = imageJobs['promote-images'].steps.map((step) => step.name);
+assert.ok(
+  promotionSteps.indexOf('Attest promoted release manifest') <
+    promotionSteps.indexOf('Publish immutable release manifest') &&
+    promotionSteps.indexOf('Publish immutable release manifest') <
+      promotionSteps.indexOf('Promote Complete Image Set') &&
+    promotionSteps.indexOf('Promote Complete Image Set') <
+      promotionSteps.indexOf('Advance durable production release pointer'),
+  'Promotion must validate lineage, publish immutable evidence, promote the image set, and advance the production pointer last.',
+);
+const lineageAdvance = findStep(
+  imageJobs['promote-images'],
+  'Advance durable production release pointer',
+  'Image promotion job',
+);
+assert.match(String(lineageAdvance.if), /github\.ref == 'refs\/heads\/main'/);
+assert.match(lineageAdvance.run, /release-manifest-oci\.mjs retag/);
 assert.ok(images.workflow.on.push.paths.length > 0, 'Main image builds must be path-gated.');
 assert.ok(images.workflow.on.schedule, 'Weekly full image verification must remain configured.');
 assert.equal(

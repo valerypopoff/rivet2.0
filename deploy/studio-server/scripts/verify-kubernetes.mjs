@@ -92,6 +92,8 @@ async function verifyProdRender(helmBin, managedWorkflowSchemaVersion) {
     '--set',
     `images.executor.digest=sha256:${'d'.repeat(64)}`,
     '--set',
+    `release.production.manifestDigest=sha256:${'f'.repeat(64)}`,
+    '--set',
     `release.production.sourceSha=${'e'.repeat(40)}`,
     '--set',
     'release.production.verification.workflow=Build-Images',

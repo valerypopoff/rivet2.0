@@ -773,6 +773,8 @@ test('production rendering requires a fully identified digest-pinned release', a
     '--set',
     `images.executor.digest=sha256:${'d'.repeat(64)}`,
     '--set',
+    `release.production.manifestDigest=sha256:${'f'.repeat(64)}`,
+    '--set',
     `release.production.sourceSha=${'e'.repeat(40)}`,
     '--set',
     'release.production.verification.workflow=Build-Images',
@@ -798,11 +800,12 @@ test('production rendering requires a fully identified digest-pinned release', a
 
   assert.throws(
     () => execFileSync(helmBin, baseArgs, { cwd: repoRoot, encoding: 'utf8', stdio: 'pipe' }),
-    /release\.production\.sourceSha must be the 40-character lowercase Git commit/,
+    /release\.production\.manifestDigest must be the canonical sha256 digest/,
   );
 
   const rendered = renderProduction();
   assert.match(rendered, /kind: ConfigMap[\s\S]*?name: rivet-prod-rivet-release-identity/);
+  assert.match(rendered, new RegExp(`release-manifest-digest: "sha256:${'f'.repeat(64)}"`));
   assert.match(rendered, new RegExp(`chart-content-digest: "sha256:${'f'.repeat(64)}"`));
   assert.match(rendered, new RegExp(`image: ghcr.io/example/api@sha256:${'c'.repeat(64)}`));
 

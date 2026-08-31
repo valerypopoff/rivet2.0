@@ -216,6 +216,7 @@ webAppActionRetention:
 release:
   production:
     enabled: false
+    manifestDigest: ''
     sourceSha: ''
     verification:
       workflow: ''
