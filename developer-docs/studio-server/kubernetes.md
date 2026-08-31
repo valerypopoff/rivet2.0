@@ -100,6 +100,25 @@ The Runs tab makes temporary expiry explicit and offers **Keep replay recordings
 
 This source-level isolation does not substitute for operational evidence. Keep the feature disabled in high-volume production until the worker-loss/cancellation and concurrent batch-versus-public capacity scenarios have passed with the immutable release images. See the [managed-mode audit](./audits/kubernetes-managed-mode.md) for those gates.
 
+### Hosted Evaluation disruption certificate
+
+`yarn studio-server:verify:kubernetes:managed-evaluations` is the protected staging certificate for the durable hosted-Evaluation path. In GitHub **Build Images**, enable `run_managed_kubernetes_evaluation_gate`; it first deploys the current immutable candidate through the existing provider gate, then runs this certificate in the same protected `rivet-managed-staging` environment. It requires `RIVET_K8S_EVALUATION_GATE_CONFIRM=disrupt-staging-evaluations`, the exact allowlisted staging context, and exactly one Evaluation worker replica so that the worker-loss transition is unambiguous. If the same manual dispatch also requests the published-capacity certificate, that certificate completes first; the destructive worker-loss certificate never runs concurrently with it. Provider deployment, capacity, and Evaluation certificate jobs share one non-canceling staging lock across workflow runs, so another manual dispatch cannot mutate the release at the same time.
+
+After durable acceptance, the runner force-deletes only that selected Evaluation worker (`--grace-period=0 --force`). It does not delete the backend, execution, proxy, web, database, or object-store workloads. The protected confirmation and one-worker precondition make this a deliberate, bounded worker-loss test rather than an ordinary rollout action.
+
+Add this bounded non-secret block to the protected provider-gate JSON:
+
+```json
+{
+  "hostedEvaluationGate": {
+    "waitSeconds": 240,
+    "publicProbeRequests": 8
+  }
+}
+```
+
+The runner submits a one-trial, execution-only snapshot of the long deterministic fixture and immediately abandons its initiating request path: no browser connection is required after the server returns `202`. It proves duplicate submission returns `409`, waits for one accepted trial, probes the independently scalable published endpoint while that trial is running, deletes only the exact Evaluation worker Pod, and requires one explicit interrupted trial. It then requests the selected retry and requires exactly one settled second attempt; it separately proves a durable cancellation. Its report keeps only run/job IDs, state transitions, attempt counts, timestamps, public status counts, and failure classes. It never stores response bodies, project content, provider headers, or credentials, and it deletes only its generated hosted runs. A passing report is staging evidence, not a license to enable hosted Evaluation retention enforcement without a separate audit-mode review.
+
 ## Autoscaling prerequisites
 
 The current HPAs are CPU-based:
@@ -276,10 +295,11 @@ The runner requires both the provider-gate acknowledgement (`RIVET_K8S_PROVIDER_
 
 - two uniquely identified temporary projects based on the deterministic Code-plus-Delay fixture, published as one short and one long endpoint;
 - one uniquely named ConfigMap containing a non-secret worker configuration;
+- when endpoint bearer authentication is enabled, one uniquely named Secret containing only an expiring, endpoint-scoped capability; and
 - one single-attempt bounded Job using the candidate API image, explicitly non-root/read-only/capability-free and without a service-account token; and
-- the temporary projects, Job, and ConfigMap during cleanup. Cleanup failure fails the run rather than leaving undisclosed staging artifacts.
+- the temporary projects, Job, ConfigMap, and disposable capability Secret during cleanup. Cleanup failure fails the run rather than leaving undisclosed staging artifacts.
 
-The worker can construct only `POST /workflows/<safe-generated-endpoint>` URLs. It cannot accept a path, a `/workflows-latest/...` route, an internal execution-service target, arbitrary request headers (the schema rejects `requestHeaders`), or a retry policy. It sends neither a management credential nor a Kubernetes service-account token: the authenticated external staging `baseUrl` is used only by the host-side runner to publish and later delete its temporary fixture projects. This makes the load proof about the proxy-to-execution public-runtime route while keeping control credentials out of the Job and its report. Consequently, the runner reads the protected staging **Workflow endpoint access** setting before creating fixtures and refuses to run while bearer authentication is required. Do not put `RIVET_KEY` or another management credential in the Job merely to bypass that check; use staging configured for the public-route posture being certified. A protected-endpoint capacity certificate needs separately scoped workload credentials and is not implemented by this public-route gate.
+The worker can construct only `POST /workflows/<safe-generated-endpoint>` URLs. It cannot accept a path, a `/workflows-latest/...` route, an internal execution-service target, arbitrary request headers (the schema rejects `requestHeaders`), or a retry policy. It sends neither a management credential nor a Kubernetes service-account token. When bearer authentication is enabled, the host-side runner derives an HMAC capability from the protected runner credential and places that capability—not `RIVET_KEY`—in a disposable Secret. The capability expires with the Job (at most three hours) and is valid only for the two fixture endpoints; the published route verifies the signature, expiry, and normalized endpoint name. The ConfigMap and JSON report cannot contain it. The normal `/workflows-latest/...` route never accepts it. This preserves the proxy-to-execution public-runtime proof while keeping the shared key out of the Job and its artifacts.
 
 Add a `capacity` object to the existing protected provider-gate JSON. Keep the JSON, request headers, kubeconfig, and Helm values in the protected environment secrets; do not commit them.
 
@@ -293,6 +313,15 @@ Add a `capacity` object to the existing protected provider-gate JSON. Keep the J
     "sampleIntervalMs": 5000,
     "jobTimeoutSeconds": 900,
     "requireExecutionMetrics": true,
+    "prometheus": {
+      "baseUrl": "https://prometheus.staging.example.test",
+      "headers": { "authorization": "Bearer <prometheus-read-token>" },
+      "queries": {
+        "memoryHighWaterBytes": "max(container_memory_working_set_bytes{app_kubernetes_io_name=\"rivet\"})",
+        "nodeEphemeralHighWaterBytes": "max(container_fs_usage_bytes{app_kubernetes_io_name=\"rivet\"})",
+        "downstreamConcurrency": "sum(rivet_provider_requests_in_flight)"
+      }
+    },
     "stages": [
       { "name": "warmup", "scenario": "fast", "expect": "success", "concurrency": 4, "requests": 40 },
       { "name": "steady", "scenario": "long", "expect": "success", "concurrency": 12, "requests": 120 },
@@ -319,9 +348,9 @@ metrics:
 
 The operator identity also needs read access to execution Pods and Events plus Kubernetes API pod-proxy access for `pods/<name>:8080/proxy/metrics`. Metrics remain internal ClusterIP endpoints; this does not publish `/metrics` through the proxy. Each sample records bounded active-run/admission gauges, recording queue, and per-Pod drop counters compared with the pre-load baseline (a Pod first seen after the baseline uses zero), plus per-Pod restart/OOM evidence and eviction events. The Job makes a direct backend `/readyz` control canary at the configured interval while the proxy receives load. The report includes p50/p95/p99, exact status counts, rejected/failed/timeout counts, canary outcomes, metric samples, pod-event evidence, the selected stage thresholds, and the immutable candidate image references. It excludes request headers, raw request bodies, prompts, outputs, and provider credentials.
 
-The CI job always runs in `certify` mode. Certification requires `requireExecutionMetrics: true` and a complete report whose stage names, request totals, outcome totals, and control-canary counts exactly match the declared configuration. A scheduling-edge sample with no execution Pod is retained as evidence but does not require metrics; at least one sample taken while an execution Pod exists must expose every required metric. The gate otherwise fails if a required event sample is unavailable, a stage exceeds its p95 or unexpected-result limit, a control canary fails, recording drops increase beyond the limit, an overload stage never receives visible `429` admission rejection, or a new restart/OOM/eviction occurs after the baseline sample. Local protected use may set `RIVET_K8S_CAPACITY_GATE_MODE=observe`; that records the same evidence but does not turn threshold findings into success/failure. It still requires the exact staging acknowledgement and refuses non-staging contexts. On every normal finalization path, the gate writes `capacity-report.json`, including setup, scheduling, Job, and cleanup failures: it records the completed phase, available Pod snapshots and report data, plus cleanup outcome and only a failure class—not a raw exception, request header, or credential. If writing the local evidence artifact itself fails, the command fails explicitly rather than claiming a certificate. The separate diagnostic logs retain the bounded command context.
+The CI job always runs in `certify` mode. Certification requires `requireExecutionMetrics: true`, the `capacity.prometheus` block, and a complete report whose stage names, request totals, outcome totals, and control-canary counts exactly match the declared configuration. A scheduling-edge sample with no execution Pod is retained as evidence but does not require metrics; every sampled live execution Pod must have all three external high-water values as one finite Prometheus vector sample. The gate otherwise fails if a required event/Prometheus sample is unavailable, a stage exceeds its p95 or unexpected-result limit, a control canary fails, recording drops increase beyond the limit, an overload stage never receives visible `429` admission rejection, or a new restart/OOM/eviction occurs after the baseline sample. Local protected use may set `RIVET_K8S_CAPACITY_GATE_MODE=observe`; that records the same evidence but does not turn threshold findings into success/failure. It still requires the exact staging acknowledgement and refuses non-staging contexts. On every normal finalization path, the gate writes `capacity-report.json`, including setup, scheduling, Job, and cleanup failures: it records the completed phase, available Pod snapshots and report data, plus cleanup outcome and only a failure class—not a raw exception, request header, PromQL expression, or credential. If writing the local evidence artifact itself fails, the command fails explicitly rather than claiming a certificate. The separate diagnostic logs retain the bounded command context.
 
-This certificate is deliberately not proof of final production sizing. The initial runner does not collect node-ephemeral high-water usage, downstream provider concurrency, external tool correctness, or a simultaneous Evaluation batch. Use provider monitoring for memory/ephemeral high-water marks and retain its charts with the JSON report. Do not change HPA bounds, admission ceilings, Evaluation quotas, placement, or resource limits automatically from one run. First establish a stable staging envelope, then promote explicit values through normal review. P10-A/P10-B now provide the server-owned, quota-bounded, capacity-isolated worker tier in source; a concurrent batch scenario is still required to certify the selected values against the published endpoint SLO.
+This certificate is deliberately not proof of final production sizing. It records provider-side memory/node-ephemeral high-water and downstream concurrency when certifying, but it does not infer safe limits or provider/tool correctness from one run. Retain the provider charts and JSON report together. Do not change HPA bounds, admission ceilings, Evaluation quotas, placement, or resource limits automatically from one run. First establish a stable staging envelope, then promote explicit values through normal review. The separate hosted-Evaluation certificate probes public traffic while Evaluation work is active; a joint high-concurrency envelope still needs retained staging evidence before final public-SLO claims.
 
 ### Cross-store backup and restore drill
 
@@ -758,6 +787,24 @@ metrics:
 When `proxyExporter.enabled=true`, the chart starts the digest-pinned `nginx/nginx-prometheus-exporter` sidecar with a read-only non-root filesystem. Its memory request and limit are mandatory, so enabling observability cannot introduce an unbounded sidecar; node-ephemeral storage is intentionally not required because the sidecar has no writable filesystem. NGINX binds its `stub_status` page to `127.0.0.1:18080`, so it is reachable only within the proxy Pod; the exporter reads it over the shared Pod network namespace and uses the proxy Service's internal `metrics` port `9113`. The public listener has no `/metrics` or `/stub_status` location. Enable a matching NetworkPolicy before a monitoring namespace scrapes that Service. The exporter port and the `webAppActionRetention.retentionHours` lifecycle window are strict positive whole numbers: the chart rejects fractional values before a Pod can receive an environment value that the API would reject at startup.
 
 `proxyExporter.enabled`, `serviceMonitor.enabled`, `prometheusRule.enabled`, and `grafanaDashboards.enabled` are independent opt-ins, and each requires `metrics.enabled=true`. The ServiceMonitor and PrometheusRule resources require the Prometheus Operator CRDs to be installed. `grafanaDashboards.enabled` creates one labeled ConfigMap containing the versioned `rivet-control-plane` and `rivet-published-execution` dashboard JSON definitions; the cluster's own Grafana sidecar or import controller must be configured to discover that label. Each dashboard uses an interactive Prometheus-datasource selector, so it does not assume a deployment-specific datasource UID. The chart does not install Grafana, make dashboards public, or enable metrics merely by rendering the ConfigMap. All values are chart-owned, so Vault or `env` cannot override the final deployment policy after the API entrypoint loads dotenv. Their interval and alert hold values accept positive Prometheus durations such as `30s`, `10m`, or `1h30m`. Minimal installations can leave the whole block disabled and do not need Prometheus, Grafana, or their CRDs.
+
+After the monitoring stack is reachable and its labels have been checked, an operator can enable the additional failure-mode rules explicitly:
+
+```yaml
+metrics:
+  enabled: true
+  prometheusRule:
+    enabled: true
+    for: 10m
+    failureModeAlerts:
+      enabled: true
+      postgresPoolWaiting: 1
+      maintenanceStaleSeconds: 900
+      outboxBlockedEntries: 1
+      evaluationQueueUtilization: 0.9
+```
+
+These opt-in rules cover PostgreSQL pool waiters, runtime-library job failures, stale fenced maintenance, blocked deletion-outbox rows, hosted-Evaluation outstanding-job saturation, and per-replica managed App Settings synchronization. They do not replace cluster telemetry: restart/OOM/eviction alerts remain the responsibility of the installed Kubernetes monitoring stack (for example, `kube-state-metrics`). Enable the rules only after confirming the Prometheus Operator's namespace/pod labels and routing policy. Their defaults are conservative starting points, not a production paging policy; inject each relevant failure in staging, tune it, assign an owner, and retain the evidence before it pages anyone.
 
 The current metric families are intentionally low-cardinality and contain no project IDs, workflow names, prompts, inputs, secrets, request IDs, or error text:
 

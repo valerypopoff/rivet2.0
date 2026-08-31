@@ -228,6 +228,33 @@
 {{- if not (kindIs "bool" .Values.metrics.prometheusRule.enabled) -}}
 {{- fail "metrics.prometheusRule.enabled must be a boolean" -}}
 {{- end -}}
+{{- if not (kindIs "map" .Values.metrics.prometheusRule.failureModeAlerts) -}}
+{{- fail "metrics.prometheusRule.failureModeAlerts must be a map" -}}
+{{- end -}}
+{{- if not (kindIs "bool" .Values.metrics.prometheusRule.failureModeAlerts.enabled) -}}
+{{- fail "metrics.prometheusRule.failureModeAlerts.enabled must be a boolean" -}}
+{{- end -}}
+{{- range $field := list
+  (dict "path" "metrics.prometheusRule.failureModeAlerts.postgresPoolWaiting" "value" .Values.metrics.prometheusRule.failureModeAlerts.postgresPoolWaiting)
+  (dict "path" "metrics.prometheusRule.failureModeAlerts.maintenanceStaleSeconds" "value" .Values.metrics.prometheusRule.failureModeAlerts.maintenanceStaleSeconds)
+  (dict "path" "metrics.prometheusRule.failureModeAlerts.outboxBlockedEntries" "value" .Values.metrics.prometheusRule.failureModeAlerts.outboxBlockedEntries)
+-}}
+{{- include "rivet.assertNonNegativeWholeNumber" $field -}}
+{{- end -}}
+{{- if lt (int .Values.metrics.prometheusRule.failureModeAlerts.postgresPoolWaiting) 1 -}}
+{{- fail "metrics.prometheusRule.failureModeAlerts.postgresPoolWaiting must be greater than zero" -}}
+{{- end -}}
+{{- if lt (int .Values.metrics.prometheusRule.failureModeAlerts.maintenanceStaleSeconds) 1 -}}
+{{- fail "metrics.prometheusRule.failureModeAlerts.maintenanceStaleSeconds must be greater than zero" -}}
+{{- end -}}
+{{- if lt (int .Values.metrics.prometheusRule.failureModeAlerts.outboxBlockedEntries) 1 -}}
+{{- fail "metrics.prometheusRule.failureModeAlerts.outboxBlockedEntries must be greater than zero" -}}
+{{- end -}}
+{{- $evaluationQueueUtilization := .Values.metrics.prometheusRule.failureModeAlerts.evaluationQueueUtilization -}}
+{{- $evaluationQueueUtilizationNumber := float64 $evaluationQueueUtilization -}}
+{{- if or (not (or (kindIs "float64" $evaluationQueueUtilization) (kindIs "int" $evaluationQueueUtilization) (kindIs "int64" $evaluationQueueUtilization))) (le $evaluationQueueUtilizationNumber 0.0) (gt $evaluationQueueUtilizationNumber 1.0) -}}
+{{- fail "metrics.prometheusRule.failureModeAlerts.evaluationQueueUtilization must be a number greater than zero and at most one" -}}
+{{- end -}}
 {{- if not (kindIs "bool" .Values.metrics.grafanaDashboards.enabled) -}}
 {{- fail "metrics.grafanaDashboards.enabled must be a boolean" -}}
 {{- end -}}
@@ -258,6 +285,9 @@
 {{- end -}}
 {{- if and .Values.metrics.prometheusRule.enabled (not .Values.metrics.enabled) -}}
 {{- fail "metrics.prometheusRule.enabled requires metrics.enabled=true" -}}
+{{- end -}}
+{{- if and .Values.metrics.prometheusRule.failureModeAlerts.enabled (not .Values.metrics.prometheusRule.enabled) -}}
+{{- fail "metrics.prometheusRule.failureModeAlerts.enabled requires metrics.prometheusRule.enabled=true" -}}
 {{- end -}}
 {{- if and .Values.metrics.grafanaDashboards.enabled (not .Values.metrics.enabled) -}}
 {{- fail "metrics.grafanaDashboards.enabled requires metrics.enabled=true" -}}

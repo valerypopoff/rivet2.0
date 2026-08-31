@@ -7,6 +7,7 @@ const stageNamePattern = /^[a-z0-9](?:[a-z0-9-]{0,38}[a-z0-9])?$/u;
 const scenarioNames = new Set(['fast', 'long']);
 const dnsLabelPattern = /^[a-z0-9]([-a-z0-9]*[a-z0-9])?$/u;
 const modes = new Set(['observe', 'certify']);
+const externalObservationNames = ['memoryHighWaterBytes', 'nodeEphemeralHighWaterBytes', 'downstreamConcurrency'];
 
 function assertObject(value, name) {
   if (!value || Array.isArray(value) || typeof value !== 'object') {
@@ -27,6 +28,60 @@ function assertFiniteNumber(value, name, { minimum = 0, maximum = Number.MAX_SAF
     throw new Error(`[kubernetes-published-capacity-gate] ${name} must be a number from ${minimum} to ${maximum}`);
   }
   return value;
+}
+
+function parsePrometheusObservation(rawValue) {
+  if (rawValue == null) return undefined;
+  const value = assertObject(rawValue, 'capacity.prometheus');
+  const baseUrl = String(value.baseUrl ?? '').trim();
+  let parsedUrl;
+  try {
+    parsedUrl = new URL(baseUrl);
+  } catch {
+    throw new Error(
+      '[kubernetes-published-capacity-gate] capacity.prometheus.baseUrl must be an absolute HTTP(S) origin',
+    );
+  }
+  if (
+    !['http:', 'https:'].includes(parsedUrl.protocol) ||
+    parsedUrl.username ||
+    parsedUrl.password ||
+    parsedUrl.pathname !== '/' ||
+    parsedUrl.search ||
+    parsedUrl.hash
+  ) {
+    throw new Error(
+      '[kubernetes-published-capacity-gate] capacity.prometheus.baseUrl must be an HTTP(S) origin without credentials, path, query, or fragment',
+    );
+  }
+  const rawHeaders = value.headers ?? {};
+  const headers = assertObject(rawHeaders, 'capacity.prometheus.headers');
+  const normalizedHeaders = {};
+  for (const [name, headerValue] of Object.entries(headers)) {
+    if (!/^[!#$%&'*+\-.^_\x60|~0-9A-Za-z]+$/u.test(name) || typeof headerValue !== 'string' || !headerValue.trim()) {
+      throw new Error(
+        '[kubernetes-published-capacity-gate] capacity.prometheus.headers must contain non-empty HTTP header strings',
+      );
+    }
+    normalizedHeaders[name] = headerValue;
+  }
+  const queries = assertObject(value.queries, 'capacity.prometheus.queries');
+  const normalizedQueries = {};
+  for (const name of externalObservationNames) {
+    const query = queries[name];
+    if (typeof query !== 'string' || !query.trim() || query.length > 4_096 || /[\r\n]/u.test(query)) {
+      throw new Error(
+        `[kubernetes-published-capacity-gate] capacity.prometheus.queries.${name} must be one non-empty PromQL expression of at most 4096 characters`,
+      );
+    }
+    normalizedQueries[name] = query;
+  }
+  if (Object.keys(queries).some((name) => !externalObservationNames.includes(name))) {
+    throw new Error(
+      '[kubernetes-published-capacity-gate] capacity.prometheus.queries has unsupported observation names',
+    );
+  }
+  return { baseUrl: parsedUrl.origin, headers: normalizedHeaders, queries: normalizedQueries };
 }
 
 function parseCapacity(rawConfig) {
@@ -119,6 +174,7 @@ function parseCapacity(rawConfig) {
       maximum: 7_200,
     }),
     requireExecutionMetrics: capacity.requireExecutionMetrics !== false,
+    prometheus: parsePrometheusObservation(capacity.prometheus),
     thresholds: {
       maximumP95Ms: normalizedMaximumP95Ms,
       maximumUnexpectedRate: assertFiniteNumber(
@@ -173,6 +229,11 @@ export function buildPublishedCapacityGateConfig({ rootDir, env = process.env } 
   if (mode === 'certify' && !capacity.requireExecutionMetrics) {
     throw new Error('[kubernetes-published-capacity-gate] certify mode requires capacity.requireExecutionMetrics=true');
   }
+  if (mode === 'certify' && !capacity.prometheus) {
+    throw new Error(
+      '[kubernetes-published-capacity-gate] certify mode requires capacity.prometheus memory, node-ephemeral, and downstream observations',
+    );
+  }
   const artifactsDir = path.resolve(provider.artifactsDir, 'published-capacity');
   const relative = path.relative(rootDir, artifactsDir);
   if (relative.startsWith('..') || path.isAbsolute(relative)) {
@@ -192,6 +253,17 @@ export function redactPublishedCapacityGateConfig(config) {
     images: Object.fromEntries(
       Object.entries(config.images).map(([name, image]) => [name, `${image.repository}@${image.digest}`]),
     ),
-    capacity: config.capacity,
+    capacity: {
+      ...config.capacity,
+      ...(config.capacity.prometheus
+        ? {
+            prometheus: {
+              baseUrl: config.capacity.prometheus.baseUrl,
+              queryNames: Object.keys(config.capacity.prometheus.queries),
+              hasHeaders: Object.keys(config.capacity.prometheus.headers).length > 0,
+            },
+          }
+        : {}),
+    },
   };
 }

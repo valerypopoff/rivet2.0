@@ -20,7 +20,10 @@ import {
   type UiGraph,
 } from '@valerypopoff/rivet2-node';
 
-import { isLatestWorkflowRemoteDebuggerEnabled, maybeGetLatestWorkflowRemoteDebugger } from '../../latestWorkflowRemoteDebugger.js';
+import {
+  isLatestWorkflowRemoteDebuggerEnabled,
+  maybeGetLatestWorkflowRemoteDebugger,
+} from '../../latestWorkflowRemoteDebugger.js';
 import { registerActiveHttpExecution } from '../../active-http-executions.js';
 import {
   getPublishedExecutionAdmission,
@@ -53,6 +56,7 @@ import {
   WEB_APP_OAUTH_SELECT_ACCOUNT_PROMPT,
 } from '../../web-app-oauth.js';
 import { readWorkflowEndpointAuthSettingsSync } from '../../workflow-endpoint-auth-settings.js';
+import { isWorkflowCapacityCapabilityValid } from '../../workflow-capacity-capability.js';
 import { readExecutionEnvironmentVariables } from '../../environment-variable-settings.js';
 import { enqueueWorkflowExecutionRecordingPersistence } from './recordings.js';
 import {
@@ -86,9 +90,8 @@ type WorkflowExecutionContext = {
   };
 };
 
-export type WorkflowExecutionProject = Awaited<ReturnType<typeof resolvePublishedExecutionProject>> extends infer T
-  ? Exclude<T, null>
-  : never;
+export type WorkflowExecutionProject =
+  Awaited<ReturnType<typeof resolvePublishedExecutionProject>> extends infer T ? Exclude<T, null> : never;
 
 const WORKFLOW_CONTEXT_HEADER_NAME_PATTERN = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/;
 const UNSAFE_WORKFLOW_CONTEXT_HEADER_NAMES = new Set(['__proto__', 'constructor', 'prototype']);
@@ -208,12 +211,7 @@ export function getWorkflowRecordingStatusFromOutputs(
   return outputs.output?.type === 'control-flow-excluded' ? 'suspicious' : 'succeeded';
 }
 
-function sendJsonWithDuration(
-  res: Response,
-  statusCode: number,
-  payload: unknown,
-  requestStartedAt: number,
-): void {
+function sendJsonWithDuration(res: Response, statusCode: number, payload: unknown, requestStartedAt: number): void {
   const durationMs = Math.max(0, Math.round(performance.now() - requestStartedAt));
   res.set('x-duration-ms', String(durationMs));
 
@@ -228,14 +226,11 @@ function sendJsonWithDuration(
   res.status(statusCode).json(payload);
 }
 
-function sendWorkflowErrorWithDuration(
-  res: Response,
-  error: unknown,
-  requestStartedAt: number,
-): void {
-  const status = typeof error === 'object' && error != null && 'status' in error && typeof error.status === 'number'
-    ? error.status
-    : 500;
+function sendWorkflowErrorWithDuration(res: Response, error: unknown, requestStartedAt: number): void {
+  const status =
+    typeof error === 'object' && error != null && 'status' in error && typeof error.status === 'number'
+      ? error.status
+      : 500;
 
   if (status >= 500 && !(error instanceof PublishedExecutionAdmissionError)) {
     console.error('Workflow execution failed:', error);
@@ -244,19 +239,25 @@ function sendWorkflowErrorWithDuration(
     res.set('Retry-After', String(error.retryAfterSeconds));
   }
 
-  const errorPayload = error instanceof Error
-    ? {
-        name: error.name,
-        message: error.message,
-        ...(error instanceof PublishedExecutionAdmissionError ? { code: error.code } : {}),
-      }
-    : {
-        message: String(error),
-      };
+  const errorPayload =
+    error instanceof Error
+      ? {
+          name: error.name,
+          message: error.message,
+          ...(error instanceof PublishedExecutionAdmissionError ? { code: error.code } : {}),
+        }
+      : {
+          message: String(error),
+        };
 
-  sendJsonWithDuration(res, status, {
-    error: errorPayload,
-  }, requestStartedAt);
+  sendJsonWithDuration(
+    res,
+    status,
+    {
+      error: errorPayload,
+    },
+    requestStartedAt,
+  );
 }
 
 function getBearerToken(req: Request): string | null {
@@ -306,9 +307,7 @@ function shouldCollectCodeRunnerTelemetry(): boolean {
   return shouldEmitWorkflowExecutionDebugHeaders() && isManagedCodeRunnerTelemetryEnabled();
 }
 
-function getWorkflowExecutionContext(
-  req: Request
-): WorkflowExecutionContext {
+function getWorkflowExecutionContext(req: Request): WorkflowExecutionContext {
   return {
     headers: {
       type: 'any',
@@ -341,10 +340,7 @@ function setWorkflowExecutionDebugHeaders(
   res.set('x-workflow-cache', executionProject.debug.cacheStatus);
 }
 
-function setCodeRunnerTelemetryHeaders(
-  res: Response,
-  telemetry: ManagedCodeRunnerTelemetry | null,
-): void {
+function setCodeRunnerTelemetryHeaders(res: Response, telemetry: ManagedCodeRunnerTelemetry | null): void {
   if (!telemetry || !shouldEmitWorkflowExecutionDebugHeaders() || !isManagedCodeRunnerTelemetryEnabled()) {
     return;
   }
@@ -363,7 +359,7 @@ function setCodeRunnerTelemetryHeaders(
   res.set('x-code-runner-force-prepare', snapshot.forcePrepareEveryCode ? 'true' : 'false');
 }
 
-function requirePublishedWorkflowApiKey(req: Request): void {
+function requirePublishedWorkflowApiKey(req: Request, options?: { capacityEndpointName?: string }): void {
   const isWorkflowKeyRequired = readWorkflowEndpointAuthSettingsSync().requireBearerAuth;
   if (!isWorkflowKeyRequired) {
     return;
@@ -379,7 +375,14 @@ function requirePublishedWorkflowApiKey(req: Request): void {
   }
 
   const providedApiKey = getBearerToken(req);
-  if (!providedApiKey || providedApiKey !== expectedApiKey) {
+  const capacityCapabilityValid =
+    options?.capacityEndpointName !== undefined &&
+    isWorkflowCapacityCapabilityValid({
+      token: providedApiKey,
+      signingKey: expectedApiKey,
+      endpointName: options.capacityEndpointName,
+    });
+  if (!providedApiKey || (providedApiKey !== expectedApiKey && !capacityCapabilityValid)) {
     throw createHttpError(401, 'Unauthorized');
   }
 }
@@ -434,9 +437,12 @@ function getWebAppOAuthLoginPath(req: Request): string {
   return `${parsed.pathname}${parsed.search}${parsed.hash}` || '/';
 }
 
-function getWebAppOAuthLogoutPath(returnTo: string, options: {
-  selectAccount?: boolean;
-} = {}): string {
+function getWebAppOAuthLogoutPath(
+  returnTo: string,
+  options: {
+    selectAccount?: boolean;
+  } = {},
+): string {
   const params = new URLSearchParams({ return_to: returnTo });
   if (options.selectAccount) {
     params.set('select_account', '1');
@@ -477,9 +483,10 @@ function renderWebAppAuthStatusHtml(options: {
   secondaryHref?: string;
   secondaryLabel?: string;
 }): string {
-  const secondaryLink = options.secondaryHref && options.secondaryLabel
-    ? `<a class="secondary" href="${escapeHtml(options.secondaryHref)}">${escapeHtml(options.secondaryLabel)}</a>`
-    : '';
+  const secondaryLink =
+    options.secondaryHref && options.secondaryLabel
+      ? `<a class="secondary" href="${escapeHtml(options.secondaryHref)}">${escapeHtml(options.secondaryLabel)}</a>`
+      : '';
   return `<!doctype html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -592,10 +599,10 @@ function renderWebAppOriginDeniedHtml(req: Request): string {
 
   return getWebAppAuthMode() === 'oauth'
     ? renderWebAppAuthStatusHtml({
-      ...options,
-      secondaryHref: getWebAppCurrentLogoutPath(req),
-      secondaryLabel: 'Sign out',
-    })
+        ...options,
+        secondaryHref: getWebAppCurrentLogoutPath(req),
+        secondaryLabel: 'Sign out',
+      })
     : renderWebAppAuthStatusHtml(options);
 }
 
@@ -686,7 +693,9 @@ function getWebAppSocketRequestOrigin(req: IncomingMessage): string | null {
   const trustedProxy = isTrustedProxyRequest(req);
   const protocol = trustedProxy
     ? getIncomingHeader(req, 'x-forwarded-proto').split(',')[0]?.trim().toLowerCase()
-    : ((req.socket as { encrypted?: boolean }).encrypted ? 'https' : 'http');
+    : (req.socket as { encrypted?: boolean }).encrypted
+      ? 'https'
+      : 'http';
   const host = trustedProxy
     ? getIncomingHeader(req, 'x-forwarded-host').split(',')[0]?.trim() || getIncomingHeader(req, 'host')
     : getIncomingHeader(req, 'host');
@@ -722,12 +731,7 @@ function authorizeWebAppRequestBeforeResolve(
 
   if (!isWebAppBrowserRequestOriginAllowed(req, requestKind)) {
     if (requestKind === 'html') {
-      sendHtmlWithDuration(
-        res,
-        403,
-        renderWebAppOriginDeniedHtml(req),
-        requestStartedAt,
-      );
+      sendHtmlWithDuration(res, 403, renderWebAppOriginDeniedHtml(req), requestStartedAt);
     } else {
       sendWebAppAuthJsonError(res, requestStartedAt, 403, 'Cross-origin web app request denied', 'origin_forbidden');
     }
@@ -772,12 +776,7 @@ function authorizeWebAppRequestBeforeResolve(
   }
 
   if (requestKind === 'html') {
-    sendHtmlWithDuration(
-      res,
-      401,
-      renderWebAppLoginRequiredHtml(req),
-      requestStartedAt,
-    );
+    sendHtmlWithDuration(res, 401, renderWebAppLoginRequiredHtml(req), requestStartedAt);
     return false;
   }
 
@@ -822,9 +821,7 @@ function encodeUrlPathSegment(value: string): string {
 export type WebAppRouteKind = 'published' | 'latest';
 
 export function getWebAppBasePath(routeKind: WebAppRouteKind, slug: string): string {
-  const basePath = routeKind === 'published'
-    ? getPublishedWebAppsBasePath()
-    : getLatestWebAppsBasePath();
+  const basePath = routeKind === 'published' ? getPublishedWebAppsBasePath() : getLatestWebAppsBasePath();
 
   return `${basePath}/${encodeUrlPathSegment(slug)}`;
 }
@@ -839,16 +836,11 @@ export function resolveWebAppUiGraph(executionProject: WorkflowExecutionProject)
   const uiGraphId = executionProject.webAppUiGraphId;
 
   return uiGraphId
-    ? (executionProject.project.uiGraphs?.[uiGraphId as keyof typeof executionProject.project.uiGraphs] ?? null)
+    ? executionProject.project.uiGraphs?.[uiGraphId as keyof typeof executionProject.project.uiGraphs] ?? null
     : null;
 }
 
-function sendHtmlWithDuration(
-  res: Response,
-  statusCode: number,
-  html: string,
-  requestStartedAt: number,
-): void {
+function sendHtmlWithDuration(res: Response, statusCode: number, html: string, requestStartedAt: number): void {
   const durationMs = Math.max(0, Math.round(performance.now() - requestStartedAt));
   res.set('Cache-Control', 'no-store, no-cache, must-revalidate');
   res.set('Pragma', 'no-cache');
@@ -856,30 +848,34 @@ function sendHtmlWithDuration(
   res.status(statusCode).type('html').send(html);
 }
 
-function sendWebAppActionErrorWithDuration(
-  res: Response,
-  error: unknown,
-  requestStartedAt: number,
-): void {
-  const status = error instanceof RivetWebAppActionHttpError || error instanceof PublishedExecutionAdmissionError
-    ? error.status
-    : 500;
+function sendWebAppActionErrorWithDuration(res: Response, error: unknown, requestStartedAt: number): void {
+  const status =
+    error instanceof RivetWebAppActionHttpError || error instanceof PublishedExecutionAdmissionError
+      ? error.status
+      : 500;
   if (status >= 500 && !(error instanceof PublishedExecutionAdmissionError)) {
     console.error('Rivet web app action failed:', error);
   }
   if (error instanceof PublishedExecutionAdmissionError) {
     res.set('Retry-After', String(error.retryAfterSeconds));
   }
-  const message = status >= 500 && !(error instanceof RivetWebAppActionHttpError || error instanceof PublishedExecutionAdmissionError)
-    ? 'Internal server error'
-    : getWorkflowErrorMessage(error);
-  const code = error instanceof RivetWebAppActionHttpError || error instanceof PublishedExecutionAdmissionError
-    ? error.code
-    : undefined;
-  sendJsonWithDuration(res, status, {
-    error: message,
-    ...(code ? { code } : {}),
-  }, requestStartedAt);
+  const message =
+    status >= 500 && !(error instanceof RivetWebAppActionHttpError || error instanceof PublishedExecutionAdmissionError)
+      ? 'Internal server error'
+      : getWorkflowErrorMessage(error);
+  const code =
+    error instanceof RivetWebAppActionHttpError || error instanceof PublishedExecutionAdmissionError
+      ? error.code
+      : undefined;
+  sendJsonWithDuration(
+    res,
+    status,
+    {
+      error: message,
+      ...(code ? { code } : {}),
+    },
+    requestStartedAt,
+  );
 }
 
 function acquirePublishedExecutionPermit(surface: PublishedExecutionSurface): PublishedExecutionPermit {
@@ -949,7 +945,10 @@ function getWebAppActionStorage(body: Record<string, unknown>): Record<string, u
   throw new RivetWebAppActionHttpError('Invalid action storage.', 400);
 }
 
-function validateWebAppActionRevisionKey(requestRevisionKey: string | undefined, revisionKey: string | undefined): void {
+function validateWebAppActionRevisionKey(
+  requestRevisionKey: string | undefined,
+  revisionKey: string | undefined,
+): void {
   if (revisionKey != null && requestRevisionKey !== revisionKey) {
     throw new RivetWebAppActionHttpError('Rivet web app revision mismatch.', 409, 'revision_mismatch');
   }
@@ -994,16 +993,12 @@ async function runRecordedWebAppAction(
   );
 
   const rawInputs = resolveUiGraphActionInputs(component.action, actionState);
-  const processorOptions = await createWebAppProcessorOptions(
-    executionProject,
-    req,
-    codeRunnerTelemetry,
-    options,
-  );
+  const processorOptions = await createWebAppProcessorOptions(executionProject, req, codeRunnerTelemetry, options);
   const inputs = (processorOptions.inputs ??
-    Object.fromEntries(
-      Object.entries(rawInputs).map(([key, value]) => [key, jsonValueToDataValue(value)]),
-    )) as Record<string, LooseDataValue>;
+    Object.fromEntries(Object.entries(rawInputs).map(([key, value]) => [key, jsonValueToDataValue(value)]))) as Record<
+    string,
+    LooseDataValue
+  >;
   const browserStoredValues = processorOptions.storedValueStore
     ? undefined
     : createRivetStoredValueSnapshotStore(actionStorage);
@@ -1014,9 +1009,7 @@ async function runRecordedWebAppAction(
     inputs,
     storedValueStore: processorOptions.storedValueStore ?? browserStoredValues!.store,
   });
-  const recorder = isWorkflowRecordingEnabled()
-    ? new ExecutionRecorder(getWorkflowExecutionRecorderOptions())
-    : null;
+  const recorder = isWorkflowRecordingEnabled() ? new ExecutionRecorder(getWorkflowExecutionRecorderOptions()) : null;
   recorder?.record(processor.processor);
 
   let result: RivetWebAppActionResult | undefined;
@@ -1027,7 +1020,7 @@ async function runRecordedWebAppAction(
   const executionStartedAt = performance.now();
 
   try {
-    const outputs = await processor.run() as Record<string, DataValue>;
+    const outputs = (await processor.run()) as Record<string, DataValue>;
     status = getWorkflowRecordingStatusFromOutputs(outputs);
     result = {
       outputs,
@@ -1069,9 +1062,10 @@ async function resolveWebAppExecutionProject(
     throw badRequest('Web app slug is required');
   }
 
-  const executionProject = routeKind === 'published'
-    ? await resolvePublishedWebAppExecutionProjectWithBackend(slug)
-    : await resolveLatestWebAppExecutionProjectWithBackend(slug);
+  const executionProject =
+    routeKind === 'published'
+      ? await resolvePublishedWebAppExecutionProjectWithBackend(slug)
+      : await resolveLatestWebAppExecutionProjectWithBackend(slug);
   if (!executionProject) {
     sendJsonWithDuration(
       res,
@@ -1131,9 +1125,10 @@ export async function resolveWebAppSocketExecution(
     return { statusCode: 400, code: 'invalid_slug', message: 'Web app slug is required' };
   }
 
-  const executionProject = routeKind === 'published'
-    ? await resolvePublishedWebAppExecutionProjectWithBackend(slug)
-    : await resolveLatestWebAppExecutionProjectWithBackend(slug);
+  const executionProject =
+    routeKind === 'published'
+      ? await resolvePublishedWebAppExecutionProjectWithBackend(slug)
+      : await resolveLatestWebAppExecutionProjectWithBackend(slug);
   if (!executionProject) {
     return {
       statusCode: 404,
@@ -1189,10 +1184,10 @@ export async function createWebAppProcessorOptions(
   const executionEnvironment = await readExecutionEnvironmentVariables();
 
   return {
-    codeRunner: new ManagedCodeRunner(
-      getRootPath(),
-      { ...(codeRunnerTelemetry ? { telemetry: codeRunnerTelemetry } : {}), executionEnvironment },
-    ) as any,
+    codeRunner: new ManagedCodeRunner(getRootPath(), {
+      ...(codeRunnerTelemetry ? { telemetry: codeRunnerTelemetry } : {}),
+      executionEnvironment,
+    }) as any,
     context: getWebAppWorkflowExecutionContext(req),
     datasetProvider: executionProject.datasetProvider,
     projectPath: executionProject.projectVirtualPath,
@@ -1256,15 +1251,16 @@ export function enqueueWebAppActionRecording(
     executionIdentity?: WorkflowRecordingExecutionIdentity;
   },
 ): void {
-  enqueueExecutionRecording(
-    executionProject,
-    { recorder, durationMs, status, errorMessage },
-    options,
-  );
+  enqueueExecutionRecording(executionProject, { recorder, durationMs, status, errorMessage }, options);
 }
 
-function getGraphNameAtExecution(executionProject: WorkflowExecutionProject, graphId: string | undefined): string | undefined {
-  return graphId ? executionProject.project.graphs[graphId as keyof typeof executionProject.project.graphs]?.metadata?.name : undefined;
+function getGraphNameAtExecution(
+  executionProject: WorkflowExecutionProject,
+  graphId: string | undefined,
+): string | undefined {
+  return graphId
+    ? executionProject.project.graphs[graphId as keyof typeof executionProject.project.graphs]?.metadata?.name
+    : undefined;
 }
 
 function createWorkflowEndpointRecordingIdentity(
@@ -1320,15 +1316,13 @@ async function executeWorkflowEndpoint(
   const projectReferenceLoader = await createExecutionProjectReferenceLoader(projectVirtualPath);
   const remoteDebugger = getLatestRemoteDebuggerForExecution(options);
   const executionEnvironment = await readExecutionEnvironmentVariables();
-  const codeRunnerTelemetry = shouldCollectCodeRunnerTelemetry()
-    ? createManagedCodeRunnerTelemetry()
-    : null;
+  const codeRunnerTelemetry = shouldCollectCodeRunnerTelemetry() ? createManagedCodeRunnerTelemetry() : null;
   const processor = createProcessor(project, {
     abortSignal: options.abortSignal,
-    codeRunner: new ManagedCodeRunner(
-      getRootPath(),
-      { ...(codeRunnerTelemetry ? { telemetry: codeRunnerTelemetry } : {}), executionEnvironment },
-    ) as any,
+    codeRunner: new ManagedCodeRunner(getRootPath(), {
+      ...(codeRunnerTelemetry ? { telemetry: codeRunnerTelemetry } : {}),
+      executionEnvironment,
+    }) as any,
     projectPath: projectVirtualPath,
     datasetProvider,
     projectReferenceLoader,
@@ -1338,9 +1332,7 @@ async function executeWorkflowEndpoint(
     context: getWorkflowExecutionContext(req),
     inputs: getWorkflowRequestInputs(req),
   });
-  const recorder = isWorkflowRecordingEnabled()
-    ? new ExecutionRecorder(getWorkflowExecutionRecorderOptions())
-    : null;
+  const recorder = isWorkflowRecordingEnabled() ? new ExecutionRecorder(getWorkflowExecutionRecorderOptions()) : null;
   recorder?.record(processor.processor);
 
   let recordingStatus: 'succeeded' | 'failed' | 'suspicious' = 'succeeded';
@@ -1352,7 +1344,9 @@ async function executeWorkflowEndpoint(
 
   try {
     const outputs = await processor.run();
-    recordingStatus = getWorkflowRecordingStatusFromOutputs(outputs as Record<string, { type?: string; value?: unknown }>);
+    recordingStatus = getWorkflowRecordingStatusFromOutputs(
+      outputs as Record<string, { type?: string; value?: unknown }>,
+    );
 
     responsePayload = getWorkflowResponsePayload(outputs as Record<string, { type?: string; value?: unknown }>);
   } catch (error) {
@@ -1375,7 +1369,8 @@ async function executeWorkflowEndpoint(
       endpointName: options.endpointName,
       runKind: options.runKind,
       executionIdentity: createWorkflowEndpointRecordingIdentity(executionProject, getRequestCorrelationId(req)),
-    });
+    },
+  );
 
   if (executionError) {
     setWorkflowExecutionDebugHeaders(res, executionProject, executionDurationMs);
@@ -1396,13 +1391,14 @@ async function handlePublishedWorkflowRequest(
   const requestStartedAt = performance.now();
 
   try {
-    if (options?.requireApiKey !== false) {
-      requirePublishedWorkflowApiKey(req);
-    }
-
     const endpointName = normalizeStoredEndpointName(String(req.params.endpointName ?? ''));
     if (!endpointName) {
       throw badRequest('Endpoint name is required');
+    }
+    if (options?.requireApiKey !== false) {
+      // Only the immutable published route recognizes the short-lived capacity
+      // capability. Latest execution keeps requiring the normal operator key.
+      requirePublishedWorkflowApiKey(req, { capacityEndpointName: endpointName });
     }
 
     const executionProject = await resolvePublishedExecutionProject(endpointName);
@@ -1414,18 +1410,12 @@ async function handlePublishedWorkflowRequest(
     const permit = acquirePublishedExecutionPermit('workflow-endpoint');
     const activeExecution = registerActiveHttpExecution();
     try {
-      await executeWorkflowEndpoint(
-        executionProject,
-        requestStartedAt,
-        req,
-        res,
-        {
-          abortSignal: activeExecution.signal,
-          enableRemoteDebugger: false,
-          endpointName,
-          runKind: 'published',
-        },
-      );
+      await executeWorkflowEndpoint(executionProject, requestStartedAt, req, res, {
+        abortSignal: activeExecution.signal,
+        enableRemoteDebugger: false,
+        endpointName,
+        runKind: 'published',
+      });
     } finally {
       activeExecution.release();
       permit.release();
@@ -1435,52 +1425,55 @@ async function handlePublishedWorkflowRequest(
   }
 }
 
-publishedWorkflowsRouter.post('/:endpointName', asyncHandler(async (req, res) => {
-  await handlePublishedWorkflowRequest(req, res);
-}));
+publishedWorkflowsRouter.post(
+  '/:endpointName',
+  asyncHandler(async (req, res) => {
+    await handlePublishedWorkflowRequest(req, res);
+  }),
+);
 
-internalPublishedWorkflowsRouter.post('/:endpointName', asyncHandler(async (req, res) => {
-  await handlePublishedWorkflowRequest(req, res, { requireApiKey: false });
-}));
+internalPublishedWorkflowsRouter.post(
+  '/:endpointName',
+  asyncHandler(async (req, res) => {
+    await handlePublishedWorkflowRequest(req, res, { requireApiKey: false });
+  }),
+);
 
-latestWorkflowsRouter.post('/:endpointName', asyncHandler(async (req, res) => {
-  const requestStartedAt = performance.now();
+latestWorkflowsRouter.post(
+  '/:endpointName',
+  asyncHandler(async (req, res) => {
+    const requestStartedAt = performance.now();
 
-  try {
-    requirePublishedWorkflowApiKey(req);
-
-    const endpointName = normalizeStoredEndpointName(String(req.params.endpointName ?? ''));
-    if (!endpointName) {
-      throw badRequest('Endpoint name is required');
-    }
-
-    const executionProject = await resolveLatestExecutionProject(endpointName);
-    if (!executionProject) {
-      sendJsonWithDuration(res, 404, { error: 'Latest workflow not found' }, requestStartedAt);
-      return;
-    }
-
-    const activeExecution = registerActiveHttpExecution();
     try {
-      await executeWorkflowEndpoint(
-        executionProject,
-        requestStartedAt,
-        req,
-        res,
-        {
+      requirePublishedWorkflowApiKey(req);
+
+      const endpointName = normalizeStoredEndpointName(String(req.params.endpointName ?? ''));
+      if (!endpointName) {
+        throw badRequest('Endpoint name is required');
+      }
+
+      const executionProject = await resolveLatestExecutionProject(endpointName);
+      if (!executionProject) {
+        sendJsonWithDuration(res, 404, { error: 'Latest workflow not found' }, requestStartedAt);
+        return;
+      }
+
+      const activeExecution = registerActiveHttpExecution();
+      try {
+        await executeWorkflowEndpoint(executionProject, requestStartedAt, req, res, {
           abortSignal: activeExecution.signal,
           enableRemoteDebugger: true,
           endpointName,
           runKind: 'latest',
-        },
-      );
-    } finally {
-      activeExecution.release();
+        });
+      } finally {
+        activeExecution.release();
+      }
+    } catch (error) {
+      sendWorkflowErrorWithDuration(res, error, requestStartedAt);
     }
-  } catch (error) {
-    sendWorkflowErrorWithDuration(res, error, requestStartedAt);
-  }
-}));
+  }),
+);
 
 async function handleWebAppHtmlRequest(req: Request, res: Response, routeKind: WebAppRouteKind): Promise<void> {
   const requestStartedAt = performance.now();
@@ -1563,13 +1556,9 @@ async function handleWebAppActionRequest(req: Request, res: Response, routeKind:
       throw new RivetWebAppActionHttpError('Invalid action request body.', 400);
     }
 
-    codeRunnerTelemetry = shouldCollectCodeRunnerTelemetry()
-      ? createManagedCodeRunnerTelemetry()
-      : null;
+    codeRunnerTelemetry = shouldCollectCodeRunnerTelemetry() ? createManagedCodeRunnerTelemetry() : null;
 
-    const permit = routeKind === 'published'
-      ? acquirePublishedExecutionPermit('web-app-action')
-      : null;
+    const permit = routeKind === 'published' ? acquirePublishedExecutionPermit('web-app-action') : null;
     const activeExecution = registerActiveHttpExecution();
     let execution: WebAppActionExecutionSnapshot;
     try {
@@ -1602,22 +1591,40 @@ async function handleWebAppActionRequest(req: Request, res: Response, routeKind:
   }
 }
 
-publishedWebAppsRouter.get('/:slug/app.json', asyncHandler(async (req, res) => {
-  await handleWebAppJsonRequest(req, res, 'published');
-}));
-publishedWebAppsRouter.post('/:slug/actions/run', asyncHandler(async (req, res) => {
-  await handleWebAppActionRequest(req, res, 'published');
-}));
-publishedWebAppsRouter.get('/:slug', asyncHandler(async (req, res) => {
-  await handleWebAppHtmlRequest(req, res, 'published');
-}));
+publishedWebAppsRouter.get(
+  '/:slug/app.json',
+  asyncHandler(async (req, res) => {
+    await handleWebAppJsonRequest(req, res, 'published');
+  }),
+);
+publishedWebAppsRouter.post(
+  '/:slug/actions/run',
+  asyncHandler(async (req, res) => {
+    await handleWebAppActionRequest(req, res, 'published');
+  }),
+);
+publishedWebAppsRouter.get(
+  '/:slug',
+  asyncHandler(async (req, res) => {
+    await handleWebAppHtmlRequest(req, res, 'published');
+  }),
+);
 
-latestWebAppsRouter.get('/:slug/app.json', asyncHandler(async (req, res) => {
-  await handleWebAppJsonRequest(req, res, 'latest');
-}));
-latestWebAppsRouter.post('/:slug/actions/run', asyncHandler(async (req, res) => {
-  await handleWebAppActionRequest(req, res, 'latest');
-}));
-latestWebAppsRouter.get('/:slug', asyncHandler(async (req, res) => {
-  await handleWebAppHtmlRequest(req, res, 'latest');
-}));
+latestWebAppsRouter.get(
+  '/:slug/app.json',
+  asyncHandler(async (req, res) => {
+    await handleWebAppJsonRequest(req, res, 'latest');
+  }),
+);
+latestWebAppsRouter.post(
+  '/:slug/actions/run',
+  asyncHandler(async (req, res) => {
+    await handleWebAppActionRequest(req, res, 'latest');
+  }),
+);
+latestWebAppsRouter.get(
+  '/:slug',
+  asyncHandler(async (req, res) => {
+    await handleWebAppHtmlRequest(req, res, 'latest');
+  }),
+);

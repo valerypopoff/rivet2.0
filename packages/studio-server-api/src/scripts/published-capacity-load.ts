@@ -78,6 +78,11 @@ export type CapacityLoadReport = {
 export type CapacityLoadDependencies = {
   fetch?: typeof globalThis.fetch;
   now?: () => number;
+  /**
+   * A short-lived endpoint-scoped capability supplied by a mounted Secret.
+   * It is intentionally not part of the serializable load configuration.
+   */
+  bearerToken?: string;
 };
 
 const MAX_CONCURRENCY = 512;
@@ -227,12 +232,17 @@ async function requestSample(
   body: unknown,
   timeoutMs: number,
   now: () => number,
+  bearerToken: string | undefined,
 ): Promise<RequestSample> {
   const started = now();
   try {
     const response = await fetchImplementation(url, {
       method: 'POST',
-      headers: { accept: 'application/json', 'content-type': 'application/json' },
+      headers: {
+        accept: 'application/json',
+        'content-type': 'application/json',
+        ...(bearerToken ? { authorization: `Bearer ${bearerToken}` } : {}),
+      },
       body: JSON.stringify(body),
       signal: AbortSignal.timeout(timeoutMs),
     });
@@ -306,6 +316,7 @@ export async function runPublishedCapacityLoad(
   const config = validateCapacityLoadConfig(rawConfig);
   const fetchImplementation = dependencies.fetch ?? globalThis.fetch;
   const now = dependencies.now ?? (() => performance.now());
+  const bearerToken = dependencies.bearerToken ?? (process.env.RIVET_CAPACITY_BEARER_TOKEN?.trim() || undefined);
   if (typeof fetchImplementation !== 'function') throw new Error('A fetch implementation is required.');
   const startedAt = new Date().toISOString();
   const scenarios = new Map(config.scenarios.map((scenario) => [scenario.name, scenario]));
@@ -346,6 +357,7 @@ export async function runPublishedCapacityLoad(
             scenario.body,
             config.requestTimeoutMs,
             now,
+            bearerToken,
           );
           timings.push(sample.durationMs);
           classifySample(sample, stage.expect, outcomes, statusCounts);

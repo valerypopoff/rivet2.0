@@ -8,6 +8,7 @@ test('published capacity load is bounded, records exact request outcomes, and ne
   let maxActive = 0;
   let publishedRequests = 0;
   let controlRequests = 0;
+  let authorization = '';
   const report = await runPublishedCapacityLoad(
     {
       version: 1,
@@ -20,13 +21,15 @@ test('published capacity load is bounded, records exact request outcomes, and ne
       stages: [{ name: 'overload', scenario: 'fast', concurrency: 3, requests: 7, expect: 'overload' }],
     },
     {
-      fetch: async (input) => {
+      bearerToken: 'scoped-capability',
+      fetch: async (input, init) => {
         const url = new URL(String(input));
         if (url.pathname === '/readyz') {
           controlRequests += 1;
           return new Response('', { status: 200 });
         }
         assert.equal(url.pathname, '/workflows/fixture-fast');
+        authorization = new Headers(init?.headers).get('authorization') ?? '';
         publishedRequests += 1;
         active += 1;
         maxActive = Math.max(maxActive, active);
@@ -45,6 +48,7 @@ test('published capacity load is bounded, records exact request outcomes, and ne
   assert.equal(stage.outcomes.unexpected, 0);
   assert.equal(stage.maxConcurrentObserved, 3);
   assert.equal(maxActive, 3);
+  assert.equal(authorization, 'Bearer scoped-capability');
 });
 
 test('published capacity load rejects latest routes and unsafe load shapes before any request starts', () => {

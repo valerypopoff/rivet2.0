@@ -15,7 +15,10 @@ import {
   evaluateCapacityCertificate,
   createCapacityEvidence,
   isTerminalJob,
+  createCapacityCapabilityToken,
+  getCapacityFixtureEndpoints,
 } from '../../../../deploy/studio-server/scripts/kubernetes-published-capacity-gate.mjs';
+import { isWorkflowCapacityCapabilityValid } from '../workflow-capacity-capability.js';
 
 const rootDir = path.resolve(import.meta.dirname, '../../../..');
 const digest = (letter: string) => `sha256:${letter.repeat(64)}`;
@@ -64,6 +67,15 @@ function providerConfig() {
       sampleIntervalMs: 500,
       jobTimeoutSeconds: 120,
       requireExecutionMetrics: true,
+      prometheus: {
+        baseUrl: 'https://prometheus-staging.example.test',
+        headers: { authorization: 'Bearer prometheus-capacity-secret' },
+        queries: {
+          memoryHighWaterBytes: 'max(container_memory_working_set_bytes{app="rivet"})',
+          nodeEphemeralHighWaterBytes: 'max(container_fs_usage_bytes{app="rivet"})',
+          downstreamConcurrency: 'sum(rivet_provider_requests_in_flight)',
+        },
+      },
       stages: [
         { name: 'steady', scenario: 'fast', expect: 'success', concurrency: 4, requests: 20 },
         { name: 'overload', scenario: 'long', expect: 'overload', concurrency: 16, requests: 32 },
@@ -90,6 +102,10 @@ test('published capacity gate is explicit, staging-only, bounded, and redacts re
     assert.equal(config.capacity.stages.length, 2);
     assert.equal(config.capacity.serviceNamePrefix, 'rivet-staging');
     assert.equal(JSON.stringify(redactPublishedCapacityGateConfig(config)).includes('capacity-secret'), false);
+    assert.equal(
+      JSON.stringify(redactPublishedCapacityGateConfig(config)).includes('prometheus-capacity-secret'),
+      false,
+    );
     assert.throws(
       () =>
         buildPublishedCapacityGateConfig({
@@ -119,6 +135,17 @@ test('published capacity gate is explicit, staging-only, bounded, and redacts re
     assert.throws(
       () => buildPublishedCapacityGateConfig({ rootDir, env: createEnvironment(configFile, valuesFile) }),
       /certify mode requires capacity\.requireExecutionMetrics=true/,
+    );
+    await fs.writeFile(
+      configFile,
+      JSON.stringify({
+        ...providerConfig(),
+        capacity: { ...providerConfig().capacity, prometheus: undefined },
+      }),
+    );
+    assert.throws(
+      () => buildPublishedCapacityGateConfig({ rootDir, env: createEnvironment(configFile, valuesFile) }),
+      /certify mode requires capacity\.prometheus/,
     );
   } finally {
     await fs.rm(directory, { recursive: true, force: true });
@@ -160,7 +187,7 @@ test('published capacity load Job config uses only the published proxy route and
   assert.equal(JSON.stringify(jobConfig).includes('authorization'), false);
 });
 
-test('published capacity Job is explicitly unprivileged and cannot receive a Kubernetes API credential', () => {
+test('published capacity Job is explicitly unprivileged and can receive only a scoped disposable capability', () => {
   const manifest = renderPublishedCapacityJob({
     namespace: 'rivet-staging-capacity',
     name: 'rivet-capacity-test',
@@ -176,7 +203,56 @@ test('published capacity Job is explicitly unprivileged and cannot receive a Kub
   assert.match(manifest, /readOnlyRootFilesystem: true/);
   assert.match(manifest, /drop:\n\s+- ALL/);
   assert.doesNotMatch(manifest, /serviceAccountName:/);
-  assert.doesNotMatch(manifest, /env:/);
+  assert.doesNotMatch(manifest, /RIVET_KEY/);
+  assert.doesNotMatch(manifest, /capacity-secret/);
+  assert.doesNotMatch(manifest, /serviceAccountToken/);
+
+  const protectedManifest = renderPublishedCapacityJob({
+    namespace: 'rivet-staging-capacity',
+    name: 'rivet-capacity-test',
+    image: 'example.test/rivet/api@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+    registrySecretName: 'rivet-registry',
+    configMapName: 'rivet-capacity-test-config',
+    authorizationSecretName: 'rivet-capacity-test-authorization',
+    timeoutSeconds: 120,
+  });
+  assert.match(protectedManifest, /name: RIVET_CAPACITY_BEARER_TOKEN/);
+  assert.match(protectedManifest, /secretKeyRef:\n\s+name: rivet-capacity-test-authorization\n\s+key: token/);
+  assert.doesNotMatch(protectedManifest, /RIVET_KEY/);
+
+  const token = createCapacityCapabilityToken({
+    signingKey: 'capacity-secret',
+    endpoints: getCapacityFixtureEndpoints('rivet-capacity-test'),
+    nowMs: 1_000_000,
+    lifetimeSeconds: 120,
+  });
+  assert.equal(
+    isWorkflowCapacityCapabilityValid({
+      token,
+      signingKey: 'capacity-secret',
+      endpointName: 'rivet-capacity-test-fast',
+      nowMs: 1_001_000,
+    }),
+    true,
+  );
+  assert.equal(
+    isWorkflowCapacityCapabilityValid({
+      token,
+      signingKey: 'capacity-secret',
+      endpointName: 'unrelated-endpoint',
+      nowMs: 1_001_000,
+    }),
+    false,
+  );
+  assert.equal(
+    isWorkflowCapacityCapabilityValid({
+      token,
+      signingKey: 'capacity-secret',
+      endpointName: 'rivet-capacity-test-fast',
+      nowMs: 1_120_000,
+    }),
+    false,
+  );
 });
 
 test('capacity gate ignores nonterminal Job conditions and retains partial failure evidence without error text', () => {

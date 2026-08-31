@@ -33,8 +33,16 @@ export function renderPublishedCapacityJob(input: {
   image: string;
   registrySecretName: string;
   configMapName: string;
+  authorizationSecretName?: string;
   timeoutSeconds: number;
 }): string;
+export function createCapacityCapabilityToken(input: {
+  signingKey: string;
+  endpoints: string[];
+  nowMs?: number;
+  lifetimeSeconds: number;
+}): string;
+export function getCapacityFixtureEndpoints(jobName: string): string[];
 export function createPublishedCapacityLoadJobConfig(input: {
   serviceNamePrefix: string;
   namespace: string;

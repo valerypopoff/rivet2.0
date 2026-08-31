@@ -412,6 +412,76 @@ assert.match(
   /needs\.managed-kubernetes-capacity-gate\.result/,
   'Image promotion must depend on an explicitly requested capacity certificate.',
 );
+assert.ok(
+  imageJobs['managed-kubernetes-evaluation-gate'],
+  'Image workflow must expose the protected hosted-Evaluation certificate.',
+);
+assert.match(
+  String(imageJobs['managed-kubernetes-provider-gate'].if),
+  /run_managed_kubernetes_evaluation_gate/,
+  'The provider gate must deploy immutable candidate images before the hosted-Evaluation certificate runs.',
+);
+assert.deepEqual(
+  asArray(imageJobs['managed-kubernetes-evaluation-gate'].needs),
+  ['build-and-push', 'managed-kubernetes-provider-gate', 'managed-kubernetes-capacity-gate'],
+  'The hosted-Evaluation certificate must wait for the provider gate and any selected capacity certificate.',
+);
+assert.match(
+  String(imageJobs['managed-kubernetes-evaluation-gate'].if),
+  /always\(\)[\s\S]*run_managed_kubernetes_evaluation_gate[\s\S]*managed-kubernetes-capacity-gate\.result == 'success'[\s\S]*managed-kubernetes-capacity-gate\.result == 'skipped'/,
+  'The hosted-Evaluation certificate must run after a selected capacity gate but still run when capacity was not requested.',
+);
+assert.equal(
+  imageJobs['managed-kubernetes-evaluation-gate'].environment?.name,
+  'rivet-managed-staging',
+  'The hosted-Evaluation certificate must remain protected by the staging environment.',
+);
+for (const jobName of [
+  'managed-kubernetes-provider-gate',
+  'managed-kubernetes-capacity-gate',
+  'managed-kubernetes-evaluation-gate',
+]) {
+  assert.equal(
+    imageJobs[jobName].concurrency?.group,
+    'rivet-managed-staging-certificates',
+    `${jobName} must share the exclusive protected-staging mutation lock.`,
+  );
+  assert.equal(
+    imageJobs[jobName].concurrency?.['cancel-in-progress'],
+    false,
+    `${jobName} must never cancel an in-flight protected staging certificate.`,
+  );
+}
+assert.equal(
+  imageJobs['managed-kubernetes-evaluation-gate'].env?.RIVET_K8S_EVALUATION_GATE_CONFIRM,
+  'disrupt-staging-evaluations',
+  'The hosted-Evaluation certificate must supply its exact disruption acknowledgement.',
+);
+assert.match(
+  String(
+    findStep(
+      imageJobs['managed-kubernetes-evaluation-gate'],
+      'Certify Hosted Evaluation Durability',
+      'Managed Kubernetes hosted-Evaluation gate',
+    ).run,
+  ),
+  /studio-server:verify:kubernetes:managed-evaluations/,
+  'The hosted-Evaluation certificate must run the canonical durable worker-loss command.',
+);
+assert.equal(
+  findStep(
+    imageJobs['managed-kubernetes-evaluation-gate'],
+    'Upload Hosted Evaluation Evidence',
+    'Managed Kubernetes hosted-Evaluation gate',
+  ).with?.name,
+  'managed-kubernetes-evaluation-gate-${{ github.run_id }}-${{ github.run_attempt }}',
+  'Hosted-Evaluation evidence must remain distinct per workflow attempt.',
+);
+assert.match(
+  promotionCondition,
+  /needs\.managed-kubernetes-evaluation-gate\.result/,
+  'Image promotion must depend on an explicitly requested hosted-Evaluation certificate.',
+);
 
 const reusableDesktop = parseWorkflow('.github/workflows/desktop-release.yml');
 const reusableJobs = reusableDesktop.workflow.jobs;

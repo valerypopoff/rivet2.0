@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHmac, randomUUID } from 'node:crypto';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -88,8 +88,78 @@ function metricSum(text, metricName) {
   return matched ? total : undefined;
 }
 
+async function observePrometheus(prometheus) {
+  const values = {};
+  const errors = [];
+  const observations = await Promise.all(
+    Object.entries(prometheus.queries).map(async ([name, query]) => {
+      try {
+        const url = new URL('/api/v1/query', prometheus.baseUrl);
+        url.searchParams.set('query', query);
+        const response = await fetch(url, {
+          headers: prometheus.headers,
+          signal: AbortSignal.timeout(15_000),
+        });
+        const responseBody = await response.json().catch(() => null);
+        const result = responseBody?.status === 'success' ? responseBody.data?.result : null;
+        if (
+          !response.ok ||
+          responseBody?.data?.resultType !== 'vector' ||
+          !Array.isArray(result) ||
+          result.length !== 1 ||
+          !Array.isArray(result[0]?.value) ||
+          typeof result[0].value[1] !== 'string' ||
+          !Number.isFinite(Number(result[0].value[1]))
+        ) {
+          return { name, value: null };
+        }
+        return { name, value: Number(result[0].value[1]) };
+      } catch {
+        return { name, value: null };
+      }
+    }),
+  );
+  for (const observation of observations) {
+    if (observation.value === null) {
+      errors.push(observation.name);
+    } else {
+      values[observation.name] = observation.value;
+    }
+  }
+  return { available: errors.length === 0, values, errors };
+}
+
 function safeRunToken() {
   return randomUUID().replaceAll('-', '').slice(0, 12);
+}
+
+function getBearerSigningKey(headers) {
+  const authorization = Object.entries(headers ?? {}).find(([name]) => name.toLowerCase() === 'authorization')?.[1];
+  const match = typeof authorization === 'string' ? authorization.match(/^Bearer\s+([^\s]+)$/iu) : null;
+  if (!match) {
+    throw new Error(
+      '[kubernetes-published-capacity-gate] protected endpoint capacity testing requires provider requestHeaders.authorization to be the RIVET_KEY bearer value.',
+    );
+  }
+  return match[1];
+}
+
+export function createCapacityCapabilityToken({ signingKey, endpoints, nowMs = Date.now(), lifetimeSeconds }) {
+  if (!Number.isInteger(lifetimeSeconds) || lifetimeSeconds < 1 || lifetimeSeconds > 10_800) {
+    throw new Error('Capacity capability lifetime must be an integer from 1 to 10800 seconds.');
+  }
+  const iat = Math.floor(nowMs / 1_000);
+  const payload = {
+    v: 1,
+    iat,
+    exp: iat + lifetimeSeconds,
+    endpoints: [...new Set(endpoints)],
+  };
+  const encodedPayload = Buffer.from(JSON.stringify(payload)).toString('base64url');
+  const signature = createHmac('sha256', signingKey)
+    .update('rivet-capacity-v1.' + encodedPayload)
+    .digest('base64url');
+  return 'rivet-capacity-v1.' + encodedPayload + '.' + signature;
 }
 
 export function createCapacityFixtureContents(template, { title, delayMs }) {
@@ -119,8 +189,20 @@ export function renderPublishedCapacityJob({
   image,
   registrySecretName,
   configMapName,
+  authorizationSecretName,
   timeoutSeconds,
 }) {
+  const authorizationEnvironment = authorizationSecretName
+    ? [
+        '          env:',
+        '            - name: RIVET_CAPACITY_BEARER_TOKEN',
+        '              valueFrom:',
+        '                secretKeyRef:',
+        '                  name: ' + authorizationSecretName,
+        '                  key: token',
+        '',
+      ].join('\n')
+    : '';
   return `apiVersion: batch/v1
 kind: Job
 metadata:
@@ -160,7 +242,7 @@ spec:
                 - ALL
           command: ["node"]
           args: ["/app/packages/studio-server-api/dist/studio-server-api/src/scripts/published-capacity-load.js", "--config", "/config/config.json"]
-          volumeMounts:
+${authorizationEnvironment}          volumeMounts:
             - name: config
               mountPath: /config
               readOnly: true
@@ -350,6 +432,22 @@ export function evaluateCapacityCertificate(report, snapshots, config) {
     failures.push('execution pod OOMKilled during capacity run');
   if (baseline && snapshots.some((snapshot) => snapshot.evictedPods.some((pod) => !baseline.evictedPods.includes(pod))))
     failures.push('execution pod eviction observed during capacity run');
+  if (config.capacity.prometheus) {
+    const observedSnapshots = snapshots.filter((snapshot) => !snapshot.baseline && snapshot.podCount > 0);
+    if (observedSnapshots.length === 0) {
+      failures.push('no execution-pod sample was available for Prometheus high-water observations');
+    } else if (
+      observedSnapshots.some(
+        (snapshot) =>
+          snapshot.prometheus?.available !== true ||
+          !Number.isFinite(snapshot.prometheus.values?.memoryHighWaterBytes) ||
+          !Number.isFinite(snapshot.prometheus.values?.nodeEphemeralHighWaterBytes) ||
+          !Number.isFinite(snapshot.prometheus.values?.downstreamConcurrency),
+      )
+    ) {
+      failures.push('Prometheus high-water observations were unavailable for one or more execution-pod samples');
+    }
+  }
   const recordingDropsObserved = snapshots.at(-1)?.recordingDropsObserved ?? 0;
   if (recordingDropsObserved > config.capacity.thresholds.maximumRecordingDrops)
     failures.push(
@@ -405,12 +503,17 @@ export function createPublishedCapacityLoadJobConfig({ serviceNamePrefix, namesp
     requestTimeoutMs: capacity.requestTimeoutMs,
     controlCanaryEveryRequests: capacity.controlCanaryEveryRequests,
     controlCanaryTimeoutMs: capacity.controlCanaryTimeoutMs,
-    scenarios: [
-      { name: 'fast', endpoint: `${jobName}-fast`, body: { input: 'capacity-fast' } },
-      { name: 'long', endpoint: `${jobName}-long`, body: { input: 'capacity-long' } },
-    ],
+    scenarios: getCapacityFixtureEndpoints(jobName).map((endpoint, index) => ({
+      name: index === 0 ? 'fast' : 'long',
+      endpoint,
+      body: { input: index === 0 ? 'capacity-fast' : 'capacity-long' },
+    })),
     stages: capacity.stages,
   };
+}
+
+export function getCapacityFixtureEndpoints(jobName) {
+  return [jobName + '-fast', jobName + '-long'];
 }
 class PublishedCapacityGate {
   constructor(config, kubectlBin, helmBin) {
@@ -420,6 +523,8 @@ class PublishedCapacityGate {
     this.runToken = safeRunToken();
     this.jobName = `rivet-capacity-${this.runToken}`;
     this.configMapName = `${this.jobName}-config`;
+    this.authorizationSecretName = `${this.jobName}-authorization`;
+    this.capacityBearerToken = null;
     this.fixturePaths = [];
     this.snapshots = [];
     this.baselineRecordingDropsByPod = new Map();
@@ -471,9 +576,11 @@ class PublishedCapacityGate {
       headers: this.config.requestHeaders,
     });
     if (endpointAuth?.requireBearerAuth !== false) {
-      throw new Error(
-        `[${runnerName}] staging workflow endpoints require a bearer token, but the capacity Job is intentionally credential-free. Configure the protected staging environment to allow public workflow endpoints before running this public-route certificate.`,
-      );
+      this.capacityBearerToken = createCapacityCapabilityToken({
+        signingKey: getBearerSigningKey(this.config.requestHeaders),
+        endpoints: getCapacityFixtureEndpoints(this.jobName),
+        lifetimeSeconds: Math.min(10_800, this.config.capacity.jobTimeoutSeconds + 600),
+      });
     }
   }
 
@@ -531,6 +638,25 @@ class PublishedCapacityGate {
       ],
       { capture: true },
     ).then((result) => this.kubectl(['apply', '-f', '-'], { input: result.stdout }));
+    if (this.capacityBearerToken) {
+      const secretPath = path.join(this.tempDir, 'capacity-bearer-token');
+      await fs.writeFile(secretPath, this.capacityBearerToken, { encoding: 'utf8', mode: 0o600 });
+      await this.kubectl(
+        [
+          'create',
+          'secret',
+          'generic',
+          this.authorizationSecretName,
+          '-n',
+          this.config.namespace,
+          '--from-file=token=' + secretPath,
+          '--dry-run=client',
+          '-o',
+          'yaml',
+        ],
+        { capture: true },
+      ).then((result) => this.kubectl(['apply', '-f', '-'], { input: result.stdout }));
+    }
     await this.snapshot({ baseline: true });
     await this.kubectl(['apply', '-f', '-'], {
       input: renderPublishedCapacityJob({
@@ -539,6 +665,7 @@ class PublishedCapacityGate {
         image: imageReference(this.config.images.api),
         registrySecretName: this.config.registry.secretName,
         configMapName: this.configMapName,
+        authorizationSecretName: this.capacityBearerToken ? this.authorizationSecretName : undefined,
         timeoutSeconds: this.config.capacity.jobTimeoutSeconds,
       }),
     });
@@ -577,6 +704,7 @@ class PublishedCapacityGate {
       metrics: { activeRuns: 0, admissionLimit: 0, recordingQueueDepth: 0 },
       recordingDropsByPod: {},
       recordingDropsObserved: 0,
+      prometheus: null,
       metricErrors: [],
       eventErrors: [],
     };
@@ -636,6 +764,9 @@ class PublishedCapacityGate {
       }
     }
     if (pods.length === 0) snapshot.metricsAvailable = false;
+    if (this.config.capacity.prometheus) {
+      snapshot.prometheus = await observePrometheus(this.config.capacity.prometheus);
+    }
     if (baseline) {
       for (const [podName, drops] of Object.entries(snapshot.recordingDropsByPod)) {
         this.baselineRecordingDropsByPod.set(podName, drops);
@@ -691,6 +822,14 @@ class PublishedCapacityGate {
     const results = await Promise.allSettled([
       this.kubectl(['delete', 'job', this.jobName, '-n', this.config.namespace, '--ignore-not-found=true']),
       this.kubectl(['delete', 'configmap', this.configMapName, '-n', this.config.namespace, '--ignore-not-found=true']),
+      this.kubectl([
+        'delete',
+        'secret',
+        this.authorizationSecretName,
+        '-n',
+        this.config.namespace,
+        '--ignore-not-found=true',
+      ]),
       ...this.fixturePaths.map((relativePath) =>
         requestJson(this.config.baseUrl, '/api/workflows/projects', {
           method: 'DELETE',

@@ -73,6 +73,14 @@ metrics:
     enabled: false
     for: 10m
     additionalLabels: {}
+    # These rules are disabled separately until their thresholds are observed
+    # in the target environment. They use only Rivet's finite-label metrics.
+    failureModeAlerts:
+      enabled: false
+      postgresPoolWaiting: 1
+      maintenanceStaleSeconds: 900
+      outboxBlockedEntries: 1
+      evaluationQueueUtilization: 0.9
   # Emits two ConfigMap dashboard definitions for Grafana sidecar/import
   # workflows. This does not install Grafana or enable a scrape by itself.
   grafanaDashboards:

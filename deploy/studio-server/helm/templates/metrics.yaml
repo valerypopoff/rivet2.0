@@ -124,4 +124,48 @@ spec:
             severity: warning
           annotations:
             summary: Rivet object storage reported an operation error.
+        {{- if .Values.metrics.prometheusRule.failureModeAlerts.enabled }}
+        - alert: RivetPostgresPoolWaiters
+          expr: sum by (namespace, pod, profile) (rivet_postgres_pool_connections{state="waiting"}) >= {{ .Values.metrics.prometheusRule.failureModeAlerts.postgresPoolWaiting }}
+          for: {{ index .Values.metrics.prometheusRule "for" | quote }}
+          labels:
+            severity: warning
+          annotations:
+            summary: A Rivet API process has PostgreSQL pool waiters.
+        - alert: RivetRuntimeLibraryJobFailures
+          expr: sum by (namespace, pod, profile) (increase(rivet_runtime_library_jobs_total{outcome="failed"}[10m])) > 0
+          for: {{ index .Values.metrics.prometheusRule "for" | quote }}
+          labels:
+            severity: warning
+          annotations:
+            summary: Rivet runtime-library work failed.
+        - alert: RivetManagedMaintenanceStale
+          expr: time() - max by (namespace, pod) (rivet_managed_maintenance_last_success_timestamp_seconds{profile="control"}) > {{ .Values.metrics.prometheusRule.failureModeAlerts.maintenanceStaleSeconds }}
+          for: {{ index .Values.metrics.prometheusRule "for" | quote }}
+          labels:
+            severity: warning
+          annotations:
+            summary: Rivet managed maintenance has not completed within its expected window.
+        - alert: RivetManagedDeletionOutboxBlocked
+          expr: sum by (namespace) (rivet_managed_object_deletion_outbox_entries{state="blocked",profile="control"}) >= {{ .Values.metrics.prometheusRule.failureModeAlerts.outboxBlockedEntries }}
+          for: {{ index .Values.metrics.prometheusRule "for" | quote }}
+          labels:
+            severity: warning
+          annotations:
+            summary: Rivet has object-deletion outbox entries blocked by a remaining durable reference.
+        - alert: RivetHostedEvaluationQueueSaturated
+          expr: (sum by (namespace) (rivet_hosted_evaluation_jobs_outstanding{state=~"queued|claimed|accepted"}) / clamp_min(sum by (namespace) (rivet_hosted_evaluation_jobs_outstanding_limit), 1)) >= {{ .Values.metrics.prometheusRule.failureModeAlerts.evaluationQueueUtilization }}
+          for: {{ index .Values.metrics.prometheusRule "for" | quote }}
+          labels:
+            severity: warning
+          annotations:
+            summary: Rivet hosted Evaluation work is nearing its configured outstanding-job limit.
+        - alert: RivetAppSettingsReplicaSynchronizationStale
+          expr: time() - rivet_managed_settings_last_success_timestamp_seconds > {{ .Values.metrics.prometheusRule.failureModeAlerts.maintenanceStaleSeconds }}
+          for: {{ index .Values.metrics.prometheusRule "for" | quote }}
+          labels:
+            severity: warning
+          annotations:
+            summary: A Rivet API replica has not refreshed its managed App Settings revision within the expected window.
+        {{- end }}
 {{- end }}

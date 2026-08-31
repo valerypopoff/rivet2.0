@@ -339,6 +339,7 @@ test('chart makes pull-only metrics and Prometheus Operator resources explicit o
     'metrics.prometheusRule.enabled=true',
     'metrics.serviceMonitor.interval=1h30m',
     'metrics.serviceMonitor.additionalLabels.release=prometheus',
+    'metrics.prometheusRule.failureModeAlerts.enabled=true',
   ]);
   const apiEntrypoint = readRepoFile('deploy/studio-server/images/api/entrypoint.sh');
   const dashboardChart = await renderLocalKubernetesChartWithOverrides([
@@ -377,6 +378,13 @@ test('chart makes pull-only metrics and Prometheus Operator resources explicit o
   );
   assert.match(metricsChart, /kind: PrometheusRule[\s\S]*?alert: RivetExecutionReadinessUnavailable/);
   assert.match(metricsChart, /alert: RivetPublishedExecutionAdmissionSaturated/);
+  assert.match(metricsChart, /alert: RivetPostgresPoolWaiters/);
+  assert.match(metricsChart, /alert: RivetRuntimeLibraryJobFailures/);
+  assert.match(metricsChart, /alert: RivetManagedMaintenanceStale/);
+  assert.match(metricsChart, /alert: RivetManagedDeletionOutboxBlocked/);
+  assert.match(metricsChart, /alert: RivetHostedEvaluationQueueSaturated/);
+  assert.match(metricsChart, /alert: RivetAppSettingsReplicaSynchronizationStale/);
+  assert.doesNotMatch(defaultChart, /alert: RivetPostgresPoolWaiters/);
   assert.equal(
     (metricsChart.match(/name: RIVET_DEPLOYMENT_METRICS_ENABLED\s*\n\s*value: "true"/g) ?? []).length,
     2,
@@ -385,6 +393,14 @@ test('chart makes pull-only metrics and Prometheus Operator resources explicit o
   assert.match(
     apiEntrypoint,
     /deployment_metrics_enabled="\$\{RIVET_DEPLOYMENT_METRICS_ENABLED:-\}"[\s\S]*?load_optional_dotenv \/vault\/dotenv[\s\S]*?RIVET_METRICS_ENABLED "\$deployment_metrics_enabled"/,
+  );
+  await assertHelmTemplateFails(
+    ['metrics.prometheusRule.failureModeAlerts.enabled=true'],
+    /requires metrics\.prometheusRule\.enabled=true/,
+  );
+  await assertHelmTemplateFails(
+    ['metrics.prometheusRule.failureModeAlerts.evaluationQueueUtilization=1.1'],
+    /must be a number greater than zero and at most one/,
   );
   assert.match(validationTemplate, /RIVET_METRICS_ENABLED[\s\S]*?configure metrics instead/);
 
@@ -449,11 +465,7 @@ test('chart exposes aggregate proxy metrics only through opt-in internal resourc
     /metrics\.proxyExporter\.port must be an unprivileged TCP port between 1024 and 65535/,
   );
   await assertHelmTemplateFails(
-    [
-      'metrics.enabled=true',
-      'metrics.proxyExporter.enabled=true',
-      'metrics.proxyExporter.resources.requests.memory=',
-    ],
+    ['metrics.enabled=true', 'metrics.proxyExporter.enabled=true', 'metrics.proxyExporter.resources.requests.memory='],
     /metrics\.proxyExporter\.resources\.requests\.memory must be a positive Kubernetes quantity string/,
   );
   await assertHelmTemplateFails(
@@ -470,16 +482,34 @@ test('chart exposes aggregate proxy metrics only through opt-in internal resourc
 
 test('chart rejects fractional native values for integral runtime and Kubernetes controls', async () => {
   for (const [override, expectedMessage] of [
-    ['hostedEvaluations.workerConcurrency=1.5', /hostedEvaluations\.workerConcurrency must be a non-negative whole number/],
-    ['publishedExecutionAdmission.maxActiveRunsPerPod=4.5', /publishedExecutionAdmission\.maxActiveRunsPerPod must be a non-negative whole number/],
+    [
+      'hostedEvaluations.workerConcurrency=1.5',
+      /hostedEvaluations\.workerConcurrency must be a non-negative whole number/,
+    ],
+    [
+      'publishedExecutionAdmission.maxActiveRunsPerPod=4.5',
+      /publishedExecutionAdmission\.maxActiveRunsPerPod must be a non-negative whole number/,
+    ],
     ['postgres.poolMaxPerApiPod=10.5', /postgres\.poolMaxPerApiPod must be a non-negative whole number/],
     ['postgres.port=5432.5', /postgres\.port must be a non-negative whole number/],
     ['service.api.targetPort=8080.5', /service\.api\.targetPort must be a non-negative whole number/],
-    ['autoscaling.execution.maxReplicas=10.5', /autoscaling\.execution\.maxReplicas must be a non-negative whole number/],
+    [
+      'autoscaling.execution.maxReplicas=10.5',
+      /autoscaling\.execution\.maxReplicas must be a non-negative whole number/,
+    ],
     ['managedMaintenance.batchSize=100.5', /managedMaintenance\.batchSize must be a non-negative whole number/],
-    ['workflowSchema.compatibility.maximumVersion=10.5', /workflowSchema\.compatibility\.maximumVersion must be a non-negative whole number/],
-    ['lifecycle.probes.readiness.failureThreshold=2.5', /lifecycle\.probes\.readiness\.failureThreshold must be a non-negative whole number/],
-    ['availability.topologySpread.maxSkew=1.5', /availability\.topologySpread\.maxSkew must be a non-negative whole number/],
+    [
+      'workflowSchema.compatibility.maximumVersion=10.5',
+      /workflowSchema\.compatibility\.maximumVersion must be a non-negative whole number/,
+    ],
+    [
+      'lifecycle.probes.readiness.failureThreshold=2.5',
+      /lifecycle\.probes\.readiness\.failureThreshold must be a non-negative whole number/,
+    ],
+    [
+      'availability.topologySpread.maxSkew=1.5',
+      /availability\.topologySpread\.maxSkew must be a non-negative whole number/,
+    ],
   ] as const) {
     await assertHelmTemplateFails([override], expectedMessage, '--set-json');
   }
