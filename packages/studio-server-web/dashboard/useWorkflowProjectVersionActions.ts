@@ -37,7 +37,7 @@ export function useWorkflowProjectVersionActions({
   openedWorkflowProject: WorkflowProjectItem | null;
   openedWorkflowProjectRef: MutableRefObject<WorkflowProjectItem | null>;
   projectContextMenuProject: WorkflowProjectItem | null;
-  refresh: (showLoading?: boolean) => Promise<void>;
+  refresh: (showLoading?: boolean) => Promise<unknown>;
   uploadingFolderPath: string | null;
 }) {
   const [projectModalState, setProjectModalState] = useState<WorkflowProjectModalState | null>(null);

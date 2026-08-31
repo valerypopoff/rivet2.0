@@ -166,6 +166,23 @@ Current backend-specific behavior:
 - in `managed` mode, a no-op save does not create a new draft revision
 - in `managed` mode, if the saved contents match the published revision exactly, the save path reuses that published revision instead of creating a distinct draft revision that would incorrectly appear as `unpublished_changes`
 
+## Dashboard project-tree synchronization
+
+Open hosted dashboards keep their project trees synchronized for mutations made through Rivet Server. The API exposes an authenticated SSE invalidation stream at `GET /api/workflows/tree/events`. It sends an initial `tree-state` `{ epoch, revision }` token and a `tree-changed` token after each completed tree-affecting mutation. The notification deliberately contains no folder or project payload: every browser refetches the authoritative `GET /api/workflows/tree` response, which carries the same kind of token.
+
+The server emits one invalidation only after a successful create, move, rename, delete, upload, duplicate, restore, save, publish/unpublish, or web-app publication/access mutation. Rejected and failed operations emit nothing. Each dashboard includes an opaque per-browser id in the `x-rivet-workflow-tree-client` request header; it is a refresh-deduplication token, not an authentication credential. The API reflects that id only in the event for the originating mutation, so the browser's existing local refresh remains authoritative and it does not schedule a redundant stream refresh for its own change.
+
+The browser coalesces rapid remote notifications, keeps folders expanded when their IDs still exist, and defers reconciliation while the local user is dragging, while a drag/drop move request is still reconciling, editing a tree name, uploading, or waiting for another local tree action. A transient refetch failure leaves the visible tree intact and is retried in the background. Native `EventSource` reconnection plus the server epoch means a restarted API process causes connected clients to fetch a fresh tree rather than trusting an old revision.
+
+Tree synchronization is intentionally metadata-only:
+
+- A remote rename, move, or delete refreshes the sidebar but never reloads, merges, closes, or discards an editor document that another administrator already has open.
+- If the open project's original tree path no longer exists, the dashboard explains that it was moved/renamed or removed elsewhere and that the unchanged editor document remains open.
+- This is not live graph collaboration and does not merge project content. Users still choose when to reload, save, or resolve content-level conflicts.
+- Only Rivet Server mutations participate. Manual filesystem changes outside the server are not watched.
+
+The Docker, development, and Kubernetes proxy templates define this stream as an exact authenticated `/api/workflows/tree/events` location before the generic `/api/` route. That location disables proxy buffering and uses long read/write timeouts so the stream is not delayed or cut off by ordinary API defaults. The notifier is intentionally API-process-local because the dashboard control plane is currently singleton. If control-plane API replicas become highly available later, replace it with shared fan-out (for example PostgreSQL `LISTEN/NOTIFY`) before claiming cross-replica tree updates.
+
 ## Unpublish flow
 
 1. Server clears the current published pointer.

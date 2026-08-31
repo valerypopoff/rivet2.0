@@ -14,6 +14,7 @@ import { useWorkflowLibraryDragAndDrop } from './useWorkflowLibraryDragAndDrop';
 import { useWorkflowLibraryMutations } from './useWorkflowLibraryMutations';
 import { useWorkflowLibrarySelection } from './useWorkflowLibrarySelection';
 import { useWorkflowLibraryTree } from './useWorkflowLibraryTree';
+import { useWorkflowLibraryTreeSync } from './useWorkflowLibraryTreeSync';
 import { useWorkflowProjectVersionActions } from './useWorkflowProjectVersionActions';
 
 export const instantWarningToastTransition = cssTransition({
@@ -79,10 +80,12 @@ export function useWorkflowLibraryController(options: {
     loading,
     reconcileInBackground: reconcileWorkflowTreeInBackground,
     refresh,
+    refreshFromRemoteChange,
     rootProjects,
     setExpandedFolders,
     setFolders,
     setRootProjects,
+    syncRef,
   } = useWorkflowLibraryTree(projectSaveSequence);
   const runRecordings = useRunRecordingsModalState();
   const [settingsModalProject, setSettingsModalProject] = useState<WorkflowProjectItem | null>(null);
@@ -187,6 +190,7 @@ export function useWorkflowLibraryController(options: {
     startProjectRename: handleStartProjectRename,
     submitFolderRename: handleSubmitFolderRename,
     submitProjectRename: handleSubmitProjectRename,
+    treeMutationPending,
     uploadProject,
     uploadingFolderPath,
   } = mutations;
@@ -214,6 +218,7 @@ export function useWorkflowLibraryController(options: {
     handleRootDragLeave,
     handleRootDragOver,
     handleRootDrop,
+    movePending,
   } = dragAndDrop;
 
   const handlePanelBodyClick = useCallback((event: MouseEvent<HTMLDivElement>) => {
@@ -263,6 +268,24 @@ export function useWorkflowLibraryController(options: {
     projectModalMode,
     projectModalProject,
   } = versionActions;
+
+  useWorkflowLibraryTreeSync({
+    currentSyncRef: syncRef,
+    isLocalTreeInteractionActive: Boolean(
+      draggedItem
+      || movePending
+      || editingFolderId
+      || editingProjectPath
+      || renamingFolderId
+      || renamingProjectPath
+      || treeMutationPending
+      || uploadingFolderPath
+      || duplicatingProjectPath,
+    ),
+    openedProjectPath,
+    openedProjectRef: openedWorkflowProjectRef,
+    refreshFromRemoteChange,
+  });
 
   const handleFolderContextMenu = useCallback((
     folder: WorkflowFolderItem,

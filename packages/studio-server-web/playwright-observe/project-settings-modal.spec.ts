@@ -156,6 +156,7 @@ async function installProjectSettingsRoutes(
 
     const tree: WorkflowTreeResponse = {
       root: '/managed/workflows',
+      sync: { epoch: 'playwright-fixture', revision: 0 },
       folders: [],
       projects,
     };

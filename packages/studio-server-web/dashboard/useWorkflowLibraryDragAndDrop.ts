@@ -27,7 +27,7 @@ export function useWorkflowLibraryDragAndDrop({
   flattenedFolders: WorkflowFolderItem[];
   folders: WorkflowFolderItem[];
   reconcileTree: (message: string) => void;
-  refresh: (showLoading?: boolean) => Promise<void>;
+  refresh: (showLoading?: boolean) => Promise<unknown>;
   rootProjects: WorkflowProjectItem[];
   setExpandedFolders: Dispatch<SetStateAction<Record<string, boolean>>>;
   setFolders: Dispatch<SetStateAction<WorkflowFolderItem[]>>;
@@ -38,6 +38,7 @@ export function useWorkflowLibraryDragAndDrop({
     dropTargetFolderPath: null,
     dragOverRoot: false,
   });
+  const [movePending, setMovePending] = useState(false);
   const { draggedItem, dropTargetFolderPath, dragOverRoot } = state;
 
   const canDropIntoFolder = useCallback((item: DraggedWorkflowItem | null, destinationPath: string) => {
@@ -58,6 +59,7 @@ export function useWorkflowLibraryDragAndDrop({
       return;
     }
 
+    setMovePending(true);
     try {
       const sourceFolder = draggedItem.itemType === 'folder'
         ? flattenedFolders.find((folder) => folder.relativePath === draggedItem.relativePath) ?? null
@@ -90,6 +92,7 @@ export function useWorkflowLibraryDragAndDrop({
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Failed to move workflow item');
     } finally {
+      setMovePending(false);
       reset();
     }
   }, [
@@ -174,5 +177,6 @@ export function useWorkflowLibraryDragAndDrop({
     handleRootDragLeave,
     handleRootDragOver,
     handleRootDrop,
+    movePending,
   };
 }

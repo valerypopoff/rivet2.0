@@ -33,6 +33,7 @@ import type { AppDatasetProvider } from '../../app/src/host';
 import {
   fetchWorkflowPublishedVersionPreview,
   fetchWorkflowRecordingArtifactText,
+  getWorkflowTreeMutationHeaders,
 } from '../dashboard/workflowApi';
 import { deserializeHostedProjectPayloadAsync } from '../overrides/utils/deserializeProject';
 
@@ -114,7 +115,7 @@ async function apiSaveProject(options: {
 }> {
   const response = await fetch(`${API}/projects/save`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...getWorkflowTreeMutationHeaders() },
     body: JSON.stringify(options),
   });
 

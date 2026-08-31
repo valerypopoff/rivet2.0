@@ -320,7 +320,7 @@ Windows PowerShell override example:
 - Vite web app on `http://localhost:5174`
 - executor websocket service on port `21889`
 
-The local executor is the wrapper entrypoint, not the upstream standalone executable. It injects an HTTP-backed LLM Profile health store into Node-mode editor runs. By default it calls `http://127.0.0.1:3100/api/workflows/llm-profile-health`; set `RIVET_LLM_PROFILE_HEALTH_API_URL` only when the local API is exposed elsewhere. `RIVET_KEY` must match the API because the executor derives the normal trusted proxy token from it.
+The local executor is the wrapper entrypoint, not the upstream standalone executable. It injects an HTTP-backed LLM Profile health store into Node-mode editor runs. By default it calls `http://127.0.0.1:3100/api/workflows/llm-profile-health`; set `RIVET_LLM_PROFILE_HEALTH_API_URL` only when the local API is exposed elsewhere. `RIVET_KEY` must match the API because the executor derives the normal trusted proxy token from it. When a key is configured, the Vite development proxy derives the same proxy-auth digest server-side for its `/api/*` forwarding; the browser never receives the shared key or that header value.
 
 The dashboard's outer Project Settings > LLM profile suspension tab administers that same
 server state. It is intentionally outside the embedded Rivet editor, and the
@@ -334,8 +334,8 @@ Important constraints:
 
 - host Node must be `24+` for local API execution because the API now uses Node's built-in `node:sqlite`
 - this mode does not recreate the nginx trusted-proxy layer
-- the Vite dev server only proxies `/api/*` to the API and `/ws/executor*` to the executor
-- Vite does not proxy the published/latest workflow route families, Rivet web app route families, `/ui-auth`, or `/ws/latest-debugger`, and it does not inject the trusted proxy headers that those control-plane routes expect
+- the Vite dev server only proxies `/api/*` to the API and `/ws/executor*` to the executor; when `RIVET_KEY` is configured, its `/api/*` proxy adds the derived internal proxy-auth header server-side
+- Vite does not proxy the published/latest workflow route families, Rivet web app route families, `/ui-auth`, or `/ws/latest-debugger`; it remains a narrower development seam than the deployed nginx proxy
 - use it for service-level debugging, direct API/executor work, or frontend iteration that does not rely on fully wired hosted-shell control-plane routing
 - Docker dev remains the best path for testing the full hosted browser flow exactly as deployed
 

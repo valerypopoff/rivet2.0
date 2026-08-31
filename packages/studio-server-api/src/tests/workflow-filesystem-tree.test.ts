@@ -2,7 +2,8 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import test from 'node:test';
-import { readJson } from './helpers/workflow-api-harness.js';
+import { getExpectedProxyAuthToken } from '../auth.js';
+import { readJson, withEnvOverride } from './helpers/workflow-api-harness.js';
 import { createFilesystemWorkflowSuiteHarness } from './helpers/workflow-filesystem-suite-harness.js';
 
 const {
@@ -20,6 +21,55 @@ const {
 
 test.beforeEach(resetAndEnsureWorkflowsRoot);
 test.after(cleanupWorkflowSuite);
+
+type WorkflowTreeSseEvent = {
+  event: string;
+  data: Record<string, unknown>;
+};
+
+async function openWorkflowTreeEventStream(baseUrl: string, headers: HeadersInit) {
+  const controller = new AbortController();
+  const response = await fetch(`${baseUrl}/tree/events`, {
+    headers,
+    signal: controller.signal,
+  });
+  assert.equal(response.status, 200);
+  assert.equal(response.headers.get('content-type'), 'text/event-stream; charset=utf-8');
+  assert.equal(response.headers.get('x-accel-buffering'), 'no');
+  assert.ok(response.body, 'Expected the workflow tree stream to have a response body.');
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+
+  return {
+    async next(): Promise<WorkflowTreeSseEvent> {
+      for (;;) {
+        const boundary = buffer.indexOf('\n\n');
+        if (boundary !== -1) {
+          const rawEvent = buffer.slice(0, boundary).replace(/\r/g, '');
+          buffer = buffer.slice(boundary + 2);
+          const event = rawEvent.match(/^event: (.+)$/m)?.[1];
+          const rawData = rawEvent.match(/^data: (.+)$/m)?.[1];
+          if (!event || !rawData) {
+            continue;
+          }
+          return { event, data: JSON.parse(rawData) as Record<string, unknown> };
+        }
+
+        const chunk = await reader.read();
+        if (chunk.done) {
+          throw new Error('Workflow tree event stream closed before an event arrived.');
+        }
+        buffer += decoder.decode(chunk.value, { stream: true });
+      }
+    },
+    async close() {
+      controller.abort();
+      await reader.cancel().catch(() => undefined);
+    },
+  };
+}
 
 test('workflow project rename and move preserve wrapper sidecars', async () => {
   await workflowMutations.createWorkflowFolderItem('Folder', '');
@@ -309,6 +359,69 @@ test('workflow tree route disables caching', async () => {
     assert.equal(response.status, 200);
     assert.equal(response.headers.get('cache-control'), 'no-store, no-cache, must-revalidate');
     assert.equal(response.headers.get('pragma'), 'no-cache');
+  });
+});
+
+test('workflow tree stream is authenticated, fans out one invalidation per completed mutation, and exposes the matching tree token', async () => {
+  await withEnvOverride('RIVET_KEY', 'workflow-tree-events-test-key', async () => {
+    await withWorkflowApiServer(async (baseUrl) => {
+      const unauthorized = await fetch(`${baseUrl}/tree/events`);
+      assert.equal(unauthorized.status, 403);
+
+      const proxyAuthHeaders = { 'x-rivet-proxy-auth': getExpectedProxyAuthToken() };
+      const first = await openWorkflowTreeEventStream(baseUrl, proxyAuthHeaders);
+      const second = await openWorkflowTreeEventStream(baseUrl, proxyAuthHeaders);
+
+      try {
+        const firstState = await first.next();
+        const secondState = await second.next();
+        assert.equal(firstState.event, 'tree-state');
+        assert.equal(secondState.event, 'tree-state');
+        assert.equal(firstState.data.epoch, secondState.data.epoch);
+        assert.equal(firstState.data.revision, secondState.data.revision);
+
+        const invalid = await fetch(`${baseUrl}/folders`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ name: '.hidden' }),
+        });
+        assert.equal(invalid.status, 400);
+
+        const afterRejectedMutation = await readJson<{ sync: { epoch: string; revision: number } }>(
+          await fetch(`${baseUrl}/tree`),
+        );
+        assert.equal(afterRejectedMutation.sync.epoch, firstState.data.epoch);
+        assert.equal(afterRejectedMutation.sync.revision, firstState.data.revision);
+
+        const mutation = await fetch(`${baseUrl}/folders`, {
+          method: 'POST',
+          headers: {
+            'content-type': 'application/json',
+            'x-rivet-workflow-tree-client': 'source-browser',
+          },
+          body: JSON.stringify({ name: 'Shared folder' }),
+        });
+        assert.equal(mutation.status, 201);
+
+        const [firstChange, secondChange] = await Promise.all([first.next(), second.next()]);
+        for (const change of [firstChange, secondChange]) {
+          assert.equal(change.event, 'tree-changed');
+          assert.equal(change.data.epoch, firstState.data.epoch);
+          assert.equal(change.data.sourceClientId, 'source-browser');
+          assert.equal(change.data.revision, Number(firstState.data.revision) + 1);
+        }
+
+        const tree = await readJson<{ folders: Array<{ name: string }>; sync: { epoch: string; revision: number } }>(
+          await fetch(`${baseUrl}/tree`),
+        );
+        assert.ok(tree.folders.some((folder) => folder.name === 'Shared folder'));
+        assert.equal(tree.sync.epoch, firstChange.data.epoch);
+        assert.equal(tree.sync.revision, firstChange.data.revision);
+      } finally {
+        await first.close();
+        await second.close();
+      }
+    });
   });
 });
 

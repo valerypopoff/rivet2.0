@@ -10,6 +10,7 @@ import {
   loadHostedProject,
   saveHostedProject,
 } from './workflows/storage-backend.js';
+import { notifyWorkflowTreeChanged } from './workflows/workflow-tree-events.js';
 
 export const projectsRouter = Router();
 const timing = createResponseTimingMiddleware();
@@ -46,12 +47,14 @@ projectsRouter.post('/save', timing, validateBody(saveProjectSchema), asyncHandl
     expectedRevisionId,
   } = req.body as z.infer<typeof saveProjectSchema>;
 
-  res.json(await saveHostedProject({
+  const result = await saveHostedProject({
     projectPath: path,
     contents,
     datasetsContents,
     expectedRevisionId,
-  }));
+  });
+  notifyWorkflowTreeChanged(req);
+  res.json(result);
 }));
 
 projectsRouter.get('/workspace-root', (_req, res) => {

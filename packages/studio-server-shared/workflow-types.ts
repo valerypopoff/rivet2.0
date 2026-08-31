@@ -205,6 +205,31 @@ export type WorkflowProjectPathMove = {
   toAbsolutePath: string;
 };
 
+/**
+ * A lightweight, API-instance-scoped token for the hosted workflow tree.
+ *
+ * The token is deliberately not persisted. It lets dashboard clients detect a
+ * tree mutation or an API restart and then reload the normal authoritative
+ * tree response instead of receiving project metadata over a live stream.
+ */
+export type WorkflowTreeSyncState = {
+  epoch: string;
+  revision: number;
+};
+
+export type WorkflowTreeChangeEvent = WorkflowTreeSyncState & {
+  sourceClientId: string | null;
+};
+
+export const WORKFLOW_TREE_CLIENT_ID_HEADER = 'x-rivet-workflow-tree-client';
+
+export type WorkflowTreeResponse = {
+  root: string;
+  folders: WorkflowFolderItem[];
+  projects: WorkflowProjectItem[];
+  sync: WorkflowTreeSyncState;
+};
+
 export type WorkflowPublishedVersionSummary = {
   id: string;
   projectId: string;

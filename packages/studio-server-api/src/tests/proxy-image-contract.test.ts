@@ -128,6 +128,24 @@ test('proxy templates replace client correlation IDs before forwarding requests'
   }
 });
 
+test('proxy templates keep the authenticated workflow-tree event stream unbuffered and long-lived', () => {
+  for (const template of readProxyTemplates()) {
+    const streamLocation = proxyLocation(template, /location = \/api\/workflows\/tree\/events\s*\{/);
+    const apiLocationIndex = template.indexOf('location /api/ {');
+    const streamLocationIndex = template.indexOf('location = /api/workflows/tree/events {');
+
+    assert.notEqual(streamLocationIndex, -1);
+    assert.ok(streamLocationIndex < apiLocationIndex, 'The exact SSE route must precede the generic API route.');
+    assert.match(streamLocation, /auth_request \/__rivet_ui_auth_check;/);
+    assert.match(streamLocation, /proxy_http_version 1\.1;/);
+    assert.match(streamLocation, /proxy_set_header X-Rivet-Proxy-Auth \$\{RIVET_PROXY_AUTH_TOKEN\};/);
+    assert.match(streamLocation, /proxy_buffering off;/);
+    assert.match(streamLocation, /proxy_cache off;/);
+    assert.match(streamLocation, /proxy_read_timeout 86400s;/);
+    assert.match(streamLocation, /proxy_send_timeout 86400s;/);
+  }
+});
+
 test('proxy UI gate prompt is API-rendered and receives the original route', () => {
   const proxyBootstrap = readRepoFile('deploy/studio-server/images/proxy/normalize-workflow-paths.sh');
   const proxyDockerfile = readRepoFile('deploy/studio-server/images/proxy/Dockerfile');

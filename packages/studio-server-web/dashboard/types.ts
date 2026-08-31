@@ -11,6 +11,9 @@ import type {
   WorkflowProjectWebAppPublicationDraft,
   WorkflowProjectWebAppSummary,
   WorkflowProjectWebAppsResponse,
+  WorkflowTreeChangeEvent,
+  WorkflowTreeResponse,
+  WorkflowTreeSyncState,
   WorkflowPublishedVersionRestoreResponse,
   WorkflowPublishedVersionCommentResponse,
   WorkflowPublishedVersionStarResponse,
@@ -59,6 +62,9 @@ export type {
   WorkflowProjectWebAppPublicationDraft,
   WorkflowProjectWebAppSummary,
   WorkflowProjectWebAppsResponse,
+  WorkflowTreeChangeEvent,
+  WorkflowTreeResponse,
+  WorkflowTreeSyncState,
   WorkflowPublishedVersionRestoreResponse,
   WorkflowPublishedVersionCommentResponse,
   WorkflowPublishedVersionStarResponse,
@@ -92,12 +98,6 @@ export type WorkflowMoveResponse = {
   folder?: WorkflowFolderItem;
   project?: WorkflowProjectItem;
   movedProjectPaths: WorkflowProjectPathMove[];
-};
-
-export type WorkflowTreeResponse = {
-  root: string;
-  folders: WorkflowFolderItem[];
-  projects: WorkflowProjectItem[];
 };
 
 export type HostedRouteConfig = {

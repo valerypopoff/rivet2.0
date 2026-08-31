@@ -78,6 +78,7 @@ test('single-click project opens as a replaceable editor preview tab', async ({ 
   await page.route('**/api/workflows/tree', async (route) => {
     const tree: WorkflowTreeResponse = {
       root: '/workflows',
+      sync: { epoch: 'playwright-fixture', revision: 0 },
       folders: [],
       projects: [firstProject, secondProject, thirdProject],
     };

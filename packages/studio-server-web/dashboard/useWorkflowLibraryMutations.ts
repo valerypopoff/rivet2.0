@@ -101,7 +101,7 @@ export function useWorkflowLibraryMutations({
   folders: WorkflowFolderItem[];
   onOpenProject: (path: string, options?: WorkflowProjectOpenOptions) => void;
   reconcileTree: (message: string) => void;
-  refresh: (showLoading?: boolean) => Promise<void>;
+  refresh: (showLoading?: boolean) => Promise<unknown>;
   rootProjects: WorkflowProjectItem[];
   setExpandedFolders: Dispatch<SetStateAction<Record<string, boolean>>>;
   setFolders: Dispatch<SetStateAction<WorkflowFolderItem[]>>;
@@ -113,6 +113,16 @@ export function useWorkflowLibraryMutations({
   const [renamingFolderId, setRenamingFolderId] = useState<string | null>(null);
   const [editingProjectPath, setEditingProjectPath] = useState<string | null>(null);
   const [renamingProjectPath, setRenamingProjectPath] = useState<string | null>(null);
+  const [treeMutationCount, setTreeMutationCount] = useState(0);
+
+  const runTreeMutation = useCallback(async <T,>(operation: () => Promise<T>): Promise<T> => {
+    setTreeMutationCount((current) => current + 1);
+    try {
+      return await operation();
+    } finally {
+      setTreeMutationCount((current) => Math.max(0, current - 1));
+    }
+  }, []);
 
   const clearInlineEditing = useCallback(() => {
     setEditingFolderId(null);
@@ -125,13 +135,13 @@ export function useWorkflowLibraryMutations({
       return;
     }
     try {
-      const folder = await createWorkflowFolder(name);
+      const folder = await runTreeMutation(() => createWorkflowFolder(name));
       setExpandedFolders((previous) => ({ ...previous, [folder.id]: true }));
       await refresh(false);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Failed to create folder');
     }
-  }, [refresh, setExpandedFolders]);
+  }, [refresh, runTreeMutation, setExpandedFolders]);
 
   const startFolderRename = useCallback((folder: WorkflowFolderItem) => {
     setEditingProjectPath(null);
@@ -150,7 +160,7 @@ export function useWorkflowLibraryMutations({
     setEditingFolderId(null);
     setRenamingFolderId(folder.id);
     try {
-      const result = await renameWorkflowFolder(folder.relativePath, newName);
+      const result = await runTreeMutation(() => renameWorkflowFolder(folder.relativePath, newName));
       if (result.movedProjectPaths.some((move) => move.fromAbsolutePath === activePath)) {
         suppressAncestorExpansion(getRenamedFolderIds(folder, folder.relativePath, result.folder.relativePath));
       }
@@ -172,6 +182,7 @@ export function useWorkflowLibraryMutations({
     folders,
     reconcileTree,
     rootProjects,
+    runTreeMutation,
     setExpandedFolders,
     setFolders,
     setRootProjects,
@@ -195,7 +206,7 @@ export function useWorkflowLibraryMutations({
     setEditingProjectPath(null);
     setRenamingProjectPath(project.absolutePath);
     try {
-      const result = await renameWorkflowProject(project.relativePath, newName);
+      const result = await runTreeMutation(() => renameWorkflowProject(project.relativePath, newName));
       const nextTree = applyProjectMoveToTree(folders, rootProjects, project, result.project);
       setFolders(nextTree.folders);
       setRootProjects(nextTree.rootProjects);
@@ -206,7 +217,7 @@ export function useWorkflowLibraryMutations({
     } finally {
       setRenamingProjectPath((current) => current === project.absolutePath ? null : current);
     }
-  }, [applyProjectPathMoves, folders, reconcileTree, rootProjects, setFolders, setRootProjects]);
+  }, [applyProjectPathMoves, folders, reconcileTree, rootProjects, runTreeMutation, setFolders, setRootProjects]);
 
   const addProject = useCallback(async (folder: WorkflowFolderItem) => {
     const name = normalizePromptValue(prompt(`New Rivet project name in folder "${folder.name}":`));
@@ -214,26 +225,26 @@ export function useWorkflowLibraryMutations({
       return;
     }
     try {
-      const project = await createWorkflowProject(folder.relativePath, name);
+      const project = await runTreeMutation(() => createWorkflowProject(folder.relativePath, name));
       setExpandedFolders((previous) => ({ ...previous, [folder.id]: true }));
       await refresh(false);
       onOpenProject(project.absolutePath, { title: project.name });
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Failed to create project');
     }
-  }, [onOpenProject, refresh, setExpandedFolders]);
+  }, [onOpenProject, refresh, runTreeMutation, setExpandedFolders]);
 
   const deleteFolder = useCallback(async (folder: WorkflowFolderItem) => {
     if (!window.confirm(`Delete empty folder "${folder.name}"?`)) {
       return;
     }
     try {
-      await deleteWorkflowFolder(folder.relativePath);
+      await runTreeMutation(() => deleteWorkflowFolder(folder.relativePath));
       await refresh(false);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Failed to delete folder');
     }
-  }, [refresh]);
+  }, [refresh, runTreeMutation]);
 
   const uploadProject = useCallback(async (folder: WorkflowFolderItem) => {
     let selectedFile: File | null;
@@ -253,14 +264,15 @@ export function useWorkflowLibraryMutations({
 
     setUploadingFolderPath(folder.relativePath);
     try {
-      await uploadWorkflowProject(folder.relativePath, selectedFile.name, await selectedFile.text());
+      const contents = await selectedFile.text();
+      await runTreeMutation(() => uploadWorkflowProject(folder.relativePath, selectedFile.name, contents));
       await refresh(false);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Failed to upload project');
     } finally {
       setUploadingFolderPath((current) => current === folder.relativePath ? null : current);
     }
-  }, [refresh]);
+  }, [refresh, runTreeMutation]);
 
   return {
     addProject,
@@ -277,6 +289,7 @@ export function useWorkflowLibraryMutations({
     startProjectRename,
     submitFolderRename,
     submitProjectRename,
+    treeMutationPending: treeMutationCount > 0,
     uploadProject,
     uploadingFolderPath,
   };

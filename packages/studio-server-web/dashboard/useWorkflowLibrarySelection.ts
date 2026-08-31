@@ -39,8 +39,17 @@ export function useWorkflowLibrarySelection({
     () => allProjects.find((project) => project.absolutePath === activePath) ?? null,
     [activePath, allProjects],
   );
-  const openedWorkflowProjectPath = openedWorkflowProject?.absolutePath ?? '';
-  openedWorkflowProjectRef.current = openedWorkflowProject;
+  if (openedWorkflowProject) {
+    openedWorkflowProjectRef.current = openedWorkflowProject;
+  } else if (
+    !openedProjectPath ||
+    openedWorkflowProjectRef.current?.absolutePath !== openedProjectPath
+  ) {
+    // Keep the last known tree item only for the still-open document. A
+    // remote rename/delete removes its row before the synchronization hook
+    // can explain that the editor intentionally remains unchanged.
+    openedWorkflowProjectRef.current = null;
+  }
 
   const clearPendingPreviewOpen = useCallback(() => {
     if (previewOpenTimeoutRef.current != null) {
@@ -67,8 +76,11 @@ export function useWorkflowLibrarySelection({
   }, [allProjects, openedWorkflowProject, selectedProjectPath]);
 
   useEffect(() => {
-    onActiveWorkflowProjectPathChange(openedWorkflowProjectPath);
-  }, [onActiveWorkflowProjectPathChange, openedWorkflowProjectPath]);
+    // A remote tree refresh can remove or move an open project. The editor
+    // deliberately keeps that document open, so retain its active path even
+    // while there is no longer a matching sidebar row.
+    onActiveWorkflowProjectPathChange(openedProjectPath);
+  }, [onActiveWorkflowProjectPathChange, openedProjectPath]);
 
   const activeAncestorFolderIds = useMemo(() => {
     if (!activePath) {

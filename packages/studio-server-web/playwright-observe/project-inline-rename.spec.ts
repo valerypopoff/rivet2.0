@@ -61,6 +61,7 @@ async function installProjectRenameRoutes(page: Page, state: {
   await page.route('**/api/workflows/tree', async (route) => {
     await fulfillJson(route, {
       root: '/managed/workflows',
+      sync: { epoch: 'playwright-fixture', revision: 0 },
       folders: [],
       projects: [createProjectFixture(state.projectName)],
     });

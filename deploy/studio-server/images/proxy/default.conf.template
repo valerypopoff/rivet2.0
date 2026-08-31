@@ -123,6 +123,25 @@ server {
         proxy_read_timeout 30s;
     }
 
+    # Dashboard-only stream: this exact location must precede /api/ so
+    # nginx does not buffer the long-lived SSE response.
+    location = /api/workflows/tree/events {
+        auth_request /__rivet_ui_auth_check;
+
+        proxy_pass $api_upstream;
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
+        proxy_set_header X-Rivet-Proxy-Auth ${RIVET_PROXY_AUTH_TOKEN};
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-Host $rivet_forwarded_host;
+        proxy_set_header X-Forwarded-Proto $rivet_forwarded_proto;
+        proxy_buffering off;
+        proxy_cache off;
+        proxy_read_timeout 86400s;
+        proxy_send_timeout 86400s;
+    }
+
     location /api/ {
         auth_request /__rivet_ui_auth_check;
 

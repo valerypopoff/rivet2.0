@@ -6,6 +6,7 @@ import svgr from 'vite-plugin-svgr';
 import monacoEditorPlugin from 'vite-plugin-monaco-editor';
 import topLevelAwait from 'vite-plugin-top-level-await';
 import { createRequire } from 'node:module';
+import { createHash } from 'node:crypto';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { existsSync, readFileSync } from 'node:fs';
@@ -85,6 +86,9 @@ const wrapperPackageJson = JSON.parse(readFileSync(resolve(__dirname, 'package.j
 const hostedAppVersion = typeof wrapperPackageJson.version === 'string' && wrapperPackageJson.version.trim()
   ? wrapperPackageJson.version.trim()
   : 'unknown';
+const localProxyAuthToken = process.env.RIVET_KEY?.trim()
+  ? createHash('sha256').update(`${process.env.RIVET_KEY.trim()}:proxy-auth`).digest('hex')
+  : null;
 const upstreamSourcePackageAliases = new Set([
   '@valerypopoff/rivet-app',
   '@valerypopoff/rivet-studio-server-shared',
@@ -477,6 +481,13 @@ export default defineConfig({
         '/api': {
           target: 'http://localhost:3100',
           changeOrigin: true,
+          // The browser never receives this header or the shared key. It lets
+          // the local Vite dev proxy stand in for the Docker/Kubernetes proxy.
+          ...(localProxyAuthToken ? {
+            headers: {
+              'X-Rivet-Proxy-Auth': localProxyAuthToken,
+            },
+          } : {}),
         },
         '/ws': {
           target: 'ws://localhost:21889',
