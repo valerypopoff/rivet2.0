@@ -515,7 +515,7 @@ export function createPublishedCapacityLoadJobConfig({ serviceNamePrefix, namesp
 export function getCapacityFixtureEndpoints(jobName) {
   return [jobName + '-fast', jobName + '-long'];
 }
-class PublishedCapacityGate {
+export class PublishedCapacityGate {
   constructor(config, kubectlBin, helmBin) {
     this.config = config;
     this.kubectlBin = kubectlBin;
@@ -614,7 +614,7 @@ class PublishedCapacityGate {
     }
   }
 
-  async prepareJob() {
+  async prepareJob({ onBeforeLoadStart } = {}) {
     const loadConfig = createPublishedCapacityLoadJobConfig({
       serviceNamePrefix: this.config.capacity.serviceNamePrefix ?? this.config.release,
       namespace: this.config.namespace,
@@ -658,6 +658,10 @@ class PublishedCapacityGate {
       ).then((result) => this.kubectl(['apply', '-f', '-'], { input: result.stdout }));
     }
     await this.snapshot({ baseline: true });
+    // All temporary configuration is ready, while no public-load Job exists
+    // yet. A joint certificate uses this exact boundary to prove its durable
+    // Evaluation trial is active before any capacity traffic can start.
+    await onBeforeLoadStart?.();
     await this.kubectl(['apply', '-f', '-'], {
       input: renderPublishedCapacityJob({
         namespace: this.config.namespace,
@@ -848,13 +852,21 @@ class PublishedCapacityGate {
   }
 }
 
-async function main() {
-  const config = buildPublishedCapacityGateConfig({ rootDir });
-  const gate = new PublishedCapacityGate(
-    config,
-    resolveKubectlBin(process.env),
-    resolveHelmBinOrThrow(rootDir, { env: process.env, launcherName: runnerName }),
-  );
+/**
+ * Run one isolated published-endpoint capacity experiment. The hosted
+ * Evaluation certificate imports this operation instead of copying its
+ * publish/job/cleanup sequence, so both certificates apply exactly the same
+ * target, admission, metric, and evidence rules.
+ */
+export async function runPublishedCapacityGate({
+  config,
+  kubectlBin = resolveKubectlBin(process.env),
+  helmBin = resolveHelmBinOrThrow(rootDir, { env: process.env, launcherName: runnerName }),
+  onBeforeLoadStart,
+  onLoadCompleted,
+} = {}) {
+  if (!config) throw new Error(`[${runnerName}] config is required`);
+  const gate = new PublishedCapacityGate(config, kubectlBin, helmBin);
   await fs.mkdir(config.artifactsDir, { recursive: true });
   await gate.artifact('config.json', `${JSON.stringify(redactPublishedCapacityGateConfig(config), null, 2)}\n`);
   let report;
@@ -867,9 +879,13 @@ async function main() {
     phase = 'publish-fixtures';
     await gate.publishFixtures();
     phase = 'prepare-job';
-    await gate.prepareJob();
+    await gate.prepareJob({ onBeforeLoadStart });
     phase = 'wait-for-job';
     await gate.waitForJob();
+    // This is the precise end of public load. Keep a joint caller's liveness
+    // proof here, before report parsing, diagnostics, or cleanup can consume
+    // the Evaluation trial's deliberately bounded duration.
+    await onLoadCompleted?.();
     phase = 'collect-report';
     report = await gate.collectReport();
     phase = 'evaluate-certificate';
@@ -916,11 +932,27 @@ async function main() {
     } catch (error) {
       evidenceFailure = error;
     }
+    const evidence = createCapacityEvidence({
+      mode: config.mode,
+      phase,
+      completed,
+      report,
+      snapshots: gate.snapshots,
+      certificate,
+      failure,
+      cleanupFailure,
+    });
     const finalFailures = [failure, cleanupFailure, evidenceFailure].filter(Boolean);
     if (finalFailures.length === 1) throw finalFailures[0];
     if (finalFailures.length > 1)
       throw new AggregateError(finalFailures, `[${runnerName}] capacity gate failed during execution or finalization`);
+    return evidence;
   }
+}
+
+async function main() {
+  const config = buildPublishedCapacityGateConfig({ rootDir });
+  await runPublishedCapacityGate({ config });
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) await main();

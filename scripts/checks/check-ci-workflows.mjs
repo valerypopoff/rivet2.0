@@ -186,6 +186,18 @@ assert.equal(
   'Image workflow must expose a boolean manual capacity-observation input.',
 );
 assert.equal(capacityObserveDispatchInput?.default, false, 'Capacity observation must never run implicitly.');
+const jointCapacityDispatchInput =
+  images.workflow.on.workflow_dispatch?.inputs?.run_managed_kubernetes_evaluation_joint_capacity_gate;
+assert.equal(
+  jointCapacityDispatchInput?.type,
+  'boolean',
+  'Image workflow must expose a boolean manual joint Evaluation/capacity input.',
+);
+assert.equal(
+  jointCapacityDispatchInput?.default,
+  false,
+  'The joint Evaluation/capacity certificate must never run implicitly.',
+);
 const lineageBootstrapInput = images.workflow.on.workflow_dispatch?.inputs?.allow_release_lineage_bootstrap;
 assert.equal(
   lineageBootstrapInput?.default,
@@ -488,6 +500,11 @@ assert.match(
   /run_managed_kubernetes_evaluation_gate/,
   'The provider gate must deploy immutable candidate images before the hosted-Evaluation certificate runs.',
 );
+assert.match(
+  String(imageJobs['managed-kubernetes-provider-gate'].if),
+  /run_managed_kubernetes_evaluation_joint_capacity_gate/,
+  'The provider gate must deploy immutable candidate images before the joint Evaluation/capacity certificate runs.',
+);
 assert.deepEqual(
   asArray(imageJobs['managed-kubernetes-evaluation-gate'].needs),
   ['build-and-push', 'managed-kubernetes-provider-gate', 'managed-kubernetes-capacity-gate'],
@@ -495,8 +512,13 @@ assert.deepEqual(
 );
 assert.match(
   String(imageJobs['managed-kubernetes-evaluation-gate'].if),
-  /always\(\)[\s\S]*run_managed_kubernetes_evaluation_gate[\s\S]*run_managed_kubernetes_capacity_observe != true[\s\S]*managed-kubernetes-capacity-gate\.result == 'success'[\s\S]*managed-kubernetes-capacity-gate\.result == 'skipped'/,
+  /always\(\)[\s\S]*run_managed_kubernetes_evaluation_gate[\s\S]*run_managed_kubernetes_evaluation_joint_capacity_gate[\s\S]*run_managed_kubernetes_capacity_observe != true[\s\S]*managed-kubernetes-capacity-gate\.result == 'success'[\s\S]*managed-kubernetes-capacity-gate\.result == 'skipped'/,
   'The hosted-Evaluation certificate must run after a selected certificate, but never silently combine with a capacity observation.',
+);
+assert.match(
+  String(imageJobs['managed-kubernetes-capacity-gate'].if),
+  /run_managed_kubernetes_evaluation_joint_capacity_gate != true/,
+  'The standalone capacity gate must be skipped when the joint certificate owns the capacity study.',
 );
 assert.equal(
   imageJobs['managed-kubernetes-evaluation-gate'].environment?.name,
@@ -525,6 +547,33 @@ assert.equal(
   'The hosted-Evaluation certificate must supply its exact disruption acknowledgement.',
 );
 assert.match(
+  String(imageJobs['managed-kubernetes-evaluation-gate'].env?.RIVET_K8S_EVALUATION_JOINT_CAPACITY_CONFIRM),
+  /run_managed_kubernetes_evaluation_joint_capacity_gate.*certify-joint-public-evaluation-capacity/,
+  'The joint certificate must supply its separate exact acknowledgement only when requested.',
+);
+assert.match(
+  String(
+    findStep(
+      imageJobs['managed-kubernetes-provider-gate'],
+      'Validate Managed Kubernetes Certificate Selection',
+      'Managed Kubernetes provider gate',
+    ).run,
+  ),
+  /joint capacity certificate requires run_managed_kubernetes_evaluation_gate=true[\s\S]*replaces the separate capacity gate or observation run/s,
+  'The joint input must fail closed before the provider gate can mutate staging unless the durable Evaluation certificate is selected alone.',
+);
+assert.match(
+  String(
+    findStep(
+      imageJobs['managed-kubernetes-evaluation-gate'],
+      'Generate Joint Capacity Calibration Review',
+      'Managed Kubernetes hosted-Evaluation gate',
+    ).run,
+  ),
+  /kubernetes-published-capacity-review\.mjs.*published-capacity\/capacity-report\.json.*published-capacity\/capacity-review\.md/s,
+  'A joint certificate must retain the same sanitized capacity review as the standalone capacity gate.',
+);
+assert.match(
   String(
     findStep(
       imageJobs['managed-kubernetes-evaluation-gate'],
@@ -543,6 +592,16 @@ assert.equal(
   ).with?.name,
   'managed-kubernetes-evaluation-gate-${{ github.run_id }}-${{ github.run_attempt }}',
   'Hosted-Evaluation evidence must remain distinct per workflow attempt.',
+);
+const hostedEvaluationEvidenceUpload = findStep(
+  imageJobs['managed-kubernetes-evaluation-gate'],
+  'Upload Hosted Evaluation Evidence',
+  'Managed Kubernetes hosted-Evaluation gate',
+);
+assert.match(
+  String(hostedEvaluationEvidenceUpload.with?.path),
+  /hosted-evaluations[\s\S]*published-capacity/,
+  'Joint evidence upload must retain both hosted lifecycle and child capacity evidence.',
 );
 assert.match(
   promotionCondition,

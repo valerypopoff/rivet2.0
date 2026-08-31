@@ -340,6 +340,7 @@ test('chart makes pull-only metrics and Prometheus Operator resources explicit o
     'metrics.serviceMonitor.interval=1h30m',
     'metrics.serviceMonitor.additionalLabels.release=prometheus',
     'metrics.prometheusRule.failureModeAlerts.enabled=true',
+    'metrics.prometheusRule.clusterStateAlerts.enabled=true',
   ]);
   const apiEntrypoint = readRepoFile('deploy/studio-server/images/api/entrypoint.sh');
   const dashboardChart = await renderLocalKubernetesChartWithOverrides([
@@ -384,6 +385,13 @@ test('chart makes pull-only metrics and Prometheus Operator resources explicit o
   assert.match(metricsChart, /alert: RivetManagedDeletionOutboxBlocked/);
   assert.match(metricsChart, /alert: RivetHostedEvaluationQueueSaturated/);
   assert.match(metricsChart, /alert: RivetAppSettingsReplicaSynchronizationStale/);
+  assert.match(metricsChart, /alert: RivetPublishedExecutionContainerRestarts/);
+  assert.match(metricsChart, /alert: RivetPublishedExecutionContainerOOMKilled/);
+  assert.match(metricsChart, /alert: RivetPublishedExecutionPodEvicted/);
+  assert.match(
+    metricsChart,
+    /sum by \(namespace, profile\) \(time\(\) - rivet_managed_settings_last_success_timestamp_seconds > 900\) > 0/,
+  );
   assert.doesNotMatch(defaultChart, /alert: RivetPostgresPoolWaiters/);
   assert.equal(
     (metricsChart.match(/name: RIVET_DEPLOYMENT_METRICS_ENABLED\s*\n\s*value: "true"/g) ?? []).length,
@@ -397,6 +405,14 @@ test('chart makes pull-only metrics and Prometheus Operator resources explicit o
   await assertHelmTemplateFails(
     ['metrics.prometheusRule.failureModeAlerts.enabled=true'],
     /requires metrics\.prometheusRule\.enabled=true/,
+  );
+  await assertHelmTemplateFails(
+    ['metrics.prometheusRule.clusterStateAlerts.enabled=true'],
+    /requires metrics\.prometheusRule\.enabled=true/,
+  );
+  await assertHelmTemplateFails(
+    ['metrics.prometheusRule.clusterStateAlerts.restartIncrease=0'],
+    /restartIncrease must be greater than zero/,
   );
   await assertHelmTemplateFails(
     ['metrics.prometheusRule.failureModeAlerts.evaluationQueueUtilization=1.1'],

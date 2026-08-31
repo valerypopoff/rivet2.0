@@ -6,7 +6,9 @@ import { spawn } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { buildManagedProviderGateConfig, imageReference } from './lib/kubernetes-managed-provider-gate-config.mjs';
+import { buildPublishedCapacityGateConfig } from './lib/kubernetes-published-capacity-gate-config.mjs';
 import { resolveHelmBinOrThrow } from './lib/k8s-tools.mjs';
+import { runPublishedCapacityGate } from './kubernetes-published-capacity-gate.mjs';
 
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 const runnerName = 'kubernetes-hosted-evaluation-gate';
@@ -20,6 +22,7 @@ const fixturePath = path.join(
 );
 const fixtureProjectId = '230bbbc2-f5ec-41ea-99d2-bcbb43e82f3b';
 const longGraphId = 'd6d3c1cf-670d-4b8d-bf64-617be4e3df81';
+const jointCapacityConfirmation = 'certify-joint-public-evaluation-capacity';
 
 function resolveKubectlBin(env) {
   return String(env.KUBECTL_BIN ?? '').trim() || (process.platform === 'win32' ? 'kubectl.exe' : 'kubectl');
@@ -79,6 +82,8 @@ function parseJson(text, name) {
 function readHostedEvaluationGateConfig(configFile) {
   const rawConfig = assertObject(JSON.parse(fsSync.readFileSync(configFile, 'utf8')), 'provider gate config');
   const value = assertObject(rawConfig.hostedEvaluationGate, 'provider gate hostedEvaluationGate');
+  const jointCapacity =
+    value.jointCapacity == null ? null : assertObject(value.jointCapacity, 'hostedEvaluationGate.jointCapacity');
   return {
     waitSeconds: parsePositiveInteger(value.waitSeconds ?? 240, 'hostedEvaluationGate.waitSeconds', {
       minimum: 60,
@@ -92,6 +97,18 @@ function readHostedEvaluationGateConfig(configFile) {
         maximum: 64,
       },
     ),
+    jointCapacity: jointCapacity
+      ? {
+          trialDelayMs: parsePositiveInteger(
+            jointCapacity.trialDelayMs,
+            'hostedEvaluationGate.jointCapacity.trialDelayMs',
+            {
+              minimum: 90_000,
+              maximum: 900_000,
+            },
+          ),
+        }
+      : null,
   };
 }
 
@@ -101,12 +118,50 @@ export function buildHostedEvaluationGateConfig({ rootDir: configuredRootDir, en
   }
   const provider = buildManagedProviderGateConfig({ rootDir: configuredRootDir, env });
   const hostedEvaluation = readHostedEvaluationGateConfig(provider.configFile);
+  const jointRequested = String(env.RIVET_K8S_EVALUATION_JOINT_CAPACITY_CONFIRM ?? '').trim();
+  if (jointRequested && jointRequested !== jointCapacityConfirmation) {
+    throw new Error(
+      '[' + runnerName + '] RIVET_K8S_EVALUATION_JOINT_CAPACITY_CONFIRM must equal ' + jointCapacityConfirmation,
+    );
+  }
+  let jointCapacity = null;
+  if (jointRequested) {
+    if (!hostedEvaluation.jointCapacity) {
+      throw new Error(
+        '[' + runnerName + '] hostedEvaluationGate.jointCapacity must be configured for a joint certificate',
+      );
+    }
+    const capacityConfig = buildPublishedCapacityGateConfig({
+      rootDir: configuredRootDir,
+      env: {
+        ...env,
+        RIVET_K8S_CAPACITY_GATE_CONFIRM: 'certify-staging',
+        RIVET_K8S_CAPACITY_GATE_MODE: 'certify',
+      },
+    });
+    if (capacityConfig.capacity.jobTimeoutSeconds > 840) {
+      throw new Error(
+        '[' +
+          runnerName +
+          '] joint capacity certificates require capacity.jobTimeoutSeconds at most 840 so the dedicated Evaluation trial can remain active',
+      );
+    }
+    const requiredTrialDelayMs = capacityConfig.capacity.jobTimeoutSeconds * 1_000 + 60_000;
+    if (hostedEvaluation.jointCapacity.trialDelayMs < requiredTrialDelayMs) {
+      throw new Error(
+        '[' +
+          runnerName +
+          '] hostedEvaluationGate.jointCapacity.trialDelayMs must be at least capacity.jobTimeoutSeconds plus 60 seconds',
+      );
+    }
+    jointCapacity = { ...hostedEvaluation.jointCapacity, capacityConfig };
+  }
   const artifactsDir = path.resolve(provider.artifactsDir, 'hosted-evaluations');
   const relative = path.relative(configuredRootDir, artifactsDir);
   if (relative.startsWith('..') || path.isAbsolute(relative)) {
     throw new Error('[' + runnerName + '] hosted Evaluation artifacts must remain inside the repository');
   }
-  return { ...provider, hostedEvaluation, artifactsDir };
+  return { ...provider, hostedEvaluation: { ...hostedEvaluation, jointCapacity }, artifactsDir };
 }
 
 export function createHostedEvaluationSubmission({ runId, label }) {
@@ -147,6 +202,16 @@ export function createHostedEvaluationSubmission({ runId, label }) {
   };
 }
 
+export function createHostedEvaluationFixtureContents(template, { trialDelayMs } = {}) {
+  if (trialDelayMs == null) return template;
+  const marker = 'delay: 60000';
+  const occurrences = template.split(marker).length - 1;
+  if (occurrences !== 1) {
+    throw new Error('[' + runnerName + '] fixture must contain exactly one immutable long-trial delay marker');
+  }
+  return template.replace(marker, 'delay: ' + trialDelayMs);
+}
+
 function sleep(milliseconds) {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
@@ -155,7 +220,15 @@ function safeError(error) {
   return error instanceof Error ? error.name : 'Error';
 }
 
-export function createHostedEvaluationEvidence({ phase, completed, runs, publicProbe, failure, cleanupFailure }) {
+export function createHostedEvaluationEvidence({
+  phase,
+  completed,
+  runs,
+  publicProbe,
+  jointCapacity,
+  failure,
+  cleanupFailure,
+}) {
   return {
     version: 1,
     status: completed && !failure && !cleanupFailure ? 'completed' : 'failed',
@@ -174,6 +247,15 @@ export function createHostedEvaluationEvidence({ phase, completed, runs, publicP
         : [],
     })),
     publicProbe,
+    jointCapacity:
+      jointCapacity?.requested === true
+        ? {
+            requested: true,
+            status: jointCapacity.status,
+            phase: jointCapacity.phase,
+            certificatePassed: jointCapacity.certificatePassed,
+          }
+        : { requested: false },
     failure: failure ? { phase, kind: safeError(failure) } : null,
     cleanup: {
       attempted: true,
@@ -271,10 +353,12 @@ class HostedEvaluationGate {
     }
   }
 
-  async submit(label) {
+  async submit(label, { trialDelayMs } = {}) {
     const id = 'k8s-evaluation-' + this.runToken + '-' + label;
     const submission = createHostedEvaluationSubmission({ runId: id, label });
-    submission.projectContents = await fs.readFile(fixturePath, 'utf8');
+    submission.projectContents = createHostedEvaluationFixtureContents(await fs.readFile(fixturePath, 'utf8'), {
+      trialDelayMs,
+    });
     await this.requireSuccess('/api/workflows/evaluation-runs/hosted', { method: 'POST', body: submission });
     const duplicate = await this.request('/api/workflows/evaluation-runs/hosted', { method: 'POST', body: submission });
     if (duplicate.status !== 409) {
@@ -291,6 +375,13 @@ class HostedEvaluationGate {
     );
     run.state = value;
     return value;
+  }
+
+  async requireAccepted(run, description) {
+    const state = await this.state(run);
+    if (!state.jobs?.some((job) => job.status === 'accepted')) {
+      throw new Error('[' + runnerName + '] joint Evaluation trial was not accepted ' + description);
+    }
   }
 
   async waitFor(run, predicate, description) {
@@ -404,9 +495,64 @@ async function main() {
   let phase = 'assert-target';
   let completed = false;
   let publicProbe = null;
+  let jointCapacity = null;
   let failure;
   try {
     await gate.assertTarget();
+    if (config.hostedEvaluation.jointCapacity) {
+      phase = 'submit-joint-capacity-run';
+      const jointRun = await gate.submit('joint-capacity', {
+        trialDelayMs: config.hostedEvaluation.jointCapacity.trialDelayMs,
+      });
+      await gate.waitFor(
+        jointRun,
+        (state) => state.jobs?.some((job) => job.status === 'accepted'),
+        'joint capacity worker acceptance',
+      );
+      phase = 'run-joint-published-capacity';
+      jointCapacity = { requested: true, status: 'running', phase, certificatePassed: false };
+      try {
+        const capacityEvidence = await runPublishedCapacityGate({
+          config: config.hostedEvaluation.jointCapacity.capacityConfig,
+          kubectlBin: gate.kubectlBin,
+          helmBin: gate.helmBin,
+          onBeforeLoadStart: () => gate.requireAccepted(jointRun, 'immediately before public load began'),
+          onLoadCompleted: () => gate.requireAccepted(jointRun, 'when public load completed'),
+        });
+        jointCapacity = {
+          requested: true,
+          status: capacityEvidence.status,
+          phase: capacityEvidence.phase,
+          certificatePassed: capacityEvidence.certificate.evaluated && capacityEvidence.certificate.passed,
+        };
+      } catch (error) {
+        // The capacity runner writes its own sanitized report on every
+        // finalization path. Keep this parent report truthful too: it must
+        // never imply a still-running or successful joint certificate when
+        // its child operation failed before returning evidence.
+        jointCapacity = { requested: true, status: 'failed', phase, certificatePassed: false };
+        throw error;
+      }
+      if (!jointCapacity.certificatePassed) {
+        throw new Error('[' + runnerName + '] joint published capacity certificate did not pass');
+      }
+      // The certificate intentionally supports a singleton Evaluation worker.
+      // Cancel only the generated joint run after the public experiment so it
+      // releases that worker before the independent interruption scenario.
+      phase = 'cancel-joint-capacity-run';
+      await gate.requireSuccess(
+        '/api/workflows/evaluation-runs/' + encodeURIComponent(jointRun.id) + '/cancel-hosted',
+        {
+          method: 'POST',
+          body: { projectId: fixtureProjectId, runId: jointRun.id },
+        },
+      );
+      await gate.waitFor(
+        jointRun,
+        (state) => state.status === 'canceled' && state.jobs?.length === 1 && state.jobs[0]?.status === 'canceled',
+        'joint capacity cancellation',
+      );
+    }
     phase = 'submit-disruption-run';
     const interrupted = await gate.submit('interruption');
     // The initiating browser can disappear immediately after this durable 202.
@@ -493,6 +639,7 @@ async function main() {
           completed,
           runs: gate.runs,
           publicProbe,
+          jointCapacity,
           failure,
           cleanupFailure,
         }),

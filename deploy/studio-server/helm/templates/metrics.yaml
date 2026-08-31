@@ -161,11 +161,34 @@ spec:
           annotations:
             summary: Rivet hosted Evaluation work is nearing its configured outstanding-job limit.
         - alert: RivetAppSettingsReplicaSynchronizationStale
-          expr: time() - rivet_managed_settings_last_success_timestamp_seconds > {{ .Values.metrics.prometheusRule.failureModeAlerts.maintenanceStaleSeconds }}
+          expr: sum by (namespace, profile) (time() - rivet_managed_settings_last_success_timestamp_seconds > {{ .Values.metrics.prometheusRule.failureModeAlerts.maintenanceStaleSeconds }}) > 0
           for: {{ index .Values.metrics.prometheusRule "for" | quote }}
           labels:
             severity: warning
           annotations:
-            summary: A Rivet API replica has not refreshed its managed App Settings revision within the expected window.
+            summary: One or more Rivet API replicas have not refreshed their managed App Settings revision within the expected window.
+        {{- end }}
+        {{- if .Values.metrics.prometheusRule.clusterStateAlerts.enabled }}
+        - alert: RivetPublishedExecutionContainerRestarts
+          expr: sum by (namespace, pod) (increase(kube_pod_container_status_restarts_total{namespace="{{ .Release.Namespace }}",pod=~"{{ include "rivet.fullname" . }}-(proxy|execution)-.*"}[10m])) >= {{ .Values.metrics.prometheusRule.clusterStateAlerts.restartIncrease }}
+          for: {{ index .Values.metrics.prometheusRule "for" | quote }}
+          labels:
+            severity: warning
+          annotations:
+            summary: A Rivet proxy or published-execution container restarted.
+        - alert: RivetPublishedExecutionContainerOOMKilled
+          expr: max by (namespace, pod) (kube_pod_container_status_last_terminated_reason{namespace="{{ .Release.Namespace }}",pod=~"{{ include "rivet.fullname" . }}-(proxy|execution)-.*",reason="OOMKilled"}) > 0
+          for: {{ index .Values.metrics.prometheusRule "for" | quote }}
+          labels:
+            severity: critical
+          annotations:
+            summary: A Rivet proxy or published-execution container was OOM killed.
+        - alert: RivetPublishedExecutionPodEvicted
+          expr: max by (namespace, pod) (kube_pod_status_reason{namespace="{{ .Release.Namespace }}",pod=~"{{ include "rivet.fullname" . }}-(proxy|execution)-.*",reason="Evicted"}) > 0
+          for: {{ index .Values.metrics.prometheusRule "for" | quote }}
+          labels:
+            severity: critical
+          annotations:
+            summary: A Rivet proxy or published-execution pod was evicted.
         {{- end }}
 {{- end }}

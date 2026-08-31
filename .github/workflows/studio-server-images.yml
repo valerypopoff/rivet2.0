@@ -54,6 +54,11 @@ on:
         required: false
         default: false
         type: boolean
+      run_managed_kubernetes_evaluation_joint_capacity_gate:
+        description: With the hosted-Evaluation certificate, also certify bounded public endpoint capacity while a durable Evaluation trial is active. Do not select the separate capacity gate.
+        required: false
+        default: false
+        type: boolean
       allow_release_lineage_bootstrap:
         description: Explicitly start a new production release-manifest chain when no durable predecessor manifest exists.
         required: false
@@ -418,7 +423,7 @@ jobs:
         shell: bash
         run: kind delete cluster --name rivet-managed-release
   managed-kubernetes-provider-gate:
-    if: ${{ github.event_name == 'workflow_dispatch' && (inputs.run_managed_kubernetes_provider_gate == true || inputs.run_managed_kubernetes_capacity_gate == true || inputs.run_managed_kubernetes_capacity_observe == true || inputs.run_managed_kubernetes_evaluation_gate == true) && !(inputs.run_managed_kubernetes_capacity_gate == true && inputs.run_managed_kubernetes_capacity_observe == true) }}
+    if: ${{ github.event_name == 'workflow_dispatch' && (inputs.run_managed_kubernetes_provider_gate == true || inputs.run_managed_kubernetes_capacity_gate == true || inputs.run_managed_kubernetes_capacity_observe == true || inputs.run_managed_kubernetes_evaluation_gate == true || inputs.run_managed_kubernetes_evaluation_joint_capacity_gate == true) && !(inputs.run_managed_kubernetes_capacity_gate == true && inputs.run_managed_kubernetes_capacity_observe == true) }}
     needs:
       - build-and-push
     runs-on: ubuntu-latest
@@ -440,6 +445,21 @@ jobs:
       RIVET_K8S_PROVIDER_GATE_REGISTRY_USERNAME: ${{ github.actor }}
       RIVET_K8S_PROVIDER_GATE_REGISTRY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
     steps:
+      - name: Validate Managed Kubernetes Certificate Selection
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${{ inputs.run_managed_kubernetes_evaluation_joint_capacity_gate }}" != "true" ]]; then
+            exit 0
+          fi
+          if [[ "${{ inputs.run_managed_kubernetes_evaluation_gate }}" != "true" ]]; then
+            echo "::error::The joint capacity certificate requires run_managed_kubernetes_evaluation_gate=true."
+            exit 1
+          fi
+          if [[ "${{ inputs.run_managed_kubernetes_capacity_gate }}" == "true" || "${{ inputs.run_managed_kubernetes_capacity_observe }}" == "true" ]]; then
+            echo "::error::The joint capacity certificate replaces the separate capacity gate or observation run."
+            exit 1
+          fi
       - name: Check Out Repository
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
@@ -527,7 +547,7 @@ jobs:
           retention-days: 14
 
   managed-kubernetes-capacity-gate:
-    if: ${{ always() && github.event_name == 'workflow_dispatch' && (inputs.run_managed_kubernetes_capacity_gate == true || inputs.run_managed_kubernetes_capacity_observe == true) && needs.build-and-push.result == 'success' && (needs.managed-kubernetes-provider-gate.result == 'success' || (inputs.run_managed_kubernetes_capacity_gate == true && inputs.run_managed_kubernetes_capacity_observe == true && needs.managed-kubernetes-provider-gate.result == 'skipped')) }}
+    if: ${{ always() && github.event_name == 'workflow_dispatch' && inputs.run_managed_kubernetes_evaluation_joint_capacity_gate != true && (inputs.run_managed_kubernetes_capacity_gate == true || inputs.run_managed_kubernetes_capacity_observe == true) && needs.build-and-push.result == 'success' && (needs.managed-kubernetes-provider-gate.result == 'success' || (inputs.run_managed_kubernetes_capacity_gate == true && inputs.run_managed_kubernetes_capacity_observe == true && needs.managed-kubernetes-provider-gate.result == 'skipped')) }}
     needs:
       - build-and-push
       - managed-kubernetes-provider-gate
@@ -635,7 +655,7 @@ jobs:
           if-no-files-found: warn
           retention-days: 90
   managed-kubernetes-evaluation-gate:
-    if: ${{ always() && github.event_name == 'workflow_dispatch' && inputs.run_managed_kubernetes_evaluation_gate == true && inputs.run_managed_kubernetes_capacity_observe != true && needs.build-and-push.result == 'success' && needs.managed-kubernetes-provider-gate.result == 'success' && (needs.managed-kubernetes-capacity-gate.result == 'success' || needs.managed-kubernetes-capacity-gate.result == 'skipped') }}
+    if: ${{ always() && github.event_name == 'workflow_dispatch' && (inputs.run_managed_kubernetes_evaluation_gate == true || inputs.run_managed_kubernetes_evaluation_joint_capacity_gate == true) && inputs.run_managed_kubernetes_capacity_observe != true && needs.build-and-push.result == 'success' && needs.managed-kubernetes-provider-gate.result == 'success' && (needs.managed-kubernetes-capacity-gate.result == 'success' || needs.managed-kubernetes-capacity-gate.result == 'skipped') }}
     needs:
       - build-and-push
       - managed-kubernetes-provider-gate
@@ -660,6 +680,7 @@ jobs:
       RIVET_K8S_PROVIDER_GATE_REGISTRY_USERNAME: ${{ github.actor }}
       RIVET_K8S_PROVIDER_GATE_REGISTRY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
       RIVET_K8S_EVALUATION_GATE_CONFIRM: disrupt-staging-evaluations
+      RIVET_K8S_EVALUATION_JOINT_CAPACITY_CONFIRM: ${{ inputs.run_managed_kubernetes_evaluation_joint_capacity_gate == true && 'certify-joint-public-evaluation-capacity' || '' }}
     steps:
       - name: Check Out Repository
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
@@ -714,12 +735,22 @@ jobs:
           done
       - name: Certify Hosted Evaluation Durability
         run: yarn studio-server:verify:kubernetes:managed-evaluations
+      - name: Generate Joint Capacity Calibration Review
+        if: ${{ always() && inputs.run_managed_kubernetes_evaluation_joint_capacity_gate == true && inputs.run_managed_kubernetes_evaluation_gate == true && inputs.run_managed_kubernetes_capacity_gate != true && inputs.run_managed_kubernetes_capacity_observe != true }}
+        run: >-
+          node deploy/studio-server/scripts/kubernetes-published-capacity-review.mjs
+          artifacts/kubernetes-managed-provider-gate/published-capacity/capacity-report.json
+          artifacts/kubernetes-managed-provider-gate/published-capacity/capacity-review.md
       - name: Upload Hosted Evaluation Evidence
         if: ${{ always() }}
         uses: actions/upload-artifact@65462800fd760344b1a7b4382951275a0abb4808 # v4
         with:
           name: managed-kubernetes-evaluation-gate-${{ github.run_id }}-${{ github.run_attempt }}
-          path: artifacts/kubernetes-managed-provider-gate/hosted-evaluations
+          # A joint certificate is one logical study. Retain the parent
+          # lifecycle evidence alongside the child capacity report/review.
+          path: |
+            artifacts/kubernetes-managed-provider-gate/hosted-evaluations
+            artifacts/kubernetes-managed-provider-gate/published-capacity
           if-no-files-found: warn
           retention-days: 90
   promote-images:

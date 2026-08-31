@@ -8,6 +8,7 @@ import { deserializeEvaluationProjectData, validateEvaluationDataset } from '@va
 import {
   buildHostedEvaluationGateConfig,
   createHostedEvaluationEvidence,
+  createHostedEvaluationFixtureContents,
   createHostedEvaluationSubmission,
 } from '../../../../deploy/studio-server/scripts/kubernetes-hosted-evaluation-gate.mjs';
 
@@ -85,6 +86,111 @@ test('hosted Evaluation gate is protected, bounded, and uses a valid isolated be
   }
 });
 
+test('joint hosted Evaluation/capacity configuration is separately confirmed and retains safe evidence', async () => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'rivet-hosted-evaluation-joint-gate-test-'));
+  const configFile = path.join(directory, 'provider-gate.json');
+  const valuesFile = path.join(directory, 'values.yaml');
+  try {
+    const configWithJointCapacity = {
+      ...providerConfig(),
+      hostedEvaluationGate: {
+        ...providerConfig().hostedEvaluationGate,
+        jointCapacity: { trialDelayMs: 180_000 },
+      },
+      capacity: {
+        serviceNamePrefix: 'rivet-staging',
+        jobTimeoutSeconds: 120,
+        requireExecutionMetrics: true,
+        prometheus: {
+          baseUrl: 'https://prometheus-staging.example.test',
+          headers: {},
+          queries: {
+            memoryHighWaterBytes: 'max(container_memory_working_set_bytes)',
+            nodeEphemeralHighWaterBytes: 'max(container_fs_usage_bytes)',
+            downstreamConcurrency: 'sum(rivet_provider_requests_in_flight)',
+          },
+        },
+        stages: [
+          { name: 'steady', scenario: 'fast', expect: 'success', concurrency: 2, requests: 3 },
+          { name: 'overload', scenario: 'long', expect: 'overload', concurrency: 4, requests: 5 },
+        ],
+        thresholds: {
+          maximumP95Ms: { steady: 5_000, overload: 5_000 },
+          maximumUnexpectedRate: 0,
+          maximumControlCanaryFailureRate: 0,
+          maximumRecordingDrops: 0,
+        },
+      },
+    };
+    await fs.writeFile(configFile, JSON.stringify(configWithJointCapacity));
+    await fs.writeFile(valuesFile, 'hostedEvaluations:\n  enabled: true\nmetrics:\n  enabled: true\n');
+    const config = buildHostedEvaluationGateConfig({
+      rootDir,
+      env: environment(configFile, valuesFile, {
+        RIVET_K8S_EVALUATION_JOINT_CAPACITY_CONFIRM: 'certify-joint-public-evaluation-capacity',
+      }),
+    });
+    assert.equal(config.hostedEvaluation.jointCapacity?.trialDelayMs, 180_000);
+    assert.equal(config.hostedEvaluation.jointCapacity?.capacityConfig.mode, 'certify');
+    assert.match(createHostedEvaluationFixtureContents('delay: 60000', { trialDelayMs: 180_000 }), /delay: 180000/);
+    assert.throws(
+      () => createHostedEvaluationFixtureContents('delay: 60000\ndelay: 60000', { trialDelayMs: 180_000 }),
+      /exactly one immutable/u,
+    );
+    await fs.writeFile(
+      configFile,
+      JSON.stringify({
+        ...configWithJointCapacity,
+        hostedEvaluationGate: {
+          ...configWithJointCapacity.hostedEvaluationGate,
+          jointCapacity: { trialDelayMs: 179_999 },
+        },
+      }),
+    );
+    assert.throws(
+      () =>
+        buildHostedEvaluationGateConfig({
+          rootDir,
+          env: environment(configFile, valuesFile, {
+            RIVET_K8S_EVALUATION_JOINT_CAPACITY_CONFIRM: 'certify-joint-public-evaluation-capacity',
+          }),
+        }),
+      /must be at least capacity\.jobTimeoutSeconds/u,
+    );
+    assert.deepEqual(
+      createHostedEvaluationEvidence({
+        phase: 'run-joint-published-capacity',
+        completed: false,
+        runs: [],
+        publicProbe: null,
+        jointCapacity: {
+          requested: true,
+          status: 'failed',
+          phase: 'run-joint-published-capacity',
+          certificatePassed: false,
+        },
+      }),
+      {
+        version: 1,
+        status: 'failed',
+        phase: 'run-joint-published-capacity',
+        runs: [],
+        publicProbe: null,
+        jointCapacity: {
+          requested: true,
+          status: 'failed',
+          phase: 'run-joint-published-capacity',
+          certificatePassed: false,
+        },
+        failure: null,
+        cleanup: { attempted: true, succeeded: true, failureKind: null },
+      },
+    );
+  } finally {
+    await fs.rm(directory, { recursive: true, force: true });
+  }
+});
+
 test('hosted Evaluation evidence records durable job state but never raw failure text', () => {
   const evidence = createHostedEvaluationEvidence({
     phase: 'wait-for-interruption',
@@ -99,6 +205,7 @@ test('hosted Evaluation evidence records durable job state but never raw failure
       },
     ],
     publicProbe: { requested: 4, statusCounts: { 200: 4 } },
+    jointCapacity: { requested: false },
     failure: new Error('do not serialize provider secret'),
   });
   assert.deepEqual(evidence, {
@@ -113,6 +220,7 @@ test('hosted Evaluation evidence records durable job state but never raw failure
       },
     ],
     publicProbe: { requested: 4, statusCounts: { 200: 4 } },
+    jointCapacity: { requested: false },
     failure: { phase: 'wait-for-interruption', kind: 'Error' },
     cleanup: { attempted: true, succeeded: true, failureKind: null },
   });

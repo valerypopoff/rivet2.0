@@ -234,6 +234,16 @@
 {{- if not (kindIs "bool" .Values.metrics.prometheusRule.failureModeAlerts.enabled) -}}
 {{- fail "metrics.prometheusRule.failureModeAlerts.enabled must be a boolean" -}}
 {{- end -}}
+{{- if not (kindIs "map" .Values.metrics.prometheusRule.clusterStateAlerts) -}}
+{{- fail "metrics.prometheusRule.clusterStateAlerts must be a map" -}}
+{{- end -}}
+{{- if not (kindIs "bool" .Values.metrics.prometheusRule.clusterStateAlerts.enabled) -}}
+{{- fail "metrics.prometheusRule.clusterStateAlerts.enabled must be a boolean" -}}
+{{- end -}}
+{{- include "rivet.assertNonNegativeWholeNumber" (dict "path" "metrics.prometheusRule.clusterStateAlerts.restartIncrease" "value" .Values.metrics.prometheusRule.clusterStateAlerts.restartIncrease) -}}
+{{- if lt (int .Values.metrics.prometheusRule.clusterStateAlerts.restartIncrease) 1 -}}
+{{- fail "metrics.prometheusRule.clusterStateAlerts.restartIncrease must be greater than zero" -}}
+{{- end -}}
 {{- range $field := list
   (dict "path" "metrics.prometheusRule.failureModeAlerts.postgresPoolWaiting" "value" .Values.metrics.prometheusRule.failureModeAlerts.postgresPoolWaiting)
   (dict "path" "metrics.prometheusRule.failureModeAlerts.maintenanceStaleSeconds" "value" .Values.metrics.prometheusRule.failureModeAlerts.maintenanceStaleSeconds)
@@ -288,6 +298,9 @@
 {{- end -}}
 {{- if and .Values.metrics.prometheusRule.failureModeAlerts.enabled (not .Values.metrics.prometheusRule.enabled) -}}
 {{- fail "metrics.prometheusRule.failureModeAlerts.enabled requires metrics.prometheusRule.enabled=true" -}}
+{{- end -}}
+{{- if and .Values.metrics.prometheusRule.clusterStateAlerts.enabled (not .Values.metrics.prometheusRule.enabled) -}}
+{{- fail "metrics.prometheusRule.clusterStateAlerts.enabled requires metrics.prometheusRule.enabled=true" -}}
 {{- end -}}
 {{- if and .Values.metrics.grafanaDashboards.enabled (not .Values.metrics.enabled) -}}
 {{- fail "metrics.grafanaDashboards.enabled requires metrics.enabled=true" -}}

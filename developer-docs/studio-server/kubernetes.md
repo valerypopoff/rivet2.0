@@ -104,6 +104,8 @@ This source-level isolation does not substitute for operational evidence. Keep t
 
 `yarn studio-server:verify:kubernetes:managed-evaluations` is the protected staging certificate for the durable hosted-Evaluation path. In GitHub **Build Images**, enable `run_managed_kubernetes_evaluation_gate`; it first deploys the current immutable candidate through the existing provider gate, then runs this certificate in the same protected `rivet-managed-staging` environment. It requires `RIVET_K8S_EVALUATION_GATE_CONFIRM=disrupt-staging-evaluations`, the exact allowlisted staging context, and exactly one Evaluation worker replica so that the worker-loss transition is unambiguous. If the same manual dispatch also requests the published-capacity certificate, that certificate completes first; the destructive worker-loss certificate never runs concurrently with it. Provider deployment, capacity, and Evaluation certificate jobs share one non-canceling staging lock across workflow runs, so another manual dispatch cannot mutate the release at the same time.
 
+For the deliberate joint scenario, select both `run_managed_kubernetes_evaluation_gate` and `run_managed_kubernetes_evaluation_joint_capacity_gate`, **without** either separate capacity input. The provider job rejects any other joint selection before it deploys staging. The protected provider configuration must supply the ordinary `capacity` block and `hostedEvaluationGate.jointCapacity.trialDelayMs`. The runner rejects a trial delay shorter than `capacity.jobTimeoutSeconds + 60 seconds` and a capacity timeout above 14 minutes. It verifies the dedicated Evaluation trial immediately before the public-load Job is created and again at the Job-completion boundary, before report collection or cleanup can consume the trial's duration. It then cancels only that generated joint run before the independent worker-loss/retry/cancellation scenarios begin. This preserves the single-worker certificate precondition. It reuses the exact capacity runner, temporary endpoints, scoped credential, cleanup, and sanitized evidence contract; it does not introduce another load engine or a batch request path. The Evaluation artifact retains both `hosted-evaluations/` and `published-capacity/`, including the sanitized capacity report and calibration review, so the joint lifecycle and load evidence cannot be separated.
+
 After durable acceptance, the runner force-deletes only that selected Evaluation worker (`--grace-period=0 --force`). It does not delete the backend, execution, proxy, web, database, or object-store workloads. The protected confirmation and one-worker precondition make this a deliberate, bounded worker-loss test rather than an ordinary rollout action.
 
 Add this bounded non-secret block to the protected provider-gate JSON:
@@ -112,10 +114,15 @@ Add this bounded non-secret block to the protected provider-gate JSON:
 {
   "hostedEvaluationGate": {
     "waitSeconds": 240,
-    "publicProbeRequests": 8
+    "publicProbeRequests": 8,
+    "jointCapacity": {
+      "trialDelayMs": 180000
+    }
   }
 }
 ```
+
+`jointCapacity` is ignored unless the joint manual-dispatch input is selected. Its delay is not a performance knob: set it to at least the configured capacity Job timeout plus 60 seconds, after reviewing the Evaluation execution timeout for the staging release. Do not add it as an unsafely long default to a general production chart.
 
 The runner submits a one-trial, execution-only snapshot of the long deterministic fixture and immediately abandons its initiating request path: no browser connection is required after the server returns `202`. It proves duplicate submission returns `409`, waits for one accepted trial, probes the independently scalable published endpoint while that trial is running, deletes only the exact Evaluation worker Pod, and requires one explicit interrupted trial. It then requests the selected retry and requires exactly one settled second attempt; it separately proves a durable cancellation. Its report keeps only run/job IDs, state transitions, attempt counts, timestamps, public status counts, and failure classes. It never stores response bodies, project content, provider headers, or credentials, and it deletes only its generated hosted runs. A passing report is staging evidence, not a license to enable hosted Evaluation retention enforcement without a separate audit-mode review.
 
@@ -357,7 +364,7 @@ The observe dispatch sets `RIVET_K8S_CAPACITY_GATE_MODE=observe` and uploads bot
 
 The certificate dispatch sets `RIVET_K8S_CAPACITY_GATE_MODE=certify`. Certification requires `requireExecutionMetrics: true`, the `capacity.prometheus` block, and a complete report whose stage names, request totals, outcome totals, and control-canary counts exactly match the declared configuration. A scheduling-edge sample with no execution Pod is retained as evidence but does not require metrics; every sampled live execution Pod must have all three external high-water values as one finite Prometheus vector sample. The gate otherwise fails if a required event/Prometheus sample is unavailable, a stage exceeds its p95 or unexpected-result limit, a control canary fails, recording drops increase beyond the limit, an overload stage never receives visible `429` admission rejection, or a new restart/OOM/eviction occurs after the baseline sample. Both modes require the exact staging acknowledgement and refuse non-staging contexts. On every normal finalization path, the gate writes `capacity-report.json`, including setup, scheduling, Job, and cleanup failures: it records the completed phase, available Pod snapshots and report data, plus cleanup outcome and only a failure class—not a raw exception, request header, PromQL expression, or credential. If writing the local evidence artifact itself fails, the command fails explicitly rather than claiming a certificate. The separate diagnostic logs retain the bounded command context.
 
-This certificate is deliberately not proof of final production sizing. It records provider-side memory/node-ephemeral high-water and downstream concurrency when certifying, but it does not infer safe limits or provider/tool correctness from one run. Retain the provider charts and JSON report together. Do not change HPA bounds, admission ceilings, Evaluation quotas, placement, or resource limits automatically from one run. First establish a stable staging envelope, then promote explicit values through normal review. The separate hosted-Evaluation certificate probes public traffic while Evaluation work is active; a joint high-concurrency envelope still needs retained staging evidence before final public-SLO claims.
+This certificate is deliberately not proof of final production sizing. It records provider-side memory/node-ephemeral high-water and downstream concurrency when certifying, but it does not infer safe limits or provider/tool correctness from one run. Retain the provider charts and JSON report together. Do not change HPA bounds, admission ceilings, Evaluation quotas, placement, or resource limits automatically from one run. First establish a stable staging envelope, then promote explicit values through normal review. The separate hosted-Evaluation certificate probes public traffic while Evaluation work is active; the optional joint dispatch adds the bounded high-concurrency case, but it still needs retained staging evidence before it can support final public-SLO claims.
 
 ### Cross-store backup and restore drill
 
@@ -809,9 +816,13 @@ metrics:
       maintenanceStaleSeconds: 900
       outboxBlockedEntries: 1
       evaluationQueueUtilization: 0.9
+    # Requires kube-state-metrics to be scraped by this Prometheus.
+    clusterStateAlerts:
+      enabled: true
+      restartIncrease: 1
 ```
 
-These opt-in rules cover PostgreSQL pool waiters, runtime-library job failures, stale fenced maintenance, blocked deletion-outbox rows, hosted-Evaluation outstanding-job saturation, and per-replica managed App Settings synchronization. They do not replace cluster telemetry: restart/OOM/eviction alerts remain the responsibility of the installed Kubernetes monitoring stack (for example, `kube-state-metrics`). Enable the rules only after confirming the Prometheus Operator's namespace/pod labels and routing policy. Their defaults are conservative starting points, not a production paging policy; inject each relevant failure in staging, tune it, assign an owner, and retain the evidence before it pages anyone.
+These opt-in rules cover PostgreSQL pool waiters, runtime-library job failures, stale fenced maintenance, blocked deletion-outbox rows, hosted-Evaluation outstanding-job saturation, and aggregate-by-namespace/profile App Settings synchronization. `clusterStateAlerts` adds proxy/execution restart, OOM-kill, and eviction rules from the standard `kube-state-metrics` series. It deliberately stays disabled unless the target Prometheus scrapes `kube-state-metrics`; Rivet does not duplicate Kubernetes state into application metrics. Enable the rules only after confirming the Prometheus Operator's namespace/pod labels and routing policy. Their defaults are conservative starting points, not a production paging policy; inject each relevant failure in staging, tune it, assign an owner, and retain the evidence before it pages anyone.
 
 The current metric families are intentionally low-cardinality and contain no project IDs, workflow names, prompts, inputs, secrets, request IDs, or error text:
 

@@ -81,6 +81,12 @@ metrics:
       maintenanceStaleSeconds: 900
       outboxBlockedEntries: 1
       evaluationQueueUtilization: 0.9
+    # Requires kube-state-metrics to be scraped by the same Prometheus.
+    # It is separate because cluster-state metrics are cluster-owned, unlike
+    # Rivet's application metrics exposed by this chart.
+    clusterStateAlerts:
+      enabled: false
+      restartIncrease: 1
   # Emits two ConfigMap dashboard definitions for Grafana sidecar/import
   # workflows. This does not install Grafana or enable a scrape by itself.
   grafanaDashboards:
