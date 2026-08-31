@@ -4,6 +4,7 @@ export const kubernetesApiTestFiles = [
   'src/tests/kubernetes-managed-release-gate.test.ts',
   'src/tests/kubernetes-managed-restore-drill.test.ts',
   'src/tests/kubernetes-published-capacity-gate.test.ts',
+  'src/tests/kubernetes-published-capacity-review.test.ts',
   'src/tests/kubernetes-hosted-evaluation-gate.test.ts',
 ];
 

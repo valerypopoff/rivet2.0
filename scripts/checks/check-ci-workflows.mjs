@@ -178,6 +178,14 @@ assert.equal(
   'Image workflow must expose a boolean manual capacity-certificate input.',
 );
 assert.equal(capacityDispatchInput?.default, false, 'The capacity certificate must never run implicitly.');
+const capacityObserveDispatchInput =
+  images.workflow.on.workflow_dispatch?.inputs?.run_managed_kubernetes_capacity_observe;
+assert.equal(
+  capacityObserveDispatchInput?.type,
+  'boolean',
+  'Image workflow must expose a boolean manual capacity-observation input.',
+);
+assert.equal(capacityObserveDispatchInput?.default, false, 'Capacity observation must never run implicitly.');
 const lineageBootstrapInput = images.workflow.on.workflow_dispatch?.inputs?.allow_release_lineage_bootstrap;
 assert.equal(
   lineageBootstrapInput?.default,
@@ -362,6 +370,16 @@ assert.match(
   /run_managed_kubernetes_capacity_gate/,
   'The provider gate must deploy immutable candidate images before the capacity gate runs.',
 );
+assert.match(
+  String(imageJobs['managed-kubernetes-provider-gate'].if),
+  /run_managed_kubernetes_capacity_observe/,
+  'The provider gate must deploy immutable candidate images before the capacity observation runs.',
+);
+assert.match(
+  String(imageJobs['managed-kubernetes-provider-gate'].if),
+  /!\(inputs\.run_managed_kubernetes_capacity_gate == true && inputs\.run_managed_kubernetes_capacity_observe == true\)/,
+  'Conflicting capacity observation and certificate inputs must not deploy protected staging.',
+);
 assert.deepEqual(
   asArray(imageJobs['managed-kubernetes-capacity-gate'].needs),
   ['build-and-push', 'managed-kubernetes-provider-gate'],
@@ -374,43 +392,92 @@ assert.equal(
 );
 assert.match(
   String(imageJobs['managed-kubernetes-capacity-gate'].if),
-  /workflow_dispatch.*run_managed_kubernetes_capacity_gate.*true/,
-  'The capacity gate must run only when manually requested.',
+  /workflow_dispatch.*run_managed_kubernetes_capacity_gate.*run_managed_kubernetes_capacity_observe/,
+  'The capacity runner must run only when one manual capacity mode is requested.',
 );
 assert.equal(
   imageJobs['managed-kubernetes-capacity-gate'].env?.RIVET_K8S_CAPACITY_GATE_CONFIRM,
   'certify-staging',
   'The capacity gate must supply its exact staging acknowledgement.',
 );
-assert.equal(
-  imageJobs['managed-kubernetes-capacity-gate'].env?.RIVET_K8S_CAPACITY_GATE_MODE,
-  'certify',
-  'The CI capacity gate must issue a real certificate rather than observations only.',
+assert.match(
+  String(imageJobs['managed-kubernetes-capacity-gate'].env?.RIVET_K8S_CAPACITY_GATE_MODE),
+  /run_managed_kubernetes_capacity_gate.*certify.*observe/,
+  'The capacity runner must select certify only for the certificate input and observe otherwise.',
 );
 assert.match(
   String(
     findStep(
       imageJobs['managed-kubernetes-capacity-gate'],
-      'Certify Published Endpoint Capacity',
+      'Run Published Endpoint Capacity',
       'Managed Kubernetes capacity gate',
     ).run,
   ),
   /studio-server:verify:kubernetes:managed-capacity/,
   'The capacity gate must run the canonical bounded published-endpoint command.',
 );
-assert.equal(
+assert.match(
   findStep(
     imageJobs['managed-kubernetes-capacity-gate'],
     'Upload Published Capacity Evidence',
     'Managed Kubernetes capacity gate',
   ).with?.name,
-  'managed-kubernetes-capacity-gate-${{ github.run_id }}-${{ github.run_attempt }}',
-  'Capacity evidence must remain distinct per workflow attempt.',
+  /managed-kubernetes-capacity-.*github\.run_id.*github\.run_attempt/,
+  'Capacity evidence must distinguish observation and certificate attempts.',
+);
+assert.match(
+  String(
+    findStep(
+      imageJobs['managed-kubernetes-capacity-gate'],
+      'Generate Capacity Calibration Review',
+      'Managed Kubernetes capacity gate',
+    ).run,
+  ),
+  /kubernetes-published-capacity-review\.mjs.*capacity-report\.json.*capacity-review\.md/s,
+  'Every capacity attempt must emit a sanitized review artifact even after a runner failure.',
+);
+assert.match(
+  String(
+    findStep(
+      imageJobs['managed-kubernetes-capacity-gate'],
+      'Generate Capacity Calibration Review',
+      'Managed Kubernetes capacity gate',
+    ).if,
+  ),
+  /always\(\)/,
+  'Capacity review generation must run after a capacity-command failure.',
+);
+assert.match(
+  String(
+    findStep(
+      imageJobs['managed-kubernetes-capacity-gate'],
+      'Upload Published Capacity Evidence',
+      'Managed Kubernetes capacity gate',
+    ).if,
+  ),
+  /always\(\)/,
+  'Capacity evidence upload must retain diagnostic review output after a capacity-command failure.',
+);
+assert.match(
+  String(
+    findStep(
+      imageJobs['managed-kubernetes-capacity-gate'],
+      'Validate Capacity Run Selection',
+      'Managed Kubernetes capacity gate',
+    ).run,
+  ),
+  /either the capacity certificate or capacity observation run, not both/,
+  'The capacity runner must fail closed when both manual modes are selected.',
 );
 assert.match(
   promotionCondition,
   /needs\.managed-kubernetes-capacity-gate\.result/,
   'Image promotion must depend on an explicitly requested capacity certificate.',
+);
+assert.match(
+  promotionCondition,
+  /run_managed_kubernetes_capacity_observe != true/,
+  'An observe-only capacity run must never publish candidate image aliases.',
 );
 assert.ok(
   imageJobs['managed-kubernetes-evaluation-gate'],
@@ -428,8 +495,8 @@ assert.deepEqual(
 );
 assert.match(
   String(imageJobs['managed-kubernetes-evaluation-gate'].if),
-  /always\(\)[\s\S]*run_managed_kubernetes_evaluation_gate[\s\S]*managed-kubernetes-capacity-gate\.result == 'success'[\s\S]*managed-kubernetes-capacity-gate\.result == 'skipped'/,
-  'The hosted-Evaluation certificate must run after a selected capacity gate but still run when capacity was not requested.',
+  /always\(\)[\s\S]*run_managed_kubernetes_evaluation_gate[\s\S]*run_managed_kubernetes_capacity_observe != true[\s\S]*managed-kubernetes-capacity-gate\.result == 'success'[\s\S]*managed-kubernetes-capacity-gate\.result == 'skipped'/,
+  'The hosted-Evaluation certificate must run after a selected certificate, but never silently combine with a capacity observation.',
 );
 assert.equal(
   imageJobs['managed-kubernetes-evaluation-gate'].environment?.name,

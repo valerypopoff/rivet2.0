@@ -44,6 +44,11 @@ on:
         required: false
         default: false
         type: boolean
+      run_managed_kubernetes_capacity_observe:
+        description: After the provider gate deploys candidate images, record protected staging capacity observations without certifying or promoting them.
+        required: false
+        default: false
+        type: boolean
       run_managed_kubernetes_evaluation_gate:
         description: After the provider gate deploys candidate images, run the protected hosted-Evaluation worker-loss and cancellation certificate.
         required: false
@@ -413,7 +418,7 @@ jobs:
         shell: bash
         run: kind delete cluster --name rivet-managed-release
   managed-kubernetes-provider-gate:
-    if: ${{ github.event_name == 'workflow_dispatch' && (inputs.run_managed_kubernetes_provider_gate == true || inputs.run_managed_kubernetes_capacity_gate == true || inputs.run_managed_kubernetes_evaluation_gate == true) }}
+    if: ${{ github.event_name == 'workflow_dispatch' && (inputs.run_managed_kubernetes_provider_gate == true || inputs.run_managed_kubernetes_capacity_gate == true || inputs.run_managed_kubernetes_capacity_observe == true || inputs.run_managed_kubernetes_evaluation_gate == true) && !(inputs.run_managed_kubernetes_capacity_gate == true && inputs.run_managed_kubernetes_capacity_observe == true) }}
     needs:
       - build-and-push
     runs-on: ubuntu-latest
@@ -522,7 +527,7 @@ jobs:
           retention-days: 14
 
   managed-kubernetes-capacity-gate:
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.run_managed_kubernetes_capacity_gate == true }}
+    if: ${{ always() && github.event_name == 'workflow_dispatch' && (inputs.run_managed_kubernetes_capacity_gate == true || inputs.run_managed_kubernetes_capacity_observe == true) && needs.build-and-push.result == 'success' && (needs.managed-kubernetes-provider-gate.result == 'success' || (inputs.run_managed_kubernetes_capacity_gate == true && inputs.run_managed_kubernetes_capacity_observe == true && needs.managed-kubernetes-provider-gate.result == 'skipped')) }}
     needs:
       - build-and-push
       - managed-kubernetes-provider-gate
@@ -542,8 +547,17 @@ jobs:
       RIVET_K8S_PROVIDER_GATE_REGISTRY_USERNAME: ${{ github.actor }}
       RIVET_K8S_PROVIDER_GATE_REGISTRY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
       RIVET_K8S_CAPACITY_GATE_CONFIRM: certify-staging
-      RIVET_K8S_CAPACITY_GATE_MODE: certify
+      RIVET_K8S_CAPACITY_GATE_MODE: ${{ inputs.run_managed_kubernetes_capacity_gate == true && 'certify' || 'observe' }}
     steps:
+      - name: Validate Capacity Run Selection
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${{ inputs.run_managed_kubernetes_capacity_gate }}" == "true" && "${{ inputs.run_managed_kubernetes_capacity_observe }}" == "true" ]]; then
+            echo "::error::Choose either the capacity certificate or capacity observation run, not both."
+            exit 1
+          fi
+
       - name: Check Out Repository
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
@@ -602,25 +616,33 @@ jobs:
             echo "RIVET_K8S_PROVIDER_GATE_${upper_service}_IMAGE_DIGEST=$digest" >> "$GITHUB_ENV"
           done
 
-      - name: Certify Published Endpoint Capacity
+      - name: Run Published Endpoint Capacity
         run: yarn studio-server:verify:kubernetes:managed-capacity
+
+      - name: Generate Capacity Calibration Review
+        if: ${{ always() }}
+        run: >-
+          node deploy/studio-server/scripts/kubernetes-published-capacity-review.mjs
+          artifacts/kubernetes-managed-provider-gate/published-capacity/capacity-report.json
+          artifacts/kubernetes-managed-provider-gate/published-capacity/capacity-review.md
 
       - name: Upload Published Capacity Evidence
         if: ${{ always() }}
         uses: actions/upload-artifact@65462800fd760344b1a7b4382951275a0abb4808 # v4
         with:
-          name: managed-kubernetes-capacity-gate-${{ github.run_id }}-${{ github.run_attempt }}
+          name: managed-kubernetes-capacity-${{ inputs.run_managed_kubernetes_capacity_gate == true && 'certificate' || 'observe' }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: artifacts/kubernetes-managed-provider-gate/published-capacity
           if-no-files-found: warn
           retention-days: 90
   managed-kubernetes-evaluation-gate:
-    if: ${{ always() && github.event_name == 'workflow_dispatch' && inputs.run_managed_kubernetes_evaluation_gate == true && needs.build-and-push.result == 'success' && needs.managed-kubernetes-provider-gate.result == 'success' && (needs.managed-kubernetes-capacity-gate.result == 'success' || needs.managed-kubernetes-capacity-gate.result == 'skipped') }}
+    if: ${{ always() && github.event_name == 'workflow_dispatch' && inputs.run_managed_kubernetes_evaluation_gate == true && inputs.run_managed_kubernetes_capacity_observe != true && needs.build-and-push.result == 'success' && needs.managed-kubernetes-provider-gate.result == 'success' && (needs.managed-kubernetes-capacity-gate.result == 'success' || needs.managed-kubernetes-capacity-gate.result == 'skipped') }}
     needs:
       - build-and-push
       - managed-kubernetes-provider-gate
-      # A capacity certificate and this worker-loss certificate share the
-      # protected staging release. Do not let a forced Evaluation worker loss
-      # race the public-capacity measurement when both are requested.
+      # A capacity run and this worker-loss certificate share the protected
+      # staging release. Do not let a forced Evaluation worker loss race the
+      # public-capacity measurement. An observe run is isolated from this
+      # destructive certificate, rather than silently combining two studies.
       - managed-kubernetes-capacity-gate
     runs-on: ubuntu-latest
     timeout-minutes: 90
@@ -713,7 +735,7 @@ jobs:
       - managed-kubernetes-evaluation-gate
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    if: ${{ always() && needs.changes.result == 'success' && needs.verify-repository.result == 'success' && needs.build-and-push.result == 'success' && needs.release-manifest.result == 'success' && needs.fast-container-smoke.result == 'success' && ((needs.changes.outputs.full_kubernetes == 'true' && needs.managed-kubernetes-release-gate.result == 'success') || (needs.changes.outputs.full_kubernetes != 'true' && needs.managed-kubernetes-release-gate.result == 'skipped')) && (needs.managed-kubernetes-provider-gate.result == 'success' || needs.managed-kubernetes-provider-gate.result == 'skipped') && (needs.managed-kubernetes-capacity-gate.result == 'success' || needs.managed-kubernetes-capacity-gate.result == 'skipped') && (needs.managed-kubernetes-evaluation-gate.result == 'success' || needs.managed-kubernetes-evaluation-gate.result == 'skipped') }}
+    if: ${{ always() && needs.changes.result == 'success' && needs.verify-repository.result == 'success' && needs.build-and-push.result == 'success' && needs.release-manifest.result == 'success' && needs.fast-container-smoke.result == 'success' && ((needs.changes.outputs.full_kubernetes == 'true' && needs.managed-kubernetes-release-gate.result == 'success') || (needs.changes.outputs.full_kubernetes != 'true' && needs.managed-kubernetes-release-gate.result == 'skipped')) && (needs.managed-kubernetes-provider-gate.result == 'success' || needs.managed-kubernetes-provider-gate.result == 'skipped') && (needs.managed-kubernetes-capacity-gate.result == 'success' || needs.managed-kubernetes-capacity-gate.result == 'skipped') && (needs.managed-kubernetes-evaluation-gate.result == 'success' || needs.managed-kubernetes-evaluation-gate.result == 'skipped') && (github.event_name != 'workflow_dispatch' || inputs.run_managed_kubernetes_capacity_observe != true) }}
     env:
       SOURCE_TAG: candidate-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
       CANDIDATE_RELEASE_MANIFEST: artifacts/studio-server-release-manifest/candidate-release-manifest.json
