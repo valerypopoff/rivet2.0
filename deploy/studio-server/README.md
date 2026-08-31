@@ -24,6 +24,7 @@ platform that lives inside the Rivet monorepo. It provides:
 - [Editor bridge](../../developer-docs/studio-server/editor-bridge.md)
 - [Workflow publication](../../developer-docs/studio-server/workflow-publication.md)
 - [Runtime libraries](../../developer-docs/studio-server/runtime-libraries.md)
+- [Deployment status](../../developer-docs/studio-server/deployment-status.md)
 
 ## Monorepo Map
 

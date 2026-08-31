@@ -751,11 +751,41 @@ export const MANAGED_WORKFLOW_SCHEMA_REQUIRED_INDEXES = [
   ['llm_profile_health', 'llm_profile_health_updated_at_idx', ['updated_at'], null, [3]],
   ['evaluation_runs', 'evaluation_runs_project_started_idx', ['project_id', 'started_at'], null, [0, 3]],
   ['evaluation_runs', 'evaluation_runs_project_suite_idx', ['project_id', 'suite_id'], null, [0, 0]],
-  ['evaluation_hosted_runs', 'evaluation_hosted_runs_active_idx', ['status', 'created_at', 'project_id', 'run_id'], "(status = ANY (ARRAY['queued'::text, 'running'::text]))", [0, 0, 0, 0]],
-  ['evaluation_hosted_trial_jobs', 'evaluation_hosted_trial_jobs_claim_idx', ['status', 'case_index', 'trial_index', 'project_id', 'run_id'], "(status = 'queued'::text)", [0, 0, 0, 0, 0]],
-  ['evaluation_hosted_trial_jobs', 'evaluation_hosted_trial_jobs_lease_idx', ['status', 'lease_expires_at', 'project_id', 'run_id'], "(status = ANY (ARRAY['claimed'::text, 'accepted'::text]))", [0, 0, 0, 0]],
-  ['evaluation_hosted_trial_jobs', 'evaluation_hosted_trial_jobs_outstanding_idx', ['status'], "(status = ANY (ARRAY['queued'::text, 'claimed'::text, 'accepted'::text]))", [0]],
-  ['evaluation_hosted_trial_attempts', 'evaluation_hosted_trial_attempts_run_idx', ['project_id', 'run_id', 'created_at', 'job_id'], null, [0, 0, 0, 0]],
+  [
+    'evaluation_hosted_runs',
+    'evaluation_hosted_runs_active_idx',
+    ['status', 'created_at', 'project_id', 'run_id'],
+    "(status = ANY (ARRAY['queued'::text, 'running'::text]))",
+    [0, 0, 0, 0],
+  ],
+  [
+    'evaluation_hosted_trial_jobs',
+    'evaluation_hosted_trial_jobs_claim_idx',
+    ['status', 'case_index', 'trial_index', 'project_id', 'run_id'],
+    "(status = 'queued'::text)",
+    [0, 0, 0, 0, 0],
+  ],
+  [
+    'evaluation_hosted_trial_jobs',
+    'evaluation_hosted_trial_jobs_lease_idx',
+    ['status', 'lease_expires_at', 'project_id', 'run_id'],
+    "(status = ANY (ARRAY['claimed'::text, 'accepted'::text]))",
+    [0, 0, 0, 0],
+  ],
+  [
+    'evaluation_hosted_trial_jobs',
+    'evaluation_hosted_trial_jobs_outstanding_idx',
+    ['status'],
+    "(status = ANY (ARRAY['queued'::text, 'claimed'::text, 'accepted'::text]))",
+    [0],
+  ],
+  [
+    'evaluation_hosted_trial_attempts',
+    'evaluation_hosted_trial_attempts_run_idx',
+    ['project_id', 'run_id', 'created_at', 'job_id'],
+    null,
+    [0, 0, 0, 0],
+  ],
   ['evaluation_recordings', 'evaluation_recordings_project_run_idx', ['project_id', 'run_id'], null, [0, 0]],
   [
     'evaluation_recordings',
@@ -764,7 +794,13 @@ export const MANAGED_WORKFLOW_SCHEMA_REQUIRED_INDEXES = [
     "((artifact_json -> 'reference'::text) ->> 'retention'::text) = 'temporary'::text",
     [0, 0, 0, 0],
   ],
-  ['evaluation_dataset_snapshots', 'evaluation_dataset_snapshots_created_idx', ['created_at', 'project_id', 'dataset_fingerprint'], null, [0, 0, 0]],
+  [
+    'evaluation_dataset_snapshots',
+    'evaluation_dataset_snapshots_created_idx',
+    ['created_at', 'project_id', 'dataset_fingerprint'],
+    null,
+    [0, 0, 0],
+  ],
 ] as const;
 
 export const MANAGED_WORKFLOW_SCHEMA_REQUIRED_CONSTRAINTS = [
@@ -814,12 +850,24 @@ export const MANAGED_WORKFLOW_SCHEMA_REQUIRED_CONSTRAINTS = [
   ['app_settings', 'c', 'CHECK (((source_hash IS NULL) OR (char_length(source_hash) = 64)))'],
   ['evaluation_dataset_snapshots', 'p', 'PRIMARY KEY (project_id, dataset_fingerprint)'],
   ['evaluation_hosted_runs', 'p', 'PRIMARY KEY (project_id, run_id)'],
-  ['evaluation_hosted_runs', 'f', 'FOREIGN KEY (project_id, run_id) REFERENCES evaluation_runs(project_id, run_id) ON DELETE CASCADE'],
+  [
+    'evaluation_hosted_runs',
+    'f',
+    'FOREIGN KEY (project_id, run_id) REFERENCES evaluation_runs(project_id, run_id) ON DELETE CASCADE',
+  ],
   ['evaluation_hosted_trial_jobs', 'p', 'PRIMARY KEY (project_id, run_id, job_id)'],
   ['evaluation_hosted_trial_jobs', 'u', 'UNIQUE (project_id, run_id, case_id, trial_index)'],
-  ['evaluation_hosted_trial_jobs', 'f', 'FOREIGN KEY (project_id, run_id) REFERENCES evaluation_hosted_runs(project_id, run_id) ON DELETE CASCADE'],
+  [
+    'evaluation_hosted_trial_jobs',
+    'f',
+    'FOREIGN KEY (project_id, run_id) REFERENCES evaluation_hosted_runs(project_id, run_id) ON DELETE CASCADE',
+  ],
   ['evaluation_hosted_trial_attempts', 'p', 'PRIMARY KEY (project_id, run_id, job_id, attempt, event)'],
-  ['evaluation_hosted_trial_attempts', 'f', 'FOREIGN KEY (project_id, run_id, job_id) REFERENCES evaluation_hosted_trial_jobs(project_id, run_id, job_id) ON DELETE CASCADE'],
+  [
+    'evaluation_hosted_trial_attempts',
+    'f',
+    'FOREIGN KEY (project_id, run_id, job_id) REFERENCES evaluation_hosted_trial_jobs(project_id, run_id, job_id) ON DELETE CASCADE',
+  ],
   ['evaluation_dataset_snapshots', 'f', 'FOREIGN KEY (project_id) REFERENCES workflows(workflow_id) ON DELETE CASCADE'],
   ['evaluation_library', 'p', 'PRIMARY KEY (singleton_key)'],
   ['evaluation_library', 'c', 'CHECK (singleton_key)'],
@@ -954,6 +1002,44 @@ function validateAppliedMigrations(
   return currentVersion;
 }
 
+/**
+ * PostgreSQL's `pg_get_expr` may omit redundant outer parentheses from a
+ * partial-index predicate. The migration definitions retain the parentheses
+ * because they make the SQL easier to read, so compare the catalog expression
+ * in the same canonical form rather than treating a cosmetic deparse choice as
+ * schema drift.
+ */
+function normalizeIndexPredicate(predicate: string | null): string | null {
+  if (predicate == null) {
+    return null;
+  }
+
+  let normalized = predicate.trim();
+  while (normalized.startsWith('(') && normalized.endsWith(')')) {
+    let depth = 0;
+    let enclosesWholeExpression = true;
+    for (let index = 0; index < normalized.length; index += 1) {
+      const character = normalized[index];
+      if (character === '(') {
+        depth += 1;
+      } else if (character === ')') {
+        depth -= 1;
+        if (depth === 0 && index < normalized.length - 1) {
+          enclosesWholeExpression = false;
+          break;
+        }
+      }
+    }
+
+    if (!enclosesWholeExpression || depth !== 0) {
+      break;
+    }
+    normalized = normalized.slice(1, -1).trim();
+  }
+
+  return normalized;
+}
+
 async function validateManagedWorkflowSchemaObjects(client: PoolClient): Promise<void> {
   const tableResult = await client.query<TableRow>(
     `SELECT table_relation.relname AS name,
@@ -1065,7 +1151,7 @@ async function validateManagedWorkflowSchemaObjects(client: PoolClient): Promise
         isReady: true,
         keyExpressions: expectedKeys,
         keyOptions: expectedKeyOptions,
-        predicate: expectedPredicate,
+        predicate: normalizeIndexPredicate(expectedPredicate),
       });
       const actualSignature = JSON.stringify({
         tableName: actual.table_name,
@@ -1075,7 +1161,7 @@ async function validateManagedWorkflowSchemaObjects(client: PoolClient): Promise
         isReady: actual.is_ready,
         keyExpressions: actual.key_expressions,
         keyOptions: actual.key_options,
-        predicate: actual.predicate,
+        predicate: normalizeIndexPredicate(actual.predicate),
       });
       if (actualSignature !== expectedSignature) {
         return [`${indexName} (expected ${expectedSignature}, received ${actualSignature})`];

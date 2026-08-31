@@ -27,6 +27,8 @@ import { appSettingsRouter } from './routes/app-settings.js';
 import { uiAuthRouter } from './routes/ui-auth.js';
 import { webAppOAuthRouter } from './web-app-oauth.js';
 import { runtimeLibrariesRouter } from './routes/runtime-libraries.js';
+import { createDeploymentStatusRouter } from './routes/deployment-status.js';
+import { getDeploymentTopology } from './deployment-status.js';
 import {
   getLatestWebAppsBasePath,
   getLatestWorkflowsBasePath,
@@ -42,6 +44,7 @@ import {
   isControlPlaneApiProfile,
   isExecutionOnlyApiProfile,
   isPublishedExecutionApiProfile,
+  type ApiRuntimeProfile,
 } from './runtime-profile.js';
 import type { RuntimeHealthReader } from './runtime-health.js';
 import { readRuntimeLimitSettingsSync } from './runtime-limit-settings.js';
@@ -251,6 +254,7 @@ export function getApiRouteExposureMatrix(profile = getApiRuntimeProfile()): str
       '/api/projects/*',
       '/api/workflows/*',
       '/api/runtime-libraries/*',
+      '/api/deployment-status/*',
       '/api/app-settings/*',
       '/api/config*',
       '/internal/app-settings/proxy-config',
@@ -273,6 +277,10 @@ export function getApiRouteExposureMatrix(profile = getApiRuntimeProfile()): str
 }
 
 export function assertApiRuntimeProfileStartupPreconditions(profile = getApiRuntimeProfile()): void {
+  // Validate topology during startup rather than deferring a deployment typo
+  // until an operator happens to open Settings -> Deployment.
+  getDeploymentTopology();
+
   if (isExecutionOnlyApiProfile(profile) && getWorkflowStorageBackendMode() !== 'managed') {
     throw new Error(`RIVET_API_PROFILE=${profile} requires Settings -> Storage to use Object storage`);
   }
@@ -304,7 +312,7 @@ function dispatchDynamicBasePath(getBasePath: () => string, router: ExpressRoute
   };
 }
 
-function mountControlPlaneRoutes(app: Express): void {
+function mountControlPlaneRoutes(app: Express, profile: ApiRuntimeProfile): void {
   app.get('/internal/app-settings/proxy-config', requireAuth, (_req, res) => {
     res.set('Cache-Control', 'no-store');
     res.json(createProxySettingsSnapshot());
@@ -319,6 +327,7 @@ function mountControlPlaneRoutes(app: Express): void {
   app.use('/api/projects', projectsRouter);
   app.use('/api/workflows', workflowsRouter);
   app.use('/api/runtime-libraries', runtimeLibrariesRouter);
+  app.use('/api/deployment-status', createDeploymentStatusRouter(profile));
   app.use('/api/app-settings', appSettingsRouter);
   app.use('/api', configRouter);
 }
@@ -374,7 +383,7 @@ export function createApiApp(profile = getApiRuntimeProfile(), options: ApiAppOp
   }
 
   if (isControlPlaneApiProfile(profile)) {
-    mountControlPlaneRoutes(app);
+    mountControlPlaneRoutes(app, profile);
   }
 
   if (isPublishedExecutionApiProfile(profile)) {

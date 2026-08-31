@@ -3,6 +3,12 @@ import test from 'node:test';
 
 type KubernetesLauncherModule = {
   buildKubernetesLauncherConfig: (env: Record<string, string>) => any;
+  resolveKubernetesLauncherImageTag: (input: {
+    action: string;
+    explicitImageTag: string | null;
+    persistedImageTag: string | null;
+    generatedImageTag: string;
+  }) => string;
   renderKubernetesLauncherSecretManifest: (config: any) => string;
   renderKubernetesLauncherValuesYaml: (config: any) => string;
 };
@@ -11,7 +17,10 @@ let kubernetesLauncherModulePromise: Promise<KubernetesLauncherModule> | null = 
 
 function loadKubernetesLauncherModule(): Promise<KubernetesLauncherModule> {
   if (kubernetesLauncherModulePromise == null) {
-    const moduleUrl = new URL('../../../../deploy/studio-server/scripts/lib/kubernetes-launcher-config.mjs', import.meta.url);
+    const moduleUrl = new URL(
+      '../../../../deploy/studio-server/scripts/lib/kubernetes-launcher-config.mjs',
+      import.meta.url,
+    );
     kubernetesLauncherModulePromise = import(moduleUrl.href) as Promise<KubernetesLauncherModule>;
   }
 
@@ -74,11 +83,8 @@ test('kubernetes launcher config can derive object storage settings from RIVET_K
 });
 
 test('kubernetes launcher renderer emits chart values and secrets compatible with the local rehearsal workflow', async () => {
-  const {
-    buildKubernetesLauncherConfig,
-    renderKubernetesLauncherSecretManifest,
-    renderKubernetesLauncherValuesYaml,
-  } = await loadKubernetesLauncherModule();
+  const { buildKubernetesLauncherConfig, renderKubernetesLauncherSecretManifest, renderKubernetesLauncherValuesYaml } =
+    await loadKubernetesLauncherModule();
   const config = buildKubernetesLauncherConfig({
     RIVET_K8S_DATABASE_CONNECTION_STRING: 'postgresql://db-user:db-pass@example-db:5432/rivet?sslmode=require',
     RIVET_K8S_STORAGE_BUCKET: 'rivet-prod',
@@ -109,7 +115,10 @@ test('kubernetes launcher renderer emits chart values and secrets compatible wit
   assert.match(secretManifest, /name: rivet-auth/);
   assert.match(secretManifest, /name: rivet-postgres-conn/);
   assert.match(secretManifest, /name: rivet-object-storage/);
-  assert.match(secretManifest, /connectionString: "postgresql:\/\/db-user:db-pass@example-db:5432\/rivet\?sslmode=require"/);
+  assert.match(
+    secretManifest,
+    /connectionString: "postgresql:\/\/db-user:db-pass@example-db:5432\/rivet\?sslmode=require"/,
+  );
   assert.doesNotMatch(secretManifest, /kind: PersistentVolumeClaim|rivet-local-app-data/);
 });
 
@@ -177,4 +186,37 @@ test('kubernetes launcher config treats minikube as a first-class local cluster 
   assert.equal(config.localClusterProvider, 'minikube');
   assert.equal(config.minikubeProfile, 'minikube');
   assert.equal(config.loadLocalImages, true);
+});
+
+test('local Kubernetes builds use a fresh image tag while up reuses the recorded build', async () => {
+  const { resolveKubernetesLauncherImageTag } = await loadKubernetesLauncherModule();
+  const generatedImageTag = 'local-1234567890-42';
+
+  assert.equal(
+    resolveKubernetesLauncherImageTag({
+      action: 'dev',
+      explicitImageTag: null,
+      persistedImageTag: 'local-older-1',
+      generatedImageTag,
+    }),
+    generatedImageTag,
+  );
+  assert.equal(
+    resolveKubernetesLauncherImageTag({
+      action: 'up',
+      explicitImageTag: null,
+      persistedImageTag: generatedImageTag,
+      generatedImageTag: 'local-newer-2',
+    }),
+    generatedImageTag,
+  );
+  assert.equal(
+    resolveKubernetesLauncherImageTag({
+      action: 'up',
+      explicitImageTag: 'manual-tag',
+      persistedImageTag: generatedImageTag,
+      generatedImageTag: 'local-newer-2',
+    }),
+    'manual-tag',
+  );
 });

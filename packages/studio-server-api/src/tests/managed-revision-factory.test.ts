@@ -21,6 +21,7 @@ test('managed pre-commit blob cleanup queues known objects instead of directly d
     } as never,
     queueObjectDeletions: async (domain, keys) => {
       queued.push({ domain, keys });
+      return keys.filter((key): key is string => Boolean(key)).length;
     },
   });
   let onRollback: (() => Promise<void>) | undefined;

@@ -36,10 +36,6 @@ runtimeLibrariesRouter.post('/remove', validateBody(removeSchema), asyncHandler(
   res.status(202).json(job);
 }));
 
-runtimeLibrariesRouter.post('/replicas/cleanup', asyncHandler(async (_req, res) => {
-  res.json(await getRuntimeLibrariesBackend().clearStaleReplicaStatuses());
-}));
-
 runtimeLibrariesRouter.get('/jobs/:jobId', asyncHandler(async (req, res) => {
   const job = await getRuntimeLibrariesBackend().getJob(req.params.jobId);
   if (!job) {

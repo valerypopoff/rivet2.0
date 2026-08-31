@@ -48,6 +48,7 @@ type FakeSchemaDatabase = DatabaseSnapshot & {
   invalidIndexOptions: string | null;
   invalidIndexState: string | null;
   invalidIndexTable: string | null;
+  postgresCanonicalIndexPredicates: boolean;
   missingObject: string | null;
   queryLog: string[];
   lockTail: Promise<void>;
@@ -76,6 +77,7 @@ function createDatabase(overrides: Partial<FakeSchemaDatabase> = {}): FakeSchema
     invalidIndexOptions: null,
     invalidIndexState: null,
     invalidIndexTable: null,
+    postgresCanonicalIndexPredicates: false,
     missingObject: null,
     queryLog: [],
     lockTail: Promise.resolve(),
@@ -113,6 +115,31 @@ function createCurrentDatabase(): FakeSchemaDatabase {
 
 function queryResult(rows: unknown[] = []) {
   return { rows, rowCount: rows.length };
+}
+
+function removeRedundantOuterParentheses(predicate: string): string {
+  let normalized = predicate.trim();
+  while (normalized.startsWith('(') && normalized.endsWith(')')) {
+    let depth = 0;
+    let enclosesWholeExpression = true;
+    for (let index = 0; index < normalized.length; index += 1) {
+      const character = normalized[index];
+      if (character === '(') {
+        depth += 1;
+      } else if (character === ')') {
+        depth -= 1;
+        if (depth === 0 && index < normalized.length - 1) {
+          enclosesWholeExpression = false;
+          break;
+        }
+      }
+    }
+    if (!enclosesWholeExpression || depth !== 0) {
+      break;
+    }
+    normalized = normalized.slice(1, -1).trim();
+  }
+  return normalized;
 }
 
 function cloneSnapshot(database: FakeSchemaDatabase): DatabaseSnapshot {
@@ -299,7 +326,10 @@ function createPool(database: FakeSchemaDatabase): Pick<Pool, 'connect'> {
                           database.invalidIndexOptions === name
                             ? expected?.keyOptions.map(() => 0)
                             : expected?.keyOptions,
-                        predicate: expected?.predicate,
+                        predicate:
+                          database.postgresCanonicalIndexPredicates && expected?.predicate
+                            ? removeRedundantOuterParentheses(expected.predicate)
+                            : expected?.predicate,
                       };
                     })
                 : [],
@@ -666,6 +696,12 @@ test('schema compatibility rejects a ledger marked current when required objects
       verifyManagedWorkflowSchema(createPool(database), { logger: quietLogger }),
       /"isValid":true.*"isValid":false/,
     );
+  });
+
+  await t.test('PostgreSQL canonical partial-index predicates', async () => {
+    const database = createCurrentDatabase();
+    database.postgresCanonicalIndexPredicates = true;
+    await verifyManagedWorkflowSchema(createPool(database), { logger: quietLogger });
   });
 
   await t.test('constraint definition', async () => {

@@ -359,14 +359,11 @@ The current wrapper UI exposes a simple single-package workflow:
 - cancel a queued or running job from the modal
 - show the live job log inline in the modal
 - in `filesystem` mode, closing the modal clears the transient terminal view; reopening the modal shows the installed libraries list and only resumes job logs/status if another job is still actively running
-- in `managed` mode, show `Replica readiness` for:
-  - `Endpoint execution replicas`
-  - `Editor execution replicas`
-- while the modal is open in `managed` mode, poll `/api/runtime-libraries` every 5 seconds even when no job is active
+- while the modal is open, poll `/api/runtime-libraries` every 5 seconds so active job state can recover after a reconnect
 - in `managed` mode, persisted job state can still be rehydrated across refreshes/reopen because the backend stores logs and status durably
-- keep replica details collapsed by default, with expandable per-replica sync/error detail for debugging partial convergence
-- when stale rows exist, show a `Clear stale replicas` action that calls the cleanup route and refreshes readiness state
 - `RuntimeLibrariesModal.tsx` remains the shell, `useRuntimeLibrariesModalState.ts` remains the public controller, and `runtimeLibrariesJobStream.ts` owns SSE connection helpers plus log/status patching so those state transitions are not duplicated inside the hook
+
+Replica topology and Code-runtime synchronization are shown separately at `Settings` -> `Deployment`; see [deployment-status.md](deployment-status.md). Keeping it there prevents package-management UI from being mistaken for a general deployment-health view.
 
 The underlying API accepts arrays for install/remove requests, so bulk operations are possible programmatically even though the dashboard currently uses one-at-a-time actions.
 

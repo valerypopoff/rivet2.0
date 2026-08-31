@@ -160,6 +160,8 @@
   value: {{ .port | quote }}
 - name: RIVET_API_PROFILE
   value: {{ .profile | quote }}
+- name: RIVET_DEPLOYMENT_TOPOLOGY
+  value: "replicated"
 - name: RIVET_HOSTED_EVALUATIONS_ENABLED
   value: {{ $root.Values.hostedEvaluations.enabled | quote }}
 - name: RIVET_HOSTED_EVALUATIONS_WORKER_CONCURRENCY

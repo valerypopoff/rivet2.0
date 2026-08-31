@@ -15,6 +15,7 @@ import {
   getApiRouteExposureMatrix,
 } from '../app.js';
 import { disposeRuntimeLibrariesBackend } from '../runtime-libraries/backend.js';
+import { buildDeploymentStatus, getDeploymentTopology } from '../deployment-status.js';
 import { isWebAppSocketRouteEnabled } from '../web-app-action-websocket.js';
 import { createHttpError } from '../utils/httpError.js';
 import { writeWorkflowEndpointAuthSettings } from '../workflow-endpoint-auth-settings.js';
@@ -30,6 +31,7 @@ const relevantEnvKeys = [
   'RIVET_REMOTE_DEBUGGER_DEFAULT_WS',
   'RIVET_REQUIRE_UI_GATE_KEY',
   'RIVET_SERVER_UI_AUTH_MODE',
+  'RIVET_DEPLOYMENT_TOPOLOGY',
 ] as const;
 
 async function withApiEnv(
@@ -126,6 +128,7 @@ test('Phase 4 route exposure matrix stays stable across API runtime profiles', (
     '/api/projects/*',
     '/api/workflows/*',
     '/api/runtime-libraries/*',
+    '/api/deployment-status/*',
     '/api/app-settings/*',
     '/api/config*',
     '/internal/app-settings/proxy-config',
@@ -160,6 +163,7 @@ test('Phase 4 route exposure matrix stays stable across API runtime profiles', (
     '/api/projects/*',
     '/api/workflows/*',
     '/api/runtime-libraries/*',
+    '/api/deployment-status/*',
     '/api/app-settings/*',
     '/api/config*',
     '/internal/app-settings/proxy-config',
@@ -191,6 +195,68 @@ test('combined and control profiles keep filesystem mode as a supported startup 
   await withApiEnv({}, () => {
     assert.doesNotThrow(() => assertApiRuntimeProfileStartupPreconditions('combined'));
     assert.doesNotThrow(() => assertApiRuntimeProfileStartupPreconditions('control'));
+  });
+});
+
+test('deployment status keeps topology explicit and never infers single-host replica data', () => {
+  assert.equal(getDeploymentTopology({}), 'single-host');
+  assert.equal(getDeploymentTopology({ RIVET_DEPLOYMENT_TOPOLOGY: 'replicated' }), 'replicated');
+  assert.throws(
+    () => getDeploymentTopology({ RIVET_DEPLOYMENT_TOPOLOGY: 'cluster' }),
+    /RIVET_DEPLOYMENT_TOPOLOGY/,
+  );
+
+  const replicaReadiness = {
+    activeReleaseId: 'release-1',
+    heartbeatTtlMs: 30_000,
+    endpoint: { tier: 'endpoint' as const, liveReplicaCount: 1, readyReplicaCount: 1, staleReplicaCount: 0, replicas: [] },
+    editor: { tier: 'editor' as const, liveReplicaCount: 1, readyReplicaCount: 1, staleReplicaCount: 0, replicas: [] },
+  };
+
+  assert.deepEqual(
+    buildDeploymentStatus({ topology: 'single-host', apiProfile: 'combined', replicaReadiness }),
+    { topology: 'single-host', apiProfile: 'combined', replicaReadiness: null },
+  );
+  assert.deepEqual(
+    buildDeploymentStatus({ topology: 'replicated', apiProfile: 'control', replicaReadiness }),
+    { topology: 'replicated', apiProfile: 'control', replicaReadiness },
+  );
+});
+
+test('control-plane deployment status is authenticated and describes the single-host default', async () => {
+  await withApiEnv({}, async () => {
+    const server = await startServer('control');
+    try {
+      const response = await fetch(`${server.baseUrl}/api/deployment-status`, {
+        headers: trustedProxyHeaders(),
+      });
+      assert.equal(response.status, 200);
+      assert.deepEqual(await response.json(), {
+        topology: 'single-host',
+        apiProfile: 'control',
+        replicaReadiness: null,
+      });
+
+      const cleanupResponse = await fetch(`${server.baseUrl}/api/deployment-status/replicas/cleanup`, {
+        method: 'POST',
+        headers: trustedProxyHeaders(),
+      });
+      assert.equal(cleanupResponse.status, 400);
+      assert.deepEqual(await cleanupResponse.json(), {
+        error: 'Replica status is available only for a replicated deployment.',
+      });
+    } finally {
+      await server.close();
+    }
+  });
+});
+
+test('invalid deployment topology fails API startup preconditions', async () => {
+  await withApiEnv({ RIVET_DEPLOYMENT_TOPOLOGY: 'cluster' }, () => {
+    assert.throws(
+      () => assertApiRuntimeProfileStartupPreconditions('combined'),
+      /RIVET_DEPLOYMENT_TOPOLOGY/,
+    );
   });
 });
 

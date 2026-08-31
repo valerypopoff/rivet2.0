@@ -2,7 +2,6 @@ import { RIVET_API_BASE_URL } from '../../studio-server-shared/hosted-env';
 import type {
   JobStatus,
   RuntimeLibrariesState,
-  RuntimeLibraryReplicaCleanupResult,
   RuntimeLibraryEntry,
   RuntimeLibraryLogSource,
   RuntimeLibraryJobState,
@@ -14,7 +13,6 @@ import { parseJsonResponse } from './apiRequest';
 
 export type {
   RuntimeLibrariesState,
-  RuntimeLibraryReplicaCleanupResult,
   RuntimeLibraryEntry,
   RuntimeLibraryJobState,
   JobStatus,
@@ -63,13 +61,6 @@ export async function removePackages(packages: string[]): Promise<JobState> {
     body: JSON.stringify({ packages }),
   });
   return jsonResponse<JobState>(response);
-}
-
-export async function clearStaleReplicaStatuses(): Promise<RuntimeLibraryReplicaCleanupResult> {
-  const response = await fetch(`${API}/replicas/cleanup`, {
-    method: 'POST',
-  });
-  return jsonResponse<RuntimeLibraryReplicaCleanupResult>(response);
 }
 
 export async function fetchJob(jobId: string): Promise<JobState> {

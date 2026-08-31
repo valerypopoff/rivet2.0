@@ -9,6 +9,7 @@ import { resolveHelmBinOrThrow } from './lib/k8s-tools.mjs';
 import {
   buildImageRef,
   buildKubernetesLauncherConfig,
+  resolveKubernetesLauncherImageTag,
   renderKubernetesLauncherSecretManifest,
   renderKubernetesLauncherValuesYaml,
 } from './lib/kubernetes-launcher-config.mjs';
@@ -100,7 +101,9 @@ function spawnProgram(program, args, options = {}) {
       }
 
       const commandLine = [program, ...args].map(quoteArg).join(' ');
-      reject(new Error(`Command failed with exit code ${exitCode}: ${commandLine}${stderr ? `\n${stderr}` : ''}`.trim()));
+      reject(
+        new Error(`Command failed with exit code ${exitCode}: ${commandLine}${stderr ? `\n${stderr}` : ''}`.trim()),
+      );
     });
   });
 }
@@ -123,7 +126,9 @@ async function commandWorks(program, args, env) {
 }
 
 function inferLocalClusterProvider(context, explicitProvider) {
-  const normalizedExplicitProvider = String(explicitProvider ?? '').trim().toLowerCase();
+  const normalizedExplicitProvider = String(explicitProvider ?? '')
+    .trim()
+    .toLowerCase();
   if (normalizedExplicitProvider) {
     return normalizedExplicitProvider;
   }
@@ -218,6 +223,14 @@ function writeState(config, state) {
   fs.mkdirSync(stateDir, { recursive: true });
   const { statePath } = getStatePaths(config);
   fs.writeFileSync(statePath, JSON.stringify(state, null, 2));
+}
+
+function rememberImageTag(config) {
+  const existing = readState(config) ?? {};
+  writeState(config, {
+    ...existing,
+    imageTag: config.images.api.tag,
+  });
 }
 
 function removeState(config) {
@@ -378,10 +391,12 @@ function isMinikubeReady(status) {
   const kubelet = String(status.Kubelet ?? '').toLowerCase();
   const apiServer = String(status.APIServer ?? '').toLowerCase();
   const kubeconfig = String(status.Kubeconfig ?? '').toLowerCase();
-  return host === 'running' &&
+  return (
+    host === 'running' &&
     kubelet === 'running' &&
     apiServer === 'running' &&
-    (kubeconfig === 'configured' || kubeconfig === 'running');
+    (kubeconfig === 'configured' || kubeconfig === 'running')
+  );
 }
 
 async function ensureMinikubeReady(minikubeBin, config, env, { autoStart = false } = {}) {
@@ -394,7 +409,7 @@ async function ensureMinikubeReady(minikubeBin, config, env, { autoStart = false
   if (!autoStart) {
     throw new Error(
       `[${launcherName}] Minikube profile "${profile}" is not running. ` +
-      `Run "minikube start -p ${profile}" or set RIVET_K8S_CONTEXT to another reachable cluster.`,
+        `Run "minikube start -p ${profile}" or set RIVET_K8S_CONTEXT to another reachable cluster.`,
     );
   }
 
@@ -426,12 +441,9 @@ async function buildImages(dockerBin, config, env) {
   ];
 
   for (const spec of buildSpecs) {
-    await spawnProgram(
-      dockerBin,
-      ['build', '-f', spec.dockerfile, '-t', buildImageRef(spec.image), '.'],
-      { env },
-    );
+    await spawnProgram(dockerBin, ['build', '-f', spec.dockerfile, '-t', buildImageRef(spec.image), '.'], { env });
   }
+  rememberImageTag(config);
 }
 
 async function listClusterNodeNames(kubectlBin, config, env) {
@@ -457,7 +469,7 @@ async function ensureDockerNodeContainer(dockerBin, nodeName, env) {
   if (result.exitCode !== 0) {
     throw new Error(
       `[${launcherName}] Kubernetes node "${nodeName}" is not accessible as a Docker container. ` +
-      'For local images with pullPolicy=Never, either use a Docker-backed local cluster or set RIVET_K8S_LOAD_LOCAL_IMAGES=false and point the chart at pullable images.',
+        'For local images with pullPolicy=Never, either use a Docker-backed local cluster or set RIVET_K8S_LOAD_LOCAL_IMAGES=false and point the chart at pullable images.',
     );
   }
 }
@@ -478,6 +490,7 @@ async function loadImagesIntoCluster(dockerBin, kubectlBin, config, env) {
     const minikubeBin = resolveMinikubeBin(env);
     const profile = config.minikubeProfile ?? config.context;
     for (const imageRef of imageRefs) {
+      console.log(`[${launcherName}] Loading ${imageRef} into Minikube profile "${profile}"...`);
       await spawnProgram(minikubeBin, ['-p', profile, 'image', 'load', '--daemon=true', imageRef], { env });
     }
     return;
@@ -502,7 +515,11 @@ async function loadImagesIntoCluster(dockerBin, kubectlBin, config, env) {
       const remoteArchivePath = `/var/tmp/${config.release}.images.tar`;
       await spawnProgram(dockerBin, ['cp', imageArchivePath, `${nodeName}:${remoteArchivePath}`], { env });
       try {
-        await spawnProgram(dockerBin, ['exec', nodeName, 'ctr', '-n', 'k8s.io', 'images', 'import', remoteArchivePath], { env });
+        await spawnProgram(
+          dockerBin,
+          ['exec', nodeName, 'ctr', '-n', 'k8s.io', 'images', 'import', remoteArchivePath],
+          { env },
+        );
       } finally {
         await spawnProgram(dockerBin, ['exec', nodeName, 'rm', '-f', remoteArchivePath], {
           env,
@@ -558,7 +575,14 @@ async function helmTemplate(helmBin, config, valuesPath, env) {
 async function helmLint(helmBin, valuesPath, env) {
   await spawnProgram(
     helmBin,
-    ['lint', './deploy/studio-server/helm', '-f', './deploy/studio-server/helm/overlays/local-kubernetes.yaml', '-f', valuesPath],
+    [
+      'lint',
+      './deploy/studio-server/helm',
+      '-f',
+      './deploy/studio-server/helm/overlays/local-kubernetes.yaml',
+      '-f',
+      valuesPath,
+    ],
     { env },
   );
 }
@@ -613,10 +637,14 @@ async function uninstallRelease(helmBin, kubectlBin, config, env) {
     env,
     allowFailure: true,
   });
-  await spawnProgram(kubectlBin, withKubectlContext(config, ['delete', 'namespace', config.namespace, '--ignore-not-found=true']), {
-    env,
-    allowFailure: true,
-  });
+  await spawnProgram(
+    kubectlBin,
+    withKubectlContext(config, ['delete', 'namespace', config.namespace, '--ignore-not-found=true']),
+    {
+      env,
+      allowFailure: true,
+    },
+  );
 }
 
 async function startPortForward(kubectlBin, config, env, envFileLabel) {
@@ -632,7 +660,13 @@ async function startPortForward(kubectlBin, config, env, envFileLabel) {
   const logFd = fs.openSync(portForwardLogPath, 'w');
   const child = spawn(
     kubectlBin,
-    withKubectlContext(config, ['-n', config.namespace, 'port-forward', `service/${proxyServiceName}`, `${config.localPort}:80`]),
+    withKubectlContext(config, [
+      '-n',
+      config.namespace,
+      'port-forward',
+      `service/${proxyServiceName}`,
+      `${config.localPort}:80`,
+    ]),
     {
       cwd: rootDir,
       env,
@@ -654,9 +688,11 @@ async function startPortForward(kubectlBin, config, env, envFileLabel) {
   }
 
   writeState(config, {
+    ...(readState(config) ?? {}),
     namespace: config.namespace,
     release: config.release,
     localPort: config.localPort,
+    imageTag: config.images.api.tag,
     ...getAppUrls(config),
     portForwardPid: child.pid,
     portForwardLogPath,
@@ -682,10 +718,18 @@ async function main() {
     ...mergedEnv,
     ...launcherEnvOverrides,
   };
-  const config = buildKubernetesLauncherConfig(effectiveEnv);
-  const helmBin = action === 'build'
-    ? null
-    : resolveHelmBinOrThrow(rootDir, { env: effectiveEnv, launcherName });
+  const configForExistingState = buildKubernetesLauncherConfig(effectiveEnv);
+  const imageTag = resolveKubernetesLauncherImageTag({
+    action,
+    explicitImageTag: String(effectiveEnv.RIVET_K8S_IMAGE_TAG ?? '').trim() || null,
+    persistedImageTag: readState(configForExistingState)?.imageTag ?? null,
+    generatedImageTag: `local-${Date.now()}-${process.pid}`,
+  });
+  const config = buildKubernetesLauncherConfig({
+    ...effectiveEnv,
+    RIVET_K8S_IMAGE_TAG: imageTag,
+  });
+  const helmBin = action === 'build' ? null : resolveHelmBinOrThrow(rootDir, { env: effectiveEnv, launcherName });
   const dockerBin = resolveDockerBin(effectiveEnv);
 
   if (action === 'build' || action === 'dev' || action === 'recreate') {

@@ -20,6 +20,7 @@ export type AppSettingsTab =
   | 'general'
   | 'shell-execution'
   | 'storage'
+  | 'deployment-status'
   | 'node-executor-proxy'
   | 'environment-variables'
   | 'run-recordings'

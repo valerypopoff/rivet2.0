@@ -74,11 +74,11 @@ test('rendered chart keeps control-plane and execution-plane API env contracts d
 
   assert.match(
     renderedChart,
-    /name: RIVET_API_PROFILE\s*\n\s*value: "control"[\s\S]*?- name: RIVET_RUNTIME_LIBRARIES_REPLICA_TIER\s*\n\s*value: "none"[\s\S]*?- name: RIVET_RUNTIME_LIBRARIES_JOB_WORKER_ENABLED\s*\n\s*value: "true"/,
+    /name: RIVET_API_PROFILE\s*\n\s*value: "control"\s*\n\s*- name: RIVET_DEPLOYMENT_TOPOLOGY\s*\n\s*value: "replicated"[\s\S]*?- name: RIVET_RUNTIME_LIBRARIES_REPLICA_TIER\s*\n\s*value: "none"[\s\S]*?- name: RIVET_RUNTIME_LIBRARIES_JOB_WORKER_ENABLED\s*\n\s*value: "true"/,
   );
   assert.match(
     renderedChart,
-    /name: RIVET_API_PROFILE\s*\n\s*value: "execution"[\s\S]*?- name: RIVET_RUNTIME_LIBRARIES_REPLICA_TIER\s*\n\s*value: "endpoint"[\s\S]*?- name: RIVET_RUNTIME_LIBRARIES_JOB_WORKER_ENABLED\s*\n\s*value: "false"/,
+    /name: RIVET_API_PROFILE\s*\n\s*value: "execution"\s*\n\s*- name: RIVET_DEPLOYMENT_TOPOLOGY\s*\n\s*value: "replicated"[\s\S]*?- name: RIVET_RUNTIME_LIBRARIES_REPLICA_TIER\s*\n\s*value: "endpoint"[\s\S]*?- name: RIVET_RUNTIME_LIBRARIES_JOB_WORKER_ENABLED\s*\n\s*value: "false"/,
   );
   assert.match(
     renderedChart,
@@ -911,6 +911,26 @@ test('local Kubernetes overlay keeps the backend singleton while scaling endpoin
   assert.doesNotMatch(localOverlay, /RIVET_REQUIRE_WORKFLOW_KEY/);
   assert.match(localOverlay, /RIVET_REQUIRE_UI_GATE_KEY:\s*"false"/);
   assert.doesNotMatch(localOverlay, /RIVET_WEB_APPS_AUTH_MODE|OAUTH_CLIENT_SECRET|OAUTH_AUTHORIZE_URL/);
+});
+
+test('self-contained Minikube dependencies stay isolated and match the local launcher contract', () => {
+  const dependencies = readRepoFile('deploy/studio-server/kubernetes-test/local-dependencies.yaml');
+  const environment = readRepoFile('deploy/studio-server/.env.kubernetes-local.example');
+
+  assert.match(dependencies, /kind: Namespace\s*\nmetadata:\s*\n  name: rivet-local/);
+  assert.match(dependencies, /name: rivet-local-postgres/);
+  assert.match(dependencies, /image: postgres:16\.8-alpine/);
+  assert.match(dependencies, /name: rivet-local-minio/);
+  assert.match(dependencies, /image: minio\/minio:RELEASE\.2025-04-22T22-12-26Z/);
+  assert.match(dependencies, /mc mb --ignore-existing local\/rivet-workflows/);
+  assert.match(dependencies, /storage: 2Gi/);
+  assert.doesNotMatch(dependencies, /example\.invalid|ghcr\.io|digitaloceanspaces\.com/);
+
+  assert.match(environment, /RIVET_K8S_CONTEXT=rivet-local/);
+  assert.match(environment, /RIVET_K8S_NAMESPACE=rivet-local/);
+  assert.match(environment, /rivet-local-postgres\.rivet-local\.svc\.cluster\.local/);
+  assert.match(environment, /rivet-local-minio\.rivet-local\.svc\.cluster\.local/);
+  assert.match(environment, /RIVET_K8S_DATABASE_SSL_MODE=disable/);
 });
 
 test('local Kubernetes launcher builds every image from the monorepo root', () => {

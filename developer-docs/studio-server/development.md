@@ -133,6 +133,7 @@ Operational note:
   - `RIVET_RUNTIME_LIBRARIES_REPLICA_STATUS_CLEANUP_INTERVAL_MS`
 - split-topology launches can also override:
   - `RIVET_API_PROFILE=combined|control|execution`
+  - `RIVET_DEPLOYMENT_TOPOLOGY=single-host|replicated` — operational metadata for `Settings` -> `Deployment`; it describes the actual launcher topology and does not create replicas
   - `RIVET_RUNTIME_LIBRARIES_REPLICA_TIER=endpoint|editor|none`
   - `RIVET_RUNTIME_LIBRARIES_JOB_WORKER_ENABLED=true|false`
 
@@ -170,6 +171,10 @@ The repo now includes a local Kubernetes rehearsal launcher:
 Current behavior:
 
 - it builds local `proxy`, `web`, `api`, and `executor` images from the current workspace
+- the API image build runs the workspace TypeScript build before it touches the cluster, so a type-contract failure stops the rehearsal before any Helm deployment changes
+- the managed-schema migration validates catalog definitions after applying them; PostgreSQL may remove redundant outer parentheses from partial-index predicates, which the validator treats as equivalent rather than rejecting a healthy fresh database
+- Minikube imports freshly built images sequentially and names each image as it starts; the first local deployment can therefore take several minutes before Helm begins, rather than appearing stalled
+- every local `build`, `dev`, and `recreate` run stamps images with a fresh local tag, because Minikube can retain an older image behind a reused `:dev` tag; `up` reuses the recorded tag from the preceding build. Set `RIVET_K8S_IMAGE_TAG` only when you deliberately want to manage that identity yourself
 - it deploys the real Helm chart into a dedicated local namespace
 - it targets `RIVET_K8S_CONTEXT` explicitly without mutating your global `kubectl` current-context
 - if `RIVET_K8S_CONTEXT` is unset, it uses the current `kubectl` context when one exists
@@ -227,6 +232,44 @@ Operational notes:
   - `RIVET_K8S_WEB_REPLICAS`
   - `RIVET_K8S_EXECUTION_REPLICAS`
   - `RIVET_K8S_LOAD_LOCAL_IMAGES`
+
+### Self-contained Minikube rehearsal
+
+For a local machine that does not already have a safe Postgres and
+S3-compatible endpoint, use the repository's disposable dependency manifest.
+It creates a dedicated namespace with one Postgres instance, one MinIO
+instance, and two 2 GiB local claims. It does not contact production services
+and its credentials are intentionally public development-only values.
+
+From PowerShell:
+
+```powershell
+minikube start -p rivet-local --driver=docker --cpus=4 --memory=8192
+Copy-Item deploy/studio-server/.env.kubernetes-local.example .env.local
+kubectl --context rivet-local apply -f deploy/studio-server/kubernetes-test/local-dependencies.yaml
+kubectl --context rivet-local -n rivet-local rollout status deployment/rivet-local-postgres --timeout=180s
+kubectl --context rivet-local -n rivet-local rollout status deployment/rivet-local-minio --timeout=180s
+kubectl --context rivet-local -n rivet-local wait --for=condition=complete job/rivet-local-create-bucket --timeout=180s
+$env:RIVET_ENV_FILE = '.env.local'
+yarn studio-server:dev:kubernetes-test
+```
+
+The launcher's proxy port-forward exposes the editor at
+`http://127.0.0.1:8090`. Inspect the deployed components with
+`yarn studio-server:dev:kubernetes-test:ps`, or stream their logs with
+`yarn studio-server:dev:kubernetes-test:logs`.
+
+To remove the entire rehearsal—including its database and object-storage
+contents—run:
+
+```powershell
+$env:RIVET_ENV_FILE = '.env.local'
+yarn studio-server:dev:kubernetes-test:down
+minikube delete -p rivet-local
+```
+
+Do not use `:down` against a namespace that contains any work you intend to
+keep: the local launcher deliberately deletes its namespace.
 
 For the operator-facing chart contract and handoff checklist, see:
 

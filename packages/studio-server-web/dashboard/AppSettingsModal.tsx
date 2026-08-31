@@ -3,6 +3,7 @@ import { type Dispatch, type FC, type SetStateAction, useEffect, useState } from
 
 import { SettingsActions } from './app-settings/SettingsControls';
 import { DockerSettingsTab } from './app-settings/tabs/DockerSettingsTab';
+import { DeploymentStatusSettingsTab } from './app-settings/tabs/DeploymentStatusSettingsTab';
 import { EnvironmentVariablesSettingsTab } from './app-settings/tabs/EnvironmentVariablesSettingsTab';
 import { GeneralSettingsTab } from './app-settings/tabs/GeneralSettingsTab';
 import { NodeExecutorSettingsTab } from './app-settings/tabs/NodeExecutorSettingsTab';
@@ -15,6 +16,7 @@ import { WebAppsSettingsTab } from './app-settings/tabs/WebAppsSettingsTab';
 import { WorkflowEndpointsSettingsTab } from './app-settings/tabs/WorkflowEndpointsSettingsTab';
 import { isWebAppAuthSettingsTab, type AppSettingsTab } from './app-settings/model';
 import { useDeploymentStorageForm } from './app-settings/useDeploymentStorageForm';
+import { useDeploymentStatus } from './useDeploymentStatus';
 import { useEnvironmentVariablesForm } from './app-settings/useEnvironmentVariablesForm';
 import { useNodeExecutorForms } from './app-settings/useNodeExecutorForms';
 import { usePublicRoutesForm } from './app-settings/usePublicRoutesForm';
@@ -37,6 +39,7 @@ const tabs: ReadonlyArray<{ id: AppSettingsTab; label: string }> = [
   { id: 'shell-execution', label: 'Shell execution' },
   { id: 'server-ui-access', label: 'Server UI access' },
   { id: 'storage', label: 'Storage' },
+  { id: 'deployment-status', label: 'Deployment' },
   { id: 'workflow-endpoints', label: 'Workflow endpoints' },
   { id: 'run-recordings', label: 'Run recordings' },
   { id: 'node-executor-proxy', label: 'Node executor proxy' },
@@ -81,6 +84,7 @@ function OpenAppSettingsModal({
   const limits = useRuntimeLimitsForm(usesRuntimeLimits);
   const trustedHosts = useTrustedHostsForm(activeTab === 'general');
   const storage = useDeploymentStorageForm(activeTab === 'storage');
+  const deploymentStatus = useDeploymentStatus(activeTab === 'deployment-status');
   const routes = usePublicRoutesForm(usesPublicRoutes, routeConfig, onRouteConfigChange);
   const workflowAuth = useWorkflowEndpointAuthForm(activeTab === 'workflow-endpoints');
   const recordings = useRunRecordingsForm(activeTab === 'run-recordings');
@@ -96,6 +100,8 @@ function OpenAppSettingsModal({
       ? <ServerUiAccessSettingsTab auth={webAppAuth} />
       : activeTab === 'storage'
         ? <StorageSettingsTab storage={storage} />
+        : activeTab === 'deployment-status'
+          ? <DeploymentStatusSettingsTab deployment={deploymentStatus} />
         : activeTab === 'workflow-endpoints'
           ? <WorkflowEndpointsSettingsTab auth={workflowAuth} limits={limits} routes={routes} />
           : activeTab === 'run-recordings'
@@ -110,7 +116,9 @@ function OpenAppSettingsModal({
                   ? <OAuthSettingsTab auth={webAppAuth} routeConfig={routeConfig} />
                   : <DockerSettingsTab limits={limits} />;
 
-  const tabActions: TabSettingsAction[] = activeTab === 'general'
+  const tabActions: TabSettingsAction[] = activeTab === 'deployment-status'
+    ? []
+    : activeTab === 'general'
     ? [{
         changed: trustedHosts.changed,
         disabled: trustedHosts.controlsDisabled,
@@ -347,17 +355,19 @@ function OpenAppSettingsModal({
                 onInputCapture={() => setActionFeedback(null)}
               >
                 {panel}
-                <SettingsActions
-                  changed={tabActions.some((action) => action.changed)}
-                  disabled={actionsDisabled}
-                  error={tabError}
-                  loading={savingTab}
-                  onRevert={revertActiveTab}
-                  onSave={saveActiveTab}
-                  pending={routes.applying ? 'Applying routes...' : undefined}
-                  saved={actionFeedback?.saved}
-                  savedMessage={actionFeedback?.savedMessage}
-                />
+                {tabActions.length > 0 ? (
+                  <SettingsActions
+                    changed={tabActions.some((action) => action.changed)}
+                    disabled={actionsDisabled}
+                    error={tabError}
+                    loading={savingTab}
+                    onRevert={revertActiveTab}
+                    onSave={saveActiveTab}
+                    pending={routes.applying ? 'Applying routes...' : undefined}
+                    saved={actionFeedback?.saved}
+                    savedMessage={actionFeedback?.savedMessage}
+                  />
+                ) : null}
               </div>
             </div>
           </div>
