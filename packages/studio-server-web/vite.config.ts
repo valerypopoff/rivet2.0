@@ -26,6 +26,7 @@ const normalizedWorkspaceSourceRoots = [upstreamApp, upstreamCore, upstreamEvalu
 const shimDir = resolve(__dirname, 'shims');
 const overrideDir = resolve(__dirname, 'overrides');
 const webDistDir = resolve(__dirname, 'dist');
+const hostedViteCacheDir = process.env.HOSTED_VITE_CACHE_DIR?.trim();
 
 const wrapperRequire = createRequire(resolve(__dirname, 'package.json'));
 const upstreamAppRequire = createRequire(resolve(upstreamApp, 'package.json'));
@@ -363,6 +364,7 @@ export default defineConfig({
     envDir: resolve(__dirname, '../..'),
     envPrefix: ['VITE_', 'RIVET_'],
     publicDir: resolve(upstreamApp, 'public'),
+    cacheDir: hostedViteCacheDir || undefined,
 
     optimizeDeps: {
       include: ['nspell'],

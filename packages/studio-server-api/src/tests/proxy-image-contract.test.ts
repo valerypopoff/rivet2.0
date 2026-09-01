@@ -406,7 +406,9 @@ test('images and local launchers build directly from the monorepo workspace', ()
   const apiEntrypoint = readRepoFile('deploy/studio-server/images/api/entrypoint.sh');
   const prodCompose = readRepoFile('deploy/studio-server/compose/docker-compose.yml');
   const devCompose = readRepoFile('deploy/studio-server/compose/docker-compose.dev.yml');
+  const managedServicesCompose = readRepoFile('deploy/studio-server/compose/docker-compose.managed-services.yml');
   const devDockerLauncher = readRepoFile('deploy/studio-server/scripts/dev-docker.mjs');
+  const dockerLauncher = readRepoFile('deploy/studio-server/scripts/lib/docker-launcher.mjs');
   const prodDockerLauncher = readRepoFile('deploy/studio-server/scripts/prod-docker.mjs');
 
   for (const dockerfile of [apiDockerfile, webDockerfile, executorDockerfile]) {
@@ -433,6 +435,11 @@ test('images and local launchers build directly from the monorepo workspace', ()
     assert.match(compose, /api:[\s\S]*healthcheck:[\s\S]*\/readyz/);
     assert.match(compose, /api:[\s\S]*stop_grace_period: 150s/);
   }
+  assert.match(devCompose, /com\.valerypopoff\.rivet2\.dev-stack-input-fingerprint/);
+  assert.equal(devCompose.match(/labels: \*dev-stack-labels/g)?.length, 5);
+  assert.match(managedServicesCompose, /com\.valerypopoff\.rivet2\.dev-stack-input-fingerprint/);
+  assert.equal(managedServicesCompose.match(/labels: \*dev-stack-labels/g)?.length, 3);
+  assert.match(devCompose, /\r?\n  api:\r?\n    labels: \*dev-stack-labels\r?\n(?:    #.*\r?\n)*    entrypoint: \[\]/);
   assert.match(devCompose, /node_modules\/\.studio-server-yarn-install-ok/);
   assert.match(
     devCompose,
@@ -445,9 +452,24 @@ test('images and local launchers build directly from the monorepo workspace', ()
     devCompose.match(/- YARN_INSTALL_STATE_PATH=\/workspace\/node_modules\/\.yarn-install-state\.gz/g)?.length,
     2,
   );
+  assert.equal(devCompose.match(/- YARN_CACHE_FOLDER=\/home\/rivet\/\.cache\/yarn/g)?.length, 3);
+  assert.equal(devCompose.match(/- HOSTED_VITE_CACHE_DIR=\/home\/rivet\/\.cache\/vite/g)?.length, 1);
+  assert.equal(devCompose.match(/- vite_cache:\/home\/rivet\/\.cache\/vite/g)?.length, 1);
+  assert.equal(devCompose.match(/- yarn_cache:\/home\/rivet\/\.cache\/yarn/g)?.length, 3);
   assert.match(devDockerLauncher, /node_modules\/\.studio-server-yarn-install-ok/);
   assert.match(devDockerLauncher, /const composeProject = 'rivet-studio-server-dev'/);
   assert.match(devDockerLauncher, /docker compose -p \$\{composeProject\}/);
+  assert.match(devDockerLauncher, /composeProjectInputFingerprint/);
+  assert.match(devDockerLauncher, /RIVET_DEV_STACK_INPUT_FINGERPRINT/);
+  assert.match(devDockerLauncher, /reconcileComposeProjectConfiguration/);
+  assert.match(devDockerLauncher, /down --remove-orphans --timeout 20/);
+  assert.match(dockerLauncher, /Removing only project containers/);
+  assert.match(dockerLauncher, /await run\(`docker rm --force \$\{containerIds\.join\(' '\)\}/);
+  assert.doesNotMatch(dockerLauncher, /composeBase\} down --remove-orphans/);
+  assert.match(devDockerLauncher, /Restarting the dev stack because dependency markers changed/);
+  assert.match(dockerLauncher, /docker ps -aq --no-trunc/);
+  assert.match(devDockerLauncher, /dev: \[`\$\{composeBase\} up -d --remove-orphans --wait/);
+  assert.match(devDockerLauncher, /down --remove-orphans --timeout 20`,\s*`\$\{composeBase\} up -d --build --remove-orphans --wait/);
   assert.match(devDockerLauncher, /readDockerWaitTimeoutSeconds/);
   assert.match(
     prodDockerLauncher,

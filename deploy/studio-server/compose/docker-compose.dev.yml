@@ -1,5 +1,9 @@
+x-dev-stack-labels: &dev-stack-labels
+  com.valerypopoff.rivet2.dev-stack-input-fingerprint: ${RIVET_DEV_STACK_INPUT_FINGERPRINT:-}
+
 services:
   proxy:
+    labels: *dev-stack-labels
     image: nginx:alpine
     ports:
       - "${RIVET_PORT:-8080}:80"
@@ -33,6 +37,7 @@ services:
     restart: unless-stopped
 
   web:
+    labels: *dev-stack-labels
     image: node:20-alpine
     working_dir: /workspace/packages/studio-server-web
     environment:
@@ -50,6 +55,7 @@ services:
       - YARN_NODE_LINKER=node-modules
       - YARN_CHECKSUM_BEHAVIOR=ignore
       - YARN_INSTALL_STATE_PATH=/workspace/node_modules/.yarn-install-state.gz
+      - HOSTED_VITE_CACHE_DIR=/home/rivet/.cache/vite
       - VITE_RIVET_DEBUG_LOGS=${VITE_RIVET_DEBUG_LOGS:-false}
       - RIVET_PUBLISHED_WORKFLOWS_BASE_PATH=${RIVET_PUBLISHED_WORKFLOWS_BASE_PATH:-/workflows}
       - RIVET_LATEST_WORKFLOWS_BASE_PATH=${RIVET_LATEST_WORKFLOWS_BASE_PATH:-/workflows-latest}
@@ -65,6 +71,7 @@ services:
       - web_yarn_unplugged:/workspace/.yarn/unplugged
       - npm_cache:/home/rivet/.npm
       - yarn_cache:/home/rivet/.cache/yarn
+      - vite_cache:/home/rivet/.cache/vite
       - ./docker/preserve-host-pnp-during-command.sh:/tmp/preserve-host-pnp-during-command.sh:ro
     command: >
       sh -lc "
@@ -93,6 +100,7 @@ services:
     restart: unless-stopped
 
   filesystem-artifacts-init:
+    labels: *dev-stack-labels
     image: node:20-alpine
     user: "0:0"
     entrypoint: ["/bin/sh", "-ec"]
@@ -115,6 +123,10 @@ services:
           nocopy: true
     restart: "no"
   api:
+    labels: *dev-stack-labels
+    # The production image entrypoint serves the built API. Development must run
+    # this Compose command instead, so source watching and dependency markers work.
+    entrypoint: []
     build:
       context: ../../..
       dockerfile: deploy/studio-server/compose/docker/Dockerfile.api
@@ -149,6 +161,7 @@ services:
       - no_proxy=${no_proxy:-${NO_PROXY:-}}
       - HOME=/home/rivet
       - npm_config_cache=/home/rivet/.npm
+      - YARN_CACHE_FOLDER=/home/rivet/.cache/yarn
       - YARN_NODE_LINKER=node-modules
       - YARN_CHECKSUM_BEHAVIOR=ignore
       - YARN_INSTALL_STATE_PATH=/workspace/node_modules/.yarn-install-state.gz
@@ -191,6 +204,7 @@ services:
       - api_node_modules:/workspace/node_modules
       - api_yarn_unplugged:/workspace/.yarn/unplugged
       - npm_cache:/home/rivet/.npm
+      - yarn_cache:/home/rivet/.cache/yarn
       - ./docker/preserve-host-pnp-during-command.sh:/tmp/preserve-host-pnp-during-command.sh:ro
       - ${RIVET_WORKFLOWS_HOST_PATH:-../../../.data/workflows}:/workflows
       - ${RIVET_WORKFLOW_RECORDINGS_HOST_PATH:-../../../.data/workflow-recordings}:/workflow-recordings
@@ -229,6 +243,7 @@ services:
     restart: unless-stopped
 
   executor:
+    labels: *dev-stack-labels
     build:
       context: ../../..
       dockerfile: deploy/studio-server/compose/docker/Dockerfile.executor
@@ -294,6 +309,8 @@ volumes:
   npm_cache:
     driver: local
   yarn_cache:
+    driver: local
+  vite_cache:
     driver: local
   rivet_data:
     driver: local

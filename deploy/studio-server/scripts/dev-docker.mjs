@@ -2,6 +2,8 @@ import path from 'node:path';
 import { loadDevEnv } from './lib/dev-env.mjs';
 import {
   assertValidPort,
+  composeProjectInputFingerprint,
+  reconcileComposeProjectConfiguration,
   ensurePortAvailable,
   isComposeServiceRunning,
   printFailureDiagnostics,
@@ -15,7 +17,11 @@ import {
 } from './lib/docker-launcher-env.mjs';
 const rootDir = process.cwd();
 const composeProject = 'rivet-studio-server-dev';
-let composeBase = `docker compose -p ${composeProject} -f deploy/studio-server/compose/docker-compose.managed-services.yml -f deploy/studio-server/compose/docker-compose.dev.yml`;
+const composeConfigFiles = [
+  'deploy/studio-server/compose/docker-compose.managed-services.yml',
+  'deploy/studio-server/compose/docker-compose.dev.yml',
+];
+let composeBase = `docker compose -p ${composeProject} -f ${composeConfigFiles[0]} -f ${composeConfigFiles[1]}`;
 const diagnosticServices = 'api web executor proxy';
 let envFileLabel = '.env';
 
@@ -50,7 +56,8 @@ async function main() {
   if (hasEnvFile) {
     const relativeEnvPath = path.relative(rootDir, envPath) || envFileLabel;
     mergedEnv.RIVET_RUNTIME_ENV_FILE = envPath;
-    composeBase = `docker compose -p ${composeProject} --env-file "${relativeEnvPath}" -f deploy/studio-server/compose/docker-compose.managed-services.yml -f deploy/studio-server/compose/docker-compose.dev.yml -f deploy/studio-server/compose/docker-compose.runtime-env.yml`;
+    composeConfigFiles.push('deploy/studio-server/compose/docker-compose.runtime-env.yml');
+    composeBase = `docker compose -p ${composeProject} --env-file "${relativeEnvPath}" -f ${composeConfigFiles[0]} -f ${composeConfigFiles[1]} -f ${composeConfigFiles[2]}`;
   }
 
   if (!Object.prototype.hasOwnProperty.call(mergedEnv, 'COMPOSE_PARALLEL_LIMIT')) {
@@ -62,6 +69,11 @@ async function main() {
   mergedEnv.RIVET_NODE_EXECUTOR_PROXY_BYPASS_HOSTS = 'host.docker.internal';
 
   assertNoRetiredEnv(mergedEnv, { launcherName: 'dev-docker', envFileLabel });
+  const projectInputFingerprint = await composeProjectInputFingerprint({
+    composeConfigFiles,
+    cwd: rootDir,
+  });
+  mergedEnv.RIVET_DEV_STACK_INPUT_FINGERPRINT = projectInputFingerprint;
 
   const waitTimeoutSeconds = await readDockerWaitTimeoutSeconds({
     composeBase,
@@ -70,21 +82,24 @@ async function main() {
     label: 'dev-docker',
   });
   const proxyPort = assertValidPort(mergedEnv.RIVET_PORT, 8080);
-  let refreshRunningProxy = false;
+  const staleDependencyServices = [];
 
   const commandsByAction = {
     build: [`${composeBase} build api executor`],
-    up: [`${composeBase} up --build`],
-    down: [`${composeBase} down`],
+    up: [`${composeBase} up --build --remove-orphans`],
+    down: [`${composeBase} down --remove-orphans`],
     config: [`${composeBase} config --no-interpolate --no-env-resolution --no-path-resolution`],
     services: [`${composeBase} config --services`],
     ps: [`${composeBase} ps`],
     logs: [`${composeBase} logs -f --tail=120 ${diagnosticServices}`],
-    dev: [`${composeBase} up -d --build --wait --wait-timeout ${waitTimeoutSeconds}`],
-    recreate: [`${composeBase} up -d --build --force-recreate --wait --wait-timeout ${waitTimeoutSeconds}`],
+    dev: [`${composeBase} up -d --remove-orphans --wait --wait-timeout ${waitTimeoutSeconds}`],
+    recreate: [
+      `${composeBase} down --remove-orphans --timeout 20`,
+      `${composeBase} up -d --build --remove-orphans --wait --wait-timeout ${waitTimeoutSeconds}`,
+    ],
   };
 
-  const commands = commandsByAction[action];
+  let commands = commandsByAction[action];
 
   if (!commands) {
     console.error(`Unknown action: ${action}`);
@@ -94,13 +109,22 @@ async function main() {
 
   try {
     if (action === 'dev' || action === 'up') {
+      await reconcileComposeProjectConfiguration({
+        composeProject,
+        expectedConfigFiles: composeConfigFiles,
+        expectedProjectFingerprint: projectInputFingerprint,
+        cwd: rootDir,
+        env: mergedEnv,
+        label: 'dev-docker',
+      });
+    }
+
+    if (action === 'dev' || action === 'up') {
       const proxyAlreadyRunning = await isComposeServiceRunning('proxy', {
         composeBase,
         cwd: rootDir,
         env: mergedEnv,
       });
-      refreshRunningProxy = action === 'dev' && proxyAlreadyRunning;
-
       if (!proxyAlreadyRunning) {
         await ensurePortAvailable(proxyPort, {
           envFileLabel,
@@ -118,13 +142,18 @@ async function main() {
         });
 
         if (alreadyRunning && (await runningServiceDependenciesNeedRefresh(service, mergedEnv))) {
-          console.log(`[dev-docker] Recreating ${service} because dependency markers changed.`);
-          await run(
-            `${composeBase} up -d --no-deps --force-recreate --wait --wait-timeout ${waitTimeoutSeconds} ${service}`,
-            mergedEnv,
-            { cwd: rootDir },
-          );
+          staleDependencyServices.push(service);
         }
+      }
+
+      if (staleDependencyServices.length > 0) {
+        console.log(
+          `[dev-docker] Restarting the dev stack because dependency markers changed for ${staleDependencyServices.join(', ')}.`,
+        );
+        commands = [
+          `${composeBase} down --remove-orphans --timeout 20`,
+          `${composeBase} up -d --build --remove-orphans --wait --wait-timeout ${waitTimeoutSeconds}`,
+        ];
       }
     }
 
@@ -132,13 +161,6 @@ async function main() {
       await run(command, mergedEnv, { cwd: rootDir });
     }
 
-    if (refreshRunningProxy) {
-      await run(
-        `${composeBase} up -d --no-deps --force-recreate --wait --wait-timeout ${waitTimeoutSeconds} proxy`,
-        mergedEnv,
-        { cwd: rootDir },
-      );
-    }
   } catch (error) {
     if (action === 'dev' || action === 'up') {
       await printFailureDiagnostics({

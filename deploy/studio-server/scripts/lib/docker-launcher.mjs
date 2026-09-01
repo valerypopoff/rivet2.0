@@ -1,4 +1,7 @@
 import net from 'node:net';
+import path from 'node:path';
+import { createHash } from 'node:crypto';
+import { readFile } from 'node:fs/promises';
 import { spawn } from 'node:child_process';
 
 export const DEFAULT_DOCKER_WAIT_TIMEOUT_SECONDS = 1200;
@@ -113,6 +116,122 @@ export async function isComposeServiceRunning(service, options) {
     .split(/\r?\n/)
     .map((line) => line.trim())
     .includes(service);
+}
+
+function composeConfigFileName(value) {
+  return String(value).trim().replaceAll('\\', '/').split('/').pop().toLowerCase();
+}
+
+export function composeConfigFilesMatch(configFilesLabel, expectedConfigFiles) {
+  if (typeof configFilesLabel !== 'string' || !configFilesLabel.trim()) {
+    return false;
+  }
+
+  const actual = configFilesLabel
+    .split(',')
+    .map(composeConfigFileName)
+    .filter(Boolean)
+    .sort();
+  const expected = expectedConfigFiles
+    .map(composeConfigFileName)
+    .filter(Boolean)
+    .sort();
+
+  return actual.length === expected.length && actual.every((file, index) => file === expected[index]);
+}
+
+export function composeProjectFingerprintMatches(actualFingerprint, expectedFingerprint) {
+  return typeof expectedFingerprint === 'string' && actualFingerprint === expectedFingerprint;
+}
+
+export async function composeProjectInputFingerprint(options) {
+  const {
+    composeConfigFiles,
+    cwd = process.cwd(),
+  } = options;
+  const hash = createHash('sha256');
+
+  for (const configFile of composeConfigFiles) {
+    const resolvedConfigFile = path.resolve(cwd, configFile);
+    hash.update(`compose:${configFile}\n`);
+    hash.update(await readFile(resolvedConfigFile));
+  }
+
+  return hash.digest('hex');
+}
+
+export async function reconcileComposeProjectConfiguration(options) {
+  const {
+    composeProject,
+    expectedConfigFiles,
+    expectedProjectFingerprint,
+    cwd = process.cwd(),
+    env,
+    label = 'docker-launcher',
+  } = options;
+  const containersResult = await runCapture(
+    `docker ps -aq --no-trunc --filter "label=com.docker.compose.project=${composeProject}"`,
+    env,
+    { allowFailure: true, cwd },
+  );
+  if (containersResult.exitCode !== 0) {
+    return false;
+  }
+
+  const containerIds = containersResult.stdout
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  if (containerIds.length === 0) {
+    return false;
+  }
+
+  const labelsResult = await runCapture(
+    `docker inspect --format "{{.Id}}|{{json .Config.Labels}}" ${containerIds.join(' ')}`,
+    env,
+    { allowFailure: true, cwd },
+  );
+  if (labelsResult.exitCode !== 0) {
+    console.warn(`[${label}] Could not inspect the existing dev Compose containers; continuing with Docker Compose reconciliation.`);
+    return false;
+  }
+
+  const labelsByContainerId = new Map(
+    labelsResult.stdout
+      .split(/\r?\n/)
+      .map((line) => {
+        const separator = line.indexOf('|');
+        if (separator < 0) {
+          return undefined;
+        }
+
+        try {
+          const labels = JSON.parse(line.slice(separator + 1));
+          return [line.slice(0, separator).trim(), labels];
+        } catch {
+          return undefined;
+        }
+      })
+      .filter((entry) => entry != null),
+  );
+  const hasStaleConfiguration = containerIds.some((containerId) => {
+    const labels = labelsByContainerId.get(containerId);
+    return !composeConfigFilesMatch(labels?.['com.docker.compose.project.config_files'], expectedConfigFiles)
+      || !composeProjectFingerprintMatches(
+        labels?.['com.valerypopoff.rivet2.dev-stack-input-fingerprint'],
+        expectedProjectFingerprint,
+      );
+  });
+  if (!hasStaleConfiguration) {
+    return false;
+  }
+
+  console.log(
+    `[${label}] Replacing a dev stack created with different Compose inputs. Removing only project containers; named volumes, the project network, and mounted project data are preserved.`,
+  );
+  await run(`docker rm --force ${containerIds.join(' ')}`, env, { cwd });
+
+  return true;
 }
 
 export async function readDockerWaitTimeoutSeconds(options) {
