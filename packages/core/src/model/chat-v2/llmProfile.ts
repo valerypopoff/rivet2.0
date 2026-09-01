@@ -63,14 +63,17 @@ export function normalizeLLMProfileValue(value: unknown): LLMProfileValue {
   } as LLMChatV2NodeData);
 
   const sourceIdentity = normalizeSourceIdentity(value.healthIdentity);
+  const profileName = normalizeProfileName(value.profileName) ?? sourceIdentity.profileName;
   return {
     version: LLM_PROFILE_VALUE_VERSION,
     configuration,
     credential,
+    ...(profileName == null ? {} : { profileName }),
     healthIdentity: createRivetLLMProfileHealthIdentity({
       configuration,
       credential,
       ...sourceIdentity,
+      ...(profileName == null ? {} : { profileName }),
     }),
   };
 }
@@ -114,20 +117,28 @@ export function scopeLLMProfileHealthIdentity(
   },
 ): LLMProfileValue {
   const profileNodeId = profile.healthIdentity?.profileNodeId ?? fallback.profileNodeId;
+  const profileName =
+    normalizeProfileName(profile.profileName) ?? normalizeProfileName(profile.healthIdentity?.profileName);
   const healthIdentity = createRivetLLMProfileHealthIdentity({
     configuration: profile.configuration,
     credential: profile.credential,
     chatNodeHeaders: fallback.chatNodeHeaders,
     projectId: fallback.projectId,
     profileNodeId,
+    ...(profileName == null ? {} : { profileName }),
   });
 
-  if (profile.healthIdentity?.key === healthIdentity.key) {
+  if (
+    profile.healthIdentity?.key === healthIdentity.key &&
+    profile.profileName === profileName &&
+    profile.healthIdentity?.profileName === profileName
+  ) {
     return profile;
   }
 
   return {
     ...profile,
+    ...(profileName == null ? {} : { profileName }),
     healthIdentity,
   };
 }
@@ -241,15 +252,23 @@ function normalizeCredential(value: unknown): ChatV2CredentialResult {
   };
 }
 
-function normalizeSourceIdentity(value: unknown): { projectId?: ProjectId; profileNodeId?: NodeId } {
+function normalizeSourceIdentity(value: unknown): { projectId?: ProjectId; profileNodeId?: NodeId; profileName?: string } {
   if (!isRecord(value)) {
     return {};
   }
 
+  const profileName = normalizeProfileName(value.profileName);
   return {
     ...(typeof value.projectId === 'string' ? { projectId: value.projectId as ProjectId } : {}),
     ...(typeof value.profileNodeId === 'string' ? { profileNodeId: value.profileNodeId as NodeId } : {}),
+    ...(profileName == null ? {} : { profileName }),
   };
+}
+
+function normalizeProfileName(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const normalized = value.trim();
+  return normalized === '' ? undefined : normalized;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

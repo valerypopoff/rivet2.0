@@ -137,7 +137,7 @@ function createResponseInspectorElement(trace: AgentResponseTrace | null, onClos
             'Model calls',
             trace.modelCalls.map((call) =>
               createElement('article', {}, [
-                createElement('strong', { text: `${call.provider} · ${call.model}` }),
+                createElement('strong', { text: formatTraceModelCallLabel(call) }),
                 createElement('span', {
                   text: `${call.outcome}${call.profileIndex == null ? '' : ` · profile ${call.profileIndex + 1}`} · round ${(call.roundIndex ?? 0) + 1} · attempt ${call.attemptIndex + 1}`,
                 }),
@@ -197,6 +197,14 @@ function createResponseInspectorElement(trace: AgentResponseTrace | null, onClos
       ),
     ],
   );
+}
+
+
+function formatTraceModelCallLabel(call: AgentResponseTrace['modelCalls'][number]): string {
+  const profileName = call.profileName?.trim();
+  return profileName
+    ? 'Profile: ' + profileName + ' · ' + call.provider + ' · ' + call.model
+    : call.provider + ' · ' + call.model;
 }
 
 function createTraceDetails(title: string, rows: HTMLElement[], omitted: number): HTMLElement {

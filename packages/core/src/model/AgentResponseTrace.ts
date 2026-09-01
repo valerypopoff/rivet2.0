@@ -26,6 +26,7 @@ export type AgentModelCallTrace = {
   outcome: ChatV2CallTraceEvent['outcome'];
   attemptIndex: number;
   profileIndex?: number;
+  profileName?: string;
   profileHealthKey?: string;
   profileHealthState?: ChatV2CallTraceEvent['profileHealthState'];
   roundIndex?: number;
@@ -229,11 +230,23 @@ export function mergeAgentTraceEvent(existing: AgentTraceEvent, incoming: AgentT
   if (existing.type === 'llm-call-finished' && incoming.type === 'llm-call-finished') {
     return {
       ...incoming,
+      ...(incoming.profileName == null && existing.profileName != null
+        ? { profileName: existing.profileName }
+        : {}),
       ...(incoming.profileHealthKey == null && existing.profileHealthKey != null
         ? { profileHealthKey: existing.profileHealthKey }
         : {}),
       ...(incoming.profileHealthState == null && existing.profileHealthState != null
         ? { profileHealthState: existing.profileHealthState }
+        : {}),
+    };
+  }
+
+  if (existing.type === 'llm-profile-attempt' && incoming.type === 'llm-profile-attempt') {
+    return {
+      ...incoming,
+      ...(incoming.profileName == null && existing.profileName != null
+        ? { profileName: existing.profileName }
         : {}),
     };
   }
@@ -262,6 +275,7 @@ function toModelCallTrace(event: Extract<AgentTraceEvent, { type: 'llm-call-fini
     outcome: event.outcome,
     attemptIndex: event.attemptIndex,
     ...(event.profileIndex == null ? {} : { profileIndex: event.profileIndex }),
+    ...(event.profileName == null ? {} : { profileName: event.profileName }),
     ...(event.profileHealthKey == null ? {} : { profileHealthKey: event.profileHealthKey }),
     ...(event.profileHealthState == null ? {} : { profileHealthState: event.profileHealthState }),
     ...(event.roundIndex == null ? {} : { roundIndex: event.roundIndex }),
@@ -524,6 +538,7 @@ function isAgentModelCallTrace(value: unknown): boolean {
       'outcome',
       'attemptIndex',
       'profileIndex',
+      'profileName',
       'profileHealthKey',
       'profileHealthState',
       'roundIndex',
@@ -544,6 +559,7 @@ function isAgentModelCallTrace(value: unknown): boolean {
     (value.outcome === 'success' || value.outcome === 'provider-failure' || value.outcome === 'aborted') &&
     isNonNegativeInteger(value.attemptIndex) &&
     isOptionalNonNegativeInteger(value.profileIndex) &&
+    isOptionalString(value.profileName) &&
     isOptionalString(value.profileHealthKey) &&
     (value.profileHealthState === undefined ||
       value.profileHealthState === 'closed' ||
@@ -565,6 +581,7 @@ function isAgentLLMProfileAttemptTrace(value: unknown): boolean {
       'eventId',
       'roundIndex',
       'profileIndex',
+      'profileName',
       'nodeId',
       'processId',
       'provider',
@@ -585,6 +602,7 @@ function isAgentLLMProfileAttemptTrace(value: unknown): boolean {
     typeof value.eventId === 'string' &&
     isNonNegativeInteger(value.roundIndex) &&
     isOptionalNonNegativeInteger(value.profileIndex) &&
+    isOptionalString(value.profileName) &&
     typeof value.nodeId === 'string' &&
     typeof value.processId === 'string' &&
     typeof value.provider === 'string' &&

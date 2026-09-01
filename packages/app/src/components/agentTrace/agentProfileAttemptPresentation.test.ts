@@ -6,6 +6,7 @@ import { buildAgentProfileAttemptInspectorRows } from './agentProfileAttemptPres
 const baseAttempt = {
   roundIndex: 0,
   profileIndex: 0,
+  profileName: 'Primary route',
   nodeId: 'chat' as NodeId,
   processId: 'chat-process' as ProcessId,
   provider: 'custom',
@@ -13,7 +14,7 @@ const baseAttempt = {
   model: 'fast-provider',
 } satisfies Pick<
   AgentLLMProfileAttemptTrace,
-  'roundIndex' | 'profileIndex' | 'nodeId' | 'processId' | 'provider' | 'customProviderApi' | 'model'
+  'roundIndex' | 'profileIndex' | 'profileName' | 'nodeId' | 'processId' | 'provider' | 'customProviderApi' | 'model'
 >;
 
 test('presents suspension skips, reliability-service decisions, and timeout failures for Response Inspector', () => {
@@ -46,18 +47,18 @@ test('presents suspension skips, reliability-service decisions, and timeout fail
   assert.deepEqual(rows, [
     {
       eventId: 'open-gate',
-      providerAndModel: 'Custom Responses / fast-provider',
+      providerAndModel: 'Profile: Primary route · Custom Responses / fast-provider',
       context: 'reliability check / profile suspended; skipped / profile 1 / round 1',
     },
     {
       eventId: 'store-fail-open',
-      providerAndModel: 'Custom Responses / fast-provider',
+      providerAndModel: 'Profile: Primary route · Custom Responses / fast-provider',
       context: 'reliability check / reliability service unavailable; profile request continued / profile 1 / round 1',
       error: 'Health store unavailable',
     },
     {
       eventId: 'first-output-timeout',
-      providerAndModel: 'Custom Responses / fast-provider',
+      providerAndModel: 'Profile: Primary route · Custom Responses / fast-provider',
       context: 'request / first output timed out / profile 1 / round 1',
     },
   ]);

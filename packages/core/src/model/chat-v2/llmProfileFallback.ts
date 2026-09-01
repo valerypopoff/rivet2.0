@@ -111,6 +111,8 @@ export type LLMAttempt = {
   roundIndex: number;
   /** Present when a From profile candidate produced this attempt. */
   profileIndex?: number;
+  /** User-facing title captured from the source LLM Profile node. */
+  profileName?: string;
   provider: ChatV2Provider;
   model: string;
   customProviderApi?: CustomProviderApi;
@@ -137,6 +139,8 @@ export type LLMProfileFallbackHealth = {
 export type LLMProfileFallbackCandidate = {
   provider: ChatV2Provider;
   model: string;
+  /** User-facing title captured from the source LLM Profile node. */
+  profileName?: string;
   customProviderApi?: CustomProviderApi;
   health?: LLMProfileFallbackHealth;
 };
@@ -175,6 +179,15 @@ export function getLLMAttemptErrorMessage(error: unknown): string {
   }
 }
 
+function formatCandidateProfileIdentity(
+  candidate: Pick<LLMProfileFallbackCandidate, 'provider' | 'model' | 'customProviderApi' | 'profileName'>,
+  profileIndex: number,
+): string {
+  const profileName = candidate.profileName?.trim();
+  const identity = formatCandidateIdentity(candidate);
+  return profileName ? `${profileName} (profile ${profileIndex + 1}; ${identity})` : `Profile ${profileIndex + 1} (${identity})`;
+}
+
 function buildExhaustedMessage(attempts: readonly LLMAttempt[]): string {
   const details = attempts
     .map((attempt) => {
@@ -190,7 +203,7 @@ function buildExhaustedMessage(attempts: readonly LLMAttempt[]): string {
                 : 'configuration';
       const status = attempt.status == null ? '' : ` (${attempt.status})`;
       const error = attempt.error ? `: ${attempt.error.replace(/\r\n|\r|\n/g, '\n  ')}` : '';
-      return `Profile ${attempt.profileIndex} (${formatCandidateIdentity(attempt)}), round ${attempt.roundIndex}, ${stage} ${attempt.outcome}${status}${error}`;
+      return `${formatCandidateProfileIdentity(attempt, attempt.profileIndex ?? 0)}, round ${attempt.roundIndex + 1}, ${stage} ${attempt.outcome}${status}${error}`;
     })
     .join('\n');
   return details
@@ -214,7 +227,7 @@ export function buildLLMProfileFallbackSummary(
   return candidates
     .map((candidate, profileIndex) => {
       const profileAttempts = attempts.filter((attempt) => attempt.profileIndex === profileIndex);
-      const identity = `Profile ${profileIndex} (${formatCandidateIdentity(candidate)})`;
+      const identity = formatCandidateProfileIdentity(candidate, profileIndex);
 
       if (profileAttempts.length === 0) {
         return `${identity}: not attempted.`;
@@ -556,9 +569,14 @@ export function createLLMProfileFallbackRunner(params: {
 }): LLMProfileFallbackRunner {
   const attempts: LLMAttempt[] = [];
   const recordAttempt = (attempt: LLMAttempt) => {
-    attempts.push(attempt);
+    const candidate = attempt.profileIndex == null ? undefined : params.candidates[attempt.profileIndex];
+    const completedAttempt =
+      attempt.profileName == null && candidate?.profileName != null
+        ? { ...attempt, profileName: candidate.profileName }
+        : attempt;
+    attempts.push(completedAttempt);
     try {
-      params.onAttempt?.(attempt);
+      params.onAttempt?.(completedAttempt);
     } catch {
       // Diagnostics must not alter profile recovery.
     }
@@ -733,6 +751,7 @@ export function createLLMProfileFallbackRunner(params: {
           ...candidateOptions,
           profileIndex,
           roundIndex,
+          ...(candidate.profileName == null ? {} : { profileName: candidate.profileName }),
           ...(activeHealth == null
             ? {}
             : {

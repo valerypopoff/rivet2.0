@@ -71,8 +71,10 @@ covers provider routing and authentication inputs, including the effective
 project-wide Chat headers plus profile headers after case-insensitive merging
 (profile headers win). Credential and header values never appear in the key.
 Provider, model, Custom API, base URL, routing-header, or credential changes
-rotate the identity. Generation parameters and breaker-policy edits retain it.
-Serialized/imported profile values are rebound to the current executing project
+rotate the identity. Generation parameters and breaker-policy edits retain it. The
+source LLM Profile node title is retained as display-only `profileName` metadata:
+renaming a node updates operator-facing labels without rotating or resetting the
+identity. Serialized/imported profile values are rebound to the current executing project
 while preserving an existing source profile-node ID.
 Profiles resolved without a loaded project deliberately omit that identity;
 LLM Chat creates the project-scoped identity when it later consumes the
@@ -125,8 +127,11 @@ so it has no LLM profile suspension management section.
 Rivet Studio Server owns its operational UI outside the embedded editor. Its
 Project Settings > LLM profile suspension tab shows profiles that are currently
 suspended, awaiting their one recovery attempt, or running that attempt. Fully
-available profiles stay hidden. The tab maps retained profile node IDs back to
-graph/node names and can clear one visible profile's history
+available profiles stay hidden. The tab maps retained profile node IDs back to the
+current graph and node title when the project is available. Newer health entries also
+retain the title as a fallback, so a temporarily unavailable project never leaves an
+operator with only an opaque node ID; legacy entries fall back to their existing
+provider/model label. The tab can clear one visible profile's history
 and resume it, or clear history for the whole project. Project-wide listing and
 clearing use the store's first-class
 `list({ projectId })` and atomic `reset({ projectId })` operations rather than
@@ -142,17 +147,20 @@ suspension list.
 ## Observability
 
 `llmProfileAttempt` is a first-class process event. It carries exact root,
-graph, node, and process identity plus profile index, lifecycle stage, outcome,
-circuit disposition/state, timeout kind, and retry time where applicable. The
-event crosses the Node executor protocol, debugger transport,
+graph, node, and process identity plus the source LLM Profile node title when
+available, profile index, lifecycle stage, outcome, circuit disposition/state, timeout
+kind, and retry time where applicable. The event crosses the Node executor protocol,
+debugger transport,
 recording/replay, and response-trace collector. This matters for an open-circuit
 skip because no physical provider call exists from which the UI could infer it.
 
 Run Activity attaches these decisions to the owning LLM Chat invocation and
 shows suspension skips, unavailable reliability-service errors, first-output/stream
 inactivity timeouts, and reliability updates in chronological order beside physical
-model calls. Response Inspector exposes the same records in its **LLM profile
-attempts** section. Older recordings remain loadable; their additive profile
+model calls. When a source title is available, Run Activity and Response Inspector
+show `Profile: <node title>` beside provider/model identity. Response Inspector
+exposes the same records in its **LLM profile attempts** section. Older recordings
+remain loadable; their additive profile
 attempt collection is simply absent.
 
 ## Host responsibilities

@@ -220,6 +220,7 @@ export async function resolveLLMChatV2RuntimeConfig(params: {
       return {
         provider: parseChatV2Provider(profile.configuration.provider),
         model: profile.configuration.model,
+        ...(profile.profileName == null ? {} : { profileName: profile.profileName }),
         ...(profile.configuration.provider === 'custom'
           ? { customProviderApi: parseCustomProviderApi(profile.configuration.customProviderApi) }
           : {}),

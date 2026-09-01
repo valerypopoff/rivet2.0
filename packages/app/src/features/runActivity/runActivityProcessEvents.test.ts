@@ -136,6 +136,7 @@ test('projects LLM profile health events through the process-event boundary', ()
       eventId: 'health-gate-1',
       roundIndex: 0,
       profileIndex: 1,
+      profileName: 'Recovery profile',
       nodeId: node.id,
       processId,
       provider: 'openai',
@@ -155,4 +156,5 @@ test('projects LLM profile health events through the process-event boundary', ()
     ]!;
   assert.equal(invocation.profileAttempts?.[0]?.healthDisposition, 'fail-open');
   assert.equal(invocation.profileAttempts?.[0]?.error, 'Shared health store unavailable');
+  assert.equal(invocation.profileAttempts?.[0]?.profileName, 'Recovery profile');
 });

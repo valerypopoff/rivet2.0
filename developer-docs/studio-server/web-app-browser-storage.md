@@ -121,9 +121,11 @@ Relevant local gates include:
 
 ```text
 yarn workspace @valerypopoff/rivet2-core exec tsx --test test/model/WebAppBrowserStorage.test.ts test/model/WebAppBrowserStorageRpc.test.ts test/model/UiGraphActionProtocol.test.ts
-yarn workspace @valerypopoff/rivet2-node exec tsx --test test/webAppBrowserStorageRpc.test.ts test/webAppClientStorageRpc.test.ts test/webAppClientTransport.test.ts test/webAppSocketGateway.test.ts
+yarn workspace @valerypopoff/rivet2-node exec tsx --test test/webAppBrowserStorageRpc.test.ts test/webAppClientStorageRpc.test.ts test/webAppClientTransport.test.ts test/webAppSocketGateway.test.ts test/webAppHandler.test.ts
 yarn workspace @valerypopoff/rivet-studio-server-api run test:files src/tests/browser-storage-deployment-contract.test.ts src/tests/metrics.test.ts
 yarn studio-server:verify:kubernetes
 ```
+
+The JSDOM web-app handler suite waits for the asynchronously hydrated surface to remain stable before interacting with it; browser persistence initialization must never silently restore a synchronous-mount test assumption. The harness supplies standard text codecs that browsers provide but JSDOM omits.
 
 UI changes also require the headless `yarn studio-server:ui:observe` gate. A release touching the public WebSocket/proxy path should complete the managed Kubernetes rehearsal before promotion, not only the static Helm contract tests.

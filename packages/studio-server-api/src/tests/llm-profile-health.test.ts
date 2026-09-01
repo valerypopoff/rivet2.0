@@ -46,6 +46,7 @@ function identity(key: string, projectId = 'project-a'): RivetLLMProfileHealthId
     key,
     projectId: projectId as never,
     profileNodeId: 'profile-node' as never,
+    profileName: 'Primary route',
     provider: 'custom',
     model: 'fast-model',
     customProviderApi: 'completions',

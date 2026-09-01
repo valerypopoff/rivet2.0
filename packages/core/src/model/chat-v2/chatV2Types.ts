@@ -169,6 +169,8 @@ export type RunChatV2PipelineOptions = {
    * provider.
    */
   profileIndex?: number | undefined;
+  /** User-facing title from the source LLM Profile node. Never sent to the provider. */
+  profileName?: string | undefined;
   profileHealthKey?: string | undefined;
   profileHealthState?: RivetLLMProfileHealthState | undefined;
   roundIndex?: number | undefined;

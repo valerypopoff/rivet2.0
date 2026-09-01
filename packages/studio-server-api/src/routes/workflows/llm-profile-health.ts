@@ -20,6 +20,8 @@ const identitySchema = z.object({
   // must carry the owning project so one hosted project cannot mutate another.
   projectId: z.string().min(1),
   profileNodeId: z.string().min(1).optional(),
+  // Display-only source-node title. It is never used to authorize or key health state.
+  profileName: z.string().trim().min(1).optional(),
   provider: z.string().min(1),
   model: z.string(),
   customProviderApi: z.enum(['completions', 'responses']).optional(),

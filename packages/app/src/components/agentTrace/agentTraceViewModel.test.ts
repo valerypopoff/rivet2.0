@@ -30,6 +30,7 @@ function modelEvent(processId: ProcessId): AgentTraceEvent {
     processId,
     provider: 'openai',
     model: 'gpt-test',
+    profileName: 'Primary route',
     outcome: 'success',
     pricing: { status: 'unknown' },
   };
@@ -56,6 +57,7 @@ void describe('agentTraceViewModel', () => {
       eventId: 'profile-attempt-1',
       roundIndex: 0,
       profileIndex: 0,
+      profileName: 'Primary route',
       nodeId: node.id,
       processId: selectedProcessId,
       provider: 'openai',
@@ -92,10 +94,12 @@ void describe('agentTraceViewModel', () => {
     assert.equal(trace?.modelCalls.length, 1);
     assert.equal(trace?.modelCalls[0]?.processId, selectedProcessId);
     assert.equal(trace?.modelCalls[0]?.durationMs, 12);
+    assert.equal(trace?.modelCalls[0]?.profileName, 'Primary route');
     assert.equal(trace?.toolCalls.length, 1);
     assert.equal(trace?.toolCalls[0]?.durationMs, 4);
     assert.equal(trace?.profileAttempts?.length, 1);
     assert.equal(trace?.profileAttempts?.[0]?.healthDisposition, 'deny');
+    assert.equal(trace?.profileAttempts?.[0]?.profileName, 'Primary route');
     assert.equal(trace?.durationMs, 40);
   });
 

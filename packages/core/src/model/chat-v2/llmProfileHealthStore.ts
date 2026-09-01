@@ -87,6 +87,8 @@ export type RivetLLMProfileHealthIdentity = {
   key: string;
   projectId?: ProjectId;
   profileNodeId?: NodeId;
+  /** Current source-node title used only for operator-facing identification. */
+  profileName?: string;
   provider: ChatV2Provider;
   model: string;
   customProviderApi?: CustomProviderApi;
@@ -104,7 +106,10 @@ export function createRivetLLMProfileHealthIdentity(params: {
   chatNodeHeaders?: Record<string, string> | undefined;
   projectId?: ProjectId;
   profileNodeId?: NodeId;
+  /** Current source-node title. It is intentionally excluded from the key. */
+  profileName?: string;
 }): RivetLLMProfileHealthIdentity {
+  const profileName = params.profileName?.trim();
   // Circuit health belongs to the physical provider route and credentials,
   // not to generation policy. A temperature/cooldown edit must not silently
   // create a fresh circuit, while changing the model, endpoint, auth, or
@@ -141,6 +146,7 @@ export function createRivetLLMProfileHealthIdentity(params: {
     key: `llm-profile:${key}`,
     ...(params.projectId == null ? {} : { projectId: params.projectId }),
     ...(params.profileNodeId == null ? {} : { profileNodeId: params.profileNodeId }),
+    ...(profileName === '' || profileName == null ? {} : { profileName }),
     provider: params.configuration.provider,
     model: params.configuration.model,
     ...(params.configuration.provider !== 'custom'

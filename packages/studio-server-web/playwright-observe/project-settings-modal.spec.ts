@@ -512,6 +512,7 @@ test.describe('Project settings modal', () => {
           key: 'suspended-profile',
           projectId: project.id,
           profileNodeId: null,
+          profileName: 'Primary route',
           provider: 'openai',
           model: 'suspended-model',
           configurationFingerprint: 'sha256:suspended',
@@ -556,6 +557,7 @@ test.describe('Project settings modal', () => {
     const suspendedRow = modal.locator('.project-settings-llm-health-row-suspended');
     const recoveryRow = modal.locator('.project-settings-llm-health-row-recovery');
     await expect(suspendedRow).toContainText('suspended until');
+    await expect(suspendedRow).toContainText('Primary route');
     await expect(recoveryRow).toContainText('recovery attempt in progress');
 
     const [suspendedColor, recoveryColor] = await Promise.all([

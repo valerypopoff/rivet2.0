@@ -20,6 +20,12 @@ export type LLMProfileValue = {
   version: typeof LLM_PROFILE_VALUE_VERSION;
   configuration: LLMChatV2ProfileData;
   credential: ChatV2CredentialResult;
+  /**
+   * User-facing title captured from the source LLM Profile node. It is
+   * diagnostic metadata only: changing a node title must not change provider
+   * resolution, caching, or circuit-breaker identity.
+   */
+  profileName?: string;
   /** Stable privacy-bounded identity used by optional cross-run health policy. */
   healthIdentity?: RivetLLMProfileHealthIdentity;
 };

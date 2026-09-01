@@ -80,6 +80,14 @@ test('LLM profile suspension settings resolve retained profile nodes to friendly
 
   assert.equal(getLLMProfileHealthDisplayName(project, snapshot('open', 'project-a', 'open')), 'Fast provider in Chat');
   assert.equal(getLLMProfileHealthDisplayName(undefined, snapshot('open', 'project-a', 'open')), 'LLM Profile profile-node');
+  const namedSnapshot = snapshot('named', 'project-a', 'open');
+  assert.equal(
+    getLLMProfileHealthDisplayName(undefined, {
+      ...namedSnapshot,
+      identity: { ...namedSnapshot.identity, profileName: 'Primary route' },
+    }),
+    'Primary route',
+  );
 });
 
 test('outer Project Settings owns LLM profile suspension administration and the embedded editor owns execution only', () => {
