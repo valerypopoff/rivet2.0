@@ -9,3 +9,8 @@ script = ""
 name = "Run Rivet2.0"
 icon = "run"
 command = "yarn dev"
+
+[[actions]]
+name = "Run Rivet server"
+icon = "tool"
+command = "yarn studio-server:dev"
