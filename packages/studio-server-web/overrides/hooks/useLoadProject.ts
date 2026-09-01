@@ -15,6 +15,8 @@ import { toast } from 'react-toastify';
 import { useStore } from 'jotai';
 import { getOpenedProjectSession, primeOpenedProjectSession } from '../../io/openedProjectSessionCache.js';
 import { normalizeHostedProjectExecutorMode } from '../utils/hostedExecutorMode';
+import { isValidOpenedProjectSnapshot } from '../../../app/src/utils/openedProjectSnapshots.js';
+import { flushHybridStorageGroup } from '../../../app/src/state/storage.js';
 
 export function useLoadProject() {
   const store = useStore();
@@ -43,21 +45,30 @@ export function useLoadProject() {
               data: currentProjectData,
             }
           : undefined;
-      const storedSnapshot = activeProjectSnapshot ?? providedSnapshot ?? openedProjectSnapshots[projectInfo.projectId];
+      const storedSnapshot =
+        activeProjectSnapshot ??
+        (isValidOpenedProjectSnapshot(providedSnapshot, projectInfo.projectId) ? providedSnapshot : undefined) ??
+        (isValidOpenedProjectSnapshot(openedProjectSnapshots[projectInfo.projectId], projectInfo.projectId)
+          ? openedProjectSnapshots[projectInfo.projectId]
+          : undefined);
       let project = storedSnapshot?.project;
       let data = storedSnapshot?.data;
       let markClean = false;
       let evaluation: EvaluationProjectFileData | undefined;
+      let loadedProjectFromPath = false;
 
       if (projectInfo.fsPath && isPathBasedIOProvider(ioProvider)) {
         let cachedEvaluation = getOpenedProjectSession(projectInfo.projectId, projectInfo.fsPath);
 
-        if (!cachedEvaluation) {
+        // The session cache deliberately contains Evaluation payloads only. It
+        // cannot stand in for a project snapshot after browser state recovery.
+        if (!project || !cachedEvaluation) {
           const loadedProject = await ioProvider.loadProjectDataNoPrompt(projectInfo.fsPath);
           markClean = !project;
           project ??= loadedProject.project;
           data ??= loadedProject.project.data;
-          cachedEvaluation = loadedProject.evaluation;
+          cachedEvaluation ??= loadedProject.evaluation;
+          loadedProjectFromPath = true;
           primeOpenedProjectSession(projectInfo.projectId, {
             fsPath: projectInfo.fsPath,
             evaluation: cachedEvaluation,
@@ -68,10 +79,12 @@ export function useLoadProject() {
       }
 
       if (!project) {
-        throw new Error(`No in-memory snapshot is available for "${projectInfo.title}".`);
+        throw new Error(
+          `Project tab "${projectInfo.title}" cannot be restored because it has neither a saved server path nor a valid workspace snapshot. Close the tab and reopen the project from the project tree.`,
+        );
       }
 
-      return await workspaceTransitions.loadProject({
+      const loaded = await workspaceTransitions.loadProject({
         project,
         data,
         fsPath: projectInfo.fsPath,
@@ -81,6 +94,22 @@ export function useLoadProject() {
         evaluationData: evaluation?.evaluationData,
         evaluationDatasets: evaluation?.evaluationDatasets,
       });
+
+      if (loaded && loadedProjectFromPath) {
+        store.set(openedProjectSnapshotsState, (previousSnapshots) => ({
+          ...previousSnapshots,
+          [projectInfo.projectId]: { project, data },
+        }));
+        try {
+          await flushHybridStorageGroup('project');
+        } catch (error) {
+          // The project is already open in memory. A failed persistence write
+          // must not turn a successful recovery into a failed tab activation.
+          console.error('Failed to persist recovered hosted project snapshot:', error);
+        }
+      }
+
+      return loaded;
     } catch (err) {
       toast.error(`Failed to load project: ${getError(err).message}`);
       return false;

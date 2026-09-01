@@ -33,6 +33,7 @@ import { selectedExecutorState } from '../state/settings';
 import { normalizeHostedProjectExecutorMode } from '../utils/hostedExecutorMode';
 import { resolveHostedProjectTitle, withHostedProjectTitle } from '../../dashboard/openedProjectMetadata';
 import { syncOpenedProjectSessionIds } from '../../io/openedProjectSessionCache';
+import { isValidOpenedProjectSnapshot } from '../../../app/src/utils/openedProjectSnapshots.js';
 
 type LegacyOpenedProjectInfo = Partial<OpenedProjectInfo> & {
   project?: (Omit<Project, 'data'> & { data?: Project['data'] }) | null;
@@ -66,21 +67,26 @@ function shouldRegisterCurrentProjectInOpenedProjects({
   return true;
 }
 
+function getPersistedString(value: unknown): string | undefined {
+  return typeof value === 'string' ? value : undefined;
+}
+
 function normalizeOpenedProjectEntry(previousProjectId: ProjectId, entry: LegacyOpenedProjectInfo) {
   const legacyProject = entry.project ?? null;
-  const projectId = (entry.projectId ?? legacyProject?.metadata?.id ?? previousProjectId) as ProjectId;
-  const fsPath = entry.fsPath ?? null;
+  const projectId = (getPersistedString(entry.projectId) ??
+    getPersistedString(legacyProject?.metadata?.id) ??
+    previousProjectId) as ProjectId;
+  const fsPath = getPersistedString(entry.fsPath) ?? null;
   const executorMode = normalizeHostedProjectExecutorMode(entry.executorMode);
   const title = resolveHostedProjectTitle(
     {
       metadata: {
-        ...legacyProject?.metadata,
-        title: entry.title ?? legacyProject?.metadata?.title,
+        title: getPersistedString(entry.title) ?? getPersistedString(legacyProject?.metadata?.title),
       },
     } as Pick<Project, 'metadata'>,
     fsPath,
   );
-  const openedGraph = entry.openedGraph ?? legacyProject?.metadata?.mainGraphId;
+  const openedGraph = getPersistedString(entry.openedGraph) ?? getPersistedString(legacyProject?.metadata?.mainGraphId);
   const info: OpenedProjectInfo = {
     projectId,
     title,
@@ -109,7 +115,7 @@ function normalizeOpenedProjectEntry(previousProjectId: ProjectId, entry: Legacy
   };
 }
 
-function normalizeOpenedProjects(
+export function normalizeHostedOpenedProjects(
   previousProjects: OpenedProjectsInfo,
   options: {
     currentProjectId: ProjectId | undefined;
@@ -123,7 +129,7 @@ function normalizeOpenedProjects(
 
   for (const previousProjectId of previousProjects.openedProjectsSortedIds) {
     const entry = previousProjects.openedProjects[previousProjectId] as LegacyOpenedProjectInfo | undefined;
-    if (!entry) {
+    if (!entry || typeof entry !== 'object') {
       changed = true;
       continue;
     }
@@ -140,8 +146,11 @@ function normalizeOpenedProjects(
     }
 
     const hasActivatableSnapshot =
-      Boolean(options.openedProjectSnapshots[normalized.projectId]) ||
-      Boolean(normalized.legacyProject) ||
+      isValidOpenedProjectSnapshot(options.openedProjectSnapshots[normalized.projectId], normalized.projectId) ||
+      isValidOpenedProjectSnapshot(
+        { project: normalized.legacyProject, data: normalized.legacyProject?.data },
+        normalized.projectId,
+      ) ||
       options.currentProjectId === normalized.projectId;
 
     if (!normalized.info.fsPath && !hasActivatableSnapshot) {
@@ -234,7 +243,7 @@ export function useSyncCurrentStateIntoOpenedProjects({ enabled = true }: { enab
 
     const currentProjectId = currentProject.metadata.id as ProjectId | undefined;
     setProjects((previousProjects) =>
-      normalizeOpenedProjects(previousProjects, {
+      normalizeHostedOpenedProjects(previousProjects, {
         currentProjectId,
         openedProjectSnapshots,
       }),
@@ -252,21 +261,33 @@ export function useSyncCurrentStateIntoOpenedProjects({ enabled = true }: { enab
       const openProjectIdSet = new Set(openedProjectIds);
 
       for (const entry of Object.values(openedProjects) as LegacyOpenedProjectInfo[]) {
+        if (!entry || typeof entry !== 'object') {
+          continue;
+        }
+
         const legacyProject = entry.project ?? null;
-        const projectId = (entry.projectId ?? legacyProject?.metadata?.id) as ProjectId | undefined;
+        const projectId = (getPersistedString(entry.projectId) ?? getPersistedString(legacyProject?.metadata?.id)) as
+          | ProjectId
+          | undefined;
         if (!legacyProject || !projectId || nextSnapshots[projectId]) {
           continue;
         }
 
-        nextSnapshots[projectId] = {
-          project: withHostedProjectTitle(legacyProject, entry.fsPath),
+        const rawLegacySnapshot = { project: legacyProject, data: legacyProject.data };
+        if (!isValidOpenedProjectSnapshot(rawLegacySnapshot, projectId)) {
+          continue;
+        }
+
+        const legacySnapshot = {
+          project: withHostedProjectTitle(legacyProject, getPersistedString(entry.fsPath) ?? null),
           data: legacyProject.data,
         };
+        nextSnapshots[projectId] = legacySnapshot;
         changed = true;
       }
 
       for (const projectId of Object.keys(nextSnapshots) as ProjectId[]) {
-        if (!openProjectIdSet.has(projectId)) {
+        if (!openProjectIdSet.has(projectId) || !isValidOpenedProjectSnapshot(nextSnapshots[projectId], projectId)) {
           delete nextSnapshots[projectId];
           changed = true;
         }
@@ -370,7 +391,6 @@ export function useSyncCurrentStateIntoOpenedProjects({ enabled = true }: { enab
     openedProjectIds,
     setProjects,
   ]);
-
 
   useEffect(() => {
     if (!enabled) {

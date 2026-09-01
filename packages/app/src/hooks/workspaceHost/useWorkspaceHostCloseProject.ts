@@ -1,8 +1,14 @@
 import { useAtom, useAtomValue, useSetAtom } from 'jotai';
 import type { ProjectId } from '@valerypopoff/rivet2-core';
-import { openedProjectsSortedIdsState, projectsState, projectState } from '../../state/savedGraphs.js';
+import {
+  openedProjectSnapshotsState,
+  openedProjectsSortedIdsState,
+  projectsState,
+  projectState,
+} from '../../state/savedGraphs.js';
 import { clearLoadedRecordingForProjectState } from '../../state/execution.js';
 import { removeOpenedProject } from '../../utils/openedProjects.js';
+import { isOpenedProjectRecoverable } from '../../utils/openedProjectSnapshots.js';
 import { useCurrentProjectEditorSnapshot } from '../useCurrentProjectEditorSnapshot.js';
 import { useLoadProject } from '../useLoadProject.js';
 import { useProjectExecutionSnapshots } from '../useProjectExecutionSnapshots.js';
@@ -13,6 +19,7 @@ export function useWorkspaceHostCloseProject() {
   const [projects, setProjects] = useAtom(projectsState);
   const currentProject = useAtomValue(projectState);
   const openedProjectIds = useAtomValue(openedProjectsSortedIdsState);
+  const openedProjectSnapshots = useAtomValue(openedProjectSnapshotsState);
   const clearLoadedRecordingForProject = useSetAtom(clearLoadedRecordingForProjectState);
   const loadProject = useLoadProject();
   const { persistCurrentProjectEditorSnapshot } = useCurrentProjectEditorSnapshot();
@@ -33,21 +40,28 @@ export function useWorkspaceHostCloseProject() {
       ? captureCurrentProjectExecutionSnapshot()
       : undefined;
 
-    const sortedOpenedProjects = openedProjectIds
-      .map((id) => ({
-        id,
-        project: projects.openedProjects[id],
-      }))
-      .filter((item) => item.project != null);
-    const closestProject = sortedOpenedProjects[indexOfProject + 1] || sortedOpenedProjects[indexOfProject - 1];
+    const candidateProjectIds = [
+      ...openedProjectIds.slice(indexOfProject + 1),
+      ...openedProjectIds.slice(0, indexOfProject).reverse(),
+    ];
 
-    if (closingCurrentProject && closestProject?.project) {
-      const loaded = await loadProject(closestProject.project);
-      if (!loaded) {
-        return false;
+    if (closingCurrentProject) {
+      let activatedReplacement = false;
+      for (const candidateProjectId of candidateProjectIds) {
+        const candidateProject = projects.openedProjects[candidateProjectId];
+        if (!candidateProject || !isOpenedProjectRecoverable(candidateProject, openedProjectSnapshots)) {
+          continue;
+        }
+
+        if (await loadProject(candidateProject)) {
+          activatedReplacement = true;
+          break;
+        }
       }
-    } else if (closingCurrentProject) {
-      restoreProjectExecutionSnapshot(undefined);
+
+      if (!activatedReplacement) {
+        restoreProjectExecutionSnapshot(undefined);
+      }
     }
 
     cleanupClosedProject(projectId, {

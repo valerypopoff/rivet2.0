@@ -58,6 +58,38 @@ test('project tabs select after click completion while preserving close and drag
   }
 });
 
+test('inactive project tabs retain a close escape hatch', async () => {
+  const dom = new JSDOM('<div id="root"></div>');
+  const restoreGlobals = installDomGlobals(dom);
+  const root = createRoot(dom.window.document.getElementById('root')!);
+  let closes = 0;
+
+  try {
+    await act(async () =>
+      root.render(
+        React.createElement(ProjectTabSurface, {
+          active: false,
+          closeIcon: React.createElement('span', undefined, 'Close'),
+          displayName: 'Broken project',
+          onCloseProject: () => {
+            closes += 1;
+          },
+        }),
+      ),
+    );
+
+    const close = dom.window.document.querySelector<HTMLButtonElement>('.close-project');
+    assert.ok(close);
+    assert.equal(close.getAttribute('aria-label'), 'Close Broken project');
+
+    await act(async () => close.click());
+    assert.equal(closes, 1);
+  } finally {
+    await act(async () => root.unmount());
+    restoreGlobals();
+    dom.window.close();
+  }
+});
 test('project tab presentation owns active labels, unsaved state, and preview styling', () => {
   assert.deepEqual(
     resolveProjectTabPresentation({
