@@ -1,6 +1,14 @@
 import type { UiComponentId } from './UiGraph.js';
 import { normalizeGraphProgress, type GraphProgress } from './GraphProgress.js';
 import { isAgentResponseTrace, type AgentResponseTrace } from './AgentResponseTrace.js';
+import {
+  RIVET_WEB_APP_BROWSER_STORAGE_DEFAULT_TRANSFER_TIMEOUT_MS,
+  parseRivetWebAppBrowserStorageClientMessage,
+  parseRivetWebAppBrowserStorageServerMessage,
+  type RivetWebAppBrowserStorageClientMessage,
+  type RivetWebAppBrowserStorageServerMessage,
+  type RivetWebAppBrowserStorageRpcAdvertisedLimits,
+} from './WebAppBrowserStorageRpc.js';
 
 export const RIVET_WEB_APP_ACTION_PROTOCOL_VERSION = 1 as const;
 
@@ -11,6 +19,7 @@ export type RivetWebAppActionStartMessage = {
   revisionKey?: string;
   state: Record<string, unknown>;
   storage?: Record<string, unknown>;
+  storageRpcVersion?: 2;
 };
 
 export type RivetWebAppActionCancelMessage = {
@@ -27,13 +36,15 @@ export type RivetWebAppRunResumeMessage = {
 export type RivetWebAppClientHelloMessage = {
   type: 'client.hello';
   protocolVersion: typeof RIVET_WEB_APP_ACTION_PROTOCOL_VERSION;
+  capabilities?: readonly string[];
 };
 
 export type RivetWebAppClientMessage =
   | RivetWebAppClientHelloMessage
   | RivetWebAppActionStartMessage
   | RivetWebAppActionCancelMessage
-  | RivetWebAppRunResumeMessage;
+  | RivetWebAppRunResumeMessage
+  | RivetWebAppBrowserStorageClientMessage;
 
 type RunEventBase = {
   requestId: string;
@@ -45,6 +56,8 @@ export type RivetWebAppServerMessage =
   | {
       type: 'server.ready';
       protocolVersion: typeof RIVET_WEB_APP_ACTION_PROTOCOL_VERSION;
+      capabilities?: readonly string[];
+      browserStorageRpcLimits?: RivetWebAppBrowserStorageRpcAdvertisedLimits;
     }
   | ({ type: 'action.accepted' } & RunEventBase)
   | ({ type: 'action.progress'; progress: GraphProgress } & RunEventBase)
@@ -71,20 +84,28 @@ export type RivetWebAppServerMessage =
     }
   | {
       type: 'server.draining';
-    };
+    }
+  | RivetWebAppBrowserStorageServerMessage;
 
 export type RivetWebAppRunEvent = Exclude<
   RivetWebAppServerMessage,
-  { type: 'server.ready' | 'action.rejected' | 'run.rejected' | 'server.draining' }
+  | { type: 'server.ready' | 'action.rejected' | 'run.rejected' | 'server.draining' }
+  | RivetWebAppBrowserStorageServerMessage
 >;
 
 export function parseRivetWebAppClientMessage(value: unknown): RivetWebAppClientMessage | undefined {
   if (!isRecord(value) || typeof value.type !== 'string') return undefined;
+  const storageMessage = parseRivetWebAppBrowserStorageClientMessage(value);
+  if (storageMessage) return storageMessage;
 
   switch (value.type) {
     case 'client.hello':
       return value.protocolVersion === RIVET_WEB_APP_ACTION_PROTOCOL_VERSION
-        ? { type: value.type, protocolVersion: value.protocolVersion }
+        ? {
+            type: value.type,
+            protocolVersion: value.protocolVersion,
+            ...(isStringArray(value.capabilities) ? { capabilities: value.capabilities } : {}),
+          }
         : undefined;
     case 'action.start':
       return isNonEmptyString(value.requestId) &&
@@ -99,6 +120,7 @@ export function parseRivetWebAppClientMessage(value: unknown): RivetWebAppClient
             state: value.state,
             ...(isRecord(value.storage) ? { storage: value.storage } : {}),
             ...(typeof value.revisionKey === 'string' ? { revisionKey: value.revisionKey } : {}),
+            ...(value.storageRpcVersion === 2 ? { storageRpcVersion: 2 as const } : {}),
           }
         : undefined;
     case 'action.cancel':
@@ -117,11 +139,19 @@ export function parseRivetWebAppClientMessage(value: unknown): RivetWebAppClient
 
 export function parseRivetWebAppServerMessage(value: unknown): RivetWebAppServerMessage | undefined {
   if (!isRecord(value) || typeof value.type !== 'string') return undefined;
+  const storageMessage = parseRivetWebAppBrowserStorageServerMessage(value);
+  if (storageMessage) return storageMessage;
 
   if (value.type === 'server.ready') {
-    return value.protocolVersion === RIVET_WEB_APP_ACTION_PROTOCOL_VERSION
-      ? { type: value.type, protocolVersion: value.protocolVersion }
-      : undefined;
+    if (value.protocolVersion !== RIVET_WEB_APP_ACTION_PROTOCOL_VERSION) return undefined;
+    const browserStorageRpcLimits = parseBrowserStorageRpcLimits(value.browserStorageRpcLimits);
+    if (value.browserStorageRpcLimits != null && !browserStorageRpcLimits) return undefined;
+    return {
+      type: value.type,
+      protocolVersion: value.protocolVersion,
+      ...(isStringArray(value.capabilities) ? { capabilities: value.capabilities } : {}),
+      ...(browserStorageRpcLimits ? { browserStorageRpcLimits } : {}),
+    };
   }
   if (value.type === 'server.draining') return { type: value.type };
   if (value.type === 'action.rejected') {
@@ -213,6 +243,32 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value != null && !Array.isArray(value);
 }
 
+function parseBrowserStorageRpcLimits(value: unknown): RivetWebAppBrowserStorageRpcAdvertisedLimits | undefined {
+  if (!isRecord(value)) return undefined;
+  if (
+    !isPositiveSafeInteger(value.maxActionBytes) ||
+    !isPositiveSafeInteger(value.maxValueBytes) ||
+    value.maxValueBytes > value.maxActionBytes
+  ) {
+    return undefined;
+  }
+  if (value.transferTimeoutMs != null && !isPositiveSafeInteger(value.transferTimeoutMs)) return undefined;
+  return {
+    maxActionBytes: value.maxActionBytes,
+    maxValueBytes: value.maxValueBytes,
+    transferTimeoutMs: value.transferTimeoutMs ?? RIVET_WEB_APP_BROWSER_STORAGE_DEFAULT_TRANSFER_TIMEOUT_MS,
+  };
+}
+
+function isPositiveSafeInteger(value: unknown): value is number {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value > 0;
+}
+
 function isNonEmptyString(value: unknown): value is string {
   return typeof value === 'string' && value.length > 0;
+}
+function isStringArray(value: unknown): value is string[] {
+  return (
+    Array.isArray(value) && value.length <= 16 && value.every((item) => typeof item === 'string' && item.length <= 100)
+  );
 }

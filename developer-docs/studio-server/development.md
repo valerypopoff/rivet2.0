@@ -350,6 +350,7 @@ The Docker launchers now render layered Compose files:
 - the executor service sets `RIVET_LLM_PROFILE_HEALTH_API_URL=http://api:80/api/workflows/llm-profile-health` and receives `RIVET_KEY`; this keeps Node-mode editor circuit-breaker state aligned with API-owned endpoint and web-app runs
 
 - `yarn studio-server:dev` / `yarn studio-server:dev:docker:*` use `deploy/studio-server/compose/docker-compose.managed-services.yml` plus `deploy/studio-server/compose/docker-compose.dev.yml`; set `RIVET_METRICS_ENABLED=true` only when a private host or Docker-network scraper needs the direct API container's pull-only `/metrics` endpoint. The public proxy intentionally does not route that endpoint.
+- Published web-app Chat state and Stored Values use browser IndexedDB. The API-only `RIVET_WEB_APP_BROWSER_STORAGE_*` settings bound the optional on-demand WebSocket storage RPC; Compose and Helm supply safe defaults. See [web-app-browser-storage.md](web-app-browser-storage.md) before changing limits or proxy timeouts, because these ceilings must be sized with execution-replica memory and admission capacity.
 - `yarn studio-server:prod`, `yarn studio-server:prod:prebuilt`, `yarn studio-server:prod:restart`, and `yarn studio-server:prod:custom` use `deploy/studio-server/compose/docker-compose.managed-services.yml` plus `deploy/studio-server/compose/docker-compose.yml`
 - the shared file only contributes the optional managed Postgres/MinIO services; enable them explicitly with `COMPOSE_PROFILES=workflow-managed` when rehearsing object-storage mode locally
 

@@ -12,6 +12,7 @@ export const defaultApiTestFiles = [
   'src/tests/active-http-executions.test.ts',
   'src/tests/api-profile.test.ts',
   'src/tests/app-settings.test.ts',
+  'src/tests/browser-storage-deployment-contract.test.ts',
   'src/tests/docker-launcher-env.test.ts',
   'src/tests/editor-bridge.test.ts',
   'src/tests/env-security.test.ts',

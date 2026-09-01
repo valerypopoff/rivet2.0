@@ -49,6 +49,15 @@ test('metrics registry renders only finite, fixed-label metric families', () => 
   metrics.recordPublishedExecutionAdmission('capacity_exceeded', 'workflow_endpoint');
   metrics.recordHostedEvaluationSubmission('accepted');
   metrics.recordHostedEvaluationSubmission('outstanding_capacity_exceeded');
+  metrics.recordBrowserStorageRpcProtocolNegotiation('2');
+  metrics.recordBrowserStorageRpcProtocolNegotiation('legacy');
+  metrics.recordBrowserStorageRpcTransfer({
+    byteLength: 5 * 1024 * 1024,
+    direction: 'read',
+    durationMs: 250,
+    outcome: 'completed',
+    retryable: false,
+  });
   metrics.setHostedEvaluationQueue({ accepted: 1, claimed: 2, maxOutstandingJobs: 24, queued: 3 });
   metrics.setHostedEvaluationWorkers({ activeTrials: 2, workerConcurrency: 4 });
   metrics.setManagedMaintenance({ lastAttemptAtMs: 1_000, lastSuccessAtMs: 900 });
@@ -118,6 +127,19 @@ test('metrics registry renders only finite, fixed-label metric families', () => 
   assert.match(
     rendered,
     /rivet_hosted_evaluation_submissions_total\{profile="execution",result="outstanding_capacity_exceeded"\} 1/,
+  );
+  assert.match(rendered, /rivet_web_app_browser_storage_rpc_negotiations_total\{profile="execution",version="2"\} 1/);
+  assert.match(
+    rendered,
+    /rivet_web_app_browser_storage_rpc_negotiations_total\{profile="execution",version="legacy"\} 1/,
+  );
+  assert.match(
+    rendered,
+    /rivet_web_app_browser_storage_rpc_transfers_total\{direction="read",outcome="completed",profile="execution",retryable="false"\} 1/,
+  );
+  assert.match(
+    rendered,
+    /rivet_web_app_browser_storage_rpc_transfer_size_buckets_total\{bucket="le_16_mib",direction="read",outcome="completed",profile="execution",retryable="false"\} 1/,
   );
   assert.match(rendered, /rivet_hosted_evaluation_jobs_outstanding\{profile="execution",state="queued"\} 3/);
   assert.match(rendered, /rivet_hosted_evaluation_jobs_outstanding_limit\{profile="execution"\} 24/);

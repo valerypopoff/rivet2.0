@@ -16569,6 +16569,7 @@ const RAW_RUNTIME_STATE =
           ["eslint-plugin-import", "virtual:cce41fb5932c708537e2c8102f67c1df8503bc7b0e98fe405b8d054c96ba0fd0ec3b4d44ffa2144f5379ff48b0cfcbb1215b2409bcf11998c11e7bcf45bd049f#npm:2.31.0"],\
           ["eslint-plugin-n", "virtual:cce41fb5932c708537e2c8102f67c1df8503bc7b0e98fe405b8d054c96ba0fd0ec3b4d44ffa2144f5379ff48b0cfcbb1215b2409bcf11998c11e7bcf45bd049f#npm:16.2.0"],\
           ["eslint-plugin-promise", "virtual:cce41fb5932c708537e2c8102f67c1df8503bc7b0e98fe405b8d054c96ba0fd0ec3b4d44ffa2144f5379ff48b0cfcbb1215b2409bcf11998c11e7bcf45bd049f#npm:6.1.1"],\
+          ["fake-indexeddb", "npm:6.2.5"],\
           ["gpt-tokenizer", "npm:2.1.2"],\
           ["json-stream-es", "npm:1.2.1"],\
           ["jsonpath-plus", "npm:10.4.0"],\

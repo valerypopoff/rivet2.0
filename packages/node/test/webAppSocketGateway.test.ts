@@ -13,6 +13,7 @@ import {
   type RivetKnowledgeStore,
   type RivetWebAppServerMessage,
 } from '../src/index.js';
+import { RIVET_WEB_APP_BROWSER_STORAGE_RPC_CAPABILITY } from '@valerypopoff/rivet2-core/web-app-runtime';
 import {
   makeExternalStatusProject,
   makeKnowledgeStatusProject,
@@ -63,6 +64,68 @@ void describe('Rivet web app WebSocket gateway', () => {
     const ready = await messages.next('server.ready');
 
     assert.equal(ready.protocolVersion, 1);
+  });
+  void it('negotiates browser-storage RPC v2 only when the client requests it', async () => {
+    const protocolEvents: Array<{ type: string; version?: string }> = [];
+    const harness = await createHarness(makeProject(), undefined, {
+      browserStorageTransferTimeoutMs: 1_234,
+      maxBrowserStorageActionBytes: 4096,
+      maxBrowserStorageValueBytes: 2048,
+      onBrowserStorageRpcEvent(event) {
+        protocolEvents.push(event);
+      },
+    });
+    const client = await harness.connect('owner', false);
+    const messages = collectMessages(client);
+
+    client.send(
+      JSON.stringify({
+        type: 'client.hello',
+        protocolVersion: 1,
+        capabilities: [RIVET_WEB_APP_BROWSER_STORAGE_RPC_CAPABILITY],
+      }),
+    );
+    const ready = await messages.next('server.ready');
+
+    assert.deepEqual(ready.capabilities, [RIVET_WEB_APP_BROWSER_STORAGE_RPC_CAPABILITY]);
+    assert.deepEqual(ready.browserStorageRpcLimits, {
+      maxActionBytes: 4096,
+      maxValueBytes: 2048,
+      transferTimeoutMs: 1_234,
+    });
+
+    client.send(JSON.stringify({ ...makeStartMessage('request-storage-rpc'), storageRpcVersion: 2 }));
+    await messages.next('action.accepted');
+    assert.deepEqual(protocolEvents, [{ type: 'protocol-negotiated', version: '2' }]);
+  });
+  void it('records the legacy browser-storage fallback selected by an old client', async () => {
+    const protocolVersions: string[] = [];
+    const harness = await createHarness(makeProject(), undefined, {
+      onBrowserStorageRpcEvent(event) {
+        if (event.type === 'protocol-negotiated') protocolVersions.push(event.version);
+      },
+    });
+    const client = await harness.connect('owner', false);
+    const messages = collectMessages(client);
+    client.send(JSON.stringify({ type: 'client.hello', protocolVersion: 1 }));
+    await messages.next('server.ready');
+    client.send(JSON.stringify(makeStartMessage('request-legacy-storage')));
+    await messages.next('action.accepted');
+    assert.deepEqual(protocolVersions, ['legacy']);
+  });
+
+  void it('rejects an RPC-v2 action when the capability was not negotiated', async () => {
+    const harness = await createHarness(makeProject());
+    const client = await harness.connect();
+    const messages = collectMessages(client);
+    await messages.next('server.ready');
+
+    client.send(
+      JSON.stringify({ ...makeStartMessage('request-storage-rpc-without-capability'), storageRpcVersion: 2 }),
+    );
+    const rejected = await messages.next('action.rejected');
+
+    assert.match(rejected.error, /was not negotiated/i);
   });
 
   void it('closes clients that never complete the protocol handshake', async () => {
@@ -905,6 +968,58 @@ void describe('Rivet web app WebSocket gateway', () => {
     assert.equal(progress.sequence, 2);
     assert.equal(completed.sequence, 3);
     assert.deepEqual(completed.statePatch, { result: 'Hello' });
+  });
+
+  void it('keeps a storage-free RPC-v2 action live across a browser disconnect', async () => {
+    const harness = await createHarness(makeProject(120));
+    const firstClient = await harness.connect('owner', false);
+    const firstMessages = collectMessages(firstClient);
+    firstClient.send(
+      JSON.stringify({
+        type: 'client.hello',
+        protocolVersion: 1,
+        capabilities: [RIVET_WEB_APP_BROWSER_STORAGE_RPC_CAPABILITY],
+      }),
+    );
+    await firstMessages.next('server.ready');
+    firstClient.send(JSON.stringify({ ...makeStartMessage('request-rpc-resume'), storageRpcVersion: 2 }));
+    const accepted = await firstMessages.next('action.accepted');
+    firstClient.close();
+    await waitForClose(firstClient);
+
+    const resumedClient = await harness.connect('owner');
+    const resumedMessages = collectMessages(resumedClient);
+    resumedClient.send(JSON.stringify({ type: 'run.resume', runId: accepted.runId, lastSequence: 1 }));
+
+    await resumedMessages.next('action.progress');
+    const completed = await resumedMessages.next('action.completed');
+    assert.deepEqual(completed.statePatch, { result: 'Hello' });
+  });
+
+  void it('fails a storage-dependent RPC-v2 action if its browser disconnects mid-read', async () => {
+    const harness = await createHarness(makeStoredValueProject('get'));
+    const firstClient = await harness.connect('owner', false);
+    const firstMessages = collectMessages(firstClient);
+    firstClient.send(
+      JSON.stringify({
+        type: 'client.hello',
+        protocolVersion: 1,
+        capabilities: [RIVET_WEB_APP_BROWSER_STORAGE_RPC_CAPABILITY],
+      }),
+    );
+    await firstMessages.next('server.ready');
+    firstClient.send(JSON.stringify({ ...makeStartMessage('request-rpc-disconnect'), storageRpcVersion: 2 }));
+    const accepted = await firstMessages.next('action.accepted');
+    await firstMessages.next('storage.get');
+    firstClient.close();
+    await waitForClose(firstClient);
+
+    const resumedClient = await harness.connect('owner');
+    const resumedMessages = collectMessages(resumedClient);
+    resumedClient.send(JSON.stringify({ type: 'run.resume', runId: accepted.runId, lastSequence: 1 }));
+
+    const failed = await resumedMessages.next('action.failed');
+    assert.match(failed.error, /Get Stored Value/i);
   });
 
   void it('resumes a live run through another gateway by coordinating with its owner', async () => {

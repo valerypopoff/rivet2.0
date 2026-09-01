@@ -36,6 +36,14 @@ export type MetricsHttpRoute =
   | 'published_workflow';
 
 export type MetricsPublishedExecutionSurface = 'web_app_action' | 'workflow_endpoint';
+export type MetricsBrowserStorageRpcDirection = 'commit' | 'read';
+export type MetricsBrowserStorageRpcOutcome =
+  | 'cancelled'
+  | 'capacity_rejected'
+  | 'completed'
+  | 'invalid'
+  | 'too_large'
+  | 'unavailable';
 export type MetricsHostedEvaluationSubmissionResult =
   | 'accepted'
   | 'outstanding_capacity_exceeded'
@@ -137,6 +145,35 @@ export class StudioMetrics {
 
   recordPublishedExecutionInterruptions(surface: MetricsPublishedExecutionSurface, count = 1): void {
     this.incrementCounter('rivet_published_execution_interruptions_total', { surface }, count);
+  }
+
+  recordBrowserStorageRpcProtocolNegotiation(version: 'legacy' | '2'): void {
+    this.incrementCounter('rivet_web_app_browser_storage_rpc_negotiations_total', { version });
+  }
+
+  recordBrowserStorageRpcTransfer(input: {
+    byteLength: number;
+    direction: MetricsBrowserStorageRpcDirection;
+    durationMs: number;
+    outcome: MetricsBrowserStorageRpcOutcome;
+    retryable: boolean;
+  }): void {
+    const labels = {
+      direction: input.direction,
+      outcome: input.outcome,
+      retryable: input.retryable ? 'true' : 'false',
+    };
+    this.incrementCounter('rivet_web_app_browser_storage_rpc_transfers_total', labels);
+    this.incrementCounter('rivet_web_app_browser_storage_rpc_transfer_bytes_total', labels, input.byteLength);
+    this.incrementCounter('rivet_web_app_browser_storage_rpc_transfer_size_buckets_total', {
+      ...labels,
+      bucket: browserStorageTransferByteBucket(input.byteLength),
+    });
+    this.observeHistogram(
+      'rivet_web_app_browser_storage_rpc_transfer_duration_seconds',
+      labels,
+      Math.max(0, input.durationMs) / 1_000,
+    );
   }
 
   recordHostedEvaluationSubmission(result: MetricsHostedEvaluationSubmissionResult): void {
@@ -515,6 +552,16 @@ export async function observeObjectStorageOperation<T>(
     );
     throw error;
   }
+}
+
+function browserStorageTransferByteBucket(byteLength: number): string {
+  if (byteLength <= 0) return 'empty';
+  if (byteLength <= 1024 * 1024) return 'le_1_mib';
+  if (byteLength <= 4 * 1024 * 1024) return 'le_4_mib';
+  if (byteLength <= 16 * 1024 * 1024) return 'le_16_mib';
+  if (byteLength <= 64 * 1024 * 1024) return 'le_64_mib';
+  if (byteLength <= 256 * 1024 * 1024) return 'le_256_mib';
+  return 'gt_256_mib';
 }
 
 function normalizeHttpMethod(method: string): string {

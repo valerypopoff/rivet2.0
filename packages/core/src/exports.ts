@@ -16,6 +16,7 @@ export * from './model/UiGraphWebAppStorage.js';
 export * from './model/StoredValueStore.js';
 export * from './model/ToolCallContinuation.js';
 export * from './model/UiGraphActionProtocol.js';
+export * from './model/WebAppBrowserStorageRpc.js';
 export * from './model/GraphProgress.js';
 export * from './model/UiGraphRendererStyles.js';
 export * from './model/MarkdownSanitizationPolicy.js';

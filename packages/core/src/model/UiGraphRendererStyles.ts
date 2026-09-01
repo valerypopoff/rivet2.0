@@ -1460,6 +1460,20 @@ button.rivet-web-app-output-header:focus-visible {
   margin-bottom: 0;
 }
 
+.rivet-web-app-loading,
+.rivet-web-app-storage-warning {
+  border: 1px solid color-mix(in srgb, var(--rivet-web-app-error-color) 52%, transparent);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--rivet-web-app-error-color) 10%, var(--rivet-web-app-card-background));
+  color: var(--rivet-web-app-foreground);
+  padding: 12px 14px;
+}
+
+.rivet-web-app-loading {
+  margin: 24px auto;
+  max-width: 720px;
+}
+
 .rivet-web-app-error {
   color: var(--rivet-web-app-error-color);
   font-weight: 700;

@@ -1,6 +1,8 @@
 import fs from 'node:fs';
 import { createRequire } from 'node:module';
 import { expect, test } from '@playwright/test';
+import type { UiGraph } from '../../core/src/model/UiGraph';
+import { getUiGraphChatStorageKey } from '../../core/src/model/UiGraphBrowserRuntime';
 import { RIVET_MARKDOWN_SANITIZER_POLICY } from '../../core/src/model/MarkdownSanitizationPolicy';
 import { RIVET_WEB_APP_CLIENT_JS } from '../../node/src/generated/webAppClient.generated';
 
@@ -51,6 +53,52 @@ function createWebAppHtml(clientScript: string, extraBodyHtml = ''): string {
   ${extraBodyHtml}
 </body>
 </html>`;
+}
+
+const CHAT_COMPONENT_ID = 'playwright-chat';
+const CHAT_UI_GRAPH = {
+  components: [{ action: { type: 'runGraph' }, id: CHAT_COMPONENT_ID, title: 'Persisted chat', type: 'chat' }],
+  id: 'playwright-indexeddb-chat',
+} as unknown as UiGraph;
+
+function createChatWebAppHtml(clientScript: string): string {
+  const markedScript = readRivetWebAppBrowserAsset('marked/marked.min.js');
+  const domPurifyScript = readRivetWebAppBrowserAsset('dompurify/dist/purify.min.js');
+  const config = {
+    actionPath: 'http://example.test/actions/chat',
+    initialState: {},
+    markdownSanitizerPolicy: RIVET_MARKDOWN_SANITIZER_POLICY,
+    revisionKey: 'indexeddb-revision',
+    uiGraph: CHAT_UI_GRAPH,
+  };
+
+  return `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>IndexedDB chat storage test</title>
+</head>
+<body>
+  <div id="app" class="rivet-web-app-root"></div>
+  <script>
+    window.__RIVET_WEB_APP__ = ${JSON.stringify(config)};
+  </script>
+  <script>${markedScript.replace(/<\/script/gi, '<\\/script')}</script>
+  <script>${domPurifyScript.replace(/<\/script/gi, '<\\/script')}</script>
+  <script>${clientScript.replace(/<\/script/gi, '<\\/script')}</script>
+</body>
+</html>`;
+}
+
+function getLegacyChatState(): Record<string, unknown> {
+  return {
+    [`__rivet_chat_${CHAT_COMPONENT_ID}_draft`]: 'Migrated draft',
+    [`__rivet_chat_${CHAT_COMPONENT_ID}_messages`]: [
+      { content: 'Migrated question', role: 'user', timestamp: '2026-08-31T12:00:00.000Z' },
+      { content: 'Migrated answer', role: 'assistant', timestamp: '2026-08-31T12:00:01.000Z' },
+    ],
+    [`__rivet_chat_${CHAT_COMPONENT_ID}_pins`]: [1],
+  };
 }
 
 function createLogoutControlHtml(): string {
@@ -120,4 +168,79 @@ test('Rivet web app client keeps the wrapper OAuth logout control visible', asyn
   await expect(logout).toBeVisible();
   await expect(logout).toHaveAttribute('href', '/apps/auth/logout?return_to=%2Fapps%2Ftest&select_account=1');
   await expect(page.locator('.rivet-web-app-markdown strong')).toHaveText('Rendered markdown');
+});
+
+test('Rivet web app migrates legacy Chat state to IndexedDB and synchronizes it across tabs', async ({
+  context,
+  page,
+}) => {
+  const appUrl = 'http://example.test/indexeddb-chat';
+  const legacyKey = getUiGraphChatStorageKey(CHAT_UI_GRAPH, {
+    origin: 'http://example.test',
+    pathname: '/indexeddb-chat',
+  });
+  expect(legacyKey).toBeTruthy();
+
+  await context.addInitScript(
+    ({ key, seedMarker, value }) => {
+      if (localStorage.getItem(seedMarker) === 'complete') return;
+      localStorage.setItem(key, value);
+      localStorage.setItem(seedMarker, 'complete');
+    },
+    {
+      key: legacyKey!,
+      seedMarker: 'rivet-playwright-indexeddb-migration-seeded',
+      value: JSON.stringify(getLegacyChatState()),
+    },
+  );
+  await context.route(appUrl, async (route) => {
+    await route.fulfill({ body: createChatWebAppHtml(RIVET_WEB_APP_CLIENT_JS), contentType: 'text/html', status: 200 });
+  });
+
+  await page.goto(appUrl);
+  const firstComposer = page.locator('.rivet-web-app-chat-composer textarea');
+  await expect(firstComposer).toHaveValue('Migrated draft');
+  await expect(page.getByText('Migrated question', { exact: true })).toBeVisible();
+  await expect(page.getByText('Migrated answer', { exact: true })).toBeVisible();
+  await page.getByRole('button', { name: 'Show 1 pinned response' }).click();
+  await expect(page.locator('.rivet-web-app-chat-pin')).toHaveCount(1);
+  expect(await page.evaluate((key) => localStorage.getItem(key), legacyKey!)).toBe(JSON.stringify(getLegacyChatState()));
+
+  await page.evaluate((key) => localStorage.removeItem(key), legacyKey!);
+  await page.reload();
+  await expect(page.locator('.rivet-web-app-chat-composer textarea')).toHaveValue('Migrated draft');
+  await expect(page.getByText('Migrated answer', { exact: true })).toBeVisible();
+
+  const secondPage = await context.newPage();
+  await secondPage.goto(appUrl);
+  const secondComposer = secondPage.locator('.rivet-web-app-chat-composer textarea');
+  await expect(secondComposer).toHaveValue('Migrated draft');
+
+  await page.locator('.rivet-web-app-chat-composer textarea').fill('Updated in the first tab');
+  await expect(secondComposer).toHaveValue('Updated in the first tab');
+  await secondPage.close();
+});
+
+test('Rivet web app warns when IndexedDB is unavailable', async ({ browser }) => {
+  const context = await browser.newContext();
+  try {
+    await context.addInitScript(() => {
+      Object.defineProperty(globalThis, 'indexedDB', { configurable: true, value: undefined });
+    });
+    await context.route('http://example.test/indexeddb-unavailable', async (route) => {
+      await route.fulfill({
+        body: createChatWebAppHtml(RIVET_WEB_APP_CLIENT_JS),
+        contentType: 'text/html',
+        status: 200,
+      });
+    });
+
+    const page = await context.newPage();
+    await page.goto('http://example.test/indexeddb-unavailable');
+    await expect(page.getByRole('alert')).toContainText(
+      'Saved browser data is unavailable. Changes will use limited legacy storage for this page.',
+    );
+  } finally {
+    await context.close();
+  }
 });

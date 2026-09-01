@@ -8,19 +8,17 @@ import {
   createInMemoryRivetWebAppRunStore,
   createRivetWebAppWebSocketGateway,
   ExecutionRecorder,
+  RIVET_WEB_APP_BROWSER_STORAGE_BINARY_FRAME_HEADER_BYTES,
+  RIVET_WEB_APP_BROWSER_STORAGE_TRANSFER_CHUNK_BYTES,
   RivetWebAppActionHttpError,
+  type RivetWebAppBrowserStorageRpcEvent,
   type RivetWebAppWebSocketGateway,
 } from '@valerypopoff/rivet2-node';
 
 import { checkPostgresPoolHealth } from './managed-health.js';
-import {
-  getPublishedExecutionAdmission,
-  toPublishedExecutionAdmissionError,
-} from './published-execution-admission.js';
-import {
-  acquireManagedPostgresPool,
-  type ManagedPostgresPoolLease,
-} from './managed-postgres-pool.js';
+import { getPublishedExecutionAdmission, toPublishedExecutionAdmissionError } from './published-execution-admission.js';
+import { recordStudioMetrics } from './metrics.js';
+import { acquireManagedPostgresPool, type ManagedPostgresPoolLease } from './managed-postgres-pool.js';
 import type { RuntimeHealthCheckContext } from './runtime-health.js';
 import { getRequestCorrelationId } from './request-correlation.js';
 import { getManagedDbConnectionConfig, getManagedDbPoolConfig } from './routes/workflows/managed/db.js';
@@ -36,7 +34,10 @@ import {
   resolveWebAppSocketExecution,
   type WebAppRouteKind,
 } from './routes/workflows/execution.js';
-import { getWorkflowExecutionRecorderOptions, isWorkflowRecordingEnabled } from './routes/workflows/recordings-config.js';
+import {
+  getWorkflowExecutionRecorderOptions,
+  isWorkflowRecordingEnabled,
+} from './routes/workflows/recordings-config.js';
 import { readRuntimeLimitSettingsSync } from './runtime-limit-settings.js';
 import { getApiRuntimeProfile, type ApiRuntimeProfile } from './runtime-profile.js';
 import { PostgresRivetWebAppRunCoordinator } from './web-app-action-coordinator.js';
@@ -124,9 +125,9 @@ function acquirePublishedWebAppActionPermit() {
 function rejectUpgrade(socket: import('node:stream').Duplex, statusCode: number, message: string): void {
   socket.write(
     `HTTP/1.1 ${statusCode} ${message}\r\n` +
-    'Connection: close\r\n' +
-    'Cache-Control: no-store\r\n' +
-    'Content-Length: 0\r\n\r\n',
+      'Connection: close\r\n' +
+      'Cache-Control: no-store\r\n' +
+      'Content-Length: 0\r\n\r\n',
   );
   socket.destroy();
 }
@@ -135,13 +136,48 @@ async function closeWebSocketServer(server: WebSocketServer): Promise<void> {
   await new Promise<void>((resolve) => server.close(() => resolve()));
 }
 
+function readOptionalPositiveIntegerEnvironment(name: string): number | undefined {
+  const raw = process.env[name]?.trim();
+  if (!raw) return undefined;
+  const value = Number(raw);
+  if (!Number.isSafeInteger(value) || value < 1) {
+    throw new Error(`${name} must be a positive integer.`);
+  }
+  return value;
+}
+
 export async function initializeWebAppActionWebSockets(server: Server): Promise<WebAppActionWebSocketRuntime> {
   if (activeRuntime) return activeRuntime;
 
   const configuredMaxMessageBytes = readRuntimeLimitSettingsSync().webAppActionRequestLimitBytes;
+  const browserStorageRpcOptions = {
+    browserStorageTransferTimeoutMs: readOptionalPositiveIntegerEnvironment(
+      'RIVET_WEB_APP_BROWSER_STORAGE_TRANSFER_TIMEOUT_MS',
+    ),
+    maxBrowserStorageActionBytes: readOptionalPositiveIntegerEnvironment(
+      'RIVET_WEB_APP_BROWSER_STORAGE_MAX_ACTION_BYTES',
+    ),
+    maxBrowserStorageActiveBytes: readOptionalPositiveIntegerEnvironment(
+      'RIVET_WEB_APP_BROWSER_STORAGE_MAX_ACTIVE_BYTES',
+    ),
+    maxBrowserStorageValueBytes: readOptionalPositiveIntegerEnvironment(
+      'RIVET_WEB_APP_BROWSER_STORAGE_MAX_VALUE_BYTES',
+    ),
+    onBrowserStorageRpcEvent(event: RivetWebAppBrowserStorageRpcEvent) {
+      recordStudioMetrics((metrics) => {
+        if (event.type === 'protocol-negotiated') metrics.recordBrowserStorageRpcProtocolNegotiation(event.version);
+        else metrics.recordBrowserStorageRpcTransfer(event);
+      });
+    },
+  };
   const webSocketServer = new WebSocketServer({
     noServer: true,
-    maxPayload: configuredMaxMessageBytes,
+    // The gateway applies configuredMaxMessageBytes to JSON control messages.
+    // Leave enough room here for one independently bounded binary storage chunk.
+    maxPayload: Math.max(
+      configuredMaxMessageBytes,
+      RIVET_WEB_APP_BROWSER_STORAGE_TRANSFER_CHUNK_BYTES + RIVET_WEB_APP_BROWSER_STORAGE_BINARY_FRAME_HEADER_BYTES,
+    ),
   });
   const recorders = new Map<string, RecorderEntry>();
   let pool: Pool | null = null;
@@ -152,6 +188,7 @@ export async function initializeWebAppActionWebSockets(server: Server): Promise<
   const gateway: RivetWebAppWebSocketGateway = (() => {
     if (!isManagedWorkflowStorageEnabled()) {
       return createRivetWebAppWebSocketGateway({
+        ...browserStorageRpcOptions,
         hostId: getHostId(),
         maxMessageBytes: configuredMaxMessageBytes,
         runCoordinator: createInMemoryRivetWebAppRunCoordinator(),
@@ -163,12 +200,11 @@ export async function initializeWebAppActionWebSockets(server: Server): Promise<
     const config = getManagedWorkflowStorageConfig();
     poolLease = acquireManagedPostgresPool(getManagedDbPoolConfig(config));
     pool = poolLease.pool;
-    coordinator = new PostgresRivetWebAppRunCoordinator(
-      pool,
-      getManagedDbConnectionConfig(config),
-      (error) => console.error('[web-app-actions] PostgreSQL coordinator error:', error),
+    coordinator = new PostgresRivetWebAppRunCoordinator(pool, getManagedDbConnectionConfig(config), (error) =>
+      console.error('[web-app-actions] PostgreSQL coordinator error:', error),
     );
     return createRivetWebAppWebSocketGateway({
+      ...browserStorageRpcOptions,
       hostId: getHostId(),
       maxMessageBytes: configuredMaxMessageBytes,
       runCoordinator: coordinator,
@@ -209,19 +245,15 @@ export async function initializeWebAppActionWebSockets(server: Server): Promise<
           const endpointName = getWebAppBasePath(route.routeKind, route.slug);
           gateway.handleConnection(webSocket, {
             ownerScope: resolved.ownerScope,
-            ...(route.routeKind === 'published'
-              ? { acquireRunPermit: acquirePublishedWebAppActionPermit }
-              : {}),
+            ...(route.routeKind === 'published' ? { acquireRunPermit: acquirePublishedWebAppActionPermit } : {}),
             project: resolved.executionProject.project,
             uiGraph: resolved.uiGraph,
             revisionKey: resolved.executionProject.revisionKey,
             request: createWebAppSocketFetchRequest(req),
-            createProcessorOptions: async () => createWebAppProcessorOptions(
-              resolved.executionProject,
-              req,
-              null,
-              { enableRemoteDebugger: route.routeKind === 'latest' },
-            ),
+            createProcessorOptions: async () =>
+              createWebAppProcessorOptions(resolved.executionProject, req, null, {
+                enableRemoteDebugger: route.routeKind === 'latest',
+              }),
             onProcessorPrepared({ actionContext, processor, runId }) {
               const recorder = isWorkflowRecordingEnabled()
                 ? new ExecutionRecorder(getWorkflowExecutionRecorderOptions())
@@ -260,11 +292,12 @@ export async function initializeWebAppActionWebSockets(server: Server): Promise<
               const entry = recorders.get(runId);
               recorders.delete(runId);
               if (!entry) return;
-              const fallbackMessage = outcome === 'cancelled'
-                ? 'Web app action was cancelled.'
-                : outcome === 'interrupted'
-                  ? 'Web app action was interrupted.'
-                  : 'Web app action failed.';
+              const fallbackMessage =
+                outcome === 'cancelled'
+                  ? 'Web app action was cancelled.'
+                  : outcome === 'interrupted'
+                    ? 'Web app action was interrupted.'
+                    : 'Web app action failed.';
               enqueueWebAppActionRecording(
                 resolved.executionProject,
                 entry.recorder,
