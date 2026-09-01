@@ -195,45 +195,22 @@ const fullscreenOutputCss = css`
     padding-bottom: calc(24px * var(--ui-font-scale));
   }
 
-  .llm-chat-output-history-pager {
-    align-items: center;
+  .picker.llm-chat-output-history-pager {
+    border: 0;
     border-bottom: 1px solid var(--node-output-picker-border);
+    border-radius: 0;
     display: flex;
     font-size: var(--ui-font-size-sm);
-    gap: 8px;
     margin: 8px 0 16px;
-    min-height: 32px;
-    padding-bottom: 8px;
+    width: 100%;
 
-    button {
-      align-items: center;
-      background: transparent;
-      border: 0;
-      border-radius: 4px;
-      color: var(--foreground);
-      cursor: pointer;
-      display: inline-flex;
-      font: inherit;
-      height: 28px;
-      justify-content: center;
-      padding: 0;
-      width: 28px;
-
-      &:hover:not(:disabled) {
-        background: var(--node-output-picker-hover-bg);
-      }
-
-      &:disabled {
-        cursor: default;
-        opacity: 0.4;
-      }
-    }
-
-    .llm-chat-output-history-pager-label {
+    .picker-page.llm-chat-output-history-pager-label {
+      flex: 1;
       min-width: 0;
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
+      width: auto;
     }
   }
 
@@ -358,7 +335,13 @@ const NodeFullscreenOutput: FC<{ node: ChartNode }> = ({ node }) => {
             }),
       };
     });
-  }, [filteredOutput, hasSelectedSplitOutputData, selectedLLMChatOutputPage, selectedPresentationData, selectedProcessData]);
+  }, [
+    filteredOutput,
+    hasSelectedSplitOutputData,
+    selectedLLMChatOutputPage,
+    selectedPresentationData,
+    selectedProcessData,
+  ]);
 
   const { FullscreenOutput, Output, OutputSimple, FullscreenOutputSimple, defaultRenderMarkdown, getCopyValueData } =
     useUnknownNodeComponentDescriptorFor(node);
@@ -428,7 +411,15 @@ const NodeFullscreenOutput: FC<{ node: ChartNode }> = ({ node }) => {
       selectedLLMChatOutputPage,
       showNodeRunDurations,
     }),
-    [data, displaySelectedPage, durationSummaryKey, processId, renderMarkdown, selectedLLMChatOutputPage, showNodeRunDurations],
+    [
+      data,
+      displaySelectedPage,
+      durationSummaryKey,
+      processId,
+      renderMarkdown,
+      selectedLLMChatOutputPage,
+      showNodeRunDurations,
+    ],
   );
   const {
     contextValue: fullscreenOutputSearchContext,
@@ -592,7 +583,11 @@ const NodeFullscreenOutput: FC<{ node: ChartNode }> = ({ node }) => {
           onSearchInputKeyDown={handleSearchInputKeyDown}
           onCopyValue={handleCopyToClipboard}
           onCopyJson={handleCopyToClipboardJson}
-          onOpenPromptDesigner={node.type === 'llmChatV2' && (node as LLMChatV2Node).data.configurationMode !== 'profile' ? handleOpenPromptDesigner : undefined}
+          onOpenPromptDesigner={
+            node.type === 'llmChatV2' && (node as LLMChatV2Node).data.configurationMode !== 'profile'
+              ? handleOpenPromptDesigner
+              : undefined
+          }
           onInspectResponse={node.type === 'llmChatV2' ? () => setInspectorOpen(true) : undefined}
         />
       </header>

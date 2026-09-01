@@ -214,30 +214,41 @@ const NodeOutputSingleProcess: FC<{
 
   const copySource = getNodeOutputCopySource(content);
   const handleCopyToClipboard = useStableCallback(() =>
-      copyOutputValue(copySource, dataRefs, getCopyValueData, io.outputDefinitions),
+    copyOutputValue(copySource, dataRefs, getCopyValueData, io.outputDefinitions),
   );
-  const hasPromptDesignerAction = node.type === 'llmChatV2' && (node as LLMChatV2Node).data.configurationMode !== 'profile';
+  const hasPromptDesignerAction =
+    node.type === 'llmChatV2' && (node as LLMChatV2Node).data.configurationMode !== 'profile';
   const hasResponseInspectorAction = node.type === 'llmChatV2';
   const responseTrace = useMemo(() => buildLlmInvocationTrace(node, processData), [node, processData]);
   const responseInspector = isInspectorOpen ? (
     <AgentResponseInspector trace={responseTrace} onClose={() => setInspectorOpen(false)} renderInPortal />
   ) : null;
+  const forceLlmChatOutputHistoryPager = shouldShowLLMChatOutputHistoryPager({
+    entries: llmChatOutputHistory,
+    hasTerminalOutput: data.outputData != null,
+  });
+  const showLiveLlmChatOutputHistoryPage = data.status?.type === 'running' && data.outputData != null;
+  const hasLlmChatOutputHistoryPager =
+    llmChatOutputHistory.length > 0 &&
+    (llmChatOutputHistory.length > 1 || forceLlmChatOutputHistoryPager || showLiveLlmChatOutputHistoryPage);
   const llmChatOutputHistoryPager = (
     <LLMChatOutputHistoryPager
       entries={llmChatOutputHistory}
-      forceVisible={shouldShowLLMChatOutputHistoryPager({
-        entries: llmChatOutputHistory,
-        hasTerminalOutput: data.outputData != null,
-      })}
-      showLivePage={data.status?.type === 'running' && data.outputData != null}
+      forceVisible={forceLlmChatOutputHistoryPager}
+      showLivePage={showLiveLlmChatOutputHistoryPage}
       selectedPage={selectedLLMChatOutputPage}
       onSelectPage={setSelectedLLMChatOutputPage}
     />
   );
-  const outputInnerClassName =
+  const outputInnerClassName = [
     hasPromptDesignerAction || hasResponseInspectorAction
       ? 'node-output-inner has-output-actions has-extra-output-action'
-      : 'node-output-inner has-output-actions';
+      : 'node-output-inner has-output-actions',
+    hasLlmChatOutputHistoryPager && 'has-llm-chat-output-history-pager',
+    isFrozen && 'has-frozen-output-notice',
+  ]
+    .filter(Boolean)
+    .join(' ');
   const erroredOutputInnerClassName = `${outputInnerClassName} errored`;
 
   if (content.kind === 'code-error') {
@@ -248,6 +259,7 @@ const NodeOutputSingleProcess: FC<{
         <NodeOutputOverlayButtons
           hasPromptDesignerAction={hasPromptDesignerAction}
           hasResponseInspectorAction={hasResponseInspectorAction}
+          hasLlmChatOutputHistoryPager={hasLlmChatOutputHistoryPager}
           onCopyToClipboard={handleCopyToClipboard}
           onOpenFullscreenModal={onOpenFullscreenModal}
           onOpenPromptDesigner={handleOpenPromptDesigner}
@@ -273,6 +285,7 @@ const NodeOutputSingleProcess: FC<{
         <NodeOutputOverlayButtons
           hasPromptDesignerAction={hasPromptDesignerAction}
           hasResponseInspectorAction={hasResponseInspectorAction}
+          hasLlmChatOutputHistoryPager={hasLlmChatOutputHistoryPager}
           onCopyToClipboard={handleCopyToClipboard}
           onOpenFullscreenModal={onOpenFullscreenModal}
           onOpenPromptDesigner={handleOpenPromptDesigner}
@@ -341,6 +354,7 @@ const NodeOutputSingleProcess: FC<{
       <NodeOutputOverlayButtons
         hasPromptDesignerAction={hasPromptDesignerAction}
         hasResponseInspectorAction={hasResponseInspectorAction}
+        hasLlmChatOutputHistoryPager={hasLlmChatOutputHistoryPager}
         onCopyToClipboard={handleCopyToClipboard}
         onOpenFullscreenModal={onOpenFullscreenModal}
         onOpenPromptDesigner={handleOpenPromptDesigner}
@@ -374,6 +388,7 @@ const NodeOutputSingleProcess: FC<{
 const NodeOutputOverlayButtons: FC<{
   hasPromptDesignerAction: boolean;
   hasResponseInspectorAction: boolean;
+  hasLlmChatOutputHistoryPager: boolean;
   onCopyToClipboard: () => void;
   onOpenFullscreenModal?: () => void;
   onOpenPromptDesigner: () => void;
@@ -382,6 +397,7 @@ const NodeOutputOverlayButtons: FC<{
 }> = ({
   hasPromptDesignerAction,
   hasResponseInspectorAction,
+  hasLlmChatOutputHistoryPager,
   onCopyToClipboard,
   onOpenFullscreenModal,
   onOpenPromptDesigner,
@@ -399,7 +415,11 @@ const NodeOutputOverlayButtons: FC<{
   });
 
   return (
-    <div className="overlay-buttons" onMouseDown={handleOutputActionMouseDown} onClick={handleOutputActionClick}>
+    <div
+      className={hasLlmChatOutputHistoryPager ? 'overlay-buttons after-output-history-pager' : 'overlay-buttons'}
+      onMouseDown={handleOutputActionMouseDown}
+      onClick={handleOutputActionClick}
+    >
       <Tooltip content="Unfold output">
         <div
           className="output-toggle-button"
@@ -491,16 +511,14 @@ const NodeOutputMultiProcess: FC<{
     selectedData != null && nodeRunDataHasVisibleOutput(node.type, selectedData.data, { showNodeRunDuration: false });
 
   return (
-    <div className="node-output multi">
-      <div className="multi-node-output">
-        <NodeOutputPager
-          selectedPage={displaySelectedPage}
-          totalPages={data.length}
-          onPrevPage={prevPage}
-          onNextPage={nextPage}
-          stopDoubleClickPropagation
-        />
-      </div>
+    <div className="multi-node-output">
+      <NodeOutputPager
+        selectedPage={displaySelectedPage}
+        totalPages={data.length}
+        onPrevPage={prevPage}
+        onNextPage={nextPage}
+        stopDoubleClickPropagation
+      />
       {showDurationSummary && <NodeRunDurationSummaryMeta processData={data} hasBody={selectedHasVisibleBody} />}
       {selectedData && (
         <NodeOutputSingleProcess

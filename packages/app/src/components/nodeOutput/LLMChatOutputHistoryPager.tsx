@@ -37,20 +37,22 @@ export const LLMChatOutputHistoryPager: FC<LLMChatOutputHistoryPagerProps> = ({
   const canGoToLatestPage = showLivePage && !isLatestPage;
 
   return (
-    <div className="llm-chat-output-history-pager" onMouseDown={handlePointerDown}>
+    <div className="picker llm-chat-output-history-pager" onMouseDown={handlePointerDown}>
       <button
         aria-label="Show previous LLM response round"
+        className="picker-left"
         disabled={!previousPage}
         onClick={() => previousPage && onSelectPage(previousPage.entryId)}
         type="button"
       >
         {'<'}
       </button>
-      <span className="llm-chat-output-history-pager-label">
+      <div className="picker-page llm-chat-output-history-pager-label">
         {isLatestPage ? 'Current response · Running' : getLLMChatOutputHistoryPageLabel(selectedEntry!)}
-      </span>
+      </div>
       <button
         aria-label="Show next LLM response round"
+        className="picker-right"
         disabled={!nextPage && !canGoToLatestPage}
         onClick={() => onSelectPage(nextPage ? nextPage.entryId : 'latest')}
         type="button"
