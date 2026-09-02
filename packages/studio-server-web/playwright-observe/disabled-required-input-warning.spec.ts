@@ -2,9 +2,9 @@ import { expect, test } from '@playwright/test';
 import { authenticateIfNeeded, waitForDashboardReady } from './helpers/hostedEditorObserve';
 import type { WorkflowProjectItem, WorkflowTreeResponse } from '../dashboard/types';
 
-function createDisabledRequiredInputProjectFile(projectName: string): string {
-  const projectId = 'disabled-required-input-project';
-  const graphId = 'disabled-required-input-graph';
+function createDisabledGraphInputFallbackProjectFile(projectName: string): string {
+  const projectId = 'disabled-graph-input-project';
+  const graphId = 'disabled-graph-input-graph';
 
   return [
     'version: 4',
@@ -24,14 +24,16 @@ function createDisabledRequiredInputProjectFile(projectName: string): string {
     '        \'[disabled-source]:text "Disabled source"\':',
     '          disabled: true',
     '          data:',
-    '            text: "{\\\"name\\\":\\\"Ada\\\"}"',
+    '            text: "Ignored"',
     '          outgoingConnections:',
-    '            - output->"Required target" required-target/object',
+    '            - output->"Graph Input" graph-input/default',
     '          visualData: 400/300/250/null//',
-    '        \'[required-target]:destructure "Required target"\':',
+    '        \'[graph-input]:graphInput "Graph Input"\':',
     '          data:',
-    '            paths:',
-    '              - $.name',
+    '            dataType: string',
+    '            id: input',
+    '            defaultValue: "Fallback"',
+    '            useDefaultValueInput: true',
     '          visualData: 760/300/250/null//',
     '  plugins: []',
     '  references: []',
@@ -39,11 +41,11 @@ function createDisabledRequiredInputProjectFile(projectName: string): string {
   ].join('\n');
 }
 
-test('shows the standard header warning when a required input is fed by a disabled node', async ({ page }) => {
-  const projectName = 'Disabled required input';
-  const projectContents = createDisabledRequiredInputProjectFile(projectName);
+test('warns when a disabled source feeds a Graph Input Default Value', async ({ page }) => {
+  const projectName = 'Disabled Graph Input default';
+  const projectContents = createDisabledGraphInputFallbackProjectFile(projectName);
   const project: WorkflowProjectItem = {
-    id: 'disabled-required-input-project',
+    id: 'disabled-graph-input-project',
     name: projectName,
     fileName: `${projectName}.rivet-project`,
     relativePath: `${projectName}.rivet-project`,
@@ -92,13 +94,13 @@ test('shows the standard header warning when a required input is fed by a disabl
   await projectRow.dblclick();
 
   const frame = page.frameLocator('iframe.dashboard-editor-frame');
-  const targetNode = frame.locator('.node[data-nodeid="required-target"]');
-  const warning = targetNode.locator('.node-header-warning');
+  const graphInputNode = frame.locator('.node[data-nodeid="graph-input"]');
+  const warning = graphInputNode.locator('.node-header-warning');
 
-  await expect(targetNode).toBeVisible({ timeout: 60_000 });
+  await expect(graphInputNode).toBeVisible({ timeout: 60_000 });
   await expect(warning).toBeVisible();
   await expect(warning).toHaveAttribute(
     'aria-label',
-    'Required input "Object" is connected to disabled node "Disabled source". It will not provide a value, so this node is marked Not Ran. Enable the source or remove or replace the connection.',
+    'Input "Default Value" is connected to disabled node "Disabled source". A disabled connection provides no usable value, so when running, this node will be marked Not Ran.',
   );
 });

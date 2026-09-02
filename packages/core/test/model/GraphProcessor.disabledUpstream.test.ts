@@ -66,3 +66,66 @@ describe('GraphProcessor disabled upstream dependencies', () => {
     assert.deepEqual(outputs.result, { type: 'control-flow-excluded', value: undefined });
   });
 });
+describe('GraphProcessor disabled Graph Input fallback', () => {
+  it('excludes a Graph Input with a disabled Default Value source before it can use its fallback', async () => {
+    const disabledSource = {
+      id: 'disabled-source',
+      type: 'text',
+      title: 'Disabled source',
+      disabled: true,
+      data: { text: 'ignored' },
+      visualData: { x: 0, y: 0, width: 250 },
+    };
+    const graphInput = {
+      id: 'graph-input',
+      type: 'graphInput',
+      title: 'Graph Input',
+      data: { id: 'input', dataType: 'string', defaultValue: 'Fallback', useDefaultValueInput: true },
+      visualData: { x: 300, y: 0, width: 250 },
+    };
+    const graphOutput = {
+      id: 'graph-output',
+      type: 'graphOutput',
+      title: 'Graph Output',
+      data: { id: 'result', dataType: 'string' },
+      visualData: { x: 600, y: 0, width: 250 },
+    };
+    const graph = {
+      metadata: { id: 'disabled-graph-input-default', name: 'Disabled Graph Input default', description: '' },
+      nodes: [disabledSource, graphInput, graphOutput],
+      connections: [
+        {
+          outputNodeId: disabledSource.id,
+          outputId: 'output',
+          inputNodeId: graphInput.id,
+          inputId: 'default',
+        },
+        {
+          outputNodeId: graphInput.id,
+          outputId: 'data',
+          inputNodeId: graphOutput.id,
+          inputId: 'value',
+        },
+      ],
+    };
+    const project = {
+      metadata: { id: 'project', title: 'Project', description: '', mainGraphId: graph.metadata.id },
+      graphs: { [graph.metadata.id]: graph },
+      plugins: [],
+    };
+    const processor = new GraphProcessor(project as any, graph.metadata.id as any, globalRivetNodeRegistry);
+    const excludedNodes: Array<{ nodeId: string; reason: string }> = [];
+
+    processor.on('nodeExcluded', ({ node, reason }) => {
+      excludedNodes.push({ nodeId: node.id, reason });
+    });
+
+    const outputs = await processor.processGraph(testProcessContext());
+
+    assert.deepEqual(excludedNodes, [
+      { nodeId: disabledSource.id, reason: 'disabled' },
+      { nodeId: graphInput.id, reason: 'input is excluded value' },
+    ]);
+    assert.deepEqual(outputs.result, { type: 'control-flow-excluded', value: undefined });
+  });
+});

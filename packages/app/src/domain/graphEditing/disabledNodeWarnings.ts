@@ -1,6 +1,12 @@
-import type { ChartNode, NodeConnection, NodeId, NodeInputDefinition } from '@valerypopoff/rivet2-core';
+import {
+  canConsumeControlFlowExcludedInput,
+  type ChartNode,
+  type NodeConnection,
+  type NodeId,
+  type NodeInputDefinition,
+} from '@valerypopoff/rivet2-core';
 
-type DisabledRequiredInput = {
+type DisabledUpstreamInput = {
   inputTitle: string;
   sourceTitle: string;
 };
@@ -9,26 +15,27 @@ function getConnectionSlotKey(connection: NodeConnection): string {
   return `${connection.inputNodeId}\u0000${connection.inputId}`;
 }
 
-function getRequiredInputWarning(disabledInputs: readonly DisabledRequiredInput[]): string {
+function getDisabledUpstreamInputWarning(disabledInputs: readonly DisabledUpstreamInput[]): string {
   if (disabledInputs.length === 1) {
     const { inputTitle, sourceTitle } = disabledInputs[0]!;
-    return `Required input "${inputTitle}" is connected to disabled node "${sourceTitle}". It will not provide a value, so this node is marked Not Ran. Enable the source or remove or replace the connection.`;
+    return `Input "${inputTitle}" is connected to disabled node "${sourceTitle}". A disabled connection provides no usable value, so when running, this node will be marked Not Ran.`;
   }
 
   const dependencies = disabledInputs
     .map(({ inputTitle, sourceTitle }) => `"${inputTitle}" ← "${sourceTitle}"`)
     .join('; ');
-  return `Required inputs are connected to disabled nodes: ${dependencies}. They will not provide values, so this node is marked Not Ran. Enable the sources or remove or replace the connections.`;
+  return `Inputs are connected to disabled nodes: ${dependencies}. Disabled connections provide no usable values, so when running, this node will be marked Not Ran.`;
 }
 
 /**
- * Returns header-warning text for enabled nodes whose required input is fed by
- * a disabled node. `connections` must already exclude missing/stale ports.
+ * Returns header-warning text for enabled nodes whose connected input is fed
+ * by a disabled node and whose runtime policy does not consume excluded
+ * values. `connections` must already exclude missing/stale ports.
  *
  * Runtime execution uses the first valid wire for an input slot. Mirroring
  * that rule here keeps malformed duplicate wires from changing the warning.
  */
-export function getDisabledRequiredInputWarnings({
+export function getDisabledUpstreamInputWarnings({
   connections,
   getInputDefinitions,
   nodesById,
@@ -46,7 +53,7 @@ export function getDisabledRequiredInputWarnings({
     }
   }
 
-  const disabledInputsByTargetNodeId = new Map<NodeId, DisabledRequiredInput[]>();
+  const disabledInputsByTargetNodeId = new Map<NodeId, DisabledUpstreamInput[]>();
 
   for (const connection of firstConnectionByInputSlot.values()) {
     const sourceNode = nodesById[connection.outputNodeId];
@@ -57,9 +64,9 @@ export function getDisabledRequiredInputWarnings({
     }
 
     const inputDefinition = getInputDefinitions(targetNode.id).find(
-      (definition) => definition.id === connection.inputId && definition.required,
+      (definition) => definition.id === connection.inputId,
     );
-    if (!inputDefinition) {
+    if (!inputDefinition || canConsumeControlFlowExcludedInput(targetNode)) {
       continue;
     }
 
@@ -74,7 +81,7 @@ export function getDisabledRequiredInputWarnings({
   return new Map(
     [...disabledInputsByTargetNodeId.entries()].map(([nodeId, disabledInputs]) => [
       nodeId,
-      getRequiredInputWarning(disabledInputs),
+      getDisabledUpstreamInputWarning(disabledInputs),
     ]),
   );
 }

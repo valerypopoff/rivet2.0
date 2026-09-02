@@ -47,7 +47,7 @@ import {
   getToolNodeHeaderWarning,
 } from '../domain/graphEditing/toolWarnings.js';
 import { combineNodeHeaderWarnings } from '../domain/graphEditing/disabledNodeWarnings.js';
-import { disabledRequiredInputWarningsState } from '../state/selectors/ioDefinitions.js';
+import { disabledUpstreamInputWarningsState } from '../state/selectors/ioDefinitions.js';
 
 export type VisualNodeProps = {
   node: ChartNode;
@@ -119,10 +119,10 @@ const VisualNodeImpl = memo(
       const graphId = useAtomValue(graphMetadataState)?.id;
       const executorSession = useExecutorSessionState();
       const nodeColor = node.visualData.color;
-      const disabledRequiredInputWarnings = useAtomValue(disabledRequiredInputWarningsState);
+      const disabledUpstreamInputWarnings = useAtomValue(disabledUpstreamInputWarningsState);
       const combinedHeaderWarning = combineNodeHeaderWarnings(
         headerWarning,
-        disabledRequiredInputWarnings.get(editTargetNode?.id ?? node.id),
+        disabledUpstreamInputWarnings.get(editTargetNode?.id ?? node.id),
       );
       const isOutputPreviewHovered = Boolean(isHovered || shouldShowHoverControls);
       const isHistoricalChanged = changeInfo != null && changeInfo.changed && !!changeInfo.before && !!changeInfo.after;

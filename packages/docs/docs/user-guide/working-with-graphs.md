@@ -32,7 +32,7 @@ When connected to a remote debugger, whenever the graph executes remotely, it wi
 
 ### Disabled node connections
 
-Turning a node off marks it **Not Ran**; it does not disconnect its existing wires. If its output is still connected to a required input on another node, that node also receives no value and is marked **Not Ran**. Rivet shows a warning icon in that downstream node's header naming the disabled dependency. Enable the source or remove or replace the connection before running the graph.
+Turning a node off marks it **Not Ran**; it does not disconnect its existing wires. A connected downstream input normally receives a control-flow exclusion rather than behaving as if its wire were removed, so its node is also marked **Not Ran**. This includes optional fallback inputs such as a Graph Input's **Default Value**: an unconnected fallback can be used, but a connected disabled source prevents the Graph Input from reaching it. Nodes designed to handle excluded values, such as Coalesce and Graph Output, remain exceptions. Rivet shows a warning icon in the affected node's header naming the disabled dependency. Enable the source or remove or replace the connection before running the graph.
 
 ## Viewing Node Outputs
 

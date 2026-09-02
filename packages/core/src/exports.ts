@@ -1,6 +1,7 @@
 export * from './utils/index.js';
 // eslint-disable-next-line import/no-cycle -- GraphProcessor depends on CodeRunner, which exposes the top-level Rivet export surface.
 export * from './model/GraphProcessor.js';
+export { canConsumeControlFlowExcludedInput } from './model/NodeExclusionPolicy.js';
 export * from './model/DataValue.js';
 export * from './model/NodeBase.js';
 export * from './model/NodeGraph.js';
