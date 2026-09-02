@@ -25,11 +25,13 @@ interface WorkflowLibraryPanelProps {
   onDeleteProject: (path: string, projectId?: string | null) => void;
   onWorkflowPathsMoved: (moves: WorkflowProjectPathMove[]) => Promise<void> | void;
   onWorkflowProjectOpenIntent: (path: string) => void;
+  onWorkflowProjectOpenIntentCanceled: (path: string) => void;
   onActiveWorkflowProjectPathChange: (path: string) => void;
   openedProjectPath: string;
   activeProjectHasUnsavedChanges: boolean;
   editorReady: boolean;
   projectSaveSequence: number;
+  projectTreeRenameRequestSequence: number;
   collapsed: boolean;
   contentVisible: boolean;
   onToggleCollapse: () => void;
@@ -60,11 +62,13 @@ export const WorkflowLibraryPanel: FC<WorkflowLibraryPanelProps> = ({
   onDeleteProject,
   onWorkflowPathsMoved,
   onWorkflowProjectOpenIntent,
+  onWorkflowProjectOpenIntentCanceled,
   onActiveWorkflowProjectPathChange,
   openedProjectPath,
   activeProjectHasUnsavedChanges,
   editorReady,
   projectSaveSequence,
+  projectTreeRenameRequestSequence,
   collapsed,
   contentVisible,
   onToggleCollapse,
@@ -80,9 +84,11 @@ export const WorkflowLibraryPanel: FC<WorkflowLibraryPanelProps> = ({
     onDeleteProject,
     onWorkflowPathsMoved,
     onWorkflowProjectOpenIntent,
+    onWorkflowProjectOpenIntentCanceled,
     onActiveWorkflowProjectPathChange,
     openedProjectPath,
     projectSaveSequence,
+    projectTreeRenameRequestSequence,
   });
 
   const {

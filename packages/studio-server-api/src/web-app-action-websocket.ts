@@ -20,7 +20,7 @@ import { getPublishedExecutionAdmission, toPublishedExecutionAdmissionError } fr
 import { recordStudioMetrics } from './metrics.js';
 import { acquireManagedPostgresPool, type ManagedPostgresPoolLease } from './managed-postgres-pool.js';
 import type { RuntimeHealthCheckContext } from './runtime-health.js';
-import { getRequestCorrelationId } from './request-correlation.js';
+import { createRivetCorrelationId } from './request-correlation.js';
 import { getManagedDbConnectionConfig, getManagedDbPoolConfig } from './routes/workflows/managed/db.js';
 import { getManagedWorkflowStorageConfig, isManagedWorkflowStorageEnabled } from './routes/workflows/storage-config.js';
 import {
@@ -243,6 +243,9 @@ export async function initializeWebAppActionWebSockets(server: Server): Promise<
 
         webSocketServer.handleUpgrade(req, socket, head, (webSocket) => {
           const endpointName = getWebAppBasePath(route.routeKind, route.slug);
+          // A socket can carry several concurrent actions. Keep an opaque key
+          // per action context rather than reusing the socket request ID.
+          const healthCorrelations = new WeakMap<object, string>();
           gateway.handleConnection(webSocket, {
             ownerScope: resolved.ownerScope,
             ...(route.routeKind === 'published' ? { acquireRunPermit: acquirePublishedWebAppActionPermit } : {}),
@@ -250,11 +253,17 @@ export async function initializeWebAppActionWebSockets(server: Server): Promise<
             uiGraph: resolved.uiGraph,
             revisionKey: resolved.executionProject.revisionKey,
             request: createWebAppSocketFetchRequest(req),
-            createProcessorOptions: async () =>
-              createWebAppProcessorOptions(resolved.executionProject, req, null, {
+            createProcessorOptions: async (actionContext) => {
+              const correlationId = createRivetCorrelationId();
+              healthCorrelations.set(actionContext, correlationId);
+              return await createWebAppProcessorOptions(resolved.executionProject, req, null, {
                 enableRemoteDebugger: route.routeKind === 'latest',
-              }),
+                llmProfileHealthExecutionCorrelationId: correlationId,
+              });
+            },
             onProcessorPrepared({ actionContext, processor, runId }) {
+              const correlationId = healthCorrelations.get(actionContext) ?? createRivetCorrelationId();
+              healthCorrelations.delete(actionContext);
               const recorder = isWorkflowRecordingEnabled()
                 ? new ExecutionRecorder(getWorkflowExecutionRecorderOptions())
                 : null;
@@ -267,7 +276,7 @@ export async function initializeWebAppActionWebSockets(server: Server): Promise<
                   actionContext.uiGraph,
                   actionContext.component,
                   route.slug,
-                  getRequestCorrelationId(req),
+                  correlationId,
                 ),
               });
             },

@@ -20,6 +20,14 @@ export const isEditorDuplicateShortcutEvent = (event: KeyboardEvent) =>
   !event.shiftKey &&
   (event.code === 'KeyD' || event.key.toLowerCase() === 'd');
 
+/**
+ * F2 is a tree-management shortcut. Keep it deliberately narrow so it does
+ * not claim modified platform shortcuts or retrigger while the key is held.
+ */
+export const isPlainF2ShortcutEvent = (
+  event: Pick<KeyboardEvent, 'altKey' | 'ctrlKey' | 'key' | 'metaKey' | 'repeat' | 'shiftKey'>,
+) => event.key === 'F2' && !event.altKey && !event.ctrlKey && !event.metaKey && !event.repeat && !event.shiftKey;
+
 export function focusElement(element: HTMLElement | HTMLIFrameElement | null) {
   if (!element) {
     return;

@@ -80,6 +80,21 @@ test('managed recording retention combines age, endpoint count, and total byte l
   );
 });
 
+test('managed recording retention keeps active suspension evidence outside normal limits', () => {
+  const now = Date.parse('2026-08-04T12:00:00.000Z');
+  const selected = selectManagedRecordingRowsForCleanup(
+    [
+      createRecordingRow('held-old', 'endpoint', '2026-07-01T00:00:00.000Z'),
+      createRecordingRow('ordinary-old', 'endpoint', '2026-07-02T00:00:00.000Z'),
+      createRecordingRow('ordinary-new', 'endpoint', '2026-08-04T00:00:00.000Z'),
+    ],
+    { retentionDays: 14, maxRunsPerEndpoint: 1, maxTotalBytes: 10 },
+    now,
+    new Set(['held-old']),
+  );
+
+  assert.deepEqual(selected.map((row) => row.recording_id), ['ordinary-old']);
+});
 test('managed per-endpoint retention does not combine projects that reused the same slug', () => {
   const rows = [
     createRecordingRow('a-old', 'shared', '2026-08-01T00:00:00.000Z'),
@@ -269,8 +284,8 @@ test('managed startup cleanup queues only the bounded claimed recording batch', 
   });
   await service.initialize();
 
-  assert.match(retentionQuery?.sql ?? '', /WITH classified/u);
-  assert.deepEqual(retentionQuery?.parameters, [14, 100, 1]);
+  assert.match(retentionQuery?.sql ?? '', /WITH eligible_recordings/u);
+  assert.deepEqual(retentionQuery?.parameters, [14, 100, [], 1]);
   assert.deepEqual(deletedIds, ['oldest']);
   assert.equal(leaseAssertions, 1);
   assert.deepEqual(enqueuedObjectKeys, [

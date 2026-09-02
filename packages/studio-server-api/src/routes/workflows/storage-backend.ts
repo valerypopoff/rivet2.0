@@ -72,6 +72,7 @@ import {
 } from './published-versions.js';
 import {
   deleteWorkflowRecording,
+  flushWorkflowExecutionRecordingPersistence,
   initializeWorkflowRecordingStorage,
   listWorkflowRecordingRunsPage,
   getWorkflowRunStatistics,
@@ -90,6 +91,7 @@ import {
   FilesystemRivetLLMProfileHealthStore,
   getFilesystemLLMProfileHealthDatabasePath,
 } from '../../llm-profile-health/filesystem-store.js';
+import { flushLLMProfileHealthRecordingOutcomes } from '../../llm-profile-health/recording-outcomes.js';
 import type { RivetStudioLLMProfileHealthStore } from '../../llm-profile-health/store.js';
 import { FilesystemRivetEvaluationStore } from '../../evaluation-runs/filesystem-store.js';
 import type { RivetStudioEvaluationStore } from '../../evaluation-runs/store.js';
@@ -558,6 +560,11 @@ export async function getWorkflowRunStatisticsWithBackend(
 }
 
 export async function disposeWorkflowStorage(): Promise<void> {
+  // Recording persistence can schedule its final health-evidence update after
+  // the bundle write. Drain both layers before their shared stores close.
+  await flushWorkflowExecutionRecordingPersistence();
+  await flushLLMProfileHealthRecordingOutcomes();
+
   const backendPromise = managedBackendPromise;
   managedBackendPromise = null;
   const filesystemStore = filesystemLLMProfileHealthStore;
@@ -583,6 +590,15 @@ export async function deleteWorkflowRecordingWithBackend(recordingId: string): P
     async (backend) => backend.deleteWorkflowRecording(recordingId),
     async (root) => deleteWorkflowRecording(root, recordingId),
   );
+  // Explicit operator deletion deliberately overrides an active suspension's
+  // temporary retention hold. The recording is already gone if the health-store
+  // status update is temporarily unavailable, so do not turn a successful delete
+  // into a false API failure.
+  try {
+    await (await getLLMProfileHealthStore()).markRecordingDeleted(recordingId);
+  } catch (error) {
+    console.error('[llm-profile-health] Failed to mark deleted recording evidence:', error);
+  }
 }
 
 export async function moveWorkflowItemWithBackend(
@@ -900,13 +916,13 @@ export async function persistWorkflowExecutionRecordingWithBackend(options: {
   durationMs: number;
   errorMessage?: string;
   executionIdentity?: WorkflowRecordingExecutionIdentity;
-}) {
+  onPersisted?: (recordingId: string) => Promise<void>;
+}): Promise<string | undefined> {
   if (isManagedWorkflowStorageEnabled()) {
-    await (await getManagedBackend()).persistWorkflowExecutionRecording(options);
-    return;
+    return await (await getManagedBackend()).persistWorkflowExecutionRecording(options);
   }
 
-  await persistWorkflowExecutionRecording({ workflowsRoot: getWorkflowsRoot(), ...options });
+  return await persistWorkflowExecutionRecording({ workflowsRoot: getWorkflowsRoot(), ...options });
 }
 
 export function getWorkflowStorageMode() {

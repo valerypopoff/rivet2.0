@@ -17,6 +17,11 @@ import type {
 import { WORKFLOW_PROJECT_EXTENSION } from '../../../../../studio-server-shared/workflow-types.js';
 import { createHttpError } from '../../../utils/httpError.js';
 import { normalizeRivetCorrelationId } from '../../../request-correlation.js';
+import {
+  getLLMProfileHealthHeldRecordingIds,
+  normalizeStoredLLMProfileHealthEntry,
+  type StoredLLMProfileHealthEntry,
+} from '../../../llm-profile-health/state.js';
 import { getWorkflowRecordingConfig, type WorkflowRecordingConfig } from '../recordings-config.js';
 import { parseManagedWorkflowProjectVirtualPath } from '../virtual-paths.js';
 import type { ManagedWorkflowBlobStore } from './blob-store.js';
@@ -35,6 +40,25 @@ import {
   type WorkflowRecordingStatisticsRow,
 } from '../recording-statistics.js';
 
+type ManagedHealthEntryRow = {
+  entry_json: StoredLLMProfileHealthEntry | string | null;
+};
+
+function getManagedLLMProfileHealthHeldRecordingIds(rows: readonly ManagedHealthEntryRow[]): readonly string[] {
+  const heldRecordingIds = new Set<string>();
+  for (const row of rows) {
+    if (row.entry_json == null) continue;
+    const parsed = typeof row.entry_json === 'string'
+      ? JSON.parse(row.entry_json) as StoredLLMProfileHealthEntry
+      : row.entry_json;
+    for (const recordingId of getLLMProfileHealthHeldRecordingIds(
+      normalizeStoredLLMProfileHealthEntry(parsed),
+    )) {
+      heldRecordingIds.add(recordingId);
+    }
+  }
+  return [...heldRecordingIds];
+}
 type ManagedWorkflowRecordingServiceDependencies = {
   context: ManagedWorkflowContext;
   getRecordingConfig?: () => WorkflowRecordingConfig;
@@ -136,11 +160,14 @@ export function selectManagedRecordingRowsForCleanup(
   rows: RecordingRow[],
   config: ManagedRecordingRetentionConfig,
   now = Date.now(),
+  heldRecordingIds: ReadonlySet<string> = new Set(),
 ): RecordingRow[] {
-  const oldestRows = [...rows].sort((left, right) => {
-    const createdAtDifference = getCreatedAtMs(left) - getCreatedAtMs(right);
-    return createdAtDifference || left.recording_id.localeCompare(right.recording_id);
-  });
+  const oldestRows = rows
+    .filter((row) => !heldRecordingIds.has(row.recording_id))
+    .sort((left, right) => {
+      const createdAtDifference = getCreatedAtMs(left) - getCreatedAtMs(right);
+      return createdAtDifference || left.recording_id.localeCompare(right.recording_id);
+    });
   const rowsToDelete = new Map<string, RecordingRow>();
 
   if (config.retentionDays > 0) {
@@ -300,31 +327,48 @@ export function createManagedWorkflowRecordingService(options: ManagedWorkflowRe
           FROM endpoint_classified
         )`;
     }
-    retentionParameters.push(deps.maintenance.config.batchSize);
     await deps.withTransaction(async (client) => {
       // The fence is held before candidate selection. The row lock prevents a
       // successor from taking the lease while this bounded selection and its
       // metadata/outbox mutation commit together.
       await lease.assertCurrent(client);
+      // A corruption/read failure intentionally aborts this cleanup pass rather
+      // than risking deletion of the replay evidence for an active suspension.
+      const healthRows = await deps.queryRows<ManagedHealthEntryRow>(
+        client,
+        'SELECT entry_json FROM llm_profile_health WHERE entry_json IS NOT NULL',
+      );
+      const heldRecordingIds = [...getManagedLLMProfileHealthHeldRecordingIds(healthRows)];
+      const queryParameters: Array<number | string[]> = [
+        ...retentionParameters,
+        heldRecordingIds,
+        deps.maintenance.config.batchSize,
+      ];
+      const heldRecordingIdsParameter = retentionParameters.length + 1;
+      const batchSizeParameter = queryParameters.length;
       const rowsToDelete = await deps.queryRows<RecordingRow>(
         client,
         `
-          WITH classified AS (
+          WITH eligible_recordings AS (
+            SELECT *
+            FROM workflow_recordings
+            WHERE recording_id <> ALL($${heldRecordingIdsParameter}::text[])
+          ), classified AS (
             SELECT ${deps.recordingColumns},
                    CASE
                      WHEN $1::int > 0
                        THEN created_at < NOW() - ($1::bigint * INTERVAL '1 day')
                      ELSE false
                    END AS age_expired
-            FROM workflow_recordings
+            FROM eligible_recordings
           ), ${endpointRetentionSql}, ${totalBytesRetentionSql}
           SELECT ${deps.recordingColumns}
           FROM ranked
           WHERE ${retentionConditions.join('\n             OR ')}
           ORDER BY created_at ASC, recording_id ASC
-          LIMIT $${retentionParameters.length}
+          LIMIT $${batchSizeParameter}
         `,
-        retentionParameters,
+        queryParameters,
       );
       if (rowsToDelete.length === 0) {
         return;
@@ -659,12 +703,12 @@ export function createManagedWorkflowRecordingService(options: ManagedWorkflowRe
       });
     },
 
-    async persistWorkflowExecutionRecording(options: PersistWorkflowExecutionRecordingOptions): Promise<void> {
+    async persistWorkflowExecutionRecording(options: PersistWorkflowExecutionRecordingOptions): Promise<string | undefined> {
       await deps.initialize();
 
       const workflowId = options.sourceProject.metadata.id;
       if (!workflowId) {
-        return;
+        return undefined;
       }
 
       const recordingId = `${Date.now()}-${randomUUID()}`;
@@ -723,8 +767,10 @@ export function createManagedWorkflowRecordingService(options: ManagedWorkflowRe
           cleanupContext: 'recording persistence failure',
         },
       );
+      await options.onPersisted?.(recordingId);
       // Do not force a global cleanup scan onto a published endpoint request.
       // The control-plane maintenance owner enforces retention independently.
+      return recordingId;
     },
 
     async cleanupWorkflowRecordingStorage(): Promise<void> {

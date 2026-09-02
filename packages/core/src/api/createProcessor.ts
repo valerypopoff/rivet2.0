@@ -57,6 +57,7 @@ export type RunGraphOptions = {
   onChatV2CallFinished?: ProcessContext['onChatV2CallFinished'];
   onLLMChatOutputSnapshot?: ProcessContext['onLLMChatOutputSnapshot'];
   llmProfileHealthStore?: RivetLLMProfileHealthStore;
+  llmProfileHealthExecutionCorrelationId?: ProcessContext['llmProfileHealthExecutionCorrelationId'];
   evaluation?: ProcessContext['evaluation'];
   tokenizer?: Tokenizer;
   codeRunner?: ProcessContext['codeRunner'];
@@ -251,6 +252,7 @@ export function coreCreateProcessor(
           onChatV2CallFinished: options.onChatV2CallFinished,
           onLLMChatOutputSnapshot: options.onLLMChatOutputSnapshot,
           llmProfileHealthStore: options.llmProfileHealthStore,
+          llmProfileHealthExecutionCorrelationId: options.llmProfileHealthExecutionCorrelationId,
           evaluation: options.evaluation,
         },
         resolvedInputs,

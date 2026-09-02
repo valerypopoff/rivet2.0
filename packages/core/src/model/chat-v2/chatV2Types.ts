@@ -183,7 +183,7 @@ export type RunChatV2PipelineOptions = {
   onStreamActivity?: (() => void) | undefined;
   onBeforeProviderRetry?: ((cooldownMs: number) => void | Promise<void>) | undefined;
   context: Pick<InternalProcessContext, 'signal' | 'onPartialOutputs'> &
-    Partial<Pick<InternalProcessContext, 'node' | 'onChatV2CallFinished' | 'processId'>>;
+    Partial<Pick<InternalProcessContext, 'node' | 'onChatV2CallFinished' | 'processId' | 'llmProfileHealthExecutionCorrelationId'>>;
   executeStream?: ChatV2StreamExecutor | undefined;
   executeGenerate?: ChatV2GenerateExecutor | undefined;
 };

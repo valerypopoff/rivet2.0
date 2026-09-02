@@ -104,6 +104,11 @@ test('outer Project Settings owns LLM profile suspension administration and the 
   assert.match(healthSource, /No LLM profiles are currently suspended or awaiting recovery\./);
   assert.match(healthSource, /project-settings-llm-health-row-\$\{tone\}/);
   assert.match(healthSource, /project-settings-llm-health-metadata-\$\{tone\}/);
+  assert.match(healthSource, /Contributing recordings/);
+  assert.match(healthSource, /Open recording/);
+  assert.match(healthSource, /The replay is still being saved/);
+  assert.match(healthSource, /This suspension predates recording links/);
+  assert.match(healthSource, /entry\.contributingRuns \?\? \[\]/);
   assert.doesNotMatch(healthSource, /LLM profile reliability/);
   assert.doesNotMatch(providersSource, /llmProfileHealthAdmin:/);
   assert.match(providersSource, /llmProfileHealthStore:/);

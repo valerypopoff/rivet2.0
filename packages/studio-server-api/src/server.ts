@@ -12,7 +12,6 @@ import {
   disposeWorkflowStorage,
   initializeWorkflowStorage,
 } from './routes/workflows/storage-backend.js';
-import { flushWorkflowExecutionRecordingPersistence } from './routes/workflows/recordings.js';
 import { getPublishedExecutionAdmission } from './published-execution-admission.js';
 import {
   abortActiveHttpExecutions,
@@ -149,9 +148,6 @@ async function disposeResourcesOnce(interruptWebAppRuns: boolean): Promise<void>
     console.error('[latest-debugger] Failed to dispose during shutdown:', error);
   });
 
-  await flushWorkflowExecutionRecordingPersistence().catch((error) => {
-    console.error('[workflow-recordings] Failed to flush recording persistence during shutdown:', error);
-  });
   await disposeWorkflowStorage().catch((error) => {
     console.error('[managed-workflows] Failed to dispose storage backend during shutdown:', error);
   });

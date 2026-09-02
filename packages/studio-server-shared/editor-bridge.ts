@@ -34,6 +34,7 @@ export type DashboardToEditorCommand =
 
 export type EditorToDashboardEvent =
   | { type: 'editor-ready' }
+  | { type: 'request-active-workflow-project-rename' }
   | { type: 'project-opened'; path: string; requestId?: string }
   | { type: 'project-open-failed'; path: string; error: string }
   | { type: 'active-project-path-changed'; path: string }
@@ -125,6 +126,7 @@ export function isEditorToDashboardEvent(value: unknown): value is EditorToDashb
 
   switch (value.type) {
     case 'editor-ready':
+    case 'request-active-workflow-project-rename':
       return true;
     case 'project-opened':
       return typeof value.path === 'string' && (value.requestId == null || typeof value.requestId === 'string');

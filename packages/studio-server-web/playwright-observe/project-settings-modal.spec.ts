@@ -521,6 +521,13 @@ test.describe('Project settings modal', () => {
         failureCount: 3,
         openUntil: now + 60_000,
         updatedAt: now,
+        contributingRuns: [{
+          occurredAt: now - 1_000,
+          contributionCount: 1,
+          triggeredSuspension: true,
+          availability: 'available',
+          recordingId: 'suspension-recording',
+        }],
       },
       {
         identity: {
@@ -538,8 +545,8 @@ test.describe('Project settings modal', () => {
       },
     ];
     await installProjectSettingsRoutes(page, project, createProjectSettingsRouteTrackers());
-    await page.route('**/api/workflows/llm-profile-health/?projectId=*', async (route) => {
-      if (!isRouteRequest(route.request(), 'GET', '/api/workflows/llm-profile-health/')) {
+    await page.route('**/api/workflows/llm-profile-health/admin?projectId=*', async (route) => {
+      if (!isRouteRequest(route.request(), 'GET', '/api/workflows/llm-profile-health/admin')) {
         await route.fallback();
         return;
       }
@@ -558,7 +565,11 @@ test.describe('Project settings modal', () => {
     const recoveryRow = modal.locator('.project-settings-llm-health-row-recovery');
     await expect(suspendedRow).toContainText('suspended until');
     await expect(suspendedRow).toContainText('Primary route');
+    await expect(suspendedRow).toContainText('Contributing recordings');
+    await expect(suspendedRow).toContainText('suspension threshold reached');
+    await expect(suspendedRow.getByRole('button', { name: 'Open contributing run recording' })).toBeVisible();
     await expect(recoveryRow).toContainText('recovery attempt in progress');
+    await expect(recoveryRow).toContainText('This suspension predates recording links');
 
     const [suspendedColor, recoveryColor] = await Promise.all([
       suspendedRow.evaluate((element) => getComputedStyle(element).borderLeftColor),

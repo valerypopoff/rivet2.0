@@ -209,6 +209,12 @@ export type RivetLLMProfileHealthFinishRequest = {
   policy: RivetLLMProfileCircuitBreakerPolicy;
   permitId: string;
   outcome: RivetLLMProfileHealthOutcome;
+  /**
+   * Host-owned, privacy-bounded execution correlation. Studio Server uses this
+   * only to join an unhealthy profile result to its normal run recording after
+   * that recording has finished persisting.
+   */
+  executionCorrelationId?: string;
 };
 
 export type RivetLLMProfileHealthRenewRequest = {

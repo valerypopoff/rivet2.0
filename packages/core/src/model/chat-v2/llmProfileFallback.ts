@@ -410,6 +410,7 @@ function createHealthPermit(params: {
   roundIndex: number;
   profileIndex: number;
   operationTimeoutMs: number;
+  executionCorrelationId?: string;
   signal: AbortSignal;
   recordAttempt: (attempt: LLMAttempt) => void;
 }): {
@@ -427,6 +428,7 @@ function createHealthPermit(params: {
     roundIndex,
     profileIndex,
     operationTimeoutMs,
+    executionCorrelationId,
     signal,
     recordAttempt,
   } = params;
@@ -517,6 +519,7 @@ function createHealthPermit(params: {
               policy: candidate.health.policy,
               permitId,
               outcome,
+              ...(executionCorrelationId == null ? {} : { executionCorrelationId }),
             }),
         });
         recordAttempt({
@@ -680,6 +683,7 @@ export function createLLMProfileFallbackRunner(params: {
               roundIndex,
               profileIndex,
               operationTimeoutMs: healthOperationTimeoutMs,
+              executionCorrelationId: roundOptions.context.llmProfileHealthExecutionCorrelationId,
               signal: roundOptions.context.signal,
               recordAttempt,
             });

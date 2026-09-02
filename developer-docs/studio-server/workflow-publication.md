@@ -529,11 +529,18 @@ attempt consults the backend selected for the workflow deployment:
 
 The state records only safe profile identity metadata, bounded failure timestamps, suspension state, and permit/lease data. The backend owns time and serializes same-key transitions. A suspended profile is skipped until its suspension ends; after that, one leased recovery attempt is allowed. Candidate activity renews the owning permit without shortening an existing lease. A successful recovery attempt invalidates all permits admitted before the profile was suspended. Stale permits, including a request that finishes after an administrator clears the project history, cannot mutate or recreate the record, and an existing key cannot be rebound to another project. Internally, this uses standard circuit-breaker states and leases; those implementation names are intentionally not shown in the product UI.
 
-`GET /api/workflows/llm-profile-health?projectId=<id>` and `POST /api/workflows/llm-profile-health/reset` are trusted hosted-editor administration surfaces. Both require an exact project id. Reset accepts that project id alone for one atomic project-wide reset, or the project id plus one exact key; unscoped listing and key-only reset are rejected. Runtime `begin`, `finish`, and `renew` identities also require their project id. These routes use the normal wrapper proxy-auth contract and are not public workflow endpoints.
+`GET /api/workflows/llm-profile-health?projectId=<id>` is the runtime health snapshot surface. `GET /api/workflows/llm-profile-health/admin?projectId=<id>` is the trusted hosted-editor administration surface: it adds only safe, active-suspension evidence metadata. `POST /api/workflows/llm-profile-health/reset` resets state. All require an exact project id. Reset accepts that project id alone for one atomic project-wide reset, or the project id plus one exact key; unscoped listing and key-only reset are rejected. Runtime `begin`, `finish`, and `renew` identities also require their project id. These routes use the normal wrapper proxy-auth contract and are not public workflow endpoints.
+
+Every hosted execution receives one opaque correlation id. If its normal Run recording persists, the queue resolves pending profile-failure evidence to that existing `recordingId` before filesystem retention can consider the new bundle; it does not create a second recording or copy a prompt/provider response into health state. A queue rejection, disabled recording policy, persistence failure, or explicit recording deletion is displayed as an unavailable explanation rather than a broken replay link. During a rolling upgrade, a new dashboard also treats an older admin response without evidence metadata as unavailable rather than losing the suspension row. The correlation id never reaches the browser.
 
 The wrapper-owned Project Settings > LLM profile suspension tab shows profiles that
 are currently suspended, awaiting their recovery attempt, or running that attempt.
-This keeps retained recovery state visible after a suspension expires instead of
+For an active suspension it also shows all contributing failed runs, labels the run
+that crossed the failure threshold, and opens every available item in the existing
+Run recording replay flow. Those recordings are temporarily exempt from normal age,
+per-endpoint, and size retention until that suspension recovers or the health history
+is cleared. An explicit administrator deletion still wins; Rivet best-effort marks the
+link unavailable without turning an already-successful recording delete into a false API failure. This keeps retained recovery state visible after a suspension expires instead of
 presenting the project as having no operational reliability state. Clearing history
 deletes the complete stored record, including failures, suspension, and recovery attempts; it does not alter the
 LLM profile suspension settings in the project. Its full-width reliability explanation

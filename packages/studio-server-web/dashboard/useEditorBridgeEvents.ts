@@ -24,6 +24,7 @@ type UseEditorBridgeEventsOptions = {
   onOpenProjectCountChange: (count: number) => void;
   onProjectOpenFailed: (error: string) => void;
   onProjectOpened: (path: string, requestId?: string) => void;
+  onRequestActiveWorkflowProjectRename: () => void;
   onProjectSaved: (path: string) => void;
   onWorkflowPathsMovedApplied: (requestId?: string) => void;
 };
@@ -41,6 +42,7 @@ export function useEditorBridgeEvents(options: UseEditorBridgeEventsOptions) {
     onOpenProjectCountChange,
     onProjectOpenFailed,
     onProjectOpened,
+    onRequestActiveWorkflowProjectRename,
     onProjectSaved,
     onWorkflowPathsMovedApplied,
   } = options;
@@ -144,9 +146,14 @@ export function useEditorBridgeEvents(options: UseEditorBridgeEventsOptions) {
         case 'editor-ready':
           onEditorReady();
           break;
+        case 'request-active-workflow-project-rename':
+          onRequestActiveWorkflowProjectRename();
+          break;
         case 'project-opened':
           onProjectOpened(event.data.path, event.data.requestId);
-          focusEditorFrame();
+          if (!isEditableElement(document.activeElement)) {
+            focusEditorFrame();
+          }
           break;
         case 'active-project-path-changed':
           onActiveWorkflowProjectPathChange(event.data.path);
@@ -183,6 +190,7 @@ export function useEditorBridgeEvents(options: UseEditorBridgeEventsOptions) {
     onOpenProjectCountChange,
     onProjectOpenFailed,
     onProjectOpened,
+    onRequestActiveWorkflowProjectRename,
     onProjectSaved,
     onWorkflowPathsMovedApplied,
   ]);

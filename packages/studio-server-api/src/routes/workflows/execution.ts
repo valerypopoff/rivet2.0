@@ -59,6 +59,7 @@ import { readWorkflowEndpointAuthSettingsSync } from '../../workflow-endpoint-au
 import { isWorkflowCapacityCapabilityValid } from '../../workflow-capacity-capability.js';
 import { readExecutionEnvironmentVariables } from '../../environment-variable-settings.js';
 import { enqueueWorkflowExecutionRecordingPersistence } from './recordings.js';
+import { trackLLMProfileHealthRecordingOutcome } from '../../llm-profile-health/recording-outcomes.js';
 import {
   createExecutionProjectReferenceLoader,
   getLLMProfileHealthStore,
@@ -918,6 +919,23 @@ type WebAppActionExecutionSnapshot = WorkflowExecutionRecordingSnapshot & {
   executionError?: unknown;
   executionIdentity: WorkflowRecordingExecutionIdentity;
 };
+type RecordingEvidenceAvailability = 'available' | 'disabled' | 'queue-dropped' | 'persistence-failed';
+
+function reportLLMProfileHealthRecordingOutcome(
+  executionIdentity: WorkflowRecordingExecutionIdentity | undefined,
+  availability: RecordingEvidenceAvailability,
+  recordingId?: string,
+): Promise<void> {
+  const correlationId = executionIdentity?.correlationId;
+  if (!correlationId) return Promise.resolve();
+  return trackLLMProfileHealthRecordingOutcome(
+    getLLMProfileHealthStore()
+      .then((store) => store.recordRecordingOutcome({ correlationId, availability, recordingId }))
+      .catch((error) => {
+        console.error('[llm-profile-health] Failed to resolve recording evidence:', error);
+      }),
+  );
+}
 
 function getWebAppActionState(body: Record<string, unknown>): Record<string, unknown> {
   const state = body.state;
@@ -993,7 +1011,10 @@ async function runRecordedWebAppAction(
   );
 
   const rawInputs = resolveUiGraphActionInputs(component.action, actionState);
-  const processorOptions = await createWebAppProcessorOptions(executionProject, req, codeRunnerTelemetry, options);
+  const processorOptions = await createWebAppProcessorOptions(executionProject, req, codeRunnerTelemetry, {
+    enableRemoteDebugger: options.enableRemoteDebugger,
+    llmProfileHealthExecutionCorrelationId: executionIdentity.correlationId,
+  });
   const inputs = (processorOptions.inputs ??
     Object.fromEntries(Object.entries(rawInputs).map(([key, value]) => [key, jsonValueToDataValue(value)]))) as Record<
     string,
@@ -1178,6 +1199,7 @@ export async function createWebAppProcessorOptions(
   codeRunnerTelemetry: ManagedCodeRunnerTelemetry | null,
   options?: {
     enableRemoteDebugger?: boolean;
+    llmProfileHealthExecutionCorrelationId?: string;
   },
 ): Promise<RivetWebAppProcessorOptions> {
   const remoteDebugger = getLatestRemoteDebuggerForExecution(options);
@@ -1193,6 +1215,9 @@ export async function createWebAppProcessorOptions(
     projectPath: executionProject.projectVirtualPath,
     projectReferenceLoader: await createExecutionProjectReferenceLoader(executionProject.projectVirtualPath),
     llmProfileHealthStore: await getLLMProfileHealthStore(),
+    ...(options?.llmProfileHealthExecutionCorrelationId == null
+      ? {}
+      : { llmProfileHealthExecutionCorrelationId: options.llmProfileHealthExecutionCorrelationId }),
     executionEnvironment,
     remoteDebugger,
   };
@@ -1211,32 +1236,46 @@ function enqueueExecutionRecording(
   const recorder = recording.recorder;
 
   if (!recorder) {
+    void reportLLMProfileHealthRecordingOutcome(options.executionIdentity, 'disabled');
     return;
   }
 
-  enqueueWorkflowExecutionRecordingPersistence(async () => {
-    const executedDatasets = shouldSnapshotWorkflowRecordingDatasets()
-      ? await datasetProvider.exportDatasetsForProject(project.metadata.id).catch((error) => {
-          console.error('Failed to export workflow datasets for recording:', error);
-          return [];
-        })
-      : [];
-
-    await persistWorkflowExecutionRecordingWithBackend({
-      sourceProject: project,
-      sourceProjectPath: projectVirtualPath,
-      executedProject: project,
-      executedAttachedData: attachedData,
-      executedDatasets,
-      endpointName: options.endpointName,
-      recordingSerialized: recorder.serialize(),
-      runKind: options.runKind,
-      status: recording.status,
-      durationMs: recording.durationMs,
-      errorMessage: recording.errorMessage,
-      executionIdentity: options.executionIdentity,
-    });
+  const accepted = enqueueWorkflowExecutionRecordingPersistence(async () => {
+    try {
+      const executedDatasets = shouldSnapshotWorkflowRecordingDatasets()
+        ? await datasetProvider.exportDatasetsForProject(project.metadata.id).catch((error) => {
+            console.error('Failed to export workflow datasets for recording:', error);
+            return [];
+          })
+        : [];
+      const recordingId = await persistWorkflowExecutionRecordingWithBackend({
+        sourceProject: project,
+        sourceProjectPath: projectVirtualPath,
+        executedProject: project,
+        executedAttachedData: attachedData,
+        executedDatasets,
+        endpointName: options.endpointName,
+        recordingSerialized: recorder.serialize(),
+        runKind: options.runKind,
+        status: recording.status,
+        durationMs: recording.durationMs,
+        errorMessage: recording.errorMessage,
+        executionIdentity: options.executionIdentity,
+        onPersisted: async (recordingId) => {
+          await reportLLMProfileHealthRecordingOutcome(options.executionIdentity, 'available', recordingId);
+        },
+      });
+      if (recordingId == null) {
+        await reportLLMProfileHealthRecordingOutcome(options.executionIdentity, 'disabled');
+      }
+    } catch (error) {
+      await reportLLMProfileHealthRecordingOutcome(options.executionIdentity, 'persistence-failed');
+      throw error;
+    }
   });
+  if (!accepted) {
+    void reportLLMProfileHealthRecordingOutcome(options.executionIdentity, 'queue-dropped');
+  }
 }
 
 export function enqueueWebAppActionRecording(
@@ -1317,6 +1356,7 @@ async function executeWorkflowEndpoint(
   const remoteDebugger = getLatestRemoteDebuggerForExecution(options);
   const executionEnvironment = await readExecutionEnvironmentVariables();
   const codeRunnerTelemetry = shouldCollectCodeRunnerTelemetry() ? createManagedCodeRunnerTelemetry() : null;
+  const executionIdentity = createWorkflowEndpointRecordingIdentity(executionProject, getRequestCorrelationId(req));
   const processor = createProcessor(project, {
     abortSignal: options.abortSignal,
     codeRunner: new ManagedCodeRunner(getRootPath(), {
@@ -1327,6 +1367,7 @@ async function executeWorkflowEndpoint(
     datasetProvider,
     projectReferenceLoader,
     llmProfileHealthStore: await getLLMProfileHealthStore(),
+    llmProfileHealthExecutionCorrelationId: executionIdentity.correlationId,
     executionEnvironment,
     remoteDebugger,
     context: getWorkflowExecutionContext(req),
@@ -1368,7 +1409,7 @@ async function executeWorkflowEndpoint(
     {
       endpointName: options.endpointName,
       runKind: options.runKind,
-      executionIdentity: createWorkflowEndpointRecordingIdentity(executionProject, getRequestCorrelationId(req)),
+      executionIdentity,
     },
   );
 

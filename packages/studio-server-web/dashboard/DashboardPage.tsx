@@ -59,6 +59,7 @@ export const DashboardPage: FC = () => {
   const [editorReady, setEditorReady] = useState(false);
   const [openProjectCount, setOpenProjectCount] = useState(0);
   const [projectSaveSequence, setProjectSaveSequence] = useState(0);
+  const [projectTreeRenameRequestSequence, setProjectTreeRenameRequestSequence] = useState(0);
   const [routeConfig, setRouteConfig] = useState<HostedRouteConfig>(DEFAULT_HOSTED_ROUTE_CONFIG);
   const postEditorCommand = useEditorCommandQueue(iframeRef, editorReady);
   const {
@@ -140,6 +141,10 @@ export const DashboardPage: FC = () => {
   const handleWorkflowProjectOpenIntent = useCallback((path: string) => {
     rememberPendingWorkflowProjectOpen(path);
   }, [rememberPendingWorkflowProjectOpen]);
+
+  const handleWorkflowProjectOpenIntentCanceled = useCallback((path: string) => {
+    clearPendingWorkflowProjectOpen(path);
+  }, [clearPendingWorkflowProjectOpen]);
 
   const handleRefreshOpenProjectFromDisk = useCallback((path: string) => {
     postEditorCommand({ type: 'refresh-open-project-from-disk', path });
@@ -338,6 +343,9 @@ export const DashboardPage: FC = () => {
       setOpenedProjectPath(path);
       setActiveWorkflowProjectPath(path);
     },
+    onRequestActiveWorkflowProjectRename: () => {
+      setProjectTreeRenameRequestSequence((previous) => previous + 1);
+    },
     onProjectSaved: (path) => {
       setProjectSaveSequence((prev) => prev + 1);
       setProjectUnsavedChangesByPath((prev) => (
@@ -382,11 +390,13 @@ export const DashboardPage: FC = () => {
           onDeleteProject={handleDeleteProject}
           onWorkflowPathsMoved={handleWorkflowPathsMoved}
           onWorkflowProjectOpenIntent={handleWorkflowProjectOpenIntent}
+          onWorkflowProjectOpenIntentCanceled={handleWorkflowProjectOpenIntentCanceled}
           onActiveWorkflowProjectPathChange={setActiveWorkflowProjectPath}
           openedProjectPath={openedProjectPath}
           activeProjectHasUnsavedChanges={activeProjectHasUnsavedChanges}
           editorReady={editorReady}
           projectSaveSequence={projectSaveSequence}
+          projectTreeRenameRequestSequence={projectTreeRenameRequestSequence}
           collapsed={sidebarCollapsed}
           contentVisible={sidebarContentVisible}
           onToggleCollapse={handleToggleSidebar}

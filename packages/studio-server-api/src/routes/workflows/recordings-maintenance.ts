@@ -17,6 +17,7 @@ import {
   pathExists,
 } from './fs-helpers.js';
 import { readStoredWorkflowRecordingMetadata } from './recordings-metadata.js';
+import { getFilesystemLLMProfileHealthHeldRecordingIds } from '../../llm-profile-health/filesystem-store.js';
 
 function getEndpointRetentionKey(run: WorkflowRecordingRunRow): string {
   return `${run.workflowId}\0${run.endpointNameAtExecution.trim().toLowerCase()}`;
@@ -103,6 +104,15 @@ export async function removeEmptyWorkflowProjectRecordingsRoot(recordingsRoot: s
 
 export async function cleanupWorkflowRecordingStorage(): Promise<void> {
   const config = getWorkflowRecordingConfig();
+  let heldRecordingIds: ReadonlySet<string>;
+  try {
+    heldRecordingIds = await getFilesystemLLMProfileHealthHeldRecordingIds();
+  } catch (error) {
+    // Losing the diagnostic replay is worse than deferring one cleanup pass.
+    // Do not delete recordings until the active suspension holds are readable.
+    console.error('[workflow-recordings] Skipped retention cleanup because LLM Profile suspension holds could not be read.', error);
+    return;
+  }
   const rowsToDelete = new Map<string, WorkflowRecordingRunRow>();
   const oldestRows = config.maxRunsPerEndpoint > 0 || config.maxTotalBytes > 0
     ? await listWorkflowRecordingRunsOldestFirst()
@@ -111,7 +121,7 @@ export async function cleanupWorkflowRecordingStorage(): Promise<void> {
   if (config.retentionDays > 0) {
     const cutoff = new Date(Date.now() - config.retentionDays * 24 * 60 * 60 * 1000).toISOString();
     for (const row of await listWorkflowRecordingRunsOlderThan(cutoff)) {
-      rowsToDelete.set(row.id, row);
+      if (!heldRecordingIds.has(row.id)) rowsToDelete.set(row.id, row);
     }
   }
 
@@ -119,7 +129,7 @@ export async function cleanupWorkflowRecordingStorage(): Promise<void> {
     const rowsByEndpoint = new Map<string, WorkflowRecordingRunRow[]>();
 
     for (const row of oldestRows) {
-      if (rowsToDelete.has(row.id)) {
+      if (heldRecordingIds.has(row.id) || rowsToDelete.has(row.id)) {
         continue;
       }
 
@@ -146,6 +156,9 @@ export async function cleanupWorkflowRecordingStorage(): Promise<void> {
 
   if (config.maxTotalBytes > 0) {
     let totalBytes = await getWorkflowRecordingTotalCompressedBytes();
+    for (const row of oldestRows) {
+      if (heldRecordingIds.has(row.id)) totalBytes -= getCompressedBundleSize(row);
+    }
     if (totalBytes > config.maxTotalBytes) {
       for (const row of rowsToDelete.values()) {
         totalBytes -= getCompressedBundleSize(row);
@@ -153,7 +166,7 @@ export async function cleanupWorkflowRecordingStorage(): Promise<void> {
 
       if (totalBytes > config.maxTotalBytes) {
         for (const row of oldestRows) {
-          if (rowsToDelete.has(row.id)) {
+          if (heldRecordingIds.has(row.id) || rowsToDelete.has(row.id)) {
             continue;
           }
 

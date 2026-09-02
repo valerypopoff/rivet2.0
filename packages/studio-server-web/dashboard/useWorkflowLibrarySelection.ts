@@ -11,6 +11,7 @@ export function useWorkflowLibrarySelection({
   onActiveWorkflowProjectPathChange,
   onOpenProject,
   onWorkflowProjectOpenIntent,
+  onWorkflowProjectOpenIntentCanceled,
   openedProjectPath,
   setExpandedFolders,
 }: {
@@ -21,11 +22,13 @@ export function useWorkflowLibrarySelection({
   onActiveWorkflowProjectPathChange: (path: string) => void;
   onOpenProject: (path: string, options?: WorkflowProjectOpenOptions) => void;
   onWorkflowProjectOpenIntent: (path: string) => void;
+  onWorkflowProjectOpenIntentCanceled: (path: string) => void;
   openedProjectPath: string;
   setExpandedFolders: Dispatch<SetStateAction<Record<string, boolean>>>;
 }) {
   const [selectedProjectPath, setSelectedProjectPath] = useState('');
   const projectRowRefs = useRef<Record<string, HTMLElement | null>>({});
+  const pendingPreviewPathRef = useRef<string | null>(null);
   const previewOpenTimeoutRef = useRef<number | null>(null);
   const lastAutoExpandedActivePathRef = useRef<string | null>(null);
   const suppressedActiveAncestorExpansionIdsRef = useRef<Set<string>>(new Set());
@@ -56,7 +59,17 @@ export function useWorkflowLibrarySelection({
       window.clearTimeout(previewOpenTimeoutRef.current);
       previewOpenTimeoutRef.current = null;
     }
+    pendingPreviewPathRef.current = null;
   }, []);
+
+  const cancelPendingPreviewOpen = useCallback((path: string) => {
+    if (pendingPreviewPathRef.current !== path) {
+      return;
+    }
+
+    clearPendingPreviewOpen();
+    onWorkflowProjectOpenIntentCanceled(path);
+  }, [clearPendingPreviewOpen, onWorkflowProjectOpenIntentCanceled]);
 
   useEffect(() => clearPendingPreviewOpen, [clearPendingPreviewOpen]);
 
@@ -161,10 +174,15 @@ export function useWorkflowLibrarySelection({
   }, []);
   const openPreview = useCallback((project: WorkflowProjectItem) => {
     clearPendingPreviewOpen();
+    pendingPreviewPathRef.current = project.absolutePath;
     setSelectedProjectPath(project.absolutePath);
     onWorkflowProjectOpenIntent(project.absolutePath);
     previewOpenTimeoutRef.current = window.setTimeout(() => {
       previewOpenTimeoutRef.current = null;
+      if (pendingPreviewPathRef.current !== project.absolutePath) {
+        return;
+      }
+      pendingPreviewPathRef.current = null;
       onOpenProject(project.absolutePath, { preview: true, title: project.name });
     }, 180);
   }, [clearPendingPreviewOpen, onOpenProject, onWorkflowProjectOpenIntent]);
@@ -177,6 +195,7 @@ export function useWorkflowLibrarySelection({
   return {
     activePath,
     activeProject,
+    cancelPendingPreviewOpen,
     clearSelection,
     isActiveProjectOpen: activeProject != null && activeProject.absolutePath === openedProjectPath,
     openedWorkflowProject,

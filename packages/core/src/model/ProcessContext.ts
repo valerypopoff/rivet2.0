@@ -254,6 +254,13 @@ export type ProcessContext = {
   /** Optional shared persistence for cross-run LLM Profile circuit state. */
   llmProfileHealthStore?: RivetLLMProfileHealthStore;
 
+  /**
+   * Host-owned correlation for a runnable execution. It is not a graph input,
+   * is never sent to a provider, and lets hosts connect profile suspension
+   * evidence to a durable run recording after the run has completed.
+   */
+  llmProfileHealthExecutionCorrelationId?: string;
+
   /** Optional host-owned Evaluation identity propagated into execution events and recordings. */
   evaluation?: EvaluationExecutionMetadata;
 

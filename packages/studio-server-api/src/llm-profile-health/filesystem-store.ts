@@ -14,7 +14,22 @@ import type {
 } from '@valerypopoff/rivet2-node';
 
 import { getAppDataRoot } from '../security.js';
-import { beginLLMProfileHealthAttempt, createLLMProfileHealthSnapshot, finishLLMProfileHealthAttempt, renewLLMProfileHealthPermit, type StoredLLMProfileHealthEntry } from './state.js';
+import {
+  applyLLMProfileHealthRecordingOutcome,
+  beginLLMProfileHealthAttempt,
+  createLLMProfileHealthSnapshot,
+  finishLLMProfileHealthAttempt,
+  getLLMProfileHealthContributorRuns,
+  getLLMProfileHealthHeldRecordingIds,
+  markLLMProfileHealthRecordingDeleted,
+  normalizeStoredLLMProfileHealthEntry,
+  renewLLMProfileHealthPermit,
+  type StoredLLMProfileHealthEntry,
+} from './state.js';
+import type {
+  LLMProfileHealthAdminEntry,
+  LLMProfileHealthRecordingOutcome,
+} from '../../../studio-server-shared/llmProfileHealthTypes.js';
 import type { RivetStudioLLMProfileHealthStore } from './store.js';
 
 type StoredRow = { key: string; entryJson: string };
@@ -23,6 +38,31 @@ export function getFilesystemLLMProfileHealthDatabasePath(): string {
   return path.join(getAppDataRoot(), 'llm-profile-health.sqlite');
 }
 
+/**
+ * Reads the metadata-only recording holds without initializing a health store.
+ * Recording retention calls this before it mutates the recording index, so a
+ * missing health database stays a no-op and a failed read fails cleanup closed.
+ */
+export async function getFilesystemLLMProfileHealthHeldRecordingIds(): Promise<ReadonlySet<string>> {
+  const databasePath = getFilesystemLLMProfileHealthDatabasePath();
+  try {
+    await fs.access(databasePath);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return new Set();
+    throw error;
+  }
+
+  const database = new DatabaseSync(databasePath, { readOnly: true });
+  try {
+    database.exec('PRAGMA busy_timeout = 5000;');
+    const rows = database.prepare(
+      'SELECT key, entry_json AS entryJson FROM llm_profile_health',
+    ).all<StoredRow>();
+    return new Set(rows.flatMap((row) => getLLMProfileHealthHeldRecordingIds(parseEntry(row)!)));
+  } finally {
+    database.close();
+  }
+}
 function requireProjectId(
   identity: RivetLLMProfileHealthBeginRequest['identity'],
 ): void {
@@ -37,7 +77,7 @@ function parseEntry(row: StoredRow | undefined): StoredLLMProfileHealthEntry | n
   if (!parsed || typeof parsed !== 'object' || !Array.isArray(parsed.failureTimestamps)) {
     throw new Error(`Invalid persisted LLM Profile health entry for ${row.key}.`);
   }
-  return parsed;
+  return normalizeStoredLLMProfileHealthEntry(parsed);
 }
 
 export class FilesystemRivetLLMProfileHealthStore implements RivetStudioLLMProfileHealthStore {
@@ -170,6 +210,54 @@ export class FilesystemRivetLLMProfileHealthStore implements RivetStudioLLMProfi
     return rows.map((row) => createLLMProfileHealthSnapshot(parseEntry(row)!, now));
   }
 
+  async listAdmin(input: { projectId: ProjectId }): Promise<readonly LLMProfileHealthAdminEntry[]> {
+    const database = await this.#getDatabase();
+    const rows = database.prepare(`
+      SELECT key, entry_json AS entryJson
+      FROM llm_profile_health
+      WHERE project_id = ?
+      ORDER BY updated_at_ms DESC, key ASC
+    `).all<StoredRow>(String(input.projectId));
+    const now = Date.now();
+    return rows.map((row) => {
+      const entry = parseEntry(row)!;
+      return {
+        ...createLLMProfileHealthSnapshot(entry, now),
+        contributingRuns: getLLMProfileHealthContributorRuns(entry),
+      };
+    });
+  }
+
+  async recordRecordingOutcome(input: LLMProfileHealthRecordingOutcome): Promise<void> {
+    await this.#transaction((database) => {
+      const correlationNeedle = `"correlationId":${JSON.stringify(input.correlationId)}`;
+      const rows = database.prepare(
+        'SELECT key, entry_json AS entryJson FROM llm_profile_health WHERE instr(entry_json, ?) > 0',
+      ).all<StoredRow>(correlationNeedle);
+      const now = Date.now();
+      for (const row of rows) {
+        const entry = parseEntry(row)!;
+        if (applyLLMProfileHealthRecordingOutcome(entry, input, now)) {
+          this.#write(database, row.key, entry);
+        }
+      }
+    });
+  }
+
+  async markRecordingDeleted(recordingId: string): Promise<void> {
+    await this.#transaction((database) => {
+      const rows = database.prepare(
+        'SELECT key, entry_json AS entryJson FROM llm_profile_health',
+      ).all<StoredRow>();
+      const now = Date.now();
+      for (const row of rows) {
+        const entry = parseEntry(row)!;
+        if (markLLMProfileHealthRecordingDeleted(entry, recordingId, now)) {
+          this.#write(database, row.key, entry);
+        }
+      }
+    });
+  }
   async dispose(): Promise<void> {
     const databasePromise = this.#databasePromise;
     this.#databasePromise = null;

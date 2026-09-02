@@ -1,4 +1,4 @@
-import { type FC, useEffect, useRef, useState } from 'react';
+import { type FC, useLayoutEffect, useRef, useState } from 'react';
 
 type WorkflowInlineRenameInputProps = {
   classNamePrefix: 'folder' | 'project';
@@ -20,7 +20,7 @@ export const WorkflowInlineRenameInput: FC<WorkflowInlineRenameInputProps> = ({
   const [value, setValue] = useState(initialValue);
   const inputRef = useRef<HTMLInputElement | null>(null);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     inputRef.current?.focus();
     inputRef.current?.select();
   }, [identityKey]);

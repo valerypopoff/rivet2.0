@@ -382,7 +382,7 @@ export class ManagedWorkflowBackend {
     return this.#recordings.deleteWorkflowRecording(recordingId);
   }
 
-  async persistWorkflowExecutionRecording(options: PersistWorkflowExecutionRecordingOptions): Promise<void> {
+  async persistWorkflowExecutionRecording(options: PersistWorkflowExecutionRecordingOptions): Promise<string | undefined> {
     return this.#recordings.persistWorkflowExecutionRecording(options);
   }
 }

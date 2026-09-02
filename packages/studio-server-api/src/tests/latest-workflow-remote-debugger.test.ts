@@ -90,6 +90,7 @@ function toWebSocketUrl(baseUrl: string): string {
 async function resetFilesystemState(): Promise<void> {
   filesystemExecutionCache.resetFilesystemExecutionCacheForTests();
   await resetLatestWorkflowRemoteDebuggerForTests();
+  await workflowStorageBackend.disposeWorkflowStorage();
   delete process.env.RIVET_ENABLE_LATEST_REMOTE_DEBUGGER;
   await resetWorkflowTestRoots({ workflowsRoot, appDataRoot, runtimeLibrariesRoot });
   await workflowEndpointAuthSettings.writeWorkflowEndpointAuthSettings({
@@ -250,6 +251,7 @@ test.afterEach(async () => {
 
 test.after(async () => {
   await resetLatestWorkflowRemoteDebuggerForTests();
+  await workflowStorageBackend.disposeWorkflowStorage();
   await fs.rm(tempRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
 
   for (const key of envKeys) {

@@ -35,6 +35,14 @@ test('open project bridge command accepts optional title and preview flags', () 
   }), false);
 });
 
+test('project-tree rename request event is accepted only by its exact bridge type', () => {
+  assert.equal(isEditorToDashboardEvent({
+    type: 'request-active-workflow-project-rename',
+  }), true);
+  assert.equal(isEditorToDashboardEvent({
+    type: 'request-active-workflow-project-rename-now',
+  }), false);
+});
 test('project opened event accepts optional request ownership', () => {
   assert.equal(isEditorToDashboardEvent({
     type: 'project-opened',

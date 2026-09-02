@@ -4,6 +4,7 @@ import test from 'node:test';
 import {
   isEditorDuplicateShortcutEvent,
   isEditorFindShortcutEvent,
+  isPlainF2ShortcutEvent,
   isSaveShortcutEvent,
 } from '../dashboard/editorBridgeFocus';
 
@@ -14,6 +15,7 @@ function keyboardEventLike(options: Partial<KeyboardEvent>): KeyboardEvent {
     ctrlKey: false,
     key: '',
     metaKey: false,
+    repeat: false,
     shiftKey: false,
     ...options,
   } as KeyboardEvent;
@@ -42,4 +44,10 @@ test('duplicate shortcut detection accepts physical KeyD and rejects browser-adj
   assert.equal(isEditorDuplicateShortcutEvent(keyboardEventLike({ code: 'KeyF', ctrlKey: true, key: 'f' })), false);
   assert.equal(isEditorDuplicateShortcutEvent(keyboardEventLike({ altKey: true, code: 'KeyD', ctrlKey: true, key: 'd' })), false);
   assert.equal(isEditorDuplicateShortcutEvent(keyboardEventLike({ code: 'KeyD', ctrlKey: true, key: 'd', shiftKey: true })), false);
+});
+test('project-tree rename only accepts one plain F2 keydown', () => {
+  assert.equal(isPlainF2ShortcutEvent(keyboardEventLike({ key: 'F2' })), true);
+  assert.equal(isPlainF2ShortcutEvent(keyboardEventLike({ ctrlKey: true, key: 'F2' })), false);
+  assert.equal(isPlainF2ShortcutEvent(keyboardEventLike({ key: 'F2', repeat: true })), false);
+  assert.equal(isPlainF2ShortcutEvent(keyboardEventLike({ key: 'F2', shiftKey: true })), false);
 });

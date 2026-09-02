@@ -172,6 +172,8 @@ export type PersistWorkflowExecutionRecordingOptions = {
   durationMs: number;
   errorMessage?: string;
   executionIdentity?: WorkflowRecordingExecutionIdentity;
+  /** Runs after durable recording metadata commits. */
+  onPersisted?: (recordingId: string) => Promise<void>;
 };
 
 export type ImportManagedWorkflowOptions = {
