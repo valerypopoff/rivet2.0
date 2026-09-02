@@ -195,22 +195,27 @@ const fullscreenOutputCss = css`
     padding-bottom: calc(24px * var(--ui-font-scale));
   }
 
-  .picker.llm-chat-output-history-pager {
-    border: 0;
-    border-bottom: 1px solid var(--node-output-picker-border);
-    border-radius: 0;
+  .fullscreen-output-pagers {
     display: flex;
-    font-size: var(--ui-font-size-sm);
-    margin: 8px 0 16px;
-    width: 100%;
+    gap: 8px;
+    min-width: 0;
 
-    .picker-page.llm-chat-output-history-pager-label {
-      flex: 1;
-      min-width: 0;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-      width: auto;
+    .picker {
+      flex: 0 0 auto;
+    }
+
+    .picker.llm-chat-output-history-pager.compact {
+      max-width: min(320px, 34vw);
+
+      .picker-page.llm-chat-output-history-pager-label {
+        flex: 1 1 auto;
+        min-width: 0;
+        width: auto;
+        overflow: hidden;
+        padding: 0 10px;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
     }
   }
 
@@ -309,9 +314,9 @@ const NodeFullscreenOutput: FC<{ node: ChartNode }> = ({ node }) => {
   const selectedPresentationData = useMemo(
     () =>
       selectedProcessData && node.type === 'llmChatV2'
-        ? getLLMChatSplitOutputHistoryPresentationData(selectedProcessData.data)
+        ? getLLMChatSplitOutputHistoryPresentationData(selectedProcessData.data, node.isSplitRun === true)
         : selectedProcessData?.data,
-    [node.type, selectedProcessData],
+    [node.isSplitRun, node.type, selectedProcessData],
   );
   const hasSelectedSplitOutputData = selectedPresentationData?.splitOutputData != null;
   const displayedOutput = useMemo(() => {
@@ -371,6 +376,25 @@ const NodeFullscreenOutput: FC<{ node: ChartNode }> = ({ node }) => {
     node.type === 'llmChatV2' && !hasSelectedSplitOutputData
       ? selectedProcessData?.data.llmChatOutputHistory?.[0] ?? []
       : [];
+  const forceLlmChatOutputHistoryPager = shouldShowLLMChatOutputHistoryPager({
+    entries: llmChatOutputHistory,
+    hasTerminalOutput: selectedProcessData?.data.outputData != null,
+  });
+  const showLiveLlmChatOutputHistoryPage =
+    selectedProcessData?.data.status?.type === 'running' && selectedProcessData.data.outputData != null;
+  const hasLlmChatOutputHistoryPager =
+    llmChatOutputHistory.length > 0 &&
+    (llmChatOutputHistory.length > 1 || forceLlmChatOutputHistoryPager || showLiveLlmChatOutputHistoryPage);
+  const llmChatOutputHistoryPager = hasLlmChatOutputHistoryPager ? (
+    <LLMChatOutputHistoryPager
+      compact
+      entries={llmChatOutputHistory}
+      forceVisible={forceLlmChatOutputHistoryPager}
+      showLivePage={showLiveLlmChatOutputHistoryPage}
+      selectedPage={selectedLLMChatOutputPage}
+      onSelectPage={setSelectedLLMChatOutputPage}
+    />
+  ) : null;
 
   const handleOpenPromptDesigner = () => {
     if (!processId) {
@@ -558,16 +582,17 @@ const NodeFullscreenOutput: FC<{ node: ChartNode }> = ({ node }) => {
   return (
     <div css={fullscreenOutputCss}>
       <header className="fullscreen-header">
-        {outputViewModel.totalPages > 1 ? (
-          <NodeOutputPager
-            selectedPage={displaySelectedPage}
-            totalPages={outputViewModel.totalPages}
-            onPrevPage={prevPage}
-            onNextPage={nextPage}
-          />
-        ) : (
-          <div />
-        )}
+        <div className="fullscreen-output-pagers">
+          {outputViewModel.totalPages > 1 && (
+            <NodeOutputPager
+              selectedPage={displaySelectedPage}
+              totalPages={outputViewModel.totalPages}
+              onPrevPage={prevPage}
+              onNextPage={nextPage}
+            />
+          )}
+          {llmChatOutputHistoryPager}
+        </div>
         <FullscreenNodeOutputToolbar
           wrapLines={wrapLines}
           renderMarkdown={renderMarkdown}
@@ -593,18 +618,6 @@ const NodeFullscreenOutput: FC<{ node: ChartNode }> = ({ node }) => {
       </header>
 
       <FullscreenOutputSearchContext.Provider value={fullscreenOutputSearchContext}>
-        <LLMChatOutputHistoryPager
-          entries={llmChatOutputHistory}
-          forceVisible={shouldShowLLMChatOutputHistoryPager({
-            entries: llmChatOutputHistory,
-            hasTerminalOutput: selectedProcessData?.data.outputData != null,
-          })}
-          showLivePage={
-            selectedProcessData?.data.status?.type === 'running' && selectedProcessData.data.outputData != null
-          }
-          selectedPage={selectedLLMChatOutputPage}
-          onSelectPage={setSelectedLLMChatOutputPage}
-        />
         <div
           ref={fullscreenOutputBodyRef}
           className={`fullscreen-output-body ${wrapLines ? 'wrap-lines' : 'no-wrap-lines'}${

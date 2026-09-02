@@ -7,6 +7,7 @@ import {
   getLLMChatOutputHistorySelectionKey,
   selectedLLMChatOutputPageState,
 } from '../../state/dataFlow.js';
+import { resolveLLMChatOutputHistoryEntry } from '../../utils/llmChatOutputHistory.js';
 import { LLMChatOutputHistoryPager } from './LLMChatOutputHistoryPager.js';
 
 export const LLMChatSplitOutputHistory: FC<{
@@ -21,8 +22,8 @@ export const LLMChatSplitOutputHistory: FC<{
 }> = ({ nodeId, processId, splitIndex, entries = [], hasTerminalOutput, isRunning, latestOutputs, renderOutputs }) => {
   const selectionKey = getLLMChatOutputHistorySelectionKey(nodeId, processId, splitIndex);
   const [selectedPage, setSelectedPage] = useAtom(selectedLLMChatOutputPageState(selectionKey));
-  const selectedOutputs =
-    selectedPage === 'latest' ? latestOutputs : entries.find((entry) => entry.entryId === selectedPage)?.outputData ?? latestOutputs;
+  const selectedEntry = resolveLLMChatOutputHistoryEntry(entries, selectedPage);
+  const selectedOutputs = selectedPage === 'latest' ? latestOutputs : selectedEntry?.outputData ?? latestOutputs;
 
   return (
     <div className="llm-chat-split-output-history">

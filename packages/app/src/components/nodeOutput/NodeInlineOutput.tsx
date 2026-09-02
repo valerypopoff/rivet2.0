@@ -169,8 +169,8 @@ const NodeOutputSingleProcess: FC<{
   const setPromptDesignerAttachedNode = useSetAtom(promptDesignerAttachedChatNodeState);
   const io = useNodeIO(node.id);
   const presentationData = useMemo(
-    () => (node.type === 'llmChatV2' ? getLLMChatSplitOutputHistoryPresentationData(data) : data),
-    [data, node.type],
+    () => (node.type === 'llmChatV2' ? getLLMChatSplitOutputHistoryPresentationData(data, node.isSplitRun === true) : data),
+    [data, node.isSplitRun, node.type],
   );
   const hasSplitOutputData = presentationData.splitOutputData != null;
   const llmChatOutputHistory =
@@ -245,17 +245,19 @@ const NodeOutputSingleProcess: FC<{
       ? 'node-output-inner has-output-actions has-extra-output-action'
       : 'node-output-inner has-output-actions',
     hasLlmChatOutputHistoryPager && 'has-llm-chat-output-history-pager',
+    data.status?.type === 'error' && displayedData.status?.type !== 'error' && 'llm-chat-history-non-error',
     isFrozen && 'has-frozen-output-notice',
   ]
     .filter(Boolean)
     .join(' ');
-  const erroredOutputInnerClassName = `${outputInnerClassName} errored`;
+  const displayedOutputInnerClassName =
+    displayedData.status?.type === 'error' ? `${outputInnerClassName} errored` : outputInnerClassName;
 
   if (content.kind === 'code-error') {
     const contentKey = getNodeOutputContentKey(processId, displayedData, content.contentKeyKind);
 
     return (
-      <div className={erroredOutputInnerClassName}>
+      <div className={displayedOutputInnerClassName}>
         <NodeOutputOverlayButtons
           hasPromptDesignerAction={hasPromptDesignerAction}
           hasResponseInspectorAction={hasResponseInspectorAction}
@@ -281,7 +283,7 @@ const NodeOutputSingleProcess: FC<{
     const contentKey = getNodeOutputContentKey(processId, displayedData, content.contentKeyKind);
 
     return (
-      <div className={erroredOutputInnerClassName}>
+      <div className={displayedOutputInnerClassName}>
         <NodeOutputOverlayButtons
           hasPromptDesignerAction={hasPromptDesignerAction}
           hasResponseInspectorAction={hasResponseInspectorAction}
@@ -350,7 +352,7 @@ const NodeOutputSingleProcess: FC<{
   const contentKey = getNodeOutputContentKey(processId, displayedData, content.contentKeyKind);
 
   return (
-    <div className={outputInnerClassName}>
+    <div className={displayedOutputInnerClassName}>
       <NodeOutputOverlayButtons
         hasPromptDesignerAction={hasPromptDesignerAction}
         hasResponseInspectorAction={hasResponseInspectorAction}

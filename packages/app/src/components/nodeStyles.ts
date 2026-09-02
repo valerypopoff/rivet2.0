@@ -1099,13 +1099,14 @@ export const nodeStyles = css`
 
   /*
    * A multi-run output has one card surface: the pager belongs to the selected
-   * run output rather than ending a separate rounded card above it. The inner
-   * output keeps the deliberate divider, while this outer surface owns the
-   * final clipping and bottom corners.
+   * run output rather than ending a separate rounded card above it. The
+   * shared pager owns the sole neutral divider; this outer surface owns final
+   * clipping and bottom corners.
    */
   .node-output.multi .multi-node-output > .node-output-inner {
     border-radius: 0;
     margin: 0;
+    border-top: 0;
   }
 
   .node-output-warnings {
@@ -1248,15 +1249,44 @@ export const nodeStyles = css`
     border-top-color: var(--node-output-status-border);
   }
 
+  /*
+   * An LLM invocation can fail after earlier model rounds completed. The node
+   * keeps its terminal error status, but an earlier selected history page is a
+   * successful snapshot and must not inherit the terminal error surface.
+   */
+  .node.error .node-output:not(.multi) .node-output-inner.llm-chat-history-non-error,
+  .node.error .multi-node-output:has(> .node-output-inner.llm-chat-history-non-error) {
+    background-color: var(--node-output-surface-bg);
+    border-top-color: var(--node-output-success-border);
+  }
+
+  .node.error .node-output:has(.node-output-inner.llm-chat-history-non-error)::before {
+    border-top-color: var(--node-output-success-border);
+  }
+
+  /*
+   * Some nested executions, including Delegate Tool Call continuations, keep
+   * the node's overall status independent from the selected delegated run.
+   * The selected output's own error state therefore owns this surface.
+   */
+  .node-output:not(.multi) > .node-output-inner.errored,
+  .node-output.multi .multi-node-output:has(> .node-output-inner.errored),
+  .node-output.multi .multi-node-output > .node-output-inner.errored {
+    background-color: var(--node-output-error-bg);
+    background-image: none;
+    border-top-color: var(--node-output-error-border);
+  }
+
+  .node-output:has(.node-output-inner.errored)::before {
+    border-top-color: var(--node-output-error-border);
+  }
+
   .node.not-ran .node-output:not(.multi) .node-output-inner,
   .node.not-ran .multi-node-output {
     border-top-style: dashed;
     border-top-color: var(--node-output-not-ran-border);
   }
 
-  .node-output.multi .node-output-inner.node-output-inner {
-    border-top: 1px solid var(--node-output-multi-border);
-  }
 
   .node:is(:hover, .hovered, .showHoverControls) .node-output-inner,
   .node:is(:hover, .hovered, .showHoverControls) .node-output-warnings {

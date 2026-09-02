@@ -208,11 +208,21 @@ older page is only a display choice: it does not rerun the model, alter ports,
 or change downstream execution. Cached, frozen, preloaded, legacy, and
 single-result invocations keep the compact one-page output.
 
+In the full-screen output modal, the round selector remains in the compact
+top-left pager group while showing the same full label, such as
+**Round 1 · Requested tools**, as the node body. The label truncates only when
+space is genuinely limited; its full value remains available to assistive
+technology and as a hover title.
+
 While a later model round is streaming, **Current response · Running** remains
 the latest page. You can inspect an older completed round and return to the
 current response without changing the running graph. If an invocation later
 fails, every completed round remains available, but Rivet does not invent a
-page for the incomplete round.
+page for the incomplete round. The terminal error appears only on the terminal
+output page or, when there is no terminal output, on the newest retained round
+that led into the failure; earlier completed rounds remain free of that later
+error. Returning to that final retained round restores its error; it never
+turns the earlier round outputs into errors.
 
 Each model tool-call round also appears at the call level on the Delegate. One
 model round with several parallel calls is therefore one LLM Chat page but

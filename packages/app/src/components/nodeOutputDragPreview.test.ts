@@ -47,23 +47,61 @@ test('multi-run output keeps its pager and selected output on one card surface',
   assert.doesNotMatch(multiProcessSource, /<div className="node-output multi">/);
   assert.match(
     nodeStylesSource,
-    /\.node-output\.multi \.multi-node-output > \.node-output-inner \{[\s\S]*?border-radius: 0;[\s\S]*?margin: 0;/,
+    /\.node-output\.multi \.multi-node-output > \.node-output-inner \{[\s\S]*?border-radius: 0;[\s\S]*?margin: 0;[\s\S]*?border-top: 0;/,
   );
+  assert.match(nodeStylesSource, /\.picker \{[\s\S]*?border-bottom: 1px solid var\(--node-output-picker-border\);/);
 });
 
-test('LLM Chat round history uses the shared output pager row', () => {
+test('LLM Chat round history keeps the inline pager row and uses the compact fullscreen pager', () => {
   const nodeInlineOutputSource = readFileSync(join(componentsDir, 'nodeOutput', 'NodeInlineOutput.tsx'), 'utf8');
+  const nodeFullscreenOutputSource = readFileSync(
+    join(componentsDir, 'nodeOutput', 'NodeFullscreenOutput.tsx'),
+    'utf8',
+  );
   const llmChatPagerSource = readFileSync(join(componentsDir, 'nodeOutput', 'LLMChatOutputHistoryPager.tsx'), 'utf8');
   const nodeStylesSource = readFileSync(join(componentsDir, 'nodeStyles.ts'), 'utf8');
 
   assert.match(
     llmChatPagerSource,
-    /<div className="picker llm-chat-output-history-pager"[\s\S]*?className="picker-left"[\s\S]*?className="picker-page llm-chat-output-history-pager-label"[\s\S]*?className="picker-right"/,
+    /className=\{`picker llm-chat-output-history-pager\$\{compact \? ' compact' : ''\}`\}[\s\S]*?className="picker-left"[\s\S]*?className="picker-page llm-chat-output-history-pager-label"[\s\S]*?className="picker-right"/,
   );
   assert.match(nodeInlineOutputSource, /has-llm-chat-output-history-pager[\s\S]*?has-frozen-output-notice/);
   assert.match(
+    llmChatPagerSource,
+    /compact\?: boolean;[\s\S]*?resolveLLMChatOutputHistoryEntry\(entries, selectedPage\);[\s\S]*?\{selectedPageLabel\}/,
+  );
+  assert.doesNotMatch(llmChatPagerSource, /compactPageNumber|compact \? compactPageNumber/);
+  assert.match(
+    nodeFullscreenOutputSource,
+    /const llmChatOutputHistoryPager = hasLlmChatOutputHistoryPager \?[\s\S]*?<LLMChatOutputHistoryPager[\s\S]*?compact[\s\S]*?\/>/,
+  );
+  assert.match(
+    nodeFullscreenOutputSource,
+    /<header className="fullscreen-header">[\s\S]*?<div className="fullscreen-output-pagers">[\s\S]*?<NodeOutputPager[\s\S]*?\{llmChatOutputHistoryPager\}[\s\S]*?<FullscreenNodeOutputToolbar/,
+  );
+  assert.match(
+    nodeFullscreenOutputSource,
+    /\.picker\.llm-chat-output-history-pager\.compact[\s\S]*?max-width: min\(320px, 34vw\);[\s\S]*?text-overflow: ellipsis;/,
+  );
+  assert.doesNotMatch(
+    nodeFullscreenOutputSource,
+    /<FullscreenOutputSearchContext\.Provider[\s\S]*?<LLMChatOutputHistoryPager/,
+  );
+  assert.match(
     nodeInlineOutputSource,
     /hasLlmChatOutputHistoryPager: boolean;[\s\S]*?'overlay-buttons after-output-history-pager'/,
+  );
+  assert.match(
+    nodeInlineOutputSource,
+    /data\.status\?\.type === 'error' && displayedData\.status\?\.type !== 'error' && 'llm-chat-history-non-error'/,
+  );
+  assert.match(
+    nodeStylesSource,
+    /\.node\.error \.node-output:not\(\.multi\) \.node-output-inner\.llm-chat-history-non-error[\s\S]*?background-color: var\(--node-output-surface-bg\);[\s\S]*?border-top-color: var\(--node-output-success-border\);/,
+  );
+  assert.match(
+    nodeStylesSource,
+    /\.node-output\.multi \.multi-node-output:has\(> \.node-output-inner\.errored\)[\s\S]*?background-color: var\(--node-output-error-bg\);[\s\S]*?border-top-color: var\(--node-output-error-border\);/,
   );
   assert.match(
     nodeStylesSource,

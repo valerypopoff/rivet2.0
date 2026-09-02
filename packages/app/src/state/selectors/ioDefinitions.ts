@@ -14,6 +14,7 @@ import { handleError } from '../../utils/errorHandling.js';
 import { projectNodeRegistryState } from '../plugins.js';
 import { nodePrefabSourceNodesByIdState } from './nodePrefabSelectors.js';
 import { connectionsState } from '../atoms/graph.js';
+import { getDisabledRequiredInputWarnings } from '../../domain/graphEditing/disabledNodeWarnings.js';
 
 export const ioDefinitionsForNodeState = atomFamily((nodeId: NodeId | undefined) =>
   atom((get) => {
@@ -129,4 +130,19 @@ export const definitionValidConnectionsState = atom((get) => {
   });
 
   return filteredConnections.length === connections.length ? connections : filteredConnections;
+});
+
+/**
+ * Header warnings for enabled nodes whose required input is supplied by a
+ * disabled upstream node. The runtime excludes that downstream node rather
+ * than treating the wire as disconnected.
+ */
+export const disabledRequiredInputWarningsState = atom((get) => {
+  const nodesById = get(effectiveNodesByIdState);
+
+  return getDisabledRequiredInputWarnings({
+    connections: get(definitionValidConnectionsState),
+    nodesById,
+    getInputDefinitions: (nodeId) => get(ioDefinitionsForNodeState(nodeId)).inputDefinitions,
+  });
 });

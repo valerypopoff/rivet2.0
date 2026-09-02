@@ -30,6 +30,10 @@ To run the currently selected graph, press the **Run** button in the top right o
 
 When connected to a remote debugger, whenever the graph executes remotely, it will automatically show the result of the run in the current graph. The editor disables its normal run controls while the remote debugger is connected, so start the graph from the remote process and use **Stop Remote Debugger** when you want to return to normal editor-run controls.
 
+### Disabled node connections
+
+Turning a node off marks it **Not Ran**; it does not disconnect its existing wires. If its output is still connected to a required input on another node, that node also receives no value and is marked **Not Ran**. Rivet shows a warning icon in that downstream node's header naming the disabled dependency. Enable the source or remove or replace the connection before running the graph.
+
 ## Viewing Node Outputs
 
 After a graph runs, node outputs appear directly on the canvas. Use the output actions on a node to copy the displayed output, page through multiple runs, or open the output in the fullscreen modal. The regular copy button copies the value as Rivet displays it. In the fullscreen output modal, each named output section also has its own copy button next to the words/characters counters, so you can copy just that section's displayed value. **Copy as JSON** copies Rivet's internal output representation instead, including typed output wrappers. The fullscreen output view also adds search, lets you toggle line wrapping or Markdown rendering, and supports folding for JSON/code-style output, including parsed code/expression sections, when foldable regions are available. In fullscreen JSON output, hover or place the cursor on escaped or long string values and use the inline preview button to view and copy the decoded, unescaped text without changing the JSON output itself; drag the preview's bottom-left corner to adjust its width and maximum text height, and click elsewhere or press Escape to close it.
