@@ -1,10 +1,7 @@
 import type { Project, ProjectId } from '@valerypopoff/rivet2-core';
 
 import type { RivetWorkspaceHost } from '../../app/src/host';
-import type {
-  OpenedProjectInfo,
-  OpenedProjectsInfo,
-} from '../../app/src/state/savedGraphs';
+import type { OpenedProjectInfo, OpenedProjectsInfo } from '../../app/src/state/savedGraphs';
 import type { DashboardToEditorCommand } from '../../studio-server-shared/editor-bridge';
 import type { useOpenWorkflowProject } from './useOpenWorkflowProject';
 import type { usePreviewProjectLifecycle } from './usePreviewProjectLifecycle';
@@ -16,15 +13,19 @@ export type LoadedProjectInfo = {
   path: string | null;
 };
 
-export type SerializedEditorCommand = Extract<DashboardToEditorCommand, {
-  type:
-    | 'open-project'
-    | 'open-recording'
-    | 'open-published-version-preview'
-    | 'refresh-open-project-from-disk'
-    | 'compare-open-project-with'
-    | 'workflow-paths-moved';
-}>;
+export type SerializedEditorCommand = Extract<
+  DashboardToEditorCommand,
+  {
+    type:
+      | 'open-project'
+      | 'open-recording'
+      | 'open-published-version-preview'
+      | 'refresh-open-project-from-disk'
+      | 'compare-open-project-with'
+      | 'workflow-paths-moved'
+      | 'reconcile-workflow-project-bindings';
+  }
+>;
 
 export type EditorCommandBridgeContext = {
   clearLoadedRecording(projectId?: ProjectId): void;
@@ -40,14 +41,12 @@ export type EditorCommandBridgeContext = {
   removeOpenedProjectSnapshot(projectId: ProjectId): void;
 };
 
-export function findOpenedProjectByPath(
-  context: EditorCommandBridgeContext,
-  path: string,
-): OpenedProjectInfo | null {
+export function findOpenedProjectByPath(context: EditorCommandBridgeContext, path: string): OpenedProjectInfo | null {
   const normalizedPath = normalizeWorkflowPath(path);
   const projects = context.getProjects();
-  const openedProjectId = projects.openedProjectsSortedIds.find((projectId) =>
-    normalizeWorkflowPath(projects.openedProjects[projectId]?.fsPath ?? '') === normalizedPath);
+  const openedProjectId = projects.openedProjectsSortedIds.find(
+    (projectId) => normalizeWorkflowPath(projects.openedProjects[projectId]?.fsPath ?? '') === normalizedPath,
+  );
   const aliasedProjectId = context.openedProjectPathAliases.get(normalizedPath);
 
   return openedProjectId

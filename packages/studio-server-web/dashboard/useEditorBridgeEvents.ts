@@ -3,6 +3,7 @@ import { toast } from 'react-toastify';
 import {
   isEditorToDashboardEvent,
   isValidBridgeOrigin,
+  type WorkflowProjectBindingReconciliation,
   postMessageToEditor,
 } from '../../studio-server-shared/editor-bridge';
 import {
@@ -27,6 +28,7 @@ type UseEditorBridgeEventsOptions = {
   onRequestActiveWorkflowProjectRename: () => void;
   onProjectSaved: (path: string, hasNewerUnsavedChanges?: boolean) => void;
   onWorkflowPathsMovedApplied: (requestId?: string) => void;
+  onWorkflowProjectBindingsReconciled: (changes: WorkflowProjectBindingReconciliation[], requestId?: string) => void;
 };
 
 export function useEditorBridgeEvents(options: UseEditorBridgeEventsOptions) {
@@ -45,6 +47,7 @@ export function useEditorBridgeEvents(options: UseEditorBridgeEventsOptions) {
     onRequestActiveWorkflowProjectRename,
     onProjectSaved,
     onWorkflowPathsMovedApplied,
+    onWorkflowProjectBindingsReconciled,
   } = options;
 
   useEffect(() => {
@@ -170,6 +173,9 @@ export function useEditorBridgeEvents(options: UseEditorBridgeEventsOptions) {
         case 'workflow-paths-moved-applied':
           onWorkflowPathsMovedApplied(event.data.requestId);
           break;
+        case 'workflow-project-bindings-reconciled':
+          onWorkflowProjectBindingsReconciled(event.data.changes, event.data.requestId);
+          break;
         case 'project-open-failed':
           onProjectOpenFailed(event.data.error);
           toast.error(`Failed to open project: ${event.data.error}`);
@@ -193,5 +199,6 @@ export function useEditorBridgeEvents(options: UseEditorBridgeEventsOptions) {
     onRequestActiveWorkflowProjectRename,
     onProjectSaved,
     onWorkflowPathsMovedApplied,
+    onWorkflowProjectBindingsReconciled,
   ]);
 }

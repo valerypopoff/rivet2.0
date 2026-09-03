@@ -49,6 +49,8 @@ type ManagedWorkflowCatalogServiceDependencies = {
     contents: string;
     datasetsContents: string | null;
     expectedRevisionId?: string | null;
+    projectId?: string;
+    saveIntent?: 'in-place' | 'save-as';
   }): Promise<SaveHostedProjectResult>;
 };
 

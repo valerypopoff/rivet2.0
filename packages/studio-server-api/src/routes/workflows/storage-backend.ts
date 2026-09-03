@@ -41,6 +41,7 @@ import type { ManagedReconciliationFindingDetailQuery } from './managed/reconcil
 import {
   ensureWorkflowsRoot,
   getWorkflowDatasetPath,
+  listProjectPathsRecursive,
   pathExists,
   PROJECT_EXTENSION,
   requireProjectPath,
@@ -94,7 +95,7 @@ import { createPublishedWorkflowProjectReferenceLoader, findPublishedWorkflowWeb
 import { NodeDatasetProvider } from '@valerypopoff/rivet2-node';
 import type { AttachedData, CombinedDataset, Project, ProjectId } from '@valerypopoff/rivet2-node';
 import { getFilesystemExecutionCache } from './filesystem-execution-cache.js';
-import { normalizeHostedProjectTitle } from './hosted-project-contents.js';
+import { normalizeHostedProjectTitle, parseHostedProjectContents } from './hosted-project-contents.js';
 import { writeWorkflowProjectStatsCacheFromContents } from './project-stats.js';
 import {
   checkFilesystemProjectTransactionHealth,
@@ -147,11 +148,77 @@ type SaveHostedProjectResult = {
   created: boolean;
 };
 
+export type HostedProjectSaveIntent = 'in-place' | 'save-as';
+
 type LoadHostedProjectResult = {
   contents: string;
   datasetsContents: string | null;
   revisionId: string | null;
 };
+
+function resolveFilesystemProjectPathInsideRoot(root: string, projectPath: string): string {
+  const resolvedRoot = path.resolve(root);
+  const resolvedPath = path.resolve(projectPath);
+  const relative = path.relative(resolvedRoot, resolvedPath);
+  if (!relative || relative.startsWith('..') || path.isAbsolute(relative)) {
+    throw createHttpError(400, 'Project path must stay inside workflow storage.', { expose: true });
+  }
+  return requireProjectPath(resolvedPath);
+}
+
+async function findFilesystemProjectPathsByMetadataId(root: string, projectId: ProjectId): Promise<string[]> {
+  // Save reconciliation cannot depend on a UI/tree projection: the physical
+  // workflow file may have moved between the tree refresh and this write lock.
+  const candidates = await listProjectPathsRecursive(root);
+  const matches: string[] = [];
+  for (const candidate of candidates) {
+    try {
+      const [candidateProject] = await loadProjectAndAttachedDataFromFile(candidate);
+      if (candidateProject.metadata.id === projectId) {
+        matches.push(candidate);
+      }
+    } catch {
+      // A malformed neighboring project cannot establish ownership of this id.
+    }
+  }
+  return matches;
+}
+
+async function resolveFilesystemInPlaceSaveTarget(
+  root: string,
+  requestedProjectPath: string,
+  sourceProjectId: ProjectId,
+): Promise<string> {
+  const requestedPath = resolveFilesystemProjectPathInsideRoot(root, requestedProjectPath);
+  if (await pathExists(requestedPath)) {
+    try {
+      const [requestedProject] = await loadProjectAndAttachedDataFromFile(requestedPath);
+      if (requestedProject.metadata.id === sourceProjectId) {
+        return requestedPath;
+      }
+    } catch {
+      // Fall through to the authoritative id scan. A moved project may have
+      // left a different or malformed file at its old location.
+    }
+  }
+
+  const matches = await findFilesystemProjectPathsByMetadataId(root, sourceProjectId);
+  if (matches.length === 1) {
+    return matches[0]!;
+  }
+  if (matches.length === 0) {
+    throw createHttpError(409, 'This project no longer exists at its saved location. Reopen it or use Save As.', {
+      expose: true,
+    });
+  }
+  throw createHttpError(
+    409,
+    'Could not determine a unique current location for this project. Reopen it before saving.',
+    {
+      expose: true,
+    },
+  );
+}
 
 type ExecutionProjectResult = {
   project: Project;
@@ -452,17 +519,22 @@ export async function saveHostedProject(options: {
   contents: string;
   datasetsContents: string | null;
   expectedRevisionId?: string | null;
+  projectId?: ProjectId;
+  saveIntent?: HostedProjectSaveIntent;
 }): Promise<SaveHostedProjectResult> {
   return delegate<SaveHostedProjectResult>(
     async (backend) => backend.saveHostedProject(options),
     async () => {
       try {
-        const projectName = path.basename(options.projectPath, PROJECT_EXTENSION);
-        const normalized = normalizeHostedProjectTitle(options.contents, projectName, 'Could not save project');
-
-        const sourceProjectId = normalized.project.metadata.id;
+        const parsed = parseHostedProjectContents(options.contents, 'Could not save project');
+        const sourceProjectId = parsed.project.metadata.id;
         if (!sourceProjectId) {
           throw createHttpError(400, 'Could not save project', { expose: true });
+        }
+        if (options.projectId && options.projectId !== sourceProjectId) {
+          throw createHttpError(400, 'Project identity does not match the submitted project contents.', {
+            expose: true,
+          });
         }
         if (options.datasetsContents != null) {
           try {
@@ -474,40 +546,53 @@ export async function saveHostedProject(options: {
 
         const root = await ensureWorkflowsRoot();
         let targetAlreadyExists = false;
+        let savedProjectPath = options.projectPath;
         await saveFilesystemProjectTransaction({
           root,
           projectPath: options.projectPath,
-          projectContents: normalized.contents,
+          projectContents: options.contents,
           datasetsContents: options.datasetsContents,
+          resolveProjectTarget: async () => {
+            const projectPath =
+              options.saveIntent === 'in-place'
+                ? await resolveFilesystemInPlaceSaveTarget(root, options.projectPath, sourceProjectId)
+                : resolveFilesystemProjectPathInsideRoot(root, options.projectPath);
+            savedProjectPath = projectPath;
+            const projectName = path.basename(projectPath, PROJECT_EXTENSION);
+            const normalized = normalizeHostedProjectTitle(options.contents, projectName, 'Could not save project');
+            return { projectPath, projectContents: normalized.contents };
+          },
           beforeTransaction: async () => {
-            targetAlreadyExists = await pathExists(options.projectPath);
+            targetAlreadyExists = await pathExists(savedProjectPath);
             if (!targetAlreadyExists) return;
 
             let targetProject: Project;
             try {
-              [targetProject] = await loadProjectAndAttachedDataFromFile(options.projectPath);
+              [targetProject] = await loadProjectAndAttachedDataFromFile(savedProjectPath);
             } catch {
               throw createHttpError(409, 'Could not verify the existing save target. Reopen it before saving.', {
                 expose: true,
               });
             }
-            assertMatchingHostedProjectIdentity(targetProject, sourceProjectId, options.projectPath);
+            assertMatchingHostedProjectIdentity(targetProject, sourceProjectId, savedProjectPath);
           },
           afterCommit: async () => {
             try {
-              await writeWorkflowProjectStatsCacheFromContents(options.projectPath, normalized.contents);
+              const projectName = path.basename(savedProjectPath, PROJECT_EXTENSION);
+              const normalized = normalizeHostedProjectTitle(options.contents, projectName, 'Could not save project');
+              await writeWorkflowProjectStatsCacheFromContents(savedProjectPath, normalized.contents);
             } finally {
               // The statistics cache is derived and may be rebuilt later. The
               // execution materialization is not: always discard it so a
               // committed project can never keep serving its old graph merely
               // because updating derived statistics failed.
-              invalidateFilesystemExecutionMaterializations([options.projectPath]);
+              invalidateFilesystemExecutionMaterializations([savedProjectPath]);
             }
           },
         });
 
         return {
-          path: options.projectPath,
+          path: savedProjectPath,
           revisionId: null,
           project: null,
           created: !targetAlreadyExists,

@@ -4,21 +4,17 @@ import { flushHybridStorageGroup } from '../../app/src/state/storage';
 import {
   clearHostedProjectRevisionPath,
   remapHostedProjectRevisionPaths,
+  setHostedProjectRevisionPath,
 } from '../io/HostedIOProvider';
-import {
-  clearOpenedProjectSession,
-  remapOpenedProjectSessionPaths,
-} from '../io/openedProjectSessionCache';
+import { clearOpenedProjectSession, remapOpenedProjectSessionPaths } from '../io/openedProjectSessionCache';
 import { deleteHostedProjectContextState } from '../overrides/state/savedGraphs';
 import {
   postMessageToDashboard,
   type DashboardToEditorCommand,
+  type WorkflowProjectBindingReconciliation,
 } from '../../studio-server-shared/editor-bridge';
 import { clearHostedDatasetsForProject } from './hostedRivetProviders';
-import type {
-  EditorCommandBridgeContext,
-  SerializedEditorCommand,
-} from './editorCommandBridgeContext';
+import type { EditorCommandBridgeContext, SerializedEditorCommand } from './editorCommandBridgeContext';
 import { removeOpenedProjectPathAliasesForProject } from './editorCommandBridgeContext';
 import {
   resolveHostedProjectMetadataUpdatesForPathMoves,
@@ -26,24 +22,27 @@ import {
   type HostedProjectMetadataUpdateForPathMove,
 } from './openedProjectMetadata';
 import type { WorkflowProjectPathMove } from './types';
+import type { WorkflowProjectEditorBinding } from '../../studio-server-shared/workflow-types';
 import { normalizeWorkflowPath } from './workflowLibraryHelpers';
 
 function getHostedProjectPathMoveInputs(moves: WorkflowProjectPathMove[]) {
   const moveKeys = new Set<string>();
-  return moves.flatMap((move) => [
-    { from: move.fromAbsolutePath, to: move.toAbsolutePath },
-    {
-      from: normalizeWorkflowPath(move.fromAbsolutePath),
-      to: normalizeWorkflowPath(move.toAbsolutePath),
-    },
-  ].filter((candidate) => {
-    const key = `${candidate.from}\n${candidate.to}`;
-    if (moveKeys.has(key)) {
-      return false;
-    }
-    moveKeys.add(key);
-    return true;
-  }));
+  return moves.flatMap((move) =>
+    [
+      { from: move.fromAbsolutePath, to: move.toAbsolutePath },
+      {
+        from: normalizeWorkflowPath(move.fromAbsolutePath),
+        to: normalizeWorkflowPath(move.toAbsolutePath),
+      },
+    ].filter((candidate) => {
+      const key = `${candidate.from}\n${candidate.to}`;
+      if (moveKeys.has(key)) {
+        return false;
+      }
+      moveKeys.add(key);
+      return true;
+    }),
+  );
 }
 
 async function clearDeletedHostedProjectState(projectIds: Iterable<ProjectId>): Promise<void> {
@@ -98,9 +97,7 @@ export async function handleWorkflowPathsMovedCommand(
     }
     const currentPreview = context.preview.previewProjectRef.current;
     if (currentPreview) {
-      const movedPreviewPath = moves.find(
-        (move) => move.fromAbsolutePath === currentPreview.path,
-      )?.toAbsolutePath;
+      const movedPreviewPath = moves.find((move) => move.fromAbsolutePath === currentPreview.path)?.toAbsolutePath;
       if (movedPreviewPath) {
         context.preview.rememberPreviewProject({ ...currentPreview, path: movedPreviewPath });
       }
@@ -110,15 +107,13 @@ export async function handleWorkflowPathsMovedCommand(
     let metadataUpdated = false;
     for (const update of metadataUpdatesByProjectId.values()) {
       try {
-        const updated = await context.getWorkspace().updateProjectMetadata(
-          update.projectId,
-          update.title ? { title: update.title } : {},
-          {
+        const updated = await context
+          .getWorkspace()
+          .updateProjectMetadata(update.projectId, update.title ? { title: update.title } : {}, {
             path: update.path,
             persistedExternally: true,
             changeSource: 'external-wrapper-rename',
-          },
-        );
+          });
         metadataUpdated ||= updated;
       } catch (error) {
         console.error('Failed to update renamed hosted project metadata:', error);
@@ -129,6 +124,128 @@ export async function handleWorkflowPathsMovedCommand(
     }
   } finally {
     postMessageToDashboard({ type: 'workflow-paths-moved-applied', requestId: command.requestId });
+  }
+}
+
+/**
+ * Rebind already-open editor tabs to the authoritative workflow-tree location.
+ * The path is deliberately derived from the stable project id, not from a
+ * matching filename, so a folder move, project rename, or a sequence of both
+ * cannot turn a later in-place save into a new project.
+ */
+export async function handleReconcileWorkflowProjectBindingsCommand(
+  context: EditorCommandBridgeContext,
+  command: Extract<SerializedEditorCommand, { type: 'reconcile-workflow-project-bindings' }>,
+): Promise<void> {
+  const bindingsByProjectId = new Map<ProjectId, WorkflowProjectEditorBinding>();
+  for (const binding of command.bindings) {
+    bindingsByProjectId.set(binding.projectId as ProjectId, binding);
+  }
+
+  const projects = context.getProjects();
+  const revisionBindings: WorkflowProjectEditorBinding[] = [];
+  const updates: Array<{
+    projectId: ProjectId;
+    binding: WorkflowProjectEditorBinding;
+    fromPath: string | null;
+    fromTitle: string;
+  }> = [];
+
+  for (const projectId of projects.openedProjectsSortedIds) {
+    const openedProject = projects.openedProjects[projectId];
+    const binding = openedProject ? bindingsByProjectId.get(projectId) : undefined;
+    if (!openedProject || !binding) {
+      continue;
+    }
+
+    const pathChanged = normalizeWorkflowPath(openedProject.fsPath ?? '') !== normalizeWorkflowPath(binding.path);
+    const titleChanged = openedProject.title !== binding.title;
+    if (binding.revisionId !== undefined) revisionBindings.push(binding);
+    if (!pathChanged && !titleChanged) {
+      continue;
+    }
+
+    updates.push({
+      projectId,
+      binding,
+      fromPath: openedProject.fsPath ?? null,
+      fromTitle: openedProject.title,
+    });
+  }
+
+  const moves = updates.flatMap(({ fromPath, binding }) =>
+    fromPath && normalizeWorkflowPath(fromPath) !== normalizeWorkflowPath(binding.path)
+      ? [{ fromAbsolutePath: fromPath, toAbsolutePath: binding.path }]
+      : [],
+  );
+  const changes: WorkflowProjectBindingReconciliation[] = updates.flatMap((update) =>
+    update.fromPath &&
+    (normalizeWorkflowPath(update.fromPath) !== normalizeWorkflowPath(update.binding.path) ||
+      update.fromTitle !== update.binding.title)
+      ? [
+          {
+            projectId: update.projectId,
+            fromPath: update.fromPath,
+            toPath: update.binding.path,
+            fromTitle: update.fromTitle,
+            toTitle: update.binding.title,
+          },
+        ]
+      : [],
+  );
+
+  try {
+    if (moves.length > 0) {
+      remapOpenedProjectSessionPaths(moves);
+      remapHostedProjectRevisionPaths(moves);
+      for (const move of moves) {
+        const fromPath = normalizeWorkflowPath(move.fromAbsolutePath);
+        const toPath = normalizeWorkflowPath(move.toAbsolutePath);
+        const projectId = context.openedProjectPathAliases.get(fromPath);
+        context.openedProjectPathAliases.delete(fromPath);
+        if (projectId) {
+          context.openedProjectPathAliases.set(toPath, projectId);
+        }
+      }
+      const currentPreview = context.preview.previewProjectRef.current;
+      if (currentPreview) {
+        const movedPreviewPath = moves.find(
+          (move) => normalizeWorkflowPath(move.fromAbsolutePath) === normalizeWorkflowPath(currentPreview.path),
+        )?.toAbsolutePath;
+        if (movedPreviewPath) {
+          context.preview.rememberPreviewProject({ ...currentPreview, path: movedPreviewPath });
+        }
+      }
+      context.getWorkspace().moveProjectPaths(getHostedProjectPathMoveInputs(moves));
+    }
+
+    for (const binding of revisionBindings) {
+      setHostedProjectRevisionPath(binding.path, binding.revisionId ?? null);
+    }
+
+    let persistedProjectStateChanged = false;
+    for (const update of updates) {
+      context.openedProjectPathAliases.set(normalizeWorkflowPath(update.binding.path), update.projectId);
+      const updated = await context.getWorkspace().updateProjectMetadata(
+        update.projectId,
+        { title: update.binding.title },
+        {
+          path: update.binding.path,
+          persistedExternally: true,
+          changeSource: 'external-wrapper-rename',
+        },
+      );
+      persistedProjectStateChanged ||= updated;
+    }
+    if (persistedProjectStateChanged) {
+      await flushHybridStorageGroup('project');
+    }
+  } finally {
+    postMessageToDashboard({
+      type: 'workflow-project-bindings-reconciled',
+      changes,
+      requestId: command.requestId,
+    });
   }
 }
 

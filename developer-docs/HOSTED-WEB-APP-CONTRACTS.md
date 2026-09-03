@@ -34,6 +34,13 @@ was saved; same-project repeated Save requests still share that operation and do
 not queue a trailing save. `onProjectSaved.hasNewerUnsavedChanges` lets a wrapper
 preserve the matching dashboard dirty marker instead of clearing it blindly.
 
+For a normal hosted **Save**, `HostedIOProvider` sends the project metadata ID and
+an `in-place` save intent in addition to the tab path. The server treats that path
+as a hint: if another administrator has renamed or moved the project, it resolves
+the unique current owner by immutable ID, persists at that canonical path, and
+returns it to Rivet's workspace transition. A deleted or ambiguous owner is a
+conflict, never a new project at the stale path. **Save As** remains path-directed.
+
 `onProjectSaved` is an observer, not part of persistence ownership. A synchronous
 throw or rejected promise from wrapper callback code is logged without changing a
 successfully persisted save into `false` or repeating the persistence operation.

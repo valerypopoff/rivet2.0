@@ -123,6 +123,8 @@ export class ManagedWorkflowBackend {
     contents: string;
     datasetsContents: string | null;
     expectedRevisionId?: string | null;
+    projectId?: string;
+    saveIntent?: 'in-place' | 'save-as';
   }): Promise<SaveHostedProjectResult> {
     return this.#revisions.saveHostedProject(options);
   }
@@ -382,7 +384,9 @@ export class ManagedWorkflowBackend {
     return this.#recordings.deleteWorkflowRecording(recordingId);
   }
 
-  async persistWorkflowExecutionRecording(options: PersistWorkflowExecutionRecordingOptions): Promise<string | undefined> {
+  async persistWorkflowExecutionRecording(
+    options: PersistWorkflowExecutionRecordingOptions,
+  ): Promise<string | undefined> {
     return this.#recordings.persistWorkflowExecutionRecording(options);
   }
 }

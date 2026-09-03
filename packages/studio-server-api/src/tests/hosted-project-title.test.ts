@@ -189,6 +189,71 @@ test('filesystem saveHostedProject rejects an existing path owned by another pro
   assert.equal(await fs.readFile(sidecars.dataset, 'utf8'), targetDatasets);
 });
 
+test('filesystem in-place save follows a project moved by another administrator instead of recreating its stale path', async () => {
+  const suffix = randomUUID();
+  const oldName = `Open before move ${suffix}`;
+  const movedName = `Moved while open ${suffix}`;
+  const oldPath = path.join(workflowsRoot, `${oldName}.rivet-project`);
+  const movedFolder = path.join(workflowsRoot, `Moved folder ${suffix}`);
+  const movedPath = path.join(movedFolder, `${movedName}.rivet-project`);
+  const originalContents = workflowFs.createBlankProjectFile(oldName);
+  const [originalProject] = loadProjectAndAttachedDataFromString(originalContents);
+  const locallyEditedContents = rewriteProjectMetadata(originalContents, {
+    title: oldName,
+    description: 'local edit made after the remote move',
+  });
+
+  await fs.writeFile(oldPath, originalContents, 'utf8');
+  await fs.mkdir(movedFolder, { recursive: true });
+  await fs.rename(oldPath, movedPath);
+
+  const saved = await workflowStorageBackend.saveHostedProject({
+    projectPath: oldPath,
+    contents: locallyEditedContents,
+    datasetsContents: null,
+    projectId: originalProject.metadata.id,
+    saveIntent: 'in-place',
+  });
+
+  assert.equal(saved.path, movedPath);
+  assert.equal(saved.created, false);
+  await assert.rejects(fs.access(oldPath));
+  const [persistedProject] = loadProjectAndAttachedDataFromString(await fs.readFile(movedPath, 'utf8'));
+  assert.equal(persistedProject.metadata.id, originalProject.metadata.id);
+  assert.equal(persistedProject.metadata.title, movedName);
+  assert.equal(persistedProject.metadata.description, 'local edit made after the remote move');
+});
+
+test('filesystem in-place save refuses a deleted project rather than recreating it at the stale path', async () => {
+  const suffix = randomUUID();
+  const projectName = `Deleted while open ${suffix}`;
+  const projectPath = path.join(workflowsRoot, `${projectName}.rivet-project`);
+  const originalContents = workflowFs.createBlankProjectFile(projectName);
+  const [originalProject] = loadProjectAndAttachedDataFromString(originalContents);
+
+  await fs.writeFile(projectPath, originalContents, 'utf8');
+  await fs.unlink(projectPath);
+
+  await assert.rejects(
+    workflowStorageBackend.saveHostedProject({
+      projectPath,
+      contents: rewriteProjectMetadata(originalContents, {
+        title: projectName,
+        description: 'must not create a replacement file',
+      }),
+      datasetsContents: null,
+      projectId: originalProject.metadata.id,
+      saveIntent: 'in-place',
+    }),
+    (error: unknown) => {
+      assert.equal((error as { status?: number }).status, 409);
+      assert.match((error as Error).message, /no longer exists/i);
+      return true;
+    },
+  );
+  await assert.rejects(fs.access(projectPath));
+});
+
 test('filesystem saveHostedProject serializes concurrent creates for one target path', async () => {
   const suffix = randomUUID();
   const projectPath = path.join(workflowsRoot, `Concurrent ${suffix}.rivet-project`);
@@ -365,6 +430,84 @@ test('managed saveHostedProject stores revisions with the YAML title matching th
   const [savedProject] = loadProjectAndAttachedDataFromString(savedRevisionContents);
   assert.equal(savedProject.metadata.title, workflow.name);
   assert.equal(savedProject.metadata.description, 'managed description from editor save');
+});
+
+test('managed in-place save follows a remotely renamed project by immutable id and rebases the title-only revision', async () => {
+  const workflow = createWorkflowRow({
+    name: 'Renamed by collaborator',
+    file_name: 'Renamed by collaborator.rivet-project',
+    relative_path: 'Moved folder/Renamed by collaborator.rivet-project',
+    folder_relative_path: 'Moved folder',
+    current_draft_revision_id: 'revision-after-remote-rename',
+  });
+  const openedRevision = createRevisionRow(workflow.workflow_id, 'revision-before-remote-rename');
+  const renamedRevision = createRevisionRow(workflow.workflow_id, workflow.current_draft_revision_id);
+  const openedContents = rewriteProjectMetadata(createWorkflowProjectContents(workflow), {
+    title: 'Name at open time',
+    description: 'shared description',
+  });
+  const renamedContents = rewriteProjectMetadata(openedContents, {
+    title: workflow.name,
+    description: 'shared description',
+  });
+  const localContents = rewriteProjectMetadata(openedContents, {
+    title: 'Name at open time',
+    description: 'local edit after remote rename',
+  });
+  let savedRevisionContents = '';
+  let createdRevisionForWorkflowId: string | null = null;
+
+  const revisionService = createManagedWorkflowRevisionService({
+    context: {
+      pool: {} as never,
+      initialize: async () => {},
+      withTransaction: async (run: (client: unknown, hooks: TransactionHooks) => Promise<unknown>) =>
+        run({ query: async () => ({ rows: [] }) }, { onCommit: () => {}, onRollback: () => {} }),
+      queries: {
+        ensureFolderChain: async () => {},
+        getWorkflowByRelativePath: async () => workflow,
+        getWorkflowById: async () => workflow,
+        getRevision: async (_client: unknown, revisionId: string | null | undefined) => {
+          if (revisionId === openedRevision.revision_id) return openedRevision;
+          if (revisionId === renamedRevision.revision_id) return renamedRevision;
+          return null;
+        },
+      },
+      revisions: {
+        readRevisionContents: async (revision: RevisionRow) => ({
+          contents: revision.revision_id === openedRevision.revision_id ? openedContents : renamedContents,
+          datasetsContents: null,
+        }),
+        createRevision: async (workflowId: string, contents: string): Promise<RevisionRow> => {
+          createdRevisionForWorkflowId = workflowId;
+          savedRevisionContents = contents;
+          return createRevisionRow(workflowId, 'revision-saved-after-rebase');
+        },
+        scheduleRevisionBlobCleanup: () => {},
+        insertRevision: async () => {},
+      },
+      endpointSync: { syncWorkflowEndpointRows: async () => {} },
+      mappers: managedMappers,
+      executionInvalidationController: { queueWorkflowInvalidation: async () => {} },
+    } as never,
+  });
+
+  const saved = await revisionService.saveHostedProject({
+    projectPath: getManagedWorkflowProjectVirtualPath('Name at open time.rivet-project'),
+    contents: localContents,
+    datasetsContents: null,
+    expectedRevisionId: openedRevision.revision_id,
+    projectId: workflow.workflow_id,
+    saveIntent: 'in-place',
+  });
+
+  assert.equal(saved.path, getManagedWorkflowProjectVirtualPath(workflow.relative_path));
+  assert.equal(saved.created, false);
+  assert.equal(createdRevisionForWorkflowId, workflow.workflow_id);
+  const [persistedProject] = loadProjectAndAttachedDataFromString(savedRevisionContents);
+  assert.equal(persistedProject.metadata.id, workflow.workflow_id);
+  assert.equal(persistedProject.metadata.title, workflow.name);
+  assert.equal(persistedProject.metadata.description, 'local edit after remote rename');
 });
 
 test('managed saveHostedProject invalidates latest web app caches when only web apps are published', async () => {

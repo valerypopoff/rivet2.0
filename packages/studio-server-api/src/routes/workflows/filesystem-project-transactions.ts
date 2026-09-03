@@ -763,12 +763,24 @@ export async function saveFilesystemProjectTransaction(options: {
   projectPath: string;
   projectContents: string;
   datasetsContents: string | null;
+  /** Resolves a canonical target and normalized contents while the write lock is held. */
+  resolveProjectTarget?: () =>
+    | {
+        projectPath: string;
+        projectContents: string;
+      }
+    | Promise<{
+        projectPath: string;
+        projectContents: string;
+      }>;
   beforeTransaction?: () => void | Promise<void>;
   afterCommit?: () => void | Promise<void>;
   onCheckpoint?: (checkpoint: FilesystemProjectTransactionCheckpoint) => void | Promise<void>;
 }): Promise<void> {
   await operationCoordinator.withWrite(async () => {
-    const projectPath = path.resolve(options.projectPath);
+    const resolvedTarget = await options.resolveProjectTarget?.();
+    const projectPath = path.resolve(resolvedTarget?.projectPath ?? options.projectPath);
+    const projectContents = resolvedTarget?.projectContents ?? options.projectContents;
     if (!projectPath.endsWith(PROJECT_EXTENSION)) {
       throw new Error(`Project transaction target must end with ${PROJECT_EXTENSION}`);
     }
@@ -776,7 +788,7 @@ export async function saveFilesystemProjectTransaction(options: {
     normalizeCanonicalPath(options.root, projectPath);
     normalizeCanonicalPath(options.root, datasetPath);
     checkFilesystemProjectTransactionHealth(options.root);
-    loadProjectAndAttachedDataFromString(options.projectContents);
+    loadProjectAndAttachedDataFromString(projectContents);
     if (options.datasetsContents != null) deserializeDatasets(options.datasetsContents);
 
     let cleanupPending: boolean;
@@ -805,7 +817,7 @@ export async function saveFilesystemProjectTransaction(options: {
     await fs.mkdir(transactionPath, { recursive: false });
     await syncDirectory(transactionsRoot);
 
-    const projectBuffer = Buffer.from(options.projectContents, 'utf8');
+    const projectBuffer = Buffer.from(projectContents, 'utf8');
     const datasetBuffer = options.datasetsContents == null ? null : Buffer.from(options.datasetsContents, 'utf8');
     let committed = false;
     let markerWritten = false;

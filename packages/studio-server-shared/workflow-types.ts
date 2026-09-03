@@ -52,10 +52,7 @@ export type WorkflowPublishedVersionPreviewReference = {
   versionId: string;
 };
 
-export function getWorkflowPublishedVersionPreviewVirtualProjectPath(
-  relativePath: string,
-  versionId: string,
-): string {
+export function getWorkflowPublishedVersionPreviewVirtualProjectPath(relativePath: string, versionId: string): string {
   return [
     WORKFLOW_PUBLISHED_VERSION_PREVIEW_VIRTUAL_PROJECT_PATH_PREFIX,
     encodeURIComponent(normalizeWorkflowVirtualRelativePath(relativePath)),
@@ -135,8 +132,7 @@ export type WorkflowProjectWebAppsResponse = {
   webApps: WorkflowProjectWebAppSummary[];
 };
 
-export const WORKFLOW_ENDPOINT_MAIN_GRAPH_REQUIRED_MESSAGE =
-  'Choose a Main Graph before publishing this endpoint.';
+export const WORKFLOW_ENDPOINT_MAIN_GRAPH_REQUIRED_MESSAGE = 'Choose a Main Graph before publishing this endpoint.';
 
 export type WorkflowProjectWebAppPublicationDraft = {
   uiGraphId: string;
@@ -159,6 +155,8 @@ export type WorkflowProjectItem = {
   id: string;
   /** Immutable Rivet project metadata id used by runtime-scoped services. */
   projectMetadataId?: string;
+  /** Current managed draft revision. Filesystem storage intentionally omits this. */
+  revisionId?: string | null;
   name: string;
   fileName: string;
   relativePath: string;
@@ -203,6 +201,18 @@ export type WorkflowFolderItem = {
 export type WorkflowProjectPathMove = {
   fromAbsolutePath: string;
   toAbsolutePath: string;
+};
+
+/**
+ * The authoritative location and title for an editable workflow project.
+ * Dashboard/editor reconciliation matches this stable project id rather than
+ * trusting an old filename or folder path.
+ */
+export type WorkflowProjectEditorBinding = {
+  projectId: string;
+  path: string;
+  title: string;
+  revisionId?: string | null;
 };
 
 /**

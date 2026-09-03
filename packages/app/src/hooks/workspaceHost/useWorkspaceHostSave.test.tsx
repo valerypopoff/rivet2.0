@@ -32,7 +32,7 @@ import { useWorkspaceHostSave } from './useWorkspaceHostSave.js';
 
 type SaveableIOProvider = IOProvider & {
   canSaveProjectDataNoPrompt(path: string): boolean;
-  saveProjectDataNoPrompt(project: Project, path: string): Promise<void>;
+  saveProjectDataNoPrompt(project: Project, path: string): Promise<string | void>;
 };
 
 type MountedSaveHost = {
@@ -142,11 +142,9 @@ test('an in-flight save cannot replace another active tab path or redirect its n
       store.set(
         projectsState,
         addOpenedProject(
-          addOpenedProject(
-            { openedProjects: {}, openedProjectsSortedIds: [] },
-            projectA,
-            { fsPath: 'project-a.rivet-project' },
-          ),
+          addOpenedProject({ openedProjects: {}, openedProjectsSortedIds: [] }, projectA, {
+            fsPath: 'project-a.rivet-project',
+          }),
           projectB,
           { fsPath: 'project-b.rivet-project' },
         ),
@@ -170,6 +168,38 @@ test('an in-flight save cannot replace another active tab path or redirect its n
   }
 });
 
+test('an in-place provider can return the canonical path after a remote move', async () => {
+  let savedEvent: RivetAppHostProjectSavedEvent | undefined;
+  const ioProvider = createSaveableIOProvider({
+    async saveProjectDataNoPrompt(_project, path) {
+      assert.equal(path, 'project-before-move.rivet-project');
+      return 'Moved/project-after-move.rivet-project';
+    },
+  });
+  const fixture = await mountSaveHost(
+    ioProvider,
+    (event) => {
+      savedEvent = event;
+    },
+    { loaded: true, path: 'project-before-move.rivet-project' },
+  );
+  const store = getDefaultStore();
+  const projectId = store.get(projectState).metadata.id as ProjectId;
+
+  try {
+    await act(async () => {
+      assert.equal(await fixture.saveCurrentProject(), true);
+    });
+
+    assert.equal(store.get(loadedProjectState).path, 'Moved/project-after-move.rivet-project');
+    assert.equal(store.get(projectsState).openedProjects[projectId]?.fsPath, 'Moved/project-after-move.rivet-project');
+    assert.equal(savedEvent?.path, 'Moved/project-after-move.rivet-project');
+    assert.equal(savedEvent?.pathChangedWhileSaving, false);
+  } finally {
+    await fixture.unmount();
+  }
+});
+
 test('a completed older save preserves newer inactive project state, path, and tab metadata', async () => {
   let savedEvent: RivetAppHostProjectSavedEvent | undefined;
   let resolveSave!: () => void;
@@ -186,9 +216,13 @@ test('a completed older save preserves newer inactive project state, path, and t
       await saveGate;
     },
   });
-  const fixture = await mountSaveHost(ioProvider, (event) => {
-    savedEvent = event;
-  }, { loaded: true, path: 'project-a.rivet-project' });
+  const fixture = await mountSaveHost(
+    ioProvider,
+    (event) => {
+      savedEvent = event;
+    },
+    { loaded: true, path: 'project-a.rivet-project' },
+  );
   const store = getDefaultStore();
   const projectA = store.get(projectState);
   const projectAId = projectA.metadata.id as ProjectId;
@@ -233,14 +267,8 @@ test('a completed older save preserves newer inactive project state, path, and t
       resolveSave();
       assert.equal(await save, true);
     });
-    assert.equal(
-      store.get(projectsState).openedProjects[projectAId]?.title,
-      'Renamed while save was pending',
-    );
-    assert.equal(
-      store.get(projectsState).openedProjects[projectAId]?.fsPath,
-      'renamed-project-a.rivet-project',
-    );
+    assert.equal(store.get(projectsState).openedProjects[projectAId]?.title, 'Renamed while save was pending');
+    assert.equal(store.get(projectsState).openedProjects[projectAId]?.fsPath, 'renamed-project-a.rivet-project');
 
     assert.equal(store.get(loadedProjectState).path, 'project-b.rivet-project');
     assert.equal(
@@ -256,7 +284,6 @@ test('a completed older save preserves newer inactive project state, path, and t
     await fixture.unmount();
   }
 });
-
 
 test('public workspace save returns false when Save As is cancelled', async () => {
   let savedEventCount = 0;

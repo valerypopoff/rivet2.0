@@ -114,20 +114,24 @@ async function installTreeRoute(page: Page, state: TreeState, treeReads: { count
 
 async function emitTreeChange(page: Page, payload: unknown): Promise<void> {
   await page.evaluate((nextPayload) => {
-    (window as Window & {
-      __emitWorkflowTreeEvent?: (eventName: string, eventPayload: unknown) => void;
-    }).__emitWorkflowTreeEvent?.('tree-changed', nextPayload);
+    (
+      window as Window & {
+        __emitWorkflowTreeEvent?: (eventName: string, eventPayload: unknown) => void;
+      }
+    ).__emitWorkflowTreeEvent?.('tree-changed', nextPayload);
   }, payload);
 }
 
 async function dispatchProjectOpenedFromEditorFrame(page: Page, path: string): Promise<void> {
   await page.evaluate((projectPath) => {
     const editorFrame = document.querySelector<HTMLIFrameElement>('.dashboard-editor-frame');
-    window.dispatchEvent(new MessageEvent('message', {
-      data: { type: 'project-opened', path: projectPath },
-      origin: window.location.origin,
-      source: editorFrame?.contentWindow ?? null,
-    }));
+    window.dispatchEvent(
+      new MessageEvent('message', {
+        data: { type: 'project-opened', path: projectPath },
+        origin: window.location.origin,
+        source: editorFrame?.contentWindow ?? null,
+      }),
+    );
   }, path);
 }
 
@@ -141,34 +145,38 @@ test('a workflow tree mutation refreshes a second administrator browser without 
   const treeReadsB = { count: 0 };
 
   try {
-    await Promise.all([
-      installMockEventSource(pageA),
-      installMockEventSource(pageB),
-    ]);
-    await Promise.all([
-      installTreeRoute(pageA, state, treeReadsA),
-      installTreeRoute(pageB, state, treeReadsB),
-    ]);
+    await Promise.all([installMockEventSource(pageA), installMockEventSource(pageB)]);
+    await Promise.all([installTreeRoute(pageA, state, treeReadsA), installTreeRoute(pageB, state, treeReadsB)]);
 
     let originClientId: string | null = null;
     await pageA.route('**/api/workflows/folders', async (route: Route) => {
       if (route.request().method() !== 'POST') {
-        await route.fulfill({ status: 405, contentType: 'application/json', body: JSON.stringify({ error: 'Unexpected request' }) });
+        await route.fulfill({
+          status: 405,
+          contentType: 'application/json',
+          body: JSON.stringify({ error: 'Unexpected request' }),
+        });
         return;
       }
 
       originClientId = route.request().headers()['x-rivet-workflow-tree-client'] ?? null;
-      state.folders = [{
-        id: 'shared-folder',
-        name: 'Shared folder',
-        relativePath: 'Shared folder',
-        absolutePath: '/managed/workflows/Shared folder',
-        updatedAt: '2026-08-31T00:00:00.000Z',
-        folders: [],
-        projects: [],
-      }];
+      state.folders = [
+        {
+          id: 'shared-folder',
+          name: 'Shared folder',
+          relativePath: 'Shared folder',
+          absolutePath: '/managed/workflows/Shared folder',
+          updatedAt: '2026-08-31T00:00:00.000Z',
+          folders: [],
+          projects: [],
+        },
+      ];
       state.revision += 1;
-      await route.fulfill({ status: 201, contentType: 'application/json', body: JSON.stringify({ folder: state.folders[0] }) });
+      await route.fulfill({
+        status: 201,
+        contentType: 'application/json',
+        body: JSON.stringify({ folder: state.folders[0] }),
+      });
 
       setTimeout(() => {
         const event = {
@@ -184,14 +192,8 @@ test('a workflow tree mutation refreshes a second administrator browser without 
       pageA.goto('/', { waitUntil: 'domcontentloaded' }),
       pageB.goto('/', { waitUntil: 'domcontentloaded' }),
     ]);
-    await Promise.all([
-      authenticateIfNeeded(pageA),
-      authenticateIfNeeded(pageB),
-    ]);
-    await Promise.all([
-      waitForDashboardReady(pageA),
-      waitForDashboardReady(pageB),
-    ]);
+    await Promise.all([authenticateIfNeeded(pageA), authenticateIfNeeded(pageB)]);
+    await Promise.all([waitForDashboardReady(pageA), waitForDashboardReady(pageB)]);
     await expect(pageB.locator('.folder-row', { hasText: 'Shared folder' })).toHaveCount(0);
 
     pageA.once('dialog', (dialog) => void dialog.accept('Shared folder'));
@@ -261,4 +263,117 @@ test('a remote removal updates the tree but preserves the already open editor do
   await page.waitForTimeout(250);
   expect(projectLoadRequests).toBe(1);
   expect(treeReads.count).toBeGreaterThan(1);
+});
+
+test('a remote project move retargets the open editor tab and notifies the user without reloading project contents', async ({
+  page,
+}) => {
+  const projectName = 'Project moved remotely';
+  const project = createProjectFixture(projectName);
+  const state: TreeState = { folders: [], projects: [project], revision: 0 };
+  const treeReads = { count: 0 };
+  let projectLoadRequests = 0;
+
+  await installMockEventSource(page);
+  await installTreeRoute(page, state, treeReads);
+  await page.route('**/api/projects/load', async (route) => {
+    projectLoadRequests += 1;
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        contents: createProjectContents(projectName),
+        datasetsContents: null,
+        revisionId: null,
+      }),
+    });
+  });
+
+  await page.goto('/', { waitUntil: 'domcontentloaded' });
+  await authenticateIfNeeded(page);
+  await waitForDashboardReady(page);
+
+  const projectRow = page.locator('.project-row', { hasText: projectName });
+  await projectRow.dblclick();
+  const editorFrame = page.frameLocator('iframe.dashboard-editor-frame');
+  await expect(editorFrame.locator('.projects-container .project.active', { hasText: projectName })).toBeVisible();
+  await dispatchProjectOpenedFromEditorFrame(page, project.absolutePath);
+
+  const movedProject = {
+    ...project,
+    relativePath: `Moved by collaborator/${project.fileName}`,
+    absolutePath: `/managed/workflows/Moved by collaborator/${project.fileName}`,
+  };
+  state.projects = [movedProject];
+  state.revision += 1;
+  await emitTreeChange(page, {
+    epoch: 'playwright-tree-sync',
+    revision: state.revision,
+    sourceClientId: 'other-administrator',
+  });
+
+  await expect(page.locator('.Toastify__toast')).toContainText(
+    `"${projectName}" was moved by another administrator. Your editor tab now follows the new location.`,
+  );
+  await expect(editorFrame.locator('.projects-container .project.active', { hasText: projectName })).toBeVisible();
+  await expect(page.locator('.active-project-name')).toHaveText(projectName);
+  expect(projectLoadRequests).toBe(1);
+  expect(treeReads.count).toBeGreaterThan(1);
+});
+
+test('a remote project rename updates the open tab title and notifies the user without reloading it', async ({
+  page,
+}) => {
+  const originalName = 'Project renamed remotely';
+  const renamedName = 'Collaborator renamed project';
+  const project = createProjectFixture(originalName);
+  const state: TreeState = { folders: [], projects: [project], revision: 0 };
+  let projectLoadRequests = 0;
+
+  await installMockEventSource(page);
+  await installTreeRoute(page, state, { count: 0 });
+  await page.route('**/api/projects/load', async (route) => {
+    projectLoadRequests += 1;
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        contents: createProjectContents(originalName),
+        datasetsContents: null,
+        revisionId: null,
+      }),
+    });
+  });
+
+  await page.goto('/', { waitUntil: 'domcontentloaded' });
+  await authenticateIfNeeded(page);
+  await waitForDashboardReady(page);
+
+  await page.locator('.project-row', { hasText: originalName }).dblclick();
+  const editorFrame = page.frameLocator('iframe.dashboard-editor-frame');
+  await expect(editorFrame.locator('.projects-container .project.active', { hasText: originalName })).toBeVisible();
+  await dispatchProjectOpenedFromEditorFrame(page, project.absolutePath);
+
+  state.projects = [
+    {
+      ...project,
+      name: renamedName,
+      fileName: `${renamedName}.rivet-project`,
+      relativePath: `${renamedName}.rivet-project`,
+      absolutePath: `/managed/workflows/${renamedName}.rivet-project`,
+    },
+  ];
+  state.revision += 1;
+  await emitTreeChange(page, {
+    epoch: 'playwright-tree-sync',
+    revision: state.revision,
+    sourceClientId: 'other-administrator',
+  });
+
+  await expect(page.locator('.Toastify__toast')).toContainText(
+    `"${originalName}" was renamed to "${renamedName}" by another administrator. Your editor tab now follows the renamed project.`,
+  );
+  await expect(editorFrame.locator('.projects-container .project.active', { hasText: renamedName })).toBeVisible();
+  await expect(page.locator('.active-project-name')).toHaveText(renamedName);
+  expect(projectLoadRequests).toBe(1);
 });

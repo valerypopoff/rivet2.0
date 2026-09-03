@@ -9,10 +9,7 @@ import {
   openedProjectSnapshotsState,
   type OpenedProjectsInfo,
 } from '../../app/src/state/savedGraphs';
-import {
-  isDashboardToEditorCommand,
-  isValidBridgeOrigin,
-} from '../../studio-server-shared/editor-bridge';
+import { isDashboardToEditorCommand, isValidBridgeOrigin } from '../../studio-server-shared/editor-bridge';
 import {
   handleCompareOpenProjectCommand,
   handleOpenPublishedPreviewCommand,
@@ -25,16 +22,11 @@ import type {
 } from './editorCommandBridgeContext';
 import {
   handleDeleteWorkflowProjectCommand,
+  handleReconcileWorkflowProjectBindingsCommand,
   handleWorkflowPathsMovedCommand,
 } from './editorProjectLifecycleCommands';
-import {
-  handleOpenProjectCommand,
-  handleRefreshOpenProjectCommand,
-} from './editorProjectOpenCommands';
-import {
-  replayEditorDuplicateShortcut,
-  replayEditorFindShortcut,
-} from './useEditorBridgeInteractions';
+import { handleOpenProjectCommand, handleRefreshOpenProjectCommand } from './editorProjectOpenCommands';
+import { replayEditorDuplicateShortcut, replayEditorFindShortcut } from './useEditorBridgeInteractions';
 import { useOpenWorkflowProject } from './useOpenWorkflowProject';
 import type { usePreviewProjectLifecycle } from './usePreviewProjectLifecycle';
 import type { useWorkflowRecordingBridge } from './useWorkflowRecordingBridge';
@@ -77,7 +69,8 @@ export function useEditorCommandBridge({
     const context: EditorCommandBridgeContext = {
       clearLoadedRecording: (projectId) => {
         setLoadedRecording((loadedRecording) =>
-          projectId != null && loadedRecording?.projectId === projectId ? null : loadedRecording);
+          projectId != null && loadedRecording?.projectId === projectId ? null : loadedRecording,
+        );
       },
       getCurrentProject: () => currentProjectRef.current,
       getLoadedProject: () => loadedProjectRef.current,
@@ -114,13 +107,13 @@ export function useEditorCommandBridge({
           return handleCompareOpenProjectCommand(context, command);
         case 'workflow-paths-moved':
           return handleWorkflowPathsMovedCommand(context, command);
+        case 'reconcile-workflow-project-bindings':
+          return handleReconcileWorkflowProjectBindingsCommand(context, command);
       }
     };
 
     const enqueueSerializedCommand = (command: SerializedEditorCommand): void => {
-      const queued = serializedCommandQueueRef.current
-        .catch(() => undefined)
-        .then(() => runSerializedCommand(command));
+      const queued = serializedCommandQueueRef.current.catch(() => undefined).then(() => runSerializedCommand(command));
       serializedCommandQueueRef.current = queued.catch((error) => {
         console.error('Failed to process hosted editor command:', error);
       });
@@ -155,6 +148,7 @@ export function useEditorCommandBridge({
         case 'refresh-open-project-from-disk':
         case 'compare-open-project-with':
         case 'workflow-paths-moved':
+        case 'reconcile-workflow-project-bindings':
           enqueueSerializedCommand(event.data);
           break;
       }
@@ -162,11 +156,5 @@ export function useEditorCommandBridge({
 
     window.addEventListener('message', handler);
     return () => window.removeEventListener('message', handler);
-  }, [
-    preview,
-    recording,
-    setLoadedProject,
-    setLoadedRecording,
-    setOpenedProjectSnapshots,
-  ]);
+  }, [preview, recording, setLoadedProject, setLoadedRecording, setOpenedProjectSnapshots]);
 }

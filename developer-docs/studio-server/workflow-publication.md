@@ -186,10 +186,11 @@ The server emits one invalidation only after a successful create, move, rename, 
 
 The browser coalesces rapid remote notifications, keeps folders expanded when their IDs still exist, and defers reconciliation while the local user is dragging, while a drag/drop move request is still reconciling, editing a tree name, uploading, or waiting for another local tree action. A transient refetch failure leaves the visible tree intact and is retried in the background. Native `EventSource` reconnection plus the server epoch means a restarted API process causes connected clients to fetch a fresh tree rather than trusting an old revision.
 
-Tree synchronization is intentionally metadata-only:
+Tree synchronization is intentionally content-non-destructive:
 
-- A remote rename, move, or delete refreshes the sidebar but never reloads, merges, closes, or discards an editor document that another administrator already has open.
-- If the open project's original tree path no longer exists, the dashboard explains that it was moved/renamed or removed elsewhere and that the unchanged editor document remains open.
+- A remote rename or move refreshes the sidebar, then reconciles every matching open editor tab by immutable project metadata ID. It updates the tab title and canonical path without reloading, merging, closing, or discarding the in-memory document, and shows the affected user a notification.
+- A following normal Save carries that project ID as an in-place persistence intent. Filesystem storage scans the authoritative tree under its write lock; managed storage locks the workflow row by ID. Both save to the current canonical path rather than creating a duplicate at the stale path. Missing or ambiguous owners fail with a conflict; Save As stays an explicit create-at-path operation.
+- A remote delete still does not reload or silently close an editor document. The dashboard explains that the unchanged document remains open; its subsequent in-place save fails instead of recreating the deleted project.
 - This is not live graph collaboration and does not merge project content. Users still choose when to reload, save, or resolve content-level conflicts.
 - Only Rivet Server mutations participate. Manual filesystem changes outside the server are not watched.
 

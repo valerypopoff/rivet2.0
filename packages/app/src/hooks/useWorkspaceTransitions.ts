@@ -486,8 +486,8 @@ export function useWorkspaceTransitions() {
             if (!saveInPlaceProvider || !savePath) {
               throw new Error('The active project cannot be saved in place.');
             }
-            await saveInPlaceProvider.saveProjectDataNoPrompt(projectToPersist, savePath);
-            savedPath = savePath;
+            const canonicalSavePath = await saveInPlaceProvider.saveProjectDataNoPrompt(projectToPersist, savePath);
+            savedPath = canonicalSavePath ?? savePath;
             await flushHybridStorageGroup('graph');
             await flushHybridStorageGroup('project');
           }

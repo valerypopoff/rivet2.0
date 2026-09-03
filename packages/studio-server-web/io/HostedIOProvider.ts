@@ -54,10 +54,21 @@ export function clearHostedProjectRevisionPath(path: string | null | undefined):
   projectRevisionIdByPath.delete(path);
 }
 
-export function remapHostedProjectRevisionPaths(moves: Iterable<{
-  fromAbsolutePath: string;
-  toAbsolutePath: string;
-}>): void {
+/** Bind a managed revision to the canonical project path supplied by the workflow tree. */
+export function setHostedProjectRevisionPath(path: string | null | undefined, revisionId: string | null): void {
+  if (!path) {
+    return;
+  }
+
+  projectRevisionIdByPath.set(path, revisionId);
+}
+
+export function remapHostedProjectRevisionPaths(
+  moves: Iterable<{
+    fromAbsolutePath: string;
+    toAbsolutePath: string;
+  }>,
+): void {
   const moveMap = new Map<string, string>();
 
   for (const move of moves) {
@@ -109,6 +120,8 @@ async function apiSaveProject(options: {
   contents: string;
   datasetsContents: string | null;
   expectedRevisionId: string | null;
+  projectId: string;
+  saveIntent: 'in-place' | 'save-as';
 }): Promise<{
   path: string;
   revisionId: string | null;
@@ -137,7 +150,7 @@ async function getWorkflowStorageBackend(): Promise<'filesystem' | 'managed'> {
         throw new Error(`Failed to load hosted config: ${response.status}`);
       }
 
-      const config = await response.json().catch(() => ({})) as { storageMode?: unknown };
+      const config = (await response.json().catch(() => ({}))) as { storageMode?: unknown };
       const value = typeof config.storageMode === 'string' ? config.storageMode.trim().toLowerCase() : '';
       return value === 'managed' ? 'managed' : 'filesystem';
     })().catch((error) => {
@@ -181,8 +194,8 @@ function getCurrentLoadedProjectPath(): string | null {
 }
 
 function createPublishedVersionPreviewProjectId(): ProjectId {
-  const randomId = globalThis.crypto?.randomUUID?.() ??
-    `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+  const randomId =
+    globalThis.crypto?.randomUUID?.() ?? `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
 
   return `published-version-preview:${randomId}` as ProjectId;
 }
@@ -249,9 +262,13 @@ async function pickSingleFile(options: { accept?: string } = {}): Promise<File |
       }, 300);
     };
 
-    input.addEventListener('change', () => {
-      finish(input.files?.[0] ?? null);
-    }, { once: true });
+    input.addEventListener(
+      'change',
+      () => {
+        finish(input.files?.[0] ?? null);
+      },
+      { once: true },
+    );
     window.addEventListener('focus', handleWindowFocus, true);
     document.body.appendChild(input);
     input.click();
@@ -331,6 +348,8 @@ export class HostedIOProvider implements IOProvider {
       contents: serializeProject(project) as string,
       datasetsContents: datasets.length > 0 ? serializeDatasets(datasets) : null,
       expectedRevisionId: projectRevisionIdByPath.get(filePath) ?? null,
+      projectId: project.metadata.id,
+      saveIntent: 'save-as',
     });
 
     projectRevisionIdByPath.delete(filePath);
@@ -338,7 +357,7 @@ export class HostedIOProvider implements IOProvider {
     return saved.path;
   }
 
-  async saveProjectDataNoPrompt(project: Project, path: string): Promise<void> {
+  async saveProjectDataNoPrompt(project: Project, path: string): Promise<string> {
     assertProjectIsWritable(project, path);
 
     if (getWorkflowRecordingIdFromVirtualProjectPath(path)) {
@@ -352,9 +371,13 @@ export class HostedIOProvider implements IOProvider {
       contents: serializeProject(project) as string,
       datasetsContents: datasets.length > 0 ? serializeDatasets(datasets) : null,
       expectedRevisionId: projectRevisionIdByPath.get(path) ?? null,
+      projectId: project.metadata.id,
+      saveIntent: 'in-place',
     });
 
+    projectRevisionIdByPath.delete(path);
     projectRevisionIdByPath.set(saved.path, saved.revisionId ?? null);
+    return saved.path;
   }
 
   async loadGraphData(callback: (graphData: NodeGraph) => void): Promise<void> {
@@ -426,17 +449,22 @@ export class HostedIOProvider implements IOProvider {
         previewReference.relativePath,
         previewReference.versionId,
       );
-      const { project: projectData, evaluation } = await deserializeHostedProjectPayload(
-        preview.contents,
-        path,
-      );
+      const { project: projectData, evaluation } = await deserializeHostedProjectPayload(preview.contents, path);
       const previewProject = createPublishedVersionPreviewProject(projectData, previewReference);
 
       if (preview.datasetsContents) {
         const datasets = deserializeDatasets(preview.datasetsContents);
-        const evaluationDatasets = (JSON.parse(preview.datasetsContents) as { evaluationDatasets?: EvaluationProjectFileData['evaluationDatasets'] }).evaluationDatasets ?? [];
+        const evaluationDatasets =
+          (
+            JSON.parse(preview.datasetsContents) as {
+              evaluationDatasets?: EvaluationProjectFileData['evaluationDatasets'];
+            }
+          ).evaluationDatasets ?? [];
         await this.#datasetProvider.importDatasetsForProject(previewProject.metadata.id, datasets);
-        evaluation.evaluationDatasets = evaluationDatasets.map((dataset) => ({ ...dataset, projectId: previewProject.metadata.id }));
+        evaluation.evaluationDatasets = evaluationDatasets.map((dataset) => ({
+          ...dataset,
+          projectId: previewProject.metadata.id,
+        }));
       } else {
         await this.#datasetProvider.importDatasetsForProject(previewProject.metadata.id, []);
       }
@@ -451,12 +479,13 @@ export class HostedIOProvider implements IOProvider {
         fetchWorkflowRecordingArtifactText(recordingId, 'replay-dataset')
           .then((datasetsText) => ({ datasetsText }))
           .catch((error) => {
-            const status = typeof error === 'object' &&
+            const status =
+              typeof error === 'object' &&
               error != null &&
               'status' in error &&
               typeof (error as { status?: unknown }).status === 'number'
-              ? (error as { status: number }).status
-              : undefined;
+                ? (error as { status: number }).status
+                : undefined;
 
             if (status === 404) {
               return { datasetsText: null };
@@ -469,7 +498,12 @@ export class HostedIOProvider implements IOProvider {
 
       if (replayDatasetResult.datasetsText) {
         const datasets = deserializeDatasets(replayDatasetResult.datasetsText);
-        evaluation.evaluationDatasets = (JSON.parse(replayDatasetResult.datasetsText) as { evaluationDatasets?: EvaluationProjectFileData['evaluationDatasets'] }).evaluationDatasets ?? [];
+        evaluation.evaluationDatasets =
+          (
+            JSON.parse(replayDatasetResult.datasetsText) as {
+              evaluationDatasets?: EvaluationProjectFileData['evaluationDatasets'];
+            }
+          ).evaluationDatasets ?? [];
         await this.#datasetProvider.importDatasetsForProject(projectData.metadata.id, datasets);
       } else {
         await this.#datasetProvider.importDatasetsForProject(projectData.metadata.id, []);
@@ -485,7 +519,12 @@ export class HostedIOProvider implements IOProvider {
 
     if (loaded.datasetsContents) {
       const datasets = deserializeDatasets(loaded.datasetsContents);
-      evaluation.evaluationDatasets = (JSON.parse(loaded.datasetsContents) as { evaluationDatasets?: EvaluationProjectFileData['evaluationDatasets'] }).evaluationDatasets ?? [];
+      evaluation.evaluationDatasets =
+        (
+          JSON.parse(loaded.datasetsContents) as {
+            evaluationDatasets?: EvaluationProjectFileData['evaluationDatasets'];
+          }
+        ).evaluationDatasets ?? [];
       await this.#datasetProvider.importDatasetsForProject(projectData.metadata.id, datasets);
     } else {
       await this.#datasetProvider.importDatasetsForProject(projectData.metadata.id, []);
