@@ -265,6 +265,17 @@ test('dev Compose exposes the host machine to both Node execution paths', () => 
   );
 });
 
+test('dev Compose recreates Nginx when its upstream container is recreated', () => {
+  const proxy = composeServiceBlock(readRepoFile('deploy/studio-server/compose/docker-compose.dev.yml'), 'proxy');
+
+  for (const service of ['web', 'api', 'executor']) {
+    assert.match(
+      proxy,
+      new RegExp(`\\n      ${service}:\\s*\\r?\\n        condition: [^\\r\\n]+\\r?\\n(?:        #[^\\r\\n]*\\r?\\n)*        restart: true`),
+    );
+  }
+});
+
 test('compose fallback artifact mounts stay isolated under app data', () => {
   const prodCompose = readRepoFile('deploy/studio-server/compose/docker-compose.yml');
   const devCompose = readRepoFile('deploy/studio-server/compose/docker-compose.dev.yml');

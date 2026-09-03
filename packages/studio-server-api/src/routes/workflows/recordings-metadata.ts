@@ -110,7 +110,11 @@ function normalizeExecutionIdentity(value: unknown): WorkflowRecordingExecutionI
   }
 
   const raw = value as Record<string, unknown>;
-  if (raw.surface !== 'workflow_endpoint' && raw.surface !== 'web_app_action') {
+  if (
+    raw.surface !== 'workflow_endpoint' &&
+    raw.surface !== 'web_app_action' &&
+    raw.surface !== 'editor_local'
+  ) {
     return undefined;
   }
   const componentType = raw.componentType;
@@ -132,7 +136,7 @@ function normalizeExecutionIdentity(value: unknown): WorkflowRecordingExecutionI
 }
 
 export function normalizeRunKind(value: unknown): WorkflowRecordingRunKind | null {
-  return value === 'published' || value === 'latest' ? value : null;
+  return value === 'published' || value === 'latest' || value === 'editor' ? value : null;
 }
 
 export function normalizeStatus(value: unknown): WorkflowRecordingStatus | null {

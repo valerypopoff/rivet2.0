@@ -190,6 +190,12 @@ export type OutgoingMessageMap = {
     useEditorCache?: boolean;
     captureNodeTimings?: boolean;
     evaluation?: EvaluationExecutionMetadata;
+    /**
+     * An opaque, host-owned ID that lets a trusted executor join an unhealthy
+     * LLM Profile attempt to a recording persisted after this editor run.
+     * It is not graph input and is never forwarded to a model provider.
+     */
+    llmProfileHealthExecutionCorrelationId?: string;
     returnWhenGraphOutputsReady?: boolean;
     webAppStorage?: RivetWebAppStorage;
   };

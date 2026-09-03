@@ -705,7 +705,7 @@ function normalizeWorkflowRecordingRunRow(row: Record<string, unknown>): Workflo
     id: String(row.id ?? ''),
     workflowId: String(row.workflowId ?? ''),
     createdAt: String(row.createdAt ?? ''),
-    runKind: row.runKind === 'published' ? 'published' : 'latest',
+    runKind: row.runKind === 'published' || row.runKind === 'editor' ? row.runKind : 'latest',
     status,
     durationMs: toNumber(row.durationMs),
     endpointNameAtExecution: String(row.endpointNameAtExecution ?? ''),
@@ -725,7 +725,7 @@ function normalizeWorkflowRecordingRunRow(row: Record<string, unknown>): Workflo
 
 function getExecutionIdentity(row: Record<string, unknown>): WorkflowRecordingExecutionIdentity | undefined {
   const surface = row.executionSurface;
-  if (surface !== 'workflow_endpoint' && surface !== 'web_app_action') {
+  if (surface !== 'workflow_endpoint' && surface !== 'web_app_action' && surface !== 'editor_local') {
     return undefined;
   }
 

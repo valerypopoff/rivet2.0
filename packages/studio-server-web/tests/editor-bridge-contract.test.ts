@@ -116,3 +116,20 @@ test('active project unsaved changes event validates path and dirty payload', ()
     path: '/workflows/example.rivet-project',
   }), false);
 });
+
+test('project saved event carries only a boolean retained-dirty-state signal', () => {
+  assert.equal(isEditorToDashboardEvent({
+    type: 'project-saved',
+    path: '/workflows/example.rivet-project',
+    hasNewerUnsavedChanges: true,
+  }), true);
+  assert.equal(isEditorToDashboardEvent({
+    type: 'project-saved',
+    path: '/workflows/example.rivet-project',
+  }), true);
+  assert.equal(isEditorToDashboardEvent({
+    type: 'project-saved',
+    path: '/workflows/example.rivet-project',
+    hasNewerUnsavedChanges: 'true',
+  }), false);
+});

@@ -42,7 +42,7 @@ export type EditorToDashboardEvent =
   | { type: 'open-project-count-changed'; count: number }
   | { type: 'project-compare-failed'; path: string; error: string }
   | { type: 'workflow-paths-moved-applied'; requestId?: string }
-  | { type: 'project-saved'; path: string };
+  | { type: 'project-saved'; path: string; hasNewerUnsavedChanges?: boolean };
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   value != null && typeof value === 'object';
@@ -131,8 +131,10 @@ export function isEditorToDashboardEvent(value: unknown): value is EditorToDashb
     case 'project-opened':
       return typeof value.path === 'string' && (value.requestId == null || typeof value.requestId === 'string');
     case 'active-project-path-changed':
-    case 'project-saved':
       return typeof value.path === 'string';
+    case 'project-saved':
+      return typeof value.path === 'string' &&
+        (value.hasNewerUnsavedChanges == null || typeof value.hasNewerUnsavedChanges === 'boolean');
     case 'active-project-unsaved-changes-changed':
       return typeof value.path === 'string' && typeof value.hasUnsavedChanges === 'boolean';
     case 'project-compare-failed':

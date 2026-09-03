@@ -19,7 +19,7 @@ import {
 } from '@valerypopoff/rivet2-core';
 import { useCurrentExecution } from './useCurrentExecution';
 import { graphState } from '../state/graph';
-import { settingsState, showNodeRunDurationsState } from '../state/settings';
+import { recordExecutionsState, settingsState, showNodeRunDurationsState } from '../state/settings';
 import { useExecutorSessionRuntime } from '../providers/ExecutorSessionContext.js';
 import { useRemoteDebugger } from './useRemoteDebugger';
 import { fillMissingSettingsFromEnvironmentVariables } from '../utils/tauri';
@@ -58,6 +58,8 @@ import {
   useEnvironmentProvider,
   useEvaluationRunStore,
   useHostedEvaluationCoordinator,
+  useLocalExecutionRecordingPersistence,
+  type LocalExecutionRecordingPersistenceProvider,
 } from '../providers/ProvidersContext.js';
 import { pluginsState } from '../state/plugins.js';
 import { withDerivedProjectPluginSpecs } from '../utils/pluginUsage.js';
@@ -101,6 +103,63 @@ type RemoteEvaluationMetricsState = {
   metrics: EvaluationExecutionMetrics;
   providerAttempts: PortableJson[];
 };
+
+type RemoteLocalExecutionRecordingCapture = {
+  correlationId: string;
+  errorMessage?: string;
+  graphId: GraphId;
+  hasUnhealthyLLMProfileHealthEvidence: boolean;
+  isTerminal: boolean;
+  project: Project;
+  projectId: ProjectId;
+  projectPath: string;
+  provider: LocalExecutionRecordingPersistenceProvider;
+  recorder: ExecutionRecorder;
+  recorderAbortController: AbortController;
+  startedAt: number;
+  status: 'succeeded' | 'failed' | 'suspicious';
+};
+
+function createLocalExecutionRecordingCorrelationId(): string {
+  const id = globalThis.crypto?.randomUUID?.() ?? `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+  return `rvt-local-${id}`;
+}
+
+function getRemoteExecutionErrorMessage(data: unknown): string | undefined {
+  const error = (data as { error?: unknown } | undefined)?.error;
+  if (error instanceof Error) return error.message;
+  return typeof error === 'string' && error.length > 0 ? error : undefined;
+}
+
+function captureRemoteLocalExecutionTerminal(
+  capture: RemoteLocalExecutionRecordingCapture | undefined,
+  message: string,
+  data: unknown,
+): void {
+  if (!capture) return;
+
+  if (message === 'llmProfileAttempt') {
+    const event = data as ProcessEventMessageMap['llmProfileAttempt'];
+    if (event.stage === 'health-update' && event.outcome === 'success' && event.healthOutcome === 'unhealthy') {
+      capture.hasUnhealthyLLMProfileHealthEvidence = true;
+    }
+    return;
+  }
+
+  if (message === 'graphError' || message === 'error') {
+    capture.status = 'failed';
+    capture.errorMessage ??= getRemoteExecutionErrorMessage(data);
+  }
+
+  if (message === 'done' || message === 'error' || message === 'abort') {
+    capture.isTerminal = true;
+    if (message === 'abort') {
+      capture.status = 'suspicious';
+      capture.errorMessage ??= getRemoteExecutionErrorMessage(data);
+      capture.recorderAbortController.abort();
+    }
+  }
+}
 
 function createRemoteEvaluationMetricsState(): RemoteEvaluationMetricsState {
   return {
@@ -220,6 +279,9 @@ export function useRemoteExecutor() {
   );
   const responseTraceByRequestIdRef = useRef(new Map<RemoteRunRequestId, RemoteResponseTraceState>());
   const evaluationMetricsByRequestIdRef = useRef(new Map<RemoteRunRequestId, RemoteEvaluationMetricsState>());
+  const localRecordingCapturesByRequestIdRef = useRef(
+    new Map<RemoteRunRequestId, RemoteLocalExecutionRecordingCapture>(),
+  );
   const externalDebuggerRunFlushedFrozenOutputsRef = useRef(false);
   const remoteDebuggerDiagnosticsRef = useRef(createRemoteDebuggerDiagnostics());
   const unscopedEventRoutingRef = useRef(createUnscopedRemoteExecutionRoutingState());
@@ -241,6 +303,7 @@ export function useRemoteExecutor() {
   });
   const graph = useAtomValue(graphState);
   const savedSettings = useAtomValue(settingsState);
+  const recordExecutions = useAtomValue(recordExecutionsState);
   const showNodeRunDurations = useAtomValue(showNodeRunDurationsState);
   const [evaluations, setEvaluationsState] = useAtom(evaluationsState);
   const setUserInputQuestions = useSetAtom(userInputModalQuestionsState);
@@ -249,6 +312,58 @@ export function useRemoteExecutor() {
   const setFrozenNodeOutputs = useSetAtom(frozenNodeOutputsState);
   const loadedProject = useAtomValue(loadedProjectState);
   const pluginStates = useAtomValue(pluginsState);
+  const localExecutionRecordingPersistence = useLocalExecutionRecordingPersistence();
+
+  const finalizeRemoteLocalExecutionRecording = useStableCallback(async (requestId: RemoteRunRequestId) => {
+    const capture = localRecordingCapturesByRequestIdRef.current.get(requestId);
+    if (!capture) return;
+    localRecordingCapturesByRequestIdRef.current.delete(requestId);
+
+    if (!capture.hasUnhealthyLLMProfileHealthEvidence) return;
+
+    if (!capture.isTerminal || capture.recorder.events.length === 0) {
+      await capture.provider.markUnavailable(capture.correlationId).catch((error) => {
+        logRuntimeDebug('Remote LLM-profile replay could not capture a terminal recording.', {
+          error,
+          graphId: capture.graphId,
+          projectId: capture.projectId,
+        });
+      });
+      return;
+    }
+
+    try {
+      const durationMs = Math.max(0, performance.now() - capture.startedAt);
+      const datasetsContents = serializeDatasets(await datasetProvider.exportDatasetsForProject(capture.projectId));
+      await capture.provider.persist({
+        projectId: capture.projectId,
+        projectPath: capture.projectPath,
+        projectContents: serializeProject(capture.project) as string,
+        datasetsContents,
+        recordingSerialized: capture.recorder.serialize(),
+        status: capture.status,
+        durationMs,
+        errorMessage: capture.errorMessage,
+        executionIdentity: {
+          correlationId: capture.correlationId,
+          graphId: capture.graphId,
+        },
+      });
+    } catch (error) {
+      await capture.provider.markUnavailable(capture.correlationId).catch((outcomeError) => {
+        logRuntimeDebug('Remote LLM-profile replay could not report a failed local recording.', {
+          error: outcomeError,
+          graphId: capture.graphId,
+          projectId: capture.projectId,
+        });
+      });
+      logRuntimeDebug('Remote LLM-profile replay was not retained by the hosted server.', {
+        error,
+        graphId: capture.graphId,
+        projectId: capture.projectId,
+      });
+    }
+  });
 
   const remoteDebugger = useRemoteDebugger({
     onDisconnect: () => {
@@ -262,6 +377,9 @@ export function useRemoteExecutor() {
       webAppStoragePatchCallbacksByRequestIdRef.current.clear();
       responseTraceByRequestIdRef.current.clear();
       evaluationMetricsByRequestIdRef.current.clear();
+      for (const capture of localRecordingCapturesByRequestIdRef.current.values()) {
+        capture.recorderAbortController.abort();
+      }
       executorSession.setActiveGraphRunRequestId(null);
       if (store.get(projectState).metadata.id !== project.metadata.id) {
         return;
@@ -309,6 +427,11 @@ export function useRemoteExecutor() {
   }, [executorSession]);
 
   const handleExecutorMessage: RemoteExecutorMessageHandler = useStableCallback((message, data, requestId) => {
+    captureRemoteLocalExecutionTerminal(
+      requestId == null ? undefined : localRecordingCapturesByRequestIdRef.current.get(requestId),
+      message,
+      data,
+    );
     if (store.get(projectState).metadata.id !== project.metadata.id) {
       return;
     }
@@ -635,6 +758,86 @@ export function useRemoteExecutor() {
         });
       }
 
+      const remoteLocalRecordingProjectPath =
+        recordExecutions &&
+        sessionState.target?.type === 'internal-hosted' &&
+        options.webAppStorage === undefined &&
+        loadedProject.path &&
+        localExecutionRecordingPersistence
+          ? loadedProject.path
+          : undefined;
+      const remoteLocalRecordingProvider =
+        remoteLocalRecordingProjectPath &&
+        localExecutionRecordingPersistence &&
+        (await localExecutionRecordingPersistence.getCapability().catch(() => false))
+          ? localExecutionRecordingPersistence
+          : undefined;
+      const remoteLocalRecordingCorrelationId = remoteLocalRecordingProvider
+        ? createLocalExecutionRecordingCorrelationId()
+        : undefined;
+      const remoteLocalRecordingProject: Project =
+        projectData === undefined
+          ? projectWithCurrentGraph
+          : { ...projectWithCurrentGraph, data: structuredClone(projectData) };
+      let remoteLocalRecordingRequestId: RemoteRunRequestId | undefined;
+      const startRemoteLocalExecutionRecording = (requestId: RemoteRunRequestId) => {
+        if (!remoteLocalRecordingProvider || !remoteLocalRecordingCorrelationId || !remoteLocalRecordingProjectPath) {
+          return;
+        }
+
+        const capture: RemoteLocalExecutionRecordingCapture = {
+          correlationId: remoteLocalRecordingCorrelationId,
+          graphId: graphToRun,
+          hasUnhealthyLLMProfileHealthEvidence: false,
+          isTerminal: false,
+          project: remoteLocalRecordingProject,
+          projectId: project.metadata.id,
+          projectPath: remoteLocalRecordingProjectPath,
+          provider: remoteLocalRecordingProvider,
+          recorder: new ExecutionRecorder(),
+          recorderAbortController: new AbortController(),
+          startedAt: performance.now(),
+          status: 'succeeded',
+        };
+        const recorderPromise = executorSession.recordSocketEvents((socket) =>
+          capture.recorder.recordSocket(socket, {
+            requestId,
+            signal: capture.recorderAbortController.signal,
+          }),
+        );
+        if (!recorderPromise) {
+          void capture.provider.markUnavailable(capture.correlationId).catch((error) => {
+            logRuntimeDebug('Remote LLM-profile replay could not attach to the executor socket.', {
+              error,
+              graphId: graphToRun,
+              projectId: project.metadata.id,
+            });
+          });
+          return;
+        }
+
+        remoteLocalRecordingRequestId = requestId;
+        localRecordingCapturesByRequestIdRef.current.set(requestId, capture);
+        void recorderPromise.then(
+          () => finalizeRemoteLocalExecutionRecording(requestId),
+          async (error) => {
+            localRecordingCapturesByRequestIdRef.current.delete(requestId);
+            await capture.provider.markUnavailable(capture.correlationId).catch((outcomeError) => {
+              logRuntimeDebug('Remote LLM-profile replay could not report its unavailable recording.', {
+                error: outcomeError,
+                graphId: graphToRun,
+                projectId: project.metadata.id,
+              });
+            });
+            logRuntimeDebug('Remote LLM-profile replay socket capture failed.', {
+              error,
+              graphId: graphToRun,
+              projectId: project.metadata.id,
+            });
+          },
+        );
+      };
+
       const contextValues = getProjectContextValues(projectContext);
       let runToNodeIds = options.to;
       let preloadData: Record<NodeId, Outputs> | undefined;
@@ -677,59 +880,75 @@ export function useRemoteExecutor() {
         useEditorCache: true,
         captureNodeTimings: showNodeRunDurations,
         returnWhenGraphOutputsReady: options.returnWhenGraphOutputsReady,
+        ...(remoteLocalRecordingCorrelationId == null
+          ? {}
+          : { llmProfileHealthExecutionCorrelationId: remoteLocalRecordingCorrelationId }),
         ...(options.webAppStorage === undefined ? {} : { webAppStorage: options.webAppStorage }),
       };
 
       if (options.waitForResults) {
-        return await sendPendingRemoteGraphRunRequest({
-          abortSignal: options.abortSignal,
-          disconnectErrorMessage: 'Remote executor disconnected before the graph run could be sent.',
-          executorSession,
-          onRequestCreated: (requestId) => {
-            activeGraphRequestIdRef.current = requestId;
-            executorSession.setActiveGraphRunRequestId(requestId);
-            if (options.onWebAppStoragePatch) {
-              webAppStoragePatchCallbacksByRequestIdRef.current.set(requestId, options.onWebAppStoragePatch);
-            }
-            if (options.onResponseTrace) {
-              responseTraceByRequestIdRef.current.set(requestId, {
-                callback: options.onResponseTrace,
-                events: [],
-                startedAt: Date.now(),
-                delivered: false,
-              });
-            }
-          },
-          onRequestSettled: (requestId) => {
-            if (earlyResultRequestIdsRef.current.has(requestId)) {
-              return;
-            }
-            webAppStoragePatchCallbacksByRequestIdRef.current.delete(requestId);
-            if (!earlyResultRequestIdsRef.current.has(requestId)) {
-              responseTraceByRequestIdRef.current.delete(requestId);
-            }
-            clearActiveRemoteRunRequestIfMatches(activeGraphRequestIdRef, requestId);
-            if (requestId === executorSession.getActiveGraphRunRequestId()) {
-              executorSession.setActiveGraphRunRequestId(null);
-            }
-          },
-          onProgress: options.onProgress,
-          payload,
-          sendAbort: (requestId) => remoteDebugger.send('abort', { requestId }),
-          sendRun: (payload) => remoteDebugger.send('run', payload),
-        });
+        try {
+          return await sendPendingRemoteGraphRunRequest({
+            abortSignal: options.abortSignal,
+            disconnectErrorMessage: 'Remote executor disconnected before the graph run could be sent.',
+            executorSession,
+            onRequestCreated: (requestId) => {
+              activeGraphRequestIdRef.current = requestId;
+              executorSession.setActiveGraphRunRequestId(requestId);
+              startRemoteLocalExecutionRecording(requestId);
+              if (options.onWebAppStoragePatch) {
+                webAppStoragePatchCallbacksByRequestIdRef.current.set(requestId, options.onWebAppStoragePatch);
+              }
+              if (options.onResponseTrace) {
+                responseTraceByRequestIdRef.current.set(requestId, {
+                  callback: options.onResponseTrace,
+                  events: [],
+                  startedAt: Date.now(),
+                  delivered: false,
+                });
+              }
+            },
+            onRequestSettled: (requestId) => {
+              if (earlyResultRequestIdsRef.current.has(requestId)) {
+                return;
+              }
+              webAppStoragePatchCallbacksByRequestIdRef.current.delete(requestId);
+              if (!earlyResultRequestIdsRef.current.has(requestId)) {
+                responseTraceByRequestIdRef.current.delete(requestId);
+              }
+              clearActiveRemoteRunRequestIfMatches(activeGraphRequestIdRef, requestId);
+              if (requestId === executorSession.getActiveGraphRunRequestId()) {
+                executorSession.setActiveGraphRunRequestId(null);
+              }
+            },
+            onProgress: options.onProgress,
+            payload,
+            sendAbort: (requestId) => remoteDebugger.send('abort', { requestId }),
+            sendRun: (payload) => remoteDebugger.send('run', payload),
+          });
+        } catch (error) {
+          const capture =
+            remoteLocalRecordingRequestId == null
+              ? undefined
+              : localRecordingCapturesByRequestIdRef.current.get(remoteLocalRecordingRequestId);
+          if (capture && !capture.isTerminal) capture.recorderAbortController.abort();
+          throw error;
+        }
       }
 
       const runRequest = startActiveRemoteGraphRunRequest({
         activeRequestIdRef: activeGraphRequestIdRef,
         createRequestId: () => executorSession.createRemoteExecutionRequest(),
         payload,
+        onRequestCreated: startRemoteLocalExecutionRecording,
         sendRun: (payload) => remoteDebugger.send('run', payload),
       });
       if (runRequest.type === 'sent') {
         executorSession.setActiveGraphRunRequestId(runRequest.requestId);
       }
       if (runRequest.type === 'send-failed') {
+        const capture = localRecordingCapturesByRequestIdRef.current.get(runRequest.requestId);
+        if (capture) capture.recorderAbortController.abort();
         currentExecution.clearNodeRunDataPreservationForNextStart();
         logRuntimeDebug('Remote graph run skipped because executor session disconnected before send.', {
           target: executorSession.getRuntimeState().target?.type ?? 'none',

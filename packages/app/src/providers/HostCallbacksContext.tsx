@@ -3,6 +3,10 @@ import type { GraphId, Project, ProjectId } from '@valerypopoff/rivet2-core';
 
 export type RivetAppHostProjectSavedEvent = {
   project: Omit<Project, 'data'>;
+  /** The save completed, but a newer local snapshot is still dirty. */
+  hasNewerUnsavedChanges?: boolean;
+  /** The originating tab path changed before this save completed. */
+  pathChangedWhileSaving?: boolean;
   path: string | null;
   saveAs: boolean;
 };

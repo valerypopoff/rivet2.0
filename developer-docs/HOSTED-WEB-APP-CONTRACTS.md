@@ -22,6 +22,18 @@ requests for the same project within one mounted workspace share one in-flight
 persistence operation. Wrappers must not import `useSaveProject`,
 `useWorkspaceTransitions`, or dirty-state atoms.
 
+A hosted save captures one project ID, path, and snapshot before persistence. Users
+may switch tabs while it runs: the Core completion records the saved path on that
+originating tab only while its path binding is unchanged, without replacing newer
+tab metadata or snapshot state and without changing the active tab's loaded path.
+A concurrent rename or move preserves the newer path, remains dirty, and sets
+`onProjectSaved.pathChangedWhileSaving`, which makes the hosted wrapper skip stale
+title/path reconciliation. If newer project or data edits exist
+when it completes, they remain dirty and the user is told that an earlier version
+was saved; same-project repeated Save requests still share that operation and do
+not queue a trailing save. `onProjectSaved.hasNewerUnsavedChanges` lets a wrapper
+preserve the matching dashboard dirty marker instead of clearing it blindly.
+
 `onProjectSaved` is an observer, not part of persistence ownership. A synchronous
 throw or rejected promise from wrapper callback code is logged without changing a
 successfully persisted save into `false` or repeating the persistence operation.

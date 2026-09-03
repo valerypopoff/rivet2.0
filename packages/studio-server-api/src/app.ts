@@ -57,6 +57,7 @@ import {
   getRequestCorrelationId,
   RIVET_CORRELATION_HEADER,
 } from './request-correlation.js';
+import { MAX_LOCAL_EDITOR_RECORDING_REQUEST_BYTES } from './routes/workflows/local-editor-recording-limits.js';
 
 type RuntimeExpressRouter = {
   handle: (req: Request, res: Response, next: NextFunction) => void;
@@ -81,6 +82,11 @@ function isWebAppActionRequest(req: Request): boolean {
     const slug = requestPath.slice(prefix.length, -'/actions/run'.length);
     return requestPath.startsWith(prefix) && slug.length > 0 && !slug.includes('/');
   });
+}
+
+function isLocalEditorRecordingUploadRequest(req: Request): boolean {
+  const requestPath = req.path.replace(/\/+$/, '');
+  return req.method === 'POST' && requestPath === '/api/workflows/local-editor-recordings';
 }
 
 function matchesPath(pathname: string, basePath: string): boolean {
@@ -139,10 +145,28 @@ function sendMetrics(metrics: StudioMetrics, health: RuntimeHealthReader, res: R
   res.setHeader('Content-Type', 'text/plain; version=0.0.4; charset=utf-8');
   res.status(200).send(metrics.render());
 }
+function requireLocalEditorRecordingUploadAuth(req: Request, res: Response, next: NextFunction): void {
+  if (!isLocalEditorRecordingUploadRequest(req)) {
+    next();
+    return;
+  }
+
+  requireAuth(req, res, next);
+}
+
 function createJsonBodyParser(): RequestHandler {
   const defaultParser = express.json({ limit: DEFAULT_JSON_BODY_LIMIT_BYTES, strict: false });
+  const localEditorRecordingParser = express.json({
+    limit: MAX_LOCAL_EDITOR_RECORDING_REQUEST_BYTES,
+    strict: false,
+  });
 
   return (req, res, next) => {
+    if (isLocalEditorRecordingUploadRequest(req)) {
+      localEditorRecordingParser(req, res, next);
+      return;
+    }
+
     if (!isWebAppActionRequest(req)) {
       defaultParser(req, res, next);
       return;
@@ -375,6 +399,11 @@ export function createApiApp(profile = getApiRuntimeProfile(), options: ApiAppOp
   app.use(createMetricsRequestObserver(metrics));
 
   app.use(captureAppSettingsSnapshot);
+  // The replay body may be larger than ordinary control-plane JSON. Authenticate
+  // this exact route before parsing it, including for direct local API access.
+  if (isControlPlaneApiProfile(profile)) {
+    app.use(requireLocalEditorRecordingUploadAuth);
+  }
   app.use(createJsonBodyParser());
   app.use(express.urlencoded({ extended: false }));
 

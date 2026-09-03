@@ -346,14 +346,14 @@ export const DashboardPage: FC = () => {
     onRequestActiveWorkflowProjectRename: () => {
       setProjectTreeRenameRequestSequence((previous) => previous + 1);
     },
-    onProjectSaved: (path) => {
+    onProjectSaved: (path, hasNewerUnsavedChanges = false) => {
       setProjectSaveSequence((prev) => prev + 1);
       setProjectUnsavedChangesByPath((prev) => (
-        prev[path] === false
+        prev[path] === hasNewerUnsavedChanges
           ? prev
           : {
               ...prev,
-              [path]: false,
+              [path]: hasNewerUnsavedChanges,
             }
       ));
     },

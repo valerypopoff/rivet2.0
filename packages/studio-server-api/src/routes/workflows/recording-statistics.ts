@@ -109,6 +109,9 @@ export function getStatisticsQueryPeriod(input: { from: string; to: string }): W
 
 function getTargetForRow(row: WorkflowRecordingStatisticsRow): WorkflowRunStatisticsTarget | null {
   const identity = row.executionIdentity;
+  // Local editor evidence exists solely to make a suspension diagnosable. It
+  // must never create a production endpoint or web-app analytics target.
+  if (identity?.surface === 'editor_local') return null;
   if (identity?.surface === 'workflow_endpoint') {
     return { surface: 'endpoint', workflowId: row.workflowId };
   }

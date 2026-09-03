@@ -29,4 +29,11 @@ void test('app executor exposes a host entrypoint without changing standalone st
   assert.match(executorSource, /isWebAppAction: initialWebAppStorage !== undefined/);
   assert.doesNotMatch(executorSource, /from '\.\/executorHost\.mjs'/);
   assert.match(stateSource, /export function configureAppExecutorHost/);
+  assert.match(executorSource, /normalizeLLMProfileHealthExecutionCorrelationId/);
+  assert.match(
+    executorSource,
+    /llmProfileHealthExecutionCorrelationId: requestedLLMProfileHealthExecutionCorrelationId/,
+  );
+  assert.match(executorSource, /llmProfileHealthExecutionCorrelationId \}/);
+  assert.match(stateSource, /llmProfileHealthExecutionCorrelationId\?: string/);
 });

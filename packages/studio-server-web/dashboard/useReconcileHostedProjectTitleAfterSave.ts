@@ -8,7 +8,7 @@ export function useReconcileHostedProjectTitleAfterSave(workspaceHost: RivetWork
   return useCallback((event: RivetAppHostProjectSavedEvent) => {
     const projectId = event.project.metadata.id as ProjectId | undefined;
     const title = resolveHostedProjectTitleFromPath(event.path);
-    if (!workspaceHost || !projectId || !title) {
+    if (!workspaceHost || !projectId || !title || event.pathChangedWhileSaving) {
       return;
     }
 

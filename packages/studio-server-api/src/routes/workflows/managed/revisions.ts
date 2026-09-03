@@ -122,12 +122,7 @@ export function createManagedWorkflowRevisionService(options: ManagedWorkflowRev
           }
 
           if (sourceProject.metadata.id !== workflowId) {
-            sourceProject.metadata.id = workflowId as typeof sourceProject.metadata.id;
-            const rewritten = serializeProject(sourceProject, attachedData);
-            if (typeof rewritten !== 'string') {
-              throw createHttpError(400, 'Could not save project');
-            }
-            contents = rewritten;
+            throw conflict('The save target belongs to a different project. Choose a new path or reopen the target.');
           }
 
           const currentDraftRevision = await deps.getRevision(client, workflow.current_draft_revision_id);

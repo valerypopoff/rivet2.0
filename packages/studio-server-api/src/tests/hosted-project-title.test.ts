@@ -39,6 +39,23 @@ function rewriteProjectMetadata(contents: string, metadata: { title: string; des
   return serialized;
 }
 
+function rewriteProjectId(contents: string, projectId: string): string {
+  const [project, attachedData] = loadProjectAndAttachedDataFromString(contents);
+  project.metadata.id = projectId as typeof project.metadata.id;
+  const serialized = serializeProject(project, attachedData);
+  if (typeof serialized !== 'string') {
+    throw new Error('Project serialization did not return a string');
+  }
+  return serialized;
+}
+
+function createWorkflowProjectContents(workflow: WorkflowRow): string {
+  return rewriteProjectId(
+    workflowFs.createBlankProjectFile(workflow.name),
+    workflow.workflow_id,
+  );
+}
+
 function createWorkflowRow(overrides: Partial<WorkflowRow> = {}): WorkflowRow {
   return {
     workflow_id: randomUUID(),
@@ -133,10 +150,68 @@ test('filesystem saveHostedProject rewrites the YAML title to the file tree name
   }
 });
 
+test('filesystem saveHostedProject rejects an existing path owned by another project', async () => {
+  const suffix = randomUUID();
+  const projectPath = path.join(workflowsRoot, `Target ${suffix}.rivet-project`);
+  const sidecars = workflowFs.getProjectSidecarPaths(projectPath);
+  const targetContents = workflowFs.createBlankProjectFile(`Target ${suffix}`);
+  const sourceContents = workflowFs.createBlankProjectFile(`Source ${suffix}`);
+
+  await fs.writeFile(projectPath, targetContents, 'utf8');
+  await fs.writeFile(sidecars.dataset, 'target datasets', 'utf8');
+
+  await assert.rejects(
+    workflowStorageBackend.saveHostedProject({
+      projectPath,
+      contents: sourceContents,
+      datasetsContents: 'source datasets',
+    }),
+    (error: unknown) => {
+      assert.equal((error as { status?: number }).status, 409);
+      assert.match((error as Error).message, /belongs to a different project/i);
+      return true;
+    },
+  );
+
+  assert.equal(await fs.readFile(projectPath, 'utf8'), targetContents);
+  assert.equal(await fs.readFile(sidecars.dataset, 'utf8'), 'target datasets');
+});
+
+test('filesystem saveHostedProject serializes concurrent creates for one target path', async () => {
+  const suffix = randomUUID();
+  const projectPath = path.join(workflowsRoot, `Concurrent ${suffix}.rivet-project`);
+  const firstContents = workflowFs.createBlankProjectFile(`First ${suffix}`);
+  const secondContents = workflowFs.createBlankProjectFile(`Second ${suffix}`);
+
+  const [firstResult, secondResult] = await Promise.allSettled([
+    workflowStorageBackend.saveHostedProject({
+      projectPath,
+      contents: firstContents,
+      datasetsContents: 'first datasets',
+    }),
+    workflowStorageBackend.saveHostedProject({
+      projectPath,
+      contents: secondContents,
+      datasetsContents: 'second datasets',
+    }),
+  ]);
+
+  assert.equal(firstResult.status, 'fulfilled');
+  assert.equal(secondResult.status, 'rejected');
+  if (secondResult.status === 'rejected') {
+    assert.equal((secondResult.reason as { status?: number }).status, 409);
+    assert.match((secondResult.reason as Error).message, /belongs to a different project/i);
+  }
+
+  const [savedProject] = loadProjectAndAttachedDataFromString(await fs.readFile(projectPath, 'utf8'));
+  const [firstProject] = loadProjectAndAttachedDataFromString(firstContents);
+  assert.equal(savedProject.metadata.id, firstProject.metadata.id);
+  assert.equal(await fs.readFile(workflowFs.getProjectSidecarPaths(projectPath).dataset, 'utf8'), 'first datasets');
+});
 test('managed saveHostedProject stores revisions with the YAML title matching the tree name', async () => {
   const workflow = createWorkflowRow();
   const currentRevision = createRevisionRow(workflow.workflow_id, workflow.current_draft_revision_id);
-  const currentContents = workflowFs.createBlankProjectFile(workflow.name);
+  const currentContents = createWorkflowProjectContents(workflow);
   const editedContents = rewriteProjectMetadata(currentContents, {
     title: 'Editor Settings Name',
     description: 'managed description from editor save',
@@ -192,6 +267,22 @@ test('managed saveHostedProject stores revisions with the YAML title matching th
     expectedRevisionId: workflow.current_draft_revision_id,
   });
 
+  const persistedContents = savedRevisionContents;
+  await assert.rejects(
+    revisionService.saveHostedProject({
+      projectPath: getManagedWorkflowProjectVirtualPath(workflow.relative_path),
+      contents: workflowFs.createBlankProjectFile('Different project'),
+      datasetsContents: null,
+      expectedRevisionId: workflow.current_draft_revision_id,
+    }),
+    (error: unknown) => {
+      assert.equal((error as { status?: number }).status, 409);
+      assert.match((error as Error).message, /belongs to a different project/i);
+      return true;
+    },
+  );
+  assert.equal(savedRevisionContents, persistedContents);
+
   const [savedProject] = loadProjectAndAttachedDataFromString(savedRevisionContents);
   assert.equal(savedProject.metadata.title, workflow.name);
   assert.equal(savedProject.metadata.description, 'managed description from editor save');
@@ -200,7 +291,7 @@ test('managed saveHostedProject stores revisions with the YAML title matching th
 test('managed saveHostedProject invalidates latest web app caches when only web apps are published', async () => {
   const workflow = createWorkflowRow();
   const currentRevision = createRevisionRow(workflow.workflow_id, workflow.current_draft_revision_id);
-  const currentContents = workflowFs.createBlankProjectFile(workflow.name);
+  const currentContents = createWorkflowProjectContents(workflow);
   const editedContents = rewriteProjectMetadata(currentContents, {
     title: 'Editor Settings Name',
     description: 'managed web app draft change',
@@ -276,7 +367,7 @@ test('managed project rename stores a new draft revision with the YAML title mat
   const revisions = new Map<string, RevisionRow>([
     [currentRevision.revision_id, currentRevision],
   ]);
-  const currentContents = rewriteProjectMetadata(workflowFs.createBlankProjectFile(workflow.name), {
+  const currentContents = rewriteProjectMetadata(createWorkflowProjectContents(workflow), {
     title: 'Editor YAML Name',
     description: 'managed rename keeps project data',
   });

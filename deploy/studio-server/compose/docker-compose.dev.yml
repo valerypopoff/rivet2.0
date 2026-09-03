@@ -30,10 +30,15 @@ services:
     depends_on:
       web:
         condition: service_healthy
+        # Nginx resolves Docker service names at startup. Recreate it with an
+        # upstream so it cannot retain that upstream's old container address.
+        restart: true
       api:
         condition: service_healthy
+        restart: true
       executor:
         condition: service_started
+        restart: true
     restart: unless-stopped
 
   web:

@@ -1,6 +1,11 @@
 import type { WorkflowProjectItem } from './workflow-types';
 
-export type WorkflowRecordingRunKind = 'published' | 'latest';
+/**
+ * `editor` is a locally executed graph replay captured by the hosted editor.
+ * It is intentionally distinct from endpoint traffic and excluded from run
+ * statistics, while still using the normal recording browser and retention.
+ */
+export type WorkflowRecordingRunKind = 'published' | 'latest' | 'editor';
 
 export type WorkflowRecordingStatus = 'succeeded' | 'failed' | 'suspicious';
 
@@ -10,7 +15,7 @@ export type WorkflowRecordingStatus = 'succeeded' | 'failed' | 'suspicious';
  * after a recording is created.
  */
 export type WorkflowRecordingExecutionIdentity = {
-  surface: 'workflow_endpoint' | 'web_app_action';
+  surface: 'workflow_endpoint' | 'web_app_action' | 'editor_local';
   graphId?: string;
   graphName?: string;
   revisionKey?: string;
@@ -92,7 +97,7 @@ export type WorkflowRecordingRunsPageResponse = {
 };
 
 export type WorkflowRunStatisticsSurface = 'endpoint' | 'web_app';
-export type WorkflowRunStatisticsRunKind = WorkflowRecordingRunKind | 'both';
+export type WorkflowRunStatisticsRunKind = Exclude<WorkflowRecordingRunKind, 'editor'> | 'both';
 export type WorkflowRunStatisticsAggregation = 'auto' | 'day' | 'week';
 
 export type WorkflowRunStatisticsPeriod = {

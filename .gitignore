@@ -73,6 +73,9 @@ packages/app-executor/bin/executor-bundle.cjs
 /artifacts/
 /tmp-*.png
 
+# Personal planning notes stay local and must never be committed.
+/backlog.md
+
 Thumbs.db
 
 packages/app/stats.html

@@ -117,6 +117,33 @@ function mapHostedProjectFilesystemError(
   );
 }
 
+const filesystemHostedProjectSaveLocks = new Map<string, Promise<void>>();
+
+async function withFilesystemHostedProjectSaveLock<T>(projectPath: string, operation: () => Promise<T>): Promise<T> {
+  const lockKey = path.resolve(projectPath);
+  const previous = filesystemHostedProjectSaveLocks.get(lockKey) ?? Promise.resolve();
+  let release!: () => void;
+  const current = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  filesystemHostedProjectSaveLocks.set(lockKey, current);
+
+  await previous.catch(() => {});
+  try {
+    return await operation();
+  } finally {
+    release();
+    if (filesystemHostedProjectSaveLocks.get(lockKey) === current) {
+      filesystemHostedProjectSaveLocks.delete(lockKey);
+    }
+  }
+}
+
+function assertMatchingHostedProjectIdentity(project: Project, expectedProjectId: ProjectId, projectPath: string): void {
+  if (!project.metadata.id || project.metadata.id !== expectedProjectId) {
+    throw createHttpError(409, `The save target ${projectPath} belongs to a different project.`, { expose: true });
+  }
+}
 type SaveHostedProjectResult = {
   path: string;
   revisionId: string | null;
@@ -432,25 +459,46 @@ export async function saveHostedProject(options: {
           'Could not save project',
         );
 
-        await fs.mkdir(path.dirname(options.projectPath), { recursive: true });
-        await fs.writeFile(options.projectPath, normalized.contents, 'utf8');
-        await writeWorkflowProjectStatsCacheFromContents(options.projectPath, normalized.contents);
-
-        const datasetPath = getWorkflowDatasetPath(options.projectPath);
-        if (options.datasetsContents != null) {
-          await fs.writeFile(datasetPath, options.datasetsContents, 'utf8');
-        } else {
-          await fs.rm(datasetPath, { force: true }).catch(() => {});
+        const sourceProjectId = normalized.project.metadata.id;
+        if (!sourceProjectId) {
+          throw createHttpError(400, 'Could not save project', { expose: true });
         }
 
-        invalidateFilesystemExecutionMaterializations([options.projectPath]);
+        return await withFilesystemHostedProjectSaveLock(options.projectPath, async () => {
+          const targetAlreadyExists = await pathExists(options.projectPath);
+          if (targetAlreadyExists) {
+            let targetProject: Project;
+            try {
+              [targetProject] = await loadProjectAndAttachedDataFromFile(options.projectPath);
+            } catch {
+              throw createHttpError(409, 'Could not verify the existing save target. Reopen it before saving.', {
+                expose: true,
+              });
+            }
+            assertMatchingHostedProjectIdentity(targetProject, sourceProjectId, options.projectPath);
+          }
 
-        return {
-          path: options.projectPath,
-          revisionId: null,
-          project: null,
-          created: false,
-        };
+          await fs.mkdir(path.dirname(options.projectPath), { recursive: true });
+          await fs.writeFile(options.projectPath, normalized.contents, 'utf8');
+          await writeWorkflowProjectStatsCacheFromContents(options.projectPath, normalized.contents);
+
+          const datasetPath = getWorkflowDatasetPath(options.projectPath);
+          if (options.datasetsContents != null) {
+            await fs.writeFile(datasetPath, options.datasetsContents, 'utf8');
+          } else {
+            await fs.rm(datasetPath, { force: true }).catch(() => {});
+          }
+
+          invalidateFilesystemExecutionMaterializations([options.projectPath]);
+
+          return {
+            path: options.projectPath,
+            revisionId: null,
+            project: null,
+            created: !targetAlreadyExists,
+          };
+        });
+
       } catch (error) {
         throw mapHostedProjectFilesystemError(error, 'write', options.projectPath);
       }
@@ -911,7 +959,7 @@ export async function persistWorkflowExecutionRecordingWithBackend(options: {
   executedDatasets: CombinedDataset[];
   endpointName: string;
   recordingSerialized: string;
-  runKind: 'published' | 'latest';
+  runKind: 'published' | 'latest' | 'editor';
   status: 'succeeded' | 'failed' | 'suspicious';
   durationMs: number;
   errorMessage?: string;

@@ -17,6 +17,7 @@ import { projectEditorStateByProjectIdState } from '../../state/projectEditor.js
 import {
   loadedProjectState,
   openedProjectSnapshotsState,
+  projectDataState,
   projectDataUnsavedChangesState,
   projectState,
   projectUnsavedChangesState,
@@ -98,6 +99,164 @@ test('public workspace save shares one persistence operation, marks the project 
     await fixture.unmount();
   }
 });
+
+test('an in-flight save cannot replace another active tab path or redirect its next save', async () => {
+  const savedPaths: string[] = [];
+  let resolveFirstSave!: () => void;
+  let firstSaveStarted!: () => void;
+  const firstSaveStartedPromise = new Promise<void>((resolve) => {
+    firstSaveStarted = resolve;
+  });
+  const firstSaveGate = new Promise<void>((resolve) => {
+    resolveFirstSave = resolve;
+  });
+  const ioProvider = createSaveableIOProvider({
+    async saveProjectDataNoPrompt(_project, path) {
+      savedPaths.push(path);
+      if (savedPaths.length === 1) {
+        firstSaveStarted();
+        await firstSaveGate;
+      }
+    },
+  });
+  const fixture = await mountSaveHost(ioProvider, undefined, { loaded: true, path: 'project-a.rivet-project' });
+  const store = getDefaultStore();
+  const projectA = store.get(projectState);
+  const projectAId = projectA.metadata.id as ProjectId;
+  const projectBWithData = createBlankProjectWithDefaultGraph();
+  const { data: _projectBData, ...projectB } = projectBWithData;
+  const projectBId = projectB.metadata.id as ProjectId;
+  const projectBGraph = projectB.graphs[projectB.metadata.mainGraphId as GraphId]!;
+
+  try {
+    let firstSave!: Promise<boolean>;
+    await act(async () => {
+      firstSave = fixture.saveCurrentProject();
+      await firstSaveStartedPromise;
+    });
+
+    await act(async () => {
+      store.set(projectState, projectB);
+      store.set(graphState, projectBGraph);
+      store.set(loadedProjectState, { loaded: true, path: 'project-b.rivet-project' });
+      store.set(
+        projectsState,
+        addOpenedProject(
+          addOpenedProject(
+            { openedProjects: {}, openedProjectsSortedIds: [] },
+            projectA,
+            { fsPath: 'project-a.rivet-project' },
+          ),
+          projectB,
+          { fsPath: 'project-b.rivet-project' },
+        ),
+      );
+      store.set(projectUnsavedChangesState, { [projectAId]: true, [projectBId]: true });
+      resolveFirstSave();
+      assert.equal(await firstSave, true);
+    });
+
+    assert.equal(store.get(loadedProjectState).path, 'project-b.rivet-project');
+    assert.equal(store.get(projectsState).openedProjects[projectAId]?.fsPath, 'project-a.rivet-project');
+    assert.equal(store.get(projectsState).openedProjects[projectBId]?.fsPath, 'project-b.rivet-project');
+
+    await act(async () => {
+      assert.equal(await fixture.saveCurrentProject(), true);
+    });
+
+    assert.deepEqual(savedPaths, ['project-a.rivet-project', 'project-b.rivet-project']);
+  } finally {
+    await fixture.unmount();
+  }
+});
+
+test('a completed older save preserves newer inactive project state, path, and tab metadata', async () => {
+  let savedEvent: RivetAppHostProjectSavedEvent | undefined;
+  let resolveSave!: () => void;
+  let saveStarted!: () => void;
+  const saveStartedPromise = new Promise<void>((resolve) => {
+    saveStarted = resolve;
+  });
+  const saveGate = new Promise<void>((resolve) => {
+    resolveSave = resolve;
+  });
+  const ioProvider = createSaveableIOProvider({
+    async saveProjectDataNoPrompt() {
+      saveStarted();
+      await saveGate;
+    },
+  });
+  const fixture = await mountSaveHost(ioProvider, (event) => {
+    savedEvent = event;
+  }, { loaded: true, path: 'project-a.rivet-project' });
+  const store = getDefaultStore();
+  const projectA = store.get(projectState);
+  const projectAId = projectA.metadata.id as ProjectId;
+  const projectAData = store.get(projectDataState);
+  const projectBWithData = createBlankProjectWithDefaultGraph();
+  const { data: _projectBData, ...projectB } = projectBWithData;
+  const projectBGraph = projectB.graphs[projectB.metadata.mainGraphId as GraphId]!;
+  const newerProjectA = {
+    ...projectA,
+    metadata: {
+      ...projectA.metadata,
+      title: 'Renamed while save was pending',
+      description: 'Edited after the save started',
+    },
+  };
+  const newerProjectAData = { ...(projectAData ?? {}), 'data-after-save': 'newer' };
+
+  try {
+    let save!: Promise<boolean>;
+    await act(async () => {
+      save = fixture.saveCurrentProject();
+      await saveStartedPromise;
+    });
+
+    await act(async () => {
+      store.set(projectState, projectB);
+      store.set(graphState, projectBGraph);
+      store.set(loadedProjectState, { loaded: true, path: 'project-b.rivet-project' });
+      store.set(
+        projectsState,
+        addOpenedProject(
+          addOpenedProject(store.get(projectsState), newerProjectA, {
+            fsPath: 'renamed-project-a.rivet-project',
+          }),
+          projectB,
+          { fsPath: 'project-b.rivet-project' },
+        ),
+      );
+      store.set(openedProjectSnapshotsState, {
+        [projectAId]: { project: newerProjectA, data: newerProjectAData },
+      });
+      resolveSave();
+      assert.equal(await save, true);
+    });
+    assert.equal(
+      store.get(projectsState).openedProjects[projectAId]?.title,
+      'Renamed while save was pending',
+    );
+    assert.equal(
+      store.get(projectsState).openedProjects[projectAId]?.fsPath,
+      'renamed-project-a.rivet-project',
+    );
+
+    assert.equal(store.get(loadedProjectState).path, 'project-b.rivet-project');
+    assert.equal(
+      store.get(openedProjectSnapshotsState)[projectAId]?.project.metadata.description,
+      'Edited after the save started',
+    );
+    assert.deepEqual(store.get(openedProjectSnapshotsState)[projectAId]?.data, newerProjectAData);
+    assert.equal(store.get(projectUnsavedChangesState)[projectAId], true);
+    assert.equal(store.get(projectDataUnsavedChangesState)[projectAId], true);
+    assert.equal(savedEvent?.hasNewerUnsavedChanges, true);
+    assert.equal(savedEvent?.pathChangedWhileSaving, true);
+  } finally {
+    await fixture.unmount();
+  }
+});
+
 
 test('public workspace save returns false when Save As is cancelled', async () => {
   let savedEventCount = 0;
@@ -250,6 +409,7 @@ async function mountSaveHost(
     graph: store.get(graphState),
     loadedProject: store.get(loadedProjectState),
     openedProjectSnapshots: store.get(openedProjectSnapshotsState),
+    projectData: store.get(projectDataState),
     project: store.get(projectState),
     projectEditorStateByProjectId: store.get(projectEditorStateByProjectIdState),
     projectDataUnsavedChanges: store.get(projectDataUnsavedChangesState),
@@ -267,6 +427,7 @@ async function mountSaveHost(
       description: 'Unsaved live graph edit',
     },
   });
+  store.set(projectDataState, projectWithData.data);
   store.set(loadedProjectState, loadedProject);
   store.set(
     projectsState,
@@ -308,6 +469,7 @@ async function mountSaveHost(
       store.set(loadedProjectState, previousState.loadedProject);
       store.set(openedProjectSnapshotsState, previousState.openedProjectSnapshots);
       store.set(projectState, previousState.project);
+      store.set(projectDataState, previousState.projectData);
       store.set(projectEditorStateByProjectIdState, previousState.projectEditorStateByProjectId);
       store.set(projectDataUnsavedChangesState, previousState.projectDataUnsavedChanges);
       store.set(projectUnsavedChangesState, previousState.projectUnsavedChanges);

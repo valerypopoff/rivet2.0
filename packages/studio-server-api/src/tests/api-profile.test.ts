@@ -18,6 +18,7 @@ import { disposeRuntimeLibrariesBackend } from '../runtime-libraries/backend.js'
 import { buildDeploymentStatus, getDeploymentTopology } from '../deployment-status.js';
 import { isWebAppSocketRouteEnabled } from '../web-app-action-websocket.js';
 import { createHttpError } from '../utils/httpError.js';
+import { MAX_LOCAL_EDITOR_RECORDING_REQUEST_BYTES } from '../routes/workflows/local-editor-recording-limits.js';
 import { writeWorkflowEndpointAuthSettings } from '../workflow-endpoint-auth-settings.js';
 
 const relevantEnvKeys = [
@@ -635,6 +636,38 @@ test('runtime-libraries route exposes permission errors for an unwritable runtim
       assert.match((loggedErrors[0]?.[1] as Error).message, /Runtime-library storage is not writable/);
     } finally {
       await disposeRuntimeLibrariesBackend();
+      await server.close();
+    }
+  });
+});
+
+test('local editor replay uploads are authenticated before their elevated request parser runs', async () => {
+  await withApiEnv({}, async () => {
+    const server = await startServer('control');
+    try {
+      const response = await fetch(`${server.baseUrl}/api/workflows/local-editor-recordings`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: '{"recordingSerialized":',
+      });
+      assert.equal(response.status, 403);
+    } finally {
+      await server.close();
+    }
+  });
+});
+
+test('local editor replay uploads are rejected at the request parser limit', async () => {
+  await withApiEnv({}, async () => {
+    const server = await startServer('control');
+    try {
+      const response = await fetch(`${server.baseUrl}/api/workflows/local-editor-recordings/`, {
+        method: 'POST',
+        headers: { ...trustedProxyHeaders(), 'content-type': 'application/json' },
+        body: JSON.stringify({ recordingSerialized: 'x'.repeat(MAX_LOCAL_EDITOR_RECORDING_REQUEST_BYTES) }),
+      });
+      assert.equal(response.status, 413);
+    } finally {
       await server.close();
     }
   });

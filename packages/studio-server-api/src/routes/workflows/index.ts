@@ -54,6 +54,7 @@ import {
   updateWorkflowProjectWebAppAccessWithBackend,
   uploadWorkflowProjectItemWithBackend,
 } from './storage-backend.js';
+import { localEditorRecordingsRouter } from './local-editor-recordings.js';
 import { createWorkflowDownloadContentDisposition } from './workflow-download.js';
 import { getStatisticsQueryPeriod } from './recording-statistics.js';
 import { llmProfileHealthRouter } from './llm-profile-health.js';
@@ -141,6 +142,7 @@ const publishProjectSchema = z.object({
 workflowsRouter.use('/llm-profile-health', llmProfileHealthRouter);
 workflowsRouter.use('/evaluation-runs', evaluationRunsRouter);
 
+workflowsRouter.use('/local-editor-recordings', localEditorRecordingsRouter);
 // The Node executor is a separate process. It asks the API for one immutable
 // overlay at run start, so saved UI variables apply immediately without
 // exposing them to browser clients or mutating process.env.

@@ -126,6 +126,10 @@ The Docker development stack is the default production-shaped loop:
 yarn studio-server:dev
 ```
 
+When Compose recreates the API, editor web service, or internal executor, it
+also restarts Nginx so Docker service-name resolution cannot leave the browser
+connected to a retired container IP.
+
 Useful commands:
 
 ```bash

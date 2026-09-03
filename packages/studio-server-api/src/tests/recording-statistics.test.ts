@@ -306,3 +306,19 @@ test('statistics target and run-kind matching never mix endpoint and web-app act
   assert.equal(webAppStatistics.current.runCount, 1);
   assert.equal(webAppStatistics.current.medianDurationMs, 800);
 });
+
+test('statistics catalog excludes local editor diagnostic replays', () => {
+  const catalog = buildWorkflowRunStatisticsCatalog([
+    row(),
+    row({
+      sourceProjectName: 'Local diagnostic replay',
+      runKind: 'editor',
+      executionIdentity: { surface: 'editor_local' },
+    }),
+  ], 'endpoint');
+
+  assert.equal(catalog.targets.length, 1);
+  assert.deepEqual(catalog.targets[0]?.target, { surface: 'endpoint', workflowId: 'workflow-a' });
+  assert.equal(catalog.targets[0]?.projectName, 'Project A');
+  assert.equal(catalog.targets[0]?.totalRuns, 1);
+});

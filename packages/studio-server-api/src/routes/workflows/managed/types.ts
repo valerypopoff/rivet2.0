@@ -103,11 +103,11 @@ export type RecordingRow = {
   source_project_name: string;
   source_project_relative_path: string;
   created_at: TimestampValue;
-  run_kind: 'published' | 'latest';
+  run_kind: 'published' | 'latest' | 'editor';
   status: 'succeeded' | 'failed' | 'suspicious';
   duration_ms: number;
   endpoint_name_at_execution: string;
-  execution_surface: 'workflow_endpoint' | 'web_app_action' | null;
+  execution_surface: 'workflow_endpoint' | 'web_app_action' | 'editor_local' | null;
   graph_id_at_execution: string | null;
   graph_name_at_execution: string | null;
   revision_key_at_execution: string | null;
@@ -167,7 +167,7 @@ export type PersistWorkflowExecutionRecordingOptions = {
   executedDatasets: CombinedDataset[];
   endpointName: string;
   recordingSerialized: string;
-  runKind: 'published' | 'latest';
+  runKind: 'published' | 'latest' | 'editor';
   status: 'succeeded' | 'failed' | 'suspicious';
   durationMs: number;
   errorMessage?: string;
@@ -207,7 +207,7 @@ export type ImportManagedWorkflowRecordingOptions = {
   sourceProjectRelativePath: string;
   sourceProjectName: string;
   createdAt: string;
-  runKind: 'published' | 'latest';
+  runKind: 'published' | 'latest' | 'editor';
   status: 'succeeded' | 'failed' | 'suspicious';
   durationMs: number;
   endpointName: string;
@@ -235,7 +235,7 @@ export type RecordingInsertRowData = {
   workflowId: string;
   sourceProjectName: string;
   sourceProjectRelativePath: string;
-  runKind: 'published' | 'latest';
+  runKind: 'published' | 'latest' | 'editor';
   status: 'succeeded' | 'failed' | 'suspicious';
   durationMs: number;
   endpointNameAtExecution: string;

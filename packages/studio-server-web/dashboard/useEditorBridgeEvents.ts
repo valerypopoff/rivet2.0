@@ -25,7 +25,7 @@ type UseEditorBridgeEventsOptions = {
   onProjectOpenFailed: (error: string) => void;
   onProjectOpened: (path: string, requestId?: string) => void;
   onRequestActiveWorkflowProjectRename: () => void;
-  onProjectSaved: (path: string) => void;
+  onProjectSaved: (path: string, hasNewerUnsavedChanges?: boolean) => void;
   onWorkflowPathsMovedApplied: (requestId?: string) => void;
 };
 
@@ -165,7 +165,7 @@ export function useEditorBridgeEvents(options: UseEditorBridgeEventsOptions) {
           onOpenProjectCountChange(event.data.count);
           break;
         case 'project-saved':
-          onProjectSaved(event.data.path);
+          onProjectSaved(event.data.path, event.data.hasNewerUnsavedChanges);
           break;
         case 'workflow-paths-moved-applied':
           onWorkflowPathsMovedApplied(event.data.requestId);

@@ -180,12 +180,14 @@ export function clearActiveRemoteRunRequestIfMatches(
 export function startActiveRemoteGraphRunRequest(options: {
   activeRequestIdRef: ActiveRemoteRunRequestRef;
   createRequestId: () => RemoteRunRequestId;
+  onRequestCreated?(requestId: RemoteRunRequestId): void;
   payload: RemoteRunPayloadWithoutRequestId;
   sendRun: RemoteRunRequestSender;
 }): ActiveRemoteRunRequestResult {
   const { activeRequestIdRef, createRequestId, payload, sendRun } = options;
   const requestId = createRequestId();
   activeRequestIdRef.current = requestId;
+  options.onRequestCreated?.(requestId);
 
   const runSent = sendRun({
     ...payload,

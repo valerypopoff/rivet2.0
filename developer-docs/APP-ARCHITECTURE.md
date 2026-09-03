@@ -1989,6 +1989,16 @@ same transition used by Rivet's Save command, returns `true` only after successf
 persistence and `onProjectSaved`, returns `false` for unavailable/cancelled/failed
 saves, and shares one in-flight promise for concurrent requests targeting the same
 project within one mounted workspace.
+Each operation captures the originating project ID, remembered tab path, and save
+snapshot before awaiting storage. A later tab switch may not let that completion
+overwrite the new active project's global loaded path, newer inactive snapshot, or
+newer tab metadata. Save completion updates the originating tab's persisted path
+only when its binding still matches the captured path; a concurrent rename or move
+keeps the newer path, remains dirty, and sets
+`onProjectSaved.pathChangedWhileSaving` so a host does not reconcile stale path
+metadata. It also cannot restore an older title captured before persistence began.
+When the captured snapshot is older than current project or data state, the clean
+baseline advances only to the saved snapshot and the newer state remains dirty.
 
 When `executor.internalExecutorUrl` is configured and the user selects Node
 executor mode,

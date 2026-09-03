@@ -1,4 +1,5 @@
 import { useAtom, useAtomValue, useSetAtom, useStore } from 'jotai';
+import { isEqual } from 'lodash-es';
 import {
   type DataId,
   type GraphId,
@@ -41,7 +42,7 @@ import {
 } from '../utils/workspaceTransitions.js';
 import { handleError } from '../utils/errorHandling.js';
 import { useStaticDataDatabase } from './useStaticDataDatabase.js';
-import { addOpenedProject } from '../utils/openedProjects.js';
+import { resolveOpenedProjectSavePath, updateOpenedProjectMetadata } from '../utils/openedProjects.js';
 import {
   resolveCanvasPositionsForProject,
   resolvePersistedCanvasPositionsForLegacyCache,
@@ -53,7 +54,7 @@ import { canSaveProjectDataNoPrompt } from '../utils/projectSaveCapabilities.js'
 import { pluginsState, projectNodeRegistryState } from '../state/plugins.js';
 import { withDerivedProjectPluginSpecs } from '../utils/pluginUsage.js';
 import { useProjectExecutionSnapshots } from './useProjectExecutionSnapshots.js';
-import { markProjectClean, markProjectDirtyFlag } from '../utils/projectUnsavedChanges.js';
+import { getProjectContentDigest, markProjectClean, markProjectDirtyFlag } from '../utils/projectUnsavedChanges.js';
 import { useApplyProjectExecutorMode } from './useProjectExecutorMode.js';
 import type { ProjectExecutorMode } from '../utils/projectExecutorMode.js';
 import { projectWorkspaceTargetsState, setProjectWorkspaceTargetState } from '../state/workspaceTarget.js';
@@ -434,8 +435,15 @@ export function useWorkspaceTransitions() {
 
         try {
           const latestProject = store.get(projectState);
+          if (latestProject.metadata.id !== projectId) {
+            return false;
+          }
           const latestLoadedProject = store.get(loadedProjectState);
-          projectPath = latestLoadedProject.path;
+          const projectsAtSaveStart = store.get(projectsState);
+          const openedProjectPathAtSaveStart = projectsAtSaveStart.openedProjects[projectId]?.fsPath ?? null;
+          const loadedProjectPathAtSaveStart = latestLoadedProject.path;
+          const savePath = resolveOpenedProjectSavePath(projectsAtSaveStart, projectId, latestLoadedProject.path);
+          projectPath = savePath;
           const savedGraph = saveCurrentGraph();
           const projectToPersist = withDerivedProjectPluginSpecs(
             mergeCurrentGraphIntoProject(latestProject, savedGraph),
@@ -445,11 +453,10 @@ export function useWorkspaceTransitions() {
               registry: store.get(projectNodeRegistryState),
             },
           );
-          const saveInPlaceProvider = canSaveProjectDataNoPrompt(ioProvider, latestLoadedProject.path)
-            ? ioProvider
-            : undefined;
-          shouldUseSaveAs =
-            options.forceSaveAs || !latestLoadedProject.loaded || !latestLoadedProject.path || !saveInPlaceProvider;
+          const projectDataToPersist = store.get(projectDataState);
+          const savedProjectDigest = getProjectContentDigest({ project: projectToPersist });
+          const saveInPlaceProvider = canSaveProjectDataNoPrompt(ioProvider, savePath) ? ioProvider : undefined;
+          shouldUseSaveAs = options.forceSaveAs || !latestLoadedProject.loaded || !savePath || !saveInPlaceProvider;
 
           let savedPath: string | null = null;
           savingTimeout = setTimeout(() => {
@@ -472,54 +479,109 @@ export function useWorkspaceTransitions() {
 
             if (filePath) {
               savedPath = filePath;
-              setLoadedProject({ loaded: true, path: filePath });
-              setOpenedProjectSnapshots((snapshots) => {
-                const nextSnapshots = { ...snapshots };
-                delete nextSnapshots[projectToPersist.metadata.id];
-                return nextSnapshots;
-              });
-              setProjects((prev) => addOpenedProject(prev, projectToPersist, { fsPath: filePath }));
               await flushHybridStorageGroup('graph');
               await flushHybridStorageGroup('project');
-              toast.success('Project saved');
             }
           } else {
-            if (!saveInPlaceProvider) {
+            if (!saveInPlaceProvider || !savePath) {
               throw new Error('The active project cannot be saved in place.');
             }
-            const savePath = latestLoadedProject.path!;
             await saveInPlaceProvider.saveProjectDataNoPrompt(projectToPersist, savePath);
             savedPath = savePath;
-            setLoadedProject({ loaded: true, path: savePath });
-            setOpenedProjectSnapshots((snapshots) => {
-              const nextSnapshots = { ...snapshots };
-              delete nextSnapshots[projectToPersist.metadata.id];
-              return nextSnapshots;
-            });
             await flushHybridStorageGroup('graph');
             await flushHybridStorageGroup('project');
-            toast.success('Project saved');
           }
 
           if (!savedPath) {
             return false;
           }
 
-          setSavedProjectContentDigests((previousDigests) =>
-            markProjectClean(previousDigests, {
-              project: projectToPersist,
-            }),
-          );
-          setProjectUnsavedChanges((previousFlags) =>
-            markProjectDirtyFlag(previousFlags, projectToPersist.metadata.id, false),
-          );
-          setProjectDataUnsavedChanges((previousFlags) =>
-            markProjectDirtyFlag(previousFlags, projectToPersist.metadata.id, false),
-          );
+          const projectsAfterSave = store.get(projectsState);
+          const openedProjectAfterSave = projectsAfterSave.openedProjects[projectId];
+          const projectIsStillOpen = openedProjectAfterSave != null;
+          const activeProjectAfterSave = store.get(projectState);
+          const projectIsStillActive = activeProjectAfterSave.metadata.id === projectId;
+          const loadedProjectAfterSave = store.get(loadedProjectState);
+          const pathMatchesSaveBinding = (
+            currentPath: string | null | undefined,
+            originalPath: string | null | undefined,
+          ) => currentPath === originalPath || currentPath === savedPath;
+          const pathChangedWhileSaving =
+            projectIsStillOpen &&
+            (!pathMatchesSaveBinding(openedProjectAfterSave.fsPath, openedProjectPathAtSaveStart) ||
+              (projectIsStillActive &&
+                !pathMatchesSaveBinding(loadedProjectAfterSave.path, loadedProjectPathAtSaveStart)));
+
+          const latestSnapshot = store.get(openedProjectSnapshotsState)[projectId];
+          const latestProjectToCompare = projectIsStillActive
+            ? mergeCurrentGraphIntoProject(activeProjectAfterSave, store.get(graphState))
+            : latestSnapshot?.project;
+          const latestProjectDataToCompare = projectIsStillActive ? store.get(projectDataState) : latestSnapshot?.data;
+          const hasNewerProjectChanges =
+            projectIsStillOpen &&
+            (pathChangedWhileSaving ||
+              latestProjectToCompare == null ||
+              getProjectContentDigest({ project: latestProjectToCompare }) !== savedProjectDigest);
+          const hasNewerProjectDataChanges =
+            projectIsStillOpen &&
+            (latestProjectToCompare == null || !isEqual(latestProjectDataToCompare, projectDataToPersist));
+          const hasNewerUnsavedChanges = hasNewerProjectChanges || hasNewerProjectDataChanges;
+
+          if (projectIsStillOpen) {
+            setProjects((previousProjects) =>
+              !pathMatchesSaveBinding(previousProjects.openedProjects[projectId]?.fsPath, openedProjectPathAtSaveStart)
+                ? previousProjects
+                : updateOpenedProjectMetadata(previousProjects, projectId, null, { fsPath: savedPath }),
+            );
+
+            if (projectIsStillActive) {
+              setLoadedProject((previousLoadedProject) =>
+                !pathMatchesSaveBinding(previousLoadedProject.path, loadedProjectPathAtSaveStart)
+                  ? previousLoadedProject
+                  : { loaded: true, path: savedPath },
+              );
+            }
+
+            setOpenedProjectSnapshots((snapshots) => {
+              const snapshot = snapshots[projectId];
+              if (
+                !snapshot ||
+                !isEqual(snapshot.project, projectToPersist) ||
+                !isEqual(snapshot.data, projectDataToPersist)
+              ) {
+                return snapshots;
+              }
+
+              const nextSnapshots = { ...snapshots };
+              delete nextSnapshots[projectId];
+              return nextSnapshots;
+            });
+
+            setSavedProjectContentDigests((previousDigests) =>
+              markProjectClean(previousDigests, {
+                project: projectToPersist,
+              }),
+            );
+            setProjectUnsavedChanges((previousFlags) =>
+              markProjectDirtyFlag(previousFlags, projectId, hasNewerProjectChanges),
+            );
+            setProjectDataUnsavedChanges((previousFlags) =>
+              markProjectDirtyFlag(previousFlags, projectId, hasNewerProjectDataChanges),
+            );
+          }
+
+          if (hasNewerUnsavedChanges) {
+            toast.info('Saved an earlier version; newer changes remain unsaved.');
+          } else {
+            toast.success('Project saved');
+          }
+
           try {
             void Promise.resolve(
               hostCallbacks.onProjectSaved?.({
                 project: projectToPersist,
+                hasNewerUnsavedChanges,
+                pathChangedWhileSaving,
                 path: savedPath,
                 saveAs: shouldUseSaveAs,
               }),

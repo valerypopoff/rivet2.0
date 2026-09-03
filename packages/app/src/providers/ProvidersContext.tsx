@@ -114,6 +114,32 @@ export type LLMProfileHealthAdminProvider = {
   reset(input: { key?: string; projectId: ProjectId }): Promise<void>;
 };
 
+/**
+ * Optional host persistence for a local editor run that produced shared LLM
+ * health evidence. Desktop mode intentionally omits it; hosted mode uses it
+ * to turn the existing in-memory recorder into a durable replay link.
+ */
+export type LocalExecutionRecordingPersistenceProvider = {
+  getCapability(): Promise<boolean>;
+  /** Marks health evidence unavailable when a terminal replay cannot be captured. */
+  markUnavailable(correlationId: string): Promise<void>;
+  persist(input: {
+    projectId: ProjectId;
+    projectPath: string;
+    projectContents: string;
+    datasetsContents?: string;
+    recordingSerialized: string;
+    status: 'succeeded' | 'failed' | 'suspicious';
+    durationMs: number;
+    errorMessage?: string;
+    executionIdentity: {
+      correlationId: string;
+      graphId?: string;
+      graphName?: string;
+    };
+  }): Promise<void>;
+};
+
 export type Providers = {
   io: IOProvider;
   datasets: AppDatasetProvider;
@@ -124,6 +150,7 @@ export type Providers = {
   staticData: StaticDataStore;
   llmProfileHealthAdmin?: LLMProfileHealthAdminProvider;
   llmProfileHealthStore?: RivetLLMProfileHealthStore;
+  localExecutionRecordingPersistence?: LocalExecutionRecordingPersistenceProvider;
   hostedEvaluationCoordinator?: HostedEvaluationCoordinatorProvider;
   /** Complete persistence boundary for local evaluation resources and evidence. */
   evaluationStore: EvaluationStore;
@@ -182,6 +209,9 @@ export function useLLMProfileHealthStore(): RivetLLMProfileHealthStore | undefin
   return useProviders().llmProfileHealthStore;
 }
 
+export function useLocalExecutionRecordingPersistence(): LocalExecutionRecordingPersistenceProvider | undefined {
+  return useProviders().localExecutionRecordingPersistence;
+}
 export function useHostedEvaluationCoordinator(): HostedEvaluationCoordinatorProvider | undefined {
   return useProviders().hostedEvaluationCoordinator;
 }
