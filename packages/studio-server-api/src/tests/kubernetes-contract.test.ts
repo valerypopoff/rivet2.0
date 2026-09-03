@@ -690,6 +690,7 @@ test('chart can delegate migration execution but never lets API replicas become 
 
 test('chart validation keeps the supported managed singleton control-plane boundaries', () => {
   const validateValuesTemplate = readRepoFile('deploy/studio-server/helm/templates/validate-values.yaml');
+  const backendStatefulSet = readRepoFile('deploy/studio-server/helm/templates/backend-statefulset.yaml');
 
   assert.match(validateValuesTemplate, /workflowStorage\.backend=managed and runtimeLibraries\.backend=managed/);
   assert.match(
@@ -704,6 +705,10 @@ test('chart validation keeps the supported managed singleton control-plane bound
     validateValuesTemplate,
     /appSettings\.backend=postgres so settings remain consistent across replicas without a shared app-data volume/,
   );
+  assert.match(backendStatefulSet, /replicas: \{\{ \.Values\.replicaCount\.backend \}\}/);
+  assert.match(backendStatefulSet, /podManagementPolicy: OrderedReady/);
+  assert.match(backendStatefulSet, /updateStrategy:\s*\n\s*type: RollingUpdate/);
+  assert.match(backendStatefulSet, /StatefulSets do not expose Deployment's Recreate strategy/);
 });
 
 test('chart budgets PostgreSQL connections against the maximum execution replica count', async () => {

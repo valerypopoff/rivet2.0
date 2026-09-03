@@ -1,5 +1,6 @@
 import fs from 'node:fs/promises';
 import {
+  createHostedProjectApiServerHarness,
   createWorkflowApiServerHarness,
   createWorkflowExecutionServerHarness,
 } from './workflow-api-harness.js';
@@ -23,6 +24,7 @@ export async function createFilesystemWorkflowSuiteHarness() {
   const workflowRecordings = await import('../../routes/workflows/recordings.js');
   const workflowExecution = await import('../../routes/workflows/execution.js');
   const workflowRoutes = await import('../../routes/workflows/index.js');
+  const projectRoutes = await import('../../routes/projects.js');
   const workflowStorageBackend = await import('../../routes/workflows/storage-backend.js');
   const filesystemExecutionCache = await import('../../routes/workflows/filesystem-execution-cache.js');
   const workflowEndpointAuthSettings = await import('../../workflow-endpoint-auth-settings.js');
@@ -31,6 +33,11 @@ export async function createFilesystemWorkflowSuiteHarness() {
 
   const withWorkflowApiServer = createWorkflowApiServerHarness({
     initializeWorkflowStorage: workflowStorageBackend.initializeWorkflowStorage,
+    workflowsRouter: workflowRoutes.workflowsRouter,
+  });
+  const withHostedProjectApiServer = createHostedProjectApiServerHarness({
+    initializeWorkflowStorage: workflowStorageBackend.initializeWorkflowStorage,
+    projectsRouter: projectRoutes.projectsRouter,
     workflowsRouter: workflowRoutes.workflowsRouter,
   });
 
@@ -83,6 +90,7 @@ export async function createFilesystemWorkflowSuiteHarness() {
     filesystemExecutionCache,
     rivetNode,
     withWorkflowApiServer,
+    withHostedProjectApiServer,
     withWorkflowExecutionServer,
     resetWorkflowsRoot,
     resetAndEnsureWorkflowsRoot,

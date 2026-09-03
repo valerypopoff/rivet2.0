@@ -437,25 +437,25 @@ test('filesystem saveHostedProject refreshes latest materialization without dirt
 test('filesystem saveHostedProject exposes a permission error when the workflows root is not writable', async (t) => {
   const created = await workflowMutations.createWorkflowProjectItem('', 'PermissionSave');
   const loaded = await workflowStorageBackend.loadHostedProject(created.absolutePath);
-  const originalWriteFile = fs.writeFile;
+  const originalOpen = fs.open;
 
   t.mock.method(
     fs,
-    'writeFile',
+    'open',
     async (
-      targetPath: Parameters<typeof fs.writeFile>[0],
-      data: Parameters<typeof fs.writeFile>[1],
-      options?: Parameters<typeof fs.writeFile>[2],
+      targetPath: Parameters<typeof fs.open>[0],
+      flags: Parameters<typeof fs.open>[1],
+      mode?: Parameters<typeof fs.open>[2],
     ) => {
-      if (String(targetPath) === created.absolutePath) {
-        const error = new Error(`EACCES: permission denied, open '${created.absolutePath}'`) as Error & {
+      if (path.basename(String(targetPath)) === 'project.new') {
+        const error = new Error(`EACCES: permission denied, open '${String(targetPath)}'`) as Error & {
           code?: string;
         };
         error.code = 'EACCES';
         throw error;
       }
 
-      return originalWriteFile(targetPath, data, options as any);
+      return originalOpen(targetPath, flags, mode);
     },
   );
 

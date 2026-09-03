@@ -8,7 +8,10 @@ metadata:
 spec:
   serviceName: {{ include "rivet.backendHeadlessServiceName" . }}
   replicas: {{ .Values.replicaCount.backend }}
-  podManagementPolicy: Parallel
+  # Validation fixes this workload at one replica. OrderedReady plus the
+  # StatefulSet's ordinal replacement keeps control-plane writers serial during
+  # rollouts; StatefulSets do not expose Deployment's Recreate strategy.
+  podManagementPolicy: OrderedReady
   updateStrategy:
     type: RollingUpdate
   selector:

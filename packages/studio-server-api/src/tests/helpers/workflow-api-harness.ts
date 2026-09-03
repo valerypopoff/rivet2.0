@@ -23,6 +23,10 @@ type WorkflowExecutionServerHarnessOptions = WorkflowApiServerHarnessOptions & {
   latestWorkflowsRouter: Router;
 };
 
+type HostedProjectApiServerHarnessOptions = WorkflowApiServerHarnessOptions & {
+  projectsRouter: Router;
+};
+
 type WorkflowExecutionServerUrls = {
   apiBaseUrl: string;
   publishedBaseUrl: string;
@@ -78,11 +82,7 @@ export function observeFilesystemExecutionInvalidations(t: TestContext, cache: F
   return calls;
 }
 
-export async function withEnvOverride(
-  name: string,
-  value: string | undefined,
-  run: () => Promise<void>,
-) {
+export async function withEnvOverride(name: string, value: string | undefined, run: () => Promise<void>) {
   const previousValue = process.env[name];
 
   if (value == null) {
@@ -117,6 +117,32 @@ export function createWorkflowApiServerHarness(options: WorkflowApiServerHarness
 
     try {
       await run(`${listener.baseUrl}/workflows`);
+    } finally {
+      await listener.close();
+    }
+  };
+}
+
+export function createHostedProjectApiServerHarness(options: HostedProjectApiServerHarnessOptions) {
+  return async function withHostedProjectApiServer(
+    run: (urls: { projectsBaseUrl: string; workflowsBaseUrl: string }) => Promise<void>,
+  ) {
+    await options.initializeWorkflowStorage();
+
+    const app = express();
+    app.use(express.json({ strict: false }));
+    app.use(createRequestCorrelationMiddleware());
+    app.use('/projects', options.projectsRouter);
+    app.use('/workflows', options.workflowsRouter);
+    attachJsonFallbackHandlers(app);
+
+    const server = http.createServer(app);
+    const listener = await listenTestServer(server);
+    try {
+      await run({
+        projectsBaseUrl: `${listener.baseUrl}/projects`,
+        workflowsBaseUrl: `${listener.baseUrl}/workflows`,
+      });
     } finally {
       await listener.close();
     }
@@ -161,7 +187,7 @@ export function createWorkflowExecutionServerHarness(options: WorkflowExecutionS
 }
 
 export async function readJson<T>(response: globalThis.Response): Promise<T> {
-  const body = await response.json() as T;
+  const body = (await response.json()) as T;
   if (!response.ok) {
     throw new Error(`HTTP ${response.status}: ${JSON.stringify(body)}`);
   }

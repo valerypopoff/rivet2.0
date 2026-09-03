@@ -26,6 +26,12 @@ The `execution` Deployment owns:
 
 Do not scale `backend` horizontally in the current chart shape. Latest workflow execution, latest web-app action execution, and `/ws/latest-debugger` are still process-local control-plane features.
 
+The chart enforces `backend=1` and disables backend autoscaling. The backend is a StatefulSet, so Kubernetes does not offer the Deployment-only `Recreate` strategy named in some deployment guidance. Its `OrderedReady` plus single-ordinal `RollingUpdate` is the equivalent single-writer replacement here: ordinal `0` is terminated before its replacement is created, accepting a short control-plane interruption and preventing an old and new backend from serving together. Execution replicas remain independently scalable.
+
+The supported chart currently requires managed workflow and runtime-library storage, so canonical workflow bytes are transactional in PostgreSQL/object storage and do not use the filesystem save journal. Filesystem deployments still use the same API image and startup recovery code in local Docker and single-host installations. A downstream Kubernetes shape that re-enables filesystem workflow storage must keep the backend singleton, mount project files, dataset sidecars, and `.rivet-transactions` from one PVC at the same workflow-root mount, and retain serial pod replacement. Prefer `ReadWriteOncePod` when the CSI driver supports it. `ReadWriteOnce` alone may allow multiple pods on one node and is not a single-writer guarantee. Scaling a filesystem-backed control plane above one replica is unsupported; high availability requires shared locking or the managed transactional backend.
+
+Workflow storage initializes before the API listens. Its filesystem capability probe and journal recovery therefore gate readiness. An ambiguous recovery leaves the pod unready and logs a transaction ID plus safe project-relative path; do not delete that transaction evidence until the underlying storage state has been inspected. The configured termination grace period normally lets active filesystem operations drain, but crash correctness comes from recovery rather than graceful shutdown.
+
 ## Scaling model
 
 Scaling in this chart is per Deployment or StatefulSet, not in fixed pod pairs.

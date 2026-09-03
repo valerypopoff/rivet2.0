@@ -302,6 +302,9 @@ runtimeLibraries:
 
 filesystem:
   workflows:
+    # Filesystem control-plane mode is not enabled by the current managed-only
+    # chart. If re-enabled, prefer a ReadWriteOncePod PVC and retain backend=1;
+    # ordinary ReadWriteOnce alone does not prevent two pods on the same node.
     existingClaimName: ''
   runtimeLibraries:
     existingClaimName: ''
