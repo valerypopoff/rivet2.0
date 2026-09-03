@@ -144,7 +144,10 @@ test('generic node errors preserve line breaks in inline and fullscreen output',
   const nodeStyles = readComponent('nodeStyles.ts');
 
   assert.match(inlineOutput, /<div className="node-output-error-message">\{content\.error\}<\/div>/);
-  assert.match(fullscreenOutput, /<div className="node-output-error-message">\{content\.error\}<\/div>/);
+  assert.match(
+    fullscreenOutput,
+    /<div className="node-output-error-message" \{\.\.\.\{ \[OUTPUT_NAVIGATION_ITEM_ATTRIBUTE\]: '' \}\}>\s*\{content\.error\}\s*<\/div>/,
+  );
   assert.match(nodeStyles, /\.node-output-error-message \{[\s\S]*?white-space: pre-wrap;/);
   assert.match(fullscreenOutput, /\.node-output-error-message \{[\s\S]*?white-space: pre-wrap;/);
   assert.match(fullscreenOutput, /\.node-output-error-message \{[\s\S]*?background: var\(--node-output-error-bg\);/);

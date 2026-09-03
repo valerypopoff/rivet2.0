@@ -15,6 +15,7 @@ import React, { Fragment, type FC, type ReactElement } from 'react';
 import { multiOutputStyles, renderDataValueStyles } from './renderDataValueStyles.js';
 import { type createScalarRenderers, type ScalarRendererProps } from './createScalarRenderers.js';
 import type { OutputRenderMode } from './outputRenderTypes.js';
+import { OUTPUT_NAVIGATION_ITEM_ATTRIBUTE } from './outputNavigationItems.js';
 
 export type DataValueRendererProps = {
   value: DataValue | undefined;
@@ -78,7 +79,11 @@ export function createDataValueRendererMap(options: {
               {count.toLocaleString()} item{count === 1 ? '' : 's'}
             </div>
             {items.map((item, index) => (
-              <div className="multi-output-item" key={index}>
+              <div
+                className="multi-output-item"
+                {...((depth ?? 0) === 0 ? { [OUTPUT_NAVIGATION_ITEM_ATTRIBUTE]: '' } : undefined)}
+                key={index}
+              >
                 {renderValue({
                   value: item,
                   depth: (depth ?? 0) + 1,

@@ -29,6 +29,7 @@ import { FullScreenModal } from '../FullScreenModal.js';
 import { AgentResponseInspector } from '../agentTrace/AgentResponseInspector.js';
 import { buildLlmInvocationTrace } from '../agentTrace/agentTraceViewModel.js';
 import { CodeNodeErrorOutput } from '../nodes/CodeNode.js';
+import { OUTPUT_NAVIGATION_ITEM_ATTRIBUTE } from '../renderDataValue/outputNavigationItems.js';
 import { MATCH_ACTIVE_CLASS, MATCH_CLASS } from './fullscreenOutputSearch.js';
 import { FullscreenNodeOutputToolbar } from './FullscreenNodeOutputToolbar.js';
 import { FullscreenOutputSearchContext } from './FullscreenOutputSearchContext.js';
@@ -44,6 +45,7 @@ import {
   shouldShowNodeRunDurationSummary,
 } from './NodeRunDurationMeta.js';
 import { useFullscreenOutputSearch } from './useFullscreenOutputSearch.js';
+import { useFullscreenOutputKeyboardNavigation } from './fullscreenOutputKeyboardNavigation.js';
 import {
   createFullscreenNodeOutputViewModel,
   getNodeOutputCopySource,
@@ -129,6 +131,11 @@ const fullscreenOutputCss = css`
   min-width: 0;
   flex-direction: column;
 
+  /* This is a programmatic keyboard-navigation target, not a visible control. */
+  &:focus {
+    outline: none;
+  }
+
   .fullscreen-header {
     position: sticky;
     top: var(--fullscreen-modal-vertical-inset);
@@ -141,7 +148,7 @@ const fullscreenOutputCss = css`
 
   .picker {
     border: 1px solid var(--grey-darkish);
-    background: transparent;
+    background: var(--grey-darker);
     display: inline-flex;
     gap: 0;
     border-radius: 8px;
@@ -459,6 +466,8 @@ const NodeFullscreenOutput: FC<{ node: ChartNode }> = ({ node }) => {
   } = useFullscreenOutputSearch({
     contentKey: contentVersion,
   });
+  const fullscreenOutputRootRef = useRef<HTMLDivElement>(null);
+  useFullscreenOutputKeyboardNavigation(fullscreenOutputBodyRef, fullscreenOutputRootRef);
 
   const prevPage = useStableCallback(() => {
     if (!filteredOutput) {
@@ -504,7 +513,9 @@ const NodeFullscreenOutput: FC<{ node: ChartNode }> = ({ node }) => {
       <div className="errored">
         {showDurationSummary && filteredOutput && <NodeRunDurationSummaryMeta processData={filteredOutput} hasBody />}
         {showDurationMeta && <NodeRunDurationMeta data={selectedData} hasBody />}
-        <div className="node-output-error-message">{content.error}</div>
+        <div className="node-output-error-message" {...{ [OUTPUT_NAVIGATION_ITEM_ATTRIBUTE]: '' }}>
+          {content.error}
+        </div>
       </div>
     );
   } else {
@@ -563,13 +574,15 @@ const NodeFullscreenOutput: FC<{ node: ChartNode }> = ({ node }) => {
         )}
         {showDurationMeta && <NodeRunDurationMeta data={selectedData} hasBody={hasBody} />}
         {content.kind === 'output' && content.errorMessage && (
-          <div className="node-output-error-message">{content.errorMessage}</div>
+          <div className="node-output-error-message" {...{ [OUTPUT_NAVIGATION_ITEM_ATTRIBUTE]: '' }}>
+            {content.errorMessage}
+          </div>
         )}
         {body}
         {content.warnings && (
           <div className="fullscreen-output-warnings">
             {content.warnings.map((warning) => (
-              <div className="fullscreen-output-warning" key={warning}>
+              <div className="fullscreen-output-warning" key={warning} {...{ [OUTPUT_NAVIGATION_ITEM_ATTRIBUTE]: '' }}>
                 {warning}
               </div>
             ))}
@@ -580,7 +593,7 @@ const NodeFullscreenOutput: FC<{ node: ChartNode }> = ({ node }) => {
   }
 
   return (
-    <div css={fullscreenOutputCss}>
+    <div ref={fullscreenOutputRootRef} css={fullscreenOutputCss} tabIndex={-1}>
       <header className="fullscreen-header">
         <div className="fullscreen-output-pagers">
           {outputViewModel.totalPages > 1 && (
