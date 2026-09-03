@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import test from 'node:test';
+import { writeWorkflowProjectStatsCacheFromContents } from '../routes/workflows/project-stats.js';
 import {
   readJson,
   waitForRecordingWorkflows,
@@ -900,27 +901,18 @@ test('local editor replay persistence resolves a nested relative path when the t
   const created = await workflowMutations.createWorkflowProjectItem('Nested', 'LocalRelativeReplay');
   const [project, attachedData] = await rivetNode.loadProjectAndAttachedDataFromFile(created.absolutePath);
   const projectId = project.metadata.id!;
-  const projectStats = await fs.stat(created.absolutePath);
   const sidecars = workflowFs.getProjectSidecarPaths(created.absolutePath);
+  const projectContents = rivetNode.serializeProject(project, attachedData);
+  if (typeof projectContents !== 'string') {
+    throw new Error('Expected the test project to serialize to text.');
+  }
 
-  // Simulate an old or incomplete generated tree-index sidecar. The source
-  // project remains valid, but the tree can only identify it by its path.
-  await fs.writeFile(
-    sidecars.stats,
-    `${JSON.stringify({
-      schemaVersion: 4,
-      fileSize: projectStats.size,
-      fileMtimeMs: projectStats.mtimeMs,
-      fileCtimeMs: projectStats.ctimeMs,
-      projectMetadataId: null,
-      stats: {
-        graphCount: 1,
-        totalNodeCount: 0,
-        webAppCount: 0,
-      },
-    })}\n`,
-    'utf8',
-  );
+  // Start with a current, fingerprint-valid generated sidecar, then remove
+  // only its metadata ID. The source remains valid, but the tree must select
+  // it through the normalized relative path instead of the ID lookup.
+  await writeWorkflowProjectStatsCacheFromContents(created.absolutePath, projectContents);
+  const generatedCache = JSON.parse(await fs.readFile(sidecars.stats, 'utf8')) as Record<string, unknown>;
+  await fs.writeFile(sidecars.stats, `${JSON.stringify({ ...generatedCache, projectMetadataId: null })}\n`, 'utf8');
 
   await withWorkflowExecutionServer(async ({ apiBaseUrl }) => {
     const persistResponse = await fetch(`${apiBaseUrl}/local-editor-recordings`, {
@@ -929,7 +921,7 @@ test('local editor replay persistence resolves a nested relative path when the t
       body: JSON.stringify({
         projectId,
         projectPath: `./${created.relativePath.replace(/\//g, '\\')}`,
-        projectContents: rivetNode.serializeProject(project, attachedData),
+        projectContents,
         recordingSerialized: JSON.stringify({
           version: 1,
           recording: {

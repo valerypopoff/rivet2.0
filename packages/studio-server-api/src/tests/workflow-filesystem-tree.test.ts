@@ -3,6 +3,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import test from 'node:test';
 import { getExpectedProxyAuthToken } from '../auth.js';
+import { writeWorkflowProjectStatsCacheFromContents } from '../routes/workflows/project-stats.js';
 import { readJson, withEnvOverride } from './helpers/workflow-api-harness.js';
 import { createFilesystemWorkflowSuiteHarness } from './helpers/workflow-filesystem-suite-harness.js';
 
@@ -27,6 +28,20 @@ type WorkflowTreeSseEvent = {
   event: string;
   data: Record<string, unknown>;
 };
+
+function withTextNodes(projectContents: string, count: number): string {
+  const nodeLines = Array.from({ length: count }, (_, index) => {
+    const number = index + 1;
+    return [
+      `        '[node-${number}]:text "Node ${number}"':`,
+      '          visualData: 0/0/null/null//',
+      '          data:',
+      '            text: hello',
+    ];
+  }).flat();
+
+  return projectContents.replace('      nodes: {}', ['      nodes:', ...nodeLines].join('\n'));
+}
 
 async function openWorkflowTreeEventStream(baseUrl: string, headers: HeadersInit) {
   const controller = new AbortController();
@@ -271,47 +286,21 @@ test('workflow project stats count serialized graph nodes and web apps', async (
 
 test('workflow project stats cache is rebuilt when the project file changes', async () => {
   const created = await workflowMutations.createWorkflowProjectItem('', 'StatsCache');
-  const sidecars = workflowFs.getProjectSidecarPaths(created.absolutePath);
   const projectContents = await fs.readFile(created.absolutePath, 'utf8');
+  const cachedContents = withTextNodes(projectContents, 2);
+
+  await fs.writeFile(created.absolutePath, cachedContents, 'utf8');
   const fileStats = await fs.stat(created.absolutePath);
 
-  await fs.writeFile(
-    sidecars.stats,
-    `${JSON.stringify({
-      schemaVersion: 4,
-      fileSize: fileStats.size,
-      fileMtimeMs: fileStats.mtimeMs,
-      fileCtimeMs: fileStats.ctimeMs,
-      projectMetadataId: created.projectMetadataId ?? null,
-      stats: {
-        graphCount: 99,
-        totalNodeCount: 99,
-        webAppCount: 99,
-      },
-    })}\n`,
-    'utf8',
-  );
+  await writeWorkflowProjectStatsCacheFromContents(created.absolutePath, cachedContents, null, fileStats);
 
   const cachedProject = await workflowQuery.getWorkflowProject(workflowsRoot, created.absolutePath);
-  assert.equal(cachedProject.stats?.graphCount, 99);
-  assert.equal(cachedProject.stats?.totalNodeCount, 99);
-  assert.equal(cachedProject.stats?.webAppCount, 99);
+  assert.equal(cachedProject.stats?.graphCount, 1);
+  assert.equal(cachedProject.stats?.totalNodeCount, 2);
+  assert.equal(cachedProject.stats?.webAppCount, 0);
   assert.equal(cachedProject.projectMetadataId, created.projectMetadataId);
 
-  await fs.writeFile(
-    created.absolutePath,
-    projectContents.replace(
-      '      nodes: {}',
-      [
-        '      nodes:',
-        '        \'[node-1]:text "Node 1"\':',
-        '          visualData: 0/0/null/null//',
-        '          data:',
-        '            text: hello',
-      ].join('\n'),
-    ),
-    'utf8',
-  );
+  await fs.writeFile(created.absolutePath, withTextNodes(projectContents, 1), 'utf8');
 
   const rebuiltProject = await workflowQuery.getWorkflowProject(workflowsRoot, created.absolutePath);
   assert.equal(rebuiltProject.stats?.graphCount, 1);
@@ -321,34 +310,26 @@ test('workflow project stats cache is rebuilt when the project file changes', as
 
 test('workflow project stats cache is rebuilt when file ctime changes', async () => {
   const created = await workflowMutations.createWorkflowProjectItem('', 'StatsCacheCtime');
-  const sidecars = workflowFs.getProjectSidecarPaths(created.absolutePath);
+  const projectContents = await fs.readFile(created.absolutePath, 'utf8');
   const fileStats = await fs.stat(created.absolutePath);
+  const sidecars = workflowFs.getProjectSidecarPaths(created.absolutePath);
 
-  await fs.writeFile(
-    sidecars.stats,
-    `${JSON.stringify({
-      schemaVersion: 4,
-      fileSize: fileStats.size,
-      fileMtimeMs: fileStats.mtimeMs,
-      fileCtimeMs: fileStats.ctimeMs,
-      projectMetadataId: created.projectMetadataId ?? null,
-      stats: {
-        graphCount: 99,
-        totalNodeCount: 99,
-        webAppCount: 99,
-      },
-    })}\n`,
-    'utf8',
-  );
+  await writeWorkflowProjectStatsCacheFromContents(created.absolutePath, projectContents, null, fileStats);
 
-  const contents = await fs.readFile(created.absolutePath, 'utf8');
-  await fs.writeFile(created.absolutePath, contents, 'utf8');
+  const cachedProject = await workflowQuery.getWorkflowProject(workflowsRoot, created.absolutePath);
+  assert.equal(cachedProject.stats?.totalNodeCount, 0);
+
+  await fs.writeFile(created.absolutePath, projectContents, 'utf8');
   await fs.utimes(created.absolutePath, fileStats.atime, fileStats.mtime);
+  const updatedFileStats = await fs.stat(created.absolutePath);
+  assert.notEqual(updatedFileStats.ctimeMs, fileStats.ctimeMs);
 
   const rebuiltProject = await workflowQuery.getWorkflowProject(workflowsRoot, created.absolutePath);
   assert.equal(rebuiltProject.stats?.graphCount, 1);
   assert.equal(rebuiltProject.stats?.totalNodeCount, 0);
   assert.equal(rebuiltProject.stats?.webAppCount, 0);
+  const rebuiltCache = JSON.parse(await fs.readFile(sidecars.stats, 'utf8')) as { fileCtimeMs: number };
+  assert.equal(rebuiltCache.fileCtimeMs, updatedFileStats.ctimeMs);
 });
 
 test('workflow tree route disables caching', async () => {

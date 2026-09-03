@@ -7,7 +7,7 @@
     "dev": "vite --config vite.config.ts",
     "dev:all": "concurrently --names api,web --prefix-colors blue,green \"yarn workspace @valerypopoff/rivet-studio-server-api run dev\" \"vite --config vite.config.ts\"",
     "build": "vite build --config vite.config.ts",
-    "test": "tsx --test tests/api-request.test.ts tests/editor-bridge-contract.test.ts tests/editor-bridge-focus.test.ts tests/hosted-env-shim.test.ts tests/hosted-evaluation-coordinator.test.ts tests/hosted-local-execution-recording-persistence.test.ts tests/hosted-fonts.test.ts tests/hosted-project-revision-tracker.test.ts tests/hosted-runtime-config.test.ts tests/llm-profile-health-settings.test.ts tests/modal-theme-contract.test.ts tests/opened-project-metadata.test.ts tests/vite-aliases.test.ts",
+    "test": "tsx --test tests/api-request.test.ts tests/editor-bridge-contract.test.ts tests/editor-bridge-focus.test.ts tests/hosted-env-shim.test.ts tests/hosted-evaluation-coordinator.test.ts tests/hosted-fonts.test.ts tests/hosted-local-execution-recording-persistence.test.ts tests/hosted-project-revision-tracker.test.ts tests/hosted-runtime-config.test.ts tests/llm-profile-health-settings.test.ts tests/modal-theme-contract.test.ts tests/opened-project-metadata.test.ts tests/vite-aliases.test.ts",
     "preview": "vite preview --config vite.config.ts"
   },
   "dependencies": {
