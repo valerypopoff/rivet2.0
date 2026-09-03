@@ -84,6 +84,7 @@ export async function getWorkflowProject(
   return {
     id: relativePath,
     ...(projectIndexData.projectMetadataId ? { projectMetadataId: projectIndexData.projectMetadataId } : {}),
+    revisionId: projectIndexData.revisionId,
     name: projectName,
     fileName,
     relativePath,

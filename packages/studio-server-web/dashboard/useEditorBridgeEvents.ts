@@ -3,7 +3,7 @@ import { toast } from 'react-toastify';
 import {
   isEditorToDashboardEvent,
   isValidBridgeOrigin,
-  type WorkflowProjectBindingReconciliation,
+  type WorkflowProjectBindingReconciliationResult,
   postMessageToEditor,
 } from '../../studio-server-shared/editor-bridge';
 import {
@@ -28,7 +28,8 @@ type UseEditorBridgeEventsOptions = {
   onRequestActiveWorkflowProjectRename: () => void;
   onProjectSaved: (path: string, hasNewerUnsavedChanges?: boolean) => void;
   onWorkflowPathsMovedApplied: (requestId?: string) => void;
-  onWorkflowProjectBindingsReconciled: (changes: WorkflowProjectBindingReconciliation[], requestId?: string) => void;
+  onWorkflowProjectBindingsReconciled: (result: WorkflowProjectBindingReconciliationResult, requestId?: string) => void;
+  onWorkflowProjectContentChangeResolved: (requestId: string | undefined, resolved: boolean) => void;
 };
 
 export function useEditorBridgeEvents(options: UseEditorBridgeEventsOptions) {
@@ -48,6 +49,7 @@ export function useEditorBridgeEvents(options: UseEditorBridgeEventsOptions) {
     onProjectSaved,
     onWorkflowPathsMovedApplied,
     onWorkflowProjectBindingsReconciled,
+    onWorkflowProjectContentChangeResolved,
   } = options;
 
   useEffect(() => {
@@ -174,7 +176,13 @@ export function useEditorBridgeEvents(options: UseEditorBridgeEventsOptions) {
           onWorkflowPathsMovedApplied(event.data.requestId);
           break;
         case 'workflow-project-bindings-reconciled':
-          onWorkflowProjectBindingsReconciled(event.data.changes, event.data.requestId);
+          onWorkflowProjectBindingsReconciled(
+            { changes: event.data.changes, contentChanges: event.data.contentChanges },
+            event.data.requestId,
+          );
+          break;
+        case 'workflow-project-content-change-resolved':
+          onWorkflowProjectContentChangeResolved(event.data.requestId, event.data.resolved);
           break;
         case 'project-open-failed':
           onProjectOpenFailed(event.data.error);
@@ -200,5 +208,6 @@ export function useEditorBridgeEvents(options: UseEditorBridgeEventsOptions) {
     onProjectSaved,
     onWorkflowPathsMovedApplied,
     onWorkflowProjectBindingsReconciled,
+    onWorkflowProjectContentChangeResolved,
   ]);
 }

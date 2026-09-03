@@ -9,7 +9,8 @@ import type {
 } from './types';
 import type {
   ProjectCompareSideLabels,
-  WorkflowProjectBindingReconciliation,
+  WorkflowProjectBindingReconciliationResult,
+  WorkflowProjectContentChange,
 } from '../../studio-server-shared/editor-bridge';
 import type { WorkflowProjectEditorBinding } from '../../studio-server-shared/workflow-types';
 import { isWorkflowProjectFullyUnpublished } from './projectSettingsForm';
@@ -58,7 +59,11 @@ export function useWorkflowLibraryController(options: {
   onWorkflowPathsMoved: (moves: WorkflowProjectPathMove[]) => Promise<void> | void;
   onReconcileWorkflowProjectBindings: (
     bindings: WorkflowProjectEditorBinding[],
-  ) => Promise<WorkflowProjectBindingReconciliation[]>;
+  ) => Promise<WorkflowProjectBindingReconciliationResult>;
+  onResolveWorkflowProjectContentChange: (
+    change: WorkflowProjectContentChange,
+    resolution: 'reload' | 'keep-local',
+  ) => Promise<boolean>;
   onWorkflowProjectOpenIntent: (path: string) => void;
   onWorkflowProjectOpenIntentCanceled: (path: string) => void;
   onActiveWorkflowProjectPathChange: (path: string) => void;
@@ -76,6 +81,7 @@ export function useWorkflowLibraryController(options: {
     onDeleteProject,
     onWorkflowPathsMoved,
     onReconcileWorkflowProjectBindings,
+    onResolveWorkflowProjectContentChange,
     onWorkflowProjectOpenIntent,
     onWorkflowProjectOpenIntentCanceled,
     onActiveWorkflowProjectPathChange,
@@ -332,6 +338,7 @@ export function useWorkflowLibraryController(options: {
     editorReady,
     refreshFromRemoteChange,
     reconcileProjectBindings: onReconcileWorkflowProjectBindings,
+    resolveProjectContentChange: onResolveWorkflowProjectContentChange,
   });
 
   const startSelectedProjectRename = useCallback(() => {

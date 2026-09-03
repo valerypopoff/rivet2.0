@@ -4,14 +4,20 @@ import { flushHybridStorageGroup } from '../../app/src/state/storage';
 import {
   clearHostedProjectRevisionPath,
   remapHostedProjectRevisionPaths,
-  setHostedProjectRevisionPath,
 } from '../io/HostedIOProvider';
+import {
+  acceptHostedProjectRemoteRevision,
+  getHostedProjectPendingRevision,
+  observeHostedProjectRevision,
+  pruneHostedProjectRevisions,
+} from '../io/hostedProjectRevisionTracker';
 import { clearOpenedProjectSession, remapOpenedProjectSessionPaths } from '../io/openedProjectSessionCache';
 import { deleteHostedProjectContextState } from '../overrides/state/savedGraphs';
 import {
   postMessageToDashboard,
   type DashboardToEditorCommand,
   type WorkflowProjectBindingReconciliation,
+  type WorkflowProjectContentChange,
 } from '../../studio-server-shared/editor-bridge';
 import { clearHostedDatasetsForProject } from './hostedRivetProviders';
 import type { EditorCommandBridgeContext, SerializedEditorCommand } from './editorCommandBridgeContext';
@@ -21,6 +27,7 @@ import {
   resolveHostedProjectTitleFromPath,
   type HostedProjectMetadataUpdateForPathMove,
 } from './openedProjectMetadata';
+import { handleRefreshOpenProjectCommand } from './editorProjectOpenCommands';
 import type { WorkflowProjectPathMove } from './types';
 import type { WorkflowProjectEditorBinding } from '../../studio-server-shared/workflow-types';
 import { normalizeWorkflowPath } from './workflowLibraryHelpers';
@@ -143,13 +150,15 @@ export async function handleReconcileWorkflowProjectBindingsCommand(
   }
 
   const projects = context.getProjects();
-  const revisionBindings: WorkflowProjectEditorBinding[] = [];
   const updates: Array<{
     projectId: ProjectId;
     binding: WorkflowProjectEditorBinding;
     fromPath: string | null;
     fromTitle: string;
   }> = [];
+  const contentChanges: WorkflowProjectContentChange[] = [];
+
+  pruneHostedProjectRevisions(projects.openedProjectsSortedIds);
 
   for (const projectId of projects.openedProjectsSortedIds) {
     const openedProject = projects.openedProjects[projectId];
@@ -160,8 +169,22 @@ export async function handleReconcileWorkflowProjectBindingsCommand(
 
     const pathChanged = normalizeWorkflowPath(openedProject.fsPath ?? '') !== normalizeWorkflowPath(binding.path);
     const titleChanged = openedProject.title !== binding.title;
-    if (binding.revisionId !== undefined) revisionBindings.push(binding);
-    if (!pathChanged && !titleChanged) {
+    const structuralChange = pathChanged || titleChanged;
+    const remoteChange = observeHostedProjectRevision({
+      projectId,
+      path: binding.path,
+      revisionId: binding.revisionId,
+      structuralChange,
+    });
+    if (remoteChange) {
+      contentChanges.push({
+        projectId,
+        path: binding.path,
+        title: binding.title,
+        revisionId: remoteChange.revisionId,
+      });
+    }
+    if (!structuralChange) {
       continue;
     }
 
@@ -219,10 +242,6 @@ export async function handleReconcileWorkflowProjectBindingsCommand(
       context.getWorkspace().moveProjectPaths(getHostedProjectPathMoveInputs(moves));
     }
 
-    for (const binding of revisionBindings) {
-      setHostedProjectRevisionPath(binding.path, binding.revisionId ?? null);
-    }
-
     let persistedProjectStateChanged = false;
     for (const update of updates) {
       context.openedProjectPathAliases.set(normalizeWorkflowPath(update.binding.path), update.projectId);
@@ -244,9 +263,61 @@ export async function handleReconcileWorkflowProjectBindingsCommand(
     postMessageToDashboard({
       type: 'workflow-project-bindings-reconciled',
       changes,
+      contentChanges,
       requestId: command.requestId,
     });
   }
+}
+
+export async function handleResolveWorkflowProjectContentChangeCommand(
+  context: EditorCommandBridgeContext,
+  command: Extract<DashboardToEditorCommand, { type: 'resolve-workflow-project-content-change' }>,
+): Promise<void> {
+  let resolved = false;
+  let error: string | undefined;
+
+  try {
+    const openedProject = context.getProjects().openedProjects[command.projectId as ProjectId];
+    if (!openedProject || normalizeWorkflowPath(openedProject.fsPath ?? '') !== normalizeWorkflowPath(command.path)) {
+      throw new Error('The project is no longer open at this location.');
+    }
+
+    if (command.resolution === 'keep-local') {
+      resolved = acceptHostedProjectRemoteRevision(command.projectId, command.path, command.revisionId);
+      if (!resolved) {
+        throw new Error('A newer remote version is available. Review the updated notification before saving.');
+      }
+    } else {
+      if (getHostedProjectPendingRevision(command.projectId) !== command.revisionId) {
+        throw new Error('A newer remote version is available. Review the updated notification before saving.');
+      }
+      const refreshed = await handleRefreshOpenProjectCommand(context, { type: 'refresh-open-project-from-disk', path: command.path });
+      if (!refreshed) {
+        throw new Error('Could not reload the latest saved project.');
+      }
+      const pendingAfterReload = getHostedProjectPendingRevision(command.projectId);
+      if (pendingAfterReload === command.revisionId) {
+        if (!acceptHostedProjectRemoteRevision(command.projectId, command.path, command.revisionId)) {
+          throw new Error('A newer remote version is available. Review the updated notification before saving.');
+        }
+      } else if (pendingAfterReload) {
+        throw new Error('A newer remote version is available. Review the updated notification before saving.');
+      }
+      resolved = true;
+    }
+  } catch (caught) {
+    error = caught instanceof Error ? caught.message : String(caught);
+  }
+
+  postMessageToDashboard({
+    type: 'workflow-project-content-change-resolved',
+    projectId: command.projectId,
+    revisionId: command.revisionId,
+    resolution: command.resolution,
+    resolved,
+    ...(error ? { error } : {}),
+    requestId: command.requestId,
+  });
 }
 
 export async function handleDeleteWorkflowProjectCommand(

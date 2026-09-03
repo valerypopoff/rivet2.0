@@ -189,6 +189,68 @@ test('filesystem saveHostedProject rejects an existing path owned by another pro
   assert.equal(await fs.readFile(sidecars.dataset, 'utf8'), targetDatasets);
 });
 
+test('filesystem in-place save rejects a remote project or dataset edit made after load', async () => {
+  const suffix = randomUUID();
+  const projectName = `Conflict protected ${suffix}`;
+  const projectPath = path.join(workflowsRoot, `${projectName}.rivet-project`);
+  const sidecars = workflowFs.getProjectSidecarPaths(projectPath);
+  const initialContents = workflowFs.createBlankProjectFile(projectName);
+  const [initialProject] = loadProjectAndAttachedDataFromString(initialContents);
+  const initialDatasets = createDatasetsContents('initial');
+  await fs.writeFile(projectPath, initialContents, 'utf8');
+  await fs.writeFile(sidecars.dataset, initialDatasets, 'utf8');
+
+  const opened = await workflowStorageBackend.loadHostedProject(projectPath);
+  assert.match(opened.revisionId ?? '', /^fs-sha256:[a-f0-9]{64}$/);
+
+  const remoteContents = rewriteProjectMetadata(initialContents, {
+    title: projectName,
+    description: 'remote administrator edit',
+  });
+  const remoteDatasets = createDatasetsContents('remote');
+  await fs.writeFile(projectPath, remoteContents, 'utf8');
+  await fs.writeFile(sidecars.dataset, remoteDatasets, 'utf8');
+  const remote = await workflowStorageBackend.loadHostedProject(projectPath);
+  assert.notEqual(remote.revisionId, opened.revisionId);
+
+  await assert.rejects(
+    workflowStorageBackend.saveHostedProject({
+      projectPath,
+      contents: rewriteProjectMetadata(initialContents, {
+        title: projectName,
+        description: 'local editor edit',
+      }),
+      datasetsContents: initialDatasets,
+      projectId: initialProject.metadata.id,
+      saveIntent: 'in-place',
+      expectedRevisionId: opened.revisionId,
+    }),
+    (error: unknown) => {
+      assert.equal((error as { status?: number }).status, 409);
+      assert.match((error as Error).message, /changed since it was opened/i);
+      return true;
+    },
+  );
+
+  assert.equal(await fs.readFile(projectPath, 'utf8'), remoteContents);
+  assert.equal(await fs.readFile(sidecars.dataset, 'utf8'), remoteDatasets);
+
+  const saved = await workflowStorageBackend.saveHostedProject({
+    projectPath,
+    contents: rewriteProjectMetadata(remoteContents, {
+      title: projectName,
+      description: 'local editor edit after choosing keep mine',
+    }),
+    datasetsContents: remoteDatasets,
+    projectId: initialProject.metadata.id,
+    saveIntent: 'in-place',
+    expectedRevisionId: remote.revisionId,
+  });
+  assert.notEqual(saved.revisionId, remote.revisionId);
+  const [persistedProject] = loadProjectAndAttachedDataFromString(await fs.readFile(projectPath, 'utf8'));
+  assert.equal(persistedProject.metadata.description, 'local editor edit after choosing keep mine');
+});
+
 test('filesystem in-place save follows a project moved by another administrator instead of recreating its stale path', async () => {
   const suffix = randomUUID();
   const oldName = `Open before move ${suffix}`;

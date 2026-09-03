@@ -2,7 +2,7 @@ import { constants as fsConstants } from 'node:fs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
-import { deserializeDatasets, loadProjectAndAttachedDataFromFile } from '@valerypopoff/rivet2-node';
+import { deserializeDatasets, loadProjectAndAttachedDataFromFile, loadProjectAndAttachedDataFromString } from '@valerypopoff/rivet2-node';
 
 import type {
   WorkflowFolderItem,
@@ -96,7 +96,7 @@ import { NodeDatasetProvider } from '@valerypopoff/rivet2-node';
 import type { AttachedData, CombinedDataset, Project, ProjectId } from '@valerypopoff/rivet2-node';
 import { getFilesystemExecutionCache } from './filesystem-execution-cache.js';
 import { normalizeHostedProjectTitle, parseHostedProjectContents } from './hosted-project-contents.js';
-import { writeWorkflowProjectStatsCacheFromContents } from './project-stats.js';
+import { getFilesystemProjectRevisionId, writeWorkflowProjectStatsCacheFromContents } from './project-stats.js';
 import {
   checkFilesystemProjectTransactionHealth,
   initializeFilesystemProjectTransactions,
@@ -495,16 +495,17 @@ export async function loadHostedProject(projectPath: string): Promise<LoadHosted
       try {
         const root = await ensureWorkflowsRoot();
         return await withFilesystemWorkflowProjectRead(root, projectPath, async () => {
-          const [project, attachedData] = await loadProjectAndAttachedDataFromFile(projectPath);
+          const contents = await fs.readFile(projectPath, 'utf8');
+          const [project, attachedData] = loadProjectAndAttachedDataFromString(contents);
           void project;
           void attachedData;
           const datasetPath = getWorkflowDatasetPath(projectPath);
           const datasetsContents = (await pathExists(datasetPath)) ? await fs.readFile(datasetPath, 'utf8') : null;
 
           return {
-            contents: await fs.readFile(projectPath, 'utf8'),
+            contents,
             datasetsContents,
-            revisionId: null,
+            revisionId: getFilesystemProjectRevisionId(contents, datasetsContents),
           };
         });
       } catch (error) {
@@ -575,12 +576,27 @@ export async function saveHostedProject(options: {
               });
             }
             assertMatchingHostedProjectIdentity(targetProject, sourceProjectId, savedProjectPath);
+
+            if (options.saveIntent !== 'in-place' || !options.expectedRevisionId) {
+              return;
+            }
+
+            const currentContents = await fs.readFile(savedProjectPath, 'utf8');
+            const datasetPath = getWorkflowDatasetPath(savedProjectPath);
+            const currentDatasetsContents = (await pathExists(datasetPath))
+              ? await fs.readFile(datasetPath, 'utf8')
+              : null;
+            if (getFilesystemProjectRevisionId(currentContents, currentDatasetsContents) !== options.expectedRevisionId) {
+              throw createHttpError(409, 'Project has changed since it was opened. Reload it before saving again.', {
+                expose: true,
+              });
+            }
           },
           afterCommit: async () => {
             try {
               const projectName = path.basename(savedProjectPath, PROJECT_EXTENSION);
               const normalized = normalizeHostedProjectTitle(options.contents, projectName, 'Could not save project');
-              await writeWorkflowProjectStatsCacheFromContents(savedProjectPath, normalized.contents);
+              await writeWorkflowProjectStatsCacheFromContents(savedProjectPath, normalized.contents, options.datasetsContents);
             } finally {
               // The statistics cache is derived and may be rebuilt later. The
               // execution materialization is not: always discard it so a
@@ -593,7 +609,14 @@ export async function saveHostedProject(options: {
 
         return {
           path: savedProjectPath,
-          revisionId: null,
+          revisionId: getFilesystemProjectRevisionId(
+            normalizeHostedProjectTitle(
+              options.contents,
+              path.basename(savedProjectPath, PROJECT_EXTENSION),
+              'Could not save project',
+            ).contents,
+            options.datasetsContents,
+          ),
           project: null,
           created: !targetAlreadyExists,
         };

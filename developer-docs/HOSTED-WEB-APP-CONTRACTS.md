@@ -39,7 +39,20 @@ an `in-place` save intent in addition to the tab path. The server treats that pa
 as a hint: if another administrator has renamed or moved the project, it resolves
 the unique current owner by immutable ID, persists at that canonical path, and
 returns it to Rivet's workspace transition. A deleted or ambiguous owner is a
-conflict, never a new project at the stale path. **Save As** remains path-directed.
+conflict, never a new project at the stale path. **Save As** remains path-directed
+and intentionally does not reuse the open tab's in-place revision precondition.
+
+Normal hosted loads and saves also carry an opaque project-content revision. Managed
+storage uses its draft revision ID; filesystem storage hashes the canonical project
+and dataset sidecar together. A remote content revision seen through the workflow
+tree is held as pending rather than silently becoming the next save precondition.
+The dashboard keeps every open tab in place and presents a persistent **Reload** /
+**Keep mine** notification, even when the local tab is clean. Reload explicitly
+replaces the selected active or inactive tab snapshot with the latest server data;
+Keep mine authorizes only the next explicit in-place Save to overwrite that exact
+remote revision. Until either choice, save fails locally, and the server repeats the
+same compare-and-swap check so an unseen later remote write cannot be overwritten.
+This is a choice between saved versions, not a merge or live-collaboration feature.
 
 `onProjectSaved` is an observer, not part of persistence ownership. A synchronous
 throw or rejected promise from wrapper callback code is logged without changing a

@@ -1,4 +1,5 @@
 import type { Project, ProjectId } from '@valerypopoff/rivet2-core';
+import type { EvaluationProjectFileData } from '../../app/src/io/IOProvider.js';
 
 import type { RivetWorkspaceHost } from '../../app/src/host';
 import type { OpenedProjectInfo, OpenedProjectsInfo } from '../../app/src/state/savedGraphs';
@@ -23,13 +24,15 @@ export type SerializedEditorCommand = Extract<
       | 'refresh-open-project-from-disk'
       | 'compare-open-project-with'
       | 'workflow-paths-moved'
-      | 'reconcile-workflow-project-bindings';
+      | 'reconcile-workflow-project-bindings'
+      | 'resolve-workflow-project-content-change';
   }
 >;
 
 export type EditorCommandBridgeContext = {
   clearLoadedRecording(projectId?: ProjectId): void;
   getCurrentProject(): Project;
+  loadProjectData(path: string): Promise<{ project: Project; evaluation: EvaluationProjectFileData }>;
   getLoadedProject(): LoadedProjectInfo;
   getOpenProject(): ReturnType<typeof useOpenWorkflowProject>;
   getProjects(): OpenedProjectsInfo;
@@ -38,7 +41,6 @@ export type EditorCommandBridgeContext = {
   openedProjectPathAliases: Map<string, ProjectId>;
   preview: ReturnType<typeof usePreviewProjectLifecycle>;
   recording: ReturnType<typeof useWorkflowRecordingBridge>;
-  removeOpenedProjectSnapshot(projectId: ProjectId): void;
 };
 
 export function findOpenedProjectByPath(context: EditorCommandBridgeContext, path: string): OpenedProjectInfo | null {

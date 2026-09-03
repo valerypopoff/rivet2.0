@@ -35,6 +35,14 @@ export type DashboardToEditorCommand =
       type: 'reconcile-workflow-project-bindings';
       bindings: WorkflowProjectEditorBinding[];
       requestId?: string;
+    }
+  | {
+      type: 'resolve-workflow-project-content-change';
+      projectId: string;
+      path: string;
+      revisionId: string;
+      resolution: 'reload' | 'keep-local';
+      requestId?: string;
     };
 
 export type WorkflowProjectBindingReconciliation = {
@@ -43,6 +51,18 @@ export type WorkflowProjectBindingReconciliation = {
   toPath: string;
   fromTitle: string;
   toTitle: string;
+};
+
+export type WorkflowProjectContentChange = {
+  projectId: string;
+  path: string;
+  title: string;
+  revisionId: string;
+};
+
+export type WorkflowProjectBindingReconciliationResult = {
+  changes: WorkflowProjectBindingReconciliation[];
+  contentChanges: WorkflowProjectContentChange[];
 };
 
 export type EditorToDashboardEvent =
@@ -58,6 +78,16 @@ export type EditorToDashboardEvent =
   | {
       type: 'workflow-project-bindings-reconciled';
       changes: WorkflowProjectBindingReconciliation[];
+      contentChanges: WorkflowProjectContentChange[];
+      requestId?: string;
+    }
+  | {
+      type: 'workflow-project-content-change-resolved';
+      projectId: string;
+      revisionId: string;
+      resolution: 'reload' | 'keep-local';
+      resolved: boolean;
+      error?: string;
       requestId?: string;
     }
   | { type: 'project-saved'; path: string; hasNewerUnsavedChanges?: boolean };
@@ -90,6 +120,13 @@ const isWorkflowProjectBindingReconciliation = (value: unknown): value is Workfl
   typeof value.toPath === 'string' &&
   typeof value.fromTitle === 'string' &&
   typeof value.toTitle === 'string';
+
+const isWorkflowProjectContentChange = (value: unknown): value is WorkflowProjectContentChange =>
+  isRecord(value) &&
+  typeof value.projectId === 'string' &&
+  typeof value.path === 'string' &&
+  typeof value.title === 'string' &&
+  typeof value.revisionId === 'string';
 
 const isEditorShortcutModifier = (value: unknown): value is EditorShortcutModifier =>
   value === 'ctrl' || value === 'meta';
@@ -150,6 +187,14 @@ export function isDashboardToEditorCommand(value: unknown): value is DashboardTo
         value.bindings.every(isWorkflowProjectEditorBinding) &&
         (value.requestId == null || typeof value.requestId === 'string')
       );
+    case 'resolve-workflow-project-content-change':
+      return (
+        typeof value.projectId === 'string' &&
+        typeof value.path === 'string' &&
+        typeof value.revisionId === 'string' &&
+        (value.resolution === 'reload' || value.resolution === 'keep-local') &&
+        (value.requestId == null || typeof value.requestId === 'string')
+      );
     default:
       return false;
   }
@@ -184,6 +229,17 @@ export function isEditorToDashboardEvent(value: unknown): value is EditorToDashb
       return (
         Array.isArray(value.changes) &&
         value.changes.every(isWorkflowProjectBindingReconciliation) &&
+        Array.isArray(value.contentChanges) &&
+        value.contentChanges.every(isWorkflowProjectContentChange) &&
+        (value.requestId == null || typeof value.requestId === 'string')
+      );
+    case 'workflow-project-content-change-resolved':
+      return (
+        typeof value.projectId === 'string' &&
+        typeof value.revisionId === 'string' &&
+        (value.resolution === 'reload' || value.resolution === 'keep-local') &&
+        typeof value.resolved === 'boolean' &&
+        (value.error == null || typeof value.error === 'string') &&
         (value.requestId == null || typeof value.requestId === 'string')
       );
     case 'open-project-count-changed':

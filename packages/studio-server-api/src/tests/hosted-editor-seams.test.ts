@@ -74,7 +74,7 @@ test('hosted project IO keeps app-state cleanup and workspace commands on wrappe
   assert.match(editorCommandBridge, /handleDeleteWorkflowProjectCommand/);
   assert.match(editorCommandBridge, /handleWorkflowPathsMovedCommand/);
   assert.match(editorCommandBridge, /handleRefreshOpenProjectCommand/);
-  assert.match(editorCommandBridge, /setOpenedProjectSnapshots/);
+  assert.doesNotMatch(editorCommandBridge, /setOpenedProjectSnapshots/);
   assert.match(editorCommandBridge, /loadedRecordingState/);
   assert.match(editorCommandBridge, /projectId != null && loadedRecording\?\.projectId === projectId \? null : loadedRecording/);
   assert.doesNotMatch(editorCommandBridge, /clearLoadedRecordingForProjectState/);
@@ -86,7 +86,8 @@ test('hosted project IO keeps app-state cleanup and workspace commands on wrappe
   assert.match(editorProjectLifecycleCommands, /changeSource: 'external-wrapper-rename'/);
   assert.match(editorProjectLifecycleCommands, /deleteHostedProjectContextState\(projectId\)/);
   assert.match(editorProjectLifecycleCommands, /await clearHostedDatasetsForProject\(projectId\)/);
-  assert.match(editorProjectOpenCommands, /removeOpenedProjectSnapshot\(openedProject\.projectId\)/);
+  assert.match(editorProjectOpenCommands, /replaceProjectSnapshot\(openedProject\.projectId/);
+  assert.doesNotMatch(editorProjectOpenCommands, /removeOpenedProjectSnapshot/);
   assert.match(editorMessageBridge, /selectedExecutorState/);
   assert.match(editorMessageBridge, /setSelectedExecutor\('browser'\)/);
   assert.doesNotMatch(editorMessageBridge, /defaultExecutorState|setProjects|setOpenedProjects/);

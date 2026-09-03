@@ -2,11 +2,10 @@ import type { Project, ProjectId } from '@valerypopoff/rivet2-core';
 import { useSetAtom } from 'jotai';
 import { useEffect, useRef } from 'react';
 
-import type { RivetWorkspaceHost } from '../../app/src/host';
+import { useIOProvider, type RivetWorkspaceHost } from '../../app/src/host';
 import { loadedRecordingState } from '../../app/src/state/execution';
 import {
   loadedProjectState,
-  openedProjectSnapshotsState,
   type OpenedProjectsInfo,
 } from '../../app/src/state/savedGraphs';
 import { isDashboardToEditorCommand, isValidBridgeOrigin } from '../../studio-server-shared/editor-bridge';
@@ -23,6 +22,7 @@ import type {
 import {
   handleDeleteWorkflowProjectCommand,
   handleReconcileWorkflowProjectBindingsCommand,
+  handleResolveWorkflowProjectContentChangeCommand,
   handleWorkflowPathsMovedCommand,
 } from './editorProjectLifecycleCommands';
 import { handleOpenProjectCommand, handleRefreshOpenProjectCommand } from './editorProjectOpenCommands';
@@ -49,8 +49,8 @@ export function useEditorCommandBridge({
   workspaceHost: RivetWorkspaceHost;
 }) {
   const setLoadedProject = useSetAtom(loadedProjectState);
-  const setOpenedProjectSnapshots = useSetAtom(openedProjectSnapshotsState);
   const setLoadedRecording = useSetAtom(loadedRecordingState);
+  const ioProvider = useIOProvider();
   const projectsRef = useRef(projects);
   const loadedProjectRef = useRef(loadedProject);
   const currentProjectRef = useRef(currentProject);
@@ -73,6 +73,15 @@ export function useEditorCommandBridge({
         );
       },
       getCurrentProject: () => currentProjectRef.current,
+      loadProjectData: async (path) => {
+        const provider = ioProvider as {
+          loadProjectDataNoPrompt?: (path: string) => ReturnType<typeof ioProvider.loadProjectData>;
+        };
+        if (typeof provider.loadProjectDataNoPrompt !== 'function') {
+          throw new Error('The active IO provider does not support reloading projects by path.');
+        }
+        return provider.loadProjectDataNoPrompt(path);
+      },
       getLoadedProject: () => loadedProjectRef.current,
       getOpenProject: () => openProjectRef.current,
       getProjects: () => projectsRef.current,
@@ -81,16 +90,6 @@ export function useEditorCommandBridge({
       openedProjectPathAliases: openedProjectPathAliasesRef.current,
       preview,
       recording,
-      removeOpenedProjectSnapshot: (projectId) => {
-        setOpenedProjectSnapshots((snapshots) => {
-          if (!snapshots[projectId]) {
-            return snapshots;
-          }
-          const nextSnapshots = { ...snapshots };
-          delete nextSnapshots[projectId];
-          return nextSnapshots;
-        });
-      },
     };
 
     const runSerializedCommand = async (command: SerializedEditorCommand): Promise<void> => {
@@ -109,6 +108,8 @@ export function useEditorCommandBridge({
           return handleWorkflowPathsMovedCommand(context, command);
         case 'reconcile-workflow-project-bindings':
           return handleReconcileWorkflowProjectBindingsCommand(context, command);
+        case 'resolve-workflow-project-content-change':
+          return handleResolveWorkflowProjectContentChangeCommand(context, command);
       }
     };
 
@@ -149,6 +150,7 @@ export function useEditorCommandBridge({
         case 'compare-open-project-with':
         case 'workflow-paths-moved':
         case 'reconcile-workflow-project-bindings':
+        case 'resolve-workflow-project-content-change':
           enqueueSerializedCommand(event.data);
           break;
       }
@@ -156,5 +158,5 @@ export function useEditorCommandBridge({
 
     window.addEventListener('message', handler);
     return () => window.removeEventListener('message', handler);
-  }, [preview, recording, setLoadedProject, setLoadedRecording, setOpenedProjectSnapshots]);
+  }, [preview, recording, setLoadedProject, setLoadedRecording]);
 }

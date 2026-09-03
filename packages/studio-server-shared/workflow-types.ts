@@ -155,7 +155,7 @@ export type WorkflowProjectItem = {
   id: string;
   /** Immutable Rivet project metadata id used by runtime-scoped services. */
   projectMetadataId?: string;
-  /** Current managed draft revision. Filesystem storage intentionally omits this. */
+  /** Opaque current content revision used for optimistic hosted saves. */
   revisionId?: string | null;
   name: string;
   fileName: string;
@@ -204,7 +204,7 @@ export type WorkflowProjectPathMove = {
 };
 
 /**
- * The authoritative location and title for an editable workflow project.
+ * The authoritative location, title, and content revision for an editable workflow project.
  * Dashboard/editor reconciliation matches this stable project id rather than
  * trusting an old filename or folder path.
  */
@@ -212,6 +212,7 @@ export type WorkflowProjectEditorBinding = {
   projectId: string;
   path: string;
   title: string;
+  /** Optional only while an older server is rolling out; current servers always provide it. */
   revisionId?: string | null;
 };
 

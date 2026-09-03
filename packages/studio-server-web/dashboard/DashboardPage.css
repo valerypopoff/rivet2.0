@@ -193,6 +193,46 @@
   text-align: center;
 }
 
+.workflow-remote-project-change-notice {
+  display: grid;
+  gap: 10px;
+  max-width: 520px;
+}
+
+.workflow-remote-project-change-message {
+  text-align: left;
+}
+
+.workflow-remote-project-change-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.workflow-remote-project-change-actions button {
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+  padding: 5px 9px;
+}
+
+.workflow-remote-project-change-actions button:hover,
+.workflow-remote-project-change-actions button:focus-visible {
+  border-color: rgba(255, 255, 255, 0.6);
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.workflow-remote-project-change-reload {
+  border-color: rgba(255, 183, 77, 0.7) !important;
+}
+
+.workflow-remote-project-change-keep {
+  border-color: rgba(126, 226, 148, 0.7) !important;
+}
+
 .dashboard-toast-success {
   border-color: rgba(126, 226, 148, 0.45);
 }

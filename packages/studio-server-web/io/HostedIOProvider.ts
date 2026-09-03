@@ -36,10 +36,16 @@ import {
   getWorkflowTreeMutationHeaders,
 } from '../dashboard/workflowApi';
 import { deserializeHostedProjectPayloadAsync } from '../overrides/utils/deserializeProject';
+import {
+  assertHostedProjectRevisionCanSave,
+  bindHostedProjectRevision,
+  clearHostedProjectRevisionPath as clearTrackedHostedProjectRevisionPath,
+  getHostedProjectExpectedRevision,
+  remapHostedProjectRevisionPaths as remapTrackedHostedProjectRevisionPaths,
+} from './hostedProjectRevisionTracker';
 
 const API = RIVET_API_BASE_URL;
 const jotaiStore = getDefaultStore();
-const projectRevisionIdByPath = new Map<string, string | null>();
 let workflowStorageBackendPromise: Promise<'filesystem' | 'managed'> | null = null;
 
 type HostedDatasetProvider = AppDatasetProvider & {
@@ -47,20 +53,7 @@ type HostedDatasetProvider = AppDatasetProvider & {
 };
 
 export function clearHostedProjectRevisionPath(path: string | null | undefined): void {
-  if (!path) {
-    return;
-  }
-
-  projectRevisionIdByPath.delete(path);
-}
-
-/** Bind a managed revision to the canonical project path supplied by the workflow tree. */
-export function setHostedProjectRevisionPath(path: string | null | undefined, revisionId: string | null): void {
-  if (!path) {
-    return;
-  }
-
-  projectRevisionIdByPath.set(path, revisionId);
+  clearTrackedHostedProjectRevisionPath(path);
 }
 
 export function remapHostedProjectRevisionPaths(
@@ -69,25 +62,7 @@ export function remapHostedProjectRevisionPaths(
     toAbsolutePath: string;
   }>,
 ): void {
-  const moveMap = new Map<string, string>();
-
-  for (const move of moves) {
-    moveMap.set(move.fromAbsolutePath, move.toAbsolutePath);
-  }
-
-  if (moveMap.size === 0) {
-    return;
-  }
-
-  for (const [path, revisionId] of Array.from(projectRevisionIdByPath.entries())) {
-    const nextPath = moveMap.get(path);
-    if (!nextPath) {
-      continue;
-    }
-
-    projectRevisionIdByPath.delete(path);
-    projectRevisionIdByPath.set(nextPath, revisionId);
-  }
+  remapTrackedHostedProjectRevisionPaths(moves);
 }
 
 async function apiListProjects(): Promise<string[]> {
@@ -347,13 +322,12 @@ export class HostedIOProvider implements IOProvider {
       path: filePath,
       contents: serializeProject(project) as string,
       datasetsContents: datasets.length > 0 ? serializeDatasets(datasets) : null,
-      expectedRevisionId: projectRevisionIdByPath.get(filePath) ?? null,
+      expectedRevisionId: null,
       projectId: project.metadata.id,
       saveIntent: 'save-as',
     });
 
-    projectRevisionIdByPath.delete(filePath);
-    projectRevisionIdByPath.set(saved.path, saved.revisionId ?? null);
+    bindHostedProjectRevision(project.metadata.id, saved.path, saved.revisionId ?? null);
     return saved.path;
   }
 
@@ -364,19 +338,20 @@ export class HostedIOProvider implements IOProvider {
       throw new Error('Recording replay projects are read-only. Use Save As to create a new project file.');
     }
 
+    assertHostedProjectRevisionCanSave(project.metadata.id);
+
     await this.#flushEvaluationLibrary();
     const datasets = await this.#datasetProvider.exportDatasetsForProject(project.metadata.id);
     const saved = await apiSaveProject({
       path,
       contents: serializeProject(project) as string,
       datasetsContents: datasets.length > 0 ? serializeDatasets(datasets) : null,
-      expectedRevisionId: projectRevisionIdByPath.get(path) ?? null,
+      expectedRevisionId: getHostedProjectExpectedRevision(project.metadata.id, path),
       projectId: project.metadata.id,
       saveIntent: 'in-place',
     });
 
-    projectRevisionIdByPath.delete(path);
-    projectRevisionIdByPath.set(saved.path, saved.revisionId ?? null);
+    bindHostedProjectRevision(project.metadata.id, saved.path, saved.revisionId ?? null);
     return saved.path;
   }
 
@@ -513,9 +488,9 @@ export class HostedIOProvider implements IOProvider {
     }
 
     const loaded = await apiLoadProject(path);
-    projectRevisionIdByPath.set(path, loaded.revisionId ?? null);
     const data = loaded.contents;
     const { project: projectData, evaluation } = await deserializeHostedProjectPayload(data, path);
+    bindHostedProjectRevision(projectData.metadata.id, path, loaded.revisionId ?? null);
 
     if (loaded.datasetsContents) {
       const datasets = deserializeDatasets(loaded.datasetsContents);

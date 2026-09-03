@@ -39,6 +39,7 @@ import type {
 import { createResponseError, parseJsonResponse, parseTextResponse } from './apiRequest';
 
 const API = RIVET_API_BASE_URL;
+const WORKFLOW_TREE_CLIENT_ID_SESSION_KEY = 'rivet.workflow-tree-client-id.v1';
 let workflowTreeClientId: string | null = null;
 
 function createWorkflowTreeClientId(): string {
@@ -47,7 +48,27 @@ function createWorkflowTreeClientId(): string {
 }
 
 export function getWorkflowTreeClientId(): string {
-  workflowTreeClientId ??= createWorkflowTreeClientId();
+  if (workflowTreeClientId) {
+    return workflowTreeClientId;
+  }
+
+  try {
+    const stored = window.sessionStorage.getItem(WORKFLOW_TREE_CLIENT_ID_SESSION_KEY);
+    if (stored && /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(stored)) {
+      workflowTreeClientId = stored;
+      return workflowTreeClientId;
+    }
+  } catch {
+    // Session storage is unavailable in some private browser contexts. The
+    // in-memory fallback still preserves one ID within this bundle instance.
+  }
+
+  workflowTreeClientId = createWorkflowTreeClientId();
+  try {
+    window.sessionStorage.setItem(WORKFLOW_TREE_CLIENT_ID_SESSION_KEY, workflowTreeClientId);
+  } catch {
+    // Keep the generated in-memory id when persistence is unavailable.
+  }
   return workflowTreeClientId;
 }
 

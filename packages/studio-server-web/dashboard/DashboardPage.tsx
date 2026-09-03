@@ -11,7 +11,8 @@ import { fetchHostedConfig } from './workflowApi';
 import { normalizeWorkflowPath } from './workflowLibraryHelpers';
 import type {
   ProjectCompareSideLabels,
-  WorkflowProjectBindingReconciliation,
+  WorkflowProjectBindingReconciliationResult,
+  WorkflowProjectContentChange,
 } from '../../studio-server-shared/editor-bridge';
 import type { WorkflowProjectEditorBinding } from '../../studio-server-shared/workflow-types';
 import {
@@ -59,9 +60,11 @@ export const DashboardPage: FC = () => {
   const workflowPathMoveAckResolversRef = useRef(new Map<string, () => void>());
   const workflowPathMoveRequestSequenceRef = useRef(0);
   const workflowProjectBindingAckResolversRef = useRef(
-    new Map<string, (changes: WorkflowProjectBindingReconciliation[]) => void>(),
+    new Map<string, (result: WorkflowProjectBindingReconciliationResult) => void>(),
   );
   const workflowProjectBindingRequestSequenceRef = useRef(0);
+  const workflowProjectContentResolutionAckResolversRef = useRef(new Map<string, (resolved: boolean) => void>());
+  const workflowProjectContentResolutionRequestSequenceRef = useRef(0);
   const [openedProjectPath, setOpenedProjectPath] = useState('');
   const [activeWorkflowProjectPath, setActiveWorkflowProjectPath] = useState('');
   const [projectUnsavedChangesByPath, setProjectUnsavedChangesByPath] = useState<Record<string, boolean>>({});
@@ -247,7 +250,7 @@ export const DashboardPage: FC = () => {
   }, []);
 
   const handleWorkflowProjectBindingsReconciled = useCallback(
-    (changes: WorkflowProjectBindingReconciliation[], requestId?: string) => {
+    (result: WorkflowProjectBindingReconciliationResult, requestId?: string) => {
       if (!requestId) {
         return;
       }
@@ -258,7 +261,7 @@ export const DashboardPage: FC = () => {
       }
 
       workflowProjectBindingAckResolversRef.current.delete(requestId);
-      resolve(changes);
+      resolve(result);
     },
     [],
   );
@@ -309,16 +312,16 @@ export const DashboardPage: FC = () => {
   );
 
   const reconcileWorkflowProjectBindings = useCallback(
-    (bindings: WorkflowProjectEditorBinding[]): Promise<WorkflowProjectBindingReconciliation[]> => {
+    (bindings: WorkflowProjectEditorBinding[]): Promise<WorkflowProjectBindingReconciliationResult> => {
       if (!editorReady || bindings.length === 0) {
-        return Promise.resolve([]);
+        return Promise.resolve({ changes: [], contentChanges: [] });
       }
 
       const requestId = `workflow-project-bindings:${Date.now()}:${workflowProjectBindingRequestSequenceRef.current++}`;
-      const applied = new Promise<WorkflowProjectBindingReconciliation[]>((resolve) => {
+      const applied = new Promise<WorkflowProjectBindingReconciliationResult>((resolve) => {
         const timeoutId = window.setTimeout(() => {
           workflowProjectBindingAckResolversRef.current.delete(requestId);
-          resolve([]);
+          resolve({ changes: [], contentChanges: [] });
         }, 5_000);
 
         workflowProjectBindingAckResolversRef.current.set(requestId, (changes) => {
@@ -333,6 +336,37 @@ export const DashboardPage: FC = () => {
     [editorReady, postEditorCommand],
   );
 
+  const resolveWorkflowProjectContentChange = useCallback(
+    (change: WorkflowProjectContentChange, resolution: 'reload' | 'keep-local'): Promise<boolean> => {
+      if (!editorReady) {
+        return Promise.resolve(false);
+      }
+
+      const requestId = `workflow-project-content-change:${Date.now()}:${workflowProjectContentResolutionRequestSequenceRef.current++}`;
+      const applied = new Promise<boolean>((resolve) => {
+        const timeoutId = window.setTimeout(() => {
+          workflowProjectContentResolutionAckResolversRef.current.delete(requestId);
+          resolve(false);
+        }, 10_000);
+        workflowProjectContentResolutionAckResolversRef.current.set(requestId, (resolved) => {
+          window.clearTimeout(timeoutId);
+          resolve(resolved);
+        });
+      });
+
+      postEditorCommand({
+        type: 'resolve-workflow-project-content-change',
+        projectId: change.projectId,
+        path: change.path,
+        revisionId: change.revisionId,
+        resolution,
+        requestId,
+      });
+      return applied;
+    },
+    [editorReady, postEditorCommand],
+  );
+
   useEffect(
     () => () => {
       clearPendingWorkflowProjectOpen();
@@ -341,9 +375,13 @@ export const DashboardPage: FC = () => {
       }
       workflowPathMoveAckResolversRef.current.clear();
       for (const resolve of workflowProjectBindingAckResolversRef.current.values()) {
-        resolve([]);
+        resolve({ changes: [], contentChanges: [] });
       }
       workflowProjectBindingAckResolversRef.current.clear();
+      for (const resolve of workflowProjectContentResolutionAckResolversRef.current.values()) {
+        resolve(false);
+      }
+      workflowProjectContentResolutionAckResolversRef.current.clear();
     },
     [clearPendingWorkflowProjectOpen],
   );
@@ -431,6 +469,13 @@ export const DashboardPage: FC = () => {
     },
     onWorkflowPathsMovedApplied: handleWorkflowPathsMovedApplied,
     onWorkflowProjectBindingsReconciled: handleWorkflowProjectBindingsReconciled,
+    onWorkflowProjectContentChangeResolved: (requestId, resolved) => {
+      if (!requestId) return;
+      const resolve = workflowProjectContentResolutionAckResolversRef.current.get(requestId);
+      if (!resolve) return;
+      workflowProjectContentResolutionAckResolversRef.current.delete(requestId);
+      resolve(resolved);
+    },
   });
 
   const showEditorLoading = !editorReady;
@@ -463,6 +508,7 @@ export const DashboardPage: FC = () => {
           onDeleteProject={handleDeleteProject}
           onWorkflowPathsMoved={handleWorkflowPathsMoved}
           onReconcileWorkflowProjectBindings={reconcileWorkflowProjectBindings}
+          onResolveWorkflowProjectContentChange={resolveWorkflowProjectContentChange}
           onWorkflowProjectOpenIntent={handleWorkflowProjectOpenIntent}
           onWorkflowProjectOpenIntentCanceled={handleWorkflowProjectOpenIntentCanceled}
           onActiveWorkflowProjectPathChange={setActiveWorkflowProjectPath}

@@ -17,7 +17,7 @@ type TreeState = {
   revision: number;
 };
 
-function createProjectFixture(name: string): WorkflowProjectItem {
+function createProjectFixture(name: string, revisionId?: string): WorkflowProjectItem {
   const fileName = `${name}.rivet-project`;
 
   return {
@@ -28,6 +28,7 @@ function createProjectFixture(name: string): WorkflowProjectItem {
     relativePath: fileName,
     absolutePath: `/managed/workflows/${fileName}`,
     updatedAt: '2026-08-31T00:00:00.000Z',
+    ...(revisionId ? { revisionId } : {}),
     settings: {
       status: 'unpublished',
       endpointName: '',
@@ -376,4 +377,70 @@ test('a remote project rename updates the open tab title and notifies the user w
   await expect(editorFrame.locator('.projects-container .project.active', { hasText: renamedName })).toBeVisible();
   await expect(page.locator('.active-project-name')).toHaveText(renamedName);
   expect(projectLoadRequests).toBe(1);
+});
+
+test('a remote content edit keeps an open project in place and requires an explicit reload or keep-mine choice', async ({
+  page,
+}) => {
+  const projectName = 'Project edited remotely';
+  const project = createProjectFixture(projectName, 'revision-1');
+  const state: TreeState = { folders: [], projects: [project], revision: 0 };
+  let projectLoadRequests = 0;
+
+  await installMockEventSource(page);
+  await installTreeRoute(page, state, { count: 0 });
+  await page.route('**/api/projects/load', async (route) => {
+    projectLoadRequests += 1;
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        contents: createProjectContents(projectName),
+        datasetsContents: null,
+        revisionId: projectLoadRequests === 1 ? 'revision-1' : 'revision-3',
+      }),
+    });
+  });
+
+  await page.goto('/', { waitUntil: 'domcontentloaded' });
+  await authenticateIfNeeded(page);
+  await waitForDashboardReady(page);
+
+  await page.locator('.project-row', { hasText: projectName }).dblclick();
+  const editorFrame = page.frameLocator('iframe.dashboard-editor-frame');
+  await expect(editorFrame.locator('.projects-container .project.active', { hasText: projectName })).toBeVisible();
+  await dispatchProjectOpenedFromEditorFrame(page, project.absolutePath);
+
+  state.projects = [{ ...project, revisionId: 'revision-2' }];
+  state.revision += 1;
+  await emitTreeChange(page, {
+    epoch: 'playwright-tree-sync',
+    revision: state.revision,
+    sourceClientId: 'other-administrator',
+  });
+
+  const remoteChangeToast = page.locator('.Toastify__toast', { hasText: 'was changed by another administrator' });
+  await expect(remoteChangeToast).toContainText('Reload');
+  await expect(remoteChangeToast).toContainText('Keep mine');
+  await expect(remoteChangeToast.getByRole('button', { name: 'Reload' })).toBeVisible();
+  await expect(remoteChangeToast.getByRole('button', { name: 'Keep mine' })).toBeVisible();
+  await expect(editorFrame.locator('.projects-container .project.active', { hasText: projectName })).toBeVisible();
+  expect(projectLoadRequests).toBe(1);
+
+  await remoteChangeToast.getByRole('button', { name: 'Keep mine' }).click();
+  await expect(remoteChangeToast).toHaveCount(0);
+  expect(projectLoadRequests).toBe(1);
+
+  state.projects = [{ ...project, revisionId: 'revision-3' }];
+  state.revision += 1;
+  await emitTreeChange(page, {
+    epoch: 'playwright-tree-sync',
+    revision: state.revision,
+    sourceClientId: 'other-administrator',
+  });
+
+  await expect(remoteChangeToast).toBeVisible();
+  await remoteChangeToast.getByRole('button', { name: 'Reload' }).click();
+  await expect(remoteChangeToast).toHaveCount(0);
+  await expect.poll(() => projectLoadRequests).toBe(2);
 });

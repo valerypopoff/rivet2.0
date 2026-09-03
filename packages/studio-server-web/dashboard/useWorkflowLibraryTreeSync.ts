@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, type MutableRefObject } from 'react';
+import { createElement, useCallback, useEffect, useRef, type MutableRefObject } from 'react';
 import { toast } from 'react-toastify';
 
 import type {
@@ -7,7 +7,11 @@ import type {
   WorkflowTreeResponse,
   WorkflowTreeSyncState,
 } from './types';
-import type { WorkflowProjectBindingReconciliation } from '../../studio-server-shared/editor-bridge';
+import type {
+  WorkflowProjectBindingReconciliation,
+  WorkflowProjectBindingReconciliationResult,
+  WorkflowProjectContentChange,
+} from '../../studio-server-shared/editor-bridge';
 import type { WorkflowProjectEditorBinding } from '../../studio-server-shared/workflow-types';
 import { getWorkflowTreeClientId, openWorkflowTreeEventStream } from './workflowApi';
 import { flattenProjects, normalizeWorkflowPath } from './workflowLibraryHelpers';
@@ -84,7 +88,11 @@ export function useWorkflowLibraryTreeSync(options: {
   refreshFromRemoteChange: () => Promise<WorkflowTreeResponse | null>;
   reconcileProjectBindings: (
     bindings: WorkflowProjectEditorBinding[],
-  ) => Promise<WorkflowProjectBindingReconciliation[]>;
+  ) => Promise<WorkflowProjectBindingReconciliationResult>;
+  resolveProjectContentChange: (
+    change: WorkflowProjectContentChange,
+    resolution: 'reload' | 'keep-local',
+  ) => Promise<boolean>;
 }) {
   const currentSyncRef = options.currentSyncRef;
   const interactionActiveRef = useRef(options.isLocalTreeInteractionActive);
@@ -155,6 +163,86 @@ export function useWorkflowLibraryTreeSync(options: {
     [],
   );
 
+  const showRemoteProjectContentNotice = useCallback(
+    (change: WorkflowProjectContentChange, changedByAnotherAdministrator: boolean) => {
+      const toastId = `workflow-project-content-change:${change.projectId}`;
+      const actor = changedByAnotherAdministrator
+        ? 'another administrator'
+        : 'while this dashboard was reconnecting';
+      const render = ({ closeToast }: { closeToast?: () => void }) => {
+        let resolving = false;
+        const resolve = (resolution: 'reload' | 'keep-local', failureMessage: string) => {
+          if (resolving) {
+            return;
+          }
+          resolving = true;
+          void options.resolveProjectContentChange(change, resolution)
+            .then((resolved) => {
+              if (resolved) {
+                closeToast?.();
+              } else {
+                toast.error(failureMessage);
+                resolving = false;
+              }
+            })
+            .catch((error) => {
+              console.error('Failed to resolve remote project change:', error);
+              toast.error(failureMessage);
+              resolving = false;
+            });
+        };
+        return createElement(
+          'div',
+          { className: 'workflow-remote-project-change-notice' },
+          createElement(
+            'div',
+            { className: 'workflow-remote-project-change-message' },
+            `"${change.title}" was changed by ${actor}. Reload discards the version currently open in this tab; Keep mine lets your next Save overwrite the remote version.`,
+          ),
+          createElement(
+            'div',
+            { className: 'workflow-remote-project-change-actions' },
+            createElement(
+              'button',
+              {
+                type: 'button',
+                className: 'workflow-remote-project-change-reload',
+                onClick: () => {
+                  resolve('reload', `Could not reload "${change.title}". The remote-update warning remains active.`);
+                },
+              },
+              'Reload and discard mine',
+            ),
+            createElement(
+              'button',
+              {
+                type: 'button',
+                className: 'workflow-remote-project-change-keep',
+                onClick: () => {
+                  resolve('keep-local', `A newer version of "${change.title}" is available. Review the updated warning.`);
+                },
+              },
+              'Keep mine',
+            ),
+          ),
+        );
+      };
+
+      if (toast.isActive(toastId)) {
+        toast.update(toastId, { render: render as never });
+        return;
+      }
+      toast.info(render, {
+        toastId,
+        autoClose: false,
+        closeButton: false,
+        closeOnClick: false,
+        draggable: false,
+      });
+    },
+    [options],
+  );
+
   const drain = useCallback(() => {
     if (refreshInFlightRef.current || interactionActiveRef.current) {
       return;
@@ -187,11 +275,11 @@ export function useWorkflowLibraryTreeSync(options: {
 
         return options
           .reconcileProjectBindings(getWorkflowProjectEditorBindings(tree))
-          .then((reconciledChanges) => {
+          .then((reconciled) => {
             // A remote mutation can affect an inactive tab too. Surface each
             // actual ID-based rebind once rather than only inspecting the
             // currently active project reference.
-            for (const reconciledChange of reconciledChanges) {
+            for (const reconciledChange of reconciled.changes) {
               showOpenProjectNotice(
                 {
                   absolutePath: reconciledChange.fromPath,
@@ -207,8 +295,14 @@ export function useWorkflowLibraryTreeSync(options: {
               showOpenProjectNotice(
                 openedProjectBeforeRefresh,
                 tree,
-                reconciledChanges,
+                reconciled.changes,
                 pending.kind === 'change' && pending.sourceClientId !== getWorkflowTreeClientId(),
+              );
+            }
+            for (const contentChange of reconciled.contentChanges) {
+              showRemoteProjectContentNotice(
+                contentChange,
+                pending.kind === 'change' && pending.sourceClientId != null && pending.sourceClientId !== getWorkflowTreeClientId(),
               );
             }
           })
@@ -228,7 +322,7 @@ export function useWorkflowLibraryTreeSync(options: {
           drainRef.current();
         }
       });
-  }, [currentSyncRef, openedProjectRef, options, showOpenProjectNotice]);
+  }, [currentSyncRef, openedProjectRef, options, showOpenProjectNotice, showRemoteProjectContentNotice]);
 
   drainRef.current = drain;
 

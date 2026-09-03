@@ -235,6 +235,14 @@ test('remote project binding reconciliation validates immutable IDs and the ackn
           toTitle: 'Project',
         },
       ],
+      contentChanges: [
+        {
+          projectId: 'project-1',
+          path: '/managed/workflows/Moved/Project.rivet-project',
+          title: 'Project',
+          revisionId: 'revision-2',
+        },
+      ],
       requestId: 'reconcile-1',
     }),
     true,
@@ -243,6 +251,49 @@ test('remote project binding reconciliation validates immutable IDs and the ackn
     isEditorToDashboardEvent({
       type: 'workflow-project-bindings-reconciled',
       changes: [{ projectId: 'project-1' }],
+      contentChanges: [],
+    }),
+    false,
+  );
+  assert.equal(
+    isDashboardToEditorCommand({
+      type: 'resolve-workflow-project-content-change',
+      projectId: 'project-1',
+      path: '/managed/workflows/Project.rivet-project',
+      revisionId: 'revision-2',
+      resolution: 'keep-local',
+      requestId: 'content-change-1',
+    }),
+    true,
+  );
+  assert.equal(
+    isDashboardToEditorCommand({
+      type: 'resolve-workflow-project-content-change',
+      projectId: 'project-1',
+      path: '/managed/workflows/Project.rivet-project',
+      revisionId: 'revision-2',
+      resolution: 'overwrite',
+    }),
+    false,
+  );
+  assert.equal(
+    isEditorToDashboardEvent({
+      type: 'workflow-project-content-change-resolved',
+      projectId: 'project-1',
+      revisionId: 'revision-2',
+      resolution: 'reload',
+      resolved: true,
+      requestId: 'content-change-1',
+    }),
+    true,
+  );
+  assert.equal(
+    isEditorToDashboardEvent({
+      type: 'workflow-project-content-change-resolved',
+      projectId: 'project-1',
+      revisionId: 'revision-2',
+      resolution: 'reload',
+      resolved: 'true',
     }),
     false,
   );
