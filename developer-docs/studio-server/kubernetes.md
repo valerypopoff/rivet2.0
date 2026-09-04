@@ -1196,21 +1196,11 @@ Download the manifest from the successful workflow run into this repository, for
 
 #### One-time release-lineage cutover
 
-Before the first workflow using manifest format 2, seed the durable pointer from the promoted legacy manifest that exactly matches the currently promoted runtime images. From an authenticated Docker session, with that manifest downloaded beneath this checkout:
+The **Build Images** workflow normally performs the format-2 lineage cutover without operator work. When the durable `production` pointer is absent, it first inspects all four promoted `latest` images. A partially present image set fails closed. For a complete image set, the workflow searches this repository's non-expired promoted-manifest artifacts from `main`, rejects fork-owned run evidence, validates each candidate manifest, and cross-checks its source repository, ref, and commit against the artifact run. It accepts a manifest only when its proxy, web, API, and executor repositories and immutable digests also exactly match the promoted images. It republishes that content-addressed manifest, advances the durable pointer, and binds the new candidate to it as its predecessor.
 
-```bash
-manifest=artifacts/releases/<current-run-id>/release-manifest.json
-digest="$(node deploy/studio-server/scripts/create-release-manifest.mjs digest --input "$manifest")"
-reference="ghcr.io/valerypopoff/rivet2.0-studio-server/release-manifest:manifest-${digest#sha256:}"
-node deploy/studio-server/scripts/release-manifest-oci.mjs push --reference "$reference" --input "$manifest"
-node deploy/studio-server/scripts/release-manifest-oci.mjs retag \
-  --source "$reference" \
-  --destination ghcr.io/valerypopoff/rivet2.0-studio-server/release-manifest:production
-```
+The next candidate can therefore read a version-1 promoted predecessor and write a version-2 lineage manifest. Legacy manifests remain deployable and usable as a first predecessor, but a failed legacy release cannot itself authorize automated forward rollback because it has no predecessor record.
 
-The next candidate can read a version-1 promoted predecessor and writes a version-2 lineage manifest. Legacy manifests remain deployable and usable as a first predecessor, but a failed legacy release cannot itself authorize automated forward rollback because it has no predecessor record.
-
-If no matching legacy manifest can be verified, run **Build Images** manually with `allow_release_lineage_bootstrap` only after explicitly accepting that this one transition has no automated rollback target. An ordinary push refuses to erase an existing image history silently. A true initial installation with neither promoted images nor a manifest pointer bootstraps automatically.
+If the complete legacy image set has no retained matching manifest, automatic recovery cannot prove a rollback target and still fails closed. Only that exceptional case requires a manual **Build Images** dispatch with `allow_release_lineage_bootstrap`, after explicitly accepting that the transition has no automated rollback to the pre-lineage image set. A true initial installation with neither promoted images nor a manifest pointer bootstraps automatically. Registry/API failures and partial promoted image sets are never treated as an empty registry.
 
 First render exactly what would be installed. This changes no cluster state and retains the rendered manifest plus values under `artifacts/kubernetes-production-release/<release>/`:
 

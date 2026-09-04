@@ -178,6 +178,24 @@ test('release-manifest OCI artifacts are data-only and registry failures fail cl
   assert.equal(isMissingRegistryManifestError('denied: permission_denied'), false);
 });
 
+test('Build Images automatically repairs an exact retained production lineage before manual fallback', () => {
+  const workflow = fs.readFileSync(path.join(rootDir, '.github', 'workflows', 'studio-server-images.yml'), 'utf8');
+
+  assert.match(workflow, /allow_release_lineage_bootstrap/);
+  assert.match(
+    workflow,
+    /The durable production release-manifest pointer is missing and only \$promoted_image_count of 4 promoted latest images exist/,
+  );
+  assert.match(workflow, /actions\/artifacts\?per_page=100/);
+  assert.match(workflow, /\.workflow_run\.repository_id == \.workflow_run\.head_repository_id/);
+  assert.match(
+    workflow,
+    /\.state == "promoted" and \.source\.repository == \$source_repository and \.source\.ref == "refs\/heads\/main" and \.source\.sha == \$source_sha and \.images\[\$service\]\.repository == \$repository and \.images\[\$service\]\.digest == \$digest/,
+  );
+  assert.match(workflow, /Recovered the missing durable production pointer from retained artifact/);
+  assert.match(workflow, /Automatic recovery cannot prove the rollback target/);
+});
+
 test('release-manifest OCI tags bind the semantic digest and production repository', () => {
   const manifestDigest = digest('a');
   const source = `ghcr.io/example/releases:manifest-${'a'.repeat(64)}`;

@@ -60,7 +60,7 @@ on:
         default: false
         type: boolean
       allow_release_lineage_bootstrap:
-        description: Explicitly start a new production release-manifest chain when no durable predecessor manifest exists.
+        description: Allow a non-rollbackable bootstrap only when exact automatic predecessor recovery is impossible.
         required: false
         default: false
         type: boolean
@@ -218,6 +218,8 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Resolve exact production predecessor
         shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           node deploy/studio-server/scripts/release-manifest-oci.mjs pull \
@@ -230,15 +232,127 @@ jobs:
             exit 0
           fi
 
-          if docker buildx imagetools inspect "${IMAGE_NAMESPACE}/api:latest" >/dev/null 2>&1; then
-            if [[ "$ALLOW_RELEASE_LINEAGE_BOOTSTRAP" != "true" ]]; then
-              echo "::error::Promoted images exist, but the durable production release-manifest pointer is missing. Seed it from the matching promoted legacy manifest, or manually dispatch this workflow with allow_release_lineage_bootstrap after accepting that this transition has no automated rollback target."
+          declare -A promoted_digests=()
+          promoted_image_count=0
+          for service in proxy web api executor; do
+            image="${IMAGE_NAMESPACE}/${service}:latest"
+            if digest="$(docker buildx imagetools inspect "$image" --format '{{.Manifest.Digest}}' 2>/dev/null)"; then
+              if [[ ! "$digest" =~ ^sha256:[a-f0-9]{64}$ ]]; then
+                echo "::error::Promoted image $image returned an invalid digest: $digest"
+                exit 1
+              fi
+              promoted_digests["$service"]="$digest"
+              promoted_image_count="$((promoted_image_count + 1))"
+            fi
+          done
+
+          if [[ "$promoted_image_count" -eq 0 ]]; then
+            echo "::notice::No promoted images or release manifest exist; creating the initial bootstrap release."
+            exit 0
+          fi
+
+          if [[ "$promoted_image_count" -ne 4 ]]; then
+            echo "::error::The durable production release-manifest pointer is missing and only $promoted_image_count of 4 promoted latest images exist. Refusing to infer a partial predecessor."
+            exit 1
+          fi
+
+          recovery_root="$RUNNER_TEMP/rivet-release-lineage-recovery"
+          artifact_rows="$recovery_root/artifacts.tsv"
+          rm -rf "$recovery_root"
+          mkdir -p "$recovery_root"
+          trap 'rm -rf "$recovery_root"' EXIT
+
+          artifact_query_succeeded=false
+          for attempt in 1 2 3; do
+            if gh api --paginate \
+              "/repos/${GITHUB_REPOSITORY}/actions/artifacts?per_page=100" \
+              --jq '.artifacts[] | select(.expired == false and (.name | startswith("studio-server-release-manifest-")) and .workflow_run.head_branch == "main" and .workflow_run.repository_id == .workflow_run.head_repository_id) | [.id, .workflow_run.head_sha] | @tsv' \
+              > "$artifact_rows"; then
+              artifact_query_succeeded=true
+              break
+            fi
+            sleep "$((attempt * 2))"
+          done
+          if [[ "$artifact_query_succeeded" != true ]]; then
+            echo "::error::Could not inspect retained release-manifest artifacts after three attempts."
+            exit 1
+          fi
+
+          recovered=false
+          while IFS=$'\t' read -r artifact_id artifact_head_sha; do
+            [[ "$artifact_id" =~ ^[0-9]+$ ]] || continue
+            [[ "$artifact_head_sha" =~ ^[a-f0-9]{40}$ ]] || continue
+            artifact_dir="$recovery_root/artifact-$artifact_id"
+            artifact_zip="$recovery_root/artifact-$artifact_id.zip"
+            mkdir -p "$artifact_dir"
+
+            artifact_downloaded=false
+            for attempt in 1 2 3; do
+              if gh api "/repos/${GITHUB_REPOSITORY}/actions/artifacts/${artifact_id}/zip" > "$artifact_zip"; then
+                artifact_downloaded=true
+                break
+              fi
+              sleep "$((attempt * 2))"
+            done
+            if [[ "$artifact_downloaded" != true ]]; then
+              echo "::error::Could not download retained release-manifest artifact $artifact_id after three attempts."
               exit 1
             fi
-            echo "::warning::Explicitly starting a new release lineage while promoted images already exist. This transition is non-rollbackable through the automated forward-rollback command."
-          else
-            echo "::notice::No promoted images or release manifest exist; creating the initial bootstrap release."
+            if ! unzip -q "$artifact_zip" -d "$artifact_dir"; then
+              echo "::error::Retained release-manifest artifact $artifact_id is not a valid zip archive."
+              exit 1
+            fi
+
+            while IFS= read -r -d '' manifest; do
+              if ! manifest_digest="$(node deploy/studio-server/scripts/create-release-manifest.mjs digest --input "$manifest" 2>/dev/null)"; then
+                continue
+              fi
+
+              matches_promoted_images=true
+              for service in proxy web api executor; do
+                if ! jq -e \
+                  --arg service "$service" \
+                  --arg repository "${IMAGE_NAMESPACE}/${service}" \
+                  --arg digest "${promoted_digests[$service]}" \
+                  --arg source_repository "$GITHUB_REPOSITORY" \
+                  --arg source_sha "$artifact_head_sha" \
+                  '.state == "promoted" and .source.repository == $source_repository and .source.ref == "refs/heads/main" and .source.sha == $source_sha and .images[$service].repository == $repository and .images[$service].digest == $digest' \
+                  "$manifest" >/dev/null; then
+                  matches_promoted_images=false
+                  break
+                fi
+              done
+              if [[ "$matches_promoted_images" != true ]]; then
+                continue
+              fi
+
+              manifest_reference="${RELEASE_MANIFEST_REPOSITORY}:manifest-${manifest_digest#sha256:}"
+              node deploy/studio-server/scripts/release-manifest-oci.mjs push \
+                --reference "$manifest_reference" \
+                --input "$manifest"
+              node deploy/studio-server/scripts/release-manifest-oci.mjs retag \
+                --source "$manifest_reference" \
+                --destination "${RELEASE_MANIFEST_REPOSITORY}:production"
+              cp "$manifest" "$CURRENT_PRODUCTION_MANIFEST"
+              echo "::notice::Recovered the missing durable production pointer from retained artifact $artifact_id after verifying all four promoted image digests."
+              recovered=true
+              break
+            done < <(find "$artifact_dir" -type f -name '*.json' -print0)
+
+            if [[ "$recovered" == true ]]; then
+              break
+            fi
+          done < "$artifact_rows"
+
+          if [[ "$recovered" == true ]]; then
+            exit 0
           fi
+
+          if [[ "$ALLOW_RELEASE_LINEAGE_BOOTSTRAP" != "true" ]]; then
+            echo "::error::Promoted images exist, but no retained promoted release manifest exactly matches all four image digests. Automatic recovery cannot prove the rollback target. Manually dispatch with allow_release_lineage_bootstrap only if losing automated rollback to the pre-lineage release is acceptable."
+            exit 1
+          fi
+          echo "::warning::Explicitly starting a new release lineage while promoted images already exist. This transition is non-rollbackable through the automated forward-rollback command."
       - name: Materialize immutable candidate manifest
         shell: bash
         run: |
