@@ -11,7 +11,7 @@ const hasPotentialAuditJsonRows = (text) => text.split(/\r?\n/).some((line) => l
 const isTransientAuditFailure = (result) =>
   result.status !== 0 &&
   !hasPotentialAuditJsonRows(result.stdout) &&
-  /RequestError: Timeout awaiting 'socket'|\b(?:ECONNRESET|ECONNREFUSED|ETIMEDOUT|EAI_AGAIN)\b/u.test(
+  /RequestError: Timeout awaiting 'socket'|\b(?:ECONNRESET|ECONNREFUSED|ETIMEDOUT|EAI_AGAIN)\b|Response Code: (?:408|425|429|500|502|503|504)\b/u.test(
     `${result.stdout}\n${result.stderr}`,
   );
 
@@ -59,6 +59,7 @@ const runAudit = async () => {
         env: {
           ...process.env,
           YARN_HTTP_TIMEOUT: process.env.YARN_HTTP_TIMEOUT ?? '120000',
+          YARN_NPM_REGISTRY_SERVER: process.env.YARN_NPM_REGISTRY_SERVER ?? 'https://registry.npmjs.org',
         },
       },
     );
@@ -67,7 +68,7 @@ const runAudit = async () => {
     if (!isTransientAuditFailure(result) || attempt === maxAuditAttempts) break;
 
     console.warn(
-      `Dependency audit attempt ${attempt} timed out while contacting the registry; retrying once in ${auditRetryDelayMs / 1000}s.`,
+      `Dependency audit attempt ${attempt} hit a transient registry failure; retrying once in ${auditRetryDelayMs / 1000}s.`,
     );
     await waitForAuditRetry();
   }

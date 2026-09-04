@@ -683,12 +683,13 @@ non-JSON line. A nonzero audit command exit must first contain JSON finding outp
 then is accepted only when at least one audit finding row was parsed, so a
 reporter-only or transport failure cannot look like a clean audit. It fails on every
 critical finding and every unreviewed high finding. A single retry is reserved for
-known transient registry socket/DNS failures; malformed reports and all other command
-failures surface immediately. The audit child alone defaults to a two-minute HTTP
-timeout (while honoring an explicit `YARN_HTTP_TIMEOUT` override); normal dependency
-installation keeps its existing configuration. It passes Yarn's `--no-deprecations`
-option because deprecation annotations require a metadata request for every audited
-package but do not affect vulnerability findings. Temporary high-severity
+known transient registry socket, DNS, rate-limit, timeout, and server failures; malformed
+reports and all other command failures surface immediately. The audit child alone defaults to npm's canonical
+`https://registry.npmjs.org` registry and a two-minute HTTP timeout, while honoring
+explicit `YARN_NPM_REGISTRY_SERVER` and `YARN_HTTP_TIMEOUT` overrides. Normal dependency
+installation keeps its existing registry and timeout configuration. The audit passes
+Yarn's `--no-deprecations` option because deprecation annotations require a metadata
+request for every audited package but do not affect vulnerability findings. Temporary high-severity
 exceptions live in
 [`security/dependency-audit-exceptions.json`](../security/dependency-audit-exceptions.json)
 and must name their package/advisory, normalized direct dependents, scope, reason,
