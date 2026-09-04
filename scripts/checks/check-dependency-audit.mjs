@@ -4,6 +4,18 @@ import { resolve } from 'node:path';
 
 const rootDirectory = resolve(import.meta.dirname, '../..');
 const defaultExceptionsPath = resolve(rootDirectory, 'security/dependency-audit-exceptions.json');
+const auditRetryDelayMs = 10_000;
+const maxAuditAttempts = 2;
+const isYarnReporterLine = (line) => /^\s*➤\s+YN\d{4}:\s/u.test(line);
+const hasPotentialAuditJsonRows = (text) => text.split(/\r?\n/).some((line) => line.trimStart().startsWith('{'));
+const isTransientAuditFailure = (result) =>
+  result.status !== 0 &&
+  !hasPotentialAuditJsonRows(result.stdout) &&
+  /RequestError: Timeout awaiting 'socket'|\b(?:ECONNRESET|ECONNREFUSED|ETIMEDOUT|EAI_AGAIN)\b|Response Code: (?:408|425|429|500|502|503|504)\b/u.test(
+    `${result.stdout}\n${result.stderr}`,
+  );
+
+const waitForAuditRetry = () => new Promise((resolve) => setTimeout(resolve, auditRetryDelayMs));
 
 const parseArguments = (arguments_) => {
   const inputIndex = arguments_.indexOf('--input');
@@ -21,32 +33,63 @@ const parseAuditRows = (text) =>
     .replace(/^\uFEFF/, '')
     .split(/\r?\n/)
     .filter(Boolean)
-    .map((line, index) => {
+    .flatMap((line, index) => {
+      if (isYarnReporterLine(line)) return [];
       try {
-        return JSON.parse(line);
+        return [JSON.parse(line)];
       } catch (error) {
         throw new Error(`Unable to parse dependency audit line ${index + 1}.`, { cause: error });
       }
     })
     .filter((row) => row.children?.Severity);
 
-const runAudit = () => {
-  const result = spawnSync(
-    process.execPath,
-    ['.yarn/releases/yarn-4.17.1.cjs', 'npm', 'audit', '--all', '--recursive', '--json'],
-    {
-      cwd: rootDirectory,
-      encoding: 'utf8',
-      maxBuffer: 64 * 1024 * 1024,
-    },
-  );
+const runAudit = async () => {
+  let result;
+  for (let attempt = 1; attempt <= maxAuditAttempts; attempt += 1) {
+    result = spawnSync(
+      process.execPath,
+      ['.yarn/releases/yarn-4.17.1.cjs', 'npm', 'audit', '--all', '--recursive', '--json', '--no-deprecations'],
+      {
+        cwd: rootDirectory,
+        encoding: 'utf8',
+        maxBuffer: 64 * 1024 * 1024,
+        // The audit excludes non-security deprecation annotations, so this
+        // security-only bulk request does not fan out into metadata requests
+        // for every package in the dependency graph.
+        env: {
+          ...process.env,
+          YARN_HTTP_TIMEOUT: process.env.YARN_HTTP_TIMEOUT ?? '120000',
+          YARN_NPM_REGISTRY_SERVER: process.env.YARN_NPM_REGISTRY_SERVER ?? 'https://registry.npmjs.org',
+        },
+      },
+    );
 
-  if (result.error) throw result.error;
+    if (result.error) throw result.error;
+    if (!isTransientAuditFailure(result) || attempt === maxAuditAttempts) break;
+
+    console.warn(
+      `Dependency audit attempt ${attempt} hit a transient registry failure; retrying once in ${auditRetryDelayMs / 1000}s.`,
+    );
+    await waitForAuditRetry();
+  }
+
   if (!result.stdout.trim()) {
     throw new Error(`Dependency audit produced no report.${result.stderr ? `\n${result.stderr.trim()}` : ''}`);
   }
+  if (result.status !== 0 && !hasPotentialAuditJsonRows(result.stdout)) {
+    const diagnostic = [result.stdout.trim(), result.stderr.trim()].filter(Boolean).join('\n');
+    throw new Error(
+      `Dependency audit exited with status ${result.status ?? 'unknown'} before producing JSON findings.${
+        diagnostic ? `\n${diagnostic}` : ''
+      }`,
+    );
+  }
 
-  return result.stdout;
+  return {
+    output: result.stdout,
+    status: result.status,
+    stderr: result.stderr,
+  };
 };
 
 const loadExceptions = (path) => {
@@ -108,7 +151,15 @@ const formatFinding = (row) => {
 };
 
 const { inputPath, exceptionsPath } = parseArguments(process.argv.slice(2));
-const rows = parseAuditRows(inputPath ? readFileSync(inputPath, 'utf8') : runAudit());
+const auditResult = inputPath ? undefined : await runAudit();
+const rows = parseAuditRows(inputPath ? readFileSync(inputPath, 'utf8') : auditResult.output);
+if (auditResult && auditResult.status !== 0 && rows.length === 0) {
+  throw new Error(
+    `Dependency audit exited with status ${auditResult.status ?? 'unknown'} before producing any finding rows.${
+      auditResult.stderr ? `\n${auditResult.stderr.trim()}` : ''
+    }`,
+  );
+}
 const exceptions = loadExceptions(exceptionsPath);
 const now = new Date();
 const usedExceptions = new Set();

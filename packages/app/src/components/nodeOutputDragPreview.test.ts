@@ -31,9 +31,91 @@ test('drag previews use the same output preview sizing as hovered nodes', () => 
   );
   assert.match(nodeInlineOutputSource, /resolveNodeOutputPreviewMode\(\{\s*isOutputExpanded,\s*isHovered,/);
   assert.match(nodeStylesSource, /\.node:is\(:hover, \.hovered, \.showHoverControls\) \.node-output-inner,/);
-  assert.match(nodeStylesSource, /\.node:is\(:hover, \.hovered, \.showHoverControls\) \.multi-node-output/);
 });
 
+test('multi-run output keeps its pager and selected output on one card surface', () => {
+  const nodeInlineOutputSource = readFileSync(join(componentsDir, 'nodeOutput', 'NodeInlineOutput.tsx'), 'utf8');
+  const nodeStylesSource = readFileSync(join(componentsDir, 'nodeStyles.ts'), 'utf8');
+  const multiProcessSource = nodeInlineOutputSource.slice(
+    nodeInlineOutputSource.indexOf('const NodeOutputMultiProcess'),
+  );
+
+  assert.match(
+    multiProcessSource,
+    /<div className="multi-node-output">[\s\S]*?<NodeOutputPager[\s\S]*?<NodeOutputSingleProcess[\s\S]*?<\/div>/,
+  );
+  assert.doesNotMatch(multiProcessSource, /<div className="node-output multi">/);
+  assert.match(
+    nodeStylesSource,
+    /\.node-output\.multi \.multi-node-output > \.node-output-inner \{[\s\S]*?border-radius: 0;[\s\S]*?margin: 0;[\s\S]*?border-top: 0;/,
+  );
+  assert.match(nodeStylesSource, /\.picker \{[\s\S]*?border-bottom: 1px solid var\(--node-output-picker-border\);/);
+});
+
+test('LLM Chat round history keeps the inline pager row and uses the compact fullscreen pager', () => {
+  const nodeInlineOutputSource = readFileSync(join(componentsDir, 'nodeOutput', 'NodeInlineOutput.tsx'), 'utf8');
+  const nodeFullscreenOutputSource = readFileSync(
+    join(componentsDir, 'nodeOutput', 'NodeFullscreenOutput.tsx'),
+    'utf8',
+  );
+  const llmChatPagerSource = readFileSync(join(componentsDir, 'nodeOutput', 'LLMChatOutputHistoryPager.tsx'), 'utf8');
+  const nodeStylesSource = readFileSync(join(componentsDir, 'nodeStyles.ts'), 'utf8');
+
+  assert.match(
+    llmChatPagerSource,
+    /className=\{`picker llm-chat-output-history-pager\$\{compact \? ' compact' : ''\}`\}[\s\S]*?className="picker-left"[\s\S]*?className="picker-page llm-chat-output-history-pager-label"[\s\S]*?className="picker-right"/,
+  );
+  assert.match(nodeInlineOutputSource, /has-llm-chat-output-history-pager[\s\S]*?has-frozen-output-notice/);
+  assert.match(
+    llmChatPagerSource,
+    /compact\?: boolean;[\s\S]*?resolveLLMChatOutputHistoryEntry\(entries, selectedPage\);[\s\S]*?\{selectedPageLabel\}/,
+  );
+  assert.doesNotMatch(llmChatPagerSource, /compactPageNumber|compact \? compactPageNumber/);
+  assert.match(
+    nodeFullscreenOutputSource,
+    /const llmChatOutputHistoryPager = hasLlmChatOutputHistoryPager \?[\s\S]*?<LLMChatOutputHistoryPager[\s\S]*?compact[\s\S]*?\/>/,
+  );
+  assert.match(
+    nodeFullscreenOutputSource,
+    /<header className="fullscreen-header">[\s\S]*?<div className="fullscreen-output-pagers">[\s\S]*?<NodeOutputPager[\s\S]*?\{llmChatOutputHistoryPager\}[\s\S]*?<FullscreenNodeOutputToolbar/,
+  );
+  assert.match(
+    nodeFullscreenOutputSource,
+    /\.picker\.llm-chat-output-history-pager\.compact[\s\S]*?max-width: min\(320px, 34vw\);[\s\S]*?text-overflow: ellipsis;/,
+  );
+  assert.doesNotMatch(
+    nodeFullscreenOutputSource,
+    /<FullscreenOutputSearchContext\.Provider[\s\S]*?<LLMChatOutputHistoryPager/,
+  );
+  assert.match(
+    nodeInlineOutputSource,
+    /hasLlmChatOutputHistoryPager: boolean;[\s\S]*?'overlay-buttons after-output-history-pager'/,
+  );
+  assert.match(
+    nodeInlineOutputSource,
+    /data\.status\?\.type === 'error' && displayedData\.status\?\.type !== 'error' && 'llm-chat-history-non-error'/,
+  );
+  assert.match(
+    nodeStylesSource,
+    /\.node\.error \.node-output:not\(\.multi\) \.node-output-inner\.llm-chat-history-non-error[\s\S]*?background-color: var\(--node-output-surface-bg\);[\s\S]*?border-top-color: var\(--node-output-success-border\);/,
+  );
+  assert.match(
+    nodeStylesSource,
+    /\.node-output\.multi \.multi-node-output:has\(> \.node-output-inner\.errored\)[\s\S]*?background-color: var\(--node-output-error-bg\);[\s\S]*?border-top-color: var\(--node-output-error-border\);/,
+  );
+  assert.match(
+    nodeStylesSource,
+    /\.picker\.llm-chat-output-history-pager \{[\s\S]*?\.llm-chat-output-history-pager-label \{[\s\S]*?flex: 1;/,
+  );
+  assert.match(
+    nodeStylesSource,
+    /\.node-output-inner\.has-llm-chat-output-history-pager:not\(\.has-frozen-output-notice\)[\s\S]*?> \.picker\.llm-chat-output-history-pager \{[\s\S]*?margin-top: calc\(-1 \* var\(--node-output-surface-padding\)\);/,
+  );
+  assert.match(
+    nodeStylesSource,
+    /\.overlay-buttons\.after-output-history-pager \{[\s\S]*?top: calc\(var\(--node-output-actions-top\) \+ 42px\);[\s\S]*?has-llm-chat-output-history-pager:not\(\.has-frozen-output-notice\)[\s\S]*?top: calc\(var\(--node-output-actions-top\) \+ 30px\);[\s\S]*?has-frozen-output-notice[\s\S]*?top: calc\(var\(--node-output-actions-top\) \+ 70px\);/,
+  );
+});
 test('node drags clear stale canvas hover state', () => {
   const nodeCanvasSource = readFileSync(join(componentsDir, 'NodeCanvas.tsx'), 'utf8');
 
@@ -176,7 +258,7 @@ test('inline node output actions reserve flow space without moving their hit tar
 
   assert.match(
     nodeInlineOutputSource,
-    /const hasPromptDesignerAction = node\.type === 'llmChatV2' && \(node as LLMChatV2Node\)\.data\.configurationMode !== 'profile';/,
+    /const hasPromptDesignerAction =\s*node\.type === 'llmChatV2' && \(node as LLMChatV2Node\)\.data\.configurationMode !== 'profile';/,
   );
   assert.match(nodeInlineOutputSource, /const hasResponseInspectorAction = node\.type === 'llmChatV2';/);
   assert.match(nodeInlineOutputSource, /<AgentResponseInspector[\s\S]*?renderInPortal \/>/);

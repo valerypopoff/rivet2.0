@@ -298,12 +298,14 @@ describe('InMemoryRivetLLMProfileHealthStore', () => {
           },
           getPluginConfig: () => '',
           project: { metadata: { id: 'project' as ProjectId } },
-          node: { id: 'profile' as NodeId },
+          node: { id: 'profile' as NodeId, title: '  Primary route  ' },
         } as any,
       });
 
     const first = resolveWithHeader('route-a');
     const second = resolveWithHeader('route-b');
+    assert.equal(first.profileName, 'Primary route');
+    assert.equal(first.healthIdentity?.profileName, 'Primary route');
     assert.notEqual(first.healthIdentity?.key, second.healthIdentity?.key);
     assert.doesNotMatch(JSON.stringify(first.healthIdentity), /route-a|credential-secret/);
   });

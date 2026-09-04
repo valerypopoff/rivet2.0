@@ -14,10 +14,12 @@ import {
   type GraphId,
   type GraphInputNode,
   type Project,
+  serializeDatasets,
+  serializeProject,
 } from '@valerypopoff/rivet2-core';
 import { useCurrentExecution } from './useCurrentExecution';
 import { graphState } from '../state/graph';
-import { settingsState, showNodeRunDurationsState } from '../state/settings';
+import { recordExecutionsState, settingsState, showNodeRunDurationsState } from '../state/settings';
 import { useExecutorSessionRuntime } from '../providers/ExecutorSessionContext.js';
 import { useRemoteDebugger } from './useRemoteDebugger';
 import { fillMissingSettingsFromEnvironmentVariables } from '../utils/tauri';
@@ -26,8 +28,10 @@ import { useStableCallback } from './useStableCallback';
 import { toast, type Id as ToastId } from 'react-toastify';
 import { applyEvaluationRunEvent, applyEvaluationRunSnapshot, evaluationsState } from '../state/evaluations';
 import {
+  assertPortableJson,
   EvaluationGraphExecutionError,
   type EvaluationExecutionMetrics,
+  type EvaluationRun,
   type EvaluationRecordingReference,
   type EvaluationRunPurpose,
   type PortableJson,
@@ -49,7 +53,14 @@ import {
 } from './remoteExecutorHelpers.js';
 import { handleError } from '../utils/errorHandling.js';
 import { getLLMChatV2ApiKeyEnvVarNames } from '../utils/chatV2ProviderEnv.js';
-import { useEnvironmentProvider, useEvaluationRunStore } from '../providers/ProvidersContext.js';
+import {
+  useDatasetProvider,
+  useEnvironmentProvider,
+  useEvaluationRunStore,
+  useHostedEvaluationCoordinator,
+  useLocalExecutionRecordingPersistence,
+  type LocalExecutionRecordingPersistenceProvider,
+} from '../providers/ProvidersContext.js';
 import { pluginsState } from '../state/plugins.js';
 import { withDerivedProjectPluginSpecs } from '../utils/pluginUsage.js';
 import { getProjectContextValues } from '../utils/projectContextValues.js';
@@ -93,6 +104,63 @@ type RemoteEvaluationMetricsState = {
   providerAttempts: PortableJson[];
 };
 
+type RemoteLocalExecutionRecordingCapture = {
+  correlationId: string;
+  errorMessage?: string;
+  graphId: GraphId;
+  hasUnhealthyLLMProfileHealthEvidence: boolean;
+  isTerminal: boolean;
+  project: Project;
+  projectId: ProjectId;
+  projectPath: string;
+  provider: LocalExecutionRecordingPersistenceProvider;
+  recorder: ExecutionRecorder;
+  recorderAbortController: AbortController;
+  startedAt: number;
+  status: 'succeeded' | 'failed' | 'suspicious';
+};
+
+function createLocalExecutionRecordingCorrelationId(): string {
+  const id = globalThis.crypto?.randomUUID?.() ?? `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+  return `rvt-local-${id}`;
+}
+
+function getRemoteExecutionErrorMessage(data: unknown): string | undefined {
+  const error = (data as { error?: unknown } | undefined)?.error;
+  if (error instanceof Error) return error.message;
+  return typeof error === 'string' && error.length > 0 ? error : undefined;
+}
+
+function captureRemoteLocalExecutionTerminal(
+  capture: RemoteLocalExecutionRecordingCapture | undefined,
+  message: string,
+  data: unknown,
+): void {
+  if (!capture) return;
+
+  if (message === 'llmProfileAttempt') {
+    const event = data as ProcessEventMessageMap['llmProfileAttempt'];
+    if (event.stage === 'health-update' && event.outcome === 'success' && event.healthOutcome === 'unhealthy') {
+      capture.hasUnhealthyLLMProfileHealthEvidence = true;
+    }
+    return;
+  }
+
+  if (message === 'graphError' || message === 'error') {
+    capture.status = 'failed';
+    capture.errorMessage ??= getRemoteExecutionErrorMessage(data);
+  }
+
+  if (message === 'done' || message === 'error' || message === 'abort') {
+    capture.isTerminal = true;
+    if (message === 'abort') {
+      capture.status = 'suspicious';
+      capture.errorMessage ??= getRemoteExecutionErrorMessage(data);
+      capture.recorderAbortController.abort();
+    }
+  }
+}
+
 function createRemoteEvaluationMetricsState(): RemoteEvaluationMetricsState {
   return {
     metrics: { durationMs: 0, modelCallCount: 0, toolCallCount: 0, toolFailureCount: 0 },
@@ -127,6 +195,7 @@ function collectRemoteEvaluationEvent(
       outcome: event.outcome,
       finishReason: event.finishReason ?? null,
       profileIndex: event.profileIndex ?? null,
+      profileName: event.profileName ?? null,
       attemptIndex: event.attemptIndex,
       roundIndex: event.roundIndex ?? null,
       durationMs: event.durationMs ?? null,
@@ -144,6 +213,7 @@ function collectRemoteEvaluationEvent(
       stage: event.stage,
       outcome: event.outcome,
       profileIndex: event.profileIndex ?? null,
+      profileName: event.profileName ?? null,
       attemptIndex: event.attemptIndex ?? null,
       roundIndex: event.roundIndex,
       status: event.status ?? null,
@@ -191,20 +261,27 @@ function createRemoteEvaluationRecordingReference(): EvaluationRecordingReferenc
 
 export function useRemoteExecutor() {
   const executorSession = useExecutorSessionRuntime();
+  const datasetProvider = useDatasetProvider();
   const environmentProvider = useEnvironmentProvider();
   const evaluationRunStore = useEvaluationRunStore();
+  const hostedEvaluationCoordinator = useHostedEvaluationCoordinator();
   const store = useStore();
   const activeGraphRequestIdRef = useRef<RemoteRunRequestId | null>(null);
   // An evaluation owns several remote graph requests at once, so it cannot
   // share the normal one-request editor abort state.
   const evaluationAbortControllerRef = useRef<AbortController | null>(null);
+  const hostedEvaluationRunRef = useRef<{ projectId: ProjectId; runId: string; observerId: number } | null>(null);
   const evaluationProjectIdRef = useRef<ProjectId | null>(null);
+  const hostedEvaluationObservationIdRef = useRef(0);
   const earlyResultRequestIdsRef = useRef(new Set<RemoteRunRequestId>());
   const webAppStoragePatchCallbacksByRequestIdRef = useRef(
     new Map<RemoteRunRequestId, (storagePatch: RivetWebAppStorage) => void>(),
   );
   const responseTraceByRequestIdRef = useRef(new Map<RemoteRunRequestId, RemoteResponseTraceState>());
   const evaluationMetricsByRequestIdRef = useRef(new Map<RemoteRunRequestId, RemoteEvaluationMetricsState>());
+  const localRecordingCapturesByRequestIdRef = useRef(
+    new Map<RemoteRunRequestId, RemoteLocalExecutionRecordingCapture>(),
+  );
   const externalDebuggerRunFlushedFrozenOutputsRef = useRef(false);
   const remoteDebuggerDiagnosticsRef = useRef(createRemoteDebuggerDiagnostics());
   const unscopedEventRoutingRef = useRef(createUnscopedRemoteExecutionRoutingState());
@@ -226,6 +303,7 @@ export function useRemoteExecutor() {
   });
   const graph = useAtomValue(graphState);
   const savedSettings = useAtomValue(settingsState);
+  const recordExecutions = useAtomValue(recordExecutionsState);
   const showNodeRunDurations = useAtomValue(showNodeRunDurationsState);
   const [evaluations, setEvaluationsState] = useAtom(evaluationsState);
   const setUserInputQuestions = useSetAtom(userInputModalQuestionsState);
@@ -234,6 +312,58 @@ export function useRemoteExecutor() {
   const setFrozenNodeOutputs = useSetAtom(frozenNodeOutputsState);
   const loadedProject = useAtomValue(loadedProjectState);
   const pluginStates = useAtomValue(pluginsState);
+  const localExecutionRecordingPersistence = useLocalExecutionRecordingPersistence();
+
+  const finalizeRemoteLocalExecutionRecording = useStableCallback(async (requestId: RemoteRunRequestId) => {
+    const capture = localRecordingCapturesByRequestIdRef.current.get(requestId);
+    if (!capture) return;
+    localRecordingCapturesByRequestIdRef.current.delete(requestId);
+
+    if (!capture.hasUnhealthyLLMProfileHealthEvidence) return;
+
+    if (!capture.isTerminal || capture.recorder.events.length === 0) {
+      await capture.provider.markUnavailable(capture.correlationId).catch((error) => {
+        logRuntimeDebug('Remote LLM-profile replay could not capture a terminal recording.', {
+          error,
+          graphId: capture.graphId,
+          projectId: capture.projectId,
+        });
+      });
+      return;
+    }
+
+    try {
+      const durationMs = Math.max(0, performance.now() - capture.startedAt);
+      const datasetsContents = serializeDatasets(await datasetProvider.exportDatasetsForProject(capture.projectId));
+      await capture.provider.persist({
+        projectId: capture.projectId,
+        projectPath: capture.projectPath,
+        projectContents: serializeProject(capture.project) as string,
+        datasetsContents,
+        recordingSerialized: capture.recorder.serialize(),
+        status: capture.status,
+        durationMs,
+        errorMessage: capture.errorMessage,
+        executionIdentity: {
+          correlationId: capture.correlationId,
+          graphId: capture.graphId,
+        },
+      });
+    } catch (error) {
+      await capture.provider.markUnavailable(capture.correlationId).catch((outcomeError) => {
+        logRuntimeDebug('Remote LLM-profile replay could not report a failed local recording.', {
+          error: outcomeError,
+          graphId: capture.graphId,
+          projectId: capture.projectId,
+        });
+      });
+      logRuntimeDebug('Remote LLM-profile replay was not retained by the hosted server.', {
+        error,
+        graphId: capture.graphId,
+        projectId: capture.projectId,
+      });
+    }
+  });
 
   const remoteDebugger = useRemoteDebugger({
     onDisconnect: () => {
@@ -247,6 +377,9 @@ export function useRemoteExecutor() {
       webAppStoragePatchCallbacksByRequestIdRef.current.clear();
       responseTraceByRequestIdRef.current.clear();
       evaluationMetricsByRequestIdRef.current.clear();
+      for (const capture of localRecordingCapturesByRequestIdRef.current.values()) {
+        capture.recorderAbortController.abort();
+      }
       executorSession.setActiveGraphRunRequestId(null);
       if (store.get(projectState).metadata.id !== project.metadata.id) {
         return;
@@ -294,6 +427,11 @@ export function useRemoteExecutor() {
   }, [executorSession]);
 
   const handleExecutorMessage: RemoteExecutorMessageHandler = useStableCallback((message, data, requestId) => {
+    captureRemoteLocalExecutionTerminal(
+      requestId == null ? undefined : localRecordingCapturesByRequestIdRef.current.get(requestId),
+      message,
+      data,
+    );
     if (store.get(projectState).metadata.id !== project.metadata.id) {
       return;
     }
@@ -620,6 +758,86 @@ export function useRemoteExecutor() {
         });
       }
 
+      const remoteLocalRecordingProjectPath =
+        recordExecutions &&
+        sessionState.target?.type === 'internal-hosted' &&
+        options.webAppStorage === undefined &&
+        loadedProject.path &&
+        localExecutionRecordingPersistence
+          ? loadedProject.path
+          : undefined;
+      const remoteLocalRecordingProvider =
+        remoteLocalRecordingProjectPath &&
+        localExecutionRecordingPersistence &&
+        (await localExecutionRecordingPersistence.getCapability().catch(() => false))
+          ? localExecutionRecordingPersistence
+          : undefined;
+      const remoteLocalRecordingCorrelationId = remoteLocalRecordingProvider
+        ? createLocalExecutionRecordingCorrelationId()
+        : undefined;
+      const remoteLocalRecordingProject: Project =
+        projectData === undefined
+          ? projectWithCurrentGraph
+          : { ...projectWithCurrentGraph, data: structuredClone(projectData) };
+      let remoteLocalRecordingRequestId: RemoteRunRequestId | undefined;
+      const startRemoteLocalExecutionRecording = (requestId: RemoteRunRequestId) => {
+        if (!remoteLocalRecordingProvider || !remoteLocalRecordingCorrelationId || !remoteLocalRecordingProjectPath) {
+          return;
+        }
+
+        const capture: RemoteLocalExecutionRecordingCapture = {
+          correlationId: remoteLocalRecordingCorrelationId,
+          graphId: graphToRun,
+          hasUnhealthyLLMProfileHealthEvidence: false,
+          isTerminal: false,
+          project: remoteLocalRecordingProject,
+          projectId: project.metadata.id,
+          projectPath: remoteLocalRecordingProjectPath,
+          provider: remoteLocalRecordingProvider,
+          recorder: new ExecutionRecorder(),
+          recorderAbortController: new AbortController(),
+          startedAt: performance.now(),
+          status: 'succeeded',
+        };
+        const recorderPromise = executorSession.recordSocketEvents((socket) =>
+          capture.recorder.recordSocket(socket, {
+            requestId,
+            signal: capture.recorderAbortController.signal,
+          }),
+        );
+        if (!recorderPromise) {
+          void capture.provider.markUnavailable(capture.correlationId).catch((error) => {
+            logRuntimeDebug('Remote LLM-profile replay could not attach to the executor socket.', {
+              error,
+              graphId: graphToRun,
+              projectId: project.metadata.id,
+            });
+          });
+          return;
+        }
+
+        remoteLocalRecordingRequestId = requestId;
+        localRecordingCapturesByRequestIdRef.current.set(requestId, capture);
+        void recorderPromise.then(
+          () => finalizeRemoteLocalExecutionRecording(requestId),
+          async (error) => {
+            localRecordingCapturesByRequestIdRef.current.delete(requestId);
+            await capture.provider.markUnavailable(capture.correlationId).catch((outcomeError) => {
+              logRuntimeDebug('Remote LLM-profile replay could not report its unavailable recording.', {
+                error: outcomeError,
+                graphId: graphToRun,
+                projectId: project.metadata.id,
+              });
+            });
+            logRuntimeDebug('Remote LLM-profile replay socket capture failed.', {
+              error,
+              graphId: graphToRun,
+              projectId: project.metadata.id,
+            });
+          },
+        );
+      };
+
       const contextValues = getProjectContextValues(projectContext);
       let runToNodeIds = options.to;
       let preloadData: Record<NodeId, Outputs> | undefined;
@@ -662,59 +880,75 @@ export function useRemoteExecutor() {
         useEditorCache: true,
         captureNodeTimings: showNodeRunDurations,
         returnWhenGraphOutputsReady: options.returnWhenGraphOutputsReady,
+        ...(remoteLocalRecordingCorrelationId == null
+          ? {}
+          : { llmProfileHealthExecutionCorrelationId: remoteLocalRecordingCorrelationId }),
         ...(options.webAppStorage === undefined ? {} : { webAppStorage: options.webAppStorage }),
       };
 
       if (options.waitForResults) {
-        return await sendPendingRemoteGraphRunRequest({
-          abortSignal: options.abortSignal,
-          disconnectErrorMessage: 'Remote executor disconnected before the graph run could be sent.',
-          executorSession,
-          onRequestCreated: (requestId) => {
-            activeGraphRequestIdRef.current = requestId;
-            executorSession.setActiveGraphRunRequestId(requestId);
-            if (options.onWebAppStoragePatch) {
-              webAppStoragePatchCallbacksByRequestIdRef.current.set(requestId, options.onWebAppStoragePatch);
-            }
-            if (options.onResponseTrace) {
-              responseTraceByRequestIdRef.current.set(requestId, {
-                callback: options.onResponseTrace,
-                events: [],
-                startedAt: Date.now(),
-                delivered: false,
-              });
-            }
-          },
-          onRequestSettled: (requestId) => {
-            if (earlyResultRequestIdsRef.current.has(requestId)) {
-              return;
-            }
-            webAppStoragePatchCallbacksByRequestIdRef.current.delete(requestId);
-            if (!earlyResultRequestIdsRef.current.has(requestId)) {
-              responseTraceByRequestIdRef.current.delete(requestId);
-            }
-            clearActiveRemoteRunRequestIfMatches(activeGraphRequestIdRef, requestId);
-            if (requestId === executorSession.getActiveGraphRunRequestId()) {
-              executorSession.setActiveGraphRunRequestId(null);
-            }
-          },
-          onProgress: options.onProgress,
-          payload,
-          sendAbort: (requestId) => remoteDebugger.send('abort', { requestId }),
-          sendRun: (payload) => remoteDebugger.send('run', payload),
-        });
+        try {
+          return await sendPendingRemoteGraphRunRequest({
+            abortSignal: options.abortSignal,
+            disconnectErrorMessage: 'Remote executor disconnected before the graph run could be sent.',
+            executorSession,
+            onRequestCreated: (requestId) => {
+              activeGraphRequestIdRef.current = requestId;
+              executorSession.setActiveGraphRunRequestId(requestId);
+              startRemoteLocalExecutionRecording(requestId);
+              if (options.onWebAppStoragePatch) {
+                webAppStoragePatchCallbacksByRequestIdRef.current.set(requestId, options.onWebAppStoragePatch);
+              }
+              if (options.onResponseTrace) {
+                responseTraceByRequestIdRef.current.set(requestId, {
+                  callback: options.onResponseTrace,
+                  events: [],
+                  startedAt: Date.now(),
+                  delivered: false,
+                });
+              }
+            },
+            onRequestSettled: (requestId) => {
+              if (earlyResultRequestIdsRef.current.has(requestId)) {
+                return;
+              }
+              webAppStoragePatchCallbacksByRequestIdRef.current.delete(requestId);
+              if (!earlyResultRequestIdsRef.current.has(requestId)) {
+                responseTraceByRequestIdRef.current.delete(requestId);
+              }
+              clearActiveRemoteRunRequestIfMatches(activeGraphRequestIdRef, requestId);
+              if (requestId === executorSession.getActiveGraphRunRequestId()) {
+                executorSession.setActiveGraphRunRequestId(null);
+              }
+            },
+            onProgress: options.onProgress,
+            payload,
+            sendAbort: (requestId) => remoteDebugger.send('abort', { requestId }),
+            sendRun: (payload) => remoteDebugger.send('run', payload),
+          });
+        } catch (error) {
+          const capture =
+            remoteLocalRecordingRequestId == null
+              ? undefined
+              : localRecordingCapturesByRequestIdRef.current.get(remoteLocalRecordingRequestId);
+          if (capture && !capture.isTerminal) capture.recorderAbortController.abort();
+          throw error;
+        }
       }
 
       const runRequest = startActiveRemoteGraphRunRequest({
         activeRequestIdRef: activeGraphRequestIdRef,
         createRequestId: () => executorSession.createRemoteExecutionRequest(),
         payload,
+        onRequestCreated: startRemoteLocalExecutionRecording,
         sendRun: (payload) => remoteDebugger.send('run', payload),
       });
       if (runRequest.type === 'sent') {
         executorSession.setActiveGraphRunRequestId(runRequest.requestId);
       }
       if (runRequest.type === 'send-failed') {
+        const capture = localRecordingCapturesByRequestIdRef.current.get(runRequest.requestId);
+        if (capture) capture.recorderAbortController.abort();
         currentExecution.clearNodeRunDataPreservationForNextStart();
         logRuntimeDebug('Remote graph run skipped because executor session disconnected before send.', {
           target: executorSession.getRuntimeState().target?.type ?? 'none',
@@ -731,6 +965,55 @@ export function useRemoteExecutor() {
     }
     return undefined;
   };
+
+  const observeHostedEvaluationRun = useStableCallback((input: { projectId: ProjectId; run: EvaluationRun }) => {
+    const existing = hostedEvaluationRunRef.current;
+    if (existing && (existing.projectId !== input.projectId || existing.runId !== input.run.id)) {
+      throw new Error('A Studio Server evaluation is already queued or running for this editor session.');
+    }
+
+    const observerId = hostedEvaluationObservationIdRef.current + 1;
+    hostedEvaluationObservationIdRef.current = observerId;
+    hostedEvaluationRunRef.current = { projectId: input.projectId, runId: input.run.id, observerId };
+    const isActiveEvaluationProject = () => store.get(projectState).metadata.id === input.projectId;
+    const updateActiveProjectEvaluationState = (update: Parameters<typeof setEvaluationsState>[0]): void => {
+      if (isActiveEvaluationProject()) setEvaluationsState(update);
+    };
+    updateActiveProjectEvaluationState((state) => ({
+      ...applyEvaluationRunSnapshot(state, input.run),
+      runningSuiteId: input.run.suiteId,
+    }));
+
+    void (async () => {
+      while (hostedEvaluationRunRef.current?.observerId === observerId) {
+        await new Promise<void>((resolve) => setTimeout(resolve, 1_000));
+        try {
+          const refreshed = await evaluationRunStore.get({ projectId: input.projectId, runId: input.run.id });
+          if (!refreshed) continue;
+          const terminal =
+            refreshed.executionStatus === 'completed' ||
+            refreshed.executionStatus === 'canceled' ||
+            refreshed.executionStatus === 'error';
+          if (isActiveEvaluationProject()) {
+            updateActiveProjectEvaluationState((state) => ({
+              ...applyEvaluationRunSnapshot(state, refreshed),
+              ...(terminal ? { runningSuiteId: undefined } : {}),
+            }));
+          }
+          if (!terminal) continue;
+          if (hostedEvaluationRunRef.current?.observerId === observerId) hostedEvaluationRunRef.current = null;
+          if (isActiveEvaluationProject()) toast.info(formatEvaluationCompletionToast(refreshed));
+          return;
+        } catch (error) {
+          logRuntimeDebug('Failed to refresh a Studio Server evaluation run.', {
+            error,
+            evaluationProjectId: input.projectId,
+            runId: input.run.id,
+          });
+        }
+      }
+    })();
+  });
 
   const tryRunEvaluation = useStableCallback(
     async ({
@@ -760,6 +1043,58 @@ export function useRemoteExecutor() {
       const evaluationProjectId = projectForEvaluation.metadata.id;
       if (!evaluationProjectId)
         throw new Error('The loaded project is missing its project ID, so the evaluation cannot be stored.');
+      const isActiveEvaluationProject = () => store.get(projectState).metadata.id === evaluationProjectId;
+      const updateActiveProjectEvaluationState = (update: Parameters<typeof setEvaluationsState>[0]): void => {
+        if (isActiveEvaluationProject()) setEvaluationsState(update);
+      };
+
+      // The editor currently tracks one durable hosted run so the global stop
+      // action always addresses the right server-side job. Keep that fence even
+      // if an operator disables the feature flag while the run is in flight;
+      // otherwise a fallback evaluation could start and become impossible to
+      // cancel from this editor session.
+      if (hostedEvaluationRunRef.current) {
+        throw new Error('A Studio Server evaluation is already queued or running for this editor session.');
+      }
+      const hostedCapability = hostedEvaluationCoordinator
+        ? await hostedEvaluationCoordinator.getCapability()
+        : undefined;
+      if (hostedCapability?.enabled && hostedEvaluationCoordinator) {
+        if (!loadedProject.path) {
+          throw new Error(
+            'Save this project before running it on Studio Server so the server can resolve project references safely.',
+          );
+        }
+
+        const runKind = purpose === 'evaluation' ? 'evaluation' : 'execution benchmark';
+        const projectSnapshot: Project = {
+          ...projectForEvaluation,
+          ...(projectData === undefined ? {} : { data: structuredClone(projectData) }),
+        };
+        const datasetsContents = serializeDatasets(await datasetProvider.exportDatasetsForProject(evaluationProjectId));
+        const contextValues = getProjectContextValues(projectContext);
+        for (const [name, value] of Object.entries(contextValues)) {
+          assertPortableJson(value, `project context ${name}`);
+        }
+        const serializedProject = serializeProject(projectSnapshot);
+        if (typeof serializedProject !== 'string') {
+          throw new Error('Could not serialize the current project for Studio Server evaluation.');
+        }
+        const run = await hostedEvaluationCoordinator.submit({
+          projectContents: serializedProject,
+          projectPath: loadedProject.path,
+          datasetsContents,
+          evaluationData: evaluations.data,
+          dataset,
+          suiteId,
+          purpose,
+          contextValues: contextValues as Record<string, PortableJson>,
+        });
+        observeHostedEvaluationRun({ projectId: evaluationProjectId, run });
+        toast.info(`Queued ${runKind} on Studio Server: ${suite.name}`);
+        return run;
+      }
+
       if (evaluationAbortControllerRef.current) {
         throw new Error('An evaluation is already running for this project.');
       }
@@ -770,7 +1105,6 @@ export function useRemoteExecutor() {
       const evaluationAbortController = new AbortController();
       evaluationAbortControllerRef.current = evaluationAbortController;
       evaluationProjectIdRef.current = evaluationProjectId;
-      const isActiveEvaluationProject = () => store.get(projectState).metadata.id === evaluationProjectId;
       const ensureActiveEvaluationProject = () => {
         if (evaluationAbortController.signal.aborted) throw evaluationAbortController.signal.reason;
         if (isActiveEvaluationProject()) return;
@@ -778,9 +1112,6 @@ export function useRemoteExecutor() {
         const reason = new DOMException('Active project changed.', 'AbortError');
         evaluationAbortController.abort(reason);
         throw reason;
-      };
-      const updateActiveProjectEvaluationState = (update: Parameters<typeof setEvaluationsState>[0]): void => {
-        if (isActiveEvaluationProject()) setEvaluationsState(update);
       };
       let runningToastId: ToastId | undefined;
       try {
@@ -822,6 +1153,7 @@ export function useRemoteExecutor() {
             uploadRemoteExecutorProjectIfNeeded({
               cache: uploadCacheRef.current,
               project: projectForEvaluation,
+              projectData,
               sessionKey: getRemoteExecutorUploadSessionKey(sessionState),
               settings,
               transport: {
@@ -958,7 +1290,54 @@ export function useRemoteExecutor() {
     },
   );
 
+  const tryRetryInterruptedEvaluation = useStableCallback(
+    async ({ runId, jobIds }: { runId: string; jobIds: readonly string[] }) => {
+      if (!hostedEvaluationCoordinator) {
+        throw new Error('Retrying interrupted trials is available only for hosted Studio Server evaluations.');
+      }
+      const uniqueJobIds = [...new Set(jobIds)];
+      if (uniqueJobIds.length === 0) throw new Error('Select one or more interrupted trials to retry.');
+      const activeRun = hostedEvaluationRunRef.current;
+      if (activeRun && activeRun.runId !== runId) {
+        throw new Error('A different Studio Server evaluation is already queued or running for this editor session.');
+      }
+
+      const run = await hostedEvaluationCoordinator.retryInterrupted({
+        projectId: project.metadata.id,
+        runId,
+        jobIds: uniqueJobIds,
+      });
+      if (!run) {
+        throw new Error('This hosted Evaluation is no longer available. Refresh the Runs tab and try again.');
+      }
+      observeHostedEvaluationRun({ projectId: project.metadata.id, run });
+      toast.info(`Requeued ${uniqueJobIds.length} interrupted hosted trial${uniqueJobIds.length === 1 ? '' : 's'}.`);
+      return run;
+    },
+  );
+
   function tryAbortGraph() {
+    const hostedRun = hostedEvaluationRunRef.current;
+    if (hostedRun?.projectId === project.metadata.id && hostedEvaluationCoordinator) {
+      void hostedEvaluationCoordinator
+        .requestCancel(hostedRun)
+        .then((run) => {
+          if (!run || store.get(projectState).metadata.id !== hostedRun.projectId) return;
+          const terminal =
+            run.executionStatus === 'completed' ||
+            run.executionStatus === 'canceled' ||
+            run.executionStatus === 'error';
+          if (terminal && hostedEvaluationRunRef.current?.observerId === hostedRun.observerId) {
+            hostedEvaluationRunRef.current = null;
+          }
+          setEvaluationsState((state) => ({
+            ...applyEvaluationRunSnapshot(state, run),
+            ...(terminal ? { runningSuiteId: undefined } : {}),
+          }));
+        })
+        .catch((error) => handleError(error, 'Failed to cancel the Studio Server evaluation'));
+      return;
+    }
     if (evaluationAbortControllerRef.current) {
       evaluationAbortControllerRef.current.abort(new DOMException('Evaluation canceled.', 'AbortError'));
       return;
@@ -1049,6 +1428,7 @@ export function useRemoteExecutor() {
     active: remoteDebugger.sessionState.capabilities.canSendRun,
     tryRunEvaluation,
     submitUserInput,
+    tryRetryInterruptedEvaluation,
   };
 }
 

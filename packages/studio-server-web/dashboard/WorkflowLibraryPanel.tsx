@@ -8,7 +8,12 @@ import type { HostedRouteConfig, WorkflowProjectOpenOptions, WorkflowProjectPath
 import { getParentRelativePath } from './workflowLibraryHelpers';
 import { getWorkflowProjectDotStatus } from './workflowProjectPublicationStatus';
 import { useWorkflowLibraryController } from './useWorkflowLibraryController';
-import type { ProjectCompareSideLabels } from '../../studio-server-shared/editor-bridge';
+import type {
+  ProjectCompareSideLabels,
+  WorkflowProjectBindingReconciliationResult,
+  WorkflowProjectContentChange,
+} from '../../studio-server-shared/editor-bridge';
+import type { WorkflowProjectEditorBinding } from '../../studio-server-shared/workflow-types';
 import './WorkflowLibraryPanel.css';
 
 interface WorkflowLibraryPanelProps {
@@ -24,12 +29,21 @@ interface WorkflowLibraryPanelProps {
   onSaveProject: () => void;
   onDeleteProject: (path: string, projectId?: string | null) => void;
   onWorkflowPathsMoved: (moves: WorkflowProjectPathMove[]) => Promise<void> | void;
+  onReconcileWorkflowProjectBindings: (
+    bindings: WorkflowProjectEditorBinding[],
+  ) => Promise<WorkflowProjectBindingReconciliationResult>;
+  onResolveWorkflowProjectContentChange: (
+    change: WorkflowProjectContentChange,
+    resolution: 'reload' | 'keep-local',
+  ) => Promise<boolean>;
   onWorkflowProjectOpenIntent: (path: string) => void;
+  onWorkflowProjectOpenIntentCanceled: (path: string) => void;
   onActiveWorkflowProjectPathChange: (path: string) => void;
   openedProjectPath: string;
   activeProjectHasUnsavedChanges: boolean;
   editorReady: boolean;
   projectSaveSequence: number;
+  projectTreeRenameRequestSequence: number;
   collapsed: boolean;
   contentVisible: boolean;
   onToggleCollapse: () => void;
@@ -46,7 +60,13 @@ const SidebarOpenIcon: FC = () => (
 
 const SidebarExpandIcon: FC = () => (
   <svg aria-hidden="true" fill="none" viewBox="0 0 16 16">
-    <path d="M6 4.5 9.5 8 6 11.5" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.5" />
+    <path
+      d="M6 4.5 9.5 8 6 11.5"
+      stroke="currentColor"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      strokeWidth="1.5"
+    />
   </svg>
 );
 
@@ -59,12 +79,16 @@ export const WorkflowLibraryPanel: FC<WorkflowLibraryPanelProps> = ({
   onSaveProject,
   onDeleteProject,
   onWorkflowPathsMoved,
+  onReconcileWorkflowProjectBindings,
+  onResolveWorkflowProjectContentChange,
   onWorkflowProjectOpenIntent,
+  onWorkflowProjectOpenIntentCanceled,
   onActiveWorkflowProjectPathChange,
   openedProjectPath,
   activeProjectHasUnsavedChanges,
   editorReady,
   projectSaveSequence,
+  projectTreeRenameRequestSequence,
   collapsed,
   contentVisible,
   onToggleCollapse,
@@ -79,10 +103,15 @@ export const WorkflowLibraryPanel: FC<WorkflowLibraryPanelProps> = ({
     onCompareOpenProjectWith,
     onDeleteProject,
     onWorkflowPathsMoved,
+    onReconcileWorkflowProjectBindings,
+    onResolveWorkflowProjectContentChange,
     onWorkflowProjectOpenIntent,
+    onWorkflowProjectOpenIntentCanceled,
     onActiveWorkflowProjectPathChange,
     openedProjectPath,
+    editorReady,
     projectSaveSequence,
+    projectTreeRenameRequestSequence,
   });
 
   const {
@@ -288,10 +317,7 @@ export const WorkflowLibraryPanel: FC<WorkflowLibraryPanelProps> = ({
         >
           <SidebarExpandIcon />
           {openedProjectDotStatus ? (
-            <span
-              className={`collapsed-strip-status-dot ${openedProjectDotStatus}`}
-              aria-hidden="true"
-            />
+            <span className={`collapsed-strip-status-dot ${openedProjectDotStatus}`} aria-hidden="true" />
           ) : null}
         </button>
       ) : null}

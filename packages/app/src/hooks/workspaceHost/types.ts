@@ -96,6 +96,8 @@ export type RivetWorkspaceHost = {
     metadataPatch: RivetProjectMetadataPatch,
     options?: RivetProjectMetadataUpdateOptions,
   ): Promise<boolean>;
+  /** Replace an existing active or inactive tab from an externally loaded snapshot. */
+  replaceProjectSnapshot(projectId: ProjectId, snapshot: RivetProjectSnapshotInput): Promise<boolean>;
   replaceCurrent(snapshot: RivetProjectSnapshotInput, options?: RivetProjectReplaceOptions): Promise<boolean>;
   markCurrentProjectClean(snapshot?: RivetProjectCleanBaselineSnapshotInput): Promise<boolean>;
   markProjectClean(projectId: ProjectId, snapshot?: RivetProjectCleanBaselineSnapshotInput): Promise<boolean>;

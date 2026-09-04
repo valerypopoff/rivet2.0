@@ -17,6 +17,7 @@ import {
 import { useDataRefs } from '../../providers/ProvidersContext.js';
 import type { DataValueWithRefs } from '../../state/dataFlow.js';
 import { serializeDisplayedDataValue } from '../../utils/executionDataCopyValue.js';
+import { OUTPUT_NAVIGATION_ITEM_ATTRIBUTE } from '../renderDataValue/outputNavigationItems.js';
 
 const structuredNodeOutputCss = css`
   display: block;
@@ -108,7 +109,11 @@ export const StructuredNodeOutput: FC<{
   return (
     <StructuredNodeOutputStatsContext.Provider value={showSectionStats}>
       <div css={structuredNodeOutputCss} className={showSectionStats ? 'large-output-sections' : undefined}>
-        {errorMessage !== undefined && <div className="structured-node-output-error">{errorMessage}</div>}
+        {errorMessage !== undefined && (
+          <div className="structured-node-output-error" {...{ [OUTPUT_NAVIGATION_ITEM_ATTRIBUTE]: '' }}>
+            {errorMessage}
+          </div>
+        )}
         {children}
         {parsedSourceSection}
       </div>
@@ -136,7 +141,10 @@ export const StructuredNodeOutputSection: FC<{
       : undefined;
 
   return (
-    <div className={className ? `structured-node-output-section ${className}` : 'structured-node-output-section'}>
+    <div
+      className={className ? `structured-node-output-section ${className}` : 'structured-node-output-section'}
+      {...{ [OUTPUT_NAVIGATION_ITEM_ATTRIBUTE]: '' }}
+    >
       <OutputSectionHeader getCopyValue={getCopyValue} isLarge={showSectionStats} label={label} stats={stats} />
       {children}
     </div>

@@ -75,6 +75,20 @@ const rootDestinations = new Map([
   ['scripts/playwright-observe.mjs', ['packages/studio-server-web/scripts/playwright-observe.mjs']],
 ]);
 
+/**
+ * Reviewed post-consolidation successors. The ledger still records the exact
+ * migration-era destination/blob; this mapping only proves that a later
+ * refactor intentionally kept that responsibility at a tracked current path.
+ */
+const currentDestinationSuccessors = new Map([
+  [
+    'packages/studio-server-web/dashboard/RuntimeLibrariesReplicaReadinessPanel.tsx',
+    {
+      path: 'packages/studio-server-web/dashboard/DeploymentReplicaReadinessPanel.tsx',
+      reason: 'Replica readiness moved from Runtime libraries to Deployment settings after the monorepo import.',
+    },
+  ],
+]);
 const destinationRules = [
   ['wrapper/api/', 'packages/studio-server-api/'],
   ['wrapper/web/', 'packages/studio-server-web/'],
@@ -170,9 +184,14 @@ function buildLedger() {
     const destinationPaths = destinationPathsFor(sourcePath);
     const destinations = destinationPaths.flatMap((destinationPath) => {
       const destinationEntry = migrationEntries.get(destinationPath);
-      return destinationEntry
-        ? [{ path: destinationPath, migrationMode: destinationEntry.mode, migrationBlob: destinationEntry.object }]
-        : [];
+      if (!destinationEntry) return [];
+      const successor = currentDestinationSuccessors.get(destinationPath);
+      return [{
+        path: destinationPath,
+        migrationMode: destinationEntry.mode,
+        migrationBlob: destinationEntry.object,
+        ...(successor == null ? {} : { currentPath: successor.path, currentReason: successor.reason }),
+      }];
     });
 
     if (destinations.length !== destinationPaths.length || destinations.length === 0) {
@@ -277,15 +296,22 @@ function verifyLedger(ledger) {
       assert.ok(migrationEntry, `Destination was absent at migration commit: ${destination.path}`);
       assert.equal(destination.migrationMode, migrationEntry.mode, `Migration mode mismatch: ${destination.path}`);
       assert.equal(destination.migrationBlob, migrationEntry.object, `Migration blob mismatch: ${destination.path}`);
+      const currentPath = destination.currentPath ?? destination.path;
+      if (destination.currentPath != null) {
+        assert.notEqual(destination.currentPath, destination.path, `Successor must differ: ${destination.path}`);
+        assert.ok(destination.currentReason?.trim(), `Successor lacks a reason: ${destination.path}`);
+      } else {
+        assert.equal(destination.currentReason, undefined, `Unexpected successor reason: ${destination.path}`);
+      }
       assert.equal(
-        currentTrackedPaths.has(destination.path),
+        currentTrackedPaths.has(currentPath),
         true,
-        `Destination is no longer tracked: ${destination.path}`,
+        `Current destination is no longer tracked: ${currentPath}`,
       );
       assert.equal(
-        fs.existsSync(path.join(rootDir, ...destination.path.split('/'))),
+        fs.existsSync(path.join(rootDir, ...currentPath.split('/'))),
         true,
-        `Destination is missing: ${destination.path}`,
+        `Current destination is missing: ${currentPath}`,
       );
     }
   }

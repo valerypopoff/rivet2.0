@@ -5,6 +5,7 @@ import type { NextFunction, Request, Response as ExpressResponse, Router } from 
 
 import type { WebAppActionWebSocketRuntime } from '../../web-app-action-websocket.js';
 
+import { createRequestCorrelationMiddleware } from '../../request-correlation.js';
 import { listenTestServer } from './http-server-harness.js';
 
 type InitializeWorkflowStorage = () => Promise<void>;
@@ -20,6 +21,10 @@ type WorkflowExecutionServerHarnessOptions = WorkflowApiServerHarnessOptions & {
   publishedWebAppsRouter?: Router;
   publishedWorkflowsRouter: Router;
   latestWorkflowsRouter: Router;
+};
+
+type HostedProjectApiServerHarnessOptions = WorkflowApiServerHarnessOptions & {
+  projectsRouter: Router;
 };
 
 type WorkflowExecutionServerUrls = {
@@ -77,11 +82,7 @@ export function observeFilesystemExecutionInvalidations(t: TestContext, cache: F
   return calls;
 }
 
-export async function withEnvOverride(
-  name: string,
-  value: string | undefined,
-  run: () => Promise<void>,
-) {
+export async function withEnvOverride(name: string, value: string | undefined, run: () => Promise<void>) {
   const previousValue = process.env[name];
 
   if (value == null) {
@@ -107,6 +108,7 @@ export function createWorkflowApiServerHarness(options: WorkflowApiServerHarness
 
     const app = express();
     app.use(express.json({ strict: false }));
+    app.use(createRequestCorrelationMiddleware());
     app.use('/workflows', options.workflowsRouter);
     attachJsonFallbackHandlers(app);
 
@@ -121,12 +123,39 @@ export function createWorkflowApiServerHarness(options: WorkflowApiServerHarness
   };
 }
 
+export function createHostedProjectApiServerHarness(options: HostedProjectApiServerHarnessOptions) {
+  return async function withHostedProjectApiServer(
+    run: (urls: { projectsBaseUrl: string; workflowsBaseUrl: string }) => Promise<void>,
+  ) {
+    await options.initializeWorkflowStorage();
+
+    const app = express();
+    app.use(express.json({ strict: false }));
+    app.use(createRequestCorrelationMiddleware());
+    app.use('/projects', options.projectsRouter);
+    app.use('/workflows', options.workflowsRouter);
+    attachJsonFallbackHandlers(app);
+
+    const server = http.createServer(app);
+    const listener = await listenTestServer(server);
+    try {
+      await run({
+        projectsBaseUrl: `${listener.baseUrl}/projects`,
+        workflowsBaseUrl: `${listener.baseUrl}/workflows`,
+      });
+    } finally {
+      await listener.close();
+    }
+  };
+}
+
 export function createWorkflowExecutionServerHarness(options: WorkflowExecutionServerHarnessOptions) {
   return async function withWorkflowExecutionServer(run: (urls: WorkflowExecutionServerUrls) => Promise<void>) {
     await options.initializeWorkflowStorage();
 
     const app = express();
     app.use(express.json({ strict: false }));
+    app.use(createRequestCorrelationMiddleware());
     app.use('/api/workflows', options.workflowsRouter);
     app.use('/workflows', options.publishedWorkflowsRouter);
     if (options.publishedWebAppsRouter) {
@@ -158,7 +187,7 @@ export function createWorkflowExecutionServerHarness(options: WorkflowExecutionS
 }
 
 export async function readJson<T>(response: globalThis.Response): Promise<T> {
-  const body = await response.json() as T;
+  const body = (await response.json()) as T;
   if (!response.ok) {
     throw new Error(`HTTP ${response.status}: ${JSON.stringify(body)}`);
   }

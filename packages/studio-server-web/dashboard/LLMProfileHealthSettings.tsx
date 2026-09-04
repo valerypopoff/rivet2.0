@@ -1,5 +1,9 @@
 import Button, { LoadingButton } from '@atlaskit/button';
-import type { Project, ProjectId, RivetLLMProfileHealthSnapshot } from '@valerypopoff/rivet2-core';
+import type { Project, ProjectId } from '@valerypopoff/rivet2-core';
+import type {
+  LLMProfileHealthAdminEntry,
+  LLMProfileHealthContributorRun,
+} from '../../studio-server-shared/llmProfileHealthTypes';
 import { type FC, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { hostedLLMProfileHealthAdmin } from './hostedRivetProviders';
@@ -20,7 +24,37 @@ function getErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-export const LLMProfileHealthSettings: FC<{ activeProject: WorkflowProjectItem }> = ({ activeProject }) => {
+function getRecordingAvailabilityDetail(run: LLMProfileHealthContributorRun): string {
+  switch (run.availability) {
+    case 'pending':
+      return 'The replay is still being saved.';
+    case 'disabled':
+      return 'Run recording was disabled for this execution.';
+    case 'queue-dropped':
+      return 'The recording queue was full, so no replay was saved.';
+    case 'persistence-failed':
+      return 'Rivet could not save this replay.';
+    case 'deleted':
+      return 'This replay was deleted.';
+    case 'not-recorded':
+      return 'No replay was captured for this run.';
+    case 'available':
+      return 'Replay is available.';
+  }
+}
+
+function getContributingRunLabel(run: LLMProfileHealthContributorRun): string {
+  const occurredAt = new Date(run.occurredAt).toLocaleString();
+  const contributions = run.contributionCount === 1
+    ? 'one contributing failure'
+    : `${run.contributionCount} contributing failures`;
+  return `${occurredAt} - ${contributions}${run.triggeredSuspension ? ' - suspension threshold reached' : ''}`;
+}
+
+export const LLMProfileHealthSettings: FC<{
+  activeProject: WorkflowProjectItem;
+  onOpenRecording: (recordingId: string) => void;
+}> = ({ activeProject, onOpenRecording }) => {
   const catalogProjectId = activeProject.projectMetadataId as ProjectId | undefined;
   const [projectContext, setProjectContext] = useState<{
     relativePath: string;
@@ -34,7 +68,7 @@ export const LLMProfileHealthSettings: FC<{ activeProject: WorkflowProjectItem }
     ? projectContext
     : undefined;
   const projectId = catalogProjectId ?? activeProjectContext?.projectId;
-  const [entries, setEntries] = useState<readonly RivetLLMProfileHealthSnapshot[]>([]);
+  const [entries, setEntries] = useState<readonly LLMProfileHealthAdminEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string>();
   const [resettingKey, setResettingKey] = useState<string>();
@@ -208,29 +242,72 @@ export const LLMProfileHealthSettings: FC<{ activeProject: WorkflowProjectItem }
           <div className="project-settings-llm-health-list">
             {operationalEntries.map((entry) => {
               const tone = getLLMProfileHealthStatusTone(entry, statusNow);
+              // A newly deployed browser can briefly talk to an older API that has
+              // not added evidence metadata yet. Keep the suspension visible.
+              const contributingRuns = entry.contributingRuns ?? [];
 
               return (
                 <div
                   className={`project-settings-llm-health-row project-settings-llm-health-row-${tone}`}
                   key={entry.identity.key}
                 >
-                  <div className="project-settings-llm-health-description">
-                    <div className="project-settings-llm-health-name">
-                      {getLLMProfileHealthDisplayName(activeProjectContext?.project, entry)}
+                  <div className="project-settings-llm-health-row-header">
+                    <div className="project-settings-llm-health-description">
+                      <div className="project-settings-llm-health-name">
+                        {getLLMProfileHealthDisplayName(activeProjectContext?.project, entry)}
+                      </div>
+                      <div className={`project-settings-llm-health-metadata project-settings-llm-health-metadata-${tone}`}>
+                        {getLLMProfileHealthIdentityLabel(entry)} - {getLLMProfileHealthStatusDetail(entry, statusNow)}
+                      </div>
                     </div>
-                    <div className={`project-settings-llm-health-metadata project-settings-llm-health-metadata-${tone}`}>
-                      {getLLMProfileHealthIdentityLabel(entry)} - {getLLMProfileHealthStatusDetail(entry, statusNow)}
-                    </div>
+                    <LoadingButton
+                      appearance="subtle"
+                      className="project-settings-secondary-button button-size-l"
+                      onClick={() => void reset(entry.identity.key)}
+                      isLoading={resettingKey === entry.identity.key}
+                      isDisabled={resettingKey != null}
+                    >
+                      Clear history
+                    </LoadingButton>
                   </div>
-                  <LoadingButton
-                    appearance="subtle"
-                    className="project-settings-secondary-button button-size-l"
-                    onClick={() => void reset(entry.identity.key)}
-                    isLoading={resettingKey === entry.identity.key}
-                    isDisabled={resettingKey != null}
-                  >
-                    Clear history
-                  </LoadingButton>
+                  {contributingRuns.length > 0 ? (
+                    <div className="project-settings-llm-health-recordings">
+                      <div className="project-settings-llm-health-recordings-title">Contributing recordings</div>
+                      <div className="project-settings-llm-health-recording-list">
+                        {contributingRuns.map((run, index) => (
+                          <div
+                            className="project-settings-llm-health-recording"
+                            key={run.recordingId ?? `${run.occurredAt}-${index}`}
+                          >
+                            <div>
+                              <div className="project-settings-llm-health-recording-label">
+                                {getContributingRunLabel(run)}
+                              </div>
+                              <div className="project-settings-llm-health-recording-detail">
+                                {getRecordingAvailabilityDetail(run)}
+                              </div>
+                            </div>
+                            {run.availability === 'available' && run.recordingId != null ? (
+                              <Button
+                                appearance="subtle"
+                                className="project-settings-secondary-button button-size-l"
+                                onClick={() => onOpenRecording(run.recordingId!)}
+                                aria-label="Open contributing run recording"
+                              >
+                                Open recording
+                              </Button>
+                            ) : null}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="project-settings-llm-health-recordings">
+                      <div className="project-settings-llm-health-recording-detail">
+                        This suspension predates recording links, so its contributing runs are unavailable.
+                      </div>
+                    </div>
+                  )}
                 </div>
               );
             })}
@@ -245,7 +322,7 @@ export const LLMProfileHealthSettings: FC<{ activeProject: WorkflowProjectItem }
           aria-label="Clear all LLM profile suspension history"
         >
           <div>
-            Clear all recorded failures, suspensions, and recovery attempts for this project? The next request starts
+            Clear all contributing failures, suspensions, and recovery attempts for this project? The next request starts
             with no recorded history. LLM Profile node settings are not changed, and requests already in progress are
             not cancelled; their late completion cannot recreate deleted history.
           </div>

@@ -36,11 +36,7 @@ function createRevisionRow(workflowId: string, revisionId: string): RevisionRow 
   };
 }
 
-function createWebAppPublicationRow(
-  workflowId: string,
-  revisionId: string,
-  uiGraphId: string,
-): WebAppPublicationRow {
+function createWebAppPublicationRow(workflowId: string, revisionId: string, uiGraphId: string): WebAppPublicationRow {
   return {
     app_id: `app-${uiGraphId}`,
     workflow_id: workflowId,
@@ -55,7 +51,7 @@ function createWebAppPublicationRow(
 function createCatalogForDeleteGuard(
   workflowRow: WorkflowRow,
   webAppRows: unknown[] = [],
-  options: { allowDeletion?: boolean; executedQueries?: string[] } = {},
+  options: { allowDeletion?: boolean; executedQueries?: string[]; enqueuedDeletionDomains?: string[] } = {},
 ) {
   const client = {
     query: async (sql: string, params: unknown[] = []) => {
@@ -75,14 +71,15 @@ function createCatalogForDeleteGuard(
     context: {
       pool: {} as never,
       initialize: async () => {},
-      withTransaction: async <T,>(
+      withTransaction: async <T>(
         run: (transactionClient: typeof client, transactionHooks: typeof hooks) => Promise<T>,
       ) => run(client, hooks),
       db: {
         queryOne: async () => null,
-        queryRows: async () => options.allowDeletion ? [] : Promise.reject(new Error('Unexpected queryRows after delete guard')),
+        queryRows: async () =>
+          options.allowDeletion ? [] : Promise.reject(new Error('Unexpected queryRows after delete guard')),
         isUniqueViolation: () => false,
-        withManagedDbRetry: async <T,>(_scope: string, run: () => Promise<T>) => run(),
+        withManagedDbRetry: async <T>(_scope: string, run: () => Promise<T>) => run(),
         getManagedDbConnectionConfig: () => ({}),
         getManagedDbPoolConfig: () => ({}),
       },
@@ -120,6 +117,11 @@ function createCatalogForDeleteGuard(
         queueWorkflowInvalidation: async () => {},
         queueGlobalInvalidation: async () => {},
       },
+      maintenance: {
+        enqueueObjectDeletions: async (_client: unknown, domain: string) => {
+          options.enqueuedDeletionDomains?.push(domain);
+        },
+      },
       dispose: async () => {},
     } as never,
     saveHostedProject: async () => {
@@ -143,7 +145,7 @@ test('managed workflow tree includes graph and node stats from current draft rev
         queryOne: async () => null,
         queryRows: async () => [],
         isUniqueViolation: () => false,
-        withManagedDbRetry: async <T,>(_scope: string, run: () => Promise<T>) => run(),
+        withManagedDbRetry: async <T>(_scope: string, run: () => Promise<T>) => run(),
         getManagedDbConnectionConfig: () => ({}),
         getManagedDbPoolConfig: () => ({}),
       },
@@ -182,6 +184,9 @@ test('managed workflow tree includes graph and node stats from current draft rev
       executionInvalidationController: {
         queueWorkflowInvalidation: async () => {},
         queueGlobalInvalidation: async () => {},
+      },
+      maintenance: {
+        enqueueObjectDeletions: async () => {},
       },
       dispose: async () => {},
     } as never,
@@ -233,11 +238,7 @@ test('managed workflow tree exposes aggregate endpoint and web app publication s
       webAppPublishedWorkflow.current_draft_revision_id,
       'published-web-app',
     ),
-    createWebAppPublicationRow(
-      staleWebAppWorkflow.workflow_id,
-      'revision-managed-web-app-old',
-      'stale-web-app',
-    ),
+    createWebAppPublicationRow(staleWebAppWorkflow.workflow_id, 'revision-managed-web-app-old', 'stale-web-app'),
   ];
 
   const catalog = createManagedWorkflowCatalogService({
@@ -251,7 +252,7 @@ test('managed workflow tree exposes aggregate endpoint and web app publication s
         queryOne: async () => null,
         queryRows: async () => webAppRows,
         isUniqueViolation: () => false,
-        withManagedDbRetry: async <T,>(_scope: string, run: () => Promise<T>) => run(),
+        withManagedDbRetry: async <T>(_scope: string, run: () => Promise<T>) => run(),
         getManagedDbConnectionConfig: () => ({}),
         getManagedDbPoolConfig: () => ({}),
       },
@@ -290,6 +291,9 @@ test('managed workflow tree exposes aggregate endpoint and web app publication s
       executionInvalidationController: {
         queueWorkflowInvalidation: async () => {},
         queueGlobalInvalidation: async () => {},
+      },
+      maintenance: {
+        enqueueObjectDeletions: async () => {},
       },
       dispose: async () => {},
     } as never,
@@ -340,10 +344,12 @@ test('managed workflow deletion is blocked by every active publication marker', 
 test('managed workflow deletion removes project health in the same transaction before the workflow row', async () => {
   const workflowRow = createWorkflowRow();
   const executedQueries: string[] = [];
+  const enqueuedDeletionDomains: string[] = [];
 
   const deletedProjectId = await createCatalogForDeleteGuard(workflowRow, [], {
     allowDeletion: true,
     executedQueries,
+    enqueuedDeletionDomains,
   }).deleteWorkflowProjectItem(workflowRow.relative_path);
 
   assert.equal(deletedProjectId, workflowRow.workflow_id);
@@ -351,6 +357,7 @@ test('managed workflow deletion removes project health in the same transaction b
   const workflowDeleteIndex = executedQueries.findIndex((sql) => /DELETE FROM workflows/.test(sql));
   assert.ok(healthDeleteIndex >= 0);
   assert.ok(workflowDeleteIndex > healthDeleteIndex);
+  assert.deepEqual(enqueuedDeletionDomains, ['workflow-project-deletion']);
 });
 
 test('managed workflow tree backfills legacy revision stats when metadata is missing', async () => {
@@ -408,7 +415,7 @@ test('managed workflow tree backfills legacy revision stats when metadata is mis
           return [];
         },
         isUniqueViolation: () => false,
-        withManagedDbRetry: async <T,>(_scope: string, run: () => Promise<T>) => run(),
+        withManagedDbRetry: async <T>(_scope: string, run: () => Promise<T>) => run(),
         getManagedDbConnectionConfig: () => ({}),
         getManagedDbPoolConfig: () => ({}),
       },
@@ -446,6 +453,9 @@ test('managed workflow tree backfills legacy revision stats when metadata is mis
         queueWorkflowInvalidation: async () => {},
         queueGlobalInvalidation: async () => {},
       },
+      maintenance: {
+        enqueueObjectDeletions: async () => {},
+      },
       dispose: async () => {},
     } as never,
     saveHostedProject: async () => {
@@ -480,7 +490,7 @@ test('managed workflow tree falls back to zero stats when the draft revision is 
         queryOne: async () => null,
         queryRows: async () => [],
         isUniqueViolation: () => false,
-        withManagedDbRetry: async <T,>(_scope: string, run: () => Promise<T>) => run(),
+        withManagedDbRetry: async <T>(_scope: string, run: () => Promise<T>) => run(),
         getManagedDbConnectionConfig: () => ({}),
         getManagedDbPoolConfig: () => ({}),
       },
@@ -517,6 +527,9 @@ test('managed workflow tree falls back to zero stats when the draft revision is 
       executionInvalidationController: {
         queueWorkflowInvalidation: async () => {},
         queueGlobalInvalidation: async () => {},
+      },
+      maintenance: {
+        enqueueObjectDeletions: async () => {},
       },
       dispose: async () => {},
     } as never,

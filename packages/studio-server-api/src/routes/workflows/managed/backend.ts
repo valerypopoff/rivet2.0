@@ -24,8 +24,15 @@ import type { RuntimeHealthCheckContext } from '../../../runtime-health.js';
 import type { ManagedWorkflowStorageConfig } from '../storage-config.js';
 import { PostgresRivetLLMProfileHealthStore } from '../../../llm-profile-health/managed-store.js';
 import { PostgresRivetEvaluationStore } from '../../../evaluation-runs/managed-store.js';
+import { HostedEvaluationCoordinator } from '../../../evaluation-runs/hosted-coordinator.js';
+import { createHostedEvaluationGraphRunner } from '../../../evaluation-runs/hosted-execution.js';
+import { getHostedEvaluationsCoordinatorConfig } from '../../../hosted-evaluations-config.js';
 import type { ManagedWorkflowBlobStore } from './blob-store.js';
 import { createManagedWorkflowCatalogService } from './catalog.js';
+import {
+  listManagedReconciliationFindingDetails,
+  type ManagedReconciliationFindingDetailQuery,
+} from './reconciliation.js';
 import { createManagedWorkflowContext } from './context.js';
 import type { ManagedExecutionProjectResult } from './execution-types.js';
 import { ManagedWorkflowExecutionService } from './execution-service.js';
@@ -51,6 +58,7 @@ export class ManagedWorkflowBackend {
   readonly #recordings: ReturnType<typeof createManagedWorkflowRecordingService>;
   readonly #llmProfileHealthStore: PostgresRivetLLMProfileHealthStore;
   readonly #evaluationStore: PostgresRivetEvaluationStore;
+  readonly #hostedEvaluationCoordinator: HostedEvaluationCoordinator;
 
   constructor(config: ManagedWorkflowStorageConfig, blobStore?: ManagedWorkflowBlobStore) {
     this.#context = createManagedWorkflowContext(config, blobStore);
@@ -72,13 +80,25 @@ export class ManagedWorkflowBackend {
     });
     this.#llmProfileHealthStore = new PostgresRivetLLMProfileHealthStore(this.#context.pool);
     this.#evaluationStore = new PostgresRivetEvaluationStore(this.#context.pool);
+    this.#hostedEvaluationCoordinator = new HostedEvaluationCoordinator({
+      pool: this.#context.pool,
+      runStore: this.#evaluationStore,
+      config: getHostedEvaluationsCoordinatorConfig(),
+      runGraph: createHostedEvaluationGraphRunner({
+        evaluationStore: this.#evaluationStore,
+        llmProfileHealthStore: this.#llmProfileHealthStore,
+        createProjectReferenceLoader: () => Promise.resolve(this.#executionService.createProjectReferenceLoader()),
+      }),
+    });
   }
 
   async initialize(): Promise<void> {
     await this.#recordings.initialize();
+    this.#hostedEvaluationCoordinator.start();
   }
 
   async dispose(): Promise<void> {
+    await this.#hostedEvaluationCoordinator.stop();
     await this.#context.dispose();
   }
 
@@ -103,6 +123,8 @@ export class ManagedWorkflowBackend {
     contents: string;
     datasetsContents: string | null;
     expectedRevisionId?: string | null;
+    projectId?: string;
+    saveIntent?: 'in-place' | 'save-as';
   }): Promise<SaveHostedProjectResult> {
     return this.#revisions.saveHostedProject(options);
   }
@@ -127,11 +149,17 @@ export class ManagedWorkflowBackend {
     return this.#catalog.createWorkflowFolderItem(name, parentRelativePath);
   }
 
-  async renameWorkflowFolderItem(relativePath: unknown, newName: unknown): Promise<{ folder: WorkflowFolderItem; movedProjectPaths: WorkflowProjectPathMove[] }> {
+  async renameWorkflowFolderItem(
+    relativePath: unknown,
+    newName: unknown,
+  ): Promise<{ folder: WorkflowFolderItem; movedProjectPaths: WorkflowProjectPathMove[] }> {
     return this.#catalog.renameWorkflowFolderItem(relativePath, newName);
   }
 
-  async moveWorkflowFolder(sourceRelativePath: unknown, destinationFolderRelativePath: unknown): Promise<{ folder: WorkflowFolderItem; movedProjectPaths: WorkflowProjectPathMove[] }> {
+  async moveWorkflowFolder(
+    sourceRelativePath: unknown,
+    destinationFolderRelativePath: unknown,
+  ): Promise<{ folder: WorkflowFolderItem; movedProjectPaths: WorkflowProjectPathMove[] }> {
     return this.#catalog.moveWorkflowFolder(sourceRelativePath, destinationFolderRelativePath);
   }
 
@@ -143,23 +171,39 @@ export class ManagedWorkflowBackend {
     return this.#catalog.createWorkflowProjectItem(folderRelativePath, name);
   }
 
-  async renameWorkflowProjectItem(relativePath: unknown, newName: unknown): Promise<{ project: WorkflowProjectItem; movedProjectPaths: WorkflowProjectPathMove[] }> {
+  async renameWorkflowProjectItem(
+    relativePath: unknown,
+    newName: unknown,
+  ): Promise<{ project: WorkflowProjectItem; movedProjectPaths: WorkflowProjectPathMove[] }> {
     return this.#catalog.renameWorkflowProjectItem(relativePath, newName);
   }
 
-  async moveWorkflowProject(sourceRelativePath: unknown, destinationFolderRelativePath: unknown): Promise<{ project: WorkflowProjectItem; movedProjectPaths: WorkflowProjectPathMove[] }> {
+  async moveWorkflowProject(
+    sourceRelativePath: unknown,
+    destinationFolderRelativePath: unknown,
+  ): Promise<{ project: WorkflowProjectItem; movedProjectPaths: WorkflowProjectPathMove[] }> {
     return this.#catalog.moveWorkflowProject(sourceRelativePath, destinationFolderRelativePath);
   }
 
-  async duplicateWorkflowProjectItem(relativePath: unknown, version: WorkflowProjectDownloadVersion = 'live'): Promise<WorkflowProjectItem> {
+  async duplicateWorkflowProjectItem(
+    relativePath: unknown,
+    version: WorkflowProjectDownloadVersion = 'live',
+  ): Promise<WorkflowProjectItem> {
     return this.#catalog.duplicateWorkflowProjectItem(relativePath, version);
   }
 
-  async uploadWorkflowProjectItem(folderRelativePath: unknown, fileName: unknown, contents: unknown): Promise<WorkflowProjectItem> {
+  async uploadWorkflowProjectItem(
+    folderRelativePath: unknown,
+    fileName: unknown,
+    contents: unknown,
+  ): Promise<WorkflowProjectItem> {
     return this.#catalog.uploadWorkflowProjectItem(folderRelativePath, fileName, contents);
   }
 
-  async readWorkflowProjectDownload(relativePath: unknown, version: WorkflowProjectDownloadVersion): Promise<{ contents: string; fileName: string }> {
+  async readWorkflowProjectDownload(
+    relativePath: unknown,
+    version: WorkflowProjectDownloadVersion,
+  ): Promise<{ contents: string; fileName: string }> {
     return this.#catalog.readWorkflowProjectDownload(relativePath, version);
   }
 
@@ -168,20 +212,41 @@ export class ManagedWorkflowBackend {
     return this.#llmProfileHealthStore;
   }
 
+  async getManagedReconciliationStatus() {
+    await this.initialize();
+    return this.#context.getReconciliationStatus();
+  }
+
+  async listManagedReconciliationFindingDetails(query: ManagedReconciliationFindingDetailQuery) {
+    await this.initialize();
+    return listManagedReconciliationFindingDetails(this.#context.pool, query);
+  }
+
   async getEvaluationStore(): Promise<PostgresRivetEvaluationStore> {
     await this.initialize();
     return this.#evaluationStore;
+  }
+
+  async getHostedEvaluationCoordinator(): Promise<HostedEvaluationCoordinator> {
+    await this.initialize();
+    return this.#hostedEvaluationCoordinator;
   }
 
   async listWorkflowPublishedVersions(relativePath: unknown): Promise<WorkflowPublishedVersionsResponse> {
     return this.#publication.listWorkflowPublishedVersions(relativePath);
   }
 
-  async readWorkflowPublishedVersionDownload(relativePath: unknown, versionId: unknown): Promise<{ contents: string; fileName: string }> {
+  async readWorkflowPublishedVersionDownload(
+    relativePath: unknown,
+    versionId: unknown,
+  ): Promise<{ contents: string; fileName: string }> {
     return this.#publication.readWorkflowPublishedVersionDownload(relativePath, versionId);
   }
 
-  async readWorkflowPublishedVersionPreview(relativePath: unknown, versionId: unknown): Promise<{ contents: string; datasetsContents: string | null }> {
+  async readWorkflowPublishedVersionPreview(
+    relativePath: unknown,
+    versionId: unknown,
+  ): Promise<{ contents: string; datasetsContents: string | null }> {
     return this.#publication.readWorkflowPublishedVersionPreview(relativePath, versionId);
   }
 
@@ -308,7 +373,10 @@ export class ManagedWorkflowBackend {
     return this.#recordings.getWorkflowRunStatistics(query);
   }
 
-  async readWorkflowRecordingArtifact(recordingId: string, artifact: 'recording' | 'replay-project' | 'replay-dataset'): Promise<string> {
+  async readWorkflowRecordingArtifact(
+    recordingId: string,
+    artifact: 'recording' | 'replay-project' | 'replay-dataset',
+  ): Promise<string> {
     return this.#recordings.readWorkflowRecordingArtifact(recordingId, artifact);
   }
 
@@ -316,7 +384,9 @@ export class ManagedWorkflowBackend {
     return this.#recordings.deleteWorkflowRecording(recordingId);
   }
 
-  async persistWorkflowExecutionRecording(options: PersistWorkflowExecutionRecordingOptions): Promise<void> {
+  async persistWorkflowExecutionRecording(
+    options: PersistWorkflowExecutionRecordingOptions,
+  ): Promise<string | undefined> {
     return this.#recordings.persistWorkflowExecutionRecording(options);
   }
 }

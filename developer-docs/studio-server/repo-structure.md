@@ -86,10 +86,13 @@ only supported dependency installer.
 
 The root preinstall guard rejects npm and pnpm dependency installation with the
 fresh-machine recovery commands. The repository structure verifier also rejects
-secondary `yarn.lock`, `package-lock.json`, and `npm-shrinkwrap.json` files,
+secondary `yarn.lock`, `package-lock.json`, and
+pm-shrinkwrap.json` files,
 per-workspace package-manager declarations, ambiguous root production aliases,
-and root or workspace scripts that dispatch monorepo work through `npm run`
-or `npm --prefix`.
+and root or workspace scripts that dispatch monorepo work through
+pm run`
+or
+pm --prefix`.
 
 The intentional npm boundaries are narrower than dependency management for the
 monorepo: npm-registry publication, isolated synthetic Code-node runtime-library
@@ -116,8 +119,8 @@ Install the pinned cached binary with
 - do not reintroduce clone/ref bootstrap variables, package-link overlays,
   nested installs, or dual-repository Git labels
 - keep `deploy/studio-server/migration/source-file-ledger.json` fresh when a
-  current destination is deliberately moved or retired; the ledger must still
-  account for every blob in the preserved import tree
+  migration-era destination is deliberately moved or retired; record its reviewed
+  current successor and reason while retaining the original blob proof
 - keep test manifests explicit and protected by the repository verifiers
 
 The monorepo migration and history-preservation details are recorded in

@@ -39,9 +39,14 @@ export const ProjectTabSurface: FC<{
       <div className="project-name" {...dragListeners}>
         <span>{displayName}</span>
       </div>
-      {active && (
+      {onCloseProject && (
         <div className="actions">
-          <button className="close-project" onMouseDown={(event) => event.stopPropagation()} onClick={closeProject}>
+          <button
+            aria-label={`Close ${displayName}`}
+            className="close-project"
+            onMouseDown={(event) => event.stopPropagation()}
+            onClick={closeProject}
+          >
             {closeIcon}
           </button>
         </div>

@@ -6,6 +6,7 @@ import type { DataValue } from '@valerypopoff/rivet2-core';
 
 import { createDataValueRendererMap } from './createDataValueRendererMap.js';
 import type { createScalarRenderers } from './createScalarRenderers.js';
+import { OUTPUT_NAVIGATION_ITEM_ATTRIBUTE } from './outputNavigationItems.js';
 
 const rendererMap = createDataValueRendererMap({
   scalarRenderers: {} as ReturnType<typeof createScalarRenderers>,
@@ -27,6 +28,7 @@ test('array-like data values share the common multi-output item presentation', (
 
   assert.equal(countOccurrences(stringArrayMarkup, 'class="multi-output-item"'), 2);
   assert.equal(countOccurrences(chatMessageArrayMarkup, 'class="multi-output-item"'), 2);
+  assert.equal(countOccurrences(stringArrayMarkup, `${OUTPUT_NAVIGATION_ITEM_ATTRIBUTE}=""`), 2);
   assert.doesNotMatch(chatMessageArrayMarkup, /chat-message-list/);
 });
 

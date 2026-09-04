@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import type { Project } from '@valerypopoff/rivet2-core';
+import type { Project, ProjectId } from '@valerypopoff/rivet2-core';
+import type { OpenedProjectSnapshot, OpenedProjectsInfo } from '../../app/src/state/savedGraphs';
+import { normalizeHostedOpenedProjects } from '../overrides/hooks/useSyncCurrentStateIntoOpenedProjects';
 import {
   resolveHostedProjectMetadataUpdatesForPathMoves,
   resolveHostedProjectTitleFromPath,
@@ -8,10 +10,10 @@ import {
   withHostedProjectTitle,
 } from '../dashboard/openedProjectMetadata';
 
-function makeProject(title: string | undefined): Project {
+function makeProject(title: string | undefined, id = 'project-1'): Project {
   return {
     metadata: {
-      id: 'project-1' as Project['metadata']['id'],
+      id: id as Project['metadata']['id'],
       title: title as string,
       description: '',
     },
@@ -19,28 +21,104 @@ function makeProject(title: string | undefined): Project {
   };
 }
 
+test('hosted tab normalization retains recoverable saved and draft tabs while dropping broken orphans', () => {
+  const savedProjectId = 'project-1' as ProjectId;
+  const draftProjectId = 'draft-1' as ProjectId;
+  const orphanProjectId = 'orphan-1' as ProjectId;
+  const previous: OpenedProjectsInfo = {
+    openedProjects: {
+      [savedProjectId]: {
+        projectId: savedProjectId,
+        title: 'Saved project',
+        fsPath: '/workflows/Saved project.rivet-project',
+      },
+      [draftProjectId]: {
+        projectId: draftProjectId,
+        title: 'Unsaved draft',
+        fsPath: null,
+      },
+      [orphanProjectId]: {
+        projectId: orphanProjectId,
+        title: 'Broken tab',
+        fsPath: null,
+      },
+    },
+    openedProjectsSortedIds: [savedProjectId, draftProjectId, orphanProjectId],
+  };
+  const snapshots = {
+    [savedProjectId]: {},
+    [draftProjectId]: { project: makeProject('Unsaved draft', draftProjectId) },
+  } as Record<ProjectId, OpenedProjectSnapshot>;
+
+  const normalized = normalizeHostedOpenedProjects(previous, {
+    currentProjectId: undefined,
+    openedProjectSnapshots: snapshots,
+  });
+
+  assert.deepEqual(normalized.openedProjectsSortedIds, [savedProjectId, draftProjectId]);
+  assert.deepEqual(Object.keys(normalized.openedProjects).sort(), [draftProjectId, savedProjectId]);
+});
+test('hosted tab normalization drops malformed legacy project payloads without throwing', () => {
+  const brokenProjectId = 'broken-1' as ProjectId;
+  const previous = {
+    openedProjects: {
+      [brokenProjectId]: {
+        projectId: 42,
+        title: { unexpected: true },
+        fsPath: { unexpected: true },
+        project: {},
+      },
+    },
+    openedProjectsSortedIds: [brokenProjectId],
+  } as unknown as OpenedProjectsInfo;
+
+  const normalized = normalizeHostedOpenedProjects(previous, {
+    currentProjectId: undefined,
+    openedProjectSnapshots: {},
+  });
+
+  assert.deepEqual(normalized, { openedProjects: {}, openedProjectsSortedIds: [] });
+});
 test('resolveHostedProjectTitle prefers a normal hosted project path title', () => {
-  assert.equal(resolveHostedProjectTitle(makeProject('Billing Flow'), '/workflows/Renamed Flow.rivet-project'), 'Renamed Flow');
+  assert.equal(
+    resolveHostedProjectTitle(makeProject('Billing Flow'), '/workflows/Renamed Flow.rivet-project'),
+    'Renamed Flow',
+  );
 });
 
 test('resolveHostedProjectTitle falls back to the project filename when metadata title is missing', () => {
-  assert.equal(resolveHostedProjectTitle(makeProject(undefined), '/workflows/published-demo.rivet-project'), 'published-demo');
-  assert.equal(resolveHostedProjectTitle(makeProject('   '), 'D:\\Programming\\workflows\\Windows Demo.rivet-project'), 'Windows Demo');
+  assert.equal(
+    resolveHostedProjectTitle(makeProject(undefined), '/workflows/published-demo.rivet-project'),
+    'published-demo',
+  );
+  assert.equal(
+    resolveHostedProjectTitle(makeProject('   '), 'D:\\Programming\\workflows\\Windows Demo.rivet-project'),
+    'Windows Demo',
+  );
   assert.equal(resolveHostedProjectTitle(makeProject('undefined'), '/workflows/bad-title.rivet-project'), 'bad-title');
   assert.equal(resolveHostedProjectTitle(makeProject('null'), '/workflows/null-title.rivet-project'), 'null-title');
 });
 
 test('resolveHostedProjectTitle preserves metadata titles for virtual project paths', () => {
-  assert.equal(resolveHostedProjectTitle(makeProject('Recorded Run'), 'recording://run-1/replay.rivet-project'), 'Recorded Run');
   assert.equal(
-    resolveHostedProjectTitle(makeProject('Published Snapshot'), 'published-version-preview://Project/version/replay.rivet-project'),
+    resolveHostedProjectTitle(makeProject('Recorded Run'), 'recording://run-1/replay.rivet-project'),
+    'Recorded Run',
+  );
+  assert.equal(
+    resolveHostedProjectTitle(
+      makeProject('Published Snapshot'),
+      'published-version-preview://Project/version/replay.rivet-project',
+    ),
     'Published Snapshot',
   );
 });
 
 test('resolveHostedProjectTitleFromPath resolves the file-tree project title without consulting metadata', () => {
   assert.equal(resolveHostedProjectTitleFromPath('/workflows/My Flow.rivet-project'), 'My Flow');
-  assert.equal(resolveHostedProjectTitleFromPath('D:\\Programming\\workflows\\Windows Demo.rivet-project'), 'Windows Demo');
+  assert.equal(
+    resolveHostedProjectTitleFromPath('D:\\Programming\\workflows\\Windows Demo.rivet-project'),
+    'Windows Demo',
+  );
   assert.equal(resolveHostedProjectTitleFromPath('/workflows/No Extension'), 'No Extension');
   assert.equal(resolveHostedProjectTitleFromPath('/workflows/readme.md'), 'readme.md');
   assert.equal(resolveHostedProjectTitleFromPath('   '), null);

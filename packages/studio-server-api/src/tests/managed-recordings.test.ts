@@ -6,6 +6,10 @@ import {
   selectManagedRecordingRowsForCleanup,
 } from '../routes/workflows/managed/recordings.js';
 import type { ManagedWorkflowContext } from '../routes/workflows/managed/context.js';
+import type {
+  ManagedWorkflowMaintenanceLease,
+  ManagedWorkflowMaintenanceTask,
+} from '../routes/workflows/managed/maintenance.js';
 import type { RecordingInsertRowData, RecordingRow, TransactionHooks } from '../routes/workflows/managed/types.js';
 
 function createRecordingRow(
@@ -35,6 +39,7 @@ function createRecordingRow(
     component_id_at_execution: null,
     component_type_at_execution: null,
     component_label_at_execution: null,
+    correlation_id: null,
     error_message: null,
     recording_blob_key: `${recordingId}/recording`,
     replay_project_blob_key: `${recordingId}/project`,
@@ -59,15 +64,37 @@ test('managed recording retention combines age, endpoint count, and total byte l
     createRecordingRow('b-new', 'endpoint b', '2026-08-03T12:00:00.000Z', 10),
   ];
 
-  const selected = selectManagedRecordingRowsForCleanup(rows, {
-    retentionDays: 14,
-    maxRunsPerEndpoint: 1,
-    maxTotalBytes: 15,
-  }, now);
+  const selected = selectManagedRecordingRowsForCleanup(
+    rows,
+    {
+      retentionDays: 14,
+      maxRunsPerEndpoint: 1,
+      maxTotalBytes: 15,
+    },
+    now,
+  );
 
-  assert.deepEqual(selected.map((row) => row.recording_id), ['expired', 'a-old', 'b-old', 'a-new']);
+  assert.deepEqual(
+    selected.map((row) => row.recording_id),
+    ['expired', 'a-old', 'b-old', 'a-new'],
+  );
 });
 
+test('managed recording retention keeps active suspension evidence outside normal limits', () => {
+  const now = Date.parse('2026-08-04T12:00:00.000Z');
+  const selected = selectManagedRecordingRowsForCleanup(
+    [
+      createRecordingRow('held-old', 'endpoint', '2026-07-01T00:00:00.000Z'),
+      createRecordingRow('ordinary-old', 'endpoint', '2026-07-02T00:00:00.000Z'),
+      createRecordingRow('ordinary-new', 'endpoint', '2026-08-04T00:00:00.000Z'),
+    ],
+    { retentionDays: 14, maxRunsPerEndpoint: 1, maxTotalBytes: 10 },
+    now,
+    new Set(['held-old']),
+  );
+
+  assert.deepEqual(selected.map((row) => row.recording_id), ['ordinary-old']);
+});
 test('managed per-endpoint retention does not combine projects that reused the same slug', () => {
   const rows = [
     createRecordingRow('a-old', 'shared', '2026-08-01T00:00:00.000Z'),
@@ -81,7 +108,10 @@ test('managed per-endpoint retention does not combine projects that reused the s
     maxTotalBytes: 0,
   });
 
-  assert.deepEqual(selected.map((row) => row.recording_id), ['a-old']);
+  assert.deepEqual(
+    selected.map((row) => row.recording_id),
+    ['a-old'],
+  );
 });
 
 test('managed recording statistics preserve web-app action identity and run-kind filtering', async () => {
@@ -94,13 +124,18 @@ test('managed recording statistics preserve web-app action identity and run-kind
     component_id_at_execution: 'generate',
     component_type_at_execution: 'button',
     component_label_at_execution: 'Generate report',
+    correlation_id: 'rvt-managed-recording-12345',
   };
   const context = {
     pool: {},
     initialize: async () => {},
     withTransaction: async () => {},
     revisions: {
-      uploadRecordingBlobs: async () => ({ recordingBlobKey: 'recording', replayProjectBlobKey: 'project', replayDatasetBlobKey: null }),
+      uploadRecordingBlobs: async () => ({
+        recordingBlobKey: 'recording',
+        replayProjectBlobKey: 'project',
+        replayDatasetBlobKey: null,
+      }),
       insertRecordingRow: async () => {},
       deleteBlobKeysBestEffort: async () => {},
     },
@@ -135,29 +170,66 @@ test('managed recording statistics preserve web-app action identity and run-kind
 
   const catalog = await service.listWorkflowRunStatisticsCatalog('web_app');
 
-  assert.deepEqual(catalog.targets.map((entry) => entry.target), [
-    { surface: 'web_app', workflowId: 'workflow-a', uiGraphId: 'ui-report', componentId: 'generate' },
-  ]);
+  assert.deepEqual(
+    catalog.targets.map((entry) => entry.target),
+    [{ surface: 'web_app', workflowId: 'workflow-a', uiGraphId: 'ui-report', componentId: 'generate' }],
+  );
   assert.equal(catalog.targets[0]?.componentLabel, 'Generate report');
+  const page = await service.listWorkflowRecordingRunsPage('workflow-a', 1, 20, 'all');
+  assert.equal(page.runs.length, 1);
+  assert.equal(page.runs[0]?.executionIdentity?.correlationId, 'rvt-managed-recording-12345');
+
 });
 
-test('managed startup cleanup deletes only claimed rows and their blobs', async () => {
+test('managed startup cleanup queues only the bounded claimed recording batch', async () => {
+  const oldestRow = createRecordingRow('oldest', 'endpoint', '2019-01-01T00:00:00.000Z');
   const oldRow = createRecordingRow('old', 'endpoint', '2020-01-01T00:00:00.000Z');
   const currentRow = createRecordingRow('current', 'endpoint', new Date().toISOString());
   const deletedIds: string[] = [];
-  const deletedBlobKeys: Array<string | null | undefined> = [];
+  let retentionQuery: { sql: string; parameters: unknown[] } | undefined;
   const commitTasks: Array<() => Promise<void>> = [];
+  let leaseAssertions = 0;
+  const maintenanceTasks = new Map<string, ManagedWorkflowMaintenanceTask>();
+  const enqueuedObjectKeys: Array<{ domain: string; keys: Array<string | null | undefined> }> = [];
+  const lease: ManagedWorkflowMaintenanceLease = {
+    holderId: 'test-maintainer',
+    fencingToken: 1,
+    assertCurrent: async () => {
+      leaseAssertions += 1;
+    },
+  };
+  const maintenance = {
+    config: { enabled: true, intervalMs: 60_000, leaseMs: 60_000, batchSize: 1 },
+    registerTask(name: string, task: ManagedWorkflowMaintenanceTask) {
+      maintenanceTasks.set(name, task);
+      return () => maintenanceTasks.delete(name);
+    },
+    enqueueObjectDeletions: async (_client: object, domain: string, keys: Array<string | null | undefined>) => {
+      enqueuedObjectKeys.push({ domain, keys });
+    },
+    initialize: async () => {},
+    requestRun: async () => {},
+    runNow: async () => {
+      for (const task of maintenanceTasks.values()) {
+        await task(lease);
+      }
+    },
+    dispose: async () => {},
+  };
 
   const context = {
     pool: {},
     initialize: async () => {},
     withTransaction: async (run: (client: object, hooks: TransactionHooks) => Promise<unknown>) => {
-      const result = await run({}, {
-        onCommit(task) {
-          commitTasks.push(task);
+      const result = await run(
+        {},
+        {
+          onCommit(task) {
+            commitTasks.push(task);
+          },
+          onRollback() {},
         },
-        onRollback() {},
-      });
+      );
       for (const task of commitTasks.splice(0)) {
         await task();
       }
@@ -170,9 +242,7 @@ test('managed startup cleanup deletes only claimed rows and their blobs', async 
         replayDatasetBlobKey: null,
       }),
       insertRecordingRow: async () => {},
-      deleteBlobKeysBestEffort: async (_context: string, keys: Array<string | null | undefined>) => {
-        deletedBlobKeys.push(...keys);
-      },
+      deleteBlobKeysBestEffort: async () => {},
     },
     db: {
       queryOne: async () => null,
@@ -180,11 +250,13 @@ test('managed startup cleanup deletes only claimed rows and their blobs', async 
         if (sql.includes('DELETE FROM workflow_recordings')) {
           const ids = params[0] as string[];
           deletedIds.push(...ids);
-          return ids.includes(oldRow.recording_id) ? [oldRow] : [];
+          return [oldestRow, oldRow].filter((row) => ids.includes(row.recording_id));
         }
-        return [oldRow, currentRow];
+        retentionQuery = { sql, parameters: params };
+        return [oldestRow];
       },
     },
+    maintenance,
     blobStore: { getText: async () => '' },
     mappers: {
       getWorkflowStatus: () => 'unpublished',
@@ -212,8 +284,16 @@ test('managed startup cleanup deletes only claimed rows and their blobs', async 
   });
   await service.initialize();
 
-  assert.deepEqual(deletedIds, ['old']);
-  assert.deepEqual(deletedBlobKeys, ['old/recording', 'old/project', null]);
+  assert.match(retentionQuery?.sql ?? '', /WITH eligible_recordings/u);
+  assert.deepEqual(retentionQuery?.parameters, [14, 100, [], 1]);
+  assert.deepEqual(deletedIds, ['oldest']);
+  assert.equal(leaseAssertions, 1);
+  assert.deepEqual(enqueuedObjectKeys, [
+    {
+      domain: 'workflow-recording-retention',
+      keys: ['oldest/recording', 'oldest/project', null],
+    },
+  ]);
 });
 
 test('managed recording imports account for UTF-8 bytes instead of JavaScript characters', async () => {

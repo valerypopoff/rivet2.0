@@ -1,7 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { toast } from 'react-toastify';
 
-import type { WorkflowFolderItem, WorkflowProjectItem } from './types';
+import type {
+  WorkflowFolderItem,
+  WorkflowProjectItem,
+  WorkflowTreeResponse,
+  WorkflowTreeSyncState,
+} from './types';
 import { fetchWorkflowTree } from './workflowApi';
 import { collectFolderIds, flattenFolders, flattenProjects } from './workflowLibraryHelpers';
 
@@ -15,6 +20,7 @@ export function useWorkflowLibraryTree(projectSaveSequence: number) {
   const [expandedFolders, setExpandedFolders] = useState<Record<string, boolean>>({});
   const refreshRequestIdRef = useRef(0);
   const projectSaveRefreshTimeoutRef = useRef<number | null>(null);
+  const syncRef = useRef<WorkflowTreeSyncState | null>(null);
 
   const refresh = useCallback(async (
     showLoading = true,
@@ -22,7 +28,7 @@ export function useWorkflowLibraryTree(projectSaveSequence: number) {
       preserveVisibleTreeOnError?: boolean;
       onError?: (message: string) => void;
     },
-  ) => {
+  ): Promise<WorkflowTreeResponse | null> => {
     const requestId = ++refreshRequestIdRef.current;
     const preserveVisibleTreeOnError = options?.preserveVisibleTreeOnError ?? false;
     if (showLoading) {
@@ -35,11 +41,12 @@ export function useWorkflowLibraryTree(projectSaveSequence: number) {
     try {
       const tree = await fetchWorkflowTree();
       if (requestId !== refreshRequestIdRef.current) {
-        return;
+        return null;
       }
 
       setFolders(tree.folders);
       setRootProjects(tree.projects);
+      syncRef.current = tree.sync;
       setExpandedFolders((previous) => {
         const validFolderIds = new Set(collectFolderIds(tree.folders));
         const next: Record<string, boolean> = {};
@@ -59,15 +66,17 @@ export function useWorkflowLibraryTree(projectSaveSequence: number) {
         }
         return changed ? next : previous;
       });
+      return tree;
     } catch (caughtError) {
       if (requestId !== refreshRequestIdRef.current) {
-        return;
+        return null;
       }
       const message = caughtError instanceof Error ? caughtError.message : 'Failed to load workflow folders';
       if (!preserveVisibleTreeOnError) {
         setError(message);
       }
       options?.onError?.(message);
+      return null;
     } finally {
       if (requestId === refreshRequestIdRef.current) {
         setLoading(false);
@@ -81,6 +90,10 @@ export function useWorkflowLibraryTree(projectSaveSequence: number) {
       onError: (message) => toast.error(message || fallbackMessage),
     });
   }, [refresh]);
+
+  const refreshFromRemoteChange = useCallback(() => refresh(false, {
+    preserveVisibleTreeOnError: true,
+  }), [refresh]);
 
   useEffect(() => {
     void refresh();
@@ -121,8 +134,10 @@ export function useWorkflowLibraryTree(projectSaveSequence: number) {
     reconcileInBackground,
     refresh,
     rootProjects,
+    refreshFromRemoteChange,
     setExpandedFolders,
     setFolders,
     setRootProjects,
+    syncRef,
   };
 }

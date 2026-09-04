@@ -80,6 +80,14 @@ test('LLM profile suspension settings resolve retained profile nodes to friendly
 
   assert.equal(getLLMProfileHealthDisplayName(project, snapshot('open', 'project-a', 'open')), 'Fast provider in Chat');
   assert.equal(getLLMProfileHealthDisplayName(undefined, snapshot('open', 'project-a', 'open')), 'LLM Profile profile-node');
+  const namedSnapshot = snapshot('named', 'project-a', 'open');
+  assert.equal(
+    getLLMProfileHealthDisplayName(undefined, {
+      ...namedSnapshot,
+      identity: { ...namedSnapshot.identity, profileName: 'Primary route' },
+    }),
+    'Primary route',
+  );
 });
 
 test('outer Project Settings owns LLM profile suspension administration and the embedded editor owns execution only', () => {
@@ -96,6 +104,11 @@ test('outer Project Settings owns LLM profile suspension administration and the 
   assert.match(healthSource, /No LLM profiles are currently suspended or awaiting recovery\./);
   assert.match(healthSource, /project-settings-llm-health-row-\$\{tone\}/);
   assert.match(healthSource, /project-settings-llm-health-metadata-\$\{tone\}/);
+  assert.match(healthSource, /Contributing recordings/);
+  assert.match(healthSource, /Open recording/);
+  assert.match(healthSource, /The replay is still being saved/);
+  assert.match(healthSource, /This suspension predates recording links/);
+  assert.match(healthSource, /entry\.contributingRuns \?\? \[\]/);
   assert.doesNotMatch(healthSource, /LLM profile reliability/);
   assert.doesNotMatch(providersSource, /llmProfileHealthAdmin:/);
   assert.match(providersSource, /llmProfileHealthStore:/);

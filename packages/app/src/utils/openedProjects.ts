@@ -11,6 +11,19 @@ export type ProjectPathMove = {
 
 export type ProjectPathMovesInput = Record<string, string> | ProjectPathMove[];
 
+function isOpenedProjectPathOwnedByAnotherProject(
+  current: OpenedProjectsInfo,
+  projectId: ProjectId,
+  path: string | null | undefined,
+): boolean {
+  return (
+    path != null &&
+    Object.entries(current.openedProjects).some(
+      ([otherProjectId, projectInfo]) => otherProjectId !== projectId && projectInfo.fsPath === path,
+    )
+  );
+}
+
 export function addOpenedProject(
   current: OpenedProjectsInfo,
   project: Project,
@@ -48,15 +61,14 @@ export function resolveSyncedOpenedProjectFsPathOptions(
   loadedProjectPath: string | null | undefined,
 ): { fsPath?: string | null } {
   const existingProject = current.openedProjects[projectId];
-  const isPathOwnedByAnotherProject = (path: string | null | undefined) =>
-    path != null &&
-    Object.entries(current.openedProjects).some(
-      ([otherProjectId, projectInfo]) => otherProjectId !== projectId && projectInfo.fsPath === path,
-    );
-  const existingPathIsOwnedByAnotherProject = isPathOwnedByAnotherProject(existingProject?.fsPath);
+  const existingPathIsOwnedByAnotherProject = isOpenedProjectPathOwnedByAnotherProject(
+    current,
+    projectId,
+    existingProject?.fsPath,
+  );
 
   if (loadedProjectPath) {
-    if (!isPathOwnedByAnotherProject(loadedProjectPath)) {
+    if (!isOpenedProjectPathOwnedByAnotherProject(current, projectId, loadedProjectPath)) {
       return { fsPath: loadedProjectPath };
     }
 
@@ -68,6 +80,28 @@ export function resolveSyncedOpenedProjectFsPathOptions(
   }
 
   return {};
+}
+
+/**
+ * Resolve the persistence target for one opened project without ever borrowing
+ * another tab's remembered path. `loadedProjectState` is global for historical
+ * reasons, so it is only a fallback when no other open project owns it.
+ */
+export function resolveOpenedProjectSavePath(
+  current: OpenedProjectsInfo,
+  projectId: ProjectId,
+  loadedProjectPath: string | null | undefined,
+): string | null {
+  const projectPath = current.openedProjects[projectId]?.fsPath;
+  if (projectPath && !isOpenedProjectPathOwnedByAnotherProject(current, projectId, projectPath)) {
+    return projectPath;
+  }
+
+  if (loadedProjectPath && !isOpenedProjectPathOwnedByAnotherProject(current, projectId, loadedProjectPath)) {
+    return loadedProjectPath;
+  }
+
+  return null;
 }
 
 export function removeOpenedProject(current: OpenedProjectsInfo, projectId: ProjectId): OpenedProjectsInfo {

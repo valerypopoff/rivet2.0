@@ -88,6 +88,7 @@ async function installCompareModeRoutes(
 
     const tree: WorkflowTreeResponse = {
       root: '/workflows',
+      sync: { epoch: 'playwright-fixture', revision: 0 },
       folders: [],
       projects,
     };

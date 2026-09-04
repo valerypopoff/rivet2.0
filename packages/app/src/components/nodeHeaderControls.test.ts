@@ -118,3 +118,22 @@ test('linked node headers use the library-link control instead of the edit gear'
     /id: 'node-edit',[\s\S]*label: 'Edit',[\s\S]*icon: SettingsCogIcon,[\s\S]*conditional: canEditNode,/,
   );
 });
+
+test('disabled upstream dependencies use the standard node-header warning in every canvas detail level', () => {
+  const visualNodeSource = readFileSync(join(componentsDir, 'VisualNode.tsx'), 'utf8');
+  const normalNodeSource = readFileSync(join(componentsDir, 'visualNode', 'NormalVisualNodeContent.tsx'), 'utf8');
+  const zoomedOutNodeSource = readFileSync(join(componentsDir, 'visualNode', 'ZoomedOutVisualNodeContent.tsx'), 'utf8');
+
+  assert.match(visualNodeSource, /disabledUpstreamInputWarningsState/);
+  assert.match(
+    visualNodeSource,
+    /combineNodeHeaderWarnings\([\s\S]*?disabledUpstreamInputWarnings\.get\(editTargetNode\?\.id \?\? node\.id\)/,
+  );
+  assert.match(visualNodeSource, /hasHeaderWarning: Boolean\(combinedHeaderWarning\)/);
+
+  for (const source of [normalNodeSource, zoomedOutNodeSource]) {
+    assert.match(source, /headerWarning && \(/);
+    assert.match(source, /className="node-header-warning"/);
+    assert.match(source, /aria-label=\{headerWarning\}/);
+  }
+});

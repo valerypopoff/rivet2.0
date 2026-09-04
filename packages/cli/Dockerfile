@@ -3,7 +3,7 @@ FROM node:23.11.0-alpine3.21
 WORKDIR /app
 VOLUME /project
 
-ARG RIVET_CLI_VERSION=2.1.9
+ARG RIVET_CLI_VERSION=2.4.0
 RUN npm install -g "@valerypopoff/rivet2-cli@${RIVET_CLI_VERSION}"
 
 COPY entrypoint.sh /usr/local/bin/

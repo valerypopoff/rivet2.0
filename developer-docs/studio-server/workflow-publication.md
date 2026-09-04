@@ -73,17 +73,29 @@ Important current behavior:
 
 Each project has a derived status:
 
-| Status | Meaning |
-|---|---|
-| `unpublished` | No published endpoint is currently active |
-| `published` | The live file matches the published snapshot/hash |
+| Status                | Meaning                                                                           |
+| --------------------- | --------------------------------------------------------------------------------- |
+| `unpublished`         | No published endpoint is currently active                                         |
+| `published`           | The live file matches the published snapshot/hash                                 |
 | `unpublished_changes` | An endpoint is published, but the live file has diverged from the published state |
 
 Status is derived from the stored settings plus a fresh state hash; it is not stored as the source of truth.
 
 The dashboard does not maintain its own separate optimistic publication-status model after save. It refreshes `/api/workflows/tree` and uses the API's derived status.
 
-Tree project stats are intentionally separate from publication state. Filesystem mode stores stats in a generated `*.wrapper-stats.json` sidecar keyed by the project file size, modification time, and metadata-change time; managed mode stores stats on immutable `workflow_revisions` rows when a revision is created. Existing managed revisions that predate the stats columns are lazily backfilled the first time the tree needs their counts. These caches let `/api/workflows/tree` avoid re-parsing project contents only for graph/node counts. They must not be used to decide whether a saved project is `Published` or `Unpublished changes`.
+Tree project stats are intentionally separate from publication state. Filesystem mode stores stats plus an opaque SHA-256 content revision in a generated `*.wrapper-stats.json` sidecar, keyed by the project and dataset-sidecar size, modification time, and metadata-change time; managed mode stores stats on immutable `workflow_revisions` rows when a revision is created. Existing managed revisions that predate the stats columns are lazily backfilled the first time the tree needs their counts. These caches let `/api/workflows/tree` avoid re-parsing project contents only for graph/node counts while still returning the revision needed for hosted-save conflict detection. They must not be used to decide whether a saved project is `Published` or `Unpublished changes`.
+
+### Crash-safe filesystem saves
+
+Filesystem-mode hosted saves commit the canonical `.rivet-project` and optional `.rivet-data` sidecar as one recoverable generation. Before either canonical file changes, the API validates both complete payloads, writes uniquely named staged artifacts under the workflow root's hidden `.rivet-transactions` directory, flushes them, and durably writes a versioned journal. The journal contains only safe relative paths, existence state, byte counts, and SHA-256 checksums; it never duplicates project or dataset contents.
+
+Commit first moves any old canonical project and dataset into transaction-owned backups, promotes the staged project and intended dataset state, re-reads and validates the complete result, and then durably creates the committed marker. The marker duplicates the safe journal metadata (not payload contents), so it alone can still prove the committed pair if final cleanup has already removed `journal.json`. That marker is the only success boundary. Any ordinary failure before it causes an immediate rollback, including dataset removal failures. Failures after it are cleanup failures: the API keeps the successful result and retries cleanup during recovery. Cleanup retains the journal and marker until no unexpected transaction residue remains, flushes the journal removal before removing the marker, and then removes the empty transaction directory. Once recovery has validated either the complete old or complete new generation, remaining cleanup work is retryable and does not block readiness; an unprovable generation still fails closed. Reads remain available while cleanup is pending, but all filesystem workflow mutations receive a retryable response until the old transaction evidence is removed, so a later save, move, rename, or delete cannot invalidate the retained journal's checksum. The derived `*.wrapper-stats.json` cache is refreshed only after commit and is not part of the transaction because it can be rebuilt from the canonical project. A stats-cache failure never prevents invalidation of the corresponding execution materialization, so a durable save cannot keep serving its old graph.
+
+Workflow-storage initialization runs a capability probe for exclusive creation, file flush, and same-filesystem rename, then recovers every retained journal before the API listens or reports ready. A probe file left by a crash is recognized by its generated name and safely removed on the next initialization. An uncommitted journal is restored to its checksummed old generation; a committed journal or structured committed marker must match its checksummed new generation before cleanup. Project loads also perform path-specific recovery defensively. A legacy ID-only committed marker without its durable journal, or any conflicting/checksum-invalid evidence, is ambiguous and not disposable staging. In those cases recovery fails closed, preserves the transaction directory, keeps readiness false, and logs the transaction ID plus safe project-relative path for operator inspection.
+
+The filesystem coordinator lets reads proceed together but excludes every canonical tree/project mutation while a save, move, rename, duplicate, upload, delete, restore, or publication change owns the write boundary. This prevents API readers from seeing the short sequence of individual renames. Recovery health is scoped to the configured workflow root, so a failed recovery for a different test or reconfigured root cannot poison the active control plane. Graceful shutdown stops new HTTP work first and waits for active filesystem operations; a hard stop remains safe because the journal is authoritative on restart.
+
+Project files, dataset sidecars, and `.rivet-transactions` must resolve beneath the same workflow root and filesystem device. The transaction helper accepts only `.rivet-project` targets, verifies the target path before it invokes save callbacks or creates a target directory, then checks every newly traversed directory's real path before using it. Object-storage mounts or FUSE implementations that cannot provide the probed semantics are rejected rather than treated as transactional. The guarantee covers Rivet Server API access only; manual processes are not tree-notified, but an in-place API save hashes the current canonical project and dataset immediately before its transaction and rejects a supplied stale revision. That prevents a mixed generation or a blind overwrite; it deliberately does not merge concurrent project edits.
 
 In Project Settings:
 
@@ -161,10 +173,29 @@ That means:
 
 Current backend-specific behavior:
 
-- in `filesystem` mode, status is derived from the fresh publication state hash after the save completes
+- in `filesystem` mode, the project and dataset save has crossed its durable transaction marker before the endpoint returns success or the tree notifier advances; status is then derived from the fresh publication state hash
 - in both storage modes, the workflow tree/file name is the hosted project title source of truth; saving rewrites `data.metadata.title` back to the current tree name if the editor changed it, and the hosted editor calls `RivetWorkspaceHost.updateProjectMetadata(..., { persistedExternally: true })` after save so open editor title surfaces match the stored tree name without reopening the project. If a future wrapper-owned save flow needs to mark a canonical saved snapshot clean without changing title/description, it should call `markCurrentProjectClean()` or `markProjectClean()` after backend save success instead of touching Rivet's dirty-state atoms.
 - in `managed` mode, a no-op save does not create a new draft revision
 - in `managed` mode, if the saved contents match the published revision exactly, the save path reuses that published revision instead of creating a distinct draft revision that would incorrectly appear as `unpublished_changes`
+
+## Dashboard project-tree synchronization
+
+Open hosted dashboards keep their project trees synchronized for mutations made through Rivet Server. The API exposes an authenticated SSE invalidation stream at `GET /api/workflows/tree/events`. It sends an initial `tree-state` `{ epoch, revision }` token and a `tree-changed` token after each completed tree-affecting mutation. The notification deliberately contains no folder or project payload: every browser refetches the authoritative `GET /api/workflows/tree` response, which carries the same kind of token.
+
+The server emits one invalidation only after a successful create, move, rename, delete, upload, duplicate, restore, save, publish/unpublish, or web-app publication/access mutation. Rejected and failed operations emit nothing. Each dashboard includes an opaque per-browser id in the `x-rivet-workflow-tree-client` request header; it is a refresh-deduplication token, not an authentication credential. The API reflects that id only in the event for the originating mutation, so the browser's existing local refresh remains authoritative and it does not schedule a redundant stream refresh for its own change.
+
+The browser coalesces rapid remote notifications, keeps folders expanded when their IDs still exist, and defers reconciliation while the local user is dragging, while a drag/drop move request is still reconciling, editing a tree name, uploading, or waiting for another local tree action. A transient refetch failure leaves the visible tree intact and is retried in the background. Native `EventSource` reconnection plus the server epoch means a restarted API process causes connected clients to fetch a fresh tree rather than trusting an old revision.
+
+Tree synchronization is intentionally content-non-destructive:
+
+- A remote rename or move refreshes the sidebar, then reconciles every matching open editor tab by immutable project metadata ID. It updates the tab title and canonical path without reloading, merging, closing, or discarding the in-memory document, and shows the affected user a notification.
+- A following normal Save carries that project ID as an in-place persistence intent. Filesystem storage scans the authoritative tree under its write lock; managed storage locks the workflow row by ID. Both save to the current canonical path rather than creating a duplicate at the stale path. Missing or ambiguous owners fail with a conflict; Save As stays an explicit create-at-path operation.
+- A remote saved-content edit changes the tree item's opaque revision without changing its ID/path/title. Every open matching tab, including a clean or inactive tab, receives a persistent **Reload** / **Keep mine** notification and remains untouched until the user chooses. Reload explicitly fetches the saved project into that tab; Keep mine permits the next explicit in-place Save to overwrite the observed remote revision. The client blocks saving before that decision, and the managed revision or filesystem project-plus-dataset hash is compared again immediately before the server write. A stale precondition is a conflict, never a duplicate or silent overwrite.
+- A remote delete still does not reload or silently close an editor document. The dashboard explains that the unchanged document remains open; its subsequent in-place save fails instead of recreating the deleted project.
+- This is not live graph collaboration and does not merge project content. Users still choose when to reload, save, or resolve content-level conflicts.
+- Only Rivet Server mutations participate. Manual filesystem changes outside the server are not watched.
+
+The Docker, development, and Kubernetes proxy templates define this stream as an exact authenticated `/api/workflows/tree/events` location before the generic `/api/` route. That location disables proxy buffering and uses long read/write timeouts so the stream is not delayed or cut off by ordinary API defaults. The notifier is intentionally API-process-local because the dashboard control plane is currently singleton. If control-plane API replicas become highly available later, replace it with shared fan-out (for example PostgreSQL `LISTEN/NOTIFY`) before claiming cross-replica tree updates.
 
 ## Unpublish flow
 
@@ -411,6 +442,8 @@ Project Settings displays workflow and web-app endpoint prefixes from the runtim
 
 Newly rendered app pages use the upstream resumable WebSocket action transport at `/apps/<slug>/actions/ws` or `/apps-latest/<slug>/actions/ws`. It starts each action idempotently, streams graph-authored `Report Progress` events, supports explicit cancellation, and reconnects/resumes from durable event sequence numbers without running the graph a second time. The existing `POST .../actions/run` routes remain available for an already-open page produced by an older Rivet renderer; the client never falls back from an interrupted socket action to HTTP because a retry could duplicate an external side effect.
 
+Chat-owned browser state and graph Stored Values now use a dedicated IndexedDB database. Current WebSocket clients negotiate an on-demand, chunked storage RPC so large values are not attached to every action request; older clients keep the bounded snapshot/patch path. The database remains best-effort data in one browser profile, never a server backup or LLM-context policy. The record model, 30-day `localStorage` migration, compatibility boundary, resource limits, and operator metrics are documented in [web-app-browser-storage.md](web-app-browser-storage.md).
+
 Both transports use the same project resolver family, dataset provider, project-reference loader, `ManagedCodeRunner`, and request-header context injection as workflow execution. The wrapper attaches an `ExecutionRecorder` in the WebSocket gateway's `onProcessorPrepared` hook, before `processor.run()`. After upstream Rivet durably stores the matching terminal socket event, its terminal hook queues the recorder into the normal Run recordings store using the exact server-assigned run id. This keeps concurrent button actions correlated correctly without delaying the browser result. HTML embeds an opaque `revisionKey`; stale HTTP or socket action attempts are rejected with `code: "revision_mismatch"`, and the embedded upstream Rivet web-app client shows a blocking `This app was updated. Reload to continue.` modal rather than auto-refreshing or rerunning the action.
 
 Published web app action runs do not attach Remote Debugger. Latest web app action runs attach the same default-on `/ws/latest-debugger` remote debugger as latest workflow endpoint runs because they execute against the latest saved draft on the control-plane backend. Hardened deployments can explicitly disable that websocket with `RIVET_ENABLE_LATEST_REMOTE_DEBUGGER=false`. Published and latest web app action graph runs are persisted into the same Run recordings history as workflow endpoint runs. Their `endpointNameAtExecution` value is the route path that executed the action, such as `/apps/my-tool` or `/apps-latest/my-tool`, so the Run recordings modal can show whether a saved run came from a workflow endpoint or a web-app action.
@@ -504,17 +537,28 @@ Rivet intentionally does not enforce the policy. Every Studio Server profile
 attempt consults the backend selected for the workflow deployment:
 
 - filesystem mode uses the single-host SQLite health store under `RIVET_APP_DATA_ROOT`
-- managed mode uses shared Postgres state across control and execution replicas
+- managed mode uses shared Postgres state across control, execution, and internal Evaluation-worker replicas
 - published and latest workflow endpoints receive the store through their processor options
 - HTTP compatibility and resumable WebSocket web-app actions receive the same store; reconnecting a web-app action does not create a browser-local health island
 
 The state records only safe profile identity metadata, bounded failure timestamps, suspension state, and permit/lease data. The backend owns time and serializes same-key transitions. A suspended profile is skipped until its suspension ends; after that, one leased recovery attempt is allowed. Candidate activity renews the owning permit without shortening an existing lease. A successful recovery attempt invalidates all permits admitted before the profile was suspended. Stale permits, including a request that finishes after an administrator clears the project history, cannot mutate or recreate the record, and an existing key cannot be rebound to another project. Internally, this uses standard circuit-breaker states and leases; those implementation names are intentionally not shown in the product UI.
 
-`GET /api/workflows/llm-profile-health?projectId=<id>` and `POST /api/workflows/llm-profile-health/reset` are trusted hosted-editor administration surfaces. Both require an exact project id. Reset accepts that project id alone for one atomic project-wide reset, or the project id plus one exact key; unscoped listing and key-only reset are rejected. Runtime `begin`, `finish`, and `renew` identities also require their project id. These routes use the normal wrapper proxy-auth contract and are not public workflow endpoints.
+`GET /api/workflows/llm-profile-health?projectId=<id>` is the runtime health snapshot surface. `GET /api/workflows/llm-profile-health/admin?projectId=<id>` is the trusted hosted-editor administration surface: it adds only safe, active-suspension evidence metadata. `POST /api/workflows/llm-profile-health/reset` resets state. All require an exact project id. Reset accepts that project id alone for one atomic project-wide reset, or the project id plus one exact key; unscoped listing and key-only reset are rejected. Runtime `begin`, `finish`, and `renew` identities also require their project id. These routes use the normal wrapper proxy-auth contract and are not public workflow endpoints.
+
+Published endpoints and web-app actions receive one API-created opaque correlation id. If their normal Run recording persists, the queue resolves pending profile-failure evidence to that existing `recordingId` before retention can consider the new bundle; it does not create a second recording or copy a prompt/provider response into health state. Those API-created ids never reach a browser.
+
+A hosted editor run is different. When the user enables **Record local graph executions**, the hosted provider confirms support for `GET /api/workflows/local-editor-recordings/capability`, creates a one-run opaque correlation id, and supplies it only to the shared health store. This applies to both Browser-mode execution and Node-mode execution on Studio Server's internal executor. Browser mode gives the id directly to the local processor. Node mode adds it to the private remote-run protocol, starts an exact-request WebSocket recorder before the run is sent, and the Studio Server executor forwards the validated id into its processor options. If—and only if—the processor later reports a successful unhealthy `health-update`, the browser sends the already captured recorder, execution project snapshot, and optional dataset snapshot to the authenticated `POST /api/workflows/local-editor-recordings` route. A socket that disconnects before a terminal frame, or a local snapshot/upload that cannot be retained, explicitly resolves its evidence as unavailable instead of leaving it pending.
+
+The API resolves the saved hosted project through the authoritative tree by stable metadata ID, with an exact relative tree-path fallback for an older or temporarily unindexed client, and never reads a raw requested filesystem path. It then requires both project IDs to match before writing the normal replay bundle with `runKind: editor`; these diagnostic editor rows are excluded from endpoint and web-app Run statistics. The upload is capped at 24 MiB of UTF-8 snapshot data, uses normal recording retention, and does not run for healthy local executions. It is browser-to-the-same-authenticated-Studio-Server storage, not a public workflow endpoint or a cloud sync feature. The API resolves matching evidence to that recording ID only after durable persistence. Disabled recording policy, an oversized/invalid upload, a persistence failure, a queue rejection, an unrecordable socket, or explicit recording deletion is shown as an unavailable explanation rather than a broken replay link. A mixed-version dashboard checks the capability route before it gives either hosted editor mode a correlation id, so an older server cleanly falls back to `not recorded` instead of leaving evidence pending. Desktop and external-debugger Node executors never upload editor replays through this route.
 
 The wrapper-owned Project Settings > LLM profile suspension tab shows profiles that
 are currently suspended, awaiting their recovery attempt, or running that attempt.
-This keeps retained recovery state visible after a suspension expires instead of
+For an active suspension it also shows all contributing failed runs, labels the run
+that crossed the failure threshold, and opens every available item in the existing
+Run recording replay flow. Those recordings are temporarily exempt from normal age,
+per-endpoint, and size retention until that suspension recovers or the health history
+is cleared. An explicit administrator deletion still wins; Rivet best-effort marks the
+link unavailable without turning an already-successful recording delete into a false API failure. This keeps retained recovery state visible after a suspension expires instead of
 presenting the project as having no operational reliability state. Clearing history
 deletes the complete stored record, including failures, suspension, and recovery attempts; it does not alter the
 LLM profile suspension settings in the project. Its full-width reliability explanation
@@ -691,25 +735,25 @@ Legacy uncompressed bundles are still readable in `filesystem` mode. Startup rec
 
 Recording history limits are wrapper-owned app settings, not deployment env. The dashboard exposes them under `Settings` -> `Run recordings`, and the API stores them as `settings/run-recordings.json` under `RIVET_APP_DATA_ROOT`. The saved settings are:
 
-| Setting | Purpose | Default |
-|---|---|---|
-| `Queued recording writes` | How many recording save jobs can wait in memory before new recordings are skipped | `100` |
-| `Runs kept per workflow endpoint` | Choose whether to keep every run for each endpoint or keep only the newest N runs | `Keep latest runs: 100` |
-| `Days to keep recordings` | Choose whether to keep recordings forever or delete them after N days | `Keep for some time: 14 days` |
+| Setting                           | Purpose                                                                           | Default                       |
+| --------------------------------- | --------------------------------------------------------------------------------- | ----------------------------- |
+| `Queued recording writes`         | How many recording save jobs can wait in memory before new recordings are skipped | `100`                         |
+| `Runs kept per workflow endpoint` | Choose whether to keep every run for each endpoint or keep only the newest N runs | `Keep latest runs: 100`       |
+| `Days to keep recordings`         | Choose whether to keep recordings forever or delete them after N days             | `Keep for some time: 14 days` |
 
 The legacy `RIVET_RECORDINGS_MAX_PENDING_WRITES`, `RIVET_RECORDINGS_MAX_RUNS_PER_ENDPOINT`, and `RIVET_RECORDINGS_RETENTION_DAYS` env vars are ignored so runtime retention policy comes only from the App Settings UI.
 
 The remaining recording behavior is controlled by env vars:
 
-| Variable | Purpose | Default |
-|---|---|---|
-| `RIVET_RECORDINGS_ENABLED` | Enable workflow recording persistence | `true` |
-| `RIVET_RECORDINGS_COMPRESS` | Blob encoding (`gzip` or `identity`) | `gzip` |
-| `RIVET_RECORDINGS_GZIP_LEVEL` | Gzip compression level | `4` |
-| `RIVET_RECORDINGS_INCLUDE_PARTIAL_OUTPUTS` | Include partial outputs in recorder payloads | `false` |
-| `RIVET_RECORDINGS_INCLUDE_TRACE` | Include trace data in recorder payloads | `false` |
-| `RIVET_RECORDINGS_DATASET_MODE` | Dataset snapshot mode (`none` or `all`) | `none` |
-| `RIVET_RECORDINGS_MAX_TOTAL_BYTES` | Global compressed-byte cap across recordings (`0` disables) | `0` |
+| Variable                                   | Purpose                                                     | Default |
+| ------------------------------------------ | ----------------------------------------------------------- | ------- |
+| `RIVET_RECORDINGS_ENABLED`                 | Enable workflow recording persistence                       | `true`  |
+| `RIVET_RECORDINGS_COMPRESS`                | Blob encoding (`gzip` or `identity`)                        | `gzip`  |
+| `RIVET_RECORDINGS_GZIP_LEVEL`              | Gzip compression level                                      | `4`     |
+| `RIVET_RECORDINGS_INCLUDE_PARTIAL_OUTPUTS` | Include partial outputs in recorder payloads                | `false` |
+| `RIVET_RECORDINGS_INCLUDE_TRACE`           | Include trace data in recorder payloads                     | `false` |
+| `RIVET_RECORDINGS_DATASET_MODE`            | Dataset snapshot mode (`none` or `all`)                     | `none`  |
+| `RIVET_RECORDINGS_MAX_TOTAL_BYTES`         | Global compressed-byte cap across recordings (`0` disables) | `0`     |
 
 Operational defaults are intentionally conservative:
 
@@ -864,6 +908,7 @@ The workflow-publication UI now follows the same controller-versus-view split as
 - `packages/studio-server-api/src/routes/workflows/endpoint-names.ts` - shared endpoint-name validation and case-insensitive lookup normalization
 - `packages/studio-server-api/src/routes/workflows/publication.ts` - filesystem publication logic, status derivation, and endpoint lookup
 - `packages/studio-server-api/src/routes/workflows/web-app-publication.ts` - filesystem web-app publication, republish, and per-app unpublish mutations
+- `packages/studio-server-api/src/routes/workflows/local-editor-recordings.ts` - authenticated replay import/outcome resolution for health-correlated hosted editor runs
 - `packages/studio-server-api/src/routes/workflows/published-versions.ts` - filesystem published-version history metadata, star state, listing, download, preview, restore, and cleanup
 - `packages/studio-server-api/src/routes/workflows/execution.ts` - public/latest/internal execution handlers and recording enqueue path
 - `packages/studio-server-api/src/routes/workflows/hosted-project-contents.ts` - hosted project content normalization shared by filesystem and managed saves

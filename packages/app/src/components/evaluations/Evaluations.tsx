@@ -1,5 +1,6 @@
 import { css } from '@emotion/react';
 import Button from '@atlaskit/button';
+import Checkbox from '@atlaskit/checkbox';
 import Textfield from '@atlaskit/textfield';
 import TextArea from '@atlaskit/textarea';
 import { useAtom, useAtomValue, useSetAtom } from 'jotai';
@@ -31,6 +32,7 @@ import {
   type EvaluationAssertionOperator,
   type EvaluationRun,
   type EvaluationRunPurpose,
+  type EvaluationRecordingReference,
   type EvaluationSuite,
   type EvaluationThreshold,
   type PortableJson,
@@ -52,13 +54,18 @@ import {
   type EvaluationSuitePresentation,
 } from '../../state/evaluations.js';
 import { overlayOpenState } from '../../state/ui.js';
-import { useEvaluationRunStore, useIOProvider } from '../../providers/ProvidersContext.js';
+import {
+  useEvaluationRunStore,
+  useHostedEvaluationCoordinator,
+  useIOProvider,
+  type HostedEvaluationRunState,
+} from '../../providers/ProvidersContext.js';
 import { useLoadRecording } from '../../hooks/useLoadRecording.js';
 import { CollapsiblePanel } from '../CollapsiblePanel.js';
 import { LabeledToggle } from '../LabeledToggle.js';
 import { ScalableToggle } from '../ScalableToggle.js';
 import { SegmentedEditor } from '../editors/SegmentedEditor.js';
-import type { AbortEvaluation, TryRunEvaluation } from './api.js';
+import type { AbortEvaluation, TryRetryInterruptedEvaluation, TryRunEvaluation } from './api.js';
 import { CreateEvaluationSuiteModal, type CreateEvaluationSuiteValue } from './CreateEvaluationSuiteModal.js';
 import { EvaluationConfirmModal, type EvaluationConfirmation } from './EvaluationConfirmModal.js';
 import {
@@ -132,6 +139,43 @@ function getCachedEvaluationRunSummary(run: EvaluationRun): EvaluationRunSummary
   const summary = summarizeEvaluationRun(run);
   if (summary) evaluationRunSummaryCache.set(run, summary);
   return summary;
+}
+
+function getEvaluationRunRecordingReferences(run: EvaluationRun): EvaluationRecordingReference[] {
+  return run.trials.flatMap((trial) => [
+    ...(trial.recording === undefined ? [] : [trial.recording]),
+    ...trial.observations.flatMap((observation) =>
+      observation.recording === undefined ? [] : [observation.recording],
+    ),
+  ]);
+}
+
+function withEvaluationRunRecordingRetention(
+  run: EvaluationRun,
+  recordingIds: ReadonlySet<string>,
+  retention: EvaluationRecordingReference['retention'],
+  expiresAt?: string,
+): EvaluationRun {
+  const update = (reference: EvaluationRecordingReference): EvaluationRecordingReference =>
+    !recordingIds.has(reference.id)
+      ? reference
+      : {
+          id: reference.id,
+          retention,
+          ...(expiresAt === undefined ? {} : { expiresAt }),
+        };
+  return {
+    ...run,
+    trials: run.trials.map((trial) => ({
+      ...trial,
+      ...(trial.recording === undefined ? {} : { recording: update(trial.recording) }),
+      observations: trial.observations.map((observation) =>
+        observation.recording === undefined
+          ? observation
+          : { ...observation, recording: update(observation.recording) },
+      ),
+    })),
+  };
 }
 
 const styles = css`
@@ -901,6 +945,45 @@ const styles = css`
     background: color-mix(in srgb, var(--grey-light) 9%, transparent);
     color: var(--grey-light);
   }
+  .evaluation-hosted-retry {
+    display: grid;
+    gap: 14px;
+    max-width: 950px;
+    margin-top: 18px;
+    padding: 14px;
+    border: 1px solid color-mix(in srgb, var(--warning) 48%, var(--grey-darkish));
+    border-radius: 6px;
+    background: color-mix(in srgb, var(--warning) 10%, var(--grey-dark));
+  }
+  .evaluation-hosted-retry h3,
+  .evaluation-hosted-retry p {
+    margin: 0;
+  }
+  .evaluation-hosted-retry h3 {
+    margin-bottom: 6px;
+  }
+  .evaluation-hosted-retry p {
+    max-width: 800px;
+    color: var(--foreground);
+    line-height: 1.45;
+  }
+  .evaluation-hosted-retry-selection {
+    display: grid;
+    gap: 8px;
+  }
+  .evaluation-hosted-retry-job-list {
+    display: grid;
+    gap: 6px;
+    padding: 10px 12px;
+    border-radius: 4px;
+    background: color-mix(in srgb, var(--grey-darkest) 38%, transparent);
+  }
+  .evaluation-hosted-retry-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    align-items: center;
+  }
   .evaluation-threshold-results {
     max-width: 950px;
     margin-top: 18px;
@@ -951,6 +1034,13 @@ const styles = css`
   }
   .evaluation-trial-sort + .evaluation-trial-list {
     margin-top: 12px;
+  }
+  .evaluation-run-recording-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 16px;
+    flex-wrap: wrap;
   }
   .evaluation-run-delete-action {
     position: fixed;
@@ -1553,19 +1643,27 @@ function formatEvaluationComparisonMetric(label: string, value: number | undefin
   return value.toFixed(4);
 }
 
-export const EvaluationsRenderer: FC<{ tryRunEvaluation: TryRunEvaluation; abortEvaluation: AbortEvaluation }> = ({
-  tryRunEvaluation,
-  abortEvaluation,
-}) => {
+export const EvaluationsRenderer: FC<{
+  tryRunEvaluation: TryRunEvaluation;
+  retryInterruptedEvaluation: TryRetryInterruptedEvaluation;
+  abortEvaluation: AbortEvaluation;
+}> = ({ tryRunEvaluation, abortEvaluation, retryInterruptedEvaluation }) => {
   const openOverlay = useAtomValue(overlayOpenState);
   if (openOverlay !== 'evaluations') return null;
-  return <EvaluationsContainer tryRunEvaluation={tryRunEvaluation} abortEvaluation={abortEvaluation} />;
+  return (
+    <EvaluationsContainer
+      tryRunEvaluation={tryRunEvaluation}
+      retryInterruptedEvaluation={retryInterruptedEvaluation}
+      abortEvaluation={abortEvaluation}
+    />
+  );
 };
 
-const EvaluationsContainer: FC<{ tryRunEvaluation: TryRunEvaluation; abortEvaluation: AbortEvaluation }> = ({
-  tryRunEvaluation,
-  abortEvaluation,
-}) => {
+const EvaluationsContainer: FC<{
+  tryRunEvaluation: TryRunEvaluation;
+  retryInterruptedEvaluation: TryRetryInterruptedEvaluation;
+  abortEvaluation: AbortEvaluation;
+}> = ({ tryRunEvaluation, abortEvaluation, retryInterruptedEvaluation }) => {
   const [state, setState] = useAtom(evaluationsState);
   const storedProject = useAtomValue(projectState);
   const openedProjects = useAtomValue(projectsState);
@@ -1602,6 +1700,7 @@ const EvaluationsContainer: FC<{ tryRunEvaluation: TryRunEvaluation; abortEvalua
   const [datasetUsageExpanded, setDatasetUsageExpanded] = useState(false);
   const [runsStatus, setRunsStatus] = useState<EvaluationRunHistoryLoadStatus>('idle');
   const [runsError, setRunsError] = useState<string>();
+  const [retryingHostedRunId, setRetryingHostedRunId] = useState<string>();
   // Reading history is asynchronous, while deleting a run updates the store
   // and local selection immediately. A request generation prevents an older
   // read from putting the deleted record back into the Runs view afterward.
@@ -2420,6 +2519,36 @@ const EvaluationsContainer: FC<{ tryRunEvaluation: TryRunEvaluation; abortEvalua
     runSelectedEvaluation(purpose);
   };
 
+  const requestRetryInterruptedTrials = (run: EvaluationRun, jobIds: readonly string[]) => {
+    if (!projectAvailable) {
+      toast.info('Open this Evaluation project before retrying hosted trials.');
+      return;
+    }
+    const uniqueJobIds = [...new Set(jobIds)];
+    if (uniqueJobIds.length === 0 || retryingHostedRunId === run.id) return;
+    const trialLabel = `${uniqueJobIds.length} interrupted trial${uniqueJobIds.length === 1 ? '' : 's'}`;
+    setConfirmation({
+      title: `Retry ${trialLabel}?`,
+      description:
+        'A worker may have started these trials before it was interrupted. Retrying can repeat model calls, tool calls, external side effects, and cost. Only retry work that is safe to run again.',
+      confirmLabel: `Retry ${trialLabel}`,
+      onConfirm: () => {
+        void (async () => {
+          setRetryingHostedRunId(run.id);
+          try {
+            await retryInterruptedEvaluation({ runId: run.id, jobIds: uniqueJobIds });
+          } catch (error) {
+            toast.error(
+              `Could not retry interrupted trials: ${error instanceof Error ? error.message : String(error)}`,
+            );
+          } finally {
+            setRetryingHostedRunId(undefined);
+          }
+        })();
+      },
+    });
+  };
+
   const openRecording = async (recordingId: string) => {
     try {
       const artifact = await runStore.getRecording({ projectId: project.metadata.id, recordingId });
@@ -2485,6 +2614,81 @@ const EvaluationsContainer: FC<{ tryRunEvaluation: TryRunEvaluation; abortEvalua
     }
   };
 
+  const updateEvaluationRunRecordingRetention = async (run: EvaluationRun, action: 'keep' | 'release') => {
+    const now = Date.now();
+    const sourceRetention = action === 'keep' ? 'temporary' : 'retained';
+    const references = [
+      ...new Map(
+        getEvaluationRunRecordingReferences(run)
+          .filter(
+            (reference) =>
+              reference.retention === sourceRetention &&
+              (action !== 'keep' || reference.expiresAt === undefined || Date.parse(reference.expiresAt) > now),
+          )
+          .map((reference) => [reference.id, reference]),
+      ).values(),
+    ];
+    if (references.length === 0) {
+      toast.info(
+        action === 'keep'
+          ? 'This run has no unexpired temporary replay recordings to keep.'
+          : 'This run has no manually retained replay recordings to release.',
+      );
+      return;
+    }
+
+    const expiresAt = action === 'release' ? new Date(now + 24 * 60 * 60 * 1000).toISOString() : undefined;
+    const changedIds = new Set<string>();
+    let failure: unknown;
+    for (const reference of references) {
+      try {
+        const updated = await runStore.updateRecordingRetention({
+          expiresAt,
+          projectId: project.metadata.id,
+          recordingId: reference.id,
+          retention: action === 'keep' ? 'retained' : 'temporary',
+        });
+        if (updated) changedIds.add(reference.id);
+      } catch (error) {
+        failure = error;
+        break;
+      }
+    }
+
+    if (changedIds.size > 0) {
+      const update = (candidate: EvaluationRun) =>
+        candidate.id === run.id
+          ? withEvaluationRunRecordingRetention(
+              candidate,
+              changedIds,
+              action === 'keep' ? 'retained' : 'temporary',
+              expiresAt,
+            )
+          : candidate;
+      setState((current) => ({
+        ...current,
+        currentRun: current.currentRun ? update(current.currentRun) : undefined,
+        runs: current.runs.map(update),
+      }));
+    }
+    if (failure !== undefined || changedIds.size !== references.length) {
+      const detail =
+        failure === undefined
+          ? 'One or more recordings expired or were removed before the change could be saved.'
+          : failure instanceof Error
+            ? failure.message
+            : String(failure);
+      toast.warn(
+        `Only ${changedIds.size} of ${references.length} replay recordings were updated. Refresh Runs before trying again: ${detail}`,
+      );
+      return;
+    }
+    toast.success(
+      action === 'keep'
+        ? `${changedIds.size} replay recording${changedIds.size === 1 ? '' : 's'} will be kept until you release them.`
+        : `${changedIds.size} replay recording${changedIds.size === 1 ? '' : 's'} will expire in 24 hours.`,
+    );
+  };
   const deleteEvaluationRun = async (run: EvaluationRun) => {
     const isLiveRun =
       state.currentRun?.id === run.id &&
@@ -2528,7 +2732,7 @@ const EvaluationsContainer: FC<{ tryRunEvaluation: TryRunEvaluation; abortEvalua
     setConfirmation({
       appearance: 'danger',
       title: 'Delete evaluation run?',
-      description: `Delete "${run.name?.trim() || 'Unnamed'}"? This permanently removes its local run history and any retained replay recordings. A baseline already promoted from this run remains available.`,
+      description: `Delete "${run.name?.trim() || 'Unnamed'}"? This permanently removes its run history and every replay recording for the run, including manually kept and baseline recordings. A compact baseline snapshot remains available for comparison, but its replay recordings will be gone.`,
       confirmLabel: 'Delete run',
       onConfirm: () => void deleteEvaluationRun(run),
     });
@@ -2905,11 +3109,15 @@ const EvaluationsContainer: FC<{ tryRunEvaluation: TryRunEvaluation; abortEvalua
                   error={visibleRunsStatus === 'error' ? runsError : undefined}
                   refreshError={runHistoryRefreshError}
                   expandedTrialExpansion={visibleRunTrialExpansion}
+                  retryingHostedRunId={retryingHostedRunId}
+                  onRetryInterrupted={requestRetryInterruptedTrials}
                   onSelect={selectRun}
                   onScoreSortChange={updateRunScoreSort}
                   onExpandedTrialsChange={updateExpandedTrials}
                   onRename={(runId, name) => void renameEvaluationRun(runId, name)}
                   onDelete={requestDeleteEvaluationRun}
+                  onKeepRecordings={(run) => void updateEvaluationRunRecordingRetention(run, 'keep')}
+                  onReleaseRecordings={(run) => void updateEvaluationRunRecordingRetention(run, 'release')}
                   onOpenRecording={(recordingId) => void openRecording(recordingId)}
                 />
               )}
@@ -4424,6 +4632,129 @@ const Dataset: FC<{
   );
 };
 
+const HostedInterruptedTrialRetry: FC<{
+  run: EvaluationRun;
+  retrying: boolean;
+  onRetry: (run: EvaluationRun, jobIds: readonly string[]) => void;
+}> = ({ run, retrying, onRetry }) => {
+  const hostedEvaluationCoordinator = useHostedEvaluationCoordinator();
+  const [hostedState, setHostedState] = useState<HostedEvaluationRunState>();
+  const [retryEnabled, setRetryEnabled] = useState(false);
+  const [selectedJobIds, setSelectedJobIds] = useState<readonly string[]>([]);
+  const [refreshVersion, setRefreshVersion] = useState(0);
+  const readGeneration = useRef(0);
+
+  // A durable run snapshot may advance while an operator is choosing a subset
+  // of interrupted work. Only changing the run scope invalidates that choice;
+  // a background refresh merely revalidates it against the latest job set.
+  useEffect(() => {
+    setHostedState(undefined);
+    setRetryEnabled(false);
+    setSelectedJobIds([]);
+  }, [hostedEvaluationCoordinator, run.id, run.projectId]);
+
+  useEffect(() => {
+    const generation = readGeneration.current + 1;
+    readGeneration.current = generation;
+    if (!hostedEvaluationCoordinator) return;
+
+    void Promise.all([
+      hostedEvaluationCoordinator.getRunState({ projectId: run.projectId, runId: run.id }),
+      hostedEvaluationCoordinator.getCapability(),
+    ])
+      .then(([next, capability]) => {
+        if (readGeneration.current !== generation) return;
+        setHostedState(next);
+        setRetryEnabled(capability.enabled);
+      })
+      // Local and ordinary remote runs have no scheduler state. A missing or
+      // temporarily unavailable retry capability must never manufacture retry UI.
+      .catch(() => {
+        if (readGeneration.current !== generation) return;
+        setHostedState(undefined);
+        setRetryEnabled(false);
+      });
+    // The durable run snapshot is refreshed by the normal hosted-run observer.
+    // Include its revision so an interruption that happens while this tab is
+    // already open triggers a fresh scheduler read and exposes the guarded retry
+    // controls without making the operator navigate away first.
+  }, [hostedEvaluationCoordinator, refreshVersion, run.id, run.projectId, run.revision]);
+
+  const interruptedJobs = useMemo(
+    () =>
+      hostedState &&
+      !hostedState.cancelRequested &&
+      (hostedState.status === 'interrupted' || hostedState.status === 'running')
+        ? hostedState.jobs.filter((job) => job.status === 'interrupted')
+        : [],
+    [hostedState],
+  );
+  const interruptedJobIds = useMemo(() => new Set(interruptedJobs.map((job) => job.jobId)), [interruptedJobs]);
+  const selectedInterruptedJobIds = useMemo(
+    () => selectedJobIds.filter((jobId) => interruptedJobIds.has(jobId)),
+    [interruptedJobIds, selectedJobIds],
+  );
+
+  useEffect(() => {
+    setSelectedJobIds((current) => current.filter((jobId) => interruptedJobIds.has(jobId)));
+  }, [interruptedJobIds]);
+
+  if (!retryEnabled || interruptedJobs.length === 0) return null;
+
+  const allSelected = selectedInterruptedJobIds.length === interruptedJobs.length;
+  const toggleJob = (jobId: string, selected: boolean) => {
+    setSelectedJobIds((current) =>
+      selected ? [...new Set([...current, jobId])] : current.filter((candidate) => candidate !== jobId),
+    );
+  };
+
+  return (
+    <section className="evaluation-hosted-retry" aria-label="Interrupted hosted trials">
+      <div>
+        <h3>Interrupted hosted trials</h3>
+        <p>
+          {interruptedJobs.length} trial{interruptedJobs.length === 1 ? ' was' : 's were'} interrupted after dispatch.
+          Select only work that is safe to run again. A retry can repeat model calls, tool calls, external side effects,
+          and cost.
+        </p>
+      </div>
+      <div className="evaluation-hosted-retry-selection">
+        <Checkbox
+          isChecked={allSelected}
+          label="Select all interrupted trials"
+          onChange={(event) => setSelectedJobIds(event.target.checked ? interruptedJobs.map((job) => job.jobId) : [])}
+        />
+        <div className="evaluation-hosted-retry-job-list">
+          {interruptedJobs.map((job) => (
+            <Checkbox
+              key={job.jobId}
+              isChecked={selectedInterruptedJobIds.includes(job.jobId)}
+              label={`${job.caseName} · Trial ${job.trialIndex + 1} · Worker attempt ${job.attempt}`}
+              onChange={(event) => toggleJob(job.jobId, event.target.checked)}
+            />
+          ))}
+        </div>
+      </div>
+      <div className="evaluation-hosted-retry-actions">
+        <Button appearance="subtle" isDisabled={retrying} onClick={() => setRefreshVersion((version) => version + 1)}>
+          Refresh status
+        </Button>
+        <Button
+          appearance="primary"
+          isDisabled={retrying || selectedInterruptedJobIds.length === 0}
+          onClick={() => onRetry(run, selectedInterruptedJobIds)}
+        >
+          {retrying
+            ? 'Retrying…'
+            : selectedInterruptedJobIds.length === 0
+              ? 'Select trials to retry'
+              : `Retry ${selectedInterruptedJobIds.length} ${selectedInterruptedJobIds.length === 1 ? 'trial' : 'trials'}`}
+        </Button>
+      </div>
+    </section>
+  );
+};
+
 const Runs: FC<{
   dataset?: EvaluationDataset;
   runs: EvaluationRun[];
@@ -4435,11 +4766,15 @@ const Runs: FC<{
   refreshError?: string;
   expandedTrialExpansion?: EvaluationRunTrialExpansion;
   onSelect: (runId: string) => void;
+  retryingHostedRunId?: string;
   onScoreSortChange: (scoreSort: EvaluationScoreSort) => void;
   onExpandedTrialsChange: (runId: string | undefined, trialIds: readonly string[]) => void;
   onRename: (runId: string, name: string) => void;
   onDelete: (run: EvaluationRun) => void;
+  onKeepRecordings: (run: EvaluationRun) => void;
+  onReleaseRecordings: (run: EvaluationRun) => void;
   onOpenRecording: (recordingId: string) => void;
+  onRetryInterrupted: (run: EvaluationRun, jobIds: readonly string[]) => void;
 }> = ({
   dataset,
   runs,
@@ -4451,11 +4786,15 @@ const Runs: FC<{
   refreshError,
   expandedTrialExpansion,
   onSelect,
+  retryingHostedRunId,
   onScoreSortChange,
   onExpandedTrialsChange,
   onRename,
   onDelete,
+  onKeepRecordings,
+  onReleaseRecordings,
   onOpenRecording,
+  onRetryInterrupted,
 }) => {
   const liveRun =
     currentRun?.executionStatus === 'queued' || currentRun?.executionStatus === 'running' ? currentRun : undefined;
@@ -4539,6 +4878,13 @@ const Runs: FC<{
   const summaryAggregate = runSummary?.aggregate ?? aggregate;
   const isScoringRun = run.evaluationMode === 'scoring';
   const isRunInProgress = run.executionStatus === 'queued' || run.executionStatus === 'running';
+  const recordingReferences = getEvaluationRunRecordingReferences(run);
+  const hasKeepableReplayRecordings = recordingReferences.some(
+    (reference) =>
+      reference.retention === 'temporary' &&
+      (reference.expiresAt === undefined || Date.parse(reference.expiresAt) > Date.now()),
+  );
+  const hasRetainedReplayRecordings = recordingReferences.some((reference) => reference.retention === 'retained');
   const executionLabel = `${run.executionStatus.charAt(0).toUpperCase()}${run.executionStatus.slice(1)}`;
   const isExecutionSettled = !isRunInProgress;
   const isAccountingPartial = run.accountingStatus === 'partial';
@@ -4720,6 +5066,7 @@ const Runs: FC<{
           {quality.explanation}
         </p>
       </div>
+      <HostedInterruptedTrialRetry run={run} retrying={retryingHostedRunId === run.id} onRetry={onRetryInterrupted} />
       {isScoringRun && runSummary ? (
         <div className="evaluation-threshold-results">
           <h3>Scores by case</h3>
@@ -4878,6 +5225,24 @@ const Runs: FC<{
           ))}
         </ul>
       ) : null}
+      {isRunInProgress || (!hasKeepableReplayRecordings && !hasRetainedReplayRecordings) ? null : (
+        <div className="evaluation-run-recording-actions">
+          {hasKeepableReplayRecordings ? (
+            <Button appearance="primary" onClick={() => onKeepRecordings(run)}>
+              Keep replay recordings
+            </Button>
+          ) : null}
+          {hasRetainedReplayRecordings ? (
+            <Button
+              appearance="subtle"
+              className="evaluation-secondary-action"
+              onClick={() => onReleaseRecordings(run)}
+            >
+              Release replay recordings
+            </Button>
+          ) : null}
+        </div>
+      )}
       <div className="evaluation-run-delete-action">
         <Button
           appearance="danger"

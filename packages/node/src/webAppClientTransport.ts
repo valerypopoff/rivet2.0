@@ -1,10 +1,25 @@
 import {
   parseRivetWebAppServerMessage,
   RIVET_WEB_APP_ACTION_PROTOCOL_VERSION,
+  RIVET_WEB_APP_BROWSER_STORAGE_RPC_CAPABILITY,
+  RIVET_WEB_APP_BROWSER_STORAGE_DEFAULT_MAX_ACTION_BYTES,
+  RIVET_WEB_APP_BROWSER_STORAGE_DEFAULT_MAX_VALUE_BYTES,
+  RIVET_WEB_APP_BROWSER_STORAGE_DEFAULT_TRANSFER_TIMEOUT_MS,
+  RIVET_WEB_APP_BROWSER_STORAGE_SAFE_FALLBACK_BYTES,
   type GraphProgress,
   type AgentResponseTrace,
+  type RivetWebAppBrowserStorageServerMessage,
+  type RivetWebAppBrowserStorageRpcAdvertisedLimits,
 } from '@valerypopoff/rivet2-core/web-app-runtime';
 import type { WebAppClientConfig } from './webAppClientTypes.js';
+import { WebAppClientStorageRpc, type HostedBrowserStorageBridge } from './webAppClientStorageRpc.js';
+const DEFAULT_CLIENT_STORAGE_RPC_LIMITS: RivetWebAppBrowserStorageRpcAdvertisedLimits = {
+  maxActionBytes: RIVET_WEB_APP_BROWSER_STORAGE_DEFAULT_MAX_ACTION_BYTES,
+  maxValueBytes: RIVET_WEB_APP_BROWSER_STORAGE_DEFAULT_MAX_VALUE_BYTES,
+  transferTimeoutMs: RIVET_WEB_APP_BROWSER_STORAGE_DEFAULT_TRANSFER_TIMEOUT_MS,
+};
+
+export type { HostedBrowserStorageBridge } from './webAppClientStorageRpc.js';
 
 type WebAppActionResponse = {
   code?: string;
@@ -23,7 +38,8 @@ export type HostedActionRunner = {
     revisionKey?: string;
     signal: AbortSignal;
     state: Record<string, unknown>;
-    storage: Record<string, unknown>;
+    storage?: Record<string, unknown>;
+    browserStorage?: HostedBrowserStorageBridge;
   }): Promise<{
     statePatch?: Record<string, unknown>;
     storagePatch?: Record<string, unknown>;
@@ -63,9 +79,19 @@ function createHttpActionRunner(actionPath: string): HostedActionRunner {
   return {
     survivesPageDetach: false,
     dispose: () => undefined,
-    async run({ componentId, revisionKey, signal, state, storage }) {
+    async run({ browserStorage, componentId, revisionKey, signal, state, storage }) {
+      const snapshot = browserStorage ? await browserStorage.loadSnapshot() : storage ?? {};
+      if (browserStorage && serializedByteLength(snapshot) > RIVET_WEB_APP_BROWSER_STORAGE_SAFE_FALLBACK_BYTES) {
+        const error = new HostedActionError(
+          'This Stored Value state is too large for HTTP action transport. Use a current Studio Server WebSocket endpoint with browser-storage RPC v2.',
+          'browser_storage_rpc_required',
+        );
+        browserStorage.reportTransportIncompatibility?.(error.message);
+        throw error;
+      }
+      browserStorage?.clearTransportIncompatibility?.();
       const response = await fetch(actionPath, {
-        body: JSON.stringify({ componentId, revisionKey, state, storage }),
+        body: JSON.stringify({ componentId, revisionKey, state, storage: snapshot }),
         credentials: 'same-origin',
         headers: { 'content-type': 'application/json' },
         method: 'POST',
@@ -94,8 +120,9 @@ function createWebSocketActionRunner(socketPath: string): HostedActionRunner {
       componentId: string;
       revisionKey?: string;
       state: Record<string, unknown>;
-      storage: Record<string, unknown>;
     };
+    browserStorage?: HostedBrowserStorageBridge;
+    legacyStorage?: Record<string, unknown>;
     onProgress(progress: GraphProgress): void;
     reject(error: unknown): void;
     resolve(result: {
@@ -104,7 +131,10 @@ function createWebSocketActionRunner(socketPath: string): HostedActionRunner {
       responseTrace?: AgentResponseTrace;
     }): void;
     runId?: string;
+    settled: boolean;
     signal: AbortSignal;
+    sendingStart: boolean;
+    storageRpc?: WebAppClientStorageRpc;
     startSent: boolean;
   };
 
@@ -112,12 +142,17 @@ function createWebSocketActionRunner(socketPath: string): HostedActionRunner {
   const pendingByRunId = new Map<string, PendingAction>();
   let socket: WebSocket | undefined;
   let protocolReady = false;
+  let storageRpcReady = false;
   let reconnectAttempt = 0;
+  let storageRpcLimits = DEFAULT_CLIENT_STORAGE_RPC_LIMITS;
   let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
   let disposed = false;
 
   const settlePending = (pending: PendingAction, settle: () => void): void => {
+    if (pending.settled) return;
+    pending.settled = true;
     pending.signal.removeEventListener('abort', pending.abortListener);
+    pending.storageRpc?.dispose();
     pendingByRequestId.delete(pending.message.requestId);
     if (pending.runId) pendingByRunId.delete(pending.runId);
     settle();
@@ -131,13 +166,52 @@ function createWebSocketActionRunner(socketPath: string): HostedActionRunner {
       return false;
     }
   };
+  const sendBinary = (frame: Uint8Array): boolean => {
+    if (socket?.readyState !== WebSocket.OPEN) return false;
+    try {
+      socket.send(frame);
+      return true;
+    } catch {
+      return false;
+    }
+  };
   const send = (message: unknown): boolean => protocolReady && sendRaw(message);
   const sendPending = (pending: PendingAction): void => {
     if (pending.runId) {
       send({ type: 'run.resume', runId: pending.runId, lastSequence: pending.lastSequence });
       if (pending.signal.aborted) send({ type: 'action.cancel', runId: pending.runId });
-    } else if (!pending.signal.aborted || pending.startSent) {
-      pending.startSent = send(pending.message) || pending.startSent;
+    } else if ((!pending.signal.aborted || pending.startSent) && !pending.sendingStart) {
+      pending.sendingStart = true;
+      void (async () => {
+        try {
+          const useRpc = storageRpcReady && pending.browserStorage != null;
+          if (useRpc) pending.browserStorage?.clearTransportIncompatibility?.();
+          const storage = useRpc
+            ? undefined
+            : pending.browserStorage
+              ? await pending.browserStorage.loadSnapshot()
+              : pending.legacyStorage ?? {};
+          if (storage != null && serializedByteLength(storage) > RIVET_WEB_APP_BROWSER_STORAGE_SAFE_FALLBACK_BYTES) {
+            const error = new HostedActionError(
+              'This Stored Value state requires browser-storage RPC v2, but the server or proxy did not negotiate it. Update the server before running this action.',
+              'browser_storage_rpc_required',
+            );
+            pending.browserStorage?.reportTransportIncompatibility?.(error.message);
+            settlePending(pending, () => pending.reject(error));
+            return;
+          }
+          if (!useRpc) pending.browserStorage?.clearTransportIncompatibility?.();
+          pending.startSent =
+            send({
+              ...pending.message,
+              ...(useRpc ? { storageRpcVersion: 2 } : { storage: storage ?? {} }),
+            }) || pending.startSent;
+        } catch (error) {
+          settlePending(pending, () => pending.reject(error));
+        } finally {
+          pending.sendingStart = false;
+        }
+      })();
     }
   };
   const scheduleReconnect = (): void => {
@@ -159,7 +233,9 @@ function createWebSocketActionRunner(socketPath: string): HostedActionRunner {
         throw new Error(`Unsupported web app WebSocket protocol: ${url.protocol}`);
       }
       socket = new WebSocket(url);
+      socket.binaryType = 'arraybuffer';
       protocolReady = false;
+      storageRpcReady = false;
     } catch (error) {
       for (const pending of [...pendingByRequestId.values()]) {
         settlePending(pending, () => pending.reject(error));
@@ -167,9 +243,25 @@ function createWebSocketActionRunner(socketPath: string): HostedActionRunner {
       return;
     }
     socket.addEventListener('open', () => {
-      sendRaw({ type: 'client.hello', protocolVersion: RIVET_WEB_APP_ACTION_PROTOCOL_VERSION });
+      sendRaw({
+        type: 'client.hello',
+        protocolVersion: RIVET_WEB_APP_ACTION_PROTOCOL_VERSION,
+        capabilities: [RIVET_WEB_APP_BROWSER_STORAGE_RPC_CAPABILITY],
+      });
     });
     socket.addEventListener('message', (event) => {
+      if (event.data instanceof ArrayBuffer) {
+        const sourceSocket = socket;
+        void (async () => {
+          for (const pending of pendingByRequestId.values()) {
+            if (pending.storageRpc && (await pending.storageRpc.handleBinary(event.data))) return;
+          }
+          if (socket === sourceSocket && sourceSocket?.readyState === WebSocket.OPEN) {
+            sourceSocket.close(1002, 'Unexpected browser storage frame');
+          }
+        })();
+        return;
+      }
       let value: unknown;
       try {
         value = JSON.parse(String(event.data));
@@ -180,11 +272,20 @@ function createWebSocketActionRunner(socketPath: string): HostedActionRunner {
       if (!message) return;
       if (message.type === 'server.ready') {
         protocolReady = true;
+        storageRpcReady = message.capabilities?.includes(RIVET_WEB_APP_BROWSER_STORAGE_RPC_CAPABILITY) === true;
         reconnectAttempt = 0;
+        storageRpcLimits = message.browserStorageRpcLimits ?? DEFAULT_CLIENT_STORAGE_RPC_LIMITS;
         for (const pending of pendingByRequestId.values()) sendPending(pending);
         return;
       }
       if (message.type === 'server.draining') return;
+      if (isStorageServerMessage(message)) {
+        const pending = pendingByRunId.get(message.runId) ?? pendingByRequestId.get(message.requestId);
+        if (pending?.storageRpc) {
+          void pending.storageRpc.handleMessage(message);
+        }
+        return;
+      }
       if (message.type === 'action.rejected') {
         const pending = pendingByRequestId.get(message.requestId);
         if (pending) settlePending(pending, () => pending.reject(new HostedActionError(message.error, message.code)));
@@ -202,6 +303,20 @@ function createWebSocketActionRunner(socketPath: string): HostedActionRunner {
       if (message.type === 'action.accepted') {
         pending.runId = message.runId;
         pendingByRunId.set(message.runId, pending);
+        if (storageRpcReady && pending.browserStorage) {
+          pending.storageRpc = new WebAppClientStorageRpc({
+            bridge: pending.browserStorage,
+            requestId: pending.message.requestId,
+            limits: storageRpcLimits,
+            runId: () => pending.runId,
+            sendBinary,
+            sendJson: send,
+            onFatal(error) {
+              if (pending.runId) send({ type: 'action.cancel', runId: pending.runId });
+              settlePending(pending, () => pending.reject(error));
+            },
+          });
+        }
         if (pending.signal.aborted) send({ type: 'action.cancel', runId: message.runId });
       } else if (message.type === 'action.progress') {
         pending.onProgress(message.progress);
@@ -226,6 +341,7 @@ function createWebSocketActionRunner(socketPath: string): HostedActionRunner {
     socket.addEventListener('close', (event) => {
       socket = undefined;
       protocolReady = false;
+      storageRpcReady = false;
       if (isNonRetryableWebSocketClose(event.code)) {
         const message = event.reason.trim() || `Web app action connection closed (${event.code}).`;
         for (const pending of [...pendingByRequestId.values()]) {
@@ -249,7 +365,7 @@ function createWebSocketActionRunner(socketPath: string): HostedActionRunner {
         settlePending(pending, () => pending.reject(error));
       }
     },
-    run({ componentId, onProgress, revisionKey, signal, state, storage }) {
+    run({ browserStorage, componentId, onProgress, revisionKey, signal, state, storage }) {
       if (disposed) return Promise.reject(new Error('The web app action transport is closed.'));
       signal.throwIfAborted();
       const requestId = globalThis.crypto?.randomUUID?.() ?? `rivet-${Date.now()}-${Math.random()}`;
@@ -265,13 +381,16 @@ function createWebSocketActionRunner(socketPath: string): HostedActionRunner {
             requestId,
             componentId,
             state,
-            storage,
             ...(revisionKey == null ? {} : { revisionKey }),
           },
           onProgress,
+          browserStorage,
+          legacyStorage: storage,
           reject,
           resolve,
+          settled: false,
           signal,
+          sendingStart: false,
           startSent: false,
         };
         pendingByRequestId.set(requestId, pending);
@@ -281,6 +400,21 @@ function createWebSocketActionRunner(socketPath: string): HostedActionRunner {
       });
     },
   };
+}
+
+function serializedByteLength(value: unknown): number {
+  return new TextEncoder().encode(JSON.stringify(value)).byteLength;
+}
+
+function isStorageServerMessage(
+  message: ReturnType<typeof parseRivetWebAppServerMessage>,
+): message is RivetWebAppBrowserStorageServerMessage {
+  return (
+    message?.type === 'storage.get' ||
+    message?.type === 'storage.transfer.ack' ||
+    message?.type === 'storage.commit.start' ||
+    message?.type === 'storage.error'
+  );
 }
 
 function isNonRetryableWebSocketClose(code: number): boolean {

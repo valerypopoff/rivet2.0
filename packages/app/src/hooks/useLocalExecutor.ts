@@ -18,6 +18,8 @@ import {
   logRuntimeError,
   logRuntimeInfo,
   AgentResponseTraceCollector,
+  serializeDatasets,
+  serializeProject,
 } from '@valerypopoff/rivet2-core';
 import { produce } from 'immer';
 import { useEffect, useRef } from 'react';
@@ -68,6 +70,7 @@ import {
   useEnvironmentProvider,
   useEvaluationRunStore,
   useLLMProfileHealthStore,
+  useLocalExecutionRecordingPersistence,
   usePathPolicyProvider,
 } from '../providers/ProvidersContext';
 import { useProjectNodeRegistry } from './useProjectNodeRegistry';
@@ -158,6 +161,7 @@ export function useLocalExecutor() {
   const environmentProvider = useEnvironmentProvider();
   const evaluationRunStore = useEvaluationRunStore();
   const llmProfileHealthStore = useLLMProfileHealthStore();
+  const localExecutionRecordingPersistence = useLocalExecutionRecordingPersistence();
   const pathPolicy = usePathPolicyProvider();
   const projectNodeRegistry = useProjectNodeRegistry();
   const project = useAtomValue(projectState);
@@ -344,7 +348,9 @@ export function useLocalExecutor() {
       routeLocalProcessEvent(runProjectId, 'llmCallFinished', data, () => eventDispatcher.llmCallFinished(data));
     });
     processor.on('llmChatOutputSnapshot', (data) => {
-      routeLocalProcessEvent(runProjectId, 'llmChatOutputSnapshot', data, () => eventDispatcher.llmChatOutputSnapshot(data));
+      routeLocalProcessEvent(runProjectId, 'llmChatOutputSnapshot', data, () =>
+        eventDispatcher.llmChatOutputSnapshot(data),
+      );
     });
     processor.on('llmProfileAttempt', (data) => {
       routeLocalProcessEvent(runProjectId, 'llmProfileAttempt', data, () => eventDispatcher.llmProfileAttempt(data));
@@ -454,6 +460,9 @@ export function useLocalExecutor() {
 
     let processor: GraphProcessor | undefined;
     let responseTraceCollector: AgentResponseTraceCollector | undefined;
+    let finalizeCapturedRecording: (() => Promise<void>) | undefined;
+    let localRecordingStatus: 'succeeded' | 'failed' | 'suspicious' = 'succeeded';
+    let localRecordingErrorMessage: string | undefined;
     const handleAbort = () => {
       void processor?.abort();
     };
@@ -491,6 +500,22 @@ export function useLocalExecutor() {
           registry: projectNodeRegistry,
         },
       );
+
+      const localRecordingProjectPath =
+        recordExecutions && !recordingToReplay && loadedProject.path && localExecutionRecordingPersistence
+          ? loadedProject.path
+          : undefined;
+      const localRecordingProvider =
+        localRecordingProjectPath &&
+        localExecutionRecordingPersistence &&
+        (await localExecutionRecordingPersistence.getCapability().catch(() => false))
+          ? localExecutionRecordingPersistence
+          : undefined;
+      const localRecordingCorrelationId = localRecordingProvider
+        ? `rvt-local-${globalThis.crypto?.randomUUID?.() ?? `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`}`
+        : undefined;
+      let hasUnhealthyLLMProfileHealthEvidence = false;
+      const localRecordingStartedAt = performance.now();
 
       const recorder = new ExecutionRecorder();
       processor = new GraphProcessor(tempProject, graphToRun, projectNodeRegistry, true, {
@@ -539,6 +564,66 @@ export function useLocalExecutor() {
         recorder.record(processor);
       }
 
+      processor.on('llmProfileAttempt', (event) => {
+        if (event.stage === 'health-update' && event.outcome === 'success' && event.healthOutcome === 'unhealthy') {
+          hasUnhealthyLLMProfileHealthEvidence = true;
+        }
+      });
+      processor.on('error', (event) => {
+        localRecordingStatus = 'failed';
+        localRecordingErrorMessage = event.error instanceof Error ? event.error.message : event.error;
+      });
+      processor.on('abort', (event) => {
+        if (event.successful || localRecordingStatus !== 'succeeded') return;
+        localRecordingStatus = 'suspicious';
+        localRecordingErrorMessage ??= event.error instanceof Error ? event.error.message : event.error;
+      });
+      finalizeCapturedRecording = async () => {
+        if (!recordExecutions) return;
+
+        const recordingSerialized = recorder.serialize();
+        setLastRecordingForProject(runProjectId, recordingSerialized);
+        if (
+          !hasUnhealthyLLMProfileHealthEvidence ||
+          !localRecordingProvider ||
+          !localRecordingCorrelationId ||
+          !localRecordingProjectPath
+        ) {
+          return;
+        }
+
+        try {
+          const datasetsContents = serializeDatasets(await datasetProvider.exportDatasetsForProject(runProjectId));
+          await localRecordingProvider.persist({
+            projectId: runProjectId,
+            projectPath: localRecordingProjectPath,
+            projectContents: serializeProject(tempProject) as string,
+            datasetsContents,
+            recordingSerialized,
+            status: localRecordingStatus,
+            durationMs: Math.max(0, performance.now() - localRecordingStartedAt),
+            errorMessage: localRecordingErrorMessage,
+            executionIdentity: {
+              correlationId: localRecordingCorrelationId,
+              graphId: graphToRun,
+            },
+          });
+        } catch (error) {
+          await localRecordingProvider.markUnavailable(localRecordingCorrelationId).catch((outcomeError) => {
+            logRuntimeDebug('Local LLM-profile replay could not report a failed local recording.', {
+              error: outcomeError,
+              graphId: graphToRun,
+              projectId: runProjectId,
+            });
+          });
+          logRuntimeDebug('Local LLM-profile replay was not retained by the hosted server.', {
+            error,
+            graphId: graphToRun,
+            projectId: runProjectId,
+          });
+        }
+      };
+
       attachGraphEvents(processor, runProjectId);
 
       let results: GraphOutputs;
@@ -569,6 +654,9 @@ export function useLocalExecutor() {
             projectReferenceLoader: new TauriProjectReferenceLoader(pathPolicy),
             editorExecutionCache: getEditorExecutionCache(tempProject.metadata.id),
             llmProfileHealthStore,
+            ...(localRecordingCorrelationId == null
+              ? {}
+              : { llmProfileHealthExecutionCorrelationId: localRecordingCorrelationId }),
           },
           options.inputs ?? {},
           contextValues,
@@ -576,21 +664,12 @@ export function useLocalExecutor() {
         );
       }
 
-      if (recordExecutions) {
-        if (processor.isRunning) {
-          void processor
-            .waitForRunCompletion()
-            .then(() => setLastRecordingForProject(runProjectId, recorder.serialize()))
-            .catch(() => undefined);
-        } else {
-          setLastRecordingForProject(runProjectId, recorder.serialize());
-        }
-      }
-
       const responseTrace = responseTraceCollector?.build();
       if (responseTrace) options.onResponseTrace?.(responseTrace);
       return results;
     } catch (e) {
+      localRecordingStatus = 'failed';
+      localRecordingErrorMessage = e instanceof Error ? e.message : String(e);
       const runProjectIsActive = store.get(projectState).metadata.id === runProjectId;
       if (runProjectIsActive) {
         currentExecution.clearNodeRunDataPreservationForNextStart();
@@ -628,13 +707,12 @@ export function useLocalExecutor() {
         }
       };
 
-      if (processor?.isRunning) {
-        void processor
-          .waitForRunCompletion()
-          .catch(() => undefined)
-          .finally(cleanupProcessorRun);
-      } else {
-        cleanupProcessorRun();
+      const completion = processor?.isRunning
+        ? processor.waitForRunCompletion().catch(() => undefined)
+        : Promise.resolve();
+      void completion.finally(cleanupProcessorRun);
+      if (finalizeCapturedRecording) {
+        void completion.then(() => finalizeCapturedRecording!()).catch(() => undefined);
       }
 
       if (recordingToReplay) {
@@ -777,6 +855,7 @@ export function useLocalExecutor() {
                 outcome: event.outcome,
                 finishReason: event.finishReason ?? null,
                 profileIndex: event.profileIndex ?? null,
+                profileName: event.profileName ?? null,
                 attemptIndex: event.attemptIndex,
                 roundIndex: event.roundIndex ?? null,
                 durationMs: event.durationMs ?? null,
@@ -791,6 +870,7 @@ export function useLocalExecutor() {
                 stage: event.stage,
                 outcome: event.outcome,
                 profileIndex: event.profileIndex ?? null,
+                profileName: event.profileName ?? null,
                 attemptIndex: event.attemptIndex ?? null,
                 roundIndex: event.roundIndex,
                 status: event.status ?? null,

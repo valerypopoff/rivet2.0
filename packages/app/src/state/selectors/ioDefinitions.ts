@@ -14,6 +14,7 @@ import { handleError } from '../../utils/errorHandling.js';
 import { projectNodeRegistryState } from '../plugins.js';
 import { nodePrefabSourceNodesByIdState } from './nodePrefabSelectors.js';
 import { connectionsState } from '../atoms/graph.js';
+import { getDisabledUpstreamInputWarnings } from '../../domain/graphEditing/disabledNodeWarnings.js';
 
 export const ioDefinitionsForNodeState = atomFamily((nodeId: NodeId | undefined) =>
   atom((get) => {
@@ -129,4 +130,18 @@ export const definitionValidConnectionsState = atom((get) => {
   });
 
   return filteredConnections.length === connections.length ? connections : filteredConnections;
+});
+
+/**
+ * Header warnings for enabled nodes whose disabled upstream connection would
+ * make the runtime exclude the node, rather than treating the wire as absent.
+ */
+export const disabledUpstreamInputWarningsState = atom((get) => {
+  const nodesById = get(effectiveNodesByIdState);
+
+  return getDisabledUpstreamInputWarnings({
+    connections: get(definitionValidConnectionsState),
+    nodesById,
+    getInputDefinitions: (nodeId) => get(ioDefinitionsForNodeState(nodeId)).inputDefinitions,
+  });
 });

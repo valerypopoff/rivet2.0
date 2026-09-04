@@ -13,7 +13,9 @@ function requireEnv(env, name, launcherName) {
 }
 
 function parseBoolean(value, fallback) {
-  const normalized = String(value ?? '').trim().toLowerCase();
+  const normalized = String(value ?? '')
+    .trim()
+    .toLowerCase();
   if (!normalized) {
     return fallback;
   }
@@ -92,8 +94,31 @@ function parseImageConfig(env, prefix, defaultRepository, defaultTag) {
   };
 }
 
+/**
+ * Local Kubernetes nodes do not reliably replace an already-imported image
+ * when the tag stays the same. Development builds therefore use a fresh tag;
+ * a later `up` command reuses the tag recorded by the preceding build.
+ */
+export function resolveKubernetesLauncherImageTag({ action, explicitImageTag, persistedImageTag, generatedImageTag }) {
+  if (explicitImageTag) {
+    return explicitImageTag;
+  }
+
+  if (action === 'up' && persistedImageTag) {
+    return persistedImageTag;
+  }
+
+  if (['build', 'dev', 'recreate'].includes(action)) {
+    return generatedImageTag;
+  }
+
+  return 'dev';
+}
+
 function inferLocalClusterProvider(context, explicitProvider) {
-  const normalizedExplicitProvider = String(explicitProvider ?? '').trim().toLowerCase();
+  const normalizedExplicitProvider = String(explicitProvider ?? '')
+    .trim()
+    .toLowerCase();
   if (normalizedExplicitProvider) {
     return normalizedExplicitProvider;
   }
@@ -130,9 +155,8 @@ export function buildKubernetesLauncherConfig(env) {
     namespace: readEnv(env, 'RIVET_K8S_NAMESPACE') ?? 'rivet-local',
     context,
     localClusterProvider,
-    minikubeProfile: localClusterProvider === 'minikube'
-      ? readEnv(env, 'RIVET_K8S_MINIKUBE_PROFILE') ?? context
-      : undefined,
+    minikubeProfile:
+      localClusterProvider === 'minikube' ? readEnv(env, 'RIVET_K8S_MINIKUBE_PROFILE') ?? context : undefined,
     clusterDomain: readEnv(env, 'RIVET_K8S_CLUSTER_DOMAIN') ?? 'cluster.local',
     localPort: parsePositiveInt(readEnv(env, 'RIVET_K8S_PROXY_PORT') ?? readEnv(env, 'RIVET_PORT'), 8080),
     loadLocalImages: parseBoolean(
@@ -159,7 +183,10 @@ export function buildKubernetesLauncherConfig(env) {
     databaseConnectionString: requireEnv(env, 'RIVET_K8S_DATABASE_CONNECTION_STRING', launcherName),
     databaseSslMode: readEnv(env, 'RIVET_K8S_DATABASE_SSL_MODE') ?? 'require',
     objectStorage: {
-      bucket: readEnv(env, 'RIVET_K8S_STORAGE_BUCKET') ?? parsedStorageUrl?.bucket ?? requireEnv(env, 'RIVET_K8S_STORAGE_BUCKET', launcherName),
+      bucket:
+        readEnv(env, 'RIVET_K8S_STORAGE_BUCKET') ??
+        parsedStorageUrl?.bucket ??
+        requireEnv(env, 'RIVET_K8S_STORAGE_BUCKET', launcherName),
       region: readEnv(env, 'RIVET_K8S_STORAGE_REGION') ?? parsedStorageUrl?.region ?? 'us-east-1',
       endpoint: readEnv(env, 'RIVET_K8S_STORAGE_ENDPOINT') ?? parsedStorageUrl?.endpoint ?? '',
       accessKeyId: requireEnv(env, 'RIVET_K8S_STORAGE_ACCESS_KEY_ID', launcherName),
@@ -173,12 +200,17 @@ export function buildKubernetesLauncherConfig(env) {
     routeConfig: {
       publishedBasePath: readEnv(env, 'RIVET_PUBLISHED_WORKFLOWS_BASE_PATH') ?? '/workflows',
       latestBasePath: readEnv(env, 'RIVET_LATEST_WORKFLOWS_BASE_PATH') ?? '/workflows-latest',
-      webAppsBasePath: readEnv(env, 'RIVET_PUBLISHED_APPS_BASE_PATH') ?? readEnv(env, 'RIVET_WEB_APPS_BASE_PATH') ?? '/apps',
-      latestWebAppsBasePath: readEnv(env, 'RIVET_LATEST_APPS_BASE_PATH') ?? readEnv(env, 'RIVET_LATEST_WEB_APPS_BASE_PATH') ?? '/apps-latest',
+      webAppsBasePath:
+        readEnv(env, 'RIVET_PUBLISHED_APPS_BASE_PATH') ?? readEnv(env, 'RIVET_WEB_APPS_BASE_PATH') ?? '/apps',
+      latestWebAppsBasePath:
+        readEnv(env, 'RIVET_LATEST_APPS_BASE_PATH') ??
+        readEnv(env, 'RIVET_LATEST_WEB_APPS_BASE_PATH') ??
+        '/apps-latest',
       proxyResolver: readEnv(env, 'RIVET_PROXY_RESOLVER') ?? 'kube-dns.kube-system.svc.cluster.local',
       enableLatestRemoteDebugger: parseBoolean(readEnv(env, 'RIVET_ENABLE_LATEST_REMOTE_DEBUGGER'), true),
       corsAllowedOrigins: readEnv(env, 'RIVET_CORS_ALLOWED_ORIGINS') ?? '',
-      serverUiAuthMode: readEnv(env, 'RIVET_SERVER_UI_AUTH_MODE') ??
+      serverUiAuthMode:
+        readEnv(env, 'RIVET_SERVER_UI_AUTH_MODE') ??
         (parseBoolean(readEnv(env, 'RIVET_REQUIRE_UI_GATE_KEY'), false) ? 'key' : 'none'),
       requireUiGateKey: parseBoolean(readEnv(env, 'RIVET_REQUIRE_UI_GATE_KEY'), false),
       trustIncomingForwardedHeaders: parseBoolean(readEnv(env, 'RIVET_TRUST_INCOMING_FORWARDED_HEADERS'), false),

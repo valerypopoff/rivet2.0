@@ -1,0 +1,166 @@
+.deployment-status-panel {
+  gap: 18px;
+}
+
+.deployment-status-loading {
+  color: var(--grey-light);
+  font-size: 14px;
+}
+
+.deployment-status-error {
+  margin: 0;
+}
+
+.deployment-status-cleanup-message {
+  margin: 0;
+}
+
+.deployment-status-section {
+  gap: 12px;
+}
+
+.deployment-status-topology-card,
+.deployment-status-empty-card,
+.deployment-status-replica-tier {
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.045);
+  padding: 14px;
+}
+
+.deployment-status-topology-card.single-host {
+  border-color: rgba(255, 193, 7, 0.28);
+  background: rgba(255, 193, 7, 0.075);
+}
+
+.deployment-status-topology-card.replicated {
+  border-color: rgba(80, 200, 120, 0.26);
+  background: rgba(80, 200, 120, 0.075);
+}
+
+.deployment-status-topology-title {
+  color: var(--grey-lightest);
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.deployment-status-topology-copy,
+.deployment-status-current-role,
+.deployment-status-empty-card,
+.deployment-status-replica-detail {
+  color: var(--grey-light);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.deployment-status-topology-copy {
+  margin-top: 7px;
+}
+
+.deployment-status-current-role {
+  margin-top: 10px;
+  color: var(--grey-lightest);
+  font-weight: 600;
+}
+
+.deployment-status-section-header,
+.deployment-status-replica-tier-head,
+.deployment-status-replica-item-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.deployment-status-section-header {
+  align-items: flex-start;
+}
+
+.deployment-status-clear-stale,
+.deployment-status-replica-toggle {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+.deployment-status-replica-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.deployment-status-replica-tier.ready {
+  border-color: rgba(80, 200, 120, 0.3);
+  background: rgba(80, 200, 120, 0.09);
+}
+
+.deployment-status-replica-tier.warning {
+  border-color: rgba(255, 193, 7, 0.3);
+  background: rgba(255, 193, 7, 0.08);
+}
+
+.deployment-status-replica-tier.error {
+  border-color: rgba(255, 107, 122, 0.3);
+  background: rgba(255, 107, 122, 0.08);
+}
+
+.deployment-status-replica-tier-head {
+  color: var(--grey-lightest);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.deployment-status-replica-toggle {
+  margin-top: 8px;
+}
+
+.deployment-status-replica-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.deployment-status-replica-item {
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.18);
+  padding: 10px;
+}
+
+.deployment-status-replica-item.ready { border-color: rgba(80, 200, 120, 0.25); }
+.deployment-status-replica-item.warning { border-color: rgba(255, 193, 7, 0.25); }
+.deployment-status-replica-item.error { border-color: rgba(255, 107, 122, 0.25); }
+
+.deployment-status-replica-name {
+  color: var(--grey-lightest);
+  font-size: 13px;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.deployment-status-replica-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 72px;
+  padding: 4px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+.deployment-status-replica-badge.ready { background: rgba(80, 200, 120, 0.16); color: #8de0a5; }
+.deployment-status-replica-badge.syncing,
+.deployment-status-replica-badge.starting { background: rgba(255, 193, 7, 0.16); color: #ffd36b; }
+.deployment-status-replica-badge.error { background: rgba(255, 107, 122, 0.16); color: #ff9ba5; }
+
+.deployment-status-replica-detail {
+  margin-top: 6px;
+}
+
+@media (max-width: 720px) {
+  .deployment-status-replica-grid { grid-template-columns: 1fr; }
+  .deployment-status-section-header { flex-direction: column; }
+}

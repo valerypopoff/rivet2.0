@@ -4,7 +4,7 @@ import {
   postMessageToDashboard,
   type DashboardToEditorCommand,
 } from '../../studio-server-shared/editor-bridge';
-import { clearOpenedProjectSession } from '../io/openedProjectSessionCache';
+import { primeOpenedProjectSession } from '../io/openedProjectSessionCache';
 import { focusHostedEditorFrame } from './editorBridgeFocus';
 import {
   findOpenedProjectByPath,
@@ -12,6 +12,10 @@ import {
   type EditorCommandBridgeContext,
   type SerializedEditorCommand,
 } from './editorCommandBridgeContext';
+import {
+  getHostedProjectRevisionState,
+  restoreHostedProjectRevisionState,
+} from '../io/hostedProjectRevisionTracker';
 import { normalizeWorkflowPath } from './workflowLibraryHelpers';
 
 function resolveOpeningProjectTitle(
@@ -164,17 +168,50 @@ export async function handleOpenProjectCommand(
 export async function handleRefreshOpenProjectCommand(
   context: EditorCommandBridgeContext,
   command: Extract<SerializedEditorCommand, { type: 'refresh-open-project-from-disk' }>,
-): Promise<void> {
+): Promise<boolean> {
   const openedProject = findOpenedProjectByPath(context, command.path);
   if (!openedProject) {
-    return;
+    return false;
   }
-  clearOpenedProjectSession(openedProject.projectId);
+  const revisionStateBeforeRefresh = getHostedProjectRevisionState(openedProject.projectId);
   if (normalizeWorkflowPath(context.getLoadedProject().path) !== normalizeWorkflowPath(command.path)) {
-    context.removeOpenedProjectSnapshot(openedProject.projectId);
-    return;
+    let replacementSucceeded = false;
+    try {
+      const loaded = await context.loadProjectData(command.path);
+      if (loaded.project.metadata.id !== openedProject.projectId) {
+        throw new Error('Reloaded project has a different project ID.');
+      }
+      const { data, ...project } = loaded.project;
+      const replaced = await context.getWorkspace().replaceProjectSnapshot(openedProject.projectId, {
+        project,
+        data,
+        path: command.path,
+        openedGraph: openedProject.openedGraph,
+        evaluationData: loaded.evaluation.evaluationData,
+        evaluationDatasets: loaded.evaluation.evaluationDatasets,
+      });
+      if (!replaced) {
+        throw new Error('Rivet could not refresh the inactive project tab.');
+      }
+      replacementSucceeded = true;
+      primeOpenedProjectSession(openedProject.projectId, {
+        fsPath: command.path,
+        evaluation: loaded.evaluation,
+      });
+      context.clearLoadedRecording(openedProject.projectId);
+      return true;
+    } catch (error) {
+      if (!replacementSucceeded) {
+        restoreHostedProjectRevisionState(openedProject.projectId, revisionStateBeforeRefresh);
+      }
+      const message = getError(error).message;
+      console.error('Failed to refresh inactive workflow project from storage:', error);
+      postMessageToDashboard({ type: 'project-open-failed', path: command.path, error: message });
+      return false;
+    }
   }
 
+  let replacementSucceeded = false;
   try {
     const openResult = await context.getOpenProject()(command.path, {
       replaceCurrent: true,
@@ -185,15 +222,21 @@ export async function handleRefreshOpenProjectCommand(
     if (!openResult.opened) {
       throw new Error('Rivet could not reload the restored project.');
     }
+    replacementSucceeded = true;
     if (openResult.projectId) {
       rememberOpenedProjectPathAlias(context, command.path, openResult.projectId);
     }
     context.preview.promotePreviewProjectByPath(command.path);
     context.clearLoadedRecording(openResult.projectId);
     postMessageToDashboard({ type: 'project-opened', path: command.path });
+    return true;
   } catch (error) {
+    if (!replacementSucceeded) {
+      restoreHostedProjectRevisionState(openedProject.projectId, revisionStateBeforeRefresh);
+    }
     const message = getError(error).message;
     console.error('Failed to refresh workflow project from storage:', error);
     postMessageToDashboard({ type: 'project-open-failed', path: command.path, error: message });
+    return false;
   }
 }

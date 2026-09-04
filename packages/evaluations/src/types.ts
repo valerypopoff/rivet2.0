@@ -540,7 +540,7 @@ export type EvaluationRunStore = {
     recordingId: string;
     retention: EvaluationRecordingReference['retention'];
     expiresAt?: string;
-  }): Promise<void>;
+  }): Promise<boolean>;
   /** Pins all artifacts belonging to the run before its compact baseline is saved in the project. */
   promoteBaseline(input: { projectId: ProjectId; runId: string }): Promise<void>;
   /**

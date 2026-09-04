@@ -90,6 +90,8 @@ type PersistWorkflowExecutionRecordingOptions = {
   durationMs: number;
   errorMessage?: string;
   executionIdentity?: WorkflowRecordingExecutionIdentity;
+  /** Runs after the replay is indexed but before normal retention can delete it. */
+  onPersisted?: (recordingId: string) => Promise<void>;
 };
 
 type WorkflowRecordingStorageCounts = {
@@ -135,6 +137,11 @@ export async function flushWorkflowExecutionRecordingPersistence(): Promise<void
   await workflowRecordingStore.flush();
 }
 
+/** A process-local queue snapshot; it never performs I/O during a metrics scrape. */
+export function getWorkflowExecutionRecordingPersistenceMetrics() {
+  return workflowRecordingStore.getPersistenceMetrics();
+}
+
 function toWorkflowRecordingRunSummary(row: WorkflowRecordingRunRow): WorkflowRecordingRunSummary {
   return {
     id: row.id,
@@ -144,6 +151,7 @@ function toWorkflowRecordingRunSummary(row: WorkflowRecordingRunRow): WorkflowRe
     status: row.status,
     durationMs: row.durationMs,
     endpointNameAtExecution: row.endpointNameAtExecution,
+    executionIdentity: row.executionIdentity,
     errorMessage: row.errorMessage,
     hasReplayDataset: row.hasReplayDataset,
     recordingCompressedBytes: row.recordingCompressedBytes,
@@ -591,14 +599,14 @@ export async function deleteWorkflowRecording(root: string, recordingId: string)
 
 export async function persistWorkflowExecutionRecording(
   options: PersistWorkflowExecutionRecordingOptions,
-): Promise<void> {
+): Promise<string | undefined> {
   if (!isWorkflowRecordingEnabled()) {
-    return;
+    return undefined;
   }
 
   const workflowId = options.sourceProject.metadata.id;
   if (!workflowId) {
-    return;
+    return undefined;
   }
 
   const recordingsRoot = getWorkflowRecordingsRoot(options.workflowsRoot);
@@ -716,7 +724,9 @@ export async function persistWorkflowExecutionRecording(
       datasetUncompressedBytes: datasetArtifact?.uncompressedBytes ?? 0,
     });
 
+    await options.onPersisted?.(recordingId);
     workflowRecordingStore.scheduleCleanup();
+    return recordingId;
   } catch (error) {
     await fs.rm(bundlePath, { recursive: true, force: true }).catch(() => {});
     throw error;

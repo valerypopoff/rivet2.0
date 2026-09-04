@@ -34,6 +34,15 @@ const nodesAllowedToConsumeExcludedValue = new Set<BuiltInNodeType>([
   'loopController',
 ]);
 
+/**
+ * Whether a node intentionally handles an input that was excluded by control
+ * flow. Most nodes are excluded themselves in that situation; these nodes
+ * implement their own fallback, branching, or aggregation behavior instead.
+ */
+export function canConsumeControlFlowExcludedInput(node: ChartNode): boolean {
+  return nodesAllowedToConsumeExcludedValue.has(node.type as BuiltInNodeType);
+}
+
 function isControlFlowExcluded(value: DataValue | undefined): value is DataValue {
   return value != null && getScalarTypeOf(value.type) === 'control-flow-excluded';
 }
@@ -71,7 +80,7 @@ export function getControlFlowExclusionDecision({
       isControlFlowExcluded(value) && (typeOfExclusion === undefined || value.value === typeOfExclusion),
   );
   const isWaitingForLoop = controlFlowExcludedValues.some(([, value]) => value?.value === LOOP_NOT_BROKEN_SENTINEL);
-  const allowedToConsumeExcludedValue = nodesAllowedToConsumeExcludedValue.has(node.type as BuiltInNodeType) && !isWaitingForLoop;
+  const allowedToConsumeExcludedValue = canConsumeControlFlowExcludedInput(node) && !isWaitingForLoop;
 
   if (controlFlowExcludedValues.length === 0 || allowedToConsumeExcludedValue) {
     return { action: 'continue' };

@@ -4,11 +4,12 @@ import {
   getLLMChatSplitOutputHistoryPresentationData,
   getLLMChatOutputHistoryPageLabel,
   getSelectedLLMChatOutputHistoryData,
+  resolveLLMChatOutputHistoryEntry,
   shouldShowLLMChatOutputHistoryPager,
   upsertLLMChatOutputHistoryEntry,
 } from './llmChatOutputHistory.js';
 import type { PortId } from '@valerypopoff/rivet2-core';
-import type { StoredInputsOrOutputs } from '../state/dataFlow.js';
+import type { NodeRunDataWithRefs, StoredInputsOrOutputs } from '../state/dataFlow.js';
 
 const responsePortId = 'response' as PortId;
 
@@ -82,7 +83,7 @@ test('upsertLLMChatOutputHistoryEntry keeps refs reused by a redelivered snapsho
   assert.deepEqual(replacement.replacedRefIds, ['history:round:0:response']);
 });
 
-test('getSelectedLLMChatOutputHistoryData changes only the displayed output map', () => {
+test('getSelectedLLMChatOutputHistoryData changes the displayed output map without changing terminal output data', () => {
   const data = upsertLLMChatOutputHistoryEntry(
     {
       outputData: responseOutput('terminal response'),
@@ -114,16 +115,29 @@ test('labels direct results and logical model rounds distinctly', () => {
   );
 });
 
-test('failed invocations keep completed history pages viewable without terminal outputs', () => {
-  const data = upsertLLMChatOutputHistoryEntry(
-    { status: { type: 'error', error: 'Tool handler failed' } },
-    entry('model-round:0', 'requested tools'),
-  ).data;
+test('failed invocations show a terminal error only on the newest retained history page', () => {
+  const failedStatus = { type: 'error', error: 'Tool handler failed' } as const;
+  let data: NodeRunDataWithRefs = { status: failedStatus };
+  for (const [roundIndex, response] of ['first tools', 'second tools', 'third tools'].entries()) {
+    data = upsertLLMChatOutputHistoryEntry(data, {
+      ...entry(`model-round:${roundIndex}`, response, roundIndex),
+      outcome: 'tool-calls',
+    }).data;
+  }
 
-  const displayed = getSelectedLLMChatOutputHistoryData({ data, selectedPage: 'latest' });
+  const first = getSelectedLLMChatOutputHistoryData({ data, selectedPage: 'model-round:0' });
+  const second = getSelectedLLMChatOutputHistoryData({ data, selectedPage: 'model-round:1' });
+  const third = getSelectedLLMChatOutputHistoryData({ data, selectedPage: 'model-round:2' });
+  const latest = getSelectedLLMChatOutputHistoryData({ data, selectedPage: 'latest' });
 
-  assert.equal(responseValue(displayed.outputData), 'requested tools');
-  assert.deepEqual(displayed.status, { type: 'error', error: 'Tool handler failed' });
+  assert.equal(responseValue(first.outputData), 'first tools');
+  assert.equal(responseValue(second.outputData), 'second tools');
+  assert.equal(responseValue(third.outputData), 'third tools');
+  assert.equal(responseValue(latest.outputData), 'third tools');
+  assert.equal(first.status, undefined);
+  assert.equal(second.status, undefined);
+  assert.deepEqual(third.status, failedStatus);
+  assert.deepEqual(latest.status, failedStatus);
   assert.equal(
     shouldShowLLMChatOutputHistoryPager({
       entries: data.llmChatOutputHistory?.[0] ?? [],
@@ -133,14 +147,55 @@ test('failed invocations keep completed history pages viewable without terminal 
   );
 });
 
+test('the final visible round keeps its terminal error through either page identifier', () => {
+  const failedStatus = { type: 'error', error: 'Terminal projection failed' } as const;
+  const data = upsertLLMChatOutputHistoryEntry(
+    upsertLLMChatOutputHistoryEntry(
+      { outputData: responseOutput('terminal response'), status: failedStatus },
+      entry('model-round:0', 'first tools'),
+    ).data,
+    entry('model-round:1', 'second tools', 1),
+  ).data;
+
+  const first = getSelectedLLMChatOutputHistoryData({ data, selectedPage: 'model-round:0' });
+  const second = getSelectedLLMChatOutputHistoryData({ data, selectedPage: 'model-round:1' });
+  const latest = getSelectedLLMChatOutputHistoryData({ data, selectedPage: 'latest' });
+
+  assert.equal(responseValue(first.outputData), 'first tools');
+  assert.equal(responseValue(second.outputData), 'second tools');
+  assert.equal(responseValue(latest.outputData), 'terminal response');
+  assert.equal(first.status, undefined);
+  assert.deepEqual(second.status, failedStatus);
+  assert.deepEqual(latest.status, failedStatus);
+});
+
+test('a stale historical-page selection resolves to the newest retained round', () => {
+  const entries = [entry('model-round:0', 'first tools'), entry('model-round:1', 'second tools', 1)];
+  const selected = resolveLLMChatOutputHistoryEntry(entries, 'model-round:missing');
+
+  assert.equal(selected?.entryId, 'model-round:1');
+});
+
 test('failed split invocations receive display-only latest output maps for completed rounds', () => {
   const data = upsertLLMChatOutputHistoryEntry(
     { status: { type: 'error', error: 'Tool handler failed' } },
     { ...entry('model-round:0', 'split response'), splitIndex: 2 },
   ).data;
 
-  const displayed = getLLMChatSplitOutputHistoryPresentationData(data);
+  const displayed = getLLMChatSplitOutputHistoryPresentationData(data, true);
 
   assert.equal(responseValue(displayed.splitOutputData?.[2]), 'split response');
   assert.equal(data.splitOutputData, undefined);
+});
+
+test('ordinary failed multi-round invocations do not synthesize split output', () => {
+  const data = upsertLLMChatOutputHistoryEntry(
+    { status: { type: 'error', error: 'Tool handler failed' } },
+    entry('model-round:0', 'requested tools'),
+  ).data;
+
+  const displayed = getLLMChatSplitOutputHistoryPresentationData(data, false);
+
+  assert.equal(displayed, data);
+  assert.equal(displayed.splitOutputData, undefined);
 });

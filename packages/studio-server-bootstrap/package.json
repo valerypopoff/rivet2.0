@@ -10,7 +10,7 @@
     "tar": "^7.4.3",
     "undici": "^6.21.1"
   },
-  "version": "1.8.6",
+  "version": "1.9.0",
   "scripts": {
     "build": "node --check bootstrap.mjs && node --check config.mjs && node --check node-executor-proxy-settings.mjs && node --check runtime-libraries-sync.mjs && node --check state.mjs && node --check sync.mjs"
   }

@@ -5,6 +5,7 @@ import { type DataRefReader, useDataRefs } from '../../providers/ProvidersContex
 import { type InputsOrOutputsWithRefs } from '../../state/dataFlow.js';
 import { RenderDataValue } from '../RenderDataValue.js';
 import { OutputSectionHeader } from '../renderDataValue/OutputSectionHeader.js';
+import { OUTPUT_NAVIGATION_ITEM_ATTRIBUTE } from '../renderDataValue/outputNavigationItems.js';
 import type { OutputRenderMode } from '../renderDataValue/outputRenderTypes.js';
 import {
   getOutputSectionArrayItemCount,
@@ -159,7 +160,7 @@ const OutputSection: FC<{
   );
 
   return (
-    <div className="port-value">
+    <div className="port-value" {...{ [OUTPUT_NAVIGATION_ITEM_ATTRIBUTE]: '' }}>
       <OutputSectionHeader
         getCopyValue={
           section.headerMode === 'large'

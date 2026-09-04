@@ -186,7 +186,9 @@ test('filesystem recording persistence writes bundles under the configured recor
   const created = await workflowMutations.createWorkflowProjectItem('', 'RootSplit');
   const [loadedProject, attachedData] = await rivetNode.loadProjectAndAttachedDataFromFile(created.absolutePath);
 
-  await workflowRecordings.persistWorkflowExecutionRecording({
+  const projectRecordingsRoot = workflowFs.getWorkflowProjectRecordingsRoot(recordingsRoot, loadedProject.metadata.id!);
+  let callbackRecordingId: string | undefined;
+  const recordingId = await workflowRecordings.persistWorkflowExecutionRecording({
     workflowsRoot,
     sourceProject: loadedProject,
     sourceProjectPath: created.absolutePath,
@@ -208,9 +210,16 @@ test('filesystem recording persistence writes bundles under the configured recor
     runKind: 'latest',
     status: 'succeeded',
     durationMs: 1,
+    onPersisted: async (persistedRecordingId) => {
+      callbackRecordingId = persistedRecordingId;
+      assert.equal(
+        await workflowFs.pathExists(path.join(projectRecordingsRoot, persistedRecordingId, 'metadata.json')),
+        true,
+      );
+    },
   });
 
-  const projectRecordingsRoot = workflowFs.getWorkflowProjectRecordingsRoot(recordingsRoot, loadedProject.metadata.id!);
+  assert.equal(recordingId, callbackRecordingId);
   const bundleDirectories = (await fs.readdir(projectRecordingsRoot, { withFileTypes: true }))
     .filter((entry) => entry.isDirectory() && !entry.name.startsWith('.'));
 
@@ -230,7 +239,9 @@ test('recordings listing repairs on-disk index drift without blocking the list r
   });
   const [loadedProject, attachedData] = await rivetNode.loadProjectAndAttachedDataFromFile(created.absolutePath);
 
-  await workflowRecordings.persistWorkflowExecutionRecording({
+  const projectRecordingsRoot = workflowFs.getWorkflowProjectRecordingsRoot(recordingsRoot, loadedProject.metadata.id!);
+  let callbackRecordingId: string | undefined;
+  const recordingId = await workflowRecordings.persistWorkflowExecutionRecording({
     workflowsRoot,
     sourceProject: loadedProject,
     sourceProjectPath: created.absolutePath,
@@ -275,7 +286,9 @@ test('recording index replacement is atomic and rejects a stale concurrent scan'
   const created = await workflowMutations.createWorkflowProjectItem('', 'AtomicRecordingIndex');
   const [loadedProject, attachedData] = await rivetNode.loadProjectAndAttachedDataFromFile(created.absolutePath);
 
-  await workflowRecordings.persistWorkflowExecutionRecording({
+  const projectRecordingsRoot = workflowFs.getWorkflowProjectRecordingsRoot(recordingsRoot, loadedProject.metadata.id!);
+  let callbackRecordingId: string | undefined;
+  const recordingId = await workflowRecordings.persistWorkflowExecutionRecording({
     workflowsRoot,
     sourceProject: loadedProject,
     sourceProjectPath: created.absolutePath,
@@ -335,7 +348,9 @@ test('recordings drift repair detects swapped bundle rows when counts stay equal
   const created = await workflowMutations.createWorkflowProjectItem('', 'EqualCountDrift');
   const [loadedProject, attachedData] = await rivetNode.loadProjectAndAttachedDataFromFile(created.absolutePath);
 
-  await workflowRecordings.persistWorkflowExecutionRecording({
+  const projectRecordingsRoot = workflowFs.getWorkflowProjectRecordingsRoot(recordingsRoot, loadedProject.metadata.id!);
+  let callbackRecordingId: string | undefined;
+  const recordingId = await workflowRecordings.persistWorkflowExecutionRecording({
     workflowsRoot,
     sourceProject: loadedProject,
     sourceProjectPath: created.absolutePath,
@@ -388,7 +403,9 @@ test('recordings listing ignores empty workflow recording directories during dri
   });
   const [loadedProject, attachedData] = await rivetNode.loadProjectAndAttachedDataFromFile(created.absolutePath);
 
-  await workflowRecordings.persistWorkflowExecutionRecording({
+  const projectRecordingsRoot = workflowFs.getWorkflowProjectRecordingsRoot(recordingsRoot, loadedProject.metadata.id!);
+  let callbackRecordingId: string | undefined;
+  const recordingId = await workflowRecordings.persistWorkflowExecutionRecording({
     workflowsRoot,
     sourceProject: loadedProject,
     sourceProjectPath: created.absolutePath,
@@ -441,7 +458,9 @@ test('recordings listing does not repeat an unrepairable drift rebuild on every 
   });
   const [loadedProject, attachedData] = await rivetNode.loadProjectAndAttachedDataFromFile(created.absolutePath);
 
-  await workflowRecordings.persistWorkflowExecutionRecording({
+  const projectRecordingsRoot = workflowFs.getWorkflowProjectRecordingsRoot(recordingsRoot, loadedProject.metadata.id!);
+  let callbackRecordingId: string | undefined;
+  const recordingId = await workflowRecordings.persistWorkflowExecutionRecording({
     workflowsRoot,
     sourceProject: loadedProject,
     sourceProjectPath: created.absolutePath,

@@ -7,22 +7,22 @@ images:
     repository: example.invalid/rivet/proxy
     tag: latest
     # Set digest to pin an exact OCI manifest. It takes precedence over tag.
-    digest: ""
+    digest: ''
     pullPolicy: IfNotPresent
   web:
     repository: example.invalid/rivet/web
     tag: latest
-    digest: ""
+    digest: ''
     pullPolicy: IfNotPresent
   api:
     repository: example.invalid/rivet/api
     tag: latest
-    digest: ""
+    digest: ''
     pullPolicy: IfNotPresent
   executor:
     repository: example.invalid/rivet/executor
     tag: latest
-    digest: ""
+    digest: ''
     pullPolicy: IfNotPresent
 
 replicaCount:
@@ -30,7 +30,86 @@ replicaCount:
   web: 1
   backend: 1
   execution: 2
+  # Only rendered when hostedEvaluations.enabled=true. This is a bounded
+  # batch tier, not spare capacity for published workflow traffic.
+  evaluation: 1
 
+# Only execution-profile API pods receive this gate. It has no in-memory queue:
+# an overloaded published request receives a visible retry response instead.
+publishedExecutionAdmission:
+  mode: disabled
+  maxActiveRunsPerPod: 4
+  retryAfterSeconds: 1
+
+# Metrics stay disabled until a monitoring system is explicitly configured to
+# scrape their internal ClusterIP Services. The API surfaces and optional proxy
+# exporter are never routed through the public proxy listener or Ingress.
+metrics:
+  enabled: false
+  proxyExporter:
+    # When enabled, this sidecar reads NGINX stub_status over Pod-local
+    # loopback and exposes aggregate proxy behavior on a separate ClusterIP
+    # Service port. Update the descriptive tag and immutable digest together.
+    enabled: false
+    image:
+      repository: nginx/nginx-prometheus-exporter
+      tag: 1.5.1
+      digest: sha256:9f6d963bb2b19d706d401cc3e2c3ea8de2f1c471b96a2156ca45e76f650b1625
+      pullPolicy: IfNotPresent
+    port: 9113
+    resources:
+      requests:
+        cpu: 25m
+        memory: 32Mi
+      limits:
+        cpu: 100m
+        memory: 64Mi
+  serviceMonitor:
+    enabled: false
+    interval: 30s
+    scrapeTimeout: 10s
+    additionalLabels: {}
+  prometheusRule:
+    enabled: false
+    for: 10m
+    additionalLabels: {}
+    # These rules are disabled separately until their thresholds are observed
+    # in the target environment. They use only Rivet's finite-label metrics.
+    failureModeAlerts:
+      enabled: false
+      postgresPoolWaiting: 1
+      maintenanceStaleSeconds: 900
+      outboxBlockedEntries: 1
+      evaluationQueueUtilization: 0.9
+    # Requires kube-state-metrics to be scraped by the same Prometheus.
+    # It is separate because cluster-state metrics are cluster-owned, unlike
+    # Rivet's application metrics exposed by this chart.
+    clusterStateAlerts:
+      enabled: false
+      restartIncrease: 1
+  # Emits two ConfigMap dashboard definitions for Grafana sidecar/import
+  # workflows. This does not install Grafana or enable a scrape by itself.
+  grafanaDashboards:
+    enabled: false
+    additionalLabels: {}
+
+# Disabled unless every API process uses managed PostgreSQL. Control accepts
+# submissions; only the isolated evaluation/combined development profile
+# claims durable batch trials. `execution` capacity remains public-only.
+hostedEvaluations:
+  enabled: false
+  workerConcurrency: 1
+  leaseMs: 60000
+  pollMs: 1000
+  # Submission is rejected atomically before a partial run is persisted when
+  # either durable queue bound would be exceeded.
+  maxJobsPerRun: 2000
+  maxOutstandingJobs: 10000
+  # In production, enabling batch work requires either dedicated placement or
+  # an operator-provided lower-priority class. The class is cluster-owned.
+  scheduling:
+    nodeSelector: {}
+    priorityClassName: ''
 autoscaling:
   proxy:
     enabled: true
@@ -66,39 +145,112 @@ service:
   execution:
     port: 80
     targetPort: 8080
+  evaluation:
+    port: 80
+    targetPort: 8080
   executor:
     port: 21889
     targetPort: 21889
 
 ingress:
   enabled: false
-  className: ""
-  host: ""
-  externalDNSHostname: ""
+  className: ''
+  host: ''
+  externalDNSHostname: ''
   annotations: {}
-  tlsSecretName: ""
+  tlsSecretName: ''
   pathType: Prefix
 
 vault:
   enabled: false
+  # Extra Injector annotations are allowed, but typed dotenv-injection values
+  # below win over same-name keys so they cannot weaken init ordering or
+  # resource reservations.
   annotations: {}
-  role: ""
-  authPath: ""
-  secretPath: ""
+  role: ''
+  authPath: ''
+  secretPath: ''
   tlsSkipVerify: false
-  caSecretName: ""
+  caSecretName: ''
   caCertPath: /vault/tls/ca.crt
   dotenvFileName: dotenv
-  dotenvTemplate: ""
+  dotenvTemplate: ''
+  # The chart injects a pre-population-only Vault Agent that renders one dotenv
+  # file. Keep this separately bounded from long-running application workloads.
+  # Values are emitted as Vault Injector resource annotations only when
+  # vault.enabled and vault.secretPath are both set.
+  agentResources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+      ephemeral-storage: 64Mi
+    limits:
+      cpu: 250m
+      memory: 128Mi
+      ephemeral-storage: 256Mi
 
 workflowStorage:
   backend: managed
 
 workflowSchema:
+  # Serving API pods are verify-only. A normal release accepts exactly this
+  # schema. The managed release command widens maximumVersion only for a
+  # documented expand-only rollback; the migration Job always stays exact.
+  compatibility:
+    minimumVersion: 10
+    maximumVersion: 10
   migrationJob:
     enabled: true
     backoffLimit: 2
     activeDeadlineSeconds: 600
+
+# A singleton control-plane process performs low-frequency cleanup. PostgreSQL
+# fencing remains mandatory so a restart or future control-plane replication
+# cannot make a stale owner commit retention work.
+managedMaintenance:
+  intervalMs: 300000
+  leaseMs: 60000
+  batchSize: 100
+
+# Evaluate the global PostgreSQL-owned Evaluation retention candidates first.
+# Change to enforce only after candidate metrics show expected temporary replay
+# and orphaned-snapshot volume for the managed installation.
+evaluationRetention:
+  mode: audit
+
+# Web-app action rows are short-lived reconnect/cancellation transport state.
+# Review candidate volume through the control-plane metrics before selecting
+# enforce. This policy never removes workflow recordings.
+webAppActionRetention:
+  mode: audit
+  retentionHours: 24
+
+# Reconciliation inventories unreferenced workflow uploads first. This policy
+# stays audit-only until the authenticated findings and bounded metrics have
+# been reviewed for this installation. Enforce only queues recognized Rivet
+# revision/recording artifacts; it never performs a prefix deletion.
+staleUploadRetention:
+  mode: audit
+  minimumCandidateAgeHours: 24
+  requiredCompletedScans: 2
+
+# Production deployments must be materialized from an immutable release
+# manifest. Local Kubernetes rehearsal and disposable CI gates leave this off.
+release:
+  production:
+    enabled: false
+    manifestDigest: ''
+    sourceSha: ''
+    verification:
+      workflow: ''
+      runId: ''
+      runAttempt: 0
+    chart:
+      name: ''
+      version: ''
+      contentDigest: ''
+    database:
+      managedWorkflowSchemaVersion: 0
 
 lifecycle:
   health:
@@ -145,14 +297,17 @@ runtimeLibraries:
   cache:
     enabled: false
     size: 10Gi
-    storageClassName: ""
-    existingClaimName: ""
+    storageClassName: ''
+    existingClaimName: ''
 
 filesystem:
   workflows:
-    existingClaimName: ""
+    # Filesystem control-plane mode is not enabled by the current managed-only
+    # chart. If re-enabled, prefer a ReadWriteOncePod PVC and retain backend=1;
+    # ordinary ReadWriteOnce alone does not prevent two pods on the same node.
+    existingClaimName: ''
   runtimeLibraries:
-    existingClaimName: ""
+    existingClaimName: ''
 
 postgres:
   mode: managed
@@ -164,38 +319,38 @@ postgres:
   # Shared query-pool connections per API process. Three additional dedicated
   # LISTEN connections per API pod are included by the chart capacity check.
   poolMaxPerApiPod: 10
-  host: ""
+  host: ''
   port: 5432
-  database: ""
-  username: ""
-  passwordSecretName: ""
+  database: ''
+  username: ''
+  passwordSecretName: ''
   passwordSecretKey: password
   sslMode: require
-  connectionStringSecretName: ""
+  connectionStringSecretName: ''
   connectionStringSecretKey: connectionString
 
 objectStorage:
-  endpoint: ""
-  bucket: ""
+  endpoint: ''
+  bucket: ''
   region: us-east-1
   prefix: workflows/
-  accessKeySecretName: ""
+  accessKeySecretName: ''
   accessKeySecretKey: accessKeyId
-  secretKeySecretName: ""
+  secretKeySecretName: ''
   secretKeySecretKey: secretAccessKey
   forcePathStyle: false
 
 appSettings:
   backend: postgres
   # Prefer a dedicated 32+ character secret. RIVET_KEY remains a compatibility fallback.
-  encryptionKeySecretName: ""
+  encryptionKeySecretName: ''
   encryptionKeySecretKey: encryptionKey
   # Rotation is two compatibility phases: new secondary first, then old secondary after the primary swap.
-  previousEncryptionKeySecretName: ""
+  previousEncryptionKeySecretName: ''
   previousEncryptionKeySecretKey: encryptionKey
   legacyImport:
     # Optional one-time source from deployments that used the old shared app-data PVC.
-    existingClaimName: ""
+    existingClaimName: ''
 
 tmpVolume:
   enabled: true
@@ -203,8 +358,16 @@ tmpVolume:
   path: /var/tmp
   sizeLimit: 2Gi
 
+# Every disposable writable volume receives a bounded starting capacity. Tune
+# these from the published-route load gate before raising them for production.
+writableVolumeLimits:
+  workspace: 2Gi
+  workflows: 2Gi
+  appData: 1Gi
+  runtimeLibraries: 8Gi
+
 auth:
-  keySecretName: ""
+  keySecretName: ''
   keySecretKey: RIVET_KEY
 
 env:
@@ -214,19 +377,24 @@ env:
   RIVET_LATEST_APPS_BASE_PATH: /apps-latest
   RIVET_WEB_APPS_BASE_PATH: /apps
   RIVET_LATEST_WEB_APPS_BASE_PATH: /apps-latest
+  RIVET_WEB_APP_BROWSER_STORAGE_TRANSFER_TIMEOUT_MS: '60000'
+  RIVET_WEB_APP_BROWSER_STORAGE_MAX_VALUE_BYTES: '268435456'
+  RIVET_WEB_APP_BROWSER_STORAGE_MAX_ACTION_BYTES: '536870912'
+  RIVET_WEB_APP_BROWSER_STORAGE_MAX_ACTIVE_BYTES: '536870912'
   RIVET_PROXY_RESOLVER: kube-dns.kube-system.svc.cluster.local
-  RIVET_ENABLE_LATEST_REMOTE_DEBUGGER: "true"
-  RIVET_CORS_ALLOWED_ORIGINS: ""
+  RIVET_ENABLE_LATEST_REMOTE_DEBUGGER: 'true'
+  RIVET_CORS_ALLOWED_ORIGINS: ''
   RIVET_SERVER_UI_AUTH_MODE: key
-  RIVET_REQUIRE_UI_GATE_KEY: "true"
-  RIVET_TRUST_INCOMING_FORWARDED_HEADERS: "false"
-  RIVET_RECORDINGS_ENABLED: "true"
+  RIVET_REQUIRE_UI_GATE_KEY: 'true'
+  RIVET_TRUST_INCOMING_FORWARDED_HEADERS: 'false'
+  RIVET_RECORDINGS_ENABLED: 'true'
 
 podAnnotations:
   proxy: {}
   web: {}
   backend: {}
   execution: {}
+  evaluation: {}
   workflowSchemaMigration: {}
 
 resources:
@@ -250,3 +418,31 @@ resources:
     requests:
       cpu: 500m
       memory: 1Gi
+  evaluation:
+    requests:
+      cpu: 500m
+      memory: 1Gi
+
+# Generic memory and node-ephemeral limits can interrupt valid long graph runs.
+# A production render therefore requires an actual limit or a component-level
+# acknowledgement that records why the limit is intentionally deferred pending
+# capacity evidence. Remove an acknowledgement when that resource limit is set.
+resourceLimitAcknowledgements:
+  proxy:
+    memory: ''
+    ephemeralStorage: ''
+  web:
+    memory: ''
+    ephemeralStorage: ''
+  api:
+    memory: ''
+    ephemeralStorage: ''
+  executor:
+    memory: ''
+    ephemeralStorage: ''
+  execution:
+    memory: ''
+    ephemeralStorage: ''
+  evaluation:
+    memory: ''
+    ephemeralStorage: ''

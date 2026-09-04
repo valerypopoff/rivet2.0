@@ -97,6 +97,8 @@ function RecordingRow({
               <div className="run-recordings-run-title">{formatTimestamp(recording.createdAt)}</div>
               {recording.runKind === 'latest' ? (
                 <span className="run-recordings-badge latest">Latest</span>
+              ) : recording.runKind === 'editor' ? (
+                <span className="run-recordings-badge latest">Local editor</span>
               ) : null}
             </div>
           </div>

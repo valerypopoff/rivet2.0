@@ -39,31 +39,27 @@ import {
   createUiGraphChatSubmissionStatePatch,
   getUiGraphChatDraftStateKey,
   getUiGraphChatMessagesStateKey,
+  getUiGraphChatPinsStateKey,
   getUiGraphComponentRenderModel,
   getUiGraphProgressiveJsonOutputChunks,
   normalizeUiGraph,
 } from '@valerypopoff/rivet2-core';
 import {
   clearUiGraphChatSearchMatches,
-  applyUiGraphWebAppStorageActionPatch,
-  applyUiGraphWebAppStoragePatch,
+  applyUiGraphWebAppStorageActionPatchAsync,
   copyUiGraphText,
   downloadUiGraphJsonOutput,
   enhanceUiGraphChatJsonCodeBlocks,
-  hasUiGraphChatPersistentStateChanged,
   getUiGraphChatPersistentState,
+  hasUiGraphChatPersistentStateChanged,
   getUiGraphChatMessagePresentations,
   getUiGraphWebAppStorageKey,
   highlightUiGraphChatSearchMatches,
-  loadUiGraphChatPersistentState,
-  loadUiGraphWebAppStorage,
   observeUiGraphOutputResizeBounds,
   revealUiGraphChatElement,
   revealUiGraphChatSearchMatch,
-  saveUiGraphChatPersistentState,
-  saveUiGraphResponseTrace,
-  loadUiGraphResponseTrace,
-  pruneUiGraphResponseTraces,
+  UiGraphBrowserPersistence,
+  type UiGraphBrowserPersistenceWarning,
   type UiGraphChatMessagePresentation,
 } from '@valerypopoff/rivet2-core/web-app-runtime';
 import { useMarkdown } from '../../hooks/useMarkdown.js';
@@ -122,8 +118,8 @@ export type RivetWebAppActionResult = {
  * because their Tauri webview can have isolated browser storage.
  */
 export type RivetWebAppStorageAdapter = {
-  applyPatch(patch: Record<string, unknown>): void;
-  load(): Record<string, unknown>;
+  applyPatch(patch: Record<string, unknown>): Promise<void> | void;
+  load(): Promise<Record<string, unknown>> | Record<string, unknown>;
 };
 
 export type RivetWebAppRendererProps = {
@@ -162,43 +158,95 @@ export type RivetWebAppComponentFrameProps = {
 function useUiGraphChatBrowserPersistence(
   interactionController: UiGraphInteractionController,
   uiGraph: UiGraph,
-): () => void {
+): {
+  hydrated: boolean;
+  persistence: UiGraphBrowserPersistence;
+  reset(): void;
+  warning: UiGraphBrowserPersistenceWarning | undefined;
+} {
   const isRestoringRef = useRef(false);
+  const persistence = useMemo(() => new UiGraphBrowserPersistence(uiGraph), [uiGraph]);
+  const [hydrated, setHydrated] = useState(false);
+  const [warning, setWarning] = useState<UiGraphBrowserPersistenceWarning | undefined>();
 
   useLayoutEffect(() => {
+    let active = true;
+    let disposeControllerSubscription = () => {};
+    let disposeCrossTabSubscription = () => {};
+    const disposeWarningSubscription = persistence.subscribeWarning(setWarning);
     interactionController.setUiGraph(uiGraph);
+    setHydrated(false);
 
-    if (Object.keys(getUiGraphChatPersistentState(uiGraph, interactionController.getSnapshot().state)).length === 0) {
-      const storedState = loadUiGraphChatPersistentState(uiGraph);
-      if (Object.keys(storedState).length > 0) {
+    void (async () => {
+      await persistence.initialize();
+      if (!active) return;
+      setWarning(persistence.warning);
+      const storedState = await persistence.loadChatState();
+      if (!active) return;
+      const currentState = interactionController.getSnapshot().state;
+      const currentPersistentState = getUiGraphChatPersistentState(uiGraph, currentState);
+      if (Object.keys(currentPersistentState).length === 0 && Object.keys(storedState).length > 0) {
         isRestoringRef.current = true;
         interactionController.updateStatePatch(storedState);
         isRestoringRef.current = false;
       }
-    }
-
-    let previousState = interactionController.getSnapshot().state;
-    saveUiGraphChatPersistentState(uiGraph, previousState);
-    return interactionController.subscribe(() => {
-      const nextState = interactionController.getSnapshot().state;
-      if (!isRestoringRef.current && hasUiGraphChatPersistentStateChanged(uiGraph, previousState, nextState)) {
-        saveUiGraphChatPersistentState(uiGraph, nextState);
-        pruneUiGraphResponseTraces(uiGraph, nextState);
+      let previousState = interactionController.getSnapshot().state;
+      disposeControllerSubscription = interactionController.subscribe(() => {
+        const nextState = interactionController.getSnapshot().state;
+        if (!isRestoringRef.current && hasUiGraphChatPersistentStateChanged(uiGraph, previousState, nextState)) {
+          void persistence.saveChatState(nextState).catch(() => undefined);
+          void persistence.pruneResponseTraces(nextState).catch(() => undefined);
+        }
+        previousState = nextState;
+      });
+      disposeCrossTabSubscription = persistence.subscribe((change) => {
+        if (change.namespace !== 'chat-state') return;
+        void persistence
+          .loadChatState()
+          .then((nextChatState) => {
+            if (!active) return;
+            const patch: Record<string, unknown> = {};
+            for (const component of uiGraph.components) {
+              if (component.type !== 'chat') continue;
+              const draftKey = getUiGraphChatDraftStateKey(component.id);
+              const messagesKey = getUiGraphChatMessagesStateKey(component.id);
+              const pinsKey = getUiGraphChatPinsStateKey(component.id);
+              patch[draftKey] = nextChatState[draftKey] ?? '';
+              patch[messagesKey] = nextChatState[messagesKey] ?? [];
+              patch[pinsKey] = nextChatState[pinsKey] ?? [];
+            }
+            isRestoringRef.current = true;
+            interactionController.updateStatePatch(patch);
+            previousState = interactionController.getSnapshot().state;
+            isRestoringRef.current = false;
+          })
+          .catch(() => undefined);
+      });
+      setHydrated(true);
+    })().catch(() => {
+      if (active) {
+        setWarning(persistence.warning);
+        setHydrated(true);
       }
-      previousState = nextState;
     });
-  }, [interactionController, uiGraph]);
 
-  return useCallback(() => {
-    const chatState = getUiGraphChatPersistentState(uiGraph, interactionController.getSnapshot().state);
+    return () => {
+      active = false;
+      disposeControllerSubscription();
+      disposeCrossTabSubscription();
+      disposeWarningSubscription();
+      persistence.dispose();
+    };
+  }, [interactionController, persistence, uiGraph]);
+
+  const reset = useCallback(() => {
     isRestoringRef.current = true;
     interactionController.reset();
-    if (Object.keys(chatState).length > 0) {
-      interactionController.updateStatePatch(chatState);
-    }
     isRestoringRef.current = false;
-    saveUiGraphChatPersistentState(uiGraph, interactionController.getSnapshot().state);
-  }, [interactionController, uiGraph]);
+    void persistence.saveChatState(interactionController.getSnapshot().state).catch(() => undefined);
+  }, [interactionController, persistence]);
+
+  return { hydrated, persistence, reset, warning };
 }
 
 export const RivetWebAppRenderer: FC<RivetWebAppRendererProps> = ({
@@ -229,7 +277,12 @@ export const RivetWebAppRenderer: FC<RivetWebAppRendererProps> = ({
     interactionController.getSnapshot,
     interactionController.getSnapshot,
   );
-  const resetApp = useUiGraphChatBrowserPersistence(interactionController, normalizedInteractionUiGraph);
+  const {
+    hydrated,
+    persistence,
+    reset: resetApp,
+    warning: storageWarning,
+  } = useUiGraphChatBrowserPersistence(interactionController, normalizedInteractionUiGraph);
 
   useEffect(() => {
     const abortActions = () => interactionController.abortActions();
@@ -247,39 +300,38 @@ export const RivetWebAppRenderer: FC<RivetWebAppRendererProps> = ({
       interactionController.runAction(component, async ({ componentId, reportProgress, signal, state }) => {
         const storageActionState = getWebAppStorageActionState(normalizedInteractionUiGraph);
         const actionNumber = ++storageActionState.nextAction;
-        const result = await onRunAction(
-          componentId,
-          state,
-          signal,
-          reportProgress,
-          storageAdapter?.load() ?? loadUiGraphWebAppStorage(normalizedInteractionUiGraph),
-        );
+        const storageSnapshot = storageAdapter ? await storageAdapter.load() : await persistence.loadStoredValues();
+        const result = await onRunAction(componentId, state, signal, reportProgress, storageSnapshot);
         signal.throwIfAborted();
         if (result.storagePatch && Object.keys(result.storagePatch).length > 0) {
-          applyUiGraphWebAppStorageActionPatch(
+          await applyUiGraphWebAppStorageActionPatchAsync(
             result.storagePatch,
             actionNumber,
             storageActionState.appliedActionByKey,
-            (applicablePatch) => {
-              if (storageAdapter) {
-                storageAdapter.applyPatch(applicablePatch);
-              } else {
-                applyUiGraphWebAppStoragePatch(
-                  normalizedInteractionUiGraph,
-                  loadUiGraphWebAppStorage(normalizedInteractionUiGraph),
-                  applicablePatch,
-                );
-              }
-            },
+            async (applicablePatch) =>
+              void (storageAdapter
+                ? await storageAdapter.applyPatch(applicablePatch)
+                : await persistence.applyStoredValuePatch(applicablePatch)),
           );
         }
         if (component.type === 'chat' && component.allowResponseInspection && result.responseTrace) {
-          saveUiGraphResponseTrace(normalizedInteractionUiGraph, component.id, result.responseTrace);
+          await persistence.saveResponseTrace(String(component.id), result.responseTrace);
         }
         return { statePatch: result.statePatch, responseTrace: result.responseTrace };
       }),
-    [interactionController, normalizedInteractionUiGraph, onRunAction, storageAdapter],
+    [interactionController, normalizedInteractionUiGraph, onRunAction, persistence, storageAdapter],
   );
+
+  if (!hydrated) {
+    return (
+      <div ref={rootRef} className="rivet-web-app-root" onPointerDownCapture={onRootPointerDownCapture}>
+        <style>{RIVET_WEB_APP_RENDERER_CSS}</style>
+        <main className="rivet-web-app-surface">
+          <div className="rivet-web-app-loading">Loading saved app data…</div>
+        </main>
+      </div>
+    );
+  }
 
   return (
     <div ref={rootRef} className="rivet-web-app-root" onPointerDownCapture={onRootPointerDownCapture}>
@@ -307,6 +359,7 @@ export const RivetWebAppRenderer: FC<RivetWebAppRendererProps> = ({
             children: (
               <RivetWebAppComponent
                 component={component}
+                browserPersistence={persistence}
                 actionError={interaction.actionErrors[component.id]}
                 actionProgress={interaction.actionProgress[component.id]}
                 isLoading={interaction.loadingComponentIds.has(component.id)}
@@ -341,6 +394,11 @@ export const RivetWebAppRenderer: FC<RivetWebAppRendererProps> = ({
             </div>
           );
         })}
+        {storageWarning && (
+          <div className="rivet-web-app-storage-warning" role="status">
+            {storageWarning.message}
+          </div>
+        )}
         {Object.entries(interaction.actionErrors).flatMap(([componentId, message]) =>
           normalizedUiGraph.components.some((component) => component.id === componentId && component.type === 'chat')
             ? []
@@ -358,6 +416,7 @@ export const RivetWebAppRenderer: FC<RivetWebAppRendererProps> = ({
 const RivetWebAppComponent: FC<{
   actionError?: string;
   actionProgress?: GraphProgress;
+  browserPersistence: UiGraphBrowserPersistence;
   component: UiGraphComponent;
   isLoading: boolean;
   isRunning: boolean;
@@ -374,6 +433,7 @@ const RivetWebAppComponent: FC<{
 }> = ({
   actionError,
   actionProgress,
+  browserPersistence,
   component,
   isLoading,
   isRunning,
@@ -485,6 +545,7 @@ const RivetWebAppComponent: FC<{
         <RivetWebAppChat
           actionError={actionError}
           actionProgress={actionProgress}
+          browserPersistence={browserPersistence}
           isRunning={isRunning}
           renderModel={renderModel}
           onRunAction={onRunAction}
@@ -637,6 +698,7 @@ function scheduleAnimationFrame(callback: () => void): () => void {
 const RivetWebAppChat: FC<{
   actionError?: string;
   actionProgress?: GraphProgress;
+  browserPersistence: UiGraphBrowserPersistence;
   isRunning: boolean;
   onRunAction(component: Extract<UiGraphComponent, { type: 'chat' }>): Promise<void> | void;
   onCancelAction(componentId: UiComponentId): void;
@@ -650,6 +712,7 @@ const RivetWebAppChat: FC<{
 }> = ({
   actionError,
   actionProgress,
+  browserPersistence,
   isRunning,
   onCancelAction,
   onFlushChatHistory,
@@ -848,11 +911,16 @@ const RivetWebAppChat: FC<{
     if (!messageContextMenu) return;
     const message = messages[messageContextMenu.messageIndex];
     setMessageContextMenu(undefined);
-    setInspectedTrace(
-      message?.role === 'assistant' && typeof message.responseTraceId === 'string'
-        ? loadUiGraphResponseTrace(uiGraph, component.id, message.responseTraceId) ?? null
-        : null,
-    );
+    if (message?.role !== 'assistant' || typeof message.responseTraceId !== 'string') {
+      setInspectedTrace(null);
+      return;
+    }
+    void browserPersistence
+      .loadResponseTrace(String(component.id), message.responseTraceId)
+      .then((trace) => {
+        setInspectedTrace(trace ?? null);
+      })
+      .catch(() => setInspectedTrace(null));
   };
 
   const togglePin = (messageIndex: number) => {

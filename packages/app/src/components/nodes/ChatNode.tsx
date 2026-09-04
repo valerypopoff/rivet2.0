@@ -16,6 +16,7 @@ import { useDataRefs } from '../../providers/ProvidersContext.js';
 import { tryRestoreStoredDataValue } from '../../utils/executionDataStorage.js';
 import type { OutputRenderMode } from '../RenderDataValue.js';
 import { getChatNodeCopyValueData } from '../../utils/nodeOutputCopyValueProjectors.js';
+import { OUTPUT_NAVIGATION_ITEM_ATTRIBUTE } from '../renderDataValue/outputNavigationItems.js';
 
 const bodyStyles = css`
   display: flex;
@@ -74,6 +75,7 @@ export const ChatNodeOutput: FC<{
             <ChatNodeOutputSingle
               key={index}
               outputValue={outputText == null ? undefined : { type: 'string', value: outputText }}
+              isResponseItem
               requestTokens={requestTokens}
               responseTokens={responseTokens}
               cost={cost}
@@ -100,6 +102,7 @@ export const ChatNodeOutput: FC<{
     return (
       <ChatNodeOutputSingle
         outputValue={outputs['response' as PortId]}
+        isResponseItem={false}
         requestTokens={requestTokens}
         responseTokens={responseTokens}
         cost={cost}
@@ -147,6 +150,7 @@ const ChatNodeOutputContainer = styled.div`
 
 export const ChatNodeOutputSingle: FC<{
   outputValue: DataValueWithRefs | DataValue | undefined;
+  isResponseItem: boolean;
   functionCallValue: DataValue | undefined;
   requestTokens: number | undefined;
   responseTokens: number | undefined;
@@ -159,6 +163,7 @@ export const ChatNodeOutputSingle: FC<{
   wrapLines?: boolean;
 }> = ({
   outputValue,
+  isResponseItem,
   functionCallValue,
   requestTokens,
   responseTokens,
@@ -173,7 +178,10 @@ export const ChatNodeOutputSingle: FC<{
   const effectiveRenderMode = renderMode ?? (fullscreen ? 'expanded-preview' : 'compact');
 
   return (
-    <ChatNodeOutputContainer className={clsx({ fullscreen })}>
+    <ChatNodeOutputContainer
+      className={clsx({ fullscreen })}
+      {...(isResponseItem ? { [OUTPUT_NAVIGATION_ITEM_ATTRIBUTE]: '' } : undefined)}
+    >
       <div className="metaInfo">
         {(responseTokens != null || requestTokens != null || cost != null) && (
           <div style={{ marginBottom: 8 }}>

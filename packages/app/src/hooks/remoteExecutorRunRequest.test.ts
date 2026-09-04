@@ -476,18 +476,24 @@ test('active remote run request can be cleared on disconnect or replacement', ()
 test('startActiveRemoteGraphRunRequest registers the active request before sending', () => {
   const activeRequestIdRef: ActiveRemoteRunRequestRef = { current: null };
   const sentPayloads: OutgoingMessageMap['run'][] = [];
+  const lifecycle: string[] = [];
 
   const result = startActiveRemoteGraphRunRequest({
     activeRequestIdRef,
     createRequestId: () => 'request-1' as RemoteRunRequestId,
+    onRequestCreated: (requestId) => {
+      lifecycle.push('created:' + requestId);
+    },
     payload: makeRunPayload(),
     sendRun: (payload) => {
       assert.equal(activeRequestIdRef.current, 'request-1');
+      assert.deepEqual(lifecycle, ['created:request-1']);
       sentPayloads.push(payload);
       return true;
     },
   });
 
+  assert.deepEqual(lifecycle, ['created:request-1']);
   assert.deepEqual(result, {
     requestId: 'request-1',
     type: 'sent',

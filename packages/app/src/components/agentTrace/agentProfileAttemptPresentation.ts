@@ -12,7 +12,10 @@ export function buildAgentProfileAttemptInspectorRows(
 ): AgentProfileAttemptInspectorRow[] {
   return attempts.map((attempt) => ({
     eventId: attempt.eventId,
-    providerAndModel: `${formatProvider(attempt)} / ${attempt.model}`,
+    providerAndModel: [
+      ...(attempt.profileName == null || attempt.profileName.trim() === '' ? [] : [`Profile: ${attempt.profileName.trim()}`]),
+      `${formatProvider(attempt)} / ${attempt.model}`,
+    ].join(' · '),
     context: [
       describeStage(attempt.stage),
       describeOutcome(attempt),

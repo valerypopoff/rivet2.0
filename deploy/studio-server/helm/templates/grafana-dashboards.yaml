@@ -1,0 +1,17 @@
+{{- if .Values.metrics.grafanaDashboards.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "rivet.fullname" . }}-grafana-dashboards
+  labels:
+    {{- include "rivet.labels" . | nindent 4 }}
+    grafana_dashboard: "1"
+    {{- with .Values.metrics.grafanaDashboards.additionalLabels }}
+{{ toYaml . | nindent 4 }}
+    {{- end }}
+data:
+  rivet-control-plane.json: |-
+{{ .Files.Get "dashboards/rivet-control-plane.json" | nindent 4 }}
+  rivet-published-execution.json: |-
+{{ .Files.Get "dashboards/rivet-published-execution.json" | nindent 4 }}
+{{- end }}

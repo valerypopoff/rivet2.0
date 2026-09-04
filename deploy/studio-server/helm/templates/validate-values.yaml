@@ -1,3 +1,6 @@
+{{- $kubernetesQuantityPattern := "^[+]?([0-9]+([.][0-9]*)?|[.][0-9]+)([eE][+-]?[0-9]+|[numkMGTPE]|[KMGTPE]i)?$" -}}
+{{- $zeroKubernetesQuantityPattern := "^[+]?0+([.]0+)?([eE][+-]?[0-9]+)?([numkMGTPE]|[KMGTPE]i)?$" -}}
+
 {{- if ne .Values.workflowStorage.backend .Values.runtimeLibraries.backend -}}
 {{- fail "workflowStorage.backend and runtimeLibraries.backend must stay unified in phase 3" -}}
 {{- end -}}
@@ -8,6 +11,26 @@
 
 {{- if hasKey .Values.vault "roleIdSecretName" -}}
 {{- fail "vault.roleIdSecretName is retired; use vault.role with the Vault Injector dotenv contract" -}}
+{{- end -}}
+
+{{- $vaultInjectionEnabled := and .Values.vault.enabled (not (empty .Values.vault.secretPath)) -}}
+{{- if $vaultInjectionEnabled -}}
+{{- $vaultAgentResources := .Values.vault.agentResources -}}
+{{- if not (kindIs "map" $vaultAgentResources) -}}
+{{- fail "vault.agentResources must be a map when Vault dotenv injection is enabled" -}}
+{{- end -}}
+{{- range $tier := list "requests" "limits" -}}
+{{- $tierResources := default (dict) (index $vaultAgentResources $tier) -}}
+{{- if not (kindIs "map" $tierResources) -}}
+{{- fail (printf "vault.agentResources.%s must be a map when Vault dotenv injection is enabled" $tier) -}}
+{{- end -}}
+{{- range $resourceName := list "cpu" "memory" "ephemeral-storage" -}}
+{{- $quantity := default "" (index $tierResources $resourceName) -}}
+{{- if or (not (kindIs "string" $quantity)) (empty $quantity) (not (regexMatch $kubernetesQuantityPattern $quantity)) (regexMatch $zeroKubernetesQuantityPattern $quantity) -}}
+{{- fail (printf "vault.agentResources.%s.%s must be a positive Kubernetes quantity string when Vault dotenv injection is enabled" $tier $resourceName) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
 {{- end -}}
 
 {{- if ne .Values.runtimeLibraries.objectStoragePrefix "runtime-libraries/" -}}
@@ -22,10 +45,337 @@
 {{- fail "env.RIVET_DEPLOYMENT_MANAGED_WORKFLOW_SCHEMA_MODE is an internal chart-owned startup policy and cannot be overridden" -}}
 {{- end -}}
 
+{{- range $key := list "RIVET_MANAGED_WORKFLOW_SCHEMA_MIN_VERSION" "RIVET_MANAGED_WORKFLOW_SCHEMA_MAX_VERSION" "RIVET_DEPLOYMENT_MANAGED_WORKFLOW_SCHEMA_MIN_VERSION" "RIVET_DEPLOYMENT_MANAGED_WORKFLOW_SCHEMA_MAX_VERSION" -}}
+{{- if hasKey $.Values.env $key -}}
+{{- fail (printf "env.%s is chart-owned; configure workflowSchema.compatibility through the immutable release manifest" $key) -}}
+{{- end -}}
+{{- end -}}
+
 {{- if hasKey .Values.env "RIVET_DEPLOYMENT_DATABASE_POOL_MAX" -}}
 {{- fail "env.RIVET_DEPLOYMENT_DATABASE_POOL_MAX is chart-owned; configure postgres.poolMaxPerApiPod instead" -}}
 {{- end -}}
 
+{{- range $key := list "RIVET_PUBLISHED_EXECUTION_ADMISSION_MODE" "RIVET_PUBLISHED_EXECUTION_MAX_ACTIVE_RUNS" "RIVET_PUBLISHED_EXECUTION_RETRY_AFTER_SECONDS" "RIVET_DEPLOYMENT_PUBLISHED_EXECUTION_ADMISSION_MODE" "RIVET_DEPLOYMENT_PUBLISHED_EXECUTION_MAX_ACTIVE_RUNS" "RIVET_DEPLOYMENT_PUBLISHED_EXECUTION_RETRY_AFTER_SECONDS" -}}
+{{- if hasKey $.Values.env $key -}}
+{{- fail (printf "env.%s is chart-owned; configure publishedExecutionAdmission instead" $key) -}}
+{{- end -}}
+{{- end -}}
+
+{{- range $key := list "RIVET_HOSTED_EVALUATIONS_ENABLED" "RIVET_HOSTED_EVALUATIONS_WORKER_CONCURRENCY" "RIVET_HOSTED_EVALUATIONS_LEASE_MS" "RIVET_HOSTED_EVALUATIONS_POLL_MS" "RIVET_HOSTED_EVALUATIONS_MAX_JOBS_PER_RUN" "RIVET_HOSTED_EVALUATIONS_MAX_OUTSTANDING_JOBS" -}}
+{{- if hasKey $.Values.env $key -}}
+{{- fail (printf "env.%s is chart-owned; configure hostedEvaluations instead" $key) -}}
+{{- end -}}
+{{- end -}}
+
+{{- if not (kindIs "map" .Values.hostedEvaluations) -}}
+{{- fail "hostedEvaluations must be a map" -}}
+{{- end -}}
+{{- if not (kindIs "bool" .Values.hostedEvaluations.enabled) -}}
+{{- fail "hostedEvaluations.enabled must be a boolean" -}}
+{{- end -}}
+{{- range $field := list
+  (dict "path" "hostedEvaluations.workerConcurrency" "value" .Values.hostedEvaluations.workerConcurrency)
+  (dict "path" "hostedEvaluations.leaseMs" "value" .Values.hostedEvaluations.leaseMs)
+  (dict "path" "hostedEvaluations.pollMs" "value" .Values.hostedEvaluations.pollMs)
+  (dict "path" "hostedEvaluations.maxJobsPerRun" "value" .Values.hostedEvaluations.maxJobsPerRun)
+  (dict "path" "hostedEvaluations.maxOutstandingJobs" "value" .Values.hostedEvaluations.maxOutstandingJobs)
+  (dict "path" "replicaCount.evaluation" "value" .Values.replicaCount.evaluation)
+-}}
+{{- include "rivet.assertNonNegativeWholeNumber" $field -}}
+{{- end -}}
+{{- $hostedEvaluationWorkerConcurrency := int .Values.hostedEvaluations.workerConcurrency -}}
+{{- if or (lt $hostedEvaluationWorkerConcurrency 1) (gt $hostedEvaluationWorkerConcurrency 8) -}}
+{{- fail "hostedEvaluations.workerConcurrency must be an integer between 1 and 8" -}}
+{{- end -}}
+{{- $hostedEvaluationLeaseMs := int .Values.hostedEvaluations.leaseMs -}}
+{{- if or (lt $hostedEvaluationLeaseMs 15000) (gt $hostedEvaluationLeaseMs 600000) -}}
+{{- fail "hostedEvaluations.leaseMs must be an integer between 15000 and 600000" -}}
+{{- end -}}
+{{- $hostedEvaluationPollMs := int .Values.hostedEvaluations.pollMs -}}
+{{- if or (lt $hostedEvaluationPollMs 250) (gt $hostedEvaluationPollMs 30000) -}}
+{{- fail "hostedEvaluations.pollMs must be an integer between 250 and 30000" -}}
+{{- end -}}
+{{- $hostedEvaluationMaxJobsPerRun := int .Values.hostedEvaluations.maxJobsPerRun -}}
+{{- if or (lt $hostedEvaluationMaxJobsPerRun 1) (gt $hostedEvaluationMaxJobsPerRun 100000) -}}
+{{- fail "hostedEvaluations.maxJobsPerRun must be an integer between 1 and 100000" -}}
+{{- end -}}
+{{- $hostedEvaluationMaxOutstandingJobs := int .Values.hostedEvaluations.maxOutstandingJobs -}}
+{{- if or (lt $hostedEvaluationMaxOutstandingJobs $hostedEvaluationMaxJobsPerRun) (gt $hostedEvaluationMaxOutstandingJobs 1000000) -}}
+{{- fail "hostedEvaluations.maxOutstandingJobs must be an integer between maxJobsPerRun and 1000000" -}}
+{{- end -}}
+{{- if not (kindIs "map" .Values.hostedEvaluations.scheduling) -}}
+{{- fail "hostedEvaluations.scheduling must be a map" -}}
+{{- end -}}
+{{- if not (kindIs "map" .Values.hostedEvaluations.scheduling.nodeSelector) -}}
+{{- fail "hostedEvaluations.scheduling.nodeSelector must be a map" -}}
+{{- end -}}
+{{- if not (kindIs "string" .Values.hostedEvaluations.scheduling.priorityClassName) -}}
+{{- fail "hostedEvaluations.scheduling.priorityClassName must be a string" -}}
+{{- end -}}
+{{- if and .Values.hostedEvaluations.enabled (lt (int .Values.replicaCount.evaluation) 1) -}}
+{{- fail "hostedEvaluations.enabled requires replicaCount.evaluation >= 1" -}}
+{{- end -}}
+{{- if and .Values.hostedEvaluations.enabled .Values.release.production.enabled (empty .Values.hostedEvaluations.scheduling.priorityClassName) (eq (len .Values.hostedEvaluations.scheduling.nodeSelector) 0) -}}
+{{- fail "production hostedEvaluations require scheduling.nodeSelector or a lower-priority scheduling.priorityClassName so batch pods cannot consume reserved public capacity" -}}
+{{- end -}}
+
+{{- $publishedExecutionAdmissionMode := .Values.publishedExecutionAdmission.mode -}}
+{{- if not (has $publishedExecutionAdmissionMode (list "disabled" "observe" "enforce")) -}}
+{{- fail "publishedExecutionAdmission.mode must be disabled, observe, or enforce" -}}
+{{- end -}}
+{{- range $field := list
+  (dict "path" "publishedExecutionAdmission.maxActiveRunsPerPod" "value" .Values.publishedExecutionAdmission.maxActiveRunsPerPod)
+  (dict "path" "publishedExecutionAdmission.retryAfterSeconds" "value" .Values.publishedExecutionAdmission.retryAfterSeconds)
+-}}
+{{- include "rivet.assertNonNegativeWholeNumber" $field -}}
+{{- end -}}
+{{- $publishedExecutionMaxActiveRuns := int .Values.publishedExecutionAdmission.maxActiveRunsPerPod -}}
+{{- if or (lt $publishedExecutionMaxActiveRuns 1) (gt $publishedExecutionMaxActiveRuns 10000) -}}
+{{- fail "publishedExecutionAdmission.maxActiveRunsPerPod must be an integer between 1 and 10000" -}}
+{{- end -}}
+{{- $publishedExecutionRetryAfterSeconds := int .Values.publishedExecutionAdmission.retryAfterSeconds -}}
+{{- if or (lt $publishedExecutionRetryAfterSeconds 1) (gt $publishedExecutionRetryAfterSeconds 3600) -}}
+{{- fail "publishedExecutionAdmission.retryAfterSeconds must be an integer between 1 and 3600" -}}
+{{- end -}}
+
+{{- $writableVolumeLimits := .Values.writableVolumeLimits -}}
+{{- if not (kindIs "map" $writableVolumeLimits) -}}
+{{- fail "writableVolumeLimits must be a map" -}}
+{{- end -}}
+{{- range $volume := list "workspace" "workflows" "appData" "runtimeLibraries" -}}
+{{- $sizeLimit := default "" (index $writableVolumeLimits $volume) -}}
+{{- if or (not (kindIs "string" $sizeLimit)) (not (regexMatch "^[1-9][0-9]*(Ki|Mi|Gi|Ti|Pi|Ei)$" $sizeLimit)) -}}
+{{- fail (printf "writableVolumeLimits.%s must be a positive binary Kubernetes quantity such as 2Gi" $volume) -}}
+{{- end -}}
+{{- end -}}
+{{- if and .Values.tmpVolume.enabled (or (not (kindIs "string" .Values.tmpVolume.sizeLimit)) (not (regexMatch "^[1-9][0-9]*(Ki|Mi|Gi|Ti|Pi|Ei)$" .Values.tmpVolume.sizeLimit))) -}}
+{{- fail "tmpVolume.sizeLimit must be a positive binary Kubernetes quantity such as 2Gi when tmpVolume.enabled=true" -}}
+{{- end -}}
+
+{{- $resourceLimitAcknowledgements := .Values.resourceLimitAcknowledgements -}}
+{{- $productionReleaseEnabled := .Values.release.production.enabled -}}
+{{- if not (kindIs "map" $resourceLimitAcknowledgements) -}}
+{{- fail "resourceLimitAcknowledgements must be a map" -}}
+{{- end -}}
+{{- $resourceComponents := list "proxy" "web" "api" "executor" "execution" -}}
+{{- if .Values.hostedEvaluations.enabled -}}
+{{- $resourceComponents = append $resourceComponents "evaluation" -}}
+{{- end -}}
+{{- range $component := $resourceComponents -}}
+{{- $resources := index $.Values.resources $component -}}
+{{- if not (kindIs "map" $resources) -}}
+{{- fail (printf "resources.%s must be a map" $component) -}}
+{{- end -}}
+{{- $requests := default (dict) (index $resources "requests") -}}
+{{- $limits := default (dict) (index $resources "limits") -}}
+{{- $acknowledgements := default (dict) (index $resourceLimitAcknowledgements $component) -}}
+{{- if or (not (kindIs "map" $requests)) (not (kindIs "map" $limits)) (not (kindIs "map" $acknowledgements)) -}}
+{{- fail (printf "resources.%s requests/limits and resourceLimitAcknowledgements.%s must be maps" $component $component) -}}
+{{- end -}}
+{{- $memoryRequest := default "" (index $requests "memory") -}}
+{{- $memoryLimit := default "" (index $limits "memory") -}}
+{{- $ephemeralStorageRequest := default "" (index $requests "ephemeral-storage") -}}
+{{- $ephemeralStorageLimit := default "" (index $limits "ephemeral-storage") -}}
+{{- $memoryAcknowledgement := default "" (index $acknowledgements "memory") -}}
+{{- $ephemeralStorageAcknowledgement := default "" (index $acknowledgements "ephemeralStorage") -}}
+{{- if or (not (kindIs "string" $memoryAcknowledgement)) (not (kindIs "string" $ephemeralStorageAcknowledgement)) -}}
+{{- fail (printf "resourceLimitAcknowledgements.%s.memory and .ephemeralStorage must be strings" $component) -}}
+{{- end -}}
+{{- $resourceQuantities := dict
+  (printf "resources.%s.requests.memory" $component) $memoryRequest
+  (printf "resources.%s.limits.memory" $component) $memoryLimit
+  (printf "resources.%s.requests.ephemeral-storage" $component) $ephemeralStorageRequest
+  (printf "resources.%s.limits.ephemeral-storage" $component) $ephemeralStorageLimit
+-}}
+{{- range $quantityPath, $quantity := $resourceQuantities -}}
+{{- if and (not (empty $quantity)) (or (not (kindIs "string" $quantity)) (not (regexMatch $kubernetesQuantityPattern $quantity)) (regexMatch $zeroKubernetesQuantityPattern $quantity)) -}}
+{{- fail (printf "%s must be a positive Kubernetes quantity string when set" $quantityPath) -}}
+{{- end -}}
+{{- end -}}
+{{- $hasMemoryLimit := and (not (empty $memoryRequest)) (not (empty $memoryLimit)) -}}
+{{- $hasEphemeralStorageLimit := and (not (empty $ephemeralStorageRequest)) (not (empty $ephemeralStorageLimit)) -}}
+{{- if and $hasMemoryLimit (not (empty $memoryAcknowledgement)) -}}
+{{- fail (printf "resourceLimitAcknowledgements.%s.memory must be empty when resources.%s has memory request and limit" $component $component) -}}
+{{- end -}}
+{{- if and $hasEphemeralStorageLimit (not (empty $ephemeralStorageAcknowledgement)) -}}
+{{- fail (printf "resourceLimitAcknowledgements.%s.ephemeralStorage must be empty when resources.%s has ephemeral-storage request and limit" $component $component) -}}
+{{- end -}}
+{{- if $productionReleaseEnabled -}}
+{{- if and (not $hasMemoryLimit) (lt (len (trim $memoryAcknowledgement)) 24) -}}
+{{- fail (printf "production requires resources.%s memory request and limit or a 24-character resourceLimitAcknowledgements.%s.memory rationale" $component $component) -}}
+{{- end -}}
+{{- if and (not $hasEphemeralStorageLimit) (lt (len (trim $ephemeralStorageAcknowledgement)) 24) -}}
+{{- fail (printf "production requires resources.%s ephemeral-storage request and limit or a 24-character resourceLimitAcknowledgements.%s.ephemeralStorage rationale" $component $component) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+
+{{- range $key := list "RIVET_METRICS_ENABLED" "RIVET_DEPLOYMENT_METRICS_ENABLED" -}}
+{{- if hasKey $.Values.env $key -}}
+{{- fail (printf "env.%s is chart-owned; configure metrics instead" $key) -}}
+{{- end -}}
+{{- end -}}
+
+{{- if not (kindIs "bool" .Values.metrics.enabled) -}}
+{{- fail "metrics.enabled must be a boolean" -}}
+{{- end -}}
+{{- if not (kindIs "bool" .Values.metrics.proxyExporter.enabled) -}}
+{{- fail "metrics.proxyExporter.enabled must be a boolean" -}}
+{{- end -}}
+{{- if not (kindIs "bool" .Values.metrics.serviceMonitor.enabled) -}}
+{{- fail "metrics.serviceMonitor.enabled must be a boolean" -}}
+{{- end -}}
+{{- if not (kindIs "bool" .Values.metrics.prometheusRule.enabled) -}}
+{{- fail "metrics.prometheusRule.enabled must be a boolean" -}}
+{{- end -}}
+{{- if not (kindIs "map" .Values.metrics.prometheusRule.failureModeAlerts) -}}
+{{- fail "metrics.prometheusRule.failureModeAlerts must be a map" -}}
+{{- end -}}
+{{- if not (kindIs "bool" .Values.metrics.prometheusRule.failureModeAlerts.enabled) -}}
+{{- fail "metrics.prometheusRule.failureModeAlerts.enabled must be a boolean" -}}
+{{- end -}}
+{{- if not (kindIs "map" .Values.metrics.prometheusRule.clusterStateAlerts) -}}
+{{- fail "metrics.prometheusRule.clusterStateAlerts must be a map" -}}
+{{- end -}}
+{{- if not (kindIs "bool" .Values.metrics.prometheusRule.clusterStateAlerts.enabled) -}}
+{{- fail "metrics.prometheusRule.clusterStateAlerts.enabled must be a boolean" -}}
+{{- end -}}
+{{- include "rivet.assertNonNegativeWholeNumber" (dict "path" "metrics.prometheusRule.clusterStateAlerts.restartIncrease" "value" .Values.metrics.prometheusRule.clusterStateAlerts.restartIncrease) -}}
+{{- if lt (int .Values.metrics.prometheusRule.clusterStateAlerts.restartIncrease) 1 -}}
+{{- fail "metrics.prometheusRule.clusterStateAlerts.restartIncrease must be greater than zero" -}}
+{{- end -}}
+{{- range $field := list
+  (dict "path" "metrics.prometheusRule.failureModeAlerts.postgresPoolWaiting" "value" .Values.metrics.prometheusRule.failureModeAlerts.postgresPoolWaiting)
+  (dict "path" "metrics.prometheusRule.failureModeAlerts.maintenanceStaleSeconds" "value" .Values.metrics.prometheusRule.failureModeAlerts.maintenanceStaleSeconds)
+  (dict "path" "metrics.prometheusRule.failureModeAlerts.outboxBlockedEntries" "value" .Values.metrics.prometheusRule.failureModeAlerts.outboxBlockedEntries)
+-}}
+{{- include "rivet.assertNonNegativeWholeNumber" $field -}}
+{{- end -}}
+{{- if lt (int .Values.metrics.prometheusRule.failureModeAlerts.postgresPoolWaiting) 1 -}}
+{{- fail "metrics.prometheusRule.failureModeAlerts.postgresPoolWaiting must be greater than zero" -}}
+{{- end -}}
+{{- if lt (int .Values.metrics.prometheusRule.failureModeAlerts.maintenanceStaleSeconds) 1 -}}
+{{- fail "metrics.prometheusRule.failureModeAlerts.maintenanceStaleSeconds must be greater than zero" -}}
+{{- end -}}
+{{- if lt (int .Values.metrics.prometheusRule.failureModeAlerts.outboxBlockedEntries) 1 -}}
+{{- fail "metrics.prometheusRule.failureModeAlerts.outboxBlockedEntries must be greater than zero" -}}
+{{- end -}}
+{{- $evaluationQueueUtilization := .Values.metrics.prometheusRule.failureModeAlerts.evaluationQueueUtilization -}}
+{{- $evaluationQueueUtilizationNumber := float64 $evaluationQueueUtilization -}}
+{{- if or (not (or (kindIs "float64" $evaluationQueueUtilization) (kindIs "int" $evaluationQueueUtilization) (kindIs "int64" $evaluationQueueUtilization))) (le $evaluationQueueUtilizationNumber 0.0) (gt $evaluationQueueUtilizationNumber 1.0) -}}
+{{- fail "metrics.prometheusRule.failureModeAlerts.evaluationQueueUtilization must be a number greater than zero and at most one" -}}
+{{- end -}}
+{{- if not (kindIs "bool" .Values.metrics.grafanaDashboards.enabled) -}}
+{{- fail "metrics.grafanaDashboards.enabled must be a boolean" -}}
+{{- end -}}
+{{- if not (kindIs "map" .Values.metrics.grafanaDashboards.additionalLabels) -}}
+{{- fail "metrics.grafanaDashboards.additionalLabels must be a map" -}}
+{{- end -}}
+
+{{- range $key := list "serviceMonitor" "prometheusRule" -}}
+{{- if not (kindIs "map" (index $.Values.metrics $key).additionalLabels) -}}
+{{- fail (printf "metrics.%s.additionalLabels must be a map" $key) -}}
+{{- end -}}
+{{- end -}}
+{{- range $key := list "interval" "scrapeTimeout" -}}
+{{- $value := index $.Values.metrics.serviceMonitor $key -}}
+{{- if or (not (kindIs "string" $value)) (not (regexMatch "^([1-9][0-9]*(ms|s|m|h|d|w|y))([0-9]+(ms|s|m|h|d|w|y))*$" $value)) -}}
+{{- fail (printf "metrics.serviceMonitor.%s must be a positive Prometheus duration" $key) -}}
+{{- end -}}
+{{- end -}}
+{{- $metricsRuleFor := index .Values.metrics.prometheusRule "for" -}}
+{{- if or (not (kindIs "string" $metricsRuleFor)) (not (regexMatch "^([1-9][0-9]*(ms|s|m|h|d|w|y))([0-9]+(ms|s|m|h|d|w|y))*$" $metricsRuleFor)) -}}
+{{- fail "metrics.prometheusRule.for must be a positive Prometheus duration" -}}
+{{- end -}}
+{{- if and .Values.metrics.serviceMonitor.enabled (not .Values.metrics.enabled) -}}
+{{- fail "metrics.serviceMonitor.enabled requires metrics.enabled=true" -}}
+{{- end -}}
+{{- if and .Values.metrics.proxyExporter.enabled (not .Values.metrics.enabled) -}}
+{{- fail "metrics.proxyExporter.enabled requires metrics.enabled=true" -}}
+{{- end -}}
+{{- if and .Values.metrics.prometheusRule.enabled (not .Values.metrics.enabled) -}}
+{{- fail "metrics.prometheusRule.enabled requires metrics.enabled=true" -}}
+{{- end -}}
+{{- if and .Values.metrics.prometheusRule.failureModeAlerts.enabled (not .Values.metrics.prometheusRule.enabled) -}}
+{{- fail "metrics.prometheusRule.failureModeAlerts.enabled requires metrics.prometheusRule.enabled=true" -}}
+{{- end -}}
+{{- if and .Values.metrics.prometheusRule.clusterStateAlerts.enabled (not .Values.metrics.prometheusRule.enabled) -}}
+{{- fail "metrics.prometheusRule.clusterStateAlerts.enabled requires metrics.prometheusRule.enabled=true" -}}
+{{- end -}}
+{{- if and .Values.metrics.grafanaDashboards.enabled (not .Values.metrics.enabled) -}}
+{{- fail "metrics.grafanaDashboards.enabled requires metrics.enabled=true" -}}
+{{- end -}}
+{{- if .Values.metrics.proxyExporter.enabled -}}
+{{- $proxyExporterImage := .Values.metrics.proxyExporter.image -}}
+{{- if or (empty $proxyExporterImage.repository) (not (regexMatch "^sha256:[a-f0-9]{64}$" (default "" $proxyExporterImage.digest))) -}}
+{{- fail "metrics.proxyExporter.image.repository and immutable sha256 digest are required when proxy exporter is enabled" -}}
+{{- end -}}
+{{- $proxyExporterResources := .Values.metrics.proxyExporter.resources -}}
+{{- if not (kindIs "map" $proxyExporterResources) -}}
+{{- fail "metrics.proxyExporter.resources must be a map when proxy exporter is enabled" -}}
+{{- end -}}
+{{- $proxyExporterRequests := default (dict) (index $proxyExporterResources "requests") -}}
+{{- $proxyExporterLimits := default (dict) (index $proxyExporterResources "limits") -}}
+{{- if or (not (kindIs "map" $proxyExporterRequests)) (not (kindIs "map" $proxyExporterLimits)) -}}
+{{- fail "metrics.proxyExporter.resources.requests and .limits must be maps when proxy exporter is enabled" -}}
+{{- end -}}
+{{- range $resourcePath, $quantity := dict
+  "metrics.proxyExporter.resources.requests.memory" (default "" (index $proxyExporterRequests "memory"))
+  "metrics.proxyExporter.resources.limits.memory" (default "" (index $proxyExporterLimits "memory"))
+-}}
+{{- if or (empty $quantity) (not (kindIs "string" $quantity)) (not (regexMatch $kubernetesQuantityPattern $quantity)) (regexMatch $zeroKubernetesQuantityPattern $quantity) -}}
+{{- fail (printf "%s must be a positive Kubernetes quantity string when proxy exporter is enabled" $resourcePath) -}}
+{{- end -}}
+{{- end -}}
+{{- $proxyExporterPortRaw := toString .Values.metrics.proxyExporter.port -}}
+{{- if not (regexMatch "^[1-9][0-9]*$" $proxyExporterPortRaw) -}}
+{{- fail "metrics.proxyExporter.port must be a positive whole-number TCP port when proxy exporter is enabled" -}}
+{{- end -}}
+{{- $proxyExporterPort := int $proxyExporterPortRaw -}}
+{{- if or (lt $proxyExporterPort 1024) (gt $proxyExporterPort 65535) -}}
+{{- fail "metrics.proxyExporter.port must be an unprivileged TCP port between 1024 and 65535" -}}
+{{- end -}}
+{{- end -}}
+
+{{- range $field := list
+  (dict "path" "postgres.port" "value" .Values.postgres.port)
+  (dict "path" "postgres.maxConnections" "value" .Values.postgres.maxConnections)
+  (dict "path" "postgres.reservedConnections" "value" .Values.postgres.reservedConnections)
+  (dict "path" "postgres.poolMaxPerApiPod" "value" .Values.postgres.poolMaxPerApiPod)
+  (dict "path" "replicaCount.proxy" "value" .Values.replicaCount.proxy)
+  (dict "path" "replicaCount.web" "value" .Values.replicaCount.web)
+  (dict "path" "replicaCount.backend" "value" .Values.replicaCount.backend)
+  (dict "path" "replicaCount.execution" "value" .Values.replicaCount.execution)
+  (dict "path" "autoscaling.proxy.minReplicas" "value" .Values.autoscaling.proxy.minReplicas)
+  (dict "path" "autoscaling.proxy.maxReplicas" "value" .Values.autoscaling.proxy.maxReplicas)
+  (dict "path" "autoscaling.proxy.targetCPUUtilizationPercentage" "value" .Values.autoscaling.proxy.targetCPUUtilizationPercentage)
+  (dict "path" "autoscaling.web.minReplicas" "value" .Values.autoscaling.web.minReplicas)
+  (dict "path" "autoscaling.web.maxReplicas" "value" .Values.autoscaling.web.maxReplicas)
+  (dict "path" "autoscaling.web.targetCPUUtilizationPercentage" "value" .Values.autoscaling.web.targetCPUUtilizationPercentage)
+  (dict "path" "autoscaling.backend.minReplicas" "value" .Values.autoscaling.backend.minReplicas)
+  (dict "path" "autoscaling.backend.maxReplicas" "value" .Values.autoscaling.backend.maxReplicas)
+  (dict "path" "autoscaling.backend.targetCPUUtilizationPercentage" "value" .Values.autoscaling.backend.targetCPUUtilizationPercentage)
+  (dict "path" "autoscaling.execution.minReplicas" "value" .Values.autoscaling.execution.minReplicas)
+  (dict "path" "autoscaling.execution.maxReplicas" "value" .Values.autoscaling.execution.maxReplicas)
+  (dict "path" "autoscaling.execution.targetCPUUtilizationPercentage" "value" .Values.autoscaling.execution.targetCPUUtilizationPercentage)
+-}}
+{{- include "rivet.assertNonNegativeWholeNumber" $field -}}
+{{- end -}}
+{{- $postgresPort := int .Values.postgres.port -}}
+{{- if or (lt $postgresPort 1) (gt $postgresPort 65535) -}}
+{{- fail "postgres.port must be a TCP port between 1 and 65535" -}}
+{{- end -}}
+{{- range $serviceName := list "proxy" "web" "api" "execution" "evaluation" "executor" -}}
+{{- range $portName := list "port" "targetPort" -}}
+{{- $portPath := printf "service.%s.%s" $serviceName $portName -}}
+{{- $portValue := index (index $.Values.service $serviceName) $portName -}}
+{{- include "rivet.assertNonNegativeWholeNumber" (dict "path" $portPath "value" $portValue) -}}
+{{- $port := int $portValue -}}
+{{- if or (lt $port 1) (gt $port 65535) -}}
+{{- fail (printf "%s must be a TCP port between 1 and 65535" $portPath) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
 {{- $postgresMaxConnections := int .Values.postgres.maxConnections -}}
 {{- $postgresReservedConnections := int .Values.postgres.reservedConnections -}}
 {{- $poolMaxPerApiPod := int .Values.postgres.poolMaxPerApiPod -}}
@@ -46,12 +396,107 @@
 {{- if .Values.autoscaling.execution.enabled -}}
 {{- $executionReplicas = int .Values.autoscaling.execution.maxReplicas -}}
 {{- end -}}
+{{- $evaluationReplicas := ternary (int .Values.replicaCount.evaluation) 0 .Values.hostedEvaluations.enabled -}}
+{{- $evaluationCapacityDetail := "" -}}
+{{- if .Values.hostedEvaluations.enabled -}}
+{{- $evaluationCapacityDetail = printf ", including %d Evaluation worker pod(s)" $evaluationReplicas -}}
+{{- end -}}
 {{- $apiPodConnections := add $poolMaxPerApiPod 3 -}}
-{{- $requiredPostgresConnections := add $postgresReservedConnections (mul (add $backendReplicas $executionReplicas) $apiPodConnections) -}}
+{{- $apiPods := add $backendReplicas $executionReplicas $evaluationReplicas -}}
+{{- $requiredPostgresConnections := add $postgresReservedConnections (mul $apiPods $apiPodConnections) -}}
 {{- if gt $requiredPostgresConnections $postgresMaxConnections -}}
-{{- fail (printf "PostgreSQL capacity is too small: the chart requires %d connections (%d reserved + %d API pods * (%d pooled + 3 LISTEN)), but postgres.maxConnections is %d; raise database capacity, lower postgres.poolMaxPerApiPod, or lower execution autoscaling.maxReplicas" $requiredPostgresConnections $postgresReservedConnections (add $backendReplicas $executionReplicas) $poolMaxPerApiPod $postgresMaxConnections) -}}
+{{- fail (printf "PostgreSQL capacity is too small: the chart requires %d connections (%d reserved + %d API pods * (%d pooled + 3 LISTEN)%s), but postgres.maxConnections is %d; raise database capacity, lower postgres.poolMaxPerApiPod, lower execution autoscaling.maxReplicas, or lower replicaCount.evaluation" $requiredPostgresConnections $postgresReservedConnections $apiPods $poolMaxPerApiPod $evaluationCapacityDetail $postgresMaxConnections) -}}
 {{- end -}}
 
+{{- range $key := list "RIVET_MANAGED_MAINTENANCE_ENABLED" "RIVET_MANAGED_MAINTENANCE_INTERVAL_MS" "RIVET_MANAGED_MAINTENANCE_LEASE_MS" "RIVET_MANAGED_MAINTENANCE_BATCH_SIZE" -}}
+{{- if hasKey $.Values.env $key -}}
+{{- fail (printf "env.%s is chart-owned; configure managedMaintenance instead" $key) -}}
+{{- end -}}
+{{- end -}}
+{{- if hasKey .Values.env "RIVET_MANAGED_EVALUATION_RETENTION_MODE" -}}
+{{- fail "env.RIVET_MANAGED_EVALUATION_RETENTION_MODE is chart-owned; configure evaluationRetention.mode instead" -}}
+{{- end -}}
+{{- range $key := list "RIVET_MANAGED_WEB_APP_ACTION_RETENTION_MODE" "RIVET_MANAGED_WEB_APP_ACTION_RETENTION_HOURS" -}}
+{{- if hasKey $.Values.env $key -}}
+{{- fail (printf "env.%s is chart-owned; configure webAppActionRetention instead" $key) -}}
+{{- end -}}
+{{- end -}}
+{{- range $key := list "RIVET_MANAGED_STALE_UPLOAD_RETENTION_MODE" "RIVET_MANAGED_STALE_UPLOAD_RETENTION_MINIMUM_CANDIDATE_AGE_HOURS" "RIVET_MANAGED_STALE_UPLOAD_RETENTION_REQUIRED_COMPLETED_SCANS" -}}
+{{- if hasKey $.Values.env $key -}}
+{{- fail (printf "env.%s is chart-owned; configure staleUploadRetention instead" $key) -}}
+{{- end -}}
+{{- end -}}
+{{- if not (kindIs "map" .Values.webAppActionRetention) -}}
+{{- fail "webAppActionRetention must be a map" -}}
+{{- end -}}
+{{- if not (has .Values.webAppActionRetention.mode (list "audit" "enforce" "disabled")) -}}
+{{- fail "webAppActionRetention.mode must be audit, enforce, or disabled" -}}
+{{- end -}}
+{{- $webAppActionRetentionHoursRaw := toString .Values.webAppActionRetention.retentionHours -}}
+{{- if not (regexMatch "^[1-9][0-9]*$" $webAppActionRetentionHoursRaw) -}}
+{{- fail "webAppActionRetention.retentionHours must be a positive whole number of hours" -}}
+{{- end -}}
+{{- $webAppActionRetentionHours := int $webAppActionRetentionHoursRaw -}}
+{{- if or (lt $webAppActionRetentionHours 1) (gt $webAppActionRetentionHours 720) -}}
+{{- fail "webAppActionRetention.retentionHours must be an integer between 1 and 720" -}}
+{{- end -}}
+{{- if not (kindIs "map" .Values.evaluationRetention) -}}
+{{- fail "evaluationRetention must be a map" -}}
+{{- end -}}
+{{- if not (has .Values.evaluationRetention.mode (list "audit" "enforce" "disabled")) -}}
+{{- fail "evaluationRetention.mode must be audit, enforce, or disabled" -}}
+{{- end -}}
+{{- if not (kindIs "map" .Values.staleUploadRetention) -}}
+{{- fail "staleUploadRetention must be a map" -}}
+{{- end -}}
+{{- if not (has .Values.staleUploadRetention.mode (list "audit" "enforce" "disabled")) -}}
+{{- fail "staleUploadRetention.mode must be audit, enforce, or disabled" -}}
+{{- end -}}
+{{- $staleUploadCandidateHoursRaw := toString .Values.staleUploadRetention.minimumCandidateAgeHours -}}
+{{- if not (regexMatch "^[1-9][0-9]*$" $staleUploadCandidateHoursRaw) -}}
+{{- fail "staleUploadRetention.minimumCandidateAgeHours must be a positive whole number of hours" -}}
+{{- end -}}
+{{- $staleUploadCandidateHours := int $staleUploadCandidateHoursRaw -}}
+{{- if or (lt $staleUploadCandidateHours 24) (gt $staleUploadCandidateHours 720) -}}
+{{- fail "staleUploadRetention.minimumCandidateAgeHours must be an integer between 24 and 720" -}}
+{{- end -}}
+{{- $staleUploadCompletedScansRaw := toString .Values.staleUploadRetention.requiredCompletedScans -}}
+{{- if not (regexMatch "^[1-9][0-9]*$" $staleUploadCompletedScansRaw) -}}
+{{- fail "staleUploadRetention.requiredCompletedScans must be a positive whole number" -}}
+{{- end -}}
+{{- $staleUploadCompletedScans := int $staleUploadCompletedScansRaw -}}
+{{- if or (lt $staleUploadCompletedScans 2) (gt $staleUploadCompletedScans 10) -}}
+{{- fail "staleUploadRetention.requiredCompletedScans must be an integer between 2 and 10" -}}
+{{- end -}}
+
+{{- range $field := list
+  (dict "path" "managedMaintenance.intervalMs" "value" .Values.managedMaintenance.intervalMs)
+  (dict "path" "managedMaintenance.leaseMs" "value" .Values.managedMaintenance.leaseMs)
+  (dict "path" "managedMaintenance.batchSize" "value" .Values.managedMaintenance.batchSize)
+-}}
+{{- include "rivet.assertNonNegativeWholeNumber" $field -}}
+{{- end -}}
+{{- $managedMaintenanceIntervalMs := int .Values.managedMaintenance.intervalMs -}}
+{{- if or (lt $managedMaintenanceIntervalMs 15000) (gt $managedMaintenanceIntervalMs 86400000) -}}
+{{- fail "managedMaintenance.intervalMs must be an integer between 15000 and 86400000" -}}
+{{- end -}}
+{{- $managedMaintenanceLeaseMs := int .Values.managedMaintenance.leaseMs -}}
+{{- if or (lt $managedMaintenanceLeaseMs 15000) (gt $managedMaintenanceLeaseMs 600000) -}}
+{{- fail "managedMaintenance.leaseMs must be an integer between 15000 and 600000" -}}
+{{- end -}}
+{{- $managedMaintenanceBatchSize := int .Values.managedMaintenance.batchSize -}}
+{{- if or (lt $managedMaintenanceBatchSize 1) (gt $managedMaintenanceBatchSize 500) -}}
+{{- fail "managedMaintenance.batchSize must be an integer between 1 and 500" -}}
+{{- end -}}
+
+{{- range $field := list
+  (dict "path" "workflowSchema.migrationJob.backoffLimit" "value" .Values.workflowSchema.migrationJob.backoffLimit)
+  (dict "path" "workflowSchema.migrationJob.activeDeadlineSeconds" "value" .Values.workflowSchema.migrationJob.activeDeadlineSeconds)
+  (dict "path" "workflowSchema.compatibility.minimumVersion" "value" .Values.workflowSchema.compatibility.minimumVersion)
+  (dict "path" "workflowSchema.compatibility.maximumVersion" "value" .Values.workflowSchema.compatibility.maximumVersion)
+-}}
+{{- include "rivet.assertNonNegativeWholeNumber" $field -}}
+{{- end -}}
 {{- if lt (int .Values.workflowSchema.migrationJob.backoffLimit) 0 -}}
 {{- fail "workflowSchema.migrationJob.backoffLimit must be zero or greater" -}}
 {{- end -}}
@@ -59,12 +504,31 @@
 {{- if lt (int .Values.workflowSchema.migrationJob.activeDeadlineSeconds) 1 -}}
 {{- fail "workflowSchema.migrationJob.activeDeadlineSeconds must be greater than zero" -}}
 {{- end -}}
+
+{{- $schemaMinimumVersion := int .Values.workflowSchema.compatibility.minimumVersion -}}
+{{- $schemaMaximumVersion := int .Values.workflowSchema.compatibility.maximumVersion -}}
+{{- if lt $schemaMinimumVersion 1 -}}
+{{- fail "workflowSchema.compatibility.minimumVersion must be greater than zero" -}}
+{{- end -}}
+{{- if lt $schemaMaximumVersion $schemaMinimumVersion -}}
+{{- fail "workflowSchema.compatibility.maximumVersion must be greater than or equal to minimumVersion" -}}
+{{- end -}}
 {{- range $key := list "RIVET_HEALTH_REFRESH_SECONDS" "RIVET_HEALTH_CHECK_TIMEOUT_SECONDS" "RIVET_HEALTH_STALE_AFTER_SECONDS" "RIVET_SHUTDOWN_GRACE_SECONDS" "RIVET_DEPLOYMENT_HEALTH_REFRESH_SECONDS" "RIVET_DEPLOYMENT_HEALTH_CHECK_TIMEOUT_SECONDS" "RIVET_DEPLOYMENT_HEALTH_STALE_AFTER_SECONDS" "RIVET_DEPLOYMENT_SHUTDOWN_GRACE_SECONDS" -}}
 {{- if hasKey $.Values.env $key -}}
 {{- fail (printf "env.%s is chart-owned; configure lifecycle values instead" $key) -}}
 {{- end -}}
 {{- end -}}
 
+{{- range $field := list
+  (dict "path" "lifecycle.health.refreshSeconds" "value" .Values.lifecycle.health.refreshSeconds)
+  (dict "path" "lifecycle.health.checkTimeoutSeconds" "value" .Values.lifecycle.health.checkTimeoutSeconds)
+  (dict "path" "lifecycle.health.staleAfterSeconds" "value" .Values.lifecycle.health.staleAfterSeconds)
+  (dict "path" "lifecycle.shutdownGraceSeconds" "value" .Values.lifecycle.shutdownGraceSeconds)
+  (dict "path" "lifecycle.preStopDelaySeconds" "value" .Values.lifecycle.preStopDelaySeconds)
+  (dict "path" "lifecycle.terminationGracePeriodSeconds" "value" .Values.lifecycle.terminationGracePeriodSeconds)
+-}}
+{{- include "rivet.assertNonNegativeWholeNumber" $field -}}
+{{- end -}}
 {{- if lt (int .Values.lifecycle.health.refreshSeconds) 1 -}}
 {{- fail "lifecycle.health.refreshSeconds must be greater than zero" -}}
 {{- end -}}
@@ -84,10 +548,19 @@
 {{- fail "lifecycle.terminationGracePeriodSeconds must allow shutdownGraceSeconds, preStopDelaySeconds, and a 25-second finalization margin" -}}
 {{- end -}}
 {{- range $name, $probe := .Values.lifecycle.probes -}}
+{{- range $field := list
+  (dict "path" (printf "lifecycle.probes.%s.periodSeconds" $name) "value" $probe.periodSeconds)
+  (dict "path" (printf "lifecycle.probes.%s.timeoutSeconds" $name) "value" $probe.timeoutSeconds)
+  (dict "path" (printf "lifecycle.probes.%s.failureThreshold" $name) "value" $probe.failureThreshold)
+-}}
+{{- include "rivet.assertNonNegativeWholeNumber" $field -}}
+{{- end -}}
 {{- if or (lt (int $probe.periodSeconds) 1) (lt (int $probe.timeoutSeconds) 1) (lt (int $probe.failureThreshold) 1) -}}
 {{- fail (printf "lifecycle.probes.%s periodSeconds, timeoutSeconds, and failureThreshold must be greater than zero" $name) -}}
 {{- end -}}
 {{- end -}}
+{{- include "rivet.assertNonNegativeWholeNumber" (dict "path" "availability.topologySpread.maxSkew" "value" .Values.availability.topologySpread.maxSkew) -}}
+{{- include "rivet.assertNonNegativeWholeNumber" (dict "path" "availability.disruptionBudget.maxUnavailable" "value" .Values.availability.disruptionBudget.maxUnavailable) -}}
 {{- if .Values.availability.topologySpread.enabled -}}
 {{- if not (has .Values.availability.topologySpread.whenUnsatisfiable (list "ScheduleAnyway" "DoNotSchedule")) -}}
 {{- fail "availability.topologySpread.whenUnsatisfiable must be ScheduleAnyway or DoNotSchedule" -}}
@@ -173,6 +646,44 @@
 
 {{- if or (contains "example.invalid/" .Values.images.proxy.repository) (contains "example.invalid/" .Values.images.web.repository) (contains "example.invalid/" .Values.images.api.repository) (contains "example.invalid/" .Values.images.executor.repository) -}}
 {{- fail "replace the example.invalid image repositories with real image repositories before install" -}}
+{{- end -}}
+
+{{- if .Values.release.production.enabled -}}
+{{- if not (regexMatch "^sha256:[a-f0-9]{64}$" .Values.release.production.manifestDigest) -}}
+{{- fail "release.production.manifestDigest must be the canonical sha256 digest of a promoted release manifest" -}}
+{{- end -}}
+{{- if not (regexMatch "^[a-f0-9]{40}$" .Values.release.production.sourceSha) -}}
+{{- fail "release.production.sourceSha must be the 40-character lowercase Git commit from a promoted release manifest" -}}
+{{- end -}}
+{{- if empty .Values.release.production.verification.workflow -}}
+{{- fail "release.production.verification.workflow is required for a production release manifest" -}}
+{{- end -}}
+{{- if empty .Values.release.production.verification.runId -}}
+{{- fail "release.production.verification.runId is required for a production release manifest" -}}
+{{- end -}}
+{{- include "rivet.assertNonNegativeWholeNumber" (dict "path" "release.production.verification.runAttempt" "value" .Values.release.production.verification.runAttempt) -}}
+{{- include "rivet.assertNonNegativeWholeNumber" (dict "path" "release.production.database.managedWorkflowSchemaVersion" "value" .Values.release.production.database.managedWorkflowSchemaVersion) -}}
+{{- if lt (int .Values.release.production.verification.runAttempt) 1 -}}
+{{- fail "release.production.verification.runAttempt must be greater than zero for a production release manifest" -}}
+{{- end -}}
+{{- if ne .Values.release.production.chart.name .Chart.Name -}}
+{{- fail "release.production.chart.name must equal the deployed chart name from a promoted release manifest" -}}
+{{- end -}}
+{{- if ne .Values.release.production.chart.version .Chart.Version -}}
+{{- fail "release.production.chart.version must equal the deployed chart version from a promoted release manifest" -}}
+{{- end -}}
+{{- if not (regexMatch "^sha256:[a-f0-9]{64}$" .Values.release.production.chart.contentDigest) -}}
+{{- fail "release.production.chart.contentDigest must be a sha256 digest from a promoted release manifest" -}}
+{{- end -}}
+{{- if ne (int .Values.release.production.database.managedWorkflowSchemaVersion) $schemaMaximumVersion -}}
+{{- fail "release.production.database.managedWorkflowSchemaVersion must equal workflowSchema.compatibility.maximumVersion" -}}
+{{- end -}}
+{{- range $component := list "proxy" "web" "api" "executor" -}}
+{{- $image := index $.Values.images $component -}}
+{{- if not (regexMatch "^sha256:[a-f0-9]{64}$" (default "" $image.digest)) -}}
+{{- fail (printf "images.%s.digest must be a sha256 OCI manifest digest for a production release; mutable tags are not accepted" $component) -}}
+{{- end -}}
+{{- end -}}
 {{- end -}}
 
 {{- if and (eq .Values.workflowStorage.backend "managed") (empty .Values.postgres.connectionStringSecretName) (or (empty .Values.postgres.host) (empty .Values.postgres.database) (empty .Values.postgres.username) (and (empty .Values.postgres.passwordSecretName) (not .Values.vault.enabled))) -}}

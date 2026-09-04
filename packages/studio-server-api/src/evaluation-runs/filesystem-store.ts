@@ -541,9 +541,9 @@ export class FilesystemRivetEvaluationStore
     recordingId: string;
     retention: EvaluationRecordingArtifact["reference"]["retention"];
     expiresAt?: string;
-  }): Promise<void> {
+  }): Promise<boolean> {
     const database = await this.#database();
-    withImmediateTransaction(database, () => {
+    return withImmediateTransaction(database, () => {
       const artifact = parseRecording(
         database
           .prepare(
@@ -551,7 +551,7 @@ export class FilesystemRivetEvaluationStore
           )
           .get<RecordingRow>(String(input.projectId), input.recordingId),
       );
-      if (!artifact) return;
+      if (!artifact) return false;
       artifact.reference = {
         id: artifact.reference.id,
         retention: input.retention,
@@ -568,6 +568,7 @@ export class FilesystemRivetEvaluationStore
           String(input.projectId),
           input.recordingId,
         );
+      return true;
     });
   }
 

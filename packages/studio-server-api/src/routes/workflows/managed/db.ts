@@ -6,12 +6,7 @@ import { createHttpError } from '../../../utils/httpError.js';
 import type { ManagedWorkflowStorageConfig } from '../storage-config.js';
 import { WORKFLOW_COLUMNS, splitCurrentDraftRevisionRow } from './mappers.js';
 import type { ManagedExecutionPointerLookupResult } from './execution-types.js';
-import type {
-  CurrentDraftRevisionRow,
-  FolderRow,
-  RevisionRow,
-  WorkflowRow,
-} from './types.js';
+import type { CurrentDraftRevisionRow, FolderRow, RevisionRow, WorkflowRow } from './types.js';
 
 export type ManagedWorkflowDbClient = Pool | PoolClient;
 
@@ -63,10 +58,12 @@ export function getManagedDbPoolConfig(config: ManagedWorkflowStorageConfig) {
 }
 
 export function isUniqueViolation(error: unknown): boolean {
-  return typeof error === 'object' &&
+  return (
+    typeof error === 'object' &&
     error != null &&
     'code' in error &&
-    String((error as { code?: unknown }).code ?? '') === '23505';
+    String((error as { code?: unknown }).code ?? '') === '23505'
+  );
 }
 
 export async function withManagedDbRetry<T>(scope: string, run: () => Promise<T>): Promise<T> {
@@ -81,7 +78,7 @@ export async function withManagedDbRetry<T>(scope: string, run: () => Promise<T>
       const delayMs = attempt * 250;
       console.warn(
         `[managed-workflows] ${scope} failed with retryable database connection error ` +
-        `(${String((error as { code?: unknown }).code ?? 'unknown')}). Retrying in ${delayMs}ms...`,
+          `(${String((error as { code?: unknown }).code ?? 'unknown')}). Retrying in ${delayMs}ms...`,
       );
       await waitForManagedDbRetry(delayMs);
     }
@@ -95,9 +92,10 @@ export async function queryRows<T extends QueryResultRow>(
   sql: string,
   params: unknown[] = [],
 ): Promise<T[]> {
-  const result = client instanceof Pool
-    ? await withManagedDbRetry('database query', () => client.query<T>(sql, params))
-    : await client.query<T>(sql, params);
+  const result =
+    client instanceof Pool
+      ? await withManagedDbRetry('database query', () => client.query<T>(sql, params))
+      : await client.query<T>(sql, params);
   return result.rows;
 }
 
@@ -118,7 +116,11 @@ export type ManagedWorkflowQueries = {
     relativePath: string,
     options?: { forUpdate?: boolean },
   ): Promise<WorkflowRow | null>;
-  getWorkflowById(client: ManagedWorkflowDbClient, workflowId: string): Promise<WorkflowRow | null>;
+  getWorkflowById(
+    client: ManagedWorkflowDbClient,
+    workflowId: string,
+    options?: { forUpdate?: boolean },
+  ): Promise<WorkflowRow | null>;
   getRevision(client: ManagedWorkflowDbClient, revisionId: string | null | undefined): Promise<RevisionRow | null>;
   getCurrentDraftWorkflowRevision(
     client: ManagedWorkflowDbClient,
@@ -143,11 +145,14 @@ export function createManagedWorkflowQueries(pool: Pool): ManagedWorkflowQueries
     },
 
     async listWorkflowRows(client: ManagedWorkflowDbClient = pool): Promise<WorkflowRow[]> {
-      return queryRows<WorkflowRow>(client, `
+      return queryRows<WorkflowRow>(
+        client,
+        `
         SELECT ${WORKFLOW_COLUMNS}
         FROM workflows
         ORDER BY relative_path ASC
-      `);
+      `,
+      );
     },
 
     async getWorkflowByRelativePath(
@@ -167,19 +172,27 @@ export function createManagedWorkflowQueries(pool: Pool): ManagedWorkflowQueries
       );
     },
 
-    async getWorkflowById(client: ManagedWorkflowDbClient, workflowId: string): Promise<WorkflowRow | null> {
+    async getWorkflowById(
+      client: ManagedWorkflowDbClient,
+      workflowId: string,
+      options: { forUpdate?: boolean } = {},
+    ): Promise<WorkflowRow | null> {
       return queryOne<WorkflowRow>(
         client,
         `
           SELECT ${WORKFLOW_COLUMNS}
           FROM workflows
           WHERE workflow_id = $1
+          ${options.forUpdate ? 'FOR UPDATE' : ''}
         `,
         [workflowId],
       );
     },
 
-    async getRevision(client: ManagedWorkflowDbClient, revisionId: string | null | undefined): Promise<RevisionRow | null> {
+    async getRevision(
+      client: ManagedWorkflowDbClient,
+      revisionId: string | null | undefined,
+    ): Promise<RevisionRow | null> {
       if (!revisionId) {
         return null;
       }

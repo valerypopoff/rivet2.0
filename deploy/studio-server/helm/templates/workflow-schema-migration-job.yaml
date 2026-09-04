@@ -35,7 +35,7 @@ spec:
             - /bin/sh
             - -ec
           args:
-            - . /opt/rivet/lib/load-env.sh; load_optional_dotenv /vault/dotenv; node /opt/rivet/lib/bootstrap-deployment-storage-settings.mjs; RIVET_APP_SETTINGS_BACKEND=file node /app/packages/studio-server-api/dist/studio-server-api/src/scripts/migrate-managed-workflow-schema.js migrate; node /app/packages/studio-server-api/dist/studio-server-api/src/scripts/import-managed-app-settings.js
+            - . /opt/rivet/lib/load-env.sh; load_optional_dotenv /vault/dotenv; node /opt/rivet/lib/bootstrap-deployment-storage-settings.mjs; RIVET_APP_SETTINGS_BACKEND=file RIVET_MANAGED_WORKFLOW_SCHEMA_MIN_VERSION={{ .Values.workflowSchema.compatibility.maximumVersion | quote }} RIVET_MANAGED_WORKFLOW_SCHEMA_MAX_VERSION={{ .Values.workflowSchema.compatibility.maximumVersion | quote }} node /app/packages/studio-server-api/dist/studio-server-api/src/scripts/migrate-managed-workflow-schema.js migrate; node /app/packages/studio-server-api/dist/studio-server-api/src/scripts/import-managed-app-settings.js
           env:
 {{ include "rivet.env.deploymentStorageBootstrap" (dict "root" . "appDataRoot" "/var/tmp/rivet-migration-app-data") | nindent 12 }}
 {{ include "rivet.env.appSettings" (dict "root" . "includeDatabase" false) | nindent 12 }}

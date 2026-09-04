@@ -2,7 +2,9 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import test from 'node:test';
-import { readJson } from './helpers/workflow-api-harness.js';
+import { getExpectedProxyAuthToken } from '../auth.js';
+import { writeWorkflowProjectStatsCacheFromContents } from '../routes/workflows/project-stats.js';
+import { readJson, withEnvOverride } from './helpers/workflow-api-harness.js';
 import { createFilesystemWorkflowSuiteHarness } from './helpers/workflow-filesystem-suite-harness.js';
 
 const {
@@ -14,12 +16,76 @@ const {
   workflowPublication,
   rivetNode,
   withWorkflowApiServer,
+  withHostedProjectApiServer,
   resetAndEnsureWorkflowsRoot,
   cleanupWorkflowSuite,
 } = await createFilesystemWorkflowSuiteHarness();
 
 test.beforeEach(resetAndEnsureWorkflowsRoot);
 test.after(cleanupWorkflowSuite);
+
+type WorkflowTreeSseEvent = {
+  event: string;
+  data: Record<string, unknown>;
+};
+
+function withTextNodes(projectContents: string, count: number): string {
+  const nodeLines = Array.from({ length: count }, (_, index) => {
+    const number = index + 1;
+    return [
+      `        '[node-${number}]:text "Node ${number}"':`,
+      '          visualData: 0/0/null/null//',
+      '          data:',
+      '            text: hello',
+    ];
+  }).flat();
+
+  return projectContents.replace('      nodes: {}', ['      nodes:', ...nodeLines].join('\n'));
+}
+
+async function openWorkflowTreeEventStream(baseUrl: string, headers: HeadersInit) {
+  const controller = new AbortController();
+  const response = await fetch(`${baseUrl}/tree/events`, {
+    headers,
+    signal: controller.signal,
+  });
+  assert.equal(response.status, 200);
+  assert.equal(response.headers.get('content-type'), 'text/event-stream; charset=utf-8');
+  assert.equal(response.headers.get('x-accel-buffering'), 'no');
+  assert.ok(response.body, 'Expected the workflow tree stream to have a response body.');
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+
+  return {
+    async next(): Promise<WorkflowTreeSseEvent> {
+      for (;;) {
+        const boundary = buffer.indexOf('\n\n');
+        if (boundary !== -1) {
+          const rawEvent = buffer.slice(0, boundary).replace(/\r/g, '');
+          buffer = buffer.slice(boundary + 2);
+          const event = rawEvent.match(/^event: (.+)$/m)?.[1];
+          const rawData = rawEvent.match(/^data: (.+)$/m)?.[1];
+          if (!event || !rawData) {
+            continue;
+          }
+          return { event, data: JSON.parse(rawData) as Record<string, unknown> };
+        }
+
+        const chunk = await reader.read();
+        if (chunk.done) {
+          throw new Error('Workflow tree event stream closed before an event arrived.');
+        }
+        buffer += decoder.decode(chunk.value, { stream: true });
+      }
+    },
+    async close() {
+      controller.abort();
+      await reader.cancel().catch(() => undefined);
+    },
+  };
+}
 
 test('workflow project rename and move preserve wrapper sidecars', async () => {
   await workflowMutations.createWorkflowFolderItem('Folder', '');
@@ -28,7 +94,11 @@ test('workflow project rename and move preserve wrapper sidecars', async () => {
 
   await fs.writeFile(sidecars.dataset, '{"rows":[]}', 'utf8');
   await fs.writeFile(sidecars.settings, '{"endpointName":""}', 'utf8');
-  await fs.writeFile(sidecars.stats, '{"schemaVersion":3,"fileSize":0,"fileMtimeMs":0,"fileCtimeMs":0,"stats":{"graphCount":1,"totalNodeCount":0,"webAppCount":0}}', 'utf8');
+  await fs.writeFile(
+    sidecars.stats,
+    '{"schemaVersion":3,"fileSize":0,"fileMtimeMs":0,"fileCtimeMs":0,"stats":{"graphCount":1,"totalNodeCount":0,"webAppCount":0}}',
+    'utf8',
+  );
 
   const renamed = await workflowMutations.renameWorkflowProjectItem(created.relativePath, 'Renamed');
   const renamedSidecars = workflowFs.getProjectSidecarPaths(renamed.project.absolutePath);
@@ -62,15 +132,9 @@ test('workflow project rename rejects hidden names and does not expose hidden wo
     /must not start with a dot/,
   );
 
-  await assert.rejects(
-    workflowMutations.createWorkflowFolderItem('.hidden', ''),
-    /must not start with a dot/,
-  );
+  await assert.rejects(workflowMutations.createWorkflowFolderItem('.hidden', ''), /must not start with a dot/);
 
-  await assert.rejects(
-    workflowMutations.deleteWorkflowFolderItem('.published'),
-    /Invalid relativePath/,
-  );
+  await assert.rejects(workflowMutations.deleteWorkflowFolderItem('.published'), /Invalid relativePath/);
 });
 
 test('workflow project rename refuses conflicting sidecar targets without moving the project', async () => {
@@ -183,30 +247,32 @@ test('workflow folder rename reports moved project paths for nested projects', a
 test('workflow project stats count serialized graph nodes and web apps', async () => {
   const created = await workflowMutations.createWorkflowProjectItem('', 'Stats');
   const projectContents = await fs.readFile(created.absolutePath, 'utf8');
-  const withNode = projectContents.replace(
-    '      nodes: {}',
-    [
-      '      nodes:',
-      '        \'[node-1]:text "Node 1"\':',
-      '          visualData: 0/0/null/null//',
-      '          data:',
-      '            text: hello',
-    ].join('\n'),
-  ).replace(
-    '  plugins: []',
-    [
-      '  uiGraphs:',
-      '    "ui-graph-a":',
-      '      id: "ui-graph-a"',
-      '      name: "App A"',
-      '      components: []',
-      '    "ui-graph-b":',
-      '      id: "ui-graph-b"',
-      '      name: "App B"',
-      '      components: []',
+  const withNode = projectContents
+    .replace(
+      '      nodes: {}',
+      [
+        '      nodes:',
+        '        \'[node-1]:text "Node 1"\':',
+        '          visualData: 0/0/null/null//',
+        '          data:',
+        '            text: hello',
+      ].join('\n'),
+    )
+    .replace(
       '  plugins: []',
-    ].join('\n'),
-  );
+      [
+        '  uiGraphs:',
+        '    "ui-graph-a":',
+        '      id: "ui-graph-a"',
+        '      name: "App A"',
+        '      components: []',
+        '    "ui-graph-b":',
+        '      id: "ui-graph-b"',
+        '      name: "App B"',
+        '      components: []',
+        '  plugins: []',
+      ].join('\n'),
+    );
 
   await fs.writeFile(created.absolutePath, withNode, 'utf8');
 
@@ -220,47 +286,21 @@ test('workflow project stats count serialized graph nodes and web apps', async (
 
 test('workflow project stats cache is rebuilt when the project file changes', async () => {
   const created = await workflowMutations.createWorkflowProjectItem('', 'StatsCache');
-  const sidecars = workflowFs.getProjectSidecarPaths(created.absolutePath);
   const projectContents = await fs.readFile(created.absolutePath, 'utf8');
+  const cachedContents = withTextNodes(projectContents, 2);
+
+  await fs.writeFile(created.absolutePath, cachedContents, 'utf8');
   const fileStats = await fs.stat(created.absolutePath);
 
-  await fs.writeFile(
-    sidecars.stats,
-    `${JSON.stringify({
-      schemaVersion: 4,
-      fileSize: fileStats.size,
-      fileMtimeMs: fileStats.mtimeMs,
-      fileCtimeMs: fileStats.ctimeMs,
-      projectMetadataId: created.projectMetadataId ?? null,
-      stats: {
-        graphCount: 99,
-        totalNodeCount: 99,
-        webAppCount: 99,
-      },
-    })}\n`,
-    'utf8',
-  );
+  await writeWorkflowProjectStatsCacheFromContents(created.absolutePath, cachedContents, null, fileStats);
 
   const cachedProject = await workflowQuery.getWorkflowProject(workflowsRoot, created.absolutePath);
-  assert.equal(cachedProject.stats?.graphCount, 99);
-  assert.equal(cachedProject.stats?.totalNodeCount, 99);
-  assert.equal(cachedProject.stats?.webAppCount, 99);
+  assert.equal(cachedProject.stats?.graphCount, 1);
+  assert.equal(cachedProject.stats?.totalNodeCount, 2);
+  assert.equal(cachedProject.stats?.webAppCount, 0);
   assert.equal(cachedProject.projectMetadataId, created.projectMetadataId);
 
-  await fs.writeFile(
-    created.absolutePath,
-    projectContents.replace(
-      '      nodes: {}',
-      [
-        '      nodes:',
-        '        \'[node-1]:text "Node 1"\':',
-        '          visualData: 0/0/null/null//',
-        '          data:',
-        '            text: hello',
-      ].join('\n'),
-    ),
-    'utf8',
-  );
+  await fs.writeFile(created.absolutePath, withTextNodes(projectContents, 1), 'utf8');
 
   const rebuiltProject = await workflowQuery.getWorkflowProject(workflowsRoot, created.absolutePath);
   assert.equal(rebuiltProject.stats?.graphCount, 1);
@@ -270,34 +310,26 @@ test('workflow project stats cache is rebuilt when the project file changes', as
 
 test('workflow project stats cache is rebuilt when file ctime changes', async () => {
   const created = await workflowMutations.createWorkflowProjectItem('', 'StatsCacheCtime');
-  const sidecars = workflowFs.getProjectSidecarPaths(created.absolutePath);
+  const projectContents = await fs.readFile(created.absolutePath, 'utf8');
   const fileStats = await fs.stat(created.absolutePath);
+  const sidecars = workflowFs.getProjectSidecarPaths(created.absolutePath);
 
-  await fs.writeFile(
-    sidecars.stats,
-    `${JSON.stringify({
-      schemaVersion: 4,
-      fileSize: fileStats.size,
-      fileMtimeMs: fileStats.mtimeMs,
-      fileCtimeMs: fileStats.ctimeMs,
-      projectMetadataId: created.projectMetadataId ?? null,
-      stats: {
-        graphCount: 99,
-        totalNodeCount: 99,
-        webAppCount: 99,
-      },
-    })}\n`,
-    'utf8',
-  );
+  await writeWorkflowProjectStatsCacheFromContents(created.absolutePath, projectContents, null, fileStats);
 
-  const contents = await fs.readFile(created.absolutePath, 'utf8');
-  await fs.writeFile(created.absolutePath, contents, 'utf8');
+  const cachedProject = await workflowQuery.getWorkflowProject(workflowsRoot, created.absolutePath);
+  assert.equal(cachedProject.stats?.totalNodeCount, 0);
+
+  await fs.writeFile(created.absolutePath, projectContents, 'utf8');
   await fs.utimes(created.absolutePath, fileStats.atime, fileStats.mtime);
+  const updatedFileStats = await fs.stat(created.absolutePath);
+  assert.notEqual(updatedFileStats.ctimeMs, fileStats.ctimeMs);
 
   const rebuiltProject = await workflowQuery.getWorkflowProject(workflowsRoot, created.absolutePath);
   assert.equal(rebuiltProject.stats?.graphCount, 1);
   assert.equal(rebuiltProject.stats?.totalNodeCount, 0);
   assert.equal(rebuiltProject.stats?.webAppCount, 0);
+  const rebuiltCache = JSON.parse(await fs.readFile(sidecars.stats, 'utf8')) as { fileCtimeMs: number };
+  assert.equal(rebuiltCache.fileCtimeMs, updatedFileStats.ctimeMs);
 });
 
 test('workflow tree route disables caching', async () => {
@@ -309,6 +341,133 @@ test('workflow tree route disables caching', async () => {
     assert.equal(response.status, 200);
     assert.equal(response.headers.get('cache-control'), 'no-store, no-cache, must-revalidate');
     assert.equal(response.headers.get('pragma'), 'no-cache');
+  });
+});
+
+test('workflow tree stream is authenticated, fans out one invalidation per completed mutation, and exposes the matching tree token', async () => {
+  await withEnvOverride('RIVET_KEY', 'workflow-tree-events-test-key', async () => {
+    await withWorkflowApiServer(async (baseUrl) => {
+      const unauthorized = await fetch(`${baseUrl}/tree/events`);
+      assert.equal(unauthorized.status, 403);
+
+      const proxyAuthHeaders = { 'x-rivet-proxy-auth': getExpectedProxyAuthToken() };
+      const first = await openWorkflowTreeEventStream(baseUrl, proxyAuthHeaders);
+      const second = await openWorkflowTreeEventStream(baseUrl, proxyAuthHeaders);
+
+      try {
+        const firstState = await first.next();
+        const secondState = await second.next();
+        assert.equal(firstState.event, 'tree-state');
+        assert.equal(secondState.event, 'tree-state');
+        assert.equal(firstState.data.epoch, secondState.data.epoch);
+        assert.equal(firstState.data.revision, secondState.data.revision);
+
+        const invalid = await fetch(`${baseUrl}/folders`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ name: '.hidden' }),
+        });
+        assert.equal(invalid.status, 400);
+
+        const afterRejectedMutation = await readJson<{ sync: { epoch: string; revision: number } }>(
+          await fetch(`${baseUrl}/tree`),
+        );
+        assert.equal(afterRejectedMutation.sync.epoch, firstState.data.epoch);
+        assert.equal(afterRejectedMutation.sync.revision, firstState.data.revision);
+
+        const mutation = await fetch(`${baseUrl}/folders`, {
+          method: 'POST',
+          headers: {
+            'content-type': 'application/json',
+            'x-rivet-workflow-tree-client': 'source-browser',
+          },
+          body: JSON.stringify({ name: 'Shared folder' }),
+        });
+        assert.equal(mutation.status, 201);
+
+        const [firstChange, secondChange] = await Promise.all([first.next(), second.next()]);
+        for (const change of [firstChange, secondChange]) {
+          assert.equal(change.event, 'tree-changed');
+          assert.equal(change.data.epoch, firstState.data.epoch);
+          assert.equal(change.data.sourceClientId, 'source-browser');
+          assert.equal(change.data.revision, Number(firstState.data.revision) + 1);
+        }
+
+        const tree = await readJson<{ folders: Array<{ name: string }>; sync: { epoch: string; revision: number } }>(
+          await fetch(`${baseUrl}/tree`),
+        );
+        assert.ok(tree.folders.some((folder) => folder.name === 'Shared folder'));
+        assert.equal(tree.sync.epoch, firstChange.data.epoch);
+        assert.equal(tree.sync.revision, firstChange.data.revision);
+      } finally {
+        await first.close();
+        await second.close();
+      }
+    });
+  });
+});
+
+test('hosted save invalidates the tree only after a complete project and dataset transaction commits', async () => {
+  const created = await workflowMutations.createWorkflowProjectItem('', 'Atomic Save');
+  const originalProject = await fs.readFile(created.absolutePath, 'utf8');
+  const [editedProject, attachedData] = rivetNode.loadProjectAndAttachedDataFromString(originalProject);
+  editedProject.metadata.description = 'committed generation';
+  const nextProject = rivetNode.serializeProject(editedProject, attachedData) as string;
+  const datasetPath = workflowFs.getWorkflowDatasetPath(created.absolutePath);
+  await fs.writeFile(datasetPath, 'old dataset evidence', 'utf8');
+
+  await withEnvOverride('RIVET_KEY', 'atomic-save-events-test-key', async () => {
+    await withHostedProjectApiServer(async ({ projectsBaseUrl, workflowsBaseUrl }) => {
+      const stream = await openWorkflowTreeEventStream(workflowsBaseUrl, {
+        'x-rivet-proxy-auth': getExpectedProxyAuthToken(),
+      });
+      try {
+        const initialState = await stream.next();
+        assert.equal(initialState.event, 'tree-state');
+
+        const rejected = await fetch(`${projectsBaseUrl}/save`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            path: created.absolutePath,
+            contents: nextProject,
+            datasetsContents: '{invalid',
+          }),
+        });
+        assert.equal(rejected.status, 400);
+        assert.equal(await fs.readFile(created.absolutePath, 'utf8'), originalProject);
+        assert.equal(await fs.readFile(datasetPath, 'utf8'), 'old dataset evidence');
+
+        const afterRejectedSave = await readJson<{ sync: { epoch: string; revision: number } }>(
+          await fetch(`${workflowsBaseUrl}/tree`),
+        );
+        assert.equal(afterRejectedSave.sync.epoch, initialState.data.epoch);
+        assert.equal(afterRejectedSave.sync.revision, initialState.data.revision);
+
+        const committed = await fetch(`${projectsBaseUrl}/save`, {
+          method: 'POST',
+          headers: {
+            'content-type': 'application/json',
+            'x-rivet-workflow-tree-client': 'atomic-save-browser',
+          },
+          body: JSON.stringify({
+            path: created.absolutePath,
+            contents: nextProject,
+            datasetsContents: null,
+          }),
+        });
+        assert.equal(committed.status, 200);
+        assert.equal(await fs.readFile(created.absolutePath, 'utf8'), nextProject);
+        await assert.rejects(fs.readFile(datasetPath), { code: 'ENOENT' });
+
+        const change = await stream.next();
+        assert.equal(change.event, 'tree-changed');
+        assert.equal(change.data.sourceClientId, 'atomic-save-browser');
+        assert.equal(change.data.revision, Number(initialState.data.revision) + 1);
+      } finally {
+        await stream.close();
+      }
+    });
   });
 });
 
@@ -375,14 +534,14 @@ test('workflow project duplication stays literal when duplicating a duplicate', 
 
 test('workflow project duplication preserves literal user-authored names that already end with a copy-style suffix', async () => {
   const created = await workflowMutations.createWorkflowProjectItem('', 'LiteralSuffix');
-  const renamed = await workflowMutations.renameWorkflowProjectItem(created.relativePath, 'LiteralSuffix [unpublished] Copy');
+  const renamed = await workflowMutations.renameWorkflowProjectItem(
+    created.relativePath,
+    'LiteralSuffix [unpublished] Copy',
+  );
 
   const duplicate = await workflowMutations.duplicateWorkflowProjectItem(renamed.project.relativePath);
 
-  assert.equal(
-    duplicate.relativePath,
-    'LiteralSuffix [unpublished] Copy [unpublished] Copy.rivet-project',
-  );
+  assert.equal(duplicate.relativePath, 'LiteralSuffix [unpublished] Copy [unpublished] Copy.rivet-project');
 });
 
 test('workflow project duplication keeps published source state detached from the copy', async () => {
@@ -566,19 +725,26 @@ test('workflow project download returns not found for missing projects', async (
 
 test('workflow routes support folder/project create, move, rename, and delete flows over HTTP', async () => {
   await withWorkflowApiServer(async (baseUrl) => {
-    const createdFolder = await readJson<{ folder: { relativePath: string } }>(await fetch(`${baseUrl}/folders`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name: 'Folder' }),
-    }));
+    const createdFolder = await readJson<{ folder: { relativePath: string } }>(
+      await fetch(`${baseUrl}/folders`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: 'Folder' }),
+      }),
+    );
 
-    const createdProject = await readJson<{ project: { relativePath: string; absolutePath: string } }>(await fetch(`${baseUrl}/projects`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ folderRelativePath: createdFolder.folder.relativePath, name: 'Example' }),
-    }));
+    const createdProject = await readJson<{ project: { relativePath: string; absolutePath: string } }>(
+      await fetch(`${baseUrl}/projects`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ folderRelativePath: createdFolder.folder.relativePath, name: 'Example' }),
+      }),
+    );
 
-    const movedProject = await readJson<{ project: { relativePath: string }; movedProjectPaths: Array<{ fromAbsolutePath: string; toAbsolutePath: string }> }>(
+    const movedProject = await readJson<{
+      project: { relativePath: string };
+      movedProjectPaths: Array<{ fromAbsolutePath: string; toAbsolutePath: string }>;
+    }>(
       await fetch(`${baseUrl}/move`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -593,66 +759,85 @@ test('workflow routes support folder/project create, move, rename, and delete fl
     assert.equal(movedProject.project.relativePath, 'Example.rivet-project');
     assert.equal(movedProject.movedProjectPaths.length, 1);
 
-    const renamedProject = await readJson<{ project: { relativePath: string } }>(await fetch(`${baseUrl}/projects`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        relativePath: movedProject.project.relativePath,
-        newName: 'Renamed',
+    const renamedProject = await readJson<{ project: { relativePath: string } }>(
+      await fetch(`${baseUrl}/projects`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          relativePath: movedProject.project.relativePath,
+          newName: 'Renamed',
+        }),
       }),
-    }));
+    );
 
     assert.equal(renamedProject.project.relativePath, 'Renamed.rivet-project');
 
-    const tree = await readJson<{ folders: Array<{ relativePath: string }>; projects: Array<{ relativePath: string }> }>(
-      await fetch(`${baseUrl}/tree`),
+    const tree = await readJson<{
+      folders: Array<{ relativePath: string }>;
+      projects: Array<{ relativePath: string }>;
+    }>(await fetch(`${baseUrl}/tree`));
+
+    assert.deepEqual(
+      tree.folders.map((folder) => folder.relativePath),
+      ['Folder'],
+    );
+    assert.deepEqual(
+      tree.projects.map((project) => project.relativePath),
+      ['Renamed.rivet-project'],
     );
 
-    assert.deepEqual(tree.folders.map((folder) => folder.relativePath), ['Folder']);
-    assert.deepEqual(tree.projects.map((project) => project.relativePath), ['Renamed.rivet-project']);
-
-    const deleteProjectResponse = await readJson<{ deleted: true; projectId: string | null }>(await fetch(`${baseUrl}/projects`, {
-      method: 'DELETE',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ relativePath: 'Renamed.rivet-project' }),
-    }));
+    const deleteProjectResponse = await readJson<{ deleted: true; projectId: string | null }>(
+      await fetch(`${baseUrl}/projects`, {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ relativePath: 'Renamed.rivet-project' }),
+      }),
+    );
     assert.equal(deleteProjectResponse.deleted, true);
     assert.equal(typeof deleteProjectResponse.projectId, 'string');
 
-    const deleteFolderResponse = await readJson<{ deleted: true }>(await fetch(`${baseUrl}/folders`, {
-      method: 'DELETE',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ relativePath: createdFolder.folder.relativePath }),
-    }));
+    const deleteFolderResponse = await readJson<{ deleted: true }>(
+      await fetch(`${baseUrl}/folders`, {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ relativePath: createdFolder.folder.relativePath }),
+      }),
+    );
     assert.equal(deleteFolderResponse.deleted, true);
   });
 });
 
 test('workflow folder rename route reports moved project paths over HTTP', async () => {
   await withWorkflowApiServer(async (baseUrl) => {
-    const createdFolder = await readJson<{ folder: { relativePath: string } }>(await fetch(`${baseUrl}/folders`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name: 'Folder' }),
-    }));
+    const createdFolder = await readJson<{ folder: { relativePath: string } }>(
+      await fetch(`${baseUrl}/folders`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: 'Folder' }),
+      }),
+    );
 
-    const createdProject = await readJson<{ project: { absolutePath: string } }>(await fetch(`${baseUrl}/projects`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ folderRelativePath: createdFolder.folder.relativePath, name: 'Example' }),
-    }));
+    const createdProject = await readJson<{ project: { absolutePath: string } }>(
+      await fetch(`${baseUrl}/projects`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ folderRelativePath: createdFolder.folder.relativePath, name: 'Example' }),
+      }),
+    );
 
     const renamedFolder = await readJson<{
       folder: { relativePath: string };
       movedProjectPaths: Array<{ fromAbsolutePath: string; toAbsolutePath: string }>;
-    }>(await fetch(`${baseUrl}/folders`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        relativePath: createdFolder.folder.relativePath,
-        newName: 'Renamed Folder',
+    }>(
+      await fetch(`${baseUrl}/folders`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          relativePath: createdFolder.folder.relativePath,
+          newName: 'Renamed Folder',
+        }),
       }),
-    }));
+    );
 
     assert.equal(renamedFolder.folder.relativePath, 'Renamed Folder');
     assert.deepEqual(renamedFolder.movedProjectPaths, [
@@ -666,13 +851,17 @@ test('workflow folder rename route reports moved project paths over HTTP', async
 
 test('workflow duplicate route creates a duplicate and exposes it through the tree', async () => {
   await withWorkflowApiServer(async (baseUrl) => {
-    const createdProject = await readJson<{ project: { relativePath: string } }>(await fetch(`${baseUrl}/projects`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name: 'HttpDuplicate' }),
-    }));
+    const createdProject = await readJson<{ project: { relativePath: string } }>(
+      await fetch(`${baseUrl}/projects`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: 'HttpDuplicate' }),
+      }),
+    );
 
-    const duplicated = await readJson<{ project: { relativePath: string; settings: { status: string; endpointName: string } } }>(
+    const duplicated = await readJson<{
+      project: { relativePath: string; settings: { status: string; endpointName: string } };
+    }>(
       await fetch(`${baseUrl}/projects/duplicate`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -694,20 +883,24 @@ test('workflow duplicate route creates a duplicate and exposes it through the tr
 
 test('workflow duplicate route can duplicate the published snapshot for projects with unpublished changes', async () => {
   await withWorkflowApiServer(async (baseUrl) => {
-    const createdProject = await readJson<{ project: { relativePath: string; absolutePath: string } }>(await fetch(`${baseUrl}/projects`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name: 'HttpDuplicatePublished' }),
-    }));
-
-    await readJson<{ project: { settings: { status: string } } }>(await fetch(`${baseUrl}/projects/publish`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        relativePath: createdProject.project.relativePath,
-        settings: { endpointName: 'http-duplicate-published-endpoint' },
+    const createdProject = await readJson<{ project: { relativePath: string; absolutePath: string } }>(
+      await fetch(`${baseUrl}/projects`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: 'HttpDuplicatePublished' }),
       }),
-    }));
+    );
+
+    await readJson<{ project: { settings: { status: string } } }>(
+      await fetch(`${baseUrl}/projects/publish`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          relativePath: createdProject.project.relativePath,
+          settings: { endpointName: 'http-duplicate-published-endpoint' },
+        }),
+      }),
+    );
 
     const liveContents = await fs.readFile(createdProject.project.absolutePath, 'utf8');
     await fs.writeFile(
@@ -733,11 +926,13 @@ test('workflow duplicate route can duplicate the published snapshot for projects
 
 test('workflow duplicate route returns a controlled 400 for invalid project files', async () => {
   await withWorkflowApiServer(async (baseUrl) => {
-    const createdProject = await readJson<{ project: { relativePath: string; absolutePath: string } }>(await fetch(`${baseUrl}/projects`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name: 'BrokenDuplicate' }),
-    }));
+    const createdProject = await readJson<{ project: { relativePath: string; absolutePath: string } }>(
+      await fetch(`${baseUrl}/projects`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: 'BrokenDuplicate' }),
+      }),
+    );
 
     await fs.writeFile(createdProject.project.absolutePath, 'not: valid: yaml: [', 'utf8');
 
@@ -747,7 +942,7 @@ test('workflow duplicate route returns a controlled 400 for invalid project file
       body: JSON.stringify({ relativePath: createdProject.project.relativePath }),
     });
 
-    const body = await response.json() as { error?: string };
+    const body = (await response.json()) as { error?: string };
 
     assert.equal(response.status, 400);
     assert.equal(body.error, 'Could not duplicate project: invalid project file');
@@ -756,18 +951,20 @@ test('workflow duplicate route returns a controlled 400 for invalid project file
 
 test('workflow duplicate route rejects published duplication when no published version exists', async () => {
   await withWorkflowApiServer(async (baseUrl) => {
-    const createdProject = await readJson<{ project: { relativePath: string } }>(await fetch(`${baseUrl}/projects`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name: 'NoPublishedDuplicate' }),
-    }));
+    const createdProject = await readJson<{ project: { relativePath: string } }>(
+      await fetch(`${baseUrl}/projects`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: 'NoPublishedDuplicate' }),
+      }),
+    );
 
     const response = await fetch(`${baseUrl}/projects/duplicate`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ relativePath: createdProject.project.relativePath, version: 'published' }),
     });
-    const body = await response.json() as { error?: string };
+    const body = (await response.json()) as { error?: string };
 
     assert.equal(response.status, 409);
     assert.equal(body.error, 'Published version is not available for this project');
@@ -776,15 +973,19 @@ test('workflow duplicate route rejects published duplication when no published v
 
 test('workflow upload route imports projects into folders and numbers collisions', async () => {
   await withWorkflowApiServer(async (baseUrl) => {
-    const createdFolder = await readJson<{ folder: { relativePath: string } }>(await fetch(`${baseUrl}/folders`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name: 'Uploads' }),
-    }));
+    const createdFolder = await readJson<{ folder: { relativePath: string } }>(
+      await fetch(`${baseUrl}/folders`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: 'Uploads' }),
+      }),
+    );
     const sourceProject = await workflowMutations.createWorkflowProjectItem('', 'HttpUpload');
     const sourceContents = await fs.readFile(sourceProject.absolutePath, 'utf8');
 
-    const firstUpload = await readJson<{ project: { relativePath: string; settings: { status: string; endpointName: string } } }>(
+    const firstUpload = await readJson<{
+      project: { relativePath: string; settings: { status: string; endpointName: string } };
+    }>(
       await fetch(`${baseUrl}/projects/upload`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -812,9 +1013,9 @@ test('workflow upload route imports projects into folders and numbers collisions
     assert.equal(firstUpload.project.settings.endpointName, '');
     assert.equal(secondUpload.project.relativePath, 'Uploads/HttpUpload 1.rivet-project');
 
-    const tree = await readJson<{ folders: Array<{ relativePath: string; projects: Array<{ relativePath: string }> }> }>(
-      await fetch(`${baseUrl}/tree`),
-    );
+    const tree = await readJson<{
+      folders: Array<{ relativePath: string; projects: Array<{ relativePath: string }> }>;
+    }>(await fetch(`${baseUrl}/tree`));
     const uploadsFolder = tree.folders.find((folder) => folder.relativePath === 'Uploads');
 
     assert.deepEqual(
@@ -831,7 +1032,7 @@ test('workflow upload route validates request shape and missing folders cleanly'
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ folderRelativePath: '', fileName: 'Broken.txt', contents: 'hello' }),
     });
-    const invalidBody = await invalidResponse.json() as { error?: string };
+    const invalidBody = (await invalidResponse.json()) as { error?: string };
 
     assert.equal(invalidResponse.status, 400);
     assert.equal(invalidBody.error, 'Expected .rivet-project file');
@@ -842,10 +1043,13 @@ test('workflow upload route validates request shape and missing folders cleanly'
       body: JSON.stringify({
         folderRelativePath: 'MissingFolder',
         fileName: 'Uploaded.rivet-project',
-        contents: await fs.readFile((await workflowMutations.createWorkflowProjectItem('', 'UploadedSource')).absolutePath, 'utf8'),
+        contents: await fs.readFile(
+          (await workflowMutations.createWorkflowProjectItem('', 'UploadedSource')).absolutePath,
+          'utf8',
+        ),
       }),
     });
-    const missingFolderBody = await missingFolderResponse.json() as { error?: string };
+    const missingFolderBody = (await missingFolderResponse.json()) as { error?: string };
 
     assert.equal(missingFolderResponse.status, 404);
     assert.equal(missingFolderBody.error, 'Folder not found');
@@ -854,11 +1058,13 @@ test('workflow upload route validates request shape and missing folders cleanly'
 
 test('workflow download route streams unpublished projects with attachment headers', async () => {
   await withWorkflowApiServer(async (baseUrl) => {
-    const createdProject = await readJson<{ project: { relativePath: string; absolutePath: string } }>(await fetch(`${baseUrl}/projects`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name: 'HttpDownloadUnpublished' }),
-    }));
+    const createdProject = await readJson<{ project: { relativePath: string; absolutePath: string } }>(
+      await fetch(`${baseUrl}/projects`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: 'HttpDownloadUnpublished' }),
+      }),
+    );
     const expectedContents = await fs.readFile(createdProject.project.absolutePath, 'utf8');
 
     const response = await fetch(`${baseUrl}/projects/download`, {
@@ -879,23 +1085,30 @@ test('workflow download route streams unpublished projects with attachment heade
 
 test('workflow download route streams published and unpublished-changes variants separately', async () => {
   await withWorkflowApiServer(async (baseUrl) => {
-    const createdProject = await readJson<{ project: { relativePath: string; absolutePath: string } }>(await fetch(`${baseUrl}/projects`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name: 'HttpDownloadChanged' }),
-    }));
+    const createdProject = await readJson<{ project: { relativePath: string; absolutePath: string } }>(
+      await fetch(`${baseUrl}/projects`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: 'HttpDownloadChanged' }),
+      }),
+    );
     const originalContents = await fs.readFile(createdProject.project.absolutePath, 'utf8');
 
-    await readJson<{ project: { settings: { status: string } } }>(await fetch(`${baseUrl}/projects/publish`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        relativePath: createdProject.project.relativePath,
-        settings: { endpointName: 'http-download-changed-endpoint' },
+    await readJson<{ project: { settings: { status: string } } }>(
+      await fetch(`${baseUrl}/projects/publish`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          relativePath: createdProject.project.relativePath,
+          settings: { endpointName: 'http-download-changed-endpoint' },
+        }),
       }),
-    }));
+    );
 
-    const changedContents = originalContents.replace('title: "HttpDownloadChanged"', 'title: "HttpDownloadChanged Live"');
+    const changedContents = originalContents.replace(
+      'title: "HttpDownloadChanged"',
+      'title: "HttpDownloadChanged Live"',
+    );
     await fs.writeFile(createdProject.project.absolutePath, changedContents, 'utf8');
 
     const publishedResponse = await fetch(`${baseUrl}/projects/download`, {
@@ -931,7 +1144,7 @@ test('workflow download route validates request shape and reports missing or unp
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ relativePath: 'Anything.rivet-project', version: 'invalid' }),
     });
-    const invalidBody = await invalidResponse.json() as { error?: string };
+    const invalidBody = (await invalidResponse.json()) as { error?: string };
 
     assert.equal(invalidResponse.status, 400);
     assert.ok(invalidBody.error);
@@ -941,23 +1154,25 @@ test('workflow download route validates request shape and reports missing or unp
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ relativePath: 'Missing.rivet-project', version: 'live' }),
     });
-    const missingBody = await missingResponse.json() as { error?: string };
+    const missingBody = (await missingResponse.json()) as { error?: string };
 
     assert.equal(missingResponse.status, 404);
     assert.equal(missingBody.error, 'Project not found');
 
-    const createdProject = await readJson<{ project: { relativePath: string } }>(await fetch(`${baseUrl}/projects`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name: 'HttpDownloadUnavailable' }),
-    }));
+    const createdProject = await readJson<{ project: { relativePath: string } }>(
+      await fetch(`${baseUrl}/projects`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: 'HttpDownloadUnavailable' }),
+      }),
+    );
 
     const unavailableResponse = await fetch(`${baseUrl}/projects/download`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ relativePath: createdProject.project.relativePath, version: 'published' }),
     });
-    const unavailableBody = await unavailableResponse.json() as { error?: string };
+    const unavailableBody = (await unavailableResponse.json()) as { error?: string };
 
     assert.equal(unavailableResponse.status, 409);
     assert.equal(unavailableBody.error, 'Published version is not available for this project');
@@ -992,8 +1207,14 @@ test('delete workflow project is blocked until workflow publication is unpublish
   const published = await workflowMutations.publishWorkflowProjectItem(created.relativePath, {
     endpointName: 'delete-published',
   });
-  const storedSettings = await workflowPublication.readStoredWorkflowProjectSettings(published.absolutePath, published.name);
-  const publishedSnapshotPath = workflowFs.getPublishedWorkflowSnapshotPath(workflowsRoot, storedSettings.publishedSnapshotId!);
+  const storedSettings = await workflowPublication.readStoredWorkflowProjectSettings(
+    published.absolutePath,
+    published.name,
+  );
+  const publishedSnapshotPath = workflowFs.getPublishedWorkflowSnapshotPath(
+    workflowsRoot,
+    storedSettings.publishedSnapshotId!,
+  );
 
   assert.equal(await workflowFs.pathExists(publishedSnapshotPath), true);
 
@@ -1012,15 +1233,23 @@ test('delete workflow project is blocked by legacy published settings', async ()
   for (const legacyStatus of ['published', 'unpublished_changes'] as const) {
     const created = await workflowMutations.createWorkflowProjectItem('', `DeleteLegacy${legacyStatus}`);
     const settingsPath = workflowFs.getProjectSidecarPaths(created.absolutePath).settings;
-    await fs.writeFile(settingsPath, `${JSON.stringify({
-      endpointName: `delete-legacy-${legacyStatus.replace('_', '-')}`,
-      publishedEndpointName: '',
-      publishedSnapshotId: null,
-      publishedStateHash: null,
-      lastPublishedAt: null,
-      publishedWebApps: [],
-      status: legacyStatus,
-    }, null, 2)}\n`, 'utf8');
+    await fs.writeFile(
+      settingsPath,
+      `${JSON.stringify(
+        {
+          endpointName: `delete-legacy-${legacyStatus.replace('_', '-')}`,
+          publishedEndpointName: '',
+          publishedSnapshotId: null,
+          publishedStateHash: null,
+          lastPublishedAt: null,
+          publishedWebApps: [],
+          status: legacyStatus,
+        },
+        null,
+        2,
+      )}\n`,
+      'utf8',
+    );
 
     await assert.rejects(
       () => workflowMutations.deleteWorkflowProjectItem(created.relativePath),

@@ -93,6 +93,8 @@ test('hosted Vite config carries upstream spellcheck browser virtual modules', (
   assert.match(viteConfig, /dependency !== '@cspell\/dict-companies'/);
   assert.match(viteConfig, /dependency !== '@cspell\/dict-software-terms'/);
   assert.match(viteConfig, /dependency !== 'dictionary-en'/);
+  assert.ok(viteConfig.includes('const hostedViteCacheDir = process.env.HOSTED_VITE_CACHE_DIR?.trim();'));
+  assert.ok(viteConfig.includes('cacheDir: hostedViteCacheDir || undefined,'));
   assert.match(viteConfig, /include: \['nspell'\]/);
   assert.match(viteConfig, /exclude: \[[\s\S]*'dictionary-en'[\s\S]*'rivet-cspell-words'/);
   assert.match(viteConfig, /dictionaryEnBrowserPlugin\(\),/);

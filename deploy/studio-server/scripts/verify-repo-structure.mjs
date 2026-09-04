@@ -31,7 +31,9 @@ const requiredPaths = [
   'deploy/studio-server/scripts/run-api-tests.mjs',
   'deploy/studio-server/scripts/candidate-image-smoke.mjs',
   'deploy/studio-server/.env.example',
+  'deploy/studio-server/.env.kubernetes-local.example',
   'deploy/studio-server/README.md',
+  'deploy/studio-server/kubernetes-test/local-dependencies.yaml',
   'deploy/studio-server/helm/Chart.yaml',
   'deploy/studio-server/compose/docker-compose.yml',
   'deploy/studio-server/compose/docker-compose.dev.yml',
@@ -172,17 +174,25 @@ const expectedPackageNames = new Map([
   ['packages/studio-server-bootstrap/package.json', '@valerypopoff/rivet-studio-server-bootstrap'],
 ]);
 
+const studioServerVersions = new Set();
 for (const [manifestPath, expectedName] of expectedPackageNames) {
   const manifest = readJson(manifestPath);
   assert.equal(manifest.name, expectedName, `${manifestPath} has the wrong workspace name.`);
   assert.equal(manifest.private, true, `${manifestPath} must remain private.`);
   assert.equal(manifest.packageManager, undefined, `${manifestPath} must use the root package manager.`);
+  assert.match(manifest.version, /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/);
+  studioServerVersions.add(manifest.version);
   for (const dependencyVersion of Object.values(manifest.dependencies ?? {})) {
     if (String(dependencyVersion).startsWith('file:')) {
       assert.fail(`${manifestPath} still contains a file dependency: ${dependencyVersion}`);
     }
   }
 }
+assert.equal(
+  studioServerVersions.size,
+  1,
+  `Studio Server packages must use one product version. Found: ${[...studioServerVersions].join(', ')}`,
+);
 
 for (const scriptName of [
   'studio-server:build',

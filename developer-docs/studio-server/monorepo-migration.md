@@ -81,9 +81,12 @@ Focused package work uses `yarn workspace`. Dependency installation is always
 `yarn install --immutable` at the repository root.
 
 The old standalone npm operator surface is intentionally not preserved. VM
-automation must migrate `npm install` to `corepack enable` followed by
-`yarn install --immutable`, `npm run prod` to `yarn studio-server:prod`, and
-`npm run prod:custom` to `yarn studio-server:prod:custom`. `yarn dev` continues
+automation must migrate
+pm install` to `corepack enable` followed by
+`yarn install --immutable`,
+pm run prod` to `yarn studio-server:prod`, and
+
+pm run prod:custom` to `yarn studio-server:prod:custom`. `yarn dev` continues
 to mean the Rivet desktop/editor; Studio Server commands remain namespaced.
 
 npm remains only at boundaries where npm itself is the external protocol or an
@@ -183,8 +186,9 @@ blob ID, migration-time destination mode and blob ID, and an explanation for
 every transformation, merge, or removal.
 `yarn studio-server:verify:migration-ledger` reconstructs the source and
 consolidation trees from retained Git objects, compares the checked-in ledger
-with the canonical mapping rules, verifies every recorded blob, and requires
-every maintained destination to remain tracked and present. The Studio Server
+with the canonical mapping rules, verifies every recorded blob, and requires every maintained destination, or a reviewed current successor, to remain
+tracked and present. A successor preserves the migration-era blob proof and adds only
+an explicit current path plus reason for a later refactor. The Studio Server
 verification and image-publication workflows use full-history checkouts so
 this proof runs in CI before builds can be accepted or published.
 

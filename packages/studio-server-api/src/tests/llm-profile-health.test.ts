@@ -17,11 +17,20 @@ import { loadProjectFromFile } from '@valerypopoff/rivet2-node';
 import { createApiApp } from '../app.js';
 import { getExpectedProxyAuthToken } from '../auth.js';
 import { FilesystemRivetLLMProfileHealthStore } from '../llm-profile-health/filesystem-store.js';
+import {
+  flushLLMProfileHealthRecordingOutcomes,
+  trackLLMProfileHealthRecordingOutcome,
+} from '../llm-profile-health/recording-outcomes.js';
 import { PostgresRivetLLMProfileHealthStore } from '../llm-profile-health/managed-store.js';
 import {
+  applyLLMProfileHealthRecordingOutcome,
   beginLLMProfileHealthAttempt,
   finishLLMProfileHealthAttempt,
+  getLLMProfileHealthContributorRuns,
+  getLLMProfileHealthHeldRecordingIds,
   LLM_PROFILE_CLOSED_PERMIT_RETENTION_FLOOR_MS,
+  markLLMProfileHealthRecordingDeleted,
+  normalizeStoredLLMProfileHealthEntry,
   renewLLMProfileHealthPermit,
 } from '../llm-profile-health/state.js';
 import {
@@ -46,6 +55,7 @@ function identity(key: string, projectId = 'project-a'): RivetLLMProfileHealthId
     key,
     projectId: projectId as never,
     profileNodeId: 'profile-node' as never,
+    profileName: 'Primary route',
     provider: 'custom',
     model: 'fast-model',
     customProviderApi: 'completions',
@@ -135,6 +145,23 @@ class FakeManagedHealthPool {
       return { rows: [] as T[], rowCount: deleted ? 1 : 0 };
     }
 
+    if (normalized.startsWith('select key, entry_json from llm_profile_health where entry_json @> $1::jsonb for update')) {
+      const evidence = JSON.parse(String(values[0])) as {
+        failureEvidence?: Array<{ correlationId?: string; recordingId?: string }>;
+      };
+      const needle = evidence.failureEvidence?.[0] ?? {};
+      const rows = [...this.rows.values()]
+        .filter((row) => {
+          if (row.entryJson == null || typeof row.entryJson !== 'object') return false;
+          const storedEvidence = (row.entryJson as { failureEvidence?: Array<{ correlationId?: string; recordingId?: string }> })
+            .failureEvidence ?? [];
+          return storedEvidence.some((item) =>
+            (needle.correlationId == null || item.correlationId === needle.correlationId) &&
+            (needle.recordingId == null || item.recordingId === needle.recordingId));
+        })
+        .map((row) => ({ key: row.key, entry_json: row.entryJson }) as T);
+      return { rows, rowCount: rows.length };
+    }
     if (normalized.startsWith('select key, entry_json from llm_profile_health where entry_json is not null')) {
       const projectId = normalized.includes('and project_id = $1') ? String(values[0]) : undefined;
       const rows = [...this.rows.values()]
@@ -207,6 +234,88 @@ test('health transitions track closed permits, renew only the owning probe, and 
   assert.equal(staleFinish.snapshot.failureCount, 0);
 });
 
+test('active suspensions expose only their contributing recording evidence and release it on recovery', () => {
+  const healthIdentity = identity('recording-evidence-key');
+  const first = beginLLMProfileHealthAttempt(null, { identity: healthIdentity, policy }, 1_000);
+  const firstFailure = finishLLMProfileHealthAttempt(first.entry, {
+    identity: healthIdentity,
+    policy,
+    permitId: first.result.permitId!,
+    outcome: 'unhealthy',
+    executionCorrelationId: 'correlation-first',
+  }, 1_001);
+  const second = beginLLMProfileHealthAttempt(firstFailure.entry, { identity: healthIdentity, policy }, 1_002);
+  const opened = finishLLMProfileHealthAttempt(second.entry, {
+    identity: healthIdentity,
+    policy,
+    permitId: second.result.permitId!,
+    outcome: 'unhealthy',
+    executionCorrelationId: 'correlation-second',
+  }, 1_003);
+  assert.ok(opened.entry);
+
+  assert.equal(
+    applyLLMProfileHealthRecordingOutcome(opened.entry, {
+      correlationId: 'correlation-first', availability: 'disabled',
+    }, 1_004),
+    true,
+  );
+  assert.equal(
+    applyLLMProfileHealthRecordingOutcome(opened.entry, {
+      correlationId: 'correlation-second', availability: 'available', recordingId: 'recording-second',
+    }, 1_005),
+    true,
+  );
+  assert.deepEqual(getLLMProfileHealthContributorRuns(opened.entry), [
+    {
+      occurredAt: 1_001,
+      contributionCount: 1,
+      triggeredSuspension: false,
+      availability: 'disabled',
+    },
+    {
+      occurredAt: 1_003,
+      contributionCount: 1,
+      triggeredSuspension: true,
+      availability: 'available',
+      recordingId: 'recording-second',
+    },
+  ]);
+  assert.deepEqual(getLLMProfileHealthHeldRecordingIds(opened.entry), ['recording-second']);
+
+  assert.equal(markLLMProfileHealthRecordingDeleted(opened.entry, 'recording-second', 1_006), true);
+  assert.deepEqual(getLLMProfileHealthHeldRecordingIds(opened.entry), []);
+
+  const probe = beginLLMProfileHealthAttempt(opened.entry, { identity: healthIdentity, policy }, 1_014);
+  const recovered = finishLLMProfileHealthAttempt(probe.entry, {
+    identity: healthIdentity,
+    policy,
+    permitId: probe.result.permitId!,
+    outcome: 'healthy',
+  }, 1_015);
+  assert.ok(recovered.entry);
+  assert.deepEqual(getLLMProfileHealthContributorRuns(recovered.entry), []);
+  assert.deepEqual(getLLMProfileHealthHeldRecordingIds(recovered.entry), []);
+});
+
+test('legacy health rows discard invalid active-suspension metadata before it reaches UI or retention', () => {
+  const healthIdentity = identity('malformed-suspension-key');
+  const opened = beginLLMProfileHealthAttempt(null, { identity: healthIdentity, policy }, 1_000);
+  const malformed = {
+    ...opened.entry,
+    activeSuspension: {
+      id: 'stale-suspension',
+      contributorEventIds: ['unknown-evidence'],
+      triggerEventId: 'unknown-evidence',
+    },
+  };
+
+  const normalized = normalizeStoredLLMProfileHealthEntry(malformed);
+  assert.equal(normalized.activeSuspension, undefined);
+  assert.deepEqual(getLLMProfileHealthContributorRuns(normalized), []);
+  assert.deepEqual(getLLMProfileHealthHeldRecordingIds(normalized), []);
+});
+
 test('permit renewal is monotonic, refreshes closed attempts, and recovery invalidates pre-open attempts', () => {
   const healthIdentity = identity('renew-and-recovery-key');
   const first = beginLLMProfileHealthAttempt(null, { identity: healthIdentity, policy }, 1_000);
@@ -270,6 +379,24 @@ test('an existing health key cannot be rebound to a different project', () => {
     /belongs to a different project scope/,
   );
   assert.equal(existing.entry.identity.projectId, originalIdentity.projectId);
+});
+
+test('recording evidence drain waits for outcomes that are outside the response path', async () => {
+  let complete: (() => void) | undefined;
+  let settled = false;
+  const outcome = trackLLMProfileHealthRecordingOutcome(new Promise<void>((resolve) => {
+    complete = resolve;
+  }));
+  const flush = flushLLMProfileHealthRecordingOutcomes().then(() => {
+    settled = true;
+  });
+
+  await delay(0);
+  assert.equal(settled, false);
+  complete!();
+  await outcome;
+  await flush;
+  assert.equal(settled, true);
 });
 
 test('durable health stores reject unscoped runtime identities', async () => {
@@ -484,6 +611,58 @@ test('managed health store preserves transition, lease, project, and reset seman
   );
 });
 
+test('filesystem and managed health stores persist recording evidence for active suspensions', async () => {
+  const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'rivet-llm-health-evidence-'));
+  const filesystem = new FilesystemRivetLLMProfileHealthStore(path.join(tempRoot, 'health.sqlite'));
+  const managed = new PostgresRivetLLMProfileHealthStore(new FakeManagedHealthPool() as unknown as Pool);
+
+  try {
+    for (const [label, store] of [
+      ['filesystem', filesystem],
+      ['managed', managed],
+    ] as const) {
+      const healthIdentity = identity(`evidence-${label}`);
+      const first = await store.begin({ identity: healthIdentity, policy });
+      await store.finish({
+        identity: healthIdentity,
+        policy,
+        permitId: first.permitId!,
+        outcome: 'unhealthy',
+        executionCorrelationId: `${label}-first`,
+      });
+      const second = await store.begin({ identity: healthIdentity, policy });
+      await store.finish({
+        identity: healthIdentity,
+        policy,
+        permitId: second.permitId!,
+        outcome: 'unhealthy',
+        executionCorrelationId: `${label}-second`,
+      });
+      await store.recordRecordingOutcome({
+        correlationId: `${label}-first`,
+        availability: 'disabled',
+      });
+      await store.recordRecordingOutcome({
+        correlationId: `${label}-second`,
+        availability: 'available',
+        recordingId: `${label}-recording`,
+      });
+
+      const [entry] = await store.listAdmin({ projectId: healthIdentity.projectId! });
+      assert.ok(entry);
+      assert.deepEqual(entry.contributingRuns.map((run) => run.availability), ['disabled', 'available']);
+      assert.equal(entry.contributingRuns[1]?.recordingId, `${label}-recording`);
+      assert.equal(entry.contributingRuns[1]?.triggeredSuspension, true);
+
+      await store.markRecordingDeleted(`${label}-recording`);
+      const [afterDelete] = await store.listAdmin({ projectId: healthIdentity.projectId! });
+      assert.equal(afterDelete?.contributingRuns[1]?.availability, 'deleted');
+    }
+  } finally {
+    await filesystem.dispose();
+    await fs.rm(tempRoot, { recursive: true, force: true });
+  }
+});
 test('HTTP health clients preserve runtime requests and scope administration by project', async () => {
   const requests: Array<{ url: string; init: RequestInit }> = [];
   const fetchMock: typeof fetch = async (input, init = {}) => {
@@ -519,7 +698,7 @@ test('HTTP health clients preserve runtime requests and scope administration by 
 
   assert.equal(requests[0]?.url, 'https://rivet.example/api/workflows/llm-profile-health/begin');
   assert.deepEqual(JSON.parse(String(requests[0]?.init.body)), { identity: healthIdentity, policy });
-  assert.equal(requests[1]?.url, 'https://rivet.example/api/workflows/llm-profile-health/?projectId=project%20a');
+  assert.equal(requests[1]?.url, 'https://rivet.example/api/workflows/llm-profile-health/admin?projectId=project%20a');
   assert.deepEqual(JSON.parse(String(requests[2]?.init.body)), { projectId: 'project a' });
 });
 
@@ -597,6 +776,11 @@ test('authenticated health API scopes resets by exact project and rejects caller
     const projectEntries = await fetch(`${baseUrl}/?projectId=project-a`, { headers });
     assert.equal(projectEntries.status, 200);
     assert.equal((await projectEntries.json() as unknown[]).length, 1);
+
+    const adminEntries = await fetch(`${baseUrl}/admin?projectId=project-a`, { headers });
+    assert.equal(adminEntries.status, 200);
+    const [adminEntry] = await adminEntries.json() as Array<{ contributingRuns?: unknown }>;
+    assert.deepEqual(adminEntry?.contributingRuns, []);
 
     const resetResponse = await fetch(`${baseUrl}/reset`, {
       method: 'POST',

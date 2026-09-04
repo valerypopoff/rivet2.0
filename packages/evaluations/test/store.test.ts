@@ -845,11 +845,22 @@ test('delayed provisional recording writes cannot undo durable retention or reas
   const store = new InMemoryEvaluationRunStore();
   const provisional = recording();
   await store.putRecording(provisional);
-  await store.updateRecordingRetention({
-    projectId: provisional.projectId,
-    recordingId: provisional.reference.id,
-    retention: 'failure',
-  });
+  assert.equal(
+    await store.updateRecordingRetention({
+      projectId: provisional.projectId,
+      recordingId: provisional.reference.id,
+      retention: 'failure',
+    }),
+    true,
+  );
+  assert.equal(
+    await store.updateRecordingRetention({
+      projectId: provisional.projectId,
+      recordingId: 'missing-recording',
+      retention: 'failure',
+    }),
+    false,
+  );
 
   await store.putRecording(provisional);
   assert.deepEqual(

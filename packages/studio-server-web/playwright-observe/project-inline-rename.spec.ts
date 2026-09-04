@@ -61,6 +61,7 @@ async function installProjectRenameRoutes(page: Page, state: {
   await page.route('**/api/workflows/tree', async (route) => {
     await fulfillJson(route, {
       root: '/managed/workflows',
+      sync: { epoch: 'playwright-fixture', revision: 0 },
       folders: [],
       projects: [createProjectFixture(state.projectName)],
     });
@@ -118,8 +119,103 @@ async function startProjectRename(page: Page, projectName: string) {
   return renameInput;
 }
 
+async function dispatchEditorMessage(page: Page, message: unknown): Promise<void> {
+  await page.evaluate((eventData) => {
+    const editorFrame = document.querySelector<HTMLIFrameElement>('.dashboard-editor-frame');
+    window.dispatchEvent(
+      new MessageEvent('message', {
+        data: eventData,
+        origin: window.location.origin,
+        source: editorFrame?.contentWindow ?? null,
+      }),
+    );
+  }, message);
+}
+
+async function pressF2InEditorFrame(page: Page): Promise<void> {
+  await page.locator('.dashboard-editor-frame').evaluate((node) => {
+    if (!(node instanceof HTMLIFrameElement) || !node.contentWindow) {
+      throw new Error('Hosted editor frame is unavailable');
+    }
+
+    node.contentWindow.dispatchEvent(
+      new node.contentWindow.KeyboardEvent('keydown', {
+        bubbles: true,
+        cancelable: true,
+        key: 'F2',
+      }),
+    );
+  });
+}
 test.describe('Workflow project inline rename', () => {
-  test('starts from F2 or context menu, saves with Enter, keeps the active row, and cancels cleanly', async ({ page }) => {
+  test('keeps an F2 rename open across delayed project opening and accepts F2 from the editor iframe', async ({
+    page,
+  }) => {
+    const state = {
+      projectName: 'codex-inline-project-focus-race',
+      renameRequests: [] as Array<{ relativePath?: string; newName?: string }>,
+    };
+    await installProjectRenameRoutes(page, state);
+
+    await page.goto('/', { waitUntil: 'domcontentloaded' });
+    await authenticateIfNeeded(page);
+    await waitForDashboardReady(page);
+
+    const project = page.locator('.project-row', { hasText: state.projectName });
+    await project.click();
+    await expect(project).toHaveClass(/active/);
+
+    let renameInput = page.getByRole('textbox', { name: `Rename ${state.projectName}` });
+    await project.press('F2');
+    await expect(renameInput).toBeFocused();
+
+    await dispatchEditorMessage(page, {
+      type: 'project-opened',
+      path: `/managed/workflows/${state.projectName}.rivet-project`,
+    });
+    await expect(renameInput).toBeFocused();
+    await renameInput.press('Escape');
+
+    await pressF2InEditorFrame(page);
+    renameInput = page.getByRole('textbox', { name: `Rename ${state.projectName}` });
+    await expect(renameInput).toBeFocused();
+    await renameInput.press('Escape');
+    expect(state.renameRequests).toHaveLength(0);
+  });
+  test('does not start a rename from a modified F2 or editor F2 behind a menu', async ({ page }) => {
+    const state = {
+      projectName: 'codex-inline-project-shortcut-ownership',
+      renameRequests: [] as Array<{ relativePath?: string; newName?: string }>,
+    };
+    await installProjectRenameRoutes(page, state);
+
+    await page.goto('/', { waitUntil: 'domcontentloaded' });
+    await authenticateIfNeeded(page);
+    await waitForDashboardReady(page);
+
+    const project = page.locator('.project-row', { hasText: state.projectName });
+    await project.click();
+    await expect(project).toHaveClass(/active/);
+
+    await project.press('Shift+F2');
+    await page.waitForTimeout(100);
+    await expect(page.getByRole('textbox', { name: `Rename ${state.projectName}` })).toHaveCount(0);
+
+    await project.click({ button: 'right' });
+    const contextMenu = page.getByRole('menu');
+    await expect(contextMenu).toBeVisible();
+    await pressF2InEditorFrame(page);
+    await page.waitForTimeout(100);
+    await expect(page.getByRole('textbox', { name: `Rename ${state.projectName}` })).toHaveCount(0);
+
+    await page.keyboard.press('Escape');
+    await expect(contextMenu).toHaveCount(0);
+    await pressF2InEditorFrame(page);
+    await expect(page.getByRole('textbox', { name: `Rename ${state.projectName}` })).toBeFocused();
+  });
+  test('starts from F2 or context menu, saves with Enter, keeps the active row, and cancels cleanly', async ({
+    page,
+  }) => {
     const renameBlocker = createDeferred();
     const state = {
       projectName: 'codex-inline-project',
@@ -170,6 +266,10 @@ test.describe('Workflow project inline rename', () => {
     const renamedProject = page.locator('.project-row', { hasText: 'codex-inline-project-renamed' });
     await expect(renamedProject).toBeVisible();
     await expect(renamedProject).toHaveClass(/active/);
+    await page.keyboard.press('F2');
+    const secondRenameInput = page.getByRole('textbox', { name: 'Rename codex-inline-project-renamed' });
+    await expect(secondRenameInput).toBeFocused();
+    await secondRenameInput.press('Escape');
     expect(state.renameRequests).toEqual([
       {
         relativePath: 'codex-inline-project.rivet-project',

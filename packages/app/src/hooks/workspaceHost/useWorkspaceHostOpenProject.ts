@@ -2,7 +2,7 @@ import { useAtom, useAtomValue, useSetAtom, useStore } from 'jotai';
 import type { ProjectId } from '@valerypopoff/rivet2-core';
 import { useRivetAppHostCallbacks } from '../../providers/HostCallbacksContext.js';
 import { useIOProvider } from '../../providers/ProvidersContext.js';
-import { projectsState, projectState } from '../../state/savedGraphs.js';
+import { openedProjectSnapshotsState, projectsState, projectState } from '../../state/savedGraphs.js';
 import { selectedOpeningProjectTabIdState } from '../../state/openingProjectTabs.js';
 import { projectTabUiState, updateProjectTabUiState } from '../../state/projectTabUi.js';
 import { isPathBasedIOProvider } from '../../io/IOProvider.js';
@@ -13,6 +13,7 @@ import { useStableCallback } from '../useStableCallback.js';
 import { useWorkspaceTransitions } from '../useWorkspaceTransitions.js';
 import { normalizeProjectSnapshot } from './projectSnapshot.js';
 import { useWorkspaceHostProjectCleanup } from './useWorkspaceHostProjectCleanup.js';
+import { flushHybridStorageGroup } from '../../state/storage.js';
 import type {
   RivetProjectReplaceOptions,
   RivetProjectSnapshotInput,
@@ -26,6 +27,7 @@ export function useWorkspaceHostOpenProject() {
   const loadProject = useLoadProject();
   const store = useStore();
   const [projects, setProjects] = useAtom(projectsState);
+  const setOpenedProjectSnapshots = useSetAtom(openedProjectSnapshotsState);
   const [projectTabUiStates, setProjectTabUiStates] = useAtom(projectTabUiState);
   const currentProject = useAtomValue(projectState);
   const setSelectedOpeningProjectTabId = useSetAtom(selectedOpeningProjectTabIdState);
@@ -73,6 +75,16 @@ export function useWorkspaceHostOpenProject() {
           return false;
         }
 
+        // A tab must never outlive its initial snapshot. Inactive tabs use this
+        // persisted content when they are switched back to after a reload.
+        setOpenedProjectSnapshots((previousSnapshots) => ({
+          ...previousSnapshots,
+          [projectId]: {
+            project: normalized.project,
+            data: normalized.data,
+          },
+        }));
+
         setProjects((previousProjects) => {
           const replacedProjectIndex =
             replacedProjectId != null ? previousProjects.openedProjectsSortedIds.indexOf(replacedProjectId) : -1;
@@ -114,6 +126,14 @@ export function useWorkspaceHostOpenProject() {
 
         if (replacedProjectId) {
           cleanupClosedProject(replacedProjectId);
+        }
+
+        try {
+          await flushHybridStorageGroup('project');
+        } catch (error) {
+          // The project is already open in memory. Keep it usable and let the
+          // normal persistence diagnostics report the failed durable write.
+          console.error('Failed to persist opened project workspace state:', error);
         }
 
         return true;

@@ -11,7 +11,8 @@ export function getLLMProfileHealthDisplayName(project: Project, snapshot: Rivet
     }
   }
 
-  return `${snapshot.identity.provider}/${snapshot.identity.model}`;
+  const profileName = snapshot.identity.profileName?.trim();
+  return profileName || `${snapshot.identity.provider}/${snapshot.identity.model}`;
 }
 
 export function getLLMProfileHealthIdentityLabel(snapshot: RivetLLMProfileHealthSnapshot): string {

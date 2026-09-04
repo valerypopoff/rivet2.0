@@ -11,6 +11,7 @@ export function useWorkflowLibrarySelection({
   onActiveWorkflowProjectPathChange,
   onOpenProject,
   onWorkflowProjectOpenIntent,
+  onWorkflowProjectOpenIntentCanceled,
   openedProjectPath,
   setExpandedFolders,
 }: {
@@ -21,11 +22,13 @@ export function useWorkflowLibrarySelection({
   onActiveWorkflowProjectPathChange: (path: string) => void;
   onOpenProject: (path: string, options?: WorkflowProjectOpenOptions) => void;
   onWorkflowProjectOpenIntent: (path: string) => void;
+  onWorkflowProjectOpenIntentCanceled: (path: string) => void;
   openedProjectPath: string;
   setExpandedFolders: Dispatch<SetStateAction<Record<string, boolean>>>;
 }) {
   const [selectedProjectPath, setSelectedProjectPath] = useState('');
   const projectRowRefs = useRef<Record<string, HTMLElement | null>>({});
+  const pendingPreviewPathRef = useRef<string | null>(null);
   const previewOpenTimeoutRef = useRef<number | null>(null);
   const lastAutoExpandedActivePathRef = useRef<string | null>(null);
   const suppressedActiveAncestorExpansionIdsRef = useRef<Set<string>>(new Set());
@@ -39,15 +42,34 @@ export function useWorkflowLibrarySelection({
     () => allProjects.find((project) => project.absolutePath === activePath) ?? null,
     [activePath, allProjects],
   );
-  const openedWorkflowProjectPath = openedWorkflowProject?.absolutePath ?? '';
-  openedWorkflowProjectRef.current = openedWorkflowProject;
+  if (openedWorkflowProject) {
+    openedWorkflowProjectRef.current = openedWorkflowProject;
+  } else if (
+    !openedProjectPath ||
+    openedWorkflowProjectRef.current?.absolutePath !== openedProjectPath
+  ) {
+    // Keep the last known tree item only for the still-open document. A
+    // remote rename/delete removes its row before the synchronization hook
+    // can explain that the editor intentionally remains unchanged.
+    openedWorkflowProjectRef.current = null;
+  }
 
   const clearPendingPreviewOpen = useCallback(() => {
     if (previewOpenTimeoutRef.current != null) {
       window.clearTimeout(previewOpenTimeoutRef.current);
       previewOpenTimeoutRef.current = null;
     }
+    pendingPreviewPathRef.current = null;
   }, []);
+
+  const cancelPendingPreviewOpen = useCallback((path: string) => {
+    if (pendingPreviewPathRef.current !== path) {
+      return;
+    }
+
+    clearPendingPreviewOpen();
+    onWorkflowProjectOpenIntentCanceled(path);
+  }, [clearPendingPreviewOpen, onWorkflowProjectOpenIntentCanceled]);
 
   useEffect(() => clearPendingPreviewOpen, [clearPendingPreviewOpen]);
 
@@ -67,8 +89,11 @@ export function useWorkflowLibrarySelection({
   }, [allProjects, openedWorkflowProject, selectedProjectPath]);
 
   useEffect(() => {
-    onActiveWorkflowProjectPathChange(openedWorkflowProjectPath);
-  }, [onActiveWorkflowProjectPathChange, openedWorkflowProjectPath]);
+    // A remote tree refresh can remove or move an open project. The editor
+    // deliberately keeps that document open, so retain its active path even
+    // while there is no longer a matching sidebar row.
+    onActiveWorkflowProjectPathChange(openedProjectPath);
+  }, [onActiveWorkflowProjectPathChange, openedProjectPath]);
 
   const activeAncestorFolderIds = useMemo(() => {
     if (!activePath) {
@@ -149,10 +174,15 @@ export function useWorkflowLibrarySelection({
   }, []);
   const openPreview = useCallback((project: WorkflowProjectItem) => {
     clearPendingPreviewOpen();
+    pendingPreviewPathRef.current = project.absolutePath;
     setSelectedProjectPath(project.absolutePath);
     onWorkflowProjectOpenIntent(project.absolutePath);
     previewOpenTimeoutRef.current = window.setTimeout(() => {
       previewOpenTimeoutRef.current = null;
+      if (pendingPreviewPathRef.current !== project.absolutePath) {
+        return;
+      }
+      pendingPreviewPathRef.current = null;
       onOpenProject(project.absolutePath, { preview: true, title: project.name });
     }, 180);
   }, [clearPendingPreviewOpen, onOpenProject, onWorkflowProjectOpenIntent]);
@@ -165,6 +195,7 @@ export function useWorkflowLibrarySelection({
   return {
     activePath,
     activeProject,
+    cancelPendingPreviewOpen,
     clearSelection,
     isActiveProjectOpen: activeProject != null && activeProject.absolutePath === openedProjectPath,
     openedWorkflowProject,

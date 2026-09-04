@@ -8,15 +8,19 @@ import {
   createInMemoryRivetWebAppRunStore,
   createRivetWebAppWebSocketGateway,
   ExecutionRecorder,
+  RIVET_WEB_APP_BROWSER_STORAGE_BINARY_FRAME_HEADER_BYTES,
+  RIVET_WEB_APP_BROWSER_STORAGE_TRANSFER_CHUNK_BYTES,
+  RivetWebAppActionHttpError,
+  type RivetWebAppBrowserStorageRpcEvent,
   type RivetWebAppWebSocketGateway,
 } from '@valerypopoff/rivet2-node';
 
 import { checkPostgresPoolHealth } from './managed-health.js';
-import {
-  acquireManagedPostgresPool,
-  type ManagedPostgresPoolLease,
-} from './managed-postgres-pool.js';
+import { getPublishedExecutionAdmission, toPublishedExecutionAdmissionError } from './published-execution-admission.js';
+import { recordStudioMetrics } from './metrics.js';
+import { acquireManagedPostgresPool, type ManagedPostgresPoolLease } from './managed-postgres-pool.js';
 import type { RuntimeHealthCheckContext } from './runtime-health.js';
+import { createRivetCorrelationId } from './request-correlation.js';
 import { getManagedDbConnectionConfig, getManagedDbPoolConfig } from './routes/workflows/managed/db.js';
 import { getManagedWorkflowStorageConfig, isManagedWorkflowStorageEnabled } from './routes/workflows/storage-config.js';
 import {
@@ -30,8 +34,12 @@ import {
   resolveWebAppSocketExecution,
   type WebAppRouteKind,
 } from './routes/workflows/execution.js';
-import { getWorkflowExecutionRecorderOptions, isWorkflowRecordingEnabled } from './routes/workflows/recordings-config.js';
+import {
+  getWorkflowExecutionRecorderOptions,
+  isWorkflowRecordingEnabled,
+} from './routes/workflows/recordings-config.js';
 import { readRuntimeLimitSettingsSync } from './runtime-limit-settings.js';
+import { getApiRuntimeProfile, type ApiRuntimeProfile } from './runtime-profile.js';
 import { PostgresRivetWebAppRunCoordinator } from './web-app-action-coordinator.js';
 import { createPostgresRivetWebAppRunStore } from './web-app-action-run-store.js';
 import type { WorkflowRecordingExecutionIdentity } from '../../studio-server-shared/workflow-recording-types.js';
@@ -86,6 +94,15 @@ function matchWebAppSocketRoute(req: IncomingMessage): WebAppSocketRoute | null 
   return null;
 }
 
+export function isWebAppSocketRouteEnabled(
+  routeKind: WebAppRouteKind,
+  profile: ApiRuntimeProfile = getApiRuntimeProfile(),
+): boolean {
+  return routeKind === 'published'
+    ? profile === 'combined' || profile === 'execution'
+    : profile === 'combined' || profile === 'control';
+}
+
 function isWebAppSocketUpgradePath(req: IncomingMessage): boolean {
   try {
     const pathname = new URL(req.url || '/', 'http://rivet.local').pathname.replace(/\/+$/, '');
@@ -98,12 +115,19 @@ function isWebAppSocketUpgradePath(req: IncomingMessage): boolean {
   }
 }
 
+function acquirePublishedWebAppActionPermit() {
+  const result = getPublishedExecutionAdmission().acquire('web-app-action');
+  if (result.kind === 'accepted') return result.permit;
+  const error = toPublishedExecutionAdmissionError(result);
+  throw new RivetWebAppActionHttpError(error.message, error.status, error.code);
+}
+
 function rejectUpgrade(socket: import('node:stream').Duplex, statusCode: number, message: string): void {
   socket.write(
     `HTTP/1.1 ${statusCode} ${message}\r\n` +
-    'Connection: close\r\n' +
-    'Cache-Control: no-store\r\n' +
-    'Content-Length: 0\r\n\r\n',
+      'Connection: close\r\n' +
+      'Cache-Control: no-store\r\n' +
+      'Content-Length: 0\r\n\r\n',
   );
   socket.destroy();
 }
@@ -112,13 +136,48 @@ async function closeWebSocketServer(server: WebSocketServer): Promise<void> {
   await new Promise<void>((resolve) => server.close(() => resolve()));
 }
 
+function readOptionalPositiveIntegerEnvironment(name: string): number | undefined {
+  const raw = process.env[name]?.trim();
+  if (!raw) return undefined;
+  const value = Number(raw);
+  if (!Number.isSafeInteger(value) || value < 1) {
+    throw new Error(`${name} must be a positive integer.`);
+  }
+  return value;
+}
+
 export async function initializeWebAppActionWebSockets(server: Server): Promise<WebAppActionWebSocketRuntime> {
   if (activeRuntime) return activeRuntime;
 
   const configuredMaxMessageBytes = readRuntimeLimitSettingsSync().webAppActionRequestLimitBytes;
+  const browserStorageRpcOptions = {
+    browserStorageTransferTimeoutMs: readOptionalPositiveIntegerEnvironment(
+      'RIVET_WEB_APP_BROWSER_STORAGE_TRANSFER_TIMEOUT_MS',
+    ),
+    maxBrowserStorageActionBytes: readOptionalPositiveIntegerEnvironment(
+      'RIVET_WEB_APP_BROWSER_STORAGE_MAX_ACTION_BYTES',
+    ),
+    maxBrowserStorageActiveBytes: readOptionalPositiveIntegerEnvironment(
+      'RIVET_WEB_APP_BROWSER_STORAGE_MAX_ACTIVE_BYTES',
+    ),
+    maxBrowserStorageValueBytes: readOptionalPositiveIntegerEnvironment(
+      'RIVET_WEB_APP_BROWSER_STORAGE_MAX_VALUE_BYTES',
+    ),
+    onBrowserStorageRpcEvent(event: RivetWebAppBrowserStorageRpcEvent) {
+      recordStudioMetrics((metrics) => {
+        if (event.type === 'protocol-negotiated') metrics.recordBrowserStorageRpcProtocolNegotiation(event.version);
+        else metrics.recordBrowserStorageRpcTransfer(event);
+      });
+    },
+  };
   const webSocketServer = new WebSocketServer({
     noServer: true,
-    maxPayload: configuredMaxMessageBytes,
+    // The gateway applies configuredMaxMessageBytes to JSON control messages.
+    // Leave enough room here for one independently bounded binary storage chunk.
+    maxPayload: Math.max(
+      configuredMaxMessageBytes,
+      RIVET_WEB_APP_BROWSER_STORAGE_TRANSFER_CHUNK_BYTES + RIVET_WEB_APP_BROWSER_STORAGE_BINARY_FRAME_HEADER_BYTES,
+    ),
   });
   const recorders = new Map<string, RecorderEntry>();
   let pool: Pool | null = null;
@@ -129,6 +188,7 @@ export async function initializeWebAppActionWebSockets(server: Server): Promise<
   const gateway: RivetWebAppWebSocketGateway = (() => {
     if (!isManagedWorkflowStorageEnabled()) {
       return createRivetWebAppWebSocketGateway({
+        ...browserStorageRpcOptions,
         hostId: getHostId(),
         maxMessageBytes: configuredMaxMessageBytes,
         runCoordinator: createInMemoryRivetWebAppRunCoordinator(),
@@ -140,12 +200,11 @@ export async function initializeWebAppActionWebSockets(server: Server): Promise<
     const config = getManagedWorkflowStorageConfig();
     poolLease = acquireManagedPostgresPool(getManagedDbPoolConfig(config));
     pool = poolLease.pool;
-    coordinator = new PostgresRivetWebAppRunCoordinator(
-      pool,
-      getManagedDbConnectionConfig(config),
-      (error) => console.error('[web-app-actions] PostgreSQL coordinator error:', error),
+    coordinator = new PostgresRivetWebAppRunCoordinator(pool, getManagedDbConnectionConfig(config), (error) =>
+      console.error('[web-app-actions] PostgreSQL coordinator error:', error),
     );
     return createRivetWebAppWebSocketGateway({
+      ...browserStorageRpcOptions,
       hostId: getHostId(),
       maxMessageBytes: configuredMaxMessageBytes,
       runCoordinator: coordinator,
@@ -165,6 +224,14 @@ export async function initializeWebAppActionWebSockets(server: Server): Promise<
       }
       return;
     }
+    if (!isWebAppSocketRouteEnabled(route.routeKind)) {
+      rejectUpgrade(socket, 404, 'Not Found');
+      return;
+    }
+    if (!accepting) {
+      rejectUpgrade(socket, 503, 'Service Unavailable');
+      return;
+    }
 
     void (async () => {
       try {
@@ -176,19 +243,27 @@ export async function initializeWebAppActionWebSockets(server: Server): Promise<
 
         webSocketServer.handleUpgrade(req, socket, head, (webSocket) => {
           const endpointName = getWebAppBasePath(route.routeKind, route.slug);
+          // A socket can carry several concurrent actions. Keep an opaque key
+          // per action context rather than reusing the socket request ID.
+          const healthCorrelations = new WeakMap<object, string>();
           gateway.handleConnection(webSocket, {
             ownerScope: resolved.ownerScope,
+            ...(route.routeKind === 'published' ? { acquireRunPermit: acquirePublishedWebAppActionPermit } : {}),
             project: resolved.executionProject.project,
             uiGraph: resolved.uiGraph,
             revisionKey: resolved.executionProject.revisionKey,
             request: createWebAppSocketFetchRequest(req),
-            createProcessorOptions: async () => createWebAppProcessorOptions(
-              resolved.executionProject,
-              req,
-              null,
-              { enableRemoteDebugger: route.routeKind === 'latest' },
-            ),
+            createProcessorOptions: async (actionContext) => {
+              const correlationId = createRivetCorrelationId();
+              healthCorrelations.set(actionContext, correlationId);
+              return await createWebAppProcessorOptions(resolved.executionProject, req, null, {
+                enableRemoteDebugger: route.routeKind === 'latest',
+                llmProfileHealthExecutionCorrelationId: correlationId,
+              });
+            },
             onProcessorPrepared({ actionContext, processor, runId }) {
+              const correlationId = healthCorrelations.get(actionContext) ?? createRivetCorrelationId();
+              healthCorrelations.delete(actionContext);
               const recorder = isWorkflowRecordingEnabled()
                 ? new ExecutionRecorder(getWorkflowExecutionRecorderOptions())
                 : null;
@@ -201,6 +276,7 @@ export async function initializeWebAppActionWebSockets(server: Server): Promise<
                   actionContext.uiGraph,
                   actionContext.component,
                   route.slug,
+                  correlationId,
                 ),
               });
             },
@@ -225,11 +301,12 @@ export async function initializeWebAppActionWebSockets(server: Server): Promise<
               const entry = recorders.get(runId);
               recorders.delete(runId);
               if (!entry) return;
-              const fallbackMessage = outcome === 'cancelled'
-                ? 'Web app action was cancelled.'
-                : outcome === 'interrupted'
-                  ? 'Web app action was interrupted.'
-                  : 'Web app action failed.';
+              const fallbackMessage =
+                outcome === 'cancelled'
+                  ? 'Web app action was cancelled.'
+                  : outcome === 'interrupted'
+                    ? 'Web app action was interrupted.'
+                    : 'Web app action failed.';
               enqueueWebAppActionRecording(
                 resolved.executionProject,
                 entry.recorder,
@@ -262,7 +339,10 @@ export async function initializeWebAppActionWebSockets(server: Server): Promise<
     },
     drain() {
       accepting = false;
-      gateway.drain();
+      // Upgraded sockets otherwise keep node:http's close callback pending for
+      // the full shutdown grace period. The graph owner remains active and a
+      // reconnecting client can resume through the durable action ledger.
+      gateway.drain({ closeConnections: true });
     },
     async dispose(options = {}) {
       accepting = false;

@@ -5,7 +5,13 @@ import type { Pool, PoolClient, QueryResultRow } from 'pg';
 import { MANAGED_WORKFLOW_SCHEMA_SQL } from './schema.js';
 
 export const MANAGED_WORKFLOW_SCHEMA_MIGRATIONS_TABLE = 'managed_workflow_schema_migrations';
-export const CURRENT_MANAGED_WORKFLOW_SCHEMA_VERSION = 2;
+export const CURRENT_MANAGED_WORKFLOW_SCHEMA_VERSION = 10;
+// A serving release may verify an additive schema created by its immediate
+// successor only when the chart deliberately supplies that compatibility
+// window. Keep this constant explicit: raising it is the release-engineering
+// declaration that the current build can safely be used as a rollback target
+// for a newer schema.
+export const MINIMUM_ROLLBACK_COMPATIBLE_MANAGED_WORKFLOW_SCHEMA_VERSION = 2;
 
 const MANAGED_WORKFLOW_SCHEMA_LOCK = {
   classId: 8_071,
@@ -27,12 +33,179 @@ CREATE TABLE IF NOT EXISTS app_settings (
 `;
 
 const MIGRATION_LOCK_TIMEOUT = '30s';
+
+const MANAGED_MAINTENANCE_SCHEMA_SQL = `
+CREATE TABLE IF NOT EXISTS managed_maintenance_leases (
+  lease_name TEXT PRIMARY KEY CHECK (char_length(lease_name) > 0),
+  holder_id TEXT NOT NULL CHECK (char_length(holder_id) > 0),
+  fencing_token BIGINT NOT NULL CHECK (fencing_token > 0),
+  expires_at TIMESTAMPTZ NOT NULL,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS managed_object_deletion_outbox (
+  object_key TEXT PRIMARY KEY CHECK (char_length(object_key) > 0),
+  domain TEXT NOT NULL CHECK (char_length(domain) > 0),
+  status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'completed', 'blocked')),
+  enqueued_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  next_attempt_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  attempt_count INTEGER NOT NULL DEFAULT 0 CHECK (attempt_count >= 0),
+  claim_holder_id TEXT NULL,
+  claim_fencing_token BIGINT NULL,
+  claim_expires_at TIMESTAMPTZ NULL,
+  last_error TEXT NULL,
+  completed_at TIMESTAMPTZ NULL,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS managed_object_deletion_outbox_pending_idx
+  ON managed_object_deletion_outbox(status, next_attempt_at, enqueued_at, object_key);
+`;
+
+const MANAGED_RECONCILIATION_SCHEMA_SQL = `
+CREATE TABLE IF NOT EXISTS managed_reconciliation_state (
+  domain TEXT PRIMARY KEY CHECK (domain IN ('evaluations', 'runtime_libraries', 'workflows')),
+  phase TEXT NOT NULL DEFAULT 'metadata' CHECK (phase IN ('metadata', 'objects')),
+  cursor TEXT NULL,
+  active_generation BIGINT NOT NULL DEFAULT 1 CHECK (active_generation > 0),
+  completed_generation BIGINT NOT NULL DEFAULT 0 CHECK (completed_generation >= 0),
+  scan_started_at TIMESTAMPTZ NULL,
+  last_completed_at TIMESTAMPTZ NULL,
+  last_error_at TIMESTAMPTZ NULL,
+  last_error_code TEXT NULL,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS managed_reconciliation_findings (
+  domain TEXT NOT NULL CHECK (domain IN ('evaluations', 'runtime_libraries', 'workflows')),
+  kind TEXT NOT NULL CHECK (char_length(kind) > 0),
+  subject_key TEXT NOT NULL CHECK (char_length(subject_key) > 0),
+  first_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  last_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  last_observed_generation BIGINT NOT NULL CHECK (last_observed_generation > 0),
+  last_completed_observed_generation BIGINT NULL CHECK (last_completed_observed_generation > 0),
+  consecutive_complete_scans INTEGER NOT NULL DEFAULT 0 CHECK (consecutive_complete_scans >= 0),
+  resolved_at TIMESTAMPTZ NULL,
+  PRIMARY KEY (domain, kind, subject_key)
+);
+
+CREATE INDEX IF NOT EXISTS managed_reconciliation_findings_open_idx
+  ON managed_reconciliation_findings(domain, resolved_at, kind, first_seen_at);
+`;
+const MANAGED_HOSTED_EVALUATIONS_SCHEMA_SQL = `
+-- Hosted Evaluation scheduling is separate from the durable user-facing run
+-- projection. The snapshot is immutable; jobs are claimed with fencing tokens
+-- so an accepted graph execution is never silently replayed after worker loss.
+CREATE TABLE IF NOT EXISTS evaluation_hosted_runs (
+  project_id TEXT NOT NULL,
+  run_id TEXT NOT NULL,
+  status TEXT NOT NULL CHECK (status IN ('queued', 'running', 'completed', 'canceled', 'interrupted')),
+  snapshot_json JSONB NOT NULL,
+  cancel_requested_at TIMESTAMPTZ NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (project_id, run_id),
+  FOREIGN KEY (project_id, run_id) REFERENCES evaluation_runs(project_id, run_id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS evaluation_hosted_runs_active_idx
+  ON evaluation_hosted_runs(status, created_at, project_id, run_id)
+  WHERE status IN ('queued', 'running');
+
+CREATE TABLE IF NOT EXISTS evaluation_hosted_trial_jobs (
+  project_id TEXT NOT NULL,
+  run_id TEXT NOT NULL,
+  job_id TEXT NOT NULL,
+  case_id TEXT NOT NULL,
+  case_name TEXT NOT NULL,
+  case_index INTEGER NOT NULL CHECK (case_index >= 0),
+  trial_index INTEGER NOT NULL CHECK (trial_index >= 0),
+  status TEXT NOT NULL CHECK (status IN ('queued', 'claimed', 'accepted', 'settled', 'interrupted', 'canceled')),
+  attempt INTEGER NOT NULL DEFAULT 0 CHECK (attempt >= 0),
+  fencing_token BIGINT NOT NULL DEFAULT 0 CHECK (fencing_token >= 0),
+  worker_id TEXT NULL,
+  lease_expires_at TIMESTAMPTZ NULL,
+  accepted_at TIMESTAMPTZ NULL,
+  settled_at TIMESTAMPTZ NULL,
+  trial_json JSONB NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (project_id, run_id, job_id),
+  FOREIGN KEY (project_id, run_id) REFERENCES evaluation_hosted_runs(project_id, run_id) ON DELETE CASCADE,
+  UNIQUE (project_id, run_id, case_id, trial_index)
+);
+
+CREATE INDEX IF NOT EXISTS evaluation_hosted_trial_jobs_claim_idx
+  ON evaluation_hosted_trial_jobs(status, case_index, trial_index, project_id, run_id)
+  WHERE status = 'queued';
+CREATE INDEX IF NOT EXISTS evaluation_hosted_trial_jobs_lease_idx
+  ON evaluation_hosted_trial_jobs(status, lease_expires_at, project_id, run_id)
+  WHERE status IN ('claimed', 'accepted');
+
+CREATE TABLE IF NOT EXISTS evaluation_hosted_trial_attempts (
+  project_id TEXT NOT NULL,
+  run_id TEXT NOT NULL,
+  job_id TEXT NOT NULL,
+  attempt INTEGER NOT NULL CHECK (attempt >= 0),
+  fencing_token BIGINT NOT NULL CHECK (fencing_token >= 0),
+  worker_id TEXT NULL,
+  event TEXT NOT NULL CHECK (event IN ('claimed', 'accepted', 'settled', 'interrupted', 'canceled', 'requeued')),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (project_id, run_id, job_id, attempt, event),
+  FOREIGN KEY (project_id, run_id, job_id)
+    REFERENCES evaluation_hosted_trial_jobs(project_id, run_id, job_id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS evaluation_hosted_trial_attempts_run_idx
+  ON evaluation_hosted_trial_attempts(project_id, run_id, created_at, job_id);
+`;
+
+const MANAGED_HOSTED_EVALUATION_OUTSTANDING_INDEX_SQL = `
+-- Keep the installation-wide submission quota check bounded by outstanding
+-- work rather than by the complete historical Evaluation job ledger.
+CREATE INDEX IF NOT EXISTS evaluation_hosted_trial_jobs_outstanding_idx
+  ON evaluation_hosted_trial_jobs(status)
+  WHERE status IN ('queued', 'claimed', 'accepted');
+`;
+const MANAGED_EVALUATION_RETENTION_INDEX_SQL = `
+-- Bounded global retention scans must not compete with growing permanent
+-- Evaluation history. Replay payloads remain PostgreSQL-owned metadata.
+CREATE INDEX IF NOT EXISTS evaluation_recordings_temporary_created_idx
+  ON evaluation_recordings(created_at, project_id, run_id, recording_id)
+  WHERE artifact_json->'reference'->>'retention' = 'temporary';
+
+CREATE INDEX IF NOT EXISTS evaluation_dataset_snapshots_created_idx
+  ON evaluation_dataset_snapshots(created_at, project_id, dataset_fingerprint);
+`;
+const MANAGED_RECONCILIATION_SCAN_ACCOUNTING_SQL = `
+-- A completed reconciliation generation needs a durable aggregate for the
+-- object metadata it enumerated. This is deliberately inventory size, not
+-- downloaded payload bytes or provider-billing usage.
+ALTER TABLE managed_reconciliation_state
+  ADD COLUMN IF NOT EXISTS active_object_bytes BIGINT NOT NULL DEFAULT 0
+    CHECK (active_object_bytes >= 0),
+  ADD COLUMN IF NOT EXISTS last_completed_object_bytes BIGINT NOT NULL DEFAULT 0
+    CHECK (last_completed_object_bytes >= 0);
+`;
+const MANAGED_WEB_APP_ACTION_RETENTION_INDEX_SQL = `
+-- Web-app transport records are short-lived terminal reconnect state. The
+-- control-plane maintenance owner uses this partial index for bounded, fenced
+-- audit or deletion passes without scanning active actions.
+CREATE INDEX IF NOT EXISTS web_app_action_runs_terminal_retention_idx
+  ON web_app_action_runs(updated_at, run_id)
+  WHERE status <> 'running';
+`;
 const MIGRATION_STATEMENT_TIMEOUT = '5min';
 const VERIFY_STATEMENT_TIMEOUT = '30s';
 const TRANSIENT_SCHEMA_ERROR_CODES = new Set(['40001', '40P01', '55P03']);
 const TRANSIENT_SCHEMA_RETRY_ATTEMPTS = 3;
 
 export type ManagedWorkflowSchemaMode = 'migrate' | 'verify';
+
+export type ManagedWorkflowSchemaCompatibilityWindow = {
+  minimumVersion: number;
+  maximumVersion: number;
+};
 
 type ManagedWorkflowSchemaMigration = {
   version: number;
@@ -115,6 +288,13 @@ function checksumSql(sql: string): string {
   return createHash('sha256').update(sql).digest('hex');
 }
 
+const MANAGED_WORKFLOW_RECORDING_CORRELATION_SQL = [
+  '',
+  'ALTER TABLE workflow_recordings',
+  '  ADD COLUMN IF NOT EXISTS correlation_id TEXT NULL',
+  '  CHECK (correlation_id IS NULL OR char_length(correlation_id) BETWEEN 16 AND 96);',
+  '',
+].join('\n');
 export const MANAGED_WORKFLOW_SCHEMA_MIGRATIONS: readonly ManagedWorkflowSchemaMigration[] = [
   {
     version: 1,
@@ -127,6 +307,54 @@ export const MANAGED_WORKFLOW_SCHEMA_MIGRATIONS: readonly ManagedWorkflowSchemaM
     name: 'encrypted-app-settings',
     sql: MANAGED_APP_SETTINGS_SCHEMA_SQL,
     checksum: '4b531b5c4404eef0ddef0b08ed3a85f31f88a203151a5452986565536a04fe80',
+  },
+  {
+    version: 3,
+    name: 'managed-maintenance-outbox',
+    sql: MANAGED_MAINTENANCE_SCHEMA_SQL,
+    checksum: 'bd4cc69a896623c0e6fb56ab47ea087d1791137348afaabc3c31399ccf56bd3e',
+  },
+  {
+    version: 4,
+    name: 'managed-reconciliation-audit',
+    sql: MANAGED_RECONCILIATION_SCHEMA_SQL,
+    checksum: '6c6965c2d883e38d452345ab7730cb5704bc773275db41d9e7f3de00622cd330',
+  },
+  {
+    version: 5,
+    name: 'hosted-evaluation-coordinator',
+    sql: MANAGED_HOSTED_EVALUATIONS_SCHEMA_SQL,
+    checksum: '77cc68364a05ba7afadaa0634ea1945353d120dd3d338cd5c9ef09111f756bbf',
+  },
+  {
+    version: 6,
+    name: 'hosted-evaluation-outstanding-index',
+    sql: MANAGED_HOSTED_EVALUATION_OUTSTANDING_INDEX_SQL,
+    checksum: '29e225e645272fced8e1c8e8be268a8667a7f069bb3fba3ee1213759815d1e05',
+  },
+  {
+    version: 7,
+    name: 'managed-evaluation-retention-indexes',
+    sql: MANAGED_EVALUATION_RETENTION_INDEX_SQL,
+    checksum: 'f59063f1e999390b488d409eebe3c8c36880943b2848e655fb81b39fb027b4a9',
+  },
+  {
+    version: 8,
+    name: 'workflow-recording-correlation',
+    sql: MANAGED_WORKFLOW_RECORDING_CORRELATION_SQL,
+    checksum: '5e58ca90c2f9f0233e5933ea7055614b61ce804cb67f8c1729fbe7d18084e207',
+  },
+  {
+    version: 9,
+    name: 'managed-reconciliation-scan-accounting',
+    sql: MANAGED_RECONCILIATION_SCAN_ACCOUNTING_SQL,
+    checksum: '23643af7d68c3dfa75d061c2b0348b97ec06ebcbc3d7032afecf81cf10cf364f',
+  },
+  {
+    version: 10,
+    name: 'managed-web-app-action-retention-index',
+    sql: MANAGED_WEB_APP_ACTION_RETENTION_INDEX_SQL,
+    checksum: 'bf0c0eadd2b170a6c8796ca28dfcc4afa7034b54a22198ef25a9e086884288ce',
   },
 ];
 
@@ -158,6 +386,10 @@ assertMigrationDefinitions();
 
 export const MANAGED_WORKFLOW_SCHEMA_REQUIRED_TABLES = [
   'app_settings',
+  'managed_maintenance_leases',
+  'managed_object_deletion_outbox',
+  'managed_reconciliation_state',
+  'managed_reconciliation_findings',
   'workflow_folders',
   'workflows',
   'workflow_revisions',
@@ -174,9 +406,50 @@ export const MANAGED_WORKFLOW_SCHEMA_REQUIRED_TABLES = [
   'evaluation_runs',
   'evaluation_recordings',
   'evaluation_dataset_snapshots',
+  'evaluation_hosted_runs',
+  'evaluation_hosted_trial_jobs',
+  'evaluation_hosted_trial_attempts',
 ] as const;
 
 export const MANAGED_WORKFLOW_SCHEMA_REQUIRED_COLUMNS = [
+  ['managed_maintenance_leases', 'lease_name', 'text', 'NO'],
+  ['managed_maintenance_leases', 'holder_id', 'text', 'NO'],
+  ['managed_maintenance_leases', 'fencing_token', 'int8', 'NO'],
+  ['managed_maintenance_leases', 'expires_at', 'timestamptz', 'NO'],
+  ['managed_maintenance_leases', 'updated_at', 'timestamptz', 'NO'],
+  ['managed_object_deletion_outbox', 'object_key', 'text', 'NO'],
+  ['managed_object_deletion_outbox', 'domain', 'text', 'NO'],
+  ['managed_object_deletion_outbox', 'status', 'text', 'NO'],
+  ['managed_object_deletion_outbox', 'enqueued_at', 'timestamptz', 'NO'],
+  ['managed_object_deletion_outbox', 'next_attempt_at', 'timestamptz', 'NO'],
+  ['managed_object_deletion_outbox', 'attempt_count', 'int4', 'NO'],
+  ['managed_object_deletion_outbox', 'claim_holder_id', 'text', 'YES'],
+  ['managed_object_deletion_outbox', 'claim_fencing_token', 'int8', 'YES'],
+  ['managed_object_deletion_outbox', 'claim_expires_at', 'timestamptz', 'YES'],
+  ['managed_object_deletion_outbox', 'last_error', 'text', 'YES'],
+  ['managed_object_deletion_outbox', 'completed_at', 'timestamptz', 'YES'],
+  ['managed_object_deletion_outbox', 'updated_at', 'timestamptz', 'NO'],
+  ['managed_reconciliation_state', 'domain', 'text', 'NO'],
+  ['managed_reconciliation_state', 'phase', 'text', 'NO'],
+  ['managed_reconciliation_state', 'cursor', 'text', 'YES'],
+  ['managed_reconciliation_state', 'active_generation', 'int8', 'NO'],
+  ['managed_reconciliation_state', 'completed_generation', 'int8', 'NO'],
+  ['managed_reconciliation_state', 'active_object_bytes', 'int8', 'NO'],
+  ['managed_reconciliation_state', 'last_completed_object_bytes', 'int8', 'NO'],
+  ['managed_reconciliation_state', 'scan_started_at', 'timestamptz', 'YES'],
+  ['managed_reconciliation_state', 'last_completed_at', 'timestamptz', 'YES'],
+  ['managed_reconciliation_state', 'last_error_at', 'timestamptz', 'YES'],
+  ['managed_reconciliation_state', 'last_error_code', 'text', 'YES'],
+  ['managed_reconciliation_state', 'updated_at', 'timestamptz', 'NO'],
+  ['managed_reconciliation_findings', 'domain', 'text', 'NO'],
+  ['managed_reconciliation_findings', 'kind', 'text', 'NO'],
+  ['managed_reconciliation_findings', 'subject_key', 'text', 'NO'],
+  ['managed_reconciliation_findings', 'first_seen_at', 'timestamptz', 'NO'],
+  ['managed_reconciliation_findings', 'last_seen_at', 'timestamptz', 'NO'],
+  ['managed_reconciliation_findings', 'last_observed_generation', 'int8', 'NO'],
+  ['managed_reconciliation_findings', 'last_completed_observed_generation', 'int8', 'YES'],
+  ['managed_reconciliation_findings', 'consecutive_complete_scans', 'int4', 'NO'],
+  ['managed_reconciliation_findings', 'resolved_at', 'timestamptz', 'YES'],
   ['app_settings', 'setting_key', 'text', 'NO'],
   ['app_settings', 'revision', 'int8', 'NO'],
   ['app_settings', 'schema_version', 'int4', 'NO'],
@@ -189,6 +462,38 @@ export const MANAGED_WORKFLOW_SCHEMA_REQUIRED_COLUMNS = [
   ['evaluation_dataset_snapshots', 'project_id', 'text', 'NO'],
   ['evaluation_dataset_snapshots', 'dataset_fingerprint', 'text', 'NO'],
   ['evaluation_dataset_snapshots', 'snapshot_json', 'jsonb', 'NO'],
+  ['evaluation_hosted_runs', 'project_id', 'text', 'NO'],
+  ['evaluation_hosted_runs', 'run_id', 'text', 'NO'],
+  ['evaluation_hosted_runs', 'status', 'text', 'NO'],
+  ['evaluation_hosted_runs', 'snapshot_json', 'jsonb', 'NO'],
+  ['evaluation_hosted_runs', 'cancel_requested_at', 'timestamptz', 'YES'],
+  ['evaluation_hosted_runs', 'created_at', 'timestamptz', 'NO'],
+  ['evaluation_hosted_runs', 'updated_at', 'timestamptz', 'NO'],
+  ['evaluation_hosted_trial_jobs', 'project_id', 'text', 'NO'],
+  ['evaluation_hosted_trial_jobs', 'run_id', 'text', 'NO'],
+  ['evaluation_hosted_trial_jobs', 'job_id', 'text', 'NO'],
+  ['evaluation_hosted_trial_jobs', 'case_id', 'text', 'NO'],
+  ['evaluation_hosted_trial_jobs', 'case_name', 'text', 'NO'],
+  ['evaluation_hosted_trial_jobs', 'case_index', 'int4', 'NO'],
+  ['evaluation_hosted_trial_jobs', 'trial_index', 'int4', 'NO'],
+  ['evaluation_hosted_trial_jobs', 'status', 'text', 'NO'],
+  ['evaluation_hosted_trial_jobs', 'attempt', 'int4', 'NO'],
+  ['evaluation_hosted_trial_jobs', 'fencing_token', 'int8', 'NO'],
+  ['evaluation_hosted_trial_jobs', 'worker_id', 'text', 'YES'],
+  ['evaluation_hosted_trial_jobs', 'lease_expires_at', 'timestamptz', 'YES'],
+  ['evaluation_hosted_trial_jobs', 'accepted_at', 'timestamptz', 'YES'],
+  ['evaluation_hosted_trial_jobs', 'settled_at', 'timestamptz', 'YES'],
+  ['evaluation_hosted_trial_jobs', 'trial_json', 'jsonb', 'YES'],
+  ['evaluation_hosted_trial_jobs', 'created_at', 'timestamptz', 'NO'],
+  ['evaluation_hosted_trial_jobs', 'updated_at', 'timestamptz', 'NO'],
+  ['evaluation_hosted_trial_attempts', 'project_id', 'text', 'NO'],
+  ['evaluation_hosted_trial_attempts', 'run_id', 'text', 'NO'],
+  ['evaluation_hosted_trial_attempts', 'job_id', 'text', 'NO'],
+  ['evaluation_hosted_trial_attempts', 'attempt', 'int4', 'NO'],
+  ['evaluation_hosted_trial_attempts', 'fencing_token', 'int8', 'NO'],
+  ['evaluation_hosted_trial_attempts', 'worker_id', 'text', 'YES'],
+  ['evaluation_hosted_trial_attempts', 'event', 'text', 'NO'],
+  ['evaluation_hosted_trial_attempts', 'created_at', 'timestamptz', 'NO'],
   ['evaluation_dataset_snapshots', 'created_at', 'timestamptz', 'NO'],
   ['evaluation_library', 'singleton_key', 'bool', 'NO'],
   ['evaluation_library', 'revision', 'int8', 'NO'],
@@ -266,6 +571,7 @@ export const MANAGED_WORKFLOW_SCHEMA_REQUIRED_COLUMNS = [
   ['workflow_recordings', 'graph_id_at_execution', 'text', 'YES'],
   ['workflow_recordings', 'graph_name_at_execution', 'text', 'YES'],
   ['workflow_recordings', 'revision_key_at_execution', 'text', 'YES'],
+  ['workflow_recordings', 'correlation_id', 'text', 'YES'],
   ['workflow_recordings', 'ui_graph_id_at_execution', 'text', 'YES'],
   ['workflow_recordings', 'ui_graph_name_at_execution', 'text', 'YES'],
   ['workflow_recordings', 'web_app_slug_at_execution', 'text', 'YES'],
@@ -314,7 +620,29 @@ export const MANAGED_WORKFLOW_SCHEMA_REQUIRED_COLUMNS = [
 ] as const;
 
 export const MANAGED_WORKFLOW_SCHEMA_REQUIRED_COLUMN_DEFAULTS = [
+  ['managed_maintenance_leases', 'updated_at', 'now()'],
+  ['managed_object_deletion_outbox', 'status', "'pending'::text"],
+  ['managed_object_deletion_outbox', 'enqueued_at', 'now()'],
+  ['managed_object_deletion_outbox', 'next_attempt_at', 'now()'],
+  ['managed_object_deletion_outbox', 'attempt_count', '0'],
+  ['managed_object_deletion_outbox', 'updated_at', 'now()'],
+  ['managed_reconciliation_state', 'phase', "'metadata'::text"],
+  ['managed_reconciliation_state', 'active_generation', '1'],
+  ['managed_reconciliation_state', 'completed_generation', '0'],
+  ['managed_reconciliation_state', 'active_object_bytes', '0'],
+  ['managed_reconciliation_state', 'last_completed_object_bytes', '0'],
+  ['managed_reconciliation_state', 'updated_at', 'now()'],
+  ['managed_reconciliation_findings', 'first_seen_at', 'now()'],
+  ['managed_reconciliation_findings', 'last_seen_at', 'now()'],
+  ['managed_reconciliation_findings', 'consecutive_complete_scans', '0'],
   ['app_settings', 'updated_at', 'now()'],
+  ['evaluation_hosted_runs', 'created_at', 'now()'],
+  ['evaluation_hosted_runs', 'updated_at', 'now()'],
+  ['evaluation_hosted_trial_jobs', 'attempt', '0'],
+  ['evaluation_hosted_trial_jobs', 'fencing_token', '0'],
+  ['evaluation_hosted_trial_jobs', 'created_at', 'now()'],
+  ['evaluation_hosted_trial_jobs', 'updated_at', 'now()'],
+  ['evaluation_hosted_trial_attempts', 'created_at', 'now()'],
   ['evaluation_dataset_snapshots', 'created_at', 'now()'],
   ['evaluation_library', 'singleton_key', 'true'],
   ['evaluation_library', 'updated_at', 'now()'],
@@ -352,6 +680,20 @@ export const MANAGED_WORKFLOW_SCHEMA_REQUIRED_COLUMN_DEFAULTS = [
 ] as const;
 
 export const MANAGED_WORKFLOW_SCHEMA_REQUIRED_INDEXES = [
+  [
+    'managed_object_deletion_outbox',
+    'managed_object_deletion_outbox_pending_idx',
+    ['status', 'next_attempt_at', 'enqueued_at', 'object_key'],
+    null,
+    [0, 0, 0, 0],
+  ],
+  [
+    'managed_reconciliation_findings',
+    'managed_reconciliation_findings_open_idx',
+    ['domain', 'resolved_at', 'kind', 'first_seen_at'],
+    null,
+    [0, 0, 0, 0],
+  ],
   ['workflows', 'workflows_folder_relative_path_idx', ['folder_relative_path'], null, [0]],
   ['workflows', 'workflows_published_endpoint_name_idx', ['published_endpoint_name'], null, [0]],
   ['workflow_revisions', 'workflow_revisions_workflow_id_idx', ['workflow_id'], null, [0]],
@@ -371,12 +713,7 @@ export const MANAGED_WORKFLOW_SCHEMA_REQUIRED_INDEXES = [
   [
     'workflow_recordings',
     'workflow_recordings_endpoint_created_at_idx',
-    [
-      'workflow_id',
-      'lower(btrim(endpoint_name_at_execution))',
-      'created_at',
-      'recording_id',
-    ],
+    ['workflow_id', 'lower(btrim(endpoint_name_at_execution))', 'created_at', 'recording_id'],
     null,
     [0, 0, 3, 3],
   ],
@@ -394,14 +731,15 @@ export const MANAGED_WORKFLOW_SCHEMA_REQUIRED_INDEXES = [
     null,
     [0, 0, 0, 0, 0, 3],
   ],
+  ['web_app_action_runs', 'web_app_action_runs_lease_idx', ['status', 'lease_expires_at'], null, [0, 0]],
+  ['web_app_action_runs', 'web_app_action_runs_host_idx', ['host_id', 'status'], null, [0, 0]],
   [
     'web_app_action_runs',
-    'web_app_action_runs_lease_idx',
-    ['status', 'lease_expires_at'],
-    null,
+    'web_app_action_runs_terminal_retention_idx',
+    ['updated_at', 'run_id'],
+    "(status <> 'running'::text)",
     [0, 0],
   ],
-  ['web_app_action_runs', 'web_app_action_runs_host_idx', ['host_id', 'status'], null, [0, 0]],
   [
     'web_app_action_cancel_commands',
     'web_app_action_cancel_commands_pending_idx',
@@ -411,30 +749,96 @@ export const MANAGED_WORKFLOW_SCHEMA_REQUIRED_INDEXES = [
   ],
   ['llm_profile_health', 'llm_profile_health_project_id_idx', ['project_id'], null, [0]],
   ['llm_profile_health', 'llm_profile_health_updated_at_idx', ['updated_at'], null, [3]],
+  ['evaluation_runs', 'evaluation_runs_project_started_idx', ['project_id', 'started_at'], null, [0, 3]],
+  ['evaluation_runs', 'evaluation_runs_project_suite_idx', ['project_id', 'suite_id'], null, [0, 0]],
   [
-    'evaluation_runs',
-    'evaluation_runs_project_started_idx',
-    ['project_id', 'started_at'],
-    null,
-    [0, 3],
+    'evaluation_hosted_runs',
+    'evaluation_hosted_runs_active_idx',
+    ['status', 'created_at', 'project_id', 'run_id'],
+    "(status = ANY (ARRAY['queued'::text, 'running'::text]))",
+    [0, 0, 0, 0],
   ],
   [
-    'evaluation_runs',
-    'evaluation_runs_project_suite_idx',
-    ['project_id', 'suite_id'],
-    null,
-    [0, 0],
+    'evaluation_hosted_trial_jobs',
+    'evaluation_hosted_trial_jobs_claim_idx',
+    ['status', 'case_index', 'trial_index', 'project_id', 'run_id'],
+    "(status = 'queued'::text)",
+    [0, 0, 0, 0, 0],
   ],
+  [
+    'evaluation_hosted_trial_jobs',
+    'evaluation_hosted_trial_jobs_lease_idx',
+    ['status', 'lease_expires_at', 'project_id', 'run_id'],
+    "(status = ANY (ARRAY['claimed'::text, 'accepted'::text]))",
+    [0, 0, 0, 0],
+  ],
+  [
+    'evaluation_hosted_trial_jobs',
+    'evaluation_hosted_trial_jobs_outstanding_idx',
+    ['status'],
+    "(status = ANY (ARRAY['queued'::text, 'claimed'::text, 'accepted'::text]))",
+    [0],
+  ],
+  [
+    'evaluation_hosted_trial_attempts',
+    'evaluation_hosted_trial_attempts_run_idx',
+    ['project_id', 'run_id', 'created_at', 'job_id'],
+    null,
+    [0, 0, 0, 0],
+  ],
+  ['evaluation_recordings', 'evaluation_recordings_project_run_idx', ['project_id', 'run_id'], null, [0, 0]],
   [
     'evaluation_recordings',
-    'evaluation_recordings_project_run_idx',
-    ['project_id', 'run_id'],
+    'evaluation_recordings_temporary_created_idx',
+    ['created_at', 'project_id', 'run_id', 'recording_id'],
+    "((artifact_json -> 'reference'::text) ->> 'retention'::text) = 'temporary'::text",
+    [0, 0, 0, 0],
+  ],
+  [
+    'evaluation_dataset_snapshots',
+    'evaluation_dataset_snapshots_created_idx',
+    ['created_at', 'project_id', 'dataset_fingerprint'],
     null,
-    [0, 0],
+    [0, 0, 0],
   ],
 ] as const;
 
 export const MANAGED_WORKFLOW_SCHEMA_REQUIRED_CONSTRAINTS = [
+  ['managed_maintenance_leases', 'p', 'PRIMARY KEY (lease_name)'],
+  ['managed_maintenance_leases', 'c', 'CHECK ((char_length(lease_name) > 0))'],
+  ['managed_maintenance_leases', 'c', 'CHECK ((char_length(holder_id) > 0))'],
+  ['managed_maintenance_leases', 'c', 'CHECK ((fencing_token > 0))'],
+  ['managed_object_deletion_outbox', 'p', 'PRIMARY KEY (object_key)'],
+  ['managed_object_deletion_outbox', 'c', 'CHECK ((char_length(object_key) > 0))'],
+  ['managed_object_deletion_outbox', 'c', 'CHECK ((char_length(domain) > 0))'],
+  ['managed_object_deletion_outbox', 'c', 'CHECK ((attempt_count >= 0))'],
+  ['managed_reconciliation_state', 'p', 'PRIMARY KEY (domain)'],
+  [
+    'managed_reconciliation_state',
+    'c',
+    "CHECK ((domain = ANY (ARRAY['evaluations'::text, 'runtime_libraries'::text, 'workflows'::text])))",
+  ],
+  ['managed_reconciliation_state', 'c', "CHECK ((phase = ANY (ARRAY['metadata'::text, 'objects'::text])))"],
+  ['managed_reconciliation_state', 'c', 'CHECK ((active_generation > 0))'],
+  ['managed_reconciliation_state', 'c', 'CHECK ((completed_generation >= 0))'],
+  ['managed_reconciliation_state', 'c', 'CHECK ((active_object_bytes >= 0))'],
+  ['managed_reconciliation_state', 'c', 'CHECK ((last_completed_object_bytes >= 0))'],
+  ['managed_reconciliation_findings', 'p', 'PRIMARY KEY (domain, kind, subject_key)'],
+  [
+    'managed_reconciliation_findings',
+    'c',
+    "CHECK ((domain = ANY (ARRAY['evaluations'::text, 'runtime_libraries'::text, 'workflows'::text])))",
+  ],
+  ['managed_reconciliation_findings', 'c', 'CHECK ((char_length(kind) > 0))'],
+  ['managed_reconciliation_findings', 'c', 'CHECK ((char_length(subject_key) > 0))'],
+  ['managed_reconciliation_findings', 'c', 'CHECK ((last_observed_generation > 0))'],
+  ['managed_reconciliation_findings', 'c', 'CHECK ((last_completed_observed_generation > 0))'],
+  ['managed_reconciliation_findings', 'c', 'CHECK ((consecutive_complete_scans >= 0))'],
+  [
+    'managed_object_deletion_outbox',
+    'c',
+    "CHECK ((status = ANY (ARRAY['pending'::text, 'completed'::text, 'blocked'::text])))",
+  ],
   ['app_settings', 'p', 'PRIMARY KEY (setting_key)'],
   ['app_settings', 'c', 'CHECK ((char_length(setting_key) > 0))'],
   ['app_settings', 'c', 'CHECK ((revision > 0))'],
@@ -445,32 +849,35 @@ export const MANAGED_WORKFLOW_SCHEMA_REQUIRED_CONSTRAINTS = [
   ['app_settings', 'c', 'CHECK ((char_length(key_id) = 16))'],
   ['app_settings', 'c', 'CHECK (((source_hash IS NULL) OR (char_length(source_hash) = 64)))'],
   ['evaluation_dataset_snapshots', 'p', 'PRIMARY KEY (project_id, dataset_fingerprint)'],
+  ['evaluation_hosted_runs', 'p', 'PRIMARY KEY (project_id, run_id)'],
   [
-    'evaluation_dataset_snapshots',
+    'evaluation_hosted_runs',
     'f',
-    'FOREIGN KEY (project_id) REFERENCES workflows(workflow_id) ON DELETE CASCADE',
+    'FOREIGN KEY (project_id, run_id) REFERENCES evaluation_runs(project_id, run_id) ON DELETE CASCADE',
   ],
+  ['evaluation_hosted_trial_jobs', 'p', 'PRIMARY KEY (project_id, run_id, job_id)'],
+  ['evaluation_hosted_trial_jobs', 'u', 'UNIQUE (project_id, run_id, case_id, trial_index)'],
+  [
+    'evaluation_hosted_trial_jobs',
+    'f',
+    'FOREIGN KEY (project_id, run_id) REFERENCES evaluation_hosted_runs(project_id, run_id) ON DELETE CASCADE',
+  ],
+  ['evaluation_hosted_trial_attempts', 'p', 'PRIMARY KEY (project_id, run_id, job_id, attempt, event)'],
+  [
+    'evaluation_hosted_trial_attempts',
+    'f',
+    'FOREIGN KEY (project_id, run_id, job_id) REFERENCES evaluation_hosted_trial_jobs(project_id, run_id, job_id) ON DELETE CASCADE',
+  ],
+  ['evaluation_dataset_snapshots', 'f', 'FOREIGN KEY (project_id) REFERENCES workflows(workflow_id) ON DELETE CASCADE'],
   ['evaluation_library', 'p', 'PRIMARY KEY (singleton_key)'],
   ['evaluation_library', 'c', 'CHECK (singleton_key)'],
   ['evaluation_library_imports', 'p', 'PRIMARY KEY (source_fingerprint)'],
   ['evaluation_recordings', 'p', 'PRIMARY KEY (project_id, recording_id)'],
-  [
-    'evaluation_recordings',
-    'f',
-    'FOREIGN KEY (project_id) REFERENCES workflows(workflow_id) ON DELETE CASCADE',
-  ],
+  ['evaluation_recordings', 'f', 'FOREIGN KEY (project_id) REFERENCES workflows(workflow_id) ON DELETE CASCADE'],
   ['evaluation_runs', 'p', 'PRIMARY KEY (project_id, run_id)'],
-  [
-    'evaluation_runs',
-    'f',
-    'FOREIGN KEY (project_id) REFERENCES workflows(workflow_id) ON DELETE CASCADE',
-  ],
+  ['evaluation_runs', 'f', 'FOREIGN KEY (project_id) REFERENCES workflows(workflow_id) ON DELETE CASCADE'],
   ['llm_profile_health', 'p', 'PRIMARY KEY (key)'],
-  [
-    MANAGED_WORKFLOW_SCHEMA_MIGRATIONS_TABLE,
-    'c',
-    'CHECK ((char_length(checksum) = 64))',
-  ],
+  [MANAGED_WORKFLOW_SCHEMA_MIGRATIONS_TABLE, 'c', 'CHECK ((char_length(checksum) = 64))'],
   [MANAGED_WORKFLOW_SCHEMA_MIGRATIONS_TABLE, 'p', 'PRIMARY KEY (version)'],
   [MANAGED_WORKFLOW_SCHEMA_MIGRATIONS_TABLE, 'c', 'CHECK ((version > 0))'],
   ['web_app_action_cancel_commands', 'p', 'PRIMARY KEY (run_id)'],
@@ -480,19 +887,11 @@ export const MANAGED_WORKFLOW_SCHEMA_REQUIRED_CONSTRAINTS = [
     'FOREIGN KEY (run_id) REFERENCES web_app_action_runs(run_id) ON DELETE CASCADE',
   ],
   ['web_app_action_run_events', 'p', 'PRIMARY KEY (run_id, sequence)'],
-  [
-    'web_app_action_run_events',
-    'f',
-    'FOREIGN KEY (run_id) REFERENCES web_app_action_runs(run_id) ON DELETE CASCADE',
-  ],
+  ['web_app_action_run_events', 'f', 'FOREIGN KEY (run_id) REFERENCES web_app_action_runs(run_id) ON DELETE CASCADE'],
   ['web_app_action_runs', 'u', 'UNIQUE (owner_scope, request_id)'],
   ['web_app_action_runs', 'p', 'PRIMARY KEY (run_id)'],
   ['workflow_endpoints', 'p', 'PRIMARY KEY (lookup_name)'],
-  [
-    'workflow_endpoints',
-    'f',
-    'FOREIGN KEY (workflow_id) REFERENCES workflows(workflow_id) ON DELETE CASCADE',
-  ],
+  ['workflow_endpoints', 'f', 'FOREIGN KEY (workflow_id) REFERENCES workflows(workflow_id) ON DELETE CASCADE'],
   ['workflow_folders', 'p', 'PRIMARY KEY (relative_path)'],
   ['workflow_published_versions', 'p', 'PRIMARY KEY (version_id)'],
   [
@@ -500,30 +899,14 @@ export const MANAGED_WORKFLOW_SCHEMA_REQUIRED_CONSTRAINTS = [
     'f',
     'FOREIGN KEY (revision_id) REFERENCES workflow_revisions(revision_id) ON DELETE CASCADE',
   ],
-  [
-    'workflow_published_versions',
-    'f',
-    'FOREIGN KEY (workflow_id) REFERENCES workflows(workflow_id) ON DELETE CASCADE',
-  ],
+  ['workflow_published_versions', 'f', 'FOREIGN KEY (workflow_id) REFERENCES workflows(workflow_id) ON DELETE CASCADE'],
   ['workflow_recordings', 'p', 'PRIMARY KEY (recording_id)'],
   ['workflow_revisions', 'p', 'PRIMARY KEY (revision_id)'],
-  [
-    'workflow_revisions',
-    'f',
-    'FOREIGN KEY (workflow_id) REFERENCES workflows(workflow_id) ON DELETE CASCADE',
-  ],
+  ['workflow_revisions', 'f', 'FOREIGN KEY (workflow_id) REFERENCES workflows(workflow_id) ON DELETE CASCADE'],
   ['workflow_web_apps', 'p', 'PRIMARY KEY (app_id)'],
-  [
-    'workflow_web_apps',
-    'f',
-    'FOREIGN KEY (revision_id) REFERENCES workflow_revisions(revision_id) ON DELETE CASCADE',
-  ],
+  ['workflow_web_apps', 'f', 'FOREIGN KEY (revision_id) REFERENCES workflow_revisions(revision_id) ON DELETE CASCADE'],
   ['workflow_web_apps', 'u', 'UNIQUE (slug_lookup_name)'],
-  [
-    'workflow_web_apps',
-    'f',
-    'FOREIGN KEY (workflow_id) REFERENCES workflows(workflow_id) ON DELETE CASCADE',
-  ],
+  ['workflow_web_apps', 'f', 'FOREIGN KEY (workflow_id) REFERENCES workflows(workflow_id) ON DELETE CASCADE'],
   ['workflow_web_apps', 'u', 'UNIQUE (workflow_id, ui_graph_id)'],
   ['workflows', 'p', 'PRIMARY KEY (workflow_id)'],
   ['workflows', 'u', 'UNIQUE (relative_path)'],
@@ -578,7 +961,10 @@ async function assertMigrationTableExists(client: PoolClient): Promise<void> {
   }
 }
 
-function validateAppliedMigrations(rows: AppliedMigrationRow[]): number {
+function validateAppliedMigrations(
+  rows: AppliedMigrationRow[],
+  maximumSupportedVersion = CURRENT_MANAGED_WORKFLOW_SCHEMA_VERSION,
+): number {
   const migrationsByVersion = new Map(
     MANAGED_WORKFLOW_SCHEMA_MIGRATIONS.map((migration) => [migration.version, migration]),
   );
@@ -586,8 +972,14 @@ function validateAppliedMigrations(rows: AppliedMigrationRow[]): number {
   for (const row of rows) {
     const expected = migrationsByVersion.get(row.version);
     if (!expected) {
+      if (row.version > CURRENT_MANAGED_WORKFLOW_SCHEMA_VERSION && row.version <= maximumSupportedVersion) {
+        // A rollback target cannot know a successor's checksum. The canonical
+        // release tool reaches this branch only after the successor manifest
+        // declares the migration expand-only and sets the serving upper bound.
+        continue;
+      }
       throw new ManagedWorkflowSchemaCompatibilityError(
-        `Managed workflow schema version ${row.version} is newer than this server supports (${CURRENT_MANAGED_WORKFLOW_SCHEMA_VERSION}).`,
+        `Managed workflow schema version ${row.version} is newer than this server supports (${maximumSupportedVersion}).`,
       );
     }
 
@@ -608,6 +1000,44 @@ function validateAppliedMigrations(rows: AppliedMigrationRow[]): number {
   }
 
   return currentVersion;
+}
+
+/**
+ * PostgreSQL's `pg_get_expr` may omit redundant outer parentheses from a
+ * partial-index predicate. The migration definitions retain the parentheses
+ * because they make the SQL easier to read, so compare the catalog expression
+ * in the same canonical form rather than treating a cosmetic deparse choice as
+ * schema drift.
+ */
+function normalizeIndexPredicate(predicate: string | null): string | null {
+  if (predicate == null) {
+    return null;
+  }
+
+  let normalized = predicate.trim();
+  while (normalized.startsWith('(') && normalized.endsWith(')')) {
+    let depth = 0;
+    let enclosesWholeExpression = true;
+    for (let index = 0; index < normalized.length; index += 1) {
+      const character = normalized[index];
+      if (character === '(') {
+        depth += 1;
+      } else if (character === ')') {
+        depth -= 1;
+        if (depth === 0 && index < normalized.length - 1) {
+          enclosesWholeExpression = false;
+          break;
+        }
+      }
+    }
+
+    if (!enclosesWholeExpression || depth !== 0) {
+      break;
+    }
+    normalized = normalized.slice(1, -1).trim();
+  }
+
+  return normalized;
 }
 
 async function validateManagedWorkflowSchemaObjects(client: PoolClient): Promise<void> {
@@ -641,9 +1071,7 @@ async function validateManagedWorkflowSchemaObjects(client: PoolClient): Promise
       actual.can_update ? null : 'UPDATE',
       actual.can_delete ? null : 'DELETE',
     ].filter((privilege): privilege is string => privilege != null);
-    return missingPrivileges.length > 0
-      ? [`${tableName} (current role lacks ${missingPrivileges.join('/')})`]
-      : [];
+    return missingPrivileges.length > 0 ? [`${tableName} (current role lacks ${missingPrivileges.join('/')})`] : [];
   });
 
   const columnResult = await client.query<ColumnRow>(
@@ -659,8 +1087,8 @@ async function validateManagedWorkflowSchemaObjects(client: PoolClient): Promise
       { udtName: row.udt_name, nullable: row.is_nullable, defaultValue: row.column_default },
     ]),
   );
-  const missingColumns = MANAGED_WORKFLOW_SCHEMA_REQUIRED_COLUMNS
-    .flatMap(([tableName, columnName, expectedUdtName, expectedNullable]) => {
+  const missingColumns = MANAGED_WORKFLOW_SCHEMA_REQUIRED_COLUMNS.flatMap(
+    ([tableName, columnName, expectedUdtName, expectedNullable]) => {
       const qualifiedName = `${tableName}.${columnName}`;
       const actual = presentColumns.get(qualifiedName);
       if (!actual) {
@@ -672,15 +1100,17 @@ async function validateManagedWorkflowSchemaObjects(client: PoolClient): Promise
         ];
       }
       return [];
-    });
-  const invalidColumnDefaults = MANAGED_WORKFLOW_SCHEMA_REQUIRED_COLUMN_DEFAULTS
-    .flatMap(([tableName, columnName, expectedDefault]) => {
+    },
+  );
+  const invalidColumnDefaults = MANAGED_WORKFLOW_SCHEMA_REQUIRED_COLUMN_DEFAULTS.flatMap(
+    ([tableName, columnName, expectedDefault]) => {
       const qualifiedName = `${tableName}.${columnName}`;
       const actualDefault = presentColumns.get(qualifiedName)?.defaultValue ?? null;
       return actualDefault === expectedDefault
         ? []
         : [`${qualifiedName} (expected ${expectedDefault}, received ${actualDefault ?? 'missing'})`];
-    });
+    },
+  );
 
   const indexResult = await client.query<IndexRow>(
     `SELECT index_relation.relname AS name,
@@ -706,14 +1136,8 @@ async function validateManagedWorkflowSchemaObjects(client: PoolClient): Promise
     [[...MANAGED_WORKFLOW_SCHEMA_REQUIRED_INDEXES.map(([, indexName]) => indexName)]],
   );
   const presentIndexes = new Map(indexResult.rows.map((row) => [row.name, row]));
-  const missingIndexes = MANAGED_WORKFLOW_SCHEMA_REQUIRED_INDEXES
-    .flatMap(([
-      expectedTableName,
-      indexName,
-      expectedKeys,
-      expectedPredicate,
-      expectedKeyOptions,
-    ]) => {
+  const missingIndexes = MANAGED_WORKFLOW_SCHEMA_REQUIRED_INDEXES.flatMap(
+    ([expectedTableName, indexName, expectedKeys, expectedPredicate, expectedKeyOptions]) => {
       const actual = presentIndexes.get(indexName);
       if (!actual) {
         return [indexName];
@@ -727,7 +1151,7 @@ async function validateManagedWorkflowSchemaObjects(client: PoolClient): Promise
         isReady: true,
         keyExpressions: expectedKeys,
         keyOptions: expectedKeyOptions,
-        predicate: expectedPredicate,
+        predicate: normalizeIndexPredicate(expectedPredicate),
       });
       const actualSignature = JSON.stringify({
         tableName: actual.table_name,
@@ -737,13 +1161,14 @@ async function validateManagedWorkflowSchemaObjects(client: PoolClient): Promise
         isReady: actual.is_ready,
         keyExpressions: actual.key_expressions,
         keyOptions: actual.key_options,
-        predicate: actual.predicate,
+        predicate: normalizeIndexPredicate(actual.predicate),
       });
       if (actualSignature !== expectedSignature) {
         return [`${indexName} (expected ${expectedSignature}, received ${actualSignature})`];
       }
       return [];
-    });
+    },
+  );
 
   const constraintResult = await client.query<ConstraintRow>(
     `SELECT table_relation.relname AS table_name,
@@ -770,26 +1195,22 @@ async function validateManagedWorkflowSchemaObjects(client: PoolClient): Promise
     [[...new Set(MANAGED_WORKFLOW_SCHEMA_REQUIRED_CONSTRAINTS.map(([tableName]) => tableName))]],
   );
   const presentConstraints = new Map(
-    constraintResult.rows.map((row) => [
-      JSON.stringify([row.table_name, row.type, row.definition]),
-      row,
-    ]),
+    constraintResult.rows.map((row) => [JSON.stringify([row.table_name, row.type, row.definition]), row]),
   );
-  const missingConstraints = MANAGED_WORKFLOW_SCHEMA_REQUIRED_CONSTRAINTS
-    .flatMap(([tableName, type, definition]) => {
-      const signature = `${tableName}/${type}/${definition}`;
-      const actual = presentConstraints.get(JSON.stringify([tableName, type, definition]));
-      if (!actual) {
-        return [signature];
-      }
-      if (!actual.is_validated) {
-        return [`${signature} (not validated)`];
-      }
-      if (!actual.backing_index_valid || !actual.backing_index_ready) {
-        return [`${signature} (backing index is invalid or unready)`];
-      }
-      return [];
-    });
+  const missingConstraints = MANAGED_WORKFLOW_SCHEMA_REQUIRED_CONSTRAINTS.flatMap(([tableName, type, definition]) => {
+    const signature = `${tableName}/${type}/${definition}`;
+    const actual = presentConstraints.get(JSON.stringify([tableName, type, definition]));
+    if (!actual) {
+      return [signature];
+    }
+    if (!actual.is_validated) {
+      return [`${signature} (not validated)`];
+    }
+    if (!actual.backing_index_valid || !actual.backing_index_ready) {
+      return [`${signature} (backing index is invalid or unready)`];
+    }
+    return [];
+  });
 
   const functionResult = await client.query<FunctionRow>(
     `SELECT md5(function_relation.prosrc) AS source_checksum,
@@ -805,10 +1226,7 @@ async function validateManagedWorkflowSchemaObjects(client: PoolClient): Promise
         AND function_relation.oid = to_regprocedure(
           format('%I.%I(%s)', current_schema(), $1::text, $2::text)
         )`,
-    [
-      MANAGED_WORKFLOW_SCHEMA_REQUIRED_FUNCTION.name,
-      MANAGED_WORKFLOW_SCHEMA_REQUIRED_FUNCTION.argumentTypes,
-    ],
+    [MANAGED_WORKFLOW_SCHEMA_REQUIRED_FUNCTION.name, MANAGED_WORKFLOW_SCHEMA_REQUIRED_FUNCTION.argumentTypes],
   );
   const actualFunction = functionResult.rows[0];
   const expectedFunctionSignature = JSON.stringify({
@@ -829,20 +1247,17 @@ async function validateManagedWorkflowSchemaObjects(client: PoolClient): Promise
         resultType: actualFunction.result_type,
       })
     : null;
-  const functionProblem = actualFunctionSignature === expectedFunctionSignature
-    ? null
-    : `${MANAGED_WORKFLOW_SCHEMA_REQUIRED_FUNCTION.name}(${MANAGED_WORKFLOW_SCHEMA_REQUIRED_FUNCTION.argumentTypes}) (expected ${expectedFunctionSignature}, received ${actualFunctionSignature ?? 'missing'})`;
+  const functionProblem =
+    actualFunctionSignature === expectedFunctionSignature
+      ? null
+      : `${MANAGED_WORKFLOW_SCHEMA_REQUIRED_FUNCTION.name}(${MANAGED_WORKFLOW_SCHEMA_REQUIRED_FUNCTION.argumentTypes}) (expected ${expectedFunctionSignature}, received ${actualFunctionSignature ?? 'missing'})`;
 
   const problems = [
     tableProblems.length > 0 ? `tables: ${describeMissing(tableProblems)}` : null,
     missingColumns.length > 0 ? `columns: ${describeMissing(missingColumns)}` : null,
-    invalidColumnDefaults.length > 0
-      ? `column defaults: ${describeMissing(invalidColumnDefaults)}`
-      : null,
+    invalidColumnDefaults.length > 0 ? `column defaults: ${describeMissing(invalidColumnDefaults)}` : null,
     missingIndexes.length > 0 ? `indexes: ${describeMissing(missingIndexes)}` : null,
-    missingConstraints.length > 0
-      ? `constraints: ${describeMissing(missingConstraints)}`
-      : null,
+    missingConstraints.length > 0 ? `constraints: ${describeMissing(missingConstraints)}` : null,
     functionProblem ? `function: ${functionProblem}` : null,
   ].filter((problem): problem is string => problem != null);
 
@@ -853,9 +1268,7 @@ async function validateManagedWorkflowSchemaObjects(client: PoolClient): Promise
   }
 }
 
-export function getManagedWorkflowSchemaMode(
-  env: NodeJS.ProcessEnv = process.env,
-): ManagedWorkflowSchemaMode {
+export function getManagedWorkflowSchemaMode(env: NodeJS.ProcessEnv = process.env): ManagedWorkflowSchemaMode {
   const configured = env.RIVET_MANAGED_WORKFLOW_SCHEMA_MODE?.trim().toLowerCase();
   if (!configured || configured === 'migrate') {
     return 'migrate';
@@ -864,13 +1277,53 @@ export function getManagedWorkflowSchemaMode(
     return 'verify';
   }
 
-  throw new Error(
-    `Invalid RIVET_MANAGED_WORKFLOW_SCHEMA_MODE "${configured}". Expected "migrate" or "verify".`,
+  throw new Error(`Invalid RIVET_MANAGED_WORKFLOW_SCHEMA_MODE "${configured}". Expected "migrate" or "verify".`);
+}
+
+function parseCompatibilityVersion(value: string | undefined, variableName: string, fallback: number): number {
+  const configured = value?.trim();
+  if (!configured) {
+    return fallback;
+  }
+
+  const parsed = Number(configured);
+  if (!Number.isInteger(parsed) || parsed < 1) {
+    throw new Error(`Invalid ${variableName} "${configured}". Expected a positive integer schema version.`);
+  }
+  return parsed;
+}
+
+/**
+ * Serving API pods are verify-only. The Helm release, rather than a user
+ * secret, supplies this window after dotenv loading. A normal release accepts
+ * only its own schema. During a documented expand-only rollback, the release
+ * tool may widen the upper bound so the older image verifies the newer
+ * additive schema without trying to mutate it.
+ */
+export function getManagedWorkflowSchemaCompatibilityWindow(
+  env: NodeJS.ProcessEnv = process.env,
+): ManagedWorkflowSchemaCompatibilityWindow {
+  const minimumVersion = parseCompatibilityVersion(
+    env.RIVET_MANAGED_WORKFLOW_SCHEMA_MIN_VERSION,
+    'RIVET_MANAGED_WORKFLOW_SCHEMA_MIN_VERSION',
+    CURRENT_MANAGED_WORKFLOW_SCHEMA_VERSION,
   );
+  const maximumVersion = parseCompatibilityVersion(
+    env.RIVET_MANAGED_WORKFLOW_SCHEMA_MAX_VERSION,
+    'RIVET_MANAGED_WORKFLOW_SCHEMA_MAX_VERSION',
+    CURRENT_MANAGED_WORKFLOW_SCHEMA_VERSION,
+  );
+  if (minimumVersion > maximumVersion) {
+    throw new Error(
+      `Invalid managed workflow schema compatibility window ${minimumVersion}-${maximumVersion}: minimum version cannot exceed maximum version.`,
+    );
+  }
+  return { minimumVersion, maximumVersion };
 }
 
 type RunSchemaOptions = {
   applicationVersion?: string | null;
+  compatibilityWindow?: ManagedWorkflowSchemaCompatibilityWindow;
   logger?: Pick<Console, 'log' | 'warn'>;
 };
 
@@ -882,19 +1335,13 @@ function safelyLog(run: () => void): void {
   }
 }
 
-async function rollbackAfterSchemaError(
-  client: PoolClient,
-  logger: Pick<Console, 'warn'>,
-): Promise<boolean> {
+async function rollbackAfterSchemaError(client: PoolClient, logger: Pick<Console, 'warn'>): Promise<boolean> {
   try {
     await client.query('ROLLBACK');
     return false;
   } catch (rollbackError) {
     safelyLog(() =>
-      logger.warn(
-        '[managed-workflow-schema] Failed to roll back after a schema migration error:',
-        rollbackError,
-      ),
+      logger.warn('[managed-workflow-schema] Failed to roll back after a schema migration error:', rollbackError),
     );
     return true;
   }
@@ -906,6 +1353,16 @@ async function runManagedWorkflowSchema(
   options: RunSchemaOptions = {},
 ): Promise<ManagedWorkflowSchemaResult> {
   const logger = options.logger ?? console;
+  const compatibilityWindow = options.compatibilityWindow ?? getManagedWorkflowSchemaCompatibilityWindow();
+  if (
+    mode === 'migrate' &&
+    (compatibilityWindow.minimumVersion !== CURRENT_MANAGED_WORKFLOW_SCHEMA_VERSION ||
+      compatibilityWindow.maximumVersion !== CURRENT_MANAGED_WORKFLOW_SCHEMA_VERSION)
+  ) {
+    throw new Error(
+      'Managed workflow schema migrations require the exact schema version for this build. Compatibility windows are only valid for verify-only serving workloads.',
+    );
+  }
   const client = await pool.connect();
   const appliedVersions: number[] = [];
   const startedAt = Date.now();
@@ -935,12 +1392,18 @@ async function runManagedWorkflowSchema(
     }
 
     const appliedResult = await client.query<AppliedMigrationRow>(LIST_MIGRATIONS_SQL);
-    let currentVersion = validateAppliedMigrations(appliedResult.rows);
+    let currentVersion = validateAppliedMigrations(
+      appliedResult.rows,
+      mode === 'verify' ? compatibilityWindow.maximumVersion : CURRENT_MANAGED_WORKFLOW_SCHEMA_VERSION,
+    );
     observedVersion = currentVersion;
 
-    if (mode === 'verify' && currentVersion !== CURRENT_MANAGED_WORKFLOW_SCHEMA_VERSION) {
+    if (
+      mode === 'verify' &&
+      (currentVersion < compatibilityWindow.minimumVersion || currentVersion > compatibilityWindow.maximumVersion)
+    ) {
       throw new ManagedWorkflowSchemaCompatibilityError(
-        `Managed workflow schema is at version ${currentVersion}; this server requires version ${CURRENT_MANAGED_WORKFLOW_SCHEMA_VERSION}. Run "yarn studio-server:workflow-schema:migrate" before starting verify-only API workloads.`,
+        `Managed workflow schema is at version ${currentVersion}; this server supports versions ${compatibilityWindow.minimumVersion}-${compatibilityWindow.maximumVersion}. Run "yarn studio-server:workflow-schema:migrate" before starting verify-only API workloads, or use the documented expand-only rollback release values.`,
       );
     }
 
@@ -960,12 +1423,7 @@ async function runManagedWorkflowSchema(
           `INSERT INTO ${MANAGED_WORKFLOW_SCHEMA_MIGRATIONS_TABLE}
              (version, name, checksum, application_version)
            VALUES ($1, $2, $3, $4)`,
-          [
-            migration.version,
-            migration.name,
-            migration.checksum,
-            options.applicationVersion?.trim() || null,
-          ],
+          [migration.version, migration.name, migration.checksum, options.applicationVersion?.trim() || null],
         );
         appliedVersions.push(migration.version);
         currentVersion = migration.version;
@@ -1011,7 +1469,7 @@ async function runManagedWorkflowSchemaWithRetry(
         throw error;
       }
 
-      const delayMs = 250 * (2 ** (attempt - 1)) + Math.floor(Math.random() * 100);
+      const delayMs = 250 * 2 ** (attempt - 1) + Math.floor(Math.random() * 100);
       safelyLog(() =>
         logger.warn(
           `[managed-workflow-schema] ${mode} failed with transient PostgreSQL error ${code}; retrying in ${delayMs}ms (${attempt}/${TRANSIENT_SCHEMA_RETRY_ATTEMPTS}).`,

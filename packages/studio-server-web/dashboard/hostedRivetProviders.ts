@@ -17,6 +17,8 @@ import {
   createHttpRivetLLMProfileHealthStore,
 } from '../../studio-server-shared/llmProfileHealthHttpStore';
 import { createHttpEvaluationStore } from '../../studio-server-shared/evaluationRunHttpStore';
+import { createHostedEvaluationCoordinator } from './hostedEvaluationCoordinator';
+import { createHostedLocalExecutionRecordingPersistence } from './hostedLocalExecutionRecordingPersistence';
 
 const hostedDatasetProvider = new HostedDatasetProvider();
 const hostedLLMProfileHealthStore = createHttpRivetLLMProfileHealthStore({
@@ -44,5 +46,7 @@ export const hostedRivetProviders = {
   environment: getDefaultEnvironmentProvider(),
   pathPolicy: getDefaultPathPolicyProvider(),
   llmProfileHealthStore: hostedLLMProfileHealthStore,
+  localExecutionRecordingPersistence: createHostedLocalExecutionRecordingPersistence(),
   evaluationStore: hostedEvaluationStore,
+  hostedEvaluationCoordinator: createHostedEvaluationCoordinator(),
 } satisfies ProviderOverrides;

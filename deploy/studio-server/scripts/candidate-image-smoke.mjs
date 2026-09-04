@@ -116,6 +116,23 @@ export function extractCandidateWorkflowValue(result) {
   return result?.value?.type === 'any' ? result.value.value : result;
 }
 
+async function assertDirectApiMetrics(composeArgs, env) {
+  const probeScript = [
+    '(async () => {',
+    "  const response = await fetch('http://127.0.0.1:80/metrics');",
+    '  const body = await response.text();',
+    '  if (!response.ok || !body.includes(\'rivet_metrics_enabled{profile="combined"} 1\')) {',
+    '    throw new Error(`Unexpected direct API metrics response ${response.status}: ${body}`);',
+    '  }',
+    '})().catch((error) => {',
+    '  console.error(error.stack ?? error.message);',
+    '  process.exit(1);',
+    '});',
+  ].join('\n');
+
+  await run('docker', [...composeArgs, 'exec', '-T', 'api', 'node', '-e', probeScript], { env });
+}
+
 async function main() {
   if (!imageNamespace || !sourceTag) {
     throw new Error('IMAGE_NAMESPACE and SOURCE_TAG are required.');
@@ -145,6 +162,7 @@ async function main() {
     RIVET_KEY: key,
     RIVET_SERVER_UI_AUTH_MODE: 'key',
     RIVET_REQUIRE_UI_GATE_KEY: 'true',
+    RIVET_METRICS_ENABLED: 'true',
     RIVET_WORKFLOWS_HOST_PATH: directories.workflows,
     RIVET_WORKFLOW_RECORDINGS_HOST_PATH: directories.recordings,
     RIVET_RUNTIME_LIBS_HOST_PATH: directories.runtimeLibraries,
@@ -196,7 +214,7 @@ async function main() {
     await request(baseUrl, '/', { headers: { Cookie: cookie } });
     await request(baseUrl, '/api/config', { headers: { Cookie: cookie } });
     await openExecutorSocket(baseUrl, cookie);
-
+    await assertDirectApiMetrics(composeArgs, env);
     const fixtureContents = await fs.readFile(fixturePath, 'utf8');
     const upload = await request(baseUrl, '/api/workflows/projects/upload', {
       method: 'POST',
@@ -230,7 +248,7 @@ async function main() {
       throw new Error(`Candidate workflow returned an unexpected result: ${JSON.stringify(executionBody)}`);
     }
     console.log(
-      '[candidate-image-smoke] Candidate images passed authentication, routing, executor, and workflow execution checks.',
+      '[candidate-image-smoke] Candidate images passed authentication, routing, direct API metrics, executor, and workflow execution checks.',
     );
   } catch (error) {
     console.error(

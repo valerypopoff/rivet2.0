@@ -35,7 +35,9 @@ export interface IOProvider {
 
   loadGraphData(callback: (graphData: NodeGraph) => void): Promise<void>;
 
-  loadProjectData(callback: (data: { project: Project; evaluation: EvaluationProjectFileData; path: string }) => void): Promise<void>;
+  loadProjectData(
+    callback: (data: { project: Project; evaluation: EvaluationProjectFileData; path: string }) => void,
+  ): Promise<void>;
 
   loadRecordingData(callback: (data: { recorder: ExecutionRecorder; path: string }) => void): Promise<void>;
 
@@ -48,7 +50,8 @@ export interface IOProvider {
 
 /** Extended interface for platforms with path-based file system access (Tauri, Node.js). */
 export interface PathBasedIOProvider extends IOProvider {
-  saveProjectDataNoPrompt(project: Project, path: string): Promise<void>;
+  /** Returns the canonical persisted path when the storage provider rebases a stale path. */
+  saveProjectDataNoPrompt(project: Project, path: string): Promise<string | void>;
 
   loadProjectDataNoPrompt(path: string): Promise<{ project: Project; evaluation: EvaluationProjectFileData }>;
 

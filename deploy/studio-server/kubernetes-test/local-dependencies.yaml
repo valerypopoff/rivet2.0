@@ -1,0 +1,206 @@
+# Disposable dependencies for the local Minikube rehearsal only.
+#
+# These credentials deliberately have no value outside the local cluster. Do
+# not use this manifest, its storage, or its namespace for staging/production.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: rivet-local
+  labels:
+    app.kubernetes.io/part-of: rivet-local-rehearsal
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: rivet-local-dependencies
+  namespace: rivet-local
+type: Opaque
+stringData:
+  postgres-password: rivet-local-only
+  minio-root-user: rivet-local-minio
+  minio-root-password: rivet-local-minio-only
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: rivet-local-postgres-data
+  namespace: rivet-local
+  labels:
+    app.kubernetes.io/part-of: rivet-local-rehearsal
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 2Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: rivet-local-postgres
+  namespace: rivet-local
+  labels:
+    app: rivet-local-postgres
+    app.kubernetes.io/part-of: rivet-local-rehearsal
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: rivet-local-postgres
+  template:
+    metadata:
+      labels:
+        app: rivet-local-postgres
+        app.kubernetes.io/part-of: rivet-local-rehearsal
+    spec:
+      containers:
+        - name: postgres
+          image: postgres:16.8-alpine
+          ports:
+            - containerPort: 5432
+          env:
+            - name: POSTGRES_DB
+              value: rivet
+            - name: POSTGRES_USER
+              value: rivet
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: rivet-local-dependencies
+                  key: postgres-password
+          readinessProbe:
+            exec:
+              command: ['sh', '-ec', 'pg_isready -U rivet -d rivet']
+            periodSeconds: 2
+            timeoutSeconds: 2
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: rivet-local-postgres-data
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: rivet-local-postgres
+  namespace: rivet-local
+  labels:
+    app.kubernetes.io/part-of: rivet-local-rehearsal
+spec:
+  selector:
+    app: rivet-local-postgres
+  ports:
+    - port: 5432
+      targetPort: 5432
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: rivet-local-minio-data
+  namespace: rivet-local
+  labels:
+    app.kubernetes.io/part-of: rivet-local-rehearsal
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 2Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: rivet-local-minio
+  namespace: rivet-local
+  labels:
+    app: rivet-local-minio
+    app.kubernetes.io/part-of: rivet-local-rehearsal
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: rivet-local-minio
+  template:
+    metadata:
+      labels:
+        app: rivet-local-minio
+        app.kubernetes.io/part-of: rivet-local-rehearsal
+    spec:
+      containers:
+        - name: minio
+          image: minio/minio:RELEASE.2025-04-22T22-12-26Z
+          args: ['server', '/data', '--console-address', ':9001']
+          ports:
+            - containerPort: 9000
+          env:
+            - name: MINIO_ROOT_USER
+              valueFrom:
+                secretKeyRef:
+                  name: rivet-local-dependencies
+                  key: minio-root-user
+            - name: MINIO_ROOT_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: rivet-local-dependencies
+                  key: minio-root-password
+          readinessProbe:
+            tcpSocket:
+              port: 9000
+            periodSeconds: 2
+            timeoutSeconds: 2
+          volumeMounts:
+            - name: data
+              mountPath: /data
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: rivet-local-minio-data
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: rivet-local-minio
+  namespace: rivet-local
+  labels:
+    app.kubernetes.io/part-of: rivet-local-rehearsal
+spec:
+  selector:
+    app: rivet-local-minio
+  ports:
+    - port: 9000
+      targetPort: 9000
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: rivet-local-create-bucket
+  namespace: rivet-local
+  labels:
+    app.kubernetes.io/part-of: rivet-local-rehearsal
+spec:
+  backoffLimit: 30
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/part-of: rivet-local-rehearsal
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: create-bucket
+          image: minio/mc:RELEASE.2025-04-16T18-13-26Z
+          command: ['sh', '-ec']
+          args:
+            - >-
+              until mc alias set local http://rivet-local-minio:9000 "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD";
+              do sleep 2; done; mc mb --ignore-existing local/rivet-workflows
+          env:
+            - name: MINIO_ROOT_USER
+              valueFrom:
+                secretKeyRef:
+                  name: rivet-local-dependencies
+                  key: minio-root-user
+            - name: MINIO_ROOT_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: rivet-local-dependencies
+                  key: minio-root-password

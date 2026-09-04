@@ -24,6 +24,7 @@ platform that lives inside the Rivet monorepo. It provides:
 - [Editor bridge](../../developer-docs/studio-server/editor-bridge.md)
 - [Workflow publication](../../developer-docs/studio-server/workflow-publication.md)
 - [Runtime libraries](../../developer-docs/studio-server/runtime-libraries.md)
+- [Deployment status](../../developer-docs/studio-server/deployment-status.md)
 
 ## Monorepo Map
 
@@ -124,6 +125,10 @@ The Docker development stack is the default production-shaped loop:
 ```bash
 yarn studio-server:dev
 ```
+
+When Compose recreates the API, editor web service, or internal executor, it
+also restarts Nginx so Docker service-name resolution cannot leave the browser
+connected to a retired container IP.
 
 Useful commands:
 

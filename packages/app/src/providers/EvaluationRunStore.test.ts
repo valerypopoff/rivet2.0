@@ -701,7 +701,14 @@ test('does not let a delayed provisional write demote or reassign a local record
       createdAt: '2026-08-15T00:00:00.000Z',
     };
     await store.putRecording(provisional);
-    await store.updateRecordingRetention({ projectId, recordingId: 'recording-1', retention: 'failure' });
+    assert.equal(
+      await store.updateRecordingRetention({ projectId, recordingId: 'recording-1', retention: 'failure' }),
+      true,
+    );
+    assert.equal(
+      await store.updateRecordingRetention({ projectId, recordingId: 'missing-recording', retention: 'failure' }),
+      false,
+    );
 
     await store.putRecording(provisional);
     assert.deepEqual((await store.getRecording({ projectId, recordingId: 'recording-1' }))?.reference, {

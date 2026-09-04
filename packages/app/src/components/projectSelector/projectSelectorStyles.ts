@@ -438,11 +438,11 @@ export const projectSelectorStyles = css`
       visibility: hidden;
     }
 
-    &:not(.active) > .actions {
-      display: none;
+    &:hover .actions {
+      visibility: visible;
     }
 
-    &.active:hover .actions {
+    &:focus-within .actions {
       visibility: visible;
     }
 

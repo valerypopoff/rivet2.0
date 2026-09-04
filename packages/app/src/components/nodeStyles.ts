@@ -7,8 +7,6 @@ export const nodeStyles = css`
     --node-output-min-height: 46px;
     --node-output-collapsed-max-height: calc(3 * 1.4em + 200px);
     --node-output-hover-max-height: calc(20 * 1.4em + 36px);
-    --node-output-multi-collapsed-max-height: calc(3 * 1.4em + 60px);
-    --node-output-multi-hover-max-height: calc(20 * 1.4em + 60px);
     background-color: var(--node-body-bg);
     background-clip: padding-box;
     border-radius: var(--node-card-radius);
@@ -1097,8 +1095,18 @@ export const nodeStyles = css`
 
   .multi-node-output {
     padding: 0;
-    margin-bottom: -8px;
-    max-height: var(--node-output-multi-collapsed-max-height);
+  }
+
+  /*
+   * A multi-run output has one card surface: the pager belongs to the selected
+   * run output rather than ending a separate rounded card above it. The
+   * shared pager owns the sole neutral divider; this outer surface owns final
+   * clipping and bottom corners.
+   */
+  .node-output.multi .multi-node-output > .node-output-inner {
+    border-radius: 0;
+    margin: 0;
+    border-top: 0;
   }
 
   .node-output-warnings {
@@ -1183,48 +1191,25 @@ export const nodeStyles = css`
     z-index: 2;
   }
 
-  .llm-chat-output-history-pager {
-    align-items: center;
-    border-bottom: 1px solid var(--node-output-picker-border);
-    display: flex;
+  .picker.llm-chat-output-history-pager {
     font-size: var(--ui-font-size-xs);
-    gap: 8px;
     margin: 0 -12px 10px;
-    min-height: 28px;
-    padding: 0 8px 8px;
     position: relative;
     z-index: 3;
 
-    button {
-      align-items: center;
-      background: transparent;
-      border: 0;
-      border-radius: 4px;
-      color: var(--foreground);
-      cursor: pointer;
-      display: inline-flex;
-      font: inherit;
-      height: 24px;
-      justify-content: center;
-      padding: 0;
-      width: 24px;
-
-      &:hover:not(:disabled) {
-        background: var(--node-output-picker-hover-bg);
-      }
-
-      &:disabled {
-        cursor: default;
-        opacity: 0.4;
-      }
-    }
-
     .llm-chat-output-history-pager-label {
+      flex: 1;
       min-width: 0;
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
     }
+  }
+
+  /* The top-level LLM history picker continues the output divider directly. */
+  .node-output-inner.has-llm-chat-output-history-pager:not(.has-frozen-output-notice)
+    > .picker.llm-chat-output-history-pager {
+    margin-top: calc(-1 * var(--node-output-surface-padding));
   }
 
   .node-output-inner.has-output-actions .node-output-content-fade::before {
@@ -1264,33 +1249,53 @@ export const nodeStyles = css`
     border-top-color: var(--node-output-status-border);
   }
 
+  /*
+   * An LLM invocation can fail after earlier model rounds completed. The node
+   * keeps its terminal error status, but an earlier selected history page is a
+   * successful snapshot and must not inherit the terminal error surface.
+   */
+  .node.error .node-output:not(.multi) .node-output-inner.llm-chat-history-non-error,
+  .node.error .multi-node-output:has(> .node-output-inner.llm-chat-history-non-error) {
+    background-color: var(--node-output-surface-bg);
+    border-top-color: var(--node-output-success-border);
+  }
+
+  .node.error .node-output:has(.node-output-inner.llm-chat-history-non-error)::before {
+    border-top-color: var(--node-output-success-border);
+  }
+
+  /*
+   * Some nested executions, including Delegate Tool Call continuations, keep
+   * the node's overall status independent from the selected delegated run.
+   * The selected output's own error state therefore owns this surface.
+   */
+  .node-output:not(.multi) > .node-output-inner.errored,
+  .node-output.multi .multi-node-output:has(> .node-output-inner.errored),
+  .node-output.multi .multi-node-output > .node-output-inner.errored {
+    background-color: var(--node-output-error-bg);
+    background-image: none;
+    border-top-color: var(--node-output-error-border);
+  }
+
+  .node-output:has(.node-output-inner.errored)::before {
+    border-top-color: var(--node-output-error-border);
+  }
+
   .node.not-ran .node-output:not(.multi) .node-output-inner,
   .node.not-ran .multi-node-output {
     border-top-style: dashed;
     border-top-color: var(--node-output-not-ran-border);
   }
 
-  .node-output.multi .node-output-inner.node-output-inner {
-    border-top: 1px solid var(--node-output-multi-border);
-  }
 
   .node:is(:hover, .hovered, .showHoverControls) .node-output-inner,
   .node:is(:hover, .hovered, .showHoverControls) .node-output-warnings {
     max-height: var(--node-output-hover-max-height);
   }
 
-  .node:is(:hover, .hovered, .showHoverControls) .multi-node-output {
-    max-height: var(--node-output-multi-hover-max-height);
-  }
-
   .node.isOutputExpanded .node-output-inner {
     max-height: unset;
     overflow: auto;
-  }
-
-  .node.isOutputExpanded .multi-node-output {
-    max-height: unset;
-    overflow: visible;
   }
 
   .node .node-output.errored:not(.multi) {
@@ -1347,6 +1352,19 @@ export const nodeStyles = css`
     display: flex;
     gap: var(--node-output-actions-gap);
     z-index: 10;
+  }
+
+  .overlay-buttons.after-output-history-pager {
+    top: calc(var(--node-output-actions-top) + 42px);
+  }
+
+  .node-output-inner.has-llm-chat-output-history-pager:not(.has-frozen-output-notice)
+    .overlay-buttons.after-output-history-pager {
+    top: calc(var(--node-output-actions-top) + 30px);
+  }
+
+  .node-output-inner.has-frozen-output-notice .overlay-buttons.after-output-history-pager {
+    top: calc(var(--node-output-actions-top) + 70px);
   }
 
   .copy-button,
@@ -1577,8 +1595,13 @@ export const nodeStyles = css`
       width: 32px;
       height: 32px;
 
-      &:hover {
+      &:hover:not(:disabled) {
         background: var(--node-output-picker-hover-bg);
+      }
+
+      &:disabled {
+        cursor: default;
+        opacity: 0.4;
       }
     }
 
@@ -1588,6 +1611,11 @@ export const nodeStyles = css`
 
     .picker-right {
       border-left: 1px solid var(--node-output-picker-border);
+    }
+
+    .picker-page {
+      min-width: 0;
+      text-align: center;
     }
   }
 

@@ -25,6 +25,7 @@ export async function createWebAppSocketHarness(
   gatewayOptions: Parameters<typeof createRivetWebAppWebSocketGateway>[0] = {},
   sessionOptions: Pick<
     RivetWebAppSocketSession,
+    | 'acquireRunPermit'
     | 'createProcessorOptions'
     | 'knowledgeStores'
     | 'onProcessorPrepared'

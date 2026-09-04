@@ -39,6 +39,31 @@ on:
         required: false
         default: false
         type: boolean
+      run_managed_kubernetes_capacity_gate:
+        description: After the provider gate deploys candidate images, certify bounded published-endpoint capacity in protected staging.
+        required: false
+        default: false
+        type: boolean
+      run_managed_kubernetes_capacity_observe:
+        description: After the provider gate deploys candidate images, record protected staging capacity observations without certifying or promoting them.
+        required: false
+        default: false
+        type: boolean
+      run_managed_kubernetes_evaluation_gate:
+        description: After the provider gate deploys candidate images, run the protected hosted-Evaluation worker-loss and cancellation certificate.
+        required: false
+        default: false
+        type: boolean
+      run_managed_kubernetes_evaluation_joint_capacity_gate:
+        description: With the hosted-Evaluation certificate, also certify bounded public endpoint capacity while a durable Evaluation trial is active. Do not select the separate capacity gate.
+        required: false
+        default: false
+        type: boolean
+      allow_release_lineage_bootstrap:
+        description: Explicitly start a new production release-manifest chain when no durable predecessor manifest exists.
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   actions: read
@@ -168,6 +193,89 @@ jobs:
           cache-from: type=gha,scope=${{ matrix.service }}
           cache-to: type=gha,mode=max,scope=${{ matrix.service }}
 
+  release-manifest:
+    name: Create candidate release manifest
+    needs:
+      - build-and-push
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      SOURCE_TAG: candidate-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+      RELEASE_MANIFEST: artifacts/studio-server-release-manifest/candidate-release-manifest.json
+      CURRENT_PRODUCTION_MANIFEST: artifacts/studio-server-release-manifest/current-production-release-manifest.json
+      RELEASE_MANIFEST_REPOSITORY: ghcr.io/valerypopoff/rivet2.0-studio-server/release-manifest
+      ALLOW_RELEASE_LINEAGE_BOOTSTRAP: ${{ github.event_name == 'workflow_dispatch' && inputs.allow_release_lineage_bootstrap == true }}
+    steps:
+      - name: Check Out Repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - name: Set Up Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - name: Log In to GHCR
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Resolve exact production predecessor
+        shell: bash
+        run: |
+          set -euo pipefail
+          node deploy/studio-server/scripts/release-manifest-oci.mjs pull \
+            --reference "${RELEASE_MANIFEST_REPOSITORY}:production" \
+            --output "$CURRENT_PRODUCTION_MANIFEST" \
+            --allow-missing
+
+          if [[ -s "$CURRENT_PRODUCTION_MANIFEST" ]]; then
+            echo "Candidate will be bound to the durable production release-manifest pointer."
+            exit 0
+          fi
+
+          if docker buildx imagetools inspect "${IMAGE_NAMESPACE}/api:latest" >/dev/null 2>&1; then
+            if [[ "$ALLOW_RELEASE_LINEAGE_BOOTSTRAP" != "true" ]]; then
+              echo "::error::Promoted images exist, but the durable production release-manifest pointer is missing. Seed it from the matching promoted legacy manifest, or manually dispatch this workflow with allow_release_lineage_bootstrap after accepting that this transition has no automated rollback target."
+              exit 1
+            fi
+            echo "::warning::Explicitly starting a new release lineage while promoted images already exist. This transition is non-rollbackable through the automated forward-rollback command."
+          else
+            echo "::notice::No promoted images or release manifest exist; creating the initial bootstrap release."
+          fi
+      - name: Materialize immutable candidate manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+          image_specs=()
+          for service in proxy web api executor; do
+            image="${IMAGE_NAMESPACE}/${service}:${SOURCE_TAG}"
+            digest="$(docker buildx imagetools inspect "$image" --format '{{.Manifest.Digest}}')"
+            if [[ ! "$digest" =~ ^sha256:[a-f0-9]{64}$ ]]; then
+              echo "::error::Could not resolve immutable digest for $image: $digest"
+              exit 1
+            fi
+            image_specs+=("${service}=${IMAGE_NAMESPACE}/${service}@${digest}")
+          done
+          image_specs_csv="$(IFS=,; echo "${image_specs[*]}")"
+          predecessor_args=()
+          if [[ -s "$CURRENT_PRODUCTION_MANIFEST" ]]; then
+            predecessor_args=(--predecessor "$CURRENT_PRODUCTION_MANIFEST")
+          fi
+          node deploy/studio-server/scripts/create-release-manifest.mjs create \
+            --output "$RELEASE_MANIFEST" \
+            --source-repository "$GITHUB_REPOSITORY" \
+            --source-ref "$GITHUB_REF" \
+            --source-sha "$GITHUB_SHA" \
+            --workflow "$GITHUB_WORKFLOW" \
+            --run-id "$GITHUB_RUN_ID" \
+            --run-attempt "$GITHUB_RUN_ATTEMPT" \
+            --image "$image_specs_csv" \
+            "${predecessor_args[@]}"
+      - name: Upload candidate release manifest
+        uses: actions/upload-artifact@65462800fd760344b1a7b4382951275a0abb4808 # v4
+        with:
+          name: studio-server-candidate-release-manifest-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ env.RELEASE_MANIFEST }}
+          if-no-files-found: error
+          retention-days: 14
+
   fast-container-smoke:
     name: Smoke candidate images
     needs:
@@ -197,10 +305,12 @@ jobs:
     needs:
       - changes
       - build-and-push
+      - release-manifest
     runs-on: ubuntu-latest
     timeout-minutes: 55
     env:
       SOURCE_TAG: candidate-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+      CANDIDATE_RELEASE_MANIFEST: artifacts/studio-server-release-manifest/candidate-release-manifest.json
     steps:
       - name: Check Out Repository
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
@@ -231,6 +341,32 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Download candidate release manifest
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: studio-server-candidate-release-manifest-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifacts/studio-server-release-manifest
+
+      - name: Resolve manifest-bound predecessor API image
+        shell: bash
+        run: |
+          set -euo pipefail
+          if jq -e '.lineage.predecessor != null' "$CANDIDATE_RELEASE_MANIFEST" >/dev/null; then
+            repository="$(jq -er '.lineage.predecessor.images.api.repository' "$CANDIDATE_RELEASE_MANIFEST")"
+            digest="$(jq -er '.lineage.predecessor.images.api.digest' "$CANDIDATE_RELEASE_MANIFEST")"
+            if [[ ! "$digest" =~ ^sha256:[a-f0-9]{64}$ ]]; then
+              echo "::error::Candidate predecessor API digest is invalid: $digest"
+              exit 1
+            fi
+            {
+              echo "RIVET_K8S_RELEASE_GATE_PREVIOUS_API_IMAGE_REPOSITORY=$repository"
+              echo "RIVET_K8S_RELEASE_GATE_PREVIOUS_API_IMAGE_DIGEST=$digest"
+            } >> "$GITHUB_ENV"
+            echo "Using exact predecessor API image $repository@$digest for schema compatibility."
+          else
+            echo "::notice::The bootstrap candidate has no verified predecessor to exercise."
+          fi
 
       - name: Resolve Candidate Image Digests
         shell: bash
@@ -287,13 +423,19 @@ jobs:
         shell: bash
         run: kind delete cluster --name rivet-managed-release
   managed-kubernetes-provider-gate:
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.run_managed_kubernetes_provider_gate == true }}
+    if: ${{ github.event_name == 'workflow_dispatch' && (inputs.run_managed_kubernetes_provider_gate == true || inputs.run_managed_kubernetes_capacity_gate == true || inputs.run_managed_kubernetes_capacity_observe == true || inputs.run_managed_kubernetes_evaluation_gate == true || inputs.run_managed_kubernetes_evaluation_joint_capacity_gate == true) && !(inputs.run_managed_kubernetes_capacity_gate == true && inputs.run_managed_kubernetes_capacity_observe == true) }}
     needs:
       - build-and-push
     runs-on: ubuntu-latest
     timeout-minutes: 180
     environment:
       name: rivet-managed-staging
+    concurrency:
+      # This environment is intentionally mutated by a candidate deployment.
+      # Keep every protected provider/capacity/Evaluation certificate exclusive
+      # across manual dispatches and refs; never cancel an in-flight drill.
+      group: rivet-managed-staging-certificates
+      cancel-in-progress: false
     env:
       SOURCE_TAG: candidate-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
       RIVET_K8S_PROVIDER_GATE_CONTEXT: ${{ vars.RIVET_K8S_STAGING_CONTEXT }}
@@ -303,6 +445,21 @@ jobs:
       RIVET_K8S_PROVIDER_GATE_REGISTRY_USERNAME: ${{ github.actor }}
       RIVET_K8S_PROVIDER_GATE_REGISTRY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
     steps:
+      - name: Validate Managed Kubernetes Certificate Selection
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${{ inputs.run_managed_kubernetes_evaluation_joint_capacity_gate }}" != "true" ]]; then
+            exit 0
+          fi
+          if [[ "${{ inputs.run_managed_kubernetes_evaluation_gate }}" != "true" ]]; then
+            echo "::error::The joint capacity certificate requires run_managed_kubernetes_evaluation_gate=true."
+            exit 1
+          fi
+          if [[ "${{ inputs.run_managed_kubernetes_capacity_gate }}" == "true" || "${{ inputs.run_managed_kubernetes_capacity_observe }}" == "true" ]]; then
+            echo "::error::The joint capacity certificate replaces the separate capacity gate or observation run."
+            exit 1
+          fi
       - name: Check Out Repository
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
@@ -389,20 +546,243 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
 
+  managed-kubernetes-capacity-gate:
+    if: ${{ always() && github.event_name == 'workflow_dispatch' && inputs.run_managed_kubernetes_evaluation_joint_capacity_gate != true && (inputs.run_managed_kubernetes_capacity_gate == true || inputs.run_managed_kubernetes_capacity_observe == true) && needs.build-and-push.result == 'success' && (needs.managed-kubernetes-provider-gate.result == 'success' || (inputs.run_managed_kubernetes_capacity_gate == true && inputs.run_managed_kubernetes_capacity_observe == true && needs.managed-kubernetes-provider-gate.result == 'skipped')) }}
+    needs:
+      - build-and-push
+      - managed-kubernetes-provider-gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    environment:
+      name: rivet-managed-staging
+    concurrency:
+      group: rivet-managed-staging-certificates
+      cancel-in-progress: false
+    env:
+      SOURCE_TAG: candidate-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+      RIVET_K8S_PROVIDER_GATE_CONTEXT: ${{ vars.RIVET_K8S_STAGING_CONTEXT }}
+      RIVET_K8S_PROVIDER_GATE_ALLOW_CONTEXT: ${{ vars.RIVET_K8S_STAGING_CONTEXT }}
+      RIVET_K8S_PROVIDER_GATE_CONFIRM: deploy-staging
+      RIVET_K8S_PROVIDER_GATE_REGISTRY_SERVER: ghcr.io
+      RIVET_K8S_PROVIDER_GATE_REGISTRY_USERNAME: ${{ github.actor }}
+      RIVET_K8S_PROVIDER_GATE_REGISTRY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
+      RIVET_K8S_CAPACITY_GATE_CONFIRM: certify-staging
+      RIVET_K8S_CAPACITY_GATE_MODE: ${{ inputs.run_managed_kubernetes_capacity_gate == true && 'certify' || 'observe' }}
+    steps:
+      - name: Validate Capacity Run Selection
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${{ inputs.run_managed_kubernetes_capacity_gate }}" == "true" && "${{ inputs.run_managed_kubernetes_capacity_observe }}" == "true" ]]; then
+            echo "::error::Choose either the capacity certificate or capacity observation run, not both."
+            exit 1
+          fi
+
+      - name: Check Out Repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Set Up Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24
+
+      - name: Install Workspace Dependencies
+        run: |
+          corepack enable
+          yarn install --immutable
+
+      - name: Set Up Kubernetes Tools
+        run: yarn studio-server:setup:k8s-tools
+
+      - name: Define Protected Staging File Paths
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            echo "KUBECONFIG=$RUNNER_TEMP/rivet-managed-staging.kubeconfig"
+            echo "RIVET_K8S_PROVIDER_GATE_CONFIG_FILE=$RUNNER_TEMP/rivet-managed-provider-gate.json"
+            echo "RIVET_K8S_PROVIDER_GATE_VALUES_FILE=$RUNNER_TEMP/rivet-managed-provider-values.yaml"
+          } >> "$GITHUB_ENV"
+
+      - name: Restore Protected Staging Configuration
+        shell: bash
+        env:
+          RIVET_K8S_STAGING_KUBECONFIG_B64: ${{ secrets.RIVET_K8S_STAGING_KUBECONFIG_B64 }}
+          RIVET_K8S_STAGING_CONFIG_B64: ${{ secrets.RIVET_K8S_STAGING_CONFIG_B64 }}
+          RIVET_K8S_STAGING_VALUES_B64: ${{ secrets.RIVET_K8S_STAGING_VALUES_B64 }}
+        run: |
+          set -euo pipefail
+          umask 077
+          : "${RIVET_K8S_STAGING_KUBECONFIG_B64:?Missing protected staging kubeconfig}"
+          : "${RIVET_K8S_STAGING_CONFIG_B64:?Missing protected staging gate config}"
+          : "${RIVET_K8S_STAGING_VALUES_B64:?Missing protected staging Helm values}"
+          printf '%s' "$RIVET_K8S_STAGING_KUBECONFIG_B64" | base64 --decode > "$KUBECONFIG"
+          printf '%s' "$RIVET_K8S_STAGING_CONFIG_B64" | base64 --decode > "$RIVET_K8S_PROVIDER_GATE_CONFIG_FILE"
+          printf '%s' "$RIVET_K8S_STAGING_VALUES_B64" | base64 --decode > "$RIVET_K8S_PROVIDER_GATE_VALUES_FILE"
+
+      - name: Resolve Candidate Image Digests
+        shell: bash
+        run: |
+          set -euo pipefail
+          for service in proxy web api executor; do
+            image="${IMAGE_NAMESPACE}/${service}:${SOURCE_TAG}"
+            digest="$(docker buildx imagetools inspect "$image" --format '{{.Manifest.Digest}}')"
+            if [[ ! "$digest" =~ ^sha256:[a-f0-9]{64}$ ]]; then
+              echo "::error::Could not resolve immutable digest for $image: $digest"
+              exit 1
+            fi
+            upper_service="$(tr '[:lower:]' '[:upper:]' <<< "$service")"
+            echo "RIVET_K8S_PROVIDER_GATE_${upper_service}_IMAGE_REPOSITORY=${IMAGE_NAMESPACE}/${service}" >> "$GITHUB_ENV"
+            echo "RIVET_K8S_PROVIDER_GATE_${upper_service}_IMAGE_DIGEST=$digest" >> "$GITHUB_ENV"
+          done
+
+      - name: Run Published Endpoint Capacity
+        run: yarn studio-server:verify:kubernetes:managed-capacity
+
+      - name: Generate Capacity Calibration Review
+        if: ${{ always() }}
+        run: >-
+          node deploy/studio-server/scripts/kubernetes-published-capacity-review.mjs
+          artifacts/kubernetes-managed-provider-gate/published-capacity/capacity-report.json
+          artifacts/kubernetes-managed-provider-gate/published-capacity/capacity-review.md
+
+      - name: Upload Published Capacity Evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@65462800fd760344b1a7b4382951275a0abb4808 # v4
+        with:
+          name: managed-kubernetes-capacity-${{ inputs.run_managed_kubernetes_capacity_gate == true && 'certificate' || 'observe' }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifacts/kubernetes-managed-provider-gate/published-capacity
+          if-no-files-found: warn
+          retention-days: 90
+  managed-kubernetes-evaluation-gate:
+    if: ${{ always() && github.event_name == 'workflow_dispatch' && (inputs.run_managed_kubernetes_evaluation_gate == true || inputs.run_managed_kubernetes_evaluation_joint_capacity_gate == true) && inputs.run_managed_kubernetes_capacity_observe != true && needs.build-and-push.result == 'success' && needs.managed-kubernetes-provider-gate.result == 'success' && (needs.managed-kubernetes-capacity-gate.result == 'success' || needs.managed-kubernetes-capacity-gate.result == 'skipped') }}
+    needs:
+      - build-and-push
+      - managed-kubernetes-provider-gate
+      # A capacity run and this worker-loss certificate share the protected
+      # staging release. Do not let a forced Evaluation worker loss race the
+      # public-capacity measurement. An observe run is isolated from this
+      # destructive certificate, rather than silently combining two studies.
+      - managed-kubernetes-capacity-gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    environment:
+      name: rivet-managed-staging
+    concurrency:
+      group: rivet-managed-staging-certificates
+      cancel-in-progress: false
+    env:
+      SOURCE_TAG: candidate-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+      RIVET_K8S_PROVIDER_GATE_CONTEXT: ${{ vars.RIVET_K8S_STAGING_CONTEXT }}
+      RIVET_K8S_PROVIDER_GATE_ALLOW_CONTEXT: ${{ vars.RIVET_K8S_STAGING_CONTEXT }}
+      RIVET_K8S_PROVIDER_GATE_CONFIRM: deploy-staging
+      RIVET_K8S_PROVIDER_GATE_REGISTRY_SERVER: ghcr.io
+      RIVET_K8S_PROVIDER_GATE_REGISTRY_USERNAME: ${{ github.actor }}
+      RIVET_K8S_PROVIDER_GATE_REGISTRY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
+      RIVET_K8S_EVALUATION_GATE_CONFIRM: disrupt-staging-evaluations
+      RIVET_K8S_EVALUATION_JOINT_CAPACITY_CONFIRM: ${{ inputs.run_managed_kubernetes_evaluation_joint_capacity_gate == true && 'certify-joint-public-evaluation-capacity' || '' }}
+    steps:
+      - name: Check Out Repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - name: Set Up Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24
+      - name: Install Workspace Dependencies
+        run: |
+          corepack enable
+          yarn install --immutable
+      - name: Set Up Kubernetes Tools
+        run: yarn studio-server:setup:k8s-tools
+      - name: Define Protected Staging File Paths
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            echo "KUBECONFIG=$RUNNER_TEMP/rivet-managed-staging.kubeconfig"
+            echo "RIVET_K8S_PROVIDER_GATE_CONFIG_FILE=$RUNNER_TEMP/rivet-managed-provider-gate.json"
+            echo "RIVET_K8S_PROVIDER_GATE_VALUES_FILE=$RUNNER_TEMP/rivet-managed-provider-values.yaml"
+          } >> "$GITHUB_ENV"
+      - name: Restore Protected Staging Configuration
+        shell: bash
+        env:
+          RIVET_K8S_STAGING_KUBECONFIG_B64: ${{ secrets.RIVET_K8S_STAGING_KUBECONFIG_B64 }}
+          RIVET_K8S_STAGING_CONFIG_B64: ${{ secrets.RIVET_K8S_STAGING_CONFIG_B64 }}
+          RIVET_K8S_STAGING_VALUES_B64: ${{ secrets.RIVET_K8S_STAGING_VALUES_B64 }}
+        run: |
+          set -euo pipefail
+          umask 077
+          test -n "$RIVET_K8S_STAGING_KUBECONFIG_B64" || { echo "Missing protected staging kubeconfig"; exit 1; }
+          test -n "$RIVET_K8S_STAGING_CONFIG_B64" || { echo "Missing protected staging gate config"; exit 1; }
+          test -n "$RIVET_K8S_STAGING_VALUES_B64" || { echo "Missing protected staging Helm values"; exit 1; }
+          printf '%s' "$RIVET_K8S_STAGING_KUBECONFIG_B64" | base64 --decode > "$KUBECONFIG"
+          printf '%s' "$RIVET_K8S_STAGING_CONFIG_B64" | base64 --decode > "$RIVET_K8S_PROVIDER_GATE_CONFIG_FILE"
+          printf '%s' "$RIVET_K8S_STAGING_VALUES_B64" | base64 --decode > "$RIVET_K8S_PROVIDER_GATE_VALUES_FILE"
+      - name: Resolve Candidate Image Digests
+        shell: bash
+        run: |
+          set -euo pipefail
+          for service in proxy web api executor; do
+            image="$IMAGE_NAMESPACE/$service:$SOURCE_TAG"
+            digest="$(docker buildx imagetools inspect "$image" --format '{{.Manifest.Digest}}')"
+            if [[ ! "$digest" =~ ^sha256:[a-f0-9]{64}$ ]]; then
+              echo "::error::Could not resolve immutable digest for $image: $digest"
+              exit 1
+            fi
+            upper_service="$(tr '[:lower:]' '[:upper:]' <<< "$service")"
+            echo "RIVET_K8S_PROVIDER_GATE_${upper_service}_IMAGE_REPOSITORY=${IMAGE_NAMESPACE}/${service}" >> "$GITHUB_ENV"
+            echo "RIVET_K8S_PROVIDER_GATE_${upper_service}_IMAGE_DIGEST=${digest}" >> "$GITHUB_ENV"
+          done
+      - name: Certify Hosted Evaluation Durability
+        run: yarn studio-server:verify:kubernetes:managed-evaluations
+      - name: Generate Joint Capacity Calibration Review
+        if: ${{ always() && inputs.run_managed_kubernetes_evaluation_joint_capacity_gate == true && inputs.run_managed_kubernetes_evaluation_gate == true && inputs.run_managed_kubernetes_capacity_gate != true && inputs.run_managed_kubernetes_capacity_observe != true }}
+        run: >-
+          node deploy/studio-server/scripts/kubernetes-published-capacity-review.mjs
+          artifacts/kubernetes-managed-provider-gate/published-capacity/capacity-report.json
+          artifacts/kubernetes-managed-provider-gate/published-capacity/capacity-review.md
+      - name: Upload Hosted Evaluation Evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@65462800fd760344b1a7b4382951275a0abb4808 # v4
+        with:
+          name: managed-kubernetes-evaluation-gate-${{ github.run_id }}-${{ github.run_attempt }}
+          # A joint certificate is one logical study. Retain the parent
+          # lifecycle evidence alongside the child capacity report/review.
+          path: |
+            artifacts/kubernetes-managed-provider-gate/hosted-evaluations
+            artifacts/kubernetes-managed-provider-gate/published-capacity
+          if-no-files-found: warn
+          retention-days: 90
   promote-images:
     needs:
       - changes
       - verify-repository
       - build-and-push
+      - release-manifest
       - fast-container-smoke
       - managed-kubernetes-release-gate
       - managed-kubernetes-provider-gate
+      - managed-kubernetes-capacity-gate
+      - managed-kubernetes-evaluation-gate
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    if: ${{ always() && needs.changes.result == 'success' && needs.verify-repository.result == 'success' && needs.build-and-push.result == 'success' && needs.fast-container-smoke.result == 'success' && ((needs.changes.outputs.full_kubernetes == 'true' && needs.managed-kubernetes-release-gate.result == 'success') || (needs.changes.outputs.full_kubernetes != 'true' && needs.managed-kubernetes-release-gate.result == 'skipped')) && (needs.managed-kubernetes-provider-gate.result == 'success' || needs.managed-kubernetes-provider-gate.result == 'skipped') }}
+    if: ${{ always() && needs.changes.result == 'success' && needs.verify-repository.result == 'success' && needs.build-and-push.result == 'success' && needs.release-manifest.result == 'success' && needs.fast-container-smoke.result == 'success' && ((needs.changes.outputs.full_kubernetes == 'true' && needs.managed-kubernetes-release-gate.result == 'success') || (needs.changes.outputs.full_kubernetes != 'true' && needs.managed-kubernetes-release-gate.result == 'skipped')) && (needs.managed-kubernetes-provider-gate.result == 'success' || needs.managed-kubernetes-provider-gate.result == 'skipped') && (needs.managed-kubernetes-capacity-gate.result == 'success' || needs.managed-kubernetes-capacity-gate.result == 'skipped') && (needs.managed-kubernetes-evaluation-gate.result == 'success' || needs.managed-kubernetes-evaluation-gate.result == 'skipped') && (github.event_name != 'workflow_dispatch' || inputs.run_managed_kubernetes_capacity_observe != true) }}
     env:
       SOURCE_TAG: candidate-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+      CANDIDATE_RELEASE_MANIFEST: artifacts/studio-server-release-manifest/candidate-release-manifest.json
+      PROMOTED_RELEASE_MANIFEST: artifacts/studio-server-release-manifest/promoted-release-manifest.json
+      CURRENT_PRODUCTION_MANIFEST: artifacts/studio-server-release-manifest/current-production-release-manifest.json
+      RELEASE_MANIFEST_REPOSITORY: ghcr.io/valerypopoff/rivet2.0-studio-server/release-manifest
     steps:
+      - name: Check Out Repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Download candidate release manifest
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: studio-server-candidate-release-manifest-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifacts/studio-server-release-manifest
+
       - name: Set Up Buildx
         uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
 
@@ -424,7 +804,59 @@ jobs:
             type=ref,event=tag
             type=sha,format=short
 
+      - name: Confirm main still points to this release
+        id: main_freshness
+        if: ${{ github.ref == 'refs/heads/main' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          current_sha="$(git ls-remote origin refs/heads/main | awk 'NR == 1 { print $1 }')"
+          if [[ ! "$current_sha" =~ ^[a-f0-9]{40}$ ]]; then
+            echo "::error::Could not resolve the current main branch head."
+            exit 1
+          fi
+          if [[ "$current_sha" == "$GITHUB_SHA" ]]; then
+            echo "current=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "current=false" >> "$GITHUB_OUTPUT"
+          echo "::warning::Skipping mutable main image aliases: this run built $GITHUB_SHA, but main now points to $current_sha."
+
+      - name: Attest promoted release manifest
+        if: ${{ github.ref != 'refs/heads/main' || steps.main_freshness.outputs.current == 'true' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          node deploy/studio-server/scripts/release-manifest-oci.mjs pull \
+            --reference "${RELEASE_MANIFEST_REPOSITORY}:production" \
+            --output "$CURRENT_PRODUCTION_MANIFEST" \
+            --allow-missing
+          current_args=()
+          if [[ -s "$CURRENT_PRODUCTION_MANIFEST" ]]; then
+            current_args=(--current "$CURRENT_PRODUCTION_MANIFEST")
+          fi
+          node deploy/studio-server/scripts/create-release-manifest.mjs promote \
+            --input "$CANDIDATE_RELEASE_MANIFEST" \
+            --output "$PROMOTED_RELEASE_MANIFEST" \
+            --workflow "$GITHUB_WORKFLOW" \
+            --run-id "$GITHUB_RUN_ID" \
+            --run-attempt "$GITHUB_RUN_ATTEMPT" \
+            "${current_args[@]}"
+
+      - name: Publish immutable release manifest
+        if: ${{ github.ref != 'refs/heads/main' || steps.main_freshness.outputs.current == 'true' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          manifest_digest="$(node deploy/studio-server/scripts/create-release-manifest.mjs digest --input "$PROMOTED_RELEASE_MANIFEST")"
+          manifest_reference="${RELEASE_MANIFEST_REPOSITORY}:manifest-${manifest_digest#sha256:}"
+          node deploy/studio-server/scripts/release-manifest-oci.mjs push \
+            --reference "$manifest_reference" \
+            --input "$PROMOTED_RELEASE_MANIFEST"
+          echo "PROMOTED_MANIFEST_REFERENCE=$manifest_reference" >> "$GITHUB_ENV"
+
       - name: Promote Complete Image Set
+        if: ${{ github.ref != 'refs/heads/main' || steps.main_freshness.outputs.current == 'true' }}
         shell: bash
         env:
           PROXY_RELEASE_TAGS: ${{ steps.release-meta.outputs.tags }}
@@ -465,3 +897,19 @@ jobs:
               sleep "$((attempt * 5))"
             done
           done
+
+      - name: Advance durable production release pointer
+        if: ${{ github.ref == 'refs/heads/main' && steps.main_freshness.outputs.current == 'true' }}
+        run: |
+          node deploy/studio-server/scripts/release-manifest-oci.mjs retag \
+            --source "$PROMOTED_MANIFEST_REFERENCE" \
+            --destination "${RELEASE_MANIFEST_REPOSITORY}:production"
+
+      - name: Upload promoted release manifest
+        if: ${{ github.ref != 'refs/heads/main' || steps.main_freshness.outputs.current == 'true' }}
+        uses: actions/upload-artifact@65462800fd760344b1a7b4382951275a0abb4808 # v4
+        with:
+          name: studio-server-release-manifest-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ env.PROMOTED_RELEASE_MANIFEST }}
+          if-no-files-found: error
+          retention-days: 90

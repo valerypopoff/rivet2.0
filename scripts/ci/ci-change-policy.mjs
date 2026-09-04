@@ -63,6 +63,7 @@ const fullKubernetesPrefixes = [
   'deploy/studio-server/scripts/lib/kubernetes-',
   'deploy/studio-server/scripts/prod-docker',
   'deploy/studio-server/scripts/verify-kubernetes',
+  'packages/studio-server-api/src/routes/workflows/managed/schema-migrations.ts',
   'packages/studio-server-api/src/tests/kubernetes-',
 ];
 

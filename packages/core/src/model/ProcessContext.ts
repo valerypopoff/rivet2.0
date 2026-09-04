@@ -90,6 +90,8 @@ export type ChatV2CallFinishedEvent = {
   attemptIndex: number;
   /** Zero-based profile index when LLM Chat is using a profile fallback chain. */
   profileIndex?: number;
+  /** User-facing title captured from the source LLM Profile node. */
+  profileName?: string;
   /** Privacy-bounded stable profile health key when circuit breaking is enabled. */
   profileHealthKey?: string;
   /** Circuit state observed when this physical call was admitted. */
@@ -161,6 +163,8 @@ export type LLMProfileAttemptTraceEvent = {
   roundIndex: number;
   /** Present when this attempt belongs to a From profile fallback candidate. */
   profileIndex?: number;
+  /** User-facing title captured from the source LLM Profile node. */
+  profileName?: string;
   nodeId: NodeId;
   processId: ProcessId;
   provider: ChatV2Provider;
@@ -249,6 +253,13 @@ export type ProcessContext = {
 
   /** Optional shared persistence for cross-run LLM Profile circuit state. */
   llmProfileHealthStore?: RivetLLMProfileHealthStore;
+
+  /**
+   * Host-owned correlation for a runnable execution. It is not a graph input,
+   * is never sent to a provider, and lets hosts connect profile suspension
+   * evidence to a durable run recording after the run has completed.
+   */
+  llmProfileHealthExecutionCorrelationId?: string;
 
   /** Optional host-owned Evaluation identity propagated into execution events and recordings. */
   evaluation?: EvaluationExecutionMetadata;

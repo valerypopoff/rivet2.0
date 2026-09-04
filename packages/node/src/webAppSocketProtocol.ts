@@ -11,6 +11,16 @@ export function sendWebAppSocketMessage(socket: WebSocket, message: RivetWebAppS
   }
 }
 
+export function sendWebAppSocketBinary(socket: WebSocket, frame: Uint8Array): boolean {
+  if (socket.readyState !== WebSocket.OPEN) return false;
+  try {
+    socket.send(frame, { binary: true });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export function parseWebAppSocketMessage(raw: RawData): unknown {
   try {
     return JSON.parse(typeof raw === 'string' ? raw : raw.toString());

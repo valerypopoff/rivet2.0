@@ -28,11 +28,29 @@ map $rivet_forwarded_hostname $rivet_ui_host_is_token_free {
     include ${RIVET_TRUSTED_HOSTS_INCLUDE_FILE};
 }
 
+# This listener is reachable only inside the proxy Pod. It exposes NGINX's
+# intentionally aggregate stub-status counters to the optional exporter
+# sidecar; it is not a route on the public proxy listener.
+server {
+    listen 127.0.0.1:18080;
+    server_name localhost;
+    access_log off;
+
+    location = /stub_status {
+        stub_status;
+    }
+
+    location / {
+        return 404;
+    }
+}
+
 server {
     listen 8080;
     server_name _;
 
     client_max_body_size 100m;
+    proxy_set_header X-Rivet-Correlation-Id $request_id;
 
     set $web_upstream http://${RIVET_WEB_UPSTREAM_HOST}:${RIVET_WEB_UPSTREAM_PORT};
     set $api_upstream http://${RIVET_API_UPSTREAM_HOST}:${RIVET_API_UPSTREAM_PORT};
@@ -103,6 +121,25 @@ server {
         proxy_set_header X-Forwarded-Host $rivet_forwarded_host;
         proxy_set_header X-Forwarded-Proto $rivet_forwarded_proto;
         proxy_read_timeout 30s;
+    }
+
+    # Dashboard-only stream: this exact location must precede /api/ so
+    # nginx does not buffer the long-lived SSE response.
+    location = /api/workflows/tree/events {
+        auth_request /__rivet_ui_auth_check;
+
+        proxy_pass $api_upstream;
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
+        proxy_set_header X-Rivet-Proxy-Auth ${RIVET_PROXY_AUTH_TOKEN};
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-Host $rivet_forwarded_host;
+        proxy_set_header X-Forwarded-Proto $rivet_forwarded_proto;
+        proxy_buffering off;
+        proxy_cache off;
+        proxy_read_timeout 86400s;
+        proxy_send_timeout 86400s;
     }
 
     location /api/ {

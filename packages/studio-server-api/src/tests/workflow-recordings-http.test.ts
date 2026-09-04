@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import test from 'node:test';
+import { writeWorkflowProjectStatsCacheFromContents } from '../routes/workflows/project-stats.js';
 import {
   readJson,
   waitForRecordingWorkflows,
@@ -14,6 +15,7 @@ const {
   workflowMutations,
   workflowFs,
   workflowRecordings,
+  workflowStorageBackend,
   workflowExecution,
   rivetNode,
   withWorkflowExecutionServer,
@@ -39,6 +41,8 @@ test('published and latest workflow execution create replayable recordings that 
     });
     assert.equal(publishedResponse.ok, true);
 
+    const publishedCorrelationId = publishedResponse.headers.get('x-rivet-correlation-id');
+    assert.match(publishedCorrelationId ?? '', /^rvt-[a-f0-9-]{36}$/);
     const latestResponse = await fetch(`${latestBaseUrl}/recorded-endpoint`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -46,6 +50,8 @@ test('published and latest workflow execution create replayable recordings that 
     });
     assert.equal(latestResponse.ok, true);
 
+    const latestCorrelationId = latestResponse.headers.get('x-rivet-correlation-id');
+    assert.match(latestCorrelationId ?? '', /^rvt-[a-f0-9-]{36}$/);
     const workflowsResponse = await waitForRecordingWorkflows(
       apiBaseUrl,
       (workflows) => workflows[0]?.totalRuns === 2,
@@ -69,6 +75,7 @@ test('published and latest workflow execution create replayable recordings that 
         id: string;
         runKind: string;
         status: string;
+        executionIdentity?: { correlationId?: string };
       }>;
     }>(await fetch(`${apiBaseUrl}/recordings/workflows/${encodeURIComponent(workflowId)}/runs?page=1&pageSize=20&status=all`));
 
@@ -86,6 +93,10 @@ test('published and latest workflow execution create replayable recordings that 
     const sourceProject = await rivetNode.loadProjectFromFile(created.absolutePath);
     const recordingsRoot = workflowFs.getWorkflowProjectRecordingsRoot(workflowFs.getWorkflowRecordingsRoot(workflowsRoot), sourceProject.metadata.id);
 
+    assert.deepEqual(
+      runsResponse.runs.map((recording) => recording.executionIdentity?.correlationId).sort(),
+      [latestCorrelationId, publishedCorrelationId].sort(),
+    );
     for (const recording of runsResponse.runs) {
       const bundlePath = path.join(recordingsRoot, recording.id);
       const recordingPath = workflowFs.getWorkflowRecordingPath(bundlePath);
@@ -795,4 +806,146 @@ test('workflow recording cleanup keeps only the newest configured runs per endpo
     .sort();
 
   assert.equal(bundles.length, 2);
+});
+
+test('local editor replay persistence links health evidence after a project rename', async () => {
+  const created = await workflowMutations.createWorkflowProjectItem('', 'LocalHealthEvidence');
+  const [project, attachedData] = await rivetNode.loadProjectAndAttachedDataFromFile(created.absolutePath);
+  const projectId = project.metadata.id!;
+  const correlationId = 'rvt-local-0f01eb95-2b7d-4fb4-8c77-9b50e3e4ce5c';
+  const healthStore = await workflowStorageBackend.getLLMProfileHealthStore();
+  const identity = {
+    key: 'local-editor-health-evidence',
+    projectId,
+    profileNodeId: 'profile-node' as never,
+    profileName: 'Local evidence profile',
+    provider: 'openai' as never,
+    model: 'local-model',
+    customProviderApi: 'completions' as const,
+    configurationFingerprint: 'sha256:local-editor-evidence',
+  };
+  const policy = {
+    failureThreshold: 1,
+    failureWindowMs: 60_000,
+    openDurationMs: 60_000,
+    halfOpenLeaseMs: 10_000,
+  };
+  const attempt = await healthStore.begin({ identity, policy });
+  await healthStore.finish({
+    identity,
+    policy,
+    permitId: attempt.permitId!,
+    outcome: 'unhealthy',
+    executionCorrelationId: correlationId,
+  });
+
+  const staleProjectPath = created.absolutePath;
+  const renamed = await workflowMutations.renameWorkflowProjectItem(created.relativePath, 'LocalHealthEvidenceRenamed');
+  assert.notEqual(renamed.project.absolutePath, staleProjectPath);
+
+  await withWorkflowExecutionServer(async ({ apiBaseUrl }) => {
+    const capability = await readJson<{ supported: boolean }>(
+      await fetch(`${apiBaseUrl}/local-editor-recordings/capability`),
+    );
+    assert.equal(capability.supported, true);
+
+    const persistResponse = await fetch(`${apiBaseUrl}/local-editor-recordings`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        projectId,
+        projectPath: staleProjectPath,
+        projectContents: rivetNode.serializeProject(project, attachedData),
+        recordingSerialized: JSON.stringify({
+          version: 1,
+          recording: {
+            recordingId: 'local-health-evidence-recording',
+            events: [],
+            startTs: 1,
+            finishTs: 2,
+          },
+          assets: {},
+          strings: {},
+        }),
+        status: 'failed',
+        durationMs: 12,
+        errorMessage: 'Provider request failed.',
+        executionIdentity: {
+          correlationId,
+          graphId: project.metadata.mainGraphId,
+        },
+      }),
+    });
+    const persisted = await readJson<{ availability: string; recordingId?: string }>(persistResponse);
+    assert.equal(persisted.availability, 'available');
+    assert.ok(persisted.recordingId);
+
+    const [health] = await healthStore.listAdmin({ projectId });
+    assert.equal(health?.contributingRuns[0]?.availability, 'available');
+    assert.equal(health?.contributingRuns[0]?.recordingId, persisted.recordingId);
+
+    const runs = await readJson<{ runs: Array<{ id: string; runKind: string; status: string }> }>(
+      await fetch(
+        `${apiBaseUrl}/recordings/workflows/${encodeURIComponent(projectId)}/runs?page=1&pageSize=20&status=all`,
+      ),
+    );
+    assert.deepEqual(
+      runs.runs.map((run) => [run.id, run.runKind, run.status]),
+      [[persisted.recordingId, 'editor', 'failed']],
+    );
+  });
+});
+
+test('local editor replay persistence resolves a nested relative path when the tree index has no metadata id', async () => {
+  await workflowMutations.createWorkflowFolderItem('Nested', '');
+  const created = await workflowMutations.createWorkflowProjectItem('Nested', 'LocalRelativeReplay');
+  const [project, attachedData] = await rivetNode.loadProjectAndAttachedDataFromFile(created.absolutePath);
+  const projectId = project.metadata.id!;
+  const sidecars = workflowFs.getProjectSidecarPaths(created.absolutePath);
+  const projectContents = rivetNode.serializeProject(project, attachedData);
+  if (typeof projectContents !== 'string') {
+    throw new Error('Expected the test project to serialize to text.');
+  }
+
+  // Start with a current, fingerprint-valid generated sidecar, then remove
+  // only its metadata ID. The source remains valid, but the tree must select
+  // it through the normalized relative path instead of the ID lookup.
+  await writeWorkflowProjectStatsCacheFromContents(created.absolutePath, projectContents);
+  const generatedCache = JSON.parse(await fs.readFile(sidecars.stats, 'utf8')) as Record<string, unknown>;
+  await fs.writeFile(sidecars.stats, `${JSON.stringify({ ...generatedCache, projectMetadataId: null })}\n`, 'utf8');
+
+  await withWorkflowExecutionServer(async ({ apiBaseUrl }) => {
+    const persistResponse = await fetch(`${apiBaseUrl}/local-editor-recordings`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        projectId,
+        projectPath: `./${created.relativePath.replace(/\//g, '\\')}`,
+        projectContents,
+        recordingSerialized: JSON.stringify({
+          version: 1,
+          recording: {
+            recordingId: 'local-relative-replay-recording',
+            events: [],
+            startTs: 1,
+            finishTs: 2,
+          },
+          assets: {},
+          strings: {},
+        }),
+        status: 'failed',
+        durationMs: 12,
+        errorMessage: 'Provider request failed.',
+        executionIdentity: {
+          correlationId: 'rvt-local-41b71494-3788-45e9-99b7-20212546da21',
+          graphId: project.metadata.mainGraphId,
+        },
+      }),
+    });
+
+    assert.equal(persistResponse.status, 201);
+    const persisted = await readJson<{ availability: string; recordingId?: string }>(persistResponse);
+    assert.equal(persisted.availability, 'available');
+    assert.ok(persisted.recordingId);
+  });
 });

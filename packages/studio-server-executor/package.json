@@ -1,7 +1,7 @@
 {
   "name": "@valerypopoff/rivet-studio-server-executor",
   "private": true,
-  "version": "1.8.6",
+  "version": "1.9.0",
   "description": "Hosted Rivet executor entry point and container bundle",
   "dependencies": {
     "@valerypopoff/rivet-app-executor": "workspace:^",

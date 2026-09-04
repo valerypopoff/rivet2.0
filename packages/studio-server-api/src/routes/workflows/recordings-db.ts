@@ -12,6 +12,8 @@ import type {
   WorkflowRunStatisticsTarget,
 } from '../../../../studio-server-shared/workflow-recording-types.js';
 
+import { normalizeRivetCorrelationId } from '../../request-correlation.js';
+
 export type WorkflowRecordingWorkflowRow = {
   workflowId: string;
   sourceProjectMetadataId: string;
@@ -71,6 +73,7 @@ const RECORDING_RUN_COLUMNS = `
   component_id_at_execution AS componentIdAtExecution,
   component_type_at_execution AS componentTypeAtExecution,
   component_label_at_execution AS componentLabelAtExecution,
+  correlation_id AS correlationId,
   error_message AS errorMessage,
   bundle_path AS bundlePath,
   encoding AS encoding,
@@ -119,6 +122,7 @@ const UPSERT_RECORDING_RUN_SQL = `
     component_id_at_execution,
     component_type_at_execution,
     component_label_at_execution,
+    correlation_id,
     error_message,
     bundle_path,
     encoding,
@@ -129,7 +133,7 @@ const UPSERT_RECORDING_RUN_SQL = `
     project_uncompressed_bytes,
     dataset_compressed_bytes,
     dataset_uncompressed_bytes
-  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   ON CONFLICT(id) DO UPDATE SET
     workflow_id = excluded.workflow_id,
     created_at = excluded.created_at,
@@ -147,6 +151,7 @@ const UPSERT_RECORDING_RUN_SQL = `
     component_id_at_execution = excluded.component_id_at_execution,
     component_type_at_execution = excluded.component_type_at_execution,
     component_label_at_execution = excluded.component_label_at_execution,
+    correlation_id = excluded.correlation_id,
     error_message = excluded.error_message,
     bundle_path = excluded.bundle_path,
     encoding = excluded.encoding,
@@ -195,6 +200,7 @@ function writeWorkflowRecordingRun(statement: RecordingStatement, row: WorkflowR
     identity?.componentId ?? null,
     identity?.componentType ?? null,
     identity?.componentLabel ?? null,
+    normalizeRivetCorrelationId(identity?.correlationId) ?? null,
     row.errorMessage ?? null,
     row.bundlePath,
     row.encoding,
@@ -276,6 +282,7 @@ async function openDatabase(): Promise<DatabaseSync> {
       component_id_at_execution TEXT,
       component_type_at_execution TEXT,
       component_label_at_execution TEXT,
+      correlation_id TEXT,
       error_message TEXT,
       bundle_path TEXT NOT NULL,
       encoding TEXT NOT NULL,
@@ -334,6 +341,7 @@ function ensureRecordingRunIdentityColumns(db: DatabaseSync): void {
     ['component_id_at_execution', 'TEXT'],
     ['component_type_at_execution', 'TEXT'],
     ['component_label_at_execution', 'TEXT'],
+    ['correlation_id', 'TEXT'],
   ] as const;
 
   for (const [name, type] of columns) {
@@ -697,7 +705,7 @@ function normalizeWorkflowRecordingRunRow(row: Record<string, unknown>): Workflo
     id: String(row.id ?? ''),
     workflowId: String(row.workflowId ?? ''),
     createdAt: String(row.createdAt ?? ''),
-    runKind: row.runKind === 'published' ? 'published' : 'latest',
+    runKind: row.runKind === 'published' || row.runKind === 'editor' ? row.runKind : 'latest',
     status,
     durationMs: toNumber(row.durationMs),
     endpointNameAtExecution: String(row.endpointNameAtExecution ?? ''),
@@ -717,7 +725,7 @@ function normalizeWorkflowRecordingRunRow(row: Record<string, unknown>): Workflo
 
 function getExecutionIdentity(row: Record<string, unknown>): WorkflowRecordingExecutionIdentity | undefined {
   const surface = row.executionSurface;
-  if (surface !== 'workflow_endpoint' && surface !== 'web_app_action') {
+  if (surface !== 'workflow_endpoint' && surface !== 'web_app_action' && surface !== 'editor_local') {
     return undefined;
   }
 
@@ -733,6 +741,7 @@ function getExecutionIdentity(row: Record<string, unknown>): WorkflowRecordingEx
     componentId: toOptionalString(row.componentIdAtExecution),
     componentType: componentType === 'button' || componentType === 'chat' ? componentType : undefined,
     componentLabel: toOptionalString(row.componentLabelAtExecution),
+    correlationId: normalizeRivetCorrelationId(toOptionalString(row.correlationId)) ?? undefined,
   };
 }
 

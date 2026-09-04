@@ -1,7 +1,6 @@
 import {
   clearUiGraphChatSearchMatches,
-  applyUiGraphWebAppStorageActionPatch,
-  applyUiGraphWebAppStoragePatch,
+  applyUiGraphWebAppStorageActionPatchAsync,
   copyUiGraphText,
   createUiGraphChatHistoryFlushStatePatch,
   createUiGraphChatMessageRemovalStatePatch,
@@ -14,17 +13,14 @@ import {
   getUiGraphChatDraftStateKey,
   getUiGraphChatMessagePresentations,
   getUiGraphChatMessagesStateKey,
+  getUiGraphChatPinsStateKey,
   getUiGraphChatPersistentState,
   hasUiGraphChatPersistentStateChanged,
   highlightUiGraphChatSearchMatches,
-  loadUiGraphChatPersistentState,
-  loadUiGraphWebAppStorage,
   revealUiGraphChatElement,
   revealUiGraphChatSearchMatch,
-  saveUiGraphChatPersistentState,
-  saveUiGraphResponseTrace,
-  loadUiGraphResponseTrace,
-  pruneUiGraphResponseTraces,
+  UiGraphBrowserPersistence,
+  type UiGraphBrowserPersistenceWarning,
   type AgentResponseTrace,
   type UiGraphActionComponent,
   type UiGraphChatMessageTimestampPresentation,
@@ -141,7 +137,7 @@ function createResponseInspectorElement(trace: AgentResponseTrace | null, onClos
             'Model calls',
             trace.modelCalls.map((call) =>
               createElement('article', {}, [
-                createElement('strong', { text: `${call.provider} · ${call.model}` }),
+                createElement('strong', { text: formatTraceModelCallLabel(call) }),
                 createElement('span', {
                   text: `${call.outcome}${call.profileIndex == null ? '' : ` · profile ${call.profileIndex + 1}`} · round ${(call.roundIndex ?? 0) + 1} · attempt ${call.attemptIndex + 1}`,
                 }),
@@ -201,6 +197,14 @@ function createResponseInspectorElement(trace: AgentResponseTrace | null, onClos
       ),
     ],
   );
+}
+
+
+function formatTraceModelCallLabel(call: AgentResponseTrace['modelCalls'][number]): string {
+  const profileName = call.profileName?.trim();
+  return profileName
+    ? 'Profile: ' + profileName + ' · ' + call.provider + ' · ' + call.model
+    : call.provider + ' · ' + call.model;
 }
 
 function createTraceDetails(title: string, rows: HTMLElement[], omitted: number): HTMLElement {
@@ -307,12 +311,37 @@ function createChatDateSeparator(presentation: UiGraphChatMessageTimestampPresen
 }
 
 export function mountRivetWebApp(root: HTMLElement, config: WebAppClientConfig): void {
+  root.replaceChildren(createElement('div', { className: 'rivet-web-app-loading', text: 'Loading saved app data…' }));
+  void initializeRivetWebApp(root, config).catch(() => {
+    root.replaceChildren(
+      createElement('div', {
+        className: 'rivet-web-app-error',
+        role: 'alert',
+        text: 'This web app could not be initialized. Reload the page to try again.',
+      }),
+    );
+  });
+}
+
+async function initializeRivetWebApp(root: HTMLElement, config: WebAppClientConfig): Promise<void> {
   let revisionMismatch = false;
   let disposeOutputResizeObservers = () => {};
   const chatPresentationStates = new Map<string, ChatPresentationState>();
   let chatScrollRenderStates = new Map<string, ChatScrollRenderState>();
+  const browserPersistence = new UiGraphBrowserPersistence(config.uiGraph);
+  await browserPersistence.initialize();
+  let storageWarning: UiGraphBrowserPersistenceWarning | undefined = browserPersistence.warning;
+  const hostedBrowserStorage = {
+    clearTransportIncompatibility: () => browserPersistence.clearTransportIncompatibility(),
+    loadSnapshot: () => browserPersistence.loadStoredValues(),
+    get: (key: string) => browserPersistence.loadStoredValue(key),
+    commit: async (patch: Record<string, unknown>) =>
+      void (await browserPersistence.applyStoredValuePatch(patch, { requireDurable: true })),
+    reportTransportIncompatibility: (message: string) => browserPersistence.reportTransportIncompatibility(message),
+  };
+  const storedChatState = await browserPersistence.loadChatState();
   const interactionController = createUiGraphInteractionController(config.uiGraph, {
-    initialState: { ...config.initialState, ...loadUiGraphChatPersistentState(config.uiGraph) },
+    initialState: { ...config.initialState, ...storedChatState },
   });
   let actionRunner = createHostedActionRunner(config);
   let nextStorageAction = 0;
@@ -473,6 +502,17 @@ export function mountRivetWebApp(root: HTMLElement, config: WebAppClientConfig):
               ],
         );
 
+  const renderStorageWarning = (): Node[] =>
+    storageWarning
+      ? [
+          createElement('div', {
+            className: 'rivet-web-app-storage-warning',
+            role: 'alert',
+            text: storageWarning.message,
+          }),
+        ]
+      : [];
+
   const renderRevisionMismatchModal = (): Node[] => {
     if (!revisionMismatch) return [];
 
@@ -515,7 +555,7 @@ export function mountRivetWebApp(root: HTMLElement, config: WebAppClientConfig):
       interactionController.updateStatePatch(chatState);
     }
     isRestoringChatState = false;
-    saveUiGraphChatPersistentState(config.uiGraph, interactionController.getSnapshot().state);
+    void browserPersistence.saveChatState(interactionController.getSnapshot().state).catch(() => undefined);
     render();
   };
 
@@ -527,29 +567,25 @@ export function mountRivetWebApp(root: HTMLElement, config: WebAppClientConfig):
         const storageAction = ++nextStorageAction;
         try {
           const result = await actionRunner.run({
+            browserStorage: hostedBrowserStorage,
             componentId,
             onProgress: reportProgress,
             revisionKey: config.revisionKey,
             signal,
             state,
-            storage: loadUiGraphWebAppStorage(config.uiGraph),
           });
           signal.throwIfAborted();
           if (result.storagePatch && Object.keys(result.storagePatch).length > 0) {
-            applyUiGraphWebAppStorageActionPatch(
+            await applyUiGraphWebAppStorageActionPatchAsync(
               result.storagePatch,
               storageAction,
               appliedStorageActionByKey,
-              (applicablePatch) =>
-                applyUiGraphWebAppStoragePatch(
-                  config.uiGraph,
-                  loadUiGraphWebAppStorage(config.uiGraph),
-                  applicablePatch,
-                ),
+              async (applicablePatch) =>
+                void (await browserPersistence.applyStoredValuePatch(applicablePatch, { requireDurable: true })),
             );
           }
           if (component.type === 'chat' && component.allowResponseInspection && result.responseTrace) {
-            saveUiGraphResponseTrace(config.uiGraph, component.id, result.responseTrace);
+            await browserPersistence.saveResponseTrace(String(component.id), result.responseTrace);
           }
           return { statePatch: result.statePatch, responseTrace: result.responseTrace };
         } catch (error) {
@@ -867,11 +903,17 @@ export function mountRivetWebApp(root: HTMLElement, config: WebAppClientConfig):
           const messageIndex = searchState.messageMenu?.messageIndex;
           searchState.messageMenu = undefined;
           const message = messageIndex == null ? undefined : renderModel.messages[messageIndex];
-          searchState.inspectedTrace =
-            message?.role === 'assistant' && typeof message.responseTraceId === 'string'
-              ? loadUiGraphResponseTrace(config.uiGraph, component.id, message.responseTraceId) ?? null
-              : null;
+          searchState.inspectedTrace = null;
           render();
+          if (message?.role === 'assistant' && typeof message.responseTraceId === 'string') {
+            void browserPersistence
+              .loadResponseTrace(String(component.id), message.responseTraceId)
+              .then((trace) => {
+                searchState.inspectedTrace = trace ?? null;
+                render();
+              })
+              .catch(() => render());
+          }
         };
         const closeResponseInspector = () => {
           searchState.inspectedTrace = undefined;
@@ -1551,6 +1593,7 @@ export function mountRivetWebApp(root: HTMLElement, config: WebAppClientConfig):
         }),
       ]),
       ...config.uiGraph.components.map((component) => renderComponent(component, interaction)),
+      ...renderStorageWarning(),
       ...renderErrors(),
     ]);
     disposeOutputResizeObservers();
@@ -1614,15 +1657,41 @@ export function mountRivetWebApp(root: HTMLElement, config: WebAppClientConfig):
   };
 
   let persistedChatState = interactionController.getSnapshot().state;
-  saveUiGraphChatPersistentState(config.uiGraph, persistedChatState);
   interactionController.subscribe((change) => {
     const nextState = interactionController.getSnapshot().state;
     if (!isRestoringChatState && hasUiGraphChatPersistentStateChanged(config.uiGraph, persistedChatState, nextState)) {
-      saveUiGraphChatPersistentState(config.uiGraph, nextState);
-      pruneUiGraphResponseTraces(config.uiGraph, nextState);
+      void browserPersistence.saveChatState(nextState).catch(() => undefined);
+      void browserPersistence.pruneResponseTraces(nextState).catch(() => undefined);
     }
     persistedChatState = nextState;
     if (change !== 'state') render();
+  });
+  browserPersistence.subscribeWarning((warning) => {
+    storageWarning = warning;
+    render();
+  });
+  browserPersistence.subscribe((change) => {
+    if (change.namespace !== 'chat-state') return;
+    void browserPersistence
+      .loadChatState()
+      .then((nextChatState) => {
+        const patch: Record<string, unknown> = {};
+        for (const component of config.uiGraph.components) {
+          if (component.type !== 'chat') continue;
+          const draftKey = getUiGraphChatDraftStateKey(component.id);
+          const messagesKey = getUiGraphChatMessagesStateKey(component.id);
+          const pinsKey = getUiGraphChatPinsStateKey(component.id);
+          patch[draftKey] = nextChatState[draftKey] ?? '';
+          patch[messagesKey] = nextChatState[messagesKey] ?? [];
+          patch[pinsKey] = nextChatState[pinsKey] ?? [];
+        }
+        isRestoringChatState = true;
+        interactionController.updateStatePatch(patch);
+        persistedChatState = interactionController.getSnapshot().state;
+        isRestoringChatState = false;
+        render();
+      })
+      .catch(() => undefined);
   });
   window.addEventListener('pagehide', (event) => {
     if (actionRunner.survivesPageDetach) {
@@ -1633,6 +1702,7 @@ export function mountRivetWebApp(root: HTMLElement, config: WebAppClientConfig):
     actionRunner.dispose();
     disposeOutputResizeObservers();
     restoreActionRunnerFromPageCache = event.persisted;
+    if (!event.persisted) browserPersistence.dispose();
   });
   window.addEventListener('pageshow', (event) => {
     if (!event.persisted || !restoreActionRunnerFromPageCache) return;

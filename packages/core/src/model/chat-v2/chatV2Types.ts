@@ -169,6 +169,8 @@ export type RunChatV2PipelineOptions = {
    * provider.
    */
   profileIndex?: number | undefined;
+  /** User-facing title from the source LLM Profile node. Never sent to the provider. */
+  profileName?: string | undefined;
   profileHealthKey?: string | undefined;
   profileHealthState?: RivetLLMProfileHealthState | undefined;
   roundIndex?: number | undefined;
@@ -181,7 +183,7 @@ export type RunChatV2PipelineOptions = {
   onStreamActivity?: (() => void) | undefined;
   onBeforeProviderRetry?: ((cooldownMs: number) => void | Promise<void>) | undefined;
   context: Pick<InternalProcessContext, 'signal' | 'onPartialOutputs'> &
-    Partial<Pick<InternalProcessContext, 'node' | 'onChatV2CallFinished' | 'processId'>>;
+    Partial<Pick<InternalProcessContext, 'node' | 'onChatV2CallFinished' | 'processId' | 'llmProfileHealthExecutionCorrelationId'>>;
   executeStream?: ChatV2StreamExecutor | undefined;
   executeGenerate?: ChatV2GenerateExecutor | undefined;
 };

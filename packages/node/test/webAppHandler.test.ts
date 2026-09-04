@@ -43,6 +43,44 @@ function waitForActionLoadingPresentation(): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ACTION_LOADING_PRESENTATION_WAIT_MS));
 }
 
+async function waitForWebAppCondition(
+  dom: JSDOM,
+  description: string,
+  condition: () => boolean,
+): Promise<void> {
+  const maximumChecks = 20;
+  for (let check = 0; check < maximumChecks; check += 1) {
+    if (condition()) return;
+    await new Promise((resolve) => dom.window.setTimeout(resolve, 0));
+  }
+  throw new Error(`Timed out waiting for ${description}.`);
+}
+
+function installWebAppBrowserGlobals(dom: JSDOM): void {
+  // JSDOM does not expose these browser-standard codecs. The generated client
+  // uses them only when an action serializes browser storage; real browsers
+  // provide both natively.
+  if (dom.window.TextEncoder == null) {
+    Object.defineProperty(dom.window, 'TextEncoder', { configurable: true, value: globalThis.TextEncoder });
+  }
+  if (dom.window.TextDecoder == null) {
+    Object.defineProperty(dom.window, 'TextDecoder', { configurable: true, value: globalThis.TextDecoder });
+  }
+}
+
+async function waitForWebAppMount(dom: JSDOM): Promise<void> {
+  installWebAppBrowserGlobals(dom);
+  const maximumChecks = 20;
+  let observedSurface: Element | null = null;
+  for (let check = 0; check < maximumChecks; check += 1) {
+    const surface = dom.window.document.querySelector('.rivet-web-app-surface');
+    if (surface != null && surface === observedSurface) return;
+    observedSurface = surface;
+    await new Promise((resolve) => dom.window.setTimeout(resolve, 0));
+  }
+  throw new Error('Timed out waiting for the Rivet web app to finish initializing.');
+}
+
 function makeKnowledgeStore(message: string): RivetKnowledgeStore {
   return {
     capabilities: {},
@@ -288,6 +326,7 @@ void describe('createRivetWebAppHandler', () => {
 
     try {
       await new Promise<void>((resolve) => dom.window.addEventListener('load', () => resolve(), { once: true }));
+      await waitForWebAppMount(dom);
 
       assert.deepEqual(fetchedAssets, new Set(Object.values(manifest).map((asset) => asset.fileName)));
       assert.equal(
@@ -380,9 +419,10 @@ void describe('createRivetWebAppHandler', () => {
       runScripts: 'dangerously',
       url: 'https://example.test/app',
     });
+    await waitForWebAppMount(dom);
 
     dom.window.document.querySelector<HTMLButtonElement>('.rivet-web-app-button')?.click();
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await waitForWebAppCondition(dom, 'the hosted action request', () => requests.length === 1);
     assert.deepEqual(requests, [
       {
         componentId: 'run-button',
@@ -397,7 +437,7 @@ void describe('createRivetWebAppHandler', () => {
     dom.window.close();
   });
 
-  void it('restores hosted Chat state from browser storage and flushes only its history', () => {
+  void it('restores hosted Chat state from browser storage and flushes only its history', async () => {
     const project = makeProject();
     const uiGraph = project.uiGraphs?.['ui-graph' as UiGraphId]!;
     const chatId = 'chat' as UiComponentId;
@@ -423,6 +463,7 @@ void describe('createRivetWebAppHandler', () => {
       runScripts: 'dangerously',
       url: 'https://example.test/app',
     });
+    await waitForWebAppMount(dom);
 
     assert.equal(dom.window.document.querySelectorAll('.rivet-web-app-chat-message').length, 2);
     assert.equal(
@@ -476,7 +517,7 @@ void describe('createRivetWebAppHandler', () => {
     dom.window.close();
   });
 
-  void it('renders the opt-in hosted response inspector without editor-only navigation', () => {
+  void it('renders the opt-in hosted response inspector without editor-only navigation', async () => {
     const project = makeProject();
     const uiGraph = project.uiGraphs?.['ui-graph' as UiGraphId]!;
     const chatId = 'chat' as UiComponentId;
@@ -495,14 +536,27 @@ void describe('createRivetWebAppHandler', () => {
       responseReadyAt: Date.parse('2026-08-01T10:00:04.000Z'),
       status: 'completed',
       summary: {
-        modelCallCount: 0,
+        modelCallCount: 1,
         toolCallCount: 0,
         retryCount: 2,
         fallbackCount: 1,
         knownCostUsd: 0,
         costStatus: 'unknown',
       },
-      modelCalls: [],
+      modelCalls: [
+        {
+          callId: 'model-call-1',
+          nodeId: 'chat-node',
+          processId: 'chat-process',
+          provider: 'custom',
+          model: 'deepseek-v4-flash',
+          outcome: 'success',
+          attemptIndex: 0,
+          profileIndex: 0,
+          profileName: 'Primary DeepSeek',
+          pricing: { status: 'unknown' },
+        },
+      ],
       toolCalls: [],
       omittedModelCallCount: 0,
       omittedToolCallCount: 0,
@@ -523,6 +577,7 @@ void describe('createRivetWebAppHandler', () => {
       runScripts: 'dangerously',
       url: 'https://example.test/app',
     });
+    await waitForWebAppMount(dom);
 
     dom.window.document
       .querySelector<HTMLElement>('[data-rivet-chat-message-index="1"] .rivet-web-app-chat-message')
@@ -535,6 +590,7 @@ void describe('createRivetWebAppHandler', () => {
       ['Open in reading view', 'Inspect response', 'Remove message'],
     );
     menuButtons[1]?.click();
+    await new Promise((resolve) => dom.window.setTimeout(resolve, 0));
     const inspector = dom.window.document.querySelector('.rivet-agent-response-inspector');
     assert.equal(inspector?.getAttribute('role'), 'dialog');
     const inspectorText = inspector?.textContent ?? '';
@@ -544,13 +600,14 @@ void describe('createRivetWebAppHandler', () => {
     assert.match(inspectorText, /LLM profile fallbacks1/);
     assert.match(inspectorText, /Usage and cost/);
     assert.match(inspectorText, /Timing/);
+    assert.match(inspectorText, /Profile: Primary DeepSeek · custom · deepseek-v4-flash/);
     assert.doesNotMatch(inspectorText, /trace-1|graph-run-1|main-graph/);
     assert.doesNotMatch(inspectorText, /Open graph at this run/);
     dom.window.document.querySelector<HTMLButtonElement>('.rivet-agent-response-inspector-close')?.click();
     dom.window.close();
   });
 
-  void it('keeps hosted Chat history in place for menu and pin presentation changes', () => {
+  void it('keeps hosted Chat history in place for menu and pin presentation changes', async () => {
     const project = makeProject();
     const uiGraph = project.uiGraphs?.['ui-graph' as UiGraphId]!;
     const chatId = 'chat' as UiComponentId;
@@ -586,6 +643,7 @@ void describe('createRivetWebAppHandler', () => {
       runScripts: 'dangerously',
       url: 'https://example.test/app',
     });
+    await waitForWebAppMount(dom);
 
     const messages = dom.window.document.querySelector<HTMLElement>('.rivet-web-app-chat-messages')!;
     messages.scrollTop = 280;
@@ -664,6 +722,7 @@ void describe('createRivetWebAppHandler', () => {
       runScripts: 'dangerously',
       url: 'https://example.test/app',
     });
+    await waitForWebAppMount(dom);
 
     dom.window.document.querySelectorAll<HTMLButtonElement>('.rivet-web-app-button')[1]?.click();
     await waitForActionLoadingPresentation();
@@ -710,6 +769,7 @@ void describe('createRivetWebAppHandler', () => {
       runScripts: 'dangerously',
       url: 'https://example.test/app',
     });
+    await waitForWebAppMount(dom);
 
     dom.window.document.querySelectorAll('.rivet-web-app-action-stack > .rivet-web-app-button')[0]?.click();
     dom.window.document.querySelectorAll('.rivet-web-app-action-stack > .rivet-web-app-button')[1]?.click();
@@ -753,7 +813,7 @@ void describe('createRivetWebAppHandler', () => {
     dom.window.close();
   });
 
-  void it('unfolds a collapsed Output when its data key receives a new value', () => {
+  void it('unfolds a collapsed Output when its data key receives a new value', async () => {
     const project = makeProject();
     const uiGraph = project.uiGraphs?.['ui-graph' as UiGraphId]!;
     uiGraph.components = [
@@ -770,6 +830,7 @@ void describe('createRivetWebAppHandler', () => {
       runScripts: 'dangerously',
       url: 'https://example.test/app',
     });
+    await waitForWebAppMount(dom);
 
     dom.window.document.querySelector<HTMLButtonElement>('.rivet-web-app-output-toggle')?.click();
     assert.ok(dom.window.document.querySelector('.rivet-web-app-output-collapsed'));
@@ -799,8 +860,10 @@ void describe('createRivetWebAppHandler', () => {
       runScripts: 'dangerously',
       url: 'https://example.test/app',
     });
+    await waitForWebAppMount(dom);
 
     dom.window.document.querySelector<HTMLButtonElement>('.rivet-web-app-button')?.click();
+    await waitForWebAppCondition(dom, 'the hosted action fetch to start', () => actionSignal != null);
     dom.window.dispatchEvent(new dom.window.Event('pagehide'));
     await new Promise((resolve) => setTimeout(resolve, 0));
 
@@ -832,6 +895,7 @@ void describe('createRivetWebAppHandler', () => {
         url: 'https://example.test/app',
       },
     );
+    await waitForWebAppMount(dom);
 
     const promptInput = dom.window.document.querySelector('.rivet-web-app-control') as HTMLInputElement;
     promptInput.value = 'hello';
@@ -905,6 +969,7 @@ void describe('createRivetWebAppHandler', () => {
         url: 'https://example.test/app',
       },
     );
+    await waitForWebAppMount(dom);
 
     (dom.window.document.querySelector('.rivet-web-app-button') as HTMLButtonElement).click();
     await new Promise((resolve) => setTimeout(resolve, 0));
@@ -956,6 +1021,7 @@ void describe('createRivetWebAppHandler', () => {
         url: 'https://example.test/app',
       },
     );
+    await waitForWebAppMount(dom);
 
     (dom.window.document.querySelector('.rivet-web-app-button') as HTMLButtonElement).click();
     await new Promise((resolve) => setTimeout(resolve, 0));
@@ -981,6 +1047,7 @@ void describe('createRivetWebAppHandler', () => {
         url: 'https://example.test/app',
       },
     );
+    await waitForWebAppMount(dom);
 
     (dom.window.document.querySelector('.rivet-web-app-button') as HTMLButtonElement).click();
     await new Promise((resolve) => setTimeout(resolve, 0));
@@ -1029,6 +1096,7 @@ void describe('createRivetWebAppHandler', () => {
         url: 'https://example.test/app',
       },
     );
+    await waitForWebAppMount(dom);
 
     (dom.window.document.querySelector('.rivet-web-app-button') as HTMLButtonElement).click();
     await new Promise((resolve) => setTimeout(resolve, 0));
@@ -1084,6 +1152,7 @@ void describe('createRivetWebAppHandler', () => {
         url: 'https://example.test/app',
       },
     );
+    await waitForWebAppMount(dom);
 
     (dom.window.document.querySelector('.rivet-web-app-button') as HTMLButtonElement).click();
     await new Promise((resolve) => setTimeout(resolve, 0));
@@ -1112,6 +1181,7 @@ void describe('createRivetWebAppHandler', () => {
         url: 'https://example.test/app',
       },
     );
+    await waitForWebAppMount(dom);
 
     (dom.window.document.querySelector('.rivet-web-app-button') as HTMLButtonElement).click();
     await new Promise((resolve) => setTimeout(resolve, 0));
@@ -1145,6 +1215,7 @@ void describe('createRivetWebAppHandler', () => {
         url: 'https://example.test/app',
       },
     );
+    await waitForWebAppMount(dom);
 
     (dom.window.document.querySelector('.rivet-web-app-button') as HTMLButtonElement).click();
     await waitForActionLoadingPresentation();
@@ -1197,6 +1268,7 @@ void describe('createRivetWebAppHandler', () => {
       runScripts: 'dangerously',
       url: 'https://example.test/app',
     });
+    await waitForWebAppMount(dom);
 
     dom.window.document.querySelector<HTMLButtonElement>('.rivet-web-app-button')?.click();
     await new Promise((resolve) => setTimeout(resolve, 0));
@@ -1208,7 +1280,7 @@ void describe('createRivetWebAppHandler', () => {
     assert.doesNotMatch(renderedError ?? '', /Unexpected token|<html>/i);
   });
 
-  void it('renders Text and Markdown without card surfaces and sanitizes hosted Markdown', () => {
+  void it('renders Text and Markdown without card surfaces and sanitizes hosted Markdown', async () => {
     const project = makeProject();
     const uiGraph = project.uiGraphs?.['ui-graph' as UiGraphId]!;
     uiGraph.components = [
@@ -1226,6 +1298,7 @@ void describe('createRivetWebAppHandler', () => {
 
     const html = renderRivetWebAppHtml(uiGraph, { actionPath: '/app/actions/run' });
     const dom = new JSDOM(html, { runScripts: 'dangerously', url: 'https://example.test/app' });
+    await waitForWebAppMount(dom);
     const text = dom.window.document.querySelector('.rivet-web-app-text');
     const markdown = dom.window.document.querySelector('.rivet-web-app-markdown');
     const links = markdown?.querySelectorAll('a');
@@ -1325,7 +1398,7 @@ void describe('createRivetWebAppHandler', () => {
     assert.ok(rendererStyleIndex > markdownStyleIndex);
   });
 
-  void it('renders Gap components as cardless shared spacing', () => {
+  void it('renders Gap components as cardless shared spacing', async () => {
     const project = makeProject();
     const uiGraph = project.uiGraphs?.['ui-graph' as UiGraphId]!;
     uiGraph.components = [{ id: 'large-gap' as any, size: 'large', type: 'gap' }];
@@ -1334,6 +1407,7 @@ void describe('createRivetWebAppHandler', () => {
       runScripts: 'dangerously',
       url: 'https://example.test/app',
     });
+    await waitForWebAppMount(dom);
     const gap = dom.window.document.querySelector('.rivet-web-app-gap.rivet-web-app-gap-large');
 
     assert.ok(gap);
@@ -1580,8 +1654,9 @@ void describe('createRivetWebAppHandler', () => {
       runScripts: 'dangerously',
       url: 'https://example.test/app',
     });
+    await waitForWebAppMount(clientDom);
     clientDom.window.document.querySelector<HTMLButtonElement>('.rivet-web-app-button')?.click();
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await waitForWebAppCondition(clientDom, 'the revision-key action request', () => clientRequests.length === 1);
     clientDom.window.close();
     assert.deepEqual(clientRequests, [
       {
@@ -1624,6 +1699,7 @@ void describe('createRivetWebAppHandler', () => {
       runScripts: 'dangerously',
       url: 'https://example.test/app',
     });
+    await waitForWebAppMount(mismatchDom);
     mismatchDom.window.document.querySelector<HTMLButtonElement>('.rivet-web-app-button')?.click();
     await new Promise((resolve) => setTimeout(resolve, 0));
     const dialog = mismatchDom.window.document.querySelector<HTMLElement>('[role="dialog"]');

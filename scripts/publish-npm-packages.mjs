@@ -62,6 +62,7 @@ function main() {
   }));
 
   const version = validatePackageVersions(packageJsons);
+  validateCliDockerVersion(version);
   if (checkVersionsOnly) {
     console.log(`Public npm package versions are lockstep at ${version}.`);
     return;
@@ -131,10 +132,7 @@ function loadDotEnv() {
 }
 
 function unquoteEnvValue(value) {
-  if (
-    (value.startsWith('"') && value.endsWith('"')) ||
-    (value.startsWith("'") && value.endsWith("'"))
-  ) {
+  if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
     return value.slice(1, -1);
   }
 
@@ -148,10 +146,7 @@ function writeNpmAuthConfig(stagingRoot) {
   }
 
   const npmAuthConfigPath = path.join(stagingRoot, '.npmrc');
-  writeFileSync(
-    npmAuthConfigPath,
-    `registry=https://registry.npmjs.org/\n//registry.npmjs.org/:_authToken=${token}\n`,
-  );
+  writeFileSync(npmAuthConfigPath, `registry=https://registry.npmjs.org/\n//registry.npmjs.org/:_authToken=${token}\n`);
   return npmAuthConfigPath;
 }
 
@@ -179,6 +174,17 @@ function validatePackageVersions(packageJsons) {
   }
 
   return version;
+}
+
+function validateCliDockerVersion(version) {
+  const dockerfilePath = path.join(repoRoot, 'packages', 'cli', 'Dockerfile');
+  const dockerfile = readFileSync(dockerfilePath, 'utf8');
+  const dockerVersion = /^ARG RIVET_CLI_VERSION=(\S+)$/m.exec(dockerfile)?.[1];
+  if (dockerVersion !== version) {
+    fail(
+      `packages/cli/Dockerfile defaults to ${dockerVersion ?? 'no version'}, expected the public package version ${version}.`,
+    );
+  }
 }
 
 function validatePackage(pkg) {
@@ -282,12 +288,16 @@ function rewriteWorkspaceDependencies(dependencies, version) {
 }
 
 function packageVersionExists(name, version, npmAuthConfigPath) {
-  const result = run(npmCommand, ['view', `${name}@${version}`, 'version', '--json', '--registry', 'https://registry.npmjs.org/'], {
-    stdio: 'pipe',
-    allowFailure: true,
-    env: npmAuthConfigPath ? { NPM_CONFIG_USERCONFIG: npmAuthConfigPath } : undefined,
-    ...npmRunOptions,
-  });
+  const result = run(
+    npmCommand,
+    ['view', `${name}@${version}`, 'version', '--json', '--registry', 'https://registry.npmjs.org/'],
+    {
+      stdio: 'pipe',
+      allowFailure: true,
+      env: npmAuthConfigPath ? { NPM_CONFIG_USERCONFIG: npmAuthConfigPath } : undefined,
+      ...npmRunOptions,
+    },
+  );
 
   if (result.status === 0) {
     return true;
@@ -302,7 +312,16 @@ function packageVersionExists(name, version, npmAuthConfigPath) {
 }
 
 function publishPackage(name, stagingDir, distTag, npmAuthConfigPath) {
-  const publishArgs = ['publish', stagingDir, '--access', 'public', '--tag', distTag, '--registry', 'https://registry.npmjs.org/'];
+  const publishArgs = [
+    'publish',
+    stagingDir,
+    '--access',
+    'public',
+    '--tag',
+    distTag,
+    '--registry',
+    'https://registry.npmjs.org/',
+  ];
   if (dryRun) {
     publishArgs.push('--dry-run');
   }

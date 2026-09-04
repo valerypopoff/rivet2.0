@@ -530,7 +530,8 @@
 
 .project-settings-llm-health-row {
   display: flex;
-  align-items: center;
+  flex-direction: column;
+  align-items: stretch;
   justify-content: space-between;
   gap: 14px;
   padding: 10px 12px;
@@ -551,6 +552,55 @@
 
 .project-settings-llm-health-description {
   min-width: 0;
+}
+
+.project-settings-llm-health-row-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.project-settings-llm-health-recordings {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-top: 10px;
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.project-settings-llm-health-recordings-title,
+.project-settings-llm-health-recording-label {
+  color: var(--grey-lightest);
+  font-size: var(--workflow-library-font-size-s);
+  font-weight: 700;
+}
+
+.project-settings-llm-health-recording-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.project-settings-llm-health-recording {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.14);
+}
+
+.project-settings-llm-health-recording-label,
+.project-settings-llm-health-recording-detail {
+  overflow-wrap: anywhere;
+}
+
+.project-settings-llm-health-recording-detail {
+  margin-top: 2px;
+  color: var(--grey-light);
+  font-size: var(--workflow-library-font-size-s);
 }
 
 .project-settings-llm-health-name {
@@ -594,7 +644,8 @@
 
 @media (max-width: 720px) {
   .project-settings-llm-health-toolbar,
-  .project-settings-llm-health-row {
+  .project-settings-llm-health-row-header,
+  .project-settings-llm-health-recording {
     align-items: stretch;
     flex-direction: column;
   }

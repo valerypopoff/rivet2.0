@@ -48,6 +48,12 @@ const sharedCodeWorkerPoolReady = prewarmSharedAppExecutorCodeWorkerPool().catch
   logRuntimeError('Failed to prewarm app-executor code workers.', error);
 });
 
+function normalizeLLMProfileHealthExecutionCorrelationId(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const normalized = value.trim();
+  return normalized.length > 0 && normalized.length <= 200 ? normalized : undefined;
+}
+
 function getEditorExecutionCache(client: AppExecutorClient, project: Rivet.Project) {
   let cachesByProjectId = editorExecutionCachesByClient.get(client);
   if (!cachesByProjectId) {
@@ -237,6 +243,7 @@ const rivetDebugger = startDebuggerServer({
     useEditorCache,
     captureNodeTimings,
     evaluation,
+    llmProfileHealthExecutionCorrelationId: requestedLLMProfileHealthExecutionCorrelationId,
     returnWhenGraphOutputsReady,
     webAppStorage: initialWebAppStorage,
   }) => {
@@ -310,10 +317,14 @@ const rivetDebugger = startDebuggerServer({
         logRuntimeError(`Failed to enable plugin ${fail.id}.`, fail.error);
       }
 
+      const llmProfileHealthExecutionCorrelationId = normalizeLLMProfileHealthExecutionCorrelationId(
+        requestedLLMProfileHealthExecutionCorrelationId,
+      );
       const injectedProcessorOptions =
         (await getAppExecutorHostOptions().createProcessorOptions?.({
           graphId,
           isWebAppAction: initialWebAppStorage !== undefined,
+          ...(llmProfileHealthExecutionCorrelationId == null ? {} : { llmProfileHealthExecutionCorrelationId }),
           project,
           projectPath,
           requestId,

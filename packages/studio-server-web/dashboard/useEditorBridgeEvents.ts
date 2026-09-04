@@ -3,6 +3,7 @@ import { toast } from 'react-toastify';
 import {
   isEditorToDashboardEvent,
   isValidBridgeOrigin,
+  type WorkflowProjectBindingReconciliationResult,
   postMessageToEditor,
 } from '../../studio-server-shared/editor-bridge';
 import {
@@ -24,8 +25,11 @@ type UseEditorBridgeEventsOptions = {
   onOpenProjectCountChange: (count: number) => void;
   onProjectOpenFailed: (error: string) => void;
   onProjectOpened: (path: string, requestId?: string) => void;
-  onProjectSaved: (path: string) => void;
+  onRequestActiveWorkflowProjectRename: () => void;
+  onProjectSaved: (path: string, hasNewerUnsavedChanges?: boolean) => void;
   onWorkflowPathsMovedApplied: (requestId?: string) => void;
+  onWorkflowProjectBindingsReconciled: (result: WorkflowProjectBindingReconciliationResult, requestId?: string) => void;
+  onWorkflowProjectContentChangeResolved: (requestId: string | undefined, resolved: boolean) => void;
 };
 
 export function useEditorBridgeEvents(options: UseEditorBridgeEventsOptions) {
@@ -41,8 +45,11 @@ export function useEditorBridgeEvents(options: UseEditorBridgeEventsOptions) {
     onOpenProjectCountChange,
     onProjectOpenFailed,
     onProjectOpened,
+    onRequestActiveWorkflowProjectRename,
     onProjectSaved,
     onWorkflowPathsMovedApplied,
+    onWorkflowProjectBindingsReconciled,
+    onWorkflowProjectContentChangeResolved,
   } = options;
 
   useEffect(() => {
@@ -144,9 +151,14 @@ export function useEditorBridgeEvents(options: UseEditorBridgeEventsOptions) {
         case 'editor-ready':
           onEditorReady();
           break;
+        case 'request-active-workflow-project-rename':
+          onRequestActiveWorkflowProjectRename();
+          break;
         case 'project-opened':
           onProjectOpened(event.data.path, event.data.requestId);
-          focusEditorFrame();
+          if (!isEditableElement(document.activeElement)) {
+            focusEditorFrame();
+          }
           break;
         case 'active-project-path-changed':
           onActiveWorkflowProjectPathChange(event.data.path);
@@ -158,10 +170,19 @@ export function useEditorBridgeEvents(options: UseEditorBridgeEventsOptions) {
           onOpenProjectCountChange(event.data.count);
           break;
         case 'project-saved':
-          onProjectSaved(event.data.path);
+          onProjectSaved(event.data.path, event.data.hasNewerUnsavedChanges);
           break;
         case 'workflow-paths-moved-applied':
           onWorkflowPathsMovedApplied(event.data.requestId);
+          break;
+        case 'workflow-project-bindings-reconciled':
+          onWorkflowProjectBindingsReconciled(
+            { changes: event.data.changes, contentChanges: event.data.contentChanges },
+            event.data.requestId,
+          );
+          break;
+        case 'workflow-project-content-change-resolved':
+          onWorkflowProjectContentChangeResolved(event.data.requestId, event.data.resolved);
           break;
         case 'project-open-failed':
           onProjectOpenFailed(event.data.error);
@@ -183,7 +204,10 @@ export function useEditorBridgeEvents(options: UseEditorBridgeEventsOptions) {
     onOpenProjectCountChange,
     onProjectOpenFailed,
     onProjectOpened,
+    onRequestActiveWorkflowProjectRename,
     onProjectSaved,
     onWorkflowPathsMovedApplied,
+    onWorkflowProjectBindingsReconciled,
+    onWorkflowProjectContentChangeResolved,
   ]);
 }

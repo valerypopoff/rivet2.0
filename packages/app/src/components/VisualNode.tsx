@@ -46,6 +46,8 @@ import {
   getMissingAutoDelegateToolGraphWarnings,
   getToolNodeHeaderWarning,
 } from '../domain/graphEditing/toolWarnings.js';
+import { combineNodeHeaderWarnings } from '../domain/graphEditing/disabledNodeWarnings.js';
+import { disabledUpstreamInputWarningsState } from '../state/selectors/ioDefinitions.js';
 
 export type VisualNodeProps = {
   node: ChartNode;
@@ -117,11 +119,16 @@ const VisualNodeImpl = memo(
       const graphId = useAtomValue(graphMetadataState)?.id;
       const executorSession = useExecutorSessionState();
       const nodeColor = node.visualData.color;
+      const disabledUpstreamInputWarnings = useAtomValue(disabledUpstreamInputWarningsState);
+      const combinedHeaderWarning = combineNodeHeaderWarnings(
+        headerWarning,
+        disabledUpstreamInputWarnings.get(editTargetNode?.id ?? node.id),
+      );
       const isOutputPreviewHovered = Boolean(isHovered || shouldShowHoverControls);
       const isHistoricalChanged = changeInfo != null && changeInfo.changed && !!changeInfo.before && !!changeInfo.after;
       const staticHeaderControlCount =
         Number(isHistoricalChanged) +
-        Number(Boolean(headerWarning)) +
+        Number(Boolean(combinedHeaderWarning)) +
         Number(isNodePrefabInstance) +
         Number(graphId != null && compareChangeKind === 'changed') +
         Number(node.type === 'delegateFunctionCall');
@@ -208,7 +215,7 @@ const VisualNodeImpl = memo(
               disabled: node.disabled,
               conditional: !!node.isConditional,
               hasPrefabIndicator: isNodePrefabInstance,
-              hasHeaderWarning: Boolean(headerWarning),
+              hasHeaderWarning: Boolean(combinedHeaderWarning),
               hasCompareChange: compareChangeKind === 'changed',
               [`compare-${compareChangeKind}`]: compareChangeKind && compareChangeKind !== 'unchanged',
             },
@@ -240,7 +247,7 @@ const VisualNodeImpl = memo(
               isKnownNodeType={isKnownNodeType}
               isReallyZoomedOut={effectiveIsReallyZoomedOut}
               showRunningIndicator={showRunningChrome}
-              headerWarning={headerWarning}
+              headerWarning={combinedHeaderWarning}
               editTargetNode={nodeForEditing}
               isNodePrefabInstance={isNodePrefabInstance}
             />
@@ -257,7 +264,7 @@ const VisualNodeImpl = memo(
               showRunningIndicator={showRunningChrome}
               renderHeavyContent={renderHeavyContent}
               minimumNodeWidth={minimumNodeWidth}
-              headerWarning={headerWarning}
+              headerWarning={combinedHeaderWarning}
               compareChangeKind={compareChangeKind}
               graphId={graphId}
               editTargetNode={nodeForEditing}

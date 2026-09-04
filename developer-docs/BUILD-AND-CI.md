@@ -213,9 +213,11 @@ that dependency for the same Yarn PnP ESM-loader compatibility reason as the Cor
 CJS and app-executor bundlers.
 The test-style script fails when `test.only`, `it.only`, `describe.only`,
 `suite.only`, or `context.only` calls are present in tracked or untracked
-non-ignored test files. Source-reading tests are controlled by the explicit shrinking
-allowlist in `source-reading-test-allowlist.mjs`: a new source-reading test fails,
-and removing one requires removing its stale allowlist entry. `.skip` remains a
+non-ignored test files. Source-reading candidates are controlled by the explicit shrinking
+allowlist in `source-reading-test-allowlist.mjs`: a new candidate fails, and removing one
+requires removing its stale allowlist entry. The lexical candidate check intentionally also
+catches direct filesystem reads, so a retained black-box fixture or generated-artifact test
+needs a narrow comment explaining why it is not a production-source contract. `.skip` remains a
 visible review queue because several parked runtime optimizations intentionally keep
 characterization cases beside the active suite.
 
@@ -675,8 +677,19 @@ longer requires `dependenciesMeta` or an unplugged package copy.
 
 ### Dependency security
 
-`yarn security:audit` parses Yarn's recursive NDJSON audit output and fails on
-every critical finding and every unreviewed high finding. Temporary high-severity
+`yarn security:audit` parses Yarn's recursive NDJSON audit output, discarding only
+Yarn reporter lines in its `➤ YN####:` format, and fails closed on every other
+non-JSON line. A nonzero audit command exit must first contain JSON finding output,
+then is accepted only when at least one audit finding row was parsed, so a
+reporter-only or transport failure cannot look like a clean audit. It fails on every
+critical finding and every unreviewed high finding. A single retry is reserved for
+known transient registry socket, DNS, rate-limit, timeout, and server failures; malformed
+reports and all other command failures surface immediately. The audit child alone defaults to npm's canonical
+`https://registry.npmjs.org` registry and a two-minute HTTP timeout, while honoring
+explicit `YARN_NPM_REGISTRY_SERVER` and `YARN_HTTP_TIMEOUT` overrides. Normal dependency
+installation keeps its existing registry and timeout configuration. The audit passes
+Yarn's `--no-deprecations` option because deprecation annotations require a metadata
+request for every audited package but do not affect vulnerability findings. Temporary high-severity
 exceptions live in
 [`security/dependency-audit-exceptions.json`](../security/dependency-audit-exceptions.json)
 and must name their package/advisory, normalized direct dependents, scope, reason,
@@ -1052,15 +1065,22 @@ manifests together:
 `packages/core/package.json`, `packages/node/package.json`,
 `packages/evaluations/package.json`, and `packages/cli/package.json`.
 
+This lockstep rule is a repository publishing contract, not a general npm
+requirement. The publisher emits the four packages as one compatible release
+family and rewrites internal `workspace:` dependencies to `^<family version>`.
+Desktop, app-executor, documentation, and private Studio Server versions are
+separate release tracks and must not be forced to match the public npm family.
+
 - patch releases: `2.0.1`, `2.0.2`, etc. for compatible fixes
 - minor releases: `2.1.0`, `2.2.0`, etc. for compatible features
 - prereleases: `2.1.0-beta.1`, etc. publish with the `next` dist-tag unless `NPM_DIST_TAG` overrides it
 
 The publish script refuses to publish if the four package versions disagree, if
 the version is not semver, or if the major version is not `2`. It also checks
-npm before publishing each package and skips package versions that are already
-present in the registry, so re-running the same main-branch workflow does not
-turn an already-published package into a hard failure.
+that the CLI Dockerfile's local-build fallback matches the lockstep package
+version. It checks npm before publishing each package and skips package versions
+that are already present in the registry, so re-running the same main-branch
+workflow does not turn an already-published package into a hard failure.
 
 ### npm trusted publishing
 

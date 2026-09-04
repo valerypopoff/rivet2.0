@@ -111,6 +111,7 @@ void describe('AgentResponseTrace', () => {
   void it('deduplicates redelivered identified calls without double-counting usage or cost', () => {
     const firstModelCall = modelEvent({
       callId: 'model-round-1' as never,
+      profileName: 'Primary route',
       roundIndex: 0,
       durationMs: 100,
       normalizedUsage: { promptTokens: 10, completionTokens: 2 },
@@ -161,6 +162,7 @@ void describe('AgentResponseTrace', () => {
         ['model-round-2', 210],
       ],
     );
+    assert.equal(trace.modelCalls[0]?.profileName, 'Primary route');
     assert.equal(trace.toolCalls[0]?.durationMs, 6);
     // Remote/local redelivery from an older executor may not have the newly
     // optional pointer. Preserve an observed exact result owner instead of

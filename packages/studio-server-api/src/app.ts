@@ -1,3 +1,5 @@
+import { performance } from 'node:perf_hooks';
+
 import express, {
   type Express,
   type NextFunction,
@@ -25,6 +27,8 @@ import { appSettingsRouter } from './routes/app-settings.js';
 import { uiAuthRouter } from './routes/ui-auth.js';
 import { webAppOAuthRouter } from './web-app-oauth.js';
 import { runtimeLibrariesRouter } from './routes/runtime-libraries.js';
+import { createDeploymentStatusRouter } from './routes/deployment-status.js';
+import { getDeploymentTopology } from './deployment-status.js';
 import {
   getLatestWebAppsBasePath,
   getLatestWorkflowsBasePath,
@@ -35,16 +39,36 @@ import { getWorkflowStorageBackendMode } from './routes/workflows/storage-config
 import { requireAuth } from './middleware/auth.js';
 import { createProxySettingsSnapshot } from './proxy-settings-snapshot.js';
 import { isTrustedProxyRequest } from './auth.js';
-import { getApiRuntimeProfile, isControlPlaneApiProfile, isExecutionOnlyApiProfile } from './runtime-profile.js';
+import {
+  getApiRuntimeProfile,
+  isControlPlaneApiProfile,
+  isExecutionOnlyApiProfile,
+  isPublishedExecutionApiProfile,
+  type ApiRuntimeProfile,
+} from './runtime-profile.js';
 import type { RuntimeHealthReader } from './runtime-health.js';
 import { readRuntimeLimitSettingsSync } from './runtime-limit-settings.js';
 import { captureAppSettingsSnapshot } from './middleware/app-settings-snapshot.js';
+import { getManagedPostgresPoolMetrics } from './managed-postgres-pool.js';
+import { getStudioMetrics, type MetricsHttpRoute, type StudioMetrics } from './metrics.js';
+import { getWorkflowExecutionRecordingPersistenceMetrics } from './routes/workflows/recordings.js';
+import {
+  createRequestCorrelationMiddleware,
+  getRequestCorrelationId,
+  RIVET_CORRELATION_HEADER,
+} from './request-correlation.js';
+import { MAX_LOCAL_EDITOR_RECORDING_REQUEST_BYTES } from './routes/workflows/local-editor-recording-limits.js';
 
 type RuntimeExpressRouter = {
   handle: (req: Request, res: Response, next: NextFunction) => void;
 };
 
 const DEFAULT_JSON_BODY_LIMIT_BYTES = 100 * 1024 * 1024;
+
+type ApiAppOptions = {
+  health?: RuntimeHealthReader;
+  metrics?: StudioMetrics;
+};
 
 function isWebAppActionRequest(req: Request): boolean {
   const requestPath = req.path.replace(/\/+$/, '');
@@ -60,10 +84,89 @@ function isWebAppActionRequest(req: Request): boolean {
   });
 }
 
+function isLocalEditorRecordingUploadRequest(req: Request): boolean {
+  const requestPath = req.path.replace(/\/+$/, '');
+  return req.method === 'POST' && requestPath === '/api/workflows/local-editor-recordings';
+}
+
+function matchesPath(pathname: string, basePath: string): boolean {
+  return pathname === basePath || pathname.startsWith(`${basePath}/`);
+}
+
+function getMetricsHttpRoute(req: Request): MetricsHttpRoute {
+  const pathname = req.path.replace(/\/+$/, '') || '/';
+  if (matchesPath(pathname, getPublishedWorkflowsBasePath())) return 'published_workflow';
+  if (matchesPath(pathname, getPublishedWebAppsBasePath())) return 'published_web_app';
+  if (matchesPath(pathname, getLatestWorkflowsBasePath())) return 'latest_workflow';
+  if (matchesPath(pathname, getLatestWebAppsBasePath())) return 'latest_web_app';
+  if (matchesPath(pathname, '/internal/workflows')) return 'internal_workflow';
+  if (matchesPath(pathname, '/api')) return 'api';
+  return 'other';
+}
+
+function createMetricsRequestObserver(metrics: StudioMetrics): RequestHandler {
+  return (req, res, next) => {
+    if (!metrics.enabled) {
+      next();
+      return;
+    }
+
+    const startedAt = performance.now();
+    const route = getMetricsHttpRoute(req);
+    res.once('finish', () => {
+      metrics.observeHttpRequest({
+        durationMs: performance.now() - startedAt,
+        method: req.method,
+        route,
+        status: res.statusCode,
+      });
+    });
+    next();
+  };
+}
+
+function collectMetricsSnapshot(collect: () => void): void {
+  try {
+    collect();
+  } catch {
+    // Scrapes can race a subsystem starting or stopping. Keep every remaining
+    // process-local metric available and never surface dependency details.
+  }
+}
+
+function sendMetrics(metrics: StudioMetrics, health: RuntimeHealthReader, res: Response): void {
+  collectMetricsSnapshot(() => metrics.setRuntimeHealth(health.getLiveness(), health.getReadiness()));
+  collectMetricsSnapshot(() => metrics.setPostgresPool(getManagedPostgresPoolMetrics()));
+  collectMetricsSnapshot(() =>
+    metrics.setWorkflowRecordingPersistence(getWorkflowExecutionRecordingPersistenceMetrics()),
+  );
+
+  res.setHeader('Cache-Control', 'no-store');
+  res.setHeader('Content-Type', 'text/plain; version=0.0.4; charset=utf-8');
+  res.status(200).send(metrics.render());
+}
+function requireLocalEditorRecordingUploadAuth(req: Request, res: Response, next: NextFunction): void {
+  if (!isLocalEditorRecordingUploadRequest(req)) {
+    next();
+    return;
+  }
+
+  requireAuth(req, res, next);
+}
+
 function createJsonBodyParser(): RequestHandler {
   const defaultParser = express.json({ limit: DEFAULT_JSON_BODY_LIMIT_BYTES, strict: false });
+  const localEditorRecordingParser = express.json({
+    limit: MAX_LOCAL_EDITOR_RECORDING_REQUEST_BYTES,
+    strict: false,
+  });
 
   return (req, res, next) => {
+    if (isLocalEditorRecordingUploadRequest(req)) {
+      localEditorRecordingParser(req, res, next);
+      return;
+    }
+
     if (!isWebAppActionRequest(req)) {
       defaultParser(req, res, next);
       return;
@@ -146,6 +249,7 @@ function createCorsOptions(req: Request) {
     credentials: true,
     origin: origin && isCorsOriginAllowed(req, origin) ? origin : false,
     optionsSuccessStatus: 204,
+    exposedHeaders: [RIVET_CORRELATION_HEADER],
   };
 }
 
@@ -174,13 +278,14 @@ export function getApiRouteExposureMatrix(profile = getApiRuntimeProfile()): str
       '/api/projects/*',
       '/api/workflows/*',
       '/api/runtime-libraries/*',
+      '/api/deployment-status/*',
       '/api/app-settings/*',
       '/api/config*',
       '/internal/app-settings/proxy-config',
     );
   }
 
-  if (profile === 'combined' || profile === 'execution') {
+  if (isPublishedExecutionApiProfile(profile)) {
     surfaces.push(
       `${publishedAppsBasePath}/auth/callback`,
       `${publishedAppsBasePath}/auth/dummy`,
@@ -196,15 +301,16 @@ export function getApiRouteExposureMatrix(profile = getApiRuntimeProfile()): str
 }
 
 export function assertApiRuntimeProfileStartupPreconditions(profile = getApiRuntimeProfile()): void {
+  // Validate topology during startup rather than deferring a deployment typo
+  // until an operator happens to open Settings -> Deployment.
+  getDeploymentTopology();
+
   if (isExecutionOnlyApiProfile(profile) && getWorkflowStorageBackendMode() !== 'managed') {
-    throw new Error('RIVET_API_PROFILE=execution requires Settings -> Storage to use Object storage');
+    throw new Error(`RIVET_API_PROFILE=${profile} requires Settings -> Storage to use Object storage`);
   }
 }
 
-function dispatchDynamicBasePath(
-  getBasePath: () => string,
-  router: ExpressRouter,
-): RequestHandler {
+function dispatchDynamicBasePath(getBasePath: () => string, router: ExpressRouter): RequestHandler {
   const runtimeRouter = router as unknown as RuntimeExpressRouter;
 
   return (req, res, next) => {
@@ -230,7 +336,7 @@ function dispatchDynamicBasePath(
   };
 }
 
-function mountControlPlaneRoutes(app: Express): void {
+function mountControlPlaneRoutes(app: Express, profile: ApiRuntimeProfile): void {
   app.get('/internal/app-settings/proxy-config', requireAuth, (_req, res) => {
     res.set('Cache-Control', 'no-store');
     res.json(createProxySettingsSnapshot());
@@ -245,6 +351,7 @@ function mountControlPlaneRoutes(app: Express): void {
   app.use('/api/projects', projectsRouter);
   app.use('/api/workflows', workflowsRouter);
   app.use('/api/runtime-libraries', runtimeLibrariesRouter);
+  app.use('/api/deployment-status', createDeploymentStatusRouter(profile));
   app.use('/api/app-settings', appSettingsRouter);
   app.use('/api', configRouter);
 }
@@ -255,11 +362,9 @@ function mountPublishedExecutionRoutes(app: Express): void {
   app.use('/internal/workflows', internalPublishedWorkflowsRouter);
 }
 
-export function createApiApp(
-  profile = getApiRuntimeProfile(),
-  options: { health?: RuntimeHealthReader } = {},
-): Express {
+export function createApiApp(profile = getApiRuntimeProfile(), options: ApiAppOptions = {}): Express {
   const app = express();
+  const metrics = options.metrics ?? getStudioMetrics();
 
   const fallbackHealth: RuntimeHealthReader = {
     getLiveness: () => ({ ok: true, profile, state: 'ready', checkedAt: null, checks: [] }),
@@ -271,9 +376,16 @@ export function createApiApp(
     res.status(snapshot.ok ? 200 : 503).json(snapshot);
   };
 
-  app.use(cors((req, callback) => {
-    callback(null, createCorsOptions(req));
-  }));
+  app.use(
+    cors((req, callback) => {
+      callback(null, createCorsOptions(req));
+    }),
+  );
+  app.use(createRequestCorrelationMiddleware());
+
+  if (metrics.enabled) {
+    app.get('/metrics', (_req, res) => sendMetrics(metrics, health, res));
+  }
 
   app.get('/healthz', (_req, res) => {
     const snapshot = health.getLiveness();
@@ -283,7 +395,15 @@ export function createApiApp(
   app.get('/livez', (_req, res) => sendHealth(health.getLiveness(), res));
   app.get('/readyz', (_req, res) => sendHealth(health.getReadiness(), res));
 
+  // Do not count platform probes or Prometheus scrapes as application traffic.
+  app.use(createMetricsRequestObserver(metrics));
+
   app.use(captureAppSettingsSnapshot);
+  // The replay body may be larger than ordinary control-plane JSON. Authenticate
+  // this exact route before parsing it, including for direct local API access.
+  if (isControlPlaneApiProfile(profile)) {
+    app.use(requireLocalEditorRecordingUploadAuth);
+  }
   app.use(createJsonBodyParser());
   app.use(express.urlencoded({ extended: false }));
 
@@ -292,10 +412,10 @@ export function createApiApp(
   }
 
   if (isControlPlaneApiProfile(profile)) {
-    mountControlPlaneRoutes(app);
+    mountControlPlaneRoutes(app, profile);
   }
 
-  if (profile === 'combined' || profile === 'execution') {
+  if (isPublishedExecutionApiProfile(profile)) {
     mountPublishedExecutionRoutes(app);
   }
 
@@ -303,10 +423,10 @@ export function createApiApp(
     res.status(404).json({ error: 'Not found' });
   });
 
-  app.use((err: Error, _req: Request, res: Response, _next: NextFunction) => {
+  app.use((err: Error, req: Request, res: Response, _next: NextFunction) => {
     const response = getApiErrorResponse(err);
     if (response.status >= 500) {
-      console.error('Unhandled API error:', err);
+      console.error('[' + getRequestCorrelationId(req) + '] Unhandled API error:', err);
     }
     res.status(response.status).json(response.body);
   });

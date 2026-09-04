@@ -1,7 +1,7 @@
 {
   "name": "@valerypopoff/rivet-studio-server-shared",
   "private": true,
-  "version": "1.8.6",
+  "version": "1.9.0",
   "description": "Shared browser and server contracts for Rivet Studio Server",
   "type": "module",
   "scripts": {

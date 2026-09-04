@@ -37,23 +37,26 @@ securityContext:
 {{- end -}}
 
 {{- define "rivet.pod.appSettingsProjectionInitContainer" -}}
+{{- $root := .root -}}
 - name: managed-app-settings-projection
-  image: {{ include "rivet.image" (dict "root" . "image" .Values.images.api) }}
-  imagePullPolicy: {{ .Values.images.api.pullPolicy }}
-  {{- include "rivet.pod.containerSecurityContext" . | nindent 2 }}
+  image: {{ include "rivet.image" (dict "root" $root "image" $root.Values.images.api) }}
+  imagePullPolicy: {{ $root.Values.images.api.pullPolicy }}
+  {{- include "rivet.pod.containerSecurityContext" $root | nindent 2 }}
   command:
     - /bin/sh
     - -ec
   args:
     - . /opt/rivet/lib/load-env.sh; load_optional_dotenv /vault/dotenv; node /app/packages/studio-server-api/dist/studio-server-api/src/scripts/project-managed-app-settings.js
   env:
-{{ include "rivet.env.deploymentStorageBootstrap" . | nindent 4 }}
-{{ include "rivet.env.appSettings" (dict "root" . "includeDatabase" false) | nindent 4 }}
-{{ include "rivet.env.authKey" . | nindent 4 }}
+{{ include "rivet.env.deploymentStorageBootstrap" $root | nindent 4 }}
+{{ include "rivet.env.appSettings" (dict "root" $root "includeDatabase" false) | nindent 4 }}
+{{ include "rivet.env.authKey" $root | nindent 4 }}
   volumeMounts:
     - name: app-data
       mountPath: /data/rivet-app
-{{ include "rivet.pod.tmpVolumeMount" . | nindent 4 }}
+{{ include "rivet.pod.tmpVolumeMount" $root | nindent 4 }}
+  resources:
+{{ toYaml .resources | nindent 4 }}
 {{- end -}}
 {{- define "rivet.pod.apiVolumeMounts" -}}
 - name: workspace

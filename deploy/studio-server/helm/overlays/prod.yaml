@@ -5,8 +5,16 @@ ingress:
   externalDNSHostname: rivet.example.com
   annotations:
     nginx.ingress.kubernetes.io/proxy-body-size: 100m
-    nginx.ingress.kubernetes.io/proxy-read-timeout: "86400"
-    nginx.ingress.kubernetes.io/proxy-send-timeout: "86400"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: '86400'
+    nginx.ingress.kubernetes.io/proxy-send-timeout: '86400'
+
+release:
+  production:
+    # The canonical deployment command fills the immutable source SHA, CI
+    # evidence, canonical manifest digest, schema version, and all four image
+    # digests from a promoted release manifest. Do not put mutable image tags
+    # in this file.
+    enabled: true
 
 vault:
   enabled: true
@@ -49,7 +57,6 @@ objectStorage:
   secretKeySecretName: rivet-object-storage
   forcePathStyle: false
 
-
 auth:
   keySecretName: rivet-shared-key
 
@@ -58,6 +65,43 @@ replicaCount:
   web: 1
   backend: 1
   execution: 2
+
+# A pod admits at most four active public graph/web-app runs. With the current
+# 2-10 execution pod range this makes the public envelope 8-40 active runs.
+# Tune only from the published-route load evidence documented in kubernetes.md.
+publishedExecutionAdmission:
+  mode: enforce
+  maxActiveRunsPerPod: 4
+  retryAfterSeconds: 1
+
+# Initial node-ephemeral caps for disposable content. Tune from the
+# published-route load gate; use a persistent cache claim when a larger
+# runtime-library cache is deliberately required.
+writableVolumeLimits:
+  workspace: 2Gi
+  workflows: 2Gi
+  appData: 1Gi
+  runtimeLibraries: 8Gi
+
+# No generic memory/node-ephemeral resource limits are assumed to be safe for
+# long-running graphs. These acknowledgements make that temporary decision
+# deliberate; replace each with measured limits after the capacity load gate.
+resourceLimitAcknowledgements:
+  proxy:
+    memory: "Proxy memory limit deferred until ingress load evidence is retained."
+    ephemeralStorage: "Proxy node-ephemeral limit deferred until ingress and log-volume evidence is retained."
+  web:
+    memory: "Web memory limit deferred until the low-volume control-plane profile is measured."
+    ephemeralStorage: "Web node-ephemeral limit deferred until the low-volume control-plane profile is measured."
+  api:
+    memory: "Control API memory limit deferred until editor and maintenance high-water marks are measured."
+    ephemeralStorage: "Control API node-ephemeral limit deferred until projection, workspace, and maintenance high-water marks are measured."
+  executor:
+    memory: "Editor executor memory limit deferred until remote-debugger graph high-water marks are measured."
+    ephemeralStorage: "Editor executor node-ephemeral limit deferred until shared workspace and runtime-library high-water marks are measured."
+  execution:
+    memory: "Execution API memory limit deferred until the published-route load gate establishes a safe ceiling."
+    ephemeralStorage: "Execution API node-ephemeral limit deferred until the published-route load gate establishes a safe ceiling."
 
 autoscaling:
   proxy:

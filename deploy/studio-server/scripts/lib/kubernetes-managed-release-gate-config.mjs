@@ -1,5 +1,7 @@
 import path from 'node:path';
 
+import { readManagedWorkflowSchemaReleaseContract } from './studio-server-release-manifest.mjs';
+
 const imageKeys = ['proxy', 'web', 'api', 'executor'];
 const namespacePattern = /^[a-z0-9]([-a-z0-9]*[a-z0-9])?$/;
 const digestPattern = /^sha256:[a-f0-9]{64}$/;
@@ -18,7 +20,9 @@ function optionalString(env, name, fallback) {
 }
 
 function parseBoolean(env, name, fallback) {
-  const value = String(env[name] ?? '').trim().toLowerCase();
+  const value = String(env[name] ?? '')
+    .trim()
+    .toLowerCase();
   if (!value) {
     return fallback;
   }
@@ -85,11 +89,26 @@ function buildImages(env) {
   return images;
 }
 
-export function buildManagedReleaseGateConfig({
-  rootDir,
-  env = process.env,
-  mode = 'smoke',
-} = {}) {
+function buildPreviousApiImage(env) {
+  const repositoryName = 'RIVET_K8S_RELEASE_GATE_PREVIOUS_API_IMAGE_REPOSITORY';
+  const digestName = 'RIVET_K8S_RELEASE_GATE_PREVIOUS_API_IMAGE_DIGEST';
+  const repository = String(env[repositoryName] ?? '').trim();
+  const digest = String(env[digestName] ?? '')
+    .trim()
+    .toLowerCase();
+  if (!repository && !digest) {
+    return null;
+  }
+  if (!repository || !digest) {
+    throw new Error(`[kubernetes-managed-release-gate] ${repositoryName} and ${digestName} must be supplied together`);
+  }
+  if (!digestPattern.test(digest)) {
+    throw new Error(`[kubernetes-managed-release-gate] ${digestName} must be a sha256 OCI digest`);
+  }
+  return { repository, digest };
+}
+
+export function buildManagedReleaseGateConfig({ rootDir, env = process.env, mode = 'smoke' } = {}) {
   if (!rootDir) {
     throw new Error('[kubernetes-managed-release-gate] rootDir is required');
   }
@@ -100,7 +119,9 @@ export function buildManagedReleaseGateConfig({
   const context = requireString(env, 'RIVET_K8S_RELEASE_GATE_CONTEXT');
   const allowedContext = requireString(env, 'RIVET_K8S_RELEASE_GATE_ALLOW_CONTEXT');
   if (context !== allowedContext) {
-    throw new Error('[kubernetes-managed-release-gate] RIVET_K8S_RELEASE_GATE_CONTEXT and RIVET_K8S_RELEASE_GATE_ALLOW_CONTEXT must match exactly');
+    throw new Error(
+      '[kubernetes-managed-release-gate] RIVET_K8S_RELEASE_GATE_CONTEXT and RIVET_K8S_RELEASE_GATE_ALLOW_CONTEXT must match exactly',
+    );
   }
 
   const namespace = assertDnsLabel(
@@ -130,6 +151,8 @@ export function buildManagedReleaseGateConfig({
     namespace,
     release,
     images: buildImages(env),
+    previousApiImage: buildPreviousApiImage(env),
+    managedWorkflowSchema: readManagedWorkflowSchemaReleaseContract(rootDir),
     imagePullPolicy: parseImagePullPolicy(env),
     registry,
 
@@ -147,11 +170,22 @@ export function renderManagedReleaseGateValues(config) {
   return {
     fullnameOverride: config.release,
     imagePullSecrets: [{ name: config.registry.secretName }],
-    images: Object.fromEntries(Object.entries(config.images).map(([key, image]) => [key, {
-      repository: image.repository,
-      digest: image.digest,
-      pullPolicy: config.imagePullPolicy,
-    }])),
+    images: Object.fromEntries(
+      Object.entries(config.images).map(([key, image]) => [
+        key,
+        {
+          repository: image.repository,
+          digest: image.digest,
+          pullPolicy: config.imagePullPolicy,
+        },
+      ]),
+    ),
+    workflowSchema: {
+      compatibility: {
+        minimumVersion: config.managedWorkflowSchema.version,
+        maximumVersion: config.managedWorkflowSchema.version,
+      },
+    },
     postgres: {
       host: 'release-gate-postgres',
       port: 5432,

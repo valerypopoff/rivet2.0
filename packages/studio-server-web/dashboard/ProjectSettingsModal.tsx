@@ -115,6 +115,7 @@ type ProjectSettingsModalProps = {
   onRefresh: () => void | Promise<void>;
   onDeleteProject: (path: string, projectId?: string | null) => void;
   onOpenPublishedHistory: (project: WorkflowProjectItem) => void;
+  onOpenRecording: (recordingId: string) => void;
   routeConfig: HostedRouteConfig;
 };
 
@@ -126,6 +127,7 @@ export const ProjectSettingsModal: FC<ProjectSettingsModalProps> = ({
   onRefresh,
   onDeleteProject,
   onOpenPublishedHistory,
+  onOpenRecording,
   routeConfig,
 }) => {
   const [activeTab, setActiveTab] = useState<ProjectSettingsTab>('workflow');
@@ -493,7 +495,15 @@ export const ProjectSettingsModal: FC<ProjectSettingsModalProps> = ({
               <div className="project-settings-modal-content">
                 {activeTab === 'workflow' ? renderWorkflowSettings() : null}
                 {activeTab === 'web-apps' ? renderWebAppsSettings() : null}
-                {activeTab === 'llm-health' ? <LLMProfileHealthSettings activeProject={activeProject} /> : null}
+                {activeTab === 'llm-health' ? (
+                  <LLMProfileHealthSettings
+                    activeProject={activeProject}
+                    onOpenRecording={(recordingId) => {
+                      onClose();
+                      onOpenRecording(recordingId);
+                    }}
+                  />
+                ) : null}
                 {renderDangerSection()}
               </div>
             </div>

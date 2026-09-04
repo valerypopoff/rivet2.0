@@ -5,6 +5,7 @@ import {
   addOpenedProject,
   moveOpenedProjectPaths,
   removeOpenedProject,
+  resolveOpenedProjectSavePath,
   resolveSyncedOpenedProjectFsPathOptions,
   updateOpenedProjectExecutorMode,
   updateOpenedProjectMetadata,
@@ -473,4 +474,51 @@ describe('openedProjects helpers', () => {
     assert.equal(pathOnlyResult.openedProjects[project.metadata.id]?.title, 'Project');
     assert.equal(pathOnlyResult.openedProjects[project.metadata.id]?.fsPath, '/new/project.rivet-project');
   });
+  test('prefers a project-owned save path over the mutable loaded project path', () => {
+    const firstProject = makeProject('project-1', 'First');
+    const secondProject = makeProject('project-2', 'Second');
+    const openedProjects = {
+      openedProjects: {
+        [firstProject.metadata.id]: {
+          projectId: firstProject.metadata.id,
+          title: firstProject.metadata.title,
+          fsPath: '/tmp/first.rivet-project',
+        },
+        [secondProject.metadata.id]: {
+          projectId: secondProject.metadata.id,
+          title: secondProject.metadata.title,
+          fsPath: '/tmp/second.rivet-project',
+        },
+      },
+      openedProjectsSortedIds: [firstProject.metadata.id, secondProject.metadata.id],
+    };
+
+    assert.equal(
+      resolveOpenedProjectSavePath(openedProjects, firstProject.metadata.id, '/tmp/second.rivet-project'),
+      '/tmp/first.rivet-project',
+    );
+  });
+
+  test('refuses a loaded-path fallback owned by another open project', () => {
+    const firstProject = makeProject('project-1', 'First');
+    const secondProject = makeProject('project-2', 'Second');
+    const openedProjects = {
+      openedProjects: {
+        [firstProject.metadata.id]: {
+          projectId: firstProject.metadata.id,
+          title: firstProject.metadata.title,
+          fsPath: '/tmp/first.rivet-project',
+        },
+        [secondProject.metadata.id]: {
+          projectId: secondProject.metadata.id,
+          title: secondProject.metadata.title,
+          fsPath: null,
+        },
+      },
+      openedProjectsSortedIds: [firstProject.metadata.id, secondProject.metadata.id],
+    };
+
+    assert.equal(resolveOpenedProjectSavePath(openedProjects, secondProject.metadata.id, '/tmp/first.rivet-project'), null);
+  });
+
 });

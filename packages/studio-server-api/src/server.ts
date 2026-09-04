@@ -1,10 +1,7 @@
 import 'dotenv/config';
 import { createServer } from 'node:http';
 import { reconcileRuntimeLibraries } from './runtime-libraries/startup.js';
-import {
-  checkRuntimeLibrariesHealth,
-  disposeRuntimeLibrariesBackend,
-} from './runtime-libraries/backend.js';
+import { checkRuntimeLibrariesHealth, disposeRuntimeLibrariesBackend } from './runtime-libraries/backend.js';
 import {
   disposeLatestWorkflowRemoteDebugger,
   initializeLatestWorkflowRemoteDebugger,
@@ -15,20 +12,27 @@ import {
   disposeWorkflowStorage,
   initializeWorkflowStorage,
 } from './routes/workflows/storage-backend.js';
-import { flushWorkflowExecutionRecordingPersistence } from './routes/workflows/recordings.js';
-import { getApiRuntimeProfile, isControlPlaneApiProfile } from './runtime-profile.js';
+import { getPublishedExecutionAdmission } from './published-execution-admission.js';
+import {
+  abortActiveHttpExecutions,
+  beginActiveHttpExecutionDrain,
+  getActiveHttpExecutionCount,
+} from './active-http-executions.js';
+import { getApiRuntimeProfile, isControlPlaneApiProfile, isPublishedExecutionApiProfile } from './runtime-profile.js';
 import { assertApiRuntimeProfileStartupPreconditions, createApiApp } from './app.js';
 import {
   checkAppSettingsRepositoriesHealth,
   disposeAppSettingsRepositories,
   initializeAppSettingsRepositories,
 } from './app-settings/settings-repository.js';
-import { getRuntimeHealthOptionsFromEnv, RuntimeHealthController } from './runtime-health.js';
+import { getRuntimeHealthOptionsFromEnv, RuntimeHealthController, type RuntimeHealthCheck } from './runtime-health.js';
+import { configureStudioMetrics } from './metrics.js';
 
 const PORT = parseInt(process.env.PORT ?? '3100', 10);
 const apiRuntimeProfile = getApiRuntimeProfile();
+const metrics = configureStudioMetrics(apiRuntimeProfile);
 let webAppActionWebSockets: WebAppActionWebSocketRuntime | null = null;
-const runtimeHealth = new RuntimeHealthController(apiRuntimeProfile, [
+const runtimeHealthChecks: RuntimeHealthCheck[] = [
   {
     name: 'app-settings',
     failureCode: 'app_settings_unavailable',
@@ -44,7 +48,12 @@ const runtimeHealth = new RuntimeHealthController(apiRuntimeProfile, [
     failureCode: 'runtime_libraries_unavailable',
     check: checkRuntimeLibrariesHealth,
   },
-  {
+];
+
+// The internal Evaluation profile exposes no web-app routes, so it must not
+// allocate a WebSocket gateway or an extra managed PostgreSQL listener.
+if (apiRuntimeProfile !== 'evaluation') {
+  runtimeHealthChecks.push({
     name: 'web-app-actions',
     failureCode: 'web_app_gateway_unavailable',
     async check(context) {
@@ -53,9 +62,15 @@ const runtimeHealth = new RuntimeHealthController(apiRuntimeProfile, [
       }
       await webAppActionWebSockets.checkHealth(context);
     },
-  },
-], getRuntimeHealthOptionsFromEnv());
-const app = createApiApp(apiRuntimeProfile, { health: runtimeHealth });
+  });
+}
+
+const runtimeHealth = new RuntimeHealthController(
+  apiRuntimeProfile,
+  runtimeHealthChecks,
+  getRuntimeHealthOptionsFromEnv(),
+);
+const app = createApiApp(apiRuntimeProfile, { health: runtimeHealth, metrics });
 const server = createServer(app);
 
 if (isControlPlaneApiProfile(apiRuntimeProfile)) {
@@ -82,13 +97,21 @@ function wait(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function waitForActiveWebAppRuns(deadline: number): Promise<boolean> {
-  while ((webAppActionWebSockets?.getActiveRunCount() ?? 0) > 0) {
+async function waitForActiveRuns(getActiveRunCount: () => number, deadline: number): Promise<boolean> {
+  while (getActiveRunCount() > 0) {
     const remainingMs = deadline - Date.now();
     if (remainingMs <= 0) return false;
     await wait(Math.min(250, remainingMs));
   }
   return true;
+}
+
+async function waitForActiveWebAppRuns(deadline: number): Promise<boolean> {
+  return waitForActiveRuns(() => webAppActionWebSockets?.getActiveRunCount() ?? 0, deadline);
+}
+
+async function waitForActiveHttpExecutions(deadline: number): Promise<boolean> {
+  return waitForActiveRuns(getActiveHttpExecutionCount, deadline);
 }
 
 async function closeHttpServer(deadline: number): Promise<boolean> {
@@ -125,9 +148,6 @@ async function disposeResourcesOnce(interruptWebAppRuns: boolean): Promise<void>
     console.error('[latest-debugger] Failed to dispose during shutdown:', error);
   });
 
-  await flushWorkflowExecutionRecordingPersistence().catch((error) => {
-    console.error('[workflow-recordings] Failed to flush recording persistence during shutdown:', error);
-  });
   await disposeWorkflowStorage().catch((error) => {
     console.error('[managed-workflows] Failed to dispose storage backend during shutdown:', error);
   });
@@ -161,35 +181,54 @@ async function shutdown(signal: string): Promise<void> {
 
   shuttingDown = true;
   runtimeHealth.beginDrain();
+  beginActiveHttpExecutionDrain();
+  if (isPublishedExecutionApiProfile(apiRuntimeProfile)) {
+    getPublishedExecutionAdmission().beginDrain();
+  }
   webAppActionWebSockets?.drain();
   const shutdownGraceMs = readShutdownGraceMs();
   const deadline = Date.now() + shutdownGraceMs;
   console.log(`[rivet-api] Received ${signal}; draining for up to ${shutdownGraceMs}ms...`);
 
   if (startupPromise && !server.listening) {
-    await Promise.race([
-      startupPromise.catch(() => undefined),
-      wait(Math.max(0, deadline - Date.now())),
-    ]);
+    await Promise.race([startupPromise.catch(() => undefined), wait(Math.max(0, deadline - Date.now()))]);
   }
 
-  const [httpClosed, runsCompleted] = await Promise.all([
+  const [httpClosed, webAppRunsCompleted, httpRunsCompleted] = await Promise.all([
     closeHttpServer(deadline),
     waitForActiveWebAppRuns(deadline),
+    waitForActiveHttpExecutions(deadline),
   ]);
+
+  if (!webAppRunsCompleted) {
+    const interruptedWebAppRuns = webAppActionWebSockets?.getActiveRunCount() ?? 0;
+    console.warn(
+      `[web-app-actions] ${interruptedWebAppRuns} active run(s) exceeded the shutdown grace period and will be interrupted.`,
+    );
+    metrics.recordPublishedExecutionInterruptions('web_app_action', interruptedWebAppRuns);
+  }
+  if (!httpRunsCompleted) {
+    const activeHttpRuns = getActiveHttpExecutionCount();
+    const aborted = abortActiveHttpExecutions();
+    metrics.recordPublishedExecutionInterruptions('workflow_endpoint', aborted);
+    console.warn(
+      `[workflow-executions] ${activeHttpRuns} active HTTP graph run(s) exceeded the shutdown grace period; aborting ${aborted}.`,
+    );
+    const finalized = await waitForActiveHttpExecutions(Date.now() + 5_000);
+    if (!finalized) {
+      console.warn(
+        `[workflow-executions] ${getActiveHttpExecutionCount()} HTTP graph run(s) did not settle after shutdown abort.`,
+      );
+    }
+  }
 
   if (!httpClosed) {
     console.warn('[rivet-api] HTTP connections exceeded the shutdown grace period; forcing them closed.');
     server.closeAllConnections?.();
     server.closeIdleConnections?.();
   }
-  if (!runsCompleted) {
-    console.warn(
-      `[web-app-actions] ${webAppActionWebSockets?.getActiveRunCount() ?? 0} active run(s) exceeded the shutdown grace period and will be interrupted.`,
-    );
-  }
 
-  await disposeResources(!runsCompleted);
+  await disposeResources(!webAppRunsCompleted);
   runtimeHealth.stop();
   process.exitCode = 0;
 }
@@ -204,6 +243,9 @@ process.once('SIGTERM', () => {
 
 async function startServer(): Promise<void> {
   try {
+    if (isPublishedExecutionApiProfile(apiRuntimeProfile)) {
+      getPublishedExecutionAdmission();
+    }
     await initializeAppSettingsRepositories();
     assertStartupActive();
     assertApiRuntimeProfileStartupPreconditions(apiRuntimeProfile);
@@ -211,7 +253,9 @@ async function startServer(): Promise<void> {
     assertStartupActive();
     await initializeWorkflowStorage();
     assertStartupActive();
-    webAppActionWebSockets = await initializeWebAppActionWebSockets(server);
+    if (apiRuntimeProfile !== 'evaluation') {
+      webAppActionWebSockets = await initializeWebAppActionWebSockets(server);
+    }
     assertStartupActive();
     await runtimeHealth.start();
     assertStartupActive();

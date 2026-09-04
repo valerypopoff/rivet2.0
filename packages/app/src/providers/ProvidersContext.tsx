@@ -8,7 +8,15 @@ import {
   type RivetLLMProfileHealthSnapshot,
   type RivetLLMProfileHealthStore,
 } from '@valerypopoff/rivet2-core';
-import { type EvaluationRunStore, type EvaluationStore } from '@valerypopoff/rivet2-evaluations';
+import {
+  type EvaluationDataset,
+  type EvaluationProjectData,
+  type EvaluationRun,
+  type EvaluationRunPurpose,
+  type EvaluationRunStore,
+  type EvaluationStore,
+  type PortableJson,
+} from '@valerypopoff/rivet2-evaluations';
 import { LocalEvaluationRunStore } from './EvaluationRunStore.js';
 import { TauriEvaluationStore } from './TauriEvaluationStore.js';
 import { BrowserIOProvider } from '../io/BrowserIOProvider.js';
@@ -47,6 +55,52 @@ export type PathPolicyProvider = {
   readRelativeProjectFile?(currentProjectPath: string, projectFilePath: string): Promise<string>;
 };
 
+export type HostedEvaluationJobState = 'queued' | 'claimed' | 'accepted' | 'settled' | 'interrupted' | 'canceled';
+
+/** Stable API state for a managed Evaluation scheduler run. */
+export type HostedEvaluationRunState = {
+  status: 'queued' | 'running' | 'completed' | 'canceled' | 'interrupted';
+  cancelRequested: boolean;
+  jobs: readonly {
+    jobId: string;
+    caseId: string;
+    caseName: string;
+    caseIndex: number;
+    trialIndex: number;
+    status: HostedEvaluationJobState;
+    /** Number of worker claims; a retry has not yet increased it until claimed. */
+    attempt: number;
+    acceptedAt?: string;
+    settledAt?: string;
+  }[];
+};
+
+/**
+ * Optional managed-server execution path. Its submission is immutable and
+ * returns immediately; the editor only observes the durable run afterwards.
+ * Browser and ordinary remote executors deliberately omit this provider.
+ */
+export type HostedEvaluationCoordinatorProvider = {
+  getCapability(): Promise<{ enabled: boolean; workerEnabled: boolean; workerConcurrency: number }>;
+  submit(input: {
+    projectContents: string;
+    projectPath: string;
+    datasetsContents?: string;
+    evaluationData: EvaluationProjectData;
+    dataset: EvaluationDataset;
+    suiteId: string;
+    purpose: EvaluationRunPurpose;
+    contextValues: Record<string, PortableJson>;
+  }): Promise<EvaluationRun>;
+  requestCancel(input: { projectId: ProjectId; runId: string }): Promise<EvaluationRun | undefined>;
+  getRunState(input: { projectId: ProjectId; runId: string }): Promise<HostedEvaluationRunState | undefined>;
+  retryInterrupted(input: {
+    projectId: ProjectId;
+    runId: string;
+    jobIds: readonly string[];
+  }): Promise<EvaluationRun | undefined>;
+};
+
 /**
  * Optional operational surface supplied by a host that owns shared LLM
  * profile health. It is intentionally separate from the execution store so a
@@ -60,6 +114,32 @@ export type LLMProfileHealthAdminProvider = {
   reset(input: { key?: string; projectId: ProjectId }): Promise<void>;
 };
 
+/**
+ * Optional host persistence for a local editor run that produced shared LLM
+ * health evidence. Desktop mode intentionally omits it; hosted mode uses it
+ * to turn the existing in-memory recorder into a durable replay link.
+ */
+export type LocalExecutionRecordingPersistenceProvider = {
+  getCapability(): Promise<boolean>;
+  /** Marks health evidence unavailable when a terminal replay cannot be captured. */
+  markUnavailable(correlationId: string): Promise<void>;
+  persist(input: {
+    projectId: ProjectId;
+    projectPath: string;
+    projectContents: string;
+    datasetsContents?: string;
+    recordingSerialized: string;
+    status: 'succeeded' | 'failed' | 'suspicious';
+    durationMs: number;
+    errorMessage?: string;
+    executionIdentity: {
+      correlationId: string;
+      graphId?: string;
+      graphName?: string;
+    };
+  }): Promise<void>;
+};
+
 export type Providers = {
   io: IOProvider;
   datasets: AppDatasetProvider;
@@ -70,6 +150,8 @@ export type Providers = {
   staticData: StaticDataStore;
   llmProfileHealthAdmin?: LLMProfileHealthAdminProvider;
   llmProfileHealthStore?: RivetLLMProfileHealthStore;
+  localExecutionRecordingPersistence?: LocalExecutionRecordingPersistenceProvider;
+  hostedEvaluationCoordinator?: HostedEvaluationCoordinatorProvider;
   /** Complete persistence boundary for local evaluation resources and evidence. */
   evaluationStore: EvaluationStore;
   /** @deprecated Supply and consume evaluationStore instead. */
@@ -125,6 +207,13 @@ export function useLLMProfileHealthAdmin(): LLMProfileHealthAdminProvider | unde
 
 export function useLLMProfileHealthStore(): RivetLLMProfileHealthStore | undefined {
   return useProviders().llmProfileHealthStore;
+}
+
+export function useLocalExecutionRecordingPersistence(): LocalExecutionRecordingPersistenceProvider | undefined {
+  return useProviders().localExecutionRecordingPersistence;
+}
+export function useHostedEvaluationCoordinator(): HostedEvaluationCoordinatorProvider | undefined {
+  return useProviders().hostedEvaluationCoordinator;
 }
 
 export function useEvaluationRunStore(): EvaluationRunStore {

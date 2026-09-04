@@ -1,4 +1,4 @@
-import type { WorkflowProjectPathMove } from './workflow-types';
+import type { WorkflowProjectEditorBinding, WorkflowProjectPathMove } from './workflow-types';
 
 export type EditorShortcutModifier = 'ctrl' | 'meta';
 
@@ -30,10 +30,44 @@ export type DashboardToEditorCommand =
   | { type: 'trigger-editor-find-shortcut'; modifier: EditorShortcutModifier }
   | { type: 'trigger-editor-duplicate-shortcut'; modifier: EditorShortcutModifier }
   | { type: 'delete-workflow-project'; path: string; projectId?: string | null }
-  | { type: 'workflow-paths-moved'; moves: WorkflowProjectPathMove[]; requestId?: string };
+  | { type: 'workflow-paths-moved'; moves: WorkflowProjectPathMove[]; requestId?: string }
+  | {
+      type: 'reconcile-workflow-project-bindings';
+      bindings: WorkflowProjectEditorBinding[];
+      requestId?: string;
+    }
+  | {
+      type: 'resolve-workflow-project-content-change';
+      projectId: string;
+      path: string;
+      revisionId: string;
+      resolution: 'reload' | 'keep-local';
+      requestId?: string;
+    };
+
+export type WorkflowProjectBindingReconciliation = {
+  projectId: string;
+  fromPath: string;
+  toPath: string;
+  fromTitle: string;
+  toTitle: string;
+};
+
+export type WorkflowProjectContentChange = {
+  projectId: string;
+  path: string;
+  title: string;
+  revisionId: string;
+};
+
+export type WorkflowProjectBindingReconciliationResult = {
+  changes: WorkflowProjectBindingReconciliation[];
+  contentChanges: WorkflowProjectContentChange[];
+};
 
 export type EditorToDashboardEvent =
   | { type: 'editor-ready' }
+  | { type: 'request-active-workflow-project-rename' }
   | { type: 'project-opened'; path: string; requestId?: string }
   | { type: 'project-open-failed'; path: string; error: string }
   | { type: 'active-project-path-changed'; path: string }
@@ -41,10 +75,24 @@ export type EditorToDashboardEvent =
   | { type: 'open-project-count-changed'; count: number }
   | { type: 'project-compare-failed'; path: string; error: string }
   | { type: 'workflow-paths-moved-applied'; requestId?: string }
-  | { type: 'project-saved'; path: string };
+  | {
+      type: 'workflow-project-bindings-reconciled';
+      changes: WorkflowProjectBindingReconciliation[];
+      contentChanges: WorkflowProjectContentChange[];
+      requestId?: string;
+    }
+  | {
+      type: 'workflow-project-content-change-resolved';
+      projectId: string;
+      revisionId: string;
+      resolution: 'reload' | 'keep-local';
+      resolved: boolean;
+      error?: string;
+      requestId?: string;
+    }
+  | { type: 'project-saved'; path: string; hasNewerUnsavedChanges?: boolean };
 
-const isRecord = (value: unknown): value is Record<string, unknown> =>
-  value != null && typeof value === 'object';
+const isRecord = (value: unknown): value is Record<string, unknown> => value != null && typeof value === 'object';
 
 const getBridgeOrigin = (): string => {
   if (typeof window === 'undefined') {
@@ -56,9 +104,29 @@ const getBridgeOrigin = (): string => {
 };
 
 const isWorkflowMove = (value: unknown): value is WorkflowProjectPathMove =>
+  isRecord(value) && typeof value.fromAbsolutePath === 'string' && typeof value.toAbsolutePath === 'string';
+
+const isWorkflowProjectEditorBinding = (value: unknown): value is WorkflowProjectEditorBinding =>
   isRecord(value) &&
-  typeof value.fromAbsolutePath === 'string' &&
-  typeof value.toAbsolutePath === 'string';
+  typeof value.projectId === 'string' &&
+  typeof value.path === 'string' &&
+  typeof value.title === 'string' &&
+  (value.revisionId == null || typeof value.revisionId === 'string');
+
+const isWorkflowProjectBindingReconciliation = (value: unknown): value is WorkflowProjectBindingReconciliation =>
+  isRecord(value) &&
+  typeof value.projectId === 'string' &&
+  typeof value.fromPath === 'string' &&
+  typeof value.toPath === 'string' &&
+  typeof value.fromTitle === 'string' &&
+  typeof value.toTitle === 'string';
+
+const isWorkflowProjectContentChange = (value: unknown): value is WorkflowProjectContentChange =>
+  isRecord(value) &&
+  typeof value.projectId === 'string' &&
+  typeof value.path === 'string' &&
+  typeof value.title === 'string' &&
+  typeof value.revisionId === 'string';
 
 const isEditorShortcutModifier = (value: unknown): value is EditorShortcutModifier =>
   value === 'ctrl' || value === 'meta';
@@ -113,6 +181,20 @@ export function isDashboardToEditorCommand(value: unknown): value is DashboardTo
         value.moves.every(isWorkflowMove) &&
         (value.requestId == null || typeof value.requestId === 'string')
       );
+    case 'reconcile-workflow-project-bindings':
+      return (
+        Array.isArray(value.bindings) &&
+        value.bindings.every(isWorkflowProjectEditorBinding) &&
+        (value.requestId == null || typeof value.requestId === 'string')
+      );
+    case 'resolve-workflow-project-content-change':
+      return (
+        typeof value.projectId === 'string' &&
+        typeof value.path === 'string' &&
+        typeof value.revisionId === 'string' &&
+        (value.resolution === 'reload' || value.resolution === 'keep-local') &&
+        (value.requestId == null || typeof value.requestId === 'string')
+      );
     default:
       return false;
   }
@@ -125,12 +207,17 @@ export function isEditorToDashboardEvent(value: unknown): value is EditorToDashb
 
   switch (value.type) {
     case 'editor-ready':
+    case 'request-active-workflow-project-rename':
       return true;
     case 'project-opened':
       return typeof value.path === 'string' && (value.requestId == null || typeof value.requestId === 'string');
     case 'active-project-path-changed':
-    case 'project-saved':
       return typeof value.path === 'string';
+    case 'project-saved':
+      return (
+        typeof value.path === 'string' &&
+        (value.hasNewerUnsavedChanges == null || typeof value.hasNewerUnsavedChanges === 'boolean')
+      );
     case 'active-project-unsaved-changes-changed':
       return typeof value.path === 'string' && typeof value.hasUnsavedChanges === 'boolean';
     case 'project-compare-failed':
@@ -138,6 +225,23 @@ export function isEditorToDashboardEvent(value: unknown): value is EditorToDashb
       return typeof value.path === 'string' && typeof value.error === 'string';
     case 'workflow-paths-moved-applied':
       return value.requestId == null || typeof value.requestId === 'string';
+    case 'workflow-project-bindings-reconciled':
+      return (
+        Array.isArray(value.changes) &&
+        value.changes.every(isWorkflowProjectBindingReconciliation) &&
+        Array.isArray(value.contentChanges) &&
+        value.contentChanges.every(isWorkflowProjectContentChange) &&
+        (value.requestId == null || typeof value.requestId === 'string')
+      );
+    case 'workflow-project-content-change-resolved':
+      return (
+        typeof value.projectId === 'string' &&
+        typeof value.revisionId === 'string' &&
+        (value.resolution === 'reload' || value.resolution === 'keep-local') &&
+        typeof value.resolved === 'boolean' &&
+        (value.error == null || typeof value.error === 'string') &&
+        (value.requestId == null || typeof value.requestId === 'string')
+      );
     case 'open-project-count-changed':
       return typeof value.count === 'number';
     default:

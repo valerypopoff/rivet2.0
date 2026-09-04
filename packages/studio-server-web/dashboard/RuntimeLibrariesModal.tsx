@@ -3,7 +3,6 @@ import type { FC } from 'react';
 
 import { RuntimeLibrariesJobPanel } from './RuntimeLibrariesJobPanel';
 import { RuntimeLibrariesPackagesPanel } from './RuntimeLibrariesPackagesPanel';
-import { RuntimeLibrariesReplicaReadinessPanel } from './RuntimeLibrariesReplicaReadinessPanel';
 import { useRuntimeLibrariesModalState } from './useRuntimeLibrariesModalState';
 import './RuntimeLibrariesModal.css';
 
@@ -26,12 +25,10 @@ export const RuntimeLibrariesModal: FC<RuntimeLibrariesModalProps> = ({
     logEntries,
     jobResult,
     cancellingJob,
-    clearingStaleReplicas,
     isJobActive,
     isStalled,
     nowMs,
     packages,
-    replicaReadiness,
     logPanelRef,
     setAddName,
     setAddVersion,
@@ -39,7 +36,6 @@ export const RuntimeLibrariesModal: FC<RuntimeLibrariesModalProps> = ({
     handleInstall,
     handleRemove,
     handleCancel,
-    handleClearStaleReplicas,
     handleKeyDown,
   } = useRuntimeLibrariesModalState(isOpen);
 
@@ -96,14 +92,6 @@ export const RuntimeLibrariesModal: FC<RuntimeLibrariesModalProps> = ({
                     onRemove={(packageName) => void handleRemove(packageName)}
                     onKeyDown={handleKeyDown}
                     displayedJobType={displayedJob?.type}
-                  />
-
-                  <RuntimeLibrariesReplicaReadinessPanel
-                    readiness={replicaReadiness}
-                    isJobActive={isJobActive}
-                    clearingStaleReplicas={clearingStaleReplicas}
-                    nowMs={nowMs}
-                    onClearStaleReplicas={() => void handleClearStaleReplicas()}
                   />
 
                   <RuntimeLibrariesJobPanel

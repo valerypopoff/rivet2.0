@@ -22,6 +22,38 @@ requests for the same project within one mounted workspace share one in-flight
 persistence operation. Wrappers must not import `useSaveProject`,
 `useWorkspaceTransitions`, or dirty-state atoms.
 
+A hosted save captures one project ID, path, and snapshot before persistence. Users
+may switch tabs while it runs: the Core completion records the saved path on that
+originating tab only while its path binding is unchanged, without replacing newer
+tab metadata or snapshot state and without changing the active tab's loaded path.
+A concurrent rename or move preserves the newer path, remains dirty, and sets
+`onProjectSaved.pathChangedWhileSaving`, which makes the hosted wrapper skip stale
+title/path reconciliation. If newer project or data edits exist
+when it completes, they remain dirty and the user is told that an earlier version
+was saved; same-project repeated Save requests still share that operation and do
+not queue a trailing save. `onProjectSaved.hasNewerUnsavedChanges` lets a wrapper
+preserve the matching dashboard dirty marker instead of clearing it blindly.
+
+For a normal hosted **Save**, `HostedIOProvider` sends the project metadata ID and
+an `in-place` save intent in addition to the tab path. The server treats that path
+as a hint: if another administrator has renamed or moved the project, it resolves
+the unique current owner by immutable ID, persists at that canonical path, and
+returns it to Rivet's workspace transition. A deleted or ambiguous owner is a
+conflict, never a new project at the stale path. **Save As** remains path-directed
+and intentionally does not reuse the open tab's in-place revision precondition.
+
+Normal hosted loads and saves also carry an opaque project-content revision. Managed
+storage uses its draft revision ID; filesystem storage hashes the canonical project
+and dataset sidecar together. A remote content revision seen through the workflow
+tree is held as pending rather than silently becoming the next save precondition.
+The dashboard keeps every open tab in place and presents a persistent **Reload** /
+**Keep mine** notification, even when the local tab is clean. Reload explicitly
+replaces the selected active or inactive tab snapshot with the latest server data;
+Keep mine authorizes only the next explicit in-place Save to overwrite that exact
+remote revision. Until either choice, save fails locally, and the server repeats the
+same compare-and-swap check so an unseen later remote write cannot be overwritten.
+This is a choice between saved versions, not a merge or live-collaboration feature.
+
 `onProjectSaved` is an observer, not part of persistence ownership. A synchronous
 throw or rejected promise from wrapper callback code is logged without changing a
 successfully persisted save into `false` or repeating the persistence operation.

@@ -77,5 +77,6 @@ export function useGraphExecutor() {
     tryPauseGraph: graphControlExecutor.tryPauseGraph,
     tryResumeGraph: graphControlExecutor.tryResumeGraph,
     tryRunEvaluation: liveExecutor.tryRunEvaluation,
+    tryRetryInterruptedEvaluation: remoteExecutor.tryRetryInterruptedEvaluation,
   };
 }

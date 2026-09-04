@@ -85,7 +85,6 @@
   --node-output-warning-bg-start: var(--grey-darker);
   --node-output-warning-bg-end: var(--grey-darkest);
   --node-output-not-ran-border: var(--grey-lightish);
-  --node-output-multi-border: var(--grey-light);
   --node-output-error-bg: color-mix(in srgb, var(--error) 10%, var(--grey-darker) 90%);
   --node-output-error-border: var(--error-light);
   --node-frozen-output-accent: #68b7ff;

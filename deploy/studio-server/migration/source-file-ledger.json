@@ -4798,7 +4798,9 @@
         {
           "path": "packages/studio-server-web/dashboard/RuntimeLibrariesReplicaReadinessPanel.tsx",
           "migrationMode": "100644",
-          "migrationBlob": "b543d4875ad0dad4dde9b462ec3ff680a425e14e"
+          "migrationBlob": "b543d4875ad0dad4dde9b462ec3ff680a425e14e",
+          "currentPath": "packages/studio-server-web/dashboard/DeploymentReplicaReadinessPanel.tsx",
+          "currentReason": "Replica readiness moved from Runtime libraries to Deployment settings after the monorepo import."
         }
       ]
     },

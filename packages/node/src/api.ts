@@ -571,6 +571,7 @@ function createNodeProcessContext(
     getChatNodeEndpoint: runtimeOptions.getChatNodeEndpoint,
     onChatV2CallFinished: runtimeOptions.onChatV2CallFinished,
     llmProfileHealthStore: runtimeOptions.llmProfileHealthStore,
+    llmProfileHealthExecutionCorrelationId: runtimeOptions.llmProfileHealthExecutionCorrelationId,
     evaluation: runtimeOptions.evaluation,
   };
 }

@@ -1,5 +1,9 @@
+x-dev-stack-labels: &dev-stack-labels
+  com.valerypopoff.rivet2.dev-stack-input-fingerprint: ${RIVET_DEV_STACK_INPUT_FINGERPRINT:-}
+
 services:
   proxy:
+    labels: *dev-stack-labels
     image: nginx:alpine
     ports:
       - "${RIVET_PORT:-8080}:80"
@@ -26,13 +30,19 @@ services:
     depends_on:
       web:
         condition: service_healthy
+        # Nginx resolves Docker service names at startup. Recreate it with an
+        # upstream so it cannot retain that upstream's old container address.
+        restart: true
       api:
         condition: service_healthy
+        restart: true
       executor:
         condition: service_started
+        restart: true
     restart: unless-stopped
 
   web:
+    labels: *dev-stack-labels
     image: node:20-alpine
     working_dir: /workspace/packages/studio-server-web
     environment:
@@ -50,6 +60,7 @@ services:
       - YARN_NODE_LINKER=node-modules
       - YARN_CHECKSUM_BEHAVIOR=ignore
       - YARN_INSTALL_STATE_PATH=/workspace/node_modules/.yarn-install-state.gz
+      - HOSTED_VITE_CACHE_DIR=/home/rivet/.cache/vite
       - VITE_RIVET_DEBUG_LOGS=${VITE_RIVET_DEBUG_LOGS:-false}
       - RIVET_PUBLISHED_WORKFLOWS_BASE_PATH=${RIVET_PUBLISHED_WORKFLOWS_BASE_PATH:-/workflows}
       - RIVET_LATEST_WORKFLOWS_BASE_PATH=${RIVET_LATEST_WORKFLOWS_BASE_PATH:-/workflows-latest}
@@ -65,12 +76,14 @@ services:
       - web_yarn_unplugged:/workspace/.yarn/unplugged
       - npm_cache:/home/rivet/.npm
       - yarn_cache:/home/rivet/.cache/yarn
+      - vite_cache:/home/rivet/.cache/vite
+      - ./docker/preserve-host-pnp-during-command.sh:/tmp/preserve-host-pnp-during-command.sh:ro
     command: >
       sh -lc "
         corepack enable &&
         cd /workspace &&
         if [ ! -f node_modules/.studio-server-yarn-install-ok ] || [ ! -f node_modules/.yarn.lock ] || ! cmp -s yarn.lock node_modules/.yarn.lock; then
-          YARN_NODE_LINKER=node-modules YARN_CHECKSUM_BEHAVIOR=ignore yarn install --immutable &&
+          sh /tmp/preserve-host-pnp-during-command.sh /workspace env YARN_NODE_LINKER=node-modules YARN_CHECKSUM_BEHAVIOR=ignore yarn install --immutable &&
           cp yarn.lock node_modules/.yarn.lock &&
           touch node_modules/.studio-server-yarn-install-ok;
         fi &&
@@ -92,6 +105,7 @@ services:
     restart: unless-stopped
 
   filesystem-artifacts-init:
+    labels: *dev-stack-labels
     image: node:20-alpine
     user: "0:0"
     entrypoint: ["/bin/sh", "-ec"]
@@ -114,6 +128,10 @@ services:
           nocopy: true
     restart: "no"
   api:
+    labels: *dev-stack-labels
+    # The production image entrypoint serves the built API. Development must run
+    # this Compose command instead, so source watching and dependency markers work.
+    entrypoint: []
     build:
       context: ../../..
       dockerfile: deploy/studio-server/compose/docker/Dockerfile.api
@@ -148,6 +166,7 @@ services:
       - no_proxy=${no_proxy:-${NO_PROXY:-}}
       - HOME=/home/rivet
       - npm_config_cache=/home/rivet/.npm
+      - YARN_CACHE_FOLDER=/home/rivet/.cache/yarn
       - YARN_NODE_LINKER=node-modules
       - YARN_CHECKSUM_BEHAVIOR=ignore
       - YARN_INSTALL_STATE_PATH=/workspace/node_modules/.yarn-install-state.gz
@@ -158,6 +177,12 @@ services:
       - RIVET_APP_DATA_ROOT=/data/rivet-app
       - RIVET_RUNTIME_LIBRARIES_ROOT=/data/runtime-libraries
       - RIVET_RUNTIME_PROCESS_ROLE=api
+      # Pull-only metrics stay on this direct internal API service; proxy does not route /metrics.
+      - RIVET_METRICS_ENABLED=${RIVET_METRICS_ENABLED:-false}
+      - RIVET_WEB_APP_BROWSER_STORAGE_TRANSFER_TIMEOUT_MS=${RIVET_WEB_APP_BROWSER_STORAGE_TRANSFER_TIMEOUT_MS:-60000}
+      - RIVET_WEB_APP_BROWSER_STORAGE_MAX_VALUE_BYTES=${RIVET_WEB_APP_BROWSER_STORAGE_MAX_VALUE_BYTES:-268435456}
+      - RIVET_WEB_APP_BROWSER_STORAGE_MAX_ACTION_BYTES=${RIVET_WEB_APP_BROWSER_STORAGE_MAX_ACTION_BYTES:-536870912}
+      - RIVET_WEB_APP_BROWSER_STORAGE_MAX_ACTIVE_BYTES=${RIVET_WEB_APP_BROWSER_STORAGE_MAX_ACTIVE_BYTES:-536870912}
       - RIVET_KEY=${RIVET_KEY:-}
       - RIVET_SERVER_UI_AUTH_MODE=${RIVET_SERVER_UI_AUTH_MODE:-}
       - RIVET_REQUIRE_UI_GATE_KEY=${RIVET_REQUIRE_UI_GATE_KEY:-false}
@@ -184,6 +209,8 @@ services:
       - api_node_modules:/workspace/node_modules
       - api_yarn_unplugged:/workspace/.yarn/unplugged
       - npm_cache:/home/rivet/.npm
+      - yarn_cache:/home/rivet/.cache/yarn
+      - ./docker/preserve-host-pnp-during-command.sh:/tmp/preserve-host-pnp-during-command.sh:ro
       - ${RIVET_WORKFLOWS_HOST_PATH:-../../../.data/workflows}:/workflows
       - ${RIVET_WORKFLOW_RECORDINGS_HOST_PATH:-../../../.data/workflow-recordings}:/workflow-recordings
       - type: volume
@@ -197,7 +224,7 @@ services:
         corepack enable &&
         cd /workspace &&
         if [ ! -f node_modules/.studio-server-yarn-install-ok ] || [ ! -f node_modules/.yarn.lock ] || ! cmp -s yarn.lock node_modules/.yarn.lock; then
-          YARN_NODE_LINKER=node-modules YARN_CHECKSUM_BEHAVIOR=ignore yarn install --immutable &&
+          sh /tmp/preserve-host-pnp-during-command.sh /workspace env YARN_NODE_LINKER=node-modules YARN_CHECKSUM_BEHAVIOR=ignore yarn install --immutable &&
           cp yarn.lock node_modules/.yarn.lock &&
           touch node_modules/.studio-server-yarn-install-ok;
         fi &&
@@ -221,6 +248,7 @@ services:
     restart: unless-stopped
 
   executor:
+    labels: *dev-stack-labels
     build:
       context: ../../..
       dockerfile: deploy/studio-server/compose/docker/Dockerfile.executor
@@ -286,6 +314,8 @@ volumes:
   npm_cache:
     driver: local
   yarn_cache:
+    driver: local
+  vite_cache:
     driver: local
   rivet_data:
     driver: local

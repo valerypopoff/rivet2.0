@@ -44,6 +44,7 @@ async function installStatusDotTreeRoute(page: Page, projects: WorkflowProjectIt
       contentType: 'application/json',
       body: JSON.stringify({
         root: '/managed/workflows',
+        sync: { epoch: 'playwright-fixture', revision: 0 },
         folders: [],
         projects,
       }),

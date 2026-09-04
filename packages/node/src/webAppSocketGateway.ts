@@ -2,6 +2,10 @@ import { nanoid } from 'nanoid';
 import type WebSocket from 'ws';
 import {
   isRivetWebAppRunTerminalEvent,
+  RIVET_WEB_APP_BROWSER_STORAGE_DEFAULT_MAX_ACTION_BYTES,
+  RIVET_WEB_APP_BROWSER_STORAGE_DEFAULT_MAX_ACTIVE_BYTES,
+  RIVET_WEB_APP_BROWSER_STORAGE_DEFAULT_MAX_VALUE_BYTES,
+  RIVET_WEB_APP_BROWSER_STORAGE_DEFAULT_TRANSFER_TIMEOUT_MS,
   type GraphProcessor,
   type Project,
   type RivetWebAppActionStartMessage,
@@ -24,14 +28,32 @@ import type { RivetWebAppRunCoordinator } from './webAppRunCoordinator.js';
 import { createInMemoryRivetWebAppRunStore } from './webAppRunStore.js';
 import { createWebAppRunJournal } from './webAppRunJournal.js';
 import { createWebAppLeaseManager } from './webAppLeaseManager.js';
-import { sendWebAppSocketMessage as safeSend } from './webAppSocketProtocol.js';
+import { sendWebAppSocketBinary, sendWebAppSocketMessage as safeSend } from './webAppSocketProtocol.js';
 import { attachWebAppSocketSession } from './webAppSocketSession.js';
+import {
+  createRivetWebAppBrowserStorageRpcAdmission,
+  RivetWebAppBrowserStorageRpcError,
+  RivetWebAppBrowserStorageRpcHost,
+  type RivetWebAppBrowserStorageRpcEvent,
+  type RivetWebAppBrowserStorageRpcLimits,
+} from './webAppBrowserStorageRpcHost.js';
 import { createWebAppRemoteRunSubscriptions } from './webAppRemoteRunSubscriptions.js';
 import { createWebAppActiveRunRegistry, type ActiveWebAppRun } from './webAppActiveRuns.js';
 
 export { createInMemoryRivetWebAppRunStore } from './webAppRunStore.js';
+export type { RivetWebAppBrowserStorageRpcEvent } from './webAppBrowserStorageRpcHost.js';
+
+export type RivetWebAppRunPermit = {
+  release(): void;
+};
 
 export type RivetWebAppSocketSession = {
+  acquireRunPermit?: (context: {
+    componentId: string;
+    ownerScope: string;
+    requestId: string;
+    runId: string;
+  }) => Promise<RivetWebAppRunPermit | void> | RivetWebAppRunPermit | void;
   createProcessorOptions?: RivetWebAppCreateProcessorOptions;
   onActionError?: RivetWebAppHandlerOptions['onActionError'];
   onActionFinish?: RivetWebAppHandlerOptions['onActionFinish'];
@@ -130,13 +152,14 @@ export type RivetWebAppRunStore = {
 
 export type RivetWebAppWebSocketGateway = {
   dispose(options?: { interrupt?: boolean }): Promise<void>;
-  drain(): void;
+  drain(options?: { closeConnections?: boolean }): void;
   getActiveRunCount(): number;
   handleConnection(socket: WebSocket, session: RivetWebAppSocketSession): void;
   recoverInterruptedRuns(error?: string): Promise<number>;
 };
 
 export type RivetWebAppWebSocketGatewayOptions = {
+  browserStorageTransferTimeoutMs?: number;
   handshakeTimeoutMs?: number;
   heartbeatIntervalMs?: number;
   heartbeatTimeoutMs?: number;
@@ -144,7 +167,11 @@ export type RivetWebAppWebSocketGatewayOptions = {
   leaseDurationMs?: number;
   leaseRenewIntervalMs?: number;
   maxActiveRunsPerScope?: number;
+  maxBrowserStorageActionBytes?: number;
+  maxBrowserStorageActiveBytes?: number;
+  maxBrowserStorageValueBytes?: number;
   maxMessageBytes?: number;
+  onBrowserStorageRpcEvent?: (event: RivetWebAppBrowserStorageRpcEvent) => void;
   onError?: (error: unknown) => void;
   runCoordinator?: RivetWebAppRunCoordinator;
   runStore?: RivetWebAppRunStore;
@@ -183,13 +210,45 @@ export function createRivetWebAppWebSocketGateway(
   );
   const maxMessageBytes = getIntegerOption('maxMessageBytes', options.maxMessageBytes, DEFAULT_MAX_MESSAGE_BYTES, 1);
   const store = options.runStore ?? createInMemoryRivetWebAppRunStore();
+  const browserStorageLimits: RivetWebAppBrowserStorageRpcLimits = {
+    maxActionBytes: getIntegerOption(
+      'maxBrowserStorageActionBytes',
+      options.maxBrowserStorageActionBytes,
+      RIVET_WEB_APP_BROWSER_STORAGE_DEFAULT_MAX_ACTION_BYTES,
+      1,
+    ),
+    maxActiveBytes: getIntegerOption(
+      'maxBrowserStorageActiveBytes',
+      options.maxBrowserStorageActiveBytes,
+      RIVET_WEB_APP_BROWSER_STORAGE_DEFAULT_MAX_ACTIVE_BYTES,
+      1,
+    ),
+    maxValueBytes: getIntegerOption(
+      'maxBrowserStorageValueBytes',
+      options.maxBrowserStorageValueBytes,
+      RIVET_WEB_APP_BROWSER_STORAGE_DEFAULT_MAX_VALUE_BYTES,
+      1,
+    ),
+    transferTimeoutMs: getIntegerOption(
+      'browserStorageTransferTimeoutMs',
+      options.browserStorageTransferTimeoutMs,
+      RIVET_WEB_APP_BROWSER_STORAGE_DEFAULT_TRANSFER_TIMEOUT_MS,
+      1,
+    ),
+  };
+  if (browserStorageLimits.maxValueBytes > browserStorageLimits.maxActionBytes) {
+    throw new RangeError('maxBrowserStorageValueBytes cannot exceed maxBrowserStorageActionBytes.');
+  }
+  const browserStorageAdmission = createRivetWebAppBrowserStorageRpcAdmission(browserStorageLimits.maxActiveBytes);
   const coordinator = options.runCoordinator;
   const activeRuns = createWebAppActiveRunRegistry();
+  const runPermitReleases = new Map<string, () => void>();
   const pendingRunSetups = new Map<string, Promise<RivetWebAppStoredRun | undefined>>();
   const connections = new Set<WebSocket>();
   let draining = false;
   let disposed = false;
 
+  const browserStorageHosts = new Map<string, { host: RivetWebAppBrowserStorageRpcHost; socket: WebSocket }>();
   const reportError = (error: unknown): void => {
     try {
       options.onError?.(error);
@@ -209,7 +268,15 @@ export function createRivetWebAppWebSocketGateway(
   const { append: appendAndBroadcast, broadcast, subscribe, unsubscribe } = journal;
 
   const finishRun = (runId: string, fallbackOwnerScope?: string): void => {
-    activeRuns.finish(runId, fallbackOwnerScope);
+    browserStorageHosts.get(runId)?.host.dispose();
+    browserStorageHosts.delete(runId);
+    const releasePermit = runPermitReleases.get(runId);
+    runPermitReleases.delete(runId);
+    try {
+      activeRuns.finish(runId, fallbackOwnerScope);
+    } finally {
+      releasePermit?.();
+    }
   };
   const replay = (socket: WebSocket, run: RivetWebAppStoredRun, afterSequence: number): number => {
     let lastSequence = afterSequence;
@@ -404,7 +471,9 @@ export function createRivetWebAppWebSocketGateway(
     pendingRunSetups.set(requestKey, setupPromise);
 
     let createdRunId: string | undefined;
+    let acquiredPermit: RivetWebAppRunPermit | undefined;
     let accepted = false;
+    let storedRunCreated = false;
     try {
       const existing = await store.getRunByRequestId(session.ownerScope, message.requestId);
       if (existing) {
@@ -430,6 +499,20 @@ export function createRivetWebAppWebSocketGateway(
         return;
       }
 
+      try {
+        const permit = await session.acquireRunPermit?.({
+          componentId: message.componentId,
+          ownerScope: session.ownerScope,
+          requestId: message.requestId,
+          runId,
+        });
+        if (permit) acquiredPermit = permit;
+      } catch (error) {
+        activeRuns.release(session.ownerScope, runId);
+        completeSetup(undefined);
+        throw error;
+      }
+
       createdRunId = runId;
       const created = await store.createRun({
         componentId: message.componentId,
@@ -443,6 +526,8 @@ export function createRivetWebAppWebSocketGateway(
       });
       if (!created.created) {
         activeRuns.release(session.ownerScope, runId);
+        acquiredPermit?.release();
+        acquiredPermit = undefined;
         createdRunId = undefined;
         completeSetup(created.run);
         if (created.run.componentId !== message.componentId) {
@@ -452,9 +537,45 @@ export function createRivetWebAppWebSocketGateway(
         await attachRun(socket, created.run, 0);
         return;
       }
+      storedRunCreated = true;
+      if (acquiredPermit) {
+        const permit = acquiredPermit;
+        runPermitReleases.set(runId, () => permit.release());
+        acquiredPermit = undefined;
+      }
       if (draining) throw createServerDrainingError();
 
       const abortController = new AbortController();
+      const browserStorageHost =
+        message.storageRpcVersion === 2 && !session.storedValueStore
+          ? new RivetWebAppBrowserStorageRpcHost({
+              admission: browserStorageAdmission,
+              limits: browserStorageLimits,
+              onEvent(event) {
+                try {
+                  options.onBrowserStorageRpcEvent?.(event);
+                } catch {
+                  // Observability must never alter action execution.
+                }
+              },
+              requestId: message.requestId,
+              runId,
+              sendBinary: (frame) => sendWebAppSocketBinary(socket, frame),
+              sendJson: (storageMessage) => safeSend(socket, storageMessage),
+              signal: abortController.signal,
+            })
+          : undefined;
+      if (!session.storedValueStore) {
+        try {
+          options.onBrowserStorageRpcEvent?.({
+            type: 'protocol-negotiated',
+            version: browserStorageHost ? '2' : 'legacy',
+          });
+        } catch {
+          // Observability must never alter action execution.
+        }
+      }
+      if (browserStorageHost) browserStorageHosts.set(runId, { host: browserStorageHost, socket });
       const activeRun: ActiveWebAppRun = {
         abortController,
         durableLeaseActive: true,
@@ -488,7 +609,7 @@ export function createRivetWebAppWebSocketGateway(
           resolveContext: session.resolveContext,
           revisionKey: session.revisionKey,
           state: message.state,
-          storedValueStore: session.storedValueStore,
+          storedValueStore: session.storedValueStore ?? browserStorageHost?.store,
           knowledgeStores: session.knowledgeStores,
           llmProfileHealthStore: session.llmProfileHealthStore,
           storage: message.storage,
@@ -540,6 +661,13 @@ export function createRivetWebAppWebSocketGateway(
           .run()
           .then(
             async (result) => {
+              try {
+                await browserStorageHost?.commit();
+              } catch (error) {
+                const callbacks = journal.getCallbacks(runId);
+                if (callbacks) callbacks.error = error;
+                return await appendAndBroadcast(runId, createRunErrorEvent(activeRun, message.requestId, runId, error));
+              }
               const callbacks = journal.getCallbacks(runId);
               if (callbacks) callbacks.result = result;
               const completedEvent = await appendAndBroadcast(
@@ -585,22 +713,29 @@ export function createRivetWebAppWebSocketGateway(
       }
     } catch (error) {
       if (createdRunId) {
-        try {
-          await appendAndBroadcast(createdRunId, {
-            type: 'action.interrupted',
-            error: 'Web app action setup failed before execution started.',
-            requestId: message.requestId,
-            runId: createdRunId,
-          });
-        } catch (storeError) {
-          handleTerminalPersistenceError(createdRunId, storeError);
+        if (storedRunCreated) {
+          try {
+            await appendAndBroadcast(createdRunId, {
+              type: 'action.interrupted',
+              error: 'Web app action setup failed before execution started.',
+              requestId: message.requestId,
+              runId: createdRunId,
+            });
+          } catch (storeError) {
+            handleTerminalPersistenceError(createdRunId, storeError);
+          }
         }
         finishRun(createdRunId, session.ownerScope);
       }
+      acquiredPermit?.release();
       completeSetup(undefined);
-      if (!isServerDrainingError(error)) reportError(error);
+      if (!isServerDrainingError(error) && !(error instanceof RivetWebAppActionHttpError)) reportError(error);
       if (!accepted) {
-        reject(socket, message.requestId, isServerDrainingError(error) ? error : createActionUnavailableError());
+        reject(
+          socket,
+          message.requestId,
+          error instanceof RivetWebAppActionHttpError ? error : createActionUnavailableError(),
+        );
       }
     }
   };
@@ -640,9 +775,12 @@ export function createRivetWebAppWebSocketGateway(
         journal.clearSubscribers();
       }
     },
-    drain() {
+    drain(options = {}) {
       draining = true;
-      for (const socket of connections) safeSend(socket, { type: 'server.draining' });
+      for (const socket of connections) {
+        safeSend(socket, { type: 'server.draining' });
+        if (options.closeConnections) socket.close(1012, 'Web app action server restarting');
+      }
     },
     getActiveRunCount() {
       return activeRuns.size();
@@ -662,6 +800,11 @@ export function createRivetWebAppWebSocketGateway(
         heartbeatIntervalMs,
         heartbeatTimeoutMs,
         maxMessageBytes,
+        browserStorageRpcLimits: {
+          maxActionBytes: browserStorageLimits.maxActionBytes,
+          maxValueBytes: browserStorageLimits.maxValueBytes,
+          transferTimeoutMs: browserStorageLimits.transferTimeoutMs,
+        },
         async onActionCancel(runId) {
           const run = await store.getRun(runId);
           if (!run || run.ownerScope !== session.ownerScope) {
@@ -673,8 +816,27 @@ export function createRivetWebAppWebSocketGateway(
           }
         },
         onActionStart: (message) => startAction(socket, session, message),
+        onStorageBinary(frame) {
+          const handled = [...browserStorageHosts.values()].some(
+            (entry) => entry.socket === socket && entry.host.handleBinary(normalizeWebSocketBinary(frame)),
+          );
+          if (!handled) socket.close(1002, 'Unexpected browser storage frame');
+        },
+        onStorageMessage(message) {
+          const entry = browserStorageHosts.get(message.runId);
+          if (!entry || entry.socket !== socket) {
+            socket.close(1008, 'Browser storage action ownership mismatch');
+            return;
+          }
+          entry.host.handleMessage(message);
+        },
         onCleanup() {
           connections.delete(socket);
+          for (const [runId, entry] of browserStorageHosts) {
+            if (entry.socket !== socket) continue;
+            entry.host.dispose(new Error('Browser storage connection closed.'));
+            browserStorageHosts.delete(runId);
+          }
           for (const runId of journal.subscribedRunIds()) unsubscribe(socket, runId);
           remoteRunSubscriptions.closeSocket(socket);
         },
@@ -714,6 +876,7 @@ function createRequestIdConflictError(): RivetWebAppActionHttpError {
   return new RivetWebAppActionHttpError(
     'The web app action request ID was already used for another component.',
     409,
+
     'request_id_conflict',
   );
 }
@@ -746,7 +909,11 @@ function createRunErrorEvent(
   return {
     type: 'action.failed',
     error: error instanceof Error ? error.message : String(error),
-    ...(error instanceof RivetWebAppActionHttpError && error.code ? { code: error.code } : {}),
+    ...(error instanceof RivetWebAppActionHttpError && error.code
+      ? { code: error.code }
+      : error instanceof RivetWebAppBrowserStorageRpcError
+        ? { code: error.code }
+        : {}),
     ...(responseTrace == null ? {} : { responseTrace }),
     requestId,
     runId,
@@ -759,4 +926,10 @@ function getIntegerOption(name: string, value: number | undefined, fallback: num
     throw new RangeError(`${name} must be a safe integer greater than or equal to ${minimum}.`);
   }
   return resolved;
+}
+
+function normalizeWebSocketBinary(frame: WebSocket.RawData): Uint8Array {
+  if (Array.isArray(frame)) return Buffer.concat(frame);
+  if (frame instanceof ArrayBuffer) return new Uint8Array(frame);
+  return new Uint8Array(frame.buffer, frame.byteOffset, frame.byteLength);
 }

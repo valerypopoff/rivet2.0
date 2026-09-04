@@ -16,6 +16,13 @@ export type ManagedPostgresPoolLease = {
   release(): Promise<void>;
 };
 
+export type ManagedPostgresPoolMetrics = Readonly<{
+  idle: number;
+  pools: number;
+  total: number;
+  waiting: number;
+}>;
+
 function normalizeKeyValue(value: unknown): unknown {
   if (Array.isArray(value)) {
     return value.map(normalizeKeyValue);
@@ -38,19 +45,11 @@ function getPoolKey(config: PoolConfig, max: number): string {
   return JSON.stringify(normalizeKeyValue({ ...identityConfig, max }));
 }
 
-export function getManagedPostgresPoolMax(
-  env: NodeJS.ProcessEnv = process.env,
-): number {
-  return parsePositiveInt(
-    env[MANAGED_POSTGRES_POOL_MAX_ENV],
-    DEFAULT_MANAGED_POSTGRES_POOL_MAX,
-  );
+export function getManagedPostgresPoolMax(env: NodeJS.ProcessEnv = process.env): number {
+  return parsePositiveInt(env[MANAGED_POSTGRES_POOL_MAX_ENV], DEFAULT_MANAGED_POSTGRES_POOL_MAX);
 }
 
-export function withManagedPostgresPoolMax(
-  config: PoolConfig,
-  env: NodeJS.ProcessEnv = process.env,
-): PoolConfig {
+export function withManagedPostgresPoolMax(config: PoolConfig, env: NodeJS.ProcessEnv = process.env): PoolConfig {
   return {
     ...config,
     max: getManagedPostgresPoolMax(env),
@@ -101,10 +100,41 @@ export class ManagedPostgresPoolRegistry {
       },
     };
   }
+
+  getMetrics(): ManagedPostgresPoolMetrics {
+    let idle = 0;
+    let total = 0;
+    let waiting = 0;
+
+    for (const { pool } of this.#entries.values()) {
+      idle += toNonNegativeCount(pool.idleCount);
+      total += toNonNegativeCount(pool.totalCount);
+      waiting += toNonNegativeCount(pool.waitingCount);
+    }
+
+    return Object.freeze({
+      idle,
+      pools: this.#entries.size,
+      total,
+      waiting,
+    });
+  }
+}
+
+function toNonNegativeCount(value: unknown): number {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : 0;
 }
 
 const managedPostgresPoolRegistry = new ManagedPostgresPoolRegistry();
 
 export function acquireManagedPostgresPool(config: PoolConfig): ManagedPostgresPoolLease {
   return managedPostgresPoolRegistry.acquire(config);
+}
+
+/**
+ * A synchronous view of process-local shared pools for the metrics endpoint.
+ * It never opens a connection or queries PostgreSQL while Prometheus scrapes.
+ */
+export function getManagedPostgresPoolMetrics(): ManagedPostgresPoolMetrics {
+  return managedPostgresPoolRegistry.getMetrics();
 }

@@ -15,6 +15,16 @@ Do not mutate graph arrays directly from node body controls. Canvas controls use
 same commands as settings editors so undo/redo, connection recovery, comparison, and
 serialization remain aligned.
 
+## Node Output Surfaces
+
+Inline output is part of the node card, not a detached panel. For a node with several
+recorded runs, `NodeOutputMultiProcess` places the run pager and the selected output
+inside one `.multi-node-output` surface. The pager remains separated from the selected
+output by the normal output divider, but the outer multi-run surface alone owns the
+bottom corners and clipping. Do not restore an extra `.node-output.multi` wrapper
+around the selected output: it creates a rounded pager card followed by a visually
+detached output section.
+
 ## Connection Mode
 
 Connection mode survives canvas pan/zoom and keeps its pending wire attached to the

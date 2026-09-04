@@ -102,11 +102,14 @@ export function resolveLLMProfileNodeValue(params: {
   // project-scoped, so defer attaching it until LLM Chat binds the profile to
   // the executing project in that case.
   const projectId = context.project?.metadata?.id;
+  const profileTitle = context.node?.title;
+  const profileName = typeof profileTitle === 'string' ? profileTitle.trim() : '';
 
   return {
     version: LLM_PROFILE_VALUE_VERSION,
     credential,
     configuration,
+    ...(profileName === '' ? {} : { profileName }),
     ...(projectId == null
       ? {}
       : {
@@ -116,6 +119,7 @@ export function resolveLLMProfileNodeValue(params: {
             chatNodeHeaders: context.settings.chatNodeHeaders,
             projectId,
             profileNodeId: context.node.id,
+            ...(profileName === '' ? {} : { profileName }),
           }),
         }),
   };

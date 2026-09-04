@@ -3,6 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { resolveHelmBinOrThrow } from './lib/k8s-tools.mjs';
+import { readManagedWorkflowSchemaReleaseContract } from './lib/studio-server-release-manifest.mjs';
 
 const rootDir = process.cwd();
 const launcherName = 'verify-kubernetes';
@@ -16,10 +17,7 @@ function quoteArg(arg) {
 }
 
 function spawnProgram(program, args, options = {}) {
-  const {
-    cwd = rootDir,
-    env = process.env,
-  } = options;
+  const { cwd = rootDir, env = process.env } = options;
 
   return new Promise((resolve, reject) => {
     const child = spawn(program, args, {
@@ -73,18 +71,63 @@ async function verifyLocalRender(nodeBin, envPath) {
   });
 }
 
-async function verifyProdRender(helmBin) {
+async function verifyProdRender(helmBin, managedWorkflowSchemaVersion) {
   console.log(`[${launcherName}] Linting and rendering the production overlay...`);
 
   const prodImageArgs = [
-    '--set', 'images.proxy.repository=ghcr.io/example/proxy',
-    '--set', 'images.web.repository=ghcr.io/example/web',
-    '--set', 'images.api.repository=ghcr.io/example/api',
-    '--set', 'images.executor.repository=ghcr.io/example/executor',
+    '--set',
+    'images.proxy.repository=ghcr.io/example/proxy',
+    '--set',
+    `images.proxy.digest=sha256:${'a'.repeat(64)}`,
+    '--set',
+    'images.web.repository=ghcr.io/example/web',
+    '--set',
+    `images.web.digest=sha256:${'b'.repeat(64)}`,
+    '--set',
+    'images.api.repository=ghcr.io/example/api',
+    '--set',
+    `images.api.digest=sha256:${'c'.repeat(64)}`,
+    '--set',
+    'images.executor.repository=ghcr.io/example/executor',
+    '--set',
+    `images.executor.digest=sha256:${'d'.repeat(64)}`,
+    '--set',
+    `release.production.manifestDigest=sha256:${'f'.repeat(64)}`,
+    '--set',
+    `release.production.sourceSha=${'e'.repeat(40)}`,
+    '--set',
+    'release.production.verification.workflow=Build-Images',
+    '--set',
+    'release.production.verification.runId=12345',
+    '--set',
+    'release.production.verification.runAttempt=1',
+    '--set',
+    'release.production.chart.name=rivet',
+    '--set',
+    'release.production.chart.version=0.1.0',
+    '--set',
+    `release.production.chart.contentDigest=sha256:${'f'.repeat(64)}`,
+    '--set',
+    `release.production.database.managedWorkflowSchemaVersion=${managedWorkflowSchemaVersion}`,
   ];
 
-  await spawnProgram(helmBin, ['lint', './deploy/studio-server/helm', '-f', './deploy/studio-server/helm/overlays/prod.yaml', ...prodImageArgs]);
-  await spawnProgram(helmBin, ['template', 'rivet-prod', './deploy/studio-server/helm', '-n', 'rivet-prod', '-f', './deploy/studio-server/helm/overlays/prod.yaml', ...prodImageArgs]);
+  await spawnProgram(helmBin, [
+    'lint',
+    './deploy/studio-server/helm',
+    '-f',
+    './deploy/studio-server/helm/overlays/prod.yaml',
+    ...prodImageArgs,
+  ]);
+  await spawnProgram(helmBin, [
+    'template',
+    'rivet-prod',
+    './deploy/studio-server/helm',
+    '-n',
+    'rivet-prod',
+    '-f',
+    './deploy/studio-server/helm/overlays/prod.yaml',
+    ...prodImageArgs,
+  ]);
 }
 
 async function main() {
@@ -94,7 +137,7 @@ async function main() {
 
   try {
     await verifyLocalRender(nodeBin, envPath);
-    await verifyProdRender(helmBin);
+    await verifyProdRender(helmBin, readManagedWorkflowSchemaReleaseContract(rootDir).version);
     console.log(`[${launcherName}] Kubernetes local/prod render verification passed.`);
   } finally {
     fs.rmSync(tempDir, { recursive: true, force: true });

@@ -335,9 +335,7 @@ const ResponseInspectorContent: FC<{ trace?: AgentResponseTrace; includeSubtitle
         <TraceSection title="Model calls" omitted={trace.omittedModelCallCount} empty="No provider requests recorded.">
           {trace.modelCalls.map((call) => (
             <article key={call.callId}>
-              <strong>
-                {formatModelCallProvider(call)} · {call.model}
-              </strong>
+              <strong>{formatModelCallLabel(call)}</strong>
               <span>
                 {call.outcome}
                 {call.profileIndex == null ? '' : ` · profile ${call.profileIndex + 1}`}
@@ -379,6 +377,14 @@ const ResponseInspectorContent: FC<{ trace?: AgentResponseTrace; includeSubtitle
     )}
   </div>
 );
+
+function formatModelCallLabel(call: AgentModelCallTrace): string {
+  return [
+    ...(call.profileName == null || call.profileName.trim() === '' ? [] : [`Profile: ${call.profileName.trim()}`]),
+    formatModelCallProvider(call),
+    call.model,
+  ].join(' · ');
+}
 
 function formatModelCallProvider(call: Pick<AgentModelCallTrace, 'provider' | 'customProviderApi'>): string {
   return call.provider === 'custom' ? getCustomProviderApiContract(call.customProviderApi).label : call.provider;

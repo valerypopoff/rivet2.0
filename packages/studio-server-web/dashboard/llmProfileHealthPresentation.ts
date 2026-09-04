@@ -29,6 +29,8 @@ export function getLLMProfileHealthDisplayName(
     }
   }
 
+  const profileName = snapshot.identity.profileName?.trim();
+  if (profileName) return profileName;
   return profileNodeId == null ? 'LLM Profile' : `LLM Profile ${profileNodeId}`;
 }
 

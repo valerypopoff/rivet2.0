@@ -1,6 +1,6 @@
 {
   "name": "@valerypopoff/rivet-studio-server-api",
-  "version": "1.8.6",
+  "version": "1.9.0",
   "private": true,
   "type": "module",
   "scripts": {
@@ -9,6 +9,7 @@
     "start": "node dist/studio-server-api/src/server.js",
     "runtime-libraries:managed:audit": "tsx src/scripts/runtime-library-managed-cleanup.ts audit",
     "runtime-libraries:managed:prune": "tsx src/scripts/runtime-library-managed-cleanup.ts prune",
+    "managed-reconciliation:status": "tsx src/scripts/managed-reconciliation-status.ts",
     "workflow-execution:benchmark-fixture": "tsx src/scripts/benchmark-graph-fixture.ts",
     "workflow-execution:measure": "tsx src/scripts/measure-workflow-execution.ts",
     "workflow-schema:migrate": "tsx src/scripts/migrate-managed-workflow-schema.ts migrate",

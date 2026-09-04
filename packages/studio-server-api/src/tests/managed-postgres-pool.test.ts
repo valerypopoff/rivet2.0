@@ -76,5 +76,20 @@ test('managed PostgreSQL pools stay isolated across database identities', async 
   assert.equal(pools.length, 2);
 
   await Promise.all([first.release(), second.release()]);
-  assert.deepEqual(pools.map((pool) => pool.endCalls), [1, 1]);
+  assert.deepEqual(
+    pools.map((pool) => pool.endCalls),
+    [1, 1],
+  );
+});
+
+test('managed PostgreSQL pool telemetry is an in-memory aggregate and tolerates an incomplete pool shim', async () => {
+  const { pools, registry } = createPoolHarness();
+  const first = registry.acquire({ connectionString: 'postgresql://rivet@one.test/rivet' });
+  const second = registry.acquire({ connectionString: 'postgresql://rivet@two.test/rivet' });
+  Object.assign(pools[0]!, { idleCount: 2, totalCount: 4, waitingCount: 1 });
+  Object.assign(pools[1]!, { idleCount: 3, totalCount: 5, waitingCount: 0 });
+
+  assert.deepEqual(registry.getMetrics(), { idle: 5, pools: 2, total: 9, waiting: 1 });
+  await Promise.all([first.release(), second.release()]);
+  assert.deepEqual(registry.getMetrics(), { idle: 0, pools: 0, total: 0, waiting: 0 });
 });

@@ -175,8 +175,8 @@ export class TauriEvaluationStore implements EvaluationStore {
     recordingId: string;
     retention: EvaluationRecordingArtifact['reference']['retention'];
     expiresAt?: string;
-  }): Promise<void> {
-    await (await this.store()).updateRecordingRetention(input);
+  }): Promise<boolean> {
+    return (await this.store()).updateRecordingRetention(input);
   }
 
   async promoteBaseline(input: { projectId: ProjectId; runId: string }): Promise<void> {

@@ -330,7 +330,7 @@ function profileAttemptToChild(attempt: RunActivityProfileAttempt): RunActivityC
 
   return {
     id: `profile-attempt:${attempt.eventId}`,
-    label: `${formatModelCallProvider(attempt)} / ${attempt.model} - ${describeProfileAttemptStage(attempt.stage)}`,
+    label: `${formatProfileTitle(attempt)}${formatModelCallProvider(attempt)} / ${attempt.model} - ${describeProfileAttemptStage(attempt.stage)}`,
     secondaryText: context.join(' / '),
     status: getProfileAttemptStatus(attempt),
   };
@@ -421,11 +421,16 @@ function modelCallToChild(call: RunActivityModelCall): RunActivityChildViewModel
   ].filter((value): value is string => value != null);
   return {
     id: `model:${call.callId}:${call.sequence}`,
-    label: `${formatModelCallProvider(call)} / ${call.model}`,
+    label: `${formatProfileTitle(call)}${formatModelCallProvider(call)} / ${call.model}`,
     secondaryText: context.join(' / '),
     status: call.outcome === 'success' ? 'success' : call.outcome === 'aborted' ? 'interrupted' : 'error',
     ...(call.durationMs == null ? {} : { durationMs: call.durationMs }),
   };
+}
+
+function formatProfileTitle(call: { profileName?: string }): string {
+  const profileName = call.profileName?.trim();
+  return profileName ? `Profile: ${profileName} · ` : '';
 }
 
 function formatModelCallProvider(call: Pick<RunActivityModelCall, 'provider' | 'customProviderApi'>): string {

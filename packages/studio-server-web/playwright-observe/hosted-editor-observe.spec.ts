@@ -72,6 +72,7 @@ test.describe('Observable hosted editor flow', () => {
     await page.route('**/api/workflows/tree', async (route) => {
       const tree: WorkflowTreeResponse = {
         root: '/workflows',
+        sync: { epoch: 'playwright-fixture', revision: 0 },
         folders: [],
         projects: [project],
       };

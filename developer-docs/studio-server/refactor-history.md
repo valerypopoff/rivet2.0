@@ -4,6 +4,27 @@ This document records intentional architecture and cleanup changes that future m
 
 It is not a changelog. Keep entries focused on why a refactor happened, which ownership boundary changed, and which verification paths should be kept alive.
 
+## 2026-09-03 - Crash-Safe Filesystem Project Saves
+
+### Why
+
+The filesystem hosted-save path previously replaced `.rivet-project` before writing or deleting `.rivet-data`. An ordinary sidecar error or process termination between those operations could expose two different save generations while still leaving callers unsure which part committed.
+
+### Ownership
+
+- `filesystem-project-transactions.ts` owns validation, exclusive staging, checksummed journals, backup/promotion order, the durable committed marker, cleanup, startup and path-specific recovery, the storage capability probe, and the shared filesystem read/write coordinator.
+- `storage-backend.ts` keeps hosted identity validation and cache invalidation, but canonical project/dataset persistence crosses the transaction helper. Derived project statistics update only after the committed marker and are never recovery evidence.
+- Server startup does not listen until recovery completes. Ambiguous evidence fails closed and remains on disk. Shutdown drains the coordinator, while hard-stop correctness comes from journal recovery.
+- The Kubernetes chart remains managed-storage-only and singleton at the backend. Its StatefulSet uses ordered, single-ordinal rolling replacement—the StatefulSet equivalent of a no-overlap Recreate rollout—and execution replicas remain the scaling boundary.
+- This closes mixed filesystem project/dataset generations. Stale-revision conflict detection between administrators remains separate work; the save-target identity check prevents cross-project writes but does not reject two edits based on the same older revision.
+
+### Verification To Preserve
+
+- Transaction checkpoints: `yarn workspace @valerypopoff/rivet-studio-server-api run test:files -- src/tests/filesystem-project-transactions.test.ts`
+- Hosted save and tree invalidation: `yarn workspace @valerypopoff/rivet-studio-server-api run test:files -- src/tests/hosted-project-title.test.ts src/tests/workflow-filesystem-tree.test.ts`
+- API build and full suite: `yarn workspace @valerypopoff/rivet-studio-server-api run build` and `yarn workspace @valerypopoff/rivet-studio-server-api run test`
+- Kubernetes render/contract gate: `yarn studio-server:verify:kubernetes`
+
 ## 2026-07-14 - Settings Repository And Frontend Orchestration Split
 
 ### Why

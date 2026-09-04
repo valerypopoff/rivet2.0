@@ -199,7 +199,7 @@ export function getUiGraphWebAppStorageKey(
   ].join(':');
 }
 
-function getUiGraphResponseTraceStorageKey(
+export function getUiGraphResponseTraceStorageKey(
   uiGraph: UiGraph,
   componentId: string,
   location: UiGraphStorageLocation | undefined = getDefaultUiGraphStorageLocation(),
@@ -416,6 +416,27 @@ export function applyUiGraphWebAppStorageActionPatch(
   if (applicableKeys.length === 0) return applicablePatch;
 
   persist(applicablePatch);
+  for (const key of applicableKeys) appliedActionByKey.set(key, actionNumber);
+  return applicablePatch;
+}
+
+/**
+ * Async equivalent used by IndexedDB-backed clients. Ordering metadata is
+ * advanced only after the durable commit succeeds.
+ */
+export async function applyUiGraphWebAppStorageActionPatchAsync(
+  patch: Readonly<Record<string, unknown>>,
+  actionNumber: number,
+  appliedActionByKey: Map<string, number>,
+  persist: (applicablePatch: Record<string, unknown>) => Promise<void>,
+): Promise<Record<string, unknown>> {
+  const applicablePatch = Object.fromEntries(
+    Object.entries(patch).filter(([key]) => actionNumber >= (appliedActionByKey.get(key) ?? 0)),
+  );
+  const applicableKeys = Object.keys(applicablePatch);
+  if (applicableKeys.length === 0) return applicablePatch;
+
+  await persist(applicablePatch);
   for (const key of applicableKeys) appliedActionByKey.set(key, actionNumber);
   return applicablePatch;
 }

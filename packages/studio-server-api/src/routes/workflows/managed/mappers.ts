@@ -5,10 +5,7 @@ import type {
 } from '../../../../../studio-server-shared/workflow-types.js';
 import { getAggregateWorkflowProjectStatus } from '../../../../../studio-server-shared/workflow-types.js';
 import { normalizeWorkflowEndpointLookupName } from '../endpoint-names.js';
-import {
-  getManagedWorkflowFolderVirtualPath,
-  getManagedWorkflowProjectVirtualPath,
-} from '../virtual-paths.js';
+import { getManagedWorkflowFolderVirtualPath, getManagedWorkflowProjectVirtualPath } from '../virtual-paths.js';
 import type { CurrentDraftRevisionRow, FolderRow, RevisionRow, WorkflowRow } from './types.js';
 import type { WebAppPublicationRow } from './types.js';
 
@@ -51,6 +48,7 @@ const RECORDING_COLUMN_NAMES = [
   'component_id_at_execution',
   'component_type_at_execution',
   'component_label_at_execution',
+  'correlation_id',
   'error_message',
   'recording_blob_key',
   'replay_project_blob_key',
@@ -82,7 +80,8 @@ export function getWorkflowStatus(row: WorkflowRow): WorkflowProjectStatus {
   }
 
   return row.published_revision_id === row.current_draft_revision_id &&
-    normalizeWorkflowEndpointLookupName(row.published_endpoint_name) === normalizeWorkflowEndpointLookupName(row.endpoint_name)
+    normalizeWorkflowEndpointLookupName(row.published_endpoint_name) ===
+      normalizeWorkflowEndpointLookupName(row.endpoint_name)
     ? 'published'
     : 'unpublished_changes';
 }
@@ -92,7 +91,8 @@ export function getWorkflowWebAppPublicationStatuses(
   webAppRows: readonly WebAppPublicationRow[] = [],
 ): WorkflowProjectStatus[] {
   return webAppRows.map((webApp) =>
-    webApp.revision_id === row.current_draft_revision_id ? 'published' : 'unpublished_changes');
+    webApp.revision_id === row.current_draft_revision_id ? 'published' : 'unpublished_changes',
+  );
 }
 
 export function mapWorkflowRowToProjectItem(
@@ -104,6 +104,7 @@ export function mapWorkflowRowToProjectItem(
   return {
     id: row.workflow_id,
     projectMetadataId: row.workflow_id,
+    revisionId: row.current_draft_revision_id,
     name: row.name,
     fileName: row.file_name,
     relativePath: row.relative_path,
@@ -140,7 +141,10 @@ export function mapFolderRowToFolderItem(row: FolderRow): WorkflowFolderItem {
   };
 }
 
-export function splitCurrentDraftRevisionRow(row: CurrentDraftRevisionRow): { workflow: WorkflowRow; revision: RevisionRow } {
+export function splitCurrentDraftRevisionRow(row: CurrentDraftRevisionRow): {
+  workflow: WorkflowRow;
+  revision: RevisionRow;
+} {
   return {
     workflow: {
       workflow_id: row.workflow_id,

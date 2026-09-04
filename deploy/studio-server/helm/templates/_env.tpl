@@ -160,6 +160,22 @@
   value: {{ .port | quote }}
 - name: RIVET_API_PROFILE
   value: {{ .profile | quote }}
+- name: RIVET_DEPLOYMENT_TOPOLOGY
+  value: "replicated"
+- name: RIVET_HOSTED_EVALUATIONS_ENABLED
+  value: {{ $root.Values.hostedEvaluations.enabled | quote }}
+- name: RIVET_HOSTED_EVALUATIONS_WORKER_CONCURRENCY
+  value: {{ $root.Values.hostedEvaluations.workerConcurrency | quote }}
+- name: RIVET_HOSTED_EVALUATIONS_LEASE_MS
+  value: {{ $root.Values.hostedEvaluations.leaseMs | quote }}
+- name: RIVET_HOSTED_EVALUATIONS_POLL_MS
+  value: {{ $root.Values.hostedEvaluations.pollMs | quote }}
+- name: RIVET_HOSTED_EVALUATIONS_MAX_JOBS_PER_RUN
+  value: {{ $root.Values.hostedEvaluations.maxJobsPerRun | quote }}
+- name: RIVET_HOSTED_EVALUATIONS_MAX_OUTSTANDING_JOBS
+  value: {{ $root.Values.hostedEvaluations.maxOutstandingJobs | quote }}
+- name: RIVET_DEPLOYMENT_METRICS_ENABLED
+  value: {{ $root.Values.metrics.enabled | quote }}
 - name: RIVET_WORKSPACE_ROOT
   value: /workspace
 - name: RIVET_WORKFLOWS_ROOT
@@ -176,6 +192,30 @@
   value: {{ .jobWorkerEnabled | quote }}
 - name: RIVET_DEPLOYMENT_MANAGED_WORKFLOW_SCHEMA_MODE
   value: verify
+- name: RIVET_DEPLOYMENT_MANAGED_WORKFLOW_SCHEMA_MIN_VERSION
+  value: {{ $root.Values.workflowSchema.compatibility.minimumVersion | quote }}
+- name: RIVET_DEPLOYMENT_MANAGED_WORKFLOW_SCHEMA_MAX_VERSION
+  value: {{ $root.Values.workflowSchema.compatibility.maximumVersion | quote }}
+- name: RIVET_MANAGED_MAINTENANCE_ENABLED
+  value: {{ if eq .profile "control" }}"true"{{ else }}"false"{{ end }}
+- name: RIVET_MANAGED_MAINTENANCE_INTERVAL_MS
+  value: {{ $root.Values.managedMaintenance.intervalMs | quote }}
+- name: RIVET_MANAGED_MAINTENANCE_LEASE_MS
+  value: {{ $root.Values.managedMaintenance.leaseMs | quote }}
+- name: RIVET_MANAGED_MAINTENANCE_BATCH_SIZE
+  value: {{ $root.Values.managedMaintenance.batchSize | quote }}
+- name: RIVET_MANAGED_EVALUATION_RETENTION_MODE
+  value: {{ $root.Values.evaluationRetention.mode | quote }}
+- name: RIVET_MANAGED_WEB_APP_ACTION_RETENTION_MODE
+  value: {{ $root.Values.webAppActionRetention.mode | quote }}
+- name: RIVET_MANAGED_WEB_APP_ACTION_RETENTION_HOURS
+  value: {{ $root.Values.webAppActionRetention.retentionHours | quote }}
+- name: RIVET_MANAGED_STALE_UPLOAD_RETENTION_MODE
+  value: {{ $root.Values.staleUploadRetention.mode | quote }}
+- name: RIVET_MANAGED_STALE_UPLOAD_RETENTION_MINIMUM_CANDIDATE_AGE_HOURS
+  value: {{ $root.Values.staleUploadRetention.minimumCandidateAgeHours | quote }}
+- name: RIVET_MANAGED_STALE_UPLOAD_RETENTION_REQUIRED_COMPLETED_SCANS
+  value: {{ $root.Values.staleUploadRetention.requiredCompletedScans | quote }}
 - name: RIVET_DEPLOYMENT_HEALTH_REFRESH_SECONDS
   value: {{ $root.Values.lifecycle.health.refreshSeconds | quote }}
 - name: RIVET_DEPLOYMENT_HEALTH_CHECK_TIMEOUT_SECONDS
@@ -184,6 +224,14 @@
   value: {{ $root.Values.lifecycle.health.staleAfterSeconds | quote }}
 - name: RIVET_DEPLOYMENT_SHUTDOWN_GRACE_SECONDS
   value: {{ $root.Values.lifecycle.shutdownGraceSeconds | quote }}
+{{- if eq .profile "execution" }}
+- name: RIVET_DEPLOYMENT_PUBLISHED_EXECUTION_ADMISSION_MODE
+  value: {{ $root.Values.publishedExecutionAdmission.mode | quote }}
+- name: RIVET_DEPLOYMENT_PUBLISHED_EXECUTION_MAX_ACTIVE_RUNS
+  value: {{ $root.Values.publishedExecutionAdmission.maxActiveRunsPerPod | quote }}
+- name: RIVET_DEPLOYMENT_PUBLISHED_EXECUTION_RETRY_AFTER_SECONDS
+  value: {{ $root.Values.publishedExecutionAdmission.retryAfterSeconds | quote }}
+{{- end }}
 {{ include "rivet.env.appSettings" $root }}
 {{ include "rivet.env.authKey" $root }}
 {{ include "rivet.env.globalValues" $root }}

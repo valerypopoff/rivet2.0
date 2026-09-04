@@ -29,6 +29,7 @@ import { FullScreenModal } from '../FullScreenModal.js';
 import { AgentResponseInspector } from '../agentTrace/AgentResponseInspector.js';
 import { buildLlmInvocationTrace } from '../agentTrace/agentTraceViewModel.js';
 import { CodeNodeErrorOutput } from '../nodes/CodeNode.js';
+import { OUTPUT_NAVIGATION_ITEM_ATTRIBUTE } from '../renderDataValue/outputNavigationItems.js';
 import { MATCH_ACTIVE_CLASS, MATCH_CLASS } from './fullscreenOutputSearch.js';
 import { FullscreenNodeOutputToolbar } from './FullscreenNodeOutputToolbar.js';
 import { FullscreenOutputSearchContext } from './FullscreenOutputSearchContext.js';
@@ -44,6 +45,7 @@ import {
   shouldShowNodeRunDurationSummary,
 } from './NodeRunDurationMeta.js';
 import { useFullscreenOutputSearch } from './useFullscreenOutputSearch.js';
+import { useFullscreenOutputKeyboardNavigation } from './fullscreenOutputKeyboardNavigation.js';
 import {
   createFullscreenNodeOutputViewModel,
   getNodeOutputCopySource,
@@ -129,6 +131,11 @@ const fullscreenOutputCss = css`
   min-width: 0;
   flex-direction: column;
 
+  /* This is a programmatic keyboard-navigation target, not a visible control. */
+  &:focus {
+    outline: none;
+  }
+
   .fullscreen-header {
     position: sticky;
     top: var(--fullscreen-modal-vertical-inset);
@@ -141,7 +148,7 @@ const fullscreenOutputCss = css`
 
   .picker {
     border: 1px solid var(--grey-darkish);
-    background: transparent;
+    background: var(--grey-darker);
     display: inline-flex;
     gap: 0;
     border-radius: 8px;
@@ -195,45 +202,27 @@ const fullscreenOutputCss = css`
     padding-bottom: calc(24px * var(--ui-font-scale));
   }
 
-  .llm-chat-output-history-pager {
-    align-items: center;
-    border-bottom: 1px solid var(--node-output-picker-border);
+  .fullscreen-output-pagers {
     display: flex;
-    font-size: var(--ui-font-size-sm);
     gap: 8px;
-    margin: 8px 0 16px;
-    min-height: 32px;
-    padding-bottom: 8px;
+    min-width: 0;
 
-    button {
-      align-items: center;
-      background: transparent;
-      border: 0;
-      border-radius: 4px;
-      color: var(--foreground);
-      cursor: pointer;
-      display: inline-flex;
-      font: inherit;
-      height: 28px;
-      justify-content: center;
-      padding: 0;
-      width: 28px;
-
-      &:hover:not(:disabled) {
-        background: var(--node-output-picker-hover-bg);
-      }
-
-      &:disabled {
-        cursor: default;
-        opacity: 0.4;
-      }
+    .picker {
+      flex: 0 0 auto;
     }
 
-    .llm-chat-output-history-pager-label {
-      min-width: 0;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
+    .picker.llm-chat-output-history-pager.compact {
+      max-width: min(320px, 34vw);
+
+      .picker-page.llm-chat-output-history-pager-label {
+        flex: 1 1 auto;
+        min-width: 0;
+        width: auto;
+        overflow: hidden;
+        padding: 0 10px;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
     }
   }
 
@@ -332,9 +321,9 @@ const NodeFullscreenOutput: FC<{ node: ChartNode }> = ({ node }) => {
   const selectedPresentationData = useMemo(
     () =>
       selectedProcessData && node.type === 'llmChatV2'
-        ? getLLMChatSplitOutputHistoryPresentationData(selectedProcessData.data)
+        ? getLLMChatSplitOutputHistoryPresentationData(selectedProcessData.data, node.isSplitRun === true)
         : selectedProcessData?.data,
-    [node.type, selectedProcessData],
+    [node.isSplitRun, node.type, selectedProcessData],
   );
   const hasSelectedSplitOutputData = selectedPresentationData?.splitOutputData != null;
   const displayedOutput = useMemo(() => {
@@ -358,7 +347,13 @@ const NodeFullscreenOutput: FC<{ node: ChartNode }> = ({ node }) => {
             }),
       };
     });
-  }, [filteredOutput, hasSelectedSplitOutputData, selectedLLMChatOutputPage, selectedPresentationData, selectedProcessData]);
+  }, [
+    filteredOutput,
+    hasSelectedSplitOutputData,
+    selectedLLMChatOutputPage,
+    selectedPresentationData,
+    selectedProcessData,
+  ]);
 
   const { FullscreenOutput, Output, OutputSimple, FullscreenOutputSimple, defaultRenderMarkdown, getCopyValueData } =
     useUnknownNodeComponentDescriptorFor(node);
@@ -388,6 +383,25 @@ const NodeFullscreenOutput: FC<{ node: ChartNode }> = ({ node }) => {
     node.type === 'llmChatV2' && !hasSelectedSplitOutputData
       ? selectedProcessData?.data.llmChatOutputHistory?.[0] ?? []
       : [];
+  const forceLlmChatOutputHistoryPager = shouldShowLLMChatOutputHistoryPager({
+    entries: llmChatOutputHistory,
+    hasTerminalOutput: selectedProcessData?.data.outputData != null,
+  });
+  const showLiveLlmChatOutputHistoryPage =
+    selectedProcessData?.data.status?.type === 'running' && selectedProcessData.data.outputData != null;
+  const hasLlmChatOutputHistoryPager =
+    llmChatOutputHistory.length > 0 &&
+    (llmChatOutputHistory.length > 1 || forceLlmChatOutputHistoryPager || showLiveLlmChatOutputHistoryPage);
+  const llmChatOutputHistoryPager = hasLlmChatOutputHistoryPager ? (
+    <LLMChatOutputHistoryPager
+      compact
+      entries={llmChatOutputHistory}
+      forceVisible={forceLlmChatOutputHistoryPager}
+      showLivePage={showLiveLlmChatOutputHistoryPage}
+      selectedPage={selectedLLMChatOutputPage}
+      onSelectPage={setSelectedLLMChatOutputPage}
+    />
+  ) : null;
 
   const handleOpenPromptDesigner = () => {
     if (!processId) {
@@ -428,7 +442,15 @@ const NodeFullscreenOutput: FC<{ node: ChartNode }> = ({ node }) => {
       selectedLLMChatOutputPage,
       showNodeRunDurations,
     }),
-    [data, displaySelectedPage, durationSummaryKey, processId, renderMarkdown, selectedLLMChatOutputPage, showNodeRunDurations],
+    [
+      data,
+      displaySelectedPage,
+      durationSummaryKey,
+      processId,
+      renderMarkdown,
+      selectedLLMChatOutputPage,
+      showNodeRunDurations,
+    ],
   );
   const {
     contextValue: fullscreenOutputSearchContext,
@@ -444,6 +466,8 @@ const NodeFullscreenOutput: FC<{ node: ChartNode }> = ({ node }) => {
   } = useFullscreenOutputSearch({
     contentKey: contentVersion,
   });
+  const fullscreenOutputRootRef = useRef<HTMLDivElement>(null);
+  useFullscreenOutputKeyboardNavigation(fullscreenOutputBodyRef, fullscreenOutputRootRef);
 
   const prevPage = useStableCallback(() => {
     if (!filteredOutput) {
@@ -489,7 +513,9 @@ const NodeFullscreenOutput: FC<{ node: ChartNode }> = ({ node }) => {
       <div className="errored">
         {showDurationSummary && filteredOutput && <NodeRunDurationSummaryMeta processData={filteredOutput} hasBody />}
         {showDurationMeta && <NodeRunDurationMeta data={selectedData} hasBody />}
-        <div className="node-output-error-message">{content.error}</div>
+        <div className="node-output-error-message" {...{ [OUTPUT_NAVIGATION_ITEM_ATTRIBUTE]: '' }}>
+          {content.error}
+        </div>
       </div>
     );
   } else {
@@ -548,13 +574,15 @@ const NodeFullscreenOutput: FC<{ node: ChartNode }> = ({ node }) => {
         )}
         {showDurationMeta && <NodeRunDurationMeta data={selectedData} hasBody={hasBody} />}
         {content.kind === 'output' && content.errorMessage && (
-          <div className="node-output-error-message">{content.errorMessage}</div>
+          <div className="node-output-error-message" {...{ [OUTPUT_NAVIGATION_ITEM_ATTRIBUTE]: '' }}>
+            {content.errorMessage}
+          </div>
         )}
         {body}
         {content.warnings && (
           <div className="fullscreen-output-warnings">
             {content.warnings.map((warning) => (
-              <div className="fullscreen-output-warning" key={warning}>
+              <div className="fullscreen-output-warning" key={warning} {...{ [OUTPUT_NAVIGATION_ITEM_ATTRIBUTE]: '' }}>
                 {warning}
               </div>
             ))}
@@ -565,18 +593,19 @@ const NodeFullscreenOutput: FC<{ node: ChartNode }> = ({ node }) => {
   }
 
   return (
-    <div css={fullscreenOutputCss}>
+    <div ref={fullscreenOutputRootRef} css={fullscreenOutputCss} tabIndex={-1}>
       <header className="fullscreen-header">
-        {outputViewModel.totalPages > 1 ? (
-          <NodeOutputPager
-            selectedPage={displaySelectedPage}
-            totalPages={outputViewModel.totalPages}
-            onPrevPage={prevPage}
-            onNextPage={nextPage}
-          />
-        ) : (
-          <div />
-        )}
+        <div className="fullscreen-output-pagers">
+          {outputViewModel.totalPages > 1 && (
+            <NodeOutputPager
+              selectedPage={displaySelectedPage}
+              totalPages={outputViewModel.totalPages}
+              onPrevPage={prevPage}
+              onNextPage={nextPage}
+            />
+          )}
+          {llmChatOutputHistoryPager}
+        </div>
         <FullscreenNodeOutputToolbar
           wrapLines={wrapLines}
           renderMarkdown={renderMarkdown}
@@ -592,24 +621,16 @@ const NodeFullscreenOutput: FC<{ node: ChartNode }> = ({ node }) => {
           onSearchInputKeyDown={handleSearchInputKeyDown}
           onCopyValue={handleCopyToClipboard}
           onCopyJson={handleCopyToClipboardJson}
-          onOpenPromptDesigner={node.type === 'llmChatV2' && (node as LLMChatV2Node).data.configurationMode !== 'profile' ? handleOpenPromptDesigner : undefined}
+          onOpenPromptDesigner={
+            node.type === 'llmChatV2' && (node as LLMChatV2Node).data.configurationMode !== 'profile'
+              ? handleOpenPromptDesigner
+              : undefined
+          }
           onInspectResponse={node.type === 'llmChatV2' ? () => setInspectorOpen(true) : undefined}
         />
       </header>
 
       <FullscreenOutputSearchContext.Provider value={fullscreenOutputSearchContext}>
-        <LLMChatOutputHistoryPager
-          entries={llmChatOutputHistory}
-          forceVisible={shouldShowLLMChatOutputHistoryPager({
-            entries: llmChatOutputHistory,
-            hasTerminalOutput: selectedProcessData?.data.outputData != null,
-          })}
-          showLivePage={
-            selectedProcessData?.data.status?.type === 'running' && selectedProcessData.data.outputData != null
-          }
-          selectedPage={selectedLLMChatOutputPage}
-          onSelectPage={setSelectedLLMChatOutputPage}
-        />
         <div
           ref={fullscreenOutputBodyRef}
           className={`fullscreen-output-body ${wrapLines ? 'wrap-lines' : 'no-wrap-lines'}${

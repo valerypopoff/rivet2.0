@@ -179,10 +179,18 @@ chronological, developer-visible record per profile configuration, physical
 provider request, or JSON-schema response-validation attempt. Each record holds
 provider/model identity, model round, retry index where applicable, outcome,
 observable HTTP status, and original error text where available. Profile records
-also carry their zero-based `profileIndex`. `LLM Profile Summary`
-(`llmProfileSummary`, `string`) remains profile-only and names every configured
-candidate as succeeded, failed, or not attempted. Captured response bodies and
-attempt errors are deliberately neither redacted nor truncated. The editor cache
+also carry their zero-based `profileIndex`. Resolved values from an LLM
+Profile node carries its trimmed node title as diagnostic `profileName` metadata when
+the executing context provides a non-empty string title; older, programmatic, and
+partially loaded node contexts omit it safely.
+It appears beside provider/model identity in LLM Profile Summary, the editor and published-web-app Response Inspectors,
+and Run Activity; the raw protocol index remains zero-based. The title is never
+sent to the provider and does not affect profile resolution, cache fingerprints, or
+circuit-breaker identity. Older recorded attempts without a title retain the ordinal
+and provider/model fallback. `LLM Profile Summary` (`llmProfileSummary`, `string`)
+remains profile-only and names every configured candidate as succeeded, failed, or
+not attempted. Captured response bodies and attempt errors are deliberately neither
+redacted nor truncated. The editor cache
 fingerprints the complete ordered profile chain, effective global Chat headers,
 and each credential without storing
 raw keys. A cache hit emits an empty LLM Attempts array and an explicit profile

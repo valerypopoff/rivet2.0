@@ -12,15 +12,15 @@ function createProxyAuthenticationHeaders(): HeadersInit {
   };
 }
 
-const healthServiceUrl = process.env.RIVET_LLM_PROFILE_HEALTH_API_URL?.trim()
-  || 'http://127.0.0.1:3100/api/workflows/llm-profile-health';
+const healthServiceUrl =
+  process.env.RIVET_LLM_PROFILE_HEALTH_API_URL?.trim() || 'http://127.0.0.1:3100/api/workflows/llm-profile-health';
 const healthStore = createHttpRivetLLMProfileHealthStore({
   baseUrl: healthServiceUrl,
   headers: createProxyAuthenticationHeaders,
 });
 
-const executionEnvironmentServiceUrl = process.env.RIVET_EXECUTION_ENVIRONMENT_API_URL?.trim()
-  || 'http://api:80/api/workflows/execution-environment';
+const executionEnvironmentServiceUrl =
+  process.env.RIVET_EXECUTION_ENVIRONMENT_API_URL?.trim() || 'http://api:80/api/workflows/execution-environment';
 
 async function readExecutionEnvironment(): Promise<Readonly<Record<string, string>>> {
   const response = await fetch(executionEnvironmentServiceUrl, {
@@ -31,20 +31,23 @@ async function readExecutionEnvironment(): Promise<Readonly<Record<string, strin
     throw new Error(`Execution environment service failed (${response.status} ${response.statusText})`);
   }
 
-  const body = await response.json() as { environment?: unknown };
+  const body = (await response.json()) as { environment?: unknown };
   if (!body.environment || typeof body.environment !== 'object' || Array.isArray(body.environment)) {
     throw new Error('Execution environment service returned an invalid response');
   }
 
-  return Object.freeze(Object.fromEntries(
-    Object.entries(body.environment).filter((entry): entry is [string, string] => typeof entry[1] === 'string'),
-  ));
+  return Object.freeze(
+    Object.fromEntries(
+      Object.entries(body.environment).filter((entry): entry is [string, string] => typeof entry[1] === 'string'),
+    ),
+  );
 }
 
 void startAppExecutor({
-  createProcessorOptions: async () => ({
+  createProcessorOptions: async ({ llmProfileHealthExecutionCorrelationId }) => ({
     executionEnvironment: await readExecutionEnvironment(),
     llmProfileHealthStore: healthStore,
+    ...(llmProfileHealthExecutionCorrelationId == null ? {} : { llmProfileHealthExecutionCorrelationId }),
   }),
 }).catch((error) => {
   console.error('[rivet-executor] Failed to start:', error);

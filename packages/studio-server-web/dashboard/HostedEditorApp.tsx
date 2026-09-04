@@ -45,7 +45,9 @@ export const HostedEditorApp: FC = () => {
       return;
     }
 
-    postMessageToDashboard({ type: 'project-saved', path: event.path });
+    postMessageToDashboard({
+      type: 'project-saved', hasNewerUnsavedChanges: event.hasNewerUnsavedChanges, path: event.path,
+    });
   }, [reconcileHostedProjectTitleAfterSave]);
 
   const handleActiveProjectChanged = useCallback((event: { path: string | null }) => {

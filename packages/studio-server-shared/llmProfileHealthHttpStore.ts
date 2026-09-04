@@ -8,9 +8,10 @@ import type {
   RivetLLMProfileHealthSnapshot,
   RivetLLMProfileHealthStore,
 } from '@valerypopoff/rivet2-node';
+import type { LLMProfileHealthAdminEntry } from './llmProfileHealthTypes.js';
 
 export type HttpLLMProfileHealthAdminProvider = {
-  list(input: { projectId: ProjectId }): Promise<readonly RivetLLMProfileHealthSnapshot[]>;
+  list(input: { projectId: ProjectId }): Promise<readonly LLMProfileHealthAdminEntry[]>;
   reset(input: { key?: string; projectId: ProjectId }): Promise<void>;
 };
 
@@ -85,8 +86,8 @@ export function createHttpLLMProfileHealthAdminProvider(
 
   return {
     async list({ projectId }) {
-      return await call<RivetLLMProfileHealthSnapshot[]>(
-        `/?projectId=${encodeURIComponent(String(projectId))}`,
+      return await call<LLMProfileHealthAdminEntry[]>(
+        `/admin?projectId=${encodeURIComponent(String(projectId))}`,
       );
     },
     async reset(input) {

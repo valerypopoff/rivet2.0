@@ -12,6 +12,7 @@ import {
 import { NodeHttpHandler } from '@smithy/node-http-handler';
 
 import { createManagedObjectStorageHttpHandlerOptions } from '../../managed-health.js';
+import { observeObjectStorageOperation } from '../../metrics.js';
 import type { RuntimeHealthCheckContext } from '../../runtime-health.js';
 import type { ManagedRuntimeLibrariesConfig } from '../config.js';
 
@@ -88,78 +89,84 @@ export function createRuntimeLibrariesS3ClientConfig(config: ManagedRuntimeLibra
 export async function listRuntimeLibrariesBlobObjects(
   config: ManagedRuntimeLibrariesConfig,
 ): Promise<RuntimeLibrariesBlobObject[]> {
-  const client = new S3Client(createRuntimeLibrariesS3ClientConfig(config));
-  const prefix = getRuntimeLibrariesBlobPrefix(config.objectStoragePrefix);
-  const objects: RuntimeLibrariesBlobObject[] = [];
-  let continuationToken: string | undefined;
+  return observeObjectStorageOperation('runtime_libraries', 'list', async () => {
+    const client = new S3Client(createRuntimeLibrariesS3ClientConfig(config));
+    const prefix = getRuntimeLibrariesBlobPrefix(config.objectStoragePrefix);
+    const objects: RuntimeLibrariesBlobObject[] = [];
+    let continuationToken: string | undefined;
 
-  try {
-    while (true) {
-      const response = await client.send(new ListObjectsV2Command({
-        Bucket: config.objectStorageBucket,
-        Prefix: prefix,
-        ContinuationToken: continuationToken,
-      }));
+    try {
+      while (true) {
+        const response = await client.send(
+          new ListObjectsV2Command({
+            Bucket: config.objectStorageBucket,
+            Prefix: prefix,
+            ContinuationToken: continuationToken,
+          }),
+        );
 
-      for (const entry of response.Contents ?? []) {
-        if (!entry.Key) {
-          continue;
+        for (const entry of response.Contents ?? []) {
+          if (!entry.Key) {
+            continue;
+          }
+
+          objects.push({
+            key: stripRuntimeLibrariesBlobPrefix(prefix, entry.Key),
+            size: typeof entry.Size === 'number' ? entry.Size : 0,
+            lastModified: entry.LastModified ? entry.LastModified.toISOString() : null,
+          });
         }
 
-        objects.push({
-          key: stripRuntimeLibrariesBlobPrefix(prefix, entry.Key),
-          size: typeof entry.Size === 'number' ? entry.Size : 0,
-          lastModified: entry.LastModified ? entry.LastModified.toISOString() : null,
-        });
-      }
+        if (!response.IsTruncated || !response.NextContinuationToken) {
+          break;
+        }
 
-      if (!response.IsTruncated || !response.NextContinuationToken) {
-        break;
+        continuationToken = response.NextContinuationToken;
       }
-
-      continuationToken = response.NextContinuationToken;
+    } finally {
+      client.destroy();
     }
-  } finally {
-    client.destroy();
-  }
 
-  return objects;
+    return objects;
+  });
 }
-
 export async function deleteRuntimeLibrariesBlobObjects(
   config: ManagedRuntimeLibrariesConfig,
   keys: string[],
 ): Promise<number> {
-  const uniqueKeys = Array.from(new Set(keys
-    .map((key) => key.trim())
-    .filter(Boolean)));
+  const uniqueKeys = Array.from(new Set(keys.map((key) => key.trim()).filter(Boolean)));
 
   if (uniqueKeys.length === 0) {
     return 0;
   }
 
-  const client = new S3Client(createRuntimeLibrariesS3ClientConfig(config));
-  let deletedCount = 0;
+  return observeObjectStorageOperation('runtime_libraries', 'delete_many', async () => {
+    const client = new S3Client(createRuntimeLibrariesS3ClientConfig(config));
+    let deletedCount = 0;
 
-  try {
-    for (let index = 0; index < uniqueKeys.length; index += 1_000) {
-      const batch = uniqueKeys.slice(index, index + 1_000);
-      await client.send(new DeleteObjectsCommand({
-        Bucket: config.objectStorageBucket,
-        Delete: {
-          Objects: batch.map((key) => ({ Key: getRuntimeLibrariesBlobKeyWithPrefix(config.objectStoragePrefix, key) })),
-          Quiet: true,
-        },
-      }));
-      deletedCount += batch.length;
+    try {
+      for (let index = 0; index < uniqueKeys.length; index += 1_000) {
+        const batch = uniqueKeys.slice(index, index + 1_000);
+        await client.send(
+          new DeleteObjectsCommand({
+            Bucket: config.objectStorageBucket,
+            Delete: {
+              Objects: batch.map((key) => ({
+                Key: getRuntimeLibrariesBlobKeyWithPrefix(config.objectStoragePrefix, key),
+              })),
+              Quiet: true,
+            },
+          }),
+        );
+        deletedCount += batch.length;
+      }
+    } finally {
+      client.destroy();
     }
-  } finally {
-    client.destroy();
-  }
 
-  return deletedCount;
+    return deletedCount;
+  });
 }
-
 export class S3RuntimeLibrariesBlobStore implements RuntimeLibrariesBlobStore {
   readonly #client;
   readonly #bucket;
@@ -176,32 +183,42 @@ export class S3RuntimeLibrariesBlobStore implements RuntimeLibrariesBlobStore {
   }
 
   async initialize(): Promise<void> {
-    try {
-      await this.#client.send(new HeadBucketCommand({
-        Bucket: this.#bucket,
-      }));
-    } catch (error) {
-      const statusCode = typeof error === 'object' &&
-        error != null &&
-        '$metadata' in error &&
-        typeof (error as { $metadata?: { httpStatusCode?: unknown } }).$metadata?.httpStatusCode === 'number'
-        ? (error as { $metadata: { httpStatusCode: number } }).$metadata.httpStatusCode
-        : undefined;
+    await observeObjectStorageOperation('runtime_libraries', 'health', async () => {
+      try {
+        await this.#client.send(
+          new HeadBucketCommand({
+            Bucket: this.#bucket,
+          }),
+        );
+      } catch (error) {
+        const statusCode =
+          typeof error === 'object' &&
+          error != null &&
+          '$metadata' in error &&
+          typeof (error as { $metadata?: { httpStatusCode?: unknown } }).$metadata?.httpStatusCode === 'number'
+            ? (error as { $metadata: { httpStatusCode: number } }).$metadata.httpStatusCode
+            : undefined;
 
-      if (statusCode && statusCode !== 404) {
-        throw error;
+        if (statusCode && statusCode !== 404) {
+          throw error;
+        }
+
+        await this.#client.send(
+          new CreateBucketCommand({
+            Bucket: this.#bucket,
+          }),
+        );
       }
-
-      await this.#client.send(new CreateBucketCommand({
-        Bucket: this.#bucket,
-      }));
-    }
+    });
   }
 
   async checkHealth(context?: RuntimeHealthCheckContext): Promise<void> {
-    await this.#client.send(new HeadBucketCommand({
-      Bucket: this.#bucket,
-    }), context ? { abortSignal: context.signal } : undefined);
+    await observeObjectStorageOperation('runtime_libraries', 'health', () =>
+      this.#client.send(
+        new HeadBucketCommand({ Bucket: this.#bucket }),
+        context ? { abortSignal: context.signal } : undefined,
+      ),
+    );
   }
 
   dispose(): void {
@@ -209,25 +226,33 @@ export class S3RuntimeLibrariesBlobStore implements RuntimeLibrariesBlobStore {
   }
 
   async putBuffer(key: string, contents: Buffer, contentType = 'application/octet-stream'): Promise<void> {
-    await this.#client.send(new PutObjectCommand({
-      Bucket: this.#bucket,
-      Key: this.#key(key),
-      Body: contents,
-      ContentType: contentType,
-    }));
+    await observeObjectStorageOperation('runtime_libraries', 'put', () =>
+      this.#client.send(
+        new PutObjectCommand({
+          Bucket: this.#bucket,
+          Key: this.#key(key),
+          Body: contents,
+          ContentType: contentType,
+        }),
+      ),
+    );
   }
 
   async getBuffer(key: string): Promise<Buffer> {
-    const response = await this.#client.send(new GetObjectCommand({
-      Bucket: this.#bucket,
-      Key: this.#key(key),
-    }));
+    return observeObjectStorageOperation('runtime_libraries', 'get', async () => {
+      const response = await this.#client.send(
+        new GetObjectCommand({
+          Bucket: this.#bucket,
+          Key: this.#key(key),
+        }),
+      );
 
-    if (!response.Body) {
-      throw new Error(`Object body missing for key ${key}`);
-    }
+      if (!response.Body) {
+        throw new Error(`Object body missing for key ${key}`);
+      }
 
-    return Buffer.from(await response.Body.transformToByteArray());
+      return Buffer.from(await response.Body.transformToByteArray());
+    });
   }
 
   async delete(key: string | null | undefined): Promise<void> {
@@ -235,9 +260,13 @@ export class S3RuntimeLibrariesBlobStore implements RuntimeLibrariesBlobStore {
       return;
     }
 
-    await this.#client.send(new DeleteObjectCommand({
-      Bucket: this.#bucket,
-      Key: this.#key(key),
-    }));
+    await observeObjectStorageOperation('runtime_libraries', 'delete', () =>
+      this.#client.send(
+        new DeleteObjectCommand({
+          Bucket: this.#bucket,
+          Key: this.#key(key),
+        }),
+      ),
+    );
   }
 }

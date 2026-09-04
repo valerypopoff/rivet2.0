@@ -7,8 +7,10 @@ import {
   type ManagedWorkflowBlobStore,
 } from './blob-store.js';
 import { withManagedDbRetry, type ManagedWorkflowDbClient } from './db.js';
+import type { ManagedObjectDeletionReason } from './maintenance.js';
 import { RECORDING_COLUMNS } from './mappers.js';
 import { resolveManagedHostedProjectSaveTarget } from './save-target.js';
+import { normalizeRivetCorrelationId } from '../../../request-correlation.js';
 import { getWorkflowProjectStatsFromContents } from '../project-stats.js';
 import type {
   ManagedRevisionContents,
@@ -23,16 +25,38 @@ export { resolveManagedHostedProjectSaveTarget };
 
 export function createManagedWorkflowRevisionFactory(options: {
   blobStore: ManagedWorkflowBlobStore;
+  /**
+   * Used only for objects that this request created but failed to attach to
+   * durable metadata. The maintenance worker rechecks references before it
+   * deletes, so an unexpected duplicate-key error cannot erase a live blob.
+   */
+  queueObjectDeletions: (
+    reason: ManagedObjectDeletionReason,
+    keys: Array<string | null | undefined>,
+  ) => Promise<number>;
 }) {
-  const deleteBlobKeys = async (keys: Array<string | null | undefined>): Promise<void> => {
-    await Promise.all(keys.map((key) => options.blobStore.delete(key)));
-  };
+  const queueKnownBlobCleanup = async (context: string, keys: Array<string | null | undefined>): Promise<void> => {
+    const objectKeys = [
+      ...new Set(
+        keys.flatMap((key) => {
+          const normalized = key?.trim();
+          return normalized ? [normalized] : [];
+        }),
+      ),
+    ];
+    if (objectKeys.length === 0) return;
 
-  const deleteBlobKeysBestEffort = async (context: string, keys: Array<string | null | undefined>): Promise<void> => {
-    const deletions = await Promise.allSettled([deleteBlobKeys(keys)]);
-    const rejected = deletions.find((result) => result.status === 'rejected');
-    if (rejected?.status === 'rejected') {
-      console.error(`[managed-workflows] Failed to clean up blob objects after ${context}:`, rejected.reason);
+    try {
+      // Never fall back to an unchecked direct delete when PostgreSQL is
+      // unavailable. Keeping a rare orphan is safer than deleting an object
+      // that a concurrent or duplicate row may already reference;
+      // reconciliation can inventory the former.
+      await options.queueObjectDeletions('workflow-precommit-blob-cleanup', objectKeys);
+    } catch (error) {
+      console.error(
+        `[managed-workflows] Failed to durably queue pre-commit blob cleanup after ${context}; leaving the objects untouched for reconciliation:`,
+        error,
+      );
     }
   };
 
@@ -40,10 +64,9 @@ export function createManagedWorkflowRevisionFactory(options: {
     hooks: TransactionHooks,
     revision: Pick<RevisionRow, 'project_blob_key' | 'dataset_blob_key'>,
   ): void => {
-    hooks.onRollback(() => deleteBlobKeysBestEffort('transaction rollback', [
-      revision.project_blob_key,
-      revision.dataset_blob_key,
-    ]));
+    hooks.onRollback(() =>
+      queueKnownBlobCleanup('transaction rollback', [revision.project_blob_key, revision.dataset_blob_key]),
+    );
   };
 
   const readRevisionProjectContents = async (revision: Pick<RevisionRow, 'project_blob_key'>): Promise<string> => {
@@ -51,7 +74,6 @@ export function createManagedWorkflowRevisionFactory(options: {
   };
 
   return {
-    deleteBlobKeysBestEffort,
     scheduleRevisionBlobCleanup,
 
     readRevisionProjectContents,
@@ -71,9 +93,7 @@ export function createManagedWorkflowRevisionFactory(options: {
     async createRevision(workflowId: string, contents: string, datasetsContents: string | null): Promise<RevisionRow> {
       const revisionId = createManagedRevisionId();
       const projectBlobKey = createRevisionBlobKey(workflowId, revisionId, 'project');
-      const datasetBlobKey = datasetsContents != null
-        ? createRevisionBlobKey(workflowId, revisionId, 'dataset')
-        : null;
+      const datasetBlobKey = datasetsContents != null ? createRevisionBlobKey(workflowId, revisionId, 'dataset') : null;
       const stats = getWorkflowProjectStatsFromContents(contents);
 
       await options.blobStore.putText(projectBlobKey, contents, 'application/x-yaml; charset=utf-8');
@@ -82,7 +102,7 @@ export function createManagedWorkflowRevisionFactory(options: {
           await options.blobStore.putText(datasetBlobKey, datasetsContents, 'text/plain; charset=utf-8');
         }
       } catch (error) {
-        await deleteBlobKeysBestEffort('revision upload rollback', [projectBlobKey, datasetBlobKey]);
+        await queueKnownBlobCleanup('revision upload rollback', [projectBlobKey, datasetBlobKey]);
         throw error;
       }
 
@@ -127,9 +147,8 @@ export function createManagedWorkflowRevisionFactory(options: {
     ): Promise<RecordingBlobKeys> {
       const recordingBlobKey = createRecordingBlobKey(workflowId, recordingId, 'recording');
       const replayProjectBlobKey = createRecordingBlobKey(workflowId, recordingId, 'replay-project');
-      const replayDatasetBlobKey = artifacts.replayDataset != null
-        ? createRecordingBlobKey(workflowId, recordingId, 'replay-dataset')
-        : null;
+      const replayDatasetBlobKey =
+        artifacts.replayDataset != null ? createRecordingBlobKey(workflowId, recordingId, 'replay-dataset') : null;
 
       try {
         await Promise.all([
@@ -140,11 +159,7 @@ export function createManagedWorkflowRevisionFactory(options: {
             : Promise.resolve(),
         ]);
       } catch (error) {
-        await deleteBlobKeysBestEffort(cleanupContext, [
-          recordingBlobKey,
-          replayProjectBlobKey,
-          replayDatasetBlobKey,
-        ]);
+        await queueKnownBlobCleanup(cleanupContext, [recordingBlobKey, replayProjectBlobKey, replayDatasetBlobKey]);
         throw error;
       }
 
@@ -166,73 +181,77 @@ export function createManagedWorkflowRevisionFactory(options: {
       },
     ): Promise<void> {
       const identity = row.executionIdentity;
-      const valuesClause = options.timestampMode === 'provided'
-        ? 'VALUES ($1, $2, $3, $4, $5::timestamptz, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30)'
-        : 'VALUES ($1, $2, $3, $4, NOW(), $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29)';
-      const params = options.timestampMode === 'provided'
-        ? [
-          row.recordingId,
-          row.workflowId,
-          row.sourceProjectName,
-          row.sourceProjectRelativePath,
-          options.createdAt,
-          row.runKind,
-          row.status,
-          row.durationMs,
-          row.endpointNameAtExecution,
-          identity?.surface ?? null,
-          identity?.graphId ?? null,
-          identity?.graphName ?? null,
-          identity?.revisionKey ?? null,
-          identity?.uiGraphId ?? null,
-          identity?.uiGraphName ?? null,
-          identity?.webAppSlug ?? null,
-          identity?.componentId ?? null,
-          identity?.componentType ?? null,
-          identity?.componentLabel ?? null,
-          row.errorMessage,
-          row.recordingBlobKey,
-          row.replayProjectBlobKey,
-          row.replayDatasetBlobKey,
-          row.hasReplayDataset,
-          row.recordingCompressedBytes,
-          row.recordingUncompressedBytes,
-          row.projectCompressedBytes,
-          row.projectUncompressedBytes,
-          row.datasetCompressedBytes,
-          row.datasetUncompressedBytes,
-        ]
-        : [
-          row.recordingId,
-          row.workflowId,
-          row.sourceProjectName,
-          row.sourceProjectRelativePath,
-          row.runKind,
-          row.status,
-          row.durationMs,
-          row.endpointNameAtExecution,
-          identity?.surface ?? null,
-          identity?.graphId ?? null,
-          identity?.graphName ?? null,
-          identity?.revisionKey ?? null,
-          identity?.uiGraphId ?? null,
-          identity?.uiGraphName ?? null,
-          identity?.webAppSlug ?? null,
-          identity?.componentId ?? null,
-          identity?.componentType ?? null,
-          identity?.componentLabel ?? null,
-          row.errorMessage,
-          row.recordingBlobKey,
-          row.replayProjectBlobKey,
-          row.replayDatasetBlobKey,
-          row.hasReplayDataset,
-          row.recordingCompressedBytes,
-          row.recordingUncompressedBytes,
-          row.projectCompressedBytes,
-          row.projectUncompressedBytes,
-          row.datasetCompressedBytes,
-          row.datasetUncompressedBytes,
-        ];
+      const valuesClause =
+        options.timestampMode === 'provided'
+          ? 'VALUES ($1, $2, $3, $4, $5::timestamptz, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31)'
+          : 'VALUES ($1, $2, $3, $4, NOW(), $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30)';
+      const params =
+        options.timestampMode === 'provided'
+          ? [
+              row.recordingId,
+              row.workflowId,
+              row.sourceProjectName,
+              row.sourceProjectRelativePath,
+              options.createdAt,
+              row.runKind,
+              row.status,
+              row.durationMs,
+              row.endpointNameAtExecution,
+              identity?.surface ?? null,
+              identity?.graphId ?? null,
+              identity?.graphName ?? null,
+              identity?.revisionKey ?? null,
+              identity?.uiGraphId ?? null,
+              identity?.uiGraphName ?? null,
+              identity?.webAppSlug ?? null,
+              identity?.componentId ?? null,
+              identity?.componentType ?? null,
+              identity?.componentLabel ?? null,
+              normalizeRivetCorrelationId(identity?.correlationId) ?? null,
+              row.errorMessage,
+              row.recordingBlobKey,
+              row.replayProjectBlobKey,
+              row.replayDatasetBlobKey,
+              row.hasReplayDataset,
+              row.recordingCompressedBytes,
+              row.recordingUncompressedBytes,
+              row.projectCompressedBytes,
+              row.projectUncompressedBytes,
+              row.datasetCompressedBytes,
+              row.datasetUncompressedBytes,
+            ]
+          : [
+              row.recordingId,
+              row.workflowId,
+              row.sourceProjectName,
+              row.sourceProjectRelativePath,
+              row.runKind,
+              row.status,
+              row.durationMs,
+              row.endpointNameAtExecution,
+              identity?.surface ?? null,
+              identity?.graphId ?? null,
+              identity?.graphName ?? null,
+              identity?.revisionKey ?? null,
+              identity?.uiGraphId ?? null,
+              identity?.uiGraphName ?? null,
+              identity?.webAppSlug ?? null,
+              identity?.componentId ?? null,
+              identity?.componentType ?? null,
+              identity?.componentLabel ?? null,
+              normalizeRivetCorrelationId(identity?.correlationId) ?? null,
+              row.errorMessage,
+              row.recordingBlobKey,
+              row.replayProjectBlobKey,
+              row.replayDatasetBlobKey,
+              row.hasReplayDataset,
+              row.recordingCompressedBytes,
+              row.recordingUncompressedBytes,
+              row.projectCompressedBytes,
+              row.projectUncompressedBytes,
+              row.datasetCompressedBytes,
+              row.datasetUncompressedBytes,
+            ];
       const sql = `
         INSERT INTO workflow_recordings (${RECORDING_COLUMNS})
         ${valuesClause}
@@ -246,7 +265,7 @@ export function createManagedWorkflowRevisionFactory(options: {
           await client.query(sql, params);
         }
       } catch (error) {
-        await deleteBlobKeysBestEffort(options.cleanupContext, [
+        await queueKnownBlobCleanup(options.cleanupContext, [
           row.recordingBlobKey,
           row.replayProjectBlobKey,
           row.replayDatasetBlobKey,

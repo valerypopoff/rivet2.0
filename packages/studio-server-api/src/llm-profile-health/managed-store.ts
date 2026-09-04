@@ -10,7 +10,21 @@ import type {
   RivetLLMProfileHealthSnapshot,
 } from '@valerypopoff/rivet2-node';
 
-import { beginLLMProfileHealthAttempt, createLLMProfileHealthSnapshot, finishLLMProfileHealthAttempt, renewLLMProfileHealthPermit, type StoredLLMProfileHealthEntry } from './state.js';
+import {
+  applyLLMProfileHealthRecordingOutcome,
+  beginLLMProfileHealthAttempt,
+  createLLMProfileHealthSnapshot,
+  finishLLMProfileHealthAttempt,
+  getLLMProfileHealthContributorRuns,
+  markLLMProfileHealthRecordingDeleted,
+  normalizeStoredLLMProfileHealthEntry,
+  renewLLMProfileHealthPermit,
+  type StoredLLMProfileHealthEntry,
+} from './state.js';
+import type {
+  LLMProfileHealthAdminEntry,
+  LLMProfileHealthRecordingOutcome,
+} from '../../../studio-server-shared/llmProfileHealthTypes.js';
 import type { RivetStudioLLMProfileHealthStore } from './store.js';
 
 type ManagedRow = { key: string; entry_json: StoredLLMProfileHealthEntry | string | null };
@@ -27,7 +41,7 @@ function parseEntry(row: ManagedRow | undefined): StoredLLMProfileHealthEntry | 
   if (!parsed || typeof parsed !== 'object' || !Array.isArray(parsed.failureTimestamps)) {
     throw new Error(`Invalid persisted LLM Profile health entry for ${row.key}.`);
   }
-  return parsed;
+  return normalizeStoredLLMProfileHealthEntry(parsed);
 }
 
 function requireProjectId(
@@ -171,5 +185,61 @@ export class PostgresRivetLLMProfileHealthStore implements RivetStudioLLMProfile
     const now = Number(clockResult.rows[0]?.now_ms);
     if (!Number.isFinite(now)) throw new Error('Postgres did not return a valid health-store clock.');
     return result.rows.map((row) => createLLMProfileHealthSnapshot(parseEntry(row)!, now));
+  }
+  async listAdmin(input: { projectId: ProjectId }): Promise<readonly LLMProfileHealthAdminEntry[]> {
+    const result = await this.#pool.query<ManagedRow>(`
+      SELECT key, entry_json
+      FROM llm_profile_health
+      WHERE entry_json IS NOT NULL AND project_id = $1
+      ORDER BY updated_at DESC, key ASC
+    `, [String(input.projectId)]);
+    const clockResult = await this.#pool.query<ManagedClockRow>(
+      'SELECT (EXTRACT(EPOCH FROM clock_timestamp()) * 1000)::bigint AS now_ms',
+    );
+    const now = Number(clockResult.rows[0]?.now_ms);
+    if (!Number.isFinite(now)) throw new Error('Postgres did not return a valid health-store clock.');
+    return result.rows.map((row) => {
+      const entry = parseEntry(row)!;
+      return {
+        ...createLLMProfileHealthSnapshot(entry, now),
+        contributingRuns: getLLMProfileHealthContributorRuns(entry),
+      };
+    });
+  }
+
+  async recordRecordingOutcome(input: LLMProfileHealthRecordingOutcome): Promise<void> {
+    await this.#transaction(async (client) => {
+      const result = await client.query<ManagedRow>(`
+        SELECT key, entry_json
+        FROM llm_profile_health
+        WHERE entry_json @> $1::jsonb
+        FOR UPDATE
+      `, [JSON.stringify({ failureEvidence: [{ correlationId: input.correlationId }] })]);
+      const now = await this.#now(client);
+      for (const row of result.rows) {
+        const entry = parseEntry(row)!;
+        if (applyLLMProfileHealthRecordingOutcome(entry, input, now)) {
+          await this.#write(client, row.key, entry);
+        }
+      }
+    });
+  }
+
+  async markRecordingDeleted(recordingId: string): Promise<void> {
+    await this.#transaction(async (client) => {
+      const result = await client.query<ManagedRow>(`
+        SELECT key, entry_json
+        FROM llm_profile_health
+        WHERE entry_json @> $1::jsonb
+        FOR UPDATE
+      `, [JSON.stringify({ failureEvidence: [{ recordingId }] })]);
+      const now = await this.#now(client);
+      for (const row of result.rows) {
+        const entry = parseEntry(row)!;
+        if (markLLMProfileHealthRecordingDeleted(entry, recordingId, now)) {
+          await this.#write(client, row.key, entry);
+        }
+      }
+    });
   }
 }

@@ -125,3 +125,22 @@ test('both executors finalize through the shared lifecycle before applying the t
     assert.match(source, /applyEvaluationRunSnapshot\(state, finalizedRun\)/);
   }
 });
+
+test('hosted local recordings are linked only after an unhealthy LLM health update and terminal processor completion', () => {
+  assert.match(useLocalExecutorSource, /useLocalExecutionRecordingPersistence\(\)/);
+  assert.match(useLocalExecutorSource, /localExecutionRecordingPersistence\.getCapability\(\)\.catch\(\(\) => false\)/);
+  assert.match(
+    useLocalExecutorSource,
+    /event\.stage === 'health-update' && event\.outcome === 'success' && event\.healthOutcome === 'unhealthy/,
+  );
+  assert.match(useLocalExecutorSource, /llmProfileHealthExecutionCorrelationId: localRecordingCorrelationId/);
+  assert.match(useLocalExecutorSource, /!hasUnhealthyLLMProfileHealthEvidence\s*\|\|\s*!localRecordingProvider/);
+  assert.match(useLocalExecutorSource, /projectContents: serializeProject\(tempProject\) as string/);
+  assert.match(useLocalExecutorSource, /const completion = processor\?\.isRunning/);
+  assert.match(useLocalExecutorSource, /then\(\(\) => finalizeCapturedRecording!\(\)\)/);
+  assert.match(
+    useLocalExecutorSource,
+    /processor\.on\('abort', \(event\) => \{[\s\S]*localRecordingStatus = 'suspicious'/,
+  );
+  assert.match(useLocalExecutorSource, /localRecordingProvider\.markUnavailable\(localRecordingCorrelationId\)/);
+});

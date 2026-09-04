@@ -82,6 +82,16 @@ describe('LLM Profile fallback chain', () => {
     });
     assert.equal(alreadyScoped, rescopeToProjectB);
 
+    const renamed = scopeLLMProfileHealthIdentity(
+      { ...alreadyScoped, profileName: 'Renamed profile' },
+      {
+        projectId: 'project-b' as ProjectId,
+        profileNodeId: 'another-chat' as NodeId,
+      },
+    );
+    assert.equal(renamed.healthIdentity?.key, alreadyScoped.healthIdentity?.key);
+    assert.equal(renamed.healthIdentity?.profileName, 'Renamed profile');
+
     const changedGlobalHeaders = scopeLLMProfileHealthIdentity(alreadyScoped, {
       projectId: 'project-b' as ProjectId,
       profileNodeId: 'another-chat' as NodeId,
@@ -341,8 +351,8 @@ describe('LLM Profile fallback chain', () => {
     const journalObserved: Array<[number, number | undefined, string]> = [];
     const runner = createLLMProfileFallbackRunner({
       candidates: [
-        { provider: 'custom', model: 'primary' },
-        { provider: 'custom', model: 'backup' },
+        { provider: 'custom', model: 'primary', profileName: 'Primary route' },
+        { provider: 'custom', model: 'backup', profileName: 'Backup route' },
       ],
       onAttempt: (attempt) => journalObserved.push([attempt.profileIndex, attempt.attemptIndex, attempt.outcome]),
       resolveCandidate: async (profileIndex, roundOptions) => ({
@@ -374,19 +384,19 @@ describe('LLM Profile fallback chain', () => {
     assert.equal(result.response, 'backup answer');
     assert.deepEqual(calls, [0, 0, 1]);
     assert.deepEqual(
-      runner.attempts.map((attempt) => [attempt.profileIndex, attempt.attemptIndex, attempt.status, attempt.outcome]),
+      runner.attempts.map((attempt) => [attempt.profileName, attempt.profileIndex, attempt.attemptIndex, attempt.status, attempt.outcome]),
       [
-        [0, 0, 503, 'failure'],
-        [0, 1, 503, 'failure'],
-        [1, 0, 200, 'success'],
+        ['Primary route', 0, 0, 503, 'failure'],
+        ['Primary route', 0, 1, 503, 'failure'],
+        ['Backup route', 1, 0, 200, 'success'],
       ],
     );
     assert.deepEqual(
-      observed.map((event) => [event.profileIndex, event.roundIndex, event.attemptIndex, event.outcome]),
+      observed.map((event) => [event.profileName, event.profileIndex, event.roundIndex, event.attemptIndex, event.outcome]),
       [
-        [0, 0, 0, 'provider-failure'],
-        [0, 0, 1, 'provider-failure'],
-        [1, 0, 0, 'success'],
+        ['Primary route', 0, 0, 0, 'provider-failure'],
+        ['Primary route', 0, 0, 1, 'provider-failure'],
+        ['Backup route', 1, 0, 0, 'success'],
       ],
     );
     assert.deepEqual(journalObserved, [
@@ -396,8 +406,8 @@ describe('LLM Profile fallback chain', () => {
     ]);
     assert.equal(
       runner.summary(),
-      'Profile 0 (Custom Completions/primary): failed after 2 provider attempts; last status 503.\n' +
-        'Profile 1 (Custom Completions/backup): succeeded in model 1 round (0).',
+      'Primary route (profile 1; Custom Completions/primary): failed after 2 provider attempts; last status 503.\n' +
+        'Backup route (profile 2; Custom Completions/backup): succeeded in model 1 round (0).',
     );
   });
 
@@ -453,8 +463,8 @@ describe('LLM Profile fallback chain', () => {
     );
     assert.equal(
       runner.summary(),
-      'Profile 0 (Custom Completions/shared-model): failed after 1 provider attempt; last status 503.\n' +
-        'Profile 1 (Custom Responses/shared-model): succeeded in model 1 round (0).',
+      'Profile 1 (Custom Completions/shared-model): failed after 1 provider attempt; last status 503.\n' +
+        'Profile 2 (Custom Responses/shared-model): succeeded in model 1 round (0).',
     );
   });
 
@@ -659,8 +669,8 @@ describe('LLM Profile fallback chain', () => {
 
     assert.equal(
       runner.summary(),
-      'Profile 0 (Custom Completions/primary): succeeded in model 1 round (0).\n' +
-        'Profile 1 (Custom Completions/backup): not attempted.',
+      'Profile 1 (Custom Completions/primary): succeeded in model 1 round (0).\n' +
+        'Profile 2 (Custom Completions/backup): not attempted.',
     );
   });
 
@@ -713,8 +723,8 @@ describe('LLM Profile fallback chain', () => {
     );
     assert.equal(
       runner.summary(),
-      'Profile 0 (Custom Completions/invalid-json): had 1 failed provider attempt; last status 503; failed response validation in 1 model round.\n' +
-        'Profile 1 (Custom Completions/backup): succeeded in model 1 round (0).',
+      'Profile 1 (Custom Completions/invalid-json): had 1 failed provider attempt; last status 503; failed response validation in 1 model round.\n' +
+        'Profile 2 (Custom Completions/backup): succeeded in model 1 round (0).',
     );
   });
 
@@ -780,11 +790,11 @@ describe('LLM Profile fallback chain', () => {
         assert.ok(error instanceof LLMProfileFallbackExhaustedError);
         assert.match(
           error.message,
-          /Profile 0 \(Custom Completions\/first-invalid\), round 0, request attempt 0 success \(200\)/,
+          /Profile 1 \(Custom Completions\/first-invalid\), round 1, request attempt 0 success \(200\)/,
         );
         assert.match(
           error.message,
-          /Profile 0 \(Custom Completions\/first-invalid\), round 0, response validation failure:/,
+          /Profile 1 \(Custom Completions\/first-invalid\), round 1, response validation failure:/,
         );
         assert.match(
           error.message,
@@ -792,11 +802,11 @@ describe('LLM Profile fallback chain', () => {
         );
         assert.match(
           error.message,
-          /Profile 1 \(Custom Completions\/second-invalid\), round 0, request attempt 0 success \(200\)/,
+          /Profile 2 \(Custom Completions\/second-invalid\), round 1, request attempt 0 success \(200\)/,
         );
         assert.match(
           error.message,
-          /Profile 1 \(Custom Completions\/second-invalid\), round 0, response validation failure:/,
+          /Profile 2 \(Custom Completions\/second-invalid\), round 1, response validation failure:/,
         );
         return true;
       },
@@ -1075,8 +1085,8 @@ describe('LLM Profile fallback chain', () => {
       () => runner.run(baseRoundOptions()),
       (error) => {
         assert.ok(error instanceof LLMProfileFallbackExhaustedError);
-        assert.match(error.message, /Profile 0 \(Custom Completions\/primary\)/);
-        assert.match(error.message, /Profile 1 \(Custom Completions\/backup\)/);
+        assert.match(error.message, /Profile 1 \(Custom Completions\/primary\)/);
+        assert.match(error.message, /Profile 2 \(Custom Completions\/backup\)/);
         assert.equal((error as Error & { cause?: unknown }).cause, undefined);
         return true;
       },

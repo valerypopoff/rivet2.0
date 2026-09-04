@@ -22,7 +22,10 @@ import {
 } from "./store.js";
 
 type Row = { run_json: EvaluationRun | string };
-type RecordingRow = { artifact_json: EvaluationRecordingArtifact | string };
+type RecordingRow = {
+  artifact_json: EvaluationRecordingArtifact | string;
+  protected_from_expiry?: boolean;
+};
 type DatasetSnapshotRow = { snapshot_json: EvaluationDatasetSnapshot | string };
 type LibraryRow = {
   revision: number;
@@ -229,21 +232,6 @@ export class PostgresRivetEvaluationStore
     }
   }
 
-  /** See the filesystem store: browsing a project's run history must also
-   * reclaim expired temporary candidate artifacts. */
-  async #deleteExpiredTemporaryRecordings(projectId: ProjectId): Promise<void> {
-    await this.#pool.query(
-      `
-      DELETE FROM evaluation_recordings
-      WHERE project_id = $1
-        AND artifact_json->'reference'->>'retention' = 'temporary'
-        AND artifact_json->'reference'->>'expiresAt' IS NOT NULL
-        AND (artifact_json->'reference'->>'expiresAt')::timestamptz <= NOW()
-    `,
-      [String(projectId)],
-    );
-  }
-
   async put(run: EvaluationRun): Promise<void> {
     const incoming = normalizeEvaluationRun(run);
     await this.#withRunLock(
@@ -319,7 +307,6 @@ export class PostgresRivetEvaluationStore
     projectId: ProjectId;
     runId: string;
   }): Promise<EvaluationRun | undefined> {
-    await this.#deleteExpiredTemporaryRecordings(input.projectId);
     const result = await this.#pool.query<Row>(
       "SELECT run_json FROM evaluation_runs WHERE project_id = $1 AND run_id = $2",
       [String(input.projectId), input.runId],
@@ -331,7 +318,6 @@ export class PostgresRivetEvaluationStore
     projectId: ProjectId;
     suiteId?: string;
   }): Promise<readonly EvaluationRun[]> {
-    await this.#deleteExpiredTemporaryRecordings(input.projectId);
     const result =
       input.suiteId == null
         ? await this.#pool.query<Row>(
@@ -395,9 +381,6 @@ export class PostgresRivetEvaluationStore
 
   async putRecording(artifact: EvaluationRecordingArtifact): Promise<void> {
     assertEvaluationRecordingArtifact(artifact);
-    // Expire temporary artifacts during ordinary writes, rather than relying
-    // on a later read of the exact recording id to perform cleanup.
-    await this.#deleteExpiredTemporaryRecordings(artifact.projectId);
     const result = await this.#pool.query<{ recording_id: string }>(
       `
       INSERT INTO evaluation_recordings (project_id, recording_id, run_id, artifact_json, created_at)
@@ -432,54 +415,96 @@ export class PostgresRivetEvaluationStore
     projectId: ProjectId;
     recordingId: string;
   }): Promise<EvaluationRecordingArtifact | undefined> {
-    await this.#deleteExpiredTemporaryRecordings(input.projectId);
     const result = await this.#pool.query<RecordingRow>(
-      "SELECT artifact_json FROM evaluation_recordings WHERE project_id = $1 AND recording_id = $2",
+      `
+      SELECT recording.artifact_json,
+        (
+          EXISTS (
+            SELECT 1
+            FROM evaluation_hosted_runs AS hosted
+            WHERE hosted.project_id = recording.project_id
+              AND hosted.run_id = recording.run_id
+              AND hosted.status IN ('queued', 'running')
+          )
+          OR EXISTS (
+            SELECT 1
+            FROM evaluation_hosted_trial_jobs AS job
+            WHERE job.project_id = recording.project_id
+              AND job.run_id = recording.run_id
+              AND job.status IN ('queued', 'claimed', 'accepted')
+          )
+        ) AS protected_from_expiry
+      FROM evaluation_recordings AS recording
+      WHERE recording.project_id = $1 AND recording.recording_id = $2
+    `,
+      [String(input.projectId), input.recordingId],
+    );
+    const row = result.rows[0];
+    const artifact = parseRecording(row);
+    // The fenced cleanup worker uses the same active-parent/job predicate.
+    // Never make a long-running hosted evaluation's protected recording look
+    // missing merely because its provisional 24-hour window elapsed first.
+    return artifact && (!isExpired(artifact) || row?.protected_from_expiry === true) ? artifact : undefined;
+  }
+  async #updateRecordingRetentionWithClient(
+    client: PoolClient,
+    input: {
+      projectId: ProjectId;
+      recordingId: string;
+      retention: EvaluationRecordingArtifact['reference']['retention'];
+      expiresAt?: string;
+    },
+  ): Promise<boolean> {
+    const result = await client.query<RecordingRow>(
+      'SELECT artifact_json FROM evaluation_recordings WHERE project_id = $1 AND recording_id = $2 FOR UPDATE',
       [String(input.projectId), input.recordingId],
     );
     const artifact = parseRecording(result.rows[0]);
-    if (!artifact || !isExpired(artifact)) return artifact;
-    await this.#pool.query(
-      "DELETE FROM evaluation_recordings WHERE project_id = $1 AND recording_id = $2",
-      [String(input.projectId), input.recordingId],
+    if (!artifact) return false;
+    artifact.reference = {
+      id: artifact.reference.id,
+      retention: input.retention,
+      ...(input.expiresAt === undefined ? {} : { expiresAt: input.expiresAt }),
+    };
+    await client.query(
+      'UPDATE evaluation_recordings SET artifact_json = $1::jsonb WHERE project_id = $2 AND recording_id = $3',
+      [JSON.stringify(artifact), String(input.projectId), input.recordingId],
     );
-    return undefined;
+    return true;
+  }
+
+  /**
+   * Applies a terminal retention transition inside the caller's transaction.
+   * Hosted evaluation projection must use this form so an expired temporary
+   * artifact cannot be swept between marking a run complete and extending its
+   * retention window.
+   */
+  async updateRecordingRetentionInTransaction(
+    client: PoolClient,
+    input: {
+      projectId: ProjectId;
+      recordingId: string;
+      retention: EvaluationRecordingArtifact['reference']['retention'];
+      expiresAt?: string;
+    },
+  ): Promise<boolean> {
+    return this.#updateRecordingRetentionWithClient(client, input);
   }
 
   async updateRecordingRetention(input: {
     projectId: ProjectId;
     recordingId: string;
-    retention: EvaluationRecordingArtifact["reference"]["retention"];
+    retention: EvaluationRecordingArtifact['reference']['retention'];
     expiresAt?: string;
-  }): Promise<void> {
+  }): Promise<boolean> {
     const client = await this.#pool.connect();
     try {
-      await client.query("BEGIN");
-      const result = await client.query<RecordingRow>(
-        "SELECT artifact_json FROM evaluation_recordings WHERE project_id = $1 AND recording_id = $2 FOR UPDATE",
-        [String(input.projectId), input.recordingId],
-      );
-      const artifact = parseRecording(result.rows[0]);
-      if (artifact) {
-        artifact.reference = {
-          id: artifact.reference.id,
-          retention: input.retention,
-          ...(input.expiresAt === undefined
-            ? {}
-            : { expiresAt: input.expiresAt }),
-        };
-        await client.query(
-          "UPDATE evaluation_recordings SET artifact_json = $1::jsonb WHERE project_id = $2 AND recording_id = $3",
-          [
-            JSON.stringify(artifact),
-            String(input.projectId),
-            input.recordingId,
-          ],
-        );
-      }
-      await client.query("COMMIT");
+      await client.query('BEGIN');
+      const updated = await this.#updateRecordingRetentionWithClient(client, input);
+      await client.query('COMMIT');
+      return updated;
     } catch (error) {
-      await client.query("ROLLBACK");
+      await client.query('ROLLBACK').catch(() => undefined);
       throw error;
     } finally {
       client.release();

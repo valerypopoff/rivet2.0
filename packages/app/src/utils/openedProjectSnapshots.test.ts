@@ -1,7 +1,11 @@
 import assert from 'node:assert/strict';
 import { describe, test } from 'node:test';
 import { emptyNodeGraph, type GraphId, type NodeGraph, type Project, type ProjectId } from '@valerypopoff/rivet2-core';
-import { buildOpenedProjectSnapshot } from './openedProjectSnapshots.js';
+import {
+  buildOpenedProjectSnapshot,
+  isOpenedProjectRecoverable,
+  isValidOpenedProjectSnapshot,
+} from './openedProjectSnapshots.js';
 
 function makeGraph(id: string, name: string, nodes: NodeGraph['nodes'] = []): NodeGraph {
   return {
@@ -80,5 +84,30 @@ describe('openedProjectSnapshots', () => {
     });
 
     assert.deepEqual(snapshot.project.graphs, {});
+  });
+
+  test('accepts only structurally valid snapshots for their owning project', () => {
+    const graph = makeGraph('g-1', 'Alpha');
+    const snapshot = buildOpenedProjectSnapshot({ project: makeProject([graph]), graph });
+
+    assert.equal(isValidOpenedProjectSnapshot(snapshot, 'project-1'), true);
+    assert.equal(isValidOpenedProjectSnapshot(snapshot, 'other-project'), false);
+    assert.equal(isValidOpenedProjectSnapshot({ project: {} }, 'project-1'), false);
+    assert.equal(
+      isValidOpenedProjectSnapshot({ project: { metadata: { id: 'project-1' }, graphs: [] } }, 'project-1'),
+      false,
+    );
+
+    assert.equal(isValidOpenedProjectSnapshot(makeProject([graph]), 'project-1'), false);
+  });
+
+  test('treats a tab as recoverable only when it has a path or valid snapshot', () => {
+    const graph = makeGraph('g-1', 'Alpha');
+    const snapshot = buildOpenedProjectSnapshot({ project: makeProject([graph]), graph });
+    const pathlessTab = { projectId: 'project-1' as ProjectId, title: 'Project', fsPath: null };
+
+    assert.equal(isOpenedProjectRecoverable(pathlessTab, { 'project-1': snapshot }), true);
+    assert.equal(isOpenedProjectRecoverable(pathlessTab, { 'project-1': {} }), false);
+    assert.equal(isOpenedProjectRecoverable({ ...pathlessTab, fsPath: '/workflows/project.rivet-project' }, {}), true);
   });
 });

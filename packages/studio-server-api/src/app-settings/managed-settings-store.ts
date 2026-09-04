@@ -1,11 +1,9 @@
 import { Client, Pool, type PoolConfig, type QueryResultRow } from 'pg';
 
 import { checkPostgresPoolHealth, MANAGED_POSTGRES_CONNECTION_TIMEOUT_MS } from '../managed-health.js';
-import {
-  acquireManagedPostgresPool,
-  type ManagedPostgresPoolLease,
-} from '../managed-postgres-pool.js';
+import { acquireManagedPostgresPool, type ManagedPostgresPoolLease } from '../managed-postgres-pool.js';
 import type { RuntimeHealthCheckContext } from '../runtime-health.js';
+import { recordStudioMetrics, type MetricsManagedSettingsSynchronizationSource } from '../metrics.js';
 import {
   decryptManagedSettingsValue,
   deriveManagedSettingsEncryptionKey,
@@ -109,9 +107,7 @@ export async function acknowledgeManagedSettingsRevision(
 }
 
 function normalizePollInterval(value: number | undefined): number {
-  return Number.isFinite(value) && (value ?? 0) >= 1_000
-    ? Math.floor(value as number)
-    : DEFAULT_POLL_INTERVAL_MS;
+  return Number.isFinite(value) && (value ?? 0) >= 1_000 ? Math.floor(value as number) : DEFAULT_POLL_INTERVAL_MS;
 }
 
 export class PostgresAppSettingsBackend implements AppSettingsBackend {
@@ -128,6 +124,9 @@ export class PostgresAppSettingsBackend implements AppSettingsBackend {
   #listenerReconnectTimer: NodeJS.Timeout | undefined;
   #pollTimer: NodeJS.Timeout | undefined;
   #pollInFlight: Promise<void> | undefined;
+  #lastSynchronizationFailureAtMs: number | null = null;
+  #lastSynchronizationSuccessAtMs: number | null = null;
+  #listenerConnected = false;
   #initialized = false;
   #disposed = false;
 
@@ -153,6 +152,24 @@ export class PostgresAppSettingsBackend implements AppSettingsBackend {
     }
   }
 
+  #recordSynchronizationState(): void {
+    recordStudioMetrics((metrics) =>
+      metrics.setManagedSettingsSynchronization({
+        lastFailureAtMs: this.#lastSynchronizationFailureAtMs,
+        lastSuccessAtMs: this.#lastSynchronizationSuccessAtMs,
+        listenerConnected: this.#listenerConnected,
+        pollInFlight: this.#pollInFlight != null,
+      }),
+    );
+  }
+
+  #recordSynchronization(source: MetricsManagedSettingsSynchronizationSource, outcome: 'failure' | 'success'): void {
+    if (outcome === 'success') this.#lastSynchronizationSuccessAtMs = Date.now();
+    else this.#lastSynchronizationFailureAtMs = Date.now();
+    recordStudioMetrics((metrics) => metrics.recordManagedSettingsSynchronization({ outcome, source }));
+    this.#recordSynchronizationState();
+  }
+
   async initialize(): Promise<void> {
     if (this.#initialized) {
       return;
@@ -161,20 +178,22 @@ export class PostgresAppSettingsBackend implements AppSettingsBackend {
       throw new Error('PostgreSQL app-settings backend is disposed.');
     }
 
-    await this.#refreshRevisionIndex(false);
+    await this.#refreshRevisionIndex(false, 'initialization');
     this.#initialized = true;
     await this.#connectListener();
     this.#pollTimer = setInterval(() => {
       if (this.#pollInFlight) {
         return;
       }
-      this.#pollInFlight = this.#refreshRevisionIndex(true)
+      this.#pollInFlight = this.#refreshRevisionIndex(true, 'poll')
         .catch((error) => {
           this.#report('error', '[app-settings] PostgreSQL revision poll failed:', error);
         })
         .finally(() => {
           this.#pollInFlight = undefined;
+          this.#recordSynchronizationState();
         });
+      this.#recordSynchronizationState();
     }, this.#pollIntervalMs);
     this.#pollTimer.unref?.();
   }
@@ -187,25 +206,32 @@ export class PostgresAppSettingsBackend implements AppSettingsBackend {
   }
 
   async read(key: string): Promise<ManagedSettingsRecord | null> {
-    const result = await this.#pool.query<AppSettingsRow>(`
+    const result = await this.#pool.query<AppSettingsRow>(
+      `
       SELECT setting_key, revision, schema_version, ciphertext, iv, auth_tag, key_id, source_hash
       FROM app_settings
       WHERE setting_key = $1
-    `, [key]);
+    `,
+      [key],
+    );
     const row = result.rows[0];
     if (!row) {
       return null;
     }
 
-    const value = decryptManagedSettingsValue({
-      key: row.setting_key,
-      schemaVersion: row.schema_version,
-    }, {
-      ciphertext: row.ciphertext,
-      iv: row.iv,
-      authTag: row.auth_tag,
-      keyId: row.key_id,
-    }, this.#keys);
+    const value = decryptManagedSettingsValue(
+      {
+        key: row.setting_key,
+        schemaVersion: row.schema_version,
+      },
+      {
+        ciphertext: row.ciphertext,
+        iv: row.iv,
+        authTag: row.auth_tag,
+        keyId: row.key_id,
+      },
+      this.#keys,
+    );
     const record = this.#toRecord(row, value);
     this.#knownRevisions.set(key, record.revision);
 
@@ -224,10 +250,14 @@ export class PostgresAppSettingsBackend implements AppSettingsBackend {
   }
 
   async write(input: ManagedSettingsWrite): Promise<ManagedSettingsRecord | null> {
-    const encrypted = encryptManagedSettingsValue({
-      key: input.key,
-      schemaVersion: input.schemaVersion,
-    }, input.value, this.#primaryKey);
+    const encrypted = encryptManagedSettingsValue(
+      {
+        key: input.key,
+        schemaVersion: input.schemaVersion,
+      },
+      input.value,
+      this.#primaryKey,
+    );
     const params = [
       input.key,
       input.schemaVersion,
@@ -238,15 +268,20 @@ export class PostgresAppSettingsBackend implements AppSettingsBackend {
       input.sourceHash ?? null,
     ];
 
-    const result = input.expectedRevision == null
-      ? await this.#pool.query<AppSettingsRow>(`
+    const result =
+      input.expectedRevision == null
+        ? await this.#pool.query<AppSettingsRow>(
+            `
           INSERT INTO app_settings
             (setting_key, revision, schema_version, ciphertext, iv, auth_tag, key_id, source_hash)
           VALUES ($1, 1, $2, $3, $4, $5, $6, $7)
           ON CONFLICT (setting_key) DO NOTHING
           RETURNING setting_key, revision, schema_version, ciphertext, iv, auth_tag, key_id, source_hash
-        `, params)
-      : await this.#pool.query<AppSettingsRow>(`
+        `,
+            params,
+          )
+        : await this.#pool.query<AppSettingsRow>(
+            `
           UPDATE app_settings
           SET revision = revision + 1,
               schema_version = $2,
@@ -258,7 +293,9 @@ export class PostgresAppSettingsBackend implements AppSettingsBackend {
               updated_at = NOW()
           WHERE setting_key = $1 AND revision = $8
           RETURNING setting_key, revision, schema_version, ciphertext, iv, auth_tag, key_id, source_hash
-        `, [...params, input.expectedRevision.toString()]);
+        `,
+            [...params, input.expectedRevision.toString()],
+          );
 
     const row = result.rows[0];
     if (!row) {
@@ -271,11 +308,12 @@ export class PostgresAppSettingsBackend implements AppSettingsBackend {
       (text, values) => this.#pool.query(text, values),
       input.key,
       record.revision,
-      (error) => this.#report(
-        'warn',
-        `[app-settings] ${input.key} revision ${record.revision} was saved, but PostgreSQL notification delivery failed; polling will converge replicas:`,
-        error,
-      ),
+      (error) =>
+        this.#report(
+          'warn',
+          `[app-settings] ${input.key} revision ${record.revision} was saved, but PostgreSQL notification delivery failed; polling will converge replicas:`,
+          error,
+        ),
     );
     return record;
   }
@@ -291,6 +329,8 @@ export class PostgresAppSettingsBackend implements AppSettingsBackend {
     }
     this.#disposed = true;
     this.#initialized = false;
+    this.#listenerConnected = false;
+    this.#recordSynchronizationState();
     if (this.#pollTimer) {
       clearInterval(this.#pollTimer);
       this.#pollTimer = undefined;
@@ -303,10 +343,7 @@ export class PostgresAppSettingsBackend implements AppSettingsBackend {
     this.#listenerClient = null;
     await this.#pollInFlight?.catch(() => undefined);
     this.#pollInFlight = undefined;
-    await Promise.allSettled([
-      listener?.end(),
-      this.#poolLease.release(),
-    ]);
+    await Promise.allSettled([listener?.end(), this.#poolLease.release()]);
     this.#listeners.clear();
     this.#knownRevisions.clear();
   }
@@ -336,22 +373,33 @@ export class PostgresAppSettingsBackend implements AppSettingsBackend {
     }
   }
 
-  async #refreshRevisionIndex(emitChanges: boolean): Promise<void> {
-    const result = await this.#pool.query<RevisionRow>(
-      'SELECT setting_key, revision FROM app_settings ORDER BY setting_key',
-    );
-    for (const row of result.rows) {
-      const revision = BigInt(row.revision);
-      if (!emitChanges) {
-        this.#knownRevisions.set(row.setting_key, revision);
-        continue;
-      }
-      await acknowledgeManagedSettingsRevision(
-        this.#knownRevisions,
-        row.setting_key,
-        revision,
-        (key) => this.#emit(key),
+  async #refreshRevisionIndex(
+    emitChanges: boolean,
+    source: MetricsManagedSettingsSynchronizationSource,
+  ): Promise<void> {
+    try {
+      const result = await this.#pool.query<RevisionRow>(
+        'SELECT setting_key, revision FROM app_settings ORDER BY setting_key',
       );
+      let synchronized = true;
+      for (const row of result.rows) {
+        const revision = BigInt(row.revision);
+        if (!emitChanges) {
+          this.#knownRevisions.set(row.setting_key, revision);
+          continue;
+        }
+        if (
+          !(await acknowledgeManagedSettingsRevision(this.#knownRevisions, row.setting_key, revision, (key) =>
+            this.#emit(key),
+          ))
+        ) {
+          synchronized = false;
+        }
+      }
+      this.#recordSynchronization(source, synchronized ? 'success' : 'failure');
+    } catch (error) {
+      this.#recordSynchronization(source, 'failure');
+      throw error;
     }
   }
 
@@ -364,31 +412,39 @@ export class PostgresAppSettingsBackend implements AppSettingsBackend {
       await client.connect();
       await client.query(`LISTEN ${APP_SETTINGS_CHANNEL}`);
       client.on('notification', (message) => {
-        if (message.channel !== APP_SETTINGS_CHANNEL || !message.payload) {
+        if (message.channel !== APP_SETTINGS_CHANNEL) {
+          return;
+        }
+        if (!message.payload) {
+          this.#recordSynchronization('notification', 'failure');
           return;
         }
         try {
           const payload = JSON.parse(message.payload) as { key?: unknown; revision?: unknown };
-          if (typeof payload.key !== 'string') {
-            return;
-          }
-          if (typeof payload.revision !== 'string') {
+          if (typeof payload.key !== 'string' || typeof payload.revision !== 'string') {
+            this.#recordSynchronization('notification', 'failure');
             return;
           }
           const revision = BigInt(payload.revision);
-          void acknowledgeManagedSettingsRevision(
-            this.#knownRevisions,
-            payload.key,
-            revision,
-            (key) => this.#emit(key),
-          );
+          void acknowledgeManagedSettingsRevision(this.#knownRevisions, payload.key, revision, (key) => this.#emit(key))
+            .then((acknowledged) => {
+              this.#recordSynchronization('notification', acknowledged ? 'success' : 'failure');
+            })
+            .catch((error) => {
+              this.#recordSynchronization('notification', 'failure');
+              this.#report('warn', '[app-settings] PostgreSQL change notification was not applied:', error);
+            });
         } catch (error) {
+          this.#recordSynchronization('notification', 'failure');
           this.#report('warn', '[app-settings] Ignoring malformed PostgreSQL change notification:', error);
         }
       });
       const reconnect = () => {
         if (this.#listenerClient === client) {
           this.#listenerClient = null;
+          this.#listenerConnected = false;
+          this.#recordSynchronizationState();
+          if (!this.#disposed) this.#recordSynchronization('notification', 'failure');
         }
         if (!this.#disposed && !this.#listenerReconnectTimer) {
           this.#listenerReconnectTimer = setTimeout(() => {
@@ -401,8 +457,12 @@ export class PostgresAppSettingsBackend implements AppSettingsBackend {
       client.once('error', reconnect);
       client.once('end', reconnect);
       this.#listenerClient = client;
+      this.#listenerConnected = true;
+      this.#recordSynchronizationState();
     } catch (error) {
       await client.end().catch(() => undefined);
+      this.#listenerConnected = false;
+      this.#recordSynchronization('notification', 'failure');
       this.#report('warn', '[app-settings] PostgreSQL LISTEN unavailable; polling remains active:', error);
       if (!this.#disposed && !this.#listenerReconnectTimer) {
         this.#listenerReconnectTimer = setTimeout(() => {
@@ -419,9 +479,7 @@ export function getManagedSettingsWriteRetryLimit(): number {
   return MAX_WRITE_RETRIES;
 }
 
-export function isPostgresAppSettingsBackendEnabled(
-  env: NodeJS.ProcessEnv = process.env,
-): boolean {
+export function isPostgresAppSettingsBackendEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
   return env.RIVET_APP_SETTINGS_BACKEND?.trim().toLowerCase() === 'postgres';
 }
 
@@ -436,8 +494,8 @@ function stripSslMode(connectionString: string): string {
 }
 
 function buildConnectionString(env: NodeJS.ProcessEnv): string {
-  const explicit = env.RIVET_APP_SETTINGS_DATABASE_URL?.trim()
-    || env.RIVET_DEPLOYMENT_DATABASE_CONNECTION_STRING?.trim();
+  const explicit =
+    env.RIVET_APP_SETTINGS_DATABASE_URL?.trim() || env.RIVET_DEPLOYMENT_DATABASE_CONNECTION_STRING?.trim();
   if (explicit) {
     return stripSslMode(explicit);
   }
@@ -448,25 +506,24 @@ function buildConnectionString(env: NodeJS.ProcessEnv): string {
   if (!host || !database || !username) {
     throw new Error(
       'PostgreSQL app settings require RIVET_APP_SETTINGS_DATABASE_URL, ' +
-      'RIVET_DEPLOYMENT_DATABASE_CONNECTION_STRING, or the deployment database host/name/username tuple.',
+        'RIVET_DEPLOYMENT_DATABASE_CONNECTION_STRING, or the deployment database host/name/username tuple.',
     );
   }
 
   const port = env.RIVET_DEPLOYMENT_DATABASE_PORT?.trim() || '5432';
   const password = env.RIVET_DEPLOYMENT_DATABASE_PASSWORD ?? '';
-  return `postgresql://${encodeURIComponent(username)}:${encodeURIComponent(password)}` +
-    `@${host}:${port}/${encodeURIComponent(database)}`;
+  return (
+    `postgresql://${encodeURIComponent(username)}:${encodeURIComponent(password)}` +
+    `@${host}:${port}/${encodeURIComponent(database)}`
+  );
 }
 
 export function createPostgresAppSettingsBackendFromEnv(
   env: NodeJS.ProcessEnv = process.env,
 ): PostgresAppSettingsBackend {
-  const encryptionSecret = env.RIVET_APP_SETTINGS_ENCRYPTION_KEY?.trim()
-    || env.RIVET_KEY?.trim();
+  const encryptionSecret = env.RIVET_APP_SETTINGS_ENCRYPTION_KEY?.trim() || env.RIVET_KEY?.trim();
   if (!encryptionSecret) {
-    throw new Error(
-      'PostgreSQL app settings require RIVET_APP_SETTINGS_ENCRYPTION_KEY or RIVET_KEY.',
-    );
+    throw new Error('PostgreSQL app settings require RIVET_APP_SETTINGS_ENCRYPTION_KEY or RIVET_KEY.');
   }
 
   const sslMode = env.RIVET_DEPLOYMENT_DATABASE_SSL_MODE?.trim().toLowerCase() || 'require';
@@ -476,9 +533,7 @@ export function createPostgresAppSettingsBackendFromEnv(
     keepAliveInitialDelayMillis: 30_000,
     idleTimeoutMillis: 30_000,
     connectionTimeoutMillis: MANAGED_POSTGRES_CONNECTION_TIMEOUT_MS,
-    ...(sslMode === 'disable'
-      ? {}
-      : { ssl: { rejectUnauthorized: sslMode === 'verify-full' } }),
+    ...(sslMode === 'disable' ? {} : { ssl: { rejectUnauthorized: sslMode === 'verify-full' } }),
   };
 
   return new PostgresAppSettingsBackend({

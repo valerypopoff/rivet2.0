@@ -2,7 +2,7 @@ import { type Project } from '@valerypopoff/rivet2-core';
 import { type IOProvider, isPathBasedIOProvider } from '../io/IOProvider.js';
 
 type ProjectSaveWithoutPromptProvider = IOProvider & {
-  saveProjectDataNoPrompt(project: Project, path: string): Promise<void>;
+  saveProjectDataNoPrompt(project: Project, path: string): Promise<string | void>;
   canSaveProjectDataNoPrompt?(path: string): boolean;
 };
 
@@ -10,7 +10,10 @@ export function canSaveProjectDataNoPrompt(
   ioProvider: IOProvider,
   path: string | null,
 ): ioProvider is ProjectSaveWithoutPromptProvider {
-  if (!path || typeof (ioProvider as Partial<ProjectSaveWithoutPromptProvider>).saveProjectDataNoPrompt !== 'function') {
+  if (
+    !path ||
+    typeof (ioProvider as Partial<ProjectSaveWithoutPromptProvider>).saveProjectDataNoPrompt !== 'function'
+  ) {
     return false;
   }
 

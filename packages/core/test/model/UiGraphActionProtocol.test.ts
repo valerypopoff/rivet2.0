@@ -160,4 +160,47 @@ void describe('UiGraphActionProtocol', () => {
       );
     }
   });
+
+  void it('accepts coherent browser-storage limits and rejects unsafe advertised limits', () => {
+    assert.deepEqual(
+      parseRivetWebAppServerMessage({
+        type: 'server.ready',
+        protocolVersion: RIVET_WEB_APP_ACTION_PROTOCOL_VERSION,
+        browserStorageRpcLimits: { maxActionBytes: 1024, maxValueBytes: 512, transferTimeoutMs: 60_000 },
+      }),
+      {
+        type: 'server.ready',
+        protocolVersion: RIVET_WEB_APP_ACTION_PROTOCOL_VERSION,
+        browserStorageRpcLimits: { maxActionBytes: 1024, maxValueBytes: 512, transferTimeoutMs: 60_000 },
+      },
+    );
+    assert.deepEqual(
+      parseRivetWebAppServerMessage({
+        type: 'server.ready',
+        protocolVersion: RIVET_WEB_APP_ACTION_PROTOCOL_VERSION,
+        browserStorageRpcLimits: { maxActionBytes: 1024, maxValueBytes: 512 },
+      }),
+      {
+        type: 'server.ready',
+        protocolVersion: RIVET_WEB_APP_ACTION_PROTOCOL_VERSION,
+        browserStorageRpcLimits: { maxActionBytes: 1024, maxValueBytes: 512, transferTimeoutMs: 60_000 },
+      },
+    );
+    assert.equal(
+      parseRivetWebAppServerMessage({
+        type: 'server.ready',
+        protocolVersion: RIVET_WEB_APP_ACTION_PROTOCOL_VERSION,
+        browserStorageRpcLimits: { maxActionBytes: 1024, maxValueBytes: 512, transferTimeoutMs: 0 },
+      }),
+      undefined,
+    );
+    assert.equal(
+      parseRivetWebAppServerMessage({
+        type: 'server.ready',
+        protocolVersion: RIVET_WEB_APP_ACTION_PROTOCOL_VERSION,
+        browserStorageRpcLimits: { maxActionBytes: 512, maxValueBytes: 1024, transferTimeoutMs: 60_000 },
+      }),
+      undefined,
+    );
+  });
 });

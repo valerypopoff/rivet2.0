@@ -2,13 +2,10 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import test from 'node:test';
-import {
-  readJson,
-  waitForRecordingWorkflows,
-  withEnvOverride,
-} from './helpers/workflow-api-harness.js';
+import { readJson, waitForRecordingWorkflows, withEnvOverride } from './helpers/workflow-api-harness.js';
 import { createFilesystemWorkflowSuiteHarness } from './helpers/workflow-filesystem-suite-harness.js';
 import { writeWorkflowEndpointAuthSettings } from '../workflow-endpoint-auth-settings.js';
+import { createWorkflowCapacityCapability } from '../workflow-capacity-capability.js';
 
 const {
   workflowsRoot,
@@ -268,6 +265,31 @@ test('filesystem workflow endpoint bearer auth follows app settings without rest
       });
       assert.equal(authenticatedPublishedResponse.ok, true);
 
+      const scopedCapacityCapability = createWorkflowCapacityCapability({
+        signingKey: 'workflow-auth-key',
+        endpoints: ['bearer-auth-settings'],
+        lifetimeSeconds: 60,
+      });
+      const scopedPublishedResponse = await fetch(publishedBaseUrl + '/bearer-auth-settings', {
+        method: 'POST',
+        headers: {
+          Authorization: 'Bearer ' + scopedCapacityCapability,
+          'Content-Type': 'application/json',
+        },
+        body: '{}',
+      });
+      assert.equal(scopedPublishedResponse.ok, true);
+
+      const scopedLatestResponse = await fetch(latestBaseUrl + '/bearer-auth-settings', {
+        method: 'POST',
+        headers: {
+          Authorization: 'Bearer ' + scopedCapacityCapability,
+          'Content-Type': 'application/json',
+        },
+        body: '{}',
+      });
+      assert.equal(scopedLatestResponse.status, 401);
+
       const unauthenticatedLatestResponse = await fetch(`${latestBaseUrl}/bearer-auth-settings`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -310,11 +332,13 @@ test('filesystem execution cache rebuilds lazily after project-affecting mutatio
       assert.equal(firstLatestResponse.ok, true);
       assert.equal(firstLatestResponse.headers.get('x-workflow-cache'), 'hit');
 
-      const createdProject = await readJson<{ project: { relativePath: string } }>(await fetch(`${apiBaseUrl}/projects`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: 'Filesystem Mutation One' }),
-      }));
+      const createdProject = await readJson<{ project: { relativePath: string } }>(
+        await fetch(`${apiBaseUrl}/projects`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name: 'Filesystem Mutation One' }),
+        }),
+      );
       assert.equal(typeof createdProject.project.relativePath, 'string');
 
       const publishedMissResponse = await fetch(`${publishedBaseUrl}/warm-filesystem-endpoint`, {
@@ -333,15 +357,17 @@ test('filesystem execution cache rebuilds lazily after project-affecting mutatio
       assert.equal(publishedHitResponse.ok, true);
       assert.equal(publishedHitResponse.headers.get('x-workflow-cache'), 'hit');
 
-      const uploadedProject = await readJson<{ project: { relativePath: string } }>(await fetch(`${apiBaseUrl}/projects/upload`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          folderRelativePath: '',
-          fileName: 'filesystem-mutation-two.rivet-project',
-          contents: await fs.readFile(created.absolutePath, 'utf8'),
+      const uploadedProject = await readJson<{ project: { relativePath: string } }>(
+        await fetch(`${apiBaseUrl}/projects/upload`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            folderRelativePath: '',
+            fileName: 'filesystem-mutation-two.rivet-project',
+            contents: await fs.readFile(created.absolutePath, 'utf8'),
+          }),
         }),
-      }));
+      );
       assert.equal(typeof uploadedProject.project.relativePath, 'string');
 
       const latestMissResponse = await fetch(`${latestBaseUrl}/warm-filesystem-endpoint`, {
@@ -376,7 +402,10 @@ test('filesystem saveHostedProject refreshes latest materialization without dirt
     assert.ok(beforeProject);
     assert.equal(beforeProject.debug?.cacheStatus, 'hit');
     assert.equal(beforeProject.project.metadata.title, 'LatestSaveRefresh');
-    assert.equal(beforeProject.project.graphs[beforeProject.project.metadata.mainGraphId!]?.metadata?.name, 'Main Graph');
+    assert.equal(
+      beforeProject.project.graphs[beforeProject.project.metadata.mainGraphId!]?.metadata?.name,
+      'Main Graph',
+    );
 
     const loaded = await workflowStorageBackend.loadHostedProject(created.absolutePath);
     await workflowStorageBackend.saveHostedProject({
@@ -389,34 +418,46 @@ test('filesystem saveHostedProject refreshes latest materialization without dirt
     assert.ok(afterProject);
     assert.equal(afterProject.debug?.cacheStatus, 'hit');
     assert.equal(afterProject.project.metadata.title, 'LatestSaveRefresh');
-    assert.equal(afterProject.project.graphs[afterProject.project.metadata.mainGraphId!]?.metadata?.name, 'Updated Main Graph');
+    assert.equal(
+      afterProject.project.graphs[afterProject.project.metadata.mainGraphId!]?.metadata?.name,
+      'Updated Main Graph',
+    );
 
     const followupProject = await workflowStorageBackend.resolveLatestExecutionProject('latest-save-refresh-endpoint');
     assert.ok(followupProject);
     assert.equal(followupProject.debug?.cacheStatus, 'hit');
     assert.equal(followupProject.project.metadata.title, 'LatestSaveRefresh');
-    assert.equal(followupProject.project.graphs[followupProject.project.metadata.mainGraphId!]?.metadata?.name, 'Updated Main Graph');
+    assert.equal(
+      followupProject.project.graphs[followupProject.project.metadata.mainGraphId!]?.metadata?.name,
+      'Updated Main Graph',
+    );
   });
 });
 
 test('filesystem saveHostedProject exposes a permission error when the workflows root is not writable', async (t) => {
   const created = await workflowMutations.createWorkflowProjectItem('', 'PermissionSave');
   const loaded = await workflowStorageBackend.loadHostedProject(created.absolutePath);
-  const originalWriteFile = fs.writeFile;
+  const originalOpen = fs.open;
 
-  t.mock.method(fs, 'writeFile', async (
-    targetPath: Parameters<typeof fs.writeFile>[0],
-    data: Parameters<typeof fs.writeFile>[1],
-    options?: Parameters<typeof fs.writeFile>[2],
-  ) => {
-    if (String(targetPath) === created.absolutePath) {
-      const error = new Error(`EACCES: permission denied, open '${created.absolutePath}'`) as Error & { code?: string };
-      error.code = 'EACCES';
-      throw error;
-    }
+  t.mock.method(
+    fs,
+    'open',
+    async (
+      targetPath: Parameters<typeof fs.open>[0],
+      flags: Parameters<typeof fs.open>[1],
+      mode?: Parameters<typeof fs.open>[2],
+    ) => {
+      if (path.basename(String(targetPath)) === 'project.new') {
+        const error = new Error(`EACCES: permission denied, open '${String(targetPath)}'`) as Error & {
+          code?: string;
+        };
+        error.code = 'EACCES';
+        throw error;
+      }
 
-    return originalWriteFile(targetPath, data, options as any);
-  });
+      return originalOpen(targetPath, flags, mode);
+    },
+  );
 
   await assert.rejects(
     workflowStorageBackend.saveHostedProject({
@@ -427,10 +468,7 @@ test('filesystem saveHostedProject exposes a permission error when the workflows
     (error: unknown) => {
       assert.equal((error as { status?: number }).status, 500);
       assert.equal((error as { expose?: boolean }).expose, true);
-      assert.match(
-        String((error as { message?: string }).message ?? ''),
-        /Workflow storage is not writable/,
-      );
+      assert.match(String((error as { message?: string }).message ?? ''), /Workflow storage is not writable/);
       return true;
     },
   );
@@ -449,10 +487,14 @@ test('filesystem latest execution follows the draft endpoint after publish setti
     const settings = await workflowPublication.readStoredWorkflowProjectSettings(created.absolutePath, created.name);
     await fs.writeFile(
       settingsPath,
-      `${JSON.stringify({
-        ...settings,
-        endpointName: 'draft-latest-backend-current',
-      }, null, 2)}\n`,
+      `${JSON.stringify(
+        {
+          ...settings,
+          endpointName: 'draft-latest-backend-current',
+        },
+        null,
+        2,
+      )}\n`,
       'utf8',
     );
 
@@ -461,10 +503,14 @@ test('filesystem latest execution follows the draft endpoint after publish setti
     assert.equal(latestProject.projectVirtualPath, created.absolutePath);
     assert.equal(latestProject.debug?.cacheStatus, 'miss');
 
-    const staleLatestProject = await workflowStorageBackend.resolveLatestExecutionProject('draft-latest-backend-published');
+    const staleLatestProject = await workflowStorageBackend.resolveLatestExecutionProject(
+      'draft-latest-backend-published',
+    );
     assert.equal(staleLatestProject, null);
 
-    const publishedProject = await workflowStorageBackend.resolvePublishedExecutionProject('draft-latest-backend-published');
+    const publishedProject = await workflowStorageBackend.resolvePublishedExecutionProject(
+      'draft-latest-backend-published',
+    );
     assert.ok(publishedProject);
     assert.equal(publishedProject.projectVirtualPath, created.absolutePath);
   });
@@ -488,13 +534,17 @@ test('filesystem published execution bypasses cold when a stale live-backed cand
   await fs.writeFile(staleCandidate.absolutePath, `${staleOriginalContents}\n# stale\n`, 'utf8');
   await fs.writeFile(
     workflowFs.getProjectSidecarPaths(staleCandidate.absolutePath).settings,
-    `${JSON.stringify({
-      endpointName: sharedEndpoint,
-      publishedEndpointName: sharedEndpoint,
-      publishedSnapshotId: null,
-      publishedStateHash,
-      lastPublishedAt: '2025-01-01T00:00:00.000Z',
-    }, null, 2)}\n`,
+    `${JSON.stringify(
+      {
+        endpointName: sharedEndpoint,
+        publishedEndpointName: sharedEndpoint,
+        publishedSnapshotId: null,
+        publishedStateHash,
+        lastPublishedAt: '2025-01-01T00:00:00.000Z',
+      },
+      null,
+      2,
+    )}\n`,
     'utf8',
   );
 
@@ -541,7 +591,8 @@ test('filesystem execution helpers do not recreate the workflows root on the war
     return originalMkdir(dirPath, options);
   });
 
-  const publishedProject = await workflowStorageBackend.resolvePublishedExecutionProject('warm-execution-root-endpoint');
+  const publishedProject =
+    await workflowStorageBackend.resolvePublishedExecutionProject('warm-execution-root-endpoint');
   assert.ok(publishedProject);
   assert.equal(publishedProject.debug?.cacheStatus, 'hit');
 
@@ -577,7 +628,9 @@ test('filesystem execution helpers do not recreate the workflows root on the war
   });
 
   assert.deepEqual(
-    mkdirTargets.filter((target) => target === workflowsRoot || target === workflowFs.getPublishedSnapshotsRoot(workflowsRoot)),
+    mkdirTargets.filter(
+      (target) => target === workflowsRoot || target === workflowFs.getPublishedSnapshotsRoot(workflowsRoot),
+    ),
     [],
   );
 });
@@ -612,10 +665,10 @@ test('published workflow responds with any outputs and records the run asynchron
   await fs.writeFile(
     created.absolutePath,
     passthroughProject
-      .replace('    title: Untitled Project', [
+      .replace(
         '    title: Untitled Project',
-        '    mainGraphId: kqaNrBo0WpJ1EOc2hj0zK',
-      ].join('\n'))
+        ['    title: Untitled Project', '    mainGraphId: kqaNrBo0WpJ1EOc2hj0zK'].join('\n'),
+      )
       .replaceAll('dataType: string', 'dataType: any'),
     'utf8',
   );
@@ -639,14 +692,14 @@ test('published workflow responds with any outputs and records the run asynchron
       assert.match(workflowExecuteMsHeader ?? '', /^\d+$/);
       const workflowExecuteMs = Number(workflowExecuteMsHeader);
 
-      const body = await response.json() as { foo: string; durationMs: number };
+      const body = (await response.json()) as { foo: string; durationMs: number };
       assert.equal(body.foo, 'bar');
       assert.equal(typeof body.durationMs, 'number');
 
-      const workflowsResponse = await waitForRecordingWorkflows(
+      const workflowsResponse = (await waitForRecordingWorkflows(
         apiBaseUrl,
         (workflows) => workflows[0]?.totalRuns === 1,
-      ) as {
+      )) as {
         workflows: Array<{ totalRuns: number; workflowId: string }>;
       };
 
@@ -656,9 +709,11 @@ test('published workflow responds with any outputs and records the run asynchron
 
       const runsResponse = await readJson<{
         runs: Array<{ durationMs: number }>;
-      }>(await fetch(
-        `${apiBaseUrl}/recordings/workflows/${encodeURIComponent(workflow.workflowId)}/runs?page=1&pageSize=20&status=all`,
-      ));
+      }>(
+        await fetch(
+          `${apiBaseUrl}/recordings/workflows/${encodeURIComponent(workflow.workflowId)}/runs?page=1&pageSize=20&status=all`,
+        ),
+      );
 
       assert.equal(runsResponse.runs[0]?.durationMs, workflowExecuteMs);
     });
@@ -722,6 +777,8 @@ test('published and latest workflows inject request headers into context', async
   await withWorkflowExecutionServer(async ({ publishedBaseUrl, latestBaseUrl }) => {
     const requestHeaders = {
       'Content-Type': 'application/json',
+      'X-Rivet-Correlation-Id': 'client-selected-correlation-id',
+      'X-Rivet-Proxy-Auth': 'client-selected-proxy-auth',
       'X-Storyteller-Header': 'published-request-header',
     };
 
@@ -733,10 +790,14 @@ test('published and latest workflows inject request headers into context', async
     });
 
     assert.equal(publishedResponse.ok, true);
+    const publishedCorrelationId = publishedResponse.headers.get('x-rivet-correlation-id');
+    assert.match(publishedCorrelationId ?? '', /^rvt-[a-f0-9-]{36}$/);
 
-    const publishedBody = await publishedResponse.json() as Record<string, unknown>;
+    const publishedBody = (await publishedResponse.json()) as Record<string, unknown>;
     assert.equal(publishedBody['x-storyteller-header'], 'published-request-header');
     assert.equal(publishedBody['content-type'], 'application/json');
+    assert.equal(publishedBody['x-rivet-correlation-id'], publishedCorrelationId);
+    assert.equal(Object.hasOwn(publishedBody, 'x-rivet-proxy-auth'), false);
     assert.equal(typeof publishedBody.durationMs, 'number');
 
     const latestResponse = await fetch(`${latestBaseUrl}/headers-context-endpoint`, {
@@ -747,10 +808,15 @@ test('published and latest workflows inject request headers into context', async
     });
 
     assert.equal(latestResponse.ok, true);
+    const latestCorrelationId = latestResponse.headers.get('x-rivet-correlation-id');
+    assert.match(latestCorrelationId ?? '', /^rvt-[a-f0-9-]{36}$/);
+    assert.notEqual(latestCorrelationId, publishedCorrelationId);
 
-    const latestBody = await latestResponse.json() as Record<string, unknown>;
+    const latestBody = (await latestResponse.json()) as Record<string, unknown>;
     assert.equal(latestBody['x-storyteller-header'], 'published-request-header');
     assert.equal(latestBody['content-type'], 'application/json');
+    assert.equal(latestBody['x-rivet-correlation-id'], latestCorrelationId);
+    assert.equal(Object.hasOwn(latestBody, 'x-rivet-proxy-auth'), false);
     assert.equal(typeof latestBody.durationMs, 'number');
   });
 });
@@ -765,10 +831,10 @@ test('published workflow preserves falsy top-level JSON inputs and null any outp
   await fs.writeFile(
     created.absolutePath,
     passthroughProject
-      .replace('    title: Untitled Project', [
+      .replace(
         '    title: Untitled Project',
-        '    mainGraphId: kqaNrBo0WpJ1EOc2hj0zK',
-      ].join('\n'))
+        ['    title: Untitled Project', '    mainGraphId: kqaNrBo0WpJ1EOc2hj0zK'].join('\n'),
+      )
       .replaceAll('dataType: string', 'dataType: any'),
     'utf8',
   );
@@ -793,10 +859,10 @@ test('published workflow preserves falsy top-level JSON inputs and null any outp
       assert.deepEqual(await response.json(), value);
     }
 
-    const workflowsResponse = await waitForRecordingWorkflows(
+    const workflowsResponse = (await waitForRecordingWorkflows(
       apiBaseUrl,
       (workflows) => workflows[0]?.totalRuns === cases.length,
-    ) as {
+    )) as {
       workflows: Array<{ totalRuns: number }>;
     };
 

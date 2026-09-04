@@ -75,6 +75,7 @@ export const WorkflowLibraryModals: FC<{
           onRefresh={() => refresh(false)}
           onDeleteProject={onDeleteProject}
           onOpenPublishedHistory={openPublishedHistoryModal}
+          onOpenRecording={onOpenRecording}
           routeConfig={routeConfig}
         />
       ) : null}
