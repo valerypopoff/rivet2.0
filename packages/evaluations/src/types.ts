@@ -206,6 +206,108 @@ export type EvaluationLibrary = {
   migratedLegacyProjectIds: ProjectId[];
 };
 
+/**
+ * A collaboration boundary for the shared evaluation library. A suite owns
+ * its baselines because a baseline is only meaningful with that suite; a
+ * dataset is independently editable and reusable by many suites.
+ */
+export type EvaluationLibraryResourceKind = 'suite' | 'dataset';
+
+export type EvaluationLibraryResourceVersions = {
+  suites: Record<string, string>;
+  datasets: Record<string, string>;
+};
+
+/** A server-authoritative library snapshot used by collaborative hosts. */
+export type EvaluationLibrarySyncSnapshot = {
+  revision: number;
+  library: EvaluationLibrary;
+  resourceVersions: EvaluationLibraryResourceVersions;
+};
+
+/** The durable value for one independently synchronized library resource. */
+export type EvaluationLibrarySuiteBundle = {
+  suite: EvaluationSuite;
+  baselines: EvaluationBaselineSnapshot[];
+};
+
+export type EvaluationLibraryResourceValue =
+  | { kind: 'suite'; id: string; value: EvaluationLibrarySuiteBundle | undefined }
+  | { kind: 'dataset'; id: string; value: EvaluationDataset | undefined };
+
+/**
+ * Every mutation is an all-or-nothing resource batch. Existing resources use
+ * their opaque version token; null means that creation requires the resource
+ * to remain absent.
+ */
+export type EvaluationLibraryMutationChange =
+  | {
+      kind: 'put-suite';
+      id: string;
+      expectedVersion: string | null;
+      suite: EvaluationSuite;
+      baselines: EvaluationBaselineSnapshot[];
+    }
+  | { kind: 'delete-suite'; id: string; expectedVersion: string }
+  | {
+      kind: 'put-dataset';
+      id: string;
+      expectedVersion: string | null;
+      dataset: EvaluationDataset;
+    }
+  | { kind: 'delete-dataset'; id: string; expectedVersion: string };
+
+export type EvaluationLibraryMutation = {
+  changes: EvaluationLibraryMutationChange[];
+};
+
+export type EvaluationLibraryConflictResource = {
+  kind: EvaluationLibraryResourceKind;
+  id: string;
+  expectedVersion: string | null;
+  currentVersion: string | null;
+};
+
+/**
+ * A conflict is deliberately expressed with both values. Hosts use this to
+ * present an explicit choice instead of silently overwriting either editor.
+ */
+export type EvaluationLibraryConflictDraft = EvaluationLibraryConflictResource & {
+  local: EvaluationLibraryResourceValue;
+  server: EvaluationLibraryResourceValue;
+};
+
+export type EvaluationLibrarySyncIssue =
+  | {
+      id: string;
+      kind: 'conflict';
+      message: string;
+      conflicts: readonly EvaluationLibraryConflictDraft[];
+    }
+  | {
+      id: string;
+      kind: 'retryable' | 'failed';
+      message: string;
+    };
+
+export type EvaluationLibraryConflictResolution = {
+  issueId: string;
+  kind: EvaluationLibraryResourceKind;
+  id: string;
+  action: 'use-server' | 'keep-mine-as-copy';
+};
+
+/** A host can expose this optional capability without changing local stores. */
+export type EvaluationLibrarySyncStore = {
+  getLibrarySyncSnapshot(): Promise<EvaluationLibrarySyncSnapshot>;
+  mutateLibrary(input: EvaluationLibraryMutation): Promise<EvaluationLibrarySyncSnapshot>;
+  subscribeLibraryInvalidation?(listener: () => void): () => void;
+  /** An unresolved hosted save requiring an explicit user decision. */
+  subscribeLibrarySyncIssue?(listener: (issue: EvaluationLibrarySyncIssue | undefined) => void): () => void;
+  resolveLibraryConflict?(input: EvaluationLibraryConflictResolution): Promise<EvaluationLibrary>;
+  retryLibrarySync?(): Promise<EvaluationLibrary>;
+};
+
 export type EvaluationObservationStatus = 'passed' | 'failed' | 'scored' | 'error' | 'skipped';
 
 export type EvaluationObservation = {
@@ -564,6 +666,13 @@ export type EvaluationStore = EvaluationRunStore & {
   initialize?(): Promise<EvaluationStoreInitialization | void>;
   getLibrary(): Promise<EvaluationLibrary>;
   putLibrary(library: EvaluationLibrary): Promise<void>;
+  /** Optional hosted capability for resource-scoped collaborative saves. */
+  getLibrarySyncSnapshot?: EvaluationLibrarySyncStore['getLibrarySyncSnapshot'];
+  mutateLibrary?: EvaluationLibrarySyncStore['mutateLibrary'];
+  subscribeLibraryInvalidation?: EvaluationLibrarySyncStore['subscribeLibraryInvalidation'];
+  subscribeLibrarySyncIssue?: EvaluationLibrarySyncStore['subscribeLibrarySyncIssue'];
+  resolveLibraryConflict?: EvaluationLibrarySyncStore['resolveLibraryConflict'];
+  retryLibrarySync?: EvaluationLibrarySyncStore['retryLibrarySync'];
 };
 
 export type EvaluationReporter = {

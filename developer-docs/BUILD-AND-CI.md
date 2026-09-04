@@ -682,9 +682,12 @@ Yarn reporter lines in its `➤ YN####:` format, and fails closed on every other
 non-JSON line. A nonzero audit command exit must first contain JSON finding output,
 then is accepted only when at least one audit finding row was parsed, so a
 reporter-only or transport failure cannot look like a clean audit. It fails on every
-critical finding and every unreviewed high finding. A single retry is reserved for
-known transient registry socket, DNS, rate-limit, timeout, and server failures; malformed
-reports and all other command failures surface immediately. The audit child alone defaults to npm's canonical
+critical finding and every unreviewed high finding. Three bounded retries (after 10,
+30, and 60 seconds) are reserved for known transient registry socket, DNS, rate-limit,
+timeout, and server failures; malformed reports and all other command failures surface
+immediately. Each audit child is also limited to three minutes, so a process that
+stops responding is retried using the same bounded schedule rather than holding CI
+indefinitely. The audit child alone defaults to npm's canonical
 `https://registry.npmjs.org` registry and a two-minute HTTP timeout, while honoring
 explicit `YARN_NPM_REGISTRY_SERVER` and `YARN_HTTP_TIMEOUT` overrides. Normal dependency
 installation keeps its existing registry and timeout configuration. The audit passes
@@ -834,15 +837,18 @@ work behind it is parallelized.
 3. `package-lint` fans out the same six source-only workspaces immediately; it does not
    wait for compiled artifacts. Test and lint matrices use `fail-fast: false`, so one
    failure cannot hide failures in other packages.
-4. `static-validation` runs PnP freshness, JavaScript dependency audit, docs
-   typechecking, `yarn test:style`, and Prettier in parallel with compilation.
+4. `static-validation` runs PnP freshness, docs typechecking, `yarn test:style`,
+   and Prettier in parallel with compilation.
    Graph Builder assets are not checked in a second named step because
    `yarn test:style` already owns that complete gate.
-5. `rust-audit` runs independently. It restores the pinned `cargo-audit 0.22.2`
+5. `javascript-audit` runs separately, so an npm registry outage is clearly
+   identified instead of appearing as an unrelated static-validation failure. Its
+   20-minute job deadline contains the four-attempt audit policy and its setup time.
+6. `rust-audit` runs independently. It restores the pinned `cargo-audit 0.22.2`
    binary from a runner/architecture/version cache and compiles it only on a
    cache miss; the advisory database itself is still refreshed by the audit.
-6. The lightweight `build` aggregator fails unless compilation, every test and
-   lint shard, static validation, and Rust audit all succeeded.
+7. The lightweight `build` aggregator fails unless compilation, every test and
+   lint shard, static validation, JavaScript audit, and Rust audit all succeeded.
 
 Each substantive job records its wall time through
 [`scripts/ci/job-timing.mjs`](../scripts/ci/job-timing.mjs). The helper writes a

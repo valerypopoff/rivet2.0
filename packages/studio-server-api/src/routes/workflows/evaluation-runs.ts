@@ -13,6 +13,7 @@ import {
   type EvaluationQualityReasonCode,
   type EvaluationQualityStatus,
   type EvaluationRecordingArtifact,
+  type EvaluationLibraryMutation,
   type EvaluationRun,
 } from '@valerypopoff/rivet2-evaluations';
 
@@ -20,7 +21,15 @@ import { asyncHandler } from '../../utils/asyncHandler.js';
 import { badRequest, conflict } from '../../utils/httpError.js';
 import { validateBody } from '../../middleware/validate.js';
 import { getEvaluationStore, getHostedEvaluationCoordinator } from './storage-backend.js';
-import { EvaluationLibraryConflictError } from '../../evaluation-runs/store.js';
+import {
+  EvaluationLibraryConflictError,
+  EvaluationLibraryMutationValidationError,
+  EvaluationLibraryResourceConflictError,
+} from '../../evaluation-runs/store.js';
+import {
+  notifyEvaluationLibraryChanged,
+  openEvaluationLibraryEventStream,
+} from './evaluation-library-events.js';
 import {
   HostedEvaluationCapacityError,
   HostedEvaluationRetryConflictError,
@@ -319,6 +328,32 @@ const replaceLibrarySchema = z
     library: evaluationLibrarySchema,
   })
   .strict();
+const libraryMutationChangeSchema = z.discriminatedUnion('kind', [
+  z
+    .object({
+      kind: z.literal('put-suite'),
+      id: z.string().min(1),
+      expectedVersion: z.string().min(1).nullable(),
+      suite: z.unknown(),
+      baselines: z.array(z.unknown()),
+    })
+    .strict(),
+  z
+    .object({ kind: z.literal('delete-suite'), id: z.string().min(1), expectedVersion: z.string().min(1) })
+    .strict(),
+  z
+    .object({
+      kind: z.literal('put-dataset'),
+      id: z.string().min(1),
+      expectedVersion: z.string().min(1).nullable(),
+      dataset: z.unknown(),
+    })
+    .strict(),
+  z
+    .object({ kind: z.literal('delete-dataset'), id: z.string().min(1), expectedVersion: z.string().min(1) })
+    .strict(),
+]);
+const libraryMutationSchema = z.object({ changes: z.array(libraryMutationChangeSchema).min(1).max(256) }).strict();
 const importLibrarySchema = z.object({ library: evaluationLibrarySchema }).strict();
 const runEventSchema = z.discriminatedUnion('type', [
   z
@@ -348,6 +383,33 @@ const runEventSchema = z.discriminatedUnion('type', [
     })
     .strict(),
 ]);
+
+function normalizeLibraryMutation(input: z.infer<typeof libraryMutationSchema>): EvaluationLibraryMutation {
+  return {
+    changes: input.changes.map((change) => {
+      if (change.kind === 'put-suite') {
+        const data = deserializeEvaluationProjectData({
+          version: 1,
+          suites: [change.suite],
+          baselines: change.baselines,
+        });
+        const suite = data.suites[0];
+        if (!suite || suite.id !== change.id || data.baselines.some((baseline) => baseline.suiteId !== change.id)) {
+          throw badRequest('Evaluation suite mutation payload does not match its resource ID.');
+        }
+        return { ...change, suite, baselines: data.baselines };
+      }
+      if (change.kind === 'put-dataset') {
+        const dataset = validateEvaluationDataset(change.dataset);
+        if (dataset.id !== change.id) {
+          throw badRequest('Evaluation dataset mutation payload does not match its resource ID.');
+        }
+        return { ...change, dataset };
+      }
+      return change;
+    }),
+  };
+}
 
 evaluationRunsRouter.get(
   '/hosted/capability',
@@ -447,9 +509,17 @@ evaluationRunsRouter.post(
   }),
 );
 evaluationRunsRouter.get(
+  '/library/events',
+  asyncHandler(async (req, res) => {
+    const snapshot = await (await getEvaluationStore()).getLibrarySyncSnapshot();
+    openEvaluationLibraryEventStream(req, res, snapshot.revision);
+  }),
+);
+
+evaluationRunsRouter.get(
   '/library',
   asyncHandler(async (_req, res) => {
-    res.json(await (await getEvaluationStore()).getLibrarySnapshot());
+    res.json(await (await getEvaluationStore()).getLibrarySyncSnapshot());
   }),
 );
 
@@ -458,15 +528,14 @@ evaluationRunsRouter.put(
   validateBody(replaceLibrarySchema),
   asyncHandler(async (req, res) => {
     const input = req.body as z.infer<typeof replaceLibrarySchema>;
+    const store = await getEvaluationStore();
     try {
-      res.json(
-        await (
-          await getEvaluationStore()
-        ).replaceLibrary({
-          expectedRevision: input.expectedRevision,
-          library: normalizeEvaluationLibrary(input.library),
-        }),
-      );
+      const snapshot = await store.replaceLibrary({
+        expectedRevision: input.expectedRevision,
+        library: normalizeEvaluationLibrary(input.library),
+      });
+      if (snapshot.revision !== input.expectedRevision) notifyEvaluationLibraryChanged(req, snapshot.revision);
+      res.json(await store.getLibrarySyncSnapshot());
     } catch (error) {
       if (error instanceof EvaluationLibraryConflictError) {
         throw conflict(error.message);
@@ -477,13 +546,43 @@ evaluationRunsRouter.put(
 );
 
 evaluationRunsRouter.post(
+  '/library/mutations',
+  validateBody(libraryMutationSchema),
+  asyncHandler(async (req, res) => {
+    const store = await getEvaluationStore();
+    const before = await store.getLibrarySyncSnapshot();
+    try {
+      const snapshot = await store.mutateLibrary(normalizeLibraryMutation(req.body as z.infer<typeof libraryMutationSchema>));
+      if (snapshot.revision !== before.revision) notifyEvaluationLibraryChanged(req, snapshot.revision);
+      res.json(snapshot);
+    } catch (error) {
+      if (error instanceof EvaluationLibraryResourceConflictError) {
+        res.status(409).json({
+          error: error.message,
+          code: 'evaluation_library_resource_conflict',
+          conflicts: error.conflicts,
+          snapshot: await store.getLibrarySyncSnapshot(),
+        });
+        return;
+      }
+      if (error instanceof EvaluationLibraryMutationValidationError) throw badRequest(error.message);
+      throw error;
+    }
+  }),
+);
+
+evaluationRunsRouter.post(
   '/library/import',
   validateBody(importLibrarySchema),
   asyncHandler(async (req, res) => {
+    const store = await getEvaluationStore();
+    const before = await store.getLibrarySnapshot();
     const { library: rawLibrary } = req.body as z.infer<typeof importLibrarySchema>;
     const library = normalizeEvaluationLibrary(rawLibrary);
     const sourceFingerprint = createHash('sha256').update(JSON.stringify(library)).digest('hex');
-    res.json(await (await getEvaluationStore()).importLegacyLibrary({ sourceFingerprint, library }));
+    const snapshot = await store.importLegacyLibrary({ sourceFingerprint, library });
+    if (snapshot.revision !== before.revision) notifyEvaluationLibraryChanged(req, snapshot.revision);
+    res.json(await store.getLibrarySyncSnapshot());
   }),
 );
 

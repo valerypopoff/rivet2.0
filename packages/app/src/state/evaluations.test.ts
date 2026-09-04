@@ -149,6 +149,24 @@ test('Runs cache is scoped to its exact project and suite and resets with a proj
   assert.deepEqual(reset.runs, []);
 });
 
+test('opening a project without legacy evaluations preserves the hydrated library references', () => {
+  const initial = {
+    ...createDefaultEvaluationsState(
+      { version: 1, suites: [suite('shared-suite', 'shared-dataset')], baselines: [] },
+      [dataset('shared-dataset')],
+    ),
+    migratedLegacyProjectIds: ['previous-project' as ProjectId],
+  };
+
+  const reset = resetEvaluationsForProjectLoad(initial, undefined, undefined, 'unrelated-project' as ProjectId);
+
+  // The host only persists a library when this identity changes. A normal
+  // project switch must therefore remain a true no-op for shared storage.
+  assert.equal(reset.data, initial.data);
+  assert.equal(reset.datasets, initial.datasets);
+  assert.equal(reset.migratedLegacyProjectIds, initial.migratedLegacyProjectIds);
+});
+
 test('a dataset round trip preserves the last suite view and warm Runs presentation', () => {
   const scope = { projectId: 'project-a' as ProjectId, suiteId: 'suite-a' };
   const retainedRun = run('run-a', 'completed', 1);

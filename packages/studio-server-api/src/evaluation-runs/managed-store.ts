@@ -16,7 +16,9 @@ import {
 
 import {
   EvaluationLibraryConflictError,
+  applyCheckedEvaluationLibraryMutation,
   mergeEvaluationLibraries,
+  toEvaluationLibrarySyncSnapshot,
   type EvaluationLibrarySnapshot,
   type RivetStudioEvaluationStore,
 } from "./store.js";
@@ -150,6 +152,10 @@ export class PostgresRivetEvaluationStore
     return structuredClone(await this.#readLibrarySnapshot(this.#pool));
   }
 
+  async getLibrarySyncSnapshot() {
+    return toEvaluationLibrarySyncSnapshot(await this.getLibrarySnapshot());
+  }
+
   async getLibrary(): Promise<EvaluationLibrary> {
     const snapshot = await this.getLibrarySnapshot();
     this.#observedLibraryRevision = snapshot.revision;
@@ -173,6 +179,16 @@ export class PostgresRivetEvaluationStore
     });
     this.#observedLibraryRevision = snapshot.revision;
     return snapshot;
+  }
+
+  async mutateLibrary(input: import("@valerypopoff/rivet2-evaluations").EvaluationLibraryMutation) {
+    const snapshot = await this.#withLibraryLock(async (client) => {
+      const current = await this.#readLibrarySnapshot(client);
+      const result = applyCheckedEvaluationLibraryMutation(current.library, input);
+      return result.changed ? this.#writeLibrary(client, current.revision + 1, result.library) : current;
+    });
+    this.#observedLibraryRevision = snapshot.revision;
+    return toEvaluationLibrarySyncSnapshot(snapshot);
   }
 
   async putLibrary(library: EvaluationLibrary): Promise<void> {
