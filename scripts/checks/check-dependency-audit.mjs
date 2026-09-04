@@ -4,7 +4,7 @@ import { resolve } from 'node:path';
 
 const rootDirectory = resolve(import.meta.dirname, '../..');
 const defaultExceptionsPath = resolve(rootDirectory, 'security/dependency-audit-exceptions.json');
-const auditRetryDelayMs = 1_000;
+const auditRetryDelayMs = 10_000;
 const maxAuditAttempts = 2;
 const isYarnReporterLine = (line) => /^\s*➤\s+YN\d{4}:\s/u.test(line);
 const hasPotentialAuditJsonRows = (text) => text.split(/\r?\n/).some((line) => line.trimStart().startsWith('{'));
@@ -48,11 +48,18 @@ const runAudit = async () => {
   for (let attempt = 1; attempt <= maxAuditAttempts; attempt += 1) {
     result = spawnSync(
       process.execPath,
-      ['.yarn/releases/yarn-4.17.1.cjs', 'npm', 'audit', '--all', '--recursive', '--json'],
+      ['.yarn/releases/yarn-4.17.1.cjs', 'npm', 'audit', '--all', '--recursive', '--json', '--no-deprecations'],
       {
         cwd: rootDirectory,
         encoding: 'utf8',
         maxBuffer: 64 * 1024 * 1024,
+        // The audit excludes non-security deprecation annotations, so this
+        // security-only bulk request does not fan out into metadata requests
+        // for every package in the dependency graph.
+        env: {
+          ...process.env,
+          YARN_HTTP_TIMEOUT: process.env.YARN_HTTP_TIMEOUT ?? '120000',
+        },
       },
     );
 
@@ -60,7 +67,7 @@ const runAudit = async () => {
     if (!isTransientAuditFailure(result) || attempt === maxAuditAttempts) break;
 
     console.warn(
-      `Dependency audit attempt ${attempt} timed out while contacting the registry; retrying once in ${auditRetryDelayMs}ms.`,
+      `Dependency audit attempt ${attempt} timed out while contacting the registry; retrying once in ${auditRetryDelayMs / 1000}s.`,
     );
     await waitForAuditRetry();
   }

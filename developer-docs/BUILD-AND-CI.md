@@ -684,7 +684,11 @@ then is accepted only when at least one audit finding row was parsed, so a
 reporter-only or transport failure cannot look like a clean audit. It fails on every
 critical finding and every unreviewed high finding. A single retry is reserved for
 known transient registry socket/DNS failures; malformed reports and all other command
-failures surface immediately. Temporary high-severity
+failures surface immediately. The audit child alone defaults to a two-minute HTTP
+timeout (while honoring an explicit `YARN_HTTP_TIMEOUT` override); normal dependency
+installation keeps its existing configuration. It passes Yarn's `--no-deprecations`
+option because deprecation annotations require a metadata request for every audited
+package but do not affect vulnerability findings. Temporary high-severity
 exceptions live in
 [`security/dependency-audit-exceptions.json`](../security/dependency-audit-exceptions.json)
 and must name their package/advisory, normalized direct dependents, scope, reason,
