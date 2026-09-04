@@ -11,7 +11,10 @@ function withFixtures(auditRows, exceptions, callback) {
   const directory = mkdtempSync(resolve(tmpdir(), 'rivet-dependency-audit-'));
   const inputPath = resolve(directory, 'audit.ndjson');
   const exceptionsPath = resolve(directory, 'exceptions.json');
-  writeFileSync(inputPath, `${auditRows.map((row) => JSON.stringify(row)).join('\n')}\n`);
+  writeFileSync(
+    inputPath,
+    `${auditRows.map((row) => (typeof row === 'string' ? row : JSON.stringify(row))).join('\n')}\n`,
+  );
   writeFileSync(exceptionsPath, JSON.stringify(exceptions));
 
   try {
@@ -55,6 +58,28 @@ test('accepts a current exception that matches the audit ancestry', () => {
     execFileSync(process.execPath, [scriptPath, '--input', inputPath, '--exceptions', exceptionsPath], {
       encoding: 'utf8',
     });
+  });
+});
+
+test('ignores Yarn reporter lines around otherwise valid NDJSON audit rows', () => {
+  withFixtures(
+    ['➤ YN0000: Done in 1s', highFinding(), '➤ YN0000: Completed'],
+    exception(),
+    (inputPath, exceptionsPath) => {
+      execFileSync(process.execPath, [scriptPath, '--input', inputPath, '--exceptions', exceptionsPath], {
+        encoding: 'utf8',
+      });
+    },
+  );
+});
+
+test('rejects non-JSON lines that are not Yarn reporter output', () => {
+  withFixtures(['unexpected diagnostic'], { version: 1, exceptions: [] }, (inputPath, exceptionsPath) => {
+    const result = spawnSync(process.execPath, [scriptPath, '--input', inputPath, '--exceptions', exceptionsPath], {
+      encoding: 'utf8',
+    });
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /Unable to parse dependency audit line 1/);
   });
 });
 

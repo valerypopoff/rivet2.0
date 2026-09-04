@@ -213,9 +213,11 @@ that dependency for the same Yarn PnP ESM-loader compatibility reason as the Cor
 CJS and app-executor bundlers.
 The test-style script fails when `test.only`, `it.only`, `describe.only`,
 `suite.only`, or `context.only` calls are present in tracked or untracked
-non-ignored test files. Source-reading tests are controlled by the explicit shrinking
-allowlist in `source-reading-test-allowlist.mjs`: a new source-reading test fails,
-and removing one requires removing its stale allowlist entry. `.skip` remains a
+non-ignored test files. Source-reading candidates are controlled by the explicit shrinking
+allowlist in `source-reading-test-allowlist.mjs`: a new candidate fails, and removing one
+requires removing its stale allowlist entry. The lexical candidate check intentionally also
+catches direct filesystem reads, so a retained black-box fixture or generated-artifact test
+needs a narrow comment explaining why it is not a production-source contract. `.skip` remains a
 visible review queue because several parked runtime optimizations intentionally keep
 characterization cases beside the active suite.
 
@@ -675,8 +677,14 @@ longer requires `dependenciesMeta` or an unplugged package copy.
 
 ### Dependency security
 
-`yarn security:audit` parses Yarn's recursive NDJSON audit output and fails on
-every critical finding and every unreviewed high finding. Temporary high-severity
+`yarn security:audit` parses Yarn's recursive NDJSON audit output, discarding only
+Yarn reporter lines in its `➤ YN####:` format, and fails closed on every other
+non-JSON line. A nonzero audit command exit must first contain JSON finding output,
+then is accepted only when at least one audit finding row was parsed, so a
+reporter-only or transport failure cannot look like a clean audit. It fails on every
+critical finding and every unreviewed high finding. A single retry is reserved for
+known transient registry socket/DNS failures; malformed reports and all other command
+failures surface immediately. Temporary high-severity
 exceptions live in
 [`security/dependency-audit-exceptions.json`](../security/dependency-audit-exceptions.json)
 and must name their package/advisory, normalized direct dependents, scope, reason,

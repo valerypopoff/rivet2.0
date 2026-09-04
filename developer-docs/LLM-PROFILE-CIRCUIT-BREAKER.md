@@ -72,7 +72,8 @@ project-wide Chat headers plus profile headers after case-insensitive merging
 (profile headers win). Credential and header values never appear in the key.
 Provider, model, Custom API, base URL, routing-header, or credential changes
 rotate the identity. Generation parameters and breaker-policy edits retain it. The
-source LLM Profile node title is retained as display-only `profileName` metadata:
+source LLM Profile node title is retained as display-only `profileName` metadata
+when a non-empty string title is available:
 renaming a node updates operator-facing labels without rotating or resetting the
 identity. Serialized/imported profile values are rebound to the current executing project
 while preserving an existing source profile-node ID.

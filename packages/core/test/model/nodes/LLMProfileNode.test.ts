@@ -291,7 +291,16 @@ describe('LLMProfileNodeImpl', () => {
     const result = await createProfileNode().process({}, createRuntimeContext());
 
     assert.ok(result.profile);
-    assert.equal((result.profile.value as Record<string, unknown>).healthIdentity, undefined);
+    const profile = result.profile.value as Record<string, unknown>;
+    assert.equal(profile.healthIdentity, undefined);
+    assert.equal(profile.profileName, undefined);
+  });
+
+  it('omits diagnostic profile metadata when a programmatic node title is malformed', async () => {
+    const result = await createProfileNode().process({}, createRuntimeContext({ node: { title: 42 } }));
+
+    assert.ok(result.profile);
+    assert.equal((result.profile.value as Record<string, unknown>).profileName, undefined);
   });
 
   it('normalizes legacy profile nodes that predate Previous Response ID ownership', async () => {

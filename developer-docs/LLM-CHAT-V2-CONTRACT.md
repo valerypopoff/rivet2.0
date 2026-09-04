@@ -180,7 +180,9 @@ provider request, or JSON-schema response-validation attempt. Each record holds
 provider/model identity, model round, retry index where applicable, outcome,
 observable HTTP status, and original error text where available. Profile records
 also carry their zero-based `profileIndex`. Resolved values from an LLM
-Profile node also carry its trimmed node title as diagnostic `profileName` metadata.
+Profile node carries its trimmed node title as diagnostic `profileName` metadata when
+the executing context provides a non-empty string title; older, programmatic, and
+partially loaded node contexts omit it safely.
 It appears beside provider/model identity in LLM Profile Summary, the editor and published-web-app Response Inspectors,
 and Run Activity; the raw protocol index remains zero-based. The title is never
 sent to the provider and does not affect profile resolution, cache fingerprints, or

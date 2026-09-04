@@ -68,9 +68,17 @@ export const sourceReadingTestAllowlist = new Set([
   'packages/studio-server-api/src/tests/app-settings.test.ts',
   'packages/studio-server-api/src/tests/filesystem-execution-cache.test.ts',
   'packages/studio-server-api/src/tests/filesystem-execution-source.test.ts',
+  // Crash-recovery behavior: reads only the generated project/dataset fixture
+  // to prove that canonical artifacts expose one complete generation.
+  'packages/studio-server-api/src/tests/filesystem-project-transactions.test.ts',
   'packages/studio-server-api/src/tests/fixture-safety.test.ts',
+  // Scheduler behavior: loads the canonical serialized project fixture, not
+  // production source, to create an executable evaluation run shell.
+  'packages/studio-server-api/src/tests/hosted-evaluation-coordinator.test.ts',
   'packages/studio-server-api/src/tests/hosted-project-title.test.ts',
   'packages/studio-server-api/src/tests/kubernetes-managed-release-gate.test.ts',
+  // Capacity-review behavior: reads only its own generated review artifact.
+  'packages/studio-server-api/src/tests/kubernetes-published-capacity-review.test.ts',
   'packages/studio-server-api/src/tests/settings-repository.test.ts',
   'packages/studio-server-api/src/tests/workflow-execution-filesystem.test.ts',
   'packages/studio-server-api/src/tests/workflow-filesystem-tree.test.ts',
