@@ -102,7 +102,15 @@ Useful variants:
 | `yarn studio-server:prod`         | Pull and run the published images                                                          |
 | `yarn studio-server:prod:restart` | Recreate containers from already-local images after an environment-only change             |
 | `yarn studio-server:prod:custom`  | Build production images from the current monorepo commit and run them                      |
-| `yarn studio-server:clean`        | Remove unused Docker containers, networks, images, and build cache without pruning volumes |
+| `yarn studio-server:clean`        | Show a host-wide Docker cleanup preflight, then require explicit authorization before pruning non-volume resources |
+
+`yarn studio-server:clean` is a recovery tool for the whole selected Docker host, not only this Compose project. Start with:
+
+```bash
+yarn studio-server:clean -- --dry-run
+```
+
+The normal command prints the Docker context, endpoint, concise disk summary, and counted resource inventories (the first 20 rows of each); Docker decides which unused networks and images are eligible only at prune time. An interactive terminal then requires the exact `PRUNE` confirmation. Automation must pass `--confirm-host-prune`. It refuses a remote Docker endpoint unless both `--allow-remote-docker-host` and `--confirm-host-prune` are present. It preserves Docker volumes and bind-mounted workflow/recording paths, but it can remove stopped containers and their logs, unused images, unused custom networks, and builder cache belonging to any project on that Docker host.
 
 For direct diagnostics:
 
