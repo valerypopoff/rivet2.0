@@ -23,6 +23,19 @@ See also: [Wrapper ManagedCodeRunner Speed Plan](./wrapper-managed-code-runner-s
   - downloads the pinned Helm release into `.data/tools/helm/`
   - use this when you want Kubernetes verification or the local Kubernetes launcher to work without a system Helm install
 
+## Versioning
+
+The five private `@valerypopoff/rivet-studio-server-*` workspaces form one
+Studio Server product and use one lockstep package version. Their current
+version is `1.9.0`. `yarn studio-server:verify:repo-structure` rejects version
+drift between the API, web, executor, shared, and bootstrap manifests.
+
+These private package versions are release metadata, not npm publication or
+container selectors. Studio Server images are built together from one Git
+commit and promoted by immutable OCI digest. The Helm chart's `version` and
+`appVersion` are separate chart metadata and must not be changed merely to
+bump the private workspace manifests.
+
 ## Main commands
 
 The command contract is deliberate: `yarn dev` starts the Rivet desktop/editor,

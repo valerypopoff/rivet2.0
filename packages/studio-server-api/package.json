@@ -1,6 +1,6 @@
 {
   "name": "@valerypopoff/rivet-studio-server-api",
-  "version": "1.8.6",
+  "version": "1.9.0",
   "private": true,
   "type": "module",
   "scripts": {

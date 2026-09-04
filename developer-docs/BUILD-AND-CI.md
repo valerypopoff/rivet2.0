@@ -1065,15 +1065,22 @@ manifests together:
 `packages/core/package.json`, `packages/node/package.json`,
 `packages/evaluations/package.json`, and `packages/cli/package.json`.
 
+This lockstep rule is a repository publishing contract, not a general npm
+requirement. The publisher emits the four packages as one compatible release
+family and rewrites internal `workspace:` dependencies to `^<family version>`.
+Desktop, app-executor, documentation, and private Studio Server versions are
+separate release tracks and must not be forced to match the public npm family.
+
 - patch releases: `2.0.1`, `2.0.2`, etc. for compatible fixes
 - minor releases: `2.1.0`, `2.2.0`, etc. for compatible features
 - prereleases: `2.1.0-beta.1`, etc. publish with the `next` dist-tag unless `NPM_DIST_TAG` overrides it
 
 The publish script refuses to publish if the four package versions disagree, if
 the version is not semver, or if the major version is not `2`. It also checks
-npm before publishing each package and skips package versions that are already
-present in the registry, so re-running the same main-branch workflow does not
-turn an already-published package into a hard failure.
+that the CLI Dockerfile's local-build fallback matches the lockstep package
+version. It checks npm before publishing each package and skips package versions
+that are already present in the registry, so re-running the same main-branch
+workflow does not turn an already-published package into a hard failure.
 
 ### npm trusted publishing
 
