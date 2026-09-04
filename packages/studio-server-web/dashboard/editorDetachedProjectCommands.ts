@@ -1,4 +1,5 @@
 import { getError, type Project } from '@valerypopoff/rivet2-core';
+import { createLocalProjectExecutorMode } from '../../app/src/utils/projectExecutorMode.js';
 
 import { postMessageToDashboard } from '../../studio-server-shared/editor-bridge';
 import { getWorkflowRecordingVirtualProjectPath } from '../../studio-server-shared/workflow-recording-types';
@@ -46,6 +47,7 @@ export async function handleOpenRecordingCommand(
     const replacedPath = command.replaceCurrent ? context.getLoadedProject().path : '';
     context.recording.recordingByProjectPathRef.current.set(virtualProjectPath, loadedRecording);
     const openResult = await context.getOpenProject()(virtualProjectPath, {
+      executorMode: createLocalProjectExecutorMode(context.getSelectedExecutor()),
       replaceCurrent: Boolean(command.replaceCurrent),
       preferredGraphId: getRecordingStartGraphId(loadedRecording.recorder),
     });

@@ -225,6 +225,16 @@ export type EvaluationLibrarySyncSnapshot = {
   resourceVersions: EvaluationLibraryResourceVersions;
 };
 
+/**
+ * A validated, external change token for the shared evaluation library.
+ * `epoch` identifies one SSE generation so reconnects can require a resync
+ * even when a server's revision counter has not advanced.
+ */
+export type EvaluationLibraryInvalidation = {
+  epoch: string;
+  revision: number;
+};
+
 /** The durable value for one independently synchronized library resource. */
 export type EvaluationLibrarySuiteBundle = {
   suite: EvaluationSuite;
@@ -301,7 +311,7 @@ export type EvaluationLibraryConflictResolution = {
 export type EvaluationLibrarySyncStore = {
   getLibrarySyncSnapshot(): Promise<EvaluationLibrarySyncSnapshot>;
   mutateLibrary(input: EvaluationLibraryMutation): Promise<EvaluationLibrarySyncSnapshot>;
-  subscribeLibraryInvalidation?(listener: () => void): () => void;
+  subscribeLibraryInvalidation?(listener: (invalidation: EvaluationLibraryInvalidation) => void): () => void;
   /** An unresolved hosted save requiring an explicit user decision. */
   subscribeLibrarySyncIssue?(listener: (issue: EvaluationLibrarySyncIssue | undefined) => void): () => void;
   resolveLibraryConflict?(input: EvaluationLibraryConflictResolution): Promise<EvaluationLibrary>;

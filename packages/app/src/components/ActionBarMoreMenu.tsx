@@ -3,6 +3,7 @@ import { type FC, type MouseEvent } from 'react';
 import type { ProjectId } from '@valerypopoff/rivet2-core';
 import { useLoadRecording } from '../hooks/useLoadRecording';
 import { useExecutorSessionState } from '../hooks/useExecutorSession';
+import { getLoadedRecordingForProject, loadedRecordingState } from '../state/execution';
 import { getExecutorOptions, selectedExecutorState } from '../state/settings';
 import { useExecutorSessionHostConfig } from '../providers/ExecutorSessionContext.js';
 import { isRivetAppHostCapabilityEnabled, useRivetAppHostUiConfig } from '../providers/HostUiConfigContext.js';
@@ -28,7 +29,7 @@ const moreMenuStyles = css`
     font-size: var(--ui-font-size-base);
 
     .executor-title,
-    .select-executor-remote {
+    .executor-status {
       color: var(--grey-lighter);
       font-size: var(--ui-font-size-base);
       line-height: 1.25;
@@ -36,7 +37,7 @@ const moreMenuStyles = css`
       align-items: center;
     }
 
-    .select-executor-remote {
+    .executor-status {
       font-weight: 700;
       min-height: calc(32px * var(--ui-font-scale));
     }
@@ -67,6 +68,10 @@ export const ActionBarMoreMenu: FC<{
   const setDebuggerPanelAnchor = useSetAtom(debuggerPanelAnchorState);
   const [selectedExecutor, setSelectedExecutor] = useAtom(selectedExecutorState);
   const currentProject = useAtomValue(projectState);
+  const loadedRecording = getLoadedRecordingForProject(
+    useAtomValue(loadedRecordingState),
+    currentProject.metadata.id,
+  );
   const setProjects = useSetAtom(projectsState);
   const { loadRecording } = useLoadRecording();
   const hostUiConfig = useRivetAppHostUiConfig();
@@ -114,8 +119,10 @@ export const ActionBarMoreMenu: FC<{
     <PopupMenu extraCss={moreMenuStyles}>
       <div className="menu-item executor">
         <span className="executor-title">Executor</span>
-        {isActuallyRemoteDebugging ? (
-          <span className="select-executor-remote">Remote</span>
+        {loadedRecording ? (
+          <span className="executor-status">Not used during recording playback</span>
+        ) : isActuallyRemoteDebugging ? (
+          <span className="executor-status">Remote</span>
         ) : (
           <SegmentedEditor
             value={selectedExecutor}

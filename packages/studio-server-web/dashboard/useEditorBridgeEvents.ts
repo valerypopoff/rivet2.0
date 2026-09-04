@@ -17,7 +17,7 @@ type UseEditorBridgeEventsOptions = {
   activeWorkflowProjectPath: string;
   editorReady: boolean;
   focusEditorFrame: () => void;
-  handleSaveProject: () => void;
+  handleSaveProject: (source?: 'shortcut') => void;
   iframeRef: RefObject<HTMLIFrameElement | null>;
   onActiveWorkflowProjectPathChange: (path: string) => void;
   onActiveProjectUnsavedChangesChange: (path: string, hasUnsavedChanges: boolean) => void;
@@ -126,7 +126,7 @@ export function useEditorBridgeEvents(options: UseEditorBridgeEventsOptions) {
       }
 
       if (!event.repeat) {
-        handleSaveProject();
+        handleSaveProject('shortcut');
       }
     };
 

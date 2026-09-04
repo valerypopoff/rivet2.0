@@ -16,6 +16,8 @@ import { useEnvironmentProvider, useEvaluationStore } from '../providers/Provide
 import { EvaluationLibrarySyncDialog } from './evaluations/EvaluationLibrarySyncDialog.js';
 import { evaluationLibraryState, evaluationLibrarySyncIssueState } from '../state/evaluations.js';
 import { handleError } from '../utils/errorHandling.js';
+import { describeEvaluationLibraryRemoteChange } from '../utils/evaluationLibraryRemoteChange.js';
+import { toast } from 'react-toastify';
 
 // Storage-backed atoms read synchronously on mount, so this subtree must stay behind the
 // async hybrid-storage bootstrap or settings/theme atoms can lock in default values.
@@ -80,35 +82,84 @@ const InitializedRivetApp = ({ children }: { children?: ReactNode }) => {
     if (!evaluationStore.subscribeLibraryInvalidation || !evaluationStore.getLibrarySyncSnapshot) return;
     let disposed = false;
     let refreshInFlight = false;
-    let refreshPending = false;
+    let retryTimer: ReturnType<typeof setTimeout> | undefined;
+    let retryCount = 0;
+    let pending:
+      | {
+          epoch: string;
+          revision: number;
+        }
+      | undefined;
+    let notificationBaseline: typeof evaluationLibrary | undefined;
+
+    const retryDelay = () => Math.min(1_000 * 2 ** retryCount++, 30_000);
+    const scheduleRetry = () => {
+      retryTimer ??= setTimeout(() => {
+        retryTimer = undefined;
+        refresh();
+      }, retryDelay());
+    };
+    const shouldRefreshAgain = (target: { epoch: string; revision: number }, revision: number): boolean =>
+      pending !== undefined && (pending.epoch !== target.epoch || pending.revision > revision);
+
     const refresh = () => {
       if (disposed) return;
-      refreshPending = true;
       if (refreshInFlight) return;
+      if (!pending) return;
       refreshInFlight = true;
       void (async () => {
-        while (refreshPending && !disposed) {
-          refreshPending = false;
-          try {
-            await evaluationStore.getLibrarySyncSnapshot!();
-            const library = await evaluationStore.getLibrary();
-            if (disposed) return;
-            // This is a server-orchestrated rebase, not a user edit. Advance
-            // the observer before setting the atom so it cannot trigger a
-            // redundant persistence write.
-            lastObservedLibrary.current = library;
-            setEvaluationLibrary(library);
-          } catch (error) {
-            console.warn('Failed to refresh the evaluation library:', error);
+        const target = pending!;
+        try {
+          const snapshot = await evaluationStore.getLibrarySyncSnapshot!();
+          const library = await evaluationStore.getLibrary();
+          if (disposed) return;
+          // This is a server-orchestrated rebase, not a user edit. Advance
+          // the observer before setting the atom so it cannot trigger a
+          // redundant persistence write.
+          lastObservedLibrary.current = library;
+          setEvaluationLibrary(library);
+          if (!shouldRefreshAgain(target, snapshot.revision)) {
+            pending = undefined;
+            retryCount = 0;
+            if (retryTimer) {
+              clearTimeout(retryTimer);
+              retryTimer = undefined;
+            }
+            if (notificationBaseline && evaluationLibrarySyncIssueId.current === undefined) {
+              const message = describeEvaluationLibraryRemoteChange(notificationBaseline, library);
+              if (message) toast.info(message, { toastId: `evaluation-library-${target.epoch}-${target.revision}` });
+            }
+            notificationBaseline = undefined;
+          } else {
+            // A newly notified revision may not yet be visible through a
+            // replica. Keep the token, but never turn that lag into a tight
+            // request loop.
+            scheduleRetry();
           }
+        } catch (error) {
+          console.warn('Failed to refresh the evaluation library:', error);
+          scheduleRetry();
         }
       })().finally(() => {
         refreshInFlight = false;
+        if (!disposed && pending && retryTimer === undefined) refresh();
       });
     };
-    const unsubscribe = evaluationStore.subscribeLibraryInvalidation(refresh);
+    const unsubscribe = evaluationStore.subscribeLibraryInvalidation((invalidation) => {
+      if (disposed) return;
+      if (
+        pending === undefined ||
+        pending.epoch !== invalidation.epoch ||
+        invalidation.revision > pending.revision
+      ) {
+        pending = { epoch: invalidation.epoch, revision: invalidation.revision };
+      }
+      notificationBaseline ??= lastObservedLibrary.current;
+      refresh();
+    });
     return () => {
       disposed = true;
+      if (retryTimer) clearTimeout(retryTimer);
       unsubscribe();
     };
   }, [evaluationStore, setEvaluationLibrary]);

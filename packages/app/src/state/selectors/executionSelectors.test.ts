@@ -933,7 +933,7 @@ describe('executionSelectors', () => {
     );
   });
 
-  test('editor graph runs are disabled while an external remote debugger is active', () => {
+  test('editor graph runs are disabled while an external remote debugger is active unless playback is loaded', () => {
     assert.equal(
       canRunGraphFromEditor({
         selectedExecutor: 'browser',
@@ -964,7 +964,7 @@ describe('executionSelectors', () => {
           target: { type: 'external-debugger', url: 'ws://debugger.example/latest' },
         },
       }),
-      false,
+      true,
     );
 
     assert.equal(
@@ -1027,7 +1027,7 @@ describe('executionSelectors', () => {
           target: { type: 'external-debugger', url: 'ws://debugger.example/latest' },
         },
       }),
-      { type: 'external-debugger-ready' },
+      { type: 'recording-playback-ready' },
     );
 
     assert.deepEqual(

@@ -1675,6 +1675,16 @@ recording load/unload while an execution is active, which keeps the playback
 override stable for the lifetime of the run and prevents Abort/Pause/Resume from
 switching executor targets mid-run.
 
+Recording playback never changes the selected live Browser/Node executor or
+the source tab's executor metadata. A newly opened virtual replay tab receives
+that local mode before it loads, rather than falling back to the default executor.
+While the active tab owns a loaded recording, playback takes precedence over a
+retained Remote Debugger connection in executor-state selection and the
+ActionBar More menu replaces the Browser/Node/Remote status with `Not used
+during recording playback`; unloading restores the unchanged local executor
+UI. This is presentation only: it neither disconnects a live session nor
+changes the local replay route.
+
 A loaded recording is also owned by the project tab from which it was selected.
 Switching to another open project preserves that recording for its owner, but
 must not make the other project's ActionBar, executor selection, canvas border,

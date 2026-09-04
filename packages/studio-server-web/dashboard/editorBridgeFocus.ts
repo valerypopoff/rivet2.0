@@ -1,3 +1,5 @@
+import type { OverlayKey } from '../../app/src/state/ui.js';
+
 const EDITOR_CANVAS_SELECTOR = '.node-canvas';
 const CANVAS_FOCUS_PRESERVE_SELECTOR =
   'input, textarea, select, button, [contenteditable="true"], [contenteditable=""], [role="textbox"]';
@@ -7,6 +9,12 @@ export const isSaveShortcutEvent = (event: KeyboardEvent) =>
   !event.altKey &&
   !event.shiftKey &&
   (event.code === 'KeyS' || event.key.toLowerCase() === 's');
+
+/** Evaluation definitions persist independently of the open project. */
+export const shouldSkipHostedShortcutProjectSave = (
+  source: 'shortcut' | undefined,
+  openOverlay: OverlayKey | undefined,
+): boolean => source === 'shortcut' && openOverlay === 'evaluations';
 
 export const isEditorFindShortcutEvent = (event: KeyboardEvent) =>
   (event.ctrlKey || event.metaKey) &&

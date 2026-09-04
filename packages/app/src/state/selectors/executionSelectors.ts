@@ -277,6 +277,12 @@ export function getExecutorProductState(options: {
 }): ExecutorProductState {
   const { hasLoadedRecording = false, selectedExecutor, session } = options;
 
+  // Playback always uses the local executor path. A retained Remote Debugger
+  // session must not turn its controls back into a live-execution UI.
+  if (hasLoadedRecording) {
+    return { type: 'recording-playback-ready' };
+  }
+
   if (session.target?.type === 'external-debugger') {
     if (session.status === 'ready' && session.capabilities.canSendRun) {
       return { type: 'external-debugger-ready' };
@@ -287,10 +293,6 @@ export function getExecutorProductState(options: {
     }
 
     return { type: 'external-debugger-connecting' };
-  }
-
-  if (hasLoadedRecording) {
-    return { type: 'recording-playback-ready' };
   }
 
   if (selectedExecutor === 'nodejs') {

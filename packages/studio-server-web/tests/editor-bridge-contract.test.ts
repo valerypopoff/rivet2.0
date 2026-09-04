@@ -1,7 +1,32 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import test from 'node:test';
 
 import { isDashboardToEditorCommand, isEditorToDashboardEvent } from '../../studio-server-shared/editor-bridge';
+
+const workflowRecordingBridgeSource = readFileSync(
+  new URL('../dashboard/useWorkflowRecordingBridge.ts', import.meta.url),
+  'utf8',
+);
+
+test('recording activation preserves the selected executor', () => {
+  assert.doesNotMatch(workflowRecordingBridgeSource, /selectBrowserExecutor/);
+  assert.match(workflowRecordingBridgeSource, /setLoadedRecording\(\{ \.\.\.loadedRecording, projectId \}\);/);
+});
+
+test('recording opens give a new replay tab the active local executor mode', () => {
+  const detachedProjectCommandsSource = readFileSync(
+    new URL('../dashboard/editorDetachedProjectCommands.ts', import.meta.url),
+    'utf8',
+  );
+  const openWorkflowProjectSource = readFileSync(
+    new URL('../dashboard/useOpenWorkflowProject.ts', import.meta.url),
+    'utf8',
+  );
+
+  assert.match(detachedProjectCommandsSource, /createLocalProjectExecutorMode\(context\.getSelectedExecutor\(\)\)/);
+  assert.match(openWorkflowProjectSource, /executorMode: options\.executorMode/);
+});
 
 test('open project bridge command accepts optional title and preview flags', () => {
   assert.equal(
@@ -42,6 +67,12 @@ test('open project bridge command accepts optional title and preview flags', () 
     }),
     false,
   );
+});
+
+test('save-project bridge command accepts only the optional shortcut source', () => {
+  assert.equal(isDashboardToEditorCommand({ type: 'save-project' }), true);
+  assert.equal(isDashboardToEditorCommand({ type: 'save-project', source: 'shortcut' }), true);
+  assert.equal(isDashboardToEditorCommand({ type: 'save-project', source: 'button' }), false);
 });
 
 test('project-tree rename request event is accepted only by its exact bridge type', () => {

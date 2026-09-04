@@ -255,18 +255,25 @@ test('workspace host exposes transient opening project tabs for hosted wrappers'
   assert.match(hostSource, /RivetOpeningProjectTabOptions/);
 });
 
-test('workspace host carries existing project executor mode through hosted snapshot opens', () => {
+test('workspace host preserves existing executor mode and accepts an initial mode for new hosted snapshot tabs', () => {
+  const workspaceHostTypesSource = source('workspaceHost', 'types.ts');
   const workspaceHostOpenSource = source('workspaceHost', 'useWorkspaceHostOpenProject.ts');
 
+  assert.match(workspaceHostTypesSource, /executorMode\?: ProjectExecutorMode;/);
   assert.match(workspaceHostOpenSource, /const store = useStore\(\);/);
   assert.match(
     workspaceHostOpenSource,
     /const existingExecutorMode = store\.get\(projectsState\)\.openedProjects\[projectId\]\?\.executorMode;/,
   );
-  assert.match(workspaceHostOpenSource, /executorMode: existingExecutorMode,/);
+  assert.match(workspaceHostOpenSource, /const executorMode = existingExecutorMode \?\? options\.executorMode;/);
+  assert.match(workspaceHostOpenSource, /executorMode,/);
   assert.match(
     workspaceHostOpenSource,
-    /const nextExecutorMode = previousProjects\.openedProjects\[projectId\]\?\.executorMode \?\? existingExecutorMode;/,
+    /openProjectSnapshot\(snapshot, \{ \.\.\.options, replaceCurrent: true \}\)/,
+  );
+  assert.match(
+    workspaceHostOpenSource,
+    /const nextExecutorMode = previousProjects\.openedProjects\[projectId\]\?\.executorMode \?\? executorMode;/,
   );
   assert.match(workspaceHostOpenSource, /\.\.\.\(nextExecutorMode \? \{ executorMode: nextExecutorMode \} : \{\}\),/);
 });

@@ -491,6 +491,9 @@ test.describe('Run recordings modal', () => {
   });
 
   test('deletes a run and opens replay through serialized recorder APIs', async ({ page }) => {
+    await page.addInitScript(() => {
+      localStorage.setItem('recoil-persist', JSON.stringify({ defaultExecutor: 'nodejs' }));
+    });
     const { recordingFetches, replayProjectFetches, runFetches } = await installRunRecordingRoutes(page);
     const modal = await openLatestFlowRecordings(page);
     await choosePageSizeTen(modal);
@@ -511,6 +514,16 @@ test.describe('Run recordings modal', () => {
     const editorFrame = page.frameLocator('iframe.dashboard-editor-frame');
     await expect(editorFrame.getByRole('button', { name: 'Play Recording', exact: true })).toBeVisible();
     await expect(editorFrame.getByRole('button', { name: 'Unload Recording', exact: true })).toBeVisible();
+    await editorFrame.locator('.more-menu').click();
+    await expect(editorFrame.getByText('Not used during recording playback', { exact: true })).toBeVisible();
+    await expect(editorFrame.getByRole('group', { name: 'Executor mode' })).toHaveCount(0);
+    await editorFrame.locator('.more-menu').click();
+    await editorFrame.getByRole('button', { name: 'Unload Recording', exact: true }).click();
+    await expect(editorFrame.getByRole('button', { name: 'Play Recording', exact: true })).toHaveCount(0);
+    await editorFrame.locator('.more-menu').click();
+    const executorMode = editorFrame.getByRole('group', { name: 'Executor mode' });
+    await expect(executorMode).toBeVisible();
+    await expect(executorMode.getByRole('button', { name: 'Node', exact: true })).toHaveAttribute('aria-pressed', 'true');
     await expect(modal).toBeHidden();
     await expect(page.getByText('Found: 11')).toBeVisible();
 

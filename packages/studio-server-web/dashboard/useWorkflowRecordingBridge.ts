@@ -39,22 +39,19 @@ export function useWorkflowRecordingBridge({
   loadedProjectPath,
   openedProjectPaths,
   setLoadedRecording,
-  selectBrowserExecutor,
 }: {
   currentProjectId?: ProjectId;
   loadedProjectPath: string | null;
   openedProjectPaths: readonly string[];
   setLoadedRecording: (recording: SetStateAction<LoadedRecording | null>) => void;
-  selectBrowserExecutor: () => void;
 }) {
   const recordingByProjectPathRef = useRef(new Map<string, LoadedWorkflowRecording>());
   const activateWorkflowRecording = useCallback((
     loadedRecording: LoadedWorkflowRecording,
     projectId: ProjectId,
   ) => {
-    selectBrowserExecutor();
     setLoadedRecording({ ...loadedRecording, projectId });
-  }, [selectBrowserExecutor, setLoadedRecording]);
+  }, [setLoadedRecording]);
 
   useEffect(() => {
     const openPaths = new Set(openedProjectPaths);

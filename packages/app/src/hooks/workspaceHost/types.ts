@@ -5,6 +5,7 @@ import type { ProjectTabUiState } from '../../state/projectTabUi.js';
 import type { OpeningProjectTabId } from '../../state/openingProjectTabs.js';
 import type { ProjectPathMovesInput } from '../../utils/openedProjects.js';
 import type { ProjectMetadataPatch } from '../../utils/projectMetadataUpdates.js';
+import type { ProjectExecutorMode } from '../../utils/projectExecutorMode.js';
 
 export type RivetProjectSnapshotInput = {
   project: Project | Omit<Project, 'data'>;
@@ -32,6 +33,8 @@ export type RivetProjectCompareOptions = {
 export type RivetProjectTabUiState = ProjectTabUiState;
 
 export type RivetProjectOpenOptions = {
+  /** Initial runtime selection for a newly opened virtual project tab. */
+  executorMode?: ProjectExecutorMode;
   tabUi?: RivetProjectTabUiState;
 };
 
