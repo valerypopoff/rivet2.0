@@ -249,6 +249,44 @@ test('transactional authoring rejects a Data Bus relay cycle before accepting th
   );
 });
 
+test('Subgraph output pruning is an independently authored, default-off boolean setting', () => {
+  const inputProject = project();
+  const { catalog } = setup(inputProject);
+  const createSubgraph = (id: string) =>
+    catalog.createNode({
+      authoringChoiceId: 'registered:subGraph',
+      allocatedNodeId: id as NodeId,
+      project: inputProject,
+      settings: { graphId: childGraphId },
+    });
+  const first = createSubgraph('first');
+  const second = createSubgraph('second');
+  assert.equal((first.data as Record<string, unknown>).skipUnusedOutputs, false);
+  const optimized = catalog.applyNodeSettings({
+    node: first,
+    project: inputProject,
+    settings: { skipUnusedOutputs: true },
+  });
+  assert.equal(catalog.projectNodeSafeSettings(optimized, inputProject)?.skipUnusedOutputs, true);
+  assert.equal(catalog.projectNodeSafeSettings(first, inputProject)?.skipUnusedOutputs, false);
+  assert.equal(catalog.projectNodeSafeSettings(second, inputProject)?.skipUnusedOutputs, false);
+
+  const descriptor = catalog
+    .getEntry('registered:subGraph')!
+    .settings.find((setting) => setting.key === 'skipUnusedOutputs');
+  assert.equal(descriptor?.valueKind, 'boolean');
+  assert.match(descriptor!.description, /side effects and errors/);
+  assert.throws(
+    () =>
+      catalog.applyNodeSettings({
+        node: first,
+        project: inputProject,
+        settings: { skipUnusedOutputs: 'true' },
+      }),
+    /boolean/i,
+  );
+});
+
 test('tool-delegation built-ins expose only the safe settings needed for auto-continuation', () => {
   const inputProject = project();
   const { catalog, semantics } = setup(inputProject);

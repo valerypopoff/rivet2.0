@@ -27,7 +27,15 @@ The Subgraph Node also has an optional error output. If enabled, any errors that
 
 ## Execution behavior
 
-When a Subgraph node runs, Rivet currently executes the full child graph. Child branches that produce unconnected Subgraph outputs still run, so side effects such as global variable writes, dataset writes, events, audio playback, aborts, external calls, HTTP/LLM calls, and Code/Expression side effects still happen. Errors in those branches can still fail the Subgraph unless **Use Error Output** catches them.
+By default, a Subgraph node executes the full child graph. Child branches that produce unconnected outputs still run, including their side effects and errors.
+
+Enable **Skip unused outputs** on a Subgraph node to run only branches needed by its connected outputs. This setting belongs to that particular Subgraph node, so other calls to the same graph keep their own settings. Connections to disabled or missing consumers do not require an output; a conditional consumer still counts even if it later decides not to run. Running to a downstream node considers only outputs needed by that run.
+
+Skipped branches also skip their side effects and errors, including global or stored-value writes, dataset changes, events, async work, and HTTP/LLM calls. Use this option when the branches are independent. Rivet cannot infer a dependency through shared globals, storage, events, or arbitrary Code. Work shared with a required output still runs; a single LLM or Code invocation that produces several values is not split into smaller computations.
+
+Unused boundary outputs are returned as excluded values. A requested output that produces no value stays missing, allowing downstream nodes to use their normal input defaults; an explicitly excluded requested value stays excluded. If none are needed, Rivet skips the child graph entirely. Runtime metrics reflect the work performed, with zero synthetic cost/duration for a skipped call; a Graph Output explicitly named `cost` or `duration` keeps ownership of its value instead of being replaced by a metric.
+
+Rivet still runs the **full child graph** when you use **Run to here** on the Subgraph itself, when its partial-output forwarding is enabled, or when **Use Error Output** is enabled and the Error output has an active connection. These exceptions preserve inspection, streaming, and whole-graph error handling without changing the saved setting. Referenced Graph Alias, Call Graph, Loop Until, Cron, and tool graph calls are unaffected.
 
 <Tabs
   defaultValue="inputs"
@@ -65,10 +73,11 @@ The Subgraph node output view can also show runtime metrics such as duration and
 
 ## Editor Settings
 
-| Setting          | Description                                                                                                                                                                                      | Default Value | Use Input Toggle | Input Data Type |
-| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------- | ---------------- | --------------- |
-| Graph            | The graph to execute when this node is ran. Must be a graph in the same project. This can be changed from the node body on the canvas or from this settings panel.                              | (required)    | No               | N/A             |
-| Use Error Output | If enabled, then the Subgraph node will not fail, but instead any error will appear in the `Error` output port of the node. If disabled, the entire Subgraph node will error if the call errors. | False         | No               | N/A             |
+| Setting             | Description                                                                                                                                                                                                                                                 | Default Value | Use Input Toggle | Input Data Type |
+| ------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------- | ---------------- | --------------- |
+| Graph               | The graph to execute when this node is ran. Must be a graph in the same project. This can be changed from the node body on the canvas or from this settings panel. When output pruning is enabled, the canvas body shows it directly beneath this selector. | (required)    | No               | N/A             |
+| Use Error Output    | If enabled, then the Subgraph node will not fail, but instead any error will appear in the `Error` output port of the node. If disabled, the entire Subgraph node will error if the call errors.                                                            | False         | No               | N/A             |
+| Skip unused outputs | Run only branches needed by connected outputs; skipped work also skips its side effects and errors. Full execution is retained for direct Run to here, partial-output forwarding, and a connected Error output.                                             | False         | No               | N/A             |
 
 </TabItem>
 

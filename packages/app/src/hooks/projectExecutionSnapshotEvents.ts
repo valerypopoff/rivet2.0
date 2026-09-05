@@ -33,6 +33,7 @@ import {
   collectReplacedRefIds,
   mergeNodeRunDataForProcess,
   prepareNodeRunDataForStorage,
+  removeUserInputQuestionsForProcess,
 } from './useExecutionDataFlow.js';
 import { applyProcessEventToRunActivityJournal } from '../features/runActivity/runActivityProcessEvents.js';
 import { createRunActivityJournal } from '../features/runActivity/runActivityJournal.js';
@@ -456,6 +457,13 @@ function setDataForNodeInSnapshot(
   const refIdsToDelete: string[] = [];
 
   const nextSnapshot = produce(snapshot, (draft) => {
+    if (data.status && data.status.type !== 'running') {
+      draft.userInputQuestions = removeUserInputQuestionsForProcess(
+        draft.userInputQuestions ?? {},
+        event.node.id,
+        event.processId,
+      );
+    }
     draft.lastRunDataByNode[event.node.id] ??= [];
 
     const existingProcess = draft.lastRunDataByNode[event.node.id]!.find(

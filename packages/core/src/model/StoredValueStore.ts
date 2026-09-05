@@ -125,9 +125,11 @@ export class RivetStoredValueController {
       });
     });
 
+    // Observe the registered wait before checking cancellation again, or an
+    // abort while the key lock releases can orphan its rejected promise.
+    const value = waiterPromise === undefined ? immediateValue! : await waiterPromise;
     signal?.throwIfAborted();
-    if (immediateValue !== undefined) return immediateValue;
-    return await waiterPromise!;
+    return value;
   }
 
   async #getUnlocked(key: string): Promise<RivetStoredValueReadResult> {

@@ -37,7 +37,13 @@ export function applyFrozenGraphBoundaryEffects(
     const outputId = (node.data as { id?: string } | undefined)?.id;
     const valueOutput = outputValues['valueOutput' as PortId];
 
-    if (outputId && valueOutput) {
+    // Duplicate Graph Outputs share the ordinary first-non-excluded winner,
+    // whether a producer is computed or replayed from frozen outputs.
+    if (
+      outputId &&
+      valueOutput &&
+      (graphOutputs[outputId] == null || graphOutputs[outputId]?.type === 'control-flow-excluded')
+    ) {
       graphOutputs[outputId] = valueOutput;
     }
 

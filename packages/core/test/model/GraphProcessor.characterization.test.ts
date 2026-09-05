@@ -3,6 +3,7 @@ import { describe, it } from 'node:test';
 import {
   GraphProcessor,
   NodeImpl,
+  SubGraphNodeImpl,
   createBuiltInRegistry,
   nodeDefinition,
   type ChartNode,
@@ -24,13 +25,13 @@ import {
   type ProjectId,
   type ScalarOrArrayDataValue,
 } from '../../src/index.js';
-import { GRAPH_BOUNDARY_OUTPUT_DEMAND_OPTIMIZATION_ENABLED } from '../../src/model/GraphBoundaryCache.js';
 import { testProcessContext } from '../testUtils.js';
 
 type CharacterizationNode = ChartNode<'graphProcessorCharacterization', CharacterizationNodeData>;
 
 type CharacterizationNodeData = {
   value?: DataValue;
+  cost?: number;
   delayMs?: number;
   throwMessage?: string;
   partialValues?: DataValue[];
@@ -44,7 +45,6 @@ type CharacterizationNodeData = {
 };
 
 const graphId = 'graph-processor-characterization' as GraphId;
-const demandOptimizationIt = GRAPH_BOUNDARY_OUTPUT_DEMAND_OPTIMIZATION_ENABLED ? it : it.skip;
 
 function waitFor(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -127,6 +127,7 @@ class CharacterizationNodeImpl extends NodeImpl<CharacterizationNode> {
 
     return {
       output: this.data.value ?? inputs['input' as PortId] ?? { type: 'string', value: this.id },
+      ...(this.data.cost == null ? {} : { cost: { type: 'number' as const, value: this.data.cost } }),
     };
   }
 }
@@ -216,11 +217,11 @@ function createProcessor(graph: NodeGraph, extraGraphs: NodeGraph[] = []): Graph
 }
 
 void describe('GraphProcessor characterization', () => {
-  void it('keeps graph boundary output-demand pruning disabled while the optimization is parked', () => {
-    assert.equal(GRAPH_BOUNDARY_OUTPUT_DEMAND_OPTIMIZATION_ENABLED, false);
+  void it('creates subgraph nodes with unused-output optimization disabled', () => {
+    assert.equal(SubGraphNodeImpl.create().data.skipUnusedOutputs, false);
   });
 
-  void it('runs full subgraph child graphs while output-demand pruning is parked', async () => {
+  void it('runs full subgraph child graphs when the optimization setting is omitted', async () => {
     const usedProbe = makeProbeNode('parked-subgraph-used-probe', { value: { type: 'string', value: 'used' } });
     const unusedProbe = makeProbeNode('parked-subgraph-unused-probe', {
       setGlobal: { id: 'parked-subgraph-unused-side-effect', value: { type: 'string', value: 'ran' } },
@@ -230,10 +231,7 @@ void describe('GraphProcessor characterization', () => {
     const unusedOutput = makeGraphOutputNode('unused');
     const childGraph = makeGraph(
       [usedProbe, usedOutput, unusedProbe, unusedOutput],
-      [
-        connect(usedProbe.id, usedOutput.id, 'value'),
-        connect(unusedProbe.id, unusedOutput.id, 'value'),
-      ],
+      [connect(usedProbe.id, usedOutput.id, 'value'), connect(unusedProbe.id, unusedOutput.id, 'value')],
       'parked-subgraph-child' as GraphId,
     );
     const subgraphNode = makeSubgraphNode('parked-subgraph-node', childGraph.metadata!.id);
@@ -265,7 +263,7 @@ void describe('GraphProcessor characterization', () => {
     assert.deepEqual(subgraphFinish?.outputs.unused, { type: 'string', value: 'unused' });
   });
 
-  void it('runs full referenced graph alias child graphs while output-demand pruning is parked', async () => {
+  void it('runs full referenced graph alias child graphs', async () => {
     const referencedProjectId = 'parked-referenced-project' as ProjectId;
     const referencedGraphId = 'parked-referenced-child' as GraphId;
     const usedProbe = makeProbeNode('parked-referenced-used-probe', { value: { type: 'string', value: 'used' } });
@@ -274,10 +272,7 @@ void describe('GraphProcessor characterization', () => {
     const unusedOutput = makeGraphOutputNode('unused');
     const referencedGraph = makeGraph(
       [usedProbe, usedOutput, unusedProbe, unusedOutput],
-      [
-        connect(usedProbe.id, usedOutput.id, 'value'),
-        connect(unusedProbe.id, unusedOutput.id, 'value'),
-      ],
+      [connect(usedProbe.id, usedOutput.id, 'value'), connect(unusedProbe.id, unusedOutput.id, 'value')],
       referencedGraphId,
     );
     const referencedProject = makeProject(referencedGraph);
@@ -575,9 +570,10 @@ void describe('GraphProcessor characterization', () => {
     });
   });
 
-  void demandOptimizationIt('runs only subgraph output branches demanded by active parent output connections', async () => {
-    const usedProbe = makeProbeNode('child-used-probe', { value: { type: 'string', value: 'used' } });
+  void it('runs only opted-in subgraph output branches demanded by active parent output connections', async () => {
+    const usedProbe = makeProbeNode('child-used-probe', { cost: 2.5, value: { type: 'string', value: 'used' } });
     const unusedProbe = makeProbeNode('child-unused-probe', {
+      cost: 7.5,
       setGlobal: { id: 'unused-side-effect', value: { type: 'string', value: 'should not be set' } },
       value: { type: 'string', value: 'unused' },
     });
@@ -585,13 +581,10 @@ void describe('GraphProcessor characterization', () => {
     const unusedOutput = makeGraphOutputNode('childUnused');
     const childGraph = makeGraph(
       [usedProbe, usedOutput, unusedProbe, unusedOutput],
-      [
-        connect(usedProbe.id, usedOutput.id, 'value'),
-        connect(unusedProbe.id, unusedOutput.id, 'value'),
-      ],
+      [connect(usedProbe.id, usedOutput.id, 'value'), connect(unusedProbe.id, unusedOutput.id, 'value')],
       'demand-child-graph' as GraphId,
     );
-    const subgraphNode = makeSubgraphNode('demand-subgraph', childGraph.metadata!.id);
+    const subgraphNode = makeSubgraphNode('demand-subgraph', childGraph.metadata!.id, { skipUnusedOutputs: true });
     const parentOutput = makeGraphOutputNode('parentUsed');
     const disabledConsumer = makeProbeNode('disabled-consumer');
     disabledConsumer.disabled = true;
@@ -622,13 +615,14 @@ void describe('GraphProcessor characterization', () => {
     assert.equal(finishedNodeIds.includes(usedProbe.id), true);
     assert.equal(finishedNodeIds.includes(unusedProbe.id), false);
     assert.deepEqual(globalSetIds, []);
+    assert.deepEqual(subgraphFinish?.outputs.cost, { type: 'number', value: 2.5 });
     assert.deepEqual(subgraphFinish?.outputs.childUnused, {
       type: 'control-flow-excluded',
       value: undefined,
     });
   });
 
-  void demandOptimizationIt('treats a subgraph output connected to any enabled downstream node as demanded', async () => {
+  void it('treats a subgraph output connected to any enabled downstream node as demanded', async () => {
     const childProbe = makeProbeNode('child-enabled-consumer-probe', { value: { type: 'string', value: 'value' } });
     const childOutput = makeGraphOutputNode('childValue');
     const childGraph = makeGraph(
@@ -636,7 +630,9 @@ void describe('GraphProcessor characterization', () => {
       [connect(childProbe.id, childOutput.id, 'value')],
       'enabled-consumer-child' as GraphId,
     );
-    const subgraphNode = makeSubgraphNode('enabled-consumer-subgraph', childGraph.metadata!.id);
+    const subgraphNode = makeSubgraphNode('enabled-consumer-subgraph', childGraph.metadata!.id, {
+      skipUnusedOutputs: true,
+    });
     const enabledConsumer = makeProbeNode('enabled-consumer');
     const parentGraph = makeGraph(
       [subgraphNode, enabledConsumer],
@@ -654,20 +650,186 @@ void describe('GraphProcessor characterization', () => {
     assert.equal(finishedNodeIds.includes(enabledConsumer.id), true);
   });
 
-  void demandOptimizationIt('skips errors from unrequested subgraph output branches', async () => {
+  void it('demands outputs only through valid enabled consumers among multiple outgoing connections', async () => {
+    const usedProbe = makeProbeNode('connection-used-probe', { value: { type: 'string', value: 'used' } });
+    const unusedProbe = makeProbeNode('connection-unused-probe', {
+      setGlobal: { id: 'invalid-connection-side-effect', value: { type: 'boolean', value: true } },
+    });
+    const usedOutput = makeGraphOutputNode('used');
+    const unusedOutput = makeGraphOutputNode('unused');
+    const childGraph = makeGraph(
+      [usedProbe, usedOutput, unusedProbe, unusedOutput],
+      [connect(usedProbe.id, usedOutput.id, 'value'), connect(unusedProbe.id, unusedOutput.id, 'value')],
+      'connection-demand-child' as GraphId,
+    );
+    const subgraph = makeSubgraphNode('connection-demand-subgraph', childGraph.metadata!.id, {
+      skipUnusedOutputs: true,
+    });
+    const enabledConsumer = makeProbeNode('connection-enabled-consumer');
+    const disabledConsumer = makeProbeNode('connection-disabled-consumer');
+    disabledConsumer.disabled = true;
+    const invalidTargetConsumer = makeProbeNode('connection-invalid-target-consumer');
+    const invalidSourceConsumer = makeProbeNode('connection-invalid-source-consumer');
+    const parentGraph = makeGraph(
+      [subgraph, enabledConsumer, disabledConsumer, invalidTargetConsumer, invalidSourceConsumer],
+      [
+        connect(subgraph.id, disabledConsumer.id, 'input', 'used'),
+        connect(subgraph.id, enabledConsumer.id, 'input', 'used'),
+        connect(subgraph.id, disabledConsumer.id, 'input', 'unused'),
+        connect(subgraph.id, 'missing-consumer', 'input', 'unused'),
+        connect(subgraph.id, invalidTargetConsumer.id, 'missing-input', 'unused'),
+        connect(subgraph.id, invalidSourceConsumer.id, 'input', 'missing-output'),
+      ],
+    );
+    const processor = createProcessor(parentGraph, [childGraph]);
+    processor.warnOnInvalidGraph = false;
+    const finished = new Map<NodeId, Outputs>();
+    const globalsSet: string[] = [];
+    processor.on('nodeFinish', ({ node, outputs }) => {
+      finished.set(node.id, outputs);
+    });
+    processor.on('globalSet', ({ id }) => {
+      globalsSet.push(id);
+    });
+
+    await processor.processGraph(testProcessContext());
+
+    assert.deepEqual(finished.get(enabledConsumer.id)?.output, { type: 'string', value: 'used' });
+    assert.equal(finished.has(usedProbe.id), true);
+    assert.equal(finished.has(unusedProbe.id), false);
+    assert.deepEqual(finished.get(subgraph.id)?.unused, { type: 'control-flow-excluded', value: undefined });
+    assert.deepEqual(globalsSet, []);
+    assert.equal((subgraph.data as { skipUnusedOutputs: boolean }).skipUnusedOutputs, true);
+  });
+
+  void it('keeps an output structurally demanded when its connected consumer has a false condition', async () => {
+    const normalProbe = makeProbeNode('conditional-normal-probe', { value: { type: 'string', value: 'normal' } });
+    const conditionalProbe = makeProbeNode('conditional-demand-probe', {
+      value: { type: 'string', value: 'conditional' },
+    });
+    const normalOutput = makeGraphOutputNode('normal');
+    const conditionalOutput = makeGraphOutputNode('conditional');
+    const childGraph = makeGraph(
+      [normalProbe, normalOutput, conditionalProbe, conditionalOutput],
+      [connect(normalProbe.id, normalOutput.id, 'value'), connect(conditionalProbe.id, conditionalOutput.id, 'value')],
+      'conditional-demand-child' as GraphId,
+    );
+    const subgraph = makeSubgraphNode('conditional-demand-subgraph', childGraph.metadata!.id, {
+      skipUnusedOutputs: true,
+    });
+    const falseCondition = makeProbeNode('false-condition', { value: { type: 'boolean', value: false } });
+    const normalConsumer = makeProbeNode('normal-consumer');
+    const conditionalConsumer = makeProbeNode('conditional-consumer');
+    conditionalConsumer.isConditional = true;
+    const parentGraph = makeGraph(
+      [subgraph, falseCondition, normalConsumer, conditionalConsumer],
+      [
+        connect(subgraph.id, normalConsumer.id, 'input', 'normal'),
+        connect(subgraph.id, conditionalConsumer.id, 'input', 'conditional'),
+        connect(falseCondition.id, conditionalConsumer.id, 'if'),
+      ],
+    );
+    const processor = createProcessor(parentGraph, [childGraph]);
+    const finished = new Map<NodeId, Outputs>();
+    const excluded = new Set<NodeId>();
+    processor.on('nodeFinish', ({ node, outputs }) => {
+      finished.set(node.id, outputs);
+    });
+    processor.on('nodeExcluded', ({ node }) => {
+      excluded.add(node.id);
+    });
+
+    await processor.processGraph(testProcessContext());
+
+    assert.equal(finished.has(conditionalProbe.id), true);
+    assert.deepEqual(finished.get(subgraph.id)?.conditional, { type: 'string', value: 'conditional' });
+    assert.deepEqual(finished.get(normalConsumer.id)?.output, { type: 'string', value: 'normal' });
+    assert.equal(finished.has(conditionalConsumer.id), false);
+    assert.equal(excluded.has(conditionalConsumer.id), true);
+    assert.equal((subgraph.data as { skipUnusedOutputs: boolean }).skipUnusedOutputs, true);
+  });
+
+  void it('excludes an unrequested boundary value even when it runs as a requested output dependency', async () => {
+    const source = makeProbeNode('ancestor-source', { value: { type: 'string', value: 'shared value' } });
+    const ancestorOutput = makeGraphOutputNode('ancestor');
+    const requestedOutput = makeGraphOutputNode('requested');
+    const childGraph = makeGraph(
+      [source, ancestorOutput, requestedOutput],
+      [
+        connect(source.id, ancestorOutput.id, 'value'),
+        connect(ancestorOutput.id, requestedOutput.id, 'value', 'valueOutput'),
+      ],
+      'ancestor-child' as GraphId,
+    );
+    const subgraph = makeSubgraphNode('ancestor-subgraph', childGraph.metadata!.id, { skipUnusedOutputs: true });
+    const parentOutput = makeGraphOutputNode('parentValue');
+    const processor = createProcessor(
+      makeGraph([subgraph, parentOutput], [connect(subgraph.id, parentOutput.id, 'value', 'requested')]),
+      [childGraph],
+    );
+    let subgraphOutputs: Outputs | undefined;
+    let ancestorFinished = false;
+    processor.on('nodeFinish', ({ node, outputs }) => {
+      if (node.id === subgraph.id) subgraphOutputs = outputs;
+      if (node.id === ancestorOutput.id) ancestorFinished = true;
+    });
+
+    const outputs = await processor.processGraph(testProcessContext());
+
+    assert.equal(ancestorFinished, true);
+    assert.deepEqual(outputs.parentValue, { type: 'string', value: 'shared value' });
+    assert.deepEqual(subgraphOutputs?.ancestor, { type: 'control-flow-excluded', value: undefined });
+  });
+
+  void it('preserves authored metric-named outputs as requested or excluded boundary values', async () => {
+    for (const metric of ['cost', 'duration']) {
+      for (const requestedOutputId of [metric, 'ordinary', undefined]) {
+        const metricProbe = makeProbeNode(`${metric}-source`, { value: { type: 'number', value: 42 } });
+        const ordinaryProbe = makeProbeNode('ordinary-source', { value: { type: 'string', value: 'ordinary' } });
+        const metricOutput = makeGraphOutputNode(metric);
+        const ordinaryOutput = makeGraphOutputNode('ordinary');
+        const childGraph = makeGraph(
+          [metricProbe, metricOutput, ordinaryProbe, ordinaryOutput],
+          [connect(metricProbe.id, metricOutput.id, 'value'), connect(ordinaryProbe.id, ordinaryOutput.id, 'value')],
+          'metric-child' as GraphId,
+        );
+        const subgraph = makeSubgraphNode('metric-subgraph', childGraph.metadata!.id, { skipUnusedOutputs: true });
+        const parentOutput = makeGraphOutputNode('parentValue');
+        const parentGraph = requestedOutputId
+          ? makeGraph([subgraph, parentOutput], [connect(subgraph.id, parentOutput.id, 'value', requestedOutputId)])
+          : makeGraph([subgraph], []);
+        const processor = createProcessor(parentGraph, [childGraph]);
+        let subgraphOutputs: Outputs | undefined;
+        processor.on('nodeFinish', ({ node, outputs }) => {
+          if (node.id === subgraph.id) subgraphOutputs = outputs;
+        });
+
+        await processor.processGraph(testProcessContext());
+
+        assert.deepEqual(
+          subgraphOutputs?.[metric as PortId],
+          requestedOutputId === metric
+            ? { type: 'number', value: 42 }
+            : { type: 'control-flow-excluded', value: undefined },
+          `${metric} with ${requestedOutputId ?? 'no'} requested output`,
+        );
+      }
+    }
+  });
+
+  void it('skips errors from unrequested subgraph output branches', async () => {
     const usedProbe = makeProbeNode('skipped-error-used-probe', { value: { type: 'string', value: 'used' } });
     const throwingProbe = makeProbeNode('skipped-error-throwing-probe', { throwMessage: 'unused branch failed' });
     const usedOutput = makeGraphOutputNode('used');
     const unusedOutput = makeGraphOutputNode('unused');
     const childGraph = makeGraph(
       [usedProbe, usedOutput, throwingProbe, unusedOutput],
-      [
-        connect(usedProbe.id, usedOutput.id, 'value'),
-        connect(throwingProbe.id, unusedOutput.id, 'value'),
-      ],
+      [connect(usedProbe.id, usedOutput.id, 'value'), connect(throwingProbe.id, unusedOutput.id, 'value')],
       'skipped-error-child-graph' as GraphId,
     );
-    const subgraphNode = makeSubgraphNode('skipped-error-subgraph', childGraph.metadata!.id);
+    const subgraphNode = makeSubgraphNode('skipped-error-subgraph', childGraph.metadata!.id, {
+      skipUnusedOutputs: true,
+    });
     const parentOutput = makeGraphOutputNode('parentUsed');
     const parentGraph = makeGraph(
       [subgraphNode, parentOutput],
@@ -695,13 +857,10 @@ void describe('GraphProcessor characterization', () => {
     const rightOutput = makeGraphOutputNode('right');
     const childGraph = makeGraph(
       [sharedProbe, leftOutput, rightOutput],
-      [
-        connect(sharedProbe.id, leftOutput.id, 'value'),
-        connect(sharedProbe.id, rightOutput.id, 'value'),
-      ],
+      [connect(sharedProbe.id, leftOutput.id, 'value'), connect(sharedProbe.id, rightOutput.id, 'value')],
       'shared-child-graph' as GraphId,
     );
-    const subgraphNode = makeSubgraphNode('shared-subgraph', childGraph.metadata!.id);
+    const subgraphNode = makeSubgraphNode('shared-subgraph', childGraph.metadata!.id, { skipUnusedOutputs: true });
     const leftParentOutput = makeGraphOutputNode('parentLeft');
     const rightParentOutput = makeGraphOutputNode('parentRight');
     const parentGraph = makeGraph(
@@ -724,7 +883,7 @@ void describe('GraphProcessor characterization', () => {
     assert.equal(finishedNodeIds.filter((nodeId) => nodeId === sharedProbe.id).length, 1);
   });
 
-  void demandOptimizationIt('skips child graph execution when a subgraph has no active output consumers', async () => {
+  void it('skips child graph execution when an opted-in subgraph has no active output consumers', async () => {
     const childProbe = makeProbeNode('skipped-child-probe', { value: { type: 'string', value: 'unused' } });
     const childOutput = makeGraphOutputNode('childValue');
     const childGraph = makeGraph(
@@ -732,12 +891,14 @@ void describe('GraphProcessor characterization', () => {
       [connect(childProbe.id, childOutput.id, 'value')],
       'skipped-child-graph' as GraphId,
     );
-    const subgraphNode = makeSubgraphNode('skipped-subgraph', childGraph.metadata!.id);
+    const subgraphNode = makeSubgraphNode('skipped-subgraph', childGraph.metadata!.id, { skipUnusedOutputs: true });
     const parentGraph = makeGraph([subgraphNode], [], 'skipped-parent-graph' as GraphId);
     const processor = createProcessor(parentGraph, [childGraph]);
     const finishedNodeIds: NodeId[] = [];
+    const startedGraphIds: GraphId[] = [];
     let subgraphFinish: ProcessEvents['nodeFinish'] | undefined;
 
+    processor.on('graphStart', ({ graph }) => startedGraphIds.push(graph.metadata!.id));
     processor.on('nodeFinish', (event) => {
       finishedNodeIds.push(event.node.id);
       if (event.node.id === subgraphNode.id) {
@@ -748,6 +909,7 @@ void describe('GraphProcessor characterization', () => {
     await processor.processGraph(testProcessContext());
 
     assert.equal(finishedNodeIds.includes(childProbe.id), false);
+    assert.deepEqual(startedGraphIds, [parentGraph.metadata!.id]);
     assert.deepEqual(subgraphFinish?.outputs.childValue, {
       type: 'control-flow-excluded',
       value: undefined,
@@ -763,13 +925,10 @@ void describe('GraphProcessor characterization', () => {
     const unusedOutput = makeGraphOutputNode('unused');
     const childGraph = makeGraph(
       [usedProbe, usedOutput, unusedProbe, unusedOutput],
-      [
-        connect(usedProbe.id, usedOutput.id, 'value'),
-        connect(unusedProbe.id, unusedOutput.id, 'value'),
-      ],
+      [connect(usedProbe.id, usedOutput.id, 'value'), connect(unusedProbe.id, unusedOutput.id, 'value')],
       'run-to-child-graph' as GraphId,
     );
-    const subgraphNode = makeSubgraphNode('run-to-subgraph', childGraph.metadata!.id);
+    const subgraphNode = makeSubgraphNode('run-to-subgraph', childGraph.metadata!.id, { skipUnusedOutputs: true });
     const parentGraph = makeGraph([subgraphNode], [], 'run-to-parent-graph' as GraphId);
     const processor = createProcessor(parentGraph, [childGraph]);
     const finishedNodeIds: NodeId[] = [];
@@ -783,20 +942,19 @@ void describe('GraphProcessor characterization', () => {
     assert.equal(finishedNodeIds.includes(unusedProbe.id), true);
   });
 
-  void demandOptimizationIt('uses downstream run-to targets to demand only relevant subgraph output ports', async () => {
+  void it('uses downstream run-to targets to demand only relevant subgraph output ports', async () => {
     const leftProbe = makeProbeNode('run-to-downstream-left-probe', { value: { type: 'string', value: 'left' } });
     const rightProbe = makeProbeNode('run-to-downstream-right-probe', { value: { type: 'string', value: 'right' } });
     const leftOutput = makeGraphOutputNode('left');
     const rightOutput = makeGraphOutputNode('right');
     const childGraph = makeGraph(
       [leftProbe, leftOutput, rightProbe, rightOutput],
-      [
-        connect(leftProbe.id, leftOutput.id, 'value'),
-        connect(rightProbe.id, rightOutput.id, 'value'),
-      ],
+      [connect(leftProbe.id, leftOutput.id, 'value'), connect(rightProbe.id, rightOutput.id, 'value')],
       'run-to-downstream-child-graph' as GraphId,
     );
-    const subgraphNode = makeSubgraphNode('run-to-downstream-subgraph', childGraph.metadata!.id);
+    const subgraphNode = makeSubgraphNode('run-to-downstream-subgraph', childGraph.metadata!.id, {
+      skipUnusedOutputs: true,
+    });
     const leftConsumer = makeProbeNode('run-to-downstream-left-consumer');
     const rightConsumer = makeProbeNode('run-to-downstream-right-consumer');
     const parentGraph = makeGraph(
@@ -828,13 +986,11 @@ void describe('GraphProcessor characterization', () => {
     const throwingOutput = makeGraphOutputNode('unused');
     const childGraph = makeGraph(
       [goodProbe, goodOutput, throwingProbe, throwingOutput],
-      [
-        connect(goodProbe.id, goodOutput.id, 'value'),
-        connect(throwingProbe.id, throwingOutput.id, 'value'),
-      ],
+      [connect(goodProbe.id, goodOutput.id, 'value'), connect(throwingProbe.id, throwingOutput.id, 'value')],
       'error-active-child-graph' as GraphId,
     );
     const subgraphNode = makeSubgraphNode('error-active-subgraph', childGraph.metadata!.id, {
+      skipUnusedOutputs: true,
       useErrorOutput: true,
     });
     const parentGoodOutput = makeGraphOutputNode('parentGood');
@@ -863,6 +1019,27 @@ void describe('GraphProcessor characterization', () => {
     assert.match(String(outputs.parentError?.value), /unused branch failed|error-active-throwing-probe/);
   });
 
+  void it('runs the full child graph when Error is the only consumed subgraph output', async () => {
+    const failure = makeProbeNode('error-only-failure', { throwMessage: 'error-only child failed' });
+    const childOutput = makeGraphOutputNode('unused');
+    const childGraph = makeGraph(
+      [failure, childOutput],
+      [connect(failure.id, childOutput.id, 'value')],
+      'error-only-child' as GraphId,
+    );
+    const subgraph = makeSubgraphNode('error-only-subgraph', childGraph.metadata!.id, {
+      skipUnusedOutputs: true,
+      useErrorOutput: true,
+    });
+    const parentError = makeGraphOutputNode('parentError');
+    const parentGraph = makeGraph([subgraph, parentError], [connect(subgraph.id, parentError.id, 'value', 'error')]);
+
+    const outputs = await createProcessor(parentGraph, [childGraph]).processGraph(testProcessContext());
+
+    assert.equal(outputs.parentError?.type, 'string');
+    assert.match(String(outputs.parentError?.value), /error-only child failed|error-only-failure/);
+  });
+
   void it('runs the full child graph when subgraph partial-output forwarding is enabled', async () => {
     const usedProbe = makeProbeNode('partial-used-probe', { value: { type: 'string', value: 'used' } });
     const unusedProbe = makeProbeNode('partial-unused-probe', { value: { type: 'string', value: 'unused' } });
@@ -870,13 +1047,11 @@ void describe('GraphProcessor characterization', () => {
     const unusedOutput = makeGraphOutputNode('unused');
     const childGraph = makeGraph(
       [usedProbe, usedOutput, unusedProbe, unusedOutput],
-      [
-        connect(usedProbe.id, usedOutput.id, 'value'),
-        connect(unusedProbe.id, unusedOutput.id, 'value'),
-      ],
+      [connect(usedProbe.id, usedOutput.id, 'value'), connect(unusedProbe.id, unusedOutput.id, 'value')],
       'partial-subgraph-child' as GraphId,
     );
     const subgraphNode = makeSubgraphNode('partial-subgraph', childGraph.metadata!.id, {
+      skipUnusedOutputs: true,
       useAsGraphPartialOutput: true,
     });
     const parentOutput = makeGraphOutputNode('parentUsed');
@@ -896,8 +1071,11 @@ void describe('GraphProcessor characterization', () => {
     assert.equal(finishedNodeIds.includes(unusedProbe.id), true);
   });
 
-  void demandOptimizationIt('targets the winning duplicate Graph Output node when pruning subgraph outputs', async () => {
-    const firstProbe = makeProbeNode('duplicate-first-probe', { value: { type: 'string', value: 'first' } });
+  void it('runs every producer of a requested output id and preserves the first completed value', async () => {
+    const firstProbe = makeProbeNode('duplicate-first-probe', {
+      delayMs: 30,
+      value: { type: 'string', value: 'first' },
+    });
     const secondProbe = makeProbeNode('duplicate-second-probe', { value: { type: 'string', value: 'second' } });
     const firstOutput = makeGraphOutputNode('duplicate');
     firstOutput.id = 'duplicate-output-first' as NodeId;
@@ -905,13 +1083,12 @@ void describe('GraphProcessor characterization', () => {
     secondOutput.id = 'duplicate-output-second' as NodeId;
     const childGraph = makeGraph(
       [firstProbe, firstOutput, secondProbe, secondOutput],
-      [
-        connect(firstProbe.id, firstOutput.id, 'value'),
-        connect(secondProbe.id, secondOutput.id, 'value'),
-      ],
+      [connect(firstProbe.id, firstOutput.id, 'value'), connect(secondProbe.id, secondOutput.id, 'value')],
       'duplicate-output-child' as GraphId,
     );
-    const subgraphNode = makeSubgraphNode('duplicate-output-subgraph', childGraph.metadata!.id);
+    const subgraphNode = makeSubgraphNode('duplicate-output-subgraph', childGraph.metadata!.id, {
+      skipUnusedOutputs: true,
+    });
     const parentOutput = makeGraphOutputNode('parentDuplicate');
     const parentGraph = makeGraph(
       [subgraphNode, parentOutput],
@@ -925,12 +1102,12 @@ void describe('GraphProcessor characterization', () => {
 
     const outputs = await processor.processGraph(testProcessContext());
 
-    assert.deepEqual(outputs.parentDuplicate, { type: 'string', value: 'first' });
+    assert.deepEqual(outputs.parentDuplicate, { type: 'string', value: 'second' });
     assert.equal(finishedNodeIds.includes(firstProbe.id), true);
-    assert.equal(finishedNodeIds.includes(secondProbe.id), false);
+    assert.equal(finishedNodeIds.includes(secondProbe.id), true);
   });
 
-  void demandOptimizationIt('runs only referenced graph alias output branches demanded by active parent output connections', async () => {
+  void it('does not optimize referenced graph aliases even when a saved optimization key is present', async () => {
     const referencedProjectId = 'referenced-demand-project' as ProjectId;
     const referencedGraphId = 'referenced-demand-graph' as GraphId;
     const usedProbe = makeProbeNode('referenced-used-probe', { value: { type: 'string', value: 'used' } });
@@ -939,10 +1116,7 @@ void describe('GraphProcessor characterization', () => {
     const unusedOutput = makeGraphOutputNode('referencedUnused');
     const referencedGraph = makeGraph(
       [usedProbe, usedOutput, unusedProbe, unusedOutput],
-      [
-        connect(usedProbe.id, usedOutput.id, 'value'),
-        connect(unusedProbe.id, unusedOutput.id, 'value'),
-      ],
+      [connect(usedProbe.id, usedOutput.id, 'value'), connect(unusedProbe.id, unusedOutput.id, 'value')],
       referencedGraphId,
     );
     const referencedProject = makeProject(referencedGraph);
@@ -955,6 +1129,7 @@ void describe('GraphProcessor characterization', () => {
         graphId: referencedGraphId,
         inputData: {},
         projectId: referencedProjectId,
+        skipUnusedOutputs: true,
         useErrorOutput: false,
       },
       visualData: { x: 0, y: 0, width: 240 },
@@ -992,16 +1167,13 @@ void describe('GraphProcessor characterization', () => {
 
     assert.deepEqual(outputs.parentReferencedUsed, { type: 'string', value: 'used' });
     assert.equal(finishedNodeIds.includes(usedProbe.id), true);
-    assert.equal(finishedNodeIds.includes(unusedProbe.id), false);
-    assert.deepEqual(aliasFinish?.outputs.referencedUnused, {
-      type: 'control-flow-excluded',
-      value: undefined,
-    });
+    assert.equal(finishedNodeIds.includes(unusedProbe.id), true);
+    assert.deepEqual(aliasFinish?.outputs.referencedUnused, { type: 'string', value: 'unused' });
     assert.equal(aliasFinish?.outputs.cost, undefined);
     assert.equal(aliasFinish?.outputs.duration, undefined);
   });
 
-  void demandOptimizationIt('honors the referenced graph alias metric toggle when demand pruning skips the child graph', async () => {
+  void it('honors the referenced graph alias metric toggle without connected output consumers', async () => {
     const referencedProjectId = 'referenced-skipped-metrics-project' as ProjectId;
     const referencedGraphId = 'referenced-skipped-metrics-graph' as GraphId;
     const childProbe = makeProbeNode('referenced-skipped-metrics-probe', {
@@ -1053,20 +1225,14 @@ void describe('GraphProcessor characterization', () => {
     };
 
     const outputsWithoutMetrics = await runAlias(false);
-    assert.deepEqual(outputsWithoutMetrics?.childValue, {
-      type: 'control-flow-excluded',
-      value: undefined,
-    });
+    assert.deepEqual(outputsWithoutMetrics?.childValue, { type: 'string', value: 'unused' });
     assert.equal(outputsWithoutMetrics?.cost, undefined);
     assert.equal(outputsWithoutMetrics?.duration, undefined);
 
     const outputsWithMetrics = await runAlias(true);
-    assert.deepEqual(outputsWithMetrics?.childValue, {
-      type: 'control-flow-excluded',
-      value: undefined,
-    });
+    assert.deepEqual(outputsWithMetrics?.childValue, { type: 'string', value: 'unused' });
     assert.deepEqual(outputsWithMetrics?.cost, { type: 'number', value: 0 });
-    assert.deepEqual(outputsWithMetrics?.duration, { type: 'number', value: 0 });
+    assert.equal(outputsWithMetrics?.duration?.type, 'number');
   });
 
   void it('preloads boundary nodes and runs only the requested terminal slice', async () => {

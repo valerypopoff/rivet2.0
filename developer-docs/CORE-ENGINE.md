@@ -1038,36 +1038,105 @@ node-definition loading keeps the no-cache hot path. Editor settings use
 uncached boundary derivation so in-place graph input/output edits remain
 visible immediately.
 
-Subgraph output-demand execution is currently parked behind
-`GRAPH_BOUNDARY_OUTPUT_DEMAND_OPTIMIZATION_ENABLED`, which defaults to `false`.
-With the flag off, `SubGraph` and `Referenced Graph Alias` run their full child
-graphs just like the legacy runtime: unconnected child `Graph Output` branches
-still run, and their side effects/errors still occur. The implementation remains
-in place for later re-enablement. Before a node implementation runs,
-`GraphProcessor` still computes `activeOutputPortIds` from valid outgoing
-connections whose immediate downstream node exists, is not disabled, and is
-relevant to the current run-to slice when `runToNodeIds` is active. The node
-process context also receives `isDirectRunTarget`, so the parked optimization
-can distinguish "this Subgraph is being inspected" from "this Subgraph is only a
-dependency of another target."
+Subgraph **Skip unused outputs** is an optional per-node `data.skipUnusedOutputs`
+boolean, defaulting to `false` for new nodes and when absent from saved projects.
+Only an explicit `true` changes execution. Referenced Graph Alias, Call Graph,
+Loop Until, Cron, and tool graph calls retain their full-graph behavior. Nested
+Subgraph instances honor their own setting independently; enabling an outer
+instance does not enable pruning on an inner instance.
 
-When the flag is re-enabled, `SubGraph` and `Referenced Graph Alias` use their
-boundary metadata to map active output ports to the first-duplicate-wins child
-`Graph Output` node ids and run the child processor with those ids as
-`runToNodeIds`. Unrequested boundary outputs are returned from the caller node as
-`control-flow-excluded` values. If no boundary output is active, the child graph
-is not started; Subgraph returns excluded boundary outputs plus zero cost/duration
-metrics, while Referenced Graph Alias returns zero cost/duration only when its
-`Output Cost & Duration` setting is enabled.
+Before a node implementation runs, `GraphProcessor` computes
+`activeOutputPortIds` from effective, definition-valid outgoing connections to
+enabled immediate consumers. A targeted parent run also limits consumers to its
+dependency selection. Demand is structural: a runtime conditional consumer still
+counts as a consumer, and input providers of the caller still run normally.
+The context's `isDirectRunTarget` distinguishes inspection of the Subgraph from
+execution as a dependency of another target.
 
-When the flag is on, the full child graph still runs when the caller node is the
-direct run-to target, when Subgraph partial-output forwarding is enabled, or when
-an enabled Subgraph/Referenced Graph Alias `Error` output has an active
-downstream consumer. Re-enabling the flag intentionally changes side-effect
-behavior: side-effect-only work in unconnected child output branches no longer
-runs. That includes globals, dataset writes, events, audio playback, aborts,
-external calls, HTTP/LLM calls, and arbitrary Code/Expression side effects.
-Errors in skipped branches are also skipped.
+An optimized Subgraph passes requested boundary IDs through the per-invocation
+fourth `processGraph(...)` option, `requestedGraphOutputIds`. It does not mutate
+the child processor's `runToNodeIds`: output demand selects a dependency subgraph,
+whereas run-to also imposes terminal execution boundaries. The processor derives
+the selection from compiled topology and every `Graph Output` producer of a
+requested ID. Boundary metadata's first-node choice is for port definitions,
+not for selecting an execution winner; same-ID outputs retain their ordinary
+first non-excluded completed-value behavior. The selection is local to the run,
+does not alter saved graphs or shared cached execution plans, and cannot be
+combined with `runToNodeIds` on the same processor call.
+
+Omitting `requestedGraphOutputIds` means unrestricted execution; an empty array
+means no output roots. IDs are copied for the invocation, deduplicated, and
+validated after reference loading and preprocessing. Unknown IDs fail before
+node execution. `GraphOutputSelection.ts` selects every scheduler prerequisite
+after Data Bus compilation and prefab resolution, including duplicate input
+providers, feedback/race branches, and a selected auto-continuing LLM's required
+connected Delegate. Unrelated Delegate descendants are not implicit roots.
+
+Selected invocations use the compatible scheduler; unrestricted calls retain
+their existing fast-scheduler eligibility. The fixed selection guards dependency
+fetching, dispatch, continuation propagation, downstream queueing, and active
+consumer calculations, not just start-node selection. Frozen/preloaded work and
+async topology preparation respect it too. Preloads registered during a selected
+run remain available for a later unrestricted run, but cannot insert an omitted
+node into the current invocation's results, visited state, or lifecycle events.
+Same-graph continuation helpers use the planner's relevance filter while
+preserving source/preload anchors; they do
+not receive output names belonging to their owning graph. Normal preprocessing
+and validation still apply, including invalid selected async-to-output paths.
+
+The caller returns `control-flow-excluded` for every unrequested boundary ID,
+even if its Graph Output node ran as a dependency of a requested output. Only
+requested declared values are projected from the child result. An absent
+requested value stays absent, so downstream optional-input defaults retain their
+ordinary behavior; a genuine requested exclusion is preserved. Runtime cost and
+duration describe the work performed unless authored Graph Outputs own those
+names; authored metric-named outputs retain requested/excluded boundary values.
+The existing `cost` output also controls parent cost accumulation, so an authored
+cost output retains that existing overloaded behavior. With no requested output,
+the child processor is not created: the caller returns excluded boundary outputs
+and zero synthetic cost/duration only for names not authored at the boundary.
+
+The full child graph still runs when the caller itself is a direct run-to target,
+when its `useAsGraphPartialOutput` flag is enabled, or when its enabled `Error`
+output has an active consumer, including an Error-only call. These exceptions
+preserve inspection, partial output, and whole-child error semantics; they do not
+clear the saved optimization setting.
+
+Enabling the setting intentionally removes side effects and errors in skipped
+work: globals, Stored Values, dataset writes, events, audio, aborts, async
+branches, external calls, HTTP/LLM calls, and arbitrary Code/plugin effects are
+not inferred as hidden dependencies. A selected Get/Wait node still needs an
+explicit dependency on a required producer or a caller with optimization off.
+`waitForGlobal` defaults to the current node's abort signal and removes its global
+event subscription on completion or cancellation, so omitting a writer cannot
+prevent Stop or a losing Race Inputs branch from settling.
+`waitEvent` likewise removes both event and abort subscriptions when its node
+settles, including cancellation when a pruned sender never raises the event.
+`waitForStoredValue` also defaults to the node signal when callers omit one.
+Stored-value waiter promises are observed before a final abort check, so
+cancellation during key-lock release cannot leave an unhandled rejection.
+Shared producers required by a requested output still run once; computing several
+values in one LLM/Code node does not make that invocation partially lazy.
+
+Run `yarn workspace @valerypopoff/rivet2-node exec tsx bench/outputSelection.bench.ts`
+to compare independent work with shared-only work. The fixtures keep shared-only
+execution at 7 nodes, reduce 200 unused Text nodes from 206 executed nodes to 5,
+and reduce an unused 40 ms Delay branch from 7 nodes to 5. Compare measured timing
+distributions on the current machine rather than treating those counts as a
+promise of speedup for shared or already inexpensive work. Elapsed times are
+unprofiled; a separate instrumented pass reports preprocessing, dependency/input
+lookup, and downstream-queue bookkeeping. Those buckets include profiler
+overhead and may overlap, so do not sum them into a total scheduler cost.
+
+Regression coverage lives in `GraphOutputSelection.test.ts`,
+`GraphProcessor.outputSelection*.test.ts`, `GraphProcessor.characterization.test.ts`,
+`SubGraphNode.outputProjection.test.ts`, and Node's `outputSelectionRuntime.test.ts`.
+Run `yarn test:core`, rebuild Core
+exports, then `yarn test:node`; the Node fixtures compare direct and wrapper
+entrypoints and fast-parent/compatible-child scheduling, while Core covers
+recording/replay. For the catalog, invocation history, save/reload, and
+hosted-browser checks, follow
+[Subgraph output-pruning verification](studio-server/development.md#subgraph-output-pruning-verification).
 
 ### User input
 
@@ -1079,6 +1148,17 @@ Current behavior:
 - processor stores pending resolvers by `NodeId`
 - processor emits a `userInput` event
 - callers respond through `processor.userInput(nodeId, values)`
+
+Each request is cancelled by its owning node's signal, including Race Inputs
+losers and requests made after cancellation. Both the emitted callback and
+`processor.userInput(...)` share one idempotent settlement path that removes the
+abort listener and only clears its own pending entry. A callback retained from
+an earlier run cannot erase a newer request for the same node. The debugger
+protocol remains node-addressed; this does not introduce a new request-ID API.
+
+Regression tests cover these boundaries in
+`GraphProcessor.outputSelection.userInput.test.ts`,
+`StoredValueStore.cancellation.test.ts`, and `ProcessContextBuilder.test.ts`.
 
 This is how the app bridges execution to the user-input modal.
 

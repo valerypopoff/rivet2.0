@@ -21,12 +21,9 @@ import type { EditorDefinition } from '../EditorDefinition.js';
 import {
   buildExcludedGraphBoundaryOutputs,
   buildGraphBoundaryInputData,
-  GRAPH_BOUNDARY_OUTPUT_DEMAND_OPTIMIZATION_ENABLED,
   getGraphBoundary,
   getGraphBoundaryInputDefinitions,
   getGraphBoundaryOutputDefinitions,
-  getRequestedGraphOutputNodeIds,
-  type GraphBoundary,
 } from '../GraphBoundaryCache.js';
 
 export type ReferencedGraphAliasNode = ChartNode & {
@@ -187,41 +184,20 @@ export class ReferencedGraphAliasNodeImpl extends NodeImpl<ReferencedGraphAliasN
       getGraphBoundary(referencedProject, this.data.graphId)!;
     const inputData = buildGraphBoundaryInputData(boundary, inputs, this.data.inputData);
 
-    const shouldRunWholeGraph =
-      !GRAPH_BOUNDARY_OUTPUT_DEMAND_OPTIMIZATION_ENABLED ||
-      context.isDirectRunTarget ||
-      (this.data.useErrorOutput === true && context.activeOutputPortIds.has('error' as PortId));
-    const requestedGraphOutputNodeIds = shouldRunWholeGraph
-      ? []
-      : getRequestedGraphOutputNodeIds(boundary, context.activeOutputPortIds);
-
-    if (!shouldRunWholeGraph && requestedGraphOutputNodeIds.length === 0) {
-      return buildSkippedReferencedGraphOutputs(boundary, this.data.useErrorOutput, this.data.outputCostDuration);
-    }
-
     // Create a subprocessor using the referenced project's graph
     const subGraphProcessor = context.createSubProcessor(this.data.graphId, {
       signal: context.signal,
       project: referencedProject!,
     });
-    if (!shouldRunWholeGraph) {
-      subGraphProcessor.runToNodeIds = requestedGraphOutputNodeIds;
-    }
 
     try {
       const startTime = Date.now();
 
-      const graphOutputs = await subGraphProcessor.processGraph(
+      const outputs = await subGraphProcessor.processGraph(
         context,
         inputData as Record<string, DataValue>,
         context.contextValues,
       );
-      const outputs = shouldRunWholeGraph
-        ? graphOutputs
-        : {
-            ...buildExcludedGraphBoundaryOutputs(boundary),
-            ...graphOutputs,
-          };
 
       const duration = Date.now() - startTime;
 
@@ -258,34 +234,6 @@ export class ReferencedGraphAliasNodeImpl extends NodeImpl<ReferencedGraphAliasN
 }
 
 export const referencedGraphAliasNode = nodeDefinition(ReferencedGraphAliasNodeImpl, 'Referenced Graph Alias');
-
-function buildSkippedReferencedGraphOutputs(
-  boundary: GraphBoundary,
-  useErrorOutput: boolean | undefined,
-  outputCostDuration: boolean | undefined,
-): Outputs {
-  const outputs: Outputs = buildExcludedGraphBoundaryOutputs(boundary);
-
-  if (useErrorOutput) {
-    outputs['error' as PortId] = {
-      type: 'control-flow-excluded',
-      value: undefined,
-    };
-  }
-
-  if (outputCostDuration) {
-    outputs['cost' as PortId] = {
-      type: 'number',
-      value: 0,
-    };
-    outputs['duration' as PortId] = {
-      type: 'number',
-      value: 0,
-    };
-  }
-
-  return applyMetricOutputSetting(outputs, outputCostDuration);
-}
 
 function applyMetricOutputSetting(outputs: Outputs, outputCostDuration: boolean | undefined): Outputs {
   if (outputCostDuration) {

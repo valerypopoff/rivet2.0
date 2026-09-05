@@ -253,6 +253,63 @@ test('inactive project snapshot reducer stores hidden user input prompts and cle
   assert.deepEqual(finishedSnapshot.userInputQuestions, {});
 });
 
+for (const message of ['nodeFinish', 'nodeExcluded', 'nodeError'] as const) {
+  test(`inactive project snapshots remove only the terminal prompt on ${message}`, () => {
+    const nodeId = 'prompt-node' as NodeId;
+    const processId = 'finished-prompt' as ProcessId;
+    const otherProcessId = 'waiting-prompt' as ProcessId;
+    const projectId = 'prompt-project' as ProjectId;
+    const execution = {
+      graphId: 'prompt-graph' as GraphId,
+      graphRunId: 'prompt-run' as GraphRunId,
+      rootRunId: 'prompt-root' as RootRunId,
+    };
+    const refStore = createDataRefStore();
+    let snapshot = createEmptyProjectExecutionSnapshot();
+    snapshot.graphRunning = true;
+    for (const pendingProcessId of [processId, otherProcessId]) {
+      snapshot = applyProcessEventToProjectExecutionSnapshot({
+        message: 'userInput',
+        data: {
+          node: { id: nodeId },
+          execution,
+          processId: pendingProcessId,
+          inputStrings: [pendingProcessId],
+          inputs: {},
+          renderingType: 'text',
+        } as never,
+        projectId,
+        refStore,
+        snapshot,
+      }).snapshot;
+    }
+    const finished = applyProcessEventToProjectExecutionSnapshot({
+      message,
+      data: {
+        node: { id: nodeId },
+        execution,
+        processId,
+        inputs: {},
+        outputs: {},
+        reason: 'Race lost',
+        error: 'Cancelled',
+      } as never,
+      projectId,
+      refStore,
+      snapshot,
+    }).snapshot;
+    assert.equal(finished.graphRunning, true, 'Another branch is still running');
+    assert.deepEqual(finished.userInputQuestions[nodeId], [
+      {
+        nodeId,
+        processId: otherProcessId,
+        questions: [otherProcessId],
+      },
+    ]);
+    assert.equal(snapshot.userInputQuestions[nodeId]?.length, 2, 'History snapshots are immutable');
+  });
+}
+
 test('inactive project snapshots retain replayed user-input activity without restoring a modal question', () => {
   const nodeId = 'node-a' as NodeId;
   const processId = 'replay-process-a' as ProcessId;

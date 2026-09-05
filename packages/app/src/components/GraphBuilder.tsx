@@ -283,7 +283,7 @@ export const GraphBuilder: FC<{ runGraph: EditorGraphRun }> = ({ runGraph }) => 
         <GraphExecutionSelectorBar />
         <HistoricalGraphNotice />
         <UserInputModal
-          open={isUserInputModalOpen}
+          open={isUserInputModalOpen && questions.length > 0}
           questions={lastQuestions}
           questionsNodeId={questionsNodeId}
           onSubmit={handleSubmitUserInputModal}

@@ -41,6 +41,17 @@ test('subgraph node canvas selector preserves stale graph ids visibly', () => {
   assert.match(subGraphNodeSource, /selectedGraphId: node\.data\.graphId/);
 });
 
+test('subgraph node canvas body displays enabled output pruning after its graph selector only', () => {
+  assert.match(subGraphNodeSource, /node\.data\.skipUnusedOutputs === true/);
+  assert.match(subGraphNodeSource, /data-testid="subgraph-skip-unused-outputs"/);
+  assert.match(subGraphNodeSource, /Skip unused outputs:<\/span> Enabled/);
+  assert.match(subGraphNodeSource, /subgraph-node-body-setting-label[\s\S]*?opacity: 0\.55;/);
+  assert.match(
+    subGraphNodeSource,
+    /subgraph-node-body-select-wrap[\s\S]*?<\/div>\s*\{node\.data\.skipUnusedOutputs === true/,
+  );
+});
+
 test('subgraph node selector handles focus and double-click like other canvas controls', () => {
   assert.match(subGraphNodeSource, /const \[isMenuOpen, setIsMenuOpen\] = useState\(false\)/);
   assert.match(subGraphNodeSource, /if \(!isMenuOpen\) \{[\s\S]*?return;[\s\S]*?\}/);
@@ -48,22 +59,34 @@ test('subgraph node selector handles focus and double-click like other canvas co
   assert.match(subGraphNodeSource, /document\.addEventListener\('wheel', handleDocumentWheel, true\)/);
   assert.match(subGraphNodeSource, /document\.addEventListener\('keydown', handleDocumentKeyDown, true\)/);
   assert.match(subGraphNodeSource, /rootRef\.current\?\.contains\(event\.target\)/);
-  assert.match(subGraphNodeSource, /event\.preventDefault\(\);[\s\S]*?event\.stopPropagation\(\);[\s\S]*?closeMenu\(\)/);
+  assert.match(
+    subGraphNodeSource,
+    /event\.preventDefault\(\);[\s\S]*?event\.stopPropagation\(\);[\s\S]*?closeMenu\(\)/,
+  );
   assert.match(subGraphNodeSource, /closeMenu\(\)/);
   assert.match(subGraphNodeSource, /document\.removeEventListener\('pointerdown', handleDocumentPointerDown, true\)/);
   assert.match(subGraphNodeSource, /document\.removeEventListener\('wheel', handleDocumentWheel, true\)/);
   assert.match(subGraphNodeSource, /document\.removeEventListener\('keydown', handleDocumentKeyDown, true\)/);
   assert.match(subGraphNodeSource, /onDoubleClick=\{handleControlDoubleClick\}/);
   assert.match(subGraphNodeSource, /onMouseDown=\{handleControlMouseDown\}/);
-  assert.match(subGraphNodeSource, /const handleMenuWheel = \(event: ReactWheelEvent<HTMLDivElement>\) => \{[\s\S]*?event\.stopPropagation\(\);[\s\S]*?\}/);
+  assert.match(
+    subGraphNodeSource,
+    /const handleMenuWheel = \(event: ReactWheelEvent<HTMLDivElement>\) => \{[\s\S]*?event\.stopPropagation\(\);[\s\S]*?\}/,
+  );
   assert.match(subGraphNodeSource, /onWheel=\{handleMenuWheel\}/);
-  assert.match(subGraphNodeSource, /const handleControlWheel = \(event: ReactWheelEvent<HTMLButtonElement>\) => \{[\s\S]*?if \(!isMenuOpen\) \{[\s\S]*?return;[\s\S]*?\}[\s\S]*?event\.stopPropagation\(\);[\s\S]*?setIsMenuOpen\(false\);[\s\S]*?\}/);
+  assert.match(
+    subGraphNodeSource,
+    /const handleControlWheel = \(event: ReactWheelEvent<HTMLButtonElement>\) => \{[\s\S]*?if \(!isMenuOpen\) \{[\s\S]*?return;[\s\S]*?\}[\s\S]*?event\.stopPropagation\(\);[\s\S]*?setIsMenuOpen\(false\);[\s\S]*?\}/,
+  );
   assert.match(subGraphNodeSource, /onWheel=\{handleControlWheel\}/);
   assert.doesNotMatch(subGraphNodeSource, /handleOptionDoubleClick/);
   assert.match(subGraphNodeSource, /event\.stopPropagation\(\)/);
 });
 
 test('subgraph node descriptor remains registered for custom canvas body rendering', () => {
-  assert.match(useNodeTypesSource, /import \{ subgraphNodeDescriptor \} from '\.\.\/components\/nodes\/SubGraphNode\.js';/);
+  assert.match(
+    useNodeTypesSource,
+    /import \{ subgraphNodeDescriptor \} from '\.\.\/components\/nodes\/SubGraphNode\.js';/,
+  );
   assert.match(useNodeTypesSource, /subGraph: subgraphNodeDescriptor,/);
 });

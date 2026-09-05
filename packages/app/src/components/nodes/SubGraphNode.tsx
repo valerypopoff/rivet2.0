@@ -101,6 +101,18 @@ const subGraphBodyCss = css`
     white-space: nowrap;
   }
 
+  .subgraph-node-body-setting {
+    margin-top: calc(8px * var(--ui-font-scale, 1));
+    overflow: hidden;
+    padding: 0 calc(8px * var(--ui-font-scale, 1));
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .subgraph-node-body-setting-label {
+    opacity: 0.55;
+  }
+
   .subgraph-node-body-select-menu {
     background: var(--node-body-bg);
     border: 1px solid color-mix(in srgb, var(--foreground-bright) 20%, transparent);
@@ -303,6 +315,11 @@ export const SubGraphNodeBody: FC<{
           </div>
         )}
       </div>
+      {node.data.skipUnusedOutputs === true && (
+        <div className="subgraph-node-body-setting" data-testid="subgraph-skip-unused-outputs">
+          <span className="subgraph-node-body-setting-label">Skip unused outputs:</span> Enabled
+        </div>
+      )}
     </div>
   );
 };
@@ -317,9 +334,7 @@ export const SubGraphNodeOutputSimple: FC<{
 }> = ({ outputs, renderMarkdown, isCompact, renderMode, allowLargeStoredValueActions, wrapLines }) => {
   const dataRefs = useDataRefs();
   const costMetric = getSubGraphCostMetric(tryRestoreStoredDataValue(outputs['cost' as PortId], dataRefs));
-  const durationMetric = getSubGraphDurationMetric(
-    tryRestoreStoredDataValue(outputs['duration' as PortId], dataRefs),
-  );
+  const durationMetric = getSubGraphDurationMetric(tryRestoreStoredDataValue(outputs['duration' as PortId], dataRefs));
   const bodyOutputs = omit(outputs, ['cost', 'duration'])! as InputsOrOutputsWithRefs;
   const hasMeta = costMetric.kind !== 'none' || durationMetric.kind !== 'none';
   const hasBody = hasVisibleStoredPortMapValues(bodyOutputs);

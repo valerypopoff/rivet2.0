@@ -30,6 +30,7 @@ import {
 } from '../utils/executionDataStorage';
 import { projectState } from '../state/savedGraphs';
 import { removeLLMChatOutputHistorySelectionsForProcess } from '../utils/llmChatOutputHistory.js';
+import { shouldFollowLatestNodeProcess } from '../state/selectors/executionSelectors.js';
 
 export type ExecutionDataFlowApi = {
   clearNodeRunDataPreservationForNextStart: () => void;
@@ -98,6 +99,9 @@ export function useExecutionDataFlow(): ExecutionDataFlowApi {
     execution: GraphExecutionMetadata | undefined,
     data: Partial<NodeRunData>,
   ) => {
+    if (data.status && data.status.type !== 'running') {
+      setUserInputQuestions((questions) => removeUserInputQuestionsForProcess(questions, nodeId, processId));
+    }
     const storedData = storeNodeDataForHistory(prepareNodeRunDataForStorage(data), dataRefs, {
       nodeId,
       processId,
@@ -175,7 +179,9 @@ export function useExecutionDataFlow(): ExecutionDataFlowApi {
     const view = currentGraphViewLatest.current;
     const selectionByView = selectedGraphRunByViewLatest.current ?? {};
     const shouldFollowLatest =
-      view != null && execution?.graphId === view.graphId && (selectionByView[view.key] ?? 'latest') === 'latest';
+      view != null &&
+      execution?.graphId === view.graphId &&
+      shouldFollowLatestNodeProcess(selectionByView[view.key], execution);
 
     if (!shouldFollowLatest) {
       return;
@@ -231,6 +237,22 @@ export function useExecutionDataFlow(): ExecutionDataFlowApi {
     suppressPreloadedNodeEventsForCurrentRun,
     evaluationRunningLatest,
   };
+}
+
+/** A terminal invocation must not leave a prompt blocking other live branches. */
+export function removeUserInputQuestionsForProcess(
+  questions: Record<NodeId, ProcessQuestions[]>,
+  nodeId: NodeId,
+  processId: ProcessId,
+): Record<NodeId, ProcessQuestions[]> {
+  const pending = questions[nodeId];
+  if (!pending) return questions;
+  const remaining = pending.filter((request) => request.processId !== processId);
+  if (remaining.length === pending.length) return questions;
+  const next = { ...questions };
+  if (remaining.length > 0) next[nodeId] = remaining;
+  else delete next[nodeId];
+  return next;
 }
 
 export function prepareNodeRunDataForStorage(data: Partial<NodeRunData>): Partial<NodeRunData> {

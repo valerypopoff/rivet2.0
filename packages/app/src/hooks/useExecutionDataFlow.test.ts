@@ -1,8 +1,28 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import type { PortId } from '@valerypopoff/rivet2-core';
+import type { NodeId, PortId, ProcessId } from '@valerypopoff/rivet2-core';
 import type { NodeRunDataWithRefs } from '../state/dataFlow.js';
-import { mergeNodeRunDataForProcess, prepareNodeRunDataForStorage } from './useExecutionDataFlow.js';
+import {
+  mergeNodeRunDataForProcess,
+  prepareNodeRunDataForStorage,
+  removeUserInputQuestionsForProcess,
+} from './useExecutionDataFlow.js';
+
+test('terminal prompt removal preserves other nodes and removes empty entries without mutating state', () => {
+  const nodeId = 'finished-node' as NodeId;
+  const otherNodeId = 'waiting-node' as NodeId;
+  const processId = 'finished-process' as ProcessId;
+  const questions = {
+    [nodeId]: [{ nodeId, processId, questions: ['Finished?'] }],
+    [otherNodeId]: [{ nodeId: otherNodeId, processId: 'waiting-process' as ProcessId, questions: ['Waiting?'] }],
+  };
+  const next = removeUserInputQuestionsForProcess(questions, nodeId, processId);
+  assert.equal(Object.hasOwn(next, nodeId), false);
+  assert.equal(next[otherNodeId], questions[otherNodeId]);
+  assert.equal(questions[nodeId]!.length, 1);
+  assert.equal(removeUserInputQuestionsForProcess(next, nodeId, processId), next);
+  assert.equal(removeUserInputQuestionsForProcess(questions, otherNodeId, processId), questions);
+});
 
 test('prepareNodeRunDataForStorage drops malformed output fields from running updates', () => {
   const preparedData = prepareNodeRunDataForStorage({
