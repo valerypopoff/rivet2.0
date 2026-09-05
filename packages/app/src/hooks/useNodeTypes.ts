@@ -28,6 +28,7 @@ import { passthroughNodeDescriptor } from '../components/nodes/PassthroughNode.j
 import { dataBusNodeDescriptor } from '../components/nodes/DataBusNode.js';
 import { llmChatV2NodeDescriptor } from '../components/nodes/LLMChatV2Node.js';
 import { llmProfileNodeDescriptor } from '../components/nodes/LLMProfileNode.js';
+import { toolNodeDescriptor } from '../components/nodes/ToolNode.js';
 import { useAtomValue } from 'jotai';
 import { useProjectNodeRegistry } from './useProjectNodeRegistry';
 import type { NodeOutputCopyValueProjector } from '../utils/executionDataCopyValue.js';
@@ -93,6 +94,7 @@ const overriddenDescriptors: Partial<NodeComponentDescriptors> = {
   dataBus: dataBusNodeDescriptor,
   llmChatV2: llmChatV2NodeDescriptor,
   llmProfile: llmProfileNodeDescriptor,
+  gptFunction: toolNodeDescriptor,
 };
 
 export function useNodeTypes(): NodeComponentDescriptors {

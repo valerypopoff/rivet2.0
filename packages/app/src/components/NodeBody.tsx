@@ -8,7 +8,6 @@ import {
 import { useUnknownNodeComponentDescriptorFor } from '../hooks/useNodeTypes.js';
 import {
   type ChartNode,
-  type ColorizedNodeBodySpec,
   type MarkdownNodeBodySpec,
   type NodeBodySpec,
   type PlainNodeBodySpec,
@@ -19,7 +18,7 @@ import {
 import { useMarkdown } from '../hooks/useMarkdown';
 import { match } from 'ts-pattern';
 import styled from '@emotion/styled';
-import ColorizedPreformattedText from './ColorizedPreformattedText';
+import { ColorizedNodeBody } from './ColorizedNodeBody.js';
 import { useDependsOnPlugins } from '../hooks/useDependsOnPlugins';
 import { useGetRivetUIContext } from '../hooks/useGetRivetUIContext';
 import { useProjectNodeRegistry } from '../hooks/useProjectNodeRegistry';
@@ -210,23 +209,3 @@ export const MarkdownNodeBody: FC<MarkdownNodeBodySpec> = memo(({ text, disableL
 });
 
 MarkdownNodeBody.displayName = 'MarkdownNodeBody';
-
-function shouldWrapColorizedNodeBody(language: string): boolean {
-  return language === 'prompt-interpolation-markdown';
-}
-
-export const ColorizedNodeBody: FC<ColorizedNodeBodySpec> = memo(({ text, language, theme }) => {
-  const wrapWords = shouldWrapColorizedNodeBody(language);
-
-  return (
-    <ColorizedPreformattedText
-      text={text}
-      language={language}
-      theme={theme}
-      className={wrapWords ? 'node-body-colorized-wrap' : undefined}
-      wrapWords={wrapWords}
-    />
-  );
-});
-
-ColorizedNodeBody.displayName = 'ColorizedNodeBody';

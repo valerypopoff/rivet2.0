@@ -18,6 +18,7 @@ import { coerceTypeOptional, coerceType } from '../../utils/coerceType.js';
 import { getInputOrData } from '../../utils/index.js';
 import { createInterpolationInputDefinition } from '../interpolationInputDefinition.js';
 import type { GptFunctionResultHandling } from '../DataValue.js';
+import { buildNodeBodyPreview } from './nodeBodyPreview.js';
 
 export type GptFunctionNode = ChartNode<'gptFunction', GptFunctionNodeData>;
 
@@ -35,6 +36,31 @@ export type GptFunctionNodeData = {
 
   strict?: boolean;
 };
+
+export type ToolNodeBodyPreview = Readonly<{
+  name: string;
+  description: string;
+}>;
+
+const TOOL_NODE_BODY_PREVIEW_MAX_LINES = 14;
+
+/**
+ * Splits Tool's bounded canvas preview into its label/value row and its text body.
+ *
+ * The combined source preview deliberately uses one fewer line than Text to
+ * compensate for the custom header's visual separator.
+ */
+export function getToolNodeBodyPreview(data: Pick<GptFunctionNodeData, 'name' | 'description'>): ToolNodeBodyPreview {
+  const [name = '', ...descriptionLines] = buildNodeBodyPreview(
+    `${data.name}\n${data.description}`,
+    TOOL_NODE_BODY_PREVIEW_MAX_LINES,
+  ).split('\n');
+
+  return {
+    name,
+    description: descriptionLines.join('\n'),
+  };
+}
 
 export class GptFunctionNodeImpl extends NodeImpl<GptFunctionNode> {
   static create(): GptFunctionNode {
@@ -181,9 +207,13 @@ export class GptFunctionNodeImpl extends NodeImpl<GptFunctionNode> {
   }
 
   getBody(): string | NodeBodySpec | undefined {
+    const preview = getToolNodeBodyPreview(this.data);
+
     return {
-      type: 'markdown',
-      text: `**${this.data.name}**\n${this.data.description}`,
+      type: 'colorized',
+      language: 'prompt-interpolation-markdown',
+      theme: 'prompt-interpolation',
+      text: [preview.name, preview.description].filter(Boolean).join('\n'),
     };
   }
 

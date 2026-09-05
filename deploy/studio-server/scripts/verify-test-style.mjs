@@ -119,6 +119,7 @@ function assertRootTestCommand(command) {
   const requiredSegments = [
     'yarn studio-server:build',
     'yarn studio-server:verify:clean',
+    'yarn studio-server:verify:dev-watcher',
     'yarn workspace @valerypopoff/rivet-studio-server-api run test',
     'yarn studio-server:verify:web-pure',
     'yarn studio-server:verify:test-style',
