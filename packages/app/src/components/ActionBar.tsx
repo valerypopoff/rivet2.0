@@ -6,9 +6,8 @@ import { useLoadRecording } from '../hooks/useLoadRecording';
 import { useSaveRecording } from '../hooks/useSaveRecording';
 import { graphRunningState, graphPausedState } from '../state/dataFlow';
 import {
-  getLoadedRecordingForProject,
+  currentProjectLoadedRecordingState,
   lastRecordingState,
-  loadedRecordingState,
   recordingPlaybackStartingState,
 } from '../state/execution';
 import { selectedExecutorState } from '../state/settings';
@@ -183,7 +182,7 @@ export const ActionBar: FC<ActionBarProps> = ({ onRunGraph, onAbortGraph, onPaus
   const graphRunning = useAtomValue(graphRunningState);
   const graphPaused = useAtomValue(graphPausedState);
 
-  const loadedRecording = getLoadedRecordingForProject(useAtomValue(loadedRecordingState), projectMetadata.id);
+  const loadedRecording = useAtomValue(currentProjectLoadedRecordingState);
   const recordingPlaybackStarting = useAtomValue(recordingPlaybackStartingState);
   const { unloadRecording } = useLoadRecording();
   const [menuIsOpen, toggleMenuIsOpen] = useToggle();

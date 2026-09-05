@@ -31,7 +31,9 @@ export type SerializedEditorCommand = Extract<
 >;
 
 export type EditorCommandBridgeContext = {
-  clearLoadedRecording(projectId?: ProjectId): void;
+  /** Clears playback only when the exact replay tab is being replaced or refreshed. */
+  clearLoadedRecordingForPath(projectPath?: string | null): void;
+  rebindLoadedRecordingPath(fromPath: string, toPath: string): void;
   getCurrentProject(): Project;
   getSelectedExecutor(): DefaultExecutor;
   loadProjectData(path: string): Promise<{ project: Project; evaluation: EvaluationProjectFileData }>;

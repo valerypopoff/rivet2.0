@@ -3,7 +3,7 @@ import { type FC, type MouseEvent } from 'react';
 import type { ProjectId } from '@valerypopoff/rivet2-core';
 import { useLoadRecording } from '../hooks/useLoadRecording';
 import { useExecutorSessionState } from '../hooks/useExecutorSession';
-import { getLoadedRecordingForProject, loadedRecordingState } from '../state/execution';
+import { currentProjectLoadedRecordingState } from '../state/execution';
 import { getExecutorOptions, selectedExecutorState } from '../state/settings';
 import { useExecutorSessionHostConfig } from '../providers/ExecutorSessionContext.js';
 import { isRivetAppHostCapabilityEnabled, useRivetAppHostUiConfig } from '../providers/HostUiConfigContext.js';
@@ -68,10 +68,7 @@ export const ActionBarMoreMenu: FC<{
   const setDebuggerPanelAnchor = useSetAtom(debuggerPanelAnchorState);
   const [selectedExecutor, setSelectedExecutor] = useAtom(selectedExecutorState);
   const currentProject = useAtomValue(projectState);
-  const loadedRecording = getLoadedRecordingForProject(
-    useAtomValue(loadedRecordingState),
-    currentProject.metadata.id,
-  );
+  const loadedRecording = useAtomValue(currentProjectLoadedRecordingState);
   const setProjects = useSetAtom(projectsState);
   const { loadRecording } = useLoadRecording();
   const hostUiConfig = useRivetAppHostUiConfig();

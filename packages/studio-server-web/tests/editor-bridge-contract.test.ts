@@ -9,9 +9,33 @@ const workflowRecordingBridgeSource = readFileSync(
   'utf8',
 );
 
-test('recording activation preserves the selected executor', () => {
+test('recording activation preserves the selected executor and the exact replay-tab path', () => {
   assert.doesNotMatch(workflowRecordingBridgeSource, /selectBrowserExecutor/);
-  assert.match(workflowRecordingBridgeSource, /setLoadedRecording\(\{ \.\.\.loadedRecording, projectId \}\);/);
+  assert.match(workflowRecordingBridgeSource, /activateLoadedRecording\(\{ \.\.\.loadedRecording, projectId, projectPath \}\);/);
+  assert.match(workflowRecordingBridgeSource, /activateWorkflowRecording\(cachedRecording, currentProjectId, projectPath\)/);
+  assert.match(workflowRecordingBridgeSource, /clearLoadedRecordingForPath\(projectPath\);/);
+});
+
+test('replacing a tab clears playback by its path, never just by a reused project ID', () => {
+  const editorCommandBridgeSource = readFileSync(
+    new URL('../dashboard/useEditorCommandBridge.ts', import.meta.url),
+    'utf8',
+  );
+
+  assert.match(editorCommandBridgeSource, /clearLoadedRecordingForPath: \(projectPath\) =>/);
+  assert.match(editorCommandBridgeSource, /clearLoadedRecordingForPathState/);
+  assert.match(editorCommandBridgeSource, /clearLoadedRecordingForPath\(projectPath\);/);
+  assert.doesNotMatch(editorCommandBridgeSource, /loadedRecordingState/);
+});
+
+test('project path moves rebind a manually loaded recording to its owner tab', () => {
+  const lifecycleCommandsSource = readFileSync(
+    new URL('../dashboard/editorProjectLifecycleCommands.ts', import.meta.url),
+    'utf8',
+  );
+
+  assert.match(lifecycleCommandsSource, /const workspaceMoves = getHostedProjectPathMoveInputs\(moves\);/);
+  assert.match(lifecycleCommandsSource, /context\.rebindLoadedRecordingPath\(move\.from, move\.to\);/);
 });
 
 test('recording opens give a new replay tab the active local executor mode', () => {

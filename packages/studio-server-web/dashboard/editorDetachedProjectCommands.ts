@@ -54,7 +54,7 @@ export async function handleOpenRecordingCommand(
     if (!openResult.opened || !openResult.projectId) {
       context.recording.recordingByProjectPathRef.current.delete(virtualProjectPath);
       if (context.getLoadedProject().path === virtualProjectPath) {
-        context.clearLoadedRecording(context.getCurrentProject().metadata.id);
+        context.clearLoadedRecordingForPath(virtualProjectPath);
       }
       return;
     }
@@ -62,13 +62,13 @@ export async function handleOpenRecordingCommand(
       context.preview.clearPreviewProjectByPath(replacedPath);
       context.recording.recordingByProjectPathRef.current.delete(replacedPath);
     }
-    context.recording.activateWorkflowRecording(loadedRecording, openResult.projectId);
+    context.recording.activateWorkflowRecording(loadedRecording, openResult.projectId, virtualProjectPath);
     focusHostedEditorFrame();
     postMessageToDashboard({ type: 'project-opened', path: virtualProjectPath });
   } catch (error) {
     context.recording.recordingByProjectPathRef.current.delete(virtualProjectPath);
     if (context.getLoadedProject().path === virtualProjectPath) {
-      context.clearLoadedRecording(context.getCurrentProject().metadata.id);
+      context.clearLoadedRecordingForPath(virtualProjectPath);
     }
     const message = getError(error).message;
     console.error('Failed to open workflow recording:', error);
@@ -96,7 +96,7 @@ export async function handleOpenPublishedPreviewCommand(
       context.preview.clearPreviewProjectByPath(replacedPath);
       context.recording.recordingByProjectPathRef.current.delete(replacedPath);
     }
-    context.clearLoadedRecording(openResult.projectId);
+    context.clearLoadedRecordingForPath(replacedPath || undefined);
     focusHostedEditorFrame();
     postMessageToDashboard({ type: 'project-opened', path: virtualProjectPath });
   } catch (error) {

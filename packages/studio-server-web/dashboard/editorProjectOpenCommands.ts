@@ -148,7 +148,7 @@ export async function handleOpenProjectCommand(
       context.preview.clearPreviewProjectByPath(replacedPath);
       context.recording.recordingByProjectPathRef.current.delete(replacedPath);
     }
-    context.clearLoadedRecording(openResult.projectId);
+    context.clearLoadedRecordingForPath(replacedPath || undefined);
     focusHostedEditorFrame();
     postMessageToDashboard({ type: 'project-opened', path: command.path, requestId: command.requestId });
   } catch (error) {
@@ -198,7 +198,7 @@ export async function handleRefreshOpenProjectCommand(
         fsPath: command.path,
         evaluation: loaded.evaluation,
       });
-      context.clearLoadedRecording(openedProject.projectId);
+      context.clearLoadedRecordingForPath(command.path);
       return true;
     } catch (error) {
       if (!replacementSucceeded) {
@@ -227,7 +227,7 @@ export async function handleRefreshOpenProjectCommand(
       rememberOpenedProjectPathAlias(context, command.path, openResult.projectId);
     }
     context.preview.promotePreviewProjectByPath(command.path);
-    context.clearLoadedRecording(openResult.projectId);
+    context.clearLoadedRecordingForPath(command.path);
     postMessageToDashboard({ type: 'project-opened', path: command.path });
     return true;
   } catch (error) {

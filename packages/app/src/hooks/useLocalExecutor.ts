@@ -39,8 +39,8 @@ import {
 import { recordExecutionsState, settingsState, showNodeRunDurationsState } from '../state/settings';
 import { graphState } from '../state/graph';
 import {
-  getLoadedRecordingForProject,
-  isCurrentLoadedRecordingForProject,
+  currentProjectLoadedRecordingState,
+  isCurrentLoadedRecordingForTab,
   lastRecordingState,
   loadedRecordingState,
   recordingPlaybackStartingState,
@@ -174,7 +174,7 @@ export function useLocalExecutor() {
   const eventDispatcher = createProcessEventDispatcher(currentExecution);
   const setUserInputQuestions = useSetAtom(userInputModalQuestionsState);
   const savedSettings = useAtomValue(settingsState);
-  const loadedRecording = getLoadedRecordingForProject(useAtomValue(loadedRecordingState), project.metadata.id);
+  const loadedRecording = useAtomValue(currentProjectLoadedRecordingState);
   const recordingPlaybackStarting = useAtomValue(recordingPlaybackStartingState);
   const setRecordingPlaybackStarting = useSetAtom(recordingPlaybackStartingState);
   const setLastRecordingState = useSetAtom(lastRecordingState);
@@ -475,7 +475,7 @@ export function useLocalExecutor() {
         // The user can close this tab during the repaint yield. Its recording
         // is released synchronously on close, so do not construct a hidden
         // playback processor from a stale captured selection.
-        if (!isCurrentLoadedRecordingForProject(store.get(loadedRecordingState), recordingToReplay, runProjectId)) {
+        if (!isCurrentLoadedRecordingForTab(store.get(loadedRecordingState), recordingToReplay, runProjectId)) {
           return undefined;
         }
       }
@@ -719,7 +719,7 @@ export function useLocalExecutor() {
         // A closed owner can be replaced by another tab's recording while this
         // stale invocation settles. Only the still-selected recording may
         // clear the shared short pre-start flag.
-        if (isCurrentLoadedRecordingForProject(store.get(loadedRecordingState), recordingToReplay, runProjectId)) {
+        if (isCurrentLoadedRecordingForTab(store.get(loadedRecordingState), recordingToReplay, runProjectId)) {
           recordingPlaybackStartingRef.current = false;
           setRecordingPlaybackStarting(false);
         }

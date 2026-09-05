@@ -18,12 +18,9 @@ test('executor picker immediately persists Browser/Node mode to the active proje
   );
 });
 
-test('recording playback replaces only the owning project\'s executor picker with a status', () => {
-  assert.match(actionBarMoreMenuSource, /getLoadedRecordingForProject, loadedRecordingState/);
-  assert.match(
-    actionBarMoreMenuSource,
-    /getLoadedRecordingForProject\(\s*useAtomValue\(loadedRecordingState\),\s*currentProject\.metadata\.id,\s*\)/,
-  );
+test('recording playback replaces only the owning editor tab\'s executor picker with a status', () => {
+  assert.match(actionBarMoreMenuSource, /currentProjectLoadedRecordingState/);
+  assert.match(actionBarMoreMenuSource, /useAtomValue\(currentProjectLoadedRecordingState\)/);
   assert.match(actionBarMoreMenuSource, /Not used during recording playback/);
   assert.match(
     actionBarMoreMenuSource,

@@ -6,7 +6,6 @@ import { useExecutorSessionRuntime, type RivetWorkspaceHost } from '../../app/sr
 import { graphRunningState } from '../../app/src/state/dataFlow';
 import {
   executorSessionRevisionState,
-  loadedRecordingState,
 } from '../../app/src/state/execution';
 import { openOrFocusGraphSearchState, searchingGraphState } from '../../app/src/state/graphBuilder';
 import {
@@ -45,7 +44,6 @@ export const EditorMessageBridge: FC<EditorMessageBridgeProps> = ({ savedProject
   const graphRunning = useAtomValue(graphRunningState);
   useAtomValue(executorSessionRevisionState);
   const openOverlay = useAtomValue(overlayOpenState);
-  const setLoadedRecording = useSetAtom(loadedRecordingState);
   const selectedExecutor = useAtomValue(selectedExecutorState);
   const setSearching = useSetAtom(searchingGraphState);
   const openedProjectPaths = useMemo(() => projects.openedProjectsSortedIds
@@ -63,7 +61,6 @@ export const EditorMessageBridge: FC<EditorMessageBridgeProps> = ({ savedProject
     currentProjectId: currentProject.metadata.id as ProjectId | undefined,
     loadedProjectPath: loadedProject.path,
     openedProjectPaths,
-    setLoadedRecording,
   });
   const openGraphSearch = useCallback(() => {
     setSearching(openOrFocusGraphSearchState);

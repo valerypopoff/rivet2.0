@@ -3,7 +3,10 @@ import { useSetAtom } from 'jotai';
 import { useEffect, useRef } from 'react';
 
 import { useIOProvider, type RivetWorkspaceHost } from '../../app/src/host';
-import { loadedRecordingState } from '../../app/src/state/execution';
+import {
+  clearLoadedRecordingForPathState,
+  rebindLoadedRecordingPathState,
+} from '../../app/src/state/execution';
 import {
   loadedProjectState,
   type OpenedProjectsInfo,
@@ -59,7 +62,8 @@ export function useEditorCommandBridge({
   workspaceHost: RivetWorkspaceHost;
 }) {
   const setLoadedProject = useSetAtom(loadedProjectState);
-  const setLoadedRecording = useSetAtom(loadedRecordingState);
+  const clearLoadedRecordingForPath = useSetAtom(clearLoadedRecordingForPathState);
+  const rebindLoadedRecordingPath = useSetAtom(rebindLoadedRecordingPathState);
   const ioProvider = useIOProvider();
   const projectsRef = useRef(projects);
   const loadedProjectRef = useRef(loadedProject);
@@ -81,10 +85,11 @@ export function useEditorCommandBridge({
 
   useEffect(() => {
     const context: EditorCommandBridgeContext = {
-      clearLoadedRecording: (projectId) => {
-        setLoadedRecording((loadedRecording) =>
-          projectId != null && loadedRecording?.projectId === projectId ? null : loadedRecording,
-        );
+      clearLoadedRecordingForPath: (projectPath) => {
+        clearLoadedRecordingForPath(projectPath);
+      },
+      rebindLoadedRecordingPath: (fromPath, toPath) => {
+        rebindLoadedRecordingPath({ fromPath, toPath });
       },
       getCurrentProject: () => currentProjectRef.current,
       getSelectedExecutor: () => selectedExecutorRef.current,
@@ -179,5 +184,5 @@ export function useEditorCommandBridge({
 
     window.addEventListener('message', handler);
     return () => window.removeEventListener('message', handler);
-  }, [preview, recording, setLoadedProject, setLoadedRecording]);
+  }, [clearLoadedRecordingForPath, preview, rebindLoadedRecordingPath, recording, setLoadedProject]);
 }
