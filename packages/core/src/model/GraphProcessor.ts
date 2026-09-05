@@ -2800,6 +2800,11 @@ export class GraphProcessor {
     partialOutput?: (node: ChartNode, partialOutputs: Outputs, index: number) => void,
     markResultAsEditorCacheHit?: () => void,
   ) {
+    // Split items enter here independently. A race can finish after the caller
+    // started but before a queued item receives its own abort controller.
+    if (this.#shouldSkipCompletedRaceNode(node, this.#getAttachedDataTo(node))) {
+      throw createGraphAbortError(createGraphAbortReason(true, RACE_LOSER_EXCLUSION_REASON));
+    }
     const instance = this.#nodeInstances[node.id]!;
     const nodeAbortController = this.#newAbortController();
     this.#registerNodeAbortController(node.id, nodeAbortController);
@@ -2826,6 +2831,9 @@ export class GraphProcessor {
       }
 
       await this.#waitUntilUnpaused();
+      if (nodeAbortController.signal.aborted) {
+        throw createGraphAbortErrorFromSignal(nodeAbortController.signal);
+      }
       const implementationProfileStart = this.#startRuntimeProfile();
       let results: Outputs;
       try {

@@ -102,6 +102,12 @@ Replay remains busy through `done` until terminal cleanup, matching live
 execution; start follow-up work from `finish` or after awaiting playback.
 Playback returns its own recorded result. Its completion must never replace
 outputs belonging to a live run started by a completion listener.
+Repeated split Subgraph invocations keep one caller process ID per loop
+iteration, a distinct child `graphRunId` per item, and the item's `splitIndex`.
+Pruning does not change that grouping or item order. Serialized replay remaps
+the execution IDs while preserving those parent/child relationships. If a split
+caller loses a race, only children already started emit abort events; its queued
+items create neither child runs nor recording history.
 Cost/duration report performed work when no same-named Graph Output owns
 the value. The output renderer continues to hide zero synthetic metrics.
 

@@ -379,6 +379,98 @@ void describe('GraphProcessor selected-output integration', { timeout: 10_000 },
     assert.deepEqual(outputs.cost, { type: 'number', value: 3 });
   });
 
+  for (const skipUnusedOutputs of [false, true]) {
+    for (const isSplitSequential of [false, true]) {
+      void it(`does not start queued ${isSplitSequential ? 'sequential' : 'parallel'} Subgraph items after losing a race (pruning ${skipUnusedOutputs})`, async () => {
+        const activeItemCount = isSplitSequential ? 1 : 2;
+        const child = graph(
+          'split-race-child',
+          [
+            node('graphInput', 'item-input', { id: 'item', dataType: 'number' }),
+            probe('waiter'),
+            output('wanted'),
+            probe('unused'),
+            output('unused'),
+          ],
+          [
+            connect('item-input', 'waiter', 'input', 'data'),
+            connect('waiter', 'wanted-output', 'value'),
+            connect('unused', 'unused-output', 'value'),
+          ],
+        );
+        const caller = node('subGraph', 'caller', { graphId: child.metadata!.id, skipUnusedOutputs });
+        caller.isSplitRun = true;
+        caller.isSplitSequential = isSplitSequential;
+        caller.splitRunConcurrency = 2;
+        const main = graph(
+          'split-race-parent',
+          [
+            probe('items', { type: 'number[]', value: [1, 2, 3, 4] }),
+            caller,
+            probe('winner'),
+            node('raceInputs', 'race'),
+            output('result'),
+          ],
+          [
+            connect('items', 'caller', 'item'),
+            connect('caller', 'race', 'input1', 'wanted'),
+            connect('winner', 'race', 'input2'),
+            connect('race', 'result-output', 'value', 'result'),
+          ],
+        );
+        const f = fixture(main, [child]);
+        const entered = deferred();
+        let starts = 0;
+        let cancellations = 0;
+        f.handlers.set('waiter' as NodeId, async (_inputs, context) => {
+          starts++;
+          if (starts > activeItemCount) {
+            // A regression must fail by count, not hang indefinitely in a new wait.
+            return { output: { type: 'string', value: 'unexpected queued work' } };
+          }
+          if (starts === activeItemCount) entered.resolve();
+          return await new Promise<Outputs>((_resolve, reject) => {
+            context.signal.addEventListener(
+              'abort',
+              () => {
+                cancellations++;
+                reject(context.signal.reason);
+              },
+              { once: true },
+            );
+          });
+        });
+        f.handlers.set('winner' as NodeId, async () => {
+          await entered.promise;
+          return { output: { type: 'string', value: 'winner' } };
+        });
+        const processor = f.createProcessor();
+        const recorder = new ExecutionRecorder();
+        recorder.record(processor);
+        const children: ProcessEvents['graphStart'][] = [];
+        processor.on('graphStart', (event) => {
+          if (event.graph.metadata!.id === child.metadata!.id) children.push(event);
+        });
+        assert.deepEqual((await processor.processGraph(testProcessContext())).result, {
+          type: 'string',
+          value: 'winner',
+        });
+        assert.equal(cancellations, activeItemCount);
+        assert.equal(starts, activeItemCount, 'queued split items must not restart a cancelled branch');
+        assert.equal(children.length, activeItemCount, 'cancelled queued items must not fabricate child runs');
+        assert.equal(f.runs.has('unused' as NodeId), !skipUnusedOutputs);
+        const saved = ExecutionRecorder.deserializeFromString(recorder.serialize());
+        const childAborts = saved.events.filter(
+          (event) => event.type === 'graphAbort' && event.data.graphId === child.metadata!.id,
+        );
+        assert.equal(childAborts.length, activeItemCount, 'only children that started have terminal lifecycle events');
+        const replay = f.createProcessor();
+        assert.deepEqual((await replay.replayRecording(saved)).result, { type: 'string', value: 'winner' });
+        assert.equal(starts, activeItemCount, 'replay must not execute the waiting implementation');
+      });
+    }
+  }
+
   void it('omits independent async work and still rejects an async branch feeding a requested output', async () => {
     const main = graph(
       'selected-async',

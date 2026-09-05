@@ -47,6 +47,7 @@ import {
 } from '../src/cliRuntime.js';
 import { formatListenUrl } from '../src/http.js';
 import { shapeOutputs } from '../src/output.js';
+import { makeLoopedSplitOutputProject } from '../../node/test/outputSelectionFixtures.js';
 
 test('run command builder registers its default option values', async () => {
   const command = makeRunCommand(yargs([])).exitProcess(false);
@@ -347,6 +348,24 @@ test('run command executes a real project and writes shaped output', async (t) =
 
   assert.equal(await readFile(outputFile, 'utf8'), '"hello"\n');
 });
+
+for (const isSplitSequential of [false, true]) {
+  for (const skipUnusedOutputs of [false, true]) {
+    test(`run command preserves looped ${isSplitSequential ? 'sequential' : 'parallel'} Subgraph results with pruning ${skipUnusedOutputs}`, async (t) => {
+      const { project } = makeLoopedSplitOutputProject(skipUnusedOutputs, isSplitSequential);
+      const projectFile = await writeTemporaryProject(t, project);
+      const outputFile = join(dirname(projectFile), 'output.json');
+      await run({
+        ...buildRunArgs(),
+        projectFile,
+        inputJson: ['items=[1,2,3]'],
+        outputFile,
+        unwrapOutput: 'result',
+      });
+      assert.deepEqual(JSON.parse(await readFile(outputFile, 'utf8')), [[4, 5, 6]]);
+    });
+  }
+}
 
 test('run command can persist dataset mutations through the project-adjacent data file', async (t) => {
   const projectFile = await writeTemporaryProject(t, createDatasetAppendProject());

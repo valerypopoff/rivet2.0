@@ -80,6 +80,45 @@ export function makeDelayedUnusedOutputProject(skipUnusedOutputs: boolean, delay
   return fixture;
 }
 
+/** The loop repeatedly calls a split Subgraph, sharing its child plan across items and iterations. */
+export function makeLoopedSplitOutputProject(skipUnusedOutputs: boolean, isSplitSequential: boolean) {
+  const fixture = makeUnusedOutputProject(skipUnusedOutputs, 1);
+  const main = fixture.project.graphs[fixture.graphId]!;
+  const child = fixture.project.graphs[fixture.childGraphId]!;
+  main.nodes = [
+    node('graphInput', 'items-input', { id: 'items', dataType: 'number[]' }),
+    node('loopController', 'loop', { maxIterations: 3, atMaxIterationsAction: 'break' }),
+    {
+      ...node('subGraph', 'subgraph', { graphId: fixture.childGraphId, skipUnusedOutputs }),
+      isSplitRun: true,
+      isSplitSequential,
+      splitRunMax: 20,
+      splitRunConcurrency: 2,
+    },
+    node('graphOutput', 'result-output', { id: 'result', dataType: 'any' }),
+  ];
+  main.connections = [
+    connection('items-input', 'data', 'loop', 'input1Default'),
+    connection('loop', 'output1', 'subgraph', 'seed'),
+    connection('subgraph', 'wanted', 'loop', 'input1'),
+    connection('loop', 'break', 'result-output', 'value'),
+  ];
+  child.nodes = [
+    node('graphInput', 'seed-input', { id: 'seed', dataType: 'number' }),
+    node('expression', 'increment', { expression: '{{seed}} + 1' }),
+    node('graphOutput', 'wanted-output', { id: 'wanted', dataType: 'number' }),
+    node('text', 'unused-text', { text: 'Unused {{seed}}' }),
+    node('graphOutput', 'unused-output', { id: 'unused', dataType: 'string' }),
+  ];
+  child.connections = [
+    connection('seed-input', 'data', 'increment', 'seed'),
+    connection('increment', 'output', 'wanted-output', 'value'),
+    connection('seed-input', 'data', 'unused-text', 'seed'),
+    connection('unused-text', 'output', 'unused-output', 'value'),
+  ];
+  return { project: fixture.project, graphId: fixture.graphId, childGraphId: fixture.childGraphId };
+}
+
 function node(type: string, id: string, data: Record<string, unknown>): ChartNode {
   return { type, id: id as NodeId, title: id, data, visualData: { x: 0, y: 0 } };
 }

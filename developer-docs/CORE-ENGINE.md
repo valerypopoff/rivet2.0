@@ -1118,6 +1118,14 @@ cancellation during key-lock release cannot leave an unhandled rejection.
 Shared producers required by a requested output still run once; computing several
 values in one LLM/Code node does not make that invocation partially lazy.
 
+Split Subgraph callers use the same fixed structural demand for every item and
+loop iteration, with independent child results and graph-run IDs. Queued split
+items must recheck their caller's race-completion state before creating another
+node context or child processor: cancelling only the already-active controllers
+would allow later sequential/parallel items to restart a losing branch. Dispatch
+also checks its abort signal after waiting for resume, before calling the node
+implementation. These cancellation checks apply with pruning on or off.
+
 Run `yarn workspace @valerypopoff/rivet2-node exec tsx bench/outputSelection.bench.ts`
 to compare independent work with shared-only work. The fixtures keep shared-only
 execution at 7 nodes, reduce 200 unused Text nodes from 206 executed nodes to 5,
@@ -1137,6 +1145,17 @@ entrypoints and fast-parent/compatible-child scheduling, while Core covers
 recording/replay. For the catalog, invocation history, save/reload, and
 hosted-browser checks, follow
 [Subgraph output-pruning verification](studio-server/development.md#subgraph-output-pruning-verification).
+
+`outputSelectionRepeatedCalls.test.ts` adds a saved-project Node runtime matrix:
+three loop iterations each invoke a three-item split Subgraph in parallel or
+sequential mode, with pruning on/off and default/compatible runtime profiles.
+It verifies results across processor reuse and concurrent `createGraphRunner`
+calls, plus serialized-recording replay and per-item/iteration execution identity.
+Each selected child runs 3 nodes instead of 5 (27 versus 45 child node starts per
+root invocation); this is omitted-work evidence, not a timing claim. CLI's
+`cli.test.ts` executes the same saved loop/split fixture through the run command.
+Core's selected-output integration suite also verifies queued race-loser items
+do not start, both with and without pruning, and replays their cancellation events.
 
 ### User input
 

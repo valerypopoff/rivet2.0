@@ -366,6 +366,17 @@ lifecycle events only in the selected run. Run it with
 `yarn workspace @valerypopoff/rivet-app-executor test`. This catches upload/cache
 regressions but still does not prove freshness of an existing Docker image.
 
+`workflow-recordings-http.test.ts` covers the separate headless HTTP path using
+temporary filesystem workflow/recording roots and a local test server. Concurrent
+published/latest requests invoke an opted-in Subgraph in both many-parallel and
+many-sequential modes. The test reads the persisted recording and replay-project
+artifacts, replays them, and checks ordered results, omitted node events, excluded
+caller outputs, and distinct per-request/per-item execution identities. It uses
+only Graph Input/Output and Text nodes, with no model calls or production writes.
+Run `yarn workspace @valerypopoff/rivet-studio-server-api test:files src/tests/workflow-recordings-http.test.ts`
+after building Core and Node. For loops, processor reuse, and the CLI path, also
+run Node's `outputSelectionRepeatedCalls.test.ts` and `yarn test:cli`.
+
 Run against a verified current-source hosted app and, for the Node scenario, a
 verified current executor image. The Docker dev web is source-mounted, but its
 executor is an image-built snapshot: incremental host Core/Node builds do not
