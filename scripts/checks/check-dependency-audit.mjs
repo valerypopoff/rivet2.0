@@ -1,21 +1,12 @@
 import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
+import { hasPotentialAuditJsonRows, runAuditWithRetries } from './dependency-audit-retry.mjs';
 
 const rootDirectory = resolve(import.meta.dirname, '../..');
 const defaultExceptionsPath = resolve(rootDirectory, 'security/dependency-audit-exceptions.json');
-const auditRetryDelayMs = 10_000;
-const maxAuditAttempts = 2;
+const auditProcessTimeoutMs = 180_000;
 const isYarnReporterLine = (line) => /^\s*➤\s+YN\d{4}:\s/u.test(line);
-const hasPotentialAuditJsonRows = (text) => text.split(/\r?\n/).some((line) => line.trimStart().startsWith('{'));
-const isTransientAuditFailure = (result) =>
-  result.status !== 0 &&
-  !hasPotentialAuditJsonRows(result.stdout) &&
-  /RequestError: Timeout awaiting 'socket'|\b(?:ECONNRESET|ECONNREFUSED|ETIMEDOUT|EAI_AGAIN)\b|Response Code: (?:408|425|429|500|502|503|504)\b/u.test(
-    `${result.stdout}\n${result.stderr}`,
-  );
-
-const waitForAuditRetry = () => new Promise((resolve) => setTimeout(resolve, auditRetryDelayMs));
 
 const parseArguments = (arguments_) => {
   const inputIndex = arguments_.indexOf('--input');
@@ -44,40 +35,37 @@ const parseAuditRows = (text) =>
     .filter((row) => row.children?.Severity);
 
 const runAudit = async () => {
-  let result;
-  for (let attempt = 1; attempt <= maxAuditAttempts; attempt += 1) {
-    result = spawnSync(
-      process.execPath,
-      ['.yarn/releases/yarn-4.17.1.cjs', 'npm', 'audit', '--all', '--recursive', '--json', '--no-deprecations'],
-      {
-        cwd: rootDirectory,
-        encoding: 'utf8',
-        maxBuffer: 64 * 1024 * 1024,
-        // The audit excludes non-security deprecation annotations, so this
-        // security-only bulk request does not fan out into metadata requests
-        // for every package in the dependency graph.
-        env: {
-          ...process.env,
-          YARN_HTTP_TIMEOUT: process.env.YARN_HTTP_TIMEOUT ?? '120000',
-          YARN_NPM_REGISTRY_SERVER: process.env.YARN_NPM_REGISTRY_SERVER ?? 'https://registry.npmjs.org',
+  const result = await runAuditWithRetries({
+    run: () =>
+      spawnSync(
+        process.execPath,
+        ['.yarn/releases/yarn-4.17.1.cjs', 'npm', 'audit', '--all', '--recursive', '--json', '--no-deprecations'],
+        {
+          cwd: rootDirectory,
+          encoding: 'utf8',
+          maxBuffer: 64 * 1024 * 1024,
+          timeout: auditProcessTimeoutMs,
+          // The audit excludes non-security deprecation annotations, so this
+          // security-only bulk request does not fan out into metadata requests
+          // for every package in the dependency graph.
+          env: {
+            ...process.env,
+            YARN_HTTP_TIMEOUT: process.env.YARN_HTTP_TIMEOUT ?? '120000',
+            YARN_NPM_REGISTRY_SERVER: process.env.YARN_NPM_REGISTRY_SERVER ?? 'https://registry.npmjs.org',
+          },
         },
-      },
-    );
+      ),
+  });
 
-    if (result.error) throw result.error;
-    if (!isTransientAuditFailure(result) || attempt === maxAuditAttempts) break;
+  if (result.error) throw result.error;
 
-    console.warn(
-      `Dependency audit attempt ${attempt} hit a transient registry failure; retrying once in ${auditRetryDelayMs / 1000}s.`,
-    );
-    await waitForAuditRetry();
+  const stdout = result.stdout ?? '';
+  const stderr = result.stderr ?? '';
+  if (!stdout.trim()) {
+    throw new Error(`Dependency audit produced no report.${stderr ? `\n${stderr.trim()}` : ''}`);
   }
-
-  if (!result.stdout.trim()) {
-    throw new Error(`Dependency audit produced no report.${result.stderr ? `\n${result.stderr.trim()}` : ''}`);
-  }
-  if (result.status !== 0 && !hasPotentialAuditJsonRows(result.stdout)) {
-    const diagnostic = [result.stdout.trim(), result.stderr.trim()].filter(Boolean).join('\n');
+  if (result.status !== 0 && !hasPotentialAuditJsonRows(stdout)) {
+    const diagnostic = [stdout.trim(), stderr.trim()].filter(Boolean).join('\n');
     throw new Error(
       `Dependency audit exited with status ${result.status ?? 'unknown'} before producing JSON findings.${
         diagnostic ? `\n${diagnostic}` : ''
@@ -86,9 +74,9 @@ const runAudit = async () => {
   }
 
   return {
-    output: result.stdout,
+    output: stdout,
     status: result.status,
-    stderr: result.stderr,
+    stderr,
   };
 };
 

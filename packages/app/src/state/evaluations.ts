@@ -3,6 +3,7 @@ import type {
   EvaluationBaselineSnapshot,
   EvaluationDataset,
   EvaluationLibrary,
+  EvaluationLibrarySyncIssue,
   EvaluationProjectData,
   EvaluationRun,
   EvaluationRunEvent,
@@ -312,7 +313,6 @@ export function mergeLegacyEvaluationLibrary(
   legacyDatasets?: readonly EvaluationDataset[],
   sourceProjectId?: ProjectId,
 ): EvaluationLibrary {
-  const local = normalizeEvaluationLibrary(library);
   let data = createEmptyEvaluationProjectData();
   try {
     data = legacyData === undefined ? data : deserializeEvaluationProjectData(legacyData);
@@ -331,10 +331,15 @@ export function mergeLegacyEvaluationLibrary(
   const hasLegacyResources = data.suites.length > 0 || data.baselines.length > 0 || validatedLegacyDatasets.length > 0;
   if (
     !hasLegacyResources ||
-    (sourceProjectId !== undefined && local.migratedLegacyProjectIds.includes(sourceProjectId))
+    (sourceProjectId !== undefined && library.migratedLegacyProjectIds.includes(sourceProjectId))
   ) {
-    return local;
+    // A project switch normally has no legacy resources. Returning the exact
+    // already-hydrated library prevents a workspace reset from looking like a
+    // library edit to hosted persistence.
+    return library;
   }
+
+  const local = normalizeEvaluationLibrary(library);
 
   const datasetIds = new Set(local.datasets.map((dataset) => dataset.id));
   const importedDatasets: EvaluationDataset[] = [];
@@ -460,6 +465,8 @@ export function applyEvaluationRunEvent(state: EvaluationsState, event: Evaluati
 
 /** Hydrated and persisted by the active EvaluationStore provider. */
 export const evaluationLibraryState = atom<EvaluationLibrary>(createEmptyEvaluationLibrary());
+/** A hosted-library save requiring explicit conflict resolution or a retry. */
+export const evaluationLibrarySyncIssueState = atom<EvaluationLibrarySyncIssue | undefined>(undefined);
 const evaluationWorkspaceState = atom<EvaluationWorkspaceState>({
   activeView: 'definition',
   suitePresentationByScope: {},

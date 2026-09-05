@@ -13,7 +13,8 @@ import { useDependsOnPlugins } from '../hooks/useDependsOnPlugins.js';
 import { fillMissingSettingsFromEnvironmentVariables } from '../utils/tauri.js';
 import { prefetchChatV2DiscoveredModelOptions } from '../utils/chatV2ModelCatalog.js';
 import { useEnvironmentProvider, useEvaluationStore } from '../providers/ProvidersContext.js';
-import { evaluationLibraryState } from '../state/evaluations.js';
+import { EvaluationLibrarySyncDialog } from './evaluations/EvaluationLibrarySyncDialog.js';
+import { evaluationLibraryState, evaluationLibrarySyncIssueState } from '../state/evaluations.js';
 import { handleError } from '../utils/errorHandling.js';
 
 // Storage-backed atoms read synchronously on mount, so this subtree must stay behind the
@@ -24,8 +25,24 @@ const InitializedRivetApp = ({ children }: { children?: ReactNode }) => {
   const environmentProvider = useEnvironmentProvider();
   const evaluationStore = useEvaluationStore();
   const evaluationLibrary = useAtomValue(evaluationLibraryState);
+  const setEvaluationLibrary = useSetAtom(evaluationLibraryState);
+  const evaluationLibrarySyncIssue = useAtomValue(evaluationLibrarySyncIssueState);
+  const setEvaluationLibrarySyncIssue = useSetAtom(evaluationLibrarySyncIssueState);
   const pendingLibraryWrite = useRef(Promise.resolve());
   const lastObservedLibrary = useRef(evaluationLibrary);
+  const evaluationLibrarySyncIssueId = useRef<string>();
+
+  useEffect(() => {
+    if (!evaluationStore.subscribeLibrarySyncIssue) {
+      evaluationLibrarySyncIssueId.current = undefined;
+      setEvaluationLibrarySyncIssue(undefined);
+      return;
+    }
+    return evaluationStore.subscribeLibrarySyncIssue((issue) => {
+      evaluationLibrarySyncIssueId.current = issue?.id;
+      setEvaluationLibrarySyncIssue(issue);
+    });
+  }, [evaluationStore]);
 
   useEffect(() => {
     // Hydration updates the atom before this subtree mounts. Do not turn every
@@ -34,12 +51,67 @@ const InitializedRivetApp = ({ children }: { children?: ReactNode }) => {
     if (lastObservedLibrary.current === evaluationLibrary) return;
     lastObservedLibrary.current = evaluationLibrary;
     const librarySnapshot = structuredClone(evaluationLibrary);
-    const write = pendingLibraryWrite.current
-      .catch(() => undefined)
-      .then(() => evaluationStore.putLibrary(librarySnapshot));
-    pendingLibraryWrite.current = write;
-    void write.catch((error) => handleError(error, 'Failed to save the evaluation library'));
+    const issueIdBeforeWrite = evaluationLibrarySyncIssueId.current;
+    // Hosted stores capture resource deltas at the moment the atom changes so
+    // a later acknowledgement cannot accidentally replay an older full
+    // library over another browser's unrelated edit. Local stores retain the
+    // existing serialized whole-library write path.
+    const write = evaluationStore.mutateLibrary
+      ? evaluationStore.putLibrary(librarySnapshot)
+      : (pendingLibraryWrite.current = pendingLibraryWrite.current
+          .catch(() => undefined)
+          .then(() => evaluationStore.putLibrary(librarySnapshot)));
+    void write.catch((error) => {
+      // The hosted store exposes conflicts and retryable failures through the
+      // dedicated resolution dialog. Do not hide that actionable state behind
+      // a generic toast. Stores without that capability retain the legacy
+      // error handling behavior.
+      if (
+        evaluationLibrarySyncIssueId.current !== undefined &&
+        evaluationLibrarySyncIssueId.current !== issueIdBeforeWrite
+      ) {
+        return;
+      }
+      handleError(error, 'Failed to save the evaluation library');
+    });
   }, [evaluationLibrary, evaluationStore]);
+
+  useEffect(() => {
+    if (!evaluationStore.subscribeLibraryInvalidation || !evaluationStore.getLibrarySyncSnapshot) return;
+    let disposed = false;
+    let refreshInFlight = false;
+    let refreshPending = false;
+    const refresh = () => {
+      if (disposed) return;
+      refreshPending = true;
+      if (refreshInFlight) return;
+      refreshInFlight = true;
+      void (async () => {
+        while (refreshPending && !disposed) {
+          refreshPending = false;
+          try {
+            await evaluationStore.getLibrarySyncSnapshot!();
+            const library = await evaluationStore.getLibrary();
+            if (disposed) return;
+            // This is a server-orchestrated rebase, not a user edit. Advance
+            // the observer before setting the atom so it cannot trigger a
+            // redundant persistence write.
+            lastObservedLibrary.current = library;
+            setEvaluationLibrary(library);
+          } catch (error) {
+            console.warn('Failed to refresh the evaluation library:', error);
+          }
+        }
+      })().finally(() => {
+        refreshInFlight = false;
+      });
+    };
+    const unsubscribe = evaluationStore.subscribeLibraryInvalidation(refresh);
+    return () => {
+      disposed = true;
+      unsubscribe();
+    };
+  }, [evaluationStore, setEvaluationLibrary]);
 
   useAsyncEffect(async () => {
     const resolvedSettings = await fillMissingSettingsFromEnvironmentVariables(settings, plugins, {
@@ -54,6 +126,25 @@ const InitializedRivetApp = ({ children }: { children?: ReactNode }) => {
   return (
     <>
       <RivetApp />
+      <EvaluationLibrarySyncDialog
+        issue={evaluationLibrarySyncIssue}
+        onResolve={async (input) => {
+          if (!evaluationStore.resolveLibraryConflict) {
+            throw new Error('This evaluation store cannot resolve shared-library conflicts.');
+          }
+          const library = await evaluationStore.resolveLibraryConflict(input);
+          lastObservedLibrary.current = library;
+          setEvaluationLibrary(library);
+        }}
+        onRetry={async () => {
+          if (!evaluationStore.retryLibrarySync) {
+            throw new Error('This evaluation store cannot retry the pending shared-library save.');
+          }
+          const library = await evaluationStore.retryLibrarySync();
+          lastObservedLibrary.current = library;
+          setEvaluationLibrary(library);
+        }}
+      />
       {children}
     </>
   );
@@ -77,11 +168,16 @@ export const RivetAppLoader = ({
   const initializationGeneration = useRef(0);
   const evaluationStore = useEvaluationStore();
   const setEvaluationLibrary = useSetAtom(evaluationLibraryState);
+  const setEvaluationLibrarySyncIssue = useSetAtom(evaluationLibrarySyncIssueState);
 
   useAsyncEffect(async () => {
     const generation = ++initializationGeneration.current;
     setIsLoading(true);
     setLoadingError(undefined);
+    // The atom is process-global, while a hosted store can be replaced for a
+    // tenant/session change. Never let an unresolved issue from the old
+    // persistence boundary briefly render against the replacement store.
+    setEvaluationLibrarySyncIssue(undefined);
     try {
       configureHybridStorageBackend(storage);
 
@@ -108,7 +204,7 @@ export const RivetAppLoader = ({
       setLoadingError(message || 'Unknown persistence error');
       setIsLoading(false);
     }
-  }, [evaluationStore, setEvaluationLibrary, storage]);
+  }, [evaluationStore, setEvaluationLibrary, setEvaluationLibrarySyncIssue, storage]);
 
   const sourceIsCurrent =
     initializedSource?.evaluationStore === evaluationStore && initializedSource.storage === storage;

@@ -38,7 +38,15 @@ const build = parseWorkflow('.github/workflows/build.yml');
 const buildJobs = build.workflow.jobs;
 assertIncludesAll(
   Object.keys(buildJobs),
-  ['compiled-artifacts', 'package-tests', 'package-lint', 'static-validation', 'rust-audit', 'build'],
+  [
+    'compiled-artifacts',
+    'package-tests',
+    'package-lint',
+    'static-validation',
+    'javascript-audit',
+    'rust-audit',
+    'build',
+  ],
   'Build jobs',
 );
 assert.equal(build.workflow.concurrency['cancel-in-progress'], true, 'Build must cancel superseded refs.');
@@ -80,11 +88,24 @@ assert.equal(
   false,
   'Build must not duplicate the graph asset check already owned by test:style.',
 );
+assert.equal(buildJobs['javascript-audit']['timeout-minutes'], 20, 'JavaScript audit must have a bounded job timeout.');
+assert.equal(
+  findStep(buildJobs['javascript-audit'], 'Audit JavaScript dependencies', 'JavaScript-audit job').run,
+  'yarn security:audit',
+);
+assert.equal(
+  buildJobs['static-validation'].steps.some((step) => step.name === 'Audit JavaScript dependencies'),
+  false,
+  'Static validation must not hide the network-dependent JavaScript audit.',
+);
 assertIncludesAll(
   asArray(buildJobs.build.needs),
-  ['compiled-artifacts', 'package-tests', 'package-lint', 'static-validation', 'rust-audit'],
+  ['compiled-artifacts', 'package-tests', 'package-lint', 'static-validation', 'javascript-audit', 'rust-audit'],
   'Build aggregator',
 );
+const buildGate = findStep(buildJobs.build, 'Require every Build gate', 'Build aggregator');
+assert.equal(buildGate.env?.JAVASCRIPT_AUDIT_RESULT, '${{ needs.javascript-audit.result }}');
+assert.match(buildGate.run, /\$JAVASCRIPT_AUDIT_RESULT/, 'Build aggregator must require the JavaScript audit result.');
 assert.match(build.source, /job-timing\.mjs finish-at/, 'Build must report the complete workflow critical path.');
 
 const studio = parseWorkflow('.github/workflows/studio-server-verify.yml');

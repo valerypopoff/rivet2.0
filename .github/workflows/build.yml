@@ -140,8 +140,6 @@ jobs:
         run: node .yarn/releases/yarn-4.17.1.cjs install --immutable --immutable-cache
       - name: Verify fresh Yarn PnP dependency map
         run: yarn check:pnp:fresh
-      - name: Audit JavaScript dependencies
-        run: yarn security:audit
       - name: Docs typecheck
         run: yarn test:docs
       - name: Test style
@@ -151,6 +149,23 @@ jobs:
       - name: Report timing
         if: always()
         run: node scripts/ci/job-timing.mjs finish "Static repository validation"
+
+  javascript-audit:
+    name: Audit JavaScript dependencies
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+      - uses: ./.github/actions/setup-yarn
+      - name: Start timing
+        run: node scripts/ci/job-timing.mjs start "Audit JavaScript dependencies"
+      - name: Install dependencies
+        run: node .yarn/releases/yarn-4.17.1.cjs install --immutable --immutable-cache
+      - name: Audit JavaScript dependencies
+        run: yarn security:audit
+      - name: Report timing
+        if: always()
+        run: node scripts/ci/job-timing.mjs finish "Audit JavaScript dependencies"
 
   rust-audit:
     name: Audit Rust dependencies
@@ -192,6 +207,7 @@ jobs:
       - package-tests
       - package-lint
       - static-validation
+      - javascript-audit
       - rust-audit
     runs-on: ubuntu-latest
     steps:
@@ -201,9 +217,10 @@ jobs:
           TEST_RESULT: ${{ needs.package-tests.result }}
           LINT_RESULT: ${{ needs.package-lint.result }}
           STATIC_RESULT: ${{ needs.static-validation.result }}
+          JAVASCRIPT_AUDIT_RESULT: ${{ needs.javascript-audit.result }}
           RUST_RESULT: ${{ needs.rust-audit.result }}
         run: |
-          for result in "$COMPILE_RESULT" "$TEST_RESULT" "$LINT_RESULT" "$STATIC_RESULT" "$RUST_RESULT"; do
+          for result in "$COMPILE_RESULT" "$TEST_RESULT" "$LINT_RESULT" "$STATIC_RESULT" "$JAVASCRIPT_AUDIT_RESULT" "$RUST_RESULT"; do
             test "$result" = success
           done
       - uses: actions/checkout@v6

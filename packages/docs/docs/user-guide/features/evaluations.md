@@ -12,6 +12,12 @@ An open project supplies the graphs and execution context for a suite. Without a
 
 Older project-attached Evaluations data is imported into the local database once when that project opens. On the first upgraded desktop launch, Rivet also moves Evaluations data previously stored by its embedded browser into the native database; if that migration cannot be verified, Rivet keeps using the old browser store for the whole session instead of splitting data. Later project saves do not write migrated resources back into the project or sidecar file.
 
+### Working with a shared Rivet Server
+
+On Rivet Server, the Evaluation library is shared by everyone using that server. You can work on different suites and datasets at the same time: a save to one resource does not overwrite an unrelated resource changed by someone else. If another person changes the same suite or dataset after you began editing it, Rivet keeps both values safe and opens a resolution dialog.
+
+Choose **Use server version** to discard your pending change for that resource, or **Keep mine as copy** to retain your pending suite or dataset with a new identity alongside the server version. A pending deletion has no local content to copy, so it offers only the server-version choice. Temporary network or server failures are shown separately and offer **Retry save**; they do not mean that another person edited the resource. Project opening itself does not save the shared library.
+
 ## Suites and datasets
 
 The resizable left sidebar contains peer lists for **Evaluation suites** and **Datasets**. A suite references one dataset, while one dataset can be reused by multiple suites. Select a suite to open **Definition**, **Runs**, and **Compare**. Select a dataset to edit its fields and cases; the clickable **Used by … evaluation suites** text under its title reveals or hides its dependent suites.

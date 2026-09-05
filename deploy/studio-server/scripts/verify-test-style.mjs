@@ -118,6 +118,7 @@ function assertCommandHasExplicitTestFiles(command, label) {
 function assertRootTestCommand(command) {
   const requiredSegments = [
     'yarn studio-server:build',
+    'yarn studio-server:verify:clean',
     'yarn workspace @valerypopoff/rivet-studio-server-api run test',
     'yarn studio-server:verify:web-pure',
     'yarn studio-server:verify:test-style',
@@ -242,6 +243,11 @@ function main() {
     typeof rootScripts['studio-server:verify:test-style'],
     'string',
     'Root package.json should expose studio-server:verify:test-style.',
+  );
+  assert.equal(
+    typeof rootScripts['studio-server:verify:clean'],
+    'string',
+    'Root package.json should expose studio-server:verify:clean.',
   );
   assert.equal(
     typeof apiScripts.test,

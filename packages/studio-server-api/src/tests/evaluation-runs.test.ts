@@ -15,12 +15,18 @@ import {
   normalizeEvaluationRun,
   type EvaluationDatasetSnapshot,
   type EvaluationLibrary,
+  type EvaluationLibrarySyncIssue,
   type EvaluationRecordingArtifact,
   type EvaluationRun,
 } from "@valerypopoff/rivet2-evaluations";
 
 import { FilesystemRivetEvaluationStore } from "../evaluation-runs/filesystem-store.js";
-import type { RivetStudioEvaluationStore } from "../evaluation-runs/store.js";
+import {
+  applyCheckedEvaluationLibraryMutation,
+  EvaluationLibraryResourceConflictError,
+  getEvaluationLibraryResourceVersions,
+  type RivetStudioEvaluationStore,
+} from "../evaluation-runs/store.js";
 import { PostgresRivetEvaluationStore } from "../evaluation-runs/managed-store.js";
 import {
   evaluationRecordingSchema,
@@ -266,6 +272,52 @@ async function assertCompleteEvaluationStoreContract(
   assert.deepEqual((await store.getLibrary()).migratedLegacyProjectIds, [
     projectA,
   ]);
+
+  // Two browsers may start from the same snapshot and safely edit different
+  // resources. Only a stale write to the same resource must conflict.
+  const browserA = await store.getLibrarySyncSnapshot();
+  const browserB = await store.getLibrarySyncSnapshot();
+  const dataset = browserA.library.datasets.find((candidate) => candidate.id === "second-dataset");
+  const suite = browserB.library.data.suites.find((candidate) => candidate.id === "second-suite");
+  assert.ok(dataset);
+  assert.ok(suite);
+  const afterDatasetEdit = await store.mutateLibrary({
+    changes: [
+      {
+        kind: "put-dataset",
+        id: dataset.id,
+        expectedVersion: browserA.resourceVersions.datasets[dataset.id]!,
+        dataset: { ...dataset, name: "Dataset updated by browser A" },
+      },
+    ],
+  });
+  const afterSuiteEdit = await store.mutateLibrary({
+    changes: [
+      {
+        kind: "put-suite",
+        id: suite.id,
+        expectedVersion: browserB.resourceVersions.suites[suite.id]!,
+        suite: { ...suite, name: "Suite updated by browser B" },
+        baselines: browserB.library.data.baselines.filter((baseline) => baseline.suiteId === suite.id),
+      },
+    ],
+  });
+  assert.equal(afterSuiteEdit.library.datasets.find((candidate) => candidate.id === dataset.id)?.name, "Dataset updated by browser A");
+  assert.equal(afterSuiteEdit.library.data.suites.find((candidate) => candidate.id === suite.id)?.name, "Suite updated by browser B");
+  await assert.rejects(
+    store.mutateLibrary({
+      changes: [
+        {
+          kind: "put-dataset",
+          id: dataset.id,
+          expectedVersion: browserA.resourceVersions.datasets[dataset.id]!,
+          dataset: { ...dataset, name: "Stale browser A edit" },
+        },
+      ],
+    }),
+    (error: unknown) => error instanceof EvaluationLibraryResourceConflictError,
+  );
+  assert.equal(afterDatasetEdit.revision < afterSuiteEdit.revision, true);
 
   const finalized = run(projectA, "checkpoint-run");
   const started: EvaluationRun = {
@@ -618,6 +670,662 @@ test("hosted HTTP evaluation store migrates legacy libraries and serializes writ
       (await store.getLibrary()).data.suites[0]?.id,
       "third-http-suite",
     );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("hosted HTTP evaluation stores merge different-resource browser edits and reject only overlaps", async () => {
+  const originalFetch = globalThis.fetch;
+  let revision = 0;
+  let currentLibrary = normalizeEvaluationLibrary(library());
+  const snapshot = () => ({
+    revision,
+    library: currentLibrary,
+    resourceVersions: getEvaluationLibraryResourceVersions(currentLibrary),
+  });
+  globalThis.fetch = async (input, init) => {
+    const requestUrl = new URL(String(input), "https://rivet.example");
+    const method = init?.method ?? "GET";
+    if (requestUrl.pathname.endsWith("/library") && method === "GET") return Response.json(snapshot());
+    if (requestUrl.pathname.endsWith("/library/mutations") && method === "POST") {
+      const mutation = JSON.parse(String(init?.body));
+      try {
+        const result = applyCheckedEvaluationLibraryMutation(currentLibrary, mutation);
+        if (result.changed) {
+          currentLibrary = result.library;
+          revision += 1;
+        }
+        return Response.json(snapshot());
+      } catch (error) {
+        if (!(error instanceof EvaluationLibraryResourceConflictError)) throw error;
+        return Response.json(
+          { error: error.message, conflicts: error.conflicts, snapshot: snapshot() },
+          { status: 409 },
+        );
+      }
+    }
+    throw new Error(`Unexpected evaluation HTTP request: ${method} ${requestUrl.pathname}`);
+  };
+
+  try {
+    const options = {
+      baseUrl: "/api/workflows/evaluation-runs",
+      normalizeRun: normalizeEvaluationRun,
+      normalizeLibrary: normalizeEvaluationLibrary,
+    };
+    const browserA = createHttpEvaluationStore(options);
+    const browserB = createHttpEvaluationStore(options);
+    await Promise.all([browserA.initialize?.(), browserB.initialize?.()]);
+    const aLibrary = await browserA.getLibrary();
+    const bLibrary = await browserB.getLibrary();
+
+    await browserA.putLibrary({
+      ...aLibrary,
+      data: {
+        ...aLibrary.data,
+        suites: aLibrary.data.suites.map((suite) =>
+          suite.id === "library-suite" ? { ...suite, name: "Suite edited by A" } : suite,
+        ),
+      },
+    });
+    await browserB.putLibrary({
+      ...bLibrary,
+      datasets: bLibrary.datasets.map((dataset) =>
+        dataset.id === "library-dataset" ? { ...dataset, name: "Dataset edited by B" } : dataset,
+      ),
+    });
+    assert.equal(currentLibrary.data.suites[0]?.name, "Suite edited by A");
+    assert.equal(currentLibrary.datasets[0]?.name, "Dataset edited by B");
+
+    const browserC = createHttpEvaluationStore(options);
+    const browserD = createHttpEvaluationStore(options);
+    await Promise.all([browserC.initialize?.(), browserD.initialize?.()]);
+    let browserDIssue: EvaluationLibrarySyncIssue | undefined;
+    const unsubscribeBrowserDIssue = browserD.subscribeLibrarySyncIssue?.((issue) => {
+      browserDIssue = issue;
+    });
+    const cLibrary = await browserC.getLibrary();
+    const dLibrary = await browserD.getLibrary();
+    await browserC.putLibrary({
+      ...cLibrary,
+      data: {
+        ...cLibrary.data,
+        suites: cLibrary.data.suites.map((suite) => ({ ...suite, name: "Suite edited by C" })),
+      },
+    });
+    await assert.rejects(
+      browserD.putLibrary({
+        ...dLibrary,
+        data: {
+          ...dLibrary.data,
+          suites: dLibrary.data.suites.map((suite) => ({ ...suite, name: "Conflicting suite edit by D" })),
+        },
+      }),
+      (error: unknown) => error instanceof Error && /changed in another browser/u.test(error.message),
+    );
+    assert.equal(browserDIssue?.kind, 'conflict');
+    const dConflict = browserDIssue?.kind === 'conflict' ? browserDIssue.conflicts[0] : undefined;
+    assert.ok(dConflict?.server.kind === 'suite' && dConflict.local.kind === 'suite');
+    assert.equal(dConflict.server.value?.suite.name, 'Suite edited by C');
+    assert.equal(dConflict.local.value?.suite.name, 'Conflicting suite edit by D');
+    const copied = await browserD.resolveLibraryConflict!({
+      issueId: browserDIssue!.id,
+      kind: 'suite',
+      id: 'library-suite',
+      action: 'keep-mine-as-copy',
+    });
+    assert.equal(copied.data.suites.find((suite) => suite.id === 'library-suite')?.name, 'Suite edited by C');
+    assert.equal(copied.data.suites.find((suite) => suite.id === 'library-suite-copy')?.name, 'Conflicting suite edit by D (copy)');
+    assert.equal(currentLibrary.data.suites.find((suite) => suite.id === 'library-suite')?.name, 'Suite edited by C');
+    assert.equal(currentLibrary.data.suites.find((suite) => suite.id === 'library-suite-copy')?.name, 'Conflicting suite edit by D (copy)');
+    unsubscribeBrowserDIssue?.();
+
+    const browserE = createHttpEvaluationStore(options);
+    const browserF = createHttpEvaluationStore(options);
+    await Promise.all([browserE.initialize?.(), browserF.initialize?.()]);
+    let browserFIssue: EvaluationLibrarySyncIssue | undefined;
+    browserF.subscribeLibrarySyncIssue?.((issue) => {
+      browserFIssue = issue;
+    });
+    const eLibrary = await browserE.getLibrary();
+    const fLibrary = await browserF.getLibrary();
+    await browserE.putLibrary({
+      ...eLibrary,
+      data: {
+        ...eLibrary.data,
+        suites: eLibrary.data.suites.map((suite) =>
+          suite.id === 'library-suite' ? { ...suite, name: 'Suite edited by E' } : suite,
+        ),
+      },
+    });
+    await assert.rejects(
+      browserF.putLibrary({
+        ...fLibrary,
+        data: {
+          ...fLibrary.data,
+          suites: fLibrary.data.suites.map((suite) =>
+            suite.id === 'library-suite' ? { ...suite, name: 'Conflicting suite edit by F' } : suite,
+          ),
+        },
+      }),
+      (error: unknown) => error instanceof Error && /changed in another browser/u.test(error.message),
+    );
+    const serverVersion = await browserF.resolveLibraryConflict!({
+      issueId: browserFIssue!.id,
+      kind: 'suite',
+      id: 'library-suite',
+      action: 'use-server',
+    });
+    assert.equal(serverVersion.data.suites.find((suite) => suite.id === 'library-suite')?.name, 'Suite edited by E');
+    assert.equal(currentLibrary.data.suites.find((suite) => suite.id === 'library-suite')?.name, 'Suite edited by E');
+
+    const browserG = createHttpEvaluationStore(options);
+    const browserH = createHttpEvaluationStore(options);
+    await Promise.all([browserG.initialize?.(), browserH.initialize?.()]);
+    let browserHIssue: EvaluationLibrarySyncIssue | undefined;
+    browserH.subscribeLibrarySyncIssue?.((issue) => {
+      browserHIssue = issue;
+    });
+    const gLibrary = await browserG.getLibrary();
+    const hLibrary = await browserH.getLibrary();
+    await browserG.putLibrary({
+      ...gLibrary,
+      datasets: gLibrary.datasets.map((dataset) =>
+        dataset.id === 'library-dataset' ? { ...dataset, name: 'Server dataset version' } : dataset,
+      ),
+    });
+    await assert.rejects(
+      browserH.putLibrary({
+        ...hLibrary,
+        data: {
+          ...hLibrary.data,
+          suites: hLibrary.data.suites.map((suite) =>
+            suite.id === 'library-suite' ? { ...suite, name: 'Local existing suite edit' } : suite,
+          ),
+        },
+        datasets: hLibrary.datasets.map((dataset) =>
+          dataset.id === 'library-dataset' ? { ...dataset, name: 'Local dataset version' } : dataset,
+        ),
+      }),
+      /changed in another browser/u,
+    );
+    const copiedDataset = await browserH.resolveLibraryConflict!({
+      issueId: browserHIssue!.id,
+      kind: 'dataset',
+      id: 'library-dataset',
+      action: 'keep-mine-as-copy',
+    });
+    assert.equal(copiedDataset.datasets.find((dataset) => dataset.id === 'library-dataset-copy')?.name, 'Local dataset version (copy)');
+    assert.equal(copiedDataset.data.suites.find((suite) => suite.id === 'library-suite')?.datasetId, 'library-dataset');
+    assert.equal(currentLibrary.data.suites.find((suite) => suite.id === 'library-suite')?.datasetId, 'library-dataset');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('hosted HTTP evaluation stores preserve each queued conflict until it is resolved', async () => {
+  const originalFetch = globalThis.fetch;
+  let revision = 0;
+  let currentLibrary = normalizeEvaluationLibrary(library());
+  let blockNextMutation = false;
+  let releaseBlockedMutation: (() => void) | undefined;
+  let signalBlockedMutation: (() => void) | undefined;
+  const blockedMutationStarted = new Promise<void>((resolve) => {
+    signalBlockedMutation = resolve;
+  });
+  const snapshot = () => ({
+    revision,
+    library: currentLibrary,
+    resourceVersions: getEvaluationLibraryResourceVersions(currentLibrary),
+  });
+  globalThis.fetch = async (input, init) => {
+    const requestUrl = new URL(String(input), 'https://rivet.example');
+    const method = init?.method ?? 'GET';
+    if (requestUrl.pathname.endsWith('/library') && method === 'GET') return Response.json(snapshot());
+    if (requestUrl.pathname.endsWith('/library/mutations') && method === 'POST') {
+      if (blockNextMutation) {
+        blockNextMutation = false;
+        signalBlockedMutation!();
+        await new Promise<void>((resolve) => {
+          releaseBlockedMutation = resolve;
+        });
+      }
+      try {
+        const result = applyCheckedEvaluationLibraryMutation(currentLibrary, JSON.parse(String(init?.body)));
+        if (result.changed) {
+          currentLibrary = result.library;
+          revision += 1;
+        }
+        return Response.json(snapshot());
+      } catch (error) {
+        if (!(error instanceof EvaluationLibraryResourceConflictError)) throw error;
+        return Response.json(
+          { error: error.message, conflicts: error.conflicts, snapshot: snapshot() },
+          { status: 409 },
+        );
+      }
+    }
+    throw new Error(`Unexpected evaluation HTTP request: ${method} ${requestUrl.pathname}`);
+  };
+
+  try {
+    const options = {
+      baseUrl: '/api/workflows/evaluation-runs',
+      normalizeRun: normalizeEvaluationRun,
+      normalizeLibrary: normalizeEvaluationLibrary,
+    };
+    const writer = createHttpEvaluationStore(options);
+    const staleBrowser = createHttpEvaluationStore(options);
+    await Promise.all([writer.initialize?.(), staleBrowser.initialize?.()]);
+
+    const writerLibrary = await writer.getLibrary();
+    await writer.putLibrary({
+      ...writerLibrary,
+      data: {
+        ...writerLibrary.data,
+        suites: writerLibrary.data.suites.map((suite) => ({ ...suite, name: 'Server suite' })),
+      },
+      datasets: writerLibrary.datasets.map((dataset) => ({ ...dataset, name: 'Server dataset' })),
+    });
+
+    let issue: EvaluationLibrarySyncIssue | undefined;
+    staleBrowser.subscribeLibrarySyncIssue?.((next) => {
+      issue = next;
+    });
+    const staleLibrary = await staleBrowser.getLibrary();
+    blockNextMutation = true;
+    const firstWrite = staleBrowser.putLibrary({
+      ...staleLibrary,
+      data: {
+        ...staleLibrary.data,
+        suites: staleLibrary.data.suites.map((suite) => ({ ...suite, name: 'Local suite' })),
+      },
+    });
+    const firstRejection = assert.rejects(firstWrite, /changed in another browser/u);
+    await blockedMutationStarted;
+
+    const locallyUpdated = await staleBrowser.getLibrary();
+    const secondWrite = staleBrowser.putLibrary({
+      ...locallyUpdated,
+      datasets: locallyUpdated.datasets.map((dataset) => ({ ...dataset, name: 'Local dataset' })),
+    });
+    const secondRejection = assert.rejects(secondWrite, /changed in another browser/u);
+    releaseBlockedMutation!();
+    await firstRejection;
+
+    assert.equal(issue?.kind, 'conflict');
+    assert.equal(issue?.kind === 'conflict' ? issue.conflicts[0]?.kind : undefined, 'suite');
+    const suiteIssue = issue!;
+    await staleBrowser.resolveLibraryConflict!({
+      issueId: suiteIssue.id,
+      kind: 'suite',
+      id: 'library-suite',
+      action: 'use-server',
+    });
+    await secondRejection;
+
+    assert.equal(issue?.kind, 'conflict');
+    assert.equal(issue?.kind === 'conflict' ? issue.conflicts[0]?.kind : undefined, 'dataset');
+    await staleBrowser.resolveLibraryConflict!({
+      issueId: issue!.id,
+      kind: 'dataset',
+      id: 'library-dataset',
+      action: 'use-server',
+    });
+    assert.equal(issue, undefined);
+    assert.equal(currentLibrary.data.suites[0]?.name, 'Server suite');
+    assert.equal(currentLibrary.datasets[0]?.name, 'Server dataset');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('hosted HTTP evaluation store copies only the newest queued edit for one conflicting resource', async () => {
+  const originalFetch = globalThis.fetch;
+  let revision = 0;
+  let currentLibrary = normalizeEvaluationLibrary(library());
+  let blockNextMutation = false;
+  let releaseBlockedMutation: (() => void) | undefined;
+  let signalBlockedMutation: (() => void) | undefined;
+  const blockedMutationStarted = new Promise<void>((resolve) => {
+    signalBlockedMutation = resolve;
+  });
+  const snapshot = () => ({
+    revision,
+    library: currentLibrary,
+    resourceVersions: getEvaluationLibraryResourceVersions(currentLibrary),
+  });
+  globalThis.fetch = async (input, init) => {
+    const requestUrl = new URL(String(input), 'https://rivet.example');
+    const method = init?.method ?? 'GET';
+    if (requestUrl.pathname.endsWith('/library') && method === 'GET') return Response.json(snapshot());
+    if (requestUrl.pathname.endsWith('/library/mutations') && method === 'POST') {
+      if (blockNextMutation) {
+        blockNextMutation = false;
+        signalBlockedMutation!();
+        await new Promise<void>((resolve) => {
+          releaseBlockedMutation = resolve;
+        });
+      }
+      try {
+        const result = applyCheckedEvaluationLibraryMutation(currentLibrary, JSON.parse(String(init?.body)));
+        if (result.changed) {
+          currentLibrary = result.library;
+          revision += 1;
+        }
+        return Response.json(snapshot());
+      } catch (error) {
+        if (!(error instanceof EvaluationLibraryResourceConflictError)) throw error;
+        return Response.json(
+          { error: error.message, conflicts: error.conflicts, snapshot: snapshot() },
+          { status: 409 },
+        );
+      }
+    }
+    throw new Error(`Unexpected evaluation HTTP request: ${method} ${requestUrl.pathname}`);
+  };
+
+  try {
+    const options = {
+      baseUrl: '/api/workflows/evaluation-runs',
+      normalizeRun: normalizeEvaluationRun,
+      normalizeLibrary: normalizeEvaluationLibrary,
+    };
+    const writer = createHttpEvaluationStore(options);
+    const staleBrowser = createHttpEvaluationStore(options);
+    await Promise.all([writer.initialize?.(), staleBrowser.initialize?.()]);
+    const serverLibrary = await writer.getLibrary();
+    await writer.putLibrary({
+      ...serverLibrary,
+      data: {
+        ...serverLibrary.data,
+        suites: serverLibrary.data.suites.map((suite) => ({ ...suite, name: 'Server suite' })),
+      },
+    });
+
+    let issue: EvaluationLibrarySyncIssue | undefined;
+    staleBrowser.subscribeLibrarySyncIssue?.((next) => {
+      issue = next;
+    });
+    const staleLibrary = await staleBrowser.getLibrary();
+    blockNextMutation = true;
+    const firstWrite = staleBrowser.putLibrary({
+      ...staleLibrary,
+      data: {
+        ...staleLibrary.data,
+        suites: staleLibrary.data.suites.map((suite) => ({ ...suite, name: 'Intermediate local suite' })),
+      },
+    });
+    const firstRejection = assert.rejects(firstWrite, /changed in another browser/u);
+    await blockedMutationStarted;
+
+    const locallyUpdated = await staleBrowser.getLibrary();
+    const secondWrite = staleBrowser.putLibrary({
+      ...locallyUpdated,
+      data: {
+        ...locallyUpdated.data,
+        suites: locallyUpdated.data.suites.map((suite) => ({ ...suite, name: 'Newest local suite' })),
+      },
+    });
+    const secondRejection = assert.rejects(secondWrite, /changed in another browser/u);
+    releaseBlockedMutation!();
+    await Promise.all([firstRejection, secondRejection]);
+
+    assert.equal(issue?.kind, 'conflict');
+    const latestConflict = issue?.kind === 'conflict' ? issue.conflicts[0] : undefined;
+    assert.equal(latestConflict?.local.kind, 'suite');
+    assert.equal(
+      latestConflict?.local.kind === 'suite' ? latestConflict.local.value?.suite.name : undefined,
+      'Newest local suite',
+    );
+    const copied = await staleBrowser.resolveLibraryConflict!({
+      issueId: issue!.id,
+      kind: 'suite',
+      id: 'library-suite',
+      action: 'keep-mine-as-copy',
+    });
+    assert.equal(issue, undefined);
+    assert.equal(copied.data.suites.find((suite) => suite.id === 'library-suite')?.name, 'Server suite');
+    assert.equal(copied.data.suites.find((suite) => suite.id === 'library-suite-copy')?.name, 'Newest local suite (copy)');
+    assert.equal(currentLibrary.data.suites.find((suite) => suite.id === 'library-suite-copy')?.name, 'Newest local suite (copy)');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('hosted HTTP evaluation store retains retryable local edits without presenting them as conflicts', async () => {
+  const originalFetch = globalThis.fetch;
+  let revision = 0;
+  let attempts = 0;
+  let currentLibrary = normalizeEvaluationLibrary(library());
+  const snapshot = () => ({
+    revision,
+    library: currentLibrary,
+    resourceVersions: getEvaluationLibraryResourceVersions(currentLibrary),
+  });
+  globalThis.fetch = async (input, init) => {
+    const requestUrl = new URL(String(input), 'https://rivet.example');
+    const method = init?.method ?? 'GET';
+    if (requestUrl.pathname.endsWith('/library') && method === 'GET') return Response.json(snapshot());
+    if (requestUrl.pathname.endsWith('/library/mutations') && method === 'POST') {
+      attempts += 1;
+      if (attempts === 1) return Response.json({ error: 'Temporary storage outage' }, { status: 503 });
+      const result = applyCheckedEvaluationLibraryMutation(currentLibrary, JSON.parse(String(init?.body)));
+      if (result.changed) {
+        currentLibrary = result.library;
+        revision += 1;
+      }
+      return Response.json(snapshot());
+    }
+    throw new Error(`Unexpected evaluation HTTP request: ${method} ${requestUrl.pathname}`);
+  };
+
+  try {
+    const store = createHttpEvaluationStore({
+      baseUrl: '/api/workflows/evaluation-runs',
+      normalizeRun: normalizeEvaluationRun,
+      normalizeLibrary: normalizeEvaluationLibrary,
+    });
+    await store.initialize?.();
+    let issue: EvaluationLibrarySyncIssue | undefined;
+    store.subscribeLibrarySyncIssue?.((next) => {
+      issue = next;
+    });
+    const before = await store.getLibrary();
+    await assert.rejects(
+      store.putLibrary({
+        ...before,
+        datasets: before.datasets.map((dataset) => ({ ...dataset, name: 'Locally retained during retry' })),
+      }),
+      /Temporary storage outage/u,
+    );
+    assert.equal(issue?.kind, 'retryable');
+    assert.equal((await store.getLibrary()).datasets[0]?.name, 'Locally retained during retry');
+    assert.equal(currentLibrary.datasets[0]?.name, 'Dataset library-dataset');
+
+    const resolved = await store.retryLibrarySync!();
+    assert.equal(resolved.datasets[0]?.name, 'Locally retained during retry');
+    assert.equal(currentLibrary.datasets[0]?.name, 'Locally retained during retry');
+    assert.equal(issue, undefined);
+    assert.equal(attempts, 2);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('hosted HTTP evaluation store recovers from a bare conflict response without an unresolvable dialog', async () => {
+  const originalFetch = globalThis.fetch;
+  let revision = 0;
+  let mutationAttempts = 0;
+  let currentLibrary = normalizeEvaluationLibrary(library());
+  const snapshot = () => ({
+    revision,
+    library: currentLibrary,
+    resourceVersions: getEvaluationLibraryResourceVersions(currentLibrary),
+  });
+  globalThis.fetch = async (input, init) => {
+    const requestUrl = new URL(String(input), 'https://rivet.example');
+    const method = init?.method ?? 'GET';
+    if (requestUrl.pathname.endsWith('/library') && method === 'GET') return Response.json(snapshot());
+    if (requestUrl.pathname.endsWith('/library/mutations') && method === 'POST') {
+      mutationAttempts += 1;
+      if (mutationAttempts === 1) return Response.json({ error: 'Stale proxy conflict' }, { status: 409 });
+      const result = applyCheckedEvaluationLibraryMutation(currentLibrary, JSON.parse(String(init?.body)));
+      if (result.changed) {
+        currentLibrary = result.library;
+        revision += 1;
+      }
+      return Response.json(snapshot());
+    }
+    throw new Error(`Unexpected evaluation HTTP request: ${method} ${requestUrl.pathname}`);
+  };
+
+  try {
+    const store = createHttpEvaluationStore({
+      baseUrl: '/api/workflows/evaluation-runs',
+      normalizeRun: normalizeEvaluationRun,
+      normalizeLibrary: normalizeEvaluationLibrary,
+    });
+    await store.initialize?.();
+    let issue: EvaluationLibrarySyncIssue | undefined;
+    store.subscribeLibrarySyncIssue?.((next) => {
+      issue = next;
+    });
+    const before = await store.getLibrary();
+    await assert.rejects(
+      store.putLibrary({
+        ...before,
+        datasets: before.datasets.map((dataset) => ({ ...dataset, name: 'Saved after bare conflict' })),
+      }),
+      /Stale proxy conflict/u,
+    );
+    assert.equal(issue?.kind, 'failed');
+
+    const resolved = await store.retryLibrarySync!();
+    assert.equal(resolved.datasets[0]?.name, 'Saved after bare conflict');
+    assert.equal(currentLibrary.datasets[0]?.name, 'Saved after bare conflict');
+    assert.equal(issue, undefined);
+    assert.equal(mutationAttempts, 2);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('hosted HTTP evaluation store never lets a delayed refresh roll back a newer mutation', async () => {
+  const originalFetch = globalThis.fetch;
+  let revision = 0;
+  let currentLibrary = normalizeEvaluationLibrary(library());
+  let holdNextLibraryRead = false;
+  let releaseRead: (() => void) | undefined;
+  let signalRead: (() => void) | undefined;
+  const delayedReadStarted = new Promise<void>((resolve) => {
+    signalRead = resolve;
+  });
+  const snapshot = () => ({
+    revision,
+    library: currentLibrary,
+    resourceVersions: getEvaluationLibraryResourceVersions(currentLibrary),
+  });
+  globalThis.fetch = async (input, init) => {
+    const requestUrl = new URL(String(input), 'https://rivet.example');
+    const method = init?.method ?? 'GET';
+    if (requestUrl.pathname.endsWith('/library') && method === 'GET') {
+      const response = snapshot();
+      if (holdNextLibraryRead) {
+        holdNextLibraryRead = false;
+        signalRead!();
+        await new Promise<void>((resolve) => {
+          releaseRead = resolve;
+        });
+      }
+      return Response.json(response);
+    }
+    if (requestUrl.pathname.endsWith('/library/mutations') && method === 'POST') {
+      const result = applyCheckedEvaluationLibraryMutation(currentLibrary, JSON.parse(String(init?.body)));
+      if (result.changed) {
+        currentLibrary = result.library;
+        revision += 1;
+      }
+      return Response.json(snapshot());
+    }
+    throw new Error(`Unexpected evaluation HTTP request: ${method} ${requestUrl.pathname}`);
+  };
+
+  try {
+    const store = createHttpEvaluationStore({
+      baseUrl: '/api/workflows/evaluation-runs',
+      normalizeRun: normalizeEvaluationRun,
+      normalizeLibrary: normalizeEvaluationLibrary,
+    });
+    await store.initialize?.();
+    const before = await store.getLibrary();
+    holdNextLibraryRead = true;
+    const delayedRefresh = store.getLibrarySyncSnapshot!();
+    await delayedReadStarted;
+
+    await store.putLibrary({
+      ...before,
+      datasets: before.datasets.map((dataset) => ({ ...dataset, name: 'Saved after refresh began' })),
+    });
+    releaseRead!();
+    await delayedRefresh;
+
+    assert.equal((await store.getLibrary()).datasets[0]?.name, 'Saved after refresh began');
+    assert.equal(currentLibrary.datasets[0]?.name, 'Saved after refresh began');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('hosted HTTP evaluation store uses the guarded replacement route for incomplete resource versions', async () => {
+  const originalFetch = globalThis.fetch;
+  let revision = 7;
+  let currentLibrary = normalizeEvaluationLibrary(library());
+  let replacementWrites = 0;
+  let resourceMutationWrites = 0;
+  const incompleteSnapshot = () => ({
+    revision,
+    library: currentLibrary,
+    resourceVersions: {
+      suites: {},
+      datasets: { 'dataset-b': 'present-but-incomplete' },
+    },
+  });
+  globalThis.fetch = async (input, init) => {
+    const requestUrl = new URL(String(input), 'https://rivet.example');
+    const method = init?.method ?? 'GET';
+    if (requestUrl.pathname.endsWith('/library') && method === 'GET') return Response.json(incompleteSnapshot());
+    if (requestUrl.pathname.endsWith('/library') && method === 'PUT') {
+      replacementWrites += 1;
+      const body = JSON.parse(String(init?.body)) as { expectedRevision: number; library: EvaluationLibrary };
+      assert.equal(body.expectedRevision, revision);
+      currentLibrary = normalizeEvaluationLibrary(body.library);
+      revision += 1;
+      return Response.json(incompleteSnapshot());
+    }
+    if (requestUrl.pathname.endsWith('/library/mutations') && method === 'POST') {
+      resourceMutationWrites += 1;
+      throw new Error('The incomplete token map must never use the resource mutation route.');
+    }
+    throw new Error(`Unexpected evaluation HTTP request: ${method} ${requestUrl.pathname}`);
+  };
+
+  try {
+    const store = createHttpEvaluationStore({
+      baseUrl: '/api/workflows/evaluation-runs',
+      normalizeRun: normalizeEvaluationRun,
+      normalizeLibrary: normalizeEvaluationLibrary,
+    });
+    const before = await store.getLibrary();
+    await store.putLibrary({
+      ...before,
+      datasets: before.datasets.map((dataset) => ({ ...dataset, name: 'Compatible guarded replacement' })),
+    });
+
+    assert.equal(replacementWrites, 1);
+    assert.equal(resourceMutationWrites, 0);
+    assert.equal((await store.getLibrary()).datasets[0]?.name, 'Compatible guarded replacement');
   } finally {
     globalThis.fetch = originalFetch;
   }
@@ -1051,7 +1759,7 @@ test("filesystem evaluation store persists the complete upstream contract", asyn
     const reopened = new FilesystemRivetEvaluationStore(databasePath);
     try {
       const snapshot = await reopened.getLibrarySnapshot();
-      assert.equal(snapshot.revision, 3);
+      assert.equal(snapshot.revision, 5);
       assert.deepEqual(snapshot.library.migratedLegacyProjectIds, [projectA]);
       assert.equal(
         (await reopened.get({ projectId: projectA, runId: "checkpoint-run" }))
@@ -1291,7 +1999,7 @@ test("managed evaluation store persists the complete upstream contract", async (
   const store = new PostgresRivetEvaluationStore(pool as unknown as Pool);
   await assertCompleteEvaluationStoreContract(store);
   await assertRecordingRetentionUpdateOutcomes(store);
-  assert.equal(pool.library?.revision, 3);
+  assert.equal(pool.library?.revision, 5);
   assert.equal(pool.libraryImports.size, 2);
 });
 test('managed Evaluation terminal retention can join the caller transaction', async () => {
