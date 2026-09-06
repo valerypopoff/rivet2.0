@@ -24,7 +24,6 @@ void test(
   },
   async (t) => {
     const isolatedHome = await mkdtemp(join(tmpdir(), 'rivet-executor-selection-'));
-    let socket: WebSocket | undefined;
     const port = await reserveLocalPort();
     const executor = spawn(
       process.execPath,
@@ -56,7 +55,6 @@ void test(
     );
     const exited = new Promise<void>((resolve) => executor.once('close', () => resolve()));
     t.after(async () => {
-      socket?.close();
       if (executor.exitCode == null) executor.kill('SIGKILL');
       await exited;
       await rm(isolatedHome, { recursive: true, force: true });
@@ -104,10 +102,11 @@ void test(
     executor.stderr.on('data', (chunk: Buffer) => {
       output += chunk.toString();
     });
-    socket = new WebSocket(`ws://127.0.0.1:${port}`);
+    const socket = new WebSocket(`ws://127.0.0.1:${port}`);
+    t.after(() => socket.close());
     await new Promise<void>((resolve, reject) => {
-      socket!.addEventListener('open', () => resolve(), { once: true });
-      socket!.addEventListener('error', () => reject(new Error(`Executor connection failed:\n${output}`)), {
+      socket.addEventListener('open', () => resolve(), { once: true });
+      socket.addEventListener('error', () => reject(new Error(`Executor connection failed:\n${output}`)), {
         once: true,
       });
       t.signal.addEventListener('abort', () => reject(new Error('Executor connection timed out.')), { once: true });

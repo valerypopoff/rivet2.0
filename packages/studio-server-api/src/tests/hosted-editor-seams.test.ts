@@ -75,9 +75,6 @@ test('hosted project IO keeps app-state cleanup and workspace commands on wrappe
   assert.match(editorCommandBridge, /handleWorkflowPathsMovedCommand/);
   assert.match(editorCommandBridge, /handleRefreshOpenProjectCommand/);
   assert.doesNotMatch(editorCommandBridge, /setOpenedProjectSnapshots/);
-  assert.match(editorCommandBridge, /loadedRecordingState/);
-  assert.match(editorCommandBridge, /projectId != null && loadedRecording\?\.projectId === projectId \? null : loadedRecording/);
-  assert.doesNotMatch(editorCommandBridge, /clearLoadedRecordingForProjectState/);
   assert.match(editorProjectLifecycleCommands, /context\.getWorkspace\(\)\.closeProject\(deletedProjectId\)/);
   assert.match(editorProjectLifecycleCommands, /context\.getWorkspace\(\)\.moveProjectPaths/);
   assert.match(editorProjectLifecycleCommands, /resolveHostedProjectMetadataUpdatesForPathMoves\(context\.getProjects\(\), moves\)/);
@@ -89,7 +86,6 @@ test('hosted project IO keeps app-state cleanup and workspace commands on wrappe
   assert.match(editorProjectOpenCommands, /replaceProjectSnapshot\(openedProject\.projectId/);
   assert.doesNotMatch(editorProjectOpenCommands, /removeOpenedProjectSnapshot/);
   assert.match(editorMessageBridge, /selectedExecutorState/);
-  assert.match(editorMessageBridge, /setSelectedExecutor\('browser'\)/);
   assert.doesNotMatch(editorMessageBridge, /defaultExecutorState|setProjects|setOpenedProjects/);
 
   assert.match(openWorkflowProject, /openedProjectSnapshotsState/);
@@ -173,11 +169,13 @@ test('hosted executor, save, find, and clipboard seams keep clear ownership', ()
   assert.doesNotMatch(editorMessageBridge, /rivet-project-saved/);
   assert.doesNotMatch(editorBridgeInteractions, /isSaveShortcutEvent|onSave/);
   assert.doesNotMatch(viteAliases, /useWindowsHotkeysFix/);
-  assert.match(editorEvents, /if \(!event\.repeat\) \{\s*handleSaveProject\(\);\s*\}/);
   assert.match(editorEvents, /postMessageToEditor\(editorWindow,\s*\{\s*type: 'trigger-editor-find-shortcut'/);
   assert.match(editorEvents, /activeWorkflowProjectPath && isEditorDuplicateShortcutEvent\(event\)/);
   assert.match(editorEvents, /postMessageToEditor\(editorWindow,\s*\{\s*type: 'trigger-editor-duplicate-shortcut'/);
   assert.match(editorEvents, /event\.preventDefault\(\);\s*event\.stopPropagation\(\);/);
+  // This dashboard listener is separate from the editor's hotkey handler.
+  // Retain its repeat suppression and save-origin contract until it has a hook-level test.
+  assert.match(editorEvents, /if \(!event\.repeat\) \{\s*handleSaveProject\('shortcut'\);\s*\}/);
   assert.match(editorEvents, /isEditableElement\(eventTarget\)/);
   assert.match(editorBridgeInteractions, /function replayEditorFindShortcut/);
   assert.match(editorBridgeInteractions, /function replayEditorDuplicateShortcut/);

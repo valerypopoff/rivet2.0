@@ -745,7 +745,10 @@ preserving user-authored blank prompt lines; that custom prompt preview uses a l
 interpolation-token highlighter instead of Monaco colorization, because Monaco preserves code spaces
 in a way that prevents normal word wrapping. Empty prompt lines render as real line boxes so blank
 lines in the middle of a prompt remain visible in the card preview.
-`ToolNode` renders the tool name as a bold markdown line followed immediately by its description. The app-side
+`ToolNode` renders a `Name:` field with a muted label, then a separator and a
+description using the same clipped, colorized prompt preview as Text nodes.
+Its render tests exercise the actual component markup, escaping, and clipping;
+only the browser-only Monaco import is stubbed for the static renderer. The app-side
 [`NodeBody`](../packages/app/src/components/NodeBody.tsx) markdown renderer trims first/last child
 margins and resets body-local `pre` margins for node bodies so Markdown paragraph defaults and
 colorized preview defaults do not reintroduce visual spacer lines. Generic node body previews
@@ -2104,4 +2107,4 @@ These are visible from the current code and matter for planning:
 - When touching plugin flows, review both registry state and app plugin-state UI together.
 - When changing save/load behavior, include Evaluations data, static project data, and per-project context in the design review.
 - Validate both local and remote executor behavior for any execution-related change.
-- Source-contract tests are acceptable for public hosted-wrapper seams, CSS/style entrypoints, import-boundary guardrails, and integration wiring that has no cheap behavior seam. When production code already exposes a pure helper, view model, or reducer, prefer focused behavior tests for that helper and leave source-reading tests with only the minimal wiring/import checks. `yarn test:style` reports source-reading tests so the remaining contracts stay visible without blocking refactors.
+- Test hosted-wrapper behavior through its public commands, helpers, state, or rendered components. Existing source-contract tests for entrypoints and integration wiring form a shrinking migration queue; keep their checks minimal and move behavior assertions to the owning runtime tests. `yarn test:style` rejects new source-reading tests and stale allowlist entries, so migrate coverage instead of adding exceptions. See [Test Guardrails](BUILD-AND-CI.md#test-guardrails).

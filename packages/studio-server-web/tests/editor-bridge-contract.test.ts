@@ -1,55 +1,163 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
-import test from 'node:test';
+import { registerHooks } from 'node:module';
+import test, { type TestContext } from 'node:test';
+import { ExecutionRecorder, type ProjectId } from '@valerypopoff/rivet2-core';
+import { createStore, Provider } from 'jotai';
+import { createElement } from 'react';
+import { renderToStaticMarkup } from 'react-dom/server';
 
 import { isDashboardToEditorCommand, isEditorToDashboardEvent } from '../../studio-server-shared/editor-bridge';
+import { getWorkflowRecordingVirtualProjectPath } from '../../studio-server-shared/workflow-recording-types';
+import {
+  clearLoadedRecordingForPathState,
+  loadedRecordingState,
+  rebindLoadedRecordingPathState,
+} from '../../app/src/state/execution.js';
+import { selectedExecutorState } from '../../app/src/state/settings.js';
+import type { EditorCommandBridgeContext } from '../dashboard/editorCommandBridgeContext';
+import { useWorkflowRecordingBridge } from '../dashboard/useWorkflowRecordingBridge';
 
-const workflowRecordingBridgeSource = readFileSync(
-  new URL('../dashboard/useWorkflowRecordingBridge.ts', import.meta.url),
-  'utf8',
-);
+// Recording commands use an already deserialized recording. Their sibling
+// project commands import a browser worker, which must never run in this test.
+const deserializeUrl = new URL('../overrides/utils/deserializeProject.ts', import.meta.url).href;
+const hooks = registerHooks({
+  resolve(specifier, context, nextResolve) {
+    const resolved = nextResolve(specifier, context);
+    return resolved.url === deserializeUrl
+      ? {
+          url: 'data:text/javascript,export const deserializeProjectAsync = () => { throw new Error("Unexpected project deserialization"); }; export const deserializeHostedProjectPayloadAsync = deserializeProjectAsync;',
+          shortCircuit: true,
+        }
+      : resolved;
+  },
+});
+const [{ handleOpenRecordingCommand, handleOpenPublishedPreviewCommand }, { handleWorkflowPathsMovedCommand }] =
+  await Promise.all([
+    import('../dashboard/editorDetachedProjectCommands'),
+    import('../dashboard/editorProjectLifecycleCommands'),
+  ]).finally(() => hooks.deregister());
 
-test('recording activation preserves the selected executor and the exact replay-tab path', () => {
-  assert.doesNotMatch(workflowRecordingBridgeSource, /selectBrowserExecutor/);
-  assert.match(workflowRecordingBridgeSource, /activateLoadedRecording\(\{ \.\.\.loadedRecording, projectId, projectPath \}\);/);
-  assert.match(workflowRecordingBridgeSource, /activateWorkflowRecording\(cachedRecording, currentProjectId, projectPath\)/);
-  assert.match(workflowRecordingBridgeSource, /clearLoadedRecordingForPath\(projectPath\);/);
+function createRecordingHarness(t: TestContext, initialPath: string) {
+  const store = createStore();
+  store.set(selectedExecutorState, 'nodejs');
+  let recording!: ReturnType<typeof useWorkflowRecordingBridge>;
+  function Harness() {
+    recording = useWorkflowRecordingBridge({ loadedProjectPath: null, openedProjectPaths: [] });
+    return null;
+  }
+  renderToStaticMarkup(createElement(Provider, { store }, createElement(Harness)));
+
+  const messages: unknown[] = [];
+  for (const [key, value] of Object.entries({
+    window: {
+      location: { origin: 'https://editor.test' },
+      frameElement: null,
+      parent: { postMessage: (message: unknown) => messages.push(message) },
+    },
+    HTMLIFrameElement: class {},
+  })) {
+    const original = Object.getOwnPropertyDescriptor(globalThis, key);
+    Object.defineProperty(globalThis, key, { configurable: true, value });
+    t.after(() =>
+      original ? Object.defineProperty(globalThis, key, original) : Reflect.deleteProperty(globalThis, key),
+    );
+  }
+
+  const projectId = 'project-1' as ProjectId;
+  const openCalls: Array<{ path: string; options: unknown }> = [];
+  const context = {
+    recording,
+    getSelectedExecutor: () => store.get(selectedExecutorState),
+    getLoadedProject: () => ({ loaded: true, path: initialPath }),
+    getOpenProject: () => async (path: string, options: unknown) => {
+      openCalls.push({ path, options });
+      return { opened: true, projectId };
+    },
+    getProjects: () => ({ openedProjects: {}, openedProjectsSortedIds: [] }),
+    getWorkspace: () => ({ moveProjectPaths: () => {} }),
+    openedProjectPathAliases: new Map(),
+    preview: { previewProjectRef: { current: null }, clearPreviewProjectByPath: () => {} },
+    clearLoadedRecordingForPath: (path: string | null | undefined) => store.set(clearLoadedRecordingForPathState, path),
+    rebindLoadedRecordingPath: (fromPath: string, toPath: string) =>
+      store.set(rebindLoadedRecordingPathState, { fromPath, toPath }),
+  } as unknown as EditorCommandBridgeContext;
+  return { context, store, projectId, openCalls, messages };
+}
+
+test('recording activation preserves the selected executor and the exact replay-tab path', (t) => {
+  const { context, store, projectId } = createRecordingHarness(t, '/workflows/project.rivet-project');
+  const loaded = { path: 'run.rivet-recording', recorder: new ExecutionRecorder() };
+  const projectPath = getWorkflowRecordingVirtualProjectPath('recording-1');
+
+  context.recording.activateWorkflowRecording(loaded, projectId, projectPath);
+
+  assert.deepEqual(store.get(loadedRecordingState), { ...loaded, projectId, projectPath });
+  assert.equal(store.get(selectedExecutorState), 'nodejs');
 });
 
-test('replacing a tab clears playback by its path, never just by a reused project ID', () => {
-  const editorCommandBridgeSource = readFileSync(
-    new URL('../dashboard/useEditorCommandBridge.ts', import.meta.url),
-    'utf8',
-  );
+test('replacing a tab clears playback by its path, never just by a reused project ID', async (t) => {
+  const originalPath = '/workflows/project.rivet-project';
+  const { context, store, projectId } = createRecordingHarness(t, originalPath);
+  const loaded = { path: 'run.rivet-recording', recorder: new ExecutionRecorder() };
+  const replayPath = getWorkflowRecordingVirtualProjectPath('recording-1');
+  context.recording.activateWorkflowRecording(loaded, projectId, replayPath);
+  const command = {
+    type: 'open-published-version-preview',
+    relativePath: 'project.rivet-project',
+    versionId: 'v1',
+    replaceCurrent: true,
+  } as const;
 
-  assert.match(editorCommandBridgeSource, /clearLoadedRecordingForPath: \(projectPath\) =>/);
-  assert.match(editorCommandBridgeSource, /clearLoadedRecordingForPathState/);
-  assert.match(editorCommandBridgeSource, /clearLoadedRecordingForPath\(projectPath\);/);
-  assert.doesNotMatch(editorCommandBridgeSource, /loadedRecordingState/);
+  await handleOpenPublishedPreviewCommand(context, command);
+  assert.equal(store.get(loadedRecordingState)?.projectPath, replayPath);
+
+  context.recording.activateWorkflowRecording(loaded, projectId, originalPath);
+  await handleOpenPublishedPreviewCommand(context, command);
+  assert.equal(store.get(loadedRecordingState), null);
+  assert.equal(store.get(selectedExecutorState), 'nodejs');
 });
 
-test('project path moves rebind a manually loaded recording to its owner tab', () => {
-  const lifecycleCommandsSource = readFileSync(
-    new URL('../dashboard/editorProjectLifecycleCommands.ts', import.meta.url),
-    'utf8',
+test('project path moves rebind a manually loaded recording to its owner tab', async (t) => {
+  const fromPath = '/workflows/project.rivet-project';
+  const toPath = '/workflows/moved/project.rivet-project';
+  const { context, store, projectId, messages } = createRecordingHarness(t, fromPath);
+  context.recording.activateWorkflowRecording(
+    { path: 'run.rivet-recording', recorder: new ExecutionRecorder() },
+    projectId,
+    fromPath,
   );
 
-  assert.match(lifecycleCommandsSource, /const workspaceMoves = getHostedProjectPathMoveInputs\(moves\);/);
-  assert.match(lifecycleCommandsSource, /context\.rebindLoadedRecordingPath\(move\.from, move\.to\);/);
+  await handleWorkflowPathsMovedCommand(context, {
+    type: 'workflow-paths-moved',
+    moves: [{ fromAbsolutePath: fromPath, toAbsolutePath: toPath }],
+    requestId: 'move-1',
+  });
+
+  assert.equal(store.get(loadedRecordingState)?.projectPath, toPath);
+  assert.equal(store.get(loadedRecordingState)?.projectId, projectId);
+  assert.deepEqual(messages, [{ type: 'workflow-paths-moved-applied', requestId: 'move-1' }]);
 });
 
-test('recording opens give a new replay tab the active local executor mode', () => {
-  const detachedProjectCommandsSource = readFileSync(
-    new URL('../dashboard/editorDetachedProjectCommands.ts', import.meta.url),
-    'utf8',
-  );
-  const openWorkflowProjectSource = readFileSync(
-    new URL('../dashboard/useOpenWorkflowProject.ts', import.meta.url),
-    'utf8',
-  );
+test('recording opens give a new replay tab the active local executor mode', async (t) => {
+  const { context, store, projectId, openCalls } = createRecordingHarness(t, '/workflows/project.rivet-project');
+  t.mock.method(globalThis, 'fetch', async () => new Response(new ExecutionRecorder().serialize()));
 
-  assert.match(detachedProjectCommandsSource, /createLocalProjectExecutorMode\(context\.getSelectedExecutor\(\)\)/);
-  assert.match(openWorkflowProjectSource, /executorMode: options\.executorMode/);
+  await handleOpenRecordingCommand(context, { type: 'open-recording', recordingId: 'recording-1' });
+
+  const replayPath = getWorkflowRecordingVirtualProjectPath('recording-1');
+  assert.deepEqual(openCalls, [
+    {
+      path: replayPath,
+      options: {
+        executorMode: { type: 'local', executor: 'nodejs' },
+        replaceCurrent: false,
+        preferredGraphId: undefined,
+      },
+    },
+  ]);
+  assert.equal(store.get(selectedExecutorState), 'nodejs');
+  assert.equal(store.get(loadedRecordingState)?.projectPath, replayPath);
+  assert.equal(store.get(loadedRecordingState)?.projectId, projectId);
 });
 
 test('open project bridge command accepts optional title and preview flags', () => {
