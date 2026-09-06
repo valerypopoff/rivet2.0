@@ -1,6 +1,6 @@
 {
   "formatVersion": 1,
-  "catalogFingerprint": "fnv1a64:22460d918bcec9b4",
+  "catalogFingerprint": "fnv1a64:463ef57d01dffa61",
   "entries": [
     {
       "authoringChoiceId": "registered:abortGraph",
@@ -1888,6 +1888,11 @@
           "description": "Expose an error output."
         },
         {
+          "key": "skipUnusedOutputs",
+          "valueKind": "boolean",
+          "description": "Only run branches needed by connected outputs. Skipped branches also skip their side effects and errors. Runs the full subgraph for Run to here, partial-output forwarding, or a connected Error output."
+        },
+        {
           "key": "useAsGraphPartialOutput",
           "valueKind": "boolean",
           "description": "Forward partial outputs from the subgraph."
@@ -1905,6 +1910,7 @@
       ],
       "safeDefaults": {
         "useErrorOutput": false,
+        "skipUnusedOutputs": false,
         "useAsGraphPartialOutput": false
       }
     },

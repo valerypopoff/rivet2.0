@@ -2,7 +2,7 @@ import { css } from '@emotion/react';
 import { useMemo, type FC } from 'react';
 import { useAtom, useAtomValue } from 'jotai';
 import { currentGraphViewState, graphRunHistoryByViewState, selectedGraphRunByViewState } from '../state/dataFlow';
-import { getGraphRunsForView } from '../state/selectors/executionSelectors.js';
+import { getGraphRunsForView, getSelectedGraphRunId } from '../state/selectors/executionSelectors.js';
 import LeftIcon from 'majesticons/line/chevron-left-line.svg?react';
 import RightIcon from 'majesticons/line/chevron-right-line.svg?react';
 import { Tooltip } from './Tooltip';
@@ -91,17 +91,10 @@ export const GraphExecutionSelectorBar: FC = () => {
   const selectedGraphRun = currentGraphView ? selectedGraphRunByView[currentGraphView.key] ?? 'latest' : 'latest';
 
   const selectedExecutionIndex = useMemo(() => {
-    if (!graphRuns.length) {
-      return -1;
-    }
-
-    if (selectedGraphRun === 'latest') {
-      return graphRuns.length - 1;
-    }
-
-    const selectedIndex = graphRuns.findIndex((graphRun) => graphRun.graphRunId === selectedGraphRun);
-    return selectedIndex === -1 ? graphRuns.length - 1 : selectedIndex;
+    const selectedId = getSelectedGraphRunId(graphRuns, selectedGraphRun);
+    return graphRuns.findIndex((graphRun) => graphRun.graphRunId === selectedId);
   }, [graphRuns, selectedGraphRun]);
+  const hasNoCallerExecution = typeof selectedGraphRun === 'object' && selectedExecutionIndex === -1;
 
   const setSelectedGraphRun = (graphRunId: typeof selectedGraphRun) => {
     if (!currentGraphView) {
@@ -136,27 +129,43 @@ export const GraphExecutionSelectorBar: FC = () => {
 
   const selectedExecutionFraction =
     selectedExecutionIndex === -1 ? '0/0' : `${selectedExecutionIndex + 1}/${graphRuns.length}`;
-  const selectedExecutionLabel = `Execution: ${selectedExecutionFraction}`;
+  const selectedExecutionLabel = hasNoCallerExecution
+    ? 'No execution for selected caller'
+    : `Execution: ${selectedExecutionFraction}`;
 
-  if (!currentGraphView || graphRuns.length <= 1) {
+  if (!currentGraphView || (graphRuns.length <= 1 && !hasNoCallerExecution)) {
     return null;
   }
 
   return (
     <div css={styles}>
       <Tooltip content="Previous execution (all nodes)" placement="bottom">
-        <button className="prev" onClick={onPrev}>
+        <button
+          className="prev"
+          aria-label="Previous execution (all nodes)"
+          disabled={selectedExecutionIndex <= 0}
+          onClick={onPrev}
+        >
           <LeftIcon />
         </button>
       </Tooltip>
       <Tooltip
-        content={`This graph view has executed ${graphRuns.length} times. You are viewing ${selectedExecutionLabel.toLowerCase()}.`}
+        content={
+          hasNoCallerExecution
+            ? 'The selected caller has no child execution. Other recorded invocations remain available using the arrows.'
+            : `This graph view has executed ${graphRuns.length} times. You are viewing ${selectedExecutionLabel.toLowerCase()}.`
+        }
         placement="bottom"
       >
         <div className="current">{selectedExecutionLabel}</div>
       </Tooltip>
       <Tooltip content="Next execution (all nodes)" placement="bottom">
-        <button className="next" onClick={onNext}>
+        <button
+          className="next"
+          aria-label="Next execution (all nodes)"
+          disabled={selectedExecutionIndex >= graphRuns.length - 1}
+          onClick={onNext}
+        >
           <RightIcon />
         </button>
       </Tooltip>

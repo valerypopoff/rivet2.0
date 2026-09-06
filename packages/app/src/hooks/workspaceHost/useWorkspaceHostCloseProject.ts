@@ -6,7 +6,7 @@ import {
   projectsState,
   projectState,
 } from '../../state/savedGraphs.js';
-import { clearLoadedRecordingForProjectState } from '../../state/execution.js';
+import { clearLoadedRecordingForTabState } from '../../state/execution.js';
 import { removeOpenedProject } from '../../utils/openedProjects.js';
 import { isOpenedProjectRecoverable } from '../../utils/openedProjectSnapshots.js';
 import { useCurrentProjectEditorSnapshot } from '../useCurrentProjectEditorSnapshot.js';
@@ -20,7 +20,7 @@ export function useWorkspaceHostCloseProject() {
   const currentProject = useAtomValue(projectState);
   const openedProjectIds = useAtomValue(openedProjectsSortedIdsState);
   const openedProjectSnapshots = useAtomValue(openedProjectSnapshotsState);
-  const clearLoadedRecordingForProject = useSetAtom(clearLoadedRecordingForProjectState);
+  const clearLoadedRecordingForTab = useSetAtom(clearLoadedRecordingForTabState);
   const loadProject = useLoadProject();
   const { persistCurrentProjectEditorSnapshot } = useCurrentProjectEditorSnapshot();
   const { captureCurrentProjectExecutionSnapshot, restoreProjectExecutionSnapshot } = useProjectExecutionSnapshots();
@@ -70,7 +70,10 @@ export function useWorkspaceHostCloseProject() {
     // Recording selection is app-local but belongs to one project tab. Release
     // it before removing the tab so no invisible owner can block other tabs
     // from loading or unloading their own recording.
-    clearLoadedRecordingForProject(projectId);
+    clearLoadedRecordingForTab({
+      projectId,
+      projectPath: projects.openedProjects[projectId]?.fsPath ?? null,
+    });
     setProjects((previousProjects) => removeOpenedProject(previousProjects, projectId));
 
     return true;

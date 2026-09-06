@@ -109,7 +109,11 @@ export async function handleWorkflowPathsMovedCommand(
         context.preview.rememberPreviewProject({ ...currentPreview, path: movedPreviewPath });
       }
     }
-    context.getWorkspace().moveProjectPaths(getHostedProjectPathMoveInputs(moves));
+    const workspaceMoves = getHostedProjectPathMoveInputs(moves);
+    context.getWorkspace().moveProjectPaths(workspaceMoves);
+    for (const move of workspaceMoves) {
+      context.rebindLoadedRecordingPath(move.from, move.to);
+    }
 
     let metadataUpdated = false;
     for (const update of metadataUpdatesByProjectId.values()) {
@@ -239,7 +243,11 @@ export async function handleReconcileWorkflowProjectBindingsCommand(
           context.preview.rememberPreviewProject({ ...currentPreview, path: movedPreviewPath });
         }
       }
-      context.getWorkspace().moveProjectPaths(getHostedProjectPathMoveInputs(moves));
+      const workspaceMoves = getHostedProjectPathMoveInputs(moves);
+      context.getWorkspace().moveProjectPaths(workspaceMoves);
+      for (const move of workspaceMoves) {
+        context.rebindLoadedRecordingPath(move.from, move.to);
+      }
     }
 
     let persistedProjectStateChanged = false;

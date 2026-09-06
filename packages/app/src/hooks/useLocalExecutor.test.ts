@@ -55,14 +55,14 @@ test('local executor forwards a host-provided LLM profile health store to every 
 });
 
 test('local recording playback revalidates its captured owner before and after the pre-start yield', () => {
-  assert.match(useLocalExecutorSource, /isCurrentLoadedRecordingForProject/);
+  assert.match(useLocalExecutorSource, /isCurrentLoadedRecordingForTab/);
   assert.match(
     useLocalExecutorSource,
     /await yieldToMacrotask\(\);[\s\S]*store\.get\(loadedRecordingState\),[\s\S]*recordingToReplay,[\s\S]*runProjectId/,
   );
   assert.match(
     useLocalExecutorSource,
-    /if \(recordingToReplay\) \{[\s\S]*isCurrentLoadedRecordingForProject\([\s\S]*setRecordingPlaybackStarting\(false\)/,
+    /if \(recordingToReplay\) \{[\s\S]*isCurrentLoadedRecordingForTab\([\s\S]*setRecordingPlaybackStarting\(false\)/,
   );
 });
 

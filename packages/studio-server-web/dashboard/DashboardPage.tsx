@@ -210,8 +210,8 @@ export const DashboardPage: FC = () => {
     [postEditorCommand],
   );
 
-  const handleSaveProject = useCallback(() => {
-    postEditorCommand({ type: 'save-project' });
+  const handleSaveProject = useCallback((source?: 'shortcut') => {
+    postEditorCommand({ type: 'save-project', ...(source ? { source } : {}) });
   }, [postEditorCommand]);
 
   const focusEditorFrame = useCallback(() => {

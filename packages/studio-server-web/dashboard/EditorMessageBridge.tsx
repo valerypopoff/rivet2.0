@@ -6,7 +6,6 @@ import { useExecutorSessionRuntime, type RivetWorkspaceHost } from '../../app/sr
 import { graphRunningState } from '../../app/src/state/dataFlow';
 import {
   executorSessionRevisionState,
-  loadedRecordingState,
 } from '../../app/src/state/execution';
 import { openOrFocusGraphSearchState, searchingGraphState } from '../../app/src/state/graphBuilder';
 import {
@@ -45,8 +44,7 @@ export const EditorMessageBridge: FC<EditorMessageBridgeProps> = ({ savedProject
   const graphRunning = useAtomValue(graphRunningState);
   useAtomValue(executorSessionRevisionState);
   const openOverlay = useAtomValue(overlayOpenState);
-  const setLoadedRecording = useSetAtom(loadedRecordingState);
-  const setSelectedExecutor = useSetAtom(selectedExecutorState);
+  const selectedExecutor = useAtomValue(selectedExecutorState);
   const setSearching = useSetAtom(searchingGraphState);
   const openedProjectPaths = useMemo(() => projects.openedProjectsSortedIds
     .map((projectId) => projects.openedProjects[projectId]?.fsPath)
@@ -59,13 +57,10 @@ export const EditorMessageBridge: FC<EditorMessageBridgeProps> = ({ savedProject
     projectUnsavedChanges,
     workspaceHost,
   });
-  const selectBrowserExecutor = useCallback(() => setSelectedExecutor('browser'), [setSelectedExecutor]);
   const recording = useWorkflowRecordingBridge({
     currentProjectId: currentProject.metadata.id as ProjectId | undefined,
     loadedProjectPath: loadedProject.path,
     openedProjectPaths,
-    selectBrowserExecutor,
-    setLoadedRecording,
   });
   const openGraphSearch = useCallback(() => {
     setSearching(openOrFocusGraphSearchState);
@@ -82,6 +77,8 @@ export const EditorMessageBridge: FC<EditorMessageBridgeProps> = ({ savedProject
     preview,
     projects,
     recording,
+    openOverlay,
+    selectedExecutor,
     workspaceHost,
   });
 

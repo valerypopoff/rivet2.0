@@ -605,12 +605,14 @@ test("hosted HTTP evaluation store migrates legacy libraries and serializes writ
   let currentLibrary = normalizeEvaluationLibrary(undefined);
   const expectedRevisions: number[] = [];
   let importRequests = 0;
+  let importClientId: string | null = null;
 
   globalThis.fetch = async (input, init) => {
     const requestUrl = new URL(String(input), "https://rivet.example");
     const method = init?.method ?? "GET";
     if (requestUrl.pathname.endsWith("/library/import") && method === "POST") {
       importRequests += 1;
+      importClientId = new Headers(init?.headers).get('x-rivet-evaluation-library-client-id');
       const body = JSON.parse(String(init?.body)) as {
         library: EvaluationLibrary;
       };
@@ -658,6 +660,7 @@ test("hosted HTTP evaluation store migrates legacy libraries and serializes writ
 
     await store.initialize?.();
     assert.equal(importRequests, 1);
+    assert.ok(importClientId);
     assert.equal((await store.getLibrary()).data.suites[0]?.id, "legacy-suite");
 
     const second = library("second-http-suite", "second-http-dataset");
@@ -1275,6 +1278,112 @@ test('hosted HTTP evaluation store never lets a delayed refresh roll back a newe
     assert.equal(currentLibrary.datasets[0]?.name, 'Saved after refresh began');
   } finally {
     globalThis.fetch = originalFetch;
+  }
+});
+
+test('hosted HTTP evaluation invalidations are external, revisioned, and never recurse through refreshes', async () => {
+  const originalFetch = globalThis.fetch;
+  const eventSourceDescriptor = Object.getOwnPropertyDescriptor(globalThis, 'EventSource');
+  let revision = 0;
+  let currentLibrary = normalizeEvaluationLibrary(library());
+  let clientId: string | null = null;
+  let libraryReads = 0;
+
+  class FakeEventSource {
+    static instances: FakeEventSource[] = [];
+    readonly listeners = new Map<string, Array<(event: { data: string }) => void>>();
+    constructor(_url: string) {
+      FakeEventSource.instances.push(this);
+    }
+    addEventListener(type: string, listener: EventListenerOrEventListenerObject): void {
+      const callbacks = this.listeners.get(type) ?? [];
+      callbacks.push(listener as unknown as (event: { data: string }) => void);
+      this.listeners.set(type, callbacks);
+    }
+    close(): void {}
+    emit(type: string, value: unknown): void {
+      for (const listener of this.listeners.get(type) ?? []) listener({ data: JSON.stringify(value) });
+    }
+  }
+
+  const snapshot = () => ({
+    revision,
+    library: currentLibrary,
+    resourceVersions: getEvaluationLibraryResourceVersions(currentLibrary),
+  });
+  globalThis.fetch = async (input, init) => {
+    const requestUrl = new URL(String(input), 'https://rivet.example');
+    const method = init?.method ?? 'GET';
+    if (requestUrl.pathname.endsWith('/library') && method === 'GET') {
+      libraryReads += 1;
+      return Response.json(snapshot());
+    }
+    if (requestUrl.pathname.endsWith('/library/mutations') && method === 'POST') {
+      clientId = new Headers(init?.headers).get('x-rivet-evaluation-library-client-id');
+      const result = applyCheckedEvaluationLibraryMutation(currentLibrary, JSON.parse(String(init?.body)));
+      if (result.changed) {
+        currentLibrary = result.library;
+        revision += 1;
+      }
+      return Response.json(snapshot());
+    }
+    throw new Error(`Unexpected evaluation HTTP request: ${method} ${requestUrl.pathname}`);
+  };
+  Object.defineProperty(globalThis, 'EventSource', {
+    configurable: true,
+    value: FakeEventSource,
+  });
+
+  try {
+    const store = createHttpEvaluationStore({
+      baseUrl: '/api/workflows/evaluation-runs',
+      normalizeRun: normalizeEvaluationRun,
+      normalizeLibrary: normalizeEvaluationLibrary,
+    });
+    await store.initialize?.();
+    const invalidations: Array<{ epoch: string; revision: number }> = [];
+    const unsubscribe = store.subscribeLibraryInvalidation?.((event) => invalidations.push(event));
+    const stream = FakeEventSource.instances[0];
+    assert.ok(stream);
+
+    stream.emit('library-state', { epoch: 'epoch-a', revision });
+    assert.deepEqual(invalidations, []);
+
+    await store.getLibrarySyncSnapshot!();
+    assert.deepEqual(invalidations, []);
+
+    const before = await store.getLibrary();
+    await store.putLibrary({
+      ...before,
+      datasets: before.datasets.map((dataset) => ({ ...dataset, name: 'Saved locally' })),
+    });
+    assert.ok(clientId);
+    assert.deepEqual(invalidations, []);
+
+    stream.emit('library-changed', { epoch: 'epoch-a', revision, sourceClientId: clientId });
+    assert.deepEqual(invalidations, []);
+
+    currentLibrary = normalizeEvaluationLibrary({
+      ...currentLibrary,
+      data: {
+        ...currentLibrary.data,
+        suites: currentLibrary.data.suites.map((suite) => ({ ...suite, name: 'Renamed remotely' })),
+      },
+    });
+    revision += 1;
+    stream.emit('library-changed', { epoch: 'epoch-a', revision, sourceClientId: 'another-browser' });
+    assert.deepEqual(invalidations, [{ epoch: 'epoch-a', revision }]);
+
+    await store.getLibrarySyncSnapshot!();
+    stream.emit('library-changed', { epoch: 'epoch-a', revision, sourceClientId: 'another-browser' });
+    stream.emit('library-changed', { epoch: 'epoch-a', revision: revision - 1, sourceClientId: 'another-browser' });
+    assert.deepEqual(invalidations, [{ epoch: 'epoch-a', revision }]);
+    assert.equal(libraryReads, 3);
+    unsubscribe?.();
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (eventSourceDescriptor) Object.defineProperty(globalThis, 'EventSource', eventSourceDescriptor);
+    else Reflect.deleteProperty(globalThis, 'EventSource');
   }
 });
 

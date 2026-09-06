@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import test from 'node:test';
+import type { ChartNode, GraphId, NodeConnection, PortId, ProcessEvents } from '@valerypopoff/rivet2-node';
 import { writeWorkflowProjectStatsCacheFromContents } from '../routes/workflows/project-stats.js';
 import {
   readJson,
@@ -26,6 +27,120 @@ const { writeRunRecordingsSettings } = await import('../routes/workflows/recordi
 
 test.beforeEach(resetAndEnsureWorkflowsRoot);
 test.after(cleanupWorkflowSuite);
+
+for (const isSplitSequential of [false, true]) {
+  test(`headless ${isSplitSequential ? 'sequential' : 'parallel'} pruned calls persist replayable per-item recordings`, async () => {
+    const created = await workflowMutations.createWorkflowProjectItem('', 'PrunedRecording');
+    const project = await rivetNode.loadProjectFromFile(created.absolutePath);
+    const main = project.graphs[project.metadata.mainGraphId!]!;
+    const childId = 'recording-pruned-child' as GraphId;
+    const input = rivetNode.graphInputNode.impl.create();
+    input.data = { id: 'input', dataType: 'string[]' };
+    const caller = rivetNode.subGraphNode.impl.create();
+    caller.data = { graphId: childId, skipUnusedOutputs: true };
+    caller.isSplitRun = true;
+    caller.isSplitSequential = isSplitSequential;
+    caller.splitRunConcurrency = 2;
+    const result = rivetNode.graphOutputNode.impl.create();
+    result.data = { id: 'result', dataType: 'string[]' };
+    const seed = rivetNode.graphInputNode.impl.create();
+    seed.data = { id: 'seed', dataType: 'string' };
+    const wanted = rivetNode.graphOutputNode.impl.create();
+    wanted.data = { id: 'wanted', dataType: 'string' };
+    const unused = rivetNode.textNode.impl.create();
+    unused.data.text = 'This branch must not execute';
+    const unusedOutput = rivetNode.graphOutputNode.impl.create();
+    unusedOutput.data = { id: 'unused', dataType: 'string' };
+    const connect = (from: ChartNode, output: string, to: ChartNode, port: string): NodeConnection => ({
+      outputNodeId: from.id,
+      outputId: output as NodeConnection['outputId'],
+      inputNodeId: to.id,
+      inputId: port as NodeConnection['inputId'],
+    });
+    main.nodes = [input, caller, result];
+    main.connections = [connect(input, 'data', caller, 'seed'), connect(caller, 'wanted', result, 'value')];
+    project.graphs[childId] = {
+      metadata: { id: childId, name: 'Pruned child' },
+      nodes: [seed, wanted, unused, unusedOutput],
+      connections: [connect(seed, 'data', wanted, 'value'), connect(unused, 'output', unusedOutput, 'value')],
+    };
+    const serializedProject = rivetNode.serializeProject(project);
+    assert.ok(typeof serializedProject === 'string');
+    await fs.writeFile(created.absolutePath, serializedProject, 'utf8');
+    await workflowMutations.publishWorkflowProjectItem(created.relativePath, { endpointName: 'pruned-recording' });
+
+    await withWorkflowExecutionServer(async ({ publishedBaseUrl, latestBaseUrl }) => {
+      // Simultaneous requests plus a repeated latest call exercise server project-cache reuse.
+      const responses = await Promise.all(
+        [publishedBaseUrl, latestBaseUrl, latestBaseUrl].map(async (base, index) => {
+          const items = [`request-${index}-a`, `request-${index}-b`, `request-${index}-c`];
+          const response = await fetch(`${base}/pruned-recording`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(items),
+          });
+          assert.equal(response.status, 200);
+          const payload = await response.json();
+          assert.deepEqual(payload.result, { type: 'string[]', value: items }, JSON.stringify(payload));
+          return items;
+        }),
+      );
+      const page = await waitForWorkflowRecordingRunCount(
+        workflowRecordings.listWorkflowRecordingRunsPage,
+        workflowsRoot,
+        project.metadata.id,
+        3,
+      );
+      assert.equal(page.runs.length, 3);
+      const replayedResults: unknown[] = [];
+      const recordedRootIds = new Set<string>();
+      for (const run of page.runs) {
+        assert.equal(run.status, 'succeeded');
+        const replayProject = rivetNode.loadProjectFromString(
+          await workflowRecordings.readWorkflowRecordingArtifact(workflowsRoot, run.id, 'replay-project'),
+        );
+        const saved = rivetNode.ExecutionRecorder.deserializeFromString(
+          await workflowRecordings.readWorkflowRecordingArtifact(workflowsRoot, run.id, 'recording'),
+        );
+        const starts = saved.events.filter((event) => event.type === 'graphStart');
+        const root = starts.find((event) => event.data.graphId === main.metadata!.id)!;
+        recordedRootIds.add(root.data.execution!.rootRunId);
+        const children = starts.filter((event) => event.data.graphId === childId);
+        assert.equal(children.length, 3);
+        assert.equal(new Set(children.map((event) => event.data.execution!.graphRunId)).size, 3);
+        assert.deepEqual(children.map((event) => event.data.execution!.executor!.splitIndex).sort(), [0, 1, 2]);
+        for (const event of saved.events) {
+          if (event.data != null && typeof event.data === 'object' && 'nodeId' in event.data) {
+            assert.notEqual(event.data.nodeId, unused.id);
+            assert.notEqual(event.data.nodeId, unusedOutput.id);
+          }
+        }
+        const finish = saved.events.find((event) => event.type === 'nodeFinish' && event.data.nodeId === caller.id);
+        assert.ok(finish?.type === 'nodeFinish');
+        assert.equal(finish.data.outputs['unused' as PortId]?.type, 'control-flow-excluded[]');
+        const replay = rivetNode.createProcessor(replayProject, { graph: main.metadata!.id });
+        const replayStarts: ProcessEvents['graphStart'][] = [];
+        replay.processor.on('graphStart', (event) => {
+          replayStarts.push(event);
+        });
+        try {
+          const outputs = await replay.processor.replayRecording(saved);
+          replayedResults.push(outputs.result?.value);
+          const replayRoot = replayStarts.find((event) => event.graph.metadata!.id === main.metadata!.id)!;
+          const replayChildren = replayStarts.filter((event) => event.graph.metadata!.id === childId);
+          assert.equal(replayChildren.length, 3);
+          for (const child of replayChildren) {
+            assert.equal(child.execution!.parentGraphRunId, replayRoot.execution!.graphRunId);
+          }
+        } finally {
+          replay.dispose();
+        }
+      }
+      assert.equal(recordedRootIds.size, 3, 'concurrent requests never share recording run identity');
+      assert.deepEqual(replayedResults.sort(), responses.sort());
+    });
+  });
+}
 
 test('published and latest workflow execution create replayable recordings that are listed over HTTP', async () => {
   const created = await workflowMutations.createWorkflowProjectItem('', 'Recorded');

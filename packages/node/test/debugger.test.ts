@@ -293,9 +293,12 @@ function makeNestedRaceLoserProject(): Project {
   const slowSubgraphNode = makeSubgraphNode('subgraph-race-slow-subgraph', slowChildGraphId);
   const slowDirectExpressionNode = makeExpressionNode(
     'subgraph-race-slow-expression',
-    'await new Promise((resolve) => setTimeout(() => resolve("slow direct"), 50))',
+    'await context.raceGate.value.waitForWinner("slow direct")',
   );
-  const fastExpressionNode = makeExpressionNode('subgraph-race-fast-expression', '"fast"');
+  const fastExpressionNode = makeExpressionNode(
+    'subgraph-race-fast-expression',
+    'await context.raceGate.value.waitForLosers()',
+  );
   const raceNode: ChartNode = {
     data: {},
     id: 'subgraph-race-inputs' as NodeId,
@@ -414,7 +417,7 @@ function makeSuccessfulAbortSlowLeafGraph(graphId: GraphId): NodeGraph {
 function makeSlowExpressionGraph(graphId: GraphId): NodeGraph {
   const slowExpressionNode = makeExpressionNode(
     'subgraph-race-slow-child-expression',
-    'await new Promise((resolve) => setTimeout(() => resolve("slow child"), 50))',
+    'await context.raceGate.value.waitForWinner("slow child")',
   );
   const outputNode = makeGraphOutputNode('subgraph-race-slow-child-output', 'result', 'any');
 
@@ -1280,7 +1283,7 @@ describe('startDebuggerServer broadcast', () => {
     assert.match(nodeError.data.error, /nested expression failed/);
   });
 
-  it('sends late race-loser exclusions from nested subgraphs before done', async () => {
+  it('sends late race-loser exclusions from nested subgraphs before done', { timeout: 10_000 }, async (t) => {
     const server = new FakeWebSocketServer();
     const socket = new FakeWebSocket();
     const debuggerServer = startDebuggerServer({
@@ -1288,12 +1291,47 @@ describe('startDebuggerServer broadcast', () => {
       heartbeatIntervalMs: 0,
     });
     const fixture = makeNestedRaceLoserProject();
+    let enteredLosers = 0;
+    let releaseFast!: () => void;
+    let releaseLosers!: () => void;
+    const losersEntered = new Promise<void>((resolve) => {
+      releaseFast = resolve;
+    });
+    const winnerFinished = new Promise<void>((resolve) => {
+      releaseLosers = resolve;
+    });
 
     server.connect(socket);
 
     const processor = createProcessor(fixture, {
       graph: 'main-race',
       remoteDebugger: debuggerServer,
+      context: {
+        raceGate: {
+          type: 'any',
+          value: {
+            async waitForWinner(result: string) {
+              if (++enteredLosers === 2) releaseFast();
+              await winnerFinished;
+              return result;
+            },
+            async waitForLosers() {
+              await losersEntered;
+              return 'fast';
+            },
+          },
+        },
+      },
+    });
+    t.after(() => {
+      releaseFast();
+      releaseLosers();
+      processor.dispose();
+    });
+    // Evaluate both real slow expressions before allowing the winner to finish.
+    // Release them only after Race Inputs has cancelled the losing branches.
+    processor.processor.on('nodeStart', ({ node }) => {
+      if (node.id === 'subgraph-race-output') releaseLosers();
     });
 
     const outputs = await processor.run();

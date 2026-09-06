@@ -44,6 +44,7 @@ export function useWorkspaceHostOpenProject() {
           ? replaceTargetProjectId
           : undefined;
       const existingExecutorMode = store.get(projectsState).openedProjects[projectId]?.executorMode;
+      const executorMode = existingExecutorMode ?? options.executorMode;
       const shouldPreseedTabUiState = options.tabUi !== undefined;
       const previousTabUiState = projectTabUiStates[projectId];
 
@@ -66,7 +67,7 @@ export function useWorkspaceHostOpenProject() {
           graphToLoad: snapshot.graphToLoad,
           evaluationData: snapshot.evaluationData,
           evaluationDatasets: snapshot.evaluationDatasets,
-          executorMode: existingExecutorMode,
+          executorMode,
           markClean: true,
         });
 
@@ -91,7 +92,7 @@ export function useWorkspaceHostOpenProject() {
           const withoutReplacedProject = replacedProjectId
             ? removeOpenedProject(previousProjects, replacedProjectId)
             : previousProjects;
-          const nextExecutorMode = previousProjects.openedProjects[projectId]?.executorMode ?? existingExecutorMode;
+          const nextExecutorMode = previousProjects.openedProjects[projectId]?.executorMode ?? executorMode;
 
           const withOpenedProject = addOpenedProject(
             withoutReplacedProject,
@@ -197,7 +198,7 @@ export function useWorkspaceHostOpenProject() {
 
   const replaceCurrent = useStableCallback(
     (snapshot: RivetProjectSnapshotInput, options?: RivetProjectReplaceOptions) =>
-      openProjectSnapshot(snapshot, { replaceCurrent: true, tabUi: options?.tabUi }),
+      openProjectSnapshot(snapshot, { ...options, replaceCurrent: true }),
   );
 
   return {

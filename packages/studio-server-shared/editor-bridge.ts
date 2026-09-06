@@ -26,7 +26,7 @@ export type DashboardToEditorCommand =
       labels?: ProjectCompareSideLabels;
     }
   | { type: 'refresh-open-project-from-disk'; path: string }
-  | { type: 'save-project' }
+  | { type: 'save-project'; source?: 'shortcut' }
   | { type: 'trigger-editor-find-shortcut'; modifier: EditorShortcutModifier }
   | { type: 'trigger-editor-duplicate-shortcut'; modifier: EditorShortcutModifier }
   | { type: 'delete-workflow-project'; path: string; projectId?: string | null }
@@ -168,7 +168,7 @@ export function isDashboardToEditorCommand(value: unknown): value is DashboardTo
     case 'refresh-open-project-from-disk':
       return typeof value.path === 'string';
     case 'save-project':
-      return true;
+      return value.source == null || value.source === 'shortcut';
     case 'trigger-editor-find-shortcut':
       return isEditorShortcutModifier(value.modifier);
     case 'trigger-editor-duplicate-shortcut':

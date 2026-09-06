@@ -3,11 +3,16 @@ import { useSetAtom } from 'jotai';
 import { useEffect, useRef } from 'react';
 
 import { useIOProvider, type RivetWorkspaceHost } from '../../app/src/host';
-import { loadedRecordingState } from '../../app/src/state/execution';
+import {
+  clearLoadedRecordingForPathState,
+  rebindLoadedRecordingPathState,
+} from '../../app/src/state/execution';
 import {
   loadedProjectState,
   type OpenedProjectsInfo,
 } from '../../app/src/state/savedGraphs';
+import type { DefaultExecutor } from '../../app/src/state/settings.js';
+import type { OverlayKey } from '../../app/src/state/ui.js';
 import { isDashboardToEditorCommand, isValidBridgeOrigin } from '../../studio-server-shared/editor-bridge';
 import {
   handleCompareOpenProjectCommand,
@@ -26,7 +31,11 @@ import {
   handleWorkflowPathsMovedCommand,
 } from './editorProjectLifecycleCommands';
 import { handleOpenProjectCommand, handleRefreshOpenProjectCommand } from './editorProjectOpenCommands';
-import { replayEditorDuplicateShortcut, replayEditorFindShortcut } from './useEditorBridgeInteractions';
+import {
+  replayEditorDuplicateShortcut,
+  replayEditorFindShortcut,
+} from './useEditorBridgeInteractions';
+import { shouldSkipHostedShortcutProjectSave } from './editorBridgeFocus';
 import { useOpenWorkflowProject } from './useOpenWorkflowProject';
 import type { usePreviewProjectLifecycle } from './usePreviewProjectLifecycle';
 import type { useWorkflowRecordingBridge } from './useWorkflowRecordingBridge';
@@ -38,6 +47,8 @@ export function useEditorCommandBridge({
   preview,
   projects,
   recording,
+  openOverlay,
+  selectedExecutor,
   workspaceHost,
 }: {
   currentProject: Project;
@@ -46,14 +57,19 @@ export function useEditorCommandBridge({
   preview: ReturnType<typeof usePreviewProjectLifecycle>;
   projects: OpenedProjectsInfo;
   recording: ReturnType<typeof useWorkflowRecordingBridge>;
+  openOverlay: OverlayKey | undefined;
+  selectedExecutor: DefaultExecutor;
   workspaceHost: RivetWorkspaceHost;
 }) {
   const setLoadedProject = useSetAtom(loadedProjectState);
-  const setLoadedRecording = useSetAtom(loadedRecordingState);
+  const clearLoadedRecordingForPath = useSetAtom(clearLoadedRecordingForPathState);
+  const rebindLoadedRecordingPath = useSetAtom(rebindLoadedRecordingPathState);
   const ioProvider = useIOProvider();
   const projectsRef = useRef(projects);
   const loadedProjectRef = useRef(loadedProject);
   const currentProjectRef = useRef(currentProject);
+  const openOverlayRef = useRef(openOverlay);
+  const selectedExecutorRef = useRef(selectedExecutor);
   const workspaceRef = useRef(workspaceHost);
   const openProjectRef = useRef(openProject);
   const serializedCommandQueueRef = useRef<Promise<void>>(Promise.resolve());
@@ -62,17 +78,21 @@ export function useEditorCommandBridge({
   projectsRef.current = projects;
   loadedProjectRef.current = loadedProject;
   currentProjectRef.current = currentProject;
+  openOverlayRef.current = openOverlay;
+  selectedExecutorRef.current = selectedExecutor;
   workspaceRef.current = workspaceHost;
   openProjectRef.current = openProject;
 
   useEffect(() => {
     const context: EditorCommandBridgeContext = {
-      clearLoadedRecording: (projectId) => {
-        setLoadedRecording((loadedRecording) =>
-          projectId != null && loadedRecording?.projectId === projectId ? null : loadedRecording,
-        );
+      clearLoadedRecordingForPath: (projectPath) => {
+        clearLoadedRecordingForPath(projectPath);
+      },
+      rebindLoadedRecordingPath: (fromPath, toPath) => {
+        rebindLoadedRecordingPath({ fromPath, toPath });
       },
       getCurrentProject: () => currentProjectRef.current,
+      getSelectedExecutor: () => selectedExecutorRef.current,
       loadProjectData: async (path) => {
         const provider = ioProvider as {
           loadProjectDataNoPrompt?: (path: string) => ReturnType<typeof ioProvider.loadProjectData>;
@@ -127,6 +147,12 @@ export function useEditorCommandBridge({
 
       switch (event.data.type) {
         case 'save-project': {
+          // Evaluation definitions are independently persisted shared
+          // resources. A dashboard-level shortcut must not rewrite the open
+          // project while that workspace owns the interaction.
+          if (shouldSkipHostedShortcutProjectSave(event.data.source, openOverlayRef.current)) {
+            break;
+          }
           try {
             await workspaceRef.current.saveCurrentProject();
           } catch (error) {
@@ -158,5 +184,5 @@ export function useEditorCommandBridge({
 
     window.addEventListener('message', handler);
     return () => window.removeEventListener('message', handler);
-  }, [preview, recording, setLoadedProject, setLoadedRecording]);
+  }, [clearLoadedRecordingForPath, preview, rebindLoadedRecordingPath, recording, setLoadedProject]);
 }

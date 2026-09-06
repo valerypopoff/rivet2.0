@@ -1,5 +1,11 @@
-import type { GraphRunRecord, GraphRunSelection, ProcessDataForNode, NodeRunDataWithRefs, PageValue } from '../dataFlow.js';
-import type { GraphRunId } from '@valerypopoff/rivet2-core';
+import type {
+  GraphRunRecord,
+  GraphRunSelection,
+  ProcessDataForNode,
+  NodeRunDataWithRefs,
+  PageValue,
+} from '../dataFlow.js';
+import type { GraphExecutionMetadata, GraphRunId, NodeId } from '@valerypopoff/rivet2-core';
 import type { DefaultExecutor } from '../settings.js';
 import type { ExecutorSessionState } from '../../hooks/executorSession.js';
 import type { GraphViewContext, GraphViewKey } from '../../domain/graphEditing/navigationActions.js';
@@ -120,6 +126,10 @@ export function getSelectedGraphRunId(
     return graphRuns[graphRuns.length - 1]?.graphRunId;
   }
 
+  if (typeof selectedGraphRun === 'object') {
+    return graphRuns.findLast((graphRun) => matchesCallerSelection(graphRun, selectedGraphRun))?.graphRunId;
+  }
+
   return graphRuns.some((graphRun) => graphRun.graphRunId === selectedGraphRun)
     ? selectedGraphRun
     : graphRuns[graphRuns.length - 1]?.graphRunId;
@@ -137,7 +147,9 @@ export function filterProcessDataForSelection(options: {
 
   const selectedGraphRunId = getSelectedGraphRunId(graphRuns, selectedGraphRun);
   if (!selectedGraphRunId) {
-    return processData;
+    // A specific caller may have skipped the child, or may not have started it
+    // yet. Never substitute another caller's data in that view.
+    return typeof selectedGraphRun === 'object' ? undefined : processData;
   }
 
   const exactMatches = processData.filter((process) => process.graphRunId === selectedGraphRunId);
@@ -146,7 +158,7 @@ export function filterProcessDataForSelection(options: {
   }
 
   const hasGraphRunTaggedData = processData.some((process) => process.graphRunId != null);
-  if (hasGraphRunTaggedData) {
+  if (hasGraphRunTaggedData || typeof selectedGraphRun === 'object') {
     return undefined;
   }
 
@@ -181,6 +193,43 @@ export function getSelectedProcessRun(
   options?: Parameters<typeof getSelectedProcessData>[2],
 ): NodeRunDataWithRefs | undefined {
   return getSelectedProcessData(processData, selectedPage, options)?.data;
+}
+
+export function getSubgraphCallerRunSelection(
+  parentNodeId: NodeId,
+  processData: ProcessDataForNode[] | undefined,
+  selectedPage: PageValue,
+  parentSelection: Parameters<typeof getSelectedProcessData>[2],
+): GraphRunSelection | undefined {
+  const process = getSelectedProcessData(processData, selectedPage, parentSelection);
+  if (process?.graphRunId) {
+    return { type: 'caller', parentNodeId, parentGraphRunId: process.graphRunId, parentProcessId: process.processId };
+  }
+  const parentGraphRunId = getSelectedGraphRunId(parentSelection?.graphRuns, parentSelection?.selectedGraphRun);
+  return parentGraphRunId != null || typeof parentSelection?.selectedGraphRun === 'object'
+    ? { type: 'caller', parentNodeId, parentGraphRunId }
+    : undefined;
+}
+
+export function shouldFollowLatestNodeProcess(
+  selection: GraphRunSelection | undefined,
+  execution: GraphExecutionMetadata | undefined,
+): boolean {
+  return typeof selection === 'object'
+    ? execution != null && matchesCallerSelection(execution, selection)
+    : selection == null || selection === 'latest';
+}
+
+function matchesCallerSelection(
+  execution: Pick<GraphExecutionMetadata, 'parentGraphRunId' | 'executor'>,
+  selection: Extract<GraphRunSelection, { type: 'caller' }>,
+): boolean {
+  return (
+    selection.parentGraphRunId != null &&
+    execution.parentGraphRunId === selection.parentGraphRunId &&
+    execution.executor?.nodeId === selection.parentNodeId &&
+    (selection.parentProcessId == null || execution.executor?.processId === selection.parentProcessId)
+  );
 }
 
 export function hasRunningProcessData(
@@ -277,6 +326,12 @@ export function getExecutorProductState(options: {
 }): ExecutorProductState {
   const { hasLoadedRecording = false, selectedExecutor, session } = options;
 
+  // Playback always uses the local executor path. A retained Remote Debugger
+  // session must not turn its controls back into a live-execution UI.
+  if (hasLoadedRecording) {
+    return { type: 'recording-playback-ready' };
+  }
+
   if (session.target?.type === 'external-debugger') {
     if (session.status === 'ready' && session.capabilities.canSendRun) {
       return { type: 'external-debugger-ready' };
@@ -287,10 +342,6 @@ export function getExecutorProductState(options: {
     }
 
     return { type: 'external-debugger-connecting' };
-  }
-
-  if (hasLoadedRecording) {
-    return { type: 'recording-playback-ready' };
   }
 
   if (selectedExecutor === 'nodejs') {

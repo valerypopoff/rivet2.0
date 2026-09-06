@@ -23,11 +23,9 @@ import {
   applyGraphBoundaryPortOrder,
   buildExcludedGraphBoundaryOutputs,
   buildGraphBoundaryInputData,
-  GRAPH_BOUNDARY_OUTPUT_DEMAND_OPTIMIZATION_ENABLED,
   getGraphBoundary,
   getGraphBoundaryInputDefinitions,
   getGraphBoundaryOutputDefinitions,
-  getRequestedGraphOutputNodeIds,
   type GraphBoundary,
 } from '../GraphBoundaryCache.js';
 
@@ -37,6 +35,8 @@ export type SubGraphNode = ChartNode & {
     graphId: GraphId;
     useErrorOutput?: boolean;
     useAsGraphPartialOutput?: boolean;
+    /** Only execute child branches needed by actively connected output ports. */
+    skipUnusedOutputs?: boolean;
 
     /** Data for each of the inputs of the subgraph */
     inputData?: Record<string, DataValue>;
@@ -60,6 +60,7 @@ export class SubGraphNodeImpl extends NodeImpl<SubGraphNode> {
         graphId: '' as GraphId,
         useErrorOutput: false,
         useAsGraphPartialOutput: false,
+        skipUnusedOutputs: false,
       },
     };
 
@@ -122,6 +123,14 @@ export class SubGraphNodeImpl extends NodeImpl<SubGraphNode> {
         label: 'Use Error Output',
         dataKey: 'useErrorOutput',
       },
+      {
+        type: 'toggle',
+        label: 'Skip unused outputs',
+        dataKey: 'skipUnusedOutputs',
+        helperMessage:
+          'Only run branches needed by connected outputs. Skipped branches also skip their side effects and errors. ' +
+          'Runs the full subgraph for Run to here, partial-output forwarding, or a connected Error output.',
+      },
     ];
 
     if (this.data.graphId) {
@@ -171,22 +180,19 @@ export class SubGraphNodeImpl extends NodeImpl<SubGraphNode> {
     const inputData = buildGraphBoundaryInputData(boundary, inputs, this.data.inputData);
 
     const shouldRunWholeGraph =
-      !GRAPH_BOUNDARY_OUTPUT_DEMAND_OPTIMIZATION_ENABLED ||
+      this.data.skipUnusedOutputs !== true ||
       context.isDirectRunTarget ||
       this.data.useAsGraphPartialOutput === true ||
       (this.data.useErrorOutput === true && context.activeOutputPortIds.has('error' as PortId));
-    const requestedGraphOutputNodeIds = shouldRunWholeGraph
-      ? []
-      : getRequestedGraphOutputNodeIds(boundary, context.activeOutputPortIds);
+    const requestedGraphOutputIds = shouldRunWholeGraph
+      ? undefined
+      : boundary.outputs.filter((output) => context.activeOutputPortIds.has(output.portId)).map((output) => output.id);
 
-    if (!shouldRunWholeGraph && requestedGraphOutputNodeIds.length === 0) {
-      return buildSkippedSubgraphOutputs(boundary, this.data.useErrorOutput);
+    if (requestedGraphOutputIds?.length === 0) {
+      return buildOptimizedSubgraphOutputs(boundary, [], {}, 0, this.data.useErrorOutput);
     }
 
     const subGraphProcessor = context.createSubProcessor(this.data.graphId, { signal: context.signal });
-    if (!shouldRunWholeGraph) {
-      subGraphProcessor.runToNodeIds = requestedGraphOutputNodeIds;
-    }
 
     try {
       const startTime = Date.now();
@@ -195,16 +201,21 @@ export class SubGraphNodeImpl extends NodeImpl<SubGraphNode> {
         context,
         inputData as Record<string, DataValue>,
         context.contextValues,
+        requestedGraphOutputIds ? { requestedGraphOutputIds } : undefined,
       );
-      const outputs = shouldRunWholeGraph
-        ? graphOutputs
-        : {
-            ...buildExcludedGraphBoundaryOutputs(boundary),
-            ...graphOutputs,
-          };
-
       const duration = Date.now() - startTime;
 
+      if (requestedGraphOutputIds) {
+        return buildOptimizedSubgraphOutputs(
+          boundary,
+          requestedGraphOutputIds,
+          graphOutputs,
+          duration,
+          this.data.useErrorOutput,
+        );
+      }
+
+      const outputs = graphOutputs;
       if (this.data.useErrorOutput) {
         outputs['error' as PortId] = {
           type: 'control-flow-excluded',
@@ -239,8 +250,24 @@ export class SubGraphNodeImpl extends NodeImpl<SubGraphNode> {
 
 export const subGraphNode = nodeDefinition(SubGraphNodeImpl, 'Subgraph');
 
-function buildSkippedSubgraphOutputs(boundary: GraphBoundary, useErrorOutput: boolean | undefined): Outputs {
+function buildOptimizedSubgraphOutputs(
+  boundary: GraphBoundary,
+  requestedOutputIds: readonly string[],
+  graphOutputs: Outputs,
+  duration: number,
+  useErrorOutput: boolean | undefined,
+): Outputs {
   const outputs: Outputs = buildExcludedGraphBoundaryOutputs(boundary);
+
+  for (const outputId of requestedOutputIds) {
+    if (Object.hasOwn(graphOutputs, outputId)) {
+      outputs[outputId as PortId] = graphOutputs[outputId as PortId];
+    } else {
+      // Missing requested values must remain missing: downstream optional inputs
+      // may use defaults, whereas an excluded value would skip their node.
+      delete outputs[outputId as PortId];
+    }
+  }
 
   if (useErrorOutput) {
     outputs['error' as PortId] = {
@@ -249,14 +276,15 @@ function buildSkippedSubgraphOutputs(boundary: GraphBoundary, useErrorOutput: bo
     };
   }
 
-  outputs['cost' as PortId] = {
-    type: 'number',
-    value: 0,
-  };
-  outputs['duration' as PortId] = {
-    type: 'number',
-    value: 0,
-  };
+  // Authored boundary values retain ownership of metric-named ports, including
+  // exclusions. An unrequested Graph Output may still run as another output's
+  // dependency, so do not copy arbitrary child results into the caller map.
+  if (!boundary.outputs.some((output) => output.id === 'cost')) {
+    outputs['cost' as PortId] = graphOutputs['cost' as PortId] ?? { type: 'number', value: 0 };
+  }
+  if (!boundary.outputs.some((output) => output.id === 'duration')) {
+    outputs['duration' as PortId] = { type: 'number', value: duration };
+  }
 
   return outputs;
 }

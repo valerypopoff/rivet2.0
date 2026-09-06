@@ -157,7 +157,7 @@ Packages without a `test` script are not included.
 
 #### Test Guardrails
 
-When adding or cleaning tests, prefer behavior-level tests at the owning helper, domain model, runtime API, or render-data-value seam. Avoid tests that read production `.ts` or `.tsx` files and assert exact source text unless the contract is a static entrypoint/CSS relationship that cannot be observed through a focused helper yet. Any retained source-shape guard should say what product contract it protects and should avoid duplicating behavior already covered by owner tests.
+When adding or cleaning tests, use behavior-level tests at the owning helper, domain model, runtime API, or rendered-component seam. New tests that read production `.ts` or `.tsx` files and assert exact source text fail `yarn test:style`; do not grow the migration allowlist to make a new test pass. Existing allowlisted static entrypoint/CSS guards are migration debt. Each retained guard should name its product contract and avoid duplicating behavior already covered by owner tests.
 When a retained source-shape guard covers a formatted expression or call, match the required semantic arguments while allowing normal whitespace and multiline formatting; do not make Prettier-compatible layout changes fail the suite.
 `packages/app-executor/bin/executorHost.test.mts` is an approved static-entrypoint guard: importing its startup path would bind the executor socket server, so it verifies the host/standalone bootstrap boundary from source. Keep that one exception listed in `scripts/checks/source-reading-test-allowlist.mjs`; migrate any other test to an observable helper instead.
 
@@ -193,6 +193,32 @@ Docs typecheck is not part of `yarn test`; CI runs `yarn test:docs` as a
 separate step so runtime/package tests and documentation validation stay
 visibly distinct. The docs typecheck is non-emitting so it cannot leave
 generated JavaScript beside Docusaurus source files during CI or local cleanup.
+
+Before committing or pushing, run `yarn lint`, `yarn test:docs`, the complete
+`yarn test:style`, and `yarn prettier:check` in addition to the applicable
+runtime suites. A passing `yarn test` does not cover these gates or the Studio
+Server API/web suites. Finish `test:style` before starting runtime tests in the
+same checkout: its authoring checks rebuild Core's ESM output, which consumers
+must not import while it is being replaced. After changing a hosted editor seam, run the full API
+suite as well as the focused owner tests, after building its workspace
+dependencies. The API suite still contains legacy integration guards that can
+become stale when a caller changes without changing its observable behavior.
+
+On PowerShell, run each native command separately and inspect its exit code.
+If grouping checks in a script, stop immediately after a failure:
+
+```powershell
+foreach ($ciCheck in @('lint', 'test:docs', 'test:style', 'prettier:check')) {
+  node .yarn/releases/yarn-4.17.1.cjs $ciCheck
+  if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+}
+```
+
+PowerShell's final status can otherwise describe only the last command, hiding
+an earlier failure. The style guard deliberately prints its migration queue
+after reporting an error; that output is not a success signal. The aggregate
+GitHub `build` and `verify` jobs fail when a required upstream job fails, so
+fix and rerun that upstream gate rather than relaxing the aggregate condition.
 
 The app test script lets the Node/tsx test runner discover `*.test.ts` files
 instead of expanding `src/**/*.test.ts` in the shell. Keep discovery internal to

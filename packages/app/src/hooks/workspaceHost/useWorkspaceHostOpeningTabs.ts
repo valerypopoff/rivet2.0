@@ -98,6 +98,7 @@ export function useWorkspaceHostOpeningTabs(openProjectSnapshot: WorkspaceHostOp
         replaceCurrent: openingTab.replaceTargetProjectId != null,
         replaceProjectId: openingTab.replaceTargetProjectId,
         selectedOpeningProjectTabIdToClear: typedOpeningTabId,
+        executorMode: options.executorMode,
         tabUi: options.tabUi ?? openingTab.tabUi,
       });
 

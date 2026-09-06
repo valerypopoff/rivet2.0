@@ -7,8 +7,6 @@ import type { DynamicEditorEditor } from './EditorDefinition.js';
 import type { GraphInputNode } from './nodes/GraphInputNode.js';
 import type { GraphOutputNode } from './nodes/GraphOutputNode.js';
 
-export const GRAPH_BOUNDARY_OUTPUT_DEMAND_OPTIMIZATION_ENABLED = false;
-
 export type GraphBoundaryInput = {
   dataType: DataType;
   editor?: DynamicEditorEditor;
@@ -153,15 +151,6 @@ export function buildExcludedGraphBoundaryOutputs(boundary: GraphBoundary): Outp
   }
 
   return outputs;
-}
-
-export function getRequestedGraphOutputNodeIds(
-  boundary: GraphBoundary,
-  requestedOutputPortIds: ReadonlySet<PortId>,
-): NodeId[] {
-  return boundary.outputs
-    .filter((output) => requestedOutputPortIds.has(output.portId))
-    .map((output) => output.nodeId);
 }
 
 function deriveGraphBoundary(graph: NodeGraph): GraphBoundary {

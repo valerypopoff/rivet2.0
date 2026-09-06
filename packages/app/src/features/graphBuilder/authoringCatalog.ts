@@ -709,6 +709,11 @@ function createBuiltInAdapter(
           allowedValues: Object.keys(project.graphs).sort(),
         }),
         setting('useErrorOutput', 'boolean', 'Expose an error output.'),
+        setting(
+          'skipUnusedOutputs',
+          'boolean',
+          'Only run branches needed by connected outputs. Skipped branches also skip their side effects and errors. Runs the full subgraph for Run to here, partial-output forwarding, or a connected Error output.',
+        ),
         setting('useAsGraphPartialOutput', 'boolean', 'Forward partial outputs from the subgraph.'),
         setting('inputPortOrder', 'string-array', 'Optional input-port order.'),
         setting('outputPortOrder', 'string-array', 'Optional output-port order.'),

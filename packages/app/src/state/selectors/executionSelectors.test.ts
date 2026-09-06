@@ -850,6 +850,76 @@ describe('executionSelectors', () => {
     assert.equal(filtered, undefined);
   });
 
+  test('mixed full and pruned child invocations do not show skipped nodes from another invocation', () => {
+    const graphRuns = ['full', 'pruned', 'full-again'].map((id) => ({
+      graphRunId: id as GraphRunId,
+      rootRunId: 'root' as RootRunId,
+      graphId: 'child' as GraphId,
+    }));
+    const processData = [
+      {
+        processId: 'old-process',
+        graphRunId: 'full' as GraphRunId,
+        data: { status: { type: 'ok' }, outputData: { output: { type: 'string', value: 'old result' } } },
+      },
+      {
+        processId: 'new-process',
+        graphRunId: 'full-again' as GraphRunId,
+        data: { status: { type: 'error', error: 'new error' } },
+      },
+    ] as ProcessDataForNode[];
+
+    // This node emitted no events in the pruned invocation. Neither older
+    // successful results nor newer errors may appear when that run is selected.
+    for (const selectedPage of ['latest', 0, 100] as const) {
+      assert.equal(
+        getSelectedProcessData(processData, selectedPage, {
+          graphRuns,
+          selectedGraphRun: 'pruned' as GraphRunId,
+        }),
+        undefined,
+      );
+      assert.deepEqual(
+        getNodeExecutionClassFlags(
+          getSelectedProcessRun(processData, selectedPage, {
+            graphRuns,
+            selectedGraphRun: 'pruned' as GraphRunId,
+          }),
+        ),
+        {
+          success: false,
+          error: false,
+          interrupted: false,
+          running: false,
+          'not-ran': false,
+        },
+      );
+    }
+    assert.equal(
+      getSelectedProcessData(processData.slice(0, 1), 'latest', {
+        graphRuns: graphRuns.slice(0, 2),
+        selectedGraphRun: 'latest',
+      }),
+      undefined,
+    );
+
+    // Deliberately selecting history still works; pruning does not erase it.
+    assert.equal(
+      getSelectedProcessData(processData, 'latest', {
+        graphRuns,
+        selectedGraphRun: 'full' as GraphRunId,
+      })?.processId,
+      'old-process',
+    );
+    assert.equal(
+      getSelectedProcessData(processData, 'latest', {
+        graphRuns,
+        selectedGraphRun: 'latest',
+      })?.processId,
+      'new-process',
+    );
+  });
+
   test('filterProcessDataForSelection keeps legacy untagged process data when no tagged data exists', () => {
     const processData = [
       { processId: 'p-untagged-a', data: { status: { type: 'ok' } } },
@@ -933,7 +1003,7 @@ describe('executionSelectors', () => {
     );
   });
 
-  test('editor graph runs are disabled while an external remote debugger is active', () => {
+  test('editor graph runs are disabled while an external remote debugger is active unless playback is loaded', () => {
     assert.equal(
       canRunGraphFromEditor({
         selectedExecutor: 'browser',
@@ -964,7 +1034,7 @@ describe('executionSelectors', () => {
           target: { type: 'external-debugger', url: 'ws://debugger.example/latest' },
         },
       }),
-      false,
+      true,
     );
 
     assert.equal(
@@ -1027,7 +1097,7 @@ describe('executionSelectors', () => {
           target: { type: 'external-debugger', url: 'ws://debugger.example/latest' },
         },
       }),
-      { type: 'external-debugger-ready' },
+      { type: 'recording-playback-ready' },
     );
 
     assert.deepEqual(

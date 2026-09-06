@@ -81,7 +81,6 @@ export async function replayExecutionRecording(options: {
   const {
     emitter,
     erroredNodes,
-    graphOutputs,
     fallbackGraphId,
     initialReplayExecution,
     project,
@@ -96,6 +95,7 @@ export async function replayExecutionRecording(options: {
     nodeResults,
     isAborted,
   } = options;
+  let graphOutputs = options.graphOutputs;
 
   const nodesByIdAllGraphs: Record<NodeId, ChartNode> = {};
   const graphIdByNodeId: Record<NodeId, GraphId> = {};
@@ -253,14 +253,14 @@ export async function replayExecutionRecording(options: {
         replayRootRunIds.set(recordedExecution.rootRunId, replayRootRunId);
       }
 
-      const getReplayGraphRunId = (recordedGraphRunId: GraphRunId): GraphRunId => {
+      const getReplayGraphRunId = (recordedGraphRunId: GraphRunId, initialGraphRunId?: GraphRunId): GraphRunId => {
         let graphRunIds = replayGraphRunIdsByRoot.get(recordedExecution.rootRunId);
         if (graphRunIds == null) {
           graphRunIds = new Map();
           replayGraphRunIdsByRoot.set(recordedExecution.rootRunId, graphRunIds);
         }
 
-        const replayGraphRunId = graphRunIds.get(recordedGraphRunId) ?? (nanoid() as GraphRunId);
+        const replayGraphRunId = initialGraphRunId ?? graphRunIds.get(recordedGraphRunId) ?? (nanoid() as GraphRunId);
         graphRunIds.set(recordedGraphRunId, replayGraphRunId);
         return replayGraphRunId;
       };
@@ -274,7 +274,12 @@ export async function replayExecutionRecording(options: {
       return {
         ...rest,
         rootRunId: replayRootRunId,
-        graphRunId: isInitialRootGraph ? initialReplayExecution!.graphRunId : getReplayGraphRunId(graphRunId),
+        // Seed the root mapping too, so child parentGraphRunId references resolve
+        // to the same identity already allocated by the playback processor.
+        graphRunId: getReplayGraphRunId(
+          graphRunId,
+          isInitialRootGraph ? initialReplayExecution!.graphRunId : undefined,
+        ),
         ...(parentGraphRunId == null ? {} : { parentGraphRunId: getReplayGraphRunId(parentGraphRunId) }),
       };
     };
@@ -338,8 +343,10 @@ export async function replayExecutionRecording(options: {
         case 'done': {
           emitFallbackRootTerminal('completed', { outputs: event.data.results });
           emitReplayTerminalEvent('done', event.data);
-          setGraphOutputs(event.data.results);
-          setRunning(false);
+          graphOutputs = event.data.results;
+          setGraphOutputs(graphOutputs);
+          // Keep ownership until playback drains, just like a live graph run.
+          // A done listener must not start work that final cleanup could clobber.
           break;
         }
         case 'error': {

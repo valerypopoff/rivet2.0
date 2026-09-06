@@ -9,13 +9,14 @@ const appRoot = join(componentsDir, '..', '..');
 
 test('node body previews distinguish wrapped text from clipped object source', () => {
   const nodeBodySource = readFileSync(join(componentsDir, 'NodeBody.tsx'), 'utf8');
+  const colorizedNodeBodySource = readFileSync(join(componentsDir, 'ColorizedNodeBody.tsx'), 'utf8');
   const nodeStylesSource = readFileSync(join(componentsDir, 'nodeStyles.ts'), 'utf8');
   const objectNodeSource = readFileSync(join(componentsDir, 'nodes', 'ObjectNode.tsx'), 'utf8');
   const colorizedWrapBlock = /\.node-body-colorized-wrap \{(?<styles>[\s\S]*?)\n  \}/.exec(nodeBodySource)?.groups
     ?.styles;
 
-  assert.match(nodeBodySource, /function shouldWrapColorizedNodeBody\(language: string\)/);
-  assert.match(nodeBodySource, /language === 'prompt-interpolation-markdown'/);
+  assert.match(colorizedNodeBodySource, /function shouldWrapColorizedNodeBody\(language: string\)/);
+  assert.match(colorizedNodeBodySource, /language === 'prompt-interpolation-markdown'/);
   assert.ok(colorizedWrapBlock, 'Expected a dedicated CSS block for wrapped colorized node bodies');
   assert.match(colorizedWrapBlock, /max-width: 100%;/);
   assert.match(colorizedWrapBlock, /min-width: 0;/);
@@ -25,7 +26,7 @@ test('node body previews distinguish wrapped text from clipped object source', (
   assert.match(colorizedWrapBlock, /word-break: normal;/);
   assert.doesNotMatch(colorizedWrapBlock, /overflow-wrap:\s*anywhere;/);
   assert.doesNotMatch(colorizedWrapBlock, /word-break:\s*break-word;/);
-  assert.match(nodeBodySource, /wrapWords=\{wrapWords\}/);
+  assert.match(colorizedNodeBodySource, /wrapWords=\{wrapWords\}/);
   assert.match(nodeBodySource, /renderedSpecs\.length === 0 && \(!pending \|\| height == null\)/);
   assert.match(nodeStylesSource, /\.node-body:empty \{[\s\S]*margin-bottom: 0;[\s\S]*\}/);
   assert.match(objectNodeSource, /text-overflow: clip;/);

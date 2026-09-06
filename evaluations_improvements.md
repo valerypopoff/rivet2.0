@@ -21,6 +21,28 @@ The implementation intentionally does not mark the broader plan complete. It
 closes the highest-risk lost-update and duplicated-finalization paths without
 introducing unsafe “resume” behavior that could race another live window.
 
+## Post-roadmap maintenance (2026-09-05)
+
+The following completed replay-UI correction is deliberately outside the
+persistence roadmap above: it changes no evaluation artifact, retention, or
+transaction guarantee.
+
+- A loaded recording is now owned by the exact editor tab: its project ID and
+  loaded path must both match before replay-only UI or executor behavior is
+  shown. This prevents a replay's yellow canvas frame, controls, and disabled
+  executor status from leaking into another open document when a legacy replay
+  project ID is reused.
+- Recording activation and release update the recorder selection and the
+  transient playback-start state together. Replacing a tab or a failed replay
+  restore clears by the exact path, so an unrelated tab cannot be cleared.
+- When a normal project tab is renamed or moved, a manually loaded recording
+  follows that tab's rewritten path. This preserves the owner relationship
+  without weakening cross-tab isolation.
+
+Coverage includes state ownership transitions, hosted bridge contracts, replay
+tab switching, and workflow-tree synchronization. The remaining persistence
+and lifecycle work in this plan is unchanged.
+
 The three original architectural boundaries were:
 
 1. persistence is expressed as independent key/value operations instead of an

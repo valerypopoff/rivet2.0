@@ -2,6 +2,7 @@ import type {
   EvaluationLibraryConflictDraft,
   EvaluationLibraryConflictResolution,
   EvaluationLibraryConflictResource,
+  EvaluationLibraryInvalidation,
   EvaluationLibraryMutation,
   EvaluationLibraryMutationChange,
   EvaluationLibraryResourceKind,
@@ -134,11 +135,13 @@ export function createHttpEvaluationStore(options: {
     | undefined;
   let optimisticLibrary: EvaluationLibrary | undefined;
   let legacyLibraryWrite = Promise.resolve();
-  const libraryListeners = new Set<() => void>();
+  const libraryListeners = new Set<(invalidation: EvaluationLibraryInvalidation) => void>();
   const librarySyncIssueListeners = new Set<(issue: EvaluationLibrarySyncIssue | undefined) => void>();
   let librarySyncIssue: EvaluationLibrarySyncIssue | undefined;
   const clientId = `evaluation-${Math.random().toString(36).slice(2)}-${Date.now().toString(36)}`;
   let eventSource: EventSource | undefined;
+  let eventEpoch: string | undefined;
+  let highestEventRevision = -1;
 
   type QueuedMutation = {
     before: EvaluationLibrary;
@@ -207,7 +210,10 @@ export function createHttpEvaluationStore(options: {
             url(options.baseUrl, "/library/import"),
             {
               method: "POST",
-              headers: { "Content-Type": "application/json" },
+              headers: {
+                "Content-Type": "application/json",
+                [EVALUATION_LIBRARY_CLIENT_ID_HEADER]: clientId,
+              },
               body: JSON.stringify({ library: legacyLibrary }),
             },
           ).then(parseLibrarySnapshot));
@@ -220,8 +226,8 @@ export function createHttpEvaluationStore(options: {
     return initializationPromise;
   };
 
-  const notifyLibraryListeners = () => {
-    for (const listener of libraryListeners) listener();
+  const notifyLibraryListeners = (invalidation: EvaluationLibraryInvalidation) => {
+    for (const listener of libraryListeners) listener(invalidation);
   };
 
   const notifyLibrarySyncIssueListeners = () => {
@@ -346,7 +352,6 @@ export function createHttpEvaluationStore(options: {
       library = applyEvaluationLibraryMutation(library, group.mutation);
     }
     optimisticLibrary = library;
-    notifyLibraryListeners();
   };
 
   const prepareMutation = (group: QueuedMutation): EvaluationLibraryMutation => {
@@ -645,20 +650,62 @@ export function createHttpEvaluationStore(options: {
     return structuredClone(snapshot);
   };
 
+  const parseLibraryEvent = (event: MessageEvent<string>): {
+    epoch: string;
+    revision: number;
+    sourceClientId: string | null;
+  } | undefined => {
+    try {
+      const value = JSON.parse(event.data) as {
+        epoch?: unknown;
+        revision?: unknown;
+        sourceClientId?: unknown;
+      };
+      if (
+        typeof value.epoch !== 'string' ||
+        value.epoch.length === 0 ||
+        !Number.isSafeInteger(value.revision) ||
+        Number(value.revision) < 0 ||
+        (value.sourceClientId !== undefined && value.sourceClientId !== null && typeof value.sourceClientId !== 'string')
+      ) {
+        return undefined;
+      }
+      return {
+        epoch: value.epoch,
+        revision: Number(value.revision),
+        sourceClientId: value.sourceClientId ?? null,
+      };
+    } catch {
+      return undefined;
+    }
+  };
+
   const startEventStream = () => {
     if (eventSource || typeof EventSource === 'undefined') return;
     eventSource = new EventSource(url(options.baseUrl, '/library/events'));
-    const onChange = (event: MessageEvent<string>) => {
-      try {
-        const value = JSON.parse(event.data) as { sourceClientId?: unknown };
-        if (value.sourceClientId === clientId) return;
-      } catch {
-        return;
+    const onEvent = (isChange: boolean) => (event: MessageEvent<string>) => {
+      const value = parseLibraryEvent(event);
+      if (!value) return;
+
+      const epochChanged = eventEpoch !== undefined && eventEpoch !== value.epoch;
+      if (eventEpoch !== value.epoch) {
+        eventEpoch = value.epoch;
+        highestEventRevision = -1;
       }
-      notifyLibraryListeners();
+      if (value.revision <= highestEventRevision) return;
+      highestEventRevision = value.revision;
+
+      // The write response already advanced this store's authoritative
+      // snapshot. A self event is useful only for stream ordering and must
+      // never make the app re-fetch its own library.
+      if (isChange && value.sourceClientId === clientId) return;
+
+      const localRevision = librarySnapshot?.revision;
+      if (!epochChanged && localRevision !== undefined && value.revision <= localRevision) return;
+      notifyLibraryListeners({ epoch: value.epoch, revision: value.revision });
     };
-    eventSource.addEventListener('library-state', onChange);
-    eventSource.addEventListener('library-changed', onChange);
+    eventSource.addEventListener('library-state', onEvent(false));
+    eventSource.addEventListener('library-changed', onEvent(true));
   };
 
   const stopEventStream = () => {
@@ -725,7 +772,6 @@ export function createHttpEvaluationStore(options: {
               body: JSON.stringify({ expectedRevision: librarySnapshot!.revision, library: next }),
             }).then(parseLibrarySnapshot));
             optimisticLibrary = librarySnapshot!.library;
-            notifyLibraryListeners();
           });
         legacyLibraryWrite = write;
         await write;

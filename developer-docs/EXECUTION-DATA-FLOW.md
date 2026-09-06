@@ -60,27 +60,76 @@ the user navigates a completed run.
 This does not change the user-facing rule that arbitrary nested arrays are not a
 general graph port type. Use a subgraph for explicit nested item processing.
 
-## Parked Subgraph Output-Demand Execution Data
+## Subgraph Output-Demand Execution Data
 
-Subgraph and Referenced Graph Alias output-demand pruning is currently disabled
-by `GRAPH_BOUNDARY_OUTPUT_DEMAND_OPTIMIZATION_ENABLED`. With the flag off, child
-graphs execute fully and unconnected child `Graph Output` branches still emit
-their normal lifecycle/data events. Recording, Remote Debugger, graph-run
-history, cost, and duration therefore reflect the full child execution.
+Subgraph **Skip unused outputs** (`data.skipUnusedOutputs`) is off by default.
+When enabled on a caller, child execution contains only the dependency branches
+needed by its actively connected graph outputs. Referenced Graph Alias and other
+graph callers continue to execute their full child graphs. The runtime selection
+is passed through `processGraph(..., { requestedGraphOutputIds })`, not an editor
+run-to command or a mutation of the saved project.
 
-The parked implementation still computes the metadata it needs for later
-re-enablement. When the flag is turned back on, Subgraph and Referenced Graph
-Alias runs execute only the child `Graph Output` branches whose caller output
-ports are connected to at least one active immediate downstream node. A
-downstream node counts as active when it exists, is not disabled, and is part of
-the current run-to slice if the run is targeted. Unrequested child boundary
-outputs are written on the caller node as `control-flow-excluded` values so the
-output panel can show that those outputs did not run. Skipped child branches do
-not emit child `nodeStart`, `nodeFinish`, `nodeError`, or `nodeExcluded` events
-because the child nodes were never scheduled. The child graph is still executed
-fully when the Subgraph node itself is the direct run-to target, when Subgraph
-partial-output forwarding is enabled, or when an enabled `Error` output is
-actively connected and must represent errors from the whole child graph.
+Unrequested child boundary outputs are recorded on the caller node as
+`control-flow-excluded`, including an unrequested Graph Output that executes as
+another output's dependency. Unscheduled child nodes emit no `nodeStart`,
+`nodeFinish`, `nodeError`, or `nodeExcluded`; do not invent lifecycle events for
+them, including when results are preloaded after `graphStart`. Frozen duplicate
+Graph Outputs retain the first completed non-excluded boundary value; a later
+frozen exclusion or differing value cannot overwrite that winner.
+A caller with no demanded boundary outputs does not start a child graph
+invocation at all. Its own normal terminal event contains excluded values and
+zero synthetic metrics, unless an authored boundary output owns that metric name.
+
+Recording, Remote Debugger, and graph-run history use the existing event shape and
+execution IDs. Run start clears prior ordinary run data, and selection by
+`graphRunId` must show no node data when that node did not execute in the selected
+invocation. **Go to subgraph** scopes the initial selection to the parent node's
+currently selected process (parent node, `parentGraphRunId`, and a known
+`parentProcessId`), not the latest unrelated caller of the same graph. This is transient UI selection state,
+not a project or recording field. A skipped/frozen/excluded caller with no child
+run shows no current execution; a matching caller/child that starts later becomes
+visible automatically. Empty enclosing invocations remain empty when navigating
+deeper. The graph pager uses the same identity resolver as node
+outputs, while still allowing explicit navigation to broader same-graph history.
+A skipped call must not manufacture an empty child history record. Root-run
+start resets these selections with the ordinary execution snapshot. Replay maps
+the recorded root graph-run ID to the playback processor's
+allocated graph-run ID in the same table used for child parent references, so
+replayed child invocations stay attached to their replayed parent.
+Both live execution and replay reject an overlapping invocation before changing
+processor state or execution IDs, so a rejected start cannot relabel active events.
+Replay remains busy through `done` until terminal cleanup, matching live
+execution; start follow-up work from `finish` or after awaiting playback.
+Playback returns its own recorded result. Its completion must never replace
+outputs belonging to a live run started by a completion listener.
+Repeated split Subgraph invocations keep one caller process ID per loop
+iteration, a distinct child `graphRunId` per item, and the item's `splitIndex`.
+Pruning does not change that grouping or item order. Serialized replay remaps
+the execution IDs while preserving those parent/child relationships. If a split
+caller loses a race, only children already started emit abort events; its queued
+items create neither child runs nor recording history.
+Cost/duration report performed work when no same-named Graph Output owns
+the value. The output renderer continues to hide zero synthetic metrics.
+
+Full child execution remains in effect for a direct run-to Subgraph target,
+Subgraph partial-output forwarding, or an enabled Error output with an active
+consumer. Those calls retain all child events, side effects, and errors. In an
+optimized call, skipped side effects and errors are intentional; no purity or
+hidden global/event/storage dependency inference is performed.
+
+The nested race-loser debugger regression in Node's `debugger.test.ts` uses
+explicit expression-entry and winner-completion gates instead of wall-clock
+delays. This preserves deterministic coverage of late loser exclusions arriving
+before `done`, even when the host is busy compiling or running parallel suites.
+
+User Input waits belong to their node invocation. A race-loser cancellation must
+release the Core wait and remove only that node/process's pending modal questions
+on its terminal event, even while other branches keep the graph running. Both
+`useExecutionDataFlow` (active projects) and `projectExecutionSnapshotEvents`
+(background projects) apply the same request-removal helper. Other invocations'
+questions stay available, and an empty question queue cannot leave a blank modal
+open. Regressions cover all node terminal event kinds and a hosted selected-child
+race that advances to another live prompt without stopping the graph.
 
 ## Frozen Node Outputs
 
@@ -1674,6 +1723,16 @@ using the selected executor while a recording is loaded. The app blocks
 recording load/unload while an execution is active, which keeps the playback
 override stable for the lifetime of the run and prevents Abort/Pause/Resume from
 switching executor targets mid-run.
+
+Recording playback never changes the selected live Browser/Node executor or
+the source tab's executor metadata. A newly opened virtual replay tab receives
+that local mode before it loads, rather than falling back to the default executor.
+While the active tab owns a loaded recording, playback takes precedence over a
+retained Remote Debugger connection in executor-state selection and the
+ActionBar More menu replaces the Browser/Node/Remote status with `Not used
+during recording playback`; unloading restores the unchanged local executor
+UI. This is presentation only: it neither disconnects a live session nor
+changes the local replay route.
 
 A loaded recording is also owned by the project tab from which it was selected.
 Switching to another open project preserves that recording for its owner, but

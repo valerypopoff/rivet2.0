@@ -413,7 +413,8 @@ export type InternalProcessContext<T extends ChartNode = ChartNode> = ProcessCon
   /** Like context, but variables that are set during the run of the graph and can be read during the graph. Shared among all graphs and subgraphs. */
   setGlobal: (id: string, value: ScalarOrArrayDataValue) => void;
 
-  waitForGlobal: (id: string) => Promise<ScalarOrArrayDataValue>;
+  /** Waits for a global value; by default the current node's cancellation stops the wait. */
+  waitForGlobal: (id: string, signal?: AbortSignal) => Promise<ScalarOrArrayDataValue>;
 
   /** Reads through the root run's stored-value cache and optional persistence store. */
   getStoredValue: (key: string) => Promise<RivetStoredValueReadResult>;
@@ -424,7 +425,7 @@ export type InternalProcessContext<T extends ChartNode = ChartNode> = ProcessCon
   /** Writes through the root run's cache and optional persistence store. */
   setStoredValue: (key: string, value: RivetStoredValue) => Promise<RivetStoredValueSetResult>;
 
-  /** Waits only for a successful Set Stored Value in this root run. */
+  /** Waits only for a successful Set Stored Value in this root run; defaults to the current node's abort signal. */
   waitForStoredValue: (key: string, signal?: AbortSignal) => Promise<RivetStoredValue>;
 
   /** Resolves a named project or host-provided knowledge store for this execution. */

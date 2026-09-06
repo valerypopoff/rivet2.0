@@ -84,6 +84,8 @@ export function buildNodeProcessContext(options: {
     isDirectRunTarget,
     markResultAsEditorCacheHit,
     waitEvent,
+    waitForGlobal: (id, signal = nodeAbortController.signal) => base.waitForGlobal(id, signal),
+    waitForStoredValue: (key, signal = nodeAbortController.signal) => base.waitForStoredValue(key, signal),
     externalFunctions: { ...externalFunctions },
     onPartialOutputs,
     signal: nodeAbortController.signal,

@@ -1,6 +1,7 @@
 import { useSetAtom, useStore } from 'jotai';
 import { toast } from 'react-toastify';
 import type { GraphId, NodeGraph, Project, ProjectId } from '@valerypopoff/rivet2-core';
+import type { ProjectExecutorMode } from '../../app/src/utils/projectExecutorMode.js';
 import type { EvaluationProjectFileData } from '../../app/src/io/IOProvider.js';
 import {
   type OpenedProjectInfo,
@@ -25,6 +26,7 @@ import { resolveHostedProjectTitle, withHostedProjectTitle } from './openedProje
 import { normalizeWorkflowPath } from './workflowLibraryHelpers';
 
 type OpenWorkflowProjectOptions = {
+  executorMode?: ProjectExecutorMode;
   replaceCurrent?: boolean;
   reloadFromDisk?: boolean;
   preferredGraphId?: GraphId;
@@ -143,6 +145,9 @@ export function useOpenWorkflowProject(workspace: RivetWorkspaceHost) {
     const skipReplaceConfirmation = options?.skipReplaceConfirmation ?? false;
     const openingTabId = options?.openingTabId;
     const tabUiOptions = getProjectTabUiOptions(options?.previewTab);
+    const workspaceOpenOptions = options?.executorMode
+      ? { ...tabUiOptions, executorMode: options.executorMode }
+      : tabUiOptions;
     const normalizedFilePath = normalizeWorkflowPath(filePath);
     const latestLoadedProject = store.get(loadedProjectState);
     const latestCurrentProject = store.get(projectState);
@@ -232,7 +237,7 @@ export function useOpenWorkflowProject(workspace: RivetWorkspaceHost) {
               evaluationData: evaluation?.evaluationData,
               evaluationDatasets: evaluation?.evaluationDatasets,
             },
-            tabUiOptions,
+            workspaceOpenOptions,
           )
         : await workspace.openProjectSnapshot(
             {
@@ -242,7 +247,7 @@ export function useOpenWorkflowProject(workspace: RivetWorkspaceHost) {
               evaluationData: evaluation?.evaluationData,
               evaluationDatasets: evaluation?.evaluationDatasets,
             },
-            tabUiOptions,
+            workspaceOpenOptions,
           );
 
       if (!opened) {
@@ -301,10 +306,10 @@ export function useOpenWorkflowProject(workspace: RivetWorkspaceHost) {
     let opened = false;
     try {
       opened = openingTabId
-        ? await workspace.finishOpeningProjectTab(openingTabId, projectInput, tabUiOptions)
+        ? await workspace.finishOpeningProjectTab(openingTabId, projectInput, workspaceOpenOptions)
         : replaceCurrent
-          ? await workspace.replaceCurrent(projectInput, tabUiOptions)
-          : await workspace.openProjectSnapshot(projectInput, tabUiOptions);
+          ? await workspace.replaceCurrent(projectInput, workspaceOpenOptions)
+          : await workspace.openProjectSnapshot(projectInput, workspaceOpenOptions);
     } catch (error) {
       await cancelOpeningTab();
       throw error;

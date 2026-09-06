@@ -25,6 +25,10 @@ bottom corners and clipping. Do not restore an extra `.node-output.multi` wrappe
 around the selected output: it creates a rounded pager card followed by a visually
 detached output section.
 
+## Node Body Previews
+
+Text-like node-card bodies use core's `buildNodeBodyPreview(...)` formatter. It shows no more than 15 source lines, clips each source line at 240 characters, and caps the resulting preview at 3,000 characters with an ellipsis when content is omitted. This is presentation-only: the node data and editor retain the complete value. Tool's core `getToolNodeBodyPreview(...)` limits its combined name/description preview to 14 source lines: the header separator uses the remaining Text-height line. Its app-level `ToolNodeBody` presents `Name: <toolname>` using the LLM field-label color, followed by the standard LLM-style separator and the same `ColorizedNodeBody` renderer, monospace metrics, zero preformatted margin, and wrapping rules as Text. Do not route Tool through Markdown or independently reapply preview limits: that reintroduces the formatting and height mismatch.
+
 ## Connection Mode
 
 Connection mode survives canvas pan/zoom and keeps its pending wire attached to the

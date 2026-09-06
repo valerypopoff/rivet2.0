@@ -2,12 +2,13 @@ import { useStore } from 'jotai';
 import { toast } from 'react-toastify';
 import { graphRunningState } from '../state/dataFlow.js';
 import {
-  canChangeLoadedRecordingForProject,
-  clearLoadedRecordingForProjectState,
+  activateLoadedRecordingState,
+  canChangeLoadedRecordingForTab,
+  clearLoadedRecordingForTabState,
   loadedRecordingState,
   recordingPlaybackStartingState,
 } from '../state/execution.js';
-import { projectState, projectsState } from '../state/savedGraphs.js';
+import { loadedProjectState, projectState, projectsState } from '../state/savedGraphs.js';
 import { useIOProvider } from '../providers/ProvidersContext.js';
 import { ExecutionRecorder, type ProjectId } from '@valerypopoff/rivet2-core';
 import { graphState } from '../state/graph.js';
@@ -19,9 +20,12 @@ export function useLoadRecording() {
   const store = useStore();
   const loadGraph = useLoadGraph();
 
-  function canChangeRecording(action: 'loading' | 'unloading', ownerProjectId: string | undefined) {
+  function canChangeRecording(
+    action: 'loading' | 'unloading',
+    owner: { projectId: string | undefined; projectPath: string | null | undefined },
+  ) {
     const currentRecording = store.get(loadedRecordingState);
-    if (!canChangeLoadedRecordingForProject(currentRecording, ownerProjectId)) {
+    if (!canChangeLoadedRecordingForTab(currentRecording, owner.projectId, owner.projectPath)) {
       toast.warn(`Switch back to the project that loaded this recording before ${action} a recording.`);
       return false;
     }
@@ -46,12 +50,13 @@ export function useLoadRecording() {
       // only against the project from which they selected it.
       const project = store.get(projectState);
       const projectId = project.metadata.id;
+      const projectPath = store.get(loadedProjectState).path;
       const ownerProjectWasOpen = projectId != null && store.get(projectsState).openedProjects[projectId] != null;
       if (!projectId) {
         toast.warn('Open a project before loading a recording.');
         return;
       }
-      if (!canChangeRecording('loading', projectId)) {
+      if (!canChangeRecording('loading', { projectId, projectPath })) {
         return;
       }
 
@@ -66,21 +71,26 @@ export function useLoadRecording() {
           return;
         }
 
-        if (!canChangeRecording('loading', projectId)) {
+        if (!canChangeRecording('loading', { projectId, projectPath })) {
           return;
         }
 
-        store.set(loadedRecordingState, { recorder, path, projectId });
-        store.set(recordingPlaybackStartingState, false);
+        store.set(activateLoadedRecordingState, { recorder, path, projectId, projectPath });
       });
     },
     unloadRecording: () => {
       const project = store.get(projectState);
-      if (!canChangeRecording('unloading', project.metadata.id)) {
+      if (!canChangeRecording('unloading', {
+        projectId: project.metadata.id,
+        projectPath: store.get(loadedProjectState).path,
+      })) {
         return;
       }
 
-      store.set(clearLoadedRecordingForProjectState, project.metadata.id);
+      store.set(clearLoadedRecordingForTabState, {
+        projectId: project.metadata.id,
+        projectPath: store.get(loadedProjectState).path,
+      });
     },
     /** Loads a recording already owned by a trusted Rivet run store. */
     loadSerializedRecording: (input: { serialized: string; path: string; projectId: ProjectId }): boolean => {
@@ -89,7 +99,8 @@ export function useLoadRecording() {
         toast.warn('Switch to this evaluation project before opening its recording.');
         return false;
       }
-      if (!canChangeRecording('loading', input.projectId)) return false;
+      const projectPath = store.get(loadedProjectState).path;
+      if (!canChangeRecording('loading', { projectId: input.projectId, projectPath })) return false;
 
       try {
         const recorder = ExecutionRecorder.deserializeFromString(input.serialized);
@@ -100,12 +111,12 @@ export function useLoadRecording() {
           return false;
         }
         if (store.get(graphState).metadata?.id !== rootGraphId) loadGraph(rootGraph);
-        store.set(loadedRecordingState, {
+        store.set(activateLoadedRecordingState, {
           recorder,
           path: input.path,
           projectId: input.projectId,
+          projectPath,
         });
-        store.set(recordingPlaybackStartingState, false);
         return true;
       } catch (error) {
         toast.error(`Could not open the evaluation recording: ${error instanceof Error ? error.message : String(error)}`);

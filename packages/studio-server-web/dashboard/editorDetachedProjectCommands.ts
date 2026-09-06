@@ -1,4 +1,5 @@
 import { getError, type Project } from '@valerypopoff/rivet2-core';
+import { createLocalProjectExecutorMode } from '../../app/src/utils/projectExecutorMode.js';
 
 import { postMessageToDashboard } from '../../studio-server-shared/editor-bridge';
 import { getWorkflowRecordingVirtualProjectPath } from '../../studio-server-shared/workflow-recording-types';
@@ -46,13 +47,14 @@ export async function handleOpenRecordingCommand(
     const replacedPath = command.replaceCurrent ? context.getLoadedProject().path : '';
     context.recording.recordingByProjectPathRef.current.set(virtualProjectPath, loadedRecording);
     const openResult = await context.getOpenProject()(virtualProjectPath, {
+      executorMode: createLocalProjectExecutorMode(context.getSelectedExecutor()),
       replaceCurrent: Boolean(command.replaceCurrent),
       preferredGraphId: getRecordingStartGraphId(loadedRecording.recorder),
     });
     if (!openResult.opened || !openResult.projectId) {
       context.recording.recordingByProjectPathRef.current.delete(virtualProjectPath);
       if (context.getLoadedProject().path === virtualProjectPath) {
-        context.clearLoadedRecording(context.getCurrentProject().metadata.id);
+        context.clearLoadedRecordingForPath(virtualProjectPath);
       }
       return;
     }
@@ -60,13 +62,13 @@ export async function handleOpenRecordingCommand(
       context.preview.clearPreviewProjectByPath(replacedPath);
       context.recording.recordingByProjectPathRef.current.delete(replacedPath);
     }
-    context.recording.activateWorkflowRecording(loadedRecording, openResult.projectId);
+    context.recording.activateWorkflowRecording(loadedRecording, openResult.projectId, virtualProjectPath);
     focusHostedEditorFrame();
     postMessageToDashboard({ type: 'project-opened', path: virtualProjectPath });
   } catch (error) {
     context.recording.recordingByProjectPathRef.current.delete(virtualProjectPath);
     if (context.getLoadedProject().path === virtualProjectPath) {
-      context.clearLoadedRecording(context.getCurrentProject().metadata.id);
+      context.clearLoadedRecordingForPath(virtualProjectPath);
     }
     const message = getError(error).message;
     console.error('Failed to open workflow recording:', error);
@@ -94,7 +96,7 @@ export async function handleOpenPublishedPreviewCommand(
       context.preview.clearPreviewProjectByPath(replacedPath);
       context.recording.recordingByProjectPathRef.current.delete(replacedPath);
     }
-    context.clearLoadedRecording(openResult.projectId);
+    context.clearLoadedRecordingForPath(replacedPath || undefined);
     focusHostedEditorFrame();
     postMessageToDashboard({ type: 'project-opened', path: virtualProjectPath });
   } catch (error) {

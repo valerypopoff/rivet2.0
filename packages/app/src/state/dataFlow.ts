@@ -25,7 +25,18 @@ import { getGraphSelectionOptions } from './selectors/executionSelectors.js';
 import type { ProcessQuestions } from './userInput.js';
 import { createRunActivityJournal, type RunActivityJournal } from '../features/runActivity/runActivityJournal.js';
 
-export type GraphRunSelection = GraphRunId | 'latest';
+export type GraphRunSelection =
+  | GraphRunId
+  | 'latest'
+  | {
+      /** Transient navigation scope, including callers that start no child run. */
+      type: 'caller';
+      parentNodeId: NodeId;
+      /** Absent when the enclosing graph itself has no selected invocation. */
+      parentGraphRunId?: GraphRunId;
+      /** Absent until the caller has a process in the selected parent run. */
+      parentProcessId?: ProcessId;
+    };
 
 export type GraphRunRecord = {
   graphRunId: GraphRunId;

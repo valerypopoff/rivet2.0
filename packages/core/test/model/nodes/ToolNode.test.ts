@@ -1,6 +1,11 @@
 import { describe, it } from 'node:test';
 import { strict as assert } from 'node:assert';
-import { GptFunctionNodeImpl, type GptFunctionNode } from '../../../src/index.js';
+import {
+  getToolNodeBodyPreview,
+  GptFunctionNodeImpl,
+  type GptFunctionNode,
+  type NodeBodySpec,
+} from '../../../src/index.js';
 
 const createNode = (data: Partial<GptFunctionNode['data']>) => {
   return new GptFunctionNodeImpl({
@@ -65,5 +70,38 @@ describe('GptFunctionNodeImpl', () => {
       node.getInputDefinitions([], {}, {} as any, {}).map((definition) => definition.id),
       ['input-foo', 'input-somevar'],
     );
+  });
+
+  it('bounds long descriptions with the same preview budget as Text nodes', () => {
+    const node = createNode({
+      name: 'lookup',
+      description: Array.from({ length: 20 }, (_, index) => `description line ${index + 1}`).join('\n'),
+    });
+
+    assert.deepStrictEqual(node.getBody(), {
+      type: 'colorized',
+      language: 'prompt-interpolation-markdown',
+      theme: 'prompt-interpolation',
+      text: `lookup\n${Array.from({ length: 13 }, (_, index) => `description line ${index + 1}`).join('\n')}\n...`,
+    } satisfies NodeBodySpec);
+
+    assert.deepStrictEqual(getToolNodeBodyPreview(node.data), {
+      name: 'lookup',
+      description: `${Array.from({ length: 13 }, (_, index) => `description line ${index + 1}`).join('\n')}\n...`,
+    });
+  });
+
+  it('clips an oversized description line before it can expand the Tool node', () => {
+    const node = createNode({
+      name: 'lookup',
+      description: `prefix-${'a'.repeat(5000)}`,
+    });
+
+    assert.deepStrictEqual(node.getBody(), {
+      type: 'colorized',
+      language: 'prompt-interpolation-markdown',
+      theme: 'prompt-interpolation',
+      text: `lookup\nprefix-${'a'.repeat(233)}...`,
+    } satisfies NodeBodySpec);
   });
 });

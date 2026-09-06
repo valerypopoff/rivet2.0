@@ -18,7 +18,7 @@ import { UserInputModal } from './UserInputModal.js';
 import Button from '@atlaskit/button';
 import { isNotNull } from '../utils/genericUtilFunctions.js';
 import { ErrorBoundary } from 'react-error-boundary';
-import { getLoadedRecordingForProject, loadedRecordingState } from '../state/execution.js';
+import { currentProjectLoadedRecordingState } from '../state/execution.js';
 import { useGraphHistoryNavigation } from '../hooks/useGraphHistoryNavigation';
 import { entries } from '../utils/typeSafety';
 import { useGraphBuilderContextMenuHandler } from '../hooks/useGraphBuilderContextMenuHandler';
@@ -135,10 +135,7 @@ export const GraphBuilder: FC<{ runGraph: EditorGraphRun }> = ({ runGraph }) => 
   const hostUiConfig = useRivetAppHostUiConfig();
   const aiGraphBuilderEnabled = isRivetAppHostCapabilityEnabled(hostUiConfig, 'aiGraphBuilder');
   const recordingsEnabled = isRivetAppHostCapabilityEnabled(hostUiConfig, 'recordings');
-  const loadedRecordingForProject = getLoadedRecordingForProject(
-    useAtomValue(loadedRecordingState),
-    project.metadata.id,
-  );
+  const loadedRecordingForProject = useAtomValue(currentProjectLoadedRecordingState);
   const loadedRecording = recordingsEnabled ? loadedRecordingForProject : undefined;
   const activeComparison = useAtomValue(activeProjectComparisonState);
   const selectedGraphComparison = useAtomValue(selectedGraphProjectComparisonState);
@@ -286,7 +283,7 @@ export const GraphBuilder: FC<{ runGraph: EditorGraphRun }> = ({ runGraph }) => 
         <GraphExecutionSelectorBar />
         <HistoricalGraphNotice />
         <UserInputModal
-          open={isUserInputModalOpen}
+          open={isUserInputModalOpen && questions.length > 0}
           questions={lastQuestions}
           questionsNodeId={questionsNodeId}
           onSubmit={handleSubmitUserInputModal}

@@ -3,6 +3,7 @@ import type { EvaluationProjectFileData } from '../../app/src/io/IOProvider.js';
 
 import type { RivetWorkspaceHost } from '../../app/src/host';
 import type { OpenedProjectInfo, OpenedProjectsInfo } from '../../app/src/state/savedGraphs';
+import type { DefaultExecutor } from '../../app/src/state/settings.js';
 import type { DashboardToEditorCommand } from '../../studio-server-shared/editor-bridge';
 import type { useOpenWorkflowProject } from './useOpenWorkflowProject';
 import type { usePreviewProjectLifecycle } from './usePreviewProjectLifecycle';
@@ -30,8 +31,11 @@ export type SerializedEditorCommand = Extract<
 >;
 
 export type EditorCommandBridgeContext = {
-  clearLoadedRecording(projectId?: ProjectId): void;
+  /** Clears playback only when the exact replay tab is being replaced or refreshed. */
+  clearLoadedRecordingForPath(projectPath?: string | null): void;
+  rebindLoadedRecordingPath(fromPath: string, toPath: string): void;
   getCurrentProject(): Project;
+  getSelectedExecutor(): DefaultExecutor;
   loadProjectData(path: string): Promise<{ project: Project; evaluation: EvaluationProjectFileData }>;
   getLoadedProject(): LoadedProjectInfo;
   getOpenProject(): ReturnType<typeof useOpenWorkflowProject>;

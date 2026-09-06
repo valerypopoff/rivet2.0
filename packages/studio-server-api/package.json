@@ -4,7 +4,8 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "tsx watch src/server.ts",
+    "dev": "node ../../deploy/studio-server/scripts/watch-api-workspace-dependencies.mjs",
+    "dev:tsx": "tsx watch src/server.ts",
     "build": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\" && tsc",
     "start": "node dist/studio-server-api/src/server.js",
     "runtime-libraries:managed:audit": "tsx src/scripts/runtime-library-managed-cleanup.ts audit",

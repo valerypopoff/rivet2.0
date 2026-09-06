@@ -79,6 +79,39 @@ function createReplayProject(recordingId: string): string {
   ].join('\n');
 }
 
+async function openAdditionalProjectTab(page: Page, path: string) {
+  await page.route('**/api/projects/load', async (route) => {
+    const requestPath = (route.request().postDataJSON() as { path?: string }).path;
+    if (requestPath !== path) {
+      await route.fallback();
+      return;
+    }
+
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        contents: createReplayProject('ordinary-project'),
+        datasetsContents: null,
+        revisionId: 'ordinary-project-revision',
+      }),
+    });
+  });
+
+  await page.locator('iframe.dashboard-editor-frame').evaluate((frame, command) => {
+    const editorWindow = (frame as HTMLIFrameElement).contentWindow;
+    if (!editorWindow) {
+      throw new Error('Hosted editor frame is unavailable.');
+    }
+
+    editorWindow.postMessage(command, window.location.origin);
+  }, {
+    type: 'open-project',
+    path,
+    replaceCurrent: false,
+  });
+}
+
 function createRunRecordingsFixture() {
   const workflows: WorkflowRecordingWorkflowSummary[] = [
     {
@@ -491,6 +524,9 @@ test.describe('Run recordings modal', () => {
   });
 
   test('deletes a run and opens replay through serialized recorder APIs', async ({ page }) => {
+    await page.addInitScript(() => {
+      localStorage.setItem('recoil-persist', JSON.stringify({ defaultExecutor: 'nodejs' }));
+    });
     const { recordingFetches, replayProjectFetches, runFetches } = await installRunRecordingRoutes(page);
     const modal = await openLatestFlowRecordings(page);
     await choosePageSizeTen(modal);
@@ -511,6 +547,30 @@ test.describe('Run recordings modal', () => {
     const editorFrame = page.frameLocator('iframe.dashboard-editor-frame');
     await expect(editorFrame.getByRole('button', { name: 'Play Recording', exact: true })).toBeVisible();
     await expect(editorFrame.getByRole('button', { name: 'Unload Recording', exact: true })).toBeVisible();
+    await expect(editorFrame.locator('.recording-border')).toBeVisible();
+    await editorFrame.locator('.more-menu').click();
+    await expect(editorFrame.getByText('Not used during recording playback', { exact: true })).toBeVisible();
+    await expect(editorFrame.getByRole('group', { name: 'Executor mode' })).toHaveCount(0);
+    await editorFrame.locator('.more-menu').click();
+
+    await openAdditionalProjectTab(page, '/workflows/Ordinary project.rivet-project');
+    const ordinaryProjectTab = editorFrame.locator('.project').filter({ hasText: 'Ordinary project' });
+    await expect(ordinaryProjectTab).toHaveClass(/active/);
+    await expect(editorFrame.locator('.recording-border')).toHaveCount(0);
+    await expect(editorFrame.getByRole('button', { name: 'Play Recording', exact: true })).toHaveCount(0);
+    await expect(editorFrame.getByRole('button', { name: 'Unload Recording', exact: true })).toHaveCount(0);
+
+    await editorFrame.locator('.project').filter({ hasText: 'Replay recording-b-2' }).click();
+    await expect(editorFrame.locator('.recording-border')).toBeVisible();
+    await expect(editorFrame.getByRole('button', { name: 'Play Recording', exact: true })).toBeVisible();
+    await expect(editorFrame.getByRole('button', { name: 'Unload Recording', exact: true })).toBeVisible();
+
+    await editorFrame.getByRole('button', { name: 'Unload Recording', exact: true }).click();
+    await expect(editorFrame.getByRole('button', { name: 'Play Recording', exact: true })).toHaveCount(0);
+    await editorFrame.locator('.more-menu').click();
+    const executorMode = editorFrame.getByRole('group', { name: 'Executor mode' });
+    await expect(executorMode).toBeVisible();
+    await expect(executorMode.getByRole('button', { name: 'Node', exact: true })).toHaveAttribute('aria-pressed', 'true');
     await expect(modal).toBeHidden();
     await expect(page.getByText('Found: 11')).toBeVisible();
 

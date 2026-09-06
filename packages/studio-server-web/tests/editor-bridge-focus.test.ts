@@ -6,6 +6,7 @@ import {
   isEditorFindShortcutEvent,
   isPlainF2ShortcutEvent,
   isSaveShortcutEvent,
+  shouldSkipHostedShortcutProjectSave,
 } from '../dashboard/editorBridgeFocus';
 
 function keyboardEventLike(options: Partial<KeyboardEvent>): KeyboardEvent {
@@ -26,6 +27,12 @@ test('save shortcut detection only accepts plain Ctrl/Cmd+S', () => {
   assert.equal(isSaveShortcutEvent(keyboardEventLike({ code: 'KeyS', key: 's', metaKey: true })), true);
   assert.equal(isSaveShortcutEvent(keyboardEventLike({ code: 'KeyS', ctrlKey: true, key: 's', shiftKey: true })), false);
   assert.equal(isSaveShortcutEvent(keyboardEventLike({ code: 'KeyI', ctrlKey: true, key: 'i', shiftKey: true })), false);
+});
+
+test('shortcut-originated project saves are suppressed only in Evaluations', () => {
+  assert.equal(shouldSkipHostedShortcutProjectSave('shortcut', 'evaluations'), true);
+  assert.equal(shouldSkipHostedShortcutProjectSave('shortcut', undefined), false);
+  assert.equal(shouldSkipHostedShortcutProjectSave(undefined, 'evaluations'), false);
 });
 
 test('find shortcut detection accepts physical KeyF and rejects unrelated browser shortcuts', () => {

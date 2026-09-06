@@ -27,6 +27,11 @@ yarn-error.log*
 
 # Local runtime data
 .data
+# Runtime dotenv files must not enter image contexts or builder caches.
+**/.env
+**/.env.*
+!**/.env.example
+!**/.env.*.example
 .pnp.cjs
 .pnp.loader.mjs
 .yarn/install-state.gz
