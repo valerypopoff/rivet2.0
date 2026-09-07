@@ -2,7 +2,7 @@
 
 ![License](https://img.shields.io/github/license/valerypopoff/rivet2.0)
 
-Rivet is a visual IDE and runtime for building AI workflows, agents, prompt chains, graph-based tools, and reusable automation flows. This repository is the Rivet 2 monorepo: it contains the desktop app, graph runtime, Node runtime, CLI, app executor sidecar, Evaluations test tooling, documentation site, and maintainer developer docs. Rivet 2 continues the previous Rivet codebase as an independently maintained project.
+Rivet is a visual IDE and runtime for building AI workflows, agents, prompt chains, and reusable automation flows. This repository is the Rivet 2 monorepo: it contains the desktop app, graph runtime, Node runtime, CLI, app executor sidecar, Evaluations test tooling, documentation site, and maintainer developer docs. Rivet 2 continues the previous Rivet codebase as an independently maintained project.
 
 [Download Rivet 2 desktop app](https://valerypopoff.github.io/rivet2.0/download)
 
