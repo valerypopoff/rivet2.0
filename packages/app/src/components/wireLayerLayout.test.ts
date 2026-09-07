@@ -68,13 +68,9 @@ test('wire bend handles are local rendered-wire affordances with persisted conne
   assert.match(wireLayerSource, /className="wire-bend-point wire-bend-point-ghost"/);
   assert.match(wireLayerSource, /onMouseDown=\{\(event\) => onConnectionMouseDown\(connectionKey, event\)\}/);
   assert.match(wireLayerSource, /shouldCommitConnectionBendClick/);
-  assert.match(wireLayerSource, /editable: allowConnectionBendEditing/);
   assert.match(wireLayerSource, /event\.preventDefault\(\);\s*event\.stopPropagation\(\);\s*setConnectionBendPoint/s);
   assert.match(wireLayerSource, /onDoubleClick=\{\(event\) => onConnectionBendDoubleClick\(connection, event\)\}/);
-  assert.match(
-    wireLayerSource,
-    /onMouseDown=\{\(event\) => onConnectionBendMouseDown\(connection, connectionKey, event\)\}/,
-  );
+  // Group dragging and double-click deletion are exercised by connection-bend-selection.spec.ts.
   assert.match(wireLayerSource, /bendPoint=\{bendPoint\}/);
 });
 

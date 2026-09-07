@@ -29,6 +29,8 @@ import { useProjectNodeRegistry } from '../hooks/useProjectNodeRegistry';
 import { usePortHoverTooltip } from '../hooks/usePortHoverTooltip.js';
 import { useSearchGraph } from '../hooks/useSearchGraph';
 import { useSelectionBox } from '../hooks/useSelectionBox.js';
+import { connectionBendSelectionScopeState, selectedConnectionBendsState } from '../state/connectionBends.js';
+import { moveConnectionBends } from '../domain/graphEditing/connectionBendSelection.js';
 import { useStableCallback } from '../hooks/useStableCallback.js';
 import { useViewportBounds } from '../hooks/useViewportBounds.js';
 import { useVisibleCanvasNodes } from '../hooks/useVisibleCanvasNodes';
@@ -400,7 +402,18 @@ export const NodeCanvas: FC<NodeCanvasProps> = ({
     };
   }, [connections, definitionValidConnections, disableConnections, nodes, project, selectedGraphMetadata]);
 
-  const { selectionBox, startSelectionBox, updateSelectionBox, endSelectionBox } = useSelectionBox();
+  const [selectedBends, setSelectedBends] = useAtom(selectedConnectionBendsState);
+  const bendSelectionScope = useAtomValue(connectionBendSelectionScopeState);
+  const { selectionBox, startSelectionBox, updateSelectionBox, endSelectionBox } = useSelectionBox(
+    disableConnections || disableGraphCommands || canvasPosition.zoom <= 0.15
+      ? []
+      : definitionValidConnections.filter(
+          (connection) =>
+            !hiddenDataBusNodeIdSet.has(connection.inputNodeId) && !hiddenDataBusNodeIdSet.has(connection.outputNodeId),
+        ),
+    selectedBends,
+    setSelectedBends,
+  );
   const {
     hoveringPort,
     hoveringShowPortInfo,
@@ -412,6 +425,8 @@ export const NodeCanvas: FC<NodeCanvasProps> = ({
 
   const {
     dragAxisLock,
+    isDragActive,
+    draggingBendMoves,
     dragDelta,
     dragMode,
     draggingConnectionSourceNodeIds,
@@ -448,6 +463,18 @@ export const NodeCanvas: FC<NodeCanvasProps> = ({
   const visibleDraggingWire = disableConnections ? undefined : draggingWire;
   const visibleClosestPort = disableConnections ? undefined : closestPort;
   const isDraggingNode = draggingNodes.length > 0;
+  const isDraggingCanvasItem = isDragActive;
+  const dragPreviewConnections = moveConnectionBends(previewConnections, draggingBendMoves);
+  const draggingBendConnectionKeys = useMemo(
+    () => draggingBendMoves.map((move) => move.connectionKey),
+    [draggingBendMoves],
+  );
+  const isDraggingBend = draggingBendConnectionKeys.length > 0;
+
+  useEffect(() => {
+    setSelectedBends([]);
+    onNodeDragCancelled();
+  }, [bendSelectionScope, disableGraphCommands, setSelectedBends, onNodeDragCancelled]);
   const isDraggingWire = !!visibleDraggingWire;
 
   const isNodeDragGestureActive = useStableCallback(() => nodeDragGestureActiveRef.current);
@@ -560,7 +587,10 @@ export const NodeCanvas: FC<NodeCanvasProps> = ({
       endSelectionBox,
       isDraggingCanvas,
       nodes: spatialCanvasNodes,
-      onCanvasClick,
+      onCanvasClick: () => {
+        if (!disableGraphCommands) setSelectedBends([]);
+        onCanvasClick?.();
+      },
       onCanvasContextMenu: handleCanvasContextMenuRequest,
       selectedGraphId: selectedGraphMetadata?.id,
       selectedNodeIds,
@@ -819,6 +849,7 @@ export const NodeCanvas: FC<NodeCanvasProps> = ({
   const setCanvasRef = useMergeRefs([setNodeRef, canvasRef, canvasRootRef]);
 
   const nodeSelected = useStableCallback((node: ChartNode, multi: boolean) => {
+    if (!disableGraphCommands && !multi && !selectedNodeIds.includes(node.id)) setSelectedBends([]);
     onNodeSelected?.(node, multi);
   });
 
@@ -1060,7 +1091,8 @@ export const NodeCanvas: FC<NodeCanvasProps> = ({
       <div
         ref={setCanvasRef}
         className={clsx('node-canvas', {
-          'dragging-node': isDraggingNode,
+          // Bends use the same drag affordance without opting into node-drag rendering work.
+          'dragging-node': isDraggingCanvasItem,
           'dragging-canvas': isDraggingCanvas,
         })}
         css={nodeCanvasStyles}
@@ -1079,7 +1111,7 @@ export const NodeCanvas: FC<NodeCanvasProps> = ({
           opacity={normalizedCanvasBackgroundPatternOpacity}
           pattern={normalizedCanvasBackgroundPattern}
         />
-        <MouseIcon isDraggingNode={isDraggingNode} />
+        <MouseIcon isDraggingNode={isDraggingCanvasItem} />
         {!disableGraphCommands && <CopyNodesHotkeys />}
         <DebugOverlay enabled={false} />
         <NodeCanvasViewport
@@ -1115,7 +1147,7 @@ export const NodeCanvas: FC<NodeCanvasProps> = ({
         />
         {shouldRenderWires && (
           <WireLayer
-            connections={previewConnections}
+            connections={dragPreviewConnections}
             draggingWire={visibleDraggingWire}
             compareNodesById={comparisonRenderState.compareNodesById}
             compareRemovedConnections={comparisonRenderState.compareRemovedConnections}
@@ -1129,6 +1161,8 @@ export const NodeCanvas: FC<NodeCanvasProps> = ({
             visibleNodeIdSet={visibleNodeIdSet}
             viewportClientRect={viewportBounds.clientRect}
             draggingNode={isDraggingNode}
+            draggingBend={isDraggingBend}
+            draggingBendConnectionKeys={draggingBendConnectionKeys}
           />
         )}
         <DataBusRail
