@@ -15,6 +15,11 @@ The root `yarn build` script currently builds packages in this order:
 
 That order is encoded directly in the root `package.json` and reflects actual runtime dependencies.
 
+This is the shared Rivet build set, not all workspaces. `build:all` is its alias.
+`yarn studio-server:build` first builds Core, Node, Evaluations, and app-executor,
+then the five private Studio Server workspaces. The docs site has its own build.
+See [Refactor Baseline](./REFACTOR-BASELINE.md) for complete verification coverage.
+
 Hosted wrappers should prefer the narrower root build targets when they do not
 need the full desktop/app/CLI surface:
 
@@ -333,7 +338,10 @@ nodes, fixture CodeRunner cache/compile/invocation/execution buckets, coarse
 time, and small synthetic CodeRunner scenarios. Runtime phase buckets are
 diagnostic and can be inclusive across nested graph/subgraph calls; use them to
 choose the next optimization target, not as standalone proof that the
-unprofiled runtime got faster. Like the speed benchmark, relative attribution
+unprofiled runtime got faster. Its profiling runner follows the normal Node
+runner's lazy narrow interpolation-resolver contract, so JSONPath and special
+interpolation roots remain measurable without pulling in the full `Rivet` API.
+Like the speed benchmark, relative attribution
 output paths that start with `packages/` resolve from the repo root.
 
 A later fixture-focused speed pass kept only one low-risk runtime optimization:
@@ -861,7 +869,9 @@ The Rivet app keeps every evaluation resource and retained artifact in its activ
 
 ### Role
 
-Docusaurus 3 documentation site package.
+Docusaurus 3 documentation site package. Its local-search theme builds a
+static offline index for the GitHub Pages site; it does not depend on Algolia,
+a crawler, credentials, or a server-side search API.
 
 ### Package metadata
 
@@ -874,6 +884,8 @@ Docusaurus 3 documentation site package.
 - `yarn dev` (the local Docusaurus development server; `yarn start` remains a compatible alias)
 - `yarn start`
 - `yarn build`
+- `yarn build:dev-search-index` (disposable search snapshot used by `yarn docs dev`)
+- `yarn check:search-bundle` (validates the generated local-search index and full-results route)
 - `yarn serve`
 - `yarn typecheck`
 - standard Docusaurus maintenance commands
@@ -884,6 +896,32 @@ Docs publishing is handled by the GitHub Pages release workflows. The docs
 package owns local Docusaurus commands such as `yarn build`, `yarn serve`, and
 `yarn deploy`, but normal release publishing does not use a root publishing
 script.
+
+`docusaurus.config.js` owns the search-theme contract. The site serves docs
+from the root route, so `docsRouteBasePath: '/'` must remain aligned with the
+Docs plugin. The search index must use a content-hashed filename so Pages cache
+updates are safe. It indexes documentation and ordinary site pages, displays
+paths/snippets and up to ten fuzzy-matched results, supports `Ctrl+K`/`Cmd+K`,
+and adds a query-only highlight to the selected document. The generated index
+lives only under ignored `packages/docs/build/`; verify the actual UI with a
+production build and local `docusaurus serve` before changing its behavior.
+
+The plug-in produces its index in Docusaurus's post-build hook, so the live
+server cannot create it on its own. `scripts/dev.mjs` performs a disposable
+`.search-dev` build using `RIVET_DOCS_DEV_SEARCH_INDEX=1`, copies its stable
+`search-index.json` into the existing ignored `.promo-dev` static root, then
+starts live reload with the same setting. Its browser bundle uses
+`NODE_ENV=production` because the plug-in intentionally disables its search
+worker in development bundles; the explicit flag, rather than `NODE_ENV`, keeps
+the development static root available. This makes search usable immediately
+without weakening production cache hashing. The snapshot is deliberately not a
+watcher: restart `yarn docs dev` after changing searchable content.
+
+The local-search package declares broad Docusaurus 2-or-3 ranges. The six
+descriptor-specific root Yarn resolutions keep those imports on this package's
+tested `3.10.1` Docusaurus release instead of allowing a second framework patch
+version into the PnP graph. Update the Docusaurus stack and these descriptors
+together; do not replace them with a broad namespace override.
 
 The Docusaurus image pipeline reaches `image-size`; the root workspace applies a
 small Yarn patch so its Node file-handle reads operate on a compatible Buffer under
@@ -994,6 +1032,13 @@ the matching root build target first. This keeps Dockerfiles explicit about
 which build layers are expensive and cacheable.
 
 ## Package-Level Refactor Guidance
+
+The five private Studio Server packages are documented in
+[Studio Server repository structure](./studio-server/repo-structure.md) and
+[architecture](./studio-server/architecture.md). They are part of this monorepo,
+but are not members of the public npm publication set. Their API, web, executor,
+shared, and bootstrap responsibilities must be included when changing a public
+Rivet host/runtime boundary.
 
 - Treat `core` as the compatibility center of gravity.
 - Treat `node` as the Node-default runtime adapter, not just a re-export package.

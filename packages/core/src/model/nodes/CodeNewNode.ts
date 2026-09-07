@@ -16,6 +16,7 @@ import {
   buildJsValueInterpolatedSource,
   buildJsValueInputsInitializer,
   buildJsValuePreview,
+  getJsValueInterpolationCodeRunnerOptions,
   getJsValueInterpolationInputDefinitions,
   getJsValueInterpolationRuntimeContext,
   interpolateJsValuePreviewSource,
@@ -42,22 +43,19 @@ const DEFAULT_CODE_NEW = dedent`
 `;
 const MAX_BODY_PREVIEW_LINES = 15;
 const CODE_NEW_INPUTS_IDENTIFIER = '__codeNewInputs';
-const CODE_NEW_INPUT_CLONE_CACHE_IDENTIFIER = 'codeNewInputCloneCache';
 export const CODE_NEW_OUTPUT_PORT_ID = 'output' as PortId;
 
 function buildCodeNewPreview(code: string): string {
   return buildJsValuePreview(code, MAX_BODY_PREVIEW_LINES);
 }
 
-function buildCodeNewRuntimeSource(code: string, inputsIdentifier: string): string {
-  return buildJsValueInterpolatedSource(code, inputsIdentifier, { trim: false });
+function buildCodeNewRuntimeSource(code: string, interpolationContext: JsValueInterpolationRuntimeContext): string {
+  return buildJsValueInterpolatedSource(code, interpolationContext, { trim: false });
 }
 
-function buildCodeNewInputsInitializer(inputNames: string[], inputsIdentifier: string): string {
+function buildCodeNewInputsInitializer(interpolationContext: JsValueInterpolationRuntimeContext): string {
   return buildJsValueInputsInitializer({
-    cacheIdentifier: CODE_NEW_INPUT_CLONE_CACHE_IDENTIFIER,
-    inputNames,
-    inputsIdentifier,
+    interpolationContext,
   });
 }
 
@@ -65,8 +63,19 @@ export function interpolateCodeNewSource(code: string, inputs: Inputs): string {
   return interpolateJsValuePreviewSource(code, inputs, { trim: false });
 }
 
-function sanitizeCodeNewError(error: unknown, inputNames: string[], inputsIdentifier: string): Error {
-  return sanitizeGeneratedJsValueError(error, inputNames, inputsIdentifier, 'code input');
+function sanitizeCodeNewError(error: unknown, interpolationContext: JsValueInterpolationRuntimeContext): Error {
+  return sanitizeGeneratedJsValueError(
+    error,
+    interpolationContext.inputNames,
+    interpolationContext.inputsIdentifier,
+    'code input',
+    [
+      interpolationContext.cloneCacheIdentifier,
+      interpolationContext.contextIdentifier,
+      interpolationContext.graphInputsIdentifier,
+      interpolationContext.interpolationHelperIdentifier,
+    ],
+  );
 }
 
 function buildCodeNewWrapper(
@@ -76,9 +85,8 @@ function buildCodeNewWrapper(
   source: string;
   userCodeLineOffset: number;
 } {
-  const { inputNames, inputsIdentifier } = interpolationContext;
   const beforeUserCodeLines = [
-    ...buildCodeNewInputsInitializer(inputNames, inputsIdentifier).split(/\r?\n/),
+    ...buildCodeNewInputsInitializer(interpolationContext).split(/\r?\n/),
     '',
     'const __codeNewResult = await (async () => {',
   ];
@@ -94,7 +102,7 @@ function buildCodeNewWrapper(
   ];
 
   return {
-    source: [...beforeUserCodeLines, buildCodeNewRuntimeSource(code, inputsIdentifier), ...afterUserCodeLines].join(
+    source: [...beforeUserCodeLines, buildCodeNewRuntimeSource(code, interpolationContext), ...afterUserCodeLines].join(
       '\n',
     ),
     userCodeLineOffset: beforeUserCodeLines.length,
@@ -198,14 +206,13 @@ export class CodeNewNodeImpl extends NodeImpl<CodeNewNode> {
   async process(inputs: Inputs, context: InternalProcessContext): Promise<Outputs> {
     const sourceUrl = buildCodeNodeSourceUrl(this.chartNode.id);
     const interpolationContext = getJsValueInterpolationRuntimeContext(this.data.code, CODE_NEW_INPUTS_IDENTIFIER);
-    const { inputNames, inputsIdentifier } = interpolationContext;
     const { source, userCodeLineOffset } = buildCodeNewWrapper(this.data.code, interpolationContext);
 
     try {
       const outputs = await context.codeRunner.runCode(
         appendCodeNodeSourceUrl(source, sourceUrl),
         inputs,
-        ALL_CODE_RUNNER_OPTIONS,
+        getJsValueInterpolationCodeRunnerOptions(ALL_CODE_RUNNER_OPTIONS, interpolationContext),
         context.graphInputNodeValues,
         context.contextValues,
       );
@@ -221,7 +228,7 @@ export class CodeNewNodeImpl extends NodeImpl<CodeNewNode> {
         userCodeLineOffset,
       });
 
-      throw sanitizeCodeNewError(enrichedError, inputNames, inputsIdentifier);
+      throw sanitizeCodeNewError(enrichedError, interpolationContext);
     }
   }
 }

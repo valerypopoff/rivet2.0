@@ -1,3 +1,5 @@
+import { scanInterpolationTokenSpans } from '@valerypopoff/rivet2-core/interpolation-syntax';
+
 export const JS_VALUE_INTERPOLATION_MARKER_OWNERS = ['javascript', 'typescript'] as const;
 export const JSON_TEMPLATE_INTERPOLATION_MARKER_OWNERS = ['json'] as const;
 
@@ -13,10 +15,6 @@ export type TextMarkerRange = {
   end: number;
 };
 
-function isEscapedInterpolationTokenSpan(text: string, range: OffsetRange): boolean {
-  return text[range.start + 2] === '{' && text[range.end] === '}';
-}
-
 function normalizeOffsetRange(range: OffsetRange): OffsetRange {
   if (range.end > range.start) {
     return range;
@@ -28,40 +26,6 @@ function normalizeOffsetRange(range: OffsetRange): OffsetRange {
   };
 }
 
-function findEditorInterpolationTokenRanges(text: string): OffsetRange[] {
-  const ranges: OffsetRange[] = [];
-  let searchIndex = 0;
-
-  while (searchIndex < text.length) {
-    const openIndex = text.indexOf('{{', searchIndex);
-
-    if (openIndex === -1) {
-      break;
-    }
-
-    const closeIndex = text.indexOf('}}', openIndex + 2);
-
-    if (closeIndex === -1) {
-      break;
-    }
-
-    const nestedOpenIndex = text.indexOf('{{', openIndex + 2);
-
-    if (nestedOpenIndex !== -1 && nestedOpenIndex < closeIndex) {
-      searchIndex = nestedOpenIndex;
-      continue;
-    }
-
-    ranges.push({
-      start: openIndex,
-      end: closeIndex + 2,
-    });
-    searchIndex = closeIndex + 2;
-  }
-
-  return ranges;
-}
-
 export function rangesOverlap(a: OffsetRange, b: OffsetRange): boolean {
   const normalizedA = normalizeOffsetRange(a);
   const normalizedB = normalizeOffsetRange(b);
@@ -70,7 +34,7 @@ export function rangesOverlap(a: OffsetRange, b: OffsetRange): boolean {
 }
 
 export function getActiveInterpolationOffsetRanges(text: string): OffsetRange[] {
-  return findEditorInterpolationTokenRanges(text).filter((range) => !isEscapedInterpolationTokenSpan(text, range));
+  return scanInterpolationTokenSpans(text).map(({ start, end }) => ({ start, end }));
 }
 
 export function shouldSuppressMarkerForInterpolation(

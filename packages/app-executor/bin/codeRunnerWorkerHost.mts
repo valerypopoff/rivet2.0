@@ -1,6 +1,17 @@
 import type { CodeConsoleMessage, CodeRunnerOptions, DataValue, Inputs, Outputs } from '@valerypopoff/rivet2-core';
+import { createRequire } from 'node:module';
 import { Worker } from 'node:worker_threads';
 import { getCodeRunnerRequireAnchorPath } from './codeRunnerRequire.mjs';
+
+declare const __RIVET_CODE_INTERPOLATION_RUNTIME_SOURCE__: string;
+
+// Source-mode workers load this tiny Core entry through the local workspace.
+// The packaged sidecar receives the same entry bundled by build-executor.cjs,
+// because an eval worker cannot otherwise import modules from pkg's snapshot.
+const bundledInterpolationRuntimeSource =
+  typeof __RIVET_CODE_INTERPOLATION_RUNTIME_SOURCE__ === 'string'
+    ? __RIVET_CODE_INTERPOLATION_RUNTIME_SOURCE__
+    : undefined;
 
 type SerializedWorkerError = {
   message: string;
@@ -31,6 +42,8 @@ const WORKER_SOURCE = String.raw`
 const { parentPort } = require('node:worker_threads');
 const { createRequire } = require('node:module');
 const { inspect } = require('node:util');
+
+const BUNDLED_INTERPOLATION_RUNTIME_SOURCE = ${JSON.stringify(bundledInterpolationRuntimeSource)};
 
 const CONSOLE_LEVELS = ['debug', 'error', 'info', 'log', 'warn'];
 
@@ -80,7 +93,16 @@ function createBridgedConsole() {
 }
 
 async function runCode(request) {
-  const { code, contextValues, executionEnvironment, graphInputs, inputs, options, requireAnchorPath } = request;
+  const {
+    code,
+    contextValues,
+    executionEnvironment,
+    graphInputs,
+    inputs,
+    interpolationRuntimeModulePath,
+    options,
+    requireAnchorPath,
+  } = request;
   const argNames = ['inputs'];
   const args = [inputs];
 
@@ -114,11 +136,46 @@ async function runCode(request) {
     args.push(contextValues);
   }
 
+  if (options.interpolationHelperIdentifier) {
+    argNames.push(options.interpolationHelperIdentifier);
+    args.push(getCodeInterpolationResolver(requireAnchorPath, interpolationRuntimeModulePath));
+  }
+
   argNames.push(code);
 
   const AsyncFunction = async function () {}.constructor;
   const codeFunction = new AsyncFunction(...argNames);
   return await codeFunction(...args);
+}
+
+let codeInterpolationResolver;
+
+function getCodeInterpolationResolver(requireAnchorPath, interpolationRuntimeModulePath) {
+  if (codeInterpolationResolver) {
+    return codeInterpolationResolver;
+  }
+
+  const runtimeRequire = createRequire(requireAnchorPath);
+  let runtimeExports;
+
+  if (BUNDLED_INTERPOLATION_RUNTIME_SOURCE) {
+    const runtimeModule = { exports: {} };
+    const runtimeFactory = new Function('module', 'exports', 'require', BUNDLED_INTERPOLATION_RUNTIME_SOURCE);
+    runtimeFactory(runtimeModule, runtimeModule.exports, runtimeRequire);
+    runtimeExports = runtimeModule.exports;
+  } else {
+    if (!interpolationRuntimeModulePath) {
+      throw new Error('Code interpolation runtime module path is unavailable.');
+    }
+    runtimeExports = runtimeRequire(interpolationRuntimeModulePath);
+  }
+
+  if (typeof runtimeExports.resolveCodeInterpolationExpression !== 'function') {
+    throw new Error('Code interpolation runtime does not provide resolveCodeInterpolationExpression.');
+  }
+
+  codeInterpolationResolver = runtimeExports.resolveCodeInterpolationExpression;
+  return codeInterpolationResolver;
 }
 
 function createScopedProcess(executionEnvironment) {
@@ -191,6 +248,7 @@ export type CodeWorkerRunRequest = {
   contextValues: Record<string, DataValue> | undefined;
   executionEnvironment: Readonly<Record<string, string | undefined>> | undefined;
   graphInputs: Record<string, DataValue> | undefined;
+  interpolationRuntimeModulePath: string | undefined;
   inputs: Inputs;
   options: CodeRunnerOptions;
   requireAnchorPath: string;
@@ -210,11 +268,19 @@ export function createCodeWorkerRunRequest(
     contextValues,
     executionEnvironment,
     graphInputs,
+    interpolationRuntimeModulePath:
+      options.interpolationHelperIdentifier && !bundledInterpolationRuntimeSource
+        ? getInterpolationRuntimeModulePath()
+        : undefined,
     inputs,
     options,
     requireAnchorPath: getCodeRunnerRequireAnchorPath(),
     type: 'run',
   };
+}
+
+function getInterpolationRuntimeModulePath(): string {
+  return createRequire(import.meta.url).resolve('@valerypopoff/rivet2-core/interpolation-runtime');
 }
 
 export function createReadyCodeWorker(): Promise<Worker> {

@@ -425,6 +425,140 @@ void describe('AppExecutorWorkerCodeRunner', () => {
     });
   });
 
+  void it('resolves interpolation paths inside the worker without moving execution to the Rivet thread', async () => {
+    const pool = new AppExecutorCodeWorkerPool({ size: 1 });
+
+    try {
+      await pool.prewarm();
+      const before = pool.getStats();
+      const runner = new AppExecutorWorkerCodeRunner(undefined, { workerPool: pool });
+      const outputs = await runner.runCode(
+        `
+          return {
+            output1: {
+              type: 'any',
+              value: {
+                graph: __resolveInterpolation(inputs, '@graphInputs.global.items[1]', graphInputs, context),
+                input: __resolveInterpolation(inputs, 'payload.items[0].name', graphInputs, context),
+                context: __resolveInterpolation(inputs, '@context.local.active', graphInputs, context),
+              },
+            },
+          };
+        `,
+        {
+          payload: {
+            type: 'object',
+            value: { items: [{ name: 'worker-value' }] },
+          },
+        },
+        defaultCodeRunnerOptions({ interpolationHelperIdentifier: '__resolveInterpolation' }),
+        {
+          global: { type: 'object', value: { items: ['ignored', 'graph-value'] } },
+        },
+        {
+          local: { type: 'object', value: { active: true } },
+        },
+      );
+
+      assert.deepEqual(outputs, {
+        output1: {
+          type: 'any',
+          value: {
+            context: true,
+            graph: 'graph-value',
+            input: 'worker-value',
+          },
+        },
+      });
+      assert.equal(pool.getStats().acquiredReadyWorkers, before.acquiredReadyWorkers + 1);
+      assert.equal(pool.getStats().acquiredColdWorkers, before.acquiredColdWorkers);
+    } finally {
+      await pool.shutdown();
+    }
+  });
+
+  void it('keeps the worker interpolation runtime independent from an authored require root', async () => {
+    const runtimeRoot = await mkdtemp(join(tmpdir(), 'rivet-app-executor-interpolation-root-'));
+    const previousRoot = process.env.RIVET_CODE_RUNNER_REQUIRE_ROOT;
+
+    try {
+      process.env.RIVET_CODE_RUNNER_REQUIRE_ROOT = runtimeRoot;
+      const runner = new AppExecutorWorkerCodeRunner();
+      const outputs = await runner.runCode(
+        `
+          return {
+            output1: {
+              type: 'any',
+              value: __resolveInterpolation(inputs, 'payload[0]'),
+            },
+          };
+        `,
+        {
+          payload: { type: 'any[]', value: ['isolated-value'] },
+        },
+        defaultCodeRunnerOptions({ interpolationHelperIdentifier: '__resolveInterpolation' }),
+      );
+
+      assert.deepEqual(outputs, {
+        output1: { type: 'any', value: 'isolated-value' },
+      });
+    } finally {
+      if (previousRoot === undefined) {
+        delete process.env.RIVET_CODE_RUNNER_REQUIRE_ROOT;
+      } else {
+        process.env.RIVET_CODE_RUNNER_REQUIRE_ROOT = previousRoot;
+      }
+      await rm(runtimeRoot, { force: true, recursive: true });
+    }
+  });
+
+  void it('resolves interpolation paths on the Rivet-capability current-thread fallback', async () => {
+    const runner = new AppExecutorWorkerCodeRunner();
+    const outputs = await runner.runCode(
+      `
+        return {
+          output1: {
+            type: 'any',
+            value: {
+              graph: __resolveInterpolation(inputs, '@graphInputs.global.enabled', graphInputs, context),
+              input: __resolveInterpolation(inputs, 'payload.items[0].name', graphInputs, context),
+              context: __resolveInterpolation(inputs, '@context.local.label', graphInputs, context),
+              rivet: typeof Rivet.createProcessor === 'function',
+            },
+          },
+        };
+      `,
+      {
+        payload: {
+          type: 'object',
+          value: { items: [{ name: 'fallback-value' }] },
+        },
+      },
+      defaultCodeRunnerOptions({
+        includeRivet: true,
+        interpolationHelperIdentifier: '__resolveInterpolation',
+      }),
+      {
+        global: { type: 'object', value: { enabled: true } },
+      },
+      {
+        local: { type: 'object', value: { label: 'fallback-context' } },
+      },
+    );
+
+    assert.deepEqual(outputs, {
+      output1: {
+        type: 'any',
+        value: {
+          context: 'fallback-context',
+          graph: true,
+          input: 'fallback-value',
+          rivet: true,
+        },
+      },
+    });
+  });
+
   void it('matches the default Node runner for worker-safe capabilities', async () => {
     const appExecutorRunner = new AppExecutorWorkerCodeRunner();
     const code = `

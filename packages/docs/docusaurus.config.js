@@ -3,6 +3,34 @@
 
 const lightCodeTheme = require('prism-react-renderer').themes.github;
 const darkCodeTheme = require('prism-react-renderer').themes.dracula;
+const useDevelopmentSearchIndex = process.env.RIVET_DOCS_DEV_SEARCH_INDEX === '1';
+
+/** @satisfies {import('@easyops-cn/docusaurus-search-local').PluginOptions} */
+const localSearchOptions = {
+  docsRouteBasePath: '/',
+  language: ['en'],
+  // Development serves a primed, disposable `search-index.json` from the
+  // live-server static directory. Production retains content-hashed filenames
+  // so GitHub Pages can cache each immutable index safely.
+  hashed: useDevelopmentSearchIndex ? false : 'filename',
+  indexDocs: true,
+  indexBlog: false,
+  indexPages: true,
+  // Programming documentation must be able to find meaningful short words
+  // such as `if`, `for`, and `map`.
+  removeDefaultStopWordFilter: ['en'],
+  highlightSearchTermsOnTargetPage: true,
+  searchResultLimits: 10,
+  searchResultContextMaxLength: 90,
+  explicitSearchResultPath: true,
+  searchBarShortcut: true,
+  searchBarShortcutKeymap: 'mod+k',
+  searchBarPosition: 'right',
+  fuzzyMatchingDistance: 1,
+};
+
+/** @type {import('@docusaurus/types').PluginConfig} */
+const localSearchTheme = [require.resolve('@easyops-cn/docusaurus-search-local'), localSearchOptions];
 
 /** @type {import('@docusaurus/types').Config} */
 const config = {
@@ -32,13 +60,22 @@ const config = {
 
   // Development serves the prebuilt Rivet promo from the same Docusaurus
   // origin. Production builds that entry separately after Docusaurus finishes.
-  staticDirectories: process.env.NODE_ENV === 'production' ? ['static'] : ['static', '.promo-dev'],
+  // The local-search client only enables its worker in a production bundle.
+  // `yarn docs dev` therefore runs Docusaurus Start in that mode while still
+  // serving this development-only static root and retaining live reload.
+  staticDirectories: useDevelopmentSearchIndex ? ['static', '.promo-dev'] : ['static'],
 
   customFields: {
     promoDemoUrl: process.env.RIVET_PROMO_DEMO_URL || null,
   },
 
   plugins: [require.resolve('docusaurus-plugin-image-zoom')],
+
+  // Search is deliberately local: the GitHub Pages deployment has no search
+  // service or crawler credentials, and the complete index remains available
+  // after the first static download. `docsRouteBasePath` must match the docs
+  // plugin because this site serves documentation from the root route.
+  themes: [localSearchTheme],
 
   presets: [
     [

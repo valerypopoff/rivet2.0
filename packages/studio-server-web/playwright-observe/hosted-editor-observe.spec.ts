@@ -40,6 +40,10 @@ function createClipboardProjectFile(projectName: string): string {
     '          visualData: 860/300/260/null//',
     '          data:',
     '            text: second',
+    '        \'[clipboard-path-node]:text "Clipboard Path Node"\':',
+    '          visualData: 520/520/260/null//',
+    '          data:',
+    '            text: "{{customer.address.city}}"',
     '  plugins: []',
     '  references: []',
     '',
@@ -126,6 +130,13 @@ test.describe('Observable hosted editor flow', () => {
       await expect(iframe).toBeVisible({ timeout: 30_000 });
       await expect(canvas).toBeVisible({ timeout: 30_000 });
       await expect(nodes.first()).toBeVisible({ timeout: 30_000 });
+    });
+
+    await test.step('Show a JSONPath interpolation as one base input port', async () => {
+      const pathNode = frameLocator.locator('.node[data-nodeid="clipboard-path-node"]');
+      await expect(pathNode).toBeVisible({ timeout: 30_000 });
+      await expect(pathNode.locator('.input-port[data-portid="customer"]')).toBeVisible();
+      await expect(pathNode.locator('.input-port[data-portid="customer.address.city"]')).toHaveCount(0);
     });
 
     await expect(iframe).toBeVisible({ timeout: 120_000 });

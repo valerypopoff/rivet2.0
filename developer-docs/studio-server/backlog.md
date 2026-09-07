@@ -1,4 +1,13 @@
 ﻿
+# Product Backlog Notes
+
+Ideas and investigation reminders; these are not implemented behavior or
+acceptance requirements for a behavior-preserving refactor. The notes below retain
+their original wording. Before promoting an idea to a plan, reconcile it with
+current source and the relevant feature guide. Workflow schema/storage migration
+commands already exist, but that alone does not promise automatic transfer of
+every settings, library, recording and evaluation domain.
+
 - Feature to move from local mode to managed (transfer all files (including libs) and metadata)
 
 

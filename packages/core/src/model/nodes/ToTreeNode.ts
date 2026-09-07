@@ -12,8 +12,9 @@ import { type DataValue } from '../DataValue.js';
 import { type EditorDefinition } from '../EditorDefinition.js';
 import { dedent } from 'ts-dedent';
 import { coerceTypeOptional } from '../../utils/coerceType.js';
-import { extractInterpolationVariables, interpolate } from '../../utils/interpolation.js';
+import { interpolate } from '../../utils/interpolation.js';
 import { get, sortBy } from 'lodash-es';
+import type { InternalProcessContext } from '../ProcessContext.js';
 
 export type ToTreeNode = ChartNode<'toTree', ToTreeNodeData>;
 
@@ -22,6 +23,8 @@ export type ToTreeNodeData = {
   childrenProperty: string;
   useSortAlphabetically: boolean;
 };
+
+type ToTreeInterpolationContext = Pick<InternalProcessContext, 'graphInputNodeValues' | 'contextValues'>;
 
 export class ToTreeNodeImpl extends NodeImpl<ToTreeNode> {
   static create(): ToTreeNode {
@@ -111,7 +114,13 @@ export class ToTreeNodeImpl extends NodeImpl<ToTreeNode> {
     };
   }
 
-  buildTree(objects: unknown[], parentPath: string = '', level: number = 0, isLast: boolean = true): string {
+  buildTree(
+    objects: unknown[],
+    parentPath: string = '',
+    level: number = 0,
+    isLast: boolean = true,
+    interpolationContext?: ToTreeInterpolationContext,
+  ): string {
     if (!Array.isArray(objects) || objects.length === 0) return '';
 
     let result = '';
@@ -124,18 +133,13 @@ export class ToTreeNodeImpl extends NodeImpl<ToTreeNode> {
       const prefix = level === 0 ? '' : isLast ? '└── ' : '├── ';
       const indent = level === 0 ? '' : '    '.repeat(level - 1) + (isLast ? '    ' : '│   ');
 
-      // Get all potential interpolation variables from the format string
-      const matches = extractInterpolationVariables(this.data.format);
-      const interpolationVars = matches.reduce(
-        (acc, match) => {
-          const key = match;
-          acc[key] = String(get(obj, key, ''));
-          return acc;
-        },
-        {} as Record<string, string>,
+      const formattedNode = interpolate(
+        this.data.format,
+        obj != null && typeof obj === 'object' ? (obj as Record<string, unknown>) : {},
+        interpolationContext?.graphInputNodeValues,
+        interpolationContext?.contextValues,
+        { unwrapVariableDataValues: false },
       );
-
-      const formattedNode = interpolate(this.data.format, interpolationVars);
 
       // Add this node to the result
       result += indent + prefix + formattedNode + '\n';
@@ -144,16 +148,19 @@ export class ToTreeNodeImpl extends NodeImpl<ToTreeNode> {
       const children = get(obj, this.data.childrenProperty);
       if (Array.isArray(children) && children.length > 0) {
         const newPath = parentPath ? `${parentPath}/${formattedNode}` : formattedNode;
-        result += this.buildTree(children, newPath, level + 1, isLastItem);
+        result += this.buildTree(children, newPath, level + 1, isLastItem, interpolationContext);
       }
     });
 
     return result;
   }
 
-  async process(inputs: Record<PortId, DataValue>): Promise<Record<PortId, DataValue>> {
+  async process(
+    inputs: Record<PortId, DataValue>,
+    context?: InternalProcessContext,
+  ): Promise<Record<PortId, DataValue>> {
     const objects = coerceTypeOptional(inputs['objects' as PortId], 'object[]') ?? [];
-    const treeOutput = this.buildTree(objects);
+    const treeOutput = this.buildTree(objects, '', 0, true, context);
 
     return {
       ['tree' as PortId]: {

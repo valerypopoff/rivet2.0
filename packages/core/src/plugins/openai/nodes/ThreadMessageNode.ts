@@ -6,11 +6,10 @@ import {
   type EditorDefinition,
   type PluginNodeImpl,
 } from '../../../index.js';
-import { newId, coerceTypeOptional, getInputOrData, coerceType } from '../../../utils/index.js';
-import { extractInterpolationVariables, interpolate } from '../../../utils/interpolation.js';
+import { newId, coerceTypeOptional, getInputOrData } from '../../../utils/index.js';
+import { extractInterpolationVariableReferences, interpolate } from '../../../utils/interpolation.js';
 import { pluginNodeDefinition } from '../../../model/NodeDefinition.js';
 import type { CreateMessageBody } from '../../../utils/openai.js';
-import { mapValues } from 'lodash-es';
 import { createInterpolationInputDefinition } from '../../../model/interpolationInputDefinition.js';
 
 export type ThreadMessageNode = ChartNode<'threadMessage', ThreadMessageNodeData>;
@@ -82,16 +81,19 @@ export const ThreadMessageNodeImpl: PluginNodeImpl<ThreadMessageNode> = {
       });
     }
 
-    const inputNames = extractInterpolationVariables(data.text);
+    const inputReferences = extractInterpolationVariableReferences(data.text);
+    const fixedInputIds = new Set(inputs.map((input) => input.id));
     inputs = [
       ...inputs,
-      ...(inputNames?.map((inputName): NodeInputDefinition => {
-        return createInterpolationInputDefinition({
-          interpolationName: inputName,
-          dataType: 'string',
-          required: false,
-        });
-      }) ?? []),
+      ...inputReferences
+        .filter(({ baseName }) => !fixedInputIds.has(baseName as PortId))
+        .map(({ baseName, hasPath }): NodeInputDefinition => {
+          return createInterpolationInputDefinition({
+            interpolationName: baseName,
+            dataType: hasPath ? 'any' : 'string',
+            required: false,
+          });
+        }),
     ];
 
     return inputs;
@@ -144,7 +146,7 @@ export const ThreadMessageNodeImpl: PluginNodeImpl<ThreadMessageNode> = {
     };
   },
 
-  async process(data, inputData) {
+  async process(data, inputData, context?) {
     const text = getInputOrData(data, inputData, 'text', 'string');
     const fileIds = getInputOrData(data, inputData, 'fileIds', 'string[]') ?? [];
 
@@ -160,8 +162,9 @@ export const ThreadMessageNodeImpl: PluginNodeImpl<ThreadMessageNode> = {
       metadata = coerceTypeOptional(inputData['metadata' as PortId], 'object') as Record<string, string>;
     }
 
-    const inputMap = mapValues(inputData, (input) => coerceType(input, 'string')) as Record<PortId, string>;
-    const interpolated = interpolate(text, inputMap);
+    const interpolated = interpolate(text, inputData, context?.graphInputNodeValues, context?.contextValues, {
+      coerceBareVariableDataValues: true,
+    });
 
     // Here you would typically make a call to an API to create the message
     // For the sake of this example, we'll just return the data as is

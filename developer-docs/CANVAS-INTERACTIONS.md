@@ -343,6 +343,35 @@ canvas representation is an antenna.
 
 ## Selection And Navigation
 
+Connection bend handles participate in Shift-marquee selection alongside nodes.
+Only an authored, visible bend whose center falls inside the rectangle is selected;
+ghost points and hidden/synthetic Data Bus wires are not selectable. Clicking a bend
+does not select it; double-click still removes that bend. Dragging an unselected
+bend moves it alone. Dragging a selected bend or node moves the selected group.
+Blank-canvas clicks, graph-command mode changes (including recording/read-only
+views), and project/graph changes clear bend selection. Selection is session-only
+and never serialized into the project.
+
+`selectedConnectionBendsState` scopes endpoint-keyed selections to the project file
+path plus project/graph IDs (including copies sharing IDs) and filters deleted bends.
+`connectionBendSelection.ts` owns rectangle geometry and immutable position updates.
+`WireLayer` bend handles use the same
+DndContext and `useDraggingNode` session as nodes; there is no separate mousemove
+drag loop. Preview changes are transient. `moveNodeCommand` records node and bend
+positions together so one Undo/Redo restores the entire move. Existing connection
+serialization persists bend coordinates without changing topology. Alt-node-drag
+keeps its existing duplication behavior; original selected bends are not moved.
+Midpoint-only drags do not enable node-drag port measurement or all-wire rendering:
+the active bend keys are forced through normal wire virtualization so long wires
+remain visible without paying the cost of a full node drag.
+
+Both kinds of handle share `nodeDragInteraction.ts` Shift locking: the dominant
+axis is selected from initial Shift movement, held while Shift remains pressed,
+and released immediately when Shift is released. Deltas are relative to each
+item's initial position and converted through canvas zoom. Cancellation discards
+previews; read-only graphs and changed graph/project identities cannot commit a
+stale drag.
+
 Shift drag-selection accumulates groups while Shift remains held. Page Up, Page
 Down, and Home navigate graph/resource history through the shared workspace target,
 including Node library. Fit-to-content has a maximum zoom so one or two nodes do not
@@ -361,6 +390,12 @@ copying linked instances back as sources is blocked.
 Use pure graph-editing tests for connection recovery, drag actions, variadic reorder,
 and bend-point persistence. Use focused browser/visual tests only for hit targets,
 pointer capture, portals, or layout that pure geometry cannot prove.
+`connectionBendSelection.test.ts` covers rectangle direction, grouped offsets,
+identity preservation, restoration, and stale/deleted bend protection.
+`connection-bend-selection.spec.ts` exercises mixed marquee selection, group
+movement from node and bend handles, Shift locking, Undo/Redo, click behavior,
+and persisted coordinates through mocked workflow storage. Run it with the
+repository observer and `PLAYWRIGHT_HEADLESS=1`, `PLAYWRIGHT_SLOW_MO=0`.
 Data Bus compilation and scheduler behavior belong in
 `packages/core/test/model/DataBusTopology.test.ts`; provider/consumer
 classification and wire-suppression eligibility belong in

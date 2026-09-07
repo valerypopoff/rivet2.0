@@ -255,6 +255,45 @@ describe('PromptNode', () => {
     });
   });
 
+  it('resolves nested JSONPath from one any input while retaining the bare-value rendering', async () => {
+    const node = createNode({
+      promptText: '{{payload.message.text}} / {{payload}}',
+    });
+
+    assert.deepStrictEqual(
+      node.getInputDefinitions().map(({ id, dataType }) => ({ id, dataType })),
+      [{ id: 'payload', dataType: 'any' }],
+    );
+
+    const result = await node.process(
+      {
+        payload: {
+          type: 'object',
+          value: { message: { text: 'Hello' } },
+        },
+      } satisfies Record<string, DataValue>,
+      context,
+    );
+
+    assert.deepStrictEqual(result.output?.value, {
+      type: 'user',
+      message: 'Hello / {"message":{"text":"Hello"}}',
+      isCacheBreakpoint: undefined,
+    });
+  });
+
+  it('reuses an enabled built-in input when prompt text references its name', () => {
+    const node = createNode({
+      promptText: '{{type}}',
+      useTypeInput: true,
+    });
+
+    assert.deepStrictEqual(
+      node.getInputDefinitions().map(({ id, dataType }) => ({ id, dataType })),
+      [{ id: 'type', dataType: 'string' }],
+    );
+  });
+
   it('opts the prompt text editor into word and character stats', () => {
     const node = createNode({});
     const promptTextEditor = node

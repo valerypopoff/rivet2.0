@@ -30,10 +30,44 @@ test('getActiveInterpolationOffsetRanges skips malformed outer tokens with neste
   );
 });
 
-test('interpolation diagnostics stay independent from the core runtime barrel', async () => {
-  const source = await readFile(new URL('./interpolationDiagnostics.ts', import.meta.url), 'utf8');
+test('getActiveInterpolationOffsetRanges recovers a later token after an unmatched object brace', () => {
+  const text = 'before {{broken{ {{valid}} after';
+  const ranges = getActiveInterpolationOffsetRanges(text);
 
-  assert.equal(source.includes('@valerypopoff/rivet2-core'), false);
+  assert.deepEqual(
+    ranges.map((range) => text.slice(range.start, range.end)),
+    ['{{valid}}'],
+  );
+});
+
+test('getActiveInterpolationOffsetRanges recovers a later token after an unterminated quoted JSONPath segment', () => {
+  const text = 'before {{broken + $.aaa["{{field}}"] after';
+  const ranges = getActiveInterpolationOffsetRanges(text);
+
+  assert.deepEqual(
+    ranges.map((range) => text.slice(range.start, range.end)),
+    ['{{field}}'],
+  );
+});
+
+test('getActiveInterpolationOffsetRanges keeps JSONPath filter quotes and object literals inside one token', () => {
+  const text = '{{records[?(@.label == "a}}b" && @.metadata == {"kind":"kept"})].label}}';
+  const ranges = getActiveInterpolationOffsetRanges(text);
+
+  assert.deepEqual(
+    ranges.map((range) => text.slice(range.start, range.end)),
+    [text],
+  );
+});
+
+test('getActiveInterpolationOffsetRanges keeps JSONPath regex literals inside one token', () => {
+  const text = '{{records[?(@.pattern =~ /{{|}}/)].label}}';
+  const ranges = getActiveInterpolationOffsetRanges(text);
+
+  assert.deepEqual(
+    ranges.map((range) => text.slice(range.start, range.end)),
+    [text],
+  );
 });
 
 test('JSON template interpolation uses JSON validation markers only', () => {

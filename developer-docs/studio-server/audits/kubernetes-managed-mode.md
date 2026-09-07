@@ -1,5 +1,11 @@
 # Kubernetes Managed Mode Audit
 
+This is dated audit evidence and implementation history, not a fresh deployment
+certification. Read [Kubernetes](../kubernetes.md) for the current operational
+contract and [Refactor Baseline](../../REFACTOR-BASELINE.md) for evidence required
+after structural changes. Claims of no known gaps below are scoped to the dated
+review and its listed checks, not to arbitrary later code or provider deployments.
+
 - Original audit date: 2026-08-26
 - Reassessment date: 2026-08-31
 - Scope: managed storage and managed PostgreSQL on Kubernetes

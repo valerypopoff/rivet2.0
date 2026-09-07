@@ -87,12 +87,12 @@ only supported dependency installer.
 The root preinstall guard rejects npm and pnpm dependency installation with the
 fresh-machine recovery commands. The repository structure verifier also rejects
 secondary `yarn.lock`, `package-lock.json`, and
-pm-shrinkwrap.json` files,
+`npm-shrinkwrap.json` files,
 per-workspace package-manager declarations, ambiguous root production aliases,
 and root or workspace scripts that dispatch monorepo work through
-pm run`
+`npm run`
 or
-pm --prefix`.
+`npm --prefix`.
 
 The intentional npm boundaries are narrower than dependency management for the
 monorepo: npm-registry publication, isolated synthetic Code-node runtime-library

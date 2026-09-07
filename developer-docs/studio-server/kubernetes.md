@@ -1200,7 +1200,28 @@ The **Build Images** workflow normally performs the format-2 lineage cutover wit
 
 The next candidate can therefore read a version-1 promoted predecessor and write a version-2 lineage manifest. Legacy manifests remain deployable and usable as a first predecessor, but a failed legacy release cannot itself authorize automated forward rollback because it has no predecessor record.
 
+Recovery stages downloaded manifests in a unique directory beneath the checkout's
+`artifacts/` directory and removes it on exit.
+Both manifest validation and OCI publication intentionally reject input paths
+outside the checkout. Using `$RUNNER_TEMP` for recovery would make every otherwise
+valid downloaded manifest fail validation; do not relax the CLI's path boundary
+to accommodate an external staging directory. Promoted-image inspection must
+also distinguish an absent registry tag from authentication or transport errors:
+only genuine absence can contribute to an automatic first-install bootstrap.
+
 If the complete legacy image set has no retained matching manifest, automatic recovery cannot prove a rollback target and still fails closed. Only that exceptional case requires a manual **Build Images** dispatch with `allow_release_lineage_bootstrap`, after explicitly accepting that the transition has no automated rollback to the pre-lineage image set. A true initial installation with neither promoted images nor a manifest pointer bootstraps automatically. Registry/API failures and partial promoted image sets are never treated as an empty registry.
+
+For an installation last released by a workflow that never generated release
+manifests, retrying a push cannot create the missing predecessor evidence. Check
+the last successful run's artifacts and workflow revision first; candidate image
+tags, build records, and Kubernetes gate reports are not promoted manifests.
+After accepting the one-time rollback limitation, open GitHub Actions **Build
+Images**, select **Run workflow** on `main`, and enable
+`allow_release_lineage_bootstrap`. Leave unrelated staging/provider options at
+their defaults. Rerunning the failed push does not enable this manual-only input.
+The successful release creates the durable `production` manifest pointer, which
+later releases use normally. This input starts release history; it does not
+disable verification gates or alter an already-running deployment.
 
 First render exactly what would be installed. This changes no cluster state and retains the rendered manifest plus values under `artifacts/kubernetes-production-release/<release>/`:
 

@@ -55,6 +55,18 @@ Important local-Docker wiring note:
 - the executor websocket upstream remains a separate internal service on port `21889`; it must not inherit the API `PORT` value from `.env`
 - in Docker modes the executor process binds to `0.0.0.0` inside its container so nginx can reach the `executor:21889` service; external clients should still use the proxy routes, not the executor container directly
 
+## Proxy address recovery and health
+
+For all three shipped proxy templates, service `proxy_pass` destinations use
+runtime DNS with the existing 30-second resolver cache. Container address changes
+must recover without a launcher call; the dev launcher's startup reload is an
+additional safeguard. The `/__rivet_auth/` prefix is explicitly rewritten to
+`/ui-auth/` before variable-based forwarding, with redirect handling retained.
+The dev health check requires HTTP 200 through the normal UI auth route and from
+the web upstream, so a working login page cannot conceal an unavailable dashboard.
+See [proxy recovery verification](./development.md#proxy-dns-recovery-and-health)
+for the disposable Docker fixture, timing bound, and browser check.
+
 ## Browser-side websocket ownership
 
 The browser transport seams now match the backend route split more explicitly:

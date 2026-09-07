@@ -61,7 +61,8 @@ describe('JSFilterNode', () => {
         type: 'code',
         label: 'Callback Body',
         helperMessage: '(item, index, array) => {',
-        postEditorHelperMessage: '};\n\n//Use {{var}} to create input ports that evaluate as connected values.',
+        postEditorHelperMessage:
+          '};\n\n//Use {{var}} to create input ports. {{config.limit.max}} creates only config; {{item.name}} and {{array[0]}} use callback locals.',
         dataKey: 'callbackBody',
         language: 'javascript',
         interpolationSyntax: 'js-value',
@@ -152,6 +153,33 @@ describe('JSFilterNode', () => {
     );
 
     assert.deepStrictEqual(result.filtered?.value, [3]);
+  });
+
+  it('resolves JSONPath expressions from callback locals without creating local ports', async () => {
+    const node = createNode({
+      callbackBody: 'return {{item.details.score}} >= {{config.minimum}} && {{array[0].enabled}};',
+    });
+
+    assert.deepStrictEqual(
+      node.getInputDefinitions().map((definition) => definition.id),
+      ['array', 'config'],
+    );
+
+    const result = await node.process(
+      {
+        ['array' as PortId]: {
+          type: 'object[]',
+          value: [
+            { enabled: true, details: { score: 2 } },
+            { enabled: true, details: { score: 5 } },
+          ],
+        },
+        ['config' as PortId]: { type: 'object', value: { minimum: 3 } },
+      },
+      createContext(),
+    );
+
+    assert.deepStrictEqual(result.filtered?.value, [{ enabled: true, details: { score: 5 } }]);
   });
 
   it('keeps interpolation values available when callback code uses generated helper names', async () => {

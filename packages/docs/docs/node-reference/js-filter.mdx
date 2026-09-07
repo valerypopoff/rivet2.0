@@ -16,7 +16,7 @@ The callback body can use `item`, `index`, and `array`, and should `return` a tr
 | ----- | --------- | -------------------- |
 | Array | `any[]`   | The array to filter. |
 
-Additional inputs are created from `{{name}}` interpolation tokens in the callback body.
+Additional inputs are created from `{{name}}` interpolation tokens in the callback body. A path expression such as `{{config.limit.max}}` creates only `config`; `{{item.name}}` and `{{array[0]}}` select from the callback's local values and create no extra input.
 
 ## Outputs
 

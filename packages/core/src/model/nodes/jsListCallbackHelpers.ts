@@ -9,6 +9,7 @@ import {
   buildJsValueInterpolatedSource,
   buildJsValueInputClonePreamble,
   buildJsValuePreview,
+  getJsValueInterpolationCodeRunnerOptions,
   getJsValueInterpolationInputDefinitions,
   getJsValueInterpolationRuntimeContext,
   interpolateJsValuePreviewSource,
@@ -20,7 +21,6 @@ const MAX_CALLBACK_PREVIEW_BODY_LINES = 13;
 const JS_LIST_CALLBACK_SIGNATURE = '(item, index, array)';
 export const JS_LIST_CALLBACK_LOCAL_NAMES: ReadonlySet<string> = new Set(['item', 'index', 'array']);
 const JS_LIST_INPUTS_IDENTIFIER = '__jsListInputs';
-const JS_LIST_INPUT_CLONE_CACHE_IDENTIFIER = 'jsListInputCloneCache';
 const JS_LIST_CODE_RUNNER_OPTIONS = {
   includeFetch: false,
   includeRequire: false,
@@ -57,35 +57,50 @@ function buildJSListRuntimePreamble(interpolationContext: JsValueInterpolationRu
   return dedent`
     const assertSynchronousCallbackResult = ${assertSynchronousCallbackResult.toString()};
     ${buildJsValueInputClonePreamble({
-      cacheIdentifier: JS_LIST_INPUT_CLONE_CACHE_IDENTIFIER,
+      cacheIdentifier: interpolationContext.cloneCacheIdentifier,
+      contextIdentifier: interpolationContext.contextIdentifier,
+      graphInputsIdentifier: interpolationContext.graphInputsIdentifier,
       inputsIdentifier: interpolationContext.inputsIdentifier,
     })}
-    const array = cloneJsInputValue(inputs.array?.value, ${JS_LIST_INPUT_CLONE_CACHE_IDENTIFIER});
+    const array = cloneJsInputValue(inputs.array?.value, ${interpolationContext.cloneCacheIdentifier});
     ${buildClonedInputValueAssignments(
       interpolationContext.inputNames,
       interpolationContext.inputsIdentifier,
-      JS_LIST_INPUT_CLONE_CACHE_IDENTIFIER,
+      interpolationContext.cloneCacheIdentifier,
     )}
   `;
 }
 
-function buildJSListCallbackRuntimeSource(callbackBody: string, inputsIdentifier: string): string {
-  return buildJsValueInterpolatedSource(callbackBody, inputsIdentifier, {
+function buildJSListCallbackRuntimeSource(
+  callbackBody: string,
+  interpolationContext: JsValueInterpolationRuntimeContext,
+): string {
+  return buildJsValueInterpolatedSource(callbackBody, interpolationContext, {
     localIdentifiers: JS_LIST_CALLBACK_LOCAL_NAMES,
   });
 }
 
 function sanitizeJSListError(error: unknown, callbackBody: string, nodeName: string): Error {
-  const { inputNames, inputsIdentifier } = getJSListInterpolationContext(callbackBody);
+  const interpolationContext = getJSListInterpolationContext(callbackBody);
   const fallbackLabel = `${nodeName} input`;
 
-  return sanitizeGeneratedJsValueError(error, inputNames, inputsIdentifier, fallbackLabel);
+  return sanitizeGeneratedJsValueError(
+    error,
+    interpolationContext.inputNames,
+    interpolationContext.inputsIdentifier,
+    fallbackLabel,
+    [
+      interpolationContext.cloneCacheIdentifier,
+      interpolationContext.contextIdentifier,
+      interpolationContext.graphInputsIdentifier,
+      interpolationContext.interpolationHelperIdentifier,
+    ],
+  );
 }
 
 export function buildJSFilterWrapper(callbackBody: string): string {
   const interpolationContext = getJSListInterpolationContext(callbackBody);
-  const { inputsIdentifier } = interpolationContext;
-  const callbackBodySource = buildJSListCallbackRuntimeSource(callbackBody, inputsIdentifier);
+  const callbackBodySource = buildJSListCallbackRuntimeSource(callbackBody, interpolationContext);
 
   return dedent`
     ${buildJSListRuntimePreamble(interpolationContext)}
@@ -123,8 +138,7 @@ export function buildJSFilterWrapper(callbackBody: string): string {
 
 export function buildJSMapWrapper(callbackBody: string): string {
   const interpolationContext = getJSListInterpolationContext(callbackBody);
-  const { inputsIdentifier } = interpolationContext;
-  const callbackBodySource = buildJSListCallbackRuntimeSource(callbackBody, inputsIdentifier);
+  const callbackBodySource = buildJSListCallbackRuntimeSource(callbackBody, interpolationContext);
 
   return dedent`
     ${buildJSListRuntimePreamble(interpolationContext)}
@@ -181,7 +195,8 @@ export function getJSListEditors<T extends ChartNode>(): EditorDefinition<T>[] {
       type: 'code',
       label: 'Callback Body',
       helperMessage: '(item, index, array) => {',
-      postEditorHelperMessage: '};\n\n//Use {{var}} to create input ports that evaluate as connected values.',
+      postEditorHelperMessage:
+        '};\n\n//Use {{var}} to create input ports. {{config.limit.max}} creates only config; {{item.name}} and {{array[0]}} use callback locals.',
       dataKey: 'callbackBody',
       language: 'javascript',
       interpolationSyntax: 'js-value',
@@ -245,7 +260,10 @@ export async function runJSListNodeCode({
     const outputs = await context.codeRunner.runCode(
       buildWrapper(callbackBody),
       inputs,
-      JS_LIST_CODE_RUNNER_OPTIONS,
+      getJsValueInterpolationCodeRunnerOptions(
+        JS_LIST_CODE_RUNNER_OPTIONS,
+        getJSListInterpolationContext(callbackBody),
+      ),
       context.graphInputNodeValues,
       context.contextValues,
     );

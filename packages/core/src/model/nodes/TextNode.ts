@@ -11,8 +11,7 @@ import { nodeDefinition } from '../NodeDefinition.js';
 import { type DataValue } from '../DataValue.js';
 import { type EditorDefinition, type NodeBodySpec } from '../../index.js';
 import { dedent } from 'ts-dedent';
-import { coerceTypeOptional } from '../../utils/coerceType.js';
-import { extractInterpolationVariables, interpolate } from '../../utils/interpolation.js';
+import { extractInterpolationVariableReferences, interpolate } from '../../utils/interpolation.js';
 import { createInterpolationInputDefinition } from '../interpolationInputDefinition.js';
 import { buildNodeBodyPreview } from './nodeBodyPreview.js';
 
@@ -45,15 +44,13 @@ export class TextNodeImpl extends NodeImpl<TextNode> {
 
   getInputDefinitions(): NodeInputDefinition[] {
     // Extract inputs from text, everything like {{input}}
-    const inputNames = extractInterpolationVariables(this.data.text);
-    return (
-      inputNames?.map((inputName) =>
-        createInterpolationInputDefinition({
-          interpolationName: inputName,
-          dataType: 'string',
-          required: false,
-        }),
-      ) ?? []
+    const inputReferences = extractInterpolationVariableReferences(this.data.text);
+    return inputReferences.map(({ baseName, hasPath }) =>
+      createInterpolationInputDefinition({
+        interpolationName: baseName,
+        dataType: hasPath ? 'any' : 'string',
+        required: false,
+      }),
     );
   }
 
@@ -101,21 +98,12 @@ export class TextNodeImpl extends NodeImpl<TextNode> {
   }
 
   async process(inputs: Record<string, DataValue>, context: any): Promise<Record<string, DataValue>> {
-    const inputMap = Object.keys(inputs).reduce(
-      (acc, key) => {
-        const stringValue = coerceTypeOptional(inputs[key], 'string') ?? '';
-
-        acc[key] = stringValue;
-        return acc;
-      },
-      {} as Record<string, string>,
-    );
-
     let outputValue = interpolate(
       this.chartNode.data.text,
-      inputMap,
+      inputs,
       context.graphInputNodeValues, // Pass graph inputs
       context.contextValues, // Pass context values
+      { coerceBareVariableDataValues: true },
     );
 
     if (this.chartNode.data.normalizeLineEndings) {

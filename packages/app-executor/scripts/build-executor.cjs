@@ -19,6 +19,7 @@ const resolveRivet = {
 
 async function main() {
   const [{ execaCommand }, { default: chalk }] = await Promise.all([import('execa'), import('chalk')]);
+  const interpolationRuntimeSource = await buildInterpolationRuntimeSource();
 
   console.log(`Bundling to ${chalk.cyan('bin/executor-bundle.cjs')}...`);
 
@@ -33,6 +34,7 @@ async function main() {
     target: 'node16',
     define: {
       'import.meta.url': '__filename',
+      __RIVET_CODE_INTERPOLATION_RUNTIME_SOURCE__: JSON.stringify(interpolationRuntimeSource),
     },
     external: [],
     plugins: [resolveRivet],
@@ -88,6 +90,23 @@ async function main() {
   }
 
   console.log(`Copied ${chalk.cyan(platformParams.from)} to ${chalk.cyan(destinations.join(', '))} for tauri sidecar`);
+}
+
+async function buildInterpolationRuntimeSource() {
+  const result = await esbuild.build({
+    entryPoints: ['../core/src/interpolationRuntime.ts'],
+    bundle: true,
+    format: 'cjs',
+    platform: 'node',
+    target: 'node16',
+    write: false,
+  });
+  const output = result.outputFiles?.[0]?.text;
+  if (!output) {
+    throw new Error('Could not bundle the Core interpolation runtime for the executor worker.');
+  }
+
+  return output;
 }
 
 main().catch((error) => {

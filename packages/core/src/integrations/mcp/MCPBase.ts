@@ -1,11 +1,12 @@
 import type { EditorDefinition } from '../../model/EditorDefinition.js';
+import type { DataValue } from '../../model/DataValue.js';
 import type { Inputs } from '../../model/GraphProcessor.js';
+import { createInterpolationInputDefinition } from '../../model/interpolationInputDefinition.js';
 import type { ChartNode, NodeInputDefinition, PortId } from '../../model/NodeBase.js';
 import type { InternalProcessContext } from '../../model/ProcessContext.js';
 import type { RivetUIContext } from '../../model/RivetUIContext.js';
-import { coerceTypeOptional } from '../../utils/coerceType.js';
 import { getInputOrData } from '../../utils/inputs.js';
-import { interpolate } from '../../utils/interpolation.js';
+import { extractInterpolationVariables, interpolate } from '../../utils/interpolation.js';
 import { keys } from '../../utils/typeSafety.js';
 import { MCPError, MCPErrorType, type MCP, type MCPProvider } from './MCPProvider.js';
 import { getServerHelperMessage, getServerOptions, loadMCPConfiguration } from './MCPUtils.js';
@@ -199,14 +200,32 @@ export async function resolveMCPServer(
   return undefined;
 }
 
-export function interpolateMCPArgumentTemplate(template: string, inputs: Inputs): string {
-  const values: Record<string, string> = {};
+export function interpolateMCPArgumentTemplate(
+  template: string,
+  inputs: Inputs,
+  graphInputValues?: Record<string, DataValue>,
+  contextValues?: Record<string, DataValue>,
+): string {
+  const values: Record<string, DataValue | undefined> = {};
 
   for (const key of keys(inputs)) {
-    if (key.startsWith('input')) {
-      values[key.slice('input-'.length)] = coerceTypeOptional(inputs[key], 'string') ?? '';
+    if (key.startsWith('input-')) {
+      values[key.slice('input-'.length)] = inputs[key];
     }
   }
 
-  return interpolate(template, values);
+  return interpolate(template, values, graphInputValues, contextValues, {
+    coerceBareVariableDataValues: true,
+  });
+}
+
+export function getMCPArgumentTemplateInputs(template: string | undefined): NodeInputDefinition[] {
+  return extractInterpolationVariables(template ?? '').map((interpolationName) =>
+    createInterpolationInputDefinition({
+      id: `input-${interpolationName}` as PortId,
+      interpolationName,
+      dataType: 'any',
+      required: false,
+    }),
+  );
 }

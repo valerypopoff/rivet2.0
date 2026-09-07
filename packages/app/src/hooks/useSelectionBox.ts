@@ -1,5 +1,6 @@
 import { useState } from 'react';
-import type { ChartNode, NodeId } from '@valerypopoff/rivet2-core';
+import type { ChartNode, NodeId, NodeConnection } from '@valerypopoff/rivet2-core';
+import { getBoxedConnectionBends } from '../domain/graphEditing/connectionBendSelection.js';
 import { DEFAULT_CANVAS_NODE_HEIGHT_ESTIMATE } from './canvasVisibilityBounds.js';
 
 export interface SelectionBox {
@@ -8,6 +9,7 @@ export interface SelectionBox {
   width: number;
   height: number;
   baseSelectedNodeIds: NodeId[];
+  baseSelectedBends: string[];
 }
 
 export function mergeSelectionBoxNodeIds(
@@ -21,11 +23,22 @@ function areSameNodeIdSet(left: readonly NodeId[], right: readonly NodeId[]): bo
   return left.length === right.length && left.every((nodeId) => right.includes(nodeId));
 }
 
-export function useSelectionBox() {
+export function useSelectionBox(
+  connections: readonly NodeConnection[] = [],
+  selectedBends: string[] = [],
+  setSelectedBends?: (keys: string[]) => void,
+) {
   const [selectionBox, setSelectionBox] = useState<SelectionBox | null>(null);
 
   const startSelectionBox = (clientX: number, clientY: number, baseSelectedNodeIds: readonly NodeId[]) => {
-    setSelectionBox({ x: clientX, y: clientY, width: 0, height: 0, baseSelectedNodeIds: [...baseSelectedNodeIds] });
+    setSelectionBox({
+      x: clientX,
+      y: clientY,
+      width: 0,
+      height: 0,
+      baseSelectedNodeIds: [...baseSelectedNodeIds],
+      baseSelectedBends: [...selectedBends],
+    });
   };
 
   const updateSelectionBox = (
@@ -57,6 +70,15 @@ export function useSelectionBox() {
 
     const canvasStartPoint = clientToCanvasPosition(topLeft.x, topLeft.y);
     const canvasEndPoint = clientToCanvasPosition(bottomRight.x, bottomRight.y);
+    const nextBends = [
+      ...new Set([
+        ...selectionBox.baseSelectedBends,
+        ...getBoxedConnectionBends(connections, canvasStartPoint, canvasEndPoint),
+      ]),
+    ];
+    if (nextBends.length !== selectedBends.length || nextBends.some((key) => !selectedBends.includes(key))) {
+      setSelectedBends?.(nextBends);
+    }
 
     const nodesInBox = nodes.filter((node) => {
       const nodeWidth = node.visualData.width ?? 150;

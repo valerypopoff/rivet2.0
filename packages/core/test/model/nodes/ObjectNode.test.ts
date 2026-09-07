@@ -187,6 +187,39 @@ describe('ObjectNodeImpl', () => {
     });
   });
 
+  it('uses one base input to insert a JSONPath-selected nested value with its original type', async () => {
+    const node = createNode({ jsonTemplate: `{"selected": {{payload.records[0].value}}}` });
+    const result = await node.process(
+      {
+        payload: {
+          type: 'object',
+          value: {
+            records: [
+              {
+                value: {
+                  type: 'ordinary-json',
+                  value: 42,
+                },
+              },
+            ],
+          },
+        },
+      },
+      ctx,
+    );
+
+    assert.deepStrictEqual(result.output.value, {
+      selected: {
+        type: 'ordinary-json',
+        value: 42,
+      },
+    });
+    assert.deepStrictEqual(
+      node.getInputDefinitions().map(({ id, dataType }) => ({ id, dataType })),
+      [{ id: 'payload', dataType: 'any' }],
+    );
+  });
+
   it('allows variables to be used multiple times, both escaped and unescaped', async () => {
     const node = createNode({
       jsonTemplate: `{
@@ -267,6 +300,24 @@ describe('ObjectNodeImpl', () => {
     assert.deepStrictEqual(result['output'].value, {
       literal: '{{foo}}',
       actual: 'B',
+    });
+  });
+
+  it('does not reinterpret escaped-token syntax supplied by an interpolated value', async () => {
+    const node = createNode({
+      jsonTemplate: `{"triple":"{{triple}}","backslash":"{{backslash}}"}`,
+    });
+    const result = await node.process(
+      {
+        triple: { type: 'string', value: '{{{bar}}}' },
+        backslash: { type: 'string', value: '\\{\\{bar\\}\\}' },
+      },
+      ctx,
+    );
+
+    assert.deepStrictEqual(result['output'].value, {
+      triple: '{{{bar}}}',
+      backslash: '\\{\\{bar\\}\\}',
     });
   });
 });

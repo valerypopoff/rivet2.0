@@ -22,6 +22,7 @@ import { createCodeRunnerRequire } from '../src/native/codeRunnerRequire.js';
 import {
   buildNodeCodeRunnerInvocation,
   compileNodeCodeRunnerFunction,
+  type CodeInterpolationResolver,
   type NodeCodeRunnerFunction,
 } from '../src/native/nodeCodeRunnerInvocation.js';
 
@@ -146,6 +147,7 @@ class ProfilingCachedNodeCodeRunner implements CodeRunner {
     totalMs: 0,
   };
   private readonly runtimeRequire = createCodeRunnerRequire();
+  private interpolationResolverPromise: Promise<CodeInterpolationResolver> | undefined;
   private rivetModulePromise: Promise<unknown> | undefined;
 
   getProfile(): CodeRunnerProfile {
@@ -170,6 +172,7 @@ class ProfilingCachedNodeCodeRunner implements CodeRunner {
       contextValues,
       graphInputs,
       inputs,
+      loadInterpolationResolver: () => this.loadInterpolationResolver(),
       loadRivet: () => this.loadRivet(),
       options,
       runtimeRequire: this.runtimeRequire,
@@ -236,6 +239,24 @@ class ProfilingCachedNodeCodeRunner implements CodeRunner {
     } catch (error) {
       if (this.rivetModulePromise === promise) {
         this.rivetModulePromise = undefined;
+      }
+      throw error;
+    }
+  }
+
+  private async loadInterpolationResolver(): Promise<CodeInterpolationResolver> {
+    const promise =
+      this.interpolationResolverPromise ??
+      import('@valerypopoff/rivet2-core/interpolation-runtime').then(
+        ({ resolveCodeInterpolationExpression }) => resolveCodeInterpolationExpression,
+      );
+    this.interpolationResolverPromise = promise;
+
+    try {
+      return await promise;
+    } catch (error) {
+      if (this.interpolationResolverPromise === promise) {
+        this.interpolationResolverPromise = undefined;
       }
       throw error;
     }

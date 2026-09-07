@@ -14,10 +14,9 @@ import { type EditorDefinition } from '../EditorDefinition.js';
 import type { InternalProcessContext } from '../ProcessContext.js';
 import {
   extractInterpolationVariables,
-  findInterpolationTokenSpans,
-  getInterpolationTokenName,
+  parseInterpolationTemplate,
   protectEscapedInterpolationTokens,
-  resolveExpressionRawValue,
+  resolveInterpolationExpressionRawValue,
   restoreEscapedInterpolationTokens,
   unwrapPotentialDataValue,
 } from '../../utils/interpolation.js';
@@ -162,21 +161,22 @@ export class ObjectNodeImpl extends NodeImpl<ObjectNode> {
 
   interpolate(
     baseString: string,
-    values: Record<string, any>,
+    values: Record<string, unknown>,
     graphInputNodeValues?: Record<string, DataValue>,
     contextValues?: Record<string, DataValue>,
   ): string {
     const protectedBaseString = protectEscapedInterpolationTokens(baseString);
-    const tokenSpans = findInterpolationTokenSpans(protectedBaseString);
+    const parsedTemplate = parseInterpolationTemplate(protectedBaseString);
 
-    if (tokenSpans.length === 0) {
+    if (parsedTemplate.tokens.length === 0) {
       return restoreEscapedInterpolationTokens(protectedBaseString);
     }
 
     let result = '';
     let cursor = 0;
 
-    for (const tokenSpan of tokenSpans) {
+    for (const token of parsedTemplate.tokens) {
+      const tokenSpan = token.span;
       const isInsideString = isInsideJsonString(protectedBaseString, tokenSpan.start);
       const isWholeQuotedToken =
         isInsideString &&
@@ -184,26 +184,19 @@ export class ObjectNodeImpl extends NodeImpl<ObjectNode> {
         isUnescapedQuoteAt(protectedBaseString, tokenSpan.end);
       const replacementStart = isWholeQuotedToken ? tokenSpan.start - 1 : tokenSpan.start;
       const replacementEnd = isWholeQuotedToken ? tokenSpan.end + 1 : tokenSpan.end;
-      const trimmedKey = getInterpolationTokenName(tokenSpan.rawInner) ?? tokenSpan.rawInner.trim();
+      const value = token.reference
+        ? resolveInterpolationExpressionRawValue(token.reference, {
+            variables: values,
+            graphInputValues: graphInputNodeValues,
+            contextValues,
+            unwrapVariableDataValues: false,
+          })
+        : undefined;
 
-      let value: any;
-
-      const graphInputPrefix = '@graphInputs.';
-      const contextPrefix = '@context.';
-
-      if (trimmedKey.startsWith(graphInputPrefix) && graphInputNodeValues) {
-        value = resolveExpressionRawValue(
-          graphInputNodeValues,
-          trimmedKey.substring(graphInputPrefix.length),
-          'graphInputs',
-        );
-      } else if (trimmedKey.startsWith(contextPrefix) && contextValues) {
-        value = resolveExpressionRawValue(contextValues, trimmedKey.substring(contextPrefix.length), 'context');
-      } else {
-        value = values[trimmedKey]; // Original logic for non-@ variables
-      }
-
-      result += protectedBaseString.slice(cursor, replacementStart);
+      // Restore escaped delimiters only from the authored JSON template. An
+      // interpolated string may itself contain literal interpolation syntax and
+      // must not be processed again while the final JSON is assembled.
+      result += restoreEscapedInterpolationTokens(protectedBaseString.slice(cursor, replacementStart));
 
       if (isInsideString && !isWholeQuotedToken) {
         result += stringifyEmbeddedJsonStringFragment(value);
@@ -216,9 +209,9 @@ export class ObjectNodeImpl extends NodeImpl<ObjectNode> {
       cursor = replacementEnd;
     }
 
-    result += protectedBaseString.slice(cursor);
+    result += restoreEscapedInterpolationTokens(protectedBaseString.slice(cursor));
 
-    return restoreEscapedInterpolationTokens(result);
+    return result;
   }
 
   async process(
@@ -230,7 +223,7 @@ export class ObjectNodeImpl extends NodeImpl<ObjectNode> {
         acc[key] = unwrapPotentialDataValue(inputs[key]);
         return acc;
       },
-      {} as Record<string, any>,
+      {} as Record<string, unknown>,
     );
 
     const interpolatedString = this.interpolate(

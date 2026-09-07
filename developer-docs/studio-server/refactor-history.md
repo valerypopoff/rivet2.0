@@ -58,7 +58,7 @@ After the workflow, static-contract, managed-storage, Playwright, and style-guar
 ### Ownership
 
 - Retired or merged-away suites remain deleted: `workflow-services.test.ts`, `workflow-publication.test.ts`, `phase4-static-contract.test.ts`, and `managed-backend-sql.test.ts`.
-- `scripts/verify-test-style.mjs` remains the cheap guard that prevents those suite names and hidden nested test files from returning.
+- `deploy/studio-server/scripts/verify-test-style.mjs` remains the cheap guard that prevents those suite names and hidden nested test files from returning.
 - Shared test helpers should keep active call sites. Do not keep an unused helper as a placeholder for possible future suites; add it back when a real second call site appears.
 
 ### Verification To Preserve
@@ -115,7 +115,7 @@ After the workflow and static-contract suite split, the next failure mode was co
 
 ### Ownership
 
-- `scripts/verify-test-style.mjs` owns test command manifests and style guardrails.
+- `deploy/studio-server/scripts/verify-test-style.mjs` owns test command manifests and style guardrails.
 - Root `yarn studio-server:test` must compose the non-browser repo-local gate after the standard `pretest` dependency bootstrap: API build, default API tests, pure web tests, test-style guardrails, repo-structure guardrails, and Kubernetes launcher/chart contracts.
 - The default API test command must list every non-Kubernetes API test exactly once.
 - `verify:web-pure` must list every pure web test exactly once.

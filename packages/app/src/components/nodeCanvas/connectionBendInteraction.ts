@@ -8,16 +8,6 @@ export type ConnectionBendClickStart = {
   clientY: number;
 };
 
-export type DraggingConnectionBend = {
-  connection: NodeConnection;
-  connectionKey: string;
-  hasMoved: boolean;
-  point: ConnectionBendPoint;
-  startClientX: number;
-  startClientY: number;
-};
-
-export const CONNECTION_BEND_DRAG_THRESHOLD_PX = 2;
 export const CONNECTION_BEND_CLICK_THRESHOLD_PX = 5;
 
 export function getGhostConnectionBendPoint({
@@ -59,31 +49,6 @@ export function shouldCommitConnectionBendClick({
 
   return (
     clickStart.connectionKey === connectionKey &&
-    Math.hypot(clientX - clickStart.clientX, clientY - clickStart.clientY) <
-      CONNECTION_BEND_CLICK_THRESHOLD_PX
+    Math.hypot(clientX - clickStart.clientX, clientY - clickStart.clientY) < CONNECTION_BEND_CLICK_THRESHOLD_PX
   );
-}
-
-export function updateConnectionBendDrag({
-  clientX,
-  clientY,
-  drag,
-  point,
-}: {
-  clientX: number;
-  clientY: number;
-  drag: DraggingConnectionBend;
-  point: ConnectionBendPoint;
-}): DraggingConnectionBend | undefined {
-  const hasMoved =
-    drag.hasMoved ||
-    Math.hypot(clientX - drag.startClientX, clientY - drag.startClientY) >= CONNECTION_BEND_DRAG_THRESHOLD_PX;
-
-  return hasMoved
-    ? {
-        ...drag,
-        hasMoved,
-        point,
-    }
-    : undefined;
 }

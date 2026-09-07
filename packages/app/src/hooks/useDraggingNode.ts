@@ -1,9 +1,11 @@
 import { type DragStartEvent, type DragEndEvent, type DragMoveEvent } from '@dnd-kit/core';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { type ChartNode, type NodeId } from '@valerypopoff/rivet2-core';
+import { getProjectConnectionComparisonKey, type ChartNode, type NodeId } from '@valerypopoff/rivet2-core';
+import { connectionBendSelectionScopeState, selectedConnectionBendsState } from '../state/connectionBends.js';
+import { offsetConnectionBends, type ConnectionBendMove } from '../domain/graphEditing/connectionBendSelection.js';
 import { useAtomValue, useSetAtom } from 'jotai';
 import { canvasPositionState, selectedNodesState } from '../state/graphBuilder.js';
-import { nodesByIdState, nodesState } from '../state/graph.js';
+import { nodesByIdState, nodesState, connectionsState, isReadOnlyGraphState } from '../state/graph.js';
 import { useMoveNodeCommand } from '../commands/moveNodeCommand';
 import { useDuplicateNodesCommand } from '../commands/duplicateNodesCommand.js';
 import { duplicateNodesWithConnections } from '../domain/graphEditing/nodeActions.js';
@@ -73,6 +75,14 @@ function bringNodesToFront(nodes: ChartNode[], nodeIdsToFront: NodeId[]): ChartN
 
 export const useDraggingNode = (options: UseDraggingNodeOptions = {}) => {
   const selectedNodeIds = useAtomValue(selectedNodesState);
+  const selectedBends = useAtomValue(selectedConnectionBendsState);
+  const setSelectedBends = useSetAtom(selectedConnectionBendsState);
+  const connections = useAtomValue(connectionsState);
+  const selectionScope = useAtomValue(connectionBendSelectionScopeState);
+  const isReadOnly = useAtomValue(isReadOnlyGraphState);
+  const bendStartsRef = useRef<ConnectionBendMove[]>([]);
+  const bendActivatorRef = useRef(false);
+  const dragScopeRef = useRef(selectionScope);
   const setSelectedNodeIds = useSetAtom(selectedNodesState);
   const canvasPosition = useAtomValue(canvasPositionState);
   const graphNodes = useAtomValue(nodesState);
@@ -145,6 +155,8 @@ export const useDraggingNode = (options: UseDraggingNodeOptions = {}) => {
   }, []);
 
   const resetDragSession = useCallback(() => {
+    bendStartsRef.current = [];
+    bendActivatorRef.current = false;
     lastDragActivatorAltRef.current = false;
     lastDragActivatorCommentEnclosureRef.current = false;
     lastDragActivatorHoverControlsVisibleRef.current = false;
@@ -217,7 +229,7 @@ export const useDraggingNode = (options: UseDraggingNodeOptions = {}) => {
     }
 
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (duplicateDragEnabled && shouldUseDuplicateDragModeOnKeyDown(event)) {
+      if (duplicateDragEnabled && !bendActivatorRef.current && shouldUseDuplicateDragModeOnKeyDown(event)) {
         setSessionDragMode('duplicate');
       }
 
@@ -301,24 +313,54 @@ export const useDraggingNode = (options: UseDraggingNodeOptions = {}) => {
 
   const onNodeStartDrag = useCallback(
     (e: DragStartEvent) => {
+      if (graphCommandsEnabled && isReadOnly) return;
+      const bendKey = e.active.data.current?.connectionBendKey as string | undefined;
+      bendActivatorRef.current = !!bendKey;
+      dragScopeRef.current = selectionScope;
+      const isSelectedBend = !!bendKey && selectedBends.includes(bendKey);
+      const bendKeys = bendKey && !isSelectedBend ? [bendKey] : selectedBends;
+      bendStartsRef.current = graphCommandsEnabled
+        ? connections.flatMap((connection) => {
+            if (excludedNodeIds?.has(connection.inputNodeId) || excludedNodeIds?.has(connection.outputNodeId))
+              return [];
+            const connectionKey = getProjectConnectionComparisonKey(connection);
+            return connection.bendPoint && bendKeys.includes(connectionKey)
+              ? [{ connectionKey, position: { ...connection.bendPoint } }]
+              : [];
+          })
+        : [];
       const draggedNodeId = e.active.id as NodeId;
-      const baseDraggedNodeIds = resolveDraggedNodeIds(selectedNodeIds, draggedNodeId);
+      const baseDraggedNodeIds = bendKey
+        ? isSelectedBend
+          ? selectedNodeIds
+          : []
+        : resolveDraggedNodeIds(selectedNodeIds, draggedNodeId);
       baseDraggedSourceNodeIdsRef.current = baseDraggedNodeIds;
       const { sourceNodes } = updateDragSourceNodes(baseDraggedNodeIds, lastDragActivatorCommentEnclosureRef.current);
-      if (sourceNodes.length === 0) {
+      if (sourceNodes.length === 0 && bendStartsRef.current.length === 0) {
         resetDragSession();
         return;
       }
 
       dragIncludesCommentRef.current = sourceNodes.some((node) => node.type === 'comment');
-      isShiftDragConstraintEnabledRef.current = lastDragActivatorShiftRef.current;
+      isShiftDragConstraintEnabledRef.current = bendKey
+        ? !!e.active.data.current?.shiftKey
+        : lastDragActivatorShiftRef.current;
       lastDragDeltaRef.current = { x: 0, y: 0 };
       setSessionDragAxisLock(undefined);
-      setSessionDragMode(duplicateDragEnabled ? resolveDragModeFromAlt(lastDragActivatorAltRef.current) : 'move');
+      setSessionDragMode(
+        duplicateDragEnabled && !bendKey ? resolveDragModeFromAlt(lastDragActivatorAltRef.current) : 'move',
+      );
       setIsDragActive(true);
     },
     [
       duplicateDragEnabled,
+      connections,
+      excludedNodeIds,
+      graphCommandsEnabled,
+      selectionScope,
+      isReadOnly,
+      selectedBends,
       resetDragSession,
       selectedNodeIds,
       setSessionDragAxisLock,
@@ -335,7 +377,7 @@ export const useDraggingNode = (options: UseDraggingNodeOptions = {}) => {
       };
 
       lastDragDeltaRef.current = nextDelta;
-      if (dragIncludesCommentRef.current) {
+      if (dragIncludesCommentRef.current || bendStartsRef.current.length > 0) {
         setDragDelta(nextDelta);
       }
       setSessionDragAxisLock(
@@ -364,6 +406,8 @@ export const useDraggingNode = (options: UseDraggingNodeOptions = {}) => {
       const initialPositions = startPositionsRef.current;
 
       try {
+        if (graphCommandsEnabled && (isReadOnly || dragScopeRef.current !== selectionScope)) return;
+        if (actualDelta.x === 0 && actualDelta.y === 0) return;
         if (finalDragMode === 'duplicate') {
           if (sourceNodeIds.length === 0) {
             return;
@@ -377,7 +421,12 @@ export const useDraggingNode = (options: UseDraggingNodeOptions = {}) => {
               delta: actualDelta,
             });
 
-            controlledOnNodesChanged(bringNodesToFront([...nodes, ...newNodes], newNodes.map((node) => node.id)));
+            controlledOnNodesChanged(
+              bringNodesToFront(
+                [...nodes, ...newNodes],
+                newNodes.map((node) => node.id),
+              ),
+            );
             setSelectedNodeIds(newNodes.map((node) => node.id));
             return;
           }
@@ -386,11 +435,12 @@ export const useDraggingNode = (options: UseDraggingNodeOptions = {}) => {
             nodeIds: sourceNodeIds,
             delta: actualDelta,
           });
+          setSelectedBends([]);
 
           return;
         }
 
-        if (sourceNodeIds.length === 0) {
+        if (sourceNodeIds.length === 0 && bendStartsRef.current.length === 0) {
           return;
         }
 
@@ -419,6 +469,7 @@ export const useDraggingNode = (options: UseDraggingNodeOptions = {}) => {
         }
 
         moveNode({
+          bendMoves: offsetConnectionBends(bendStartsRef.current, actualDelta),
           moves: sourceNodeIds.map((nodeId) => {
             const initialPosition = initialPositions.get(nodeId);
             if (!initialPosition) {
@@ -441,6 +492,9 @@ export const useDraggingNode = (options: UseDraggingNodeOptions = {}) => {
     },
     [
       canvasPosition.zoom,
+      selectionScope,
+      isReadOnly,
+      setSelectedBends,
       controlledOnNodesChanged,
       duplicateNodes,
       graphCommandsEnabled,
@@ -457,6 +511,17 @@ export const useDraggingNode = (options: UseDraggingNodeOptions = {}) => {
   }, [resetDragSession]);
 
   return {
+    isDragActive,
+    draggingBendMoves:
+      dragMode === 'move'
+        ? offsetConnectionBends(
+            bendStartsRef.current,
+            constrainDragDeltaToAxisLock(
+              { x: dragDelta.x / canvasPosition.zoom, y: dragDelta.y / canvasPosition.zoom },
+              dragAxisLock,
+            ),
+          )
+        : [],
     dragAxisLock,
     dragDelta,
     dragMode,

@@ -23,6 +23,10 @@ export class NodeCodeRunner implements CodeRunner {
       executionEnvironment: this.executionEnvironment,
       graphInputs,
       inputs,
+      loadInterpolationResolver: async () => {
+        const { resolveCodeInterpolationExpression } = await import('@valerypopoff/rivet2-core/interpolation-runtime');
+        return resolveCodeInterpolationExpression;
+      },
       loadRivet: () => import('@valerypopoff/rivet2-node'),
       options,
       runtimeRequire: this.runtimeRequire,

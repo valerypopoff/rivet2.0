@@ -16,6 +16,9 @@ At a high level:
 5. `@valerypopoff/rivet-app-executor` is the Node sidecar used by the desktop app.
 6. `@valerypopoff/rivet2-evaluations` provides graph-oriented testing utilities and serialization.
 7. `packages/docs` is the Docusaurus documentation site.
+8. Five private Studio Server workspaces own the dashboard and hosted editor,
+   API/publication/storage, executor bootstrap, and shared host contracts.
+   They consume the same Core, Node, Evaluations, and app host surfaces.
 
 ## Workspace Layout
 
@@ -27,7 +30,13 @@ packages/
   core/           Runtime engine, graph model, built-in nodes/plugins
   docs/           Docusaurus site
   node/           Node integration library
-  evaluations/         Test-runner package
+  evaluations/    Portable evaluation engine and store/transfer contracts
+  studio-server-api/        Hosted control, execution, and evaluation API profiles
+  studio-server-web/        Dashboard and iframe-hosted editor
+  studio-server-executor/   Hosted app-executor bootstrap
+  studio-server-shared/     Browser/server host contracts
+  studio-server-bootstrap/  Server/executor runtime initialization
+deploy/studio-server/       Images, Compose, Helm, launchers and deployment checks
 developer-docs/   These internal docs
 refactor-history.md  Consolidated record of completed refactors and residual watchlist
 .github/         CI workflows and release scripts
@@ -52,6 +61,15 @@ Important implications:
 - `node`, `app`, `app-executor`, and `evaluations` all rely on `core` concepts and types.
 - `cli` is not an independent runtime; it is a thin operational layer over `rivet-node`.
 - the app uses both `core` directly and the sidecar protocol indirectly.
+
+The diagram above is the shared runtime subset, not the complete workspace graph.
+Studio Server API consumes Node/Core; its web workspace consumes the app host and
+Evaluations; its executor starts the shared app-executor with hosted adapters.
+Shared/bootstrap packages carry host contracts and initialization. See
+[Studio Server architecture](./studio-server/architecture.md) for the control,
+published-execution, and optional evaluation-worker process boundaries.
+`yarn build` and `yarn test` cover the shared Rivet package set; their `:all`
+aliases do not add Studio Server, the docs site build, or browser/deployment gates.
 
 ## Main Architectural Layers
 
@@ -110,11 +128,11 @@ These packages expose the runtime in different ways rather than redefining it.
 
 ## Execution Model
 
-There are three execution contexts worth distinguishing:
+Distinguish execution runtime from the shell that hosts it:
 
 ### Browser execution
 
-Used by the desktop app when the live `selectedExecutorState` is `browser`.
+Used by the desktop or hosted app when the live `selectedExecutorState` is `browser`.
 
 - runs `GraphProcessor` in-process inside the app
 - uses browser/Tauri-facing adapters
@@ -189,6 +207,12 @@ Used by `rivet-node`, `rivet-cli`, and external Node consumers.
 - runs `GraphProcessor` directly in Node
 - uses Node-native providers like `NodeNativeApi`, `NodeCodeRunner`, and `NodeProjectReferenceLoader`
 - can optionally attach a debugger server
+
+Studio Server published/latest endpoints are also headless Node consumers, with
+host-owned storage, admission, environment, CodeRunner, and recording adapters.
+They are not the editor's Node sidecar. A loaded recording is replay, not another
+live executor choice: its owning project controls playback UI, and other tabs
+retain their live execution mode. See [Execution Data Flow](./EXECUTION-DATA-FLOW.md).
 
 ## Cross-Cutting Concepts
 

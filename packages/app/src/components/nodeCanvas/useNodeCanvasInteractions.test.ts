@@ -163,7 +163,7 @@ test('canvas panning uses the same closed-hand cursor treatment as node dragging
   const nodeCanvasStylesSource = readFileSync(join(testDir, 'nodeCanvasStyles.ts'), 'utf8');
 
   assert.match(nodeCanvasSource, /className=\{clsx\('node-canvas', \{/);
-  assert.match(nodeCanvasSource, /'dragging-node': isDraggingNode/);
+  assert.match(nodeCanvasSource, /'dragging-node': isDraggingCanvasItem/);
   assert.match(nodeCanvasSource, /'dragging-canvas': isDraggingCanvas/);
   assert.match(
     nodeCanvasStylesSource,
@@ -209,7 +209,10 @@ test('non-graph canvases keep drag, resize, and alignment commands out of graph 
   assert.match(nodeLibraryBuilderSource, /createPastedNodeLibraryPrefabs/);
   assert.match(draggingNodeSource, /duplicateDragEnabled/);
   assert.match(draggingNodeSource, /duplicateNodesWithConnections/);
-  assert.match(draggingNodeSource, /controlledOnNodesChanged\(bringNodesToFront\(\[\.\.\.nodes, \.\.\.newNodes\]/);
+  assert.match(
+    draggingNodeSource,
+    /controlledOnNodesChanged\(\s*bringNodesToFront\(\s*\[\.\.\.nodes, \.\.\.newNodes\]/,
+  );
   assert.match(draggingNodeSource, /setSelectedNodeIds\(newNodes\.map\(\(node\) => node\.id\)\)/);
   assert.match(
     canvasHotkeysSource,

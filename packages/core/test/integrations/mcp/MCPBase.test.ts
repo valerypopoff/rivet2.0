@@ -2,6 +2,7 @@ import { strict as assert } from 'node:assert';
 import { describe, it } from 'node:test';
 import {
   getMCPBaseBody,
+  getMCPArgumentTemplateInputs,
   getMCPClientEditors,
   getMCPServerEditors,
   interpolateMCPArgumentTemplate,
@@ -152,7 +153,64 @@ void describe('MCP base behavior', () => {
     assert.equal(result, '{"greeting":"Hello Rivet"}');
   });
 
-  void it('keeps MCP Tool Call on the shared HTTP resolver', async () => {
+  void it('interpolates graph and context JSONPath roots in MCP argument templates', () => {
+    const result = interpolateMCPArgumentTemplate(
+      '{"graph":"{{@graphInputs.payload.user.name}}","context":"{{@context.settings.labels[0]}}"}',
+      {} as Inputs,
+      {
+        payload: { type: 'object', value: { user: { name: 'Ada' } } },
+      },
+      {
+        settings: { type: 'object', value: { labels: ['Primary'] } },
+      },
+    );
+
+    assert.equal(result, '{"graph":"Ada","context":"Primary"}');
+  });
+
+  void it('creates one MCP argument input per base and resolves nested values from raw input data', () => {
+    assert.deepEqual(
+      getMCPArgumentTemplateInputs('{"name":"{{payload.user.name}}","again":"{{payload.user.name}}"}').map(
+        ({ id, dataType }) => ({ id, dataType }),
+      ),
+      [{ id: 'input-payload', dataType: 'any' }],
+    );
+
+    const toolCall = MCPToolCallNodeImpl.create();
+    Object.assign(toolCall.data, {
+      toolArguments: '{"name":"{{payload.user.name}}"}',
+      useToolNameInput: false,
+      useToolArgumentsInput: false,
+      useToolCallIdInput: false,
+    });
+    assert.deepEqual(
+      new MCPToolCallNodeImpl(toolCall).getInputDefinitions().map(({ id, dataType }) => ({ id, dataType })),
+      [{ id: 'input-payload', dataType: 'any' }],
+    );
+
+    const getPrompt = MCPGetPromptNodeImpl.create();
+    Object.assign(getPrompt.data, {
+      promptArguments: '{"name":"{{payload.user.name}}"}',
+      usePromptNameInput: false,
+      usePromptArgumentsInput: false,
+    });
+    assert.deepEqual(
+      new MCPGetPromptNodeImpl(getPrompt).getInputDefinitions().map(({ id, dataType }) => ({ id, dataType })),
+      [{ id: 'input-payload', dataType: 'any' }],
+    );
+
+    assert.equal(
+      interpolateMCPArgumentTemplate('{"name":"{{payload.user.name}}","raw":{{payload}}}', {
+        'input-payload': {
+          type: 'object',
+          value: { user: { name: 'Ada' } },
+        },
+      } as Inputs),
+      '{"name":"Ada","raw":{"user":{"name":"Ada"}}}',
+    );
+  });
+
+  void it('keeps MCP Tool Call on the shared HTTP resolver and forwards interpolation namespaces', async () => {
     let invocation: unknown;
     const provider = createProvider({
       httpToolCall: async (clientConfig, serverUrl, toolCall) => {
@@ -165,7 +223,8 @@ void describe('MCP base behavior', () => {
       transportType: 'http',
       serverUrl: 'https://example.test/mcp',
       toolName: 'echo',
-      toolArguments: '{"message":"{{message}}"}',
+      toolArguments:
+        '{"message":"{{message}}","graph":"{{@graphInputs.payload.user.name}}","context":"{{@context.settings.labels[0]}}"}',
       toolCallId: 'call-1',
       useToolNameInput: false,
       useToolArgumentsInput: false,
@@ -175,16 +234,22 @@ void describe('MCP base behavior', () => {
     await new MCPToolCallNodeImpl(node).process({ 'input-message': { type: 'string', value: 'Hello' } } as Inputs, {
       ...createContext(),
       mcpProvider: provider,
+      graphInputNodeValues: {
+        payload: { type: 'object', value: { user: { name: 'Ada' } } },
+      },
+      contextValues: {
+        settings: { type: 'object', value: { labels: ['Primary'] } },
+      },
     });
 
     assert.deepEqual(invocation, {
       clientConfig: { name: 'mcp-tool-call-client', version: '1.0.0' },
       serverUrl: 'https://example.test/mcp',
-      toolCall: { name: 'echo', arguments: { message: 'Hello' } },
+      toolCall: { name: 'echo', arguments: { message: 'Hello', graph: 'Ada', context: 'Primary' } },
     });
   });
 
-  void it('keeps MCP Get Prompt on the shared STDIO resolver', async () => {
+  void it('keeps MCP Get Prompt on the shared STDIO resolver and forwards interpolation namespaces', async () => {
     let invocation: unknown;
     const provider = createProvider({
       getStdioPrompt: async (clientConfig, serverConfig, request) => {
@@ -197,7 +262,8 @@ void describe('MCP base behavior', () => {
       transportType: 'stdio',
       serverId: 'local-server',
       promptName: 'summarize',
-      promptArguments: '{"subject":"{{subject}}"}',
+      promptArguments:
+        '{"subject":"{{subject}}","graph":"{{@graphInputs.article.title}}","context":"{{@context.options.mode}}"}',
       usePromptNameInput: false,
       usePromptArgumentsInput: false,
     });
@@ -205,12 +271,21 @@ void describe('MCP base behavior', () => {
     await new MCPGetPromptNodeImpl(node).process({ 'input-subject': { type: 'string', value: 'Rivet' } } as Inputs, {
       ...createContext({ 'local-server': { command: 'node' } }),
       mcpProvider: provider,
+      graphInputNodeValues: {
+        article: { type: 'object', value: { title: 'Graph title' } },
+      },
+      contextValues: {
+        options: { type: 'object', value: { mode: 'brief' } },
+      },
     });
 
     assert.deepEqual(invocation, {
       clientConfig: { name: 'mcp-get-prompt-client', version: '1.0.0' },
       serverConfig: { serverId: 'local-server', config: { command: 'node' } },
-      request: { name: 'summarize', arguments: { subject: 'Rivet' } },
+      request: {
+        name: 'summarize',
+        arguments: { subject: 'Rivet', graph: 'Graph title', context: 'brief' },
+      },
     });
   });
 

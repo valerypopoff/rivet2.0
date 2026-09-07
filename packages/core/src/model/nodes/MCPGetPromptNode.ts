@@ -18,6 +18,7 @@ import { dedent, getInputOrData } from '../../utils/index.js';
 import { getError } from '../../utils/errors.js';
 import {
   getMCPBaseBody,
+  getMCPArgumentTemplateInputs,
   getMCPBaseInputs,
   getMCPClientEditors,
   getMCPServerEditors,
@@ -87,6 +88,8 @@ export class MCPGetPromptNodeImpl extends NodeImpl<MCPGetPromptNode> {
         id: 'promptArguments' as PortId,
         title: 'Prompt Arguments',
       });
+    } else {
+      inputs.push(...getMCPArgumentTemplateInputs(this.data.promptArguments));
     }
 
     return inputs;
@@ -121,6 +124,7 @@ export class MCPGetPromptNodeImpl extends NodeImpl<MCPGetPromptNode> {
         dataKey: 'promptArguments',
         useInputToggleDataKey: 'usePromptArgumentsInput',
         language: 'json',
+        interpolationSyntax: 'json-template',
         helperMessage: 'Arguments to provide the prompt',
         enableFolding: true,
       },
@@ -158,7 +162,14 @@ export class MCPGetPromptNodeImpl extends NodeImpl<MCPGetPromptNode> {
         throw new MCPError(MCPErrorType.INVALID_SCHEMA, 'Cannot parse tool argument with input toggle on');
       }
     } else {
-      promptArguments = JSON.parse(interpolateMCPArgumentTemplate(this.data.promptArguments ?? '', inputs));
+      promptArguments = JSON.parse(
+        interpolateMCPArgumentTemplate(
+          this.data.promptArguments ?? '',
+          inputs,
+          context.graphInputNodeValues,
+          context.contextValues,
+        ),
+      );
     }
 
     const getPromptRequest: MCP.GetPromptRequest = {

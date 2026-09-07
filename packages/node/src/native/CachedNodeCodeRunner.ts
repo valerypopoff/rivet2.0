@@ -5,6 +5,7 @@ import {
   compileNodeCodeRunnerFunction,
   createNodeCodeRunnerInvocationPlan,
   type NodeExecutionEnvironment,
+  type CodeInterpolationResolver,
   type NodeCodeRunnerFunction,
   type NodeCodeRunnerInvocationPlan,
 } from './nodeCodeRunnerInvocation.js';
@@ -42,12 +43,13 @@ function normalizeMaxEntries(maxEntries: number | undefined): number {
 
 export class CachedNodeCodeRunner implements CodeRunner {
   private readonly cacheByCode = new Map<string, Map<string, CacheEntry>>();
-  private readonly invocationPlans = new Map<number, NodeCodeRunnerInvocationPlan>();
+  private readonly invocationPlans = new Map<string, NodeCodeRunnerInvocationPlan>();
   private readonly lruEntries = new Set<CacheEntry>();
   private readonly maxEntries: number;
   private readonly runtimeRequire = createCodeRunnerRequire();
   private readonly executionEnvironment: NodeExecutionEnvironment | undefined;
   private hits = 0;
+  private interpolationResolverPromise: Promise<CodeInterpolationResolver> | undefined;
   private misses = 0;
   private rivetModulePromise: Promise<unknown> | undefined;
 
@@ -69,6 +71,7 @@ export class CachedNodeCodeRunner implements CodeRunner {
       executionEnvironment: this.executionEnvironment,
       graphInputs,
       inputs,
+      loadInterpolationResolver: () => this.loadInterpolationResolver(),
       loadRivet: () => this.loadRivet(),
       options,
       runtimeRequire: this.runtimeRequire,
@@ -172,13 +175,31 @@ export class CachedNodeCodeRunner implements CodeRunner {
       throw error;
     }
   }
+
+  private async loadInterpolationResolver(): Promise<CodeInterpolationResolver> {
+    const promise =
+      this.interpolationResolverPromise ??
+      import('@valerypopoff/rivet2-core/interpolation-runtime').then(
+        ({ resolveCodeInterpolationExpression }) => resolveCodeInterpolationExpression,
+      );
+    this.interpolationResolverPromise = promise;
+
+    try {
+      return await promise;
+    } catch (error) {
+      if (this.interpolationResolverPromise === promise) {
+        this.interpolationResolverPromise = undefined;
+      }
+      throw error;
+    }
+  }
 }
 
 function getInvocationPlanCacheKey(
   options: CodeRunnerOptions,
   hasGraphInputs: boolean,
   hasContextValues: boolean,
-): number {
+): string {
   let key = 0;
   if (options.includeConsole) {
     key |= 1 << 0;
@@ -202,5 +223,5 @@ function getInvocationPlanCacheKey(
     key |= 1 << 6;
   }
 
-  return key;
+  return `${key}\0${options.interpolationHelperIdentifier ?? ''}`;
 }

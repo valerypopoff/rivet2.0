@@ -28,7 +28,7 @@ function listCandidateDocs() {
         .split(/\r?\n/)
         .filter(Boolean)
         .map((file) => file.replaceAll('\\', '/'))
-        .filter((file) => /^developer-docs\/[^/]+\.md$/.test(file)),
+        .filter((file) => /^developer-docs\/.+\.md$/.test(file)),
     )
     .filter((file, index, files) => files.indexOf(file) === index)
     .sort();

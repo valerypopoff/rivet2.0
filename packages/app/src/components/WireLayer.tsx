@@ -9,6 +9,8 @@ import {
   useRef,
   useState,
 } from 'react';
+import { useDraggable } from '@dnd-kit/core';
+import { selectedConnectionBendsState } from '../state/connectionBends.js';
 import { createPortal } from 'react-dom';
 import {
   getProjectConnectionComparisonKey,
@@ -48,10 +50,8 @@ import { useSetConnectionBendPointCommand } from '../commands/setConnectionBendP
 import {
   getGhostConnectionBendPoint,
   shouldCommitConnectionBendClick,
-  updateConnectionBendDrag,
   type ConnectionBendClickStart,
   type ConnectionBendPoint,
-  type DraggingConnectionBend,
 } from './nodeCanvas/connectionBendInteraction.js';
 import {
   getToolContinuationWireStates,
@@ -195,7 +195,8 @@ const wiresStyles = css`
   }
 
   .wire-bend-point:hover,
-  .wire-bend-point.dragging {
+  .wire-bend-point.dragging,
+  .wire-bend-point.selected {
     fill: var(--primary);
   }
 
@@ -292,6 +293,8 @@ type WireLayerProps = {
   dataBusTopology: DataBusTopology;
   draggingWire?: WireDef;
   draggingNode: boolean;
+  draggingBend: boolean;
+  draggingBendConnectionKeys: readonly string[];
   highlightedNodes?: NodeId[];
   highlightedPort?: {
     isInput: boolean;
@@ -313,6 +316,8 @@ export const WireLayer: FC<WireLayerProps> = ({
   dataBusTopology,
   draggingWire,
   draggingNode,
+  draggingBend,
+  draggingBendConnectionKeys,
   highlightedNodes,
   highlightedPort,
   hoveredDataBusChannelKeys = [],
@@ -352,10 +357,6 @@ export const WireLayer: FC<WireLayerProps> = ({
   const [mousePosition, setMousePosition] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
   const [hoveredConnectionKey, setHoveredConnectionKey] = useState<string | undefined>();
   const [hoveredConnectionPoint, setHoveredConnectionPoint] = useState<ConnectionBendPoint | undefined>();
-  const [draggingBendPreview, setDraggingBendPreview] = useState<
-    { connectionKey: string; point: ConnectionBendPoint } | undefined
-  >();
-  const draggingBendRef = useRef<DraggingConnectionBend | undefined>();
   const wireClickStartRef = useRef<ConnectionBendClickStart | undefined>();
   const [closestPort, setClosestPort] = useAtom(draggingWireClosestPortState);
   const store = useStore();
@@ -500,12 +501,20 @@ export const WireLayer: FC<WireLayerProps> = ({
     return nextRunningNodeIdSet;
   }, [graphSelectionOptions, lastRunDataByNode]);
 
+  const forcedRenderableConnectionKeySet = useMemo(() => {
+    if (!draggingBend) {
+      return hoverRevealedDataBusConnectionKeySet;
+    }
+
+    return new Set([...hoverRevealedDataBusConnectionKeySet, ...draggingBendConnectionKeys]);
+  }, [draggingBend, draggingBendConnectionKeys, hoverRevealedDataBusConnectionKeySet]);
+
   const renderableWires = useRenderableWires({
     canvasToClientPosition,
     connections: visibleConnections,
     draggingNode,
     draggingWire: !!draggingWire,
-    forceRenderableConnectionKeySet: hoverRevealedDataBusConnectionKeySet,
+    forceRenderableConnectionKeySet: forcedRenderableConnectionKeySet,
     highlightedNodes,
     highlightedPort,
     nearViewportNodeIdSet,
@@ -536,7 +545,7 @@ export const WireLayer: FC<WireLayerProps> = ({
     };
   }, [hoverRevealedDataBusConnectionKeySet, renderableWires]);
 
-  const allowConnectionBendEditing = !isReadOnlyGraph && !draggingNode && !draggingWire;
+  const allowConnectionBendEditing = !isReadOnlyGraph && !draggingNode && !draggingBend && !draggingWire;
 
   const hoveredRenderableConnection = useMemo(() => {
     if (!hoveredConnectionKey) {
@@ -564,23 +573,11 @@ export const WireLayer: FC<WireLayerProps> = ({
   }, [hoveredConnectionKey, renderableConnectionKeySet]);
 
   useEffect(() => {
-    if (draggingNode || draggingWire) {
+    if (draggingNode || draggingBend || draggingWire) {
       setHoveredConnectionKey(undefined);
       setHoveredConnectionPoint(undefined);
     }
-  }, [draggingNode, draggingWire]);
-
-  useEffect(() => {
-    const draggingBend = draggingBendRef.current;
-    if (!draggingBend) {
-      return;
-    }
-
-    if (!renderableConnectionKeySet.has(draggingBend.connectionKey)) {
-      draggingBendRef.current = undefined;
-      setDraggingBendPreview(undefined);
-    }
-  }, [renderableConnectionKeySet]);
+  }, [draggingBend, draggingNode, draggingWire]);
 
   const handleConnectionHoverStart = useStableCallback(
     (connectionKey: string, event: ReactMouseEvent<SVGPathElement>) => {
@@ -617,13 +614,14 @@ export const WireLayer: FC<WireLayerProps> = ({
       wireClickStartRef.current = undefined;
 
       if (
+        event.shiftKey ||
         !shouldCommitConnectionBendClick({
           clickStart,
           connectionKey,
           clientX: event.clientX,
           clientY: event.clientY,
           hasBendPoint: !!connection.bendPoint,
-          isDraggingBend: !!draggingBendRef.current,
+          isDraggingBend: draggingNode || draggingBend,
           isReadOnlyGraph,
         })
       ) {
@@ -636,30 +634,6 @@ export const WireLayer: FC<WireLayerProps> = ({
     },
   );
 
-  const handleConnectionBendMouseDown = useStableCallback(
-    (connection: NodeConnection, connectionKey: string, event: ReactMouseEvent<SVGCircleElement>) => {
-      if (isReadOnlyGraph || event.button !== 0 || draggingBendRef.current) {
-        return;
-      }
-
-      event.preventDefault();
-      event.stopPropagation();
-
-      const point = connection.bendPoint ?? getConnectionPointFromMouseEvent(event);
-      draggingBendRef.current = {
-        connection,
-        connectionKey,
-        point,
-        hasMoved: false,
-        startClientX: event.clientX,
-        startClientY: event.clientY,
-      };
-      setDraggingBendPreview({ connectionKey, point });
-      setHoveredConnectionKey(connectionKey);
-      setHoveredConnectionPoint(undefined);
-    },
-  );
-
   const handleConnectionBendDoubleClick = useStableCallback(
     (connection: NodeConnection, event: ReactMouseEvent<SVGCircleElement>) => {
       if (isReadOnlyGraph) {
@@ -668,8 +642,6 @@ export const WireLayer: FC<WireLayerProps> = ({
 
       event.preventDefault();
       event.stopPropagation();
-      draggingBendRef.current = undefined;
-      setDraggingBendPreview(undefined);
       setConnectionBendPoint({ connection, bendPoint: undefined });
     },
   );
@@ -678,63 +650,6 @@ export const WireLayer: FC<WireLayerProps> = ({
     setHoveredConnectionKey(connectionKey);
     setHoveredConnectionPoint(undefined);
   });
-
-  const handleWindowBendMouseMove = useStableCallback((event: MouseEvent) => {
-    const draggingBend = draggingBendRef.current;
-    if (!draggingBend) {
-      return;
-    }
-
-    const point = getConnectionPointFromMouseEvent(event);
-    const nextDrag = updateConnectionBendDrag({
-      clientX: event.clientX,
-      clientY: event.clientY,
-      drag: draggingBend,
-      point,
-    });
-
-    if (!nextDrag) {
-      return;
-    }
-
-    draggingBendRef.current = nextDrag;
-    setDraggingBendPreview({ connectionKey: nextDrag.connectionKey, point: nextDrag.point });
-  });
-
-  const handleWindowBendMouseUp = useStableCallback(() => {
-    const draggingBend = draggingBendRef.current;
-    if (!draggingBend) {
-      return;
-    }
-
-    draggingBendRef.current = undefined;
-    setDraggingBendPreview(undefined);
-    if (!draggingBend.hasMoved) {
-      return;
-    }
-
-    setConnectionBendPoint({
-      connection: draggingBend.connection,
-      bendPoint: draggingBend.point,
-    });
-  });
-
-  const draggingBendConnectionKey = draggingBendPreview?.connectionKey;
-
-  useEffect(() => {
-    if (!draggingBendConnectionKey) {
-      return;
-    }
-
-    window.addEventListener('mousemove', handleWindowBendMouseMove);
-    window.addEventListener('mouseup', handleWindowBendMouseUp);
-    window.addEventListener('blur', handleWindowBendMouseUp);
-    return () => {
-      window.removeEventListener('mousemove', handleWindowBendMouseMove);
-      window.removeEventListener('mouseup', handleWindowBendMouseUp);
-      window.removeEventListener('blur', handleWindowBendMouseUp);
-    };
-  }, [draggingBendConnectionKey, handleWindowBendMouseMove, handleWindowBendMouseUp]);
 
   const handleConnectionHoverEnd = useStableCallback((connectionKey: string) => {
     if (hoveredConnectionKey === connectionKey) {
@@ -746,8 +661,7 @@ export const WireLayer: FC<WireLayerProps> = ({
   const sharedStaticWireContentsProps = {
     graphSelectionOptions,
     allowConnectionBendEditing,
-    allowConnectionHover: !draggingNode && !draggingWire,
-    draggingBendPreview,
+    allowConnectionHover: !draggingNode && !draggingBend && !draggingWire,
     highlightedNodes,
     highlightedPort,
     hoverRevealedDataBusConnectionKeySet,
@@ -755,7 +669,6 @@ export const WireLayer: FC<WireLayerProps> = ({
     lastRunDataByNode,
     onConnectionBendDoubleClick: handleConnectionBendDoubleClick,
     onConnectionBendMouseEnter: handleConnectionBendMouseEnter,
-    onConnectionBendMouseDown: handleConnectionBendMouseDown,
     onConnectionClick: handleConnectionClick,
     onConnectionHoverEnd: handleConnectionHoverEnd,
     onConnectionMouseDown: handleConnectionMouseDown,
@@ -844,7 +757,6 @@ export const WireLayer: FC<WireLayerProps> = ({
           <ToolContinuationEndpointMarkerContents
             connectionCompareKindsByKey={connectionCompareKindsByKey}
             connections={mainRenderableWires}
-            draggingBendPreview={draggingBendPreview}
             markerIds={endpointToolContinuationMarkerIds}
             nodesById={renderNodesById}
             portPositions={portPositions}
@@ -892,7 +804,6 @@ export const WireLayer: FC<WireLayerProps> = ({
 const ToolContinuationEndpointMarkerContents: FC<{
   connections: readonly NodeConnection[];
   connectionCompareKindsByKey: Record<string, ProjectComparisonChangeKind | undefined>;
-  draggingBendPreview: { connectionKey: string; point: ConnectionBendPoint } | undefined;
   markerIds: ToolContinuationMarkerIds;
   nodesById: Record<NodeId, ChartNode>;
   portPositions: PortPositions;
@@ -900,7 +811,6 @@ const ToolContinuationEndpointMarkerContents: FC<{
 }> = ({
   connections,
   connectionCompareKindsByKey,
-  draggingBendPreview,
   markerIds,
   nodesById,
   portPositions,
@@ -914,8 +824,7 @@ const ToolContinuationEndpointMarkerContents: FC<{
       }
 
       const connectionKey = getProjectConnectionComparisonKey(connection);
-      const bendPoint =
-        draggingBendPreview?.connectionKey === connectionKey ? draggingBendPreview.point : connection.bendPoint;
+      const bendPoint = connection.bendPoint;
 
       return (
         <ToolContinuationEndpointMarkers
@@ -941,7 +850,6 @@ const StaticWireContents = memo(
     allowConnectionBendEditing,
     compareRemovedConnections,
     connectionCompareKindsByKey,
-    draggingBendPreview,
     graphSelectionOptions,
     highlightedNodes,
     highlightedPort,
@@ -951,7 +859,6 @@ const StaticWireContents = memo(
     nodesById,
     onConnectionBendDoubleClick,
     onConnectionBendMouseEnter,
-    onConnectionBendMouseDown,
     onConnectionClick,
     onConnectionHoverEnd,
     onConnectionMouseDown,
@@ -968,7 +875,6 @@ const StaticWireContents = memo(
     allowConnectionBendEditing: boolean;
     compareRemovedConnections: NodeConnection[];
     connectionCompareKindsByKey: Record<string, ProjectComparisonChangeKind | undefined>;
-    draggingBendPreview: { connectionKey: string; point: ConnectionBendPoint } | undefined;
     graphSelectionOptions: Parameters<typeof getSelectedProcessData>[2];
     highlightedNodes: NodeId[] | undefined;
     highlightedPort:
@@ -984,11 +890,6 @@ const StaticWireContents = memo(
     nodesById: Record<NodeId, ChartNode>;
     onConnectionBendDoubleClick: (connection: NodeConnection, event: ReactMouseEvent<SVGCircleElement>) => void;
     onConnectionBendMouseEnter: (connectionKey: string) => void;
-    onConnectionBendMouseDown: (
-      connection: NodeConnection,
-      connectionKey: string,
-      event: ReactMouseEvent<SVGCircleElement>,
-    ) => void;
     onConnectionClick: (
       connection: NodeConnection,
       connectionKey: string,
@@ -1086,8 +987,7 @@ const StaticWireContents = memo(
                     : 'Tool continuation: The LLM sends tool calls to this Delegate Tool Call node and resumes with its results.',
               }
             : undefined;
-          const bendPoint =
-            draggingBendPreview?.connectionKey === connectionKey ? draggingBendPreview.point : connection.bendPoint;
+          const bendPoint = connection.bendPoint;
 
           return (
             <ErrorBoundary fallback={<></>} key={`wire-${connectionKey}`}>
@@ -1111,16 +1011,11 @@ const StaticWireContents = memo(
                 onClick={(event) => onConnectionClick(connection, connectionKey, event)}
               />
               {bendPoint && !isHoverRevealedDataBusConnection && (
-                <circle
-                  className={clsx('wire-bend-point', {
-                    dragging: draggingBendPreview?.connectionKey === connectionKey,
-                    editable: allowConnectionBendEditing,
-                  })}
-                  cx={bendPoint.x}
-                  cy={bendPoint.y}
-                  r={7}
+                <ConnectionBendHandle
+                  connectionKey={connectionKey}
+                  point={bendPoint}
+                  editable={allowConnectionBendEditing}
                   onDoubleClick={(event) => onConnectionBendDoubleClick(connection, event)}
-                  onMouseDown={(event) => onConnectionBendMouseDown(connection, connectionKey, event)}
                   onMouseEnter={() => onConnectionBendMouseEnter(connectionKey)}
                   onMouseLeave={() => onConnectionHoverEnd(connectionKey)}
                 />
@@ -1134,6 +1029,60 @@ const StaticWireContents = memo(
 );
 
 StaticWireContents.displayName = 'StaticWireContents';
+
+/** Uses the same drag session as nodes, including mixed selection and one Undo step. */
+function ConnectionBendHandle({
+  connectionKey,
+  point,
+  editable,
+  onDoubleClick,
+  onMouseEnter,
+  onMouseLeave,
+}: {
+  connectionKey: string;
+  point: ConnectionBendPoint;
+  editable: boolean;
+  onDoubleClick: (event: ReactMouseEvent<SVGCircleElement>) => void;
+  onMouseEnter: () => void;
+  onMouseLeave: () => void;
+}) {
+  const selectedBends = useAtomValue(selectedConnectionBendsState);
+  const isReadOnly = useAtomValue(isReadOnlyGraphState);
+  const activatorData = useRef({ connectionBendKey: connectionKey, shiftKey: false });
+  const { setNodeRef, listeners, isDragging } = useDraggable({
+    id: `connection-bend:${connectionKey}`,
+    data: activatorData.current,
+    disabled: isReadOnly,
+  });
+  return (
+    <circle
+      ref={(element) => setNodeRef(element as unknown as HTMLElement | null)}
+      className={clsx('wire-bend-point', {
+        // Keep the active handle hit-testable through mouseup/double-click.
+        editable: !isReadOnly && (editable || isDragging),
+        dragging: isDragging,
+        selected: selectedBends.includes(connectionKey),
+      })}
+      data-connection-key={connectionKey}
+      cx={point.x}
+      cy={point.y}
+      r={7}
+      onPointerDown={(event) => {
+        event.stopPropagation();
+        activatorData.current.shiftKey = event.shiftKey;
+        if (editable && event.button === 0) listeners?.onPointerDown?.(event);
+      }}
+      onMouseDown={(event) => {
+        event.preventDefault();
+        event.stopPropagation();
+      }}
+      onClick={(event) => event.stopPropagation()}
+      onDoubleClick={onDoubleClick}
+      onMouseEnter={onMouseEnter}
+      onMouseLeave={onMouseLeave}
+    />
+  );
+}
 
 function getIsNotRan(
   connection: NodeConnection,

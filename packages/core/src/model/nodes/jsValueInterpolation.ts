@@ -1,9 +1,15 @@
 import { dedent } from 'ts-dedent';
 import type { Inputs } from '../GraphProcessor.js';
-import type { NodeInputDefinition, PortId } from '../NodeBase.js';
+import type { NodeInputDefinition } from '../NodeBase.js';
 import { createInterpolationInputDefinition } from '../interpolationInputDefinition.js';
 import { getError } from '../../utils/errors.js';
-import { extractInterpolationVariables, replaceInterpolationTokens } from '../../utils/interpolation.js';
+import type { CodeRunnerOptions } from '../../integrations/CodeRunnerOptions.js';
+import {
+  extractInterpolationVariables,
+  parseInterpolationTemplate,
+  replaceInterpolationTokens,
+  resolveInterpolationExpressionRawValue,
+} from '../../utils/interpolation.js';
 
 type JsValueInterpolationOptions = {
   localIdentifiers?: ReadonlySet<string>;
@@ -13,7 +19,16 @@ type JsValueInterpolationOptions = {
 export type JsValueInterpolationRuntimeContext = {
   inputNames: string[];
   inputsIdentifier: string;
+  interpolationHelperIdentifier: string;
+  cloneCacheIdentifier: string;
+  graphInputsIdentifier: string;
+  contextIdentifier: string;
+  /** True when generated source needs a runner-provided path/special resolver. */
+  requiresInterpolationHelper: boolean;
 };
+
+const MISSING_INTERPOLATION_HELPER_MESSAGE =
+  'This CodeRunner must honor CodeRunnerOptions.interpolationHelperIdentifier to resolve JSONPath or @graphInputs/@context interpolation.';
 
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -39,10 +54,6 @@ export function buildJsValuePreview(source: string, maxLines: number): string {
   return source.split('\n').slice(0, maxLines).join('\n').trim();
 }
 
-function isSpecialReference(inputName: string): boolean {
-  return inputName.startsWith('@graphInputs.') || inputName.startsWith('@context.');
-}
-
 function isSimpleIdentifier(value: string): boolean {
   return /^[A-Za-z_$][\w$]*$/.test(value);
 }
@@ -52,35 +63,56 @@ function getUserFacingInputName(inputName: string): string {
 }
 
 function buildJsValueReference(
-  inputName: string | undefined,
-  targetIdentifier: string,
+  token: {
+    tokenName: string | undefined;
+    reference: { baseName: string; jsonPath?: string; source: string } | undefined;
+  },
+  interpolationContext: JsValueInterpolationRuntimeContext,
   options: JsValueInterpolationOptions,
 ): string {
-  if (!inputName || isSpecialReference(inputName)) {
+  if (!token.tokenName || !token.reference) {
     return 'undefined';
   }
 
-  if (options.localIdentifiers?.has(inputName)) {
-    return inputName;
+  const isBareVariableReference = token.reference.source === 'variable' && token.reference.jsonPath === undefined;
+  if (isBareVariableReference) {
+    return options.localIdentifiers?.has(token.reference.baseName)
+      ? token.reference.baseName
+      : `${interpolationContext.inputsIdentifier}[${JSON.stringify(token.reference.baseName)}].value`;
   }
 
-  return `${targetIdentifier}[${JSON.stringify(inputName)}]`;
+  const isLocalReference =
+    token.reference.source === 'variable' && options.localIdentifiers?.has(token.reference.baseName);
+  const sourceInputs = isLocalReference
+    ? `{ ${JSON.stringify(token.reference.baseName)}: { type: 'any', value: ${token.reference.baseName} } }`
+    : interpolationContext.inputsIdentifier;
+
+  const resolveExpression = `${interpolationContext.interpolationHelperIdentifier}(${sourceInputs}, ${JSON.stringify(
+    token.tokenName,
+  )}, ${interpolationContext.graphInputsIdentifier}, ${interpolationContext.contextIdentifier})`;
+
+  return `(typeof ${interpolationContext.interpolationHelperIdentifier} === 'function'
+    ? ${resolveExpression}
+    : (() => { throw new Error(${JSON.stringify(MISSING_INTERPOLATION_HELPER_MESSAGE)}); })())`;
 }
 
 function formatJsValuePreviewValue(
-  inputName: string | undefined,
+  token: {
+    tokenName: string | undefined;
+    reference: { baseName: string; jsonPath?: string; source: string } | undefined;
+  },
   inputs: Inputs,
   options: JsValueInterpolationOptions,
 ): string {
-  if (!inputName || isSpecialReference(inputName)) {
+  if (!token.tokenName || !token.reference || token.reference.source !== 'variable') {
     return 'undefined';
   }
 
-  if (options.localIdentifiers?.has(inputName)) {
-    return inputName;
+  if (options.localIdentifiers?.has(token.reference.baseName)) {
+    return token.reference.jsonPath ? `{{${token.tokenName}}}` : token.reference.baseName;
   }
 
-  const value = inputs[inputName as PortId]?.value;
+  const value = resolveInterpolationExpressionRawValue(token.tokenName, { variables: inputs });
 
   if (value === undefined) {
     return 'undefined';
@@ -98,7 +130,7 @@ function formatJsValuePreviewValue(
     return String(value);
   }
 
-  return getUserFacingInputName(inputName);
+  return getUserFacingInputName(token.tokenName);
 }
 
 export function getJsValueInterpolationInputNames(
@@ -126,24 +158,48 @@ export function getJsValueInterpolationRuntimeContext(
   baseInputsIdentifier: string,
   options: JsValueInterpolationOptions = {},
 ): JsValueInterpolationRuntimeContext {
+  const inputsIdentifier = getSafeJsValueInterpolationIdentifier(template, baseInputsIdentifier);
+  const interpolationHelperIdentifier = getSafeJsValueInterpolationIdentifier(
+    `${template}\n${inputsIdentifier}`,
+    `${baseInputsIdentifier}ResolveInterpolation`,
+  );
+  const cloneCacheIdentifier = getSafeJsValueInterpolationIdentifier(
+    `${template}\n${inputsIdentifier}\n${interpolationHelperIdentifier}`,
+    `${baseInputsIdentifier}CloneCache`,
+  );
+  const graphInputsIdentifier = getSafeJsValueInterpolationIdentifier(
+    `${template}\n${inputsIdentifier}\n${interpolationHelperIdentifier}\n${cloneCacheIdentifier}`,
+    `${baseInputsIdentifier}GraphInputs`,
+  );
+  const contextIdentifier = getSafeJsValueInterpolationIdentifier(
+    `${template}\n${inputsIdentifier}\n${interpolationHelperIdentifier}\n${cloneCacheIdentifier}\n${graphInputsIdentifier}`,
+    `${baseInputsIdentifier}Context`,
+  );
+
+  const parsedTemplate = parseInterpolationTemplate(template);
   return {
     inputNames: getJsValueInterpolationInputNames(template, options),
-    inputsIdentifier: getSafeJsValueInterpolationIdentifier(template, baseInputsIdentifier),
+    inputsIdentifier,
+    interpolationHelperIdentifier,
+    cloneCacheIdentifier,
+    graphInputsIdentifier,
+    contextIdentifier,
+    requiresInterpolationHelper: parsedTemplate.tokens.some(
+      (token) =>
+        token.reference !== undefined &&
+        (token.reference.source !== 'variable' || token.reference.jsonPath !== undefined),
+    ),
   };
 }
 
 export function buildJsValueInterpolatedSource(
   template: string,
-  targetIdentifier: string,
+  interpolationContext: JsValueInterpolationRuntimeContext,
   options: JsValueInterpolationOptions = {},
 ): string {
-  return replaceInterpolationTokens(
-    template,
-    (token) => buildJsValueReference(token.tokenName, targetIdentifier, options),
-    {
-      trim: options.trim ?? true,
-    },
-  );
+  return replaceInterpolationTokens(template, (token) => buildJsValueReference(token, interpolationContext, options), {
+    trim: options.trim ?? true,
+  });
 }
 
 export function interpolateJsValuePreviewSource(
@@ -151,7 +207,7 @@ export function interpolateJsValuePreviewSource(
   inputs: Inputs,
   options: JsValueInterpolationOptions = {},
 ): string {
-  return replaceInterpolationTokens(template, (token) => formatJsValuePreviewValue(token.tokenName, inputs, options), {
+  return replaceInterpolationTokens(template, (token) => formatJsValuePreviewValue(token, inputs, options), {
     trim: options.trim ?? true,
   });
 }
@@ -255,40 +311,71 @@ export function buildClonedInputValueAssignments(
   return inputNames
     .map(
       (inputName) =>
-        `${targetIdentifier}[${JSON.stringify(inputName)}] = cloneJsInputValue(inputs[${JSON.stringify(
-          inputName,
-        )}]?.value, ${cacheIdentifier});`,
+        `${targetIdentifier}[${JSON.stringify(inputName)}] = (() => {
+          const sourceDataValue = inputs[${JSON.stringify(inputName)}];
+          return sourceDataValue == null
+            ? { type: 'any', value: undefined }
+            : { ...sourceDataValue, value: cloneJsInputValue(sourceDataValue.value, ${cacheIdentifier}) };
+        })();`,
     )
     .join('\n');
 }
 
 export function buildJsValueInputClonePreamble({
   cacheIdentifier,
+  contextIdentifier,
+  graphInputsIdentifier,
   inputsIdentifier,
 }: {
   cacheIdentifier: string;
+  contextIdentifier: string;
+  graphInputsIdentifier: string;
   inputsIdentifier: string;
 }): string {
   return dedent`
     ${buildCloneJsInputValueFunction()}
     const ${inputsIdentifier} = Object.create(null);
     const ${cacheIdentifier} = new WeakMap();
+    const ${graphInputsIdentifier} = typeof graphInputs === 'undefined'
+      ? Object.create(null)
+      : cloneJsInputValue(graphInputs, ${cacheIdentifier});
+    const ${contextIdentifier} = typeof context === 'undefined'
+      ? Object.create(null)
+      : cloneJsInputValue(context, ${cacheIdentifier});
   `;
 }
 
 export function buildJsValueInputsInitializer({
-  cacheIdentifier,
-  inputNames,
-  inputsIdentifier,
+  interpolationContext,
 }: {
-  cacheIdentifier: string;
-  inputNames: string[];
-  inputsIdentifier: string;
+  interpolationContext: JsValueInterpolationRuntimeContext;
 }): string {
+  const { cloneCacheIdentifier, contextIdentifier, graphInputsIdentifier, inputNames, inputsIdentifier } =
+    interpolationContext;
+
   return dedent`
-    ${buildJsValueInputClonePreamble({ cacheIdentifier, inputsIdentifier })}
-    ${buildClonedInputValueAssignments(inputNames, inputsIdentifier, cacheIdentifier)}
+    ${buildJsValueInputClonePreamble({
+      cacheIdentifier: cloneCacheIdentifier,
+      contextIdentifier,
+      graphInputsIdentifier,
+      inputsIdentifier,
+    })}
+    ${buildClonedInputValueAssignments(inputNames, inputsIdentifier, cloneCacheIdentifier)}
   `;
+}
+
+export function getJsValueInterpolationCodeRunnerOptions(
+  options: CodeRunnerOptions,
+  interpolationContext: JsValueInterpolationRuntimeContext,
+): CodeRunnerOptions {
+  if (!interpolationContext.requiresInterpolationHelper) {
+    return options;
+  }
+
+  return {
+    ...options,
+    interpolationHelperIdentifier: interpolationContext.interpolationHelperIdentifier,
+  };
 }
 
 export function sanitizeGeneratedJsValueText(
@@ -296,12 +383,15 @@ export function sanitizeGeneratedJsValueText(
   inputNames: string[],
   targetIdentifier: string,
   fallbackLabel: string,
+  generatedIdentifiers: readonly string[] = [],
 ): string | undefined {
   if (!text) {
     return text;
   }
 
   let sanitized = text;
+  const generatedFallbackLabel =
+    inputNames.length === 1 ? `${fallbackLabel} ${getUserFacingInputName(inputNames[0]!)}` : fallbackLabel;
 
   for (const inputName of inputNames) {
     const userFacingInputName = getUserFacingInputName(inputName);
@@ -310,7 +400,16 @@ export function sanitizeGeneratedJsValueText(
       .replaceAll(`${targetIdentifier}.${inputName}`, userFacingInputName);
   }
 
-  return sanitized.replaceAll(targetIdentifier, fallbackLabel);
+  // Several generated identifiers intentionally share the input identifier as
+  // a prefix. Replace the longer names first so errors never leak fragments
+  // such as "code inputResolveInterpolation".
+  for (const identifier of [...generatedIdentifiers].sort((left, right) => right.length - left.length)) {
+    sanitized = sanitized.replaceAll(identifier, generatedFallbackLabel);
+  }
+
+  sanitized = sanitized.replaceAll(targetIdentifier, fallbackLabel);
+
+  return sanitized;
 }
 
 export function sanitizeGeneratedJsValueError(
@@ -318,16 +417,23 @@ export function sanitizeGeneratedJsValueError(
   inputNames: string[],
   targetIdentifier: string,
   fallbackLabel: string,
+  generatedIdentifiers: readonly string[] = [],
 ): Error {
   const jsValueError = getError(error);
   jsValueError.message =
-    sanitizeGeneratedJsValueText(jsValueError.message, inputNames, targetIdentifier, fallbackLabel) ??
-    jsValueError.message;
+    sanitizeGeneratedJsValueText(
+      jsValueError.message,
+      inputNames,
+      targetIdentifier,
+      fallbackLabel,
+      generatedIdentifiers,
+    ) ?? jsValueError.message;
   jsValueError.stack = sanitizeGeneratedJsValueText(
     jsValueError.stack,
     inputNames,
     targetIdentifier,
     fallbackLabel,
+    generatedIdentifiers,
   );
 
   return jsValueError;

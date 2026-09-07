@@ -1,6 +1,7 @@
 import type { Inputs, Outputs } from '../index.js';
 import type { DataValue } from '../model/DataValue.js';
 import type { CodeRunnerOptions } from './CodeRunnerOptions.js';
+import { resolveCodeInterpolationExpression } from '../utils/interpolation.js';
 
 // eslint-disable-next-line import/no-cycle -- Authored code receives the complete public Rivet namespace at execution time.
 import * as Rivet from '../exports.js';
@@ -60,6 +61,11 @@ export class IsomorphicCodeRunner implements CodeRunner {
     if (contextValues) {
       argNames.push('context');
       args.push(contextValues);
+    }
+
+    if (options.interpolationHelperIdentifier) {
+      argNames.push(options.interpolationHelperIdentifier);
+      args.push(resolveCodeInterpolationExpression);
     }
 
     argNames.push(code);

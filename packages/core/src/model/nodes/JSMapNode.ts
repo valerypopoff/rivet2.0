@@ -76,7 +76,9 @@ export class JSMapNodeImpl extends NodeImpl<JSMapNode> {
 
         Available callback parameters are <code>item</code>, <code>index</code>, and <code>array</code>.
         Write only the callback body and still use <code>return</code> to produce each mapped item.
-        Use <code>{{var}}</code> to add input ports that evaluate as connected values.
+        Use <code>{{var}}</code> to add input ports that evaluate as connected values. A path such as
+        <code>{{config.limit.max}}</code> creates only <code>config</code>; <code>{{item.name}}</code> and
+        <code>{{array[0]}}</code> use callback locals and do not add ports.
       `,
       infoBoxTitle: 'JS Map Node',
       contextMenuTitle: 'JS Map',

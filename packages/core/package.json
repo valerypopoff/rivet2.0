@@ -31,6 +31,16 @@
       "types": "./dist/types/webAppRuntime.d.ts",
       "import": "./dist/esm/webAppRuntime.js",
       "require": "./dist/cjs/webAppRuntime.cjs"
+    },
+    "./interpolation-runtime": {
+      "types": "./dist/types/interpolationRuntime.d.ts",
+      "import": "./dist/esm/interpolationRuntime.js",
+      "require": "./dist/cjs/interpolationRuntime.cjs"
+    },
+    "./interpolation-syntax": {
+      "types": "./dist/types/utils/interpolationSyntax.d.ts",
+      "import": "./dist/esm/utils/interpolationSyntax.js",
+      "require": "./dist/cjs/interpolationSyntax.cjs"
     }
   },
   "files": [

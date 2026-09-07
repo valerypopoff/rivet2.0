@@ -1,5 +1,15 @@
 # LOC Reduction With Libraries: Reassessed
 
+Historical proposal and 2026-07-25 implementation outcome. The outcome section
+supersedes the prospective ranking and estimates below: Zod primitives and LRU
+mechanics shipped; Query and OAuth migrations were deferred. Original LOC counts
+and statements labelled "Current evidence" refer to the pre-change audit, not
+the present tree. Do not plan these completed changes again from the proposal.
+Current owners include `packages/studio-server-api/src/app-settings/schema.ts`,
+`runtime-libraries/managed-code-runner.ts`, and
+`routes/workflows/managed/execution-cache.ts` within the API workspace.
+Re-measure current code before choosing any remaining candidate.
+
 ## Decision summary
 
 There are four credible wrapper-owned candidates, but they are not equally
@@ -108,8 +118,9 @@ of:
 - optional/default field handling;
 - repeated stored-object validation.
 
-`zod` is already a direct dependency of `packages/studio-server-api`, but wrapper API code
-does not currently import it. Zod supports preprocessing, transforms,
+At the proposal baseline, `zod` was already a direct dependency. The implemented
+App Settings primitives and current API validators now import it; the earlier
+absence of imports is no longer a reason to schedule new work. Zod supports preprocessing, transforms,
 refinements, unions, defaults, and inferred TypeScript types:
 [Zod documentation](https://zod.dev/api).
 
