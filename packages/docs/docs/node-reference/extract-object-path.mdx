@@ -132,7 +132,9 @@ The input to Extract Object path must be either an object, or an array of any da
 
 ## Error Handling
 
-If the path is invalid, the Extract Object Path Node will throw an error. If the path is valid, but the value is not found, the `match` output will not run, and the `all_matches` output will run with an empty array.
+JSONPath uses the same syntax and safe structural-whitespace handling as interpolation paths. For example, `$ . user [ "name" ]` is treated like `$.user["name"]`; whitespace inside quoted values, regular expressions, filters, and object literals is preserved.
+
+If the path is invalid or the value is not found, the `match` output will not run and the `all_matches` output will run with an empty array. This fail-soft behavior lets the graph handle a missing or malformed selection through the normal output flow.
 
 ## FAQs
 

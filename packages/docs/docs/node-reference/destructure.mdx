@@ -76,6 +76,8 @@ The Destructure Node is used to extract multiple values from an object or array 
 
 If a path is invalid or does not exist in the input object, the corresponding output port will not be run.
 
+Paths use the same safe structural-whitespace handling as interpolation and Extract Object Path. For example, `$ . user [ "name" ]` and `$.user["name"]` select the same value; whitespace inside quoted values, regular expressions, filters, and object literals is preserved.
+
 ## FAQ
 
 **Q: How is the Destructure Node different from the Extract Object Path Node?**
