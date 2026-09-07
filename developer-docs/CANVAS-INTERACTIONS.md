@@ -343,6 +343,12 @@ canvas representation is an antenna.
 
 ## Selection And Navigation
 
+Connection bend handles use the same Shift constraint behavior as node drags. The
+pure `connectionBendInteraction.ts` helper selects the dominant axis from the
+initial Shift movement, holds that axis while Shift remains pressed, and returns
+to unrestricted movement immediately when Shift is released. The axis is relative
+to the bend point at drag start, not the canvas origin or either connection port.
+
 Shift drag-selection accumulates groups while Shift remains held. Page Up, Page
 Down, and Home navigate graph/resource history through the shared workspace target,
 including Node library. Fit-to-content has a maximum zoom so one or two nodes do not

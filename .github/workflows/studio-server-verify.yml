@@ -234,6 +234,8 @@ jobs:
         run: yarn studio-server:setup:k8s-tools
       - name: Verify Kubernetes and deployment contracts
         run: yarn studio-server:verify:kubernetes
+      - name: Verify proxy recovery after container address changes
+        run: node deploy/studio-server/scripts/verify-proxy-dns.mjs
       - name: Report timing
         if: always()
         run: node scripts/ci/job-timing.mjs finish "Studio Server deployment contracts"

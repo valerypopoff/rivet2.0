@@ -161,6 +161,13 @@ async function main() {
       await run(command, mergedEnv, { cwd: rootDir });
     }
 
+    if (action === 'dev') {
+      // nginx resolves Compose service names when its configuration loads. The
+      // API/web containers can be recreated with new bridge-network addresses
+      // while the proxy itself stays up, so refresh that resolution after every
+      // normal dev bring-up without recreating the proxy or its dependencies.
+      await run(`${composeBase} exec -T proxy nginx -s reload`, mergedEnv, { cwd: rootDir });
+    }
   } catch (error) {
     if (action === 'dev' || action === 'up') {
       await printFailureDiagnostics({

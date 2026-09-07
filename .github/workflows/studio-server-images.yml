@@ -232,17 +232,36 @@ jobs:
             exit 0
           fi
 
+          # Manifest CLIs accept evidence only inside the checkout. Keep each
+          # recovery attempt isolated without making valid artifacts fail validation.
+          mkdir -p "$GITHUB_WORKSPACE/artifacts"
+          recovery_root="$(mktemp -d "$GITHUB_WORKSPACE/artifacts/rivet-release-lineage-recovery.XXXXXX")"
+          artifact_rows="$recovery_root/artifacts.tsv"
+          trap 'rm -rf "$recovery_root"' EXIT
+
           declare -A promoted_digests=()
           promoted_image_count=0
           for service in proxy web api executor; do
             image="${IMAGE_NAMESPACE}/${service}:latest"
-            if digest="$(docker buildx imagetools inspect "$image" --format '{{.Manifest.Digest}}' 2>/dev/null)"; then
+            inspect_diagnostics="$recovery_root/inspect-$service.log"
+            if digest="$(docker buildx imagetools inspect "$image" --format '{{.Manifest.Digest}}' 2>"$inspect_diagnostics")"; then
               if [[ ! "$digest" =~ ^sha256:[a-f0-9]{64}$ ]]; then
                 echo "::error::Promoted image $image returned an invalid digest: $digest"
                 exit 1
               fi
               promoted_digests["$service"]="$digest"
               promoted_image_count="$((promoted_image_count + 1))"
+            else
+              printf '%s\n' "$digest" >> "$inspect_diagnostics"
+              if ! node --input-type=module -e '
+                import fs from "node:fs";
+                import { isMissingRegistryManifestError } from "./deploy/studio-server/scripts/release-manifest-oci.mjs";
+                process.exit(isMissingRegistryManifestError(fs.readFileSync(process.argv[1], "utf8")) ? 0 : 1);
+              ' "$inspect_diagnostics"; then
+                echo "::error::Could not inspect promoted image $image; refusing to treat a registry failure as a missing release."
+                cat "$inspect_diagnostics" >&2
+                exit 1
+              fi
             fi
           done
 
@@ -255,12 +274,6 @@ jobs:
             echo "::error::The durable production release-manifest pointer is missing and only $promoted_image_count of 4 promoted latest images exist. Refusing to infer a partial predecessor."
             exit 1
           fi
-
-          recovery_root="$RUNNER_TEMP/rivet-release-lineage-recovery"
-          artifact_rows="$recovery_root/artifacts.tsv"
-          rm -rf "$recovery_root"
-          mkdir -p "$recovery_root"
-          trap 'rm -rf "$recovery_root"' EXIT
 
           artifact_query_succeeded=false
           for attempt in 1 2 3; do

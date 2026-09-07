@@ -647,12 +647,14 @@ export const WireLayer: FC<WireLayerProps> = ({
 
       const point = connection.bendPoint ?? getConnectionPointFromMouseEvent(event);
       draggingBendRef.current = {
+        axisLock: undefined,
         connection,
         connectionKey,
         point,
         hasMoved: false,
         startClientX: event.clientX,
         startClientY: event.clientY,
+        startPoint: point,
       };
       setDraggingBendPreview({ connectionKey, point });
       setHoveredConnectionKey(connectionKey);
@@ -691,6 +693,7 @@ export const WireLayer: FC<WireLayerProps> = ({
       clientY: event.clientY,
       drag: draggingBend,
       point,
+      shiftKey: event.shiftKey,
     });
 
     if (!nextDrag) {

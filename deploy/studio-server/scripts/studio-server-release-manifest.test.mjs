@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
@@ -176,6 +177,8 @@ test('release-manifest OCI artifacts are data-only and registry failures fail cl
   assert.equal(isMissingRegistryManifestError('credential helper executable not found'), false);
   assert.equal(isMissingRegistryManifestError('dial tcp: lookup ghcr.io: no such host'), false);
   assert.equal(isMissingRegistryManifestError('denied: permission_denied'), false);
+  assert.equal(isMissingRegistryManifestError('unauthorized: authentication required'), false);
+  assert.equal(isMissingRegistryManifestError('unexpected status: 503 Service Unavailable'), false);
 });
 
 test('Build Images automatically repairs an exact retained production lineage before manual fallback', () => {
@@ -187,6 +190,10 @@ test('Build Images automatically repairs an exact retained production lineage be
     /The durable production release-manifest pointer is missing and only \$promoted_image_count of 4 promoted latest images exist/,
   );
   assert.match(workflow, /actions\/artifacts\?per_page=100/);
+  assert.match(
+    workflow,
+    /recovery_root="\$\(mktemp -d "\$GITHUB_WORKSPACE\/artifacts\/rivet-release-lineage-recovery\.XXXXXX"\)"/,
+  );
   assert.match(workflow, /\.workflow_run\.repository_id == \.workflow_run\.head_repository_id/);
   assert.match(
     workflow,
@@ -194,6 +201,41 @@ test('Build Images automatically repairs an exact retained production lineage be
   );
   assert.match(workflow, /Recovered the missing durable production pointer from retained artifact/);
   assert.match(workflow, /Automatic recovery cannot prove the rollback target/);
+  assert.match(workflow, /isMissingRegistryManifestError\(fs\.readFileSync\(process\.argv\[1\], "utf8"\)\)/);
+  assert.match(
+    workflow,
+    /refusing to treat a registry failure as a missing release\."\s+cat "\$inspect_diagnostics" >&2\s+exit 1/,
+  );
+});
+
+test('retained recovery manifests pass the real digest CLI only inside the checkout', () => {
+  const artifactsRoot = path.join(rootDir, 'artifacts');
+  fs.mkdirSync(artifactsRoot, { recursive: true });
+  const recoveryDirectory = fs.mkdtempSync(path.join(artifactsRoot, 'rivet-release-lineage-recovery.'));
+  const outsideDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'rivet-release-lineage-recovery.'));
+  try {
+    const release = promoted();
+    const cli = path.join(rootDir, 'deploy', 'studio-server', 'scripts', 'create-release-manifest.mjs');
+    const runDigest = (directory) => {
+      const manifestPath = path.join(directory, 'promoted-release-manifest.json');
+      fs.writeFileSync(manifestPath, `${JSON.stringify(release)}\n`);
+      return spawnSync(process.execPath, [cli, 'digest', '--input', manifestPath], {
+        cwd: rootDir,
+        encoding: 'utf8',
+      });
+    };
+
+    const recovered = runDigest(recoveryDirectory);
+    assert.equal(recovered.status, 0, recovered.stderr);
+    assert.equal(recovered.stdout.trim(), getStudioServerReleaseManifestDigest(release, { requirePromoted: true }));
+
+    const outside = runDigest(outsideDirectory);
+    assert.equal(outside.status, 1);
+    assert.match(outside.stderr, /--input must remain inside this repository/);
+  } finally {
+    fs.rmSync(recoveryDirectory, { recursive: true, force: true });
+    fs.rmSync(outsideDirectory, { recursive: true, force: true });
+  }
 });
 
 test('release-manifest OCI tags bind the semantic digest and production repository', () => {
