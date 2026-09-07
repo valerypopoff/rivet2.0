@@ -114,9 +114,13 @@ explicit redirect rules retain the original upstream redirect behavior.
 
 Run `node deploy/studio-server/scripts/verify-proxy-dns.mjs` with Docker available
 after modifying these routes. It uses an isolated network and disposable mock
-containers with the real templates; it verifies API/web IP replacement without
-Nginx reload, recovery within 45 seconds, health failures/recovery, auth, redirects,
-POST bodies, SSE, and WebSocket upgrades. It removes only its own fixtures. Also
+containers with the real templates. The fixture explicitly allocates and verifies
+a private `/24` subnet before assigning fixed mock addresses; it safely retries
+another private range when an existing Docker network overlaps. This is required
+because Docker rejects `--ip` on its automatically addressed bridge networks.
+It verifies API/web IP replacement without Nginx reload, recovery within 45 seconds,
+health failures/recovery, auth, redirects, POST bodies, SSE, and WebSocket upgrades.
+It removes only its own fixtures. Also
 run the API proxy-image contract tests and `yarn studio-server:ui:observe proxy-routing.spec.ts`
 with `PLAYWRIGHT_HEADLESS=1` and `PLAYWRIGHT_SLOW_MO=0`; require a fresh report under
 `artifacts/playwright/`, not merely a successful launcher exit.

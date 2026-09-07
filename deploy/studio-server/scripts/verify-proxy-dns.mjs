@@ -12,6 +12,20 @@ const fixture = await mkdtemp(path.join(os.tmpdir(), 'rivet-proxy-dns-'));
 const network = `rivet-proxy-dns-${process.pid}-${Date.now()}`;
 const containers = new Set();
 const docker = (...args) => execFileSync('docker', args, { encoding: 'utf8', timeout: 60000 }).trim();
+const createDockerNetwork = (subnet, gateway) => {
+  const result = spawnSync(
+    'docker',
+    ['network', 'create', '--driver', 'bridge', '--subnet', subnet, '--gateway', gateway, network],
+    { encoding: 'utf8', timeout: 60000 },
+  );
+  if (result.error) throw result.error;
+  if (result.status !== 0) {
+    const error = new Error(result.stderr || `docker network create exited with ${result.status}.`);
+    error.stderr = result.stderr;
+    throw error;
+  }
+  return result.stdout.trim();
+};
 const remove = (name) => {
   docker('rm', '-f', name);
   containers.delete(name);
@@ -32,15 +46,48 @@ async function until(label, check, timeout = 45000) {
   }
   throw new Error(`${label} timed out: ${last ?? 'condition not met'}`);
 }
+
+function fixtureSubnetCandidates() {
+  // Docker only accepts `--ip` on a network whose IPAM configuration declares
+  // a subnet. Spread attempts across the private 172.16.0.0/12 range so an
+  // existing Docker network cannot make this disposable fixture flaky.
+  const seed = Number(process.hrtime.bigint() % 4096n);
+  return Array.from({ length: 64 }, (_, attempt) => {
+    const index = (seed + attempt * 733) % 4096;
+    return `172.${16 + Math.floor(index / 256)}.${index % 256}.0/24`;
+  });
+}
+
+function createFixtureNetwork() {
+  let overlapError;
+  for (const subnet of fixtureSubnetCandidates()) {
+    const prefix = subnet.slice(0, -5);
+    const gateway = `${prefix}.1`;
+    try {
+      createDockerNetwork(subnet, gateway);
+      const [details] = JSON.parse(docker('network', 'inspect', network));
+      assert.equal(details.IPAM.Config.length, 1, 'Fixture network must have one IPAM configuration.');
+      assert.equal(details.IPAM.Config[0].Subnet, subnet, 'Fixture network must retain its explicit subnet.');
+      assert.equal(details.IPAM.Config[0].Gateway, gateway, 'Fixture network must retain its explicit gateway.');
+      return { prefix, subnet };
+    } catch (error) {
+      if (!/pool overlaps with other one on this address space/i.test(String(error.stderr ?? error.message))) {
+        throw error;
+      }
+      overlapError = error;
+    }
+  }
+  throw new Error(`Could not allocate an isolated Docker subnet after 64 attempts: ${overlapError?.message ?? 'unknown error'}`);
+}
+
 const templates = [
   ['dev', 'deploy/studio-server/compose/nginx/default.dev.conf.template', 80, 5174],
   ['compose', 'deploy/studio-server/compose/nginx/default.conf.template', 80, 3000],
   ['image', 'deploy/studio-server/images/proxy/default.conf.template', 8080, 3000],
 ];
 try {
-  docker('network', 'create', network);
-  const gateway = JSON.parse(docker('network', 'inspect', network))[0].IPAM.Config[0].Gateway;
-  const prefix = gateway.split('.').slice(0, 3).join('.');
+  const { prefix, subnet } = createFixtureNetwork();
+  console.log(`Using isolated Docker subnet ${subnet}.`);
   await writeFile(path.join(fixture, 'empty.inc'), '');
   // One worker guarantees each request uses the DNS cache warmed before the
   // replacement, instead of accidentally succeeding through a fresh worker.
