@@ -322,6 +322,7 @@ test('filesystem saveHostedProject serializes concurrent creates for one target 
   const firstContents = workflowFs.createBlankProjectFile(`First ${suffix}`);
   const secondContents = workflowFs.createBlankProjectFile(`Second ${suffix}`);
   const firstDatasets = createDatasetsContents('first');
+  const secondDatasets = createDatasetsContents('second');
 
   const [firstResult, secondResult] = await Promise.allSettled([
     workflowStorageBackend.saveHostedProject({
@@ -332,21 +333,28 @@ test('filesystem saveHostedProject serializes concurrent creates for one target 
     workflowStorageBackend.saveHostedProject({
       projectPath,
       contents: secondContents,
-      datasetsContents: createDatasetsContents('second'),
+      datasetsContents: secondDatasets,
     }),
   ]);
 
-  assert.equal(firstResult.status, 'fulfilled');
-  assert.equal(secondResult.status, 'rejected');
-  if (secondResult.status === 'rejected') {
-    assert.equal((secondResult.reason as { status?: number }).status, 409);
-    assert.match((secondResult.reason as Error).message, /belongs to a different project/i);
-  }
+  assert.deepEqual(
+    [firstResult.status, secondResult.status].sort(),
+    ['fulfilled', 'rejected'],
+    'exactly one concurrent create should commit',
+  );
+  const rejectedResult = firstResult.status === 'rejected' ? firstResult : secondResult;
+  assert.equal(rejectedResult.status, 'rejected');
+  assert.equal((rejectedResult.reason as { status?: number }).status, 409);
+  assert.match((rejectedResult.reason as Error).message, /belongs to a different project/i);
 
   const [savedProject] = loadProjectAndAttachedDataFromString(await fs.readFile(projectPath, 'utf8'));
-  const [firstProject] = loadProjectAndAttachedDataFromString(firstContents);
-  assert.equal(savedProject.metadata.id, firstProject.metadata.id);
-  assert.equal(await fs.readFile(workflowFs.getProjectSidecarPaths(projectPath).dataset, 'utf8'), firstDatasets);
+  const firstCreateWon = firstResult.status === 'fulfilled';
+  const [expectedProject] = loadProjectAndAttachedDataFromString(firstCreateWon ? firstContents : secondContents);
+  assert.equal(savedProject.metadata.id, expectedProject.metadata.id);
+  assert.equal(
+    await fs.readFile(workflowFs.getProjectSidecarPaths(projectPath).dataset, 'utf8'),
+    firstCreateWon ? firstDatasets : secondDatasets,
+  );
 });
 
 test('filesystem saveHostedProject reports pending transaction cleanup as retryable', async (t) => {

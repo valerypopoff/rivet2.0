@@ -362,7 +362,16 @@ jobs:
           fi
 
           if [[ "$ALLOW_RELEASE_LINEAGE_BOOTSTRAP" != "true" ]]; then
-            echo "::error::Promoted images exist, but no retained promoted release manifest exactly matches all four image digests. Automatic recovery cannot prove the rollback target. Manually dispatch with allow_release_lineage_bootstrap only if losing automated rollback to the pre-lineage release is acceptable."
+            {
+              echo "### One-time Studio Server release-lineage bootstrap required"
+              echo
+              echo "Four legacy promoted images exist, but no durable or retained manifest proves their source, chart, schema, and image set as one rollback-safe release."
+              echo
+              echo "Another push or rerun cannot reconstruct that historical evidence. If losing automated rollback to this pre-lineage release is acceptable, open [Build Images](${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/workflows/studio-server-images.yml), choose **Run workflow** on \`main\`, enable \`allow_release_lineage_bootstrap\`, and leave unrelated options at their defaults."
+              echo
+              echo "The successful bootstrap creates the durable \`release-manifest:production\` pointer. Later releases use that pointer normally and do not require this exception."
+            } >> "$GITHUB_STEP_SUMMARY"
+            echo "::error::One-time release-lineage bootstrap required. Promoted images exist, but no retained manifest can prove their rollback metadata. Another push cannot repair missing historical evidence; see the job summary for the explicit manual bootstrap action."
             exit 1
           fi
           echo "::warning::Explicitly starting a new release lineage while promoted images already exist. This transition is non-rollbackable through the automated forward-rollback command."

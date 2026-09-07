@@ -13,6 +13,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { gunzipSync } from 'node:zlib';
 import { createBrowserSubpathAliases, createModuleOverrideAliases, createTauriShimAliases } from './vite-aliases';
 import { replaceHostedProjectTabLabelExpression } from './project-tab-label-transform';
+import { createRivetCoreSourceAliases } from '../app/scripts/vite-core-source-aliases';
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url));
 
@@ -385,14 +386,7 @@ export default defineConfig({
           replacement: resolveWrapperPackageFile('github-markdown-css', '$1'),
         },
         ...createBrowserSubpathAliases(__dirname, resolveWrapperPackageFile),
-        {
-          find: '@valerypopoff/rivet2-core/web-app-runtime',
-          replacement: resolve(__dirname, '../core/src/webAppRuntime.ts'),
-        },
-        {
-          find: /^@valerypopoff\/rivet2-core$/,
-          replacement: resolve(__dirname, '../core/src/index.ts'),
-        },
+        ...createRivetCoreSourceAliases(upstreamCore),
         {
           find: /^@valerypopoff\/rivet2-evaluations$/,
           replacement: resolve(__dirname, '../evaluations/src/index.ts'),

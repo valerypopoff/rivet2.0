@@ -1,11 +1,35 @@
 import assert from 'node:assert/strict';
 import { readFileSync, readdirSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 
+import { createRivetCoreSourceAliases, rivetCoreSourceEntrypoints } from '../../../scripts/vite-core-source-aliases';
+
 const platformDir = dirname(fileURLToPath(import.meta.url));
 const appRoot = join(platformDir, '..', '..', '..');
+
+test('Vite source aliases cover every public Core package entrypoint', () => {
+  const coreDirectory = resolve(appRoot, '../core');
+  const corePackage = JSON.parse(readFileSync(resolve(coreDirectory, 'package.json'), 'utf8')) as {
+    name: string;
+    exports: Record<string, unknown>;
+  };
+  const exportedSpecifiers = Object.keys(corePackage.exports)
+    .map((key) => (key === '.' ? corePackage.name : `${corePackage.name}/${key.slice(2)}`))
+    .sort();
+
+  assert.deepEqual(Object.keys(rivetCoreSourceEntrypoints).sort(), exportedSpecifiers);
+
+  const sourceAliases = createRivetCoreSourceAliases(coreDirectory);
+
+  for (const [specifier, sourcePath] of Object.entries(rivetCoreSourceEntrypoints)) {
+    const expectedReplacement = resolve(coreDirectory, 'src', sourcePath);
+    const sourceMatches = sourceAliases.filter((alias) => alias.find.test(specifier));
+    assert.equal(sourceMatches.length, 1, `${specifier} should have exactly one source alias`);
+    assert.equal(sourceMatches[0]?.replacement, expectedReplacement);
+  }
+});
 
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
