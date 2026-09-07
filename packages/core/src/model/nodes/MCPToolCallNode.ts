@@ -18,6 +18,7 @@ import { getInputOrData } from '../../utils/index.js';
 import { getError } from '../../utils/errors.js';
 import {
   getMCPBaseBody,
+  getMCPArgumentTemplateInputs,
   getMCPBaseInputs,
   getMCPClientEditors,
   getMCPServerEditors,
@@ -93,6 +94,8 @@ export class MCPToolCallNodeImpl extends NodeImpl<MCPToolCallNode> {
         id: 'toolArguments' as PortId,
         title: 'Tool Arguments',
       });
+    } else {
+      inputs.push(...getMCPArgumentTemplateInputs(this.data.toolArguments));
     }
 
     if (this.data.useToolCallIdInput) {
@@ -141,6 +144,7 @@ export class MCPToolCallNodeImpl extends NodeImpl<MCPToolCallNode> {
         label: 'Tool Arguments',
         dataKey: 'toolArguments',
         language: 'json',
+        interpolationSyntax: 'json-template',
         useInputToggleDataKey: 'useToolArgumentsInput',
         enableFolding: true,
       },
@@ -186,7 +190,14 @@ export class MCPToolCallNodeImpl extends NodeImpl<MCPToolCallNode> {
         throw new MCPError(MCPErrorType.INVALID_SCHEMA, 'Cannot parse tool argument with input toggle on');
       }
     } else {
-      toolArguments = JSON.parse(interpolateMCPArgumentTemplate(this.data.toolArguments ?? '', inputs));
+      toolArguments = JSON.parse(
+        interpolateMCPArgumentTemplate(
+          this.data.toolArguments ?? '',
+          inputs,
+          context.graphInputNodeValues,
+          context.contextValues,
+        ),
+      );
     }
 
     const toolCall: MCP.ToolCallRequest = {

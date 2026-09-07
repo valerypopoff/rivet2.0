@@ -68,6 +68,16 @@ API owns open/replace/close, clean baselines, path moves, metadata changes, comp
 sessions, transient tab UI, and opening placeholders. Wrapper-owned persistence or
 publication remains outside the app.
 
+Path and title are mutable metadata; they cannot replace the immutable project
+identity used for an in-place hosted save. A rename/move updates the binding and
+preserves unsaved graph edits. A saved-content revision requires the explicit
+Reload/Keep mine workflow. Evaluation-library revisions use their own store and
+notifications, never the open project's content revision. See
+[Hosted Contracts](./HOSTED-WEB-APP-CONTRACTS.md) for asynchronous save completion,
+revision acknowledgement and stale-path conflicts, and the
+[refactor UI scenarios](./REFACTOR-BASELINE.md#ui-acceptance-scenarios) for two-window
+and inactive-tab checks.
+
 ## Tests
 
 Prefer pure transition/presentation tests for target restoration, tab labels,

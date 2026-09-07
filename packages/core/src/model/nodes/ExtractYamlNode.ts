@@ -11,10 +11,10 @@ import { nodeDefinition } from '../NodeDefinition.js';
 import { type DataValue } from '../DataValue.js';
 import yaml from 'yaml';
 import { expectType } from '../../utils/expectType.js';
-import { JSONPath } from 'jsonpath-plus';
 import { dedent } from 'ts-dedent';
 import { type EditorDefinition, type NodeBodySpec } from '../../index.js';
 import { coerceType } from '../../utils/coerceType.js';
+import { evaluateJsonPath } from '../../utils/jsonPath.js';
 
 export type ExtractYamlNode = ChartNode<'extractYaml', ExtractYamlNodeData>;
 
@@ -200,9 +200,9 @@ export class ExtractYamlNodeImpl extends NodeImpl<ExtractYamlNode> {
 
     if (objectPath) {
       try {
-        const extractedValue = JSONPath({ json: yamlObject, path: objectPath.trim() });
-        matches = extractedValue;
-        yamlObject = extractedValue.length > 0 ? extractedValue[0] : undefined;
+        const extractedValue = evaluateJsonPath(yamlObject, objectPath, true);
+        matches = extractedValue == null ? [] : (extractedValue as unknown[]);
+        yamlObject = matches.length > 0 ? (matches[0] as Record<string, unknown>) : undefined;
       } catch (err) {
         return {
           ['noMatch' as PortId]: {

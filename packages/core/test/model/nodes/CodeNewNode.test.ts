@@ -72,6 +72,13 @@ class CapturingCodeRunner implements CodeRunner {
   }
 }
 
+class LegacyBareCodeRunner implements CodeRunner {
+  async runCode(code: string, inputs: Inputs, _options: CodeRunnerOptions): Promise<Outputs> {
+    const AsyncFunction = async function () {}.constructor as new (...args: string[]) => Function;
+    return (await new AsyncFunction('inputs', code)(inputs)) as Outputs;
+  }
+}
+
 describe('CodeNewNode', () => {
   it('can create node', () => {
     const node = CodeNewNodeImpl.create();
@@ -144,6 +151,42 @@ describe('CodeNewNode', () => {
     ]);
   });
 
+  it('creates one base port and resolves nested JSONPath, graph-input, and context expressions', async () => {
+    const node = createNode({
+      code: [
+        'const name = {{payload.profile.name}};',
+        'const second = {{payload.values[1]}};',
+        'const prefix = {{@graphInputs.settings.prefix}};',
+        'const suffix = {{@context.labels[0].suffix}};',
+        'return `${prefix}:${name}:${second}:${suffix}`;',
+      ].join('\n'),
+    });
+
+    assert.deepStrictEqual(
+      node.getInputDefinitions().map((definition) => definition.id),
+      ['payload'],
+    );
+
+    const result = await node.process(
+      {
+        ['payload' as PortId]: {
+          type: 'object',
+          value: { profile: { name: 'Rivet' }, values: ['first', 'second'] },
+        },
+      },
+      createContext(new IsomorphicCodeRunner(), {
+        graphInputNodeValues: {
+          settings: { type: 'object', value: { prefix: 'Core' } },
+        },
+        contextValues: {
+          labels: { type: 'object[]', value: [{ suffix: 'Studio' }] },
+        },
+      }),
+    );
+
+    assert.deepStrictEqual(result.output?.value, 'Core:Rivet:second:Studio');
+  });
+
   it('evaluates a JavaScript body and returns the returned value', async () => {
     const node = createNode({
       code: 'const doubled = {{value}} * 2;\nreturn doubled;',
@@ -162,6 +205,33 @@ describe('CodeNewNode', () => {
         value: 42,
       },
     });
+  });
+
+  it('keeps bare interpolation compatible with runners that do not implement the path resolver extension', async () => {
+    const node = createNode({ code: 'return {{value}} + 1;' });
+    const result = await node.process(
+      {
+        value: { type: 'number', value: 41 },
+      },
+      createContext(new LegacyBareCodeRunner()),
+    );
+
+    assert.deepStrictEqual(result.output?.value, 42);
+  });
+
+  it('explains the required CodeRunner extension for JSONPath interpolation', async () => {
+    const node = createNode({ code: 'return {{payload.answer}};' });
+
+    await assert.rejects(
+      () =>
+        node.process(
+          {
+            payload: { type: 'object', value: { answer: 42 } },
+          },
+          createContext(new LegacyBareCodeRunner()),
+        ),
+      /must honor CodeRunnerOptions\.interpolationHelperIdentifier/,
+    );
   });
 
   it('returns objects, null, and undefined as exact output values', async () => {
@@ -219,9 +289,48 @@ describe('CodeNewNode', () => {
     assert.deepStrictEqual(object, { nested: { key: 'original' } });
   });
 
+  it('keeps a base value shared between bare and JSONPath interpolation expressions', async () => {
+    const node = createNode({
+      code: '{{payload}}.profile.name = "changed";\nreturn {{payload.profile.name}};',
+    });
+    const payload = { profile: { name: 'original' } };
+
+    const result = await node.process(
+      {
+        ['payload' as PortId]: { type: 'object', value: payload },
+      },
+      createContext(),
+    );
+
+    assert.deepStrictEqual(result.output?.value, 'changed');
+    assert.deepStrictEqual(payload, { profile: { name: 'original' } });
+  });
+
   it('keeps interpolation values available when authored code uses generated helper names', async () => {
     const node = createNode({
       code: 'const __codeNewInputs = {};\nconst codeNewInputCloneCache = new WeakMap();\nreturn {{value}};',
+    });
+
+    const result = await node.process(
+      {
+        ['value' as PortId]: { type: 'number', value: 7 },
+      },
+      createContext(),
+    );
+
+    assert.deepStrictEqual(result.output?.value, 7);
+  });
+
+  it('keeps interpolation values available when authored code uses every generated runtime-name prefix', async () => {
+    const node = createNode({
+      code: [
+        'const __codeNewInputs = {};',
+        'const __codeNewInputsResolveInterpolation = () => undefined;',
+        'const __codeNewInputsCloneCache = new WeakMap();',
+        'const __codeNewInputsGraphInputs = {};',
+        'const __codeNewInputsContext = {};',
+        'return {{value}};',
+      ].join('\n'),
     });
 
     const result = await node.process(

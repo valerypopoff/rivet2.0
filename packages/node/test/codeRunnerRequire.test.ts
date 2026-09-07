@@ -71,4 +71,53 @@ void describe('codeRunnerRequire', () => {
       await rm(runtimeRoot, { force: true, recursive: true });
     }
   });
+
+  void it('injects the narrow interpolation resolver without enabling Rivet', async () => {
+    const runner = new NodeCodeRunner();
+    const outputs = await runner.runCode(
+      `
+        return {
+          output1: {
+            type: 'any',
+            value: {
+              graph: __resolveInterpolation(inputs, '@graphInputs.global.items[1]', graphInputs, context),
+              input: __resolveInterpolation(inputs, 'payload.items[0].name', graphInputs, context),
+              context: __resolveInterpolation(inputs, '@context.local.active', graphInputs, context),
+            },
+          },
+        };
+      `,
+      {
+        payload: {
+          type: 'object',
+          value: { items: [{ name: 'first' }] },
+        },
+      },
+      {
+        includeConsole: false,
+        includeFetch: false,
+        includeProcess: false,
+        includeRequire: false,
+        includeRivet: false,
+        interpolationHelperIdentifier: '__resolveInterpolation',
+      },
+      {
+        global: { type: 'object', value: { items: ['ignored', 'second'] } },
+      },
+      {
+        local: { type: 'object', value: { active: true } },
+      },
+    );
+
+    assert.deepEqual(outputs, {
+      output1: {
+        type: 'any',
+        value: {
+          context: true,
+          graph: 'second',
+          input: 'first',
+        },
+      },
+    });
+  });
 });

@@ -5,7 +5,7 @@ import {
   type PortId,
   extractInterpolationVariables,
   findInterpolationTokenSpans,
-  getInterpolationTokenName,
+  getInterpolationTokenReference,
   interpolate,
   protectEscapedInterpolationTokens,
   restoreEscapedInterpolationTokens,
@@ -54,11 +54,18 @@ export function getParsedExtractObjectPathPreviewSource(pathSource: string, inpu
   let cursor = 0;
 
   for (const tokenSpan of tokenSpans) {
-    result += protectedPath.slice(cursor, tokenSpan.start);
+    // Restore escaped syntax only from authored path segments. A recorded
+    // input value may itself contain interpolation-looking text and must stay
+    // literal in the stored-path preview.
+    result += restoreEscapedInterpolationTokens(protectedPath.slice(cursor, tokenSpan.start));
 
-    const tokenName = getInterpolationTokenName(tokenSpan.rawInner);
+    const tokenReference = getInterpolationTokenReference(tokenSpan.rawInner);
 
-    if (tokenName?.startsWith('@graphInputs.') || tokenName?.startsWith('@context.')) {
+    // Namespace roots intentionally do not have connectable input ports, and
+    // app-side history does not retain their source values. Use Core's parsed
+    // reference rather than a dotted-prefix check so bracket-root JSONPath
+    // forms remain visible too.
+    if (tokenReference?.source === 'graphInputs' || tokenReference?.source === 'context') {
       result += protectedPath.slice(tokenSpan.start, tokenSpan.end);
     } else {
       result += interpolate(`{{${tokenSpan.rawInner}}}`, interpolationInputs);
@@ -67,7 +74,7 @@ export function getParsedExtractObjectPathPreviewSource(pathSource: string, inpu
     cursor = tokenSpan.end;
   }
 
-  result += protectedPath.slice(cursor);
+  result += restoreEscapedInterpolationTokens(protectedPath.slice(cursor));
 
-  return restoreEscapedInterpolationTokens(result).trim();
+  return result.trim();
 }

@@ -1,4 +1,9 @@
-import type { CodeRunnerOptions, DataValue, Inputs, Outputs } from '@valerypopoff/rivet2-core';
+import {
+  type CodeRunnerOptions,
+  type DataValue,
+  type Inputs,
+  type Outputs,
+} from '@valerypopoff/rivet2-core';
 import * as process from 'node:process';
 import type { createCodeRunnerRequire } from './codeRunnerRequire.js';
 
@@ -15,6 +20,18 @@ export type NodeCodeRunnerInvocationPlan = {
   argNames: string[];
   argShape: string;
 };
+
+/**
+ * The deliberately narrow capability supplied to generated interpolation
+ * wrappers. Keeping it separate from Rivet means code execution does not
+ * need to expose the complete Core API merely to resolve a value path.
+ */
+export type CodeInterpolationResolver = (
+  inputs: Record<string, DataValue | undefined>,
+  expression: string,
+  graphInputs?: Record<string, DataValue>,
+  contextValues?: Record<string, DataValue>,
+) => unknown | undefined;
 
 /**
  * Gives one processor an immutable environment view without mutating the Node
@@ -98,6 +115,10 @@ export function getNodeCodeRunnerArgumentNames(
     argNames.push('context');
   }
 
+  if (options.interpolationHelperIdentifier) {
+    argNames.push(options.interpolationHelperIdentifier);
+  }
+
   return argNames;
 }
 
@@ -119,11 +140,21 @@ export async function buildNodeCodeRunnerInvocationArgs(params: {
   executionEnvironment?: NodeExecutionEnvironment;
   graphInputs?: Record<string, DataValue>;
   inputs: Inputs;
+  loadInterpolationResolver: () => Promise<CodeInterpolationResolver>;
   loadRivet: () => Promise<unknown>;
   options: CodeRunnerOptions;
   runtimeRequire: RuntimeRequire;
 }): Promise<unknown[]> {
-  const { contextValues, executionEnvironment, graphInputs, inputs, loadRivet, options, runtimeRequire } = params;
+  const {
+    contextValues,
+    executionEnvironment,
+    graphInputs,
+    inputs,
+    loadInterpolationResolver,
+    loadRivet,
+    options,
+    runtimeRequire,
+  } = params;
   const args: unknown[] = [inputs];
 
   if (options.includeConsole) {
@@ -154,6 +185,10 @@ export async function buildNodeCodeRunnerInvocationArgs(params: {
     args.push(contextValues);
   }
 
+  if (options.interpolationHelperIdentifier) {
+    args.push(await loadInterpolationResolver());
+  }
+
   return args;
 }
 
@@ -162,17 +197,28 @@ export async function buildNodeCodeRunnerInvocation(params: {
   executionEnvironment?: NodeExecutionEnvironment;
   graphInputs?: Record<string, DataValue>;
   inputs: Inputs;
+  loadInterpolationResolver: () => Promise<CodeInterpolationResolver>;
   loadRivet: () => Promise<unknown>;
   options: CodeRunnerOptions;
   runtimeRequire: RuntimeRequire;
 }): Promise<NodeCodeRunnerInvocation> {
-  const { contextValues, executionEnvironment, graphInputs, inputs, loadRivet, options, runtimeRequire } = params;
+  const {
+    contextValues,
+    executionEnvironment,
+    graphInputs,
+    inputs,
+    loadInterpolationResolver,
+    loadRivet,
+    options,
+    runtimeRequire,
+  } = params;
   const { argNames } = createNodeCodeRunnerInvocationPlan(options, graphInputs != null, contextValues != null);
   const args = await buildNodeCodeRunnerInvocationArgs({
     contextValues,
     executionEnvironment,
     graphInputs,
     inputs,
+    loadInterpolationResolver,
     loadRivet,
     options,
     runtimeRequire,

@@ -3,7 +3,11 @@ import path from 'node:path';
 import { createRequire } from 'node:module';
 import { performance } from 'node:perf_hooks';
 import { LRUCache } from 'lru-cache';
-import { createScopedNodeProcess, type NodeExecutionEnvironment } from '@valerypopoff/rivet2-node';
+import {
+  createScopedNodeProcess,
+  resolveCodeInterpolationExpression,
+  type NodeExecutionEnvironment,
+} from '@valerypopoff/rivet2-node';
 
 import { prepareRuntimeLibrariesForExecution } from './backend.js';
 
@@ -13,6 +17,7 @@ interface CodeRunnerOptions {
   includeRivet: boolean;
   includeProcess: boolean;
   includeConsole: boolean;
+  interpolationHelperIdentifier?: string;
 }
 
 interface DataValue {
@@ -358,6 +363,11 @@ export class ManagedCodeRunner {
     if (contextValues) {
       argNames.push('context');
       args.push(contextValues);
+    }
+
+    if (options.interpolationHelperIdentifier) {
+      argNames.push(options.interpolationHelperIdentifier);
+      args.push(resolveCodeInterpolationExpression);
     }
 
     const codeFunction = this.getCompiledCodeFunction(code, argNames);

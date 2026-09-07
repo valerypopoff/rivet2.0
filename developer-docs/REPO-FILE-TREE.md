@@ -17,7 +17,13 @@ packages/
   core/           Graph model, execution engine, nodes, plugins, serialization
   docs/           Docusaurus user documentation site
   node/           Node runtime adapter, debugger transport, benchmarks
-  evaluations/         Graph-oriented test utilities
+  evaluations/    Portable evaluation engine and persistence/transfer contracts
+  studio-server-api/        Hosted API and durable storage
+  studio-server-web/        Dashboard and hosted editor
+  studio-server-executor/   Hosted executor bootstrap
+  studio-server-shared/     Shared host contracts
+  studio-server-bootstrap/  Runtime initialization
+deploy/studio-server/       Images, Compose, Helm, launchers, verification
 developer-docs/   Maintainer architecture and contract docs
 scripts/          Root build, release, and timing scripts
   checks/         Repo hygiene checks
@@ -57,7 +63,7 @@ Keep these thin files unless a future change provides a compatibility path:
 | `packages/node/src/index.ts`                | public node package source entrypoint                                |
 | `packages/node/src/api.ts`                  | public Node runtime API implementation behind the package entrypoint |
 | `packages/evaluations/src/index.ts`              | public Evaluations package source entrypoint                              |
-| `packages/evaluations/src/api.ts`                | public Evaluations helper API implementation                              |
+| `packages/evaluations/src/runner.ts`             | portable evaluation runner exported through the package entrypoint        |
 | `packages/app/src/index.tsx`                | standalone app mount entrypoint                                      |
 | `packages/app/src/components/evaluations/api.ts` | app-side Evaluations bridge used by app components                        |
 

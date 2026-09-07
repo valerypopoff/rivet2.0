@@ -132,6 +132,58 @@ void describe('CachedNodeCodeRunner', () => {
     });
   });
 
+  void it('injects the interpolation resolver without Rivet and separates helper argument shapes', async () => {
+    const runner = new CachedNodeCodeRunner();
+    const code = `
+      const resolver = typeof __resolveA === 'function' ? __resolveA : __resolveB;
+      return {
+        output: {
+          type: 'any',
+          value: {
+            selected: resolver(inputs, 'payload.items[0].name'),
+            shape: [typeof __resolveA, typeof __resolveB],
+          },
+        },
+      };
+    `;
+    const inputs = {
+      payload: {
+        type: 'object',
+        value: {
+          items: [{ name: 'first' }],
+        },
+      },
+    };
+
+    const first = await runner.runCode(code, inputs, {
+      ...DEFAULT_OPTIONS,
+      interpolationHelperIdentifier: '__resolveA',
+    });
+    const second = await runner.runCode(code, inputs, {
+      ...DEFAULT_OPTIONS,
+      interpolationHelperIdentifier: '__resolveB',
+    });
+    const third = await runner.runCode(code, inputs, {
+      ...DEFAULT_OPTIONS,
+      interpolationHelperIdentifier: '__resolveB',
+    });
+
+    assert.deepEqual(first.output?.value, {
+      selected: 'first',
+      shape: ['function', 'undefined'],
+    });
+    assert.deepEqual(second.output?.value, {
+      selected: 'first',
+      shape: ['undefined', 'function'],
+    });
+    assert.deepEqual(third.output?.value, second.output?.value);
+    assert.deepEqual(runner.getCacheStats(), {
+      entries: 2,
+      hits: 1,
+      misses: 2,
+    });
+  });
+
   void it('evicts the oldest compiled functions when the cache is full', async () => {
     const runner = new CachedNodeCodeRunner({ maxEntries: 1 });
 

@@ -9,13 +9,13 @@ import { nanoid } from 'nanoid/non-secure';
 import { NodeImpl, type NodeUIData } from '../NodeImpl.js';
 import { nodeDefinition } from '../NodeDefinition.js';
 import { type DataValue } from '../DataValue.js';
-import { JSONPath } from 'jsonpath-plus';
 import { expectType } from '../../utils/expectType.js';
 import { type EditorDefinition, type InternalProcessContext, type NodeBodySpec } from '../../index.js';
 import { dedent } from 'ts-dedent';
 import { coerceTypeOptional } from '../../utils/coerceType.js';
 import { extractInterpolationVariables, interpolate } from '../../utils/interpolation.js';
 import { createInterpolationInputDefinition } from '../interpolationInputDefinition.js';
+import { evaluateJsonPath } from '../../utils/jsonPath.js';
 
 export type ExtractObjectPathNode = ChartNode<'extractObjectPath', ExtractObjectPathNodeData>;
 
@@ -176,7 +176,7 @@ export class ExtractObjectPathNodeImpl extends NodeImpl<ExtractObjectPathNode> {
     let matches: unknown[];
     try {
       // Wrap doesn't seem to wrap when the input is undefined or null...
-      const match = JSONPath<unknown>({ json: inputObject ?? null, path: inputPath, wrap: true });
+      const match = evaluateJsonPath(inputObject, inputPath, true);
       matches = match == null ? [] : (match as unknown[]);
     } catch (err) {
       matches = [];

@@ -51,6 +51,8 @@ test('hasExtractObjectPathInterpolationInputs returns true only for interpolatio
   assert.equal(hasExtractObjectPathInterpolationInputs('$.aaa["{{{field}}}"]'), false);
   assert.equal(hasExtractObjectPathInterpolationInputs('$.aaa["{{object}}"]'), false);
   assert.equal(hasExtractObjectPathInterpolationInputs('$.aaa["{{@context.field}}"]'), false);
+  assert.equal(hasExtractObjectPathInterpolationInputs(`$.aaa["{{@graphInputs['field']}}"]`), false);
+  assert.equal(hasExtractObjectPathInterpolationInputs(`$.aaa["{{@context[\"field\"]}}"]`), false);
   assert.equal(hasExtractObjectPathInterpolationInputs('{{broken + $.aaa["{{field}}"]'), true);
 });
 
@@ -69,13 +71,28 @@ test('getParsedExtractObjectPathPreviewSource substitutes stored interpolation i
   assert.equal(parsedSource, '$.aaa["ccc"][1]');
 });
 
-test('getParsedExtractObjectPathPreviewSource leaves graph and context references visible without app-side context snapshots', () => {
-  const parsedSource = getParsedExtractObjectPathPreviewSource('$.aaa["{{field}}"]["{{@context.leaf}}"]', {
+test('getParsedExtractObjectPathPreviewSource leaves dotted and bracketed graph/context references visible without app-side context snapshots', () => {
+  const source = `$.aaa["{{field}}"]["{{@context.leaf}}"]["{{@graphInputs['graph-field']}}"]["{{@context[\"context-field\"]}}"]`;
+  const parsedSource = getParsedExtractObjectPathPreviewSource(source, {
     ['field' as PortId]: {
       type: 'string',
       value: 'ccc',
     },
   });
 
-  assert.equal(parsedSource, '$.aaa["ccc"]["{{@context.leaf}}"]');
+  assert.equal(
+    parsedSource,
+    `$.aaa["ccc"]["{{@context.leaf}}"]["{{@graphInputs['graph-field']}}"]["{{@context[\"context-field\"]}}"]`,
+  );
+});
+
+test('getParsedExtractObjectPathPreviewSource does not reinterpret escaped syntax from a recorded input value', () => {
+  const parsedSource = getParsedExtractObjectPathPreviewSource('$.aaa["{{field}}"]', {
+    ['field' as PortId]: {
+      type: 'string',
+      value: '{{{literal}}}',
+    },
+  });
+
+  assert.equal(parsedSource, '$.aaa["{{{literal}}}"]');
 });

@@ -1365,6 +1365,19 @@ running. This does not change the public `@valerypopoff/rivet2-node` default
 runner, and Code-family nodes that request the `Rivet` capability may still run
 on the sidecar's current thread for compatibility.
 
+Code-family interpolation has one executor-neutral runtime contract. A bare
+`{{value}}` reads the generated cloned input map directly, while
+`{{value.path[0]}}`, `{{@graphInputs.setting}}`, and `{{@context.value}}`
+request the narrow `CodeRunnerOptions.interpolationHelperIdentifier` capability.
+Browser, public Node, cached Node, managed hosted, app-executor worker, and
+app-executor current-thread (`includeRivet`) runners inject the same Core
+`resolveCodeInterpolationExpression` behavior under that collision-safe name.
+The Node implementations dynamically import only the Core
+`interpolation-runtime` entry rather than the full `Rivet` namespace. A custom
+runner that receives this option must honor it for path/special-root
+interpolation; ordinary bare interpolation deliberately remains compatible with
+older runners that do not know the option.
+
 Code-family `console` output in Node executor mode is an executor-session
 message, not sidecar stdout. When the node's console permission is enabled, the
 app-executor runner sends `codeConsole` messages for `debug`, `info`, `log`,

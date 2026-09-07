@@ -85,12 +85,33 @@ export { JS_LIST_CALLBACK_LOCAL_NAMES, interpolateJSListCallbackBody } from './m
 export { findAutoDelegateGraphCandidate } from './model/nodes/toolCallDelegation.js';
 export {
   extractInterpolationVariables,
+  extractInterpolationVariableReferences,
   findInterpolationTokenSpans,
+  getInterpolationTokenReference,
   getInterpolationTokenName,
   interpolate,
+  parseInterpolationExpression,
+  parseInterpolationTemplate,
   protectEscapedInterpolationTokens,
+  resolveCodeInterpolationExpression,
+  resolveInterpolationExpressionRawValue,
+  resolveInterpolationTokenRawValue,
   restoreEscapedInterpolationTokens,
+  stringifyInterpolationSourceValue,
 } from './utils/interpolation.js';
+export type {
+  InterpolateOptions,
+  InterpolationReferenceSource,
+  InterpolationTokenReplacementInfo,
+  InterpolationTokenSpan,
+  InterpolationValueSources,
+  InterpolationVariableReference,
+  ParsedInterpolationExpression,
+  ParsedInterpolationTemplate,
+  ParsedInterpolationToken,
+  ReplaceInterpolationTokensOptions,
+} from './utils/interpolation.js';
+export { scanInterpolationTokenSpans } from './utils/interpolationSyntax.js';
 export { WarningsPort } from './utils/symbols.js';
 
 import * as openai from './utils/openai.js';

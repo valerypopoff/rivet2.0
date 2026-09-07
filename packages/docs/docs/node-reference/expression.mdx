@@ -8,7 +8,7 @@ sidebar_label: Expression
 
 The Expression node evaluates one JavaScript expression and returns the result on its `Output` port.
 
-Use `{{name}}` tokens inside the expression to create input ports. Connected values are exposed as JavaScript values, not as wrapped Rivet `DataValue` objects.
+Use `{{name}}` tokens inside the expression to create input ports. Connected values are exposed as JavaScript values, not as wrapped Rivet `DataValue` objects. `{{customer.address.city}}` creates one `customer` port and evaluates the JSONPath suffix against that value.
 
 ## Inputs
 

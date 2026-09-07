@@ -11,13 +11,14 @@ import { nodeDefinition } from '../NodeDefinition.js';
 import { dedent } from 'ts-dedent';
 import { type EditorDefinition } from '../EditorDefinition.js';
 import { type NodeBodySpec } from '../NodeBodySpec.js';
-import { extractInterpolationVariables, interpolate } from '../../utils/interpolation.js';
+import { extractInterpolationVariableReferences, interpolate } from '../../utils/interpolation.js';
 import type { Inputs, Outputs } from '../GraphProcessor.js';
+import type { InternalProcessContext } from '../ProcessContext.js';
 import { keys } from '../../utils/typeSafety.js';
-import { coerceTypeOptional, coerceType } from '../../utils/coerceType.js';
+import { coerceType } from '../../utils/coerceType.js';
 import { getInputOrData } from '../../utils/index.js';
 import { createInterpolationInputDefinition } from '../interpolationInputDefinition.js';
-import type { GptFunctionResultHandling } from '../DataValue.js';
+import type { DataValue, GptFunctionResultHandling } from '../DataValue.js';
 import { buildNodeBodyPreview } from './nodeBodyPreview.js';
 
 export type GptFunctionNode = ChartNode<'gptFunction', GptFunctionNodeData>;
@@ -118,17 +119,17 @@ export class GptFunctionNodeImpl extends NodeImpl<GptFunctionNode> {
       });
     }
 
-    const inputNames = this.data.useSchemaInput ? [] : extractInterpolationVariables(this.data.schema);
+    const inputReferences = this.data.useSchemaInput ? [] : extractInterpolationVariableReferences(this.data.schema);
     inputs = [
       ...inputs,
-      ...(inputNames?.map((inputName): NodeInputDefinition => {
+      ...inputReferences.map(({ baseName, hasPath }): NodeInputDefinition => {
         return createInterpolationInputDefinition({
-          id: `input-${inputName}` as PortId,
-          interpolationName: inputName,
-          dataType: 'string',
-          description: `An interpolated value in the schema named '${inputName}'`,
+          id: `input-${baseName}` as PortId,
+          interpolationName: baseName,
+          dataType: hasPath ? 'any' : 'string',
+          description: `An interpolated value in the schema named '${baseName}'`,
         });
-      }) ?? []),
+      }),
     ];
 
     return inputs;
@@ -228,7 +229,7 @@ export class GptFunctionNodeImpl extends NodeImpl<GptFunctionNode> {
     };
   }
 
-  async process(inputs: Inputs): Promise<Outputs> {
+  async process(inputs: Inputs, context?: InternalProcessContext): Promise<Outputs> {
     const name = getInputOrData(this.data, inputs, 'name');
     const description = getInputOrData(this.data, inputs, 'description');
     const resultHandling: GptFunctionResultHandling =
@@ -239,19 +240,23 @@ export class GptFunctionNodeImpl extends NodeImpl<GptFunctionNode> {
       schema = coerceType(inputs['schema' as PortId], 'object');
     } else {
       const inputMap = keys(inputs)
-        .filter((key) => key.startsWith('input'))
+        .filter((key) => key.startsWith('input-'))
         .reduce(
           (acc, key) => {
-            const stringValue = coerceTypeOptional(inputs[key], 'string') ?? '';
-
             const interpolationKey = key.slice('input-'.length);
-            acc[interpolationKey] = stringValue;
+            acc[interpolationKey] = inputs[key];
             return acc;
           },
-          {} as Record<string, string>,
+          {} as Record<string, DataValue | undefined>,
         );
 
-      const interpolated = interpolate(this.data.schema, inputMap);
+      const interpolated = interpolate(
+        this.data.schema,
+        inputMap,
+        context?.graphInputNodeValues,
+        context?.contextValues,
+        { coerceBareVariableDataValues: true },
+      );
 
       schema = JSON.parse(interpolated);
     }

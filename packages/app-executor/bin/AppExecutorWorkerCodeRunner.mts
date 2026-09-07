@@ -1,11 +1,12 @@
-import type {
-  CodeConsoleLevel,
-  CodeConsoleMessage,
-  CodeRunner,
-  CodeRunnerOptions,
-  DataValue,
-  Inputs,
-  Outputs,
+import {
+  resolveCodeInterpolationExpression,
+  type CodeConsoleLevel,
+  type CodeConsoleMessage,
+  type CodeRunner,
+  type CodeRunnerOptions,
+  type DataValue,
+  type Inputs,
+  type Outputs,
 } from '@valerypopoff/rivet2-core';
 import { createScopedNodeProcess, type NodeExecutionEnvironment } from '@valerypopoff/rivet2-node';
 import { inspect } from 'node:util';
@@ -147,6 +148,11 @@ async function runCodeInCurrentThread(
   if (contextValues) {
     argNames.push('context');
     args.push(contextValues);
+  }
+
+  if (options.interpolationHelperIdentifier) {
+    argNames.push(options.interpolationHelperIdentifier);
+    args.push(resolveCodeInterpolationExpression);
   }
 
   argNames.push(code);

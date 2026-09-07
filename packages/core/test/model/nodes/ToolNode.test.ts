@@ -6,6 +6,7 @@ import {
   type GptFunctionNode,
   type NodeBodySpec,
 } from '../../../src/index.js';
+import type { InternalProcessContext } from '../../../src/model/ProcessContext.js';
 
 const createNode = (data: Partial<GptFunctionNode['data']>) => {
   return new GptFunctionNodeImpl({
@@ -70,6 +71,55 @@ describe('GptFunctionNodeImpl', () => {
       node.getInputDefinitions([], {}, {} as any, {}).map((definition) => definition.id),
       ['input-foo', 'input-somevar'],
     );
+  });
+
+  it('uses one any schema input for nested JSONPath values while retaining bare schema interpolation', async () => {
+    const node = createNode({
+      schema:
+        '{"type":"object","properties":{"name":{"default":"{{payload.user.name}}"},"raw":{"default":{{payload}}}}}',
+      useSchemaInput: false,
+    });
+
+    assert.deepStrictEqual(
+      node.getInputDefinitions([], {}, {} as any, {}).map(({ id, dataType }) => ({ id, dataType })),
+      [{ id: 'input-payload', dataType: 'any' }],
+    );
+
+    const result = await node.process({
+      'input-payload': {
+        type: 'object',
+        value: { user: { name: 'Ada' } },
+      },
+    });
+
+    assert.deepStrictEqual(result.function?.value.parameters, {
+      type: 'object',
+      properties: {
+        name: { default: 'Ada' },
+        raw: { default: { user: { name: 'Ada' } } },
+      },
+    });
+  });
+
+  it('resolves graph and context JSONPath values in schema templates', async () => {
+    const node = createNode({
+      schema: '{"graphName":"{{@graphInputs.payload.user.name}}","contextLabel":"{{@context.settings.labels[0]}}"}',
+      useSchemaInput: false,
+    });
+
+    const result = await node.process({}, {
+      graphInputNodeValues: {
+        payload: { type: 'object', value: { user: { name: 'Ada' } } },
+      },
+      contextValues: {
+        settings: { type: 'object', value: { labels: ['Primary'] } },
+      },
+    } as InternalProcessContext);
+
+    assert.deepStrictEqual(result.function?.value.parameters, {
+      graphName: 'Ada',
+      contextLabel: 'Primary',
+    });
   });
 
   it('bounds long descriptions with the same preview budget as Text nodes', () => {

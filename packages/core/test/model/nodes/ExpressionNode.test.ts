@@ -125,6 +125,29 @@ describe('ExpressionNode', () => {
     ]);
   });
 
+  it('creates a single base port for a nested JSONPath expression', async () => {
+    const node = createNode({
+      expression: '{{payload.items[1].label}}',
+    });
+
+    assert.deepStrictEqual(
+      node.getInputDefinitions().map((definition) => definition.id),
+      ['payload'],
+    );
+
+    const result = await node.process(
+      {
+        ['payload' as PortId]: {
+          type: 'object',
+          value: { items: [{ label: 'first' }, { label: 'second' }] },
+        },
+      },
+      createContext(),
+    );
+
+    assert.deepStrictEqual(result.output?.value, 'second');
+  });
+
   it('evaluates a value-based ternary expression', async () => {
     const node = createNode({
       expression: '{{a}} == "123" ? {{b}} : {{c}}',

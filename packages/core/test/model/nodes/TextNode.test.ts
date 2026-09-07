@@ -62,6 +62,32 @@ describe('TextNode', () => {
     });
   });
 
+  it('uses one raw base input for nested JSONPath expressions while preserving bare string coercion', async () => {
+    const node = createNode({
+      text: '{{payload.user.names[0]}} / {{payload}}',
+    });
+
+    assert.deepStrictEqual(
+      node.getInputDefinitions().map(({ id, dataType }) => ({ id, dataType })),
+      [{ id: 'payload', dataType: 'any' }],
+    );
+
+    const result = await node.process(
+      {
+        payload: {
+          type: 'object',
+          value: { user: { names: ['Ada'] } },
+        },
+      } satisfies Record<string, DataValue>,
+      context,
+    );
+
+    assert.deepStrictEqual(result.output, {
+      type: 'string',
+      value: 'Ada / {"user":{"names":["Ada"]}}',
+    });
+  });
+
   it('opts the text editor into word and character stats', () => {
     const node = createNode({});
     const textEditor = node.getEditors().find((editor) => editor.type === 'code' && editor.dataKey === 'text');

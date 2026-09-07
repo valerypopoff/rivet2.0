@@ -96,7 +96,7 @@ compatibility aliases.
 
 The authorized cleanup can remove stopped containers, unused custom networks, unused images, and unused builder cache for **any** project on the selected host. It does not pass `--volumes`, run `docker volume prune` or `docker system prune`, or invoke Compose teardown. Local Compose volumes that may hold Postgres data, app data, workspace cache, or runtime-library state are preserved; filesystem workflow and recording host paths are also outside Docker's prune surface. The tradeoff is that stopped-container metadata/logs are lost, stopped stacks may need to recreate/pull images, and custom/dev builds may rebuild layers. `yarn studio-server:verify:clean` tests this contract without contacting Docker; a failure during a real prune stops subsequent steps and reports the already-completed, non-reversible cleanup.
 
-## Environment loading
+## Proxy DNS recovery and health
 
 Proxy service destinations use runtime DNS resolution consistently across the
 development, Compose production, and packaged image templates. Do not add literal
@@ -121,6 +121,8 @@ run the API proxy-image contract tests and `yarn studio-server:ui:observe proxy-
 with `PLAYWRIGHT_HEADLESS=1` and `PLAYWRIGHT_SLOW_MO=0`; require a fresh report under
 `artifacts/playwright/`, not merely a successful launcher exit.
 The Studio Server deployment-contracts CI job also runs the isolated DNS fixture.
+
+## Environment loading
 
 Studio Server launcher scripts load env with `deploy/studio-server/scripts/lib/dev-env.mjs`.
 

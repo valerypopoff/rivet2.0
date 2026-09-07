@@ -248,6 +248,58 @@ test('different argument shapes do not share compiled functions', async () => {
   });
 });
 
+test('managed runner injects interpolation resolution without Rivet and caches each helper name separately', async () => {
+  await withRunnerEnv({}, async () => {
+    const telemetry = createManagedCodeRunnerTelemetry();
+    const runner = new ManagedCodeRunner('/tmp/rivet-runtime-libraries-test', { telemetry });
+    const code = `
+      const resolver = typeof __resolveA === 'function' ? __resolveA : __resolveB;
+      return {
+        output: {
+          type: 'any',
+          value: {
+            selected: resolver(inputs, 'payload.items[0].name'),
+            shape: [typeof __resolveA, typeof __resolveB],
+          },
+        },
+      };
+    `;
+    const inputs = {
+      payload: {
+        type: 'object',
+        value: { items: [{ name: 'managed-value' }] },
+      },
+    };
+
+    const first = await runner.runCode(code, inputs, {
+      ...plainOptions,
+      interpolationHelperIdentifier: '__resolveA',
+    });
+    const second = await runner.runCode(code, inputs, {
+      ...plainOptions,
+      interpolationHelperIdentifier: '__resolveB',
+    });
+    const third = await runner.runCode(code, inputs, {
+      ...plainOptions,
+      interpolationHelperIdentifier: '__resolveB',
+    });
+
+    assert.deepEqual(getOutputValue(first), {
+      selected: 'managed-value',
+      shape: ['function', 'undefined'],
+    });
+    assert.deepEqual(getOutputValue(second), {
+      selected: 'managed-value',
+      shape: ['undefined', 'function'],
+    });
+    assert.deepEqual(getOutputValue(third), getOutputValue(second));
+    assert.equal(telemetry.prepareCalls, 0);
+    assert.equal(telemetry.compileCalls, 2);
+    assert.equal(telemetry.cacheHits, 1);
+    assert.equal(telemetry.cacheMisses, 2);
+  });
+});
+
 test('syntax errors are not cached', async () => {
   await withRunnerEnv({}, async () => {
     const telemetry = createManagedCodeRunnerTelemetry();

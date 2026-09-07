@@ -47,3 +47,21 @@ This is different from `control-flow-excluded`. A `control-flow-excluded` output
 ## Interpolation-aware editors
 
 Editors that support Rivet `{{name}}` interpolation treat those tokens as Rivet syntax while you type. Code-style editors such as Code, Expression, and the JS Filter / JS Map Callback Body editors still use JavaScript highlighting and diagnostics for the surrounding code. JSON-template editors such as Object JSON Template and GPT Function Schema validate the surrounding JSON live, but valid interpolation tokens can appear as JSON values, object keys, or string fragments without being shown as JSON syntax errors.
+
+## Interpolation paths
+
+Interpolation can select a value inside an object or array with the same JSONPath syntax used by [Extract Object Path](../node-reference/extract-object-path.mdx) and Destructure. For example:
+
+```text
+{{customer.name}}
+{{order.items[0].price}}
+{{orders[?(@.paid)].id}}
+```
+
+Each expression creates only one dynamic input: its base name. The examples above create `customer`, `order`, and `orders` inputs—not ports named `customer.name` or `order.items[0].price`. Connect the whole object or array to that base port, then Rivet selects the requested value when the node runs. A JSONPath query with no match behaves as an absent value; a query with one match returns that value, and a query with multiple matches returns an array.
+
+`{{@graphInputs.profile.name}}` and `{{@context.session.user.name}}` use the same path syntax, but continue to read their graph/context roots directly and do not create node inputs.
+
+Text-like fields turn a selected value into text. JSON-template and JavaScript fields preserve the selected value's JSON/JavaScript shape when their normal interpolation rules allow it. You can still apply a text formatter after a path, for example `{{customer.name | uppercase}}`.
+
+If an older project deliberately used a literal dynamic port name containing `.` or `[]`, it is now read as a path expression. Reconnect that value to the base port; Rivet does not silently migrate or guess those historical literal names.

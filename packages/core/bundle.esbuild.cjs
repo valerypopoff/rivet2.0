@@ -23,13 +23,27 @@ const aliasModule = (moduleFrom, moduleTo) => ({
 // Several dependencies ship as ESM-only in their latest versions. The CJS
 // bundle aliases them to installed CJS-compatible versions so require() works.
 const hasWebAppRuntimeEntry = existsSync('src/webAppRuntime.ts');
+const hasInterpolationRuntimeEntry = existsSync('src/interpolationRuntime.ts');
+const hasInterpolationSyntaxEntry = existsSync('src/utils/interpolationSyntax.ts');
+const entryPoints = { bundle: 'src/index.ts' };
+
+if (hasWebAppRuntimeEntry) {
+  entryPoints.webAppRuntime = 'src/webAppRuntime.ts';
+}
+
+if (hasInterpolationRuntimeEntry) {
+  entryPoints.interpolationRuntime = 'src/interpolationRuntime.ts';
+}
+
+if (hasInterpolationSyntaxEntry) {
+  entryPoints.interpolationSyntax = 'src/utils/interpolationSyntax.ts';
+}
+
 const options = {
-  entryPoints: hasWebAppRuntimeEntry
-    ? { bundle: 'src/index.ts', webAppRuntime: 'src/webAppRuntime.ts' }
-    : ['src/index.ts'],
+  entryPoints,
   bundle: true,
   platform: 'node',
-  ...(hasWebAppRuntimeEntry
+  ...(hasWebAppRuntimeEntry || hasInterpolationRuntimeEntry || hasInterpolationSyntaxEntry
     ? { outdir: 'dist/cjs', outExtension: { '.js': '.cjs' } }
     : { outfile: 'dist/cjs/bundle.cjs' }),
   format: 'cjs',

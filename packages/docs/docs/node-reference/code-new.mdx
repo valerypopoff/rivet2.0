@@ -17,7 +17,7 @@ Use [Code (legacy)](./code.mdx) when you need multiple named outputs or when you
 
 ### Inputs From Interpolation
 
-Code does not have an `Inputs` setting. Instead, any `{{name}}` token in the code creates an input port named `name`.
+Code does not have an `Inputs` setting. Instead, any `{{name}}` token in the code creates an input port named `name`. A JSONPath expression such as `{{customer.address.city}}` still creates only the base `customer` port and evaluates to the selected JavaScript value.
 
 Interpolated inputs evaluate as connected JavaScript values, not as text snippets. For example:
 

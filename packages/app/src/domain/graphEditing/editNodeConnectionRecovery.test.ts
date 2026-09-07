@@ -277,6 +277,35 @@ test('renamed interpolation input keeps the live incoming connection', () => {
   assert.deepEqual(result.nextRecoverableConnections, []);
 });
 
+test('changing an interpolation path keeps the base input connection', () => {
+  const targetNode = makeTextNode('target', '{{record.profile.name}}');
+  const sourceNode = makeTextNode('source', 'source');
+  const connection = makeConnection({
+    inputNodeId: targetNode.id,
+    inputId: 'record' as PortId,
+    outputNodeId: sourceNode.id,
+  });
+
+  const result = reconcileNodeEditConnections({
+    nodeId: targetNode.id,
+    newNode: {
+      data: {
+        ...(targetNode.data as Record<string, unknown>),
+        text: '{{record.profile.email}}',
+      },
+    },
+    nodes: [sourceNode, targetNode],
+    liveConnections: [connection],
+    recoverableConnections: [],
+    project,
+    referencedProjects: {},
+    projectNodeRegistry: registry,
+  });
+
+  assert.deepEqual(result.nextConnections, [connection]);
+  assert.deepEqual(result.nextRecoverableConnections, []);
+});
+
 test('renamed interpolation input does not rename a recoverable connection after the old port disappeared', () => {
   const targetNode = makeTextNode('target', '');
   const sourceNode = makeTextNode('source', 'source');

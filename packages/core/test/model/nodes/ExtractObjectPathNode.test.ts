@@ -38,16 +38,19 @@ describe('ExtractObjectPathNodeImpl', () => {
       path: '$.aaa["ccc"]',
     });
 
-    const result = await node.process({
-      object: {
-        type: 'object',
-        value: {
-          aaa: {
-            ccc: 42,
+    const result = await node.process(
+      {
+        object: {
+          type: 'object',
+          value: {
+            aaa: {
+              ccc: 42,
+            },
           },
-        },
-      } as DataValue,
-    } as Record<any, DataValue>, createContext());
+        } as DataValue,
+      } as Record<any, DataValue>,
+      createContext(),
+    );
 
     assert.equal(result['match'].value, 42);
     assert.deepEqual(result['all_matches'].value, [42]);
@@ -69,20 +72,23 @@ describe('ExtractObjectPathNodeImpl', () => {
       path: '$.aaa["{{bbb}}"]',
     });
 
-    const result = await node.process({
-      object: {
-        type: 'object',
-        value: {
-          aaa: {
-            ccc: 'picked',
+    const result = await node.process(
+      {
+        object: {
+          type: 'object',
+          value: {
+            aaa: {
+              ccc: 'picked',
+            },
           },
-        },
-      } as DataValue,
-      bbb: {
-        type: 'string',
-        value: 'ccc',
-      } as DataValue,
-    } as Record<any, DataValue>, createContext());
+        } as DataValue,
+        bbb: {
+          type: 'string',
+          value: 'ccc',
+        } as DataValue,
+      } as Record<any, DataValue>,
+      createContext(),
+    );
 
     assert.equal(result['match'].value, 'picked');
     assert.deepEqual(result['all_matches'].value, ['picked']);
@@ -93,21 +99,55 @@ describe('ExtractObjectPathNodeImpl', () => {
       path: '$.items[{{index}}]',
     });
 
-    const result = await node.process({
-      object: {
-        type: 'object',
-        value: {
-          items: ['zero', 'one', 'two'],
-        },
-      } as DataValue,
-      index: {
-        type: 'number',
-        value: 1,
-      } as DataValue,
-    } as Record<any, DataValue>, createContext());
+    const result = await node.process(
+      {
+        object: {
+          type: 'object',
+          value: {
+            items: ['zero', 'one', 'two'],
+          },
+        } as DataValue,
+        index: {
+          type: 'number',
+          value: 1,
+        } as DataValue,
+      } as Record<any, DataValue>,
+      createContext(),
+    );
 
     assert.equal(result['match'].value, 'one');
     assert.deepEqual(result['all_matches'].value, ['one']);
+  });
+
+  it('uses the same JSONPath resolver for an interpolation expression inside the stored path', async () => {
+    const node = createNode({
+      path: '$.aaa["{{selector.keys[0]}}"]',
+    });
+
+    assert.deepEqual(
+      node.getInputDefinitions().map(({ id, dataType }) => ({ id, dataType })),
+      [
+        { id: 'object', dataType: 'object' },
+        { id: 'selector', dataType: 'any' },
+      ],
+    );
+
+    const result = await node.process(
+      {
+        object: {
+          type: 'object',
+          value: { aaa: { selected: 'picked' } },
+        } as DataValue,
+        selector: {
+          type: 'object',
+          value: { keys: ['selected'] },
+        } as DataValue,
+      } as Record<any, DataValue>,
+      createContext(),
+    );
+
+    assert.equal(result.match.value, 'picked');
+    assert.deepEqual(result.all_matches.value, ['picked']);
   });
 
   it('allows a stored path to interpolate a variable named path when usePathInput is off', async () => {
@@ -163,16 +203,19 @@ describe('ExtractObjectPathNodeImpl', () => {
       ['object'],
     );
 
-    const result = await node.process({
-      object: {
-        type: 'object',
-        value: {
-          aaa: {
-            '{{bbb}}': 'literal',
+    const result = await node.process(
+      {
+        object: {
+          type: 'object',
+          value: {
+            aaa: {
+              '{{bbb}}': 'literal',
+            },
           },
-        },
-      } as DataValue,
-    } as Record<any, DataValue>, createContext());
+        } as DataValue,
+      } as Record<any, DataValue>,
+      createContext(),
+    );
 
     assert.equal(result['match'].value, 'literal');
     assert.deepEqual(result['all_matches'].value, ['literal']);
@@ -284,20 +327,23 @@ describe('ExtractObjectPathNodeImpl', () => {
       ['object', 'path'],
     );
 
-    const result = await node.process({
-      object: {
-        type: 'object',
-        value: {
-          aaa: {
-            ccc: 'from-input-path',
+    const result = await node.process(
+      {
+        object: {
+          type: 'object',
+          value: {
+            aaa: {
+              ccc: 'from-input-path',
+            },
           },
-        },
-      } as DataValue,
-      path: {
-        type: 'string',
-        value: '$.aaa["ccc"]',
-      } as DataValue,
-    } as Record<any, DataValue>, createContext());
+        } as DataValue,
+        path: {
+          type: 'string',
+          value: '$.aaa["ccc"]',
+        } as DataValue,
+      } as Record<any, DataValue>,
+      createContext(),
+    );
 
     assert.equal(result['match'].value, 'from-input-path');
     assert.deepEqual(result['all_matches'].value, ['from-input-path']);
@@ -308,16 +354,19 @@ describe('ExtractObjectPathNodeImpl', () => {
       path: '$.aaa["missing"]',
     });
 
-    const result = await node.process({
-      object: {
-        type: 'object',
-        value: {
-          aaa: {
-            ccc: 1,
+    const result = await node.process(
+      {
+        object: {
+          type: 'object',
+          value: {
+            aaa: {
+              ccc: 1,
+            },
           },
-        },
-      } as DataValue,
-    } as Record<any, DataValue>, createContext());
+        } as DataValue,
+      } as Record<any, DataValue>,
+      createContext(),
+    );
 
     assert.deepEqual(result, {
       match: {
@@ -336,16 +385,19 @@ describe('ExtractObjectPathNodeImpl', () => {
       path: '$.aaa[?(@.]',
     });
 
-    const result = await node.process({
-      object: {
-        type: 'object',
-        value: {
-          aaa: {
-            ccc: 1,
+    const result = await node.process(
+      {
+        object: {
+          type: 'object',
+          value: {
+            aaa: {
+              ccc: 1,
+            },
           },
-        },
-      } as DataValue,
-    } as Record<any, DataValue>, createContext());
+        } as DataValue,
+      } as Record<any, DataValue>,
+      createContext(),
+    );
 
     assert.deepEqual(result, {
       match: {

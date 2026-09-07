@@ -33,11 +33,9 @@ describe('jsListCallbackHelpers', () => {
   it('keeps the fixed array clone before interpolation input clones', () => {
     const wrapper = buildJSMapWrapper('return {{config}};');
     const arrayCloneIndex = wrapper.indexOf(
-      'const array = cloneJsInputValue(inputs.array?.value, jsListInputCloneCache);',
+      'const array = cloneJsInputValue(inputs.array?.value, __jsListInputsCloneCache);',
     );
-    const interpolationCloneIndex = wrapper.indexOf(
-      '__jsListInputs["config"] = cloneJsInputValue(inputs["config"]?.value, jsListInputCloneCache);',
-    );
+    const interpolationCloneIndex = wrapper.indexOf('const sourceDataValue = inputs["config"];');
 
     assert.notStrictEqual(arrayCloneIndex, -1);
     assert.notStrictEqual(interpolationCloneIndex, -1);
@@ -82,7 +80,8 @@ describe('jsListCallbackHelpers', () => {
       type: 'code',
       label: 'Callback Body',
       helperMessage: '(item, index, array) => {',
-      postEditorHelperMessage: '};\n\n//Use {{var}} to create input ports that evaluate as connected values.',
+      postEditorHelperMessage:
+        '};\n\n//Use {{var}} to create input ports. {{config.limit.max}} creates only config; {{item.name}} and {{array[0]}} use callback locals.',
       dataKey: 'callbackBody',
       language: 'javascript',
       interpolationSyntax: 'js-value',

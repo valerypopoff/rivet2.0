@@ -51,6 +51,7 @@ yarn test
 yarn test:all
 yarn test:core
 yarn test:node
+yarn test:evaluations
 yarn test:app
 yarn test:app-executor
 yarn test:cli
@@ -243,9 +244,10 @@ non-ignored test files. Source-reading candidates are controlled by the explicit
 allowlist in `source-reading-test-allowlist.mjs`: a new candidate fails, and removing one
 requires removing its stale allowlist entry. The lexical candidate check intentionally also
 catches direct filesystem reads, so a retained black-box fixture or generated-artifact test
-needs a narrow comment explaining why it is not a production-source contract. `.skip` remains a
-visible review queue because several parked runtime optimizations intentionally keep
-characterization cases beside the active suite.
+needs a narrow comment explaining why it is not a production-source contract. `.skip` is
+reported for review rather than rejected by this checker. A reported skipped test
+is not execution evidence. Do not interpret the report-only policy as meaning
+that output pruning is parked: Skip unused outputs has active per-node coverage.
 
 The Studio Server monorepo import added its existing source-contract tests to this
 same shrinking baseline. They are migration debt, not precedent for new static tests;
@@ -261,9 +263,15 @@ brittle TSX source parser. `check-editor-boundaries.mjs` prevents low-level Mona
 owners from importing app state/product layers.
 
 The documentation-link checker validates local Markdown links in root-level
-docs and direct `developer-docs/*.md` files. It skips external URLs, anchors,
-and fenced code blocks, then resolves remaining links against the repo root so
-Windows and Linux CI runners use the same containment rules.
+docs and recursively under `developer-docs/`, including Studio Server and audit
+pages. It skips external URLs, strips anchor fragments, and ignores fenced code
+blocks. Paths resolve relative to the containing document and must remain inside
+the repository. Passing establishes target existence, not heading-anchor validity,
+correct commands, current source semantics, or runtime behavior.
+
+Use [Refactor Baseline And Verification](./REFACTOR-BASELINE.md) to assemble the
+complete pre/post-refactor checks. `build:all` and `test:all` are aliases for the
+shared Rivet package set, not exhaustive checks of every workspace and deployment.
 
 `check-legacy-graph-creator-rollback.mjs` owns the temporary legacy Graph
 Creator rollback boundary. The former 1 MB `graph-creator.rivet-data` bundle

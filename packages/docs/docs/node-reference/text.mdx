@@ -12,7 +12,7 @@ import TabItem from '@theme/TabItem';
 ## Overview
 
 The Text Node is used to output a string of text. It can also interpolate:
-- Values using `{{tags}}` within the text. The inputs are dynamically generated based on the interpolation tags used in the text.
+- Values using `{{tags}}` within the text. The inputs are dynamically generated based on the interpolation tags used in the text. A JSONPath suffix such as `{{customer.address.city}}` selects from one `customer` input rather than creating an input named `customer.address.city`.
 - Current graph inputs using `{{@graphInputs.<id>}}`. It won't generate any node inputs.
 - Context inputs using `{{@context.<id>}}`. It won't generate any node inputs either.
 
@@ -35,7 +35,7 @@ This node is particularly useful for creating dynamic text based on the inputs t
 
 | Title     | Data Type | Description                                                                | Default Value | Notes                                                                                                                                                             |
 | --------- | --------- | -------------------------------------------------------------------------- | ------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| (dynamic) | `string`  | The inputs are dynamically generated based on the interpolation tags used. | N/A           | The input names are derived from the interpolation tags used in the text. For example, if the text contains `{{name}}`, then there will be an input named `name`. |
+| (dynamic) | `string` or `any` | The inputs are dynamically generated based on the interpolation tags used. | N/A           | A bare tag such as `{{name}}` creates a string input named `name`. A JSONPath tag such as `{{customer.address.city}}` creates one `customer` input that keeps its original value type before the selected value is rendered as text. |
 
 </TabItem>
 

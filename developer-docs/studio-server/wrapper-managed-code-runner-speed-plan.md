@@ -1,12 +1,20 @@
 # Wrapper ManagedCodeRunner Speed Plan
 
-Status: IMPLEMENTED FOR WRAPPER CODE PHASES
+Status: IMPLEMENTED FOR WRAPPER CODE PHASES — historical plan and measurements.
+
+For current behavior, use [Runtime Libraries](./runtime-libraries.md) and
+[Workflow Publication](./workflow-publication.md). The prospective instructions
+and before/after numbers below preserve the original implementation rationale;
+they are not outstanding refactor tasks or current production measurements.
+The owning implementation is `runtime-libraries/managed-code-runner.ts` in the
+Studio Server API, with `src/tests/managed-code-runner.test.ts` as its regression
+entrypoint. Re-run its fixtures before relying on historical performance results.
 
 ## Purpose
 
-This document explains why recent Rivet-side CodeRunner optimizations did not
-materially speed up production workflow endpoint runs, and what the wrapper
-developer should implement next.
+This document records why Rivet-side CodeRunner optimizations did not
+materially speed up the measured workflow endpoint runs, and the wrapper-owned
+implementation that followed.
 
 The target runtime is the usual headless backend path:
 
@@ -689,11 +697,11 @@ Update Studio Server developer docs to explain:
 
 Likely docs to update:
 
-- `docs/runtime-libraries.md` for the `ManagedCodeRunner` fast path, stable
+- [runtime-libraries.md](./runtime-libraries.md) for the `ManagedCodeRunner` fast path, stable
   per-run snapshot behavior, and rollback flags.
-- `docs/workflow-publication.md` for endpoint timing, debug headers, and the
+- [workflow-publication.md](./workflow-publication.md) for endpoint timing, debug headers, and the
   relationship between Run recordings duration and endpoint duration.
-- `docs/development.md` for the benchmark command and how to read telemetry.
+- [development.md](./development.md) for the benchmark command and how to read telemetry.
 
 If Rivet-side docs mention the default cached Node CodeRunner, add a note that
 custom wrapper `codeRunner` implementations are responsible for their own

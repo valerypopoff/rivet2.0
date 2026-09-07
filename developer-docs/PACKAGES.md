@@ -15,6 +15,11 @@ The root `yarn build` script currently builds packages in this order:
 
 That order is encoded directly in the root `package.json` and reflects actual runtime dependencies.
 
+This is the shared Rivet build set, not all workspaces. `build:all` is its alias.
+`yarn studio-server:build` first builds Core, Node, Evaluations, and app-executor,
+then the five private Studio Server workspaces. The docs site has its own build.
+See [Refactor Baseline](./REFACTOR-BASELINE.md) for complete verification coverage.
+
 Hosted wrappers should prefer the narrower root build targets when they do not
 need the full desktop/app/CLI surface:
 
@@ -333,7 +338,10 @@ nodes, fixture CodeRunner cache/compile/invocation/execution buckets, coarse
 time, and small synthetic CodeRunner scenarios. Runtime phase buckets are
 diagnostic and can be inclusive across nested graph/subgraph calls; use them to
 choose the next optimization target, not as standalone proof that the
-unprofiled runtime got faster. Like the speed benchmark, relative attribution
+unprofiled runtime got faster. Its profiling runner follows the normal Node
+runner's lazy narrow interpolation-resolver contract, so JSONPath and special
+interpolation roots remain measurable without pulling in the full `Rivet` API.
+Like the speed benchmark, relative attribution
 output paths that start with `packages/` resolve from the repo root.
 
 A later fixture-focused speed pass kept only one low-risk runtime optimization:
@@ -994,6 +1002,13 @@ the matching root build target first. This keeps Dockerfiles explicit about
 which build layers are expensive and cacheable.
 
 ## Package-Level Refactor Guidance
+
+The five private Studio Server packages are documented in
+[Studio Server repository structure](./studio-server/repo-structure.md) and
+[architecture](./studio-server/architecture.md). They are part of this monorepo,
+but are not members of the public npm publication set. Their API, web, executor,
+shared, and bootstrap responsibilities must be included when changing a public
+Rivet host/runtime boundary.
 
 - Treat `core` as the compatibility center of gravity.
 - Treat `node` as the Node-default runtime adapter, not just a re-export package.

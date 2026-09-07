@@ -9,11 +9,11 @@ import { nanoid } from 'nanoid/non-secure';
 import { NodeImpl, type NodeUIData } from '../NodeImpl.js';
 import { nodeDefinition } from '../NodeDefinition.js';
 import { type DataValue } from '../DataValue.js';
-import { JSONPath } from 'jsonpath-plus';
 import { type EditorDefinition, type NodeBodySpec } from '../../index.js';
 import { dedent } from 'ts-dedent';
 import { coerceTypeOptional } from '../../utils/coerceType.js';
 import { resolveStoredOrderedPortIds } from '../../utils/orderedStringPortIds.js';
+import { evaluateJsonPath } from '../../utils/jsonPath.js';
 
 export type DestructureNode = ChartNode<'destructure', DestructureNodeData>;
 
@@ -119,7 +119,7 @@ export class DestructureNodeImpl extends NodeImpl<DestructureNode> {
     this.data.paths.forEach((path, index) => {
       let match: unknown;
       try {
-        match = JSONPath<unknown>({ json: inputObject ?? null, path: path.trim(), wrap: false });
+        match = evaluateJsonPath(inputObject, path, false);
       } catch (err) {
         match = undefined;
       }

@@ -1,6 +1,6 @@
 {
   "formatVersion": 1,
-  "catalogFingerprint": "fnv1a64:463ef57d01dffa61",
+  "catalogFingerprint": "fnv1a64:93a0088722a94247",
   "entries": [
     {
       "authoringChoiceId": "registered:abortGraph",
@@ -1180,7 +1180,7 @@
       "authoringChoiceId": "registered:jsFilter",
       "nodeType": "jsFilter",
       "displayName": "JS Filter",
-      "description": "JS Filter Node The JS Filter node filters an input array with a JavaScript callback body. The callback body can use item , index , and array , and should return a truthy value for items that should stay in the output. Inputs Title Data Type Description Array any[] The array to filter. Additional inputs are created from {{name}} interpolation tokens in the callback body. Outputs Title Data Type Description Filtered any[] Items whose callback result was truthy. Settings Setting Description Callback Body JavaScript callback body. Use return to decide whether each item remains. Example js return item != null;",
+      "description": "JS Filter Node The JS Filter node filters an input array with a JavaScript callback body. The callback body can use item , index , and array , and should return a truthy value for items that should stay in the output. Inputs Title Data Type Description Array any[] The array to filter. Additional inputs are created from {{name}} interpolation tokens in the callback body. A path expression such as {{config.limit.max}} creates only config ; {{item.name}} and {{array[0]}} select from the callback's local values and create no extra input. Outputs Title Data Type Description Filtered any[] Items whose callback result was truthy. Settings Setting Description Callback Body JavaScript callback body. Use return to decide whether each item remains. Example js return item != null;",
       "aliases": [],
       "capabilities": {
         "createWithDefaults": true,
@@ -1195,7 +1195,7 @@
       "authoringChoiceId": "registered:jsMap",
       "nodeType": "jsMap",
       "displayName": "JS Map",
-      "description": "JS Map Node The JS Map node transforms each item in an input array with a JavaScript callback body. The callback body can use item , index , and array , and should return the mapped value for each item. Inputs Title Data Type Description Array any[] The array to transform. Additional inputs are created from {{name}} interpolation tokens in the callback body. Outputs Title Data Type Description Mapped any[] The array of mapped return values. Settings Setting Description Callback Body JavaScript callback body. Use return to produce each item. Example js return { ...item, index };",
+      "description": "JS Map Node The JS Map node transforms each item in an input array with a JavaScript callback body. The callback body can use item , index , and array , and should return the mapped value for each item. Inputs Title Data Type Description Array any[] The array to transform. Additional inputs are created from {{name}} interpolation tokens in the callback body. A path expression such as {{config.limit.max}} creates only config ; {{item.name}} and {{array[0]}} select from the callback's local values and create no extra input. Outputs Title Data Type Description Mapped any[] The array of mapped return values. Settings Setting Description Callback Body JavaScript callback body. Use return to produce each item. Example js return { ...item, index };",
       "aliases": [],
       "capabilities": {
         "createWithDefaults": true,

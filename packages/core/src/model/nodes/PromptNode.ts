@@ -20,7 +20,7 @@ import {
 import { dedent } from 'ts-dedent';
 import { coerceTypeOptional } from '../../utils/coerceType.js';
 import { getInputOrData } from '../../utils/index.js';
-import { interpolate, extractInterpolationVariables } from '../../utils/interpolation.js';
+import { extractInterpolationVariableReferences, interpolate } from '../../utils/interpolation.js';
 import { match } from 'ts-pattern';
 import { createInterpolationInputDefinition } from '../interpolationInputDefinition.js';
 
@@ -99,16 +99,19 @@ export class PromptNodeImpl extends NodeImpl<PromptNode> {
     }
 
     // Extract inputs from promptText, everything like {{input}}
-    const inputNames = extractInterpolationVariables(this.data.promptText);
+    const inputReferences = extractInterpolationVariableReferences(this.data.promptText);
+    const fixedInputIds = new Set(inputs.map((input) => input.id));
     inputs = [
       ...inputs,
-      ...(inputNames?.map((inputName): NodeInputDefinition => {
-        return createInterpolationInputDefinition({
-          interpolationName: inputName,
-          dataType: 'string',
-          required: false,
-        });
-      }) ?? []),
+      ...inputReferences
+        .filter(({ baseName }) => !fixedInputIds.has(baseName as PortId))
+        .map(({ baseName, hasPath }): NodeInputDefinition => {
+          return createInterpolationInputDefinition({
+            interpolationName: baseName,
+            dataType: hasPath ? 'any' : 'string',
+            required: false,
+          });
+        }),
     ];
 
     return inputs;
@@ -234,19 +237,12 @@ export class PromptNodeImpl extends NodeImpl<PromptNode> {
   }
 
   async process(inputs: Inputs, context: InternalProcessContext<PromptNode>): Promise<Outputs> {
-    const inputMap = Object.keys(inputs).reduce(
-      (acc, key) => {
-        acc[key as PortId] = coerceTypeOptional(inputs[key as PortId], 'string') ?? '';
-        return acc;
-      },
-      {} as Record<PortId, string>,
-    );
-
     let outputValue = interpolate(
       this.chartNode.data.promptText,
-      inputMap,
+      inputs,
       context.graphInputNodeValues,
       context.contextValues,
+      { coerceBareVariableDataValues: true },
     );
 
     outputValue = outputValue.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
