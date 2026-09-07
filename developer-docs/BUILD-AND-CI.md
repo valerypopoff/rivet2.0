@@ -194,6 +194,20 @@ Docs typecheck is not part of `yarn test`; CI runs `yarn test:docs` as a
 separate step so runtime/package tests and documentation validation stay
 visibly distinct. The docs typecheck is non-emitting so it cannot leave
 generated JavaScript beside Docusaurus source files during CI or local cleanup.
+`yarn workspace docs build` is the production-level docs check: it generates
+the Pages bundle, the content-hashed offline search
+index, and the embedded promo entry. Its `check:search-bundle` step requires a
+nonempty root-routed index and the generated full-results page. When changing
+documentation search, build the site and exercise the navbar field,
+`Ctrl+K`/`Cmd+K`, keyboard result selection, and a narrow viewport against
+`docusaurus serve`; a static config check alone cannot validate that the
+generated index and client UI agree.
+`yarn docs dev` primes a disposable search snapshot before starting live reload,
+because the local-search plug-in otherwise generates its index only after a
+build and disables its browser worker in development bundles. The launcher uses
+its explicit development flag to preserve the promo static root while compiling
+the search client in production mode. Restart it after changing searchable
+documentation so its development snapshot remains current.
 
 Before committing or pushing, run `yarn lint`, `yarn test:docs`, the complete
 `yarn test:style`, and `yarn prettier:check` in addition to the applicable

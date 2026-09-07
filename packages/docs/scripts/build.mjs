@@ -16,6 +16,7 @@ await waitForChild(
   }),
   'Docusaurus build',
 );
+await waitForChild(spawnWorkspaceScript('docs', 'check:search-bundle'), 'Docs search bundle check');
 await waitForChild(
   spawnWorkspaceScript('@valerypopoff/rivet-app', 'build:promo', {
     env: {

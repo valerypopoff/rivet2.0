@@ -14,6 +14,10 @@ Rivet can be used for quick experiments and for production-ready workflows that 
 
 This guide is written for people using the Rivet desktop app. If you are integrating Rivet into another TypeScript, JavaScript, server, or wrapper application, start with the [Rivet API Reference](/api-reference).
 
+## Search The Documentation
+
+Use **Search** in the top navigation to find pages, headings, and relevant text across the User Guide, tutorials, API Reference, Node Reference, CLI, and site pages. Press **Ctrl+K** on Windows/Linux or **Cmd+K** on macOS to focus it, then use the arrow keys and **Enter** to open a result. Rivet highlights the searched words on the destination page. On a narrow screen, select the magnifying-glass button in the top bar to open the same search field.
+
 ## What You Can Do In The App
 
 ### Build Graphs Visually

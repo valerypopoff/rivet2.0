@@ -1,5 +1,5 @@
 import { createServer } from 'node:net';
-import { rm } from 'node:fs/promises';
+import { cp, mkdir, readdir, rm } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { basename, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -10,6 +10,7 @@ const loopbackHosts = ['127.0.0.1', '::1'];
 const promoOutDir = '../../docs/.promo-dev/rivet-demo';
 const docsDirectory = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const promoStaticDirectory = resolve(docsDirectory, '.promo-dev');
+const developmentSearchBuildDirectory = resolve(docsDirectory, '.search-dev');
 const require = createRequire(import.meta.url);
 const { baseUrl } = require('../docusaurus.config.js');
 const promoBaseUrl = `${baseUrl.replace(/\/?$/, '/')}rivet-demo/`;
@@ -100,6 +101,48 @@ if (dirname(promoStaticDirectory) !== docsDirectory || basename(promoStaticDirec
 }
 await rm(promoStaticDirectory, { force: true, recursive: true });
 
+if (
+  dirname(developmentSearchBuildDirectory) !== docsDirectory ||
+  basename(developmentSearchBuildDirectory) !== '.search-dev'
+) {
+  throw new Error(`Refusing to clean unexpected development search directory: ${developmentSearchBuildDirectory}`);
+}
+await rm(developmentSearchBuildDirectory, { force: true, recursive: true });
+
+const developmentSearchBuild = spawnWorkspaceScript('docs', 'build:dev-search-index', {
+  env: {
+    NODE_ENV: 'production',
+    RIVET_DOCS_DEV_SEARCH_INDEX: '1',
+  },
+});
+children.push(developmentSearchBuild);
+
+try {
+  await waitForChild(developmentSearchBuild, 'The documentation development search-index build');
+} catch (error) {
+  stopChildren();
+  throw error;
+} finally {
+  const buildIndex = children.indexOf(developmentSearchBuild);
+  if (buildIndex >= 0) {
+    children.splice(buildIndex, 1);
+  }
+}
+
+const developmentSearchIndexes = (await readdir(developmentSearchBuildDirectory)).filter(
+  (filename) => filename === 'search-index.json',
+);
+if (developmentSearchIndexes.length !== 1) {
+  throw new Error(
+    `Expected exactly one development search index in ${developmentSearchBuildDirectory}, found ${developmentSearchIndexes.length}.`,
+  );
+}
+await mkdir(promoStaticDirectory, { recursive: true });
+await cp(
+  resolve(developmentSearchBuildDirectory, developmentSearchIndexes[0]),
+  resolve(promoStaticDirectory, developmentSearchIndexes[0]),
+);
+
 const promoBuild = spawnWorkspaceScript('@valerypopoff/rivet-app', 'build:promo', {
   env: {
     RIVET_PROMO_BASE_URL: promoBaseUrl,
@@ -122,8 +165,12 @@ try {
 
 const docsServer = spawnWorkspaceScript('docs', 'dev:site', {
   env: {
-    NODE_ENV: 'development',
+    // The search plug-in intentionally does no browser-side work in a
+    // development bundle. Docusaurus Start still provides live reload here;
+    // the dedicated flag keeps development-only static files available.
+    NODE_ENV: 'production',
     RIVET_PROMO_DEMO_URL: '',
+    RIVET_DOCS_DEV_SEARCH_INDEX: '1',
   },
 });
 children.push(docsServer);

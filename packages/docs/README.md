@@ -102,6 +102,20 @@ locally bundled Roboto/Roboto Mono typography, the Molten palette in dark mode,
 and the Bright palette in light mode. Keep this small semantic mirror in `src/css/custom.css`
 and the landing module rather than importing the editor's global app styles.
 
+### Search
+
+The navbar search is an offline local index built with
+`@easyops-cn/docusaurus-search-local`. It has no hosted service, crawler, or
+credential dependency, so it works in the GitHub Pages deployment and remains
+available after its first index download. `docusaurus.config.js` owns the
+search contract: it must keep `docsRouteBasePath: '/'` aligned with the
+root-routed Docs plugin, use a hashed index filename for safe long-term cache
+updates, and retain page/doc indexing, result paths, and `mod+k` keyboard
+focus. Search terms are highlighted after navigation. The static search index
+is generated into the ignored `build/` output; never check it in. The normal
+production build runs `check:search-bundle`, which verifies the hashed index,
+the root-routed node-reference entry, and the full-results page.
+
 ### Installation
 
 ```bash
@@ -115,11 +129,17 @@ yarn docs dev
 ```
 
 This short root command first builds the embedded Rivet promo with development
-asset paths into the ignored `packages/docs/.promo-dev/rivet-demo` directory,
-then starts one Docusaurus server on `127.0.0.1:3000`. In development,
-Docusaurus adds `.promo-dev` as a static directory, so every iframe uses the
-same-origin `/rivet2.0/rivet-demo/` path used by production. There is no second
-preview server whose lifecycle or assets can drift away from the docs page.
+asset paths into the ignored `packages/docs/.promo-dev/rivet-demo` directory
+and a disposable local-search snapshot, then starts one Docusaurus server on
+`127.0.0.1:3000`. In development, Docusaurus adds `.promo-dev` as a static
+directory, so every iframe and the stable `search-index.json` use the same
+origin and `/rivet2.0/` base path as production. There is no second preview
+server whose lifecycle or assets can drift away from the docs page. Docusaurus
+only lets the local-search plug-in generate and consume an index in a
+production browser bundle; the launcher uses that bundle mode while retaining
+Docusaurus Start live reload and primes a development snapshot before it
+starts. Search therefore works immediately, but after changing searchable
+documentation, restart `yarn docs dev` to refresh its development index.
 Production remains under `packages/docs/build/rivet-demo`; this separation lets
 `yarn docs build` replace the production output without invalidating a running
 development server. `dev:site` serves the latest existing development bundle
