@@ -203,11 +203,18 @@ documentation search, build the site and exercise the navbar field,
 `docusaurus serve`; a static config check alone cannot validate that the
 generated index and client UI agree.
 The embedded promo uses the shared `createRivetCoreSourceAliases(...)` map from
-the app Vite configuration. Both desktop/promo and hosted browser builds consume
-every public Core entrypoint from workspace source, so a clean runner does not
-depend on generated `packages/core/dist` files. The app test suite compares that
-map with Core's package exports; adding or renaming a Core subpath must update the
-shared map before CI can pass.
+`packages/app/scripts/vite-core-source-aliases.ts`. Both desktop/promo and hosted
+browser builds install that helper and consume every public Core entrypoint from
+workspace source, so a clean runner does not depend on generated
+`packages/core/dist` files. The helper intentionally lives in the App TypeScript
+project's existing `scripts` scope: composite builds validate it without pulling
+the root `vite.config.ts` into the browser project. The app test suite compares
+the map with Core's package exports; adding or renaming a Core subpath must update
+the shared map before CI can pass. The repository `test:style` gate also loads
+both production Vite configurations and verifies that each one installs every
+shared alias; this guards against a warm local `dist` tree masking a disconnected
+configuration. The App lint gate covers the shared helper even though it lives
+outside `src`.
 `yarn docs dev` primes a disposable search snapshot before starting live reload,
 because the local-search plug-in otherwise generates its index only after a
 build and disables its browser worker in development bundles. The launcher uses
@@ -215,21 +222,25 @@ its explicit development flag to preserve the promo static root while compiling
 the search client in production mode. Restart it after changing searchable
 documentation so its development snapshot remains current.
 
-Before committing or pushing, run `yarn lint`, `yarn test:docs`, the complete
-`yarn test:style`, and `yarn prettier:check` in addition to the applicable
-runtime suites. A passing `yarn test` does not cover these gates or the Studio
-Server API/web suites. Finish `test:style` before starting runtime tests in the
-same checkout: its authoring checks rebuild Core's ESM output, which consumers
-must not import while it is being replaced. After changing a hosted editor seam, run the full API
-suite as well as the focused owner tests, after building its workspace
-dependencies. The API suite still contains legacy integration guards that can
-become stale when a caller changes without changing its observable behavior.
+Before committing or pushing, run the exact aggregate gates `yarn test:style`,
+`yarn build`, `yarn lint`, `yarn test`, `yarn test:docs`,
+`yarn prettier:check`, and `yarn check:pnp:fresh`. Focused package builds are
+useful for fast feedback but are not substitutes for the root `yarn build`:
+composite project-boundary failures can appear only when the full workspace is
+compiled in CI order. A passing `yarn test` does not cover the other gates or
+the Studio Server API/web suites. Finish `test:style` before starting runtime
+tests in the same checkout: its authoring checks rebuild Core's ESM output,
+which consumers must not import while it is being replaced. After changing a
+hosted editor seam, run the full API suite as well as the focused owner tests,
+after building its workspace dependencies. The API suite still contains legacy
+integration guards that can become stale when a caller changes without changing
+its observable behavior.
 
 On PowerShell, run each native command separately and inspect its exit code.
 If grouping checks in a script, stop immediately after a failure:
 
 ```powershell
-foreach ($ciCheck in @('lint', 'test:docs', 'test:style', 'prettier:check')) {
+foreach ($ciCheck in @('test:style', 'build', 'lint', 'test', 'test:docs', 'prettier:check', 'check:pnp:fresh')) {
   node .yarn/releases/yarn-4.17.1.cjs $ciCheck
   if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 }

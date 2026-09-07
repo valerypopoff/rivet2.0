@@ -13,7 +13,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { gunzipSync } from 'node:zlib';
 import { createBrowserSubpathAliases, createModuleOverrideAliases, createTauriShimAliases } from './vite-aliases';
 import { replaceHostedProjectTabLabelExpression } from './project-tab-label-transform';
-import { createRivetCoreSourceAliases } from '../app/vite.core-source-aliases';
+import { createRivetCoreSourceAliases } from '../app/scripts/vite-core-source-aliases';
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url));
 

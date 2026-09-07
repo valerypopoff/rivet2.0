@@ -4,8 +4,7 @@ import { dirname, join, resolve } from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 
-import { createRivetCoreSourceAliases, rivetCoreSourceEntrypoints } from '../../../vite.core-source-aliases';
-import { createRivetViteConfig } from '../../../vite.config';
+import { createRivetCoreSourceAliases, rivetCoreSourceEntrypoints } from '../../../scripts/vite-core-source-aliases';
 
 const platformDir = dirname(fileURLToPath(import.meta.url));
 const appRoot = join(platformDir, '..', '..', '..');
@@ -23,23 +22,12 @@ test('Vite source aliases cover every public Core package entrypoint', () => {
   assert.deepEqual(Object.keys(rivetCoreSourceEntrypoints).sort(), exportedSpecifiers);
 
   const sourceAliases = createRivetCoreSourceAliases(coreDirectory);
-  const configuredAliases = createRivetViteConfig({ reactDevTools: false }).resolve?.alias;
-  assert.ok(Array.isArray(configuredAliases), 'App Vite aliases should use array form');
 
   for (const [specifier, sourcePath] of Object.entries(rivetCoreSourceEntrypoints)) {
     const expectedReplacement = resolve(coreDirectory, 'src', sourcePath);
     const sourceMatches = sourceAliases.filter((alias) => alias.find.test(specifier));
     assert.equal(sourceMatches.length, 1, `${specifier} should have exactly one source alias`);
     assert.equal(sourceMatches[0]?.replacement, expectedReplacement);
-
-    const configuredMatches = configuredAliases.filter(
-      (alias) =>
-        typeof alias === 'object' &&
-        'find' in alias &&
-        (typeof alias.find === 'string' ? alias.find === specifier : alias.find.test(specifier)),
-    );
-    assert.equal(configuredMatches.length, 1, `${specifier} should be active in the app Vite configuration`);
-    assert.equal(configuredMatches[0]?.replacement, expectedReplacement);
   }
 });
 

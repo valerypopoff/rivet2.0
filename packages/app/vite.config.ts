@@ -10,7 +10,7 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { gunzipSync } from 'node:zlib';
 import { visualizer } from 'rollup-plugin-visualizer';
-import { createRivetCoreSourceAliases } from './vite.core-source-aliases';
+import { createRivetCoreSourceAliases } from './scripts/vite-core-source-aliases';
 
 const analyzeBundle = process.env.RIVET_BUNDLE_ANALYZE === 'true';
 const require = createRequire(import.meta.url);
