@@ -202,6 +202,12 @@ documentation search, build the site and exercise the navbar field,
 `Ctrl+K`/`Cmd+K`, keyboard result selection, and a narrow viewport against
 `docusaurus serve`; a static config check alone cannot validate that the
 generated index and client UI agree.
+The embedded promo uses the shared `createRivetCoreSourceAliases(...)` map from
+the app Vite configuration. Both desktop/promo and hosted browser builds consume
+every public Core entrypoint from workspace source, so a clean runner does not
+depend on generated `packages/core/dist` files. The app test suite compares that
+map with Core's package exports; adding or renaming a Core subpath must update the
+shared map before CI can pass.
 `yarn docs dev` primes a disposable search snapshot before starting live reload,
 because the local-search plug-in otherwise generates its index only after a
 build and disables its browser worker in development bundles. The launcher uses

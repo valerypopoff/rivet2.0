@@ -1219,6 +1219,9 @@ After accepting the one-time rollback limitation, open GitHub Actions **Build
 Images**, select **Run workflow** on `main`, and enable
 `allow_release_lineage_bootstrap`. Leave unrelated staging/provider options at
 their defaults. Rerunning the failed push does not enable this manual-only input.
+The failed job writes the same instructions and a direct **Build Images** link to
+its GitHub job summary, because another push cannot recreate missing historical
+source, chart, schema, and image-set evidence.
 The successful release creates the durable `production` manifest pointer, which
 later releases use normally. This input starts release history; it does not
 disable verification gates or alter an already-running deployment.

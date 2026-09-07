@@ -10,6 +10,7 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { gunzipSync } from 'node:zlib';
 import { visualizer } from 'rollup-plugin-visualizer';
+import { createRivetCoreSourceAliases } from './vite.core-source-aliases';
 
 const analyzeBundle = process.env.RIVET_BUNDLE_ANALYZE === 'true';
 const require = createRequire(import.meta.url);
@@ -155,14 +156,7 @@ export function createRivetViteConfig(options: RivetViteConfigOptions = {}): Use
       preserveSymlinks: true,
 
       alias: [
-        {
-          find: '@valerypopoff/rivet2-core/web-app-runtime',
-          replacement: resolve(appDirectory, '../core/src/webAppRuntime.ts'),
-        },
-        {
-          find: /^@valerypopoff\/rivet2-core$/,
-          replacement: resolve(appDirectory, '../core/src/index.ts'),
-        },
+        ...createRivetCoreSourceAliases(resolve(appDirectory, '../core')),
         { find: '@valerypopoff/rivet2-evaluations', replacement: resolve(appDirectory, '../evaluations/src/index.ts') },
         {
           find: '@google-cloud/vertexai',

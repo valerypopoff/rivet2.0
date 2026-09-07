@@ -200,7 +200,9 @@ test('Build Images automatically repairs an exact retained production lineage be
     /\.state == "promoted" and \.source\.repository == \$source_repository and \.source\.ref == "refs\/heads\/main" and \.source\.sha == \$source_sha and \.images\[\$service\]\.repository == \$repository and \.images\[\$service\]\.digest == \$digest/,
   );
   assert.match(workflow, /Recovered the missing durable production pointer from retained artifact/);
-  assert.match(workflow, /Automatic recovery cannot prove the rollback target/);
+  assert.match(workflow, /One-time Studio Server release-lineage bootstrap required/);
+  assert.match(workflow, /Another push or rerun cannot reconstruct that historical evidence/);
+  assert.match(workflow, /The successful bootstrap creates the durable/);
   assert.match(workflow, /isMissingRegistryManifestError\(fs\.readFileSync\(process\.argv\[1\], "utf8"\)\)/);
   assert.match(
     workflow,
