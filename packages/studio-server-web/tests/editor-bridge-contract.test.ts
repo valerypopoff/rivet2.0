@@ -6,7 +6,12 @@ import { createStore, Provider } from 'jotai';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 
-import { isDashboardToEditorCommand, isEditorToDashboardEvent } from '../../studio-server-shared/editor-bridge';
+import {
+  cloneValidatedDashboardToEditorCommand,
+  isDashboardToEditorCommand,
+  isEditorToDashboardEvent,
+  postMessageToEditor,
+} from '../../studio-server-shared/editor-bridge';
 import { getWorkflowRecordingVirtualProjectPath } from '../../studio-server-shared/workflow-recording-types';
 import {
   clearLoadedRecordingForPathState,
@@ -205,6 +210,48 @@ test('save-project bridge command accepts only the optional shortcut source', ()
   assert.equal(isDashboardToEditorCommand({ type: 'save-project' }), true);
   assert.equal(isDashboardToEditorCommand({ type: 'save-project', source: 'shortcut' }), true);
   assert.equal(isDashboardToEditorCommand({ type: 'save-project', source: 'button' }), false);
+});
+
+test('outbound bridge validation rejects event payloads before postMessage', () => {
+  const calls: unknown[][] = [];
+  const targetWindow = {
+    postMessage: (...args: unknown[]) => calls.push(args),
+  } as unknown as Window;
+  const eventCommand = {
+    type: 'save-project',
+    source: {
+      type: 'click',
+      nativeEvent: { type: 'pointerup' },
+    },
+  };
+
+  assert.throws(
+    () => cloneValidatedDashboardToEditorCommand(eventCommand),
+    new TypeError('Invalid dashboard-to-editor command: save-project'),
+  );
+  assert.throws(
+    () => postMessageToEditor(targetWindow, eventCommand as never),
+    new TypeError('Invalid dashboard-to-editor command: save-project'),
+  );
+  assert.deepEqual(calls, []);
+
+  const uncloneableCommand = { type: 'save-project' as const, callback: () => undefined };
+  assert.throws(
+    () => cloneValidatedDashboardToEditorCommand(uncloneableCommand),
+    new TypeError('Dashboard-to-editor command is not structured-cloneable: save-project'),
+  );
+  assert.throws(
+    () => postMessageToEditor(targetWindow, uncloneableCommand),
+    new TypeError('Dashboard-to-editor command is not structured-cloneable: save-project'),
+  );
+  assert.deepEqual(calls, []);
+
+  postMessageToEditor(targetWindow, { type: 'save-project' });
+  postMessageToEditor(targetWindow, { type: 'save-project', source: 'shortcut' });
+  assert.deepEqual(calls, [
+    [{ type: 'save-project' }, '*'],
+    [{ type: 'save-project', source: 'shortcut' }, '*'],
+  ]);
 });
 
 test('project-tree rename request event is accepted only by its exact bridge type', () => {

@@ -210,8 +210,12 @@ export const DashboardPage: FC = () => {
     [postEditorCommand],
   );
 
-  const handleSaveProject = useCallback((source?: 'shortcut') => {
-    postEditorCommand({ type: 'save-project', ...(source ? { source } : {}) });
+  const requestDashboardProjectSave = useCallback(() => {
+    postEditorCommand({ type: 'save-project' });
+  }, [postEditorCommand]);
+
+  const requestShortcutProjectSave = useCallback(() => {
+    postEditorCommand({ type: 'save-project', source: 'shortcut' });
   }, [postEditorCommand]);
 
   const focusEditorFrame = useCallback(() => {
@@ -407,7 +411,7 @@ export const DashboardPage: FC = () => {
     activeWorkflowProjectPath,
     editorReady,
     focusEditorFrame,
-    handleSaveProject,
+    onSaveShortcut: requestShortcutProjectSave,
     iframeRef,
     onActiveWorkflowProjectPathChange: (path) => {
       if (shouldIgnoreTransientActiveProjectPath(path)) {
@@ -504,7 +508,7 @@ export const DashboardPage: FC = () => {
           onOpenRecording={handleOpenRecording}
           onOpenPublishedVersionPreview={handleOpenPublishedVersionPreview}
           onCompareOpenProjectWith={handleCompareOpenProjectWith}
-          onSaveProject={handleSaveProject}
+          onSaveProject={requestDashboardProjectSave}
           onDeleteProject={handleDeleteProject}
           onWorkflowPathsMoved={handleWorkflowPathsMoved}
           onReconcileWorkflowProjectBindings={reconcileWorkflowProjectBindings}

@@ -198,7 +198,7 @@ export const ActiveProjectSection: FC<ActiveProjectSectionProps> = ({
                 appearance="primary"
                 className="active-project-save-button button-size-m"
                 isDisabled={!editorReady}
-                onClick={onSave}
+                onClick={() => onSave()}
                 title={editorReady ? 'Save current project' : 'Loading editor...'}
                 aria-label={editorReady ? 'Save current project' : 'Loading editor'}
               >

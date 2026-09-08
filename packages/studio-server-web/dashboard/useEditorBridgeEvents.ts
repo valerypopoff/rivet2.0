@@ -17,7 +17,7 @@ type UseEditorBridgeEventsOptions = {
   activeWorkflowProjectPath: string;
   editorReady: boolean;
   focusEditorFrame: () => void;
-  handleSaveProject: (source?: 'shortcut') => void;
+  onSaveShortcut: () => void;
   iframeRef: RefObject<HTMLIFrameElement | null>;
   onActiveWorkflowProjectPathChange: (path: string) => void;
   onActiveProjectUnsavedChangesChange: (path: string, hasUnsavedChanges: boolean) => void;
@@ -37,7 +37,7 @@ export function useEditorBridgeEvents(options: UseEditorBridgeEventsOptions) {
     activeWorkflowProjectPath,
     editorReady,
     focusEditorFrame,
-    handleSaveProject,
+    onSaveShortcut,
     iframeRef,
     onActiveWorkflowProjectPathChange,
     onActiveProjectUnsavedChangesChange,
@@ -126,7 +126,7 @@ export function useEditorBridgeEvents(options: UseEditorBridgeEventsOptions) {
       }
 
       if (!event.repeat) {
-        handleSaveProject('shortcut');
+        onSaveShortcut();
       }
     };
 
@@ -136,7 +136,7 @@ export function useEditorBridgeEvents(options: UseEditorBridgeEventsOptions) {
       window.removeEventListener('keydown', handler, true);
       document.removeEventListener('keydown', handler, true);
     };
-  }, [activeWorkflowProjectPath, editorReady, focusEditorFrame, handleSaveProject, iframeRef]);
+  }, [activeWorkflowProjectPath, editorReady, focusEditorFrame, iframeRef, onSaveShortcut]);
 
   useEffect(() => {
     const handler = (event: MessageEvent) => {
