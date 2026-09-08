@@ -32,7 +32,7 @@ Dataset field roles are explicit:
 
 A reference field never compares itself automatically with a same-named Graph Output. Add a deterministic check that selects both values, or bind the field into an evaluator graph.
 
-Every field has a portable Rivet type and every supplied case value must match it. Strings use compact text inputs, booleans use selectors, and objects, arrays, or `any` values use wider multiline JSON editors. Invalid structured JSON or a value with the wrong declared type is highlighted and blocks both run actions until it is fixed. Disabled cases are not executed.
+Every field has a portable Rivet type and every supplied case value must match it. Strings use compact text inputs, booleans use selectors, and objects, arrays, or `any` values use wider multiline JSON editors. Invalid structured JSON or a value with the wrong declared type is highlighted and blocks both run actions until it is fixed. Disabled cases are not executed. To enable or disable every case at once, Ctrl/Cmd+click any case's **Enabled** switch; it applies that switch's new state to the whole dataset.
 
 ## Defining a suite
 

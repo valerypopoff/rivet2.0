@@ -10,6 +10,7 @@ type ScalableToggleProps = {
   onChange?: ChangeEventHandler<HTMLInputElement>;
   className?: string;
   size?: 'regular' | 'large';
+  title?: string;
 };
 
 const scalableToggleStyles = css`
@@ -148,6 +149,7 @@ export const ScalableToggle: FC<ScalableToggleProps> = ({
   isDisabled,
   onChange,
   size,
+  title,
 }) => (
   <label
     className={clsx(
@@ -167,6 +169,7 @@ export const ScalableToggle: FC<ScalableToggleProps> = ({
       disabled={isDisabled}
       onChange={onChange}
       readOnly={onChange == null}
+      title={title}
       type="checkbox"
     />
     <span className="scalable-toggle-track" aria-hidden="true">

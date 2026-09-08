@@ -204,9 +204,11 @@ test('single-click project opens as a replaceable editor preview tab', async ({ 
         [...container.querySelectorAll<HTMLElement>('.draggableProject')].map((wrapper) => {
           const tab = wrapper.querySelector<HTMLElement>('.project');
           const projectName = tab?.querySelector<HTMLElement>('.project-name');
+          const projectLabel = projectName?.querySelector<HTMLElement>('span');
           const bounds = wrapper.getBoundingClientRect();
           return {
             label: projectName?.textContent ?? '',
+            labelTop: projectLabel?.getBoundingClientRect().top ?? null,
             left: bounds.left,
             top: bounds.top,
             transform: getComputedStyle(wrapper).transform,
@@ -261,6 +263,7 @@ test('single-click project opens as a replaceable editor preview tab', async ({ 
     Array<{
       height: number;
       label: string;
+      labelTop: number | null;
       left: number;
       top: number;
       transform: string;
@@ -268,9 +271,10 @@ test('single-click project opens as a replaceable editor preview tab', async ({ 
     }>
   >;
   expect(tabMotionSamples.length).toBeGreaterThan(0);
-  const baselineGeometry = tabMotionSamples[0]!.map(({ height, label, left, top, transform, width }) => ({
+  const baselineGeometry = tabMotionSamples[0]!.map(({ height, label, labelTop, left, top, transform, width }) => ({
     height,
     label,
+    labelTop,
     left,
     top,
     transform,
@@ -278,9 +282,10 @@ test('single-click project opens as a replaceable editor preview tab', async ({ 
   }));
   for (const sample of tabMotionSamples) {
     expect(new Set(sample.map(({ label }) => label)).size).toBe(sample.length);
-    const geometry = sample.map(({ height, label, left, top, transform, width }) => ({
+    const geometry = sample.map(({ height, label, labelTop, left, top, transform, width }) => ({
       height,
       label,
+      labelTop,
       left,
       top,
       transform,

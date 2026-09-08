@@ -398,6 +398,7 @@ export const projectSelectorStyles = css`
 
       height: 100%;
       margin-bottom: 0;
+      padding-bottom: 5px;
       border-radius: 8px 8px 0 0;
       box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06);
       color: var(--grey-lightest);
