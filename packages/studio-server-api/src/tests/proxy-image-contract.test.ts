@@ -457,16 +457,17 @@ test('images and local launchers build directly from the monorepo workspace', ()
     /\.\/nginx\/default\.dev\.conf\.template:\/etc\/nginx\/templates\/default\.conf\.template:ro/,
   );
   assert.doesNotMatch(devCompose, /\.\.\/nginx\/default\.dev\.conf\.template/);
-  assert.equal(devCompose.match(/- YARN_NODE_LINKER=node-modules/g)?.length, 2);
-  assert.equal(devCompose.match(/- YARN_CHECKSUM_BEHAVIOR=ignore/g)?.length, 2);
-  assert.equal(
-    devCompose.match(/- YARN_INSTALL_STATE_PATH=\/workspace\/node_modules\/\.yarn-install-state\.gz/g)?.length,
-    2,
-  );
-  assert.equal(devCompose.match(/- YARN_CACHE_FOLDER=\/home\/rivet\/\.cache\/yarn/g)?.length, 3);
-  assert.equal(devCompose.match(/- HOSTED_VITE_CACHE_DIR=\/home\/rivet\/\.cache\/vite/g)?.length, 1);
-  assert.equal(devCompose.match(/- vite_cache:\/home\/rivet\/\.cache\/vite/g)?.length, 1);
-  assert.equal(devCompose.match(/- yarn_cache:\/home\/rivet\/\.cache\/yarn/g)?.length, 3);
+  for (const service of ['web', 'api', 'executor']) {
+    const serviceBlock = composeServiceBlock(devCompose, service);
+    assert.match(serviceBlock, /- YARN_CACHE_FOLDER=\/home\/rivet\/\.cache\/yarn/);
+    assert.match(serviceBlock, /- YARN_NODE_LINKER=node-modules/);
+    assert.match(serviceBlock, /- YARN_CHECKSUM_BEHAVIOR=ignore/);
+    assert.match(serviceBlock, /- YARN_INSTALL_STATE_PATH=\/workspace\/node_modules\/\.yarn-install-state\.gz/);
+    assert.match(serviceBlock, /- yarn_cache:\/home\/rivet\/\.cache\/yarn/);
+  }
+  const webService = composeServiceBlock(devCompose, 'web');
+  assert.match(webService, /- HOSTED_VITE_CACHE_DIR=\/home\/rivet\/\.cache\/vite/);
+  assert.match(webService, /- vite_cache:\/home\/rivet\/\.cache\/vite/);
   assert.match(devDockerLauncher, /node_modules\/\.studio-server-yarn-install-ok/);
   assert.match(devDockerLauncher, /const composeProject = 'rivet-studio-server-dev'/);
   assert.match(devDockerLauncher, /docker compose -p \$\{composeProject\}/);

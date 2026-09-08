@@ -173,9 +173,9 @@ test('hosted executor, save, find, and clipboard seams keep clear ownership', ()
   assert.match(editorEvents, /activeWorkflowProjectPath && isEditorDuplicateShortcutEvent\(event\)/);
   assert.match(editorEvents, /postMessageToEditor\(editorWindow,\s*\{\s*type: 'trigger-editor-duplicate-shortcut'/);
   assert.match(editorEvents, /event\.preventDefault\(\);\s*event\.stopPropagation\(\);/);
-  // This dashboard listener is separate from the editor's hotkey handler.
-  // Retain its repeat suppression and save-origin contract until it has a hook-level test.
-  assert.match(editorEvents, /if \(!event\.repeat\) \{\s*handleSaveProject\('shortcut'\);\s*\}/);
+  // This dashboard listener is separate from Rivet's iframe shortcut handler.
+  // A held Ctrl/Cmd+S must request one semantic save rather than one per key repeat.
+  assert.match(editorEvents, /if \(!event\.repeat\) \{\s*onSaveShortcut\(\);\s*\}/);
   assert.match(editorEvents, /isEditableElement\(eventTarget\)/);
   assert.match(editorBridgeInteractions, /function replayEditorFindShortcut/);
   assert.match(editorBridgeInteractions, /function replayEditorDuplicateShortcut/);

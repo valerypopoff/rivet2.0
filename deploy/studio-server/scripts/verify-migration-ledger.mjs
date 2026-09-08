@@ -82,6 +82,14 @@ const rootDestinations = new Map([
  */
 const currentDestinationSuccessors = new Map([
   [
+    'packages/studio-server-web/project-tab-label-transform.ts',
+    {
+      path: 'packages/studio-server-web/dashboard/HostedEditorApp.tsx',
+      reason:
+        'Hosted project-tab labels moved from a build-time source transform to the RivetAppHost projectTabs.showFileNames UI policy.',
+    },
+  ],
+  [
     'packages/studio-server-web/dashboard/RuntimeLibrariesReplicaReadinessPanel.tsx',
     {
       path: 'packages/studio-server-web/dashboard/DeploymentReplicaReadinessPanel.tsx',
