@@ -200,6 +200,19 @@ export function isDashboardToEditorCommand(value: unknown): value is DashboardTo
   }
 }
 
+export function cloneValidatedDashboardToEditorCommand(value: unknown): DashboardToEditorCommand {
+  const commandType = isRecord(value) && typeof value.type === 'string' ? value.type : 'unknown';
+  if (!isDashboardToEditorCommand(value)) {
+    throw new TypeError(`Invalid dashboard-to-editor command: ${commandType}`);
+  }
+
+  try {
+    return structuredClone(value);
+  } catch {
+    throw new TypeError(`Dashboard-to-editor command is not structured-cloneable: ${commandType}`);
+  }
+}
+
 export function isEditorToDashboardEvent(value: unknown): value is EditorToDashboardEvent {
   if (!isRecord(value) || typeof value.type !== 'string') {
     return false;
@@ -259,7 +272,7 @@ export function isValidBridgeOrigin(event: MessageEvent, expectedSource: Message
 }
 
 export function postMessageToEditor(targetWindow: Window, command: DashboardToEditorCommand): void {
-  targetWindow.postMessage(command, getBridgeOrigin());
+  targetWindow.postMessage(cloneValidatedDashboardToEditorCommand(command), getBridgeOrigin());
 }
 
 export function postMessageToDashboard(event: EditorToDashboardEvent): void {

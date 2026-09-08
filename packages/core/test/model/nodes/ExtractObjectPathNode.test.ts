@@ -56,6 +56,25 @@ describe('ExtractObjectPathNodeImpl', () => {
     assert.deepEqual(result['all_matches'].value, [42]);
   });
 
+  it('accepts the same structural whitespace as interpolation paths', async () => {
+    const node = createNode({
+      path: '$ . aaa [ "ccc" ]',
+    });
+
+    const result = await node.process(
+      {
+        object: {
+          type: 'object',
+          value: { aaa: { ccc: 'picked' } },
+        } as DataValue,
+      } as Record<any, DataValue>,
+      createContext(),
+    );
+
+    assert.equal(result.match.value, 'picked');
+    assert.deepEqual(result.all_matches.value, ['picked']);
+  });
+
   it('creates dynamic inputs from valid interpolation tokens in the stored path', () => {
     const node = createNode({
       path: '$.aaa["{{bbb}}"]',
@@ -380,7 +399,7 @@ describe('ExtractObjectPathNodeImpl', () => {
     });
   });
 
-  it('keeps invalid-path handling unchanged', async () => {
+  it('treats invalid paths as no matches', async () => {
     const node = createNode({
       path: '$.aaa[?(@.]',
     });

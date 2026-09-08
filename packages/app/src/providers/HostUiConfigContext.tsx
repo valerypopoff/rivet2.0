@@ -24,6 +24,10 @@ export type RivetAppHostUiConfig = {
     saveProject?: boolean;
   };
   preloadCodeEditor?: boolean;
+  projectTabs?: {
+    /** Show the backing file name beside the project title in active tabs. */
+    showFileNames?: boolean;
+  };
   webApps?: {
     desktopPreview?: boolean;
   };

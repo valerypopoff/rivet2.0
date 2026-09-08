@@ -35,6 +35,7 @@ import {
   reassignEvaluationSuiteTarget,
   removeEvaluationDatasetField,
   removeEvaluationDatasetFieldReferences,
+  setEvaluationDatasetCaseEnabled,
   suggestEvaluationAssertionOperator,
   sortEvaluationTrialsByScore,
 } from './evaluationWorkspaceModel.js';
@@ -242,6 +243,38 @@ test('removing a dataset field clears every suite reference while preserving unr
   assert.deepEqual(repairedSuite.evaluators[0]?.inputBindings, [
     { graphInputId: 'case', source: { kind: 'context', context: 'case' } },
   ]);
+});
+
+test('dataset case toggles update one case or every effective case without normalizing legacy enabled values', () => {
+  const dataset = {
+    id: 'dataset',
+    name: 'Dataset',
+    fields: [],
+    cases: [
+      { id: 'legacy-enabled', name: 'Legacy enabled', values: {} },
+      { id: 'explicit-enabled', name: 'Explicit enabled', enabled: true, values: {} },
+      { id: 'disabled', name: 'Disabled', enabled: false, values: {} },
+    ],
+  } satisfies EvaluationDataset;
+
+  const singleCase = setEvaluationDatasetCaseEnabled(dataset, 'explicit-enabled', false, false);
+  assert.deepEqual(
+    singleCase.cases.map((testCase) => testCase.enabled),
+    [undefined, false, false],
+  );
+
+  const everyCase = setEvaluationDatasetCaseEnabled(dataset, 'legacy-enabled', false, true);
+  assert.deepEqual(
+    everyCase.cases.map((testCase) => testCase.enabled),
+    [false, false, false],
+  );
+
+  const restoredEveryCase = setEvaluationDatasetCaseEnabled(everyCase, 'disabled', true, true);
+  assert.deepEqual(
+    restoredEveryCase.cases.map((testCase) => testCase.enabled),
+    [true, true, true],
+  );
+  assert.equal(setEvaluationDatasetCaseEnabled(dataset, 'missing', false, true), dataset);
 });
 
 test('suite references report missing graphs and datasets independently', () => {

@@ -27,6 +27,7 @@ import { ProjectTabSurface } from './ProjectTabSurface.js';
 
 export const ProjectTabRow: FC<{
   projectTabsSelected: boolean;
+  showFileNames: boolean;
   selectedOpeningProjectTabId?: OpeningProjectTabId;
   sortableProjectIds: readonly ProjectId[];
   tabItems: readonly ProjectTabListItem[];
@@ -43,6 +44,7 @@ export const ProjectTabRow: FC<{
   onSelectOpeningProjectTab,
   onSelectProject,
   projectTabsSelected,
+  showFileNames,
   selectedOpeningProjectTabId,
   sortableProjectIds,
   tabItems,
@@ -78,6 +80,7 @@ export const ProjectTabRow: FC<{
                   onCloseProject={() => onCloseOpeningProjectTab(tabItem.openingTabId)}
                   onSelectProject={() => onSelectOpeningProjectTab(tabItem.openingTabId)}
                   projectTabsSelected={projectTabsSelected}
+                  showFileName={showFileNames}
                   selectedOpeningProjectTabId={selectedOpeningProjectTabId}
                 />
               ) : (
@@ -87,6 +90,7 @@ export const ProjectTabRow: FC<{
                   onCloseProject={() => onCloseProject(tabItem.projectId)}
                   onSelectProject={() => onSelectProject(tabItem.projectId)}
                   projectTabsSelected={projectTabsSelected}
+                  showFileName={showFileNames}
                   selectedOpeningProjectTabId={selectedOpeningProjectTabId}
                 />
               ),
@@ -101,10 +105,18 @@ export const ProjectTabRow: FC<{
 const SortableProject: FC<{
   projectId: ProjectId;
   projectTabsSelected: boolean;
+  showFileName: boolean;
   selectedOpeningProjectTabId?: OpeningProjectTabId;
   onCloseProject?: () => void;
   onSelectProject?: () => void;
-}> = ({ projectId, onCloseProject, onSelectProject, projectTabsSelected, selectedOpeningProjectTabId }) => {
+}> = ({
+  projectId,
+  onCloseProject,
+  onSelectProject,
+  projectTabsSelected,
+  selectedOpeningProjectTabId,
+  showFileName,
+}) => {
   const { attributes, listeners, setNodeRef, transform, transition } = useSortable({
     id: projectId,
   });
@@ -127,6 +139,7 @@ const SortableProject: FC<{
         onCloseProject={onCloseProject}
         onSelectProject={onSelectProject}
         projectTabsSelected={projectTabsSelected}
+        showFileName={showFileName}
         selectedOpeningProjectTabId={selectedOpeningProjectTabId}
       />
     </div>
@@ -135,6 +148,7 @@ const SortableProject: FC<{
 const ProjectTab: FC<{
   projectId: ProjectId;
   projectTabsSelected: boolean;
+  showFileName: boolean;
   selectedOpeningProjectTabId?: OpeningProjectTabId;
   dragListeners?: SyntheticListenerMap;
   onCloseProject?: () => void;
@@ -146,6 +160,7 @@ const ProjectTab: FC<{
   onSelectProject,
   projectTabsSelected,
   selectedOpeningProjectTabId,
+  showFileName,
 }) => {
   const openedProjects = useAtomValue(openedProjectsState);
   const projectTabUi = useAtomValue(projectTabUiState);
@@ -163,6 +178,7 @@ const ProjectTab: FC<{
     projectTabsSelected,
     openingTabSelected: selectedOpeningProjectTabId != null,
     preview: projectTabUi[projectId]?.preview,
+    showFileName,
   });
 
   return (
@@ -184,9 +200,17 @@ const OpeningProjectTab: FC<{
   openingTabId: OpeningProjectTabId;
   selectedOpeningProjectTabId?: OpeningProjectTabId;
   projectTabsSelected: boolean;
+  showFileName: boolean;
   onCloseProject?: () => void;
   onSelectProject?: () => void;
-}> = ({ openingTabId, onCloseProject, onSelectProject, projectTabsSelected, selectedOpeningProjectTabId }) => {
+}> = ({
+  openingTabId,
+  onCloseProject,
+  onSelectProject,
+  projectTabsSelected,
+  selectedOpeningProjectTabId,
+  showFileName,
+}) => {
   const openingProjectTabs = useAtomValue(openingProjectTabsState);
   const openingTab = openingProjectTabs[openingTabId];
 
@@ -200,6 +224,7 @@ const OpeningProjectTab: FC<{
     projectTabsSelected,
     selected: selectedOpeningProjectTabId === openingTabId,
     preview: openingTab.tabUi?.preview,
+    showFileName,
   });
 
   return (

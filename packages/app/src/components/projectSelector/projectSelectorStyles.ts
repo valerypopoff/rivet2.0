@@ -303,14 +303,13 @@ export const projectSelectorStyles = css`
     --project-tab-current-bg: var(--project-tab-bg);
     --project-tab-hover-bg: var(--project-tab-active-bg);
     --project-tab-shoulder-size: 8px;
-
     display: flex;
     align-items: center;
     justify-content: flex-start;
     padding: 0 10px;
     cursor: pointer;
     user-select: none;
-    gap: 0;
+    gap: 8px;
     font-size: var(--ui-font-size-sm);
     height: calc(100% - 5px);
     margin-bottom: 5px;
@@ -397,14 +396,12 @@ export const projectSelectorStyles = css`
     &.active {
       --project-tab-current-bg: var(--project-tab-active-bg);
 
-      align-self: flex-end;
+      height: 100%;
+      margin-bottom: 0;
+      padding-bottom: 5px;
       border-radius: 8px 8px 0 0;
       box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06);
       color: var(--grey-lightest);
-      gap: 8px;
-      height: 100%;
-      margin-bottom: 0;
-      padding: 0 6px 4px 10px;
       z-index: 2;
     }
 

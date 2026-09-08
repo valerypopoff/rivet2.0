@@ -1,16 +1,17 @@
 import { useCallback, useEffect, useRef } from 'react';
-import { postMessageToEditor, type DashboardToEditorCommand } from '../../studio-server-shared/editor-bridge';
+import {
+  cloneValidatedDashboardToEditorCommand,
+  postMessageToEditor,
+  type DashboardToEditorCommand,
+} from '../../studio-server-shared/editor-bridge';
 
-export function useEditorCommandQueue(
-  iframeRef: React.RefObject<HTMLIFrameElement | null>,
-  editorReady: boolean,
-) {
+export function useEditorCommandQueue(iframeRef: React.RefObject<HTMLIFrameElement | null>, editorReady: boolean) {
   const pendingCommandsRef = useRef<DashboardToEditorCommand[]>([]);
 
   const postCommand = useCallback(
     (command: DashboardToEditorCommand) => {
       if (!editorReady || !iframeRef.current?.contentWindow) {
-        pendingCommandsRef.current.push(command);
+        pendingCommandsRef.current.push(cloneValidatedDashboardToEditorCommand(command));
         return;
       }
 

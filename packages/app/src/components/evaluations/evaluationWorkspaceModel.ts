@@ -877,6 +877,30 @@ export function removeEvaluationDatasetField(dataset: EvaluationDataset, fieldId
   };
 }
 
+/**
+ * Applies an enabled-state change from one dataset-case control. Dataset cases
+ * written by older Rivet versions may omit `enabled`; that remains equivalent
+ * to enabled and is retained when no change is required.
+ */
+export function setEvaluationDatasetCaseEnabled(
+  dataset: EvaluationDataset,
+  caseId: string,
+  enabled: boolean,
+  applyToAllCases: boolean,
+): EvaluationDataset {
+  if (!dataset.cases.some((testCase) => testCase.id === caseId)) return dataset;
+
+  let changed = false;
+  const cases = dataset.cases.map((testCase) => {
+    if (!applyToAllCases && testCase.id !== caseId) return testCase;
+    if ((testCase.enabled !== false) === enabled) return testCase;
+    changed = true;
+    return { ...testCase, enabled };
+  });
+
+  return changed ? { ...dataset, cases } : dataset;
+}
+
 export function removeEvaluationDatasetFieldReferences(suite: EvaluationSuite, fieldId: string): EvaluationSuite {
   return {
     ...suite,

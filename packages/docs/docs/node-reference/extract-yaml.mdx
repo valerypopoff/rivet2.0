@@ -104,7 +104,9 @@ Text outside of the YAML object will be ignored. If you want to extract text out
 
 ## Error Handling
 
-If the JSONPath expression is invalid, the Extract YAML Node will error. If the YAML object or the value is not found, the `Output` and `Matches` outputs will not be ran, and the `No Match` output will run with the full contents of the input string.
+The path uses the same safe structural-whitespace handling as interpolation and Extract Object Path. For example, `$ . yamlDocument . items [ 0 ]` and `$.yamlDocument.items[0]` select the same value; whitespace inside quoted values, regular expressions, filters, and object literals is preserved.
+
+If the JSONPath expression is invalid, `Output` and `Matches` do not run and `No Match` returns the captured YAML text. If the path is valid but selects nothing, `Output` does not run, `Matches` returns an empty array, and `No Match` does not run. Invalid paths are handled as failed selections rather than thrown as graph errors.
 
 ## FAQ
 

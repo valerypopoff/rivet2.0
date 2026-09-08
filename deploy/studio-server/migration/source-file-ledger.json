@@ -6500,7 +6500,9 @@
         {
           "path": "packages/studio-server-web/project-tab-label-transform.ts",
           "migrationMode": "100644",
-          "migrationBlob": "75f44731df1e8d8396e5dd40f50aa97d34bf66cf"
+          "migrationBlob": "75f44731df1e8d8396e5dd40f50aa97d34bf66cf",
+          "currentPath": "packages/studio-server-web/dashboard/HostedEditorApp.tsx",
+          "currentReason": "Hosted project-tab labels moved from a build-time source transform to the RivetAppHost projectTabs.showFileNames UI policy."
         }
       ]
     },

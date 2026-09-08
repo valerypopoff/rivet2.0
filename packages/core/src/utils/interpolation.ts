@@ -1,6 +1,6 @@
 import { dataTypes, type DataValue } from '../model/DataValue.js';
 import { coerceTypeOptional } from './coerceType.js';
-import { evaluateJsonPath } from './jsonPath.js';
+import { evaluateJsonPath, normalizeJsonPathExpression } from './jsonPath.js';
 import { dedent } from './misc.js';
 import {
   isInterpolationRegexLiteralStart,
@@ -222,7 +222,11 @@ function findTopLevelProcessorSeparator(rawInner: string): number | undefined {
         regexCharacterClass = true;
       } else if (character === ']' && !isInterpolationSyntaxCharacterEscaped(rawInner, cursor)) {
         regexCharacterClass = false;
-      } else if (character === '/' && !regexCharacterClass && !isInterpolationSyntaxCharacterEscaped(rawInner, cursor)) {
+      } else if (
+        character === '/' &&
+        !regexCharacterClass &&
+        !isInterpolationSyntaxCharacterEscaped(rawInner, cursor)
+      ) {
         regex = false;
       }
       continue;
@@ -341,133 +345,6 @@ function parseQuotedBaseReference(expression: string): { baseName: string; suffi
   return { baseName, suffix: suffix || undefined };
 }
 
-function getNextNonWhitespaceCharacter(value: string, index: number): string | undefined {
-  for (let cursor = index; cursor < value.length; cursor++) {
-    if (!/\s/.test(value[cursor]!)) {
-      return value[cursor];
-    }
-  }
-
-  return undefined;
-}
-
-function getWhitespaceRunEnd(value: string, index: number): number {
-  let cursor = index;
-  while (cursor < value.length && /\s/.test(value[cursor]!)) {
-    cursor += 1;
-  }
-  return cursor;
-}
-
-/**
- * Retains legacy convenience whitespace around JSONPath structural separators
- * without touching quoted values, regex literals, or filter expressions.
- */
-function normalizeJsonPathSuffix(suffix: string): string {
-  const result: string[] = [];
-  let lastResultCharacter: string | undefined;
-  let quote: '"' | "'" | '`' | undefined;
-  let regex = false;
-  let regexCharacterClass = false;
-  const filterBrackets: boolean[] = [];
-  let filterDepth = 0;
-
-  const append = (value: string): void => {
-    if (value === '') {
-      return;
-    }
-
-    result.push(value);
-    lastResultCharacter = value.at(-1);
-  };
-
-  for (let cursor = 0; cursor < suffix.length; cursor++) {
-    const character = suffix[cursor]!;
-
-    if (regex) {
-      if (character === '[' && !isInterpolationSyntaxCharacterEscaped(suffix, cursor)) {
-        regexCharacterClass = true;
-      } else if (character === ']' && !isInterpolationSyntaxCharacterEscaped(suffix, cursor)) {
-        regexCharacterClass = false;
-      } else if (character === '/' && !regexCharacterClass && !isInterpolationSyntaxCharacterEscaped(suffix, cursor)) {
-        regex = false;
-      }
-      append(character);
-      continue;
-    }
-
-    if (quote) {
-      if (character === quote && !isInterpolationSyntaxCharacterEscaped(suffix, cursor)) {
-        quote = undefined;
-      }
-      append(character);
-      continue;
-    }
-
-    if (character === '"' || character === "'" || character === '`') {
-      quote = character;
-      append(character);
-      continue;
-    }
-
-    if (character === '/' && isInterpolationRegexLiteralStart(suffix, cursor)) {
-      regex = true;
-      regexCharacterClass = false;
-      append(character);
-      continue;
-    }
-
-    const insideFilter = filterDepth > 0;
-
-    if (/\s/.test(character)) {
-      const whitespaceEnd = getWhitespaceRunEnd(suffix, cursor);
-      const previousCharacter = lastResultCharacter;
-      const nextCharacter = suffix[whitespaceEnd];
-      // JSONPath-plus rejects whitespace immediately inside either bracket,
-      // including filter brackets. Preserve all other filter whitespace,
-      // especially quoted and regex content handled above.
-      const shouldRemoveWhitespace =
-        previousCharacter === '[' ||
-        nextCharacter === ']' ||
-        nextCharacter === '[' ||
-        (!insideFilter && (previousCharacter === '.' || previousCharacter === ']' || nextCharacter === '.'));
-
-      if (!shouldRemoveWhitespace) {
-        append(suffix.slice(cursor, whitespaceEnd));
-      }
-      cursor = whitespaceEnd - 1;
-      continue;
-    }
-
-    if (character === '[') {
-      const opensFilter = getNextNonWhitespaceCharacter(suffix, cursor + 1) === '?';
-      filterBrackets.push(opensFilter);
-      if (opensFilter) {
-        filterDepth += 1;
-      }
-      append(character);
-      continue;
-    }
-
-    if (character === ']') {
-      if (filterBrackets.pop()) {
-        filterDepth -= 1;
-      }
-      append(character);
-      continue;
-    }
-
-    if (character === '.' && !insideFilter) {
-      append(character);
-      continue;
-    }
-
-    append(character);
-  }
-
-  return result.join('').trim();
-}
-
 function parseBaseReference(
   expression: string,
   source: InterpolationReferenceSource,
@@ -482,7 +359,7 @@ function parseBaseReference(
     return {
       source,
       baseName: quotedReference.baseName,
-      jsonPath: quotedReference.suffix ? `$${normalizeJsonPathSuffix(quotedReference.suffix)}` : undefined,
+      jsonPath: quotedReference.suffix ? normalizeJsonPathExpression(`$${quotedReference.suffix}`) : undefined,
     };
   }
 
@@ -504,7 +381,7 @@ function parseBaseReference(
   }
 
   const baseName = trimmedExpression.slice(0, suffixStart).trim();
-  const suffix = normalizeJsonPathSuffix(trimmedExpression.slice(suffixStart));
+  const suffix = normalizeJsonPathExpression(trimmedExpression.slice(suffixStart));
 
   if (!baseName || (!suffix.startsWith('.') && !suffix.startsWith('['))) {
     return undefined;

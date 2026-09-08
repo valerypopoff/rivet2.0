@@ -192,6 +192,11 @@ an explicit current path plus reason for a later refactor. The Studio Server
 verification and image-publication workflows use full-history checkouts so
 this proof runs in CI before builds can be accepted or published.
 
+When a later refactor moves or removes a migration-era destination, register its
+reviewed successor in `currentDestinationSuccessors` in the same change, then
+regenerate and review the ledger. Do not leave the prior destination in the
+ledger and rely on CI to discover the missing successor after push.
+
 The write command,
 `yarn studio-server:verify:migration-ledger:write`, exists only to regenerate
 the deterministic ledger after a reviewed mapping-rule change. Review the JSON

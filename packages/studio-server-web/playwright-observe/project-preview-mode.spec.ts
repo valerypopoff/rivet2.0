@@ -63,10 +63,14 @@ test('single-click project opens as a replaceable editor preview tab', async ({ 
   const firstProject = createPreviewProject('codex-preview-first');
   const secondProject = createPreviewProject('codex-preview-second');
   const thirdProject = createPreviewProject('codex-preview-third');
+  const additionalProjects = Array.from({ length: 7 }, (_, index) =>
+    createPreviewProject(`codex-crowded-tab-${index + 1}`),
+  );
   const contentsByPath = new Map([
     [firstProject.absolutePath, createPreviewProjectFile(firstProject.name)],
     [secondProject.absolutePath, createPreviewProjectFile(secondProject.name)],
     [thirdProject.absolutePath, createPreviewProjectFile(thirdProject.name)],
+    ...additionalProjects.map((project) => [project.absolutePath, createPreviewProjectFile(project.name)] as const),
   ]);
   let releaseFirstProjectLoad: (() => void) | null = null;
   let firstProjectLoadStartedResolve: (() => void) | null = null;
@@ -80,7 +84,7 @@ test('single-click project opens as a replaceable editor preview tab', async ({ 
       root: '/workflows',
       sync: { epoch: 'playwright-fixture', revision: 0 },
       folders: [],
-      projects: [firstProject, secondProject, thirdProject],
+      projects: [firstProject, secondProject, thirdProject, ...additionalProjects],
     };
 
     await route.fulfill({
@@ -166,11 +170,157 @@ test('single-click project opens as a replaceable editor preview tab', async ({ 
   await expectProjectTabPreview(secondEditorTab, true);
   await expect(editorTabs).toHaveCount(2);
 
-  await secondRow.click();
+  for (const project of additionalProjects) {
+    await page.locator('.project-row', { hasText: project.name }).dblclick();
+    await expect(editorTabs.filter({ hasText: project.name })).toBeVisible();
+  }
+  await firstRow.click();
+  await expect(firstActiveEditorTab).toBeVisible();
+  await secondEditorTab.hover();
+  const inactiveHoveredTabSpacing = await secondEditorTab.evaluate((tab) => {
+    const wrapper = tab.closest<HTMLElement>('.draggableProject');
+    const tabBounds = tab.getBoundingClientRect();
+    const wrapperBounds = wrapper?.getBoundingClientRect();
+
+    return {
+      bottomGap: wrapperBounds ? Math.round(wrapperBounds.bottom - tabBounds.bottom) : null,
+      marginBottom: getComputedStyle(tab).marginBottom,
+    };
+  });
+  expect(inactiveHoveredTabSpacing).toEqual({ bottomGap: 5, marginBottom: '5px' });
+
+  const tabWidthsBeforeSwitch = await editorTabs.evaluateAll((tabs) =>
+    tabs.map((tab) => tab.getBoundingClientRect().width),
+  );
+  await frame.locator('.projects-container').evaluate((container) => {
+    const samples: unknown[] = [];
+    const runtime = window as Window & {
+      __projectTabMotionDone?: Promise<void>;
+      __projectTabMotionSamples?: unknown[];
+    };
+    runtime.__projectTabMotionSamples = samples;
+    const capture = () => {
+      samples.push(
+        [...container.querySelectorAll<HTMLElement>('.draggableProject')].map((wrapper) => {
+          const tab = wrapper.querySelector<HTMLElement>('.project');
+          const projectName = tab?.querySelector<HTMLElement>('.project-name');
+          const projectLabel = projectName?.querySelector<HTMLElement>('span');
+          const bounds = wrapper.getBoundingClientRect();
+          return {
+            label: projectName?.textContent ?? '',
+            labelTop: projectLabel?.getBoundingClientRect().top ?? null,
+            left: bounds.left,
+            top: bounds.top,
+            transform: getComputedStyle(wrapper).transform,
+            height: bounds.height,
+            width: bounds.width,
+          };
+        }),
+      );
+    };
+    const observer = new MutationObserver(capture);
+    observer.observe(container, {
+      attributes: true,
+      attributeFilter: ['class', 'style'],
+      characterData: true,
+      childList: true,
+      subtree: true,
+    });
+    let framesRemaining = 90;
+    runtime.__projectTabMotionDone = new Promise<void>((resolve) => {
+      const sampleFrame = () => {
+        capture();
+        framesRemaining -= 1;
+        if (framesRemaining > 0) {
+          requestAnimationFrame(sampleFrame);
+          return;
+        }
+        observer.disconnect();
+        resolve();
+      };
+      capture();
+      requestAnimationFrame(sampleFrame);
+    });
+  });
+
+  await secondEditorTab.click();
   await expect(firstEditorTab).toBeVisible();
   await expect(secondEditorTab).toBeVisible();
   await expectProjectTabPreview(firstEditorTab, false);
   await expectProjectTabPreview(secondEditorTab, true);
+  await expect(editorTabs).toHaveCount(2 + additionalProjects.length);
+  await expect
+    .poll(() => editorTabs.evaluateAll((tabs) => tabs.map((tab) => tab.getBoundingClientRect().width)))
+    .toEqual(tabWidthsBeforeSwitch);
+  const tabMotionSamples = (await frame.locator('.projects-container').evaluate(async () => {
+    const runtime = window as Window & {
+      __projectTabMotionDone?: Promise<void>;
+      __projectTabMotionSamples?: unknown[];
+    };
+    await runtime.__projectTabMotionDone;
+    return runtime.__projectTabMotionSamples ?? [];
+  })) as Array<
+    Array<{
+      height: number;
+      label: string;
+      labelTop: number | null;
+      left: number;
+      top: number;
+      transform: string;
+      width: number;
+    }>
+  >;
+  expect(tabMotionSamples.length).toBeGreaterThan(0);
+  const baselineGeometry = tabMotionSamples[0]!.map(({ height, label, labelTop, left, top, transform, width }) => ({
+    height,
+    label,
+    labelTop,
+    left,
+    top,
+    transform,
+    width,
+  }));
+  for (const sample of tabMotionSamples) {
+    expect(new Set(sample.map(({ label }) => label)).size).toBe(sample.length);
+    const geometry = sample.map(({ height, label, labelTop, left, top, transform, width }) => ({
+      height,
+      label,
+      labelTop,
+      left,
+      top,
+      transform,
+      width,
+    }));
+    if (JSON.stringify(geometry) !== JSON.stringify(baselineGeometry)) {
+      throw new Error(`Project tab identity or geometry changed during selection:\n${JSON.stringify(sample, null, 2)}`);
+    }
+  }
+
+  await page.mouse.move(1, 1);
+  const selectedTabDecoration = await secondEditorTab.evaluate((tab) => {
+    const wrapper = tab.closest<HTMLElement>('.draggableProject');
+    const previousWrapper = wrapper?.previousElementSibling as HTMLElement | null;
+
+    return {
+      activeDivider: wrapper ? getComputedStyle(wrapper, '::after').display : 'missing',
+      leftDivider: previousWrapper ? getComputedStyle(previousWrapper, '::after').display : null,
+      leftShoulder: getComputedStyle(tab, '::before').display,
+      rightShoulder: getComputedStyle(tab, '::after').display,
+    };
+  });
+  expect(selectedTabDecoration).toEqual({
+    activeDivider: 'none',
+    leftDivider: null,
+    leftShoulder: 'block',
+    rightShoulder: 'block',
+  });
+
+  for (const project of additionalProjects) {
+    const tab = editorTabs.filter({ hasText: project.name });
+    await tab.hover();
+    await tab.getByRole('button', { name: `Close ${project.name}` }).click();
+    await expect(tab).toHaveCount(0);
+  }
   await expect(editorTabs).toHaveCount(2);
 
   await firstRow.click();
@@ -180,6 +330,25 @@ test('single-click project opens as a replaceable editor preview tab', async ({ 
   await expectProjectTabPreview(firstActiveEditorTab, false);
   await expectProjectTabPreview(secondEditorTab, true);
   await expect(editorTabs).toHaveCount(2);
+
+  await page.mouse.move(1, 1);
+  const interiorSelectedTabDecoration = await firstEditorTab.evaluate((tab) => {
+    const wrapper = tab.closest<HTMLElement>('.draggableProject');
+    const previousWrapper = wrapper?.previousElementSibling as HTMLElement | null;
+
+    return {
+      activeDivider: wrapper ? getComputedStyle(wrapper, '::after').display : 'missing',
+      leftDivider: previousWrapper ? getComputedStyle(previousWrapper, '::after').display : 'missing',
+      leftShoulder: getComputedStyle(tab, '::before').display,
+      rightShoulder: getComputedStyle(tab, '::after').display,
+    };
+  });
+  expect(interiorSelectedTabDecoration).toEqual({
+    activeDivider: 'none',
+    leftDivider: 'none',
+    leftShoulder: 'block',
+    rightShoulder: 'block',
+  });
 
   await page.evaluate(() => {
     const activeRowChanges: string[] = [];

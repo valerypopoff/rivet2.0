@@ -21,6 +21,7 @@ export const defaultApiTestFiles = [
   'src/tests/evaluation-runs-filesystem.test.ts',
   'src/tests/evaluation-runs.test.ts',
   'src/tests/exec.test.ts',
+  'src/tests/executor-dev-bundle.test.ts',
   'src/tests/filesystem-execution-cache.test.ts',
   'src/tests/filesystem-execution-source.test.ts',
   'src/tests/filesystem-project-transactions.test.ts',

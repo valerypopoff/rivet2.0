@@ -110,6 +110,7 @@ import {
   reassignEvaluationSuiteTarget,
   removeEvaluationDatasetField,
   removeEvaluationDatasetFieldReferences,
+  setEvaluationDatasetCaseEnabled,
   suggestEvaluationAssertionOperator,
   sortEvaluationTrialsByScore,
   type EvaluationScoreSort,
@@ -4524,16 +4525,18 @@ const Dataset: FC<{
                   <ScalableToggle
                     aria-label={`${testCase.name} enabled`}
                     isChecked={testCase.enabled !== false}
-                    onChange={(event) =>
-                      onUpdate({
-                        ...dataset,
-                        cases: dataset.cases.map((candidate) =>
-                          candidate.id === testCase.id
-                            ? { ...candidate, enabled: event.currentTarget.checked }
-                            : candidate,
+                    title="Ctrl/Cmd+click to enable or disable all cases"
+                    onChange={(event) => {
+                      const nativeEvent = event.nativeEvent as MouseEvent;
+                      onUpdate(
+                        setEvaluationDatasetCaseEnabled(
+                          dataset,
+                          testCase.id,
+                          event.currentTarget.checked,
+                          nativeEvent.ctrlKey || nativeEvent.metaKey,
                         ),
-                      })
-                    }
+                      );
+                    }}
                   />
                 </div>
                 <div className="evaluation-case-name-control">

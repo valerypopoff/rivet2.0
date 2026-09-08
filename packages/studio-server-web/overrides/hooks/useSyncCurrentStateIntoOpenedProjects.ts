@@ -16,7 +16,7 @@ import {
   projectsState,
   savedProjectContentDigestsState,
 } from '../../../app/src/state/savedGraphs';
-import { addOpenedProject } from '../../../app/src/utils/openedProjects.js';
+import { addOpenedProject, resolveSyncedOpenedProjectFsPathOptions } from '../../../app/src/utils/openedProjects.js';
 import { useExecutorSessionState } from '../../../app/src/hooks/useExecutorSession.js';
 import {
   projectExecutorModesEqual,
@@ -358,12 +358,19 @@ export function useSyncCurrentStateIntoOpenedProjects({ enabled = true }: { enab
 
     setProjects((previousProjects) => {
       const existingProject = previousProjects.openedProjects[currentProjectId];
-      const nextOpenedGraph = currentGraph?.metadata?.id;
-      const nextFsPath = loadedProject.path ?? existingProject?.fsPath ?? null;
+      const currentGraphId = currentGraph?.metadata?.id;
+      const nextOpenedGraph =
+        currentGraphId && currentProject.graphs[currentGraphId] ? currentGraphId : existingProject?.openedGraph;
+      const fsPathOptions = resolveSyncedOpenedProjectFsPathOptions(
+        previousProjects,
+        currentProjectId,
+        loadedProject.path,
+      );
+      const nextFsPath = 'fsPath' in fsPathOptions ? fsPathOptions.fsPath ?? null : existingProject?.fsPath ?? null;
       const projectForTab = withHostedProjectTitle(currentProjectWithData, nextFsPath);
       const nextTitle = resolveHostedProjectTitle(projectForTab, nextFsPath);
       const nextProjects = addOpenedProject(previousProjects, projectForTab, {
-        ...(loadedProject.path ? { fsPath: loadedProject.path } : {}),
+        ...fsPathOptions,
         ...(nextOpenedGraph ? { openedGraph: nextOpenedGraph } : {}),
         executorMode: currentExecutorMode,
       });
@@ -398,7 +405,8 @@ export function useSyncCurrentStateIntoOpenedProjects({ enabled = true }: { enab
     }
 
     const currentProjectId = currentProject.metadata.id as ProjectId | undefined;
-    if (!currentProjectId || !currentGraph) {
+    const currentGraphId = currentGraph?.metadata?.id;
+    if (!currentProjectId || !currentGraph || !currentGraphId || !currentProject.graphs[currentGraphId]) {
       return;
     }
 

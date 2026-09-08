@@ -140,6 +140,30 @@ test('opening project tabs use their path only while active', () => {
   );
 });
 
+test('hosts can keep project and opening tab labels title-only', () => {
+  assert.equal(
+    resolveProjectTabPresentation({
+      title: 'Hosted project',
+      fsPath: '/workflows/backing-file.rivet-project',
+      current: true,
+      projectTabsSelected: true,
+      openingTabSelected: false,
+      showFileName: false,
+    }).displayName,
+    'Hosted project',
+  );
+  assert.equal(
+    resolveOpeningProjectTabPresentation({
+      title: 'Opening project',
+      path: '/workflows/backing-file.rivet-project',
+      projectTabsSelected: true,
+      selected: true,
+      showFileName: false,
+    }).displayName,
+    'Opening project',
+  );
+});
+
 test('project selector platform policy keeps native desktop controls OS-specific', () => {
   assert.deepEqual(resolveProjectSelectorPlatformPolicy({ inTauri: true, macOS: false, windows: true }), {
     showFileMenu: true,

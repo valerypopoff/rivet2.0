@@ -228,7 +228,7 @@ export class ExtractYamlNodeImpl extends NodeImpl<ExtractYamlNode> {
               type: 'control-flow-excluded',
               value: undefined,
             }
-          : this.data.objectPath
+          : objectPath
             ? {
                 type: 'any',
                 value: yamlObject,

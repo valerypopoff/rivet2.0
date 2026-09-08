@@ -80,4 +80,20 @@ describe('DestructureNode', () => {
     assert.equal(output['path-name' as PortId]?.value, 'Ada');
     assert.equal(output['path-age' as PortId]?.value, 42);
   });
+
+  it('accepts the same structural whitespace as interpolation paths', async () => {
+    const node = createNode({
+      paths: ['$ . value . name'],
+      pathPortIds: ['path-name'],
+    });
+
+    const output = await node.process({
+      object: {
+        type: 'object',
+        value: { value: { name: 'Ada' } },
+      },
+    } as Record<PortId, any>);
+
+    assert.equal(output['path-name' as PortId]?.value, 'Ada');
+  });
 });

@@ -6,6 +6,7 @@ import { type CSSProperties, type FC, useMemo } from 'react';
 
 import { useLoadProject } from '../hooks/useLoadProject';
 import { useRivetWorkspaceHost } from '../hooks/useRivetWorkspaceHost.js';
+import { useRivetAppHostUiConfig } from '../providers/HostUiConfigContext.js';
 import { useSyncCurrentStateIntoOpenedProjects } from '../hooks/useSyncCurrentStateIntoOpenedProjects';
 import {
   openingProjectTabsSortedIdsState,
@@ -41,6 +42,7 @@ export const ProjectSelector: FC<{
   const sidebarOpen = useAtomValue(sidebarOpenState);
   const leftSidebarWidth = useAtomValue(leftSidebarLiveWidthState);
   const currentProject = useAtomValue(projectState);
+  const hostUiConfig = useRivetAppHostUiConfig();
   const { cancelOpeningProjectTab } = useRivetWorkspaceHost();
   const { closeConfirmModal, requestCloseProject } = useProjectCloseConfirmation();
 
@@ -122,6 +124,7 @@ export const ProjectSelector: FC<{
       {reserveSidebarColumn && <div className="sidebar-panel-spacer" aria-hidden="true" />}
       {showFileMenu && <ProjectFileMenu />}
       <ProjectTabRow
+        showFileNames={hostUiConfig.projectTabs?.showFileNames !== false}
         projectTabsSelected={projectTabsSelected}
         selectedOpeningProjectTabId={selectedOpeningProjectTabId}
         sortableProjectIds={sortableProjectIds}

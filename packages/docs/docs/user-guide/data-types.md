@@ -58,6 +58,8 @@ Interpolation can select a value inside an object or array with the same JSONPat
 {{orders[?(@.paid)].id}}
 ```
 
+Rivet also tolerates whitespace around JSONPath structural separators consistently. For example, `{{order . items [ 0 ] . price}}` selects the same value as `{{order.items[0].price}}`, and `$ . items [ 0 ] . price` works the same way in Extract Object Path. Whitespace inside quoted values, regular expressions, filters, and object literals is preserved.
+
 Each expression creates only one dynamic input: its base name. The examples above create `customer`, `order`, and `orders` inputs—not ports named `customer.name` or `order.items[0].price`. Connect the whole object or array to that base port, then Rivet selects the requested value when the node runs. A JSONPath query with no match behaves as an absent value; a query with one match returns that value, and a query with multiple matches returns an array.
 
 `{{@graphInputs.profile.name}}` and `{{@context.session.user.name}}` use the same path syntax, but continue to read their graph/context roots directly and do not create node inputs.
