@@ -40,7 +40,7 @@ Shared runtime foundation for the entire repo.
 
 ### Package metadata
 
-- Version: `2.4.0`
+- Version: `2.5.0`
 - Main: `dist/cjs/bundle.cjs`
 - Module: `dist/esm/index.js`
 - Types: `dist/types/index.d.ts`
@@ -80,7 +80,7 @@ Node runtime wrapper around core.
 
 ### Package metadata
 
-- Version: `2.4.0`
+- Version: `2.5.0`
 - Main: `dist/cjs/bundle.cjs`
 - Module: `dist/esm/index.js`
 - Types: `dist/types/index.d.ts`
@@ -549,7 +549,7 @@ Desktop IDE frontend plus Tauri app packaging layer.
 
 ### Package metadata
 
-- Version: `2.10.0`
+- Version: `2.11.0`
 - Private: yes
 
 ### Runtime shape
@@ -614,7 +614,7 @@ Node sidecar process used by the desktop app for Node-capable execution.
 
 ### Package metadata
 
-- Version: `2.3.0`
+- Version: `2.4.0`
 - Bin: `./bin/executor-bundle.cjs`
 
 ### Main behavior
@@ -719,7 +719,7 @@ Operational CLI for running or serving Rivet graphs.
 
 ### Package metadata
 
-- Version: `2.4.0`
+- Version: `2.5.0`
 - Source entry: `src/cli.ts`
 - Published bin mapping: `rivet -> bin/cli.js`
 - Types: `dist/types/cli.d.ts`
@@ -843,7 +843,7 @@ Portable, executor-agnostic evaluation engine shared by the app, CLI, and host i
 
 ### Package metadata
 
-- Version: `2.4.0`
+- Version: `2.5.0`
 - Main: `dist/cjs/bundle.cjs`
 - Module: `dist/esm/index.js`
 - Types: `dist/types/index.d.ts`
@@ -875,7 +875,7 @@ a crawler, credentials, or a server-side search API.
 
 ### Package metadata
 
-- Version: `2.2.0`
+- Version: `2.3.0`
 - Private: yes
 
 ### Script surface
