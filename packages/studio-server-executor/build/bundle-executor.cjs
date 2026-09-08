@@ -6,41 +6,46 @@
 
 const esbuild = require('esbuild');
 const path = require('path');
+const {
+  createRivetWorkspaceSourceResolver,
+} = require('../../app-executor/scripts/rivet-workspace-source-resolver.cjs');
 
 const repoRootDir = path.resolve(__dirname, '..', '..', '..');
-const appExecutorDir = path.resolve(repoRootDir, 'packages', 'app-executor');
 const studioServerExecutorDir = path.resolve(repoRootDir, 'packages', 'studio-server-executor');
 
-const resolveRivet = {
-  name: 'resolve-rivet',
-  setup(build) {
-    build.onResolve({ filter: /^@valerypopoff\/rivet2-(core|node)$/ }, (args) => {
-      const rivetPackage = args.path.replace(/^@valerypopoff\/rivet2-/, '');
-      return {
-        path: path.resolve(appExecutorDir, '..', rivetPackage, 'src', 'index.ts'),
-      };
-    });
-  },
-};
+const executorBundlePath = path.join(studioServerExecutorDir, 'dist', 'executor-bundle.cjs');
 
-esbuild
-  .build({
+function createExecutorBuildOptions(additionalPlugins = []) {
+  return {
+    absWorkingDir: repoRootDir,
     entryPoints: [path.join(studioServerExecutorDir, 'src', 'executor.mts')],
     bundle: true,
     platform: 'node',
-    outfile: path.join(studioServerExecutorDir, 'dist', 'executor-bundle.cjs'),
+    outfile: executorBundlePath,
     format: 'cjs',
     target: 'node20',
     define: {
       'import.meta.url': '__filename',
     },
     external: [],
-    plugins: [resolveRivet],
-  })
-  .then(() => {
-    console.log('Studio Server executor bundled to dist/executor-bundle.cjs');
-  })
-  .catch((err) => {
+    plugins: [createRivetWorkspaceSourceResolver(), ...additionalPlugins],
+  };
+}
+
+function buildExecutorBundle(overrides = {}) {
+  return esbuild.build({ ...createExecutorBuildOptions(), ...overrides });
+}
+
+async function main() {
+  await buildExecutorBundle();
+  console.log('Studio Server executor bundled to dist/executor-bundle.cjs');
+}
+
+module.exports = { buildExecutorBundle, createExecutorBuildOptions, executorBundlePath, repoRootDir };
+
+if (require.main === module) {
+  main().catch((err) => {
     console.error(err);
     process.exit(1);
   });
+}

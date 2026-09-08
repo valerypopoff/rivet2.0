@@ -12,7 +12,6 @@ import { fileURLToPath } from 'node:url';
 import { existsSync, readFileSync } from 'node:fs';
 import { gunzipSync } from 'node:zlib';
 import { createBrowserSubpathAliases, createModuleOverrideAliases, createTauriShimAliases } from './vite-aliases';
-import { replaceHostedProjectTabLabelExpression } from './project-tab-label-transform';
 import { createRivetCoreSourceAliases } from '../app/scripts/vite-core-source-aliases';
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url));
@@ -246,30 +245,6 @@ const resolveRivetModuleOverride = (): PluginOption => ({
   },
 });
 
-const normalizeHostedProjectTabLabels = (): PluginOption => {
-  const projectSelectorPath = normalizePath(resolve(upstreamApp, 'src/components/ProjectSelector.tsx'));
-
-  return {
-    name: 'normalize-hosted-project-tab-labels',
-    enforce: 'pre',
-    transform(code, id) {
-      if (normalizePath(stripImportSuffix(id)) !== projectSelectorPath) {
-        return null;
-      }
-
-      const updatedCode = replaceHostedProjectTabLabelExpression(code);
-      if (updatedCode == null) {
-        return null;
-      }
-
-      return {
-        code: updatedCode,
-        map: null,
-      };
-    },
-  };
-};
-
 const dictionaryEnBrowserPlugin = (): PluginOption => ({
   name: 'hosted-rivet-dictionary-en-browser',
   enforce: 'pre',
@@ -433,7 +408,6 @@ export default defineConfig({
     plugins: [
       resolveBrowserSafeGoogleCoreModule(),
       resolveRivetModuleOverride(),
-      normalizeHostedProjectTabLabels(),
       dictionaryEnBrowserPlugin(),
       cspellWordsBrowserPlugin(),
       resolveWrapperDependency(),

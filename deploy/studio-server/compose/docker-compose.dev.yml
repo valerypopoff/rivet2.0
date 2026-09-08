@@ -257,18 +257,10 @@ services:
 
   executor:
     labels: *dev-stack-labels
-    build:
-      context: ../../..
-      dockerfile: deploy/studio-server/compose/docker/Dockerfile.executor
-      args:
-        HTTP_PROXY: ${HTTP_PROXY:-}
-        HTTPS_PROXY: ${HTTPS_PROXY:-}
-        ALL_PROXY: ${ALL_PROXY:-}
-        NO_PROXY: ${NO_PROXY:-}
-        http_proxy: ${http_proxy:-${HTTP_PROXY:-}}
-        https_proxy: ${https_proxy:-${HTTPS_PROXY:-}}
-        all_proxy: ${all_proxy:-${ALL_PROXY:-}}
-        no_proxy: ${no_proxy:-${NO_PROXY:-}}
+    image: node:20-alpine
+    user: "0:0"
+    entrypoint: []
+    working_dir: /workspace
     depends_on:
       filesystem-artifacts-init:
         condition: service_completed_successfully
@@ -284,6 +276,9 @@ services:
       - HOME=/home/rivet
       - npm_config_cache=/home/rivet/.npm
       - YARN_CACHE_FOLDER=/home/rivet/.cache/yarn
+      - YARN_NODE_LINKER=node-modules
+      - YARN_CHECKSUM_BEHAVIOR=ignore
+      - YARN_INSTALL_STATE_PATH=/workspace/node_modules/.yarn-install-state.gz
       - PORT=21889
       - RIVET_EXECUTOR_PORT=21889
       - RIVET_EXECUTOR_HOST=0.0.0.0
@@ -297,17 +292,34 @@ services:
       - RIVET_RUNTIME_LIBRARIES_SYNC_POLL_INTERVAL_MS
       - RIVET_NODE_EXECUTOR_PROXY_SETTINGS_POLL_INTERVAL_MS
       - RIVET_NODE_EXECUTOR_PROXY_BYPASS_HOSTS=${RIVET_NODE_EXECUTOR_PROXY_BYPASS_HOSTS:-}
+      - CHOKIDAR_USEPOLLING=true
+      - CHOKIDAR_INTERVAL=300
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:
+      - ../../..:/workspace
+      - executor_node_modules:/workspace/node_modules
+      - executor_yarn_unplugged:/workspace/.yarn/unplugged
       - npm_cache:/home/rivet/.npm
       - yarn_cache:/home/rivet/.cache/yarn
+      - ./docker/preserve-host-pnp-during-command.sh:/tmp/preserve-host-pnp-during-command.sh:ro
       - type: volume
         source: rivet_data
         target: /home/rivet/.local/share/com.valerypopoff.rivet2
         volume:
           nocopy: true
       - ${RIVET_RUNTIME_LIBS_HOST_PATH:-../../../.data/runtime-libraries}:/data/runtime-libraries
+    command: >
+      sh -lc "
+        corepack enable &&
+        cd /workspace &&
+        if [ ! -f node_modules/.studio-server-yarn-install-ok ] || [ ! -f node_modules/.yarn.lock ] || ! cmp -s yarn.lock node_modules/.yarn.lock; then
+          sh /tmp/preserve-host-pnp-during-command.sh /workspace env YARN_NODE_LINKER=node-modules YARN_CHECKSUM_BEHAVIOR=ignore yarn install --immutable &&
+          cp yarn.lock node_modules/.yarn.lock &&
+          touch node_modules/.studio-server-yarn-install-ok;
+        fi &&
+        RIVET_EXECUTOR_CHILD_NODE_OPTIONS='${NODE_OPTIONS:-} --import=/workspace/packages/studio-server-bootstrap/bootstrap.mjs' NODE_OPTIONS='' yarn workspace @valerypopoff/rivet-studio-server-executor run dev
+      "
     restart: unless-stopped
 
 volumes:
@@ -318,6 +330,10 @@ volumes:
   api_node_modules:
     driver: local
   api_yarn_unplugged:
+    driver: local
+  executor_node_modules:
+    driver: local
+  executor_yarn_unplugged:
     driver: local
   npm_cache:
     driver: local

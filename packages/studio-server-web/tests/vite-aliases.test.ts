@@ -4,18 +4,24 @@ import { relative, resolve } from 'node:path';
 import test from 'node:test';
 
 import { createBrowserSubpathAliases, createModuleOverrideAliases } from '../vite-aliases';
-import { replaceHostedProjectTabLabelExpression } from '../project-tab-label-transform';
 
 const overrideDir = resolve('/repo/packages/studio-server-web/overrides');
-const updateCheckScript = readFileSync(new URL('../../../deploy/studio-server/scripts/update-check.sh', import.meta.url), 'utf8');
+const updateCheckScript = readFileSync(
+  new URL('../../../deploy/studio-server/scripts/update-check.sh', import.meta.url),
+  'utf8',
+);
 const viteConfig = readFileSync(new URL('../vite.config.ts', import.meta.url), 'utf8');
 const wrapperPackageJson = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as {
   dependencies?: Record<string, string>;
 };
-const upstreamCorePackageJson = JSON.parse(readFileSync(new URL('../../core/package.json', import.meta.url), 'utf8')) as {
+const upstreamCorePackageJson = JSON.parse(
+  readFileSync(new URL('../../core/package.json', import.meta.url), 'utf8'),
+) as {
   dependencies?: Record<string, string>;
 };
-const upstreamNodePackageJson = JSON.parse(readFileSync(new URL('../../node/package.json', import.meta.url), 'utf8')) as {
+const upstreamNodePackageJson = JSON.parse(
+  readFileSync(new URL('../../node/package.json', import.meta.url), 'utf8'),
+) as {
   dependencies?: Record<string, string>;
 };
 const settingsOverride = readFileSync(new URL('../overrides/state/settings.ts', import.meta.url), 'utf8');
@@ -102,14 +108,19 @@ test('hosted Vite config carries upstream spellcheck browser virtual modules', (
 });
 
 test('hosted Vite config mirrors upstream browser dependencies with provider subpath support', () => {
-  assert.equal(wrapperPackageJson.dependencies?.['@gentrace/core'], upstreamCorePackageJson.dependencies?.['@gentrace/core']);
+  assert.equal(
+    wrapperPackageJson.dependencies?.['@gentrace/core'],
+    upstreamCorePackageJson.dependencies?.['@gentrace/core'],
+  );
   assert.equal(wrapperPackageJson.dependencies?.dompurify, upstreamNodePackageJson.dependencies?.dompurify);
   assert.ok(viteConfig.includes('find: /^@gentrace\\/core\\/(.+)$/'));
   assert.ok(viteConfig.includes("resolveWrapperPackageFile('@gentrace/core', '$1')"));
 });
 
 test('hosted Vite config resolves workspace-source Zod imports to the V4 API surface', () => {
-  const zodAlias = createBrowserSubpathAliases(resolve('/repo/packages/studio-server-web')).find((alias) => alias.find.test('zod'));
+  const zodAlias = createBrowserSubpathAliases(resolve('/repo/packages/studio-server-web')).find((alias) =>
+    alias.find.test('zod'),
+  );
 
   assert.match(zodAlias?.replacement.replace(/\\/g, '/') ?? '', /\/node_modules\/zod\/v4\/index\.js$/);
 });
@@ -128,9 +139,15 @@ test('context menu override keeps upstream virtual anchor contract and hosted fo
   const virtualReferenceIndex = contextMenuOverride.indexOf('refs.setReference(createContextMenuVirtualElement');
 
   assert.ok(floatingHookIndex >= 0, 'context menu override should create floating refs before using them');
-  assert.ok(virtualReferenceIndex > floatingHookIndex, 'context menu override should not read refs before useFloating runs');
+  assert.ok(
+    virtualReferenceIndex > floatingHookIndex,
+    'context menu override should not read refs before useFloating runs',
+  );
   assert.match(contextMenuOverride, /createContextMenuVirtualElement/);
-  assert.match(contextMenuOverride, /refs\.setReference\(createContextMenuVirtualElement\(event\.clientX, event\.clientY\)\)/);
+  assert.match(
+    contextMenuOverride,
+    /refs\.setReference\(createContextMenuVirtualElement\(event\.clientX, event\.clientY\)\)/,
+  );
   assert.match(contextMenuOverride, /const setFloatingMenu = useMergeRefs\(\[refs\.setFloating, contextMenuRef\]\);/);
   assert.match(contextMenuOverride, /setFloatingMenu,/);
   assert.match(contextMenuOverride, /blurContextMenuFocus\(\);/);
@@ -147,84 +164,4 @@ test('hosted opened-project overrides preserve upstream project executor mode co
   );
   assert.match(syncOpenedProjectsOverride, /useSyncCurrentStateIntoOpenedProjects\(\{ enabled = true \}/);
   assert.match(loadProjectOverride, /normalizeHostedProjectExecutorMode\(projectInfo\.executorMode\)/);
-});
-
-test('hosted project tab label transform handles legacy upstream labels', () => {
-  const source = [
-    '  const fileName = unsaved ? \'Unsaved\' : project.fsPath!.split(\'/\').pop();',
-    "  const projectDisplayName = `${project?.title}${fileName ? ` [${fileName}]` : ''}`;",
-  ].join('\n');
-
-  assert.equal(
-    replaceHostedProjectTabLabelExpression(source),
-    "  const projectDisplayName = project?.title?.trim() || 'Untitled Project';",
-  );
-});
-
-test('hosted project tab label transform handles active-only upstream labels', () => {
-  const source = [
-    "  const fileName = unsaved ? 'Unsaved' : project.fsPath!.split(/[\\\\/]/).pop();",
-    '  const active = projectTabsSelected && currentProject.metadata.id === projectId;',
-    "  const projectDisplayName = active ? `${project?.title}${fileName ? ` [${fileName}]` : ''}` : project?.title;",
-  ].join('\n');
-
-  assert.equal(
-    replaceHostedProjectTabLabelExpression(source),
-    [
-      '  const active = projectTabsSelected && currentProject.metadata.id === projectId;',
-      "  const projectDisplayName = project?.title?.trim() || 'Untitled Project';",
-    ].join('\n'),
-  );
-});
-
-test('hosted project tab label transform preserves preview tab state', () => {
-  const source = [
-    "  const fileName = unsaved ? 'Unsaved' : project.fsPath!.split(/[\\\\/]/).pop();",
-    '  const active = projectTabsSelected && currentProject.metadata.id === projectId;',
-    '  const preview = projectTabUi[projectId]?.preview === true;',
-    "  const projectDisplayName = active ? `${project?.title}${fileName ? ` [${fileName}]` : ''}` : project?.title;",
-  ].join('\n');
-
-  assert.equal(
-    replaceHostedProjectTabLabelExpression(source),
-    [
-      '  const active = projectTabsSelected && currentProject.metadata.id === projectId;',
-      '  const preview = projectTabUi[projectId]?.preview === true;',
-      "  const projectDisplayName = project?.title?.trim() || 'Untitled Project';",
-    ].join('\n'),
-  );
-});
-
-test('hosted project tab label transform preserves opening-tab-aware active state', () => {
-  const source = [
-    "  const fileName = unsaved ? 'Unsaved' : project.fsPath!.split(/[\\\\/]/).pop();",
-    '  const active = projectTabsSelected && selectedOpeningProjectTabId == null && currentProject.metadata.id === projectId;',
-    '  const preview = projectTabUi[projectId]?.preview === true;',
-    "  const projectDisplayName = active ? `${project?.title}${fileName ? ` [${fileName}]` : ''}` : project?.title;",
-  ].join('\n');
-
-  assert.equal(
-    replaceHostedProjectTabLabelExpression(source),
-    [
-      '  const active = projectTabsSelected && selectedOpeningProjectTabId == null && currentProject.metadata.id === projectId;',
-      '  const preview = projectTabUi[projectId]?.preview === true;',
-      "  const projectDisplayName = project?.title?.trim() || 'Untitled Project';",
-    ].join('\n'),
-  );
-});
-
-test('hosted project tab label transform handles opening project tabs', () => {
-  const source = [
-    '  const fileName = openingTab.path?.split(/[\\\\/]/).pop();',
-    "  const projectDisplayName = active ? `${openingTab.title}${fileName ? ` [${fileName}]` : ''}` : openingTab.title;",
-  ].join('\n');
-
-  assert.equal(
-    replaceHostedProjectTabLabelExpression(source),
-    "  const projectDisplayName = openingTab.title.trim() || 'Untitled Project';",
-  );
-});
-
-test('hosted project tab label transform no-ops on unknown upstream labels', () => {
-  assert.equal(replaceHostedProjectTabLabelExpression('const projectDisplayName = project?.title;'), null);
 });

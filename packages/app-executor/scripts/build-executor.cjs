@@ -1,21 +1,6 @@
 const { cp } = require('node:fs/promises');
-const { resolve } = require('node:path');
 const esbuild = require('esbuild');
-
-const rivetWorkspaceSourceEntries = new Map([
-  ['@valerypopoff/rivet2-core', '../core/src/index.ts'],
-  ['@valerypopoff/rivet2-node', '../node/src/index.ts'],
-]);
-
-const resolveRivet = {
-  name: 'resolve-rivet',
-  setup(build) {
-    build.onResolve({ filter: /^@valerypopoff\/rivet2-(core|node)$/ }, (args) => {
-      const sourceEntry = rivetWorkspaceSourceEntries.get(args.path);
-      return sourceEntry ? { path: resolve(sourceEntry) } : undefined;
-    });
-  },
-};
+const { createRivetWorkspaceSourceResolver } = require('./rivet-workspace-source-resolver.cjs');
 
 async function main() {
   const [{ execaCommand }, { default: chalk }] = await Promise.all([import('execa'), import('chalk')]);
@@ -37,7 +22,7 @@ async function main() {
       __RIVET_CODE_INTERPOLATION_RUNTIME_SOURCE__: JSON.stringify(interpolationRuntimeSource),
     },
     external: [],
-    plugins: [resolveRivet],
+    plugins: [createRivetWorkspaceSourceResolver()],
   });
 
   console.log(`Compiling to native binary for ${chalk.cyan(process.platform)}...`);

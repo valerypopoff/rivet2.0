@@ -13,7 +13,13 @@ async function getEditorRoot(page: Page): Promise<EditorRoot> {
       return page.frameLocator('iframe.dashboard-editor-frame');
     }
 
-    if (await page.locator('.node-canvas').first().isVisible().catch(() => false)) {
+    if (
+      await page
+        .locator('.node-canvas')
+        .first()
+        .isVisible()
+        .catch(() => false)
+    ) {
       return page;
     }
 
@@ -104,9 +110,10 @@ test('hosted editor project tabs show only the project title', async ({ page }) 
   await authenticateIfNeeded(page);
 
   const editorRoot = await getEditorRoot(page);
-  const tab = projectTab(editorRoot, projectTitle);
+  const tab = editorRoot.locator('.projects-container .project.active').first();
   await expect(tab).toBeVisible();
-  await expect(tab).not.toContainText('.rivet-project');
+  await expect(tab).toContainText(projectTitle);
+  await expect(tab).not.toContainText(`${projectTitle}.rivet-project`);
 });
 
 test('hosted editor owns the Windows save shortcut', async ({ page }) => {

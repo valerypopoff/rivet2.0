@@ -16,6 +16,7 @@ export function resolveProjectTabPresentation(options: {
   projectTabsSelected: boolean;
   openingTabSelected: boolean;
   preview?: boolean | undefined;
+  showFileName?: boolean | undefined;
 }): ProjectTabPresentation {
   const active = options.projectTabsSelected && !options.openingTabSelected && options.current;
   const unsaved = !options.fsPath;
@@ -23,7 +24,8 @@ export function resolveProjectTabPresentation(options: {
 
   return {
     active,
-    displayName: active && fileName ? `${options.title} [${fileName}]` : options.title,
+    displayName:
+      options.showFileName !== false && active && fileName ? `${options.title} [${fileName}]` : options.title,
     preview: options.preview === true,
     unsaved,
   };
@@ -35,13 +37,15 @@ export function resolveOpeningProjectTabPresentation(options: {
   projectTabsSelected: boolean;
   selected: boolean;
   preview?: boolean | undefined;
+  showFileName?: boolean | undefined;
 }): Omit<ProjectTabPresentation, 'unsaved'> {
   const active = options.projectTabsSelected && options.selected;
   const fileName = getFileName(options.path);
 
   return {
     active,
-    displayName: active && fileName ? `${options.title} [${fileName}]` : options.title,
+    displayName:
+      options.showFileName !== false && active && fileName ? `${options.title} [${fileName}]` : options.title,
     preview: options.preview === true,
   };
 }

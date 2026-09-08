@@ -30,6 +30,9 @@ const HOSTED_RIVET_UI = {
   keyboardShortcuts: {
     saveProject: true,
   },
+  projectTabs: {
+    showFileNames: false,
+  },
 } satisfies RivetAppHostUiConfig;
 
 export const HostedEditorApp: FC = () => {
@@ -37,18 +40,23 @@ export const HostedEditorApp: FC = () => {
   const [savedProjectSignal, setSavedProjectSignal] = useState<SavedProjectSignal | null>(null);
   const reconcileHostedProjectTitleAfterSave = useReconcileHostedProjectTitleAfterSave(workspaceHost);
 
-  const handleProjectSaved = useCallback((event: RivetAppHostProjectSavedEvent) => {
-    reconcileHostedProjectTitleAfterSave(event);
-    setSavedProjectSignal({ projectId: event.project.metadata.id });
+  const handleProjectSaved = useCallback(
+    (event: RivetAppHostProjectSavedEvent) => {
+      reconcileHostedProjectTitleAfterSave(event);
+      setSavedProjectSignal({ projectId: event.project.metadata.id });
 
-    if (!event.path) {
-      return;
-    }
+      if (!event.path) {
+        return;
+      }
 
-    postMessageToDashboard({
-      type: 'project-saved', hasNewerUnsavedChanges: event.hasNewerUnsavedChanges, path: event.path,
-    });
-  }, [reconcileHostedProjectTitleAfterSave]);
+      postMessageToDashboard({
+        type: 'project-saved',
+        hasNewerUnsavedChanges: event.hasNewerUnsavedChanges,
+        path: event.path,
+      });
+    },
+    [reconcileHostedProjectTitleAfterSave],
+  );
 
   const handleActiveProjectChanged = useCallback((event: { path: string | null }) => {
     postMessageToDashboard({
@@ -73,7 +81,7 @@ export const HostedEditorApp: FC = () => {
   }, []);
 
   const handleWorkspaceHostDisposed = useCallback((host: RivetWorkspaceHost) => {
-    setWorkspaceHost((currentHost) => currentHost === host ? null : currentHost);
+    setWorkspaceHost((currentHost) => (currentHost === host ? null : currentHost));
   }, []);
 
   return (
@@ -89,10 +97,7 @@ export const HostedEditorApp: FC = () => {
       onWorkspaceHostReady={handleWorkspaceHostReady}
     >
       {workspaceHost ? (
-        <EditorMessageBridge
-          savedProjectSignal={savedProjectSignal}
-          workspaceHost={workspaceHost}
-        />
+        <EditorMessageBridge savedProjectSignal={savedProjectSignal} workspaceHost={workspaceHost} />
       ) : null}
     </RivetAppHost>
   );

@@ -10,7 +10,7 @@
   "type": "module",
   "scripts": {
     "build": "node build/bundle-executor.cjs",
-    "dev": "tsx watch --inspect=9228 src/executor.mts"
+    "dev": "node build/watch-executor.cjs"
   },
   "devDependencies": {
     "esbuild": "0.25.12",
