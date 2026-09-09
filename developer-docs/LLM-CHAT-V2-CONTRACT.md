@@ -95,9 +95,19 @@ partial-output fallback. A checkpoint starts only when the shared AI SDK bridge 
 invoke an executor, so setup, cache, prompt-conversion, and cancellation paths
 that never reach the executor do not fabricate **Messages Sent**. It retains
 that attempt's request messages, then its response, tool calls, and enabled
-reasoning as stream data arrives. A checkpoint is cloned at the node boundary;
-later stream and continuation mutation cannot alter it. The callback is
-observational and may not replace the original error.
+reasoning as stream data arrives. The shared SDK bridge also reports a complete
+stream or generated response *before* optional usage, provider-metadata,
+structured-output, response-status, or final JSON-schema validation can fail.
+Thus a non-streaming provider reply remains inspectable when a later accessor
+rejects, when its HTTP status is non-200, or when Rivet rejects its final
+schema value. Independently resolved generated reasoning and usage refresh the
+same evidence snapshot. After the response-body collector reaches its normal
+completed-call boundary, the retry layer republishes that snapshot so enabled
+request/response bodies and known usage enter the terminal checkpoint too. It
+does not wait for unresolved diagnostics after cancellation or synthesize their
+values. A checkpoint is cloned at the node boundary; later stream and
+continuation mutation cannot alter it. The callback is observational and may
+not replace the original error.
 
 Fallback clears the live response only while moving to another profile. It
 does not clear durable evidence and does not erase the last failed profile's

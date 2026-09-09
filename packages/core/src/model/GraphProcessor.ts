@@ -1821,7 +1821,6 @@ export class GraphProcessor {
 
   async #finalizeGraphRun(): Promise<GraphOutputs> {
     const outputValues = this.#graphOutputs;
-    this.#lifecycle.complete();
 
     if (this.#suppressGraphLifecycleEvents) {
       return outputValues;
@@ -1833,7 +1832,6 @@ export class GraphProcessor {
 
     if (!this.#isSubProcessor) {
       await this.#emitter.emit('done', { results: outputValues });
-      await this.#emitFinishIfNeeded();
     }
 
     return outputValues;

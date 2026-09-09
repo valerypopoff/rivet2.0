@@ -244,13 +244,17 @@ async function runParallel(
   return Promise.all(
     range(0, splittingAmount).map(async (i: number) => {
       const result = await queue.add(async () => {
-        const splitTimingStart = deps.startNodeTiming?.();
         let resultOrigin: SplitRunResultOrigin = 'executed';
+        let splitTimingStart: number | undefined;
 
         try {
           if (deps.isAborted()) {
             throw deps.getAbortError();
           }
+
+          // Queued items that encounter an already-aborted graph never ran,
+          // so they must not receive a synthetic split duration.
+          splitTimingStart = deps.startNodeTiming?.();
 
           const inputs = splitInputsAtIndex(inputValues, inputDefinitionsById, i);
           const output = await deps.processNodeWithInputData(
@@ -286,7 +290,7 @@ async function runParallel(
             error: getError(error),
             index: i,
             resultOrigin,
-            durationMs: deps.finishNodeTiming?.(splitTimingStart),
+            durationMs: splitTimingStart === undefined ? undefined : deps.finishNodeTiming?.(splitTimingStart),
             failureOutputs: deps.takeFailureOutputs(processId, i),
           };
         }

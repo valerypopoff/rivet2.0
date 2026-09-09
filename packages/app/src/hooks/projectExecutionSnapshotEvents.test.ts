@@ -259,6 +259,61 @@ test('inactive project snapshots keep an earlier split sibling when terminal err
   });
 });
 
+test('inactive project snapshots retain the latest large split partial when its stable ref is replaced', () => {
+  const nodeId = 'large-split-node' as NodeId;
+  const processId = 'large-split-process' as ProcessId;
+  const projectId = 'project-a' as ProjectId;
+  const execution = {
+    graphId: 'graph-a' as GraphId,
+    graphRunId: 'graph-run-a' as GraphRunId,
+    rootRunId: 'root-run-a' as RootRunId,
+  };
+  const refStore = createDataRefStore();
+  const firstValue = 'first large split output '.repeat(1_000);
+  const secondValue = 'second large split output '.repeat(1_000);
+
+  const firstSnapshot = applyProcessEventToProjectExecutionSnapshot({
+    message: 'partialOutput',
+    data: {
+      execution,
+      index: 0,
+      node: { id: nodeId, isSplitRun: true },
+      outputs: { output: { type: 'string', value: firstValue } },
+      processId,
+    } as never,
+    projectId,
+    refStore,
+    snapshot: createEmptyProjectExecutionSnapshot(),
+  }).snapshot;
+  const firstStoredOutput = firstSnapshot.lastRunDataByNode[nodeId]?.[0]?.data.splitOutputData?.[0]?.[
+    'output' as PortId
+  ];
+  assert.equal(firstStoredOutput?.storage, 'ref');
+  const refId = firstStoredOutput?.storage === 'ref' ? firstStoredOutput.refId : assert.fail('expected a stored ref');
+  assert.equal(refStore.get(refId)?.value, firstValue);
+
+  const secondSnapshot = applyProcessEventToProjectExecutionSnapshot({
+    message: 'partialOutput',
+    data: {
+      execution,
+      index: 0,
+      node: { id: nodeId, isSplitRun: true },
+      outputs: { output: { type: 'string', value: secondValue } },
+      processId,
+    } as never,
+    projectId,
+    refStore,
+    snapshot: firstSnapshot,
+  }).snapshot;
+  const secondStoredOutput = secondSnapshot.lastRunDataByNode[nodeId]?.[0]?.data.splitOutputData?.[0]?.[
+    'output' as PortId
+  ];
+
+  assert.equal(secondStoredOutput?.storage, 'ref');
+  assert.equal(secondStoredOutput?.storage === 'ref' ? secondStoredOutput.refId : undefined, refId);
+  assert.equal(refStore.get(refId)?.value, secondValue);
+});
+
 test('inactive project snapshot reducer clears stale running nodes on successful done', () => {
   const nodeId = 'node-a' as NodeId;
   const processId = 'process-a' as ProcessId;

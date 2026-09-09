@@ -224,6 +224,43 @@ describe('SplitRunProcessor', () => {
     assert.deepEqual(terminalOutputs, { 0: { output: { type: 'string', value: 'first complete item' } } });
   });
 
+  void it('does not assign durations to parallel items canceled while still queued', async () => {
+    const node = createSplitNode();
+    node.splitRunConcurrency = 1;
+    let aborted = false;
+    let nextTiming = 0;
+    const processedIndexes: number[] = [];
+    let terminalDurations: Record<number, number> | undefined;
+
+    await processSplitRunNode(node, 'process' as any, {
+      getInputValues: () => ({ prompts: { type: 'string[]', value: ['first', 'second', 'third'] } }),
+      getInputConnections: () => [],
+      getInputDefinitions: () => [{ id: 'prompts' as PortId, title: 'Prompts', dataType: 'string[]' }],
+      isExcludedDueToControlFlow: () => false,
+      processNodeWithInputData: async (_node, _inputs, index) => {
+        processedIndexes.push(index);
+        aborted = true;
+        return { output: { type: 'string', value: 'first complete item' } };
+      },
+      splitRunConcurrency: 1,
+      accumulateCost: () => {},
+      setNodeResults: () => assert.fail('canceled split run must not publish aggregate outputs'),
+      markNodeVisited: () => assert.fail('canceled split run must not mark the node visited'),
+      nodeErrored: async (_node, _error, _processId, _durationMs, splitRunDurationMs) => {
+        terminalDurations = splitRunDurationMs;
+      },
+      takeFailureOutputs: () => undefined,
+      isAborted: () => aborted,
+      getAbortError: () => new Error('graph aborted after the first parallel item'),
+      emit: async () => {},
+      startNodeTiming: () => ++nextTiming,
+      finishNodeTiming: (start) => (start == null ? undefined : start * 10),
+    });
+
+    assert.deepEqual(processedIndexes, [0]);
+    assert.deepEqual(terminalDurations, { 0: 20 });
+  });
+
   void it('keeps successful siblings beside failed-item checkpoints on a terminal split error', async () => {
     const node = createSplitNode();
     node.isSplitSequential = true;

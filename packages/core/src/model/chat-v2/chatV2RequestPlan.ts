@@ -24,7 +24,12 @@ export type ChatV2RequestPlan = {
   };
   request: Omit<
     StreamChatV2Options,
-    'abortSignal' | 'executeStream' | 'executeGenerate' | 'onPartialOutput' | 'onRequestStarted'
+    | 'abortSignal'
+    | 'executeStream'
+    | 'executeGenerate'
+    | 'onPartialOutput'
+    | 'onResponseReceived'
+    | 'onRequestStarted'
   >;
   output: Pick<
     RunChatV2PipelineOptions,

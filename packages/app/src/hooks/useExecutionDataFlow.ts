@@ -1,6 +1,6 @@
 import { useLatest } from 'ahooks';
 import { produce } from 'immer';
-import { useAtomValue, useSetAtom } from 'jotai';
+import { useAtomValue, useSetAtom, useStore } from 'jotai';
 import { useRef } from 'react';
 import {
   type GraphExecutionMetadata,
@@ -43,7 +43,8 @@ export type ExecutionDataFlowApi = {
     processId: ProcessId,
     execution: GraphExecutionMetadata | undefined,
     data: Partial<NodeRunData>,
-  ) => void;
+    options?: { ignoreIfTerminal?: boolean },
+  ) => boolean;
   setSelectedNodePageLatest: (nodeId: NodeId, execution: GraphExecutionMetadata | undefined) => void;
   shouldSuppressPreloadedNodeEvent: (nodeId: NodeId, processId: ProcessId) => boolean;
   suppressPreloadedNodeEventsForCurrentRun: (nodeIds: NodeId[]) => void;
@@ -52,6 +53,7 @@ export type ExecutionDataFlowApi = {
 
 export function useExecutionDataFlow(): ExecutionDataFlowApi {
   const dataRefs = useDataRefs();
+  const store = useStore();
   const setLastRunData = useSetAtom(lastRunDataByNodeState);
   const setLLMChatOutputPageSelections = useSetAtom(selectedLLMChatOutputPageByInvocationState);
   const setSelectedPage = useSetAtom(selectedProcessPageNodesState);
@@ -98,7 +100,19 @@ export function useExecutionDataFlow(): ExecutionDataFlowApi {
     processId: ProcessId,
     execution: GraphExecutionMetadata | undefined,
     data: Partial<NodeRunData>,
-  ) => {
+    options: { ignoreIfTerminal?: boolean } = {},
+  ): boolean => {
+    const isExistingProcessTerminal = () =>
+      isTerminalNodeRunStatus(
+        store.get(lastRunDataByNodeState)[nodeId]?.find((process) => process.processId === processId)?.data.status,
+      );
+
+    // A detached partial observer can outlive its terminal event. Check the
+    // live store before allocating a stable output ref for such an update.
+    if (options.ignoreIfTerminal && isExistingProcessTerminal()) {
+      return false;
+    }
+
     if (data.status && data.status.type !== 'running') {
       setUserInputQuestions((questions) => removeUserInputQuestionsForProcess(questions, nodeId, processId));
     }
@@ -109,6 +123,7 @@ export function useExecutionDataFlow(): ExecutionDataFlowApi {
     });
     const refIdsToDelete: string[] = [];
     const evictedProcessIds: ProcessId[] = [];
+    let applied = true;
 
     setLastRunData((prev) =>
       produce(prev, (draft) => {
@@ -118,6 +133,12 @@ export function useExecutionDataFlow(): ExecutionDataFlowApi {
 
         const existingProcess = draft[nodeId]!.find((process) => process.processId === processId);
         if (existingProcess) {
+          // Recheck inside the state update so an adjacent terminal event can
+          // never be overwritten between the optimistic read and this merge.
+          if (options.ignoreIfTerminal && isTerminalNodeRunStatus(existingProcess.data.status)) {
+            applied = false;
+            return;
+          }
           existingProcess.graphId = execution?.graphId ?? existingProcess.graphId;
           existingProcess.graphRunId = execution?.graphRunId ?? existingProcess.graphRunId;
           existingProcess.rootRunId = execution?.rootRunId ?? existingProcess.rootRunId;
@@ -159,6 +180,11 @@ export function useExecutionDataFlow(): ExecutionDataFlowApi {
       }),
     );
 
+    if (!applied) {
+      deleteStoredRefIds(dataRefs, collectStoredRefIds(storedData));
+      return false;
+    }
+
     deleteStoredRefIds(dataRefs, refIdsToDelete);
     if (evictedProcessIds.length > 0) {
       setLLMChatOutputPageSelections((previous) =>
@@ -173,6 +199,7 @@ export function useExecutionDataFlow(): ExecutionDataFlowApi {
         ),
       );
     }
+    return true;
   };
 
   const setSelectedNodePageLatest = (nodeId: NodeId, execution: GraphExecutionMetadata | undefined) => {
@@ -280,11 +307,10 @@ export function mergeNodeRunDataForProcess(
     };
   }
 
-  // Split nodeError events are a terminal evidence patch, not a replacement
-  // for sibling pages that arrived earlier as partial output. New Core
-  // versions send all completed/failing items; merging also preserves the
-  // useful subset in older recordings that only carry failed checkpoints.
-  if (nextData.status?.type === 'error' && nextData.splitOutputData !== undefined) {
+  // Split pages are independently streamed through partialOutput, while a
+  // terminal error contributes more pages as diagnostic evidence. Both are
+  // index-level patches, never replacements for already retained siblings.
+  if (nextData.splitOutputData !== undefined) {
     mergedData.splitOutputData = {
       ...previousData.splitOutputData,
       ...nextData.splitOutputData,

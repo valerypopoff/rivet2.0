@@ -442,6 +442,18 @@ terminals, `graphFinish`/`graphError`, `done`, `abort`, and root `finish`.
 the root `finish` event. Pause remains persistent across processor runs, matching
 the existing ability to pause before calling `processGraph(...)`.
 
+The root lifecycle remains owned through `done`; a `done` observer cannot reuse
+that processor while terminal cleanup is still pending. Only `finish` fires after
+the lifecycle is released and may intentionally begin the next root run. This
+prevents an observer-started run from having its identity or process state
+overwritten by the previous run's cleanup.
+
+`ExecutionRecorder` treats root `finish` as its sealing signal rather than a
+replayable record: ordinary successful recordings therefore end with `done`.
+Code that needs to know a recording is safe to persist must await the recorder's
+own `finish` notification, not search its replayable event list for a `finish`
+entry.
+
 Events from subprocessors bubble up through `wireSubprocessorEvents()` in
 `SubprocessorBridge.ts`. The key behavior:
 
@@ -809,6 +821,13 @@ start frame put the process back into `running`, replace terminal outputs, or
 move terminal timing fields forward. This protects Remote Debugger and
 recording playback display from transport or replay ordering quirks without
 changing runtime graph execution.
+Detached `partialOutput` is allowed only while that exact process is still
+non-terminal. The active editor checks the live Jotai record before allocating
+output references and repeats the check inside its functional state update;
+inactive snapshots apply the same durable status rule. This is state-owned,
+not a bounded process-ID cache, so an older terminal cannot become writable
+after unrelated later invocations. A rejected partial update deletes any
+reference it allocated before the terminal check completed.
 Running updates are normalized before storage so a malformed running frame cannot
 write output refs before the terminal merge guard discards those output fields.
 External Remote Debugger sessions also keep a bounded diagnostic trace of
@@ -891,7 +910,11 @@ This matters because streaming `partialOutput` updates overwrite the same ref en
 allocating a new blob key on every event, project tabs can keep independent
 in-memory output snapshots, and run resets can clear all execution-scoped refs
 deterministically. Low-level storage helpers still tolerate a missing project id
-for isolated tests or legacy app-private callers.
+for isolated tests or legacy app-private callers. When a split page replaces a
+stable ref, both the active editor and an inactive project snapshot compare the
+complete old and new split maps before cleanup. They retain the ref key shared
+by both maps and delete only truly removed keys; deleting the old page in
+isolation would erase the replacement payload.
 
 ## Data Filtering for Display
 
@@ -979,7 +1002,9 @@ These are related but different concepts:
   cancellation is detected before a later item starts, terminal `nodeError`
   still retains the completed/failed prefix's real split indexes, durations,
   and failure checkpoints; unstarted items receive no synthetic result or
-  timing entry.
+  timing entry. Parallel queue workers perform the same abort check before
+  starting their per-item timer, so queued work that never began likewise has
+  no duration entry.
 - A terminal split `nodeError` carries inspection evidence for every item that
   actually ran: completed sibling outputs and failed-item checkpoints. It is
   never an aggregate success or downstream input. The editor applies this as
@@ -1701,6 +1726,14 @@ and re-emitting each event on a provided `Emittery<ProcessEvents>` emitter. This
 means the app's standard event handlers (`onNodeStart`, `onGraphStart`, etc.)
 receive the same events during replay as during live execution.
 
+Replay preserves the live root lifecycle boundary for `done`: it awaits that
+event while the playback processor still owns the run, so a `done` listener
+cannot overlap a selected rerun with replay cleanup. Replay emits one `finish`
+only after playback has released that ownership (including for current
+recordings, where `finish` seals rather than enters the event log), so a finish
+listener can intentionally start the next run. Do not make either timing
+accidental by routing both events through the generic detached-event helper.
+
 Replay also adds optional, delivery-only `replayRecordedAt` provenance to each
 re-emitted lifecycle event. It is the source event's `RecordedEvent.ts`, not a
 new execution timestamp. The editor retains its fresh local receipt timestamp
@@ -1903,10 +1936,17 @@ That terminal checkpoint is always recorded and bridged through the Browser,
 Node, and Remote Debugger serialized event contracts. The app shows those
 outputs alongside the error, and Run Activity records their port metadata so
 its full-output affordance remains available without retaining the values in
-the journal. The app also ignores a delayed `partialOutput` after a terminal
-event, preventing late stream delivery from hiding the retained evidence. The
-checkpoint never becomes graph dataflow output, and legacy recordings without
-it remain honestly incomplete.
+the journal. For LLM Chat, the checkpoint includes request messages plus a
+complete streamed or generated response observed before later metadata,
+non-200-status, or JSON-schema finalization failures. At the normal
+completed-call boundary it is refreshed after opt-in response-body capture
+settles and after independently available Usage/reasoning resolves, so those
+enabled diagnostics survive a later finalization error. Cancellation and
+provider deadlines do not wait for unsettled clone reads; only bodies already
+captured at that point are recorded. The app also ignores a delayed
+`partialOutput` after a terminal event, preventing late stream delivery from
+hiding retained evidence. The checkpoint never becomes graph dataflow output,
+and legacy recordings without it remain honestly incomplete.
 
 ## File Reference
 

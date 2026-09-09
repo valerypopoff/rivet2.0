@@ -1,6 +1,7 @@
 import { generateText, NoObjectGeneratedError, streamText } from 'ai';
 import { consumeAiSdkStream } from '../chat/aiSdkStreaming.js';
 import type {
+  ChatV2ResponseEvidence,
   ChatV2GenerateHandle,
   ChatV2StreamExecutor,
   ChatV2StreamHandle,
@@ -340,6 +341,21 @@ async function resolveGenerateReasoning(result: ChatV2GenerateHandle): Promise<s
   return (await resolveOptionalValue(result.reasoning))?.map((part) => part.text).join('') ?? '';
 }
 
+async function resolveGenerateUsage(result: ChatV2GenerateHandle) {
+  return (await resolveOptionalValue(result.totalUsage)) ?? (await resolveOptionalValue(result.usage));
+}
+
+function notifyResponseReceived(
+  options: StreamChatV2Options,
+  response: ChatV2ResponseEvidence,
+): void {
+  try {
+    options.onResponseReceived?.(response);
+  } catch {
+    // Failure evidence is observational and must never block provider cleanup.
+  }
+}
+
 async function executeStream(
   options: StreamChatV2Options,
   executor: ChatV2StreamExecutor,
@@ -385,12 +401,33 @@ async function executeStream(
   const responseText = isStructuredOutput
     ? collapseRepeatedStructuredJsonText(streamed.responseText)
     : streamed.responseText;
+  const usagePromise =
+    streamed.usage != null ? Promise.resolve(streamed.usage) : resolveOptionalValue(handle.usage);
+  let evidence: ChatV2ResponseEvidence = {
+    text: responseText,
+    functionCalls: streamed.functionCalls,
+    reasoning: streamed.reasoning,
+    usage: streamed.usage,
+  };
+  const notifyCurrentResponseEvidence = () => notifyResponseReceived(options, evidence);
+
+  // The stream has completed, so its response, tool calls, and reasoning are
+  // real evidence even if a later usage/metadata/structured-output accessor
+  // rejects during finalization.
+  notifyCurrentResponseEvidence();
+  void usagePromise.then(
+    (usage) => {
+      evidence = { ...evidence, usage };
+      notifyCurrentResponseEvidence();
+    },
+    () => undefined,
+  );
 
   const [structuredOutput, usage, finishReason, providerMetadata, requestStatus] =
     await waitForPostResponseFinalization(
       Promise.all([
         options.responseOutput != null ? resolveOptionalStructuredOutput(handle.output) : undefined,
-        streamed.usage != null ? streamed.usage : resolveOptionalValue(handle.usage),
+        usagePromise,
         resolveOptionalValue(handle.finishReason),
         resolveOptionalValue(handle.providerMetadata),
         resolveOptionalValue(handle.requestStatus),
@@ -439,14 +476,42 @@ export async function generateChatV2(options: StreamChatV2Options): Promise<Stre
 
   const isStructuredOutput = isChatV2StructuredResponseFormat(options.responseFormat);
   const responseText = isStructuredOutput ? collapseRepeatedStructuredJsonText(result.text) : result.text;
+  const functionCalls = toStreamedFunctionCalls(
+    result.toolCalls != null && result.toolCalls.length > 0 ? result.toolCalls : stepToolCalls,
+  );
+  const reasoningPromise = resolveGenerateReasoning(result);
+  const usagePromise = resolveGenerateUsage(result);
+  let evidence: ChatV2ResponseEvidence = { text: responseText, functionCalls, reasoning: '' };
+  const notifyCurrentResponseEvidence = () => notifyResponseReceived(options, evidence);
+
+  // generateText has already returned its complete text/tool response here.
+  // Snapshot it before optional metadata, schema output, or usage access can
+  // fail. Independently resolved diagnostic fields refresh that snapshot so a
+  // different finalization error cannot hide them.
+  notifyCurrentResponseEvidence();
+  void reasoningPromise.then(
+    (reasoning) => {
+      evidence = { ...evidence, reasoning };
+      notifyCurrentResponseEvidence();
+    },
+    () => undefined,
+  );
+  void usagePromise.then(
+    (usage) => {
+      evidence = { ...evidence, usage };
+      notifyCurrentResponseEvidence();
+    },
+    () => undefined,
+  );
+
   const [finishReason, structuredOutput, usage, reasoning, providerMetadata, requestStatus] =
     await waitForPostResponseFinalization(
       (async () => {
         const finishReason = await resolveOptionalValue(result.finishReason);
         const [structuredOutput, usage, reasoning, providerMetadata, requestStatus] = await Promise.all([
           resolveGenerateStructuredOutput(result, options.responseOutput, finishReason),
-          (async () => (await resolveOptionalValue(result.totalUsage)) ?? (await resolveOptionalValue(result.usage)))(),
-          resolveGenerateReasoning(result),
+          usagePromise,
+          reasoningPromise,
           resolveOptionalValue(result.providerMetadata),
           resolveOptionalValue(result.requestStatus),
         ]);
@@ -458,9 +523,7 @@ export async function generateChatV2(options: StreamChatV2Options): Promise<Stre
   return {
     responseText,
     structuredOutput,
-    functionCalls: toStreamedFunctionCalls(
-      result.toolCalls != null && result.toolCalls.length > 0 ? result.toolCalls : stepToolCalls,
-    ),
+    functionCalls,
     usage,
     reasoning,
     finishReason,

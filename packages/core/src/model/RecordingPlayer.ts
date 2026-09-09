@@ -349,11 +349,13 @@ export async function replayExecutionRecording(options: {
         }
         case 'done': {
           emitFallbackRootTerminal('completed', { outputs: event.data.results });
-          emitReplayTerminalEvent('done', event.data);
+          // Match a live root run: `done` remains inside the active lifecycle
+          // so a done listener cannot start work that replay cleanup would
+          // clobber. `finish` is emitted once below, after playback releases
+          // ownership, so its listener may start a new run.
+          await emitter.emit('done', withReplayRecordedAt(event.data, currentReplayRecordedAt));
           graphOutputs = event.data.results;
           setGraphOutputs(graphOutputs);
-          // Keep ownership until playback drains, just like a live graph run.
-          // A done listener must not start work that final cleanup could clobber.
           break;
         }
         case 'error': {
@@ -596,7 +598,11 @@ export async function replayExecutionRecording(options: {
           break;
         }
         case 'finish': {
-          emitDetached(emitter, 'finish', undefined);
+          // Current recordings deliberately exclude root `finish`: the
+          // recorder uses it only as its sealing signal. Older recordings can
+          // contain it, but replay must emit exactly one finish after it has
+          // released the lifecycle below, so defer both formats to that one
+          // common boundary.
           break;
         }
         default: {
@@ -634,6 +640,12 @@ export async function replayExecutionRecording(options: {
     emitReplayTerminalEvent('error', { error: replayError });
   } finally {
     setRunning(false);
+    // This must happen after setRunning(false), not merely as a detached
+    // emission from the recorded-event loop. A live root finish listener may
+    // start the next run; replay has the same contract. It is also the
+    // synthetic finish for current recordings, whose recorder omits finish
+    // from the replayable event log and uses it only to seal the recording.
+    emitDetached(emitter, 'finish', undefined);
   }
 
   return graphOutputs;

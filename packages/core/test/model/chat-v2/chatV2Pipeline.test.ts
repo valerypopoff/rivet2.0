@@ -1564,6 +1564,234 @@ void describe('runChatV2Pipeline', () => {
     });
   });
 
+  void it('retains a completed non-streaming response and reasoning when final JSON validation fails', async () => {
+    const checkpoints: Outputs[] = [];
+
+    await assert.rejects(
+      () =>
+        runChatV2Pipeline({
+          provider: 'custom',
+          model: createMockModel(),
+          modelId: 'invalid-generated-json-model',
+          prompt: { type: 'string', value: 'Return JSON.' },
+          responseFormat: 'json_schema',
+          responseOutput: { name: 'answer_schema' },
+          outputReasoning: true,
+          emitPartialOutputs: false,
+          context: { signal: new AbortController().signal },
+          onFailureCheckpoint: (outputs) => checkpoints.push(outputs),
+          executeGenerate: async () => ({
+            text: 'not valid JSON',
+            output: undefined,
+            reasoningText: 'Completed reasoning before validation.',
+            requestStatus: 200,
+          }),
+        }),
+      /final value prepared for the Response port is not an object/,
+    );
+
+    assert.deepEqual(checkpoints.at(-1)?.['response' as PortId], {
+      type: 'string',
+      value: 'not valid JSON',
+    });
+    assert.deepEqual(checkpoints.at(-1)?.['reasoning' as PortId], {
+      type: 'string',
+      value: 'Completed reasoning before validation.',
+    });
+    assert.deepEqual(checkpoints.at(-1)?.['in-messages' as PortId], {
+      type: 'chat-message[]',
+      value: [{ type: 'user', message: 'Return JSON.' }],
+    });
+  });
+
+  void it('retains a completed non-streaming response when its status is non-200', async () => {
+    const checkpoints: Outputs[] = [];
+
+    await assert.rejects(
+      () =>
+        runChatV2Pipeline({
+          provider: 'custom',
+          model: createMockModel(),
+          modelId: 'non-200-generated-response-model',
+          prompt: { type: 'string', value: 'Keep the provider response.' },
+          emitPartialOutputs: false,
+          context: { signal: new AbortController().signal },
+          onFailureCheckpoint: (outputs) => checkpoints.push(outputs),
+          executeGenerate: async () => ({
+            text: 'A provider body arrived.',
+            requestStatus: 503,
+          }),
+        }),
+      /503/,
+    );
+
+    assert.deepEqual(checkpoints.at(-1)?.['response' as PortId], {
+      type: 'string',
+      value: 'A provider body arrived.',
+    });
+  });
+
+  void it('retains a completed non-streaming response when optional provider metadata rejects', async () => {
+    const checkpoints: Outputs[] = [];
+    const metadataFailure = new Error('provider metadata was unavailable');
+
+    await assert.rejects(
+      () =>
+        runChatV2Pipeline({
+          provider: 'custom',
+          model: createMockModel(),
+          modelId: 'generated-metadata-failure-model',
+          prompt: { type: 'string', value: 'Keep the completed response.' },
+          emitPartialOutputs: false,
+          context: { signal: new AbortController().signal },
+          onFailureCheckpoint: (outputs) => checkpoints.push(outputs),
+          executeGenerate: async () => ({
+            text: 'Completed before metadata failed.',
+            providerMetadata: Promise.reject(metadataFailure),
+            requestStatus: 200,
+          }),
+        }),
+      (error) => error === metadataFailure,
+    );
+
+    assert.deepEqual(checkpoints.at(-1)?.['response' as PortId], {
+      type: 'string',
+      value: 'Completed before metadata failed.',
+    });
+  });
+
+  void it('refreshes completed response failure evidence after diagnostic bodies and usage settle', async () => {
+    const checkpoints: Outputs[] = [];
+    const requestBodies = [{ requestId: 'request-1' }];
+    const responseBodies: unknown[] = [];
+    const metadataFailure = new Error('provider metadata was unavailable');
+
+    await assert.rejects(
+      () =>
+        runChatV2Pipeline({
+          provider: 'custom',
+          model: createMockModel(),
+          modelId: 'generated-diagnostic-refresh-model',
+          prompt: { type: 'string', value: 'Keep all captured diagnostics.' },
+          emitPartialOutputs: false,
+          outputUsage: true,
+          outputRequestBody: true,
+          outputResponseBody: true,
+          requestBodies,
+          responseBodies,
+          responseBodyCapture: {
+            bodies: responseBodies,
+            capture: () => undefined,
+            flush: async () => {
+              responseBodies.push({ responseId: 'response-1' });
+            },
+          },
+          context: { signal: new AbortController().signal },
+          onFailureCheckpoint: (outputs) => checkpoints.push(outputs),
+          executeGenerate: async () => ({
+            text: 'Completed before metadata failed.',
+            totalUsage: {
+              inputTokens: 5,
+              outputTokens: 3,
+              totalTokens: 8,
+            },
+            providerMetadata: Promise.reject(metadataFailure),
+            requestStatus: 200,
+          }),
+        }),
+      (error) => error === metadataFailure,
+    );
+
+    const checkpoint = checkpoints.at(-1);
+    assert.deepEqual(checkpoint?.['response' as PortId], {
+      type: 'string',
+      value: 'Completed before metadata failed.',
+    });
+    assert.deepEqual(checkpoint?.['requestBody' as PortId], {
+      type: 'object',
+      value: { requestId: 'request-1' },
+    });
+    assert.deepEqual(checkpoint?.['responseBody' as PortId], {
+      type: 'object',
+      value: { responseId: 'response-1' },
+    });
+    assert.deepEqual(checkpoint?.['usage' as PortId], {
+      type: 'object',
+      value: {
+        promptTokens: 5,
+        completionTokens: 3,
+        totalTokens: 8,
+        cachedTokens: 0,
+        reasoningTokens: 0,
+        totalCost: undefined,
+      },
+    });
+  });
+
+  void it('refreshes completed stream failure evidence after diagnostic bodies and usage settle', async () => {
+    const checkpoints: Outputs[] = [];
+    const responseBodies: unknown[] = [];
+    const metadataFailure = new Error('stream provider metadata was unavailable');
+
+    await assert.rejects(
+      () =>
+        runChatV2Pipeline({
+          provider: 'custom',
+          model: createMockModel(),
+          modelId: 'stream-diagnostic-refresh-model',
+          prompt: { type: 'string', value: 'Keep all streamed diagnostics.' },
+          outputUsage: true,
+          outputResponseBody: true,
+          responseBodies,
+          responseBodyCapture: {
+            bodies: responseBodies,
+            capture: () => undefined,
+            flush: async () => {
+              responseBodies.push({ responseId: 'stream-response-1' });
+            },
+          },
+          context: { signal: new AbortController().signal },
+          onFailureCheckpoint: (outputs) => checkpoints.push(outputs),
+          executeStream: async () => ({
+            fullStream: mockStream([
+              { type: 'text-start', id: 'text_1' },
+              { type: 'text-delta', id: 'text_1', text: 'Streamed before metadata failed.' },
+              { type: 'text-end', id: 'text_1' },
+            ]),
+            usage: Promise.resolve({
+              inputTokens: 4,
+              outputTokens: 2,
+              totalTokens: 6,
+            }),
+            providerMetadata: Promise.reject(metadataFailure),
+            requestStatus: 200,
+          }),
+        }),
+      (error) => error === metadataFailure,
+    );
+
+    const checkpoint = checkpoints.at(-1);
+    assert.deepEqual(checkpoint?.['response' as PortId], {
+      type: 'string',
+      value: 'Streamed before metadata failed.',
+    });
+    assert.deepEqual(checkpoint?.['responseBody' as PortId], {
+      type: 'object',
+      value: { responseId: 'stream-response-1' },
+    });
+    assert.deepEqual(checkpoint?.['usage' as PortId], {
+      type: 'object',
+      value: {
+        promptTokens: 4,
+        completionTokens: 2,
+        totalTokens: 6,
+        cachedTokens: 0,
+        reasoningTokens: 0,
+        totalCost: undefined,
+      },
+    });
+  });
+
   void it('does not fabricate sent-message evidence when prompt preparation fails before an executor starts', async () => {
     const checkpoints: Outputs[] = [];
 

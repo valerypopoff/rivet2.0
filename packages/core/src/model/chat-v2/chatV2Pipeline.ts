@@ -1,5 +1,4 @@
 import type { PortId } from '../NodeBase.js';
-import type { StreamedFunctionCall } from '../chat/streamChatResponse.js';
 import { coercePromptToChatMessages, prependSystemPrompt } from '../chat/chatMessages.js';
 import { generateChatV2, streamChatV2 } from './aiSdkBridge.js';
 import { createObservedChatV2CallId, notifyChatV2CallFinished } from './chatV2CallObserver.js';
@@ -7,6 +6,7 @@ import { chatMessagesToModelMessages } from './messageConverter.js';
 import type {
   ChatV2ProviderAttempt,
   ChatV2PipelineResult,
+  ChatV2ResponseEvidence,
   RunChatV2PipelineOptions,
   StreamChatV2Result,
   StreamChatV2Options,
@@ -118,6 +118,15 @@ async function runChatV2WithRetry(
     const callId = createObservedChatV2CallId(options);
     const callStartedAt = Date.now();
     let callWasObserved = false;
+    let latestResponseEvidence: ChatV2ResponseEvidence | undefined;
+    const reportResponseEvidence = (response: ChatV2ResponseEvidence) => {
+      latestResponseEvidence = response;
+      try {
+        chatOptions.onResponseReceived?.(response);
+      } catch {
+        // Diagnostic evidence must not alter a retry/fallback decision.
+      }
+    };
     const attemptController = new AbortController();
     const abortAttemptFromCaller = () => attemptController.abort(signal.reason);
     if (signal.aborted) {
@@ -133,12 +142,16 @@ async function runChatV2WithRetry(
         streamInactivityTimeoutMs: options.streamInactivityTimeoutMs,
         onStreamActivity: options.onStreamActivity,
         onTimeout: (error) => attemptController.abort(error),
+        onResponseReceived: reportResponseEvidence,
       };
       const result =
         transportMode === 'generate'
           ? await generateChatV2(attemptChatOptions)
           : await streamChatV2(attemptChatOptions);
       await options.responseBodyCapture?.flush();
+      if (latestResponseEvidence != null) {
+        reportResponseEvidence(latestResponseEvidence);
+      }
       const statusCode = result.requestStatus ?? 200;
       notifyChatV2CallFinished(options, {
         callId,
@@ -177,6 +190,9 @@ async function runChatV2WithRetry(
       await options.responseBodyCapture?.flush({
         waitForPending: !signal.aborted && !isChatV2ProviderTimeoutError(error),
       });
+      if (latestResponseEvidence != null) {
+        reportResponseEvidence(latestResponseEvidence);
+      }
       if (!callWasObserved) {
         notifyChatV2CallFinished(options, {
           callId,
@@ -246,7 +262,7 @@ export async function runChatV2PipelineExecution(options: RunChatV2PipelineOptio
     tools,
   });
   const shouldStreamResponse = plan.transportMode === 'stream';
-  const emitFailureCheckpoint = (partial: { text: string; functionCalls: StreamedFunctionCall[]; reasoning: string }) => {
+  const emitFailureCheckpoint = (partial: ChatV2ResponseEvidence) => {
     if (options.onFailureCheckpoint == null) {
       return;
     }
@@ -258,11 +274,11 @@ export async function runChatV2PipelineExecution(options: RunChatV2PipelineOptio
           response: partial.text,
           structuredOutput: undefined,
           functionCalls: partial.functionCalls,
-          usage: undefined,
+          usage: normalizeChatV2Usage(partial.usage, options),
           reasoning: partial.reasoning,
           requestBodies: options.requestBodies,
           responseBodies: options.responseBodies,
-          outputUsage: false,
+          outputUsage: plan.output.outputUsage,
           outputReasoning: plan.output.outputReasoning,
           outputRequestBody: plan.output.outputRequestBody,
           outputResponseBody: plan.output.outputResponseBody,
@@ -288,6 +304,7 @@ export async function runChatV2PipelineExecution(options: RunChatV2PipelineOptio
         executeStream: options.executeStream,
         executeGenerate: options.executeGenerate,
         onRequestStarted: () => emitFailureCheckpoint({ text: '', functionCalls: [], reasoning: '' }),
+        onResponseReceived: emitFailureCheckpoint,
         onPartialOutput: !shouldStreamResponse
           ? undefined
           : ({ text, functionCalls, reasoning }) => {

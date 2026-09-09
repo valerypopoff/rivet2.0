@@ -550,11 +550,14 @@ function applyPartialOutput(
       existingProcess.graphId = data.execution.graphId;
       existingProcess.graphRunId = data.execution.graphRunId;
       existingProcess.rootRunId = data.execution.rootRunId;
-      refIdsToDelete.push(...collectStoredRefIds(existingProcess.data.splitOutputData?.[data.index]));
-      existingProcess.data.splitOutputData = {
+      const nextSplitOutputData = {
         ...existingProcess.data.splitOutputData,
         [data.index]: storedOutputs!,
       };
+      refIdsToDelete.push(
+        ...collectReplacedRefIds(existingProcess.data, { splitOutputData: nextSplitOutputData }),
+      );
+      existingProcess.data.splitOutputData = nextSplitOutputData;
     } else {
       draft.lastRunDataByNode[data.node.id]!.push({
         data: {
