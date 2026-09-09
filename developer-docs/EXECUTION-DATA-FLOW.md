@@ -1684,14 +1684,29 @@ Replay also adds optional, delivery-only `replayRecordedAt` provenance to each
 re-emitted lifecycle event. It is the source event's `RecordedEvent.ts`, not a
 new execution timestamp. The editor retains its fresh local receipt timestamp
 for session ordering and live-state controls, while Run Activity computes the
-displayed replay duration from the historical provenance. This avoids showing a
-fast replay as though the original provider calls completed in milliseconds.
+displayed replay duration from historical lifecycle provenance. This avoids
+showing a fast replay as though the original provider calls completed in
+milliseconds. A replay with no recorded lifecycle start has no trustworthy
+root duration and must remain unavailable rather than display a fabricated
+zero-second result.
 Node history retains valid recorded start and terminal bounds separately for
 the Response Inspector. A recorded terminal `durationMs` is the authoritative
 whole-node duration there; the inspector must not subtract local replay receipt
 timestamps or sum physical model calls.
 `ExecutionRecorder` strips this provenance before serializing a new recording,
-so replaying and recording again creates one new, self-contained timeline.
+so an API caller which deliberately records replay events gets a new,
+self-contained timeline. The editor does not create a recorder while a loaded
+recording is playing: playback is evidence, not a fresh execution. Its **Save
+Recording** action serializes the loaded recorder itself, preserving the
+original artifact rather than exporting an accelerated replay timeline.
+
+Replay consumers must keep three clocks distinct: local replay delivery order,
+historical node lifecycle provenance, and physical model/tool call timing. A
+physical call timestamp never establishes a node lifecycle start. If a root
+terminal arrives without an invocation's own terminal event, retain the row as
+terminally incomplete, clear transient wait/progress state, and leave its
+duration unavailable rather than deriving one from a local receipt or a model
+call. A later exact node terminal remains authoritative.
 
 ### LLM Chat logical-round output history
 
@@ -1833,7 +1848,7 @@ Lifecycle and observability events relevant to editor data flow are replayed:
 | `graphStart`                                | Creates `GraphRunRecord` in history                                                                                                |
 | `graphFinish` / `graphError` / `graphAbort` | Updates run record status                                                                                                          |
 | `nodeStart` / `nodeFinish` / `nodeError`    | Stores per-node execution data                                                                                                     |
-| `llmChatOutputSnapshot`                     | Stores a display-only, ref-backed LLM Chat logical-round page; never creates Run Activity or a node lifecycle transition          |
+| `llmChatOutputSnapshot`                     | Stores a display-only, ref-backed LLM Chat logical-round page; never creates Run Activity or a node lifecycle transition           |
 | `nodeExcluded`                              | Stores excluded status                                                                                                             |
 | `partialOutput`                             | Stores streaming/split-run output                                                                                                  |
 | `progress`                                  | Updates the exact invocation's latest progress                                                                                     |
@@ -1886,7 +1901,7 @@ absence gracefully since the final `nodeFinish` event contains the complete outp
 | [`useRemoteExecutor.ts`](../packages/app/src/hooks/useRemoteExecutor.ts)                                 | Remote graph/Evaluation execution over the shared session; sends protocol messages only after action-time capability checks                                          |
 | [`remoteExecutorUploadCache.ts`](../packages/app/src/hooks/remoteExecutorUploadCache.ts)                 | Remote project/settings/static-data upload decisions, cache invalidation, and send-success marking                                                                   |
 | [`remoteExecutorRunRequest.ts`](../packages/app/src/hooks/remoteExecutorRunRequest.ts)                   | Remote run request-id registration, active request filtering, send-failure cleanup, and pending test-run send helpers                                                |
-| [`remoteExecutorHelpers.ts`](../packages/app/src/hooks/remoteExecutorHelpers.ts)                         | Run-from planning, preload extraction, Evaluations selection, and `createProcessEventDispatcher` routing from WebSocket messages to handlers                              |
+| [`remoteExecutorHelpers.ts`](../packages/app/src/hooks/remoteExecutorHelpers.ts)                         | Run-from planning, preload extraction, Evaluations selection, and `createProcessEventDispatcher` routing from WebSocket messages to handlers                         |
 | [`GraphProcessor.ts`](../packages/core/src/model/GraphProcessor.ts)                                      | Core execution engine, `#createSubProcessor`, `#buildExecutionMetadata`                                                                                              |
 | [`SubprocessorBridge.ts`](../packages/core/src/model/SubprocessorBridge.ts)                              | `wireSubprocessorEvents` - forwards child events to parent emitter                                                                                                   |
 | [`SplitRunProcessor.ts`](../packages/core/src/model/SplitRunProcessor.ts)                                | `processSplitRunNode` - iterates split inputs, creates subprocessors per iteration                                                                                   |

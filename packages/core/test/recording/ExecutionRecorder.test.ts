@@ -764,12 +764,20 @@ void describe('ExecutionRecorder', () => {
       ProcessEvents['llmProfileAttempt'],
       ProcessEvents['toolCallFinished'],
     ];
-    assert.deepEqual({ ...replayedModelEvent, execution: undefined }, { ...modelEvent, execution: undefined });
+    const recordedTimestamps = new Map(recorder.events.map((event) => [event.type, event.ts]));
+    const withoutReplayProvenance = <T extends { execution: unknown; replayRecordedAt?: number }>(event: T) => {
+      const { execution: _execution, replayRecordedAt: _replayRecordedAt, ...rest } = event;
+      return rest;
+    };
+    assert.deepEqual(withoutReplayProvenance(replayedModelEvent), withoutReplayProvenance(modelEvent));
     assert.deepEqual(
-      { ...replayedProfileAttemptEvent, execution: undefined },
-      { ...profileAttemptEvent, execution: undefined },
+      withoutReplayProvenance(replayedProfileAttemptEvent),
+      withoutReplayProvenance(profileAttemptEvent),
     );
-    assert.deepEqual({ ...replayedToolEvent, execution: undefined }, { ...toolEvent, execution: undefined });
+    assert.deepEqual(withoutReplayProvenance(replayedToolEvent), withoutReplayProvenance(toolEvent));
+    assert.equal(replayedModelEvent.replayRecordedAt, recordedTimestamps.get('llmCallFinished'));
+    assert.equal(replayedProfileAttemptEvent.replayRecordedAt, recordedTimestamps.get('llmProfileAttempt'));
+    assert.equal(replayedToolEvent.replayRecordedAt, recordedTimestamps.get('toolCallFinished'));
     assert.equal(replayedModelEvent.execution.graphId, execution.graphId);
     assert.equal(replayedProfileAttemptEvent.execution.graphId, execution.graphId);
     assert.equal(replayedToolEvent.execution.graphId, execution.graphId);
@@ -1077,7 +1085,9 @@ void describe('ExecutionRecorder', () => {
   void it('records only replayable events from its scoped remote request', async () => {
     const recorder = new ExecutionRecorder();
     const socket = new FakeSocket();
-    const recordingFinished = recorder.recordSocket(socket as unknown as WebSocket, { requestId: 'evaluation-request' });
+    const recordingFinished = recorder.recordSocket(socket as unknown as WebSocket, {
+      requestId: 'evaluation-request',
+    });
 
     socket.emit({
       message: 'webAppStoragePatch',
@@ -1096,7 +1106,10 @@ void describe('ExecutionRecorder', () => {
     });
 
     await recordingFinished;
-    assert.deepEqual(recorder.events.map((event) => event.type), ['done']);
+    assert.deepEqual(
+      recorder.events.map((event) => event.type),
+      ['done'],
+    );
   });
 
   void it('stops a scoped remote recorder when its owning evaluation request is abandoned', async () => {
@@ -1123,7 +1136,10 @@ void describe('ExecutionRecorder', () => {
       data: { results: {} },
       requestId: 'evaluation-request',
     });
-    assert.deepEqual(recorder.events.map((event) => event.type), ['nodeStart']);
+    assert.deepEqual(
+      recorder.events.map((event) => event.type),
+      ['nodeStart'],
+    );
   });
 
   void it('keeps remote socket recordings open after successful abort until done', async () => {

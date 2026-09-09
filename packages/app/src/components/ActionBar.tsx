@@ -5,11 +5,7 @@ import { useAtomValue } from 'jotai';
 import { useLoadRecording } from '../hooks/useLoadRecording';
 import { useSaveRecording } from '../hooks/useSaveRecording';
 import { graphRunningState, graphPausedState } from '../state/dataFlow';
-import {
-  currentProjectLoadedRecordingState,
-  lastRecordingState,
-  recordingPlaybackStartingState,
-} from '../state/execution';
+import { currentProjectLoadedRecordingState, recordingPlaybackStartingState } from '../state/execution';
 import { selectedExecutorState } from '../state/settings';
 import MultiplyIcon from 'majesticons/line/multiply-line.svg?react';
 import PauseIcon from 'majesticons/line/pause-circle-line.svg?react';
@@ -176,8 +172,7 @@ export const ActionBar: FC<ActionBarProps> = ({ onRunGraph, onAbortGraph, onPaus
   const hostUiConfig = useRivetAppHostUiConfig();
   const recordingsEnabled = isRivetAppHostCapabilityEnabled(hostUiConfig, 'recordings');
   const evaluationInputCopyEnabled = isRivetAppHostCapabilityEnabled(hostUiConfig, 'evaluationInputCopy');
-  const lastRecording = useAtomValue(lastRecordingState);
-  const saveRecording = useSaveRecording();
+  const { hasRecordingToSave, saveRecording } = useSaveRecording();
 
   const graphRunning = useAtomValue(graphRunningState);
   const graphPaused = useAtomValue(graphPausedState);
@@ -294,7 +289,7 @@ export const ActionBar: FC<ActionBarProps> = ({ onRunGraph, onAbortGraph, onPaus
 
       {isGentracePluginEnabled && <GentraceInteractors />}
 
-      {recordingsEnabled && lastRecording && (
+      {recordingsEnabled && hasRecordingToSave && (
         <div className={clsx('save-recording-button')}>
           <button onClick={saveRecording}>Save Recording</button>
         </div>

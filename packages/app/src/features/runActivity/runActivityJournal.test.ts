@@ -208,7 +208,25 @@ test('keeps replay receipt timestamps separate from the recorded run duration', 
     latestAt: 28_500,
     finishedAt: 28_500,
   });
+  const key = createRunActivityNodeKey({ rootRunId, graphRunId, nodeId, processId });
+  assert.equal(root.nodeInvocationsByKey[key]?.startedAt, 1_000_001);
+  assert.deepEqual(root.nodeInvocationsByKey[key]?.recordedTiming, {
+    startedAt: 10_200,
+    finishedAt: 28_200,
+  });
   assert.equal(getRunActivityRootDurationMs(root, 9_999_999), 18_500);
+});
+
+test('does not invent a zero duration from terminal-only replay evidence', () => {
+  let journal = createRunActivityJournal();
+  journal = apply(journal, 'graphFinish', { graph, execution, outputs: {}, replayRecordedAt: 28_500 }, 1_000_003);
+
+  const root = journal.rootsById[rootRunId]!;
+  assert.deepEqual(root.recordedTiming, {
+    latestAt: 28_500,
+    finishedAt: 28_500,
+  });
+  assert.equal(getRunActivityRootDurationMs(root, 9_999_999), undefined);
 });
 
 test('retains circuit-breaker decisions on failed LLM invocations and deduplicates replayed events', () => {
@@ -611,7 +629,7 @@ test('marks invocations with missing terminal events truthfully when their root 
   assert.equal(invocation.status, 'unknown');
   assert.equal(invocation.terminalEventMissing, true);
   assert.equal(invocation.finishedAt, 6);
-  assert.equal(invocation.durationMs, 4);
+  assert.equal(invocation.durationMs, undefined);
 
   const abortedRoot = 'aborted-root' as RootRunId;
   const abortedRun = 'aborted-run' as GraphRunId;
@@ -627,6 +645,7 @@ test('marks invocations with missing terminal events truthfully when their root 
     ]!;
   assert.equal(invocation.status, 'aborted');
   assert.equal(invocation.terminalEventMissing, true);
+  assert.equal(invocation.durationMs, undefined);
 
   journal = apply(
     journal,
@@ -641,6 +660,74 @@ test('marks invocations with missing terminal events truthfully when their root 
   assert.equal(invocation.status, 'completed');
   assert.equal(invocation.terminalEventMissing, undefined);
   assert.equal(invocation.durationMs, 2);
+});
+
+test('settling a root clears a waiting invocation without inventing its duration', () => {
+  let journal = reduceRunActivityEvents(createRunActivityJournal(), [
+    event('graphStart', { graph, inputs: {}, execution, replayRecordedAt: 10_000 }, 1_000_000),
+    event(
+      'userInput',
+      {
+        node,
+        processId,
+        execution,
+        inputs: {},
+        inputStrings: ['Choose one'],
+        renderingType: 'text',
+        callback: () => {},
+        replayRecordedAt: 10_200,
+      },
+      1_000_001,
+    ),
+    event('graphAbort', { graph, successful: false, execution, replayRecordedAt: 40_000 }, 1_000_002),
+  ]);
+
+  const invocation =
+    journal.rootsById[rootRunId]!.nodeInvocationsByKey[
+      createRunActivityNodeKey({ rootRunId, graphRunId, nodeId, processId })
+    ]!;
+  assert.equal(invocation.status, 'aborted');
+  assert.equal(invocation.terminalEventMissing, true);
+  assert.equal(invocation.waitingForUserInput, undefined);
+  assert.equal(invocation.progress, undefined);
+  assert.equal(invocation.durationMs, undefined);
+});
+
+test('keeps physical model timing out of lifecycle reconstruction when a node start is missing', () => {
+  const historicalStart = 10_200;
+  let journal = reduceRunActivityEvents(createRunActivityJournal(), [
+    event('graphStart', { graph, inputs: {}, execution, replayRecordedAt: 10_000 }, 1_000_000),
+    event(
+      'llmCallFinished',
+      {
+        callId: 'model-call' as ProcessEventMessageMap['llmCallFinished']['callId'],
+        nodeId,
+        processId,
+        execution,
+        provider: 'openai',
+        model: 'mock-model',
+        outcome: 'success',
+        attemptIndex: 0,
+        pricing: { status: 'unknown' },
+        startedAt: historicalStart,
+        durationMs: 15_000,
+        // A physical-call timestamp cannot shift the root/node lifecycle
+        // clock, even if a malformed recording places it before graph start.
+        replayRecordedAt: 100,
+      },
+      1_000_001,
+    ),
+    event('graphAbort', { graph, successful: false, execution, replayRecordedAt: 40_000 }, 1_000_002),
+  ]);
+
+  const root = journal.rootsById[rootRunId]!;
+  const invocation = root.nodeInvocationsByKey[createRunActivityNodeKey({ rootRunId, graphRunId, nodeId, processId })]!;
+  assert.equal(root.graphRunsById[graphRunId]!.startedAt, 1_000_000);
+  assert.equal(invocation.startedAt, undefined);
+  assert.equal(invocation.durationMs, undefined);
+  assert.equal(invocation.modelCalls[0]?.startedAt, historicalStart);
+  assert.equal(invocation.modelCalls[0]?.durationMs, 15_000);
+  assert.equal(getRunActivityRootDurationMs(root, 9_999_999), 30_000);
 });
 
 test('does not reopen a settled root from delayed start, graph, or node lifecycle events', () => {
@@ -686,6 +773,24 @@ test('does not reopen a settled root from delayed start, graph, or node lifecycl
   assert.equal(lateInvocation.terminalEventMissing, true);
   assert.equal(lateInvocation.waitingForUserInput, undefined);
   assert.equal(lateInvocation.progress, undefined);
+});
+
+test('does not let a delayed partial output resurrect a missing-terminal invocation', () => {
+  let journal = reduceRunActivityEvents(createRunActivityJournal(), [
+    event('graphStart', { graph, inputs: {}, execution }, 1),
+    event('nodeStart', { node, processId, inputs: {}, execution }, 2),
+    event('graphFinish', { graph, outputs: {}, execution }, 3),
+  ]);
+  journal = apply(journal, 'partialOutput', { node, processId, execution, index: 0, outputs: {} }, 4);
+
+  const invocation =
+    journal.rootsById[rootRunId]!.nodeInvocationsByKey[
+      createRunActivityNodeKey({ rootRunId, graphRunId, nodeId, processId })
+    ]!;
+  assert.equal(invocation.status, 'unknown');
+  assert.equal(invocation.terminalEventMissing, true);
+  assert.equal(invocation.partialOutputCount, 0);
+  assert.equal(invocation.outputsAvailable, false);
 });
 
 test('does not mislabel a root graph when the first exact event belongs to a subgraph', () => {

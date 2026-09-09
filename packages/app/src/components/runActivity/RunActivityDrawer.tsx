@@ -1212,7 +1212,13 @@ export const RunActivityDrawer: FC<RunActivityDrawerProps> = ({
           <h2>Run Activity</h2>
           <span className={`run-activity-status status-${viewModel.status}`}>
             {rootStatus}
-            {viewModel.durationMs == null ? '' : ` / ${formatRunActivityDuration(viewModel.durationMs)}`}
+            {viewModel.durationMs != null ? (
+              ` / ${formatRunActivityDuration(viewModel.durationMs)}`
+            ) : viewModel.durationUnavailable ? (
+              <span aria-label="Duration unavailable because the recording has no historical start"> / —</span>
+            ) : (
+              ''
+            )}
           </span>
           {viewModel.accounting && (
             <span className="run-activity-summary">{formatAccounting(viewModel.accounting)}</span>
@@ -1489,8 +1495,17 @@ const RunActivityRow: FC<{
               <time dateTime={new Date(item.startedAt).toISOString()}>{formatTime(item.startedAt)}</time>
             )}
           </span>
-          <span className="run-activity-duration">
-            {item.durationMs != null && formatRunActivityDuration(item.durationMs)}
+          <span
+            className="run-activity-duration"
+            aria-label={
+              item.durationUnavailable ? 'Duration unavailable because the terminal event is unavailable' : undefined
+            }
+          >
+            {item.durationMs != null
+              ? formatRunActivityDuration(item.durationMs)
+              : item.durationUnavailable
+                ? '—'
+                : null}
           </span>
         </>
       }

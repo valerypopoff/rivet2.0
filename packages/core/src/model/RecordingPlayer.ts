@@ -40,7 +40,7 @@ function withReplayRecordedAt<T>(data: T, replayRecordedAt: number | undefined):
   return { ...data, replayRecordedAt } as T;
 }
 
-const REPLAY_TIMED_LIFECYCLE_EVENTS = new Set<keyof ProcessEvents>([
+const REPLAY_TIMED_EVENTS = new Set<keyof ProcessEvents>([
   'start',
   'graphStart',
   'graphOutputsReady',
@@ -55,6 +55,12 @@ const REPLAY_TIMED_LIFECYCLE_EVENTS = new Set<keyof ProcessEvents>([
   'nodeError',
   'nodeExcluded',
   'nodeOutputsCleared',
+  // These records retain their own physical call timestamps, but the replay
+  // timestamp lets observers keep them on the same historical recording
+  // timeline without borrowing a provider timestamp as a node lifecycle time.
+  'llmCallFinished',
+  'llmProfileAttempt',
+  'toolCallFinished',
 ]);
 
 export async function replayExecutionRecording(options: {
@@ -126,9 +132,7 @@ export async function replayExecutionRecording(options: {
     // playback error remains attached to that root instead of synthesizing a
     // second one.
     hasEmittedRunActivityExecution = true;
-    const payload = REPLAY_TIMED_LIFECYCLE_EVENTS.has(event)
-      ? withReplayRecordedAt(data, currentReplayRecordedAt)
-      : data;
+    const payload = REPLAY_TIMED_EVENTS.has(event) ? withReplayRecordedAt(data, currentReplayRecordedAt) : data;
     emitDetached(emitter, event, payload);
   };
 
@@ -294,12 +298,15 @@ export async function replayExecutionRecording(options: {
       processId: ProcessId,
       terminalTs: number,
     ): number | undefined => {
-      if (recordedDuration !== undefined) {
+      if (isValidRecordedDuration(recordedDuration)) {
         return recordedDuration;
       }
 
       const startedAt = nodeStartTimestamps.get(getNodeRunKey(execution, nodeId, processId));
-      return startedAt === undefined ? undefined : Math.max(0, terminalTs - startedAt);
+      if (!isValidRecordedTimestamp(startedAt) || !isValidRecordedTimestamp(terminalTs) || terminalTs < startedAt) {
+        return undefined;
+      }
+      return terminalTs - startedAt;
     };
 
     for (const event of recorder.events) {
@@ -628,4 +635,12 @@ export async function replayExecutionRecording(options: {
   }
 
   return graphOutputs;
+}
+
+function isValidRecordedTimestamp(value: number | undefined): value is number {
+  return value != null && Number.isFinite(value) && value >= 0;
+}
+
+function isValidRecordedDuration(value: number | undefined): value is number {
+  return value != null && Number.isFinite(value) && value >= 0;
 }

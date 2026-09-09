@@ -73,6 +73,8 @@ export interface RunActivityItemViewModel {
   category: RunActivityCategory;
   startedAt?: number;
   durationMs?: number;
+  /** A root ended without this invocation's own finish/error event. */
+  durationUnavailable?: boolean;
   preview?: string;
   error?: string;
   splitCount?: number;
@@ -101,6 +103,8 @@ export interface RunActivityViewModel {
   status: RunActivityStatus;
   items: RunActivityItemViewModel[];
   durationMs?: number;
+  /** A replayed root ended without a historical lifecycle start boundary. */
+  durationUnavailable?: boolean;
   startedAt?: number;
   outputsReadyAt?: number;
   backgroundWorkPending?: boolean;

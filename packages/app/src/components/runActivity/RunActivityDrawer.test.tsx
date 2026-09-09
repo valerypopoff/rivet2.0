@@ -285,6 +285,44 @@ test('narrow viewport exposes the drawer as a modal dialog', async () => {
   }
 });
 
+test('renders an incomplete terminal duration as an accessible unavailable value', async () => {
+  const dom = new JSDOM('<div id="root"></div>', { url: 'https://example.test/' });
+  const restore = installDomGlobals(dom);
+  const root = createRoot(dom.window.document.getElementById('root')!);
+  const interruptedItem: RunActivityItemViewModel = {
+    ...ITEMS[0]!,
+    activityKey: 'root:graph:incomplete:process',
+    identity: identity('main', 'incomplete', 'incomplete-process'),
+    nodeTitle: 'Interrupted node',
+    status: 'interrupted',
+    durationUnavailable: true,
+  };
+
+  try {
+    await act(async () => {
+      root.render(
+        <RunActivityDrawer
+          open
+          viewModel={{ status: 'aborted', durationUnavailable: true, items: [interruptedItem] }}
+          onClose={() => undefined}
+        />,
+      );
+    });
+
+    const duration = dom.window.document.querySelector<HTMLElement>(
+      '[aria-label="Duration unavailable because the terminal event is unavailable"]',
+    );
+    assert.equal(duration?.textContent, '—');
+    const rootDuration = dom.window.document.querySelector<HTMLElement>(
+      '[aria-label="Duration unavailable because the recording has no historical start"]',
+    );
+    assert.equal(rootDuration?.textContent, '/ —');
+  } finally {
+    await act(async () => root.unmount());
+    restore();
+  }
+});
+
 test('synchronizes an oversized desktop height and leaves narrow persisted height unchanged', async () => {
   const dom = new JSDOM('<div id="root"></div>', { url: 'https://example.test/' });
   let narrow = false;

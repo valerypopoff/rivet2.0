@@ -19,6 +19,7 @@ import {
   type LLMProfileAttemptTraceEvent,
   type RootRunId,
 } from '@valerypopoff/rivet2-core';
+import { getRecordedNodeTiming, getReplayRecordedAt, type RecordedNodeTiming } from '../../utils/recordedNodeTiming.js';
 
 export type RunActivityRootStatus = 'running' | 'outputs-ready' | 'completed' | 'error' | 'aborted';
 export type RunActivityGraphStatus = 'unknown' | 'running' | 'completed' | 'error' | 'aborted';
@@ -56,6 +57,8 @@ export type RunActivityNodeInvocation = {
   firstOutputAt?: number;
   latestOutputAt?: number;
   finishedAt?: number;
+  /** Historical node boundaries from a replay, never local delivery time. */
+  recordedTiming?: RecordedNodeTiming;
   durationMs?: number;
   splitRunDurationMs?: Record<number, number>;
   errorSummary?: string;
@@ -115,7 +118,8 @@ export type RunActivityRoot = {
    * and replay UI ordering retain their existing behavior.
    */
   recordedTiming?: {
-    startedAt: number;
+    /** Omitted when a truncated replay has no historical lifecycle start. */
+    startedAt?: number;
     latestAt: number;
     graphOutputsReadyAt?: number;
     finishedAt?: number;
@@ -248,8 +252,9 @@ export function reduceRunActivityJournal(journal: RunActivityJournal, event: Run
 export function getRunActivityRootDurationMs(root: RunActivityRoot, now: number): number | undefined {
   const recordedTiming = root.recordedTiming;
   if (recordedTiming != null) {
+    if (recordedTiming.startedAt == null) return undefined;
     const end = recordedTiming.finishedAt ?? recordedTiming.latestAt;
-    return Math.max(0, end - recordedTiming.startedAt);
+    return end >= recordedTiming.startedAt ? end - recordedTiming.startedAt : undefined;
   }
   return root.startedAt == null ? undefined : Math.max(0, (root.finishedAt ?? now) - root.startedAt);
 }
@@ -447,6 +452,7 @@ function applyNodeStart(
   if (isTerminalNodeStatus(invocation.status) || invocation.terminalEventMissing) return;
   invocation.status = 'running';
   invocation.startedAt = minDefined(invocation.startedAt, at);
+  mergeRecordedNodeTiming(invocation, getRecordedNodeTiming(data, 'start'));
   invocation.inputPortIds = mergePortIds(invocation.inputPortIds, Object.keys(data.inputs) as PortId[]);
   invocation.waitingForUserInput = undefined;
 }
@@ -461,7 +467,6 @@ function applyUserInput(
   if (isTerminalNodeStatus(invocation.status) || invocation.terminalEventMissing) return;
 
   invocation.status = 'waiting';
-  invocation.startedAt = minDefined(invocation.startedAt, at);
   invocation.inputPortIds = mergePortIds(invocation.inputPortIds, Object.keys(data.inputs) as PortId[]);
   invocation.waitingForUserInput = {
     questionCount: data.inputStrings.length,
@@ -479,7 +484,6 @@ function applyProgress(
 
   if (isTerminalNodeStatus(invocation.status) || invocation.terminalEventMissing) return;
   invocation.status = invocation.status === 'unknown' ? 'running' : invocation.status;
-  invocation.startedAt = minDefined(invocation.startedAt, at);
   invocation.progress = data.progress;
 }
 
@@ -492,6 +496,7 @@ function applyPartialOutput(
   const invocation = getOrCreateNodeInvocation(journal, 'partialOutput', data, at, resultOrigin);
   if (invocation == null) return;
 
+  if (isTerminalNodeStatus(invocation.status) || invocation.terminalEventMissing) return;
   if (invocation.status === 'unknown') invocation.status = 'running';
   invocation.firstOutputAt ??= at;
   invocation.latestOutputAt = at;
@@ -526,9 +531,11 @@ function applyNodeFinish(
 
   invocation.status = 'completed';
   invocation.waitingForUserInput = undefined;
+  invocation.progress = undefined;
   invocation.finishedAt = at;
   invocation.terminalEventMissing = undefined;
-  invocation.durationMs = normalizeDuration(data.durationMs, invocation.startedAt, at);
+  mergeRecordedNodeTiming(invocation, getRecordedNodeTiming(data, 'terminal'));
+  invocation.durationMs = resolveNodeDuration(data.durationMs, invocation, at);
   invocation.splitRunDurationMs = data.splitRunDurationMs;
   invocation.latestOutputAt = at;
   invocation.firstOutputAt ??= at;
@@ -549,9 +556,11 @@ function applyNodeError(
 
   invocation.status = 'error';
   invocation.waitingForUserInput = undefined;
+  invocation.progress = undefined;
   invocation.finishedAt = at;
   invocation.terminalEventMissing = undefined;
-  invocation.durationMs = normalizeDuration(data.durationMs, invocation.startedAt, at);
+  mergeRecordedNodeTiming(invocation, getRecordedNodeTiming(data, 'terminal'));
+  invocation.durationMs = resolveNodeDuration(data.durationMs, invocation, at);
   invocation.splitRunDurationMs = data.splitRunDurationMs;
   invocation.errorSummary = serializeErrorMessage(data.error);
 }
@@ -567,9 +576,11 @@ function applyNodeExcluded(
 
   invocation.status = 'excluded';
   invocation.waitingForUserInput = undefined;
+  invocation.progress = undefined;
   invocation.startedAt ??= at;
   invocation.finishedAt = at;
   invocation.terminalEventMissing = undefined;
+  mergeRecordedNodeTiming(invocation, getRecordedNodeTiming(data, 'excluded'));
   invocation.exclusionReason = data.reason;
   invocation.inputPortIds = mergePortIds(invocation.inputPortIds, Object.keys(data.inputs) as PortId[]);
   invocation.outputPortIds = mergePortIds(invocation.outputPortIds, Object.keys(data.outputs) as PortId[]);
@@ -616,7 +627,7 @@ function applyLlmCallFinished(
     data.execution,
     data.nodeId,
     data.processId,
-    data.startedAt ?? at,
+    at,
   );
   if (invocation == null) return;
 
@@ -720,7 +731,7 @@ function applyToolCallFinished(
     data.execution,
     data.sourceNodeId,
     data.sourceProcessId,
-    data.startedAt ?? at,
+    at,
   );
   if (invocation == null) return;
 
@@ -775,7 +786,7 @@ function getOrCreateNodeInvocation(
 
   const root = ensureRoot(journal, execution, at);
   const graph = ensureGraphRun(journal, root, execution, undefined, at);
-  const invocation = ensureNodeInvocation(journal, root, execution, data.node.id, data.processId, at);
+  const invocation = ensureNodeInvocation(journal, root, execution, data.node.id, data.processId);
   if (invocation == null) return undefined;
 
   markGraphRunTerminalFromRoot(root, graph);
@@ -801,7 +812,7 @@ function getOrCreateTraceInvocation(
 
   const root = ensureRoot(journal, exactExecution, at);
   const graph = ensureGraphRun(journal, root, exactExecution, undefined, at);
-  const invocation = ensureNodeInvocation(journal, root, exactExecution, nodeId, processId, at);
+  const invocation = ensureNodeInvocation(journal, root, exactExecution, nodeId, processId);
   if (invocation == null) return undefined;
 
   markGraphRunTerminalFromRoot(root, graph);
@@ -885,7 +896,6 @@ function ensureNodeInvocation(
   execution: GraphExecutionMetadata,
   nodeId: NodeId,
   processId: ProcessId,
-  at: number,
 ): RunActivityNodeInvocation | undefined {
   const key = createRunActivityNodeKey({
     rootRunId: execution.rootRunId,
@@ -912,7 +922,6 @@ function ensureNodeInvocation(
     graphName: root.graphRunsById[execution.graphRunId]?.graphName,
     status: 'unknown',
     resultOrigin: 'unknown',
-    startedAt: at,
     inputPortIds: [],
     outputPortIds: [],
     splitOutputPortIds: {},
@@ -955,11 +964,9 @@ function finishRoot(
   }
   for (const key of root.nodeInvocationOrder) {
     const invocation = root.nodeInvocationsByKey[key];
-    if (invocation == null || (invocation.status !== 'running' && invocation.status !== 'unknown')) continue;
-    invocation.status = status === 'completed' ? 'unknown' : 'aborted';
-    invocation.finishedAt = at;
-    invocation.durationMs = normalizeDuration(invocation.durationMs, invocation.startedAt, at);
-    invocation.terminalEventMissing = true;
+    if (invocation != null) {
+      markNodeInvocationTerminalFromRoot(root, invocation, at);
+    }
   }
 
   journal.activeRootRunIds = journal.activeRootRunIds.filter((rootRunId) => rootRunId !== root.rootRunId);
@@ -987,7 +994,11 @@ function markGraphRunTerminalFromRoot(root: RunActivityRoot, graphRun: RunActivi
  * invocation that the root already closed. A later exact node terminal event
  * is still allowed to replace this conservative missing-terminal marker.
  */
-function markNodeInvocationTerminalFromRoot(root: RunActivityRoot, invocation: RunActivityNodeInvocation): void {
+function markNodeInvocationTerminalFromRoot(
+  root: RunActivityRoot,
+  invocation: RunActivityNodeInvocation,
+  finishedAt = root.finishedAt,
+): void {
   if (
     !isTerminalRootStatus(root.status) ||
     isTerminalNodeStatus(invocation.status) ||
@@ -997,11 +1008,10 @@ function markNodeInvocationTerminalFromRoot(root: RunActivityRoot, invocation: R
   }
 
   invocation.status = root.status === 'completed' ? 'unknown' : 'aborted';
-  const finishedAt = root.finishedAt ?? invocation.finishedAt;
-  invocation.finishedAt = finishedAt;
-  if (finishedAt != null) {
-    invocation.durationMs = normalizeDuration(invocation.durationMs, invocation.startedAt, finishedAt);
-  }
+  invocation.finishedAt = finishedAt ?? invocation.finishedAt;
+  invocation.durationMs = undefined;
+  invocation.waitingForUserInput = undefined;
+  invocation.progress = undefined;
   invocation.terminalEventMissing = true;
 }
 
@@ -1023,10 +1033,17 @@ function applyUnscopedRootTerminal(
     return;
   }
   finishRoot(journal, root, status, at, error);
-  applyRecordedTiming(root, replayRecordedAt, false, false);
+  applyRecordedTiming(root, replayRecordedAt, false, false, false);
 }
 
 function applyRecordedTimingFromScopedEvent(journal: RunActivityJournal, event: RunActivityEvent): void {
+  // Model, profile, and tool events have their own physical timestamps. They
+  // may be displayed as child diagnostics, but they must not establish the
+  // historical lifecycle bounds of the parent node or root.
+  if (event.type === 'llmCallFinished' || event.type === 'llmProfileAttempt' || event.type === 'toolCallFinished') {
+    return;
+  }
+
   const replayRecordedAt = getReplayRecordedAt(event.data);
   const execution = getEventExecution(event.data);
   if (replayRecordedAt == null || execution == null) return;
@@ -1037,7 +1054,14 @@ function applyRecordedTimingFromScopedEvent(journal: RunActivityJournal, event: 
   const isRootGraphEvent = execution.parentGraphRunId == null;
   const isRootTerminal =
     isRootGraphEvent && (event.type === 'graphFinish' || event.type === 'graphError' || event.type === 'graphAbort');
-  applyRecordedTiming(root, replayRecordedAt, event.type === 'graphOutputsReady' && isRootGraphEvent, isRootTerminal);
+  const isLifecycleStart = event.type === 'start' || event.type === 'graphStart' || event.type === 'nodeStart';
+  applyRecordedTiming(
+    root,
+    replayRecordedAt,
+    event.type === 'graphOutputsReady' && isRootGraphEvent,
+    isRootTerminal,
+    isLifecycleStart,
+  );
 }
 
 function applyRecordedTiming(
@@ -1045,14 +1069,16 @@ function applyRecordedTiming(
   replayRecordedAt: number | undefined,
   outputsReady: boolean,
   rootTerminal: boolean,
+  lifecycleStarted: boolean,
 ): void {
   if (replayRecordedAt == null) return;
 
   const timing = (root.recordedTiming ??= {
-    startedAt: replayRecordedAt,
     latestAt: replayRecordedAt,
   });
-  timing.startedAt = Math.min(timing.startedAt, replayRecordedAt);
+  if (lifecycleStarted) {
+    timing.startedAt = Math.min(timing.startedAt ?? replayRecordedAt, replayRecordedAt);
+  }
   timing.latestAt = Math.max(timing.latestAt, replayRecordedAt);
   if (outputsReady) {
     timing.graphOutputsReadyAt = Math.min(timing.graphOutputsReadyAt ?? replayRecordedAt, replayRecordedAt);
@@ -1062,12 +1088,6 @@ function applyRecordedTiming(
   } else if (root.status !== 'running' && root.status !== 'outputs-ready') {
     timing.finishedAt ??= timing.latestAt;
   }
-}
-
-function getReplayRecordedAt(data: unknown): number | undefined {
-  if (data == null || typeof data !== 'object') return undefined;
-  const value = (data as { replayRecordedAt?: unknown }).replayRecordedAt;
-  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
 }
 
 function getEventExecution(data: unknown): GraphExecutionMetadata | undefined {
@@ -1189,13 +1209,44 @@ function serializeErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-function normalizeDuration(
+function mergeRecordedNodeTiming(invocation: RunActivityNodeInvocation, timing: RecordedNodeTiming | undefined): void {
+  if (timing == null) return;
+  invocation.recordedTiming = {
+    ...invocation.recordedTiming,
+    ...timing,
+  };
+}
+
+/**
+ * A node terminal duration is exact only when the processor supplied it or
+ * when both boundaries came from the same node lifecycle clock. In particular,
+ * never combine a historical model-call timestamp with a replay receipt time.
+ */
+function resolveNodeDuration(
   durationMs: number | undefined,
-  startedAt: number | undefined,
+  invocation: RunActivityNodeInvocation,
   finishedAt: number,
 ): number | undefined {
-  if (durationMs != null && Number.isFinite(durationMs)) return Math.max(0, durationMs);
-  return startedAt == null ? undefined : Math.max(0, finishedAt - startedAt);
+  if (isValidDuration(durationMs)) return durationMs;
+
+  const recordedTiming = invocation.recordedTiming;
+  if (
+    recordedTiming?.startedAt != null &&
+    recordedTiming.finishedAt != null &&
+    recordedTiming.finishedAt >= recordedTiming.startedAt
+  ) {
+    return recordedTiming.finishedAt - recordedTiming.startedAt;
+  }
+
+  if (invocation.startedAt != null && finishedAt >= invocation.startedAt) {
+    return finishedAt - invocation.startedAt;
+  }
+
+  return undefined;
+}
+
+function isValidDuration(value: number | undefined): value is number {
+  return value != null && Number.isFinite(value) && value >= 0;
 }
 
 function minDefined(current: number | undefined, candidate: number): number {

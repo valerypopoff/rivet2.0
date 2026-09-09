@@ -38,8 +38,8 @@ export function resolveRuntimeStatusTiming(options: {
   if (root?.startedAt != null) {
     return {
       elapsedMs: getRunActivityRootDurationMs(root, options.now),
-      startedAt: root.startedAt,
-      isLive: root.finishedAt == null,
+      startedAt: root.recordedTiming == null ? root.startedAt : root.recordedTiming.startedAt,
+      isLive: root.recordedTiming == null && root.finishedAt == null,
     };
   }
 
