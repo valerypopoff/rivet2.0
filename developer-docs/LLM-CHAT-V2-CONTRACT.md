@@ -105,9 +105,13 @@ same evidence snapshot. After the response-body collector reaches its normal
 completed-call boundary, the retry layer republishes that snapshot so enabled
 request/response bodies and known usage enter the terminal checkpoint too. It
 does not wait for unresolved diagnostics after cancellation or synthesize their
-values. A checkpoint is cloned at the node boundary; later stream and
-continuation mutation cannot alter it. The callback is observational and may
-not replace the original error.
+values. Every physical retry and fallback request owns its own evidence window:
+late AI SDK usage or reasoning callbacks from a retired request are ignored
+after its body flush and terminal checkpoint refresh complete. They therefore
+cannot overwrite the current request's checkpoint or revive an earlier profile
+response after the next request fails. A checkpoint is cloned at the node
+boundary; later stream and continuation mutation cannot alter it. The callback
+is observational and may not replace the original error.
 
 Fallback clears the live response only while moving to another profile. It
 does not clear durable evidence and does not erase the last failed profile's

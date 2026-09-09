@@ -22,6 +22,21 @@ async function* mockStream(parts: ChatV2StreamPart[]): AsyncGenerator<ChatV2Stre
   }
 }
 
+function createDeferred<T>() {
+  let resolve: (value: T | PromiseLike<T>) => void = () => undefined;
+  const promise = new Promise<T>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
+}
+
+function createRetryableProviderError(message: string) {
+  const error = new Error(message) as Error & { statusCode: number };
+  error.name = 'AI_APICallError';
+  error.statusCode = 503;
+  return error;
+}
+
 function createMockModel(): ChatV2Model {
   return {} as ChatV2Model;
 }
@@ -1658,6 +1673,192 @@ void describe('runChatV2Pipeline', () => {
       type: 'string',
       value: 'Completed before metadata failed.',
     });
+  });
+
+  void it('does not let a retired generated retry overwrite the next request failure evidence', async () => {
+    const checkpoints: Outputs[] = [];
+    const lateReasoning = createDeferred<string>();
+    const firstError = createRetryableProviderError('first provider metadata failed');
+    const finalError = createRetryableProviderError('second provider request failed');
+    let attempts = 0;
+
+    await assert.rejects(
+      () =>
+        runChatV2Pipeline({
+          provider: 'custom',
+          model: createMockModel(),
+          modelId: 'generated-retired-evidence-model',
+          prompt: { type: 'string', value: 'Do not revive the first response.' },
+          emitPartialOutputs: false,
+          outputReasoning: true,
+          retryOnNon200: true,
+          retryOnNon200RepeatTimes: 1,
+          retryOnNon200CooldownMs: 0,
+          context: { signal: new AbortController().signal },
+          onFailureCheckpoint: (outputs) => checkpoints.push(outputs),
+          executeGenerate: async () => {
+            attempts += 1;
+            if (attempts === 1) {
+              return {
+                text: 'first response must stay retired',
+                reasoningText: lateReasoning.promise,
+                providerMetadata: Promise.reject(firstError),
+              };
+            }
+
+            lateReasoning.resolve('late reasoning from the first request');
+            await new Promise<void>((resolve) => setImmediate(resolve));
+            throw finalError;
+          },
+        }),
+      (error: unknown) => error instanceof Error && error.message.includes(finalError.message),
+    );
+
+    assert.equal(attempts, 2);
+    assert.deepEqual(checkpoints.at(-1)?.['response' as PortId], {
+      type: 'string',
+      value: '',
+    });
+    assert.notDeepEqual(checkpoints.at(-1)?.['reasoning' as PortId], {
+      type: 'string',
+      value: 'late reasoning from the first request',
+    });
+  });
+
+  void it('retires generated evidence before waiting for a retry cooldown', async () => {
+    const checkpoints: Outputs[] = [];
+    const lateReasoning = createDeferred<string>();
+    const retryStarted = createDeferred<void>();
+    const releaseRetry = createDeferred<void>();
+    const firstError = createRetryableProviderError('first provider metadata failed');
+    const finalError = createRetryableProviderError('second provider request failed');
+    let attempts = 0;
+
+    const run = runChatV2Pipeline({
+      provider: 'custom',
+      model: createMockModel(),
+      modelId: 'generated-cooldown-evidence-model',
+      prompt: { type: 'string', value: 'Do not update during cooldown.' },
+      emitPartialOutputs: false,
+      outputReasoning: true,
+      retryOnNon200: true,
+      retryOnNon200RepeatTimes: 1,
+      retryOnNon200CooldownMs: 0,
+      onBeforeProviderRetry: async () => {
+        retryStarted.resolve();
+        await releaseRetry.promise;
+      },
+      context: { signal: new AbortController().signal },
+      onFailureCheckpoint: (outputs) => checkpoints.push(outputs),
+      executeGenerate: async () => {
+        attempts += 1;
+        if (attempts === 1) {
+          return {
+            text: 'first response must not update during cooldown',
+            reasoningText: lateReasoning.promise,
+            providerMetadata: Promise.reject(firstError),
+          };
+        }
+        throw finalError;
+      },
+    });
+
+    await retryStarted.promise;
+    const checkpointsBeforeLateReasoning = checkpoints.length;
+    lateReasoning.resolve('late reasoning during retry cooldown');
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(checkpoints.length, checkpointsBeforeLateReasoning);
+
+    releaseRetry.resolve();
+    await assert.rejects(
+      () => run,
+      (error: unknown) => error instanceof Error && error.message.includes(finalError.message),
+    );
+  });
+
+  void it('does not let a retired streamed retry overwrite the next request failure evidence', async () => {
+    const checkpoints: Outputs[] = [];
+    const lateUsage = createDeferred<LanguageModelUsage>();
+    const firstError = createRetryableProviderError('first stream metadata failed');
+    const finalError = createRetryableProviderError('second stream request failed');
+    let attempts = 0;
+
+    await assert.rejects(
+      () =>
+        runChatV2Pipeline({
+          provider: 'custom',
+          model: createMockModel(),
+          modelId: 'streamed-retired-evidence-model',
+          prompt: { type: 'string', value: 'Do not revive the first stream.' },
+          emitPartialOutputs: true,
+          retryOnNon200: true,
+          retryOnNon200RepeatTimes: 1,
+          retryOnNon200CooldownMs: 0,
+          context: { signal: new AbortController().signal },
+          onFailureCheckpoint: (outputs) => checkpoints.push(outputs),
+          executeStream: async () => {
+            attempts += 1;
+            if (attempts === 1) {
+              return {
+                fullStream: mockStream([
+                  { type: 'text-start', id: 'text_1' },
+                  { type: 'text-delta', id: 'text_1', text: 'first streamed response must stay retired' },
+                  { type: 'text-end', id: 'text_1' },
+                ]),
+                usage: lateUsage.promise,
+                providerMetadata: Promise.reject(firstError),
+              };
+            }
+
+            lateUsage.resolve({ inputTokens: 1, outputTokens: 1, totalTokens: 2 });
+            await new Promise<void>((resolve) => setImmediate(resolve));
+            throw finalError;
+          },
+        }),
+      (error: unknown) => error instanceof Error && error.message.includes(finalError.message),
+    );
+
+    assert.equal(attempts, 2);
+    assert.deepEqual(checkpoints.at(-1)?.['response' as PortId], {
+      type: 'string',
+      value: '',
+    });
+  });
+
+  void it('does not emit late generated evidence after a terminal cancellation', async () => {
+    const checkpoints: Outputs[] = [];
+    const lateReasoning = createDeferred<string>();
+    const abortController = new AbortController();
+    const providerError = createRetryableProviderError('provider metadata failed during cancellation');
+
+    await assert.rejects(
+      () =>
+        runChatV2Pipeline({
+          provider: 'custom',
+          model: createMockModel(),
+          modelId: 'cancelled-retired-evidence-model',
+          prompt: { type: 'string', value: 'Do not update after cancellation.' },
+          emitPartialOutputs: false,
+          outputReasoning: true,
+          context: { signal: abortController.signal },
+          onFailureCheckpoint: (outputs) => checkpoints.push(outputs),
+          executeGenerate: async () => {
+            queueMicrotask(() => abortController.abort());
+            return {
+              text: 'response captured before cancellation',
+              reasoningText: lateReasoning.promise,
+              providerMetadata: Promise.reject(providerError),
+            };
+          },
+        }),
+      (error: unknown) => error instanceof Error && error.name === 'AbortError',
+    );
+
+    const checkpointsAtTerminal = checkpoints.length;
+    lateReasoning.resolve('late reasoning must be ignored');
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    assert.equal(checkpoints.length, checkpointsAtTerminal);
   });
 
   void it('refreshes completed response failure evidence after diagnostic bodies and usage settle', async () => {

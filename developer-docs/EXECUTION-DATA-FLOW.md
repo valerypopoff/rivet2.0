@@ -1943,10 +1943,14 @@ completed-call boundary it is refreshed after opt-in response-body capture
 settles and after independently available Usage/reasoning resolves, so those
 enabled diagnostics survive a later finalization error. Cancellation and
 provider deadlines do not wait for unsettled clone reads; only bodies already
-captured at that point are recorded. The app also ignores a delayed
-`partialOutput` after a terminal event, preventing late stream delivery from
-hiding retained evidence. The checkpoint never becomes graph dataflow output,
-and legacy recordings without it remain honestly incomplete.
+captured at that point are recorded. Each physical provider retry or profile
+candidate owns its response-evidence callback until that candidate's body flush
+and final checkpoint refresh complete. Once it retires, late SDK reasoning or
+usage resolution is ignored, so it cannot overwrite evidence for a later
+request, a fallback candidate, or a terminal cancellation. The app also ignores
+a delayed `partialOutput` after a terminal event, preventing late stream delivery
+from hiding retained evidence. The checkpoint never becomes graph dataflow
+output, and legacy recordings without it remain honestly incomplete.
 
 ## File Reference
 

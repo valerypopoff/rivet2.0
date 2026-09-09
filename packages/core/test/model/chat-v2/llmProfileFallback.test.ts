@@ -38,6 +38,21 @@ async function* mockTextStream(text: string) {
   yield { type: 'text-end' as const, id: 'text_1' };
 }
 
+function createDeferred<T>() {
+  let resolve: (value: T | PromiseLike<T>) => void = () => undefined;
+  const promise = new Promise<T>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
+}
+
+function createRetryableProviderError(message: string) {
+  const error = new Error(message) as Error & { statusCode: number };
+  error.name = 'AI_APICallError';
+  error.statusCode = 503;
+  return error;
+}
+
 describe('LLM Profile fallback chain', () => {
   it('accepts one profile or an ordered array and identifies malformed members by index', () => {
     const first = createDefaultLLMProfileValue();
@@ -1139,6 +1154,55 @@ describe('LLM Profile fallback chain', () => {
     );
 
     assert.deepEqual(responses, ['primary partial', '', 'backup partial']);
+  });
+
+  it('does not let a retired profile response overwrite terminal evidence from a later profile', async () => {
+    const responses: string[] = [];
+    const lateUsage = createDeferred<{ inputTokens: number; outputTokens: number; totalTokens: number }>();
+    const firstError = createRetryableProviderError('primary metadata failed');
+    const finalError = createRetryableProviderError('backup failed before a response');
+    const runner = createLLMProfileFallbackRunner({
+      candidates: [
+        { provider: 'custom', model: 'primary' },
+        { provider: 'custom', model: 'backup' },
+      ],
+      resolveCandidate: async (profileIndex, roundOptions) => ({
+        ...roundOptions,
+        provider: 'custom',
+        model: {} as ChatV2Model,
+        modelId: profileIndex === 0 ? 'primary' : 'backup',
+        executeGenerate: async () => {
+          if (profileIndex === 0) {
+            return {
+              text: 'primary response must stay retired',
+              totalUsage: lateUsage.promise,
+              providerMetadata: Promise.reject(firstError),
+            };
+          }
+
+          lateUsage.resolve({ inputTokens: 1, outputTokens: 1, totalTokens: 2 });
+          await new Promise<void>((resolve) => setImmediate(resolve));
+          throw finalError;
+        },
+      }),
+    });
+
+    await assert.rejects(
+      () =>
+        runner.run(
+          baseRoundOptions({
+            onFailureCheckpoint: (outputs) => {
+              const response = outputs['response' as PortId];
+              if (response?.type === 'string') {
+                responses.push(response.value);
+              }
+            },
+          }),
+        ),
+      LLMProfileFallbackExhaustedError,
+    );
+
+    assert.equal(responses.at(-1), '');
   });
 
   it('does not report an earlier provider failure as terminal diagnostics after a later setup failure', async () => {

@@ -118,14 +118,31 @@ async function runChatV2WithRetry(
     const callId = createObservedChatV2CallId(options);
     const callStartedAt = Date.now();
     let callWasObserved = false;
+    // AI SDK accessors such as usage and reasoning may settle after a request
+    // has otherwise failed. Their diagnostic callbacks belong only to this
+    // physical request: never let a retired retry/fallback candidate overwrite
+    // evidence collected by the current one.
+    let acceptsResponseEvidence = true;
+    const retireResponseEvidence = () => {
+      acceptsResponseEvidence = false;
+    };
     let latestResponseEvidence: ChatV2ResponseEvidence | undefined;
     const reportResponseEvidence = (response: ChatV2ResponseEvidence) => {
+      if (!acceptsResponseEvidence) {
+        return;
+      }
       latestResponseEvidence = response;
       try {
         chatOptions.onResponseReceived?.(response);
       } catch {
         // Diagnostic evidence must not alter a retry/fallback decision.
       }
+    };
+    const publishAndRetireResponseEvidence = () => {
+      if (latestResponseEvidence != null) {
+        reportResponseEvidence(latestResponseEvidence);
+      }
+      retireResponseEvidence();
     };
     const attemptController = new AbortController();
     const abortAttemptFromCaller = () => attemptController.abort(signal.reason);
@@ -149,9 +166,7 @@ async function runChatV2WithRetry(
           ? await generateChatV2(attemptChatOptions)
           : await streamChatV2(attemptChatOptions);
       await options.responseBodyCapture?.flush();
-      if (latestResponseEvidence != null) {
-        reportResponseEvidence(latestResponseEvidence);
-      }
+      publishAndRetireResponseEvidence();
       const statusCode = result.requestStatus ?? 200;
       notifyChatV2CallFinished(options, {
         callId,
@@ -190,9 +205,7 @@ async function runChatV2WithRetry(
       await options.responseBodyCapture?.flush({
         waitForPending: !signal.aborted && !isChatV2ProviderTimeoutError(error),
       });
-      if (latestResponseEvidence != null) {
-        reportResponseEvidence(latestResponseEvidence);
-      }
+      publishAndRetireResponseEvidence();
       if (!callWasObserved) {
         notifyChatV2CallFinished(options, {
           callId,
@@ -229,6 +242,7 @@ async function runChatV2WithRetry(
       await prepareProviderRetry();
       await waitForLLMChatV2RetryCooldown(retryPlan.cooldownMs, signal);
     } finally {
+      retireResponseEvidence();
       signal.removeEventListener('abort', abortAttemptFromCaller);
     }
   }
