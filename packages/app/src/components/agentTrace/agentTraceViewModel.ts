@@ -16,6 +16,7 @@ export function buildLlmInvocationTrace(
   const { data, graphId, graphRunId, processId, rootRunId } = processData;
   if (graphId == null || graphRunId == null || rootRunId == null || data.agentTraceEvents == null) return undefined;
 
+  const timing = data.recordedTiming;
   const execution: GraphExecutionMetadata = { graphId, graphRunId, rootRunId };
   return buildAgentResponseTrace({
     scope: 'llm-invocation',
@@ -23,8 +24,9 @@ export function buildLlmInvocationTrace(
     events: data.agentTraceEvents,
     nodeId: node.id,
     processId,
-    startedAt: data.startedAt,
-    finishedAt: data.finishedAt,
+    ...(timing == null ? {} : { invocationDurationMs: data.durationMs }),
+    startedAt: timing == null ? data.startedAt : timing.startedAt,
+    finishedAt: timing == null ? data.finishedAt : timing.finishedAt,
     status: toTraceStatus(data.status?.type),
   });
 }

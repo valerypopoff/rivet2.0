@@ -47,6 +47,39 @@ pinning every confirmed defect. The **Prominent UX improvements** section is a
 separate post-refactor product backlog, as this document already describes; it
 is not an unfinished prerequisite for the behavior-preserving runtime work.
 
+### Post-refactor reliability delivery (2026-09-09)
+
+**Completed:** failed LLM invocations now retain already-accessible output
+evidence without changing failure into successful dataflow. The terminal
+`nodeError` protocol carries optional display-only outputs; Core, Browser,
+Node, Remote Debugger, recording serialization/replay, inactive project
+snapshots, and Run Activity preserve that additive evidence.
+
+- The LLM pipeline begins an invocation-local checkpoint immediately before a
+  physical AI SDK executor call. It contains only existing output shapes:
+  request messages, streamed response/tool/reasoning state, opt-in HTTP bodies,
+  known usage, attempts, and profile summary. It proves request construction or
+  captured response data, not remote delivery.
+- GraphProcessor attaches that checkpoint only to terminal `nodeError`; it is
+  never a result, cache entry, or downstream input. The node does not also emit
+  it as a detached partial update when the terminal channel is available,
+  removing the late-event race. Direct consumers that do not implement the
+  terminal checkpoint callback retain the legacy partial-output fallback.
+- Fallback preserves the final failed candidate's partial evidence. Failed
+  split nodes retain completed sibling pages and per-item checkpoints by real
+  split index; cancellation retains only the executed sequential prefix.
+- Recorders remain attached through every abort until the root terminal `done`
+  or `error`; a socket close or capture-owner disposal settles recording as
+  incomplete rather than inventing completion. Replay preserves the same
+  terminal evidence and recorded node timing.
+
+Focused Core pipeline/node/GraphProcessor/split/recorder tests, App snapshot
+and Run Activity tests, Node debugger tests, the Studio Server recording-replay
+Playwright scenario, and repository style checks characterize this boundary.
+Future LLM work must keep failure evidence terminal, optional, additive, and
+display-only; it must not reintroduce a second authoritative partial-output
+path.
+
 ## Current Architecture
 
 ```text

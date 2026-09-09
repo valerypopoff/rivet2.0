@@ -91,14 +91,20 @@ export function buildRunActivityViewModel(
   const partialReason = getPartialReason(journal, root);
   const accounting = buildAccountingSummary(root);
   const durationMs = getRunActivityRootDurationMs(root, now);
+  const startedAt = root.recordedTiming == null ? root.startedAt : root.recordedTiming.startedAt;
+  const outputsReadyAt =
+    root.recordedTiming == null ? root.graphOutputsReadyAt : root.recordedTiming.graphOutputsReadyAt;
+  const durationUnavailable =
+    root.recordedTiming != null && root.recordedTiming.startedAt == null && root.finishedAt != null;
 
   return {
     rootRunId: root.rootRunId,
     status: mapRootStatus(root.status),
     items,
-    ...(root.startedAt == null ? {} : { startedAt: root.startedAt }),
-    ...(root.graphOutputsReadyAt == null ? {} : { outputsReadyAt: root.graphOutputsReadyAt }),
+    ...(startedAt == null ? {} : { startedAt }),
+    ...(outputsReadyAt == null ? {} : { outputsReadyAt }),
     ...(durationMs == null ? {} : { durationMs }),
+    ...(durationUnavailable ? { durationUnavailable: true } : {}),
     ...(root.status === 'outputs-ready' ? { backgroundWorkPending: true } : {}),
     ...(accounting == null ? {} : { accounting }),
     graphOptions: buildGraphOptions(root, items),
@@ -176,6 +182,10 @@ function buildInvocationViewModel(
   const detailRows = buildDetailRows(root, graphRun, invocation, resolved, category);
   const primaryModelCall = getEffectiveModelCall(invocation.modelCalls);
   const searchTerms = buildInvocationSearchTerms(invocation, resolved.searchTerms);
+  // Replays retain a historical event clock alongside local delivery times.
+  // Once an invocation has replay provenance, do not fall back to a local
+  // receipt timestamp for a missing historical node start.
+  const startedAt = invocation.recordedTiming == null ? invocation.startedAt : invocation.recordedTiming.startedAt;
 
   return {
     activityKey: invocation.key,
@@ -194,8 +204,9 @@ function buildInvocationViewModel(
     status,
     category,
     resultOrigin: invocation.resultOrigin as RunActivityResultOriginView,
-    ...(invocation.startedAt == null ? {} : { startedAt: invocation.startedAt }),
+    ...(startedAt == null ? {} : { startedAt }),
     ...(invocation.durationMs == null ? {} : { durationMs: invocation.durationMs }),
+    ...(invocation.terminalEventMissing && invocation.durationMs == null ? { durationUnavailable: true } : {}),
     ...(preview == null ? {} : { preview }),
     ...(invocation.errorSummary == null ? {} : { error: invocation.errorSummary }),
     ...(invocation.splitOutputIndices.length === 0 ? {} : { splitCount: invocation.splitOutputIndices.length }),

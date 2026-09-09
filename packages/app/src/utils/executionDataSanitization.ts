@@ -20,6 +20,13 @@ export function sanitizeInputsOrOutputs<T extends Inputs | Outputs>(data: T): T 
   return sanitized as T;
 }
 
+/** Applies the same transport-safe value normalization to each split result. */
+export function sanitizeSplitOutputs<T extends Outputs>(splitOutputs: Record<number, T>): Record<number, T> {
+  return Object.fromEntries(
+    Object.entries(splitOutputs).map(([index, outputs]) => [Number(index), sanitizeInputsOrOutputs(outputs)]),
+  ) as Record<number, T>;
+}
+
 export function fixDataValueUint8Arrays(value: DataValue | undefined): DataValue | undefined {
   if (!value) {
     return undefined;

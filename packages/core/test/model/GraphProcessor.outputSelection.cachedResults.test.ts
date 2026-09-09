@@ -217,6 +217,56 @@ void describe('Selected output cached-result participation', { timeout: 5_000 },
     });
   }
 
+  void it('keeps live done ownership until finish, then lets finish start a selected rerun', async () => {
+    const { processor } = fixture();
+    let doneOverlap: Promise<void> | undefined;
+    let selectedRerun: ReturnType<GraphProcessor['processGraph']> | undefined;
+
+    processor.on('done', () => {
+      doneOverlap = assert.rejects(
+        processor.processGraph(testProcessContext(), {}, {}, { requestedGraphOutputIds: ['right'] }),
+        /Cannot process graph while already processing/,
+      );
+    });
+    processor.on('finish', () => {
+      selectedRerun ??= processor.processGraph(testProcessContext(), {}, {}, { requestedGraphOutputIds: ['right'] });
+    });
+
+    const fullOutputs = await processor.processGraph(testProcessContext());
+    assert.ok(doneOverlap, 'the done listener attempted and observed a rejected overlapping run');
+    await doneOverlap;
+    assert.ok(selectedRerun, 'the finish listener started the selected rerun after lifecycle release');
+    const rerunOutputs = await selectedRerun;
+
+    assert.deepEqual(fullOutputs.left, { type: 'string', value: 'left value' });
+    assert.deepEqual(fullOutputs.right, { type: 'string', value: 'right value' });
+    assert.deepEqual(rerunOutputs.right, { type: 'string', value: 'right value' });
+    assert.equal(Object.hasOwn(rerunOutputs, 'left'), false);
+  });
+
+  void it('normalizes a legacy recorded finish to one post-lifecycle handoff', async () => {
+    const recorder = new ExecutionRecorder();
+    const recordedProcessor = fixture().processor;
+    recorder.record(recordedProcessor);
+    await recordedProcessor.processGraph(testProcessContext());
+    recorder.events.push({
+      type: 'finish',
+      data: undefined,
+      ts: recorder.events.at(-1)?.ts ?? 0,
+    });
+
+    const { processor } = fixture();
+    let finishes = 0;
+    const observedFinish = processor.once('finish');
+    processor.on('finish', () => {
+      finishes += 1;
+    });
+
+    await processor.replayRecording(recorder);
+    await observedFinish;
+    assert.equal(finishes, 1);
+  });
+
   void it('returns the recorded result without leaking it into a finish-triggered selected rerun', async () => {
     const recorder = new ExecutionRecorder();
     const recordedProcessor = fixture().processor;

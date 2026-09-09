@@ -197,6 +197,14 @@ export type ProcessEvents = {
     node: ChartNode;
     error: Error | string;
     processId: ProcessId;
+    /** Display-only outputs retained by a failed non-split invocation. */
+    outputs?: Outputs;
+    /**
+     * Display-only evidence retained by split items that actually ran. It can
+     * contain completed sibling outputs and failed-item checkpoints, but is
+     * never a successful aggregate result or downstream input.
+     */
+    splitOutputs?: Record<number, Outputs>;
     resultOrigin?: NodeResultOrigin;
     durationMs?: number;
     splitRunDurationMs?: Record<number, number>;
@@ -596,6 +604,7 @@ export class GraphProcessor {
 
   // Per-process state
   #erroredNodes: Map<NodeId, Error | string> = undefined!; // Values are strings in recordings
+  #failureOutputsByProcessId: Map<ProcessId, Map<number, Outputs>> = undefined!;
   #remainingNodes: Set<NodeId> = undefined!;
   #visitedNodes: Set<NodeId> = undefined!;
   #currentlyProcessing: Set<NodeId> = undefined!;
@@ -1174,6 +1183,7 @@ export class GraphProcessor {
     this.#hasPreloadedData = this.#preloadedNodeResults.size > 0;
 
     this.#erroredNodes = new Map();
+    this.#failureOutputsByProcessId = new Map();
     this.#currentlyProcessing = new Set();
     // A processor may be constructed with a reusable execution plan. In that
     // case preprocessing happened before this run, so retain the compiled
@@ -1811,7 +1821,6 @@ export class GraphProcessor {
 
   async #finalizeGraphRun(): Promise<GraphOutputs> {
     const outputValues = this.#graphOutputs;
-    this.#lifecycle.complete();
 
     if (this.#suppressGraphLifecycleEvents) {
       return outputValues;
@@ -1823,7 +1832,6 @@ export class GraphProcessor {
 
     if (!this.#isSubProcessor) {
       await this.#emitter.emit('done', { results: outputValues });
-      await this.#emitFinishIfNeeded();
     }
 
     return outputValues;
@@ -2505,8 +2513,9 @@ export class GraphProcessor {
       accumulateCost: (output) => this.#accumulateCost(output),
       setNodeResults: (nodeId, outputs) => this.#nodeResults.set(nodeId, outputs),
       markNodeVisited: (nodeId) => this.#visitedNodes.add(nodeId),
-      nodeErrored: (n, err, pid, durationMs, splitRunDurationMs, resultOrigin) =>
-        this.#nodeErrored(n, err, pid, durationMs, splitRunDurationMs, resultOrigin),
+      nodeErrored: (n, err, pid, durationMs, splitRunDurationMs, resultOrigin, splitOutputs) =>
+        this.#nodeErrored(n, err, pid, durationMs, splitRunDurationMs, resultOrigin, undefined, splitOutputs),
+      takeFailureOutputs: (pid, index) => this.#takeFailureOutputs(pid, index),
       isAborted: () => this.#lifecycle.isAborted,
       getAbortError: () => createGraphAbortErrorFromSignal(this.#abortController.signal),
       emit: (event, data) => {
@@ -2632,7 +2641,15 @@ export class GraphProcessor {
         ),
       );
     } catch (error) {
-      await this.#nodeErrored(node, error, processId, this.#finishNodeTiming(timingStart), undefined, resultOrigin);
+      await this.#nodeErrored(
+        node,
+        error,
+        processId,
+        this.#finishNodeTiming(timingStart),
+        undefined,
+        resultOrigin,
+        this.#takeFailureOutputs(processId, 0),
+      );
     }
   }
 
@@ -2643,8 +2660,14 @@ export class GraphProcessor {
     durationMs?: number,
     splitRunDurationMs?: Record<number, number>,
     resultOrigin: NodeResultOrigin = 'executed',
+    outputs?: Outputs,
+    splitOutputs?: Record<number, Outputs>,
   ): Promise<void> {
     const error = getError(e);
+    // Most callers are ordinary (non-split) node executions. Let those retain
+    // any checkpoint without requiring every error path to know about the
+    // internal map. Split callers provide their per-index map explicitly.
+    const retainedOutputs = splitOutputs === undefined ? (outputs ?? this.#takeFailureOutputs(processId, 0)) : outputs;
     const exclusionReason = this.#getErrorExclusionReason(node, error, processId);
     if (exclusionReason) {
       await this.#emitNodeExcluded(node, processId, this.#getInputValuesForNode(node), exclusionReason, resultOrigin);
@@ -2656,7 +2679,18 @@ export class GraphProcessor {
     await this.#emitter.emit(
       'nodeError',
       this.#withExecution(
-        withOptionalDuration({ node, error, processId, resultOrigin }, durationMs, splitRunDurationMs),
+        withOptionalDuration(
+          {
+            node,
+            error,
+            processId,
+            resultOrigin,
+            ...(retainedOutputs === undefined ? {} : { outputs: retainedOutputs }),
+            ...(splitOutputs === undefined ? {} : { splitOutputs }),
+          },
+          durationMs,
+          splitRunDurationMs,
+        ),
       ),
     );
     this.#emitTraceEvent(`Node ${node.title} (${node.id}-${processId}) errored: ${error.stack}`);
@@ -2668,6 +2702,29 @@ export class GraphProcessor {
       'partialOutput',
       this.#withExecution({ node, outputs, index, processId, resultOrigin: 'executed' as const }),
     );
+  }
+
+  #setFailureOutputs(processId: ProcessId, index: number, outputs: Outputs): void {
+    let outputsByIndex = this.#failureOutputsByProcessId.get(processId);
+    if (!outputsByIndex) {
+      outputsByIndex = new Map();
+      this.#failureOutputsByProcessId.set(processId, outputsByIndex);
+    }
+    outputsByIndex.set(index, outputs);
+  }
+
+  #takeFailureOutputs(processId: ProcessId, index: number): Outputs | undefined {
+    const outputsByIndex = this.#failureOutputsByProcessId.get(processId);
+    const outputs = outputsByIndex?.get(index);
+    outputsByIndex?.delete(index);
+    if (outputsByIndex?.size === 0) {
+      this.#failureOutputsByProcessId.delete(processId);
+    }
+    return outputs;
+  }
+
+  #discardFailureOutputs(processId: ProcessId, index: number): void {
+    this.#takeFailureOutputs(processId, index);
   }
 
   #getErrorExclusionReason(node: ChartNode, error: Error, processId: ProcessId): string | undefined {
@@ -2846,6 +2903,7 @@ export class GraphProcessor {
       if (nodeAbortController.signal.aborted) {
         if (isSuccessfulNonRaceGraphAbortReason(abortReason)) {
           this.#successfulAbortTerminalProcessIds.add(processId);
+          this.#discardFailureOutputs(processId, index);
           return results;
         } else {
           throw createGraphAbortError(abortReason, 'Aborted');
@@ -2854,6 +2912,7 @@ export class GraphProcessor {
 
       this.#finalizeToolCallContinuation(processId, index, results);
       continuationFinalized = true;
+      this.#discardFailureOutputs(processId, index);
       return results;
     } finally {
       if (!continuationFinalized) {
@@ -2902,6 +2961,7 @@ export class GraphProcessor {
         partialOutput?.(node, partialOutputs, index);
         this.#emitGraphPartialOutputIfNeeded(node, partialOutputs);
       },
+      setFailureOutputs: (outputs) => this.#setFailureOutputs(processId, index, outputs),
       processId,
       requestUserInput: async (inputStrings, renderingType) =>
         this.#requestUserInput(node, inputStrings, inputValues, renderingType, processId, nodeAbortController.signal),

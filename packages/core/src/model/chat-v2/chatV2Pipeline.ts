@@ -6,6 +6,7 @@ import { chatMessagesToModelMessages } from './messageConverter.js';
 import type {
   ChatV2ProviderAttempt,
   ChatV2PipelineResult,
+  ChatV2ResponseEvidence,
   RunChatV2PipelineOptions,
   StreamChatV2Result,
   StreamChatV2Options,
@@ -117,6 +118,32 @@ async function runChatV2WithRetry(
     const callId = createObservedChatV2CallId(options);
     const callStartedAt = Date.now();
     let callWasObserved = false;
+    // AI SDK accessors such as usage and reasoning may settle after a request
+    // has otherwise failed. Their diagnostic callbacks belong only to this
+    // physical request: never let a retired retry/fallback candidate overwrite
+    // evidence collected by the current one.
+    let acceptsResponseEvidence = true;
+    const retireResponseEvidence = () => {
+      acceptsResponseEvidence = false;
+    };
+    let latestResponseEvidence: ChatV2ResponseEvidence | undefined;
+    const reportResponseEvidence = (response: ChatV2ResponseEvidence) => {
+      if (!acceptsResponseEvidence) {
+        return;
+      }
+      latestResponseEvidence = response;
+      try {
+        chatOptions.onResponseReceived?.(response);
+      } catch {
+        // Diagnostic evidence must not alter a retry/fallback decision.
+      }
+    };
+    const publishAndRetireResponseEvidence = () => {
+      if (latestResponseEvidence != null) {
+        reportResponseEvidence(latestResponseEvidence);
+      }
+      retireResponseEvidence();
+    };
     const attemptController = new AbortController();
     const abortAttemptFromCaller = () => attemptController.abort(signal.reason);
     if (signal.aborted) {
@@ -132,12 +159,14 @@ async function runChatV2WithRetry(
         streamInactivityTimeoutMs: options.streamInactivityTimeoutMs,
         onStreamActivity: options.onStreamActivity,
         onTimeout: (error) => attemptController.abort(error),
+        onResponseReceived: reportResponseEvidence,
       };
       const result =
         transportMode === 'generate'
           ? await generateChatV2(attemptChatOptions)
           : await streamChatV2(attemptChatOptions);
       await options.responseBodyCapture?.flush();
+      publishAndRetireResponseEvidence();
       const statusCode = result.requestStatus ?? 200;
       notifyChatV2CallFinished(options, {
         callId,
@@ -176,6 +205,7 @@ async function runChatV2WithRetry(
       await options.responseBodyCapture?.flush({
         waitForPending: !signal.aborted && !isChatV2ProviderTimeoutError(error),
       });
+      publishAndRetireResponseEvidence();
       if (!callWasObserved) {
         notifyChatV2CallFinished(options, {
           callId,
@@ -212,6 +242,7 @@ async function runChatV2WithRetry(
       await prepareProviderRetry();
       await waitForLLMChatV2RetryCooldown(retryPlan.cooldownMs, signal);
     } finally {
+      retireResponseEvidence();
       signal.removeEventListener('abort', abortAttemptFromCaller);
     }
   }
@@ -245,6 +276,37 @@ export async function runChatV2PipelineExecution(options: RunChatV2PipelineOptio
     tools,
   });
   const shouldStreamResponse = plan.transportMode === 'stream';
+  const emitFailureCheckpoint = (partial: ChatV2ResponseEvidence) => {
+    if (options.onFailureCheckpoint == null) {
+      return;
+    }
+
+    try {
+      options.onFailureCheckpoint(
+        createChatV2CommonOutputs({
+          requestMessages,
+          response: partial.text,
+          structuredOutput: undefined,
+          functionCalls: partial.functionCalls,
+          usage: normalizeChatV2Usage(partial.usage, options),
+          reasoning: partial.reasoning,
+          requestBodies: options.requestBodies,
+          responseBodies: options.responseBodies,
+          outputUsage: plan.output.outputUsage,
+          outputReasoning: plan.output.outputReasoning,
+          outputRequestBody: plan.output.outputRequestBody,
+          outputResponseBody: plan.output.outputResponseBody,
+          includeFunctionCalls: plan.output.includeFunctionCalls,
+          functionCallMode: plan.output.functionCallMode,
+          // An incomplete structured reply is still useful diagnostic text,
+          // not a schema-valid graph result.
+          responseFormat: undefined,
+        }),
+      );
+    } catch {
+      // Diagnostic capture must not replace the original provider failure.
+    }
+  };
 
   let chatResponse: ChatV2WithRetryResult;
   try {
@@ -255,9 +317,12 @@ export async function runChatV2PipelineExecution(options: RunChatV2PipelineOptio
         abortSignal: options.context.signal,
         executeStream: options.executeStream,
         executeGenerate: options.executeGenerate,
+        onRequestStarted: () => emitFailureCheckpoint({ text: '', functionCalls: [], reasoning: '' }),
+        onResponseReceived: emitFailureCheckpoint,
         onPartialOutput: !shouldStreamResponse
           ? undefined
-          : ({ text, functionCalls }) => {
+          : ({ text, functionCalls, reasoning }) => {
+              emitFailureCheckpoint({ text, functionCalls, reasoning });
               options.context.onPartialOutputs?.(
                 createChatV2CommonOutputs({
                   requestMessages,
@@ -265,11 +330,11 @@ export async function runChatV2PipelineExecution(options: RunChatV2PipelineOptio
                   structuredOutput: undefined,
                   functionCalls,
                   usage: undefined,
-                  reasoning: '',
+                  reasoning,
                   requestBodies: undefined,
                   responseBodies: undefined,
                   outputUsage: false,
-                  outputReasoning: false,
+                  outputReasoning: plan.output.outputReasoning,
                   outputRequestBody: false,
                   outputResponseBody: false,
                   includeFunctionCalls: plan.output.includeFunctionCalls,

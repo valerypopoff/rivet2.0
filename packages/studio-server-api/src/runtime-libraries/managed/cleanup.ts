@@ -1,4 +1,4 @@
-import { Pool } from 'pg';
+import { Pool, type PoolClient } from 'pg';
 
 import type { JobStatus } from '../../../../studio-server-shared/runtime-library-types.js';
 import { getManagedRuntimeLibrariesConfig, type ManagedRuntimeLibrariesConfig } from '../config.js';
@@ -8,6 +8,8 @@ import {
   type RuntimeLibrariesBlobObject,
 } from './blob-store.js';
 import {
+  acquireManagedRuntimeLibrariesReleaseMutationLock,
+  configureManagedRuntimeLibrariesTransactionTimeout,
   ACTIVE_JOB_STATUS_CLAUSE,
   ensureManagedRuntimeLibrariesSchema,
   getPoolConfig,
@@ -108,6 +110,8 @@ export type ManagedRuntimeLibrariesAuditSnapshot = {
 
 export type ManagedRuntimeLibrariesPruneDriver = {
   audit: () => Promise<ManagedRuntimeLibrariesAuditSnapshot>;
+  /** Test-only seam for proving that an audit plan is rechecked before deletion. */
+  revalidateBeforeApply?: (before: ManagedRuntimeLibrariesAuditSnapshot) => Promise<ManagedRuntimeLibrariesAuditSnapshot>;
   deleteJobs: (jobIds: string[]) => Promise<number>;
   deleteReleases: (releaseIds: string[]) => Promise<number>;
   deleteObjects: (keys: string[]) => Promise<number>;
@@ -302,7 +306,7 @@ function buildManagedRuntimeLibrariesAuditSnapshotFromState(
   };
 }
 
-async function queryCleanupState(pool: Pool): Promise<CleanupQueryState> {
+async function queryCleanupState(pool: Pool | PoolClient): Promise<CleanupQueryState> {
   const [activation, releases, jobs] = await Promise.all([
     queryOne<RuntimeLibraryActivationRow>(
       pool,
@@ -359,6 +363,144 @@ export async function auditManagedRuntimeLibrariesState(
   }
 }
 
+type ManagedRuntimeLibraryPruneApplication = {
+  deletedJobCount: number;
+  deletedReleaseCount: number;
+  deletedObjectCount: number;
+};
+
+function intersectCandidateIds(candidates: string[], currentCandidates: string[]): string[] {
+  const currentCandidateSet = new Set(currentCandidates);
+  return candidates.filter((candidate) => currentCandidateSet.has(candidate));
+}
+
+async function applyManagedRuntimeLibrariesPrune(
+  config: ManagedRuntimeLibrariesConfig,
+  before: ManagedRuntimeLibrariesAuditSnapshot,
+  now?: Date,
+): Promise<ManagedRuntimeLibraryPruneApplication> {
+  const pool = new Pool(getPoolConfig(config));
+  let client: PoolClient | null = null;
+  let releaseError: Error | undefined;
+  let committed = false;
+  let deletedJobCount = 0;
+  let deletedReleaseCount = 0;
+  let objectKeysToDelete: string[] = [];
+
+  try {
+    try {
+      await ensureManagedRuntimeLibrariesSchema(pool);
+      // Listing object storage can be slow. It is read-only and immutable
+      // release keys are unique, so capture this part of the revalidation
+      // before taking the PostgreSQL mutation lock.
+      const currentObjects = await listRuntimeLibrariesBlobObjects(config);
+      client = await pool.connect();
+      await client.query('BEGIN');
+      await configureManagedRuntimeLibrariesTransactionTimeout(client);
+      await acquireManagedRuntimeLibrariesReleaseMutationLock(client);
+
+      // A prune plan is advisory. Re-read database state while activation is
+      // excluded so a release or uploaded key that became referenced since the
+      // audit cannot be deleted from a stale candidate list.
+      const currentState = await queryCleanupState(client);
+      currentState.objects = currentObjects;
+      const current = buildManagedRuntimeLibrariesAuditSnapshotFromState(currentState, now);
+      const jobIds = intersectCandidateIds(
+        before.prunePlan.pruneCandidateJobIds,
+        current.prunePlan.pruneCandidateJobIds,
+      );
+      const releaseIds = intersectCandidateIds(
+        before.prunePlan.pruneCandidateReleaseIds,
+        current.prunePlan.pruneCandidateReleaseIds,
+      );
+      const orphanedArtifactKeys = intersectCandidateIds(
+        before.prunePlan.pruneCandidateOrphanedArtifactKeys,
+        current.prunePlan.pruneCandidateOrphanedArtifactKeys,
+      );
+
+      if (jobIds.length > 0) {
+        const deletedJobs = await client.query<{ job_id: string }>(
+          `
+            DELETE FROM runtime_library_jobs
+            WHERE job_id = ANY($1::text[])
+              AND status NOT IN ${ACTIVE_JOB_STATUS_CLAUSE}
+            RETURNING job_id
+          `,
+          [jobIds],
+        );
+        deletedJobCount = deletedJobs.rowCount ?? deletedJobs.rows.length;
+      }
+
+      let deletedReleaseArtifactKeys: string[] = [];
+      if (releaseIds.length > 0) {
+        const deletedReleases = await client.query<{ artifact_blob_key: string }>(
+          `
+            DELETE FROM runtime_library_releases AS release
+            WHERE release.release_id = ANY($1::text[])
+              AND NOT EXISTS (
+                SELECT 1
+                FROM runtime_library_activation AS activation
+                WHERE activation.active_release_id = release.release_id
+              )
+              AND NOT EXISTS (
+                SELECT 1
+                FROM runtime_library_jobs AS job
+                WHERE job.release_id = release.release_id
+                  AND job.status IN ${ACTIVE_JOB_STATUS_CLAUSE}
+              )
+            RETURNING artifact_blob_key
+          `,
+          [releaseIds],
+        );
+        deletedReleaseCount = deletedReleases.rowCount ?? deletedReleases.rows.length;
+        deletedReleaseArtifactKeys = deletedReleases.rows.map((row) => row.artifact_blob_key);
+      }
+
+      objectKeysToDelete = Array.from(new Set([
+        ...deletedReleaseArtifactKeys,
+        ...orphanedArtifactKeys,
+      ]));
+      await client.query('COMMIT');
+      committed = true;
+    } catch (error) {
+      releaseError = error instanceof Error ? error : new Error(String(error));
+      if (client && !committed) {
+        await client.query('ROLLBACK').catch(() => {});
+      }
+      throw releaseError;
+    } finally {
+      client?.release(releaseError);
+    }
+
+    if (objectKeysToDelete.length === 0) {
+      return { deletedJobCount, deletedReleaseCount, deletedObjectCount: 0 };
+    }
+
+    // Object storage has no shared transaction with PostgreSQL. Recheck at the
+    // final boundary and retain anything that acquired a release reference.
+    const stillUnreferenced = await queryRows<{ key: string }>(
+      pool,
+      `
+        SELECT candidate.key
+        FROM unnest($1::text[]) AS candidate(key)
+        WHERE NOT EXISTS (
+          SELECT 1
+          FROM runtime_library_releases AS release
+          WHERE release.artifact_blob_key = candidate.key
+        )
+      `,
+      [objectKeysToDelete],
+    );
+    const deletedObjectCount = await deleteRuntimeLibrariesBlobObjects(
+      config,
+      stillUnreferenced.map((entry) => entry.key),
+    );
+    return { deletedJobCount, deletedReleaseCount, deletedObjectCount };
+  } finally {
+    await pool.end();
+  }
+}
+
 export async function pruneManagedRuntimeLibrariesState(options: {
   apply?: boolean;
   now?: Date;
@@ -387,24 +529,34 @@ export async function pruneManagedRuntimeLibrariesState(options: {
     };
   }
 
-  const releaseIdsToDelete = before.prunePlan.pruneCandidateReleaseIds;
-  const jobIdsToDelete = before.prunePlan.pruneCandidateJobIds;
-  const objectKeysToDelete = Array.from(new Set([
-    ...before.releases
-      .filter((release) => release.pruneCandidate)
-      .map((release) => release.artifactBlobKey),
-    ...before.prunePlan.pruneCandidateOrphanedArtifactKeys,
-  ]));
-
-  const deletedJobCount = driver
-    ? await driver.deleteJobs(jobIdsToDelete)
-    : await deleteManagedRuntimeLibraryJobs(config!, jobIdsToDelete);
-  const deletedReleaseCount = driver
-    ? await driver.deleteReleases(releaseIdsToDelete)
-    : await deleteManagedRuntimeLibraryReleases(config!, releaseIdsToDelete);
-  const deletedObjectCount = driver
-    ? await driver.deleteObjects(objectKeysToDelete)
-    : await deleteRuntimeLibrariesBlobObjects(config!, objectKeysToDelete);
+  const applied = driver
+    ? await (async () => {
+        const current = await driver.revalidateBeforeApply?.(before) ?? before;
+        const jobIds = intersectCandidateIds(
+          before.prunePlan.pruneCandidateJobIds,
+          current.prunePlan.pruneCandidateJobIds,
+        );
+        const releaseIds = intersectCandidateIds(
+          before.prunePlan.pruneCandidateReleaseIds,
+          current.prunePlan.pruneCandidateReleaseIds,
+        );
+        const orphanedArtifactKeys = intersectCandidateIds(
+          before.prunePlan.pruneCandidateOrphanedArtifactKeys,
+          current.prunePlan.pruneCandidateOrphanedArtifactKeys,
+        );
+        const releaseArtifacts = current.releases
+          .filter((release) => releaseIds.includes(release.releaseId))
+          .map((release) => release.artifactBlobKey);
+        return {
+          deletedJobCount: await driver.deleteJobs(jobIds),
+          deletedReleaseCount: await driver.deleteReleases(releaseIds),
+          deletedObjectCount: await driver.deleteObjects(Array.from(new Set([
+            ...releaseArtifacts,
+            ...orphanedArtifactKeys,
+          ]))),
+        };
+      })()
+    : await applyManagedRuntimeLibrariesPrune(config!, before, options.now);
   const after = driver
     ? await driver.audit()
     : await auditManagedRuntimeLibrariesState({ now: options.now, config: config! });
@@ -420,9 +572,9 @@ export async function pruneManagedRuntimeLibrariesState(options: {
 
   return {
     before,
-    deletedReleaseCount,
-    deletedJobCount,
-    deletedObjectCount,
+    deletedReleaseCount: applied.deletedReleaseCount,
+    deletedJobCount: applied.deletedJobCount,
+    deletedObjectCount: applied.deletedObjectCount,
     after,
   };
 }
@@ -436,55 +588,3 @@ export const managedRuntimeLibrariesCleanupPolicy = {
 };
 
 export { buildManagedRuntimeLibrariesAuditSnapshotFromState };
-
-async function deleteManagedRuntimeLibraryJobs(
-  config: ManagedRuntimeLibrariesConfig,
-  jobIds: string[],
-): Promise<number> {
-  if (jobIds.length === 0) {
-    return 0;
-  }
-
-  const pool = new Pool(getPoolConfig(config));
-
-  try {
-    await ensureManagedRuntimeLibrariesSchema(pool);
-    const deletedJobs = await pool.query<{ job_id: string }>(
-      `
-        DELETE FROM runtime_library_jobs
-        WHERE job_id = ANY($1::text[])
-        RETURNING job_id
-      `,
-      [jobIds],
-    );
-    return deletedJobs.rowCount ?? deletedJobs.rows.length;
-  } finally {
-    await pool.end();
-  }
-}
-
-async function deleteManagedRuntimeLibraryReleases(
-  config: ManagedRuntimeLibrariesConfig,
-  releaseIds: string[],
-): Promise<number> {
-  if (releaseIds.length === 0) {
-    return 0;
-  }
-
-  const pool = new Pool(getPoolConfig(config));
-
-  try {
-    await ensureManagedRuntimeLibrariesSchema(pool);
-    const deletedReleases = await pool.query<{ release_id: string }>(
-      `
-        DELETE FROM runtime_library_releases
-        WHERE release_id = ANY($1::text[])
-        RETURNING release_id
-      `,
-      [releaseIds],
-    );
-    return deletedReleases.rowCount ?? deletedReleases.rows.length;
-  } finally {
-    await pool.end();
-  }
-}

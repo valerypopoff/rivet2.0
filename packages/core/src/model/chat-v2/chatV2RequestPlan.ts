@@ -22,7 +22,15 @@ export type ChatV2RequestPlan = {
     repeatTimes: number;
     cooldownMs: number;
   };
-  request: Omit<StreamChatV2Options, 'abortSignal' | 'executeStream' | 'executeGenerate' | 'onPartialOutput'>;
+  request: Omit<
+    StreamChatV2Options,
+    | 'abortSignal'
+    | 'executeStream'
+    | 'executeGenerate'
+    | 'onPartialOutput'
+    | 'onResponseReceived'
+    | 'onRequestStarted'
+  >;
   output: Pick<
     RunChatV2PipelineOptions,
     | 'outputUsage'

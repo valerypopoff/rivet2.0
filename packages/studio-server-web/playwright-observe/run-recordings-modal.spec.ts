@@ -22,6 +22,13 @@ function getReplayGraphId(recordingId: string): string {
 }
 
 function createSerializedRecording(recordingId: string): string {
+  if (recordingId === 'recording-b-inspector') {
+    return createResponseInspectorRecording(recordingId);
+  }
+  if (recordingId === 'recording-a-1') {
+    return createFailedLlmOutputRecording(recordingId);
+  }
+
   const timestamp = Date.now();
 
   return JSON.stringify({
@@ -53,7 +60,202 @@ function createSerializedRecording(recordingId: string): string {
   });
 }
 
+function createFailedLlmOutputRecording(recordingId: string): string {
+  const startedAt = Date.UTC(2026, 3, 8, 9, 45, 0);
+  const finishedAt = startedAt + 15_000;
+  const graphId = getReplayGraphId(recordingId);
+  const execution = {
+    graphId,
+    graphRunId: `${recordingId}-graph-run`,
+    rootRunId: `${recordingId}-root-run`,
+  };
+  const nodeId = 'replay-llm';
+  const processId = 'replay-llm-process';
+
+  return JSON.stringify({
+    version: 1,
+    recording: {
+      recordingId,
+      startTs: startedAt,
+      finishTs: finishedAt,
+      events: [
+        {
+          type: 'start',
+          data: {
+            projectId: getReplayProjectId(recordingId),
+            inputs: {},
+            contextValues: {},
+            startGraph: graphId,
+            execution,
+          },
+          ts: startedAt,
+        },
+        { type: 'graphStart', data: { graphId, inputs: {}, execution }, ts: startedAt },
+        { type: 'nodeStart', data: { nodeId, inputs: {}, processId, execution }, ts: startedAt },
+        {
+          type: 'nodeError',
+          data: {
+            nodeId,
+            error: 'AbortError: Aborted',
+            outputs: {
+              requestBody: { type: 'object', value: { requestId: 'preserved-failure-request' } },
+              llmAttempts: {
+                type: 'object[]',
+                value: [{ kind: 'request', status: 'aborted', requestId: 'preserved-failure-attempt' }],
+              },
+            },
+            processId,
+            durationMs: 15_000,
+            execution,
+          },
+          ts: finishedAt,
+        },
+        { type: 'graphAbort', data: { graphId, error: 'AbortError: Aborted', successful: false, execution }, ts: finishedAt },
+        { type: 'done', data: { results: {} }, ts: finishedAt },
+      ],
+    },
+    assets: {},
+    strings: {},
+  });
+}
+
+function createResponseInspectorRecording(recordingId: string): string {
+  const startedAt = Date.UTC(2026, 3, 8, 11, 0, 0);
+  const finishedAt = startedAt + 95_000;
+  const graphId = getReplayGraphId(recordingId);
+  const execution = {
+    graphId,
+    graphRunId: `${recordingId}-graph-run`,
+    rootRunId: `${recordingId}-root-run`,
+  };
+  const nodeId = 'replay-llm';
+  const processId = 'replay-llm-process';
+
+  return JSON.stringify({
+    version: 1,
+    recording: {
+      recordingId,
+      startTs: startedAt,
+      finishTs: finishedAt,
+      events: [
+        {
+          type: 'start',
+          data: {
+            projectId: getReplayProjectId(recordingId),
+            inputs: {},
+            contextValues: {},
+            startGraph: graphId,
+            execution,
+          },
+          ts: startedAt,
+        },
+        { type: 'graphStart', data: { graphId, inputs: {}, execution }, ts: startedAt },
+        {
+          type: 'nodeStart',
+          data: { nodeId, inputs: {}, processId, execution },
+          ts: startedAt,
+        },
+        {
+          type: 'llmCallFinished',
+          data: {
+            callId: 'fallback-one',
+            attemptIndex: 0,
+            profileIndex: 0,
+            profileName: 'First fallback',
+            nodeId,
+            processId,
+            provider: 'openai',
+            model: 'gpt-5',
+            outcome: 'provider-failure',
+            pricing: { status: 'unknown' },
+            startedAt,
+            durationMs: 40_000,
+            execution,
+          },
+          ts: startedAt + 40_000,
+        },
+        {
+          type: 'llmCallFinished',
+          data: {
+            callId: 'fallback-two',
+            attemptIndex: 1,
+            profileIndex: 1,
+            profileName: 'Second fallback',
+            nodeId,
+            processId,
+            provider: 'openai',
+            model: 'gpt-5',
+            outcome: 'provider-failure',
+            pricing: { status: 'unknown' },
+            startedAt: startedAt + 40_000,
+            durationMs: 40_000,
+            execution,
+          },
+          ts: startedAt + 80_000,
+        },
+        {
+          type: 'llmCallFinished',
+          data: {
+            callId: 'successful-response',
+            attemptIndex: 2,
+            profileIndex: 2,
+            profileName: 'Successful fallback',
+            nodeId,
+            processId,
+            provider: 'openai',
+            model: 'gpt-5',
+            outcome: 'success',
+            pricing: { status: 'unknown' },
+            startedAt: startedAt + 80_000,
+            durationMs: 15_000,
+            execution,
+          },
+          ts: finishedAt,
+        },
+        {
+          type: 'nodeFinish',
+          data: {
+            nodeId,
+            outputs: { response: { type: 'string', value: 'Recorded response' } },
+            processId,
+            durationMs: 95_000,
+            execution,
+          },
+          ts: finishedAt,
+        },
+        { type: 'graphFinish', data: { graphId, outputs: {}, execution }, ts: finishedAt },
+        { type: 'done', data: { results: {} }, ts: finishedAt },
+      ],
+    },
+    assets: {},
+    strings: {},
+  });
+}
+
 function createReplayProject(recordingId: string): string {
+  const node =
+    recordingId === 'recording-b-inspector' || recordingId === 'recording-a-1'
+      ? [
+          '        \'[replay-llm]:llmChatV2 "Recorded response"\':',
+          '          visualData: 520/300/340/null//',
+          '          data:',
+          '            configurationMode: inline',
+          '            provider: openai',
+          '            model: gpt-5',
+          '            responseFormat: text',
+          '            useToolCalling: false',
+          '            autoContinueToolCalls: false',
+          '            outputLLMAttempts: true',
+          '            outputRequestBody: true',
+          '            outputResponseBody: true',
+        ]
+      : [
+          '        \'[replay-node-1]:text "Replay Node"\':',
+          '          visualData: 520/300/260/null//',
+          '          data:',
+          '            text: replay',
+        ];
+
   return [
     'version: 4',
     'data:',
@@ -69,10 +271,7 @@ function createReplayProject(recordingId: string): string {
     '        name: "Main Graph"',
     '        description: ""',
     '      nodes:',
-    '        \'[replay-node-1]:text "Replay Node"\':',
-    '          visualData: 520/300/260/null//',
-    '          data:',
-    '            text: replay',
+    ...node,
     '  plugins: []',
     '  references: []',
     '',
@@ -98,21 +297,24 @@ async function openAdditionalProjectTab(page: Page, path: string) {
     });
   });
 
-  await page.locator('iframe.dashboard-editor-frame').evaluate((frame, command) => {
-    const editorWindow = (frame as HTMLIFrameElement).contentWindow;
-    if (!editorWindow) {
-      throw new Error('Hosted editor frame is unavailable.');
-    }
+  await page.locator('iframe.dashboard-editor-frame').evaluate(
+    (frame, command) => {
+      const editorWindow = (frame as HTMLIFrameElement).contentWindow;
+      if (!editorWindow) {
+        throw new Error('Hosted editor frame is unavailable.');
+      }
 
-    editorWindow.postMessage(command, window.location.origin);
-  }, {
-    type: 'open-project',
-    path,
-    replaceCurrent: false,
-  });
+      editorWindow.postMessage(command, window.location.origin);
+    },
+    {
+      type: 'open-project',
+      path,
+      replaceCurrent: false,
+    },
+  );
 }
 
-function createRunRecordingsFixture() {
+function createRunRecordingsFixture(includeResponseInspectorRun = false) {
   const workflows: WorkflowRecordingWorkflowSummary[] = [
     {
       workflowId: 'workflow-a',
@@ -158,16 +360,57 @@ function createRunRecordingsFixture() {
     },
   ];
   const runsByWorkflow = new Map<string, RecordingRun[]>([
-    ['workflow-a', [
-      {
-        id: 'recording-a-1',
-        workflowId: 'workflow-a',
-        createdAt: '2026-04-08T09:45:00.000Z',
-        runKind: 'published',
-        status: 'failed',
-        durationMs: 1400,
-        endpointNameAtExecution: 'published-flow',
-        errorMessage: 'Boom',
+    [
+      'workflow-a',
+      [
+        {
+          id: 'recording-a-1',
+          workflowId: 'workflow-a',
+          createdAt: '2026-04-08T09:45:00.000Z',
+          runKind: 'published',
+          status: 'failed',
+          durationMs: 1400,
+          endpointNameAtExecution: 'published-flow',
+          errorMessage: 'Boom',
+          hasReplayDataset: false,
+          recordingCompressedBytes: 10,
+          recordingUncompressedBytes: 20,
+          projectCompressedBytes: 10,
+          projectUncompressedBytes: 20,
+          datasetCompressedBytes: 0,
+          datasetUncompressedBytes: 0,
+          input: { foo: 'bar' },
+        },
+        {
+          id: 'recording-a-2',
+          workflowId: 'workflow-a',
+          createdAt: '2026-04-08T09:40:00.000Z',
+          runKind: 'published',
+          status: 'succeeded',
+          durationMs: 1200,
+          endpointNameAtExecution: 'published-flow',
+          hasReplayDataset: false,
+          recordingCompressedBytes: 10,
+          recordingUncompressedBytes: 20,
+          projectCompressedBytes: 10,
+          projectUncompressedBytes: 20,
+          datasetCompressedBytes: 0,
+          datasetUncompressedBytes: 0,
+          input: { foo: 'baz' },
+        },
+      ],
+    ],
+    [
+      'workflow-b',
+      Array.from({ length: 12 }, (_, index) => ({
+        id: `recording-b-${index + 1}`,
+        workflowId: 'workflow-b',
+        createdAt: new Date(Date.UTC(2026, 3, 8, 11, 30 - index, 0)).toISOString(),
+        runKind: index % 3 === 0 ? 'latest' : 'published',
+        status: index === 1 || index === 7 ? 'failed' : index === 4 ? 'suspicious' : 'succeeded',
+        durationMs: 900 + index * 10,
+        endpointNameAtExecution: 'latest-flow',
+        errorMessage: index === 1 || index === 7 ? 'Failure' : undefined,
         hasReplayDataset: false,
         recordingCompressedBytes: 10,
         recordingUncompressedBytes: 20,
@@ -175,35 +418,24 @@ function createRunRecordingsFixture() {
         projectUncompressedBytes: 20,
         datasetCompressedBytes: 0,
         datasetUncompressedBytes: 0,
-        input: { foo: 'bar' },
-      },
-      {
-        id: 'recording-a-2',
-        workflowId: 'workflow-a',
-        createdAt: '2026-04-08T09:40:00.000Z',
-        runKind: 'published',
-        status: 'succeeded',
-        durationMs: 1200,
-        endpointNameAtExecution: 'published-flow',
-        hasReplayDataset: false,
-        recordingCompressedBytes: 10,
-        recordingUncompressedBytes: 20,
-        projectCompressedBytes: 10,
-        projectUncompressedBytes: 20,
-        datasetCompressedBytes: 0,
-        datasetUncompressedBytes: 0,
-        input: { foo: 'baz' },
-      },
-    ]],
-    ['workflow-b', Array.from({ length: 12 }, (_, index) => ({
-      id: `recording-b-${index + 1}`,
+        input: {
+          foo: index === 2 || index === 5 ? 'bar' : 'baz',
+          score: index,
+        },
+      })),
+    ],
+  ]);
+
+  if (includeResponseInspectorRun) {
+    const latestRuns = runsByWorkflow.get('workflow-b')!;
+    latestRuns.push({
+      id: 'recording-b-inspector',
       workflowId: 'workflow-b',
-      createdAt: new Date(Date.UTC(2026, 3, 8, 11, 30 - index, 0)).toISOString(),
-      runKind: index % 3 === 0 ? 'latest' : 'published',
-      status: index === 1 || index === 7 ? 'failed' : index === 4 ? 'suspicious' : 'succeeded',
-      durationMs: 900 + (index * 10),
+      createdAt: '2026-04-08T10:00:00.000Z',
+      runKind: 'latest',
+      status: 'succeeded',
+      durationMs: 95_000,
       endpointNameAtExecution: 'latest-flow',
-      errorMessage: index === 1 || index === 7 ? 'Failure' : undefined,
       hasReplayDataset: false,
       recordingCompressedBytes: 10,
       recordingUncompressedBytes: 20,
@@ -211,12 +443,11 @@ function createRunRecordingsFixture() {
       projectUncompressedBytes: 20,
       datasetCompressedBytes: 0,
       datasetUncompressedBytes: 0,
-      input: {
-        foo: index === 2 || index === 5 ? 'bar' : 'baz',
-        score: index,
-      },
-    }))],
-  ]);
+      input: { foo: 'inspector' },
+    });
+    const latestWorkflow = workflows.find((workflow) => workflow.workflowId === 'workflow-b')!;
+    latestWorkflow.totalRuns = latestRuns.length;
+  }
 
   return { workflows, runsByWorkflow };
 }
@@ -244,9 +475,9 @@ function delay(ms: number): Promise<void> {
 
 async function installRunRecordingRoutes(
   page: Page,
-  options: { latestFlowRunCount?: number; cursorDelayMs?: number } = {},
+  options: { includeResponseInspectorRun?: boolean; latestFlowRunCount?: number; cursorDelayMs?: number } = {},
 ) {
-  const { workflows, runsByWorkflow } = createRunRecordingsFixture();
+  const { workflows, runsByWorkflow } = createRunRecordingsFixture(options.includeResponseInspectorRun);
   const recordingFetches: string[] = [];
   const replayProjectFetches: string[] = [];
   const runFetches: string[] = [];
@@ -259,7 +490,7 @@ async function installRunRecordingRoutes(
         createdAt: new Date(Date.UTC(2026, 3, 8, 11, 30 - index, 0)).toISOString(),
         runKind: index % 3 === 0 ? 'latest' : 'published',
         status: 'succeeded',
-        durationMs: 900 + (index * 10),
+        durationMs: 900 + index * 10,
         endpointNameAtExecution: 'latest-flow',
         hasReplayDataset: false,
         recordingCompressedBytes: 10,
@@ -310,14 +541,13 @@ async function installRunRecordingRoutes(
       const inputCursor = Number(url.searchParams.get('inputCursor') ?? '0');
       const hasInputFilter = url.searchParams.has('inputPath');
       const sourceRuns = runsByWorkflow.get(workflowId) ?? [];
-      const filteredRuns = status === 'failed'
-        ? sourceRuns.filter((run) => run.status === 'failed' || run.status === 'suspicious')
-        : sourceRuns;
+      const filteredRuns =
+        status === 'failed'
+          ? sourceRuns.filter((run) => run.status === 'failed' || run.status === 'suspicious')
+          : sourceRuns;
       const offset = hasInputFilter ? inputCursor : (pageNumber - 1) * pageSize;
       const candidateRuns = filteredRuns.slice(offset, offset + pageSize);
-      const pageRuns = hasInputFilter
-        ? candidateRuns.filter((run) => applyInputFilter(run, url))
-        : candidateRuns;
+      const pageRuns = hasInputFilter ? candidateRuns.filter((run) => applyInputFilter(run, url)) : candidateRuns;
       const nextInputCursor = offset + candidateRuns.length;
       const hasMore = hasInputFilter && nextInputCursor < filteredRuns.length;
 
@@ -423,11 +653,15 @@ async function openLatestFlowRecordings(page: Page, expectedLatestFlowRecordingC
   await expect(modal).toBeVisible();
 
   await modal.locator('.run-recordings-select__control').click();
-  await expect(page.locator('.run-recordings-select__option', { hasText: 'Published Flow' })
-    .locator('.run-recordings-select-option-count')).toHaveText('2 recordings');
+  await expect(
+    page
+      .locator('.run-recordings-select__option', { hasText: 'Published Flow' })
+      .locator('.run-recordings-select-option-count'),
+  ).toHaveText('2 recordings');
   const latestFlowOption = page.locator('.run-recordings-select__option', { hasText: 'Latest Flow' });
-  await expect(latestFlowOption.locator('.run-recordings-select-option-count'))
-    .toHaveText(`${expectedLatestFlowRecordingCount} recordings`);
+  await expect(latestFlowOption.locator('.run-recordings-select-option-count')).toHaveText(
+    `${expectedLatestFlowRecordingCount} recordings`,
+  );
   await latestFlowOption.click();
   await expect(modal.locator('.run-recordings-workflow-name')).toHaveText('Latest Flow');
 
@@ -448,8 +682,9 @@ test.describe('Run recordings modal', () => {
     await expect(runFilter).toHaveClass(/segmented-control/);
     await expect(runFilter.getByRole('button').first()).toHaveCSS('height', '28px');
     await expect(runFilter.getByRole('button').first()).toHaveAttribute('aria-pressed', 'true');
-    await expect(modal.locator('.run-recordings-run').first().locator('.run-recordings-run-endpoint'))
-      .toHaveText('Endpoint at execution: latest-flow');
+    await expect(modal.locator('.run-recordings-run').first().locator('.run-recordings-run-endpoint')).toHaveText(
+      'Endpoint at execution: latest-flow',
+    );
 
     await modal.getByRole('button', { name: /Bad only/ }).click();
     await expect(modal.locator('.run-recordings-run')).toHaveCount(3);
@@ -481,7 +716,10 @@ test.describe('Run recordings modal', () => {
 
     await modal.getByLabel('Input JSON path').fill('$');
     await operatorControl.click();
-    await page.locator('.run-recordings-select__option').filter({ hasText: /^contains$/ }).click();
+    await page
+      .locator('.run-recordings-select__option')
+      .filter({ hasText: /^contains$/ })
+      .click();
     await modal.getByLabel('Value').fill("'bar'");
     await modal.getByRole('button', { name: 'Apply' }).click();
     await expect(modal.locator('.run-recordings-run')).toHaveCount(2);
@@ -501,11 +739,18 @@ test.describe('Run recordings modal', () => {
     await modal.getByRole('button', { name: 'Apply' }).click();
     await expect(modal.locator('.run-recordings-run')).toHaveCount(12);
     await expect(modal.locator('.run-recordings-input-search-status')).toContainText('Search complete');
-    await expect.poll(() => runFetches.filter((requestUrl) => {
-      const request = new URL(requestUrl);
-      return request.searchParams.get('inputPath') === '$.missing'
-        && request.searchParams.get('inputOperator') === '!=';
-    }).length).toBeGreaterThan(1);
+    await expect
+      .poll(
+        () =>
+          runFetches.filter((requestUrl) => {
+            const request = new URL(requestUrl);
+            return (
+              request.searchParams.get('inputPath') === '$.missing' &&
+              request.searchParams.get('inputOperator') === '!='
+            );
+          }).length,
+      )
+      .toBeGreaterThan(1);
     const missingNotEqualsRequest = new URL(runFetches.at(-1)!);
     expect(missingNotEqualsRequest.searchParams.get('inputPath')).toBe('$.missing');
     expect(missingNotEqualsRequest.searchParams.get('inputOperator')).toBe('!=');
@@ -570,7 +815,10 @@ test.describe('Run recordings modal', () => {
     await editorFrame.locator('.more-menu').click();
     const executorMode = editorFrame.getByRole('group', { name: 'Executor mode' });
     await expect(executorMode).toBeVisible();
-    await expect(executorMode.getByRole('button', { name: 'Node', exact: true })).toHaveAttribute('aria-pressed', 'true');
+    await expect(executorMode.getByRole('button', { name: 'Node', exact: true })).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    );
     await expect(modal).toBeHidden();
     await expect(page.getByText('Found: 11')).toBeVisible();
 
@@ -584,6 +832,120 @@ test.describe('Run recordings modal', () => {
     await modal.getByLabel('Close run recordings').click();
     await expect(modal).toBeHidden();
     await expect(page.getByText(/^Found:/)).toHaveCount(0);
+  });
+
+  test('shows recorded LLM response duration instead of accelerated replay time', async ({ page }) => {
+    const { recordingFetches, replayProjectFetches } = await installRunRecordingRoutes(page, {
+      includeResponseInspectorRun: true,
+    });
+    const modal = await openLatestFlowRecordings(page, 13);
+
+    const inspectorRun = modal.locator('.run-recordings-run').filter({
+      has: page.locator('.run-recordings-run-duration', { hasText: '1m 35s' }),
+    });
+    await expect(inspectorRun).toHaveCount(1);
+    await inspectorRun.locator('.run-recordings-run-open-button').click();
+    await expect.poll(() => recordingFetches).toEqual(['recording-b-inspector']);
+    await expect.poll(() => replayProjectFetches).toEqual(['recording-b-inspector']);
+
+    const editorFrame = page.frameLocator('iframe.dashboard-editor-frame');
+    await editorFrame.getByRole('button', { name: 'Play Recording', exact: true }).click();
+    const inspectorButton = editorFrame.locator('.response-inspector-button');
+    await expect(inspectorButton).toBeVisible();
+    await inspectorButton.click();
+
+    await expect(editorFrame.getByText('Response inspector', { exact: true })).toBeVisible();
+    await expect(editorFrame.getByText('95.0 sec', { exact: true })).toBeVisible();
+    await expect(editorFrame.getByText('0.00 sec', { exact: true })).toHaveCount(0);
+    await expect(editorFrame.getByText(/^15\.0 sec/)).toBeVisible();
+
+    await editorFrame.getByRole('button', { name: 'Close modal', exact: true }).click();
+    await editorFrame.getByRole('button', { name: 'Open Run Activity', exact: true }).click();
+    await expect(editorFrame.locator('[aria-label="Run Activity"]')).toContainText('Completed / 1m 35.00s');
+  });
+
+  test('keeps captured LLM failure outputs visible alongside a replayed error', async ({ page }) => {
+    const { recordingFetches, replayProjectFetches } = await installRunRecordingRoutes(page);
+    await page.goto('/', { waitUntil: 'domcontentloaded' });
+    await authenticateIfNeeded(page);
+    await waitForDashboardReady(page);
+
+    await page.getByRole('button', { name: 'Run recordings' }).click();
+    const modal = page.getByTestId('run-recordings-modal');
+    await expect(modal).toBeVisible();
+    await modal.locator('.run-recordings-select__control').click();
+    await page.locator('.run-recordings-select__option', { hasText: 'Published Flow' }).click();
+    await expect(modal.locator('.run-recordings-workflow-name')).toHaveText('Published Flow');
+
+    const failedRun = modal.locator('.run-recordings-run').filter({
+      has: page.locator('.run-recordings-badge.failed', { hasText: 'Failed' }),
+    });
+    await expect(failedRun).toHaveCount(1);
+    await failedRun.locator('.run-recordings-run-open-button').click();
+    await expect.poll(() => recordingFetches).toEqual(['recording-a-1']);
+    await expect.poll(() => replayProjectFetches).toEqual(['recording-a-1']);
+
+    const editorFrame = page.frameLocator('iframe.dashboard-editor-frame');
+    await editorFrame.getByRole('button', { name: 'Play Recording', exact: true }).click();
+    const failedNodeOutput = editorFrame.locator('.node[data-nodeid="replay-llm"] .node-output');
+    await expect(failedNodeOutput).toContainText('AbortError: Aborted');
+    await expect(failedNodeOutput).toContainText('preserved-failure-request');
+    await failedNodeOutput.hover();
+    await failedNodeOutput.locator('.expand-button').click();
+    const fullscreenOutput = editorFrame.getByTestId('fullscreen-output-modal');
+    await expect(fullscreenOutput).toContainText('AbortError: Aborted');
+    await expect(fullscreenOutput).toContainText('preserved-failure-request');
+    await expect(fullscreenOutput).toContainText('preserved-failure-attempt');
+  });
+
+  test('saves the loaded recording artifact after playback instead of a replay timeline', async ({ page }) => {
+    await page.addInitScript(() => {
+      const savedFiles: Array<{ suggestedName: string; content: string }> = [];
+      Object.defineProperty(window, 'showSaveFilePicker', {
+        configurable: true,
+        value: async ({ suggestedName }: { suggestedName: string }) => ({
+          createWritable: async () => ({
+            write: async (content: string) => {
+              savedFiles.push({ suggestedName, content });
+            },
+            close: async () => {},
+          }),
+        }),
+      });
+      (window as typeof window & { __rivetSavedRecordingFiles?: typeof savedFiles }).__rivetSavedRecordingFiles =
+        savedFiles;
+    });
+    await installRunRecordingRoutes(page, { includeResponseInspectorRun: true });
+    const modal = await openLatestFlowRecordings(page, 13);
+    const inspectorRun = modal.locator('.run-recordings-run').filter({
+      has: page.locator('.run-recordings-run-duration', { hasText: '1m 35s' }),
+    });
+    await inspectorRun.locator('.run-recordings-run-open-button').click();
+
+    const editorFrame = page.frameLocator('iframe.dashboard-editor-frame');
+    const editorElement = page.locator('iframe.dashboard-editor-frame');
+    const savedFiles = () =>
+      editorElement.evaluate((frame) => {
+        const editorWindow = (frame as HTMLIFrameElement).contentWindow as
+          | (Window & { __rivetSavedRecordingFiles?: Array<{ content: string }> })
+          | null;
+        return editorWindow?.__rivetSavedRecordingFiles ?? [];
+      });
+
+    await editorFrame.getByRole('button', { name: 'Save Recording', exact: true }).click();
+    await expect.poll(async () => (await savedFiles()).length).toBe(1);
+    const savedBeforePlayback = (await savedFiles())[0]?.content;
+    const firstRecording = JSON.parse(savedBeforePlayback!) as {
+      recording: { startTs: number; finishTs: number; events: Array<{ type: string; data: { durationMs?: number } }> };
+    };
+    expect(firstRecording.recording.finishTs - firstRecording.recording.startTs).toBe(95_000);
+    expect(firstRecording.recording.events.find((event) => event.type === 'nodeFinish')?.data.durationMs).toBe(95_000);
+
+    await editorFrame.getByRole('button', { name: 'Play Recording', exact: true }).click();
+    await expect(editorFrame.locator('.response-inspector-button')).toBeVisible();
+    await editorFrame.getByRole('button', { name: 'Save Recording', exact: true }).click();
+    await expect.poll(async () => (await savedFiles()).length).toBe(2);
+    expect((await savedFiles())[1]?.content).toBe(savedBeforePlayback);
   });
 
   test('stops an active input search when the modal closes', async ({ page }) => {

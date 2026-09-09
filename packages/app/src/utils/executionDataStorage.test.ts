@@ -936,6 +936,24 @@ test('storeNodeDataForHistory preserves split-run item durations as transient me
   assert.deepEqual(stored.splitRunDurationMs, { 0: 8, 1: 12 });
 });
 
+test('storeNodeDataForHistory preserves recorded replay timing separately from local receipt timing', () => {
+  const dataRefs = createDataRefStore();
+  const stored = storeNodeDataForHistory(
+    {
+      finishedAt: 1_000_001,
+      recordedTiming: { startedAt: 50_000, finishedAt: 146_000 },
+      startedAt: 1_000_000,
+      status: { type: 'ok' },
+    },
+    dataRefs,
+    { nodeId: 'node', processId: 'process' },
+  );
+
+  assert.equal(stored.startedAt, 1_000_000);
+  assert.equal(stored.finishedAt, 1_000_001);
+  assert.deepEqual(stored.recordedTiming, { startedAt: 50_000, finishedAt: 146_000 });
+});
+
 test('storeNodeDataForHistory preserves node debug snapshots for later output rendering', () => {
   const dataRefs = createDataRefStore();
 

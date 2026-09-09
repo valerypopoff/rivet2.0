@@ -756,9 +756,80 @@ test('projects a recorded replay duration instead of its near-instant delivery d
 
   const viewModel = buildRunActivityViewModel(journal, () => undefined, { now: 9_999_999 });
   assert.equal(viewModel.durationMs, 18_490);
-  // The started value intentionally remains the local replay receipt time so
-  // the activity list continues to order and label the playback session.
-  assert.equal(viewModel.startedAt, 1_000_000);
+  assert.equal(viewModel.startedAt, 10_000);
+});
+
+test('does not fall back to local replay timestamps for a truncated historical root', () => {
+  const journal = createRunActivityJournal();
+  const selectedRoot = root(newerActiveRootId, 1, 'completed');
+  selectedRoot.startedAt = 1_000_000;
+  selectedRoot.finishedAt = 1_000_001;
+  selectedRoot.graphOutputsReadyAt = 1_000_000;
+  selectedRoot.recordedTiming = {
+    latestAt: 28_490,
+    finishedAt: 28_490,
+  };
+  journal.rootsById[selectedRoot.rootRunId] = selectedRoot;
+  journal.latestCompletedRootRunId = selectedRoot.rootRunId;
+
+  const viewModel = buildRunActivityViewModel(journal, () => undefined, { now: 9_999_999 });
+  assert.equal(viewModel.durationMs, undefined);
+  assert.equal(viewModel.durationUnavailable, true);
+  assert.equal(viewModel.startedAt, undefined);
+  assert.equal(viewModel.outputsReadyAt, undefined);
+});
+
+test('discloses an unavailable duration for a terminally incomplete invocation', () => {
+  const journal = createRunActivityJournal();
+  const selectedRoot = root(newerActiveRootId, 1, 'aborted');
+  const incompleteInvocation = invocation({
+    key: 'incomplete',
+    sequence: 1,
+    graphId: 'main',
+    graphRunId: 'main-run',
+    nodeId: 'text',
+    processId: 'text-process',
+  });
+  incompleteInvocation.status = 'aborted';
+  incompleteInvocation.durationMs = undefined;
+  incompleteInvocation.terminalEventMissing = true;
+  selectedRoot.nodeInvocationsByKey[incompleteInvocation.key] = incompleteInvocation;
+  selectedRoot.nodeInvocationOrder = [incompleteInvocation.key];
+  journal.rootsById[selectedRoot.rootRunId] = selectedRoot;
+  journal.latestCompletedRootRunId = selectedRoot.rootRunId;
+
+  const item = buildRunActivityViewModel(journal, () => ({ nodeTitle: 'Interrupted node' })).items[0]!;
+  assert.equal(item.durationMs, undefined);
+  assert.equal(item.durationUnavailable, true);
+  assert.deepEqual(
+    item.detailRows?.find((row) => row.label === 'Execution record'),
+    {
+      label: 'Execution record',
+      value: 'Terminal event unavailable',
+    },
+  );
+});
+
+test('uses a replayed node start rather than the local playback receipt time', () => {
+  const journal = createRunActivityJournal();
+  const selectedRoot = root(newerActiveRootId, 1, 'completed');
+  const replayedInvocation = invocation({
+    key: 'replayed',
+    sequence: 1,
+    graphId: 'main',
+    graphRunId: 'main-run',
+    nodeId: 'text',
+    processId: 'text-process',
+  });
+  replayedInvocation.startedAt = 1_000_001;
+  replayedInvocation.recordedTiming = { startedAt: 10_200, finishedAt: 28_200 };
+  selectedRoot.nodeInvocationsByKey[replayedInvocation.key] = replayedInvocation;
+  selectedRoot.nodeInvocationOrder = [replayedInvocation.key];
+  journal.rootsById[selectedRoot.rootRunId] = selectedRoot;
+  journal.latestCompletedRootRunId = selectedRoot.rootRunId;
+
+  const item = buildRunActivityViewModel(journal, () => undefined).items[0]!;
+  assert.equal(item.startedAt, 10_200);
 });
 
 function root(rootRunId: RootRunId, sequence: number, status: RunActivityRoot['status']): RunActivityRoot {

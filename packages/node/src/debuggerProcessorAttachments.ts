@@ -48,12 +48,14 @@ export function createDebuggerProcessorAttachments(options: {
       cleanups.push(
         processor.on(
           'nodeError',
-          ({ node, error, processId, execution, resultOrigin, durationMs, splitRunDurationMs }) => {
+          ({ node, error, processId, outputs, splitOutputs, execution, resultOrigin, durationMs, splitRunDurationMs }) => {
             options.broadcast(processor, 'nodeError', {
               node,
               error: typeof error === 'string' ? error : error.toString(),
               processId,
               execution,
+              ...(outputs === undefined ? {} : { outputs }),
+              ...(splitOutputs === undefined ? {} : { splitOutputs }),
               ...(resultOrigin === undefined ? {} : { resultOrigin }),
               ...(durationMs === undefined ? {} : { durationMs }),
               ...(splitRunDurationMs === undefined ? {} : { splitRunDurationMs }),
@@ -132,8 +134,16 @@ export function createDebuggerProcessorAttachments(options: {
         }),
       );
       cleanups.push(
-        processor.on('abort', () => {
-          options.broadcast(processor, 'abort', null);
+        processor.on('abort', (data) => {
+          // The abort payload distinguishes a successful control-flow abort
+          // from an execution failure. Normalize Error exactly as the other
+          // debugger terminals do: JSON would otherwise turn it into `{}`.
+          options.broadcast(processor, 'abort', {
+            successful: data.successful,
+            ...(data.error === undefined
+              ? {}
+              : { error: typeof data.error === 'string' ? data.error : data.error.toString() }),
+          });
         }),
       );
       cleanups.push(

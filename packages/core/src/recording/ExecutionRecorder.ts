@@ -79,13 +79,15 @@ const toRecordedEventMap: {
       ),
       execution,
     ),
-  nodeError: ({ node, error, processId, resultOrigin, durationMs, splitRunDurationMs, execution }) =>
+  nodeError: ({ node, error, processId, outputs, splitOutputs, resultOrigin, durationMs, splitRunDurationMs, execution }) =>
     withExecution(
       withDuration(
         {
           nodeId: node.id,
           error: typeof error === 'string' ? error : error.stack!,
           processId,
+          ...(outputs === undefined ? {} : { outputs }),
+          ...(splitOutputs === undefined ? {} : { splitOutputs }),
           ...(resultOrigin === undefined ? {} : { resultOrigin }),
         },
         durationMs,
@@ -93,7 +95,14 @@ const toRecordedEventMap: {
       ),
       execution,
     ),
-  abort: ({ successful, error }) => ({ successful, error: typeof error === 'string' ? error : error?.stack }),
+  // Older debugger servers sent a null abort payload. Preserve that evidence
+  // instead of letting a malformed legacy transport message abort the whole
+  // recording. An unknown payload is deliberately treated as unsuccessful;
+  // it must never be mistaken for a completed graph run during replay.
+  abort: (data) => {
+    const { successful, error } = data ?? {};
+    return { successful: successful === true, error: typeof error === 'string' ? error : error?.stack };
+  },
   graphAbort: ({ successful, error, graph, execution }) =>
     withExecution(
       {
@@ -229,13 +238,23 @@ export type ExecutionRecorderOptions = {
 export type SocketRecordingOptions = {
   /** Record only the protocol messages belonging to one remote graph run. */
   requestId?: string;
-  /** Stop listening when the owning remote operation finishes or is aborted. */
+  /**
+   * Stop listening when the capture owner is disposed (for example, a socket
+   * disconnect or a run that could not be sent). This is not a graph-abort
+   * signal: graph cancellation keeps the recorder attached until the remote
+   * run emits its final done/error message.
+   */
   signal?: AbortSignal;
 };
 
 function isRecordableProcessEvent(message: string): message is keyof ProcessEvents {
   return message in toRecordedEventMap || isPrefix(message, 'globalSet:') || isPrefix(message, 'userEvent:');
 }
+
+// WebSocket.OPEN/CLOSED are static browser constants. Core is also used by
+// Node transports that can supply a compatible socket without installing that
+// browser global, so compare the standardized ready-state value directly.
+const CLOSED_WEBSOCKET_READY_STATE = 3;
 
 function mapValuesDeep(obj: any, fn: (value: any) => any): any {
   if (Array.isArray(obj)) {
@@ -348,13 +367,22 @@ export class ExecutionRecorder {
       this.recordingId = nanoid() as RecordingId;
 
       let settled = false;
-      const finish = () => {
+      const finish = (emitFinishedRecording: boolean) => {
         if (settled) return;
         settled = true;
         channel.removeEventListener('message', listener);
-        options.signal?.removeEventListener('abort', finish);
+        channel.removeEventListener('close', onClose);
+        options.signal?.removeEventListener('abort', onOwnerDisposed);
+        if (emitFinishedRecording) {
+          emitDetached(this.#emitter, 'finish', {
+            recording: this.getRecording(),
+          });
+        }
         resolve();
       };
+
+      const onClose = () => finish(false);
+      const onOwnerDisposed = () => finish(false);
 
       const listener = (event: MessageEvent) => {
         let payload: { message?: unknown; data?: unknown; requestId?: unknown };
@@ -385,26 +413,42 @@ export class ExecutionRecorder {
 
         this.#events.push(toRecordedEvent(message, data as never) as RecordedEvents);
 
-        if (isRecordingTerminalEvent(message, data as never)) {
-          emitDetached(this.#emitter, 'finish', {
-            recording: this.getRecording(),
-          });
-          finish();
+        if (isSocketRecordingTerminalEvent(message)) {
+          finish(true);
         }
       };
 
       if (options.signal?.aborted) {
-        finish();
+        onOwnerDisposed();
         return;
       }
       channel.addEventListener('message', listener);
-      options.signal?.addEventListener('abort', finish, { once: true });
+      channel.addEventListener('close', onClose, { once: true });
+      options.signal?.addEventListener('abort', onOwnerDisposed, { once: true });
+
+      if (channel.readyState === CLOSED_WEBSOCKET_READY_STATE) {
+        onClose();
+      }
     });
   }
 
   record(processor: GraphProcessor) {
     this.recordingId = nanoid() as RecordingId;
-    processor.onAny((event: keyof ProcessEvents, data: ProcessEvents[keyof ProcessEvents]) => {
+    let settled = false;
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      unsubscribeAny();
+      unsubscribeFinish();
+      emitDetached(this.#emitter, 'finish', {
+        recording: this.getRecording(),
+      });
+    };
+
+    const unsubscribeAny = processor.onAny((event: keyof ProcessEvents, data: ProcessEvents[keyof ProcessEvents]) => {
+      if (settled || event === 'finish') {
+        return;
+      }
       if (this.#includePartialOutputs === false && event === 'partialOutput') {
         return;
       }
@@ -413,20 +457,18 @@ export class ExecutionRecorder {
         return;
       }
 
-      this.#events.push(toRecordedEvent(event, data) as RecordedEvents);
-
-      if (isRecordingTerminalEvent(event, data)) {
-        emitDetached(this.#emitter, 'finish', {
-          recording: this.getRecording(),
-        });
-      }
+      this.#events.push(toRecordedEvent(event, data as never) as RecordedEvents);
     });
+    const unsubscribeFinish = processor.on('finish', finish);
   }
 
   getRecording(): Recording {
     return {
       recordingId: this.recordingId!,
-      events: this.#events,
+      // Callers persist and replay recordings asynchronously. Returning the
+      // live backing array would let a later event mutate an already-finished
+      // recording snapshot.
+      events: [...this.#events],
       startTs: this.#events[0]?.ts ?? 0,
       finishTs: this.#events[this.#events.length - 1]?.ts ?? 0,
     };
@@ -470,10 +512,6 @@ export class ExecutionRecorder {
   }
 }
 
-function isRecordingTerminalEvent(event: keyof ProcessEvents, data: ProcessEvents[keyof ProcessEvents]): boolean {
-  if (event === 'done' || event === 'error') {
-    return true;
-  }
-
-  return event === 'abort' && (data as ProcessEvents['abort']).successful !== true;
+function isSocketRecordingTerminalEvent(event: keyof ProcessEvents): boolean {
+  return event === 'done' || event === 'error';
 }

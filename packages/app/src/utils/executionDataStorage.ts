@@ -48,6 +48,10 @@ export function storeNodeDataForHistory(
     storedData.finishedAt = data.finishedAt;
   }
 
+  if (data.recordedTiming !== undefined) {
+    storedData.recordedTiming = { ...data.recordedTiming };
+  }
+
   if (Object.prototype.hasOwnProperty.call(data, 'durationMs')) {
     storedData.durationMs = data.durationMs;
   }
@@ -400,10 +404,28 @@ function hasNodeRunMetadata(value: NodeRunDataWithRefs): boolean {
   return (
     typeof value.startedAt === 'number' ||
     typeof value.finishedAt === 'number' ||
+    isRecordedNodeTiming(value.recordedTiming) ||
     isNodeRunDurationMetadata(value, 'durationMs') ||
     isNodeRunPlainMetadata(value.splitRunDurationMs) ||
     isNodeRunPlainMetadata(value.debugData) ||
     isNodeRunStatus(value.status)
+  );
+}
+
+function isRecordedNodeTiming(value: unknown): value is NonNullable<NodeRunDataWithRefs['recordedTiming']> {
+  if (!isPlainRecord(value)) {
+    return false;
+  }
+
+  const startedAt = value.startedAt;
+  const finishedAt = value.finishedAt;
+  if (startedAt === undefined && finishedAt === undefined) {
+    return false;
+  }
+
+  return (
+    (startedAt === undefined || (typeof startedAt === 'number' && Number.isFinite(startedAt) && startedAt >= 0)) &&
+    (finishedAt === undefined || (typeof finishedAt === 'number' && Number.isFinite(finishedAt) && finishedAt >= 0))
   );
 }
 

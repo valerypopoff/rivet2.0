@@ -17,7 +17,8 @@ import {
   deleteStoredRefIds,
   storeInputsOrOutputsForHistory,
 } from '../utils/executionDataStorage';
-import { sanitizeInputsOrOutputs } from '../utils/executionDataSanitization';
+import { sanitizeInputsOrOutputs, sanitizeSplitOutputs } from '../utils/executionDataSanitization';
+import { getRecordedNodeTimingPatch } from '../utils/recordedNodeTiming.js';
 import { handleError } from '../utils/errorHandling';
 import { shouldToastAsyncBranchSafetyError } from '../utils/graphExecutionErrorPresentation';
 import { useDataRefs } from '../providers/ProvidersContext';
@@ -55,7 +56,7 @@ export function useNodeExecutionEvents({
   const setLLMChatOutputPageSelections = useSetAtom(selectedLLMChatOutputPageByInvocationState);
   const project = useAtomValue(projectState);
 
-  const onNodeStart = ({ node, inputs, processId, execution }: ProcessEvents['nodeStart']) => {
+  const onNodeStart = ({ node, inputs, processId, execution, replayRecordedAt }: ProcessEvents['nodeStart']) => {
     if (shouldSuppressPreloadedNodeEvent(node.id, processId)) {
       return;
     }
@@ -63,6 +64,7 @@ export function useNodeExecutionEvents({
     setDataForNode(node.id, processId, execution, {
       ...getNodeRunDebugData(node),
       inputData: sanitizeInputsOrOutputs(inputs),
+      ...getRecordedNodeTimingPatch({ replayRecordedAt }, 'start'),
       status: { type: 'running' },
       startedAt: Date.now(),
     });
@@ -76,6 +78,7 @@ export function useNodeExecutionEvents({
     durationMs,
     splitRunDurationMs,
     execution,
+    replayRecordedAt,
   }: ProcessEvents['nodeFinish']) => {
     if (shouldSuppressPreloadedNodeEvent(node.id, processId)) {
       return;
@@ -86,16 +89,26 @@ export function useNodeExecutionEvents({
       status: { type: 'ok' },
       finishedAt: Date.now(),
       durationMs,
+      ...getRecordedNodeTimingPatch({ replayRecordedAt }, 'terminal'),
       splitRunDurationMs,
     });
     setSelectedNodePageLatest(node.id, execution);
   };
 
-  const onNodeExcluded = ({ node, processId, inputs, outputs, reason, execution }: ProcessEvents['nodeExcluded']) => {
+  const onNodeExcluded = ({
+    node,
+    processId,
+    inputs,
+    outputs,
+    reason,
+    execution,
+    replayRecordedAt,
+  }: ProcessEvents['nodeExcluded']) => {
     setDataForNode(node.id, processId, execution, {
       ...getNodeRunDebugData(node),
       inputData: sanitizeInputsOrOutputs(inputs),
       outputData: sanitizeInputsOrOutputs(outputs),
+      ...getRecordedNodeTimingPatch({ replayRecordedAt }, 'excluded'),
       status: { type: 'notRan', reason },
       startedAt: Date.now(),
       finishedAt: Date.now(),
@@ -109,13 +122,19 @@ export function useNodeExecutionEvents({
     processId,
     durationMs,
     splitRunDurationMs,
+    outputs,
+    splitOutputs,
     execution,
+    replayRecordedAt,
   }: ProcessEvents['nodeError']) => {
     setDataForNode(node.id, processId, execution, {
       status: { type: 'error', error: typeof error === 'string' ? error : error.toString() },
       finishedAt: Date.now(),
       durationMs,
+      ...getRecordedNodeTimingPatch({ replayRecordedAt }, 'terminal'),
       splitRunDurationMs,
+      ...(outputs === undefined ? {} : { outputData: sanitizeInputsOrOutputs(outputs) }),
+      ...(splitOutputs === undefined ? {} : { splitOutputData: sanitizeSplitOutputs(splitOutputs) }),
     });
     setSelectedNodePageLatest(node.id, execution);
 
@@ -126,55 +145,18 @@ export function useNodeExecutionEvents({
 
   const onPartialOutput = ({ node, outputs, index, processId, execution }: ProcessEvents['partialOutput']) => {
     const sanitizedOutputs = sanitizeInputsOrOutputs(outputs);
-    const storedOutputs = storeInputsOrOutputsForHistory(sanitizedOutputs, dataRefs, {
-      nodeId: node.id,
+    const applied = setDataForNode(
+      node.id,
       processId,
-      projectId: project.metadata.id,
-      channel: 'output',
-      splitIndex: node.isSplitRun ? index : undefined,
-    });
-    const refIdsToDelete: string[] = [];
-
-    if (node.isSplitRun) {
-      setLastRunData((prev) =>
-        produce(prev, (draft) => {
-          if (!draft[node.id]) {
-            draft[node.id] = [];
-          }
-
-          const existingProcess = draft[node.id]!.find((process) => process.processId === processId);
-          if (existingProcess) {
-            existingProcess.graphId = execution.graphId;
-            existingProcess.graphRunId = execution.graphRunId;
-            existingProcess.rootRunId = execution.rootRunId;
-            refIdsToDelete.push(...collectStoredRefIds(existingProcess.data.splitOutputData?.[index]));
-            existingProcess.data.splitOutputData = {
-              ...existingProcess.data.splitOutputData,
-              [index]: storedOutputs!,
-            };
-          } else {
-            draft[node.id]!.push({
-              processId,
-              graphId: execution.graphId,
-              graphRunId: execution.graphRunId,
-              rootRunId: execution.rootRunId,
-              data: {
-                splitOutputData: {
-                  [index]: storedOutputs!,
-                },
-              },
-            });
-          }
-        }),
-      );
-    } else {
-      setDataForNode(node.id, processId, execution, {
-        outputData: sanitizedOutputs,
-      });
+      execution,
+      node.isSplitRun
+        ? { splitOutputData: { [index]: sanitizedOutputs } }
+        : { outputData: sanitizedOutputs },
+      { ignoreIfTerminal: true },
+    );
+    if (applied) {
+      setSelectedNodePageLatest(node.id, execution);
     }
-
-    deleteStoredRefIds(dataRefs, refIdsToDelete);
-    setSelectedNodePageLatest(node.id, execution);
   };
 
   const onNodeOutputsCleared = ({ node, processId, execution }: ProcessEvents['nodeOutputsCleared']) => {

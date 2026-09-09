@@ -136,4 +136,164 @@ describe('SplitRunProcessor', () => {
   void it('reports executed when a parallel split run mixes cached and physical outputs', async () => {
     assert.equal(await runSplitOriginScenario({ cachedIndexes: new Set([0]), isSplitSequential: false }), 'executed');
   });
+
+  void it('retains sequential cancellation checkpoints and timing from the executed prefix', async () => {
+    const node = createSplitNode();
+    node.isSplitSequential = true;
+    let aborted = false;
+    const processedIndexes: number[] = [];
+    let terminal:
+      | {
+          error: unknown;
+          splitOutputs: Record<number, Outputs> | undefined;
+          splitRunDurationMs: Record<number, number> | undefined;
+        }
+      | undefined;
+    let nextTiming = 0;
+
+    await processSplitRunNode(node, 'process' as any, {
+      getInputValues: () => ({ prompts: { type: 'string[]', value: ['first', 'second'] } }),
+      getInputConnections: () => [],
+      getInputDefinitions: () => [{ id: 'prompts' as PortId, title: 'Prompts', dataType: 'string[]' }],
+      isExcludedDueToControlFlow: () => false,
+      processNodeWithInputData: async (_node, _inputs, index) => {
+        processedIndexes.push(index);
+        aborted = true;
+        throw new Error('interrupted first item');
+      },
+      splitRunConcurrency: 2,
+      accumulateCost: () => assert.fail('failed split item must not accumulate cost'),
+      setNodeResults: () => assert.fail('failed split run must not publish aggregate outputs'),
+      markNodeVisited: () => assert.fail('failed split run must not mark the node visited'),
+      nodeErrored: async (_node, error, _processId, _durationMs, splitRunDurationMs, _origin, splitOutputs) => {
+        terminal = { error, splitOutputs, splitRunDurationMs };
+      },
+      takeFailureOutputs: (_processId, index) =>
+        index === 0 ? { requestBody: { type: 'string', value: 'captured before cancellation' } } : undefined,
+      isAborted: () => aborted,
+      getAbortError: () => new Error('graph aborted before the next item'),
+      emit: async () => {},
+      startNodeTiming: () => ++nextTiming,
+      finishNodeTiming: (start) => (start == null ? undefined : start * 10),
+    });
+
+    assert.deepEqual(processedIndexes, [0]);
+    assert.match((terminal?.error as Error).message, /graph aborted before the next item/);
+    assert.deepEqual(terminal?.splitRunDurationMs, { 0: 20 });
+    assert.deepEqual(terminal?.splitOutputs, {
+      0: { requestBody: { type: 'string', value: 'captured before cancellation' } },
+    });
+  });
+
+  void it('retains successful sequential prefix timing without inventing unstarted items', async () => {
+    const node = createSplitNode();
+    node.isSplitSequential = true;
+    let aborted = false;
+    const processedIndexes: number[] = [];
+    let terminalDurations: Record<number, number> | undefined;
+    let terminalOutputs: Record<number, Outputs> | undefined;
+
+    await processSplitRunNode(node, 'process' as any, {
+      getInputValues: () => ({ prompts: { type: 'string[]', value: ['first', 'second'] } }),
+      getInputConnections: () => [],
+      getInputDefinitions: () => [{ id: 'prompts' as PortId, title: 'Prompts', dataType: 'string[]' }],
+      isExcludedDueToControlFlow: () => false,
+      processNodeWithInputData: async (_node, _inputs, index) => {
+        processedIndexes.push(index);
+        aborted = true;
+        return { output: { type: 'string', value: 'first complete item' } };
+      },
+      splitRunConcurrency: 2,
+      accumulateCost: () => {},
+      setNodeResults: () => assert.fail('canceled split run must not publish aggregate outputs'),
+      markNodeVisited: () => assert.fail('canceled split run must not mark the node visited'),
+      nodeErrored: async (_node, _error, _processId, _durationMs, splitRunDurationMs, _origin, splitOutputs) => {
+        terminalDurations = splitRunDurationMs;
+        terminalOutputs = splitOutputs;
+      },
+      takeFailureOutputs: () => undefined,
+      isAborted: () => aborted,
+      getAbortError: () => new Error('graph aborted before the next item'),
+      emit: async () => {},
+      startNodeTiming: () => 4,
+      finishNodeTiming: () => 40,
+    });
+
+    assert.deepEqual(processedIndexes, [0]);
+    assert.deepEqual(terminalDurations, { 0: 40 });
+    assert.deepEqual(terminalOutputs, { 0: { output: { type: 'string', value: 'first complete item' } } });
+  });
+
+  void it('does not assign durations to parallel items canceled while still queued', async () => {
+    const node = createSplitNode();
+    node.splitRunConcurrency = 1;
+    let aborted = false;
+    let nextTiming = 0;
+    const processedIndexes: number[] = [];
+    let terminalDurations: Record<number, number> | undefined;
+
+    await processSplitRunNode(node, 'process' as any, {
+      getInputValues: () => ({ prompts: { type: 'string[]', value: ['first', 'second', 'third'] } }),
+      getInputConnections: () => [],
+      getInputDefinitions: () => [{ id: 'prompts' as PortId, title: 'Prompts', dataType: 'string[]' }],
+      isExcludedDueToControlFlow: () => false,
+      processNodeWithInputData: async (_node, _inputs, index) => {
+        processedIndexes.push(index);
+        aborted = true;
+        return { output: { type: 'string', value: 'first complete item' } };
+      },
+      splitRunConcurrency: 1,
+      accumulateCost: () => {},
+      setNodeResults: () => assert.fail('canceled split run must not publish aggregate outputs'),
+      markNodeVisited: () => assert.fail('canceled split run must not mark the node visited'),
+      nodeErrored: async (_node, _error, _processId, _durationMs, splitRunDurationMs) => {
+        terminalDurations = splitRunDurationMs;
+      },
+      takeFailureOutputs: () => undefined,
+      isAborted: () => aborted,
+      getAbortError: () => new Error('graph aborted after the first parallel item'),
+      emit: async () => {},
+      startNodeTiming: () => ++nextTiming,
+      finishNodeTiming: (start) => (start == null ? undefined : start * 10),
+    });
+
+    assert.deepEqual(processedIndexes, [0]);
+    assert.deepEqual(terminalDurations, { 0: 20 });
+  });
+
+  void it('keeps successful siblings beside failed-item checkpoints on a terminal split error', async () => {
+    const node = createSplitNode();
+    node.isSplitSequential = true;
+    let terminalOutputs: Record<number, Outputs> | undefined;
+
+    await processSplitRunNode(node, 'process' as any, {
+      getInputValues: () => ({ prompts: { type: 'string[]', value: ['first', 'second'] } }),
+      getInputConnections: () => [],
+      getInputDefinitions: () => [{ id: 'prompts' as PortId, title: 'Prompts', dataType: 'string[]' }],
+      isExcludedDueToControlFlow: () => false,
+      processNodeWithInputData: async (_node, _inputs, index) => {
+        if (index === 0) {
+          return { output: { type: 'string', value: 'completed sibling' } };
+        }
+        throw new Error('second item failed');
+      },
+      splitRunConcurrency: 2,
+      accumulateCost: () => {},
+      setNodeResults: () => assert.fail('a split error must not publish aggregate outputs'),
+      markNodeVisited: () => assert.fail('a split error must not mark the node visited'),
+      nodeErrored: async (_node, _error, _processId, _durationMs, _splitDurations, _origin, splitOutputs) => {
+        terminalOutputs = splitOutputs;
+      },
+      takeFailureOutputs: (_processId, index) =>
+        index === 1 ? { requestBody: { type: 'string', value: 'failed-item evidence' } } : undefined,
+      isAborted: () => false,
+      getAbortError: () => new Error('aborted'),
+      emit: async () => {},
+    });
+
+    assert.deepEqual(terminalOutputs, {
+      0: { output: { type: 'string', value: 'completed sibling' } },
+      1: { requestBody: { type: 'string', value: 'failed-item evidence' } },
+    });
+  });
 });

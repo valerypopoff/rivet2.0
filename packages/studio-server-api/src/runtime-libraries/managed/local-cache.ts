@@ -18,6 +18,13 @@ export class ManagedRuntimeLibrariesLocalCache {
 
   #lastSyncCheckAt = 0;
   #syncPromise: Promise<void> | null = null;
+  // A forced sync may arrive while a previous poll is still downloading an
+  // older release. Keep one serialized queue so no caller can observe that
+  // older sync as complete after a newer release has been requested. At most
+  // one follow-up pass is queued for each active pass, so parallel execution
+  // requests do not turn into one database check per caller.
+  #runningSyncRound = 0;
+  #requestedSyncRound = 0;
 
   constructor(
     pool: Pool,
@@ -31,7 +38,6 @@ export class ManagedRuntimeLibrariesLocalCache {
 
   reset(): void {
     this.#lastSyncCheckAt = 0;
-    this.#syncPromise = null;
   }
 
   jobsRoot(): string {
@@ -39,96 +45,117 @@ export class ManagedRuntimeLibrariesLocalCache {
   }
 
   async sync(force: boolean): Promise<void> {
+    const pollExpired = Date.now() - this.#lastSyncCheckAt >= this.#config.syncPollIntervalMs;
     if (this.#syncPromise) {
-      if (!force) {
-        return this.#syncPromise;
+      if (force) {
+        this.#queueSyncAfterCurrentRound();
       }
-
-      await this.#syncPromise;
+      return this.#syncPromise;
     }
 
-    if (!force && Date.now() - this.#lastSyncCheckAt < this.#config.syncPollIntervalMs) {
+    const hasQueuedSync = this.#requestedSyncRound > this.#runningSyncRound;
+    if (!force && !hasQueuedSync && !pollExpired) {
+      return;
+    }
+    if (!hasQueuedSync) {
+      this.#requestedSyncRound = this.#runningSyncRound + 1;
+    }
+
+    let syncPromise: Promise<void>;
+    syncPromise = this.#drainSyncRounds().finally(() => {
+      if (this.#syncPromise === syncPromise) {
+        this.#syncPromise = null;
+      }
+    });
+    this.#syncPromise = syncPromise;
+    return syncPromise;
+  }
+
+  #queueSyncAfterCurrentRound(): void {
+    if (this.#syncPromise) {
+      this.#requestedSyncRound = Math.max(this.#requestedSyncRound, this.#runningSyncRound + 1);
+    }
+  }
+
+  async #drainSyncRounds(): Promise<void> {
+    while (this.#runningSyncRound < this.#requestedSyncRound) {
+      this.#runningSyncRound += 1;
+      await this.#syncCurrentRelease();
+    }
+  }
+
+  async #syncCurrentRelease(): Promise<void> {
+    ensureDirectories();
+    const activeRelease = await getManagedActiveRelease(this.#pool);
+    const manifest = readManifest();
+    const cachedReleaseId = manifest.activeReleaseId ?? null;
+    const nextReleaseId = activeRelease?.release_id ?? null;
+    const nextPackages = normalizePackageMap(activeRelease?.packages_json);
+
+    if (!nextReleaseId) {
+      if (cachedReleaseId || currentNodeModulesPath()) {
+        this.removeCurrentRelease();
+        writeManifest(emptyManifest());
+      }
+
+      this.#lastSyncCheckAt = Date.now();
       return;
     }
 
-    const syncPromise = (async () => {
-      ensureDirectories();
-      const activeRelease = await getManagedActiveRelease(this.#pool);
-      const manifest = readManifest();
-      const cachedReleaseId = manifest.activeReleaseId ?? null;
-      const nextReleaseId = activeRelease?.release_id ?? null;
-      const nextPackages = normalizePackageMap(activeRelease?.packages_json);
+    if (Object.keys(nextPackages).length === 0) {
+      this.removeCurrentRelease();
+      writeManifest({
+        packages: {},
+        updatedAt: toIsoString(activeRelease?.updated_at ?? activeRelease?.created_at) ?? new Date().toISOString(),
+        activeReleaseId: nextReleaseId,
+      });
+      this.#lastSyncCheckAt = Date.now();
+      return;
+    }
 
-      if (!nextReleaseId) {
-        if (cachedReleaseId || currentNodeModulesPath()) {
-          this.removeCurrentRelease();
-          writeManifest(emptyManifest());
-        }
+    if (
+      cachedReleaseId === nextReleaseId &&
+      currentNodeModulesPath() &&
+      fs.existsSync(path.join(currentDir(), 'package.json'))
+    ) {
+      this.#lastSyncCheckAt = Date.now();
+      return;
+    }
 
-        this.#lastSyncCheckAt = Date.now();
-        return;
-      }
+    const artifactBlobKey = activeRelease?.artifact_blob_key;
+    if (!artifactBlobKey) {
+      throw new Error(`Active runtime-library release ${nextReleaseId} is missing its artifact pointer`);
+    }
 
-      if (Object.keys(nextPackages).length === 0) {
-        this.removeCurrentRelease();
-        writeManifest({
-          packages: {},
-          updatedAt: toIsoString(activeRelease?.updated_at ?? activeRelease?.created_at) ?? new Date().toISOString(),
-          activeReleaseId: nextReleaseId,
-        });
-        this.#lastSyncCheckAt = Date.now();
-        return;
-      }
+    const archiveBuffer = await this.#blobStore.getBuffer(artifactBlobKey);
+    const archiveSha256 = createHash('sha256').update(archiveBuffer).digest('hex');
+    if (activeRelease?.artifact_sha256 && archiveSha256 !== activeRelease.artifact_sha256) {
+      throw new Error(`Runtime-library artifact checksum mismatch for release ${nextReleaseId}`);
+    }
 
-      if (
-        cachedReleaseId === nextReleaseId &&
-        currentNodeModulesPath() &&
-        fs.existsSync(path.join(currentDir(), 'package.json'))
-      ) {
-        this.#lastSyncCheckAt = Date.now();
-        return;
-      }
+    fs.mkdirSync(this.jobsRoot(), { recursive: true });
+    const tempRoot = fs.mkdtempSync(path.join(this.jobsRoot(), `sync-${nextReleaseId}-`));
+    const archivePath = path.join(tempRoot, 'release.tar');
+    const extractedDir = path.join(tempRoot, 'candidate');
 
-      const artifactBlobKey = activeRelease?.artifact_blob_key;
-      if (!artifactBlobKey) {
-        throw new Error(`Active runtime-library release ${nextReleaseId} is missing its artifact pointer`);
-      }
+    try {
+      fs.mkdirSync(extractedDir, { recursive: true });
+      fs.writeFileSync(archivePath, archiveBuffer);
+      await tar.x({
+        file: archivePath,
+        cwd: extractedDir,
+      });
 
-      const archiveBuffer = await this.#blobStore.getBuffer(artifactBlobKey);
-      const archiveSha256 = createHash('sha256').update(archiveBuffer).digest('hex');
-      if (activeRelease?.artifact_sha256 && archiveSha256 !== activeRelease.artifact_sha256) {
-        throw new Error(`Runtime-library artifact checksum mismatch for release ${nextReleaseId}`);
-      }
-
-      const tempRoot = fs.mkdtempSync(path.join(this.jobsRoot(), `sync-${nextReleaseId}-`));
-      const archivePath = path.join(tempRoot, 'release.tar');
-      const extractedDir = path.join(tempRoot, 'candidate');
-
-      try {
-        fs.mkdirSync(extractedDir, { recursive: true });
-        fs.writeFileSync(archivePath, archiveBuffer);
-        await tar.x({
-          file: archivePath,
-          cwd: extractedDir,
-        });
-
-        this.promoteCurrentRelease(extractedDir);
-        writeManifest({
-          packages: nextPackages,
-          updatedAt: toIsoString(activeRelease.updated_at) ?? new Date().toISOString(),
-          activeReleaseId: nextReleaseId,
-        });
-        this.#lastSyncCheckAt = Date.now();
-      } finally {
-        fs.rmSync(tempRoot, { recursive: true, force: true });
-      }
-    })();
-
-    this.#syncPromise = syncPromise.finally(() => {
-      this.#syncPromise = null;
-    });
-
-    return this.#syncPromise;
+      this.promoteCurrentRelease(extractedDir);
+      writeManifest({
+        packages: nextPackages,
+        updatedAt: toIsoString(activeRelease.updated_at) ?? new Date().toISOString(),
+        activeReleaseId: nextReleaseId,
+      });
+      this.#lastSyncCheckAt = Date.now();
+    } finally {
+      fs.rmSync(tempRoot, { recursive: true, force: true });
+    }
   }
 
   removeCurrentRelease(): void {

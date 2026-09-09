@@ -401,6 +401,13 @@ export type InternalProcessContext<T extends ChartNode = ChartNode> = ProcessCon
   /** Call when the node has partial data but has not finished execution yet. */
   onPartialOutputs?: (outputs: Outputs) => void;
 
+  /**
+   * Preserves display-only outputs for this invocation if it subsequently
+   * fails. These values are reported with nodeError, never used as graph
+   * results, and must not change the original failure.
+   */
+  setFailureOutputs?: (outputs: Outputs) => void;
+
   /** Creates a subprocessor, for executing subgraphs. */
   createSubProcessor: (
     subGraphId: GraphId | undefined,

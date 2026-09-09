@@ -40,7 +40,9 @@ export type SplitRunDeps = {
     durationMs?: number,
     splitRunDurationMs?: Record<number, number>,
     resultOrigin?: SplitRunResultOrigin,
+    splitOutputs?: Record<number, Outputs>,
   ): Promise<void>;
+  takeFailureOutputs(processId: ProcessId, index: number): Outputs | undefined;
   isAborted(): boolean;
   getAbortError(): Error;
   emit(
@@ -73,8 +75,17 @@ export type SplitRunDeps = {
 };
 
 type SplitResult =
-  | { type: 'output'; output: Outputs; resultOrigin: SplitRunResultOrigin; durationMs?: number; error?: Error }
-  | { type: 'error'; error: Error; resultOrigin: SplitRunResultOrigin; durationMs?: number; output?: Outputs };
+  | { type: 'output'; index: number; output: Outputs; resultOrigin: SplitRunResultOrigin; durationMs?: number }
+  | {
+      type: 'error';
+      error: Error;
+      index: number;
+      resultOrigin: SplitRunResultOrigin;
+      durationMs?: number;
+      failureOutputs?: Outputs;
+    };
+
+type SplitOutputResult = Extract<SplitResult, { type: 'output' }>;
 
 function withOptionalDuration<T extends object>(
   payload: T,
@@ -117,17 +128,15 @@ export async function processSplitRunNode(node: ChartNode, processId: ProcessId,
     resultOrigin: 'executed',
   });
   const timingStart = deps.startNodeTiming?.();
-  let splitRunDurationMs: Record<number, number> | undefined;
-  let results: SplitResult[] = [];
+  const results: SplitResult[] = [];
 
   try {
     if (node.isSplitSequential) {
-      results = await runSequential(node, inputValues, inputDefinitionsById, splittingAmount, processId, deps);
+      await runSequential(node, inputValues, inputDefinitionsById, splittingAmount, processId, deps, results);
     } else {
-      results = await runParallel(node, inputValues, inputDefinitionsById, splittingAmount, processId, deps);
+      results.push(...(await runParallel(node, inputValues, inputDefinitionsById, splittingAmount, processId, deps)));
     }
 
-    splitRunDurationMs = getSplitRunDurationMs(results);
     const errors = results.filter((r) => r.type === 'error').map((r) => r.error!);
     if (errors.length === 1) {
       throw errors[0]!;
@@ -139,7 +148,7 @@ export async function processSplitRunNode(node: ChartNode, processId: ProcessId,
       throw new AggregateError(errors);
     }
 
-    const aggregateResults = aggregateOutputs(results);
+    const aggregateResults = aggregateOutputs(results.filter(isSplitOutputResult));
 
     deps.setNodeResults(node.id, aggregateResults);
     deps.markNodeVisited(node.id);
@@ -153,7 +162,7 @@ export async function processSplitRunNode(node: ChartNode, processId: ProcessId,
           resultOrigin: getSplitRunResultOrigin(results),
         },
         deps.finishNodeTiming?.(timingStart),
-        splitRunDurationMs,
+        getSplitRunDurationMs(results),
       ),
     );
   } catch (error) {
@@ -162,8 +171,9 @@ export async function processSplitRunNode(node: ChartNode, processId: ProcessId,
       error,
       processId,
       deps.finishNodeTiming?.(timingStart),
-      splitRunDurationMs,
+      getSplitRunDurationMs(results),
       getSplitRunResultOrigin(results),
+      getSplitTerminalOutputs(results),
     );
   }
 }
@@ -175,9 +185,8 @@ async function runSequential(
   splittingAmount: number,
   processId: ProcessId,
   deps: SplitRunDeps,
-): Promise<SplitResult[]> {
-  const results: SplitResult[] = [];
-
+  results: SplitResult[],
+): Promise<void> {
   for (let i = 0; i < splittingAmount; i++) {
     if (deps.isAborted()) {
       throw deps.getAbortError();
@@ -208,18 +217,18 @@ async function runSequential(
       );
 
       deps.accumulateCost(output);
-      results.push({ type: 'output', output, resultOrigin, durationMs: deps.finishNodeTiming?.(splitTimingStart) });
+      results.push({ type: 'output', index: i, output, resultOrigin, durationMs: deps.finishNodeTiming?.(splitTimingStart) });
     } catch (error) {
       results.push({
         type: 'error',
         error: getError(error),
+        index: i,
         resultOrigin,
         durationMs: deps.finishNodeTiming?.(splitTimingStart),
+        failureOutputs: deps.takeFailureOutputs(processId, i),
       });
     }
   }
-
-  return results;
 }
 
 async function runParallel(
@@ -235,13 +244,17 @@ async function runParallel(
   return Promise.all(
     range(0, splittingAmount).map(async (i: number) => {
       const result = await queue.add(async () => {
-        const splitTimingStart = deps.startNodeTiming?.();
         let resultOrigin: SplitRunResultOrigin = 'executed';
+        let splitTimingStart: number | undefined;
 
         try {
           if (deps.isAborted()) {
             throw deps.getAbortError();
           }
+
+          // Queued items that encounter an already-aborted graph never ran,
+          // so they must not receive a synthetic split duration.
+          splitTimingStart = deps.startNodeTiming?.();
 
           const inputs = splitInputsAtIndex(inputValues, inputDefinitionsById, i);
           const output = await deps.processNodeWithInputData(
@@ -266,6 +279,7 @@ async function runParallel(
           deps.accumulateCost(output);
           return {
             type: 'output' as const,
+            index: i,
             output,
             resultOrigin,
             durationMs: deps.finishNodeTiming?.(splitTimingStart),
@@ -274,8 +288,10 @@ async function runParallel(
           return {
             type: 'error' as const,
             error: getError(error),
+            index: i,
             resultOrigin,
-            durationMs: deps.finishNodeTiming?.(splitTimingStart),
+            durationMs: splitTimingStart === undefined ? undefined : deps.finishNodeTiming?.(splitTimingStart),
+            failureOutputs: deps.takeFailureOutputs(processId, i),
           };
         }
       });
@@ -293,6 +309,25 @@ function getSplitRunResultOrigin(results: SplitResult[]): SplitRunResultOrigin {
   return results.length > 0 && results.every((result) => result.resultOrigin === 'editor-cache')
     ? 'editor-cache'
     : 'executed';
+}
+
+/**
+ * A failed split node has no graph-semantic aggregate result, but every item
+ * that actually ran still has useful inspection evidence. Keep successful
+ * item outputs as well as failed-item checkpoints so a terminal nodeError
+ * cannot erase siblings that happened to finish before another item failed.
+ */
+function getSplitTerminalOutputs(results: SplitResult[]): Record<number, Outputs> | undefined {
+  const outputs = Object.fromEntries(
+    results.flatMap((result) =>
+      result.type === 'output'
+        ? [[result.index, result.output] as const]
+        : result.failureOutputs !== undefined
+          ? [[result.index, result.failureOutputs] as const]
+          : [],
+    ),
+  );
+  return Object.keys(outputs).length === 0 ? undefined : outputs;
 }
 
 function getParallelSplitRunConcurrency(node: ChartNode, defaultConcurrency: number): number {
@@ -317,7 +352,7 @@ function splitInputsAtIndex(
   ) as Inputs;
 }
 
-function aggregateOutputs(results: SplitResult[]): Outputs {
+function aggregateOutputs(results: SplitOutputResult[]): Outputs {
   return results.reduce((acc, result) => {
     for (const [portId, value] of entries(result.output!)) {
       acc[portId as PortId] ??= { type: (value?.type + '[]') as DataValue['type'], value: [] } as DataValue;
@@ -327,11 +362,15 @@ function aggregateOutputs(results: SplitResult[]): Outputs {
   }, {} as Outputs);
 }
 
+function isSplitOutputResult(result: SplitResult): result is SplitOutputResult {
+  return result.type === 'output';
+}
+
 function getSplitRunDurationMs(results: SplitResult[]): Record<number, number> | undefined {
   const durations: Record<number, number> = {};
-  for (const [index, result] of results.entries()) {
+  for (const result of results) {
     if (result.durationMs !== undefined) {
-      durations[index] = result.durationMs;
+      durations[result.index] = result.durationMs;
     }
   }
 

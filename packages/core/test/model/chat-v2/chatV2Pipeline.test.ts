@@ -22,6 +22,21 @@ async function* mockStream(parts: ChatV2StreamPart[]): AsyncGenerator<ChatV2Stre
   }
 }
 
+function createDeferred<T>() {
+  let resolve: (value: T | PromiseLike<T>) => void = () => undefined;
+  const promise = new Promise<T>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
+}
+
+function createRetryableProviderError(message: string) {
+  const error = new Error(message) as Error & { statusCode: number };
+  error.name = 'AI_APICallError';
+  error.statusCode = 503;
+  return error;
+}
+
 function createMockModel(): ChatV2Model {
   return {} as ChatV2Model;
 }
@@ -1525,6 +1540,513 @@ void describe('runChatV2Pipeline', () => {
       custom: {
         responseId: 'resp_generate_1',
       },
+    });
+  });
+
+  void it('retains sent messages as failure evidence for a non-streaming request that throws', async () => {
+    const checkpoints: Outputs[] = [];
+
+    await assert.rejects(
+      () =>
+        runChatV2Pipeline({
+          provider: 'custom',
+          model: createMockModel(),
+          modelId: 'failing-generate-model',
+          prompt: { type: 'string', value: 'Keep this request.' },
+          emitPartialOutputs: false,
+          context: { signal: new AbortController().signal },
+          onFailureCheckpoint: (outputs) => checkpoints.push(outputs),
+          executeGenerate: async () => {
+            throw new Error('generated request failed');
+          },
+        }),
+      /generated request failed/,
+    );
+
+    assert.equal(checkpoints.length, 1);
+    assert.deepEqual(checkpoints[0]?.['in-messages' as PortId], {
+      type: 'chat-message[]',
+      value: [{ type: 'user', message: 'Keep this request.' }],
+    });
+    const allMessages = checkpoints[0]?.['all-messages' as PortId];
+    assert.equal(allMessages?.type, 'chat-message[]');
+    assert.deepEqual(allMessages?.value[0], { type: 'user', message: 'Keep this request.' });
+    assert.deepEqual(allMessages?.value[1], {
+      type: 'assistant',
+      message: '',
+      function_call: undefined,
+      function_calls: undefined,
+    });
+  });
+
+  void it('retains a completed non-streaming response and reasoning when final JSON validation fails', async () => {
+    const checkpoints: Outputs[] = [];
+
+    await assert.rejects(
+      () =>
+        runChatV2Pipeline({
+          provider: 'custom',
+          model: createMockModel(),
+          modelId: 'invalid-generated-json-model',
+          prompt: { type: 'string', value: 'Return JSON.' },
+          responseFormat: 'json_schema',
+          responseOutput: { name: 'answer_schema' },
+          outputReasoning: true,
+          emitPartialOutputs: false,
+          context: { signal: new AbortController().signal },
+          onFailureCheckpoint: (outputs) => checkpoints.push(outputs),
+          executeGenerate: async () => ({
+            text: 'not valid JSON',
+            output: undefined,
+            reasoningText: 'Completed reasoning before validation.',
+            requestStatus: 200,
+          }),
+        }),
+      /final value prepared for the Response port is not an object/,
+    );
+
+    assert.deepEqual(checkpoints.at(-1)?.['response' as PortId], {
+      type: 'string',
+      value: 'not valid JSON',
+    });
+    assert.deepEqual(checkpoints.at(-1)?.['reasoning' as PortId], {
+      type: 'string',
+      value: 'Completed reasoning before validation.',
+    });
+    assert.deepEqual(checkpoints.at(-1)?.['in-messages' as PortId], {
+      type: 'chat-message[]',
+      value: [{ type: 'user', message: 'Return JSON.' }],
+    });
+  });
+
+  void it('retains a completed non-streaming response when its status is non-200', async () => {
+    const checkpoints: Outputs[] = [];
+
+    await assert.rejects(
+      () =>
+        runChatV2Pipeline({
+          provider: 'custom',
+          model: createMockModel(),
+          modelId: 'non-200-generated-response-model',
+          prompt: { type: 'string', value: 'Keep the provider response.' },
+          emitPartialOutputs: false,
+          context: { signal: new AbortController().signal },
+          onFailureCheckpoint: (outputs) => checkpoints.push(outputs),
+          executeGenerate: async () => ({
+            text: 'A provider body arrived.',
+            requestStatus: 503,
+          }),
+        }),
+      /503/,
+    );
+
+    assert.deepEqual(checkpoints.at(-1)?.['response' as PortId], {
+      type: 'string',
+      value: 'A provider body arrived.',
+    });
+  });
+
+  void it('retains a completed non-streaming response when optional provider metadata rejects', async () => {
+    const checkpoints: Outputs[] = [];
+    const metadataFailure = new Error('provider metadata was unavailable');
+
+    await assert.rejects(
+      () =>
+        runChatV2Pipeline({
+          provider: 'custom',
+          model: createMockModel(),
+          modelId: 'generated-metadata-failure-model',
+          prompt: { type: 'string', value: 'Keep the completed response.' },
+          emitPartialOutputs: false,
+          context: { signal: new AbortController().signal },
+          onFailureCheckpoint: (outputs) => checkpoints.push(outputs),
+          executeGenerate: async () => ({
+            text: 'Completed before metadata failed.',
+            providerMetadata: Promise.reject(metadataFailure),
+            requestStatus: 200,
+          }),
+        }),
+      (error) => error === metadataFailure,
+    );
+
+    assert.deepEqual(checkpoints.at(-1)?.['response' as PortId], {
+      type: 'string',
+      value: 'Completed before metadata failed.',
+    });
+  });
+
+  void it('does not let a retired generated retry overwrite the next request failure evidence', async () => {
+    const checkpoints: Outputs[] = [];
+    const lateReasoning = createDeferred<string>();
+    const firstError = createRetryableProviderError('first provider metadata failed');
+    const finalError = createRetryableProviderError('second provider request failed');
+    let attempts = 0;
+
+    await assert.rejects(
+      () =>
+        runChatV2Pipeline({
+          provider: 'custom',
+          model: createMockModel(),
+          modelId: 'generated-retired-evidence-model',
+          prompt: { type: 'string', value: 'Do not revive the first response.' },
+          emitPartialOutputs: false,
+          outputReasoning: true,
+          retryOnNon200: true,
+          retryOnNon200RepeatTimes: 1,
+          retryOnNon200CooldownMs: 0,
+          context: { signal: new AbortController().signal },
+          onFailureCheckpoint: (outputs) => checkpoints.push(outputs),
+          executeGenerate: async () => {
+            attempts += 1;
+            if (attempts === 1) {
+              return {
+                text: 'first response must stay retired',
+                reasoningText: lateReasoning.promise,
+                providerMetadata: Promise.reject(firstError),
+              };
+            }
+
+            lateReasoning.resolve('late reasoning from the first request');
+            await new Promise<void>((resolve) => setImmediate(resolve));
+            throw finalError;
+          },
+        }),
+      (error: unknown) => error instanceof Error && error.message.includes(finalError.message),
+    );
+
+    assert.equal(attempts, 2);
+    assert.deepEqual(checkpoints.at(-1)?.['response' as PortId], {
+      type: 'string',
+      value: '',
+    });
+    assert.notDeepEqual(checkpoints.at(-1)?.['reasoning' as PortId], {
+      type: 'string',
+      value: 'late reasoning from the first request',
+    });
+  });
+
+  void it('retires generated evidence before waiting for a retry cooldown', async () => {
+    const checkpoints: Outputs[] = [];
+    const lateReasoning = createDeferred<string>();
+    const retryStarted = createDeferred<void>();
+    const releaseRetry = createDeferred<void>();
+    const firstError = createRetryableProviderError('first provider metadata failed');
+    const finalError = createRetryableProviderError('second provider request failed');
+    let attempts = 0;
+
+    const run = runChatV2Pipeline({
+      provider: 'custom',
+      model: createMockModel(),
+      modelId: 'generated-cooldown-evidence-model',
+      prompt: { type: 'string', value: 'Do not update during cooldown.' },
+      emitPartialOutputs: false,
+      outputReasoning: true,
+      retryOnNon200: true,
+      retryOnNon200RepeatTimes: 1,
+      retryOnNon200CooldownMs: 0,
+      onBeforeProviderRetry: async () => {
+        retryStarted.resolve();
+        await releaseRetry.promise;
+      },
+      context: { signal: new AbortController().signal },
+      onFailureCheckpoint: (outputs) => checkpoints.push(outputs),
+      executeGenerate: async () => {
+        attempts += 1;
+        if (attempts === 1) {
+          return {
+            text: 'first response must not update during cooldown',
+            reasoningText: lateReasoning.promise,
+            providerMetadata: Promise.reject(firstError),
+          };
+        }
+        throw finalError;
+      },
+    });
+
+    await retryStarted.promise;
+    const checkpointsBeforeLateReasoning = checkpoints.length;
+    lateReasoning.resolve('late reasoning during retry cooldown');
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(checkpoints.length, checkpointsBeforeLateReasoning);
+
+    releaseRetry.resolve();
+    await assert.rejects(
+      () => run,
+      (error: unknown) => error instanceof Error && error.message.includes(finalError.message),
+    );
+  });
+
+  void it('does not let a retired streamed retry overwrite the next request failure evidence', async () => {
+    const checkpoints: Outputs[] = [];
+    const lateUsage = createDeferred<LanguageModelUsage>();
+    const firstError = createRetryableProviderError('first stream metadata failed');
+    const finalError = createRetryableProviderError('second stream request failed');
+    let attempts = 0;
+
+    await assert.rejects(
+      () =>
+        runChatV2Pipeline({
+          provider: 'custom',
+          model: createMockModel(),
+          modelId: 'streamed-retired-evidence-model',
+          prompt: { type: 'string', value: 'Do not revive the first stream.' },
+          emitPartialOutputs: true,
+          retryOnNon200: true,
+          retryOnNon200RepeatTimes: 1,
+          retryOnNon200CooldownMs: 0,
+          context: { signal: new AbortController().signal },
+          onFailureCheckpoint: (outputs) => checkpoints.push(outputs),
+          executeStream: async () => {
+            attempts += 1;
+            if (attempts === 1) {
+              return {
+                fullStream: mockStream([
+                  { type: 'text-start', id: 'text_1' },
+                  { type: 'text-delta', id: 'text_1', text: 'first streamed response must stay retired' },
+                  { type: 'text-end', id: 'text_1' },
+                ]),
+                usage: lateUsage.promise,
+                providerMetadata: Promise.reject(firstError),
+              };
+            }
+
+            lateUsage.resolve({ inputTokens: 1, outputTokens: 1, totalTokens: 2 });
+            await new Promise<void>((resolve) => setImmediate(resolve));
+            throw finalError;
+          },
+        }),
+      (error: unknown) => error instanceof Error && error.message.includes(finalError.message),
+    );
+
+    assert.equal(attempts, 2);
+    assert.deepEqual(checkpoints.at(-1)?.['response' as PortId], {
+      type: 'string',
+      value: '',
+    });
+  });
+
+  void it('does not emit late generated evidence after a terminal cancellation', async () => {
+    const checkpoints: Outputs[] = [];
+    const lateReasoning = createDeferred<string>();
+    const abortController = new AbortController();
+    const providerError = createRetryableProviderError('provider metadata failed during cancellation');
+
+    await assert.rejects(
+      () =>
+        runChatV2Pipeline({
+          provider: 'custom',
+          model: createMockModel(),
+          modelId: 'cancelled-retired-evidence-model',
+          prompt: { type: 'string', value: 'Do not update after cancellation.' },
+          emitPartialOutputs: false,
+          outputReasoning: true,
+          context: { signal: abortController.signal },
+          onFailureCheckpoint: (outputs) => checkpoints.push(outputs),
+          executeGenerate: async () => {
+            queueMicrotask(() => abortController.abort());
+            return {
+              text: 'response captured before cancellation',
+              reasoningText: lateReasoning.promise,
+              providerMetadata: Promise.reject(providerError),
+            };
+          },
+        }),
+      (error: unknown) => error instanceof Error && error.name === 'AbortError',
+    );
+
+    const checkpointsAtTerminal = checkpoints.length;
+    lateReasoning.resolve('late reasoning must be ignored');
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    assert.equal(checkpoints.length, checkpointsAtTerminal);
+  });
+
+  void it('refreshes completed response failure evidence after diagnostic bodies and usage settle', async () => {
+    const checkpoints: Outputs[] = [];
+    const requestBodies = [{ requestId: 'request-1' }];
+    const responseBodies: unknown[] = [];
+    const metadataFailure = new Error('provider metadata was unavailable');
+
+    await assert.rejects(
+      () =>
+        runChatV2Pipeline({
+          provider: 'custom',
+          model: createMockModel(),
+          modelId: 'generated-diagnostic-refresh-model',
+          prompt: { type: 'string', value: 'Keep all captured diagnostics.' },
+          emitPartialOutputs: false,
+          outputUsage: true,
+          outputRequestBody: true,
+          outputResponseBody: true,
+          requestBodies,
+          responseBodies,
+          responseBodyCapture: {
+            bodies: responseBodies,
+            capture: () => undefined,
+            flush: async () => {
+              responseBodies.push({ responseId: 'response-1' });
+            },
+          },
+          context: { signal: new AbortController().signal },
+          onFailureCheckpoint: (outputs) => checkpoints.push(outputs),
+          executeGenerate: async () => ({
+            text: 'Completed before metadata failed.',
+            totalUsage: {
+              inputTokens: 5,
+              outputTokens: 3,
+              totalTokens: 8,
+            },
+            providerMetadata: Promise.reject(metadataFailure),
+            requestStatus: 200,
+          }),
+        }),
+      (error) => error === metadataFailure,
+    );
+
+    const checkpoint = checkpoints.at(-1);
+    assert.deepEqual(checkpoint?.['response' as PortId], {
+      type: 'string',
+      value: 'Completed before metadata failed.',
+    });
+    assert.deepEqual(checkpoint?.['requestBody' as PortId], {
+      type: 'object',
+      value: { requestId: 'request-1' },
+    });
+    assert.deepEqual(checkpoint?.['responseBody' as PortId], {
+      type: 'object',
+      value: { responseId: 'response-1' },
+    });
+    assert.deepEqual(checkpoint?.['usage' as PortId], {
+      type: 'object',
+      value: {
+        promptTokens: 5,
+        completionTokens: 3,
+        totalTokens: 8,
+        cachedTokens: 0,
+        reasoningTokens: 0,
+        totalCost: undefined,
+      },
+    });
+  });
+
+  void it('refreshes completed stream failure evidence after diagnostic bodies and usage settle', async () => {
+    const checkpoints: Outputs[] = [];
+    const responseBodies: unknown[] = [];
+    const metadataFailure = new Error('stream provider metadata was unavailable');
+
+    await assert.rejects(
+      () =>
+        runChatV2Pipeline({
+          provider: 'custom',
+          model: createMockModel(),
+          modelId: 'stream-diagnostic-refresh-model',
+          prompt: { type: 'string', value: 'Keep all streamed diagnostics.' },
+          outputUsage: true,
+          outputResponseBody: true,
+          responseBodies,
+          responseBodyCapture: {
+            bodies: responseBodies,
+            capture: () => undefined,
+            flush: async () => {
+              responseBodies.push({ responseId: 'stream-response-1' });
+            },
+          },
+          context: { signal: new AbortController().signal },
+          onFailureCheckpoint: (outputs) => checkpoints.push(outputs),
+          executeStream: async () => ({
+            fullStream: mockStream([
+              { type: 'text-start', id: 'text_1' },
+              { type: 'text-delta', id: 'text_1', text: 'Streamed before metadata failed.' },
+              { type: 'text-end', id: 'text_1' },
+            ]),
+            usage: Promise.resolve({
+              inputTokens: 4,
+              outputTokens: 2,
+              totalTokens: 6,
+            }),
+            providerMetadata: Promise.reject(metadataFailure),
+            requestStatus: 200,
+          }),
+        }),
+      (error) => error === metadataFailure,
+    );
+
+    const checkpoint = checkpoints.at(-1);
+    assert.deepEqual(checkpoint?.['response' as PortId], {
+      type: 'string',
+      value: 'Streamed before metadata failed.',
+    });
+    assert.deepEqual(checkpoint?.['responseBody' as PortId], {
+      type: 'object',
+      value: { responseId: 'stream-response-1' },
+    });
+    assert.deepEqual(checkpoint?.['usage' as PortId], {
+      type: 'object',
+      value: {
+        promptTokens: 4,
+        completionTokens: 2,
+        totalTokens: 6,
+        cachedTokens: 0,
+        reasoningTokens: 0,
+        totalCost: undefined,
+      },
+    });
+  });
+
+  void it('does not fabricate sent-message evidence when prompt preparation fails before an executor starts', async () => {
+    const checkpoints: Outputs[] = [];
+
+    await assert.rejects(
+      () =>
+        runChatV2Pipeline({
+          provider: 'custom',
+          model: createMockModel(),
+          modelId: 'never-started-model',
+          prompt: undefined,
+          context: { signal: new AbortController().signal },
+          onFailureCheckpoint: (outputs) => checkpoints.push(outputs),
+          executeStream: async () => {
+            assert.fail('the executor must not start when prompt preparation fails');
+          },
+        }),
+      /prompt/i,
+    );
+
+    assert.deepEqual(checkpoints, []);
+  });
+
+  void it('retains reasoning-only stream evidence before a provider error', async () => {
+    const checkpoints: Outputs[] = [];
+
+    await assert.rejects(
+      () =>
+        runChatV2Pipeline({
+          provider: 'custom',
+          model: createMockModel(),
+          modelId: 'reasoning-stream-model',
+          prompt: { type: 'string', value: 'Reason before failing.' },
+          emitPartialOutputs: true,
+          outputReasoning: true,
+          context: { signal: new AbortController().signal },
+          onFailureCheckpoint: (outputs) => checkpoints.push(outputs),
+          executeStream: async () => ({
+            fullStream: mockStream([
+              { type: 'reasoning-start', id: 'reasoning_1' },
+              { type: 'reasoning-delta', id: 'reasoning_1', text: 'partial chain of thought' },
+              { type: 'error', error: new Error('stream failed') },
+            ]),
+          }),
+        }),
+      /stream failed/,
+    );
+
+    assert.deepEqual(checkpoints.at(-1)?.['reasoning' as PortId], {
+      type: 'string',
+      value: 'partial chain of thought',
+    });
+    assert.deepEqual(checkpoints.at(-1)?.['in-messages' as PortId], {
+      type: 'chat-message[]',
+      value: [{ type: 'user', message: 'Reason before failing.' }],
     });
   });
 

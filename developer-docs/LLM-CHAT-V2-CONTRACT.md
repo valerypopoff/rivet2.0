@@ -19,8 +19,12 @@ bridge forwards that event to the root exactly once.
 `AgentResponseTrace` is a versioned projection built from these physical-call
 events and the corresponding `toolCallFinished` events. It is presentation and
 observability data, not an LLM input or graph output. Response traces stop their
-duration when mapped graph outputs are ready, while invocation traces span the
-selected LLM node process. Retry and fallback counts come from explicit attempt
+duration when mapped graph outputs are ready, while invocation traces use the
+local LLM node lifecycle interval during live execution. During recording
+playback, invocation traces instead use the recorded node duration and original
+lifecycle bounds, which remain independent from the editor's local replay
+receipt clock; an inspector must never measure playback speed. Retry and
+fallback counts come from explicit attempt
 and profile metadata, never timestamp inference. Unknown or partially known
 pricing stays unknown/partial rather than becoming `$0`.
 
@@ -82,6 +86,41 @@ introduce any additional raw provider body, header, credential, or hidden trace
 payload beyond an explicitly enabled existing node output, nor any new
 node/project schema. Consumers that do not understand the additive event
 continue to use the terminal output normally.
+
+Failure checkpoints are collected separately from live partial-output display
+updates. When the caller supports the terminal checkpoint channel, the LLM
+node sends failure evidence there only rather than duplicating it as a detached
+partial update; direct/custom consumers without that channel retain the legacy
+partial-output fallback. A checkpoint starts only when the shared AI SDK bridge is about to
+invoke an executor, so setup, cache, prompt-conversion, and cancellation paths
+that never reach the executor do not fabricate **Messages Sent**. It retains
+that attempt's request messages, then its response, tool calls, and enabled
+reasoning as stream data arrives. The shared SDK bridge also reports a complete
+stream or generated response *before* optional usage, provider-metadata,
+structured-output, response-status, or final JSON-schema validation can fail.
+Thus a non-streaming provider reply remains inspectable when a later accessor
+rejects, when its HTTP status is non-200, or when Rivet rejects its final
+schema value. Independently resolved generated reasoning and usage refresh the
+same evidence snapshot. After the response-body collector reaches its normal
+completed-call boundary, the retry layer republishes that snapshot so enabled
+request/response bodies and known usage enter the terminal checkpoint too. It
+does not wait for unresolved diagnostics after cancellation or synthesize their
+values. Every physical retry and fallback request owns its own evidence window:
+late AI SDK usage or reasoning callbacks from a retired request are ignored
+after its body flush and terminal checkpoint refresh complete. They therefore
+cannot overwrite the current request's checkpoint or revive an earlier profile
+response after the next request fails. A checkpoint is cloned at the node
+boundary; later stream and continuation mutation cannot alter it. The callback
+is observational and may not replace the original error.
+
+Fallback clears the live response only while moving to another profile. It
+does not clear durable evidence and does not erase the last failed profile's
+partial response. A request-only failure therefore retains its sent messages;
+a reasoning-only interrupted stream retains reasoning only when **Output
+reasoning** is enabled. Captured HTTP request/response bodies remain subject to
+their existing opt-in switches and represent transport capture, not a delivery
+receipt. Failed checkpoints are inspection-only: they do not create a completed
+logical-round page, successful graph output, editor-cache entry, or tool call.
 
 ## Inline and profile configuration
 
@@ -715,14 +754,22 @@ paths and should not be used as the primary target for new provider refactors.
   diagnostics. The opt-in `LLM response body` output captures the raw response
   payload without consuming the SDK response stream. It deliberately omits no
   content, so workflow authors are responsible for where they expose it.
-- Terminal LLM Chat failures must preserve diagnostics captured before the
-  error. The node publishes its enabled `LLM request body` when an HTTP request
-  was constructed, its enabled `LLM response body` when a provider response was
-  received, and the enabled `LLM Attempts` / profile summary through the normal
-  partial-output event before rethrowing the original error. These diagnostics
-  are editor/run-history evidence only: they do not turn the failed node into a
-  successful dataflow result and must never replace the originating error if
-  diagnostic projection itself fails.
+- Terminal LLM Chat failures preserve diagnostics captured before the error in
+  the terminal `nodeError.outputs` checkpoint. It contains an enabled `LLM
+  request body` when Rivet built an HTTP request, an enabled `LLM response body`
+  when a provider response was captured, known enabled Usage, and enabled `LLM
+  Attempts` / profile summary. The checkpoint also retains the latest streamed
+  `Response` and messages when they exist. When the caller supports terminal
+  checkpoints, that event is the only delivery path; it avoids a duplicate
+  detached partial update racing the terminal state. Direct/custom consumers
+  that lack the channel receive the existing partial-output fallback instead.
+  Recordings, replay, run history, and Remote Debugger retain the terminal
+  checkpoint even when transient `partialOutput` recording is disabled. It
+  proves what Rivet built or captured, not that a remote server necessarily
+  accepted a request. These
+  values are display-only; they never turn a failed node into graph results or
+  replace the original error if projection itself fails. Older recordings that
+  omitted the checkpoint cannot reconstruct unavailable request content.
 - Editor cache keys must keep secret fingerprints and provider/model identity
   separated enough to avoid stale catalog reuse. The editor-only cache control
   is legacy: it is visible only on nodes that already have it enabled, and once

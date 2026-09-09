@@ -40,7 +40,7 @@ Shared runtime foundation for the entire repo.
 
 ### Package metadata
 
-- Version: `2.5.0`
+- Version: `2.6.0`
 - Main: `dist/cjs/bundle.cjs`
 - Module: `dist/esm/index.js`
 - Types: `dist/types/index.d.ts`
@@ -80,7 +80,7 @@ Node runtime wrapper around core.
 
 ### Package metadata
 
-- Version: `2.5.0`
+- Version: `2.6.0`
 - Main: `dist/cjs/bundle.cjs`
 - Module: `dist/esm/index.js`
 - Types: `dist/types/index.d.ts`
@@ -238,7 +238,7 @@ When the renderer is embedded in the desktop app, its Button styling inherits th
 
 Core owns workflow-bound component consistency through `reconcileProjectUiGraphBindings(...)`, `validateUiGraphActionBindings(...)`, and `validateProjectUiGraphActionBindings(...)`. The app invokes reconciliation when a changed workflow boundary is committed into project state; mounting the builder does not rewrite mappings. Hosts can run project preflight before publishing without mutating their loaded revision. Node action execution rejects stale or ambiguous Button mappings with `invalid_button_bindings` and invalid Chat roles with `invalid_chat_bindings`.
 
-Chat pins retain both the pinned assistant-response index and, when available, the index of the preceding user message. Selecting a pin deliberately reveals that user message at the top of the Chat history, so long assistant responses cannot hide the question that supplied its context. Chat draft, messages, and pin indexes are browser-local state keyed by the app origin, normalized path, and UI graph id. `UiGraphBrowserRuntime.ts` validates that persisted subset through the existing Chat helpers, tolerates unavailable/corrupt storage, and deliberately excludes all ordinary page state and action data. Renderers write only when Chat-owned state references change, so action progress and unrelated input edits do not repeatedly serialize a large history. Reset restores the current Chat subset after resetting the ordinary app state; the Chat options menu's **Flush chat history** action clears only messages and pins, retaining an unsent draft. A message's context menu uses the shared removal patch: it removes the selected user or assistant message, unpins a removed response, and shifts every later pinned-response index. Assistant-message menus also expose a transient reading view and, when the component explicitly enables response inspection, a metadata-only response inspector. Traces are stored separately, scoped by app/UI graph/Chat component, bounded to the newest 100, and never projected into conversation history. Both renderers pass reading-view content through the existing sanitized Markdown path, enhance JSON blocks through the shared browser helper, focus the close control, and keep the table-friendly dialog out of persisted Chat state. The overflow menu stays independent from the pins panel, while search and pins remain mutually exclusive history views; both renderers remove the pins panel in the same render when its last pin is removed. The pin control stays visible on pointer hover or keyboard focus; a mouse click does not retain a focus-only pin affordance after unpinning. The shared browser reveal helper remains centered by default for Chat search results. The hosted direct-DOM renderer replaces its root on presentation updates, so it records each Chat viewport's scroll position and restores it for pin/menu changes; it follows the end only when messages, action-running state, or the active search target changes.
+Chat pins retain both the pinned assistant-response index and, when available, the index of the preceding user message. Selecting a pin deliberately reveals that user message at the top of the Chat history, so long assistant responses cannot hide the question that supplied its context. Chat draft, messages, and pin indexes are browser-local state keyed by the app origin, normalized path, and UI graph id. `UiGraphBrowserRuntime.ts` validates that persisted subset through the existing Chat helpers, tolerates unavailable/corrupt storage, and deliberately excludes all ordinary page state and action data. Renderers write only when Chat-owned state references change, so action progress and unrelated input edits do not repeatedly serialize a large history. Reset restores the current Chat subset after resetting the ordinary app state; the always-visible **New chat** header control and the Chat options menu's equivalent **Flush chat history** action must share the same flush-state patch, clearing only messages and pins while retaining an unsent draft. A message's context menu uses the shared removal patch: it removes the selected user or assistant message, unpins a removed response, and shifts every later pinned-response index. Assistant-message menus also expose a transient reading view and, when the component explicitly enables response inspection, a metadata-only response inspector. Traces are stored separately, scoped by app/UI graph/Chat component, bounded to the newest 100, and never projected into conversation history. Both renderers pass reading-view content through the existing sanitized Markdown path, enhance JSON blocks through the shared browser helper, focus the close control, and keep the table-friendly dialog out of persisted Chat state. The overflow menu stays independent from the pins panel, while search and pins remain mutually exclusive history views; both renderers remove the pins panel in the same render when its last pin is removed. The pin control stays visible on pointer hover or keyboard focus; a mouse click does not retain a focus-only pin affordance after unpinning. The shared browser reveal helper remains centered by default for Chat search results. The hosted direct-DOM renderer replaces its root on presentation updates, so it records each Chat viewport's scroll position and restores it for pin/menu changes; it follows the end only when messages, action-running state, or the active search target changes.
 
 [`UiGraphRuntimeModel.ts`](../packages/core/src/model/UiGraphRuntimeModel.ts) is the shared semantic owner for web-app component labels, input values, output formatting, JSON download eligibility and filenames, image-source validation/normalization, action state patches, and validated Chat pin exchanges. Chat pins use a reserved session-state key containing assistant-message indexes; stale, duplicate, non-assistant, and out-of-range entries are ignored, and the action-state resolver never includes pins unless a host deliberately maps that private key. Pin-menu entries reuse the sanitized Markdown path but line-clamp it in the shared renderer CSS, so desktop and hosted views present compact two-column prompt/response excerpts with a full-width hover treatment and a separator only between entries. Image mode accepts intended URL forms plus recognized raster base64, rejects arbitrary URI schemes and non-image base64, and keeps the original state string as the Copy value. [`RivetWebAppRenderer.tsx`](../packages/app/src/components/rivetWebApps/RivetWebAppRenderer.tsx) consumes that model through React; the hosted path uses the direct-DOM adapter in [`webAppClientRenderer.ts`](../packages/node/src/webAppClientRenderer.ts), transports in [`webAppClientTransport.ts`](../packages/node/src/webAppClientTransport.ts), and focused DOM lifecycle helpers in [`webAppClientDom.ts`](../packages/node/src/webAppClientDom.ts). Its one approved `innerHTML` assignment receives only the escaped-Marked, DOMPurify-allowlisted result, so new raw HTML insertion points must not be added beside it. Browser clipboard fallback, downloads, and rendered-chat search highlighting/centered message reveal are shared through [`UiGraphBrowserRuntime.ts`](../packages/core/src/model/UiGraphBrowserRuntime.ts); the shared CSS keeps ordinary matches bright and the active match brighter, while an unfiltered Chat history explicitly occupies its fill-height grid row so short conversations remain bottom-anchored. Cross-package client code imports this contract through the narrow `@valerypopoff/rivet2-core/web-app-runtime` package entrypoint, not through `packages/core/src`; the package emits dedicated ESM and CommonJS artifacts for that subpath. [`build-web-app-client.cjs`](../packages/node/scripts/build-web-app-client.cjs) aliases the public entrypoint to [`webAppRuntime.ts`](../packages/core/src/webAppRuntime.ts) while generating, so the checked-in browser artifact is built from current source even before package output exists. The generator is a true CommonJS launcher so esbuild stays on Yarn PnP's synchronous CJS resolution path under Node 22 Linux. The 13-line `webAppClient.ts` bootstrap and its renderer/transport helpers are generated into one browser artifact and injected by [`webAppHandler.ts`](../packages/node/src/webAppHandler.ts); do not restore a handwritten `String.raw` browser program. The Node build and root style check both verify that the checked-in generated client is fresh. Hosted deployments remain responsible for `img-src` CSP policy when image outputs use remote, `data:`, or `blob:` sources.
 
@@ -549,7 +549,7 @@ Desktop IDE frontend plus Tauri app packaging layer.
 
 ### Package metadata
 
-- Version: `2.11.0`
+- Version: `2.12.0`
 - Private: yes
 
 ### Runtime shape
@@ -719,7 +719,7 @@ Operational CLI for running or serving Rivet graphs.
 
 ### Package metadata
 
-- Version: `2.5.0`
+- Version: `2.6.0`
 - Source entry: `src/cli.ts`
 - Published bin mapping: `rivet -> bin/cli.js`
 - Types: `dist/types/cli.d.ts`
@@ -843,7 +843,7 @@ Portable, executor-agnostic evaluation engine shared by the app, CLI, and host i
 
 ### Package metadata
 
-- Version: `2.5.0`
+- Version: `2.6.0`
 - Main: `dist/cjs/bundle.cjs`
 - Module: `dist/esm/index.js`
 - Types: `dist/types/index.d.ts`
@@ -875,7 +875,7 @@ a crawler, credentials, or a server-side search API.
 
 ### Package metadata
 
-- Version: `2.3.0`
+- Version: `2.4.0`
 - Private: yes
 
 ### Script surface

@@ -48,6 +48,7 @@ void describe('debugger processor attachments', () => {
       execution,
       resultOrigin: 'executed',
       durationMs: 42,
+      outputs: { requestBody: { type: 'string', value: 'preserved request' } },
     });
 
     const nodeError = broadcasts.find((broadcast) => broadcast.message === 'nodeError');
@@ -58,6 +59,29 @@ void describe('debugger processor attachments', () => {
       execution,
       resultOrigin: 'executed',
       durationMs: 42,
+      outputs: { requestBody: { type: 'string', value: 'preserved request' } },
+    });
+  });
+
+  void it('forwards a JSON-safe abort outcome instead of replacing it with null', async () => {
+    const emitter = new Emittery<ProcessEvents>();
+    const processor = {
+      id: 'processor-with-abort',
+      on: emitter.on.bind(emitter),
+    } as unknown as GraphProcessor;
+    const broadcasts: Array<{ message: string; data: unknown }> = [];
+    const attachments = createDebuggerProcessorAttachments({
+      broadcast: (_processor, message, data) => broadcasts.push({ message, data }),
+      emitError: (error) => assert.fail(String(error)),
+      throttlePartialOutputs: 0,
+    });
+
+    attachments.attach(processor);
+    await emitter.emit('abort', { successful: false, error: new Error('expected abort') });
+
+    assert.deepEqual(broadcasts.find((broadcast) => broadcast.message === 'abort')?.data, {
+      successful: false,
+      error: 'Error: expected abort',
     });
   });
 });

@@ -148,10 +148,14 @@ describe('consumeAiSdkStream', () => {
       },
     ];
 
-    const result = await consumeAiSdkStream(mockStream(parts), () => {});
+    const partialReasoning: string[] = [];
+    const result = await consumeAiSdkStream(mockStream(parts), (_text, _calls, reasoning) => {
+      partialReasoning.push(reasoning);
+    });
 
     assert.equal(result.reasoning, 'Let me think about this');
     assert.equal(result.responseText, 'Answer');
+    assert.deepEqual(partialReasoning, ['Let me think', 'Let me think about this', 'Let me think about this']);
   });
 
   it('throws on error part', async () => {

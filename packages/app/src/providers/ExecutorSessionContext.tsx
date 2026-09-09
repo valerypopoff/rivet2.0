@@ -216,14 +216,15 @@ export const ExecutorSessionProvider: FC<{ children: ReactNode; hostConfig?: Exe
             runtime.resolvePendingGraphExecution(requestId, (data as { outputs: unknown }).outputs as any);
           } else if (message === 'done') {
             runtime.resolvePendingGraphExecution(requestId, (data as { results: unknown }).results as any);
-          } else if (message === 'abort') {
-            runtime.rejectPendingGraphExecution(requestId, new Error('graph execution aborted'));
           } else if (message === 'error') {
             runtime.rejectPendingGraphExecution(requestId, (data as { error: Error }).error);
           }
         }
 
-        if (shouldSettlePendingRequest && (message === 'done' || message === 'abort' || message === 'error')) {
+        // Abort announces cancellation, but nodes can still be unwinding and
+        // producing their terminal diagnostics. Keep request routing alive
+        // until the root done/error event closes the invocation.
+        if (shouldSettlePendingRequest && (message === 'done' || message === 'error')) {
           if (requestId === runtime.getActiveGraphRunRequestId()) {
             runtime.setActiveGraphRunRequestId(null);
           }

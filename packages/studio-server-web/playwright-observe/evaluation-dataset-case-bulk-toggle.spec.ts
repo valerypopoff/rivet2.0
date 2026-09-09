@@ -35,23 +35,26 @@ test.describe('Evaluation dataset case bulk enable toggle', () => {
     await frame.getByRole('button', { name: '+ Add case' }).click();
     await frame.getByRole('button', { name: '+ Add case' }).click();
 
-    const caseToggles = frame.locator('.evaluation-case-enabled-control input');
-    const firstCase = caseToggles.nth(0);
-    const secondCase = caseToggles.nth(1);
-    await expect(firstCase).toBeChecked();
-    await expect(secondCase).toBeChecked();
+    const caseToggleControls = frame.locator('.evaluation-case-enabled-control .scalable-toggle');
+    const caseToggleInputs = frame.locator('.evaluation-case-enabled-control input');
+    const firstCaseControl = caseToggleControls.nth(0);
+    const secondCaseControl = caseToggleControls.nth(1);
+    const firstCaseInput = caseToggleInputs.nth(0);
+    const secondCaseInput = caseToggleInputs.nth(1);
+    await expect(firstCaseInput).toBeChecked();
+    await expect(secondCaseInput).toBeChecked();
 
     const modifier = process.platform === 'darwin' ? 'Meta' : 'Control';
-    await firstCase.click({ modifiers: [modifier] });
-    await expect(firstCase).not.toBeChecked();
-    await expect(secondCase).not.toBeChecked();
+    await firstCaseControl.click({ modifiers: [modifier] });
+    await expect(firstCaseInput).not.toBeChecked();
+    await expect(secondCaseInput).not.toBeChecked();
 
-    await secondCase.click();
-    await expect(firstCase).not.toBeChecked();
-    await expect(secondCase).toBeChecked();
+    await secondCaseControl.click();
+    await expect(firstCaseInput).not.toBeChecked();
+    await expect(secondCaseInput).toBeChecked();
 
-    await firstCase.click({ modifiers: [modifier] });
-    await expect(firstCase).toBeChecked();
-    await expect(secondCase).toBeChecked();
+    await firstCaseControl.click({ modifiers: [modifier] });
+    await expect(firstCaseInput).toBeChecked();
+    await expect(secondCaseInput).toBeChecked();
   });
 });

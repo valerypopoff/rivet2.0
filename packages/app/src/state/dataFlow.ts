@@ -79,6 +79,11 @@ export type ProjectExecutionSnapshot = {
 export type NodeRunDataBase = {
   /** Privacy-bounded physical model/tool events correlated to this invocation. */
   agentTraceEvents?: AgentTraceEvent[];
+  /** Historical node lifecycle bounds while a recording is replayed. */
+  recordedTiming?: {
+    startedAt?: number;
+    finishedAt?: number;
+  };
   startedAt?: number;
   finishedAt?: number;
   durationMs?: number;

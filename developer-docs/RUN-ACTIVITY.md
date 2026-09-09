@@ -471,23 +471,38 @@ undefined or unrelated lifecycle identity.
 
 Run Activity keeps two clocks during playback:
 
-- The local receipt clock timestamps the new replay session. It continues to
-  own ordering, the Started column, and whether the editor is actively
-  replaying the recording.
+- The local receipt clock timestamps the new replay session. It owns reducer
+  ordering and whether the editor is actively replaying the recording; it is
+  never presented as the start or elapsed time of the original execution.
 - `RecordingPlayer` attaches the original `RecordedEvent.ts` as transient
-  `replayRecordedAt` provenance on each replayed lifecycle event. Run Activity
-  uses that timeline for the root elapsed duration: from the first historical
-  lifecycle event to the root terminal event. While playback is still active,
-  it ends at the latest delivered historical event instead of advancing at
-  replay speed.
+  `replayRecordedAt` provenance on replayed lifecycle, model-call,
+  profile-attempt, and tool-call events. Run Activity uses lifecycle
+  provenance—not a physical provider-call timestamp—as the historical node and
+  root timeline. It uses that timeline for the root elapsed duration: from a
+  recorded lifecycle start to the root terminal event. While playback
+  is still active, it ends at the latest delivered historical event instead of
+  advancing at replay speed.
 
 This lets a recording replay quickly without claiming that an 18-second model
 call took a few milliseconds. Individual recorded node durations and physical
 model/tool durations remain attached to their replayed events when present.
+Node history and Run Activity retain recorded node bounds separately from local
+receipt timestamps. The **Started** column and the Response Inspector use the
+historical node start when it exists. A model or tool record never establishes
+a node start by itself. If a replayed root settles before a node's own
+finish/error event, the journal clears stale waiting/progress state, marks that
+row as terminally incomplete, and shows an em dash with an accessible
+"duration unavailable" label instead of manufacturing a duration. A root that
+has no recorded lifecycle start is likewise duration-unavailable; it must not
+be represented as a zero-second replay. A later exact node terminal may still
+replace that conservative marker.
+
 Legacy recordings and ordinary live events have no `replayRecordedAt`, so they
-continue to use the local receipt clock. The recorder deliberately strips this
-transient provenance if a replay is recorded again: the new recording's own
-`RecordedEvent.ts` becomes the only historical timeline.
+continue to use the local receipt clock. `ExecutionRecorder` strips transient
+provenance if an API caller explicitly records replay events, but the editor
+does not start a new recorder during loaded-recording playback: **Save
+Recording** exports the loaded original artifact. That avoids replacing it with
+an accelerated, internally inconsistent replay timeline.
 
 The response inspector is scoped to the currently selected root. Closing the
 drawer, clearing its root, or selecting another root closes any open inspector

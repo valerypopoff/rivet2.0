@@ -16,7 +16,8 @@ import {
 } from '../state/dataFlow.js';
 import type { DataRefStore } from '../providers/ProvidersContext.js';
 import { buildGraphViewKeyFromExecution } from '../utils/executionIdentity.js';
-import { sanitizeInputsOrOutputs } from '../utils/executionDataSanitization.js';
+import { sanitizeInputsOrOutputs, sanitizeSplitOutputs } from '../utils/executionDataSanitization.js';
+import { getRecordedNodeTimingPatch } from '../utils/recordedNodeTiming.js';
 import {
   clearExecutionDataRefs,
   collectStoredRefIds,
@@ -31,6 +32,7 @@ import {
 } from './graphExecutionEventHelpers.js';
 import {
   collectReplacedRefIds,
+  isTerminalNodeRunStatus,
   mergeNodeRunDataForProcess,
   prepareNodeRunDataForStorage,
   removeUserInputQuestionsForProcess,
@@ -63,6 +65,21 @@ export function applyProcessEventToProjectExecutionSnapshot<K extends keyof Proc
 ): ProjectExecutionSnapshotEventResult {
   const occurredAt = Date.now();
   const previousSnapshot = options.snapshot ?? createEmptyProjectExecutionSnapshot();
+
+  // partialOutput is detached from Core execution. A late observer callback
+  // must not overwrite a completed/error/excluded invocation in either the
+  // project snapshot or its Run Activity journal.
+  if (
+    options.message === 'partialOutput' &&
+    isTerminalNodeProcess(
+      previousSnapshot,
+      (options.data as ProcessEvents['partialOutput']).node.id,
+      (options.data as ProcessEvents['partialOutput']).processId,
+    )
+  ) {
+    return { changed: false, snapshot: previousSnapshot };
+  }
+
   const result = applyProcessEventToProjectExecutionSnapshotData(options);
   let runActivityJournal = previousSnapshot.runActivityJournal ?? createRunActivityJournal();
 
@@ -114,6 +131,7 @@ function applyProcessEventToProjectExecutionSnapshotData<K extends keyof Process
           options.data as ProcessEvents['nodeStart'],
           {
             inputData: sanitizeInputsOrOutputs((options.data as ProcessEvents['nodeStart']).inputs),
+            ...getRecordedNodeTimingPatch(options.data as ProcessEvents['nodeStart'], 'start'),
             startedAt: Date.now(),
             status: { type: 'running' },
           },
@@ -128,6 +146,7 @@ function applyProcessEventToProjectExecutionSnapshotData<K extends keyof Process
           options.data as ProcessEvents['nodeFinish'],
           {
             durationMs: (options.data as ProcessEvents['nodeFinish']).durationMs,
+            ...getRecordedNodeTimingPatch(options.data as ProcessEvents['nodeFinish'], 'terminal'),
             finishedAt: Date.now(),
             outputData: sanitizeInputsOrOutputs((options.data as ProcessEvents['nodeFinish']).outputs),
             splitRunDurationMs: (options.data as ProcessEvents['nodeFinish']).splitRunDurationMs,
@@ -144,8 +163,15 @@ function applyProcessEventToProjectExecutionSnapshotData<K extends keyof Process
           options.data as ProcessEvents['nodeError'],
           {
             durationMs: (options.data as ProcessEvents['nodeError']).durationMs,
+            ...getRecordedNodeTimingPatch(options.data as ProcessEvents['nodeError'], 'terminal'),
             finishedAt: Date.now(),
             splitRunDurationMs: (options.data as ProcessEvents['nodeError']).splitRunDurationMs,
+            ...((options.data as ProcessEvents['nodeError']).outputs === undefined
+              ? {}
+              : { outputData: sanitizeInputsOrOutputs((options.data as ProcessEvents['nodeError']).outputs!) }),
+            ...((options.data as ProcessEvents['nodeError']).splitOutputs === undefined
+              ? {}
+              : { splitOutputData: sanitizeSplitOutputs((options.data as ProcessEvents['nodeError']).splitOutputs!) }),
             status: {
               type: 'error',
               error:
@@ -165,6 +191,7 @@ function applyProcessEventToProjectExecutionSnapshotData<K extends keyof Process
           options.data as ProcessEvents['nodeExcluded'],
           {
             finishedAt: Date.now(),
+            ...getRecordedNodeTimingPatch(options.data as ProcessEvents['nodeExcluded'], 'excluded'),
             inputData: sanitizeInputsOrOutputs((options.data as ProcessEvents['nodeExcluded']).inputs),
             outputData: sanitizeInputsOrOutputs((options.data as ProcessEvents['nodeExcluded']).outputs),
             startedAt: Date.now(),
@@ -523,11 +550,14 @@ function applyPartialOutput(
       existingProcess.graphId = data.execution.graphId;
       existingProcess.graphRunId = data.execution.graphRunId;
       existingProcess.rootRunId = data.execution.rootRunId;
-      refIdsToDelete.push(...collectStoredRefIds(existingProcess.data.splitOutputData?.[data.index]));
-      existingProcess.data.splitOutputData = {
+      const nextSplitOutputData = {
         ...existingProcess.data.splitOutputData,
         [data.index]: storedOutputs!,
       };
+      refIdsToDelete.push(
+        ...collectReplacedRefIds(existingProcess.data, { splitOutputData: nextSplitOutputData }),
+      );
+      existingProcess.data.splitOutputData = nextSplitOutputData;
     } else {
       draft.lastRunDataByNode[data.node.id]!.push({
         data: {
@@ -547,6 +577,15 @@ function applyPartialOutput(
 
   deleteStoredRefIds(options.refStore, refIdsToDelete);
   return nextSnapshot;
+}
+
+function isTerminalNodeProcess(
+  snapshot: ProjectExecutionSnapshot,
+  nodeId: ProcessEvents['nodeStart']['node']['id'],
+  processId: ProcessEvents['nodeStart']['processId'],
+): boolean {
+  const status = snapshot.lastRunDataByNode[nodeId]?.find((process) => process.processId === processId)?.data.status;
+  return isTerminalNodeRunStatus(status);
 }
 
 function applyNodeOutputsCleared(

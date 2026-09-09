@@ -32,7 +32,7 @@ function buildResponseText(textBlocks: Map<string, string>, dedupeDuplicateTextB
 
 export async function consumeAiSdkStream(
   fullStream: AsyncIterable<TextStreamPart<ToolSet>>,
-  onPartialOutputs: (text: string, functionCalls: StreamedFunctionCall[]) => void,
+  onPartialOutputs: (text: string, functionCalls: StreamedFunctionCall[], reasoning: string) => void,
   options: ConsumeAiSdkStreamOptions = {},
 ): Promise<AiSdkStreamResult> {
   let responseText = '';
@@ -53,12 +53,13 @@ export async function consumeAiSdkStream(
       case 'text-delta': {
         textBlocks.set(part.id, `${textBlocks.get(part.id) ?? ''}${part.text}`);
         responseText = buildResponseText(textBlocks, !!options.dedupeDuplicateTextBlocks);
-        onPartialOutputs(responseText, functionCalls);
+        onPartialOutputs(responseText, functionCalls, reasoning);
         break;
       }
 
       case 'reasoning-delta': {
         reasoning += part.text;
+        onPartialOutputs(responseText, functionCalls, reasoning);
         break;
       }
 
@@ -70,7 +71,7 @@ export async function consumeAiSdkStream(
           arguments: JSON.stringify(part.input),
           lastParsedArguments: part.input,
         });
-        onPartialOutputs(responseText, functionCalls);
+        onPartialOutputs(responseText, functionCalls, reasoning);
         break;
       }
 

@@ -65,6 +65,17 @@ export type ChatV2GenerateHandle = {
 
 export type ChatV2GenerateExecutor = (args: GenerateTextArgs) => ChatV2GenerateHandle | Promise<ChatV2GenerateHandle>;
 
+/**
+ * A complete provider response that can be retained as diagnostic evidence
+ * before a later optional finalization field fails.
+ */
+export type ChatV2ResponseEvidence = {
+  text: string;
+  functionCalls: StreamedFunctionCall[];
+  reasoning: string;
+  usage?: LanguageModelUsage | undefined;
+};
+
 export type StreamChatV2Options = {
   model: ChatV2Model;
   messages: ChatV2MessageList;
@@ -85,7 +96,20 @@ export type StreamChatV2Options = {
   abortSignal?: AbortSignal | undefined;
   executeStream?: ChatV2StreamExecutor | undefined;
   executeGenerate?: ChatV2GenerateExecutor | undefined;
-  onPartialOutput?: ((partial: { text: string; functionCalls: StreamedFunctionCall[] }) => void) | undefined;
+  onPartialOutput?: ((partial: { text: string; functionCalls: StreamedFunctionCall[]; reasoning: string }) => void) | undefined;
+  /**
+   * Internal observer invoked when complete provider response evidence becomes
+   * available, before optional metadata or response-format finalization can
+   * fail. It may be invoked again when independently resolved reasoning or
+   * usage becomes available. It is diagnostic evidence only and must never
+   * affect provider execution.
+   */
+  onResponseReceived?: ((response: ChatV2ResponseEvidence) => void) | undefined;
+  /**
+   * Internal observer invoked after request construction and immediately before
+   * the AI SDK executor is called. It is not a delivery acknowledgement.
+   */
+  onRequestStarted?: (() => void) | undefined;
   /** Deadline to the first semantic stream event, or the complete generate response. */
   firstOutputTimeoutMs?: number | undefined;
   /** Maximum gap between events after the first semantic stream event. */
@@ -182,6 +206,11 @@ export type RunChatV2PipelineOptions = {
   streamInactivityTimeoutMs?: number | undefined;
   onStreamActivity?: (() => void) | undefined;
   onBeforeProviderRetry?: ((cooldownMs: number) => void | Promise<void>) | undefined;
+  /**
+   * Internal, invocation-scoped failure evidence. It receives only existing
+   * public output shapes and must never affect a provider request.
+   */
+  onFailureCheckpoint?: ((outputs: Outputs) => void) | undefined;
   context: Pick<InternalProcessContext, 'signal' | 'onPartialOutputs'> &
     Partial<Pick<InternalProcessContext, 'node' | 'onChatV2CallFinished' | 'processId' | 'llmProfileHealthExecutionCorrelationId'>>;
   executeStream?: ChatV2StreamExecutor | undefined;

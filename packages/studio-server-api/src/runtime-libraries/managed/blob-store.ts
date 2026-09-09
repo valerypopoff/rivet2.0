@@ -1,7 +1,6 @@
 import {
   CreateBucketCommand,
   DeleteObjectsCommand,
-  DeleteObjectCommand,
   GetObjectCommand,
   HeadBucketCommand,
   ListObjectsV2Command,
@@ -22,7 +21,6 @@ export interface RuntimeLibrariesBlobStore {
   dispose?(): void;
   putBuffer(key: string, contents: Buffer, contentType?: string): Promise<void>;
   getBuffer(key: string): Promise<Buffer>;
-  delete(key: string | null | undefined): Promise<void>;
 }
 
 export type RuntimeLibrariesBlobObject = {
@@ -93,6 +91,7 @@ export async function listRuntimeLibrariesBlobObjects(
     const client = new S3Client(createRuntimeLibrariesS3ClientConfig(config));
     const prefix = getRuntimeLibrariesBlobPrefix(config.objectStoragePrefix);
     const objects: RuntimeLibrariesBlobObject[] = [];
+    const seenContinuationTokens = new Set<string>();
     let continuationToken: string | undefined;
 
     try {
@@ -117,10 +116,17 @@ export async function listRuntimeLibrariesBlobObjects(
           });
         }
 
-        if (!response.IsTruncated || !response.NextContinuationToken) {
+        if (!response.IsTruncated) {
           break;
         }
 
+        if (!response.NextContinuationToken) {
+          throw new Error('Runtime-library object listing was truncated without a continuation token.');
+        }
+        if (seenContinuationTokens.has(response.NextContinuationToken)) {
+          throw new Error('Runtime-library object listing returned the same continuation token more than once.');
+        }
+        seenContinuationTokens.add(response.NextContinuationToken);
         continuationToken = response.NextContinuationToken;
       }
     } finally {
@@ -147,7 +153,7 @@ export async function deleteRuntimeLibrariesBlobObjects(
     try {
       for (let index = 0; index < uniqueKeys.length; index += 1_000) {
         const batch = uniqueKeys.slice(index, index + 1_000);
-        await client.send(
+        const response = await client.send(
           new DeleteObjectsCommand({
             Bucket: config.objectStorageBucket,
             Delete: {
@@ -158,6 +164,15 @@ export async function deleteRuntimeLibrariesBlobObjects(
             },
           }),
         );
+        if (response.Errors?.length) {
+          const details = response.Errors
+            .slice(0, 3)
+            .map((error) => `${error.Key ?? 'unknown key'} (${error.Code ?? 'unknown error'})`)
+            .join(', ');
+          throw new Error(
+            `Runtime-library artifact deletion failed for ${response.Errors.length} object(s): ${details}`,
+          );
+        }
         deletedCount += batch.length;
       }
     } finally {
@@ -253,20 +268,5 @@ export class S3RuntimeLibrariesBlobStore implements RuntimeLibrariesBlobStore {
 
       return Buffer.from(await response.Body.transformToByteArray());
     });
-  }
-
-  async delete(key: string | null | undefined): Promise<void> {
-    if (!key) {
-      return;
-    }
-
-    await observeObjectStorageOperation('runtime_libraries', 'delete', () =>
-      this.#client.send(
-        new DeleteObjectCommand({
-          Bucket: this.#bucket,
-          Key: this.#key(key),
-        }),
-      ),
-    );
   }
 }

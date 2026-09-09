@@ -40,7 +40,7 @@ function withReplayRecordedAt<T>(data: T, replayRecordedAt: number | undefined):
   return { ...data, replayRecordedAt } as T;
 }
 
-const REPLAY_TIMED_LIFECYCLE_EVENTS = new Set<keyof ProcessEvents>([
+const REPLAY_TIMED_EVENTS = new Set<keyof ProcessEvents>([
   'start',
   'graphStart',
   'graphOutputsReady',
@@ -55,6 +55,12 @@ const REPLAY_TIMED_LIFECYCLE_EVENTS = new Set<keyof ProcessEvents>([
   'nodeError',
   'nodeExcluded',
   'nodeOutputsCleared',
+  // These records retain their own physical call timestamps, but the replay
+  // timestamp lets observers keep them on the same historical recording
+  // timeline without borrowing a provider timestamp as a node lifecycle time.
+  'llmCallFinished',
+  'llmProfileAttempt',
+  'toolCallFinished',
 ]);
 
 export async function replayExecutionRecording(options: {
@@ -126,9 +132,7 @@ export async function replayExecutionRecording(options: {
     // playback error remains attached to that root instead of synthesizing a
     // second one.
     hasEmittedRunActivityExecution = true;
-    const payload = REPLAY_TIMED_LIFECYCLE_EVENTS.has(event)
-      ? withReplayRecordedAt(data, currentReplayRecordedAt)
-      : data;
+    const payload = REPLAY_TIMED_EVENTS.has(event) ? withReplayRecordedAt(data, currentReplayRecordedAt) : data;
     emitDetached(emitter, event, payload);
   };
 
@@ -294,12 +298,15 @@ export async function replayExecutionRecording(options: {
       processId: ProcessId,
       terminalTs: number,
     ): number | undefined => {
-      if (recordedDuration !== undefined) {
+      if (isValidRecordedDuration(recordedDuration)) {
         return recordedDuration;
       }
 
       const startedAt = nodeStartTimestamps.get(getNodeRunKey(execution, nodeId, processId));
-      return startedAt === undefined ? undefined : Math.max(0, terminalTs - startedAt);
+      if (!isValidRecordedTimestamp(startedAt) || !isValidRecordedTimestamp(terminalTs) || terminalTs < startedAt) {
+        return undefined;
+      }
+      return terminalTs - startedAt;
     };
 
     for (const event of recorder.events) {
@@ -342,11 +349,13 @@ export async function replayExecutionRecording(options: {
         }
         case 'done': {
           emitFallbackRootTerminal('completed', { outputs: event.data.results });
-          emitReplayTerminalEvent('done', event.data);
+          // Match a live root run: `done` remains inside the active lifecycle
+          // so a done listener cannot start work that replay cleanup would
+          // clobber. `finish` is emitted once below, after playback releases
+          // ownership, so its listener may start a new run.
+          await emitter.emit('done', withReplayRecordedAt(event.data, currentReplayRecordedAt));
           graphOutputs = event.data.results;
           setGraphOutputs(graphOutputs);
-          // Keep ownership until playback drains, just like a live graph run.
-          // A done listener must not start work that final cleanup could clobber.
           break;
         }
         case 'error': {
@@ -471,6 +480,8 @@ export async function replayExecutionRecording(options: {
                 node,
                 error: data.error,
                 processId: data.processId as ProcessId,
+                ...(data.outputs === undefined ? {} : { outputs: data.outputs }),
+                ...(data.splitOutputs === undefined ? {} : { splitOutputs: data.splitOutputs }),
                 ...(data.resultOrigin === undefined ? {} : { resultOrigin: data.resultOrigin }),
                 execution,
               },
@@ -587,7 +598,11 @@ export async function replayExecutionRecording(options: {
           break;
         }
         case 'finish': {
-          emitDetached(emitter, 'finish', undefined);
+          // Current recordings deliberately exclude root `finish`: the
+          // recorder uses it only as its sealing signal. Older recordings can
+          // contain it, but replay must emit exactly one finish after it has
+          // released the lifecycle below, so defer both formats to that one
+          // common boundary.
           break;
         }
         default: {
@@ -625,7 +640,21 @@ export async function replayExecutionRecording(options: {
     emitReplayTerminalEvent('error', { error: replayError });
   } finally {
     setRunning(false);
+    // This must happen after setRunning(false), not merely as a detached
+    // emission from the recorded-event loop. A live root finish listener may
+    // start the next run; replay has the same contract. It is also the
+    // synthetic finish for current recordings, whose recorder omits finish
+    // from the replayable event log and uses it only to seal the recording.
+    emitDetached(emitter, 'finish', undefined);
   }
 
   return graphOutputs;
+}
+
+function isValidRecordedTimestamp(value: number | undefined): value is number {
+  return value != null && Number.isFinite(value) && value >= 0;
+}
+
+function isValidRecordedDuration(value: number | undefined): value is number {
+  return value != null && Number.isFinite(value) && value >= 0;
 }

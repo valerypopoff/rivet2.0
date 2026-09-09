@@ -64,6 +64,10 @@ export type SerializedProcessEventMap = {
     node: ChartNode;
     error: Error | string;
     processId: ProcessId;
+    /** Display-only outputs retained by a failed non-split invocation. */
+    outputs?: Outputs;
+    /** Display-only outputs retained by individual failed split invocations. */
+    splitOutputs?: Record<number, Outputs>;
     resultOrigin?: NodeResultOrigin;
     durationMs?: number;
     splitRunDurationMs?: Record<number, number>;

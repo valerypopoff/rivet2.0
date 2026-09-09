@@ -1091,8 +1091,10 @@ describe('api', () => {
     });
     const recorder = new ExecutionRecorder();
     recorder.record(processor.processor);
+    const recordingFinished = recorder.once('finish');
 
     const outputs = await processor.run();
+    await recordingFinished;
     const eventTypes = recorder.events.map((event) => event.type);
 
     assert.deepEqual(outputs.result, {
@@ -1105,6 +1107,7 @@ describe('api', () => {
     assert.ok(eventTypes.includes('nodeFinish'));
     assert.ok(eventTypes.includes('graphFinish'));
     assert.ok(eventTypes.includes('done'));
-    assert.equal(eventTypes.at(-1), 'finish');
+    // `finish` seals the recorder, but is deliberately not replayable.
+    assert.equal(eventTypes.at(-1), 'done');
   });
 });

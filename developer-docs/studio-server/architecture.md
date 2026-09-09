@@ -300,6 +300,7 @@ The saved `Settings` -> `Storage` mode decides which paths are authoritative:
   - runtime-library release metadata, activation state, and job state live in Postgres
   - runtime-library release artifacts live in object storage under the fixed `runtime-libraries/` prefix
   - `RIVET_RUNTIME_LIBRARIES_ROOT` remains a local extracted cache/workspace on each process, not the shared source of truth
+  - archive upload precedes the atomic release/activation/job transition. An ambiguous database commit acknowledgement is resolved from the locked durable state; the worker never deletes that archive on the error path. Activation and manual managed-runtime-library pruning share the same bounded transaction lock, while cancellation coordinates through the locked job row; pruning revalidates database candidates and blob references before deletion. Per-process cache refreshes are serialized, so a forced post-activation refresh cannot be overwritten by an older in-flight poll.
   - Kubernetes app settings are encrypted PostgreSQL state shared through the typed repository; execution-plane `RIVET_APP_DATA_ROOT` is only a pod-local compatibility/cache area and never a distributed source of truth
   - package-plugin registration is not currently part of the API-hosted published execution contract, so the execution plane does not assume persistent plugin state
 

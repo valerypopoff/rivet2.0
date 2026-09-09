@@ -3,7 +3,7 @@ import { describe, it } from 'node:test';
 import { strict as assert } from 'node:assert';
 
 import type { GraphId, NodeGraph } from '../../src/model/NodeGraph.js';
-import type { GraphProcessor, NodeResultOrigin, ProcessEvents } from '../../src/model/GraphProcessor.js';
+import type { GraphProcessor, NodeResultOrigin, Outputs, ProcessEvents } from '../../src/model/GraphProcessor.js';
 import type { SerializedProcessEventMap } from '../../src/model/ExecutorProtocol.js';
 import { replayExecutionRecording } from '../../src/model/RecordingPlayer.js';
 import type { GraphExecutionMetadata, GraphRunId, ProcessId, RootRunId } from '../../src/model/ProcessContext.js';
@@ -35,24 +35,37 @@ const graph: NodeGraph = {
 };
 
 class FakeSocket {
-  #listeners = new Set<(event: MessageEvent) => void>();
+  #closeListeners = new Set<() => void>();
+  #messageListeners = new Set<(event: MessageEvent) => void>();
+  readyState = 1;
 
-  addEventListener(type: 'message', listener: (event: MessageEvent) => void) {
+  addEventListener(type: 'message' | 'close', listener: ((event: MessageEvent) => void) | (() => void)) {
     if (type === 'message') {
-      this.#listeners.add(listener);
+      this.#messageListeners.add(listener as (event: MessageEvent) => void);
+    } else if (type === 'close') {
+      this.#closeListeners.add(listener as () => void);
     }
   }
 
-  removeEventListener(type: 'message', listener: (event: MessageEvent) => void) {
+  removeEventListener(type: 'message' | 'close', listener: ((event: MessageEvent) => void) | (() => void)) {
     if (type === 'message') {
-      this.#listeners.delete(listener);
+      this.#messageListeners.delete(listener as (event: MessageEvent) => void);
+    } else if (type === 'close') {
+      this.#closeListeners.delete(listener as () => void);
     }
   }
 
   emit(message: unknown) {
     const event = { data: JSON.stringify(message) } as MessageEvent;
-    for (const listener of this.#listeners) {
+    for (const listener of this.#messageListeners) {
       listener(event);
+    }
+  }
+
+  close() {
+    this.readyState = 3;
+    for (const listener of this.#closeListeners) {
+      listener();
     }
   }
 }
@@ -158,12 +171,26 @@ async function replayNodeFinishTiming(
 
 async function replayNodeResultOrigins(
   recorder: ExecutionRecorder,
-): Promise<Array<{ type: string; resultOrigin: NodeResultOrigin | undefined }>> {
+): Promise<
+  Array<{ type: string; resultOrigin: NodeResultOrigin | undefined; outputs?: Outputs; splitOutputs?: Record<number, Outputs> }>
+> {
   const replayEmitter = new Emittery<ProcessEvents>();
-  const replayed: Array<{ type: string; resultOrigin: NodeResultOrigin | undefined }> = [];
+  const replayed: Array<{
+    type: string;
+    resultOrigin: NodeResultOrigin | undefined;
+    outputs?: Outputs;
+    splitOutputs?: Record<number, Outputs>;
+  }> = [];
 
   for (const type of ['nodeStart', 'partialOutput', 'nodeFinish', 'nodeError', 'nodeExcluded'] as const) {
-    replayEmitter.on(type, (data) => replayed.push({ type, resultOrigin: data.resultOrigin }));
+    replayEmitter.on(type, (data) =>
+      replayed.push({
+        type,
+        resultOrigin: data.resultOrigin,
+        ...(type === 'nodeError' && data.outputs !== undefined ? { outputs: data.outputs } : {}),
+        ...(type === 'nodeError' && data.splitOutputs !== undefined ? { splitOutputs: data.splitOutputs } : {}),
+      }),
+    );
   }
 
   await replayExecutionRecording({
@@ -614,6 +641,8 @@ void describe('ExecutionRecorder', () => {
           node,
           error: 'failed',
           processId,
+          outputs: { requestBody: { type: 'string', value: 'preserved request' } },
+          splitOutputs: { 1: { response: { type: 'string', value: 'preserved split response' } } },
           resultOrigin: 'preloaded',
           execution,
         } satisfies SerializedProcessEventMap['nodeError'],
@@ -641,12 +670,21 @@ void describe('ExecutionRecorder', () => {
     assert.deepEqual(
       recorder.events
         .filter((event) => events.some((expected) => expected.message === event.type))
-        .map((event) => ({ type: event.type, resultOrigin: event.data.resultOrigin })),
+        .map((event) => ({
+          type: event.type,
+          resultOrigin: event.data.resultOrigin,
+          ...(event.type === 'nodeError' ? { outputs: event.data.outputs, splitOutputs: event.data.splitOutputs } : {}),
+        })),
       [
         { type: 'nodeStart', resultOrigin: 'editor-cache' },
         { type: 'partialOutput', resultOrigin: 'executed' },
         { type: 'nodeFinish', resultOrigin: 'frozen' },
-        { type: 'nodeError', resultOrigin: 'preloaded' },
+        {
+          type: 'nodeError',
+          resultOrigin: 'preloaded',
+          outputs: { requestBody: { type: 'string', value: 'preserved request' } },
+          splitOutputs: { 1: { response: { type: 'string', value: 'preserved split response' } } },
+        },
         { type: 'nodeExcluded', resultOrigin: 'unknown' },
       ],
     );
@@ -656,7 +694,12 @@ void describe('ExecutionRecorder', () => {
       { type: 'nodeStart', resultOrigin: 'editor-cache' },
       { type: 'partialOutput', resultOrigin: 'executed' },
       { type: 'nodeFinish', resultOrigin: 'frozen' },
-      { type: 'nodeError', resultOrigin: 'preloaded' },
+      {
+        type: 'nodeError',
+        resultOrigin: 'preloaded',
+        outputs: { requestBody: { type: 'string', value: 'preserved request' } },
+        splitOutputs: { 1: { response: { type: 'string', value: 'preserved split response' } } },
+      },
       { type: 'nodeExcluded', resultOrigin: 'unknown' },
     ]);
 
@@ -669,7 +712,12 @@ void describe('ExecutionRecorder', () => {
     const legacyRecorder = ExecutionRecorder.deserializeFromString(JSON.stringify(legacySerialized));
     assert.deepEqual(
       await replayNodeResultOrigins(legacyRecorder),
-      events.map((event) => ({ type: event.message, resultOrigin: undefined })),
+      events.map((event) => ({
+        type: event.message,
+        resultOrigin: undefined,
+        ...(event.message === 'nodeError' ? { outputs: event.data.outputs } : {}),
+        ...(event.message === 'nodeError' ? { splitOutputs: event.data.splitOutputs } : {}),
+      })),
     );
   });
 
@@ -764,12 +812,20 @@ void describe('ExecutionRecorder', () => {
       ProcessEvents['llmProfileAttempt'],
       ProcessEvents['toolCallFinished'],
     ];
-    assert.deepEqual({ ...replayedModelEvent, execution: undefined }, { ...modelEvent, execution: undefined });
+    const recordedTimestamps = new Map(recorder.events.map((event) => [event.type, event.ts]));
+    const withoutReplayProvenance = <T extends { execution: unknown; replayRecordedAt?: number }>(event: T) => {
+      const { execution: _execution, replayRecordedAt: _replayRecordedAt, ...rest } = event;
+      return rest;
+    };
+    assert.deepEqual(withoutReplayProvenance(replayedModelEvent), withoutReplayProvenance(modelEvent));
     assert.deepEqual(
-      { ...replayedProfileAttemptEvent, execution: undefined },
-      { ...profileAttemptEvent, execution: undefined },
+      withoutReplayProvenance(replayedProfileAttemptEvent),
+      withoutReplayProvenance(profileAttemptEvent),
     );
-    assert.deepEqual({ ...replayedToolEvent, execution: undefined }, { ...toolEvent, execution: undefined });
+    assert.deepEqual(withoutReplayProvenance(replayedToolEvent), withoutReplayProvenance(toolEvent));
+    assert.equal(replayedModelEvent.replayRecordedAt, recordedTimestamps.get('llmCallFinished'));
+    assert.equal(replayedProfileAttemptEvent.replayRecordedAt, recordedTimestamps.get('llmProfileAttempt'));
+    assert.equal(replayedToolEvent.replayRecordedAt, recordedTimestamps.get('toolCallFinished'));
     assert.equal(replayedModelEvent.execution.graphId, execution.graphId);
     assert.equal(replayedProfileAttemptEvent.execution.graphId, execution.graphId);
     assert.equal(replayedToolEvent.execution.graphId, execution.graphId);
@@ -1021,6 +1077,7 @@ void describe('ExecutionRecorder', () => {
 
     assert.equal(finished, false);
     await emitter.emit('done', { results: { output: { type: 'string', value: 'final' } } });
+    await emitter.emit('finish', undefined);
     await recordingFinished;
 
     assert.deepEqual(
@@ -1029,20 +1086,37 @@ void describe('ExecutionRecorder', () => {
     );
   });
 
-  void it('finishes processor recordings on unsuccessful abort', async () => {
+  void it('keeps processor recordings open through unsuccessful abort cleanup', async () => {
     const recorder = new ExecutionRecorder();
     const emitter = new Emittery<ProcessEvents>();
     recorder.record(emitter as unknown as GraphProcessor);
 
-    const recordingFinished = recorder.once('finish');
+    let finished = false;
+    const recordingFinished = recorder.once('finish').then(() => {
+      finished = true;
+    });
 
     await emitter.emit('abort', { successful: false, error: 'stopped' });
+    await emitter.emit('nodeError', {
+      node,
+      error: new Error('cleanup failure'),
+      outputs: { requestBody: { type: 'string', value: 'preserved request' } },
+      processId,
+      execution,
+    });
+    await Promise.resolve();
+
+    assert.equal(finished, false);
+    await emitter.emit('error', { error: new Error('stopped') });
+    await emitter.emit('finish', undefined);
     await recordingFinished;
 
     assert.deepEqual(
       recorder.events.map((event) => event.type),
-      ['abort'],
+      ['abort', 'nodeError', 'error'],
     );
+    const nodeError = recorder.events.find((event) => event.type === 'nodeError');
+    assert.deepEqual(nodeError?.data.outputs, { requestBody: { type: 'string', value: 'preserved request' } });
   });
 
   void it('ignores app-executor Code console messages when recording remote sockets', async () => {
@@ -1077,7 +1151,9 @@ void describe('ExecutionRecorder', () => {
   void it('records only replayable events from its scoped remote request', async () => {
     const recorder = new ExecutionRecorder();
     const socket = new FakeSocket();
-    const recordingFinished = recorder.recordSocket(socket as unknown as WebSocket, { requestId: 'evaluation-request' });
+    const recordingFinished = recorder.recordSocket(socket as unknown as WebSocket, {
+      requestId: 'evaluation-request',
+    });
 
     socket.emit({
       message: 'webAppStoragePatch',
@@ -1096,7 +1172,10 @@ void describe('ExecutionRecorder', () => {
     });
 
     await recordingFinished;
-    assert.deepEqual(recorder.events.map((event) => event.type), ['done']);
+    assert.deepEqual(
+      recorder.events.map((event) => event.type),
+      ['done'],
+    );
   });
 
   void it('stops a scoped remote recorder when its owning evaluation request is abandoned', async () => {
@@ -1123,7 +1202,10 @@ void describe('ExecutionRecorder', () => {
       data: { results: {} },
       requestId: 'evaluation-request',
     });
-    assert.deepEqual(recorder.events.map((event) => event.type), ['nodeStart']);
+    assert.deepEqual(
+      recorder.events.map((event) => event.type),
+      ['nodeStart'],
+    );
   });
 
   void it('keeps remote socket recordings open after successful abort until done', async () => {
@@ -1168,7 +1250,7 @@ void describe('ExecutionRecorder', () => {
     );
   });
 
-  void it('finishes remote socket recordings on unsuccessful abort', async () => {
+  void it('keeps remote socket recordings open through unsuccessful abort cleanup', async () => {
     const recorder = new ExecutionRecorder();
     const socket = new FakeSocket();
     const recordingFinished = recorder.recordSocket(socket as unknown as WebSocket);
@@ -1177,13 +1259,85 @@ void describe('ExecutionRecorder', () => {
       message: 'abort',
       data: { successful: false, error: 'stopped' },
     });
+    socket.emit({
+      message: 'nodeError',
+      data: {
+        node,
+        error: 'Error: cleanup failure',
+        outputs: { requestBody: { type: 'string', value: 'preserved request' } },
+        processId,
+        execution,
+      },
+    });
+    socket.emit({
+      message: 'error',
+      data: { error: 'Error: stopped' },
+    });
 
     await recordingFinished;
 
     assert.deepEqual(
       recorder.events.map((event) => event.type),
-      ['abort'],
+      ['abort', 'nodeError', 'error'],
     );
+  });
+
+  void it('settles socket capture without fabricating a completed recording when its owner disconnects', async () => {
+    const recorder = new ExecutionRecorder();
+    const socket = new FakeSocket();
+    let emittedFinishedRecording = false;
+    recorder.on('finish', () => {
+      emittedFinishedRecording = true;
+    });
+    const recordingFinished = recorder.recordSocket(socket as unknown as WebSocket);
+
+    socket.emit({
+      message: 'graphStart',
+      data: { graph, inputs: {}, execution },
+    });
+    socket.close();
+    await recordingFinished;
+    await Promise.resolve();
+
+    assert.equal(emittedFinishedRecording, false);
+    assert.deepEqual(recorder.events.map((event) => event.type), ['graphStart']);
+  });
+
+  void it('normalizes legacy null socket abort payloads without marking them successful', async () => {
+    const recorder = new ExecutionRecorder();
+    const socket = new FakeSocket();
+    const recordingFinished = recorder.recordSocket(socket as unknown as WebSocket);
+
+    socket.emit({ message: 'abort', data: null });
+    socket.emit({ message: 'error', data: { error: 'Error: stopped' } });
+    await recordingFinished;
+
+    const abort = recorder.events.find((event) => event.type === 'abort');
+    assert.equal(abort?.data.successful, false);
+  });
+
+  void it('returns recording snapshots whose event array cannot be mutated by later capture', async () => {
+    const recorder = new ExecutionRecorder();
+    const emitter = new Emittery<ProcessEvents>();
+    recorder.record(emitter as unknown as GraphProcessor);
+
+    await emitter.emit('start', {
+      project: { metadata: { id: 'project-id' as any } } as any,
+      contextValues: {},
+      inputs: {},
+      startGraph: graph,
+      execution,
+    });
+    const snapshot = recorder.getRecording();
+    await emitter.emit('nodeStart', {
+      node,
+      inputs: {},
+      processId,
+      execution,
+    });
+
+    assert.deepEqual(snapshot.events.map((event) => event.type), ['start']);
+    assert.deepEqual(recorder.events.map((event) => event.type), ['start', 'nodeStart']);
   });
 
   void it('emits a scoped failed replay lifecycle when the recording cannot resolve its first graph', async () => {

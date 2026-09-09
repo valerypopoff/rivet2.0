@@ -969,7 +969,15 @@ const RivetWebAppChat: FC<{
     <section className="rivet-web-app-chat" onKeyDownCapture={handleSearchShortcut}>
       <div className="rivet-web-app-chat-header">
         <span className="rivet-web-app-chat-title">
-          <span>Chat</span>
+          <button
+            type="button"
+            className="rivet-web-app-chat-new-button"
+            aria-label="New chat"
+            title="New chat"
+            onClick={flushChatHistory}
+          >
+            New chat
+          </button>
           <span ref={overflowMenuRef} className="rivet-web-app-chat-menu-anchor">
             <button
               type="button"

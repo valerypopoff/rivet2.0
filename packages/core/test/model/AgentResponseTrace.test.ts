@@ -108,6 +108,56 @@ void describe('AgentResponseTrace', () => {
     assert.equal(trace.backgroundWorkPending, true);
   });
 
+  void it('uses an explicit invocation duration over timestamp inference', () => {
+    const trace = buildAgentResponseTrace({
+      scope: 'llm-invocation',
+      execution,
+      events: [],
+      invocationDurationMs: 96_000,
+      startedAt: 1_000_000,
+      finishedAt: 1_000_001,
+      status: 'completed',
+    });
+
+    assert.equal(trace.durationMs, 96_000);
+  });
+
+  void it('keeps response traces anchored to outputs-ready timing', () => {
+    const trace = buildAgentResponseTrace({
+      scope: 'response',
+      execution,
+      events: [],
+      invocationDurationMs: 96_000,
+      startedAt: 100,
+      responseReadyAt: 160,
+      status: 'response-ready',
+    });
+
+    assert.equal(trace.durationMs, 60);
+  });
+
+  void it('does not turn reversed or invalid timestamp pairs into zero duration', () => {
+    const reversed = buildAgentResponseTrace({
+      scope: 'llm-invocation',
+      execution,
+      events: [],
+      startedAt: 200,
+      finishedAt: 100,
+      status: 'completed',
+    });
+    const invalid = buildAgentResponseTrace({
+      scope: 'llm-invocation',
+      execution,
+      events: [],
+      startedAt: Number.NaN,
+      finishedAt: 100,
+      status: 'completed',
+    });
+
+    assert.equal(reversed.durationMs, undefined);
+    assert.equal(invalid.durationMs, undefined);
+  });
+
   void it('deduplicates redelivered identified calls without double-counting usage or cost', () => {
     const firstModelCall = modelEvent({
       callId: 'model-round-1' as never,

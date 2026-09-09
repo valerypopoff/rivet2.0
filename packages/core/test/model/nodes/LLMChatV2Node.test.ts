@@ -2579,7 +2579,7 @@ describe('LLMChatV2NodeImpl', () => {
     assert.equal((headerAuthenticated.runOptions.model as { provider?: string }).provider, 'custom.responses');
   });
 
-  it('publishes captured request, response, and attempt diagnostics before a terminal provider error', async () => {
+  it('routes captured failure evidence through the terminal checkpoint without duplicating a partial update', async () => {
     const node = createNode({
       provider: 'custom',
       model: 'failing-model',
@@ -2592,6 +2592,7 @@ describe('LLMChatV2NodeImpl', () => {
       useAsGraphPartialOutput: false,
     });
     const partialOutputs: Array<Record<string, any>> = [];
+    const failureOutputCheckpoints: Array<Record<string, any>> = [];
     const fetchMock = mock.method(
       globalThis,
       'fetch',
@@ -2610,26 +2611,53 @@ describe('LLMChatV2NodeImpl', () => {
             createRuntimeContext({
               signal: new AbortController().signal,
               onPartialOutputs: (outputs: Record<string, any>) => partialOutputs.push(outputs),
+              setFailureOutputs: (outputs: Record<string, any>) => failureOutputCheckpoints.push(outputs),
             }),
           ),
         /401|Deliberate provider failure/,
       );
 
-      assert.equal(partialOutputs.length, 1);
-      assert.equal(partialOutputs[0]?.requestBody?.type, 'object');
-      assert.equal(partialOutputs[0]?.requestBody?.value?.model, 'failing-model');
-      assert.deepEqual(partialOutputs[0]?.responseBody, {
+      // GraphProcessor gets the error evidence from its dedicated terminal
+      // channel. Emitting it again as a detached partial update only creates
+      // a late-event race with nodeError.
+      assert.equal(partialOutputs.length, 0);
+      assert.equal(failureOutputCheckpoints.length, 1);
+      const [failureOutputs] = failureOutputCheckpoints;
+      assert.deepEqual(failureOutputs?.['in-messages'], {
+        type: 'chat-message[]',
+        value: [{ type: 'user', message: 'Hello' }],
+      });
+      assert.deepEqual(failureOutputs?.response, { type: 'string', value: '' });
+      assert.equal(failureOutputs?.requestBody?.type, 'object');
+      assert.equal(failureOutputs?.requestBody?.value?.model, 'failing-model');
+      assert.deepEqual(failureOutputs?.responseBody, {
         type: 'object',
         value: { error: { message: 'Deliberate provider failure' } },
       });
       assert.deepEqual(
-        partialOutputs[0]?.llmAttempts?.value.map((attempt: Record<string, unknown>) => ({
+        failureOutputs?.llmAttempts?.value.map((attempt: Record<string, unknown>) => ({
           stage: attempt.stage,
           outcome: attempt.outcome,
           status: attempt.status,
         })),
         [{ stage: 'request', outcome: 'failure', status: 401 }],
       );
+
+      const fallbackPartialOutputs: Array<Record<string, any>> = [];
+      await assert.rejects(
+        () =>
+          node.process(
+            createPromptInputs(),
+            createRuntimeContext({
+              signal: new AbortController().signal,
+              onPartialOutputs: (outputs: Record<string, any>) => fallbackPartialOutputs.push(outputs),
+            }),
+          ),
+        /401|Deliberate provider failure/,
+      );
+      assert.equal(fallbackPartialOutputs.length, 1);
+      assert.deepEqual(fallbackPartialOutputs[0]?.['in-messages'], failureOutputs?.['in-messages']);
+      assert.deepEqual(fallbackPartialOutputs[0]?.requestBody, failureOutputs?.requestBody);
     } finally {
       fetchMock.mock.restore();
     }

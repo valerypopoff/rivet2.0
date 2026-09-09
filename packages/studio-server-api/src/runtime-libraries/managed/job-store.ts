@@ -70,24 +70,34 @@ export function createManagedRuntimeLibrariesJobStore(options: {
         return getManagedJob(context.pool, jobId);
       }
 
-      await context.pool.query(
+      const cancellation = await context.pool.query<{
+        status: JobStatus;
+        claimed_by: string | null;
+      }>(
         `
           UPDATE runtime_library_jobs
           SET cancel_requested_at = NOW(),
               progress_at = NOW(),
               updated_at = NOW()
           WHERE job_id = $1
+            AND status IN ${ACTIVE_JOB_STATUS_CLAUSE}
+            AND cancel_requested_at IS NULL
+          RETURNING status, claimed_by
         `,
         [jobId],
       );
+      const cancelledJob = cancellation.rows[0];
+      if (!cancelledJob) {
+        return getManagedJob(context.pool, jobId);
+      }
       await this.appendJobLog(jobId, 'Cancellation requested by user.', 'system');
 
-      if (row.status === 'queued') {
+      if (cancelledJob.status === 'queued') {
         await this.failJob(jobId, new JobCancelledError());
         return getManagedJob(context.pool, jobId);
       }
 
-      if (row.claimed_by === context.instanceId) {
+      if (cancelledJob.claimed_by === context.instanceId) {
         options.terminateRunningProcess(jobId, 'Cancellation requested by user.');
       }
 
@@ -111,25 +121,29 @@ export function createManagedRuntimeLibrariesJobStore(options: {
       );
     },
 
-    async updateJobStatus(jobId: string, status: JobStatus): Promise<void> {
-      await context.pool.query(
+    async updateJobStatus(jobId: string, status: 'validating' | 'activating'): Promise<void> {
+      const updated = await context.pool.query<{ job_id: string }>(
         `
           UPDATE runtime_library_jobs
           SET status = $2,
               progress_at = NOW(),
               updated_at = NOW()
           WHERE job_id = $1
+            AND status IN ${ACTIVE_JOB_STATUS_CLAUSE}
+            AND claimed_by = $3
+            AND cancel_requested_at IS NULL
+          RETURNING job_id
         `,
-        [jobId, status],
+        [jobId, status, context.instanceId],
       );
+      if ((updated.rowCount ?? updated.rows.length) !== 1) {
+        throw new Error('Runtime-library job is no longer active on this worker.');
+      }
     },
 
-    async failJob(jobId: string, error: unknown): Promise<void> {
+    async failJob(jobId: string, error: unknown): Promise<boolean> {
       const message = error instanceof Error ? error.message : String(error);
-      options.terminateRunningProcess(jobId, message);
-      await this.appendJobLog(jobId, `ERROR: ${message}`);
-      await this.appendJobLog(jobId, '--- Job failed ---');
-      await context.pool.query(
+      const updated = await context.pool.query<{ job_id: string }>(
         `
           UPDATE runtime_library_jobs
           SET status = 'failed',
@@ -139,9 +153,27 @@ export function createManagedRuntimeLibrariesJobStore(options: {
               progress_at = NOW(),
               updated_at = NOW()
           WHERE job_id = $1
+            AND status IN ${ACTIVE_JOB_STATUS_CLAUSE}
+            AND (
+              claimed_by = $3
+              OR (status = 'queued' AND claimed_by IS NULL AND cancel_requested_at IS NOT NULL)
+            )
+          RETURNING job_id
         `,
-        [jobId, message],
+        [jobId, message, context.instanceId],
       );
+      if ((updated.rowCount ?? updated.rows.length) !== 1) {
+        return false;
+      }
+
+      options.terminateRunningProcess(jobId, message);
+      await this.appendJobLog(jobId, `ERROR: ${message}`).catch((logError) => {
+        console.error('[runtime-libraries] Failed to append job failure log:', logError);
+      });
+      await this.appendJobLog(jobId, '--- Job failed ---').catch((logError) => {
+        console.error('[runtime-libraries] Failed to append job failure completion log:', logError);
+      });
+      return true;
     },
 
     async touchJob(jobId: string, stopped: boolean): Promise<void> {

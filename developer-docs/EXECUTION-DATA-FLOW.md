@@ -442,6 +442,18 @@ terminals, `graphFinish`/`graphError`, `done`, `abort`, and root `finish`.
 the root `finish` event. Pause remains persistent across processor runs, matching
 the existing ability to pause before calling `processGraph(...)`.
 
+The root lifecycle remains owned through `done`; a `done` observer cannot reuse
+that processor while terminal cleanup is still pending. Only `finish` fires after
+the lifecycle is released and may intentionally begin the next root run. This
+prevents an observer-started run from having its identity or process state
+overwritten by the previous run's cleanup.
+
+`ExecutionRecorder` treats root `finish` as its sealing signal rather than a
+replayable record: ordinary successful recordings therefore end with `done`.
+Code that needs to know a recording is safe to persist must await the recorder's
+own `finish` notification, not search its replayable event list for a `finish`
+entry.
+
 Events from subprocessors bubble up through `wireSubprocessorEvents()` in
 `SubprocessorBridge.ts`. The key behavior:
 
@@ -598,8 +610,11 @@ project run. Duplicate root graph terminal frames are deduped for both route
 decisions and successful-`done` reconciliation, because only one legacy
 terminal frame can correspond to a root run. Events from older transports that
 do not carry a project id keep the compatibility fallback and still pass
-through. `done`, `abort`, `error`, disconnect, and send-failure paths clear the
-active request explicitly.
+through. `done` and `error` settle and clear the active request. `abort` is
+dispatched immediately so the editor can show cancellation, but it deliberately
+retains request routing and pending ownership until the subsequent root terminal
+event delivers late node diagnostics. Disconnect and send-failure paths still
+clear the request explicitly.
 evaluation runs use the executor-session pending-promise API and reject that
 pending request if the `run` send fails before reaching the socket, so the
 failure is observed through the same async result path as normal remote test-run
@@ -806,6 +821,13 @@ start frame put the process back into `running`, replace terminal outputs, or
 move terminal timing fields forward. This protects Remote Debugger and
 recording playback display from transport or replay ordering quirks without
 changing runtime graph execution.
+Detached `partialOutput` is allowed only while that exact process is still
+non-terminal. The active editor checks the live Jotai record before allocating
+output references and repeats the check inside its functional state update;
+inactive snapshots apply the same durable status rule. This is state-owned,
+not a bounded process-ID cache, so an older terminal cannot become writable
+after unrelated later invocations. A rejected partial update deletes any
+reference it allocated before the terminal check completed.
 Running updates are normalized before storage so a malformed running frame cannot
 write output refs before the terminal merge guard discards those output fields.
 External Remote Debugger sessions also keep a bounded diagnostic trace of
@@ -888,7 +910,11 @@ This matters because streaming `partialOutput` updates overwrite the same ref en
 allocating a new blob key on every event, project tabs can keep independent
 in-memory output snapshots, and run resets can clear all execution-scoped refs
 deterministically. Low-level storage helpers still tolerate a missing project id
-for isolated tests or legacy app-private callers.
+for isolated tests or legacy app-private callers. When a split page replaces a
+stable ref, both the active editor and an inactive project snapshot compare the
+complete old and new split maps before cleanup. They retain the ref key shared
+by both maps and delete only truly removed keys; deleting the old page in
+isolation would erase the replacement payload.
 
 ## Data Filtering for Display
 
@@ -972,6 +998,19 @@ These are related but different concepts:
   its ordered LLM Profile fallback chain.
 - All iterations share the same `processId` and `graphRunId`.
 - Each iteration's output is stored in `splitOutputData[index]`.
+- Sequential split execution owns one invocation-local results accumulator. If
+  cancellation is detected before a later item starts, terminal `nodeError`
+  still retains the completed/failed prefix's real split indexes, durations,
+  and failure checkpoints; unstarted items receive no synthetic result or
+  timing entry. Parallel queue workers perform the same abort check before
+  starting their per-item timer, so queued work that never began likewise has
+  no duration entry.
+- A terminal split `nodeError` carries inspection evidence for every item that
+  actually ran: completed sibling outputs and failed-item checkpoints. It is
+  never an aggregate success or downstream input. The editor applies this as
+  an index-level evidence patch so an older recording that contains only a
+  failed index cannot erase earlier sibling pages; a complete replacement still
+  releases stored references for indexes that are genuinely removed.
 - The UI shows a pager ("page 1 of N") within the node's output panel.
 - Split-output renderers sort those indexes numerically through `packages/app/src/components/nodeOutput/splitOutputEntries.ts`; do not rely on object-key order or string sorting for display order.
 - This is **not** multiple graph runs; it is one node execution with indexed outputs.
@@ -1654,13 +1693,20 @@ serializable identifiers (e.g. `node: ChartNode` -> `nodeId: NodeId`,
 `graph: NodeGraph` -> `graphId: GraphId`). The full type mapping is in
 `RecordedEventsMap` (`RecordedEvents.ts`).
 
-Recorder finish semantics follow root-run semantics, not every control event.
-`done`, `error`, and unsuccessful root `abort` events close the recording. A
-successful root `abort` from `Abort Graph` is recorded as an intermediate event
-because the processor can still emit late node terminals and then a successful
-`done`. Keeping the recorder open through that `done` preserves the same late
-successful-abort node terminals that Remote Debugger and replay need to clear
-running state correctly.
+Recorder finish semantics follow **settlement**, not cancellation notification.
+Every root `abort` is intermediate: both successful and error aborts can still
+emit late node terminals, checkpoint outputs, and a root `done` or `error`.
+In-process recorders finish from the processor's root `finish` event; socket
+recorders finish from request-scoped `done`/`error`. A socket close or explicit
+capture-owner disposal only detaches listeners and settles the capture promise;
+it does not fabricate a completed recording. The capture-owner signal is not a
+graph-abort signal. This separation preserves interrupted LLM request evidence
+without guessing a cleanup deadline, while legacy abort-only transports remain
+incomplete until their socket closes or their owner disposes them.
+
+`getRecording()` snapshots the event array before handing it to asynchronous
+persistence or replay. The individual event payloads remain the recorded values,
+but later recorder events cannot extend an already-obtained recording object.
 
 Recordings are serialized to `.rivet-recording` files with asset deduplication
 (Uint8Arrays -> base64) and string deduplication (long strings -> FNV-1a hash
@@ -1680,14 +1726,41 @@ and re-emitting each event on a provided `Emittery<ProcessEvents>` emitter. This
 means the app's standard event handlers (`onNodeStart`, `onGraphStart`, etc.)
 receive the same events during replay as during live execution.
 
+Replay preserves the live root lifecycle boundary for `done`: it awaits that
+event while the playback processor still owns the run, so a `done` listener
+cannot overlap a selected rerun with replay cleanup. Replay emits one `finish`
+only after playback has released that ownership (including for current
+recordings, where `finish` seals rather than enters the event log), so a finish
+listener can intentionally start the next run. Do not make either timing
+accidental by routing both events through the generic detached-event helper.
+
 Replay also adds optional, delivery-only `replayRecordedAt` provenance to each
 re-emitted lifecycle event. It is the source event's `RecordedEvent.ts`, not a
 new execution timestamp. The editor retains its fresh local receipt timestamp
 for session ordering and live-state controls, while Run Activity computes the
-displayed replay duration from the historical provenance. This avoids showing a
-fast replay as though the original provider calls completed in milliseconds.
+displayed replay duration from historical lifecycle provenance. This avoids
+showing a fast replay as though the original provider calls completed in
+milliseconds. A replay with no recorded lifecycle start has no trustworthy
+root duration and must remain unavailable rather than display a fabricated
+zero-second result.
+Node history retains valid recorded start and terminal bounds separately for
+the Response Inspector. A recorded terminal `durationMs` is the authoritative
+whole-node duration there; the inspector must not subtract local replay receipt
+timestamps or sum physical model calls.
 `ExecutionRecorder` strips this provenance before serializing a new recording,
-so replaying and recording again creates one new, self-contained timeline.
+so an API caller which deliberately records replay events gets a new,
+self-contained timeline. The editor does not create a recorder while a loaded
+recording is playing: playback is evidence, not a fresh execution. Its **Save
+Recording** action serializes the loaded recorder itself, preserving the
+original artifact rather than exporting an accelerated replay timeline.
+
+Replay consumers must keep three clocks distinct: local replay delivery order,
+historical node lifecycle provenance, and physical model/tool call timing. A
+physical call timestamp never establishes a node lifecycle start. If a root
+terminal arrives without an invocation's own terminal event, retain the row as
+terminally incomplete, clear transient wait/progress state, and leave its
+duration unavailable rather than deriving one from a local receipt or a model
+call. A later exact node terminal remains authoritative.
 
 ### LLM Chat logical-round output history
 
@@ -1829,7 +1902,7 @@ Lifecycle and observability events relevant to editor data flow are replayed:
 | `graphStart`                                | Creates `GraphRunRecord` in history                                                                                                |
 | `graphFinish` / `graphError` / `graphAbort` | Updates run record status                                                                                                          |
 | `nodeStart` / `nodeFinish` / `nodeError`    | Stores per-node execution data                                                                                                     |
-| `llmChatOutputSnapshot`                     | Stores a display-only, ref-backed LLM Chat logical-round page; never creates Run Activity or a node lifecycle transition          |
+| `llmChatOutputSnapshot`                     | Stores a display-only, ref-backed LLM Chat logical-round page; never creates Run Activity or a node lifecycle transition           |
 | `nodeExcluded`                              | Stores excluded status                                                                                                             |
 | `partialOutput`                             | Stores streaming/split-run output                                                                                                  |
 | `progress`                                  | Updates the exact invocation's latest progress                                                                                     |
@@ -1856,7 +1929,28 @@ to simulate streaming behavior.
 - `includeTrace` (default `false`): Whether to record `trace` events.
 
 These same events are simply skipped during recording; replay handles their
-absence gracefully since the final `nodeFinish` event contains the complete outputs.
+absence gracefully because `nodeFinish` contains successful terminal outputs.
+For a failed node, optional display-only evidence instead travels on the
+terminal `nodeError.outputs` (or `nodeError.splitOutputs` by split-item index).
+That terminal checkpoint is always recorded and bridged through the Browser,
+Node, and Remote Debugger serialized event contracts. The app shows those
+outputs alongside the error, and Run Activity records their port metadata so
+its full-output affordance remains available without retaining the values in
+the journal. For LLM Chat, the checkpoint includes request messages plus a
+complete streamed or generated response observed before later metadata,
+non-200-status, or JSON-schema finalization failures. At the normal
+completed-call boundary it is refreshed after opt-in response-body capture
+settles and after independently available Usage/reasoning resolves, so those
+enabled diagnostics survive a later finalization error. Cancellation and
+provider deadlines do not wait for unsettled clone reads; only bodies already
+captured at that point are recorded. Each physical provider retry or profile
+candidate owns its response-evidence callback until that candidate's body flush
+and final checkpoint refresh complete. Once it retires, late SDK reasoning or
+usage resolution is ignored, so it cannot overwrite evidence for a later
+request, a fallback candidate, or a terminal cancellation. The app also ignores
+a delayed `partialOutput` after a terminal event, preventing late stream delivery
+from hiding retained evidence. The checkpoint never becomes graph dataflow
+output, and legacy recordings without it remain honestly incomplete.
 
 ## File Reference
 
@@ -1882,7 +1976,7 @@ absence gracefully since the final `nodeFinish` event contains the complete outp
 | [`useRemoteExecutor.ts`](../packages/app/src/hooks/useRemoteExecutor.ts)                                 | Remote graph/Evaluation execution over the shared session; sends protocol messages only after action-time capability checks                                          |
 | [`remoteExecutorUploadCache.ts`](../packages/app/src/hooks/remoteExecutorUploadCache.ts)                 | Remote project/settings/static-data upload decisions, cache invalidation, and send-success marking                                                                   |
 | [`remoteExecutorRunRequest.ts`](../packages/app/src/hooks/remoteExecutorRunRequest.ts)                   | Remote run request-id registration, active request filtering, send-failure cleanup, and pending test-run send helpers                                                |
-| [`remoteExecutorHelpers.ts`](../packages/app/src/hooks/remoteExecutorHelpers.ts)                         | Run-from planning, preload extraction, Evaluations selection, and `createProcessEventDispatcher` routing from WebSocket messages to handlers                              |
+| [`remoteExecutorHelpers.ts`](../packages/app/src/hooks/remoteExecutorHelpers.ts)                         | Run-from planning, preload extraction, Evaluations selection, and `createProcessEventDispatcher` routing from WebSocket messages to handlers                         |
 | [`GraphProcessor.ts`](../packages/core/src/model/GraphProcessor.ts)                                      | Core execution engine, `#createSubProcessor`, `#buildExecutionMetadata`                                                                                              |
 | [`SubprocessorBridge.ts`](../packages/core/src/model/SubprocessorBridge.ts)                              | `wireSubprocessorEvents` - forwards child events to parent emitter                                                                                                   |
 | [`SplitRunProcessor.ts`](../packages/core/src/model/SplitRunProcessor.ts)                                | `processSplitRunNode` - iterates split inputs, creates subprocessors per iteration                                                                                   |

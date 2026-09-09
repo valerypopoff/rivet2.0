@@ -15,6 +15,7 @@ export type NodeProcessContextBase = Omit<
   | 'getPluginConfig'
   | 'node'
   | 'onPartialOutputs'
+  | 'setFailureOutputs'
   | 'processId'
   | 'requestUserInput'
   | 'reportProgress'
@@ -44,6 +45,7 @@ export function buildNodeProcessContext(options: {
   node: ChartNode;
   nodeAbortController: AbortController;
   onPartialOutputs: (partialOutputs: Outputs) => void;
+  setFailureOutputs?: InternalProcessContext['setFailureOutputs'];
   processId: ProcessId;
   requestUserInput: (inputStrings: string[], renderingType: 'text' | 'markdown') => Promise<StringArrayDataValue>;
   reportProgress: InternalProcessContext['reportProgress'];
@@ -66,6 +68,7 @@ export function buildNodeProcessContext(options: {
     node,
     nodeAbortController,
     onPartialOutputs,
+    setFailureOutputs,
     processId,
     requestUserInput,
     reportProgress,
@@ -88,6 +91,7 @@ export function buildNodeProcessContext(options: {
     waitForStoredValue: (key, signal = nodeAbortController.signal) => base.waitForStoredValue(key, signal),
     externalFunctions: { ...externalFunctions },
     onPartialOutputs,
+    setFailureOutputs,
     signal: nodeAbortController.signal,
     processId,
     splitIndex,

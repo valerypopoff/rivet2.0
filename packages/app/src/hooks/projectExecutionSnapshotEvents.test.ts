@@ -86,6 +86,7 @@ test('inactive project snapshot reducer finishes a hidden successful run', () =>
         id: nodeId,
       },
       processId,
+      replayRecordedAt: 10_000,
     } as never,
     message: 'nodeStart',
     projectId,
@@ -110,6 +111,7 @@ test('inactive project snapshot reducer finishes a hidden successful run', () =>
         },
       },
       processId,
+      replayRecordedAt: 22_000,
     } as never,
     message: 'nodeFinish',
     projectId,
@@ -148,11 +150,168 @@ test('inactive project snapshot reducer finishes a hidden successful run', () =>
   assert.deepEqual(snapshot.runningGraphs, []);
   assert.equal(snapshot.lastRunDataByNode[nodeId]?.[0]?.data.status?.type, 'ok');
   assert.equal(snapshot.lastRunDataByNode[nodeId]?.[0]?.data.durationMs, 12);
+  assert.deepEqual(snapshot.lastRunDataByNode[nodeId]?.[0]?.data.recordedTiming, {
+    startedAt: 10_000,
+    finishedAt: 22_000,
+  });
   assert.deepEqual(snapshot.lastRunDataByNode[nodeId]?.[0]?.data.outputData?.['output' as PortId], {
     type: 'string',
     storage: 'inline',
     value: 'done',
   });
+});
+
+test('inactive project snapshots retain terminal error outputs and ignore a late partial update', () => {
+  const nodeId = 'failed-llm' as NodeId;
+  const processId = 'failed-llm-process' as ProcessId;
+  const projectId = 'project-a' as ProjectId;
+  const execution = {
+    graphId: 'graph-a' as GraphId,
+    graphRunId: 'graph-run-a' as GraphRunId,
+    rootRunId: 'root-run-a' as RootRunId,
+  };
+  const refStore = createDataRefStore();
+
+  const afterError = applyProcessEventToProjectExecutionSnapshot({
+    message: 'nodeError',
+    data: {
+      error: 'provider aborted',
+      execution,
+      node: { id: nodeId },
+      outputs: {
+        llmRequestBody: { type: 'string', value: '{"prompt":"preserved"}' },
+      },
+      processId,
+    } as never,
+    projectId,
+    refStore,
+    snapshot: createEmptyProjectExecutionSnapshot(),
+  }).snapshot;
+
+  const afterLatePartial = applyProcessEventToProjectExecutionSnapshot({
+    message: 'partialOutput',
+    data: {
+      execution,
+      index: 0,
+      node: { id: nodeId },
+      outputs: { response: { type: 'string', value: 'late response' } },
+      processId,
+    } as never,
+    projectId,
+    refStore,
+    snapshot: afterError,
+  }).snapshot;
+
+  assert.equal(afterLatePartial.lastRunDataByNode[nodeId]?.[0]?.data.status?.type, 'error');
+  assert.deepEqual(afterLatePartial.lastRunDataByNode[nodeId]?.[0]?.data.outputData, {
+    llmRequestBody: { storage: 'inline', type: 'string', value: '{"prompt":"preserved"}' },
+  });
+});
+
+test('inactive project snapshots keep an earlier split sibling when terminal error evidence names another index', () => {
+  const nodeId = 'failed-split-node' as NodeId;
+  const processId = 'failed-split-process' as ProcessId;
+  const projectId = 'project-a' as ProjectId;
+  const execution = {
+    graphId: 'graph-a' as GraphId,
+    graphRunId: 'graph-run-a' as GraphRunId,
+    rootRunId: 'root-run-a' as RootRunId,
+  };
+  const refStore = createDataRefStore();
+
+  const afterPartial = applyProcessEventToProjectExecutionSnapshot({
+    message: 'partialOutput',
+    data: {
+      execution,
+      index: 0,
+      node: { id: nodeId, isSplitRun: true },
+      outputs: { output: { type: 'string', value: 'completed sibling' } },
+      processId,
+    } as never,
+    projectId,
+    refStore,
+    snapshot: createEmptyProjectExecutionSnapshot(),
+  }).snapshot;
+
+  const afterError = applyProcessEventToProjectExecutionSnapshot({
+    message: 'nodeError',
+    data: {
+      error: 'second split item failed',
+      execution,
+      node: { id: nodeId, isSplitRun: true },
+      processId,
+      splitOutputs: {
+        1: { requestBody: { type: 'string', value: 'failed-item evidence' } },
+      },
+    } as never,
+    projectId,
+    refStore,
+    snapshot: afterPartial,
+  }).snapshot;
+
+  assert.deepEqual(afterError.lastRunDataByNode[nodeId]?.[0]?.data.splitOutputData, {
+    0: {
+      output: { storage: 'inline', type: 'string', value: 'completed sibling' },
+    },
+    1: {
+      requestBody: { storage: 'inline', type: 'string', value: 'failed-item evidence' },
+    },
+  });
+});
+
+test('inactive project snapshots retain the latest large split partial when its stable ref is replaced', () => {
+  const nodeId = 'large-split-node' as NodeId;
+  const processId = 'large-split-process' as ProcessId;
+  const projectId = 'project-a' as ProjectId;
+  const execution = {
+    graphId: 'graph-a' as GraphId,
+    graphRunId: 'graph-run-a' as GraphRunId,
+    rootRunId: 'root-run-a' as RootRunId,
+  };
+  const refStore = createDataRefStore();
+  const firstValue = 'first large split output '.repeat(1_000);
+  const secondValue = 'second large split output '.repeat(1_000);
+
+  const firstSnapshot = applyProcessEventToProjectExecutionSnapshot({
+    message: 'partialOutput',
+    data: {
+      execution,
+      index: 0,
+      node: { id: nodeId, isSplitRun: true },
+      outputs: { output: { type: 'string', value: firstValue } },
+      processId,
+    } as never,
+    projectId,
+    refStore,
+    snapshot: createEmptyProjectExecutionSnapshot(),
+  }).snapshot;
+  const firstStoredOutput = firstSnapshot.lastRunDataByNode[nodeId]?.[0]?.data.splitOutputData?.[0]?.[
+    'output' as PortId
+  ];
+  assert.equal(firstStoredOutput?.storage, 'ref');
+  const refId = firstStoredOutput?.storage === 'ref' ? firstStoredOutput.refId : assert.fail('expected a stored ref');
+  assert.equal(refStore.get(refId)?.value, firstValue);
+
+  const secondSnapshot = applyProcessEventToProjectExecutionSnapshot({
+    message: 'partialOutput',
+    data: {
+      execution,
+      index: 0,
+      node: { id: nodeId, isSplitRun: true },
+      outputs: { output: { type: 'string', value: secondValue } },
+      processId,
+    } as never,
+    projectId,
+    refStore,
+    snapshot: firstSnapshot,
+  }).snapshot;
+  const secondStoredOutput = secondSnapshot.lastRunDataByNode[nodeId]?.[0]?.data.splitOutputData?.[0]?.[
+    'output' as PortId
+  ];
+
+  assert.equal(secondStoredOutput?.storage, 'ref');
+  assert.equal(secondStoredOutput?.storage === 'ref' ? secondStoredOutput.refId : undefined, refId);
+  assert.equal(refStore.get(refId)?.value, secondValue);
 });
 
 test('inactive project snapshot reducer clears stale running nodes on successful done', () => {

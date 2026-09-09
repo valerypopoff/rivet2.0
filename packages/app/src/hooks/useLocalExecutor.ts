@@ -85,6 +85,7 @@ import { pluginsState } from '../state/plugins.js';
 import { withDerivedProjectPluginSpecs } from '../utils/pluginUsage.js';
 import { getProjectContextValues } from '../utils/projectContextValues.js';
 import { cloneFrozenNodeOutputsForExecutor } from '../utils/frozenNodeOutputs.js';
+import { shouldCaptureExecutionRecording } from '../utils/recordingCapturePolicy.js';
 import { dispatchGraphExecutionEvent } from './graphExecutionEventDispatch.js';
 import {
   applyProcessEventToProjectExecutionSnapshots,
@@ -501,8 +502,16 @@ export function useLocalExecutor() {
         },
       );
 
+      // Playback only re-emits evidence from a previous execution. Recording
+      // those delivery events would replace the live recording with a fast,
+      // internally inconsistent second timeline, so only live runs create a
+      // new recorder or hosted local-recording artifact.
+      const shouldRecordExecution = shouldCaptureExecutionRecording({
+        recordExecutions,
+        isPlayback: recordingToReplay != null,
+      });
       const localRecordingProjectPath =
-        recordExecutions && !recordingToReplay && loadedProject.path && localExecutionRecordingPersistence
+        shouldRecordExecution && loadedProject.path && localExecutionRecordingPersistence
           ? loadedProject.path
           : undefined;
       const localRecordingProvider =
@@ -515,9 +524,9 @@ export function useLocalExecutor() {
         ? `rvt-local-${globalThis.crypto?.randomUUID?.() ?? `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`}`
         : undefined;
       let hasUnhealthyLLMProfileHealthEvidence = false;
-      const localRecordingStartedAt = performance.now();
+      const localRecordingStartedAt = shouldRecordExecution ? performance.now() : undefined;
 
-      const recorder = new ExecutionRecorder();
+      const recorder = shouldRecordExecution ? new ExecutionRecorder() : undefined;
       processor = new GraphProcessor(tempProject, graphToRun, projectNodeRegistry, true, {
         captureNodeTimings: showNodeRunDurations,
       });
@@ -560,7 +569,7 @@ export function useLocalExecutor() {
         currentExecution.preserveNodeRunDataForNextStart(runToPlan.preserveNodeIds);
       }
 
-      if (recordExecutions) {
+      if (recorder) {
         recorder.record(processor);
       }
 
@@ -578,51 +587,51 @@ export function useLocalExecutor() {
         localRecordingStatus = 'suspicious';
         localRecordingErrorMessage ??= event.error instanceof Error ? event.error.message : event.error;
       });
-      finalizeCapturedRecording = async () => {
-        if (!recordExecutions) return;
+      if (recorder) {
+        finalizeCapturedRecording = async () => {
+          const recordingSerialized = recorder.serialize();
+          setLastRecordingForProject(runProjectId, recordingSerialized);
+          if (
+            !hasUnhealthyLLMProfileHealthEvidence ||
+            !localRecordingProvider ||
+            !localRecordingCorrelationId ||
+            !localRecordingProjectPath
+          ) {
+            return;
+          }
 
-        const recordingSerialized = recorder.serialize();
-        setLastRecordingForProject(runProjectId, recordingSerialized);
-        if (
-          !hasUnhealthyLLMProfileHealthEvidence ||
-          !localRecordingProvider ||
-          !localRecordingCorrelationId ||
-          !localRecordingProjectPath
-        ) {
-          return;
-        }
-
-        try {
-          const datasetsContents = serializeDatasets(await datasetProvider.exportDatasetsForProject(runProjectId));
-          await localRecordingProvider.persist({
-            projectId: runProjectId,
-            projectPath: localRecordingProjectPath,
-            projectContents: serializeProject(tempProject) as string,
-            datasetsContents,
-            recordingSerialized,
-            status: localRecordingStatus,
-            durationMs: Math.max(0, performance.now() - localRecordingStartedAt),
-            errorMessage: localRecordingErrorMessage,
-            executionIdentity: {
-              correlationId: localRecordingCorrelationId,
-              graphId: graphToRun,
-            },
-          });
-        } catch (error) {
-          await localRecordingProvider.markUnavailable(localRecordingCorrelationId).catch((outcomeError) => {
-            logRuntimeDebug('Local LLM-profile replay could not report a failed local recording.', {
-              error: outcomeError,
+          try {
+            const datasetsContents = serializeDatasets(await datasetProvider.exportDatasetsForProject(runProjectId));
+            await localRecordingProvider.persist({
+              projectId: runProjectId,
+              projectPath: localRecordingProjectPath,
+              projectContents: serializeProject(tempProject) as string,
+              datasetsContents,
+              recordingSerialized,
+              status: localRecordingStatus,
+              durationMs: Math.max(0, performance.now() - localRecordingStartedAt!),
+              errorMessage: localRecordingErrorMessage,
+              executionIdentity: {
+                correlationId: localRecordingCorrelationId,
+                graphId: graphToRun,
+              },
+            });
+          } catch (error) {
+            await localRecordingProvider.markUnavailable(localRecordingCorrelationId).catch((outcomeError) => {
+              logRuntimeDebug('Local LLM-profile recording could not report a failed local artifact.', {
+                error: outcomeError,
+                graphId: graphToRun,
+                projectId: runProjectId,
+              });
+            });
+            logRuntimeDebug('Local LLM-profile recording was not retained by the hosted server.', {
+              error,
               graphId: graphToRun,
               projectId: runProjectId,
             });
-          });
-          logRuntimeDebug('Local LLM-profile replay was not retained by the hosted server.', {
-            error,
-            graphId: graphToRun,
-            projectId: runProjectId,
-          });
-        }
-      };
+          }
+        };
+      }
 
       attachGraphEvents(processor, runProjectId);
 
