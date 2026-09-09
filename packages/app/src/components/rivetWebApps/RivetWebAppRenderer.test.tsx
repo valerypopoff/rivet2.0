@@ -351,7 +351,7 @@ test('editor component frames expose multi-selection modifier clicks without cha
   }
 });
 
-test('Chat restores browser state, preserves it through Reset, and flushes only its history from the options menu', async () => {
+test('Chat restores browser state, preserves it through Reset, and flushes only its history from New chat or the options menu', async () => {
   const dom = new JSDOM('<div id="root"></div>', { url: 'https://example.test/apps/chat' });
   const previousGlobals = {
     document: globalThis.document,
@@ -497,6 +497,18 @@ test('Chat restores browser state, preserves it through Reset, and flushes only 
       [draftKey]: 'Unsaved draft',
       [messagesKey]: [{ content: 'Question', role: 'user' }],
     });
+
+    const newChatButton = rootElement.querySelector<HTMLButtonElement>('.rivet-web-app-chat-new-button');
+    assert.equal(newChatButton?.textContent, 'New chat');
+    assert.equal(newChatButton?.parentElement?.textContent, 'New chat');
+    assert.equal(newChatButton?.nextElementSibling?.classList.contains('rivet-web-app-chat-menu-anchor'), true);
+    await act(async () => newChatButton?.click());
+    assert.equal(rootElement.querySelectorAll('.rivet-web-app-chat-message').length, 0);
+    assert.equal(
+      rootElement.querySelector<HTMLTextAreaElement>('.rivet-web-app-chat-composer textarea')?.value,
+      'Unsaved draft',
+    );
+    assert.deepEqual(JSON.parse(dom.window.localStorage.getItem(storageKey)!), { [draftKey]: 'Unsaved draft' });
 
     await act(async () => rootElement.querySelector<HTMLButtonElement>('.rivet-web-app-chat-menu-button')?.click());
     assert.equal(rootElement.querySelector('.rivet-web-app-chat-menu')?.textContent, 'Flush chat history');

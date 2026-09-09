@@ -437,7 +437,7 @@ void describe('createRivetWebAppHandler', () => {
     dom.window.close();
   });
 
-  void it('restores hosted Chat state from browser storage and flushes only its history', async () => {
+  void it('restores hosted Chat state from browser storage and flushes only its history from New chat or the options menu', async () => {
     const project = makeProject();
     const uiGraph = project.uiGraphs?.['ui-graph' as UiGraphId]!;
     const chatId = 'chat' as UiComponentId;
@@ -508,6 +508,18 @@ void describe('createRivetWebAppHandler', () => {
       [draftKey]: 'Unsaved draft',
       [messagesKey]: [{ content: 'Question', role: 'user' }],
     });
+
+    const newChatButton = dom.window.document.querySelector<HTMLButtonElement>('.rivet-web-app-chat-new-button');
+    assert.equal(newChatButton?.textContent, 'New chat');
+    assert.equal(newChatButton?.parentElement?.textContent, 'New chat');
+    assert.equal(newChatButton?.nextElementSibling?.classList.contains('rivet-web-app-chat-menu-anchor'), true);
+    newChatButton?.click();
+    assert.equal(dom.window.document.querySelectorAll('.rivet-web-app-chat-message').length, 0);
+    assert.equal(
+      dom.window.document.querySelector<HTMLTextAreaElement>('.rivet-web-app-chat-composer textarea')?.value,
+      'Unsaved draft',
+    );
+    assert.deepEqual(JSON.parse(dom.window.localStorage.getItem(storageKey)!), { [draftKey]: 'Unsaved draft' });
 
     dom.window.document.querySelector<HTMLButtonElement>('.rivet-web-app-chat-menu-button')?.click();
     assert.equal(dom.window.document.querySelector('.rivet-web-app-chat-menu')?.textContent, 'Flush chat history');

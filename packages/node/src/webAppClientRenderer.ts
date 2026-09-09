@@ -1317,7 +1317,14 @@ async function initializeRivetWebApp(root: HTMLElement, config: WebAppClientConf
         const chatChildren: Node[] = [
           createElement('div', { className: 'rivet-web-app-chat-header' }, [
             createElement('span', { className: 'rivet-web-app-chat-title' }, [
-              createElement('span', { text: 'Chat' }),
+              createElement('button', {
+                'aria-label': 'New chat',
+                className: 'rivet-web-app-chat-new-button',
+                onClick: flushChatHistory,
+                text: 'New chat',
+                title: 'New chat',
+                type: 'button',
+              }),
               createElement(
                 'span',
                 {

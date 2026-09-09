@@ -210,10 +210,22 @@ test('Rivet web app migrates legacy Chat state to IndexedDB and synchronizes it 
   await page.reload();
   await expect(page.locator('.rivet-web-app-chat-composer textarea')).toHaveValue('Migrated draft');
   await expect(page.getByText('Migrated answer', { exact: true })).toBeVisible();
+  await expect(page.locator('.rivet-web-app-chat-title')).toHaveText('New chat');
+  const pinnedResponsesButton = page.getByRole('button', { name: 'Show 1 pinned response' });
+  await expect(pinnedResponsesButton).toBeVisible();
 
   const secondPage = await context.newPage();
   await secondPage.goto(appUrl);
   const secondComposer = secondPage.locator('.rivet-web-app-chat-composer textarea');
+  await expect(secondComposer).toHaveValue('Migrated draft');
+
+  const newChatButton = page.getByRole('button', { name: 'New chat' });
+  await expect(newChatButton).toBeVisible();
+  await newChatButton.click();
+  await expect(page.locator('.rivet-web-app-chat-message')).toHaveCount(0);
+  await expect(pinnedResponsesButton).toHaveCount(0);
+  await expect(firstComposer).toHaveValue('Migrated draft');
+  await expect(secondPage.locator('.rivet-web-app-chat-message')).toHaveCount(0);
   await expect(secondComposer).toHaveValue('Migrated draft');
 
   await page.locator('.rivet-web-app-chat-composer textarea').fill('Updated in the first tab');

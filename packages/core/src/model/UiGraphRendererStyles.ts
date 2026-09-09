@@ -474,6 +474,7 @@ export const RIVET_WEB_APP_RENDERER_CSS = `
 
 .rivet-web-app-chat-pins-button,
 .rivet-web-app-chat-search-button,
+.rivet-web-app-chat-new-button,
 .rivet-web-app-chat-menu-button,
 .rivet-web-app-chat-search-close-button,
 .rivet-web-app-chat-search-navigation-button {
@@ -497,6 +498,18 @@ export const RIVET_WEB_APP_RENDERER_CSS = `
   width: 56px;
   height: 56px;
   border-radius: 10px;
+}
+
+.rivet-web-app-chat-new-button {
+  min-height: 30px;
+  padding: 0 9px;
+  border: 1px solid var(--rivet-web-app-control-border);
+  border-radius: 7px;
+  background: var(--rivet-web-app-control-background);
+  color: var(--rivet-web-app-foreground);
+  font-size: 0.875em;
+  line-height: 1;
+  white-space: nowrap;
 }
 
 .rivet-web-app-chat-pins-button {
@@ -540,6 +553,13 @@ export const RIVET_WEB_APP_RENDERER_CSS = `
 .rivet-web-app-chat-menu-button:hover,
 .rivet-web-app-chat-menu-button:focus-visible {
   background: transparent;
+  color: var(--rivet-web-app-foreground);
+  outline: none;
+}
+
+.rivet-web-app-chat-new-button:hover,
+.rivet-web-app-chat-new-button:focus-visible {
+  background: var(--rivet-web-app-control-hover-background);
   color: var(--rivet-web-app-foreground);
   outline: none;
 }
