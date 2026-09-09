@@ -569,6 +569,67 @@ test('managed runtime-library prune dry run does not delete anything', async () 
   assert.deepEqual(deletes, { jobs: 0, releases: 0, objects: 0 });
 });
 
+test('managed runtime-library prune revalidates an audited candidate before deletion', async () => {
+  const now = new Date('2026-04-05T12:00:00.000Z');
+  const before = cleanup.buildManagedRuntimeLibrariesAuditSnapshotFromState({
+    activeReleaseId: 'release-active',
+    releases: [
+      { release_id: 'release-active', packages_json: {}, artifact_blob_key: 'releases/release-active/release.tar', artifact_sha256: 'sha-active', created_at: '2026-04-04T00:00:00.000Z' },
+      { release_id: 'release-prune', packages_json: {}, artifact_blob_key: 'releases/release-prune/release.tar', artifact_sha256: 'sha-prune', created_at: '2025-01-01T00:00:00.000Z' },
+    ],
+    jobs: [],
+    objects: [
+      { key: 'releases/release-active/release.tar', size: 1, lastModified: '2026-04-04T00:00:00.000Z' },
+      { key: 'releases/release-prune/release.tar', size: 1, lastModified: '2025-01-01T00:00:00.000Z' },
+    ],
+  }, now);
+  const revalidated = cleanup.buildManagedRuntimeLibrariesAuditSnapshotFromState({
+    activeReleaseId: 'release-prune',
+    releases: before.releases.map((release) => ({
+      release_id: release.releaseId,
+      packages_json: {},
+      artifact_blob_key: release.artifactBlobKey,
+      artifact_sha256: release.artifactSha256,
+      created_at: release.createdAt,
+    })),
+    jobs: [],
+    objects: before.objects.map((entry) => ({
+      key: entry.key,
+      size: entry.size,
+      lastModified: entry.lastModified,
+    })),
+  }, now);
+  const deleted = { jobs: [] as string[], releases: [] as string[], objects: [] as string[] };
+  let auditCalls = 0;
+
+  const result = await cleanup.pruneManagedRuntimeLibrariesState({
+    apply: true,
+    driver: {
+      audit: async () => {
+        auditCalls += 1;
+        return auditCalls === 1 ? before : revalidated;
+      },
+      revalidateBeforeApply: async () => revalidated,
+      deleteJobs: async (ids) => {
+        deleted.jobs = ids;
+        return ids.length;
+      },
+      deleteReleases: async (ids) => {
+        deleted.releases = ids;
+        return ids.length;
+      },
+      deleteObjects: async (keys) => {
+        deleted.objects = keys;
+        return keys.length;
+      },
+    },
+  });
+
+  assert.deepEqual(deleted, { jobs: [], releases: [], objects: [] });
+  assert.equal(result.deletedReleaseCount, 0);
+  assert.equal(result.deletedObjectCount, 0);
+});
+
 test('managed runtime-library prune apply deletes only plan candidates', async () => {
   const before = cleanup.buildManagedRuntimeLibrariesAuditSnapshotFromState({
     activeReleaseId: 'release-active',

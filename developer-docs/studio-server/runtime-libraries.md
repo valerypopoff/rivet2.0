@@ -316,6 +316,38 @@ Current persistence rules:
 - in `managed` mode, executor processes run the same reconciliation logic through the bootstrap layer before code execution
 - in `managed` mode, replica-status rows also live in Postgres, so stale rows can survive process restarts until background cleanup or explicit stale-row cleanup removes them
 
+### Managed activation outcome ownership
+
+Managed activation uploads an immutable archive before its PostgreSQL activation
+transaction can atomically create the release, switch the active release, and mark
+the job successful. A network failure after `COMMIT` may therefore leave the worker
+without an acknowledgement even though the transaction committed. The activation
+worker does not infer failure from that error or delete the uploaded archive.
+
+Instead, it takes the runtime-library release-mutation transaction lock, resolves
+the durable job/release/activation outcome on a fresh connection, and treats the
+attempt as successful only when all recorded release identity, artifact-key, and
+checksum values match. A known rolled-back attempt is conditionally marked failed;
+an unavailable or contradictory outcome remains active for normal stale-job
+recovery. In both cases its archive is retained for audit and the existing
+24-hour orphan-artifact policy. This prevents a late error path from deleting an
+artifact that a committed release now references.
+
+Activation and `--apply` pruning share the same release-mutation lock, while
+cancellation coordinates with activation through the locked job row. The
+lock-owning activation, recovery, and prune transactions apply the same bounded
+lock and statement timeout before they wait, so a blocked maintenance run cannot
+indefinitely hold an activation worker. Terminal jobs cannot be overwritten by
+late failure/cancellation cleanup. Pruning
+re-reads database candidates while holding that lock, deletes database rows first,
+and rechecks object keys for references immediately before object-storage deletion.
+
+An activation also invalidates, but never clears or overlaps, the process-local
+extracted-cache sync. If an older poll is already downloading a release, a forced
+refresh waits for it and then re-reads the active release before publishing a
+cache. Callers therefore cannot complete a newer activation with an older cache
+sync still able to overwrite it.
+
 ## Managed cleanup tooling
 
 Managed runtime-library state accumulates historical release rows, job rows, and
@@ -333,6 +365,15 @@ Those generated snapshots are operational artifacts, not source files, and are i
 
 `prune` is dry-run by default. It writes a pre-prune snapshot and prints the exact
 release rows, job rows, and orphaned object-storage keys that would be deleted.
+On `--apply`, that snapshot remains an audit record rather than a deletion
+authority: the command revalidates database candidates under the release-mutation
+lock and rechecks blob references at the final deletion boundary, so concurrent
+activation/cancellation cannot turn a formerly safe candidate into a deleted live
+artifact. If object storage partially rejects a delete batch, prune reports the
+failure rather than counting the batch as removed; any remaining artifact stays
+available for the next audited prune.
+An incomplete or non-progressing object-store listing is also an audit failure,
+never an assumed empty or complete result.
 
 Retention policy:
 

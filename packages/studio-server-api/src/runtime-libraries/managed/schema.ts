@@ -170,6 +170,16 @@ const MANAGED_RUNTIME_LIBRARIES_SCHEMA_LOCK = {
   objectId: 24_001,
 } as const;
 
+/**
+ * Serializes release activation with destructive manual cleanup. The lock is
+ * transaction scoped, so a lost database connection cannot leave it held by a
+ * dead worker.
+ */
+export const MANAGED_RUNTIME_LIBRARIES_RELEASE_MUTATION_LOCK = {
+  classId: 8_071,
+  objectId: 24_002,
+} as const;
+
 export const ACTIVE_JOB_STATUS_CLAUSE = `('queued', 'running', 'validating', 'activating')`;
 export const JOB_HEARTBEAT_INTERVAL_MS = 5_000;
 export const STALE_JOB_TIMEOUT_MS = 10 * 60_000;
@@ -177,6 +187,7 @@ export const CANCEL_POLL_INTERVAL_MS = 1_000;
 export const PROCESS_TERMINATE_GRACE_MS = 5_000;
 export const RUNTIME_LIBRARY_REPLICA_STATUS_CLEANUP_INTERVAL_MS = 15 * 60_000;
 export const RUNTIME_LIBRARY_REPLICA_STATUS_RETENTION_MS = 24 * 60 * 60 * 1_000;
+export const MANAGED_RUNTIME_LIBRARIES_RELEASE_MUTATION_TIMEOUT_MS = 5_000;
 
 export class JobCancelledError extends Error {
   constructor(message = 'Cancelled by user') {
@@ -318,6 +329,27 @@ export async function queryOne<T extends QueryResultRow>(
 ): Promise<T | null> {
   const rows = await queryRows<T>(client, sql, params);
   return rows[0] ?? null;
+}
+
+export async function configureManagedRuntimeLibrariesTransactionTimeout(
+  client: PoolClient,
+  timeoutMs = MANAGED_RUNTIME_LIBRARIES_RELEASE_MUTATION_TIMEOUT_MS,
+): Promise<void> {
+  const timeout = `${Math.max(1, Math.floor(timeoutMs))}ms`;
+  await client.query(
+    "SELECT set_config('lock_timeout', $1, true), set_config('statement_timeout', $1, true)",
+    [timeout],
+  );
+}
+
+export async function acquireManagedRuntimeLibrariesReleaseMutationLock(client: PoolClient): Promise<void> {
+  await client.query(
+    'SELECT pg_advisory_xact_lock($1::integer, $2::integer)',
+    [
+      MANAGED_RUNTIME_LIBRARIES_RELEASE_MUTATION_LOCK.classId,
+      MANAGED_RUNTIME_LIBRARIES_RELEASE_MUTATION_LOCK.objectId,
+    ],
+  );
 }
 
 export function isUniqueViolation(error: unknown): boolean {

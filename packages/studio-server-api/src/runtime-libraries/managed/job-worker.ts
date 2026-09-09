@@ -8,6 +8,7 @@ import {
   type RuntimeLibraryJobRow,
 } from './schema.js';
 import { recordStudioMetrics } from '../../metrics.js';
+import type { ManagedRuntimeLibraryActivationOutcome } from './artifact-activation.js';
 
 import type { ManagedRuntimeLibrariesContext } from './context.js';
 
@@ -18,11 +19,11 @@ export function createManagedRuntimeLibrariesJobWorker(options: {
   getProcessManagedSync(): ((force?: boolean) => Promise<void>) | undefined;
   jobStore: {
     appendJobLog(jobId: string, message: string, source?: 'system' | 'stdout' | 'stderr'): Promise<void>;
-    failJob(jobId: string, error: unknown): Promise<void>;
+    failJob(jobId: string, error: unknown): Promise<boolean>;
     touchJob(jobId: string, stopped: boolean): Promise<void>;
   };
   artifactActivation: {
-    processJob(job: RuntimeLibraryJobRow): Promise<void>;
+    processJob(job: RuntimeLibraryJobRow): Promise<ManagedRuntimeLibraryActivationOutcome>;
   };
 }) {
   let workerStarted = false;
@@ -120,13 +121,23 @@ export function createManagedRuntimeLibrariesJobWorker(options: {
 
         recordStudioMetrics((metrics) => metrics.setRuntimeLibraryJobActive(1));
         try {
-          await withJobHeartbeat(job.job_id, async () => {
-            await options.artifactActivation.processJob(job);
+          const outcome = await withJobHeartbeat(job.job_id, async () => {
+            return options.artifactActivation.processJob(job);
           });
-          recordStudioMetrics((metrics) => metrics.recordRuntimeLibraryJob('succeeded'));
+          if (outcome === 'succeeded') {
+            recordStudioMetrics((metrics) => metrics.recordRuntimeLibraryJob('succeeded'));
+          } else if (outcome === 'failed') {
+            recordStudioMetrics((metrics) => metrics.recordRuntimeLibraryJob('failed'));
+          } else {
+            console.warn(`[runtime-libraries] Job ${job.job_id} has an unresolved activation outcome; preserving durable state for recovery.`);
+          }
         } catch (error) {
-          recordStudioMetrics((metrics) => metrics.recordRuntimeLibraryJob('failed'));
-          await options.jobStore.failJob(job.job_id, error);
+          const failed = await options.jobStore.failJob(job.job_id, error);
+          if (failed) {
+            recordStudioMetrics((metrics) => metrics.recordRuntimeLibraryJob('failed'));
+          } else {
+            console.warn(`[runtime-libraries] Job ${job.job_id} reached a terminal or unresolved state before worker failure handling completed.`);
+          }
         } finally {
           recordStudioMetrics((metrics) => metrics.setRuntimeLibraryJobActive(0));
         }
