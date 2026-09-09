@@ -27,7 +27,7 @@ See also: [Wrapper ManagedCodeRunner Speed Plan](./wrapper-managed-code-runner-s
 
 The five private `@valerypopoff/rivet-studio-server-*` workspaces form one
 Studio Server product and use one lockstep package version. Their current
-version is `1.10.0`. `yarn studio-server:verify:repo-structure` rejects version
+version is `1.11.0`. `yarn studio-server:verify:repo-structure` rejects version
 drift between the API, web, executor, shared, and bootstrap manifests.
 
 These private package versions are release metadata, not npm publication or
