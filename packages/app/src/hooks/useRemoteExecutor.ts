@@ -105,6 +105,7 @@ type RemoteEvaluationMetricsState = {
 };
 
 type RemoteLocalExecutionRecordingCapture = {
+  abortRequested: boolean;
   correlationId: string;
   errorMessage?: string;
   graphId: GraphId;
@@ -151,13 +152,18 @@ function captureRemoteLocalExecutionTerminal(
     capture.errorMessage ??= getRemoteExecutionErrorMessage(data);
   }
 
-  if (message === 'done' || message === 'error' || message === 'abort') {
+  if (message === 'abort') {
+    // Abort is only the start of remote cleanup. Keep the socket recorder and
+    // request routing attached until a root done/error message carries the
+    // late node checkpoints and errors from that cleanup.
+    capture.abortRequested = true;
+    capture.status = 'suspicious';
+    capture.errorMessage ??= getRemoteExecutionErrorMessage(data);
+    return;
+  }
+
+  if (message === 'done' || message === 'error') {
     capture.isTerminal = true;
-    if (message === 'abort') {
-      capture.status = 'suspicious';
-      capture.errorMessage ??= getRemoteExecutionErrorMessage(data);
-      capture.recorderAbortController.abort();
-    }
   }
 }
 
@@ -558,16 +564,11 @@ export function useRemoteExecutor() {
         break;
       }
       case 'abort':
-        executorSession.rejectPendingGraphExecution(requestId, new Error('graph execution aborted'));
         if (requestId) {
           earlyResultRequestIdsRef.current.delete(requestId);
           webAppStoragePatchCallbacksByRequestIdRef.current.delete(requestId);
           emitRemoteResponseTrace(responseTraceByRequestIdRef.current, requestId, data, false, 'aborted');
           responseTraceByRequestIdRef.current.delete(requestId);
-        }
-        clearActiveRemoteRunRequestIfMatches(activeGraphRequestIdRef, requestId);
-        if (requestId === executorSession.getActiveGraphRunRequestId()) {
-          executorSession.setActiveGraphRunRequestId(null);
         }
         if (shouldDispatchExecutionEvent) {
           eventDispatcher.abort(data);
@@ -786,6 +787,7 @@ export function useRemoteExecutor() {
         }
 
         const capture: RemoteLocalExecutionRecordingCapture = {
+          abortRequested: false,
           correlationId: remoteLocalRecordingCorrelationId,
           graphId: graphToRun,
           hasUnhealthyLLMProfileHealthEvidence: false,
@@ -931,7 +933,13 @@ export function useRemoteExecutor() {
             remoteLocalRecordingRequestId == null
               ? undefined
               : localRecordingCapturesByRequestIdRef.current.get(remoteLocalRecordingRequestId);
-          if (capture && !capture.isTerminal) capture.recorderAbortController.abort();
+          // A remote abort is expected to reject only after its root error or
+          // done event. If a legacy executor cannot settle, leave the capture
+          // attached for its socket-close owner rather than cutting off late
+          // node diagnostics at the abort notification.
+          if (capture && !capture.isTerminal && !capture.abortRequested) {
+            capture.recorderAbortController.abort();
+          }
           throw error;
         }
       }
@@ -1190,6 +1198,18 @@ export function useRemoteExecutor() {
             const recording = createRemoteEvaluationRecordingReference();
             const recordingAbortController = new AbortController();
             let recorderPromise: Promise<void> | undefined;
+            const disposeIncompleteRecordingCapture = () => {
+              // A request-level error is delivered on the same socket as its
+              // recording. Do not dispose the listener merely because the
+              // pending-request promise rejected: the matching terminal frame
+              // may be the evidence we are about to persist. A run which
+              // never emitted a root terminal cannot produce a completed
+              // recording, so it is safe to release its capture instead.
+              const hasRootTerminal = recorder.events.some((event) => event.type === 'done' || event.type === 'error');
+              if (!hasRootTerminal) {
+                recordingAbortController.abort();
+              }
+            };
             const persistRecording = async (): Promise<EvaluationRecordingReference | undefined> => {
               if (recorder.events.length === 0) return undefined;
               try {
@@ -1251,7 +1271,7 @@ export function useRemoteExecutor() {
               };
             } catch (error) {
               captured.metrics.durationMs = Math.max(captured.metrics.durationMs, Date.now() - startedAt);
-              recordingAbortController.abort();
+              disposeIncompleteRecordingCapture();
               await recorderPromise;
               const persistedRecording = await persistRecording();
               if (signal?.aborted || (error instanceof DOMException && error.name === 'AbortError')) throw error;
@@ -1261,7 +1281,7 @@ export function useRemoteExecutor() {
                 ...(captured.providerAttempts.length === 0 ? {} : { providerAttempts: captured.providerAttempts }),
               });
             } finally {
-              recordingAbortController.abort();
+              disposeIncompleteRecordingCapture();
               if (requestId !== undefined) evaluationMetricsByRequestIdRef.current.delete(requestId);
             }
           },

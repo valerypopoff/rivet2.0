@@ -87,6 +87,27 @@ payload beyond an explicitly enabled existing node output, nor any new
 node/project schema. Consumers that do not understand the additive event
 continue to use the terminal output normally.
 
+Failure checkpoints are collected separately from live partial-output display
+updates. When the caller supports the terminal checkpoint channel, the LLM
+node sends failure evidence there only rather than duplicating it as a detached
+partial update; direct/custom consumers without that channel retain the legacy
+partial-output fallback. A checkpoint starts only when the shared AI SDK bridge is about to
+invoke an executor, so setup, cache, prompt-conversion, and cancellation paths
+that never reach the executor do not fabricate **Messages Sent**. It retains
+that attempt's request messages, then its response, tool calls, and enabled
+reasoning as stream data arrives. A checkpoint is cloned at the node boundary;
+later stream and continuation mutation cannot alter it. The callback is
+observational and may not replace the original error.
+
+Fallback clears the live response only while moving to another profile. It
+does not clear durable evidence and does not erase the last failed profile's
+partial response. A request-only failure therefore retains its sent messages;
+a reasoning-only interrupted stream retains reasoning only when **Output
+reasoning** is enabled. Captured HTTP request/response bodies remain subject to
+their existing opt-in switches and represent transport capture, not a delivery
+receipt. Failed checkpoints are inspection-only: they do not create a completed
+logical-round page, successful graph output, editor-cache entry, or tool call.
+
 ## Inline and profile configuration
 
 `LLM Chat` has one runtime pipeline and two configuration sources:
@@ -719,14 +740,22 @@ paths and should not be used as the primary target for new provider refactors.
   diagnostics. The opt-in `LLM response body` output captures the raw response
   payload without consuming the SDK response stream. It deliberately omits no
   content, so workflow authors are responsible for where they expose it.
-- Terminal LLM Chat failures must preserve diagnostics captured before the
-  error. The node publishes its enabled `LLM request body` when an HTTP request
-  was constructed, its enabled `LLM response body` when a provider response was
-  received, and the enabled `LLM Attempts` / profile summary through the normal
-  partial-output event before rethrowing the original error. These diagnostics
-  are editor/run-history evidence only: they do not turn the failed node into a
-  successful dataflow result and must never replace the originating error if
-  diagnostic projection itself fails.
+- Terminal LLM Chat failures preserve diagnostics captured before the error in
+  the terminal `nodeError.outputs` checkpoint. It contains an enabled `LLM
+  request body` when Rivet built an HTTP request, an enabled `LLM response body`
+  when a provider response was captured, known enabled Usage, and enabled `LLM
+  Attempts` / profile summary. The checkpoint also retains the latest streamed
+  `Response` and messages when they exist. When the caller supports terminal
+  checkpoints, that event is the only delivery path; it avoids a duplicate
+  detached partial update racing the terminal state. Direct/custom consumers
+  that lack the channel receive the existing partial-output fallback instead.
+  Recordings, replay, run history, and Remote Debugger retain the terminal
+  checkpoint even when transient `partialOutput` recording is disabled. It
+  proves what Rivet built or captured, not that a remote server necessarily
+  accepted a request. These
+  values are display-only; they never turn a failed node into graph results or
+  replace the original error if projection itself fails. Older recordings that
+  omitted the checkpoint cannot reconstruct unavailable request content.
 - Editor cache keys must keep secret fingerprints and provider/model identity
   separated enough to avoid stale catalog reuse. The editor-only cache control
   is legacy: it is visible only on nodes that already have it enabled, and once

@@ -478,6 +478,8 @@ export async function replayExecutionRecording(options: {
                 node,
                 error: data.error,
                 processId: data.processId as ProcessId,
+                ...(data.outputs === undefined ? {} : { outputs: data.outputs }),
+                ...(data.splitOutputs === undefined ? {} : { splitOutputs: data.splitOutputs }),
                 ...(data.resultOrigin === undefined ? {} : { resultOrigin: data.resultOrigin }),
                 execution,
               },

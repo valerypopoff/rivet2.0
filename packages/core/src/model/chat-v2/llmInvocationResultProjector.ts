@@ -12,6 +12,8 @@ type LLMInvocationDiagnosticProjectionOptions = {
     'requestBodies' | 'responseBodies' | 'outputRequestBody' | 'outputResponseBody'
   >;
   outputLLMAttempts: boolean | undefined;
+  modelCalls: readonly ChatV2CallFinishedEvent[];
+  outputUsage: boolean | undefined;
   llmAttempts: readonly LLMAttempt[];
   profileSummary?: string | undefined;
 };
@@ -24,6 +26,8 @@ type LLMInvocationDiagnosticProjectionOptions = {
 export function projectLLMInvocationDiagnostics({
   runOptions,
   outputLLMAttempts,
+  modelCalls,
+  outputUsage,
   llmAttempts,
   profileSummary,
 }: LLMInvocationDiagnosticProjectionOptions): Outputs {
@@ -33,8 +37,17 @@ export function projectLLMInvocationDiagnostics({
     ...Object.fromEntries(
       Object.entries(capturedBodies).filter(([, output]) => output?.type !== 'control-flow-excluded'),
     ),
+    ...projectLLMInvocationUsageOutput({ modelCalls, outputUsage }),
     ...projectLLMInvocationMetadata({ outputLLMAttempts, llmAttempts, profileSummary }),
   };
+}
+
+/** Combines streamed response state with terminal diagnostics without hiding either. */
+export function mergeLLMInvocationFailureOutputs(
+  partialOutputs: Outputs | undefined,
+  diagnostics: Outputs,
+): Outputs {
+  return { ...partialOutputs, ...diagnostics };
 }
 
 function projectLLMInvocationMetadata(params: {
@@ -73,12 +86,10 @@ export function projectLLMInvocationResult(params: {
 }): Outputs {
   const { result, modelCalls, outputUsage, outputLLMAttempts, llmAttempts, profileSummary } = params;
 
-  if (outputUsage && modelCalls.length > 0) {
-    const physicalUsage = projectLLMInvocationUsage(modelCalls);
-    if (physicalUsage != null) {
-      result.usage = physicalUsage;
-      result.commonOutputs['usage' as PortId] = { type: 'object', value: physicalUsage };
-    }
+  const usage = getLLMInvocationUsage({ modelCalls, outputUsage });
+  if (usage != null) {
+    result.usage = usage;
+    result.commonOutputs['usage' as PortId] = { type: 'object', value: usage };
   }
 
   Object.assign(
@@ -91,4 +102,25 @@ export function projectLLMInvocationResult(params: {
   );
 
   return result.commonOutputs;
+}
+
+function projectLLMInvocationUsageOutput({
+  modelCalls,
+  outputUsage,
+}: Pick<LLMInvocationDiagnosticProjectionOptions, 'modelCalls' | 'outputUsage'>): Outputs {
+  const usage = getLLMInvocationUsage({ modelCalls, outputUsage });
+  return usage == null ? {} : { ['usage' as PortId]: { type: 'object', value: usage } };
+}
+
+function getLLMInvocationUsage({
+  modelCalls,
+  outputUsage,
+}: Pick<LLMInvocationDiagnosticProjectionOptions, 'modelCalls' | 'outputUsage'>):
+  | ReturnType<typeof projectLLMInvocationUsage>
+  | undefined {
+  if (!outputUsage || modelCalls.length === 0) {
+    return undefined;
+  }
+
+  return projectLLMInvocationUsage(modelCalls) ?? undefined;
 }

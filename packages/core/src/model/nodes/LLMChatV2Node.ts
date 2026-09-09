@@ -20,6 +20,7 @@ import { isLLMChatV2StructuredResponseFormat } from '../chat-v2/chatV2FeatureCom
 import { LLMInvocationJournal } from '../chat-v2/llmInvocationJournal.js';
 import { executeLLMInvocation } from '../chat-v2/llmInvocationCoordinator.js';
 import {
+  mergeLLMInvocationFailureOutputs,
   projectLLMInvocationDiagnostics,
   projectLLMInvocationResult,
 } from '../chat-v2/llmInvocationResultProjector.js';
@@ -326,6 +327,7 @@ export class LLMChatV2NodeImpl extends NodeImpl<LLMChatV2Node> {
   async process(inputs: Inputs, context: InternalProcessContext): Promise<Outputs> {
     const invocationJournal = new LLMInvocationJournal();
     let profileAttemptSequence = 0;
+    let latestFailureEvidence: Outputs | undefined;
     // Retries, fallback profiles, and tool continuation produce several
     // physical provider calls underneath one node invocation. Always observe
     // them locally so every later output projection shares one truthful
@@ -369,7 +371,18 @@ export class LLMChatV2NodeImpl extends NodeImpl<LLMChatV2Node> {
       invocation = await executeLLMInvocation({
         context,
         journal: invocationJournal,
-        runtime,
+        runtime: {
+          ...runtime,
+          runOptions: {
+            ...runtime.runOptions,
+            onFailureCheckpoint: (outputs) => {
+              // The pipeline emits request/response evidence separately from
+              // presentation updates. Snapshot it here because streams and
+              // tool continuation may keep accumulating after this callback.
+              latestFailureEvidence = cloneLLMChatV2Outputs(outputs);
+            },
+          },
+        },
         toolCallContinuation,
       });
     } catch (error) {
@@ -377,12 +390,25 @@ export class LLMChatV2NodeImpl extends NodeImpl<LLMChatV2Node> {
         const diagnostics = projectLLMInvocationDiagnostics({
           runOptions: runtime.runOptions,
           outputLLMAttempts: this.data.outputLLMAttempts,
+          modelCalls: invocationJournal.modelCalls,
+          outputUsage: this.data.outputUsage,
           llmAttempts: invocationJournal.llmAttempts,
           profileSummary: runtime.getProfileSummary?.(),
         });
+        const failureOutputs = mergeLLMInvocationFailureOutputs(latestFailureEvidence, diagnostics);
 
-        if (Object.keys(diagnostics).length > 0) {
-          context.onPartialOutputs?.(diagnostics);
+        if (Object.keys(failureOutputs).length > 0) {
+          // This checkpoint is the durable terminal counterpart to the live
+          // partial-output stream. GraphProcessor attaches it to nodeError,
+          // so recordings and remote executors cannot lose evidence merely
+          // because their recorder omits transient partial events.
+          if (context.setFailureOutputs) {
+            context.setFailureOutputs(failureOutputs);
+          } else {
+            // Keep direct/custom node consumers working without asking them
+            // to implement the GraphProcessor-only terminal channel.
+            context.onPartialOutputs?.(failureOutputs);
+          }
         }
       } catch {
         // Developer diagnostics are observational and must never replace the

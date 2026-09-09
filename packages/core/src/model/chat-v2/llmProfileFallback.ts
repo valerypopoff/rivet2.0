@@ -655,7 +655,9 @@ export function createLLMProfileFallbackRunner(params: {
                 healthDisposition: 'deny',
                 ...(begin.retryAt == null ? {} : { retryAt: begin.retryAt }),
               });
-              clearPartialResponse(roundOptions);
+              if (profileIndex + 1 < params.candidates.length) {
+                clearPartialResponse(roundOptions);
+              }
               continue;
             }
 
@@ -731,7 +733,9 @@ export function createLLMProfileFallbackRunner(params: {
             outcome: 'failure',
             error: getLLMAttemptErrorMessage(error),
           });
-          clearPartialResponse(roundOptions);
+          if (profileIndex + 1 < params.candidates.length) {
+            clearPartialResponse(roundOptions);
+          }
           await healthPermit?.finish('ignored');
           continue;
         }
@@ -822,7 +826,9 @@ export function createLLMProfileFallbackRunner(params: {
             outcome: 'failure',
             error: getLLMAttemptErrorMessage(error),
           });
-          clearPartialResponse(roundOptions);
+          if (profileIndex + 1 < params.candidates.length) {
+            clearPartialResponse(roundOptions);
+          }
           await healthPermit?.finish('ignored');
           continue;
         }
@@ -837,7 +843,9 @@ export function createLLMProfileFallbackRunner(params: {
         await healthPermit?.finish(
           isUnhealthyLLMProfileProviderFailure(execution.failure.normalizedError) ? 'unhealthy' : 'ignored',
         );
-        clearPartialResponse(roundOptions);
+        if (profileIndex + 1 < params.candidates.length) {
+          clearPartialResponse(roundOptions);
+        }
       }
 
       exhausted = true;

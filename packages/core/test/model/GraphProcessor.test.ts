@@ -24,6 +24,7 @@ import {
   type Tokenizer,
   type TokenizerCallInfo,
 } from '../../src/index.js';
+import { ExecutionRecorder } from '../../src/recording/ExecutionRecorder.js';
 import { loadTestGraphInProcessor, testProcessContext } from '../testUtils';
 
 type TrackedNode = ChartNode<'trackedTest', { delayMs: number; markEditorCacheHit?: boolean }>;
@@ -132,15 +133,16 @@ class FailingTestNodeImpl extends NodeImpl<FailingNode> {
   }
 
   getInputDefinitions(): NodeInputDefinition[] {
-    return [];
+    return [{ id: 'items' as PortId, title: 'Items', dataType: 'string' }];
   }
 
   getOutputDefinitions(): NodeOutputDefinition[] {
     return [];
   }
 
-  async process(): Promise<Outputs> {
+  async process(_inputs: Inputs, context: InternalProcessContext): Promise<Outputs> {
     await waitFor(this.data.delayMs);
+    context.setFailureOutputs?.({ ['requestBody' as PortId]: { type: 'string', value: 'captured request' } });
     throw new Error('failing test node failed');
   }
 }
@@ -423,6 +425,39 @@ function createTrackedSplitGraph(
         outputId: 'output1' as PortId,
         inputNodeId: outputNode.id,
         inputId: 'value' as PortId,
+      },
+    ],
+  };
+}
+
+function createFailingSplitGraph(registry: ReturnType<typeof createTimingRegistry>) {
+  const inputNode = registry.create('graphInput');
+  inputNode.id = 'failing-split-input' as NodeId;
+  inputNode.data = {
+    ...inputNode.data,
+    id: 'items',
+    dataType: 'string[]',
+    useDefaultValueInput: false,
+  };
+
+  const failingNode = registry.create('failingTest');
+  failingNode.id = 'failing-split-node' as NodeId;
+  failingNode.isSplitRun = true;
+  failingNode.splitRunMax = 2;
+
+  return {
+    metadata: {
+      id: 'failing-split-graph',
+      name: 'Failing Split Graph',
+      description: '',
+    },
+    nodes: [inputNode, failingNode],
+    connections: [
+      {
+        outputNodeId: inputNode.id,
+        outputId: 'data' as PortId,
+        inputNodeId: failingNode.id,
+        inputId: 'items' as PortId,
       },
     ],
   };
@@ -846,6 +881,45 @@ void describe('GraphProcessor', () => {
     assert.equal(typeof nodeError?.durationMs, 'number');
     assert.ok(nodeError!.durationMs! >= 0);
     assert.equal(nodeError?.resultOrigin, 'executed');
+    assert.deepEqual(nodeError?.outputs, {
+      requestBody: { type: 'string', value: 'captured request' },
+    });
+  });
+
+  void it('keeps recording through cancellation cleanup and the final root error', async () => {
+    const registry = createTimingRegistry();
+    const failingNode = registry.create('failingTest');
+    failingNode.id = 'recording-cleanup-node' as NodeId;
+    const graph = createSingleNodeGraph(failingNode, 'recording-cleanup-graph');
+    const processor = new GraphProcessor(makeProject(graph), graph.metadata.id as GraphId, registry);
+    const recorder = new ExecutionRecorder();
+    recorder.record(processor);
+    const recorderFinished = recorder.once('finish');
+
+    processor.on('nodeStart', ({ node }) => {
+      if (node.id === failingNode.id) {
+        // Let the implementation enter its cleanup-aware await before
+        // cancellation. A synchronous abort at nodeStart intentionally
+        // prevents the node implementation from beginning at all.
+        setTimeout(() => {
+          void processor.abort(false, new Error('requested cancellation'));
+        }, 0);
+      }
+    });
+
+    await assert.rejects(() => processor.processGraph(testProcessContext(), {}));
+    const { recording } = await recorderFinished;
+    const eventTypes = recording.events.map((event) => event.type);
+    const abortIndex = eventTypes.indexOf('abort');
+    const nodeErrorIndex = eventTypes.indexOf('nodeError');
+    const errorIndex = eventTypes.indexOf('error');
+
+    assert.ok(abortIndex >= 0);
+    assert.ok(nodeErrorIndex > abortIndex);
+    assert.ok(errorIndex > nodeErrorIndex);
+    assert.deepEqual(recording.events[nodeErrorIndex]?.data.outputs, {
+      requestBody: { type: 'string', value: 'captured request' },
+    });
   });
 
   void it('captures split-run aggregate and per-item durations when requested', async () => {
@@ -877,6 +951,30 @@ void describe('GraphProcessor', () => {
     assert.ok(splitFinish!.splitRunDurationMs![0]! >= 0);
     assert.ok(splitFinish!.splitRunDurationMs![1]! >= 0);
     assert.equal(splitFinish?.resultOrigin, 'executed');
+  });
+
+  void it('retains failure outputs for every failed split invocation', async () => {
+    const registry = createTimingRegistry();
+    const graph = createFailingSplitGraph(registry);
+    const processor = new GraphProcessor(makeProject(graph), graph.metadata.id as GraphId, registry);
+    let nodeError: ProcessEvents['nodeError'] | undefined;
+    processor.on('nodeError', (event) => {
+      if (event.node.id === ('failing-split-node' as NodeId)) {
+        nodeError = event;
+      }
+    });
+
+    await assert.rejects(() =>
+      processor.processGraph(testProcessContext(), {
+        items: { type: 'string[]', value: ['first', 'second'] },
+      }),
+    );
+
+    assert.equal(nodeError?.outputs, undefined);
+    assert.deepEqual(nodeError?.splitOutputs, {
+      0: { requestBody: { type: 'string', value: 'captured request' } },
+      1: { requestBody: { type: 'string', value: 'captured request' } },
+    });
   });
 
   void it('does not add duration to preloaded node events', async () => {

@@ -32,6 +32,12 @@ function baseRoundOptions(overrides: Partial<RunChatV2PipelineOptions> = {}): Ru
   };
 }
 
+async function* mockTextStream(text: string) {
+  yield { type: 'text-start' as const, id: 'text_1' };
+  yield { type: 'text-delta' as const, id: 'text_1', text };
+  yield { type: 'text-end' as const, id: 'text_1' };
+}
+
 describe('LLM Profile fallback chain', () => {
   it('accepts one profile or an ordered array and identifies malformed members by index', () => {
     const first = createDefaultLLMProfileValue();
@@ -1092,6 +1098,47 @@ describe('LLM Profile fallback chain', () => {
       },
     );
     assert.equal(runner.wasExhausted(), true);
+  });
+
+  it('clears partial output only when advancing to another profile, not after the final failed profile', async () => {
+    const responses: string[] = [];
+    const runner = createLLMProfileFallbackRunner({
+      candidates: [
+        { provider: 'custom', model: 'primary' },
+        { provider: 'custom', model: 'backup' },
+      ],
+      resolveCandidate: async (profileIndex, roundOptions) => ({
+        ...roundOptions,
+        provider: 'custom',
+        model: {} as ChatV2Model,
+        modelId: profileIndex === 0 ? 'primary' : 'backup',
+        executeStream: async () => ({
+          fullStream: mockTextStream(profileIndex === 0 ? 'primary partial' : 'backup partial'),
+          requestStatus: 503,
+        }),
+      }),
+    });
+
+    await assert.rejects(
+      () =>
+        runner.run(
+          baseRoundOptions({
+            emitPartialOutputs: true,
+            context: {
+              signal: new AbortController().signal,
+              onPartialOutputs: (outputs) => {
+                const response = outputs['response' as PortId];
+                if (response?.type === 'string') {
+                  responses.push(response.value);
+                }
+              },
+            },
+          }),
+        ),
+      LLMProfileFallbackExhaustedError,
+    );
+
+    assert.deepEqual(responses, ['primary partial', '', 'backup partial']);
   });
 
   it('does not report an earlier provider failure as terminal diagnostics after a later setup failure', async () => {

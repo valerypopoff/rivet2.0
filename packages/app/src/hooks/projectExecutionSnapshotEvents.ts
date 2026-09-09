@@ -16,7 +16,7 @@ import {
 } from '../state/dataFlow.js';
 import type { DataRefStore } from '../providers/ProvidersContext.js';
 import { buildGraphViewKeyFromExecution } from '../utils/executionIdentity.js';
-import { sanitizeInputsOrOutputs } from '../utils/executionDataSanitization.js';
+import { sanitizeInputsOrOutputs, sanitizeSplitOutputs } from '../utils/executionDataSanitization.js';
 import { getRecordedNodeTimingPatch } from '../utils/recordedNodeTiming.js';
 import {
   clearExecutionDataRefs,
@@ -32,6 +32,7 @@ import {
 } from './graphExecutionEventHelpers.js';
 import {
   collectReplacedRefIds,
+  isTerminalNodeRunStatus,
   mergeNodeRunDataForProcess,
   prepareNodeRunDataForStorage,
   removeUserInputQuestionsForProcess,
@@ -64,6 +65,21 @@ export function applyProcessEventToProjectExecutionSnapshot<K extends keyof Proc
 ): ProjectExecutionSnapshotEventResult {
   const occurredAt = Date.now();
   const previousSnapshot = options.snapshot ?? createEmptyProjectExecutionSnapshot();
+
+  // partialOutput is detached from Core execution. A late observer callback
+  // must not overwrite a completed/error/excluded invocation in either the
+  // project snapshot or its Run Activity journal.
+  if (
+    options.message === 'partialOutput' &&
+    isTerminalNodeProcess(
+      previousSnapshot,
+      (options.data as ProcessEvents['partialOutput']).node.id,
+      (options.data as ProcessEvents['partialOutput']).processId,
+    )
+  ) {
+    return { changed: false, snapshot: previousSnapshot };
+  }
+
   const result = applyProcessEventToProjectExecutionSnapshotData(options);
   let runActivityJournal = previousSnapshot.runActivityJournal ?? createRunActivityJournal();
 
@@ -150,6 +166,12 @@ function applyProcessEventToProjectExecutionSnapshotData<K extends keyof Process
             ...getRecordedNodeTimingPatch(options.data as ProcessEvents['nodeError'], 'terminal'),
             finishedAt: Date.now(),
             splitRunDurationMs: (options.data as ProcessEvents['nodeError']).splitRunDurationMs,
+            ...((options.data as ProcessEvents['nodeError']).outputs === undefined
+              ? {}
+              : { outputData: sanitizeInputsOrOutputs((options.data as ProcessEvents['nodeError']).outputs!) }),
+            ...((options.data as ProcessEvents['nodeError']).splitOutputs === undefined
+              ? {}
+              : { splitOutputData: sanitizeSplitOutputs((options.data as ProcessEvents['nodeError']).splitOutputs!) }),
             status: {
               type: 'error',
               error:
@@ -552,6 +574,15 @@ function applyPartialOutput(
 
   deleteStoredRefIds(options.refStore, refIdsToDelete);
   return nextSnapshot;
+}
+
+function isTerminalNodeProcess(
+  snapshot: ProjectExecutionSnapshot,
+  nodeId: ProcessEvents['nodeStart']['node']['id'],
+  processId: ProcessEvents['nodeStart']['processId'],
+): boolean {
+  const status = snapshot.lastRunDataByNode[nodeId]?.find((process) => process.processId === processId)?.data.status;
+  return isTerminalNodeRunStatus(status);
 }
 
 function applyNodeOutputsCleared(

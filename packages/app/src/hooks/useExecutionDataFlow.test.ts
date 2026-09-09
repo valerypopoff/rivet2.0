@@ -3,6 +3,7 @@ import test from 'node:test';
 import type { NodeId, PortId, ProcessId } from '@valerypopoff/rivet2-core';
 import type { NodeRunDataWithRefs } from '../state/dataFlow.js';
 import {
+  collectReplacedRefIds,
   mergeNodeRunDataForProcess,
   prepareNodeRunDataForStorage,
   removeUserInputQuestionsForProcess,
@@ -157,4 +158,46 @@ test('mergeNodeRunDataForProcess retains both recorded replay bounds across life
   );
 
   assert.deepEqual(mergedData.recordedTiming, { startedAt: 50_000, finishedAt: 146_000 });
+});
+
+test('mergeNodeRunDataForProcess preserves earlier split siblings on a terminal error evidence patch', () => {
+  const previousData: NodeRunDataWithRefs = {
+    splitOutputData: {
+      0: { ['output' as PortId]: { storage: 'inline', type: 'string', value: 'completed sibling' } },
+      1: { ['output' as PortId]: { storage: 'inline', type: 'string', value: 'stale partial' } },
+    },
+    status: { type: 'running' },
+  };
+
+  const mergedData = mergeNodeRunDataForProcess(previousData, {
+    splitOutputData: {
+      1: { ['output' as PortId]: { storage: 'inline', type: 'string', value: 'failed checkpoint' } },
+    },
+    status: { type: 'error', error: 'second item failed' },
+  });
+
+  assert.deepEqual(mergedData.splitOutputData, {
+    0: { ['output' as PortId]: { storage: 'inline', type: 'string', value: 'completed sibling' } },
+    1: { ['output' as PortId]: { storage: 'inline', type: 'string', value: 'failed checkpoint' } },
+  });
+});
+
+test('collectReplacedRefIds releases split references removed by a complete replacement', () => {
+  const previousData: NodeRunDataWithRefs = {
+    splitOutputData: {
+      0: {
+        ['output' as PortId]: {
+          storage: 'ref',
+          type: 'string',
+          refId: 'sibling-ref',
+          preview: { kind: 'text', excerpt: 'sibling', totalChars: 7, lineCount: 1 },
+        },
+      },
+    },
+  };
+
+  assert.deepEqual(
+    collectReplacedRefIds(previousData, { splitOutputData: {} }),
+    ['sibling-ref'],
+  );
 });

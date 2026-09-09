@@ -1,5 +1,6 @@
 import { produce } from 'immer';
 import { useAtomValue, useSetAtom } from 'jotai';
+import { useRef } from 'react';
 import {
   type CodeNode,
   type CodeNewNode,
@@ -17,7 +18,7 @@ import {
   deleteStoredRefIds,
   storeInputsOrOutputsForHistory,
 } from '../utils/executionDataStorage';
-import { sanitizeInputsOrOutputs } from '../utils/executionDataSanitization';
+import { sanitizeInputsOrOutputs, sanitizeSplitOutputs } from '../utils/executionDataSanitization';
 import { getRecordedNodeTimingPatch } from '../utils/recordedNodeTiming.js';
 import { handleError } from '../utils/errorHandling';
 import { shouldToastAsyncBranchSafetyError } from '../utils/graphExecutionErrorPresentation';
@@ -43,6 +44,12 @@ export type NodeExecutionEventsApi = {
   onToolCallFinished: (data: ProcessEvents['toolCallFinished']) => void;
 };
 
+// A detached partial-output observer can finish after its corresponding
+// terminal event. Keep a bounded, invocation-specific guard so it cannot
+// replace the durable terminal snapshot, without retaining every historical
+// process ID for the lifetime of an editor tab.
+const MAX_TERMINAL_PROCESS_GUARDS = 512;
+
 export function useNodeExecutionEvents({
   setDataForNode,
   setSelectedNodePageLatest,
@@ -55,11 +62,14 @@ export function useNodeExecutionEvents({
   const setLastRunData = useSetAtom(lastRunDataByNodeState);
   const setLLMChatOutputPageSelections = useSetAtom(selectedLLMChatOutputPageByInvocationState);
   const project = useAtomValue(projectState);
+  const terminalProcessKeysRef = useRef(new Set<string>());
 
   const onNodeStart = ({ node, inputs, processId, execution, replayRecordedAt }: ProcessEvents['nodeStart']) => {
     if (shouldSuppressPreloadedNodeEvent(node.id, processId)) {
       return;
     }
+
+    terminalProcessKeysRef.current.delete(getNodeProcessKey(node.id, processId));
 
     setDataForNode(node.id, processId, execution, {
       ...getNodeRunDebugData(node),
@@ -84,6 +94,8 @@ export function useNodeExecutionEvents({
       return;
     }
 
+    markTerminalProcess(terminalProcessKeysRef.current, getNodeProcessKey(node.id, processId));
+
     setDataForNode(node.id, processId, execution, {
       outputData: sanitizeInputsOrOutputs(outputs),
       status: { type: 'ok' },
@@ -104,6 +116,7 @@ export function useNodeExecutionEvents({
     execution,
     replayRecordedAt,
   }: ProcessEvents['nodeExcluded']) => {
+    markTerminalProcess(terminalProcessKeysRef.current, getNodeProcessKey(node.id, processId));
     setDataForNode(node.id, processId, execution, {
       ...getNodeRunDebugData(node),
       inputData: sanitizeInputsOrOutputs(inputs),
@@ -122,15 +135,20 @@ export function useNodeExecutionEvents({
     processId,
     durationMs,
     splitRunDurationMs,
+    outputs,
+    splitOutputs,
     execution,
     replayRecordedAt,
   }: ProcessEvents['nodeError']) => {
+    markTerminalProcess(terminalProcessKeysRef.current, getNodeProcessKey(node.id, processId));
     setDataForNode(node.id, processId, execution, {
       status: { type: 'error', error: typeof error === 'string' ? error : error.toString() },
       finishedAt: Date.now(),
       durationMs,
       ...getRecordedNodeTimingPatch({ replayRecordedAt }, 'terminal'),
       splitRunDurationMs,
+      ...(outputs === undefined ? {} : { outputData: sanitizeInputsOrOutputs(outputs) }),
+      ...(splitOutputs === undefined ? {} : { splitOutputData: sanitizeSplitOutputs(splitOutputs) }),
     });
     setSelectedNodePageLatest(node.id, execution);
 
@@ -140,6 +158,9 @@ export function useNodeExecutionEvents({
   };
 
   const onPartialOutput = ({ node, outputs, index, processId, execution }: ProcessEvents['partialOutput']) => {
+    if (terminalProcessKeysRef.current.has(getNodeProcessKey(node.id, processId))) {
+      return;
+    }
     const sanitizedOutputs = sanitizeInputsOrOutputs(outputs);
     const storedOutputs = storeInputsOrOutputsForHistory(sanitizedOutputs, dataRefs, {
       nodeId: node.id,
@@ -219,6 +240,15 @@ export function useNodeExecutionEvents({
       }),
     );
     setSelectedNodePageLatest(node.id, execution);
+    if (processId) {
+      terminalProcessKeysRef.current.delete(getNodeProcessKey(node.id, processId));
+    } else {
+      for (const key of terminalProcessKeysRef.current) {
+        if (key.startsWith(`${node.id}:`)) {
+          terminalProcessKeysRef.current.delete(key);
+        }
+      }
+    }
   };
 
   const onLlmChatOutputSnapshot = (data: ProcessEvents['llmChatOutputSnapshot']) => {
@@ -296,6 +326,22 @@ export function useNodeExecutionEvents({
     onLlmProfileAttempt,
     onToolCallFinished,
   };
+}
+
+function markTerminalProcess(terminalProcessKeys: Set<string>, key: string): void {
+  terminalProcessKeys.delete(key);
+  terminalProcessKeys.add(key);
+
+  if (terminalProcessKeys.size > MAX_TERMINAL_PROCESS_GUARDS) {
+    const oldestKey = terminalProcessKeys.values().next().value;
+    if (oldestKey !== undefined) {
+      terminalProcessKeys.delete(oldestKey);
+    }
+  }
+}
+
+function getNodeProcessKey(nodeId: string, processId: string): string {
+  return `${nodeId}:${processId}`;
 }
 
 function getNodeRunDebugData(node: ProcessEvents['nodeStart']['node']) {

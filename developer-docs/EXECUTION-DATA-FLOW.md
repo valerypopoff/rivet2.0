@@ -598,8 +598,11 @@ project run. Duplicate root graph terminal frames are deduped for both route
 decisions and successful-`done` reconciliation, because only one legacy
 terminal frame can correspond to a root run. Events from older transports that
 do not carry a project id keep the compatibility fallback and still pass
-through. `done`, `abort`, `error`, disconnect, and send-failure paths clear the
-active request explicitly.
+through. `done` and `error` settle and clear the active request. `abort` is
+dispatched immediately so the editor can show cancellation, but it deliberately
+retains request routing and pending ownership until the subsequent root terminal
+event delivers late node diagnostics. Disconnect and send-failure paths still
+clear the request explicitly.
 evaluation runs use the executor-session pending-promise API and reject that
 pending request if the `run` send fails before reaching the socket, so the
 failure is observed through the same async result path as normal remote test-run
@@ -972,6 +975,17 @@ These are related but different concepts:
   its ordered LLM Profile fallback chain.
 - All iterations share the same `processId` and `graphRunId`.
 - Each iteration's output is stored in `splitOutputData[index]`.
+- Sequential split execution owns one invocation-local results accumulator. If
+  cancellation is detected before a later item starts, terminal `nodeError`
+  still retains the completed/failed prefix's real split indexes, durations,
+  and failure checkpoints; unstarted items receive no synthetic result or
+  timing entry.
+- A terminal split `nodeError` carries inspection evidence for every item that
+  actually ran: completed sibling outputs and failed-item checkpoints. It is
+  never an aggregate success or downstream input. The editor applies this as
+  an index-level evidence patch so an older recording that contains only a
+  failed index cannot erase earlier sibling pages; a complete replacement still
+  releases stored references for indexes that are genuinely removed.
 - The UI shows a pager ("page 1 of N") within the node's output panel.
 - Split-output renderers sort those indexes numerically through `packages/app/src/components/nodeOutput/splitOutputEntries.ts`; do not rely on object-key order or string sorting for display order.
 - This is **not** multiple graph runs; it is one node execution with indexed outputs.
@@ -1654,13 +1668,20 @@ serializable identifiers (e.g. `node: ChartNode` -> `nodeId: NodeId`,
 `graph: NodeGraph` -> `graphId: GraphId`). The full type mapping is in
 `RecordedEventsMap` (`RecordedEvents.ts`).
 
-Recorder finish semantics follow root-run semantics, not every control event.
-`done`, `error`, and unsuccessful root `abort` events close the recording. A
-successful root `abort` from `Abort Graph` is recorded as an intermediate event
-because the processor can still emit late node terminals and then a successful
-`done`. Keeping the recorder open through that `done` preserves the same late
-successful-abort node terminals that Remote Debugger and replay need to clear
-running state correctly.
+Recorder finish semantics follow **settlement**, not cancellation notification.
+Every root `abort` is intermediate: both successful and error aborts can still
+emit late node terminals, checkpoint outputs, and a root `done` or `error`.
+In-process recorders finish from the processor's root `finish` event; socket
+recorders finish from request-scoped `done`/`error`. A socket close or explicit
+capture-owner disposal only detaches listeners and settles the capture promise;
+it does not fabricate a completed recording. The capture-owner signal is not a
+graph-abort signal. This separation preserves interrupted LLM request evidence
+without guessing a cleanup deadline, while legacy abort-only transports remain
+incomplete until their socket closes or their owner disposes them.
+
+`getRecording()` snapshots the event array before handing it to asynchronous
+persistence or replay. The individual event payloads remain the recorded values,
+but later recorder events cannot extend an already-obtained recording object.
 
 Recordings are serialized to `.rivet-recording` files with asset deduplication
 (Uint8Arrays -> base64) and string deduplication (long strings -> FNV-1a hash
@@ -1875,7 +1896,17 @@ to simulate streaming behavior.
 - `includeTrace` (default `false`): Whether to record `trace` events.
 
 These same events are simply skipped during recording; replay handles their
-absence gracefully since the final `nodeFinish` event contains the complete outputs.
+absence gracefully because `nodeFinish` contains successful terminal outputs.
+For a failed node, optional display-only evidence instead travels on the
+terminal `nodeError.outputs` (or `nodeError.splitOutputs` by split-item index).
+That terminal checkpoint is always recorded and bridged through the Browser,
+Node, and Remote Debugger serialized event contracts. The app shows those
+outputs alongside the error, and Run Activity records their port metadata so
+its full-output affordance remains available without retaining the values in
+the journal. The app also ignores a delayed `partialOutput` after a terminal
+event, preventing late stream delivery from hiding the retained evidence. The
+checkpoint never becomes graph dataflow output, and legacy recordings without
+it remain honestly incomplete.
 
 ## File Reference
 

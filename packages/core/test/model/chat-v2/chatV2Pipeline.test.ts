@@ -1528,6 +1528,99 @@ void describe('runChatV2Pipeline', () => {
     });
   });
 
+  void it('retains sent messages as failure evidence for a non-streaming request that throws', async () => {
+    const checkpoints: Outputs[] = [];
+
+    await assert.rejects(
+      () =>
+        runChatV2Pipeline({
+          provider: 'custom',
+          model: createMockModel(),
+          modelId: 'failing-generate-model',
+          prompt: { type: 'string', value: 'Keep this request.' },
+          emitPartialOutputs: false,
+          context: { signal: new AbortController().signal },
+          onFailureCheckpoint: (outputs) => checkpoints.push(outputs),
+          executeGenerate: async () => {
+            throw new Error('generated request failed');
+          },
+        }),
+      /generated request failed/,
+    );
+
+    assert.equal(checkpoints.length, 1);
+    assert.deepEqual(checkpoints[0]?.['in-messages' as PortId], {
+      type: 'chat-message[]',
+      value: [{ type: 'user', message: 'Keep this request.' }],
+    });
+    const allMessages = checkpoints[0]?.['all-messages' as PortId];
+    assert.equal(allMessages?.type, 'chat-message[]');
+    assert.deepEqual(allMessages?.value[0], { type: 'user', message: 'Keep this request.' });
+    assert.deepEqual(allMessages?.value[1], {
+      type: 'assistant',
+      message: '',
+      function_call: undefined,
+      function_calls: undefined,
+    });
+  });
+
+  void it('does not fabricate sent-message evidence when prompt preparation fails before an executor starts', async () => {
+    const checkpoints: Outputs[] = [];
+
+    await assert.rejects(
+      () =>
+        runChatV2Pipeline({
+          provider: 'custom',
+          model: createMockModel(),
+          modelId: 'never-started-model',
+          prompt: undefined,
+          context: { signal: new AbortController().signal },
+          onFailureCheckpoint: (outputs) => checkpoints.push(outputs),
+          executeStream: async () => {
+            assert.fail('the executor must not start when prompt preparation fails');
+          },
+        }),
+      /prompt/i,
+    );
+
+    assert.deepEqual(checkpoints, []);
+  });
+
+  void it('retains reasoning-only stream evidence before a provider error', async () => {
+    const checkpoints: Outputs[] = [];
+
+    await assert.rejects(
+      () =>
+        runChatV2Pipeline({
+          provider: 'custom',
+          model: createMockModel(),
+          modelId: 'reasoning-stream-model',
+          prompt: { type: 'string', value: 'Reason before failing.' },
+          emitPartialOutputs: true,
+          outputReasoning: true,
+          context: { signal: new AbortController().signal },
+          onFailureCheckpoint: (outputs) => checkpoints.push(outputs),
+          executeStream: async () => ({
+            fullStream: mockStream([
+              { type: 'reasoning-start', id: 'reasoning_1' },
+              { type: 'reasoning-delta', id: 'reasoning_1', text: 'partial chain of thought' },
+              { type: 'error', error: new Error('stream failed') },
+            ]),
+          }),
+        }),
+      /stream failed/,
+    );
+
+    assert.deepEqual(checkpoints.at(-1)?.['reasoning' as PortId], {
+      type: 'string',
+      value: 'partial chain of thought',
+    });
+    assert.deepEqual(checkpoints.at(-1)?.['in-messages' as PortId], {
+      type: 'chat-message[]',
+      value: [{ type: 'user', message: 'Reason before failing.' }],
+    });
+  });
+
   void it('keeps non-streaming tool-call-only responses when structured output is not complete', async () => {
     let generateCalls = 0;
     const generateResult: ChatV2GenerateHandle = {

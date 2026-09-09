@@ -25,6 +25,9 @@ function createSerializedRecording(recordingId: string): string {
   if (recordingId === 'recording-b-inspector') {
     return createResponseInspectorRecording(recordingId);
   }
+  if (recordingId === 'recording-a-1') {
+    return createFailedLlmOutputRecording(recordingId);
+  }
 
   const timestamp = Date.now();
 
@@ -50,6 +53,65 @@ function createSerializedRecording(recordingId: string): string {
           data: { results: { output: 'ok' } },
           ts: timestamp,
         },
+      ],
+    },
+    assets: {},
+    strings: {},
+  });
+}
+
+function createFailedLlmOutputRecording(recordingId: string): string {
+  const startedAt = Date.UTC(2026, 3, 8, 9, 45, 0);
+  const finishedAt = startedAt + 15_000;
+  const graphId = getReplayGraphId(recordingId);
+  const execution = {
+    graphId,
+    graphRunId: `${recordingId}-graph-run`,
+    rootRunId: `${recordingId}-root-run`,
+  };
+  const nodeId = 'replay-llm';
+  const processId = 'replay-llm-process';
+
+  return JSON.stringify({
+    version: 1,
+    recording: {
+      recordingId,
+      startTs: startedAt,
+      finishTs: finishedAt,
+      events: [
+        {
+          type: 'start',
+          data: {
+            projectId: getReplayProjectId(recordingId),
+            inputs: {},
+            contextValues: {},
+            startGraph: graphId,
+            execution,
+          },
+          ts: startedAt,
+        },
+        { type: 'graphStart', data: { graphId, inputs: {}, execution }, ts: startedAt },
+        { type: 'nodeStart', data: { nodeId, inputs: {}, processId, execution }, ts: startedAt },
+        {
+          type: 'nodeError',
+          data: {
+            nodeId,
+            error: 'AbortError: Aborted',
+            outputs: {
+              requestBody: { type: 'object', value: { requestId: 'preserved-failure-request' } },
+              llmAttempts: {
+                type: 'object[]',
+                value: [{ kind: 'request', status: 'aborted', requestId: 'preserved-failure-attempt' }],
+              },
+            },
+            processId,
+            durationMs: 15_000,
+            execution,
+          },
+          ts: finishedAt,
+        },
+        { type: 'graphAbort', data: { graphId, error: 'AbortError: Aborted', successful: false, execution }, ts: finishedAt },
+        { type: 'done', data: { results: {} }, ts: finishedAt },
       ],
     },
     assets: {},
@@ -172,7 +234,7 @@ function createResponseInspectorRecording(recordingId: string): string {
 
 function createReplayProject(recordingId: string): string {
   const node =
-    recordingId === 'recording-b-inspector'
+    recordingId === 'recording-b-inspector' || recordingId === 'recording-a-1'
       ? [
           '        \'[replay-llm]:llmChatV2 "Recorded response"\':',
           '          visualData: 520/300/340/null//',
@@ -183,6 +245,9 @@ function createReplayProject(recordingId: string): string {
           '            responseFormat: text',
           '            useToolCalling: false',
           '            autoContinueToolCalls: false',
+          '            outputLLMAttempts: true',
+          '            outputRequestBody: true',
+          '            outputResponseBody: true',
         ]
       : [
           '        \'[replay-node-1]:text "Replay Node"\':',
@@ -797,6 +862,40 @@ test.describe('Run recordings modal', () => {
     await editorFrame.getByRole('button', { name: 'Close modal', exact: true }).click();
     await editorFrame.getByRole('button', { name: 'Open Run Activity', exact: true }).click();
     await expect(editorFrame.locator('[aria-label="Run Activity"]')).toContainText('Completed / 1m 35.00s');
+  });
+
+  test('keeps captured LLM failure outputs visible alongside a replayed error', async ({ page }) => {
+    const { recordingFetches, replayProjectFetches } = await installRunRecordingRoutes(page);
+    await page.goto('/', { waitUntil: 'domcontentloaded' });
+    await authenticateIfNeeded(page);
+    await waitForDashboardReady(page);
+
+    await page.getByRole('button', { name: 'Run recordings' }).click();
+    const modal = page.getByTestId('run-recordings-modal');
+    await expect(modal).toBeVisible();
+    await modal.locator('.run-recordings-select__control').click();
+    await page.locator('.run-recordings-select__option', { hasText: 'Published Flow' }).click();
+    await expect(modal.locator('.run-recordings-workflow-name')).toHaveText('Published Flow');
+
+    const failedRun = modal.locator('.run-recordings-run').filter({
+      has: page.locator('.run-recordings-badge.failed', { hasText: 'Failed' }),
+    });
+    await expect(failedRun).toHaveCount(1);
+    await failedRun.locator('.run-recordings-run-open-button').click();
+    await expect.poll(() => recordingFetches).toEqual(['recording-a-1']);
+    await expect.poll(() => replayProjectFetches).toEqual(['recording-a-1']);
+
+    const editorFrame = page.frameLocator('iframe.dashboard-editor-frame');
+    await editorFrame.getByRole('button', { name: 'Play Recording', exact: true }).click();
+    const failedNodeOutput = editorFrame.locator('.node[data-nodeid="replay-llm"] .node-output');
+    await expect(failedNodeOutput).toContainText('AbortError: Aborted');
+    await expect(failedNodeOutput).toContainText('preserved-failure-request');
+    await failedNodeOutput.hover();
+    await failedNodeOutput.locator('.expand-button').click();
+    const fullscreenOutput = editorFrame.getByTestId('fullscreen-output-modal');
+    await expect(fullscreenOutput).toContainText('AbortError: Aborted');
+    await expect(fullscreenOutput).toContainText('preserved-failure-request');
+    await expect(fullscreenOutput).toContainText('preserved-failure-attempt');
   });
 
   test('saves the loaded recording artifact after playback instead of a replay timeline', async ({ page }) => {

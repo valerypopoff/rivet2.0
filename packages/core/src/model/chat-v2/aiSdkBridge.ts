@@ -345,6 +345,11 @@ async function executeStream(
   executor: ChatV2StreamExecutor,
 ): Promise<StreamChatV2Result> {
   const args = buildTextArgs(options);
+  try {
+    options.onRequestStarted?.();
+  } catch {
+    // Failure evidence is observational and must never block a provider call.
+  }
   const firstOutputStartedAt = Date.now();
   const handlePromise = Promise.resolve(executor(args));
   const handleTimeout =
@@ -366,10 +371,11 @@ async function executeStream(
   const isStructuredOutput = isChatV2StructuredResponseFormat(options.responseFormat);
   const streamed = await consumeAiSdkStream(
     streamWithDeadlines(handle.fullStream, options, firstOutputStartedAt),
-    (text, functionCalls) => {
+    (text, functionCalls, reasoning) => {
       options.onPartialOutput?.({
         text: isStructuredOutput ? collapseRepeatedStructuredJsonText(text) : text,
         functionCalls,
+        reasoning,
       });
     },
     {
@@ -411,6 +417,11 @@ export async function streamChatV2(options: StreamChatV2Options): Promise<Stream
 export async function generateChatV2(options: StreamChatV2Options): Promise<StreamChatV2Result> {
   const args = buildTextArgs(options) as Parameters<typeof generateText>[0];
   const stepToolCalls = attachGenerateStepToolCallCollector(args);
+  try {
+    options.onRequestStarted?.();
+  } catch {
+    // Failure evidence is observational and must never block a provider call.
+  }
   let result: ChatV2GenerateHandle;
   try {
     result = await waitForGeneratedResponse(

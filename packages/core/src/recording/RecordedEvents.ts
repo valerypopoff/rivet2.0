@@ -70,6 +70,8 @@ export type RecordedEventsMap = OverrideProperties<
       nodeId: NodeId;
       error: string;
       processId: ProcessId;
+      outputs?: Outputs;
+      splitOutputs?: Record<number, Outputs>;
       resultOrigin?: ProcessEvents['nodeError']['resultOrigin'];
       durationMs?: number;
       splitRunDurationMs?: Record<number, number>;

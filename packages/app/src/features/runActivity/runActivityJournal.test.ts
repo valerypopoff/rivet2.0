@@ -179,6 +179,56 @@ Provider message: ${'x'.repeat(700)}`;
   assert.equal(journal.rootsById[rootRunId]!.nodeInvocationsByKey[key]!.errorSummary, error);
 });
 
+test('marks terminal error evidence as available without retaining its DataValues', () => {
+  const splitNode = { ...node, id: 'split-node' as NodeId, isSplitRun: true } as ChartNode;
+  const directProcessId = 'direct-process' as ProcessId;
+  const splitProcessId = 'split-process' as ProcessId;
+  let journal = createRunActivityJournal();
+  journal = apply(journal, 'graphStart', { graph, inputs: {}, execution }, 1);
+  journal = apply(journal, 'nodeStart', { node, processId: directProcessId, inputs: {}, execution }, 2);
+  journal = apply(
+    journal,
+    'nodeError',
+    {
+      node,
+      processId: directProcessId,
+      execution,
+      error: 'provider failed',
+      outputs: { ['requestBody' as PortId]: { type: 'string', value: 'DO_NOT_COPY_REQUEST' } },
+    },
+    3,
+  );
+  journal = apply(journal, 'nodeStart', { node: splitNode, processId: splitProcessId, inputs: {}, execution }, 2);
+  journal = apply(
+    journal,
+    'nodeError',
+    {
+      node: splitNode,
+      processId: splitProcessId,
+      execution,
+      error: 'provider failed',
+      splitOutputs: { 2: { ['llmAttempts' as PortId]: { type: 'object[]', value: [] } } },
+    },
+    4,
+  );
+
+  const directKey = createRunActivityNodeKey({ rootRunId, graphRunId, nodeId: node.id, processId: directProcessId });
+  const directInvocation = journal.rootsById[rootRunId]!.nodeInvocationsByKey[directKey]!;
+  assert.equal(directInvocation.status, 'error');
+  assert.equal(directInvocation.outputsAvailable, true);
+  assert.equal(directInvocation.outputRevision, 1);
+  assert.deepEqual(directInvocation.outputPortIds, ['requestBody']);
+
+  const splitKey = createRunActivityNodeKey({ rootRunId, graphRunId, nodeId: splitNode.id, processId: splitProcessId });
+  const splitInvocation = journal.rootsById[rootRunId]!.nodeInvocationsByKey[splitKey]!;
+  assert.equal(splitInvocation.status, 'error');
+  assert.equal(splitInvocation.outputsAvailable, true);
+  assert.equal(splitInvocation.outputRevision, 1);
+  assert.deepEqual(splitInvocation.splitOutputIndices, [2]);
+  assert.deepEqual(splitInvocation.splitOutputPortIds[2], ['llmAttempts']);
+  assert.equal(JSON.stringify(journal).includes('DO_NOT_COPY_REQUEST'), false);
+});
+
 test('keeps replay receipt timestamps separate from the recorded run duration', () => {
   let journal = createRunActivityJournal();
   journal = apply(
@@ -663,7 +713,7 @@ test('marks invocations with missing terminal events truthfully when their root 
 });
 
 test('settling a root clears a waiting invocation without inventing its duration', () => {
-  let journal = reduceRunActivityEvents(createRunActivityJournal(), [
+  const journal = reduceRunActivityEvents(createRunActivityJournal(), [
     event('graphStart', { graph, inputs: {}, execution, replayRecordedAt: 10_000 }, 1_000_000),
     event(
       'userInput',
@@ -695,7 +745,7 @@ test('settling a root clears a waiting invocation without inventing its duration
 
 test('keeps physical model timing out of lifecycle reconstruction when a node start is missing', () => {
   const historicalStart = 10_200;
-  let journal = reduceRunActivityEvents(createRunActivityJournal(), [
+  const journal = reduceRunActivityEvents(createRunActivityJournal(), [
     event('graphStart', { graph, inputs: {}, execution, replayRecordedAt: 10_000 }, 1_000_000),
     event(
       'llmCallFinished',

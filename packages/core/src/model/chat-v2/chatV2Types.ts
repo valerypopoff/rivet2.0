@@ -85,7 +85,12 @@ export type StreamChatV2Options = {
   abortSignal?: AbortSignal | undefined;
   executeStream?: ChatV2StreamExecutor | undefined;
   executeGenerate?: ChatV2GenerateExecutor | undefined;
-  onPartialOutput?: ((partial: { text: string; functionCalls: StreamedFunctionCall[] }) => void) | undefined;
+  onPartialOutput?: ((partial: { text: string; functionCalls: StreamedFunctionCall[]; reasoning: string }) => void) | undefined;
+  /**
+   * Internal observer invoked after request construction and immediately before
+   * the AI SDK executor is called. It is not a delivery acknowledgement.
+   */
+  onRequestStarted?: (() => void) | undefined;
   /** Deadline to the first semantic stream event, or the complete generate response. */
   firstOutputTimeoutMs?: number | undefined;
   /** Maximum gap between events after the first semantic stream event. */
@@ -182,6 +187,11 @@ export type RunChatV2PipelineOptions = {
   streamInactivityTimeoutMs?: number | undefined;
   onStreamActivity?: (() => void) | undefined;
   onBeforeProviderRetry?: ((cooldownMs: number) => void | Promise<void>) | undefined;
+  /**
+   * Internal, invocation-scoped failure evidence. It receives only existing
+   * public output shapes and must never affect a provider request.
+   */
+  onFailureCheckpoint?: ((outputs: Outputs) => void) | undefined;
   context: Pick<InternalProcessContext, 'signal' | 'onPartialOutputs'> &
     Partial<Pick<InternalProcessContext, 'node' | 'onChatV2CallFinished' | 'processId' | 'llmProfileHealthExecutionCorrelationId'>>;
   executeStream?: ChatV2StreamExecutor | undefined;

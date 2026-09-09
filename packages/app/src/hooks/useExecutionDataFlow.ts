@@ -280,6 +280,17 @@ export function mergeNodeRunDataForProcess(
     };
   }
 
+  // Split nodeError events are a terminal evidence patch, not a replacement
+  // for sibling pages that arrived earlier as partial output. New Core
+  // versions send all completed/failing items; merging also preserves the
+  // useful subset in older recordings that only carry failed checkpoints.
+  if (nextData.status?.type === 'error' && nextData.splitOutputData !== undefined) {
+    mergedData.splitOutputData = {
+      ...previousData.splitOutputData,
+      ...nextData.splitOutputData,
+    };
+  }
+
   if (nextData.status?.type === 'running' && isTerminalNodeRunStatus(previousData.status)) {
     mergedData.status = previousData.status;
     copyOptionalNodeRunField(previousData, mergedData, 'startedAt');
@@ -306,7 +317,7 @@ function copyOptionalNodeRunField<T extends keyof NodeRunDataWithRefs>(
   }
 }
 
-function isTerminalNodeRunStatus(status: NodeRunDataWithRefs['status']): boolean {
+export function isTerminalNodeRunStatus(status: NodeRunDataWithRefs['status']): boolean {
   return (
     status?.type === 'ok' ||
     status?.type === 'error' ||
@@ -341,10 +352,12 @@ export function collectReplacedRefIds(
   }
 
   if (nextData.splitOutputData !== undefined) {
-    for (const [index, nextSplitData] of Object.entries(nextData.splitOutputData)) {
-      for (const refId of collectStoredRefIds(previousData.splitOutputData?.[Number(index)])) {
+    for (const previousSplitData of Object.values(previousData.splitOutputData ?? {})) {
+      for (const refId of collectStoredRefIds(previousSplitData)) {
         previousRefIds.add(refId);
       }
+    }
+    for (const nextSplitData of Object.values(nextData.splitOutputData)) {
       for (const refId of collectStoredRefIds(nextSplitData)) {
         nextRefIds.add(refId);
       }

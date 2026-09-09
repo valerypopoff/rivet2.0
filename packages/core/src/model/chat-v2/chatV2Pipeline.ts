@@ -1,4 +1,5 @@
 import type { PortId } from '../NodeBase.js';
+import type { StreamedFunctionCall } from '../chat/streamChatResponse.js';
 import { coercePromptToChatMessages, prependSystemPrompt } from '../chat/chatMessages.js';
 import { generateChatV2, streamChatV2 } from './aiSdkBridge.js';
 import { createObservedChatV2CallId, notifyChatV2CallFinished } from './chatV2CallObserver.js';
@@ -245,6 +246,37 @@ export async function runChatV2PipelineExecution(options: RunChatV2PipelineOptio
     tools,
   });
   const shouldStreamResponse = plan.transportMode === 'stream';
+  const emitFailureCheckpoint = (partial: { text: string; functionCalls: StreamedFunctionCall[]; reasoning: string }) => {
+    if (options.onFailureCheckpoint == null) {
+      return;
+    }
+
+    try {
+      options.onFailureCheckpoint(
+        createChatV2CommonOutputs({
+          requestMessages,
+          response: partial.text,
+          structuredOutput: undefined,
+          functionCalls: partial.functionCalls,
+          usage: undefined,
+          reasoning: partial.reasoning,
+          requestBodies: options.requestBodies,
+          responseBodies: options.responseBodies,
+          outputUsage: false,
+          outputReasoning: plan.output.outputReasoning,
+          outputRequestBody: plan.output.outputRequestBody,
+          outputResponseBody: plan.output.outputResponseBody,
+          includeFunctionCalls: plan.output.includeFunctionCalls,
+          functionCallMode: plan.output.functionCallMode,
+          // An incomplete structured reply is still useful diagnostic text,
+          // not a schema-valid graph result.
+          responseFormat: undefined,
+        }),
+      );
+    } catch {
+      // Diagnostic capture must not replace the original provider failure.
+    }
+  };
 
   let chatResponse: ChatV2WithRetryResult;
   try {
@@ -255,9 +287,11 @@ export async function runChatV2PipelineExecution(options: RunChatV2PipelineOptio
         abortSignal: options.context.signal,
         executeStream: options.executeStream,
         executeGenerate: options.executeGenerate,
+        onRequestStarted: () => emitFailureCheckpoint({ text: '', functionCalls: [], reasoning: '' }),
         onPartialOutput: !shouldStreamResponse
           ? undefined
-          : ({ text, functionCalls }) => {
+          : ({ text, functionCalls, reasoning }) => {
+              emitFailureCheckpoint({ text, functionCalls, reasoning });
               options.context.onPartialOutputs?.(
                 createChatV2CommonOutputs({
                   requestMessages,
@@ -265,11 +299,11 @@ export async function runChatV2PipelineExecution(options: RunChatV2PipelineOptio
                   structuredOutput: undefined,
                   functionCalls,
                   usage: undefined,
-                  reasoning: '',
+                  reasoning,
                   requestBodies: undefined,
                   responseBodies: undefined,
                   outputUsage: false,
-                  outputReasoning: false,
+                  outputReasoning: plan.output.outputReasoning,
                   outputRequestBody: false,
                   outputResponseBody: false,
                   includeFunctionCalls: plan.output.includeFunctionCalls,

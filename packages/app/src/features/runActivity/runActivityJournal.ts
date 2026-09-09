@@ -563,6 +563,33 @@ function applyNodeError(
   invocation.durationMs = resolveNodeDuration(data.durationMs, invocation, at);
   invocation.splitRunDurationMs = data.splitRunDurationMs;
   invocation.errorSummary = serializeErrorMessage(data.error);
+
+  // A terminal error can carry display-only evidence (for example an LLM
+  // request body or attempt history). Preserve only its port metadata here;
+  // the actual values remain in the node-run store selected by this journal.
+  if (data.outputs !== undefined || data.splitOutputs !== undefined) {
+    invocation.firstOutputAt ??= at;
+    invocation.latestOutputAt = at;
+    invocation.outputRevision += 1;
+    invocation.outputsAvailable = true;
+    invocation.outputsClearedAt = undefined;
+  }
+
+  if (data.outputs !== undefined) {
+    invocation.outputPortIds = mergePortIds(invocation.outputPortIds, Object.keys(data.outputs) as PortId[]);
+  }
+
+  for (const [index, outputs] of Object.entries(data.splitOutputs ?? {})) {
+    const splitIndex = Number(index);
+    invocation.splitOutputPortIds[splitIndex] = mergePortIds(
+      invocation.splitOutputPortIds[splitIndex] ?? [],
+      Object.keys(outputs) as PortId[],
+    );
+    if (!invocation.splitOutputIndices.includes(splitIndex)) {
+      invocation.splitOutputIndices.push(splitIndex);
+    }
+  }
+  invocation.splitOutputIndices.sort((left, right) => left - right);
 }
 
 function applyNodeExcluded(

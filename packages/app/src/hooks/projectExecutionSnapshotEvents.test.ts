@@ -161,6 +161,104 @@ test('inactive project snapshot reducer finishes a hidden successful run', () =>
   });
 });
 
+test('inactive project snapshots retain terminal error outputs and ignore a late partial update', () => {
+  const nodeId = 'failed-llm' as NodeId;
+  const processId = 'failed-llm-process' as ProcessId;
+  const projectId = 'project-a' as ProjectId;
+  const execution = {
+    graphId: 'graph-a' as GraphId,
+    graphRunId: 'graph-run-a' as GraphRunId,
+    rootRunId: 'root-run-a' as RootRunId,
+  };
+  const refStore = createDataRefStore();
+
+  const afterError = applyProcessEventToProjectExecutionSnapshot({
+    message: 'nodeError',
+    data: {
+      error: 'provider aborted',
+      execution,
+      node: { id: nodeId },
+      outputs: {
+        llmRequestBody: { type: 'string', value: '{"prompt":"preserved"}' },
+      },
+      processId,
+    } as never,
+    projectId,
+    refStore,
+    snapshot: createEmptyProjectExecutionSnapshot(),
+  }).snapshot;
+
+  const afterLatePartial = applyProcessEventToProjectExecutionSnapshot({
+    message: 'partialOutput',
+    data: {
+      execution,
+      index: 0,
+      node: { id: nodeId },
+      outputs: { response: { type: 'string', value: 'late response' } },
+      processId,
+    } as never,
+    projectId,
+    refStore,
+    snapshot: afterError,
+  }).snapshot;
+
+  assert.equal(afterLatePartial.lastRunDataByNode[nodeId]?.[0]?.data.status?.type, 'error');
+  assert.deepEqual(afterLatePartial.lastRunDataByNode[nodeId]?.[0]?.data.outputData, {
+    llmRequestBody: { storage: 'inline', type: 'string', value: '{"prompt":"preserved"}' },
+  });
+});
+
+test('inactive project snapshots keep an earlier split sibling when terminal error evidence names another index', () => {
+  const nodeId = 'failed-split-node' as NodeId;
+  const processId = 'failed-split-process' as ProcessId;
+  const projectId = 'project-a' as ProjectId;
+  const execution = {
+    graphId: 'graph-a' as GraphId,
+    graphRunId: 'graph-run-a' as GraphRunId,
+    rootRunId: 'root-run-a' as RootRunId,
+  };
+  const refStore = createDataRefStore();
+
+  const afterPartial = applyProcessEventToProjectExecutionSnapshot({
+    message: 'partialOutput',
+    data: {
+      execution,
+      index: 0,
+      node: { id: nodeId, isSplitRun: true },
+      outputs: { output: { type: 'string', value: 'completed sibling' } },
+      processId,
+    } as never,
+    projectId,
+    refStore,
+    snapshot: createEmptyProjectExecutionSnapshot(),
+  }).snapshot;
+
+  const afterError = applyProcessEventToProjectExecutionSnapshot({
+    message: 'nodeError',
+    data: {
+      error: 'second split item failed',
+      execution,
+      node: { id: nodeId, isSplitRun: true },
+      processId,
+      splitOutputs: {
+        1: { requestBody: { type: 'string', value: 'failed-item evidence' } },
+      },
+    } as never,
+    projectId,
+    refStore,
+    snapshot: afterPartial,
+  }).snapshot;
+
+  assert.deepEqual(afterError.lastRunDataByNode[nodeId]?.[0]?.data.splitOutputData, {
+    0: {
+      output: { storage: 'inline', type: 'string', value: 'completed sibling' },
+    },
+    1: {
+      requestBody: { storage: 'inline', type: 'string', value: 'failed-item evidence' },
+    },
+  });
+});
+
 test('inactive project snapshot reducer clears stale running nodes on successful done', () => {
   const nodeId = 'node-a' as NodeId;
   const processId = 'process-a' as ProcessId;
