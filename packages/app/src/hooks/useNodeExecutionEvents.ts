@@ -18,6 +18,7 @@ import {
   storeInputsOrOutputsForHistory,
 } from '../utils/executionDataStorage';
 import { sanitizeInputsOrOutputs } from '../utils/executionDataSanitization';
+import { getRecordedNodeTimingPatch } from '../utils/recordedNodeTiming.js';
 import { handleError } from '../utils/errorHandling';
 import { shouldToastAsyncBranchSafetyError } from '../utils/graphExecutionErrorPresentation';
 import { useDataRefs } from '../providers/ProvidersContext';
@@ -55,7 +56,7 @@ export function useNodeExecutionEvents({
   const setLLMChatOutputPageSelections = useSetAtom(selectedLLMChatOutputPageByInvocationState);
   const project = useAtomValue(projectState);
 
-  const onNodeStart = ({ node, inputs, processId, execution }: ProcessEvents['nodeStart']) => {
+  const onNodeStart = ({ node, inputs, processId, execution, replayRecordedAt }: ProcessEvents['nodeStart']) => {
     if (shouldSuppressPreloadedNodeEvent(node.id, processId)) {
       return;
     }
@@ -63,6 +64,7 @@ export function useNodeExecutionEvents({
     setDataForNode(node.id, processId, execution, {
       ...getNodeRunDebugData(node),
       inputData: sanitizeInputsOrOutputs(inputs),
+      ...getRecordedNodeTimingPatch({ replayRecordedAt }, 'start'),
       status: { type: 'running' },
       startedAt: Date.now(),
     });
@@ -76,6 +78,7 @@ export function useNodeExecutionEvents({
     durationMs,
     splitRunDurationMs,
     execution,
+    replayRecordedAt,
   }: ProcessEvents['nodeFinish']) => {
     if (shouldSuppressPreloadedNodeEvent(node.id, processId)) {
       return;
@@ -86,16 +89,26 @@ export function useNodeExecutionEvents({
       status: { type: 'ok' },
       finishedAt: Date.now(),
       durationMs,
+      ...getRecordedNodeTimingPatch({ replayRecordedAt }, 'terminal'),
       splitRunDurationMs,
     });
     setSelectedNodePageLatest(node.id, execution);
   };
 
-  const onNodeExcluded = ({ node, processId, inputs, outputs, reason, execution }: ProcessEvents['nodeExcluded']) => {
+  const onNodeExcluded = ({
+    node,
+    processId,
+    inputs,
+    outputs,
+    reason,
+    execution,
+    replayRecordedAt,
+  }: ProcessEvents['nodeExcluded']) => {
     setDataForNode(node.id, processId, execution, {
       ...getNodeRunDebugData(node),
       inputData: sanitizeInputsOrOutputs(inputs),
       outputData: sanitizeInputsOrOutputs(outputs),
+      ...getRecordedNodeTimingPatch({ replayRecordedAt }, 'excluded'),
       status: { type: 'notRan', reason },
       startedAt: Date.now(),
       finishedAt: Date.now(),
@@ -110,11 +123,13 @@ export function useNodeExecutionEvents({
     durationMs,
     splitRunDurationMs,
     execution,
+    replayRecordedAt,
   }: ProcessEvents['nodeError']) => {
     setDataForNode(node.id, processId, execution, {
       status: { type: 'error', error: typeof error === 'string' ? error : error.toString() },
       finishedAt: Date.now(),
       durationMs,
+      ...getRecordedNodeTimingPatch({ replayRecordedAt }, 'terminal'),
       splitRunDurationMs,
     });
     setSelectedNodePageLatest(node.id, execution);

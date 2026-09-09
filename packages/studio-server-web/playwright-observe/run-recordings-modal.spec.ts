@@ -22,6 +22,10 @@ function getReplayGraphId(recordingId: string): string {
 }
 
 function createSerializedRecording(recordingId: string): string {
+  if (recordingId === 'recording-b-inspector') {
+    return createResponseInspectorRecording(recordingId);
+  }
+
   const timestamp = Date.now();
 
   return JSON.stringify({
@@ -53,7 +57,139 @@ function createSerializedRecording(recordingId: string): string {
   });
 }
 
+function createResponseInspectorRecording(recordingId: string): string {
+  const startedAt = Date.UTC(2026, 3, 8, 11, 0, 0);
+  const finishedAt = startedAt + 95_000;
+  const graphId = getReplayGraphId(recordingId);
+  const execution = {
+    graphId,
+    graphRunId: `${recordingId}-graph-run`,
+    rootRunId: `${recordingId}-root-run`,
+  };
+  const nodeId = 'replay-llm';
+  const processId = 'replay-llm-process';
+
+  return JSON.stringify({
+    version: 1,
+    recording: {
+      recordingId,
+      startTs: startedAt,
+      finishTs: finishedAt,
+      events: [
+        {
+          type: 'start',
+          data: {
+            projectId: getReplayProjectId(recordingId),
+            inputs: {},
+            contextValues: {},
+            startGraph: graphId,
+            execution,
+          },
+          ts: startedAt,
+        },
+        { type: 'graphStart', data: { graphId, inputs: {}, execution }, ts: startedAt },
+        {
+          type: 'nodeStart',
+          data: { nodeId, inputs: {}, processId, execution },
+          ts: startedAt,
+        },
+        {
+          type: 'llmCallFinished',
+          data: {
+            callId: 'fallback-one',
+            attemptIndex: 0,
+            profileIndex: 0,
+            profileName: 'First fallback',
+            nodeId,
+            processId,
+            provider: 'openai',
+            model: 'gpt-5',
+            outcome: 'provider-failure',
+            pricing: { status: 'unknown' },
+            startedAt,
+            durationMs: 40_000,
+            execution,
+          },
+          ts: startedAt + 40_000,
+        },
+        {
+          type: 'llmCallFinished',
+          data: {
+            callId: 'fallback-two',
+            attemptIndex: 1,
+            profileIndex: 1,
+            profileName: 'Second fallback',
+            nodeId,
+            processId,
+            provider: 'openai',
+            model: 'gpt-5',
+            outcome: 'provider-failure',
+            pricing: { status: 'unknown' },
+            startedAt: startedAt + 40_000,
+            durationMs: 40_000,
+            execution,
+          },
+          ts: startedAt + 80_000,
+        },
+        {
+          type: 'llmCallFinished',
+          data: {
+            callId: 'successful-response',
+            attemptIndex: 2,
+            profileIndex: 2,
+            profileName: 'Successful fallback',
+            nodeId,
+            processId,
+            provider: 'openai',
+            model: 'gpt-5',
+            outcome: 'success',
+            pricing: { status: 'unknown' },
+            startedAt: startedAt + 80_000,
+            durationMs: 15_000,
+            execution,
+          },
+          ts: finishedAt,
+        },
+        {
+          type: 'nodeFinish',
+          data: {
+            nodeId,
+            outputs: { response: { type: 'string', value: 'Recorded response' } },
+            processId,
+            durationMs: 95_000,
+            execution,
+          },
+          ts: finishedAt,
+        },
+        { type: 'graphFinish', data: { graphId, outputs: {}, execution }, ts: finishedAt },
+        { type: 'done', data: { results: {} }, ts: finishedAt },
+      ],
+    },
+    assets: {},
+    strings: {},
+  });
+}
+
 function createReplayProject(recordingId: string): string {
+  const node = recordingId === 'recording-b-inspector'
+    ? [
+      "        '[replay-llm]:llmChatV2 \"Recorded response\"':",
+      '          visualData: 520/300/340/null//',
+      '          data:',
+      '            configurationMode: inline',
+      '            provider: openai',
+      '            model: gpt-5',
+      '            responseFormat: text',
+      '            useToolCalling: false',
+      '            autoContinueToolCalls: false',
+    ]
+    : [
+      '        \'[replay-node-1]:text "Replay Node"\':',
+      '          visualData: 520/300/260/null//',
+      '          data:',
+      '            text: replay',
+    ];
+
   return [
     'version: 4',
     'data:',
@@ -69,10 +205,7 @@ function createReplayProject(recordingId: string): string {
     '        name: "Main Graph"',
     '        description: ""',
     '      nodes:',
-    '        \'[replay-node-1]:text "Replay Node"\':',
-    '          visualData: 520/300/260/null//',
-    '          data:',
-    '            text: replay',
+    ...node,
     '  plugins: []',
     '  references: []',
     '',
@@ -112,7 +245,7 @@ async function openAdditionalProjectTab(page: Page, path: string) {
   });
 }
 
-function createRunRecordingsFixture() {
+function createRunRecordingsFixture(includeResponseInspectorRun = false) {
   const workflows: WorkflowRecordingWorkflowSummary[] = [
     {
       workflowId: 'workflow-a',
@@ -218,6 +351,29 @@ function createRunRecordingsFixture() {
     }))],
   ]);
 
+  if (includeResponseInspectorRun) {
+    const latestRuns = runsByWorkflow.get('workflow-b')!;
+    latestRuns.push({
+      id: 'recording-b-inspector',
+      workflowId: 'workflow-b',
+      createdAt: '2026-04-08T10:00:00.000Z',
+      runKind: 'latest',
+      status: 'succeeded',
+      durationMs: 95_000,
+      endpointNameAtExecution: 'latest-flow',
+      hasReplayDataset: false,
+      recordingCompressedBytes: 10,
+      recordingUncompressedBytes: 20,
+      projectCompressedBytes: 10,
+      projectUncompressedBytes: 20,
+      datasetCompressedBytes: 0,
+      datasetUncompressedBytes: 0,
+      input: { foo: 'inspector' },
+    });
+    const latestWorkflow = workflows.find((workflow) => workflow.workflowId === 'workflow-b')!;
+    latestWorkflow.totalRuns = latestRuns.length;
+  }
+
   return { workflows, runsByWorkflow };
 }
 
@@ -244,9 +400,9 @@ function delay(ms: number): Promise<void> {
 
 async function installRunRecordingRoutes(
   page: Page,
-  options: { latestFlowRunCount?: number; cursorDelayMs?: number } = {},
+  options: { includeResponseInspectorRun?: boolean; latestFlowRunCount?: number; cursorDelayMs?: number } = {},
 ) {
-  const { workflows, runsByWorkflow } = createRunRecordingsFixture();
+  const { workflows, runsByWorkflow } = createRunRecordingsFixture(options.includeResponseInspectorRun);
   const recordingFetches: string[] = [];
   const replayProjectFetches: string[] = [];
   const runFetches: string[] = [];
@@ -584,6 +740,32 @@ test.describe('Run recordings modal', () => {
     await modal.getByLabel('Close run recordings').click();
     await expect(modal).toBeHidden();
     await expect(page.getByText(/^Found:/)).toHaveCount(0);
+  });
+
+  test('shows recorded LLM response duration instead of accelerated replay time', async ({ page }) => {
+    const { recordingFetches, replayProjectFetches } = await installRunRecordingRoutes(page, {
+      includeResponseInspectorRun: true,
+    });
+    const modal = await openLatestFlowRecordings(page, 13);
+
+    const inspectorRun = modal.locator('.run-recordings-run').filter({
+      has: page.locator('.run-recordings-run-duration', { hasText: '1m 35s' }),
+    });
+    await expect(inspectorRun).toHaveCount(1);
+    await inspectorRun.locator('.run-recordings-run-open-button').click();
+    await expect.poll(() => recordingFetches).toEqual(['recording-b-inspector']);
+    await expect.poll(() => replayProjectFetches).toEqual(['recording-b-inspector']);
+
+    const editorFrame = page.frameLocator('iframe.dashboard-editor-frame');
+    await editorFrame.getByRole('button', { name: 'Play Recording', exact: true }).click();
+    const inspectorButton = editorFrame.locator('.response-inspector-button');
+    await expect(inspectorButton).toBeVisible();
+    await inspectorButton.click();
+
+    await expect(editorFrame.getByText('Response inspector', { exact: true })).toBeVisible();
+    await expect(editorFrame.getByText('95.0 sec', { exact: true })).toBeVisible();
+    await expect(editorFrame.getByText('0.00 sec', { exact: true })).toHaveCount(0);
+    await expect(editorFrame.getByText(/^15\.0 sec/)).toBeVisible();
   });
 
   test('stops an active input search when the modal closes', async ({ page }) => {

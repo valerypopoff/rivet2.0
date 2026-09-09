@@ -484,6 +484,10 @@ Run Activity keeps two clocks during playback:
 This lets a recording replay quickly without claiming that an 18-second model
 call took a few milliseconds. Individual recorded node durations and physical
 model/tool durations remain attached to their replayed events when present.
+Node history also retains the recorded start and terminal bounds separately
+from its local receipt timestamps. The Response Inspector uses those historical
+bounds and the recorded whole-node duration, so its Execution and Timing
+sections describe the original invocation rather than replay delivery speed.
 Legacy recordings and ordinary live events have no `replayRecordedAt`, so they
 continue to use the local receipt clock. The recorder deliberately strips this
 transient provenance if a replay is recorded again: the new recording's own

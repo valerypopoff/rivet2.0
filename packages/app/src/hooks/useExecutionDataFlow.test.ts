@@ -143,3 +143,18 @@ test('mergeNodeRunDataForProcess still applies normal terminal updates', () => {
     status: { type: 'ok' },
   });
 });
+
+test('mergeNodeRunDataForProcess retains both recorded replay bounds across lifecycle events', () => {
+  const mergedData = mergeNodeRunDataForProcess(
+    {
+      recordedTiming: { startedAt: 50_000 },
+      status: { type: 'running' },
+    },
+    {
+      recordedTiming: { finishedAt: 146_000 },
+      status: { type: 'ok' },
+    },
+  );
+
+  assert.deepEqual(mergedData.recordedTiming, { startedAt: 50_000, finishedAt: 146_000 });
+});

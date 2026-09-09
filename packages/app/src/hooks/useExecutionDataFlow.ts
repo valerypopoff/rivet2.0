@@ -273,10 +273,18 @@ export function mergeNodeRunDataForProcess(
     ...nextData,
   };
 
+  if (nextData.recordedTiming !== undefined) {
+    mergedData.recordedTiming = {
+      ...previousData.recordedTiming,
+      ...nextData.recordedTiming,
+    };
+  }
+
   if (nextData.status?.type === 'running' && isTerminalNodeRunStatus(previousData.status)) {
     mergedData.status = previousData.status;
     copyOptionalNodeRunField(previousData, mergedData, 'startedAt');
     copyOptionalNodeRunField(previousData, mergedData, 'finishedAt');
+    copyOptionalNodeRunField(previousData, mergedData, 'recordedTiming');
     copyOptionalNodeRunField(previousData, mergedData, 'durationMs');
     copyOptionalNodeRunField(previousData, mergedData, 'splitRunDurationMs');
     copyOptionalNodeRunField(previousData, mergedData, 'outputData');

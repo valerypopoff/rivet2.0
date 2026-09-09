@@ -1686,6 +1686,10 @@ new execution timestamp. The editor retains its fresh local receipt timestamp
 for session ordering and live-state controls, while Run Activity computes the
 displayed replay duration from the historical provenance. This avoids showing a
 fast replay as though the original provider calls completed in milliseconds.
+Node history retains valid recorded start and terminal bounds separately for
+the Response Inspector. A recorded terminal `durationMs` is the authoritative
+whole-node duration there; the inspector must not subtract local replay receipt
+timestamps or sum physical model calls.
 `ExecutionRecorder` strips this provenance before serializing a new recording,
 so replaying and recording again creates one new, self-contained timeline.
 

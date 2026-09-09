@@ -17,6 +17,7 @@ import {
 import type { DataRefStore } from '../providers/ProvidersContext.js';
 import { buildGraphViewKeyFromExecution } from '../utils/executionIdentity.js';
 import { sanitizeInputsOrOutputs } from '../utils/executionDataSanitization.js';
+import { getRecordedNodeTimingPatch } from '../utils/recordedNodeTiming.js';
 import {
   clearExecutionDataRefs,
   collectStoredRefIds,
@@ -114,6 +115,7 @@ function applyProcessEventToProjectExecutionSnapshotData<K extends keyof Process
           options.data as ProcessEvents['nodeStart'],
           {
             inputData: sanitizeInputsOrOutputs((options.data as ProcessEvents['nodeStart']).inputs),
+            ...getRecordedNodeTimingPatch(options.data as ProcessEvents['nodeStart'], 'start'),
             startedAt: Date.now(),
             status: { type: 'running' },
           },
@@ -128,6 +130,7 @@ function applyProcessEventToProjectExecutionSnapshotData<K extends keyof Process
           options.data as ProcessEvents['nodeFinish'],
           {
             durationMs: (options.data as ProcessEvents['nodeFinish']).durationMs,
+            ...getRecordedNodeTimingPatch(options.data as ProcessEvents['nodeFinish'], 'terminal'),
             finishedAt: Date.now(),
             outputData: sanitizeInputsOrOutputs((options.data as ProcessEvents['nodeFinish']).outputs),
             splitRunDurationMs: (options.data as ProcessEvents['nodeFinish']).splitRunDurationMs,
@@ -144,6 +147,7 @@ function applyProcessEventToProjectExecutionSnapshotData<K extends keyof Process
           options.data as ProcessEvents['nodeError'],
           {
             durationMs: (options.data as ProcessEvents['nodeError']).durationMs,
+            ...getRecordedNodeTimingPatch(options.data as ProcessEvents['nodeError'], 'terminal'),
             finishedAt: Date.now(),
             splitRunDurationMs: (options.data as ProcessEvents['nodeError']).splitRunDurationMs,
             status: {
@@ -165,6 +169,7 @@ function applyProcessEventToProjectExecutionSnapshotData<K extends keyof Process
           options.data as ProcessEvents['nodeExcluded'],
           {
             finishedAt: Date.now(),
+            ...getRecordedNodeTimingPatch(options.data as ProcessEvents['nodeExcluded'], 'excluded'),
             inputData: sanitizeInputsOrOutputs((options.data as ProcessEvents['nodeExcluded']).inputs),
             outputData: sanitizeInputsOrOutputs((options.data as ProcessEvents['nodeExcluded']).outputs),
             startedAt: Date.now(),

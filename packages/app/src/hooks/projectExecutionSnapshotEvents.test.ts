@@ -86,6 +86,7 @@ test('inactive project snapshot reducer finishes a hidden successful run', () =>
         id: nodeId,
       },
       processId,
+      replayRecordedAt: 10_000,
     } as never,
     message: 'nodeStart',
     projectId,
@@ -110,6 +111,7 @@ test('inactive project snapshot reducer finishes a hidden successful run', () =>
         },
       },
       processId,
+      replayRecordedAt: 22_000,
     } as never,
     message: 'nodeFinish',
     projectId,
@@ -148,6 +150,10 @@ test('inactive project snapshot reducer finishes a hidden successful run', () =>
   assert.deepEqual(snapshot.runningGraphs, []);
   assert.equal(snapshot.lastRunDataByNode[nodeId]?.[0]?.data.status?.type, 'ok');
   assert.equal(snapshot.lastRunDataByNode[nodeId]?.[0]?.data.durationMs, 12);
+  assert.deepEqual(snapshot.lastRunDataByNode[nodeId]?.[0]?.data.recordedTiming, {
+    startedAt: 10_000,
+    finishedAt: 22_000,
+  });
   assert.deepEqual(snapshot.lastRunDataByNode[nodeId]?.[0]?.data.outputData?.['output' as PortId], {
     type: 'string',
     storage: 'inline',

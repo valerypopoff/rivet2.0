@@ -105,6 +105,8 @@ export type BuildAgentResponseTraceOptions = {
   events: readonly AgentTraceEvent[];
   nodeId?: NodeId;
   processId?: ProcessId;
+  /** Recorded whole-node duration for an LLM invocation; response traces retain their output-ready duration. */
+  invocationDurationMs?: number;
   startedAt?: number;
   responseReadyAt?: number;
   finishedAt?: number;
@@ -145,6 +147,14 @@ export function buildAgentResponseTrace(options: BuildAgentResponseTraceOptions)
     .map(toToolCallTrace);
   const summary = summarizeAgentCalls(allModelCalls, allProfileAttempts, allToolCalls);
   const terminalAt = options.responseReadyAt ?? options.finishedAt;
+  const durationMs =
+    options.scope === 'llm-invocation' && isNonNegativeFiniteNumber(options.invocationDurationMs)
+      ? options.invocationDurationMs
+      : isNonNegativeFiniteNumber(options.startedAt) &&
+          isNonNegativeFiniteNumber(terminalAt) &&
+          terminalAt >= options.startedAt
+        ? terminalAt - options.startedAt
+        : undefined;
 
   return {
     schemaVersion: AGENT_RESPONSE_TRACE_SCHEMA_VERSION,
@@ -158,9 +168,7 @@ export function buildAgentResponseTrace(options: BuildAgentResponseTraceOptions)
     ...(options.startedAt == null ? {} : { startedAt: options.startedAt }),
     ...(options.responseReadyAt == null ? {} : { responseReadyAt: options.responseReadyAt }),
     ...(options.finishedAt == null ? {} : { finishedAt: options.finishedAt }),
-    ...(options.startedAt == null || terminalAt == null
-      ? {}
-      : { durationMs: Math.max(0, terminalAt - options.startedAt) }),
+    ...(durationMs === undefined ? {} : { durationMs }),
     status: options.status,
     ...(options.backgroundWorkPending == null ? {} : { backgroundWorkPending: options.backgroundWorkPending }),
     summary,

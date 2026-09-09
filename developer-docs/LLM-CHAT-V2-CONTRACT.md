@@ -19,8 +19,12 @@ bridge forwards that event to the root exactly once.
 `AgentResponseTrace` is a versioned projection built from these physical-call
 events and the corresponding `toolCallFinished` events. It is presentation and
 observability data, not an LLM input or graph output. Response traces stop their
-duration when mapped graph outputs are ready, while invocation traces span the
-selected LLM node process. Retry and fallback counts come from explicit attempt
+duration when mapped graph outputs are ready, while invocation traces use the
+local LLM node lifecycle interval during live execution. During recording
+playback, invocation traces instead use the recorded node duration and original
+lifecycle bounds, which remain independent from the editor's local replay
+receipt clock; an inspector must never measure playback speed. Retry and
+fallback counts come from explicit attempt
 and profile metadata, never timestamp inference. Unknown or partially known
 pricing stays unknown/partial rather than becoming `$0`.
 
