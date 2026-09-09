@@ -10190,7 +10190,7 @@ const RAW_RUNTIME_STATE =
           ["@types/react-router-config", "npm:5.0.11"],\
           ["combine-promises", "npm:1.1.0"],\
           ["fs-extra", "npm:11.3.6"],\
-          ["js-yaml", "npm:4.3.1"],\
+          ["js-yaml", "npm:4.3.2"],\
           ["lodash", "npm:4.18.1"],\
           ["react", "npm:18.2.0"],\
           ["react-dom", "virtual:c72650afd8d8ecff5306990489065a4e0c34d2b88c4acd8d3577f92d5cf46b6fcfd28624afe640ea0bc70671a30a586d15077b1a64459cd4c0f76ed3d182f496#npm:18.2.0"],\
@@ -10749,7 +10749,7 @@ const RAW_RUNTIME_STATE =
           ["globby", "npm:11.1.0"],\
           ["gray-matter", "npm:4.0.3"],\
           ["jiti", "npm:1.21.7"],\
-          ["js-yaml", "npm:4.3.1"],\
+          ["js-yaml", "npm:4.3.2"],\
           ["lodash", "npm:4.18.1"],\
           ["micromatch", "npm:4.0.8"],\
           ["p-queue", "npm:6.6.2"],\
@@ -10784,7 +10784,7 @@ const RAW_RUNTIME_STATE =
           ["@docusaurus/utils-validation", "npm:3.10.1"],\
           ["fs-extra", "npm:11.3.6"],\
           ["joi", "npm:17.13.4"],\
-          ["js-yaml", "npm:4.3.1"],\
+          ["js-yaml", "npm:4.3.2"],\
           ["lodash", "npm:4.18.1"],\
           ["tslib", "npm:2.8.1"]\
         ],\
@@ -11423,7 +11423,7 @@ const RAW_RUNTIME_STATE =
           ["globals", "npm:14.0.0"],\
           ["ignore", "npm:5.3.2"],\
           ["import-fresh", "npm:3.3.0"],\
-          ["js-yaml", "npm:4.3.1"],\
+          ["js-yaml", "npm:4.3.2"],\
           ["minimatch", "npm:3.1.5"],\
           ["strip-json-comments", "npm:3.1.1"]\
         ],\
@@ -14204,7 +14204,7 @@ const RAW_RUNTIME_STATE =
           ["@types/svgr__core", null],\
           ["cosmiconfig", "npm:8.2.0"],\
           ["deepmerge", "npm:4.3.1"],\
-          ["svgo", "npm:3.3.4"]\
+          ["svgo", "npm:3.3.5"]\
         ],\
         "packagePeers": [\
           "@svgr/core",\
@@ -18029,7 +18029,7 @@ const RAW_RUNTIME_STATE =
           ["autoevals", "npm:0.0.26"],\
           ["esbuild", "npm:0.25.12"],\
           ["js-levenshtein", "npm:1.1.6"],\
-          ["js-yaml", "npm:4.3.1"],\
+          ["js-yaml", "npm:4.3.2"],\
           ["mustache", "npm:4.2.0"],\
           ["openai", "virtual:863419c07dd8dc2bece6230acabe3ccb05127119660152dfb48c3decf6a2eb250ad0408e9249ee291a70f8799a5ae1fa8d6337a50e20aca2a794a5e253b969d8#npm:4.104.0"],\
           ["tsx", "npm:4.23.0"]\
@@ -18051,7 +18051,7 @@ const RAW_RUNTIME_STATE =
           ["autoevals", "virtual:cce41fb5932c708537e2c8102f67c1df8503bc7b0e98fe405b8d054c96ba0fd0ec3b4d44ffa2144f5379ff48b0cfcbb1215b2409bcf11998c11e7bcf45bd049f#npm:0.3.0"],\
           ["compute-cosine-similarity", "npm:1.1.0"],\
           ["js-levenshtein", "npm:1.1.6"],\
-          ["js-yaml", "npm:4.3.1"],\
+          ["js-yaml", "npm:4.3.2"],\
           ["linear-sum-assignment", "npm:1.0.9"],\
           ["mustache", "npm:4.2.0"],\
           ["openai", "virtual:47f7dc88288feddddd70b1032f72ce76ec18cabaa1a0935f4f0db894c936af84d83019603598f2721d0b0048081be98af44bb76b5dcf207029f938d739db53ac#npm:6.46.0"],\
@@ -19736,7 +19736,7 @@ const RAW_RUNTIME_STATE =
         "packageDependencies": [\
           ["cosmiconfig", "npm:8.2.0"],\
           ["import-fresh", "npm:3.3.0"],\
-          ["js-yaml", "npm:4.3.1"],\
+          ["js-yaml", "npm:4.3.2"],\
           ["parse-json", "npm:5.2.0"],\
           ["path-type", "npm:4.0.0"]\
         ],\
@@ -19755,7 +19755,7 @@ const RAW_RUNTIME_STATE =
           ["@types/typescript", null],\
           ["cosmiconfig", "virtual:605aef0636845a4590a131da57645771a82233566c2a764cac227d681f28255f35d59c6e459ac0f7203782e9e4135c924d2ed4965a3141def65a59e5064bf0f4#npm:8.3.6"],\
           ["import-fresh", "npm:3.3.0"],\
-          ["js-yaml", "npm:4.3.1"],\
+          ["js-yaml", "npm:4.3.2"],\
           ["parse-json", "npm:5.2.0"],\
           ["path-type", "npm:4.0.0"],\
           ["typescript", null]\
@@ -24309,7 +24309,7 @@ const RAW_RUNTIME_STATE =
         "packageLocation": "./.yarn/cache/gray-matter-npm-4.0.3-852ae4f34c-9a8f146a7a.zip/node_modules/gray-matter/",\
         "packageDependencies": [\
           ["gray-matter", "npm:4.0.3"],\
-          ["js-yaml", "npm:3.15.1"],\
+          ["js-yaml", "npm:3.15.2"],\
           ["kind-of", "npm:6.0.3"],\
           ["section-matter", "npm:1.0.0"],\
           ["strip-bom-string", "npm:1.0.0"]\
@@ -26026,20 +26026,20 @@ const RAW_RUNTIME_STATE =
       }]\
     ]],\
     ["js-yaml", [\
-      ["npm:3.15.1", {\
-        "packageLocation": "./.yarn/cache/js-yaml-npm-3.15.1-057b38bd76-905842ce08.zip/node_modules/js-yaml/",\
+      ["npm:3.15.2", {\
+        "packageLocation": "./.yarn/cache/js-yaml-npm-3.15.2-ed3413b0f7-320b5471c1.zip/node_modules/js-yaml/",\
         "packageDependencies": [\
           ["argparse", "npm:1.0.10"],\
           ["esprima", "npm:4.0.1"],\
-          ["js-yaml", "npm:3.15.1"]\
+          ["js-yaml", "npm:3.15.2"]\
         ],\
         "linkType": "HARD"\
       }],\
-      ["npm:4.3.1", {\
-        "packageLocation": "./.yarn/cache/js-yaml-npm-4.3.1-6383f7fb93-2ce71b5d63.zip/node_modules/js-yaml/",\
+      ["npm:4.3.2", {\
+        "packageLocation": "./.yarn/cache/js-yaml-npm-4.3.2-d3b0efff68-05c44b9c73.zip/node_modules/js-yaml/",\
         "packageDependencies": [\
           ["argparse", "npm:2.0.1"],\
-          ["js-yaml", "npm:4.3.1"]\
+          ["js-yaml", "npm:4.3.2"]\
         ],\
         "linkType": "HARD"\
       }]\
@@ -30885,7 +30885,7 @@ const RAW_RUNTIME_STATE =
           ["postcss", "npm:8.5.22"],\
           ["postcss-svgo", "virtual:45a9bcaf6316e75c04ac4fffa1bc0c4051b63517dfa49ce112ab70d34ac823651d7f3e58c7c64a6232dc5a5ba00cb71ccd4ce6de1c6db9d6578a519f796f018b#npm:6.0.3"],\
           ["postcss-value-parser", "npm:4.2.0"],\
-          ["svgo", "npm:3.3.4"]\
+          ["svgo", "npm:3.3.5"]\
         ],\
         "packagePeers": [\
           "@types/postcss",\
@@ -34228,8 +34228,8 @@ const RAW_RUNTIME_STATE =
       }]\
     ]],\
     ["svgo", [\
-      ["npm:3.3.4", {\
-        "packageLocation": "./.yarn/cache/svgo-npm-3.3.4-4abd163986-84287b7eaf.zip/node_modules/svgo/",\
+      ["npm:3.3.5", {\
+        "packageLocation": "./.yarn/cache/svgo-npm-3.3.5-6f74a80f32-5b5f2246f0.zip/node_modules/svgo/",\
         "packageDependencies": [\
           ["commander", "npm:7.2.0"],\
           ["css-select", "npm:5.1.0"],\
@@ -34238,7 +34238,7 @@ const RAW_RUNTIME_STATE =
           ["csso", "npm:5.0.5"],\
           ["picocolors", "npm:1.0.0"],\
           ["sax", "npm:1.6.0"],\
-          ["svgo", "npm:3.3.4"]\
+          ["svgo", "npm:3.3.5"]\
         ],\
         "linkType": "HARD"\
       }]\
