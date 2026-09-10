@@ -205,6 +205,7 @@ export function interpolateMCPArgumentTemplate(
   inputs: Inputs,
   graphInputValues?: Record<string, DataValue>,
   contextValues?: Record<string, DataValue>,
+  globalValues?: Record<string, unknown>,
 ): string {
   const values: Record<string, DataValue | undefined> = {};
 
@@ -216,6 +217,7 @@ export function interpolateMCPArgumentTemplate(
 
   return interpolate(template, values, graphInputValues, contextValues, {
     coerceBareVariableDataValues: true,
+    globalValues,
   });
 }
 

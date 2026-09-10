@@ -11,7 +11,7 @@ import { nodeDefinition } from '../NodeDefinition.js';
 import { type DataValue } from '../DataValue.js';
 import { type EditorDefinition, type NodeBodySpec } from '../../index.js';
 import { dedent } from 'ts-dedent';
-import { extractInterpolationVariableReferences, interpolate } from '../../utils/interpolation.js';
+import { extractInterpolationVariableReferences, getInterpolationGlobalValues, interpolate } from '../../utils/interpolation.js';
 import { createInterpolationInputDefinition } from '../interpolationInputDefinition.js';
 import { buildNodeBodyPreview } from './nodeBodyPreview.js';
 
@@ -103,7 +103,10 @@ export class TextNodeImpl extends NodeImpl<TextNode> {
       inputs,
       context.graphInputNodeValues, // Pass graph inputs
       context.contextValues, // Pass context values
-      { coerceBareVariableDataValues: true },
+      {
+        coerceBareVariableDataValues: true,
+        globalValues: getInterpolationGlobalValues(this.chartNode.data.text, context?.getGlobal),
+      },
     );
 
     if (this.chartNode.data.normalizeLineEndings) {

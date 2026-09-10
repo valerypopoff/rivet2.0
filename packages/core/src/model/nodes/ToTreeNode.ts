@@ -12,7 +12,7 @@ import { type DataValue } from '../DataValue.js';
 import { type EditorDefinition } from '../EditorDefinition.js';
 import { dedent } from 'ts-dedent';
 import { coerceTypeOptional } from '../../utils/coerceType.js';
-import { interpolate } from '../../utils/interpolation.js';
+import { getInterpolationGlobalValues, interpolate } from '../../utils/interpolation.js';
 import { get, sortBy } from 'lodash-es';
 import type { InternalProcessContext } from '../ProcessContext.js';
 
@@ -24,7 +24,11 @@ export type ToTreeNodeData = {
   useSortAlphabetically: boolean;
 };
 
-type ToTreeInterpolationContext = Pick<InternalProcessContext, 'graphInputNodeValues' | 'contextValues'>;
+type ToTreeInterpolationContext = {
+  graphInputNodeValues?: Record<string, DataValue>;
+  contextValues?: Record<string, DataValue>;
+  globalValues?: Record<string, unknown>;
+};
 
 export class ToTreeNodeImpl extends NodeImpl<ToTreeNode> {
   static create(): ToTreeNode {
@@ -138,7 +142,10 @@ export class ToTreeNodeImpl extends NodeImpl<ToTreeNode> {
         obj != null && typeof obj === 'object' ? (obj as Record<string, unknown>) : {},
         interpolationContext?.graphInputNodeValues,
         interpolationContext?.contextValues,
-        { unwrapVariableDataValues: false },
+        {
+          globalValues: interpolationContext?.globalValues,
+          unwrapVariableDataValues: false,
+        },
       );
 
       // Add this node to the result
@@ -160,7 +167,11 @@ export class ToTreeNodeImpl extends NodeImpl<ToTreeNode> {
     context?: InternalProcessContext,
   ): Promise<Record<PortId, DataValue>> {
     const objects = coerceTypeOptional(inputs['objects' as PortId], 'object[]') ?? [];
-    const treeOutput = this.buildTree(objects, '', 0, true, context);
+    const treeOutput = this.buildTree(objects, '', 0, true, {
+      contextValues: context?.contextValues,
+      globalValues: getInterpolationGlobalValues(this.data.format, context?.getGlobal),
+      graphInputNodeValues: context?.graphInputNodeValues,
+    });
 
     return {
       ['tree' as PortId]: {

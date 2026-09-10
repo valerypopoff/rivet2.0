@@ -7,7 +7,7 @@ import {
   type PluginNodeImpl,
 } from '../../../index.js';
 import { newId, coerceTypeOptional, getInputOrData } from '../../../utils/index.js';
-import { extractInterpolationVariableReferences, interpolate } from '../../../utils/interpolation.js';
+import { extractInterpolationVariableReferences, getInterpolationGlobalValues, interpolate } from '../../../utils/interpolation.js';
 import { pluginNodeDefinition } from '../../../model/NodeDefinition.js';
 import type { CreateMessageBody } from '../../../utils/openai.js';
 import { createInterpolationInputDefinition } from '../../../model/interpolationInputDefinition.js';
@@ -164,6 +164,7 @@ export const ThreadMessageNodeImpl: PluginNodeImpl<ThreadMessageNode> = {
 
     const interpolated = interpolate(text, inputData, context?.graphInputNodeValues, context?.contextValues, {
       coerceBareVariableDataValues: true,
+      globalValues: getInterpolationGlobalValues(text, context?.getGlobal),
     });
 
     // Here you would typically make a call to an API to create the message

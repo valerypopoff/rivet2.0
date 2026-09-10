@@ -88,6 +88,7 @@ export {
   extractInterpolationVariables,
   extractInterpolationVariableReferences,
   findInterpolationTokenSpans,
+  getInterpolationGlobalValues,
   getInterpolationTokenReference,
   getInterpolationTokenName,
   interpolate,

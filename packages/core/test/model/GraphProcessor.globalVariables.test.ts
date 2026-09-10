@@ -113,6 +113,40 @@ test('assigns authored project global variables before nodes run and records the
   );
 });
 
+test('interpolation nodes read authored project global variables directly without an input connection', async () => {
+  const text = {
+    id: 'text' as NodeId,
+    type: 'text',
+    title: 'Text',
+    data: { text: 'Hello {{@globals.profile.user.name}}', normalizeLineEndings: true },
+    visualData: { x: 0, y: 0, width: 200 },
+  };
+  const output = graphOutputNode('output', 'result');
+  const mainGraph = graph(
+    'main',
+    [text, output],
+    [
+      {
+        outputNodeId: text.id,
+        outputId: 'output' as PortId,
+        inputNodeId: output.id,
+        inputId: 'value' as PortId,
+      },
+    ],
+  );
+  const processor = new GraphProcessor(
+    project('root', mainGraph, {
+      profile: encodeProjectGlobalVariable({ type: 'object', value: { user: { name: 'Rivet' } } }),
+    }),
+    mainGraph.metadata.id,
+    globalRivetNodeRegistry,
+  );
+
+  const result = await processor.processGraph(testProcessContext());
+
+  assert.deepEqual(result.result, { type: 'string', value: 'Hello Rivet' });
+});
+
 test('a reused root processor refreshes its project global variables rather than retaining an earlier run value', async () => {
   const getter = getGlobalNode('get-greeting', 'greeting');
   const output = graphOutputNode('output-greeting', 'result');

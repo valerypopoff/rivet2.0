@@ -20,7 +20,7 @@ import {
 import { dedent } from 'ts-dedent';
 import { coerceTypeOptional } from '../../utils/coerceType.js';
 import { getInputOrData } from '../../utils/index.js';
-import { extractInterpolationVariableReferences, interpolate } from '../../utils/interpolation.js';
+import { extractInterpolationVariableReferences, getInterpolationGlobalValues, interpolate } from '../../utils/interpolation.js';
 import { match } from 'ts-pattern';
 import { createInterpolationInputDefinition } from '../interpolationInputDefinition.js';
 
@@ -242,7 +242,10 @@ export class PromptNodeImpl extends NodeImpl<PromptNode> {
       inputs,
       context.graphInputNodeValues,
       context.contextValues,
-      { coerceBareVariableDataValues: true },
+      {
+        coerceBareVariableDataValues: true,
+        globalValues: getInterpolationGlobalValues(this.chartNode.data.promptText, context.getGlobal),
+      },
     );
 
     outputValue = outputValue.replace(/\r\n/g, '\n').replace(/\r/g, '\n');

@@ -16,6 +16,7 @@ import { MCPError, MCPErrorType, type MCP } from '../../integrations/mcp/MCPProv
 
 import { dedent, getInputOrData } from '../../utils/index.js';
 import { getError } from '../../utils/errors.js';
+import { getInterpolationGlobalValues } from '../../utils/interpolation.js';
 import {
   getMCPBaseBody,
   getMCPArgumentTemplateInputs,
@@ -168,6 +169,7 @@ export class MCPGetPromptNodeImpl extends NodeImpl<MCPGetPromptNode> {
           inputs,
           context.graphInputNodeValues,
           context.contextValues,
+          getInterpolationGlobalValues(this.data.promptArguments ?? '', context.getGlobal),
         ),
       );
     }

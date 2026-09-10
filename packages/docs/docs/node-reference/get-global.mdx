@@ -19,6 +19,8 @@ The node can be configured to retrieve the value on demand, which means it will 
 
 The node can also be configured to wait until the variable is available. This is useful when the global value is set by another node that might not have completed its execution when this node runs.
 
+Templates in interpolation-capable nodes can also read a current global value directly with `{{@globals.variableId}}` or a JSONPath expression such as `{{@globals.profile.user.name}}`. These references do not create input ports, wait for a value, or establish ordering with Set Global. Use this node when the graph needs an explicit value connection, typed missing-value default, on-demand read, or wait behavior.
+
 In the editor, the search field above `Variable ID` can find fixed IDs from [Set Global](./set-global.mdx) nodes and configured project global variables in Project settings → General, including the complete loaded project-reference tree, then copy the selected ID into `Variable ID`. The search text is not saved with the node. You can still type `Variable ID` manually, and dynamically generated Set Global IDs must still be entered or supplied through the input port.
 
 ## Project global variables

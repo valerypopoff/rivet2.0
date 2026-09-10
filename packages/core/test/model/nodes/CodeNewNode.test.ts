@@ -79,6 +79,12 @@ class LegacyBareCodeRunner implements CodeRunner {
   }
 }
 
+class IdentifierErrorCodeRunner implements CodeRunner {
+  async runCode(_code: string, _inputs: Inputs, options: CodeRunnerOptions): Promise<Outputs> {
+    throw new Error(`${options.globalValuesIdentifier} must remain internal`);
+  }
+}
+
 describe('CodeNewNode', () => {
   it('can create node', () => {
     const node = CodeNewNodeImpl.create();
@@ -187,6 +193,25 @@ describe('CodeNewNode', () => {
     assert.deepStrictEqual(result.output?.value, 'Core:Rivet:second:Studio');
   });
 
+  it('resolves global JSONPath values without creating an input port or mutating the global', async () => {
+    const globalValue = { nested: { count: 1 } };
+    const node = createNode({
+      code: 'const config = {{@globals.config}};\nconfig.nested.count += 1;\nreturn config;',
+    });
+
+    assert.deepStrictEqual(node.getInputDefinitions(), []);
+
+    const result = await node.process(
+      {},
+      createContext(new IsomorphicCodeRunner(), {
+        getGlobal: (id) => (id === 'config' ? { type: 'object', value: globalValue } : undefined),
+      }),
+    );
+
+    assert.deepStrictEqual(result.output?.value, { nested: { count: 2 } });
+    assert.deepStrictEqual(globalValue, { nested: { count: 1 } });
+  });
+
   it('evaluates a JavaScript body and returns the returned value', async () => {
     const node = createNode({
       code: 'const doubled = {{value}} * 2;\nreturn doubled;',
@@ -231,6 +256,21 @@ describe('CodeNewNode', () => {
           createContext(new LegacyBareCodeRunner()),
         ),
       /must honor CodeRunnerOptions\.interpolationHelperIdentifier/,
+    );
+  });
+
+  it('explains the required CodeRunner extension for @globals interpolation', async () => {
+    const node = createNode({ code: 'return {{@globals.profile.name}};' });
+
+    await assert.rejects(
+      () =>
+        node.process(
+          {},
+          createContext(new LegacyBareCodeRunner(), {
+            getGlobal: () => ({ type: 'object', value: { name: 'Rivet' } }),
+          }),
+        ),
+      /must honor CodeRunnerOptions\.globalValuesIdentifier/,
     );
   });
 
@@ -329,6 +369,8 @@ describe('CodeNewNode', () => {
         'const __codeNewInputsCloneCache = new WeakMap();',
         'const __codeNewInputsGraphInputs = {};',
         'const __codeNewInputsContext = {};',
+        'const __codeNewInputsGlobals = {};',
+        'const __codeNewInputsGlobalValues = {};',
         'return {{value}};',
       ].join('\n'),
     });
@@ -476,6 +518,26 @@ describe('CodeNewNode', () => {
         assert.ok(error instanceof Error);
         assert.match(error.message, /missing/);
         assert.doesNotMatch(error.message, /__codeNewInputs/);
+        return true;
+      },
+    );
+  });
+
+  it('does not expose generated globals identifiers in runtime errors', async () => {
+    const node = createNode({ code: 'return {{@globals.profile.name}};' });
+
+    await assert.rejects(
+      () =>
+        node.process(
+          {},
+          createContext(new IdentifierErrorCodeRunner(), {
+            getGlobal: () => ({ type: 'object', value: { name: 'Rivet' } }),
+          }),
+        ),
+      (error) => {
+        assert.ok(error instanceof Error);
+        assert.match(error.message, /code input/);
+        assert.doesNotMatch(error.message, /__codeNewInputsGlobals/);
         return true;
       },
     );

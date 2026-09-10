@@ -26,11 +26,12 @@ const createNode = (data: Partial<ExpressionNode['data']>) => {
   });
 };
 
-const createContext = (codeRunner = new IsomorphicCodeRunner()) =>
+const createContext = (codeRunner = new IsomorphicCodeRunner(), overrides: Partial<InternalProcessContext> = {}) =>
   ({
     codeRunner,
     graphInputNodeValues: {},
     contextValues: {},
+    ...overrides,
   }) as InternalProcessContext;
 
 class CapturingCodeRunner implements CodeRunner {
@@ -44,6 +45,12 @@ class CapturingCodeRunner implements CodeRunner {
         value: 'captured',
       },
     };
+  }
+}
+
+class IdentifierErrorCodeRunner implements CodeRunner {
+  async runCode(_code: string, _inputs: Inputs, options: CodeRunnerOptions): Promise<Outputs> {
+    throw new Error(`${options.globalValuesIdentifier} must remain internal`);
   }
 }
 
@@ -143,6 +150,24 @@ describe('ExpressionNode', () => {
         },
       },
       createContext(),
+    );
+
+    assert.deepStrictEqual(result.output?.value, 'second');
+  });
+
+  it('resolves a global JSONPath expression without creating an input port', async () => {
+    const node = createNode({ expression: '{{@globals.profile.items[1].label}}' });
+
+    assert.deepStrictEqual(node.getInputDefinitions(), []);
+
+    const result = await node.process(
+      {},
+      createContext(undefined, {
+        getGlobal: (id) =>
+          id === 'profile'
+            ? { type: 'object', value: { items: [{ label: 'first' }, { label: 'second' }] } }
+            : undefined,
+      }),
     );
 
     assert.deepStrictEqual(result.output?.value, 'second');
@@ -442,6 +467,26 @@ describe('ExpressionNode', () => {
         assert.ok(error instanceof Error);
         assert.match(error.message, /missing/);
         assert.doesNotMatch(error.message, /__expressionInputs/);
+        return true;
+      },
+    );
+  });
+
+  it('does not expose generated globals identifiers in runtime errors', async () => {
+    const node = createNode({ expression: '{{@globals.profile.name}}' });
+
+    await assert.rejects(
+      () =>
+        node.process(
+          {},
+          createContext(new IdentifierErrorCodeRunner(), {
+            getGlobal: () => ({ type: 'object', value: { name: 'Rivet' } }),
+          }),
+        ),
+      (error) => {
+        assert.ok(error instanceof Error);
+        assert.match(error.message, /expression input/);
+        assert.doesNotMatch(error.message, /__expressionInputsGlobals/);
         return true;
       },
     );

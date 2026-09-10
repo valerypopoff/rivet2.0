@@ -11,7 +11,7 @@ import { nodeDefinition } from '../NodeDefinition.js';
 import { dedent } from 'ts-dedent';
 import { type EditorDefinition } from '../EditorDefinition.js';
 import { type NodeBodySpec } from '../NodeBodySpec.js';
-import { extractInterpolationVariableReferences, interpolate } from '../../utils/interpolation.js';
+import { extractInterpolationVariableReferences, getInterpolationGlobalValues, interpolate } from '../../utils/interpolation.js';
 import type { Inputs, Outputs } from '../GraphProcessor.js';
 import type { InternalProcessContext } from '../ProcessContext.js';
 import { keys } from '../../utils/typeSafety.js';
@@ -255,7 +255,10 @@ export class GptFunctionNodeImpl extends NodeImpl<GptFunctionNode> {
         inputMap,
         context?.graphInputNodeValues,
         context?.contextValues,
-        { coerceBareVariableDataValues: true },
+        {
+          coerceBareVariableDataValues: true,
+          globalValues: getInterpolationGlobalValues(this.data.schema, context?.getGlobal),
+        },
       );
 
       schema = JSON.parse(interpolated);

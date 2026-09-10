@@ -62,7 +62,7 @@ Rivet also tolerates whitespace around JSONPath structural separators consistent
 
 Each expression creates only one dynamic input: its base name. The examples above create `customer`, `order`, and `orders` inputs—not ports named `customer.name` or `order.items[0].price`. Connect the whole object or array to that base port, then Rivet selects the requested value when the node runs. A JSONPath query with no match behaves as an absent value; a query with one match returns that value, and a query with multiple matches returns an array.
 
-`{{@graphInputs.profile.name}}` and `{{@context.session.user.name}}` use the same path syntax, but continue to read their graph/context roots directly and do not create node inputs.
+`{{@graphInputs.profile.name}}`, `{{@context.session.user.name}}`, and `{{@globals.profile.name}}` use the same path syntax, but continue to read their graph, context, or global roots directly and do not create node inputs. `@globals` reads the current value from the same per-run global store used by [Get Global](../node-reference/get-global.mdx) and Set Global. It does not wait for another branch to assign a value or create an execution dependency, so connect a writer explicitly when ordering matters.
 
 Text-like fields turn a selected value into text. JSON-template and JavaScript fields preserve the selected value's JSON/JavaScript shape when their normal interpolation rules allow it. You can still apply a text formatter after a path, for example `{{customer.name | uppercase}}`.
 

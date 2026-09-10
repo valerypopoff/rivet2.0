@@ -18,6 +18,7 @@ interface CodeRunnerOptions {
   includeProcess: boolean;
   includeConsole: boolean;
   interpolationHelperIdentifier?: string;
+  globalValuesIdentifier?: string;
 }
 
 interface DataValue {
@@ -317,6 +318,7 @@ export class ManagedCodeRunner {
     options: CodeRunnerOptions,
     graphInputs?: Record<string, DataValue>,
     contextValues?: Record<string, DataValue>,
+    globalValues?: Record<string, DataValue>,
   ): Promise<Outputs> {
     this.trackCall(options);
 
@@ -368,6 +370,11 @@ export class ManagedCodeRunner {
     if (options.interpolationHelperIdentifier) {
       argNames.push(options.interpolationHelperIdentifier);
       args.push(resolveCodeInterpolationExpression);
+    }
+
+    if (options.globalValuesIdentifier) {
+      argNames.push(options.globalValuesIdentifier);
+      args.push(globalValues ?? Object.create(null));
     }
 
     const codeFunction = this.getCompiledCodeFunction(code, argNames);

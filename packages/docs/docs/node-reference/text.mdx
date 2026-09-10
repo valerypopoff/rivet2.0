@@ -15,8 +15,9 @@ The Text Node is used to output a string of text. It can also interpolate:
 - Values using `{{tags}}` within the text. The inputs are dynamically generated based on the interpolation tags used in the text. A JSONPath suffix such as `{{customer.address.city}}` selects from one `customer` input rather than creating an input named `customer.address.city`.
 - Current graph inputs using `{{@graphInputs.<id>}}`. It won't generate any node inputs.
 - Context inputs using `{{@context.<id>}}`. It won't generate any node inputs either.
+- Global values using `{{@globals.<id>}}`. It reads the current value from the same per-run store as [Get Global](./get-global.mdx), without generating an input.
 
-Both `@graphInputs` and `@context` support property access expressions like `{{@graphInputs.foo.bar[0]}}`.
+`@graphInputs`, `@context`, and `@globals` support property access expressions like `{{@globals.profile.user.name}}` and `{{@graphInputs.foo.bar[0]}}`. A global interpolation reads when the Text node starts; it does not wait for a Set Global node or cause one to execute first.
 
 This node is particularly useful for creating dynamic text based on the inputs to the node. The Text Node supports markdown, so you can use it to create richly formatted text.
 

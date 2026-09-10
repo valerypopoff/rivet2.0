@@ -163,6 +163,7 @@ class ProfilingCachedNodeCodeRunner implements CodeRunner {
     options: CodeRunnerOptions,
     graphInputs?: Record<string, DataValue>,
     contextValues?: Record<string, DataValue>,
+    globalValues?: Record<string, DataValue>,
   ): Promise<Outputs> {
     this.profile.runCalls += 1;
     const totalStart = performance.now();
@@ -171,6 +172,7 @@ class ProfilingCachedNodeCodeRunner implements CodeRunner {
     const { argNames, args } = await buildNodeCodeRunnerInvocation({
       contextValues,
       graphInputs,
+      globalValues,
       inputs,
       loadInterpolationResolver: () => this.loadInterpolationResolver(),
       loadRivet: () => this.loadRivet(),

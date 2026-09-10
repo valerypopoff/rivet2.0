@@ -20,6 +20,11 @@ export interface CodeRunnerOptions {
    * and @graphInputs/@context references depend on that contract.
    */
   interpolationHelperIdentifier?: string;
+  /**
+   * The collision-safe name of the globals snapshot injected beside the
+   * interpolation helper. Generated wrappers use it only for @globals paths.
+   */
+  globalValuesIdentifier?: string;
 }
 
 export const ALL_CODE_RUNNER_OPTIONS: CodeRunnerOptions = Object.freeze({

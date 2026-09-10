@@ -16,6 +16,7 @@ import { MCPError, MCPErrorType, type MCP } from '../../integrations/mcp/MCPProv
 
 import { getInputOrData } from '../../utils/index.js';
 import { getError } from '../../utils/errors.js';
+import { getInterpolationGlobalValues } from '../../utils/interpolation.js';
 import {
   getMCPBaseBody,
   getMCPArgumentTemplateInputs,
@@ -196,6 +197,7 @@ export class MCPToolCallNodeImpl extends NodeImpl<MCPToolCallNode> {
           inputs,
           context.graphInputNodeValues,
           context.contextValues,
+          getInterpolationGlobalValues(this.data.toolArguments ?? '', context.getGlobal),
         ),
       );
     }

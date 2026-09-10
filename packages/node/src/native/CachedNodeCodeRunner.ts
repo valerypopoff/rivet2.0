@@ -64,12 +64,14 @@ export class CachedNodeCodeRunner implements CodeRunner {
     options: CodeRunnerOptions,
     graphInputs?: Record<string, DataValue>,
     contextValues?: Record<string, DataValue>,
+    globalValues?: Record<string, DataValue>,
   ): Promise<Outputs> {
     const invocationPlan = this.getInvocationPlan(options, graphInputs != null, contextValues != null);
     const args = await buildNodeCodeRunnerInvocationArgs({
       contextValues,
       executionEnvironment: this.executionEnvironment,
       graphInputs,
+      globalValues,
       inputs,
       loadInterpolationResolver: () => this.loadInterpolationResolver(),
       loadRivet: () => this.loadRivet(),
@@ -223,5 +225,5 @@ function getInvocationPlanCacheKey(
     key |= 1 << 6;
   }
 
-  return `${key}\0${options.interpolationHelperIdentifier ?? ''}`;
+  return `${key}\0${options.interpolationHelperIdentifier ?? ''}\0${options.globalValuesIdentifier ?? ''}`;
 }
