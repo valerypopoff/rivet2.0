@@ -1,6 +1,10 @@
 import type { Page } from '@playwright/test';
 
 export type SeedHostedEditorProjectOptions = {
+  graph?: {
+    connections?: unknown[];
+    nodes?: unknown[];
+  };
   graphId: string;
   loaded?: boolean;
   metadata?: Record<string, unknown>;
@@ -11,6 +15,19 @@ export type SeedHostedEditorProjectOptions = {
 
 export async function seedHostedEditorProject(page: Page, options: SeedHostedEditorProjectOptions) {
   await page.addInitScript((seed: SeedHostedEditorProjectOptions) => {
+    const graph = {
+      metadata: {
+        id: seed.graphId,
+        name: 'Main Graph',
+        description: '',
+      },
+      nodes: seed.graph?.nodes ?? [],
+      connections: seed.graph?.connections ?? [],
+    };
+
+    // The editor persists its active graph separately from the project. Seed both
+    // layers so fixtures with graph contents do not open an unrelated blank graph.
+    localStorage.setItem('graph', JSON.stringify({ graphState: graph }));
     localStorage.setItem(
       'project',
       JSON.stringify({
@@ -31,15 +48,7 @@ export async function seedHostedEditorProject(page: Page, options: SeedHostedEdi
             ...seed.metadata,
           },
           graphs: {
-            [seed.graphId]: {
-              metadata: {
-                id: seed.graphId,
-                name: 'Main Graph',
-                description: '',
-              },
-              nodes: [],
-              connections: [],
-            },
+            [seed.graphId]: graph,
           },
           plugins: [],
         },

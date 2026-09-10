@@ -17,6 +17,8 @@ On the canvas, the node title shows a downward arrow icon so it is easier to dis
 
 The Set Global Node allows you to specify the ID of the global value and the value itself. The ID can be either a fixed string or an input value. The value can be of any data type. Fixed IDs and configured project global variables in Project settings → General appear in the [Get Global](./get-global.mdx) node's search field so you can choose them without retyping. A Set Global node can overwrite a configured project global variable during its run; its `Previous Value` then returns the automatically assigned value.
 
+Interpolation-capable nodes can read the current value directly with `{{@globals.variableId}}` or a JSONPath expression such as `{{@globals.profile.user.name}}`, without a Get Global node. That shorthand does not create an execution dependency or wait for this node, so connect the writer explicitly when a later read must observe this assignment.
+
 <Tabs
   defaultValue="inputs"
   values={[

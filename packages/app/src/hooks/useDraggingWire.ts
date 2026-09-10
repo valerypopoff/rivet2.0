@@ -1,5 +1,12 @@
 import { useCallback, useEffect, useRef } from 'react';
-import { type ChartNode, type NodeConnection, type NodeId, type PortId } from '@valerypopoff/rivet2-core';
+import {
+  type ChartNode,
+  type GraphId,
+  type NodeConnection,
+  type NodeId,
+  type PortId,
+  type Project,
+} from '@valerypopoff/rivet2-core';
 import { useAtom, useStore } from 'jotai';
 import { toast } from 'react-toastify';
 import { ioDefinitionsForNodeState } from '../state/graph.js';
@@ -30,11 +37,15 @@ function shouldHandleGlobalWireMouseUpTarget(target: EventTarget | null): boolea
 export const useDraggingWire = ({
   connections,
   enabled = true,
+  graphId,
   nodesById,
+  project,
 }: {
   connections: readonly NodeConnection[];
   enabled?: boolean;
+  graphId?: GraphId;
   nodesById: Record<NodeId, ChartNode>;
+  project?: Project;
 }) => {
   const [draggingWire, setDraggingWire] = useAtom(draggingWireState);
   const store = useStore();
@@ -208,7 +219,9 @@ export const useDraggingWire = ({
       const asyncBranchViolation = nextConnections
         ? getAsyncBranchTopologyViolation({
             connections: nextConnections,
+            graphId,
             nodesById,
+            project,
           })
         : undefined;
 
@@ -247,9 +260,11 @@ export const useDraggingWire = ({
       connections,
       continueDraggingWire,
       getValidatedDropTarget,
+      graphId,
       latestDraggingWire,
       makeConnection,
       nodesById,
+      project,
       rewireConnection,
     ],
   );

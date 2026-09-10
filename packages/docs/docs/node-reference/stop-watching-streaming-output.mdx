@@ -1,0 +1,46 @@
+---
+id: stop-watching-streaming-output
+title: Stop Watching Streaming Output Node
+sidebar_label: Stop Watching Streaming Output
+---
+
+# Stop Watching Streaming Output Node
+
+**Stop Watching Streaming Output** is the optional exit boundary for a
+[Watch Streaming Output](./watch-streaming-output.mdx) branch. Add it when a
+branch needs to select one value, stop that watch, and pass the value into
+ordinary graph execution. Omit it when every streamed snapshot should run the
+downstream branch independently.
+
+| Port | Data Type | Description |
+| --- | --- | --- |
+| Value (input) | `any` | The value selected by the watch branch. |
+| Value (output) | `any` | The selected value for ordinary downstream nodes. |
+
+In sequential mode, the first invocation to reach this node wins. In parallel
+mode, competing invocations may already be running, but the first one to reach
+Stop wins and Rivet cancels the rest. Later snapshots are not started.
+
+Stop releases the selected value as soon as that node finishes. Other nodes
+already running in the winning invocation continue, and the graph waits for
+them before completing. Their failures still fail the graph. If an upstream
+condition excludes the watched output, Stop's output is also excluded, allowing
+ordinary fallback logic to run.
+
+This node is valid only downstream of one Watch Streaming Output node. It does
+not stop the upstream producer: for example, an LLM Chat request continues to
+its final response. That final response can be joined with this node's output
+after the Stop boundary.
+
+Use one Stop node per watch boundary. Put all tentative, repeatable work before
+Stop; put ordinary one-time graph work after it.
+
+Saved output cannot resume a Stop boundary. To repeat a branch with the
+producer's saved final value, use **Run from Watch Streaming Output**; to receive
+fresh chunks, run the producer again. This keeps Stop's first-value, ordering,
+and cancellation rules intact.
+
+## See also
+
+- [Watch Streaming Output](./watch-streaming-output.mdx)
+- [Join](./join.mdx)

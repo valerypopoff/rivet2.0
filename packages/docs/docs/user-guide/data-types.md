@@ -62,7 +62,11 @@ Rivet also tolerates whitespace around JSONPath structural separators consistent
 
 Each expression creates only one dynamic input: its base name. The examples above create `customer`, `order`, and `orders` inputs—not ports named `customer.name` or `order.items[0].price`. Connect the whole object or array to that base port, then Rivet selects the requested value when the node runs. A JSONPath query with no match behaves as an absent value; a query with one match returns that value, and a query with multiple matches returns an array.
 
-`{{@graphInputs.profile.name}}`, `{{@context.session.user.name}}`, and `{{@globals.profile.name}}` use the same path syntax, but continue to read their graph, context, or global roots directly and do not create node inputs. `@globals` reads the current value from the same per-run global store used by [Get Global](../node-reference/get-global.mdx) and Set Global. It does not wait for another branch to assign a value or create an execution dependency, so connect a writer explicitly when ordering matters.
+### Reading global values directly
+
+`{{@graphInputs.profile.name}}`, `{{@context.session.user.name}}`, and `{{@globals.profile.name}}` use the same path syntax, but read their graph, context, or global roots directly and do not create node inputs. `@globals` reads the current value from the same per-run store as [Get Global](../node-reference/get-global.mdx) and [Set Global](../node-reference/set-global.mdx). It can read values configured in **Project settings → General** as well as values assigned by Set Global during the run.
+
+Use `{{@globals.variableId}}` for a whole global value, `{{@globals.profile.user.name}}` for a nested value, or bracket JSONPath syntax such as `{{@globals["customer.profile"].names[0]}}` when an ID or property needs it. Every `@globals` expression is a read at the time its node starts. It does not create a port, wait for a value, make a Set Global node execute, or establish ordering between parallel branches. Connect the writer explicitly when a read must happen after it. For an explicit typed connection, a missing-value default, **Wait**, or **On Demand** behavior, use Get Global instead.
 
 Text-like fields turn a selected value into text. JSON-template and JavaScript fields preserve the selected value's JSON/JavaScript shape when their normal interpolation rules allow it. You can still apply a text formatter after a path, for example `{{customer.name | uppercase}}`.
 

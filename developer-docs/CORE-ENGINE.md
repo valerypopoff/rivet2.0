@@ -899,7 +899,15 @@ that set `returnWhenGraphOutputsReady` receive a two-phase run when foreground
 scheduling completes while managed work is still pending: core fills the
 foreground-derived `cost`, emits root `graphOutputsReady`, and resolves the
 result promise without emitting terminal lifecycle events. The processor stays
-Running. `waitForRunCompletion()` observes the later drain, errors,
+running until that managed work drains. A no-Stop `Watch Streaming Output`
+branch is managed background work here, so ordinary graph outputs may be
+published while it drains. A Watch branch with `Stop Watching Streaming Output`
+is different: it can still re-enter ordinary scheduling and contribute graph
+outputs, so it suppresses that early-publication boundary until its Stop value
+has been accepted and all resulting foreground work has completed. The same
+suppression applies after its queue drains but before Stop has accepted a value:
+that state is about to produce the required root failure, not a valid early
+result. `waitForRunCompletion()` observes the later drain, errors,
 `graphFinish`, `done`, and `finish`. Web-app action paths enable this mode so a
 Chat response is not held behind a side-effect-only branch. Local/Node executor
 owners defer abort-listener, recorder, debugger, code-runner, cache, and active
@@ -947,6 +955,171 @@ when its slice settles. It is attached to the true root lifecycle even when the
 trigger was reached inside a subgraph or a synthetic LLM continuation processor;
 attaching it to that temporary processor would let its work escape after the
 temporary owner returns.
+
+#### Streaming watch branches
+
+`Watch Streaming Output` and `Stop Watching Streaming Output` are a separate
+bounded scheduler boundary for a **specific partial-output port**. They do not
+turn ordinary connections into streaming connections. On every eligible
+`InternalProcessContext.onPartialOutputs(...)` callback, `GraphProcessor`
+snapshots the watched `DataValue`, assigns a monotonic update index, and
+hands the snapshot to [`StreamingOutputWatch.ts`](../packages/core/src/model/StreamingOutputWatch.ts).
+That coordinator owns the trigger mode (`every-update` or latest-value
+interval), FIFO queue limit, queue-overflow policy, sequential/parallel
+concurrency, and cancellation of active child processors. The persisted
+settings are normalized in that one coordinator: non-finite values use the
+defaults, and finite values are clamped
+to a one-hour interval, 32 concurrent child runs, and 1,024 queued snapshots.
+The producer's final output is offered as one final snapshot only after its
+awaited `nodeFinish` event, so a non-streaming or late-starting producer can
+use the same topology.
+
+#### Saved results and streaming boundaries
+
+Preloaded output is complete evidence, never a reconstruction of a token stream.
+When a selected producer feeding Watch has saved output, `GraphProcessor` emits
+that producer's ordinary preloaded lifecycle and offers its watched port exactly
+once as `isFinal: true`. This gives **Run from Watch Streaming Output** a useful,
+deterministic replay path without pretending that unavailable partial updates
+exist. A preloaded producer must contain the watched final port; Core rejects it
+before emitting a misleading cached `nodeFinish` when it does not.
+
+The scheduling boundary itself must always be live. Core rejects preloaded Watch
+and Stop nodes, and every external node in a Watch's repeated branch, before any
+cached boundary lifecycle event can occur. A source, Watch, branch, or Stop also
+cannot receive a preload after its Watch has started: injecting a value then
+would mutate the parent result map while the coordinator owns snapshot ordering
+and cancellation. The sole internal exception is the temporary suppressed Watch
+preload used to start an individual child invocation; it is private to the
+coordinator and is not an editor/runtime cache seam. Frozen producer output is
+safe for the same final-snapshot path, but frozen Stop output is a node-owned
+error because it would bypass the scheduler and Stop's acceptance callback. A
+stopped watch keeps any accepted/failing child invocation visible to
+the root until it settles, so its actual child error cannot be replaced by a
+later generic missing-Stop failure.
+
+The editor's shared Run-from planner mirrors that contract for both local and
+remote execution: it may preload the producer when starting at Watch, but rejects
+starting at a repeated-branch node, Stop, or downstream node when that would
+preload the boundary. The actionable choice is to run from Watch to reuse the
+producer's saved final value once, or run from the producer to stream again.
+
+The parent prepares a closed graph slice from Watch through **one reachable** Stop node;
+it ignores that slice in ordinary scheduling. Inputs into the slice may come
+only from Watch, Graph Output and nested Watch/Start Async Branch boundaries are
+rejected, and direct split-run producers are rejected because a partial item
+would otherwise have ambiguous ownership. The temporary child processor receives
+Watch's `value` (**Chunk**), `updateIndex` (**Chunk Index**), and `isFinal`
+outputs as a suppressed preload,
+shares the root's globals, stored values, cache, references, and lifecycle wiring,
+and forwards actual node events. Each invocation owns a fresh attached-data map:
+race completion and loop metadata must never leak between repeated node IDs.
+Watch costs accrue to the containing processor, so a Subgraph reports its own
+watch costs and the root includes them exactly once through the Subgraph output.
+The source output is
+cloned through [`ExecutionOutputClone.ts`](../packages/core/src/model/ExecutionOutputClone.ts)
+at that ownership boundary so a provider's mutable streaming object
+cannot rewrite an already queued branch invocation. The snapshot also exposes
+`allStreamedOutput` (**All Chunks**) as an immutable ordered `any[]` history. For cumulative
+string snapshots (the LLM Chat Response contract), the processor stores only
+each newly added suffix; this keeps history linear rather than retaining one
+full response prefix per token. Core retains and clones that cumulative history
+only when a downstream branch connects **All Chunks**; Chunk-only watches keep
+one immutable value snapshot per invocation rather than copying an unused
+growing array on every update. Non-string values are retained as emitted when
+the history output is connected.
+
+An ordinary Subgraph may be part of a Watch branch, but it does not create a
+scheduler escape hatch. While that Subgraph (or any recursively nested
+Subgraph) runs for a Watch invocation, Core rejects a **Start Async Branch**
+that has a runnable downstream branch before it can enqueue work on the
+root-managed async scheduler. An unfinished trigger with no active output is
+safe: it has no work to hand off and remains an ordinary authoring state. This
+keeps every repeated update within the Watch's sequential, parallel, and queue
+bounds. The same guard is repeated immediately before the scheduler handoff as
+defense in depth. Move detached async work after **Stop Watching Streaming
+Output**, where it belongs to normal one-time graph execution; ordinary awaited
+work inside a Watch Subgraph remains supported.
+
+The Watch node editor keeps scheduling configuration contextual: `intervalMs`
+is visible only for the interval trigger and `maxParallelRuns` only for
+parallel execution. Both persisted values remain part of the node data and
+are still normalized by the scheduler, even while their controls are hidden.
+`maxQueuedUpdates` bounds only waiting snapshots, never currently active child
+processors, in both execution modes. The default `queueOverflowBehavior` is
+`fail`, which records a root-owned watch failure and fails the graph. An
+explicit `drop` policy preserves FIFO queue contents and discards only the
+incoming partial snapshot when full; it neither cancels active work nor turns
+the producer into a cancelled node. A final producer snapshot is never
+dropped: when needed it replaces the stalest queued partial while preserving
+the configured queue bound. This is appropriate only for branches whose work
+is safe to skip. Invalid or absent persisted policies normalize to the
+fail-closed default. The node editor supplies that same **Fail run** default
+when opening legacy Watch data that predates `queueOverflowBehavior`, so its
+dropdown is never visually unselected; it does not need a project migration
+just to present the existing runtime behavior.
+
+`Stop Watching Streaming Output` is optional. Without it, every partial
+snapshot and the producer's final output run the contained watch branch; after
+those invocations settle, the watch finishes with the producer and cannot
+rejoin ordinary one-time scheduling. This is the repeat-all, side-effect form.
+One producer may feed multiple Watch nodes: each coordinator owns its own
+snapshots, queue, cumulative history, and cancellation, so accepting Stop in
+one branch never suppresses another Watch's delivery.
+An unattached Watch, or a source-to-Watch connection with no downstream branch,
+is an allowed dormant authoring state and creates no coordinator.
+
+When a branch has one reachable Stop, it is the only node granted the internal
+`acceptStreamingWatchStop(...)` process-context callback. Its child invocation
+records a candidate value; after that Stop node's awaited finish event the
+parent accepts the first candidate, stops the coordinator, cancels queued/losing
+parallel invocations, installs the Stop output in the parent result map, and
+queues the Stop node's normal downstream dependents. An unfinished sibling in
+the winning invocation cannot let a later Stop win. Winning siblings continue
+under the run's lifecycle, and their later errors still fail the run. This
+ordering keeps node finish events truthful and lets downstream nodes join the selected value with
+the producer's usual final output. The accepted Stop value is cloned at that
+second ownership boundary, so later child-owned mutation cannot affect normal
+downstream work. Only this rejoining form fails closed when the source finishes
+without any accepted Stop value; a no-Stop watch completes after draining every
+snapshot invocation. Stop's outputs must not reconnect into the Watch node or
+any node already inside that Watch branch; both authoring validation and the
+runtime reject that re-entry so Stop remains a one-way return to ordinary
+execution. A normally excluded producer/output stops its watch and marks the
+Stop output excluded too, allowing ordinary Coalesce/fallback branches to run;
+it does not report a missing-Stop error. Partial exclusion markers are ignored.
+
+Stopping a watch also prevents deferred microtasks from starting reserved work,
+and cancellation registered after stop is delivered immediately. Cancellation
+is idempotent per child; a later root cancellation still includes the preserved
+winning invocation. Stopped watches skip payload cloning and history collection
+before inspecting later producer values. Settings normalization belongs solely
+to `StreamingOutputWatch`; its option type is also the persisted node-data type.
+`StreamingOutputWatch` reports that error, queue overflow, and child failures
+to its owner; `GraphProcessor` then produces the ordinary root `graphError` and
+`error` lifecycle rather than leaking a raw drain rejection. Child failures
+retain their failing-node attribution in that root aggregate instead of being
+reported only as Watch-boundary failures. Root abort cancels
+all active watch coordinators before draining
+them; an unsuccessful root abort still rejects the root run even if the cancelled
+watch children settle cleanly. Graphs containing either boundary stay on the
+compatible scheduler. Root finalization drains those watch coordinators, the
+ordinary parent queue, and managed async branches to a fixed point. Therefore a
+Stop accepted after the source's compatible scheduler has already gone idle
+still finishes every normal downstream node (including a newly started async
+branch) before graph completion.
+
+Regression coverage belongs in `GraphProcessor.asyncBranches.test.ts` for
+partial-before-final ordering, final-only fallback, no-Stop repeat-all
+completion, sequential queueing, parallel caps/first-stop cancellation,
+topology rejection, root abort, per-invocation race/loop isolation, subgraph cost
+attribution, source exclusion propagation, and recording event lineage. Include a
+source-that-finishes-before-Stop case so the post-Stop parent queue and any
+subsequent async work cannot be finalized early.
+Browser/editor coverage must additionally prove that
+the topology guard rejects invalid wiring and that a real LLM streaming output
+can reach a regular post-Stop join without a special subgraph or connection
+type.
 
 ### Control-flow model
 
@@ -1299,6 +1472,7 @@ Processor-built node execution context:
 - event/global helpers
 - subprocessor factory
 - partial-output callback
+- internal streaming-watch stop callback (only on the Stop boundary child)
 - external functions
 - execution cache
 - plugin config lookup

@@ -1081,3 +1081,84 @@ test('canRunNodeCanvasContextMenuFromHere hides partial replay inside an async s
     false,
   );
 });
+
+test('canRunNodeCanvasContextMenuFromHere permits Watch but hides its repeated branch and Stop boundary', () => {
+  const source = makeNode('text', 'stream-source' as NodeId, 'Stream source');
+  const watch = makeNode('watchStreamingOutput', 'watch' as NodeId, 'Watch Streaming Output');
+  const branch = makeNode('text', 'watch-branch' as NodeId, 'Repeated branch');
+  branch.data = { ...(branch.data as Record<string, unknown>), text: '{{input}}' };
+  const stop = makeNode('stopWatchingStreamingOutput', 'watch-stop' as NodeId, 'Stop Watching Streaming Output');
+  const downstream = makeNode('text', 'after-stop' as NodeId, 'After Stop');
+  downstream.data = { ...(downstream.data as Record<string, unknown>), text: '{{input}}' };
+  const streamingProject: Project = {
+    ...project,
+    graphs: {
+      [graphId]: {
+        metadata: { id: graphId, name: 'Graph' },
+        nodes: [source, watch, branch, stop, downstream],
+        connections: [
+          {
+            outputNodeId: source.id,
+            outputId: 'output' as PortId,
+            inputNodeId: watch.id,
+            inputId: 'stream' as PortId,
+          },
+          {
+            outputNodeId: watch.id,
+            outputId: 'value' as PortId,
+            inputNodeId: branch.id,
+            inputId: 'input' as PortId,
+          },
+          {
+            outputNodeId: branch.id,
+            outputId: 'output' as PortId,
+            inputNodeId: stop.id,
+            inputId: 'value' as PortId,
+          },
+          {
+            outputNodeId: stop.id,
+            outputId: 'value' as PortId,
+            inputNodeId: downstream.id,
+            inputId: 'input' as PortId,
+          },
+        ],
+      },
+    },
+  };
+  const lastRunPerNode = {
+    [source.id]: [
+      {
+        graphId,
+        processId: 'source-process' as any,
+        data: {
+          status: { type: 'ok' },
+          outputData: {
+            output: { type: 'string', storage: 'inline', value: 'saved final value' },
+          },
+        },
+      },
+    ],
+  } as any;
+
+  assert.equal(
+    canRunNodeCanvasContextMenuFromHere({
+      ...contextModelOptions,
+      lastRunPerNode,
+      nodeId: watch.id,
+      project: streamingProject,
+    }),
+    true,
+  );
+
+  for (const node of [branch, stop, downstream]) {
+    assert.equal(
+      canRunNodeCanvasContextMenuFromHere({
+        ...contextModelOptions,
+        lastRunPerNode,
+        nodeId: node.id,
+        project: streamingProject,
+      }),
+      false,
+    );
+  }
+});

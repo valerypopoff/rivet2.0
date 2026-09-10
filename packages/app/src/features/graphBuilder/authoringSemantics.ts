@@ -235,7 +235,9 @@ export class AppGraphBuilderAuthoringSemantics implements GraphBuilderAuthoringS
     const result = this.#validateConnectionWithoutTopology(input.graphId, input.connection, input.project);
     const topologyViolation = getAsyncBranchTopologyViolation({
       connections: graph.connections,
+      graphId: input.graphId,
       nodesById: getEffectiveNodesById(input.project, graph.nodes),
+      project: input.project,
     });
     if (!topologyViolation) {
       return result;
@@ -634,7 +636,9 @@ export class AppGraphBuilderAuthoringSemantics implements GraphBuilderAuthoringS
 
       const topologyViolation = getAsyncBranchTopologyViolation({
         connections: graph.connections,
+        graphId,
         nodesById: effectiveNodesById,
+        project: input.candidate,
       });
       if (topologyViolation) {
         diagnostics.push(

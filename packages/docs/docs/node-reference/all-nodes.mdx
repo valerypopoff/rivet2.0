@@ -113,6 +113,8 @@ The following is all of the nodes built-in to the core of Rivet.
 | [Passthrough](./passthrough.mdx)               | Transfers the input value directly to the output without modification. Useful for grouping values from different branches of your graph or controlling wire flow without altering the value.                                                                                                     |
 | [Race Inputs](./race-inputs.mdx)               | Manages multiple inputs, outputting the value of the first input to complete while cancelling the remaining inputs. Especially useful when dealing with multiple operations that could satisfy the same requirement, allowing for the use of the result from the operation that concludes first. |
 | [Start Async Branch](./start-async-branch.mdx) | Starts a root-owned side-effect branch without making the foreground path wait for it. Web apps can return ready graph outputs while the async work continues.                                                                                                                                   |
+| [Watch Streaming Output](./watch-streaming-output.mdx) | Runs a bounded branch for partial streaming-output snapshots; optionally select one result to rejoin normal graph execution. |
+| [Stop Watching Streaming Output](./stop-watching-streaming-output.mdx) | Ends a streaming watch, cancels losing watch work, and releases a selected value into ordinary graph scheduling. |
 
 ## Input/Output
 

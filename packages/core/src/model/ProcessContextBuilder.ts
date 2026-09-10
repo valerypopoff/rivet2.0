@@ -9,6 +9,7 @@ export type NodeProcessContextBase = Omit<
   InternalProcessContext,
   | 'attachedData'
   | 'activeOutputPortIds'
+  | 'acceptStreamingWatchStop'
   | 'createSubProcessor'
   | 'execution'
   | 'externalFunctions'
@@ -31,6 +32,7 @@ export type NodeProcessContextBase = Omit<
 
 export function buildNodeProcessContext(options: {
   activeOutputPortIds: ReadonlySet<PortId>;
+  acceptStreamingWatchStop?: InternalProcessContext['acceptStreamingWatchStop'];
   base: NodeProcessContextBase;
   attachedData: AttachedNodeData;
   createSubProcessor: (
@@ -58,6 +60,7 @@ export function buildNodeProcessContext(options: {
   const {
     attachedData,
     activeOutputPortIds,
+    acceptStreamingWatchStop,
     base,
     createSubProcessor,
     execution,
@@ -84,6 +87,7 @@ export function buildNodeProcessContext(options: {
     node,
     attachedData,
     activeOutputPortIds,
+    acceptStreamingWatchStop,
     isDirectRunTarget,
     markResultAsEditorCacheHit,
     waitEvent,

@@ -86,6 +86,33 @@ function makeAsyncNode(id = 'async-trigger'): ChartNode {
   };
 }
 
+function makeWatchNode(id = 'watch'): ChartNode {
+  return {
+    data: {
+      executionMode: 'sequential',
+      intervalMs: 1_000,
+      maxParallelRuns: 4,
+      maxQueuedUpdates: 32,
+      queueOverflowBehavior: 'fail',
+      triggerMode: 'every-update',
+    },
+    id: id as NodeId,
+    title: 'Watch Streaming Output',
+    type: 'watchStreamingOutput',
+    visualData: { x: 200, y: 0, width: 230 },
+  };
+}
+
+function makeStopWatchNode(id = 'stop-watch'): ChartNode {
+  return {
+    data: {},
+    id: id as NodeId,
+    title: 'Stop Watching Streaming Output',
+    type: 'stopWatchingStreamingOutput',
+    visualData: { x: 500, y: 0, width: 230 },
+  };
+}
+
 function makeGraphOutputNode(id = 'result'): ChartNode {
   return {
     data: { dataType: 'any', id },
@@ -93,6 +120,16 @@ function makeGraphOutputNode(id = 'result'): ChartNode {
     title: 'Graph Output',
     type: 'graphOutput',
     visualData: { x: 600, y: 0, width: 220 },
+  };
+}
+
+function makeGraphInputNode(id: string, inputId = 'input'): ChartNode {
+  return {
+    data: { dataType: 'any', id: inputId },
+    id: id as NodeId,
+    title: 'Graph Input',
+    type: 'graphInput',
+    visualData: { x: 0, y: 0, width: 220 },
   };
 }
 
@@ -153,6 +190,10 @@ function deferred() {
   return { promise, resolve };
 }
 
+function wait(milliseconds: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+
 async function withTimeout<T>(promise: Promise<T>, label: string, timeoutMs = 2_000): Promise<T> {
   let timeout: ReturnType<typeof setTimeout> | undefined;
   try {
@@ -172,7 +213,1012 @@ beforeEach(() => {
   AsyncTestNodeImpl.runCounts.clear();
 });
 
-void describe('GraphProcessor managed async branches', () => {
+void describe('GraphProcessor scheduler boundaries', () => {
+  void it('runs a streaming watch branch before the producer finishes and rejoins after Stop', async () => {
+    const source = makeTestNode('streaming-source');
+    const watch = makeWatchNode();
+    const branch = makeTestNode('watch-branch');
+    const stop = makeStopWatchNode();
+    const join = makeTestNode('join');
+    const graphOutput = makeGraphOutputNode();
+    const graph = makeGraph(
+      'streaming-watch-rejoin',
+      [source, watch, branch, stop, join, graphOutput],
+      [
+        connect(source.id, watch.id, 'stream'),
+        connect(watch.id, branch.id, 'input', 'value'),
+        connect(branch.id, stop.id, 'value'),
+        connect(stop.id, join.id, 'input', 'value'),
+        connect(source.id, join.id, 'other'),
+        connect(join.id, graphOutput.id, 'value'),
+      ],
+    );
+    const watchReached = deferred();
+    const releaseSource = deferred();
+    const executionOrder: string[] = [];
+
+    AsyncTestNodeImpl.handlers.set(source.id, async (_inputs, context) => {
+      const partialPayload = { text: 'partial value' };
+      context.onPartialOutputs?.({ output: { type: 'object', value: partialPayload } });
+      partialPayload.text = 'mutated after emission';
+      await releaseSource.promise;
+      executionOrder.push('source-finished');
+      return { output: { type: 'string', value: 'final value' } };
+    });
+    AsyncTestNodeImpl.handlers.set(branch.id, (inputs) => {
+      executionOrder.push('watch-branch');
+      assert.deepEqual(inputs['input' as PortId]?.value, { text: 'partial value' });
+      watchReached.resolve();
+      releaseSource.resolve();
+      return { output: { type: 'string', value: 'accepted partial' } };
+    });
+    AsyncTestNodeImpl.handlers.set(join.id, (inputs) => {
+      executionOrder.push('join');
+      assert.equal(inputs['input' as PortId]?.value, 'accepted partial');
+      assert.equal(inputs['other' as PortId]?.value, 'final value');
+      return { output: inputs['input' as PortId]! };
+    });
+
+    const processor = createProcessor(graph);
+    const run = processor.processGraph(testProcessContext());
+    await withTimeout(watchReached.promise, 'the streaming watch branch');
+    const outputs = await withTimeout(run, 'the streaming watch graph');
+
+    assert.equal(outputs.result?.value, 'accepted partial');
+    assert.deepEqual(executionOrder, ['watch-branch', 'source-finished', 'join']);
+    assert.equal(AsyncTestNodeImpl.runCounts.get(branch.id), 1);
+  });
+
+  void it('selects the first Stop reached even while that invocation has an unfinished sibling', async () => {
+    const source = makeTestNode('source');
+    const watch = makeWatchNode();
+    watch.data = { ...watch.data, executionMode: 'parallel', maxParallelRuns: 2 };
+    const branch = makeTestNode('branch');
+    const sibling = makeTestNode('sibling');
+    const stop = makeStopWatchNode();
+    const receiver = makeTestNode('receiver');
+    const output = makeGraphOutputNode();
+    const graph = makeGraph(
+      'first-stop-reached',
+      [source, watch, branch, sibling, stop, receiver, output],
+      [
+        connect(source.id, watch.id, 'stream'),
+        connect(watch.id, branch.id, 'input', 'value'),
+        connect(watch.id, sibling.id, 'input', 'value'),
+        connect(branch.id, stop.id, 'value'),
+        connect(stop.id, receiver.id, 'input', 'value'),
+        connect(receiver.id, output.id, 'value'),
+      ],
+    );
+    const firstStop = deferred();
+    const releaseSibling = deferred();
+    AsyncTestNodeImpl.handlers.set(source.id, (_inputs, context) => {
+      context.onPartialOutputs?.({ output: { type: 'string', value: 'first' } });
+      return { output: { type: 'string', value: 'second' } };
+    });
+    AsyncTestNodeImpl.handlers.set(branch.id, async (inputs) => {
+      if (inputs['input' as PortId]?.value === 'second') await firstStop.promise;
+      return { output: inputs['input' as PortId]! };
+    });
+    AsyncTestNodeImpl.handlers.set(sibling.id, async (inputs) => {
+      if (inputs['input' as PortId]?.value === 'first') await releaseSibling.promise;
+      return {};
+    });
+    AsyncTestNodeImpl.handlers.set(receiver.id, (inputs) => {
+      releaseSibling.resolve();
+      return { output: inputs['input' as PortId]! };
+    });
+    const processor = createProcessor(graph);
+    processor.on('nodeFinish', ({ node, outputs }) => {
+      if (node.id === stop.id && outputs['value' as PortId]?.value === 'first') firstStop.resolve();
+    });
+    try {
+      const outputs = await withTimeout(
+        processor.processGraph(testProcessContext()),
+        'first Stop with a pending sibling',
+      );
+      assert.equal(outputs.result?.value, 'first');
+    } finally {
+      releaseSibling.resolve();
+    }
+  });
+
+  void it('does not inspect later stream payloads after Stop has accepted a value', async () => {
+    const source = makeTestNode('source');
+    const watch = makeWatchNode();
+    const stop = makeStopWatchNode();
+    const receiver = makeTestNode('receiver');
+    const accepted = deferred();
+    const graph = makeGraph(
+      'stopped-watch-payloads',
+      [source, watch, stop, receiver],
+      [
+        connect(source.id, watch.id, 'stream'),
+        connect(watch.id, stop.id, 'value', 'value'),
+        connect(stop.id, receiver.id, 'input', 'value'),
+      ],
+    );
+    let latePayloadReads = 0;
+    AsyncTestNodeImpl.handlers.set(source.id, async (_inputs, context) => {
+      context.onPartialOutputs?.({ output: { type: 'string', value: 'accepted' } });
+      await accepted.promise;
+      const payload = {
+        get text() {
+          latePayloadReads += 1;
+          return 'late';
+        },
+      };
+      context.onPartialOutputs?.({ output: { type: 'object', value: payload } });
+      return { output: { type: 'string', value: 'final' } };
+    });
+    AsyncTestNodeImpl.handlers.set(receiver.id, () => {
+      accepted.resolve();
+      return {};
+    });
+    await withTimeout(createProcessor(graph).processGraph(testProcessContext()), 'stopped watch producer');
+    assert.equal(latePayloadReads, 0);
+  });
+
+  void it('isolates per-invocation attached execution state', async () => {
+    const source = makeTestNode('source');
+    const watch = makeWatchNode();
+    const branch = makeTestNode('branch');
+    const graph = makeGraph(
+      'isolated-watch-state',
+      [source, watch, branch],
+      [connect(source.id, watch.id, 'stream'), connect(watch.id, branch.id, 'input', 'value')],
+    );
+    const seen: unknown[] = [];
+    AsyncTestNodeImpl.handlers.set(source.id, (_inputs, context) => {
+      context.onPartialOutputs?.({ output: { type: 'number', value: 1 } });
+      return { output: { type: 'number', value: 2 } };
+    });
+    AsyncTestNodeImpl.handlers.set(branch.id, (inputs, context) => {
+      seen.push(inputs['input' as PortId]?.value);
+      // Race/loop metadata belongs to this invocation, even though node IDs repeat.
+      context.attachedData.races = { raceIds: [], completed: true };
+      return {};
+    });
+    await createProcessor(graph).processGraph(testProcessContext());
+    assert.deepEqual(seen, [1, 2]);
+  });
+
+  void it('includes watch costs in the containing subgraph as well as the root exactly once', async () => {
+    const source = makeTestNode('source');
+    const watch = makeWatchNode();
+    const branch = makeTestNode('branch');
+    const child = makeGraph(
+      'child-with-watch',
+      [source, watch, branch],
+      [connect(source.id, watch.id, 'stream'), connect(watch.id, branch.id, 'input', 'value')],
+    );
+    const subgraph = makeSubgraphNode('child', child.metadata!.id);
+    const root = makeGraph('root-with-watch', [subgraph], []);
+    AsyncTestNodeImpl.handlers.set(source.id, () => ({ output: { type: 'string', value: 'final' } }));
+    AsyncTestNodeImpl.handlers.set(branch.id, () => ({ cost: { type: 'number', value: 3 } }));
+    const processor = createProcessor(root, [child]);
+    let childCost: unknown;
+    processor.on('nodeFinish', ({ node, outputs }) => {
+      if (node.id === subgraph.id) childCost = outputs['cost' as PortId]?.value;
+    });
+    const outputs = await processor.processGraph(testProcessContext());
+    assert.equal(childCost, 3);
+    assert.equal(outputs.cost?.value, 3);
+  });
+
+  void it('propagates excluded sources through Stop so ordinary fallback nodes can run', async () => {
+    for (const excludeBeforeProcessing of [false, true]) {
+      const gate = makeTestNode('gate');
+      const source = makeTestNode('source');
+      const watch = makeWatchNode();
+      const stop = makeStopWatchNode();
+      const fallback = makeTestNode('fallback');
+      const coalesce: ChartNode = {
+        ...makeTestNode('coalesce'),
+        type: 'coalesce',
+        data: {},
+      };
+      const output = makeGraphOutputNode();
+      const graph = makeGraph(
+        'excluded-watch-source',
+        [gate, source, watch, stop, fallback, coalesce, output],
+        [
+          ...(excludeBeforeProcessing ? [connect(gate.id, source.id)] : []),
+          connect(source.id, watch.id, 'stream'),
+          connect(watch.id, stop.id, 'value', 'value'),
+          connect(stop.id, coalesce.id, 'input1', 'value'),
+          connect(fallback.id, coalesce.id, 'input2'),
+          connect(coalesce.id, output.id, 'value'),
+        ],
+      );
+      AsyncTestNodeImpl.handlers.set(gate.id, () => ({ output: { type: 'control-flow-excluded', value: undefined } }));
+      AsyncTestNodeImpl.handlers.set(source.id, () => ({
+        output: { type: 'control-flow-excluded', value: undefined },
+      }));
+      const result = await createProcessor(graph).processGraph(testProcessContext());
+      assert.equal(result.result?.value, 'fallback');
+    }
+  });
+
+  void it('still fails if a winning invocation sibling errors after Stop has returned its value', async () => {
+    const source = makeTestNode('source');
+    const watch = makeWatchNode();
+    const stop = makeStopWatchNode();
+    const sibling = makeTestNode('failing-sibling');
+    const receiver = makeTestNode('receiver');
+    const accepted = deferred();
+    const graph = makeGraph(
+      'watch-winning-sibling-error',
+      [source, watch, stop, sibling, receiver],
+      [
+        connect(source.id, watch.id, 'stream'),
+        connect(watch.id, stop.id, 'value', 'value'),
+        connect(watch.id, sibling.id, 'input', 'value'),
+        connect(stop.id, receiver.id, 'input', 'value'),
+      ],
+    );
+    AsyncTestNodeImpl.handlers.set(sibling.id, async () => {
+      await accepted.promise;
+      throw new Error('winning sibling failure');
+    });
+    AsyncTestNodeImpl.handlers.set(receiver.id, () => {
+      accepted.resolve();
+      return {};
+    });
+    await assert.rejects(
+      withTimeout(createProcessor(graph).processGraph(testProcessContext()), 'winning sibling failure'),
+      /failing-sibling/,
+    );
+  });
+
+  void it('commits a split Stop boundary after its node finishes', async () => {
+    const source = makeTestNode('source');
+    const watch = makeWatchNode();
+    const stop = { ...makeStopWatchNode(), isSplitRun: true, isSplitSequential: true };
+    const output = makeGraphOutputNode();
+    const graph = makeGraph(
+      'split-stop',
+      [source, watch, stop, output],
+      [
+        connect(source.id, watch.id, 'stream'),
+        connect(watch.id, stop.id, 'value', 'value'),
+        connect(stop.id, output.id, 'value', 'value'),
+      ],
+    );
+    AsyncTestNodeImpl.handlers.set(source.id, () => ({ output: { type: 'string[]', value: ['first', 'second'] } }));
+    const result = await createProcessor(graph).processGraph(testProcessContext());
+    assert.equal(result.result?.value, 'first');
+  });
+
+  void it('clones the Stop value before normal downstream scheduling can observe it', async () => {
+    const source = makeTestNode('streaming-source');
+    const watch = makeWatchNode();
+    const branch = makeTestNode('watch-branch');
+    const stop = makeStopWatchNode();
+    const join = makeTestNode('join');
+    const graphOutput = makeGraphOutputNode();
+    const graph = makeGraph(
+      'streaming-watch-stop-snapshot',
+      [source, watch, branch, stop, join, graphOutput],
+      [
+        connect(source.id, watch.id, 'stream'),
+        connect(watch.id, branch.id, 'input', 'value'),
+        connect(branch.id, stop.id, 'value'),
+        connect(stop.id, join.id, 'input', 'value'),
+        connect(join.id, graphOutput.id, 'value'),
+      ],
+    );
+    const mutationDone = deferred();
+    AsyncTestNodeImpl.handlers.set(source.id, (_inputs, context) => {
+      context.onPartialOutputs?.({ output: { type: 'string', value: 'partial' } });
+      return { output: { type: 'string', value: 'final' } };
+    });
+    AsyncTestNodeImpl.handlers.set(branch.id, () => {
+      const accepted = { state: 'accepted' };
+      setTimeout(() => {
+        accepted.state = 'mutated after child completion';
+        mutationDone.resolve();
+      }, 0);
+      return { output: { type: 'object', value: accepted } };
+    });
+    AsyncTestNodeImpl.handlers.set(join.id, async (inputs) => {
+      await mutationDone.promise;
+      assert.deepEqual(inputs['input' as PortId]?.value, { state: 'accepted' });
+      return { output: inputs['input' as PortId]! };
+    });
+
+    const outputs = await withTimeout(
+      createProcessor(graph).processGraph(testProcessContext()),
+      'the stop-value snapshot',
+    );
+    assert.deepEqual(outputs.result?.value, { state: 'accepted' });
+  });
+
+  void it('drains an async branch started after Stop before the root finishes', async () => {
+    const source = makeTestNode('streaming-source');
+    const watch = makeWatchNode();
+    const branch = makeTestNode('watch-branch');
+    const stop = makeStopWatchNode();
+    const asyncTrigger = makeAsyncNode('post-stop-async');
+    const asyncLeaf = makeTestNode('post-stop-async-leaf');
+    const graph = makeGraph(
+      'streaming-watch-post-stop-async',
+      [source, watch, branch, stop, asyncTrigger, asyncLeaf],
+      [
+        connect(source.id, watch.id, 'stream'),
+        connect(watch.id, branch.id, 'input', 'value'),
+        connect(branch.id, stop.id, 'value'),
+        connect(stop.id, asyncTrigger.id, 'input1', 'value'),
+        connect(asyncTrigger.id, asyncLeaf.id, 'input', 'output1'),
+      ],
+    );
+    const asyncLeafStarted = deferred();
+    const releaseAsyncLeaf = deferred();
+    AsyncTestNodeImpl.handlers.set(source.id, (_inputs, context) => {
+      context.onPartialOutputs?.({ output: { type: 'string', value: 'partial' } });
+      return { output: { type: 'string', value: 'final' } };
+    });
+    AsyncTestNodeImpl.handlers.set(branch.id, () => ({ output: { type: 'string', value: 'accepted' } }));
+    AsyncTestNodeImpl.handlers.set(asyncLeaf.id, async (inputs) => {
+      asyncLeafStarted.resolve();
+      await releaseAsyncLeaf.promise;
+      return { output: inputs['input' as PortId]! };
+    });
+
+    let runSettled = false;
+    const run = createProcessor(graph)
+      .processGraph(testProcessContext())
+      .finally(() => {
+        runSettled = true;
+      });
+    await withTimeout(asyncLeafStarted.promise, 'the post-Stop async branch');
+    assert.equal(runSettled, false);
+    releaseAsyncLeaf.resolve();
+    await withTimeout(run, 'the post-Stop async root run');
+    assert.equal(AsyncTestNodeImpl.runCounts.get(asyncLeaf.id), 1);
+  });
+
+  void it('emits a single source error when the watched final port is missing', async () => {
+    const source = makeTestNode('streaming-source');
+    const watch = makeWatchNode();
+    const stop = makeStopWatchNode();
+    const graph = makeGraph(
+      'streaming-watch-missing-final-output',
+      [source, watch, stop],
+      [connect(source.id, watch.id, 'stream'), connect(watch.id, stop.id, 'value', 'value')],
+    );
+    AsyncTestNodeImpl.handlers.set(source.id, () => ({}));
+    const lifecycle: string[] = [];
+    let sourceError: Error | undefined;
+    const processor = createProcessor(graph);
+    processor.on('nodeFinish', ({ node }) => {
+      if (node.id === source.id) lifecycle.push('finish');
+    });
+    processor.on('nodeError', ({ node, error }) => {
+      if (node.id === source.id) {
+        lifecycle.push('error');
+        sourceError = error;
+      }
+    });
+
+    await assert.rejects(processor.processGraph(testProcessContext()), /failed to process due to errors in nodes/);
+    assert.deepEqual(lifecycle, ['error']);
+    assert.match(sourceError?.message ?? '', /did not receive final output from "streaming-source"/);
+  });
+
+  void it('runs every partial and final snapshot when a watch branch has no Stop', async () => {
+    const source = makeTestNode('streaming-source');
+    const watch = makeWatchNode();
+    const branch = makeTestNode('watch-branch');
+    const graph = makeGraph(
+      'streaming-watch-no-stop',
+      [source, watch, branch],
+      [
+        connect(source.id, watch.id, 'stream'),
+        connect(watch.id, branch.id, 'input', 'value'),
+        connect(watch.id, branch.id, 'other', 'allStreamedOutput'),
+      ],
+    );
+
+    const observedValues: unknown[] = [];
+    const observedStreamedOutput: unknown[] = [];
+    AsyncTestNodeImpl.handlers.set(source.id, (_inputs, context) => {
+      context.onPartialOutputs?.({ output: { type: 'string', value: 'first chunk' } });
+      context.onPartialOutputs?.({ output: { type: 'string', value: 'second chunk' } });
+      return { output: { type: 'string', value: 'final response' } };
+    });
+    AsyncTestNodeImpl.handlers.set(branch.id, (inputs) => {
+      observedValues.push(inputs['input' as PortId]?.value);
+      const history = inputs['other' as PortId]?.value;
+      // A branch is free to transform its own input. Its mutation must not
+      // leak into a later snapshot's cumulative history.
+      observedStreamedOutput.push(Array.isArray(history) ? [...history] : history);
+      if (Array.isArray(history)) {
+        history.push('branch mutation');
+      }
+      return { output: inputs['input' as PortId]! };
+    });
+
+    await createProcessor(graph).processGraph(testProcessContext());
+    assert.deepEqual(observedValues, ['first chunk', 'second chunk', 'final response']);
+    assert.deepEqual(observedStreamedOutput, [
+      ['first chunk'],
+      ['first chunk', 'second chunk'],
+      ['first chunk', 'second chunk', 'final response'],
+    ]);
+    assert.equal(AsyncTestNodeImpl.runCounts.get(branch.id), 3);
+  });
+
+  void it('keeps independent Watch lifecycles when two watches observe one producer', async () => {
+    const source = makeTestNode('streaming-source');
+    const stoppingWatch = makeWatchNode('stopping-watch');
+    const stoppingBranch = makeTestNode('stopping-branch');
+    const stop = makeStopWatchNode('stop-first-watch');
+    const repeatWatch = makeWatchNode('repeat-watch');
+    const repeatBranch = makeTestNode('repeat-branch');
+    const graphOutput = makeGraphOutputNode();
+    const graph = makeGraph(
+      'independent-streaming-watches',
+      [source, stoppingWatch, stoppingBranch, stop, repeatWatch, repeatBranch, graphOutput],
+      [
+        connect(source.id, stoppingWatch.id, 'stream'),
+        connect(stoppingWatch.id, stoppingBranch.id, 'input', 'value'),
+        connect(stoppingBranch.id, stop.id, 'value'),
+        connect(source.id, repeatWatch.id, 'stream'),
+        connect(repeatWatch.id, repeatBranch.id, 'input', 'value'),
+        connect(repeatWatch.id, repeatBranch.id, 'other', 'allStreamedOutput'),
+        connect(source.id, graphOutput.id, 'value'),
+      ],
+    );
+
+    const repeatedValues: unknown[] = [];
+    const repeatedHistories: unknown[] = [];
+    AsyncTestNodeImpl.handlers.set(source.id, (_inputs, context) => {
+      context.onPartialOutputs?.({ output: { type: 'string', value: 'first' } });
+      context.onPartialOutputs?.({ output: { type: 'string', value: 'second' } });
+      return { output: { type: 'string', value: 'final' } };
+    });
+    AsyncTestNodeImpl.handlers.set(stoppingBranch.id, (inputs) => ({ output: inputs['input' as PortId]! }));
+    AsyncTestNodeImpl.handlers.set(repeatBranch.id, (inputs) => {
+      repeatedValues.push(inputs['input' as PortId]?.value);
+      const history = inputs['other' as PortId]?.value;
+      repeatedHistories.push(Array.isArray(history) ? [...history] : history);
+      return { output: inputs['input' as PortId]! };
+    });
+
+    const outputs = await createProcessor(graph).processGraph(testProcessContext());
+    assert.equal(outputs.result?.value, 'final');
+    assert.equal(AsyncTestNodeImpl.runCounts.get(stoppingBranch.id), 1);
+    assert.deepEqual(repeatedValues, ['first', 'second', 'final']);
+    assert.deepEqual(repeatedHistories, [['first'], ['first', 'second'], ['first', 'second', 'final']]);
+  });
+
+  void it('drops overflowing partial snapshots while retaining the final watch snapshot', async () => {
+    const source = makeTestNode('streaming-source');
+    const watch = makeWatchNode();
+    watch.data = { ...watch.data, maxQueuedUpdates: 1, queueOverflowBehavior: 'drop' };
+    const branch = makeTestNode('watch-branch');
+    const graph = makeGraph(
+      'streaming-watch-drop-overflow',
+      [source, watch, branch],
+      [
+        connect(source.id, watch.id, 'stream'),
+        connect(watch.id, branch.id, 'input', 'value'),
+        connect(watch.id, branch.id, 'other', 'isFinal'),
+      ],
+    );
+    const firstBranchStarted = deferred();
+    const sourceFinished = deferred();
+    const releaseFirstBranch = deferred();
+    const observedValues: unknown[] = [];
+    const observedFinalFlags: unknown[] = [];
+
+    AsyncTestNodeImpl.handlers.set(source.id, async (_inputs, context) => {
+      context.onPartialOutputs?.({ output: { type: 'string', value: 'first' } });
+      await firstBranchStarted.promise;
+      context.onPartialOutputs?.({ output: { type: 'string', value: 'queued partial' } });
+      context.onPartialOutputs?.({ output: { type: 'string', value: 'dropped partial' } });
+      sourceFinished.resolve();
+      return { output: { type: 'string', value: 'final' } };
+    });
+    AsyncTestNodeImpl.handlers.set(branch.id, async (inputs) => {
+      const value = inputs['input' as PortId]?.value;
+      observedValues.push(value);
+      observedFinalFlags.push(inputs['other' as PortId]?.value);
+      if (value === 'first') {
+        firstBranchStarted.resolve();
+        await releaseFirstBranch.promise;
+      }
+      return { output: inputs['input' as PortId]! };
+    });
+
+    const run = createProcessor(graph).processGraph(testProcessContext());
+    await withTimeout(sourceFinished.promise, 'the overflowing streaming source');
+    releaseFirstBranch.resolve();
+    await withTimeout(run, 'the dropped-overflow streaming watch graph');
+
+    assert.deepEqual(observedValues, ['first', 'final']);
+    assert.deepEqual(observedFinalFlags, [false, true]);
+  });
+
+  void it('stores only new suffixes for cumulative streamed text', async () => {
+    const source = makeTestNode('streaming-source');
+    const watch = makeWatchNode();
+    const branch = makeTestNode('watch-branch');
+    const graph = makeGraph(
+      'streaming-watch-cumulative-history',
+      [source, watch, branch],
+      [
+        connect(source.id, watch.id, 'stream'),
+        connect(watch.id, branch.id, 'input', 'value'),
+        connect(watch.id, branch.id, 'other', 'allStreamedOutput'),
+      ],
+    );
+    const histories: unknown[] = [];
+    AsyncTestNodeImpl.handlers.set(source.id, (_inputs, context) => {
+      context.onPartialOutputs?.({ output: { type: 'string', value: 'H' } });
+      context.onPartialOutputs?.({ output: { type: 'string', value: 'He' } });
+      return { output: { type: 'string', value: 'Hello' } };
+    });
+    AsyncTestNodeImpl.handlers.set(branch.id, (inputs) => {
+      histories.push(inputs['other' as PortId]?.value);
+      return { output: inputs['input' as PortId]! };
+    });
+
+    await createProcessor(graph).processGraph(testProcessContext());
+    assert.deepEqual(histories, [['H'], ['H', 'e'], ['H', 'e', 'llo']]);
+  });
+
+  void it('allows a source-to-Watch draft with no downstream branch work', async () => {
+    const source = makeTestNode('streaming-source');
+    const watch = makeWatchNode();
+    const graph = makeGraph('streaming-watch-draft', [source, watch], [connect(source.id, watch.id, 'stream')]);
+
+    AsyncTestNodeImpl.handlers.set(source.id, () => ({ output: { type: 'string', value: 'final response' } }));
+
+    await createProcessor(graph).processGraph(testProcessContext());
+    assert.equal(AsyncTestNodeImpl.runCounts.get(source.id), 1);
+    assert.equal(AsyncTestNodeImpl.runCounts.get(watch.id), undefined);
+  });
+
+  void it('rejects a Stop boundary that reconnects to its own Watch branch', async () => {
+    const source = makeTestNode('streaming-source');
+    const watch = makeWatchNode();
+    const branch = makeTestNode('watch-branch');
+    const stop = makeStopWatchNode();
+    const graph = makeGraph(
+      'streaming-watch-stop-reentry',
+      [source, watch, branch, stop],
+      [
+        connect(source.id, watch.id, 'stream'),
+        connect(watch.id, branch.id, 'input', 'value'),
+        connect(branch.id, stop.id, 'value'),
+        connect(stop.id, branch.id, 'other', 'value'),
+      ],
+    );
+
+    await assert.rejects(
+      createProcessor(graph).processGraph(testProcessContext()),
+      /cannot reconnect to its own Watch Streaming Output branch/,
+    );
+  });
+
+  void it('runs the watch once with the final output when a producer has no partial updates', async () => {
+    const source = makeTestNode('streaming-source');
+    const watch = makeWatchNode();
+    const branch = makeTestNode('watch-branch');
+    const stop = makeStopWatchNode();
+    const graphOutput = makeGraphOutputNode();
+    const graph = makeGraph(
+      'streaming-watch-final-only',
+      [source, watch, branch, stop, graphOutput],
+      [
+        connect(source.id, watch.id, 'stream'),
+        connect(watch.id, branch.id, 'input', 'value'),
+        connect(watch.id, branch.id, 'other', 'isFinal'),
+        connect(branch.id, stop.id, 'value'),
+        connect(stop.id, graphOutput.id, 'value', 'value'),
+      ],
+    );
+    let observedFinalFlag: unknown;
+    const eventOrder: string[] = [];
+    AsyncTestNodeImpl.handlers.set(source.id, () => ({ output: { type: 'string', value: 'final only' } }));
+    AsyncTestNodeImpl.handlers.set(branch.id, (inputs) => {
+      eventOrder.push('watch-branch');
+      observedFinalFlag = inputs['other' as PortId]?.value;
+      return { output: inputs['input' as PortId]! };
+    });
+
+    const processor = createProcessor(graph);
+    processor.on('nodeFinish', ({ node }) => {
+      if (node.id === source.id) eventOrder.push('source-finished');
+    });
+    const outputs = await processor.processGraph(testProcessContext());
+    assert.equal(observedFinalFlag, true);
+    assert.equal(outputs.result?.value, 'final only');
+    assert.deepEqual(eventOrder.slice(0, 2), ['source-finished', 'watch-branch']);
+  });
+
+  void it('delivers a preloaded producer once as the final Watch snapshot', async () => {
+    const source = makeTestNode('streaming-source');
+    const watch = makeWatchNode();
+    const branch = makeTestNode('watch-branch');
+    const stop = makeStopWatchNode();
+    const graphOutput = makeGraphOutputNode();
+    const graph = makeGraph(
+      'preloaded-streaming-watch-source',
+      [source, watch, branch, stop, graphOutput],
+      [
+        connect(source.id, watch.id, 'stream'),
+        connect(watch.id, branch.id, 'input', 'value'),
+        connect(watch.id, branch.id, 'other', 'isFinal'),
+        connect(branch.id, stop.id, 'value'),
+        connect(stop.id, graphOutput.id, 'value', 'value'),
+      ],
+    );
+    const lifecycle: string[] = [];
+    let observedFinal: unknown;
+    AsyncTestNodeImpl.handlers.set(source.id, () => {
+      throw new Error('a preloaded producer must not run');
+    });
+    AsyncTestNodeImpl.handlers.set(branch.id, (inputs) => {
+      lifecycle.push('branch');
+      observedFinal = inputs['other' as PortId]?.value;
+      return { output: inputs['input' as PortId]! };
+    });
+
+    const processor = createProcessor(graph);
+    processor.preloadNodeData(source.id, { output: { type: 'string', value: 'cached final value' } });
+    processor.on('nodeFinish', ({ node }) => {
+      if (node.id === source.id) lifecycle.push('source');
+    });
+
+    const outputs = await processor.processGraph(testProcessContext());
+    assert.equal(outputs.result?.value, 'cached final value');
+    assert.equal(observedFinal, true);
+    assert.equal(AsyncTestNodeImpl.runCounts.get(source.id), undefined);
+    assert.equal(AsyncTestNodeImpl.runCounts.get(branch.id), 1);
+    assert.deepEqual(lifecycle.slice(0, 2), ['source', 'branch']);
+  });
+
+  void it('delivers a frozen producer once as the final Watch snapshot', async () => {
+    const source = makeTestNode('streaming-source');
+    const watch = makeWatchNode();
+    const branch = makeTestNode('watch-branch');
+    const stop = makeStopWatchNode();
+    const graphOutput = makeGraphOutputNode();
+    const graph = makeGraph(
+      'frozen-streaming-watch-source',
+      [source, watch, branch, stop, graphOutput],
+      [
+        connect(source.id, watch.id, 'stream'),
+        connect(watch.id, branch.id, 'input', 'value'),
+        connect(watch.id, branch.id, 'other', 'isFinal'),
+        connect(branch.id, stop.id, 'value'),
+        connect(stop.id, graphOutput.id, 'value', 'value'),
+      ],
+    );
+    let observedFinal: unknown;
+    AsyncTestNodeImpl.handlers.set(source.id, () => {
+      throw new Error('a frozen producer must not run');
+    });
+    AsyncTestNodeImpl.handlers.set(branch.id, (inputs) => {
+      observedFinal = inputs['other' as PortId]?.value;
+      return { output: inputs['input' as PortId]! };
+    });
+
+    const processor = createProcessor(graph);
+    processor.setFrozenNodeOutputResolver(({ node }) =>
+      node.id === source.id ? { output: { type: 'string', value: 'frozen final value' } } : undefined,
+    );
+
+    const outputs = await processor.processGraph(testProcessContext());
+    assert.equal(outputs.result?.value, 'frozen final value');
+    assert.equal(observedFinal, true);
+    assert.equal(AsyncTestNodeImpl.runCounts.get(source.id), undefined);
+    assert.equal(AsyncTestNodeImpl.runCounts.get(branch.id), 1);
+  });
+
+  void it('rejects unsafe preloads and a missing watched producer port before cached boundary events', async () => {
+    const source = makeTestNode('streaming-source');
+    const watch = makeWatchNode();
+    const branch = makeTestNode('watch-branch');
+    const stop = makeStopWatchNode();
+    const graph = makeGraph(
+      'unsafe-streaming-watch-preloads',
+      [source, watch, branch, stop],
+      [
+        connect(source.id, watch.id, 'stream'),
+        connect(watch.id, branch.id, 'input', 'value'),
+        connect(branch.id, stop.id, 'value'),
+      ],
+    );
+
+    for (const node of [watch, branch, stop]) {
+      const processor = createProcessor(graph);
+      processor.preloadNodeData(node.id, { output: { type: 'string', value: 'stale' } });
+      const finishedNodes: string[] = [];
+      processor.on('nodeFinish', ({ node: finishedNode }) => finishedNodes.push(finishedNode.id));
+      await assert.rejects(
+        processor.processGraph(testProcessContext()),
+        /Cannot preload .*streaming|Cannot preload .*repeated branch/,
+      );
+      assert.deepEqual(finishedNodes, []);
+    }
+
+    const missingPortProcessor = createProcessor(graph);
+    missingPortProcessor.preloadNodeData(source.id, { other: { type: 'string', value: 'not watched' } });
+    await assert.rejects(missingPortProcessor.processGraph(testProcessContext()), /has no final "output" output/);
+  });
+
+  void it('rejects frozen Stop output instead of reporting a later missing acceptance', async () => {
+    const source = makeTestNode('streaming-source');
+    const watch = makeWatchNode();
+    const stop = makeStopWatchNode();
+    const graphOutput = makeGraphOutputNode();
+    const graph = makeGraph(
+      'frozen-streaming-watch-stop',
+      [source, watch, stop, graphOutput],
+      [
+        connect(source.id, watch.id, 'stream'),
+        connect(watch.id, stop.id, 'value', 'value'),
+        connect(stop.id, graphOutput.id, 'value', 'value'),
+      ],
+    );
+    AsyncTestNodeImpl.handlers.set(source.id, () => ({ output: { type: 'string', value: 'live' } }));
+
+    const processor = createProcessor(graph);
+    processor.setFrozenNodeOutputResolver(({ node }) =>
+      node.id === stop.id ? { value: { type: 'string', value: 'stale stop value' } } : undefined,
+    );
+    const finishedNodes: string[] = [];
+    processor.on('nodeFinish', ({ node }) => finishedNodes.push(node.id));
+
+    await assert.rejects(processor.processGraph(testProcessContext()), (error: Error) => {
+      assert.match(String(error.cause), /Stop Watching Streaming Output cannot use frozen outputs/);
+      return true;
+    });
+    assert.equal(finishedNodes.includes(stop.id), false);
+  });
+
+  void it('rejects live cache injection into an active Watch boundary', async () => {
+    const source = makeTestNode('streaming-source');
+    const watch = makeWatchNode();
+    const branch = makeTestNode('watch-branch');
+    const stop = makeStopWatchNode();
+    const graph = makeGraph(
+      'active-streaming-watch-preload',
+      [source, watch, branch, stop],
+      [
+        connect(source.id, watch.id, 'stream'),
+        connect(watch.id, branch.id, 'input', 'value'),
+        connect(branch.id, stop.id, 'value'),
+      ],
+    );
+    let releaseSource: (() => void) | undefined;
+    const sourceIsRunning = new Promise<void>((resolve) => {
+      AsyncTestNodeImpl.handlers.set(source.id, async (_inputs, context) => {
+        context.onPartialOutputs?.({ output: { type: 'string', value: 'partial' } });
+        resolve();
+        await new Promise<void>((release) => {
+          releaseSource = release;
+        });
+        return { output: { type: 'string', value: 'final' } };
+      });
+    });
+    AsyncTestNodeImpl.handlers.set(branch.id, (inputs) => ({ output: inputs['input' as PortId]! }));
+
+    const processor = createProcessor(graph);
+    const processing = processor.processGraph(testProcessContext());
+    await sourceIsRunning;
+
+    for (const node of [source, watch, branch, stop]) {
+      assert.throws(
+        () => processor.preloadNodeData(node.id, { output: { type: 'string', value: 'stale' } }),
+        /Cannot preload .*Watch Streaming Output.*running|Cannot preload .*streaming boundary/,
+      );
+    }
+
+    releaseSource?.();
+    await processing;
+  });
+
+  void it('uses the newest snapshot for interval-triggered watches', async () => {
+    const source = makeTestNode('streaming-source');
+    const watch = makeWatchNode();
+    watch.data = { ...watch.data, intervalMs: 20, triggerMode: 'interval' };
+    const branch = makeTestNode('watch-branch');
+    const stop = makeStopWatchNode();
+    const graphOutput = makeGraphOutputNode();
+    const graph = makeGraph(
+      'streaming-watch-interval',
+      [source, watch, branch, stop, graphOutput],
+      [
+        connect(source.id, watch.id, 'stream'),
+        connect(watch.id, branch.id, 'input', 'value'),
+        connect(branch.id, stop.id, 'value'),
+        connect(stop.id, graphOutput.id, 'value', 'value'),
+      ],
+    );
+    const branchStarted = deferred();
+    const sourceMayFinish = deferred();
+    AsyncTestNodeImpl.handlers.set(source.id, async (_inputs, context) => {
+      context.onPartialOutputs?.({ output: { type: 'string', value: 'older' } });
+      await wait(1);
+      context.onPartialOutputs?.({ output: { type: 'string', value: 'newest' } });
+      await sourceMayFinish.promise;
+      return { output: { type: 'string', value: 'final' } };
+    });
+    AsyncTestNodeImpl.handlers.set(branch.id, (inputs) => {
+      assert.equal(inputs['input' as PortId]?.value, 'newest');
+      branchStarted.resolve();
+      sourceMayFinish.resolve();
+      return { output: inputs['input' as PortId]! };
+    });
+
+    const outputs = await withTimeout(
+      createProcessor(graph).processGraph(testProcessContext()),
+      'interval streaming watch graph',
+    );
+    await branchStarted.promise;
+    assert.equal(outputs.result?.value, 'newest');
+    assert.equal(AsyncTestNodeImpl.runCounts.get(branch.id), 1);
+  });
+
+  void it('continues watching when an earlier snapshot does not reach Stop', async () => {
+    const source = makeTestNode('streaming-source');
+    const watch = makeWatchNode();
+    const branch = makeTestNode('watch-branch');
+    const stop = makeStopWatchNode();
+    const graphOutput = makeGraphOutputNode();
+    const graph = makeGraph(
+      'streaming-watch-conditional-stop',
+      [source, watch, branch, stop, graphOutput],
+      [
+        connect(source.id, watch.id, 'stream'),
+        connect(watch.id, branch.id, 'input', 'value'),
+        connect(branch.id, stop.id, 'value'),
+        connect(stop.id, graphOutput.id, 'value', 'value'),
+      ],
+    );
+    AsyncTestNodeImpl.handlers.set(source.id, (_inputs, context) => {
+      context.onPartialOutputs?.({ output: { type: 'string', value: 'not-ready' } });
+      context.onPartialOutputs?.({ output: { type: 'string', value: 'ready' } });
+      return { output: { type: 'string', value: 'final' } };
+    });
+    AsyncTestNodeImpl.handlers.set(branch.id, (inputs) => {
+      return {
+        output:
+          inputs['input' as PortId]?.value === 'ready'
+            ? { type: 'string', value: 'accepted' }
+            : { type: 'control-flow-excluded', value: undefined },
+      };
+    });
+
+    const outputs = await createProcessor(graph).processGraph(testProcessContext());
+    assert.equal(outputs.result?.value, 'accepted');
+    assert.equal(AsyncTestNodeImpl.runCounts.get(branch.id), 2);
+  });
+
+  void it('reports a watch-branch failure through the root error lifecycle', async () => {
+    const source = makeTestNode('streaming-source');
+    const watch = makeWatchNode();
+    const branch = makeTestNode('watch-branch');
+    const stop = makeStopWatchNode();
+    const graph = makeGraph(
+      'streaming-watch-branch-failure',
+      [source, watch, branch, stop],
+      [
+        connect(source.id, watch.id, 'stream'),
+        connect(watch.id, branch.id, 'input', 'value'),
+        connect(branch.id, stop.id, 'value'),
+      ],
+    );
+    AsyncTestNodeImpl.handlers.set(source.id, (_inputs, context) => {
+      context.onPartialOutputs?.({ output: { type: 'string', value: 'partial' } });
+      return { output: { type: 'string', value: 'final' } };
+    });
+    AsyncTestNodeImpl.handlers.set(branch.id, () => {
+      throw new Error('watch branch exploded');
+    });
+
+    const processor = createProcessor(graph);
+    const lifecycleEvents: string[] = [];
+    const erroredNodeIds: NodeId[] = [];
+    processor.on('graphError', () => lifecycleEvents.push('graph-error'));
+    processor.on('error', () => lifecycleEvents.push('error'));
+    processor.on('nodeError', ({ node }) => erroredNodeIds.push(node.id));
+
+    await assert.rejects(processor.processGraph(testProcessContext()), /watch-branch/);
+    assert.deepEqual(erroredNodeIds, [branch.id]);
+    assert.deepEqual(lifecycleEvents, ['graph-error', 'error']);
+  });
+
+  void it('caps parallel watch invocations and cancels losing work after the first Stop', async () => {
+    const source = makeTestNode('streaming-source');
+    const watch = makeWatchNode();
+    watch.data = { ...watch.data, executionMode: 'parallel', maxParallelRuns: 2 };
+    const branch = makeTestNode('watch-branch');
+    const stop = makeStopWatchNode();
+    const graphOutput = makeGraphOutputNode();
+    const graph = makeGraph(
+      'streaming-watch-parallel',
+      [source, watch, branch, stop, graphOutput],
+      [
+        connect(source.id, watch.id, 'stream'),
+        connect(watch.id, branch.id, 'input', 'value'),
+        connect(branch.id, stop.id, 'value'),
+        connect(stop.id, graphOutput.id, 'value', 'value'),
+      ],
+    );
+    const sourceMayFinish = deferred();
+    const firstStarted = deferred();
+    const firstCancelled = deferred();
+    const secondStarted = deferred();
+
+    AsyncTestNodeImpl.handlers.set(source.id, async (_inputs, context) => {
+      context.onPartialOutputs?.({ output: { type: 'string', value: 'first' } });
+      context.onPartialOutputs?.({ output: { type: 'string', value: 'second' } });
+      await sourceMayFinish.promise;
+      return { output: { type: 'string', value: 'final' } };
+    });
+    AsyncTestNodeImpl.handlers.set(branch.id, async (inputs, context) => {
+      if (inputs['input' as PortId]?.value === 'first') {
+        firstStarted.resolve();
+        await new Promise<void>((resolve) => context.signal.addEventListener('abort', resolve, { once: true }));
+        firstCancelled.resolve();
+        return { output: { type: 'string', value: 'loser' } };
+      }
+      secondStarted.resolve();
+      sourceMayFinish.resolve();
+      return { output: { type: 'string', value: 'winner' } };
+    });
+
+    const processor = createProcessor(graph);
+    const outputs = await withTimeout(processor.processGraph(testProcessContext()), 'parallel streaming watch graph');
+
+    await Promise.all([firstStarted.promise, secondStarted.promise, firstCancelled.promise]);
+    assert.equal(outputs.result?.value, 'winner');
+    assert.equal(AsyncTestNodeImpl.runCounts.get(branch.id), 2);
+  });
+
+  void it('cancels active watch work when the root run is aborted', async () => {
+    const source = makeTestNode('streaming-source');
+    const watch = makeWatchNode();
+    const branch = makeTestNode('watch-branch');
+    const stop = makeStopWatchNode();
+    const graph = makeGraph(
+      'streaming-watch-cancel',
+      [source, watch, branch, stop],
+      [
+        connect(source.id, watch.id, 'stream'),
+        connect(watch.id, branch.id, 'input', 'value'),
+        connect(branch.id, stop.id, 'value'),
+      ],
+    );
+    const branchStarted = deferred();
+    let observedAbort = false;
+    AsyncTestNodeImpl.handlers.set(source.id, (_inputs, context) => {
+      context.onPartialOutputs?.({ output: { type: 'string', value: 'partial' } });
+      return { output: { type: 'string', value: 'final' } };
+    });
+    AsyncTestNodeImpl.handlers.set(branch.id, async (_inputs, context) => {
+      branchStarted.resolve();
+      if (!context.signal.aborted) {
+        await new Promise<void>((resolve) => context.signal.addEventListener('abort', resolve, { once: true }));
+      }
+      observedAbort = context.signal.aborted;
+      return { output: { type: 'string', value: 'cancelled' } };
+    });
+
+    const processor = createProcessor(graph);
+    const run = processor.processGraph(testProcessContext());
+    await withTimeout(branchStarted.promise, 'the cancellable streaming watch branch');
+    await withTimeout(processor.abort(false, 'streaming watch run cancelled'), 'root cancellation');
+    await assert.rejects(withTimeout(run, 'the cancelled streaming watch run'), /streaming watch run cancelled/);
+    assert.equal(observedAbort, true);
+  });
+
   void it('lets foreground nodes finish while the root run still waits for the async branch', async () => {
     const source = makeTestNode('source');
     const trigger = makeAsyncNode();
@@ -276,6 +1322,290 @@ void describe('GraphProcessor managed async branches', () => {
     assert.equal(completedOutputs?.cost?.value, 5);
     assert.notEqual(completedOutputs, outputs);
     assert.deepEqual(lifecycleEvents, ['outputs-ready', 'graph-finish', 'done']);
+  });
+
+  void it('does not publish foreground outputs before a pending Watch Stop branch can rejoin them', async () => {
+    const source = makeTestNode('streaming-source');
+    const watch = makeWatchNode();
+    const branch = makeTestNode('watch-branch');
+    const stop = makeStopWatchNode();
+    const graphOutput = makeGraphOutputNode();
+    const graph = makeGraph(
+      'streaming-watch-outputs-ready',
+      [source, watch, branch, stop, graphOutput],
+      [
+        connect(source.id, watch.id, 'stream'),
+        connect(watch.id, branch.id, 'input', 'value'),
+        connect(branch.id, stop.id, 'value'),
+        connect(stop.id, graphOutput.id, 'value', 'value'),
+      ],
+    );
+    const branchStarted = deferred();
+    const releaseBranch = deferred();
+    AsyncTestNodeImpl.handlers.set(source.id, (_inputs, context) => {
+      context.onPartialOutputs?.({ output: { type: 'string', value: 'partial' } });
+      return { output: { type: 'string', value: 'final' } };
+    });
+    AsyncTestNodeImpl.handlers.set(branch.id, async (inputs) => {
+      branchStarted.resolve();
+      await releaseBranch.promise;
+      return { output: inputs['input' as PortId]! };
+    });
+
+    const processor = createProcessor(graph);
+    let outputsReadyCount = 0;
+    let runSettled = false;
+    processor.on('graphOutputsReady', () => {
+      outputsReadyCount += 1;
+    });
+    const run = processor
+      .processGraph(testProcessContext(), {}, {}, { returnWhenGraphOutputsReady: true })
+      .finally(() => {
+        runSettled = true;
+      });
+
+    await withTimeout(branchStarted.promise, 'the pending Watch Stop branch');
+    await Promise.resolve();
+    assert.equal(runSettled, false);
+    assert.equal(outputsReadyCount, 0);
+
+    releaseBranch.resolve();
+    const outputs = await withTimeout(run, 'the Watch Stop graph output');
+    assert.equal(outputs.result?.value, 'partial');
+    assert.equal(outputsReadyCount, 0);
+  });
+
+  void it('still publishes ordinary graph outputs early while a no-Stop Watch branch drains', async () => {
+    const source = makeTestNode('streaming-source');
+    const watch = makeWatchNode();
+    const branch = makeTestNode('watch-branch');
+    const graphOutput = makeGraphOutputNode();
+    const graph = makeGraph(
+      'streaming-watch-no-stop-outputs-ready',
+      [source, watch, branch, graphOutput],
+      [
+        connect(source.id, watch.id, 'stream'),
+        connect(watch.id, branch.id, 'input', 'value'),
+        connect(source.id, graphOutput.id, 'value'),
+      ],
+    );
+    const branchStarted = deferred();
+    const releaseBranch = deferred();
+    AsyncTestNodeImpl.handlers.set(source.id, (_inputs, context) => {
+      context.onPartialOutputs?.({ output: { type: 'string', value: 'partial' } });
+      return { output: { type: 'string', value: 'final' } };
+    });
+    AsyncTestNodeImpl.handlers.set(branch.id, async (inputs) => {
+      branchStarted.resolve();
+      await releaseBranch.promise;
+      return { output: inputs['input' as PortId]! };
+    });
+
+    const processor = createProcessor(graph);
+    let outputsReadyCount = 0;
+    processor.on('graphOutputsReady', () => {
+      outputsReadyCount += 1;
+    });
+    const outputsPromise = processor.processGraph(testProcessContext(), {}, {}, { returnWhenGraphOutputsReady: true });
+
+    await withTimeout(branchStarted.promise, 'the no-Stop Watch branch');
+    const outputs = await withTimeout(outputsPromise, 'the early no-Stop Watch outputs');
+    assert.equal(outputs.result?.value, 'final');
+    assert.equal(outputsReadyCount, 1);
+    assert.equal(processor.isRunning, true);
+
+    releaseBranch.resolve();
+    await withTimeout(processor.waitForRunCompletion(), 'the no-Stop Watch branch completion');
+  });
+
+  void it('rejects an async branch nested in a Watch subgraph before it can reach the root scheduler', async () => {
+    const source = makeTestNode('streaming-source');
+    const watch = makeWatchNode();
+    const childInput = makeGraphInputNode('child-input');
+    const childTrigger = { ...makeAsyncNode('child-async-trigger'), title: 'Child Start Async Branch' };
+    const childAsyncLeaf = makeTestNode('child-async-leaf');
+    const childGraph = makeGraph(
+      'watch-async-child',
+      [childInput, childTrigger, childAsyncLeaf],
+      [
+        connect(childInput.id, childTrigger.id, 'input1', 'data'),
+        connect(childTrigger.id, childAsyncLeaf.id, 'input', 'output1'),
+      ],
+    );
+    const subgraph = makeSubgraphNode('watched-subgraph', childGraph.metadata!.id!);
+    const graph = makeGraph(
+      'watch-async-child-root',
+      [source, watch, subgraph],
+      [connect(source.id, watch.id, 'stream'), connect(watch.id, subgraph.id, 'input', 'value')],
+    );
+    AsyncTestNodeImpl.handlers.set(source.id, () => ({ output: { type: 'string', value: 'final' } }));
+    const processor = createProcessor(graph, [childGraph]);
+    const nodeErrors: string[] = [];
+    processor.on('nodeError', ({ error }) => nodeErrors.push(String(error)));
+
+    await assert.rejects(processor.processGraph(testProcessContext()), /watched-subgraph/);
+    assert.match(nodeErrors.join('\n'), /Child Start Async Branch.*Watch Streaming Output/s);
+    assert.equal(AsyncTestNodeImpl.runCounts.get(childAsyncLeaf.id), undefined);
+  });
+
+  void it('rejects an async branch through every nested Watch subgraph depth', async () => {
+    const source = makeTestNode('streaming-source');
+    const watch = makeWatchNode();
+    const outerInput = makeGraphInputNode('outer-input');
+    const innerInput = makeGraphInputNode('inner-input');
+    const innerTrigger = { ...makeAsyncNode('inner-async-trigger'), title: 'Inner Start Async Branch' };
+    const innerAsyncLeaf = makeTestNode('inner-async-leaf');
+    const innerGraph = makeGraph(
+      'watch-async-inner',
+      [innerInput, innerTrigger, innerAsyncLeaf],
+      [
+        connect(innerInput.id, innerTrigger.id, 'input1', 'data'),
+        connect(innerTrigger.id, innerAsyncLeaf.id, 'input', 'output1'),
+      ],
+    );
+    const innerSubgraph = makeSubgraphNode('inner-subgraph', innerGraph.metadata!.id!);
+    const outerGraph = makeGraph(
+      'watch-async-outer',
+      [outerInput, innerSubgraph],
+      [connect(outerInput.id, innerSubgraph.id, 'input', 'data')],
+    );
+    const outerSubgraph = makeSubgraphNode('outer-subgraph', outerGraph.metadata!.id!);
+    const graph = makeGraph(
+      'watch-async-nested-root',
+      [source, watch, outerSubgraph],
+      [connect(source.id, watch.id, 'stream'), connect(watch.id, outerSubgraph.id, 'input', 'value')],
+    );
+    AsyncTestNodeImpl.handlers.set(source.id, () => ({ output: { type: 'string', value: 'final' } }));
+    const processor = createProcessor(graph, [outerGraph, innerGraph]);
+    const nodeErrors: string[] = [];
+    processor.on('nodeError', ({ error }) => nodeErrors.push(String(error)));
+
+    await assert.rejects(processor.processGraph(testProcessContext()), /outer-subgraph/);
+    assert.match(nodeErrors.join('\n'), /Inner Start Async Branch.*Watch Streaming Output/s);
+    assert.equal(AsyncTestNodeImpl.runCounts.get(innerAsyncLeaf.id), undefined);
+  });
+
+  void it('allows ordinary and disabled work inside Watch subgraphs', async () => {
+    const source = makeTestNode('streaming-source');
+    const watch = makeWatchNode();
+    const ordinaryInput = makeGraphInputNode('ordinary-input');
+    const ordinaryLeaf = makeTestNode('ordinary-leaf');
+    const disabledInput = makeGraphInputNode('disabled-input');
+    const disabledTrigger = { ...makeAsyncNode('disabled-async-trigger'), disabled: true };
+    const disabledLeaf = makeTestNode('disabled-async-leaf');
+    const ordinaryGraph = makeGraph(
+      'watch-ordinary-child',
+      [ordinaryInput, ordinaryLeaf],
+      [connect(ordinaryInput.id, ordinaryLeaf.id, 'input', 'data')],
+    );
+    const disabledGraph = makeGraph(
+      'watch-disabled-async-child',
+      [disabledInput, disabledTrigger, disabledLeaf],
+      [
+        connect(disabledInput.id, disabledTrigger.id, 'input1', 'data'),
+        connect(disabledTrigger.id, disabledLeaf.id, 'input', 'output1'),
+      ],
+    );
+    const ordinarySubgraph = makeSubgraphNode('ordinary-subgraph', ordinaryGraph.metadata!.id!);
+    const disabledSubgraph = makeSubgraphNode('disabled-subgraph', disabledGraph.metadata!.id!);
+    const graph = makeGraph(
+      'watch-ordinary-and-disabled-subgraphs',
+      [source, watch, ordinarySubgraph, disabledSubgraph],
+      [
+        connect(source.id, watch.id, 'stream'),
+        connect(watch.id, ordinarySubgraph.id, 'input', 'value'),
+        connect(watch.id, disabledSubgraph.id, 'input', 'value'),
+      ],
+    );
+    AsyncTestNodeImpl.handlers.set(source.id, () => ({ output: { type: 'string', value: 'final' } }));
+
+    await createProcessor(graph, [ordinaryGraph, disabledGraph]).processGraph(testProcessContext());
+
+    assert.equal(AsyncTestNodeImpl.runCounts.get(ordinaryLeaf.id), 1);
+    assert.equal(AsyncTestNodeImpl.runCounts.get(disabledLeaf.id), undefined);
+  });
+
+  void it('permits an unfinished nested async trigger that has no branch to schedule', async () => {
+    const source = makeTestNode('streaming-source');
+    const watch = makeWatchNode();
+    const childInput = makeGraphInputNode('child-input');
+    const unfinishedTrigger = makeAsyncNode('unfinished-async-trigger');
+    const childGraph = makeGraph(
+      'watch-unfinished-async-child',
+      [childInput, unfinishedTrigger],
+      [connect(childInput.id, unfinishedTrigger.id, 'input1', 'data')],
+    );
+    const subgraph = makeSubgraphNode('watched-subgraph', childGraph.metadata!.id!);
+    const graph = makeGraph(
+      'watch-unfinished-async-root',
+      [source, watch, subgraph],
+      [connect(source.id, watch.id, 'stream'), connect(watch.id, subgraph.id, 'input', 'value')],
+    );
+    AsyncTestNodeImpl.handlers.set(source.id, () => ({ output: { type: 'string', value: 'final' } }));
+
+    await createProcessor(graph, [childGraph]).processGraph(testProcessContext());
+  });
+
+  void it('does not publish an early result before a required Watch Stop can report failure', async () => {
+    const source = makeTestNode('streaming-source');
+    const watch = makeWatchNode();
+    const branch = makeTestNode('watch-branch');
+    const stop = makeStopWatchNode();
+    const asyncTrigger = makeAsyncNode('background-trigger');
+    const asyncLeaf = makeTestNode('background-leaf');
+    const graphOutput = makeGraphOutputNode();
+    const graph = makeGraph(
+      'streaming-watch-stop-failure-before-outputs-ready',
+      [source, watch, branch, stop, asyncTrigger, asyncLeaf, graphOutput],
+      [
+        connect(source.id, watch.id, 'stream'),
+        connect(watch.id, branch.id, 'input', 'value'),
+        connect(branch.id, stop.id, 'value'),
+        connect(source.id, asyncTrigger.id, 'input1'),
+        connect(asyncTrigger.id, asyncLeaf.id, 'input', 'output1'),
+        connect(source.id, graphOutput.id, 'value'),
+      ],
+    );
+    const watchBranchRan = deferred();
+    const asyncLeafStarted = deferred();
+    const releaseAsyncLeaf = deferred();
+    AsyncTestNodeImpl.handlers.set(source.id, (_inputs, context) => {
+      context.onPartialOutputs?.({ output: { type: 'string', value: 'partial' } });
+      return { output: { type: 'string', value: 'final' } };
+    });
+    AsyncTestNodeImpl.handlers.set(branch.id, () => {
+      watchBranchRan.resolve();
+      return { output: { type: 'control-flow-excluded', value: undefined } };
+    });
+    AsyncTestNodeImpl.handlers.set(asyncLeaf.id, async (inputs) => {
+      asyncLeafStarted.resolve();
+      await releaseAsyncLeaf.promise;
+      return { output: inputs['input' as PortId]! };
+    });
+
+    const processor = createProcessor(graph);
+    let outputsReadyCount = 0;
+    let runSettled = false;
+    processor.on('graphOutputsReady', () => {
+      outputsReadyCount += 1;
+    });
+    const run = processor
+      .processGraph(testProcessContext(), {}, {}, { returnWhenGraphOutputsReady: true })
+      .finally(() => {
+        runSettled = true;
+      });
+
+    await Promise.all([
+      withTimeout(watchBranchRan.promise, 'the unaccepted Watch Stop branch'),
+      withTimeout(asyncLeafStarted.promise, 'the pending background branch'),
+    ]);
+    await Promise.resolve();
+    assert.equal(runSettled, false);
+    assert.equal(outputsReadyCount, 0);
+
+    releaseAsyncLeaf.resolve();
+    await assert.rejects(withTimeout(run, 'the failed Watch Stop graph'), /Watch Streaming Output/);
+    assert.equal(outputsReadyCount, 0);
   });
 
   void it('keeps the full lifecycle boundary when early-output mode has no pending async work', async () => {

@@ -8,6 +8,7 @@ import {
   type NodeConnection,
   type NodeGraph,
   type NodeId,
+  type PortId,
   type NodeRegistration,
   type Outputs,
   type ProcessEvents,
@@ -160,6 +161,81 @@ function getEditorExecutionTopology(project: Project, graph: NodeGraph): EditorE
   };
 }
 
+/**
+ * Run-from preloads are ordinary one-time values. A Watch branch is not: its
+ * nodes are invoked once per snapshot and must only receive the scheduler's
+ * private Watch preload. Keep the editor's partial-run affordance aligned with
+ * GraphProcessor's runtime boundary validation.
+ */
+function getStreamingWatchBranchOwners(topology: EditorExecutionTopology): Map<NodeId, ChartNode> {
+  const nodesById = new Map(topology.nodes.map((node) => [node.id, node]));
+  const incomingByNodeId = new Map<NodeId, NodeConnection[]>();
+  const outgoingByNodeId = new Map<NodeId, NodeConnection[]>();
+  const owners = new Map<NodeId, ChartNode>();
+
+  for (const connection of topology.connections) {
+    const incoming = incomingByNodeId.get(connection.inputNodeId) ?? [];
+    incoming.push(connection);
+    incomingByNodeId.set(connection.inputNodeId, incoming);
+    const outgoing = outgoingByNodeId.get(connection.outputNodeId) ?? [];
+    outgoing.push(connection);
+    outgoingByNodeId.set(connection.outputNodeId, outgoing);
+  }
+
+  for (const watchNode of topology.nodes) {
+    if (watchNode.type !== 'watchStreamingOutput' || watchNode.disabled) {
+      continue;
+    }
+
+    const inputs = incomingByNodeId.get(watchNode.id) ?? [];
+    const source = inputs.length === 1 ? nodesById.get(inputs[0]!.outputNodeId) : undefined;
+    if (inputs[0]?.inputId !== ('stream' as PortId) || !source || source.disabled) {
+      // Core will surface malformed Watch topology. Do not infer partial-run
+      // ownership from a connection that cannot create a runtime Watch.
+      continue;
+    }
+
+    owners.set(watchNode.id, watchNode);
+    const pending = (outgoingByNodeId.get(watchNode.id) ?? []).map((connection) => connection.inputNodeId);
+    while (pending.length > 0) {
+      const nodeId = pending.pop()!;
+      if (owners.has(nodeId)) {
+        continue;
+      }
+      const node = nodesById.get(nodeId);
+      if (!node) {
+        continue;
+      }
+      owners.set(nodeId, watchNode);
+      if (node.type === 'stopWatchingStreamingOutput') {
+        continue;
+      }
+      pending.push(...(outgoingByNodeId.get(nodeId) ?? []).map((connection) => connection.inputNodeId));
+    }
+  }
+
+  return owners;
+}
+
+function assertRunFromPreloadsRespectStreamingWatchBoundaries(
+  topology: EditorExecutionTopology,
+  preloadNodeIds: NodeId[],
+): void {
+  const owners = getStreamingWatchBranchOwners(topology);
+  const unsafeNodeId = preloadNodeIds.find((nodeId) => owners.has(nodeId));
+  if (!unsafeNodeId) {
+    return;
+  }
+
+  const unsafeNode = topology.nodes.find((node) => node.id === unsafeNodeId)!;
+  const watchNode = owners.get(unsafeNodeId)!;
+  throw new Error(
+    `Cannot run from here because it would preload "${unsafeNode.title}" from the repeated branch of ` +
+      `Watch Streaming Output "${watchNode.title}". ` +
+      'Run from Watch Streaming Output to reuse the producer\'s saved final value, or run from the producer to stream again.',
+  );
+}
+
 function assertEditorRunTargetIsExecutable(options: {
   graph: NodeGraph;
   nodeId: NodeId;
@@ -256,10 +332,13 @@ export function getEditorRunFromPlan(
     runToNodeSet.add(from);
   }
 
+  const preloadNodeIds = graphNodeIds.filter((nodeId) => preloadNodeSet.has(nodeId));
+  assertRunFromPreloadsRespectStreamingWatchBoundaries(executionTopology, preloadNodeIds);
+
   return {
     nodesToRun,
     preserveNodeIds: graphNodeIds.filter((nodeId) => !nodesToRunSet.has(nodeId)),
-    preloadNodeIds: graphNodeIds.filter((nodeId) => preloadNodeSet.has(nodeId)),
+    preloadNodeIds,
     runToNodeIds: graphNodeIds.filter((nodeId) => runToNodeSet.has(nodeId)),
   };
 }

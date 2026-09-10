@@ -55,6 +55,20 @@ function makeStartAsyncBranchNode(nodeId: string): ChartNode {
   return node;
 }
 
+function makeWatchStreamingOutputNode(nodeId: string): ChartNode {
+  const node = registry.createDynamic('watchStreamingOutput');
+  node.id = nodeId as NodeId;
+  node.title = nodeId;
+  return node;
+}
+
+function makeStopWatchingStreamingOutputNode(nodeId: string): ChartNode {
+  const node = registry.createDynamic('stopWatchingStreamingOutput');
+  node.id = nodeId as NodeId;
+  node.title = nodeId;
+  return node;
+}
+
 function makeDataBusNode(nodeId: string): ChartNode {
   const node = registry.createDynamic('dataBus');
   node.id = nodeId as NodeId;
@@ -524,6 +538,34 @@ test('getEditorRunFromPlan rejects descendants whose async trigger would otherwi
   assert.deepEqual(triggerPlan.nodesToRun, [trigger.id, descendant.id]);
   assert.deepEqual(triggerPlan.preloadNodeIds, [source.id]);
   assert.deepEqual(triggerPlan.runToNodeIds, [descendant.id]);
+});
+
+test('getEditorRunFromPlan permits Watch but rejects cached repeated-branch boundaries', () => {
+  const source = makeTextNode('stream-source');
+  const watch = makeWatchStreamingOutputNode('watch');
+  const branch = makeTextNode('watch-branch', '{{input}}');
+  const stop = makeStopWatchingStreamingOutputNode('stop');
+  const downstream = makeTextNode('after-stop', '{{input}}');
+  const graph: NodeGraph = {
+    metadata: { id: graphId, name: 'Graph' },
+    nodes: [source, watch, branch, stop, downstream],
+    connections: [
+      makeConnection(source.id, watch.id, 'stream'),
+      makeConnection(watch.id, branch.id, 'input', 'value'),
+      makeConnection(branch.id, stop.id, 'value'),
+      makeConnection(stop.id, downstream.id, 'input', 'value'),
+    ],
+  };
+
+  const watchPlan = getEditorRunFromPlan(makeProject(graph), graphId, watch.id, registry);
+  assert.deepEqual(watchPlan.preloadNodeIds, [source.id]);
+
+  for (const node of [branch, stop, downstream]) {
+    assert.throws(
+      () => getEditorRunFromPlan(makeProject(graph), graphId, node.id, registry),
+      /would preload .*repeated branch of Watch Streaming Output/,
+    );
+  }
 });
 
 test('getEditorRunFromPlan permits descendants of a disabled async trigger', () => {

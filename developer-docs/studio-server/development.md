@@ -333,6 +333,26 @@ Current behavior:
 - unless `PLAYWRIGHT_BASE_URL` is already set, the runner targets `http://127.0.0.1:${RIVET_PORT}` from your env file, defaulting to `8080`
 - the main hosted-editor observable spec uses mocked workflow/project API responses to open a two-node project, then visibly exercises the hosted editor focus, copy, cut, and paste path without mutating workflow storage
 - trace, video, screenshots, and the HTML report are written under `artifacts/playwright/`
+- `watch-streaming-output.spec.ts` seeds an isolated editor project and verifies
+  streaming-wire arrows, chunk port labels, the default overflow policy, and
+  contextual scheduling controls. Run it against a target built from the current
+  checkout. Core's `GraphProcessor.asyncBranches.test.ts` and
+  `StreamingOutputWatch.test.ts` separately cover execution ordering, cancellation,
+  first-Stop selection, snapshot isolation, exclusions, subgraph cost accounting,
+  and rejection of **Start Async Branch** nodes with runnable downstream work
+  at every nested Watch-Subgraph depth. Ordinary awaited Subgraphs remain valid inside a Watch;
+  detached async work must start only after Stop returns to normal execution.
+  The editor applies the same check while wiring when its local project graph is
+  available, including recursively referenced local Subgraphs; Core remains the
+  fail-closed authority for manually edited, cached, remote, or otherwise
+  incomplete project topology.
+  `getEditorRunFromPlan(...)` is the shared local/remote partial-execution guard:
+  starting from **Watch Streaming Output** may reuse the upstream producer's saved
+  final output once, but a repeated branch node, **Stop Watching Streaming Output**,
+  or a node after Stop must not be planned by preloading the Watch boundary. Keep
+  the planner's error actionable: run from Watch for the final snapshot, or from
+  the producer for a live stream. Core independently rejects direct/runtime cache
+  injection into an active Watch source, boundary, or repeated branch.
 
 Managed-state safety:
 

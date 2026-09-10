@@ -14,6 +14,7 @@ import { type PortPositions } from './NodeCanvas';
 import {
   getNormalOffsetWirePoints,
   getNormalOffsetWirePath,
+  getRepeatedWireArrowMarkerSegments,
   getWirePath,
   getWireSegments,
   type WirePoint,
@@ -35,6 +36,10 @@ type WireProps = {
   toolContinuation?: {
     active: boolean;
     kind: 'connected' | 'ambiguous';
+    markerId: string;
+    title: string;
+  };
+  streamingOutputWatch?: {
     markerId: string;
     title: string;
   };
@@ -67,6 +72,7 @@ export const ConditionallyRenderWire: FC<WireProps> = ({
   startEndpointDirection,
   endEndpointDirection,
   toolContinuation,
+  streamingOutputWatch,
   onHoverStart,
   onHoverMove,
   onHoverEnd,
@@ -139,6 +145,17 @@ export const ConditionallyRenderWire: FC<WireProps> = ({
           />
         );
       })}
+      {streamingOutputWatch && (
+        <StreamingOutputWatchArrowMarkers
+          connection={connection}
+          markerId={streamingOutputWatch.markerId}
+          nodesById={nodesById}
+          portPositions={portPositions}
+          bendPoint={bendPointOverride ?? connection.bendPoint}
+          startEndpointDirection={startEndpointDirection}
+          endEndpointDirection={endEndpointDirection}
+        />
+      )}
       {interactive && (
         <>
           {wireSegments.map((segment, index) => {
@@ -159,7 +176,7 @@ export const ConditionallyRenderWire: FC<WireProps> = ({
                 onHoverEnd={onHoverEnd}
                 onMouseDown={onMouseDown}
                 onClick={onClick}
-                title={index === 0 ? toolContinuation?.title : undefined}
+                title={index === 0 ? toolContinuation?.title ?? streamingOutputWatch?.title : undefined}
               />
             );
           })}
@@ -332,6 +349,56 @@ export const ToolContinuationEndpointMarkers: FC<{
 };
 
 ToolContinuationEndpointMarkers.displayName = 'ToolContinuationEndpointMarkers';
+
+/** Draws repeated, source-to-target arrows for the one-way streaming-watch wire. */
+export const StreamingOutputWatchArrowMarkers: FC<{
+  connection: NodeConnection;
+  markerId: string;
+  nodesById: Record<NodeId, ChartNode>;
+  portPositions: PortPositions;
+  startEndpointDirection?: WireEndpointDirection;
+  endEndpointDirection?: WireEndpointDirection;
+  bendPoint?: NodeConnection['bendPoint'];
+}> = ({
+  connection,
+  markerId,
+  nodesById,
+  portPositions,
+  startEndpointDirection,
+  endEndpointDirection,
+  bendPoint: bendPointOverride,
+}) => {
+  const inputNode = nodesById[connection.inputNodeId];
+  const outputNode = nodesById[connection.outputNodeId];
+
+  if (!inputNode || !outputNode) {
+    return null;
+  }
+
+  const [outputCacheKey, inputCacheKey] = getConnectionCacheKeys(connection);
+  const start = getNodePortPosition(outputNode, connection.outputId, outputCacheKey, portPositions);
+  const end = getNodePortPosition(inputNode, connection.inputId, inputCacheKey, portPositions);
+  const markerSegments = getRepeatedWireArrowMarkerSegments({
+    segments: getWireSegments({ bendPoint: bendPointOverride, end, start }),
+    endDirection: endEndpointDirection,
+    startDirection: startEndpointDirection,
+  });
+
+  return (
+    <>
+      {markerSegments.map((segment, index) => (
+        <path
+          className="streaming-output-watch-marker-path"
+          d={`M${segment.start.x},${segment.start.y} L${segment.end.x},${segment.end.y}`}
+          key={`streaming-output-watch-marker-${index}`}
+          markerEnd={`url(#${markerId})`}
+        />
+      ))}
+    </>
+  );
+};
+
+StreamingOutputWatchArrowMarkers.displayName = 'StreamingOutputWatchArrowMarkers';
 
 function getToolContinuationEndpointMarkerPath({
   segment,

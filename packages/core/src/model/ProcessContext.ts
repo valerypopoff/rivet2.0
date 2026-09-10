@@ -402,6 +402,13 @@ export type InternalProcessContext<T extends ChartNode = ChartNode> = ProcessCon
   onPartialOutputs?: (outputs: Outputs) => void;
 
   /**
+   * Internal boundary used only by Stop Watching Streaming Output. The owning
+     * GraphProcessor publishes the selected value after the Stop node's finish
+     * event, then resumes ordinary downstream scheduling while siblings drain.
+   */
+  acceptStreamingWatchStop?: (value: DataValue) => void;
+
+  /**
    * Preserves display-only outputs for this invocation if it subsequently
    * fails. These values are reported with nodeError, never used as graph
    * results, and must not change the original failure.

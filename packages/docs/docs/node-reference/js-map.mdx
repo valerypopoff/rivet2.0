@@ -18,6 +18,8 @@ The callback body can use `item`, `index`, and `array`, and should `return` the 
 
 Additional inputs are created from `{{name}}` interpolation tokens in the callback body. A path expression such as `{{config.limit.max}}` creates only `config`; `{{item.name}}` and `{{array[0]}}` select from the callback's local values and create no extra input.
 
+Use `{{@globals.variableId}}` or a JSONPath expression such as `{{@globals.transform.offset}}` to read the current global value without creating an additional input. It is read once when the node starts and is available to every callback invocation. The reference does not wait for or order Set Global; wire a writer explicitly when the map must read a value that the graph assigns earlier in the run.
+
 ## Outputs
 
 | Title  | Data Type | Description                        |
