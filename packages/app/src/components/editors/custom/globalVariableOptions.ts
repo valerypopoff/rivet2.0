@@ -1,11 +1,11 @@
 import type { NodeGraph, Project } from '@valerypopoff/rivet2-core';
-import { getStaticGlobalVariableIds } from '../../../domain/graphEditing/globalVariables.js';
+import { getKnownGlobalVariableIds } from '../../../domain/graphEditing/globalVariables.js';
 
 export {
   getGraphsWithLiveGraph,
-  getMissingStaticSetGlobalWarning,
-  getStaticGlobalVariableIds,
-  getStaticSetGlobalId,
+  getFixedSetGlobalId,
+  getKnownGlobalVariableIds,
+  getMissingKnownGlobalVariableWarning,
 } from '../../../domain/graphEditing/globalVariables.js';
 
 export type GlobalVariableOption = {
@@ -14,10 +14,11 @@ export type GlobalVariableOption = {
 };
 
 export function getGlobalVariableOptions(
-  project: Pick<Project, 'graphs'> | undefined,
+  project: Pick<Project, 'graphs' | 'metadata'> | undefined,
   liveGraph?: NodeGraph,
+  referencedProjects?: Readonly<Record<string, Pick<Project, 'metadata'>>>,
 ): GlobalVariableOption[] {
-  const ids = getStaticGlobalVariableIds(project, liveGraph);
+  const ids = getKnownGlobalVariableIds(project, liveGraph, undefined, referencedProjects);
 
   return Array.from(ids)
     .sort((a, b) => a.localeCompare(b))

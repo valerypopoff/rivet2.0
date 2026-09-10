@@ -20,7 +20,7 @@ interface SettingsModalProps {}
 
 export const settingsModalOpenState = atom(false);
 
-const SETTINGS_MODAL_HEIGHT = 'calc(100vh - 48px)';
+export const SETTINGS_MODAL_HEIGHT = 'calc(100vh - 48px)';
 
 const settingsModalScrollContainerOverrides = css`
   [data-testid='settings-modal--scrollable'] {
@@ -35,7 +35,7 @@ const settingsModalScrollContainerOverrides = css`
   }
 `;
 
-const modalBody = css`
+export const modalBody = css`
   flex: 1 1 auto;
   height: 100%;
   min-height: 300px;
@@ -133,7 +133,7 @@ const settingsNavButtonStyles = css`
   }
 `;
 
-const SettingsNavButton: FC<{
+export const SettingsNavButton: FC<{
   isSelected: boolean;
   onClick: () => void;
   children: string;
@@ -159,9 +159,9 @@ export const SettingsModal: FC<SettingsModalProps> = () => {
   return (
     <ModalTransition>
       {isOpen && (
-        <Modal onClose={() => setIsOpen(false)} width="80%" height={SETTINGS_MODAL_HEIGHT} testId="settings-modal">
+        <Modal onClose={() => setIsOpen(false)} width="45vw" height={SETTINGS_MODAL_HEIGHT} testId="settings-modal">
           <Global styles={settingsModalScrollContainerOverrides} />
-          <AppModalHeader title="Settings" onClose={() => setIsOpen(false)} />
+          <AppModalHeader title="Rivet settings" onClose={() => setIsOpen(false)} />
           <ModalBody>
             <div css={modalBody}>
               <aside className="settings-modal-sidebar">

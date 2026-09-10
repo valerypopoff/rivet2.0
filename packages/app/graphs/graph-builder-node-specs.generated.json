@@ -1,6 +1,6 @@
 {
   "formatVersion": 1,
-  "catalogFingerprint": "fnv1a64:93a0088722a94247",
+  "catalogFingerprint": "fnv1a64:0fdfa78e3244eb5b",
   "entries": [
     {
       "authoringChoiceId": "registered:abortGraph",
@@ -718,7 +718,7 @@
       "authoringChoiceId": "registered:getGlobal",
       "nodeType": "getGlobal",
       "displayName": "Get Global",
-      "description": "The Get Global Node is used to retrieve a global value that is shared across all graphs and subgraphs. The ID of the global value is configured in this node. On the canvas, the node title shows an upward arrow icon rising from a baseline so it is easier to distinguish from Set Global. This icon is only a visual title cue. If an enabled Get Global node uses a static Variable ID that no enabled static Set Global node sets anywhere in the current project, the node header shows a triangular warning icon. Dynamic Get Global IDs and dynamic Set Global IDs supplied through input ports cannot be checked statically. The node can be configured to retrieve the value on demand, which means it will be read when nodes need it, rather than when this node executes. This is useful when the global value might change during the execution of the graph. The node can also be configured to wait until the varia",
+      "description": "The Get Global Node is used to retrieve a global value that is shared across all graphs and subgraphs. The ID of the global value is configured in this node. On the canvas, the node title shows an upward arrow icon rising from a baseline so it is easier to distinguish from Set Global. This icon is only a visual title cue. If an enabled Get Global node uses a fixed Variable ID that no enabled fixed ID Set Global node or configured project global variable sets, the node header shows a triangular warning icon. Dynamic Get Global IDs and Set Global IDs supplied through input ports cannot be checked in advance. The node can be configured to retrieve the value on demand, which means it will be read when nodes need it, rather than when this node executes. This is useful when the global value might change during the execution of the graph. The node can also be configured to wait until the variab",
       "aliases": [],
       "capabilities": {
         "createWithDefaults": true,
@@ -1774,7 +1774,7 @@
       "authoringChoiceId": "registered:setGlobal",
       "nodeType": "setGlobal",
       "displayName": "Set Global",
-      "description": "The Set Global Node is used to set a global value that is shared across all graphs and subgraphs during an execution in Rivet. This can be useful for storing and retrieving values that need to be accessed by multiple graphs. On the canvas, the node title shows a downward arrow icon so it is easier to distinguish from Get Global. This icon is only a visual title cue. The Set Global Node allows you to specify the ID of the global value and the value itself. The ID can be either a static string or an input value. The value can be of any data type. Static IDs appear in the Get Global node's search field so you can choose them without retyping.",
+      "description": "The Set Global Node is used to set a global value that is shared across all graphs and subgraphs during an execution in Rivet. This can be useful for storing and retrieving values that need to be accessed by multiple graphs. On the canvas, the node title shows a downward arrow icon so it is easier to distinguish from Get Global. This icon is only a visual title cue. The Set Global Node allows you to specify the ID of the global value and the value itself. The ID can be either a fixed string or an input value. The value can be of any data type. Fixed IDs and configured project global variables in Project settings → General appear in the Get Global node's search field so you can choose them without retyping. A Set Global node can overwrite a configured project global variable during its run; its Previous Value then returns the automatically assigned value.",
       "aliases": [],
       "capabilities": {
         "createWithDefaults": true,

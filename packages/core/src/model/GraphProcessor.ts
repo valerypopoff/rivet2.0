@@ -18,7 +18,7 @@ import type { NodeImpl } from './NodeImpl.js';
 import PQueue from '../utils/pQueueCompat.js';
 import { getError } from '../utils/errors.js';
 import Emittery from 'emittery';
-import { type ProjectId, type Project, type ProjectReference } from './Project.js';
+import { type ProjectId, type Project } from './Project.js';
 import { nanoid } from 'nanoid/non-secure';
 import type {
   GraphExecutionMetadata,
@@ -110,6 +110,8 @@ import {
   ConnectedToolContinuationHost,
   type ConnectedToolContinuationInvocation,
 } from './ConnectedToolContinuationHost.js';
+import { resolveProjectGlobalVariables } from './GlobalVariables.js';
+import { loadProjectReferenceTree } from './ProjectReferenceLoader.js';
 
 // eslint-disable-next-line import/no-cycle -- There has to be a cycle because CodeRunner needs to import the entirety of Rivet
 import { IsomorphicCodeRunner } from '../integrations/CodeRunner.js';
@@ -407,9 +409,11 @@ export type GraphProcessorScheduler = 'compatible' | 'fast-acyclic';
 export type GraphProcessorRuntimeProfileBucket =
   | 'initializeGraphRun'
   | 'loadProjectReferences'
+  | 'initializeProjectGlobalVariables'
   | 'prepareNodeProcessContextBase'
   | 'preprocessGraph'
   | 'emitGraphStart'
+  | 'emitInitialProjectGlobalVariables'
   | 'emitPreloadedNodeResults'
   | 'waitUntilUnpaused'
   | 'processFastAcyclicGraph'
@@ -620,6 +624,10 @@ export class GraphProcessor {
   #subprocessors: Set<GraphProcessor> = undefined!;
   #contextValues: Record<string, DataValue> = undefined!;
   #globals: Map<string, ScalarOrArrayDataValue> = undefined!;
+  /** IDs assigned by the previous root invocation, retained only to reset project globals on reuse. */
+  #projectGlobalVariableIdsAssignedByPreviousRootRun = new Set<string>();
+  /** Snapshot for lifecycle recording, populated only while a root run starts. */
+  #initialProjectGlobalVariablesForRun = new Map<string, ScalarOrArrayDataValue>();
   #storedValueController: RivetStoredValueController = undefined!;
   #knowledgeStoreController: KnowledgeStoreController = undefined!;
   #attachedNodeData: Map<NodeId, AttachedNodeData> = undefined!;
@@ -1274,6 +1282,9 @@ export class GraphProcessor {
             this.#initializeGraphRun(context, inputs, contextValues),
           );
           await this.#profileRuntimeAsync('loadProjectReferences', () => this.#loadProjectReferences());
+          this.#profileRuntimeSync('initializeProjectGlobalVariables', () =>
+            this.#initializeProjectGlobalVariablesForRootRun(),
+          );
           this.#profileRuntimeSync('prepareNodeProcessContextBase', () => this.#prepareNodeProcessContextBase());
 
           const shouldUseSeededExecutionPlan = this.#seededExecutionPlanForNextRun() != null;
@@ -1306,6 +1317,9 @@ export class GraphProcessor {
         }
 
         await this.#profileRuntimeAsync('emitGraphStart', () => this.#emitGraphStart());
+        await this.#profileRuntimeAsync('emitInitialProjectGlobalVariables', () =>
+          this.#emitInitialProjectGlobalVariables(),
+        );
         await this.#profileRuntimeAsync('emitPreloadedNodeResults', () => this.#emitPreloadedNodeResults());
         await this.#profileRuntimeAsync('waitUntilUnpaused', () => this.#waitUntilUnpaused());
 
@@ -1398,6 +1412,25 @@ export class GraphProcessor {
     });
     this.#unsubscribeTokenizerError =
       typeof unsubscribeTokenizerError === 'function' ? unsubscribeTokenizerError : undefined;
+  }
+
+  #initializeProjectGlobalVariablesForRootRun(): void {
+    this.#initialProjectGlobalVariablesForRun = new Map();
+    if (this.#isSubProcessor) return;
+
+    // Resolve before touching the shared map. An invalid reference or definition
+    // must fail startup without leaving a partial new set of authored globals.
+    const resolved = resolveProjectGlobalVariables(this.#project, this.#loadedProjects);
+
+    for (const id of this.#projectGlobalVariableIdsAssignedByPreviousRootRun) {
+      this.#globals.delete(id);
+    }
+    for (const [id, value] of resolved) {
+      this.#globals.set(id, value);
+    }
+
+    this.#projectGlobalVariableIdsAssignedByPreviousRootRun = new Set(resolved.keys());
+    this.#initialProjectGlobalVariablesForRun = resolved;
   }
 
   #initializeExecutionIdentity(): void {
@@ -1561,6 +1594,17 @@ export class GraphProcessor {
     }
 
     await this.#emitter.emit('graphStart', this.#withExecution({ graph: this.#graph, inputs: this.#graphInputs }));
+  }
+
+  async #emitInitialProjectGlobalVariables(): Promise<void> {
+    if (this.#isSubProcessor || this.#suppressGraphLifecycleEvents) return;
+
+    for (const [id, value] of this.#initialProjectGlobalVariablesForRun) {
+      await this.#emitter.emit(
+        'globalSet',
+        this.#withExecution({ id, value, processId: 'initial-project-global-variable' as ProcessId }),
+      );
+    }
   }
 
   async #emitPreloadedNodeResults(): Promise<void> {
@@ -1850,27 +1894,11 @@ export class GraphProcessor {
         );
       }
 
-      const seenProjectIds = new Set<ProjectId>();
-
-      const loadProject = async (ref: ProjectReference) => {
-        if (seenProjectIds.has(ref.id)) {
-          return;
-        }
-
-        seenProjectIds.add(ref.id);
-
-        const project = await this.#context.projectReferenceLoader!.loadProject(this.#context.projectPath, ref);
-
-        this.#loadedProjects[project.metadata!.id!] = project;
-
-        for (const reference of project.references ?? []) {
-          await loadProject(reference);
-        }
-      };
-
-      for (const reference of this.#project.references!) {
-        await loadProject(reference);
-      }
+      this.#loadedProjects = await loadProjectReferenceTree(
+        this.#project,
+        this.#context.projectPath,
+        this.#context.projectReferenceLoader,
+      );
 
       if (this.#cacheLoadedProjects && this.#runtimeCache) {
         this.#runtimeCache.loadedProjects = { ...this.#loadedProjects };
@@ -2667,7 +2695,7 @@ export class GraphProcessor {
     // Most callers are ordinary (non-split) node executions. Let those retain
     // any checkpoint without requiring every error path to know about the
     // internal map. Split callers provide their per-index map explicitly.
-    const retainedOutputs = splitOutputs === undefined ? (outputs ?? this.#takeFailureOutputs(processId, 0)) : outputs;
+    const retainedOutputs = splitOutputs === undefined ? outputs ?? this.#takeFailureOutputs(processId, 0) : outputs;
     const exclusionReason = this.#getErrorExclusionReason(node, error, processId);
     if (exclusionReason) {
       await this.#emitNodeExcluded(node, processId, this.#getInputValuesForNode(node), exclusionReason, resultOrigin);

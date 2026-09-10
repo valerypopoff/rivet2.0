@@ -1,4 +1,4 @@
-import type { ChartNode, NodeGraph, Project } from '@valerypopoff/rivet2-core';
+import { getProjectGlobalVariableIds, type ChartNode, type NodeGraph, type Project } from '@valerypopoff/rivet2-core';
 
 type SetGlobalNodeData = {
   id?: unknown;
@@ -10,13 +10,13 @@ type GetGlobalNodeData = {
   useIdInput?: unknown;
 };
 
-export type StaticSetGlobalIdOptions = {
+export type FixedSetGlobalIdOptions = {
   includeDisabled?: boolean;
 };
 
-export function getStaticSetGlobalId(
+export function getFixedSetGlobalId(
   node: ChartNode,
-  { includeDisabled = true }: StaticSetGlobalIdOptions = {},
+  { includeDisabled = true }: FixedSetGlobalIdOptions = {},
 ): string | undefined {
   if (node.type !== 'setGlobal') {
     return undefined;
@@ -34,7 +34,7 @@ export function getStaticSetGlobalId(
   return typeof data.id === 'string' && data.id.trim() ? data.id : undefined;
 }
 
-function getStaticGetGlobalId(node: ChartNode): string | undefined {
+function getFixedGetGlobalId(node: ChartNode): string | undefined {
   if (node.type !== 'getGlobal') {
     return undefined;
   }
@@ -68,16 +68,27 @@ export function getGraphsWithLiveGraph(
   return [...projectGraphsWithoutLiveGraph, liveGraph];
 }
 
-export function getStaticGlobalVariableIds(
-  project: Pick<Project, 'graphs'> | undefined,
+export function getKnownGlobalVariableIds(
+  project: Pick<Project, 'graphs' | 'metadata'> | undefined,
   liveGraph?: NodeGraph,
-  options?: StaticSetGlobalIdOptions,
+  options?: FixedSetGlobalIdOptions,
+  referencedProjects?: Readonly<Record<string, Pick<Project, 'metadata'>>>,
 ): Set<string> {
   const ids = new Set<string>();
 
+  for (const id of getProjectGlobalVariableIds(project)) {
+    ids.add(id);
+  }
+
+  for (const referencedProject of Object.values(referencedProjects ?? {})) {
+    for (const id of getProjectGlobalVariableIds(referencedProject)) {
+      ids.add(id);
+    }
+  }
+
   for (const graph of getGraphsWithLiveGraph(project, liveGraph)) {
     for (const node of graph.nodes ?? []) {
-      const id = getStaticSetGlobalId(node, options);
+      const id = getFixedSetGlobalId(node, options);
       if (id != null) {
         ids.add(id);
       }
@@ -87,14 +98,14 @@ export function getStaticGlobalVariableIds(
   return ids;
 }
 
-export function getMissingStaticSetGlobalWarning(
+export function getMissingKnownGlobalVariableWarning(
   node: ChartNode,
-  staticSetGlobalIds: ReadonlySet<string>,
+  knownGlobalVariableIds: ReadonlySet<string>,
 ): string | undefined {
-  const id = getStaticGetGlobalId(node);
-  if (!id || staticSetGlobalIds.has(id)) {
+  const id = getFixedGetGlobalId(node);
+  if (!id || knownGlobalVariableIds.has(id)) {
     return undefined;
   }
 
-  return `No enabled Set Global node in this project sets variable ID "${id}".`;
+  return `No enabled Set Global node or configured project global sets variable ID "${id}".`;
 }

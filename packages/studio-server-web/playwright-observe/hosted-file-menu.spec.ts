@@ -41,6 +41,48 @@ test.describe('Hosted editor File menu', () => {
     await expect(fileMenu.getByRole('separator')).toHaveCount(1);
   });
 
+  test('opens the Rivet settings modal at 45% of the editor viewport width', async ({ page }) => {
+    await seedFileMenuProject(page, 'settings-modal-width');
+
+    await page.goto('/', { waitUntil: 'domcontentloaded' });
+    await authenticateIfNeeded(page);
+
+    const { editorFrame, fileMenu } = await openHostedFileMenu(page);
+    await fileMenu.getByRole('menuitem', { name: 'Rivet settings', exact: true }).click();
+
+    const modal = editorFrame.getByTestId('settings-modal');
+    await expect(modal).toBeVisible();
+    await expect(modal.getByRole('heading', { name: 'Rivet settings', exact: true })).toBeVisible();
+    const modalWidth = await modal.evaluate((element) => element.getBoundingClientRect().width);
+    const editorWidth = await editorFrame
+      .locator('body')
+      .evaluate((element) => element.ownerDocument!.defaultView!.innerWidth);
+    expect(modalWidth / editorWidth).toBeGreaterThan(0.44);
+    expect(modalWidth / editorWidth).toBeLessThan(0.46);
+    await expect(modal.getByRole('navigation', { name: 'Settings' })).toBeVisible();
+  });
+
+  test('keeps the Plugins catalog identity column compact', async ({ page }) => {
+    await seedFileMenuProject(page, 'plugin-catalog-layout');
+
+    await page.goto('/', { waitUntil: 'domcontentloaded' });
+    await authenticateIfNeeded(page);
+
+    const { editorFrame, fileMenu } = await openHostedFileMenu(page);
+    await fileMenu.getByRole('menuitem', { name: 'Rivet settings', exact: true }).click();
+
+    const modal = editorFrame.getByTestId('settings-modal');
+    await modal.getByRole('button', { name: 'Plugins', exact: true }).click();
+    const pluginRow = modal.locator('.plugin').first();
+    const pluginIcon = pluginRow.locator('.plugin-icon');
+
+    await expect(pluginIcon).toBeVisible();
+    await expect(pluginIcon).toHaveCSS('width', '32px');
+    await expect(pluginIcon).toHaveCSS('height', '32px');
+    await expect(pluginRow).toHaveCSS('grid-template-columns', /32px 120px/);
+    await expect(pluginRow).toHaveCSS('column-gap', '12px');
+  });
+
   test('does not bind the browser DevTools shortcut to graph import', async ({ page }) => {
     await page.addInitScript(() => {
       const hostedWindow = window as Window & {

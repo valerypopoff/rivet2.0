@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type FC, type ReactNode, type RefObject } from 'react';
+import { useMemo, useState, type FC } from 'react';
 import { InlineEditableTextfield } from '@atlaskit/inline-edit';
 import { ProjectPluginsConfiguration } from './ProjectPluginConfiguration';
 import { Field } from '@atlaskit/form';
@@ -10,17 +10,16 @@ import { useAtom, useAtomValue, useSetAtom } from 'jotai';
 import { ProjectReferencesConfiguration } from './ProjectReferencesConfiguration';
 import { ProjectMCPConfiguration } from './ProjectMCPConfiguration';
 import { MainGraphIcon } from './graphList/MainGraphIcon';
-import Modal, { ModalBody, ModalFooter, ModalTransition } from '@atlaskit/modal-dialog';
+import Modal, { ModalBody, ModalTransition } from '@atlaskit/modal-dialog';
 import { AppModalHeader } from './AppModalHeader';
 import Button from '@atlaskit/button';
 import { ProjectContextConfiguration } from './ProjectContextConfiguration';
 import { ProjectKnowledgeStoresConfiguration } from './ProjectKnowledgeStoresConfiguration';
 import { ProjectLLMProfileHealthConfiguration } from './ProjectLLMProfileHealthConfiguration';
-import Collapsible from 'react-collapsible';
-import ChevronDownIcon from 'majesticons/line/chevron-down-line.svg?react';
-import ChevronUpIcon from 'majesticons/line/chevron-up-line.svg?react';
-import { projectSettingsSectionOpenState } from '../state/ui';
+import { ProjectGlobalVariablesConfiguration } from './ProjectGlobalVariablesConfiguration';
 import { useIOProvider, useLLMProfileHealthAdmin } from '../providers/ProvidersContext';
+import { fields } from './settings/settingsPageStyles';
+import { modalBody, SETTINGS_MODAL_HEIGHT, SettingsNavButton } from './SettingsModal';
 import {
   activeProjectComparisonState,
   projectCompareReferenceState,
@@ -45,14 +44,9 @@ const styles = css`
     font-size: var(--ui-font-size-compact) !important;
   }
 
-  .project-info-layout {
-    display: flex;
-    flex-direction: column;
-  }
-
   .project-info-item {
     min-width: 0;
-    margin: 0 0 16px;
+    margin: 0;
 
     > * {
       margin-top: 0 !important;
@@ -65,11 +59,6 @@ const styles = css`
     > form > div {
       margin-top: 0 !important;
     }
-  }
-
-  .project-info-divider {
-    border-top: 1px solid var(--grey-darkish);
-    margin: 0 0 16px;
   }
 
   .main-graph-field-label {
@@ -108,104 +97,43 @@ const styles = css`
     margin-bottom: 6px;
   }
 
-  .project-info-foldable {
-    --editor-group-radius: calc(16px * var(--ui-font-scale));
-    --editor-group-toggle-radius: calc(8px * var(--ui-font-scale));
-    --editor-group-padding-x: calc(16px * var(--ui-font-scale));
-    --editor-group-padding-y: calc(16px * var(--ui-font-scale));
-    --editor-group-padding-bottom: calc(18px * var(--ui-font-scale));
-    --editor-group-toggle-padding-y: calc(8px * var(--ui-font-scale));
-    --editor-group-toggle-icon-size: calc(24px * var(--ui-font-scale));
+`;
+
+const projectSettingsPages = [
+  { id: 'general', label: 'General' },
+  { id: 'mcp', label: 'MCP' },
+  { id: 'knowledge-stores', label: 'Knowledge stores' },
+  { id: 'plugins', label: 'Plugins' },
+  { id: 'context-values', label: 'Context values' },
+  { id: 'other', label: 'Other' },
+] as const;
+
+type ProjectSettingsPage = (typeof projectSettingsPages)[number]['id'];
+
+const projectSettingsModalScrollContainerOverrides = css`
+  [data-testid='project-settings-modal--scrollable'] {
+    min-height: 0;
+    overflow: hidden;
+  }
+
+  [data-testid='project-settings-modal--body'] {
     display: flex;
-    flex-direction: column;
-    align-items: stretch;
-  }
-
-  @supports not (corner-shape: squircle) {
-    .project-info-foldable {
-      --editor-group-radius: calc(8px * var(--ui-font-scale));
-      --editor-group-toggle-radius: calc(4px * var(--ui-font-scale));
-    }
-  }
-
-  .project-info-foldable > .Collapsible .project-info-foldable-toggle-container {
-    display: flex;
-    flex-direction: column;
-    padding-left: var(--editor-group-padding-x);
-    padding-right: var(--editor-group-padding-x);
-    border: 1px solid var(--settings-collapsible-border);
-    border-radius: var(--editor-group-radius);
-    corner-shape: squircle;
-    background: var(--settings-collapsible-header-bg);
-  }
-
-  .project-info-foldable > .Collapsible > .project-info-foldable-toggle-container.open {
-    border-bottom: none;
-    border-radius: var(--editor-group-radius) var(--editor-group-radius) 0 0;
-    corner-shape: squircle;
-  }
-
-  .project-info-foldable > .Collapsible > .project-info-foldable-toggle-container.open + .Collapsible__contentOuter {
-    border: 1px solid var(--settings-collapsible-border);
-    border-top: none;
-    border-radius: 0 0 var(--editor-group-radius) var(--editor-group-radius);
-    corner-shape: squircle;
-    background: var(--settings-collapsible-body-bg);
-  }
-
-  .project-info-foldable-toggle-area {
-    display: flex;
-    flex-direction: column;
-    align-items: stretch;
-  }
-
-  .project-info-foldable-toggle {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: var(--editor-group-toggle-padding-y) var(--editor-group-padding-x);
-    margin: 0 calc(-1 * var(--editor-group-padding-x));
-    border: none;
-    background: none;
-    cursor: pointer;
-    outline: none;
-    font-family: inherit;
-    color: var(--label-color);
-    font-size: var(--ui-font-size-base);
-    font-weight: var(--label-font-weight);
-    line-height: 1.25;
-    border-radius: var(--editor-group-toggle-radius);
-    corner-shape: squircle;
-    transition: background 0.2s ease-out;
-  }
-
-  .project-info-foldable-toggle:hover {
-    background: var(--settings-collapsible-hover-bg);
-  }
-
-  .project-info-foldable-toggle .indicator {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    width: var(--editor-group-toggle-icon-size);
-    height: var(--editor-group-toggle-icon-size);
-    flex: 0 0 var(--editor-group-toggle-icon-size);
-  }
-
-  .project-info-foldable-content {
-    margin-top: 0;
-    padding: var(--editor-group-padding-y) var(--editor-group-padding-x) var(--editor-group-padding-bottom);
-    display: flex;
-    flex-direction: column;
-    align-items: stretch;
-    gap: 0;
+    min-height: 0;
+    min-width: 0;
   }
 `;
 
-const projectSettingsBodyTestId = 'project-settings-modal-body';
-const projectSettingsBodyScrollableTestId = `${projectSettingsBodyTestId}--scrollable`;
+const projectSettingsModalBody = css`
+  ${modalBody};
 
-export const ProjectInfoPanel: FC = () => {
+  grid-template-columns: 180px minmax(0, 1fr);
+
+  main {
+    padding: 0 16px 20px;
+  }
+`;
+
+export const ProjectInfoPanel: FC<{ page: ProjectSettingsPage }> = ({ page }) => {
   const [project, setProject] = useAtom(projectState);
   const savedGraphs = useAtomValue(savedGraphsState);
   const ioProvider = useIOProvider();
@@ -249,113 +177,123 @@ export const ProjectInfoPanel: FC = () => {
   };
 
   return (
-    <div css={styles} className="project-info-section">
-      <div className="project-info-layout">
-        <div className="project-info-item">
-          <InlineEditableTextfield
-            key={`name-${project.metadata.id}`}
-            label="Project Name"
-            placeholder="Project Name"
-            readViewFitContainerWidth
-            defaultValue={project.metadata.title}
-            onConfirm={(newValue) => setProject({ ...project, metadata: { ...project.metadata, title: newValue } })}
-          />
-        </div>
+    <div css={[fields, styles]} className="project-info-section">
+      {page === 'general' && (
+        <>
+          <div className="project-info-item">
+            <InlineEditableTextfield
+              key={`name-${project.metadata.id}`}
+              label="Project Name"
+              placeholder="Project Name"
+              readViewFitContainerWidth
+              defaultValue={project.metadata.title}
+              onConfirm={(newValue) => setProject({ ...project, metadata: { ...project.metadata, title: newValue } })}
+            />
+          </div>
 
-        <div className="project-info-item">
-          <InlineEditableTextfield
-            key={`description-${project.metadata.id}`}
-            label="Description"
-            placeholder="Project Description"
-            defaultValue={project.metadata?.description ?? ''}
-            onConfirm={(newValue) =>
-              setProject({ ...project, metadata: { ...project.metadata, description: newValue } })
-            }
-            readViewFitContainerWidth
-          />
-        </div>
+          <div className="project-info-item">
+            <InlineEditableTextfield
+              key={`description-${project.metadata.id}`}
+              label="Description"
+              placeholder="Project Description"
+              defaultValue={project.metadata?.description ?? ''}
+              onConfirm={(newValue) =>
+                setProject({ ...project, metadata: { ...project.metadata, description: newValue } })
+              }
+              readViewFitContainerWidth
+            />
+          </div>
 
-        <div className="project-info-item">
-          <Field name="mainGraph" label={<MainGraphFieldLabel />}>
-            {() => (
-              <Select
-                options={graphOptions}
-                value={selectedMainGraph}
-                onChange={(newValue) => {
-                  setProject({
-                    ...project,
-                    metadata: { ...project.metadata, mainGraphId: newValue?.value ?? undefined },
-                  });
-                }}
-              />
-            )}
-          </Field>
-        </div>
+          <div className="project-info-item">
+            <Field name="mainGraph" label={<MainGraphFieldLabel />}>
+              {() => (
+                <Select
+                  options={graphOptions}
+                  value={selectedMainGraph}
+                  onChange={(newValue) => {
+                    setProject({
+                      ...project,
+                      metadata: { ...project.metadata, mainGraphId: newValue?.value ?? undefined },
+                    });
+                  }}
+                />
+              )}
+            </Field>
+          </div>
 
-        <div className="project-info-divider" />
+          <div className="project-info-item">
+            <ProjectGlobalVariablesConfiguration />
+          </div>
+        </>
+      )}
 
+      {page === 'mcp' && (
         <div className="project-info-item">
           <ProjectMCPConfiguration />
         </div>
+      )}
 
+      {page === 'knowledge-stores' && (
         <div className="project-info-item">
           <ProjectKnowledgeStoresConfiguration />
         </div>
+      )}
 
-        {llmProfileHealthAdmin && (
-          <div className="project-info-item">
-            <ProjectLLMProfileHealthConfiguration />
-          </div>
-        )}
+      {page === 'plugins' && (
+        <ProjectPluginsConfiguration />
+      )}
 
-        <div className="project-info-item">
-          <ProjectReferencesConfiguration />
-        </div>
+      {page === 'context-values' && (
+        <ProjectContextConfiguration />
+      )}
 
-        <div className="project-info-item">
-          <div className="project-info-label">Project compare</div>
-          <div className="project-info-compare-actions">
-            <Button isDisabled={compareLoading} onClick={() => void startProjectCompare()}>
-              {compareLoading ? 'Loading project...' : 'Compare to an older version'}
-            </Button>
-            {activeComparison && <Button onClick={stopProjectCompare}>Stop comparing</Button>}
-          </div>
-          {activeComparison && (
-            <div className="project-info-compare-summary">
-              <div>
-                Compare mode against{' '}
-                {getProjectComparisonReferenceFileName(
-                  activeComparison.referencePath,
-                  activeComparison.referenceProject.metadata.title,
-                )}
-              </div>
-              <div>
-                - Overall difference:{' '}
-                {formatProjectComparisonCounts(getOverallProjectComparisonCounts(activeComparison.comparison))}
-              </div>
-              <div>
-                - Current opened graph difference:{' '}
-                {formatProjectComparisonCurrentGraphCounts(getGraphProjectComparisonCounts(selectedGraphComparison))}
-              </div>
+      {page === 'other' && (
+        <>
+          {llmProfileHealthAdmin && (
+            <div className="project-info-item">
+              <ProjectLLMProfileHealthConfiguration />
             </div>
           )}
-        </div>
 
-        <div className="project-info-item">
-          <div className="project-info-label">Revisions</div>
-          <ProjectRevisions />
-        </div>
+          <div className="project-info-item">
+            <ProjectReferencesConfiguration />
+          </div>
 
-        <div className="project-info-divider" />
+          <div className="project-info-item">
+            <div className="project-info-label">Project compare</div>
+            <div className="project-info-compare-actions">
+              <Button isDisabled={compareLoading} onClick={() => void startProjectCompare()}>
+                {compareLoading ? 'Loading project...' : 'Compare to an older version'}
+              </Button>
+              {activeComparison && <Button onClick={stopProjectCompare}>Stop comparing</Button>}
+            </div>
+            {activeComparison && (
+              <div className="project-info-compare-summary">
+                <div>
+                  Compare mode against{' '}
+                  {getProjectComparisonReferenceFileName(
+                    activeComparison.referencePath,
+                    activeComparison.referenceProject.metadata.title,
+                  )}
+                </div>
+                <div>
+                  - Overall difference:{' '}
+                  {formatProjectComparisonCounts(getOverallProjectComparisonCounts(activeComparison.comparison))}
+                </div>
+                <div>
+                  - Current opened graph difference:{' '}
+                  {formatProjectComparisonCurrentGraphCounts(getGraphProjectComparisonCounts(selectedGraphComparison))}
+                </div>
+              </div>
+            )}
+          </div>
 
-        <ProjectInfoFoldableSection sectionKey="plugins" title="Plugins">
-          <ProjectPluginsConfiguration />
-        </ProjectInfoFoldableSection>
-
-        <ProjectInfoFoldableSection sectionKey="context-values" title="Context values">
-          <ProjectContextConfiguration />
-        </ProjectInfoFoldableSection>
-      </div>
+          <div className="project-info-item">
+            <div className="project-info-label">Revisions</div>
+            <ProjectRevisions />
+          </div>
+        </>
+      )}
     </div>
   );
 };
@@ -364,35 +302,30 @@ export const ProjectInfoModal: FC<{
   isOpen: boolean;
   onClose: () => void;
 }> = ({ isOpen, onClose }) => {
-  const bodyContentRef = useRef<HTMLDivElement>(null);
-  const hasBodyScrollbar = useModalBodyScrollbar(bodyContentRef);
+  const [page, setPage] = useState<ProjectSettingsPage>('general');
 
   return (
     <ModalTransition>
       {isOpen && (
-        <Modal onClose={onClose} width="large">
-          <Global
-            styles={css`
-              ${hasBodyScrollbar
-                ? ''
-                : `
-                    [data-testid='${projectSettingsBodyScrollableTestId}'] {
-                      border-bottom-color: transparent !important;
-                    }
-                  `}
-            `}
-          />
+        <Modal onClose={onClose} width="40%" height={SETTINGS_MODAL_HEIGHT} testId="project-settings-modal">
+          <Global styles={projectSettingsModalScrollContainerOverrides} />
           <AppModalHeader title="Project settings" onClose={onClose} />
-          <ModalBody testId={projectSettingsBodyTestId}>
-            <div ref={bodyContentRef}>
-              <ProjectInfoPanel />
+          <ModalBody>
+            <div css={projectSettingsModalBody}>
+              <aside className="settings-modal-sidebar">
+                <nav className="settings-modal-nav" aria-label="Project settings">
+                  {projectSettingsPages.map(({ id, label }) => (
+                    <SettingsNavButton key={id} isSelected={page === id} onClick={() => setPage(id)}>
+                      {label}
+                    </SettingsNavButton>
+                  ))}
+                </nav>
+              </aside>
+              <main>
+                <ProjectInfoPanel page={page} />
+              </main>
             </div>
           </ModalBody>
-          <ModalFooter>
-            <Button appearance="primary" onClick={onClose}>
-              Done
-            </Button>
-          </ModalFooter>
         </Modal>
       )}
     </ModalTransition>
@@ -404,78 +337,4 @@ const MainGraphFieldLabel: FC = () => (
     <span>Main Graph</span>
     <MainGraphIcon />
   </span>
-);
-
-function useModalBodyScrollbar(contentRef: RefObject<HTMLElement>): boolean {
-  const [hasScrollbar, setHasScrollbar] = useState(false);
-
-  useEffect(() => {
-    const contentElement = contentRef.current;
-    const scrollableElement = contentElement?.closest<HTMLElement>(`[data-testid="${projectSettingsBodyScrollableTestId}"]`);
-
-    if (!contentElement || !scrollableElement) {
-      setHasScrollbar(false);
-      return;
-    }
-
-    const updateScrollbarState = () => {
-      setHasScrollbar(scrollableElement.scrollHeight > scrollableElement.clientHeight + 1);
-    };
-
-    updateScrollbarState();
-
-    const resizeObserver =
-      typeof ResizeObserver !== 'undefined' ? new ResizeObserver(updateScrollbarState) : undefined;
-    resizeObserver?.observe(scrollableElement);
-    resizeObserver?.observe(contentElement);
-    window.addEventListener('resize', updateScrollbarState);
-
-    return () => {
-      resizeObserver?.disconnect();
-      window.removeEventListener('resize', updateScrollbarState);
-    };
-  }, [contentRef]);
-
-  return hasScrollbar;
-}
-
-const ProjectInfoFoldableSection: FC<{
-  sectionKey: string;
-  title: string;
-  children: ReactNode;
-}> = ({ sectionKey, title, children }) => {
-  const [sectionOpenState, setSectionOpenState] = useAtom(projectSettingsSectionOpenState);
-  const isOpen = sectionOpenState[sectionKey] ?? false;
-  const setIsOpen = (nextOpen: boolean) => {
-    setSectionOpenState((state) => ({
-      ...state,
-      [sectionKey]: nextOpen,
-    }));
-  };
-
-  return (
-    <section className="project-info-item project-info-foldable">
-      <Collapsible
-        open={isOpen}
-        handleTriggerClick={() => setIsOpen(!isOpen)}
-        trigger={<ProjectInfoFoldableToggle label={title} />}
-        triggerClassName="project-info-foldable-toggle-container"
-        triggerOpenedClassName="project-info-foldable-toggle-container open"
-        triggerWhenOpen={<ProjectInfoFoldableToggle label={title} isOpen />}
-        transitionTime={150}
-        easing="ease-out"
-      >
-        <div className="project-info-foldable-content">{children}</div>
-      </Collapsible>
-    </section>
-  );
-};
-
-const ProjectInfoFoldableToggle: FC<{ isOpen?: boolean; label: string }> = ({ isOpen, label }) => (
-  <div className="project-info-foldable-toggle-area">
-    <button type="button" className="project-info-foldable-toggle">
-      <span className="label">{label}</span>
-      <span className="indicator">{isOpen ? <ChevronUpIcon /> : <ChevronDownIcon />}</span>
-    </button>
-  </div>
 );

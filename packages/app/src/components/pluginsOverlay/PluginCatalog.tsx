@@ -15,17 +15,17 @@ const pluginCatalogStyles = css`
 
   .plugin {
     display: grid;
-    grid-template-columns: 64px 200px 1fr auto;
+    grid-template-columns: 32px 120px minmax(0, 1fr) auto;
     row-gap: 8px;
-    column-gap: 32px;
+    column-gap: 12px;
     padding: 24px 16px;
     align-items: center;
     border-bottom: 1px solid var(--grey);
   }
 
   .plugin-icon {
-    width: 64px;
-    height: 64px;
+    width: 32px;
+    height: 32px;
     grid-column: 1;
     grid-row: 1 / -1;
 

@@ -13,13 +13,19 @@ import TabItem from '@theme/TabItem';
 
 The Get Global Node is used to retrieve a global value that is shared across all graphs and subgraphs. The ID of the global value is configured in this node.
 
-On the canvas, the node title shows an upward arrow icon rising from a baseline so it is easier to distinguish from [Set Global](./set-global.mdx). This icon is only a visual title cue. If an enabled Get Global node uses a static `Variable ID` that no enabled static Set Global node sets anywhere in the current project, the node header shows a triangular warning icon. Dynamic Get Global IDs and dynamic Set Global IDs supplied through input ports cannot be checked statically.
+On the canvas, the node title shows an upward arrow icon rising from a baseline so it is easier to distinguish from [Set Global](./set-global.mdx). This icon is only a visual title cue. If an enabled Get Global node uses a fixed `Variable ID` that no enabled fixed-ID Set Global node or configured project global variable sets, the node header shows a triangular warning icon. Dynamic Get Global IDs and Set Global IDs supplied through input ports cannot be checked in advance.
 
 The node can be configured to retrieve the value on demand, which means it will be read when nodes need it, rather than when this node executes. This is useful when the global value might change during the execution of the graph.
 
 The node can also be configured to wait until the variable is available. This is useful when the global value is set by another node that might not have completed its execution when this node runs.
 
-In the editor, the search field above `Variable ID` can find static variable IDs from [Set Global](./set-global.mdx) nodes in the current project and copy the selected ID into `Variable ID`. The search text is not saved with the node. You can still type `Variable ID` manually, and dynamically generated Set Global IDs must still be entered or supplied through the input port.
+In the editor, the search field above `Variable ID` can find fixed IDs from [Set Global](./set-global.mdx) nodes and configured project global variables in Project settings → General, including the complete loaded project-reference tree, then copy the selected ID into `Variable ID`. The search text is not saved with the node. You can still type `Variable ID` manually, and dynamically generated Set Global IDs must still be entered or supplied through the input port.
+
+## Project global variables
+
+Project settings → **General** can define global variables that are saved with the project. They are the same global variables used by Set Global and Get Global; Rivet assigns them automatically before every root run, so a Get Global node can read them immediately even with **Wait** enabled. Choose a data type and provide a matching JSON value; Rivet validates it before it can be saved. Referenced-project values are applied depth-first in declared reference order; the root project takes precedence when more than one project defines the same ID. A Set Global node can overwrite a configured value later in the same run, just as it overwrites any other global value.
+
+Configured project global variables are assigned from the project at the start of each new root run. They are not a replacement for [Context Node](./context.mdx) values, which are supplied by the local environment rather than saved in the project.
 
 <Tabs
   defaultValue="inputs"
@@ -57,7 +63,7 @@ In the editor, the search field above `Variable ID` can find static variable IDs
 
 | Setting                 | Description                                                                                                                       | Default Value | Use Input Toggle | Input Data Type |
 | ----------------------- | --------------------------------------------------------------------------------------------------------------------------------- | ------------- | ---------------- | --------------- |
-| Search field            | Searches static Set Global variable IDs in the current project and copies the selected ID to `Variable ID`.                       | Empty         | No               | N/A             |
+| Search field            | Searches fixed-ID Set Global nodes and configured project global variables, including the loaded reference tree, and copies the selected ID to `Variable ID`. | Empty         | No               | N/A             |
 | Variable ID             | The ID of the global variable to retrieve.                                                                                        | (required)    | Yes              | `string`        |
 | Data Type               | The data type of the global variable.                                                                                             | `string`      | No               | N/A             |
 | On Demand               | If enabled, the global variable will be read when nodes need it, rather than when this node executes. Turning this on turns off "Wait". | False         | No               | N/A             |
@@ -94,7 +100,7 @@ If the global variable is not found and `Wait` is disabled, the Get Global Node 
 
 **Q: What is a global variable?**
 
-A: A global variable is a value that is shared across all graphs and subgraphs. It is set using a [Set Global Node](./set-global.mdx) and retrieved using a Get Global Node.
+A: A global variable is a value that is shared across all graphs and subgraphs during a run. Project settings → General can configure one to be assigned automatically when a project run begins, or a [Set Global Node](./set-global.mdx) can set one during a run. A Get Global Node retrieves it.
 
 **Q: Can I set a global variable from a parent application?**
 

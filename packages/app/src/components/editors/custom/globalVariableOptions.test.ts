@@ -3,8 +3,8 @@ import test from 'node:test';
 import type { ChartNode, GraphId, NodeGraph, NodeId, Project } from '@valerypopoff/rivet2-core';
 import {
   getGlobalVariableOptions,
-  getMissingStaticSetGlobalWarning,
-  getStaticGlobalVariableIds,
+  getMissingKnownGlobalVariableWarning,
+  getKnownGlobalVariableIds,
 } from './globalVariableOptions.js';
 
 function setGlobalNode(id: string, useIdInput = false, disabled = false): ChartNode {
@@ -57,13 +57,22 @@ function graph(id: string, nodes: ChartNode[]): NodeGraph {
   };
 }
 
-function project(graphs: Record<string, NodeGraph>): Pick<Project, 'graphs'> {
+function project(
+  graphs: Record<string, NodeGraph>,
+  globalVariables: Project['metadata']['globalVariables'] = undefined,
+): Pick<Project, 'graphs' | 'metadata'> {
   return {
     graphs,
+    metadata: {
+      id: 'project' as never,
+      title: 'Project',
+      description: '',
+      globalVariables,
+    },
   };
 }
 
-test('getGlobalVariableOptions returns static Set Global IDs from all project graphs', () => {
+test('getGlobalVariableOptions returns fixed Set Global IDs from all project graphs', () => {
   assert.deepEqual(
     getGlobalVariableOptions(
       project({
@@ -83,14 +92,14 @@ test('getGlobalVariableOptions ignores dynamic and empty Set Global IDs', () => 
   assert.deepEqual(
     getGlobalVariableOptions(
       project({
-        main: graph('main', [setGlobalNode('static-id'), setGlobalNode('dynamic-id', true), setGlobalNode('')]),
+        main: graph('main', [setGlobalNode('fixed-id'), setGlobalNode('dynamic-id', true), setGlobalNode('')]),
       }),
     ),
-    [{ label: 'static-id', value: 'static-id' }],
+    [{ label: 'fixed-id', value: 'fixed-id' }],
   );
 });
 
-test('getGlobalVariableOptions deduplicates repeated static IDs', () => {
+test('getGlobalVariableOptions deduplicates repeated fixed IDs', () => {
   assert.deepEqual(
     getGlobalVariableOptions(
       project({
@@ -99,6 +108,32 @@ test('getGlobalVariableOptions deduplicates repeated static IDs', () => {
       }),
     ),
     [{ label: 'shared', value: 'shared' }],
+  );
+});
+
+test('getGlobalVariableOptions includes project and referenced project global variables', () => {
+  assert.deepEqual(
+    getGlobalVariableOptions(
+      project(
+        { main: graph('main', []) },
+        { rootGlobal: { type: 'string', value: 'root' } },
+      ),
+      undefined,
+      {
+        referenced: {
+          metadata: {
+            id: 'referenced' as never,
+            title: 'Referenced',
+            description: '',
+            globalVariables: { referencedGlobal: { type: 'number', value: 2 } },
+          },
+        },
+      },
+    ),
+    [
+      { label: 'referencedGlobal', value: 'referencedGlobal' },
+      { label: 'rootGlobal', value: 'rootGlobal' },
+    ],
   );
 });
 
@@ -118,8 +153,8 @@ test('getGlobalVariableOptions prefers the live graph over the saved project gra
   );
 });
 
-test('getMissingStaticSetGlobalWarning warns when a static Get Global ID has no enabled static setter', () => {
-  const ids = getStaticGlobalVariableIds(
+test('getMissingKnownGlobalVariableWarning warns when a fixed Get Global ID has no enabled known writer', () => {
+  const ids = getKnownGlobalVariableIds(
     project({
       main: graph('main', [setGlobalNode('disabled-only', false, true), setGlobalNode('dynamic-id', true)]),
     }),
@@ -128,21 +163,21 @@ test('getMissingStaticSetGlobalWarning warns when a static Get Global ID has no 
   );
 
   assert.equal(
-    getMissingStaticSetGlobalWarning(getGlobalNode('missing-id'), ids),
-    'No enabled Set Global node in this project sets variable ID "missing-id".',
+    getMissingKnownGlobalVariableWarning(getGlobalNode('missing-id'), ids),
+    'No enabled Set Global node or configured project global sets variable ID "missing-id".',
   );
   assert.equal(
-    getMissingStaticSetGlobalWarning(getGlobalNode('disabled-only'), ids),
-    'No enabled Set Global node in this project sets variable ID "disabled-only".',
+    getMissingKnownGlobalVariableWarning(getGlobalNode('disabled-only'), ids),
+    'No enabled Set Global node or configured project global sets variable ID "disabled-only".',
   );
   assert.equal(
-    getMissingStaticSetGlobalWarning(getGlobalNode('dynamic-id'), ids),
-    'No enabled Set Global node in this project sets variable ID "dynamic-id".',
+    getMissingKnownGlobalVariableWarning(getGlobalNode('dynamic-id'), ids),
+    'No enabled Set Global node or configured project global sets variable ID "dynamic-id".',
   );
 });
 
-test('getMissingStaticSetGlobalWarning accepts matching enabled static setters from any project graph', () => {
-  const ids = getStaticGlobalVariableIds(
+test('getMissingKnownGlobalVariableWarning accepts matching enabled fixed setters from any project graph', () => {
+  const ids = getKnownGlobalVariableIds(
     project({
       main: graph('main', [setGlobalNode('main-id')]),
       other: graph('other', [setGlobalNode('other-id')]),
@@ -151,12 +186,12 @@ test('getMissingStaticSetGlobalWarning accepts matching enabled static setters f
     { includeDisabled: false },
   );
 
-  assert.equal(getMissingStaticSetGlobalWarning(getGlobalNode('main-id'), ids), undefined);
-  assert.equal(getMissingStaticSetGlobalWarning(getGlobalNode('other-id'), ids), undefined);
+  assert.equal(getMissingKnownGlobalVariableWarning(getGlobalNode('main-id'), ids), undefined);
+  assert.equal(getMissingKnownGlobalVariableWarning(getGlobalNode('other-id'), ids), undefined);
 });
 
-test('getMissingStaticSetGlobalWarning ignores dynamic and blank Get Global IDs', () => {
-  const ids = getStaticGlobalVariableIds(
+test('getMissingKnownGlobalVariableWarning ignores dynamic and blank Get Global IDs', () => {
+  const ids = getKnownGlobalVariableIds(
     project({
       main: graph('main', []),
     }),
@@ -164,13 +199,13 @@ test('getMissingStaticSetGlobalWarning ignores dynamic and blank Get Global IDs'
     { includeDisabled: false },
   );
 
-  assert.equal(getMissingStaticSetGlobalWarning(getGlobalNode('dynamic-id', true), ids), undefined);
-  assert.equal(getMissingStaticSetGlobalWarning(getGlobalNode(''), ids), undefined);
-  assert.equal(getMissingStaticSetGlobalWarning(getGlobalNode('disabled-id', false, true), ids), undefined);
+  assert.equal(getMissingKnownGlobalVariableWarning(getGlobalNode('dynamic-id', true), ids), undefined);
+  assert.equal(getMissingKnownGlobalVariableWarning(getGlobalNode(''), ids), undefined);
+  assert.equal(getMissingKnownGlobalVariableWarning(getGlobalNode('disabled-id', false, true), ids), undefined);
 });
 
-test('getStaticGlobalVariableIds overlays the live graph for warnings', () => {
-  const ids = getStaticGlobalVariableIds(
+test('getKnownGlobalVariableIds overlays the live graph for warnings', () => {
+  const ids = getKnownGlobalVariableIds(
     project({
       main: graph('main', [setGlobalNode('saved-id')]),
       other: graph('other', [setGlobalNode('other-id')]),

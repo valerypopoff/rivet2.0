@@ -13,6 +13,7 @@ import { projectV2Deserializer } from '../../src/utils/serialization/serializati
 import { graphV3Serializer } from '../../src/utils/serialization/serialization_v3.js';
 import { projectV4Deserializer } from '../../src/utils/serialization/serialization_v4.js';
 import { detectSerializationVersion, validateProject } from '../../src/utils/serialization/serializationUtils.js';
+import { encodeProjectGlobalVariable } from '../../src/model/GlobalVariables.js';
 import {
   serializeConnection,
   deserializeConnection,
@@ -187,6 +188,69 @@ data:
 `;
 
 describe('serialization compatibility', () => {
+  it('round-trips portable project global variable metadata through the current project format', () => {
+    const project: Project = {
+      ...baseProject,
+      metadata: {
+        ...baseProject.metadata,
+        globalVariables: {
+          greeting: encodeProjectGlobalVariable({ type: 'string', value: 'hello' }),
+          bytes: encodeProjectGlobalVariable({ type: 'binary', value: new Uint8Array([1, 2, 3]) }),
+        },
+      },
+    };
+
+    const [deserialized] = deserializeProject(serializeProject(project));
+    assert.equal(deserialized.metadata.globalVariables?.greeting?.type, 'string');
+    assert.deepEqual(deserialized.metadata.globalVariables?.bytes?.value, {
+      $rivetProjectGlobalLiteral: 'uint8array',
+      value: 'AQID',
+    });
+  });
+
+  it('preserves a project global variable whose ID is __proto__ as an own project metadata key', () => {
+    const project: Project = {
+      ...baseProject,
+      metadata: {
+        ...baseProject.metadata,
+        globalVariables: Object.fromEntries([
+          ['__proto__', encodeProjectGlobalVariable({ type: 'string', value: 'safe global ID' })],
+        ]),
+      },
+    };
+
+    const [deserialized] = deserializeProject(serializeProject(project));
+    assert.equal(Object.hasOwn(deserialized.metadata.globalVariables ?? {}, '__proto__'), true);
+    assert.deepEqual(deserialized.metadata.globalVariables?.__proto__, {
+      type: 'string',
+      value: 'safe global ID',
+    });
+  });
+
+  it('refuses to serialize malformed project global variables supplied outside Project Settings', () => {
+    const project: Project = {
+      ...baseProject,
+      metadata: {
+        ...baseProject.metadata,
+        globalVariables: { broken: { type: 'fn<string>', value: 'not portable' } },
+      },
+    };
+
+    assert.throws(() => serializeProject(project), /supported non-function data type/);
+  });
+
+  it('refuses a portable literal that does not match its declared project-global type', () => {
+    const project: Project = {
+      ...baseProject,
+      metadata: {
+        ...baseProject.metadata,
+        globalVariables: { broken: { type: 'number', value: 'not a number' } },
+      },
+    };
+
+    assert.throws(() => serializeProject(project), /must be a number/);
+  });
+
   it('detects legacy and current serialization versions explicitly', () => {
     assert.equal(detectSerializationVersion(v1Project), 1);
     assert.equal(detectSerializationVersion(v2Project), 2);

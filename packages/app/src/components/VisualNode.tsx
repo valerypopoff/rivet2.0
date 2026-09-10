@@ -34,8 +34,8 @@ import { getCanvasCommentHeight } from '../hooks/canvasVisibilityBounds.js';
 import { useDelayedRunningState } from './visualNode/NodeRunningIndicator.js';
 import { graphMetadataState } from '../state/graph.js';
 import { useExecutorSessionState } from '../hooks/useExecutorSession.js';
-import { getMissingStaticSetGlobalWarning } from '../domain/graphEditing/globalVariables.js';
-import { enabledStaticGlobalVariableIdsState } from '../state/selectors/globalVariables.js';
+import { getMissingKnownGlobalVariableWarning } from '../domain/graphEditing/globalVariables.js';
+import { enabledKnownGlobalVariableIdsState } from '../state/selectors/globalVariables.js';
 import { getDuplicateGraphOutputIdWarning } from '../domain/graphEditing/graphOutputs.js';
 import { duplicateGraphOutputIdsState } from '../state/selectors/graphOutputs.js';
 import { getRecursiveSubGraphWarning } from '../domain/graphEditing/subGraphs.js';
@@ -280,9 +280,9 @@ const VisualNodeImpl = memo(
 
 const GetGlobalVisualNode = memo(
   forwardRef<HTMLDivElement, VisualNodeImplProps>((props, ref) => {
-    const enabledStaticGlobalVariableIds = useAtomValue(enabledStaticGlobalVariableIdsState);
+    const enabledKnownGlobalVariableIds = useAtomValue(enabledKnownGlobalVariableIdsState);
     const headerWarning =
-      props.headerWarning ?? getMissingStaticSetGlobalWarning(props.node, enabledStaticGlobalVariableIds);
+      props.headerWarning ?? getMissingKnownGlobalVariableWarning(props.node, enabledKnownGlobalVariableIds);
 
     return <VisualNodeImpl {...props} ref={ref} headerWarning={headerWarning} />;
   }),

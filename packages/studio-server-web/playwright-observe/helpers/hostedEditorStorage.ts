@@ -3,6 +3,7 @@ import type { Page } from '@playwright/test';
 export type SeedHostedEditorProjectOptions = {
   graphId: string;
   loaded?: boolean;
+  metadata?: Record<string, unknown>;
   projectId: string;
   projectPath: string;
   title: string;
@@ -27,6 +28,7 @@ export async function seedHostedEditorProject(page: Page, options: SeedHostedEdi
             title: seed.title,
             description: '',
             mainGraphId: seed.graphId,
+            ...seed.metadata,
           },
           graphs: {
             [seed.graphId]: {
