@@ -53,6 +53,8 @@ export type ProcessDataForNode = {
   processId: ProcessId;
   rootRunId?: RootRunId;
   graphRunId?: GraphRunId;
+  /** Parent invocation for child work, including retained Watch branch runs. */
+  parentGraphRunId?: GraphRunId;
   graphId?: GraphId;
   data: NodeRunDataWithRefs;
 };
@@ -88,6 +90,8 @@ export type NodeRunDataBase = {
   finishedAt?: number;
   durationMs?: number;
   splitRunDurationMs?: Record<number, number>;
+  /** Identifies the one accepted Stop result in a repeated Watch branch. */
+  streamingWatchTerminal?: boolean;
   debugData?: {
     codeSource?: string;
     expressionSource?: string;

@@ -150,6 +150,9 @@ function applyProcessEventToProjectExecutionSnapshotData<K extends keyof Process
             finishedAt: Date.now(),
             outputData: sanitizeInputsOrOutputs((options.data as ProcessEvents['nodeFinish']).outputs),
             splitRunDurationMs: (options.data as ProcessEvents['nodeFinish']).splitRunDurationMs,
+            ...((options.data as ProcessEvents['nodeFinish']).streamingWatchTerminal
+              ? { streamingWatchTerminal: true }
+              : {}),
             status: { type: 'ok' },
           },
           options,
@@ -346,6 +349,7 @@ function applyLLMChatOutputSnapshot(
         data: {},
         graphId: data.execution.graphId,
         graphRunId: data.execution.graphRunId,
+        parentGraphRunId: data.execution.parentGraphRunId,
         processId: data.processId,
         rootRunId: data.execution.rootRunId,
       };
@@ -499,6 +503,7 @@ function setDataForNodeInSnapshot(
     if (existingProcess) {
       existingProcess.graphId = event.execution?.graphId ?? existingProcess.graphId;
       existingProcess.graphRunId = event.execution?.graphRunId ?? existingProcess.graphRunId;
+      existingProcess.parentGraphRunId = event.execution?.parentGraphRunId ?? existingProcess.parentGraphRunId;
       existingProcess.rootRunId = event.execution?.rootRunId ?? existingProcess.rootRunId;
       const nextProcessData = mergeNodeRunDataForProcess(existingProcess.data, storedData);
       refIdsToDelete.push(...collectReplacedRefIds(existingProcess.data, nextProcessData));
@@ -510,6 +515,7 @@ function setDataForNodeInSnapshot(
       data: storedData as NodeRunDataWithRefs,
       graphId: event.execution?.graphId,
       graphRunId: event.execution?.graphRunId,
+      parentGraphRunId: event.execution?.parentGraphRunId,
       processId: event.processId,
       rootRunId: event.execution?.rootRunId,
     });
@@ -549,6 +555,7 @@ function applyPartialOutput(
     if (existingProcess) {
       existingProcess.graphId = data.execution.graphId;
       existingProcess.graphRunId = data.execution.graphRunId;
+      existingProcess.parentGraphRunId = data.execution.parentGraphRunId;
       existingProcess.rootRunId = data.execution.rootRunId;
       const nextSplitOutputData = {
         ...existingProcess.data.splitOutputData,
@@ -567,6 +574,7 @@ function applyPartialOutput(
         },
         graphId: data.execution.graphId,
         graphRunId: data.execution.graphRunId,
+        parentGraphRunId: data.execution.parentGraphRunId,
         processId: data.processId,
         rootRunId: data.execution.rootRunId,
       });

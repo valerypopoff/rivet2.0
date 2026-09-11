@@ -471,6 +471,7 @@ export async function replayExecutionRecording(options: {
                 outputs: data.outputs,
                 processId: data.processId as ProcessId,
                 ...(data.resultOrigin === undefined ? {} : { resultOrigin: data.resultOrigin }),
+                ...(data.streamingWatchTerminal ? { streamingWatchTerminal: true } : {}),
                 execution,
               },
               getRecordedDuration(

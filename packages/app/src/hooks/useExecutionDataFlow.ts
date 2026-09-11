@@ -141,6 +141,7 @@ export function useExecutionDataFlow(): ExecutionDataFlowApi {
           }
           existingProcess.graphId = execution?.graphId ?? existingProcess.graphId;
           existingProcess.graphRunId = execution?.graphRunId ?? existingProcess.graphRunId;
+          existingProcess.parentGraphRunId = execution?.parentGraphRunId ?? existingProcess.parentGraphRunId;
           existingProcess.rootRunId = execution?.rootRunId ?? existingProcess.rootRunId;
           const nextProcessData = mergeNodeRunDataForProcess(existingProcess.data, storedData);
           refIdsToDelete.push(...collectReplacedRefIds(existingProcess.data, nextProcessData));
@@ -174,6 +175,7 @@ export function useExecutionDataFlow(): ExecutionDataFlowApi {
           processId,
           graphId: execution?.graphId,
           graphRunId: execution?.graphRunId,
+          parentGraphRunId: execution?.parentGraphRunId,
           rootRunId: execution?.rootRunId,
           data: storedData as NodeRunDataWithRefs,
         });

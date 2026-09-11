@@ -434,6 +434,55 @@ void describe('ExecutionRecorder', () => {
     assert.notEqual(replayed?.execution.rootRunId, execution.rootRunId);
   });
 
+  void it('records and replays the accepted Watch Stop terminal marker', async () => {
+    const recorder = new ExecutionRecorder();
+    const sourceEmitter = new Emittery<ProcessEvents>();
+    recorder.record(sourceEmitter as unknown as GraphProcessor);
+    await sourceEmitter.emit('graphStart', { graph, inputs: {}, execution });
+    await sourceEmitter.emit('nodeFinish', {
+      node,
+      outputs: { value: { type: 'string', value: 'accepted result' } },
+      processId,
+      streamingWatchTerminal: true,
+      execution,
+    });
+    await sourceEmitter.emit('done', { results: {} });
+
+    const recordedFinish = recorder.events.find((event) => event.type === 'nodeFinish');
+    if (!recordedFinish || recordedFinish.type !== 'nodeFinish') {
+      assert.fail('Expected the accepted Stop terminal to be recorded.');
+    }
+    assert.equal(recordedFinish.data.streamingWatchTerminal, true);
+
+    const replayEmitter = new Emittery<ProcessEvents>();
+    let replayedTerminal = false;
+    replayEmitter.on('nodeFinish', (event) => {
+      replayedTerminal = event.streamingWatchTerminal === true;
+    });
+    await replayExecutionRecording({
+      emitter: replayEmitter,
+      erroredNodes: new Map(),
+      graphInputs: {},
+      graphOutputs: {},
+      isAborted: () => false,
+      nodeResults: new Map(),
+      project: {
+        metadata: { id: 'project-id', title: 'Project', description: '', mainGraphId: graph.metadata!.id! },
+        graphs: { [graph.metadata!.id!]: graph },
+      } as any,
+      recorder: ExecutionRecorder.deserializeFromString(recorder.serialize()),
+      recordingPlaybackChatLatency: 0,
+      setContextValues: () => {},
+      setGraphInputs: () => {},
+      setGraphOutputs: () => {},
+      setRunning: () => {},
+      visitedNodes: new Set(),
+      waitUntilUnpaused: async () => {},
+    });
+
+    assert.equal(replayedTerminal, true);
+  });
+
   void it('records and replays LLM Chat output snapshots without creating node lifecycle events', async () => {
     const recorder = new ExecutionRecorder();
     const sourceEmitter = new Emittery<ProcessEvents>();
@@ -615,6 +664,71 @@ void describe('ExecutionRecorder', () => {
     assert.notEqual(secondRoot!.graphRunId, firstRoot!.graphRunId);
     assert.notEqual(secondSubgraph!.graphRunId, firstSubgraph!.graphRunId);
     assert.equal(secondSubgraph!.parentGraphRunId, secondRoot!.graphRunId);
+  });
+
+  void it('replays retained same-graph Watch branch history under its replayed parent run', async () => {
+    const recorder = new ExecutionRecorder();
+    const sourceEmitter = new Emittery<ProcessEvents>();
+    const rootExecution: GraphExecutionMetadata = {
+      graphId: graph.metadata!.id!,
+      graphRunId: 'recorded-root-run' as GraphRunId,
+      rootRunId: 'recorded-root' as RootRunId,
+    };
+    const retainedWatchExecution: GraphExecutionMetadata = {
+      graphId: graph.metadata!.id!,
+      graphRunId: 'recorded-watch-child' as GraphRunId,
+      parentGraphRunId: rootExecution.graphRunId,
+      rootRunId: rootExecution.rootRunId,
+    };
+    recorder.record(sourceEmitter as unknown as GraphProcessor);
+    await sourceEmitter.emit('graphStart', { graph, inputs: {}, execution: rootExecution });
+    // Watch iterations intentionally suppress graph lifecycle events: only the
+    // retained node events are present in the recording.
+    await sourceEmitter.emit('nodeStart', {
+      node,
+      inputs: {},
+      processId: 'retained-watch-process' as ProcessId,
+      execution: retainedWatchExecution,
+    });
+    await sourceEmitter.emit('nodeFinish', {
+      node,
+      outputs: {},
+      processId: 'retained-watch-process' as ProcessId,
+      execution: retainedWatchExecution,
+    });
+    await sourceEmitter.emit('done', { results: {} });
+
+    const replayEmitter = new Emittery<ProcessEvents>();
+    const replayedExecutions: GraphExecutionMetadata[] = [];
+    replayEmitter.on('graphStart', (data) => replayedExecutions.push(data.execution));
+    replayEmitter.on('nodeFinish', (data) => replayedExecutions.push(data.execution));
+    await replayExecutionRecording({
+      emitter: replayEmitter,
+      erroredNodes: new Map(),
+      graphInputs: {},
+      graphOutputs: {},
+      isAborted: () => false,
+      nodeResults: new Map(),
+      project: {
+        metadata: { id: 'project-id', title: 'Project', description: '', mainGraphId: graph.metadata!.id! },
+        graphs: { [graph.metadata!.id!]: graph },
+      } as any,
+      recorder,
+      recordingPlaybackChatLatency: 0,
+      setContextValues: () => {},
+      setGraphInputs: () => {},
+      setGraphOutputs: () => {},
+      setRunning: () => {},
+      visitedNodes: new Set(),
+      waitUntilUnpaused: async () => {},
+    });
+
+    const [replayedRoot, replayedWatchChild] = replayedExecutions;
+    assert.equal(replayedExecutions.length, 2);
+    assert.equal(replayedWatchChild!.graphId, replayedRoot!.graphId);
+    assert.equal(replayedWatchChild!.rootRunId, replayedRoot!.rootRunId);
+    assert.equal(replayedWatchChild!.parentGraphRunId, replayedRoot!.graphRunId);
+    assert.notEqual(replayedWatchChild!.graphRunId, replayedRoot!.graphRunId);
   });
 
   void it('adopts the playback processor identity for the first recorded root', async () => {

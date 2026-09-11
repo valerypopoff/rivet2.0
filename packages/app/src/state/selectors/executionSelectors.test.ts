@@ -810,6 +810,58 @@ describe('executionSelectors', () => {
     assert.deepEqual(filtered?.map((p) => p.processId), ['p-sub-a']);
   });
 
+  test('shows retained same-graph Watch child runs with their owning graph run', () => {
+    const processData = [
+      {
+        processId: 'watch-first' as ProcessId,
+        rootRunId: 'root-1' as RootRunId,
+        graphId: 'main-graph' as GraphId,
+        graphRunId: 'watch-child-1' as GraphRunId,
+        parentGraphRunId: 'main-run' as GraphRunId,
+        data: { status: { type: 'ok' } },
+      },
+      {
+        processId: 'watch-latest' as ProcessId,
+        rootRunId: 'root-1' as RootRunId,
+        graphId: 'main-graph' as GraphId,
+        graphRunId: 'watch-child-4' as GraphRunId,
+        parentGraphRunId: 'main-run' as GraphRunId,
+        data: { status: { type: 'ok' } },
+      },
+      {
+        processId: 'other-graph' as ProcessId,
+        rootRunId: 'root-1' as RootRunId,
+        graphId: 'subgraph' as GraphId,
+        graphRunId: 'sub-run' as GraphRunId,
+        parentGraphRunId: 'main-run' as GraphRunId,
+        data: { status: { type: 'ok' } },
+      },
+      {
+        processId: 'other-owner' as ProcessId,
+        rootRunId: 'root-1' as RootRunId,
+        graphId: 'main-graph' as GraphId,
+        graphRunId: 'watch-child-other' as GraphRunId,
+        parentGraphRunId: 'other-main-run' as GraphRunId,
+        data: { status: { type: 'ok' } },
+      },
+    ] satisfies ProcessDataForNode[];
+    const graphRuns = [
+      {
+        graphId: 'main-graph' as GraphId,
+        graphRunId: 'main-run' as GraphRunId,
+        rootRunId: 'root-1' as RootRunId,
+      },
+    ];
+
+    const filtered = filterProcessDataForSelection({
+      graphRuns,
+      processData,
+      selectedGraphRun: 'main-run' as GraphRunId,
+    });
+
+    assert.deepEqual(filtered?.map((process) => process.processId), ['watch-first', 'watch-latest']);
+  });
+
   test('filterProcessDataForSelection does not mix untagged process data into graph-run-tagged selections', () => {
     const processData = [
       { processId: 'p-untagged-a', data: { status: { type: 'ok' } } },

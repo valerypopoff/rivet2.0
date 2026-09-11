@@ -9,7 +9,7 @@ import { useUnknownNodeComponentDescriptorFor } from '../../hooks/useNodeTypes.j
 import { useDependsOnPlugins } from '../../hooks/useDependsOnPlugins.js';
 import { type HorizontalModalBounds } from '../../utils/fullScreenModalBounds.js';
 import { promptDesignerAttachedChatNodeState } from '../../state/promptDesigner.js';
-import { graphMetadataState, nodesByIdState } from '../../state/graph.js';
+import { graphMetadataState, graphState, nodesByIdState } from '../../state/graph.js';
 import {
   getLLMChatOutputHistorySelectionKey,
   lastRunDataState,
@@ -33,6 +33,7 @@ import { OUTPUT_NAVIGATION_ITEM_ATTRIBUTE } from '../renderDataValue/outputNavig
 import { MATCH_ACTIVE_CLASS, MATCH_CLASS } from './fullscreenOutputSearch.js';
 import { FullscreenNodeOutputToolbar } from './FullscreenNodeOutputToolbar.js';
 import { FullscreenOutputSearchContext } from './FullscreenOutputSearchContext.js';
+import { getStopWatchingStreamingOutputPresentation } from './streamingOutputWatchPresentation.js';
 import { copyOutputJson, copyOutputValue } from './nodeOutputCopyActions.js';
 import { NodeOutputPager } from './NodeOutputPager.js';
 import { LLMChatOutputHistoryPager } from './LLMChatOutputHistoryPager.js';
@@ -56,6 +57,7 @@ import {
   getSelectedLLMChatOutputHistoryData,
   shouldShowLLMChatOutputHistoryPager,
 } from '../../utils/llmChatOutputHistory.js';
+import { getStreamingOutputWatchBranchNodeIds } from '../nodeCanvas/streamingOutputWatchWireState.js';
 
 export const FullscreenNodeOutputModalRenderer: FC = () => {
   useDependsOnPlugins();
@@ -297,18 +299,29 @@ const NodeFullscreenOutput: FC<{ node: ChartNode }> = ({ node }) => {
   const [selectedPage, setSelectedPage] = useAtom(selectedProcessPageState(node.id));
   const graphSelectionOptions = useAtomValue(resolvedGraphSelectionState);
   const showNodeRunDurations = useAtomValue(showNodeRunDurationsState);
+  const graph = useAtomValue(graphState);
   const [isInspectorOpen, setInspectorOpen] = useState(false);
+
+  const streamingWatchBranchNodeIds = useMemo(() => getStreamingOutputWatchBranchNodeIds(graph), [graph]);
+  const isStreamingWatchBranchNode = streamingWatchBranchNodeIds.has(node.id);
+  const isStreamingWatchStop = isStreamingWatchBranchNode && node.type === 'stopWatchingStreamingOutput';
 
   const filteredOutput = useMemo(
     () => filterProcessDataForSelection({ ...graphSelectionOptions, processData: output }),
     [graphSelectionOptions, output],
   );
-  const selectedPageIndex = getSelectedProcessPageIndex(filteredOutput, selectedPage);
+  // Stop is the one-time exit from repeated work. Its presentation is the
+  // accepted terminal value, not a pager of losing/cancelled child attempts.
+  const presentationOutput = isStreamingWatchStop
+    ? getStopWatchingStreamingOutputPresentation(filteredOutput)
+    : filteredOutput;
+  const presentationSelectedPage = isStreamingWatchStop ? 'latest' : selectedPage;
+  const selectedPageIndex = getSelectedProcessPageIndex(presentationOutput, presentationSelectedPage);
   const displaySelectedPage: number | 'latest' =
-    selectedPage === 'latest' ? 'latest' : selectedPageIndex ?? selectedPage;
+    presentationSelectedPage === 'latest' ? 'latest' : selectedPageIndex ?? presentationSelectedPage;
   const selectedProcessData = useMemo(
-    () => getSelectedNodeOutputProcess(filteredOutput ?? [], selectedPage),
-    [filteredOutput, selectedPage],
+    () => getSelectedNodeOutputProcess(presentationOutput ?? [], presentationSelectedPage),
+    [presentationOutput, presentationSelectedPage],
   );
   const llmChatHistorySelectionKey = getLLMChatOutputHistorySelectionKey(
     node.id,
@@ -327,11 +340,11 @@ const NodeFullscreenOutput: FC<{ node: ChartNode }> = ({ node }) => {
   );
   const hasSelectedSplitOutputData = selectedPresentationData?.splitOutputData != null;
   const displayedOutput = useMemo(() => {
-    if (!selectedProcessData || !filteredOutput) {
-      return filteredOutput;
+    if (!selectedProcessData || !presentationOutput) {
+      return presentationOutput;
     }
 
-    return filteredOutput.map((process) => {
+    return presentationOutput.map((process) => {
       if (process.processId !== selectedProcessData.processId) {
         return process;
       }
@@ -348,8 +361,8 @@ const NodeFullscreenOutput: FC<{ node: ChartNode }> = ({ node }) => {
       };
     });
   }, [
-    filteredOutput,
     hasSelectedSplitOutputData,
+    presentationOutput,
     selectedLLMChatOutputPage,
     selectedPresentationData,
     selectedProcessData,
@@ -371,11 +384,11 @@ const NodeFullscreenOutput: FC<{ node: ChartNode }> = ({ node }) => {
       createFullscreenNodeOutputViewModel({
         nodeType: node.type,
         processData: displayedOutput,
-        selectedPage,
+        selectedPage: presentationSelectedPage,
         dataRefs,
         showNodeRunDuration: showNodeRunDurations,
       }),
-    [dataRefs, displayedOutput, node.type, selectedPage, showNodeRunDurations],
+    [dataRefs, displayedOutput, node.type, presentationSelectedPage, showNodeRunDurations],
   );
   const { data, processId } = outputViewModel;
   const responseTrace = useMemo(() => buildLlmInvocationTrace(node, selectedProcessData), [node, selectedProcessData]);
@@ -422,7 +435,7 @@ const NodeFullscreenOutput: FC<{ node: ChartNode }> = ({ node }) => {
   const handleCopyToClipboardJson = useStableCallback(() => copyOutputJson(copySource, dataRefs));
   const durationSummaryKey = useMemo(
     () =>
-      filteredOutput
+      presentationOutput
         ?.map(
           (process) =>
             `${process.processId}:${process.data.status?.type ?? ''}:${process.data.durationMs ?? ''}:${JSON.stringify(
@@ -430,7 +443,7 @@ const NodeFullscreenOutput: FC<{ node: ChartNode }> = ({ node }) => {
             )}`,
         )
         .join('|') ?? '',
-    [filteredOutput],
+    [presentationOutput],
   );
   const contentVersion = useMemo(
     () => ({
@@ -470,22 +483,26 @@ const NodeFullscreenOutput: FC<{ node: ChartNode }> = ({ node }) => {
   useFullscreenOutputKeyboardNavigation(fullscreenOutputBodyRef, fullscreenOutputRootRef);
 
   const prevPage = useStableCallback(() => {
-    if (!filteredOutput) {
+    if (!presentationOutput) {
       return;
     }
     setSelectedPage((page) => {
-      const pageNum = getSelectedProcessPageIndex(filteredOutput, page) ?? 0;
+      const pageNum = getSelectedProcessPageIndex(presentationOutput, page) ?? 0;
       return pageNum > 0 ? pageNum - 1 : pageNum;
     });
   });
 
   const nextPage = useStableCallback(() => {
-    if (!filteredOutput) {
+    if (!presentationOutput) {
       return;
     }
     setSelectedPage((page) => {
-      const pageNum = getSelectedProcessPageIndex(filteredOutput, page) ?? 0;
-      return pageNum < filteredOutput.length - 1 ? pageNum + 1 : pageNum;
+      const pageNum = getSelectedProcessPageIndex(presentationOutput, page) ?? 0;
+      const nextPage = pageNum + 1;
+      if (nextPage >= presentationOutput.length) {
+        return pageNum;
+      }
+      return isStreamingWatchBranchNode && nextPage === presentationOutput.length - 1 ? 'latest' : nextPage;
     });
   });
 
@@ -494,7 +511,7 @@ const NodeFullscreenOutput: FC<{ node: ChartNode }> = ({ node }) => {
   }
 
   const { content, data: selectedData } = outputViewModel;
-  const showDurationSummary = shouldShowNodeRunDurationSummary(node.type, filteredOutput, showNodeRunDurations);
+  const showDurationSummary = shouldShowNodeRunDurationSummary(node.type, presentationOutput, showNodeRunDurations);
   const showDurationMeta =
     !showDurationSummary && shouldShowNodeRunDurationMeta(node.type, selectedData, showNodeRunDurations);
 
@@ -503,7 +520,7 @@ const NodeFullscreenOutput: FC<{ node: ChartNode }> = ({ node }) => {
   if (content.kind === 'code-error') {
     outputBody = (
       <>
-        {showDurationSummary && filteredOutput && <NodeRunDurationSummaryMeta processData={filteredOutput} hasBody />}
+        {showDurationSummary && presentationOutput && <NodeRunDurationSummaryMeta processData={presentationOutput} hasBody />}
         {showDurationMeta && <NodeRunDurationMeta data={selectedData} hasBody />}
         <CodeNodeErrorOutput data={selectedData} />
       </>
@@ -511,7 +528,7 @@ const NodeFullscreenOutput: FC<{ node: ChartNode }> = ({ node }) => {
   } else if (content.kind === 'generic-error') {
     outputBody = (
       <div className="errored">
-        {showDurationSummary && filteredOutput && <NodeRunDurationSummaryMeta processData={filteredOutput} hasBody />}
+        {showDurationSummary && presentationOutput && <NodeRunDurationSummaryMeta processData={presentationOutput} hasBody />}
         {showDurationMeta && <NodeRunDurationMeta data={selectedData} hasBody />}
         <div className="node-output-error-message" {...{ [OUTPUT_NAVIGATION_ITEM_ATTRIBUTE]: '' }}>
           {content.error}
@@ -569,8 +586,8 @@ const NodeFullscreenOutput: FC<{ node: ChartNode }> = ({ node }) => {
 
     outputBody = (
       <>
-        {showDurationSummary && filteredOutput && (
-          <NodeRunDurationSummaryMeta processData={filteredOutput} hasBody={hasBody} />
+        {showDurationSummary && presentationOutput && (
+          <NodeRunDurationSummaryMeta processData={presentationOutput} hasBody={hasBody} />
         )}
         {showDurationMeta && <NodeRunDurationMeta data={selectedData} hasBody={hasBody} />}
         {content.kind === 'output' && content.errorMessage && (
@@ -598,6 +615,7 @@ const NodeFullscreenOutput: FC<{ node: ChartNode }> = ({ node }) => {
         <div className="fullscreen-output-pagers">
           {outputViewModel.totalPages > 1 && (
             <NodeOutputPager
+              latestPageLabel={isStreamingWatchBranchNode ? 'Terminal' : undefined}
               selectedPage={displaySelectedPage}
               totalPages={outputViewModel.totalPages}
               onPrevPage={prevPage}

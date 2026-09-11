@@ -1,7 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import type { ChartNode, NodeConnection, NodeId, PortId } from '@valerypopoff/rivet2-core';
-import { getStreamingOutputWatchConnections } from './streamingOutputWatchWireState.js';
+import {
+  getStreamingOutputWatchBranchNodeIds,
+  getStreamingOutputWatchConnections,
+} from './streamingOutputWatchWireState.js';
 
 function node(id: string, type: ChartNode['type'], disabled = false): ChartNode {
   return {
@@ -52,4 +55,41 @@ test('leaves disabled and non-watch targets visually ordinary', () => {
     }).size,
     0,
   );
+});
+
+test('finds the Watch branch through Stop but not its ordinary downstream work', () => {
+  const connections: NodeConnection[] = [
+    connection('stream'),
+    {
+      inputId: 'input' as PortId,
+      inputNodeId: 'transform' as NodeId,
+      outputId: 'value' as PortId,
+      outputNodeId: 'watch' as NodeId,
+    },
+    {
+      inputId: 'value' as PortId,
+      inputNodeId: 'stop' as NodeId,
+      outputId: 'output' as PortId,
+      outputNodeId: 'transform' as NodeId,
+    },
+    {
+      inputId: 'input' as PortId,
+      inputNodeId: 'after-stop' as NodeId,
+      outputId: 'value' as PortId,
+      outputNodeId: 'stop' as NodeId,
+    },
+  ];
+
+  const branchNodeIds = getStreamingOutputWatchBranchNodeIds({
+    connections,
+    nodes: [
+      node('llm', 'llmChatV2'),
+      node('watch', 'watchStreamingOutput'),
+      node('transform', 'passthrough'),
+      node('stop', 'stopWatchingStreamingOutput'),
+      node('after-stop', 'passthrough'),
+    ],
+  });
+
+  assert.deepEqual(branchNodeIds, new Set(['transform' as NodeId, 'stop' as NodeId]));
 });

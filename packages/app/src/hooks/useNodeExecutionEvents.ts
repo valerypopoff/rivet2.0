@@ -73,7 +73,7 @@ export function useNodeExecutionEvents({
   };
 
   const onNodeFinish = (event: ProcessEvents['nodeFinish']) => {
-    const { node, outputs, processId, durationMs, splitRunDurationMs, execution } = event;
+    const { node, outputs, processId, durationMs, splitRunDurationMs, streamingWatchTerminal, execution } = event;
     if (shouldSuppressPreloadedNodeEvent(node.id, processId)) {
       return;
     }
@@ -85,6 +85,7 @@ export function useNodeExecutionEvents({
       durationMs,
       ...getRecordedNodeTimingPatch(event, 'terminal'),
       splitRunDurationMs,
+      ...(streamingWatchTerminal ? { streamingWatchTerminal: true } : {}),
     });
     setSelectedNodePageLatest(node.id, execution);
   };
@@ -187,6 +188,7 @@ export function useNodeExecutionEvents({
             data: {},
             graphId: data.execution.graphId,
             graphRunId: data.execution.graphRunId,
+            parentGraphRunId: data.execution.parentGraphRunId,
             processId: data.processId,
             rootRunId: data.execution.rootRunId,
           };

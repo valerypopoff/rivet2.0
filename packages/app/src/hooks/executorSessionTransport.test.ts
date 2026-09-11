@@ -3,7 +3,11 @@ import test from 'node:test';
 import {
   createDebuggerTransportEscapedSentinelEnvelope,
   createDebuggerTransportUndefinedSentinel,
+  type GraphExecutionMetadata,
+  type GraphId,
+  type GraphRunId,
   type PortId,
+  type RootRunId,
 } from '@valerypopoff/rivet2-core';
 import {
   parseExecutorSessionIncomingMessage,
@@ -110,6 +114,38 @@ test('executor transport decodes debugger sentinels in process event messages', 
   }
 
   assert.equal(parsed.incoming.data.outputs['output' as PortId]?.value, undefined);
+});
+
+test('executor transport preserves retained Watch child execution lineage', () => {
+  const target = createExternalDebuggerTarget('ws://debugger.example/latest');
+  const execution: GraphExecutionMetadata = {
+    graphId: 'main-graph' as GraphId,
+    graphRunId: 'watch-child-run' as GraphRunId,
+    parentGraphRunId: 'root-graph-run' as GraphRunId,
+    rootRunId: 'root-run' as RootRunId,
+  };
+  const parsed = parseExecutorSessionIncomingMessage({
+    rawMessage: JSON.stringify({
+      data: {
+        execution,
+      node: { id: 'watch-branch-node', type: 'text' },
+      outputs: { output: { type: 'string', value: 'final retained value' } },
+      processId: 'watch-branch-process',
+      streamingWatchTerminal: true,
+      },
+      message: 'nodeFinish',
+    }),
+    socketUrl: target.url,
+    target,
+  });
+
+  assert.equal(parsed?.kind, 'process-event');
+  if (parsed?.kind !== 'process-event' || parsed.incoming.message !== 'nodeFinish') {
+    assert.fail('Expected a nodeFinish process event');
+  }
+
+  assert.deepEqual(parsed.incoming.data.execution, execution);
+  assert.equal(parsed.incoming.data.streamingWatchTerminal, true);
 });
 
 test('executor transport preserves user objects that only resemble debugger sentinels', () => {

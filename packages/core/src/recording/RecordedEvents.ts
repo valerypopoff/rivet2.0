@@ -63,6 +63,7 @@ export type RecordedEventsMap = OverrideProperties<
       resultOrigin?: ProcessEvents['nodeFinish']['resultOrigin'];
       durationMs?: number;
       splitRunDurationMs?: Record<number, number>;
+      streamingWatchTerminal?: boolean;
     }>;
 
     /** Called when a node has errored during processing. */

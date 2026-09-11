@@ -1110,8 +1110,14 @@ void describe('GraphProcessor scheduler boundaries', () => {
       return { output: inputs['input' as PortId]! };
     });
     const processor = createProcessor(graph);
-    processor.on('nodeFinish', ({ node, outputs }) => {
-      if (node.id === stop.id && outputs['value' as PortId]?.value === 'first') firstStop.resolve();
+    const stopTerminals: Array<{ value: unknown; streamingWatchTerminal: boolean | undefined }> = [];
+    processor.on('nodeFinish', ({ node, outputs, streamingWatchTerminal }) => {
+      if (node.id !== stop.id) return;
+      stopTerminals.push({
+        value: outputs['value' as PortId]?.value,
+        streamingWatchTerminal,
+      });
+      if (outputs['value' as PortId]?.value === 'first') firstStop.resolve();
     });
     try {
       const outputs = await withTimeout(
@@ -1119,6 +1125,7 @@ void describe('GraphProcessor scheduler boundaries', () => {
         'first Stop with a pending sibling',
       );
       assert.equal(outputs.result?.value, 'first');
+      assert.deepEqual(stopTerminals, [{ value: 'first', streamingWatchTerminal: true }]);
     } finally {
       releaseSibling.resolve();
     }
@@ -1308,6 +1315,71 @@ void describe('GraphProcessor scheduler boundaries', () => {
 
     const result = await processor.processGraph(testProcessContext());
     const expectedValue = { type: 'string[]', value: ['first', 'second'] };
+    const recordedStopOutput = recorder.events.find(
+      (event) => event.type === 'nodeFinish' && event.data.nodeId === stop.id,
+    );
+    const replayEmitter = new Emittery<ProcessEvents>();
+    let replayedStopOutput: Outputs | undefined;
+    replayEmitter.on('nodeFinish', ({ node, outputs }) => {
+      if (node.id === stop.id) {
+        replayedStopOutput = outputs;
+      }
+    });
+    await replayExecutionRecording({
+      emitter: replayEmitter,
+      erroredNodes: new Map(),
+      graphInputs: {},
+      graphOutputs: {},
+      isAborted: () => false,
+      nodeResults: new Map(),
+      project: makeProject(graph),
+      recorder,
+      recordingPlaybackChatLatency: 0,
+      setContextValues: () => {},
+      setGraphInputs: () => {},
+      setGraphOutputs: () => {},
+      setRunning: () => {},
+      visitedNodes: new Set(),
+      waitUntilUnpaused: async () => {},
+    });
+
+    assert.deepEqual(terminalStopOutput?.['value' as PortId], expectedValue);
+    assert.deepEqual(
+      recordedStopOutput?.type === 'nodeFinish' ? recordedStopOutput.data.outputs['value' as PortId] : undefined,
+      expectedValue,
+    );
+    assert.deepEqual(replayedStopOutput?.['value' as PortId], expectedValue);
+    assert.deepEqual(result.result, expectedValue);
+  });
+
+  void it('records and replays the normal Stop Value that resumes the parent graph', async () => {
+    const source = makeTestNode('source');
+    const watch = makeWatchNode();
+    const stop = makeStopWatchNode();
+    const output = makeGraphOutputNode();
+    const graph = makeGraph(
+      'recorded-stop-value',
+      [source, watch, stop, output],
+      [
+        connect(source.id, watch.id, 'stream'),
+        connect(watch.id, stop.id, 'value', 'value'),
+        connect(stop.id, output.id, 'value', 'value'),
+      ],
+    );
+    const expectedValue = { type: 'string', value: 'accepted final chunk' } as const;
+    AsyncTestNodeImpl.handlers.set(source.id, () => ({ output: expectedValue }));
+
+    const processor = createProcessor(graph);
+    const recorder = new ExecutionRecorder();
+    recorder.record(processor);
+    let terminalStopOutput: Outputs | undefined;
+    processor.on('nodeFinish', ({ node, outputs }) => {
+      if (node.id === stop.id) {
+        terminalStopOutput = outputs;
+      }
+    });
+
+    const result = await processor.processGraph(testProcessContext());
     const recordedStopOutput = recorder.events.find(
       (event) => event.type === 'nodeFinish' && event.data.nodeId === stop.id,
     );

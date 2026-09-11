@@ -1,6 +1,6 @@
 {
   "formatVersion": 1,
-  "catalogFingerprint": "fnv1a64:1191408796225fda",
+  "catalogFingerprint": "fnv1a64:9fd6eb3beb436d48",
   "entries": [
     {
       "authoringChoiceId": "registered:abortGraph",
@@ -184,8 +184,8 @@
     {
       "authoringChoiceId": "registered:chatLoop",
       "nodeType": "chatLoop",
-      "displayName": "Chat Loop",
-      "description": "Chat Loop Node The Chat Loop node is a convenience node for interactive chat style workflows. It keeps appending generated assistant messages to the conversation until the configured stop behavior is reached. Inputs Chat Loop uses the same model, prompt, tool, and provider inputs as chat family nodes. Outputs Title Data Type Description Full Conversation chat message[] Complete conversation collected by the loop. Last Message chat message Final message in the conversation. Settings Setting Description User Prompt Prompt text shown when the loop asks the user for a reply. Rendering Whether user facing prompts are rendered as text or markdown.",
+      "displayName": "Chat Loop (legacy)",
+      "description": "Chat Loop (legacy) Node The Chat Loop (legacy) node is a compatibility node for existing interactive chat style workflows. For new projects, prefer LLM Chat . It keeps appending generated assistant messages to the conversation until the configured stop behavior is reached. Inputs Chat Loop (legacy) uses the same model, prompt, tool, and provider inputs as chat family nodes. Outputs Title Data Type Description Full Conversation chat message[] Complete conversation collected by the loop. Last Message chat message Final message in the conversation. Settings Setting Description User Prompt Prompt text shown when the loop asks the user for a reply. Rendering Whether user facing prompts are rendered as text or markdown.",
       "aliases": [],
       "capabilities": {
         "createWithDefaults": true,

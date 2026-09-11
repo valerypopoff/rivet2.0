@@ -32,6 +32,32 @@ function createDataRefStore(): DataRefStore {
   };
 }
 
+test('inactive project snapshots retain a Watch child run parent identity', () => {
+  const graphId = 'graph-a' as GraphId;
+  const snapshot = applyProcessEventToProjectExecutionSnapshot({
+    data: {
+      execution: {
+        graphId,
+        graphRunId: 'watch-child-run' as GraphRunId,
+        parentGraphRunId: 'root-graph-run' as GraphRunId,
+        rootRunId: 'root-run' as RootRunId,
+      },
+      inputs: {},
+      node: { id: 'watch-branch-node' as NodeId },
+      processId: 'watch-branch-process' as ProcessId,
+    } as never,
+    message: 'nodeStart',
+    projectId: 'project-a' as ProjectId,
+    refStore: createDataRefStore(),
+    snapshot: undefined,
+  }).snapshot;
+
+  assert.equal(
+    snapshot.lastRunDataByNode['watch-branch-node' as NodeId]?.[0]?.parentGraphRunId,
+    'root-graph-run',
+  );
+});
+
 test('inactive project snapshot reducer finishes a hidden successful run', () => {
   const projectId = 'project-a' as ProjectId;
   const graphId = 'graph-a' as GraphId;
@@ -112,6 +138,7 @@ test('inactive project snapshot reducer finishes a hidden successful run', () =>
       },
       processId,
       replayRecordedAt: 22_000,
+      streamingWatchTerminal: true,
     } as never,
     message: 'nodeFinish',
     projectId,
@@ -150,6 +177,7 @@ test('inactive project snapshot reducer finishes a hidden successful run', () =>
   assert.deepEqual(snapshot.runningGraphs, []);
   assert.equal(snapshot.lastRunDataByNode[nodeId]?.[0]?.data.status?.type, 'ok');
   assert.equal(snapshot.lastRunDataByNode[nodeId]?.[0]?.data.durationMs, 12);
+  assert.equal(snapshot.lastRunDataByNode[nodeId]?.[0]?.data.streamingWatchTerminal, true);
   assert.deepEqual(snapshot.lastRunDataByNode[nodeId]?.[0]?.data.recordedTiming, {
     startedAt: 10_000,
     finishedAt: 22_000,

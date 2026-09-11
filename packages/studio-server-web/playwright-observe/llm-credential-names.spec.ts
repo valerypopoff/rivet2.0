@@ -98,6 +98,15 @@ test('LLM Chat exposes editable built-in-provider credential names', async ({ pa
   await expect(environmentVariableName).toHaveValue('SUPPORT_ANTHROPIC_KEY');
 });
 
+test('Chat Loop is visibly labeled legacy while its persisted compatibility type remains available', async ({ page }) => {
+  const editor = await openEmptyProject(page, 'Legacy-Chat-Loop');
+
+  await addNode(editor, 'Chat Loop (legacy)');
+  await expect(editor.locator('.node .node-title', { hasText: 'Chat Loop (legacy)' }).last()).toHaveText(
+    'Chat Loop (legacy)',
+  );
+});
+
 test('LLM Profile exposes the same built-in-provider credential contract', async ({ page }) => {
   const editor = await openEmptyProject(page, 'Profile');
 

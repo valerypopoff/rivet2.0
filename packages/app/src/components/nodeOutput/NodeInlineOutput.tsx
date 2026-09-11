@@ -13,6 +13,7 @@ import { useStableCallback } from '../../hooks/useStableCallback.js';
 import { useUnknownNodeComponentDescriptorFor } from '../../hooks/useNodeTypes.js';
 import { useDataRefs } from '../../providers/ProvidersContext.js';
 import { promptDesignerAttachedChatNodeState } from '../../state/promptDesigner.js';
+import { graphState } from '../../state/graph.js';
 import {
   type NodeRunDataWithRefs,
   type ProcessDataForNode,
@@ -43,6 +44,7 @@ import { NodeOutputPager } from './NodeOutputPager.js';
 import { LLMChatOutputHistoryPager } from './LLMChatOutputHistoryPager.js';
 import { LLMChatSplitOutputHistory } from './LLMChatSplitOutputHistory.js';
 import { resolveNodeOutputPreviewMode } from './nodeOutputPreviewMode.js';
+import { getStopWatchingStreamingOutputPresentation } from './streamingOutputWatchPresentation.js';
 import {
   createNodeOutputContentViewModel,
   getNodeOutputCopySource,
@@ -61,6 +63,7 @@ import {
 } from './NodeRunDurationMeta.js';
 import { nodeRunDataHasVisibleOutput } from './nodeOutputVisibility.js';
 import { renderNodeOutputBody } from './renderNodeOutputBody.js';
+import { getStreamingOutputWatchBranchNodeIds } from '../nodeCanvas/streamingOutputWatchWireState.js';
 
 export const NodeInlineOutput: FC<{
   node: ChartNode;
@@ -75,6 +78,10 @@ export const NodeInlineOutput: FC<{
   const selectedPage = useAtomValue(selectedProcessPageState(node.id));
   const showNodeRunDurations = useAtomValue(showNodeRunDurationsState);
   const graphSelectionOptions = useAtomValue(resolvedGraphSelectionState);
+  const graph = useAtomValue(graphState);
+  const streamingWatchBranchNodeIds = useMemo(() => getStreamingOutputWatchBranchNodeIds(graph), [graph]);
+  const isStreamingWatchBranchNode = streamingWatchBranchNodeIds.has(node.id);
+  const isStreamingWatchStop = isStreamingWatchBranchNode && node.type === 'stopWatchingStreamingOutput';
   const filteredOutput = useMemo(
     () => filterProcessDataForSelection({ ...graphSelectionOptions, processData: output }),
     [graphSelectionOptions, output],
@@ -87,13 +94,19 @@ export const NodeInlineOutput: FC<{
     replacementScopeKey: selectedGraphRunScopeKey,
     showNodeRunDuration: showNodeRunDurations,
   });
+  // Stop is the one-time exit from repeated work. Even if a parallel Watch
+  // briefly records losing attempts, present only the accepted terminal value
+  // here; ordinary Watch-branch nodes retain their bounded history pager.
+  const presentationOutput = isStreamingWatchStop
+    ? getStopWatchingStreamingOutputPresentation(visibleOutput)
+    : visibleOutput;
 
-  if (!visibleOutput?.length) {
+  if (!presentationOutput?.length) {
     return null;
   }
 
-  if (visibleOutput.length === 1) {
-    const firstOutput = visibleOutput[0];
+  if (presentationOutput.length === 1) {
+    const firstOutput = presentationOutput[0];
     if (!firstOutput) {
       return null;
     }
@@ -119,11 +132,12 @@ export const NodeInlineOutput: FC<{
       <div className="node-output multi">
         <NodeOutputMultiProcess
           node={node}
-          data={visibleOutput}
+          data={presentationOutput}
           isFrozen={isFrozen}
           isOutputExpanded={isOutputExpanded}
           isHovered={isHovered}
           showNodeRunDuration={showNodeRunDurations}
+          latestPageLabel={isStreamingWatchBranchNode ? 'Terminal' : undefined}
           onToggleExpandedOutput={onToggleExpandedOutput}
           onOpenFullscreenModal={onOpenFullscreenModal}
         />
@@ -141,6 +155,7 @@ const NodeOutputSingleProcess: FC<{
   isHovered: boolean;
   processId: ProcessId;
   showNodeRunDuration: boolean;
+  latestPageLabel?: string;
   suppressDurationMeta?: boolean;
   onToggleExpandedOutput: () => void;
   onOpenFullscreenModal?: () => void;
@@ -151,6 +166,7 @@ const NodeOutputSingleProcess: FC<{
   isFrozen,
   isOutputExpanded,
   isHovered,
+  latestPageLabel,
   processId,
   showNodeRunDuration,
   suppressDurationMeta = false,
@@ -475,6 +491,7 @@ const NodeOutputMultiProcess: FC<{
   isFrozen: boolean;
   isOutputExpanded: boolean;
   isHovered: boolean;
+  latestPageLabel?: string;
   showNodeRunDuration: boolean;
   onToggleExpandedOutput: () => void;
   onOpenFullscreenModal?: () => void;
@@ -484,6 +501,7 @@ const NodeOutputMultiProcess: FC<{
   isFrozen,
   isOutputExpanded,
   isHovered,
+  latestPageLabel,
   showNodeRunDuration,
   onToggleExpandedOutput,
   onOpenFullscreenModal,
@@ -503,7 +521,11 @@ const NodeOutputMultiProcess: FC<{
   const nextPage = useStableCallback(() => {
     setSelectedPage((page) => {
       const pageNum = getSelectedProcessPageIndex(data, page) ?? 0;
-      return pageNum < data.length - 1 ? pageNum + 1 : pageNum;
+      const nextPage = pageNum + 1;
+      if (nextPage >= data.length) {
+        return pageNum;
+      }
+      return latestPageLabel != null && nextPage === data.length - 1 ? 'latest' : nextPage;
     });
   });
 
@@ -515,6 +537,7 @@ const NodeOutputMultiProcess: FC<{
   return (
     <div className="multi-node-output">
       <NodeOutputPager
+        latestPageLabel={latestPageLabel}
         selectedPage={displaySelectedPage}
         totalPages={data.length}
         onPrevPage={prevPage}
