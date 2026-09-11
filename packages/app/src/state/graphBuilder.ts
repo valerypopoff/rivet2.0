@@ -40,6 +40,22 @@ export const lastCanvasPositionByGraphState = atomWithStorage<Record<GraphId, Ca
   storage,
 );
 
+export function removeCanvasPositionsForGraphs(
+  positionsByGraph: Record<GraphId, CanvasPosition | undefined>,
+  graphIds: readonly GraphId[],
+): Record<GraphId, CanvasPosition | undefined> {
+  const graphIdsToRemove = new Set(graphIds.filter((graphId) => graphId in positionsByGraph));
+  if (graphIdsToRemove.size === 0) {
+    return positionsByGraph;
+  }
+
+  const nextPositionsByGraph = { ...positionsByGraph };
+  for (const graphId of graphIdsToRemove) {
+    delete nextPositionsByGraph[graphId];
+  }
+  return nextPositionsByGraph;
+}
+
 export const draggingNodesState = atom<ChartNode[]>([]);
 
 export const lastMousePositionState = atom<{ x: number; y: number }>({

@@ -398,8 +398,10 @@ test('one prepared commit atomically publishes, undoes and redoes multiple graph
   sibling.nodes = [node('sibling-survives'), node('sibling-removed')];
   const removed = graph(removedGraphId, 'Removed before');
   const unrelated = graph(unrelatedGraphId, 'Unrelated before');
+  const initialProject = project(active);
   store.set(projectState, {
-    ...project(active),
+    ...initialProject,
+    metadata: { ...initialProject.metadata, mainGraphId: removedGraphId },
     graphs: {
       [graphId]: active,
       [siblingGraphId]: sibling,
@@ -453,6 +455,7 @@ test('one prepared commit atomically publishes, undoes and redoes multiple graph
   assert.equal(store.get(projectState).graphs[siblingGraphId]?.metadata?.name, 'Sibling after');
   assert.equal(store.get(projectState).graphs[createdGraphId]?.metadata?.name, 'Created');
   assert.equal(store.get(projectState).graphs[removedGraphId], undefined);
+  assert.equal(store.get(projectState).metadata.mainGraphId, undefined);
   assert.equal(store.get(projectState).graphs[unrelatedGraphId]?.metadata?.name, 'Unrelated before');
   assert.deepEqual(Object.keys(store.get(frozenNodeOutputsState)[siblingGraphId] ?? {}), ['sibling-survives']);
   assert.equal(store.get(recoverableNodeConnectionsStatePerGraph)[siblingGraphId], undefined);
@@ -471,6 +474,7 @@ test('one prepared commit atomically publishes, undoes and redoes multiple graph
   assert.equal(store.get(projectState).graphs[siblingGraphId]?.metadata?.name, 'Sibling before');
   assert.equal(store.get(projectState).graphs[createdGraphId], undefined);
   assert.equal(store.get(projectState).graphs[removedGraphId]?.metadata?.name, 'Removed before');
+  assert.equal(store.get(projectState).metadata.mainGraphId, removedGraphId);
   assert.equal(store.get(projectState).graphs[unrelatedGraphId]?.metadata?.name, 'Unrelated user edit');
   assert.deepEqual(Object.keys(store.get(frozenNodeOutputsState)[siblingGraphId] ?? {}).sort(), [
     'sibling-removed',
@@ -483,6 +487,7 @@ test('one prepared commit atomically publishes, undoes and redoes multiple graph
   assert.equal(store.get(projectState).graphs[siblingGraphId]?.metadata?.name, 'Sibling after');
   assert.equal(store.get(projectState).graphs[createdGraphId]?.metadata?.name, 'Created');
   assert.equal(store.get(projectState).graphs[removedGraphId], undefined);
+  assert.equal(store.get(projectState).metadata.mainGraphId, undefined);
   assert.equal(store.get(projectState).graphs[unrelatedGraphId]?.metadata?.name, 'Unrelated user edit');
 });
 

@@ -18,6 +18,10 @@ Do not add parallel resource-open booleans. Use
 target per open project. Graph viewport state remains graph-owned; Node library
 viewport state is separate session state. UI graphs own their declarative editor
 state. Closing a project clears every target/resource session entry for that id.
+Always validate a stored target against current project content before rendering
+it: project replacement and graph deletion can invalidate a graph view (including
+a subgraph whose caller was removed or retargeted) without a normal workspace
+transition.
 
 ## Transitions
 
@@ -41,6 +45,31 @@ strip shell. `ProjectTabRow`, `ProjectFileMenu`, `GraphTopBarControls`, and
 owns active/preview/unsaved tab presentation and OS-specific visibility policy.
 Keep display-name and platform decisions out of JSX. Dirty state remains a
 project-id keyed app/session concern and is not project YAML.
+Dirty detection compares complete project content with its saved digest even
+when the active canvas is an empty placeholder after graph deletion. The
+placeholder is excluded from the save snapshot, so deletion immediately marks
+the project dirty. `useDeleteGraphs()` only replaces the canvas when the deleted
+graph was active; deleting another graph preserves the active canvas and any
+unsaved edits there. `replaceProjectGraphs(...)` owns normal graph-collection
+writes and Graph Builder history publication: it clears `metadata.mainGraphId`
+when that graph no longer exists, reconciles graph-bound web-app actions, and
+lets undo/redo restore a valid Main Graph setting.
+`useDeleteGraphs()` is the deletion boundary for both individual graphs and
+folders. It blocks removal of a graph that is executing and atomically removes
+its frozen outputs, recoverable connections, legacy viewport cache, persisted
+editor navigation/viewport entries, and invalid workspace target. When the
+active project contains a surviving static caller or a web-app Button/Chat
+action targeting a graph, deletion is also blocked; remove or retarget that
+reference first. Dynamic Call Graph inputs remain valid after any graph is
+removed, so they are deliberately diagnostic-only and do not block deletion. A
+multi-graph folder deletion may remove references that stay entirely inside the
+deleted set. When the
+active graph is deleted, its blank placeholder has an empty navigation stack;
+the deleted graph can never remain selected through session state. Graph
+navigation deliberately skips history entries whose graph has since been
+deleted, and persistence remaps the selected surviving entry rather than merely
+clamping its old array index, so Back/Forward and reopening cannot target the
+wrong graph after a deletion.
 
 ## Graph Tree And Resources
 

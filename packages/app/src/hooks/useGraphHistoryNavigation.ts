@@ -10,7 +10,7 @@ export const useGraphHistoryNavigation = () => {
   const loadGraph = useLoadGraph();
   const project = useAtomValue(projectState);
 
-  const { hasForward, hasBackward } = getGraphNavigationAvailability(graphNavigationStack);
+  const { hasForward, hasBackward } = getGraphNavigationAvailability(graphNavigationStack, project);
 
   const navigateBack = useCallback(() => {
     const target = resolveNavigationTarget({

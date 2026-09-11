@@ -14,6 +14,18 @@ export const setProjectWorkspaceTargetState = atom(
   },
 );
 
+/** Clears only the active workspace resource. Project-close cleanup also owns the node-library viewport. */
+export const clearProjectWorkspaceTargetState = atom(null, (get, set, projectId: ProjectId) => {
+  const current = get(projectWorkspaceTargetsState);
+  if (!current[projectId]) {
+    return;
+  }
+
+  const next = { ...current };
+  delete next[projectId];
+  set(projectWorkspaceTargetsState, next);
+});
+
 export const removeProjectWorkspaceTargetState = atom(null, (get, set, projectId: ProjectId) => {
   const current = get(projectWorkspaceTargetsState);
   if (current[projectId]) {

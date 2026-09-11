@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, test } from 'node:test';
-import type { DataId, GraphId, NodeGraph, Project, ProjectId } from '@valerypopoff/rivet2-core';
+import { emptyNodeGraph, type DataId, type GraphId, type NodeGraph, type Project, type ProjectId } from '@valerypopoff/rivet2-core';
 import {
   buildCurrentProjectContentSnapshot,
   getProjectContentDigest,
@@ -9,6 +9,7 @@ import {
   markProjectClean,
   markProjectDirtyFlag,
   removeProjectUnsavedState,
+  resolveProjectContentDirtyState,
 } from './projectUnsavedChanges.js';
 
 function makeGraph(id: string, name: string, nodes: NodeGraph['nodes'] = []): NodeGraph {
@@ -94,6 +95,23 @@ describe('project unsaved changes helpers', () => {
     });
 
     assert.equal(snapshot.project.graphs['graph-1' as GraphId], changedGraph);
+  });
+
+  test('deleted graph content stays dirty while the editor displays an empty placeholder canvas', () => {
+    const retainedGraph = makeGraph('graph-1', 'Retained graph');
+    const deletedGraph = makeGraph('graph-2', 'Deleted graph');
+    const savedProject = makeProject([retainedGraph, deletedGraph]);
+    const deletedProject = makeProject([retainedGraph]);
+    const cleanDigests = markProjectClean({}, { project: savedProject });
+
+    const dirtyState = resolveProjectContentDirtyState(cleanDigests, {
+      project: deletedProject,
+      graph: emptyNodeGraph(),
+    });
+
+    assert.equal(dirtyState.hasSavedDigest, true);
+    assert.equal(dirtyState.isDirty, true);
+    assert.deepEqual(dirtyState.snapshot.project.graphs, deletedProject.graphs);
   });
 
   test('markProjectClean records the clean digest for a project', () => {

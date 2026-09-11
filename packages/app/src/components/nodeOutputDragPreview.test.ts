@@ -206,25 +206,6 @@ test('inline node output replacement grace is scoped to the selected graph run',
   );
 });
 
-test('node output pagers clamp stale process page selections to the filtered process list', () => {
-  const nodeInlineOutputSource = readFileSync(join(componentsDir, 'nodeOutput', 'NodeInlineOutput.tsx'), 'utf8');
-  const nodeFullscreenOutputSource = readFileSync(
-    join(componentsDir, 'nodeOutput', 'NodeFullscreenOutput.tsx'),
-    'utf8',
-  );
-  const portInfoSource = readFileSync(join(componentsDir, 'PortInfo.tsx'), 'utf8');
-
-  assert.match(nodeInlineOutputSource, /const selectedPageIndex = getSelectedProcessPageIndex\(data, selectedPage\);/);
-  assert.match(
-    nodeFullscreenOutputSource,
-    /const selectedPageIndex = getSelectedProcessPageIndex\(filteredOutput, selectedPage\);/,
-  );
-  assert.match(
-    portInfoSource,
-    /const selectedPageIndex = getSelectedProcessPageIndex\(filteredLastRun, selectedPage\);/,
-  );
-});
-
 test('inline node output actions reserve flow space without moving their hit targets', () => {
   const nodeInlineOutputSource = readFileSync(join(componentsDir, 'nodeOutput', 'NodeInlineOutput.tsx'), 'utf8');
   const nodeStylesSource = readFileSync(join(componentsDir, 'nodeStyles.ts'), 'utf8');

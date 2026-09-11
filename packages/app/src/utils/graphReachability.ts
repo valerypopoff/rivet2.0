@@ -198,11 +198,20 @@ export function getGraphReachabilityReport(
 }
 
 /**
- * Returns static same-project references only. Delegate Tool Call edges are
- * intentionally excluded because tool handlers are reachability roots, not
- * direct references for this editor query.
+ * Returns same-project graph references. The graph-list indicator includes
+ * dynamic Call Graph edges as possible references. Delegate Tool Call edges
+ * are excluded by default because tool handlers are reachability roots rather
+ * than direct references for that indicator. Destructive-operation callers can
+ * opt into configured handlers and out of dynamic possibilities.
  */
-export function getGraphIdsReferencingGraph(project: ReachabilityProject, targetGraphId: GraphId): Set<GraphId> {
+export function getGraphIdsReferencingGraph(
+  project: ReachabilityProject,
+  targetGraphId: GraphId,
+  options: {
+    includeDelegateFunctionCallEdges?: boolean;
+    includeDynamicCallGraphEdges?: boolean;
+  } = {},
+): Set<GraphId> {
   const referencingGraphIds = new Set<GraphId>();
   const discovery = createGraphDependencyDiscovery(project);
 
@@ -218,8 +227,13 @@ export function getGraphIdsReferencingGraph(project: ReachabilityProject, target
 
     const referencesTarget = collectGraphDependencyEdges({
       index,
-      includeDelegateFunctionCallEdges: false,
-    }).some((edge) => isReachableGraphDependencyEdge(edge) && edge.targets.includes(targetGraphId));
+      includeDelegateFunctionCallEdges: options.includeDelegateFunctionCallEdges ?? false,
+    }).some(
+      (edge) =>
+        isReachableGraphDependencyEdge(edge) &&
+        ((options.includeDynamicCallGraphEdges ?? true) || edge.kind !== 'dynamic-via-callgraph') &&
+        edge.targets.includes(targetGraphId),
+    );
 
     if (referencesTarget) {
       referencingGraphIds.add(graphId);

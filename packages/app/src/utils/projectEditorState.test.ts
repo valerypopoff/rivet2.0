@@ -48,8 +48,10 @@ function makeCanvasPositions(
 }
 
 describe('projectEditorState', () => {
-  test('sanitizeNavigationStackForProject drops invalid entries and clamps the active index', () => {
-    const rootGraph = makeGraph('root', 'Root', [{ id: 'sub-node', type: 'subGraph', data: {}, visualData: { x: 0, y: 0 } } as any]);
+test('sanitizeNavigationStackForProject drops invalid entries and restores a valid active selection', () => {
+    const rootGraph = makeGraph('root', 'Root', [
+      { id: 'sub-node', type: 'subGraph', data: { graphId: 'sub' as GraphId }, visualData: { x: 0, y: 0 } } as any,
+    ]);
     const subGraph = makeGraph('sub', 'Sub');
     const project = makeProject([rootGraph, subGraph]);
 
@@ -87,6 +89,27 @@ describe('projectEditorState', () => {
       ],
       index: 1,
     });
+  });
+
+  test('sanitizeNavigationStackForProject keeps the selected graph when an earlier entry is deleted', () => {
+    const alpha = makeGraph('alpha', 'Alpha');
+    const beta = makeGraph('beta', 'Beta');
+    const project = makeProject([alpha, beta]);
+
+    assert.deepEqual(
+      sanitizeNavigationStackForProject(project, {
+        stack: [
+          createRootGraphViewContext('deleted' as GraphId),
+          createRootGraphViewContext('alpha' as GraphId),
+          createRootGraphViewContext('beta' as GraphId),
+        ],
+        index: 1,
+      }),
+      {
+        stack: [createRootGraphViewContext('alpha' as GraphId), createRootGraphViewContext('beta' as GraphId)],
+        index: 0,
+      },
+    );
   });
 
   test('sanitizeNavigationStackForProject falls back cleanly for malformed persisted stack shapes', () => {
@@ -196,7 +219,9 @@ describe('projectEditorState', () => {
   });
 
   test('resolveProjectEditorRestoreTarget normalizes explicit graphView inputs before restoring them', () => {
-    const rootGraph = makeGraph('root', 'Root', [{ id: 'sub-node', type: 'subGraph', data: {}, visualData: { x: 0, y: 0 } } as any]);
+    const rootGraph = makeGraph('root', 'Root', [
+      { id: 'sub-node', type: 'subGraph', data: { graphId: 'sub' as GraphId }, visualData: { x: 0, y: 0 } } as any,
+    ]);
     const subGraph = makeGraph('sub', 'Sub');
     const project = makeProject([rootGraph, subGraph], { mainGraphId: 'root' });
 
@@ -225,7 +250,9 @@ describe('projectEditorState', () => {
   });
 
   test('resolveProjectEditorRestoreTarget restores persisted navigation state and viewport', () => {
-    const rootGraph = makeGraph('root', 'Root', [{ id: 'sub-node', type: 'subGraph', data: {}, visualData: { x: 0, y: 0 } } as any]);
+    const rootGraph = makeGraph('root', 'Root', [
+      { id: 'sub-node', type: 'subGraph', data: { graphId: 'sub' as GraphId }, visualData: { x: 0, y: 0 } } as any,
+    ]);
     const subGraph = makeGraph('sub', 'Sub');
     const project = makeProject([rootGraph, subGraph], { mainGraphId: 'root' });
 
