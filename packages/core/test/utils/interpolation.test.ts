@@ -4,6 +4,7 @@ import {
   extractInterpolationVariableReferences,
   extractInterpolationVariables,
   findInterpolationTokenSpans,
+  getInterpolationGlobalValues,
   interpolate,
   parseInterpolationExpression,
   parseInterpolationTemplate,
@@ -402,6 +403,26 @@ describe('interpolation utilities', () => {
     );
   });
 
+  it('resolves @globals JSONPath expressions from a safe, selected snapshot without creating ports', () => {
+    const valuesById = new Map<string, { type: string; value: unknown }>([
+      ['profile', { type: 'object', value: { user: { name: 'Rivet' } } }],
+      ['__proto__', { type: 'object', value: { label: 'safe' } }],
+      ['unused', { type: 'string', value: 'not captured' }],
+    ]);
+    const template = '{{@globals.profile.user.name}} / {{@globals["__proto__"].label}}';
+    const globals = getInterpolationGlobalValues(template, (id) => valuesById.get(id));
+
+    assert.equal(Object.getPrototypeOf(globals), null);
+    assert.deepStrictEqual(Object.keys(globals), ['profile', '__proto__']);
+    assert.deepStrictEqual(extractInterpolationVariables(template), []);
+    assert.deepStrictEqual(parseInterpolationExpression('@globals.profile.user.name'), {
+      source: 'globals',
+      baseName: 'profile',
+      jsonPath: '$.user.name',
+    });
+    assert.equal(interpolate(template, {}, undefined, undefined, { globalValues: globals }), 'Rivet / safe');
+  });
+
   it('handles escaped tokens adjacent to real tokens without merging them', () => {
     assert.equal(
       interpolate('{{{literal}}}{{real}}{{{again}}}', {
@@ -466,6 +487,21 @@ describe('interpolation utilities', () => {
         'foo.values[1]',
       ),
       20,
+    );
+  });
+
+  it('resolves @globals through the isolated JavaScript resolver', () => {
+    assert.equal(
+      resolveCodeInterpolationExpression(
+        {},
+        '@globals.settings.flags[0]',
+        undefined,
+        undefined,
+        {
+          settings: { type: 'object', value: { flags: ['enabled'] } },
+        },
+      ),
+      'enabled',
     );
   });
 

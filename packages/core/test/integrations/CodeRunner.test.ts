@@ -36,3 +36,39 @@ test('IsomorphicCodeRunner injects the narrow interpolation resolver when reques
     },
   });
 });
+
+test('IsomorphicCodeRunner injects a selected global snapshot under its requested identifier', async () => {
+  const runner = new IsomorphicCodeRunner();
+  const outputs = await runner.runCode(
+    `
+      return {
+        output: {
+          type: 'any',
+          value: __resolveInterpolation(inputs, '@globals.profile.name', undefined, undefined, __globals),
+        },
+      };
+    `,
+    {},
+    {
+      includeConsole: false,
+      includeFetch: false,
+      includeProcess: false,
+      includeRequire: false,
+      includeRivet: false,
+      globalValuesIdentifier: '__globals',
+      interpolationHelperIdentifier: '__resolveInterpolation',
+    },
+    undefined,
+    undefined,
+    {
+      profile: { type: 'object', value: { name: 'browser-global' } },
+    },
+  );
+
+  assert.deepEqual(outputs, {
+    output: {
+      type: 'any',
+      value: 'browser-global',
+    },
+  });
+});

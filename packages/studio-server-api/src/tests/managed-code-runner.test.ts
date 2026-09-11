@@ -300,6 +300,35 @@ test('managed runner injects interpolation resolution without Rivet and caches e
   });
 });
 
+test('managed runner injects the selected global snapshot for special-root interpolation', async () => {
+  await withRunnerEnv({}, async () => {
+    const runner = new ManagedCodeRunner('/tmp/rivet-runtime-libraries-test');
+    const output = await runner.runCode(
+      `
+        return {
+          output: {
+            type: 'any',
+            value: __resolveInterpolation(inputs, '@globals.profile.name', undefined, undefined, __globals),
+          },
+        };
+      `,
+      {},
+      {
+        ...plainOptions,
+        globalValuesIdentifier: '__globals',
+        interpolationHelperIdentifier: '__resolveInterpolation',
+      },
+      undefined,
+      undefined,
+      {
+        profile: { type: 'object', value: { name: 'managed-global' } },
+      },
+    );
+
+    assert.equal(getOutputValue(output), 'managed-global');
+  });
+});
+
 test('syntax errors are not cached', async () => {
   await withRunnerEnv({}, async () => {
     const telemetry = createManagedCodeRunnerTelemetry();

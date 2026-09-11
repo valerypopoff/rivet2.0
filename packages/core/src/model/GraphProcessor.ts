@@ -1,4 +1,5 @@
 import {
+  type DataType,
   type DataValue,
   type StringArrayDataValue,
   type ControlFlowExcludedDataValue,
@@ -12,13 +13,14 @@ import {
   type NodeInputDefinition,
   type NodeOutputDefinition,
   type PortId,
+  IF_PORT,
 } from './NodeBase.js';
 import type { GraphId, NodeGraph } from './NodeGraph.js';
 import type { NodeImpl } from './NodeImpl.js';
 import PQueue from '../utils/pQueueCompat.js';
 import { getError } from '../utils/errors.js';
 import Emittery from 'emittery';
-import { type ProjectId, type Project, type ProjectReference } from './Project.js';
+import { type ProjectId, type Project } from './Project.js';
 import { nanoid } from 'nanoid/non-secure';
 import type {
   GraphExecutionMetadata,
@@ -47,7 +49,12 @@ import {
 } from './GraphPreprocessor.js';
 import { getGraphBoundary, type GraphBoundary, type GraphBoundaryCache } from './GraphBoundaryCache.js';
 import { createGraphOutputSelection, type GraphOutputSelection } from './GraphOutputSelection.js';
-import { applyFrozenGraphBoundaryEffects, ensureGraphCostOutput } from './GraphBoundaryEffects.js';
+import {
+  applyFrozenGraphBoundaryEffects,
+  commitGraphOutputValue,
+  ensureGraphCostOutput,
+} from './GraphBoundaryEffects.js';
+import { coerceGraphOutputValue, type GraphOutputNode } from './nodes/GraphOutputNode.js';
 import { replayExecutionRecording } from './RecordingPlayer.js';
 import { didLoopControllerBreak, LOOP_NOT_BROKEN_SENTINEL } from './loopControllerBreak.js';
 import { buildNodeProcessContext, type NodeProcessContextBase } from './ProcessContextBuilder.js';
@@ -102,6 +109,17 @@ import {
   type ToolCallContinuationBranchPlanner,
 } from './ToolCallContinuationBranchPlanner.js';
 import { ManagedAsyncBranches } from './ManagedAsyncBranches.js';
+import {
+  StreamingOutputWatch,
+  type StreamingOutputWatchOptions,
+  type StreamingOutputWatchSnapshot,
+} from './StreamingOutputWatch.js';
+import {
+  StreamingOutputWatchHistory,
+  type StreamingOutputWatchHistoryIteration,
+  type StreamingOutputWatchHistorySummary,
+} from './StreamingOutputWatchHistory.js';
+import { cloneExecutionOutputs } from './ExecutionOutputClone.js';
 import type { RivetKnowledgeStoreRegistry } from '../integrations/KnowledgeStore.js';
 import { KnowledgeStoreController } from '../integrations/KnowledgeStoreProvider.js';
 import { isDataBusTopologyNode } from './DataBusTopology.js';
@@ -110,6 +128,8 @@ import {
   ConnectedToolContinuationHost,
   type ConnectedToolContinuationInvocation,
 } from './ConnectedToolContinuationHost.js';
+import { resolveProjectGlobalVariables } from './GlobalVariables.js';
+import { loadProjectReferenceTree } from './ProjectReferenceLoader.js';
 
 // eslint-disable-next-line import/no-cycle -- There has to be a cycle because CodeRunner needs to import the entirety of Rivet
 import { IsomorphicCodeRunner } from '../integrations/CodeRunner.js';
@@ -123,16 +143,77 @@ export type ReplayEventTiming = {
   replayRecordedAt?: number;
 };
 
-type WithExecution<T extends object> = T & { execution: GraphExecutionMetadata } & ReplayEventTiming;
+/**
+ * Timestamp carried by a delayed-but-retained execution event. Delivery may
+ * happen after a Watch settles; observability must still use this original
+ * occurrence time rather than the later emitter receipt time.
+ */
+export type EventOccurrenceTiming = {
+  eventOccurredAt?: number;
+};
+
+type WithExecution<T extends object> = T & { execution: GraphExecutionMetadata } & ReplayEventTiming &
+  EventOccurrenceTiming;
 type NodeTimingStart = number | undefined;
 type NodeAbortControllerEntry = AbortController | Set<AbortController>;
 const graphProcessorGraphOverride = Symbol('graphProcessorGraphOverride');
 const consumedAsyncBranchTriggerOverride = Symbol('consumedAsyncBranchTriggerOverride');
-type ManagedAsyncBranchFailure = {
+const consumedStreamingWatchNodeOverride = Symbol('consumedStreamingWatchNodeOverride');
+type SchedulerBoundaryFailure = {
   error: Error;
   triggerNode: ChartNode;
   nodeErrors: Array<{ error: Error | string; node: ChartNode }>;
 };
+type StreamingOutputWatchPlan = {
+  graph: NodeGraph;
+  /** Only retain and snapshot the cumulative history when a branch consumes it. */
+  includeAllStreamedOutput: boolean;
+  sourceOutputId: PortId;
+  /**
+   * A Stop boundary is optional. Without one, every snapshot runs the entire
+   * contained branch and the watch completes normally with its producer.
+   */
+  stopNodeId?: NodeId;
+  /**
+   * Immutable stream increments observed for this run. Cumulative string
+   * snapshots contribute only their new suffix so an LLM response does not
+   * retain N copies of its whole prefix.
+   */
+  streamedOutput: unknown[];
+  previousStreamedValue: unknown;
+  watchNode: ChartNode;
+  nextUpdateIndex: number;
+  history: StreamingOutputWatchHistory;
+  historySummaryEmitted: boolean;
+};
+type StreamingOutputWatchInvocation = {
+  plan: StreamingOutputWatchPlan;
+  historyIteration: StreamingOutputWatchHistoryIteration;
+  acceptStop: (value: DataValue) => void;
+  /**
+   * Set only by the live Stop node implementation. The output that re-enters
+   * the parent is deliberately taken from the completed node result instead:
+   * split nodes aggregate their per-item outputs only at that boundary.
+   */
+  stopReached: boolean;
+};
+
+type GraphOutputPartialBinding = {
+  dataType: DataType;
+  graphOutputId: string;
+  sourceOutputId: PortId;
+};
+
+/**
+ * These nodes expose a child graph's named Graph Output ports verbatim. Other
+ * nodes that happen to run a graph (for example Call Graph or Loop Until)
+ * aggregate or transform child outputs, so streaming through them would not
+ * have the same terminal semantics.
+ */
+function isNamedGraphBoundaryCaller(node: ChartNode): boolean {
+  return node.type === 'subGraph' || node.type === 'referencedGraphAlias';
+}
+
 function createGraphOutputsOverlay(parent: GraphOutputs): { view: GraphOutputs; writes: GraphOutputs } {
   const writes: GraphOutputs = {};
   const view = new Proxy(writes, {
@@ -268,6 +349,12 @@ export type ProcessEvents = {
   /** Called when the outputs of a node have been cleared entirely. If processId is present, only the one process() should be cleared. */
   nodeOutputsCleared: WithExecution<{ node: ChartNode; processId?: ProcessId }>;
 
+  /** Compact accounting for a completed Watch Streaming Output boundary. */
+  streamingOutputWatchSummary: WithExecution<{
+    watchNode: ChartNode;
+    summary: StreamingOutputWatchHistorySummary;
+  }>;
+
   /** Called when the root graph has errored. The root graph will also throw. */
   error: { error: Error | string } & ReplayEventTiming;
 
@@ -308,6 +395,14 @@ export type ProcessEvent = {
 export type GraphOutputs = Record<string, DataValue>;
 export type GraphInputs = Record<string, DataValue>;
 
+/**
+ * Ephemeral named Graph Output updates. This is deliberately an in-process
+ * callback rather than a ProcessEvent: it bridges a named graph-boundary
+ * caller's execution boundary for a parent Watch without adding a second
+ * recorded/node-history stream for every token.
+ */
+type GraphOutputPartialListener = (outputs: GraphOutputs) => void;
+
 export type NodeResults = Map<NodeId, Outputs>;
 export type Inputs = NodeInputs;
 export type Outputs = NodeOutputs;
@@ -322,7 +417,22 @@ export type FrozenNodeOutputResolverRequest = {
   processId: ProcessId;
 };
 
-export type FrozenNodeOutputResolver = (request: FrozenNodeOutputResolverRequest) => Outputs | undefined;
+export type FrozenNodeOutputEligibilityRequest = Pick<FrozenNodeOutputResolverRequest, 'graphId' | 'node'>;
+
+/**
+ * A resolver may expose this non-consuming predicate when it can determine
+ * whether a node has frozen output without advancing its replay cursor.
+ * Streaming topology preparation uses it to keep a frozen named boundary
+ * final-only; custom resolvers without the predicate are conservatively
+ * treated as unknown rather than invoked speculatively. Return `false` only
+ * when this resolver cannot produce frozen output for the node in this run;
+ * returning `true` is allowed to be conservative and merely makes the
+ * boundary final-only.
+ */
+export type FrozenNodeOutputResolver = {
+  (request: FrozenNodeOutputResolverRequest): Outputs | undefined;
+  hasFrozenNodeOutput?: (request: FrozenNodeOutputEligibilityRequest) => boolean;
+};
 
 export function cloneFrozenNodeOutputs(outputs: Outputs): Outputs {
   if (typeof structuredClone !== 'function') {
@@ -367,7 +477,7 @@ export function createFrozenNodeOutputResolver(
 
   const countersByGraphRunAndNode = new Map<string, number>();
 
-  return ({ execution, graphId, node }) => {
+  const resolver: FrozenNodeOutputResolver = ({ execution, graphId, node }) => {
     const outputInstances = outputsByGraph?.[graphId]?.[node.id];
     if (!outputInstances?.length) {
       return undefined;
@@ -379,6 +489,10 @@ export function createFrozenNodeOutputResolver(
 
     return cloneFrozenNodeOutputs(outputInstances[Math.min(currentIndex, outputInstances.length - 1)]!);
   };
+
+  resolver.hasFrozenNodeOutput = ({ graphId, node }) => (outputsByGraph?.[graphId]?.[node.id]?.length ?? 0) > 0;
+
+  return resolver;
 }
 
 export type ExternalFunctionProcessContext = Omit<InternalProcessContext, 'setGlobal'>;
@@ -407,14 +521,17 @@ export type GraphProcessorScheduler = 'compatible' | 'fast-acyclic';
 export type GraphProcessorRuntimeProfileBucket =
   | 'initializeGraphRun'
   | 'loadProjectReferences'
+  | 'initializeProjectGlobalVariables'
   | 'prepareNodeProcessContextBase'
   | 'preprocessGraph'
   | 'emitGraphStart'
+  | 'emitInitialProjectGlobalVariables'
   | 'emitPreloadedNodeResults'
   | 'waitUntilUnpaused'
   | 'processFastAcyclicGraph'
   | 'processCompatibleGraph'
   | 'drainManagedAsyncBranches'
+  | 'drainStreamingOutputWatches'
   | 'throwIfGraphErrored'
   | 'finalizeGraphRun'
   | 'emitFinish'
@@ -442,6 +559,8 @@ const FAST_ACYCLIC_UNSUPPORTED_NODE_TYPES = new Set<string>([
   'loopUntil',
   'raceInputs',
   'startBackgroundBranch',
+  'watchStreamingOutput',
+  'stopWatchingStreamingOutput',
   'userInput',
   'waitForEvent',
 ]);
@@ -559,6 +678,13 @@ export class GraphProcessor {
   #effectiveConnectionsForRun: NodeConnection[] | undefined;
   #asyncBranchPlansByTriggerNodeId = new Map<NodeId, ToolCallContinuationAsyncBranchPlan>();
   readonly #consumedAsyncBranchTriggerNodeId: NodeId | undefined;
+  #streamingWatchPlansBySourceNodeId = new Map<NodeId, StreamingOutputWatchPlan[]>();
+  #streamingWatchPlansByWatchNodeId = new Map<NodeId, StreamingOutputWatchPlan>();
+  #streamingOutputWatches = new Map<NodeId, StreamingOutputWatch>();
+  #graphOutputPartialBindingsBySourceNodeId = new Map<NodeId, GraphOutputPartialBinding[]>();
+  #graphOutputPartialListener: GraphOutputPartialListener | undefined;
+  readonly #consumedStreamingWatchNodeId: NodeId | undefined;
+  #streamingWatchInvocation: StreamingOutputWatchInvocation | undefined;
   readonly #registry: NodeRegistration<any, any>;
   readonly #concurrency: Required<GraphProcessorConcurrency>;
   readonly #executionPlanCacheMode: GraphProcessorExecutionPlanCacheMode;
@@ -620,6 +746,10 @@ export class GraphProcessor {
   #subprocessors: Set<GraphProcessor> = undefined!;
   #contextValues: Record<string, DataValue> = undefined!;
   #globals: Map<string, ScalarOrArrayDataValue> = undefined!;
+  /** IDs assigned by the previous root invocation, retained only to reset project globals on reuse. */
+  #projectGlobalVariableIdsAssignedByPreviousRootRun = new Set<string>();
+  /** Snapshot for lifecycle recording, populated only while a root run starts. */
+  #initialProjectGlobalVariablesForRun = new Map<string, ScalarOrArrayDataValue>();
   #storedValueController: RivetStoredValueController = undefined!;
   #knowledgeStoreController: KnowledgeStoreController = undefined!;
   #attachedNodeData: Map<NodeId, AttachedNodeData> = undefined!;
@@ -635,7 +765,8 @@ export class GraphProcessor {
   #runToRelevantNodeIds: Set<NodeId> | undefined;
   #graphOutputSelection: GraphOutputSelection | undefined;
   #managedAsyncBranches: ManagedAsyncBranches | undefined;
-  #managedAsyncBranchFailures: ManagedAsyncBranchFailure[] = [];
+  #managedAsyncBranchFailures: SchedulerBoundaryFailure[] = [];
+  #streamingWatchFailures: SchedulerBoundaryFailure[] = [];
   #runCompletionPromise: Promise<GraphOutputs> | undefined;
 
   #nodesNotInCycle: ChartNode[] = undefined!;
@@ -724,6 +855,7 @@ export class GraphProcessor {
       scheduler?: GraphProcessorScheduler;
       [graphProcessorGraphOverride]?: NodeGraph;
       [consumedAsyncBranchTriggerOverride]?: NodeId;
+      [consumedStreamingWatchNodeOverride]?: NodeId;
     },
   ) {
     this.#project = project;
@@ -747,6 +879,7 @@ export class GraphProcessor {
     this.#runtimeProfiler = options?.runtimeProfiler;
     this.#captureNodeTimings = options?.captureNodeTimings ?? false;
     this.#consumedAsyncBranchTriggerNodeId = options?.[consumedAsyncBranchTriggerOverride];
+    this.#consumedStreamingWatchNodeId = options?.[consumedStreamingWatchNodeOverride];
 
     this.#emitter.bindMethods(this as unknown as Record<string, unknown>, ['on', 'off', 'once', 'onAny', 'offAny']);
 
@@ -975,6 +1108,7 @@ export class GraphProcessor {
     const abortReason = createGraphAbortReason(successful, error);
     this.#abortController.abort(abortReason);
     this.#abortActiveNodeControllers(abortReason);
+    this.#cancelStreamingOutputWatches();
 
     if (!this.#suppressGraphLifecycleEvents) {
       emitDetached(this.#emitter, 'graphAbort', this.#withExecution({ successful, error, graph: this.#graph }));
@@ -988,6 +1122,7 @@ export class GraphProcessor {
     if (!this.#isSubProcessor) {
       await this.#managedAsyncBranches?.drain();
     }
+    await this.#drainStreamingOutputWatches();
   }
 
   pause(): void {
@@ -1064,6 +1199,8 @@ export class GraphProcessor {
         throw new Error(`Invalid data value for node ${nodeId}, must be a DataValue`);
       }
     }
+
+    this.#assertStreamingOutputWatchPreloadCanBeAdded(nodeId);
 
     this.#preloadedNodeResults.set(nodeId, data);
     this.#hasPreloadedData = true;
@@ -1199,6 +1336,10 @@ export class GraphProcessor {
     this.#continuationCompletionOwnerByNodeId = new Map();
     this.#effectiveConnectionsForRun = undefined;
     this.#asyncBranchPlansByTriggerNodeId = new Map();
+    this.#streamingWatchPlansBySourceNodeId = new Map();
+    this.#streamingWatchPlansByWatchNodeId = new Map();
+    this.#streamingOutputWatches = new Map();
+    this.#graphOutputPartialBindingsBySourceNodeId = new Map();
     this.#loopControllersSeen = new Set();
     this.#subprocessors = new Set();
     this.#attachedNodeData = this.#sharedRunStateOverride?.attachedNodeData ?? new Map();
@@ -1216,6 +1357,7 @@ export class GraphProcessor {
       this.#managedAsyncBranches = new ManagedAsyncBranches();
       this.#managedAsyncBranchFailures = [];
     }
+    this.#streamingWatchFailures = [];
 
     this.#abortController = this.#newAbortController();
     this.#successfulAbortTerminalProcessIds = new Set();
@@ -1248,6 +1390,13 @@ export class GraphProcessor {
       returnWhenGraphOutputsReady?: boolean;
       /** Restrict this invocation to named graph outputs and their prerequisites. Cannot be combined with runToNodeIds. */
       requestedGraphOutputIds?: readonly string[];
+      /**
+       * Receives partial values only when a producer directly feeds a named
+       * Graph Output. Used internally to stream a named graph-boundary caller
+       * output to its parent without changing the persisted graph or public
+       * event protocol.
+       */
+      onGraphOutputPartial?: GraphOutputPartialListener;
     } = {},
   ): Promise<GraphOutputs> {
     if (this.#lifecycle.isRunning) {
@@ -1255,6 +1404,7 @@ export class GraphProcessor {
     }
 
     const requestedGraphOutputIds = options.requestedGraphOutputIds?.slice();
+    this.#graphOutputPartialListener = options.onGraphOutputPartial;
 
     let resolveOutputsReady: ((outputs: GraphOutputs) => void) | undefined;
     let rejectOutputsReady: ((error: unknown) => void) | undefined;
@@ -1274,6 +1424,9 @@ export class GraphProcessor {
             this.#initializeGraphRun(context, inputs, contextValues),
           );
           await this.#profileRuntimeAsync('loadProjectReferences', () => this.#loadProjectReferences());
+          this.#profileRuntimeSync('initializeProjectGlobalVariables', () =>
+            this.#initializeProjectGlobalVariablesForRootRun(),
+          );
           this.#profileRuntimeSync('prepareNodeProcessContextBase', () => this.#prepareNodeProcessContextBase());
 
           const shouldUseSeededExecutionPlan = this.#seededExecutionPlanForNextRun() != null;
@@ -1299,6 +1452,8 @@ export class GraphProcessor {
             }
           }
           this.#prepareAsyncBranchTopology();
+          this.#prepareStreamingWatchTopology();
+          this.#prepareGraphOutputPartialTopology();
         } catch (error) {
           const normalizedError = getError(error);
           await this.#emitRootStartupError(normalizedError);
@@ -1306,6 +1461,9 @@ export class GraphProcessor {
         }
 
         await this.#profileRuntimeAsync('emitGraphStart', () => this.#emitGraphStart());
+        await this.#profileRuntimeAsync('emitInitialProjectGlobalVariables', () =>
+          this.#emitInitialProjectGlobalVariables(),
+        );
         await this.#profileRuntimeAsync('emitPreloadedNodeResults', () => this.#emitPreloadedNodeResults());
         await this.#profileRuntimeAsync('waitUntilUnpaused', () => this.#waitUntilUnpaused());
 
@@ -1318,7 +1476,8 @@ export class GraphProcessor {
         if (
           options.returnWhenGraphOutputsReady === true &&
           !this.#isSubProcessor &&
-          this.#managedAsyncBranches!.hasPending
+          !this.#hasUnresolvedForegroundOutputStreamingWatch() &&
+          (this.#managedAsyncBranches!.hasPending || this.#hasPendingStreamingOutputWatches())
         ) {
           await this.#profileRuntimeAsync('throwIfGraphErrored', () => this.#throwIfGraphErrored(false));
           // Publish a snapshot instead of the live root output object. In particular,
@@ -1334,16 +1493,13 @@ export class GraphProcessor {
           resolveOutputsReady?.(outputsReady);
         }
 
-        if (!this.#isSubProcessor) {
-          await this.#profileRuntimeAsync('drainManagedAsyncBranches', () => this.#managedAsyncBranches!.drain());
-        }
+        await this.#drainSchedulerBoundaries();
 
         await this.#profileRuntimeAsync('throwIfGraphErrored', () => this.#throwIfGraphErrored());
         return await this.#profileRuntimeAsync('finalizeGraphRun', () => this.#finalizeGraphRun());
       } finally {
-        if (!this.#isSubProcessor) {
-          await this.#managedAsyncBranches?.drain();
-        }
+        await this.#drainSchedulerBoundaries();
+        this.#graphOutputPartialListener = undefined;
         this.#lifecycle.complete();
         this.#cleanupTokenizerErrorListener();
 
@@ -1398,6 +1554,25 @@ export class GraphProcessor {
     });
     this.#unsubscribeTokenizerError =
       typeof unsubscribeTokenizerError === 'function' ? unsubscribeTokenizerError : undefined;
+  }
+
+  #initializeProjectGlobalVariablesForRootRun(): void {
+    this.#initialProjectGlobalVariablesForRun = new Map();
+    if (this.#isSubProcessor) return;
+
+    // Resolve before touching the shared map. An invalid reference or definition
+    // must fail startup without leaving a partial new set of authored globals.
+    const resolved = resolveProjectGlobalVariables(this.#project, this.#loadedProjects);
+
+    for (const id of this.#projectGlobalVariableIdsAssignedByPreviousRootRun) {
+      this.#globals.delete(id);
+    }
+    for (const [id, value] of resolved) {
+      this.#globals.set(id, value);
+    }
+
+    this.#projectGlobalVariableIdsAssignedByPreviousRootRun = new Set(resolved.keys());
+    this.#initialProjectGlobalVariablesForRun = resolved;
   }
 
   #initializeExecutionIdentity(): void {
@@ -1563,6 +1738,17 @@ export class GraphProcessor {
     await this.#emitter.emit('graphStart', this.#withExecution({ graph: this.#graph, inputs: this.#graphInputs }));
   }
 
+  async #emitInitialProjectGlobalVariables(): Promise<void> {
+    if (this.#isSubProcessor || this.#suppressGraphLifecycleEvents) return;
+
+    for (const [id, value] of this.#initialProjectGlobalVariablesForRun) {
+      await this.#emitter.emit(
+        'globalSet',
+        this.#withExecution({ id, value, processId: 'initial-project-global-variable' as ProcessId }),
+      );
+    }
+  }
+
   async #emitPreloadedNodeResults(): Promise<void> {
     if (!this.#hasPreloadedData) {
       return;
@@ -1576,6 +1762,11 @@ export class GraphProcessor {
       if (this.#suppressedPreloadedNodeIds.has(node.id)) {
         continue;
       }
+
+      const outputs = this.#nodeResults.get(node.id)!;
+      // A preloaded producer is complete evidence, not a reconstructed token
+      // stream. Watch receives it once as the producer's final snapshot.
+      this.#assertStreamingOutputWatchFinalOutputs(node, outputs);
 
       this.#emitTraceEvent(`Node ${node.title} has preloaded data`);
 
@@ -1593,11 +1784,12 @@ export class GraphProcessor {
         'nodeFinish',
         this.#withExecution({
           node,
-          outputs: this.#nodeResults.get(node.id)!,
+          outputs,
           processId: 'preload' as ProcessId,
           resultOrigin: 'preloaded' as const,
         }),
       );
+      this.#finishStreamingOutputWatches(node, outputs);
     }
   }
 
@@ -1769,17 +1961,14 @@ export class GraphProcessor {
     });
   }
 
-  #createGraphError(
-    erroredNodes: [NodeId, Error | string][],
-    managedAsyncFailures: ManagedAsyncBranchFailure[] = [],
-  ): Error {
+  #createGraphError(erroredNodes: [NodeId, Error | string][], branchFailures: SchedulerBoundaryFailure[] = []): Error {
     if (this.#lifecycle.abortError) {
       return this.#lifecycle.getAbortError();
     }
 
     const errors = [
       ...erroredNodes.map(([nodeId, error]) => ({ error, node: this.#nodesById[nodeId]! })),
-      ...managedAsyncFailures.flatMap((failure) =>
+      ...branchFailures.flatMap((failure) =>
         failure.nodeErrors.length > 0 ? failure.nodeErrors : [{ error: failure.error, node: failure.triggerNode }],
       ),
     ];
@@ -1802,12 +1991,18 @@ export class GraphProcessor {
 
   async #throwIfGraphErrored(includeManagedAsyncFailures = true): Promise<void> {
     const erroredNodes = this.#getUnhandledErroredNodes();
-    const managedAsyncFailures = includeManagedAsyncFailures ? this.#managedAsyncBranchFailures : [];
-    if ((!erroredNodes.length && !managedAsyncFailures.length) || this.#lifecycle.abortSuccessful) {
+    const branchFailures = [
+      ...(includeManagedAsyncFailures ? this.#managedAsyncBranchFailures : []),
+      ...this.#streamingWatchFailures,
+    ];
+    if (
+      this.#lifecycle.abortSuccessful ||
+      (!this.#lifecycle.isAborted && !erroredNodes.length && !branchFailures.length)
+    ) {
       return;
     }
 
-    const error = this.#createGraphError(erroredNodes, managedAsyncFailures);
+    const error = this.#createGraphError(erroredNodes, branchFailures);
     if (!this.#suppressGraphLifecycleEvents) {
       await this.#emitter.emit('graphError', this.#withExecution({ graph: this.#graph, error }));
     }
@@ -1850,27 +2045,11 @@ export class GraphProcessor {
         );
       }
 
-      const seenProjectIds = new Set<ProjectId>();
-
-      const loadProject = async (ref: ProjectReference) => {
-        if (seenProjectIds.has(ref.id)) {
-          return;
-        }
-
-        seenProjectIds.add(ref.id);
-
-        const project = await this.#context.projectReferenceLoader!.loadProject(this.#context.projectPath, ref);
-
-        this.#loadedProjects[project.metadata!.id!] = project;
-
-        for (const reference of project.references ?? []) {
-          await loadProject(reference);
-        }
-      };
-
-      for (const reference of this.#project.references!) {
-        await loadProject(reference);
-      }
+      this.#loadedProjects = await loadProjectReferenceTree(
+        this.#project,
+        this.#context.projectPath,
+        this.#context.projectReferenceLoader,
+      );
 
       if (this.#cacheLoadedProjects && this.#runtimeCache) {
         this.#runtimeCache.loadedProjects = { ...this.#loadedProjects };
@@ -2027,6 +2206,20 @@ export class GraphProcessor {
     const missingRequiredInputs = this.#getMissingRequiredInputs(node);
     if (missingRequiredInputs.length > 0) {
       return this.#excludeNodeWithMissingRequiredInputs(node, inputValues, missingRequiredInputs, { queueOutputNodes });
+    }
+
+    // Topology validation catches this before a Watch invocation starts. Keep
+    // the same guard at the execution boundary so a dynamically reached or
+    // otherwise malformed subprocessor can never hand detached work to the
+    // root-managed async scheduler. A trigger without an active output has no
+    // branch to hand off, so it is a harmless unfinished authoring state.
+    const managedAsyncBranchWatchViolation =
+      node.type === 'startBackgroundBranch' && this.#getActiveOutputPortIds(node).size > 0
+        ? this.#getManagedAsyncBranchWatchViolation(node)
+        : undefined;
+    if (managedAsyncBranchWatchViolation) {
+      await this.#nodeErrored(node, managedAsyncBranchWatchViolation, nanoid() as ProcessId);
+      return [];
     }
 
     if (this.#beginNodeProcessing(node, attachedData) === false) {
@@ -2306,6 +2499,16 @@ export class GraphProcessor {
       return;
     }
 
+    const watchViolation = this.#getManagedAsyncBranchWatchViolation(triggerNode);
+    if (watchViolation) {
+      // The pre-dispatch guard above is the normal reporting path. Retain a
+      // final guard here because this is the only handoff to the root-owned
+      // scheduler: silently dropping the branch would make a malformed run
+      // look successful, while enqueueing it would bypass Watch bounds.
+      this.getRootProcessor().#recordManagedAsyncBranchFailure(triggerNode, undefined, watchViolation);
+      return;
+    }
+
     const root = this.getRootProcessor();
     root.#managedAsyncBranches ??= new ManagedAsyncBranches();
     const queueKey = `${this.#project.metadata?.id ?? 'project'}:${this.#graph.metadata?.id ?? 'graph'}:${triggerNode.id}`;
@@ -2445,18 +2648,36 @@ export class GraphProcessor {
     processor: GraphProcessor | undefined,
     error: unknown,
   ): void {
-    const nodeErrors =
-      processor && processor.#erroredNodes
-        ? [...processor.#erroredNodes.entries()].flatMap(([nodeId, nodeError]) => {
-            const node = processor.#nodesById[nodeId];
-            return node ? [{ error: nodeError, node }] : [];
-          })
-        : [];
-
     this.#managedAsyncBranchFailures.push({
       error: getError(error),
-      nodeErrors,
+      nodeErrors: this.#getSubprocessorNodeErrors(processor),
       triggerNode,
+    });
+  }
+
+  #getSubprocessorNodeErrors(processor: GraphProcessor | undefined): Array<{ error: Error | string; node: ChartNode }> {
+    if (!processor || !processor.#erroredNodes) {
+      return [];
+    }
+
+    return [...processor.#erroredNodes.entries()].flatMap(([nodeId, nodeError]) => {
+      const node = processor.#nodesById[nodeId];
+      return node ? [{ error: nodeError, node }] : [];
+    });
+  }
+
+  #recordStreamingWatchFailure(watchNode: ChartNode, error: Error, processor?: GraphProcessor): void {
+    if (this.#streamingWatchFailures.some((failure) => failure.error === error)) {
+      return;
+    }
+
+    // The child processor already emitted the precise nodeError before its
+    // failure reaches the coordinator. Keep a root-owned failure too so the
+    // normal graphError/error lifecycle remains truthful after draining.
+    this.#streamingWatchFailures.push({
+      error,
+      nodeErrors: this.#getSubprocessorNodeErrors(processor),
+      triggerNode: watchNode,
     });
   }
 
@@ -2480,7 +2701,18 @@ export class GraphProcessor {
     }
 
     const frozenOutputs = this.#resolveFrozenNodeOutputs(node, inputValues, processId);
-    if (frozenOutputs && node.type === 'startBackgroundBranch') {
+    if (frozenOutputs && this.#isStreamingOutputWatchBoundary(node)) {
+      await this.#nodeErrored(
+        node,
+        new Error(
+          `${node.title} cannot use frozen outputs because replaying a streaming boundary would bypass its scheduler.`,
+        ),
+        processId,
+        undefined,
+        undefined,
+        'frozen',
+      );
+    } else if (frozenOutputs && node.type === 'startBackgroundBranch') {
       await this.#nodeErrored(
         node,
         new Error('Start Async Branch cannot use frozen outputs because replaying it could repeat async side effects.'),
@@ -2524,7 +2756,13 @@ export class GraphProcessor {
           return;
         }
 
-        return this.#emitter.emit(event, this.#withExecution(data));
+        return this.#emitter.emit(event, this.#withExecution(data)).then(() => {
+          if (event === 'nodeFinish') {
+            // SplitRunDeps exposes overloaded event payloads; the runtime event
+            // discriminator guarantees this is the terminal-output shape.
+            this.#commitStreamingWatchStop(node, (data as { outputs: Outputs }).outputs);
+          }
+        });
       },
       startNodeTiming: this.#captureNodeTimings ? () => this.#startNodeTiming() : undefined,
       finishNodeTiming: this.#captureNodeTimings ? (start) => this.#finishNodeTiming(start) : undefined,
@@ -2558,6 +2796,7 @@ export class GraphProcessor {
     this.#visitedNodes.add(node.id);
     this.#accumulateCost(outputValues);
     await this.#applyFrozenNodeDataflowEffects(node, outputValues, processId);
+    this.#assertStreamingOutputWatchFinalOutputs(node, outputValues);
 
     await this.#emitter.emit(
       'nodeFinish',
@@ -2573,6 +2812,7 @@ export class GraphProcessor {
         ),
       ),
     );
+    this.#finishStreamingOutputWatches(node, outputValues);
   }
 
   async #applyFrozenNodeDataflowEffects(node: ChartNode, outputValues: Outputs, processId: ProcessId): Promise<void> {
@@ -2626,6 +2866,7 @@ export class GraphProcessor {
       this.#nodeResults.set(node.id, outputValues);
       this.#visitedNodes.add(node.id);
       this.#accumulateCost(outputValues);
+      this.#assertStreamingOutputWatchFinalOutputs(node, outputValues);
       await this.#emitter.emit(
         'nodeFinish',
         this.#withExecution(
@@ -2640,6 +2881,8 @@ export class GraphProcessor {
           ),
         ),
       );
+      this.#finishStreamingOutputWatches(node, outputValues);
+      this.#commitStreamingWatchStop(node, outputValues);
     } catch (error) {
       await this.#nodeErrored(
         node,
@@ -2667,7 +2910,7 @@ export class GraphProcessor {
     // Most callers are ordinary (non-split) node executions. Let those retain
     // any checkpoint without requiring every error path to know about the
     // internal map. Split callers provide their per-index map explicitly.
-    const retainedOutputs = splitOutputs === undefined ? (outputs ?? this.#takeFailureOutputs(processId, 0)) : outputs;
+    const retainedOutputs = splitOutputs === undefined ? outputs ?? this.#takeFailureOutputs(processId, 0) : outputs;
     const exclusionReason = this.#getErrorExclusionReason(node, error, processId);
     if (exclusionReason) {
       await this.#emitNodeExcluded(node, processId, this.#getInputValuesForNode(node), exclusionReason, resultOrigin);
@@ -2675,6 +2918,7 @@ export class GraphProcessor {
       return;
     }
 
+    this.#cancelStreamingOutputWatchesForSource(node.id);
     this.#erroredNodes.set(node.id, error);
     await this.#emitter.emit(
       'nodeError',
@@ -2762,6 +3006,29 @@ export class GraphProcessor {
       processor = processor.#parent;
     }
     return processor;
+  }
+
+  #getEnclosingStreamingWatchInvocation(): StreamingOutputWatchInvocation | undefined {
+    let processor: GraphProcessor | undefined = this;
+    while (processor) {
+      if (processor.#streamingWatchInvocation) {
+        return processor.#streamingWatchInvocation;
+      }
+      processor = processor.#parent;
+    }
+    return undefined;
+  }
+
+  #getManagedAsyncBranchWatchViolation(triggerNode: ChartNode): Error | undefined {
+    const invocation = this.#getEnclosingStreamingWatchInvocation();
+    if (!invocation) {
+      return undefined;
+    }
+
+    return new Error(
+      `Start Async Branch "${triggerNode.title}" cannot run inside Watch Streaming Output "${invocation.plan.watchNode.title}". ` +
+        'A Watch invocation must keep all work within the Watch scheduler. Move Start Async Branch after Stop Watching Streaming Output, or run the work directly inside the watched branch.',
+    );
   }
 
   /** Raise a user event on the processor, all subprocessors, and their children. */
@@ -2937,6 +3204,15 @@ export class GraphProcessor {
     markResultAsEditorCacheHit?: InternalProcessContext['markResultAsEditorCacheHit'],
   ): InternalProcessContext {
     const plugin = this.#registry.getPluginFor(node.type);
+    const onGraphOutputPartial =
+      isNamedGraphBoundaryCaller(node) &&
+      (this.#streamingWatchPlansBySourceNodeId.has(node.id) ||
+        this.#graphOutputPartialBindingsBySourceNodeId.has(node.id))
+        ? (partialOutputs: Outputs) => {
+            this.#publishStreamingOutputWatchPartial(node, partialOutputs);
+            this.#publishGraphOutputPartial(node, partialOutputs);
+          }
+        : undefined;
     const toolCallContinuation = this.#getToolCallContinuationContext(
       node,
       nodeAbortController.signal,
@@ -2957,10 +3233,21 @@ export class GraphProcessor {
       markResultAsEditorCacheHit,
       node,
       nodeAbortController,
+      onGraphOutputPartial,
       onPartialOutputs: (partialOutputs) => {
         partialOutput?.(node, partialOutputs, index);
+        this.#publishStreamingOutputWatchPartial(node, partialOutputs);
+        this.#publishGraphOutputPartial(node, partialOutputs);
         this.#emitGraphPartialOutputIfNeeded(node, partialOutputs);
       },
+      acceptStreamingWatchStop:
+        this.#streamingWatchInvocation?.plan.stopNodeId === node.id
+          ? () => {
+              if (this.#streamingWatchInvocation) {
+                this.#streamingWatchInvocation.stopReached = true;
+              }
+            }
+          : undefined,
       setFailureOutputs: (outputs) => this.#setFailureOutputs(processId, index, outputs),
       processId,
       requestUserInput: async (inputStrings, renderingType) =>
@@ -3432,6 +3719,762 @@ export class GraphProcessor {
     return this.#effectiveConnectionsForRun;
   }
 
+  #prepareStreamingWatchTopology(): void {
+    const connections = this.#getEffectiveConnections().filter((connection) =>
+      this.#isDefinitionValidConnection(connection),
+    );
+    const outgoingByNodeId = new Map<NodeId, NodeConnection[]>();
+    const incomingByNodeId = new Map<NodeId, NodeConnection[]>();
+    const relevantNodeIds = this.#getExecutionRelevantNodeIds();
+    const isRelevant = (nodeId: NodeId) => !relevantNodeIds || relevantNodeIds.has(nodeId);
+
+    for (const connection of connections) {
+      const outgoing = outgoingByNodeId.get(connection.outputNodeId) ?? [];
+      outgoing.push(connection);
+      outgoingByNodeId.set(connection.outputNodeId, outgoing);
+      const incoming = incomingByNodeId.get(connection.inputNodeId) ?? [];
+      incoming.push(connection);
+      incomingByNodeId.set(connection.inputNodeId, incoming);
+    }
+
+    for (const watchNode of Object.values(this.#nodesById)) {
+      if (watchNode.type !== 'watchStreamingOutput' || watchNode.disabled || !isRelevant(watchNode.id)) {
+        continue;
+      }
+      if (watchNode.id === this.#consumedStreamingWatchNodeId) {
+        continue;
+      }
+      const enclosingWatchInvocation = this.#getEnclosingStreamingWatchInvocation();
+      if (enclosingWatchInvocation) {
+        throw new Error(
+          `Watch Streaming Output "${watchNode.title}" cannot run inside Watch Streaming Output ` +
+            `"${enclosingWatchInvocation.plan.watchNode.title}". A Watch branch cannot contain another Watch, including through Subgraph.`,
+        );
+      }
+      if (this.#nodeResults.has(watchNode.id)) {
+        throw new Error(
+          `Cannot preload ${watchNode.title} because a streaming boundary must be scheduled. ` +
+            "Run from Watch Streaming Output to reuse a producer's saved final value, or run from the producer to stream again.",
+        );
+      }
+
+      const incoming = incomingByNodeId.get(watchNode.id) ?? [];
+      if (incoming.length === 0) {
+        // An unattached Watch is an ordinary in-progress authoring state. Keep
+        // it dormant rather than making an incomplete canvas fail to run.
+        this.#ignoreNodes.add(watchNode.id);
+        continue;
+      }
+      if (incoming.length !== 1 || incoming[0]!.inputId !== ('stream' as PortId)) {
+        throw new Error(
+          `Watch Streaming Output "${watchNode.title}" must have exactly one Streaming Output input connection.`,
+        );
+      }
+      const sourceConnection = incoming[0]!;
+      const sourceNode = this.#nodesById[sourceConnection.outputNodeId];
+      if (!sourceNode || sourceNode.disabled || !isRelevant(sourceNode.id)) {
+        throw new Error(`Watch Streaming Output "${watchNode.title}" has no runnable streaming source.`);
+      }
+      if (sourceNode.isSplitRun) {
+        throw new Error(
+          `Watch Streaming Output "${watchNode.title}" cannot watch split-run node "${sourceNode.title}". ` +
+            'Assemble a single streaming value before the watch boundary.',
+        );
+      }
+
+      const branchNodeIds = new Set<NodeId>();
+      const pendingNodeIds = (outgoingByNodeId.get(watchNode.id) ?? [])
+        .map((connection) => connection.inputNodeId)
+        .filter(isRelevant);
+      let stopNodeId: NodeId | undefined;
+
+      while (pendingNodeIds.length > 0) {
+        const nodeId = pendingNodeIds.pop()!;
+        if (nodeId === watchNode.id) {
+          throw new Error(`Watch Streaming Output "${watchNode.title}" cannot reconnect to itself.`);
+        }
+        if (branchNodeIds.has(nodeId)) {
+          continue;
+        }
+        const node = this.#nodesById[nodeId];
+        if (!node || !isRelevant(nodeId)) {
+          continue;
+        }
+        if (node.disabled) {
+          throw new Error(`Watch Streaming Output "${watchNode.title}" cannot include disabled node "${node.title}".`);
+        }
+        if (node.type === 'watchStreamingOutput') {
+          throw new Error(
+            `Watch Streaming Output "${watchNode.title}" cannot contain another Watch Streaming Output node.`,
+          );
+        }
+        if (node.type === 'graphOutput') {
+          throw new Error(
+            `Watch Streaming Output "${watchNode.title}" must reach Stop Watching Streaming Output before Graph Output "${node.title}".`,
+          );
+        }
+        if (node.type === 'startBackgroundBranch') {
+          throw new Error(
+            `Watch Streaming Output "${watchNode.title}" cannot contain Start Async Branch. ` +
+              'Keep watched work in the bounded watch branch instead.',
+          );
+        }
+
+        branchNodeIds.add(nodeId);
+        if (node.type === 'stopWatchingStreamingOutput') {
+          if (stopNodeId && stopNodeId !== nodeId) {
+            throw new Error(
+              `Watch Streaming Output "${watchNode.title}" must have one Stop Watching Streaming Output boundary.`,
+            );
+          }
+          stopNodeId = nodeId;
+          continue;
+        }
+
+        for (const connection of outgoingByNodeId.get(nodeId) ?? []) {
+          if (isRelevant(connection.inputNodeId)) {
+            pendingNodeIds.push(connection.inputNodeId);
+          }
+        }
+      }
+
+      if (branchNodeIds.size === 0) {
+        // Source -> Watch is also a useful intermediate authoring state. There
+        // is no downstream work to schedule yet, so do not create a coordinator.
+        this.#ignoreNodes.add(watchNode.id);
+        continue;
+      }
+
+      if (stopNodeId) {
+        const reentry = (outgoingByNodeId.get(stopNodeId) ?? []).find(
+          (connection) => connection.inputNodeId === watchNode.id || branchNodeIds.has(connection.inputNodeId),
+        );
+        if (reentry) {
+          const stopNode = this.#nodesById[stopNodeId]!;
+          throw new Error(
+            `Stop Watching Streaming Output "${stopNode.title}" cannot reconnect to its own Watch Streaming Output branch. ` +
+              'Connect it only to ordinary downstream execution.',
+          );
+        }
+      }
+
+      for (const nodeId of branchNodeIds) {
+        const externalInput = (incomingByNodeId.get(nodeId) ?? []).find(
+          (connection) => connection.outputNodeId !== watchNode.id && !branchNodeIds.has(connection.outputNodeId),
+        );
+        if (externalInput) {
+          const node = this.#nodesById[nodeId]!;
+          const externalNode = this.#nodesById[externalInput.outputNodeId];
+          throw new Error(
+            `Watch Streaming Output "${watchNode.title}" cannot run "${node.title}" because it also depends on ` +
+              `"${externalNode?.title ?? externalInput.outputNodeId}" outside the watch branch. ` +
+              'Assemble every required value inside the watch boundary.',
+          );
+        }
+      }
+
+      const graph: NodeGraph = {
+        metadata: this.#graph.metadata ? { ...this.#graph.metadata } : undefined,
+        nodes: this.#executionGraphNodes.filter((node) => node.id === watchNode.id || branchNodeIds.has(node.id)),
+        connections: connections.filter(
+          (connection) =>
+            connection.inputNodeId === watchNode.id ||
+            (branchNodeIds.has(connection.inputNodeId) &&
+              (connection.outputNodeId === watchNode.id || branchNodeIds.has(connection.outputNodeId))),
+        ),
+      };
+      const plan: StreamingOutputWatchPlan = {
+        graph,
+        includeAllStreamedOutput: connections.some(
+          (connection) =>
+            connection.outputNodeId === watchNode.id &&
+            connection.outputId === ('allStreamedOutput' as PortId) &&
+            branchNodeIds.has(connection.inputNodeId),
+        ),
+        sourceOutputId: sourceConnection.outputId,
+        stopNodeId,
+        streamedOutput: [],
+        previousStreamedValue: undefined,
+        watchNode,
+        nextUpdateIndex: 0,
+        history: new StreamingOutputWatchHistory(),
+        historySummaryEmitted: false,
+      };
+      const plans = this.#streamingWatchPlansBySourceNodeId.get(sourceNode.id) ?? [];
+      plans.push(plan);
+      this.#streamingWatchPlansBySourceNodeId.set(sourceNode.id, plans);
+      this.#streamingWatchPlansByWatchNodeId.set(watchNode.id, plan);
+
+      const watch = new StreamingOutputWatch(
+        watchNode.data as Partial<StreamingOutputWatchOptions>,
+        (snapshot, registerCancel) => this.#runStreamingOutputWatchInvocation(plan, snapshot, registerCancel),
+        (error) => this.#recordStreamingWatchFailure(watchNode, error),
+        { requiresAcceptedStop: stopNodeId != null },
+      );
+      this.#streamingOutputWatches.set(watchNode.id, watch);
+      for (const nodeId of [watchNode.id, ...branchNodeIds]) {
+        this.#ignoreNodes.add(nodeId);
+      }
+    }
+
+    this.#assertStreamingOutputWatchPreloadsAreSafe();
+  }
+
+  #isStreamingOutputWatchBoundary(node: ChartNode): boolean {
+    return node.type === 'watchStreamingOutput' || node.type === 'stopWatchingStreamingOutput';
+  }
+
+  #assertStreamingOutputWatchPreloadCanBeAdded(nodeId: NodeId): void {
+    // Before initialization, referenced projects and the effective graph are
+    // not available yet. Startup validation below owns that case. During a
+    // live run, reject injection before it can mutate the result map.
+    if (!this.#lifecycle.isRunning) {
+      return;
+    }
+
+    const node = this.#nodesById[nodeId];
+    if (!node || !this.#isNodeSelected(node.id) || node.id === this.#consumedStreamingWatchNodeId) {
+      return;
+    }
+
+    if (this.#isStreamingOutputWatchBoundary(node)) {
+      throw new Error(
+        `Cannot preload ${node.title} while it is running because a streaming boundary must be scheduled. ` +
+          'Preload the producer before starting a new run instead.',
+      );
+    }
+
+    for (const [sourceNodeId, plans] of this.#streamingWatchPlansBySourceNodeId) {
+      for (const plan of plans) {
+        if (sourceNodeId === node.id || plan.graph.nodes.some((branchNode) => branchNode.id === node.id)) {
+          throw new Error(
+            `Cannot preload ${node.title} while Watch Streaming Output "${plan.watchNode.title}" is running. ` +
+              'Start a new run so the watch can own its snapshots and branch invocations.',
+          );
+        }
+      }
+    }
+  }
+
+  #assertStreamingOutputWatchPreloadsAreSafe(): void {
+    for (const [nodeId] of this.#preloadedNodeResults) {
+      const node = this.#nodesById[nodeId];
+      if (!node || !this.#isNodeSelected(node.id) || node.id === this.#consumedStreamingWatchNodeId) {
+        continue;
+      }
+
+      if (this.#isStreamingOutputWatchBoundary(node)) {
+        throw new Error(
+          `Cannot preload ${node.title} because a streaming boundary must be scheduled. ` +
+            "Run from Watch Streaming Output to reuse a producer's saved final value, or run from the producer to stream again.",
+        );
+      }
+    }
+
+    for (const [sourceNodeId, plans] of this.#streamingWatchPlansBySourceNodeId) {
+      const sourceOutputs = this.#preloadedNodeResults.get(sourceNodeId);
+      for (const plan of plans) {
+        const preloadedBranchNode = plan.graph.nodes.find(
+          (node) => node.id !== this.#consumedStreamingWatchNodeId && this.#preloadedNodeResults.has(node.id),
+        );
+        if (preloadedBranchNode) {
+          throw new Error(
+            `Cannot preload ${preloadedBranchNode.title} because it belongs to the repeated branch of ` +
+              `Watch Streaming Output "${plan.watchNode.title}". ` +
+              "Run from Watch Streaming Output to reuse a producer's saved final value, or run from the producer to stream again.",
+          );
+        }
+
+        if (sourceOutputs && sourceOutputs[plan.sourceOutputId] == null) {
+          const sourceNode = this.#nodesById[sourceNodeId]!;
+          throw new Error(
+            `Preloaded source "${sourceNode.title}" has no final "${plan.sourceOutputId}" output for ` +
+              `Watch Streaming Output "${plan.watchNode.title}".`,
+          );
+        }
+      }
+    }
+  }
+
+  #publishStreamingOutputWatchPartial(node: ChartNode, partialOutputs: Outputs): void {
+    for (const plan of this.#streamingWatchPlansBySourceNodeId.get(node.id) ?? []) {
+      const value = partialOutputs[plan.sourceOutputId];
+      if (value == null || value.type === 'control-flow-excluded') {
+        continue;
+      }
+      const watch = this.#streamingOutputWatches.get(plan.watchNode.id);
+      if (!watch || watch.stopped) {
+        continue;
+      }
+      const updateIndex = this.#nextStreamingWatchUpdateIndex(plan);
+      watch.publish(this.#createStreamingOutputWatchSnapshot(plan, value, updateIndex, false));
+    }
+  }
+
+  #prepareGraphOutputPartialTopology(): void {
+    if (!this.#graphOutputPartialListener) {
+      return;
+    }
+
+    const relevantNodeIds = this.#getExecutionRelevantNodeIds();
+    const graphOutputCountsById = new Map<string, number>();
+    for (const node of Object.values(this.#nodesById)) {
+      if (node.type !== 'graphOutput' || node.disabled || (relevantNodeIds != null && !relevantNodeIds.has(node.id))) {
+        continue;
+      }
+      const outputId = (node as GraphOutputNode).data.id;
+      graphOutputCountsById.set(outputId, (graphOutputCountsById.get(outputId) ?? 0) + 1);
+    }
+
+    for (const connection of this.#getEffectiveConnections()) {
+      if (!this.#isDefinitionValidConnection(connection) || connection.inputId !== ('value' as PortId)) {
+        continue;
+      }
+
+      const graphOutput = this.#nodesById[connection.inputNodeId];
+      if (
+        graphOutput?.type !== 'graphOutput' ||
+        graphOutput.disabled ||
+        (relevantNodeIds != null && !relevantNodeIds.has(graphOutput.id))
+      ) {
+        continue;
+      }
+
+      const graphOutputData = (graphOutput as GraphOutputNode).data;
+      // Graph Outputs with the same public ID retain their long-standing
+      // first-terminal-value-wins behavior. Before that winner is known, a
+      // partial value would be ambiguous, so let the parent Watch receive
+      // only the ordinary final named-boundary output.
+      if (graphOutputCountsById.get(graphOutputData.id)! > 1) {
+        continue;
+      }
+      const sourceNode = this.#nodesById[connection.outputNodeId];
+      if (!sourceNode || !this.#canStreamAcrossGraphOutput(graphOutput, sourceNode)) {
+        continue;
+      }
+      const bindings = this.#graphOutputPartialBindingsBySourceNodeId.get(connection.outputNodeId) ?? [];
+      bindings.push({
+        dataType: graphOutputData.dataType,
+        graphOutputId: graphOutputData.id,
+        sourceOutputId: connection.outputId,
+      });
+      this.#graphOutputPartialBindingsBySourceNodeId.set(connection.outputNodeId, bindings);
+    }
+  }
+
+  /**
+   * A named Graph Output can forward a partial only when its terminal result
+   * is determined by that same direct producer. Conditions, split aggregation,
+   * and frozen replay each introduce an independent boundary decision, so they
+   * remain final-only just like an ordinary intermediate node.
+   */
+  #canStreamAcrossGraphOutput(graphOutput: ChartNode, sourceNode: ChartNode): boolean {
+    if (graphOutput.isConditional || graphOutput.isSplitRun || sourceNode.isSplitRun) {
+      return false;
+    }
+
+    return !this.#hasFrozenNodeOutputOrUnknownResolver(graphOutput);
+  }
+
+  #hasFrozenNodeOutputOrUnknownResolver(node: ChartNode): boolean {
+    const resolver = this.#frozenNodeOutputResolver;
+    if (!resolver) {
+      return false;
+    }
+
+    // Do not call a resolver during topology preparation: generated resolvers
+    // advance a per-node replay cursor, and arbitrary resolvers may have side
+    // effects. The built-in resolver answers precisely; an opaque custom
+    // resolver is final-only until execution resolves its value normally.
+    return resolver.hasFrozenNodeOutput?.({ graphId: this.#graph.metadata!.id!, node }) !== false;
+  }
+
+  /**
+   * A Graph Output is a named boundary, so only a direct effective connection
+   * may make its source node stream across a Subgraph. The preprocessed
+   * connections also cover Data Bus routes while excluding ordinary
+   * intermediate nodes, which must still wait for their normal final input.
+   */
+  #publishGraphOutputPartial(node: ChartNode, partialOutputs: Outputs): void {
+    const listener = this.#graphOutputPartialListener;
+    const bindings = this.#graphOutputPartialBindingsBySourceNodeId.get(node.id);
+    if (!listener || !bindings) {
+      return;
+    }
+
+    const outputs: GraphOutputs = {};
+    for (const binding of bindings) {
+      const partialValue = partialOutputs[binding.sourceOutputId];
+      if (partialValue == null || partialValue.type === 'control-flow-excluded') {
+        continue;
+      }
+      outputs[binding.graphOutputId] = coerceGraphOutputValue(partialValue, binding.dataType);
+    }
+
+    if (Object.keys(outputs).length > 0) {
+      listener(outputs);
+    }
+  }
+
+  #finishStreamingOutputWatches(node: ChartNode, outputs: Outputs): void {
+    for (const plan of this.#streamingWatchPlansBySourceNodeId.get(node.id) ?? []) {
+      const value = outputs[plan.sourceOutputId];
+      const watch = this.#streamingOutputWatches.get(plan.watchNode.id);
+      if (!watch || watch.stopped) {
+        continue;
+      }
+      if (value == null) {
+        // This is guarded before nodeFinish so a bad producer has one
+        // coherent terminal lifecycle (nodeError, never nodeFinish + error).
+        continue;
+      }
+      if (value.type === 'control-flow-excluded') {
+        watch.stop();
+        if (plan.stopNodeId) {
+          this.#excludeNode(this.#nodesById[plan.stopNodeId]!, nanoid() as ProcessId, {}, 'watched output is excluded');
+        }
+        continue;
+      }
+      const updateIndex = this.#nextStreamingWatchUpdateIndex(plan);
+      watch.finish(this.#createStreamingOutputWatchSnapshot(plan, value, updateIndex, true));
+    }
+  }
+
+  #assertStreamingOutputWatchFinalOutputs(node: ChartNode, outputs: Outputs): void {
+    for (const plan of this.#streamingWatchPlansBySourceNodeId.get(node.id) ?? []) {
+      const watch = this.#streamingOutputWatches.get(plan.watchNode.id);
+      if (!watch || watch.stopped || outputs[plan.sourceOutputId] != null) {
+        continue;
+      }
+      throw new Error(
+        `Watch Streaming Output "${plan.watchNode.title}" did not receive final output from "${node.title}".`,
+      );
+    }
+  }
+
+  #nextStreamingWatchUpdateIndex(plan: StreamingOutputWatchPlan): number {
+    plan.nextUpdateIndex += 1;
+    return plan.nextUpdateIndex;
+  }
+
+  #createStreamingOutputWatchSnapshot(
+    plan: StreamingOutputWatchPlan,
+    value: DataValue,
+    updateIndex: number,
+    isFinal: boolean,
+  ): StreamingOutputWatchSnapshot {
+    const snapshotValue = cloneExecutionOutputs({ ['value' as PortId]: value })['value' as PortId]!;
+    let streamedOutputLength: number | undefined;
+    if (plan.includeAllStreamedOutput) {
+      const streamedValue = snapshotValue.value;
+      const previousValue = plan.previousStreamedValue;
+      plan.previousStreamedValue = streamedValue;
+
+      // LLM Chat publishes accumulated response text for every token. Store
+      // only the suffix here so this history is linear in the response size,
+      // while still supporting providers that publish independent chunks.
+      const increment =
+        typeof previousValue === 'string' &&
+        typeof streamedValue === 'string' &&
+        streamedValue.startsWith(previousValue)
+          ? streamedValue.slice(previousValue.length)
+          : streamedValue;
+      if (increment !== '') {
+        plan.streamedOutput.push(increment);
+      }
+      streamedOutputLength = plan.streamedOutput.length;
+    }
+
+    const outputs: Outputs = {
+      ['isFinal' as PortId]: { type: 'boolean', value: isFinal },
+      ['updateIndex' as PortId]: { type: 'number', value: updateIndex },
+      ['value' as PortId]: snapshotValue,
+    };
+    return {
+      outputs,
+      isFinal,
+      updateIndex,
+      ...(streamedOutputLength === undefined
+        ? {}
+        : {
+            streamedOutput: plan.streamedOutput,
+            streamedOutputLength,
+          }),
+    };
+  }
+
+  #materializeStreamingOutputWatchSnapshot(snapshot: StreamingOutputWatchSnapshot): Outputs {
+    if (snapshot.streamedOutput == null || snapshot.streamedOutputLength == null) {
+      return snapshot.outputs;
+    }
+
+    // Construct cumulative chunks only for a branch that actually starts. A
+    // coalesced interval update or a queue-dropped update therefore performs no
+    // quadratic history copy merely because All Chunks is connected.
+    return {
+      ...snapshot.outputs,
+      ['allStreamedOutput' as PortId]: cloneExecutionOutputs({
+        ['allStreamedOutput' as PortId]: {
+          type: 'any[]',
+          value: snapshot.streamedOutput.slice(0, snapshot.streamedOutputLength),
+        },
+      })['allStreamedOutput' as PortId]!,
+    };
+  }
+
+  async #runStreamingOutputWatchInvocation(
+    plan: StreamingOutputWatchPlan,
+    snapshot: StreamingOutputWatchSnapshot,
+    registerCancel: (cancel: () => void) => void,
+  ): Promise<void> {
+    const root = this.getRootProcessor();
+    if (root.#abortController.signal.aborted) {
+      throw createGraphAbortErrorFromSignal(
+        root.#abortController.signal,
+        'Streaming watch branch aborted before it started',
+      );
+    }
+    const graphId = plan.graph.metadata?.id;
+    if (!graphId) {
+      throw new Error('Cannot start a streaming watch branch because the current graph has no ID.');
+    }
+    const historyIteration = plan.history.start(nanoid() as GraphRunId, snapshot.updateIndex);
+
+    const branchRuntimeCache: GraphProcessorRuntimeCache = {
+      ...this.#runtimeCache,
+      graphBoundaries: undefined,
+      loadedProjects: { ...this.#loadedProjects },
+    };
+    const processor = new GraphProcessor(this.#project, graphId, this.#registry, this.#includeTrace, {
+      cacheLoadedProjects: true,
+      captureNodeTimings: this.#captureNodeTimings,
+      concurrency: this.#concurrency,
+      executionPlanCacheMode: this.#executionPlanCacheMode,
+      runtimeCache: branchRuntimeCache,
+      runtimeProfiler: this.#runtimeProfiler,
+      scheduler: this.#scheduler,
+      [consumedStreamingWatchNodeOverride]: plan.watchNode.id,
+      [graphProcessorGraphOverride]: plan.graph,
+    });
+    processor.executor = this.executor;
+    processor.#isSubProcessor = true;
+    processor.#executionCache = this.#executionCache;
+    processor.#externalFunctions = this.#externalFunctions;
+    processor.#contextValues = this.#contextValues;
+    processor.#parent = this;
+    processor.#abortOwnerOverride = root;
+    processor.#suppressGraphPartialOutputs = true;
+    processor.#globals = this.#globals;
+    processor.#storedValueController = this.#storedValueController;
+    processor.#knowledgeStoreController = this.#knowledgeStoreController;
+    processor.#frozenNodeOutputResolver = this.#frozenNodeOutputResolver;
+    processor.#executor = this.#executor;
+    processor.#suppressGraphLifecycleEvents = true;
+    processor.#sharedRunStateOverride = {
+      // Repeated node IDs do not imply shared race/loop state between snapshots.
+      attachedNodeData: new Map(),
+      graphInputNodeValues: { ...this.#graphInputNodeValues },
+      graphOutputs: {},
+    };
+    processor.#executionIdentityOverride = {
+      rootRunId: root.#rootRunId,
+      graphRunId: historyIteration.graphRunId,
+      parentGraphRunId: this.#graphRunId,
+    };
+    processor.#streamingWatchInvocation = {
+      plan,
+      historyIteration,
+      acceptStop: (value) => this.#acceptStreamingWatchStop(plan, historyIteration, value, snapshot.updateIndex),
+      stopReached: false,
+    };
+    processor.preloadNodeData(plan.watchNode.id, this.#materializeStreamingOutputWatchSnapshot(snapshot));
+    processor.#suppressedPreloadedNodeIds.add(plan.watchNode.id);
+
+    let cancellationRequested = false;
+    registerCancel(() => {
+      cancellationRequested = true;
+      if (processor.isRunning) {
+        void processor.abort(true);
+      }
+    });
+    const unwireEvents = wireSubprocessorEvents(processor, root.#emitter, {
+      autoCleanup: false,
+      isPaused: () => root.#lifecycle.isPaused,
+      pause: () => {
+        void root.pause();
+      },
+      resume: () => {
+        void root.resume();
+      },
+      forwardEvent: (event, data) => {
+        // Interactive/global control events are side effects, not execution
+        // history. They must remain live even when their enclosing iteration
+        // is not selected for retained evidence.
+        if (
+          event === 'userInput' ||
+          event === 'globalSet' ||
+          event === 'newAbortController' ||
+          event.startsWith('globalSet:')
+        ) {
+          return root.#emitter.emit(event, data);
+        }
+        return plan.history.forward(historyIteration, event, data, (nextEvent, nextData) =>
+          root.#emitter.emit(nextEvent, nextData),
+        );
+      },
+    });
+    const unwireLifecycle = wireSubprocessorLifecycle(processor, {
+      autoCleanup: false,
+      signal: this.#abortController.signal,
+      parentAbortSignal: root.#abortController.signal,
+      onParentPause: (listener) => {
+        root.on('pause', listener);
+        return () => root.off('pause', listener);
+      },
+      onParentResume: (listener) => {
+        root.on('resume', listener);
+        return () => root.off('resume', listener);
+      },
+    });
+    root.#subprocessors.add(processor);
+    try {
+      if (root.#lifecycle.isPaused) {
+        processor.pause();
+      }
+      await processor.processGraph(this.#context, this.#graphInputs, this.#contextValues);
+    } catch (error) {
+      const normalizedError = getError(error);
+      const wasCancelled =
+        isAbortLikeError(normalizedError) || root.#abortController.signal.aborted || cancellationRequested;
+      if (wasCancelled) {
+        plan.history.cancel(historyIteration);
+      } else {
+        plan.history.fail(historyIteration);
+        this.#recordStreamingWatchFailure(plan.watchNode, normalizedError, processor);
+      }
+      // Preserve one Error identity across the child processor, scheduler, and
+      // root failure collector. A user node may throw a string or another
+      // non-Error value; allowing the scheduler to wrap it again would make
+      // that one branch failure appear twice in the root aggregate.
+      throw normalizedError;
+    } finally {
+      if (cancellationRequested) {
+        plan.history.cancel(historyIteration);
+      }
+      plan.history.complete(historyIteration);
+      this.#totalCost += processor.#totalCost;
+      unwireLifecycle();
+      unwireEvents();
+      root.#subprocessors.delete(processor);
+    }
+  }
+
+  #commitStreamingWatchStop(node: ChartNode, outputs: Outputs): void {
+    const invocation = this.#streamingWatchInvocation;
+    const completedValue = outputs['value' as PortId];
+    if (
+      invocation?.plan.stopNodeId === node.id &&
+      invocation.stopReached &&
+      completedValue !== undefined &&
+      !this.#getUnhandledErroredNodes().length
+    ) {
+      invocation.acceptStop(completedValue);
+    }
+  }
+
+  #acceptStreamingWatchStop(
+    plan: StreamingOutputWatchPlan,
+    historyIteration: StreamingOutputWatchHistoryIteration,
+    value: DataValue,
+    updateIndex: number,
+  ): void {
+    const stopNodeId = plan.stopNodeId;
+    if (!stopNodeId) {
+      return;
+    }
+    const watch = this.#streamingOutputWatches.get(plan.watchNode.id);
+    if (!watch || watch.stopped) {
+      return;
+    }
+    plan.history.acceptStop(historyIteration);
+    watch.stop(updateIndex);
+    const stopNode = this.#nodesById[stopNodeId];
+    if (!stopNode) {
+      throw new Error(`Watch Streaming Output "${plan.watchNode.title}" lost its Stop Watching Streaming Output node.`);
+    }
+    const acceptedValue = cloneExecutionOutputs({ ['value' as PortId]: value })['value' as PortId]!;
+    this.#nodeResults.set(stopNode.id, { ['value' as PortId]: acceptedValue });
+    this.#visitedNodes.add(stopNode.id);
+    this.#remainingNodes.delete(stopNode.id);
+    const attachedData = this.#getAttachedDataTo(stopNode);
+    const outputNodes = getOutputNodesFrom(this.#executionState, stopNode);
+    this.#propagateAttachedDataToOutputNodes(stopNode, attachedData, outputNodes.connectionsToNodes);
+    this.#queueOutputNodes(stopNode, outputNodes.nodes);
+  }
+
+  #cancelStreamingOutputWatchesForSource(nodeId: NodeId): void {
+    for (const plan of this.#streamingWatchPlansBySourceNodeId.get(nodeId) ?? []) {
+      this.#streamingOutputWatches.get(plan.watchNode.id)?.stop();
+    }
+  }
+
+  #cancelStreamingOutputWatches(): void {
+    for (const watch of this.#streamingOutputWatches.values()) {
+      watch.stop();
+    }
+  }
+
+  #hasPendingStreamingOutputWatches(): boolean {
+    return [...this.#streamingOutputWatches.values()].some((watch) => watch.hasPending);
+  }
+
+  #hasUnresolvedForegroundOutputStreamingWatch(): boolean {
+    return [...this.#streamingOutputWatches.values()].some(
+      (watch) => !watch.stopped && watch.canAffectForegroundOutputs,
+    );
+  }
+
+  #hasDrainableStreamingOutputWatches(): boolean {
+    return [...this.#streamingOutputWatches.values()].some((watch) => watch.hasPending && !watch.isAwaitingProducer);
+  }
+
+  async #drainSchedulerBoundaries(): Promise<void> {
+    do {
+      if (!this.#isSubProcessor) {
+        await this.#profileRuntimeAsync('drainManagedAsyncBranches', () => this.#managedAsyncBranches!.drain());
+      }
+      await this.#profileRuntimeAsync('drainStreamingOutputWatches', () => this.#drainStreamingOutputWatches());
+    } while (
+      (!this.#isSubProcessor && this.#managedAsyncBranches!.hasPending) ||
+      this.#hasDrainableStreamingOutputWatches()
+    );
+  }
+
+  async #drainStreamingOutputWatches(): Promise<void> {
+    do {
+      for (const watch of this.#streamingOutputWatches.values()) {
+        await watch.drain();
+      }
+      // Accepting Stop happens in a child run. It can enqueue ordinary parent
+      // work after the compatible scheduler has returned, so wait for that work
+      // before deciding every Watch boundary is quiet.
+      await this.#processingQueue.onIdle();
+    } while (this.#hasDrainableStreamingOutputWatches());
+
+    for (const [watchNodeId, watch] of this.#streamingOutputWatches) {
+      const plan = this.#streamingWatchPlansByWatchNodeId.get(watchNodeId);
+      if (!plan || plan.historySummaryEmitted || !watch.isSettled) continue;
+      const summary = await plan.history.finalize(watch.runtimeSummary, (event, data) =>
+        this.#emitter.emit(event, data),
+      );
+      plan.historySummaryEmitted = true;
+      await this.#emitter.emit(
+        'streamingOutputWatchSummary',
+        this.#withExecution({ watchNode: plan.watchNode, summary }),
+      );
+    }
+  }
+
   #prepareAsyncBranchTopology(): void {
     const connections = this.#getEffectiveConnections().filter((connection) =>
       this.#isDefinitionValidConnection(connection),
@@ -3514,6 +4557,11 @@ export class GraphProcessor {
 
       if (nodeIds.size === 0) {
         continue;
+      }
+
+      const managedAsyncBranchWatchViolation = this.#getManagedAsyncBranchWatchViolation(triggerNode);
+      if (managedAsyncBranchWatchViolation) {
+        throw managedAsyncBranchWatchViolation;
       }
 
       const preloadedNodeId = [...nodeIds].find((nodeId) => this.#nodeResults.has(nodeId));
@@ -3900,6 +4948,7 @@ export class GraphProcessor {
 
     this.#visitedNodes.add(node.id);
     this.#markAsExcluded(node, processId, inputValues, reason);
+    this.#finishStreamingOutputWatches(node, this.#nodeResults.get(node.id)!);
     this.#currentlyProcessing.delete(node.id);
     this.#remainingNodes.delete(node.id);
 
@@ -3927,6 +4976,7 @@ export class GraphProcessor {
       'nodeExcluded',
       this.#createNodeExcludedEvent(node, processId, inputValues, reason, resultOrigin),
     );
+    this.#finishStreamingOutputWatches(node, this.#nodeResults.get(node.id)!);
   }
 
   #createNodeExcludedEvent(
@@ -3939,6 +4989,7 @@ export class GraphProcessor {
     const outputs = createExcludedNodeOutputs(node, this.#definitions[node.id]!.outputs);
 
     this.#nodeResults.set(node.id, outputs);
+    this.#commitExcludedGraphOutput(node, inputValues, outputs);
 
     return this.#withExecution({
       node,
@@ -3948,6 +4999,19 @@ export class GraphProcessor {
       reason,
       resultOrigin,
     });
+  }
+
+  #commitExcludedGraphOutput(node: ChartNode, inputs: Inputs, outputs: Outputs): void {
+    const isFalseCondition = node.isConditional && coerceTypeOptional(inputs[IF_PORT.id], 'boolean') === false;
+    if (node.type !== 'graphOutput' || (inputs['value' as PortId] == null && !isFalseCondition)) {
+      return;
+    }
+
+    const outputId = (node as GraphOutputNode).data.id;
+    const value = outputs['valueOutput' as PortId];
+    if (value) {
+      commitGraphOutputValue(this.#graphOutputs, outputId, value);
+    }
   }
 
   #getInputValuesForNode(node: ChartNode): Inputs {

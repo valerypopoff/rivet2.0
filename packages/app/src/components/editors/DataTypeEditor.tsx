@@ -1,5 +1,6 @@
 import Checkbox from '@atlaskit/checkbox';
 import { Field, HelperMessage } from '@atlaskit/form';
+import Portal from '@atlaskit/portal';
 import Select from '@atlaskit/select';
 import { css } from '@emotion/react';
 import {
@@ -12,7 +13,7 @@ import {
   isArrayDataType,
   dataTypeDisplayNames,
 } from '@valerypopoff/rivet2-core';
-import { type FC } from 'react';
+import { useState, type FC } from 'react';
 import { type SharedEditorProps } from './SharedEditorProps';
 import { getHelperMessage } from './editorUtils';
 
@@ -55,6 +56,7 @@ export const DataTypeSelector: FC<{
   isReadonly: boolean;
   helperMessage?: string;
 }> = ({ value, allowedDataTypes, onChange, isReadonly, isDisabled, helperMessage }) => {
+  const [menuPortalTarget, setMenuPortalTarget] = useState<HTMLDivElement | null>(null);
   const scalarType = value ? getScalarTypeOf(value) : undefined;
   const isArray = value ? isArrayDataType(value) : undefined;
 
@@ -74,12 +76,19 @@ export const DataTypeSelector: FC<{
             {helperMessage && <HelperMessage>{helperMessage}</HelperMessage>}
             <Select
               {...fieldProps}
+              menuPlacement="auto"
+              menuPortalTarget={menuPortalTarget ?? undefined}
+              menuPosition="fixed"
+              menuShouldScrollIntoView={false}
               options={dataTypeOptions}
               value={selectedOption}
               onChange={(selected) =>
                 onChange?.(selected ? (isArray ? (`${selected.value}[]` as DataType) : selected.value) : undefined)
               }
             />
+            <Portal zIndex={1000}>
+              <div ref={setMenuPortalTarget} />
+            </Portal>
           </>
         )}
       </Field>

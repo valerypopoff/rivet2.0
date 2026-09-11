@@ -286,6 +286,8 @@ const sidebars = {
         'node-reference/passthrough',
         'node-reference/race-inputs',
         'node-reference/start-async-branch',
+        'node-reference/watch-streaming-output',
+        'node-reference/stop-watching-streaming-output',
       ],
     },
     {

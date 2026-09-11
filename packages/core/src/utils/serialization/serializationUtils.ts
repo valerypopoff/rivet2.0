@@ -11,6 +11,7 @@ import {
   normalizeKnowledgeConnectionId,
   normalizeKnowledgeMetadata,
 } from '../../integrations/KnowledgeStoreValidation.js';
+import { validateProjectGlobalVariables } from '../../model/GlobalVariables.js';
 
 /** Additional data that has been attached to a project/graph, for use by plugins, etc. */
 export type AttachedData = Record<string, unknown>;
@@ -47,6 +48,13 @@ export function validateProject(project: unknown): ProjectValidationResult {
     if (!meta.id) errors.push('Missing project metadata.id');
     if (!meta.title) errors.push('Missing project metadata.title');
     if (meta.knowledgeStores != null) validateKnowledgeStores(meta.knowledgeStores, errors);
+    if (meta.globalVariables != null) {
+      try {
+        validateProjectGlobalVariables(meta.globalVariables);
+      } catch (error) {
+        errors.push(error instanceof Error ? error.message : String(error));
+      }
+    }
   }
 
   // Graphs checks

@@ -83,6 +83,7 @@ void describe('codeRunnerRequire', () => {
               graph: __resolveInterpolation(inputs, '@graphInputs.global.items[1]', graphInputs, context),
               input: __resolveInterpolation(inputs, 'payload.items[0].name', graphInputs, context),
               context: __resolveInterpolation(inputs, '@context.local.active', graphInputs, context),
+              global: __resolveInterpolation(inputs, '@globals.profile.name', graphInputs, context, __globals),
             },
           },
         };
@@ -100,12 +101,16 @@ void describe('codeRunnerRequire', () => {
         includeRequire: false,
         includeRivet: false,
         interpolationHelperIdentifier: '__resolveInterpolation',
+        globalValuesIdentifier: '__globals',
       },
       {
         global: { type: 'object', value: { items: ['ignored', 'second'] } },
       },
       {
         local: { type: 'object', value: { active: true } },
+      },
+      {
+        profile: { type: 'object', value: { name: 'node-global' } },
       },
     );
 
@@ -115,6 +120,7 @@ void describe('codeRunnerRequire', () => {
         value: {
           context: true,
           graph: 'second',
+          global: 'node-global',
           input: 'first',
         },
       },

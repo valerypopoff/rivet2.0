@@ -402,6 +402,22 @@ export type InternalProcessContext<T extends ChartNode = ChartNode> = ProcessCon
   onPartialOutputs?: (outputs: Outputs) => void;
 
   /**
+   * Internal named graph-boundary channel for Graph Output partials. Unlike
+   * onPartialOutputs, this does not create a node-history/recording event;
+   * GraphProcessor uses it only to deliver a child boundary value to a parent
+   * Watch or another enclosing named Graph Output.
+   */
+  onGraphOutputPartial?: (outputs: Outputs) => void;
+
+  /**
+   * Internal boundary used only by Stop Watching Streaming Output. The owning
+   * GraphProcessor uses this only to verify the live Stop node was reached.
+   * It publishes the completed Stop output after its finish event, so split
+   * aggregation and ordinary downstream execution use the exact same value.
+   */
+  acceptStreamingWatchStop?: () => void;
+
+  /**
    * Preserves display-only outputs for this invocation if it subsequently
    * fails. These values are reported with nodeError, never used as graph
    * results, and must not change the original failure.

@@ -13,7 +13,7 @@ import { expectType } from '../../utils/expectType.js';
 import { type EditorDefinition, type InternalProcessContext, type NodeBodySpec } from '../../index.js';
 import { dedent } from 'ts-dedent';
 import { coerceTypeOptional } from '../../utils/coerceType.js';
-import { extractInterpolationVariables, interpolate } from '../../utils/interpolation.js';
+import { extractInterpolationVariables, getInterpolationGlobalValues, interpolate } from '../../utils/interpolation.js';
 import { createInterpolationInputDefinition } from '../interpolationInputDefinition.js';
 import { evaluateJsonPath } from '../../utils/jsonPath.js';
 
@@ -48,12 +48,14 @@ export function interpolateExtractObjectPathSource(
   inputs: Record<PortId, DataValue>,
   graphInputValues?: Record<string, DataValue>,
   contextValues?: Record<string, DataValue>,
+  globalValues?: Record<string, unknown>,
 ): string {
   return interpolate(
     path,
     buildExtractObjectPathInterpolationInputs(path, inputs),
     graphInputValues,
     contextValues,
+    { globalValues },
   ).trim();
 }
 
@@ -171,7 +173,13 @@ export class ExtractObjectPathNodeImpl extends NodeImpl<ExtractObjectPathNode> {
 
     const inputPath = usePathInput
       ? rawPath.trim()
-      : interpolateExtractObjectPathSource(rawPath, inputs, context.graphInputNodeValues, context.contextValues);
+      : interpolateExtractObjectPathSource(
+          rawPath,
+          inputs,
+          context.graphInputNodeValues,
+          context.contextValues,
+          getInterpolationGlobalValues(rawPath, context.getGlobal),
+        );
 
     let matches: unknown[];
     try {

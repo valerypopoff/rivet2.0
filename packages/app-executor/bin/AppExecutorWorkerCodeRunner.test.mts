@@ -441,6 +441,7 @@ void describe('AppExecutorWorkerCodeRunner', () => {
                 graph: __resolveInterpolation(inputs, '@graphInputs.global.items[1]', graphInputs, context),
                 input: __resolveInterpolation(inputs, 'payload.items[0].name', graphInputs, context),
                 context: __resolveInterpolation(inputs, '@context.local.active', graphInputs, context),
+                global: __resolveInterpolation(inputs, '@globals.profile.name', graphInputs, context, __globals),
               },
             },
           };
@@ -451,12 +452,18 @@ void describe('AppExecutorWorkerCodeRunner', () => {
             value: { items: [{ name: 'worker-value' }] },
           },
         },
-        defaultCodeRunnerOptions({ interpolationHelperIdentifier: '__resolveInterpolation' }),
+        defaultCodeRunnerOptions({
+          globalValuesIdentifier: '__globals',
+          interpolationHelperIdentifier: '__resolveInterpolation',
+        }),
         {
           global: { type: 'object', value: { items: ['ignored', 'graph-value'] } },
         },
         {
           local: { type: 'object', value: { active: true } },
+        },
+        {
+          profile: { type: 'object', value: { name: 'worker-global' } },
         },
       );
 
@@ -466,6 +473,7 @@ void describe('AppExecutorWorkerCodeRunner', () => {
           value: {
             context: true,
             graph: 'graph-value',
+            global: 'worker-global',
             input: 'worker-value',
           },
         },

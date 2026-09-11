@@ -97,6 +97,7 @@ async function runCode(request) {
     code,
     contextValues,
     executionEnvironment,
+    globalValues,
     graphInputs,
     inputs,
     interpolationRuntimeModulePath,
@@ -139,6 +140,11 @@ async function runCode(request) {
   if (options.interpolationHelperIdentifier) {
     argNames.push(options.interpolationHelperIdentifier);
     args.push(getCodeInterpolationResolver(requireAnchorPath, interpolationRuntimeModulePath));
+  }
+
+  if (options.globalValuesIdentifier) {
+    argNames.push(options.globalValuesIdentifier);
+    args.push(globalValues ?? Object.create(null));
   }
 
   argNames.push(code);
@@ -248,6 +254,7 @@ export type CodeWorkerRunRequest = {
   contextValues: Record<string, DataValue> | undefined;
   executionEnvironment: Readonly<Record<string, string | undefined>> | undefined;
   graphInputs: Record<string, DataValue> | undefined;
+  globalValues: Record<string, DataValue> | undefined;
   interpolationRuntimeModulePath: string | undefined;
   inputs: Inputs;
   options: CodeRunnerOptions;
@@ -261,6 +268,7 @@ export function createCodeWorkerRunRequest(
   options: CodeRunnerOptions,
   graphInputs: Record<string, DataValue> | undefined,
   contextValues: Record<string, DataValue> | undefined,
+  globalValues: Record<string, DataValue> | undefined,
   executionEnvironment?: Readonly<Record<string, string | undefined>>,
 ): CodeWorkerRunRequest {
   return {
@@ -268,6 +276,7 @@ export function createCodeWorkerRunRequest(
     contextValues,
     executionEnvironment,
     graphInputs,
+    globalValues,
     interpolationRuntimeModulePath:
       options.interpolationHelperIdentifier && !bundledInterpolationRuntimeSource
         ? getInterpolationRuntimeModulePath()

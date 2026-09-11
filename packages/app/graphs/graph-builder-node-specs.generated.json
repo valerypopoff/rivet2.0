@@ -1,6 +1,6 @@
 {
   "formatVersion": 1,
-  "catalogFingerprint": "fnv1a64:93a0088722a94247",
+  "catalogFingerprint": "fnv1a64:1191408796225fda",
   "entries": [
     {
       "authoringChoiceId": "registered:abortGraph",
@@ -718,7 +718,7 @@
       "authoringChoiceId": "registered:getGlobal",
       "nodeType": "getGlobal",
       "displayName": "Get Global",
-      "description": "The Get Global Node is used to retrieve a global value that is shared across all graphs and subgraphs. The ID of the global value is configured in this node. On the canvas, the node title shows an upward arrow icon rising from a baseline so it is easier to distinguish from Set Global. This icon is only a visual title cue. If an enabled Get Global node uses a static Variable ID that no enabled static Set Global node sets anywhere in the current project, the node header shows a triangular warning icon. Dynamic Get Global IDs and dynamic Set Global IDs supplied through input ports cannot be checked statically. The node can be configured to retrieve the value on demand, which means it will be read when nodes need it, rather than when this node executes. This is useful when the global value might change during the execution of the graph. The node can also be configured to wait until the varia",
+      "description": "The Get Global Node is used to retrieve a global value that is shared across all graphs and subgraphs. The ID of the global value is configured in this node. On the canvas, the node title shows an upward arrow icon rising from a baseline so it is easier to distinguish from Set Global. This icon is only a visual title cue. If an enabled Get Global node uses a fixed Variable ID that no enabled fixed ID Set Global node or configured project global variable sets, the node header shows a triangular warning icon. Dynamic Get Global IDs and Set Global IDs supplied through input ports cannot be checked in advance. The node can be configured to retrieve the value on demand, which means it will be read when nodes need it, rather than when this node executes. This is useful when the global value might change during the execution of the graph. The node can also be configured to wait until the variab",
       "aliases": [],
       "capabilities": {
         "createWithDefaults": true,
@@ -1180,7 +1180,7 @@
       "authoringChoiceId": "registered:jsFilter",
       "nodeType": "jsFilter",
       "displayName": "JS Filter",
-      "description": "JS Filter Node The JS Filter node filters an input array with a JavaScript callback body. The callback body can use item , index , and array , and should return a truthy value for items that should stay in the output. Inputs Title Data Type Description Array any[] The array to filter. Additional inputs are created from {{name}} interpolation tokens in the callback body. A path expression such as {{config.limit.max}} creates only config ; {{item.name}} and {{array[0]}} select from the callback's local values and create no extra input. Outputs Title Data Type Description Filtered any[] Items whose callback result was truthy. Settings Setting Description Callback Body JavaScript callback body. Use return to decide whether each item remains. Example js return item != null;",
+      "description": "JS Filter Node The JS Filter node filters an input array with a JavaScript callback body. The callback body can use item , index , and array , and should return a truthy value for items that should stay in the output. Inputs Title Data Type Description Array any[] The array to filter. Additional inputs are created from {{name}} interpolation tokens in the callback body. A path expression such as {{config.limit.max}} creates only config ; {{item.name}} and {{array[0]}} select from the callback's local values and create no extra input. Use {{@globals.variableId}} or a JSONPath expression such as {{@globals.rules.minimum}} to read the current global value without creating an additional input. It is read once when the node starts and is available to every callback invocation. The reference does not wait for or order Set Global; wire a writer explicitly when the filter must read a value that ",
       "aliases": [],
       "capabilities": {
         "createWithDefaults": true,
@@ -1195,7 +1195,7 @@
       "authoringChoiceId": "registered:jsMap",
       "nodeType": "jsMap",
       "displayName": "JS Map",
-      "description": "JS Map Node The JS Map node transforms each item in an input array with a JavaScript callback body. The callback body can use item , index , and array , and should return the mapped value for each item. Inputs Title Data Type Description Array any[] The array to transform. Additional inputs are created from {{name}} interpolation tokens in the callback body. A path expression such as {{config.limit.max}} creates only config ; {{item.name}} and {{array[0]}} select from the callback's local values and create no extra input. Outputs Title Data Type Description Mapped any[] The array of mapped return values. Settings Setting Description Callback Body JavaScript callback body. Use return to produce each item. Example js return { ...item, index };",
+      "description": "JS Map Node The JS Map node transforms each item in an input array with a JavaScript callback body. The callback body can use item , index , and array , and should return the mapped value for each item. Inputs Title Data Type Description Array any[] The array to transform. Additional inputs are created from {{name}} interpolation tokens in the callback body. A path expression such as {{config.limit.max}} creates only config ; {{item.name}} and {{array[0]}} select from the callback's local values and create no extra input. Use {{@globals.variableId}} or a JSONPath expression such as {{@globals.transform.offset}} to read the current global value without creating an additional input. It is read once when the node starts and is available to every callback invocation. The reference does not wait for or order Set Global; wire a writer explicitly when the map must read a value that the graph as",
       "aliases": [],
       "capabilities": {
         "createWithDefaults": true,
@@ -1774,7 +1774,7 @@
       "authoringChoiceId": "registered:setGlobal",
       "nodeType": "setGlobal",
       "displayName": "Set Global",
-      "description": "The Set Global Node is used to set a global value that is shared across all graphs and subgraphs during an execution in Rivet. This can be useful for storing and retrieving values that need to be accessed by multiple graphs. On the canvas, the node title shows a downward arrow icon so it is easier to distinguish from Get Global. This icon is only a visual title cue. The Set Global Node allows you to specify the ID of the global value and the value itself. The ID can be either a static string or an input value. The value can be of any data type. Static IDs appear in the Get Global node's search field so you can choose them without retyping.",
+      "description": "The Set Global Node is used to set a global value that is shared across all graphs and subgraphs during an execution in Rivet. This can be useful for storing and retrieving values that need to be accessed by multiple graphs. On the canvas, the node title shows a downward arrow icon so it is easier to distinguish from Get Global. This icon is only a visual title cue. The Set Global Node allows you to specify the ID of the global value and the value itself. The ID can be either a fixed string or an input value. The value can be of any data type. Fixed IDs and configured project global variables in Project settings → General appear in the Get Global node's search field so you can choose them without retyping. A Set Global node can overwrite a configured project global variable during its run; its Previous Value then returns the automatically assigned value. Interpolation capable nodes can r",
       "aliases": [],
       "capabilities": {
         "createWithDefaults": true,
@@ -1850,6 +1850,21 @@
       "nodeType": "startBackgroundBranch",
       "displayName": "Start Async Branch",
       "description": "Start Async Branch Node The Start Async Branch node lets the foreground path continue without waiting for one downstream branch. Rivet still owns that branch until the root graph run ends, so execution events, cancellation, and errors remain part of the same run. Web app actions return an already ready graph result without waiting for the async branch, while the processor remains running until that branch settles. Use this node for side effects that should overlap the foreground work, such as publishing a progress status while an AI tool is running. It is not a detached job that can outlive the graph run. Inputs and outputs The node has paired variadic ports. Connecting another input adds another input/output pair. Port Data Type Description Async Input [i] any A value required before the node starts. The node waits for all connected inputs. Async Output [i] any The unchanged value from ",
+      "aliases": [],
+      "capabilities": {
+        "createWithDefaults": true,
+        "inspectSafeProjection": false,
+        "resolvePorts": true,
+        "configureSettings": false,
+        "editLinkedPrefabInstance": false
+      },
+      "settings": []
+    },
+    {
+      "authoringChoiceId": "registered:stopWatchingStreamingOutput",
+      "nodeType": "stopWatchingStreamingOutput",
+      "displayName": "Stop Watching Streaming Output",
+      "description": "Stop Watching Streaming Output Node Stop Watching Streaming Output is the optional exit boundary for a Watch Streaming Output branch. Add it when a branch needs to select one value, stop that watch, and pass the value into ordinary graph execution. Omit it when every streamed snapshot should run the downstream branch independently. Port Data Type Description Value (input) any The value selected by the watch branch. Value (output) any The selected value for ordinary downstream nodes. In sequential mode, the first invocation to reach this node wins. In parallel mode, competing invocations may already be running, but the first one to reach Stop wins and Rivet cancels the rest. Later snapshots are not started. Stop releases the selected value as soon as that node finishes. Other nodes already running in the winning invocation continue, and the graph waits for them before completing. Their fa",
       "aliases": [],
       "capabilities": {
         "createWithDefaults": true,
@@ -2100,6 +2115,21 @@
       "nodeType": "waitForEvent",
       "displayName": "Wait For Event",
       "description": "The Wait For Event Node is used to pause the execution of a graph until a specific event is raised by a Raise Event Node or the host project. The event name can be configured in the node settings or provided dynamically via an input port. This node is useful in scenarios where you want to wait for an external event to occur before proceeding with the graph execution. For example, you might want to wait for a user to click a button, or for an API call to complete.",
+      "aliases": [],
+      "capabilities": {
+        "createWithDefaults": true,
+        "inspectSafeProjection": false,
+        "resolvePorts": true,
+        "configureSettings": false,
+        "editLinkedPrefabInstance": false
+      },
+      "settings": []
+    },
+    {
+      "authoringChoiceId": "registered:watchStreamingOutput",
+      "nodeType": "watchStreamingOutput",
+      "displayName": "Watch Streaming Output",
+      "description": "Watch Streaming Output Node Watch Streaming Output lets a branch begin work from snapshots emitted by a node that is still running. It is useful when an LLM Chat response is streaming and some downstream work can begin as soon as a useful partial value appears. Ordinary connections do not change: they still receive only the producer's final output. This node creates an explicit, bounded watch boundary instead of making every wire in a graph stream aware. The wire into Streaming Output is marked with repeated forward arrowheads. They show that partial snapshots travel repeatedly from the producer to this Watch node; it remains a one way connection and does not change any other output wire's final only behavior. Inputs and outputs Port Data Type Description Streaming Output any Connect one output from the node that emits partial outputs. Chunk any The immutable value snapshot for this watc",
       "aliases": [],
       "capabilities": {
         "createWithDefaults": true,

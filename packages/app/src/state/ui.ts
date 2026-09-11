@@ -80,14 +80,6 @@ export const nodeEditorGroupOpenState = atomWithStorage<NodeEditorGroupOpenState
   storage,
 );
 
-export type ProjectSettingsSectionOpenState = Record<string, boolean>;
-
-export const projectSettingsSectionOpenState = atomWithStorage<ProjectSettingsSectionOpenState>(
-  'projectSettingsSectionOpenState',
-  {},
-  storage,
-);
-
 export const fullscreenOutputModalBoundsState = atomWithStorage<HorizontalModalBounds>(
   'fullscreenOutputModalBoundsState',
   DEFAULT_HORIZONTAL_MODAL_BOUNDS,

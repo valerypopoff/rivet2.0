@@ -10,6 +10,8 @@ The Expression node evaluates one JavaScript expression and returns the result o
 
 Use `{{name}}` tokens inside the expression to create input ports. Connected values are exposed as JavaScript values, not as wrapped Rivet `DataValue` objects. `{{customer.address.city}}` creates one `customer` port and evaluates the JSONPath suffix against that value.
 
+Use `{{@globals.variableId}}` to read the current per-run global value without creating a port. JSONPath expressions such as `{{@globals.profile.user.name}}` and `{{@globals["customer.profile"].names[0]}}` return the selected JavaScript value. The read happens when Expression starts; it does not wait for Set Global or order parallel branches. Use [Get Global](./get-global.mdx) when you need an explicit connection, typed default, **Wait**, or **On Demand** behavior, and use [Set Global](./set-global.mdx) to change a value.
+
 ## Inputs
 
 Inputs are created from `{{name}}` interpolation tokens in the expression body.

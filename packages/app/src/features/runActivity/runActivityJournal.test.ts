@@ -267,6 +267,34 @@ test('keeps replay receipt timestamps separate from the recorded run duration', 
   assert.equal(getRunActivityRootDurationMs(root, 9_999_999), 18_500);
 });
 
+test('keeps delayed Watch node evidence out of the live root replay timeline', () => {
+  let journal = createRunActivityJournal();
+  journal = apply(journal, 'start', { project, startGraph: graph, inputs: {}, contextValues: {}, execution }, 10_000);
+  journal = apply(journal, 'graphStart', { graph, inputs: {}, execution }, 10_001);
+  journal = apply(
+    journal,
+    'nodeStart',
+    { node, processId, inputs: {}, execution, eventOccurredAt: 10_050 },
+    10_200,
+  );
+  journal = apply(
+    journal,
+    'nodeFinish',
+    { node, processId, execution, outputs: {}, eventOccurredAt: 10_060 },
+    10_201,
+  );
+  journal = apply(journal, 'graphFinish', { graph, execution, outputs: {} }, 10_100);
+
+  const root = journal.rootsById[rootRunId]!;
+  const key = createRunActivityNodeKey({ rootRunId, graphRunId, nodeId, processId });
+  assert.equal(root.recordedTiming, undefined);
+  assert.equal(getRunActivityRootDurationMs(root, 99_999), 100);
+  assert.deepEqual(root.nodeInvocationsByKey[key]?.recordedTiming, {
+    startedAt: 10_050,
+    finishedAt: 10_060,
+  });
+});
+
 test('does not invent a zero duration from terminal-only replay evidence', () => {
   let journal = createRunActivityJournal();
   journal = apply(journal, 'graphFinish', { graph, execution, outputs: {}, replayRecordedAt: 28_500 }, 1_000_003);

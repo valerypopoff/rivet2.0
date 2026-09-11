@@ -11,6 +11,7 @@ test('SettingsModal uses independent viewport-capped column scrolling', () => {
   const appModalHeaderSource = readFileSync(join(componentsDir, 'AppModalHeader.tsx'), 'utf8');
 
   assert.match(source, /const SETTINGS_MODAL_HEIGHT = 'calc\(100vh - 48px\)'/);
+  assert.match(source, /<Modal onClose=\{\(\) => setIsOpen\(false\)\} width="45vw" height=\{SETTINGS_MODAL_HEIGHT\} testId="settings-modal">/);
   assert.match(source, /height=\{SETTINGS_MODAL_HEIGHT\}/);
   assert.match(source, /testId="settings-modal"/);
   assert.doesNotMatch(source, /height="80%"/);

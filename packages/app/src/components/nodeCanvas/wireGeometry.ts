@@ -120,6 +120,65 @@ export function getNormalOffsetWirePath({ offset, ...coordinates }: WirePathCoor
     .join(' ');
 }
 
+/**
+ * Returns short, forward-facing paths on a wire at a regular visual cadence.
+ * Callers attach an SVG marker to each path's end, so the marker follows the
+ * actual curve (including a user-authored bend) instead of merely pointing
+ * along the connection's overall start-to-end vector.
+ */
+export function getRepeatedWireArrowMarkerSegments({
+  segments,
+  startDirection,
+  endDirection,
+  spacing = 48,
+  arrowLength = 12,
+  startInset = 28,
+  endInset = 12,
+}: {
+  segments: readonly WireSegment[];
+  startDirection?: WireEndpointDirection;
+  endDirection?: WireEndpointDirection;
+  spacing?: number;
+  arrowLength?: number;
+  startInset?: number;
+  endInset?: number;
+}): WireSegment[] {
+  if (segments.length === 0 || spacing <= 0 || arrowLength <= 0 || startInset < 0 || endInset < 0) {
+    return [];
+  }
+
+  const points = segments.reduce<WirePoint[]>((allPoints, segment, index) => {
+    const sampledPoints = getWirePathSamplePoints({
+      sx: segment.start.x,
+      sy: segment.start.y,
+      ex: segment.end.x,
+      ey: segment.end.y,
+      startDirection: index === 0 ? startDirection : undefined,
+      endDirection: index === segments.length - 1 ? endDirection : undefined,
+    });
+    return allPoints.length === 0 ? sampledPoints : appendSamplePoints(allPoints, sampledPoints);
+  }, []);
+  const cumulativeLengths = getCumulativeWireLengths(points);
+  const totalLength = cumulativeLengths.at(-1) ?? 0;
+  const maximumArrowEnd = totalLength - endInset;
+
+  if (maximumArrowEnd < startInset) {
+    return [];
+  }
+
+  const markerSegments: WireSegment[] = [];
+  for (let arrowEndDistance = startInset; arrowEndDistance <= maximumArrowEnd; arrowEndDistance += spacing) {
+    const start = getWirePointAtDistance(points, cumulativeLengths, Math.max(0, arrowEndDistance - arrowLength));
+    const end = getWirePointAtDistance(points, cumulativeLengths, arrowEndDistance);
+
+    if (start && end && (start.x !== end.x || start.y !== end.y)) {
+      markerSegments.push({ start, end });
+    }
+  }
+
+  return markerSegments;
+}
+
 function getWirePathSamplePoints({
   sx,
   sy,
@@ -182,6 +241,47 @@ function getWirePathSamplePoints({
       CUBIC_OFFSET_SAMPLE_COUNT,
     ),
   );
+}
+
+function getCumulativeWireLengths(points: readonly WirePoint[]): number[] {
+  const cumulativeLengths = [0];
+
+  for (let index = 1; index < points.length; index += 1) {
+    const previous = points[index - 1]!;
+    const current = points[index]!;
+    cumulativeLengths.push(cumulativeLengths[index - 1]! + Math.hypot(current.x - previous.x, current.y - previous.y));
+  }
+
+  return cumulativeLengths;
+}
+
+function getWirePointAtDistance(
+  points: readonly WirePoint[],
+  cumulativeLengths: readonly number[],
+  distance: number,
+): WirePoint | undefined {
+  for (let index = 1; index < points.length; index += 1) {
+    const segmentEndDistance = cumulativeLengths[index]!;
+    if (distance > segmentEndDistance) {
+      continue;
+    }
+
+    const segmentStartDistance = cumulativeLengths[index - 1]!;
+    const segmentLength = segmentEndDistance - segmentStartDistance;
+    if (segmentLength === 0) {
+      continue;
+    }
+
+    const progress = (distance - segmentStartDistance) / segmentLength;
+    const start = points[index - 1]!;
+    const end = points[index]!;
+    return {
+      x: start.x + (end.x - start.x) * progress,
+      y: start.y + (end.y - start.y) * progress,
+    };
+  }
+
+  return points.at(-1);
 }
 
 function getDirectionalWireControlPoints({

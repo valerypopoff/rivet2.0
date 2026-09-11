@@ -420,6 +420,9 @@ export function useLocalExecutor() {
     processor.on('nodeError', (data) => currentExecution.onRunActivityEvent('nodeError', data));
     processor.on('nodeExcluded', (data) => currentExecution.onRunActivityEvent('nodeExcluded', data));
     processor.on('nodeOutputsCleared', (data) => currentExecution.onRunActivityEvent('nodeOutputsCleared', data));
+    processor.on('streamingOutputWatchSummary', (data) =>
+      currentExecution.onRunActivityEvent('streamingOutputWatchSummary', data),
+    );
     processor.on('partialOutput', (data) => currentExecution.onRunActivityEvent('partialOutput', data));
     processor.on('progress', (data) => currentExecution.onRunActivityEvent('progress', data));
     processor.on('llmCallFinished', (data) => currentExecution.onRunActivityEvent('llmCallFinished', data));

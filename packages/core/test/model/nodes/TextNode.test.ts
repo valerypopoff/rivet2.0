@@ -62,6 +62,23 @@ describe('TextNode', () => {
     });
   });
 
+  it('resolves the current global value without exposing an input port', async () => {
+    const globals = new Map<string, DataValue>([
+      ['profile', { type: 'object', value: { user: { name: 'initial' } } }],
+    ]);
+    const node = createNode({ text: '{{@globals.profile.user.name}}' });
+    const globalContext = {
+      ...context,
+      getGlobal: (id: string) => globals.get(id),
+    } as InternalProcessContext;
+
+    assert.deepStrictEqual(node.getInputDefinitions(), []);
+    assert.equal((await node.process({}, globalContext)).output.value, 'initial');
+
+    globals.set('profile', { type: 'object', value: { user: { name: 'overwritten' } } });
+    assert.equal((await node.process({}, globalContext)).output.value, 'overwritten');
+  });
+
   it('uses one raw base input for nested JSONPath expressions while preserving bare string coercion', async () => {
     const node = createNode({
       text: '{{payload.user.names[0]}} / {{payload}}',

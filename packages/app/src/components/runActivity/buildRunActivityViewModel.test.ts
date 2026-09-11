@@ -497,6 +497,85 @@ test('uses plain provider-request wording when a model row has no recorded reque
   ]);
 });
 
+test('presents a compact Watch Streaming Output summary without recreating omitted iterations', () => {
+  const journal = createRunActivityJournal();
+  const selectedRoot = root(newerActiveRootId, 1, 'completed');
+  const watch = invocation({
+    key: 'streaming-watch-summary',
+    sequence: 1,
+    graphId: 'main',
+    graphRunId: 'main-run',
+    nodeId: 'watch',
+    processId: 'streaming-watch-summary:watch',
+  });
+  watch.streamingOutputWatchSummary = {
+    receivedUpdates: 6,
+    coalescedUpdates: 1,
+    droppedUpdates: 2,
+    maximumQueuedUpdates: 3,
+    completedIterations: 4,
+    failedIterations: 0,
+    cancelledIterations: 0,
+    omittedIterations: 2,
+    retainedIterationUpdateIndexes: [1, 2, 3, 6],
+    selectedIteration: { updateIndex: 6, reason: 'latest' },
+  };
+  selectedRoot.nodeInvocationsByKey[watch.key] = watch;
+  selectedRoot.nodeInvocationOrder = [watch.key];
+  journal.rootsById[selectedRoot.rootRunId] = selectedRoot;
+  journal.latestCompletedRootRunId = selectedRoot.rootRunId;
+
+  const item = buildRunActivityViewModel(journal, () => ({
+    nodeTitle: 'Watch response',
+    nodeType: 'Watch Streaming Output',
+  })).items[0]!;
+
+  assert.deepEqual(item.detailRows, [
+    { label: 'Streaming updates', value: '6 received · 1 coalesced · 2 dropped' },
+    { label: 'Watch iterations', value: '4 completed · 0 failed · 0 cancelled · 2 omitted' },
+    { label: 'Retained updates', value: '1, 2, 3, 6 · latest' },
+  ]);
+});
+
+test('labels a coordinator-level Watch failure even when no child iteration failed', () => {
+  const journal = createRunActivityJournal();
+  const selectedRoot = root(newerActiveRootId, 1, 'error');
+  const watch = invocation({
+    key: 'streaming-watch-overflow',
+    sequence: 1,
+    graphId: 'main',
+    graphRunId: 'main-run',
+    nodeId: 'watch',
+    processId: 'streaming-watch-summary:watch',
+  });
+  watch.status = 'error';
+  watch.streamingOutputWatchSummary = {
+    receivedUpdates: 3,
+    coalescedUpdates: 0,
+    droppedUpdates: 0,
+    maximumQueuedUpdates: 1,
+    failureKind: 'queue-overflow',
+    completedIterations: 1,
+    failedIterations: 0,
+    cancelledIterations: 0,
+    omittedIterations: 0,
+    retainedIterationUpdateIndexes: [1],
+    selectedIteration: { updateIndex: 1, reason: 'latest' },
+  };
+  selectedRoot.nodeInvocationsByKey[watch.key] = watch;
+  selectedRoot.nodeInvocationOrder = [watch.key];
+  journal.rootsById[selectedRoot.rootRunId] = selectedRoot;
+  journal.latestCompletedRootRunId = selectedRoot.rootRunId;
+
+  const item = buildRunActivityViewModel(journal, () => ({
+    nodeTitle: 'Watch response',
+    nodeType: 'Watch Streaming Output',
+  })).items[0]!;
+
+  assert.equal(item.status, 'error');
+  assert.ok(item.detailRows?.some((row) => row.label === 'Watch failure' && row.value === 'Queue overflow'));
+});
+
 test('empty journal discloses ignored legacy events without inventing a run', () => {
   const journal = createRunActivityJournal();
   journal.ignoredLegacyEventCount = 4;

@@ -24,6 +24,7 @@ import {
   type JsValueInterpolationRuntimeContext,
 } from './jsValueInterpolation.js';
 import { ALL_CODE_RUNNER_OPTIONS } from '../../integrations/CodeRunnerOptions.js';
+import { getInterpolationGlobalValues } from '../../utils/interpolation.js';
 
 export type ExpressionNode = ChartNode<'expression', ExpressionNodeData>;
 
@@ -69,6 +70,8 @@ function sanitizeExpressionError(error: unknown, interpolationContext: JsValueIn
     [
       interpolationContext.cloneCacheIdentifier,
       interpolationContext.contextIdentifier,
+      interpolationContext.globalValuesCloneIdentifier,
+      interpolationContext.globalValuesIdentifier,
       interpolationContext.graphInputsIdentifier,
       interpolationContext.interpolationHelperIdentifier,
     ],
@@ -176,6 +179,7 @@ export class ExpressionNodeImpl extends NodeImpl<ExpressionNode> {
         getJsValueInterpolationCodeRunnerOptions(ALL_CODE_RUNNER_OPTIONS, interpolationContext),
         context.graphInputNodeValues,
         context.contextValues,
+        getInterpolationGlobalValues(this.data.expression, context.getGlobal),
       );
     } catch (error) {
       throw sanitizeExpressionError(error, interpolationContext);

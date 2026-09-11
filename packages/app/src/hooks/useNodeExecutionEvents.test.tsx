@@ -116,6 +116,75 @@ test('active node events retain stable split refs and terminal evidence after mo
   }
 });
 
+test('node history keeps a deferred Watch event\'s occurrence timing instead of its later delivery timing', async () => {
+  const dom = new JSDOM('<div id="root"></div>');
+  const restoreGlobals = installDomGlobals(dom);
+  const root = createRoot(dom.window.document.getElementById('root')!);
+  const store = getDefaultStore();
+  const previousLastRunData = store.get(lastRunDataByNodeState);
+  const dataRefs: DataRefStore = {
+    get: () => undefined,
+    set: () => {},
+    delete: () => {},
+  };
+  let events: NodeExecutionEventsApi | undefined;
+  const nodeId = 'deferred-watch-node' as NodeId;
+  const processId = 'deferred-watch-process' as ProcessId;
+  const execution = {
+    graphId: 'graph-a' as GraphId,
+    graphRunId: 'graph-run-a' as GraphRunId,
+    rootRunId: 'root-run-a' as RootRunId,
+  };
+
+  const Harness = () => {
+    const dataFlow = useExecutionDataFlow();
+    events = useNodeExecutionEvents({
+      setDataForNode: dataFlow.setDataForNode,
+      setSelectedNodePageLatest: () => {},
+      shouldSuppressPreloadedNodeEvent: () => false,
+    });
+    return null;
+  };
+
+  try {
+    await act(async () => {
+      root.render(React.createElement(ProvidersProvider, { providers: { dataRefs } }, React.createElement(Harness)));
+    });
+    assert.ok(events);
+
+    await act(async () => {
+      events!.onNodeStart({
+        eventOccurredAt: 10_000,
+        execution,
+        inputs: {},
+        node: { id: nodeId },
+        processId,
+        replayRecordedAt: 90_000,
+      } as never);
+      events!.onNodeFinish({
+        eventOccurredAt: 10_250,
+        execution,
+        node: { id: nodeId },
+        outputs: {},
+        processId,
+        replayRecordedAt: 90_250,
+      } as never);
+    });
+
+    assert.deepEqual(store.get(lastRunDataByNodeState)[nodeId]?.[0]?.data.recordedTiming, {
+      finishedAt: 10_250,
+      startedAt: 10_000,
+    });
+  } finally {
+    await act(async () => {
+      store.set(lastRunDataByNodeState, previousLastRunData);
+      root.unmount();
+    });
+    restoreGlobals();
+    dom.window.close();
+  }
+});
+
 function installDomGlobals(dom: JSDOM): () => void {
   const keys = ['document', 'Element', 'navigator', 'window', 'IS_REACT_ACT_ENVIRONMENT'] as const;
   const previousDescriptors = keys.map((key) => [key, Object.getOwnPropertyDescriptor(globalThis, key)] as const);

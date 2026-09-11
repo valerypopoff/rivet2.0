@@ -14,6 +14,7 @@ import { type InternalProcessContext } from '../ProcessContext.js';
 import { dedent } from 'ts-dedent';
 import { type EditorDefinition } from '../EditorDefinition.js';
 import { type NodeBodySpec } from '../NodeBodySpec.js';
+import { commitGraphOutputValue } from '../GraphBoundaryEffects.js';
 
 export type GraphOutputNode = ChartNode<'graphOutput', GraphOutputNodeData>;
 
@@ -31,7 +32,13 @@ function isPlainObjectRecordValue(value: unknown): value is Record<string, unkno
   return prototype === Object.prototype || prototype === null;
 }
 
-function coerceAnyGraphOutputValue(value: DataValue, dataType: DataType): DataValue {
+/**
+ * Graph Output applies the same boundary coercion to both its terminal value
+ * and a partial value forwarded across a Subgraph boundary. Keeping this
+ * conversion here prevents a streamed named output from disagreeing with the
+ * value that the Graph Output will eventually publish.
+ */
+export function coerceGraphOutputValue(value: DataValue, dataType: DataType): DataValue {
   if (value.type === 'control-flow-excluded' || dataType === 'any' || value.type === dataType) {
     return value;
   }
@@ -133,21 +140,17 @@ export class GraphOutputNodeImpl extends NodeImpl<GraphOutputNode> {
 
   async process(inputs: Inputs, context: InternalProcessContext): Promise<Outputs> {
     const inputValue = inputs['value' as PortId];
-    const value = coerceAnyGraphOutputValue(inputValue ?? { type: 'any', value: undefined }, this.data.dataType);
+    const value = coerceGraphOutputValue(inputValue ?? { type: 'any', value: undefined }, this.data.dataType);
 
     const isExcluded = value.type === 'control-flow-excluded';
 
     if (isExcluded && context.graphOutputs[this.data.id] == null) {
-      context.graphOutputs[this.data.id] = {
+      commitGraphOutputValue(context.graphOutputs, this.data.id, {
         type: 'control-flow-excluded',
         value: undefined,
-      };
-    } else if (
-      (context.graphOutputs[this.data.id] == null ||
-        context.graphOutputs[this.data.id]?.type === 'control-flow-excluded') &&
-      inputValue
-    ) {
-      context.graphOutputs[this.data.id] = value;
+      });
+    } else if (inputValue) {
+      commitGraphOutputValue(context.graphOutputs, this.data.id, value);
     }
 
     if (isExcluded) {

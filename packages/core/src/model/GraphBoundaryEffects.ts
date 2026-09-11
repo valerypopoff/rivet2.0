@@ -1,4 +1,4 @@
-import type { ScalarOrArrayDataValue } from './DataValue.js';
+import type { DataValue, ScalarOrArrayDataValue } from './DataValue.js';
 import type { GraphOutputs, Outputs } from './GraphProcessor.js';
 import type { ChartNode, PortId } from './NodeBase.js';
 import type { RivetStoredValue } from './StoredValueStore.js';
@@ -16,6 +16,17 @@ export type FrozenSetStoredValueEffect = {
 };
 
 export type FrozenGraphBoundaryEffect = FrozenSetGlobalEffect | FrozenSetStoredValueEffect;
+
+/**
+ * Graph Outputs with the same public ID retain the first non-excluded value.
+ * Normal execution, frozen replay, and control-flow exclusion all use this
+ * single boundary rule.
+ */
+export function commitGraphOutputValue(graphOutputs: GraphOutputs, outputId: string, value: DataValue): void {
+  if (graphOutputs[outputId] == null || graphOutputs[outputId]?.type === 'control-flow-excluded') {
+    graphOutputs[outputId] = value;
+  }
+}
 
 export function ensureGraphCostOutput(graphOutputs: GraphOutputs, totalCost: number): void {
   const costPort = 'cost' as PortId;
@@ -39,12 +50,8 @@ export function applyFrozenGraphBoundaryEffects(
 
     // Duplicate Graph Outputs share the ordinary first-non-excluded winner,
     // whether a producer is computed or replayed from frozen outputs.
-    if (
-      outputId &&
-      valueOutput &&
-      (graphOutputs[outputId] == null || graphOutputs[outputId]?.type === 'control-flow-excluded')
-    ) {
-      graphOutputs[outputId] = valueOutput;
+    if (outputId && valueOutput) {
+      commitGraphOutputValue(graphOutputs, outputId, valueOutput);
     }
 
     return undefined;

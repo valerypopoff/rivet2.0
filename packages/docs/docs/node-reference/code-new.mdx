@@ -32,6 +32,17 @@ Missing interpolation inputs evaluate as JavaScript `undefined`.
 
 The Code editor recognizes `{{name}}` as Rivet interpolation syntax. It still highlights and checks normal JavaScript around the token, but syntax markers caused only by the interpolation token itself are ignored.
 
+### Reading globals without a port
+
+Use `{{@globals.variableId}}` to read the current global value without creating an input port. It is the same per-run value that [Get Global](./get-global.mdx) reads and [Set Global](./set-global.mdx) writes. JSONPath works the same way as for ordinary interpolation, so `{{@globals.profile.user.name}}` and `{{@globals["customer.profile"].names[0]}}` evaluate to their selected JavaScript values:
+
+```js
+const name = {{@globals.profile.user.name}};
+return name?.toUpperCase();
+```
+
+The value is captured when Code starts. This reference does not wait for a writer, create an execution dependency, or make a Set Global node run first; connect a writer explicitly when ordering matters. The Code wrapper gives authored code an isolated copy, so changing a property of an interpolated global does not update the run's global store. Use Set Global to write a global value.
+
 ### Accessing Current Graph And Context Inputs
 
 Like Code (legacy), Code can also read the `graphInputs` and `context` variables passed to the JavaScript runner:

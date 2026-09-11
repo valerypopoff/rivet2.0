@@ -23,12 +23,20 @@ export type JsValueInterpolationRuntimeContext = {
   cloneCacheIdentifier: string;
   graphInputsIdentifier: string;
   contextIdentifier: string;
+  /** Collision-safe runner argument containing the selected global snapshot. */
+  globalValuesIdentifier: string;
+  /** Collision-safe local clone of the selected global snapshot. */
+  globalValuesCloneIdentifier: string;
   /** True when generated source needs a runner-provided path/special resolver. */
   requiresInterpolationHelper: boolean;
+  /** True when the resolver also needs the selected global-value snapshot. */
+  requiresGlobalValues: boolean;
 };
 
 const MISSING_INTERPOLATION_HELPER_MESSAGE =
-  'This CodeRunner must honor CodeRunnerOptions.interpolationHelperIdentifier to resolve JSONPath or @graphInputs/@context interpolation.';
+  'This CodeRunner must honor CodeRunnerOptions.interpolationHelperIdentifier to resolve JSONPath or @graphInputs/@context/@globals interpolation.';
+const MISSING_GLOBAL_VALUES_MESSAGE =
+  'This CodeRunner must honor CodeRunnerOptions.globalValuesIdentifier to resolve @globals interpolation.';
 
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -89,7 +97,7 @@ function buildJsValueReference(
 
   const resolveExpression = `${interpolationContext.interpolationHelperIdentifier}(${sourceInputs}, ${JSON.stringify(
     token.tokenName,
-  )}, ${interpolationContext.graphInputsIdentifier}, ${interpolationContext.contextIdentifier})`;
+  )}, ${interpolationContext.graphInputsIdentifier}, ${interpolationContext.contextIdentifier}, ${interpolationContext.globalValuesCloneIdentifier})`;
 
   return `(typeof ${interpolationContext.interpolationHelperIdentifier} === 'function'
     ? ${resolveExpression}
@@ -175,6 +183,14 @@ export function getJsValueInterpolationRuntimeContext(
     `${template}\n${inputsIdentifier}\n${interpolationHelperIdentifier}\n${cloneCacheIdentifier}\n${graphInputsIdentifier}`,
     `${baseInputsIdentifier}Context`,
   );
+  const globalValuesIdentifier = getSafeJsValueInterpolationIdentifier(
+    `${template}\n${inputsIdentifier}\n${interpolationHelperIdentifier}\n${cloneCacheIdentifier}\n${graphInputsIdentifier}\n${contextIdentifier}`,
+    `${baseInputsIdentifier}Globals`,
+  );
+  const globalValuesCloneIdentifier = getSafeJsValueInterpolationIdentifier(
+    `${template}\n${inputsIdentifier}\n${interpolationHelperIdentifier}\n${cloneCacheIdentifier}\n${graphInputsIdentifier}\n${contextIdentifier}\n${globalValuesIdentifier}`,
+    `${baseInputsIdentifier}GlobalValues`,
+  );
 
   const parsedTemplate = parseInterpolationTemplate(template);
   return {
@@ -184,11 +200,14 @@ export function getJsValueInterpolationRuntimeContext(
     cloneCacheIdentifier,
     graphInputsIdentifier,
     contextIdentifier,
+    globalValuesIdentifier,
+    globalValuesCloneIdentifier,
     requiresInterpolationHelper: parsedTemplate.tokens.some(
       (token) =>
         token.reference !== undefined &&
         (token.reference.source !== 'variable' || token.reference.jsonPath !== undefined),
     ),
+    requiresGlobalValues: parsedTemplate.tokens.some((token) => token.reference?.source === 'globals'),
   };
 }
 
@@ -325,11 +344,17 @@ export function buildJsValueInputClonePreamble({
   cacheIdentifier,
   contextIdentifier,
   graphInputsIdentifier,
+  globalValuesCloneIdentifier,
+  globalValuesIdentifier,
+  usesGlobalValues,
   inputsIdentifier,
 }: {
   cacheIdentifier: string;
   contextIdentifier: string;
   graphInputsIdentifier: string;
+  globalValuesCloneIdentifier: string;
+  globalValuesIdentifier: string;
+  usesGlobalValues: boolean;
   inputsIdentifier: string;
 }): string {
   return dedent`
@@ -342,6 +367,13 @@ export function buildJsValueInputClonePreamble({
     const ${contextIdentifier} = typeof context === 'undefined'
       ? Object.create(null)
       : cloneJsInputValue(context, ${cacheIdentifier});
+    const ${globalValuesCloneIdentifier} = ${
+      usesGlobalValues
+        ? `typeof ${globalValuesIdentifier} === 'undefined'
+      ? (() => { throw new Error(${JSON.stringify(MISSING_GLOBAL_VALUES_MESSAGE)}); })()
+      : cloneJsInputValue(${globalValuesIdentifier}, ${cacheIdentifier})`
+        : 'Object.create(null)'
+    };
   `;
 }
 
@@ -350,7 +382,15 @@ export function buildJsValueInputsInitializer({
 }: {
   interpolationContext: JsValueInterpolationRuntimeContext;
 }): string {
-  const { cloneCacheIdentifier, contextIdentifier, graphInputsIdentifier, inputNames, inputsIdentifier } =
+  const {
+    cloneCacheIdentifier,
+    contextIdentifier,
+    globalValuesCloneIdentifier,
+    globalValuesIdentifier,
+    graphInputsIdentifier,
+    inputNames,
+    inputsIdentifier,
+  } =
     interpolationContext;
 
   return dedent`
@@ -358,6 +398,9 @@ export function buildJsValueInputsInitializer({
       cacheIdentifier: cloneCacheIdentifier,
       contextIdentifier,
       graphInputsIdentifier,
+      globalValuesCloneIdentifier,
+      globalValuesIdentifier,
+      usesGlobalValues: interpolationContext.requiresGlobalValues,
       inputsIdentifier,
     })}
     ${buildClonedInputValueAssignments(inputNames, inputsIdentifier, cloneCacheIdentifier)}
@@ -375,6 +418,9 @@ export function getJsValueInterpolationCodeRunnerOptions(
   return {
     ...options,
     interpolationHelperIdentifier: interpolationContext.interpolationHelperIdentifier,
+    ...(interpolationContext.requiresGlobalValues
+      ? { globalValuesIdentifier: interpolationContext.globalValuesIdentifier }
+      : {}),
   };
 }
 

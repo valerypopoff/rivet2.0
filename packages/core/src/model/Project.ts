@@ -5,6 +5,7 @@ import { type PluginLoadSpec } from './PluginLoadSpec.js';
 import type { MCP } from '../integrations/mcp/MCPProvider.js';
 import type { UiGraph, UiGraphId } from './UiGraph.js';
 import type { KnowledgeMetadata, KnowledgeStoreConnectionId } from '../integrations/KnowledgeStore.js';
+import type { ProjectGlobalVariables } from './GlobalVariables.js';
 
 export type ProjectId = Opaque<string, 'ProjectId'>;
 
@@ -41,6 +42,9 @@ export type ProjectMetadata = {
   mainGraphId?: GraphId;
   path?: string;
 
+  /** Portable global variables assigned at the beginning of every root project run. */
+  globalVariables?: ProjectGlobalVariables;
+
   mcpServer?: MCP.Config;
 
   /** Named, non-secret knowledge-store connections available to graphs in this project. */
@@ -56,7 +60,10 @@ export type KnowledgeStoreConnectionDefinition = {
   config: KnowledgeMetadata;
 };
 
-/** A reference to another project file. Project references cannot be cyclic. */
+/**
+ * A reference to another project file. New authored references should remain
+ * acyclic, while loaders tolerate legacy back-edges by keeping the first visit.
+ */
 export type ProjectReference = {
   /** The ID of the project being referenced. */
   id: ProjectId;

@@ -1,6 +1,11 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { getNormalOffsetWirePoints, getWirePath, getWireSegments } from './wireGeometry.js';
+import {
+  getNormalOffsetWirePoints,
+  getRepeatedWireArrowMarkerSegments,
+  getWirePath,
+  getWireSegments,
+} from './wireGeometry.js';
 
 const start = { x: 10, y: 20 };
 const end = { x: 110, y: 120 };
@@ -96,4 +101,45 @@ test('normal offsets also keep the lanes separated around backwards wire turns',
       `Expected sample ${index} to be 4px from its paired lane`,
     );
   }
+});
+
+test('repeated arrow markers follow a wire forward at a stable spacing', () => {
+  const markers = getRepeatedWireArrowMarkerSegments({
+    segments: getWireSegments({ start: { x: 0, y: 0 }, end: { x: 300, y: 0 } }),
+    arrowLength: 10,
+    endInset: 10,
+    spacing: 50,
+    startInset: 30,
+  });
+
+  assert.deepEqual(markers.map(({ start: markerStart, end: markerEnd }) => ({
+    start: { x: Math.round(markerStart.x), y: Math.round(markerStart.y) },
+    end: { x: Math.round(markerEnd.x), y: Math.round(markerEnd.y) },
+  })), [
+    { start: { x: 20, y: 0 }, end: { x: 30, y: 0 } },
+    { start: { x: 70, y: 0 }, end: { x: 80, y: 0 } },
+    { start: { x: 120, y: 0 }, end: { x: 130, y: 0 } },
+    { start: { x: 170, y: 0 }, end: { x: 180, y: 0 } },
+    { start: { x: 220, y: 0 }, end: { x: 230, y: 0 } },
+    { start: { x: 270, y: 0 }, end: { x: 280, y: 0 } },
+  ]);
+});
+
+test('repeated arrow markers continue forward across a bent wire', () => {
+  const markers = getRepeatedWireArrowMarkerSegments({
+    segments: getWireSegments({
+      start: { x: 0, y: 0 },
+      bendPoint: { x: 160, y: 0 },
+      end: { x: 160, y: 180 },
+    }),
+    arrowLength: 12,
+    endInset: 12,
+    spacing: 48,
+    startInset: 28,
+  });
+
+  assert.ok(markers.length > 4);
+  assert.ok(markers.some((marker) => marker.start.x < marker.end.x));
+  assert.ok(markers.some((marker) => marker.start.y < marker.end.y));
+  assert.ok(markers.every((marker) => marker.start.x !== marker.end.x || marker.start.y !== marker.end.y));
 });

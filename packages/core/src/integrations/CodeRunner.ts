@@ -24,6 +24,7 @@ export interface CodeRunner {
     options: CodeRunnerOptions,
     graphInputs?: Record<string, DataValue>,
     contextValues?: Record<string, DataValue>,
+    globalValues?: Record<string, DataValue>,
   ) => Promise<Outputs>;
 }
 
@@ -34,6 +35,7 @@ export class IsomorphicCodeRunner implements CodeRunner {
     options: CodeRunnerOptions,
     graphInputs?: Record<string, DataValue>,
     contextValues?: Record<string, DataValue>,
+    globalValues?: Record<string, DataValue>,
   ): Promise<Outputs> {
     const argNames = ['inputs'];
     const args: any[] = [inputs];
@@ -68,6 +70,11 @@ export class IsomorphicCodeRunner implements CodeRunner {
       args.push(resolveCodeInterpolationExpression);
     }
 
+    if (options.globalValuesIdentifier) {
+      argNames.push(options.globalValuesIdentifier);
+      args.push(globalValues ?? Object.create(null));
+    }
+
     argNames.push(code);
 
     const AsyncFunction = async function () {}.constructor as new (...args: string[]) => Function;
@@ -85,6 +92,7 @@ export class NotAllowedCodeRunner implements CodeRunner {
     _options: CodeRunnerOptions,
     _graphInputs?: Record<string, DataValue>,
     _contextValues?: Record<string, DataValue>,
+    _globalValues?: Record<string, DataValue>,
   ): Promise<Outputs> {
     throw new Error('Dynamic code execution is disabled.');
   }

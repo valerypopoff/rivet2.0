@@ -24,11 +24,12 @@ const createNode = (data: Partial<JSFilterNode['data']>) => {
   });
 };
 
-const createContext = (codeRunner = new IsomorphicCodeRunner()) =>
+const createContext = (codeRunner = new IsomorphicCodeRunner(), overrides: Partial<InternalProcessContext> = {}) =>
   ({
     codeRunner,
     graphInputNodeValues: {},
     contextValues: {},
+    ...overrides,
   }) as InternalProcessContext;
 
 const makeProject = (graph: any) =>
@@ -180,6 +181,26 @@ describe('JSFilterNode', () => {
     );
 
     assert.deepStrictEqual(result.filtered?.value, [{ enabled: true, details: { score: 5 } }]);
+  });
+
+  it('resolves a global JSONPath expression without creating an input port', async () => {
+    const node = createNode({ callbackBody: 'return item > {{@globals.config.minimum}};' });
+
+    assert.deepStrictEqual(
+      node.getInputDefinitions().map((definition) => definition.id),
+      ['array'],
+    );
+
+    const result = await node.process(
+      {
+        ['array' as PortId]: { type: 'number[]', value: [1, 2, 3, 4] },
+      },
+      createContext(undefined, {
+        getGlobal: (id) => (id === 'config' ? { type: 'object', value: { minimum: 2 } } : undefined),
+      }),
+    );
+
+    assert.deepStrictEqual(result.filtered?.value, [3, 4]);
   });
 
   it('keeps interpolation values available when callback code uses generated helper names', async () => {

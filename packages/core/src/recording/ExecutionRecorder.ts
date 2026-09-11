@@ -168,6 +168,8 @@ const toRecordedEventMap: {
       },
       execution,
     ),
+  streamingOutputWatchSummary: ({ watchNode, summary, execution }) =>
+    withExecution({ watchNodeId: watchNode.id, summary }, execution),
   error: ({ error }) => ({
     error: typeof error === 'string' ? error : error.stack!,
   }),
@@ -209,11 +211,12 @@ function toRecordedEvent<T extends keyof ProcessEvents>(event: T, data: ProcessE
     };
   }
 
-  const recordableData = omitReplayRecordedAt(data);
+  const { recordableData, occurredAt } = omitTransientEventTiming(data);
   const recordedEvent: RecordedEvent<T> = {
     type: event,
     data: toRecordedEventMap[event](recordableData) as unknown as RecordedEvent<T>['data'],
     ts: Date.now(),
+    ...(occurredAt === undefined ? {} : { occurredAt }),
   };
 
   return recordedEvent as RecordedEvents;
@@ -221,13 +224,25 @@ function toRecordedEvent<T extends keyof ProcessEvents>(event: T, data: ProcessE
 
 /**
  * Replay provenance belongs to the current delivery, not the historical event
- * itself. If a replay is recorded again, the recorder's own `ts` is the one
- * authoritative timestamp to persist.
+ * itself. A deferred Watch event additionally carries the moment it occurred;
+ * persist that separately while retaining the append-time `ts` so recording
+ * order remains monotonic and replayable.
  */
-function omitReplayRecordedAt<T>(data: T): T {
-  if (data == null || typeof data !== 'object') return data;
-  const { replayRecordedAt: _replayRecordedAt, ...recordableData } = data as T & { replayRecordedAt?: number };
-  return recordableData as T;
+function omitTransientEventTiming<T>(data: T): { recordableData: T; occurredAt: number | undefined } {
+  if (data == null || typeof data !== 'object') return { recordableData: data, occurredAt: undefined };
+  const {
+    replayRecordedAt: _replayRecordedAt,
+    eventOccurredAt,
+    ...recordableData
+  } = data as T & { replayRecordedAt?: number; eventOccurredAt?: unknown };
+  return {
+    recordableData: recordableData as T,
+    occurredAt: isRecordedTimestamp(eventOccurredAt) ? eventOccurredAt : undefined,
+  };
+}
+
+function isRecordedTimestamp(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0;
 }
 
 export type ExecutionRecorderOptions = {

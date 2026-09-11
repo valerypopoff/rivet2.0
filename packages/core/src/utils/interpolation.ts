@@ -24,7 +24,7 @@ const INTERPOLATION_EXPRESSION_CACHE_MAX_EXPRESSION_LENGTH = 4 * 1024;
 const INTERPOLATION_EXPRESSION_CACHE_MAX_CHARS = 128 * 1024;
 export type { InterpolationTokenSpan } from './interpolationSyntax.js';
 
-export type InterpolationReferenceSource = 'variable' | 'graphInputs' | 'context';
+export type InterpolationReferenceSource = 'variable' | 'graphInputs' | 'context' | 'globals';
 
 /** A base value and, optionally, a JSONPath evaluated against that value. */
 export type ParsedInterpolationExpression = {
@@ -67,6 +67,8 @@ export type ReplaceInterpolationTokensOptions = {
 };
 
 export type InterpolateOptions = {
+  /** A snapshot of the globals referenced by this template. */
+  globalValues?: Record<string, unknown>;
   /** Set false when ordinary interpolation variables are raw JSON. */
   unwrapVariableDataValues?: boolean;
   /**
@@ -80,6 +82,7 @@ export type InterpolationValueSources = {
   variables?: Record<string, unknown>;
   graphInputValues?: Record<string, unknown>;
   contextValues?: Record<string, unknown>;
+  globalValues?: Record<string, unknown>;
   /** Set false when `variables` are already raw JSON rather than DataValues. */
   unwrapVariableDataValues?: boolean;
 };
@@ -403,6 +406,7 @@ function parseInterpolationExpressionUncached(trimmedExpression: string): Parsed
   for (const [prefix, source] of [
     ['@graphInputs', 'graphInputs'],
     ['@context', 'context'],
+    ['@globals', 'globals'],
   ] as const) {
     if (trimmedExpression.startsWith(`${prefix}.`)) {
       return parseBaseReference(trimmedExpression.slice(prefix.length + 1), source);
@@ -609,7 +613,7 @@ export function replaceInterpolationTokens(
 
 /**
  * Discovers connectable interpolation bases in first-occurrence order. Special
- * graph/context references are intentionally omitted because they do not make ports.
+ * graph/context/global references are intentionally omitted because they do not make ports.
  */
 export function extractInterpolationVariableReferences(template: string): InterpolationVariableReference[] {
   if (!template.includes('{{')) {
@@ -639,6 +643,40 @@ export function extractInterpolationVariableReferences(template: string): Interp
   return Array.from(discovered.values(), (reference) => ({ ...reference }));
 }
 
+/**
+ * Captures only globals referenced by a template into a safe record. Globals
+ * are intentionally snapshotted at node execution: interpolation neither
+ * waits for a writer nor creates an execution dependency.
+ */
+export function getInterpolationGlobalValues<T>(
+  template: string,
+  getGlobal: ((id: string) => T | undefined) | undefined,
+): Record<string, T> {
+  const values = Object.create(null) as Record<string, T>;
+  if (!getGlobal || !template.includes('{{')) {
+    return values;
+  }
+
+  for (const token of parseInterpolationTemplate(template).tokens) {
+    const reference = token.reference;
+    if (!reference || reference.source !== 'globals' || Object.prototype.hasOwnProperty.call(values, reference.baseName)) {
+      continue;
+    }
+
+    const value = getGlobal(reference.baseName);
+    if (value !== undefined) {
+      Object.defineProperty(values, reference.baseName, {
+        configurable: true,
+        enumerable: true,
+        value,
+        writable: true,
+      });
+    }
+  }
+
+  return values;
+}
+
 /** Extracts base port names only. Prefer `extractInterpolationVariableReferences` when type selection matters. */
 export function extractInterpolationVariables(template: string): string[] {
   return extractInterpolationVariableReferences(template).map((reference) => reference.baseName);
@@ -655,6 +693,8 @@ function getInterpolationSource(
       return sources.graphInputValues;
     case 'context':
       return sources.contextValues;
+    case 'globals':
+      return sources.globalValues;
   }
 }
 
@@ -704,11 +744,12 @@ export function resolveInterpolationTokenRawValue(
 export function resolveExpressionRawValue(
   source: Record<string, unknown> | undefined,
   expression: string,
-  sourceType: 'graphInputs' | 'context',
+  sourceType: 'graphInputs' | 'context' | 'globals',
 ): unknown | undefined {
   return resolveInterpolationExpressionRawValue(`@${sourceType}.${expression}`, {
     graphInputValues: sourceType === 'graphInputs' ? source : undefined,
     contextValues: sourceType === 'context' ? source : undefined,
+    globalValues: sourceType === 'globals' ? source : undefined,
   });
 }
 
@@ -728,7 +769,7 @@ function stringifyInterpolationValue(value: unknown): string {
 export function resolveExpressionToString(
   source: Record<string, unknown> | undefined,
   expression: string,
-  sourceType: 'graphInputs' | 'context',
+  sourceType: 'graphInputs' | 'context' | 'globals',
 ): string | undefined {
   const finalValue = resolveExpressionRawValue(source, expression, sourceType);
   return finalValue === undefined ? undefined : stringifyInterpolationValue(finalValue);
@@ -782,6 +823,7 @@ export function interpolate(
       variables,
       graphInputValues,
       contextValues,
+      globalValues: options.globalValues,
       unwrapVariableDataValues: options.unwrapVariableDataValues,
     });
 
@@ -807,10 +849,12 @@ export function resolveCodeInterpolationExpression(
   expression: string,
   graphInputValues?: Record<string, DataValue>,
   contextValues?: Record<string, DataValue>,
+  globalValues?: Record<string, DataValue>,
 ): unknown | undefined {
   return resolveInterpolationExpressionRawValue(expression, {
     variables: inputs,
     graphInputValues,
     contextValues,
+    globalValues,
   });
 }

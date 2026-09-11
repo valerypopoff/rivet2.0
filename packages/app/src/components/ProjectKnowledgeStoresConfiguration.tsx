@@ -33,7 +33,6 @@ import {
 } from './projectKnowledgeStoreDraft.js';
 
 const styles = css`
-  .knowledge-store-heading,
   .knowledge-store-row,
   .knowledge-store-actions {
     display: flex;
@@ -41,7 +40,6 @@ const styles = css`
     gap: 8px;
   }
 
-  .knowledge-store-heading,
   .knowledge-store-row {
     justify-content: space-between;
   }
@@ -68,6 +66,10 @@ const styles = css`
   .knowledge-store-empty {
     margin: 8px 0;
     opacity: 0.72;
+  }
+
+  .knowledge-store-add {
+    margin-top: 8px;
   }
 `;
 
@@ -173,9 +175,6 @@ export const ProjectKnowledgeStoresConfiguration: FC = () => {
     <div css={styles}>
       <div className="knowledge-store-heading">
         <strong>Knowledge stores</strong>
-        <Button appearance="default" onClick={openNew}>
-          Add Store
-        </Button>
       </div>
       <div className="knowledge-store-help">
         Connections are saved with the project. Credentials stay in local Rivet settings or are supplied by the runtime
@@ -208,6 +207,11 @@ export const ProjectKnowledgeStoresConfiguration: FC = () => {
           ))}
         </div>
       )}
+      <div className="knowledge-store-add">
+        <Button appearance="default" onClick={openNew}>
+          Add Store
+        </Button>
+      </div>
 
       <ModalTransition>
         {editing && (

@@ -149,9 +149,12 @@ features remain because the app uses those APIs.
 `createRivetWebAppHandler(...)` is the minimal HTTP web-app serving seam. It takes a loaded `Project`, selects one `Project.uiGraphs` entry, serves a small declarative renderer, and exposes a Fetch-style action endpoint that runs ordinary same-project graphs through `createProcessor(...)`. Wrappers can also use `renderRivetWebAppHtml(...)` and `runRivetWebAppAction(...)` directly when they need Express-owned timing, recording metadata, debug headers, or error envelopes. `prepareRivetWebAppAction(...)` is the shared one-shot preparation boundary used by long-running transports: it validates and maps the action, resolves processor options, and returns the actual processor plus `run()` so a host can attach progress/recording listeners without reimplementing action semantics. `createProcessorOptions` can be static for simple hosts or a request-scoped resolver that receives the `Request`, UI graph, Button or Chat component, current action-scoped UI state, mapped action input, and optional revision key; the selected component graph always overrides any supplied `graph` value. Resolver-provided `inputs` and `context` win, otherwise Rivet uses the component's UI mappings and `resolveContext(request)`. Raw UI state values are converted into Rivet Data Values consistently in desktop preview and Node-hosted actions. Chat maps the current turn to `string`, only preceding user/assistant turns to native `chat-message[]`, and optional explicitly mapped page data to additional graph inputs, so wrapper integrations do not need a separate chat protocol. Action lifecycle hooks are observability-only and are not an auth or route-policy seam.
 
 Web-app graph actions set `returnWhenGraphOutputsReady` on their processors. If
-foreground scheduling has produced the graph outputs while a managed Start Async
-Branch is still pending, the action returns those outputs immediately and the
-Chat/Button interaction settles. The processor remains Running and retains its
+foreground scheduling has produced the graph outputs while managed Start Async
+Branch or no-Stop Watch Streaming Output work is still pending, the action
+returns those outputs immediately and the Chat/Button interaction settles. A
+Watch that has a Stop Watching Streaming Output boundary is foreground work
+instead: its selected value can still feed normal graph outputs, so the action
+waits for that rejoin rather than returning an incomplete response. The processor remains Running and retains its
 run-scoped resources until `waitForRunCompletion()` observes the async drain and
 terminal lifecycle. Internal/remote Node execution forwards a distinct
 `graphOutputsReady` event so the editor result waiter can settle without treating

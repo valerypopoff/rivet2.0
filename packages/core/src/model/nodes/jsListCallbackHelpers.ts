@@ -4,6 +4,7 @@ import type { ChartNode, NodeInputDefinition, PortId } from '../NodeBase.js';
 import type { EditorDefinition } from '../EditorDefinition.js';
 import type { NodeBodySpec } from '../NodeBodySpec.js';
 import type { InternalProcessContext } from '../ProcessContext.js';
+import { getInterpolationGlobalValues } from '../../utils/interpolation.js';
 import {
   buildClonedInputValueAssignments,
   buildJsValueInterpolatedSource,
@@ -60,6 +61,9 @@ function buildJSListRuntimePreamble(interpolationContext: JsValueInterpolationRu
       cacheIdentifier: interpolationContext.cloneCacheIdentifier,
       contextIdentifier: interpolationContext.contextIdentifier,
       graphInputsIdentifier: interpolationContext.graphInputsIdentifier,
+      globalValuesCloneIdentifier: interpolationContext.globalValuesCloneIdentifier,
+      globalValuesIdentifier: interpolationContext.globalValuesIdentifier,
+      usesGlobalValues: interpolationContext.requiresGlobalValues,
       inputsIdentifier: interpolationContext.inputsIdentifier,
     })}
     const array = cloneJsInputValue(inputs.array?.value, ${interpolationContext.cloneCacheIdentifier});
@@ -92,6 +96,8 @@ function sanitizeJSListError(error: unknown, callbackBody: string, nodeName: str
     [
       interpolationContext.cloneCacheIdentifier,
       interpolationContext.contextIdentifier,
+      interpolationContext.globalValuesCloneIdentifier,
+      interpolationContext.globalValuesIdentifier,
       interpolationContext.graphInputsIdentifier,
       interpolationContext.interpolationHelperIdentifier,
     ],
@@ -266,6 +272,7 @@ export async function runJSListNodeCode({
       ),
       context.graphInputNodeValues,
       context.contextValues,
+      getInterpolationGlobalValues(callbackBody, context.getGlobal),
     );
 
     assertJSListNodeOutputs(outputs, outputId, nodeName);

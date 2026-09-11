@@ -119,6 +119,28 @@ Canvas surfaces with connections disabled, such as Node library editing, keep
 their own local connection list instead of combining decorative nodes with the
 active graph's definition-valid connections.
 
+## Streaming Watch Connections
+
+[`streamingOutputWatchWireState.ts`](../packages/app/src/components/nodeCanvas/streamingOutputWatchWireState.ts)
+derives a second, intentionally simpler visual treatment for the ordinary
+definition-valid connection into an enabled **Watch Streaming Output** node's
+`Streaming Output` (`stream`) input. The base wire remains a single ordinary
+one-way wire, but short copies of the existing continuation arrowhead repeat
+from the source toward Watch along its rendered Bézier route. They communicate
+that partial snapshots can cross this one edge many times; they do not turn the
+connection into a second kind of serialized edge or add any reverse flow.
+
+`getRepeatedWireArrowMarkerSegments(...)` samples the same path geometry used
+by the wire, including stored bends and fixed-rail endpoint directions, then
+spaces short marker paths by arc length. Do not place arrows from only the
+overall endpoint vector: on a curved or bent wire that makes an arrow point
+away from the actual data direction. The marker paths reuse the existing
+comparison-aware SVG arrow definitions, so added and changed connection states
+retain the wire's color. The source-to-Watch association is
+derived from the effective, definition-valid graph and disappears when the
+Watch node is disabled or the input is no longer its `stream` port. Invalid,
+disabled, and comparison-removed connections stay visually ordinary.
+
 ## Data Buses
 
 `dataBus` is a dedicated topology-only node. It uses paired `inputN` /

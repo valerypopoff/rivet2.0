@@ -652,6 +652,11 @@ export function useRemoteExecutor() {
           eventDispatcher.nodeOutputsCleared(data);
         }
         break;
+      case 'streamingOutputWatchSummary':
+        if (shouldDispatchExecutionEvent) {
+          eventDispatcher.streamingOutputWatchSummary(data);
+        }
+        break;
       case 'trace':
         if (shouldDispatchExecutionEvent) {
           logRuntimeDebug('Remote graph trace', { trace: data });

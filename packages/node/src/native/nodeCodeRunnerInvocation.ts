@@ -31,6 +31,7 @@ export type CodeInterpolationResolver = (
   expression: string,
   graphInputs?: Record<string, DataValue>,
   contextValues?: Record<string, DataValue>,
+  globalValues?: Record<string, DataValue>,
 ) => unknown | undefined;
 
 /**
@@ -119,6 +120,10 @@ export function getNodeCodeRunnerArgumentNames(
     argNames.push(options.interpolationHelperIdentifier);
   }
 
+  if (options.globalValuesIdentifier) {
+    argNames.push(options.globalValuesIdentifier);
+  }
+
   return argNames;
 }
 
@@ -139,6 +144,7 @@ export async function buildNodeCodeRunnerInvocationArgs(params: {
   contextValues?: Record<string, DataValue>;
   executionEnvironment?: NodeExecutionEnvironment;
   graphInputs?: Record<string, DataValue>;
+  globalValues?: Record<string, DataValue>;
   inputs: Inputs;
   loadInterpolationResolver: () => Promise<CodeInterpolationResolver>;
   loadRivet: () => Promise<unknown>;
@@ -149,6 +155,7 @@ export async function buildNodeCodeRunnerInvocationArgs(params: {
     contextValues,
     executionEnvironment,
     graphInputs,
+    globalValues,
     inputs,
     loadInterpolationResolver,
     loadRivet,
@@ -189,6 +196,10 @@ export async function buildNodeCodeRunnerInvocationArgs(params: {
     args.push(await loadInterpolationResolver());
   }
 
+  if (options.globalValuesIdentifier) {
+    args.push(globalValues ?? Object.create(null));
+  }
+
   return args;
 }
 
@@ -196,6 +207,7 @@ export async function buildNodeCodeRunnerInvocation(params: {
   contextValues?: Record<string, DataValue>;
   executionEnvironment?: NodeExecutionEnvironment;
   graphInputs?: Record<string, DataValue>;
+  globalValues?: Record<string, DataValue>;
   inputs: Inputs;
   loadInterpolationResolver: () => Promise<CodeInterpolationResolver>;
   loadRivet: () => Promise<unknown>;
@@ -206,6 +218,7 @@ export async function buildNodeCodeRunnerInvocation(params: {
     contextValues,
     executionEnvironment,
     graphInputs,
+    globalValues,
     inputs,
     loadInterpolationResolver,
     loadRivet,
@@ -217,6 +230,7 @@ export async function buildNodeCodeRunnerInvocation(params: {
     contextValues,
     executionEnvironment,
     graphInputs,
+    globalValues,
     inputs,
     loadInterpolationResolver,
     loadRivet,

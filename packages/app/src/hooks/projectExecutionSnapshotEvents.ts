@@ -17,7 +17,7 @@ import {
 import type { DataRefStore } from '../providers/ProvidersContext.js';
 import { buildGraphViewKeyFromExecution } from '../utils/executionIdentity.js';
 import { sanitizeInputsOrOutputs, sanitizeSplitOutputs } from '../utils/executionDataSanitization.js';
-import { getRecordedNodeTimingPatch } from '../utils/recordedNodeTiming.js';
+import { getEventOccurredAt, getRecordedNodeTimingPatch } from '../utils/recordedNodeTiming.js';
 import {
   clearExecutionDataRefs,
   collectStoredRefIds,
@@ -63,7 +63,7 @@ type ProjectExecutionSnapshotEventOptions<K extends keyof ProcessEventMessageMap
 export function applyProcessEventToProjectExecutionSnapshot<K extends keyof ProcessEventMessageMap>(
   options: ProjectExecutionSnapshotEventOptions<K>,
 ): ProjectExecutionSnapshotEventResult {
-  const occurredAt = Date.now();
+  const occurredAt = getEventOccurredAt(options.data) ?? Date.now();
   const previousSnapshot = options.snapshot ?? createEmptyProjectExecutionSnapshot();
 
   // partialOutput is detached from Core execution. A late observer callback

@@ -9,11 +9,13 @@ export type NodeProcessContextBase = Omit<
   InternalProcessContext,
   | 'attachedData'
   | 'activeOutputPortIds'
+  | 'acceptStreamingWatchStop'
   | 'createSubProcessor'
   | 'execution'
   | 'externalFunctions'
   | 'getPluginConfig'
   | 'node'
+  | 'onGraphOutputPartial'
   | 'onPartialOutputs'
   | 'setFailureOutputs'
   | 'processId'
@@ -31,6 +33,7 @@ export type NodeProcessContextBase = Omit<
 
 export function buildNodeProcessContext(options: {
   activeOutputPortIds: ReadonlySet<PortId>;
+  acceptStreamingWatchStop?: InternalProcessContext['acceptStreamingWatchStop'];
   base: NodeProcessContextBase;
   attachedData: AttachedNodeData;
   createSubProcessor: (
@@ -44,6 +47,7 @@ export function buildNodeProcessContext(options: {
   markResultAsEditorCacheHit?: InternalProcessContext['markResultAsEditorCacheHit'];
   node: ChartNode;
   nodeAbortController: AbortController;
+  onGraphOutputPartial?: (partialOutputs: Outputs) => void;
   onPartialOutputs: (partialOutputs: Outputs) => void;
   setFailureOutputs?: InternalProcessContext['setFailureOutputs'];
   processId: ProcessId;
@@ -58,6 +62,7 @@ export function buildNodeProcessContext(options: {
   const {
     attachedData,
     activeOutputPortIds,
+    acceptStreamingWatchStop,
     base,
     createSubProcessor,
     execution,
@@ -67,6 +72,7 @@ export function buildNodeProcessContext(options: {
     markResultAsEditorCacheHit,
     node,
     nodeAbortController,
+    onGraphOutputPartial,
     onPartialOutputs,
     setFailureOutputs,
     processId,
@@ -84,12 +90,14 @@ export function buildNodeProcessContext(options: {
     node,
     attachedData,
     activeOutputPortIds,
+    acceptStreamingWatchStop,
     isDirectRunTarget,
     markResultAsEditorCacheHit,
     waitEvent,
     waitForGlobal: (id, signal = nodeAbortController.signal) => base.waitForGlobal(id, signal),
     waitForStoredValue: (key, signal = nodeAbortController.signal) => base.waitForStoredValue(key, signal),
     externalFunctions: { ...externalFunctions },
+    onGraphOutputPartial,
     onPartialOutputs,
     setFailureOutputs,
     signal: nodeAbortController.signal,

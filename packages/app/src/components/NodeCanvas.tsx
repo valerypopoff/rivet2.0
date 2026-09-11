@@ -452,7 +452,9 @@ export const NodeCanvas: FC<NodeCanvasProps> = ({
   } = useDraggingWire({
     connections,
     enabled: !disableConnections,
+    graphId: selectedGraphMetadata?.id,
     nodesById: canvasEffectiveNodesById,
+    project,
   });
   useEffect(() => {
     if (disableConnections) {

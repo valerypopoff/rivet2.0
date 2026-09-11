@@ -107,6 +107,12 @@ export * from './DataBusTopology.js';
 import { startBackgroundBranchNode } from './nodes/StartBackgroundBranchNode.js';
 export * from './nodes/StartBackgroundBranchNode.js';
 
+import { watchStreamingOutputNode } from './nodes/WatchStreamingOutputNode.js';
+export * from './nodes/WatchStreamingOutputNode.js';
+
+import { stopWatchingStreamingOutputNode } from './nodes/StopWatchingStreamingOutputNode.js';
+export * from './nodes/StopWatchingStreamingOutputNode.js';
+
 import { popNode } from './nodes/PopNode.js';
 export * from './nodes/PopNode.js';
 
@@ -346,6 +352,8 @@ export const registerBuiltInNodes = (registry: NodeRegistration) => {
     .register(passthroughNode)
     .register(dataBusNode)
     .register(startBackgroundBranchNode)
+    .register(watchStreamingOutputNode)
+    .register(stopWatchingStreamingOutputNode)
     .register(popNode)
     .register(setGlobalNode)
     .register(getGlobalNode)

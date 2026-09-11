@@ -458,13 +458,24 @@ Events from subprocessors bubble up through `wireSubprocessorEvents()` in
 `SubprocessorBridge.ts`. The key behavior:
 
 - Child processor emits events with **its own** `GraphExecutionMetadata`.
-- `wireSubprocessorEvents` forwards those events to the parent's emitter **without rewriting metadata**.
+- `wireSubprocessorEvents` forwards those events to the parent's emitter **without rewriting metadata**. A Watch Streaming Output owner is the one deliberate exception: it may hold repeated branch evidence before outer observers receive it, retaining only the first three and one decisive/latest iteration. Held payloads are deep snapshots with an `eventOccurredAt` capture clock; recorder/replay preserve that clock separately from their append/delivery order so the editor never substitutes a late Watch flush for execution timing. Every app-side event sink (node history, project snapshots, and Run Activity) passes the complete event envelope to `getRecordedNodeTimingPatch`; do not destructure a single provenance field before the projection, or a future timing source will silently be lost.
+- A direct streaming producer-to-Graph Output connection uses a separate, in-process named-boundary callback when a Subgraph or Referenced Graph Alias is called. It relays only the Graph Output ID/value needed by an enclosing Watch, including across nested Subgraphs, Referenced Graph Aliases, and compiled Data Bus routes. It is intentionally **not** forwarded as a `partialOutput` event: otherwise every streamed increment would manufacture an additional caller node-history and recording row. The actual producer's ordinary partial events retain their existing lineage and visibility. Conditional, split, duplicate, frozen, and Error-output boundaries are final-only because their eventual caller-visible value can differ from a child partial. Dynamic graph callers with aggregate output contracts do not relay child Graph Output partials by this route; **Loop Until** may still publish its own per-iteration partials through its ordinary output contract.
 - Passive child process-event forwarding stays subscribed for the subprocessor object lifetime. This keeps late terminal events from successful graph-abort paths flowing even when they arrive after the child graph's own `graphFinish`.
 - Control lifecycle wiring, such as parent/child pause, resume, and abort listeners, uses a run-scoped lifecycle subscription and tears down when the forwarded processor's own `graphRunId` finishes, aborts, or errors. A nested child graph finishing must not clean up the parent subgraph bridge, because the parent still needs to forward the subgraph node's later `nodeFinish` and the parent graph's own finish event.
 - The app's event handlers see the original metadata and can determine the execution context.
 
 This means the root processor's event emitter receives events from the entire
-execution tree, all with correct lineage metadata.
+execution tree, all with correct lineage metadata. For a streaming Watch branch,
+retained child events still have their original metadata and occurrence time; omitted iterations never
+reach app data flow, remote transport, or the recorder. The subsequent
+`streamingOutputWatchSummary` is a compact observability event rather than a
+node-data patch. It is forwarded through ordinary subgraph bridges, serialized
+for remote execution, persisted by the recorder, and replayed with its original
+recording timestamp. Run Activity projects that one terminal event into a
+synthetic Watch row with the summary counters and retained update indexes; it is
+explicitly errored when a retained child failed or the coordinator reports a
+`queue-overflow`, `missing-stop`, or `branch-failure` `failureKind`. It never
+recreates rows for omitted iterations.
 
 ```
 SubProcessor emits nodeStart({ execution: { graphRunId: "child-run", ... } })
@@ -1907,6 +1918,7 @@ Lifecycle and observability events relevant to editor data flow are replayed:
 | `partialOutput`                             | Stores streaming/split-run output                                                                                                  |
 | `progress`                                  | Updates the exact invocation's latest progress                                                                                     |
 | `nodeOutputsCleared`                        | Removes node data entries                                                                                                          |
+| `streamingOutputWatchSummary`                | Adds one compact synthetic Watch row to Run Activity; never recreates omitted repeated branch history                             |
 | `done`                                      | Sets final outputs, marks not running                                                                                              |
 | `userInput`                                 | Replays the historical prompt into Run Activity with `isReplay: true`; the callback is a no-op and no User Input modal is reopened |
 | `globalSet`                                 | Replays global variable changes                                                                                                    |

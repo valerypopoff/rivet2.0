@@ -24,6 +24,7 @@ import {
   type JsValueInterpolationRuntimeContext,
 } from './jsValueInterpolation.js';
 import { ALL_CODE_RUNNER_OPTIONS } from '../../integrations/CodeRunnerOptions.js';
+import { getInterpolationGlobalValues } from '../../utils/interpolation.js';
 
 export type CodeNewNode = ChartNode<'codeNew', CodeNewNodeData>;
 
@@ -72,6 +73,8 @@ function sanitizeCodeNewError(error: unknown, interpolationContext: JsValueInter
     [
       interpolationContext.cloneCacheIdentifier,
       interpolationContext.contextIdentifier,
+      interpolationContext.globalValuesCloneIdentifier,
+      interpolationContext.globalValuesIdentifier,
       interpolationContext.graphInputsIdentifier,
       interpolationContext.interpolationHelperIdentifier,
     ],
@@ -215,6 +218,7 @@ export class CodeNewNodeImpl extends NodeImpl<CodeNewNode> {
         getJsValueInterpolationCodeRunnerOptions(ALL_CODE_RUNNER_OPTIONS, interpolationContext),
         context.graphInputNodeValues,
         context.contextValues,
+        getInterpolationGlobalValues(this.data.code, context.getGlobal),
       );
 
       return validateCodeNewRunnerOutputs(outputs);

@@ -55,6 +55,20 @@ function makeStartAsyncBranchNode(nodeId: string): ChartNode {
   return node;
 }
 
+function makeWatchStreamingOutputNode(nodeId: string): ChartNode {
+  const node = registry.createDynamic('watchStreamingOutput');
+  node.id = nodeId as NodeId;
+  node.title = nodeId;
+  return node;
+}
+
+function makeStopWatchingStreamingOutputNode(nodeId: string): ChartNode {
+  const node = registry.createDynamic('stopWatchingStreamingOutput');
+  node.id = nodeId as NodeId;
+  node.title = nodeId;
+  return node;
+}
+
 function makeDataBusNode(nodeId: string): ChartNode {
   const node = registry.createDynamic('dataBus');
   node.id = nodeId as NodeId;
@@ -319,6 +333,26 @@ test('projects replay-shaped waiting, progress, model, profile-health, and tool 
   );
   assert.equal(dispatcher.pause({ isReplay: true } satisfies ProcessEventMessageMap['pause']), true);
   assert.equal(dispatcher.resume({ isReplay: true } satisfies ProcessEventMessageMap['resume']), true);
+  const watchNode = { ...node, id: 'replayed-watch' as NodeId, type: 'watchStreamingOutput' };
+  assert.equal(
+    dispatcher.streamingOutputWatchSummary({
+      watchNode,
+      execution,
+      summary: {
+        receivedUpdates: 6,
+        coalescedUpdates: 1,
+        droppedUpdates: 2,
+        maximumQueuedUpdates: 3,
+        completedIterations: 4,
+        failedIterations: 0,
+        cancelledIterations: 0,
+        omittedIterations: 2,
+        retainedIterationUpdateIndexes: [1, 2, 3, 6],
+        selectedIteration: { updateIndex: 6, reason: 'latest' },
+      },
+    } satisfies ProcessEventMessageMap['streamingOutputWatchSummary']),
+    true,
+  );
 
   assert.equal(primaryUserInputCount, 1);
   assert.equal(primaryModelCallCount, 1);
@@ -327,6 +361,17 @@ test('projects replay-shaped waiting, progress, model, profile-health, and tool 
   assert.equal(primaryToolCallCount, 1);
   assert.equal(primaryPauseCount, 0);
   assert.equal(primaryResumeCount, 0);
+
+  const watchInvocation =
+    journal.rootsById[execution.rootRunId]!.nodeInvocationsByKey[
+      createRunActivityNodeKey({
+        ...execution,
+        nodeId: watchNode.id,
+        processId: `streaming-watch-summary:${watchNode.id}` as ProcessId,
+      })
+    ]!;
+  assert.equal(watchInvocation.status, 'completed');
+  assert.deepEqual(watchInvocation.streamingOutputWatchSummary?.retainedIterationUpdateIndexes, [1, 2, 3, 6]);
 
   const invocation =
     journal.rootsById[execution.rootRunId]!.nodeInvocationsByKey[
@@ -524,6 +569,34 @@ test('getEditorRunFromPlan rejects descendants whose async trigger would otherwi
   assert.deepEqual(triggerPlan.nodesToRun, [trigger.id, descendant.id]);
   assert.deepEqual(triggerPlan.preloadNodeIds, [source.id]);
   assert.deepEqual(triggerPlan.runToNodeIds, [descendant.id]);
+});
+
+test('getEditorRunFromPlan permits Watch but rejects cached repeated-branch boundaries', () => {
+  const source = makeTextNode('stream-source');
+  const watch = makeWatchStreamingOutputNode('watch');
+  const branch = makeTextNode('watch-branch', '{{input}}');
+  const stop = makeStopWatchingStreamingOutputNode('stop');
+  const downstream = makeTextNode('after-stop', '{{input}}');
+  const graph: NodeGraph = {
+    metadata: { id: graphId, name: 'Graph' },
+    nodes: [source, watch, branch, stop, downstream],
+    connections: [
+      makeConnection(source.id, watch.id, 'stream'),
+      makeConnection(watch.id, branch.id, 'input', 'value'),
+      makeConnection(branch.id, stop.id, 'value'),
+      makeConnection(stop.id, downstream.id, 'input', 'value'),
+    ],
+  };
+
+  const watchPlan = getEditorRunFromPlan(makeProject(graph), graphId, watch.id, registry);
+  assert.deepEqual(watchPlan.preloadNodeIds, [source.id]);
+
+  for (const node of [branch, stop, downstream]) {
+    assert.throws(
+      () => getEditorRunFromPlan(makeProject(graph), graphId, node.id, registry),
+      /would preload .*repeated branch of Watch Streaming Output/,
+    );
+  }
 });
 
 test('getEditorRunFromPlan permits descendants of a disabled async trigger', () => {

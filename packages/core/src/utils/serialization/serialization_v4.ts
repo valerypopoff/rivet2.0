@@ -16,6 +16,7 @@ import type { PluginLoadSpec } from '../../model/PluginLoadSpec.js';
 import type { CombinedDataset } from './serialization.js';
 import { type ProjectMetadata } from '../../model/Project.js';
 import { normalizeUiGraphRecord } from '../../model/UiGraphNormalization.js';
+import { validateProjectGlobalVariables } from '../../model/GlobalVariables.js';
 import {
   type SerializedNodeConnection,
   serializeConnection,
@@ -94,6 +95,13 @@ export function graphV4Deserializer(data: unknown): NodeGraph {
 }
 
 export function projectV4Serializer(project: Project, attachedData?: AttachedData): unknown {
+  // Project Settings canonicalizes these values, but integrations and callers
+  // can author Project objects directly. Never write a project file that will
+  // later fail its own project-global validation at load or execution time.
+  if (project.metadata.globalVariables != null) {
+    validateProjectGlobalVariables(project.metadata.globalVariables);
+  }
+
   const filteredProject = {
     ...project,
     metadata: {

@@ -14,6 +14,7 @@ import { type EditorDefinition } from '../EditorDefinition.js';
 import type { InternalProcessContext } from '../ProcessContext.js';
 import {
   extractInterpolationVariables,
+  getInterpolationGlobalValues,
   parseInterpolationTemplate,
   protectEscapedInterpolationTokens,
   resolveInterpolationExpressionRawValue,
@@ -164,6 +165,7 @@ export class ObjectNodeImpl extends NodeImpl<ObjectNode> {
     values: Record<string, unknown>,
     graphInputNodeValues?: Record<string, DataValue>,
     contextValues?: Record<string, DataValue>,
+    globalValues?: Record<string, unknown>,
   ): string {
     const protectedBaseString = protectEscapedInterpolationTokens(baseString);
     const parsedTemplate = parseInterpolationTemplate(protectedBaseString);
@@ -189,6 +191,7 @@ export class ObjectNodeImpl extends NodeImpl<ObjectNode> {
             variables: values,
             graphInputValues: graphInputNodeValues,
             contextValues,
+            globalValues,
             unwrapVariableDataValues: false,
           })
         : undefined;
@@ -231,6 +234,7 @@ export class ObjectNodeImpl extends NodeImpl<ObjectNode> {
       inputMap,
       context.graphInputNodeValues, // Pass graph inputs
       context.contextValues, // Pass context values
+      getInterpolationGlobalValues(this.chartNode.data.jsonTemplate, context.getGlobal),
     );
 
     let outputValue: Record<string, unknown> | unknown[];

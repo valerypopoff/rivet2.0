@@ -57,6 +57,7 @@ import {
   getToolContinuationWireStates,
   type ToolContinuationWireState,
 } from './nodeCanvas/toolContinuationWireState.js';
+import { getStreamingOutputWatchConnections } from './nodeCanvas/streamingOutputWatchWireState.js';
 import { definitionValidConnectionsState } from '../state/selectors/ioDefinitions.js';
 import {
   connectionMatchesDataBusChannelKeys,
@@ -129,6 +130,10 @@ const wiresStyles = css`
   }
 
   .tool-continuation-endpoint-marker-path {
+    stroke: none;
+  }
+
+  .streaming-output-watch-marker-path {
     stroke: none;
   }
 
@@ -440,6 +445,14 @@ export const WireLayer: FC<WireLayerProps> = ({
       }),
     [definitionValidConnections, effectiveNodesById],
   );
+  const streamingOutputWatchConnections = useMemo(
+    () =>
+      getStreamingOutputWatchConnections({
+        connections: definitionValidConnections,
+        nodes: Object.values(effectiveNodesById),
+      }),
+    [definitionValidConnections, effectiveNodesById],
+  );
   const establishedConnectionKeySet = useMemo(
     () => new Set(definitionValidConnections.map(getProjectConnectionComparisonKey)),
     [definitionValidConnections],
@@ -679,6 +692,7 @@ export const WireLayer: FC<WireLayerProps> = ({
     portPositions,
     runningNodeIdSet,
     selectedProcessPageNodes,
+    streamingOutputWatchConnections,
     toolContinuationWireStates,
   };
   const hoverOverlayHost =
@@ -868,6 +882,7 @@ const StaticWireContents = memo(
     renderableWires,
     runningNodeIdSet,
     selectedProcessPageNodes,
+    streamingOutputWatchConnections,
     toolContinuationMarkerIds,
     toolContinuationWireStates,
   }: {
@@ -903,6 +918,7 @@ const StaticWireContents = memo(
     renderableWires: NodeConnection[];
     runningNodeIdSet: ReadonlySet<NodeId>;
     selectedProcessPageNodes: Record<NodeId, PageValue>;
+    streamingOutputWatchConnections: ReadonlySet<NodeConnection>;
     toolContinuationMarkerIds: ToolContinuationMarkerIds;
     toolContinuationWireStates: ReadonlyMap<NodeConnection, ToolContinuationWireState>;
   }) => {
@@ -987,6 +1003,12 @@ const StaticWireContents = memo(
                     : 'Tool continuation: The LLM sends tool calls to this Delegate Tool Call node and resumes with its results.',
               }
             : undefined;
+          const streamingOutputWatch = streamingOutputWatchConnections.has(connection)
+            ? {
+                markerId: getToolContinuationMarkerId('connected', compareChangeKind, toolContinuationMarkerIds),
+                title: 'Streaming watch: partial output snapshots flow repeatedly from this node to Watch Streaming Output.',
+              }
+            : undefined;
           const bendPoint = connection.bendPoint;
 
           return (
@@ -1003,6 +1025,7 @@ const StaticWireContents = memo(
                 isNotRan={isNotRan}
                 compareChangeKind={compareChangeKind}
                 toolContinuation={toolContinuation}
+                streamingOutputWatch={streamingOutputWatch}
                 interactive={allowConnectionHover && !isHoverRevealedDataBusConnection}
                 onHoverStart={(event) => onConnectionHoverStart(connectionKey, event)}
                 onHoverMove={(event) => onConnectionHoverMove(connectionKey, event)}

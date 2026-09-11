@@ -37,31 +37,43 @@ export function wireSubprocessorEvents(
     isPaused: () => boolean;
     pause: () => void;
     resume: () => void;
+    /** Intercepts forwarded child evidence before it reaches outer observers. */
+    forwardEvent?: <K extends keyof ProcessEvents>(event: K, data: ProcessEvents[K]) => Promise<void> | undefined;
   },
 ): () => void {
+  const forward = <K extends keyof ProcessEvents>(event: K, data: ProcessEvents[K]): Promise<void> | undefined => {
+    // `undefined` is a deliberate interceptor result: the Watch history
+    // boundary uses it to retain an event without forwarding it yet. Do not
+    // fall through to the parent emitter in that case.
+    if (parentState.forwardEvent) {
+      return parentState.forwardEvent(event, data);
+    }
+    return parentEmitter.emit(event, data);
+  };
   // Some successful graph-abort paths can emit node terminals just after their
   // graph-level terminal event. Keep passive forwarding alive for the
   // subprocessor object lifetime so remote-debugger/recorder consumers do not
   // miss those node terminals.
   const passiveUnsubscribers = [
-    processor.on('nodeError', (event) => parentEmitter.emit('nodeError', event)),
-    processor.on('nodeFinish', (event) => parentEmitter.emit('nodeFinish', event)),
-    processor.on('partialOutput', (event) => parentEmitter.emit('partialOutput', event)),
-    processor.on('progress', (event) => parentEmitter.emit('progress', event)),
-    processor.on('llmCallFinished', (event) => parentEmitter.emit('llmCallFinished', event)),
-    processor.on('llmChatOutputSnapshot', (event) => parentEmitter.emit('llmChatOutputSnapshot', event)),
-    processor.on('llmProfileAttempt', (event) => parentEmitter.emit('llmProfileAttempt', event)),
-    processor.on('toolCallFinished', (event) => parentEmitter.emit('toolCallFinished', event)),
-    processor.on('nodeExcluded', (event) => parentEmitter.emit('nodeExcluded', event)),
-    processor.on('nodeStart', (event) => parentEmitter.emit('nodeStart', event)),
-    processor.on('graphAbort', (event) => parentEmitter.emit('graphAbort', event)),
-    processor.on('graphError', (event) => parentEmitter.emit('graphError', event)),
-    processor.on('userInput', (event) => parentEmitter.emit('userInput', event)),
-    processor.on('graphStart', (event) => parentEmitter.emit('graphStart', event)),
-    processor.on('graphFinish', (event) => parentEmitter.emit('graphFinish', event)),
-    processor.on('nodeOutputsCleared', (event) => parentEmitter.emit('nodeOutputsCleared', event)),
-    processor.on('globalSet', (event) => parentEmitter.emit('globalSet', event)),
-    processor.on('newAbortController', (event) => parentEmitter.emit('newAbortController', event)),
+    processor.on('nodeError', (event) => forward('nodeError', event)),
+    processor.on('nodeFinish', (event) => forward('nodeFinish', event)),
+    processor.on('partialOutput', (event) => forward('partialOutput', event)),
+    processor.on('progress', (event) => forward('progress', event)),
+    processor.on('llmCallFinished', (event) => forward('llmCallFinished', event)),
+    processor.on('llmChatOutputSnapshot', (event) => forward('llmChatOutputSnapshot', event)),
+    processor.on('llmProfileAttempt', (event) => forward('llmProfileAttempt', event)),
+    processor.on('toolCallFinished', (event) => forward('toolCallFinished', event)),
+    processor.on('nodeExcluded', (event) => forward('nodeExcluded', event)),
+    processor.on('nodeStart', (event) => forward('nodeStart', event)),
+    processor.on('graphAbort', (event) => forward('graphAbort', event)),
+    processor.on('graphError', (event) => forward('graphError', event)),
+    processor.on('userInput', (event) => forward('userInput', event)),
+    processor.on('graphStart', (event) => forward('graphStart', event)),
+    processor.on('graphFinish', (event) => forward('graphFinish', event)),
+    processor.on('nodeOutputsCleared', (event) => forward('nodeOutputsCleared', event)),
+    processor.on('streamingOutputWatchSummary', (event) => forward('streamingOutputWatchSummary', event)),
+    processor.on('globalSet', (event) => forward('globalSet', event)),
+    processor.on('newAbortController', (event) => forward('newAbortController', event)),
   ];
 
   const controlUnsubscribers: Array<() => void> = [
@@ -79,7 +91,7 @@ export function wireSubprocessorEvents(
 
   const unsubscribeAny = processor.onAny((event, data) => {
     if (event.startsWith('globalSet:')) {
-      void parentEmitter.emit(event, data);
+      void forward(event, data);
     }
   });
 

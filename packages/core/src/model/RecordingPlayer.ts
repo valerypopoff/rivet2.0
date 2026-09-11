@@ -40,6 +40,11 @@ function withReplayRecordedAt<T>(data: T, replayRecordedAt: number | undefined):
   return { ...data, replayRecordedAt } as T;
 }
 
+function getRecordedEventOccurrenceAt(event: RecordedEvents): number {
+  const { occurredAt, ts } = event;
+  return typeof occurredAt === 'number' && Number.isFinite(occurredAt) && occurredAt >= 0 ? occurredAt : ts;
+}
+
 const REPLAY_TIMED_EVENTS = new Set<keyof ProcessEvents>([
   'start',
   'graphStart',
@@ -55,6 +60,7 @@ const REPLAY_TIMED_EVENTS = new Set<keyof ProcessEvents>([
   'nodeError',
   'nodeExcluded',
   'nodeOutputsCleared',
+  'streamingOutputWatchSummary',
   // These records retain their own physical call timestamps, but the replay
   // timestamp lets observers keep them on the same historical recording
   // timeline without borrowing a provider timestamp as a node lifecycle time.
@@ -315,7 +321,10 @@ export async function replayExecutionRecording(options: {
       }
 
       await waitUntilUnpaused();
-      currentReplayRecordedAt = event.ts;
+      // Watch history can defer selected evidence until the scheduler settles.
+      // Keep recording order on `ts`, but present and derive timing from when
+      // the original event actually occurred.
+      currentReplayRecordedAt = getRecordedEventOccurrenceAt(event);
 
       switch (event.type) {
         case 'start': {
@@ -433,7 +442,10 @@ export async function replayExecutionRecording(options: {
           const { data } = event;
           const node = getNode(data.nodeId);
           const execution = getExecution(data.execution?.graphId ?? getGraphIdForNode(data.nodeId), data.execution);
-          nodeStartTimestamps.set(getNodeRunKey(execution, data.nodeId, data.processId as ProcessId), event.ts);
+          nodeStartTimestamps.set(
+            getNodeRunKey(execution, data.nodeId, data.processId as ProcessId),
+            getRecordedEventOccurrenceAt(event),
+          );
           emitReplayExecutionEvent('nodeStart', {
             node,
             inputs: data.inputs,
@@ -461,7 +473,13 @@ export async function replayExecutionRecording(options: {
                 ...(data.resultOrigin === undefined ? {} : { resultOrigin: data.resultOrigin }),
                 execution,
               },
-              getRecordedDuration(data.durationMs, execution, data.nodeId, data.processId as ProcessId, event.ts),
+              getRecordedDuration(
+                data.durationMs,
+                execution,
+                data.nodeId,
+                data.processId as ProcessId,
+                getRecordedEventOccurrenceAt(event),
+              ),
               data.splitRunDurationMs,
             ),
           );
@@ -485,7 +503,13 @@ export async function replayExecutionRecording(options: {
                 ...(data.resultOrigin === undefined ? {} : { resultOrigin: data.resultOrigin }),
                 execution,
               },
-              getRecordedDuration(data.durationMs, execution, data.nodeId, data.processId as ProcessId, event.ts),
+              getRecordedDuration(
+                data.durationMs,
+                execution,
+                data.nodeId,
+                data.processId as ProcessId,
+                getRecordedEventOccurrenceAt(event),
+              ),
               data.splitRunDurationMs,
             ),
           );
@@ -518,6 +542,15 @@ export async function replayExecutionRecording(options: {
             node,
             processId: data.processId as ProcessId | undefined,
             execution: getExecution(data.execution?.graphId ?? getGraphIdForNode(data.nodeId), data.execution),
+          });
+          break;
+        }
+        case 'streamingOutputWatchSummary': {
+          const { data } = event;
+          emitReplayExecutionEvent('streamingOutputWatchSummary', {
+            watchNode: getNode(data.watchNodeId),
+            summary: data.summary,
+            execution: getExecution(data.execution?.graphId ?? getGraphIdForNode(data.watchNodeId), data.execution),
           });
           break;
         }

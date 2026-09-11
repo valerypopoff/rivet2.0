@@ -17,11 +17,13 @@ export class NodeCodeRunner implements CodeRunner {
     options: CodeRunnerOptions,
     graphInputs?: Record<string, DataValue>,
     contextValues?: Record<string, DataValue>,
+    globalValues?: Record<string, DataValue>,
   ): Promise<Outputs> {
     const { argNames, args } = await buildNodeCodeRunnerInvocation({
       contextValues,
       executionEnvironment: this.executionEnvironment,
       graphInputs,
+      globalValues,
       inputs,
       loadInterpolationResolver: async () => {
         const { resolveCodeInterpolationExpression } = await import('@valerypopoff/rivet2-core/interpolation-runtime');

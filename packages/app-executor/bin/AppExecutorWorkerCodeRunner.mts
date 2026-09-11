@@ -38,6 +38,7 @@ export class AppExecutorWorkerCodeRunner implements CodeRunner {
     options: CodeRunnerOptions,
     graphInputs?: Record<string, DataValue>,
     contextValues?: Record<string, DataValue>,
+    globalValues?: Record<string, DataValue>,
   ): Promise<Outputs> {
     if (options.includeRequire || options.includeRivet) {
       await prepareRuntimeLibrariesForCodeRunner();
@@ -53,6 +54,7 @@ export class AppExecutorWorkerCodeRunner implements CodeRunner {
         options,
         graphInputs,
         contextValues,
+        globalValues,
         this.runtimeRequire,
         this.onConsole,
         this.options.executionEnvironment,
@@ -65,6 +67,7 @@ export class AppExecutorWorkerCodeRunner implements CodeRunner {
       options,
       graphInputs,
       contextValues,
+      globalValues,
       this.onConsole,
       this.options.workerPool ?? getSharedCodeWorkerPool(),
       this.options.executionEnvironment,
@@ -90,12 +93,13 @@ async function runCodeInWorker(
   options: CodeRunnerOptions,
   graphInputs: Record<string, DataValue> | undefined,
   contextValues: Record<string, DataValue> | undefined,
+  globalValues: Record<string, DataValue> | undefined,
   onConsole?: (message: CodeConsoleMessage) => void,
   workerPool = getSharedCodeWorkerPool(),
   executionEnvironment?: NodeExecutionEnvironment,
 ): Promise<Outputs> {
   return workerPool.run(
-    createCodeWorkerRunRequest(code, inputs, options, graphInputs, contextValues, executionEnvironment),
+    createCodeWorkerRunRequest(code, inputs, options, graphInputs, contextValues, globalValues, executionEnvironment),
     onConsole,
   );
 }
@@ -106,6 +110,7 @@ async function runCodeInCurrentThread(
   options: CodeRunnerOptions,
   graphInputs: Record<string, DataValue> | undefined,
   contextValues: Record<string, DataValue> | undefined,
+  globalValues: Record<string, DataValue> | undefined,
   runtimeRequire: NodeJS.Require,
   onConsole?: (message: CodeConsoleMessage) => void,
   executionEnvironment?: NodeExecutionEnvironment,
@@ -153,6 +158,11 @@ async function runCodeInCurrentThread(
   if (options.interpolationHelperIdentifier) {
     argNames.push(options.interpolationHelperIdentifier);
     args.push(resolveCodeInterpolationExpression);
+  }
+
+  if (options.globalValuesIdentifier) {
+    argNames.push(options.globalValuesIdentifier);
+    args.push(globalValues ?? Object.create(null));
   }
 
   argNames.push(code);
