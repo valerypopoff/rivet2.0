@@ -2,6 +2,38 @@
 
 > Detailed package-by-package reference for the current monorepo.
 
+## Version update: 2026-09-11
+
+The changes below cover the last version bump through `d77761d64`. The baseline
+is `460cd9e28` for every workspace except app-executor, whose last bump was
+`234797d2d`. Comparing app-executor from its own baseline yields the same direct
+global-interpolation changes. These are minor releases for added capabilities.
+
+The public npm family and private Studio Server family retain their required
+lockstep versions. Companion bumps are release coordination, not claims of
+package-local implementation changes. See the [publishing version policy](./BUILD-AND-CI.md#versioning-policy)
+and [Studio Server versioning](./studio-server/development.md#versioning).
+
+| Workspace | Version | Changes since its previous bump |
+| --- | --- | --- |
+| `core` | `2.6.0` → `2.7.0` | Project-defined global variables, portable serialization/validation and per-run initialization; direct global interpolation across supported text and code nodes; Watch/Stop streaming branches with interval/every-update scheduling, bounded parallelism and queue overflow policies; bounded branch history (first three plus latest/decisive iteration and summary); recording/replay support; streaming through named Subgraph and Referenced Graph Alias outputs with conditional, frozen, split and error-boundary protections. |
+| `node` | `2.6.0` → `2.7.0` | Native and cached code runners receive globals for interpolation; debugger transports Watch summaries with subscription cleanup coverage. |
+| `cli` | `2.6.0` → `2.7.0` | No package-local changes before this bump. Companion release for the public npm family and its updated Core/Node dependencies; Docker fallback version follows the family. |
+| `evaluations` | `2.6.0` → `2.7.0` | No package-local changes. Companion release for the public npm family and updated Core dependency. |
+| `app` | `2.12.0` → `2.13.0` | Tabbed Project settings, inline MCP settings, narrower settings dialogs, compact plugin catalog, and global-variable editing; global discovery/reference refresh and execution integration; streaming node authoring/validation, directional wire markers and help; bounded Watch history and summaries in execution/Run Activity, including recorded timing and replay handling. |
+| `app-executor` | `2.4.0` → `2.5.0` | Pass global values through both worker and current-thread code execution so direct global interpolation works in the desktop executor. |
+| `docs` | `2.4.0` → `2.5.0` | User guides for project globals and direct interpolation; Watch/Stop references, scheduling/overflow/history semantics, named graph-boundary streaming, and navigation entries. |
+| `studio-server-api` | `1.11.0` → `1.12.0` | Managed code runner accepts global values and supplies them to code interpolation; regression coverage. |
+| `studio-server-web` | `1.11.0` → `1.12.0` | New browser tests and fixtures for project globals, settings layout, streaming controls and named Subgraph output wiring. No package-local production implementation changes; hosted editor changes live in App. |
+| `studio-server-bootstrap` | `1.11.0` → `1.12.0` | No package-local changes. Required Studio Server companion version. |
+| `studio-server-executor` | `1.11.0` → `1.12.0` | No package-local changes. Required Studio Server companion version; runtime feature implementation lives in Core/Node/app-executor. |
+| `studio-server-shared` | `1.11.0` → `1.12.0` | No package-local changes. Required Studio Server companion version. |
+
+Repository-wide dependency resolutions also moved `js-yaml` to `3.15.2`/`4.3.2`
+and `svgo` to `3.3.5` in `44cecff5f`. These are shared dependency/security updates,
+not additional package-local code changes. The root workspace has no version.
+Tauri/Cargo metadata follows App; Helm chart versions remain independent.
+
 ## Build Order
 
 The root `yarn build` script currently builds packages in this order:
@@ -40,7 +72,7 @@ Shared runtime foundation for the entire repo.
 
 ### Package metadata
 
-- Version: `2.6.0`
+- Version: `2.7.0`
 - Main: `dist/cjs/bundle.cjs`
 - Module: `dist/esm/index.js`
 - Types: `dist/types/index.d.ts`
@@ -80,7 +112,7 @@ Node runtime wrapper around core.
 
 ### Package metadata
 
-- Version: `2.6.0`
+- Version: `2.7.0`
 - Main: `dist/cjs/bundle.cjs`
 - Module: `dist/esm/index.js`
 - Types: `dist/types/index.d.ts`
@@ -552,7 +584,7 @@ Desktop IDE frontend plus Tauri app packaging layer.
 
 ### Package metadata
 
-- Version: `2.12.0`
+- Version: `2.13.0`
 - Private: yes
 
 ### Runtime shape
@@ -617,7 +649,7 @@ Node sidecar process used by the desktop app for Node-capable execution.
 
 ### Package metadata
 
-- Version: `2.4.0`
+- Version: `2.5.0`
 - Bin: `./bin/executor-bundle.cjs`
 
 ### Main behavior
@@ -722,7 +754,7 @@ Operational CLI for running or serving Rivet graphs.
 
 ### Package metadata
 
-- Version: `2.6.0`
+- Version: `2.7.0`
 - Source entry: `src/cli.ts`
 - Published bin mapping: `rivet -> bin/cli.js`
 - Types: `dist/types/cli.d.ts`
@@ -846,7 +878,7 @@ Portable, executor-agnostic evaluation engine shared by the app, CLI, and host i
 
 ### Package metadata
 
-- Version: `2.6.0`
+- Version: `2.7.0`
 - Main: `dist/cjs/bundle.cjs`
 - Module: `dist/esm/index.js`
 - Types: `dist/types/index.d.ts`
@@ -878,7 +910,7 @@ a crawler, credentials, or a server-side search API.
 
 ### Package metadata
 
-- Version: `2.4.0`
+- Version: `2.5.0`
 - Private: yes
 
 ### Script surface
