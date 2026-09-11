@@ -84,4 +84,51 @@ void describe('debugger processor attachments', () => {
       error: 'Error: expected abort',
     });
   });
+
+  void it('forwards the compact Watch Streaming Output summary', async () => {
+    const emitter = new Emittery<ProcessEvents>();
+    const processor = {
+      id: 'processor-with-watch-summary',
+      on: emitter.on.bind(emitter),
+    } as unknown as GraphProcessor;
+    const broadcasts: Array<{ message: string; data: unknown }> = [];
+    const attachments = createDebuggerProcessorAttachments({
+      broadcast: (_processor, message, data) => broadcasts.push({ message, data }),
+      emitError: (error) => assert.fail(String(error)),
+      throttlePartialOutputs: 0,
+    });
+    const watchNode = {
+      data: {},
+      id: 'watch-node' as NodeId,
+      title: 'Watch output',
+      type: 'watchStreamingOutput',
+      visualData: { x: 0, y: 0 },
+    } as ChartNode;
+    const execution: GraphExecutionMetadata = {
+      graphId: 'graph' as GraphId,
+      graphRunId: 'graph-run' as GraphRunId,
+      rootRunId: 'root-run' as RootRunId,
+    };
+    const summary: ProcessEvents['streamingOutputWatchSummary']['summary'] = {
+      receivedUpdates: 6,
+      coalescedUpdates: 1,
+      droppedUpdates: 2,
+      maximumQueuedUpdates: 3,
+      completedIterations: 4,
+      failedIterations: 0,
+      cancelledIterations: 0,
+      omittedIterations: 2,
+      retainedIterationUpdateIndexes: [1, 2, 3, 6],
+      selectedIteration: { updateIndex: 6, reason: 'latest' },
+    };
+
+    attachments.attach(processor);
+    await emitter.emit('streamingOutputWatchSummary', { watchNode, summary, execution });
+
+    assert.deepEqual(broadcasts.find((broadcast) => broadcast.message === 'streamingOutputWatchSummary')?.data, {
+      watchNode,
+      summary,
+      execution,
+    });
+  });
 });

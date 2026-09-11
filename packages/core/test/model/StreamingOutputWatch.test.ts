@@ -121,6 +121,34 @@ void describe('StreamingOutputWatch', () => {
     assert.equal(maximumActiveRuns, streamingOutputWatchDefaults.maxParallelRuns);
   });
 
+  void it('counts an interval snapshot superseded by the final output as coalesced', async () => {
+    const processedUpdates: number[] = [];
+    const watch = new StreamingOutputWatch(
+      {
+        ...streamingOutputWatchDefaults,
+        triggerMode: 'interval',
+        intervalMs: 1_000,
+      },
+      async (snapshot) => {
+        processedUpdates.push(snapshot.updateIndex);
+      },
+      (error) => assert.fail(error.message),
+      { requiresAcceptedStop: false },
+    );
+
+    watch.publish({ outputs: {}, updateIndex: 1, isFinal: false });
+    watch.finish({ outputs: {}, updateIndex: 2, isFinal: true });
+
+    await withTimeout(watch.drain(), 'the final interval watch snapshot');
+    assert.deepEqual(processedUpdates, [2]);
+    assert.deepEqual(watch.runtimeSummary, {
+      receivedUpdates: 2,
+      coalescedUpdates: 1,
+      droppedUpdates: 0,
+      maximumQueuedUpdates: 1,
+    });
+  });
+
   void it('preserves the winning run until a later cancellation stops it exactly once', async () => {
     const started = deferred();
     const register = deferred();
@@ -183,8 +211,30 @@ void describe('StreamingOutputWatch', () => {
 
     assert.match(failure?.message ?? '', /32-update queue limit/);
     assert.equal(watch.stopped, true);
+    assert.equal(watch.runtimeSummary.failureKind, 'queue-overflow');
     releaseFirstRun.resolve();
     await withTimeout(watch.drain(), 'the stopped bounded watch');
+  });
+
+  void it('reports a missing Stop as a coordinator failure without inventing a child failure', async () => {
+    const failures: Error[] = [];
+    const watch = new StreamingOutputWatch(
+      streamingOutputWatchDefaults,
+      async () => undefined,
+      (error) => failures.push(error),
+    );
+
+    watch.finish({ outputs: {}, updateIndex: 1, isFinal: true });
+    await withTimeout(watch.drain(), 'the final watch snapshot without Stop');
+
+    assert.match(failures[0]?.message ?? '', /before Stop Watching Streaming Output accepted a value/);
+    assert.deepEqual(watch.runtimeSummary, {
+      receivedUpdates: 1,
+      coalescedUpdates: 0,
+      droppedUpdates: 0,
+      maximumQueuedUpdates: 1,
+      failureKind: 'missing-stop',
+    });
   });
 
   void it('drops only the incoming update when its bounded queue is full', async () => {

@@ -107,6 +107,11 @@ import {
   type StreamingOutputWatchOptions,
   type StreamingOutputWatchSnapshot,
 } from './StreamingOutputWatch.js';
+import {
+  StreamingOutputWatchHistory,
+  type StreamingOutputWatchHistoryIteration,
+  type StreamingOutputWatchHistorySummary,
+} from './StreamingOutputWatchHistory.js';
 import { cloneExecutionOutputs } from './ExecutionOutputClone.js';
 import type { RivetKnowledgeStoreRegistry } from '../integrations/KnowledgeStore.js';
 import { KnowledgeStoreController } from '../integrations/KnowledgeStoreProvider.js';
@@ -131,7 +136,16 @@ export type ReplayEventTiming = {
   replayRecordedAt?: number;
 };
 
-type WithExecution<T extends object> = T & { execution: GraphExecutionMetadata } & ReplayEventTiming;
+/**
+ * Timestamp carried by a delayed-but-retained execution event. Delivery may
+ * happen after a Watch settles; observability must still use this original
+ * occurrence time rather than the later emitter receipt time.
+ */
+export type EventOccurrenceTiming = {
+  eventOccurredAt?: number;
+};
+
+type WithExecution<T extends object> = T & { execution: GraphExecutionMetadata } & ReplayEventTiming & EventOccurrenceTiming;
 type NodeTimingStart = number | undefined;
 type NodeAbortControllerEntry = AbortController | Set<AbortController>;
 const graphProcessorGraphOverride = Symbol('graphProcessorGraphOverride');
@@ -161,11 +175,19 @@ type StreamingOutputWatchPlan = {
   previousStreamedValue: unknown;
   watchNode: ChartNode;
   nextUpdateIndex: number;
+  history: StreamingOutputWatchHistory;
+  historySummaryEmitted: boolean;
 };
 type StreamingOutputWatchInvocation = {
   plan: StreamingOutputWatchPlan;
+  historyIteration: StreamingOutputWatchHistoryIteration;
   acceptStop: (value: DataValue) => void;
-  acceptedValue?: DataValue;
+  /**
+   * Set only by the live Stop node implementation. The output that re-enters
+   * the parent is deliberately taken from the completed node result instead:
+   * split nodes aggregate their per-item outputs only at that boundary.
+   */
+  stopReached: boolean;
 };
 function createGraphOutputsOverlay(parent: GraphOutputs): { view: GraphOutputs; writes: GraphOutputs } {
   const writes: GraphOutputs = {};
@@ -301,6 +323,12 @@ export type ProcessEvents = {
 
   /** Called when the outputs of a node have been cleared entirely. If processId is present, only the one process() should be cleared. */
   nodeOutputsCleared: WithExecution<{ node: ChartNode; processId?: ProcessId }>;
+
+  /** Compact accounting for a completed Watch Streaming Output boundary. */
+  streamingOutputWatchSummary: WithExecution<{
+    watchNode: ChartNode;
+    summary: StreamingOutputWatchHistorySummary;
+  }>;
 
   /** Called when the root graph has errored. The root graph will also throw. */
   error: { error: Error | string } & ReplayEventTiming;
@@ -599,6 +627,7 @@ export class GraphProcessor {
   #asyncBranchPlansByTriggerNodeId = new Map<NodeId, ToolCallContinuationAsyncBranchPlan>();
   readonly #consumedAsyncBranchTriggerNodeId: NodeId | undefined;
   #streamingWatchPlansBySourceNodeId = new Map<NodeId, StreamingOutputWatchPlan[]>();
+  #streamingWatchPlansByWatchNodeId = new Map<NodeId, StreamingOutputWatchPlan>();
   #streamingOutputWatches = new Map<NodeId, StreamingOutputWatch>();
   readonly #consumedStreamingWatchNodeId: NodeId | undefined;
   #streamingWatchInvocation: StreamingOutputWatchInvocation | undefined;
@@ -1254,6 +1283,7 @@ export class GraphProcessor {
     this.#effectiveConnectionsForRun = undefined;
     this.#asyncBranchPlansByTriggerNodeId = new Map();
     this.#streamingWatchPlansBySourceNodeId = new Map();
+    this.#streamingWatchPlansByWatchNodeId = new Map();
     this.#streamingOutputWatches = new Map();
     this.#loopControllersSeen = new Set();
     this.#subprocessors = new Set();
@@ -2662,7 +2692,11 @@ export class GraphProcessor {
         }
 
         return this.#emitter.emit(event, this.#withExecution(data)).then(() => {
-          if (event === 'nodeFinish') this.#commitStreamingWatchStop(node);
+          if (event === 'nodeFinish') {
+            // SplitRunDeps exposes overloaded event payloads; the runtime event
+            // discriminator guarantees this is the terminal-output shape.
+            this.#commitStreamingWatchStop(node, (data as { outputs: Outputs }).outputs);
+          }
         });
       },
       startNodeTiming: this.#captureNodeTimings ? () => this.#startNodeTiming() : undefined,
@@ -2783,7 +2817,7 @@ export class GraphProcessor {
         ),
       );
       this.#finishStreamingOutputWatches(node, outputValues);
-      this.#commitStreamingWatchStop(node);
+      this.#commitStreamingWatchStop(node, outputValues);
     } catch (error) {
       await this.#nodeErrored(
         node,
@@ -3132,9 +3166,9 @@ export class GraphProcessor {
       },
       acceptStreamingWatchStop:
         this.#streamingWatchInvocation?.plan.stopNodeId === node.id
-          ? (value) => {
-              if (this.#streamingWatchInvocation && this.#streamingWatchInvocation.acceptedValue === undefined) {
-                this.#streamingWatchInvocation.acceptedValue = value;
+          ? () => {
+              if (this.#streamingWatchInvocation) {
+                this.#streamingWatchInvocation.stopReached = true;
               }
             }
           : undefined,
@@ -3634,6 +3668,13 @@ export class GraphProcessor {
       if (watchNode.id === this.#consumedStreamingWatchNodeId) {
         continue;
       }
+      const enclosingWatchInvocation = this.#getEnclosingStreamingWatchInvocation();
+      if (enclosingWatchInvocation) {
+        throw new Error(
+          `Watch Streaming Output "${watchNode.title}" cannot run inside Watch Streaming Output ` +
+            `"${enclosingWatchInvocation.plan.watchNode.title}". A Watch branch cannot contain another Watch, including through Subgraph.`,
+        );
+      }
       if (this.#nodeResults.has(watchNode.id)) {
         throw new Error(
           `Cannot preload ${watchNode.title} because a streaming boundary must be scheduled. ` +
@@ -3780,10 +3821,13 @@ export class GraphProcessor {
         previousStreamedValue: undefined,
         watchNode,
         nextUpdateIndex: 0,
+        history: new StreamingOutputWatchHistory(),
+        historySummaryEmitted: false,
       };
       const plans = this.#streamingWatchPlansBySourceNodeId.get(sourceNode.id) ?? [];
       plans.push(plan);
       this.#streamingWatchPlansBySourceNodeId.set(sourceNode.id, plans);
+      this.#streamingWatchPlansByWatchNodeId.set(watchNode.id, plan);
 
       const watch = new StreamingOutputWatch(
         watchNode.data as Partial<StreamingOutputWatchOptions>,
@@ -3939,6 +3983,7 @@ export class GraphProcessor {
     isFinal: boolean,
   ): StreamingOutputWatchSnapshot {
     const snapshotValue = cloneExecutionOutputs({ ['value' as PortId]: value })['value' as PortId]!;
+    let streamedOutputLength: number | undefined;
     if (plan.includeAllStreamedOutput) {
       const streamedValue = snapshotValue.value;
       const previousValue = plan.previousStreamedValue;
@@ -3956,6 +4001,7 @@ export class GraphProcessor {
       if (increment !== '') {
         plan.streamedOutput.push(increment);
       }
+      streamedOutputLength = plan.streamedOutput.length;
     }
 
     const outputs: Outputs = {
@@ -3963,19 +4009,35 @@ export class GraphProcessor {
       ['updateIndex' as PortId]: { type: 'number', value: updateIndex },
       ['value' as PortId]: snapshotValue,
     };
-    if (plan.includeAllStreamedOutput) {
-      // Each invocation owns its history. Keep the source value's one clone and
-      // clone only the connected cumulative output instead of cloning both for
-      // every stream increment.
-      outputs['allStreamedOutput' as PortId] = cloneExecutionOutputs({
-        ['allStreamedOutput' as PortId]: { type: 'any[]', value: plan.streamedOutput },
-      })['allStreamedOutput' as PortId]!;
-    }
-
     return {
       outputs,
       isFinal,
       updateIndex,
+      ...(streamedOutputLength === undefined
+        ? {}
+        : {
+            streamedOutput: plan.streamedOutput,
+            streamedOutputLength,
+          }),
+    };
+  }
+
+  #materializeStreamingOutputWatchSnapshot(snapshot: StreamingOutputWatchSnapshot): Outputs {
+    if (snapshot.streamedOutput == null || snapshot.streamedOutputLength == null) {
+      return snapshot.outputs;
+    }
+
+    // Construct cumulative chunks only for a branch that actually starts. A
+    // coalesced interval update or a queue-dropped update therefore performs no
+    // quadratic history copy merely because All Chunks is connected.
+    return {
+      ...snapshot.outputs,
+      ['allStreamedOutput' as PortId]: cloneExecutionOutputs({
+        ['allStreamedOutput' as PortId]: {
+          type: 'any[]',
+          value: snapshot.streamedOutput.slice(0, snapshot.streamedOutputLength),
+        },
+      })['allStreamedOutput' as PortId]!,
     };
   }
 
@@ -3995,6 +4057,7 @@ export class GraphProcessor {
     if (!graphId) {
       throw new Error('Cannot start a streaming watch branch because the current graph has no ID.');
     }
+    const historyIteration = plan.history.start(nanoid() as GraphRunId, snapshot.updateIndex);
 
     const branchRuntimeCache: GraphProcessorRuntimeCache = {
       ...this.#runtimeCache,
@@ -4034,17 +4097,21 @@ export class GraphProcessor {
     };
     processor.#executionIdentityOverride = {
       rootRunId: root.#rootRunId,
-      graphRunId: nanoid() as GraphRunId,
+      graphRunId: historyIteration.graphRunId,
       parentGraphRunId: this.#graphRunId,
     };
     processor.#streamingWatchInvocation = {
       plan,
-      acceptStop: (value) => this.#acceptStreamingWatchStop(plan, value, snapshot.updateIndex),
+      historyIteration,
+      acceptStop: (value) => this.#acceptStreamingWatchStop(plan, historyIteration, value, snapshot.updateIndex),
+      stopReached: false,
     };
-    processor.preloadNodeData(plan.watchNode.id, snapshot.outputs);
+    processor.preloadNodeData(plan.watchNode.id, this.#materializeStreamingOutputWatchSnapshot(snapshot));
     processor.#suppressedPreloadedNodeIds.add(plan.watchNode.id);
 
+    let cancellationRequested = false;
     registerCancel(() => {
+      cancellationRequested = true;
       if (processor.isRunning) {
         void processor.abort(true);
       }
@@ -4057,6 +4124,22 @@ export class GraphProcessor {
       },
       resume: () => {
         void root.resume();
+      },
+      forwardEvent: (event, data) => {
+        // Interactive/global control events are side effects, not execution
+        // history. They must remain live even when their enclosing iteration
+        // is not selected for retained evidence.
+        if (
+          event === 'userInput' ||
+          event === 'globalSet' ||
+          event === 'newAbortController' ||
+          event.startsWith('globalSet:')
+        ) {
+          return root.#emitter.emit(event, data);
+        }
+        return plan.history.forward(historyIteration, event, data, (nextEvent, nextData) =>
+          root.#emitter.emit(nextEvent, nextData),
+        );
       },
     });
     const unwireLifecycle = wireSubprocessorLifecycle(processor, {
@@ -4079,9 +4162,25 @@ export class GraphProcessor {
       }
       await processor.processGraph(this.#context, this.#graphInputs, this.#contextValues);
     } catch (error) {
-      this.#recordStreamingWatchFailure(plan.watchNode, getError(error), processor);
-      throw error;
+      const normalizedError = getError(error);
+      const wasCancelled =
+        isAbortLikeError(normalizedError) || root.#abortController.signal.aborted || cancellationRequested;
+      if (wasCancelled) {
+        plan.history.cancel(historyIteration);
+      } else {
+        plan.history.fail(historyIteration);
+        this.#recordStreamingWatchFailure(plan.watchNode, normalizedError, processor);
+      }
+      // Preserve one Error identity across the child processor, scheduler, and
+      // root failure collector. A user node may throw a string or another
+      // non-Error value; allowing the scheduler to wrap it again would make
+      // that one branch failure appear twice in the root aggregate.
+      throw normalizedError;
     } finally {
+      if (cancellationRequested) {
+        plan.history.cancel(historyIteration);
+      }
+      plan.history.complete(historyIteration);
       this.#totalCost += processor.#totalCost;
       unwireLifecycle();
       unwireEvents();
@@ -4089,18 +4188,25 @@ export class GraphProcessor {
     }
   }
 
-  #commitStreamingWatchStop(node: ChartNode): void {
+  #commitStreamingWatchStop(node: ChartNode, outputs: Outputs): void {
     const invocation = this.#streamingWatchInvocation;
+    const completedValue = outputs['value' as PortId];
     if (
       invocation?.plan.stopNodeId === node.id &&
-      invocation.acceptedValue &&
+      invocation.stopReached &&
+      completedValue !== undefined &&
       !this.#getUnhandledErroredNodes().length
     ) {
-      invocation.acceptStop(invocation.acceptedValue);
+      invocation.acceptStop(completedValue);
     }
   }
 
-  #acceptStreamingWatchStop(plan: StreamingOutputWatchPlan, value: DataValue, updateIndex: number): void {
+  #acceptStreamingWatchStop(
+    plan: StreamingOutputWatchPlan,
+    historyIteration: StreamingOutputWatchHistoryIteration,
+    value: DataValue,
+    updateIndex: number,
+  ): void {
     const stopNodeId = plan.stopNodeId;
     if (!stopNodeId) {
       return;
@@ -4109,6 +4215,7 @@ export class GraphProcessor {
     if (!watch || watch.stopped) {
       return;
     }
+    plan.history.acceptStop(historyIteration);
     watch.stop(updateIndex);
     const stopNode = this.#nodesById[stopNodeId];
     if (!stopNode) {
@@ -4172,6 +4279,19 @@ export class GraphProcessor {
       // before deciding every Watch boundary is quiet.
       await this.#processingQueue.onIdle();
     } while (this.#hasDrainableStreamingOutputWatches());
+
+    for (const [watchNodeId, watch] of this.#streamingOutputWatches) {
+      const plan = this.#streamingWatchPlansByWatchNodeId.get(watchNodeId);
+      if (!plan || plan.historySummaryEmitted || !watch.isSettled) continue;
+      const summary = await plan.history.finalize(watch.runtimeSummary, (event, data) =>
+        this.#emitter.emit(event, data),
+      );
+      plan.historySummaryEmitted = true;
+      await this.#emitter.emit(
+        'streamingOutputWatchSummary',
+        this.#withExecution({ watchNode: plan.watchNode, summary }),
+      );
+    }
   }
 
   #prepareAsyncBranchTopology(): void {

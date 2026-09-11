@@ -13,7 +13,13 @@ async function getEditorRoot(page: Page): Promise<EditorRoot> {
       return page.frameLocator('iframe.dashboard-editor-frame');
     }
 
-    if (await page.locator('.node-canvas').first().isVisible().catch(() => false)) {
+    if (
+      await page
+        .locator('.node-canvas')
+        .first()
+        .isVisible()
+        .catch(() => false)
+    ) {
       return page;
     }
 
@@ -85,7 +91,9 @@ test('Watch Streaming Output exposes its chunk outputs', async ({ page }) => {
   const chunkIndexOutput = watch.locator('.output-port[data-portid="updateIndex"]');
 
   await expect(watch).toBeVisible({ timeout: 60_000 });
-  await expect(editor.locator('.node[data-nodeid="stop-watching-streaming-output"]')).toContainText('First Stop value continues');
+  await expect(editor.locator('.node[data-nodeid="stop-watching-streaming-output"]')).toContainText(
+    'First completed Stop continues',
+  );
   await expect(chunkOutput).toBeVisible();
   await expect(chunkOutput.locator('..')).toContainText('Chunk');
   await expect(allChunksOutput).toBeVisible();
@@ -96,7 +104,10 @@ test('Watch Streaming Output exposes its chunk outputs', async ({ page }) => {
   const streamingWatchMarkers = editor.locator('svg .streaming-output-watch-marker-path');
   await expect.poll(async () => streamingWatchMarkers.count()).toBeGreaterThan(1);
   const markerAttributes = await streamingWatchMarkers.evaluateAll((paths) =>
-    paths.map((path) => ({ markerEnd: path.getAttribute('marker-end'), markerStart: path.getAttribute('marker-start') })),
+    paths.map((path) => ({
+      markerEnd: path.getAttribute('marker-end'),
+      markerStart: path.getAttribute('marker-start'),
+    })),
   );
   expect(markerAttributes.every(({ markerEnd }) => markerEnd?.startsWith('url(#tool-continuation-'))).toBe(true);
   expect(markerAttributes.every(({ markerStart }) => markerStart == null)).toBe(true);

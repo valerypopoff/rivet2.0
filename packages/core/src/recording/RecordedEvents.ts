@@ -127,6 +127,12 @@ export type RecordedEventsMap = OverrideProperties<
     /** Called when the outputs of a node have been cleared entirely. If processId is present, only the one process() should be cleared. */
     nodeOutputsCleared: WithOptionalExecution<{ nodeId: NodeId; processId?: ProcessId }>;
 
+    /** Compact accounting for a completed Watch Streaming Output boundary. */
+    streamingOutputWatchSummary: WithOptionalExecution<{
+      watchNodeId: NodeId;
+      summary: ProcessEvents['streamingOutputWatchSummary']['summary'];
+    }>;
+
     /** Called when the root graph has errored. The root graph will also throw. */
     error: { error: string };
 
@@ -140,6 +146,8 @@ export type RecordedEvent<T extends RecordedEventKey> = {
   type: T;
   data: RecordedEventsMap[T];
   ts: number;
+  /** Original event occurrence time when delivery was deferred by a Watch branch. */
+  occurredAt?: number;
 };
 
 export type RecordedEvents = {

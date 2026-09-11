@@ -183,6 +183,10 @@ export function coreCreateProcessor(
     processor.on('nodeOutputsCleared', options.onNodeOutputsCleared);
   }
 
+  if (options.onStreamingOutputWatchSummary) {
+    processor.on('streamingOutputWatchSummary', options.onStreamingOutputWatchSummary);
+  }
+
   if (options.externalFunctions) {
     for (const [name, fn] of Object.entries(options.externalFunctions)) {
       processor.setExternalFunction(name, fn);

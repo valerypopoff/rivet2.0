@@ -494,6 +494,74 @@ test('getAsyncBranchTopologyViolation rejects async branches nested through Watc
   assert.equal(nestedGraphViolation?.nodeId, nestedAsyncBranch.id);
 });
 
+test('getAsyncBranchTopologyViolation rejects Watches nested through Watch Subgraphs', () => {
+  const source = makeTextNode('source');
+  const watch = makeWatchStreamingOutputNode('watch');
+  const outerSubgraph = makeSubGraphNode('outer-subgraph', 'outer-watch-child');
+  const outerInput = makeGraphInputNode('outer-input', 'input');
+  const nestedWatch = makeWatchStreamingOutputNode('nested-watch', 'Nested Watch');
+  const nestedLeaf = makeTextNode('nested-leaf');
+  const rootGraph = makeGraph(
+    'root',
+    [source, watch, outerSubgraph],
+    [
+      makeBaseConnection({
+        inputId: 'stream' as PortId,
+        inputNodeId: watch.id,
+        outputId: 'output' as PortId,
+        outputNodeId: source.id,
+      }),
+      makeBaseConnection({
+        inputId: 'input' as PortId,
+        inputNodeId: outerSubgraph.id,
+        outputId: 'value' as PortId,
+        outputNodeId: watch.id,
+      }),
+    ],
+  );
+  const outerGraph = makeGraph(
+    'outer-watch-child',
+    [outerInput, nestedWatch, nestedLeaf],
+    [
+      makeBaseConnection({
+        inputId: 'stream' as PortId,
+        inputNodeId: nestedWatch.id,
+        outputId: 'data' as PortId,
+        outputNodeId: outerInput.id,
+      }),
+      makeBaseConnection({
+        inputId: 'input' as PortId,
+        inputNodeId: nestedLeaf.id,
+        outputId: 'value' as PortId,
+        outputNodeId: nestedWatch.id,
+      }),
+    ],
+  );
+  const project = makeProject([rootGraph, outerGraph]);
+
+  const violation = getAsyncBranchTopologyViolation({
+    connections: rootGraph.connections,
+    nodesById: Object.fromEntries(rootGraph.nodes.map((node) => [node.id, node])),
+    project,
+  });
+
+  assert.deepEqual(
+    {
+      kind: violation?.kind,
+      nodeId: violation?.nodeId,
+      nestedGraphId: violation?.nestedGraphId,
+      nestedNodeId: violation?.nestedNodeId,
+    },
+    {
+      kind: 'nestedWatch',
+      nodeId: outerSubgraph.id,
+      nestedGraphId: outerGraph.metadata!.id,
+      nestedNodeId: nestedWatch.id,
+    },
+  );
+  assert.match(violation?.message ?? '', /Nested Watch.*cannot run inside Watch Streaming Output.*through Subgraph/s);
+});
+
 test('getAsyncBranchTopologyViolation permits ordinary and disabled Watch Subgraphs', () => {
   const source = makeTextNode('source');
   const watch = makeWatchStreamingOutputNode('watch');

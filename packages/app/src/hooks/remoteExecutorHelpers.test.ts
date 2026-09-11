@@ -333,6 +333,26 @@ test('projects replay-shaped waiting, progress, model, profile-health, and tool 
   );
   assert.equal(dispatcher.pause({ isReplay: true } satisfies ProcessEventMessageMap['pause']), true);
   assert.equal(dispatcher.resume({ isReplay: true } satisfies ProcessEventMessageMap['resume']), true);
+  const watchNode = { ...node, id: 'replayed-watch' as NodeId, type: 'watchStreamingOutput' };
+  assert.equal(
+    dispatcher.streamingOutputWatchSummary({
+      watchNode,
+      execution,
+      summary: {
+        receivedUpdates: 6,
+        coalescedUpdates: 1,
+        droppedUpdates: 2,
+        maximumQueuedUpdates: 3,
+        completedIterations: 4,
+        failedIterations: 0,
+        cancelledIterations: 0,
+        omittedIterations: 2,
+        retainedIterationUpdateIndexes: [1, 2, 3, 6],
+        selectedIteration: { updateIndex: 6, reason: 'latest' },
+      },
+    } satisfies ProcessEventMessageMap['streamingOutputWatchSummary']),
+    true,
+  );
 
   assert.equal(primaryUserInputCount, 1);
   assert.equal(primaryModelCallCount, 1);
@@ -341,6 +361,17 @@ test('projects replay-shaped waiting, progress, model, profile-health, and tool 
   assert.equal(primaryToolCallCount, 1);
   assert.equal(primaryPauseCount, 0);
   assert.equal(primaryResumeCount, 0);
+
+  const watchInvocation =
+    journal.rootsById[execution.rootRunId]!.nodeInvocationsByKey[
+      createRunActivityNodeKey({
+        ...execution,
+        nodeId: watchNode.id,
+        processId: `streaming-watch-summary:${watchNode.id}` as ProcessId,
+      })
+    ]!;
+  assert.equal(watchInvocation.status, 'completed');
+  assert.deepEqual(watchInvocation.streamingOutputWatchSummary?.retainedIterationUpdateIndexes, [1, 2, 3, 6]);
 
   const invocation =
     journal.rootsById[execution.rootRunId]!.nodeInvocationsByKey[

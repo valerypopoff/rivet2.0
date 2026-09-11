@@ -1007,12 +1007,14 @@ producer's saved final value once, or run from the producer to stream again.
 The parent prepares a closed graph slice from Watch through **one reachable** Stop node;
 it ignores that slice in ordinary scheduling. Inputs into the slice may come
 only from Watch, Graph Output and nested Watch/Start Async Branch boundaries are
-rejected, and direct split-run producers are rejected because a partial item
+rejected, including when either boundary is hidden behind one or more Subgraphs,
+and direct split-run producers are rejected because a partial item
 would otherwise have ambiguous ownership. The temporary child processor receives
 Watch's `value` (**Chunk**), `updateIndex` (**Chunk Index**), and `isFinal`
 outputs as a suppressed preload,
 shares the root's globals, stored values, cache, references, and lifecycle wiring,
-and forwards actual node events. Each invocation owns a fresh attached-data map:
+and forwards actual node events subject to the bounded evidence-retention policy
+below. Each invocation owns a fresh attached-data map:
 race completion and loop metadata must never leak between repeated node IDs.
 Watch costs accrue to the containing processor, so a Subgraph reports its own
 watch costs and the root includes them exactly once through the Subgraph output.
@@ -1027,19 +1029,25 @@ full response prefix per token. Core retains and clones that cumulative history
 only when a downstream branch connects **All Chunks**; Chunk-only watches keep
 one immutable value snapshot per invocation rather than copying an unused
 growing array on every update. Non-string values are retained as emitted when
-the history output is connected.
+the history output is connected. The cumulative array is materialized and
+deep-cloned only when the coordinator actually starts the branch. Interval
+updates coalesced before their timer fires and updates dropped at a full queue
+therefore do not make a growing history copy merely because **All Chunks** is
+connected. An executed every-update branch still receives the exact history that
+existed at that update; that work is intrinsic to its requested semantics.
 
 An ordinary Subgraph may be part of a Watch branch, but it does not create a
 scheduler escape hatch. While that Subgraph (or any recursively nested
-Subgraph) runs for a Watch invocation, Core rejects a **Start Async Branch**
-that has a runnable downstream branch before it can enqueue work on the
-root-managed async scheduler. An unfinished trigger with no active output is
-safe: it has no work to hand off and remains an ordinary authoring state. This
-keeps every repeated update within the Watch's sequential, parallel, and queue
-bounds. The same guard is repeated immediately before the scheduler handoff as
-defense in depth. Move detached async work after **Stop Watching Streaming
-Output**, where it belongs to normal one-time graph execution; ordinary awaited
-work inside a Watch Subgraph remains supported.
+Subgraph) runs for a Watch invocation, Core rejects another **Watch Streaming
+Output** and a **Start Async Branch** that has a runnable downstream branch
+before either can enqueue work outside the enclosing Watch scheduler. An
+unfinished async trigger with no active output is safe: it has no work to hand
+off and remains an ordinary authoring state. This keeps every repeated update
+within the Watch's sequential, parallel, and queue bounds. Editor validation
+walks referenced Subgraphs first, and Core repeats the Watch/async checks at
+runtime as defense in depth. Move another Watch or detached async work after
+**Stop Watching Streaming Output**, where it belongs to normal one-time graph
+execution; ordinary awaited work inside a Watch Subgraph remains supported.
 
 The Watch node editor keeps scheduling configuration contextual: `intervalMs`
 is visible only for the interval trigger and `maxParallelRuns` only for
@@ -1071,10 +1079,14 @@ is an allowed dormant authoring state and creates no coordinator.
 
 When a branch has one reachable Stop, it is the only node granted the internal
 `acceptStreamingWatchStop(...)` process-context callback. Its child invocation
-records a candidate value; after that Stop node's awaited finish event the
-parent accepts the first candidate, stops the coordinator, cancels queued/losing
-parallel invocations, installs the Stop output in the parent result map, and
-queues the Stop node's normal downstream dependents. An unfinished sibling in
+records that the live boundary was reached; after that Stop node's awaited finish
+event the parent accepts the completed `value` output, stops the coordinator,
+cancels queued/losing parallel invocations, installs the Stop output in the
+parent result map, and queues the Stop node's normal downstream dependents.
+The completed output is the sole source of truth for the terminal event,
+recording, inspector, and ordinary downstream nodes. In particular, a split-run
+Stop re-enters with its normal aggregated array output rather than the first
+per-item value that happened to reach the node. An unfinished sibling in
 the winning invocation cannot let a later Stop win. Winning siblings continue
 under the run's lifecycle, and their later errors still fail the run. This
 ordering keeps node finish events truthful and lets downstream nodes join the selected value with
@@ -1109,11 +1121,65 @@ Stop accepted after the source's compatible scheduler has already gone idle
 still finishes every normal downstream node (including a newly started async
 branch) before graph completion.
 
-Regression coverage belongs in `GraphProcessor.asyncBranches.test.ts` for
+#### Streaming Watch evidence retention
+
+Watch branches can run once per streamed increment, so their internal execution
+events are not an unbounded exception to normal editor history and recordings.
+The parent intercepts child events **before** they reach the root emitter,
+remote-executor transport, app data flow, or `ExecutionRecorder`:
+
+- The first three started branch iterations are forwarded live as representative
+  evidence.
+- Later iterations are held only while they could still be the first failure,
+  the Stop-accepted iteration, or the final/latest started iteration.
+- On settlement Core preserves one decisive iteration: the first failure wins;
+  otherwise the Stop winner wins; otherwise the latest started iteration wins.
+  It is forwarded only when it is not already among the first three. A
+  non-abort error remains a failure even if its iteration had already reached
+  Stop; only a cancellation requested by Watch or the root is counted as
+  cancelled.
+- Deferred evidence is deep-snapshotted at capture time. Its event carries the
+  original `eventOccurredAt` clock when it is eventually forwarded, so a later
+  mutation by a producer cannot rewrite retained output and history/recordings
+  do not present scheduler-flush time as execution time. The recorder keeps
+  append-order `ts` monotonic and persists that original clock separately as
+  `RecordedEvent.occurredAt`; replay uses it for historical timing while still
+  dispatching in stored event order.
+- A losing sibling cancelled after another iteration reaches Stop is likewise
+  counted as cancelled when its in-flight work rejects on that abort signal; it
+  never becomes a root Watch failure. Unrelated non-abort errors still remain
+  fail-closed and win the decisive retained iteration.
+- Core emits one `streamingOutputWatchSummary` event containing received,
+  coalesced, dropped, peak-queue, successfully completed, failed, cancelled, omitted, and
+  retained-update counts. Coalesced includes an interval snapshot superseded by
+  a later partial or the producer's final value; dropped is reserved for the
+  configured queue-overflow policy. `failureKind` separately reports a
+  coordinator-level `queue-overflow`, `missing-stop`, or `branch-failure`,
+  because no child iteration need fail for the first two cases. The recorder persists and playback re-emits it; remote
+  debugger clients receive the same compact event. The editor projects it as one
+  synthetic terminal Watch row in Run Activity, with the retained update indexes,
+  rather than recreating the omitted branch iterations; a summary with failed
+  iterations or a coordinator failure is explicitly shown as an error rather
+  than a completed row.
+
+This policy changes observability only, never scheduling, Stop propagation,
+global writes, or user input. Global writes (including dynamic
+`globalSet:<id>` listeners), user-input requests, and abort-controller
+registration remain live side effects even when their enclosing iteration is
+omitted. The bounded buffer and its bookkeeping contain only active or still
+viable non-initial candidates; completed successful candidates are released as
+soon as a newer iteration starts. Do not move this filter into the app: that
+would still transmit and record every repeated branch event.
+
+Regression coverage belongs in `GraphProcessor.asyncBranches.test.ts` and
+`StreamingOutputWatchHistory.test.ts` for
 partial-before-final ordering, final-only fallback, no-Stop repeat-all
 completion, sequential queueing, parallel caps/first-stop cancellation,
 topology rejection, root abort, per-invocation race/loop isolation, subgraph cost
-attribution, source exclusion propagation, and recording event lineage. Include a
+attribution, source exclusion propagation, retention of the first three plus the
+decisive/latest iteration, immutable deferred payloads and their original timing,
+compact-summary replay, nested-Watch rejection through Subgraphs, and recording
+event lineage. Include a
 source-that-finishes-before-Stop case so the post-Stop parent queue and any
 subsequent async work cannot be finalized early.
 Browser/editor coverage must additionally prove that

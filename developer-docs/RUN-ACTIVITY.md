@@ -504,6 +504,14 @@ does not start a new recorder during loaded-recording playback: **Save
 Recording** exports the loaded original artifact. That avoids replacing it with
 an accelerated, internally inconsistent replay timeline.
 
+A retained **Watch Streaming Output** branch event may instead carry an
+`eventOccurredAt` capture clock. That clock is authoritative for the delayed
+node's own start, finish, and duration, but it must never establish the root
+recording timeline: it represents one delayed branch rather than a complete
+root lifecycle. Root **Started** and total duration therefore use
+`replayRecordedAt` only, while ordinary live root timing remains on the local
+receipt clock.
+
 The response inspector is scoped to the currently selected root. Closing the
 drawer, clearing its root, or selecting another root closes any open inspector
 so replayed trace data never outlives its owning activity view.

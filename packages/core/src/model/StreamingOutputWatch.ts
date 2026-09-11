@@ -2,9 +2,26 @@ import type { Outputs } from './GraphProcessor.js';
 
 export type StreamingOutputWatchSnapshot = {
   outputs: Outputs;
+  /**
+   * Immutable increment storage shared by snapshots. The owning GraphProcessor
+   * materializes this cumulative output only for a branch that actually starts.
+   */
+  streamedOutput?: readonly unknown[];
+  streamedOutputLength?: number;
   updateIndex: number;
   isFinal: boolean;
 };
+
+export type StreamingOutputWatchRuntimeSummary = {
+  receivedUpdates: number;
+  coalescedUpdates: number;
+  droppedUpdates: number;
+  maximumQueuedUpdates: number;
+  /** A coordinator failure that is not necessarily a failed child iteration. */
+  failureKind?: StreamingOutputWatchFailureKind;
+};
+
+export type StreamingOutputWatchFailureKind = 'branch-failure' | 'missing-stop' | 'queue-overflow';
 
 export type StreamingOutputWatchOptions = {
   triggerMode: 'every-update' | 'interval';
@@ -69,6 +86,11 @@ export class StreamingOutputWatch {
   #finalSnapshotSettled = false;
   #stopped = false;
   #failure: Error | undefined;
+  #failureKind: StreamingOutputWatchFailureKind | undefined;
+  #receivedUpdates = 0;
+  #coalescedUpdates = 0;
+  #droppedUpdates = 0;
+  #maximumQueuedUpdates = 0;
 
   constructor(
     options: Partial<StreamingOutputWatchOptions>,
@@ -124,6 +146,21 @@ export class StreamingOutputWatch {
     return this.#stopped;
   }
 
+  /** True only after this Watch can no longer receive or run a snapshot. */
+  get isSettled(): boolean {
+    return !this.hasPending && (this.#stopped || this.#failure != null || this.#producerFinished);
+  }
+
+  get runtimeSummary(): StreamingOutputWatchRuntimeSummary {
+    return {
+      receivedUpdates: this.#receivedUpdates,
+      coalescedUpdates: this.#coalescedUpdates,
+      droppedUpdates: this.#droppedUpdates,
+      maximumQueuedUpdates: this.#maximumQueuedUpdates,
+      ...(this.#failureKind === undefined ? {} : { failureKind: this.#failureKind }),
+    };
+  }
+
   /**
    * A Stop boundary can enqueue ordinary parent-graph work when its node
    * completes. Until it settles, its result is not safe to expose
@@ -137,8 +174,12 @@ export class StreamingOutputWatch {
     if (this.#stopped || this.#failure) {
       return;
     }
+    this.#receivedUpdates += 1;
 
     if (this.#options.triggerMode === 'interval' && !snapshot.isFinal) {
+      if (this.#latestIntervalSnapshot) {
+        this.#coalescedUpdates += 1;
+      }
       this.#latestIntervalSnapshot = snapshot;
       this.#scheduleInterval();
       return;
@@ -151,11 +192,18 @@ export class StreamingOutputWatch {
     if (this.#stopped || this.#failure) {
       return;
     }
+    this.#receivedUpdates += 1;
 
     this.#producerFinished = true;
     if (this.#timer != null) {
       clearTimeout(this.#timer);
       this.#timer = undefined;
+    }
+    // The final output supersedes a partial snapshot that was still waiting
+    // for its interval. Account for that intentionally omitted update just as
+    // we account for a newer partial replacing one before the timer fires.
+    if (this.#latestIntervalSnapshot) {
+      this.#coalescedUpdates += 1;
     }
     this.#latestIntervalSnapshot = undefined;
     this.#enqueue(finalSnapshot);
@@ -186,7 +234,10 @@ export class StreamingOutputWatch {
     }
 
     if (this.#producerFinished && this.#finalSnapshotSettled && !this.#stopped && this.#requiresAcceptedStop) {
-      this.#fail(new Error('The watched streaming output completed before Stop Watching Streaming Output accepted a value.'));
+      this.#fail(
+        new Error('The watched streaming output completed before Stop Watching Streaming Output accepted a value.'),
+        'missing-stop',
+      );
     }
   }
 
@@ -216,19 +267,27 @@ export class StreamingOutputWatch {
           // relaxing the configured queue bound: discard the stalest waiting
           // partial and retain the final snapshot instead.
           this.#queue.shift();
+          this.#droppedUpdates += 1;
           this.#queue.push(snapshot);
+          this.#maximumQueuedUpdates = Math.max(this.#maximumQueuedUpdates, this.#queue.length);
           this.#pump();
+        } else {
+          this.#droppedUpdates += 1;
         }
         return;
       }
-      this.#fail(new Error(
-        `Watch Streaming Output exceeded its ${this.#options.maxQueuedUpdates}-update queue limit. ` +
-          'Increase the limit, use an interval trigger, or stop the watch sooner.',
-      ));
+      this.#fail(
+        new Error(
+          `Watch Streaming Output exceeded its ${this.#options.maxQueuedUpdates}-update queue limit. ` +
+            'Increase the limit, use an interval trigger, or stop the watch sooner.',
+        ),
+        'queue-overflow',
+      );
       return;
     }
 
     this.#queue.push(snapshot);
+    this.#maximumQueuedUpdates = Math.max(this.#maximumQueuedUpdates, this.#queue.length);
     this.#pump();
   }
 
@@ -262,7 +321,7 @@ export class StreamingOutputWatch {
         })
         .catch((error) => {
           if (!this.#stopped) {
-            this.#fail(error instanceof Error ? error : new Error(String(error)));
+            this.#fail(error instanceof Error ? error : new Error(String(error)), 'branch-failure');
           }
         })
         .finally(() => {
@@ -276,12 +335,13 @@ export class StreamingOutputWatch {
     }
   }
 
-  #fail(error: Error): void {
+  #fail(error: Error, failureKind: StreamingOutputWatchFailureKind): void {
     if (this.#failure) {
       return;
     }
 
     this.#failure = error;
+    this.#failureKind = failureKind;
     this.#onFailure(error);
     this.stop();
   }

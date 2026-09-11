@@ -371,6 +371,69 @@ void describe('ExecutionRecorder', () => {
     assert.notEqual(replayedExecutions[0]!.graphRunId, execution.graphRunId);
   });
 
+  void it('records and replays compact Watch Streaming Output summaries with timing provenance', async () => {
+    const recorder = new ExecutionRecorder();
+    const sourceEmitter = new Emittery<ProcessEvents>();
+    recorder.record(sourceEmitter as unknown as GraphProcessor);
+    const watchNode = { ...node, type: 'watchStreamingOutput' } as ChartNode;
+    const summary: ProcessEvents['streamingOutputWatchSummary']['summary'] = {
+      receivedUpdates: 9,
+      coalescedUpdates: 2,
+      droppedUpdates: 1,
+      maximumQueuedUpdates: 3,
+      completedIterations: 6,
+      failedIterations: 0,
+      cancelledIterations: 0,
+      omittedIterations: 2,
+      retainedIterationUpdateIndexes: [1, 2, 3, 9],
+      selectedIteration: { updateIndex: 9, reason: 'latest' },
+    };
+
+    await sourceEmitter.emit('graphStart', { graph, inputs: {}, execution });
+    await sourceEmitter.emit('streamingOutputWatchSummary', { watchNode, summary, execution });
+    await sourceEmitter.emit('done', { results: {} });
+
+    const recordedSummary = recorder.events.find((event) => event.type === 'streamingOutputWatchSummary');
+    if (!recordedSummary || recordedSummary.type !== 'streamingOutputWatchSummary') {
+      assert.fail('Expected the Watch summary to be recorded.');
+    }
+    assert.deepEqual(recordedSummary.data.summary, summary);
+    assert.equal(recordedSummary.data.watchNodeId, watchNode.id);
+
+    const replayEmitter = new Emittery<ProcessEvents>();
+    let replayed: ProcessEvents['streamingOutputWatchSummary'] | undefined;
+    replayEmitter.on('streamingOutputWatchSummary', (event) => {
+      replayed = event;
+    });
+
+    await replayExecutionRecording({
+      emitter: replayEmitter,
+      erroredNodes: new Map(),
+      graphInputs: {},
+      graphOutputs: {},
+      isAborted: () => false,
+      nodeResults: new Map(),
+      project: {
+        metadata: { id: 'project-id', title: 'Project', description: '', mainGraphId: graph.metadata!.id! },
+        graphs: { [graph.metadata!.id!]: graph },
+      } as any,
+      recorder,
+      recordingPlaybackChatLatency: 0,
+      setContextValues: () => {},
+      setGraphInputs: () => {},
+      setGraphOutputs: () => {},
+      setRunning: () => {},
+      visitedNodes: new Set(),
+      waitUntilUnpaused: async () => {},
+    });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    assert.deepEqual(replayed?.summary, summary);
+    assert.equal(replayed?.watchNode.id, watchNode.id);
+    assert.equal(replayed?.replayRecordedAt, recordedSummary?.ts);
+    assert.notEqual(replayed?.execution.rootRunId, execution.rootRunId);
+  });
+
   void it('records and replays LLM Chat output snapshots without creating node lifecycle events', async () => {
     const recorder = new ExecutionRecorder();
     const sourceEmitter = new Emittery<ProcessEvents>();
@@ -610,6 +673,7 @@ void describe('ExecutionRecorder', () => {
           node,
           inputs: {},
           processId,
+          eventOccurredAt: 10_000,
           resultOrigin: 'editor-cache',
           execution,
         } satisfies SerializedProcessEventMap['nodeStart'],
@@ -631,6 +695,7 @@ void describe('ExecutionRecorder', () => {
           node,
           outputs: { output: { type: 'string', value: 'finished' } },
           processId,
+          eventOccurredAt: 10_070,
           resultOrigin: 'frozen',
           execution,
         } satisfies SerializedProcessEventMap['nodeFinish'],
@@ -673,12 +738,13 @@ void describe('ExecutionRecorder', () => {
         .map((event) => ({
           type: event.type,
           resultOrigin: event.data.resultOrigin,
+          ...(event.type === 'nodeStart' || event.type === 'nodeFinish' ? { occurredAt: event.occurredAt } : {}),
           ...(event.type === 'nodeError' ? { outputs: event.data.outputs, splitOutputs: event.data.splitOutputs } : {}),
         })),
       [
-        { type: 'nodeStart', resultOrigin: 'editor-cache' },
+        { type: 'nodeStart', resultOrigin: 'editor-cache', occurredAt: 10_000 },
         { type: 'partialOutput', resultOrigin: 'executed' },
-        { type: 'nodeFinish', resultOrigin: 'frozen' },
+        { type: 'nodeFinish', resultOrigin: 'frozen', occurredAt: 10_070 },
         {
           type: 'nodeError',
           resultOrigin: 'preloaded',
@@ -690,6 +756,15 @@ void describe('ExecutionRecorder', () => {
     );
 
     const roundTripped = ExecutionRecorder.deserializeFromString(recorder.serialize());
+    assert.deepEqual(
+      roundTripped.events
+        .filter((event) => event.type === 'nodeStart' || event.type === 'nodeFinish')
+        .map((event) => ({ type: event.type, occurredAt: event.occurredAt })),
+      [
+        { type: 'nodeStart', occurredAt: 10_000 },
+        { type: 'nodeFinish', occurredAt: 10_070 },
+      ],
+    );
     assert.deepEqual(await replayNodeResultOrigins(roundTripped), [
       { type: 'nodeStart', resultOrigin: 'editor-cache' },
       { type: 'partialOutput', resultOrigin: 'executed' },
@@ -913,6 +988,65 @@ void describe('ExecutionRecorder', () => {
         replayRecordedAt: timestamps.get(type),
       })),
     );
+  });
+
+  void it('preserves deferred Watch event occurrence time separately from append order', async () => {
+    const recorder = new ExecutionRecorder();
+    const sourceEmitter = new Emittery<ProcessEvents>();
+    recorder.record(sourceEmitter as unknown as GraphProcessor);
+    await sourceEmitter.emit('nodeStart', {
+      node,
+      inputs: {},
+      processId,
+      execution,
+      eventOccurredAt: 10_000,
+    });
+    await sourceEmitter.emit('nodeFinish', {
+      node,
+      outputs: {},
+      processId,
+      execution,
+      eventOccurredAt: 10_070,
+    });
+    await sourceEmitter.emit('done', { results: {} });
+
+    const recordedStart = recorder.events.find((event) => event.type === 'nodeStart');
+    const recordedFinish = recorder.events.find((event) => event.type === 'nodeFinish');
+    assert.equal(recordedStart?.occurredAt, 10_000);
+    assert.equal(recordedFinish?.occurredAt, 10_070);
+    assert.equal('eventOccurredAt' in (recordedStart?.data ?? {}), false);
+    assert.equal('eventOccurredAt' in (recordedFinish?.data ?? {}), false);
+
+    const replayEmitter = new Emittery<ProcessEvents>();
+    const replayed: Array<{ type: string; replayRecordedAt?: number }> = [];
+    replayEmitter.on('nodeStart', (data) => replayed.push({ type: 'nodeStart', replayRecordedAt: data.replayRecordedAt }));
+    replayEmitter.on('nodeFinish', (data) => replayed.push({ type: 'nodeFinish', replayRecordedAt: data.replayRecordedAt }));
+
+    await replayExecutionRecording({
+      emitter: replayEmitter,
+      erroredNodes: new Map(),
+      graphInputs: {},
+      graphOutputs: {},
+      isAborted: () => false,
+      nodeResults: new Map(),
+      project: {
+        metadata: { id: 'project-id', title: 'Project', description: '', mainGraphId: graph.metadata!.id! },
+        graphs: { [graph.metadata!.id!]: graph },
+      } as any,
+      recorder,
+      recordingPlaybackChatLatency: 0,
+      setContextValues: () => {},
+      setGraphInputs: () => {},
+      setGraphOutputs: () => {},
+      setRunning: () => {},
+      visitedNodes: new Set(),
+      waitUntilUnpaused: async () => {},
+    });
+
+    assert.deepEqual(replayed, [
+      { type: 'nodeStart', replayRecordedAt: 10_000 },
+      { type: 'nodeFinish', replayRecordedAt: 10_070 },
+    ]);
   });
 
   void it('does not persist transient replay timing when replay is recorded again', async () => {

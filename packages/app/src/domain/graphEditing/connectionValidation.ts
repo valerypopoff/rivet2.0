@@ -172,6 +172,45 @@ function findReachableAsyncBranchInSubGraph(
   return undefined;
 }
 
+/**
+ * A Watch owns a bounded scheduler. A nested Watch would create a second
+ * scheduler whose retained evidence and queue limits escape the outer Watch,
+ * so reject it even when the nested node is reached through one or more
+ * Subgraphs.
+ */
+function findReachableStreamingWatchInSubGraph(
+  node: ChartNode,
+  project: Project | undefined,
+  visitedGraphIds: Set<GraphId> = new Set(),
+): { graphId: GraphId; node: ChartNode } | undefined {
+  const graphId = getSubGraphId(node);
+  if (!project || !graphId || visitedGraphIds.has(graphId)) {
+    return undefined;
+  }
+
+  const graph = project.graphs[graphId];
+  if (!graph) {
+    return undefined;
+  }
+  visitedGraphIds.add(graphId);
+
+  for (const childNode of graph.nodes) {
+    if (childNode.disabled) {
+      continue;
+    }
+    if (childNode.type === 'watchStreamingOutput') {
+      return { graphId, node: childNode };
+    }
+
+    const nestedWatch = findReachableStreamingWatchInSubGraph(childNode, project, visitedGraphIds);
+    if (nestedWatch) {
+      return nestedWatch;
+    }
+  }
+
+  return undefined;
+}
+
 function withCurrentGraphTopology(
   project: Project | undefined,
   graphId: GraphId | undefined,
@@ -471,6 +510,19 @@ export function getAsyncBranchTopologyViolation({
               `Start Async Branch "${nestedAsyncBranch.node.title}" cannot run inside Watch Streaming Output "${watchNode.title}" ` +
               `through Subgraph "${node.title}". A Watch invocation must keep all work within the Watch scheduler. ` +
               'Move Start Async Branch after Stop Watching Streaming Output, or run the work directly inside the watched branch.',
+          };
+        }
+        const nestedWatch = findReachableStreamingWatchInSubGraph(node, topologyProject);
+        if (nestedWatch) {
+          return {
+            kind: 'nestedWatch',
+            triggerNodeId: watchNode.id,
+            nodeId: node.id,
+            nestedGraphId: nestedWatch.graphId,
+            nestedNodeId: nestedWatch.node.id,
+            message:
+              `Watch Streaming Output "${nestedWatch.node.title}" cannot run inside Watch Streaming Output "${watchNode.title}" ` +
+              `through Subgraph "${node.title}". A Watch branch cannot contain another Watch.`,
           };
         }
       }

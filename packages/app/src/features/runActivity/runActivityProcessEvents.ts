@@ -5,6 +5,7 @@ import {
   type RunActivityJournal,
   type RunActivityResultOrigin,
 } from './runActivityJournal.js';
+import { getEventOccurredAt } from '../../utils/recordedNodeTiming.js';
 
 export type RunActivityProcessEventName = RunActivityEvent['type'];
 
@@ -23,6 +24,7 @@ const RUN_ACTIVITY_PROCESS_EVENT_NAMES = new Set<keyof ProcessEventMessageMap>([
   'nodeError',
   'nodeExcluded',
   'nodeOutputsCleared',
+  'streamingOutputWatchSummary',
   'llmCallFinished',
   'llmProfileAttempt',
   'toolCallFinished',
@@ -52,7 +54,10 @@ export function applyProcessEventToRunActivityJournal<K extends keyof ProcessEve
   return reduceRunActivityJournal(options.journal, {
     type: options.message,
     data: options.data,
-    occurredAt: options.occurredAt,
+    // Callers normally use their local receipt clock for event ordering. A
+    // retained Watch event is intentionally delivered later, so make its
+    // capture clock authoritative even for direct/project-snapshot callers.
+    occurredAt: getEventOccurredAt(options.data) ?? options.occurredAt,
     resultOrigin: getResultOrigin(options.message, options.data),
   } as RunActivityEvent);
 }

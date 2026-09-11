@@ -548,6 +548,8 @@ export function createProcessEventDispatcher(currentExecution: {
       dispatchWithRunActivity('nodeOutputsCleared', data as ProcessEvents['nodeOutputsCleared'], () =>
         currentExecution.onNodeOutputsCleared(data as ProcessEvents['nodeOutputsCleared']),
       ),
+    streamingOutputWatchSummary: (data: unknown) =>
+      dispatchRunActivityEvent('streamingOutputWatchSummary', data as ProcessEvents['streamingOutputWatchSummary']),
     progress: (data: unknown) => dispatchRunActivityEvent('progress', data as ProcessEvents['progress']),
     pause: (data: unknown) => {
       const event = data as ProcessEvents['pause'];

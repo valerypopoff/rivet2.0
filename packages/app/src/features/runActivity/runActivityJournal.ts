@@ -57,7 +57,7 @@ export type RunActivityNodeInvocation = {
   firstOutputAt?: number;
   latestOutputAt?: number;
   finishedAt?: number;
-  /** Historical node boundaries from a replay, never local delivery time. */
+  /** Authoritative node bounds from replay or delayed Watch evidence, never local delivery time. */
   recordedTiming?: RecordedNodeTiming;
   durationMs?: number;
   splitRunDurationMs?: Record<number, number>;
@@ -84,6 +84,8 @@ export type RunActivityNodeInvocation = {
   /** Additive for compatibility with journals persisted before circuit observability. */
   omittedProfileAttemptCount?: number;
   omittedToolCallCount: number;
+  /** Compact evidence accounting for a completed Watch Streaming Output node. */
+  streamingOutputWatchSummary?: ProcessEvents['streamingOutputWatchSummary']['summary'];
 };
 
 export type RunActivityGraphRun = {
@@ -178,6 +180,7 @@ type ProcessEventName =
   | 'nodeError'
   | 'nodeExcluded'
   | 'nodeOutputsCleared'
+  | 'streamingOutputWatchSummary'
   | 'llmCallFinished'
   | 'llmProfileAttempt'
   | 'toolCallFinished'
@@ -323,6 +326,9 @@ function applyEvent(journal: RunActivityJournal, event: RunActivityEvent, occurr
       break;
     case 'nodeOutputsCleared':
       applyNodeOutputsCleared(journal, event.data, occurredAt);
+      break;
+    case 'streamingOutputWatchSummary':
+      applyStreamingOutputWatchSummary(journal, event.data, occurredAt);
       break;
     case 'llmCallFinished':
       applyLlmCallFinished(journal, event.data, occurredAt);
@@ -641,6 +647,41 @@ function applyNodeOutputsCleared(
     invocation.outputsClearedAt = at;
     invocation.outputRevision += 1;
   }
+}
+
+/**
+ * Watch Streaming Output is coordinated outside the ordinary node scheduler,
+ * so it has no normal process() lifecycle to project into Run Activity. Give
+ * its one terminal summary a stable synthetic process identity instead. This
+ * keeps the summary visible for live, remote, and replayed runs without
+ * retaining an invocation row for every streaming update.
+ */
+function applyStreamingOutputWatchSummary(
+  journal: RunActivityJournal,
+  data: RunActivityEventByName['streamingOutputWatchSummary']['data'],
+  at: number,
+): void {
+  const invocation = getOrCreateNodeInvocation(
+    journal,
+    'streamingOutputWatchSummary',
+    {
+      node: data.watchNode,
+      processId: `streaming-watch-summary:${data.watchNode.id}` as ProcessId,
+      execution: data.execution,
+    },
+    at,
+    'executed',
+  );
+  if (invocation == null) return;
+
+  // The Watch coordinator has no ordinary node lifecycle. Its terminal
+  // summary is therefore the authoritative status for the synthetic row.
+  // A failed iteration must not appear as a successful green Watch beside the
+  // root error that it caused.
+  invocation.status = data.summary.failedIterations > 0 || data.summary.failureKind != null ? 'error' : 'completed';
+  invocation.startedAt ??= at;
+  invocation.finishedAt = at;
+  invocation.streamingOutputWatchSummary = data.summary;
 }
 
 function applyLlmCallFinished(
@@ -1071,6 +1112,9 @@ function applyRecordedTimingFromScopedEvent(journal: RunActivityJournal, event: 
     return;
   }
 
+  // A delayed Watch event has a node-local occurrence timestamp, but it is
+  // not a complete root timeline. Only recording playback can establish the
+  // root's historical duration and Started value.
   const replayRecordedAt = getReplayRecordedAt(event.data);
   const execution = getEventExecution(event.data);
   if (replayRecordedAt == null || execution == null) return;

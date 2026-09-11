@@ -13,8 +13,14 @@ import type {
 } from './ProcessContext.js';
 import type { Project, ProjectId } from './Project.js';
 import type { Settings } from './Settings.js';
-import type { FrozenNodeOutputsByGraph, NodeResultOrigin, ReplayEventTiming } from './GraphProcessor.js';
+import type {
+  EventOccurrenceTiming,
+  FrozenNodeOutputsByGraph,
+  NodeResultOrigin,
+  ReplayEventTiming,
+} from './GraphProcessor.js';
 import type { GraphProgress } from './GraphProgress.js';
+import type { StreamingOutputWatchHistorySummary } from './StreamingOutputWatchHistory.js';
 import type { RivetWebAppStorage } from './UiGraphWebAppStorage.js';
 
 export type GraphInputs = Record<string, DataValue>;
@@ -30,7 +36,7 @@ export type CodeConsoleMessage = {
   level: CodeConsoleLevel;
 };
 
-type WithExecution<T extends object> = T & { execution: GraphExecutionMetadata } & ReplayEventTiming;
+type WithExecution<T extends object> = T & { execution: GraphExecutionMetadata } & ReplayEventTiming & EventOccurrenceTiming;
 
 export type SerializedProcessEventMap = {
   start: WithExecution<{
@@ -106,6 +112,10 @@ export type SerializedProcessEventMap = {
   llmProfileAttempt: WithExecution<LLMProfileAttemptTraceEvent>;
   toolCallFinished: WithExecution<ToolCallFinishedEvent>;
   nodeOutputsCleared: WithExecution<{ node: ChartNode; processId?: ProcessId }>;
+  streamingOutputWatchSummary: WithExecution<{
+    watchNode: ChartNode;
+    summary: StreamingOutputWatchHistorySummary;
+  }>;
   error: { error: Error | string } & ReplayEventTiming;
   done: { results: GraphOutputs } & ReplayEventTiming;
   abort: { successful: boolean; error?: string | Error } & ReplayEventTiming;
@@ -144,6 +154,7 @@ export type ProcessEventMessageMap = {
   llmProfileAttempt: SerializedProcessEventMap['llmProfileAttempt'];
   toolCallFinished: SerializedProcessEventMap['toolCallFinished'];
   nodeOutputsCleared: SerializedProcessEventMap['nodeOutputsCleared'];
+  streamingOutputWatchSummary: SerializedProcessEventMap['streamingOutputWatchSummary'];
   error: SerializedProcessEventMap['error'];
   graphError: SerializedProcessEventMap['graphError'];
   trace: string;

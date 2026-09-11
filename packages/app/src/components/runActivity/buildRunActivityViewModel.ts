@@ -182,9 +182,9 @@ function buildInvocationViewModel(
   const detailRows = buildDetailRows(root, graphRun, invocation, resolved, category);
   const primaryModelCall = getEffectiveModelCall(invocation.modelCalls);
   const searchTerms = buildInvocationSearchTerms(invocation, resolved.searchTerms);
-  // Replays retain a historical event clock alongside local delivery times.
-  // Once an invocation has replay provenance, do not fall back to a local
-  // receipt timestamp for a missing historical node start.
+  // Replays and delayed Watch branches retain an authoritative event clock
+  // alongside local delivery times. Once an invocation has that provenance,
+  // do not fall back to a later local receipt timestamp for a missing start.
   const startedAt = invocation.recordedTiming == null ? invocation.startedAt : invocation.recordedTiming.startedAt;
 
   return {
@@ -517,6 +517,40 @@ function buildDetailRows(
   }
   if (invocation.partialOutputCount > 0) {
     rows.push({ label: 'Partial output updates', value: String(invocation.partialOutputCount) });
+  }
+  if (invocation.streamingOutputWatchSummary) {
+    const summary = invocation.streamingOutputWatchSummary;
+    rows.push({
+      label: 'Streaming updates',
+      value: `${summary.receivedUpdates} received · ${summary.coalescedUpdates} coalesced · ${summary.droppedUpdates} dropped`,
+    });
+    rows.push({
+      label: 'Watch iterations',
+      value: [
+        `${summary.completedIterations} completed`,
+        `${summary.failedIterations} failed`,
+        `${summary.cancelledIterations} cancelled`,
+        `${summary.omittedIterations} omitted`,
+      ].join(' · '),
+    });
+    if (summary.failureKind) {
+      rows.push({
+        label: 'Watch failure',
+        value:
+          summary.failureKind === 'queue-overflow'
+            ? 'Queue overflow'
+            : summary.failureKind === 'missing-stop'
+              ? 'No Stop value accepted'
+              : 'Branch failure',
+      });
+    }
+    if (summary.retainedIterationUpdateIndexes.length > 0) {
+      const selected = summary.selectedIteration;
+      rows.push({
+        label: 'Retained updates',
+        value: `${summary.retainedIterationUpdateIndexes.join(', ')}${selected ? ` · ${selected.reason}` : ''}`,
+      });
+    }
   }
   if (invocation.omittedModelCallCount > 0) {
     rows.push({ label: 'Model call rows omitted', value: String(invocation.omittedModelCallCount) });

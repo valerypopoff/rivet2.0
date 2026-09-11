@@ -162,6 +162,11 @@ export function createDebuggerProcessorAttachments(options: {
         }),
       );
       cleanups.push(
+        processor.on('streamingOutputWatchSummary', (data) => {
+          options.broadcast(processor, 'streamingOutputWatchSummary', data);
+        }),
+      );
+      cleanups.push(
         processor.on('graphStart', (data) => {
           options.broadcast(processor, 'graphStart', data);
         }),

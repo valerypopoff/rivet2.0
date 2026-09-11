@@ -34,14 +34,14 @@ export class StopWatchingStreamingOutputNodeImpl extends NodeImpl<StopWatchingSt
       infoBoxTitle: 'Stop Watching Streaming Output Node',
       infoBoxBody: dedent`
         Accepts a value from a Watch Streaming Output branch, stops future streaming
-        snapshots, and lets that value continue through the ordinary graph. In parallel
-        mode, the first branch to reach this node wins.
+        snapshots, and lets its completed output continue through the ordinary graph.
+        In parallel mode, the first completed branch to reach this node wins.
       `,
     };
   }
 
   getBody(): string {
-    return 'First Stop value continues';
+    return 'First completed Stop continues';
   }
 
   async process(inputs: Inputs, context: InternalProcessContext): Promise<Outputs> {
@@ -52,7 +52,7 @@ export class StopWatchingStreamingOutputNodeImpl extends NodeImpl<StopWatchingSt
     if (!context.acceptStreamingWatchStop) {
       throw new Error('Stop Watching Streaming Output must be downstream of Watch Streaming Output.');
     }
-    context.acceptStreamingWatchStop(value);
+    context.acceptStreamingWatchStop();
     return { ['value' as PortId]: value };
   }
 }

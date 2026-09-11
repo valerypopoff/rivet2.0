@@ -90,6 +90,30 @@ test('recognizes the reserved legacy preload process identity', () => {
   );
 });
 
+test('uses a deferred event occurrence time instead of its later delivery time', () => {
+  const processId = 'deferred-watch-finish' as ProcessId;
+  const journal = applyProcessEventToRunActivityJournal({
+    journal: createRunActivityJournal(),
+    message: 'nodeFinish',
+    // The UI received this retained Watch event much later than it occurred.
+    occurredAt: 20_000,
+    data: {
+      node,
+      processId,
+      outputs: {},
+      eventOccurredAt: 10_070,
+      execution,
+    } satisfies ProcessEventMessageMap['nodeFinish'],
+  });
+
+  assert.equal(
+    journal.rootsById[execution.rootRunId]!.nodeInvocationsByKey[
+      createRunActivityNodeKey({ ...execution, nodeId: node.id, processId })
+    ]?.finishedAt,
+    10_070,
+  );
+});
+
 test('projects user-input and progress events through the process-event boundary', () => {
   const processId = 'interactive' as ProcessId;
   let journal = applyProcessEventToRunActivityJournal({
@@ -157,4 +181,71 @@ test('projects LLM profile health events through the process-event boundary', ()
   assert.equal(invocation.profileAttempts?.[0]?.healthDisposition, 'fail-open');
   assert.equal(invocation.profileAttempts?.[0]?.error, 'Shared health store unavailable');
   assert.equal(invocation.profileAttempts?.[0]?.profileName, 'Recovery profile');
+});
+
+test('projects each Watch Streaming Output summary as one compact terminal activity row', () => {
+  const watchNode = { ...node, id: 'watch' as NodeId, title: 'Watch response', type: 'watchStreamingOutput' };
+  const summary = {
+    receivedUpdates: 6,
+    coalescedUpdates: 1,
+    droppedUpdates: 2,
+    maximumQueuedUpdates: 3,
+    completedIterations: 4,
+    failedIterations: 0,
+    cancelledIterations: 0,
+    omittedIterations: 2,
+    retainedIterationUpdateIndexes: [1, 2, 3, 6],
+    selectedIteration: { updateIndex: 6, reason: 'latest' as const },
+  };
+  const journal = applyProcessEventToRunActivityJournal({
+    journal: createRunActivityJournal(),
+    message: 'streamingOutputWatchSummary',
+    occurredAt: 7,
+    data: { watchNode, summary, execution } satisfies ProcessEventMessageMap['streamingOutputWatchSummary'],
+  });
+
+  const invocation =
+    journal.rootsById[execution.rootRunId]!.nodeInvocationsByKey[
+      createRunActivityNodeKey({
+        ...execution,
+        nodeId: watchNode.id,
+        processId: `streaming-watch-summary:${watchNode.id}` as ProcessId,
+      })
+    ]!;
+  assert.equal(invocation.status, 'completed');
+  assert.deepEqual(invocation.streamingOutputWatchSummary, summary);
+});
+
+test('marks the compact Watch activity row as errored when its summary contains a failed iteration', () => {
+  const watchNode = { ...node, id: 'failed-watch' as NodeId, title: 'Failed watch', type: 'watchStreamingOutput' };
+  const summary = {
+    receivedUpdates: 4,
+    coalescedUpdates: 0,
+    droppedUpdates: 0,
+    maximumQueuedUpdates: 1,
+    completedIterations: 2,
+    failedIterations: 0,
+    cancelledIterations: 0,
+    omittedIterations: 0,
+    retainedIterationUpdateIndexes: [1, 2, 3],
+    selectedIteration: { updateIndex: 3, reason: 'latest' as const },
+    failureKind: 'queue-overflow' as const,
+  };
+  const journal = applyProcessEventToRunActivityJournal({
+    journal: createRunActivityJournal(),
+    message: 'streamingOutputWatchSummary',
+    occurredAt: 8,
+    data: { watchNode, summary, execution } satisfies ProcessEventMessageMap['streamingOutputWatchSummary'],
+  });
+  const invocation =
+    journal.rootsById[execution.rootRunId]!.nodeInvocationsByKey[
+      createRunActivityNodeKey({
+        ...execution,
+        nodeId: watchNode.id,
+        processId: `streaming-watch-summary:${watchNode.id}` as ProcessId,
+      })
+    ]!;
+
+  assert.equal(invocation.status, 'error');
+  assert.deepEqual(invocation.streamingOutputWatchSummary, summary);
 });

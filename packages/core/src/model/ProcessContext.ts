@@ -403,10 +403,11 @@ export type InternalProcessContext<T extends ChartNode = ChartNode> = ProcessCon
 
   /**
    * Internal boundary used only by Stop Watching Streaming Output. The owning
-     * GraphProcessor publishes the selected value after the Stop node's finish
-     * event, then resumes ordinary downstream scheduling while siblings drain.
+   * GraphProcessor uses this only to verify the live Stop node was reached.
+   * It publishes the completed Stop output after its finish event, so split
+   * aggregation and ordinary downstream execution use the exact same value.
    */
-  acceptStreamingWatchStop?: (value: DataValue) => void;
+  acceptStreamingWatchStop?: () => void;
 
   /**
    * Preserves display-only outputs for this invocation if it subsequently
