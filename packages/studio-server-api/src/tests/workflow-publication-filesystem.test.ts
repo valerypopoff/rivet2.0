@@ -231,6 +231,27 @@ test('filesystem save keeps published status on a no-op save and marks real chan
   assert.equal(afterRealSave.settings.status, 'unpublished_changes');
 });
 
+test('filesystem project rename keeps a published project published without rewriting its contents', async () => {
+  const created = await workflowMutations.createWorkflowProjectItem('', 'FilesystemRenameStatus');
+  const contentsBeforeRename = await fs.readFile(created.absolutePath, 'utf8');
+
+  await workflowMutations.publishWorkflowProjectItem(created.relativePath, {
+    endpointName: 'filesystem-rename-status-endpoint',
+  });
+
+  const renamed = await workflowMutations.renameWorkflowProjectItem(created.relativePath, 'FilesystemRenameStatusRenamed');
+
+  assert.equal(renamed.project.settings.status, 'published');
+  assert.equal(await fs.readFile(renamed.project.absolutePath, 'utf8'), contentsBeforeRename);
+  assert.equal(
+    (await workflowPublication.findPublishedWorkflowByEndpoint(
+      workflowsRoot,
+      'filesystem-rename-status-endpoint',
+    ))?.projectPath,
+    renamed.project.absolutePath,
+  );
+});
+
 test('published and latest workflow resolution split after unpublished changes', async () => {
   const created = await workflowMutations.createWorkflowProjectItem('', 'Resolution');
   const sidecars = workflowFs.getProjectSidecarPaths(created.absolutePath);

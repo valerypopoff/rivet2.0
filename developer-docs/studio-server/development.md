@@ -917,7 +917,7 @@ For workflow-library project rename entry behavior:
 9. press `Esc`, then repeat and click elsewhere, and confirm both paths cancel without renaming
 10. enter a new project name and press `Enter`
 11. confirm the edit field closes immediately and the old project name shows a preloader while the rename is saving
-12. confirm the saved `.rivet-project` now has `project.metadata.title` equal to the new tree name
+12. for a published project, confirm the project remains `Published` and the saved `.rivet-project` still has its pre-rename `project.metadata.title`
 13. if the project is already open, confirm the Rivet tab label, graph-list project header, Project Settings title, and other editor title surfaces change to the new tree name without closing or reloading the project
 14. confirm the renamed row keeps the previous selection/open editor tab by following the returned `movedProjectPaths`
 15. without clicking the renamed row again, press `F2` and confirm the still-selected project starts a second inline rename
@@ -925,6 +925,7 @@ For workflow-library project rename entry behavior:
 17. press a modified or held/repeating `F2` and confirm it does not begin a rename
 18. try renaming to an existing sibling project name and confirm the preloader clears and the UI shows the API conflict without leaving a stale edit field open
 19. open Project Settings separately and confirm there is no modal-level rename button or title edit field
+20. save the renamed project and confirm the saved `.rivet-project` title now aligns with the tree name; for a previously published project, confirm this real content edit becomes `Unpublished changes`
 
 For hosted editor keyboard-node behavior:
 

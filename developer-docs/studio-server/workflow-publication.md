@@ -265,7 +265,7 @@ Current creation behavior:
 
 Projects are renamed from the workflow-library project context menu or by pressing `F2` while the selected project row has focus, not from Project Settings. The project row uses the same shared inline edit field as folder rename, with the current name selected. `Esc` or click-away cancels without an API call, and `Enter` hides the field immediately while a row preloader remains until `PATCH /api/workflows/projects` resolves.
 
-Rename treats the workflow tree/file name as the project-title source of truth. After the project file and sidecars move to the new path, the backend also rewrites the saved `.rivet-project` payload so `project.metadata.title` matches the new tree name. In managed storage, the same rule is applied by creating a new current draft revision with the rewritten title and the existing dataset contents; published revisions and published version history remain immutable. This content rewrite is tied to file-name renames only; moving the same project file into another folder does not rewrite the draft payload.
+Rename changes only the workflow tree/catalog name and project path. It preserves the saved `.rivet-project` payload and, in managed storage, the current draft revision, so a published project remains published after a rename. Normal hosted project paths supply the displayed title, and the editor receives an in-memory title/path update for open tabs. A later real save aligns `project.metadata.title` with the tree name; because that changes the saved project payload, it correctly becomes unpublished changes when the project was published.
 
 When the API returns `movedProjectPaths`, the dashboard retargets the selected project, open editor tabs, and Project Settings state to the new absolute path without opening a different project. The editor bridge waits for Rivet to acknowledge the path move before the rename/move interaction completes, so immediately reactivating an already-open moved project does not race against stale editor paths and reload from disk. If an already-open project file was renamed, the editor bridge calls `RivetWorkspaceHost.updateProjectMetadata(projectId, { title }, { path, persistedExternally: true, changeSource: 'external-wrapper-rename' })` so Rivet updates the tab title, live project metadata, inactive opened snapshot, remembered path, and clean baseline through its hosted workspace seam. Folder moves and renames where the project file name is unchanged still use the same method with an empty metadata patch plus the new `path`, because the path is the part that changed. The wrapper does not reload the active project or import Rivet dirty-state atoms just to refresh title surfaces, and unrelated unsaved graph edits stay dirty. If the API rejects the rename, the preloader clears and the tree returns to the original row name while the error toast reports the server message.
 
@@ -868,6 +868,14 @@ When a project or folder is renamed, moved, duplicated, uploaded, downloaded, or
 - **Rename/move**
   - `moveProjectWithSidecars()` renames the project, `.rivet-data`, and `.wrapper-settings.json`
   - folder moves calculate all affected absolute project paths so the dashboard/editor bridge can retarget open tabs
+  - a project rename changes only the catalog name and storage path; it does not
+    rewrite project YAML, create a draft revision, or alter a published snapshot
+  - published endpoints and web apps retain the same immutable revision, so a
+    rename alone leaves them callable and published
+  - hosted editor titles are derived from normal project paths, so open and
+    subsequently opened tabs display the new name without a content mutation;
+    a later real project save may persist the normal filename/title alignment
+    and therefore correctly become unpublished changes
 - **Duplicate**
   - creates only a new `.rivet-project` file in the same folder
   - can duplicate either the saved live file or the published snapshot when both exist
