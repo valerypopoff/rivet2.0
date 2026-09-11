@@ -201,7 +201,17 @@ export class SubGraphNodeImpl extends NodeImpl<SubGraphNode> {
         context,
         inputData as Record<string, DataValue>,
         context.contextValues,
-        requestedGraphOutputIds ? { requestedGraphOutputIds } : undefined,
+        {
+          ...(requestedGraphOutputIds ? { requestedGraphOutputIds } : {}),
+          // A child Graph Output can relay a direct producer's partial value
+          // under the public boundary port ID. An Error-output Subgraph may
+          // later replace that same normal output with an exclusion, so it is
+          // final-only even if a caller supplies this internal callback.
+          // The parent owns all Watch scheduling.
+          ...(context.onGraphOutputPartial && this.data.useErrorOutput !== true
+            ? { onGraphOutputPartial: context.onGraphOutputPartial }
+            : {}),
+        },
       );
       const duration = Date.now() - startTime;
 

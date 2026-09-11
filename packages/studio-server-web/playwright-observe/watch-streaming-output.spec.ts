@@ -132,3 +132,91 @@ test('Watch Streaming Output exposes its chunk outputs', async ({ page }) => {
   await editor.getByText('Parallel', { exact: true }).click();
   await expect(editor.getByLabel('Maximum parallel runs')).toBeVisible();
 });
+
+test('Watch Streaming Output accepts a named Subgraph streaming output', async ({ page }) => {
+  const graphId = 'watch-subgraph-streaming-output-graph';
+  const childGraphId = 'streaming-child-graph';
+
+  await seedHostedEditorProject(page, {
+    graph: {
+      nodes: [
+        {
+          data: { graphId: childGraphId },
+          id: 'streaming-subgraph',
+          title: 'Streaming child',
+          type: 'subGraph',
+          visualData: { width: 260, x: 50, y: 300 },
+        },
+        {
+          data: {
+            executionMode: 'sequential',
+            intervalMs: 1_000,
+            maxParallelRuns: 4,
+            maxQueuedUpdates: 32,
+            triggerMode: 'every-update',
+          },
+          id: 'watch-subgraph-output',
+          title: 'Watch Streaming Output',
+          type: 'watchStreamingOutput',
+          visualData: { width: 230, x: 450, y: 300 },
+        },
+      ],
+      connections: [
+        {
+          inputId: 'stream',
+          inputNodeId: 'watch-subgraph-output',
+          outputId: 'response',
+          outputNodeId: 'streaming-subgraph',
+        },
+      ],
+    },
+    extraGraphs: [
+      {
+        id: childGraphId,
+        name: 'Streaming child',
+        nodes: [
+          {
+            data: {},
+            id: 'child-llm',
+            title: 'LLM Chat',
+            type: 'llmChatV2',
+            visualData: { width: 260, x: 50, y: 300 },
+          },
+          {
+            data: { dataType: 'string', id: 'response' },
+            id: 'child-response-output',
+            title: 'Graph Output',
+            type: 'graphOutput',
+            visualData: { width: 220, x: 400, y: 300 },
+          },
+        ],
+        connections: [
+          {
+            inputId: 'value',
+            inputNodeId: 'child-response-output',
+            outputId: 'response',
+            outputNodeId: 'child-llm',
+          },
+        ],
+      },
+    ],
+    graphId,
+    loaded: true,
+    projectId: 'watch-subgraph-streaming-output-project',
+    projectPath: '/workflows/Watch Subgraph Streaming Output.rivet-project',
+    title: 'Watch Subgraph Streaming Output',
+  });
+
+  await page.goto('/?editor', { waitUntil: 'domcontentloaded' });
+  await authenticateIfNeeded(page);
+
+  const editor = await getEditorRoot(page);
+  const subgraph = editor.locator('.node[data-nodeid="streaming-subgraph"]');
+  const watch = editor.locator('.node[data-nodeid="watch-subgraph-output"]');
+  await expect(subgraph).toBeVisible({ timeout: 60_000 });
+  await expect(subgraph.locator('.output-port[data-portid="response"]')).toBeVisible();
+  await expect(watch.locator('.input-port[data-portid="stream"]')).toBeVisible();
+
+  const streamingWatchMarkers = editor.locator('svg .streaming-output-watch-marker-path');
+  await expect.poll(async () => streamingWatchMarkers.count()).toBeGreaterThan(1);
+});

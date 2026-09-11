@@ -67,6 +67,40 @@ The final producer output is also offered to the watch. This means a
 non-streaming producer, or an LLM call that produces no usable partial value,
 can still take the same path once it finishes.
 
+## Watching a Subgraph output
+
+Streaming can cross a graph boundary without a special wrapper node or setting.
+Inside the child graph, connect the streaming producer directly to a named
+**Graph Output**. The matching output port on its **Subgraph** node or
+**Referenced Graph Alias** then emits the same partial snapshots, so it can
+connect to **Watch Streaming Output** in the parent graph.
+
+For example, enable **Stream response** on LLM Chat, connect its **Response**
+to a Graph Output named `response`, then connect the Subgraph node's
+`response` port to a Watch. This works through more than one nested Subgraph
+and through a Data Bus. The same Watch queue, concurrency, overflow, Stop, and
+history rules apply at the parent connection.
+
+The Graph Output must receive the producer directly in the effective graph
+topology. If you put an ordinary node between LLM Chat and Graph Output, that
+node remains final-only and the parent Watch receives only the completed
+Subgraph output. This prevents ordinary graph branches from unexpectedly
+running once per chunk.
+
+The parent also receives only the completed value when that Graph Output is
+conditional, uses **Many** runs, shares its output name with another Graph
+Output, has a frozen saved result, is fed by a **Many** producer, or belongs
+to a Subgraph or Referenced Graph Alias with **Use Error Output** enabled.
+Those boundaries can select, aggregate, or replace a different final value. If
+a conditional Graph Output is false, the parent Watch receives no chunks and
+its optional Stop output stays excluded, so ordinary fallback paths can
+continue. If the child fails while **Use Error Output** is enabled, no partial
+chunks cross the boundary: the caller instead returns excluded normal outputs
+and its Error output. **Call Graph**, **Cron**, and **Loop Until** do not relay
+direct child Graph Output chunks through this route because their outputs
+aggregate or transform child-graph results. **Loop Until** can still emit its
+own per-iteration output updates.
+
 ## Reusing saved results
 
 When you use **Run from Watch Streaming Output**, Rivet can reuse the connected

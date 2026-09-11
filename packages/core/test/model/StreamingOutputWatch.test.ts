@@ -149,6 +149,31 @@ void describe('StreamingOutputWatch', () => {
     });
   });
 
+  void it('ignores late partial and duplicate terminal callbacks after the producer has finished', async () => {
+    const processedUpdates: number[] = [];
+    const watch = new StreamingOutputWatch(
+      streamingOutputWatchDefaults,
+      async (snapshot) => {
+        processedUpdates.push(snapshot.updateIndex);
+      },
+      (error) => assert.fail(error.message),
+      { requiresAcceptedStop: false },
+    );
+
+    watch.finish({ outputs: {}, updateIndex: 2, isFinal: true });
+    watch.finish({ outputs: {}, updateIndex: 3, isFinal: true });
+    watch.publish({ outputs: {}, updateIndex: 3, isFinal: false });
+
+    await withTimeout(watch.drain(), 'the completed watch with a late callback');
+    assert.deepEqual(processedUpdates, [2]);
+    assert.deepEqual(watch.runtimeSummary, {
+      receivedUpdates: 1,
+      coalescedUpdates: 0,
+      droppedUpdates: 0,
+      maximumQueuedUpdates: 1,
+    });
+  });
+
   void it('preserves the winning run until a later cancellation stops it exactly once', async () => {
     const started = deferred();
     const register = deferred();

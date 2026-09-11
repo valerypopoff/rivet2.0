@@ -28,6 +28,31 @@ Skipped work also skips global or stored-value writes, events, dataset changes, 
 
 The same setting applies when running headlessly through Node, the CLI, or Studio Server, and when the Subgraph is inside a loop or uses **Many parallel runs** / **Many sequential runs**. Each item and iteration keeps its own child execution; pruning does not change result order. Recordings contain only work that actually started and can be replayed normally. A deployed server or executor must be updated to a version that includes this feature; updating the browser editor alone does not update a separately deployed Node executor.
 
+### Streaming a named output to a parent graph
+
+A child graph can expose an LLM Chat stream to its caller. Connect the LLM
+Chat **Response** directly to a named **Graph Output**, then connect that named
+port on the **Subgraph** or **Referenced Graph Alias** node to
+[Watch Streaming Output](../node-reference/watch-streaming-output.mdx) in the
+parent graph. The child does not need a special streaming setting beyond LLM
+Chat's **Stream response** option, and the pattern can continue through nested
+Subgraphs and referenced graphs. An ordinary node between the LLM and Graph
+Output remains final-only, so use the direct connection when the parent needs
+partial chunks.
+Conditional and **Many** Graph Outputs, duplicate output names, frozen saved
+outputs, **Many** producers, and a Subgraph or Referenced Graph Alias with
+**Use Error Output** enabled are final-only too: the caller first applies its
+selection, aggregation, or error-handling rule, then sends the ordinary
+completed value. If a conditional output is false, the parent Watch receives
+no chunks and can continue through its normal excluded-output fallback. If the
+child fails with **Use Error Output** enabled, no partial chunks escape; the
+caller receives the normal excluded outputs and its Error output instead.
+
+**Call Graph**, **Cron**, and **Loop Until** do not relay direct child Graph
+Output chunks through this route: their outputs aggregate or transform
+child-graph results instead of exposing named Graph Output ports directly.
+**Loop Until** can still emit its own per-iteration output updates.
+
 ### Rearranging Subgraph ports
 
 To change the visual order of a Subgraph node's graph input and graph output ports, right-click the Subgraph node and choose **Rearrange inputs/outputs**. The draggable port labels get rounded backgrounds while rearrange mode is active. Drag a port label or row up and down; the other labels shift while you drag, so you can drop a port between existing ports. Click outside the node to leave rearrange mode. The circular port handles still create and rewire connections. Port ordering is saved for that Subgraph node instance only; it does not change port IDs, connections, or output object keys. The optional error output stays after the graph outputs.

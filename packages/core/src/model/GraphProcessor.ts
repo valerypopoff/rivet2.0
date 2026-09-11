@@ -1,4 +1,5 @@
 import {
+  type DataType,
   type DataValue,
   type StringArrayDataValue,
   type ControlFlowExcludedDataValue,
@@ -12,6 +13,7 @@ import {
   type NodeInputDefinition,
   type NodeOutputDefinition,
   type PortId,
+  IF_PORT,
 } from './NodeBase.js';
 import type { GraphId, NodeGraph } from './NodeGraph.js';
 import type { NodeImpl } from './NodeImpl.js';
@@ -47,7 +49,12 @@ import {
 } from './GraphPreprocessor.js';
 import { getGraphBoundary, type GraphBoundary, type GraphBoundaryCache } from './GraphBoundaryCache.js';
 import { createGraphOutputSelection, type GraphOutputSelection } from './GraphOutputSelection.js';
-import { applyFrozenGraphBoundaryEffects, ensureGraphCostOutput } from './GraphBoundaryEffects.js';
+import {
+  applyFrozenGraphBoundaryEffects,
+  commitGraphOutputValue,
+  ensureGraphCostOutput,
+} from './GraphBoundaryEffects.js';
+import { coerceGraphOutputValue, type GraphOutputNode } from './nodes/GraphOutputNode.js';
 import { replayExecutionRecording } from './RecordingPlayer.js';
 import { didLoopControllerBreak, LOOP_NOT_BROKEN_SENTINEL } from './loopControllerBreak.js';
 import { buildNodeProcessContext, type NodeProcessContextBase } from './ProcessContextBuilder.js';
@@ -145,7 +152,8 @@ export type EventOccurrenceTiming = {
   eventOccurredAt?: number;
 };
 
-type WithExecution<T extends object> = T & { execution: GraphExecutionMetadata } & ReplayEventTiming & EventOccurrenceTiming;
+type WithExecution<T extends object> = T & { execution: GraphExecutionMetadata } & ReplayEventTiming &
+  EventOccurrenceTiming;
 type NodeTimingStart = number | undefined;
 type NodeAbortControllerEntry = AbortController | Set<AbortController>;
 const graphProcessorGraphOverride = Symbol('graphProcessorGraphOverride');
@@ -189,6 +197,23 @@ type StreamingOutputWatchInvocation = {
    */
   stopReached: boolean;
 };
+
+type GraphOutputPartialBinding = {
+  dataType: DataType;
+  graphOutputId: string;
+  sourceOutputId: PortId;
+};
+
+/**
+ * These nodes expose a child graph's named Graph Output ports verbatim. Other
+ * nodes that happen to run a graph (for example Call Graph or Loop Until)
+ * aggregate or transform child outputs, so streaming through them would not
+ * have the same terminal semantics.
+ */
+function isNamedGraphBoundaryCaller(node: ChartNode): boolean {
+  return node.type === 'subGraph' || node.type === 'referencedGraphAlias';
+}
+
 function createGraphOutputsOverlay(parent: GraphOutputs): { view: GraphOutputs; writes: GraphOutputs } {
   const writes: GraphOutputs = {};
   const view = new Proxy(writes, {
@@ -370,6 +395,14 @@ export type ProcessEvent = {
 export type GraphOutputs = Record<string, DataValue>;
 export type GraphInputs = Record<string, DataValue>;
 
+/**
+ * Ephemeral named Graph Output updates. This is deliberately an in-process
+ * callback rather than a ProcessEvent: it bridges a named graph-boundary
+ * caller's execution boundary for a parent Watch without adding a second
+ * recorded/node-history stream for every token.
+ */
+type GraphOutputPartialListener = (outputs: GraphOutputs) => void;
+
 export type NodeResults = Map<NodeId, Outputs>;
 export type Inputs = NodeInputs;
 export type Outputs = NodeOutputs;
@@ -384,7 +417,22 @@ export type FrozenNodeOutputResolverRequest = {
   processId: ProcessId;
 };
 
-export type FrozenNodeOutputResolver = (request: FrozenNodeOutputResolverRequest) => Outputs | undefined;
+export type FrozenNodeOutputEligibilityRequest = Pick<FrozenNodeOutputResolverRequest, 'graphId' | 'node'>;
+
+/**
+ * A resolver may expose this non-consuming predicate when it can determine
+ * whether a node has frozen output without advancing its replay cursor.
+ * Streaming topology preparation uses it to keep a frozen named boundary
+ * final-only; custom resolvers without the predicate are conservatively
+ * treated as unknown rather than invoked speculatively. Return `false` only
+ * when this resolver cannot produce frozen output for the node in this run;
+ * returning `true` is allowed to be conservative and merely makes the
+ * boundary final-only.
+ */
+export type FrozenNodeOutputResolver = {
+  (request: FrozenNodeOutputResolverRequest): Outputs | undefined;
+  hasFrozenNodeOutput?: (request: FrozenNodeOutputEligibilityRequest) => boolean;
+};
 
 export function cloneFrozenNodeOutputs(outputs: Outputs): Outputs {
   if (typeof structuredClone !== 'function') {
@@ -429,7 +477,7 @@ export function createFrozenNodeOutputResolver(
 
   const countersByGraphRunAndNode = new Map<string, number>();
 
-  return ({ execution, graphId, node }) => {
+  const resolver: FrozenNodeOutputResolver = ({ execution, graphId, node }) => {
     const outputInstances = outputsByGraph?.[graphId]?.[node.id];
     if (!outputInstances?.length) {
       return undefined;
@@ -441,6 +489,10 @@ export function createFrozenNodeOutputResolver(
 
     return cloneFrozenNodeOutputs(outputInstances[Math.min(currentIndex, outputInstances.length - 1)]!);
   };
+
+  resolver.hasFrozenNodeOutput = ({ graphId, node }) => (outputsByGraph?.[graphId]?.[node.id]?.length ?? 0) > 0;
+
+  return resolver;
 }
 
 export type ExternalFunctionProcessContext = Omit<InternalProcessContext, 'setGlobal'>;
@@ -629,6 +681,8 @@ export class GraphProcessor {
   #streamingWatchPlansBySourceNodeId = new Map<NodeId, StreamingOutputWatchPlan[]>();
   #streamingWatchPlansByWatchNodeId = new Map<NodeId, StreamingOutputWatchPlan>();
   #streamingOutputWatches = new Map<NodeId, StreamingOutputWatch>();
+  #graphOutputPartialBindingsBySourceNodeId = new Map<NodeId, GraphOutputPartialBinding[]>();
+  #graphOutputPartialListener: GraphOutputPartialListener | undefined;
   readonly #consumedStreamingWatchNodeId: NodeId | undefined;
   #streamingWatchInvocation: StreamingOutputWatchInvocation | undefined;
   readonly #registry: NodeRegistration<any, any>;
@@ -1285,6 +1339,7 @@ export class GraphProcessor {
     this.#streamingWatchPlansBySourceNodeId = new Map();
     this.#streamingWatchPlansByWatchNodeId = new Map();
     this.#streamingOutputWatches = new Map();
+    this.#graphOutputPartialBindingsBySourceNodeId = new Map();
     this.#loopControllersSeen = new Set();
     this.#subprocessors = new Set();
     this.#attachedNodeData = this.#sharedRunStateOverride?.attachedNodeData ?? new Map();
@@ -1335,6 +1390,13 @@ export class GraphProcessor {
       returnWhenGraphOutputsReady?: boolean;
       /** Restrict this invocation to named graph outputs and their prerequisites. Cannot be combined with runToNodeIds. */
       requestedGraphOutputIds?: readonly string[];
+      /**
+       * Receives partial values only when a producer directly feeds a named
+       * Graph Output. Used internally to stream a named graph-boundary caller
+       * output to its parent without changing the persisted graph or public
+       * event protocol.
+       */
+      onGraphOutputPartial?: GraphOutputPartialListener;
     } = {},
   ): Promise<GraphOutputs> {
     if (this.#lifecycle.isRunning) {
@@ -1342,6 +1404,7 @@ export class GraphProcessor {
     }
 
     const requestedGraphOutputIds = options.requestedGraphOutputIds?.slice();
+    this.#graphOutputPartialListener = options.onGraphOutputPartial;
 
     let resolveOutputsReady: ((outputs: GraphOutputs) => void) | undefined;
     let rejectOutputsReady: ((error: unknown) => void) | undefined;
@@ -1390,6 +1453,7 @@ export class GraphProcessor {
           }
           this.#prepareAsyncBranchTopology();
           this.#prepareStreamingWatchTopology();
+          this.#prepareGraphOutputPartialTopology();
         } catch (error) {
           const normalizedError = getError(error);
           await this.#emitRootStartupError(normalizedError);
@@ -1435,6 +1499,7 @@ export class GraphProcessor {
         return await this.#profileRuntimeAsync('finalizeGraphRun', () => this.#finalizeGraphRun());
       } finally {
         await this.#drainSchedulerBoundaries();
+        this.#graphOutputPartialListener = undefined;
         this.#lifecycle.complete();
         this.#cleanupTokenizerErrorListener();
 
@@ -3139,6 +3204,15 @@ export class GraphProcessor {
     markResultAsEditorCacheHit?: InternalProcessContext['markResultAsEditorCacheHit'],
   ): InternalProcessContext {
     const plugin = this.#registry.getPluginFor(node.type);
+    const onGraphOutputPartial =
+      isNamedGraphBoundaryCaller(node) &&
+      (this.#streamingWatchPlansBySourceNodeId.has(node.id) ||
+        this.#graphOutputPartialBindingsBySourceNodeId.has(node.id))
+        ? (partialOutputs: Outputs) => {
+            this.#publishStreamingOutputWatchPartial(node, partialOutputs);
+            this.#publishGraphOutputPartial(node, partialOutputs);
+          }
+        : undefined;
     const toolCallContinuation = this.#getToolCallContinuationContext(
       node,
       nodeAbortController.signal,
@@ -3159,9 +3233,11 @@ export class GraphProcessor {
       markResultAsEditorCacheHit,
       node,
       nodeAbortController,
+      onGraphOutputPartial,
       onPartialOutputs: (partialOutputs) => {
         partialOutput?.(node, partialOutputs, index);
         this.#publishStreamingOutputWatchPartial(node, partialOutputs);
+        this.#publishGraphOutputPartial(node, partialOutputs);
         this.#emitGraphPartialOutputIfNeeded(node, partialOutputs);
       },
       acceptStreamingWatchStop:
@@ -3932,6 +4008,111 @@ export class GraphProcessor {
       }
       const updateIndex = this.#nextStreamingWatchUpdateIndex(plan);
       watch.publish(this.#createStreamingOutputWatchSnapshot(plan, value, updateIndex, false));
+    }
+  }
+
+  #prepareGraphOutputPartialTopology(): void {
+    if (!this.#graphOutputPartialListener) {
+      return;
+    }
+
+    const relevantNodeIds = this.#getExecutionRelevantNodeIds();
+    const graphOutputCountsById = new Map<string, number>();
+    for (const node of Object.values(this.#nodesById)) {
+      if (node.type !== 'graphOutput' || node.disabled || (relevantNodeIds != null && !relevantNodeIds.has(node.id))) {
+        continue;
+      }
+      const outputId = (node as GraphOutputNode).data.id;
+      graphOutputCountsById.set(outputId, (graphOutputCountsById.get(outputId) ?? 0) + 1);
+    }
+
+    for (const connection of this.#getEffectiveConnections()) {
+      if (!this.#isDefinitionValidConnection(connection) || connection.inputId !== ('value' as PortId)) {
+        continue;
+      }
+
+      const graphOutput = this.#nodesById[connection.inputNodeId];
+      if (
+        graphOutput?.type !== 'graphOutput' ||
+        graphOutput.disabled ||
+        (relevantNodeIds != null && !relevantNodeIds.has(graphOutput.id))
+      ) {
+        continue;
+      }
+
+      const graphOutputData = (graphOutput as GraphOutputNode).data;
+      // Graph Outputs with the same public ID retain their long-standing
+      // first-terminal-value-wins behavior. Before that winner is known, a
+      // partial value would be ambiguous, so let the parent Watch receive
+      // only the ordinary final named-boundary output.
+      if (graphOutputCountsById.get(graphOutputData.id)! > 1) {
+        continue;
+      }
+      const sourceNode = this.#nodesById[connection.outputNodeId];
+      if (!sourceNode || !this.#canStreamAcrossGraphOutput(graphOutput, sourceNode)) {
+        continue;
+      }
+      const bindings = this.#graphOutputPartialBindingsBySourceNodeId.get(connection.outputNodeId) ?? [];
+      bindings.push({
+        dataType: graphOutputData.dataType,
+        graphOutputId: graphOutputData.id,
+        sourceOutputId: connection.outputId,
+      });
+      this.#graphOutputPartialBindingsBySourceNodeId.set(connection.outputNodeId, bindings);
+    }
+  }
+
+  /**
+   * A named Graph Output can forward a partial only when its terminal result
+   * is determined by that same direct producer. Conditions, split aggregation,
+   * and frozen replay each introduce an independent boundary decision, so they
+   * remain final-only just like an ordinary intermediate node.
+   */
+  #canStreamAcrossGraphOutput(graphOutput: ChartNode, sourceNode: ChartNode): boolean {
+    if (graphOutput.isConditional || graphOutput.isSplitRun || sourceNode.isSplitRun) {
+      return false;
+    }
+
+    return !this.#hasFrozenNodeOutputOrUnknownResolver(graphOutput);
+  }
+
+  #hasFrozenNodeOutputOrUnknownResolver(node: ChartNode): boolean {
+    const resolver = this.#frozenNodeOutputResolver;
+    if (!resolver) {
+      return false;
+    }
+
+    // Do not call a resolver during topology preparation: generated resolvers
+    // advance a per-node replay cursor, and arbitrary resolvers may have side
+    // effects. The built-in resolver answers precisely; an opaque custom
+    // resolver is final-only until execution resolves its value normally.
+    return resolver.hasFrozenNodeOutput?.({ graphId: this.#graph.metadata!.id!, node }) !== false;
+  }
+
+  /**
+   * A Graph Output is a named boundary, so only a direct effective connection
+   * may make its source node stream across a Subgraph. The preprocessed
+   * connections also cover Data Bus routes while excluding ordinary
+   * intermediate nodes, which must still wait for their normal final input.
+   */
+  #publishGraphOutputPartial(node: ChartNode, partialOutputs: Outputs): void {
+    const listener = this.#graphOutputPartialListener;
+    const bindings = this.#graphOutputPartialBindingsBySourceNodeId.get(node.id);
+    if (!listener || !bindings) {
+      return;
+    }
+
+    const outputs: GraphOutputs = {};
+    for (const binding of bindings) {
+      const partialValue = partialOutputs[binding.sourceOutputId];
+      if (partialValue == null || partialValue.type === 'control-flow-excluded') {
+        continue;
+      }
+      outputs[binding.graphOutputId] = coerceGraphOutputValue(partialValue, binding.dataType);
+    }
+
+    if (Object.keys(outputs).length > 0) {
+      listener(outputs);
     }
   }
 
@@ -4808,6 +4989,7 @@ export class GraphProcessor {
     const outputs = createExcludedNodeOutputs(node, this.#definitions[node.id]!.outputs);
 
     this.#nodeResults.set(node.id, outputs);
+    this.#commitExcludedGraphOutput(node, inputValues, outputs);
 
     return this.#withExecution({
       node,
@@ -4817,6 +4999,19 @@ export class GraphProcessor {
       reason,
       resultOrigin,
     });
+  }
+
+  #commitExcludedGraphOutput(node: ChartNode, inputs: Inputs, outputs: Outputs): void {
+    const isFalseCondition = node.isConditional && coerceTypeOptional(inputs[IF_PORT.id], 'boolean') === false;
+    if (node.type !== 'graphOutput' || (inputs['value' as PortId] == null && !isFalseCondition)) {
+      return;
+    }
+
+    const outputId = (node as GraphOutputNode).data.id;
+    const value = outputs['valueOutput' as PortId];
+    if (value) {
+      commitGraphOutputValue(this.#graphOutputs, outputId, value);
+    }
   }
 
   #getInputValuesForNode(node: ChartNode): Inputs {

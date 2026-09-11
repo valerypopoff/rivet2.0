@@ -171,7 +171,10 @@ export class StreamingOutputWatch {
   }
 
   publish(snapshot: StreamingOutputWatchSnapshot): void {
-    if (this.#stopped || this.#failure) {
+    // A producer's terminal snapshot closes its partial stream. Ignore a
+    // misbehaving late callback rather than scheduling work after a final
+    // result has already been offered to Stop and ordinary downstream nodes.
+    if (this.#stopped || this.#failure || this.#producerFinished) {
       return;
     }
     this.#receivedUpdates += 1;
@@ -189,7 +192,7 @@ export class StreamingOutputWatch {
   }
 
   finish(finalSnapshot: StreamingOutputWatchSnapshot): void {
-    if (this.#stopped || this.#failure) {
+    if (this.#stopped || this.#failure || this.#producerFinished) {
       return;
     }
     this.#receivedUpdates += 1;

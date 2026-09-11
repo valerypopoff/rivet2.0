@@ -35,6 +35,7 @@ void it('binds global and stored-value waits to the node signal by default and f
     isDirectRunTarget: false,
     node: { id: 'node' as NodeId, type: 'text', title: 'Node', data: {}, visualData: { x: 0, y: 0 } },
     nodeAbortController,
+    onGraphOutputPartial: () => {},
     onPartialOutputs: () => {},
     processId: 'process' as ProcessId,
     requestUserInput: async () => ({ type: 'string[]', value: [] }),

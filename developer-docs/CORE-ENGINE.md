@@ -973,6 +973,72 @@ to a one-hour interval, 32 concurrent child runs, and 1,024 queued snapshots.
 The producer's final output is offered as one final snapshot only after its
 awaited `nodeFinish` event, so a non-streaming or late-starting producer can
 use the same topology.
+Once that final snapshot is accepted, the Watch closes its partial stream;
+late `onPartialOutputs` callbacks from a misbehaving producer are ignored and
+cannot schedule a branch after ordinary final execution has begun.
+
+#### Named streaming outputs across graph-boundary callers
+
+A child graph may expose a stream through a normal named **Graph Output**. If
+an emitting node directly feeds that Graph Output in the effective topology,
+Core maps its partial port value through the Graph Output's normal data-type
+coercion and relays it under the Graph Output ID. The enclosing **Subgraph**
+or **Referenced Graph Alias** then behaves as the streaming producer for a
+parent **Watch Streaming Output** connected to that named output. This repeats
+recursively through nested Subgraphs and Referenced Graph Aliases and works
+through a Data Bus because preprocessing resolves a bus channel to its real
+effective producer. Dynamic graph callers such as **Call Graph**, **Cron**, and
+**Loop Until** do not relay direct child Graph Output partials through this
+channel: they expose an
+aggregate or transformed child-output contract rather than named boundary
+ports. **Loop Until** may still publish its own per-iteration partials through
+its ordinary output contract.
+
+The relay is an internal execution callback, not a `partialOutput`
+`ProcessEvent`: it does not add a second event stream to node history,
+recordings, remote transport, or inspection. The parent Watch is the single
+owner of its snapshots, queues, retained branch evidence, cancellation, and
+final delivery. Stop is bound to that parent Watch's invocation; it clears the
+Watch's queued updates and returns its accepted value to ordinary parent
+execution without aborting the child producer. A downstream join can therefore
+combine that accepted value with the child's eventual final output. The normal
+child-node partial event still has its existing observability behavior.
+
+Only a direct effective producer-to-Graph Output connection creates this
+boundary stream. An ordinary node between them continues to receive the final
+value normally and cannot silently become repeatable. Completion, exclusion,
+preload/frozen final-result handling, and errors retain the caller's usual
+semantics: the named output's final value is delivered once through the caller,
+while an error cancels any parent Watch work owned by that output.
+
+A direct boundary is still **final-only** when its Graph Output is conditional,
+split-run, or known to have frozen output; when its direct producer is
+split-run; or when the enclosing Subgraph or Referenced Graph Alias exposes an
+Error output. In each case another boundary rule can determine, aggregate, or
+replace the terminal value, so forwarding a raw producer partial would let the
+parent act on a value its caller never returns. A false conditional Graph
+Output writes its named control-flow exclusion into the child result map; the parent Watch stops
+without starting a branch and its Stop output remains excluded for normal
+fallback paths. An error-handling named-boundary caller similarly withholds
+child partials until it either returns the ordinary final value or replaces
+normal outputs with exclusions and its Error output.
+`createFrozenNodeOutputResolver(...)` exposes a non-consuming
+`hasFrozenNodeOutput(...)` predicate so topology
+preparation can make this decision without advancing a replay cursor. A custom
+frozen resolver that does not provide that predicate is intentionally
+final-only at named boundaries; Core never calls an arbitrary resolver
+speculatively. Frozen output for an unrelated child node does not disable a
+live boundary stream.
+Custom predicates must return `false` only when their resolver cannot produce
+frozen output for that node in the run; returning `true` conservatively makes
+the boundary final-only.
+
+Duplicate enabled Graph Outputs with the same ID are intentionally
+**final-only** at this boundary. Their established terminal rule is that the
+first completed Graph Output owns the ID; before that point no partial value
+is authoritative. The editor already warns about this configuration, and the
+relay preserves its terminal behavior instead of letting a Watch act on a
+non-winning producer.
 
 #### Saved results and streaming boundaries
 
@@ -1179,7 +1245,10 @@ topology rejection, root abort, per-invocation race/loop isolation, subgraph cos
 attribution, source exclusion propagation, retention of the first three plus the
 decisive/latest iteration, immutable deferred payloads and their original timing,
 compact-summary replay, nested-Watch rejection through Subgraphs, and recording
-event lineage. Include a
+event lineage. Named Subgraph-output coverage must also include conditional
+exclusion, delayed conditional completion, frozen-boundary cursor safety,
+unrelated frozen output, opaque frozen resolvers, and sequential/parallel
+split producers plus split Graph Outputs. Include a
 source-that-finishes-before-Stop case so the post-Stop parent queue and any
 subsequent async work cannot be finalized early.
 Browser/editor coverage must additionally prove that

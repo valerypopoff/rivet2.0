@@ -1,6 +1,12 @@
 import type { Page } from '@playwright/test';
 
 export type SeedHostedEditorProjectOptions = {
+  extraGraphs?: Array<{
+    connections?: unknown[];
+    id: string;
+    name?: string;
+    nodes?: unknown[];
+  }>;
   graph?: {
     connections?: unknown[];
     nodes?: unknown[];
@@ -24,6 +30,20 @@ export async function seedHostedEditorProject(page: Page, options: SeedHostedEdi
       nodes: seed.graph?.nodes ?? [],
       connections: seed.graph?.connections ?? [],
     };
+    const extraGraphs = Object.fromEntries(
+      (seed.extraGraphs ?? []).map((extraGraph) => [
+        extraGraph.id,
+        {
+          metadata: {
+            id: extraGraph.id,
+            name: extraGraph.name ?? extraGraph.id,
+            description: '',
+          },
+          nodes: extraGraph.nodes ?? [],
+          connections: extraGraph.connections ?? [],
+        },
+      ]),
+    );
 
     // The editor persists its active graph separately from the project. Seed both
     // layers so fixtures with graph contents do not open an unrelated blank graph.
@@ -49,6 +69,7 @@ export async function seedHostedEditorProject(page: Page, options: SeedHostedEdi
           },
           graphs: {
             [seed.graphId]: graph,
+            ...extraGraphs,
           },
           plugins: [],
         },

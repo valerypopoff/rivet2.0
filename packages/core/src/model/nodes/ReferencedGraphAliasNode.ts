@@ -197,6 +197,15 @@ export class ReferencedGraphAliasNodeImpl extends NodeImpl<ReferencedGraphAliasN
         context,
         inputData as Record<string, DataValue>,
         context.contextValues,
+        {
+          // This node preserves the referenced graph's named boundary ports,
+          // so it may relay their direct producer partials to a parent Watch.
+          // An Error-output alias can replace normal ports with exclusions,
+          // making it final-only just like an Error-output Subgraph.
+          ...(context.onGraphOutputPartial && this.data.useErrorOutput !== true
+            ? { onGraphOutputPartial: context.onGraphOutputPartial }
+            : {}),
+        },
       );
 
       const duration = Date.now() - startTime;
