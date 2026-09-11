@@ -40,6 +40,8 @@ import {
   canUseNodeAsPrefabSource,
   getNodePrefabUsage,
   getNodePrefabUsageLabel,
+  getNodePrefabUsages,
+  type NodePrefabUsage,
 } from '../domain/nodeLibrary/nodePrefabs.js';
 import { createPastedNodeLibraryPrefabs } from '../domain/nodeLibrary/nodePrefabClipboard.js';
 import { isNotNull } from '../utils/genericUtilFunctions.js';
@@ -52,6 +54,8 @@ import {
 } from '../state/recoverableNodeConnections.js';
 import { reconcileNodePrefabInstanceConnectionsInGraph } from '../domain/nodeLibrary/nodePrefabConnectionRecovery.js';
 import { clipboardState } from '../state/clipboard.js';
+import { NodeLibraryReferencesContext } from './visualNode/NodeLibraryReferences.js';
+import { useGoToNode } from '../hooks/useGoToNode.js';
 
 const Container = styled.div`
   position: relative;
@@ -126,6 +130,20 @@ export const NodeLibraryBuilder: FC = () => {
   latestCanvasPositionRef.current = canvasPosition;
 
   const prefabs = useMemo(() => Object.values(project.nodePrefabs ?? {}), [project.nodePrefabs]);
+  const goToNode = useGoToNode();
+  const usagesByPrefabId = useMemo(() => getNodePrefabUsages(project, [currentGraph]), [project, currentGraph]);
+  const referenceUsages = useMemo(
+    () => new Map(prefabs.map((prefab) => [prefab.sourceNode.id, usagesByPrefabId.get(prefab.id) ?? []])),
+    [prefabs, usagesByPrefabId],
+  );
+  const onNavigateReference = useStableCallback((usage: NodePrefabUsage) => {
+    goToNode(usage.nodeId, { graphId: usage.graph.metadata?.id });
+    setSelectedNodeIds([usage.nodeId]);
+  });
+  const referencesContext = useMemo(
+    () => ({ usages: referenceUsages, onNavigate: onNavigateReference }),
+    [referenceUsages, onNavigateReference],
+  );
   const nodes = useMemo(() => prefabs.map((prefab) => prefab.sourceNode), [prefabs]);
   const prefabsBySourceNodeId = useMemo(
     () => new Map(prefabs.map((prefab) => [getPrefabSourceId(prefab), prefab])),
@@ -505,21 +523,23 @@ export const NodeLibraryBuilder: FC = () => {
         </div>
       )}
       <EditNodeCommandOverrideContext.Provider value={editPrefabSourceNode}>
-        <NodeCanvas
-          nodes={nodes}
-          connections={[]}
-          onNodesChanged={handleNodesChanged}
-          onConnectionsChanged={() => {}}
-          onNodeSelected={handleNodeSelected}
-          selectedNodes={selectedNodes}
-          onNodeStartEditing={(node) => setEditingPrefabId(prefabsBySourceNodeId.get(node.id)?.id)}
-          onCanvasClick={closeEditor}
-          onNodesDeleted={deletePrefabSources}
-          onContextMenuItemSelected={handleContextMenuItemSelected}
-          disableConnections
-          disableGraphCommands
-          pasteCommandsEnabled
-        />
+        <NodeLibraryReferencesContext.Provider value={referencesContext}>
+          <NodeCanvas
+            nodes={nodes}
+            connections={[]}
+            onNodesChanged={handleNodesChanged}
+            onConnectionsChanged={() => {}}
+            onNodeSelected={handleNodeSelected}
+            selectedNodes={selectedNodes}
+            onNodeStartEditing={(node) => setEditingPrefabId(prefabsBySourceNodeId.get(node.id)?.id)}
+            onCanvasClick={closeEditor}
+            onNodesDeleted={deletePrefabSources}
+            onContextMenuItemSelected={handleContextMenuItemSelected}
+            disableConnections
+            disableGraphCommands
+            pasteCommandsEnabled
+          />
+        </NodeLibraryReferencesContext.Provider>
         {editingPrefab && (
           <NodeEditor
             key={editingPrefab.id}

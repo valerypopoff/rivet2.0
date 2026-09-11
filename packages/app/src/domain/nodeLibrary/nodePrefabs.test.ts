@@ -2,7 +2,12 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import type { ChartNode, GraphId, NodeId, NodePrefabId, Project, ProjectId } from '@valerypopoff/rivet2-core';
-import { canUseNodeAsPrefabSource, getNodePrefabUsage, getNodePrefabUsageLabel } from './nodePrefabs.js';
+import {
+  canUseNodeAsPrefabSource,
+  getNodePrefabUsage,
+  getNodePrefabUsageLabel,
+  getNodePrefabUsages,
+} from './nodePrefabs.js';
 
 function node(id: string, type = 'text'): ChartNode {
   return {
@@ -67,6 +72,13 @@ test('Node Library usage detection finds linked nodes across graphs', () => {
   assert.equal(usages.length, 1);
   assert.equal(usages[0]?.nodeId, 'instance-a');
   assert.equal(getNodePrefabUsageLabel(usages[0]!), 'Folder/Graph A (instance-a)');
+
+  const usagesByPrefabId = getNodePrefabUsages(project);
+  assert.deepEqual(
+    usagesByPrefabId.get(prefabId)?.map((usage) => usage.nodeId),
+    ['instance-a'],
+  );
+  assert.equal(usagesByPrefabId.has('other-prefab' as NodePrefabId), true);
 });
 
 test('Node Library usage detection prefers a live graph over a stale project graph', () => {
@@ -101,5 +113,14 @@ test('Node Library usage detection prefers a live graph over a stale project gra
 
   const usages = getNodePrefabUsage(project, prefabId, [liveGraph]);
 
-  assert.deepEqual(usages.map((usage) => usage.nodeId), ['live-instance']);
+  assert.deepEqual(
+    usages.map((usage) => usage.nodeId),
+    ['live-instance'],
+  );
+  assert.deepEqual(
+    getNodePrefabUsages(project, [liveGraph])
+      .get(prefabId)
+      ?.map((usage) => usage.nodeId),
+    ['live-instance'],
+  );
 });
