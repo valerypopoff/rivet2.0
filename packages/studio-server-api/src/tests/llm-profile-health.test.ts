@@ -477,35 +477,43 @@ test('filesystem health store serializes half-open probes and resets exact proje
   const store = new FilesystemRivetLLMProfileHealthStore(path.join(tempRoot, 'health.sqlite'));
   const healthIdentity = identity('profile-key');
   const neighboringIdentity = identity('profile-key-neighbor', 'project-aa');
+  // This is a real persistence concurrency test, so its lease must remain
+  // active while a busy runner schedules both atomic SQLite transactions.
+  // Deliberately tiny lease-expiry behavior belongs in the clock-controlled
+  // state-transition tests above.
+  const filesystemStorePolicy: RivetLLMProfileCircuitBreakerPolicy = {
+    ...policy,
+    halfOpenLeaseMs: 60_000,
+  };
 
   try {
-    for (let index = 0; index < policy.failureThreshold; index += 1) {
-      const attempt = await store.begin({ identity: healthIdentity, policy });
+    for (let index = 0; index < filesystemStorePolicy.failureThreshold; index += 1) {
+      const attempt = await store.begin({ identity: healthIdentity, policy: filesystemStorePolicy });
       await store.finish({
         identity: healthIdentity,
-        policy,
+        policy: filesystemStorePolicy,
         permitId: attempt.permitId!,
         outcome: 'unhealthy',
       });
     }
-    const neighboringAttempt = await store.begin({ identity: neighboringIdentity, policy });
+    const neighboringAttempt = await store.begin({ identity: neighboringIdentity, policy: filesystemStorePolicy });
     await store.finish({
       identity: neighboringIdentity,
-      policy,
+      policy: filesystemStorePolicy,
       permitId: neighboringAttempt.permitId!,
       outcome: 'healthy',
     });
 
-    await delay(policy.openDurationMs + 5);
+    await delay(filesystemStorePolicy.openDurationMs + 5);
     const probes = await Promise.all([
-      store.begin({ identity: healthIdentity, policy }),
-      store.begin({ identity: healthIdentity, policy }),
+      store.begin({ identity: healthIdentity, policy: filesystemStorePolicy }),
+      store.begin({ identity: healthIdentity, policy: filesystemStorePolicy }),
     ]);
     assert.equal(probes.filter((probe) => probe.disposition === 'allow').length, 1);
     assert.equal(probes.filter((probe) => probe.disposition === 'deny').length, 1);
 
     await assert.rejects(
-      store.begin({ identity: identity(healthIdentity.key, 'project-b'), policy }),
+      store.begin({ identity: identity(healthIdentity.key, 'project-b'), policy: filesystemStorePolicy }),
       /belongs to a different project scope/,
     );
 
@@ -527,7 +535,7 @@ test('filesystem health store serializes half-open probes and resets exact proje
 
     await store.finish({
       identity: healthIdentity,
-      policy,
+      policy: filesystemStorePolicy,
       permitId: allowedProbe.permitId!,
       outcome: 'unhealthy',
     });
