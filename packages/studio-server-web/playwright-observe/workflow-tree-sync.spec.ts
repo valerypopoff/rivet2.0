@@ -266,6 +266,32 @@ test('a remote removal updates the tree but preserves the already open editor do
   expect(treeReads.count).toBeGreaterThan(1);
 });
 
+test('a remote tree change does not misidentify an open recording replay as a removed project', async ({ page }) => {
+  const state: TreeState = { folders: [], projects: [], revision: 0 };
+  const treeReads = { count: 0 };
+  const replayPath = 'recording://recording-for-tree-sync/replay.rivet-project';
+
+  await installMockEventSource(page);
+  await installTreeRoute(page, state, treeReads);
+  await page.goto('/', { waitUntil: 'domcontentloaded' });
+  await authenticateIfNeeded(page);
+  await waitForDashboardReady(page);
+
+  await dispatchProjectOpenedFromEditorFrame(page, replayPath);
+  await expect.poll(() => treeReads.count).toBeGreaterThan(1);
+  const treeReadsBeforeRemoteChange = treeReads.count;
+  state.revision += 1;
+  await emitTreeChange(page, {
+    epoch: 'playwright-tree-sync',
+    revision: state.revision,
+    sourceClientId: 'other-administrator',
+  });
+
+  await expect.poll(() => treeReads.count).toBeGreaterThan(treeReadsBeforeRemoteChange);
+  await expect(page.locator('.Toastify__toast', { hasText: 'recording-for-tree-sync' })).toHaveCount(0);
+  await expect(page.locator('.Toastify__toast', { hasText: 'replay' })).toHaveCount(0);
+});
+
 test('a remote project move retargets the open editor tab and notifies the user without reloading project contents', async ({
   page,
 }) => {

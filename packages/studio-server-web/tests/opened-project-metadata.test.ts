@@ -4,6 +4,7 @@ import type { Project, ProjectId } from '@valerypopoff/rivet2-core';
 import type { OpenedProjectSnapshot, OpenedProjectsInfo } from '../../app/src/state/savedGraphs';
 import { normalizeHostedOpenedProjects } from '../overrides/hooks/useSyncCurrentStateIntoOpenedProjects';
 import {
+  isHostedVirtualProjectPath,
   resolveHostedProjectMetadataUpdatesForPathMoves,
   resolveHostedProjectTitleFromPath,
   resolveHostedProjectTitle,
@@ -111,6 +112,13 @@ test('resolveHostedProjectTitle preserves metadata titles for virtual project pa
     ),
     'Published Snapshot',
   );
+});
+
+test('isHostedVirtualProjectPath distinguishes detached URI tabs from workflow-tree paths', () => {
+  assert.equal(isHostedVirtualProjectPath('recording://run-1/replay.rivet-project'), true);
+  assert.equal(isHostedVirtualProjectPath('published-version-preview://Project/version/preview.rivet-project'), true);
+  assert.equal(isHostedVirtualProjectPath('/managed/workflows/Project.rivet-project'), false);
+  assert.equal(isHostedVirtualProjectPath('C:\\workflows\\Project.rivet-project'), false);
 });
 
 test('resolveHostedProjectTitleFromPath resolves the file-tree project title without consulting metadata', () => {

@@ -13,6 +13,7 @@ import type {
   WorkflowProjectContentChange,
 } from '../../studio-server-shared/editor-bridge';
 import type { WorkflowProjectEditorBinding } from '../../studio-server-shared/workflow-types';
+import { isHostedVirtualProjectPath } from './openedProjectMetadata';
 import { getWorkflowTreeClientId, openWorkflowTreeEventStream } from './workflowApi';
 import { flattenProjects, normalizeWorkflowPath } from './workflowLibraryHelpers';
 
@@ -256,8 +257,12 @@ export function useWorkflowLibraryTreeSync(options: {
 
     pendingChangeRef.current = null;
     refreshInFlightRef.current = true;
-    const openedProjectBeforeRefresh =
-      openedProjectRef.current ?? createOpenedProjectReference(options.openedProjectPath);
+    // Replays and published-version previews are detached, read-only editor
+    // documents. They are deliberately absent from the workflow tree, so a
+    // normal remote tree change must not be described as their deletion.
+    const openedProjectBeforeRefresh = !isHostedVirtualProjectPath(options.openedProjectPath)
+      ? openedProjectRef.current ?? createOpenedProjectReference(options.openedProjectPath)
+      : null;
 
     void options
       .refreshFromRemoteChange()
