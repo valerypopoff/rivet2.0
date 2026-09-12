@@ -1,4 +1,11 @@
-import { newId, type ChartNode, type CommentNode, type NodeId } from '@valerypopoff/rivet2-core';
+import {
+  getProjectConnectionComparisonKey,
+  newId,
+  type ChartNode,
+  type CommentNode,
+  type NodeConnection,
+  type NodeId,
+} from '@valerypopoff/rivet2-core';
 import {
   DEFAULT_CANVAS_NODE_HEIGHT_ESTIMATE,
   getCanvasCommentHeight,
@@ -59,6 +66,16 @@ function getNodeCommentEnclosureBounds(node: ChartNode): NodeEnclosureBounds {
   };
 }
 
+function getDraggedCommentNodes(draggedNodeIds: ReadonlySet<NodeId>, nodes: readonly ChartNode[]): CommentNode[] {
+  return nodes.filter(
+    (node): node is CommentNode => draggedNodeIds.has(node.id) && node.type === 'comment',
+  );
+}
+
+function isPointInsideBounds(point: { x: number; y: number }, bounds: NodeEnclosureBounds): boolean {
+  return point.x >= bounds.left && point.x <= bounds.right && point.y >= bounds.top && point.y <= bounds.bottom;
+}
+
 export function isNodeFullyInsideCommentBounds(node: ChartNode, commentNode: CommentNode): boolean {
   if (node.id === commentNode.id) {
     return false;
@@ -89,9 +106,7 @@ export function resolveCommentEnclosureDraggedNodeIds({
   }
 
   const draggedNodeIdSet = new Set(draggedNodeIds);
-  const commentNodes = nodes.filter(
-    (node): node is CommentNode => draggedNodeIdSet.has(node.id) && node.type === 'comment',
-  );
+  const commentNodes = getDraggedCommentNodes(draggedNodeIdSet, nodes);
 
   if (commentNodes.length === 0) {
     return draggedNodeIds;
@@ -111,6 +126,49 @@ export function resolveCommentEnclosureDraggedNodeIds({
   }
 
   return nextNodeIds;
+}
+
+/**
+ * Returns authored connection bends that are spatially part of a dragged Comment.
+ *
+ * This deliberately uses only the bend position, rather than connection endpoints:
+ * a Comment is a geometric grouping aid, and a wire can cross its boundary while
+ * its user-authored bend still belongs with the Comment's contents.
+ */
+export function resolveCommentEnclosureDraggedConnectionBendKeys({
+  connections,
+  draggedNodeIds,
+  includeEnclosedNodes,
+  nodes,
+}: {
+  connections: readonly NodeConnection[];
+  draggedNodeIds: NodeId[];
+  includeEnclosedNodes: boolean;
+  nodes: readonly ChartNode[];
+}): string[] {
+  if (!includeEnclosedNodes) {
+    return [];
+  }
+
+  const commentBounds = getDraggedCommentNodes(new Set(draggedNodeIds), nodes).map(
+    getNodeCommentEnclosureBounds,
+  );
+
+  if (commentBounds.length === 0) {
+    return [];
+  }
+
+  return connections.flatMap((connection) => {
+    const bendPoint = connection.bendPoint;
+    if (
+      !bendPoint ||
+      !commentBounds.some((bounds) => isPointInsideBounds(bendPoint, bounds))
+    ) {
+      return [];
+    }
+
+    return [getProjectConnectionComparisonKey(connection)];
+  });
 }
 
 export function resolveDragModeFromAlt(altKey: boolean): DragMode {

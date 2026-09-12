@@ -1,12 +1,19 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { type ChartNode, type CommentNode, type NodeId } from '@valerypopoff/rivet2-core';
+import {
+  getProjectConnectionComparisonKey,
+  type ChartNode,
+  type CommentNode,
+  type NodeConnection,
+  type NodeId,
+} from '@valerypopoff/rivet2-core';
 import {
   constrainDragDeltaToAxisLock,
   createDragDuplicatePreviewNodes,
   isNodeFullyInsideCommentBounds,
   getDraggingConnectionSourceNodeIds,
   getDraggingPreviewNodes,
+  resolveCommentEnclosureDraggedConnectionBendKeys,
   resolveCommentEnclosureDraggedNodeIds,
   resolveDragAxisLock,
   resolveDraggedNodeIds,
@@ -38,6 +45,16 @@ function createCommentNode(id: string, x: number, y: number, width: number, heig
     visualData: { x, y, width },
     data: { height, text: '' },
   } as CommentNode;
+}
+
+function createConnection(id: string, bendPoint?: { x: number; y: number }): NodeConnection {
+  return {
+    inputId: 'input',
+    inputNodeId: `input-${id}` as NodeId,
+    outputId: 'output',
+    outputNodeId: `output-${id}` as NodeId,
+    bendPoint,
+  } as NodeConnection;
 }
 
 test('resolveDraggedNodeIds keeps the dragged node in the drag cohort and preserves unique selection ids', () => {
@@ -113,6 +130,55 @@ test('resolveCommentEnclosureDraggedNodeIds preserves the drag cohort when the m
       nodes: [comment, dragged, inside],
     }),
     [dragged.id],
+  );
+});
+
+test('resolveCommentEnclosureDraggedConnectionBendKeys includes only authored bends inside a Ctrl/Cmd-dragged comment', () => {
+  const comment = createCommentNode('comment', 100, 100, 500, 400);
+  const nestedComment = createCommentNode('nested-comment', 250, 200, 200, 150);
+  const inside = createConnection('inside', { x: 150, y: 150 });
+  const nested = createConnection('nested', { x: 300, y: 250 });
+  const boundary = createConnection('boundary', { x: 600, y: 500 });
+  const outside = createConnection('outside', { x: 601, y: 500 });
+  const unbent = createConnection('unbent');
+
+  assert.deepEqual(
+    resolveCommentEnclosureDraggedConnectionBendKeys({
+      connections: [inside, nested, boundary, outside, unbent],
+      draggedNodeIds: [comment.id, nestedComment.id],
+      includeEnclosedNodes: true,
+      nodes: [comment, nestedComment],
+    }),
+    [
+      getProjectConnectionComparisonKey(inside),
+      getProjectConnectionComparisonKey(nested),
+      getProjectConnectionComparisonKey(boundary),
+    ],
+  );
+});
+
+test('resolveCommentEnclosureDraggedConnectionBendKeys does not move bends without the modifier or a dragged comment', () => {
+  const comment = createCommentNode('comment', 100, 100, 500, 400);
+  const node = createTextNode('node', 150, 150);
+  const inside = createConnection('inside', { x: 150, y: 150 });
+
+  assert.deepEqual(
+    resolveCommentEnclosureDraggedConnectionBendKeys({
+      connections: [inside],
+      draggedNodeIds: [comment.id],
+      includeEnclosedNodes: false,
+      nodes: [comment],
+    }),
+    [],
+  );
+  assert.deepEqual(
+    resolveCommentEnclosureDraggedConnectionBendKeys({
+      connections: [inside],
+      draggedNodeIds: [node.id],
+      includeEnclosedNodes: true,
+      nodes: [comment, node],
+    }),
+    [],
   );
 });
 
