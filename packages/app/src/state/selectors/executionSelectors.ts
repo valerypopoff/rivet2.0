@@ -157,6 +157,22 @@ export function filterProcessDataForSelection(options: {
     return exactMatches;
   }
 
+  // Watch Streaming Output repeats its branch in a synthetic child run of the
+  // same graph. Its graph lifecycle is intentionally suppressed so the graph
+  // selector does not gain one entry per chunk, but retained child events
+  // still belong to the selected owning run. Keep ordinary subgraph work
+  // scoped to its own view by requiring the same root and graph identities.
+  const selectedGraphRunRecord = graphRuns?.find((graphRun) => graphRun.graphRunId === selectedGraphRunId);
+  const retainedSameGraphChildMatches = processData.filter(
+    (process) =>
+      process.parentGraphRunId === selectedGraphRunId &&
+      process.rootRunId === selectedGraphRunRecord?.rootRunId &&
+      process.graphId === selectedGraphRunRecord?.graphId,
+  );
+  if (retainedSameGraphChildMatches.length > 0) {
+    return retainedSameGraphChildMatches;
+  }
+
   const hasGraphRunTaggedData = processData.some((process) => process.graphRunId != null);
   if (hasGraphRunTaggedData || typeof selectedGraphRun === 'object') {
     return undefined;

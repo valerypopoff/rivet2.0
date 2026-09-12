@@ -989,6 +989,12 @@ describe('graphReachability', () => {
       'dynamic-caller',
       'static-caller',
     ]);
+    assert.deepEqual(
+      sortGraphIds(
+        getGraphIdsReferencingGraph(project, 'target' as GraphId, { includeDynamicCallGraphEdges: false }),
+      ),
+      ['static-caller'],
+    );
   });
 
   test('does not mark Delegate Tool Call graphs as referencing every possible target graph', () => {
@@ -1001,8 +1007,14 @@ describe('graphReachability', () => {
       autoDelegate: false,
       handlers: [{ key: 'tool', value: 'target' as GraphId }],
       unknownHandler: 'target' as GraphId,
-    });
-    const delegateCaller = makeGraph('delegate-caller', 'Delegate Caller', [delegateAuto, delegateManual]);
+    }, { id: 'delegate' });
+    const llm = makeNode('llmChatV2', { useToolCalling: true }, { id: 'llm' });
+    const delegateCaller = makeGraph(
+      'delegate-caller',
+      'Delegate Caller',
+      [llm, delegateAuto, delegateManual],
+      [makeConnection('llm', 'delegate', 'function-calls', 'function-call')],
+    );
     const directCaller = makeGraph('direct-caller', 'Direct Caller', [
       makeNode('subGraph', { graphId: 'target' as GraphId }),
     ]);
@@ -1010,5 +1022,11 @@ describe('graphReachability', () => {
     const project = makeProject([target, delegateCaller, directCaller], 'target');
 
     assert.deepEqual(sortGraphIds(getGraphIdsReferencingGraph(project, 'target' as GraphId)), ['direct-caller']);
+    assert.deepEqual(
+      sortGraphIds(
+        getGraphIdsReferencingGraph(project, 'target' as GraphId, { includeDelegateFunctionCallEdges: true }),
+      ),
+      ['delegate-caller', 'direct-caller'],
+    );
   });
 });

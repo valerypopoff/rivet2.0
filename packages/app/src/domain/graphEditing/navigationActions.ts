@@ -54,10 +54,13 @@ export function createInitialGraphNavigationStack(options: {
   return undefined;
 }
 
-export function getGraphNavigationAvailability(stack: GraphNavigationStack) {
+export function getGraphNavigationAvailability(
+  stack: GraphNavigationStack,
+  project?: Pick<Project, 'graphs'>,
+) {
   return {
-    hasForward: stack.index != null && stack.index < stack.stack.length - 1,
-    hasBackward: (stack.index ?? -1) > 0,
+    hasForward: findNavigationTargetIndex('forward', stack, project) != null,
+    hasBackward: findNavigationTargetIndex('backward', stack, project) != null,
   };
 }
 
@@ -67,34 +70,11 @@ export function resolveNavigationTarget(options: {
   project: Pick<Project, 'graphs'>;
 }): { nextStack: GraphNavigationStack; targetGraphId: GraphId; targetView: GraphViewContext } | undefined {
   const { direction, navigationStack } = options;
-
-  if (direction === 'backward') {
-    if ((navigationStack.index ?? -1) <= 0) {
-      return undefined;
-    }
-
-    const targetIndex = navigationStack.index! - 1;
-    const targetView = navigationStack.stack[targetIndex];
-    const targetGraphId = targetView?.graphId;
-    if (!targetGraphId || !options.project.graphs[targetGraphId]) {
-      return undefined;
-    }
-
-    return {
-      nextStack: {
-        ...navigationStack,
-        index: targetIndex,
-      },
-      targetView,
-      targetGraphId,
-    };
-  }
-
-  if (navigationStack.index == null || navigationStack.index >= navigationStack.stack.length - 1) {
+  const targetIndex = findNavigationTargetIndex(direction, navigationStack, options.project);
+  if (targetIndex == null) {
     return undefined;
   }
 
-  const targetIndex = navigationStack.index + 1;
   const targetView = navigationStack.stack[targetIndex];
   const targetGraphId = targetView?.graphId;
   if (!targetGraphId || !options.project.graphs[targetGraphId]) {
@@ -109,4 +89,25 @@ export function resolveNavigationTarget(options: {
     targetView,
     targetGraphId,
   };
+}
+
+function findNavigationTargetIndex(
+  direction: 'backward' | 'forward',
+  navigationStack: GraphNavigationStack,
+  project?: Pick<Project, 'graphs'>,
+): number | undefined {
+  const currentIndex = navigationStack.index;
+  if (currentIndex == null) {
+    return undefined;
+  }
+
+  const step = direction === 'backward' ? -1 : 1;
+  for (let index = currentIndex + step; index >= 0 && index < navigationStack.stack.length; index += step) {
+    const graphId = navigationStack.stack[index]?.graphId;
+    if (graphId && (!project || project.graphs[graphId])) {
+      return index;
+    }
+  }
+
+  return undefined;
 }

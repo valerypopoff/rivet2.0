@@ -227,6 +227,7 @@ export async function fetchWorkflowRecordingRuns(
     status: WorkflowRecordingFilterStatus;
     inputFilter?: WorkflowRecordingInputFilter | null;
     inputCursor?: number;
+    inputAfter?: string;
     signal?: AbortSignal;
   },
 ): Promise<WorkflowRecordingRunsPageResponse> {
@@ -241,6 +242,9 @@ export async function fetchWorkflowRecordingRuns(
     query.set('inputValue', options.inputFilter.value);
     if (options.inputCursor != null) {
       query.set('inputCursor', String(options.inputCursor));
+    }
+    if (options.inputAfter) {
+      query.set('inputAfter', options.inputAfter);
     }
   }
   const response = await fetch(`${API}/workflows/recordings/workflows/${encodeURIComponent(workflowId)}/runs?${query}`, {

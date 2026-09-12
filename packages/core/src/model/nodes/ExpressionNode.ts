@@ -161,7 +161,7 @@ export class ExpressionNodeImpl extends NodeImpl<ExpressionNode> {
       `,
       infoBoxTitle: 'Expression Node',
       contextMenuTitle: 'Expression',
-      group: ['Advanced'],
+      group: ['Code'],
     };
   }
 

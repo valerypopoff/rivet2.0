@@ -5,6 +5,7 @@ import { createRootGraphViewContext } from '../graphEditing/navigationActions.js
 import {
   getProjectWorkspaceLeavePolicy,
   getProjectWorkspaceTargetCapabilities,
+  isProjectWorkspaceTargetValid,
   resolveProjectWorkspaceTarget,
 } from './projectWorkspaceTarget.js';
 
@@ -78,4 +79,68 @@ test('resource targets never persist their canvas as the underlying graph viewpo
     commitLiveGraph: false,
     persistGraphViewport: false,
   });
+});
+
+test('graph workspace targets become invalid when their graph or subgraph parent is removed', () => {
+  const rootGraph = {
+    metadata: { id: 'root' as GraphId },
+    nodes: [{ id: 'subgraph-node', type: 'subGraph', data: { graphId: 'child' as GraphId } }],
+  } as never;
+  const childGraph = { metadata: { id: 'child' as GraphId }, nodes: [] } as never;
+  const project = { graphs: { root: rootGraph, child: childGraph } } as never;
+
+  assert.equal(
+    isProjectWorkspaceTargetValid(
+      {
+        graphView: {
+          ...createRootGraphViewContext('child' as GraphId),
+          parent: { parentGraphId: 'root' as GraphId, parentNodeId: 'subgraph-node' as never },
+        },
+        type: 'graph',
+      },
+      project,
+    ),
+    true,
+  );
+  assert.equal(
+    isProjectWorkspaceTargetValid(
+      { graphView: createRootGraphViewContext('missing' as GraphId), type: 'graph' },
+      project,
+    ),
+    false,
+  );
+  assert.equal(
+    isProjectWorkspaceTargetValid(
+      {
+        graphView: {
+          ...createRootGraphViewContext('child' as GraphId),
+          parent: { parentGraphId: 'missing-root' as GraphId, parentNodeId: 'subgraph-node' as never },
+        },
+        type: 'graph',
+      },
+      project,
+    ),
+    false,
+  );
+  assert.equal(
+    isProjectWorkspaceTargetValid(
+      {
+        graphView: {
+          ...createRootGraphViewContext('child' as GraphId),
+          parent: { parentGraphId: 'root' as GraphId, parentNodeId: 'subgraph-node' as never },
+        },
+        type: 'graph',
+      },
+      {
+        graphs: {
+          root: {
+            metadata: { id: 'root' as GraphId },
+            nodes: [{ id: 'subgraph-node', type: 'subGraph', data: { graphId: 'other' } }],
+          },
+          child: childGraph,
+        },
+      } as never,
+    ),
+    false,
+  );
 });

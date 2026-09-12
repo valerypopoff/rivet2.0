@@ -64,3 +64,31 @@ test('resolveNavigationTarget returns the next backward target and stack mutatio
     targetView: createRootGraphViewContext('a' as GraphId),
   });
 });
+
+test('graph history skips entries for deleted graphs', () => {
+  const graphA = 'a' as GraphId;
+  const deletedGraph = 'deleted' as GraphId;
+  const graphB = 'b' as GraphId;
+  const navigationStack = {
+    stack: [
+      createRootGraphViewContext(graphA),
+      createRootGraphViewContext(deletedGraph),
+      createRootGraphViewContext(graphB),
+    ],
+    index: 0,
+  };
+  const project = { graphs: { [graphA]: {} as never, [graphB]: {} as never } };
+
+  assert.deepEqual(getGraphNavigationAvailability(navigationStack, project), {
+    hasBackward: false,
+    hasForward: true,
+  });
+  assert.deepEqual(
+    resolveNavigationTarget({ direction: 'forward', navigationStack, project }),
+    {
+      nextStack: { ...navigationStack, index: 2 },
+      targetGraphId: graphB,
+      targetView: createRootGraphViewContext(graphB),
+    },
+  );
+});

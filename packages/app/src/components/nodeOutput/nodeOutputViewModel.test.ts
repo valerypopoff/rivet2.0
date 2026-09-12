@@ -1,8 +1,17 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { WarningsPort, type DataValue, type PortId, type ProcessId } from '@valerypopoff/rivet2-core';
+import {
+  WarningsPort,
+  type DataValue,
+  type GraphId,
+  type GraphRunId,
+  type PortId,
+  type ProcessId,
+  type RootRunId,
+} from '@valerypopoff/rivet2-core';
 import type { DataRefReader } from '../../providers/ProvidersContext.js';
 import type { NodeRunDataWithRefs, ProcessDataForNode } from '../../state/dataFlow.js';
+import { filterProcessDataForSelection } from '../../state/selectors/executionSelectors.js';
 import {
   createFullscreenNodeOutputViewModel,
   createNodeOutputBodyViewModel,
@@ -12,6 +21,10 @@ import {
   serializeNodeOutputDisplayCopy,
   serializeNodeOutputJsonCopy,
 } from './nodeOutputViewModel.js';
+import {
+  getStopWatchingStreamingOutputPresentation,
+  getStreamingOutputWatchTerminalPageIndex,
+} from './streamingOutputWatchPresentation.js';
 
 function createDataRefStore(initialValues?: Record<string, DataValue>): DataRefReader {
   const values = new Map<string, DataValue>(Object.entries(initialValues ?? {}));
@@ -34,6 +47,42 @@ function process(processId: string, data: NodeRunDataWithRefs): ProcessDataForNo
     data,
   };
 }
+
+test('Stop Watching Streaming Output presents the accepted terminal instead of the latest parallel completion', () => {
+  const processes = [
+    process('losing-late', {
+      outputData: { ['value' as PortId]: inlineStored('string', 'late loser') },
+      status: { type: 'ok' },
+    }),
+    process('accepted', {
+      outputData: { ['value' as PortId]: inlineStored('string', 'accepted winner') },
+      status: { type: 'ok' },
+      streamingWatchTerminal: true,
+    }),
+  ];
+
+  assert.deepEqual(getStopWatchingStreamingOutputPresentation(processes), [processes[1]]);
+});
+
+test('Stop Watching Streaming Output keeps older recordings readable without a terminal marker', () => {
+  const processes = [
+    process('first', { status: { type: 'ok' } }),
+    process('last', { status: { type: 'ok' } }),
+  ];
+
+  assert.deepEqual(getStopWatchingStreamingOutputPresentation(processes), [processes[1]]);
+});
+
+test('Watch pages do not have a terminal until the settled summary marks its selected parallel iteration', () => {
+  const processes = [
+    process('first', { status: { type: 'ok' } }),
+    process('selected-stop', { status: { type: 'ok' }, streamingWatchTerminal: true }),
+    process('late-parallel', { status: { type: 'ok' } }),
+  ];
+
+  assert.equal(getStreamingOutputWatchTerminalPageIndex(processes.slice(0, 1)), undefined);
+  assert.equal(getStreamingOutputWatchTerminalPageIndex(processes), 1);
+});
 
 test('createNodeOutputContentViewModel keeps legacy Code errors on the code-error path', () => {
   const data = { status: { type: 'error', error: 'SyntaxError' } } as const;
@@ -224,6 +273,59 @@ test('createNodeOutputContentViewModel exposes duration-only output only when en
 
   assert.equal(content.kind, 'output');
   assert.equal(serializeNodeOutputDisplayCopy(getNodeOutputCopySource(content), createDataRefStore()), undefined);
+});
+
+test('renders a retained Watch Stop Value in both inline and fullscreen output models', () => {
+  const graphId = 'watch-graph' as GraphId;
+  const rootRunId = 'root-run' as RootRunId;
+  const parentGraphRunId = 'parent-run' as GraphRunId;
+  const retainedStopProcess: ProcessDataForNode = {
+    processId: 'stop-child-process' as ProcessId,
+    graphId,
+    graphRunId: 'watch-child-run' as GraphRunId,
+    parentGraphRunId,
+    rootRunId,
+    data: {
+      outputData: {
+        ['value' as PortId]: inlineStored('string', 'accepted chunk'),
+      },
+      status: { type: 'ok' },
+    },
+  };
+  const retainedProcesses = filterProcessDataForSelection({
+    graphRuns: [{ graphId, graphRunId: parentGraphRunId, rootRunId }],
+    processData: [retainedStopProcess],
+    selectedGraphRun: parentGraphRunId,
+  });
+
+  assert.deepEqual(retainedProcesses, [retainedStopProcess]);
+
+  // The inline node body and fullscreen modal both use these shared output
+  // view models after graph-run filtering. Keep the Stop boundary's ordinary
+  // Value port visible in each instead of treating its child-run identity as
+  // a reason to hide an output that already feeds normal downstream work.
+  const inlineContent = createNodeOutputContentViewModel({
+    nodeType: 'stopWatchingStreamingOutput',
+    data: retainedStopProcess.data,
+    dataRefs: createDataRefStore(),
+  });
+  const inlineBody = createNodeOutputBodyViewModel({ data: retainedStopProcess.data });
+  const fullscreen = createFullscreenNodeOutputViewModel({
+    nodeType: 'stopWatchingStreamingOutput',
+    processData: retainedProcesses,
+    selectedPage: 'latest',
+    dataRefs: createDataRefStore(),
+  });
+
+  assert.equal(inlineContent.kind, 'output');
+  assert.equal(inlineBody.kind, 'outputs');
+  assert.equal(fullscreen.kind, 'content');
+  assert.equal(
+    serializeNodeOutputDisplayCopy(getNodeOutputCopySource(inlineContent), createDataRefStore(), {
+      outputDefinitions: [{ id: 'value' as PortId, title: 'Value' }],
+    }),
+    'accepted chunk',
+  );
 });
 
 test('createNodeOutputBodyViewModel chooses custom renderers before generic output maps', () => {

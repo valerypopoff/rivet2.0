@@ -14,10 +14,9 @@ import { addOpenedProject, resolveSyncedOpenedProjectFsPathOptions } from '../ut
 import { useExecutorSessionState } from './useExecutorSession.js';
 import { projectExecutorModesEqual, resolveCurrentProjectExecutorMode } from '../utils/projectExecutorMode.js';
 import {
-  buildCurrentProjectContentSnapshot,
-  getProjectContentDigest,
   markProjectClean,
   markProjectDirtyFlag,
+  resolveProjectContentDirtyState,
 } from '../utils/projectUnsavedChanges.js';
 
 export function useSyncCurrentStateIntoOpenedProjects({ enabled = true }: { enabled?: boolean } = {}) {
@@ -111,13 +110,12 @@ export function useSyncCurrentStateIntoOpenedProjects({ enabled = true }: { enab
       return;
     }
 
-    const savedDigest = savedProjectContentDigests[currentProject.metadata.id];
-    if (!savedDigest) {
-      const snapshot = buildCurrentProjectContentSnapshot({
-        project: currentProject,
-        graph: currentGraph,
-      });
-      setSavedProjectContentDigests((previousDigests) => markProjectClean(previousDigests, snapshot));
+    const dirtyState = resolveProjectContentDirtyState(savedProjectContentDigests, {
+      project: currentProject,
+      graph: currentGraph,
+    });
+    if (!dirtyState.hasSavedDigest) {
+      setSavedProjectContentDigests((previousDigests) => markProjectClean(previousDigests, dirtyState.snapshot));
 
       setProjectUnsavedChanges((previousFlags) => {
         return markProjectDirtyFlag(previousFlags, currentProject.metadata.id, false);
@@ -125,15 +123,8 @@ export function useSyncCurrentStateIntoOpenedProjects({ enabled = true }: { enab
       return;
     }
 
-    const snapshot = buildCurrentProjectContentSnapshot({
-      project: currentProject,
-      graph: currentGraph,
-    });
-    const currentDigest = getProjectContentDigest(snapshot);
-    const isDirty = currentDigest !== savedDigest;
-
     setProjectUnsavedChanges((previousFlags) => {
-      return markProjectDirtyFlag(previousFlags, currentProject.metadata.id, isDirty);
+      return markProjectDirtyFlag(previousFlags, currentProject.metadata.id, dirtyState.isDirty);
     });
   }, [
     currentGraph,

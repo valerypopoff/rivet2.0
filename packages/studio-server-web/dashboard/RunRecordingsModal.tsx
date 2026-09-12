@@ -76,6 +76,7 @@ export const RunRecordingsModal: FC<RunRecordingsModalProps> = ({
     filteredRunsCount,
     totalPages,
     inputSearchStatus,
+    inputSearchProgress,
     visibleRuns,
     setSelectedWorkflowId,
     setRunsPerPage,
@@ -131,6 +132,7 @@ export const RunRecordingsModal: FC<RunRecordingsModalProps> = ({
       <ModalDialog
         testId="run-recordings-modal"
         width="large"
+        height="calc(100vh - 40px)"
         label="Run recordings"
         onClose={onDismiss}
       >
@@ -187,6 +189,7 @@ export const RunRecordingsModal: FC<RunRecordingsModalProps> = ({
                       filteredRunsCount={filteredRunsCount}
                       totalPages={totalPages}
                       inputSearchStatus={inputSearchStatus}
+                      inputSearchProgress={inputSearchProgress}
                       page={page}
                       runsPerPage={runsPerPage}
                       statusFilter={statusFilter}

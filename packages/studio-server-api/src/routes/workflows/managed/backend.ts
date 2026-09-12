@@ -351,6 +351,7 @@ export class ManagedWorkflowBackend {
     inputFilter: WorkflowRecordingInputFilter | null = null,
     inputCursor = 0,
     signal?: AbortSignal,
+    inputAfter?: string,
   ): Promise<WorkflowRecordingRunsPageResponse> {
     return this.#recordings.listWorkflowRecordingRunsPage(
       workflowId,
@@ -360,6 +361,7 @@ export class ManagedWorkflowBackend {
       inputFilter,
       inputCursor,
       signal,
+      inputAfter,
     );
   }
 

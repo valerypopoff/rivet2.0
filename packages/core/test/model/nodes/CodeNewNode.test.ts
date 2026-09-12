@@ -91,6 +91,7 @@ describe('CodeNewNode', () => {
 
     assert.strictEqual(node.type, 'codeNew');
     assert.strictEqual(node.title, 'Code');
+    assert.deepStrictEqual(CodeNewNodeImpl.getUIData().group, ['Code']);
     assert.match(node.data.code, /Interpolation tokens create input ports/);
     assert.match(node.data.code, /return value;/);
     assert.deepStrictEqual(

@@ -190,6 +190,7 @@ test('projects replay-shaped waiting, progress, model, profile-health, and tool 
   let primaryProfileAttemptCount = 0;
   let primaryToolCallCount = 0;
   let primarySnapshotCount = 0;
+  let primaryWatchSummaryCount = 0;
   let primaryPauseCount = 0;
   let primaryResumeCount = 0;
   const projectRunActivityEvent = <K extends keyof ProcessEventMessageMap>(
@@ -214,6 +215,9 @@ test('projects replay-shaped waiting, progress, model, profile-health, and tool 
     },
     onLlmChatOutputSnapshot: () => {
       primarySnapshotCount += 1;
+    },
+    onStreamingOutputWatchSummary: () => {
+      primaryWatchSummaryCount += 1;
     },
     onLlmProfileAttempt: () => {
       primaryProfileAttemptCount += 1;
@@ -348,7 +352,7 @@ test('projects replay-shaped waiting, progress, model, profile-health, and tool 
         cancelledIterations: 0,
         omittedIterations: 2,
         retainedIterationUpdateIndexes: [1, 2, 3, 6],
-        selectedIteration: { updateIndex: 6, reason: 'latest' },
+        selectedIteration: { graphRunId: execution.graphRunId, updateIndex: 6, reason: 'latest' },
       },
     } satisfies ProcessEventMessageMap['streamingOutputWatchSummary']),
     true,
@@ -357,6 +361,7 @@ test('projects replay-shaped waiting, progress, model, profile-health, and tool 
   assert.equal(primaryUserInputCount, 1);
   assert.equal(primaryModelCallCount, 1);
   assert.equal(primarySnapshotCount, 1);
+  assert.equal(primaryWatchSummaryCount, 1);
   assert.equal(primaryProfileAttemptCount, 1);
   assert.equal(primaryToolCallCount, 1);
   assert.equal(primaryPauseCount, 0);

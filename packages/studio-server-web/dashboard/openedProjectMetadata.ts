@@ -52,9 +52,12 @@ export function resolveHostedProjectTitleFromPath(fsPath?: string | null): strin
   return getFileName(fsPath);
 }
 
+export function isHostedVirtualProjectPath(fsPath?: string | null): boolean {
+  return Boolean(fsPath?.trim() && VIRTUAL_PROJECT_PATH_PATTERN.test(fsPath.trim()));
+}
+
 function shouldPreferPathTitle(fsPath?: string | null): boolean {
-  const trimmedPath = fsPath?.trim();
-  return Boolean(trimmedPath && !VIRTUAL_PROJECT_PATH_PATTERN.test(trimmedPath));
+  return Boolean(fsPath?.trim() && !isHostedVirtualProjectPath(fsPath));
 }
 
 export function resolveHostedProjectTitle(

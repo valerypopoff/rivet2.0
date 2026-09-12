@@ -1,4 +1,5 @@
 import clsx from 'clsx';
+import { NodeLibraryReferences } from './visualNode/NodeLibraryReferences.js';
 import { type CSSProperties, type HTMLAttributes, type MouseEvent, forwardRef, memo, useMemo } from 'react';
 import {
   type ChartNode,
@@ -48,6 +49,15 @@ import {
 } from '../domain/graphEditing/toolWarnings.js';
 import { combineNodeHeaderWarnings } from '../domain/graphEditing/disabledNodeWarnings.js';
 import { disabledUpstreamInputWarningsState } from '../state/selectors/ioDefinitions.js';
+
+function isNodeLibraryReferencePointerEvent(event: MouseEvent<HTMLElement>): boolean {
+  const references = event.currentTarget.querySelector('.node-library-references');
+  if (!references) {
+    return false;
+  }
+
+  return references.contains(event.target as Node) || event.clientY >= event.currentTarget.getBoundingClientRect().bottom;
+}
 
 export type VisualNodeProps = {
   node: ChartNode;
@@ -227,6 +237,10 @@ const VisualNodeImpl = memo(
           data-nodeid={node.id}
           data-contextmenutype={`node-${node.type}`}
           onMouseEnter={(event: MouseEvent<HTMLElement>) => {
+            if (isNodeLibraryReferencePointerEvent(event)) {
+              return;
+            }
+
             onNodeMouseEnter?.(event, node.id);
           }}
           onMouseLeave={(event: MouseEvent<HTMLElement>) => {
@@ -271,6 +285,7 @@ const VisualNodeImpl = memo(
               isNodePrefabInstance={isNodePrefabInstance}
             />
           )}
+          {!effectiveIsZoomedOut && <NodeLibraryReferences nodeId={node.id} />}
           <div className="node-border-overlay" aria-hidden="true" />
         </div>
       );

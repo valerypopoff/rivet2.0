@@ -10,6 +10,17 @@ import {
   StudioMetrics,
 } from '../metrics.js';
 
+test('recording search metrics use bounded payload-free labels', () => {
+  const metrics = new StudioMetrics(getMetricsConfig({ RIVET_METRICS_ENABLED: 'true' }));
+  metrics.recordRecordingInputCacheEvent('hit');
+  metrics.recordRecordingInputCacheEvent('oversized');
+  metrics.observeRecordingInputExtraction('decode', 25);
+  metrics.observeRecordingInputExtraction('parse', 50);
+  const rendered = metrics.render();
+  assert.match(rendered, /rivet_recording_input_cache_events_total\{[^\n]*event="hit"[^\n]*\} 1/);
+  assert.match(rendered, /rivet_recording_input_extraction_seconds_sum\{[^\n]*stage="parse"[^\n]*\} 0\.05/);
+});
+
 async function startMetricsServer(metrics: StudioMetrics) {
   const app = createApiApp('execution', {
     health: {

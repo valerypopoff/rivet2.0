@@ -16,6 +16,8 @@ export type ProjectWorkspaceLeavePolicy = {
   persistGraphViewport: boolean;
 };
 
+type WorkspaceTargetProject = Pick<Project, 'graphs' | 'uiGraphs'>;
+
 export function createGraphWorkspaceTarget(graphView: GraphViewContext): ProjectWorkspaceTarget {
   return { graphView, type: 'graph' };
 }
@@ -34,6 +36,45 @@ export function getProjectWorkspaceLeavePolicy(
 ): ProjectWorkspaceLeavePolicy {
   const leavesGraph = target == null || target.type === 'graph';
   return { commitLiveGraph: leavesGraph, persistGraphViewport: leavesGraph };
+}
+
+/** A nested graph view is valid only while its exact Subgraph caller remains. */
+export function isProjectGraphViewContextValid(
+  graphView: GraphViewContext,
+  project: Pick<Project, 'graphs'>,
+): boolean {
+  if (!project.graphs[graphView.graphId]) {
+    return false;
+  }
+
+  if (!graphView.parent) {
+    return true;
+  }
+
+  const parentNode = project.graphs[graphView.parent.parentGraphId]?.nodes.find(
+    (node) => node.id === graphView.parent?.parentNodeId,
+  );
+  return parentNode?.type === 'subGraph' && (parentNode.data as { graphId?: GraphId }).graphId === graphView.graphId;
+}
+
+/**
+ * Workspace targets are session state, while graphs and web apps are project
+ * content. Validate the former against the latter whenever project content can
+ * have changed outside a workspace transition (for example, graph deletion).
+ */
+export function isProjectWorkspaceTargetValid(
+  target: ProjectWorkspaceTarget,
+  project: WorkspaceTargetProject,
+): boolean {
+  if (target.type === 'nodeLibrary') {
+    return true;
+  }
+
+  if (target.type === 'uiGraph') {
+    return project.uiGraphs?.[target.uiGraphId] != null;
+  }
+
+  return isProjectGraphViewContextValid(target.graphView, project);
 }
 
 export function resolveProjectWorkspaceTarget(options: {

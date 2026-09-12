@@ -93,7 +93,10 @@ test('managed recording retention keeps active suspension evidence outside norma
     new Set(['held-old']),
   );
 
-  assert.deepEqual(selected.map((row) => row.recording_id), ['ordinary-old']);
+  assert.deepEqual(
+    selected.map((row) => row.recording_id),
+    ['ordinary-old'],
+  );
 });
 test('managed per-endpoint retention does not combine projects that reused the same slug', () => {
   const rows = [
@@ -178,7 +181,122 @@ test('managed recording statistics preserve web-app action identity and run-kind
   const page = await service.listWorkflowRecordingRunsPage('workflow-a', 1, 20, 'all');
   assert.equal(page.runs.length, 1);
   assert.equal(page.runs[0]?.executionIdentity?.correlationId, 'rvt-managed-recording-12345');
+});
 
+test('managed input filtering reads a bounded newest-first window and returns a fresh match immediately', async () => {
+  const rows = Array.from({ length: 25 }, (_, index) =>
+    createRecordingRow(
+      `bounded-input-${index}`,
+      'endpoint',
+      `2026-08-04T12:${String(59 - index).padStart(2, '0')}:00.000Z`,
+    ),
+  );
+  // PostgreSQL's NOW() can retain microseconds that node-postgres cannot keep
+  // in `created_at` as a JavaScript Date. The keyset token must preserve this
+  // exact selected value instead of rounding it to milliseconds.
+  rows[0]!.recording_cursor_created_at = '2026-08-04T12:59:00.000123Z';
+  const queryCalls: Array<{ sql: string; parameters: unknown[] }> = [];
+  let blobReads = 0;
+  const context = {
+    pool: {},
+    initialize: async () => {},
+    withTransaction: async () => {},
+    revisions: {
+      uploadRecordingBlobs: async () => ({
+        recordingBlobKey: 'recording',
+        replayProjectBlobKey: 'project',
+        replayDatasetBlobKey: null,
+      }),
+      insertRecordingRow: async () => {},
+      deleteBlobKeysBestEffort: async () => {},
+    },
+    db: {
+      queryOne: async () => null,
+      queryRows: async (_pool: unknown, sql: string, parameters: unknown[]) => {
+        queryCalls.push({ sql, parameters });
+        const offset =
+          parameters.length === 5
+            ? rows.findIndex((row) => row.recording_id === parameters[2]) + 1
+            : Number(parameters[2]);
+        const limit = Number(parameters[parameters.length === 5 ? 3 : 1]);
+        return rows.slice(offset, offset + limit);
+      },
+    },
+    blobStore: {
+      getText: async (key: string) => {
+        blobReads += 1;
+        return JSON.stringify({
+          recording: {
+            events: [
+              {
+                type: 'start',
+                data: {
+                  inputs: { input: { value: { requestId: key === rows[0]!.recording_blob_key ? 'fresh' : key } } },
+                },
+              },
+            ],
+          },
+          strings: {},
+        });
+      },
+    },
+    maintenance: { registerTask: () => () => {} },
+    mappers: {
+      getWorkflowStatus: () => 'unpublished',
+      mapWorkflowRowToProjectItem: () => ({}),
+      toIsoString: (value: unknown) => String(value),
+      WORKFLOW_COLUMNS_QUALIFIED: '',
+      RECORDING_COLUMNS: 'recording_id',
+    },
+  } as unknown as ManagedWorkflowContext;
+  const service = createManagedWorkflowRecordingService({ context });
+
+  const page = await service.listWorkflowRecordingRunsPage('workflow-a', 1, 20, 'all', {
+    path: '$.requestId',
+    operator: '==',
+    value: 'fresh',
+  });
+
+  assert.deepEqual(
+    page.runs.map((run) => run.id),
+    [rows[0]!.recording_id],
+  );
+  assert.equal(blobReads, 1);
+  assert.equal(page.nextInputCursor, 1);
+  assert.equal(page.hasMore, true);
+  assert.match(queryCalls[0]!.sql, /LIMIT \$2 OFFSET \$3/);
+  assert.deepEqual(queryCalls[0]!.parameters, ['workflow-a', 25, 0]);
+
+  await service.listWorkflowRecordingRunsPage(
+    'workflow-a',
+    1,
+    20,
+    'all',
+    { path: '$.requestId', operator: '==', value: 'fresh' },
+    97,
+    undefined,
+    page.nextInputAfter,
+  );
+  assert.match(queryCalls[1]!.sql, /\(created_at, recording_id\) < \(\$2::timestamptz, \$3\)/);
+  assert.deepEqual(queryCalls[1]!.parameters, [
+    'workflow-a',
+    rows[0]!.recording_cursor_created_at,
+    rows[0]!.recording_id,
+    25,
+    0,
+  ]);
+  const previousQueries = queryCalls.length;
+  const sparse = await service.listWorkflowRecordingRunsPage('workflow-a', 1, 20, 'all', {
+    path: '$.requestId',
+    operator: '==',
+    value: rows[24]!.recording_blob_key,
+  });
+  assert.deepEqual(
+    sparse.runs.map((run) => run.id),
+    [rows[24]!.recording_id],
+  );
+  assert.equal(sparse.hasMore, false);
+  assert.equal(queryCalls.length - previousQueries, 2);
 });
 
 test('managed startup cleanup queues only the bounded claimed recording batch', async () => {

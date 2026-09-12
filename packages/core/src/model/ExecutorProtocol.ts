@@ -65,6 +65,7 @@ export type SerializedProcessEventMap = {
     resultOrigin?: NodeResultOrigin;
     durationMs?: number;
     splitRunDurationMs?: Record<number, number>;
+    streamingWatchTerminal?: boolean;
   }>;
   nodeError: WithExecution<{
     node: ChartNode;

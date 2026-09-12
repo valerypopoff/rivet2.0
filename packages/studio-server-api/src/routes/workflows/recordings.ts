@@ -36,6 +36,7 @@ import {
   getWorkflowRecordingWorkflowRowsBySourceProjectPath,
   listWorkflowRecordingBundlePaths,
   listWorkflowRecordingRunRowsByWorkflowId,
+  listWorkflowRecordingRunRowsForWorkflowWindow,
   listWorkflowRecordingRunRowsForWorkflow,
   listWorkflowRecordingStatisticsCatalogRows,
   listWorkflowRecordingStatisticsRows,
@@ -58,6 +59,7 @@ import {
 } from './fs-helpers.js';
 import {
   getRecordingArtifactPath,
+  readArtifactCompressedBuffer,
   readArtifactText,
   serializeArtifact,
   type WorkflowRecordingArtifactKind,
@@ -70,11 +72,13 @@ import {
 } from './recordings-maintenance.js';
 import { type StoredWorkflowRecordingMetadataV3 } from './recordings-metadata.js';
 import { getWorkflowProject } from './workflow-query.js';
-import { filterRowsBySerializedRecordingInputPage } from './recording-input-filter.js';
 import {
-  buildWorkflowRunStatistics,
-  buildWorkflowRunStatisticsCatalog,
-} from './recording-statistics.js';
+  createWorkflowRecordingInputAfter,
+  filterRecordingInputWindows,
+  parseWorkflowRecordingInputAfter,
+} from './recording-input-filter.js';
+import { getFilesystemRecordingInputCacheKey, workflowRecordingInputCache } from './recording-input-cache.js';
+import { buildWorkflowRunStatistics, buildWorkflowRunStatisticsCatalog } from './recording-statistics.js';
 
 type PersistWorkflowExecutionRecordingOptions = {
   workflowsRoot: string;
@@ -196,16 +200,15 @@ async function countIndexedWorkflowRecordings(recordingsRoot: string): Promise<W
     listWorkflowRecordingBundlePaths(),
   ]);
   return {
-    bundleKeySignature: createRecordingBundleKeySignature(indexedBundlePaths.map((bundlePath) =>
-      path.relative(recordingsRoot, bundlePath).replace(/\\/g, '/'))),
+    bundleKeySignature: createRecordingBundleKeySignature(
+      indexedBundlePaths.map((bundlePath) => path.relative(recordingsRoot, bundlePath).replace(/\\/g, '/')),
+    ),
     workflowCount: indexedWorkflows.length,
     runCount: indexedWorkflows.reduce((total, workflow) => total + workflow.totalRuns, 0),
   };
 }
 
-async function getRecordingMetadataState(
-  metadataPath: string,
-): Promise<{ mtimeMs: number; size: number } | null> {
+async function getRecordingMetadataState(metadataPath: string): Promise<{ mtimeMs: number; size: number } | null> {
   try {
     const stat = await fs.stat(metadataPath);
     return stat.isFile()
@@ -224,7 +227,7 @@ async function getRecordingMetadataState(
 }
 
 async function countRecordingBundlesOnDisk(recordingsRoot: string): Promise<WorkflowRecordingDiskCounts> {
-  if (!await pathExists(recordingsRoot)) {
+  if (!(await pathExists(recordingsRoot))) {
     return {
       bundleKeySignature: createRecordingBundleKeySignature([]),
       workflowCount: 0,
@@ -251,31 +254,29 @@ async function countRecordingBundlesOnDisk(recordingsRoot: string): Promise<Work
 
     for (let index = 0; index < bundleDirectories.length; index += INDEX_REPAIR_STAT_BATCH_SIZE) {
       const batch = bundleDirectories.slice(index, index + INDEX_REPAIR_STAT_BATCH_SIZE);
-      const states = await Promise.all(batch.map(async (entry) => {
-        const metadataState = await getRecordingMetadataState(
-          getWorkflowRecordingMetadataPath(path.join(workflowRoot, entry.name)),
-        );
+      const states = await Promise.all(
+        batch.map(async (entry) => {
+          const metadataState = await getRecordingMetadataState(
+            getWorkflowRecordingMetadataPath(path.join(workflowRoot, entry.name)),
+          );
 
-        return metadataState
-          ? {
-              ...metadataState,
-              bundleKey: `${workflowDirectory.name}/${entry.name}`,
-            }
-          : null;
-      }));
-      completedBundles.push(...states.filter(
-        (state): state is WorkflowRecordingMetadataState => state != null,
-      ));
+          return metadataState
+            ? {
+                ...metadataState,
+                bundleKey: `${workflowDirectory.name}/${entry.name}`,
+              }
+            : null;
+        }),
+      );
+      completedBundles.push(...states.filter((state): state is WorkflowRecordingMetadataState => state != null));
     }
 
     workflowStates.push({
       runCount: completedBundles.length,
       bundleKeys: completedBundles.map((state) => state.bundleKey),
-      completedBundleSignatures: completedBundles.map((state) => [
-        state.bundleKey,
-        state.mtimeMs,
-        state.size,
-      ].join(':')),
+      completedBundleSignatures: completedBundles.map((state) =>
+        [state.bundleKey, state.mtimeMs, state.size].join(':'),
+      ),
     });
   }
   const completedBundleSignature = createHash('sha256')
@@ -283,9 +284,7 @@ async function countRecordingBundlesOnDisk(recordingsRoot: string): Promise<Work
     .digest('hex');
 
   return {
-    bundleKeySignature: createRecordingBundleKeySignature(
-      workflowStates.flatMap((state) => state.bundleKeys),
-    ),
+    bundleKeySignature: createRecordingBundleKeySignature(workflowStates.flatMap((state) => state.bundleKeys)),
     workflowCount: workflowStates.filter((state) => state.runCount > 0).length,
     runCount: workflowStates.reduce((total, state) => total + state.runCount, 0),
     completedBundleSignature,
@@ -350,11 +349,7 @@ function startWorkflowRecordingIndexRepair(recordingsRoot: string): void {
 }
 
 function scheduleWorkflowRecordingIndexRepair(recordingsRoot: string): void {
-  if (
-    indexRepairTimer ||
-    indexRepairPromise ||
-    Date.now() - lastIndexRepairStartedAt < INDEX_REPAIR_MIN_INTERVAL_MS
-  ) {
+  if (indexRepairTimer || indexRepairPromise || Date.now() - lastIndexRepairStartedAt < INDEX_REPAIR_MIN_INTERVAL_MS) {
     return;
   }
 
@@ -413,7 +408,8 @@ export async function listWorkflowRecordingWorkflows(root: string): Promise<Work
     }
 
     const recordingWorkflow = (workflowId ? recordingWorkflowById.get(workflowId) : undefined) ?? workflowByPath;
-    const shouldIncludeProject = Boolean(recordingWorkflow) ||
+    const shouldIncludeProject =
+      Boolean(recordingWorkflow) ||
       (project.settings.status !== 'unpublished' && Boolean(project.settings.endpointName));
 
     if (!shouldIncludeProject) {
@@ -461,6 +457,7 @@ export async function listWorkflowRecordingRunsPage(
   inputFilter: WorkflowRecordingInputFilter | null = null,
   inputCursor = 0,
   signal?: AbortSignal,
+  inputAfter?: string,
 ): Promise<WorkflowRecordingRunsPageResponse> {
   await ensureWorkflowRecordingStorage(root);
 
@@ -474,6 +471,7 @@ export async function listWorkflowRecordingRunsPage(
       inputCursor,
       normalizedPageSize,
       signal,
+      inputAfter,
     );
 
     return {
@@ -484,6 +482,8 @@ export async function listWorkflowRecordingRunsPage(
       totalRunsExact: filteredPage.totalRunsExact,
       hasMore: filteredPage.hasMore,
       nextInputCursor: filteredPage.nextInputCursor,
+      inputSearchAnalyzedRuns: filteredPage.analyzedRuns,
+      nextInputAfter: filteredPage.nextInputAfter,
       statusFilter,
       inputFilter,
       runs: filteredPage.rows.map(toWorkflowRecordingRunSummary),
@@ -536,21 +536,69 @@ async function listWorkflowRecordingRowsMatchingInputFilter(
   inputCursor: number,
   pageSize: number,
   signal?: AbortSignal,
+  inputAfter?: string,
 ) {
-  const rows = (await listWorkflowRecordingRunRowsForWorkflow(workflowId))
-    .filter((row) => statusFilter === 'all' || row.status === 'failed' || row.status === 'suspicious');
-  return filterRowsBySerializedRecordingInputPage(rows, inputFilter, async (row) => {
-    const recordingPath = getRecordingArtifactPath(row.bundlePath, 'recording', row.encoding);
-    if (!await pathExists(recordingPath)) {
-      return null;
-    }
-
-    return readArtifactText(recordingPath, row.encoding);
-  }, {
-    cursor: inputCursor,
-    pageSize,
-    signal,
+  const inputAfterCursor = parseWorkflowRecordingInputAfter(inputAfter, {
+    workflowId,
+    statusFilter,
+    filter: inputFilter,
   });
+  return filterRecordingInputWindows(
+    inputFilter,
+    (after, offset, limit) =>
+      listWorkflowRecordingRunRowsForWorkflowWindow(workflowId, {
+        statusFilter,
+        offset: after ? 0 : offset,
+        after: parseWorkflowRecordingInputAfter(after, { workflowId, statusFilter, filter: inputFilter }),
+        limit,
+      }),
+    async (row, readSignal) => {
+      const recordingPath = getRecordingArtifactPath(row.bundlePath, 'recording', row.encoding);
+      let stat: Awaited<ReturnType<typeof fs.stat>>;
+      try {
+        stat = await fs.stat(recordingPath);
+      } catch (error: unknown) {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+          return null;
+        }
+        throw error;
+      }
+      if (!stat.isFile()) {
+        return null;
+      }
+
+      return workflowRecordingInputCache.getOrLoad(
+        getFilesystemRecordingInputCacheKey({
+          recordingPath,
+          encoding: row.encoding,
+          size: stat.size,
+          mtimeMs: stat.mtimeMs,
+        }),
+        async (cacheSignal) => ({
+          kind: 'artifact' as const,
+          bytes: await readArtifactCompressedBuffer(recordingPath, cacheSignal),
+          encoding: row.encoding,
+        }),
+        readSignal,
+        stat.size * 2 + (row.recordingUncompressedBytes || stat.size) * 4,
+      );
+    },
+    {
+      inputCursor: inputAfterCursor ? inputAfterCursor.legacyCursor : inputCursor,
+      inputAfter,
+      pageSize,
+      getInputAfter: (row, nextInputCursor) =>
+        createWorkflowRecordingInputAfter(
+          {
+            createdAt: row.createdAt,
+            recordingId: row.id,
+            legacyCursor: nextInputCursor,
+          },
+          { workflowId, statusFilter, filter: inputFilter },
+        ),
+      signal,
+    },
+  );
 }
 
 export async function readWorkflowRecordingArtifact(
@@ -570,7 +618,7 @@ export async function readWorkflowRecordingArtifact(
   }
 
   const filePath = getRecordingArtifactPath(row.bundlePath, artifact, row.encoding);
-  if (!await pathExists(filePath)) {
+  if (!(await pathExists(filePath))) {
     throw createHttpError(404, 'Recording artifact not found');
   }
 
@@ -651,9 +699,7 @@ export async function persistWorkflowExecutionRecording(
     await fs.writeFile(recordingPath, recordingArtifact.buffer);
     await fs.writeFile(replayProjectPath, replayProjectArtifact.buffer);
 
-    let datasetArtifact:
-      | { buffer: Buffer; compressedBytes: number; uncompressedBytes: number }
-      | undefined;
+    let datasetArtifact: { buffer: Buffer; compressedBytes: number; uncompressedBytes: number } | undefined;
     let hasReplayDataset = false;
 
     if (options.executedDatasets.length > 0) {
@@ -662,7 +708,10 @@ export async function persistWorkflowExecutionRecording(
         config.compression,
         config.gzipLevel,
       );
-      await fs.writeFile(getRecordingArtifactPath(bundlePath, 'replay-dataset', config.compression), datasetArtifact.buffer);
+      await fs.writeFile(
+        getRecordingArtifactPath(bundlePath, 'replay-dataset', config.compression),
+        datasetArtifact.buffer,
+      );
       hasReplayDataset = true;
     }
 
@@ -696,33 +745,36 @@ export async function persistWorkflowExecutionRecording(
     await fs.writeFile(temporaryMetadataPath, `${JSON.stringify(metadata, null, 2)}\n`, 'utf8');
     await fs.rename(temporaryMetadataPath, metadataPath);
 
-    await upsertWorkflowRecordingBundle({
-      workflowId,
-      sourceProjectMetadataId: workflowId,
-      sourceProjectPath: options.sourceProjectPath,
-      sourceProjectRelativePath,
-      sourceProjectName,
-      updatedAt: createdAt,
-    }, {
-      id: recordingId,
-      workflowId,
-      createdAt,
-      runKind: options.runKind,
-      status: options.status,
-      durationMs: Math.max(0, Math.round(options.durationMs)),
-      endpointNameAtExecution: options.endpointName,
-      executionIdentity: options.executionIdentity,
-      errorMessage: options.errorMessage,
-      bundlePath,
-      encoding: config.compression,
-      hasReplayDataset,
-      recordingCompressedBytes: recordingArtifact.compressedBytes,
-      recordingUncompressedBytes: recordingArtifact.uncompressedBytes,
-      projectCompressedBytes: replayProjectArtifact.compressedBytes,
-      projectUncompressedBytes: replayProjectArtifact.uncompressedBytes,
-      datasetCompressedBytes: datasetArtifact?.compressedBytes ?? 0,
-      datasetUncompressedBytes: datasetArtifact?.uncompressedBytes ?? 0,
-    });
+    await upsertWorkflowRecordingBundle(
+      {
+        workflowId,
+        sourceProjectMetadataId: workflowId,
+        sourceProjectPath: options.sourceProjectPath,
+        sourceProjectRelativePath,
+        sourceProjectName,
+        updatedAt: createdAt,
+      },
+      {
+        id: recordingId,
+        workflowId,
+        createdAt,
+        runKind: options.runKind,
+        status: options.status,
+        durationMs: Math.max(0, Math.round(options.durationMs)),
+        endpointNameAtExecution: options.endpointName,
+        executionIdentity: options.executionIdentity,
+        errorMessage: options.errorMessage,
+        bundlePath,
+        encoding: config.compression,
+        hasReplayDataset,
+        recordingCompressedBytes: recordingArtifact.compressedBytes,
+        recordingUncompressedBytes: recordingArtifact.uncompressedBytes,
+        projectCompressedBytes: replayProjectArtifact.compressedBytes,
+        projectUncompressedBytes: replayProjectArtifact.uncompressedBytes,
+        datasetCompressedBytes: datasetArtifact?.compressedBytes ?? 0,
+        datasetUncompressedBytes: datasetArtifact?.uncompressedBytes ?? 0,
+      },
+    );
 
     await options.onPersisted?.(recordingId);
     workflowRecordingStore.scheduleCleanup();

@@ -119,7 +119,7 @@ void describe('debugger processor attachments', () => {
       cancelledIterations: 0,
       omittedIterations: 2,
       retainedIterationUpdateIndexes: [1, 2, 3, 6],
-      selectedIteration: { updateIndex: 6, reason: 'latest' },
+      selectedIteration: { graphRunId: 'watch-child-run' as GraphRunId, updateIndex: 6, reason: 'latest' },
     };
 
     attachments.attach(processor);

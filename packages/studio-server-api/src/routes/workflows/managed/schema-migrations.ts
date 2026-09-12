@@ -5,7 +5,7 @@ import type { Pool, PoolClient, QueryResultRow } from 'pg';
 import { MANAGED_WORKFLOW_SCHEMA_SQL } from './schema.js';
 
 export const MANAGED_WORKFLOW_SCHEMA_MIGRATIONS_TABLE = 'managed_workflow_schema_migrations';
-export const CURRENT_MANAGED_WORKFLOW_SCHEMA_VERSION = 10;
+export const CURRENT_MANAGED_WORKFLOW_SCHEMA_VERSION = 11;
 // A serving release may verify an additive schema created by its immediate
 // successor only when the chart deliberately supplies that compatibility
 // window. Keep this constant explicit: raising it is the release-engineering
@@ -295,6 +295,18 @@ const MANAGED_WORKFLOW_RECORDING_CORRELATION_SQL = [
   '  CHECK (correlation_id IS NULL OR char_length(correlation_id) BETWEEN 16 AND 96);',
   '',
 ].join('\n');
+const MANAGED_WORKFLOW_RECORDING_INPUT_FILTER_INDEX_SQL = [
+  '',
+  '-- Input-filtered recording pages must locate the bounded newest-first',
+  '-- metadata window without sorting the complete workflow history first.',
+  'CREATE INDEX IF NOT EXISTS workflow_recordings_workflow_created_at_recording_id_idx',
+  '  ON workflow_recordings(workflow_id, created_at DESC, recording_id DESC);',
+  '',
+  'CREATE INDEX IF NOT EXISTS workflow_recordings_workflow_failed_created_at_recording_id_idx',
+  '  ON workflow_recordings(workflow_id, created_at DESC, recording_id DESC)',
+  "  WHERE status IN ('failed', 'suspicious');",
+  '',
+].join('\n');
 export const MANAGED_WORKFLOW_SCHEMA_MIGRATIONS: readonly ManagedWorkflowSchemaMigration[] = [
   {
     version: 1,
@@ -355,6 +367,12 @@ export const MANAGED_WORKFLOW_SCHEMA_MIGRATIONS: readonly ManagedWorkflowSchemaM
     name: 'managed-web-app-action-retention-index',
     sql: MANAGED_WEB_APP_ACTION_RETENTION_INDEX_SQL,
     checksum: 'bf0c0eadd2b170a6c8796ca28dfcc4afa7034b54a22198ef25a9e086884288ce',
+  },
+  {
+    version: 11,
+    name: 'workflow-recording-input-filter-indexes',
+    sql: MANAGED_WORKFLOW_RECORDING_INPUT_FILTER_INDEX_SQL,
+    checksum: '3c31cf1daed4a588c7a6276b84333a027f2f94599dacb8f667942fa10a7f22f3',
   },
 ];
 
@@ -710,6 +728,20 @@ export const MANAGED_WORKFLOW_SCHEMA_REQUIRED_INDEXES = [
   ['workflow_web_apps', 'workflow_web_apps_revision_id_idx', ['revision_id'], null, [0]],
   ['workflow_recordings', 'workflow_recordings_workflow_id_idx', ['workflow_id'], null, [0]],
   ['workflow_recordings', 'workflow_recordings_created_at_idx', ['created_at'], null, [3]],
+  [
+    'workflow_recordings',
+    'workflow_recordings_workflow_created_at_recording_id_idx',
+    ['workflow_id', 'created_at', 'recording_id'],
+    null,
+    [0, 3, 3],
+  ],
+  [
+    'workflow_recordings',
+    'workflow_recordings_workflow_failed_created_at_recording_id_idx',
+    ['workflow_id', 'created_at', 'recording_id'],
+    "(status = ANY (ARRAY['failed'::text, 'suspicious'::text))",
+    [0, 3, 3],
+  ],
   [
     'workflow_recordings',
     'workflow_recordings_endpoint_created_at_idx',

@@ -13,6 +13,8 @@ export type StreamingOutputWatchHistorySummary = StreamingOutputWatchRuntimeSumm
   omittedIterations: number;
   retainedIterationUpdateIndexes: number[];
   selectedIteration?: {
+    /** The retained child run that is presented as the Watch terminal page. */
+    graphRunId?: GraphRunId;
     updateIndex: number;
     reason: 'failure' | 'stop' | 'latest';
   };
@@ -217,6 +219,7 @@ export class StreamingOutputWatchHistory {
         selected == null
           ? undefined
           : {
+              graphRunId: selected.graphRunId,
               updateIndex: selected.updateIndex,
               reason: selected === this.#firstFailure ? 'failure' : selected === this.#stopWinner ? 'stop' : 'latest',
             },

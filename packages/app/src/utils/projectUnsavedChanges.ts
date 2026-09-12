@@ -6,6 +6,12 @@ export type ProjectContentForDigest = {
   project: Omit<Project, 'data'> | Project;
 };
 
+export type ProjectContentDirtyState = {
+  hasSavedDigest: boolean;
+  isDirty: boolean;
+  snapshot: ProjectContentForDigest;
+};
+
 function getProjectForDirtyDigest(project: Omit<Project, 'data'> | Project): Omit<Project, 'data' | 'plugins'> {
   const { data: _data, plugins: _plugins, ...projectForDigest } = project as Project;
   return projectForDigest;
@@ -38,6 +44,30 @@ export function buildCurrentProjectContentSnapshot(params: {
 }): ProjectContentForDigest {
   return {
     project: mergeCurrentGraphIntoProject(params.project, params.graph),
+  };
+}
+
+/**
+ * Resolves project-file dirtiness independently from whether the currently
+ * displayed canvas is still a saved graph. Graph deletion deliberately leaves
+ * an empty placeholder canvas, which must not hide the changed project from
+ * the saved-content comparison.
+ */
+export function resolveProjectContentDirtyState(
+  currentDigests: Record<ProjectId, string | undefined>,
+  params: {
+    graph: NodeGraph;
+    project: Omit<Project, 'data'>;
+  },
+): ProjectContentDirtyState {
+  const snapshot = buildCurrentProjectContentSnapshot(params);
+  const projectId = snapshot.project.metadata.id;
+  const savedDigest = projectId ? currentDigests[projectId] : undefined;
+
+  return {
+    snapshot,
+    hasSavedDigest: savedDigest != null,
+    isDirty: savedDigest != null && getProjectContentDigest(snapshot) !== savedDigest,
   };
 }
 

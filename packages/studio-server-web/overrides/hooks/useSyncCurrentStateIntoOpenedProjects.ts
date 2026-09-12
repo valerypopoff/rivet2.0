@@ -24,10 +24,9 @@ import {
   type ProjectExecutorMode,
 } from '../../../app/src/utils/projectExecutorMode.js';
 import {
-  buildCurrentProjectContentSnapshot,
-  getProjectContentDigest,
   markProjectClean,
   markProjectDirtyFlag,
+  resolveProjectContentDirtyState,
 } from '../../../app/src/utils/projectUnsavedChanges.js';
 import { selectedExecutorState } from '../state/settings';
 import { normalizeHostedProjectExecutorMode } from '../utils/hostedExecutorMode';
@@ -405,26 +404,23 @@ export function useSyncCurrentStateIntoOpenedProjects({ enabled = true }: { enab
     }
 
     const currentProjectId = currentProject.metadata.id as ProjectId | undefined;
-    const currentGraphId = currentGraph?.metadata?.id;
-    if (!currentProjectId || !currentGraph || !currentGraphId || !currentProject.graphs[currentGraphId]) {
+    if (!currentProjectId || !currentGraph) {
       return;
     }
 
-    const snapshot = buildCurrentProjectContentSnapshot({
+    const dirtyState = resolveProjectContentDirtyState(savedProjectContentDigests, {
       project: currentProject,
       graph: currentGraph,
     });
-    const savedDigest = savedProjectContentDigests[currentProjectId];
 
-    if (!savedDigest) {
-      setSavedProjectContentDigests((previousDigests) => markProjectClean(previousDigests, snapshot));
+    if (!dirtyState.hasSavedDigest) {
+      setSavedProjectContentDigests((previousDigests) => markProjectClean(previousDigests, dirtyState.snapshot));
       setProjectUnsavedChanges((previousFlags) => markProjectDirtyFlag(previousFlags, currentProjectId, false));
       return;
     }
 
-    const currentDigest = getProjectContentDigest(snapshot);
     setProjectUnsavedChanges((previousFlags) =>
-      markProjectDirtyFlag(previousFlags, currentProjectId, currentDigest !== savedDigest),
+      markProjectDirtyFlag(previousFlags, currentProjectId, dirtyState.isDirty),
     );
   }, [
     currentGraph,

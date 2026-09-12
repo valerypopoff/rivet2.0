@@ -22,7 +22,7 @@ Rivet marks graphs as reachable from the project's Main Graph through supported 
 
 ## Deleting a Graph
 
-To delete a graph, right click on it in the graph list in the sidebar and select "Delete". This will delete the graph from your project. (**Warning** there is no undo at this time!)
+To delete a graph, right click on it in the graph list in the sidebar and select "Delete". This removes the graph from the project and marks the project as having unsaved changes, so save the project to keep the deletion. Deleting another graph does not close or replace the graph you are currently editing. Rivet will not delete a graph (or a folder containing one) while it is running, or while another graph or web-app action targets it; stop the run and remove or retarget those references first. If you delete the configured Main Graph, Rivet clears that setting; choose a replacement in **Project settings** before running the project. (**Warning** there is no undo at this time!)
 
 ## Running a Graph
 

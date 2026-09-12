@@ -60,6 +60,10 @@ export function storeNodeDataForHistory(
     storedData.splitRunDurationMs = { ...data.splitRunDurationMs };
   }
 
+  if (data.streamingWatchTerminal === true) {
+    storedData.streamingWatchTerminal = true;
+  }
+
   if (data.debugData !== undefined) {
     storedData.debugData = cloneDeep(data.debugData);
   }

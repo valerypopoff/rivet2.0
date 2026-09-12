@@ -45,7 +45,6 @@ export const sourceReadingTestAllowlist = new Set([
   'packages/app/src/components/settingsModalLayout.test.ts',
   'packages/app/src/components/wireLayerLayout.test.ts',
   'packages/app/src/hooks/useContextMenu.test.ts',
-  'packages/app/src/hooks/useContextMenuAddNodeConfiguration.test.ts',
   'packages/app/src/hooks/useLocalExecutor.test.ts',
   'packages/app/src/hooks/useRemoteDebugger.test.ts',
   'packages/app/src/hooks/useRemoteExecutorActiveRequest.test.ts',

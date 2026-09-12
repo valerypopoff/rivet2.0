@@ -43,6 +43,7 @@ import {
   projectState,
   projectUnsavedChangesState,
   referencedProjectsState,
+  replaceProjectGraphs,
 } from '../../state/savedGraphs.js';
 import {
   type RecoverableNodeConnectionsByGraph,
@@ -136,6 +137,7 @@ export type GraphBuilderHistorySnapshot = {
   fullscreenOutputNodeId: NodeId | null;
   graph: NodeGraph;
   lastRunDataByNode: RunDataByNodeId;
+  mainGraphId: GraphId | undefined;
   persistedGraph: NodeGraph | undefined;
   recoverableConnections: RecoverableNodeConnectionsByNode | undefined;
   selectedNodeIds: NodeId[];
@@ -171,7 +173,7 @@ export const publishGraphBuilderHistorySnapshotState = atom(
       }
     }
 
-    set(projectState, { ...currentProject, graphs: nextGraphs });
+    set(projectState, replaceProjectGraphs(currentProject, nextGraphs, input.snapshot.mainGraphId));
     set(graphState, cloneDeep(input.snapshot.graph));
     set(selectedNodesState, [...input.snapshot.selectedNodeIds]);
     set(editingNodeState, input.snapshot.editingNodeId);
@@ -295,12 +297,6 @@ export const tryCommitGraphBuilderDraftState = atom(
     }
 
     const changedGraphIds = Object.keys(nextGraphs) as GraphId[];
-    const before = captureHistorySnapshot(get, activeGraphId, changedGraphIds);
-    const activeGraphChanged = Object.hasOwn(nextGraphs, activeGraphId);
-    const after = activeGraphChanged
-      ? createPostCommitHistorySnapshot(before, nextGraphs[activeGraphId]!)
-      : cloneDeep(before);
-    after.additionalGraphs = createPostCommitRelatedGraphSnapshots(before.additionalGraphs, nextGraphs, activeGraphId);
     const currentProject = get(projectState);
     const committedProjectGraphs = { ...currentProject.graphs };
     for (const [rawGraphId, nextGraph] of Object.entries(nextGraphs)) {
@@ -311,10 +307,17 @@ export const tryCommitGraphBuilderDraftState = atom(
         committedProjectGraphs[graphId] = cloneDeep(nextGraph);
       }
     }
-    const nextProject = {
-      ...currentProject,
-      graphs: committedProjectGraphs,
-    };
+    const nextMainGraphId =
+      currentProject.metadata.mainGraphId && committedProjectGraphs[currentProject.metadata.mainGraphId]
+        ? currentProject.metadata.mainGraphId
+        : undefined;
+    const before = captureHistorySnapshot(get, activeGraphId, changedGraphIds);
+    const activeGraphChanged = Object.hasOwn(nextGraphs, activeGraphId);
+    const after = activeGraphChanged
+      ? createPostCommitHistorySnapshot(before, nextGraphs[activeGraphId]!, nextMainGraphId)
+      : { ...cloneDeep(before), mainGraphId: nextMainGraphId };
+    after.additionalGraphs = createPostCommitRelatedGraphSnapshots(before.additionalGraphs, nextGraphs, activeGraphId);
+    const nextProject = replaceProjectGraphs(currentProject, committedProjectGraphs, nextMainGraphId);
     const historyData: GraphBuilderHistoryCommandData = {
       activeGraphId,
       before,
@@ -519,6 +522,7 @@ function captureHistorySnapshot(
     fullscreenOutputNodeId: get(fullscreenOutputNodeState),
     graph: cloneDeep(get(graphState)),
     lastRunDataByNode: cloneDeep(get(lastRunDataByNodeState)),
+    mainGraphId: currentProject.metadata.mainGraphId,
     persistedGraph: cloneDeep(currentProject.graphs[activeGraphId]),
     recoverableConnections: cloneDeep(recoverableConnectionsByGraph[activeGraphId]),
     selectedNodeIds: [...get(selectedNodesState)],
@@ -529,6 +533,7 @@ function captureHistorySnapshot(
 function createPostCommitHistorySnapshot(
   before: GraphBuilderHistorySnapshot,
   graph: NodeGraph,
+  mainGraphId: GraphId | undefined,
 ): GraphBuilderHistorySnapshot {
   const survivingNodeIds = new Set(graph.nodes.map((node) => node.id));
   return {
@@ -541,6 +546,7 @@ function createPostCommitHistorySnapshot(
         : null,
     graph: cloneDeep(graph),
     lastRunDataByNode: filterNodeRecord(before.lastRunDataByNode, survivingNodeIds) ?? {},
+    mainGraphId,
     persistedGraph: cloneDeep(graph),
     recoverableConnections: filterRecoverableConnections(
       before.recoverableConnections,

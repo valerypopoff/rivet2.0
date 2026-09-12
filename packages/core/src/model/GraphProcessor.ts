@@ -189,13 +189,23 @@ type StreamingOutputWatchPlan = {
 type StreamingOutputWatchInvocation = {
   plan: StreamingOutputWatchPlan;
   historyIteration: StreamingOutputWatchHistoryIteration;
-  acceptStop: (value: DataValue) => void;
+  /**
+   * Atomically claims the parent Watch's one accepted Stop value. The claim is
+   * made before the child's nodeFinish is emitted so that event can identify
+   * the actual terminal branch, but its parent-dataflow effects are committed
+   * only after that lifecycle event has been published.
+   */
+  claimStop: (value: DataValue) => StreamingOutputWatchStopClaim | undefined;
   /**
    * Set only by the live Stop node implementation. The output that re-enters
    * the parent is deliberately taken from the completed node result instead:
    * split nodes aggregate their per-item outputs only at that boundary.
    */
   stopReached: boolean;
+};
+
+type StreamingOutputWatchStopClaim = {
+  commit: () => void;
 };
 
 type GraphOutputPartialBinding = {
@@ -271,6 +281,8 @@ export type ProcessEvents = {
     resultOrigin?: NodeResultOrigin;
     durationMs?: number;
     splitRunDurationMs?: Record<number, number>;
+    /** True only for the one Stop result accepted by a repeated Watch branch. */
+    streamingWatchTerminal?: boolean;
   }>;
 
   /** Called when a node has errored during processing. */
@@ -2756,13 +2768,17 @@ export class GraphProcessor {
           return;
         }
 
-        return this.#emitter.emit(event, this.#withExecution(data)).then(() => {
-          if (event === 'nodeFinish') {
-            // SplitRunDeps exposes overloaded event payloads; the runtime event
-            // discriminator guarantees this is the terminal-output shape.
-            this.#commitStreamingWatchStop(node, (data as { outputs: Outputs }).outputs);
-          }
-        });
+        // SplitRunDeps exposes overloaded event payloads; the runtime event
+        // discriminator guarantees this is the terminal-output shape.
+        const stopClaim =
+          event === 'nodeFinish'
+            ? this.#claimStreamingWatchStopFromInvocation(node, (data as { outputs: Outputs }).outputs)
+            : undefined;
+        const eventData =
+          event === 'nodeFinish' && stopClaim
+            ? { ...data, streamingWatchTerminal: true }
+            : data;
+        return this.#emitter.emit(event, this.#withExecution(eventData)).then(() => stopClaim?.commit());
       },
       startNodeTiming: this.#captureNodeTimings ? () => this.#startNodeTiming() : undefined,
       finishNodeTiming: this.#captureNodeTimings ? (start) => this.#finishNodeTiming(start) : undefined,
@@ -2867,6 +2883,7 @@ export class GraphProcessor {
       this.#visitedNodes.add(node.id);
       this.#accumulateCost(outputValues);
       this.#assertStreamingOutputWatchFinalOutputs(node, outputValues);
+      const stopClaim = this.#claimStreamingWatchStopFromInvocation(node, outputValues);
       await this.#emitter.emit(
         'nodeFinish',
         this.#withExecution(
@@ -2876,13 +2893,14 @@ export class GraphProcessor {
               outputs: outputValues,
               processId,
               resultOrigin,
+              ...(stopClaim ? { streamingWatchTerminal: true } : {}),
             },
             this.#finishNodeTiming(timingStart),
           ),
         ),
       );
       this.#finishStreamingOutputWatches(node, outputValues);
-      this.#commitStreamingWatchStop(node, outputValues);
+      stopClaim?.commit();
     } catch (error) {
       await this.#nodeErrored(
         node,
@@ -4284,7 +4302,7 @@ export class GraphProcessor {
     processor.#streamingWatchInvocation = {
       plan,
       historyIteration,
-      acceptStop: (value) => this.#acceptStreamingWatchStop(plan, historyIteration, value, snapshot.updateIndex),
+      claimStop: (value) => this.#claimAcceptedStreamingWatchStop(plan, historyIteration, value, snapshot.updateIndex),
       stopReached: false,
     };
     processor.preloadNodeData(plan.watchNode.id, this.#materializeStreamingOutputWatchSnapshot(snapshot));
@@ -4369,7 +4387,7 @@ export class GraphProcessor {
     }
   }
 
-  #commitStreamingWatchStop(node: ChartNode, outputs: Outputs): void {
+  #claimStreamingWatchStopFromInvocation(node: ChartNode, outputs: Outputs): StreamingOutputWatchStopClaim | undefined {
     const invocation = this.#streamingWatchInvocation;
     const completedValue = outputs['value' as PortId];
     if (
@@ -4378,23 +4396,24 @@ export class GraphProcessor {
       completedValue !== undefined &&
       !this.#getUnhandledErroredNodes().length
     ) {
-      invocation.acceptStop(completedValue);
+      return invocation.claimStop(completedValue);
     }
+    return undefined;
   }
 
-  #acceptStreamingWatchStop(
+  #claimAcceptedStreamingWatchStop(
     plan: StreamingOutputWatchPlan,
     historyIteration: StreamingOutputWatchHistoryIteration,
     value: DataValue,
     updateIndex: number,
-  ): void {
+  ): StreamingOutputWatchStopClaim | undefined {
     const stopNodeId = plan.stopNodeId;
     if (!stopNodeId) {
-      return;
+      return undefined;
     }
     const watch = this.#streamingOutputWatches.get(plan.watchNode.id);
     if (!watch || watch.stopped) {
-      return;
+      return undefined;
     }
     plan.history.acceptStop(historyIteration);
     watch.stop(updateIndex);
@@ -4403,13 +4422,20 @@ export class GraphProcessor {
       throw new Error(`Watch Streaming Output "${plan.watchNode.title}" lost its Stop Watching Streaming Output node.`);
     }
     const acceptedValue = cloneExecutionOutputs({ ['value' as PortId]: value })['value' as PortId]!;
-    this.#nodeResults.set(stopNode.id, { ['value' as PortId]: acceptedValue });
-    this.#visitedNodes.add(stopNode.id);
-    this.#remainingNodes.delete(stopNode.id);
-    const attachedData = this.#getAttachedDataTo(stopNode);
-    const outputNodes = getOutputNodesFrom(this.#executionState, stopNode);
-    this.#propagateAttachedDataToOutputNodes(stopNode, attachedData, outputNodes.connectionsToNodes);
-    this.#queueOutputNodes(stopNode, outputNodes.nodes);
+    let committed = false;
+    return {
+      commit: () => {
+        if (committed) return;
+        committed = true;
+        this.#nodeResults.set(stopNode.id, { ['value' as PortId]: acceptedValue });
+        this.#visitedNodes.add(stopNode.id);
+        this.#remainingNodes.delete(stopNode.id);
+        const attachedData = this.#getAttachedDataTo(stopNode);
+        const outputNodes = getOutputNodesFrom(this.#executionState, stopNode);
+        this.#propagateAttachedDataToOutputNodes(stopNode, attachedData, outputNodes.connectionsToNodes);
+        this.#queueOutputNodes(stopNode, outputNodes.nodes);
+      },
+    };
   }
 
   #cancelStreamingOutputWatchesForSource(nodeId: NodeId): void {

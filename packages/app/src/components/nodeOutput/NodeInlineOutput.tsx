@@ -13,6 +13,7 @@ import { useStableCallback } from '../../hooks/useStableCallback.js';
 import { useUnknownNodeComponentDescriptorFor } from '../../hooks/useNodeTypes.js';
 import { useDataRefs } from '../../providers/ProvidersContext.js';
 import { promptDesignerAttachedChatNodeState } from '../../state/promptDesigner.js';
+import { graphState } from '../../state/graph.js';
 import {
   type NodeRunDataWithRefs,
   type ProcessDataForNode,
@@ -44,6 +45,10 @@ import { LLMChatOutputHistoryPager } from './LLMChatOutputHistoryPager.js';
 import { LLMChatSplitOutputHistory } from './LLMChatSplitOutputHistory.js';
 import { resolveNodeOutputPreviewMode } from './nodeOutputPreviewMode.js';
 import {
+  getStopWatchingStreamingOutputPresentation,
+  getStreamingOutputWatchTerminalPageIndex,
+} from './streamingOutputWatchPresentation.js';
+import {
   createNodeOutputContentViewModel,
   getNodeOutputCopySource,
   getSelectedNodeOutputProcess,
@@ -61,6 +66,7 @@ import {
 } from './NodeRunDurationMeta.js';
 import { nodeRunDataHasVisibleOutput } from './nodeOutputVisibility.js';
 import { renderNodeOutputBody } from './renderNodeOutputBody.js';
+import { getStreamingOutputWatchBranchNodeIds } from '../nodeCanvas/streamingOutputWatchWireState.js';
 
 export const NodeInlineOutput: FC<{
   node: ChartNode;
@@ -75,6 +81,10 @@ export const NodeInlineOutput: FC<{
   const selectedPage = useAtomValue(selectedProcessPageState(node.id));
   const showNodeRunDurations = useAtomValue(showNodeRunDurationsState);
   const graphSelectionOptions = useAtomValue(resolvedGraphSelectionState);
+  const graph = useAtomValue(graphState);
+  const streamingWatchBranchNodeIds = useMemo(() => getStreamingOutputWatchBranchNodeIds(graph), [graph]);
+  const isStreamingWatchBranchNode = streamingWatchBranchNodeIds.has(node.id);
+  const isStreamingWatchStop = isStreamingWatchBranchNode && node.type === 'stopWatchingStreamingOutput';
   const filteredOutput = useMemo(
     () => filterProcessDataForSelection({ ...graphSelectionOptions, processData: output }),
     [graphSelectionOptions, output],
@@ -87,13 +97,22 @@ export const NodeInlineOutput: FC<{
     replacementScopeKey: selectedGraphRunScopeKey,
     showNodeRunDuration: showNodeRunDurations,
   });
+  // Stop is the one-time exit from repeated work. Even if a parallel Watch
+  // briefly records losing attempts, present only the accepted terminal value
+  // here; ordinary Watch-branch nodes retain their bounded history pager.
+  const presentationOutput = isStreamingWatchStop
+    ? getStopWatchingStreamingOutputPresentation(visibleOutput)
+    : visibleOutput;
+  const terminalPageIndex = isStreamingWatchBranchNode
+    ? getStreamingOutputWatchTerminalPageIndex(presentationOutput)
+    : undefined;
 
-  if (!visibleOutput?.length) {
+  if (!presentationOutput?.length) {
     return null;
   }
 
-  if (visibleOutput.length === 1) {
-    const firstOutput = visibleOutput[0];
+  if (presentationOutput.length === 1) {
+    const firstOutput = presentationOutput[0];
     if (!firstOutput) {
       return null;
     }
@@ -119,11 +138,13 @@ export const NodeInlineOutput: FC<{
       <div className="node-output multi">
         <NodeOutputMultiProcess
           node={node}
-          data={visibleOutput}
+          data={presentationOutput}
           isFrozen={isFrozen}
           isOutputExpanded={isOutputExpanded}
           isHovered={isHovered}
           showNodeRunDuration={showNodeRunDurations}
+          followLatestPage={isStreamingWatchBranchNode}
+          terminalPageIndex={terminalPageIndex}
           onToggleExpandedOutput={onToggleExpandedOutput}
           onOpenFullscreenModal={onOpenFullscreenModal}
         />
@@ -475,6 +496,8 @@ const NodeOutputMultiProcess: FC<{
   isFrozen: boolean;
   isOutputExpanded: boolean;
   isHovered: boolean;
+  followLatestPage?: boolean;
+  terminalPageIndex?: number;
   showNodeRunDuration: boolean;
   onToggleExpandedOutput: () => void;
   onOpenFullscreenModal?: () => void;
@@ -484,30 +507,45 @@ const NodeOutputMultiProcess: FC<{
   isFrozen,
   isOutputExpanded,
   isHovered,
+  followLatestPage = false,
+  terminalPageIndex,
   showNodeRunDuration,
   onToggleExpandedOutput,
   onOpenFullscreenModal,
 }) => {
   const [selectedPage, setSelectedPage] = useAtom(selectedProcessPageState(node.id));
-  const selectedPageIndex = getSelectedProcessPageIndex(data, selectedPage);
-  const displaySelectedPage: number | 'latest' =
-    selectedPage === 'latest' ? 'latest' : selectedPageIndex ?? selectedPage;
+  const selectedPageForPresentation =
+    selectedPage === 'latest' && terminalPageIndex != null ? terminalPageIndex : selectedPage;
+  const selectedPageIndex = getSelectedProcessPageIndex(data, selectedPageForPresentation);
+  const displaySelectedPage: number | 'latest' = selectedPageIndex ?? selectedPageForPresentation;
 
   const prevPage = useStableCallback(() => {
     setSelectedPage((page) => {
-      const pageNum = getSelectedProcessPageIndex(data, page) ?? 0;
+      const pageForPresentation = page === 'latest' && terminalPageIndex != null ? terminalPageIndex : page;
+      const pageNum = getSelectedProcessPageIndex(data, pageForPresentation) ?? 0;
       return pageNum > 0 ? pageNum - 1 : pageNum;
     });
   });
 
   const nextPage = useStableCallback(() => {
     setSelectedPage((page) => {
-      const pageNum = getSelectedProcessPageIndex(data, page) ?? 0;
-      return pageNum < data.length - 1 ? pageNum + 1 : pageNum;
+      const pageForPresentation = page === 'latest' && terminalPageIndex != null ? terminalPageIndex : page;
+      const pageNum = getSelectedProcessPageIndex(data, pageForPresentation) ?? 0;
+      const nextPage = pageNum + 1;
+      if (nextPage >= data.length) {
+        return pageNum;
+      }
+      if (terminalPageIndex != null) {
+        return nextPage === terminalPageIndex ? 'latest' : nextPage;
+      }
+      return followLatestPage && nextPage === data.length - 1 ? 'latest' : nextPage;
     });
   });
 
-  const selectedData = useMemo(() => getSelectedNodeOutputProcess(data, selectedPage), [data, selectedPage]);
+  const selectedData = useMemo(
+    () => getSelectedNodeOutputProcess(data, selectedPageForPresentation),
+    [data, selectedPageForPresentation],
+  );
   const showDurationSummary = shouldShowNodeRunDurationSummary(node.type, data, showNodeRunDuration);
   const selectedHasVisibleBody =
     selectedData != null && nodeRunDataHasVisibleOutput(node.type, selectedData.data, { showNodeRunDuration: false });
@@ -515,6 +553,7 @@ const NodeOutputMultiProcess: FC<{
   return (
     <div className="multi-node-output">
       <NodeOutputPager
+        labelledPage={terminalPageIndex == null ? undefined : { index: terminalPageIndex, label: 'Terminal' }}
         selectedPage={displaySelectedPage}
         totalPages={data.length}
         onPrevPage={prevPage}

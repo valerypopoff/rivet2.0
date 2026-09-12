@@ -2,11 +2,11 @@ import { useState, useMemo } from 'react';
 import { useAtom, useAtomValue, useSetAtom } from 'jotai';
 import { graphState } from '../state/graph.js';
 import { projectMetadataState, savedGraphsState } from '../state/savedGraphs.js';
-import { useDeleteGraph } from './useDeleteGraph.js';
+import { useDeleteGraphs } from './useDeleteGraph.js';
 import { useLoadGraph } from './useLoadGraph.js';
 import { useDuplicateGraph } from './useDuplicateGraph.js';
 import { useImportGraph } from './useImportGraph';
-import { emptyNodeGraph, type NodeGraph } from '@valerypopoff/rivet2-core';
+import { type NodeGraph } from '@valerypopoff/rivet2-core';
 import { useStableCallback } from './useStableCallback.js';
 import { expandedFoldersState } from '../state/ui';
 import { toast } from 'react-toastify';
@@ -20,8 +20,6 @@ import {
   preserveFolderNames,
   renameFolderItemInGraphs,
 } from '../domain/graphEditing/graphListActions.js';
-import { frozenNodeOutputsState } from '../state/dataFlow.js';
-import { removeFrozenNodeOutputsForGraphs } from '../utils/frozenNodeOutputs.js';
 
 export function useGraphOperations() {
   const projectMetadata = useAtomValue(projectMetadataState);
@@ -49,14 +47,12 @@ export function useGraphOperations() {
   const allFolderedGraphs = useMemo(() => createFolderedGraphs(savedGraphs, folderNames), [savedGraphs, folderNames]);
   const allFolderPaths = useMemo(() => preserveFolderNames(allFolderedGraphs), [allFolderedGraphs]);
 
-  const deleteGraph = useDeleteGraph();
+  const deleteGraphs = useDeleteGraphs();
   const loadGraph = useLoadGraph();
   const duplicateGraph = useDuplicateGraph();
   const importGraph = useImportGraph();
 
   const setExpandedFolders = useSetAtom(expandedFoldersState);
-  const setFrozenNodeOutputs = useSetAtom(frozenNodeOutputsState);
-
   const startRename = useStableCallback((folderItemName: string) => {
     setRenamingItemFullPath(folderItemName);
     const ancestorFolderPaths = getAncestorFolderPaths(folderItemName);
@@ -98,8 +94,22 @@ export function useGraphOperations() {
   });
 
   const handleDelete = useStableCallback((graph: NodeGraph) => {
+    const graphId = graph.metadata?.id;
+    if (!graphId) {
+      return;
+    }
+
+    const deletion = deleteGraphs([graphId]);
+    if (deletion.referencedGraphIds.length > 0) {
+      toast.error('Remove this graph from other graphs and web apps before deleting it.');
+      return;
+    }
+    if (deletion.deletedGraphIds.length === 0) {
+      toast.error('Stop the graph run before deleting this graph.');
+      return;
+    }
+
     setFolderNames(preserveFolderNames(folderedGraphs));
-    deleteGraph(graph);
   });
 
   const handleDeleteFolder = useStableCallback((folderName: string) => {
@@ -108,17 +118,14 @@ export function useGraphOperations() {
       .filter((savedGraph) => !nextSavedGraphs.some((nextSavedGraph) => nextSavedGraph.metadata?.id === savedGraph.metadata?.id))
       .map((savedGraph) => savedGraph.metadata?.id)
       .filter((id): id is NonNullable<typeof id> => id != null);
-    const currentGraphId = graph.metadata?.id;
-    const currentGraphWasDeleted =
-      currentGraphId != null &&
-      savedGraphs.some((savedGraph: NodeGraph) => savedGraph.metadata?.id === currentGraphId) &&
-      !nextSavedGraphs.some((savedGraph: NodeGraph) => savedGraph.metadata?.id === currentGraphId);
-
-    setSavedGraphs(nextSavedGraphs);
-    setFrozenNodeOutputs((prev) => removeFrozenNodeOutputsForGraphs(prev, deletedGraphIds));
-
-    if (currentGraphWasDeleted) {
-      setGraph(emptyNodeGraph());
+    const deletion = deleteGraphs(deletedGraphIds);
+    if (deletion.referencedGraphIds.length > 0) {
+      toast.error('Remove folder graphs from other graphs and web apps before deleting the folder.');
+      return;
+    }
+    if (deletion.deletedGraphIds.length === 0 && deletedGraphIds.length > 0) {
+      toast.error('Stop all graph runs in this folder before deleting it.');
+      return;
     }
 
     setFolderNames((prev) => prev.filter((name) => name !== folderName && !name.startsWith(`${folderName}/`)));

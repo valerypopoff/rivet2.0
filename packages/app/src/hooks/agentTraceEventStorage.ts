@@ -18,6 +18,7 @@ export function upsertAgentTraceEventForInvocation(runDataByNode: RunDataByNodeI
       processId,
       graphId: execution.graphId,
       graphRunId: execution.graphRunId,
+      parentGraphRunId: execution.parentGraphRunId,
       rootRunId: execution.rootRunId,
       data: {},
     };
@@ -25,6 +26,7 @@ export function upsertAgentTraceEventForInvocation(runDataByNode: RunDataByNodeI
   } else {
     process.graphId = execution.graphId;
     process.graphRunId = execution.graphRunId;
+    process.parentGraphRunId = execution.parentGraphRunId;
     process.rootRunId = execution.rootRunId;
   }
 

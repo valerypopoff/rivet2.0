@@ -65,7 +65,7 @@ const toRecordedEventMap: {
       },
       execution,
     ),
-  nodeFinish: ({ node, outputs, processId, resultOrigin, durationMs, splitRunDurationMs, execution }) =>
+  nodeFinish: ({ node, outputs, processId, resultOrigin, durationMs, splitRunDurationMs, streamingWatchTerminal, execution }) =>
     withExecution(
       withDuration(
         {
@@ -73,6 +73,7 @@ const toRecordedEventMap: {
           outputs,
           processId,
           ...(resultOrigin === undefined ? {} : { resultOrigin }),
+          ...(streamingWatchTerminal ? { streamingWatchTerminal: true } : {}),
         },
         durationMs,
         splitRunDurationMs,

@@ -98,6 +98,67 @@ test('LLM Chat exposes editable built-in-provider credential names', async ({ pa
   await expect(environmentVariableName).toHaveValue('SUPPORT_ANTHROPIC_KEY');
 });
 
+test('previously saved Chat Loop nodes remain loadable after its legacy-label change', async ({ page }) => {
+  const graphId = 'legacy-chat-loop-graph';
+  await seedHostedEditorProject(page, {
+    graph: {
+      nodes: [
+        {
+          data: {},
+          id: 'legacy-chat-loop',
+          title: 'Chat Loop',
+          type: 'chatLoop',
+          visualData: { width: 280, x: 120, y: 180 },
+        },
+      ],
+    },
+    graphId,
+    loaded: true,
+    projectId: 'legacy-chat-loop-project',
+    projectPath: '/workflows/Legacy Chat Loop.rivet-project',
+    title: 'Legacy Chat Loop',
+  });
+
+  await page.goto('/', { waitUntil: 'domcontentloaded' });
+  await authenticateIfNeeded(page);
+  await waitForDashboardReady(page);
+
+  const editor = page.frameLocator('iframe.dashboard-editor-frame');
+  await expect(editor.locator('.node-canvas')).toBeVisible({ timeout: 60_000 });
+
+  // A title stored by an older project remains untouched; palette availability is
+  // separate from loading and rendering registered compatibility node types.
+  await expect(editor.locator('.node[data-nodeid="legacy-chat-loop"] .node-title')).toHaveText('Chat Loop');
+});
+
+test('Add node menu groups Code nodes and keeps retired nodes out of new-node creation', async ({ page }) => {
+  const editor = await openEmptyProject(page, 'Add-Node-Menu');
+  const canvas = editor.locator('.node-canvas');
+  await canvas.click({ button: 'right', position: { x: 640, y: 420 } });
+
+  const addNodeItem = editor.locator('.context-menu-label-text', { hasText: 'Add node' });
+  await expect(addNodeItem).toHaveText('Add node');
+  await addNodeItem.hover();
+
+  const codeGroup = editor.getByText('Code', { exact: true });
+  await expect(codeGroup).toHaveText('Code');
+  await codeGroup.hover();
+
+  const codeItems = editor.getByText('Code', { exact: true });
+  await expect(codeItems).toHaveCount(2);
+  await expect(codeItems.last()).toHaveText('Code');
+  await expect(editor.locator('.context-menu-label-text', { hasText: 'Expression' })).toHaveText('Expression');
+  await expect(editor.locator('.context-menu-label-text', { hasText: 'Convenience' })).toHaveCount(0);
+  await expect(editor.locator('.context-menu-label-text', { hasText: 'Chat (Legacy)' })).toHaveCount(0);
+  await expect(editor.locator('.context-menu-label-text', { hasText: 'Loop Controller (legacy)' })).toHaveCount(0);
+
+  const codeItem = codeItems.last();
+  await codeItem.hover();
+  const infoBox = editor.getByRole('heading', { name: 'Code Node' }).locator('..');
+  await expect(infoBox).toBeVisible();
+  await expect(infoBox.locator('img')).toHaveCount(0);
+});
+
 test('LLM Profile exposes the same built-in-provider credential contract', async ({ page }) => {
   const editor = await openEmptyProject(page, 'Profile');
 

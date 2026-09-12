@@ -7,6 +7,7 @@ import {
 } from '../domain/graphEditing/navigationActions.js';
 import type { CanvasPosition } from '../state/graphBuilder.js';
 import type { PersistedCanvasPosition, ProjectEditorState } from '../state/projectEditor.js';
+import { isProjectGraphViewContextValid } from '../domain/workspace/projectWorkspaceTarget.js';
 
 export type EditorRestoreViewportStrategy =
   | { type: 'saved'; position: CanvasPosition }
@@ -43,23 +44,6 @@ function isGraphViewContextLike(value: unknown): value is GraphViewContext {
   }
 
   return typeof graphView.parent.parentGraphId === 'string' && typeof graphView.parent.parentNodeId === 'string';
-}
-
-function isValidGraphViewContext(project: ProjectLike, graphView: GraphViewContext): boolean {
-  if (!project.graphs[graphView.graphId]) {
-    return false;
-  }
-
-  if (!graphView.parent) {
-    return true;
-  }
-
-  const parentGraph = project.graphs[graphView.parent.parentGraphId];
-  if (!parentGraph) {
-    return false;
-  }
-
-  return parentGraph.nodes.some((node) => node.id === graphView.parent?.parentNodeId);
 }
 
 function normalizeGraphViewContext(graphView: GraphViewContext): GraphViewContext {
@@ -171,7 +155,10 @@ function resolveSavedViewport(
   return { type: 'reset' };
 }
 
-function sanitizeProjectEditorState(project: ProjectLike, projectEditorState: ProjectEditorState | undefined): ProjectEditorState | undefined {
+export function sanitizeProjectEditorStateForProject(
+  project: ProjectLike,
+  projectEditorState: ProjectEditorState | undefined,
+): ProjectEditorState | undefined {
   if (!projectEditorState) {
     return undefined;
   }
@@ -187,25 +174,31 @@ export function sanitizeNavigationStackForProject(
   navigationStack: GraphNavigationStack | undefined,
 ): GraphNavigationStack {
   const rawStack = Array.isArray(navigationStack?.stack) ? navigationStack.stack : [];
-  const filteredStack = rawStack.flatMap((graphView) =>
-    isGraphViewContextLike(graphView) && isValidGraphViewContext(project, graphView)
-      ? [normalizeGraphViewContext(graphView)]
+  const rawIndex = typeof navigationStack?.index === 'number' ? navigationStack.index : rawStack.length - 1;
+  const clampedRawIndex = Math.min(Math.max(rawIndex, 0), Math.max(rawStack.length - 1, 0));
+  const validEntries = rawStack.flatMap((graphView, rawEntryIndex) =>
+    isGraphViewContextLike(graphView) && isProjectGraphViewContextValid(graphView, project)
+      ? [{ graphView: normalizeGraphViewContext(graphView), rawEntryIndex }]
       : [],
   );
 
-  if (filteredStack.length === 0) {
+  if (validEntries.length === 0) {
     return {
       stack: [],
       index: undefined,
     };
   }
 
-  const rawIndex = typeof navigationStack?.index === 'number' ? navigationStack.index : filteredStack.length - 1;
-  const clampedIndex = Math.min(Math.max(rawIndex, 0), filteredStack.length - 1);
+  const exactActiveIndex = validEntries.findIndex((entry) => entry.rawEntryIndex === clampedRawIndex);
+  const previousActiveIndex = validEntries.reduce<number | undefined>(
+    (lastIndex, entry, index) => (entry.rawEntryIndex <= clampedRawIndex ? index : lastIndex),
+    undefined,
+  );
+  const activeIndex = exactActiveIndex >= 0 ? exactActiveIndex : previousActiveIndex ?? 0;
 
   return {
-    stack: filteredStack,
-    index: clampedIndex,
+    stack: validEntries.map((entry) => entry.graphView),
+    index: activeIndex,
   };
 }
 
@@ -368,13 +361,13 @@ export function resolveProjectEditorRestoreTarget(args: {
     legacyCanvasPositionsByGraph,
   } = args;
 
-  const sanitizedPersistedProjectEditorState = sanitizeProjectEditorState(project, persistedProjectEditorState);
+  const sanitizedPersistedProjectEditorState = sanitizeProjectEditorStateForProject(project, persistedProjectEditorState);
   const persistedCanvasPositionsByGraph = sanitizedPersistedProjectEditorState?.canvasPositionsByGraph ?? {};
   const allowLegacyViewportFallback = Object.keys(persistedCanvasPositionsByGraph).length === 0;
   const normalizedExplicitGraphView =
     explicitGraphView &&
     isGraphViewContextLike(explicitGraphView) &&
-    isValidGraphViewContext(project, explicitGraphView)
+    isProjectGraphViewContextValid(explicitGraphView, project)
       ? normalizeGraphViewContext(explicitGraphView)
       : undefined;
   const explicitGraphId =

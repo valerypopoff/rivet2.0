@@ -108,7 +108,7 @@ test('workflow project rename and move preserve wrapper sidecars', async () => {
   assert.equal(await workflowFs.pathExists(renamedSidecars.dataset), true);
   assert.equal(await workflowFs.pathExists(renamedSidecars.settings), true);
   assert.equal(await workflowFs.pathExists(renamedSidecars.stats), true);
-  assert.equal(renamedProjectYaml.metadata.title, 'Renamed');
+  assert.equal(renamedProjectYaml.metadata.title, 'Example');
   assert.deepEqual(renamed.movedProjectPaths, [
     {
       fromAbsolutePath: created.absolutePath,

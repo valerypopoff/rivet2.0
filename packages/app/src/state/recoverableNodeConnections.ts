@@ -23,6 +23,22 @@ export function clearRecoverableNodeConnectionsForGraph(
   return nextEntries;
 }
 
+export function clearRecoverableNodeConnectionsForGraphs(
+  entries: RecoverableNodeConnectionsByGraph,
+  graphIds: readonly GraphId[],
+): RecoverableNodeConnectionsByGraph {
+  const graphIdsToRemove = new Set(graphIds.filter((graphId) => graphId in entries));
+  if (graphIdsToRemove.size === 0) {
+    return entries;
+  }
+
+  const nextEntries = { ...entries };
+  for (const graphId of graphIdsToRemove) {
+    delete nextEntries[graphId];
+  }
+  return nextEntries;
+}
+
 export function getRecoverableNodeConnectionsForNode(
   entriesByNode: RecoverableNodeConnectionsByNode,
   nodeId: NodeId,

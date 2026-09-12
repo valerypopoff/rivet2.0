@@ -139,10 +139,10 @@ The wrapper API currently exposes these groups behind `/api`:
   - `POST /api/workflows/projects/web-apps/unpublish`
   - `GET /api/workflows/recordings/workflows`
   - `GET /api/workflows/recordings/workflows/:workflowId/runs?page=1&pageSize=20&status=all|failed`
-    - optional input filter query: `inputPath=$.foo&inputOperator=%3D%3D&inputValue=bar&inputCursor=0`
+    - optional input filter query: `inputPath=$.foo&inputOperator=%3D%3D&inputValue=bar&inputCursor=0`; modern continuations additionally send the opaque `inputAfter` returned as `nextInputAfter`
     - `$` is the captured graph input root from Rivet's `inputs.input.value`; recordings whose graph inputs do not include an `input` port fall back to an object of all captured graph input values keyed by port name
-    - input-filtered responses scan newest-first and may return `totalRunsExact: false`, `hasMore: true`, and `nextInputCursor` so the dashboard can show recent matches quickly, request the next cursor automatically, and append later matches as they are found; a non-exhaustive cursor response may contain zero matches when the current scan window did not match
-    - if the client aborts the request, the API stops the input-filter artifact scan after the current small read batch
+    - input-filtered responses scan newest-first through bounded metadata windows, probe the newest artifact by itself before concurrently checking older candidates, and may return `totalRunsExact: false`, `hasMore: true`, and an opaque `nextInputAfter` keyset continuation. That continuation is bound to the workflow, status, predicate, and final scanned `(created_at, recording_id)` pair, so it remains correct across concurrent history mutations and avoids deep `OFFSET` scans. When present, it takes precedence over the legacy numeric cursor, so a mixed old/new client request cannot skip a keyset page. `nextInputCursor` remains only for older dashboard clients. A non-exhaustive response may contain zero matches when the current scan window did not match. The filter extracts only the captured start input in a bounded worker pool, not the full recording, and may reuse the tiny extracted value from a short-lived process-local cache keyed by filesystem stat identity or managed-storage-owner-plus-immutable-blob identity; source artifacts remain authoritative and are never copied into a second store.
+    - if the client aborts the request, the API stops the input-filter artifact scan after the current small read batch and removes any of its cold reads still waiting behind the process-wide extraction cap. An artifact absent in a normal filesystem deletion race is skipped; unexpected filesystem or object-store read errors fail the request instead of silently reporting a false negative.
   - `GET /api/workflows/recordings/:recordingId/recording`
   - `GET /api/workflows/recordings/:recordingId/replay-project`
   - `GET /api/workflows/recordings/:recordingId/replay-dataset`
@@ -223,7 +223,7 @@ Current rename-project route behavior:
 
 - `PATCH /api/workflows/projects` accepts `{ "relativePath": string, "newName": string }`
 - it returns `{ "project": WorkflowProjectItem, "movedProjectPaths": WorkflowProjectPathMove[] }`
-- it also rewrites the saved project contents so `project.metadata.title` matches `newName`; managed storage does this by creating a new current draft revision while leaving published revisions/history unchanged
+- it changes only the project catalog name and path; it preserves saved project contents and managed draft/published revisions, so a published project remains published
 - the dashboard calls this route from the project-row context menu; Project Settings does not expose a second rename control
 - the project-row context-menu flow and selected-row `F2` shortcut edit inline in the workflow library, hide the edit field immediately on `Enter`, show a row preloader while the route is pending, retarget selected/open project paths through `movedProjectPaths`, and ask the hosted editor to apply the externally persisted title/path through `RivetWorkspaceHost.updateProjectMetadata(...)` when the renamed project is already open
 - if the target sibling project name already exists, the route returns `409` and the inline preloader clears without leaving the edit field open

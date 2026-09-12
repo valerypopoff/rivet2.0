@@ -383,6 +383,12 @@ drag loop. Preview changes are transient. `moveNodeCommand` records node and ben
 positions together so one Undo/Redo restores the entire move. Existing connection
 serialization persists bend coordinates without changing topology. Alt-node-drag
 keeps its existing duplication behavior; original selected bends are not moved.
+While Ctrl/Cmd-dragging a Comment, authored connection bends whose coordinates lie
+inside that Comment also move with the comment. Bend membership is geometric rather
+than endpoint-based: a wire may cross the Comment boundary while its bend is still
+part of that visual group. The same bounds include edge-touching bends, follow live
+Ctrl/Cmd press/release during a drag, and are committed with the node move as one
+Undo/Redo operation. Unbent wires and bends outside the Comment remain unchanged.
 Midpoint-only drags do not enable node-drag port measurement or all-wire rendering:
 the active bend keys are forced through normal wire virtualization so long wires
 remain visible without paying the cost of a full node drag.
@@ -415,8 +421,9 @@ pointer capture, portals, or layout that pure geometry cannot prove.
 `connectionBendSelection.test.ts` covers rectangle direction, grouped offsets,
 identity preservation, restoration, and stale/deleted bend protection.
 `connection-bend-selection.spec.ts` exercises mixed marquee selection, group
-movement from node and bend handles, Shift locking, Undo/Redo, click behavior,
-and persisted coordinates through mocked workflow storage. Run it with the
+movement from node and bend handles, Ctrl/Cmd Comment-bend enclosure, Shift
+locking, Undo/Redo, click behavior, and persisted coordinates through mocked
+workflow storage. Run it with the
 repository observer and `PLAYWRIGHT_HEADLESS=1`, `PLAYWRIGHT_SLOW_MO=0`.
 Data Bus compilation and scheduler behavior belong in
 `packages/core/test/model/DataBusTopology.test.ts`; provider/consumer

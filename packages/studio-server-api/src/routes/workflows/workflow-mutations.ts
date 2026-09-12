@@ -45,7 +45,6 @@ import {
   writePublishedWorkflowVersionMetadata,
 } from './published-versions.js';
 import { requireProjectMainGraphForEndpoint } from './main-graph.js';
-import { normalizeHostedProjectTitle } from './hosted-project-contents.js';
 import { getWorkflowDuplicateProjectName } from './workflow-project-naming.js';
 import { deleteWorkflowRecordingsBySourceProjectPath, deleteWorkflowRecordingsByWorkflowId } from './recordings.js';
 import { getWorkflowFolder, getWorkflowProject } from './workflow-query.js';
@@ -424,15 +423,7 @@ export async function renameWorkflowProjectItem(relativePath: unknown, newName: 
     throw conflict(`Project already exists: ${path.basename(renamedProjectPath)}`);
   }
 
-  const currentContents = await fs.readFile(currentProjectPath, 'utf8');
-  const normalizedRenamedContents = normalizeHostedProjectTitle(
-    currentContents,
-    projectName,
-    'Could not rename project: invalid project file',
-  );
-
   await moveProjectWithSidecars(currentProjectPath, renamedProjectPath);
-  await fs.writeFile(renamedProjectPath, normalizedRenamedContents.contents, 'utf8');
 
   return {
     project: await getWorkflowProject(root, renamedProjectPath),

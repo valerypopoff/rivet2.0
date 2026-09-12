@@ -17,6 +17,9 @@ import { coerceType } from '../../utils/coerceType.js';
 
 export type ChatLoopNode = ChartNode<'chatLoop', ChatLoopNodeData>;
 
+/** Display-only label; the persisted node type remains the stable `chatLoop`. */
+export const chatLoopLegacyDisplayName = 'Chat Loop (legacy)';
+
 export type ChatLoopNodeData = ChatNodeData & {
   userPrompt: string;
   renderingFormat?: 'text' | 'markdown';
@@ -26,7 +29,7 @@ export class ChatLoopNodeImpl extends NodeImpl<ChatLoopNode> {
   static create(): ChatLoopNode {
     const chartNode: ChatLoopNode = {
       type: 'chatLoop',
-      title: 'Chat Loop',
+      title: chatLoopLegacyDisplayName,
       id: nanoid() as NodeId,
       visualData: {
         x: 0,
@@ -73,8 +76,8 @@ export class ChatLoopNodeImpl extends NodeImpl<ChatLoopNode> {
 
         The conversation history is maintained and sent with each new message.
       `,
-      contextMenuTitle: 'Chat Loop',
-      infoBoxTitle: 'Chat Loop Node',
+      contextMenuTitle: chatLoopLegacyDisplayName,
+      infoBoxTitle: `${chatLoopLegacyDisplayName} Node`,
       group: ['Convenience'],
     };
   }
@@ -180,4 +183,6 @@ export class ChatLoopNodeImpl extends NodeImpl<ChatLoopNode> {
   }
 }
 
-export const chatLoopNode = nodeDefinition(ChatLoopNodeImpl, 'Chat Loop');
+// The persisted `chatLoop` type is intentionally unchanged: the legacy
+// marker is display-only, so projects saved before this rename still load.
+export const chatLoopNode = nodeDefinition(ChatLoopNodeImpl, chatLoopLegacyDisplayName);

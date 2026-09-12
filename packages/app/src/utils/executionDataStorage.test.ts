@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import type { DataValue, Outputs, PortId } from '@valerypopoff/rivet2-core';
+import type { DataValue, NodeId, Outputs, PortId, ProcessId, ProjectId } from '@valerypopoff/rivet2-core';
 import type { DataRefStore } from '../providers/ProvidersContext.js';
 import {
   clearExecutionDataRefs,
@@ -934,6 +934,21 @@ test('storeNodeDataForHistory preserves split-run item durations as transient me
 
   assert.equal(stored.durationMs, 20);
   assert.deepEqual(stored.splitRunDurationMs, { 0: 8, 1: 12 });
+});
+
+test('storeNodeDataForHistory preserves the accepted Watch Stop terminal marker', () => {
+  const dataRefs = createDataRefStore();
+
+  const stored = storeNodeDataForHistory(
+    {
+      status: { type: 'ok' },
+      streamingWatchTerminal: true,
+    },
+    dataRefs,
+    { nodeId: 'watch-stop' as NodeId, processId: 'watch-stop-process' as ProcessId, projectId: 'project' as ProjectId },
+  );
+
+  assert.equal(stored.streamingWatchTerminal, true);
 });
 
 test('storeNodeDataForHistory preserves recorded replay timing separately from local receipt timing', () => {

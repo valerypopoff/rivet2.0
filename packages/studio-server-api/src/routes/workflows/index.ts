@@ -1,5 +1,6 @@
 import { Router, type Request, type Response } from 'express';
 import { z } from 'zod';
+import { prepareWorkflowRecordingInputExtractor } from './recording-input-extractor.js';
 
 import { validateBody } from '../../middleware/validate.js';
 import { asyncHandler } from '../../utils/asyncHandler.js';
@@ -21,7 +22,10 @@ import {
   publishedWebAppsRouter,
   publishedWorkflowsRouter,
 } from './execution.js';
-import { normalizeWorkflowRecordingInputFilter } from './recording-input-filter.js';
+import {
+  normalizeWorkflowRecordingInputFilter,
+  parseWorkflowRecordingInputAfter,
+} from './recording-input-filter.js';
 import {
   createWorkflowFolderItemWithBackend,
   createWorkflowProjectItemWithBackend,
@@ -218,6 +222,7 @@ const recordingsRunsQuerySchema = z.object({
   inputOperator: z.enum(WORKFLOW_RECORDING_INPUT_FILTER_OPERATORS).optional(),
   inputValue: z.string().optional(),
   inputCursor: z.coerce.number().int().min(0).optional().default(0),
+  inputAfter: z.string().min(1).max(512).optional(),
 });
 
 const reconciliationFindingQuerySchema = z
@@ -284,11 +289,15 @@ workflowsRouter.get('/maintenance/reconciliation/findings', requireAuth, asyncHa
 }));
 
 workflowsRouter.get('/recordings', asyncHandler(async (_req, res) => {
-  res.json(await listWorkflowRecordingWorkflowsWithBackend());
+  const catalog = await listWorkflowRecordingWorkflowsWithBackend();
+  prepareWorkflowRecordingInputExtractor();
+  res.json(catalog);
 }));
 
 workflowsRouter.get('/recordings/workflows', asyncHandler(async (_req, res) => {
-  res.json(await listWorkflowRecordingWorkflowsWithBackend());
+  const catalog = await listWorkflowRecordingWorkflowsWithBackend();
+  prepareWorkflowRecordingInputExtractor();
+  res.json(catalog);
 }));
 
 workflowsRouter.get('/run-statistics/targets', asyncHandler(async (req, res) => {
@@ -317,6 +326,16 @@ workflowsRouter.get('/recordings/workflows/:workflowId/runs', asyncHandler(async
       operator: parsedQuery.inputOperator,
       value: parsedQuery.inputValue,
     });
+    if (parsedQuery.inputAfter) {
+      if (!inputFilter) {
+        throw new Error('A recording input search continuation requires an input filter.');
+      }
+      parseWorkflowRecordingInputAfter(parsedQuery.inputAfter, {
+        workflowId: String(req.params.workflowId ?? ''),
+        statusFilter: parsedQuery.status,
+        filter: inputFilter,
+      });
+    }
   } catch (error) {
     requestAbort.cleanup();
     throw badRequest(error instanceof Error ? error.message : 'Invalid recording input filter');
@@ -331,6 +350,7 @@ workflowsRouter.get('/recordings/workflows/:workflowId/runs', asyncHandler(async
       inputFilter,
       parsedQuery.inputCursor,
       requestAbort.signal,
+      parsedQuery.inputAfter,
     );
     if (!requestAbort.signal.aborted && !res.destroyed) {
       res.json(runsPage);

@@ -12,6 +12,7 @@ import {
   disposeWorkflowStorage,
   initializeWorkflowStorage,
 } from './routes/workflows/storage-backend.js';
+import { disposeWorkflowRecordingInputExtractor } from './routes/workflows/recording-input-extractor.js';
 import { getPublishedExecutionAdmission } from './published-execution-admission.js';
 import {
   abortActiveHttpExecutions,
@@ -137,6 +138,8 @@ function disposeResources(interruptWebAppRuns: boolean): Promise<void> {
 }
 
 async function disposeResourcesOnce(interruptWebAppRuns: boolean): Promise<void> {
+  disposeWorkflowRecordingInputExtractor();
+
   if (webAppActionWebSockets) {
     await webAppActionWebSockets.dispose({ interrupt: interruptWebAppRuns }).catch((error) => {
       console.error('[web-app-actions] Failed to dispose WebSocket actions during shutdown:', error);

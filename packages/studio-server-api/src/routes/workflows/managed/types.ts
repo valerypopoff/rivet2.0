@@ -129,6 +129,12 @@ export type RecordingRow = {
   project_uncompressed_bytes: number;
   dataset_compressed_bytes: number;
   dataset_uncompressed_bytes: number;
+  /**
+   * Exact UTC timestamp selected only for opaque input-filter continuations.
+   * PostgreSQL timestamps can retain microseconds that JavaScript `Date`
+   * values cannot represent.
+   */
+  recording_cursor_created_at?: string;
 };
 
 export type EndpointAggregateRow = {

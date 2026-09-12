@@ -111,9 +111,33 @@ export const savedGraphsState = atom(
       }
     });
 
-    set(projectState, reconcileProjectUiGraphBindings(project, newProject));
+    set(projectState, replaceProjectGraphs(project, newProject.graphs, project.metadata.mainGraphId));
   },
 );
+
+/**
+ * Replaces the project's graph collection while keeping graph-owned project
+ * metadata valid. Call this for in-place graph collection mutations,
+ * including Graph Builder history publication, rather than setting
+ * `projectState.graphs` directly.
+ */
+export function replaceProjectGraphs<TProject extends Project>(
+  project: TProject,
+  graphs: TProject['graphs'],
+  mainGraphId: GraphId | undefined,
+): TProject {
+  const nextMainGraphId = mainGraphId && graphs[mainGraphId] ? mainGraphId : undefined;
+  const nextProject = {
+    ...project,
+    graphs,
+    metadata:
+      project.metadata.mainGraphId === nextMainGraphId
+        ? project.metadata
+        : { ...project.metadata, mainGraphId: nextMainGraphId },
+  } as TProject;
+
+  return reconcileProjectUiGraphBindings(project, nextProject);
+}
 
 export const projectPluginsState = atom(
   (get) => get(projectState).plugins ?? [],

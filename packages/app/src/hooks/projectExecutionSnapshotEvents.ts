@@ -46,6 +46,7 @@ import {
   toLLMChatOutputHistoryEntry,
   upsertLLMChatOutputHistoryEntry,
 } from '../utils/llmChatOutputHistory.js';
+import { markStreamingOutputWatchTerminal } from './streamingOutputWatchTerminal.js';
 
 export type ProjectExecutionSnapshotEventResult = {
   changed: boolean;
@@ -150,6 +151,9 @@ function applyProcessEventToProjectExecutionSnapshotData<K extends keyof Process
             finishedAt: Date.now(),
             outputData: sanitizeInputsOrOutputs((options.data as ProcessEvents['nodeFinish']).outputs),
             splitRunDurationMs: (options.data as ProcessEvents['nodeFinish']).splitRunDurationMs,
+            ...((options.data as ProcessEvents['nodeFinish']).streamingWatchTerminal
+              ? { streamingWatchTerminal: true }
+              : {}),
             status: { type: 'ok' },
           },
           options,
@@ -253,6 +257,13 @@ function applyProcessEventToProjectExecutionSnapshotData<K extends keyof Process
           options.refStore,
         ),
       };
+    case 'streamingOutputWatchSummary': {
+      const nextSnapshot = applyStreamingOutputWatchTerminal(
+        snapshot,
+        options.data as ProcessEvents['streamingOutputWatchSummary'],
+      );
+      return { changed: nextSnapshot !== snapshot, snapshot: nextSnapshot };
+    }
     case 'userInput':
       return {
         changed: true,
@@ -317,6 +328,15 @@ function applyProcessEventToProjectExecutionSnapshotData<K extends keyof Process
   }
 }
 
+function applyStreamingOutputWatchTerminal(
+  snapshot: ProjectExecutionSnapshot,
+  event: ProcessEvents['streamingOutputWatchSummary'],
+): ProjectExecutionSnapshot {
+  return produce(snapshot, (draft) => {
+    markStreamingOutputWatchTerminal(draft.lastRunDataByNode, event);
+  });
+}
+
 function applyAgentTraceEvent(snapshot: ProjectExecutionSnapshot, event: AgentTraceEvent): ProjectExecutionSnapshot {
   return produce(snapshot, (draft) => {
     upsertAgentTraceEventForInvocation(draft.lastRunDataByNode, event);
@@ -346,6 +366,7 @@ function applyLLMChatOutputSnapshot(
         data: {},
         graphId: data.execution.graphId,
         graphRunId: data.execution.graphRunId,
+        parentGraphRunId: data.execution.parentGraphRunId,
         processId: data.processId,
         rootRunId: data.execution.rootRunId,
       };
@@ -499,6 +520,7 @@ function setDataForNodeInSnapshot(
     if (existingProcess) {
       existingProcess.graphId = event.execution?.graphId ?? existingProcess.graphId;
       existingProcess.graphRunId = event.execution?.graphRunId ?? existingProcess.graphRunId;
+      existingProcess.parentGraphRunId = event.execution?.parentGraphRunId ?? existingProcess.parentGraphRunId;
       existingProcess.rootRunId = event.execution?.rootRunId ?? existingProcess.rootRunId;
       const nextProcessData = mergeNodeRunDataForProcess(existingProcess.data, storedData);
       refIdsToDelete.push(...collectReplacedRefIds(existingProcess.data, nextProcessData));
@@ -510,6 +532,7 @@ function setDataForNodeInSnapshot(
       data: storedData as NodeRunDataWithRefs,
       graphId: event.execution?.graphId,
       graphRunId: event.execution?.graphRunId,
+      parentGraphRunId: event.execution?.parentGraphRunId,
       processId: event.processId,
       rootRunId: event.execution?.rootRunId,
     });
@@ -549,6 +572,7 @@ function applyPartialOutput(
     if (existingProcess) {
       existingProcess.graphId = data.execution.graphId;
       existingProcess.graphRunId = data.execution.graphRunId;
+      existingProcess.parentGraphRunId = data.execution.parentGraphRunId;
       existingProcess.rootRunId = data.execution.rootRunId;
       const nextSplitOutputData = {
         ...existingProcess.data.splitOutputData,
@@ -567,6 +591,7 @@ function applyPartialOutput(
         },
         graphId: data.execution.graphId,
         graphRunId: data.execution.graphRunId,
+        parentGraphRunId: data.execution.parentGraphRunId,
         processId: data.processId,
         rootRunId: data.execution.rootRunId,
       });

@@ -14,6 +14,7 @@ import {
   createDragDuplicatePreviewNodes,
   getDraggingConnectionSourceNodeIds,
   getDraggingPreviewNodes,
+  resolveCommentEnclosureDraggedConnectionBendKeys,
   resolveCommentEnclosureDraggedNodeIds,
   resolveDragAxisLock,
   resolveDraggedNodeIds,
@@ -56,6 +57,18 @@ function areNodeIdsEqual(left: NodeId[], right: NodeId[]): boolean {
   return left.length === right.length && left.every((nodeId, index) => nodeId === right[index]);
 }
 
+function areConnectionBendMovesEqual(left: ConnectionBendMove[], right: ConnectionBendMove[]): boolean {
+  return (
+    left.length === right.length &&
+    left.every(
+      (move, index) =>
+        move.connectionKey === right[index]?.connectionKey &&
+        move.position.x === right[index]?.position.x &&
+        move.position.y === right[index]?.position.y,
+    )
+  );
+}
+
 function bringNodesToFront(nodes: ChartNode[], nodeIdsToFront: NodeId[]): ChartNode[] {
   if (nodeIdsToFront.length === 0) {
     return nodes;
@@ -81,6 +94,7 @@ export const useDraggingNode = (options: UseDraggingNodeOptions = {}) => {
   const selectionScope = useAtomValue(connectionBendSelectionScopeState);
   const isReadOnly = useAtomValue(isReadOnlyGraphState);
   const bendStartsRef = useRef<ConnectionBendMove[]>([]);
+  const baseBendStartsRef = useRef<ConnectionBendMove[]>([]);
   const bendActivatorRef = useRef(false);
   const dragScopeRef = useRef(selectionScope);
   const setSelectedNodeIds = useSetAtom(selectedNodesState);
@@ -109,6 +123,7 @@ export const useDraggingNode = (options: UseDraggingNodeOptions = {}) => {
   const [dragMode, setDragMode] = useState<DragMode>('move');
   const [dragAxisLock, setDragAxisLock] = useState<DragAxisLock>();
   const [dragDelta, setDragDelta] = useState<DragDelta>({ x: 0, y: 0 });
+  const [draggedBendStarts, setDraggedBendStarts] = useState<ConnectionBendMove[]>([]);
   const [isDragActive, setIsDragActive] = useState(false);
 
   const startPositionsRef = useRef<DragStartPositionMap>(new Map());
@@ -154,8 +169,16 @@ export const useDraggingNode = (options: UseDraggingNodeOptions = {}) => {
     setDragAxisLock(nextDragAxisLock);
   }, []);
 
+  const setSessionBendStarts = useCallback((nextBendStarts: ConnectionBendMove[]) => {
+    bendStartsRef.current = nextBendStarts;
+    setDraggedBendStarts((currentBendStarts) =>
+      areConnectionBendMovesEqual(currentBendStarts, nextBendStarts) ? currentBendStarts : nextBendStarts,
+    );
+  }, []);
+
   const resetDragSession = useCallback(() => {
-    bendStartsRef.current = [];
+    baseBendStartsRef.current = [];
+    setSessionBendStarts([]);
     bendActivatorRef.current = false;
     lastDragActivatorAltRef.current = false;
     lastDragActivatorCommentEnclosureRef.current = false;
@@ -177,6 +200,7 @@ export const useDraggingNode = (options: UseDraggingNodeOptions = {}) => {
     setIsDragActive(false);
   }, [
     setSessionDragAxisLock,
+    setSessionBendStarts,
     setSessionDragMode,
     setSessionPreviewNodes,
     setSessionSourceNodeIds,
@@ -192,6 +216,40 @@ export const useDraggingNode = (options: UseDraggingNodeOptions = {}) => {
         nodes,
       }).filter((nodeId) => !excludedNodeIds?.has(nodeId));
       const { sourceNodeIds, sourceNodes } = resolveDraggedSourceNodes(nextDraggedNodeIds, nodesById);
+
+      if (graphCommandsEnabled && !bendActivatorRef.current) {
+        const movableConnections = excludedNodeIds
+          ? connections.filter(
+              (connection) =>
+                !excludedNodeIds.has(connection.inputNodeId) && !excludedNodeIds.has(connection.outputNodeId),
+            )
+          : connections;
+        const enclosedBendKeys = new Set(
+          resolveCommentEnclosureDraggedConnectionBendKeys({
+            connections: movableConnections,
+            draggedNodeIds: sourceNodeIds,
+            includeEnclosedNodes,
+            nodes,
+          }),
+        );
+        const enclosedBendStarts = movableConnections.flatMap((connection) => {
+          const connectionKey = getProjectConnectionComparisonKey(connection);
+          return connection.bendPoint && enclosedBendKeys.has(connectionKey)
+            ? [{ connectionKey, position: { ...connection.bendPoint } }]
+            : [];
+        });
+        const nextBendStarts = [
+          ...baseBendStartsRef.current,
+          ...enclosedBendStarts.filter(
+            (enclosedBendStart) =>
+              !baseBendStartsRef.current.some(
+                (baseBendStart) => baseBendStart.connectionKey === enclosedBendStart.connectionKey,
+              ),
+          ),
+        ];
+
+        setSessionBendStarts(nextBendStarts);
+      }
 
       if (!areNodeIdsEqual(sourceNodeIds, draggedSourceNodeIdsRef.current)) {
         setSessionSourceNodeIds(sourceNodeIds);
@@ -215,7 +273,10 @@ export const useDraggingNode = (options: UseDraggingNodeOptions = {}) => {
     [
       nodes,
       nodesById,
+      connections,
       excludedNodeIds,
+      graphCommandsEnabled,
+      setSessionBendStarts,
       setSessionPreviewNodes,
       setSessionSourceNodeIds,
       setSessionSourceNodes,
@@ -319,7 +380,7 @@ export const useDraggingNode = (options: UseDraggingNodeOptions = {}) => {
       dragScopeRef.current = selectionScope;
       const isSelectedBend = !!bendKey && selectedBends.includes(bendKey);
       const bendKeys = bendKey && !isSelectedBend ? [bendKey] : selectedBends;
-      bendStartsRef.current = graphCommandsEnabled
+      const initialBendStarts = graphCommandsEnabled
         ? connections.flatMap((connection) => {
             if (excludedNodeIds?.has(connection.inputNodeId) || excludedNodeIds?.has(connection.outputNodeId))
               return [];
@@ -329,6 +390,8 @@ export const useDraggingNode = (options: UseDraggingNodeOptions = {}) => {
               : [];
           })
         : [];
+      baseBendStartsRef.current = initialBendStarts;
+      setSessionBendStarts(initialBendStarts);
       const draggedNodeId = e.active.id as NodeId;
       const baseDraggedNodeIds = bendKey
         ? isSelectedBend
@@ -361,6 +424,7 @@ export const useDraggingNode = (options: UseDraggingNodeOptions = {}) => {
       selectionScope,
       isReadOnly,
       selectedBends,
+      setSessionBendStarts,
       resetDragSession,
       selectedNodeIds,
       setSessionDragAxisLock,
@@ -515,7 +579,7 @@ export const useDraggingNode = (options: UseDraggingNodeOptions = {}) => {
     draggingBendMoves:
       dragMode === 'move'
         ? offsetConnectionBends(
-            bendStartsRef.current,
+            draggedBendStarts,
             constrainDragDeltaToAxisLock(
               { x: dragDelta.x / canvasPosition.zoom, y: dragDelta.y / canvasPosition.zoom },
               dragAxisLock,

@@ -32,12 +32,25 @@ export function getRecordingArtifactPath(
 export async function readArtifactBuffer(
   filePath: string,
   encoding: WorkflowRecordingBlobEncoding,
+  signal?: AbortSignal,
 ): Promise<{ compressed: Buffer; uncompressed: Buffer }> {
-  const compressed = await fs.readFile(filePath);
+  const compressed = await readArtifactCompressedBuffer(filePath, signal);
   return {
     compressed,
     uncompressed: encoding === 'gzip' ? await gunzipAsync(compressed) : compressed,
   };
+}
+
+/**
+ * Reads the stored bytes without decompressing or decoding them. Input-filter
+ * extraction transfers these bytes to its worker, keeping large-recording
+ * decompression and JSON parsing off the API event loop.
+ */
+export async function readArtifactCompressedBuffer(
+  filePath: string,
+  signal?: AbortSignal,
+): Promise<Buffer> {
+  return fs.readFile(filePath, { signal });
 }
 
 export async function readArtifactBytes(
@@ -73,7 +86,11 @@ export async function serializeArtifact(
   };
 }
 
-export async function readArtifactText(filePath: string, encoding: WorkflowRecordingBlobEncoding): Promise<string> {
-  const { uncompressed } = await readArtifactBuffer(filePath, encoding);
+export async function readArtifactText(
+  filePath: string,
+  encoding: WorkflowRecordingBlobEncoding,
+  signal?: AbortSignal,
+): Promise<string> {
+  const { uncompressed } = await readArtifactBuffer(filePath, encoding, signal);
   return uncompressed.toString('utf8');
 }
