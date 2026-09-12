@@ -90,7 +90,13 @@ export type WorkflowRecordingRunsPageResponse = {
   totalRuns: number;
   totalRunsExact?: boolean;
   hasMore?: boolean;
+  /**
+   * Legacy offset continuation. New dashboard clients prefer nextInputAfter so
+   * concurrent recording insertions/deletions cannot shift the next search.
+   */
   nextInputCursor?: number;
+  /** Opaque newest-first continuation for an input-filtered recording search. */
+  nextInputAfter?: string;
   statusFilter: WorkflowRecordingFilterStatus;
   inputFilter?: WorkflowRecordingInputFilter | null;
   runs: WorkflowRecordingRunSummary[];

@@ -131,6 +131,7 @@ export const RunRecordingsModal: FC<RunRecordingsModalProps> = ({
       <ModalDialog
         testId="run-recordings-modal"
         width="large"
+        height="calc(100vh - 40px)"
         label="Run recordings"
         onClose={onDismiss}
       >

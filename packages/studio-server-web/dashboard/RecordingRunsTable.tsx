@@ -1,5 +1,6 @@
 import Select from '@atlaskit/select';
-import { type FC } from 'react';
+import { type FC, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { VariableSizeList, type ListChildComponentProps } from 'react-window';
 
 import {
   WORKFLOW_RECORDING_INPUT_FILTER_OPERATORS,
@@ -37,6 +38,9 @@ const inputFilterOperatorOptions: Array<{ value: WorkflowRecordingInputFilterOpe
     value: operator,
     label: INPUT_FILTER_OPERATOR_LABELS[operator] ?? operator,
   }));
+
+const ESTIMATED_RECORDING_ROW_HEIGHT = 138;
+const RECORDING_ROW_GAP = 8;
 
 function formatDuration(durationMs: number): string {
   if (durationMs < 1000) {
@@ -131,6 +135,187 @@ function RecordingRow({
           Delete
         </button>
       </div>
+    </div>
+  );
+}
+
+type VirtualizedRecordingRowData = {
+  recordings: WorkflowRecordingRunSummary[];
+  deletingRecordingId: string | null;
+  onDelete: (recordingId: string) => void;
+  onOpen: (recordingId: string) => void;
+  onHeightChange: (recordingId: string, height: number) => void;
+};
+
+function MeasuredRecordingRow({
+  recording,
+  isDeleting,
+  onDelete,
+  onOpen,
+  onHeightChange,
+}: {
+  recording: WorkflowRecordingRunSummary;
+  isDeleting: boolean;
+  onDelete: (recordingId: string) => void;
+  onOpen: (recordingId: string) => void;
+  onHeightChange: (recordingId: string, height: number) => void;
+}) {
+  const rowRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    const row = rowRef.current;
+    if (!row) return;
+    const measure = () => onHeightChange(recording.id, Math.ceil(row.getBoundingClientRect().height) + RECORDING_ROW_GAP);
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(row);
+    return () => observer.disconnect();
+  }, [onHeightChange, recording.id]);
+
+  return (
+    <div ref={rowRef}>
+      <RecordingRow
+        recording={recording}
+        isDeleting={isDeleting}
+        onDelete={onDelete}
+        onOpen={onOpen}
+      />
+    </div>
+  );
+}
+
+function VirtualizedRecordingRow({ index, style, data }: ListChildComponentProps<VirtualizedRecordingRowData>) {
+  const recording = data.recordings[index]!;
+
+  return (
+    <div style={{ ...style, boxSizing: 'border-box' }}>
+      <MeasuredRecordingRow
+        recording={recording}
+        isDeleting={data.deletingRecordingId !== null}
+        onDelete={data.onDelete}
+        onOpen={data.onOpen}
+        onHeightChange={data.onHeightChange}
+      />
+    </div>
+  );
+}
+
+function VirtualizedRecordingList({
+  recordings,
+  deletingRecordingId,
+  onDelete,
+  onOpen,
+}: {
+  recordings: WorkflowRecordingRunSummary[];
+  deletingRecordingId: string | null;
+  onDelete: (recordingId: string) => void;
+  onOpen: (recordingId: string) => void;
+}) {
+  const viewportRef = useRef<HTMLDivElement | null>(null);
+  const listRef = useRef<VariableSizeList | null>(null);
+  const rowHeightsRef = useRef(new Map<string, number>());
+  const rowIndexesRef = useRef(new Map<string, number>());
+  const previousRecordingIdsRef = useRef<string[]>([]);
+  const previousRecordingsRef = useRef<WorkflowRecordingRunSummary[]>([]);
+  const [viewportHeight, setViewportHeight] = useState(0);
+
+  useEffect(() => {
+    const viewport = viewportRef.current;
+    if (!viewport) return;
+    let previousWidth = viewport.clientWidth;
+    const updateHeight = () => {
+      if (viewport.clientWidth !== previousWidth) {
+        previousWidth = viewport.clientWidth;
+        // Offscreen rows cannot report their new wrapped height until mounted.
+        rowHeightsRef.current.clear();
+        listRef.current?.resetAfterIndex(0);
+      }
+      setViewportHeight(Math.max(0, Math.floor(viewport.clientHeight)));
+    };
+    updateHeight();
+    const observer = new ResizeObserver(updateHeight);
+    observer.observe(viewport);
+    return () => observer.disconnect();
+  }, []);
+
+  useLayoutEffect(() => {
+    const previousIds = previousRecordingIdsRef.current;
+    const previousRecordings = previousRecordingsRef.current;
+    const nextIds = recordings.map((recording) => recording.id);
+    let firstChangedIndex = -1;
+    const sharedLength = Math.min(previousIds.length, nextIds.length);
+    for (let index = 0; index < sharedLength; index += 1) {
+      if (previousIds[index] !== nextIds[index]) {
+        firstChangedIndex = index;
+        break;
+      }
+    }
+    if (firstChangedIndex < 0 && previousIds.length > nextIds.length) {
+      firstChangedIndex = nextIds.length;
+    }
+    for (let index = 0; index < sharedLength; index += 1) {
+      if (previousIds[index] === nextIds[index] && previousRecordings[index] !== recordings[index]) {
+        rowHeightsRef.current.delete(nextIds[index]!);
+        firstChangedIndex = firstChangedIndex < 0 ? index : Math.min(firstChangedIndex, index);
+      }
+    }
+
+    const activeIds = new Set(recordings.map((recording) => recording.id));
+    for (const recordingId of rowHeightsRef.current.keys()) {
+      if (!activeIds.has(recordingId)) {
+        rowHeightsRef.current.delete(recordingId);
+      }
+    }
+    rowIndexesRef.current = new Map(nextIds.map((recordingId, index) => [recordingId, index]));
+    previousRecordingIdsRef.current = nextIds;
+    previousRecordingsRef.current = recordings;
+
+    // Establish indexes before child passive effects measure newly added rows.
+    // Input-filter results append in newest-first order. Existing row heights
+    // remain correct, so resetting all virtual measurements on every response
+    // would visibly jump a long list for no reason.
+    if (firstChangedIndex >= 0) {
+      listRef.current?.resetAfterIndex(firstChangedIndex, true);
+    }
+  }, [recordings]);
+
+  const onHeightChange = useCallback((recordingId: string, height: number) => {
+    if (rowHeightsRef.current.get(recordingId) === height) return;
+    rowHeightsRef.current.set(recordingId, height);
+    const index = rowIndexesRef.current.get(recordingId);
+    if (index != null) {
+      listRef.current?.resetAfterIndex(index);
+    }
+  }, []);
+
+  const itemSize = useCallback((index: number) => (
+    rowHeightsRef.current.get(recordings[index]!.id) ?? ESTIMATED_RECORDING_ROW_HEIGHT
+  ), [recordings]);
+
+  const itemData: VirtualizedRecordingRowData = {
+    recordings,
+    deletingRecordingId,
+    onDelete,
+    onOpen,
+    onHeightChange,
+  };
+
+  return (
+    <div ref={viewportRef} className="run-recordings-list-viewport">
+      {viewportHeight > 0 ? (
+        <VariableSizeList
+          ref={listRef}
+          className="run-recordings-list"
+          height={viewportHeight}
+          width="100%"
+          itemCount={recordings.length}
+          itemData={itemData}
+          itemKey={(index, data) => data.recordings[index]!.id}
+          itemSize={itemSize}
+        >
+          {VirtualizedRecordingRow}
+        </VariableSizeList>
+      ) : null}
     </div>
   );
 }
@@ -396,21 +581,20 @@ export const RecordingRunsTable: FC<RecordingRunsTableProps> = ({
           ) : filteredRunsCount === 0 ? (
             <div className="run-recordings-empty-group">
               {appliedInputFilter
-                ? inputSearchStatus === 'searching' ? 'Searching for matching runs...' : 'No runs match this input filter.'
+                ? inputSearchStatus === 'searching'
+                  ? 'Searching for matching runs...'
+                  : inputSearchStatus === 'stopped'
+                    ? 'Search stopped. Results may be incomplete.'
+                    : 'No runs match this input filter.'
                 : statusFilter === 'failed' ? 'No bad runs for this workflow.' : 'No recorded runs yet.'}
             </div>
           ) : (
-            <div className="run-recordings-list">
-              {visibleRuns.map((recording) => (
-                <RecordingRow
-                  key={recording.id}
-                  recording={recording}
-                  isDeleting={deletingRecordingId === recording.id}
-                  onDelete={onDeleteRecording}
-                  onOpen={onOpenRecording}
-                />
-              ))}
-            </div>
+            <VirtualizedRecordingList
+              recordings={visibleRuns}
+              deletingRecordingId={deletingRecordingId}
+              onDelete={onDeleteRecording}
+              onOpen={onOpenRecording}
+            />
           )}
         </div>
 

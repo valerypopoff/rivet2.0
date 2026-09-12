@@ -10,6 +10,23 @@ const blobStore = await import('../routes/workflows/managed/blob-store.js');
 const envParsing = await import('../utils/env-parsing.js');
 const deploymentStorageSettings = await import('../deployment-storage-settings.js');
 
+test('in-memory blob text stays exact and byte reads are isolated and cancellable', async () => {
+  const store = new blobStore.InMemoryManagedWorkflowBlobStore();
+  const text = 'Unicode: 🍌; unpaired surrogate: \ud800';
+  await store.putText('recording', text);
+  assert.equal(await store.getText('recording'), text);
+  const first = await store.getBytes('recording');
+  const second = await store.getBytes('recording');
+  assert.deepEqual(first, Buffer.from(text, 'utf8'));
+  first.fill(0);
+  assert.deepEqual(second, Buffer.from(text, 'utf8'));
+  assert.equal(await store.getText('recording'), text);
+  const controller = new AbortController();
+  controller.abort();
+  await assert.rejects(store.getText('recording', { signal: controller.signal }), { name: 'AbortError' });
+  await assert.rejects(store.getBytes('recording', { signal: controller.signal }), { name: 'AbortError' });
+});
+
 const managedEnvKeys = [
   'RIVET_APP_DATA_ROOT',
   'RIVET_STORAGE_MODE',

@@ -666,12 +666,17 @@ export async function listWorkflowRecordingRunsPageWithBackend(
   inputFilter: WorkflowRecordingInputFilter | null = null,
   inputCursor = 0,
   signal?: AbortSignal,
+  inputAfter?: string,
 ): Promise<WorkflowRecordingRunsPageResponse> {
   return delegateWithWorkflowsRoot(
     async (backend) =>
-      backend.listWorkflowRecordingRunsPage(workflowId, page, pageSize, statusFilter, inputFilter, inputCursor, signal),
+      backend.listWorkflowRecordingRunsPage(
+        workflowId, page, pageSize, statusFilter, inputFilter, inputCursor, signal, inputAfter,
+      ),
     async (root) =>
-      listWorkflowRecordingRunsPage(root, workflowId, page, pageSize, statusFilter, inputFilter, inputCursor, signal),
+      listWorkflowRecordingRunsPage(
+        root, workflowId, page, pageSize, statusFilter, inputFilter, inputCursor, signal, inputAfter,
+      ),
   );
 }
 

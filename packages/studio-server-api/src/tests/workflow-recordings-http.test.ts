@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import test from 'node:test';
+import { gzipSync } from 'node:zlib';
 import type { ChartNode, GraphId, NodeConnection, PortId, ProcessEvents } from '@valerypopoff/rivet2-node';
 import { writeWorkflowProjectStatsCacheFromContents } from '../routes/workflows/project-stats.js';
 import {
@@ -519,6 +520,36 @@ test('workflow recording input filter evaluates JSON paths against the request i
     ),
     /input-filter-bar/,
   );
+
+  // Exercise the real HTTP/storage/cache path, not only a mocked UI error.
+  const recordingRoot = workflowFs.getWorkflowProjectRecordingsRoot(
+    workflowFs.getWorkflowRecordingsRoot(workflowsRoot),
+    workflowId,
+  );
+  const artifactPath = workflowFs.getWorkflowRecordingPath(path.join(recordingRoot, equalsBar.runs[0]!.id));
+  const original = await fs.readFile(artifactPath);
+  await withWorkflowExecutionServer(async ({ apiBaseUrl }) => {
+    const query = new URLSearchParams({ inputPath: '$.foo', inputOperator: '==', inputValue: 'bar' });
+    const url = `${apiBaseUrl}/recordings/workflows/${workflowId}/runs?${query}`;
+    try {
+      for (const malformed of ['{secret-invalid-json', '{}']) {
+        await fs.writeFile(artifactPath, artifactPath.endsWith('.gz') ? gzipSync(malformed) : malformed);
+        for (let attempt = 0; attempt < 2; attempt++) {
+          const response = await fetch(url);
+          assert.equal(response.status, 500);
+          const body = await response.text();
+          assert.match(body, /Malformed recording artifact/);
+          assert.doesNotMatch(body, /secret-invalid-json/);
+        }
+        await fs.writeFile(artifactPath, original);
+        const recovered = await fetch(url);
+        assert.equal(recovered.status, 200);
+        assert.equal((await recovered.json()).runs[0]?.id, equalsBar.runs[0]!.id);
+      }
+    } finally {
+      await fs.writeFile(artifactPath, original);
+    }
+  });
 });
 
 test('filesystem recording statistics use indexed identities for endpoint and web-app targets', async () => {

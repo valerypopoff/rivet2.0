@@ -22,7 +22,13 @@ export interface ManagedWorkflowBlobStore {
   checkHealth?(context?: RuntimeHealthCheckContext): Promise<void>;
   dispose?(): void;
   putText(key: string, contents: string, contentType?: string): Promise<void>;
-  getText(key: string): Promise<string>;
+  getText(key: string, options?: { signal?: AbortSignal }): Promise<string>;
+  /**
+   * Returns bytes which remain stable for bounded worker-side decoding.
+   * The extractor copies exactly these bytes before transferring them, so a
+   * provider-owned allocation is never detached.
+   */
+  getBytes?(key: string, options?: { signal?: AbortSignal }): Promise<Uint8Array>;
   /**
    * Reconciliation uses this cheap metadata operation instead of downloading
    * project or recording payloads merely to prove that a referenced object is
@@ -160,20 +166,28 @@ export class S3ManagedWorkflowBlobStore implements ManagedWorkflowBlobStore {
     );
   }
 
-  async getText(key: string): Promise<string> {
+  async getText(key: string, options?: { signal?: AbortSignal }): Promise<string> {
+    const bytes = await this.getBytes(key, options);
+    return Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength).toString('utf8');
+  }
+
+  async getBytes(key: string, options?: { signal?: AbortSignal }): Promise<Uint8Array> {
     return observeObjectStorageOperation(this.#metricsDomain, 'get', async () => {
       const response = await this.#client.send(
         new GetObjectCommand({
           Bucket: this.#bucket,
           Key: this.#key(key),
         }),
+        { abortSignal: options?.signal },
       );
 
       if (!response.Body) {
         throw new Error(`Object body missing for key ${key}`);
       }
 
-      return response.Body.transformToString();
+      // The extractor owns the single transfer copy, made only on dispatch.
+      // Returning the SDK bytes here avoids another full-artifact allocation.
+      return response.Body.transformToByteArray();
     });
   }
 
@@ -266,7 +280,12 @@ export class InMemoryManagedWorkflowBlobStore implements ManagedWorkflowBlobStor
     this.#objects.set(normalizeBlobKey(key), contents);
   }
 
-  async getText(key: string): Promise<string> {
+  async getText(key: string, options?: { signal?: AbortSignal }): Promise<string> {
+    if (options?.signal?.aborted) {
+      const error = new Error('Object read aborted');
+      error.name = 'AbortError';
+      throw error;
+    }
     const normalizedKey = normalizeBlobKey(key);
     const contents = this.#objects.get(normalizedKey);
     if (contents == null) {
@@ -274,6 +293,10 @@ export class InMemoryManagedWorkflowBlobStore implements ManagedWorkflowBlobStor
     }
 
     return contents;
+  }
+
+  async getBytes(key: string, options?: { signal?: AbortSignal }): Promise<Uint8Array> {
+    return Buffer.from(await this.getText(key, options), 'utf8');
   }
 
   async exists(key: string): Promise<boolean> {

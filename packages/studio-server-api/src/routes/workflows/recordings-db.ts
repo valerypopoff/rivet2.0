@@ -166,10 +166,7 @@ const UPSERT_RECORDING_RUN_SQL = `
 
 type RecordingStatement = ReturnType<DatabaseSync['prepare']>;
 
-function writeWorkflowRecordingWorkflow(
-  statement: RecordingStatement,
-  row: WorkflowRecordingWorkflowRow,
-): void {
+function writeWorkflowRecordingWorkflow(statement: RecordingStatement, row: WorkflowRecordingWorkflowRow): void {
   statement.run(
     row.workflowId,
     row.sourceProjectMetadataId,
@@ -297,6 +294,14 @@ async function openDatabase(): Promise<DatabaseSync> {
 
     CREATE INDEX IF NOT EXISTS idx_recording_runs_workflow_created_at
       ON recording_runs(workflow_id, created_at DESC);
+    -- Input-filtered run searches order by the same stable tuple as the API.
+    -- Let the metadata-window query seek instead of sorting a growing
+    -- workflow history before any bounded artifact reads can begin.
+    CREATE INDEX IF NOT EXISTS idx_recording_runs_workflow_created_at_id
+      ON recording_runs(workflow_id, created_at DESC, id DESC);
+    CREATE INDEX IF NOT EXISTS idx_recording_runs_workflow_failed_created_at_id
+      ON recording_runs(workflow_id, created_at DESC, id DESC)
+      WHERE status IN ('failed', 'suspicious');
     CREATE INDEX IF NOT EXISTS idx_recording_runs_status_created_at
       ON recording_runs(status, created_at DESC);
     CREATE INDEX IF NOT EXISTS idx_recording_runs_created_at
@@ -328,7 +333,10 @@ async function openDatabase(): Promise<DatabaseSync> {
 
 function ensureRecordingRunIdentityColumns(db: DatabaseSync): void {
   const existingColumns = new Set(
-    db.prepare('PRAGMA table_info(recording_runs)').all<{ name: string }>().map((row) => row.name),
+    db
+      .prepare('PRAGMA table_info(recording_runs)')
+      .all<{ name: string }>()
+      .map((row) => row.name),
   );
   const columns = [
     ['execution_surface', 'TEXT'],
@@ -358,17 +366,21 @@ async function getDatabase(): Promise<DatabaseSync> {
 
 export async function getWorkflowRecordingStorageState(key: string): Promise<string | null> {
   const db = await getDatabase();
-  const row = db.prepare('SELECT value AS value FROM recording_storage_state WHERE key = ?').get<{ value: string }>(key);
+  const row = db
+    .prepare('SELECT value AS value FROM recording_storage_state WHERE key = ?')
+    .get<{ value: string }>(key);
   return row?.value ?? null;
 }
 
 export async function setWorkflowRecordingStorageState(key: string, value: string): Promise<void> {
   const db = await getDatabase();
-  db.prepare(`
+  db.prepare(
+    `
     INSERT INTO recording_storage_state (key, value)
     VALUES (?, ?)
     ON CONFLICT(key) DO UPDATE SET value = excluded.value
-  `).run(key, value);
+  `,
+  ).run(key, value);
 }
 
 export async function clearWorkflowRecordingIndex(): Promise<void> {
@@ -453,7 +465,9 @@ export async function replaceWorkflowRecordingIndex(
 
 export async function listWorkflowRecordingWorkflowStatsRows(): Promise<WorkflowRecordingWorkflowStatsRow[]> {
   const db = await getDatabase();
-  const rows = db.prepare(`
+  const rows = db
+    .prepare(
+      `
     SELECT
       w.workflow_id AS workflowId,
       w.source_project_metadata_id AS sourceProjectMetadataId,
@@ -475,7 +489,9 @@ export async function listWorkflowRecordingWorkflowStatsRows(): Promise<Workflow
       w.source_project_name,
       w.updated_at
     ORDER BY latestRunAt DESC, w.source_project_name ASC
-  `).all<Record<string, unknown>>();
+  `,
+    )
+    .all<Record<string, unknown>>();
 
   return rows.map((row) => ({
     workflowId: String(row.workflowId ?? ''),
@@ -495,18 +511,67 @@ export async function listWorkflowRecordingRunRowsByWorkflowId(
   workflowId: string,
   options: { page: number; pageSize: number; statusFilter: WorkflowRecordingFilterStatus },
 ): Promise<WorkflowRecordingRunRow[]> {
+  return listWorkflowRecordingRunRowsForWorkflowWindow(workflowId, {
+    statusFilter: options.statusFilter,
+    limit: options.pageSize,
+    offset: (options.page - 1) * options.pageSize,
+  });
+}
+
+/**
+ * Reads only a bounded newest-first metadata window. Input filtering uses this
+ * rather than loading every historical run before it can inspect an artifact.
+ */
+export async function listWorkflowRecordingRunRowsForWorkflowWindow(
+  workflowId: string,
+  options: {
+    limit: number;
+    offset: number;
+    statusFilter: WorkflowRecordingFilterStatus;
+    after?: { createdAt: string; recordingId: string };
+  },
+): Promise<WorkflowRecordingRunRow[]> {
   const db = await getDatabase();
+  const { sql, parameters } = buildRecordingWindowQuery(workflowId, options);
+  return db
+    .prepare(sql)
+    .all<Record<string, unknown>>(...parameters)
+    .map(normalizeWorkflowRecordingRunRow);
+}
+
+export async function explainWorkflowRecordingWindow(
+  workflowId: string,
+  options: Parameters<typeof listWorkflowRecordingRunRowsForWorkflowWindow>[1],
+): Promise<string[]> {
+  const db = await getDatabase();
+  const { sql, parameters } = buildRecordingWindowQuery(workflowId, options);
+  return db
+    .prepare(`EXPLAIN QUERY PLAN ${sql}`)
+    .all<{ detail: string }>(...parameters)
+    .map((row) => row.detail);
+}
+
+function buildRecordingWindowQuery(
+  workflowId: string,
+  options: Parameters<typeof listWorkflowRecordingRunRowsForWorkflowWindow>[1],
+) {
   const whereClause = buildRunFilterClause(options.statusFilter);
-  const rows = db.prepare(`
+  const afterClause = options.after ? 'AND (created_at, id) < (?, ?)' : '';
+  const parameters: Array<string | number> = [workflowId];
+  if (options.after) {
+    parameters.push(options.after.createdAt, options.after.recordingId);
+  }
+  parameters.push(Math.max(1, Math.floor(options.limit)), Math.max(0, Math.floor(options.offset)));
+  const sql = `
     SELECT
       ${RECORDING_RUN_COLUMNS}
     FROM recording_runs
     ${whereClause}
+    ${afterClause}
     ORDER BY created_at DESC, id DESC
     LIMIT ? OFFSET ?
-  `).all<Record<string, unknown>>(workflowId, options.pageSize, (options.page - 1) * options.pageSize);
-
-  return rows.map(normalizeWorkflowRecordingRunRow);
+  `;
+  return { sql, parameters };
 }
 
 export async function countWorkflowRecordingRuns(
@@ -515,7 +580,8 @@ export async function countWorkflowRecordingRuns(
 ): Promise<number> {
   const db = await getDatabase();
   const whereClause = buildRunFilterClause(statusFilter);
-  const row = db.prepare(`SELECT COUNT(id) AS count FROM recording_runs ${whereClause}`)
+  const row = db
+    .prepare(`SELECT COUNT(id) AS count FROM recording_runs ${whereClause}`)
     .get<{ count: number | bigint }>(workflowId);
 
   return toNumber(row?.count ?? 0);
@@ -523,50 +589,66 @@ export async function countWorkflowRecordingRuns(
 
 export async function getWorkflowRecordingRunRow(recordingId: string): Promise<WorkflowRecordingRunRow | null> {
   const db = await getDatabase();
-  const row = db.prepare(`
+  const row = db
+    .prepare(
+      `
     SELECT
       ${RECORDING_RUN_COLUMNS}
     FROM recording_runs
     WHERE id = ?
-  `).get<Record<string, unknown>>(recordingId);
+  `,
+    )
+    .get<Record<string, unknown>>(recordingId);
 
   return row ? normalizeWorkflowRecordingRunRow(row) : null;
 }
 
 export async function listWorkflowRecordingRunRowsForWorkflow(workflowId: string): Promise<WorkflowRecordingRunRow[]> {
   const db = await getDatabase();
-  const rows = db.prepare(`
+  const rows = db
+    .prepare(
+      `
     SELECT
       ${RECORDING_RUN_COLUMNS}
     FROM recording_runs
     WHERE workflow_id = ?
     ORDER BY created_at DESC, id DESC
-  `).all<Record<string, unknown>>(workflowId);
+  `,
+    )
+    .all<Record<string, unknown>>(workflowId);
 
   return rows.map(normalizeWorkflowRecordingRunRow);
 }
 
 export async function listWorkflowRecordingRunsOlderThan(createdBefore: string): Promise<WorkflowRecordingRunRow[]> {
   const db = await getDatabase();
-  const rows = db.prepare(`
+  const rows = db
+    .prepare(
+      `
     SELECT
       ${RECORDING_RUN_COLUMNS}
     FROM recording_runs
     WHERE created_at < ?
     ORDER BY created_at ASC, id ASC
-  `).all<Record<string, unknown>>(createdBefore);
+  `,
+    )
+    .all<Record<string, unknown>>(createdBefore);
 
   return rows.map(normalizeWorkflowRecordingRunRow);
 }
 
 export async function listWorkflowRecordingRunsOldestFirst(): Promise<WorkflowRecordingRunRow[]> {
   const db = await getDatabase();
-  const rows = db.prepare(`
+  const rows = db
+    .prepare(
+      `
     SELECT
       ${RECORDING_RUN_COLUMNS}
     FROM recording_runs
     ORDER BY created_at ASC, id ASC
-  `).all<Record<string, unknown>>();
+  `,
+    )
+    .all<Record<string, unknown>>();
 
   return rows.map(normalizeWorkflowRecordingRunRow);
 }
@@ -578,16 +660,23 @@ export async function listWorkflowRecordingStatisticsRows(
 ): Promise<WorkflowRecordingStatisticsRow[]> {
   const db = await getDatabase();
   const { clause, parameters } = buildStatisticsTargetClause(target);
-  const rows = db.prepare(`
+  const rows = db
+    .prepare(
+      `
     SELECT
       ${RECORDING_RUN_COLUMNS}
     FROM recording_runs
     WHERE created_at >= ? AND created_at < ?
     ${clause}
     ORDER BY created_at ASC, id ASC
-  `).all<Record<string, unknown>>(from, to, ...parameters);
+  `,
+    )
+    .all<Record<string, unknown>>(from, to, ...parameters);
   const workflowNames = new Map(
-    (await listWorkflowRecordingWorkflowStatsRows()).map((workflow) => [workflow.workflowId, workflow.sourceProjectName]),
+    (await listWorkflowRecordingWorkflowStatsRows()).map((workflow) => [
+      workflow.workflowId,
+      workflow.sourceProjectName,
+    ]),
   );
 
   return rows.map((row) => {
@@ -599,7 +688,10 @@ export async function listWorkflowRecordingStatisticsRows(
 export async function listWorkflowRecordingStatisticsCatalogRows(): Promise<WorkflowRecordingStatisticsRow[]> {
   const runs = await listWorkflowRecordingRunsOldestFirst();
   const workflowNames = new Map(
-    (await listWorkflowRecordingWorkflowStatsRows()).map((workflow) => [workflow.workflowId, workflow.sourceProjectName]),
+    (await listWorkflowRecordingWorkflowStatsRows()).map((workflow) => [
+      workflow.workflowId,
+      workflow.sourceProjectName,
+    ]),
   );
 
   return runs.map((run) => ({
@@ -610,11 +702,15 @@ export async function listWorkflowRecordingStatisticsCatalogRows(): Promise<Work
 
 export async function listWorkflowRecordingBundlePaths(): Promise<string[]> {
   const db = await getDatabase();
-  const rows = db.prepare(`
+  const rows = db
+    .prepare(
+      `
     SELECT bundle_path AS bundlePath
     FROM recording_runs
     ORDER BY bundle_path ASC
-  `).all<{ bundlePath: string }>();
+  `,
+    )
+    .all<{ bundlePath: string }>();
 
   return rows.map((row) => String(row.bundlePath ?? ''));
 }
@@ -624,7 +720,9 @@ export async function getWorkflowRecordingWorkflowRowsBySourceProjectPath(
   sourceProjectRelativePath: string,
 ): Promise<WorkflowRecordingWorkflowRow[]> {
   const db = await getDatabase();
-  const rows = db.prepare(`
+  const rows = db
+    .prepare(
+      `
     SELECT
       workflow_id AS workflowId,
       source_project_metadata_id AS sourceProjectMetadataId,
@@ -634,7 +732,9 @@ export async function getWorkflowRecordingWorkflowRowsBySourceProjectPath(
       updated_at AS updatedAt
     FROM recording_workflows
     WHERE source_project_path = ? OR source_project_relative_path = ?
-  `).all<Record<string, unknown>>(sourceProjectPath, sourceProjectRelativePath);
+  `,
+    )
+    .all<Record<string, unknown>>(sourceProjectPath, sourceProjectRelativePath);
 
   return rows.map((row) => ({
     workflowId: String(row.workflowId ?? ''),
@@ -660,23 +760,29 @@ export async function deleteWorkflowRecordingWorkflowRow(workflowId: string): Pr
 
 export async function deleteEmptyWorkflowRecordingWorkflows(): Promise<void> {
   const db = await getDatabase();
-  db.prepare(`
+  db.prepare(
+    `
     DELETE FROM recording_workflows
     WHERE workflow_id NOT IN (SELECT DISTINCT workflow_id FROM recording_runs)
-  `).run();
+  `,
+  ).run();
   markWorkflowRecordingIndexChanged();
 }
 
 export async function getWorkflowRecordingTotalCompressedBytes(): Promise<number> {
   const db = await getDatabase();
-  const row = db.prepare(`
+  const row = db
+    .prepare(
+      `
     SELECT COALESCE(SUM(
       recording_compressed_bytes +
       project_compressed_bytes +
       dataset_compressed_bytes
     ), 0) AS total
     FROM recording_runs
-  `).get<{ total: number | bigint }>();
+  `,
+    )
+    .get<{ total: number | bigint }>();
 
   return toNumber(row?.total ?? 0);
 }

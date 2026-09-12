@@ -6,6 +6,7 @@ import {
   parseJsonResponse,
   parseTextResponse,
 } from '../dashboard/apiRequest.js';
+import { fetchWorkflowRecordingRuns } from '../dashboard/workflowApi.js';
 
 test('parseJsonResponse returns parsed JSON for successful JSON responses', async () => {
   const response = new Response(JSON.stringify({ ok: true }), {
@@ -94,4 +95,40 @@ test('createResponseError attaches the HTTP status to the thrown error', () => {
   const error = createResponseError(418, 'teapot');
   assert.equal(error.status, 418);
   assert.equal(error.message, 'teapot');
+});
+
+test('recording input searches send the opaque keyset continuation unchanged', async () => {
+  const originalFetch = globalThis.fetch;
+  let requestedUrl = '';
+  globalThis.fetch = (async (input: string | URL | Request) => {
+    requestedUrl = String(input);
+    return new Response(JSON.stringify({
+      workflowId: 'workflow-1',
+      page: 1,
+      pageSize: 20,
+      totalRuns: 0,
+      hasMore: false,
+      statusFilter: 'all',
+      runs: [],
+    }), {
+      headers: { 'content-type': 'application/json' },
+    });
+  }) as typeof fetch;
+
+  try {
+    await fetchWorkflowRecordingRuns('workflow-1', {
+      page: 1,
+      pageSize: 20,
+      status: 'all',
+      inputFilter: { path: '$.requestId', operator: '==', value: 'needle' },
+      inputCursor: 24,
+      inputAfter: 'opaque-cursor-value',
+    });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+
+  const url = new URL(requestedUrl, 'http://localhost');
+  assert.equal(url.searchParams.get('inputCursor'), '24');
+  assert.equal(url.searchParams.get('inputAfter'), 'opaque-cursor-value');
 });

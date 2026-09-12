@@ -18,6 +18,8 @@ import {
 } from './fs-helpers.js';
 import { readStoredWorkflowRecordingMetadata } from './recordings-metadata.js';
 import { getFilesystemLLMProfileHealthHeldRecordingIds } from '../../llm-profile-health/filesystem-store.js';
+import { invalidateFilesystemRecordingInputCache } from './recording-input-cache.js';
+import { getRecordingArtifactPath } from './recordings-artifacts.js';
 
 function getEndpointRetentionKey(run: WorkflowRecordingRunRow): string {
   return `${run.workflowId}\0${run.endpointNameAtExecution.trim().toLowerCase()}`;
@@ -82,6 +84,9 @@ export async function rebuildWorkflowRecordingIndex(
 }
 
 export async function deleteRecordingRun(row: WorkflowRecordingRunRow): Promise<void> {
+  invalidateFilesystemRecordingInputCache(
+    getRecordingArtifactPath(row.bundlePath, 'recording', row.encoding),
+  );
   if (row.bundlePath && await pathExists(row.bundlePath)) {
     await fs.rm(row.bundlePath, { recursive: true, force: true });
   }

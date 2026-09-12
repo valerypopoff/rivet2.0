@@ -33,7 +33,12 @@ import type {
   RecordingRow,
   WorkflowRecordingListRow,
 } from './types.js';
-import { filterRowsBySerializedRecordingInputPage } from '../recording-input-filter.js';
+import {
+  createWorkflowRecordingInputAfter,
+  filterRecordingInputWindows,
+  parseWorkflowRecordingInputAfter,
+} from '../recording-input-filter.js';
+import { getManagedRecordingInputCacheKey, workflowRecordingInputCache } from '../recording-input-cache.js';
 import {
   buildWorkflowRunStatistics,
   buildWorkflowRunStatisticsCatalog,
@@ -48,12 +53,9 @@ function getManagedLLMProfileHealthHeldRecordingIds(rows: readonly ManagedHealth
   const heldRecordingIds = new Set<string>();
   for (const row of rows) {
     if (row.entry_json == null) continue;
-    const parsed = typeof row.entry_json === 'string'
-      ? JSON.parse(row.entry_json) as StoredLLMProfileHealthEntry
-      : row.entry_json;
-    for (const recordingId of getLLMProfileHealthHeldRecordingIds(
-      normalizeStoredLLMProfileHealthEntry(parsed),
-    )) {
+    const parsed =
+      typeof row.entry_json === 'string' ? (JSON.parse(row.entry_json) as StoredLLMProfileHealthEntry) : row.entry_json;
+    for (const recordingId of getLLMProfileHealthHeldRecordingIds(normalizeStoredLLMProfileHealthEntry(parsed))) {
       heldRecordingIds.add(recordingId);
     }
   }
@@ -70,7 +72,6 @@ type ManagedRecordingRetentionConfig = Pick<
 >;
 
 const DAY_MS = 24 * 60 * 60 * 1000;
-
 function getEndpointRetentionKey(row: RecordingRow): string {
   return `${row.workflow_id}\0${row.endpoint_name_at_execution.trim().toLowerCase()}`;
 }
@@ -82,6 +83,19 @@ function getCompressedBundleSize(row: RecordingRow): number {
 function getCreatedAtMs(row: RecordingRow): number {
   const timestamp = row.created_at instanceof Date ? row.created_at.getTime() : Date.parse(String(row.created_at));
   return Number.isFinite(timestamp) ? timestamp : 0;
+}
+
+function getRecordingCursorCreatedAt(row: RecordingRow): string {
+  // node-postgres turns `timestamptz` into a JavaScript Date, which removes
+  // microseconds. A keyset boundary has to keep the exact selected timestamp
+  // or recordings written by `NOW()` can be skipped at the same millisecond.
+  if (
+    typeof row.recording_cursor_created_at === 'string' &&
+    Number.isFinite(Date.parse(row.recording_cursor_created_at))
+  ) {
+    return row.recording_cursor_created_at;
+  }
+  return row.created_at instanceof Date ? row.created_at.toISOString() : new Date(String(row.created_at)).toISOString();
 }
 
 function getExecutionIdentity(row: RecordingRow) {
@@ -231,20 +245,49 @@ function getUtf8ByteLength(value: string | null | undefined): number {
 }
 
 async function filterManagedRecordingRowsByInput(
-  rows: RecordingRow[],
+  loadWindow: (after: string | undefined, offset: number, limit: number) => Promise<RecordingRow[]>,
+  workflowId: string,
+  statusFilter: WorkflowRecordingFilterStatus,
   inputFilter: WorkflowRecordingInputFilter,
   blobStore: ManagedWorkflowBlobStore,
   inputCursor: number,
+  inputAfterCursor: ReturnType<typeof parseWorkflowRecordingInputAfter>,
+  inputAfter: string | undefined,
   pageSize: number,
   signal?: AbortSignal,
 ) {
-  return filterRowsBySerializedRecordingInputPage(
-    rows,
+  return filterRecordingInputWindows(
     inputFilter,
-    (row) => blobStore.getText(row.recording_blob_key),
+    loadWindow,
+    (row, readSignal) =>
+      workflowRecordingInputCache.getOrLoad(
+        getManagedRecordingInputCacheKey(blobStore, row.recording_blob_key),
+        async (cacheSignal) => ({
+          kind: 'artifact' as const,
+          bytes: blobStore.getBytes
+            ? await blobStore.getBytes(row.recording_blob_key, { signal: cacheSignal })
+            : // Compatibility for a third-party store compiled against the prior
+              // text-only interface. Built-in stores always provide bytes; this
+              // fallback retains cancellation and never changes match semantics.
+              Buffer.from(await blobStore.getText(row.recording_blob_key, { signal: cacheSignal }), 'utf8'),
+          encoding: 'identity' as const,
+        }),
+        readSignal,
+        Math.max(row.recording_compressed_bytes, row.recording_uncompressed_bytes) * 6,
+      ),
     {
-      cursor: inputCursor,
+      inputCursor: inputAfterCursor?.legacyCursor ?? inputCursor,
+      inputAfter,
       pageSize,
+      getInputAfter: (row, nextInputCursor) =>
+        createWorkflowRecordingInputAfter(
+          {
+            createdAt: getRecordingCursorCreatedAt(row),
+            recordingId: row.recording_id,
+            legacyCursor: nextInputCursor,
+          },
+          { workflowId, statusFilter, filter: inputFilter },
+        ),
       signal,
     },
   );
@@ -397,6 +440,11 @@ export function createManagedWorkflowRecordingService(options: ManagedWorkflowRe
             row.replay_dataset_blob_key,
           ]),
         );
+        for (const row of deletedRows) {
+          workflowRecordingInputCache.invalidate(
+            getManagedRecordingInputCacheKey(deps.blobStore, row.recording_blob_key),
+          );
+        }
       }
     });
   };
@@ -537,12 +585,16 @@ export function createManagedWorkflowRecordingService(options: ManagedWorkflowRe
       inputFilter: WorkflowRecordingInputFilter | null = null,
       inputCursor = 0,
       signal?: AbortSignal,
+      inputAfter?: string,
     ): Promise<WorkflowRecordingRunsPageResponse> {
       await deps.initialize();
       const normalizedPage = Math.max(1, Math.floor(page));
       const normalizedPageSize = Math.min(100, Math.max(1, Math.floor(pageSize)));
       const offset = (normalizedPage - 1) * normalizedPageSize;
       const filterClause = statusFilter === 'failed' ? `AND status IN ('failed', 'suspicious')` : '';
+      const inputAfterCursor = inputFilter
+        ? parseWorkflowRecordingInputAfter(inputAfter, { workflowId, statusFilter, filter: inputFilter })
+        : undefined;
 
       const countRow = inputFilter
         ? null
@@ -551,35 +603,49 @@ export function createManagedWorkflowRecordingService(options: ManagedWorkflowRe
             `SELECT COUNT(*)::int AS total_runs FROM workflow_recordings WHERE workflow_id = $1 ${filterClause}`,
             [workflowId],
           );
-      const rows = await deps.queryRows<RecordingRow>(
-        deps.pool,
-        inputFilter
-          ? `
-            SELECT ${deps.recordingColumns}
-            FROM workflow_recordings
-            WHERE workflow_id = $1 ${filterClause}
-            ORDER BY created_at DESC, recording_id DESC
+      const loadWindow = async (after: string | undefined, legacyOffset: number, queryLimit: number) => {
+        const boundary = inputFilter
+          ? parseWorkflowRecordingInputAfter(after, { workflowId, statusFilter, filter: inputFilter })
+          : undefined;
+        // An opaque keyset continuation already identifies the exact row after
+        // which to continue. Never combine it with a numeric offset: doing so
+        // would silently skip rows when a legacy caller supplies both values.
+        const queryOffset = boundary ? 0 : Math.max(0, Math.floor(legacyOffset));
+        const inputAfterClause = boundary ? 'AND (created_at, recording_id) < ($2::timestamptz, $3)' : '';
+        const queryParameters = boundary
+          ? [workflowId, boundary.createdAt, boundary.recordingId, queryLimit, queryOffset]
+          : [workflowId, queryLimit, queryOffset];
+        const limitParameter = boundary ? '$4' : '$2';
+        const offsetParameter = boundary ? '$5' : '$3';
+        return deps.queryRows<RecordingRow>(
+          deps.pool,
           `
-          : `
-            SELECT ${deps.recordingColumns}
-            FROM workflow_recordings
-            WHERE workflow_id = $1 ${filterClause}
-            ORDER BY created_at DESC, recording_id DESC
-            LIMIT $2 OFFSET $3
-          `,
-        inputFilter ? [workflowId] : [workflowId, normalizedPageSize, offset],
-      );
+          SELECT ${deps.recordingColumns},
+                 TO_CHAR(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')
+                   AS recording_cursor_created_at
+          FROM workflow_recordings
+          WHERE workflow_id = $1 ${filterClause} ${inputAfterClause}
+          ORDER BY created_at DESC, recording_id DESC
+          LIMIT ${limitParameter} OFFSET ${offsetParameter}
+        `,
+          queryParameters,
+        );
+      };
       const filteredPage = inputFilter
         ? await filterManagedRecordingRowsByInput(
-            rows,
+            loadWindow,
+            workflowId,
+            statusFilter,
             inputFilter,
             deps.blobStore,
             inputCursor,
+            inputAfterCursor,
+            inputAfter,
             normalizedPageSize,
             signal,
           )
         : null;
-      const pageRows = filteredPage?.rows ?? rows;
+      const pageRows = filteredPage?.rows ?? (await loadWindow(undefined, offset, normalizedPageSize));
 
       const runs: WorkflowRecordingRunSummary[] = pageRows.map((row) => ({
         id: row.recording_id,
@@ -608,6 +674,7 @@ export function createManagedWorkflowRecordingService(options: ManagedWorkflowRe
         totalRunsExact: filteredPage?.totalRunsExact ?? true,
         hasMore: filteredPage?.hasMore ?? normalizedPage * normalizedPageSize < (countRow?.total_runs ?? 0),
         nextInputCursor: filteredPage?.nextInputCursor,
+        nextInputAfter: filteredPage?.nextInputAfter,
         statusFilter,
         inputFilter,
         runs,
@@ -683,6 +750,7 @@ export function createManagedWorkflowRecordingService(options: ManagedWorkflowRe
     },
 
     async deleteWorkflowRecording(recordingId: string): Promise<void> {
+      let deletedRecordingBlobKey: string | undefined;
       await deps.withTransaction(async (client) => {
         const row = await deps.queryOne<RecordingRow>(
           client,
@@ -698,6 +766,7 @@ export function createManagedWorkflowRecordingService(options: ManagedWorkflowRe
           throw createHttpError(404, 'Recording not found');
         }
 
+        deletedRecordingBlobKey = row.recording_blob_key;
         await client.query('DELETE FROM workflow_recordings WHERE recording_id = $1', [recordingId]);
         await deps.maintenance.enqueueObjectDeletions(client, 'workflow-recording-deletion', [
           row.recording_blob_key,
@@ -705,9 +774,16 @@ export function createManagedWorkflowRecordingService(options: ManagedWorkflowRe
           row.replay_dataset_blob_key,
         ]);
       });
+      if (deletedRecordingBlobKey) {
+        workflowRecordingInputCache.invalidate(
+          getManagedRecordingInputCacheKey(deps.blobStore, deletedRecordingBlobKey),
+        );
+      }
     },
 
-    async persistWorkflowExecutionRecording(options: PersistWorkflowExecutionRecordingOptions): Promise<string | undefined> {
+    async persistWorkflowExecutionRecording(
+      options: PersistWorkflowExecutionRecordingOptions,
+    ): Promise<string | undefined> {
       await deps.initialize();
 
       const workflowId = options.sourceProject.metadata.id;

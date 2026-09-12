@@ -297,7 +297,10 @@
 
 .run-recordings-filter-apply-button {
   cursor: pointer;
-  transition: border-color 120ms ease, background 120ms ease, color 120ms ease;
+  transition:
+    border-color 120ms ease,
+    background 120ms ease,
+    color 120ms ease;
 }
 
 .run-recordings-filter-apply-button:hover:not(:disabled),
@@ -333,7 +336,9 @@
 
 .run-recordings-page-button {
   cursor: pointer;
-  transition: border-color 120ms ease, background 120ms ease;
+  transition:
+    border-color 120ms ease,
+    background 120ms ease;
 }
 
 .run-recordings-page-button:hover:not(:disabled),
@@ -468,41 +473,43 @@
 .run-recordings-runs-body {
   flex: 1 1 auto;
   min-height: 0;
-  overflow-y: auto;
+  overflow: hidden;
   padding: 0 4px 12px 0;
   box-sizing: border-box;
+}
+
+.run-recordings-list {
   scrollbar-gutter: stable;
   scrollbar-width: thin;
   scrollbar-color: rgba(255, 255, 255, 0.22) transparent;
 }
 
-.run-recordings-runs-body::-webkit-scrollbar {
+.run-recordings-list::-webkit-scrollbar {
   width: 10px;
 }
 
-.run-recordings-runs-body::-webkit-scrollbar-track {
+.run-recordings-list::-webkit-scrollbar-track {
   background: transparent;
 }
 
-.run-recordings-runs-body::-webkit-scrollbar-thumb {
+.run-recordings-list::-webkit-scrollbar-thumb {
   background: rgba(255, 255, 255, 0.2);
   background-clip: padding-box;
   border: 3px solid transparent;
   border-radius: 999px;
 }
 
-.run-recordings-runs-body::-webkit-scrollbar-thumb:hover {
+.run-recordings-list::-webkit-scrollbar-thumb:hover {
   background: rgba(255, 255, 255, 0.3);
 }
 
-.run-recordings-runs-body::-webkit-scrollbar-corner {
+.run-recordings-list::-webkit-scrollbar-corner {
   background: transparent;
 }
 
-.run-recordings-list {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
+.run-recordings-list-viewport {
+  height: 100%;
+  min-height: 0;
 }
 
 .run-recordings-pagination-footer {
@@ -524,7 +531,9 @@
   flex-direction: column;
   gap: 6px;
   cursor: pointer;
-  transition: border-color 120ms ease, background 120ms ease;
+  transition:
+    border-color 120ms ease,
+    background 120ms ease;
 }
 
 .run-recordings-run-open-button {
@@ -703,7 +712,10 @@
   cursor: pointer;
   opacity: 0;
   pointer-events: none;
-  transition: opacity 120ms ease, border-color 120ms ease, background 120ms ease;
+  transition:
+    opacity 120ms ease,
+    border-color 120ms ease,
+    background 120ms ease;
 }
 
 .run-recordings-run:hover .run-recordings-run-delete-button,
@@ -755,6 +767,11 @@
 
   .run-recordings-input-filter {
     grid-template-columns: 1fr;
+  }
+
+  .run-recordings-runs-body {
+    flex: 0 0 min(42vh, 360px);
+    min-height: 220px;
   }
 
   .run-recordings-pagination {
