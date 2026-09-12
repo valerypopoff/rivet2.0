@@ -1,5 +1,6 @@
 import { deserialize, serialize } from 'node:v8';
 import { LRUCache } from 'lru-cache';
+import { recordStudioMetrics } from '../../metrics.js';
 
 import type { WorkflowRecordingExtractedInput } from './recording-input-filter.js';
 import { RECORDING_INPUT_PAGE_COMPLETE } from './recording-input-filter.js';
@@ -41,9 +42,12 @@ type WorkflowRecordingInputCacheOptions = {
   maxEstimatedLoadBytes?: number;
   now?: () => number;
   pageCompletionGraceMs?: number;
+  onCacheEvent?: (event: RecordingInputCacheEvent) => void;
   /** Optional diagnostic hook used by the benchmark; it cannot affect loads. */
   onExtractionTiming?: (timing: WorkflowRecordingInputExtractionTiming & { workerQueueAndTransferMs: number }) => void;
 };
+
+type RecordingInputCacheEvent = 'hit' | 'miss' | 'shared' | 'load' | 'evicted' | 'expired' | 'oversized';
 
 /**
  * Short-lived, process-local extracted-input cache. Recording artifacts remain
@@ -52,6 +56,8 @@ type WorkflowRecordingInputCacheOptions = {
  * are never cached.
  */
 export class WorkflowRecordingInputCache {
+  readonly #events = { hit: 0, miss: 0, shared: 0, load: 0, evicted: 0, expired: 0, oversized: 0 };
+  readonly #onCacheEvent: WorkflowRecordingInputCacheOptions['onCacheEvent'];
   // LRUCache performs retention in O(1). Expiry is intentionally checked by
   // this wrapper's injectable clock so tests and cache consumers keep the
   // existing deterministic TTL contract without scanning all entries on each
@@ -74,6 +80,7 @@ export class WorkflowRecordingInputCache {
   readonly #loadWaiters: Array<{ acquire: () => void; weight: number }> = [];
 
   constructor(options: WorkflowRecordingInputCacheOptions = {}) {
+    this.#onCacheEvent = options.onCacheEvent;
     this.#maxEntries = options.maxEntries ?? DEFAULT_MAX_ENTRIES;
     this.#maxBytes = options.maxBytes ?? DEFAULT_MAX_BYTES;
     this.#maxEntryBytes = options.maxEntryBytes ?? DEFAULT_ENTRY_MAX_BYTES;
@@ -96,6 +103,9 @@ export class WorkflowRecordingInputCache {
       // Do not auto-purge or use a second clock. #takeFresh handles expiry on
       // access, while max/maxSize keep stale-but-unread values bounded.
       ttlAutopurge: false,
+      dispose: (_entry, _key, reason) => {
+        if (reason === 'evict') this.#record('evicted');
+      },
     });
   }
 
@@ -108,10 +118,14 @@ export class WorkflowRecordingInputCache {
     throwIfAborted(signal);
     const cached = this.#takeFresh(key);
     if (cached) {
+      this.#record('hit');
       return deserializeInput(cached.serializedInput);
     }
 
+    this.#record('miss');
+
     let inFlight = this.#inFlight.get(key);
+    if (inFlight) this.#record('shared');
     if (!inFlight) {
       const controller = new AbortController();
       const promise = this.#load(
@@ -199,6 +213,26 @@ export class WorkflowRecordingInputCache {
     return this.#entries.size;
   }
 
+  /** Bounded aggregate diagnostics; never includes keys, filters, or inputs. */
+  get diagnostics() {
+    return {
+      ...this.#events,
+      entries: this.size,
+      retainedBytes: this.#entries.calculatedSize,
+      activeLoads: this.#activeLoads,
+      queuedLoads: this.#loadWaiters.length,
+    };
+  }
+
+  #record(event: RecordingInputCacheEvent): void {
+    this.#events[event]++;
+    try {
+      this.#onCacheEvent?.(event);
+    } catch {
+      /* Diagnostics cannot affect search. */
+    }
+  }
+
   async #load(
     key: string,
     loadRecordingSource: (signal: AbortSignal) => Promise<WorkflowRecordingInputSource | string | null>,
@@ -213,6 +247,7 @@ export class WorkflowRecordingInputCache {
     const input = await this.#runWithLoadSlot(
       async () => {
         onStarted();
+        this.#record('load');
         const source = await loadRecordingSource(signal);
         throwIfAborted(signal);
         if (source == null) {
@@ -247,6 +282,7 @@ export class WorkflowRecordingInputCache {
     }
 
     if (entry.expiresAt <= this.#now()) {
+      this.#record('expired');
       this.invalidate(key);
       return undefined;
     }
@@ -255,16 +291,13 @@ export class WorkflowRecordingInputCache {
   }
 
   #store(key: string, input: WorkflowRecordingExtractedInput): void {
+    if (this.#maxEntries <= 0 || this.#maxBytes <= 0) return;
     const serializedInput = serializeInput(input);
     const retainedBytes = serializedInput.byteLength;
     this.#removeEntry(key);
 
-    if (
-      this.#maxEntries <= 0 ||
-      this.#maxBytes <= 0 ||
-      retainedBytes > this.#maxEntryBytes ||
-      retainedBytes > this.#maxBytes
-    ) {
+    if (retainedBytes > this.#maxEntryBytes || retainedBytes > this.#maxBytes) {
+      this.#record('oversized');
       return;
     }
 
@@ -347,7 +380,26 @@ export class WorkflowRecordingInputCache {
   }
 }
 
-export const workflowRecordingInputCache = new WorkflowRecordingInputCache();
+/** Deployment memory budget, per API process. Retained inputs only, not worker RSS. */
+export function getRecordingInputCacheMaxBytes(env: NodeJS.ProcessEnv = process.env): number {
+  const value = env.RIVET_RECORDING_INPUT_CACHE_MAX_MIB?.trim();
+  if (!value) return DEFAULT_MAX_BYTES;
+  if (!/^\d+$/.test(value) || !Number.isSafeInteger(Number(value)) || Number(value) > 512) {
+    throw new Error('RIVET_RECORDING_INPUT_CACHE_MAX_MIB must be an integer from 0 to 512.');
+  }
+  return Number(value) * 1024 * 1024;
+}
+
+export const workflowRecordingInputCache = new WorkflowRecordingInputCache({
+  maxBytes: getRecordingInputCacheMaxBytes(),
+  onCacheEvent: (event) => recordStudioMetrics((metrics) => metrics.recordRecordingInputCacheEvent(event)),
+  onExtractionTiming: (timing) =>
+    recordStudioMetrics((metrics) => {
+      metrics.observeRecordingInputExtraction('decode', timing.decompressionMs);
+      metrics.observeRecordingInputExtraction('parse', timing.parseAndExtractMs);
+      metrics.observeRecordingInputExtraction('queue_transfer', timing.workerQueueAndTransferMs);
+    }),
+});
 
 export function getFilesystemRecordingInputCacheKey(options: {
   recordingPath: string;

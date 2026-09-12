@@ -1,5 +1,6 @@
 import { Router, type Request, type Response } from 'express';
 import { z } from 'zod';
+import { prepareWorkflowRecordingInputExtractor } from './recording-input-extractor.js';
 
 import { validateBody } from '../../middleware/validate.js';
 import { asyncHandler } from '../../utils/asyncHandler.js';
@@ -288,11 +289,15 @@ workflowsRouter.get('/maintenance/reconciliation/findings', requireAuth, asyncHa
 }));
 
 workflowsRouter.get('/recordings', asyncHandler(async (_req, res) => {
-  res.json(await listWorkflowRecordingWorkflowsWithBackend());
+  const catalog = await listWorkflowRecordingWorkflowsWithBackend();
+  prepareWorkflowRecordingInputExtractor();
+  res.json(catalog);
 }));
 
 workflowsRouter.get('/recordings/workflows', asyncHandler(async (_req, res) => {
-  res.json(await listWorkflowRecordingWorkflowsWithBackend());
+  const catalog = await listWorkflowRecordingWorkflowsWithBackend();
+  prepareWorkflowRecordingInputExtractor();
+  res.json(catalog);
 }));
 
 workflowsRouter.get('/run-statistics/targets', asyncHandler(async (req, res) => {

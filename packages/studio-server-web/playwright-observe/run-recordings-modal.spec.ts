@@ -951,8 +951,8 @@ test.describe('Run recordings modal', () => {
   }
 
   test('progressive results preserve scrolling and replacement searches discard late batches', async ({ page }) => {
-    const { runFetches } = await installRunRecordingRoutes(page, { latestFlowRunCount: 120, cursorDelayMs: 500 });
-    const modal = await openLatestFlowRecordings(page, 120);
+    const { runFetches } = await installRunRecordingRoutes(page, { latestFlowRunCount: 240, cursorDelayMs: 500 });
+    const modal = await openLatestFlowRecordings(page, 240);
     await modal.getByRole('button', { name: 'Filter by input' }).click();
     await modal.getByLabel('Input JSON path').fill('$.missing');
     await modal.locator('.run-recordings-input-filter-operator .run-recordings-select__control').click();
@@ -966,7 +966,10 @@ test.describe('Run recordings modal', () => {
       element.scrollTop = 350;
     });
     await expect.poll(() => list.evaluate((element) => element.scrollTop)).toBe(350);
-    await expect.poll(() => runFetches.filter((url) => url.includes('inputCursor=40')).length).toBeGreaterThan(0);
+    await expect.poll(() => runFetches.filter((url) => url.includes('inputCursor=120')).length).toBeGreaterThan(0);
+    const searchRequests = runFetches.map((url) => new URL(url)).filter((url) => url.searchParams.has('inputPath'));
+    expect(searchRequests[0]!.searchParams.get('pageSize')).toBe('20');
+    expect(searchRequests.slice(1).every((url) => url.searchParams.get('pageSize') === '100')).toBe(true);
     await expect.poll(() => list.evaluate((element) => element.scrollTop)).toBe(350);
     await modal.getByLabel('Input JSON path').fill('$.foo');
     await modal.locator('.run-recordings-input-filter-operator .run-recordings-select__control').click();

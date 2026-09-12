@@ -214,6 +214,16 @@ export class StudioMetrics {
     this.incrementCounter('rivet_workflow_recording_persistence_failures_total', {});
   }
 
+  recordRecordingInputCacheEvent(
+    event: 'hit' | 'miss' | 'shared' | 'load' | 'evicted' | 'expired' | 'oversized',
+  ): void {
+    this.incrementCounter('rivet_recording_input_cache_events_total', { event });
+  }
+
+  observeRecordingInputExtraction(stage: 'decode' | 'parse' | 'queue_transfer', durationMs: number): void {
+    this.observeHistogram('rivet_recording_input_extraction_seconds', { stage }, Math.max(0, durationMs) / 1000);
+  }
+
   setPostgresPool(input: { idle: number; pools: number; total: number; waiting: number }): void {
     this.setGauge('rivet_postgres_pool_connections', { state: 'idle' }, input.idle);
     this.setGauge('rivet_postgres_pool_connections', { state: 'total' }, input.total);

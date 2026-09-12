@@ -22,6 +22,55 @@ const source = {
   ),
 };
 
+test('catalog preparation creates only one idle worker and shares it with searches', async () => {
+  const workers: Worker[] = [];
+  const extractor = new WorkflowRecordingInputExtractor(() => {
+    const worker = new Worker(workerUrl);
+    workers.push(worker);
+    return worker;
+  });
+  try {
+    for (let i = 0; i < 20; i++) extractor.prepare();
+    assert.equal(workers.length, 1);
+    assert.deepEqual(await extractor.extract(source), { exists: true, value: 'needle' });
+    assert.equal(workers.length, 1);
+    await workers[0]!.terminate();
+    assert.deepEqual(await extractor.extract(source), { exists: true, value: 'needle' });
+    assert.equal(workers.length, 2);
+  } finally {
+    extractor.dispose();
+  }
+});
+
+test('optional preparation failure does not throw or prevent a later search', async () => {
+  let attempts = 0;
+  const extractor = new WorkflowRecordingInputExtractor(() => {
+    if (++attempts === 1) throw new Error('temporary startup failure');
+    return new Worker(workerUrl);
+  });
+  try {
+    assert.doesNotThrow(() => extractor.prepare());
+    assert.deepEqual(await extractor.extract(source), { exists: true, value: 'needle' });
+    assert.equal(attempts, 2);
+  } finally {
+    extractor.dispose();
+  }
+});
+
+test('disposing a prepared worker does not restart it in the background', async () => {
+  const workers: Worker[] = [];
+  const extractor = new WorkflowRecordingInputExtractor(() => {
+    const worker = new Worker(workerUrl);
+    workers.push(worker);
+    return worker;
+  });
+  extractor.prepare();
+  const exit = new Promise<void>((resolve) => workers[0]!.once('exit', () => resolve()));
+  extractor.dispose();
+  await exit;
+  assert.equal(workers.length, 1);
+});
+
 test('compiled input workers recover from an unexpected idle exit without inline parsing', async () => {
   const workers: Worker[] = [];
   const extractor = new WorkflowRecordingInputExtractor(() => {

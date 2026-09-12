@@ -4,10 +4,89 @@ import { gzipSync } from 'node:zlib';
 
 import {
   getManagedRecordingInputCacheKey,
+  getRecordingInputCacheMaxBytes,
   WorkflowRecordingInputCache,
 } from '../routes/workflows/recording-input-cache.js';
 import { extractWorkflowRecordingInputFromSource } from '../routes/workflows/recording-input-source.js';
 import { RECORDING_INPUT_PAGE_COMPLETE } from '../routes/workflows/recording-input-filter.js';
+
+test('deployment cache memory budget is explicit, bounded, and defaults to 32 MiB', () => {
+  assert.equal(getRecordingInputCacheMaxBytes({}), 32 * 1024 * 1024);
+  assert.equal(getRecordingInputCacheMaxBytes({ RIVET_RECORDING_INPUT_CACHE_MAX_MIB: '64' }), 64 * 1024 * 1024);
+  assert.equal(getRecordingInputCacheMaxBytes({ RIVET_RECORDING_INPUT_CACHE_MAX_MIB: '0' }), 0);
+  for (const value of ['-1', '1.5', 'NaN', 'Infinity', '513', '9007199254740992']) {
+    assert.throws(() => getRecordingInputCacheMaxBytes({ RIVET_RECORDING_INPUT_CACHE_MAX_MIB: value }), /0 to 512/);
+  }
+});
+
+test('cache diagnostics are isolated, payload-free, and distinguish capacity from expiry', async () => {
+  let now = 0;
+  const cache = new WorkflowRecordingInputCache({
+    maxEntries: 1,
+    ttlMs: 10,
+    now: () => now,
+    onCacheEvent: () => {
+      throw new Error('broken diagnostics');
+    },
+  });
+  const load = async () => createSerializedRecording('secret-value');
+  await cache.getOrLoad('secret-key', load);
+  await cache.getOrLoad('secret-key', load);
+  await cache.getOrLoad('second', load);
+  assert.equal(cache.diagnostics.hit, 1);
+  assert.equal(cache.diagnostics.evicted, 1);
+  assert.equal(cache.diagnostics.load, 2);
+  assert.ok(cache.diagnostics.retainedBytes > 0);
+  const snapshot = cache.diagnostics;
+  snapshot.hit = 99;
+  assert.equal(cache.diagnostics.hit, 1);
+  now = 11;
+  await cache.getOrLoad('second', load);
+  assert.equal(cache.diagnostics.expired, 1);
+  assert.equal(cache.diagnostics.load, 3);
+  assert.doesNotMatch(JSON.stringify(cache.diagnostics), /secret/);
+});
+
+test('working sets larger than retention remain bounded and report rereads', async () => {
+  const cache = new WorkflowRecordingInputCache({ maxBytes: 2048 });
+  const load = async () => createSerializedRecording('x'.repeat(1024));
+  for (let pass = 0; pass < 2; pass++) {
+    for (let i = 0; i < 3; i++) await cache.getOrLoad(String(i), load);
+  }
+  assert.equal(cache.diagnostics.load, 6);
+  assert.equal(cache.diagnostics.hit, 0);
+  assert.ok(cache.diagnostics.retainedBytes <= 2048);
+  assert.equal(cache.diagnostics.evicted, 5);
+  const oversized = new WorkflowRecordingInputCache({ maxEntryBytes: 100 });
+  await oversized.getOrLoad('large', load);
+  assert.equal(oversized.diagnostics.oversized, 1);
+  assert.equal(oversized.size, 0);
+});
+
+test('disabled completed retention still shares active loads and isolates consumers', async () => {
+  const cache = new WorkflowRecordingInputCache({ maxBytes: 0 });
+  let release!: (source: string) => void;
+  let loads = 0;
+  const pending = new Promise<string>((resolve) => {
+    release = resolve;
+  });
+  const load = async () => {
+    loads++;
+    return pending;
+  };
+  const first = cache.getOrLoad('same', load);
+  const second = cache.getOrLoad('same', load);
+  release(createSerializedRecording('kept'));
+  const [left, right] = await Promise.all([first, second]);
+  assert.deepEqual(left, right);
+  assert.notEqual(left, right);
+  assert.equal(loads, 1);
+  assert.equal(cache.diagnostics.shared, 1);
+  assert.equal(cache.diagnostics.oversized, 0);
+  assert.equal(cache.size, 0);
+  await cache.getOrLoad('same', load);
+  assert.equal(loads, 2);
+});
 
 test('normal page completion hands an admitted load to the next request without restarting it', async () => {
   const cache = new WorkflowRecordingInputCache();

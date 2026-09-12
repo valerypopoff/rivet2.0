@@ -172,7 +172,9 @@ export function useRunRecordingsController(isOpen: boolean, resetToken = 0) {
         while (!cancelled && !abortController.signal.aborted) {
           const response = await loadWorkflowRecordingRunsPage(selectedWorkflowId, {
             page: 1,
-            pageSize: runsPerPage,
+            // Preserve quick initial discovery; subsequent search batches are
+            // independent of ordinary table pagination and fill the virtual list.
+            pageSize: nextCursor === 0 && !nextAfter ? runsPerPage : 100,
             status: statusFilter,
             inputFilter: appliedInputFilter,
             inputCursor: nextCursor,

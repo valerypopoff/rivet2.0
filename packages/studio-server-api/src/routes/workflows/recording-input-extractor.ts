@@ -50,6 +50,24 @@ export class WorkflowRecordingInputExtractor {
   }
   private readonly forceWorker: boolean;
 
+  /** Prepare one idle worker without reading artifacts or delaying the catalog. */
+  prepare(): void {
+    if (
+      (!this.forceWorker && import.meta.url.endsWith('.ts')) ||
+      this.#slots.length > 0 ||
+      this.#retryTimer ||
+      performance.now() < this.#unavailableUntil
+    )
+      return;
+    try {
+      this.#slots.push(this.#createSlot());
+    } catch {
+      // Preparation is optional. Actual searches retain bounded recovery and
+      // report failures normally; opening the catalog must remain successful.
+      this.#recover();
+    }
+  }
+
   async extract(
     source: WorkflowRecordingInputSource,
     signal?: AbortSignal,
@@ -252,6 +270,10 @@ export class WorkflowRecordingInputExtractor {
 }
 
 const extractor = new WorkflowRecordingInputExtractor();
+
+export function prepareWorkflowRecordingInputExtractor(): void {
+  extractor.prepare();
+}
 
 export function extractWorkflowRecordingInputInWorker(
   source: WorkflowRecordingInputSource,

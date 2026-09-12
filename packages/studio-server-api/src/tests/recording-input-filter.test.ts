@@ -638,42 +638,43 @@ test('continuations fill a page instead of returning one matching recording per 
   assert.equal(filteredPage.nextInputCursor, 5);
 });
 
-test('a dense cached history uses one initial request plus filled continuation pages', async () => {
-  const rows = Array.from({ length: 1_000 }, (_, index) => ({
-    id: `row-${index}`,
-    serialized: createSerializedRecording({ request_id: `match-${index}` }),
-  }));
-  let cursor = 0;
-  let requestCount = 0;
-  const receivedIds: string[] = [];
+for (const continuationSize of [20, 100])
+  test(`dense cached history fills ${continuationSize}-row continuations`, async () => {
+    const rows = Array.from({ length: 1_000 }, (_, index) => ({
+      id: `row-${index}`,
+      serialized: createSerializedRecording({ request_id: `match-${index}` }),
+    }));
+    let cursor = 0;
+    let requestCount = 0;
+    const receivedIds: string[] = [];
 
-  do {
-    const page = await filterRowsBySerializedRecordingInputPage(
-      rows,
-      { path: '$.request_id', operator: 'exists', value: '' },
-      async (row) => row.serialized,
-      {
-        cursor,
-        pageSize: 20,
-        settleCandidateCount: 24,
-        probeFirstCandidate: cursor === 0,
-        isInitialSearch: cursor === 0,
-      },
+    do {
+      const page = await filterRowsBySerializedRecordingInputPage(
+        rows,
+        { path: '$.request_id', operator: 'exists', value: '' },
+        async (row) => row.serialized,
+        {
+          cursor,
+          pageSize: cursor === 0 ? 20 : continuationSize,
+          settleCandidateCount: Math.max(24, continuationSize),
+          probeFirstCandidate: cursor === 0,
+          isInitialSearch: cursor === 0,
+        },
+      );
+      requestCount += 1;
+      receivedIds.push(...page.rows.map((row) => row.id));
+      if (!page.hasMore) {
+        break;
+      }
+      cursor = page.nextInputCursor!;
+    } while (true);
+
+    assert.equal(requestCount, continuationSize === 20 ? 51 : 11);
+    assert.deepEqual(
+      receivedIds,
+      rows.map((row) => row.id),
     );
-    requestCount += 1;
-    receivedIds.push(...page.rows.map((row) => row.id));
-    if (!page.hasMore) {
-      break;
-    }
-    cursor = page.nextInputCursor!;
-  } while (true);
-
-  assert.equal(requestCount, 51);
-  assert.deepEqual(
-    receivedIds,
-    rows.map((row) => row.id),
-  );
-});
+  });
 
 test('the scan budget stops further scheduling after the current ordered read completes', async () => {
   const rows = Array.from({ length: 24 }, (_, index) => ({

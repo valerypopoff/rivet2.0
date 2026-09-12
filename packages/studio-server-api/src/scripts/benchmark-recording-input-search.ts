@@ -7,13 +7,17 @@ import { createServer } from 'node:http';
 import { fork } from 'node:child_process';
 import { monitorEventLoopDelay } from 'node:perf_hooks';
 import { promisify } from 'node:util';
-import { gzipSync, gunzip } from 'node:zlib';
+import { gzipSync, gunzip, deflateRawSync, inflateRawSync } from 'node:zlib';
+import { serialize, deserialize } from 'node:v8';
 import { setTimeout as delay } from 'node:timers/promises';
 import {
   WorkflowRecordingInputCache,
   getFilesystemRecordingInputCacheKey,
 } from '../routes/workflows/recording-input-cache.js';
-import { disposeWorkflowRecordingInputExtractor } from '../routes/workflows/recording-input-extractor.js';
+import {
+  disposeWorkflowRecordingInputExtractor,
+  WorkflowRecordingInputExtractor,
+} from '../routes/workflows/recording-input-extractor.js';
 import {
   filterRecordingInputWindows,
   filterRowsByRecordingInputPage,
@@ -48,6 +52,12 @@ for (let i = 2; i < process.argv.length; i += 2) {
       '--read-latency-ms',
       '--http-latency-ms',
       '--extraction-kib',
+      '--input-kib',
+      '--cache-mib',
+      '--cache-entry-kib',
+      '--cache-ttl-ms',
+      '--repeat-delay-ms',
+      '--initial-page-size',
     ].includes(key) ||
     value == null
   )
@@ -62,7 +72,13 @@ function integer(name: string, fallback: number, minimum = 1): number {
 }
 const count = integer('--recordings', 250),
   payloadKiB = integer('--payload-kib', 32),
-  pageSize = integer('--page-size', 20);
+  pageSize = integer('--page-size', 100);
+const inputKiB = integer('--input-kib', 0, 0),
+  cacheMiB = integer('--cache-mib', 32),
+  cacheEntryKiB = integer('--cache-entry-kib', 1024),
+  cacheTtlMs = integer('--cache-ttl-ms', 300000),
+  repeatDelayMs = integer('--repeat-delay-ms', 0, 0),
+  initialPageSize = integer('--initial-page-size', 20);
 const readLatencyMs = integer('--read-latency-ms', 0, 0),
   httpLatencyMs = integer('--http-latency-ms', 0, 0);
 const extractionKiB = integer('--extraction-kib', 16384),
@@ -70,20 +86,28 @@ const extractionKiB = integer('--extraction-kib', 16384),
 if (
   !['recent', 'dense', 'sparse', 'absent'].includes(scenario) ||
   pageSize > 100 ||
-  count * payloadKiB > 512 * 1024 ||
+  initialPageSize > 100 ||
+  cacheMiB > 512 ||
+  cacheEntryKiB > 8192 ||
+  inputKiB > 8192 ||
+  count * (payloadKiB + inputKiB) > 512 * 1024 ||
   extractionKiB > 64 * 1024
 )
   throw new Error('Invalid scenario/page size or fixture exceeds safety limit.');
 const matches = (index: number) =>
   scenario === 'dense' || (scenario === 'recent' && index === 0) || (scenario === 'sparse' && index % 50 === 49);
 
-function artifact(index: number, kib: number): Buffer {
+function fixtureText(index: number, kib: number): string {
   let seed = index + 123;
   const chars = new Uint8Array(kib * 1024);
   for (let offset = 0; offset < chars.length; offset++) {
     seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
     chars[offset] = index % 2 ? 33 + ((seed >>> 24) % 90) : 120;
   }
+  return Buffer.from(chars).toString('ascii');
+}
+
+function artifact(index: number, kib: number): Buffer {
   return gzipSync(
     JSON.stringify({
       recording: {
@@ -91,12 +115,19 @@ function artifact(index: number, kib: number): Buffer {
           {
             type: 'start',
             data: {
-              inputs: { input: { value: { requestId: matches(index) ? '$STRING:request' : 'other' } } },
+              inputs: {
+                input: {
+                  value: {
+                    requestId: matches(index) ? '$STRING:request' : 'other',
+                    ...(inputKiB ? { payload: fixtureText(index, inputKiB) } : {}),
+                  },
+                },
+              },
             },
           },
         ],
       },
-      assets: { unrelated: Buffer.from(chars).toString('ascii') },
+      assets: { unrelated: fixtureText(index, kib) },
       strings: { request: 'needle' },
     }),
   );
@@ -120,6 +151,9 @@ async function measure(
   });
   let stats = blankStats();
   const cache = new WorkflowRecordingInputCache({
+    maxBytes: cacheMiB * 1024 * 1024,
+    maxEntryBytes: cacheEntryKiB * 1024,
+    ttlMs: cacheTtlMs,
     onExtractionTiming: (timing) => {
       stats.decompressionMs += timing.decompressionMs;
       stats.parseMs += timing.parseAndExtractMs;
@@ -183,23 +217,24 @@ async function measure(
       const url = new URL(req.url!, 'http://localhost'),
         inputCursor = Number(url.searchParams.get('cursor') ?? 0);
       const inputAfter = url.searchParams.get('after') || undefined;
+      const batchSize = inputCursor === 0 && !inputAfter ? initialPageSize : pageSize;
       const start = performance.now();
       const page =
         pagination === 'multi-window'
           ? await filterRecordingInputWindows(scope.filter, loadWindow, read, {
               inputCursor,
               inputAfter,
-              pageSize,
+              pageSize: batchSize,
               getInputAfter,
               signal: controller.signal,
             })
           : await (async () => {
-              const size = Math.max(24, pageSize),
+              const size = Math.max(24, batchSize),
                 fetched = await loadWindow(inputAfter, inputCursor, size + 1);
               return filterRowsByRecordingInputPage(fetched.slice(0, size), scope.filter, read, {
                 cursor: 0,
                 cursorBase: inputCursor,
-                pageSize,
+                pageSize: batchSize,
                 hasMoreCandidates: fetched.length > size,
                 isInitialSearch: inputCursor === 0,
                 probeFirstCandidate: inputCursor === 0,
@@ -220,7 +255,9 @@ async function measure(
     reports = [];
   try {
     for (const phase of ['cold', 'warm', 'concurrent-cold']) {
+      if (phase === 'warm' && repeatDelayMs) await delay(repeatDelayMs);
       if (phase === 'concurrent-cold') cache.clear();
+      const cacheBefore = cache.diagnostics;
       stats = blankStats();
       const start = performance.now(),
         eventLoop = monitorEventLoopDelay({ resolution: 10 });
@@ -251,7 +288,7 @@ async function measure(
             ids.push(...page.rows.map((row) => row.id));
             searchIds.push(...page.rows.map((row) => row.id));
             if (ids.length && firstResultMs == null) firstResultMs = performance.now() - start;
-            if (ids.length >= pageSize && firstPageMs == null) firstPageMs = performance.now() - start;
+            if (searchIds.length >= initialPageSize && firstPageMs == null) firstPageMs = performance.now() - start;
             if (!page.hasMore) break;
             assert.ok(page.nextInputCursor! > cursor, 'cursor must advance');
             cursor = page.nextInputCursor!;
@@ -273,6 +310,8 @@ async function measure(
           firstPageMs,
           completedMs: performance.now() - start,
           ...stats,
+          cacheBefore,
+          cacheAfter: cache.diagnostics,
           peakRssBytes,
           eventLoopP99Ms: eventLoop.percentile(99) / 1e6,
         });
@@ -340,7 +379,7 @@ async function main() {
         encoding: 'gzip',
         hasReplayDataset: false,
         recordingCompressedBytes: bytes.length,
-        recordingUncompressedBytes: payloadKiB * 1024,
+        recordingUncompressedBytes: (payloadKiB + inputKiB) * 1024,
         projectCompressedBytes: 0,
         projectUncompressedBytes: 0,
         datasetCompressedBytes: 0,
@@ -367,7 +406,7 @@ async function main() {
       }
     disposeWorkflowRecordingInputExtractor();
     const extraction = [];
-    for (const kib of [32, extractionKiB])
+    for (const kib of new Set([32, extractionKiB]))
       for (const entropy of [0, 1]) {
         const bytes = artifact(entropy, kib),
           full = await compareExtraction(bytes, 'full'),
@@ -375,7 +414,15 @@ async function main() {
         assert.equal(full.error, undefined);
         assert.equal(tokenizer.error, undefined);
         assert.deepEqual(tokenizer.input, full.input);
-        extraction.push({ kib, entropy, compressedBytes: bytes.length, full, tokenizer });
+        const { input: _fullInput, ...fullMetrics } = full;
+        const { input: _tokenizerInput, ...tokenizerMetrics } = tokenizer;
+        extraction.push({
+          kib,
+          entropy,
+          compressedBytes: bytes.length,
+          full: fullMetrics,
+          tokenizer: tokenizerMetrics,
+        });
       }
     const boundary = rows[Math.floor(rows.length * 0.8)]!;
     const queryPlans = await explainWorkflowRecordingWindow(scope.workflowId, {
@@ -391,6 +438,15 @@ async function main() {
       scenario,
       count,
       payloadKiB,
+      inputKiB,
+      pageSize,
+      initialPageSize,
+      cacheMiB,
+      cacheEntryKiB,
+      cacheTtlMs,
+      repeatDelayMs,
+      cacheCompression: compareCacheCompression(),
+      workerPreparation: await compareWorkerPreparation(),
       readLatencyMs,
       httpLatencyMs,
       measurements,
@@ -419,5 +475,46 @@ async function main() {
     else process.env.RIVET_APP_DATA_ROOT = previousRoot;
     await fs.rm(root, { recursive: true, force: true });
   }
+}
+
+// CPU/retention comparison only: this does not change production cache encoding.
+function compareCacheCompression() {
+  return [0, 1].map((entropy) => {
+    const value = { exists: true, value: { payload: fixtureText(entropy, Math.max(1, inputKiB)) } };
+    const bytes = serialize(value);
+    const encodeStarted = performance.now();
+    const compressed = deflateRawSync(bytes, { level: 1 });
+    const encodeMs = performance.now() - encodeStarted;
+    const iterations = 100;
+    let start = performance.now();
+    for (let i = 0; i < iterations; i++) deserialize(bytes);
+    const rawReadMs = (performance.now() - start) / iterations;
+    start = performance.now();
+    for (let i = 0; i < iterations; i++) deserialize(inflateRawSync(compressed));
+    const compressedReadMs = (performance.now() - start) / iterations;
+    assert.deepEqual(deserialize(inflateRawSync(compressed)), value);
+    return { entropy, bytes: bytes.length, compressedBytes: compressed.length, encodeMs, rawReadMs, compressedReadMs };
+  });
+}
+
+async function compareWorkerPreparation() {
+  const samples = [];
+  const source = { kind: 'serialized' as const, serializedRecording: JSON.stringify({ recording: { events: [] } }) };
+  for (const prepared of [false, true]) {
+    const extractor = new WorkflowRecordingInputExtractor();
+    try {
+      if (prepared) {
+        extractor.prepare();
+        // Explicitly model the time between catalog opening and clicking Search.
+        await delay(250);
+      }
+      const start = performance.now();
+      assert.deepEqual(await extractor.extract(source), { exists: false, value: undefined });
+      samples.push({ prepared, catalogLeadMs: prepared ? 250 : 0, extractionMs: performance.now() - start });
+    } finally {
+      extractor.dispose();
+    }
+  }
+  return samples;
 }
 await main();
