@@ -1284,7 +1284,9 @@ void describe('GraphProcessor scheduler boundaries', () => {
       withTimeout(processor.processGraph(testProcessContext()), 'winning sibling failure'),
       /failing-sibling/,
     );
-    assert.deepEqual(summaries[0]?.summary.selectedIteration, { updateIndex: 1, reason: 'failure' });
+    assert.equal(summaries[0]?.summary.selectedIteration?.updateIndex, 1);
+    assert.equal(summaries[0]?.summary.selectedIteration?.reason, 'failure');
+    assert.ok(summaries[0]?.summary.selectedIteration?.graphRunId);
     assert.equal(summaries[0]?.summary.failedIterations, 1);
   });
 

@@ -33,7 +33,10 @@ import { OUTPUT_NAVIGATION_ITEM_ATTRIBUTE } from '../renderDataValue/outputNavig
 import { MATCH_ACTIVE_CLASS, MATCH_CLASS } from './fullscreenOutputSearch.js';
 import { FullscreenNodeOutputToolbar } from './FullscreenNodeOutputToolbar.js';
 import { FullscreenOutputSearchContext } from './FullscreenOutputSearchContext.js';
-import { getStopWatchingStreamingOutputPresentation } from './streamingOutputWatchPresentation.js';
+import {
+  getStopWatchingStreamingOutputPresentation,
+  getStreamingOutputWatchTerminalPageIndex,
+} from './streamingOutputWatchPresentation.js';
 import { copyOutputJson, copyOutputValue } from './nodeOutputCopyActions.js';
 import { NodeOutputPager } from './NodeOutputPager.js';
 import { LLMChatOutputHistoryPager } from './LLMChatOutputHistoryPager.js';
@@ -315,7 +318,14 @@ const NodeFullscreenOutput: FC<{ node: ChartNode }> = ({ node }) => {
   const presentationOutput = isStreamingWatchStop
     ? getStopWatchingStreamingOutputPresentation(filteredOutput)
     : filteredOutput;
-  const presentationSelectedPage = isStreamingWatchStop ? 'latest' : selectedPage;
+  const terminalPageIndex = isStreamingWatchBranchNode
+    ? getStreamingOutputWatchTerminalPageIndex(presentationOutput)
+    : undefined;
+  const presentationSelectedPage = isStreamingWatchStop
+    ? 'latest'
+    : selectedPage === 'latest' && terminalPageIndex != null
+      ? terminalPageIndex
+      : selectedPage;
   const selectedPageIndex = getSelectedProcessPageIndex(presentationOutput, presentationSelectedPage);
   const displaySelectedPage: number | 'latest' =
     presentationSelectedPage === 'latest' ? 'latest' : selectedPageIndex ?? presentationSelectedPage;
@@ -487,7 +497,8 @@ const NodeFullscreenOutput: FC<{ node: ChartNode }> = ({ node }) => {
       return;
     }
     setSelectedPage((page) => {
-      const pageNum = getSelectedProcessPageIndex(presentationOutput, page) ?? 0;
+      const pageForPresentation = page === 'latest' && terminalPageIndex != null ? terminalPageIndex : page;
+      const pageNum = getSelectedProcessPageIndex(presentationOutput, pageForPresentation) ?? 0;
       return pageNum > 0 ? pageNum - 1 : pageNum;
     });
   });
@@ -497,10 +508,14 @@ const NodeFullscreenOutput: FC<{ node: ChartNode }> = ({ node }) => {
       return;
     }
     setSelectedPage((page) => {
-      const pageNum = getSelectedProcessPageIndex(presentationOutput, page) ?? 0;
+      const pageForPresentation = page === 'latest' && terminalPageIndex != null ? terminalPageIndex : page;
+      const pageNum = getSelectedProcessPageIndex(presentationOutput, pageForPresentation) ?? 0;
       const nextPage = pageNum + 1;
       if (nextPage >= presentationOutput.length) {
         return pageNum;
+      }
+      if (terminalPageIndex != null) {
+        return nextPage === terminalPageIndex ? 'latest' : nextPage;
       }
       return isStreamingWatchBranchNode && nextPage === presentationOutput.length - 1 ? 'latest' : nextPage;
     });
@@ -615,7 +630,7 @@ const NodeFullscreenOutput: FC<{ node: ChartNode }> = ({ node }) => {
         <div className="fullscreen-output-pagers">
           {outputViewModel.totalPages > 1 && (
             <NodeOutputPager
-              latestPageLabel={isStreamingWatchBranchNode ? 'Terminal' : undefined}
+              labelledPage={terminalPageIndex == null ? undefined : { index: terminalPageIndex, label: 'Terminal' }}
               selectedPage={displaySelectedPage}
               totalPages={outputViewModel.totalPages}
               onPrevPage={prevPage}

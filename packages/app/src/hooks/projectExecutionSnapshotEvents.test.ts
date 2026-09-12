@@ -58,6 +58,78 @@ test('inactive project snapshots retain a Watch child run parent identity', () =
   );
 });
 
+test('inactive project snapshots mark only the settled Watch terminal child run', () => {
+  const projectId = 'project-a' as ProjectId;
+  const graphId = 'graph-a' as GraphId;
+  const rootRunId = 'root-run-a' as RootRunId;
+  const selectedGraphRunId = 'watch-selected-run' as GraphRunId;
+  const snapshot = {
+    ...createEmptyProjectExecutionSnapshot(),
+    lastRunDataByNode: {
+      ['first-node' as NodeId]: [
+        {
+          data: { status: { type: 'ok' as const } },
+          graphRunId: 'watch-first-run' as GraphRunId,
+          processId: 'first-process' as ProcessId,
+          rootRunId,
+        },
+      ],
+      ['selected-node' as NodeId]: [
+        {
+          data: { status: { type: 'ok' as const } },
+          graphRunId: selectedGraphRunId,
+          processId: 'selected-process' as ProcessId,
+          rootRunId,
+        },
+      ],
+      ['late-parallel-node' as NodeId]: [
+        {
+          data: { status: { type: 'ok' as const } },
+          graphRunId: 'watch-late-run' as GraphRunId,
+          processId: 'late-process' as ProcessId,
+          rootRunId,
+        },
+      ],
+      ['different-root-node' as NodeId]: [
+        {
+          data: { status: { type: 'ok' as const } },
+          graphRunId: selectedGraphRunId,
+          processId: 'different-root-process' as ProcessId,
+          rootRunId: 'other-root' as RootRunId,
+        },
+      ],
+    },
+  };
+
+  const result = applyProcessEventToProjectExecutionSnapshot({
+    data: {
+      execution: { graphId, graphRunId: 'parent-run' as GraphRunId, rootRunId },
+      summary: {
+        receivedUpdates: 4,
+        coalescedUpdates: 0,
+        droppedUpdates: 0,
+        maximumQueuedUpdates: 1,
+        completedIterations: 4,
+        failedIterations: 0,
+        cancelledIterations: 0,
+        omittedIterations: 0,
+        retainedIterationUpdateIndexes: [1, 2, 3, 4],
+        selectedIteration: { graphRunId: selectedGraphRunId, updateIndex: 2, reason: 'stop' },
+      },
+      watchNode: { id: 'watch-node' as NodeId, type: 'watchStreamingOutput' },
+    } as never,
+    message: 'streamingOutputWatchSummary',
+    projectId,
+    refStore: createDataRefStore(),
+    snapshot,
+  }).snapshot;
+
+  assert.equal(result.lastRunDataByNode['first-node' as NodeId]?.[0]?.data.streamingWatchTerminal, undefined);
+  assert.equal(result.lastRunDataByNode['selected-node' as NodeId]?.[0]?.data.streamingWatchTerminal, true);
+  assert.equal(result.lastRunDataByNode['late-parallel-node' as NodeId]?.[0]?.data.streamingWatchTerminal, undefined);
+  assert.equal(result.lastRunDataByNode['different-root-node' as NodeId]?.[0]?.data.streamingWatchTerminal, undefined);
+});
+
 test('inactive project snapshot reducer finishes a hidden successful run', () => {
   const projectId = 'project-a' as ProjectId;
   const graphId = 'graph-a' as GraphId;

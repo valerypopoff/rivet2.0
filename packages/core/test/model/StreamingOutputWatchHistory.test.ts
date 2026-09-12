@@ -31,7 +31,7 @@ void describe('StreamingOutputWatchHistory', () => {
     assert.deepEqual(forwarded, ['trace:1', 'trace:2', 'trace:3', 'trace:6']);
     assert.deepEqual(summary.retainedIterationUpdateIndexes, [1, 2, 3, 6]);
     assert.equal(summary.omittedIterations, 2);
-    assert.deepEqual(summary.selectedIteration, { updateIndex: 6, reason: 'latest' });
+    assert.deepEqual(summary.selectedIteration, { graphRunId: 'iteration-6', updateIndex: 6, reason: 'latest' });
   });
 
   void it('retains the first failure in preference to a later Stop winner or latest iteration', async () => {
@@ -61,7 +61,7 @@ void describe('StreamingOutputWatchHistory', () => {
 
     assert.deepEqual(forwarded, ['trace:initial-1', 'trace:initial-2', 'trace:initial-3', 'trace:failure']);
     assert.deepEqual(summary.retainedIterationUpdateIndexes, [1, 2, 3, 4]);
-    assert.deepEqual(summary.selectedIteration, { updateIndex: 4, reason: 'failure' });
+    assert.deepEqual(summary.selectedIteration, { graphRunId: 'iteration-4', updateIndex: 4, reason: 'failure' });
     assert.equal(summary.completedIterations, 4);
     assert.equal(summary.failedIterations, 1);
   });

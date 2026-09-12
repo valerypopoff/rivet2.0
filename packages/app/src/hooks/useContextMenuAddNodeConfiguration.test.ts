@@ -1,15 +1,54 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
 import test from 'node:test';
-import { fileURLToPath } from 'node:url';
+import {
+  addContextMenuGroups,
+  createAddNodeMenuInfoBox,
+  isAddNodeMenuTypeAllowed,
+  isAddNodeMenuGroupVisible,
+  isAddNodeMenuTypeVisible,
+} from './useContextMenuAddNodeConfiguration.js';
+import { NODE_PREFAB_INSTANCE_TYPE } from '@valerypopoff/rivet2-core';
 
-const testDir = dirname(fileURLToPath(import.meta.url));
+test('Add node menu keeps explicitly retired types and the Convenience category out of new-node creation', () => {
+  assert.equal(isAddNodeMenuTypeVisible('chat'), false);
+  assert.equal(isAddNodeMenuTypeVisible('loopController'), false);
+  assert.equal(isAddNodeMenuTypeVisible('chatLoop'), true);
+  assert.equal(isAddNodeMenuTypeVisible('llmChatV2'), true);
 
-test('Node Library add menu keeps graph-reference and linked-node entries out of source creation', () => {
-  const source = readFileSync(join(testDir, 'useContextMenuAddNodeConfiguration.ts'), 'utf8');
+  assert.equal(isAddNodeMenuTypeAllowed('referencedGraphAlias', false), false);
+  assert.equal(isAddNodeMenuTypeAllowed(NODE_PREFAB_INSTANCE_TYPE, false), false);
+  assert.equal(isAddNodeMenuTypeAllowed('comment', true), false);
+  assert.equal(isAddNodeMenuTypeAllowed('graphInput', true), false);
+  assert.equal(isAddNodeMenuTypeAllowed('text', true), true);
 
-  assert.match(source, /x\.type === 'referencedGraphAlias' \|\| x\.type === NODE_PREFAB_INSTANCE_TYPE/);
-  assert.match(source, /if \(!nodeLibraryOpen\) \{[\s\S]*const type: BuiltInNodeType = 'referencedGraphAlias'/);
-  assert.match(source, /if \(!nodeLibraryOpen && Object\.values\(referencedProjects\)\.length > 0\)/);
+  assert.equal(isAddNodeMenuGroupVisible('Convenience'), false);
+  assert.equal(isAddNodeMenuGroupVisible('Code'), true);
+  assert.deepEqual(
+    addContextMenuGroups.map((group) => group.label),
+    [
+      'Common',
+      'Text',
+      'Code',
+      'AI',
+      'Knowledge',
+      'Lists',
+      'Numbers',
+      'Objects',
+      'Data',
+      'Logic',
+      'Input/Output',
+      'Advanced',
+      'Custom',
+      'MCP',
+    ],
+  );
+
+  const infoBox = createAddNodeMenuInfoBox('text', {
+    contextMenuTitle: 'Text',
+    infoBoxBody: 'Creates text.',
+    infoBoxTitle: 'Text Node',
+    group: ['Text'],
+  });
+  assert.deepEqual(infoBox, { description: 'Creates text.', title: 'Text Node' });
+  assert.equal('image' in infoBox, false);
 });

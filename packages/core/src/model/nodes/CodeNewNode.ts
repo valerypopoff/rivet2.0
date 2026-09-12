@@ -202,7 +202,7 @@ export class CodeNewNodeImpl extends NodeImpl<CodeNewNode> {
       `,
       infoBoxTitle: 'Code Node',
       contextMenuTitle: 'Code',
-      group: ['Advanced'],
+      group: ['Code'],
     };
   }
 

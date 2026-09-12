@@ -21,7 +21,10 @@ import {
   serializeNodeOutputDisplayCopy,
   serializeNodeOutputJsonCopy,
 } from './nodeOutputViewModel.js';
-import { getStopWatchingStreamingOutputPresentation } from './streamingOutputWatchPresentation.js';
+import {
+  getStopWatchingStreamingOutputPresentation,
+  getStreamingOutputWatchTerminalPageIndex,
+} from './streamingOutputWatchPresentation.js';
 
 function createDataRefStore(initialValues?: Record<string, DataValue>): DataRefReader {
   const values = new Map<string, DataValue>(Object.entries(initialValues ?? {}));
@@ -68,6 +71,17 @@ test('Stop Watching Streaming Output keeps older recordings readable without a t
   ];
 
   assert.deepEqual(getStopWatchingStreamingOutputPresentation(processes), [processes[1]]);
+});
+
+test('Watch pages do not have a terminal until the settled summary marks its selected parallel iteration', () => {
+  const processes = [
+    process('first', { status: { type: 'ok' } }),
+    process('selected-stop', { status: { type: 'ok' }, streamingWatchTerminal: true }),
+    process('late-parallel', { status: { type: 'ok' } }),
+  ];
+
+  assert.equal(getStreamingOutputWatchTerminalPageIndex(processes.slice(0, 1)), undefined);
+  assert.equal(getStreamingOutputWatchTerminalPageIndex(processes), 1);
 });
 
 test('createNodeOutputContentViewModel keeps legacy Code errors on the code-error path', () => {

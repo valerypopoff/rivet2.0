@@ -548,10 +548,28 @@ export async function replayExecutionRecording(options: {
         }
         case 'streamingOutputWatchSummary': {
           const { data } = event;
+          const execution = getExecution(data.execution?.graphId ?? getGraphIdForNode(data.watchNodeId), data.execution);
+          // Watch summaries identify one retained child branch as terminal.
+          // A replay creates fresh graph-run IDs, so remap that child identity
+          // with the same root-scoped map used for its retained node events.
+          const selectedIteration = data.summary.selectedIteration;
+          const summary =
+            selectedIteration?.graphRunId != null && data.execution != null
+              ? {
+                  ...data.summary,
+                  selectedIteration: {
+                    ...selectedIteration,
+                    graphRunId: getReplayExecution({
+                      ...data.execution,
+                      graphRunId: selectedIteration.graphRunId,
+                    }).graphRunId,
+                  },
+                }
+              : data.summary;
           emitReplayExecutionEvent('streamingOutputWatchSummary', {
             watchNode: getNode(data.watchNodeId),
-            summary: data.summary,
-            execution: getExecution(data.execution?.graphId ?? getGraphIdForNode(data.watchNodeId), data.execution),
+            summary,
+            execution,
           });
           break;
         }

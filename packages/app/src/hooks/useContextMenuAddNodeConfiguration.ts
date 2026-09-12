@@ -8,7 +8,6 @@ import {
 } from '@valerypopoff/rivet2-core';
 import { type ContextMenuItem } from './useContextMenuConfiguration';
 import { useMemo, useState } from 'react';
-import { useBuiltInNodeImages } from './useBuiltInNodeImages';
 import { useDependsOnPlugins } from './useDependsOnPlugins';
 import { useGetRivetUIContext } from './useGetRivetUIContext';
 import useAsyncEffect from 'use-async-effect';
@@ -29,6 +28,10 @@ export const addContextMenuGroups = [
   {
     id: 'add-node-group:text',
     label: 'Text',
+  },
+  {
+    id: 'add-node-group:code',
+    label: 'Code',
   },
   {
     id: 'add-node-group:ai',
@@ -63,10 +66,6 @@ export const addContextMenuGroups = [
     label: 'Input/Output',
   },
   {
-    id: 'add-node-group:convenience',
-    label: 'Convenience',
-  },
-  {
     id: 'add-node-group:advanced',
     label: 'Advanced',
   },
@@ -82,12 +81,40 @@ export const addContextMenuGroups = [
   items?: readonly ContextMenuItem[];
 };
 
+const ADD_NODE_MENU_HIDDEN_TYPES = new Set(['chat', 'loopController']);
+
+/** Legacy types remain registered for saved projects, but cannot be newly added from the palette. */
+export function isAddNodeMenuTypeVisible(type: string): boolean {
+  return !ADD_NODE_MENU_HIDDEN_TYPES.has(type);
+}
+
+/** Node Library may create only independently usable node sources. */
+export function isAddNodeMenuTypeAllowed(type: string, nodeLibraryOpen: boolean): boolean {
+  if (type === 'referencedGraphAlias' || type === NODE_PREFAB_INSTANCE_TYPE || !isAddNodeMenuTypeVisible(type)) {
+    return false;
+  }
+
+  return !nodeLibraryOpen || canUseNodeAsPrefabSource({ type } as ChartNode);
+}
+
+/** Do not let a plugin restore the retired Convenience category by label. */
+export function isAddNodeMenuGroupVisible(label: string): boolean {
+  return label !== 'Convenience';
+}
+
+/** Add-node descriptions stay text-only; node images belong to node cards, not this picker. */
+export function createAddNodeMenuInfoBox(type: string, uiData: NodeUIData): NonNullable<ContextMenuItem['infoBox']> {
+  return {
+    title: uiData.infoBoxTitle ?? type,
+    description: uiData.infoBoxBody ?? '',
+  };
+}
+
 export function useContextMenuAddNodeConfiguration() {
   const referencedProjects = useAtomValue(referencedProjectsState);
   const project = useAtomValue(projectState);
   const nodeLibraryOpen = useProjectWorkspaceTarget()?.type === 'nodeLibrary';
   const constructors = useAtomValue(nodeConstructorsState);
-  const builtInImages = useBuiltInNodeImages();
   const getUIContext = useGetRivetUIContext();
 
   const [nodeTypesWithUiData, setNodeTypesWithUiData] = useState<readonly { type: string; uiData: NodeUIData }[]>([]);
@@ -123,13 +150,7 @@ export function useContextMenuAddNodeConfiguration() {
       )
     ).filter(isNotNull);
 
-    nodeTypesWithUiData = nodeTypesWithUiData.filter((x) => {
-      if (x.type === 'referencedGraphAlias' || x.type === NODE_PREFAB_INSTANCE_TYPE) {
-        return false;
-      }
-
-      return !nodeLibraryOpen || canUseNodeAsPrefabSource({ type: x.type } as ChartNode);
-    });
+    nodeTypesWithUiData = nodeTypesWithUiData.filter((x) => isAddNodeMenuTypeAllowed(x.type, nodeLibraryOpen));
 
     if (!nodeLibraryOpen) {
       for (const project of Object.values(referencedProjects)) {
@@ -157,7 +178,9 @@ export function useContextMenuAddNodeConfiguration() {
   const plugins = useDependsOnPlugins();
   const groupsWithItems = useMemo(() => {
     const allGroups = uniqBy(
-      [...addContextMenuGroups, ...plugins.flatMap((plugin) => plugin.contextMenuGroups ?? [])],
+      [...addContextMenuGroups, ...plugins.flatMap((plugin) => plugin.contextMenuGroups ?? [])].filter((group) =>
+        isAddNodeMenuGroupVisible(group.label),
+      ),
       (g) => g.id,
     );
 
@@ -204,11 +227,7 @@ export function useContextMenuAddNodeConfiguration() {
                   id: `add-node:${type}`,
                   label: item.uiData.contextMenuTitle ?? type,
                   data: type,
-                  infoBox: {
-                    title: item.uiData.infoBoxTitle ?? type,
-                    description: item.uiData.infoBoxBody ?? '',
-                    image: builtInImages[type as keyof typeof builtInImages] ?? undefined,
-                  },
+                  infoBox: createAddNodeMenuInfoBox(type, item.uiData),
                 };
               });
 
@@ -218,7 +237,7 @@ export function useContextMenuAddNodeConfiguration() {
     });
 
     return groups.filter((group) => group.items.length > 0);
-  }, [builtInImages, nodeLibraryOpen, nodeTypesWithUiData, plugins, project, referencedProjects]);
+  }, [nodeLibraryOpen, nodeTypesWithUiData, plugins, project, referencedProjects]);
 
   return groupsWithItems;
 }

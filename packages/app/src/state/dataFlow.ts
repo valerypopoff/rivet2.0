@@ -90,7 +90,7 @@ export type NodeRunDataBase = {
   finishedAt?: number;
   durationMs?: number;
   splitRunDurationMs?: Record<number, number>;
-  /** Identifies the one accepted Stop result in a repeated Watch branch. */
+  /** Identifies the settled terminal iteration of a repeated Watch branch. */
   streamingWatchTerminal?: boolean;
   debugData?: {
     codeSource?: string;

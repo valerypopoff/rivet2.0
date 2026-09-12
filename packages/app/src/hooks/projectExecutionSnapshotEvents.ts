@@ -46,6 +46,7 @@ import {
   toLLMChatOutputHistoryEntry,
   upsertLLMChatOutputHistoryEntry,
 } from '../utils/llmChatOutputHistory.js';
+import { markStreamingOutputWatchTerminal } from './streamingOutputWatchTerminal.js';
 
 export type ProjectExecutionSnapshotEventResult = {
   changed: boolean;
@@ -256,6 +257,13 @@ function applyProcessEventToProjectExecutionSnapshotData<K extends keyof Process
           options.refStore,
         ),
       };
+    case 'streamingOutputWatchSummary': {
+      const nextSnapshot = applyStreamingOutputWatchTerminal(
+        snapshot,
+        options.data as ProcessEvents['streamingOutputWatchSummary'],
+      );
+      return { changed: nextSnapshot !== snapshot, snapshot: nextSnapshot };
+    }
     case 'userInput':
       return {
         changed: true,
@@ -318,6 +326,15 @@ function applyProcessEventToProjectExecutionSnapshotData<K extends keyof Process
         snapshot,
       };
   }
+}
+
+function applyStreamingOutputWatchTerminal(
+  snapshot: ProjectExecutionSnapshot,
+  event: ProcessEvents['streamingOutputWatchSummary'],
+): ProjectExecutionSnapshot {
+  return produce(snapshot, (draft) => {
+    markStreamingOutputWatchTerminal(draft.lastRunDataByNode, event);
+  });
 }
 
 function applyAgentTraceEvent(snapshot: ProjectExecutionSnapshot, event: AgentTraceEvent): ProjectExecutionSnapshot {

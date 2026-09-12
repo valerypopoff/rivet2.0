@@ -60,6 +60,7 @@ describe('ExpressionNode', () => {
 
     assert.strictEqual(node.type, 'expression');
     assert.strictEqual(node.title, 'Expression');
+    assert.deepStrictEqual(ExpressionNodeImpl.getUIData().group, ['Code']);
   });
 
   it('creates one code editor and no manual input/output editors', () => {

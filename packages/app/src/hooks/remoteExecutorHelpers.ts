@@ -440,6 +440,7 @@ export function createProcessEventDispatcher(currentExecution: {
   onNodeExcluded: (event: ProcessEvents['nodeExcluded']) => void;
   onNodeFinish: (event: ProcessEvents['nodeFinish']) => void;
   onNodeOutputsCleared: (event: ProcessEvents['nodeOutputsCleared']) => void;
+  onStreamingOutputWatchSummary: (event: ProcessEvents['streamingOutputWatchSummary']) => void;
   onNodeStart: (event: ProcessEvents['nodeStart']) => void;
   onPartialOutput: (event: ProcessEvents['partialOutput']) => void;
   onLlmCallFinished: (event: ProcessEvents['llmCallFinished']) => void;
@@ -549,7 +550,9 @@ export function createProcessEventDispatcher(currentExecution: {
         currentExecution.onNodeOutputsCleared(data as ProcessEvents['nodeOutputsCleared']),
       ),
     streamingOutputWatchSummary: (data: unknown) =>
-      dispatchRunActivityEvent('streamingOutputWatchSummary', data as ProcessEvents['streamingOutputWatchSummary']),
+      dispatchWithRunActivity('streamingOutputWatchSummary', data as ProcessEvents['streamingOutputWatchSummary'], () =>
+        currentExecution.onStreamingOutputWatchSummary(data as ProcessEvents['streamingOutputWatchSummary']),
+      ),
     progress: (data: unknown) => dispatchRunActivityEvent('progress', data as ProcessEvents['progress']),
     pause: (data: unknown) => {
       const event = data as ProcessEvents['pause'];

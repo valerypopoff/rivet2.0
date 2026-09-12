@@ -75,6 +75,34 @@ test('createAddedNode applies configured default colors to supported node types'
     referencedProjects: {},
     applyDefaultColor: true,
   });
+  const llmChatNode = createAddedNode({
+    nodeType: 'llmChatV2',
+    position: { x: 120, y: 130 },
+    registry,
+    referencedProjects: {},
+    applyDefaultColor: true,
+  });
+  const textNode = createAddedNode({
+    nodeType: 'text',
+    position: { x: 130, y: 140 },
+    registry,
+    referencedProjects: {},
+    applyDefaultColor: true,
+  });
+  const promptNode = createAddedNode({
+    nodeType: 'prompt',
+    position: { x: 140, y: 150 },
+    registry,
+    referencedProjects: {},
+    applyDefaultColor: true,
+  });
+  const objectNode = createAddedNode({
+    nodeType: 'object',
+    position: { x: 150, y: 160 },
+    registry,
+    referencedProjects: {},
+    applyDefaultColor: true,
+  });
 
   assert.deepEqual(graphInputNode.visualData.color, { bg: 'var(--node-color-3)', border: 'transparent' });
   assert.deepEqual(graphOutputNode.visualData.color, { bg: 'var(--node-color-3)', border: 'transparent' });
@@ -84,6 +112,10 @@ test('createAddedNode applies configured default colors to supported node types'
   assert.deepEqual(getStoredValueNode.visualData.color, { bg: 'var(--node-color-7)', border: 'transparent' });
   assert.deepEqual(setStoredValueNode.visualData.color, { bg: 'var(--node-color-7)', border: 'transparent' });
   assert.deepEqual(subGraphNode.visualData.color, { bg: 'var(--node-color-2)', border: 'transparent' });
+  assert.deepEqual(llmChatNode.visualData.color, { bg: 'var(--node-color-6)', border: 'transparent' });
+  assert.deepEqual(textNode.visualData.color, { bg: 'var(--node-color-4)', border: 'transparent' });
+  assert.deepEqual(promptNode.visualData.color, { bg: 'var(--node-color-4)', border: 'transparent' });
+  assert.deepEqual(objectNode.visualData.color, { bg: 'var(--node-color-4)', border: 'transparent' });
 });
 
 test('createAddedNode leaves node colors untouched when default node colors are disabled or unsupported', () => {
@@ -96,8 +128,8 @@ test('createAddedNode leaves node colors untouched when default node colors are 
     referencedProjects: {},
     applyDefaultColor: false,
   });
-  const textNode = createAddedNode({
-    nodeType: 'text',
+  const arrayNode = createAddedNode({
+    nodeType: 'array',
     position: { x: 30, y: 40 },
     registry,
     referencedProjects: {},
@@ -105,7 +137,7 @@ test('createAddedNode leaves node colors untouched when default node colors are 
   });
 
   assert.equal(graphInputNode.visualData.color, undefined);
-  assert.equal(textNode.visualData.color, undefined);
+  assert.equal(arrayNode.visualData.color, undefined);
 });
 
 test('createAddedNode sizes linked nodes from the library node', () => {

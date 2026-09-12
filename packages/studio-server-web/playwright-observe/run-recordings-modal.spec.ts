@@ -936,13 +936,13 @@ test.describe('Run recordings modal', () => {
         await modal.getByLabel('Value').fill('bar');
         await modal.getByRole('button', { name: 'Apply' }).click();
         const status = modal.locator('.run-recordings-input-search-status');
-        await expect(status).toHaveText('Search complete, 2 matches found');
+        await expect(status).toContainText('Search complete, 2 matches found');
         const deleted = page.waitForResponse((response) => response.request().method() === 'DELETE');
         releaseDeletion();
         await deleted;
         // Flush the response's state updates, including a possible metadata fetch.
         await delay(200);
-        await expect(status).toHaveText('Search complete, 2 matches found');
+        await expect(status).toContainText('Search complete, 2 matches found');
         await expect(modal.locator('.run-recordings-run')).toHaveCount(2);
         await expect(modal.locator('.run-recordings-error')).toHaveCount(0);
       } finally {

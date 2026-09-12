@@ -372,6 +372,11 @@ export function useLocalExecutor() {
     processor.on('nodeOutputsCleared', (data) => {
       routeLocalProcessEvent(runProjectId, 'nodeOutputsCleared', data, () => eventDispatcher.nodeOutputsCleared(data));
     });
+    processor.on('streamingOutputWatchSummary', (data) => {
+      routeLocalProcessEvent(runProjectId, 'streamingOutputWatchSummary', data, () =>
+        eventDispatcher.streamingOutputWatchSummary(data),
+      );
+    });
     processor.on('trace', (trace) => logRuntimeDebug('Local graph trace', { trace }));
     processor.on('pause', (data) => {
       routeLocalProcessEvent(runProjectId, 'pause', data, () => eventDispatcher.pause(data));

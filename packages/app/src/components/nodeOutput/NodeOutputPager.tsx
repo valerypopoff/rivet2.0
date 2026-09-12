@@ -1,7 +1,8 @@
 import type { FC, MouseEvent } from 'react';
 
 export type NodeOutputPagerProps = {
-  latestPageLabel?: string;
+  /** A settled, semantic page label (for example a Watch terminal iteration). */
+  labelledPage?: { index: number; label: string };
   selectedPage: number | 'latest';
   totalPages: number;
   onPrevPage: () => void;
@@ -10,7 +11,7 @@ export type NodeOutputPagerProps = {
 };
 
 export const NodeOutputPager: FC<NodeOutputPagerProps> = ({
-  latestPageLabel,
+  labelledPage,
   onNextPage,
   onPrevPage,
   selectedPage,
@@ -24,7 +25,7 @@ export const NodeOutputPager: FC<NodeOutputPagerProps> = ({
       <button className="picker-left" onClick={onPrevPage} onDoubleClick={handleDoubleClick}>
         {'<'}
       </button>
-      <div className="picker-page">{getNodeOutputPagerPageLabel(selectedPage, totalPages, latestPageLabel)}</div>
+      <div className="picker-page">{getNodeOutputPagerPageLabel(selectedPage, totalPages, labelledPage)}</div>
       <button className="picker-right" onClick={onNextPage} onDoubleClick={handleDoubleClick}>
         {'>'}
       </button>
@@ -35,11 +36,11 @@ export const NodeOutputPager: FC<NodeOutputPagerProps> = ({
 export function getNodeOutputPagerPageLabel(
   selectedPage: number | 'latest',
   totalPages: number,
-  latestPageLabel?: string,
+  labelledPage?: { index: number; label: string },
 ): string | number {
-  if (selectedPage === 'latest' || (latestPageLabel != null && selectedPage === totalPages - 1)) {
-    return latestPageLabel ?? totalPages;
+  if (selectedPage !== 'latest' && labelledPage?.index === selectedPage) {
+    return labelledPage.label;
   }
 
-  return selectedPage + 1;
+  return selectedPage === 'latest' ? totalPages : selectedPage + 1;
 }

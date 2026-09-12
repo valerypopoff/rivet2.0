@@ -19,6 +19,9 @@ import { getHighestVariadicPortIndex } from './variadicPortIndex.js';
 
 export type LoopControllerNode = ChartNode<'loopController', LoopControllerNodeData>;
 
+/** Display-only label; persisted projects keep the stable `loopController` type. */
+export const loopControllerLegacyDisplayName = 'Loop Controller (legacy)';
+
 export type LoopControllerNodeData = {
   maxIterations?: number;
   atMaxIterationsAction?: 'break' | 'error';
@@ -28,7 +31,7 @@ export class LoopControllerNodeImpl extends NodeImpl<LoopControllerNode> {
   static create(): LoopControllerNode {
     const chartNode: LoopControllerNode = {
       type: 'loopController',
-      title: 'Loop Controller',
+      title: loopControllerLegacyDisplayName,
       id: nanoid() as NodeId,
       visualData: {
         x: 0,
@@ -158,8 +161,8 @@ export class LoopControllerNodeImpl extends NodeImpl<LoopControllerNode> {
 
         If the "continue" input is falsey, then the "break" output will run.
       `,
-      infoBoxTitle: 'Loop Controller Node',
-      contextMenuTitle: 'Loop Controller',
+      infoBoxTitle: `${loopControllerLegacyDisplayName} Node`,
+      contextMenuTitle: loopControllerLegacyDisplayName,
       group: ['Logic'],
     };
   }
@@ -243,4 +246,4 @@ export class LoopControllerNodeImpl extends NodeImpl<LoopControllerNode> {
   }
 }
 
-export const loopControllerNode = nodeDefinition(LoopControllerNodeImpl, 'Loop Controller');
+export const loopControllerNode = nodeDefinition(LoopControllerNodeImpl, loopControllerLegacyDisplayName);

@@ -44,7 +44,10 @@ import { NodeOutputPager } from './NodeOutputPager.js';
 import { LLMChatOutputHistoryPager } from './LLMChatOutputHistoryPager.js';
 import { LLMChatSplitOutputHistory } from './LLMChatSplitOutputHistory.js';
 import { resolveNodeOutputPreviewMode } from './nodeOutputPreviewMode.js';
-import { getStopWatchingStreamingOutputPresentation } from './streamingOutputWatchPresentation.js';
+import {
+  getStopWatchingStreamingOutputPresentation,
+  getStreamingOutputWatchTerminalPageIndex,
+} from './streamingOutputWatchPresentation.js';
 import {
   createNodeOutputContentViewModel,
   getNodeOutputCopySource,
@@ -100,6 +103,9 @@ export const NodeInlineOutput: FC<{
   const presentationOutput = isStreamingWatchStop
     ? getStopWatchingStreamingOutputPresentation(visibleOutput)
     : visibleOutput;
+  const terminalPageIndex = isStreamingWatchBranchNode
+    ? getStreamingOutputWatchTerminalPageIndex(presentationOutput)
+    : undefined;
 
   if (!presentationOutput?.length) {
     return null;
@@ -137,7 +143,8 @@ export const NodeInlineOutput: FC<{
           isOutputExpanded={isOutputExpanded}
           isHovered={isHovered}
           showNodeRunDuration={showNodeRunDurations}
-          latestPageLabel={isStreamingWatchBranchNode ? 'Terminal' : undefined}
+          followLatestPage={isStreamingWatchBranchNode}
+          terminalPageIndex={terminalPageIndex}
           onToggleExpandedOutput={onToggleExpandedOutput}
           onOpenFullscreenModal={onOpenFullscreenModal}
         />
@@ -155,7 +162,6 @@ const NodeOutputSingleProcess: FC<{
   isHovered: boolean;
   processId: ProcessId;
   showNodeRunDuration: boolean;
-  latestPageLabel?: string;
   suppressDurationMeta?: boolean;
   onToggleExpandedOutput: () => void;
   onOpenFullscreenModal?: () => void;
@@ -166,7 +172,6 @@ const NodeOutputSingleProcess: FC<{
   isFrozen,
   isOutputExpanded,
   isHovered,
-  latestPageLabel,
   processId,
   showNodeRunDuration,
   suppressDurationMeta = false,
@@ -491,7 +496,8 @@ const NodeOutputMultiProcess: FC<{
   isFrozen: boolean;
   isOutputExpanded: boolean;
   isHovered: boolean;
-  latestPageLabel?: string;
+  followLatestPage?: boolean;
+  terminalPageIndex?: number;
   showNodeRunDuration: boolean;
   onToggleExpandedOutput: () => void;
   onOpenFullscreenModal?: () => void;
@@ -501,35 +507,45 @@ const NodeOutputMultiProcess: FC<{
   isFrozen,
   isOutputExpanded,
   isHovered,
-  latestPageLabel,
+  followLatestPage = false,
+  terminalPageIndex,
   showNodeRunDuration,
   onToggleExpandedOutput,
   onOpenFullscreenModal,
 }) => {
   const [selectedPage, setSelectedPage] = useAtom(selectedProcessPageState(node.id));
-  const selectedPageIndex = getSelectedProcessPageIndex(data, selectedPage);
-  const displaySelectedPage: number | 'latest' =
-    selectedPage === 'latest' ? 'latest' : selectedPageIndex ?? selectedPage;
+  const selectedPageForPresentation =
+    selectedPage === 'latest' && terminalPageIndex != null ? terminalPageIndex : selectedPage;
+  const selectedPageIndex = getSelectedProcessPageIndex(data, selectedPageForPresentation);
+  const displaySelectedPage: number | 'latest' = selectedPageIndex ?? selectedPageForPresentation;
 
   const prevPage = useStableCallback(() => {
     setSelectedPage((page) => {
-      const pageNum = getSelectedProcessPageIndex(data, page) ?? 0;
+      const pageForPresentation = page === 'latest' && terminalPageIndex != null ? terminalPageIndex : page;
+      const pageNum = getSelectedProcessPageIndex(data, pageForPresentation) ?? 0;
       return pageNum > 0 ? pageNum - 1 : pageNum;
     });
   });
 
   const nextPage = useStableCallback(() => {
     setSelectedPage((page) => {
-      const pageNum = getSelectedProcessPageIndex(data, page) ?? 0;
+      const pageForPresentation = page === 'latest' && terminalPageIndex != null ? terminalPageIndex : page;
+      const pageNum = getSelectedProcessPageIndex(data, pageForPresentation) ?? 0;
       const nextPage = pageNum + 1;
       if (nextPage >= data.length) {
         return pageNum;
       }
-      return latestPageLabel != null && nextPage === data.length - 1 ? 'latest' : nextPage;
+      if (terminalPageIndex != null) {
+        return nextPage === terminalPageIndex ? 'latest' : nextPage;
+      }
+      return followLatestPage && nextPage === data.length - 1 ? 'latest' : nextPage;
     });
   });
 
-  const selectedData = useMemo(() => getSelectedNodeOutputProcess(data, selectedPage), [data, selectedPage]);
+  const selectedData = useMemo(
+    () => getSelectedNodeOutputProcess(data, selectedPageForPresentation),
+    [data, selectedPageForPresentation],
+  );
   const showDurationSummary = shouldShowNodeRunDurationSummary(node.type, data, showNodeRunDuration);
   const selectedHasVisibleBody =
     selectedData != null && nodeRunDataHasVisibleOutput(node.type, selectedData.data, { showNodeRunDuration: false });
@@ -537,7 +553,7 @@ const NodeOutputMultiProcess: FC<{
   return (
     <div className="multi-node-output">
       <NodeOutputPager
-        latestPageLabel={latestPageLabel}
+        labelledPage={terminalPageIndex == null ? undefined : { index: terminalPageIndex, label: 'Terminal' }}
         selectedPage={displaySelectedPage}
         totalPages={data.length}
         onPrevPage={prevPage}

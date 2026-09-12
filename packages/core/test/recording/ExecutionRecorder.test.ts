@@ -376,6 +376,11 @@ void describe('ExecutionRecorder', () => {
     const sourceEmitter = new Emittery<ProcessEvents>();
     recorder.record(sourceEmitter as unknown as GraphProcessor);
     const watchNode = { ...node, type: 'watchStreamingOutput' } as ChartNode;
+    const selectedIterationExecution: GraphExecutionMetadata = {
+      ...execution,
+      graphRunId: 'watch-selected-child-run' as GraphRunId,
+      parentGraphRunId: execution.graphRunId,
+    };
     const summary: ProcessEvents['streamingOutputWatchSummary']['summary'] = {
       receivedUpdates: 9,
       coalescedUpdates: 2,
@@ -386,10 +391,20 @@ void describe('ExecutionRecorder', () => {
       cancelledIterations: 0,
       omittedIterations: 2,
       retainedIterationUpdateIndexes: [1, 2, 3, 9],
-      selectedIteration: { updateIndex: 9, reason: 'latest' },
+      selectedIteration: {
+        graphRunId: selectedIterationExecution.graphRunId,
+        updateIndex: 9,
+        reason: 'latest',
+      },
     };
 
     await sourceEmitter.emit('graphStart', { graph, inputs: {}, execution });
+    await sourceEmitter.emit('nodeFinish', {
+      node,
+      outputs: { output: { type: 'string', value: 'selected watch output' } },
+      processId,
+      execution: selectedIterationExecution,
+    });
     await sourceEmitter.emit('streamingOutputWatchSummary', { watchNode, summary, execution });
     await sourceEmitter.emit('done', { results: {} });
 
@@ -402,8 +417,12 @@ void describe('ExecutionRecorder', () => {
 
     const replayEmitter = new Emittery<ProcessEvents>();
     let replayed: ProcessEvents['streamingOutputWatchSummary'] | undefined;
+    let replayedSelectedIterationExecution: GraphExecutionMetadata | undefined;
     replayEmitter.on('streamingOutputWatchSummary', (event) => {
       replayed = event;
+    });
+    replayEmitter.on('nodeFinish', (event) => {
+      replayedSelectedIterationExecution = event.execution;
     });
 
     await replayExecutionRecording({
@@ -428,10 +447,17 @@ void describe('ExecutionRecorder', () => {
     });
     await new Promise<void>((resolve) => setImmediate(resolve));
 
-    assert.deepEqual(replayed?.summary, summary);
+    assert.deepEqual(replayed?.summary, {
+      ...summary,
+      selectedIteration: {
+        ...summary.selectedIteration,
+        graphRunId: replayedSelectedIterationExecution?.graphRunId,
+      },
+    });
     assert.equal(replayed?.watchNode.id, watchNode.id);
     assert.equal(replayed?.replayRecordedAt, recordedSummary?.ts);
     assert.notEqual(replayed?.execution.rootRunId, execution.rootRunId);
+    assert.notEqual(replayed?.summary.selectedIteration?.graphRunId, selectedIterationExecution.graphRunId);
   });
 
   void it('records and replays the accepted Watch Stop terminal marker', async () => {

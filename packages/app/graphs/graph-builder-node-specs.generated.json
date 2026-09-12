@@ -1,6 +1,6 @@
 {
   "formatVersion": 1,
-  "catalogFingerprint": "fnv1a64:9fd6eb3beb436d48",
+  "catalogFingerprint": "fnv1a64:3cf424c5a56f2342",
   "entries": [
     {
       "authoringChoiceId": "registered:abortGraph",
@@ -1326,7 +1326,7 @@
     {
       "authoringChoiceId": "registered:loopController",
       "nodeType": "loopController",
-      "displayName": "Loop Controller",
+      "displayName": "Loop Controller (legacy)",
       "description": "The Loop Controller Node is a powerful node that allows you to create loops in your graph. It is the only node in Rivet that is allowed to contain cycles of nodes, including itself. The Loop Controller Node maintains the state of the loop and controls the flow of values through the loop. All values that can change in a loop must flow through the Loop Controller Node itself. The Loop Controller Node has a dynamic number of pairs of inputs. Each pair consists of an input and a default input. The default input is the initial state of the loop and the input is the value that changes in each iteration of the loop. The Loop Controller Node also has a dynamic number of output ports. On the first iteration, the value of each output port is the value passed into the corresponding default input port. On subsequent iterations, the value of each output port is the value passed into the corresponding",
       "aliases": [],
       "capabilities": {

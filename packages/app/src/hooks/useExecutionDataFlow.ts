@@ -31,11 +31,13 @@ import {
 import { projectState } from '../state/savedGraphs';
 import { removeLLMChatOutputHistorySelectionsForProcess } from '../utils/llmChatOutputHistory.js';
 import { shouldFollowLatestNodeProcess } from '../state/selectors/executionSelectors.js';
+import { markStreamingOutputWatchTerminal } from './streamingOutputWatchTerminal.js';
 
 export type ExecutionDataFlowApi = {
   clearNodeRunDataPreservationForNextStart: () => void;
   consumeNodeRunDataPreservationForNextStart: () => NodeId[] | undefined;
   onEvaluationStart: () => void;
+  onStreamingOutputWatchSummary: (data: ProcessEvents['streamingOutputWatchSummary']) => void;
   onUserInput: (data: ProcessEvents['userInput']) => void;
   preserveNodeRunDataForNextStart: (nodeIds: NodeId[]) => void;
   setDataForNode: (
@@ -219,6 +221,14 @@ export function useExecutionDataFlow(): ExecutionDataFlowApi {
     setSelectedPage((prev) => ({ ...prev, [nodeId]: 'latest' }));
   };
 
+  const onStreamingOutputWatchSummary = (event: ProcessEvents['streamingOutputWatchSummary']) => {
+    setLastRunData((previous) =>
+      produce(previous, (draft) => {
+        markStreamingOutputWatchTerminal(draft, event);
+      }),
+    );
+  };
+
   const onUserInput = ({ node, processId, inputStrings, execution, isReplay }: ProcessEvents['userInput']) => {
     // RecordingPlayer re-emits historical prompts for observability. Their
     // recorded answers are already part of the replay, so they must never
@@ -258,6 +268,7 @@ export function useExecutionDataFlow(): ExecutionDataFlowApi {
     clearNodeRunDataPreservationForNextStart,
     consumeNodeRunDataPreservationForNextStart,
     onEvaluationStart,
+    onStreamingOutputWatchSummary,
     onUserInput,
     preserveNodeRunDataForNextStart,
     setDataForNode,

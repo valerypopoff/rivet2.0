@@ -53,6 +53,7 @@ describe('CodeNode', () => {
 
     assert.strictEqual(node.type, 'code');
     assert.strictEqual(node.title, 'Code (legacy)');
+    assert.deepStrictEqual(CodeNodeImpl.getUIData().group, ['Advanced']);
   });
 
   it('always requests every runtime API, ignoring retired saved permission fields', async () => {
