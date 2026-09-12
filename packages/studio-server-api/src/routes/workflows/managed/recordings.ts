@@ -674,6 +674,7 @@ export function createManagedWorkflowRecordingService(options: ManagedWorkflowRe
         totalRunsExact: filteredPage?.totalRunsExact ?? true,
         hasMore: filteredPage?.hasMore ?? normalizedPage * normalizedPageSize < (countRow?.total_runs ?? 0),
         nextInputCursor: filteredPage?.nextInputCursor,
+        inputSearchAnalyzedRuns: filteredPage?.analyzedRuns,
         nextInputAfter: filteredPage?.nextInputAfter,
         statusFilter,
         inputFilter,

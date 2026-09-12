@@ -630,6 +630,7 @@ async function installRunRecordingRoutes(
           totalRunsExact: !hasInputFilter || !hasMore,
           hasMore,
           nextInputCursor: hasMore ? nextInputCursor : undefined,
+          inputSearchAnalyzedRuns: hasInputFilter ? nextInputCursor : undefined,
           nextInputAfter: hasMore ? `fixture:${nextInputCursor}` : undefined,
           statusFilter: status,
           runs: pageRuns,
@@ -982,6 +983,50 @@ test.describe('Run recordings modal', () => {
     await modal.locator('.run-recordings-run').first().hover();
     await modal.locator('.run-recordings-run').first().getByRole('button', { name: 'Delete' }).click();
     await expect(modal.locator('.run-recordings-run')).toHaveCount(1);
+  });
+
+  test('reports how many available runs an input search has analyzed', async ({ page }) => {
+    await installRunRecordingRoutes(page, { latestFlowRunCount: 30, cursorDelayMs: 750 });
+    const modal = await openLatestFlowRecordings(page, 30);
+    await choosePageSizeTen(modal, 3);
+
+    await modal.getByRole('button', { name: 'Filter by input' }).click();
+    await modal.getByLabel('Input JSON path').fill('$.missing');
+    await modal.locator('.run-recordings-input-filter-operator .run-recordings-select__control').click();
+    await page.locator('.run-recordings-select__option').filter({ hasText: /^!=$/ }).click();
+    await modal.getByLabel('Value').fill('bar');
+    await modal.getByRole('button', { name: 'Apply' }).click();
+
+    const progress = modal.getByRole('progressbar', { name: 'Input search progress' });
+    await expect(progress).toHaveAttribute('aria-valuetext', 'Analyzed 10 of 30 available runs (33%)');
+    await expect(progress).toHaveAttribute('aria-valuenow', '10');
+    await expect(progress).toHaveAttribute('aria-valuemax', '30');
+
+    await expect(modal.locator('.run-recordings-input-search-status')).toContainText('Search complete');
+    await expect(progress).toHaveAttribute('aria-valuetext', 'Analyzed 30 of 30 available runs (100%)');
+    await expect(progress).toHaveAttribute('aria-valuenow', '30');
+  });
+
+  test('keeps the last analyzed-run progress after stopping a search', async ({ page }) => {
+    await installRunRecordingRoutes(page, { latestFlowRunCount: 30, cursorDelayMs: 500 });
+    const modal = await openLatestFlowRecordings(page, 30);
+    await choosePageSizeTen(modal, 3);
+
+    await modal.getByRole('button', { name: 'Filter by input' }).click();
+    await modal.getByLabel('Input JSON path').fill('$.missing');
+    await modal.locator('.run-recordings-input-filter-operator .run-recordings-select__control').click();
+    await page.locator('.run-recordings-select__option').filter({ hasText: /^!=$/ }).click();
+    await modal.getByLabel('Value').fill('bar');
+    await modal.getByRole('button', { name: 'Apply' }).click();
+
+    const progress = modal.getByRole('progressbar', { name: 'Input search progress' });
+    await expect(progress).toHaveAttribute('aria-valuetext', 'Analyzed 10 of 30 available runs (33%)');
+    await modal.getByRole('button', { name: 'Stop search' }).click();
+
+    await expect(modal.locator('.run-recordings-input-search-status')).toContainText('Search stopped');
+    await expect(progress).toHaveAttribute('aria-valuetext', 'Analyzed 10 of 30 available runs (33%)');
+    await delay(700);
+    await expect(progress).toHaveAttribute('aria-valuetext', 'Analyzed 10 of 30 available runs (33%)');
   });
 
   test('filters and paginates runs with the operator menu outside modal clipping', async ({ page }) => {

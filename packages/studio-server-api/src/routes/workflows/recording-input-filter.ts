@@ -60,6 +60,7 @@ type FilterRowsByRecordingInputPageResult<T> = {
   totalRuns: number;
   totalRunsExact: boolean;
   hasMore: boolean;
+  analyzedRuns: number;
   nextInputCursor?: number;
   nextInputAfter?: string;
 };
@@ -387,6 +388,7 @@ function buildFilteredPageResult<T>(
     totalRuns: totalRunsExact ? matchedRows : pageRows.length,
     totalRunsExact,
     hasMore,
+    analyzedRuns: nextInputCursor,
     nextInputCursor: hasMore ? nextInputCursor : undefined,
     nextInputAfter: hasMore && lastScannedRow ? options.getInputAfter?.(lastScannedRow, nextInputCursor) : undefined,
   };

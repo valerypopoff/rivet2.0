@@ -329,6 +329,7 @@ type RecordingRunsTableProps = {
   filteredRunsCount: number;
   totalPages: number;
   inputSearchStatus: 'idle' | 'searching' | 'complete' | 'stopped';
+  inputSearchProgress: { analyzedRuns: number; availableRuns: number } | null;
   page: number;
   runsPerPage: number;
   statusFilter: WorkflowRecordingFilterStatus;
@@ -364,6 +365,7 @@ export const RecordingRunsTable: FC<RecordingRunsTableProps> = ({
   filteredRunsCount,
   totalPages,
   inputSearchStatus,
+  inputSearchProgress,
   page,
   runsPerPage,
   statusFilter,
@@ -400,6 +402,18 @@ export const RecordingRunsTable: FC<RecordingRunsTableProps> = ({
     : inputSearchStatus === 'complete'
       ? `Search complete, ${inputSearchFoundLabel}`
       : inputSearchStatus === 'stopped' ? `Search stopped, ${inputSearchFoundLabel}` : '';
+  const inputSearchProgressPercent = inputSearchProgress
+    ? inputSearchProgress.availableRuns === 0
+      ? 100
+      : Math.round(
+          Math.min(1, Math.max(0, inputSearchProgress.analyzedRuns / inputSearchProgress.availableRuns)) * 100,
+        )
+    : null;
+  const inputSearchProgressLabel = inputSearchProgress
+    ? inputSearchProgress.availableRuns === 0
+      ? 'No available runs to analyze (100%)'
+      : `Analyzed ${inputSearchProgress.analyzedRuns} of ${inputSearchProgress.availableRuns} available runs (${inputSearchProgressPercent}%)`
+    : null;
 
   return (
     <section className="run-recordings-details">
@@ -559,6 +573,29 @@ export const RecordingRunsTable: FC<RecordingRunsTableProps> = ({
                   ) : null}
                   {inputSearchMessage}
                 </span>
+                {inputSearchProgressLabel && inputSearchProgressPercent != null ? (
+                  <div className="run-recordings-input-search-progress">
+                    <span>{inputSearchProgressLabel}</span>
+                    <div
+                      className="run-recordings-input-search-progress-track"
+                      role="progressbar"
+                      aria-label="Input search progress"
+                      aria-valuemin={0}
+                      aria-valuemax={Math.max(inputSearchProgress?.availableRuns ?? 0, 1)}
+                      aria-valuenow={
+                        inputSearchProgress?.availableRuns === 0
+                          ? 1
+                          : inputSearchProgress?.analyzedRuns ?? 0
+                      }
+                      aria-valuetext={inputSearchProgressLabel}
+                    >
+                      <span
+                        className="run-recordings-input-search-progress-fill"
+                        style={{ width: `${inputSearchProgressPercent}%` }}
+                      />
+                    </div>
+                  </div>
+                ) : null}
                 {inputSearchStatus === 'searching' ? (
                   <button
                     type="button"

@@ -95,6 +95,8 @@ export type WorkflowRecordingRunsPageResponse = {
    * concurrent recording insertions/deletions cannot shift the next search.
    */
   nextInputCursor?: number;
+  /** Exact number of status-scoped candidates evaluated by an input-filter search. */
+  inputSearchAnalyzedRuns?: number;
   /** Opaque newest-first continuation for an input-filtered recording search. */
   nextInputAfter?: string;
   statusFilter: WorkflowRecordingFilterStatus;

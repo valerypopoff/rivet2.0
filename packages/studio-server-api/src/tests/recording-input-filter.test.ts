@@ -26,6 +26,7 @@ test('input search batches sparse metadata windows under one request budget', as
   );
   assert.deepEqual(page.rows, [{ id: 999 }]);
   assert.equal(page.hasMore, false);
+  assert.equal(page.analyzedRuns, 1000);
   assert.equal(page.totalRunsExact, true);
   assert.equal(queries, 7);
 });
@@ -50,6 +51,7 @@ test('continuations progress when metadata consumed their budget and drain ready
     },
   );
   assert.deepEqual(result.rows, [rows[0]]);
+  assert.equal(result.analyzedRuns, 25);
   assert.equal(result.nextInputCursor, 25);
   now = 0;
   const ready = await filterRowsByRecordingInputPage(

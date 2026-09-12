@@ -482,6 +482,7 @@ export async function listWorkflowRecordingRunsPage(
       totalRunsExact: filteredPage.totalRunsExact,
       hasMore: filteredPage.hasMore,
       nextInputCursor: filteredPage.nextInputCursor,
+      inputSearchAnalyzedRuns: filteredPage.analyzedRuns,
       nextInputAfter: filteredPage.nextInputAfter,
       statusFilter,
       inputFilter,
