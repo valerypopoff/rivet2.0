@@ -68,6 +68,8 @@ export function startDebuggerServer(
     getProcessorsForClient?: (client: WebSocket, allProcessors: GraphProcessor[]) => GraphProcessor[];
     datasetProvider?: DebuggerDatasetProvider;
     server?: WebSocketServer;
+    /** Upgrade and periodic authorization. The host must bound async work and supply its own deadline. */
+    authorizeClient?: (request: import('node:http').IncomingMessage) => Promise<boolean>;
     port?: number;
     dynamicGraphRun?: DynamicGraphRun;
     allowGraphUpload?: boolean;
@@ -87,7 +89,35 @@ export function startDebuggerServer(
       ? options.heartbeatTimeoutMs
       : DEBUGGER_HEARTBEAT_TIMEOUT_MS;
 
-  const server = options.server ?? new WebSocketServer({ port, host });
+  const authorize = options.authorizeClient;
+  if (options.server && authorize) throw new Error('An externally owned debugger server must authorize its own upgrades.');
+  const server = options.server ?? new WebSocketServer({
+    port,
+    host,
+    ...(authorize ? {
+      verifyClient: (info: { req: import('node:http').IncomingMessage }, done: (allowed: boolean, code?: number) => void) => {
+        void Promise.resolve().then(() => authorize(info.req)).then(
+          (allowed) => done(allowed, allowed ? undefined : 403),
+          () => done(false, 403),
+        );
+      },
+    } : {}),
+  });
+
+  if (authorize) server.on('connection', (client, request) => {
+    let checking = false;
+    const timer = setInterval(() => {
+      if (checking) return;
+      checking = true;
+      void Promise.resolve().then(() => authorize(request)).then(
+        (allowed) => { if (!allowed) client.terminate(); },
+        () => client.terminate(),
+      )
+        .finally(() => { checking = false; });
+    }, 5_000);
+    timer.unref();
+    client.once('close', () => clearInterval(timer));
+  });
 
   const emitter = new Emittery<DebuggerEvents>();
 

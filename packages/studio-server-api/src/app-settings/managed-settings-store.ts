@@ -1,4 +1,5 @@
 import { Client, Pool, type PoolConfig, type QueryResultRow } from 'pg';
+import { performance } from 'node:perf_hooks';
 
 import { checkPostgresPoolHealth, MANAGED_POSTGRES_CONNECTION_TIMEOUT_MS } from '../managed-health.js';
 import { acquireManagedPostgresPool, type ManagedPostgresPoolLease } from '../managed-postgres-pool.js';
@@ -57,6 +58,8 @@ type ManagedSettingsStoreOptions = {
 
 export interface AppSettingsBackend {
   initialize(): Promise<void>;
+  assertSynchronized?(): void;
+  invalidateRevision?(key: string): void;
   checkHealth?(context?: RuntimeHealthCheckContext): Promise<void>;
   read(key: string): Promise<ManagedSettingsRecord | null>;
   write(value: ManagedSettingsWrite): Promise<ManagedSettingsRecord | null>;
@@ -124,6 +127,8 @@ export class PostgresAppSettingsBackend implements AppSettingsBackend {
   #listenerReconnectTimer: NodeJS.Timeout | undefined;
   #pollTimer: NodeJS.Timeout | undefined;
   #pollInFlight: Promise<void> | undefined;
+  #revisionIndexError: unknown = null;
+  #lastRevisionIndexAt: number | null = null;
   #lastSynchronizationFailureAtMs: number | null = null;
   #lastSynchronizationSuccessAtMs: number | null = null;
   #listenerConnected = false;
@@ -203,6 +208,20 @@ export class PostgresAppSettingsBackend implements AppSettingsBackend {
       throw new Error('PostgreSQL app-settings backend is not available.');
     }
     await checkPostgresPoolHealth(this.#pool, context);
+    this.assertSynchronized();
+  }
+
+  /** Cached policies are authoritative only while the complete revision index is fresh. */
+  assertSynchronized(): void {
+    const maximumAgeMs = Math.max(15_000, this.#pollIntervalMs * 3);
+    if (!this.#initialized || this.#disposed || this.#revisionIndexError ||
+      this.#lastRevisionIndexAt === null || performance.now() - this.#lastRevisionIndexAt >= maximumAgeMs) {
+      throw new Error('Managed app settings synchronization is unavailable or stale.', { cause: this.#revisionIndexError });
+    }
+  }
+
+  invalidateRevision(key: string): void {
+    this.#knownRevisions.delete(key);
   }
 
   async read(key: string): Promise<ManagedSettingsRecord | null> {
@@ -377,6 +396,7 @@ export class PostgresAppSettingsBackend implements AppSettingsBackend {
     emitChanges: boolean,
     source: MetricsManagedSettingsSynchronizationSource,
   ): Promise<void> {
+    const startedAt = performance.now();
     try {
       const result = await this.#pool.query<RevisionRow>(
         'SELECT setting_key, revision FROM app_settings ORDER BY setting_key',
@@ -396,8 +416,14 @@ export class PostgresAppSettingsBackend implements AppSettingsBackend {
           synchronized = false;
         }
       }
-      this.#recordSynchronization(source, synchronized ? 'success' : 'failure');
+      if (!synchronized) throw new Error('Managed app settings revisions could not be applied.');
+      this.#revisionIndexError = null;
+      this.#lastRevisionIndexAt = startedAt;
+      this.#recordSynchronization(source, 'success');
     } catch (error) {
+      this.#revisionIndexError = error;
+      // Recovery must refresh values even when their database revisions did not change.
+      this.#knownRevisions.clear();
       this.#recordSynchronization(source, 'failure');
       throw error;
     }

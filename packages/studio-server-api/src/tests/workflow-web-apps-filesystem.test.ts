@@ -7,6 +7,7 @@ import { getExpectedProxyAuthToken, getExpectedUiSessionToken } from '../auth.js
 import { writeRuntimeLimitSettings } from '../runtime-limit-settings.js';
 import { readWebAppAuthSettingsSync, writeWebAppAuthSettings } from '../web-app-auth-settings.js';
 import { writeWorkflowEndpointAuthSettings } from '../workflow-endpoint-auth-settings.js';
+import { writeTrustedClientSettings } from '../trusted-client-settings.js';
 import { readJson, waitForRecordingWorkflows, withEnvOverride } from './helpers/workflow-api-harness.js';
 import { createFilesystemWorkflowSuiteHarness } from './helpers/workflow-filesystem-suite-harness.js';
 import {
@@ -805,7 +806,7 @@ test('published filesystem web apps use the UI gate instead of workflow bearer a
           },
           signal: AbortSignal.timeout(5000),
         });
-        assert.equal(tokenFreeResponse.status, 200);
+        assert.equal(tokenFreeResponse.status, 401);
 
         const latestTokenFreeResponse = await fetch(`${latestWebAppsBaseUrl}/published-web-app-ui-session/app.json`, {
           headers: {
@@ -814,7 +815,28 @@ test('published filesystem web apps use the UI gate instead of workflow bearer a
           },
           signal: AbortSignal.timeout(5000),
         });
-        assert.equal(latestTokenFreeResponse.status, 200);
+        assert.equal(latestTokenFreeResponse.status, 401);
+        await writeTrustedClientSettings({ trustedClients: ['10.20.0.0/16'] });
+        try {
+          for (const baseUrl of [webAppsBaseUrl, latestWebAppsBaseUrl]) {
+            const trustedResponse = await fetch(`${baseUrl}/published-web-app-ui-session/app.json`, {
+              headers: { 'X-Rivet-Proxy-Auth': getExpectedProxyAuthToken(), 'X-Rivet-Client-IP': '10.20.1.2' },
+              signal: AbortSignal.timeout(5000),
+            });
+            assert.equal(trustedResponse.status, 200);
+            const crossOrigin = await fetch(`${baseUrl}/published-web-app-ui-session/app.json`, {
+              headers: {
+                'X-Rivet-Proxy-Auth': getExpectedProxyAuthToken(),
+                'X-Rivet-Client-IP': '10.20.1.2',
+                Origin: 'https://evil.example.test',
+              },
+              signal: AbortSignal.timeout(5000),
+            });
+            assert.equal(crossOrigin.status, 403);
+          }
+        } finally {
+          await writeTrustedClientSettings({ trustedClients: [] });
+        }
 
         await writeWorkflowEndpointAuthSettings({
           requireBearerAuth: true,

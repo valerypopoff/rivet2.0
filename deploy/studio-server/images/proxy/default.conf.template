@@ -12,21 +12,13 @@ map "${RIVET_TRUST_INCOMING_FORWARDED_HEADERS}:$http_x_forwarded_host" $rivet_fo
     ~^1:(.+)$ $1;
 }
 
-map $rivet_forwarded_host $rivet_forwarded_hostname {
-    default $rivet_forwarded_host;
-    ~^\[(?<ipv6_host>[^\]]+)\](?::\d+)?$ $ipv6_host;
-    ~^(?<plain_host>[^:]+):\d+$ $plain_host;
-}
 
 map "${RIVET_TRUST_INCOMING_FORWARDED_HEADERS}:$http_x_forwarded_proto" $rivet_forwarded_proto {
     default $scheme;
     ~^1:(.+)$ $1;
 }
 
-map $rivet_forwarded_hostname $rivet_ui_host_is_token_free {
-    default 0;
-    include ${RIVET_TRUSTED_HOSTS_INCLUDE_FILE};
-}
+include ${RIVET_CLIENT_ADDRESS_INCLUDE_FILE};
 
 # This listener is reachable only inside the proxy Pod. It exposes NGINX's
 # intentionally aggregate stub-status counters to the optional exporter
@@ -76,7 +68,8 @@ server {
         proxy_pass $api_ui_auth_prompt_upstream;
         proxy_http_version 1.1;
         proxy_set_header X-Rivet-Proxy-Auth ${RIVET_PROXY_AUTH_TOKEN};
-        proxy_set_header X-Rivet-Token-Free-Host $rivet_ui_host_is_token_free;
+        proxy_set_header X-Rivet-Client-IP $rivet_client_ip;
+        proxy_set_header X-Rivet-Token-Free-Host "";
         proxy_set_header X-Rivet-Ui-Return-To $request_uri;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
@@ -93,7 +86,8 @@ server {
         proxy_pass_request_body off;
         proxy_set_header Content-Length "";
         proxy_set_header X-Rivet-Proxy-Auth ${RIVET_PROXY_AUTH_TOKEN};
-        proxy_set_header X-Rivet-Token-Free-Host $rivet_ui_host_is_token_free;
+        proxy_set_header X-Rivet-Client-IP $rivet_client_ip;
+        proxy_set_header X-Rivet-Token-Free-Host "";
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-Host $rivet_forwarded_host;
@@ -105,6 +99,8 @@ server {
         proxy_pass $api_ui_auth_upstream;
         proxy_http_version 1.1;
         proxy_set_header X-Rivet-Proxy-Auth ${RIVET_PROXY_AUTH_TOKEN};
+        proxy_set_header X-Rivet-Client-IP $rivet_client_ip;
+        proxy_set_header X-Rivet-Token-Free-Host "";
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-Host $rivet_forwarded_host;
@@ -118,6 +114,8 @@ server {
         proxy_redirect $api_ui_auth_upstream/ /__rivet_auth/;
         proxy_http_version 1.1;
         proxy_set_header X-Rivet-Proxy-Auth ${RIVET_PROXY_AUTH_TOKEN};
+        proxy_set_header X-Rivet-Client-IP $rivet_client_ip;
+        proxy_set_header X-Rivet-Token-Free-Host "";
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-Host $rivet_forwarded_host;
@@ -134,6 +132,8 @@ server {
         proxy_http_version 1.1;
         proxy_set_header Connection "";
         proxy_set_header X-Rivet-Proxy-Auth ${RIVET_PROXY_AUTH_TOKEN};
+        proxy_set_header X-Rivet-Client-IP $rivet_client_ip;
+        proxy_set_header X-Rivet-Token-Free-Host "";
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-Host $rivet_forwarded_host;
@@ -150,6 +150,8 @@ server {
         proxy_pass $api_upstream;
         proxy_http_version 1.1;
         proxy_set_header X-Rivet-Proxy-Auth ${RIVET_PROXY_AUTH_TOKEN};
+        proxy_set_header X-Rivet-Client-IP $rivet_client_ip;
+        proxy_set_header X-Rivet-Token-Free-Host "";
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-Host $rivet_forwarded_host;
@@ -165,6 +167,7 @@ server {
         proxy_pass $api_latest_debugger_upstream;
         proxy_http_version 1.1;
         proxy_set_header X-Rivet-Proxy-Auth ${RIVET_PROXY_AUTH_TOKEN};
+        proxy_set_header X-Rivet-Client-IP $rivet_client_ip;
         proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection $connection_upgrade;
         proxy_set_header Host $host;
@@ -177,6 +180,9 @@ server {
         auth_request /__rivet_ui_auth_check;
 
         proxy_pass $executor_internal_upstream;
+        proxy_set_header X-Rivet-Proxy-Auth ${RIVET_PROXY_AUTH_TOKEN};
+        proxy_set_header X-Rivet-Client-IP $rivet_client_ip;
+        proxy_set_header X-Rivet-Token-Free-Host "";
         proxy_http_version 1.1;
         proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection $connection_upgrade;
@@ -190,6 +196,9 @@ server {
         auth_request /__rivet_ui_auth_check;
 
         proxy_pass $executor_upstream;
+        proxy_set_header X-Rivet-Proxy-Auth ${RIVET_PROXY_AUTH_TOKEN};
+        proxy_set_header X-Rivet-Client-IP $rivet_client_ip;
+        proxy_set_header X-Rivet-Token-Free-Host "";
         proxy_http_version 1.1;
         proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection $connection_upgrade;

@@ -1,0 +1,52 @@
+---
+title: Trusted clients in Rivet Server
+---
+
+# Trusted clients in Rivet Server
+
+Trusted clients lets selected computers or networks use Rivet Server without
+signing in. It grants access to administrator features as well as web apps and
+workflow endpoints. Only enable it for clients you intend to trust fully.
+
+Open **Server Settings → General → Trusted clients**. Enter client IP addresses
+or network ranges, one per line. You do not need a hostname.
+
+For example, `192.0.2.15` describes one client address and `10.20.0.0/16` describes
+a network. These are examples, not values to copy into your configuration.
+Use the address of the connecting client, not the address of your Rivet server.
+Everyone sharing a whitelisted office, VPN, or NAT address receives the same access.
+
+The form shows the verified address for your current connection. If it says the
+address is unavailable, keep using normal login and ask the deployment administrator
+to configure forwarding correctly. Do not whitelist the proxy or an entire container
+network as a workaround. Existing normal login and explicitly public apps continue
+working when the list is empty.
+
+## Upgrading from Trusted hosts
+
+Old hostname entries are shown as migration information but no longer skip login.
+Log in normally and configure the intended client IPs/networks. Hostnames cannot
+be automatically converted: they usually identify the server rather than its users.
+Before upgrading, confirm you can sign in using your access key or OAuth account.
+
+If Settings reports that the trusted-client policy is invalid, automatic access
+is disabled but normal administrator login remains available. Save a corrected
+list to repair it. Saving an empty list keeps automatic access disabled.
+The server does not overwrite the damaged settings merely by reading them.
+
+## Database synchronization problems
+
+On deployments using PostgreSQL settings, Rivet temporarily stops trusting cached
+permissions if it cannot reliably refresh them. This can close debugger connections
+and make server features temporarily unavailable. Access recovers automatically
+after settings synchronization succeeds; you do not need to edit the trusted-client
+list. Ask the deployment administrator to restore database connectivity instead of
+loosening the authentication settings.
+
+## Local dummy OAuth
+
+Dummy OAuth is a development-only email impersonation tool. The deployment must
+explicitly enable it and restrict the allowed development clients. Selecting the
+dummy provider in Settings is not enough. Production trusted clients do not
+automatically enable dummy login, and dummy cookies do not grant access from outside
+the allowed development network.

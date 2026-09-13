@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type { Request, Response } from 'express';
+import { watchOperatorStreamAuthorization } from '../../watch-authorization.js';
 
 import {
   WORKFLOW_TREE_CLIENT_ID_HEADER,
@@ -86,6 +87,7 @@ export function openWorkflowTreeEventStream(request: Request, response: Response
   response.setHeader('Connection', 'keep-alive');
   response.setHeader('X-Accel-Buffering', 'no');
   response.flushHeaders?.();
+  if (!watchOperatorStreamAuthorization(request, response)) return;
 
   let closed = false;
   let unsubscribe: (() => void) | null = null;

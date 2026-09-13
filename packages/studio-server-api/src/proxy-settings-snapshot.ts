@@ -12,10 +12,6 @@ import {
   readRuntimeLimitSettingsSync,
   runtimeLimitSettingsRepository,
 } from './runtime-limit-settings.js';
-import {
-  readTrustedHostSettingsSync,
-  trustedHostSettingsRepository,
-} from './trusted-host-settings.js';
 
 export type ProxySettingsSnapshot = {
   revision: string;
@@ -26,16 +22,15 @@ export type ProxySettingsSnapshot = {
   latestAppsBasePath: string;
   proxyReadTimeoutSeconds: number;
   webAppActionRequestLimitBytes: number;
+  // Empty for older proxies: never project an active hostname bypass again.
   trustedHostsCsv: string;
 };
 
 export function createProxySettingsSnapshot(): ProxySettingsSnapshot {
   const limits = readRuntimeLimitSettingsSync();
-  const trustedHosts = readTrustedHostSettingsSync();
   const revisions = [
     publicRouteSettingsRepository.readSync().revision,
     runtimeLimitSettingsRepository.readSync().revision,
-    trustedHostSettingsRepository.readSync().revision,
   ];
   return {
     revision: createHash('sha256').update(revisions.join(':')).digest('base64url'),
@@ -46,6 +41,6 @@ export function createProxySettingsSnapshot(): ProxySettingsSnapshot {
     latestAppsBasePath: getLatestWebAppsBasePath(),
     proxyReadTimeoutSeconds: limits.proxyReadTimeoutSeconds,
     webAppActionRequestLimitBytes: limits.webAppActionRequestLimitBytes,
-    trustedHostsCsv: trustedHosts.trustedHosts.join(','),
+    trustedHostsCsv: '',
   };
 }

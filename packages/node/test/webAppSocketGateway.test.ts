@@ -37,6 +37,18 @@ function activeLease(leaseId = TEST_LEASE_ID, leaseDurationMs = 60_000) {
 afterEach(closeWebAppTestHarnesses);
 
 void describe('Rivet web app WebSocket gateway', () => {
+  void it('does not dispatch client frames after host authorization is revoked', async () => {
+    let allowed = true;
+    let starts = 0;
+    const harness = await createHarness(makeWebAppProject(), () => { starts++; }, {}, { isAuthorized: () => allowed });
+    const socket = await harness.connect();
+    allowed = false;
+    const closed = waitForClose(socket);
+    socket.send(JSON.stringify(makeStartMessage('revoked')));
+    await closed;
+    assert.equal(starts, 0);
+    assert.equal(harness.gateway.getActiveRunCount(), 0);
+  });
   void it('rejects unsafe resource-limit and host identity configuration', () => {
     assert.throws(() => createInMemoryRivetWebAppRunStore({ maxEventsPerRun: 1 }), /maxEventsPerRun/);
     assert.throws(() => createInMemoryRivetWebAppRunStore({ maxStoredRuns: 0 }), /maxStoredRuns/);

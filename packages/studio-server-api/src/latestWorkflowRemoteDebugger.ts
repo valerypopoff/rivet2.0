@@ -3,6 +3,8 @@ import type { Duplex } from 'node:stream';
 import { startDebuggerServer, type RivetDebuggerServer } from '@valerypopoff/rivet2-node';
 import { WebSocketServer } from 'ws';
 import { isTrustedProxyRequest } from './auth.js';
+import { isServerUiAuthRequestAllowed } from './server-ui-auth.js';
+import { watchAuthorization } from './watch-authorization.js';
 
 export const LATEST_WORKFLOW_REMOTE_DEBUGGER_PATH = '/ws/latest-debugger';
 
@@ -19,7 +21,7 @@ export function isLatestWorkflowRemoteDebuggerEnabled(): boolean {
   return !['false', '0', 'no', 'off'].includes(configuredValue ?? '');
 }
 
-function rejectWebSocketUpgrade(socket: Duplex, statusCode: 401 | 404, statusText: string): void {
+function rejectWebSocketUpgrade(socket: Duplex, statusCode: 400 | 401 | 404 | 503, statusText: string): void {
   socket.write(`HTTP/1.1 ${statusCode} ${statusText}\r\nConnection: close\r\n\r\n`);
   socket.destroy();
 }
@@ -39,13 +41,27 @@ export function initializeLatestWorkflowRemoteDebugger(httpServer: HttpServer): 
 
   if (!latestWorkflowRemoteDebuggerUpgradeHandler) {
     latestWorkflowRemoteDebuggerUpgradeHandler = (request, socket, head) => {
-      const url = new URL(request.url ?? '', 'http://localhost');
+      let url: URL;
+      try {
+        url = new URL(request.url ?? '', 'http://localhost');
+      } catch {
+        rejectWebSocketUpgrade(socket, 400, 'Bad Request');
+        return;
+      }
 
       if (url.pathname !== LATEST_WORKFLOW_REMOTE_DEBUGGER_PATH) {
         return;
       }
 
-      if (!isTrustedProxyRequest(request)) {
+      let authorized: boolean;
+      try {
+        authorized = isTrustedProxyRequest(request) && isServerUiAuthRequestAllowed(request);
+      } catch {
+        // Upgrade callbacks are outside Express's error boundary.
+        rejectWebSocketUpgrade(socket, 503, 'Service Unavailable');
+        return;
+      }
+      if (!authorized) {
         rejectWebSocketUpgrade(socket, 401, 'Unauthorized');
         return;
       }
@@ -55,7 +71,10 @@ export function initializeLatestWorkflowRemoteDebugger(httpServer: HttpServer): 
         return;
       }
 
-      const handleUpgradeComplete = (webSocket: unknown) => {
+      const handleUpgradeComplete = (webSocket: import('ws').WebSocket) => {
+        const stop = watchAuthorization(() => isServerUiAuthRequestAllowed(request), () => webSocket.terminate());
+        webSocket.once('close', stop);
+        if (webSocket.readyState !== 1) return;
         webSocketServer.emit('connection', webSocket, request);
       };
 

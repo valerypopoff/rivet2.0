@@ -1,5 +1,13 @@
 # Architecture
 
+## Trusted-client access
+
+Authentication bypass uses verified client IPs/networks, never hostnames. The API
+owns the policy, while nginx supplies authenticated address provenance. See
+[Trusted clients](trusted-clients.md) for migration, forwarding peers, dummy OAuth
+isolation, and long-lived connection revocation. Hosted executor upgrade authorization
+uses the control API rather than trusting clients merely because they share its network.
+
 ## Repository layout
 
 - Rivet and Studio Server are packages in one Yarn monorepo. Upstream editor,

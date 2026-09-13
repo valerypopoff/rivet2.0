@@ -48,6 +48,8 @@ export type RivetWebAppRunPermit = {
 };
 
 export type RivetWebAppSocketSession = {
+  /** Optional synchronous cached-policy check before accepting each client frame. */
+  isAuthorized?: () => boolean;
   acquireRunPermit?: (context: {
     componentId: string;
     ownerScope: string;
@@ -796,6 +798,7 @@ export function createRivetWebAppWebSocketGateway(
       }
       connections.add(socket);
       attachWebAppSocketSession(socket, {
+        isAuthorized: session.isAuthorized,
         handshakeTimeoutMs,
         heartbeatIntervalMs,
         heartbeatTimeoutMs,

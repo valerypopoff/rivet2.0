@@ -46,7 +46,7 @@ import {
   type ManagedCodeRunnerTelemetry,
 } from '../../runtime-libraries/managed-code-runner.js';
 import { getRootPath } from '../../runtime-libraries/manifest.js';
-import { isTrustedProxyRequest, isTrustedTokenFreeHostRequest } from '../../auth.js';
+import { isTrustedProxyRequest, isTrustedClientRequest } from '../../auth.js';
 import { getRequestCorrelationId, RIVET_CORRELATION_HEADER } from '../../request-correlation.js';
 import { isServerUiAuthRequestAllowed } from '../../server-ui-auth.js';
 import {
@@ -111,6 +111,7 @@ const SENSITIVE_WORKFLOW_CONTEXT_HEADER_NAMES = new Set([
   'x-forwarded-authorization',
   'x-rivet-proxy-auth',
   'x-rivet-token-free-host',
+  'x-rivet-client-ip',
 ]);
 
 function isJsonObjectRecord(value: unknown): value is Record<string, unknown> {
@@ -374,7 +375,7 @@ function requirePublishedWorkflowApiKey(req: Request, options?: { capacityEndpoi
     return;
   }
 
-  if (isTrustedTokenFreeHostRequest(req)) {
+  if (isTrustedClientRequest(req)) {
     return;
   }
 
@@ -770,7 +771,7 @@ function authorizeWebAppRequestBeforeResolve(
   requestKind: WebAppRequestKind,
 ): boolean {
   const mode = getWebAppAuthMode();
-  if (mode === 'none' || isTrustedTokenFreeHostRequest(req)) {
+  if (mode === 'none') {
     return true;
   }
 
@@ -783,6 +784,10 @@ function authorizeWebAppRequestBeforeResolve(
     }
     return false;
   }
+
+  // Network trust bypasses authentication, not the protected browser surface's
+  // origin checks. The explicitly public mode above keeps its existing policy.
+  if (isTrustedClientRequest(req)) return true;
 
   if (mode === 'ui-gate') {
     try {
@@ -846,7 +851,7 @@ function authorizeResolvedWebAppRequest(
   executionProject: WorkflowExecutionProject,
   requestKind: WebAppRequestKind,
 ): boolean {
-  if (getWebAppAuthMode() !== 'oauth' || isTrustedTokenFreeHostRequest(req)) {
+  if (getWebAppAuthMode() !== 'oauth' || isTrustedClientRequest(req)) {
     return true;
   }
 
@@ -1332,6 +1337,7 @@ export type WebAppSocketExecutionResolution =
   | {
       executionProject: WorkflowExecutionProject;
       ownerScope: string;
+      isAuthorized(): boolean;
       uiGraph: UiGraph;
     }
   | {
@@ -1355,13 +1361,13 @@ export async function resolveWebAppSocketExecution(
   }
 
   const mode = getWebAppAuthMode();
-  const tokenFreeHost = isTrustedTokenFreeHostRequest(req);
-  if (!tokenFreeHost && mode === 'ui-gate' && !isServerUiAuthRequestAllowed(req)) {
+  const trustedClient = isTrustedClientRequest(req);
+  if (!trustedClient && mode === 'ui-gate' && !isServerUiAuthRequestAllowed(req)) {
     return { statusCode: 401, code: 'ui_gate_required', message: 'Rivet access key required' };
   }
 
-  const oauthSession = !tokenFreeHost && mode === 'oauth' ? readWebAppOAuthSession(req) : null;
-  if (!tokenFreeHost && mode === 'oauth' && !oauthSession) {
+  const oauthSession = !trustedClient && mode === 'oauth' ? readWebAppOAuthSession(req) : null;
+  if (!trustedClient && mode === 'oauth' && !oauthSession) {
     return { statusCode: 401, code: 'oauth_required', message: 'OAuth login required' };
   }
 
@@ -1383,7 +1389,7 @@ export async function resolveWebAppSocketExecution(
   }
 
   if (
-    !tokenFreeHost &&
+    !trustedClient &&
     mode === 'oauth' &&
     !isWebAppOAuthSessionAllowed(oauthSession, executionProject.webAppAllowedEmails ?? [])
   ) {
@@ -1395,7 +1401,7 @@ export async function resolveWebAppSocketExecution(
     return { statusCode: 404, code: 'not_found', message: 'Rivet web app not found' };
   }
 
-  let principal = tokenFreeHost ? 'trusted-host' : mode;
+  let principal = trustedClient ? 'trusted-client' : mode;
   if (oauthSession) {
     try {
       principal = `oauth:${getWebAppOAuthSessionOwnerKey(oauthSession)}`;
@@ -1407,6 +1413,16 @@ export async function resolveWebAppSocketExecution(
   return {
     executionProject,
     uiGraph,
+    isAuthorized: () => {
+      if (isTrustedClientRequest(req)) return true;
+      // A trusted-client socket cannot silently switch ownership scopes.
+      if (trustedClient) return false;
+      const currentMode = getWebAppAuthMode();
+      if (currentMode !== mode) return false;
+      if (mode === 'ui-gate') return isServerUiAuthRequestAllowed(req);
+      if (mode === 'oauth') return isWebAppOAuthSessionAllowed(readWebAppOAuthSession(req), executionProject.webAppAllowedEmails ?? []);
+      return true;
+    },
     ownerScope: [principal, routeKind, slug, executionProject.revisionKey].join(':'),
   };
 }

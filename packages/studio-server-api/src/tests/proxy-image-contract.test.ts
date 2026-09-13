@@ -85,10 +85,7 @@ test('proxy templates route public workflow traffic to the right API plane', () 
     proxyBootstrap,
     /public_route_settings_file="\$\{RIVET_PROXY_SETTINGS_FILE:-\$\{RIVET_APP_DATA_ROOT:-\/data\/rivet-app\}\/settings\/public-routes\.json\}"/,
   );
-  assert.match(
-    proxyBootstrap,
-    /trusted_host_settings_file="\$\{RIVET_PROXY_SETTINGS_FILE:-\$\{RIVET_APP_DATA_ROOT:-\/data\/rivet-app\}\/settings\/trusted-hosts\.json\}"/,
-  );
+
   assert.match(
     proxyBootstrap,
     /legacy_web_app_route_settings_file="\$\{RIVET_APP_DATA_ROOT:-\/data\/rivet-app\}\/settings\/web-app-routes\.json"/,
@@ -107,13 +104,10 @@ test('proxy templates route public workflow traffic to the right API plane', () 
   assert.match(proxyBootstrap, /write_public_routes_include\(\)/);
   assert.match(proxyBootstrap, /mkdir -p "\$output_dir"/);
   assert.match(proxyBootstrap, /RIVET_PUBLIC_ROUTES_INCLUDE_FILE:-\/tmp\/nginx\/rivet-public-routes\.inc/);
-  assert.match(proxyBootstrap, /RIVET_TRUSTED_HOSTS_INCLUDE_FILE:-\/tmp\/nginx\/rivet-trusted-hosts\.inc/);
   assert.doesNotMatch(
     proxyBootstrap,
     /RIVET_PUBLIC_ROUTES_INCLUDE_FILE:-\$NGINX_ENVSUBST_OUTPUT_DIR\/rivet-public-routes\.conf/,
   );
-  assert.match(proxyBootstrap, /write_trusted_hosts_include\(\)/);
-  assert.match(proxyBootstrap, /trustedHostsCsv/);
   assert.match(proxyBootstrap, /nginx -t/);
   assert.match(proxyBootstrap, /nginx -s reload/);
   assert.match(
@@ -165,7 +159,7 @@ test('proxy UI gate prompt is API-rendered and receives the original route', () 
     assert.match(apiLocation, /auth_request \/__rivet_ui_auth_check;/);
     assert.match(authCheckLocation, /proxy_pass \$api_ui_auth_check_upstream;/);
     assert.match(authCheckLocation, /proxy_pass_request_body off;/);
-    assert.match(authCheckLocation, /proxy_set_header X-Rivet-Token-Free-Host \$rivet_ui_host_is_token_free;/);
+    assert.match(authCheckLocation, /proxy_set_header X-Rivet-Token-Free-Host "";/);
     assert.match(promptLocation, /proxy_pass \$api_ui_auth_prompt_upstream;/);
     assert.match(promptLocation, /proxy_set_header X-Rivet-Ui-Return-To \$request_uri;/);
     assert.doesNotMatch(promptLocation, /try_files \/ui-gate-prompt\.html =500;/);
@@ -232,16 +226,14 @@ test('proxy templates forward hosted web apps to the API-owned auth layer', () =
     );
     assert.match(template, /default \$http_host;/);
     assert.match(template, /\~\^1:\(\.\+\)\$ \$1;/);
-    assert.match(template, /map \$rivet_forwarded_host \$rivet_forwarded_hostname/);
-    assert.ok(template.includes('~^\\[(?<ipv6_host>[^\\]]+)\\](?::\\d+)?$ $ipv6_host;'));
-    assert.ok(template.includes('~^(?<plain_host>[^:]+):\\d+$ $plain_host;'));
+    assert.doesNotMatch(template, /map \$rivet_forwarded_host \$rivet_forwarded_hostname/);
     assert.match(
       template,
       /map "\$\{RIVET_TRUST_INCOMING_FORWARDED_HEADERS\}:\$http_x_forwarded_proto" \$rivet_forwarded_proto/,
     );
     assert.match(template, /default \$scheme;/);
-    assert.match(template, /map \$rivet_forwarded_hostname \$rivet_ui_host_is_token_free/);
-    assert.match(template, /include \$\{RIVET_TRUSTED_HOSTS_INCLUDE_FILE\};/);
+    assert.match(template, /RIVET_CLIENT_ADDRESS_INCLUDE_FILE/);
+    assert.match(template, /include \$\{RIVET_CLIENT_ADDRESS_INCLUDE_FILE\};/);
     assert.doesNotMatch(template, /RIVET_UI_TOKEN_FREE_HOSTS_REGEX/);
     assert.doesNotMatch(template, /rivet_ui_cookie_secure_suffix|rivet_ui_gate_result|RIVET_UI_SESSION_TOKEN/);
     assert.doesNotMatch(template, /RIVET_WEB_APPS_AUTH_MODE|rivet_web_apps_gate_result|rivet_web_apps_use_ui_gate/);
@@ -249,7 +241,7 @@ test('proxy templates forward hosted web apps to the API-owned auth layer', () =
     assert.match(template, /include \$\{RIVET_PUBLIC_ROUTES_INCLUDE_FILE\};/);
   }
 
-  assert.match(proxyBootstrap, /proxy_set_header X-Rivet-Token-Free-Host \\\$rivet_ui_host_is_token_free;/);
+  assert.match(proxyBootstrap, /proxy_set_header X-Rivet-Token-Free-Host "";/);
   assert.match(proxyBootstrap, /proxy_set_header X-Forwarded-Host \\\$rivet_forwarded_host;/);
   assert.match(proxyBootstrap, /proxy_set_header X-Forwarded-Proto \\\$rivet_forwarded_proto;/);
 });

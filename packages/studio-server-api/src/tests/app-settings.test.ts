@@ -49,10 +49,10 @@ import {
   writeRuntimeLimitSettings,
 } from '../runtime-limit-settings.js';
 import {
-  getTrustedHostSettingsPath,
-  readTrustedHostSettings,
-  writeTrustedHostSettings,
-} from '../trusted-host-settings.js';
+  getTrustedClientSettingsPath,
+  readTrustedClientSettings,
+  writeTrustedClientSettings,
+} from '../trusted-client-settings.js';
 import {
   getWorkflowEndpointAuthSettingsPath,
   readWorkflowEndpointAuthSettings,
@@ -507,70 +507,70 @@ test('Workflow endpoint auth settings reject non-boolean values', async () => {
   });
 });
 
-test('Trusted host settings default empty and ignore environment values', async () => {
+test('Trusted client settings default empty and ignore environment values', async () => {
   await withAppSettingsEnv(async () => {
     process.env.RIVET_UI_TOKEN_FREE_HOSTS = 'env-trusted.example.test';
 
-    const defaultSettings = await readTrustedHostSettings();
+    const defaultSettings = await readTrustedClientSettings();
     assert.equal(defaultSettings.source, 'default');
-    assert.deepEqual(defaultSettings.trustedHosts, []);
+    assert.deepEqual(defaultSettings.trustedClients, []);
 
-    const savedSettings = await writeTrustedHostSettings({
-      trustedHosts: [
-        ' Storyteller-Rivet-1.Internal.Yc.Prod.Litnet.Com ',
-        'storyteller-rivet-1.internal.yc.prod.litnet.com',
-        'localhost',
+    const savedSettings = await writeTrustedClientSettings({
+      trustedClients: [
+        ' 10.20.0.0/16 ',
+        '10.20.0.0/16',
+        '127.0.0.1',
       ],
     });
     assert.equal(savedSettings.source, 'app-settings');
-    assert.deepEqual(savedSettings.trustedHosts, [
-      'storyteller-rivet-1.internal.yc.prod.litnet.com',
-      'localhost',
+    assert.deepEqual(savedSettings.trustedClients, [
+      '10.20.0.0/16',
+      '127.0.0.1',
     ]);
 
     process.env.RIVET_UI_TOKEN_FREE_HOSTS = 'ignored.example.test';
-    const nextSettings = await readTrustedHostSettings();
-    assert.deepEqual(nextSettings.trustedHosts, [
-      'storyteller-rivet-1.internal.yc.prod.litnet.com',
-      'localhost',
+    const nextSettings = await readTrustedClientSettings();
+    assert.deepEqual(nextSettings.trustedClients, [
+      '10.20.0.0/16',
+      '127.0.0.1',
     ]);
   });
 });
 
-test('Trusted host settings API saves and returns persisted hosts', async () => {
+test('Trusted client settings API saves and returns persisted hosts', async () => {
   await withAppSettingsEnv(async () => {
     let server: Awaited<ReturnType<typeof startServer>> | undefined;
     try {
       server = await startServer();
-      const saveResponse = await fetch(`${server.baseUrl}/api/app-settings/trusted-hosts`, {
+      const saveResponse = await fetch(`${server.baseUrl}/api/app-settings/trusted-clients`, {
         method: 'PUT',
         headers: {
           ...trustedProxyHeaders(),
           'content-type': 'application/json',
         },
         body: JSON.stringify({
-          trustedHosts: ['storyteller-rivet-1.internal.yc.prod.litnet.com', '127.0.0.1', '::1'],
+          trustedClients: ['10.20.0.0/16', '127.0.0.1', '::1'],
         }),
       });
       assert.equal(saveResponse.status, 200);
       const savedSettings = await saveResponse.json() as Record<string, unknown>;
       assert.equal(savedSettings.source, 'app-settings');
-      assert.deepEqual(savedSettings.trustedHosts, [
-        'storyteller-rivet-1.internal.yc.prod.litnet.com',
+      assert.deepEqual(savedSettings.trustedClients, [
+        '10.20.0.0/16',
         '127.0.0.1',
         '::1',
       ]);
 
-      const readResponse = await fetch(`${server.baseUrl}/api/app-settings/trusted-hosts`, {
+      const readResponse = await fetch(`${server.baseUrl}/api/app-settings/trusted-clients`, {
         headers: trustedProxyHeaders(),
       });
       assert.equal(readResponse.status, 200);
       const readSettings = await readResponse.json() as Record<string, unknown>;
-      assert.deepEqual(readSettings.trustedHosts, savedSettings.trustedHosts);
+      assert.deepEqual(readSettings.trustedClients, savedSettings.trustedClients);
 
-      const settingsPath = getTrustedHostSettingsPath();
+      const settingsPath = getTrustedClientSettingsPath();
       const raw = JSON.parse(fs.readFileSync(settingsPath, 'utf8')) as Record<string, unknown>;
-      assert.equal(raw.trustedHostsCsv, 'storyteller-rivet-1.internal.yc.prod.litnet.com,127.0.0.1,::1');
+      assert.deepEqual(raw.trustedClients, savedSettings.trustedClients);
       if (process.platform !== 'win32') {
         assert.equal(fs.statSync(settingsPath).mode & 0o777, 0o644);
       }
@@ -580,29 +580,29 @@ test('Trusted host settings API saves and returns persisted hosts', async () => 
   });
 });
 
-test('Trusted host settings reject unsafe host values', async () => {
+test('Trusted client settings reject unsafe host values', async () => {
   await withAppSettingsEnv(async () => {
     await assert.rejects(
-      writeTrustedHostSettings({ trustedHosts: ['https://trusted.example.test'] }),
-      /without protocol/,
+      writeTrustedClientSettings({ trustedClients: ['https://trusted.example.test'] }),
+      /IP address or CIDR/,
     );
     await assert.rejects(
-      writeTrustedHostSettings({ trustedHosts: ['trusted.example.test:8080'] }),
-      /must not include ports/,
+      writeTrustedClientSettings({ trustedClients: ['trusted.example.test:8080'] }),
+      /IP address or CIDR/,
     );
     await assert.rejects(
-      writeTrustedHostSettings({ trustedHosts: ['*.example.test'] }),
-      /without protocol, path, or wildcard/,
+      writeTrustedClientSettings({ trustedClients: ['*.example.test'] }),
+      /IP address or CIDR/,
     );
     await assert.rejects(
-      writeTrustedHostSettings({ trustedHosts: 'trusted.example.test' }),
+      writeTrustedClientSettings({ trustedClients: 'trusted.example.test' }),
       /must be a list/,
     );
     await assert.rejects(
-      writeTrustedHostSettings({
-        trustedHosts: Array.from({ length: 101 }, (_, index) => `trusted-${index}.example.test`),
+      writeTrustedClientSettings({
+        trustedClients: Array.from({ length: 101 }, (_, index) => `trusted-${index}.example.test`),
       }),
-      /cannot contain more than 100 entries/,
+      /at most 100/,
     );
   });
 });
@@ -993,16 +993,24 @@ test('web-app action route preflight runs before a declared payload limit is eva
         '/latest-apps/example/actions/run',
         '/latest-apps/example/actions/run/',
       ]) {
-        const response = await fetch(`${server.baseUrl}${route}`, {
-          method: 'POST',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ data: 'x'.repeat(1024 * 1024) }),
+        // Send only the declared size. A streaming fetch body races the
+        // intentional early connection close and obscures the status under test.
+        const status = await new Promise<number | undefined>((resolve, reject) => {
+          const request = http.request(`${server.baseUrl}${route}`, {
+            method: 'POST', headers: { 'content-type': 'application/json', 'content-length': String(1024 * 1024 + 20) },
+          }, (response) => {
+            response.resume();
+            response.once('end', () => { resolve(response.statusCode); request.destroy(); });
+          });
+          request.once('error', reject);
+          request.setTimeout(5_000, () => request.destroy(new Error('Preflight did not reject before body receipt')));
+          request.flushHeaders();
         });
 
         // A missing app must be rejected before the parser examines its
         // declared size. This prevents the action-size setting from becoming
         // an unauthenticated preflight oracle.
-        assert.equal(response.status, 404, route);
+        assert.equal(status, 404, route);
       }
     } finally {
       await server.close();

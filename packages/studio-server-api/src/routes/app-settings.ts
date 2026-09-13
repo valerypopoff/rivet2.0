@@ -34,10 +34,10 @@ import {
   writeRuntimeLimitSettings,
 } from '../runtime-limit-settings.js';
 import {
-  trustedHostSettingsRepository,
-  readTrustedHostSettings,
-  writeTrustedHostSettings,
-} from '../trusted-host-settings.js';
+  trustedClientSettingsRepository,
+  readTrustedClientSettings,
+  writeTrustedClientSettings,
+} from '../trusted-client-settings.js';
 import {
   webAppAuthSettingsRepository,
   readWebAppAuthSettings,
@@ -49,6 +49,7 @@ import {
   writeWorkflowEndpointAuthSettings,
 } from '../workflow-endpoint-auth-settings.js';
 import { createHttpError } from '../utils/httpError.js';
+import { getVerifiedClientAddress, isTrustedClientRequest } from '../auth.js';
 import { asyncHandler } from '../utils/asyncHandler.js';
 import { createControlPlaneJsonBodyParser } from '../middleware/body-parsers.js';
 import {
@@ -61,6 +62,12 @@ export { readNodeExecutorProxySettings, writeNodeExecutorProxySettings } from '.
 export { readRunRecordingsSettings, writeRunRecordingsSettings } from './workflows/recordings-config.js';
 
 export const appSettingsRouter = Router();
+appSettingsRouter.get('/trusted-clients/current-request', (req, res) => {
+  res.set('Cache-Control', 'no-store').json({
+    clientAddress: getVerifiedClientAddress(req),
+    trusted: isTrustedClientRequest(req),
+  });
+});
 const jsonBody = createControlPlaneJsonBodyParser();
 
 type NodeExecutorProxySettingsReloader = () => Promise<unknown> | unknown;
@@ -193,10 +200,10 @@ registerSettingsResource({
   normalizeDraft: normalizeRuntimeLimitSettingsDraft,
 });
 registerSettingsResource({
-  path: '/trusted-hosts',
-  repository: trustedHostSettingsRepository,
-  read: readTrustedHostSettings,
-  write: writeTrustedHostSettings,
+  path: '/trusted-clients',
+  repository: trustedClientSettingsRepository,
+  read: readTrustedClientSettings,
+  write: writeTrustedClientSettings,
 });
 registerSettingsResource({
   path: '/deployment-storage',

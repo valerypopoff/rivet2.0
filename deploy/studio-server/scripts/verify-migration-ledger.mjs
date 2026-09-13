@@ -82,6 +82,20 @@ const rootDestinations = new Map([
  */
 const currentDestinationSuccessors = new Map([
   [
+    'packages/studio-server-api/src/trusted-host-settings.ts',
+    {
+      path: 'packages/studio-server-api/src/trusted-client-settings.ts',
+      reason: 'Hostname bypass was replaced by verified client IP/network settings; legacy data remains migration information.',
+    },
+  ],
+  [
+    'packages/studio-server-web/dashboard/app-settings/useTrustedHostsForm.ts',
+    {
+      path: 'packages/studio-server-web/dashboard/app-settings/useTrustedClientsForm.ts',
+      reason: 'The settings form now edits trusted client IPs/networks instead of hostnames.',
+    },
+  ],
+  [
     'packages/studio-server-web/project-tab-label-transform.ts',
     {
       path: 'packages/studio-server-web/dashboard/HostedEditorApp.tsx',

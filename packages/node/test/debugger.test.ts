@@ -1,4 +1,4 @@
-import { EventEmitter } from 'node:events';
+import { EventEmitter, once } from 'node:events';
 import { describe, it } from 'node:test';
 import * as assert from 'node:assert/strict';
 import {
@@ -33,6 +33,32 @@ import { createProcessor } from '../src/api.js';
 import { loadTestGraphs } from './testUtils.js';
 import { makeThrowingCodeProject } from './runtimeSpeedFixtures.js';
 import { stringifyDebuggerPayloadForTransport } from '../src/debuggerPayloadSanitizer.js';
+
+describe('debugger client authorization', () => {
+  it('rejects unauthorized upgrades and closes an authorized socket after policy revocation', async () => {
+    let allowed = false;
+    const debuggerServer = startDebuggerServer({ port: 0, host: '127.0.0.1', authorizeClient: async () => allowed });
+    const server = debuggerServer.webSocketServer;
+    await once(server, 'listening');
+    const port = (server.address() as import('node:net').AddressInfo).port;
+    let client: WebSocket | undefined;
+    try {
+      const denied = new WebSocket(`ws://127.0.0.1:${port}`);
+      const [error] = await once(denied, 'error');
+      assert.match(error.message, /403/);
+      allowed = true;
+      client = new WebSocket(`ws://127.0.0.1:${port}`);
+      await once(client, 'open');
+      allowed = false;
+      await once(client, 'close', { signal: AbortSignal.timeout(10_000) });
+      assert.equal(client.readyState, WebSocket.CLOSED);
+    } finally {
+      client?.terminate();
+      for (const socket of server.clients) socket.terminate();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+});
 
 class FakeWebSocket extends EventEmitter {
   readyState = WebSocket.OPEN;

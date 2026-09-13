@@ -17,6 +17,8 @@ import {
 } from '../ui-auth-utils.js';
 
 const SERVER_UI_AUTH_ENV_KEYS = [
+  'RIVET_ENABLE_DEVELOPMENT_AUTH',
+  'RIVET_DEVELOPMENT_AUTH_CLIENTS',
   'RIVET_KEY',
   'RIVET_APP_DATA_ROOT',
   'RIVET_REQUIRE_UI_GATE_KEY',
@@ -54,6 +56,8 @@ async function withServerUiAuthEnv(values: ServerUiAuthEnv, run: () => Promise<v
 
   try {
     process.env.RIVET_KEY = 'server-ui-auth-test-key';
+    process.env.RIVET_ENABLE_DEVELOPMENT_AUTH = 'true';
+    process.env.RIVET_DEVELOPMENT_AUTH_CLIENTS = '127.0.0.1';
     process.env.RIVET_APP_DATA_ROOT = path.join(tempRoot, 'app-data');
     for (const [key, value] of Object.entries(values)) {
       if (value == null) {
@@ -107,6 +111,7 @@ async function withUiAuthServer(run: (baseUrl: string) => Promise<void>): Promis
 
 function trustedProxyHeaders(extra: Record<string, string> = {}): Record<string, string> {
   return {
+    'x-rivet-client-ip': '127.0.0.1',
     ...extra,
     'x-rivet-proxy-auth': getExpectedProxyAuthToken(),
     'x-forwarded-host': '127.0.0.1',

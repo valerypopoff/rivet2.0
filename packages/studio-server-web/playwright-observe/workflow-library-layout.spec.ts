@@ -115,8 +115,8 @@ async function installAppSettingsRoute(page: Page): Promise<void> {
     updatedAt: null as string | null,
     source: 'default',
   };
-  let trustedHostSettings = {
-    trustedHosts: ['internal.example.test'],
+  let trustedClientSettings = {
+    trustedClients: ['10.20.0.0/16'],
     updatedAt: null as string | null,
     source: 'default',
   };
@@ -449,20 +449,24 @@ async function installAppSettingsRoute(page: Page): Promise<void> {
       return;
     }
 
-    if (url.pathname === '/api/app-settings/trusted-hosts') {
+    if (url.pathname === '/api/app-settings/trusted-clients/current-request') {
+      await route.fulfill({ json: { clientAddress: '10.20.1.2', trusted: true } });
+      return;
+    }
+    if (url.pathname === '/api/app-settings/trusted-clients') {
       if (method === 'PATCH') {
         const body = route.request().postDataJSON() as {
-          trustedHosts?: string[];
+          trustedClients?: string[];
         };
-        trustedHostSettings = {
-          trustedHosts: body.trustedHosts ?? [],
+        trustedClientSettings = {
+          trustedClients: body.trustedClients ?? [],
           updatedAt: '2026-06-30T12:01:00.000Z',
           source: 'app-settings',
         };
         await route.fulfill({
           status: 200,
           contentType: 'application/json',
-          body: JSON.stringify(trustedHostSettings),
+          body: JSON.stringify(trustedClientSettings),
         });
         return;
       }
@@ -475,7 +479,7 @@ async function installAppSettingsRoute(page: Page): Promise<void> {
       await route.fulfill({
         status: 200,
         contentType: 'application/json',
-        body: JSON.stringify(trustedHostSettings),
+        body: JSON.stringify(trustedClientSettings),
       });
       return;
     }
@@ -597,8 +601,35 @@ async function dispatchProjectOpenedFromEditorFrame(page: Page, path: string): P
 }
 
 test.describe('Workflow library layout', () => {
+  test('trusted clients explains legacy hosts and unavailable client identity', async ({ page }) => {
+    await installAppSettingsRoute(page);
+    await page.route('**/api/app-settings/trusted-clients', (route) => route.fulfill({
+      json: { trustedClients: [], legacyTrustedHosts: ['old.internal.example'], source: 'app-settings', updatedAt: null },
+    }));
+    await page.route('**/api/app-settings/trusted-clients/current-request', (route) => route.fulfill({
+      json: { clientAddress: null, trusted: false },
+    }));
+    await page.route('**/?editor', (route) => route.fulfill({
+      contentType: 'text/html',
+      body: '<script>setInterval(() => parent.postMessage({type:"editor-ready"}, location.origin), 100)</script>',
+    }));
+    await page.goto('/');
+    await authenticateIfNeeded(page);
+    await waitForDashboardReady(page);
+    await page.getByRole('button', { name: 'App settings' }).click();
+    const modal = page.getByTestId('app-settings-modal');
+    await expect(modal.getByLabel('Trusted clients', { exact: true })).toHaveValue('');
+    await expect(modal).toContainText('Hostname-only access has been disabled. Previous entries: old.internal.example');
+    await expect(modal).toContainText('Unavailable — trusted access cannot be determined for this connection.');
+  });
+
   test('collapses from the full header row into a clickable narrow rail', async ({ page }) => {
     await installAppSettingsRoute(page);
+    // This dashboard/settings fixture does not exercise the embedded editor.
+    await page.route('**/?editor', (route) => route.fulfill({
+      contentType: 'text/html',
+      body: '<script>setInterval(() => parent.postMessage({type:"editor-ready"}, location.origin), 100)</script>',
+    }));
 
     await page.goto('/', { waitUntil: 'domcontentloaded' });
     await authenticateIfNeeded(page);
@@ -650,14 +681,15 @@ test.describe('Workflow library layout', () => {
     await expect(appSettingsModal.locator('section[aria-label="Routes"]')).toHaveCount(0);
     await expect(appSettingsModal.locator('section[aria-label="Access"]')).toHaveCount(0);
     await expect(appSettingsActions).toHaveCount(1);
-    await expect(appSettingsModal.getByLabel('Trusted hosts')).toHaveValue('internal.example.test');
-    await appSettingsModal.getByLabel('Trusted hosts').fill('internal.example.test\nhealthcheck.example.test');
+    await expect(appSettingsModal.getByLabel('Trusted clients')).toHaveValue('10.20.0.0/16');
+    await expect(appSettingsModal.getByText('Verified address for this connection: 10.20.1.2')).toBeVisible();
+    await appSettingsModal.getByLabel('Trusted clients').fill('10.20.0.0/16\n192.0.2.15');
     await appSettingsActions.getByRole('button', { name: 'Revert' }).click();
-    await expect(appSettingsModal.getByLabel('Trusted hosts')).toHaveValue('internal.example.test');
-    await appSettingsModal.getByLabel('Trusted hosts').fill('internal.example.test\nhealthcheck.example.test');
+    await expect(appSettingsModal.getByLabel('Trusted clients')).toHaveValue('10.20.0.0/16');
+    await appSettingsModal.getByLabel('Trusted clients').fill('10.20.0.0/16\n192.0.2.15');
     await appSettingsActions.getByRole('button', { name: 'Save' }).click();
     await expect(appSettingsActions.locator('.project-settings-success')).toHaveText('Saved.');
-    await expect(appSettingsModal.getByLabel('Trusted hosts')).toHaveValue('internal.example.test\nhealthcheck.example.test');
+    await expect(appSettingsModal.getByLabel('Trusted clients')).toHaveValue('10.20.0.0/16\n192.0.2.15');
 
     await appSettingsModal.getByRole('tab', { name: 'Shell execution' }).click();
     await expect(appSettingsModal.getByRole('tab', { name: 'Shell execution' })).toHaveAttribute('aria-selected', 'true');

@@ -26,6 +26,7 @@ export async function createWebAppSocketHarness(
   sessionOptions: Pick<
     RivetWebAppSocketSession,
     | 'acquireRunPermit'
+    | 'isAuthorized'
     | 'createProcessorOptions'
     | 'knowledgeStores'
     | 'onProcessorPrepared'

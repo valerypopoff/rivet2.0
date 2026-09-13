@@ -79,6 +79,9 @@ export const sourceReadingTestAllowlist = new Set([
   // Capacity-review behavior: reads only its own generated review artifact.
   'packages/studio-server-api/src/tests/kubernetes-published-capacity-review.test.ts',
   'packages/studio-server-api/src/tests/settings-repository.test.ts',
+  // Reads only its own temporary malformed settings fixture to prove that
+  // fail-closed policy recovery preserves the original bytes until repair.
+  'packages/studio-server-api/src/tests/trusted-clients.test.ts',
   'packages/studio-server-api/src/tests/workflow-execution-filesystem.test.ts',
   'packages/studio-server-api/src/tests/workflow-filesystem-tree.test.ts',
   'packages/studio-server-api/src/tests/workflow-publication-filesystem.test.ts',

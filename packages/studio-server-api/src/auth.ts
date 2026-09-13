@@ -1,10 +1,11 @@
 import type { IncomingMessage } from 'node:http';
 import type { Request } from 'express';
 import { createHash, timingSafeEqual } from 'node:crypto';
+import { clientMatchesNetworks, normalizeClientAddress } from './client-networks.js';
+import { readTrustedClientSettingsSync } from './trusted-client-settings.js';
 
 const PROXY_AUTH_HEADER = 'x-rivet-proxy-auth';
 const EXECUTOR_AUTH_HEADER = 'x-rivet-executor-auth';
-const TOKEN_FREE_HOST_HEADER = 'x-rivet-token-free-host';
 const UI_SESSION_COOKIE_NAME = 'rivet_ui_token';
 
 function sha256Hex(value: string): string {
@@ -76,14 +77,22 @@ export function isTrustedExecutorRequest(request: Request | IncomingMessage): bo
   return typeof providedToken === 'string' && timingSafeStringEqual(providedToken.trim(), expectedToken);
 }
 
-export function isTrustedTokenFreeHostRequest(request: Request | IncomingMessage): boolean {
-  if (!isTrustedProxyRequest(request)) {
+export function getVerifiedClientAddress(request: Request | IncomingMessage): string | null {
+  if (!isTrustedProxyRequest(request)) return null;
+  const value = request.headers['x-rivet-client-ip'];
+  return typeof value === 'string' ? normalizeClientAddress(value) : null;
+}
+
+export function isTrustedClientRequest(request: Request | IncomingMessage): boolean {
+  const address = getVerifiedClientAddress(request);
+  if (!address) return false;
+  try {
+    return clientMatchesNetworks(address, readTrustedClientSettingsSync().trustedClients);
+  } catch {
+    // Malformed policy disables bypass; infrastructure failures still fail
+    // the repository health/snapshot boundary rather than granting access.
     return false;
   }
-
-  const headerValue = request.headers[TOKEN_FREE_HOST_HEADER];
-  const tokenFreeHeader = Array.isArray(headerValue) ? headerValue[0] : headerValue;
-  return typeof tokenFreeHeader === 'string' && tokenFreeHeader.trim() === '1';
 }
 
 function readCookieValue(cookieHeader: string | undefined, name: string): string | null {

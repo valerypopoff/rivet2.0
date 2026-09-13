@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 
 import { startAppExecutor } from '../../app-executor/bin/executorHost.mjs';
 import { createHttpRivetLLMProfileHealthStore } from '../../studio-server-shared/llmProfileHealthHttpStore.js';
+import { createHostedClientAuthorizer } from './clientAuthorization.mjs';
 
 function createProxyAuthenticationHeaders(): HeadersInit {
   const sharedKey = process.env.RIVET_KEY?.trim();
@@ -44,6 +45,10 @@ async function readExecutionEnvironment(): Promise<Readonly<Record<string, strin
 }
 
 void startAppExecutor({
+  authorizeClient: createHostedClientAuthorizer({
+    url: new URL('/ui-auth/check', executionEnvironmentServiceUrl),
+    getProxyToken: () => (createProxyAuthenticationHeaders() as Record<string, string>)['x-rivet-proxy-auth'] ?? '',
+  }),
   createProcessorOptions: async ({ llmProfileHealthExecutionCorrelationId }) => ({
     executionEnvironment: await readExecutionEnvironment(),
     llmProfileHealthStore: healthStore,

@@ -12,14 +12,24 @@ export async function streamManagedRuntimeLibraryJob(
   let previousStatus: JobStatus | null = null;
   let lastSeq = 0;
   let closed = false;
+  let polling = false;
+  let interval: NodeJS.Timeout | undefined;
+  let keepalive: NodeJS.Timeout | undefined;
 
-  const sendState = async () => {
-    const job = await options.getJob(req.params.jobId);
-    if (!job) {
-      res.status(404).json({ error: 'Job not found' });
-      return false;
-    }
+  const cleanup = () => {
+    closed = true;
+    clearInterval(interval);
+    clearInterval(keepalive);
+    req.off('close', cleanup);
+    res.off('close', cleanup);
+    res.off('finish', cleanup);
+  };
+  const unavailable = () => closed || res.destroyed || res.writableEnded;
+  req.once('close', cleanup);
+  res.once('close', cleanup);
+  res.once('finish', cleanup);
 
+  const sendState = (job: RuntimeLibraryJobState) => {
     for (const [index, entry] of job.logEntries.entries()) {
       const seq = index + 1;
       if (seq <= lastSeq) {
@@ -43,8 +53,16 @@ export async function streamManagedRuntimeLibraryJob(
     return true;
   };
 
-  const initialJob = await options.getJob(req.params.jobId);
+  let initialJob: RuntimeLibraryJobState | null;
+  try {
+    initialJob = await options.getJob(req.params.jobId);
+  } catch (error) {
+    cleanup();
+    throw error;
+  }
+  if (unavailable()) { cleanup(); return; }
   if (!initialJob) {
+    cleanup();
     res.status(404).json({ error: 'Job not found' });
     return;
   }
@@ -55,49 +73,40 @@ export async function streamManagedRuntimeLibraryJob(
   res.setHeader('X-Accel-Buffering', 'no');
   res.flushHeaders();
 
-  lastSeq = initialJob.logEntries.length;
-  for (const entry of initialJob.logEntries) {
-    res.write(`data: ${JSON.stringify({ type: 'log', message: entry.message, createdAt: entry.createdAt, source: entry.source })}\n\n`);
-  }
-  previousStatus = initialJob.status;
-  res.write(`data: ${JSON.stringify({ type: 'status', status: initialJob.status, createdAt: initialJob.lastProgressAt, cancelRequestedAt: initialJob.cancelRequestedAt ?? null })}\n\n`);
-
-  if (initialJob.status === 'succeeded' || initialJob.status === 'failed') {
-    res.write(`data: ${JSON.stringify({ type: 'done', status: initialJob.status, error: initialJob.error, createdAt: initialJob.lastProgressAt, cancelRequestedAt: initialJob.cancelRequestedAt ?? null })}\n\n`);
+  if (!sendState(initialJob)) {
+    cleanup();
     res.end();
     return;
   }
 
-  const interval = setInterval(() => {
-    if (closed) {
-      return;
-    }
-
-    void sendState()
-      .then((keepOpen) => {
-        if (!keepOpen && !closed) {
+  interval = setInterval(() => {
+    if (unavailable()) { cleanup(); return; }
+    if (polling) return;
+    polling = true;
+    void options.getJob(req.params.jobId)
+      .then((job) => {
+        // Access can be revoked while a storage lookup is pending.
+        if (unavailable()) return;
+        if (!job || !sendState(job)) {
           cleanup();
           res.end();
         }
       })
       .catch((error) => {
+        if (unavailable()) return;
         console.error('[runtime-libraries] Failed to poll managed job stream:', error);
         cleanup();
         res.end();
-      });
+      })
+      .finally(() => { polling = false; });
   }, 1_000);
 
-  const keepalive = setInterval(() => {
-    if (!closed) {
+  keepalive = setInterval(() => {
+    if (!unavailable()) {
       res.write(':keepalive\n\n');
     }
   }, 30_000);
 
-  const cleanup = () => {
-    closed = true;
-    clearInterval(interval);
-    clearInterval(keepalive);
-  };
-
-  req.on('close', cleanup);
+  interval.unref();
+  keepalive.unref();
 }

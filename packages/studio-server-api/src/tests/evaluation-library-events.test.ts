@@ -26,9 +26,17 @@ class FakeResponse extends EventEmitter {
   }
 }
 
-test('Evaluation Library events use real SSE delimiters and retain the source client id', () => {
-  const request = new EventEmitter() as EventEmitter & { get(name: string): string | undefined };
-  request.get = (name) => (name === 'x-rivet-evaluation-library-client-id' ? 'browser-a' : undefined);
+test('Evaluation Library events use real SSE delimiters and retain the source client id', (t) => {
+  const previousMode = process.env.RIVET_SERVER_UI_AUTH_MODE;
+  process.env.RIVET_SERVER_UI_AUTH_MODE = 'none';
+  t.after(() => {
+    if (previousMode === undefined) delete process.env.RIVET_SERVER_UI_AUTH_MODE;
+    else process.env.RIVET_SERVER_UI_AUTH_MODE = previousMode;
+  });
+  const request = Object.assign(new EventEmitter(), {
+    headers: {},
+    get: (name: string) => name === 'x-rivet-evaluation-library-client-id' ? 'browser-a' : undefined,
+  });
   const response = new FakeResponse();
 
   openEvaluationLibraryEventStream(request as never, response as never, 7);
@@ -40,4 +48,5 @@ test('Evaluation Library events use real SSE delimiters and retain the source cl
   assert.match(response.writes[1] ?? '', /"sourceClientId":"browser-a"/u);
 
   request.emit('close');
+  response.emit('close');
 });

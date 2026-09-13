@@ -36,7 +36,7 @@ import {
   getPublishedWorkflowsBasePath,
 } from './workflowEndpointPaths.js';
 import { getWorkflowStorageBackendMode } from './routes/workflows/storage-config.js';
-import { requireAuth } from './middleware/auth.js';
+import { requireAuth, requireOperatorAuth } from './middleware/auth.js';
 import { createProxySettingsSnapshot } from './proxy-settings-snapshot.js';
 import { isTrustedProxyRequest } from './auth.js';
 import {
@@ -294,7 +294,7 @@ function mountControlPlaneRoutes(app: Express, profile: ApiRuntimeProfile): void
   // Authenticate the control-plane boundary before individual routers parse
   // their own request bodies. Unknown routes and unsupported methods never
   // enter a body parser.
-  app.use('/api', requireAuth);
+  app.use('/api', requireOperatorAuth);
   app.use('/api/native', nativeRouter);
   app.use('/api/shell', shellRouter);
   app.use('/api/plugins', pluginsRouter);

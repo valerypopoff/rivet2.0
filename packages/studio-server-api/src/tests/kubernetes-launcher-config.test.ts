@@ -63,6 +63,9 @@ test('kubernetes launcher config uses managed canonical envs and local rehearsal
   assert.equal(config.routeConfig.latestWebAppsBasePath, '/apps-latest');
   assert.equal(config.routeConfig.enableLatestRemoteDebugger, true);
   assert.equal(config.routeConfig.requireUiGateKey, false);
+  assert.equal(config.routeConfig.trustedForwardingProxies, '');
+  assert.equal(config.routeConfig.enableDevelopmentAuth, false);
+  assert.equal(config.routeConfig.developmentAuthClients, '');
 });
 
 test('kubernetes launcher config can derive object storage settings from RIVET_K8S_STORAGE_URL', async () => {
@@ -92,10 +95,16 @@ test('kubernetes launcher renderer emits chart values and secrets compatible wit
     RIVET_K8S_STORAGE_ACCESS_KEY_ID: 'spaces-key',
     RIVET_K8S_STORAGE_ACCESS_KEY: 'spaces-secret',
     RIVET_KEY: 'shared-key',
+    RIVET_TRUSTED_FORWARDING_PROXIES: '10.30.0.0/16',
+    RIVET_ENABLE_DEVELOPMENT_AUTH: 'true',
+    RIVET_DEVELOPMENT_AUTH_CLIENTS: '10.20.1.2',
   });
 
   const valuesYaml = renderKubernetesLauncherValuesYaml(config);
   const secretManifest = renderKubernetesLauncherSecretManifest(config);
+  assert.match(valuesYaml, /RIVET_TRUSTED_FORWARDING_PROXIES: "10\.30\.0\.0\/16"/);
+  assert.match(valuesYaml, /RIVET_ENABLE_DEVELOPMENT_AUTH: "true"/);
+  assert.match(valuesYaml, /RIVET_DEVELOPMENT_AUTH_CLIENTS: "10\.20\.1\.2"/);
 
   assert.match(valuesYaml, /connectionStringSecretName: "rivet-postgres-conn"/);
   assert.match(valuesYaml, /accessKeySecretName: "rivet-object-storage"/);

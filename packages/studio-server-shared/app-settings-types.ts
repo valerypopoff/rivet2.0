@@ -38,14 +38,16 @@ export interface WorkflowEndpointAuthSettingsDraft {
   requireBearerAuth?: unknown;
 }
 
-export interface TrustedHostSettings {
-  trustedHosts: string[];
+export interface TrustedClientSettings {
+  trustedClients: string[];
+  legacyTrustedHosts?: string[];
+  policyError?: string;
   updatedAt: string | null;
   source: AppSettingsSource;
 }
 
-export interface TrustedHostSettingsDraft {
-  trustedHosts?: unknown;
+export interface TrustedClientSettingsDraft {
+  trustedClients?: unknown;
 }
 
 export interface EnvironmentVariableSettingsEntry {

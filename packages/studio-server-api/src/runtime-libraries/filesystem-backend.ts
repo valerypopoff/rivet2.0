@@ -159,6 +159,7 @@ class FilesystemRuntimeLibrariesBackend implements RuntimeLibrariesBackend {
   }
 
   streamJob(req: Request, res: Response): void {
+    if (res.destroyed || res.writableEnded) return;
     const job = jobRunner.getJob(req.params.jobId);
     if (!job) {
       res.status(404).json({ error: 'Job not found' });
@@ -184,7 +185,7 @@ class FilesystemRuntimeLibrariesBackend implements RuntimeLibrariesBackend {
     }
 
     const onLog = (jobId: string, message: string, createdAt: string, source: RuntimeLibraryLogSource) => {
-      if (jobId !== req.params.jobId) {
+      if (res.destroyed || res.writableEnded || jobId !== req.params.jobId) {
         return;
       }
 
@@ -192,7 +193,7 @@ class FilesystemRuntimeLibrariesBackend implements RuntimeLibrariesBackend {
     };
 
     const onStatus = (jobId: string, status: JobStatus, createdAt: string, cancelRequestedAt: string | null) => {
-      if (jobId !== req.params.jobId) {
+      if (res.destroyed || res.writableEnded || jobId !== req.params.jobId) {
         return;
       }
 
@@ -207,6 +208,7 @@ class FilesystemRuntimeLibrariesBackend implements RuntimeLibrariesBackend {
     };
 
     const keepalive = setInterval(() => {
+      if (res.destroyed || res.writableEnded) return;
       res.write(':keepalive\n\n');
     }, 30_000);
 
@@ -214,12 +216,17 @@ class FilesystemRuntimeLibrariesBackend implements RuntimeLibrariesBackend {
       clearInterval(keepalive);
       jobRunner.removeListener('log', onLog);
       jobRunner.removeListener('status', onStatus);
+      req.off('close', cleanup);
+      res.off('close', cleanup);
+      res.off('finish', cleanup);
     };
 
     jobRunner.on('log', onLog);
     jobRunner.on('status', onStatus);
 
-    req.on('close', cleanup);
+    req.once('close', cleanup);
+    res.once('close', cleanup);
+    res.once('finish', cleanup);
   }
 }
 

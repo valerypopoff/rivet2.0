@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type { Request, Response } from 'express';
+import { watchOperatorStreamAuthorization } from '../../watch-authorization.js';
 
 export const EVALUATION_LIBRARY_CLIENT_ID_HEADER = 'x-rivet-evaluation-library-client-id';
 
@@ -72,6 +73,7 @@ export function openEvaluationLibraryEventStream(
   response.setHeader('Connection', 'keep-alive');
   response.setHeader('X-Accel-Buffering', 'no');
   response.flushHeaders?.();
+  if (!watchOperatorStreamAuthorization(request, response)) return;
 
   let closed = false;
   let unsubscribe: (() => void) | undefined;

@@ -213,6 +213,7 @@ function createClientScopedDebugger(client: AppExecutorClient): AppExecutorDebug
 }
 
 const rivetDebugger = startDebuggerServer({
+  authorizeClient: getAppExecutorHostOptions().authorizeClient,
   port,
   host,
   allowGraphUpload: true,

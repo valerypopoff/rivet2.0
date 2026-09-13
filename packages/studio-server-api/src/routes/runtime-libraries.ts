@@ -5,6 +5,7 @@ import { validateBody } from '../middleware/validate.js';
 import { createControlPlaneJsonBodyParser } from '../middleware/body-parsers.js';
 import { asyncHandler } from '../utils/asyncHandler.js';
 import { getRuntimeLibrariesBackend } from '../runtime-libraries/backend.js';
+import { watchOperatorStreamAuthorization } from '../watch-authorization.js';
 
 export const runtimeLibrariesRouter = Router();
 const jsonBody = createControlPlaneJsonBodyParser();
@@ -86,6 +87,7 @@ runtimeLibrariesRouter.post(
 runtimeLibrariesRouter.get(
   '/jobs/:jobId/stream',
   asyncHandler(async (req, res) => {
+    if (!watchOperatorStreamAuthorization(req, res)) return;
     await getRuntimeLibrariesBackend().streamJob(req, res);
   }),
 );

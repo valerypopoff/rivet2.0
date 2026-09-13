@@ -1,4 +1,6 @@
 import { hostname } from 'node:os';
+import { watchAuthorization } from './watch-authorization.js';
+import { runOutsideAppSettingsSnapshot } from './app-settings/settings-repository.js';
 import type { IncomingMessage, Server } from 'node:http';
 import { performance } from 'node:perf_hooks';
 import type { Pool } from 'pg';
@@ -242,11 +244,18 @@ export async function initializeWebAppActionWebSockets(server: Server): Promise<
         }
 
         webSocketServer.handleUpgrade(req, socket, head, (webSocket) => {
+          const isAuthorized = () => {
+            try { return runOutsideAppSettingsSnapshot(resolved.isAuthorized); } catch { return false; }
+          };
+          const stop = watchAuthorization(isAuthorized, () => webSocket.terminate());
+          webSocket.once('close', stop);
+          if (webSocket.readyState !== 1) return;
           const endpointName = getWebAppBasePath(route.routeKind, route.slug);
           // A socket can carry several concurrent actions. Keep an opaque key
           // per action context rather than reusing the socket request ID.
           const healthCorrelations = new WeakMap<object, string>();
           gateway.handleConnection(webSocket, {
+            isAuthorized,
             ownerScope: resolved.ownerScope,
             ...(route.routeKind === 'published' ? { acquireRunPermit: acquirePublishedWebAppActionPermit } : {}),
             project: resolved.executionProject.project,

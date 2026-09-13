@@ -1,4 +1,5 @@
 import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
+import { getDevelopmentAuthPolicyVersion, isDevelopmentAuthRequest } from './development-auth.js';
 import type { IncomingMessage } from 'node:http';
 import { Router, type Request, type Response } from 'express';
 import { createSmallCredentialBodyParser } from './middleware/body-parsers.js';
@@ -174,6 +175,7 @@ function getOAuthSettingsSessionVersion(): string {
       JSON.stringify({
         mode: settings.mode,
         provider: settings.provider,
+        ...(settings.provider === 'dummy' ? { developmentPolicy: getDevelopmentAuthPolicyVersion() } : {}),
         dummyEmail: settings.dummyEmail,
         dummyAllowNonLocalhost: settings.dummyAllowNonLocalhost,
         authorizeUrl: settings.authorizeUrl,
@@ -314,7 +316,7 @@ export function createWebAppOAuthAuthorizationRedirect(
 
   if (config.provider === 'dummy') {
     if (!isDummyOAuthAllowedForRequest(req)) {
-      throw createHttpError(403, 'Dummy OAuth is only available for localhost requests');
+      throw createHttpError(403, 'Dummy OAuth requires deployment opt-in and an allowed development client');
     }
 
     const authorizeUrl = new URL(`${getRequestOrigin(req)}${getPublishedWebAppsBasePath()}/auth/dummy`);
@@ -346,6 +348,7 @@ export function createWebAppOAuthAuthorizationRedirect(
 }
 
 export function readWebAppOAuthSession(req: Request | IncomingMessage): WebAppOAuthSession | null {
+  if (readWebAppAuthSettingsSync().provider === 'dummy' && !isDevelopmentAuthRequest(req)) return null;
   const payload = readSignedPayload<WebAppOAuthSession>(readCookie(req, OAUTH_SESSION_COOKIE_NAME));
   if (!payload || typeof payload.email !== 'string') {
     return null;
@@ -409,7 +412,7 @@ async function exchangeCodeForToken(req: Request, code: string): Promise<string>
   const config = getRequiredOauthConfig();
   if (config.provider === 'dummy') {
     if (!isDummyOAuthAllowedForRequest(req)) {
-      throw createHttpError(403, 'Dummy OAuth is only available for localhost requests');
+      throw createHttpError(403, 'Dummy OAuth requires deployment opt-in and an allowed development client');
     }
 
     if (!code.startsWith(DUMMY_OAUTH_CODE_PREFIX)) {
@@ -505,32 +508,12 @@ function shouldRedirectOAuthCallbackFailure(error: unknown): boolean {
 export const webAppOAuthRouter = Router();
 const smallCredentialBodyParser = createSmallCredentialBodyParser();
 
-function getLocalRequestHostName(req: Request): string {
-  const host = getForwardedHost(req).split(',')[0]?.trim() ?? '';
-  if (host.startsWith('[')) {
-    const closingBracketIndex = host.indexOf(']');
-    return closingBracketIndex > 1 ? host.slice(1, closingBracketIndex) : host;
-  }
-
-  const colonCount = host.split(':').length - 1;
-  if (colonCount === 1) {
-    return host.split(':')[0]!;
-  }
-
-  return host;
-}
-
 function isDummyOAuthAllowedForRequest(req: Request): boolean {
   if (!isDummyOAuthProvider()) {
     return false;
   }
 
-  if (readWebAppAuthSettingsSync().dummyAllowNonLocalhost) {
-    return true;
-  }
-
-  const host = getLocalRequestHostName(req).toLowerCase();
-  return host === 'localhost' || host === '127.0.0.1' || host === '::1';
+  return isDevelopmentAuthRequest(req);
 }
 
 function createDummyOAuthCode(email: string): string {
@@ -576,7 +559,7 @@ webAppOAuthRouter.get('/auth/dummy', (req, res) => {
       .status(403)
       .type('html')
       .send(
-        '<!doctype html><meta charset="utf-8"><title>Forbidden</title><body>Dummy OAuth is only available for localhost requests.</body>',
+        '<!doctype html><meta charset="utf-8"><title>Forbidden</title><body>Dummy OAuth requires deployment opt-in and an allowed development client.</body>',
       );
     return;
   }
@@ -593,7 +576,7 @@ webAppOAuthRouter.post('/auth/dummy', smallCredentialBodyParser, (req, res) => {
       .status(403)
       .type('html')
       .send(
-        '<!doctype html><meta charset="utf-8"><title>Forbidden</title><body>Dummy OAuth is only available for localhost requests.</body>',
+        '<!doctype html><meta charset="utf-8"><title>Forbidden</title><body>Dummy OAuth requires deployment opt-in and an allowed development client.</body>',
       );
     return;
   }

@@ -11,6 +11,8 @@ export type AppExecutorProcessorOptionsContext = Readonly<{
 }>;
 
 export type AppExecutorHostOptions = Readonly<{
+  /** Hosted transports can authenticate upgrades and periodically reauthorize sessions. */
+  authorizeClient?: (request: import('node:http').IncomingMessage) => Promise<boolean>;
   /**
    * Adds host-owned processor facilities to every editor run handled by this
    * executor process. Rivet-owned execution identity, graph inputs, debugger,

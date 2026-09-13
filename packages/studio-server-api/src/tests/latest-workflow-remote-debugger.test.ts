@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import http from 'node:http';
+import { PassThrough } from 'node:stream';
+import { once } from 'node:events';
 import test from 'node:test';
 import WebSocket from 'ws';
 import { listenTestServer } from './helpers/http-server-harness.js';
@@ -62,6 +64,7 @@ process.env.RIVET_WEB_APPS_BASE_PATH = '/apps';
 process.env.RIVET_LATEST_WEB_APPS_BASE_PATH = '/apps-latest';
 
 const { getExpectedProxyAuthToken } = await import('../auth.js');
+const { writeTrustedClientSettings } = await import('../trusted-client-settings.js');
 const { createApiApp } = await import('../app.js');
 const {
   initializeLatestWorkflowRemoteDebugger,
@@ -159,11 +162,67 @@ async function connectDebuggerSocket(baseUrl: string, trusted = true): Promise<W
   });
 }
 
+test('latest debugger revokes an established trusted-client socket after policy removal', async () => {
+  const previousMode = process.env.RIVET_SERVER_UI_AUTH_MODE;
+  process.env.RIVET_SERVER_UI_AUTH_MODE = 'key';
+  await resetFilesystemState();
+  await writeTrustedClientSettings({ trustedClients: ['10.20.0.0/16'] });
+  const listener = await startApiServer('combined', { debuggerEnabled: true });
+  let socket: WebSocket | undefined;
+  try {
+    socket = await connectWebSocket(toWebSocketUrl(listener.baseUrl), {
+      headers: { ...trustedProxyHeaders(), 'x-rivet-client-ip': '10.20.1.2' },
+    });
+    const closed = once(socket, 'close', { signal: AbortSignal.timeout(5_000) });
+    await writeTrustedClientSettings({ trustedClients: [] });
+    await closed;
+    assert.equal(socket.readyState, WebSocket.CLOSED);
+    await expectWebSocketConnectionFailure(toWebSocketUrl(listener.baseUrl), {
+      headers: { ...trustedProxyHeaders(), 'x-rivet-client-ip': '10.20.1.2', 'x-rivet-token-free-host': '1' },
+    });
+  } finally {
+    socket?.terminate();
+    await listener.close();
+    if (previousMode === undefined) delete process.env.RIVET_SERVER_UI_AUTH_MODE;
+    else process.env.RIVET_SERVER_UI_AUTH_MODE = previousMode;
+  }
+});
+
 async function expectDebuggerConnectionFailure(baseUrl: string, trusted = true) {
   return expectWebSocketConnectionFailure(toWebSocketUrl(baseUrl), {
     headers: trusted ? trustedProxyHeaders() : {},
   });
 }
+
+test('latest debugger rejects unreadable OAuth policy without escaping the upgrade callback', async (t) => {
+  await resetFilesystemState();
+  const previousMode = process.env.RIVET_SERVER_UI_AUTH_MODE;
+  process.env.RIVET_SERVER_UI_AUTH_MODE = 'oauth';
+  const { webAppAuthSettingsRepository } = await import('../web-app-auth-settings.js');
+  t.mock.method(webAppAuthSettingsRepository, 'readSync', () => { throw new Error('policy storage unavailable'); });
+  const server = http.createServer();
+  initializeLatestWorkflowRemoteDebugger(server);
+  const socket = new PassThrough();
+  let response = '';
+  socket.on('data', (data) => { response += data.toString(); });
+  try {
+    const req = { url: '/ws/latest-debugger', headers: trustedProxyHeaders() } as http.IncomingMessage;
+    assert.doesNotThrow(() => server.emit('upgrade', req, socket, Buffer.alloc(0)));
+    assert.match(response, /^HTTP\/1.1 503 /);
+    assert.equal(socket.destroyed, true);
+    const malformedSocket = new PassThrough();
+    let malformedResponse = '';
+    malformedSocket.on('data', (data) => { malformedResponse += data.toString(); });
+    assert.doesNotThrow(() => server.emit('upgrade', { ...req, url: 'http://[' }, malformedSocket, Buffer.alloc(0)));
+    assert.match(malformedResponse, /^HTTP\/1.1 400 /);
+    assert.equal(malformedSocket.destroyed, true);
+  } finally {
+    socket.destroy();
+    await resetLatestWorkflowRemoteDebuggerForTests();
+    if (previousMode === undefined) delete process.env.RIVET_SERVER_UI_AUTH_MODE;
+    else process.env.RIVET_SERVER_UI_AUTH_MODE = previousMode;
+  }
+});
 
 async function waitForDebuggerMessages(socket: WebSocket, expectedMessages: string[], timeoutMs = 5000) {
   return waitForWebSocketMessages(socket, expectedMessages, {

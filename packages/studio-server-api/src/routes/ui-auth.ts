@@ -125,7 +125,7 @@ function renderKeyPrompt(returnTo: string): string {
         <input name="return_to" type="hidden" value="${escapeHtml(retryReturnTo)}">
         <button type="submit">Continue</button>
       </form>`,
-    hint: 'Trusted hosts still bypass this prompt automatically.',
+    hint: 'Configured trusted client IP addresses and networks bypass this prompt automatically.',
   });
 }
 
@@ -294,7 +294,7 @@ uiAuthRouter.get('/ui-auth/oauth/dummy', (req, res) => {
       .send(
         renderAuthShell({
           title: 'Forbidden',
-          message: 'Dummy OAuth is only available for localhost requests.',
+          message: 'Dummy OAuth requires deployment opt-in and an allowed development client.',
           bodyHtml: '',
         }),
       );
@@ -328,7 +328,7 @@ uiAuthRouter.post('/ui-auth/oauth/dummy', smallCredentialBodyParser, (req, res) 
       .send(
         renderAuthShell({
           title: 'Forbidden',
-          message: 'Dummy OAuth is only available for localhost requests.',
+          message: 'Dummy OAuth requires deployment opt-in and an allowed development client.',
           bodyHtml: '',
         }),
       );
