@@ -972,7 +972,7 @@ test('Runtime limit settings API saves and returns persisted values', async () =
   });
 });
 
-test('Web app action JSON requests use the saved button-data limit on active app routes', async () => {
+test('web-app action route preflight runs before a declared payload limit is evaluated', async () => {
   await withAppSettingsEnv(async () => {
     await writeRuntimeLimitSettings({
       webAppActionRequestLimitBytes: 1024 * 1024,
@@ -999,7 +999,10 @@ test('Web app action JSON requests use the saved button-data limit on active app
           body: JSON.stringify({ data: 'x'.repeat(1024 * 1024) }),
         });
 
-        assert.equal(response.status, 413, route);
+        // A missing app must be rejected before the parser examines its
+        // declared size. This prevents the action-size setting from becoming
+        // an unauthenticated preflight oracle.
+        assert.equal(response.status, 404, route);
       }
     } finally {
       await server.close();

@@ -73,6 +73,11 @@ const runtimeHealth = new RuntimeHealthController(
 );
 const app = createApiApp(apiRuntimeProfile, { health: runtimeHealth, metrics });
 const server = createServer(app);
+// This is the time allowed to receive the complete HTTP request, including a
+// JSON body. It does not limit graph execution after the body has arrived.
+// Keep it below the normal proxy request timeout so a slow client cannot keep
+// an admitted parser reservation indefinitely.
+server.requestTimeout = 120_000;
 
 if (isControlPlaneApiProfile(apiRuntimeProfile)) {
   initializeLatestWorkflowRemoteDebugger(server);

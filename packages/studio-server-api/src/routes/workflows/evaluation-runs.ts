@@ -20,16 +20,14 @@ import {
 import { asyncHandler } from '../../utils/asyncHandler.js';
 import { badRequest, conflict } from '../../utils/httpError.js';
 import { validateBody } from '../../middleware/validate.js';
+import { createControlPlaneJsonBodyParser, createJsonBodyParser } from '../../middleware/body-parsers.js';
 import { getEvaluationStore, getHostedEvaluationCoordinator } from './storage-backend.js';
 import {
   EvaluationLibraryConflictError,
   EvaluationLibraryMutationValidationError,
   EvaluationLibraryResourceConflictError,
 } from '../../evaluation-runs/store.js';
-import {
-  notifyEvaluationLibraryChanged,
-  openEvaluationLibraryEventStream,
-} from './evaluation-library-events.js';
+import { notifyEvaluationLibraryChanged, openEvaluationLibraryEventStream } from './evaluation-library-events.js';
 import {
   HostedEvaluationCapacityError,
   HostedEvaluationRetryConflictError,
@@ -39,6 +37,8 @@ import {
 export const evaluationRunsRouter = Router();
 /** Keeps evaluation replay artifacts below the API's broader 100 MiB JSON limit. */
 export const MAX_EVALUATION_RECORDING_BYTES = 24 * 1024 * 1024;
+const jsonBody = createControlPlaneJsonBodyParser();
+const evaluationRecordingJsonBody = createJsonBodyParser(() => MAX_EVALUATION_RECORDING_BYTES);
 
 function sendHostedEvaluationCapacityError(res: Response, error: HostedEvaluationCapacityError): void {
   res.set('Retry-After', String(error.retryAfterSeconds));
@@ -338,9 +338,7 @@ const libraryMutationChangeSchema = z.discriminatedUnion('kind', [
       baselines: z.array(z.unknown()),
     })
     .strict(),
-  z
-    .object({ kind: z.literal('delete-suite'), id: z.string().min(1), expectedVersion: z.string().min(1) })
-    .strict(),
+  z.object({ kind: z.literal('delete-suite'), id: z.string().min(1), expectedVersion: z.string().min(1) }).strict(),
   z
     .object({
       kind: z.literal('put-dataset'),
@@ -349,9 +347,7 @@ const libraryMutationChangeSchema = z.discriminatedUnion('kind', [
       dataset: z.unknown(),
     })
     .strict(),
-  z
-    .object({ kind: z.literal('delete-dataset'), id: z.string().min(1), expectedVersion: z.string().min(1) })
-    .strict(),
+  z.object({ kind: z.literal('delete-dataset'), id: z.string().min(1), expectedVersion: z.string().min(1) }).strict(),
 ]);
 const libraryMutationSchema = z.object({ changes: z.array(libraryMutationChangeSchema).min(1).max(256) }).strict();
 const importLibrarySchema = z.object({ library: evaluationLibrarySchema }).strict();
@@ -421,6 +417,7 @@ evaluationRunsRouter.get(
 
 evaluationRunsRouter.post(
   '/hosted',
+  jsonBody,
   validateBody(hostedSubmissionSchema),
   asyncHandler(async (req, res) => {
     const input = req.body as z.infer<typeof hostedSubmissionSchema>;
@@ -465,6 +462,7 @@ evaluationRunsRouter.get(
 
 evaluationRunsRouter.post(
   '/:runId/cancel-hosted',
+  jsonBody,
   validateBody(hostedRunScopeSchema),
   asyncHandler(async (req, res) => {
     const input = req.body as z.infer<typeof hostedRunScopeSchema>;
@@ -483,6 +481,7 @@ evaluationRunsRouter.post(
 
 evaluationRunsRouter.post(
   '/:runId/retry-interrupted',
+  jsonBody,
   validateBody(hostedRetrySchema),
   asyncHandler(async (req, res) => {
     const input = req.body as z.infer<typeof hostedRetrySchema>;
@@ -525,6 +524,7 @@ evaluationRunsRouter.get(
 
 evaluationRunsRouter.put(
   '/library',
+  jsonBody,
   validateBody(replaceLibrarySchema),
   asyncHandler(async (req, res) => {
     const input = req.body as z.infer<typeof replaceLibrarySchema>;
@@ -547,12 +547,15 @@ evaluationRunsRouter.put(
 
 evaluationRunsRouter.post(
   '/library/mutations',
+  jsonBody,
   validateBody(libraryMutationSchema),
   asyncHandler(async (req, res) => {
     const store = await getEvaluationStore();
     const before = await store.getLibrarySyncSnapshot();
     try {
-      const snapshot = await store.mutateLibrary(normalizeLibraryMutation(req.body as z.infer<typeof libraryMutationSchema>));
+      const snapshot = await store.mutateLibrary(
+        normalizeLibraryMutation(req.body as z.infer<typeof libraryMutationSchema>),
+      );
       if (snapshot.revision !== before.revision) notifyEvaluationLibraryChanged(req, snapshot.revision);
       res.json(snapshot);
     } catch (error) {
@@ -573,6 +576,7 @@ evaluationRunsRouter.post(
 
 evaluationRunsRouter.post(
   '/library/import',
+  jsonBody,
   validateBody(importLibrarySchema),
   asyncHandler(async (req, res) => {
     const store = await getEvaluationStore();
@@ -588,6 +592,7 @@ evaluationRunsRouter.post(
 
 evaluationRunsRouter.put(
   '/events/:runId',
+  jsonBody,
   validateBody(runEventSchema),
   asyncHandler(async (req, res) => {
     const event = req.body as EvaluationRunEvent;
@@ -616,6 +621,7 @@ evaluationRunsRouter.get(
 
 evaluationRunsRouter.put(
   '/datasets/:fingerprint',
+  jsonBody,
   validateBody(datasetSnapshotSchema),
   asyncHandler(async (req, res) => {
     const input = req.body as z.infer<typeof datasetSnapshotSchema>;
@@ -684,6 +690,7 @@ evaluationRunsRouter.get(
 
 evaluationRunsRouter.put(
   '/:runId',
+  jsonBody,
   validateBody(putSchema),
   asyncHandler(async (req, res) => {
     const { projectId, run } = req.body as z.infer<typeof putSchema>;
@@ -697,6 +704,7 @@ evaluationRunsRouter.put(
 
 evaluationRunsRouter.patch(
   '/:runId',
+  jsonBody,
   validateBody(renameRunSchema),
   asyncHandler(async (req, res) => {
     const input = req.body as z.infer<typeof renameRunSchema>;
@@ -717,6 +725,7 @@ evaluationRunsRouter.patch(
 
 evaluationRunsRouter.delete(
   '/:runId',
+  jsonBody,
   validateBody(deleteSchema),
   asyncHandler(async (req, res) => {
     const { projectId, runId } = req.body as z.infer<typeof deleteSchema>;
@@ -735,6 +744,7 @@ evaluationRunsRouter.delete(
 
 evaluationRunsRouter.put(
   '/recordings/:recordingId',
+  evaluationRecordingJsonBody,
   validateBody(evaluationRecordingSchema),
   asyncHandler(async (req, res) => {
     const artifact = req.body as EvaluationRecordingArtifact;
@@ -769,6 +779,7 @@ evaluationRunsRouter.get(
 
 evaluationRunsRouter.patch(
   '/recordings/:recordingId',
+  jsonBody,
   validateBody(updateRecordingSchema),
   asyncHandler(async (req, res) => {
     const input = req.body as z.infer<typeof updateRecordingSchema>;
@@ -786,6 +797,7 @@ evaluationRunsRouter.patch(
 
 evaluationRunsRouter.post(
   '/:runId/promote-baseline',
+  jsonBody,
   validateBody(baselineSchema),
   asyncHandler(async (req, res) => {
     const input = req.body as z.infer<typeof baselineSchema>;

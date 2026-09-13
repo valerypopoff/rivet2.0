@@ -4,6 +4,7 @@ import fs from 'node:fs/promises';
 import test from 'node:test';
 
 import { getExpectedProxyAuthToken, getExpectedUiSessionToken } from '../auth.js';
+import { writeRuntimeLimitSettings } from '../runtime-limit-settings.js';
 import { readWebAppAuthSettingsSync, writeWebAppAuthSettings } from '../web-app-auth-settings.js';
 import { writeWorkflowEndpointAuthSettings } from '../workflow-endpoint-auth-settings.js';
 import { readJson, waitForRecordingWorkflows, withEnvOverride } from './helpers/workflow-api-harness.js';
@@ -1101,6 +1102,37 @@ test('published filesystem web app actions run through the wrapper execution dep
     assert.deepEqual(actionBody.outputs?.value, { type: 'string', value: 'hello from web app' });
     assert.deepEqual(actionBody.statePatch, { result: 'hello from web app' });
     assert.deepEqual(actionBody.storagePatch, {});
+  });
+});
+
+test('published web-app actions enforce the saved body limit after authorization and project preflight', async () => {
+  const created = await workflowMutations.createWorkflowProjectItem('', 'PublishedWebAppActionBodyLimit');
+  await writeWebAppProject(created.absolutePath, 'PublishedWebAppActionBodyLimit', 'Published Body Limit App');
+  await publishWebApp(created.relativePath, 'published-web-app-body-limit');
+  await writeRuntimeLimitSettings({ webAppActionRequestLimitBytes: 1024 * 1024 });
+
+  await withWorkflowExecutionServer(async ({ webAppsBaseUrl }) => {
+    const html = await (await fetch(`${webAppsBaseUrl}/published-web-app-body-limit`, {
+      signal: AbortSignal.timeout(5000),
+    })).text();
+    const revisionKey = extractWebAppRevisionKey(html);
+    const actionResponse = await fetch(`${webAppsBaseUrl}/published-web-app-body-limit/actions/run`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        componentId: WEB_APP_TEST_ACTION_COMPONENT_ID,
+        revisionKey,
+        state: { prompt: 'body limit' },
+        padding: 'x'.repeat(1024 * 1024),
+      }),
+      signal: AbortSignal.timeout(5000),
+    });
+
+    assert.equal(actionResponse.status, 413);
+    assert.deepEqual(await actionResponse.json(), {
+      error: "Request body exceeds this route's allowed size.",
+      code: 'body_too_large',
+    });
   });
 });
 

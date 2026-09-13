@@ -3,6 +3,15 @@ import test from 'node:test';
 import type { Pool } from 'pg';
 
 import { PostgresRivetWebAppRunCoordinator } from '../web-app-action-coordinator.js';
+import { awaitWebAppActionPreflight } from '../routes/workflows/execution.js';
+
+async function waitFor(condition: () => boolean, timeoutMs = 250): Promise<void> {
+  const deadline = performance.now() + timeoutMs;
+  while (!condition()) {
+    assert.ok(performance.now() < deadline, 'Timed out waiting for the expected coordinator poll.');
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+}
 
 test('durably accepted cancellation stays successful when PostgreSQL notification delivery fails', async () => {
   const queries: string[] = [];
@@ -84,10 +93,41 @@ test('coordinator polling does not rebroadcast an unchanged latest event', async
       },
       onUnavailable: () => undefined,
     });
-    await new Promise((resolve) => setTimeout(resolve, 35));
-    assert.ok(eventReads >= 2);
+    await waitFor(() => eventReads >= 2);
     assert.equal(delivered, 1);
   } finally {
     await coordinator.dispose();
+  }
+});
+
+test('web-app action preflight times out the client without releasing the underlying operation', async () => {
+  const abortController = new AbortController();
+  // The production timeout is intentionally unref'd so it cannot keep a
+  // shutting-down API alive. A real request socket is an active handle; model
+  // that ownership here so Node's test runner does not end the process first.
+  const activeRequest = setInterval(() => undefined, 60_000);
+  let finishOperation: (() => void) | undefined;
+  const operation = new Promise<void>((resolve) => {
+    finishOperation = resolve;
+  });
+
+  try {
+    await assert.rejects(
+      () => awaitWebAppActionPreflight(operation, abortController, 5),
+      (error: Error & { code?: string; retryAfterSeconds?: number; status?: number }) => {
+        assert.equal(error.status, 503);
+        assert.equal(error.code, 'web_app_action_preflight_timeout');
+        assert.equal(error.retryAfterSeconds, 1);
+        return true;
+      },
+    );
+    assert.equal(abortController.signal.aborted, true);
+
+    // The caller timed out, but the operation remains independently owned. Its
+    // completion is observed by the middleware that still holds the permit.
+    finishOperation?.();
+    await operation;
+  } finally {
+    clearInterval(activeRequest);
   }
 });

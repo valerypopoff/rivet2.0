@@ -3,6 +3,7 @@ import { z } from 'zod';
 import type { ProjectId } from '@valerypopoff/rivet2-node';
 
 import { validateBody } from '../middleware/validate.js';
+import { createControlPlaneJsonBodyParser } from '../middleware/body-parsers.js';
 import { asyncHandler } from '../utils/asyncHandler.js';
 import { createResponseTimingMiddleware } from '../utils/responseTiming.js';
 import { getWorkspaceRoot } from '../security.js';
@@ -11,6 +12,7 @@ import { notifyWorkflowTreeChanged } from './workflows/workflow-tree-events.js';
 
 export const projectsRouter = Router();
 const timing = createResponseTimingMiddleware();
+const jsonBody = createControlPlaneJsonBodyParser();
 
 const loadProjectSchema = z.object({
   path: z.string().min(1, 'path is required'),
@@ -41,6 +43,7 @@ projectsRouter.post(
 
 projectsRouter.post(
   '/load',
+  jsonBody,
   timing,
   validateBody(loadProjectSchema),
   asyncHandler(async (req, res) => {
@@ -51,6 +54,7 @@ projectsRouter.post(
 
 projectsRouter.post(
   '/save',
+  jsonBody,
   timing,
   validateBody(saveProjectSchema),
   asyncHandler(async (req, res) => {

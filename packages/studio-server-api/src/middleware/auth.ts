@@ -4,7 +4,7 @@ import { isTrustedProxyRequest } from '../auth.js';
 
 export const requireAuth: RequestHandler = (req, _res, next) => {
   if (!isTrustedProxyRequest(req)) {
-    next(createHttpError(403, 'Forbidden'));
+    next(createHttpError(403, 'Forbidden', { closeConnection: true }));
     return;
   }
 

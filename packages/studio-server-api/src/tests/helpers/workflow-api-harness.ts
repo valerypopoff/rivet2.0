@@ -57,7 +57,11 @@ function attachJsonFallbackHandlers(app: express.Express) {
     res.status(404).json({ error: 'Not found' });
   });
   app.use((err: Error, _req: Request, res: ExpressResponse, _next: NextFunction) => {
-    res.status((err as { status?: number }).status ?? 500).json({ error: err.message });
+    const code = (err as { code?: unknown }).code;
+    res.status((err as { status?: number }).status ?? 500).json({
+      error: err.message,
+      ...(code ? { code: String(code) } : {}),
+    });
   });
 }
 
@@ -107,7 +111,6 @@ export function createWorkflowApiServerHarness(options: WorkflowApiServerHarness
     await options.initializeWorkflowStorage();
 
     const app = express();
-    app.use(express.json({ strict: false }));
     app.use(createRequestCorrelationMiddleware());
     app.use('/workflows', options.workflowsRouter);
     attachJsonFallbackHandlers(app);
@@ -130,7 +133,6 @@ export function createHostedProjectApiServerHarness(options: HostedProjectApiSer
     await options.initializeWorkflowStorage();
 
     const app = express();
-    app.use(express.json({ strict: false }));
     app.use(createRequestCorrelationMiddleware());
     app.use('/projects', options.projectsRouter);
     app.use('/workflows', options.workflowsRouter);
@@ -154,7 +156,6 @@ export function createWorkflowExecutionServerHarness(options: WorkflowExecutionS
     await options.initializeWorkflowStorage();
 
     const app = express();
-    app.use(express.json({ strict: false }));
     app.use(createRequestCorrelationMiddleware());
     app.use('/api/workflows', options.workflowsRouter);
     app.use('/workflows', options.publishedWorkflowsRouter);

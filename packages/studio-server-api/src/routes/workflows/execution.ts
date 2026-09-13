@@ -1,6 +1,6 @@
 import { performance } from 'node:perf_hooks';
 import type { IncomingMessage } from 'node:http';
-import { Router, type Request, type Response } from 'express';
+import { Router, type NextFunction, type Request, type Response } from 'express';
 import {
   createProcessor,
   createRivetStoredValueSnapshotStore,
@@ -34,6 +34,8 @@ import {
 } from '../../published-execution-admission.js';
 import { asyncHandler } from '../../utils/asyncHandler.js';
 import { badRequest, createHttpError } from '../../utils/httpError.js';
+import { closeResponseConnectionAfterFlush } from '../../middleware/body-admission.js';
+import { createJsonBodyParser } from '../../middleware/body-parsers.js';
 import { getLatestWebAppsBasePath, getPublishedWebAppsBasePath } from '../../workflowEndpointPaths.js';
 import { normalizeStoredEndpointName } from './endpoint-names.js';
 import {
@@ -56,6 +58,7 @@ import {
   WEB_APP_OAUTH_SELECT_ACCOUNT_PROMPT,
 } from '../../web-app-oauth.js';
 import { readWorkflowEndpointAuthSettingsSync } from '../../workflow-endpoint-auth-settings.js';
+import { readRuntimeLimitSettingsSync } from '../../runtime-limit-settings.js';
 import { isWorkflowCapacityCapabilityValid } from '../../workflow-capacity-capability.js';
 import { readExecutionEnvironmentVariables } from '../../environment-variable-settings.js';
 import { enqueueWorkflowExecutionRecordingPersistence } from './recordings.js';
@@ -82,6 +85,11 @@ export const internalPublishedWorkflowsRouter = Router();
 export const latestWorkflowsRouter = Router();
 export const publishedWebAppsRouter = Router();
 export const latestWebAppsRouter = Router();
+
+const WORKFLOW_JSON_BODY_LIMIT_BYTES = 100 * 1024 * 1024;
+const MAX_CONCURRENT_WEB_APP_ACTION_PREFLIGHTS = 16;
+const WEB_APP_ACTION_PREFLIGHT_TIMEOUT_MS = 15_000;
+let activeWebAppActionPreflights = 0;
 
 type WorkflowRequestHeadersContext = Record<string, string>;
 type WorkflowExecutionContext = {
@@ -385,6 +393,36 @@ function requirePublishedWorkflowApiKey(req: Request, options?: { capacityEndpoi
     });
   if (!providedApiKey || (providedApiKey !== expectedApiKey && !capacityCapabilityValid)) {
     throw createHttpError(401, 'Unauthorized');
+  }
+}
+
+function authorizePublishedWorkflowBeforeBody(req: Request, res: Response, next: NextFunction): void {
+  try {
+    const endpointName = normalizeStoredEndpointName(String(req.params.endpointName ?? ''));
+    if (!endpointName) {
+      throw badRequest('Endpoint name is required');
+    }
+    // Only the immutable published route recognizes a short-lived capacity
+    // capability. This must happen before JSON parsing, not merely before run.
+    requirePublishedWorkflowApiKey(req, { capacityEndpointName: endpointName });
+    next();
+  } catch (error) {
+    closeResponseConnectionAfterFlush(res, req);
+    sendWorkflowErrorWithDuration(res, error, performance.now());
+  }
+}
+
+function authorizeLatestWorkflowBeforeBody(req: Request, res: Response, next: NextFunction): void {
+  try {
+    const endpointName = normalizeStoredEndpointName(String(req.params.endpointName ?? ''));
+    if (!endpointName) {
+      throw badRequest('Endpoint name is required');
+    }
+    requirePublishedWorkflowApiKey(req);
+    next();
+  } catch (error) {
+    closeResponseConnectionAfterFlush(res, req);
+    sendWorkflowErrorWithDuration(res, error, performance.now());
   }
 }
 
@@ -719,6 +757,12 @@ function isWebAppSocketOriginAllowed(req: IncomingMessage): boolean {
   }
 }
 
+function prepareWebAppRejection(req: Request, res: Response, requestKind: WebAppRequestKind): void {
+  if (requestKind === 'action') {
+    closeResponseConnectionAfterFlush(res, req);
+  }
+}
+
 function authorizeWebAppRequestBeforeResolve(
   req: Request,
   res: Response,
@@ -731,6 +775,7 @@ function authorizeWebAppRequestBeforeResolve(
   }
 
   if (!isWebAppBrowserRequestOriginAllowed(req, requestKind)) {
+    prepareWebAppRejection(req, res, requestKind);
     if (requestKind === 'html') {
       sendHtmlWithDuration(res, 403, renderWebAppOriginDeniedHtml(req), requestStartedAt);
     } else {
@@ -745,12 +790,17 @@ function authorizeWebAppRequestBeforeResolve(
       return true;
     } catch (error) {
       if (requestKind === 'html' && (error as { status?: unknown }).status === 401) {
+        prepareWebAppRejection(req, res, requestKind);
         res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
         res.setHeader('Pragma', 'no-cache');
         sendHtmlWithDuration(res, 401, renderWebAppUiGatePromptHtml(req), requestStartedAt);
         return false;
       }
 
+      // The action route has not admitted its JSON body yet. Let the shared
+      // error formatter keep this legacy error response, but first make the
+      // connection non-reusable so the client cannot continue that body.
+      prepareWebAppRejection(req, res, requestKind);
       throw error;
     }
   }
@@ -762,6 +812,7 @@ function authorizeWebAppRequestBeforeResolve(
 
   const authError = getWebAppAuthError(req);
   if (requestKind === 'html' && authError) {
+    prepareWebAppRejection(req, res, requestKind);
     sendHtmlWithDuration(
       res,
       401,
@@ -772,15 +823,18 @@ function authorizeWebAppRequestBeforeResolve(
   }
 
   if (requestKind === 'html' && isWebAppOAuthLoginRequest(req)) {
+    prepareWebAppRejection(req, res, requestKind);
     startWebAppOAuthLogin(req, res);
     return false;
   }
 
   if (requestKind === 'html') {
+    prepareWebAppRejection(req, res, requestKind);
     sendHtmlWithDuration(res, 401, renderWebAppLoginRequiredHtml(req), requestStartedAt);
     return false;
   }
 
+  prepareWebAppRejection(req, res, requestKind);
   sendWebAppAuthJsonError(res, requestStartedAt, 401, 'OAuth login required', 'oauth_required');
   return false;
 }
@@ -802,6 +856,7 @@ function authorizeResolvedWebAppRequest(
   }
 
   if (requestKind === 'html') {
+    prepareWebAppRejection(req, res, requestKind);
     sendHtmlWithDuration(
       res,
       403,
@@ -811,6 +866,7 @@ function authorizeResolvedWebAppRequest(
     return false;
   }
 
+  prepareWebAppRejection(req, res, requestKind);
   sendWebAppAuthJsonError(res, requestStartedAt, 403, 'Forbidden', 'oauth_forbidden');
   return false;
 }
@@ -1073,8 +1129,16 @@ async function resolveWebAppExecutionProject(
   res: Response,
   routeKind: WebAppRouteKind,
   requestKind: WebAppRequestKind,
+  options?: { abortSignal?: AbortSignal; initialAuthorizationAlreadyChecked?: boolean },
 ): Promise<{ slug: string; executionProject: WorkflowExecutionProject } | null> {
-  if (!authorizeWebAppRequestBeforeResolve(req, res, requestStartedAt, requestKind)) {
+  if (options?.abortSignal?.aborted) {
+    return null;
+  }
+
+  if (
+    !options?.initialAuthorizationAlreadyChecked &&
+    !authorizeWebAppRequestBeforeResolve(req, res, requestStartedAt, requestKind)
+  ) {
     return null;
   }
 
@@ -1087,7 +1151,11 @@ async function resolveWebAppExecutionProject(
     routeKind === 'published'
       ? await resolvePublishedWebAppExecutionProjectWithBackend(slug)
       : await resolveLatestWebAppExecutionProjectWithBackend(slug);
+  if (options?.abortSignal?.aborted) {
+    return null;
+  }
   if (!executionProject) {
+    prepareWebAppRejection(req, res, requestKind);
     sendJsonWithDuration(
       res,
       404,
@@ -1097,11 +1165,167 @@ async function resolveWebAppExecutionProject(
     return null;
   }
 
+  if (options?.abortSignal?.aborted) {
+    return null;
+  }
   if (!authorizeResolvedWebAppRequest(req, res, requestStartedAt, executionProject, requestKind)) {
     return null;
   }
 
   return { slug, executionProject };
+}
+
+type PreparedWebAppAction = {
+  bodyLimitBytes: number;
+  requestStartedAt: number;
+  resolved: { slug: string; executionProject: WorkflowExecutionProject };
+  uiGraph: UiGraph;
+};
+
+const preparedWebAppActions = new WeakMap<Request, PreparedWebAppAction>();
+
+function getPreparedWebAppActionBodyLimit(req: Request): number {
+  const prepared = preparedWebAppActions.get(req);
+  if (!prepared) {
+    throw createHttpError(500, 'Web app action authorization was not prepared.');
+  }
+  return prepared.bodyLimitBytes;
+}
+
+function acquireWebAppActionPreflight(): (() => void) | null {
+  if (activeWebAppActionPreflights >= MAX_CONCURRENT_WEB_APP_ACTION_PREFLIGHTS) {
+    return null;
+  }
+
+  activeWebAppActionPreflights += 1;
+  let released = false;
+  return () => {
+    if (released) {
+      return;
+    }
+    released = true;
+    activeWebAppActionPreflights = Math.max(0, activeWebAppActionPreflights - 1);
+  };
+}
+
+export function awaitWebAppActionPreflight<T>(
+  operation: Promise<T>,
+  abortController: AbortController,
+  timeoutMs = WEB_APP_ACTION_PREFLIGHT_TIMEOUT_MS,
+): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    let settled = false;
+    const timeout = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      abortController.abort();
+      reject(
+        createHttpError(503, 'Web app action preparation timed out.', {
+          expose: true,
+          code: 'web_app_action_preflight_timeout',
+          retryAfterSeconds: 1,
+          closeConnection: true,
+        }),
+      );
+    }, timeoutMs);
+    timeout.unref();
+
+    void operation.then(
+      (value) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timeout);
+        resolve(value);
+      },
+      (error) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timeout);
+        reject(error);
+      },
+    );
+  });
+}
+
+function prepareWebAppActionBeforeBody(routeKind: WebAppRouteKind) {
+  return asyncHandler(async (req, res, next) => {
+    const requestStartedAt = performance.now();
+    if (!authorizeWebAppRequestBeforeResolve(req, res, requestStartedAt, 'action')) {
+      return;
+    }
+
+    // Capture the setting before project resolution and reuse it for parsing.
+    // An action must not be authorized against one request snapshot and parsed
+    // against a later limit if Settings changes while its preflight is running.
+    const bodyLimitBytes = readRuntimeLimitSettingsSync().webAppActionRequestLimitBytes;
+
+    const releasePreflight = acquireWebAppActionPreflight();
+    if (!releasePreflight) {
+      closeResponseConnectionAfterFlush(res, req);
+      res.setHeader('Retry-After', '1');
+      sendJsonWithDuration(
+        res,
+        503,
+        {
+          error: 'Web app action preparation is temporarily exhausted.',
+          code: 'web_app_action_preflight_capacity_exhausted',
+        },
+        requestStartedAt,
+      );
+      return;
+    }
+
+    const preflightAbortController = new AbortController();
+    let responseClosed = false;
+    const markResponseClosed = () => {
+      responseClosed = true;
+      preflightAbortController.abort();
+    };
+    res.once('close', markResponseClosed);
+
+    try {
+      const resolution = resolveWebAppExecutionProject(req, requestStartedAt, res, routeKind, 'action', {
+        initialAuthorizationAlreadyChecked: true,
+        abortSignal: preflightAbortController.signal,
+      });
+      // Keep the permit until the storage work itself settles. A deadline
+      // bounds the client request, while this retained permit prevents a hung
+      // backend from letting repeated timeouts create unbounded preflights.
+      void resolution.then(releasePreflight, releasePreflight);
+      const resolved = await awaitWebAppActionPreflight(resolution, preflightAbortController);
+      if (responseClosed || res.destroyed) {
+        return;
+      }
+      if (!resolved) {
+        return;
+      }
+
+      const uiGraph = resolveWebAppUiGraph(resolved.executionProject);
+      if (responseClosed || res.destroyed) {
+        return;
+      }
+      if (!uiGraph) {
+        closeResponseConnectionAfterFlush(res, req);
+        sendJsonWithDuration(res, 404, { error: 'Rivet web app not found' }, requestStartedAt);
+        return;
+      }
+
+      preparedWebAppActions.set(req, { bodyLimitBytes, requestStartedAt, resolved, uiGraph });
+      const clearPreparedAction = () => preparedWebAppActions.delete(req);
+      res.once('finish', clearPreparedAction);
+      res.once('close', clearPreparedAction);
+      next();
+    } catch (error) {
+      // Any exception here happens before the action parser has consumed the
+      // body. Route-specific denials send their own response above; unexpected
+      // preparation failures still need the same non-reusable connection
+      // boundary before the application error handler formats them.
+      closeResponseConnectionAfterFlush(res, req);
+      throw error;
+    } finally {
+      res.off('close', markResponseClosed);
+    }
+  });
 }
 
 export type WebAppSocketExecutionResolution =
@@ -1427,7 +1651,7 @@ async function executeWorkflowEndpoint(
 async function handlePublishedWorkflowRequest(
   req: Request,
   res: Response,
-  options?: { requireApiKey?: boolean },
+  options: { requireApiKey: boolean },
 ): Promise<void> {
   const requestStartedAt = performance.now();
 
@@ -1436,7 +1660,7 @@ async function handlePublishedWorkflowRequest(
     if (!endpointName) {
       throw badRequest('Endpoint name is required');
     }
-    if (options?.requireApiKey !== false) {
+    if (options.requireApiKey) {
       // Only the immutable published route recognizes the short-lived capacity
       // capability. Latest execution keeps requiring the normal operator key.
       requirePublishedWorkflowApiKey(req, { capacityEndpointName: endpointName });
@@ -1468,13 +1692,16 @@ async function handlePublishedWorkflowRequest(
 
 publishedWorkflowsRouter.post(
   '/:endpointName',
+  authorizePublishedWorkflowBeforeBody,
+  createJsonBodyParser(() => WORKFLOW_JSON_BODY_LIMIT_BYTES),
   asyncHandler(async (req, res) => {
-    await handlePublishedWorkflowRequest(req, res);
+    await handlePublishedWorkflowRequest(req, res, { requireApiKey: false });
   }),
 );
 
 internalPublishedWorkflowsRouter.post(
   '/:endpointName',
+  createJsonBodyParser(() => WORKFLOW_JSON_BODY_LIMIT_BYTES),
   asyncHandler(async (req, res) => {
     await handlePublishedWorkflowRequest(req, res, { requireApiKey: false });
   }),
@@ -1482,12 +1709,12 @@ internalPublishedWorkflowsRouter.post(
 
 latestWorkflowsRouter.post(
   '/:endpointName',
+  authorizeLatestWorkflowBeforeBody,
+  createJsonBodyParser(() => WORKFLOW_JSON_BODY_LIMIT_BYTES),
   asyncHandler(async (req, res) => {
     const requestStartedAt = performance.now();
 
     try {
-      requirePublishedWorkflowApiKey(req);
-
       const endpointName = normalizeStoredEndpointName(String(req.params.endpointName ?? ''));
       if (!endpointName) {
         throw badRequest('Endpoint name is required');
@@ -1578,16 +1805,15 @@ async function handleWebAppJsonRequest(req: Request, res: Response, routeKind: W
 }
 
 async function handleWebAppActionRequest(req: Request, res: Response, routeKind: WebAppRouteKind): Promise<void> {
-  const requestStartedAt = performance.now();
+  const prepared = preparedWebAppActions.get(req);
+  if (!prepared) {
+    throw createHttpError(500, 'Web app action authorization was not prepared.');
+  }
+  const requestStartedAt = prepared.requestStartedAt;
   let codeRunnerTelemetry: ManagedCodeRunnerTelemetry | null = null;
 
   try {
-    const resolved = await resolveWebAppExecutionProject(req, requestStartedAt, res, routeKind, 'action');
-    if (!resolved) {
-      return;
-    }
-
-    const uiGraph = resolveWebAppUiGraph(resolved.executionProject);
+    const { resolved, uiGraph } = prepared;
     if (!uiGraph) {
       sendJsonWithDuration(res, 404, { error: 'Rivet web app not found' }, requestStartedAt);
       return;
@@ -1629,6 +1855,8 @@ async function handleWebAppActionRequest(req: Request, res: Response, routeKind:
   } catch (error) {
     setCodeRunnerTelemetryHeaders(res, codeRunnerTelemetry);
     sendWebAppActionErrorWithDuration(res, error, requestStartedAt);
+  } finally {
+    preparedWebAppActions.delete(req);
   }
 }
 
@@ -1640,6 +1868,8 @@ publishedWebAppsRouter.get(
 );
 publishedWebAppsRouter.post(
   '/:slug/actions/run',
+  prepareWebAppActionBeforeBody('published'),
+  createJsonBodyParser(getPreparedWebAppActionBodyLimit),
   asyncHandler(async (req, res) => {
     await handleWebAppActionRequest(req, res, 'published');
   }),
@@ -1659,6 +1889,8 @@ latestWebAppsRouter.get(
 );
 latestWebAppsRouter.post(
   '/:slug/actions/run',
+  prepareWebAppActionBeforeBody('latest'),
+  createJsonBodyParser(getPreparedWebAppActionBodyLimit),
   asyncHandler(async (req, res) => {
     await handleWebAppActionRequest(req, res, 'latest');
   }),

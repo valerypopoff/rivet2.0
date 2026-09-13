@@ -22,23 +22,56 @@ Those labels describe logical ownership. In `RIVET_API_PROFILE=combined`, the sa
 
 The Docker dev and production stacks expose these route families through nginx:
 
-| Path | Backing service | Purpose |
-|---|---|---|
-| `/` | `web` | Wrapper dashboard shell |
-| `/?editor` | `web` | Hosted Rivet editor iframe |
-| `POST /__rivet_auth` and `/__rivet_auth/oauth/*` | control-plane `api` (`/ui-auth`) | Server UI key/OAuth exchange |
-| `/api/*` | control-plane `api` | Wrapper API surface |
-| `${RIVET_PUBLISHED_WORKFLOWS_BASE_PATH:-/workflows}/:endpointName` | execution-plane `api` | Execute frozen published workflow snapshot |
-| `${RIVET_PUBLISHED_APPS_BASE_PATH:-/apps}/:slug` | execution-plane `api` | Serve one published declarative Rivet web app from its frozen project snapshot |
-| `${RIVET_PUBLISHED_APPS_BASE_PATH:-/apps}/:slug/actions/ws` | execution-plane `api` | Resumable WebSocket transport for published web-app graph actions |
-| `${RIVET_LATEST_WORKFLOWS_BASE_PATH:-/workflows-latest}/:endpointName` | control-plane `api` | Execute the latest live draft for a still-published workflow, keyed by the current draft endpoint |
-| `${RIVET_LATEST_APPS_BASE_PATH:-/apps-latest}/:slug` | control-plane `api` | Serve one published declarative Rivet web app from the latest saved draft/current server-side project |
-| `${RIVET_LATEST_APPS_BASE_PATH:-/apps-latest}/:slug/actions/ws` | control-plane `api` | Resumable WebSocket transport for latest-draft web-app graph actions |
-| `/ws/latest-debugger` | control-plane `api` | Latest workflow and latest web-app action remote debugger websocket |
-| `/ws/executor/internal` | `executor` | Hosted editor execution websocket |
-| `/ws/executor` | `executor` | Upstream-compatible executor websocket path |
+| Path                                                                   | Backing service                  | Purpose                                                                                               |
+| ---------------------------------------------------------------------- | -------------------------------- | ----------------------------------------------------------------------------------------------------- |
+| `/`                                                                    | `web`                            | Wrapper dashboard shell                                                                               |
+| `/?editor`                                                             | `web`                            | Hosted Rivet editor iframe                                                                            |
+| `POST /__rivet_auth` and `/__rivet_auth/oauth/*`                       | control-plane `api` (`/ui-auth`) | Server UI key/OAuth exchange                                                                          |
+| `/api/*`                                                               | control-plane `api`              | Wrapper API surface                                                                                   |
+| `${RIVET_PUBLISHED_WORKFLOWS_BASE_PATH:-/workflows}/:endpointName`     | execution-plane `api`            | Execute frozen published workflow snapshot                                                            |
+| `${RIVET_PUBLISHED_APPS_BASE_PATH:-/apps}/:slug`                       | execution-plane `api`            | Serve one published declarative Rivet web app from its frozen project snapshot                        |
+| `${RIVET_PUBLISHED_APPS_BASE_PATH:-/apps}/:slug/actions/ws`            | execution-plane `api`            | Resumable WebSocket transport for published web-app graph actions                                     |
+| `${RIVET_LATEST_WORKFLOWS_BASE_PATH:-/workflows-latest}/:endpointName` | control-plane `api`              | Execute the latest live draft for a still-published workflow, keyed by the current draft endpoint     |
+| `${RIVET_LATEST_APPS_BASE_PATH:-/apps-latest}/:slug`                   | control-plane `api`              | Serve one published declarative Rivet web app from the latest saved draft/current server-side project |
+| `${RIVET_LATEST_APPS_BASE_PATH:-/apps-latest}/:slug/actions/ws`        | control-plane `api`              | Resumable WebSocket transport for latest-draft web-app graph actions                                  |
+| `/ws/latest-debugger`                                                  | control-plane `api`              | Latest workflow and latest web-app action remote debugger websocket                                   |
+| `/ws/executor/internal`                                                | `executor`                       | Hosted editor execution websocket                                                                     |
+| `/ws/executor`                                                         | `executor`                       | Upstream-compatible executor websocket path                                                           |
 
 The nginx configs keep a `100 MiB` server-wide body limit for API/editor payloads. App Settings -> `Web apps` can independently change the maximum JSON data a web-app button action may send (default `100 MiB`); nginx hot-reloads that value as a location-specific `client_max_body_size` for the published and latest web-app route families, and the API enforces the same limit when it receives an HTTP action directly. The WebSocket server captures its message cap when the API process starts, so after changing this setting, gracefully restart/recreate the API process after any active actions finish. If an external ingress or host reverse proxy sits in front of Rivet, it must independently allow at least the same body size; the wrapper cannot reconfigure infrastructure outside its own proxy container.
+
+### HTTP body admission and parsing
+
+The API does not install a catch-all body parser. Each body-consuming route owns its parser and places authentication or request preflight before it:
+
+- control-plane routes authenticate the trusted proxy header before their route-local JSON parser. Their ordinary limit is `100 MiB`; local-editor recording uploads use `48 MiB`; evaluation recording uploads use `24 MiB`.
+- published and latest workflow endpoints validate their bearer/trusted-host credential before JSON parsing. The private `/internal/workflows/*` route remains a network-isolated intra-stack route and has no bearer requirement.
+- web-app actions resolve the app's existing gate, OAuth/session, origin, and project allowlist policy before parsing the action payload.
+- the intentionally unauthenticated UI-key and dummy-OAuth forms accept only small (`64 KiB`) JSON or URL-encoded request bodies.
+
+The process limits decoded JSON and URL-encoded reception to four simultaneous parsers and `1 GiB` of aggregate body reservations. A known uncompressed `Content-Length` reserves only that many bytes; unknown-length or compressed requests reserve the route's full decoded allowance because they can inflate during parsing. Once decoding finishes, an async handler retains only its byte reservation until its work settles—even when the client disconnects—while releasing the short-lived parser slot. This prevents graph duration or a durable save from becoming an unaccounted body-owner.
+
+Web-app actions complete all gate/session/origin, project lookup, and OAuth allowlist work before their JSON parser examines even a declared size. The resulting action snapshot also captures the JSON size limit, so a concurrent Settings update cannot authorize an action under one limit and parse it under another. A maximum of `16` such preflights may resolve concurrently; a saturated preflight boundary returns `503`, `Retry-After: 1`, and `code: "web_app_action_preflight_capacity_exhausted"`. The client receives the same status and retry guidance with `code: "web_app_action_preflight_timeout"` after `15 seconds`; the unresolved storage operation retains its preflight permit until it settles, deliberately failing closed instead of allowing repeated timeouts to create unbounded backend work.
+
+Declared identity-encoded bodies that exceed a route limit are rejected by the admitted parser before decoding. A route-size violation returns `413` with `code: "body_too_large"`; admission saturation returns `503` with `code: "body_capacity_exhausted"` and `Retry-After: 1`. JSON routes reject a body-bearing request with another media type using `415` and `code: "unsupported_media_type"`; unsupported content encodings use `415` and `code: "unsupported_body_encoding"`. Every pre-body rejection produces a terminal (`Connection: close`) response, so an unparsed rejected upload cannot be reused. Closing is response-owned and idempotent because both a route boundary and final error formatting can observe the same rejection. For a larger or chunked upload, the API discards at most a short grace period, then pauses receipt while Node flushes the useful response and closes the connection; it never calls `socket.end()` directly from a response event. Ordinary clients still receive the `413`/`415`/`503` response. nginx's own body-size, buffering, and receive limits remain a separate perimeter control. This API behavior applies even when nginx is bypassed. These values bound input buffering, not the full JavaScript heap cost of parsing a complex JSON object.
+
+Each admitted parser also has a `120 seconds` receive deadline. A stalled body returns `408` with `code: "body_receive_timeout"`. It ends after the bounded transport reader has decoded a complete body, so finite JSON or form validation is not misreported as a stalled upload. The reader detaches from the request and closes any gzip/deflate decoder before releasing admission. Chunked and compressed decoded-size overflow returns `413` without waiting for the sender to finish. Express receives only a finite decoded stream, preserving JSON primitives, charset validation, and form parsing without its live-upload error-drain behavior. Parsing failures mark the connection non-reusable before returning the response. The deadline does not limit graph execution after parsing. WebSocket messages retain their own startup-captured message cap.
+
+### Body-owning route inventory
+
+This is the ownership boundary to preserve when adding a body-consuming route. Do not add a global parser or attach a parser before the listed pre-body policy.
+
+| Route owner | Accepted representation | Pre-body policy | Decoded limit |
+| --- | --- | --- | --- |
+| `/api/native`, `/api/shell`, `/api/plugins`, `/api/projects`, `/api/runtime-libraries`, `/api/app-settings`, and ordinary `/api/workflows` mutations | JSON | Trusted proxy/operator authentication at `/api` | `100 MiB` |
+| `/api/workflows/local-editor-recordings` | JSON | Trusted proxy/operator authentication at `/api` | `48 MiB` |
+| `/api/workflows/evaluation-runs` recording submission | JSON | Trusted proxy/operator authentication at `/api` | `24 MiB` |
+| Published and latest workflow `POST /:endpointName` | JSON, including primitives | Published/latest bearer or trusted-host policy | `100 MiB` |
+| `/internal/workflows/:endpointName` | JSON, including primitives | Network-isolated internal route; no bearer check | `100 MiB` |
+| Published/latest web-app `/:slug/actions/run` | JSON object | Gate/session/origin, project resolution, and project OAuth allowlist; bounded preflight | Saved web-app button-data limit (`1 MiB`–`1 GiB`) |
+| `/ui-auth` and dummy OAuth credential posts | JSON or URL-encoded form | Intentionally unauthenticated credential exchange | `64 KiB` |
+
+Routes with no body, unknown paths, and unsupported methods never enter these parsers. A body-bearing request whose content type is not accepted by its row is rejected with `415`; a zero-length request continues to normal route validation so established `400` responses remain compatible.
 
 Current proxy timeout behavior:
 

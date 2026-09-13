@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { prepareWorkflowRecordingInputExtractor } from './recording-input-extractor.js';
 
 import { validateBody } from '../../middleware/validate.js';
+import { createControlPlaneJsonBodyParser } from '../../middleware/body-parsers.js';
 import { asyncHandler } from '../../utils/asyncHandler.js';
 import { requireAuth } from '../../middleware/auth.js';
 import { badRequest, createHttpError } from '../../utils/httpError.js';
@@ -12,9 +13,7 @@ import {
   type WorkflowRunStatisticsQuery,
 } from '../../../../studio-server-shared/workflow-recording-types.js';
 import { WORKFLOW_PUBLISHED_VERSION_COMMENT_MAX_LENGTH } from '../../../../studio-server-shared/workflow-types.js';
-import {
-  PROJECT_EXTENSION,
-} from './fs-helpers.js';
+import { PROJECT_EXTENSION } from './fs-helpers.js';
 import {
   internalPublishedWorkflowsRouter,
   latestWebAppsRouter,
@@ -22,10 +21,7 @@ import {
   publishedWebAppsRouter,
   publishedWorkflowsRouter,
 } from './execution.js';
-import {
-  normalizeWorkflowRecordingInputFilter,
-  parseWorkflowRecordingInputAfter,
-} from './recording-input-filter.js';
+import { normalizeWorkflowRecordingInputFilter, parseWorkflowRecordingInputAfter } from './recording-input-filter.js';
 import {
   createWorkflowFolderItemWithBackend,
   createWorkflowProjectItemWithBackend,
@@ -73,6 +69,7 @@ import { isTrustedExecutorRequest } from '../../auth.js';
 
 export const workflowsRouter = Router();
 const timing = createResponseTimingMiddleware();
+const jsonBody = createControlPlaneJsonBodyParser();
 
 function createRequestAbortSignal(req: Request, res: Response): { signal: AbortSignal; cleanup: () => void } {
   const abortController = new AbortController();
@@ -150,28 +147,35 @@ workflowsRouter.use('/local-editor-recordings', localEditorRecordingsRouter);
 // The Node executor is a separate process. It asks the API for one immutable
 // overlay at run start, so saved UI variables apply immediately without
 // exposing them to browser clients or mutating process.env.
-workflowsRouter.get('/execution-environment', asyncHandler(async (req, res) => {
-  if (!isTrustedExecutorRequest(req)) {
-    throw createHttpError(403, 'Forbidden');
-  }
-  res.json({ environment: await readExecutionEnvironmentVariables() });
-}));
+workflowsRouter.get(
+  '/execution-environment',
+  asyncHandler(async (req, res) => {
+    if (!isTrustedExecutorRequest(req)) {
+      throw createHttpError(403, 'Forbidden');
+    }
+    res.json({ environment: await readExecutionEnvironmentVariables() });
+  }),
+);
 
 const publishProjectWebAppsSchema = z.object({
   relativePath: z.unknown(),
-  publications: z.array(z.object({
-    uiGraphId: z.string(),
-    slug: z.string(),
-    allowedEmails: z.array(z.string()).optional(),
-  })),
+  publications: z.array(
+    z.object({
+      uiGraphId: z.string(),
+      slug: z.string(),
+      allowedEmails: z.array(z.string()).optional(),
+    }),
+  ),
 });
 
 const updateProjectWebAppAccessSchema = z.object({
   relativePath: z.unknown(),
-  accessUpdates: z.array(z.object({
-    uiGraphId: z.string(),
-    allowedEmails: z.array(z.string()),
-  })),
+  accessUpdates: z.array(
+    z.object({
+      uiGraphId: z.string(),
+      allowedEmails: z.array(z.string()),
+    }),
+  ),
 });
 
 const unpublishProjectWebAppSchema = z.object({
@@ -271,275 +275,418 @@ workflowsRouter.get('/tree/events', requireAuth, (req, res) => {
   openWorkflowTreeEventStream(req, res);
 });
 
-workflowsRouter.get('/tree', timing, asyncHandler(async (_req, res) => {
-  // Capture before reading storage. A concurrent mutation can only make this
-  // token older than the returned tree, never falsely label an older snapshot
-  // as current; its subsequent event will then schedule another refresh.
-  const sync = getWorkflowTreeSyncState();
-  res.json({
-    ...(await getWorkflowTree()),
-    sync,
-  });
-}));
+workflowsRouter.get(
+  '/tree',
+  timing,
+  asyncHandler(async (_req, res) => {
+    // Capture before reading storage. A concurrent mutation can only make this
+    // token older than the returned tree, never falsely label an older snapshot
+    // as current; its subsequent event will then schedule another refresh.
+    const sync = getWorkflowTreeSyncState();
+    res.json({
+      ...(await getWorkflowTree()),
+      sync,
+    });
+  }),
+);
 
 // The parent /api mount is authenticated; repeat it here so raw object keys
 // cannot become available if this router is ever mounted differently.
-workflowsRouter.get('/maintenance/reconciliation/findings', requireAuth, asyncHandler(async (req, res) => {
-  res.json(await listManagedReconciliationFindingDetailsWithBackend(reconciliationFindingQuerySchema.parse(req.query)));
-}));
-
-workflowsRouter.get('/recordings', asyncHandler(async (_req, res) => {
-  const catalog = await listWorkflowRecordingWorkflowsWithBackend();
-  prepareWorkflowRecordingInputExtractor();
-  res.json(catalog);
-}));
-
-workflowsRouter.get('/recordings/workflows', asyncHandler(async (_req, res) => {
-  const catalog = await listWorkflowRecordingWorkflowsWithBackend();
-  prepareWorkflowRecordingInputExtractor();
-  res.json(catalog);
-}));
-
-workflowsRouter.get('/run-statistics/targets', asyncHandler(async (req, res) => {
-  const query = runStatisticsCatalogQuerySchema.parse(req.query);
-  res.json(await listWorkflowRunStatisticsCatalogWithBackend(query.surface));
-}));
-
-workflowsRouter.post('/run-statistics/query', validateBody(runStatisticsQuerySchema), asyncHandler(async (req, res) => {
-  const body = req.body as WorkflowRunStatisticsQuery;
-  let period;
-  try {
-    period = getStatisticsQueryPeriod(body.period);
-  } catch (error) {
-    throw badRequest(error instanceof Error ? error.message : 'Invalid statistics period');
-  }
-  res.json(await getWorkflowRunStatisticsWithBackend({ ...body, period }));
-}));
-
-workflowsRouter.get('/recordings/workflows/:workflowId/runs', asyncHandler(async (req, res) => {
-  const parsedQuery = recordingsRunsQuerySchema.parse(req.query);
-  const requestAbort = createRequestAbortSignal(req, res);
-  let inputFilter: ReturnType<typeof normalizeWorkflowRecordingInputFilter> = null;
-  try {
-    inputFilter = normalizeWorkflowRecordingInputFilter({
-      path: parsedQuery.inputPath,
-      operator: parsedQuery.inputOperator,
-      value: parsedQuery.inputValue,
-    });
-    if (parsedQuery.inputAfter) {
-      if (!inputFilter) {
-        throw new Error('A recording input search continuation requires an input filter.');
-      }
-      parseWorkflowRecordingInputAfter(parsedQuery.inputAfter, {
-        workflowId: String(req.params.workflowId ?? ''),
-        statusFilter: parsedQuery.status,
-        filter: inputFilter,
-      });
-    }
-  } catch (error) {
-    requestAbort.cleanup();
-    throw badRequest(error instanceof Error ? error.message : 'Invalid recording input filter');
-  }
-
-  try {
-    const runsPage = await listWorkflowRecordingRunsPageWithBackend(
-      String(req.params.workflowId ?? ''),
-      parsedQuery.page,
-      parsedQuery.pageSize,
-      parsedQuery.status,
-      inputFilter,
-      parsedQuery.inputCursor,
-      requestAbort.signal,
-      parsedQuery.inputAfter,
+workflowsRouter.get(
+  '/maintenance/reconciliation/findings',
+  requireAuth,
+  asyncHandler(async (req, res) => {
+    res.json(
+      await listManagedReconciliationFindingDetailsWithBackend(reconciliationFindingQuerySchema.parse(req.query)),
     );
-    if (!requestAbort.signal.aborted && !res.destroyed) {
-      res.json(runsPage);
+  }),
+);
+
+workflowsRouter.get(
+  '/recordings',
+  asyncHandler(async (_req, res) => {
+    const catalog = await listWorkflowRecordingWorkflowsWithBackend();
+    prepareWorkflowRecordingInputExtractor();
+    res.json(catalog);
+  }),
+);
+
+workflowsRouter.get(
+  '/recordings/workflows',
+  asyncHandler(async (_req, res) => {
+    const catalog = await listWorkflowRecordingWorkflowsWithBackend();
+    prepareWorkflowRecordingInputExtractor();
+    res.json(catalog);
+  }),
+);
+
+workflowsRouter.get(
+  '/run-statistics/targets',
+  asyncHandler(async (req, res) => {
+    const query = runStatisticsCatalogQuerySchema.parse(req.query);
+    res.json(await listWorkflowRunStatisticsCatalogWithBackend(query.surface));
+  }),
+);
+
+workflowsRouter.post(
+  '/run-statistics/query',
+  jsonBody,
+  validateBody(runStatisticsQuerySchema),
+  asyncHandler(async (req, res) => {
+    const body = req.body as WorkflowRunStatisticsQuery;
+    let period;
+    try {
+      period = getStatisticsQueryPeriod(body.period);
+    } catch (error) {
+      throw badRequest(error instanceof Error ? error.message : 'Invalid statistics period');
     }
-  } catch (error) {
-    if (!requestAbort.signal.aborted || !isAbortError(error)) {
-      throw error;
+    res.json(await getWorkflowRunStatisticsWithBackend({ ...body, period }));
+  }),
+);
+
+workflowsRouter.get(
+  '/recordings/workflows/:workflowId/runs',
+  asyncHandler(async (req, res) => {
+    const parsedQuery = recordingsRunsQuerySchema.parse(req.query);
+    const requestAbort = createRequestAbortSignal(req, res);
+    let inputFilter: ReturnType<typeof normalizeWorkflowRecordingInputFilter> = null;
+    try {
+      inputFilter = normalizeWorkflowRecordingInputFilter({
+        path: parsedQuery.inputPath,
+        operator: parsedQuery.inputOperator,
+        value: parsedQuery.inputValue,
+      });
+      if (parsedQuery.inputAfter) {
+        if (!inputFilter) {
+          throw new Error('A recording input search continuation requires an input filter.');
+        }
+        parseWorkflowRecordingInputAfter(parsedQuery.inputAfter, {
+          workflowId: String(req.params.workflowId ?? ''),
+          statusFilter: parsedQuery.status,
+          filter: inputFilter,
+        });
+      }
+    } catch (error) {
+      requestAbort.cleanup();
+      throw badRequest(error instanceof Error ? error.message : 'Invalid recording input filter');
     }
-  } finally {
-    requestAbort.cleanup();
-  }
-}));
 
-workflowsRouter.get('/recordings/:recordingId/recording', asyncHandler(async (req, res) => {
-  res.type('text/plain; charset=utf-8').send(await readWorkflowRecordingArtifactWithBackend(
-    String(req.params.recordingId ?? ''),
-    'recording',
-  ));
-}));
+    try {
+      const runsPage = await listWorkflowRecordingRunsPageWithBackend(
+        String(req.params.workflowId ?? ''),
+        parsedQuery.page,
+        parsedQuery.pageSize,
+        parsedQuery.status,
+        inputFilter,
+        parsedQuery.inputCursor,
+        requestAbort.signal,
+        parsedQuery.inputAfter,
+      );
+      if (!requestAbort.signal.aborted && !res.destroyed) {
+        res.json(runsPage);
+      }
+    } catch (error) {
+      if (!requestAbort.signal.aborted || !isAbortError(error)) {
+        throw error;
+      }
+    } finally {
+      requestAbort.cleanup();
+    }
+  }),
+);
 
-workflowsRouter.get('/recordings/:recordingId/replay-project', asyncHandler(async (req, res) => {
-  res.type('text/plain; charset=utf-8').send(await readWorkflowRecordingArtifactWithBackend(
-    String(req.params.recordingId ?? ''),
-    'replay-project',
-  ));
-}));
+workflowsRouter.get(
+  '/recordings/:recordingId/recording',
+  asyncHandler(async (req, res) => {
+    res
+      .type('text/plain; charset=utf-8')
+      .send(await readWorkflowRecordingArtifactWithBackend(String(req.params.recordingId ?? ''), 'recording'));
+  }),
+);
 
-workflowsRouter.get('/recordings/:recordingId/replay-dataset', asyncHandler(async (req, res) => {
-  res.type('text/plain; charset=utf-8').send(await readWorkflowRecordingArtifactWithBackend(
-    String(req.params.recordingId ?? ''),
-    'replay-dataset',
-  ));
-}));
+workflowsRouter.get(
+  '/recordings/:recordingId/replay-project',
+  asyncHandler(async (req, res) => {
+    res
+      .type('text/plain; charset=utf-8')
+      .send(await readWorkflowRecordingArtifactWithBackend(String(req.params.recordingId ?? ''), 'replay-project'));
+  }),
+);
 
-workflowsRouter.delete('/recordings/:recordingId', asyncHandler(async (req, res) => {
-  await deleteWorkflowRecordingWithBackend(String(req.params.recordingId ?? ''));
-  res.json({ deleted: true });
-}));
+workflowsRouter.get(
+  '/recordings/:recordingId/replay-dataset',
+  asyncHandler(async (req, res) => {
+    res
+      .type('text/plain; charset=utf-8')
+      .send(await readWorkflowRecordingArtifactWithBackend(String(req.params.recordingId ?? ''), 'replay-dataset'));
+  }),
+);
 
-workflowsRouter.post('/move', validateBody(moveSchema), asyncHandler(async (req, res) => {
-  const { itemType, sourceRelativePath, destinationFolderRelativePath } = req.body as z.infer<typeof moveSchema>;
-  if (itemType === 'project' || itemType === 'folder') {
-    const result = await moveWorkflowItemWithBackend(itemType, sourceRelativePath, destinationFolderRelativePath);
+workflowsRouter.delete(
+  '/recordings/:recordingId',
+  asyncHandler(async (req, res) => {
+    await deleteWorkflowRecordingWithBackend(String(req.params.recordingId ?? ''));
+    res.json({ deleted: true });
+  }),
+);
+
+workflowsRouter.post(
+  '/move',
+  jsonBody,
+  validateBody(moveSchema),
+  asyncHandler(async (req, res) => {
+    const { itemType, sourceRelativePath, destinationFolderRelativePath } = req.body as z.infer<typeof moveSchema>;
+    if (itemType === 'project' || itemType === 'folder') {
+      const result = await moveWorkflowItemWithBackend(itemType, sourceRelativePath, destinationFolderRelativePath);
+      notifyWorkflowTreeChanged(req);
+      res.json(result);
+      return;
+    }
+
+    throw badRequest('Invalid itemType');
+  }),
+);
+
+workflowsRouter.post(
+  '/folders',
+  jsonBody,
+  validateBody(createFolderSchema),
+  asyncHandler(async (req, res) => {
+    const { name, parentRelativePath } = req.body as z.infer<typeof createFolderSchema>;
+    const folder = await createWorkflowFolderItemWithBackend(name, parentRelativePath);
+    notifyWorkflowTreeChanged(req);
+    res.status(201).json({ folder });
+  }),
+);
+
+workflowsRouter.patch(
+  '/folders',
+  timing,
+  jsonBody,
+  validateBody(renameFolderSchema),
+  asyncHandler(async (req, res) => {
+    const { relativePath, newName } = req.body as z.infer<typeof renameFolderSchema>;
+    const result = await renameWorkflowFolderItemWithBackend(relativePath, newName);
     notifyWorkflowTreeChanged(req);
     res.json(result);
-    return;
-  }
+  }),
+);
 
-  throw badRequest('Invalid itemType');
-}));
+workflowsRouter.delete(
+  '/folders',
+  jsonBody,
+  validateBody(deleteFolderSchema),
+  asyncHandler(async (req, res) => {
+    const { relativePath } = req.body as z.infer<typeof deleteFolderSchema>;
+    await deleteWorkflowFolderItemWithBackend(relativePath);
+    notifyWorkflowTreeChanged(req);
+    res.json({ deleted: true });
+  }),
+);
 
-workflowsRouter.post('/folders', validateBody(createFolderSchema), asyncHandler(async (req, res) => {
-  const { name, parentRelativePath } = req.body as z.infer<typeof createFolderSchema>;
-  const folder = await createWorkflowFolderItemWithBackend(name, parentRelativePath);
-  notifyWorkflowTreeChanged(req);
-  res.status(201).json({ folder });
-}));
+workflowsRouter.post(
+  '/projects',
+  jsonBody,
+  validateBody(createProjectSchema),
+  asyncHandler(async (req, res) => {
+    const { folderRelativePath, name } = req.body as z.infer<typeof createProjectSchema>;
+    const project = await createWorkflowProjectItemWithBackend(folderRelativePath, name);
+    notifyWorkflowTreeChanged(req);
+    res.status(201).json({ project });
+  }),
+);
 
-workflowsRouter.patch('/folders', timing, validateBody(renameFolderSchema), asyncHandler(async (req, res) => {
-  const { relativePath, newName } = req.body as z.infer<typeof renameFolderSchema>;
-  const result = await renameWorkflowFolderItemWithBackend(relativePath, newName);
-  notifyWorkflowTreeChanged(req);
-  res.json(result);
-}));
+workflowsRouter.patch(
+  '/projects',
+  jsonBody,
+  validateBody(renameProjectSchema),
+  asyncHandler(async (req, res) => {
+    const { relativePath, newName } = req.body as z.infer<typeof renameProjectSchema>;
+    const result = await renameWorkflowProjectItemWithBackend(relativePath, newName);
+    notifyWorkflowTreeChanged(req);
+    res.json(result);
+  }),
+);
 
-workflowsRouter.delete('/folders', validateBody(deleteFolderSchema), asyncHandler(async (req, res) => {
-  const { relativePath } = req.body as z.infer<typeof deleteFolderSchema>;
-  await deleteWorkflowFolderItemWithBackend(relativePath);
-  notifyWorkflowTreeChanged(req);
-  res.json({ deleted: true });
-}));
+workflowsRouter.post(
+  '/projects/duplicate',
+  jsonBody,
+  validateBody(duplicateProjectSchema),
+  asyncHandler(async (req, res) => {
+    const { relativePath, version } = req.body as z.infer<typeof duplicateProjectSchema>;
+    const project = await duplicateWorkflowProjectItemWithBackend(relativePath, version ?? 'live');
+    notifyWorkflowTreeChanged(req);
+    res.status(201).json({ project });
+  }),
+);
 
-workflowsRouter.post('/projects', validateBody(createProjectSchema), asyncHandler(async (req, res) => {
-  const { folderRelativePath, name } = req.body as z.infer<typeof createProjectSchema>;
-  const project = await createWorkflowProjectItemWithBackend(folderRelativePath, name);
-  notifyWorkflowTreeChanged(req);
-  res.status(201).json({ project });
-}));
+workflowsRouter.post(
+  '/projects/upload',
+  jsonBody,
+  validateBody(uploadProjectSchema),
+  asyncHandler(async (req, res) => {
+    const { folderRelativePath, fileName, contents } = req.body as z.infer<typeof uploadProjectSchema>;
+    const project = await uploadWorkflowProjectItemWithBackend(folderRelativePath, fileName, contents);
+    notifyWorkflowTreeChanged(req);
+    res.status(201).json({ project });
+  }),
+);
 
-workflowsRouter.patch('/projects', validateBody(renameProjectSchema), asyncHandler(async (req, res) => {
-  const { relativePath, newName } = req.body as z.infer<typeof renameProjectSchema>;
-  const result = await renameWorkflowProjectItemWithBackend(relativePath, newName);
-  notifyWorkflowTreeChanged(req);
-  res.json(result);
-}));
+workflowsRouter.post(
+  '/projects/download',
+  jsonBody,
+  validateBody(downloadProjectSchema),
+  asyncHandler(async (req, res) => {
+    const { relativePath, version } = req.body as z.infer<typeof downloadProjectSchema>;
+    const download = await readWorkflowProjectDownloadWithBackend(relativePath, version);
+    res.setHeader('Content-Type', 'application/x-yaml; charset=utf-8');
+    res.setHeader('Content-Disposition', createWorkflowDownloadContentDisposition(download.fileName));
+    res.status(200).send(download.contents);
+  }),
+);
 
-workflowsRouter.post('/projects/duplicate', validateBody(duplicateProjectSchema), asyncHandler(async (req, res) => {
-  const { relativePath, version } = req.body as z.infer<typeof duplicateProjectSchema>;
-  const project = await duplicateWorkflowProjectItemWithBackend(relativePath, version ?? 'live');
-  notifyWorkflowTreeChanged(req);
-  res.status(201).json({ project });
-}));
+workflowsRouter.get(
+  '/projects/published-versions',
+  asyncHandler(async (req, res) => {
+    const { relativePath } = publishedVersionsQuerySchema.parse(req.query);
+    res.json(await listWorkflowPublishedVersionsWithBackend(relativePath));
+  }),
+);
 
-workflowsRouter.post('/projects/upload', validateBody(uploadProjectSchema), asyncHandler(async (req, res) => {
-  const { folderRelativePath, fileName, contents } = req.body as z.infer<typeof uploadProjectSchema>;
-  const project = await uploadWorkflowProjectItemWithBackend(folderRelativePath, fileName, contents);
-  notifyWorkflowTreeChanged(req);
-  res.status(201).json({ project });
-}));
+workflowsRouter.post(
+  '/projects/published-versions/download',
+  jsonBody,
+  validateBody(publishedVersionDownloadSchema),
+  asyncHandler(async (req, res) => {
+    const { relativePath, versionId } = req.body as z.infer<typeof publishedVersionDownloadSchema>;
+    const download = await readWorkflowPublishedVersionDownloadWithBackend(relativePath, versionId);
+    res.setHeader('Content-Type', 'application/x-yaml; charset=utf-8');
+    res.setHeader('Content-Disposition', createWorkflowDownloadContentDisposition(download.fileName));
+    res.status(200).send(download.contents);
+  }),
+);
 
-workflowsRouter.post('/projects/download', validateBody(downloadProjectSchema), asyncHandler(async (req, res) => {
-  const { relativePath, version } = req.body as z.infer<typeof downloadProjectSchema>;
-  const download = await readWorkflowProjectDownloadWithBackend(relativePath, version);
-  res.setHeader('Content-Type', 'application/x-yaml; charset=utf-8');
-  res.setHeader('Content-Disposition', createWorkflowDownloadContentDisposition(download.fileName));
-  res.status(200).send(download.contents);
-}));
+workflowsRouter.post(
+  '/projects/published-versions/preview',
+  jsonBody,
+  validateBody(publishedVersionDownloadSchema),
+  asyncHandler(async (req, res) => {
+    const { relativePath, versionId } = req.body as z.infer<typeof publishedVersionDownloadSchema>;
+    res.json(await readWorkflowPublishedVersionPreviewWithBackend(relativePath, versionId));
+  }),
+);
 
-workflowsRouter.get('/projects/published-versions', asyncHandler(async (req, res) => {
-  const { relativePath } = publishedVersionsQuerySchema.parse(req.query);
-  res.json(await listWorkflowPublishedVersionsWithBackend(relativePath));
-}));
+workflowsRouter.patch(
+  '/projects/published-versions/star',
+  jsonBody,
+  validateBody(publishedVersionStarSchema),
+  asyncHandler(async (req, res) => {
+    const { relativePath, versionId, isStarred } = req.body as z.infer<typeof publishedVersionStarSchema>;
+    res.json({ version: await setWorkflowPublishedVersionStarWithBackend(relativePath, versionId, isStarred) });
+  }),
+);
 
-workflowsRouter.post('/projects/published-versions/download', validateBody(publishedVersionDownloadSchema), asyncHandler(async (req, res) => {
-  const { relativePath, versionId } = req.body as z.infer<typeof publishedVersionDownloadSchema>;
-  const download = await readWorkflowPublishedVersionDownloadWithBackend(relativePath, versionId);
-  res.setHeader('Content-Type', 'application/x-yaml; charset=utf-8');
-  res.setHeader('Content-Disposition', createWorkflowDownloadContentDisposition(download.fileName));
-  res.status(200).send(download.contents);
-}));
+workflowsRouter.patch(
+  '/projects/published-versions/comment',
+  jsonBody,
+  validateBody(publishedVersionCommentSchema),
+  asyncHandler(async (req, res) => {
+    const { relativePath, versionId, comment } = req.body as z.infer<typeof publishedVersionCommentSchema>;
+    res.json({ version: await setWorkflowPublishedVersionCommentWithBackend(relativePath, versionId, comment) });
+  }),
+);
 
-workflowsRouter.post('/projects/published-versions/preview', validateBody(publishedVersionDownloadSchema), asyncHandler(async (req, res) => {
-  const { relativePath, versionId } = req.body as z.infer<typeof publishedVersionDownloadSchema>;
-  res.json(await readWorkflowPublishedVersionPreviewWithBackend(relativePath, versionId));
-}));
+workflowsRouter.post(
+  '/projects/published-versions/restore',
+  jsonBody,
+  validateBody(publishedVersionDownloadSchema),
+  asyncHandler(async (req, res) => {
+    const { relativePath, versionId } = req.body as z.infer<typeof publishedVersionDownloadSchema>;
+    const result = await restoreWorkflowPublishedVersionWithBackend(relativePath, versionId);
+    notifyWorkflowTreeChanged(req);
+    res.json(result);
+  }),
+);
 
-workflowsRouter.patch('/projects/published-versions/star', validateBody(publishedVersionStarSchema), asyncHandler(async (req, res) => {
-  const { relativePath, versionId, isStarred } = req.body as z.infer<typeof publishedVersionStarSchema>;
-  res.json({ version: await setWorkflowPublishedVersionStarWithBackend(relativePath, versionId, isStarred) });
-}));
+workflowsRouter.get(
+  '/projects/web-apps',
+  asyncHandler(async (req, res) => {
+    const { relativePath } = publishedVersionsQuerySchema.parse(req.query);
+    res.json(await listWorkflowProjectWebAppsWithBackend(relativePath));
+  }),
+);
 
-workflowsRouter.patch('/projects/published-versions/comment', validateBody(publishedVersionCommentSchema), asyncHandler(async (req, res) => {
-  const { relativePath, versionId, comment } = req.body as z.infer<typeof publishedVersionCommentSchema>;
-  res.json({ version: await setWorkflowPublishedVersionCommentWithBackend(relativePath, versionId, comment) });
-}));
+workflowsRouter.post(
+  '/projects/web-apps/publish',
+  jsonBody,
+  validateBody(publishProjectWebAppsSchema),
+  asyncHandler(async (req, res) => {
+    const { relativePath, publications } = req.body as z.infer<typeof publishProjectWebAppsSchema>;
+    const project = await publishWorkflowProjectWebAppsWithBackend(relativePath, publications);
+    notifyWorkflowTreeChanged(req);
+    res.json({ project });
+  }),
+);
 
-workflowsRouter.post('/projects/published-versions/restore', validateBody(publishedVersionDownloadSchema), asyncHandler(async (req, res) => {
-  const { relativePath, versionId } = req.body as z.infer<typeof publishedVersionDownloadSchema>;
-  const result = await restoreWorkflowPublishedVersionWithBackend(relativePath, versionId);
-  notifyWorkflowTreeChanged(req);
-  res.json(result);
-}));
+workflowsRouter.patch(
+  '/projects/web-apps/access',
+  jsonBody,
+  validateBody(updateProjectWebAppAccessSchema),
+  asyncHandler(async (req, res) => {
+    const { relativePath, accessUpdates } = req.body as z.infer<typeof updateProjectWebAppAccessSchema>;
+    const project = await updateWorkflowProjectWebAppAccessWithBackend(relativePath, accessUpdates);
+    notifyWorkflowTreeChanged(req);
+    res.json({ project });
+  }),
+);
 
-workflowsRouter.get('/projects/web-apps', asyncHandler(async (req, res) => {
-  const { relativePath } = publishedVersionsQuerySchema.parse(req.query);
-  res.json(await listWorkflowProjectWebAppsWithBackend(relativePath));
-}));
+workflowsRouter.post(
+  '/projects/web-apps/unpublish',
+  jsonBody,
+  validateBody(unpublishProjectWebAppSchema),
+  asyncHandler(async (req, res) => {
+    const { relativePath, uiGraphId } = req.body as z.infer<typeof unpublishProjectWebAppSchema>;
+    const project = await unpublishWorkflowProjectWebAppWithBackend(relativePath, uiGraphId);
+    notifyWorkflowTreeChanged(req);
+    res.json({ project });
+  }),
+);
 
-workflowsRouter.post('/projects/web-apps/publish', validateBody(publishProjectWebAppsSchema), asyncHandler(async (req, res) => {
-  const { relativePath, publications } = req.body as z.infer<typeof publishProjectWebAppsSchema>;
-  const project = await publishWorkflowProjectWebAppsWithBackend(relativePath, publications);
-  notifyWorkflowTreeChanged(req);
-  res.json({ project });
-}));
+workflowsRouter.post(
+  '/projects/publish',
+  jsonBody,
+  validateBody(publishProjectSchema),
+  asyncHandler(async (req, res) => {
+    const { relativePath, settings } = req.body as z.infer<typeof publishProjectSchema>;
+    const project = await publishWorkflowProjectItemWithBackend(relativePath, settings);
+    notifyWorkflowTreeChanged(req);
+    res.json({ project });
+  }),
+);
 
-workflowsRouter.patch('/projects/web-apps/access', validateBody(updateProjectWebAppAccessSchema), asyncHandler(async (req, res) => {
-  const { relativePath, accessUpdates } = req.body as z.infer<typeof updateProjectWebAppAccessSchema>;
-  const project = await updateWorkflowProjectWebAppAccessWithBackend(relativePath, accessUpdates);
-  notifyWorkflowTreeChanged(req);
-  res.json({ project });
-}));
+workflowsRouter.post(
+  '/projects/unpublish',
+  jsonBody,
+  validateBody(pathOnlySchema),
+  asyncHandler(async (req, res) => {
+    const { relativePath } = req.body as z.infer<typeof pathOnlySchema>;
+    const project = await unpublishWorkflowProjectItemWithBackend(relativePath);
+    notifyWorkflowTreeChanged(req);
+    res.json({ project });
+  }),
+);
 
-workflowsRouter.post('/projects/web-apps/unpublish', validateBody(unpublishProjectWebAppSchema), asyncHandler(async (req, res) => {
-  const { relativePath, uiGraphId } = req.body as z.infer<typeof unpublishProjectWebAppSchema>;
-  const project = await unpublishWorkflowProjectWebAppWithBackend(relativePath, uiGraphId);
-  notifyWorkflowTreeChanged(req);
-  res.json({ project });
-}));
-
-workflowsRouter.post('/projects/publish', validateBody(publishProjectSchema), asyncHandler(async (req, res) => {
-  const { relativePath, settings } = req.body as z.infer<typeof publishProjectSchema>;
-  const project = await publishWorkflowProjectItemWithBackend(relativePath, settings);
-  notifyWorkflowTreeChanged(req);
-  res.json({ project });
-}));
-
-workflowsRouter.post('/projects/unpublish', validateBody(pathOnlySchema), asyncHandler(async (req, res) => {
-  const { relativePath } = req.body as z.infer<typeof pathOnlySchema>;
-  const project = await unpublishWorkflowProjectItemWithBackend(relativePath);
-  notifyWorkflowTreeChanged(req);
-  res.json({ project });
-}));
-
-workflowsRouter.delete('/projects', validateBody(pathOnlySchema), asyncHandler(async (req, res) => {
-  const { relativePath } = req.body as z.infer<typeof pathOnlySchema>;
-  const projectId = await deleteWorkflowProjectItemWithBackend(relativePath);
-  notifyWorkflowTreeChanged(req);
-  res.json({ deleted: true, projectId });
-}));
+workflowsRouter.delete(
+  '/projects',
+  jsonBody,
+  validateBody(pathOnlySchema),
+  asyncHandler(async (req, res) => {
+    const { relativePath } = req.body as z.infer<typeof pathOnlySchema>;
+    const projectId = await deleteWorkflowProjectItemWithBackend(relativePath);
+    notifyWorkflowTreeChanged(req);
+    res.json({ deleted: true, projectId });
+  }),
+);
 
 export {
   internalPublishedWorkflowsRouter,
