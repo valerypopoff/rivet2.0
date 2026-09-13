@@ -904,10 +904,11 @@ branch is managed background work here, so ordinary graph outputs may be
 published while it drains. A Watch branch with `Stop Watching Streaming Output`
 is different: it can still re-enter ordinary scheduling and contribute graph
 outputs, so it suppresses that early-publication boundary until its Stop value
-has been accepted and all resulting foreground work has completed. The same
-suppression applies after its queue drains but before Stop has accepted a value:
-that state is about to produce the required root failure, not a valid early
-result. `waitForRunCompletion()` observes the later drain, errors,
+has been accepted **or** the stream has exhausted, the parent Stop has been
+resolved as excluded, and all resulting foreground work has completed. The
+same suppression applies after its queue drains but before that outcome is
+known: either outcome can still affect ordinary graph outputs.
+`waitForRunCompletion()` observes the later drain, errors,
 `graphFinish`, `done`, and `finish`. Web-app action paths enable this mode so a
 Chat response is not held behind a side-effect-only branch. Local/Node executor
 owners defer abort-listener, recorder, debugger, code-runner, cache, and active
@@ -1062,7 +1063,7 @@ safe for the same final-snapshot path, but frozen Stop output is a node-owned
 error because it would bypass the scheduler and Stop's acceptance callback. A
 stopped watch keeps any accepted/failing child invocation visible to
 the root until it settles, so its actual child error cannot be replaced by a
-later generic missing-Stop failure.
+later normal unmatched-Stop resolution.
 
 The editor's shared Run-from planner mirrors that contract for both local and
 remote execution: it may preload the producer when starting at Watch, but rejects
@@ -1158,9 +1159,17 @@ under the run's lifecycle, and their later errors still fail the run. This
 ordering keeps node finish events truthful and lets downstream nodes join the selected value with
 the producer's usual final output. The accepted Stop value is cloned at that
 second ownership boundary, so later child-owned mutation cannot affect normal
-downstream work. Only this rejoining form fails closed when the source finishes
-without any accepted Stop value; a no-Stop watch completes after draining every
-snapshot invocation. Stop's outputs must not reconnect into the Watch node or
+downstream work. If the source finishes and no branch reaches Stop, that is
+normal control flow: Core emits a standard parent-graph `nodeExcluded` event
+for Stop with the reason that the stream completed without an accepted value,
+then schedules its ordinary downstream nodes. Nodes that do not consume an
+excluded value are likewise shown as **Not ran**; Coalesce/fallback and other
+control-flow-aware nodes retain their normal behavior. The run remains
+successful unless the Watch itself has an actual branch, queue, or abort
+failure. A no-Stop watch similarly completes after draining every snapshot
+invocation. In **Run To** mode, the ordinary queue reactivates only the
+selected deferred path as this late parent exclusion propagates; unrelated
+nodes remain dormant. Stop's outputs must not reconnect into the Watch node or
 any node already inside that Watch branch; both authoring validation and the
 runtime reject that re-entry so Stop remains a one-way return to ordinary
 execution. A normally excluded producer/output stops its watch and marks the
@@ -1220,8 +1229,11 @@ remote-executor transport, app data flow, or `ExecutionRecorder`:
   retained-update counts. Coalesced includes an interval snapshot superseded by
   a later partial or the producer's final value; dropped is reserved for the
   configured queue-overflow policy. `failureKind` separately reports a
-  coordinator-level `queue-overflow`, `missing-stop`, or `branch-failure`,
-  because no child iteration need fail for the first two cases. The recorder persists and playback re-emits it; remote
+  coordinator-level `queue-overflow` or `branch-failure`, because no child
+  iteration need fail for the first case. `missing-stop` remains decodable for
+  historical recordings but is no longer emitted for newly executed runs: a
+  normal unmatched Stop is represented by its parent `nodeExcluded` event.
+  The recorder persists and playback re-emits summaries; remote
   debugger clients receive the same compact event. The editor projects it as one
   synthetic terminal Watch row in Run Activity, with the retained update indexes,
   rather than recreating the omitted branch iterations; a summary with failed

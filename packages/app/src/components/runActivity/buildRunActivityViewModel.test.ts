@@ -576,6 +576,45 @@ test('labels a coordinator-level Watch failure even when no child iteration fail
   assert.ok(item.detailRows?.some((row) => row.label === 'Watch failure' && row.value === 'Queue overflow'));
 });
 
+test('keeps historical missing-Stop Watch summaries visible as their recorded failure', () => {
+  const journal = createRunActivityJournal();
+  const selectedRoot = root(newerActiveRootId, 1, 'error');
+  const watch = invocation({
+    key: 'historical-missing-stop',
+    sequence: 1,
+    graphId: 'main',
+    graphRunId: 'main-run',
+    nodeId: 'watch',
+    processId: 'streaming-watch-summary:watch',
+  });
+  watch.status = 'error';
+  watch.streamingOutputWatchSummary = {
+    receivedUpdates: 2,
+    coalescedUpdates: 0,
+    droppedUpdates: 0,
+    maximumQueuedUpdates: 1,
+    failureKind: 'missing-stop',
+    completedIterations: 2,
+    failedIterations: 0,
+    cancelledIterations: 0,
+    omittedIterations: 0,
+    retainedIterationUpdateIndexes: [1, 2],
+    selectedIteration: { updateIndex: 2, reason: 'latest' },
+  };
+  selectedRoot.nodeInvocationsByKey[watch.key] = watch;
+  selectedRoot.nodeInvocationOrder = [watch.key];
+  journal.rootsById[selectedRoot.rootRunId] = selectedRoot;
+  journal.latestCompletedRootRunId = selectedRoot.rootRunId;
+
+  const item = buildRunActivityViewModel(journal, () => ({
+    nodeTitle: 'Watch response',
+    nodeType: 'Watch Streaming Output',
+  })).items[0]!;
+
+  assert.equal(item.status, 'error');
+  assert.ok(item.detailRows?.some((row) => row.label === 'Watch failure' && row.value === 'No Stop value accepted'));
+});
+
 test('empty journal discloses ignored legacy events without inventing a run', () => {
   const journal = createRunActivityJournal();
   journal.ignoredLegacyEventCount = 4;

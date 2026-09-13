@@ -468,8 +468,14 @@ Events from subprocessors bubble up through `wireSubprocessorEvents()` in
 This means the root processor's event emitter receives events from the entire
 execution tree, all with correct lineage metadata. For a streaming Watch branch,
 retained child events still have their original metadata and occurrence time; omitted iterations never
-reach app data flow, remote transport, or the recorder. The subsequent
-`streamingOutputWatchSummary` is a compact observability event with one narrow
+reach app data flow, remote transport, or the recorder.
+
+The Node debugger's `nodeError` adapter normalizes only the error value and preserves
+the remaining event envelope. In particular, retained Watch failures must keep
+`eventOccurredAt` through remote delivery and socket recording; using their later
+flush time would change failure timing compared with local execution.
+
+The subsequent `streamingOutputWatchSummary` is a compact observability event with one narrow
 history projection: once it names a selected child `graphRunId`, app state marks
 that retained child as the semantic terminal page. It is forwarded through
 ordinary subgraph bridges, serialized for remote execution, persisted by the
@@ -477,7 +483,10 @@ recorder, and replayed with its original recording timestamp and remapped child
 identity. Run Activity projects that one terminal event into a
 synthetic Watch row with the summary counters and retained update indexes; it is
 explicitly errored when a retained child failed or the coordinator reports a
-`queue-overflow`, `missing-stop`, or `branch-failure` `failureKind`. It never
+`queue-overflow` or `branch-failure` `failureKind`. `missing-stop` remains
+readable only for historical recordings; new runs represent normal unmatched
+Stops as parent `nodeExcluded` events, which every local, remote, snapshot, and
+replay consumer applies through the ordinary **Not ran** path. It never
 recreates rows for omitted iterations.
 
 ```

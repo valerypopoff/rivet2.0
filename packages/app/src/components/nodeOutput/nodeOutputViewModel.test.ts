@@ -73,6 +73,37 @@ test('Stop Watching Streaming Output keeps older recordings readable without a t
   assert.deepEqual(getStopWatchingStreamingOutputPresentation(processes), [processes[1]]);
 });
 
+test('Stop Watching Streaming Output keeps a normal unmatched exclusion visible inline and fullscreen', () => {
+  const processes = [
+    process('unmatched-stop', {
+      outputData: { ['value' as PortId]: inlineStored('control-flow-excluded', undefined) },
+      status: { type: 'notRan', reason: 'stream completed without Stop Watching Streaming Output accepting a value' },
+    }),
+  ];
+
+  const inlineContent = createNodeOutputContentViewModel({
+    nodeType: 'stopWatchingStreamingOutput',
+    data: processes[0]!.data,
+    dataRefs: createDataRefStore(),
+  });
+  const fullscreen = createFullscreenNodeOutputViewModel({
+    nodeType: 'stopWatchingStreamingOutput',
+    processData: processes,
+    selectedPage: 'latest',
+    dataRefs: createDataRefStore(),
+  });
+
+  assert.equal(inlineContent.kind, 'output');
+  assert.equal(fullscreen.kind, 'content');
+  assert.equal(fullscreen.totalPages, 1);
+  assert.equal(
+    serializeNodeOutputDisplayCopy(getNodeOutputCopySource(inlineContent), createDataRefStore(), {
+      outputDefinitions: [{ id: 'value' as PortId, title: 'Value' }],
+    }),
+    'Not ran',
+  );
+});
+
 test('Watch pages do not have a terminal until the settled summary marks its selected parallel iteration', () => {
   const processes = [
     process('first', { status: { type: 'ok' } }),

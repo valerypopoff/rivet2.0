@@ -5,9 +5,10 @@ import { createServer, type ServerResponse } from 'node:http';
 
 type EditorRoot = Page | FrameLocator;
 
-for (const scenario of ['text', 'schema', 'parallel-stop', 'abort'] as const) {
+for (const scenario of ['text', 'schema', 'parallel-stop', 'unmatched-stop', 'abort'] as const) {
   test(`live preview and Watch share a stream: ${scenario}`, async ({ page }) => {
     const pageErrors: string[] = [];
+    const hasStop = scenario === 'parallel-stop' || scenario === 'unmatched-stop';
     page.on('pageerror', (error) => pageErrors.push(error.message));
     const firstChunk = scenario === 'schema' ? '{"message":"hello' : 'hello';
     const lastChunk = scenario === 'schema' ? ' world"}' : ' world';
@@ -105,12 +106,14 @@ for (const scenario of ['text', 'schema', 'parallel-stop', 'abort'] as const) {
             },
             {
               id: 'branch',
-              type: 'text',
-              title: 'Branch',
-              data: { text: '{{input}}' },
+              type: scenario === 'unmatched-stop' ? 'if' : 'text',
+              title: scenario === 'unmatched-stop' ? 'Never Stop' : 'Branch',
+              // An unconnected If condition is false, so its True output is
+              // excluded on every Watch iteration and Stop is never reached.
+              data: scenario === 'unmatched-stop' ? {} : { text: '{{input}}' },
               visualData: { x: 1000, y: 500 },
             },
-            ...(scenario === 'parallel-stop'
+            ...(hasStop
               ? [
                   {
                     id: 'stop',
@@ -118,6 +121,24 @@ for (const scenario of ['text', 'schema', 'parallel-stop', 'abort'] as const) {
                     title: 'Stop',
                     data: {},
                     visualData: { x: 1000, y: 800 },
+                  },
+                ]
+              : []),
+            ...(scenario === 'unmatched-stop'
+              ? [
+                  {
+                    id: 'after-stop-one',
+                    type: 'text',
+                    title: 'After Stop one',
+                    data: { text: '{{input}}' },
+                    visualData: { x: 1300, y: 800 },
+                  },
+                  {
+                    id: 'after-stop-two',
+                    type: 'text',
+                    title: 'After Stop two',
+                    data: { text: '{{input}}' },
+                    visualData: { x: 1600, y: 800 },
                   },
                 ]
               : []),
@@ -130,9 +151,25 @@ for (const scenario of ['text', 'schema', 'parallel-stop', 'abort'] as const) {
               : []),
             { outputNodeId: 'llm', outputId: 'response', inputNodeId: 'consumer', inputId: 'input' },
             { outputNodeId: 'llm', outputId: 'response', inputNodeId: 'watch', inputId: 'stream' },
-            { outputNodeId: 'watch', outputId: 'value', inputNodeId: 'branch', inputId: 'input' },
-            ...(scenario === 'parallel-stop'
+            {
+              outputNodeId: 'watch',
+              outputId: 'value',
+              inputNodeId: 'branch',
+              inputId: scenario === 'unmatched-stop' ? 'value' : 'input',
+            },
+            ...(hasStop
               ? [{ outputNodeId: 'branch', outputId: 'output', inputNodeId: 'stop', inputId: 'value' }]
+              : []),
+            ...(scenario === 'unmatched-stop'
+              ? [
+                  { outputNodeId: 'stop', outputId: 'value', inputNodeId: 'after-stop-one', inputId: 'input' },
+                  {
+                    outputNodeId: 'after-stop-one',
+                    outputId: 'output',
+                    inputNodeId: 'after-stop-two',
+                    inputId: 'input',
+                  },
+                ]
               : []),
           ],
         },
@@ -159,7 +196,9 @@ for (const scenario of ['text', 'schema', 'parallel-stop', 'abort'] as const) {
       chunk(firstChunk);
       await expect(consumer.locator('.live-streaming-input-preview')).toContainText('hello');
       await expect(consumer).not.toHaveClass(/success/);
-      await expect(editor.locator('.node[data-nodeid="branch"] .node-output')).toContainText('hello');
+      if (scenario !== 'unmatched-stop') {
+        await expect(editor.locator('.node[data-nodeid="branch"] .node-output')).toContainText('hello');
+      }
       if (scenario === 'parallel-stop') {
         await expect(editor.locator('.node[data-nodeid="stop"] .node-output')).toContainText('hello');
         await expect(editor.locator('.node[data-nodeid="stop"]')).toHaveClass(/success/);
@@ -182,6 +221,15 @@ for (const scenario of ['text', 'schema', 'parallel-stop', 'abort'] as const) {
         // Stopping Watch must not abort the LLM or replace its winning output.
         await expect(editor.locator('.node[data-nodeid="stop"] .node-output')).not.toContainText('world');
       }
+      if (scenario === 'unmatched-stop') {
+        const stopOutput = editor.locator('.node[data-nodeid="stop"] .node-output');
+        await expect(stopOutput).toContainText('Not ran');
+        await expect(editor.locator('.node[data-nodeid="after-stop-one"] .node-output')).toContainText('Not ran');
+        await expect(editor.locator('.node[data-nodeid="after-stop-two"] .node-output')).toContainText('Not ran');
+        await stopOutput.hover();
+        await stopOutput.locator('.expand-button').click();
+        await expect(editor.getByTestId('fullscreen-output-modal')).toContainText('Not ran');
+      }
       expect(pageErrors).toEqual([]);
     } finally {
       response?.end();
@@ -193,27 +241,13 @@ for (const scenario of ['text', 'schema', 'parallel-stop', 'abort'] as const) {
 
 async function getEditorRoot(page: Page): Promise<EditorRoot> {
   const editorFrame = page.locator('iframe.dashboard-editor-frame');
-  const timeoutAt = Date.now() + 20_000;
-
-  while (Date.now() < timeoutAt) {
-    if ((await editorFrame.count()) > 0) {
-      return page.frameLocator('iframe.dashboard-editor-frame');
-    }
-
-    if (
-      await page
-        .locator('.node-canvas')
-        .first()
-        .isVisible()
-        .catch(() => false)
-    ) {
-      return page;
-    }
-
-    await page.waitForTimeout(100);
-  }
-
-  throw new Error('Hosted editor did not mount in iframe or direct mode.');
+  await expect
+    .poll(async () => (await editorFrame.count()) > 0 || (await page.locator('.node-canvas').first().isVisible()), {
+      message: 'Hosted editor mounts in iframe or direct mode',
+      timeout: 60_000,
+    })
+    .toBe(true);
+  return (await editorFrame.count()) > 0 ? page.frameLocator('iframe.dashboard-editor-frame') : page;
 }
 
 test('Watch Streaming Output exposes its chunk outputs', async ({ page }) => {

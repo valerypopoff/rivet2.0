@@ -48,6 +48,7 @@ void describe('debugger processor attachments', () => {
       execution,
       resultOrigin: 'executed',
       durationMs: 42,
+      eventOccurredAt: 1_700_000_000_042,
       outputs: { requestBody: { type: 'string', value: 'preserved request' } },
     });
 
@@ -59,6 +60,7 @@ void describe('debugger processor attachments', () => {
       execution,
       resultOrigin: 'executed',
       durationMs: 42,
+      eventOccurredAt: 1_700_000_000_042,
       outputs: { requestBody: { type: 'string', value: 'preserved request' } },
     });
   });

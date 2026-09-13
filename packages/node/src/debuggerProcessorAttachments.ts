@@ -46,22 +46,14 @@ export function createDebuggerProcessorAttachments(options: {
         }),
       );
       cleanups.push(
-        processor.on(
-          'nodeError',
-          ({ node, error, processId, outputs, splitOutputs, execution, resultOrigin, durationMs, splitRunDurationMs }) => {
-            options.broadcast(processor, 'nodeError', {
-              node,
-              error: typeof error === 'string' ? error : error.toString(),
-              processId,
-              execution,
-              ...(outputs === undefined ? {} : { outputs }),
-              ...(splitOutputs === undefined ? {} : { splitOutputs }),
-              ...(resultOrigin === undefined ? {} : { resultOrigin }),
-              ...(durationMs === undefined ? {} : { durationMs }),
-              ...(splitRunDurationMs === undefined ? {} : { splitRunDurationMs }),
-            });
-          },
-        ),
+        processor.on('nodeError', ({ error, ...data }) => {
+          // Deferred Watch history carries its original occurrence clock.
+          // Normalize only Error; preserve the rest of the event envelope.
+          options.broadcast(processor, 'nodeError', {
+            ...data,
+            error: typeof error === 'string' ? error : error.toString(),
+          });
+        }),
       );
       cleanups.push(
         processor.on('error', ({ error }) => {

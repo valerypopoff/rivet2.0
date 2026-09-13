@@ -14,6 +14,7 @@ import {
   type NodePrefabId,
   type PortId,
   type ProcessEventMessageMap,
+  type ProcessEvents,
   type ProcessId,
   type Project,
   type ProjectId,
@@ -574,6 +575,43 @@ test('getEditorRunFromPlan rejects descendants whose async trigger would otherwi
   assert.deepEqual(triggerPlan.nodesToRun, [trigger.id, descendant.id]);
   assert.deepEqual(triggerPlan.preloadNodeIds, [source.id]);
   assert.deepEqual(triggerPlan.runToNodeIds, [descendant.id]);
+});
+
+test('remote execution dispatches a normally unmatched Stop as Not ran', () => {
+  const execution: GraphExecutionMetadata = {
+    graphId,
+    graphRunId: 'remote-watch-run' as GraphRunId,
+    rootRunId: 'remote-watch-root' as RootRunId,
+  };
+  const stop = makeStopWatchingStreamingOutputNode('stop');
+  const processId = 'unmatched-stop' as ProcessId;
+  const event = {
+    execution,
+    inputs: {},
+    node: stop,
+    outputs: { ['value' as PortId]: { type: 'control-flow-excluded', value: undefined } },
+    processId,
+    reason: 'stream completed without Stop Watching Streaming Output accepting a value',
+  } satisfies ProcessEventMessageMap['nodeExcluded'];
+  let received: ProcessEvents['nodeExcluded'] | undefined;
+  let journal = createRunActivityJournal();
+  const dispatcher = createProcessEventDispatcher({
+    onNodeExcluded: (data: ProcessEvents['nodeExcluded']) => {
+      received = data;
+    },
+    onRunActivityEvent: <K extends keyof ProcessEventMessageMap>(message: K, data: ProcessEventMessageMap[K]) => {
+      journal = applyProcessEventToRunActivityJournal({ journal, message, data, occurredAt: 1 });
+    },
+  } as any);
+
+  assert.equal(dispatcher.nodeExcluded(event), true);
+  assert.equal(received, event);
+  const invocation =
+    journal.rootsById[execution.rootRunId]!.nodeInvocationsByKey[
+      createRunActivityNodeKey({ ...execution, nodeId: stop.id, processId })
+    ]!;
+  assert.equal(invocation.status, 'excluded');
+  assert.equal(invocation.exclusionReason, event.reason);
 });
 
 test('getEditorRunFromPlan permits Watch but rejects cached repeated-branch boundaries', () => {

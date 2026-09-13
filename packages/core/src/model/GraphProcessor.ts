@@ -185,6 +185,8 @@ type StreamingOutputWatchPlan = {
   nextUpdateIndex: number;
   history: StreamingOutputWatchHistory;
   historySummaryEmitted: boolean;
+  /** True once normal stream exhaustion has excluded the parent Stop boundary. */
+  unmatchedStopResolved: boolean;
 };
 type StreamingOutputWatchInvocation = {
   plan: StreamingOutputWatchPlan;
@@ -754,6 +756,11 @@ export class GraphProcessor {
   #graphOutputs: GraphOutputs = undefined!;
   #executionCache: Map<string, unknown> = undefined!;
   #queuedNodes: Set<NodeId> = undefined!;
+  /**
+   * Nodes deferred only because Run To reached its initial scheduler quiescence.
+   * A streaming Stop can legitimately resume one of those selected paths later.
+   */
+  #deferredRunToIgnoredNodes: Set<NodeId> = undefined!;
   #loopControllersSeen: Set<NodeId> = undefined!;
   #subprocessors: Set<GraphProcessor> = undefined!;
   #contextValues: Record<string, DataValue> = undefined!;
@@ -1344,6 +1351,7 @@ export class GraphProcessor {
     this.#graphOutputs = this.#sharedRunStateOverride?.graphOutputs ?? {};
     this.#executionCache ??= new Map();
     this.#queuedNodes = new Set();
+    this.#deferredRunToIgnoredNodes = new Set();
     this.#connectedToolContinuationHost.reset();
     this.#continuationCompletionOwnerByNodeId = new Map();
     this.#effectiveConnectionsForRun = undefined;
@@ -1960,8 +1968,9 @@ export class GraphProcessor {
     }
 
     for (const node of this.#executionGraphNodes) {
-      if (this.#queuedNodes.has(node.id) === false) {
+      if (this.#queuedNodes.has(node.id) === false && !this.#ignoreNodes.has(node.id)) {
         this.#ignoreNodes.add(node.id);
+        this.#deferredRunToIgnoredNodes.add(node.id);
       }
     }
   }
@@ -2483,6 +2492,12 @@ export class GraphProcessor {
     const selectedOutputs = this.#graphOutputSelection
       ? outputNodes.filter((outputNode) => this.#isNodeSelected(outputNode.id))
       : outputNodes;
+    const relevantNodeIds = this.#getExecutionRelevantNodeIds();
+    for (const outputNode of selectedOutputs) {
+      if (relevantNodeIds?.has(outputNode.id) && this.#deferredRunToIgnoredNodes.delete(outputNode.id)) {
+        this.#ignoreNodes.delete(outputNode.id);
+      }
+    }
     void this.#processingQueue.addAll(
       selectedOutputs.map((outputNode) => async () => {
         this.#emitTraceEvent(`Trying to run output node from ${node.title}: ${outputNode.title} (${outputNode.id})`);
@@ -3917,6 +3932,7 @@ export class GraphProcessor {
         nextUpdateIndex: 0,
         history: new StreamingOutputWatchHistory(),
         historySummaryEmitted: false,
+        unmatchedStopResolved: false,
       };
       const plans = this.#streamingWatchPlansBySourceNodeId.get(sourceNode.id) ?? [];
       plans.push(plan);
@@ -3927,7 +3943,6 @@ export class GraphProcessor {
         watchNode.data as Partial<StreamingOutputWatchOptions>,
         (snapshot, registerCancel) => this.#runStreamingOutputWatchInvocation(plan, snapshot, registerCancel),
         (error) => this.#recordStreamingWatchFailure(watchNode, error),
-        { requiresAcceptedStop: stopNodeId != null },
       );
       this.#streamingOutputWatches.set(watchNode.id, watch);
       for (const nodeId of [watchNode.id, ...branchNodeIds]) {
@@ -4455,9 +4470,10 @@ export class GraphProcessor {
   }
 
   #hasUnresolvedForegroundOutputStreamingWatch(): boolean {
-    return [...this.#streamingOutputWatches.values()].some(
-      (watch) => !watch.stopped && watch.canAffectForegroundOutputs,
-    );
+    return [...this.#streamingOutputWatches].some(([watchNodeId, watch]) => {
+      const plan = this.#streamingWatchPlansByWatchNodeId.get(watchNodeId);
+      return plan?.stopNodeId != null && !plan.unmatchedStopResolved && !watch.stopped;
+    });
   }
 
   #hasDrainableStreamingOutputWatches(): boolean {
@@ -4485,6 +4501,11 @@ export class GraphProcessor {
       // work after the compatible scheduler has returned, so wait for that work
       // before deciding every Watch boundary is quiet.
       await this.#processingQueue.onIdle();
+      this.#resolveUnmatchedStreamingWatchStops();
+      // Excluding the parent Stop queues its ordinary downstream nodes. Let
+      // their normal control-flow rules run before emitting the settled Watch
+      // summary or finalizing the root graph.
+      await this.#processingQueue.onIdle();
     } while (this.#hasDrainableStreamingOutputWatches());
 
     for (const [watchNodeId, watch] of this.#streamingOutputWatches) {
@@ -4497,6 +4518,28 @@ export class GraphProcessor {
       await this.#emitter.emit(
         'streamingOutputWatchSummary',
         this.#withExecution({ watchNode: plan.watchNode, summary }),
+      );
+    }
+  }
+
+  #resolveUnmatchedStreamingWatchStops(): void {
+    for (const [watchNodeId, watch] of this.#streamingOutputWatches) {
+      const plan = this.#streamingWatchPlansByWatchNodeId.get(watchNodeId);
+      if (!plan?.stopNodeId || plan.unmatchedStopResolved || !watch.finishedNormally) {
+        continue;
+      }
+
+      const stopNode = this.#nodesById[plan.stopNodeId];
+      if (!stopNode) {
+        throw new Error(`Watch Streaming Output "${plan.watchNode.title}" lost its Stop Watching Streaming Output node.`);
+      }
+
+      plan.unmatchedStopResolved = true;
+      this.#excludeNode(
+        stopNode,
+        nanoid() as ProcessId,
+        {},
+        'stream completed without Stop Watching Streaming Output accepting a value',
       );
     }
   }

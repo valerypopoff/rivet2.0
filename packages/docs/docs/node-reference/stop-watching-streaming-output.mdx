@@ -27,6 +27,15 @@ them before completing. Their failures still fail the graph. If an upstream
 condition excludes the watched output, Stop's output is also excluded, allowing
 ordinary fallback logic to run.
 
+The same applies when the producer completes and no watch invocation reaches
+Stop. This is a normal outcome, not a graph error: Stop receives an excluded
+**Value** output and displays **Not ran**. Ordinary downstream nodes that need
+that Value also display **Not ran**. A Coalesce or another node that handles an
+excluded input can still select a fallback and continue the graph.
+Rivet waits for all queued and active watch invocations before deciding that
+none reached Stop. In parallel mode, an earlier invocation can still win even
+after the final snapshot's invocation has finished.
+
 This node is valid only downstream of one Watch Streaming Output node. It does
 not stop the upstream producer: for example, an LLM Chat request continues to
 its final response. That final response can be joined with this node's output

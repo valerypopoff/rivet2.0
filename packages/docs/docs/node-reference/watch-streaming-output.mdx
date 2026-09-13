@@ -139,9 +139,11 @@ result must continue through ordinary graph execution. A snapshot does not
 have to reach Stop: for example, a conditional branch can end normally while
 partial JSON is still incomplete. Stop accepts a single value, stops new watch
 invocations, cancels queued and losing parallel invocations, and releases its
-output into normal graph scheduling. If a graph has Stop but no invocation ever
-reaches it, Rivet fails clearly instead of silently continuing with no selected
-value.
+output into normal graph scheduling. If the producer finishes and no invocation
+reaches Stop, the watch also finishes normally. Stop then has an excluded
+**Value** output and appears as **Not ran**, along with ordinary downstream
+nodes that require that value. Nodes such as Coalesce can still select another
+available input and continue through a fallback path.
 
 The first invocation whose Stop finishes wins, even if other nodes in that
 invocation are still running. Those sibling nodes finish under the same graph
@@ -184,9 +186,11 @@ is valid JSON.
    and continue through the graph.
 
 If no partial response becomes usable, the final Response receives one last
-watch invocation. If this rejoining form never reaches Stop, Rivet fails with
-an actionable configuration error instead of silently returning an incomplete
-graph.
+watch invocation. If it still does not reach Stop, the run remains successful:
+Stop and downstream required-value nodes appear as **Not ran**, while the LLM
+Chat Response remains available to its ordinary final-output branches. Connect
+a fallback such as Coalesce after Stop when the graph should continue with an
+alternative value.
 
 ## See also
 
