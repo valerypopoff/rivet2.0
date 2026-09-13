@@ -371,7 +371,7 @@ export function getCommonChatV2Editors<T extends ChatV2SharedNode>(
           label: 'Stream response',
           dataKey: 'useAsGraphPartialOutput',
           helperMessage:
-            'Shows streamed response updates in the node output while running in the editor. Other nodes only receive the final response after it is complete.',
+        'Shows streamed response updates in the editor, including direct consumer previews. Ordinary consumers run after the final response; Watch Streaming Output branches can run during streaming.',
         },
       ],
     },

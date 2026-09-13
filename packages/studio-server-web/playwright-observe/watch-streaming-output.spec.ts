@@ -1,8 +1,195 @@
 import { expect, type FrameLocator, type Page, test } from '@playwright/test';
 import { authenticateIfNeeded } from './helpers/hostedEditorObserve';
 import { seedHostedEditorProject } from './helpers/hostedEditorStorage';
+import { createServer, type ServerResponse } from 'node:http';
 
 type EditorRoot = Page | FrameLocator;
+
+for (const scenario of ['text', 'schema', 'parallel-stop', 'abort'] as const) {
+  test(`live preview and Watch share a stream: ${scenario}`, async ({ page }) => {
+    const pageErrors: string[] = [];
+    page.on('pageerror', (error) => pageErrors.push(error.message));
+    const firstChunk = scenario === 'schema' ? '{"message":"hello' : 'hello';
+    const lastChunk = scenario === 'schema' ? ' world"}' : ' world';
+    let response: ServerResponse | undefined;
+    const server = createServer((request, reply) => {
+      request.resume();
+      reply.setHeader('Access-Control-Allow-Origin', '*');
+      reply.setHeader('Access-Control-Allow-Headers', '*');
+      if (request.method === 'OPTIONS') {
+        reply.end();
+        return;
+      }
+      reply.writeHead(200, { 'Content-Type': 'text/event-stream' });
+      reply.flushHeaders();
+      response = reply;
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const address = server.address();
+    if (!address || typeof address === 'string') throw new Error('Missing fixture address');
+    const chunk = (text: string, finish = false) =>
+      response!.write(
+        'data: ' +
+          JSON.stringify({
+            id: 'fixture',
+            object: 'chat.completion.chunk',
+            created: 1,
+            model: 'fixture',
+            choices: [{ index: 0, delta: { content: text }, finish_reason: finish ? 'stop' : null }],
+          }) +
+          '\n\n',
+      );
+    try {
+      await seedHostedEditorProject(page, {
+        graphId: 'live-preview',
+        projectId: 'live-preview-project',
+        title: 'Live preview',
+        projectPath: '/workflows/Live preview.rivet-project',
+        loaded: true,
+        graph: {
+          nodes: [
+            { id: 'prompt', type: 'text', title: 'Prompt', data: { text: 'fixture' }, visualData: { x: 0, y: 100 } },
+            ...(scenario === 'schema'
+              ? [
+                  {
+                    id: 'schema',
+                    type: 'object',
+                    title: 'Schema',
+                    data: {
+                      jsonTemplate: JSON.stringify({
+                        type: 'object',
+                        properties: { message: { type: 'string' } },
+                        required: ['message'],
+                        additionalProperties: false,
+                      }),
+                    },
+                    visualData: { x: 0, y: 400 },
+                  },
+                ]
+              : []),
+            {
+              id: 'llm',
+              type: 'llmChatV2',
+              title: 'LLM',
+              data: {
+                configurationMode: 'inline',
+                provider: 'custom',
+                customProviderApi: 'completions',
+                customProviderBaseURL: 'http://127.0.0.1:' + address.port + '/v1',
+                apiKeySource: 'input',
+                model: 'fixture',
+                useAsGraphPartialOutput: true,
+                useToolCalling: false,
+                responseFormat: scenario === 'schema' ? 'json_schema' : 'text',
+              },
+              visualData: { x: 300, y: 100, width: 260 },
+            },
+            {
+              id: 'consumer',
+              type: 'text',
+              title: 'Consumer',
+              data: { text: '{{input}}' },
+              visualData: { x: 650, y: 100, width: 280 },
+            },
+            {
+              id: 'watch',
+              type: 'watchStreamingOutput',
+              title: 'Watch',
+              data: {
+                triggerMode: 'every-update',
+                executionMode: scenario === 'parallel-stop' ? 'parallel' : 'sequential',
+                maxParallelRuns: 2,
+                maxQueuedUpdates: 32,
+              },
+              visualData: { x: 650, y: 500 },
+            },
+            {
+              id: 'branch',
+              type: 'text',
+              title: 'Branch',
+              data: { text: '{{input}}' },
+              visualData: { x: 1000, y: 500 },
+            },
+            ...(scenario === 'parallel-stop'
+              ? [
+                  {
+                    id: 'stop',
+                    type: 'stopWatchingStreamingOutput',
+                    title: 'Stop',
+                    data: {},
+                    visualData: { x: 1000, y: 800 },
+                  },
+                ]
+              : []),
+          ],
+          connections: [
+            { outputNodeId: 'prompt', outputId: 'output', inputNodeId: 'llm', inputId: 'prompt' },
+            { outputNodeId: 'prompt', outputId: 'output', inputNodeId: 'llm', inputId: 'apiKey' },
+            ...(scenario === 'schema'
+              ? [{ outputNodeId: 'schema', outputId: 'output', inputNodeId: 'llm', inputId: 'responseSchema' }]
+              : []),
+            { outputNodeId: 'llm', outputId: 'response', inputNodeId: 'consumer', inputId: 'input' },
+            { outputNodeId: 'llm', outputId: 'response', inputNodeId: 'watch', inputId: 'stream' },
+            { outputNodeId: 'watch', outputId: 'value', inputNodeId: 'branch', inputId: 'input' },
+            ...(scenario === 'parallel-stop'
+              ? [{ outputNodeId: 'branch', outputId: 'output', inputNodeId: 'stop', inputId: 'value' }]
+              : []),
+          ],
+        },
+      });
+      await page.addInitScript(() =>
+        localStorage.setItem(
+          'recoil-persist',
+          JSON.stringify({
+            defaultExecutor: 'browser',
+            recordExecutions: false,
+          }),
+        ),
+      );
+      await page.route('**/api/**', (route) =>
+        ['GET', 'HEAD', 'OPTIONS'].includes(route.request().method()) ? route.fallback() : route.abort(),
+      );
+      await page.goto('/?editor', { waitUntil: 'domcontentloaded' });
+      await authenticateIfNeeded(page);
+      const editor = await getEditorRoot(page);
+      const consumer = editor.locator('.node[data-nodeid="consumer"]');
+      await expect(consumer).toBeVisible({ timeout: 60_000 });
+      await editor.locator('.run-button button').first().click();
+      await expect.poll(() => Boolean(response), { timeout: 30_000 }).toBe(true);
+      chunk(firstChunk);
+      await expect(consumer.locator('.live-streaming-input-preview')).toContainText('hello');
+      await expect(consumer).not.toHaveClass(/success/);
+      await expect(editor.locator('.node[data-nodeid="branch"] .node-output')).toContainText('hello');
+      if (scenario === 'parallel-stop') {
+        await expect(editor.locator('.node[data-nodeid="stop"] .node-output')).toContainText('hello');
+        await expect(editor.locator('.node[data-nodeid="stop"]')).toHaveClass(/success/);
+      }
+      if (scenario === 'abort') {
+        await editor.locator('.run-button button').first().click();
+        await expect(consumer.locator('.live-streaming-input-preview')).toHaveCount(0);
+        await expect(consumer).not.toHaveClass(/success/);
+        expect(pageErrors).toEqual([]);
+        return;
+      }
+      chunk(lastChunk);
+      await expect(consumer.locator('.live-streaming-input-preview')).toContainText('hello world');
+      chunk('', true);
+      response!.end('data: [DONE]\n\n');
+      await expect(consumer).toHaveClass(/success/);
+      await expect(consumer.locator('.live-streaming-input-preview')).toHaveCount(0);
+      await expect(consumer.locator('.node-output')).toContainText('hello world');
+      if (scenario === 'parallel-stop') {
+        // Stopping Watch must not abort the LLM or replace its winning output.
+        await expect(editor.locator('.node[data-nodeid="stop"] .node-output')).not.toContainText('world');
+      }
+      expect(pageErrors).toEqual([]);
+    } finally {
+      response?.end();
+      server.closeAllConnections();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+}
 
 async function getEditorRoot(page: Page): Promise<EditorRoot> {
   const editorFrame = page.locator('iframe.dashboard-editor-frame');

@@ -333,6 +333,28 @@ explicitly enabled streaming retain that behavior. The editor keeps the
 `Stream response` control in `Response settings`, alongside the response-format
 selection and schema metadata; it is not an output-port toggle.
 
+During an active editor run, a streamed `Response` can also paint the latest
+value into a direct ordinary consumer as a **Live streaming input** preview.
+The consumer still has not run. The preview derives from the producer's existing
+stored output, scoped to the selected graph invocation, with no separate mutable
+state or synthetic history. Cancellation, completion and connection edits
+immediately remove it. Playback and frozen consumers suppress previews; split
+producers retain their split inspector rather than presenting an arbitrary item
+as the consumer's scalar input. A connected
+`Watch Streaming Output` continues to receive the same Core-owned stream;
+the preview never subscribes, drains, or changes Watch scheduling. Structured
+responses show raw incremental text in the preview and retain their normal
+materialized final Response contract for actual downstream execution.
+
+The preview also suppresses ambiguous concurrent producer invocations in a
+parent view (including parallel Watch children), rather than selecting an
+arbitrary iteration by arrival order. Stop always renders its actual accepted
+output, never a speculative input. Stopping Watch does not stop the producer:
+ordinary consumers can keep previewing its response until final execution.
+The hosted `watch-streaming-output.spec.ts` exercises a controlled SSE provider
+with text, JSON-schema, parallel Stop, and abort cases; Core's async-branch and
+Watch coordinator suites cover queue limits and cancellation of losing work.
+
 Older serialized `outputRequestStatus` and `outputRequestError` settings are
 migrated to `outputLLMAttempts: true` and then removed. The old request-details
 switch also preserves `outputRequestBody: true` when it had enabled that
