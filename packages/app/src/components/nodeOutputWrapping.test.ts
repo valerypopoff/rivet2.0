@@ -83,7 +83,8 @@ test('large stored previews preserve safe wrapping, search ownership, and loaded
   assert.ok(wrapStyles);
   assert.match(wrapStyles, /overflow-wrap: break-word;/);
   assert.doesNotMatch(wrapStyles, /overflow-wrap:\s*anywhere;/);
-  assert.match(source, /highlightMode: usesFoldingJsonPreview \? 'external' : 'dom'/);
+  assert.match(source, /highlightMode: preview\.kind === 'json' \? 'external' : 'dom'/);
+  assert.match(source, /<ColorizedPreformattedText[\s\S]*?activeSearchMatchRange=\{activeMatchRange\}/);
   assert.match(renderDataValue, /<LargeStoredValuePreview[\s\S]*?renderMarkdown=\{renderMarkdown\}/);
   assert.match(source, /const markdownEnabled = preview\.kind === 'text' && showFull && !!renderMarkdown;/);
   assert.match(source, /useMarkdown\(activeChunkText, markdownEnabled\)/);

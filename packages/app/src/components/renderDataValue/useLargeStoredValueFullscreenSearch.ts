@@ -177,11 +177,11 @@ export function useLargeStoredValueFullscreenSearch(args: {
       return;
     }
 
-    clearHighlights(contentElement);
-
     if (highlightMode === 'external') {
       return;
     }
+
+    clearHighlights(contentElement);
 
     if (!activeChunkText || !activeVisibleMatchRange) {
       return;
