@@ -209,6 +209,7 @@ function normalizeStoredWorkflowPublishedWebApps(value: unknown): StoredWorkflow
   for (const item of value) {
     const raw = (item ?? {}) as Record<string, unknown>;
     const uiGraphId = coerceString(raw.uiGraphId, '').trim();
+    const appId = coerceString(raw.appId, '').trim();
     const publishedSnapshotId = coerceString(raw.publishedSnapshotId, '').trim();
     const slug = normalizeStoredEndpointName(coerceString(raw.slug, ''));
     const publishedAt = coerceString(raw.publishedAt, '').trim();
@@ -219,6 +220,10 @@ function normalizeStoredWorkflowPublishedWebApps(value: unknown): StoredWorkflow
 
     seenUiGraphIds.add(uiGraphId);
     normalized.push({
+      // Older filesystem settings did not retain a binding identifier. Use a
+      // deterministic legacy value until this app's next publication/access
+      // write, at which point the normal writer persists an opaque identifier.
+      appId: appId || `legacy:${uiGraphId}`,
       uiGraphId,
       uiGraphName: coerceString(raw.uiGraphName, '').trim() || uiGraphId,
       slug,
@@ -511,9 +516,11 @@ export async function findPublishedWorkflowWebAppBySlug(root: string, slug: stri
     }
 
     return {
+      appId: webApp.appId,
       slug: webApp.slug,
       uiGraphId: webApp.uiGraphId,
       allowedEmails: webApp.allowedEmails,
+      publishedSnapshotId: webApp.publishedSnapshotId,
       projectPath,
       publishedProjectPath,
     };

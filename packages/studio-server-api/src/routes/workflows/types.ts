@@ -25,6 +25,8 @@ export type StoredWorkflowProjectSettings = {
 };
 
 export type StoredWorkflowPublishedWebApp = {
+  /** Stable identity of the app binding. It survives republishing the same UI graph. */
+  appId: string;
   uiGraphId: string;
   uiGraphName: string;
   slug: string;
@@ -40,9 +42,12 @@ export type PublishedWorkflowMatch = {
 };
 
 export type PublishedWorkflowWebAppMatch = {
+  appId: string;
   slug: string;
   uiGraphId: string;
   allowedEmails: string[];
+  /** Identifies the specific published app snapshot selected for this route. */
+  publishedSnapshotId: string;
   projectPath: string;
   publishedProjectPath: string;
 };

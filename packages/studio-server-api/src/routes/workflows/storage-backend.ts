@@ -40,6 +40,7 @@ import { ManagedWorkflowBackend } from './managed/backend.js';
 import type { ManagedReconciliationFindingDetailQuery } from './managed/reconciliation.js';
 import {
   ensureWorkflowsRoot,
+  getPublishedWorkflowSnapshotPath,
   getWorkflowDatasetPath,
   listProjectPathsRecursive,
   pathExists,
@@ -91,10 +92,17 @@ import {
   persistWorkflowExecutionRecording,
   readWorkflowRecordingArtifact,
 } from './recordings.js';
-import { createPublishedWorkflowProjectReferenceLoader, findPublishedWorkflowWebAppBySlug } from './publication.js';
+import {
+  createPublishedWorkflowProjectReferenceLoader,
+  findPublishedWorkflowWebAppBySlug,
+  normalizeWorkflowEndpointLookupName,
+  readStoredWorkflowProjectSettings,
+} from './publication.js';
 import { NodeDatasetProvider } from '@valerypopoff/rivet2-node';
 import type { AttachedData, CombinedDataset, Project, ProjectId } from '@valerypopoff/rivet2-node';
 import { getFilesystemExecutionCache } from './filesystem-execution-cache.js';
+import { notifyWebAppSocketPolicyInvalidation } from './web-app-policy-invalidation.js';
+import { getManagedWorkflowProjectVirtualPath } from './virtual-paths.js';
 import { normalizeHostedProjectTitle, parseHostedProjectContents } from './hosted-project-contents.js';
 import { getFilesystemProjectRevisionId, writeWorkflowProjectStatsCacheFromContents } from './project-stats.js';
 import {
@@ -228,11 +236,22 @@ type ExecutionProjectResult = {
   revisionKey: string;
   webAppUiGraphId?: string;
   webAppAllowedEmails?: string[];
+  /** Immutable identity of the published app binding, independent of its executable revision. */
+  webAppBindingId?: string;
+  /** Process-local invalidation key for this app's owning workflow. */
+  webAppPolicyInvalidationKey?: string;
   debug?: {
     cacheStatus: 'hit' | 'miss' | 'bypass';
     resolveMs: number;
     materializeMs: number;
   };
+};
+
+export type WebAppAccessPolicy = {
+  projectVirtualPath: string;
+  uiGraphId: string;
+  allowedEmails: string[];
+  bindingId: string;
 };
 
 let managedBackendPromise: Promise<ManagedWorkflowBackend> | null = null;
@@ -309,9 +328,9 @@ async function delegateWithWorkflowsRoot<T>(
   return delegate(managedFn, async () => fsFn(await ensureWorkflowsRoot()));
 }
 
-async function loadFilesystemExecutionProjectWithMissingRootRetry(
-  load: (root: string) => Promise<ExecutionProjectResult | null>,
-): Promise<ExecutionProjectResult | null> {
+async function loadFilesystemWithMissingRootRetry<T>(
+  load: (root: string) => Promise<T>,
+): Promise<T> {
   const root = getWorkflowsRoot();
 
   try {
@@ -383,6 +402,8 @@ async function loadFilesystemPublishedWebAppExecutionProject(
     ),
     webAppUiGraphId: match.uiGraphId,
     webAppAllowedEmails: match.allowedEmails,
+    webAppBindingId: `filesystem:${match.appId}`,
+    webAppPolicyInvalidationKey: `filesystem:${path.resolve(match.projectPath)}`,
   };
 }
 
@@ -413,6 +434,48 @@ async function loadFilesystemLatestWebAppExecutionProject(
     ),
     webAppUiGraphId: match.uiGraphId,
     webAppAllowedEmails: match.allowedEmails,
+    webAppBindingId: `filesystem:${match.appId}`,
+    webAppPolicyInvalidationKey: `filesystem:${path.resolve(match.projectPath)}`,
+  };
+}
+
+async function resolveFilesystemWebAppAccessPolicy(
+  root: string,
+  slug: string,
+  expectedProjectVirtualPath: string | undefined,
+): Promise<WebAppAccessPolicy | null> {
+  if (!expectedProjectVirtualPath) return null;
+
+  // Socket execution captured this absolute path from Rivet's own project
+  // resolver. Re-read only that project's small settings file: a periodic
+  // authorization check must not validate or deserialize every project in the
+  // workspace just to confirm one app's current publication policy.
+  const projectPath = path.resolve(expectedProjectVirtualPath);
+  const relativePath = path.relative(root, projectPath);
+  if (
+    !projectPath.endsWith(PROJECT_EXTENSION) ||
+    relativePath === '' ||
+    relativePath === '..' ||
+    relativePath.startsWith(`..${path.sep}`) ||
+    path.isAbsolute(relativePath)
+  ) {
+    return null;
+  }
+
+  const projectName = path.basename(projectPath, PROJECT_EXTENSION);
+  const settings = await readStoredWorkflowProjectSettings(projectPath, projectName);
+  const lookupName = normalizeWorkflowEndpointLookupName(slug);
+  const webApp = settings.publishedWebApps.find((candidate) =>
+    normalizeWorkflowEndpointLookupName(candidate.slug) === lookupName);
+  if (!webApp || !await pathExists(getPublishedWorkflowSnapshotPath(root, webApp.publishedSnapshotId))) {
+    return null;
+  }
+
+  return {
+    projectVirtualPath: projectPath,
+    uiGraphId: webApp.uiGraphId,
+    allowedEmails: webApp.allowedEmails,
+    bindingId: `filesystem:${webApp.appId}`,
   };
 }
 
@@ -421,9 +484,13 @@ function invalidateFilesystemExecutionMaterializations(projectPaths: Iterable<st
 }
 
 function markFilesystemExecutionStructureDirty(projectPathsToInvalidate: Iterable<string> = []): void {
+  const projectPaths = [...projectPathsToInvalidate];
   const cache = getFilesystemExecutionCache();
   cache.markIndexDirty();
-  cache.invalidateProjectMaterializations(projectPathsToInvalidate);
+  cache.invalidateProjectMaterializations(projectPaths);
+  for (const projectPath of projectPaths) {
+    notifyWebAppSocketPolicyInvalidation(`filesystem:${path.resolve(projectPath)}`);
+  }
 }
 
 function invalidateFilesystemExecutionMove(movedProjectPaths: WorkflowProjectPathMove[]): void {
@@ -1069,7 +1136,7 @@ export async function resolvePublishedExecutionProject(endpointName: string): Pr
   }
 
   return withFilesystemWorkflowStorageRead(() =>
-    loadFilesystemExecutionProjectWithMissingRootRetry((root) =>
+    loadFilesystemWithMissingRootRetry((root) =>
       getFilesystemExecutionCache().loadPublishedExecutionProject(root, endpointName),
     ),
   );
@@ -1081,7 +1148,7 @@ export async function resolvePublishedWebAppExecutionProject(slug: string): Prom
   }
 
   return withFilesystemWorkflowStorageRead(() =>
-    loadFilesystemExecutionProjectWithMissingRootRetry((root) =>
+    loadFilesystemWithMissingRootRetry((root) =>
       loadFilesystemPublishedWebAppExecutionProject(root, slug),
     ),
   );
@@ -1093,9 +1160,32 @@ export async function resolveLatestWebAppExecutionProject(slug: string): Promise
   }
 
   return withFilesystemWorkflowStorageRead(() =>
-    loadFilesystemExecutionProjectWithMissingRootRetry((root) =>
+    loadFilesystemWithMissingRootRetry((root) =>
       loadFilesystemLatestWebAppExecutionProject(root, slug),
     ),
+  );
+}
+
+/** Reads the current app binding and allowlist without loading project data. */
+export async function resolveWebAppAccessPolicy(
+  slug: string,
+  expectedProjectVirtualPath?: string,
+): Promise<WebAppAccessPolicy | null> {
+  if (isManagedWorkflowStorageEnabled()) {
+    const policy = await (await getManagedBackend()).resolveWebAppAccessPolicy(slug);
+    return policy == null
+      ? null
+      : {
+          projectVirtualPath: getManagedWorkflowProjectVirtualPath(policy.relativePath),
+          uiGraphId: policy.uiGraphId,
+          allowedEmails: policy.allowedEmails,
+          bindingId: `managed:${policy.appId}`,
+        };
+  }
+
+  return withFilesystemWorkflowStorageRead(() =>
+    loadFilesystemWithMissingRootRetry((root) =>
+      resolveFilesystemWebAppAccessPolicy(root, slug, expectedProjectVirtualPath)),
   );
 }
 
@@ -1105,7 +1195,7 @@ export async function resolveLatestExecutionProject(endpointName: string): Promi
   }
 
   return withFilesystemWorkflowStorageRead(() =>
-    loadFilesystemExecutionProjectWithMissingRootRetry((root) =>
+    loadFilesystemWithMissingRootRetry((root) =>
       getFilesystemExecutionCache().loadLatestExecutionProject(root, endpointName),
     ),
   );

@@ -84,6 +84,7 @@ export const defaultApiTestFiles = [
   'src/tests/web-app-action-coordinator.test.ts',
   'src/tests/web-app-action-run-store.test.ts',
   'src/tests/web-app-oauth.test.ts',
+  'src/tests/web-app-policy-lookup.test.ts',
   'src/tests/workflow-execution-filesystem.test.ts',
   'src/tests/workflow-filesystem-tree.test.ts',
   'src/tests/workflow-publication-filesystem.test.ts',

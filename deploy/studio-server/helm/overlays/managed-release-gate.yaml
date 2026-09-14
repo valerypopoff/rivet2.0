@@ -65,4 +65,9 @@ env:
   RIVET_SERVER_UI_AUTH_MODE: none
   RIVET_REQUIRE_UI_GATE_KEY: "false"
   RIVET_TRUST_INCOMING_FORWARDED_HEADERS: "false"
+  # The disposable release gate uses loopback-only dummy OAuth to prove that
+  # a managed publication update revokes an already-open WebSocket on an
+  # execution replica. This is never a production deployment setting.
+  RIVET_ENABLE_DEVELOPMENT_AUTH: "true"
+  RIVET_DEVELOPMENT_AUTH_CLIENTS: "127.0.0.1/32,::1/128"
   RIVET_RECORDINGS_ENABLED: "true"

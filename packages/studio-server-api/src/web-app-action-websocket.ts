@@ -4,7 +4,7 @@ import { runOutsideAppSettingsSnapshot } from './app-settings/settings-repositor
 import type { IncomingMessage, Server } from 'node:http';
 import { performance } from 'node:perf_hooks';
 import type { Pool } from 'pg';
-import { WebSocketServer } from 'ws';
+import { WebSocket, WebSocketServer } from 'ws';
 import {
   createInMemoryRivetWebAppRunCoordinator,
   createInMemoryRivetWebAppRunStore,
@@ -34,8 +34,11 @@ import {
   getWorkflowErrorMessage,
   getWorkflowRecordingStatusFromOutputs,
   resolveWebAppSocketExecution,
+  type WebAppSocketAuthorizationStatus,
+  type WebAppSocketExecutionResolution,
   type WebAppRouteKind,
 } from './routes/workflows/execution.js';
+import { subscribeWebAppSocketPolicyInvalidation } from './routes/workflows/web-app-policy-invalidation.js';
 import {
   getWorkflowExecutionRecorderOptions,
   isWorkflowRecordingEnabled,
@@ -66,6 +69,327 @@ export type WebAppActionWebSocketRuntime = {
 };
 
 let activeRuntime: WebAppActionWebSocketRuntime | null = null;
+const WEB_APP_SOCKET_ACCESS_RECHECK_MS = 5_000;
+export const WEB_APP_SOCKET_POLICY_LOOKUP_MAX_ACTIVE = 16;
+export const WEB_APP_SOCKET_POLICY_LOOKUP_TIMEOUT_MS = 5_000;
+const WEB_APP_SOCKET_AUTHORIZATION_CLOSE_GRACE_MS = 1_000;
+
+type ResolvedWebAppSocketExecution = Extract<WebAppSocketExecutionResolution, { executionProject: unknown }>;
+
+type WebAppSocketPolicyLookupCoordinator = {
+  read<T>(key: string, reader: () => Promise<T>, options?: { fresh?: boolean }): Promise<T>;
+  dispose(): void;
+};
+
+type SharedPolicyLookup<T> = {
+  response: Promise<T>;
+};
+
+type WebAppSocketPolicyRecheckScheduler = {
+  subscribe(recheck: () => void): () => void;
+};
+
+/**
+ * A process owns one timer for idle socket rechecks. Individual sockets still
+ * make their own authorization decisions, while the lookup coordinator below
+ * coalesces the policy-store work for a shared app binding.
+ */
+export function createWebAppSocketPolicyRecheckScheduler(
+  intervalMs = WEB_APP_SOCKET_ACCESS_RECHECK_MS,
+): WebAppSocketPolicyRecheckScheduler {
+  if (!Number.isSafeInteger(intervalMs) || intervalMs < 1) {
+    throw new RangeError('Web app socket policy recheck intervalMs must be a positive integer.');
+  }
+
+  const subscribers = new Set<() => void>();
+  let timer: NodeJS.Timeout | undefined;
+  const stopTimerIfIdle = () => {
+    if (subscribers.size !== 0 || !timer) return;
+    clearInterval(timer);
+    timer = undefined;
+  };
+  const startTimer = () => {
+    if (timer) return;
+    timer = setInterval(() => {
+      for (const subscriber of subscribers) {
+        // A socket recheck is a defense-in-depth task. One unexpected
+        // callback failure must not prevent other sockets from being checked
+        // or turn a timer tick into an uncaught process exception.
+        try {
+          subscriber();
+        } catch {
+          // Each controller also converts its own policy-read failures into a
+          // fail-closed authorization result. This is only the final guard for
+          // an unexpected synchronous subscriber failure.
+        }
+      }
+    }, intervalMs);
+    timer.unref();
+  };
+
+  return {
+    subscribe(recheck) {
+      subscribers.add(recheck);
+      startTimer();
+      return () => {
+        subscribers.delete(recheck);
+        stopTimerIfIdle();
+      };
+    },
+  };
+}
+
+const webAppSocketPolicyRecheckScheduler = createWebAppSocketPolicyRecheckScheduler();
+
+function createPolicyLookupTimeoutError(): Error {
+  return new Error('Web app authorization lookup timed out.');
+}
+
+/**
+ * Bounds policy-store work independently of action execution admission. A
+ * timeout rejects the caller but deliberately retains the slot until the
+ * underlying read settles, preventing a slow store from being retried without
+ * limit. Background rechecks of one app binding share that one read; effectful
+ * commands always start a fresh read.
+ */
+export function createWebAppSocketPolicyLookupCoordinator(
+  maxActive = WEB_APP_SOCKET_POLICY_LOOKUP_MAX_ACTIVE,
+  timeoutMs = WEB_APP_SOCKET_POLICY_LOOKUP_TIMEOUT_MS,
+): WebAppSocketPolicyLookupCoordinator {
+  if (!Number.isSafeInteger(maxActive) || maxActive < 1) {
+    throw new RangeError('Web app socket policy lookup maxActive must be a positive integer.');
+  }
+  if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1) {
+    throw new RangeError('Web app socket policy lookup timeoutMs must be a positive integer.');
+  }
+
+  let active = 0;
+  let disposed = false;
+  const backgroundLookups = new Map<string, SharedPolicyLookup<unknown>>();
+
+  const start = <T>(key: string | null, reader: () => Promise<T>): SharedPolicyLookup<T> | null => {
+    if (disposed || active >= maxActive) return null;
+    active += 1;
+    const operation = Promise.resolve().then(reader);
+    let entry: SharedPolicyLookup<T>;
+    let released = false;
+    const release = () => {
+      if (released) return;
+      released = true;
+      active = Math.max(0, active - 1);
+      if (key && backgroundLookups.get(key) === entry) backgroundLookups.delete(key);
+    };
+    const response = new Promise<T>((resolve, reject) => {
+      const timer = setTimeout(() => reject(createPolicyLookupTimeoutError()), timeoutMs);
+      timer.unref();
+      void operation.then(
+        (value) => {
+          clearTimeout(timer);
+          resolve(value);
+        },
+        (error) => {
+          clearTimeout(timer);
+          reject(error);
+        },
+      );
+    });
+    entry = { response };
+    void operation.then(release, release);
+    return entry;
+  };
+
+  return {
+    read<T>(key: string, reader: () => Promise<T>, options: { fresh?: boolean } = {}): Promise<T> {
+      if (!options.fresh) {
+        const existing = backgroundLookups.get(key) as SharedPolicyLookup<T> | undefined;
+        if (existing) return existing.response;
+      }
+
+      const entry = start(options.fresh ? null : key, reader);
+      if (!entry) return Promise.reject(new Error('Web app authorization lookup capacity is exhausted.'));
+      if (!options.fresh) backgroundLookups.set(key, entry as SharedPolicyLookup<unknown>);
+      return entry.response;
+    },
+    dispose() {
+      disposed = true;
+      backgroundLookups.clear();
+    },
+  };
+}
+
+function closeForAuthorization(
+  webSocket: WebSocket,
+  status: Extract<WebAppSocketAuthorizationStatus, 'revoked' | 'unavailable'>,
+): void {
+  webSocket.close(
+    status === 'unavailable' ? 1013 : 1008,
+    status === 'unavailable' ? 'Web app authorization is temporarily unavailable' : 'Web app access was revoked',
+  );
+  const fallback = setTimeout(() => {
+    if (webSocket.readyState !== WebSocket.CLOSED) webSocket.terminate();
+  }, WEB_APP_SOCKET_AUTHORIZATION_CLOSE_GRACE_MS);
+  fallback.unref();
+  webSocket.once('close', () => clearTimeout(fallback));
+}
+
+function checkResolvedWebAppSocketAuthorization(
+  resolved: ResolvedWebAppSocketExecution,
+  lookups: WebAppSocketPolicyLookupCoordinator,
+  options: { fresh?: boolean } = {},
+): Promise<WebAppSocketAuthorizationStatus> {
+  try {
+    if (!runOutsideAppSettingsSnapshot(resolved.isAuthorized)) {
+      return Promise.resolve('revoked');
+    }
+  } catch {
+    // This is an infrastructure failure, not proof that the credentials were
+    // revoked. Treat it as temporary unavailability so the client can retry
+    // instead of leaving a live socket authorized by a failed check.
+    return Promise.resolve('unavailable');
+  }
+
+  return lookups.read(
+    resolved.accessPolicyLookupKey,
+    () => runOutsideAppSettingsSnapshot(resolved.readCurrentAccessPolicy),
+    options,
+  ).then(
+    (policy) => {
+      try {
+        return runOutsideAppSettingsSnapshot(() => resolved.evaluateCurrentAccessPolicy(policy));
+      } catch {
+        return 'unavailable' as const;
+      }
+    },
+    () => 'unavailable' as const,
+  );
+}
+
+/**
+ * An execution snapshot is intentionally pinned at upgrade time, whereas this
+ * controller rechecks only the app binding and its current authorization
+ * policy. That lets an access change revoke future socket operations without
+ * replacing the graph used by an already accepted action.
+ */
+function createWebAppSocketAuthorizationController(
+  resolved: ResolvedWebAppSocketExecution,
+  webSocket: WebSocket,
+  lookups: WebAppSocketPolicyLookupCoordinator,
+) {
+  let disposed = false;
+  let terminalStatus: Extract<WebAppSocketAuthorizationStatus, 'revoked' | 'unavailable'> | undefined;
+  let policyRevoked = false;
+  let inFlight: Promise<WebAppSocketAuthorizationStatus> | undefined;
+  let stopBaseAuthorization: (() => void) | undefined;
+  let stopPolicyInvalidation: (() => void) | undefined;
+  let stopPolicyRecheck: (() => void) | undefined;
+  let invalidationGeneration = 0;
+  const policyRevocationListeners = new Set<() => void>();
+
+  const stop = () => {
+    if (disposed) return;
+    disposed = true;
+    stopPolicyRecheck?.();
+    stopPolicyRecheck = undefined;
+    stopBaseAuthorization?.();
+    stopPolicyInvalidation?.();
+    policyRevocationListeners.clear();
+  };
+  const deny = (status: Extract<WebAppSocketAuthorizationStatus, 'revoked' | 'unavailable'>) => {
+    if (terminalStatus || disposed) return;
+    terminalStatus = status;
+    stop();
+    closeForAuthorization(webSocket, status);
+  };
+  const revokePolicy = () => {
+    if (policyRevoked || disposed) return;
+    policyRevoked = true;
+    stopPolicyRecheck?.();
+    stopPolicyRecheck = undefined;
+    // Policy revocation is permanent for this connection. Keep the base
+    // credential watcher alive for any still-running browser-storage action,
+    // but release the now-useless per-app invalidation listener immediately.
+    stopPolicyInvalidation?.();
+    stopPolicyInvalidation = undefined;
+    for (const listener of policyRevocationListeners) listener();
+  };
+  const checkCurrentAuthorization = (requireFreshRead = false): Promise<WebAppSocketAuthorizationStatus> => {
+    if (terminalStatus) return Promise.resolve(terminalStatus);
+    if (policyRevoked) return Promise.resolve('policy-revoked');
+    if (disposed) return Promise.resolve('revoked');
+    // A periodic check that began before a publication change must not
+    // authorize a new action after that change. Commands therefore require
+    // their own policy read; periodic checks can still share in-flight work.
+    if (!requireFreshRead && inFlight) return inFlight;
+    const check = checkResolvedWebAppSocketAuthorization(resolved, lookups, { fresh: requireFreshRead });
+    if (requireFreshRead) return check;
+    const current = check.finally(() => {
+      if (inFlight === current) inFlight = undefined;
+    });
+    inFlight = current;
+    return current;
+  };
+  const checkAndRevoke = (requireFreshRead = false) => {
+    const generation = invalidationGeneration;
+    void checkCurrentAuthorization(requireFreshRead).then(
+      (status) => {
+        if (disposed || generation !== invalidationGeneration) return;
+        if (status === 'policy-revoked') revokePolicy();
+        else if (status !== 'authorized') deny(status);
+      },
+      () => {
+        if (disposed || generation !== invalidationGeneration) return;
+        deny('unavailable');
+      },
+    );
+  };
+  stopPolicyRecheck = webAppSocketPolicyRecheckScheduler.subscribe(checkAndRevoke);
+
+  stopBaseAuthorization = watchAuthorization(
+    () => runOutsideAppSettingsSnapshot(resolved.isAuthorized),
+    () => deny('revoked'),
+  );
+  // `watchAuthorization` checks synchronously during subscription. If the
+  // original credentials were revoked in the narrow window since upgrade,
+  // `deny` has already disposed this controller; do not then install a
+  // policy-invalidation listener that nothing can ever remove.
+  if (!terminalStatus) {
+    stopPolicyInvalidation = subscribeWebAppSocketPolicyInvalidation(resolved.accessPolicyInvalidationKey, () => {
+      invalidationGeneration += 1;
+      checkAndRevoke(true);
+    });
+  } else {
+    stopBaseAuthorization();
+  }
+
+  return {
+    // Browser-storage RPC frames belong to a run which was already accepted.
+    // They remain available after the app policy is revoked, but never after
+    // the credentials that opened this socket are revoked.
+    isAuthorized: () => !disposed && !terminalStatus && runOutsideAppSettingsSnapshot(resolved.isAuthorized),
+    async authorizeOperation(): Promise<WebAppSocketAuthorizationStatus> {
+      // A command must not accept an allow decision read before a known
+      // publication mutation. Retry once against the newer generation; a
+      // second concurrent mutation fails closed rather than spinning a
+      // command-path lookup loop forever.
+      let status: WebAppSocketAuthorizationStatus = 'unavailable';
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        const generation = invalidationGeneration;
+        status = await checkCurrentAuthorization(true);
+        if (status !== 'authorized' || generation === invalidationGeneration) break;
+        if (attempt === 1) status = 'unavailable';
+      }
+      if (status === 'policy-revoked') revokePolicy();
+      else if (status !== 'authorized') deny(status);
+      return status;
+    },
+    onPolicyRevoked(listener: () => void): () => void {
+      if (policyRevoked) listener();
+      else policyRevocationListeners.add(listener);
+      return () => policyRevocationListeners.delete(listener);
+    },
+    stop,
+  };
+}
 
 function getHostId(): string {
   return process.env.RIVET_RUNNER_SLOT_ID?.trim() || hostname();
@@ -151,6 +475,7 @@ function readOptionalPositiveIntegerEnvironment(name: string): number | undefine
 export async function initializeWebAppActionWebSockets(server: Server): Promise<WebAppActionWebSocketRuntime> {
   if (activeRuntime) return activeRuntime;
 
+  const policyLookups = createWebAppSocketPolicyLookupCoordinator();
   const configuredMaxMessageBytes = readRuntimeLimitSettingsSync().webAppActionRequestLimitBytes;
   const browserStorageRpcOptions = {
     browserStorageTransferTimeoutMs: readOptionalPositiveIntegerEnvironment(
@@ -242,20 +567,31 @@ export async function initializeWebAppActionWebSockets(server: Server): Promise<
           rejectUpgrade(socket, resolved.statusCode, resolved.message);
           return;
         }
+        const initialAuthorization = await checkResolvedWebAppSocketAuthorization(resolved, policyLookups, { fresh: true });
+        if (initialAuthorization !== 'authorized') {
+          rejectUpgrade(socket, initialAuthorization === 'unavailable' ? 503 : 403, initialAuthorization === 'unavailable' ? 'Service Unavailable' : 'Forbidden');
+          return;
+        }
+        if (!accepting) {
+          rejectUpgrade(socket, 503, 'Service Unavailable');
+          return;
+        }
 
         webSocketServer.handleUpgrade(req, socket, head, (webSocket) => {
-          const isAuthorized = () => {
-            try { return runOutsideAppSettingsSnapshot(resolved.isAuthorized); } catch { return false; }
-          };
-          const stop = watchAuthorization(isAuthorized, () => webSocket.terminate());
-          webSocket.once('close', stop);
-          if (webSocket.readyState !== 1) return;
+          const authorization = createWebAppSocketAuthorizationController(resolved, webSocket, policyLookups);
+          webSocket.once('close', authorization.stop);
+          if (webSocket.readyState !== 1) {
+            authorization.stop();
+            return;
+          }
           const endpointName = getWebAppBasePath(route.routeKind, route.slug);
           // A socket can carry several concurrent actions. Keep an opaque key
           // per action context rather than reusing the socket request ID.
           const healthCorrelations = new WeakMap<object, string>();
           gateway.handleConnection(webSocket, {
-            isAuthorized,
+            isAuthorized: authorization.isAuthorized,
+            authorizeOperation: authorization.authorizeOperation,
+            onPolicyRevoked: authorization.onPolicyRevoked,
             ownerScope: resolved.ownerScope,
             ...(route.routeKind === 'published' ? { acquireRunPermit: acquirePublishedWebAppActionPermit } : {}),
             project: resolved.executionProject.project,
@@ -361,6 +697,7 @@ export async function initializeWebAppActionWebSockets(server: Server): Promise<
       await closeWebSocketServer(webSocketServer);
       await coordinator?.dispose();
       await poolLease?.release();
+      policyLookups.dispose();
       if (activeRuntime === runtime) activeRuntime = null;
     },
   };

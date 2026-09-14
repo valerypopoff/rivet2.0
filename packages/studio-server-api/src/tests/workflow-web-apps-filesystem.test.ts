@@ -440,6 +440,48 @@ test('workflow web app publication stores and updates OAuth allowed emails witho
   });
 });
 
+test('workflow web app access updates preserve the access policy of unselected apps', async () => {
+  const created = await workflowMutations.createWorkflowProjectItem('', 'WebAppSelectedAccessUpdates');
+  await writeMultiWebAppProject(created.absolutePath, 'WebAppSelectedAccessUpdates', [
+    ['ui-one', 'First Access App'],
+    ['ui-two', 'Second Access App'],
+  ]);
+
+  await withWorkflowApiServer(async (baseUrl) => {
+    await readJson<{ project: unknown }>(await fetch(`${baseUrl}/projects/web-apps/publish`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        relativePath: created.relativePath,
+        publications: [
+          { uiGraphId: 'ui-one', slug: 'first-access-app', allowedEmails: ['first@example.com'] },
+          { uiGraphId: 'ui-two', slug: 'second-access-app', allowedEmails: ['second@example.com'] },
+        ],
+      }),
+    }));
+
+    await readJson<{ project: unknown }>(await fetch(`${baseUrl}/projects/web-apps/access`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        relativePath: created.relativePath,
+        accessUpdates: [{ uiGraphId: 'ui-one', allowedEmails: ['updated@example.com'] }],
+      }),
+    }));
+
+    const updated = await readJson<{
+      webApps: Array<{ uiGraphId: string; allowedEmails: string[] }>;
+    }>(await fetch(`${baseUrl}/projects/web-apps?${new URLSearchParams({ relativePath: created.relativePath })}`));
+    assert.deepEqual(
+      updated.webApps.map((webApp) => [webApp.uiGraphId, webApp.allowedEmails]),
+      [
+        ['ui-one', ['updated@example.com']],
+        ['ui-two', ['second@example.com']],
+      ],
+    );
+  });
+});
+
 test('workflow web app publication routes allow batch slug swaps for selected apps', async () => {
   const created = await workflowMutations.createWorkflowProjectItem('', 'SwappedWebApps');
   await writeMultiWebAppProject(created.absolutePath, 'SwappedWebApps', [
@@ -1240,6 +1282,206 @@ test('published filesystem web app actions use authenticated same-origin WebSock
         runs: Array<{ endpointNameAtExecution?: string }>;
       }>(await fetch(`${apiBaseUrl}/recordings/workflows/${workflow.workflowId}/runs?page=1&pageSize=20&status=all`));
       assert.equal(runPage.runs[0]?.endpointNameAtExecution, '/apps/published-web-app-socket-action');
+    } finally {
+      closeWebSocket(socket);
+    }
+  });
+});
+
+test('published filesystem web app sockets revoke OAuth access before a later action starts', async () => {
+  await withWebAppAuthSettings({
+    mode: 'oauth',
+    provider: 'external',
+    authorizeUrl: 'https://oauth.example.test/authorize',
+    tokenUrl: 'https://oauth.example.test/token',
+    userUrl: 'https://oauth.example.test/profile',
+    clientId: 'client-id',
+    clientSecret: 'client-secret',
+    callbackUrl: 'https://rivet.example.test/apps/auth/callback',
+    sessionSecret: 'session-secret',
+  }, async () => {
+    const created = await workflowMutations.createWorkflowProjectItem('', 'PublishedWebAppSocketRevocation');
+    await writeWebAppProject(created.absolutePath, 'PublishedWebAppSocketRevocation', 'Published Socket Revocation App');
+    await workflowStorageBackend.publishWorkflowProjectWebAppsWithBackend(created.relativePath, [{
+      uiGraphId: WEB_APP_TEST_UI_GRAPH_ID,
+      slug: 'published-web-app-socket-revocation',
+      allowedEmails: ['user@example.com', 'other@example.com'],
+    }]);
+
+    await withWorkflowExecutionServer(async ({ webAppsBaseUrl }) => {
+      const cookie = createSignedOAuthSessionCookie('user@example.com', 'session-secret');
+      const otherCookie = createSignedOAuthSessionCookie('other@example.com', 'session-secret');
+      const htmlResponse = await fetch(`${webAppsBaseUrl}/published-web-app-socket-revocation`, {
+        headers: { cookie },
+        signal: AbortSignal.timeout(5000),
+      });
+      assert.equal(htmlResponse.status, 200);
+      const revisionKey = extractWebAppRevisionKey(await htmlResponse.text());
+      const socket = await connectWebSocket(
+        toWebAppSocketUrl(webAppsBaseUrl, 'published-web-app-socket-revocation'),
+        { headers: { origin: webAppsBaseUrl, cookie } },
+      );
+      const otherSocket = await connectWebSocket(
+        toWebAppSocketUrl(webAppsBaseUrl, 'published-web-app-socket-revocation'),
+        { headers: { origin: webAppsBaseUrl, cookie: otherCookie } },
+      );
+      try {
+        const ready = waitForWebSocketMessages(socket, ['server.ready'], { parser: parseWebAppSocketMessage });
+        const otherReady = waitForWebSocketMessages(otherSocket, ['server.ready'], { parser: parseWebAppSocketMessage });
+        socket.send(JSON.stringify({ type: 'client.hello', protocolVersion: 1 }));
+        otherSocket.send(JSON.stringify({ type: 'client.hello', protocolVersion: 1 }));
+        await Promise.all([ready, otherReady]);
+
+        const close = new Promise<{ code: number; reason: Buffer }>((resolve) => {
+          socket.once('close', (code, reason) => resolve({ code, reason }));
+        });
+        await workflowStorageBackend.updateWorkflowProjectWebAppAccessWithBackend(created.relativePath, [{
+          uiGraphId: WEB_APP_TEST_UI_GRAPH_ID,
+          allowedEmails: ['other@example.com'],
+        }]);
+        const outcome = await close;
+        assert.equal(outcome.code, 1008);
+        assert.match(outcome.reason.toString(), /access was revoked/i);
+
+        const deniedResponse = await fetch(`${webAppsBaseUrl}/published-web-app-socket-revocation`, {
+          headers: { cookie },
+          signal: AbortSignal.timeout(5000),
+        });
+        assert.equal(deniedResponse.status, 403);
+        await deniedResponse.text();
+
+        // Revoking one user's current publication access must not close or
+        // otherwise restrict another user's independently authorized socket.
+        const otherAction = waitForWebSocketMessages(otherSocket, ['action.accepted', 'action.completed'], {
+          parser: parseWebAppSocketMessage,
+        });
+        otherSocket.send(JSON.stringify({
+          type: 'action.start',
+          componentId: WEB_APP_TEST_ACTION_COMPONENT_ID,
+          requestId: 'published-web-app-socket-revocation-other-user',
+          revisionKey,
+          state: { prompt: 'other user remains authorized' },
+        }));
+        const otherMessages = await otherAction;
+        assert.equal(typeof (otherMessages.find((message) => message.message === 'action.accepted')?.data as { runId?: unknown } | undefined)?.runId, 'string');
+        assert.deepEqual(
+          (otherMessages.find((message) => message.message === 'action.completed')?.data as { statePatch?: unknown } | undefined)?.statePatch,
+          { result: 'other user remains authorized' },
+        );
+      } finally {
+        closeWebSocket(socket);
+        closeWebSocket(otherSocket);
+      }
+    });
+  });
+});
+
+test('published filesystem web app sockets keep their pinned execution after a code-only republish', async () => {
+  const created = await workflowMutations.createWorkflowProjectItem('', 'PublishedWebAppSocketRepublish');
+  await writeWebAppProject(created.absolutePath, 'PublishedWebAppSocketRepublish', 'Published Socket Republish App');
+  await publishWebApp(created.relativePath, 'published-web-app-socket-republish');
+
+  await withWorkflowExecutionServer(async ({ webAppsBaseUrl }) => {
+    const htmlResponse = await fetch(`${webAppsBaseUrl}/published-web-app-socket-republish`, {
+      signal: AbortSignal.timeout(5000),
+    });
+    assert.equal(htmlResponse.status, 200);
+    const revisionKey = extractWebAppRevisionKey(await htmlResponse.text());
+    const socket = await connectWebSocket(
+      toWebAppSocketUrl(webAppsBaseUrl, 'published-web-app-socket-republish'),
+      { headers: { origin: webAppsBaseUrl } },
+    );
+    try {
+      const ready = waitForWebSocketMessages(socket, ['server.ready'], { parser: parseWebAppSocketMessage });
+      socket.send(JSON.stringify({ type: 'client.hello', protocolVersion: 1 }));
+      await ready;
+
+      // Replacing only executable code must not replace this connection's
+      // pinned project snapshot or revoke its still-valid app binding.
+      await publishWebApp(created.relativePath, 'published-web-app-socket-republish');
+      const terminal = waitForWebSocketMessages(socket, ['action.accepted', 'action.completed'], {
+        parser: parseWebAppSocketMessage,
+      });
+      socket.send(JSON.stringify({
+        type: 'action.start',
+        componentId: WEB_APP_TEST_ACTION_COMPONENT_ID,
+        requestId: 'published-web-app-socket-republish',
+        revisionKey,
+        state: { prompt: 'old snapshot remains usable' },
+      }));
+      const messages = await terminal;
+      assert.equal(typeof (messages.find((message) => message.message === 'action.accepted')?.data as { runId?: unknown } | undefined)?.runId, 'string');
+      assert.deepEqual(
+        (messages.find((message) => message.message === 'action.completed')?.data as { statePatch?: unknown } | undefined)?.statePatch,
+        { result: 'old snapshot remains usable' },
+      );
+    } finally {
+      closeWebSocket(socket);
+    }
+  });
+});
+
+test('published filesystem web app sockets revoke when their slug is rebound to another app', async () => {
+  const first = await workflowMutations.createWorkflowProjectItem('', 'PublishedWebAppSocketRebindFirst');
+  const second = await workflowMutations.createWorkflowProjectItem('', 'PublishedWebAppSocketRebindSecond');
+  await writeWebAppProject(first.absolutePath, 'PublishedWebAppSocketRebindFirst', 'First App');
+  await writeWebAppProject(second.absolutePath, 'PublishedWebAppSocketRebindSecond', 'Second App');
+  await publishWebApp(first.relativePath, 'published-web-app-socket-rebind');
+
+  await withWorkflowExecutionServer(async ({ webAppsBaseUrl }) => {
+    const socket = await connectWebSocket(
+      toWebAppSocketUrl(webAppsBaseUrl, 'published-web-app-socket-rebind'),
+      { headers: { origin: webAppsBaseUrl } },
+    );
+    try {
+      const ready = waitForWebSocketMessages(socket, ['server.ready'], { parser: parseWebAppSocketMessage });
+      socket.send(JSON.stringify({ type: 'client.hello', protocolVersion: 1 }));
+      await ready;
+
+      const close = new Promise<{ code: number; reason: Buffer }>((resolve) => {
+        socket.once('close', (code, reason) => resolve({ code, reason }));
+      });
+      await workflowStorageBackend.unpublishWorkflowProjectWebAppWithBackend(
+        first.relativePath,
+        WEB_APP_TEST_UI_GRAPH_ID,
+      );
+      await publishWebApp(second.relativePath, 'published-web-app-socket-rebind');
+
+      const outcome = await close;
+      assert.equal(outcome.code, 1008);
+      assert.match(outcome.reason.toString(), /access was revoked/i);
+    } finally {
+      closeWebSocket(socket);
+    }
+  });
+});
+
+test('latest filesystem web app sockets revoke when their published app is removed', async () => {
+  const created = await workflowMutations.createWorkflowProjectItem('', 'LatestWebAppSocketUnpublish');
+  await writeWebAppProject(created.absolutePath, 'LatestWebAppSocketUnpublish', 'Latest Socket Unpublish App');
+  await publishWebApp(created.relativePath, 'latest-web-app-socket-unpublish');
+
+  await withWorkflowExecutionServer(async ({ latestWebAppsBaseUrl }) => {
+    const socket = await connectWebSocket(
+      toWebAppSocketUrl(latestWebAppsBaseUrl, 'latest-web-app-socket-unpublish'),
+      { headers: { origin: latestWebAppsBaseUrl } },
+    );
+    try {
+      const ready = waitForWebSocketMessages(socket, ['server.ready'], { parser: parseWebAppSocketMessage });
+      socket.send(JSON.stringify({ type: 'client.hello', protocolVersion: 1 }));
+      await ready;
+
+      const close = new Promise<{ code: number; reason: Buffer }>((resolve) => {
+        socket.once('close', (code, reason) => resolve({ code, reason }));
+      });
+      await workflowStorageBackend.unpublishWorkflowProjectWebAppWithBackend(
+        created.relativePath,
+        WEB_APP_TEST_UI_GRAPH_ID,
+      );
+
+      const outcome = await close;
+      assert.equal(outcome.code, 1008);
+      assert.match(outcome.reason.toString(), /access was revoked/i);
     } finally {
       closeWebSocket(socket);
     }

@@ -12,9 +12,35 @@ function readRivetWebAppBrowserAsset(packagePath: string): string {
   return fs.readFileSync(requireFromStudioServerWeb.resolve(packagePath), 'utf8');
 }
 
-function createWebAppHtml(clientScript: string, extraBodyHtml = ''): string {
+function createWebAppHtml(
+  clientScript: string,
+  extraBodyHtml = '',
+  configOverrides: Record<string, unknown> = {},
+): string {
   const markedScript = readRivetWebAppBrowserAsset('marked/marked.min.js');
   const domPurifyScript = readRivetWebAppBrowserAsset('dompurify/dist/purify.min.js');
+  const config = {
+    actionPath: 'http://example.test/actions/run',
+    initialState: { prompt: 'initial value' },
+    markdownSanitizerPolicy: RIVET_MARKDOWN_SANITIZER_POLICY,
+    revisionKey: 'old-revision',
+    uiGraph: {
+      components: [
+        { type: 'markdown', markdown: '**Rendered markdown**' },
+        { type: 'input', label: 'Prompt', stateKey: 'prompt' },
+        {
+          id: 'run-button',
+          type: 'button',
+          label: 'Run',
+          action: {
+            graphId: 'run-graph',
+            inputMappings: [{ inputKey: 'prompt', stateKey: 'prompt' }],
+          },
+        },
+      ],
+    },
+    ...configOverrides,
+  };
 
   return `<!doctype html>
 <html lang="en">
@@ -25,27 +51,7 @@ function createWebAppHtml(clientScript: string, extraBodyHtml = ''): string {
 <body>
   <div id="app" class="rivet-web-app-root"></div>
   <script>
-    window.__RIVET_WEB_APP__ = {
-      actionPath: 'http://example.test/actions/run',
-      initialState: { prompt: 'initial value' },
-      markdownSanitizerPolicy: ${JSON.stringify(RIVET_MARKDOWN_SANITIZER_POLICY)},
-      revisionKey: 'old-revision',
-      uiGraph: {
-        components: [
-          { type: 'markdown', markdown: '**Rendered markdown**' },
-          { type: 'input', label: 'Prompt', stateKey: 'prompt' },
-          {
-            id: 'run-button',
-            type: 'button',
-            label: 'Run',
-            action: {
-              graphId: 'run-graph',
-              inputMappings: [{ inputKey: 'prompt', stateKey: 'prompt' }],
-            }
-          }
-        ]
-      }
-    };
+    window.__RIVET_WEB_APP__ = ${JSON.stringify(config)};
   </script>
   <script>${markedScript.replace(/<\/script/gi, '<\\/script')}</script>
   <script>${domPurifyScript.replace(/<\/script/gi, '<\\/script')}</script>
@@ -151,6 +157,50 @@ test('Rivet web app client turns revision mismatches into a reload modal', async
 
   await modal.getByRole('button', { name: 'Reload' }).click();
   await expect.poll(() => htmlRequestCount).toBe(2);
+});
+
+test('Rivet web app client does not reconnect or fall back after access is revoked over WebSocket', async ({ page }) => {
+  let actionStarts = 0;
+  let httpActionRequests = 0;
+  let webSocketConnections = 0;
+
+  await page.route('http://example.test/revoked-websocket-app', async (route) => {
+    await route.fulfill({
+      body: createWebAppHtml(RIVET_WEB_APP_CLIENT_JS, '', {
+        actionTransport: { socketPath: 'http://example.test/actions/ws', type: 'websocket' },
+      }),
+      contentType: 'text/html',
+      status: 200,
+    });
+  });
+  await page.route('http://example.test/actions/run', async (route) => {
+    httpActionRequests += 1;
+    await route.fulfill({ status: 500 });
+  });
+  await page.routeWebSocket('ws://example.test/actions/ws', (webSocket) => {
+    webSocketConnections += 1;
+    webSocket.onMessage((raw) => {
+      const message = JSON.parse(String(raw)) as { type?: string };
+      if (message.type === 'client.hello') {
+        webSocket.send(JSON.stringify({ capabilities: [], protocolVersion: 1, type: 'server.ready' }));
+      } else if (message.type === 'action.start') {
+        actionStarts += 1;
+        webSocket.close({ code: 1008, reason: 'Web app access was revoked' });
+      }
+    });
+  });
+
+  await page.goto('http://example.test/revoked-websocket-app');
+  await page.getByRole('button', { name: 'Run' }).click();
+  await expect(page.locator('.rivet-web-app-error')).toContainText('Web app access was revoked');
+  // A close code 1008 is permanent policy denial. Give the normal retry
+  // window time to elapse, then prove this client neither reconnects nor
+  // retries the action through its HTTP endpoint.
+  await page.waitForTimeout(700);
+
+  expect(actionStarts).toBe(1);
+  expect(httpActionRequests).toBe(0);
+  expect(webSocketConnections).toBe(1);
 });
 
 test('Rivet web app client keeps the wrapper OAuth logout control visible', async ({ page }) => {

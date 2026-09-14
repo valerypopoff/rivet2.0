@@ -71,6 +71,8 @@ import {
   resolveLatestWebAppExecutionProject as resolveLatestWebAppExecutionProjectWithBackend,
   resolvePublishedExecutionProject,
   resolvePublishedWebAppExecutionProject as resolvePublishedWebAppExecutionProjectWithBackend,
+  resolveWebAppAccessPolicy,
+  type WebAppAccessPolicy,
 } from './storage-backend.js';
 import {
   getWorkflowExecutionRecorderOptions,
@@ -1337,14 +1339,32 @@ export type WebAppSocketExecutionResolution =
   | {
       executionProject: WorkflowExecutionProject;
       ownerScope: string;
+      /** Fast request/session check used before every incoming socket frame. */
       isAuthorized(): boolean;
+      /** Shared lookup key; unlike credentials, the app policy is user-independent. */
+      accessPolicyLookupKey: string;
+      /** Targeted local mutation/managed LISTEN invalidation key. */
+      accessPolicyInvalidationKey: string;
+      /** Reads only the current app binding and access list, never project contents. */
+      readCurrentAccessPolicy(): Promise<WebAppAccessPolicy | null>;
+      /** Combines the opening identity with a freshly read app policy. */
+      evaluateCurrentAccessPolicy(policy: WebAppAccessPolicy | null): WebAppSocketAuthorizationStatus;
       uiGraph: UiGraph;
     }
   | {
       code: string;
       message: string;
-      statusCode: number;
-    };
+    statusCode: number;
+  };
+
+/**
+ * `revoked` means the credentials that opened the socket are no longer valid.
+ * `policy-revoked` means those credentials remain valid, but the current web
+ * app binding or its allowlist no longer permits this app. The distinction lets
+ * an already accepted action finish using its existing browser-storage RPC
+ * channel while preventing every new operation immediately.
+ */
+export type WebAppSocketAuthorizationStatus = 'authorized' | 'revoked' | 'policy-revoked' | 'unavailable';
 
 /**
  * WebSocket upgrades cannot use the HTML redirect/prompt flow. They share the
@@ -1388,14 +1408,6 @@ export async function resolveWebAppSocketExecution(
     };
   }
 
-  if (
-    !trustedClient &&
-    mode === 'oauth' &&
-    !isWebAppOAuthSessionAllowed(oauthSession, executionProject.webAppAllowedEmails ?? [])
-  ) {
-    return { statusCode: 403, code: 'oauth_forbidden', message: 'Forbidden' };
-  }
-
   const uiGraph = resolveWebAppUiGraph(executionProject);
   if (!uiGraph) {
     return { statusCode: 404, code: 'not_found', message: 'Rivet web app not found' };
@@ -1410,19 +1422,45 @@ export async function resolveWebAppSocketExecution(
     }
   }
 
+  const isBaseAuthorized = () => {
+    // Keep the identity scope fixed for the life of this socket. A client that
+    // later appears trusted must reconnect rather than acquiring a new scope.
+    if (isTrustedClientRequest(req) !== trustedClient) return false;
+    if (trustedClient) return true;
+    const currentMode = getWebAppAuthMode();
+    if (currentMode !== mode) return false;
+    if (mode === 'ui-gate') return isServerUiAuthRequestAllowed(req);
+    if (mode === 'oauth') return readWebAppOAuthSession(req) != null;
+    return true;
+  };
+
+  const readCurrentAccessPolicy = () => resolveWebAppAccessPolicy(slug, executionProject.projectVirtualPath);
+  const evaluateCurrentAccessPolicy = (policy: WebAppAccessPolicy | null): WebAppSocketAuthorizationStatus => {
+    if (!isBaseAuthorized()) return 'revoked';
+    if (
+      policy == null ||
+      policy.projectVirtualPath !== executionProject.projectVirtualPath ||
+      policy.uiGraphId !== executionProject.webAppUiGraphId ||
+      policy.bindingId !== executionProject.webAppBindingId
+    ) {
+      return 'policy-revoked';
+    }
+    if (trustedClient || mode !== 'oauth') return 'authorized';
+    return isWebAppOAuthSessionAllowed(readWebAppOAuthSession(req), policy.allowedEmails)
+      ? 'authorized'
+      : 'policy-revoked';
+  };
+  const accessPolicyInvalidationKey = executionProject.webAppPolicyInvalidationKey ??
+    `web-app:${routeKind}:${executionProject.projectVirtualPath}`;
+
   return {
     executionProject,
     uiGraph,
-    isAuthorized: () => {
-      if (isTrustedClientRequest(req)) return true;
-      // A trusted-client socket cannot silently switch ownership scopes.
-      if (trustedClient) return false;
-      const currentMode = getWebAppAuthMode();
-      if (currentMode !== mode) return false;
-      if (mode === 'ui-gate') return isServerUiAuthRequestAllowed(req);
-      if (mode === 'oauth') return isWebAppOAuthSessionAllowed(readWebAppOAuthSession(req), executionProject.webAppAllowedEmails ?? []);
-      return true;
-    },
+    isAuthorized: isBaseAuthorized,
+    accessPolicyLookupKey: `${accessPolicyInvalidationKey}\0${slug}`,
+    accessPolicyInvalidationKey,
+    readCurrentAccessPolicy,
+    evaluateCurrentAccessPolicy,
     ownerScope: [principal, routeKind, slug, executionProject.revisionKey].join(':'),
   };
 }

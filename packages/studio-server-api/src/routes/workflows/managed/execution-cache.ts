@@ -8,6 +8,7 @@ export type ManagedEndpointPointerCacheEntry = {
   revisionId: string;
   webAppUiGraphId?: string;
   webAppAllowedEmails?: string[];
+  webAppId?: string;
 };
 
 export type ManagedRevisionMaterializationCacheEntry = {

@@ -351,6 +351,60 @@ function extractWebAppRevisionKey(html) {
   return config.revisionKey;
 }
 
+function readCookiePair(response, name) {
+  const setCookies = typeof response.headers.getSetCookie === 'function'
+    ? response.headers.getSetCookie()
+    : response.headers.get('set-cookie')?.split(/,\s*/u) ?? [];
+  return setCookies.find((cookie) => cookie.startsWith(`${name}=`))?.split(';', 1)[0] ?? null;
+}
+
+/**
+ * The release gate uses its isolated dummy OAuth provider exactly as a
+ * browser would: login redirect, local dummy sign-in, then callback. This
+ * avoids duplicating production cookie/session-version signing rules in the
+ * gate while still remaining independent of an external identity provider.
+ */
+async function createReleaseGateWebAppOAuthSession(baseUrl, slug, email) {
+  const login = await fetch(`${baseUrl}/apps/${encodeURIComponent(slug)}?auth_action=login`, {
+    redirect: 'manual',
+    signal: AbortSignal.timeout(10_000),
+  });
+  const stateCookie = readCookiePair(login, 'rivet_web_app_oauth_state');
+  const dummyLocation = login.headers.get('location');
+  if (login.status !== 302 || !stateCookie || !dummyLocation) {
+    throw new Error(`Dummy OAuth login did not produce its expected redirect: ${login.status}`);
+  }
+
+  const dummyUrl = new URL(dummyLocation, baseUrl);
+  const state = dummyUrl.searchParams.get('state');
+  if (!state) throw new Error('Dummy OAuth login redirect had no state.');
+  const signIn = await fetch(`${baseUrl}${dummyUrl.pathname}`, {
+    method: 'POST',
+    redirect: 'manual',
+    headers: {
+      'content-type': 'application/x-www-form-urlencoded',
+      cookie: stateCookie,
+    },
+    body: new URLSearchParams({ email, state }),
+    signal: AbortSignal.timeout(10_000),
+  });
+  const callbackLocation = signIn.headers.get('location');
+  if (signIn.status !== 303 || !callbackLocation) {
+    throw new Error(`Dummy OAuth sign-in did not produce its expected redirect: ${signIn.status}`);
+  }
+
+  const callback = await fetch(new URL(callbackLocation, baseUrl), {
+    headers: { cookie: stateCookie },
+    redirect: 'manual',
+    signal: AbortSignal.timeout(10_000),
+  });
+  const sessionCookie = readCookiePair(callback, 'rivet_web_app_oauth_session');
+  if (callback.status !== 303 || !sessionCookie) {
+    throw new Error(`Dummy OAuth callback did not create its expected session: ${callback.status}`);
+  }
+  return sessionCookie;
+}
+
 function getReleaseGateWorkflowValue(result) {
   const value = result?.value?.type === 'any' ? result.value.value : result;
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
@@ -454,23 +508,53 @@ function openWebSocketAction(
   baseUrl,
   {
     componentId = 'release-gate-run-button',
+    headers = {},
     requestId = `release-gate-${randomUUID()}`,
     revisionKey,
     resume,
+    slug = 'release-gate-web-app',
+    startOnReady = true,
     state = { prompt: 'managed-release-websocket' },
   } = {},
 ) {
   const { WebSocket } = requireFromApi('ws');
-  const socketUrl = `${baseUrl.replace(/^http/u, 'ws')}/apps/release-gate-web-app/actions/ws`;
+  const socketUrl = `${baseUrl.replace(/^http/u, 'ws')}/apps/${encodeURIComponent(slug)}/actions/ws`;
   const accepted = createDeferred();
   const ready = createDeferred();
   const terminal = createDeferred();
   const messages = [];
   let highestSequence = 0;
+  let initialCommandSent = false;
   const socket = new WebSocket(socketUrl, {
+    headers,
     origin: baseUrl,
     handshakeTimeout: 30_000,
   });
+
+  const start = () => {
+    if (initialCommandSent) return;
+    if (socket.readyState !== WebSocket.OPEN) {
+      throw new Error('WebSocket action cannot start before the connection is ready');
+    }
+    initialCommandSent = true;
+    socket.send(
+      JSON.stringify(
+        resume
+          ? {
+              type: 'run.resume',
+              runId: resume.runId,
+              lastSequence: resume.lastSequence,
+            }
+          : {
+              type: 'action.start',
+              componentId,
+              requestId,
+              revisionKey,
+              state,
+            },
+      ),
+    );
+  };
 
   socket.once('error', (error) => {
     ready.reject(error);
@@ -487,23 +571,7 @@ function openWebSocketAction(
       if (typeof message.sequence === 'number') highestSequence = Math.max(highestSequence, message.sequence);
       if (message.type === 'server.ready') {
         ready.resolve(message);
-        socket.send(
-          JSON.stringify(
-            resume
-              ? {
-                  type: 'run.resume',
-                  runId: resume.runId,
-                  lastSequence: resume.lastSequence,
-                }
-              : {
-                  type: 'action.start',
-                  componentId,
-                  requestId,
-                  revisionKey,
-                  state,
-                },
-          ),
-        );
+        if (startOnReady) start();
         return;
       }
       if (message.type === 'action.accepted') accepted.resolve(message);
@@ -523,6 +591,7 @@ function openWebSocketAction(
     messages,
     ready: ready.promise,
     socket,
+    start,
     terminal: terminal.promise,
   };
 }
@@ -973,7 +1042,163 @@ class ManagedReleaseGate {
       90_000,
     );
     if (typeof replayRecordingId !== 'string') throw new Error('recording replay identity did not converge');
-    return { environmentVariableId, publishedRevision, replayRecordingId };
+    return { environmentVariableId, publishedRevision, relativePath, replayRecordingId };
+  }
+
+  /**
+   * Exercises a publication update on the control-plane API against sockets
+   * served by the separately replicated execution API. Those processes share
+   * PostgreSQL but not in-memory policy caches, so success proves the managed
+   * LISTEN/NOTIFY and fresh-policy paths used in production.
+   */
+  async verifyManagedWebAppAccessRevocation(baseUrl, state) {
+    const slug = 'release-gate-web-app';
+    const removedEmail = 'removed-user@release-gate.example.test';
+    const retainedEmail = 'retained-user@release-gate.example.test';
+    const sessionSecret = randomSecret();
+    let removedAction;
+    let retainedAction;
+    let oauthEnabled = false;
+
+    try {
+      await requestJson(baseUrl, '/api/app-settings/web-app-auth', {
+        method: 'PUT',
+        body: JSON.stringify({
+          mode: 'oauth',
+          provider: 'dummy',
+          dummyAllowNonLocalhost: false,
+          dummyEmail: 'release-gate-default@example.test',
+          sessionSecret,
+          sessionTtlSeconds: 3600,
+        }),
+      });
+      oauthEnabled = true;
+      const createSession = (label, email) =>
+        waitFor(
+          `managed dummy OAuth ${label} session propagation`,
+          () => createReleaseGateWebAppOAuthSession(baseUrl, slug, email),
+          30_000,
+        );
+      const [removedCookie, retainedCookie] = await Promise.all([
+        createSession('removed user', removedEmail),
+        createSession('retained user', retainedEmail),
+      ]);
+      await requestJson(baseUrl, '/api/workflows/projects/web-apps/access', {
+        method: 'PATCH',
+        body: JSON.stringify({
+          relativePath: state.relativePath,
+          accessUpdates: [{
+            uiGraphId: 'release-gate-web-app',
+            allowedEmails: [removedEmail, retainedEmail],
+          }],
+        }),
+      });
+
+      const revisionKey = await waitFor(
+        'managed OAuth web-app policy propagation',
+        async () => {
+          const response = await fetch(`${baseUrl}/apps/${slug}`, {
+            headers: { cookie: removedCookie },
+            signal: AbortSignal.timeout(5_000),
+          });
+          const html = await response.text();
+          if (!response.ok) throw new Error(`OAuth web app returned ${response.status}`);
+          return extractWebAppRevisionKey(html);
+        },
+        30_000,
+      );
+
+      const openAuthorizedSocket = async (label, cookie) =>
+        waitFor(
+          `managed OAuth ${label} WebSocket readiness`,
+          async () => {
+            const action = openWebSocketAction(baseUrl, {
+              headers: { cookie },
+              revisionKey,
+              slug,
+              startOnReady: false,
+            });
+            try {
+              await waitForPromise(`managed OAuth ${label} WebSocket ready`, action.ready, 5_000);
+              return action;
+            } catch (error) {
+              action.close();
+              throw error;
+            }
+          },
+          30_000,
+        );
+
+      removedAction = await openAuthorizedSocket('removed user', removedCookie);
+      retainedAction = await openAuthorizedSocket('retained user', retainedCookie);
+      const removedClosed = new Promise((resolve) => {
+        removedAction.socket.once('close', (code, reason) => resolve({ code, reason }));
+      });
+
+      // This request is handled by the control-plane API. The open sockets
+      // are served by one of the execution replicas; no local callback may
+      // masquerade as the cross-instance policy invalidation we require here.
+      await requestJson(baseUrl, '/api/workflows/projects/web-apps/access', {
+        method: 'PATCH',
+        body: JSON.stringify({
+          relativePath: state.relativePath,
+          accessUpdates: [{
+            uiGraphId: 'release-gate-web-app',
+            allowedEmails: [retainedEmail],
+          }],
+        }),
+      });
+      const close = await waitForPromise('removed managed OAuth WebSocket close', removedClosed, 30_000);
+      if (close.code !== 1008 || !String(close.reason).match(/access was revoked/i)) {
+        throw new Error(`Removed OAuth WebSocket did not close with 1008 access revocation: ${JSON.stringify(close)}`);
+      }
+
+      const deniedHtml = await fetch(`${baseUrl}/apps/${slug}`, {
+        headers: { cookie: removedCookie },
+        signal: AbortSignal.timeout(10_000),
+      });
+      if (deniedHtml.status !== 403) {
+        throw new Error(`Removed OAuth user could still load the web app: ${deniedHtml.status}`);
+      }
+      await deniedHtml.text();
+      const deniedAction = await fetch(`${baseUrl}/apps/${slug}/actions/run`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', cookie: removedCookie },
+        body: JSON.stringify({
+          componentId: 'release-gate-run-button',
+          requestId: `removed-user-${randomUUID()}`,
+          revisionKey,
+          state: { prompt: 'must not execute' },
+        }),
+        signal: AbortSignal.timeout(10_000),
+      });
+      if (deniedAction.status !== 403) {
+        throw new Error(`Removed OAuth user could still start an action: ${deniedAction.status}`);
+      }
+      await deniedAction.text();
+
+      retainedAction.start();
+      await waitForPromise('retained managed OAuth WebSocket acceptance', retainedAction.accepted, 30_000);
+      const retainedTerminal = await waitForPromise('retained managed OAuth WebSocket action', retainedAction.terminal, 45_000);
+      if (retainedTerminal.type !== 'action.completed') {
+        throw new Error(`Retained OAuth user action did not complete: ${JSON.stringify(retainedTerminal)}`);
+      }
+    } finally {
+      removedAction?.close();
+      retainedAction?.close();
+      if (oauthEnabled) {
+        // Subsequent release-gate checks deliberately use their normal
+        // unauthenticated disposable fixture. Restore it even when the
+        // revocation assertion fails so artifact capture and cleanup retain
+        // their usual access path.
+        await requestJson(baseUrl, '/api/app-settings/web-app-auth', {
+          method: 'PUT',
+          body: JSON.stringify({ mode: 'none' }),
+        }).catch((error) => {
+          console.error('[kubernetes-managed-release-gate] Failed to restore disposable web-app auth mode:', error);
+        });
+      }
+    }
   }
 
   async upgradeChart(overrides) {
@@ -1451,6 +1676,7 @@ async function main() {
     const baseUrl = await gate.openProxy();
     await requestJson(baseUrl, '/api/config');
     const persistedState = await gate.exercisePersistence(baseUrl);
+    await gate.verifyManagedWebAppAccessRevocation(baseUrl, persistedState);
     await gate.verifyAfterReplacement(baseUrl, persistedState);
     if (config.mode === 'release') {
       await gate.verifyWebSocketOwnerInterruption(baseUrl, persistedState.publishedRevision);

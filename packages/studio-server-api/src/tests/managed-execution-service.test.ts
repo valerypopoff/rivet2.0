@@ -12,6 +12,7 @@ import type {
   ManagedExecutionPointerLookupResult,
   ManagedExecutionRevisionRecord,
   ManagedExecutionWorkflowRecord,
+  ManagedWebAppAccessPolicy,
 } from '../routes/workflows/managed/execution-types.js';
 
 function createControllerFixture() {
@@ -36,6 +37,7 @@ function createExecutionServiceFixture(options: {
     runKind: ManagedWorkflowRunKind,
     lookupName: string,
   ) => Promise<ManagedExecutionPointerLookupResult | null>;
+  resolveWebAppAccessPolicy?: (lookupName: string) => Promise<ManagedWebAppAccessPolicy | null>;
   getWorkflowByRelativePath?: (relativePath: string) => Promise<ManagedExecutionWorkflowRecord | null>;
   getWorkflowById?: (workflowId: string) => Promise<ManagedExecutionWorkflowRecord | null>;
   getRevision?: (revisionId: string | null | undefined) => Promise<ManagedExecutionRevisionRecord | null>;
@@ -58,6 +60,7 @@ function createExecutionServiceFixture(options: {
     created_at: new Date(),
   };
   let resolveCount = 0;
+  let resolveWebAppAccessPolicyCount = 0;
   let readRevisionContentsCount = 0;
   let getWorkflowByRelativePathCount = 0;
   let getWorkflowByIdCount = 0;
@@ -101,6 +104,17 @@ function createExecutionServiceFixture(options: {
               revision,
             };
       },
+      resolveWebAppAccessPolicyFromDatabase: async (_client, lookupName) => {
+        resolveWebAppAccessPolicyCount += 1;
+        return options.resolveWebAppAccessPolicy
+          ? options.resolveWebAppAccessPolicy(lookupName)
+          : {
+              relativePath: workflow.relative_path,
+              uiGraphId: 'ui-graph-a',
+              allowedEmails: ['user@example.com'],
+              appId: 'web-app-a',
+            };
+      },
     },
     revisions: {
       readRevisionContents: async (loadedRevision) => {
@@ -129,6 +143,9 @@ function createExecutionServiceFixture(options: {
     projectContents,
     get resolveCount() {
       return resolveCount;
+    },
+    get resolveWebAppAccessPolicyCount() {
+      return resolveWebAppAccessPolicyCount;
     },
     get readRevisionContentsCount() {
       return readRevisionContentsCount;
@@ -162,6 +179,10 @@ type ManagedWorkflowExecutionContextFixture = Pick<
       runKind: ManagedWorkflowRunKind,
       lookupName: string,
     ): Promise<ManagedExecutionPointerLookupResult | null>;
+    resolveWebAppAccessPolicyFromDatabase(
+      client: Pool,
+      lookupName: string,
+    ): Promise<ManagedWebAppAccessPolicy | null>;
   };
   revisions: {
     readRevisionContents(
@@ -183,6 +204,23 @@ test('warm pointer hit does not re-run joined DB resolution', async () => {
   assert.equal(fixture.readRevisionContentsCount, 1);
 });
 
+test('reads current web app access policy without loading an executable revision', async () => {
+  const fixture = createExecutionServiceFixture({});
+  await fixture.controller.initialize();
+
+  const policy = await fixture.service.resolveWebAppAccessPolicy('app-slug');
+
+  assert.deepEqual(policy, {
+    relativePath: 'Managed Cache.rivet-project',
+    uiGraphId: 'ui-graph-a',
+    allowedEmails: ['user@example.com'],
+    appId: 'web-app-a',
+  });
+  assert.equal(fixture.resolveWebAppAccessPolicyCount, 1);
+  assert.equal(fixture.resolveCount, 0);
+  assert.equal(fixture.readRevisionContentsCount, 0);
+});
+
 test('service forwards the correct run kind for workflow and web app endpoint resolution', async () => {
   const observedCalls: Array<{ runKind: ManagedWorkflowRunKind; lookupName: string }> = [];
   const fixture = createExecutionServiceFixture({
@@ -194,6 +232,9 @@ test('service forwards the correct run kind for workflow and web app endpoint re
           relativePath: 'Managed Cache.rivet-project',
           revisionId: 'revision-a',
           webAppUiGraphId: runKind === 'web-app' || runKind === 'latest-web-app' ? 'ui-graph-a' : undefined,
+          webAppId: runKind === 'web-app' || runKind === 'latest-web-app'
+            ? 'published-app-a'
+            : undefined,
         },
         revision: {
           revision_id: 'revision-a',
@@ -217,7 +258,9 @@ test('service forwards the correct run kind for workflow and web app endpoint re
   assert.ok(webApp);
   assert.ok(latestWebApp);
   assert.equal(webApp.webAppUiGraphId, 'ui-graph-a');
+  assert.equal(webApp.webAppBindingId, 'managed:published-app-a');
   assert.equal(latestWebApp.webAppUiGraphId, 'ui-graph-a');
+  assert.equal(latestWebApp.webAppBindingId, 'managed:published-app-a');
   assert.deepEqual(observedCalls, [
     { runKind: 'published', lookupName: 'public-live' },
     { runKind: 'latest', lookupName: 'latest-only' },

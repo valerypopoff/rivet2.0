@@ -34,7 +34,7 @@ import {
   type ManagedReconciliationFindingDetailQuery,
 } from './reconciliation.js';
 import { createManagedWorkflowContext } from './context.js';
-import type { ManagedExecutionProjectResult } from './execution-types.js';
+import type { ManagedExecutionProjectResult, ManagedWebAppAccessPolicy } from './execution-types.js';
 import { ManagedWorkflowExecutionService } from './execution-service.js';
 import { createManagedWorkflowPublicationService } from './publication.js';
 import { createManagedWorkflowRecordingService } from './recordings.js';
@@ -325,6 +325,11 @@ export class ManagedWorkflowBackend {
   async loadLatestWebAppExecutionProject(slug: string): Promise<ManagedExecutionProjectResult | null> {
     await this.initialize();
     return this.#executionService.loadLatestWebAppExecutionProject(slug);
+  }
+
+  async resolveWebAppAccessPolicy(slug: string): Promise<ManagedWebAppAccessPolicy | null> {
+    await this.initialize();
+    return this.#executionService.resolveWebAppAccessPolicy(slug);
   }
 
   createProjectReferenceLoader() {

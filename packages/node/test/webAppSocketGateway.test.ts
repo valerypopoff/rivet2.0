@@ -49,6 +49,969 @@ void describe('Rivet web app WebSocket gateway', () => {
     assert.equal(starts, 0);
     assert.equal(harness.gateway.getActiveRunCount(), 0);
   });
+  void it('closes a socket before starting an action when its fresh authorization is revoked', async () => {
+    let starts = 0;
+    const harness = await createHarness(makeWebAppProject(), () => { starts++; }, {}, {
+      authorizeOperation: async () => 'revoked',
+    });
+    const socket = await harness.connect();
+    const closed = waitForClose(socket);
+    socket.send(JSON.stringify(makeStartMessage('revoked-by-current-policy')));
+    const close = await closed;
+
+    assert.equal(close.code, 1008);
+    assert.equal(starts, 0);
+    assert.equal(harness.gateway.getActiveRunCount(), 0);
+  });
+  for (const [operation, message] of [
+    ['action-cancel', { type: 'action.cancel', runId: 'run-that-must-not-be-touched' }],
+    ['run-resume', { type: 'run.resume', runId: 'run-that-must-not-be-attached', lastSequence: 0 }],
+  ] as const) {
+    void it(`closes a socket before ${operation} when its fresh authorization is revoked`, async () => {
+      const observedOperations: string[] = [];
+      const harness = await createHarness(makeWebAppProject(), undefined, {}, {
+        authorizeOperation: async (actualOperation) => {
+          observedOperations.push(actualOperation);
+          return 'revoked';
+        },
+      });
+      const socket = await harness.connect();
+      const closed = waitForClose(socket);
+      socket.send(JSON.stringify(message));
+      const close = await closed;
+
+      assert.equal(close.code, 1008);
+      assert.deepEqual(observedOperations, [operation]);
+      assert.equal(harness.gateway.getActiveRunCount(), 0);
+    });
+  }
+  void it('uses a temporary-unavailability close when fresh authorization cannot be read', async () => {
+    const harness = await createHarness(makeWebAppProject(), undefined, {}, {
+      authorizeOperation: async () => 'unavailable',
+    });
+    const socket = await harness.connect();
+    const closed = waitForClose(socket);
+    socket.send(JSON.stringify(makeStartMessage('authorization-unavailable')));
+    const close = await closed;
+
+    assert.equal(close.code, 1013);
+    assert.equal(harness.gateway.getActiveRunCount(), 0);
+  });
+  void it('does not use a stale successful authorization after policy revocation wins its async race', async () => {
+    const authorization = createDeferred<'authorized'>();
+    let authorizeStarted!: () => void;
+    const authorizeStartedPromise = new Promise<void>((resolve) => {
+      authorizeStarted = resolve;
+    });
+    let notifyPolicyRevocation: (() => void) | undefined;
+    let starts = 0;
+    const harness = await createHarness(makeWebAppProject(), () => { starts += 1; }, {}, {
+      async authorizeOperation() {
+        authorizeStarted();
+        return authorization.promise;
+      },
+      onPolicyRevoked(listener) {
+        notifyPolicyRevocation = listener;
+        return () => {
+          if (notifyPolicyRevocation === listener) notifyPolicyRevocation = undefined;
+        };
+      },
+    });
+    const socket = await harness.connect();
+    const closed = waitForClose(socket);
+
+    socket.send(JSON.stringify(makeStartMessage('stale-authorize-race')));
+    await authorizeStartedPromise;
+    assert.ok(notifyPolicyRevocation);
+    notifyPolicyRevocation();
+    authorization.resolve('authorized');
+
+    assert.equal((await closed).code, 1008);
+    assert.equal(starts, 0);
+    assert.equal(harness.gateway.getActiveRunCount(), 0);
+  });
+  void it('rechecks authorization before accepting an action delayed by admission', async () => {
+    let authorization: 'authorized' | 'policy-revoked' = 'authorized';
+    let releasePermit!: () => void;
+    let permitRequested!: () => void;
+    const permit = new Promise<void>((resolve) => { releasePermit = resolve; });
+    const requested = new Promise<void>((resolve) => { permitRequested = resolve; });
+    let starts = 0;
+    const harness = await createHarness(makeWebAppProject(), () => { starts += 1; }, {}, {
+      authorizeOperation: async () => authorization,
+      async acquireRunPermit() {
+        permitRequested();
+        await permit;
+        return { release() {} };
+      },
+    });
+    const socket = await harness.connect();
+    const closed = waitForClose(socket);
+
+    socket.send(JSON.stringify(makeStartMessage('revoked-during-admission')));
+    await requested;
+    authorization = 'policy-revoked';
+    releasePermit();
+
+    assert.equal((await closed).code, 1008);
+    assert.equal(starts, 0);
+    assert.equal(harness.gateway.getActiveRunCount(), 0);
+  });
+  void it('does not prepare an action when its policy is revoked during durable run creation', async () => {
+    const baseStore = createInMemoryRivetWebAppRunStore();
+    let authorization: 'authorized' | 'policy-revoked' = 'authorized';
+    let permitReleases = 0;
+    let releaseCreate!: () => void;
+    let createStarted!: () => void;
+    const createGate = new Promise<void>((resolve) => {
+      releaseCreate = resolve;
+    });
+    const createStartedPromise = new Promise<void>((resolve) => {
+      createStarted = resolve;
+    });
+    const delayedStore = {
+      ...baseStore,
+      async createRun(...args: Parameters<typeof baseStore.createRun>) {
+        const result = await baseStore.createRun(...args);
+        createStarted();
+        await createGate;
+        return result;
+      },
+    };
+    let starts = 0;
+    const harness = await createHarness(makeWebAppProject(), () => { starts += 1; }, { runStore: delayedStore }, {
+      authorizeOperation: async () => authorization,
+      acquireRunPermit() {
+        return { release: () => { permitReleases += 1; } };
+      },
+    });
+    const socket = await harness.connect();
+    const closed = waitForClose(socket);
+
+    socket.send(JSON.stringify(makeStartMessage('revoked-during-durable-creation')));
+    await createStartedPromise;
+    authorization = 'policy-revoked';
+    releaseCreate();
+
+    assert.equal((await closed).code, 1008);
+    // The authorization close occurs before the setup cleanup writes the
+    // durable interruption event; yield once for that independent cleanup.
+    await delay(0);
+    const stored = await baseStore.getRunByRequestId('user:project:app:revision', 'revoked-during-durable-creation');
+    assert.equal(stored?.status, 'interrupted');
+    assert.equal(starts, 0);
+    assert.equal(permitReleases, 1);
+    assert.equal(harness.gateway.getActiveRunCount(), 0);
+  });
+  void it('lets an accepted browser-storage action finish without delivering its result after app-policy revocation', async () => {
+    let notifyPolicyRevocation: (() => void) | undefined;
+    const harness = await createHarness(makeStoredValueProject('get'), undefined, {}, {
+      // The policy watcher is the only fresh authorization source in this
+      // session. Its revocation must be authoritative even though this
+      // callback would otherwise continue to return an older allow decision.
+      authorizeOperation: async () => 'authorized',
+      onPolicyRevoked(listener) {
+        notifyPolicyRevocation = listener;
+        return () => {
+          if (notifyPolicyRevocation === listener) notifyPolicyRevocation = undefined;
+        };
+      },
+    });
+    const client = await harness.connect('owner', false);
+    const messages = collectMessages(client);
+    client.send(JSON.stringify({
+      type: 'client.hello',
+      protocolVersion: 1,
+      capabilities: [RIVET_WEB_APP_BROWSER_STORAGE_RPC_CAPABILITY],
+    }));
+    await messages.next('server.ready');
+
+    client.send(JSON.stringify({ ...makeStartMessage('accepted-before-revocation'), storageRpcVersion: 2 }));
+    await messages.next('action.accepted');
+    const storageGet = await messages.next('storage.get');
+    notifyPolicyRevocation?.();
+    notifyPolicyRevocation?.();
+
+    client.send(JSON.stringify({ ...makeStartMessage('rejected-after-revocation'), storageRpcVersion: 2 }));
+    const rejected = await messages.next('action.rejected');
+    assert.equal(rejected.code, 'access_revoked');
+
+    client.send(JSON.stringify({ type: 'action.cancel', runId: storageGet.runId }));
+    const cancelRejected = await messages.next('run.rejected');
+    assert.equal(cancelRejected.code, 'access_revoked');
+    client.send(JSON.stringify({ type: 'run.resume', runId: storageGet.runId, lastSequence: 0 }));
+    const resumeRejected = await messages.next('run.rejected');
+    assert.equal(resumeRejected.code, 'access_revoked');
+
+    const close = waitForClose(client);
+    client.send(JSON.stringify({
+      type: 'storage.transfer.start',
+      requestId: storageGet.requestId,
+      runId: storageGet.runId,
+      storageSessionId: storageGet.storageSessionId,
+      storageRequestId: storageGet.storageRequestId,
+      transferId: crypto.randomUUID(),
+      byteLength: 0,
+      chunkCount: 0,
+      found: false,
+    }));
+    assert.equal((await close).code, 1008);
+    await assert.rejects(() => messages.next('action.completed', 50), /Timed out waiting/);
+  });
+  void it('does not replay a local run after publication access is revoked during its durable catch-up read', async () => {
+    const baseStore = createInMemoryRivetWebAppRunStore();
+    let resumedRunId: string | undefined;
+    let resumedRunReads = 0;
+    let releaseCatchUpRead!: (run: Awaited<ReturnType<typeof baseStore.getRun>>) => void;
+    let catchUpReadStarted!: () => void;
+    const catchUpRead = new Promise<Awaited<ReturnType<typeof baseStore.getRun>>>((resolve) => {
+      releaseCatchUpRead = resolve;
+    });
+    const catchUpReadStartedPromise = new Promise<void>((resolve) => {
+      catchUpReadStarted = resolve;
+    });
+    const delayedStore = {
+      ...baseStore,
+      async getRun(runId: string) {
+        if (runId !== resumedRunId) return baseStore.getRun(runId);
+        resumedRunReads += 1;
+        if (resumedRunReads === 2) {
+          catchUpReadStarted();
+          return catchUpRead;
+        }
+        return baseStore.getRun(runId);
+      },
+    };
+    let notifyPolicyRevocation: (() => void) | undefined;
+    const harness = await createHarness(makeWebAppProject({ delay: 2_000 }), undefined, {
+      hostId: 'local-host',
+      runStore: delayedStore,
+    }, {
+      onPolicyRevoked(listener) {
+        notifyPolicyRevocation = listener;
+        return () => {
+          if (notifyPolicyRevocation === listener) notifyPolicyRevocation = undefined;
+        };
+      },
+    });
+    const client = await harness.connect();
+    const messages = collectMessages(client);
+
+    client.send(JSON.stringify(makeStartMessage('local-replay-revocation-race')));
+    const accepted = await messages.next('action.accepted');
+    resumedRunId = accepted.runId;
+    client.send(JSON.stringify({ type: 'run.resume', runId: accepted.runId, lastSequence: 0 }));
+    await messages.next('action.accepted');
+    await catchUpReadStartedPromise;
+
+    const running = await baseStore.getRun(accepted.runId);
+    assert.ok(running);
+    assert.ok(notifyPolicyRevocation);
+    notifyPolicyRevocation();
+    releaseCatchUpRead({
+      ...running,
+      events: [
+        ...running.events,
+        {
+          type: 'action.progress',
+          progress: { percent: 50 },
+          requestId: accepted.requestId,
+          runId: accepted.runId,
+          sequence: running.lastSequence + 1,
+        },
+      ],
+      lastSequence: running.lastSequence + 1,
+    });
+
+    await assert.rejects(() => messages.next('action.progress', 50), /Timed out waiting/);
+    await harness.gateway.dispose();
+  });
+  void it('does not replay a local terminal result after publication access is revoked during resume lookup', async () => {
+    const baseStore = createInMemoryRivetWebAppRunStore();
+    const replayRunId = 'local-terminal-replay-revocation-race';
+    await baseStore.createRun({
+      componentId: 'run-button',
+      createdAt: Date.now(),
+      hostId: 'local-host',
+      ...activeLease(),
+      ownerScope: 'user:project:app:revision',
+      requestId: replayRunId,
+      runId: replayRunId,
+    });
+    assert.ok(await baseStore.appendEvent(replayRunId, TEST_LEASE_ID, {
+      type: 'action.accepted',
+      requestId: replayRunId,
+      runId: replayRunId,
+    }));
+    assert.ok(await baseStore.appendEvent(replayRunId, TEST_LEASE_ID, {
+      type: 'action.completed',
+      requestId: replayRunId,
+      runId: replayRunId,
+      statePatch: { result: 'must never be replayed' },
+    }));
+
+    let releaseLookup!: (run: Awaited<ReturnType<typeof baseStore.getRun>>) => void;
+    let lookupStarted!: () => void;
+    const lookup = new Promise<Awaited<ReturnType<typeof baseStore.getRun>>>((resolve) => {
+      releaseLookup = resolve;
+    });
+    const lookupStartedPromise = new Promise<void>((resolve) => {
+      lookupStarted = resolve;
+    });
+    const delayedStore = {
+      ...baseStore,
+      async getRun(runId: string) {
+        if (runId !== replayRunId) return baseStore.getRun(runId);
+        lookupStarted();
+        return lookup;
+      },
+    };
+    let notifyPolicyRevocation: (() => void) | undefined;
+    // Keep a distinct accepted action active so policy revocation suppresses
+    // the delayed replay without relying on socket closure as the assertion.
+    const harness = await createHarness(makeWebAppProject({ delay: 2_000 }), undefined, {
+      hostId: 'local-host',
+      runStore: delayedStore,
+    }, {
+      onPolicyRevoked(listener) {
+        notifyPolicyRevocation = listener;
+        return () => {
+          if (notifyPolicyRevocation === listener) notifyPolicyRevocation = undefined;
+        };
+      },
+    });
+    const client = await harness.connect();
+    const messages = collectMessages(client);
+
+    client.send(JSON.stringify(makeStartMessage('accepted-action-keeps-local-terminal-socket-open')));
+    await messages.next('action.accepted');
+    client.send(JSON.stringify({ type: 'run.resume', runId: replayRunId, lastSequence: 0 }));
+    await lookupStartedPromise;
+    assert.ok(notifyPolicyRevocation);
+    notifyPolicyRevocation();
+    releaseLookup(await baseStore.getRun(replayRunId));
+
+    await assert.rejects(() => messages.next('action.completed', 50), /Timed out waiting/);
+    await harness.gateway.dispose();
+  });
+  void it('does not attach an existing idempotent action after publication access is revoked during its lookup', async () => {
+    const baseStore = createInMemoryRivetWebAppRunStore();
+    const requestId = 'duplicate-request-revocation-race';
+    await baseStore.createRun({
+      componentId: 'run-button',
+      createdAt: Date.now(),
+      hostId: 'local-host',
+      ...activeLease(),
+      ownerScope: 'user:project:app:revision',
+      requestId,
+      runId: requestId,
+    });
+    assert.ok(await baseStore.appendEvent(requestId, TEST_LEASE_ID, {
+      type: 'action.accepted',
+      requestId,
+      runId: requestId,
+    }));
+    assert.ok(await baseStore.appendEvent(requestId, TEST_LEASE_ID, {
+      type: 'action.completed',
+      requestId,
+      runId: requestId,
+      statePatch: { result: 'must never be attached' },
+    }));
+
+    let releaseLookup!: (run: Awaited<ReturnType<typeof baseStore.getRunByRequestId>>) => void;
+    let lookupStarted!: () => void;
+    const lookup = new Promise<Awaited<ReturnType<typeof baseStore.getRunByRequestId>>>((resolve) => {
+      releaseLookup = resolve;
+    });
+    const lookupStartedPromise = new Promise<void>((resolve) => {
+      lookupStarted = resolve;
+    });
+    const delayedStore = {
+      ...baseStore,
+      async getRunByRequestId(...args: Parameters<typeof baseStore.getRunByRequestId>) {
+        if (args[1] !== requestId) return baseStore.getRunByRequestId(...args);
+        lookupStarted();
+        return lookup;
+      },
+    };
+    let notifyPolicyRevocation: (() => void) | undefined;
+    const harness = await createHarness(makeWebAppProject({ delay: 2_000 }), undefined, {
+      hostId: 'local-host',
+      runStore: delayedStore,
+    }, {
+      onPolicyRevoked(listener) {
+        notifyPolicyRevocation = listener;
+        return () => {
+          if (notifyPolicyRevocation === listener) notifyPolicyRevocation = undefined;
+        };
+      },
+    });
+    const client = await harness.connect();
+    const messages = collectMessages(client);
+
+    client.send(JSON.stringify(makeStartMessage('accepted-action-keeps-duplicate-socket-open')));
+    await messages.next('action.accepted');
+    client.send(JSON.stringify(makeStartMessage(requestId)));
+    await lookupStartedPromise;
+    assert.ok(notifyPolicyRevocation);
+    notifyPolicyRevocation();
+    releaseLookup(await baseStore.getRunByRequestId('user:project:app:revision', requestId));
+
+    await assert.rejects(() => messages.next('action.completed', 50), /Timed out waiting/);
+    await harness.gateway.dispose();
+  });
+  void it('does not forward a cross-host catch-up replay after publication access is revoked', async () => {
+    const baseStore = createInMemoryRivetWebAppRunStore();
+    const remoteRunId = 'remote-replay-revocation-race';
+    await baseStore.createRun({
+      componentId: 'run-button',
+      createdAt: Date.now(),
+      hostId: 'remote-host',
+      ...activeLease(),
+      ownerScope: 'user:project:app:revision',
+      requestId: 'remote-replay-revocation-race',
+      runId: remoteRunId,
+    });
+    const remoteAccepted = await baseStore.appendEvent(remoteRunId, TEST_LEASE_ID, {
+      type: 'action.accepted',
+      requestId: 'remote-replay-revocation-race',
+      runId: remoteRunId,
+    });
+    assert.ok(remoteAccepted);
+    const remoteRunning = await baseStore.getRun(remoteRunId);
+    assert.ok(remoteRunning);
+    const remoteLatest = {
+      ...remoteRunning,
+      events: [
+        ...remoteRunning.events,
+        {
+          type: 'action.progress' as const,
+          progress: { percent: 50 },
+          requestId: remoteRunning.requestId,
+          runId: remoteRunId,
+          sequence: remoteRunning.lastSequence + 1,
+        },
+        {
+          type: 'action.completed' as const,
+          requestId: remoteRunning.requestId,
+          runId: remoteRunId,
+          sequence: remoteRunning.lastSequence + 2,
+          statePatch: { result: 'remote result' },
+        },
+      ],
+      lastSequence: remoteRunning.lastSequence + 2,
+      status: 'completed' as const,
+    };
+    let remoteRunReads = 0;
+    let releaseGapRead!: (run: typeof remoteLatest) => void;
+    let gapReadStarted!: () => void;
+    const gapRead = new Promise<typeof remoteLatest>((resolve) => {
+      releaseGapRead = resolve;
+    });
+    const gapReadStartedPromise = new Promise<void>((resolve) => {
+      gapReadStarted = resolve;
+    });
+    const delayedStore = {
+      ...baseStore,
+      async getRun(runId: string) {
+        if (runId !== remoteRunId) return baseStore.getRun(runId);
+        remoteRunReads += 1;
+        if (remoteRunReads === 3) {
+          gapReadStarted();
+          return gapRead;
+        }
+        return baseStore.getRun(runId);
+      },
+    };
+    const baseCoordinator = createInMemoryRivetWebAppRunCoordinator();
+    let remoteSubscription: Parameters<typeof baseCoordinator.subscribe>[0] | undefined;
+    let disposedRemoteSubscriptions = 0;
+    const coordinator = {
+      ...baseCoordinator,
+      async subscribe(subscription: Parameters<typeof baseCoordinator.subscribe>[0]) {
+        if (subscription.runId !== remoteRunId) return baseCoordinator.subscribe(subscription);
+        remoteSubscription = subscription;
+        return {
+          dispose() {
+            disposedRemoteSubscriptions += 1;
+          },
+        };
+      },
+    };
+    let notifyPolicyRevocation: (() => void) | undefined;
+    const harness = await createHarness(makeWebAppProject({ delay: 2_000 }), undefined, {
+      hostId: 'local-host',
+      runCoordinator: coordinator,
+      runStore: delayedStore,
+    }, {
+      onPolicyRevoked(listener) {
+        notifyPolicyRevocation = listener;
+        return () => {
+          if (notifyPolicyRevocation === listener) notifyPolicyRevocation = undefined;
+        };
+      },
+    });
+    const client = await harness.connect();
+    const messages = collectMessages(client);
+
+    // Keep this socket open after revocation so the test exercises delivery
+    // suppression, rather than merely relying on a closed transport.
+    client.send(JSON.stringify(makeStartMessage('accepted-action-keeps-socket-open')));
+    await messages.next('action.accepted');
+    client.send(JSON.stringify({ type: 'run.resume', runId: remoteRunId, lastSequence: 0 }));
+    await messages.next('action.accepted');
+    await delay(0);
+    assert.ok(remoteSubscription);
+    remoteSubscription.onEvent(remoteLatest.events.at(-1)!);
+    await gapReadStartedPromise;
+
+    assert.ok(notifyPolicyRevocation);
+    notifyPolicyRevocation();
+    releaseGapRead(remoteLatest);
+
+    await assert.rejects(() => messages.next('action.progress', 50), /Timed out waiting/);
+    await assert.rejects(() => messages.next('action.completed', 50), /Timed out waiting/);
+    assert.equal(disposedRemoteSubscriptions, 1);
+    await harness.gateway.dispose();
+  });
+  void it('does not replay a remote terminal result after revocation during its post-subscription read', async () => {
+    const baseStore = createInMemoryRivetWebAppRunStore();
+    const remoteRunId = 'remote-initial-replay-revocation-race';
+    await baseStore.createRun({
+      componentId: 'run-button',
+      createdAt: Date.now(),
+      hostId: 'remote-host',
+      ...activeLease(),
+      ownerScope: 'user:project:app:revision',
+      requestId: remoteRunId,
+      runId: remoteRunId,
+    });
+    assert.ok(await baseStore.appendEvent(remoteRunId, TEST_LEASE_ID, {
+      type: 'action.accepted',
+      requestId: remoteRunId,
+      runId: remoteRunId,
+    }));
+    const remoteRunning = await baseStore.getRun(remoteRunId);
+    assert.ok(remoteRunning);
+    const remoteTerminal = {
+      ...remoteRunning,
+      events: [
+        ...remoteRunning.events,
+        {
+          type: 'action.completed' as const,
+          requestId: remoteRunId,
+          runId: remoteRunId,
+          sequence: remoteRunning.lastSequence + 1,
+          statePatch: { result: 'must never be replayed' },
+        },
+      ],
+      lastSequence: remoteRunning.lastSequence + 1,
+      status: 'completed' as const,
+    };
+    let remoteReads = 0;
+    let releaseInitialRead!: (run: typeof remoteTerminal) => void;
+    let initialReadStarted!: () => void;
+    const initialRead = new Promise<typeof remoteTerminal>((resolve) => {
+      releaseInitialRead = resolve;
+    });
+    const initialReadStartedPromise = new Promise<void>((resolve) => {
+      initialReadStarted = resolve;
+    });
+    const delayedStore = {
+      ...baseStore,
+      async getRun(runId: string) {
+        if (runId !== remoteRunId) return baseStore.getRun(runId);
+        remoteReads += 1;
+        if (remoteReads === 2) {
+          initialReadStarted();
+          return initialRead;
+        }
+        return baseStore.getRun(runId);
+      },
+    };
+    const baseCoordinator = createInMemoryRivetWebAppRunCoordinator();
+    let disposed = 0;
+    const coordinator = {
+      ...baseCoordinator,
+      async subscribe() {
+        return { dispose: () => { disposed += 1; } };
+      },
+    };
+    let notifyPolicyRevocation: (() => void) | undefined;
+    const harness = await createHarness(makeWebAppProject({ delay: 2_000 }), undefined, {
+      hostId: 'local-host',
+      runCoordinator: coordinator,
+      runStore: delayedStore,
+    }, {
+      onPolicyRevoked(listener) {
+        notifyPolicyRevocation = listener;
+        return () => {
+          if (notifyPolicyRevocation === listener) notifyPolicyRevocation = undefined;
+        };
+      },
+    });
+    const client = await harness.connect();
+    const messages = collectMessages(client);
+
+    client.send(JSON.stringify(makeStartMessage('accepted-action-keeps-remote-initial-socket-open')));
+    await messages.next('action.accepted');
+    client.send(JSON.stringify({ type: 'run.resume', runId: remoteRunId, lastSequence: 0 }));
+    await messages.next('action.accepted');
+    await initialReadStartedPromise;
+    assert.ok(notifyPolicyRevocation);
+    notifyPolicyRevocation();
+    releaseInitialRead(remoteTerminal);
+
+    await assert.rejects(() => messages.next('action.completed', 50), /Timed out waiting/);
+    assert.equal(disposed, 1);
+    await harness.gateway.dispose();
+  });
+  void it('does not replay a cancellation result after publication access is revoked during its terminal lookup', async () => {
+    const baseStore = createInMemoryRivetWebAppRunStore();
+    const remoteRunId = 'remote-cancel-revocation-race';
+    await baseStore.createRun({
+      componentId: 'run-button',
+      createdAt: Date.now(),
+      hostId: 'remote-host',
+      ...activeLease(),
+      ownerScope: 'user:project:app:revision',
+      requestId: remoteRunId,
+      runId: remoteRunId,
+    });
+    assert.ok(await baseStore.appendEvent(remoteRunId, TEST_LEASE_ID, {
+      type: 'action.accepted',
+      requestId: remoteRunId,
+      runId: remoteRunId,
+    }));
+    let remoteReads = 0;
+    let releaseTerminalRead!: (run: Awaited<ReturnType<typeof baseStore.getRun>>) => void;
+    let terminalReadStarted!: () => void;
+    const terminalRead = new Promise<Awaited<ReturnType<typeof baseStore.getRun>>>((resolve) => {
+      releaseTerminalRead = resolve;
+    });
+    const terminalReadStartedPromise = new Promise<void>((resolve) => {
+      terminalReadStarted = resolve;
+    });
+    const delayedStore = {
+      ...baseStore,
+      async getRun(runId: string) {
+        if (runId !== remoteRunId) return baseStore.getRun(runId);
+        remoteReads += 1;
+        if (remoteReads === 2) {
+          terminalReadStarted();
+          return terminalRead;
+        }
+        return baseStore.getRun(runId);
+      },
+    };
+    let notifyPolicyRevocation: (() => void) | undefined;
+    const harness = await createHarness(makeWebAppProject({ delay: 2_000 }), undefined, {
+      hostId: 'local-host',
+      runStore: delayedStore,
+    }, {
+      onPolicyRevoked(listener) {
+        notifyPolicyRevocation = listener;
+        return () => {
+          if (notifyPolicyRevocation === listener) notifyPolicyRevocation = undefined;
+        };
+      },
+    });
+    const client = await harness.connect();
+    const messages = collectMessages(client);
+
+    client.send(JSON.stringify(makeStartMessage('accepted-action-keeps-cancel-socket-open')));
+    await messages.next('action.accepted');
+    client.send(JSON.stringify({ type: 'action.cancel', runId: remoteRunId }));
+    await terminalReadStartedPromise;
+    assert.ok(notifyPolicyRevocation);
+    notifyPolicyRevocation();
+    assert.ok(await baseStore.appendEvent(remoteRunId, TEST_LEASE_ID, {
+      type: 'action.completed',
+      requestId: remoteRunId,
+      runId: remoteRunId,
+      statePatch: { result: 'must never be replayed after cancellation' },
+    }));
+    releaseTerminalRead(await baseStore.getRun(remoteRunId));
+
+    await assert.rejects(() => messages.next('action.completed', 50), /Timed out waiting/);
+    await assert.rejects(() => messages.next('action.cancelled', 50), /Timed out waiting/);
+    await harness.gateway.dispose();
+  });
+  void it('keeps a newer remote attachment when an older attachment settles late', async () => {
+    const store = createInMemoryRivetWebAppRunStore();
+    const runId = 'remote-replacement-ownership';
+    await store.createRun({
+      componentId: 'run-button',
+      createdAt: Date.now(),
+      hostId: 'remote-host',
+      ...activeLease(),
+      ownerScope: 'user:project:app:revision',
+      requestId: 'remote-replacement-ownership',
+      runId,
+    });
+    const accepted = await store.appendEvent(runId, TEST_LEASE_ID, {
+      type: 'action.accepted',
+      requestId: 'remote-replacement-ownership',
+      runId,
+    });
+    assert.ok(accepted);
+
+    const baseCoordinator = createInMemoryRivetWebAppRunCoordinator();
+    const attachments: Parameters<typeof baseCoordinator.subscribe>[0][] = [];
+    const disposals: number[] = [];
+    const coordinator = {
+      ...baseCoordinator,
+      async subscribe(attachment: Parameters<typeof baseCoordinator.subscribe>[0]) {
+        attachments.push(attachment);
+        const attachmentIndex = attachments.length - 1;
+        return { dispose: () => { disposals.push(attachmentIndex); } };
+      },
+    };
+    const harness = await createHarness(makeWebAppProject(), undefined, {
+      hostId: 'local-host',
+      runCoordinator: coordinator,
+      runStore: store,
+    });
+    const client = await harness.connect();
+    const messages = collectMessages(client);
+
+    client.send(JSON.stringify({ type: 'run.resume', runId, lastSequence: 0 }));
+    await messages.next('action.accepted');
+    await waitForCondition(() => attachments.length === 1);
+    client.send(JSON.stringify({ type: 'run.resume', runId, lastSequence: 0 }));
+    await messages.next('action.accepted');
+    await waitForCondition(() => attachments.length === 2);
+    await waitForCondition(() => disposals.includes(0));
+
+    // This callback belongs to the superseded attachment. It must not close
+    // attachment 1, which is still permitted to forward the next event.
+    attachments[0]!.onUnavailable();
+    attachments[1]!.onEvent({
+      type: 'action.progress',
+      progress: { message: 'new attachment remains live' },
+      requestId: 'remote-replacement-ownership',
+      runId,
+      sequence: 2,
+    });
+    const progress = await messages.next('action.progress');
+    assert.equal(progress.progress.message, 'new attachment remains live');
+
+    await harness.gateway.dispose();
+    await waitForCondition(() => disposals.includes(1));
+    assert.deepEqual(disposals.sort(), [0, 1]);
+  });
+  void it('disposes a remote subscription that resolves after publication access is revoked', async () => {
+    const store = createInMemoryRivetWebAppRunStore();
+    const runId = 'remote-subscribe-revocation-race';
+    await store.createRun({
+      componentId: 'run-button',
+      createdAt: Date.now(),
+      hostId: 'remote-host',
+      ...activeLease(),
+      ownerScope: 'user:project:app:revision',
+      requestId: 'remote-subscribe-revocation-race',
+      runId,
+    });
+    const accepted = await store.appendEvent(runId, TEST_LEASE_ID, {
+      type: 'action.accepted',
+      requestId: 'remote-subscribe-revocation-race',
+      runId,
+    });
+    assert.ok(accepted);
+
+    const baseCoordinator = createInMemoryRivetWebAppRunCoordinator();
+    const subscriptionDeferred = createDeferred<{ dispose(): void }>();
+    let subscribeStarted = 0;
+    let disposed = 0;
+    const coordinator = {
+      ...baseCoordinator,
+      async subscribe() {
+        subscribeStarted += 1;
+        return subscriptionDeferred.promise;
+      },
+    };
+    let notifyPolicyRevocation: (() => void) | undefined;
+    const harness = await createHarness(makeWebAppProject(), undefined, {
+      hostId: 'local-host',
+      runCoordinator: coordinator,
+      runStore: store,
+    }, {
+      onPolicyRevoked(listener) {
+        notifyPolicyRevocation = listener;
+        return () => {
+          if (notifyPolicyRevocation === listener) notifyPolicyRevocation = undefined;
+        };
+      },
+    });
+    const client = await harness.connect();
+    const messages = collectMessages(client);
+    const closed = waitForClose(client);
+
+    client.send(JSON.stringify({ type: 'run.resume', runId, lastSequence: 0 }));
+    await messages.next('action.accepted');
+    await waitForCondition(() => subscribeStarted === 1);
+    assert.ok(notifyPolicyRevocation);
+    notifyPolicyRevocation();
+    assert.equal((await closed).code, 1008);
+
+    subscriptionDeferred.resolve({ dispose: () => { disposed += 1; } });
+    await waitForCondition(() => disposed === 1);
+    await assert.rejects(() => messages.next('action.progress', 50), /Timed out waiting/);
+    await harness.gateway.dispose();
+  });
+  void it('does not deliver an unavailable remote-run result after revocation during its store read', async () => {
+    const baseStore = createInMemoryRivetWebAppRunStore();
+    const runId = 'remote-unavailable-revocation-race';
+    await baseStore.createRun({
+      componentId: 'run-button',
+      createdAt: Date.now(),
+      hostId: 'remote-host',
+      ...activeLease(),
+      ownerScope: 'user:project:app:revision',
+      requestId: 'remote-unavailable-revocation-race',
+      runId,
+    });
+    const accepted = await baseStore.appendEvent(runId, TEST_LEASE_ID, {
+      type: 'action.accepted',
+      requestId: 'remote-unavailable-revocation-race',
+      runId,
+    });
+    assert.ok(accepted);
+
+    const unavailableRead = createDeferred<Awaited<ReturnType<typeof baseStore.getRun>>>();
+    let runReads = 0;
+    const store = {
+      ...baseStore,
+      async getRun(candidateRunId: string) {
+        if (candidateRunId !== runId) return baseStore.getRun(candidateRunId);
+        runReads += 1;
+        return runReads === 2 ? unavailableRead.promise : baseStore.getRun(candidateRunId);
+      },
+    };
+    const baseCoordinator = createInMemoryRivetWebAppRunCoordinator();
+    let remoteAttachment: Parameters<typeof baseCoordinator.subscribe>[0] | undefined;
+    let disposed = 0;
+    const coordinator = {
+      ...baseCoordinator,
+      async subscribe(attachment: Parameters<typeof baseCoordinator.subscribe>[0]) {
+        remoteAttachment = attachment;
+        return { dispose: () => { disposed += 1; } };
+      },
+    };
+    let notifyPolicyRevocation: (() => void) | undefined;
+    const harness = await createHarness(makeWebAppProject(), undefined, {
+      hostId: 'local-host',
+      runCoordinator: coordinator,
+      runStore: store,
+    }, {
+      onPolicyRevoked(listener) {
+        notifyPolicyRevocation = listener;
+        return () => {
+          if (notifyPolicyRevocation === listener) notifyPolicyRevocation = undefined;
+        };
+      },
+    });
+    const client = await harness.connect();
+    const messages = collectMessages(client);
+    const closed = waitForClose(client);
+
+    client.send(JSON.stringify({ type: 'run.resume', runId, lastSequence: 0 }));
+    await messages.next('action.accepted');
+    await waitForCondition(() => remoteAttachment != null);
+    remoteAttachment!.onUnavailable();
+    await waitForCondition(() => runReads === 2);
+    assert.ok(notifyPolicyRevocation);
+    notifyPolicyRevocation();
+    unavailableRead.resolve(await baseStore.getRun(runId));
+
+    assert.equal((await closed).code, 1008);
+    await waitForCondition(() => disposed === 1);
+    await assert.rejects(() => messages.next('run.rejected', 50), /Timed out waiting/);
+    await harness.gateway.dispose();
+  });
+  void it('keeps an accepted action socket alive when a revoked remote lookup later fails', async () => {
+    const baseStore = createInMemoryRivetWebAppRunStore();
+    const runId = 'remote-lookup-failure-after-revocation';
+    await baseStore.createRun({
+      componentId: 'run-button',
+      createdAt: Date.now(),
+      hostId: 'remote-host',
+      ...activeLease(),
+      ownerScope: 'user:project:app:revision',
+      requestId: 'remote-lookup-failure-after-revocation',
+      runId,
+    });
+    const accepted = await baseStore.appendEvent(runId, TEST_LEASE_ID, {
+      type: 'action.accepted',
+      requestId: 'remote-lookup-failure-after-revocation',
+      runId,
+    });
+    assert.ok(accepted);
+
+    const unavailableRead = createDeferred<Awaited<ReturnType<typeof baseStore.getRun>>>();
+    let remoteReads = 0;
+    let unavailableReadStarted!: () => void;
+    const unavailableReadStartedPromise = new Promise<void>((resolve) => {
+      unavailableReadStarted = resolve;
+    });
+    const store = {
+      ...baseStore,
+      async getRun(candidateRunId: string) {
+        if (candidateRunId !== runId) return baseStore.getRun(candidateRunId);
+        remoteReads += 1;
+        if (remoteReads === 3) {
+          unavailableReadStarted();
+          return unavailableRead.promise;
+        }
+        return baseStore.getRun(candidateRunId);
+      },
+    };
+    const baseCoordinator = createInMemoryRivetWebAppRunCoordinator();
+    let remoteAttachment: Parameters<typeof baseCoordinator.subscribe>[0] | undefined;
+    let disposed = 0;
+    const coordinator = {
+      ...baseCoordinator,
+      async subscribe(attachment: Parameters<typeof baseCoordinator.subscribe>[0]) {
+        remoteAttachment = attachment;
+        return { dispose: () => { disposed += 1; } };
+      },
+    };
+    let notifyPolicyRevocation: (() => void) | undefined;
+    const harness = await createHarness(makeWebAppProject({ delay: 1_000 }), undefined, {
+      hostId: 'local-host',
+      runCoordinator: coordinator,
+      runStore: store,
+    }, {
+      onPolicyRevoked(listener) {
+        notifyPolicyRevocation = listener;
+        return () => {
+          if (notifyPolicyRevocation === listener) notifyPolicyRevocation = undefined;
+        };
+      },
+    });
+    const client = await harness.connect();
+    const messages = collectMessages(client);
+
+    // Keep this local action active. Its accepted browser-storage exchange is
+    // allowed to outlive publication revocation, so an unrelated late failure
+    // in the remote result subscription must not close the socket with 1011.
+    client.send(JSON.stringify(makeStartMessage('active-action-keeps-revoked-socket-open')));
+    await messages.next('action.accepted');
+    client.send(JSON.stringify({ type: 'run.resume', runId, lastSequence: 0 }));
+    await messages.next('action.accepted');
+    await waitForCondition(() => remoteAttachment != null && remoteReads >= 2);
+    remoteAttachment!.onUnavailable();
+    await unavailableReadStartedPromise;
+
+    assert.ok(notifyPolicyRevocation);
+    notifyPolicyRevocation();
+    unavailableRead.reject(new Error('Remote run lookup failed after access was revoked.'));
+    await delay(25);
+
+    assert.equal(client.readyState, WebSocket.OPEN);
+    assert.equal(disposed, 1);
+    await harness.gateway.dispose();
+  });
   void it('rejects unsafe resource-limit and host identity configuration', () => {
     assert.throws(() => createInMemoryRivetWebAppRunStore({ maxEventsPerRun: 1 }), /maxEventsPerRun/);
     assert.throws(() => createInMemoryRivetWebAppRunStore({ maxStoredRuns: 0 }), /maxStoredRuns/);
@@ -1960,4 +2923,22 @@ const makeProject = (delay = 0): Project => makeWebAppProject({ delay, includePr
 
 function delay(milliseconds: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+
+function createDeferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (error: unknown) => void;
+  const promise = new Promise<T>((nextResolve, nextReject) => {
+    resolve = nextResolve;
+    reject = nextReject;
+  });
+  return { promise, reject, resolve };
+}
+
+async function waitForCondition(predicate: () => boolean, timeoutMs = 1_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!predicate()) {
+    if (Date.now() >= deadline) throw new Error('Timed out waiting for condition.');
+    await delay(0);
+  }
 }

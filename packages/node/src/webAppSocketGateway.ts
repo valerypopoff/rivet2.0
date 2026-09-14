@@ -47,9 +47,25 @@ export type RivetWebAppRunPermit = {
   release(): void;
 };
 
+export type RivetWebAppSocketAuthorizationStatus = 'authorized' | 'revoked' | 'policy-revoked' | 'unavailable';
+export type RivetWebAppSocketOperation = 'action-start' | 'action-cancel' | 'run-resume';
+
 export type RivetWebAppSocketSession = {
   /** Optional synchronous cached-policy check before accepting each client frame. */
   isAuthorized?: () => boolean;
+  /**
+   * Optional fresh authorization check for commands that can create, alter, or
+   * attach to work. The gateway deliberately does not call this for every
+   * browser-storage frame.
+   */
+  authorizeOperation?: (operation: RivetWebAppSocketOperation) => Promise<RivetWebAppSocketAuthorizationStatus>;
+  /**
+   * Notifies the gateway that this app's current publication policy was
+   * revoked. New commands and action-result delivery stop immediately, while
+   * an accepted action retains only its browser-storage RPC connection until
+   * it settles.
+   */
+  onPolicyRevoked?: (listener: () => void) => () => void;
   acquireRunPermit?: (context: {
     componentId: string;
     ownerScope: string;
@@ -183,6 +199,16 @@ const DEFAULT_MAX_MESSAGE_BYTES = 1_000_000;
 const DEFAULT_MAX_ACTIVE_RUNS_PER_SCOPE = 10;
 const DEFAULT_LEASE_DURATION_MS = 60_000;
 const DEFAULT_LEASE_RENEW_INTERVAL_MS = 20_000;
+const AUTHORIZATION_CLOSE_GRACE_MS = 1_000;
+
+function closeSocketForAuthorization(socket: WebSocket, code: 1008 | 1013, reason: string): void {
+  socket.close(code, reason);
+  const fallback = setTimeout(() => {
+    if (socket.readyState !== 3) socket.terminate();
+  }, AUTHORIZATION_CLOSE_GRACE_MS);
+  fallback.unref();
+  socket.once('close', () => clearTimeout(fallback));
+}
 
 export function createRivetWebAppWebSocketGateway(
   options: RivetWebAppWebSocketGatewayOptions = {},
@@ -251,12 +277,94 @@ export function createRivetWebAppWebSocketGateway(
   let disposed = false;
 
   const browserStorageHosts = new Map<string, { host: RivetWebAppBrowserStorageRpcHost; socket: WebSocket }>();
+  const activeRunOwnerSockets = new Map<string, WebSocket>();
+  const activeRunIdsBySocket = new Map<WebSocket, Set<string>>();
+  const policyRevokedSockets = new Set<WebSocket>();
+  let detachSocketRunDelivery = (_socket: WebSocket): void => {};
+  // A policy-revoked page is allowed to service the browser-storage exchange
+  // of an action it already started, but it must not receive action events,
+  // replays, or an unavailable-run result. A delayed store read can also
+  // resume after its socket's cleanup, so delivery requires both a live
+  // gateway connection and current publication access.
+  const canDeliverRunResult = (socket: WebSocket): boolean =>
+    connections.has(socket) && !policyRevokedSockets.has(socket);
+  const closePolicyRevokedSocketIfIdle = (socket: WebSocket): void => {
+    if (!policyRevokedSockets.has(socket)) return;
+    if ((activeRunIdsBySocket.get(socket)?.size ?? 0) > 0) return;
+    closeSocketForAuthorization(socket, 1008, 'Web app access was revoked');
+  };
+  const markSocketPolicyRevoked = (socket: WebSocket): void => {
+    // An already-cleaned-up socket may have a queued policy callback. Do not
+    // recreate policy state for it; late asynchronous work will fail the same
+    // live-connection delivery predicate.
+    if (!connections.has(socket)) return;
+    policyRevokedSockets.add(socket);
+    // Browser-storage RPC remains attached to an accepted action, but its
+    // action journal and remote subscriptions must stop sending results as
+    // soon as the user's current publication access is revoked.
+    detachSocketRunDelivery(socket);
+    closePolicyRevokedSocketIfIdle(socket);
+  };
+  const trackAcceptedRun = (socket: WebSocket, runId: string): void => {
+    activeRunOwnerSockets.set(runId, socket);
+    const runIds = activeRunIdsBySocket.get(socket) ?? new Set<string>();
+    runIds.add(runId);
+    activeRunIdsBySocket.set(socket, runIds);
+  };
+  const untrackAcceptedRun = (runId: string): void => {
+    const socket = activeRunOwnerSockets.get(runId);
+    if (!socket) return;
+    activeRunOwnerSockets.delete(runId);
+    const runIds = activeRunIdsBySocket.get(socket);
+    runIds?.delete(runId);
+    if (runIds?.size === 0) activeRunIdsBySocket.delete(socket);
+    closePolicyRevokedSocketIfIdle(socket);
+  };
   const reportError = (error: unknown): void => {
     try {
       options.onError?.(error);
     } catch {
       // Observability must never alter action or connection cleanup.
     }
+  };
+  const authorizeSocketOperation = async (
+    socket: WebSocket,
+    session: RivetWebAppSocketSession,
+    operation: RivetWebAppSocketOperation,
+    onPolicyRevoked: () => void,
+  ): Promise<RivetWebAppSocketAuthorizationStatus> => {
+    // A policy callback can win while an authorization or any preceding
+    // asynchronous operation is in flight. Treat that as a revocation even
+    // if the policy reader itself returned an older successful decision. This
+    // also protects sessions whose policy is pushed through onPolicyRevoked
+    // instead of authorizeOperation.
+    if (!canDeliverRunResult(socket)) {
+      if (policyRevokedSockets.has(socket)) onPolicyRevoked();
+      return 'policy-revoked';
+    }
+    if (!session.authorizeOperation) return 'authorized';
+    let authorization: RivetWebAppSocketAuthorizationStatus;
+    try {
+      authorization = await session.authorizeOperation(operation);
+    } catch {
+      authorization = 'unavailable';
+    }
+    if (authorization === 'authorized' && canDeliverRunResult(socket)) return authorization;
+    if (authorization === 'authorized') {
+      if (policyRevokedSockets.has(socket)) onPolicyRevoked();
+      return 'policy-revoked';
+    }
+    if (authorization === 'policy-revoked') {
+      markSocketPolicyRevoked(socket);
+      onPolicyRevoked();
+      return authorization;
+    }
+    closeSocketForAuthorization(
+      socket,
+      authorization === 'unavailable' ? 1013 : 1008,
+      authorization === 'unavailable' ? 'Web app authorization is temporarily unavailable' : 'Web app access was revoked',
+    );
+    return authorization;
   };
 
   const journal = createWebAppRunJournal({
@@ -272,6 +380,7 @@ export function createRivetWebAppWebSocketGateway(
   const finishRun = (runId: string, fallbackOwnerScope?: string): void => {
     browserStorageHosts.get(runId)?.host.dispose();
     browserStorageHosts.delete(runId);
+    untrackAcceptedRun(runId);
     const releasePermit = runPermitReleases.get(runId);
     runPermitReleases.delete(runId);
     try {
@@ -281,6 +390,7 @@ export function createRivetWebAppWebSocketGateway(
     }
   };
   const replay = (socket: WebSocket, run: RivetWebAppStoredRun, afterSequence: number): number => {
+    if (!canDeliverRunResult(socket)) return afterSequence;
     let lastSequence = afterSequence;
     for (const event of run.events) {
       if (event.sequence <= afterSequence) continue;
@@ -290,6 +400,7 @@ export function createRivetWebAppWebSocketGateway(
     return lastSequence;
   };
   const rejectRun = (socket: WebSocket, runId: string): void => {
+    if (!canDeliverRunResult(socket)) return;
     safeSend(socket, {
       type: 'run.rejected',
       runId,
@@ -298,16 +409,23 @@ export function createRivetWebAppWebSocketGateway(
     });
   };
   const remoteRunSubscriptions = createWebAppRemoteRunSubscriptions({
+    canDeliver: canDeliverRunResult,
     coordinator,
     rejectRun,
     replay,
     reportError,
     store,
   });
+  detachSocketRunDelivery = (socket: WebSocket): void => {
+    for (const runId of journal.subscribedRunIds()) unsubscribe(socket, runId);
+    remoteRunSubscriptions.closeSocket(socket);
+  };
   const attachRun = async (socket: WebSocket, run: RivetWebAppStoredRun, afterSequence: number): Promise<void> => {
+    if (!canDeliverRunResult(socket)) return;
     let snapshot = run;
     if (afterSequence > snapshot.lastSequence) {
       const latest = await store.getRun(run.runId);
+      if (!canDeliverRunResult(socket)) return;
       if (!latest || afterSequence > latest.lastSequence) {
         rejectRun(socket, run.runId);
         return;
@@ -327,6 +445,7 @@ export function createRivetWebAppWebSocketGateway(
 
     if (!activeRuns.has(snapshot.runId)) {
       const latest = await store.getRun(snapshot.runId);
+      if (!canDeliverRunResult(socket)) return;
       if (!latest || latest.status === 'running') {
         rejectRun(socket, snapshot.runId);
       } else {
@@ -338,6 +457,10 @@ export function createRivetWebAppWebSocketGateway(
     replay(socket, snapshot, afterSequence);
     subscribe(socket, snapshot.runId);
     const latest = await store.getRun(snapshot.runId);
+    if (!canDeliverRunResult(socket)) {
+      unsubscribe(socket, snapshot.runId);
+      return;
+    }
     if (latest) {
       replay(socket, latest, Math.max(afterSequence, snapshot.lastSequence));
       if (latest.status !== 'running') unsubscribe(socket, snapshot.runId);
@@ -349,6 +472,17 @@ export function createRivetWebAppWebSocketGateway(
       requestId,
       error: error instanceof Error ? error.message : String(error),
       ...(error instanceof RivetWebAppActionHttpError && error.code ? { code: error.code } : {}),
+    });
+  };
+  const rejectPolicyRevokedAction = (socket: WebSocket, requestId: string): void => {
+    reject(socket, requestId, createAccessRevokedError());
+  };
+  const rejectPolicyRevokedRun = (socket: WebSocket, runId: string): void => {
+    safeSend(socket, {
+      type: 'run.rejected',
+      runId,
+      error: 'Web app access was revoked.',
+      code: 'access_revoked',
     });
   };
   const rejectRunSubscribers = (runId: string): void => {
@@ -388,6 +522,7 @@ export function createRivetWebAppWebSocketGateway(
     if (cancelled) return;
 
     const latest = await store.getRun(run.runId);
+    if (!canDeliverRunResult(socket)) return;
     if (latest && latest.status !== 'running') {
       replay(socket, latest, 0);
     } else {
@@ -454,6 +589,9 @@ export function createRivetWebAppWebSocketGateway(
       } else if (run.componentId !== message.componentId) {
         reject(socket, message.requestId, createRequestIdConflictError());
       } else {
+        if (await authorizeSocketOperation(socket, session, 'action-start', () => rejectPolicyRevokedAction(socket, message.requestId)) !== 'authorized') {
+          return;
+        }
         await attachRun(socket, run, 0);
       }
       return;
@@ -482,6 +620,9 @@ export function createRivetWebAppWebSocketGateway(
         completeSetup(existing);
         if (existing.componentId !== message.componentId) {
           reject(socket, message.requestId, createRequestIdConflictError());
+          return;
+        }
+        if (await authorizeSocketOperation(socket, session, 'action-start', () => rejectPolicyRevokedAction(socket, message.requestId)) !== 'authorized') {
           return;
         }
         await attachRun(socket, existing, 0);
@@ -516,6 +657,12 @@ export function createRivetWebAppWebSocketGateway(
       }
 
       createdRunId = runId;
+      const authorization = await authorizeSocketOperation(socket, session, 'action-start', () => {});
+      if (authorization !== 'authorized') {
+        throw authorization === 'unavailable'
+          ? createActionUnavailableError()
+          : createAccessRevokedError();
+      }
       const created = await store.createRun({
         componentId: message.componentId,
         createdAt: Date.now(),
@@ -526,6 +673,19 @@ export function createRivetWebAppWebSocketGateway(
         requestId: message.requestId,
         runId,
       });
+      // From this point the gateway owns cleanup of a newly durable row, even
+      // if the immediately following authorization check rejects it.
+      storedRunCreated = created.created;
+      // `createRun` is durable, asynchronous setup. Recheck immediately
+      // afterward so a publication change that wins this race cannot reach
+      // processor preparation or graph execution. A newly created durable
+      // row is interrupted by the ordinary setup-failure cleanup below.
+      const postCreateAuthorization = await authorizeSocketOperation(socket, session, 'action-start', () => {});
+      if (postCreateAuthorization !== 'authorized') {
+        throw postCreateAuthorization === 'unavailable'
+          ? createActionUnavailableError()
+          : createAccessRevokedError();
+      }
       if (!created.created) {
         activeRuns.release(session.ownerScope, runId);
         acquiredPermit?.release();
@@ -539,7 +699,6 @@ export function createRivetWebAppWebSocketGateway(
         await attachRun(socket, created.run, 0);
         return;
       }
-      storedRunCreated = true;
       if (acquiredPermit) {
         const permit = acquiredPermit;
         runPermitReleases.set(runId, () => permit.release());
@@ -584,6 +743,7 @@ export function createRivetWebAppWebSocketGateway(
         ownerScope: session.ownerScope,
       };
       activeRuns.activate(runId, activeRun);
+      trackAcceptedRun(socket, runId);
       subscribe(socket, runId);
       const acceptedEvent = await appendAndBroadcast(runId, {
         type: 'action.accepted',
@@ -797,6 +957,9 @@ export function createRivetWebAppWebSocketGateway(
         return;
       }
       connections.add(socket);
+      const stopPolicyRevocation = session.onPolicyRevoked?.(() => {
+        markSocketPolicyRevoked(socket);
+      });
       attachWebAppSocketSession(socket, {
         isAuthorized: session.isAuthorized,
         handshakeTimeoutMs,
@@ -809,16 +972,23 @@ export function createRivetWebAppWebSocketGateway(
           transferTimeoutMs: browserStorageLimits.transferTimeoutMs,
         },
         async onActionCancel(runId) {
+          if (await authorizeSocketOperation(socket, session, 'action-cancel', () => rejectPolicyRevokedRun(socket, runId)) !== 'authorized') return;
           const run = await store.getRun(runId);
+          if (!canDeliverRunResult(socket)) return;
           if (!run || run.ownerScope !== session.ownerScope) {
             rejectRun(socket, runId);
           } else if (run.status !== 'running') {
+            if (await authorizeSocketOperation(socket, session, 'action-cancel', () => rejectPolicyRevokedRun(socket, runId)) !== 'authorized') return;
             replay(socket, run, 0);
           } else {
+            if (await authorizeSocketOperation(socket, session, 'action-cancel', () => rejectPolicyRevokedRun(socket, runId)) !== 'authorized') return;
             await cancelRun(socket, run);
           }
         },
-        onActionStart: (message) => startAction(socket, session, message),
+        onActionStart: async (message) => {
+          if (await authorizeSocketOperation(socket, session, 'action-start', () => rejectPolicyRevokedAction(socket, message.requestId)) !== 'authorized') return;
+          await startAction(socket, session, message);
+        },
         onStorageBinary(frame) {
           const handled = [...browserStorageHosts.values()].some(
             (entry) => entry.socket === socket && entry.host.handleBinary(normalizeWebSocketBinary(frame)),
@@ -834,22 +1004,30 @@ export function createRivetWebAppWebSocketGateway(
           entry.host.handleMessage(message);
         },
         onCleanup() {
+          stopPolicyRevocation?.();
+          policyRevokedSockets.delete(socket);
           connections.delete(socket);
+          activeRunIdsBySocket.delete(socket);
+          for (const [runId, ownerSocket] of activeRunOwnerSockets) {
+            if (ownerSocket === socket) activeRunOwnerSockets.delete(runId);
+          }
           for (const [runId, entry] of browserStorageHosts) {
             if (entry.socket !== socket) continue;
             entry.host.dispose(new Error('Browser storage connection closed.'));
             browserStorageHosts.delete(runId);
           }
-          for (const runId of journal.subscribedRunIds()) unsubscribe(socket, runId);
-          remoteRunSubscriptions.closeSocket(socket);
+          detachSocketRunDelivery(socket);
         },
         onError: reportError,
         onInvalidMessage: (requestId, error) => reject(socket, requestId, error),
         async onRunResume(runId, lastSequence) {
+          if (await authorizeSocketOperation(socket, session, 'run-resume', () => rejectPolicyRevokedRun(socket, runId)) !== 'authorized') return;
           const run = await store.getRun(runId);
+          if (!canDeliverRunResult(socket)) return;
           if (!run || run.ownerScope !== session.ownerScope) {
             rejectRun(socket, runId);
           } else {
+            if (await authorizeSocketOperation(socket, session, 'run-resume', () => rejectPolicyRevokedRun(socket, runId)) !== 'authorized') return;
             await attachRun(socket, run, lastSequence);
           }
         },
@@ -886,6 +1064,10 @@ function createRequestIdConflictError(): RivetWebAppActionHttpError {
 
 function createActionUnavailableError(): RivetWebAppActionHttpError {
   return new RivetWebAppActionHttpError('The web app action could not be started.', 503, 'action_unavailable');
+}
+
+function createAccessRevokedError(): RivetWebAppActionHttpError {
+  return new RivetWebAppActionHttpError('Web app access was revoked.', 403, 'access_revoked');
 }
 
 function createServerDrainingError(): RivetWebAppActionHttpError {
