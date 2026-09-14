@@ -1,5 +1,5 @@
 import { css } from '@emotion/react';
-import type { CoalesceNode } from '@valerypopoff/rivet2-core';
+import type { CoalesceNewNode, CoalesceNode } from '@valerypopoff/rivet2-core';
 import type { ChangeEvent, FC, MouseEvent } from 'react';
 import { useId } from 'react';
 import { useEditNodeCommand } from '../../commands/editNodeCommand.js';
@@ -70,7 +70,7 @@ const styles = css`
   }
 `;
 
-const CoalesceNodeBody: FC<{ node: CoalesceNode }> = ({ node }) => {
+const CoalesceNodeBody = ({ node }: { node: CoalesceNode | CoalesceNewNode }) => {
   const editNode = useEditNodeCommand();
   const toggleIdBase = useId();
 
@@ -120,6 +120,14 @@ const CoalesceNodeBody: FC<{ node: CoalesceNode }> = ({ node }) => {
   );
 };
 
+const LegacyCoalesceNodeBody: FC<{ node: CoalesceNode }> = ({ node }) => <CoalesceNodeBody node={node} />;
+
+const CurrentCoalesceNodeBody: FC<{ node: CoalesceNewNode }> = ({ node }) => <CoalesceNodeBody node={node} />;
+
 export const coalesceNodeDescriptor: NodeComponentDescriptor<'coalesce'> = {
-  Body: CoalesceNodeBody,
+  Body: LegacyCoalesceNodeBody,
+};
+
+export const coalesceNewNodeDescriptor: NodeComponentDescriptor<'coalesceNew'> = {
+  Body: CurrentCoalesceNodeBody,
 };

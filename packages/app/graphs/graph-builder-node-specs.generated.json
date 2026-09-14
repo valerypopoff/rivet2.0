@@ -1,6 +1,6 @@
 {
   "formatVersion": 1,
-  "catalogFingerprint": "fnv1a64:3cf424c5a56f2342",
+  "catalogFingerprint": "fnv1a64:2fb9f0893acc17f1",
   "entries": [
     {
       "authoringChoiceId": "registered:abortGraph",
@@ -214,8 +214,23 @@
     {
       "authoringChoiceId": "registered:coalesce",
       "nodeType": "coalesce",
+      "displayName": "Coalesce (legacy)",
+      "description": "This legacy Coalesce Node returns the first usable value from a list of inputs. By default, \"usable\" means the first input that is not Not Ran . For new graphs, use the Coalesce Node. It has the same fallback behavior without this legacy node's Conditional input. Values that show as Not Ran in the UI have been excluded from the run due to control flow processing. Coalesce consumes those values, skips over them, and continues checking later inputs. This makes it useful for taking a set of branches where only one branch runs and returning that branch's output. See the examples section for more information on using this with a Regex Match Node. null and undefined are treated as real output values by default. Enable Ignore 'null' or Ignore 'undefined' when those values should also be skipped so Coalesce (legacy) continues checking later inputs.",
+      "aliases": [],
+      "capabilities": {
+        "createWithDefaults": true,
+        "inspectSafeProjection": false,
+        "resolvePorts": true,
+        "configureSettings": false,
+        "editLinkedPrefabInstance": false
+      },
+      "settings": []
+    },
+    {
+      "authoringChoiceId": "registered:coalesceNew",
+      "nodeType": "coalesceNew",
       "displayName": "Coalesce",
-      "description": "The Coalesce Node returns the first usable value from a list of inputs. By default, \"usable\" means the first input that is not Not Ran . Values that show as Not Ran in the UI have been excluded from the run due to control flow processing. Coalesce consumes those values, skips over them, and continues checking later inputs. This makes it useful for taking a set of branches where only one branch runs and returning that branch's output. See the examples section for more information on using this with a Regex Match Node. null and undefined are treated as real output values by default. Enable Ignore 'null' or Ignore 'undefined' when those values should also be skipped so Coalesce continues checking later inputs.",
+      "description": "The Coalesce Node returns the first usable value from a list of inputs. By default, \"usable\" means the first input that is not Not Ran . Values that show as Not Ran in the UI have been excluded from the run due to control flow processing. Coalesce consumes those values, skips over them, and continues checking later inputs. This makes it useful for combining branches where one branch runs and the others are excluded. null and undefined are treated as real output values by default. Enable Ignore 'null' or Ignore 'undefined' when those values should also be skipped so Coalesce continues checking later inputs.",
       "aliases": [],
       "capabilities": {
         "createWithDefaults": true,

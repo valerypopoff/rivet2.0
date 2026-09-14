@@ -3,6 +3,11 @@ import { strict as assert } from 'node:assert';
 
 import {
   CoalesceNodeImpl,
+  CoalesceNewNodeImpl,
+  coalesceLegacyDisplayName,
+  coalesceNewNode,
+  coalesceNode,
+  type CoalesceNewNode,
   type CoalesceNode,
   type Inputs,
   type NodeConnection,
@@ -21,13 +26,31 @@ function createNode(data: Partial<CoalesceNode['data']> = {}) {
   });
 }
 
+function createCurrentNode(data: Partial<CoalesceNewNode['data']> = {}) {
+  const node = CoalesceNewNodeImpl.create();
+
+  return new CoalesceNewNodeImpl({
+    ...node,
+    data: {
+      ...node.data,
+      ...data,
+    },
+  });
+}
+
 describe('CoalesceNode', () => {
-  it('creates a compact node with enough width for inline canvas toggles', () => {
+  it('preserves the legacy type and gives new nodes the current type', () => {
     const node = CoalesceNodeImpl.create();
+    const currentNode = CoalesceNewNodeImpl.create();
 
     assert.strictEqual(node.type, 'coalesce');
-    assert.strictEqual(node.title, 'Coalesce');
+    assert.strictEqual(node.title, coalesceLegacyDisplayName);
     assert.strictEqual(node.visualData.width, 190);
+    assert.strictEqual(currentNode.type, 'coalesceNew');
+    assert.strictEqual(currentNode.title, 'Coalesce');
+    assert.strictEqual(currentNode.visualData.width, 190);
+    assert.strictEqual(coalesceNode.displayName, coalesceLegacyDisplayName);
+    assert.strictEqual(coalesceNewNode.displayName, 'Coalesce');
   });
 
   it('exposes null and undefined ignore toggles', () => {
@@ -91,6 +114,36 @@ describe('CoalesceNode', () => {
     });
   });
 
+  it('removes the conditional input from new Coalesce nodes without changing fallback behavior', async () => {
+    const chartNode = CoalesceNewNodeImpl.create();
+    const node = new CoalesceNewNodeImpl(chartNode);
+
+    assert.deepStrictEqual(
+      node.getInputDefinitions([]).map((input) => input.id),
+      ['input1'],
+    );
+
+    const result = await node.process({
+      conditional: { type: 'control-flow-excluded', value: undefined },
+      input1: { type: 'control-flow-excluded', value: undefined },
+      input2: { type: 'string', value: 'fallback' },
+    } as Inputs);
+
+    assert.deepStrictEqual(result['output' as PortId], { type: 'string', value: 'fallback' });
+  });
+
+  it('preserves the ignore settings for the current Coalesce node', async () => {
+    const node = createCurrentNode({ ignoreNull: true, ignoreUndefined: true });
+
+    const result = await node.process({
+      input1: { type: 'any', value: null },
+      input2: { type: 'any', value: undefined },
+      input3: { type: 'string', value: 'fallback' },
+    } as Inputs);
+
+    assert.deepStrictEqual(result['output' as PortId], { type: 'string', value: 'fallback' });
+  });
+
   it('checks dynamic inputs by input number instead of object-key count', async () => {
     const node = createNode();
 
@@ -116,6 +169,22 @@ describe('CoalesceNode', () => {
     assert.deepStrictEqual(
       inputDefinitions.map((input) => input.id),
       ['conditional', 'input1', 'input2', 'input3'],
+    );
+  });
+
+  it('keeps the legacy conditional input in saved Coalesce definitions', () => {
+    const chartNode = CoalesceNodeImpl.create();
+    const node = new CoalesceNodeImpl(chartNode);
+
+    assert.deepStrictEqual(
+      node.getInputDefinitions([]).map((input) => input.id),
+      ['conditional', 'input1'],
+    );
+
+    const savedWithFormerTitle = new CoalesceNodeImpl({ ...chartNode, title: 'Coalesce' });
+    assert.deepStrictEqual(
+      savedWithFormerTitle.getInputDefinitions([]).map((input) => input.id),
+      ['conditional', 'input1'],
     );
   });
 

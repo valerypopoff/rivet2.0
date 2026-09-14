@@ -43,7 +43,11 @@ test('coalesce node canvas controls use normal node edit and control-only double
   assert.doesNotMatch(coalesceNodeSource, /<div css=\{styles\} onDoubleClick=/);
 });
 
-test('coalesce node descriptor is registered for custom canvas body rendering', () => {
-  assert.match(useNodeTypesSource, /import \{ coalesceNodeDescriptor \} from '\.\.\/components\/nodes\/CoalesceNode\.js';/);
+test('both coalesce node types are registered for custom canvas body rendering', () => {
+  assert.match(
+    useNodeTypesSource,
+    /import \{ coalesceNewNodeDescriptor, coalesceNodeDescriptor \} from '\.\.\/components\/nodes\/CoalesceNode\.js';/,
+  );
   assert.match(useNodeTypesSource, /coalesce: coalesceNodeDescriptor,/);
+  assert.match(useNodeTypesSource, /coalesceNew: coalesceNewNodeDescriptor,/);
 });

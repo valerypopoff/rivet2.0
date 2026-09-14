@@ -29,6 +29,7 @@ const nodesAllowedToConsumeExcludedValue = new Set<BuiltInNodeType>([
   'if',
   'ifElse',
   'coalesce',
+  'coalesceNew',
   'graphOutput',
   'raceInputs',
   'loopController',

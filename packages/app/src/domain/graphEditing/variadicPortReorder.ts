@@ -26,6 +26,7 @@ export const VARIADIC_PORT_REORDER_SPECS: Partial<Record<ChartNode['type'], Vari
   assembleMessage: { inputPrefix: 'part', kind: 'input-only' },
   assemblePrompt: { inputPrefix: 'message', kind: 'input-only' },
   coalesce: { inputPrefix: 'input', kind: 'input-only' },
+  coalesceNew: { inputPrefix: 'input', kind: 'input-only' },
   delay: { inputPrefix: 'input', kind: 'input-output-pair', outputPrefix: 'output' },
   didRun: { inputPrefix: 'input', kind: 'input-only' },
   join: { inputPrefix: 'input', kind: 'input-only' },

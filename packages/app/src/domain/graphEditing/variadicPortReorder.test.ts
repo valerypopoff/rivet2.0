@@ -58,6 +58,7 @@ function connectionTo(inputId: string): NodeConnection {
 }
 
 test('variadic reorder specs are explicit and exclude Loop Controller', () => {
+  assert.equal(getVariadicPortReorderSpec(makeNode('coalesceNew'))?.kind, 'input-only');
   assert.equal(getVariadicPortReorderSpec(makeNode('didRun'))?.kind, 'input-only');
   assert.equal(getVariadicPortReorderSpec(makeNode('passthrough'))?.kind, 'input-output-pair');
   assert.equal(getVariadicPortReorderSpec(makeNode('startBackgroundBranch'))?.kind, 'input-output-pair');

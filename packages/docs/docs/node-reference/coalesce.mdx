@@ -1,7 +1,7 @@
 ---
 id: coalesce
-title: Coalesce Node
-sidebar_label: Coalesce
+title: Coalesce (legacy) Node
+sidebar_label: Coalesce (legacy)
 ---
 
 import Tabs from '@theme/Tabs';
@@ -9,11 +9,13 @@ import TabItem from '@theme/TabItem';
 
 ## Overview
 
-The Coalesce Node returns the first usable value from a list of inputs. By default, "usable" means the first input that is not `Not Ran`.
+This legacy Coalesce Node returns the first usable value from a list of inputs. By default, "usable" means the first input that is not `Not Ran`.
+
+For new graphs, use the [Coalesce Node](./coalesce-new.mdx). It has the same fallback behavior without this legacy node's `Conditional` input.
 
 Values that show as `Not Ran` in the UI have been excluded from the run due to control flow processing. Coalesce consumes those values, skips over them, and continues checking later inputs. This makes it useful for taking a set of branches where only one branch runs and returning that branch's output. See the examples section for more information on using this with a [Regex Match Node](./regex-match.mdx).
 
-`null` and `undefined` are treated as real output values by default. Enable `Ignore 'null'` or `Ignore 'undefined'` when those values should also be skipped so Coalesce continues checking later inputs.
+`null` and `undefined` are treated as real output values by default. Enable `Ignore 'null'` or `Ignore 'undefined'` when those values should also be skipped so Coalesce (legacy) continues checking later inputs.
 
 ![Coalesce Node Screenshot](./assets/coalesce-node.png)
 
@@ -95,7 +97,7 @@ The coalesce node cannot error in normal operation.
 
 **Q: Will an empty string be passed over?**
 
-A: No, an empty string is a real value for the Coalesce Node. If you would like to skip over empty strings, use an If Node to check for empty strings and return `Not Ran`, `null`, or `undefined`, then configure Coalesce to skip the value you chose.
+A: No, an empty string is a real value for Coalesce (legacy). If you would like to skip over empty strings, use an If Node to check for empty strings and return `Not Ran`, `null`, or `undefined`, then configure Coalesce to skip the value you chose.
 
 **Q: Are `null` and `undefined` passed over?**
 
@@ -106,3 +108,4 @@ A: Not by default. Coalesce outputs `null` and `undefined` as real values unless
 - [Regex Match Node](./regex-match.mdx)
 - [If Node](./if.mdx)
 - [If/Else Node](./if-else.mdx)
+- [Coalesce Node](./coalesce-new.mdx)
