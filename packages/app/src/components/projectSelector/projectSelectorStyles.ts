@@ -306,7 +306,8 @@ export const projectSelectorStyles = css`
     display: flex;
     align-items: center;
     justify-content: flex-start;
-    padding: 0 10px;
+    /* Match the close control's horizontal edge inset to its vertical inset. */
+    padding: 0 5px 0 10px;
     cursor: pointer;
     user-select: none;
     gap: 8px;

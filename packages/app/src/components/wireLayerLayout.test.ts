@@ -80,3 +80,14 @@ test('wire execution chrome uses the shared canvas process-page default', () => 
   assert.match(wireLayerSource, /resolveCanvasExecutionProcessPage/);
   assert.doesNotMatch(wireLayerSource, /selectedProcessPageNodes\[[^\]]+\]\s*\?\?\s*0/);
 });
+
+test('directional wire arrowheads use the active wire color', () => {
+  const wireLayerSource = readFileSync(join(componentsDir, 'WireLayer.tsx'), 'utf8');
+  const wireStyles = /const wiresStyles = css`(?<styles>[\s\S]*?)`;/u.exec(wireLayerSource)?.groups?.styles;
+
+  assert.ok(wireStyles, 'Expected WireLayer styles to stay local to wiresStyles');
+  assert.match(wireStyles, /\.wire-arrow-marker-active\s*\{[\s\S]*fill:\s*var\(--primary\);/);
+  assert.match(wireLayerSource, /active: !!highlighted,[\s\S]*markerIds: wireArrowMarkerIds/s);
+  assert.match(wireLayerSource, /active: activeConnectionKeySet\.has\(connectionKey\),/);
+  assert.match(wireLayerSource, /function isWireHighlighted/);
+});

@@ -49,8 +49,8 @@ import { fillMissingSettingsFromEnvironmentVariables } from '../utils/tauri';
 import { getLLMChatV2ApiKeyEnvVarNames } from '../utils/chatV2ProviderEnv';
 import { applyEvaluationRunEvent, applyEvaluationRunSnapshot, evaluationsState } from '../state/evaluations';
 import {
+  createEvaluationEventCollector,
   EvaluationGraphExecutionError,
-  type EvaluationExecutionMetrics,
   type EvaluationRecordingReference,
   type EvaluationRunPurpose,
   type PortableJson,
@@ -840,13 +840,7 @@ export function useLocalExecutor() {
           },
           runGraph: async ({ project: evaluationProject, graphId, inputs, signal, metadata }) => {
             const startedAt = Date.now();
-            const metrics: EvaluationExecutionMetrics = {
-              durationMs: 0,
-              modelCallCount: 0,
-              toolCallCount: 0,
-              toolFailureCount: 0,
-            };
-            const providerAttempts: PortableJson[] = [];
+            const captured = createEvaluationEventCollector('full');
             const processor = new GraphProcessor(evaluationProject, graphId, projectNodeRegistry, true, {
               captureNodeTimings: showNodeRunDurations,
             });
@@ -855,51 +849,9 @@ export function useLocalExecutor() {
             processor.executor = 'browser';
             recorder.record(processor);
             attachEvaluationRunActivity(processor);
-            processor.on('llmCallFinished', (event) => {
-              metrics.modelCallCount = (metrics.modelCallCount ?? 0) + 1;
-              metrics.inputTokens = (metrics.inputTokens ?? 0) + (event.normalizedUsage?.promptTokens ?? 0);
-              metrics.outputTokens = (metrics.outputTokens ?? 0) + (event.normalizedUsage?.completionTokens ?? 0);
-              metrics.cachedInputTokens = (metrics.cachedInputTokens ?? 0) + (event.normalizedUsage?.cachedTokens ?? 0);
-              metrics.reasoningTokens = (metrics.reasoningTokens ?? 0) + (event.normalizedUsage?.reasoningTokens ?? 0);
-              if (event.pricing.status === 'known')
-                metrics.costUsd = (metrics.costUsd ?? 0) + (event.pricing.costUsd ?? 0);
-              else metrics.hasUnknownCost = true;
-              providerAttempts.push({
-                kind: 'provider-call',
-                provider: event.provider,
-                model: event.model,
-                customProviderApi: event.customProviderApi ?? null,
-                outcome: event.outcome,
-                finishReason: event.finishReason ?? null,
-                profileIndex: event.profileIndex ?? null,
-                profileName: event.profileName ?? null,
-                attemptIndex: event.attemptIndex,
-                roundIndex: event.roundIndex ?? null,
-                durationMs: event.durationMs ?? null,
-              });
-            });
-            processor.on('llmProfileAttempt', (event) => {
-              providerAttempts.push({
-                kind: 'profile-decision',
-                provider: event.provider,
-                model: event.model,
-                customProviderApi: event.customProviderApi ?? null,
-                stage: event.stage,
-                outcome: event.outcome,
-                profileIndex: event.profileIndex ?? null,
-                profileName: event.profileName ?? null,
-                attemptIndex: event.attemptIndex ?? null,
-                roundIndex: event.roundIndex,
-                status: event.status ?? null,
-                healthState: event.healthState ?? null,
-                healthDisposition: event.healthDisposition ?? null,
-                timeoutKind: event.timeoutKind ?? null,
-              });
-            });
-            processor.on('toolCallFinished', (event) => {
-              metrics.toolCallCount = (metrics.toolCallCount ?? 0) + 1;
-              if (event.outcome !== 'success') metrics.toolFailureCount = (metrics.toolFailureCount ?? 0) + 1;
-            });
+            processor.on('llmCallFinished', captured.llmCallFinished);
+            processor.on('llmProfileAttempt', captured.llmProfileAttempt);
+            processor.on('toolCallFinished', captured.toolCallFinished);
             const abort = () => {
               void processor.abort();
             };
@@ -952,22 +904,22 @@ export function useLocalExecutor() {
               const portableOutputs = Object.fromEntries(
                 Object.entries(outputs).map(([key, value]) => [key, value.value as PortableJson]),
               );
-              metrics.durationMs = Date.now() - startedAt;
+              captured.metrics.durationMs = Date.now() - startedAt;
               const persistedRecording = await persistRecording();
               return {
                 outputs: portableOutputs,
-                metrics,
+                metrics: captured.metrics,
                 ...(persistedRecording === undefined ? {} : { recording: persistedRecording }),
-                ...(providerAttempts.length === 0 ? {} : { providerAttempts }),
+                ...(captured.providerAttempts.length === 0 ? {} : { providerAttempts: captured.providerAttempts }),
               };
             } catch (error) {
-              metrics.durationMs = Math.max(metrics.durationMs, Date.now() - startedAt);
+              captured.metrics.durationMs = Math.max(captured.metrics.durationMs, Date.now() - startedAt);
               const persistedRecording = await persistRecording();
               if (signal?.aborted || (error instanceof DOMException && error.name === 'AbortError')) throw error;
               throw new EvaluationGraphExecutionError(error instanceof Error ? error.message : String(error), {
-                metrics,
+                metrics: captured.metrics,
                 ...(persistedRecording === undefined ? {} : { recording: persistedRecording }),
-                ...(providerAttempts.length === 0 ? {} : { providerAttempts }),
+                ...(captured.providerAttempts.length === 0 ? {} : { providerAttempts: captured.providerAttempts }),
               });
             } finally {
               signal?.removeEventListener('abort', abort);

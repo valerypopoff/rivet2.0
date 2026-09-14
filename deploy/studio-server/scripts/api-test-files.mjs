@@ -31,6 +31,7 @@ export const defaultApiTestFiles = [
   'src/tests/hosted-client-authorization.test.ts',
   'src/tests/hosted-editor-seams.test.ts',
   'src/tests/hosted-evaluation-coordinator.test.ts',
+  'src/tests/hosted-evaluation-execution.test.ts',
   'src/tests/hosted-evaluations-config.test.ts',
   'src/tests/hosted-project-title.test.ts',
   'src/tests/latest-workflow-remote-debugger.test.ts',
