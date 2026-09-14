@@ -257,6 +257,7 @@ jobs:
       - name: Require every applicable Studio Server gate
         shell: bash
         env:
+          CLASSIFICATION_RESULT: ${{ needs.changes.result }}
           RELEVANT: ${{ needs.changes.outputs.relevant }}
           BUILD_RESULT: ${{ needs.build-studio-server.result }}
           API_RESULT: ${{ needs.api-tests.result }}
@@ -265,7 +266,11 @@ jobs:
           REPOSITORY_RESULT: ${{ needs.repository-contracts.result }}
           DEPLOYMENT_RESULT: ${{ needs.deployment-contracts.result }}
         run: |
-          if [[ "$RELEVANT" != "true" ]]; then
+          if [[ "$CLASSIFICATION_RESULT" != "success" || ( "$RELEVANT" != "true" && "$RELEVANT" != "false" ) ]]; then
+            echo "::error::Studio Server change classification failed or returned no valid decision."
+            exit 1
+          fi
+          if [[ "$RELEVANT" == "false" ]]; then
             echo "No Studio Server-affecting paths changed; heavy verification was skipped."
             exit 0
           fi

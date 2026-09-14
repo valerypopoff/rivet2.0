@@ -1092,6 +1092,22 @@ For the current execution-plane split specifically:
 
 ## Validation boundaries
 
+Before pushing server changes, complete `yarn studio-server:build` as well as
+the affected runtime tests. The API build type-checks its tests, including
+imports of deployment `.mjs` helpers; each such static import needs a matching
+`.d.mts` declaration. The test runner transpiles TypeScript without checking
+that contract. For proxy changes also run
+`node deploy/studio-server/scripts/verify-proxy-dns.mjs` and
+`node deploy/studio-server/scripts/verify-trusted-client-proxy.mjs` with Docker
+available, matching the CI deployment job. See
+[Build, CI, and Release](../BUILD-AND-CI.md) for the broader push checks.
+
+Test known oversized uploads with an oversized `Content-Length` and no body:
+the API deliberately rejects and closes these connections before consumption.
+Uploading a full 48 MiB fixture with `fetch` races that close and can report a
+transport error instead of the intended `413`. Keep separate small, real HTTP
+tests for chunked and compressed body-limit enforcement.
+
 Use the three validation layers intentionally:
 
 - repo-local:
