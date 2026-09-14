@@ -10,6 +10,7 @@ import {
   renderManagedReleaseGateValues,
 } from '../../../../deploy/studio-server/scripts/lib/kubernetes-managed-release-gate-config.mjs';
 import { buildManagedProviderGateConfig } from '../../../../deploy/studio-server/scripts/lib/kubernetes-managed-provider-gate-config.mjs';
+import { summarizePodStartupState } from '../../../../deploy/studio-server/scripts/lib/kubernetes-workload-diagnostics.mjs';
 
 const rootDir = path.resolve(import.meta.dirname, '../../../..');
 const digest = (letter: string) => `sha256:${letter.repeat(64)}`;
@@ -46,6 +47,55 @@ test('managed release gate fixture declares the runtime environment assertion', 
   assert.match(fixture, /\[environment-node\]:code "Environment"/);
   assert.match(fixture, /process\.env\.RIVET_RELEASE_GATE_VALUE/);
   assert.match(fixture, /output->"Delay" delay-node\/input1/);
+});
+
+test('managed release gate prints compact dependency startup states without exposing container messages', () => {
+  assert.equal(
+    summarizePodStartupState(
+      JSON.stringify({
+        items: [
+          {
+            metadata: { name: 'release-gate-minio-123' },
+            status: {
+              phase: 'Pending',
+              containerStatuses: [
+                {
+                  name: 'minio',
+                  state: {
+                    waiting: {
+                      reason: 'ImagePullBackOff',
+                      message: 'A registry response that must stay in the retained artifact only',
+                    },
+                  },
+                },
+              ],
+            },
+          },
+        ],
+      }),
+    ),
+    'release-gate-minio-123 (Pending): minio=ImagePullBackOff',
+  );
+  assert.equal(
+    summarizePodStartupState(
+      JSON.stringify({
+        items: [
+          {
+            metadata: { name: 'release-gate-minio-unschedulable' },
+            status: {
+              phase: 'Pending',
+              conditions: [{ type: 'PodScheduled', status: 'False', reason: 'Unschedulable' }],
+              initContainerStatuses: { malformed: true },
+              containerStatuses: null,
+            },
+          },
+        ],
+      }),
+    ),
+    'release-gate-minio-unschedulable (Pending): Unschedulable',
+  );
+  assert.equal(summarizePodStartupState('{not json'), 'Kubernetes did not return a readable pod list');
+  assert.equal(summarizePodStartupState(JSON.stringify({ items: [] })), 'no matching dependency pod was created');
 });
 
 test('managed release gate reserves enough workers for deterministic execution node-drain coverage', async () => {

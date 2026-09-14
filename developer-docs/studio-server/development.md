@@ -513,7 +513,7 @@ The Docker launchers now render layered Compose files:
 - `yarn studio-server:dev` / `yarn studio-server:dev:docker:*` use `deploy/studio-server/compose/docker-compose.managed-services.yml` plus `deploy/studio-server/compose/docker-compose.dev.yml`; set `RIVET_METRICS_ENABLED=true` only when a private host or Docker-network scraper needs the direct API container's pull-only `/metrics` endpoint. The public proxy intentionally does not route that endpoint.
 - Published web-app Chat state and Stored Values use browser IndexedDB. The API-only `RIVET_WEB_APP_BROWSER_STORAGE_*` settings bound the optional on-demand WebSocket storage RPC; Compose and Helm supply safe defaults. See [web-app-browser-storage.md](web-app-browser-storage.md) before changing limits or proxy timeouts, because these ceilings must be sized with execution-replica memory and admission capacity.
 - `yarn studio-server:prod`, `yarn studio-server:prod:prebuilt`, `yarn studio-server:prod:restart`, and `yarn studio-server:prod:custom` use `deploy/studio-server/compose/docker-compose.managed-services.yml` plus `deploy/studio-server/compose/docker-compose.yml`
-- the shared file only contributes the optional managed Postgres/MinIO services; enable them explicitly with `COMPOSE_PROFILES=workflow-managed` when rehearsing object-storage mode locally
+- the shared file only contributes the optional managed Postgres/MinIO services; enable them explicitly with `COMPOSE_PROFILES=workflow-managed` when rehearsing object-storage mode locally. Its MinIO server and client use tag-pinned `quay.io/minio/*` images, rather than mutable Docker Hub `latest` tags, so local object-storage rehearsals use the same repeatable dependency releases as the Kubernetes fixture.
 
 Current behavior:
 
