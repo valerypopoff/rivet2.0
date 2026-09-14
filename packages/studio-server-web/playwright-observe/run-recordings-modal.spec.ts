@@ -484,6 +484,8 @@ async function installRunRecordingRoutes(
     latestFlowRunCount?: number;
     cursorDelayMs?: number;
     deletionGate?: Promise<void>;
+    recordingError?: string;
+    recordingGate?: Promise<void>;
     beforeDelete?: (recordingId: string) => Promise<number | void>;
     beforeRuns?: (url: URL) => Promise<void>;
     inputSearchError?: string;
@@ -677,6 +679,11 @@ async function installRunRecordingRoutes(
     if (request.method() === 'GET' && parts.length >= 5 && parts[4] === 'recording') {
       const recordingId = decodeURIComponent(parts[3]!);
       recordingFetches.push(recordingId);
+      await options.recordingGate;
+      if (options.recordingError) {
+        await route.fulfill({ status: 404, json: { error: options.recordingError } });
+        return;
+      }
       await route.fulfill({
         status: 200,
         contentType: 'text/plain; charset=utf-8',
@@ -1189,6 +1196,50 @@ test.describe('Run recordings modal', () => {
     await modal.getByLabel('Close run recordings').click();
     await expect(modal).toBeHidden();
     await expect(page.getByText(/^Found:/)).toHaveCount(0);
+  });
+
+  test('keeps the recordings dialog open with progress while a replay loads', async ({ page }) => {
+    const recordingGate = responseGate();
+    const { recordingFetches, replayProjectFetches } = await installRunRecordingRoutes(page, {
+      recordingGate: recordingGate.promise,
+    });
+    const modal = await openLatestFlowRecordings(page);
+    const run = modal.locator('.run-recordings-run').first();
+    const otherRun = modal.locator('.run-recordings-run').nth(1);
+
+    await run.locator('.run-recordings-run-open-button').click();
+    await expect.poll(() => recordingFetches).toEqual(['recording-b-1']);
+    await expect(modal).toBeVisible();
+    await expect(modal.locator('.run-recordings-shell')).toHaveAttribute('aria-busy', 'true');
+    await expect(run.locator('.run-recordings-run-open-button')).toBeDisabled();
+    await expect(run.locator('.run-recordings-run-delete-button')).toBeDisabled();
+    await expect(run.getByRole('status')).toHaveText('Opening…');
+    await expect(otherRun.getByText('Opening…', { exact: true })).toHaveCount(0);
+    await expect(otherRun.locator('.run-recordings-run-open-button')).toBeDisabled();
+    await expect(otherRun.locator('.run-recordings-run-delete-button')).toBeDisabled();
+
+    recordingGate.release();
+    await expect.poll(() => replayProjectFetches).toEqual(['recording-b-1']);
+    await expect(modal).toBeHidden();
+    await expect(
+      page.frameLocator('iframe.dashboard-editor-frame').getByRole('button', { name: 'Play Recording', exact: true }),
+    ).toBeVisible();
+  });
+
+  test('keeps the recordings dialog open and restores its controls when opening fails', async ({ page }) => {
+    const { recordingFetches } = await installRunRecordingRoutes(page, {
+      recordingError: 'The recording is no longer available.',
+    });
+    const modal = await openLatestFlowRecordings(page);
+    const run = modal.locator('.run-recordings-run').first();
+
+    await run.locator('.run-recordings-run-open-button').click();
+    await expect.poll(() => recordingFetches).toEqual(['recording-b-1']);
+    await expect(modal).toBeVisible();
+    await expect(modal.locator('.run-recordings-error')).toContainText('The recording is no longer available.');
+    await expect(modal.locator('.run-recordings-shell')).toHaveAttribute('aria-busy', 'false');
+    await expect(run.locator('.run-recordings-run-open-button')).toBeEnabled();
+    await expect(run.locator('.run-recordings-run-delete-button')).toBeEnabled();
   });
 
   test('shows recorded LLM response duration instead of accelerated replay time', async ({ page }) => {

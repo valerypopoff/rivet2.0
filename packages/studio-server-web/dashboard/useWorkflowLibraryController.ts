@@ -6,6 +6,7 @@ import type {
   WorkflowProjectOpenOptions,
   WorkflowProjectPathMove,
   WorkflowPublishedVersionRestoreResponse,
+  RecordingOpenResult,
 } from './types';
 import type {
   ProjectCompareSideLabels,
@@ -48,7 +49,7 @@ function isFolderEmpty(folder: WorkflowFolderItem): boolean {
 export function useWorkflowLibraryController(options: {
   onOpenProject: (path: string, nextOptions?: WorkflowProjectOpenOptions) => void;
   onRefreshOpenProjectFromDisk: (path: string) => void;
-  onOpenRecording: (recordingId: string, nextOptions?: { replaceCurrent?: boolean }) => void;
+  onOpenRecording: (recordingId: string, nextOptions?: { replaceCurrent?: boolean }) => Promise<RecordingOpenResult>;
   onOpenPublishedVersionPreview: (
     relativePath: string,
     versionId: string,
@@ -732,10 +733,7 @@ export function useWorkflowLibraryController(options: {
     closeRunRecordingsModal: runRecordings.close,
     handleRunRecordingsFoundCountChange: runRecordings.setFoundCount,
     setAppSettingsOpen,
-    onOpenRecording: (recordingId: string) => {
-      runRecordings.hide();
-      onOpenRecording(recordingId);
-    },
+    onOpenRecording,
     onOpenPublishedVersionPreview: (relativePath: string, versionId: string) => {
       setPublishedHistoryProject(null);
       setSettingsModalProject(null);

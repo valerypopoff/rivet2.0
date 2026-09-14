@@ -73,15 +73,20 @@ function formatTimestamp(value: string | undefined): string {
 function RecordingRow({
   recording,
   isDeleting,
+  isInteractionLocked,
+  isOpening,
   onDelete,
   onOpen,
 }: {
   recording: WorkflowRecordingRunSummary;
   isDeleting: boolean;
+  isInteractionLocked: boolean;
+  isOpening: boolean;
   onDelete: (recordingId: string) => void;
   onOpen: (recordingId: string) => void;
 }) {
-  const detailText = recording.errorMessage ??
+  const detailText =
+    recording.errorMessage ??
     (recording.status === 'suspicious'
       ? 'Completed without throwing, but the final output was control-flow-excluded.'
       : null);
@@ -93,36 +98,33 @@ function RecordingRow({
         type="button"
         className="run-recordings-run-open-button"
         onClick={() => onOpen(recording.id)}
-        disabled={isDeleting}
+        disabled={isDeleting || isInteractionLocked}
       >
         <div className="run-recordings-run-body">
           <div className="run-recordings-run-header">
             <div className="run-recordings-run-main">
               <div className="run-recordings-run-title">{formatTimestamp(recording.createdAt)}</div>
-              {recording.runKind === 'latest' ? (
+              {isOpening ? (
+                <span className="run-recordings-badge opening" role="status" aria-live="polite">
+                  Opening…
+                </span>
+              ) : recording.runKind === 'latest' ? (
                 <span className="run-recordings-badge latest">Latest</span>
               ) : recording.runKind === 'editor' ? (
                 <span className="run-recordings-badge latest">Local editor</span>
               ) : null}
             </div>
           </div>
-          {detailText ? (
-            <div className={`run-recordings-run-detail ${recording.status}`}>
-              {detailText}
-            </div>
-          ) : null}
+          {detailText ? <div className={`run-recordings-run-detail ${recording.status}`}>{detailText}</div> : null}
         </div>
         <div className="run-recordings-run-footer">
           <div className="run-recordings-run-meta">
-            <span className={`run-recordings-badge ${recording.status}`}>
-              {RUN_STATUS_LABELS[recording.status]}
-            </span>
+            <span className={`run-recordings-badge ${recording.status}`}>{RUN_STATUS_LABELS[recording.status]}</span>
             <span className="run-recordings-run-duration">{formatDuration(recording.durationMs)}</span>
           </div>
         </div>
         <div className="run-recordings-run-endpoint">
-          Endpoint at execution:{' '}
-          <span className="run-recordings-run-endpoint-value">{endpointNameAtExecution}</span>
+          Endpoint at execution: <span className="run-recordings-run-endpoint-value">{endpointNameAtExecution}</span>
         </div>
       </button>
       <div className="run-recordings-run-actions">
@@ -130,7 +132,7 @@ function RecordingRow({
           type="button"
           className="run-recordings-run-delete-button"
           onClick={() => onDelete(recording.id)}
-          disabled={isDeleting}
+          disabled={isDeleting || isInteractionLocked}
         >
           Delete
         </button>
@@ -142,6 +144,7 @@ function RecordingRow({
 type VirtualizedRecordingRowData = {
   recordings: WorkflowRecordingRunSummary[];
   deletingRecordingId: string | null;
+  openingRecordingId: string | null;
   onDelete: (recordingId: string) => void;
   onOpen: (recordingId: string) => void;
   onHeightChange: (recordingId: string, height: number) => void;
@@ -150,12 +153,16 @@ type VirtualizedRecordingRowData = {
 function MeasuredRecordingRow({
   recording,
   isDeleting,
+  isInteractionLocked,
+  isOpening,
   onDelete,
   onOpen,
   onHeightChange,
 }: {
   recording: WorkflowRecordingRunSummary;
   isDeleting: boolean;
+  isInteractionLocked: boolean;
+  isOpening: boolean;
   onDelete: (recordingId: string) => void;
   onOpen: (recordingId: string) => void;
   onHeightChange: (recordingId: string, height: number) => void;
@@ -165,7 +172,8 @@ function MeasuredRecordingRow({
   useEffect(() => {
     const row = rowRef.current;
     if (!row) return;
-    const measure = () => onHeightChange(recording.id, Math.ceil(row.getBoundingClientRect().height) + RECORDING_ROW_GAP);
+    const measure = () =>
+      onHeightChange(recording.id, Math.ceil(row.getBoundingClientRect().height) + RECORDING_ROW_GAP);
     measure();
     const observer = new ResizeObserver(measure);
     observer.observe(row);
@@ -177,6 +185,8 @@ function MeasuredRecordingRow({
       <RecordingRow
         recording={recording}
         isDeleting={isDeleting}
+        isInteractionLocked={isInteractionLocked}
+        isOpening={isOpening}
         onDelete={onDelete}
         onOpen={onOpen}
       />
@@ -192,6 +202,8 @@ function VirtualizedRecordingRow({ index, style, data }: ListChildComponentProps
       <MeasuredRecordingRow
         recording={recording}
         isDeleting={data.deletingRecordingId !== null}
+        isInteractionLocked={data.openingRecordingId !== null}
+        isOpening={data.openingRecordingId === recording.id}
         onDelete={data.onDelete}
         onOpen={data.onOpen}
         onHeightChange={data.onHeightChange}
@@ -203,11 +215,13 @@ function VirtualizedRecordingRow({ index, style, data }: ListChildComponentProps
 function VirtualizedRecordingList({
   recordings,
   deletingRecordingId,
+  openingRecordingId,
   onDelete,
   onOpen,
 }: {
   recordings: WorkflowRecordingRunSummary[];
   deletingRecordingId: string | null;
+  openingRecordingId: string | null;
   onDelete: (recordingId: string) => void;
   onOpen: (recordingId: string) => void;
 }) {
@@ -288,13 +302,15 @@ function VirtualizedRecordingList({
     }
   }, []);
 
-  const itemSize = useCallback((index: number) => (
-    rowHeightsRef.current.get(recordings[index]!.id) ?? ESTIMATED_RECORDING_ROW_HEIGHT
-  ), [recordings]);
+  const itemSize = useCallback(
+    (index: number) => rowHeightsRef.current.get(recordings[index]!.id) ?? ESTIMATED_RECORDING_ROW_HEIGHT,
+    [recordings],
+  );
 
   const itemData: VirtualizedRecordingRowData = {
     recordings,
     deletingRecordingId,
+    openingRecordingId,
     onDelete,
     onOpen,
     onHeightChange,
@@ -342,6 +358,7 @@ type RecordingRunsTableProps = {
   runsLoading: boolean;
   visibleRuns: WorkflowRecordingRunSummary[];
   deletingRecordingId: string | null;
+  openingRecordingId: string | null;
   onSetStatusFilter: (status: WorkflowRecordingFilterStatus) => void;
   onSetInputFilterVisible: (visible: boolean) => void;
   onSetInputFilterPath: (path: string) => void;
@@ -378,6 +395,7 @@ export const RecordingRunsTable: FC<RecordingRunsTableProps> = ({
   runsLoading,
   visibleRuns,
   deletingRecordingId,
+  openingRecordingId,
   onSetStatusFilter,
   onSetInputFilterVisible,
   onSetInputFilterPath,
@@ -394,20 +412,23 @@ export const RecordingRunsTable: FC<RecordingRunsTableProps> = ({
   const allRunsLabel = overallRunsCount > 0 ? `All (${overallRunsCount})` : 'All';
   const badRunsLabel = badRunsCount > 0 ? `Bad only (${badRunsCount})` : 'Bad only';
   const valueInputDisabled = inputFilterOperator === 'exists' || inputFilterOperator === 'not_exists';
-  const selectedInputFilterOperator = inputFilterOperatorOptions.find((option) => option.value === inputFilterOperator) ??
-    inputFilterOperatorOptions[0]!;
+  const selectedInputFilterOperator =
+    inputFilterOperatorOptions.find((option) => option.value === inputFilterOperator) ?? inputFilterOperatorOptions[0]!;
   const inputSearchFoundLabel = visibleRuns.length === 1 ? '1 match found' : `${visibleRuns.length} matches found`;
-  const inputSearchMessage = inputSearchStatus === 'searching'
-    ? visibleRuns.length > 0 ? `Searching older recordings... ${inputSearchFoundLabel}` : 'Searching newest recordings...'
-    : inputSearchStatus === 'complete'
-      ? `Search complete, ${inputSearchFoundLabel}`
-      : inputSearchStatus === 'stopped' ? `Search stopped, ${inputSearchFoundLabel}` : '';
+  const inputSearchMessage =
+    inputSearchStatus === 'searching'
+      ? visibleRuns.length > 0
+        ? `Searching older recordings... ${inputSearchFoundLabel}`
+        : 'Searching newest recordings...'
+      : inputSearchStatus === 'complete'
+        ? `Search complete, ${inputSearchFoundLabel}`
+        : inputSearchStatus === 'stopped'
+          ? `Search stopped, ${inputSearchFoundLabel}`
+          : '';
   const inputSearchProgressPercent = inputSearchProgress
     ? inputSearchProgress.availableRuns === 0
       ? 100
-      : Math.round(
-          Math.min(1, Math.max(0, inputSearchProgress.analyzedRuns / inputSearchProgress.availableRuns)) * 100,
-        )
+      : Math.round(Math.min(1, Math.max(0, inputSearchProgress.analyzedRuns / inputSearchProgress.availableRuns)) * 100)
     : null;
   const inputSearchProgressLabel = inputSearchProgress
     ? inputSearchProgress.availableRuns === 0
@@ -561,9 +582,7 @@ export const RecordingRunsTable: FC<RecordingRunsTableProps> = ({
               </button>
             </div>
 
-            {inputFilterError ? (
-              <div className="run-recordings-input-filter-error">{inputFilterError}</div>
-            ) : null}
+            {inputFilterError ? <div className="run-recordings-input-filter-error">{inputFilterError}</div> : null}
 
             {appliedInputFilter && inputSearchMessage ? (
               <div className="run-recordings-input-search-status" aria-live="polite">
@@ -583,9 +602,7 @@ export const RecordingRunsTable: FC<RecordingRunsTableProps> = ({
                       aria-valuemin={0}
                       aria-valuemax={Math.max(inputSearchProgress?.availableRuns ?? 0, 1)}
                       aria-valuenow={
-                        inputSearchProgress?.availableRuns === 0
-                          ? 1
-                          : inputSearchProgress?.analyzedRuns ?? 0
+                        inputSearchProgress?.availableRuns === 0 ? 1 : inputSearchProgress?.analyzedRuns ?? 0
                       }
                       aria-valuetext={inputSearchProgressLabel}
                     >
@@ -597,11 +614,7 @@ export const RecordingRunsTable: FC<RecordingRunsTableProps> = ({
                   </div>
                 ) : null}
                 {inputSearchStatus === 'searching' ? (
-                  <button
-                    type="button"
-                    className="run-recordings-page-button"
-                    onClick={onStopInputSearch}
-                  >
+                  <button type="button" className="run-recordings-page-button" onClick={onStopInputSearch}>
                     Stop search
                   </button>
                 ) : null}
@@ -623,12 +636,15 @@ export const RecordingRunsTable: FC<RecordingRunsTableProps> = ({
                   : inputSearchStatus === 'stopped'
                     ? 'Search stopped. Results may be incomplete.'
                     : 'No runs match this input filter.'
-                : statusFilter === 'failed' ? 'No bad runs for this workflow.' : 'No recorded runs yet.'}
+                : statusFilter === 'failed'
+                  ? 'No bad runs for this workflow.'
+                  : 'No recorded runs yet.'}
             </div>
           ) : (
             <VirtualizedRecordingList
               recordings={visibleRuns}
               deletingRecordingId={deletingRecordingId}
+              openingRecordingId={openingRecordingId}
               onDelete={onDeleteRecording}
               onOpen={onOpenRecording}
             />

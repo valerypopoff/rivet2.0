@@ -1,13 +1,10 @@
 import ModalDialog, { ModalBody, ModalTransition } from '@atlaskit/modal-dialog';
-import { useCallback, useEffect, useMemo, type FC } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type FC } from 'react';
 
 import { getWorkflowProjectStatusLabel } from './projectSettingsForm';
 import { RecordingRunsTable } from './RecordingRunsTable';
-import {
-  RecordingWorkflowSelect,
-  type RecordingWorkflowOption,
-} from './RecordingWorkflowSelect';
-import type { WorkflowRecordingWorkflowSummary } from './types';
+import { RecordingWorkflowSelect, type RecordingWorkflowOption } from './RecordingWorkflowSelect';
+import type { RecordingOpenResult, WorkflowRecordingWorkflowSummary } from './types';
 import './RunRecordingsModal.css';
 import { useRunRecordingsController } from './useRunRecordingsController';
 
@@ -16,7 +13,7 @@ interface RunRecordingsModalProps {
   resetToken: number;
   onDismiss: () => void;
   onClose: () => void;
-  onOpenRecording: (recordingId: string) => void;
+  onOpenRecording: (recordingId: string) => Promise<RecordingOpenResult>;
   onFoundCountChange: (count: number) => void;
 }
 
@@ -54,6 +51,9 @@ export const RunRecordingsModal: FC<RunRecordingsModalProps> = ({
   onOpenRecording,
   onFoundCountChange,
 }) => {
+  const [openingRecordingId, setOpeningRecordingId] = useState<string | null>(null);
+  const [openingError, setOpeningError] = useState<string | null>(null);
+  const openingAttemptRef = useRef(0);
   const {
     workflows,
     workflowsLoading,
@@ -96,6 +96,16 @@ export const RunRecordingsModal: FC<RunRecordingsModalProps> = ({
     onFoundCountChange(filteredRunsCount);
   }, [filteredRunsCount, onFoundCountChange]);
 
+  useEffect(() => {
+    openingAttemptRef.current += 1;
+    setOpeningRecordingId(null);
+    setOpeningError(null);
+
+    return () => {
+      openingAttemptRef.current += 1;
+    };
+  }, [isOpen, resetToken]);
+
   const workflowOptions = useMemo<RecordingWorkflowOption[]>(
     () =>
       workflows.map((workflow) => {
@@ -105,7 +115,9 @@ export const RunRecordingsModal: FC<RunRecordingsModalProps> = ({
         return {
           label: workflow.project.name,
           value: workflow.workflowId,
-          description: workflow.latestRunAt ? `Last run ${formatTimestamp(workflow.latestRunAt)}` : 'No recorded runs yet',
+          description: workflow.latestRunAt
+            ? `Last run ${formatTimestamp(workflow.latestRunAt)}`
+            : 'No recorded runs yet',
           endpoint,
           recordingCount: workflow.totalRuns,
           statusLabel,
@@ -122,6 +134,31 @@ export const RunRecordingsModal: FC<RunRecordingsModalProps> = ({
     handleStopInputSearch();
     onClose();
   }, [handleStopInputSearch, onClose]);
+  const handleOpenRecording = useCallback(
+    async (recordingId: string) => {
+      if (openingRecordingId) {
+        return;
+      }
+
+      const attempt = openingAttemptRef.current + 1;
+      openingAttemptRef.current = attempt;
+      setOpeningRecordingId(recordingId);
+      setOpeningError(null);
+      const result = await onOpenRecording(recordingId);
+      if (openingAttemptRef.current !== attempt) {
+        return;
+      }
+
+      if (result.opened) {
+        onDismiss();
+        return;
+      }
+
+      setOpeningRecordingId(null);
+      setOpeningError(result.error);
+    },
+    [onDismiss, onOpenRecording, openingRecordingId],
+  );
 
   if (!isOpen) {
     return null;
@@ -137,7 +174,7 @@ export const RunRecordingsModal: FC<RunRecordingsModalProps> = ({
         onClose={onDismiss}
       >
         <ModalBody>
-          <div className="project-settings-modal-shell run-recordings-shell">
+          <div className="project-settings-modal-shell run-recordings-shell" aria-busy={openingRecordingId !== null}>
             <div className="project-settings-modal-header-row run-recordings-header-row">
               <div className="project-settings-modal-heading run-recordings-heading">
                 <div className="project-settings-modal-title run-recordings-title">Run recordings</div>
@@ -156,13 +193,13 @@ export const RunRecordingsModal: FC<RunRecordingsModalProps> = ({
             </div>
 
             <div className="project-settings-modal-content run-recordings-content">
-              {error ? (
-                <div className="project-settings-error run-recordings-error">{error}</div>
+              {error || openingError ? (
+                <div className="project-settings-error run-recordings-error" role="alert">
+                  {openingError ?? error}
+                </div>
               ) : null}
 
-              {workflowsLoading ? (
-                <div className="run-recordings-empty-state">Loading recordings...</div>
-              ) : null}
+              {workflowsLoading ? <div className="run-recordings-empty-state">Loading recordings...</div> : null}
 
               {!workflowsLoading && workflows.length === 0 ? (
                 <div className="run-recordings-empty-state">No published or previously published workflows yet.</div>
@@ -202,6 +239,7 @@ export const RunRecordingsModal: FC<RunRecordingsModalProps> = ({
                       runsLoading={runsLoading}
                       visibleRuns={visibleRuns}
                       deletingRecordingId={deletingRecordingId}
+                      openingRecordingId={openingRecordingId}
                       onSetStatusFilter={setStatusFilter}
                       onSetInputFilterVisible={setInputFilterVisible}
                       onSetInputFilterPath={setInputFilterPath}
@@ -213,7 +251,7 @@ export const RunRecordingsModal: FC<RunRecordingsModalProps> = ({
                       onSetRunsPerPage={setRunsPerPage}
                       onSetPage={setPage}
                       onDeleteRecording={handleDeleteRecording}
-                      onOpenRecording={onOpenRecording}
+                      onOpenRecording={handleOpenRecording}
                     />
                   ) : null}
                 </div>

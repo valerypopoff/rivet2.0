@@ -668,6 +668,11 @@
   border-color: rgba(143, 194, 255, 0.22);
 }
 
+.run-recordings-badge.opening {
+  background: rgba(126, 226, 148, 0.12);
+  color: #a9dbb4;
+}
+
 .run-recordings-badge.succeeded {
   background: rgba(126, 226, 148, 0.12);
   color: #7ee294;
