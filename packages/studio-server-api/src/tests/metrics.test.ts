@@ -58,6 +58,14 @@ test('metrics registry renders only finite, fixed-label metric families', () => 
     mode: 'enforce',
   });
   metrics.recordPublishedExecutionAdmission('capacity_exceeded', 'workflow_endpoint');
+  metrics.setHttpBodyAdmission({
+    activeParsers: 2,
+    maxActiveParsers: 4,
+    maxReservedBytes: 1024,
+    reservedBytes: 512,
+    retainedBodies: 1,
+  });
+  metrics.recordHttpBodyAdmission('capacity_exceeded');
   metrics.recordHostedEvaluationSubmission('accepted');
   metrics.recordHostedEvaluationSubmission('outstanding_capacity_exceeded');
   metrics.recordBrowserStorageRpcProtocolNegotiation('2');
@@ -130,6 +138,13 @@ test('metrics registry renders only finite, fixed-label metric families', () => 
     /rivet_http_requests_total\{method="OTHER",profile="execution",route="other",status_class="other"\} 1/,
   );
   assert.match(rendered, /rivet_published_execution_active_runs\{profile="execution"\} 2/);
+  assert.match(rendered, /rivet_http_body_admission_active_parsers\{profile="execution"\} 2/);
+  assert.match(rendered, /rivet_http_body_admission_retained_bodies\{profile="execution"\} 1/);
+  assert.match(rendered, /rivet_http_body_admission_reserved_bytes\{profile="execution"\} 512/);
+  assert.match(
+    rendered,
+    /rivet_http_body_admission_rejections_total\{outcome="capacity_exceeded",profile="execution"\} 1/,
+  );
   assert.match(
     rendered,
     /rivet_published_execution_admission_total\{profile="execution",result="capacity_exceeded",surface="workflow_endpoint"\} 1/,

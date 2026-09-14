@@ -1345,6 +1345,16 @@ export const nodeStyles = css`
     border-top-color: var(--primary);
   }
 
+  /* Incoming previews must not inherit the consumer's previous run status. */
+  .node .node-output.live-streaming-input-preview-output .node-output-inner.live-streaming-input-preview {
+    background-color: var(--node-output-surface-bg);
+    border-top: 2px solid var(--primary);
+  }
+
+  .node .node-output.live-streaming-input-preview-output:before {
+    border-top-color: var(--primary);
+  }
+
   .overlay-buttons {
     position: absolute;
     top: var(--node-output-actions-top);

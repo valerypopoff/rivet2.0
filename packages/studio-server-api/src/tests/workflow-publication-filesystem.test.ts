@@ -45,6 +45,43 @@ async function writeSettings(
   });
 }
 
+test('filesystem web-app access changes persist an opaque binding for a legacy sidecar entry', async () => {
+  const projectPath = await writeBlankProject('LegacyWebAppBindingMigration');
+  const relativePath = path.basename(projectPath);
+  const uiGraphId = 'legacy-ui-graph';
+  const settingsPath = workflowFs.getWorkflowProjectSettingsPath(projectPath);
+
+  // This is the pre-binding sidecar shape. The access update must not keep
+  // its in-memory `legacy:<uiGraphId>` fallback on disk forever.
+  await fs.writeFile(settingsPath, `${JSON.stringify({
+    endpointName: '',
+    publishedEndpointName: '',
+    publishedSnapshotId: null,
+    publishedStateHash: null,
+    lastPublishedAt: null,
+    publishedWebApps: [{
+      allowedEmails: [],
+      publishedAt: '2026-01-01T00:00:00.000Z',
+      publishedSnapshotId: 'legacy-snapshot',
+      slug: 'legacy-web-app-binding',
+      uiGraphId,
+      uiGraphName: 'Legacy Web App',
+    }],
+  }, null, 2)}\n`, 'utf8');
+
+  await workflowStorageBackend.updateWorkflowProjectWebAppAccessWithBackend(relativePath, [{
+    uiGraphId,
+    allowedEmails: ['owner@example.com'],
+  }]);
+
+  const persisted = JSON.parse(await fs.readFile(settingsPath, 'utf8')) as {
+    publishedWebApps: Array<{ appId?: unknown }>;
+  };
+  const appId = persisted.publishedWebApps[0]?.appId;
+  assert.ok(typeof appId === 'string');
+  assert.match(appId, /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i);
+});
+
 test('publish and unpublish keep workflow project behavior stable', async () => {
   const created = await workflowMutations.createWorkflowProjectItem('', 'Published');
 

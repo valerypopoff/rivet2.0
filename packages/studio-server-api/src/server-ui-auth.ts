@@ -3,12 +3,13 @@ import type { IncomingMessage } from 'node:http';
 import type { Request } from 'express';
 
 import {
-  isTrustedTokenFreeHostRequest,
+  isTrustedClientRequest,
   isTrustedUiSessionRequest,
 } from './auth.js';
 import { addUiAuthErrorToReturnTo, sanitizeUiAuthReturnTo } from './ui-auth-utils.js';
 import { readWebAppAuthSettingsSync, requireSecureOAuthUrl } from './web-app-auth-settings.js';
 import { createHttpError } from './utils/httpError.js';
+import { getDevelopmentAuthPolicyVersion, isDevelopmentAuthRequest } from './development-auth.js';
 
 export type ServerUiAuthMode = 'none' | 'key' | 'oauth';
 
@@ -220,6 +221,7 @@ export function getServerUiOAuthSettingsVersion(): string {
     .update(JSON.stringify({
       mode: getServerUiAuthMode(),
       provider: settings.provider,
+      ...(settings.provider === 'dummy' ? { developmentPolicy: getDevelopmentAuthPolicyVersion() } : {}),
       dummyEmail: settings.dummyEmail,
       dummyAllowNonLocalhost: settings.dummyAllowNonLocalhost,
       authorizeUrl: settings.authorizeUrl,
@@ -310,7 +312,7 @@ export function createServerUiOAuthAuthorizationRedirect(req: Request, returnTo:
 
   if (config.provider === 'dummy') {
     if (!isDummyOAuthAllowedForRequest(req)) {
-      throw createHttpError(403, 'Dummy OAuth is only available for localhost requests');
+      throw createHttpError(403, 'Dummy OAuth requires deployment opt-in and an allowed development client');
     }
 
     const authorizeUrl = new URL(`${getRequestOrigin(req)}/__rivet_auth/oauth/dummy`);
@@ -337,6 +339,7 @@ export function createServerUiOAuthAuthorizationRedirect(req: Request, returnTo:
 }
 
 export function readServerUiOAuthSession(req: Request | IncomingMessage): ServerUiOAuthSession | null {
+  if (readWebAppAuthSettingsSync().provider === 'dummy' && !isDevelopmentAuthRequest(req)) return null;
   const payload = readSignedPayload<ServerUiOAuthSession>(readCookie(req, SERVER_UI_OAUTH_SESSION_COOKIE_NAME));
   if (!payload || typeof payload.email !== 'string') {
     return null;
@@ -399,7 +402,7 @@ export function isServerUiOAuthSessionAllowed(session: ServerUiOAuthSession | nu
 }
 
 export function isServerUiAuthRequestAllowed(req: Request | IncomingMessage): boolean {
-  if (isTrustedTokenFreeHostRequest(req)) {
+  if (isTrustedClientRequest(req)) {
     return true;
   }
 
@@ -438,7 +441,7 @@ async function exchangeCodeForToken(req: Request, code: string): Promise<string>
   const config = getRequiredServerUiOAuthConfig();
   if (config.provider === 'dummy') {
     if (!isDummyOAuthAllowedForRequest(req)) {
-      throw createHttpError(403, 'Dummy OAuth is only available for localhost requests');
+      throw createHttpError(403, 'Dummy OAuth requires deployment opt-in and an allowed development client');
     }
 
     if (!code.startsWith(DUMMY_OAUTH_CODE_PREFIX)) {
@@ -525,29 +528,13 @@ export function shouldRedirectServerUiOAuthCallbackFailure(error: unknown): bool
   return typeof status !== 'number' || status < 500;
 }
 
-function getLocalRequestHostName(req: Request): string {
-  const host = getForwardedHost(req).split(',')[0]?.trim() ?? '';
-  if (host.startsWith('[')) {
-    const closingBracketIndex = host.indexOf(']');
-    return closingBracketIndex > 1 ? host.slice(1, closingBracketIndex) : host;
-  }
-
-  const colonCount = host.split(':').length - 1;
-  return colonCount === 1 ? host.split(':')[0]! : host;
-}
-
 export function isDummyOAuthAllowedForRequest(req: Request): boolean {
   const settings = readWebAppAuthSettingsSync();
   if (getServerUiAuthMode() !== 'oauth' || settings.provider !== 'dummy') {
     return false;
   }
 
-  if (settings.dummyAllowNonLocalhost) {
-    return true;
-  }
-
-  const host = getLocalRequestHostName(req).toLowerCase();
-  return host === 'localhost' || host === '127.0.0.1' || host === '::1';
+  return isDevelopmentAuthRequest(req);
 }
 
 export function createDummyOAuthCode(email: string): string {

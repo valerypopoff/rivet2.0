@@ -2,6 +2,13 @@
 
 Canonical guide for embedding Rivet and serving declarative Rivet web apps.
 
+Hosted WebSocket sessions may provide `isAuthorized`, a synchronous cached-policy
+check performed before every client frame is parsed or dispatched. A false result
+or thrown error terminates the connection. Hosts still own upgrade authorization
+and idle-connection revocation. The debugger/app-executor host optionally supplies
+`authorizeClient` for upgrade checks and five-second reauthorization; standalone
+defaults are unchanged. See [Studio Server client trust](studio-server/trusted-clients.md).
+
 ## Hosted Editor
 
 `RivetAppHost` installs the same app providers used by desktop and exposes wrapper

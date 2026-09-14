@@ -11,6 +11,7 @@ import {
 
 import { validateBody } from '../../middleware/validate.js';
 import { asyncHandler } from '../../utils/asyncHandler.js';
+import { createControlPlaneJsonBodyParser, createJsonBodyParser } from '../../middleware/body-parsers.js';
 import { badRequest } from '../../utils/httpError.js';
 import {
   getLLMProfileHealthStore,
@@ -23,6 +24,8 @@ import { MAX_LOCAL_EDITOR_RECORDING_UPLOAD_BYTES } from './local-editor-recordin
 import type { WorkflowFolderItem, WorkflowProjectItem } from '../../../../studio-server-shared/workflow-types.js';
 
 export const localEditorRecordingsRouter = Router();
+const outcomeJsonBody = createControlPlaneJsonBodyParser();
+const recordingJsonBody = createJsonBodyParser(() => MAX_LOCAL_EDITOR_RECORDING_UPLOAD_BYTES);
 
 localEditorRecordingsRouter.get('/capability', (_req, res) => {
   // Route presence is the compatibility contract. Recording configuration is
@@ -190,6 +193,7 @@ async function reportOutcomeBestEffort(
 
 localEditorRecordingsRouter.post(
   '/outcome',
+  outcomeJsonBody,
   validateBody(recordingOutcomeSchema),
   asyncHandler(async (req, res) => {
     const body = req.body as z.infer<typeof recordingOutcomeSchema>;
@@ -200,6 +204,7 @@ localEditorRecordingsRouter.post(
 
 localEditorRecordingsRouter.post(
   '/',
+  recordingJsonBody,
   validateBody(localEditorRecordingSchema),
   asyncHandler(async (req, res) => {
     const body = req.body as z.infer<typeof localEditorRecordingSchema>;

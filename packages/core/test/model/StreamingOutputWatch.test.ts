@@ -133,7 +133,6 @@ void describe('StreamingOutputWatch', () => {
         processedUpdates.push(snapshot.updateIndex);
       },
       (error) => assert.fail(error.message),
-      { requiresAcceptedStop: false },
     );
 
     watch.publish({ outputs: {}, updateIndex: 1, isFinal: false });
@@ -157,7 +156,6 @@ void describe('StreamingOutputWatch', () => {
         processedUpdates.push(snapshot.updateIndex);
       },
       (error) => assert.fail(error.message),
-      { requiresAcceptedStop: false },
     );
 
     watch.finish({ outputs: {}, updateIndex: 2, isFinal: true });
@@ -241,7 +239,7 @@ void describe('StreamingOutputWatch', () => {
     await withTimeout(watch.drain(), 'the stopped bounded watch');
   });
 
-  void it('reports a missing Stop as a coordinator failure without inventing a child failure', async () => {
+  void it('reports normal settlement after its final snapshot completes', async () => {
     const failures: Error[] = [];
     const watch = new StreamingOutputWatch(
       streamingOutputWatchDefaults,
@@ -250,16 +248,49 @@ void describe('StreamingOutputWatch', () => {
     );
 
     watch.finish({ outputs: {}, updateIndex: 1, isFinal: true });
-    await withTimeout(watch.drain(), 'the final watch snapshot without Stop');
+    await withTimeout(watch.drain(), 'the final watch snapshot');
 
-    assert.match(failures[0]?.message ?? '', /before Stop Watching Streaming Output accepted a value/);
+    assert.deepEqual(failures, []);
+    assert.equal(watch.finishedNormally, true);
     assert.deepEqual(watch.runtimeSummary, {
       receivedUpdates: 1,
       coalescedUpdates: 0,
       droppedUpdates: 0,
       maximumQueuedUpdates: 1,
-      failureKind: 'missing-stop',
     });
+  });
+
+  void it('does not report normal settlement until parallel final delivery and earlier work both settle', async () => {
+    const firstRunStarted = deferred();
+    const finalRunStarted = deferred();
+    const releaseFirstRun = deferred();
+    const watch = new StreamingOutputWatch(
+      {
+        ...streamingOutputWatchDefaults,
+        executionMode: 'parallel',
+        maxParallelRuns: 2,
+        triggerMode: 'every-update',
+      },
+      async (snapshot) => {
+        if (snapshot.updateIndex === 1) {
+          firstRunStarted.resolve();
+          await releaseFirstRun.promise;
+          return;
+        }
+        finalRunStarted.resolve();
+      },
+      (error) => assert.fail(error.message),
+    );
+
+    watch.publish({ outputs: {}, updateIndex: 1, isFinal: false });
+    await withTimeout(firstRunStarted.promise, 'the first parallel watch run');
+    watch.finish({ outputs: {}, updateIndex: 2, isFinal: true });
+    await withTimeout(finalRunStarted.promise, 'the final parallel watch run');
+
+    assert.equal(watch.finishedNormally, false);
+    releaseFirstRun.resolve();
+    await withTimeout(watch.drain(), 'all parallel watch work');
+    assert.equal(watch.finishedNormally, true);
   });
 
   void it('drops only the incoming update when its bounded queue is full', async () => {
@@ -284,7 +315,6 @@ void describe('StreamingOutputWatch', () => {
         }
       },
       (error) => failures.push(error),
-      { requiresAcceptedStop: false },
     );
 
     watch.publish({
@@ -335,7 +365,6 @@ void describe('StreamingOutputWatch', () => {
         }
       },
       (error) => failures.push(error),
-      { requiresAcceptedStop: false },
     );
 
     watch.publish({

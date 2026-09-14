@@ -32,6 +32,9 @@ export type SettingsRepositoryDescriptor<T> = {
   migrations?: Readonly<Record<number, SettingsMigration>>;
   mode?: number;
   recoverReadError?(error: unknown): T | undefined;
+  // Optional policies may fail closed on malformed content without masking
+  // filesystem, database, or decryption failures.
+  recoverParseError?(error: unknown): T;
 };
 
 export class SettingsRevisionConflictError extends Error {
@@ -155,6 +158,7 @@ export class VersionedSettingsRepository<T> {
       return requestSnapshot as SettingsSnapshot<T>;
     }
 
+    sharedBackend?.assertSynchronized?.();
     const settingsPath = this.descriptor.getPath();
     const cachedError = this.#errors.get(settingsPath);
     if (cachedError) {
@@ -219,15 +223,14 @@ export class VersionedSettingsRepository<T> {
         return;
       }
 
-      const signature = await this.#readFileSignature(settingsPath);
-      if (this.#fileSignatures.get(settingsPath) === signature) {
-        return;
-      }
-
       try {
+        const signature = await this.#readFileSignature(settingsPath);
+        if (this.#fileSignatures.get(settingsPath) === signature && !this.#errors.has(settingsPath)) {
+          return;
+        }
         await this.#refreshNow(settingsPath);
       } catch (error) {
-        this.#fileSignatures.set(settingsPath, signature);
+        this.#errors.set(settingsPath, error);
         throw error;
       }
     });
@@ -363,11 +366,18 @@ export class VersionedSettingsRepository<T> {
   }
 
   async #refreshManagedNow(settingsPath: string): Promise<SettingsSnapshot<T>> {
-    const record = await sharedBackend!.read(this.descriptor.key);
-    if (!record) {
-      return this.#initializeManaged(settingsPath);
+    try {
+      const record = await sharedBackend!.read(this.descriptor.key);
+      if (!record) {
+        return await this.#initializeManaged(settingsPath);
+      }
+      return this.#rememberManaged(settingsPath, record);
+    } catch (error) {
+      // A cached allow policy is not usable after its backing store stops being readable.
+      this.#errors.set(settingsPath, error);
+      sharedBackend?.invalidateRevision?.(this.descriptor.key);
+      throw error;
     }
-    return this.#rememberManaged(settingsPath, record);
   }
 
   async #updateManaged(
@@ -404,9 +414,7 @@ export class VersionedSettingsRepository<T> {
   }
 
   #rememberManaged(settingsPath: string, record: ManagedSettingsRecord): SettingsSnapshot<T> {
-    const parsed = this.descriptor.parseStored(
-      parseStoredObject(JSON.stringify(record.value), this.descriptor as SettingsRepositoryDescriptor<unknown>),
-    );
+    const parsed = this.#parse(JSON.stringify(record.value));
     this.#sharedRevisions.set(settingsPath, record.revision);
     return this.#remember(settingsPath, parsed);
   }
@@ -433,8 +441,13 @@ export class VersionedSettingsRepository<T> {
   }
 
   #parse(text: string): T {
-    const stored = parseStoredObject(text, this.descriptor as SettingsRepositoryDescriptor<unknown>);
-    return this.descriptor.parseStored(stored);
+    try {
+      const stored = parseStoredObject(text, this.descriptor as SettingsRepositoryDescriptor<unknown>);
+      return this.descriptor.parseStored(stored);
+    } catch (error) {
+      if (!this.descriptor.recoverParseError) throw error;
+      return this.descriptor.recoverParseError(error);
+    }
   }
 
   #handleReadError(settingsPath: string, error: unknown): SettingsSnapshot<T> {
@@ -566,6 +579,11 @@ export function runWithAppSettingsSnapshot<T>(callback: () => T): T {
     snapshots.set(repository, repository.readSync());
   }
   return requestSettingsStorage.run(snapshots, callback);
+}
+
+/** Long-lived transports must not reauthorize against their opening request's snapshot. */
+export function runOutsideAppSettingsSnapshot<T>(callback: () => T): T {
+  return requestSettingsStorage.exit(callback);
 }
 
 export function invalidateAppSettingsRepositories(): void {

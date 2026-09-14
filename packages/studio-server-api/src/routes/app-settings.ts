@@ -1,4 +1,4 @@
-import { Router, type NextFunction, type Request, type RequestHandler, type Response } from 'express';
+import { Router, type NextFunction, type Request, type Response } from 'express';
 import type { RuntimeLimitSettingsDraft } from '../../../studio-server-shared/app-settings-types.js';
 import {
   deploymentStorageSettingsRepository,
@@ -34,10 +34,10 @@ import {
   writeRuntimeLimitSettings,
 } from '../runtime-limit-settings.js';
 import {
-  trustedHostSettingsRepository,
-  readTrustedHostSettings,
-  writeTrustedHostSettings,
-} from '../trusted-host-settings.js';
+  trustedClientSettingsRepository,
+  readTrustedClientSettings,
+  writeTrustedClientSettings,
+} from '../trusted-client-settings.js';
 import {
   webAppAuthSettingsRepository,
   readWebAppAuthSettings,
@@ -49,6 +49,9 @@ import {
   writeWorkflowEndpointAuthSettings,
 } from '../workflow-endpoint-auth-settings.js';
 import { createHttpError } from '../utils/httpError.js';
+import { getVerifiedClientAddress, isTrustedClientRequest } from '../auth.js';
+import { asyncHandler } from '../utils/asyncHandler.js';
+import { createControlPlaneJsonBodyParser } from '../middleware/body-parsers.js';
 import {
   runRecordingsSettingsRepository,
   readRunRecordingsSettings,
@@ -59,6 +62,13 @@ export { readNodeExecutorProxySettings, writeNodeExecutorProxySettings } from '.
 export { readRunRecordingsSettings, writeRunRecordingsSettings } from './workflows/recordings-config.js';
 
 export const appSettingsRouter = Router();
+appSettingsRouter.get('/trusted-clients/current-request', (req, res) => {
+  res.set('Cache-Control', 'no-store').json({
+    clientAddress: getVerifiedClientAddress(req),
+    trusted: isTrustedClientRequest(req),
+  });
+});
+const jsonBody = createControlPlaneJsonBodyParser();
 
 type NodeExecutorProxySettingsReloader = () => Promise<unknown> | unknown;
 
@@ -102,19 +112,15 @@ function registerSettingsResource(options: {
     }
   });
 
-  const writeHandler: RequestHandler = async (req, res, next) => {
-    try {
-      const draft = options.normalizeDraft?.(req.body) ?? req.body;
-      const settings = await options.write(draft, getExpectedRevision(req));
-      await options.afterWrite?.();
-      sendSettingsResponse(res, options.repository, settings);
-    } catch (error) {
-      next(error);
-    }
-  };
+  const writeHandler = asyncHandler(async (req, res) => {
+    const draft = options.normalizeDraft?.(req.body) ?? req.body;
+    const settings = await options.write(draft, getExpectedRevision(req));
+    await options.afterWrite?.();
+    sendSettingsResponse(res, options.repository, settings);
+  });
 
-  appSettingsRouter.put(options.path, writeHandler);
-  appSettingsRouter.patch(options.path, writeHandler);
+  appSettingsRouter.put(options.path, jsonBody, writeHandler);
+  appSettingsRouter.patch(options.path, jsonBody, writeHandler);
 }
 
 function normalizeRuntimeLimitSettingsDraft(value: unknown): RuntimeLimitSettingsDraft {
@@ -194,10 +200,10 @@ registerSettingsResource({
   normalizeDraft: normalizeRuntimeLimitSettingsDraft,
 });
 registerSettingsResource({
-  path: '/trusted-hosts',
-  repository: trustedHostSettingsRepository,
-  read: readTrustedHostSettings,
-  write: writeTrustedHostSettings,
+  path: '/trusted-clients',
+  repository: trustedClientSettingsRepository,
+  read: readTrustedClientSettings,
+  write: writeTrustedClientSettings,
 });
 registerSettingsResource({
   path: '/deployment-storage',

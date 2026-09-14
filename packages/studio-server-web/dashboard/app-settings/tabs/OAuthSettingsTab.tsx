@@ -41,7 +41,7 @@ export function OAuthSettingsTab({ auth, routeConfig }: {
                 <span className="app-settings-field-help">The dummy sign-in form is prefilled with this email for local testing.</span>
               </label>
               <div className="app-settings-field">
-                <BooleanSetting checked={form.dummyAllowNonLocalhost} disabled={auth.controlsDisabled} label="Allow dummy sign-in outside localhost" onChange={(value) => update('dummyAllowNonLocalhost', value)} />
+                <p className="app-settings-field-help">Dummy sign-in requires deployment opt-in and an explicitly allowed development client network. It permits email impersonation and must not be exposed publicly.</p>
                 <span className="app-settings-field-help">Keep this off for shared environments. It exists only for local integration testing.</span>
               </div>
             </>

@@ -62,6 +62,28 @@ test('managed release gate reserves enough workers for deterministic execution n
   assert.equal((kindTopology.match(/- role: worker/g) ?? []).length, 3);
 });
 
+test('managed release gate proves cross-instance OAuth web-app revocation with its isolated loopback-only dummy provider', async () => {
+  const [runner, overlay] = await Promise.all([
+    fs.readFile(
+      path.join(rootDir, 'deploy', 'studio-server', 'scripts', 'kubernetes-managed-release-gate.mjs'),
+      'utf8',
+    ),
+    fs.readFile(path.join(rootDir, 'deploy', 'studio-server', 'helm', 'overlays', 'managed-release-gate.yaml'), 'utf8'),
+  ]);
+
+  assert.match(runner, /verifyManagedWebAppAccessRevocation/);
+  assert.match(runner, /createReleaseGateWebAppOAuthSession/);
+  assert.match(runner, /Dummy OAuth login did not produce its expected redirect/);
+  assert.match(runner, /managed OAuth web-app policy propagation/);
+  assert.match(runner, /Removed OAuth WebSocket did not close with 1008 access revocation/);
+  assert.match(runner, /Removed OAuth user could still start an action/);
+  assert.match(runner, /Retained OAuth user action did not complete/);
+  assert.match(runner, /await gate\.verifyManagedWebAppAccessRevocation\(baseUrl, persistedState\)/);
+  assert.match(overlay, /RIVET_ENABLE_DEVELOPMENT_AUTH: "true"/);
+  assert.match(overlay, /RIVET_DEVELOPMENT_AUTH_CLIENTS: "127\.0\.0\.1\/32,::1\/128"/);
+  assert.match(overlay, /This is never a production deployment setting/);
+});
+
 test('managed release gate requires an exact explicitly allowed kube context', () => {
   assert.throws(
     () =>

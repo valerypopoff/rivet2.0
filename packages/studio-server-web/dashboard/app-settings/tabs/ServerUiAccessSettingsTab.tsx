@@ -17,7 +17,7 @@ export function ServerUiAccessSettingsTab({ auth }: { auth: ReturnType<typeof us
             <span className="app-settings-field-label">Server UI admin emails</span>
             <textarea
               aria-label="Server UI admin emails"
-              className="project-settings-textarea app-settings-trusted-hosts"
+              className="project-settings-textarea app-settings-trusted-clients"
               value={auth.form.serverUiAdminEmailsText}
               disabled={auth.controlsDisabled}
               placeholder="admin@example.com"

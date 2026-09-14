@@ -59,6 +59,22 @@ function assertUsableWebAppSlug(slug: string): void {
   }
 }
 
+/**
+ * Filesystem sidecars written before stable app bindings existed normalize to
+ * `legacy:<uiGraphId>` in memory. Persist an opaque binding the first time
+ * that particular app is changed, so subsequent policy comparisons no longer
+ * depend on a legacy-derived identifier.
+ */
+function getPersistedWebAppBindingId(
+  publication: StoredWorkflowPublishedWebApp | undefined,
+  uiGraphId: string,
+): string {
+  if (!publication || publication.appId === `legacy:${uiGraphId}`) {
+    return randomUUID();
+  }
+  return publication.appId;
+}
+
 function normalizeWebAppPublicationDrafts(
   value: unknown,
   existingWebApps: readonly StoredWorkflowPublishedWebApp[] = [],
@@ -284,7 +300,14 @@ export async function publishWorkflowProjectWebApps(relativePath: unknown, publi
     ...existingSettings.publishedWebApps.filter((webApp) => !replacedUiGraphIds.has(webApp.uiGraphId)),
     ...normalizedPublications.map((publication) => {
       const uiGraph = availableUiGraphs.get(publication.uiGraphId);
+      const previousPublication = existingSettings.publishedWebApps.find(
+        (webApp) => webApp.uiGraphId === publication.uiGraphId,
+      );
       return {
+        // Republishing the same UI graph updates its executable snapshot, not
+        // the app binding held by already connected clients. Unpublish then
+        // publish creates a new binding because there is no prior entry.
+        appId: getPersistedWebAppBindingId(previousPublication, publication.uiGraphId),
         uiGraphId: publication.uiGraphId,
         uiGraphName: uiGraph?.name ?? publication.uiGraphId,
         slug: publication.slug,
@@ -340,7 +363,14 @@ export async function updateWorkflowProjectWebAppAccess(relativePath: unknown, a
         return webApp;
       }
 
-      return { ...webApp, allowedEmails: accessByUiGraphId.get(webApp.uiGraphId) ?? [] };
+      return {
+        ...webApp,
+        appId: getPersistedWebAppBindingId(webApp, webApp.uiGraphId),
+        // This endpoint updates only the explicitly selected web apps. Keep
+        // every other published app's access list intact instead of silently
+        // turning it into an empty allowlist.
+        allowedEmails: accessByUiGraphId.get(webApp.uiGraphId) ?? webApp.allowedEmails,
+      };
     }),
   });
 

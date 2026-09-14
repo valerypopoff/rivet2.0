@@ -28,6 +28,8 @@ type MockRequest = {
 };
 
 const OAUTH_ENV_KEYS = [
+  'RIVET_ENABLE_DEVELOPMENT_AUTH',
+  'RIVET_DEVELOPMENT_AUTH_CLIENTS',
   'RIVET_KEY',
   'RIVET_APP_DATA_ROOT',
   'RIVET_WEB_APPS_AUTH_MODE',
@@ -56,7 +58,7 @@ function createMockRequest(headers: Record<string, string> = {}): MockRequest {
   );
   return {
     protocol: 'http',
-    headers: normalizedHeaders,
+    headers: { 'x-rivet-proxy-auth': getExpectedProxyAuthToken(), 'x-rivet-client-ip': '127.0.0.1', ...normalizedHeaders },
     get(name: string): string | undefined {
       return normalizedHeaders[name.toLowerCase()];
     },
@@ -75,6 +77,8 @@ async function withEnv(values: LegacyOAuthEnvValues, run: () => Promise<void> | 
       delete process.env[key];
     }
     process.env.RIVET_KEY = 'web-app-oauth-test-key';
+    process.env.RIVET_ENABLE_DEVELOPMENT_AUTH = 'true';
+    process.env.RIVET_DEVELOPMENT_AUTH_CLIENTS = '127.0.0.1';
     process.env.RIVET_APP_DATA_ROOT = path.join(tempRoot, 'app-data');
 
     const hasOAuthValues = Object.keys(values).some((key) => key.startsWith('OAUTH_'));
@@ -144,6 +148,13 @@ async function withOAuthCallbackServer(
   mountPath = '/',
 ): Promise<void> {
   const app = express();
+  // This fixture models a trusted local forwarding proxy; public spoofing is
+  // covered by trusted-clients.test.ts and the real nginx integration check.
+  app.use((req, _res, next) => {
+    req.headers['x-rivet-proxy-auth'] = getExpectedProxyAuthToken();
+    req.headers['x-rivet-client-ip'] = '127.0.0.1';
+    next();
+  });
   app.use(express.urlencoded({ extended: false }));
   app.use(mountPath, webAppOAuthRouter);
   const server = http.createServer(app);
@@ -376,17 +387,17 @@ test('web app dummy OAuth provider signs in locally without external provider en
   });
 });
 
-test('web app dummy OAuth provider refuses non-localhost redirect starts by default', async () => {
+test('web app dummy OAuth rejects a remote client even when Host is localhost', async () => {
   await withEnv({
     OAUTH_PROVIDER: 'dummy',
     OAUTH_SESSION_SECRET: 'session-secret',
   }, () => {
     assert.throws(
       () => createWebAppOAuthAuthorizationRedirect(
-        createMockRequest({ host: 'rivet.example.test', 'x-forwarded-proto': 'https' }) as any,
+        createMockRequest({ host: 'localhost', 'x-forwarded-proto': 'https', 'x-rivet-client-ip': '203.0.113.5' }) as any,
         '/apps/dummy-tool',
       ),
-      /Dummy OAuth is only available for localhost requests/,
+      /Dummy OAuth requires deployment opt-in and an allowed development client/,
     );
   });
 });

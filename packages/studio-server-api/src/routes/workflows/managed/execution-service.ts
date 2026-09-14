@@ -16,6 +16,7 @@ import type {
   ManagedExecutionResolveSnapshot,
   ManagedExecutionRevisionRecord,
   ManagedExecutionWorkflowRecord,
+  ManagedWebAppAccessPolicy,
 } from './execution-types.js';
 
 type ManagedWorkflowExecutionBlobStore = {
@@ -36,6 +37,7 @@ type ManagedWorkflowExecutionContext = {
       runKind: ManagedWorkflowRunKind,
       lookupName: string,
     ): Promise<ManagedExecutionPointerLookupResult | null>;
+    resolveWebAppAccessPolicyFromDatabase(client: Pool, lookupName: string): Promise<ManagedWebAppAccessPolicy | null>;
   };
   revisions: {
     readRevisionContents(revision: ManagedExecutionRevisionRecord): Promise<{ contents: string; datasetsContents: string | null }>;
@@ -60,6 +62,10 @@ export class ManagedWorkflowExecutionService {
     runKind: ManagedWorkflowRunKind,
     lookupName: string,
   ) => Promise<ManagedExecutionPointerLookupResult | null>;
+  readonly #resolveWebAppAccessPolicyFromDatabase: (
+    client: Pool,
+    lookupName: string,
+  ) => Promise<ManagedWebAppAccessPolicy | null>;
   readonly #endpointLoadInflight = new Map<string, Promise<ManagedExecutionProjectResult | null>>();
   readonly #revisionMaterializationInflight = new Map<string, Promise<ManagedRevisionMaterializationCacheEntry>>();
 
@@ -73,6 +79,7 @@ export class ManagedWorkflowExecutionService {
     this.#getRevision = dependencies.context.queries.getRevision;
     this.#readRevisionContents = (revision) => dependencies.context.revisions.readRevisionContents(revision);
     this.#resolveExecutionPointerFromDatabase = dependencies.context.queries.resolveExecutionPointerFromDatabase;
+    this.#resolveWebAppAccessPolicyFromDatabase = dependencies.context.queries.resolveWebAppAccessPolicyFromDatabase;
   }
 
   async loadPublishedExecutionProject(endpointName: string): Promise<ManagedExecutionProjectResult | null> {
@@ -89,6 +96,10 @@ export class ManagedWorkflowExecutionService {
 
   async loadLatestWebAppExecutionProject(slug: string): Promise<ManagedExecutionProjectResult | null> {
     return this.#loadExecutionProjectByEndpoint('latest-web-app', slug);
+  }
+
+  async resolveWebAppAccessPolicy(slug: string): Promise<ManagedWebAppAccessPolicy | null> {
+    return this.#resolveWebAppAccessPolicyFromDatabase(this.#pool, normalizeWorkflowEndpointLookupName(slug));
   }
 
   createProjectReferenceLoader() {
@@ -275,6 +286,12 @@ export class ManagedWorkflowExecutionService {
         revisionKey: `managed:${pointer.revisionId}`,
         webAppUiGraphId: pointer.webAppUiGraphId,
         webAppAllowedEmails: pointer.webAppAllowedEmails,
+        webAppBindingId: pointer.webAppId == null
+          ? undefined
+          : `managed:${pointer.webAppId}`,
+        webAppPolicyInvalidationKey: pointer.webAppId == null
+          ? undefined
+          : `managed:${pointer.workflowId}`,
         debug: {
           cacheStatus,
           resolveMs,

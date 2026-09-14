@@ -1,6 +1,7 @@
 import type { EditorDefinition } from '../EditorDefinition.js';
 import type { ChartNode } from '../NodeBase.js';
 import type { RivetUIContext } from '../RivetUIContext.js';
+import { STREAM_RESPONSE_HELPER_MESSAGE } from './chatV2Shared.js';
 import {
   DEFAULT_LLM_CHAT_V2_RETRY_ON_NON_200_COOLDOWN_MS,
   DEFAULT_LLM_CHAT_V2_RETRY_ON_NON_200_REPEAT_TIMES,
@@ -488,8 +489,7 @@ function getResponseSettingsEditors(): LLMChatV2EditorDefinition {
       type: 'toggle',
       label: 'Stream response',
       dataKey: 'useAsGraphPartialOutput',
-      helperMessage:
-        'Shows streamed response updates in the node output while running in the editor. Other nodes only receive the final response after it is complete.',
+      helperMessage: STREAM_RESPONSE_HELPER_MESSAGE,
     },
     {
       type: 'string',

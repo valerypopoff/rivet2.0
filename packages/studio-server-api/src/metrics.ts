@@ -36,6 +36,12 @@ export type MetricsHttpRoute =
   | 'published_workflow';
 
 export type MetricsPublishedExecutionSurface = 'web_app_action' | 'workflow_endpoint';
+export type MetricsHttpBodyAdmissionOutcome =
+  | 'capacity_exceeded'
+  | 'receive_timeout'
+  | 'too_large'
+  | 'unsupported_body_encoding'
+  | 'unsupported_media_type';
 export type MetricsBrowserStorageRpcDirection = 'commit' | 'read';
 export type MetricsBrowserStorageRpcOutcome =
   | 'cancelled'
@@ -145,6 +151,24 @@ export class StudioMetrics {
 
   recordPublishedExecutionInterruptions(surface: MetricsPublishedExecutionSurface, count = 1): void {
     this.incrementCounter('rivet_published_execution_interruptions_total', { surface }, count);
+  }
+
+  setHttpBodyAdmission(input: {
+    activeParsers: number;
+    maxActiveParsers: number;
+    maxReservedBytes: number;
+    reservedBytes: number;
+    retainedBodies: number;
+  }): void {
+    this.setGauge('rivet_http_body_admission_active_parsers', {}, input.activeParsers);
+    this.setGauge('rivet_http_body_admission_active_parser_limit', {}, input.maxActiveParsers);
+    this.setGauge('rivet_http_body_admission_retained_bodies', {}, input.retainedBodies);
+    this.setGauge('rivet_http_body_admission_reserved_bytes', {}, input.reservedBytes);
+    this.setGauge('rivet_http_body_admission_reserved_bytes_limit', {}, input.maxReservedBytes);
+  }
+
+  recordHttpBodyAdmission(outcome: MetricsHttpBodyAdmissionOutcome): void {
+    this.incrementCounter('rivet_http_body_admission_rejections_total', { outcome });
   }
 
   recordBrowserStorageRpcProtocolNegotiation(version: 'legacy' | '2'): void {

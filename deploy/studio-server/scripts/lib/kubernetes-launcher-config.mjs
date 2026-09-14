@@ -214,6 +214,9 @@ export function buildKubernetesLauncherConfig(env) {
         (parseBoolean(readEnv(env, 'RIVET_REQUIRE_UI_GATE_KEY'), false) ? 'key' : 'none'),
       requireUiGateKey: parseBoolean(readEnv(env, 'RIVET_REQUIRE_UI_GATE_KEY'), false),
       trustIncomingForwardedHeaders: parseBoolean(readEnv(env, 'RIVET_TRUST_INCOMING_FORWARDED_HEADERS'), false),
+      trustedForwardingProxies: readEnv(env, 'RIVET_TRUSTED_FORWARDING_PROXIES') ?? '',
+      enableDevelopmentAuth: readEnv(env, 'RIVET_ENABLE_DEVELOPMENT_AUTH') === 'true',
+      developmentAuthClients: readEnv(env, 'RIVET_DEVELOPMENT_AUTH_CLIENTS') ?? '',
     },
   };
 }
@@ -284,6 +287,9 @@ export function renderKubernetesLauncherValuesYaml(config) {
     `  RIVET_SERVER_UI_AUTH_MODE: ${yamlString(config.routeConfig.serverUiAuthMode)}`,
     `  RIVET_REQUIRE_UI_GATE_KEY: ${yamlString(String(config.routeConfig.requireUiGateKey))}`,
     `  RIVET_TRUST_INCOMING_FORWARDED_HEADERS: ${yamlString(String(config.routeConfig.trustIncomingForwardedHeaders))}`,
+    `  RIVET_TRUSTED_FORWARDING_PROXIES: ${yamlString(config.routeConfig.trustedForwardingProxies)}`,
+    `  RIVET_ENABLE_DEVELOPMENT_AUTH: ${yamlString(String(config.routeConfig.enableDevelopmentAuth))}`,
+    `  RIVET_DEVELOPMENT_AUTH_CLIENTS: ${yamlString(config.routeConfig.developmentAuthClients)}`,
     '',
   ].join('\n');
 }

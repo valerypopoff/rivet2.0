@@ -20,14 +20,14 @@ import {
   readServerUiOAuthState,
   shouldRedirectServerUiOAuthCallbackFailure,
 } from '../server-ui-auth.js';
-import {
-  addUiAuthErrorToReturnTo,
-  removeUiAuthErrorFromReturnTo,
-  sanitizeUiAuthReturnTo,
-} from '../ui-auth-utils.js';
+import { addUiAuthErrorToReturnTo, removeUiAuthErrorFromReturnTo, sanitizeUiAuthReturnTo } from '../ui-auth-utils.js';
 import { createHttpError } from '../utils/httpError.js';
+import { createSmallCredentialBodyParser } from '../middleware/body-parsers.js';
 
 export const uiAuthRouter = Router();
+// Sign-in is necessarily unauthenticated, so keep its accepted credentials
+// deliberately small instead of inheriting a workflow-sized JSON parser.
+const smallCredentialBodyParser = createSmallCredentialBodyParser();
 const defaultUiReturnTo = '/';
 
 function isFormPost(contentType: string | undefined): boolean {
@@ -40,11 +40,7 @@ function setNoStoreHeaders(res: Response): void {
 }
 
 function getRequestReturnTo(req: Request): string {
-  return sanitizeUiAuthReturnTo(
-    req.get('x-rivet-ui-return-to') ??
-    req.query.return_to ??
-    req.body?.return_to,
-  );
+  return sanitizeUiAuthReturnTo(req.get('x-rivet-ui-return-to') ?? req.query.return_to ?? req.body?.return_to);
 }
 
 function redirectFormError(res: Response, returnTo: string, authError: string): void {
@@ -129,7 +125,7 @@ function renderKeyPrompt(returnTo: string): string {
         <input name="return_to" type="hidden" value="${escapeHtml(retryReturnTo)}">
         <button type="submit">Continue</button>
       </form>`,
-    hint: 'Trusted hosts still bypass this prompt automatically.',
+    hint: 'Configured trusted client IP addresses and networks bypass this prompt automatically.',
   });
 }
 
@@ -158,7 +154,8 @@ function renderDummyOAuthPage(state: string): string {
   const email = getServerUiOAuthDummyEmail();
   return renderAuthShell({
     title: 'Dummy OAuth sign in',
-    message: 'This local-only provider creates a normal Rivet server UI OAuth session for testing admin email allowlists.',
+    message:
+      'This local-only provider creates a normal Rivet server UI OAuth session for testing admin email allowlists.',
     bodyHtml: `<form method="post" action="/__rivet_auth/oauth/dummy">
         <input type="hidden" name="state" value="${escapeHtml(state)}">
         <label for="dummy-email">Email</label>
@@ -188,18 +185,19 @@ uiAuthRouter.get('/ui-auth/prompt', (req, res, next) => {
 
     const returnTo = getRequestReturnTo(req);
     const mode = getServerUiAuthMode();
-    const html = mode === 'oauth'
-      ? renderOAuthPrompt(returnTo)
-      : mode === 'key'
-        ? renderKeyPrompt(returnTo)
-        : renderOpenPrompt(returnTo);
+    const html =
+      mode === 'oauth'
+        ? renderOAuthPrompt(returnTo)
+        : mode === 'key'
+          ? renderKeyPrompt(returnTo)
+          : renderOpenPrompt(returnTo);
     res.status(200).type('html').send(html);
   } catch (error) {
     next(error);
   }
 });
 
-uiAuthRouter.post('/ui-auth', (req, res, next) => {
+uiAuthRouter.post('/ui-auth', smallCredentialBodyParser, (req, res, next) => {
   const formPost = isFormPost(req.get('content-type'));
   const formReturnTo = getRequestReturnTo(req);
   setNoStoreHeaders(res);
@@ -232,11 +230,8 @@ uiAuthRouter.post('/ui-auth', (req, res, next) => {
     return;
   }
 
-  const providedKey = typeof req.body?.key === 'string'
-    ? req.body.key
-    : typeof req.body?.token === 'string'
-      ? req.body.token
-      : '';
+  const providedKey =
+    typeof req.body?.key === 'string' ? req.body.key : typeof req.body?.token === 'string' ? req.body.token : '';
   if (!isValidSharedKey(providedKey)) {
     if (formPost) {
       redirectFormError(res, formReturnTo, 'invalid');
@@ -279,20 +274,30 @@ uiAuthRouter.get('/ui-auth/oauth/start', (req, res, next) => {
 uiAuthRouter.get('/ui-auth/oauth/dummy', (req, res) => {
   setNoStoreHeaders(res);
   if (!isTrustedProxyRequest(req)) {
-    res.status(403).type('html').send(renderAuthShell({
-      title: 'Forbidden',
-      message: 'This sign-in route is only available through the trusted Rivet proxy.',
-      bodyHtml: '',
-    }));
+    res
+      .status(403)
+      .type('html')
+      .send(
+        renderAuthShell({
+          title: 'Forbidden',
+          message: 'This sign-in route is only available through the trusted Rivet proxy.',
+          bodyHtml: '',
+        }),
+      );
     return;
   }
 
   if (!isDummyOAuthAllowedForRequest(req)) {
-    res.status(403).type('html').send(renderAuthShell({
-      title: 'Forbidden',
-      message: 'Dummy OAuth is only available for localhost requests.',
-      bodyHtml: '',
-    }));
+    res
+      .status(403)
+      .type('html')
+      .send(
+        renderAuthShell({
+          title: 'Forbidden',
+          message: 'Dummy OAuth requires deployment opt-in and an allowed development client.',
+          bodyHtml: '',
+        }),
+      );
     return;
   }
 
@@ -300,23 +305,33 @@ uiAuthRouter.get('/ui-auth/oauth/dummy', (req, res) => {
   res.status(200).type('html').send(renderDummyOAuthPage(state));
 });
 
-uiAuthRouter.post('/ui-auth/oauth/dummy', (req, res) => {
+uiAuthRouter.post('/ui-auth/oauth/dummy', smallCredentialBodyParser, (req, res) => {
   setNoStoreHeaders(res);
   if (!isTrustedProxyRequest(req)) {
-    res.status(403).type('html').send(renderAuthShell({
-      title: 'Forbidden',
-      message: 'This sign-in route is only available through the trusted Rivet proxy.',
-      bodyHtml: '',
-    }));
+    res
+      .status(403)
+      .type('html')
+      .send(
+        renderAuthShell({
+          title: 'Forbidden',
+          message: 'This sign-in route is only available through the trusted Rivet proxy.',
+          bodyHtml: '',
+        }),
+      );
     return;
   }
 
   if (!isDummyOAuthAllowedForRequest(req)) {
-    res.status(403).type('html').send(renderAuthShell({
-      title: 'Forbidden',
-      message: 'Dummy OAuth is only available for localhost requests.',
-      bodyHtml: '',
-    }));
+    res
+      .status(403)
+      .type('html')
+      .send(
+        renderAuthShell({
+          title: 'Forbidden',
+          message: 'Dummy OAuth requires deployment opt-in and an allowed development client.',
+          bodyHtml: '',
+        }),
+      );
     return;
   }
 
@@ -364,10 +379,7 @@ uiAuthRouter.get('/ui-auth/oauth/callback', async (req, res, next) => {
       return;
     }
 
-    res.setHeader('Set-Cookie', [
-      clearCookie(SERVER_UI_OAUTH_STATE_COOKIE_NAME, req),
-      sessionCookie,
-    ]);
+    res.setHeader('Set-Cookie', [clearCookie(SERVER_UI_OAUTH_STATE_COOKIE_NAME, req), sessionCookie]);
     res.redirect(303, returnTo);
   } catch (error) {
     next(error);
@@ -390,8 +402,4 @@ uiAuthRouter.get('/ui-auth/logout', (req, res) => {
   res.redirect(303, returnTo || defaultUiReturnTo);
 });
 
-export {
-  addUiAuthErrorToReturnTo,
-  removeUiAuthErrorFromReturnTo,
-  sanitizeUiAuthReturnTo,
-};
+export { addUiAuthErrorToReturnTo, removeUiAuthErrorFromReturnTo, sanitizeUiAuthReturnTo };

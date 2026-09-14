@@ -4022,7 +4022,9 @@
         {
           "path": "packages/studio-server-api/src/trusted-host-settings.ts",
           "migrationMode": "100644",
-          "migrationBlob": "752af9b9eb9af0950c4c985d4e76ae1916481c82"
+          "migrationBlob": "752af9b9eb9af0950c4c985d4e76ae1916481c82",
+          "currentPath": "packages/studio-server-api/src/trusted-client-settings.ts",
+          "currentReason": "Hostname bypass was replaced by verified client IP/network settings; legacy data remains migration information."
         }
       ]
     },
@@ -5287,7 +5289,9 @@
         {
           "path": "packages/studio-server-web/dashboard/app-settings/useTrustedHostsForm.ts",
           "migrationMode": "100644",
-          "migrationBlob": "ca0503c3c94fb897d52d7b314b0ea39d3a703f11"
+          "migrationBlob": "ca0503c3c94fb897d52d7b314b0ea39d3a703f11",
+          "currentPath": "packages/studio-server-web/dashboard/app-settings/useTrustedClientsForm.ts",
+          "currentReason": "The settings form now edits trusted client IPs/networks instead of hostnames."
         }
       ]
     },

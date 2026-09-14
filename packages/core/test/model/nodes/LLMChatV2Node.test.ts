@@ -21,6 +21,7 @@ import {
   resolveLLMChatV2RuntimeConfig,
 } from '../../../src/model/chat-v2/llmChatV2NodeRuntime.js';
 import { getLLMChatV2BodySections } from '../../../src/model/chat-v2/llmChatV2Body.js';
+import { STREAM_RESPONSE_HELPER_MESSAGE } from '../../../src/model/chat-v2/chatV2Shared.js';
 
 function createNode(data: Partial<LLMChatV2Node['data']> = {}) {
   return new LLMChatV2NodeImpl({
@@ -1028,9 +1029,9 @@ describe('LLMChatV2NodeImpl', () => {
       responseSettingsGroup.editors.find((editor: any) => editor.dataKey === 'useAsGraphPartialOutput')?.label,
       'Stream response',
     );
-    assert.match(
+    assert.equal(
       responseSettingsGroup.editors.find((editor: any) => editor.dataKey === 'useAsGraphPartialOutput')?.helperMessage,
-      /Other nodes only receive the final response/,
+      STREAM_RESPONSE_HELPER_MESSAGE,
     );
     assert.equal(
       outputGroup.editors.find((editor: any) => editor.dataKey === 'cache')?.label,

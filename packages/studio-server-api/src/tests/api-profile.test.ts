@@ -202,26 +202,31 @@ test('combined and control profiles keep filesystem mode as a supported startup 
 test('deployment status keeps topology explicit and never infers single-host replica data', () => {
   assert.equal(getDeploymentTopology({}), 'single-host');
   assert.equal(getDeploymentTopology({ RIVET_DEPLOYMENT_TOPOLOGY: 'replicated' }), 'replicated');
-  assert.throws(
-    () => getDeploymentTopology({ RIVET_DEPLOYMENT_TOPOLOGY: 'cluster' }),
-    /RIVET_DEPLOYMENT_TOPOLOGY/,
-  );
+  assert.throws(() => getDeploymentTopology({ RIVET_DEPLOYMENT_TOPOLOGY: 'cluster' }), /RIVET_DEPLOYMENT_TOPOLOGY/);
 
   const replicaReadiness = {
     activeReleaseId: 'release-1',
     heartbeatTtlMs: 30_000,
-    endpoint: { tier: 'endpoint' as const, liveReplicaCount: 1, readyReplicaCount: 1, staleReplicaCount: 0, replicas: [] },
+    endpoint: {
+      tier: 'endpoint' as const,
+      liveReplicaCount: 1,
+      readyReplicaCount: 1,
+      staleReplicaCount: 0,
+      replicas: [],
+    },
     editor: { tier: 'editor' as const, liveReplicaCount: 1, readyReplicaCount: 1, staleReplicaCount: 0, replicas: [] },
   };
 
-  assert.deepEqual(
-    buildDeploymentStatus({ topology: 'single-host', apiProfile: 'combined', replicaReadiness }),
-    { topology: 'single-host', apiProfile: 'combined', replicaReadiness: null },
-  );
-  assert.deepEqual(
-    buildDeploymentStatus({ topology: 'replicated', apiProfile: 'control', replicaReadiness }),
-    { topology: 'replicated', apiProfile: 'control', replicaReadiness },
-  );
+  assert.deepEqual(buildDeploymentStatus({ topology: 'single-host', apiProfile: 'combined', replicaReadiness }), {
+    topology: 'single-host',
+    apiProfile: 'combined',
+    replicaReadiness: null,
+  });
+  assert.deepEqual(buildDeploymentStatus({ topology: 'replicated', apiProfile: 'control', replicaReadiness }), {
+    topology: 'replicated',
+    apiProfile: 'control',
+    replicaReadiness,
+  });
 });
 
 test('control-plane deployment status is authenticated and describes the single-host default', async () => {
@@ -254,10 +259,7 @@ test('control-plane deployment status is authenticated and describes the single-
 
 test('invalid deployment topology fails API startup preconditions', async () => {
   await withApiEnv({ RIVET_DEPLOYMENT_TOPOLOGY: 'cluster' }, () => {
-    assert.throws(
-      () => assertApiRuntimeProfileStartupPreconditions('combined'),
-      /RIVET_DEPLOYMENT_TOPOLOGY/,
-    );
+    assert.throws(() => assertApiRuntimeProfileStartupPreconditions('combined'), /RIVET_DEPLOYMENT_TOPOLOGY/);
   });
 });
 
@@ -275,6 +277,101 @@ test('API error responses expose only explicitly marked 500 messages', () => {
   assert.deepEqual(getApiErrorResponse(createHttpError(403, 'Forbidden')), {
     status: 403,
     body: { error: 'Forbidden' },
+  });
+
+  assert.deepEqual(
+    getApiErrorResponse(
+      createHttpError(503, 'Request body capacity is temporarily exhausted.', {
+        expose: true,
+        code: 'body_capacity_exhausted',
+        retryAfterSeconds: 1,
+      }),
+    ),
+    {
+      status: 503,
+      body: { error: 'Request body capacity is temporarily exhausted.', code: 'body_capacity_exhausted' },
+    },
+  );
+});
+
+test('protected routes reject credentials before attempting to parse malformed JSON', async () => {
+  await withApiEnv({}, async () => {
+    await writeWorkflowEndpointAuthSettings({ requireBearerAuth: true });
+    const server = await startServer('combined');
+    try {
+      const publishedWorkflow = await fetch(`${server.baseUrl}/workflows/no-such-workflow`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: '{',
+      });
+      assert.equal(publishedWorkflow.status, 401);
+      assert.equal(publishedWorkflow.headers.get('connection'), 'close');
+      assert.equal(((await publishedWorkflow.json()) as { error: { message: string } }).error.message, 'Unauthorized');
+
+      const webAppAction = await fetch(`${server.baseUrl}/apps/no-such-app/actions/run`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: '{',
+      });
+      // Depending on the current web-app gate, this is rejected by auth or by
+      // the missing-app preflight. Either explicit route outcome must precede
+      // parsing; a generic failure is not evidence of that contract.
+      assert.ok([401, 404].includes(webAppAction.status));
+      assert.equal(webAppAction.headers.get('connection'), 'close');
+
+      const controlPlane = await fetch(`${server.baseUrl}/api/workflows/move`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: '{',
+      });
+      assert.equal(controlPlane.status, 403);
+      assert.equal(controlPlane.headers.get('connection'), 'close');
+      assert.deepEqual(await controlPlane.json(), { error: 'Forbidden' });
+    } finally {
+      await server.close();
+    }
+  });
+});
+
+test('UI-gated web-app actions reject before parsing and close the rejected body connection', async () => {
+  await withApiEnv({ RIVET_REQUIRE_UI_GATE_KEY: 'true' }, async () => {
+    const server = await startServer('combined');
+    try {
+      const response = await fetch(`${server.baseUrl}/apps/no-such-app/actions/run`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: '{',
+      });
+
+      assert.equal(response.status, 401);
+      assert.equal(response.headers.get('connection'), 'close');
+      assert.deepEqual(await response.json(), { error: 'Unauthorized' });
+    } finally {
+      await server.close();
+    }
+  });
+});
+
+test('unknown control-plane routes and unsupported methods never parse their request body', async () => {
+  await withApiEnv({}, async () => {
+    const server = await startServer('control');
+    try {
+      const unknownRoute = await fetch(`${server.baseUrl}/api/does-not-exist`, {
+        method: 'POST',
+        headers: { ...trustedProxyHeaders(), 'content-type': 'application/json' },
+        body: '{',
+      });
+      assert.equal(unknownRoute.status, 404);
+
+      const unsupportedMethod = await fetch(`${server.baseUrl}/api/workflows/tree`, {
+        method: 'POST',
+        headers: { ...trustedProxyHeaders(), 'content-type': 'application/json' },
+        body: '{',
+      });
+      assert.equal(unsupportedMethod.status, 404);
+    } finally {
+      await server.close();
+    }
   });
 });
 
@@ -368,10 +465,14 @@ test('control profile exposes control-plane routes and does not expose published
         body: JSON.stringify({ key: 'phase4-shared-key' }),
       });
       assert.equal(uiAuthResponse.status, 204);
+      const uiAuthCookie = uiAuthResponse.headers.get('set-cookie');
+      assert.ok(uiAuthCookie, 'Successful UI authentication must issue a session cookie.');
+      assert.match(uiAuthCookie, /^rivet_ui_token=/);
 
       const configResponse = await fetch(`${server.baseUrl}/api/config`, {
         headers: {
           ...trustedProxyHeaders(),
+          cookie: uiAuthCookie.split(';', 1)[0],
           'X-Forwarded-Host': 'rivet.example.test',
           'X-Forwarded-Proto': 'HTTPS',
         },
@@ -629,10 +730,7 @@ test('runtime-libraries route exposes permission errors for an unwritable runtim
         error: `Runtime-library storage is not writable. Check server permissions for ${normalizedRoot}.`,
       });
       assert.equal(loggedErrors.length, 1);
-      assert.match(
-        String(loggedErrors[0]?.[0]),
-        /^\[rvt-[a-f0-9-]{36}\] Unhandled API error:$/,
-      );
+      assert.match(String(loggedErrors[0]?.[0]), /^\[rvt-[a-f0-9-]{36}\] Unhandled API error:$/);
       assert.match((loggedErrors[0]?.[1] as Error).message, /Runtime-library storage is not writable/);
     } finally {
       await disposeRuntimeLibrariesBackend();

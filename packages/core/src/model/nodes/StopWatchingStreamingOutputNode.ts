@@ -36,6 +36,8 @@ export class StopWatchingStreamingOutputNodeImpl extends NodeImpl<StopWatchingSt
         Accepts a value from a Watch Streaming Output branch, stops future streaming
         snapshots, and lets its completed output continue through the ordinary graph.
         In parallel mode, the first completed branch to reach this node wins.
+        If the stream ends without a value reaching this node, it is shown as Not ran
+        and its ordinary downstream nodes receive the usual excluded value.
       `,
     };
   }

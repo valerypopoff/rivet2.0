@@ -36,7 +36,7 @@ import {
   getPublishedWorkflowsBasePath,
 } from './workflowEndpointPaths.js';
 import { getWorkflowStorageBackendMode } from './routes/workflows/storage-config.js';
-import { requireAuth } from './middleware/auth.js';
+import { requireAuth, requireOperatorAuth } from './middleware/auth.js';
 import { createProxySettingsSnapshot } from './proxy-settings-snapshot.js';
 import { isTrustedProxyRequest } from './auth.js';
 import {
@@ -47,8 +47,8 @@ import {
   type ApiRuntimeProfile,
 } from './runtime-profile.js';
 import type { RuntimeHealthReader } from './runtime-health.js';
-import { readRuntimeLimitSettingsSync } from './runtime-limit-settings.js';
 import { captureAppSettingsSnapshot } from './middleware/app-settings-snapshot.js';
+import { closeResponseConnectionAfterFlush, getHttpBodyAdmissionSnapshot } from './middleware/body-admission.js';
 import { getManagedPostgresPoolMetrics } from './managed-postgres-pool.js';
 import { getStudioMetrics, type MetricsHttpRoute, type StudioMetrics } from './metrics.js';
 import { getWorkflowExecutionRecordingPersistenceMetrics } from './routes/workflows/recordings.js';
@@ -57,37 +57,15 @@ import {
   getRequestCorrelationId,
   RIVET_CORRELATION_HEADER,
 } from './request-correlation.js';
-import { MAX_LOCAL_EDITOR_RECORDING_REQUEST_BYTES } from './routes/workflows/local-editor-recording-limits.js';
 
 type RuntimeExpressRouter = {
   handle: (req: Request, res: Response, next: NextFunction) => void;
 };
 
-const DEFAULT_JSON_BODY_LIMIT_BYTES = 100 * 1024 * 1024;
-
 type ApiAppOptions = {
   health?: RuntimeHealthReader;
   metrics?: StudioMetrics;
 };
-
-function isWebAppActionRequest(req: Request): boolean {
-  const requestPath = req.path.replace(/\/+$/, '');
-
-  if (req.method !== 'POST' || !requestPath.endsWith('/actions/run')) {
-    return false;
-  }
-
-  return [getPublishedWebAppsBasePath(), getLatestWebAppsBasePath()].some((basePath) => {
-    const prefix = `${basePath}/`;
-    const slug = requestPath.slice(prefix.length, -'/actions/run'.length);
-    return requestPath.startsWith(prefix) && slug.length > 0 && !slug.includes('/');
-  });
-}
-
-function isLocalEditorRecordingUploadRequest(req: Request): boolean {
-  const requestPath = req.path.replace(/\/+$/, '');
-  return req.method === 'POST' && requestPath === '/api/workflows/local-editor-recordings';
-}
 
 function matchesPath(pathname: string, basePath: string): boolean {
   return pathname === basePath || pathname.startsWith(`${basePath}/`);
@@ -140,53 +118,22 @@ function sendMetrics(metrics: StudioMetrics, health: RuntimeHealthReader, res: R
   collectMetricsSnapshot(() =>
     metrics.setWorkflowRecordingPersistence(getWorkflowExecutionRecordingPersistenceMetrics()),
   );
+  collectMetricsSnapshot(() => metrics.setHttpBodyAdmission(getHttpBodyAdmissionSnapshot()));
 
   res.setHeader('Cache-Control', 'no-store');
   res.setHeader('Content-Type', 'text/plain; version=0.0.4; charset=utf-8');
   res.status(200).send(metrics.render());
 }
-function requireLocalEditorRecordingUploadAuth(req: Request, res: Response, next: NextFunction): void {
-  if (!isLocalEditorRecordingUploadRequest(req)) {
-    next();
-    return;
-  }
-
-  requireAuth(req, res, next);
-}
-
-function createJsonBodyParser(): RequestHandler {
-  const defaultParser = express.json({ limit: DEFAULT_JSON_BODY_LIMIT_BYTES, strict: false });
-  const localEditorRecordingParser = express.json({
-    limit: MAX_LOCAL_EDITOR_RECORDING_REQUEST_BYTES,
-    strict: false,
-  });
-
-  return (req, res, next) => {
-    if (isLocalEditorRecordingUploadRequest(req)) {
-      localEditorRecordingParser(req, res, next);
-      return;
-    }
-
-    if (!isWebAppActionRequest(req)) {
-      defaultParser(req, res, next);
-      return;
-    }
-
-    express.json({
-      limit: readRuntimeLimitSettingsSync().webAppActionRequestLimitBytes,
-      strict: false,
-    })(req, res, next);
-  };
-}
-
-export function getApiErrorResponse(err: Error): { status: number; body: { error: string } } {
+export function getApiErrorResponse(err: Error): { status: number; body: { error: string; code?: string } } {
   const status = (err as { status?: number }).status ?? 500;
   const expose = Boolean((err as { expose?: boolean }).expose);
+  const code = (err as { code?: unknown }).code;
 
   return {
     status,
     body: {
       error: status >= 500 && !expose ? 'Internal server error' : err.message,
+      ...(code ? { code: String(code) } : {}),
     },
   };
 }
@@ -344,7 +291,10 @@ function mountControlPlaneRoutes(app: Express, profile: ApiRuntimeProfile): void
   app.use('/', uiAuthRouter);
   app.use(dispatchDynamicBasePath(getLatestWorkflowsBasePath, latestWorkflowsRouter));
   app.use(dispatchDynamicBasePath(getLatestWebAppsBasePath, latestWebAppsRouter));
-  app.use('/api', requireAuth);
+  // Authenticate the control-plane boundary before individual routers parse
+  // their own request bodies. Unknown routes and unsupported methods never
+  // enter a body parser.
+  app.use('/api', requireOperatorAuth);
   app.use('/api/native', nativeRouter);
   app.use('/api/shell', shellRouter);
   app.use('/api/plugins', pluginsRouter);
@@ -399,13 +349,6 @@ export function createApiApp(profile = getApiRuntimeProfile(), options: ApiAppOp
   app.use(createMetricsRequestObserver(metrics));
 
   app.use(captureAppSettingsSnapshot);
-  // The replay body may be larger than ordinary control-plane JSON. Authenticate
-  // this exact route before parsing it, including for direct local API access.
-  if (isControlPlaneApiProfile(profile)) {
-    app.use(requireLocalEditorRecordingUploadAuth);
-  }
-  app.use(createJsonBodyParser());
-  app.use(express.urlencoded({ extended: false }));
 
   if (isControlPlaneApiProfile(profile) || profile === 'execution') {
     app.use(dispatchDynamicBasePath(getPublishedWebAppsBasePath, webAppOAuthRouter));
@@ -427,6 +370,13 @@ export function createApiApp(profile = getApiRuntimeProfile(), options: ApiAppOp
     const response = getApiErrorResponse(err);
     if (response.status >= 500) {
       console.error('[' + getRequestCorrelationId(req) + '] Unhandled API error:', err);
+    }
+    const retryAfterSeconds = (err as { retryAfterSeconds?: unknown }).retryAfterSeconds;
+    if (typeof retryAfterSeconds === 'number' && Number.isFinite(retryAfterSeconds)) {
+      res.setHeader('Retry-After', String(Math.max(0, Math.ceil(retryAfterSeconds))));
+    }
+    if ((err as { closeConnection?: unknown }).closeConnection === true) {
+      closeResponseConnectionAfterFlush(res, req);
     }
     res.status(response.status).json(response.body);
   });

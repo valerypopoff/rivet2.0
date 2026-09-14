@@ -723,7 +723,7 @@ export function createManagedWorkflowPublicationService(options: ManagedWorkflow
                 VALUES ($1, $2, $3, $4, $5, $6, $7::text[], NOW())
               `,
               [
-                randomUUID(),
+                previousByUiGraphId.get(publication.uiGraphId)?.app_id ?? randomUUID(),
                 workflow.workflow_id,
                 currentDraftRevision.revision_id,
                 publication.uiGraphId,

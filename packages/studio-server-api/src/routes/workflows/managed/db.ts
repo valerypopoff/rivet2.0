@@ -5,7 +5,7 @@ import { withManagedPostgresPoolMax } from '../../../managed-postgres-pool.js';
 import { createHttpError } from '../../../utils/httpError.js';
 import type { ManagedWorkflowStorageConfig } from '../storage-config.js';
 import { WORKFLOW_COLUMNS, splitCurrentDraftRevisionRow } from './mappers.js';
-import type { ManagedExecutionPointerLookupResult } from './execution-types.js';
+import type { ManagedExecutionPointerLookupResult, ManagedWebAppAccessPolicy } from './execution-types.js';
 import type { CurrentDraftRevisionRow, FolderRow, RevisionRow, WorkflowRow } from './types.js';
 
 export type ManagedWorkflowDbClient = Pool | PoolClient;
@@ -133,6 +133,7 @@ export type ManagedWorkflowQueries = {
     runKind: 'published' | 'latest' | 'web-app' | 'latest-web-app',
     lookupName: string,
   ): Promise<ManagedExecutionPointerLookupResult | null>;
+  resolveWebAppAccessPolicyFromDatabase(client: Pool, lookupName: string): Promise<ManagedWebAppAccessPolicy | null>;
 };
 
 export function createManagedWorkflowQueries(pool: Pool): ManagedWorkflowQueries {
@@ -289,7 +290,11 @@ export function createManagedWorkflowQueries(pool: Pool): ManagedWorkflowQueries
       lookupName: string,
     ): Promise<ManagedExecutionPointerLookupResult | null> {
       if (runKind === 'web-app' || runKind === 'latest-web-app') {
-        const row = await queryOne<CurrentDraftRevisionRow & { ui_graph_id: string; allowed_emails: string[] | null }>(
+        const row = await queryOne<CurrentDraftRevisionRow & {
+          ui_graph_id: string;
+          allowed_emails: string[] | null;
+          web_app_id: string;
+        }>(
           client,
           `
             SELECT
@@ -313,6 +318,7 @@ export function createManagedWorkflowQueries(pool: Pool): ManagedWorkflowQueries
               r.stats_total_node_count,
               r.stats_web_app_count,
               r.created_at AS revision_created_at,
+              app.app_id AS web_app_id,
               app.ui_graph_id,
               app.allowed_emails
             FROM workflow_web_apps app
@@ -336,6 +342,7 @@ export function createManagedWorkflowQueries(pool: Pool): ManagedWorkflowQueries
             revisionId: split.revision.revision_id,
             webAppUiGraphId: row.ui_graph_id,
             webAppAllowedEmails: row.allowed_emails ?? [],
+            webAppId: row.web_app_id,
           },
           revision: split.revision,
         };
@@ -415,6 +422,35 @@ export function createManagedWorkflowQueries(pool: Pool): ManagedWorkflowQueries
         },
         revision: split.revision,
       };
+    },
+
+    async resolveWebAppAccessPolicyFromDatabase(
+      client: Pool,
+      lookupName: string,
+    ): Promise<ManagedWebAppAccessPolicy | null> {
+      const row = await queryOne<{
+        app_id: string;
+        relative_path: string;
+        ui_graph_id: string;
+        allowed_emails: string[] | null;
+      }>(
+        client,
+        `
+          SELECT app.app_id, w.relative_path, app.ui_graph_id, app.allowed_emails
+          FROM workflow_web_apps app
+          JOIN workflows w ON w.workflow_id = app.workflow_id
+          WHERE app.slug_lookup_name = $1
+        `,
+        [lookupName],
+      );
+      return row == null
+        ? null
+        : {
+            appId: row.app_id,
+            relativePath: row.relative_path,
+            uiGraphId: row.ui_graph_id,
+            allowedEmails: row.allowed_emails ?? [],
+          };
     },
   };
 }

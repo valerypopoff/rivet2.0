@@ -17,7 +17,17 @@ export type ManagedExecutionProjectResult = {
   revisionKey: string;
   webAppUiGraphId?: string;
   webAppAllowedEmails?: string[];
+  webAppBindingId?: string;
+  webAppPolicyInvalidationKey?: string;
   debug: ManagedExecutionDebugInfo;
+};
+
+/** Current web-app policy without executable revision contents. */
+export type ManagedWebAppAccessPolicy = {
+  appId: string;
+  relativePath: string;
+  uiGraphId: string;
+  allowedEmails: string[];
 };
 
 export type ManagedExecutionRevisionRecord = {

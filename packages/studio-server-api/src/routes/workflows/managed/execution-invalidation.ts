@@ -36,6 +36,8 @@ type ManagedWorkflowExecutionInvalidationControllerOptions = {
   withManagedDbRetry<T>(scope: string, run: () => Promise<T>): Promise<T>;
   invalidateWorkflowEndpointPointers(workflowId: string): void;
   clearEndpointPointers(): void;
+  onWorkflowChanged?(workflowId: string): void;
+  onAllChanged?(): void;
   createListener?: () => ManagedExecutionInvalidationListener;
   now?: () => number;
   scheduleReconnect?: (task: () => void, delayMs: number) => ManagedExecutionReconnectTimer;
@@ -54,6 +56,8 @@ export class ManagedWorkflowExecutionInvalidationController {
   readonly #withManagedDbRetry: ManagedWorkflowExecutionInvalidationControllerOptions['withManagedDbRetry'];
   readonly #invalidateWorkflowEndpointPointers: (workflowId: string) => void;
   readonly #clearEndpointPointers: () => void;
+  readonly #onWorkflowChanged: (workflowId: string) => void;
+  readonly #onAllChanged: () => void;
   readonly #createListener: () => ManagedExecutionInvalidationListener;
   readonly #now: () => number;
   readonly #scheduleReconnect: (task: () => void, delayMs: number) => ManagedExecutionReconnectTimer;
@@ -75,6 +79,8 @@ export class ManagedWorkflowExecutionInvalidationController {
     this.#withManagedDbRetry = options.withManagedDbRetry;
     this.#invalidateWorkflowEndpointPointers = options.invalidateWorkflowEndpointPointers;
     this.#clearEndpointPointers = options.clearEndpointPointers;
+    this.#onWorkflowChanged = options.onWorkflowChanged ?? (() => {});
+    this.#onAllChanged = options.onAllChanged ?? (() => {});
     this.#createListener = options.createListener ?? (() => new Client(this.#databaseConnectionConfig));
     this.#now = options.now ?? Date.now;
     this.#scheduleReconnect = options.scheduleReconnect ?? ((task, delayMs) => setTimeout(task, delayMs));
@@ -183,6 +189,7 @@ export class ManagedWorkflowExecutionInvalidationController {
     });
     this.#maybePruneWorkflowGenerations(now);
     this.#invalidateWorkflowEndpointPointers(workflowId);
+    this.#onWorkflowChanged(workflowId);
   }
 
   markAllChanged(): void {
@@ -193,6 +200,7 @@ export class ManagedWorkflowExecutionInvalidationController {
     this.#executionPointerWorkflowGenerations.clear();
     this.#executionPointerWorkflowGenerationInvalidationCount = 0;
     this.#clearEndpointPointers();
+    this.#onAllChanged();
   }
 
   beginWorkflowLoad(workflowId: string): void {

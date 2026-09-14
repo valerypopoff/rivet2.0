@@ -15,9 +15,13 @@ function createController(options: {
   scheduleReconnect?: (task: () => void, delayMs: number) => { unref?(): void };
   invalidated?: string[];
   cleared?: { count: number };
+  policyInvalidated?: string[];
+  allPoliciesInvalidated?: { count: number };
 }) {
   const invalidated = options.invalidated ?? [];
   const cleared = options.cleared ?? { count: 0 };
+  const policyInvalidated = options.policyInvalidated ?? [];
+  const allPoliciesInvalidated = options.allPoliciesInvalidated ?? { count: 0 };
   const controller = new ManagedWorkflowExecutionInvalidationController({
     databaseConnectionConfig: {},
     withManagedDbRetry: async (_scope, run) => run(),
@@ -26,6 +30,12 @@ function createController(options: {
     },
     clearEndpointPointers: () => {
       cleared.count += 1;
+    },
+    onWorkflowChanged: (workflowId) => {
+      policyInvalidated.push(workflowId);
+    },
+    onAllChanged: () => {
+      allPoliciesInvalidated.count += 1;
     },
     now: options.now,
     createListener: options.createListener,
@@ -36,6 +46,8 @@ function createController(options: {
     controller,
     invalidated,
     cleared,
+    policyInvalidated,
+    allPoliciesInvalidated,
   };
 }
 
@@ -54,6 +66,20 @@ test('workflow-level invalidation increments only the targeted workflow generati
   assert.equal(controller.captureWorkflowSnapshot('workflow-b').generation, 0);
   assert.deepEqual(invalidated, ['workflow-a']);
   assert.equal(cleared.count, 0);
+});
+
+test('managed invalidation notifies targeted web-app policy listeners without forcing unrelated workflows', () => {
+  const { controller, policyInvalidated, allPoliciesInvalidated } = createController({});
+
+  controller.markWorkflowChanged('workflow-a');
+
+  assert.deepEqual(policyInvalidated, ['workflow-a']);
+  assert.equal(allPoliciesInvalidated.count, 0);
+
+  controller.markAllChanged();
+
+  assert.deepEqual(policyInvalidated, ['workflow-a']);
+  assert.equal(allPoliciesInvalidated.count, 1);
 });
 
 test('clear-all invalidation forces retry through global generation change', () => {
@@ -191,6 +217,22 @@ test('self notifications are ignored because same-process invalidation already r
 
   listener.emitNotification(payload);
   assert.deepEqual(invalidated, ['workflow-a']);
+});
+
+test('a notification from another managed instance notifies the affected web-app policy listeners', async () => {
+  const listener = new FakeListener();
+  const { controller, policyInvalidated } = createController({
+    createListener: () => listener,
+  });
+
+  await controller.initialize();
+  listener.emitNotification({
+    eventType: 'workflow-changed',
+    workflowId: 'workflow-on-another-instance',
+    sourceInstanceId: 'other-instance',
+  });
+
+  assert.deepEqual(policyInvalidated, ['workflow-on-another-instance']);
 });
 
 test('dispose keeps an in-flight listener startup from becoming healthy afterward', async () => {

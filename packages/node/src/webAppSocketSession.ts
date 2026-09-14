@@ -19,6 +19,7 @@ import {
 export function attachWebAppSocketSession(
   socket: WebSocket,
   options: {
+    isAuthorized?: () => boolean;
     handshakeTimeoutMs: number;
     heartbeatIntervalMs: number;
     heartbeatTimeoutMs: number;
@@ -56,6 +57,11 @@ export function attachWebAppSocketSession(
   };
 
   socket.on('message', (raw, isBinary) => {
+    if (options.isAuthorized) {
+      let allowed = false;
+      try { allowed = options.isAuthorized(); } catch { /* fail closed */ }
+      if (!allowed) { socket.terminate(); return; }
+    }
     heartbeat.markActivity();
     if (isBinary) {
       if (!protocolReady || !storageRpcReady) return socket.close(1002, 'Storage RPC handshake required');

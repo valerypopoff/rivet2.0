@@ -2127,36 +2127,461 @@ void describe('GraphProcessor scheduler boundaries', () => {
     assert.deepEqual(lifecycleEvents, ['graph-error', 'error']);
   });
 
-  void it('emits a missing-Stop coordinator failure summary before failing the root', async () => {
+  void it('excludes an unmatched Stop and its ordinary downstream branch after the stream settles', async () => {
     const source = makeTestNode('streaming-source');
     const watch = makeWatchNode();
     const branch = makeTestNode('watch-branch');
     const stop = makeStopWatchNode();
+    const firstDownstream = makeTestNode('first-downstream');
+    const secondDownstream = makeTestNode('second-downstream');
     const graph = makeGraph(
-      'streaming-watch-missing-stop',
-      [source, watch, branch, stop],
+      'streaming-watch-unmatched-stop',
+      [source, watch, branch, stop, firstDownstream, secondDownstream],
       [
         connect(source.id, watch.id, 'stream'),
         connect(watch.id, branch.id, 'input', 'value'),
         connect(branch.id, stop.id, 'value'),
+        connect(stop.id, firstDownstream.id, 'input', 'value'),
+        connect(firstDownstream.id, secondDownstream.id),
       ],
     );
-    AsyncTestNodeImpl.handlers.set(source.id, () => ({ output: { type: 'string', value: 'final' } }));
-    // The branch excludes its value, so Stop is never reached. This leaves a
-    // completed child iteration with no accepted Stop value: a coordinator
-    // failure rather than a failing child node.
+    AsyncTestNodeImpl.handlers.set(source.id, (_inputs, context) => {
+      for (const value of ['1', '2', '3', '4', '5']) {
+        context.onPartialOutputs?.({ output: { type: 'string', value } });
+      }
+      return { output: { type: 'string', value: '6' } };
+    });
+    // The branch excludes its value, so none of its iterations reaches Stop.
+    // Exhaustion must resolve the parent boundary as normal control flow.
     AsyncTestNodeImpl.handlers.set(branch.id, () => ({
       output: { type: 'control-flow-excluded', value: undefined },
     }));
 
     const processor = createProcessor(graph);
+    const recorder = new ExecutionRecorder();
+    recorder.record(processor);
     const summaries: ProcessEvents['streamingOutputWatchSummary'][] = [];
+    const parentExclusions: Array<{ nodeId: NodeId; reason: string }> = [];
     processor.on('streamingOutputWatchSummary', (event) => summaries.push(event));
+    processor.on('nodeExcluded', ({ execution, node, reason }) => {
+      if (execution.parentGraphRunId == null) {
+        parentExclusions.push({ nodeId: node.id, reason });
+      }
+    });
 
-    await assert.rejects(processor.processGraph(testProcessContext()), /Watch Streaming Output/);
+    await processor.processGraph(testProcessContext());
     assert.equal(summaries.length, 1);
-    assert.equal(summaries[0]?.summary.failureKind, 'missing-stop');
+    assert.equal(summaries[0]?.summary.failureKind, undefined);
     assert.equal(summaries[0]?.summary.failedIterations, 0);
+    assert.deepEqual(summaries[0]?.summary.retainedIterationUpdateIndexes, [1, 2, 3, 6]);
+    assert.equal(summaries[0]?.summary.omittedIterations, 2);
+    assert.deepEqual(parentExclusions, [
+      { nodeId: stop.id, reason: 'stream completed without Stop Watching Streaming Output accepting a value' },
+      { nodeId: firstDownstream.id, reason: 'input is excluded value' },
+      { nodeId: secondDownstream.id, reason: 'input is excluded value' },
+    ]);
+    assert.equal(AsyncTestNodeImpl.runCounts.get(firstDownstream.id), undefined);
+    assert.equal(AsyncTestNodeImpl.runCounts.get(secondDownstream.id), undefined);
+
+    const recordedBranchFinishes = recorder.events.filter(
+      (event) => event.type === 'nodeFinish' && event.data.nodeId === branch.id,
+    );
+    // The first three branch completions and the actual terminal completion
+    // remain replayable pages. Their output is excluded because the branch
+    // ran and decided not to pass a value to Stop; this is distinct from the
+    // parent Stop exclusion that happens only after Watch exhaustion.
+    assert.deepEqual(
+      recordedBranchFinishes.map((event) =>
+        event.type === 'nodeFinish' ? event.data.outputs['output' as PortId]?.value : undefined,
+      ),
+      [undefined, undefined, undefined, undefined],
+    );
+    assert.equal(recordedBranchFinishes.length, 4);
+
+    const recordedSummary = recorder.events.find((event) => event.type === 'streamingOutputWatchSummary');
+    // The compact summary names those same four retained pages without
+    // creating a history entry for every streamed update.
+    assert.deepEqual(
+      recordedSummary?.type === 'streamingOutputWatchSummary'
+        ? recordedSummary.data.summary.retainedIterationUpdateIndexes
+        : undefined,
+      [1, 2, 3, 6],
+    );
+
+    const recordedParentExclusions = recorder.events.flatMap((event) =>
+      event.type === 'nodeExcluded' && event.data.execution.parentGraphRunId == null
+        ? [{ nodeId: event.data.nodeId, reason: event.data.reason }]
+        : [],
+    );
+    const replayedParentExclusions: Array<{ nodeId: NodeId; reason: string }> = [];
+    const replayedBranchFinishes: ProcessEvents['nodeFinish'][] = [];
+    const replayEmitter = new Emittery<ProcessEvents>();
+    replayEmitter.on('nodeExcluded', ({ execution, node, reason }) => {
+      if (execution.parentGraphRunId == null) {
+        replayedParentExclusions.push({ nodeId: node.id, reason });
+      }
+    });
+    replayEmitter.on('nodeFinish', (event) => {
+      if (event.node.id === branch.id) {
+        replayedBranchFinishes.push(event);
+      }
+    });
+    await replayExecutionRecording({
+      emitter: replayEmitter,
+      erroredNodes: new Map(),
+      graphInputs: {},
+      graphOutputs: {},
+      isAborted: () => false,
+      nodeResults: new Map(),
+      project: makeProject(graph),
+      recorder,
+      recordingPlaybackChatLatency: 0,
+      setContextValues: () => {},
+      setGraphInputs: () => {},
+      setGraphOutputs: () => {},
+      setRunning: () => {},
+      visitedNodes: new Set(),
+      waitUntilUnpaused: async () => {},
+    });
+    assert.deepEqual(recordedParentExclusions, parentExclusions);
+    assert.deepEqual(replayedParentExclusions, parentExclusions);
+    assert.equal(replayedBranchFinishes.length, 4);
+    assert.deepEqual(
+      replayedBranchFinishes.map((event) => event.outputs['output' as PortId]?.type),
+      ['control-flow-excluded', 'control-flow-excluded', 'control-flow-excluded', 'control-flow-excluded'],
+    );
+  });
+
+  void it('waits for an earlier parallel iteration to accept Stop after the final iteration has settled', async () => {
+    const source = makeTestNode('streaming-source');
+    const watch = makeWatchNode();
+    watch.data = { ...watch.data, executionMode: 'parallel', maxParallelRuns: 2 };
+    const branch = makeTestNode('watch-branch');
+    const stop = makeStopWatchNode();
+    const output = makeGraphOutputNode();
+    const graph = makeGraph(
+      'streaming-watch-late-parallel-stop',
+      [source, watch, branch, stop, output],
+      [
+        connect(source.id, watch.id, 'stream'),
+        connect(watch.id, branch.id, 'input', 'value'),
+        connect(branch.id, stop.id, 'value'),
+        connect(stop.id, output.id, 'value', 'value'),
+      ],
+    );
+    const firstStarted = deferred();
+    const finalBranchFinished = deferred();
+    const releaseProducer = deferred();
+    const releaseFirst = deferred();
+    AsyncTestNodeImpl.handlers.set(source.id, async (_inputs, context) => {
+      context.onPartialOutputs?.({ output: { type: 'string', value: 'early' } });
+      await releaseProducer.promise;
+      return { output: { type: 'string', value: 'final' } };
+    });
+    AsyncTestNodeImpl.handlers.set(branch.id, async (inputs) => {
+      if (inputs['input' as PortId]?.value === 'early') {
+        firstStarted.resolve();
+        await releaseFirst.promise;
+        return { output: { type: 'string', value: 'accepted late' } };
+      }
+      finalBranchFinished.resolve();
+      return { output: { type: 'control-flow-excluded', value: undefined } };
+    });
+
+    const processor = createProcessor(graph);
+    const parentStopExclusions: string[] = [];
+    const terminalStopValues: string[] = [];
+    processor.on('nodeFinish', ({ node, outputs, streamingWatchTerminal }) => {
+      if (node.id === stop.id && streamingWatchTerminal) {
+        terminalStopValues.push(String(outputs['value' as PortId]?.value));
+      }
+    });
+    processor.on('nodeExcluded', ({ execution, node }) => {
+      if (execution.parentGraphRunId == null && node.id === stop.id) {
+        parentStopExclusions.push('excluded');
+      }
+    });
+
+    const run = processor.processGraph(testProcessContext());
+    await withTimeout(firstStarted.promise, 'the first parallel Watch iteration');
+    releaseProducer.resolve();
+    await withTimeout(finalBranchFinished.promise, 'the final Watch iteration');
+    // The final snapshot is no longer running, but its earlier sibling can
+    // still accept Stop. Do not turn that intermediate state into exclusion.
+    assert.deepEqual(parentStopExclusions, []);
+    assert.deepEqual(terminalStopValues, []);
+
+    releaseFirst.resolve();
+    const outputs = await withTimeout(run, 'the late accepted Stop');
+    assert.equal(outputs.result?.value, 'accepted late');
+    assert.deepEqual(parentStopExclusions, []);
+    assert.deepEqual(terminalStopValues, ['accepted late']);
+  });
+
+  void it('waits for every parallel iteration before excluding an unmatched Stop', async () => {
+    const source = makeTestNode('streaming-source');
+    const watch = makeWatchNode();
+    watch.data = { ...watch.data, executionMode: 'parallel', maxParallelRuns: 2 };
+    const branch = makeTestNode('watch-branch');
+    const stop = makeStopWatchNode();
+    const downstream = makeTestNode('downstream');
+    const graph = makeGraph(
+      'streaming-watch-late-parallel-exhaustion',
+      [source, watch, branch, stop, downstream],
+      [
+        connect(source.id, watch.id, 'stream'),
+        connect(watch.id, branch.id, 'input', 'value'),
+        connect(branch.id, stop.id, 'value'),
+        connect(stop.id, downstream.id, 'input', 'value'),
+      ],
+    );
+    const firstStarted = deferred();
+    const finalBranchFinished = deferred();
+    const releaseProducer = deferred();
+    const releaseFirst = deferred();
+    AsyncTestNodeImpl.handlers.set(source.id, async (_inputs, context) => {
+      context.onPartialOutputs?.({ output: { type: 'string', value: 'early' } });
+      await releaseProducer.promise;
+      return { output: { type: 'string', value: 'final' } };
+    });
+    AsyncTestNodeImpl.handlers.set(branch.id, async (inputs) => {
+      if (inputs['input' as PortId]?.value === 'early') {
+        firstStarted.resolve();
+        await releaseFirst.promise;
+      } else {
+        finalBranchFinished.resolve();
+      }
+      return { output: { type: 'control-flow-excluded', value: undefined } };
+    });
+
+    const processor = createProcessor(graph);
+    const parentExclusions: NodeId[] = [];
+    processor.on('nodeExcluded', ({ execution, node }) => {
+      if (execution.parentGraphRunId == null) parentExclusions.push(node.id);
+    });
+    const run = processor.processGraph(testProcessContext());
+    await withTimeout(firstStarted.promise, 'the first unmatched parallel Watch iteration');
+    releaseProducer.resolve();
+    await withTimeout(finalBranchFinished.promise, 'the final unmatched Watch iteration');
+    assert.deepEqual(parentExclusions, []);
+
+    releaseFirst.resolve();
+    await withTimeout(run, 'parallel Watch exhaustion');
+    assert.deepEqual(parentExclusions, [stop.id, downstream.id]);
+    assert.equal(AsyncTestNodeImpl.runCounts.get(downstream.id), undefined);
+  });
+
+  void it('propagates an unmatched Stop exclusion through a selected Run To path', async () => {
+    const source = makeTestNode('streaming-source');
+    const watch = makeWatchNode();
+    const branch = makeTestNode('watch-branch');
+    const stop = makeStopWatchNode();
+    const firstDownstream = makeTestNode('first-downstream');
+    const target = makeTestNode('target');
+    const graph = makeGraph(
+      'streaming-watch-unmatched-stop-run-to',
+      [source, watch, branch, stop, firstDownstream, target],
+      [
+        connect(source.id, watch.id, 'stream'),
+        connect(watch.id, branch.id, 'input', 'value'),
+        connect(branch.id, stop.id, 'value'),
+        connect(stop.id, firstDownstream.id, 'input', 'value'),
+        connect(firstDownstream.id, target.id),
+      ],
+    );
+    AsyncTestNodeImpl.handlers.set(source.id, () => ({ output: { type: 'string', value: 'final' } }));
+    AsyncTestNodeImpl.handlers.set(branch.id, () => ({
+      output: { type: 'control-flow-excluded', value: undefined },
+    }));
+
+    const processor = createProcessor(graph);
+    processor.runToNodeIds = [target.id];
+    const parentExclusions: Array<{ nodeId: NodeId; reason: string }> = [];
+    processor.on('nodeExcluded', ({ execution, node, reason }) => {
+      if (execution.parentGraphRunId == null) {
+        parentExclusions.push({ nodeId: node.id, reason });
+      }
+    });
+
+    await processor.processGraph(testProcessContext());
+
+    assert.deepEqual(parentExclusions, [
+      { nodeId: stop.id, reason: 'stream completed without Stop Watching Streaming Output accepting a value' },
+      { nodeId: firstDownstream.id, reason: 'input is excluded value' },
+      { nodeId: target.id, reason: 'input is excluded value' },
+    ]);
+    assert.equal(AsyncTestNodeImpl.runCounts.get(firstDownstream.id), undefined);
+    assert.equal(AsyncTestNodeImpl.runCounts.get(target.id), undefined);
+  });
+
+  void it('propagates an accepted Stop value through a selected Run To path', async () => {
+    const source = makeTestNode('streaming-source');
+    const watch = makeWatchNode();
+    const stop = makeStopWatchNode();
+    const target = makeTestNode('target');
+    const graph = makeGraph(
+      'streaming-watch-accepted-stop-run-to',
+      [source, watch, stop, target],
+      [
+        connect(source.id, watch.id, 'stream'),
+        connect(watch.id, stop.id, 'value', 'value'),
+        connect(stop.id, target.id, 'input', 'value'),
+      ],
+    );
+    AsyncTestNodeImpl.handlers.set(source.id, () => ({ output: { type: 'string', value: 'accepted' } }));
+    AsyncTestNodeImpl.handlers.set(target.id, (inputs) => ({ output: inputs['input' as PortId]! }));
+
+    const processor = createProcessor(graph);
+    processor.runToNodeIds = [target.id];
+    const stopOutputs: Outputs[] = [];
+    processor.on('nodeFinish', ({ node, outputs }) => {
+      if (node.id === stop.id) {
+        stopOutputs.push(outputs);
+      }
+    });
+
+    await processor.processGraph(testProcessContext());
+
+    assert.deepEqual(stopOutputs, [{ ['value' as PortId]: { type: 'string', value: 'accepted' } }]);
+    assert.equal(AsyncTestNodeImpl.runCounts.get(target.id), 1);
+  });
+
+  void it('lets an ordinary Coalesce fallback continue after Stop exhausts without a value', async () => {
+    const source = makeTestNode('streaming-source');
+    const watch = makeWatchNode();
+    const branch = makeTestNode('watch-branch');
+    const stop = makeStopWatchNode();
+    const fallback = makeTestNode('fallback');
+    const coalesce: ChartNode = { ...makeTestNode('coalesce'), type: 'coalesce', data: {} };
+    const output = makeGraphOutputNode();
+    const graph = makeGraph(
+      'streaming-watch-unmatched-stop-fallback',
+      [source, watch, branch, stop, fallback, coalesce, output],
+      [
+        connect(source.id, watch.id, 'stream'),
+        connect(watch.id, branch.id, 'input', 'value'),
+        connect(branch.id, stop.id, 'value'),
+        connect(stop.id, coalesce.id, 'input1', 'value'),
+        connect(fallback.id, coalesce.id, 'input2'),
+        connect(coalesce.id, output.id, 'value'),
+      ],
+    );
+    AsyncTestNodeImpl.handlers.set(source.id, () => ({ output: { type: 'string', value: 'final' } }));
+    AsyncTestNodeImpl.handlers.set(branch.id, () => ({
+      output: { type: 'control-flow-excluded', value: undefined },
+    }));
+    AsyncTestNodeImpl.handlers.set(fallback.id, () => ({ output: { type: 'string', value: 'fallback' } }));
+
+    const result = await createProcessor(graph).processGraph(testProcessContext());
+    assert.deepEqual(result.result, { type: 'string', value: 'fallback' });
+  });
+
+  void it('drains async work started by a fallback released after an unmatched Stop', async () => {
+    const source = makeTestNode('streaming-source');
+    const watch = makeWatchNode();
+    const branch = makeTestNode('watch-branch');
+    const stop = makeStopWatchNode();
+    const fallback = makeTestNode('fallback');
+    const coalesce: ChartNode = { ...makeTestNode('coalesce'), type: 'coalesce', data: {} };
+    const asyncTrigger = makeAsyncNode('fallback-async-trigger');
+    const asyncLeaf = makeTestNode('fallback-async-leaf');
+    const graph = makeGraph(
+      'streaming-watch-unmatched-stop-fallback-async',
+      [source, watch, branch, stop, fallback, coalesce, asyncTrigger, asyncLeaf],
+      [
+        connect(source.id, watch.id, 'stream'),
+        connect(watch.id, branch.id, 'input', 'value'),
+        connect(branch.id, stop.id, 'value'),
+        connect(stop.id, coalesce.id, 'input1', 'value'),
+        connect(fallback.id, coalesce.id, 'input2'),
+        connect(coalesce.id, asyncTrigger.id, 'input1'),
+        connect(asyncTrigger.id, asyncLeaf.id, 'input', 'output1'),
+      ],
+    );
+    const asyncLeafStarted = deferred();
+    const releaseAsyncLeaf = deferred();
+    AsyncTestNodeImpl.handlers.set(source.id, () => ({ output: { type: 'string', value: 'final' } }));
+    AsyncTestNodeImpl.handlers.set(branch.id, () => ({
+      output: { type: 'control-flow-excluded', value: undefined },
+    }));
+    AsyncTestNodeImpl.handlers.set(fallback.id, () => ({ output: { type: 'string', value: 'fallback' } }));
+    AsyncTestNodeImpl.handlers.set(asyncLeaf.id, async (inputs) => {
+      asyncLeafStarted.resolve();
+      await releaseAsyncLeaf.promise;
+      return { output: inputs['input' as PortId]! };
+    });
+
+    let runSettled = false;
+    const run = createProcessor(graph)
+      .processGraph(testProcessContext())
+      .finally(() => {
+        runSettled = true;
+      });
+    await withTimeout(asyncLeafStarted.promise, 'the async fallback branch');
+    assert.equal(runSettled, false);
+    releaseAsyncLeaf.resolve();
+    await withTimeout(run, 'the unmatched Stop fallback branch');
+    assert.equal(AsyncTestNodeImpl.runCounts.get(asyncLeaf.id), 1);
+  });
+
+  void it('keeps accepting and unmatched Stop boundaries independent for one streaming producer', async () => {
+    const source = makeTestNode('streaming-source');
+    const acceptingWatch = makeWatchNode('accepting-watch');
+    const acceptingBranch = makeTestNode('accepting-branch');
+    const acceptingStop = makeStopWatchNode('accepting-stop');
+    const acceptingDownstream = makeTestNode('accepting-downstream');
+    const unmatchedWatch = makeWatchNode('unmatched-watch');
+    const unmatchedBranch = makeTestNode('unmatched-branch');
+    const unmatchedStop = makeStopWatchNode('unmatched-stop');
+    const unmatchedDownstream = makeTestNode('unmatched-downstream');
+    const output = makeGraphOutputNode();
+    const graph = makeGraph(
+      'independent-streaming-watch-stops',
+      [
+        source,
+        acceptingWatch,
+        acceptingBranch,
+        acceptingStop,
+        acceptingDownstream,
+        unmatchedWatch,
+        unmatchedBranch,
+        unmatchedStop,
+        unmatchedDownstream,
+        output,
+      ],
+      [
+        connect(source.id, acceptingWatch.id, 'stream'),
+        connect(acceptingWatch.id, acceptingBranch.id, 'input', 'value'),
+        connect(acceptingBranch.id, acceptingStop.id, 'value'),
+        connect(acceptingStop.id, acceptingDownstream.id, 'input', 'value'),
+        connect(source.id, unmatchedWatch.id, 'stream'),
+        connect(unmatchedWatch.id, unmatchedBranch.id, 'input', 'value'),
+        connect(unmatchedBranch.id, unmatchedStop.id, 'value'),
+        connect(unmatchedStop.id, unmatchedDownstream.id, 'input', 'value'),
+        connect(source.id, output.id, 'value'),
+      ],
+    );
+    AsyncTestNodeImpl.handlers.set(source.id, (_inputs, context) => {
+      context.onPartialOutputs?.({ output: { type: 'string', value: 'match' } });
+      return { output: { type: 'string', value: 'final' } };
+    });
+    AsyncTestNodeImpl.handlers.set(acceptingBranch.id, (inputs) => ({ output: inputs['input' as PortId]! }));
+    AsyncTestNodeImpl.handlers.set(unmatchedBranch.id, () => ({
+      output: { type: 'control-flow-excluded', value: undefined },
+    }));
+    AsyncTestNodeImpl.handlers.set(acceptingDownstream.id, (inputs) => ({ output: inputs['input' as PortId]! }));
+
+    const processor = createProcessor(graph);
+    const parentExclusions: NodeId[] = [];
+    processor.on('nodeExcluded', ({ execution, node }) => {
+      if (execution.parentGraphRunId == null) parentExclusions.push(node.id);
+    });
+    const outputs = await processor.processGraph(testProcessContext());
+
+    assert.equal(outputs.result?.value, 'final');
+    assert.equal(AsyncTestNodeImpl.runCounts.get(acceptingDownstream.id), 1);
+    assert.equal(AsyncTestNodeImpl.runCounts.get(unmatchedDownstream.id), undefined);
+    assert.deepEqual(parentExclusions, [unmatchedStop.id, unmatchedDownstream.id]);
   });
 
   void it('normalizes a non-Error Watch branch failure once before collecting it at the root', async () => {
@@ -2641,7 +3066,7 @@ void describe('GraphProcessor scheduler boundaries', () => {
     await createProcessor(graph, [childGraph]).processGraph(testProcessContext());
   });
 
-  void it('does not publish an early result before a required Watch Stop can report failure', async () => {
+  void it('waits for a required Watch Stop to resolve normally before returning early graph outputs', async () => {
     const source = makeTestNode('streaming-source');
     const watch = makeWatchNode();
     const branch = makeTestNode('watch-branch');
@@ -2699,7 +3124,11 @@ void describe('GraphProcessor scheduler boundaries', () => {
     assert.equal(outputsReadyCount, 0);
 
     releaseAsyncLeaf.resolve();
-    await assert.rejects(withTimeout(run, 'the failed Watch Stop graph'), /Watch Streaming Output/);
+    const outputs = await withTimeout(run, 'the normally exhausted Watch Stop graph');
+    assert.equal(outputs.result?.value, 'final');
+    // The direct graph output was not published while Stop could still
+    // re-enter normal scheduling. It becomes available only once the stream
+    // has exhausted and the parent Stop has been resolved as excluded.
     assert.equal(outputsReadyCount, 0);
   });
 

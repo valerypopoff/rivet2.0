@@ -17,7 +17,10 @@ export type StreamingOutputWatchRuntimeSummary = {
   coalescedUpdates: number;
   droppedUpdates: number;
   maximumQueuedUpdates: number;
-  /** A coordinator failure that is not necessarily a failed child iteration. */
+  /**
+   * A coordinator failure that is not necessarily a failed child iteration.
+   * `missing-stop` is retained only to read historical recording summaries.
+   */
   failureKind?: StreamingOutputWatchFailureKind;
 };
 
@@ -70,14 +73,13 @@ function normalizePositiveInteger(value: unknown, fallback: number, maximum: num
 /**
  * Owns bounded, cancellable delivery of a streaming node's immutable output
  * snapshots. It deliberately knows nothing about graph topology: the owning
- * GraphProcessor decides how a snapshot runs and whether accepting Stop is
- * required to complete the watch.
+ * GraphProcessor decides how a snapshot runs and whether a Stop boundary
+ * must be resolved after the stream completes.
  */
 export class StreamingOutputWatch {
   readonly #options: StreamingOutputWatchOptions;
   readonly #run: (snapshot: StreamingOutputWatchSnapshot, registerCancel: (cancel: () => void) => void) => Promise<void>;
   readonly #onFailure: (error: Error) => void;
-  readonly #requiresAcceptedStop: boolean;
   readonly #queue: StreamingOutputWatchSnapshot[] = [];
   readonly #activeRuns = new Set<ActiveRun>();
   #timer: ReturnType<typeof setTimeout> | undefined;
@@ -96,7 +98,6 @@ export class StreamingOutputWatch {
     options: Partial<StreamingOutputWatchOptions>,
     run: (snapshot: StreamingOutputWatchSnapshot, registerCancel: (cancel: () => void) => void) => Promise<void>,
     onFailure: (error: Error) => void,
-    { requiresAcceptedStop = true }: { requiresAcceptedStop?: boolean } = {},
   ) {
     this.#options = {
       triggerMode: options.triggerMode === 'interval' ? 'interval' : 'every-update',
@@ -121,14 +122,13 @@ export class StreamingOutputWatch {
     };
     this.#run = run;
     this.#onFailure = onFailure;
-    this.#requiresAcceptedStop = requiresAcceptedStop;
   }
 
   get hasPending(): boolean {
     // Stop prevents new delivery, but accepted and failing invocations still
     // belong to the root lifecycle until they settle. Hiding those active runs
-    // here lets finalization report a later missing-Stop error instead of the
-    // actual child failure.
+    // here would let a later completion resolve the Stop boundary before the
+    // actual child failure is observed.
     return this.#activeRuns.size > 0 || (!this.#stopped && (this.#queue.length > 0 || this.#timer != null));
   }
 
@@ -151,6 +151,22 @@ export class StreamingOutputWatch {
     return !this.hasPending && (this.#stopped || this.#failure != null || this.#producerFinished);
   }
 
+  /**
+   * The producer delivered its final snapshot and every scheduled invocation
+   * settled without cancellation or failure. The scheduler deliberately does
+   * not infer graph topology; GraphProcessor decides whether this means a
+   * parent Stop must be excluded.
+   */
+  get finishedNormally(): boolean {
+    return (
+      !this.#stopped &&
+      this.#failure == null &&
+      this.#producerFinished &&
+      this.#finalSnapshotSettled &&
+      !this.hasPending
+    );
+  }
+
   get runtimeSummary(): StreamingOutputWatchRuntimeSummary {
     return {
       receivedUpdates: this.#receivedUpdates,
@@ -159,15 +175,6 @@ export class StreamingOutputWatch {
       maximumQueuedUpdates: this.#maximumQueuedUpdates,
       ...(this.#failureKind === undefined ? {} : { failureKind: this.#failureKind }),
     };
-  }
-
-  /**
-   * A Stop boundary can enqueue ordinary parent-graph work when its node
-   * completes. Until it settles, its result is not safe to expose
-   * through the foreground-output boundary.
-   */
-  get canAffectForegroundOutputs(): boolean {
-    return this.#requiresAcceptedStop;
   }
 
   publish(snapshot: StreamingOutputWatchSnapshot): void {
@@ -234,13 +241,6 @@ export class StreamingOutputWatch {
         return;
       }
       await Promise.all([...this.#activeRuns].map((run) => run.promise));
-    }
-
-    if (this.#producerFinished && this.#finalSnapshotSettled && !this.#stopped && this.#requiresAcceptedStop) {
-      this.#fail(
-        new Error('The watched streaming output completed before Stop Watching Streaming Output accepted a value.'),
-        'missing-stop',
-      );
     }
   }
 

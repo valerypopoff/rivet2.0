@@ -12,6 +12,7 @@ COPY --chown=10001:10001 deploy/studio-server/images/proxy/entrypoint.sh /opt/ri
 COPY --chown=10001:10001 deploy/studio-server/images/proxy/nginx.conf /etc/nginx/nginx.conf
 COPY --chown=10001:10001 deploy/studio-server/images/proxy/default.conf.template /etc/nginx/templates/default.conf.template
 COPY --chown=10001:10001 deploy/studio-server/images/proxy/normalize-workflow-paths.sh /opt/rivet/proxy/normalize-workflow-paths.sh
+COPY --chown=10001:10001 deploy/studio-server/images/proxy/client-address.sh /opt/rivet/proxy/client-address.sh
 
 RUN chmod +x /opt/rivet/lib/load-env.sh /opt/rivet/proxy/entrypoint.sh /opt/rivet/proxy/normalize-workflow-paths.sh
 

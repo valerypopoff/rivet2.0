@@ -248,12 +248,14 @@ class InMemoryAppSettingsBackend implements AppSettingsBackend {
   readonly listeners = new Set<(key: string) => void>();
   initialized = false;
   disposed = false;
+  readError: Error | null = null;
 
   async initialize(): Promise<void> {
     this.initialized = true;
   }
 
   async read(key: string): Promise<ManagedSettingsRecord | null> {
+    if (this.readError) throw this.readError;
     const record = this.records.get(key);
     return record ? structuredClone(record) : null;
   }
@@ -411,6 +413,81 @@ test('managed settings invalidate replica caches and preserve request snapshots'
     fs.rmSync(tempRoot, { recursive: true, force: true });
   }
 });
+test('managed trusted-client replicas preserve legacy data, fail closed on corruption, and recover by CAS', async () => {
+  // Load the application policy only in this integration case; the preceding
+  // repository-only snapshot tests intentionally register no application domains.
+  const { trustedClientSettingsRepository } = await import('../trusted-client-settings.js');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'rivet-managed-trust-'));
+  const backend = new InMemoryAppSettingsBackend();
+  const descriptor = trustedClientSettingsRepository.descriptor;
+  const key = `managed-trust-${path.basename(root)}`;
+  const settingsPath = path.join(root, 'trusted-hosts.json');
+  fs.writeFileSync(settingsPath, JSON.stringify({ trustedHosts: ['legacy.example'] }));
+  const first = new VersionedSettingsRepository({ ...descriptor, key, getPath: () => settingsPath });
+  const second = new VersionedSettingsRepository({ ...descriptor, key, getPath: () => settingsPath });
+  try {
+    await configureAppSettingsBackendForTests(backend);
+    assert.deepEqual((await first.initialize()).value.legacyTrustedHosts, ['legacy.example']);
+    assert.deepEqual((await second.initialize()).value.trustedClients, []);
+    await first.update((current) => ({ ...current, trustedClients: ['10.20.0.0/16'] }));
+    await waitFor(() => second.readSync().value.trustedClients.length === 1);
+    const persisted = backend.records.get(key)!;
+    await backend.write({ key, expectedRevision: persisted.revision, schemaVersion: 1, value: { trustedClients: ['bad-host'] } });
+    await waitFor(() => !!second.readSync().value.policyError);
+    assert.deepEqual(first.readSync().value.trustedClients, []);
+    assert.deepEqual(backend.records.get(key)!.value, { trustedClients: ['bad-host'] });
+    const invalid = await first.read();
+    await first.update((current) => ({ ...current, policyError: undefined, trustedClients: [] }), invalid.revision);
+    await waitFor(() => !second.readSync().value.policyError);
+    await assert.rejects(first.update((current) => current, invalid.revision), SettingsRevisionConflictError);
+    assert.match(fs.readFileSync(settingsPath, 'utf8'), /legacy.example/);
+  } finally {
+    first.dispose();
+    second.dispose();
+    await configureAppSettingsBackendForTests(null);
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('filesystem metadata failures invalidate cached settings and recover without a file change', async (t) => {
+  await withTestRepository(async ({ filePath, repository }) => {
+    await repository.update(() => ({ count: 1, nested: { label: 'allowed' } }));
+    const originalStat = fs.promises.stat;
+    const failure = Object.assign(new Error('stat denied'), { code: 'EACCES' });
+    const mockedStat = t.mock.method(fs.promises, 'stat', (...args: Parameters<typeof originalStat>) => {
+      if (args[0] === filePath) return Promise.reject(failure);
+      return originalStat(...args);
+    });
+    try {
+      await assert.rejects(repository.refreshIfChanged(), /stat denied/);
+      assert.throws(() => repository.readSync(), /stat denied/);
+    } finally { mockedStat.mock.restore(); }
+    await repository.refreshIfChanged();
+    assert.equal(repository.readSync().value.count, 1);
+  });
+});
+
+test('managed refresh failures invalidate cached authorization until a successful refresh', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'rivet-settings-outage-'));
+  const backend = new InMemoryAppSettingsBackend();
+  const repository = createManagedTestRepository('outage-test', path.join(root, 'settings.json'));
+  try {
+    await configureAppSettingsBackendForTests(backend);
+    await repository.initialize();
+    await repository.update(() => ({ count: 1, nested: { label: 'allowed' } }));
+    backend.readError = new Error('storage unavailable');
+    await assert.rejects(repository.refresh(), /storage unavailable/);
+    assert.throws(() => repository.readSync(), /storage unavailable/);
+    backend.readError = null;
+    await repository.refresh();
+    assert.equal(repository.readSync().value.count, 1);
+  } finally {
+    repository.dispose();
+    await configureAppSettingsBackendForTests(null);
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('managed settings encryption binds ciphertext to its domain and schema version', () => {
   const oldKey = deriveManagedSettingsEncryptionKey('old-deployment-secret');
   const newKey = deriveManagedSettingsEncryptionKey('new-deployment-secret');

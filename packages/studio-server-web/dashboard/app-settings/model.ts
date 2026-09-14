@@ -7,7 +7,7 @@ import type {
   ExecutorUrlOverrideSettings,
   PublicRouteSettings,
   RuntimeLimitSettings,
-  TrustedHostSettings,
+  TrustedClientSettings,
   WebAppAuthMode,
   WebAppAuthSettings,
   WebAppOAuthClientAuthMethod,
@@ -50,8 +50,10 @@ export type RuntimeLimitSettingsForm = {
   dockerWaitTimeoutSeconds: string;
 };
 
-export type TrustedHostSettingsForm = {
-  trustedHostsText: string;
+export type TrustedClientSettingsForm = {
+  trustedClientsText: string;
+  legacyTrustedHosts?: string[];
+  policyError?: string;
 };
 
 export type WorkflowEndpointAuthSettingsForm = Pick<WorkflowEndpointAuthSettings, 'requireBearerAuth'>;
@@ -226,8 +228,8 @@ export function parseDelimitedListText(value: string): string[] {
   return value.split(/[\s,;]+/).map((item) => item.trim()).filter(Boolean);
 }
 
-export function createTrustedHostForm(settings: Pick<TrustedHostSettings, 'trustedHosts'>): TrustedHostSettingsForm {
-  return { trustedHostsText: settings.trustedHosts.join('\n') };
+export function createTrustedClientForm(settings: Pick<TrustedClientSettings, 'trustedClients' | 'legacyTrustedHosts' | 'policyError'>): TrustedClientSettingsForm {
+  return { trustedClientsText: settings.trustedClients.join('\n'), legacyTrustedHosts: settings.legacyTrustedHosts ?? [], policyError: settings.policyError };
 }
 
 export function publicRouteSettingsMatchConfig(

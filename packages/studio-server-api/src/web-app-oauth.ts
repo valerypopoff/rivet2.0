@@ -1,15 +1,14 @@
 import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
+import { getDevelopmentAuthPolicyVersion, isDevelopmentAuthRequest } from './development-auth.js';
 import type { IncomingMessage } from 'node:http';
 import { Router, type Request, type Response } from 'express';
+import { createSmallCredentialBodyParser } from './middleware/body-parsers.js';
 
 import { getPublishedWebAppsBasePath } from './workflowEndpointPaths.js';
 import { createHttpError } from './utils/httpError.js';
 import { addUiAuthErrorToReturnTo, sanitizeUiAuthReturnTo } from './ui-auth-utils.js';
 import { isTrustedProxyRequest } from './auth.js';
-import {
-  readWebAppAuthSettingsSync,
-  requireSecureOAuthUrl,
-} from './web-app-auth-settings.js';
+import { readWebAppAuthSettingsSync, requireSecureOAuthUrl } from './web-app-auth-settings.js';
 import type { WebAppAuthMode } from '../../studio-server-shared/app-settings-types.js';
 
 const OAUTH_STATE_COOKIE_NAME = 'rivet_web_app_oauth_state';
@@ -42,20 +41,22 @@ type OAuthStateCookiePayload = SignedPayload & {
   settingsVersion: string;
 };
 
-type OAuthConfig = {
-  provider: 'dummy';
-  email: string;
-} | {
-  provider: 'external';
-  authorizeUrl: string;
-  tokenUrl: string;
-  userUrl: string;
-  clientId: string;
-  clientSecret: string;
-  clientAuthMethod: 'basic' | 'body';
-  emailClaim: string;
-  scopes: string;
-};
+type OAuthConfig =
+  | {
+      provider: 'dummy';
+      email: string;
+    }
+  | {
+      provider: 'external';
+      authorizeUrl: string;
+      tokenUrl: string;
+      userUrl: string;
+      clientId: string;
+      clientSecret: string;
+      clientAuthMethod: 'basic' | 'body';
+      emailClaim: string;
+      scopes: string;
+    };
 
 function isDummyOAuthProvider(): boolean {
   const settings = readWebAppAuthSettingsSync();
@@ -170,22 +171,25 @@ function getOAuthSettingsSessionVersion(): string {
     : '';
 
   return createHmac('sha256', signingSecret)
-    .update(JSON.stringify({
-      mode: settings.mode,
-      provider: settings.provider,
-      dummyEmail: settings.dummyEmail,
-      dummyAllowNonLocalhost: settings.dummyAllowNonLocalhost,
-      authorizeUrl: settings.authorizeUrl,
-      tokenUrl: settings.tokenUrl,
-      userUrl: settings.userUrl,
-      clientId: settings.clientId,
-      clientSecretFingerprint,
-      callbackUrl: settings.callbackUrl,
-      scopes: settings.scopes,
-      emailClaim: settings.emailClaim,
-      sessionTtlSeconds: settings.sessionTtlSeconds,
-      clientAuthMethod: settings.clientAuthMethod,
-    }))
+    .update(
+      JSON.stringify({
+        mode: settings.mode,
+        provider: settings.provider,
+        ...(settings.provider === 'dummy' ? { developmentPolicy: getDevelopmentAuthPolicyVersion() } : {}),
+        dummyEmail: settings.dummyEmail,
+        dummyAllowNonLocalhost: settings.dummyAllowNonLocalhost,
+        authorizeUrl: settings.authorizeUrl,
+        tokenUrl: settings.tokenUrl,
+        userUrl: settings.userUrl,
+        clientId: settings.clientId,
+        clientSecretFingerprint,
+        callbackUrl: settings.callbackUrl,
+        scopes: settings.scopes,
+        emailClaim: settings.emailClaim,
+        sessionTtlSeconds: settings.sessionTtlSeconds,
+        clientAuthMethod: settings.clientAuthMethod,
+      }),
+    )
     .digest('base64url');
 }
 
@@ -247,18 +251,15 @@ function createCookie(name: string, value: string, req: Request, maxAgeSeconds: 
     'SameSite=Lax',
     `Max-Age=${maxAgeSeconds}`,
     getCookieSecuritySuffix(req),
-  ].filter(Boolean).join('; ');
+  ]
+    .filter(Boolean)
+    .join('; ');
 }
 
 function clearCookie(name: string, req: Request): string {
-  return [
-    `${name}=`,
-    'Path=/',
-    'HttpOnly',
-    'SameSite=Lax',
-    'Max-Age=0',
-    getCookieSecuritySuffix(req),
-  ].filter(Boolean).join('; ');
+  return [`${name}=`, 'Path=/', 'HttpOnly', 'SameSite=Lax', 'Max-Age=0', getCookieSecuritySuffix(req)]
+    .filter(Boolean)
+    .join('; ');
 }
 
 function getCallbackUrl(req: Request): string {
@@ -285,9 +286,13 @@ function sanitizeOAuthReturnTo(returnTo: string): string {
   return `${parsed.pathname}${parsed.search}${parsed.hash}` || '/';
 }
 
-export function createWebAppOAuthAuthorizationRedirect(req: Request, returnTo: string, options: {
-  prompt?: typeof WEB_APP_OAUTH_SELECT_ACCOUNT_PROMPT;
-} = {}): {
+export function createWebAppOAuthAuthorizationRedirect(
+  req: Request,
+  returnTo: string,
+  options: {
+    prompt?: typeof WEB_APP_OAUTH_SELECT_ACCOUNT_PROMPT;
+  } = {},
+): {
   location: string;
   cookies: string[];
 } {
@@ -311,7 +316,7 @@ export function createWebAppOAuthAuthorizationRedirect(req: Request, returnTo: s
 
   if (config.provider === 'dummy') {
     if (!isDummyOAuthAllowedForRequest(req)) {
-      throw createHttpError(403, 'Dummy OAuth is only available for localhost requests');
+      throw createHttpError(403, 'Dummy OAuth requires deployment opt-in and an allowed development client');
     }
 
     const authorizeUrl = new URL(`${getRequestOrigin(req)}${getPublishedWebAppsBasePath()}/auth/dummy`);
@@ -343,6 +348,7 @@ export function createWebAppOAuthAuthorizationRedirect(req: Request, returnTo: s
 }
 
 export function readWebAppOAuthSession(req: Request | IncomingMessage): WebAppOAuthSession | null {
+  if (readWebAppAuthSettingsSync().provider === 'dummy' && !isDevelopmentAuthRequest(req)) return null;
   const payload = readSignedPayload<WebAppOAuthSession>(readCookie(req, OAUTH_SESSION_COOKIE_NAME));
   if (!payload || typeof payload.email !== 'string') {
     return null;
@@ -368,9 +374,7 @@ export function readWebAppOAuthSession(req: Request | IncomingMessage): WebAppOA
  * the same rotating session secret as the signed browser session.
  */
 export function getWebAppOAuthSessionOwnerKey(session: WebAppOAuthSession): string {
-  return createHmac('sha256', getSigningSecret())
-    .update(`web-app-owner:${session.email}`)
-    .digest('base64url');
+  return createHmac('sha256', getSigningSecret()).update(`web-app-owner:${session.email}`).digest('base64url');
 }
 
 export function isWebAppOAuthSessionAllowed(
@@ -408,7 +412,7 @@ async function exchangeCodeForToken(req: Request, code: string): Promise<string>
   const config = getRequiredOauthConfig();
   if (config.provider === 'dummy') {
     if (!isDummyOAuthAllowedForRequest(req)) {
-      throw createHttpError(403, 'Dummy OAuth is only available for localhost requests');
+      throw createHttpError(403, 'Dummy OAuth requires deployment opt-in and an allowed development client');
     }
 
     if (!code.startsWith(DUMMY_OAUTH_CODE_PREFIX)) {
@@ -502,33 +506,14 @@ function shouldRedirectOAuthCallbackFailure(error: unknown): boolean {
 }
 
 export const webAppOAuthRouter = Router();
-
-function getLocalRequestHostName(req: Request): string {
-  const host = getForwardedHost(req).split(',')[0]?.trim() ?? '';
-  if (host.startsWith('[')) {
-    const closingBracketIndex = host.indexOf(']');
-    return closingBracketIndex > 1 ? host.slice(1, closingBracketIndex) : host;
-  }
-
-  const colonCount = host.split(':').length - 1;
-  if (colonCount === 1) {
-    return host.split(':')[0]!;
-  }
-
-  return host;
-}
+const smallCredentialBodyParser = createSmallCredentialBodyParser();
 
 function isDummyOAuthAllowedForRequest(req: Request): boolean {
   if (!isDummyOAuthProvider()) {
     return false;
   }
 
-  if (readWebAppAuthSettingsSync().dummyAllowNonLocalhost) {
-    return true;
-  }
-
-  const host = getLocalRequestHostName(req).toLowerCase();
-  return host === 'localhost' || host === '127.0.0.1' || host === '::1';
+  return isDevelopmentAuthRequest(req);
 }
 
 function createDummyOAuthCode(email: string): string {
@@ -570,7 +555,12 @@ function renderDummyOAuthPage(state: string): string {
 
 webAppOAuthRouter.get('/auth/dummy', (req, res) => {
   if (!isDummyOAuthAllowedForRequest(req)) {
-    res.status(403).type('html').send('<!doctype html><meta charset="utf-8"><title>Forbidden</title><body>Dummy OAuth is only available for localhost requests.</body>');
+    res
+      .status(403)
+      .type('html')
+      .send(
+        '<!doctype html><meta charset="utf-8"><title>Forbidden</title><body>Dummy OAuth requires deployment opt-in and an allowed development client.</body>',
+      );
     return;
   }
 
@@ -580,9 +570,14 @@ webAppOAuthRouter.get('/auth/dummy', (req, res) => {
   res.status(200).type('html').send(renderDummyOAuthPage(state));
 });
 
-webAppOAuthRouter.post('/auth/dummy', (req, res) => {
+webAppOAuthRouter.post('/auth/dummy', smallCredentialBodyParser, (req, res) => {
   if (!isDummyOAuthAllowedForRequest(req)) {
-    res.status(403).type('html').send('<!doctype html><meta charset="utf-8"><title>Forbidden</title><body>Dummy OAuth is only available for localhost requests.</body>');
+    res
+      .status(403)
+      .type('html')
+      .send(
+        '<!doctype html><meta charset="utf-8"><title>Forbidden</title><body>Dummy OAuth requires deployment opt-in and an allowed development client.</body>',
+      );
     return;
   }
 
@@ -601,9 +596,7 @@ webAppOAuthRouter.get('/auth/callback', async (req, res, next) => {
     const state = typeof req.query.state === 'string' ? req.query.state : '';
     const code = typeof req.query.code === 'string' ? req.query.code : '';
     const statePayload = readSignedPayload<OAuthStatePayload>(state);
-    const stateCookie = readSignedPayload<OAuthStateCookiePayload>(
-      readCookie(req, OAUTH_STATE_COOKIE_NAME),
-    );
+    const stateCookie = readSignedPayload<OAuthStateCookiePayload>(readCookie(req, OAUTH_STATE_COOKIE_NAME));
     const fallbackReturnTo = sanitizeUiAuthReturnTo(statePayload?.returnTo ?? stateCookie?.returnTo);
     res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
     res.setHeader('Pragma', 'no-cache');
@@ -623,12 +616,12 @@ webAppOAuthRouter.get('/auth/callback', async (req, res, next) => {
     }
 
     if (
-      !code
-      || !statePayload
-      || !stateCookie
-      || statePayload.nonce !== stateCookie.nonce
-      || statePayload.settingsVersion !== stateCookie.settingsVersion
-      || statePayload.settingsVersion !== currentSettingsVersion
+      !code ||
+      !statePayload ||
+      !stateCookie ||
+      statePayload.nonce !== stateCookie.nonce ||
+      statePayload.settingsVersion !== stateCookie.settingsVersion ||
+      statePayload.settingsVersion !== currentSettingsVersion
     ) {
       res.redirect(303, addUiAuthErrorToReturnTo(fallbackReturnTo, 'oauth_state'));
       return;
@@ -658,10 +651,7 @@ webAppOAuthRouter.get('/auth/callback', async (req, res, next) => {
       req,
       ttlSeconds,
     );
-    res.setHeader('Set-Cookie', [
-      clearCookie(OAUTH_STATE_COOKIE_NAME, req),
-      sessionCookie,
-    ]);
+    res.setHeader('Set-Cookie', [clearCookie(OAUTH_STATE_COOKIE_NAME, req), sessionCookie]);
     res.redirect(303, sanitizeUiAuthReturnTo(statePayload.returnTo));
   } catch (error) {
     next(error);
@@ -669,18 +659,12 @@ webAppOAuthRouter.get('/auth/callback', async (req, res, next) => {
 });
 
 webAppOAuthRouter.get('/auth/logout', (req, res) => {
-  const returnTo = typeof req.query.return_to === 'string'
-    ? req.query.return_to
-    : getPublishedWebAppsBasePath();
+  const returnTo = typeof req.query.return_to === 'string' ? req.query.return_to : getPublishedWebAppsBasePath();
   const sanitizedReturnTo = sanitizeOAuthReturnTo(returnTo);
-  const finalRedirectPath = req.query.select_account === '1'
-    ? addSelectAccountPromptToReturnPath(sanitizedReturnTo)
-    : sanitizedReturnTo;
+  const finalRedirectPath =
+    req.query.select_account === '1' ? addSelectAccountPromptToReturnPath(sanitizedReturnTo) : sanitizedReturnTo;
   res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
   res.setHeader('Pragma', 'no-cache');
-  res.setHeader('Set-Cookie', [
-    clearCookie(OAUTH_STATE_COOKIE_NAME, req),
-    clearCookie(OAUTH_SESSION_COOKIE_NAME, req),
-  ]);
+  res.setHeader('Set-Cookie', [clearCookie(OAUTH_STATE_COOKIE_NAME, req), clearCookie(OAUTH_SESSION_COOKIE_NAME, req)]);
   res.redirect(303, finalRedirectPath);
 });

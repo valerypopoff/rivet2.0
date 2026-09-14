@@ -15,8 +15,8 @@ import type {
   RunRecordingsSettingsDraft,
   RuntimeLimitSettings,
   RuntimeLimitSettingsDraft,
-  TrustedHostSettings,
-  TrustedHostSettingsDraft,
+  TrustedClientSettings,
+  TrustedClientSettingsDraft,
   WebAppAuthSettings,
   WebAppAuthSettingsDraft,
   WorkflowEndpointAuthSettings,
@@ -25,6 +25,10 @@ import type {
 import { parseJsonResponse } from './apiRequest';
 
 const API = `${RIVET_API_BASE_URL}/app-settings`;
+
+export async function readCurrentTrustedClient(): Promise<{ clientAddress: string | null; trusted: boolean }> {
+  return appSettingsJsonResponse(await fetch(`${API}/trusted-clients/current-request`, { cache: 'no-store' }));
+}
 
 export type AppSettingsResourceResult<T> = {
   revision: string | null;
@@ -93,10 +97,10 @@ export const runtimeLimitSettingsResource = createAppSettingsResource<
   RuntimeLimitSettings,
   RuntimeLimitSettingsDraft
 >('runtime-limits');
-export const trustedHostSettingsResource = createAppSettingsResource<
-  TrustedHostSettings,
-  TrustedHostSettingsDraft
->('trusted-hosts');
+export const trustedClientSettingsResource = createAppSettingsResource<
+  TrustedClientSettings,
+  TrustedClientSettingsDraft
+>('trusted-clients');
 export const deploymentStorageSettingsResource = createAppSettingsResource<
   DeploymentStorageSettings,
   DeploymentStorageSettingsDraft

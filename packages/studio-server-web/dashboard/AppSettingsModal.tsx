@@ -22,7 +22,7 @@ import { useNodeExecutorForms } from './app-settings/useNodeExecutorForms';
 import { usePublicRoutesForm } from './app-settings/usePublicRoutesForm';
 import { useRunRecordingsForm } from './app-settings/useRunRecordingsForm';
 import { useRuntimeLimitsForm } from './app-settings/useRuntimeLimitsForm';
-import { useTrustedHostsForm } from './app-settings/useTrustedHostsForm';
+import { useTrustedClientsForm } from './app-settings/useTrustedClientsForm';
 import { useWebAppAuthForm } from './app-settings/useWebAppAuthForm';
 import { useWorkflowEndpointAuthForm } from './app-settings/useWorkflowEndpointAuthForm';
 import type { HostedRouteConfig } from './types';
@@ -82,7 +82,7 @@ function OpenAppSettingsModal({
   const usesPublicRoutes = activeTab === 'workflow-endpoints' || activeTab === 'web-apps';
 
   const limits = useRuntimeLimitsForm(usesRuntimeLimits);
-  const trustedHosts = useTrustedHostsForm(activeTab === 'general');
+  const trustedClients = useTrustedClientsForm(activeTab === 'general');
   const storage = useDeploymentStorageForm(activeTab === 'storage');
   const deploymentStatus = useDeploymentStatus(activeTab === 'deployment-status');
   const routes = usePublicRoutesForm(usesPublicRoutes, routeConfig, onRouteConfigChange);
@@ -93,7 +93,7 @@ function OpenAppSettingsModal({
   const webAppAuth = useWebAppAuthForm(isWebAppAuthSettingsTab(activeTab), onRouteConfigChange);
 
   const panel = activeTab === 'general'
-    ? <GeneralSettingsTab trustedHosts={trustedHosts} />
+    ? <GeneralSettingsTab trustedClients={trustedClients} />
     : activeTab === 'shell-execution'
       ? <ShellExecutionSettingsTab limits={limits} />
       : activeTab === 'server-ui-access'
@@ -120,12 +120,12 @@ function OpenAppSettingsModal({
     ? []
     : activeTab === 'general'
     ? [{
-        changed: trustedHosts.changed,
-        disabled: trustedHosts.controlsDisabled,
-        error: trustedHosts.error,
-        name: 'trusted hosts',
-        revert: trustedHosts.revert,
-        save: trustedHosts.save,
+        changed: trustedClients.changed,
+        disabled: trustedClients.controlsDisabled,
+        error: trustedClients.error,
+        name: 'trusted clients',
+        revert: trustedClients.revert,
+        save: trustedClients.save,
       }]
     : activeTab === 'shell-execution'
       ? [{
@@ -350,9 +350,8 @@ function OpenAppSettingsModal({
               </aside>
               <div
                 className="app-settings-panel-region"
-                onChangeCapture={() => setActionFeedback(null)}
-                onClickCapture={() => setActionFeedback(null)}
-                onInputCapture={() => setActionFeedback(null)}
+                onChange={() => setActionFeedback(null)}
+                onClick={() => setActionFeedback(null)}
               >
                 {panel}
                 {tabActions.length > 0 ? (

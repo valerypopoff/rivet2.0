@@ -19,6 +19,10 @@ import { createManagedWorkflowEndpointSync } from './endpoint-sync.js';
 import { ManagedWorkflowExecutionCache } from './execution-cache.js';
 import { ManagedWorkflowExecutionInvalidationController } from './execution-invalidation.js';
 import {
+  notifyAllWebAppSocketPolicyInvalidations,
+  notifyWebAppSocketPolicyInvalidation,
+} from '../web-app-policy-invalidation.js';
+import {
   createManagedEvaluationRetentionTask,
   getManagedEvaluationRetentionConfig,
 } from '../../../evaluation-runs/managed-retention.js';
@@ -150,6 +154,10 @@ export function createManagedWorkflowContext(
     clearEndpointPointers: () => {
       executionCache.clearEndpointPointers();
     },
+    onWorkflowChanged: (workflowId) => {
+      notifyWebAppSocketPolicyInvalidation(`managed:${workflowId}`);
+    },
+    onAllChanged: notifyAllWebAppSocketPolicyInvalidations,
   });
 
   const initialize = async (): Promise<void> => {

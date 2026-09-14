@@ -1,3 +1,4 @@
+import type { IncomingMessage } from 'node:http';
 import type { GraphId, Project, RemoteRunRequestId } from '@valerypopoff/rivet2-core';
 import type { NodeCreateProcessorOptions } from '@valerypopoff/rivet2-node';
 
@@ -11,6 +12,8 @@ export type AppExecutorProcessorOptionsContext = Readonly<{
 }>;
 
 export type AppExecutorHostOptions = Readonly<{
+  /** Hosted transports can authenticate upgrades and periodically reauthorize sessions. */
+  authorizeClient?: (request: IncomingMessage) => Promise<boolean>;
   /**
    * Adds host-owned processor facilities to every editor run handled by this
    * executor process. Rivet-owned execution identity, graph inputs, debugger,

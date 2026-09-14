@@ -29,6 +29,8 @@ function createExecutionLookupRow() {
     revision_created_at: new Date().toISOString(),
     ui_graph_id: 'ui-graph-a',
     allowed_emails: ['user@example.com'],
+    web_app_id: 'web-app-a',
+    app_id: 'web-app-a',
   };
 }
 
@@ -189,13 +191,37 @@ test('managed web app execution lookup uses the published web app slug and pinne
   assert.equal(result.pointer.revisionId, 'resolved-revision');
   assert.equal(result.pointer.webAppUiGraphId, 'ui-graph-a');
   assert.deepEqual(result.pointer.webAppAllowedEmails, ['user@example.com']);
+  assert.equal(result.pointer.webAppId, 'web-app-a');
   assert.equal(queries.length, 1);
   assert.deepEqual(queries[0]?.params, ['app-slug']);
 
   const normalizedSql = queries[0]!.text.replace(/\s+/g, ' ').trim();
   assert.match(normalizedSql, /FROM workflow_web_apps app/);
+  assert.match(normalizedSql, /app\.app_id AS web_app_id/);
   assert.match(normalizedSql, /JOIN workflow_revisions r ON r\.revision_id = app\.revision_id/);
   assert.match(normalizedSql, /app\.allowed_emails/);
+  assert.match(normalizedSql, /WHERE app\.slug_lookup_name = \$1$/);
+});
+
+test('managed web app access-policy lookup reads the current binding without a revision blob', async () => {
+  const { pool, queries } = createExecutionLookupPool();
+  const managedQueries = createManagedWorkflowQueries(pool);
+
+  const result = await managedQueries.resolveWebAppAccessPolicyFromDatabase(pool, 'app-slug');
+
+  assert.deepEqual(result, {
+    appId: 'web-app-a',
+    relativePath: 'Main.rivet-project',
+    uiGraphId: 'ui-graph-a',
+    allowedEmails: ['user@example.com'],
+  });
+  assert.equal(queries.length, 1);
+  assert.deepEqual(queries[0]?.params, ['app-slug']);
+
+  const normalizedSql = queries[0]!.text.replace(/\s+/g, ' ').trim();
+  assert.match(normalizedSql, /FROM workflow_web_apps app JOIN workflows w ON w\.workflow_id = app\.workflow_id/);
+  assert.match(normalizedSql, /SELECT app\.app_id, w\.relative_path/);
+  assert.equal(normalizedSql.includes('workflow_revisions'), false);
   assert.match(normalizedSql, /WHERE app\.slug_lookup_name = \$1$/);
 });
 
@@ -210,6 +236,7 @@ test('managed latest web app execution lookup uses the published web app slug an
   assert.equal(result.pointer.revisionId, 'resolved-revision');
   assert.equal(result.pointer.webAppUiGraphId, 'ui-graph-a');
   assert.deepEqual(result.pointer.webAppAllowedEmails, ['user@example.com']);
+  assert.equal(result.pointer.webAppId, 'web-app-a');
   assert.equal(queries.length, 1);
   assert.deepEqual(queries[0]?.params, ['app-slug']);
 

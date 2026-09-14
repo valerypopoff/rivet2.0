@@ -1,4 +1,5 @@
 import type { ChartNode, LLMChatV2Node, ProcessId } from '@valerypopoff/rivet2-core';
+import { css } from '@emotion/react';
 import { useAtom, useAtomValue, useSetAtom } from 'jotai';
 import CopyIcon from 'majesticons/line/clipboard-line.svg?react';
 import EyeIcon from 'majesticons/line/eye-line.svg?react';
@@ -17,6 +18,7 @@ import { graphState } from '../../state/graph.js';
 import {
   type NodeRunDataWithRefs,
   type ProcessDataForNode,
+  type StoredInputsOrOutputs,
   getLLMChatOutputHistorySelectionKey,
   lastRunDataState,
   resolvedGraphSelectionState,
@@ -67,6 +69,26 @@ import {
 import { nodeRunDataHasVisibleOutput } from './nodeOutputVisibility.js';
 import { renderNodeOutputBody } from './renderNodeOutputBody.js';
 import { getStreamingOutputWatchBranchNodeIds } from '../nodeCanvas/streamingOutputWatchWireState.js';
+import { RenderDataOutputs } from './RenderDataOutputs.js';
+import { createLiveStreamingInputPreviewAtom } from '../../state/selectors/liveStreamingInputPreview.js';
+
+const liveStreamingInputPreviewStyles = css`
+  .live-streaming-input-preview-title {
+    color: var(--foreground-muted);
+    font-size: calc(11px * var(--ui-font-scale));
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    margin-bottom: calc(6px * var(--ui-font-scale));
+    text-transform: uppercase;
+  }
+
+  .live-streaming-input-preview-description {
+    color: var(--foreground-muted);
+    font-size: calc(11px * var(--ui-font-scale));
+    line-height: 1.35;
+    margin-bottom: calc(8px * var(--ui-font-scale));
+  }
+`;
 
 export const NodeInlineOutput: FC<{
   node: ChartNode;
@@ -78,6 +100,8 @@ export const NodeInlineOutput: FC<{
 }> = ({ node, isFrozen, isOutputExpanded, isHovered, onToggleExpandedOutput, onOpenFullscreenModal }) => {
   const dataRefs = useDataRefs();
   const output = useAtomValue(lastRunDataState(node.id));
+  const livePreviewAtom = useMemo(() => createLiveStreamingInputPreviewAtom(node.id), [node.id]);
+  const liveStreamingInputPreview = useAtomValue(livePreviewAtom);
   const selectedPage = useAtomValue(selectedProcessPageState(node.id));
   const showNodeRunDurations = useAtomValue(showNodeRunDurationsState);
   const graphSelectionOptions = useAtomValue(resolvedGraphSelectionState);
@@ -106,6 +130,14 @@ export const NodeInlineOutput: FC<{
   const terminalPageIndex = isStreamingWatchBranchNode
     ? getStreamingOutputWatchTerminalPageIndex(presentationOutput)
     : undefined;
+
+  if (!isFrozen && liveStreamingInputPreview) {
+    return (
+      <div className="node-output live-streaming-input-preview-output">
+        <LiveStreamingInputPreview node={node} preview={liveStreamingInputPreview} />
+      </div>
+    );
+  }
 
   if (!presentationOutput?.length) {
     return null;
@@ -151,6 +183,23 @@ export const NodeInlineOutput: FC<{
       </div>
     );
   }
+};
+
+const LiveStreamingInputPreview: FC<{
+  node: ChartNode;
+  preview: StoredInputsOrOutputs;
+}> = ({ node, preview }) => {
+  const io = useNodeIO(node.id);
+
+  return (
+    <div className="node-output-inner live-streaming-input-preview" css={liveStreamingInputPreviewStyles}>
+      <div className="live-streaming-input-preview-title">Live streaming input</div>
+      <div className="live-streaming-input-preview-description">
+        Preview only — this node runs after the response is complete.
+      </div>
+      <RenderDataOutputs definitions={io.inputDefinitions} outputs={preview} isCompact={false} mode="expanded-preview" />
+    </div>
+  );
 };
 
 const NodeOutputSingleProcess: FC<{

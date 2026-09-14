@@ -77,7 +77,9 @@ function createFixtureNetwork() {
       overlapError = error;
     }
   }
-  throw new Error(`Could not allocate an isolated Docker subnet after 64 attempts: ${overlapError?.message ?? 'unknown error'}`);
+  throw new Error(
+    `Could not allocate an isolated Docker subnet after 64 attempts: ${overlapError?.message ?? 'unknown error'}`,
+  );
 }
 
 const templates = [
@@ -89,6 +91,22 @@ try {
   const { prefix, subnet } = createFixtureNetwork();
   console.log(`Using isolated Docker subnet ${subnet}.`);
   await writeFile(path.join(fixture, 'empty.inc'), '');
+  // The production bootstrap generates this include before nginx renders a
+  // template. The DNS fixture bypasses that bootstrap, but templates still
+  // require its variables even when no forwarding peers are configured.
+  await writeFile(
+    path.join(fixture, 'client-address.inc'),
+    `real_ip_header X-Forwarded-For;
+real_ip_recursive on;
+geo $remote_addr $rivet_resolved_forwarding_peer {
+    default 0;
+}
+map $rivet_resolved_forwarding_peer $rivet_client_ip {
+    default "";
+    0 $remote_addr;
+}
+`,
+  );
   // One worker guarantees each request uses the DNS cache warmed before the
   // replacement, instead of accidentally succeeding through a fresh worker.
   await writeFile(
@@ -112,6 +130,7 @@ try {
       RIVET_TRUST_INCOMING_FORWARDED_HEADERS: '0',
       RIVET_PROXY_AUTH_TOKEN: 'fixture-secret',
       RIVET_TRUSTED_HOSTS_INCLUDE_FILE: '/fixture/empty.inc',
+      RIVET_CLIENT_ADDRESS_INCLUDE_FILE: '/fixture/client-address.inc',
       RIVET_PROXY_TIMEOUT_INCLUDE_FILE: '/fixture/empty.inc',
       RIVET_PUBLIC_ROUTES_INCLUDE_FILE: '/fixture/empty.inc',
       RIVET_API_UPSTREAM_HOST: 'api',
