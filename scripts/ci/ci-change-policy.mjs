@@ -8,6 +8,7 @@ const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..',
 const rootDependencyFiles = new Set(['.pnp.cjs', '.pnp.loader.mjs', '.yarnrc.yml', 'package.json', 'yarn.lock']);
 
 const studioRuntimePrefixes = [
+  '.yarn/',
   '.github/actions/setup-yarn/',
   '.github/workflows/studio-server-',
   'deploy/studio-server/',
@@ -23,6 +24,7 @@ const studioRuntimePrefixes = [
 ];
 
 const desktopPrefixes = [
+  '.yarn/',
   '.github/actions/',
   '.github/scripts/',
   '.github/workflows/developer-windows-release.yml',
@@ -39,6 +41,7 @@ const desktopPrefixes = [
 ];
 
 const npmPrefixes = [
+  '.yarn/',
   '.github/actions/setup-yarn/',
   '.github/workflows/publish-npm-packages.yml',
   'packages/cli/',
@@ -54,6 +57,7 @@ const fullKubernetesPrefixes = [
   '.github/workflows/studio-server-images.yml',
   'deploy/studio-server/compose/',
   'deploy/studio-server/helm/',
+  'deploy/studio-server/kubernetes-test/',
   'deploy/studio-server/images/',
   'deploy/studio-server/scripts/candidate-image-smoke',
   'deploy/studio-server/scripts/dev-kubernetes',
@@ -104,13 +108,14 @@ function resolveDiffRange(eventName, event) {
   return null;
 }
 
-export function listChangedPaths(base, head) {
-  return execFileSync('git', ['diff', '--name-only', '--diff-filter=ACMRTUXB', base, head], {
-    cwd: rootDir,
+export function listChangedPaths(base, head, cwd = rootDir) {
+  // Treat renames as deletion + addition so moving a file outside a package
+  // still verifies the package that lost it. NUL delimiters preserve filenames.
+  return execFileSync('git', ['diff', '--name-only', '--no-renames', '-z', base, head, '--'], {
+    cwd,
     encoding: 'utf8',
   })
-    .split(/\r?\n/)
-    .map((value) => value.trim())
+    .split('\0')
     .filter(Boolean);
 }
 

@@ -755,16 +755,34 @@ test('local editor replay uploads are authenticated before their elevated reques
   });
 });
 
-test('local editor replay uploads are rejected at the request parser limit', async () => {
+test('local editor replay uploads reject oversized Content-Length before receiving the body', async () => {
   await withApiEnv({}, async () => {
     const server = await startServer('control');
     try {
-      const response = await fetch(`${server.baseUrl}/api/workflows/local-editor-recordings/`, {
-        method: 'POST',
-        headers: { ...trustedProxyHeaders(), 'content-type': 'application/json' },
-        body: JSON.stringify({ recordingSerialized: 'x'.repeat(MAX_LOCAL_EDITOR_RECORDING_REQUEST_BYTES) }),
+      // The route must reject from headers alone. Sending 48 MiB here races
+      // the server's intentional early connection close and obscures the 413.
+      const status = await new Promise<number | undefined>((resolve, reject) => {
+        const request = http.request(
+          `${server.baseUrl}/api/workflows/local-editor-recordings/`,
+          {
+            method: 'POST',
+            headers: {
+              ...trustedProxyHeaders(),
+              'content-type': 'application/json',
+              'content-length': String(MAX_LOCAL_EDITOR_RECORDING_REQUEST_BYTES + 1),
+            },
+            signal: AbortSignal.timeout(5_000),
+          },
+          (response) => {
+            response.once('error', reject);
+            response.once('end', () => resolve(response.statusCode));
+            response.resume();
+          },
+        );
+        request.once('error', reject);
+        request.end();
       });
-      assert.equal(response.status, 413);
+      assert.equal(status, 413);
     } finally {
       await server.close();
     }

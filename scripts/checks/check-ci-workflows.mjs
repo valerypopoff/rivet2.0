@@ -184,6 +184,11 @@ assertIncludesAll(
   ],
   'Studio Server verify aggregator',
 );
+const studioGate = findStep(studioJobs.verify, 'Require every applicable Studio Server gate', 'Studio verifier');
+assert.equal(studioGate.env?.CLASSIFICATION_RESULT, '${{ needs.changes.result }}');
+assert.match(studioGate.run, /\$CLASSIFICATION_RESULT.*success/);
+assert.match(studioGate.run, /\$RELEVANT.*!= "true".*\$RELEVANT.*!= "false"/);
+assert.match(studioGate.run, /if \[\[ "\$RELEVANT" == "false" \]\]/);
 assert.match(
   studio.source,
   /Studio Server verification critical path[\s\S]*job-timing\.mjs finish-at/,

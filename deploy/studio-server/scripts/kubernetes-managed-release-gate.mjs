@@ -12,6 +12,7 @@ import {
   renderManagedReleaseGateValues,
 } from './lib/kubernetes-managed-release-gate-config.mjs';
 import { resolveHelmBinOrThrow } from './lib/k8s-tools.mjs';
+import { summarizePodStartupState } from './lib/kubernetes-workload-diagnostics.mjs';
 
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 const mode = process.argv[2] ?? 'smoke';
@@ -276,7 +277,7 @@ spec:
           effect: NoSchedule
       containers:
         - name: minio
-          image: minio/minio:RELEASE.2025-04-22T22-12-26Z
+          image: quay.io/minio/minio:RELEASE.2025-04-22T22-12-26Z
           args: ["server", "/data", "--console-address", ":9001"]
           ports: [{ containerPort: 9000 }]
           env:
@@ -317,7 +318,7 @@ spec:
       restartPolicy: OnFailure
       containers:
         - name: create-bucket
-          image: minio/mc:RELEASE.2025-04-16T18-13-26Z
+          image: quay.io/minio/mc:RELEASE.2025-04-16T18-13-26Z
           command: ["sh", "-ec"]
           args:
             - >-
@@ -634,6 +635,32 @@ class ManagedReleaseGate {
     return run(this.kubectlBin, ['--context', this.config.context, ...args], options);
   }
 
+  async dependencyStartupState(selector) {
+    try {
+      const result = await this.kubectl(['get', 'pods', '-n', this.config.namespace, '-l', selector, '-o', 'json'], {
+        capture: true,
+        allowFailure: true,
+      });
+      if (result.exitCode !== 0) return 'could not inspect dependency pod state';
+      return summarizePodStartupState(result.stdout);
+    } catch {
+      // A failed diagnostic query must not replace the rollout or Job failure
+      // that triggered it.
+      return 'could not inspect dependency pod state';
+    }
+  }
+
+  async waitForDependency(target, selector, args) {
+    try {
+      await this.kubectl(args);
+    } catch (error) {
+      const startupState = await this.dependencyStartupState(selector);
+      throw new Error(
+        `[${runnerName}] ${target} did not become ready: ${startupState}\n${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  }
+
   requestWorkflow(baseUrl, route, options = {}) {
     if (!this.secrets?.rivetKey) {
       throw new Error('Release-gate workflow key is not initialized');
@@ -751,7 +778,7 @@ class ManagedReleaseGate {
     await this.kubectl(['apply', '-f', '-'], {
       input: renderDependencies(this.config.namespace),
     });
-    await this.kubectl([
+    await this.waitForDependency('PostgreSQL', 'app=release-gate-postgres', [
       'rollout',
       'status',
       'deployment/release-gate-postgres',
@@ -759,7 +786,7 @@ class ManagedReleaseGate {
       this.config.namespace,
       '--timeout=180s',
     ]);
-    await this.kubectl([
+    await this.waitForDependency('MinIO', 'app=release-gate-minio', [
       'rollout',
       'status',
       'deployment/release-gate-minio',
@@ -767,7 +794,7 @@ class ManagedReleaseGate {
       this.config.namespace,
       '--timeout=180s',
     ]);
-    await this.kubectl([
+    await this.waitForDependency('MinIO bucket initialization', 'job-name=release-gate-create-bucket', [
       'wait',
       '--for=condition=complete',
       'job/release-gate-create-bucket',
@@ -1323,7 +1350,7 @@ class ManagedReleaseGate {
       if (unavailableReplay.ok) throw new Error('Object-storage outage still served a recording replay');
     } finally {
       await this.setDependencyReplicas('minio', 1);
-      await this.kubectl([
+      await this.waitForDependency('MinIO recovery', 'app=release-gate-minio', [
         'rollout',
         'status',
         'deployment/release-gate-minio',
@@ -1355,7 +1382,7 @@ class ManagedReleaseGate {
       );
     } finally {
       await this.setDependencyReplicas('postgres', 1);
-      await this.kubectl([
+      await this.waitForDependency('PostgreSQL recovery', 'app=release-gate-postgres', [
         'rollout',
         'status',
         'deployment/release-gate-postgres',

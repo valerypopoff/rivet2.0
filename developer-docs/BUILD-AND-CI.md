@@ -12,12 +12,16 @@ Repo-level toolchain expectations:
 - root `packageManager`: `yarn@4.17.1`
 - Plug'n'Play enabled
 
-Workspace manifests, Volta metadata, shared CI setup, and Tauri commands all use
+Workspace manifests, Volta metadata, shared CI setup defaults, and Tauri commands all use
 the same Node `22.21.1` / Yarn `4.17.1` toolchain. Keep those declarations
 aligned so a package-local command cannot silently select a different Yarn
 runtime. Node `22.22.3` currently regresses synchronous CommonJS loading under
 Yarn Plug'n'Play's ESM loader on Linux, which breaks both `tsx` tests and the
 Docusaurus build; do not advance this pin without rerunning those CI gates.
+
+Studio Server verification and managed release jobs explicitly override the
+shared setup to Node `24`. Validate server changes on that runtime as well;
+the default workspace pin is not the server CI runtime.
 
 ### Rust
 
@@ -251,6 +255,20 @@ an earlier failure. The style guard deliberately prints its migration queue
 after reporting an error; that output is not a success signal. The aggregate
 GitHub `build` and `verify` jobs fail when a required upstream job fails, so
 fix and rerun that upstream gate rather than relaxing the aggregate condition.
+
+Studio Server changes also require `yarn studio-server:build`: the shared
+`yarn build` command does not compile the server packages. API compilation
+includes its TypeScript tests. A passing `tsx --test` invocation does not
+type-check them; `.mjs` helpers statically imported by these tests need a
+colocated `.d.mts` declaration. Keep the declaration with the helper in the
+same commit. Wait for every command's final exit code before reporting success.
+
+Change classification includes deletions and both locations of moved files,
+plus the checked-in Yarn runtime. Moving a deployment file out of the deployment
+tree still requires verification of the original location. Local Kubernetes
+fixture changes require the full Kubernetes gate. The Studio Server aggregate
+accepts a skip only after successful classification explicitly returns `false`;
+a failed classifier or missing decision fails verification.
 
 The app test script lets the Node/tsx test runner discover `*.test.ts` files
 instead of expanding `src/**/*.test.ts` in the shell. Keep discovery internal to
