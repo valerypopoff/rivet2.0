@@ -44,6 +44,7 @@ import { coercePromptToChatMessages } from '../../../model/chat/chatMessages.js'
 import { clampMaxTokensToModelLimit, setRequestAndResponseTokenOutputs } from '../../../model/chat/tokenBudget.js';
 import { createAssistantMessagesOutput } from '../../../model/chat/streamChatResponse.js';
 import { logRuntimeDebug, summarizeErrorForLog } from '../../../utils/runtimeLogging.js';
+import { resolveLegacyChatEditorCache, writeLegacyChatEditorCache } from '../../../model/LegacyChatEditorCache.js';
 
 export type ChatAnthropicNode = ChartNode<'chatAnthropic', ChatAnthropicNodeData>;
 
@@ -80,9 +81,6 @@ export type ChatAnthropicNodeData = ChatAnthropicNodeConfigData & {
 
   useAsGraphPartialOutput?: boolean;
 };
-
-// Temporary
-const cache = new Map<string, Outputs>();
 
 export const ChatAnthropicNodeImpl: PluginNodeImpl<ChatAnthropicNode> = {
   create(): ChatAnthropicNode {
@@ -364,8 +362,10 @@ export const ChatAnthropicNodeImpl: PluginNodeImpl<ChatAnthropicNode> = {
         editors: [
           {
             type: 'toggle',
-            label: 'Cache (same inputs, same outputs)',
+            label: 'Cache outputs (editor only)',
             dataKey: 'cache',
+            helperMessage:
+              'Reuses a matching ordinary chat response while this project remains open. Tool-capable requests always run normally.',
           },
           {
             type: 'toggle',
@@ -498,6 +498,10 @@ export const ChatAnthropicNodeImpl: PluginNodeImpl<ChatAnthropicNode> = {
       ...context.settings.chatNodeHeaders,
       ...additionalHeaders,
     });
+    const apiKey = context.getPluginConfig('anthropicApiKey');
+    const defaultApiEndpoint = context.getPluginConfig('anthropicApiEndpoint') || 'https://api.anthropic.com/v1';
+    const configuredEndpoint = getInputOrData(data, inputs, 'endpoint');
+    const apiEndpoint = configuredEndpoint?.trim() ? configuredEndpoint : defaultApiEndpoint;
 
     try {
       return await retry(
@@ -522,22 +526,18 @@ export const ChatAnthropicNodeImpl: PluginNodeImpl<ChatAnthropicNode> = {
               ? tools.map((tool) => ({ name: tool.name, description: tool.description, input_schema: tool.parameters }))
               : undefined,
           };
-          const cacheKey = JSON.stringify(useMessageApi ? messageOptions : completionOptions);
-          if (data.cache) {
-            const cached = cache.get(cacheKey);
-            if (cached) {
-              context.markResultAsEditorCacheHit?.();
-              return cached;
-            }
+          const { cache, cachedOutputs } = resolveLegacyChatEditorCache({
+            context,
+            enabled: data.cache && !data.enableToolUse,
+            providerIdentity: { apiEndpoint, apiKey, headers: allAdditionalHeaders },
+            request: useMessageApi ? messageOptions : completionOptions,
+          });
+          if (cachedOutputs != null) {
+            context.markResultAsEditorCacheHit?.();
+            return cachedOutputs;
           }
 
           const startTime = Date.now();
-          const apiKey = context.getPluginConfig('anthropicApiKey');
-          const defaultApiEndpoint = context.getPluginConfig('anthropicApiEndpoint') || 'https://api.anthropic.com/v1';
-
-          const configuredEndpoint = getInputOrData(data, inputs, 'endpoint');
-
-          const apiEndpoint = configuredEndpoint?.trim() ? configuredEndpoint : defaultApiEndpoint;
 
           if (useMessageApi) {
             // Use the messages API for Claude 3 models
@@ -744,7 +744,7 @@ export const ChatAnthropicNodeImpl: PluginNodeImpl<ChatAnthropicNode> = {
           output['duration' as PortId] = { type: 'number', value: duration };
 
           Object.freeze(output);
-          cache.set(cacheKey, output);
+          writeLegacyChatEditorCache(cache, output);
 
           return output;
         },

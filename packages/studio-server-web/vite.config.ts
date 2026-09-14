@@ -5,11 +5,11 @@ import viteTsconfigPaths from 'vite-tsconfig-paths';
 import svgr from 'vite-plugin-svgr';
 import monacoEditorPlugin from 'vite-plugin-monaco-editor';
 import topLevelAwait from 'vite-plugin-top-level-await';
-import { createRequire } from 'node:module';
+import { builtinModules, createRequire } from 'node:module';
 import { createHash } from 'node:crypto';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { gunzipSync } from 'node:zlib';
 import { createBrowserSubpathAliases, createModuleOverrideAliases, createTauriShimAliases } from './vite-aliases';
 import { createRivetCoreSourceAliases } from '../app/scripts/vite-core-source-aliases';
@@ -41,6 +41,12 @@ const cspellSoftwareTermFiles = [
   'dict/coding-compound-terms.txt',
   'dict/software-terms-alternative.txt',
 ];
+const nodeBuiltinSpecifiers = new Set(
+  builtinModules.flatMap((specifier) => {
+    const bareSpecifier = specifier.replace(/^node:/, '');
+    return [bareSpecifier, `node:${bareSpecifier}`];
+  }),
+);
 
 const isBareImport = (specifier: string) => {
   return !specifier.startsWith('.') && !specifier.startsWith('/') && !specifier.startsWith('\0') && !specifier.startsWith('virtual:');
@@ -199,6 +205,11 @@ const wrapperExactDependencyAliases = wrapperAliasedDependencies.map((dependency
 }));
 
 const browserSafeGoogleModule = resolve(overrideDir, 'core/plugins/google/google.ts');
+const browserSafeGoogleLeafModule = normalizePath(resolve(upstreamCore, 'src/plugins/google/googleGenerativeAi.ts'));
+const legacyGoogleChatNodeModule = normalizePath(resolve(upstreamCore, 'src/plugins/google/nodes/ChatGoogleNode.ts'));
+const normalizedBrowserSafeGoogleModule = normalizePath(browserSafeGoogleModule);
+const hostedGoogleGenAiBrowserModule = normalizePath(resolveWrapperPackageFile('@google/genai', 'dist/web/index.mjs'));
+const googleBrowserDependencyAuditPath = resolve(workspaceRoot, 'artifacts/studio-server-web/google-browser-dependency-audit.json');
 const moduleOverrideAliases = createModuleOverrideAliases(overrideDir);
 const normalizedUpstreamAppSrc = normalizePath(resolve(upstreamApp, 'src'));
 
@@ -211,6 +222,10 @@ const isUpstreamAppSourceImporter = (importer: string) => {
 
 const resolveBrowserSafeGoogleCoreModule = (): PluginOption => ({
   name: 'resolve-browser-safe-google-core-module',
+  // Vite's built-in alias resolver runs in its own pre phase. This redirect
+  // must run before it, otherwise the relative import is resolved to Core's
+  // default facade before the importer-specific compatibility rule sees it.
+  enforce: 'pre',
   async resolveId(source, importer) {
     if (!importer) {
       return null;
@@ -221,7 +236,10 @@ const resolveBrowserSafeGoogleCoreModule = (): PluginOption => ({
       (source === '../google.js' || source === '../google.ts') &&
       normalizedImporter === normalizePath(resolve(upstreamCore, 'src/plugins/google/nodes/ChatGoogleNode.ts'))
     ) {
-      return this.resolve(browserSafeGoogleModule, importer, { skipSelf: true });
+      // This is already an absolute source module. Returning it directly is
+      // important: resolving it again can let Core's source aliases turn the
+      // hosted adapter back into the default Core facade before Rollup sees it.
+      return browserSafeGoogleModule;
     }
 
     return null;
@@ -335,6 +353,121 @@ const resolveWrapperDependency = (): PluginOption => ({
   },
 });
 
+const normalizeModuleId = (id: string) => normalizePath(stripImportSuffix(id));
+
+export function isNodeBuiltinModuleId(moduleId: string): boolean {
+  const specifier = moduleId.startsWith('__vite-browser-external:')
+    ? moduleId.slice('__vite-browser-external:'.length)
+    : moduleId;
+  return nodeBuiltinSpecifiers.has(specifier);
+}
+
+/**
+ * The hosted ChatGoogleNode override reaches Core's browser-safe Google leaf
+ * through a relative source import. Keep a build-time proof that this narrow
+ * path still selects the hosted GenAI browser entry and cannot reach Vertex or
+ * its credential stack. The audit is deliberately rooted at the leaf, so
+ * unrelated uses of a local Vertex diagnostic shim do not become false alarms.
+ */
+const assertBrowserSafeGoogleDependencies = (): PluginOption => ({
+  name: 'assert-browser-safe-google-dependencies',
+  generateBundle() {
+    // Rollup's PluginContext exposes module IDs as an iterable. Some local
+    // versions happened to return an array, but production's build image does
+    // not, so materialize the iterable before searching it.
+    const moduleIds = Array.from(this.getModuleIds());
+    const legacyNodeModuleId = moduleIds.find((id) => normalizeModuleId(id) === legacyGoogleChatNodeModule);
+    const adapterModuleId = moduleIds.find((id) => normalizeModuleId(id) === normalizedBrowserSafeGoogleModule);
+    const leafModuleId = moduleIds.find(
+      (id) => normalizeModuleId(id) === browserSafeGoogleLeafModule,
+    );
+
+    const legacyNodeInfo = legacyNodeModuleId ? this.getModuleInfo(legacyNodeModuleId) : undefined;
+    const legacyNodeImportsAdapter =
+      legacyNodeInfo?.importedIds.some((id) => normalizeModuleId(id) === normalizedBrowserSafeGoogleModule) ?? false;
+
+    if (!legacyNodeModuleId || !adapterModuleId || !legacyNodeImportsAdapter) {
+      this.error(
+        [
+          'Hosted build did not route the legacy Google chat node through its browser adapter.',
+          `legacy node: ${legacyGoogleChatNodeModule}`,
+          `adapter: ${normalizedBrowserSafeGoogleModule}`,
+        ].join('\n'),
+      );
+      return;
+    }
+
+    if (!leafModuleId) {
+      this.error(`Hosted build did not include the shared Google browser leaf: ${browserSafeGoogleLeafModule}`);
+      return;
+    }
+
+    const reachableModuleIds = new Set<string>();
+    const pendingModuleIds = [leafModuleId];
+
+    while (pendingModuleIds.length > 0) {
+      const moduleId = pendingModuleIds.pop();
+      if (!moduleId || reachableModuleIds.has(moduleId)) {
+        continue;
+      }
+
+      reachableModuleIds.add(moduleId);
+      const moduleInfo = this.getModuleInfo(moduleId);
+      if (!moduleInfo) {
+        continue;
+      }
+
+      pendingModuleIds.push(...moduleInfo.importedIds, ...moduleInfo.dynamicallyImportedIds);
+    }
+
+    const normalizedReachableModuleIds = [...reachableModuleIds].map(normalizeModuleId).sort();
+    if (!normalizedReachableModuleIds.includes(hostedGoogleGenAiBrowserModule)) {
+      this.error(
+        `Hosted Google leaf did not resolve @google/genai to the wrapper browser entry: ${hostedGoogleGenAiBrowserModule}`,
+      );
+      return;
+    }
+
+    const forbiddenDependencyPattern = /(?:^|[/\\])(?:@google-cloud[/\\]vertexai|google-auth-library|google-gax|gaxios)(?:[/\\]|$)/;
+    const forbiddenModuleIds = normalizedReachableModuleIds.filter((id) => forbiddenDependencyPattern.test(id));
+    // Vite represents some browser-externalized Node imports with a virtual
+    // ID instead of `node:`. Treat both forms as forbidden so a future SDK
+    // dependency cannot quietly replace a build failure with a browser stub.
+    const nodeBuiltinModuleIds = normalizedReachableModuleIds.filter(isNodeBuiltinModuleId);
+
+    if (forbiddenModuleIds.length > 0 || nodeBuiltinModuleIds.length > 0) {
+      this.error(
+        [
+          'Hosted Google browser leaf resolved forbidden server-only dependencies.',
+          ...forbiddenModuleIds,
+          ...nodeBuiltinModuleIds,
+        ].join('\n'),
+      );
+      return;
+    }
+
+    mkdirSync(dirname(googleBrowserDependencyAuditPath), { recursive: true });
+    writeFileSync(
+      googleBrowserDependencyAuditPath,
+      `${JSON.stringify(
+        {
+          leaf: 'packages/core/src/plugins/google/googleGenerativeAi.ts',
+          legacyNodeAdapter: 'packages/studio-server-web/overrides/core/plugins/google/google.ts',
+          legacyNodeImportsAdapter,
+          googleGenAiBrowserEntry: normalizePath(
+            relative(workspaceRoot, hostedGoogleGenAiBrowserModule),
+          ),
+          reachableModuleCount: normalizedReachableModuleIds.length,
+          forbiddenModuleIds,
+          nodeBuiltinModuleIds,
+        },
+        null,
+        2,
+      )}\n`,
+    );
+  },
+});
+
 export default defineConfig({
     root: __dirname,
     envDir: resolve(__dirname, '../..'),
@@ -411,6 +544,7 @@ export default defineConfig({
       dictionaryEnBrowserPlugin(),
       cspellWordsBrowserPlugin(),
       resolveWrapperDependency(),
+      assertBrowserSafeGoogleDependencies(),
       react(),
       viteTsconfigPaths({ root: upstreamApp }),
       svgr({

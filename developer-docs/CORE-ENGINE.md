@@ -590,6 +590,10 @@ These helpers are now reused across more than just `ChatNodeBase`:
 - `plugins/google/nodes/ChatGoogleNode.ts`
 - `plugins/anthropic/nodes/ChatAnthropicNode.ts`
 
+The legacy Google node's API-key catalog, shared request types, and Generative AI streaming implementation live together in [`plugins/google/googleGenerativeAi.ts`](../packages/core/src/plugins/google/googleGenerativeAi.ts). [`plugins/google/google.ts`](../packages/core/src/plugins/google/google.ts) remains the public Core facade and owns only the Vertex application-credential path. Vertex credentials are supplied as the SDK client's `googleAuthOptions.keyFilename`, never by mutating `GOOGLE_APPLICATION_CREDENTIALS`; concurrent graph runs therefore retain their own configured identity. Hosted browser builds import the leaf through their narrow legacy-node override, then retain only the two historical Gemini 1.5 zero-cost catalog entries locally; Core's LLM Chat V2 registry continues using the facade's deliberately unpriced versions. The leaf must remain browser-safe: no Core-index, Vertex, Google-auth, or Node-runtime imports. The legacy node treats provider 4xx responses other than 429 as non-retryable by reading the original error from p-retry's failed-attempt wrapper; retrying an invalid request only delays the visible node error.
+
+The older OpenAI, Anthropic, and Google Chat nodes cache only ordinary model calls through [`LegacyChatEditorCache.ts`](../packages/core/src/model/LegacyChatEditorCache.ts). It selects the host-owned per-project editor cache (or the current graph execution cache for non-editor callers), hashes the graph/node, effective request, credentials, endpoint, and headers into an opaque key, and clones output maps on both cache boundaries. It never uses a module-global cache, so results cannot survive into another project or credential context. Tool-capable legacy Chat requests bypass caching altogether: replaying a prior tool-call output could otherwise cause downstream work to run from stale provider data.
+
 That means some of the former provider-level duplication is already removed in:
 
 - prompt-to-chat-message coercion
