@@ -1,3 +1,4 @@
+import type { IncomingMessage } from 'node:http';
 import { WebSocketServer, type RawData, type WebSocket } from 'ws';
 import {
   type GraphProcessor,
@@ -69,7 +70,7 @@ export function startDebuggerServer(
     datasetProvider?: DebuggerDatasetProvider;
     server?: WebSocketServer;
     /** Upgrade and periodic authorization. The host must bound async work and supply its own deadline. */
-    authorizeClient?: (request: import('node:http').IncomingMessage) => Promise<boolean>;
+    authorizeClient?: (request: IncomingMessage) => Promise<boolean>;
     port?: number;
     dynamicGraphRun?: DynamicGraphRun;
     allowGraphUpload?: boolean;
@@ -95,7 +96,7 @@ export function startDebuggerServer(
     port,
     host,
     ...(authorize ? {
-      verifyClient: (info: { req: import('node:http').IncomingMessage }, done: (allowed: boolean, code?: number) => void) => {
+      verifyClient: (info: { req: IncomingMessage }, done: (allowed: boolean, code?: number) => void) => {
         void Promise.resolve().then(() => authorize(info.req)).then(
           (allowed) => done(allowed, allowed ? undefined : 403),
           () => done(false, 403),

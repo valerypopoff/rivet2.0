@@ -465,10 +465,14 @@ test('control profile exposes control-plane routes and does not expose published
         body: JSON.stringify({ key: 'phase4-shared-key' }),
       });
       assert.equal(uiAuthResponse.status, 204);
+      const uiAuthCookie = uiAuthResponse.headers.get('set-cookie');
+      assert.ok(uiAuthCookie, 'Successful UI authentication must issue a session cookie.');
+      assert.match(uiAuthCookie, /^rivet_ui_token=/);
 
       const configResponse = await fetch(`${server.baseUrl}/api/config`, {
         headers: {
           ...trustedProxyHeaders(),
+          cookie: uiAuthCookie.split(';', 1)[0],
           'X-Forwarded-Host': 'rivet.example.test',
           'X-Forwarded-Proto': 'HTTPS',
         },

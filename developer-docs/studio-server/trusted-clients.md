@@ -186,6 +186,11 @@ It uses an isolated Docker network, no published ports, distinct client/edge con
 and the production client-address generator. It starts **all three complete templates**
 through the real bootstrap, generates public-route includes, and runs `nginx -t`.
 IPv4/IPv6 forwarding chains include missing, malformed and all-trusted provenance.
+The separate DNS failover fixture renders those templates without starting that bootstrap;
+it therefore supplies a minimal, syntactically valid fixture for the generated
+`RIVET_CLIENT_ADDRESS_INCLUDE_FILE`. It has no forwarding peers but declares the same
+nginx variables, keeping DNS replacement coverage independent of client-address
+provenance while still requiring every template placeholder to resolve.
 Real WebSocket upgrades exercise both executor routes with the production hosted
 authorizer and a controlled HTTP identity provider: trusted clients, ordinary cookies,
 forged hints, rejection and live revocation. It removes only its own fixtures and
