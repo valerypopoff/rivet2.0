@@ -334,6 +334,8 @@ For the operator-facing chart contract and handoff checklist, see:
 
 The focused evaluation accounting check is `yarn studio-server:ui:observe evaluation-metrics.spec.ts`. It runs the shared profile/tool fixture through Browser execution and the real Node executor, checks unavailable-cost presentation, and reloads both runs to verify durable evidence. See [execution event accounting](../EVALUATIONS.md#execution-event-accounting) for the fixture contract and API/CLI lifecycle coverage.
 
+`graph-port-rename.spec.ts` uses mocked hosted-project load/save endpoints to rename Graph Input and Graph Output IDs through the editor. It parses every saved project to verify collision ownership, input defaults and port order, output fan-out and bend metadata, unrelated connections, and recursive callers. It also verifies exact persisted graph restoration through Undo and Redo. The companion App characterization tests cover non-UI boundaries that are impractical to author in the browser fixture: absent current graphs, exact/disabled boundary IDs, frozen inputs, same-graph multiple callers, collision ordering, and merged recursive output restoration.
+
 The repo now includes a headed Playwright workflow for frontend debugging and demos where you want to watch the browser actions live.
 
 Current behavior:

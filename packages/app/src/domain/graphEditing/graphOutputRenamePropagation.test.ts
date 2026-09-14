@@ -11,10 +11,13 @@ import {
   makeSubGraphNode,
   makeTextNode,
 } from './testGraphBuilders.js';
-import { propagateGraphOutputRename } from './graphOutputRenamePropagation.js';
+import { propagateGraphPortRename } from './graphPortRenamePropagation.js';
 
 const subGraphId = 'sub-graph' as GraphId;
 const parentGraphId = 'parent-graph' as GraphId;
+
+const propagateGraphOutputRename = (args: Omit<Parameters<typeof propagateGraphPortRename>[0], 'kind'>) =>
+  propagateGraphPortRename({ kind: 'output', ...args });
 
 function makeConnection(overrides: Partial<NodeConnection> = {}): NodeConnection {
   return makeBaseConnection({
@@ -153,6 +156,26 @@ test('propagateGraphOutputRename drops exact duplicate connections created by th
       outputId: 'new' as PortId,
     },
   ]);
+});
+
+test('propagateGraphOutputRename keeps the first connection when it precedes a rewrite collision', () => {
+  const previousOutputNode = makeGraphOutput('output-node', 'old');
+  const nextOutputNode = makeGraphOutput('output-node', 'new');
+  const subGraphNode = makeSubGraphNode('subgraph');
+  const newConnection = makeConnection({ outputId: 'new' as PortId, bendPoint: { x: 42, y: 17 } });
+  const oldConnection = makeConnection({ bendPoint: { x: 10, y: 20 } });
+  const parentGraph = makeGraph(parentGraphId, [subGraphNode, makeTextNode('target')], [newConnection, oldConnection]);
+
+  const result = propagateGraphOutputRename({
+    currentGraphId: subGraphId,
+    editedNodeId: previousOutputNode.id,
+    nextCurrentConnections: [],
+    nextCurrentNodes: [nextOutputNode],
+    previousCurrentNodes: [previousOutputNode],
+    project: makeProject([parentGraph]),
+  });
+
+  assert.deepEqual(result.projectGraphSnapshots[parentGraphId]!.nextGraph.connections, [newConnection]);
 });
 
 test('propagateGraphOutputRename does not treat a missing graph output id as an empty-string rename', () => {
