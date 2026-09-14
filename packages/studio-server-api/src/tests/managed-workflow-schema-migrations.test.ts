@@ -303,7 +303,17 @@ function createPool(database: FakeSchemaDatabase): Pick<Pool, 'connect'> {
               MANAGED_WORKFLOW_SCHEMA_REQUIRED_INDEXES.map(
                 ([tableName, indexName, keyExpressions, predicate, keyOptions]) => [
                   indexName,
-                  { tableName, keyExpressions, keyOptions, predicate },
+                  {
+                    tableName,
+                    keyExpressions,
+                    keyOptions,
+                    // Independent pg_get_expr output from PostgreSQL 16, not a
+                    // copy of the expectation under test (which once missed ]).
+                    predicate:
+                      indexName === 'workflow_recordings_workflow_failed_created_at_recording_id_idx'
+                        ? "(status = ANY (ARRAY['failed'::text, 'suspicious'::text]))"
+                        : predicate,
+                  },
                 ],
               ),
             );
@@ -535,7 +545,10 @@ test('concurrent schema migrators serialize and apply each migration once', asyn
   assert.deepEqual([...database.migrations.keys()], [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
   assert.ok(results.every(({ currentVersion }) => currentVersion === 11));
   assert.equal(results.filter(({ appliedVersions }) => appliedVersions.length === 0).length, 3);
-  assert.equal(results.filter(({ appliedVersions }) => appliedVersions.join(',') === '1,2,3,4,5,6,7,8,9,10,11').length, 1);
+  assert.equal(
+    results.filter(({ appliedVersions }) => appliedVersions.join(',') === '1,2,3,4,5,6,7,8,9,10,11').length,
+    1,
+  );
   assert.equal(database.queryLog.filter((sql) => sql.includes('pg_advisory_xact_lock(')).length, 4);
 });
 

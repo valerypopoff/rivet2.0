@@ -10,6 +10,32 @@ This repo supports one Kubernetes topology today:
 - `backend`: singleton
 - `execution`: scalable
 
+## Migration verification before release
+
+The Studio Server deployment-contract job runs
+`yarn node deploy/studio-server/scripts/verify-managed-workflow-schema.mjs`
+against a disposable PostgreSQL 16.8 container before the Kubernetes checks.
+Run `yarn studio-server:build` first locally: the check imports the compiled API
+migration implementation used by the migration image, not a mock database.
+It verifies a fresh migration, verify-only startup, idempotent migration, and
+rejection of a same-named recordings index with an incorrect predicate.
+Docker is required; the fixture accepts no external database URL, publishes
+only on loopback at an allocated port, and removes its container and volume.
+
+Keep database catalog expectations independent from fixtures. A missing `]`
+in the failed/suspicious-recordings index expectation previously passed mocked
+tests because they reused that expectation as database output. Real PostgreSQL
+correctly returned the complete expression, causing the Helm migration hook to
+fail with `BackoffLimitExceeded`. Correcting that validation expectation does
+not change migration SQL, checksums, or the schema version. Do not loosen index
+validation or edit previously applied migration SQL to fix catalog formatting.
+
+If a Helm migration hook fails, inspect the migration pod log under the release
+gate's uploaded `failure/` artifacts; `BackoffLimitExceeded` is only the Job
+summary, not its root cause.
+
+## Topology ownership
+
 That split is intentional. The singleton `backend` owns:
 
 - `/api/*`

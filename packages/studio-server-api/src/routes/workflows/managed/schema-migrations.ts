@@ -739,7 +739,7 @@ export const MANAGED_WORKFLOW_SCHEMA_REQUIRED_INDEXES = [
     'workflow_recordings',
     'workflow_recordings_workflow_failed_created_at_recording_id_idx',
     ['workflow_id', 'created_at', 'recording_id'],
-    "(status = ANY (ARRAY['failed'::text, 'suspicious'::text))",
+    "(status = ANY (ARRAY['failed'::text, 'suspicious'::text]))",
     [0, 3, 3],
   ],
   [

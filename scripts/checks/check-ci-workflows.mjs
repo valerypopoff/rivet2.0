@@ -147,6 +147,10 @@ assert.deepEqual(asArray(studioJobs['web-tests'].needs), ['changes', 'build-stud
 assert.deepEqual(asArray(studioJobs['host-compatibility'].needs), ['changes']);
 assert.deepEqual(asArray(studioJobs['repository-contracts'].needs), ['changes']);
 assert.deepEqual(asArray(studioJobs['deployment-contracts'].needs), ['changes', 'build-studio-server']);
+assert.equal(
+  findStep(studioJobs['deployment-contracts'], 'Verify compiled migrations on PostgreSQL', 'Deployment contracts').run,
+  'yarn node deploy/studio-server/scripts/verify-managed-workflow-schema.mjs',
+);
 const compiledStudioArtifactUpload = findStep(
   studioJobs['build-studio-server'],
   'Upload compiled Studio Server dependencies',
