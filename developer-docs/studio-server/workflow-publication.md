@@ -584,6 +584,8 @@ That route is mounted on the execution surface, is not exposed through nginx, an
 
 ## HTTP execution contract
 
+The built-in [Graph Call Path](../../packages/docs/docs/node-reference/graph-call-path.mdx) Debug node is available to published, internal-published, and latest workflow runs. It returns the current graph name and a `string[]` path from the executed entry graph through real graph calls, useful for validation alerts and Loki logs. Internal same-graph async or streaming processors do not add a false graph hop. Names are readable labels rather than stable identifiers; the node does not expose request credentials or change endpoint responses unless its outputs are explicitly connected to Graph Output nodes.
+
 Current request/response behavior for all execution routes:
 
 - when the HTTP request has a real body, indicated by a positive

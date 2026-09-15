@@ -91,6 +91,9 @@ export * from './nodes/ReportProgressNode.js';
 import { contextNode } from './nodes/ContextNode.js';
 export * from './nodes/ContextNode.js';
 
+import { graphCallPathNode } from './nodes/GraphCallPathNode.js';
+export * from './nodes/GraphCallPathNode.js';
+
 import { coalesceNode } from './nodes/CoalesceNode.js';
 export * from './nodes/CoalesceNode.js';
 
@@ -350,6 +353,7 @@ export const registerBuiltInNodes = (registry: NodeRegistration) => {
     .register(raiseEventNode)
     .register(reportProgressNode)
     .register(contextNode)
+    .register(graphCallPathNode)
     .register(coalesceNode)
     .register(coalesceNewNode)
     .register(didRunNode)

@@ -1,6 +1,6 @@
 {
   "formatVersion": 1,
-  "catalogFingerprint": "fnv1a64:4f69bd912be501b3",
+  "catalogFingerprint": "fnv1a64:8f6e1006504a1e86",
   "entries": [
     {
       "authoringChoiceId": "registered:abortGraph",
@@ -841,6 +841,21 @@
         "schema": "{\n  \"type\": \"object\",\n  \"properties\": {}\n}",
         "resultHandling": "continue"
       }
+    },
+    {
+      "authoringChoiceId": "registered:graphCallPath",
+      "nodeType": "graphCallPath",
+      "displayName": "Graph Call Path",
+      "description": "Graph Call Path is a Debug node that reports where it is running. Add it to the graph whose name or call path you want to include in an alert or log. It has no inputs or settings.",
+      "aliases": [],
+      "capabilities": {
+        "createWithDefaults": true,
+        "inspectSafeProjection": false,
+        "resolvePorts": true,
+        "configureSettings": false,
+        "editLinkedPrefabInstance": false
+      },
+      "settings": []
     },
     {
       "authoringChoiceId": "registered:graphInput",

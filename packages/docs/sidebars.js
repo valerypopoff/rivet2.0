@@ -351,6 +351,13 @@ const sidebars = {
         'node-reference/wait-for-event',
       ],
     },
+    {
+      type: 'category',
+      label: 'Debug',
+      collapsible: true,
+      collapsed: false,
+      items: ['node-reference/graph-call-path'],
+    },
   ],
   cli: [
     'cli',

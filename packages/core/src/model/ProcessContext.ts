@@ -348,6 +348,9 @@ export type InternalProcessContext<T extends ChartNode = ChartNode> = ProcessCon
   /** Stable execution lineage for the current graph invocation. */
   execution: GraphExecutionMetadata;
 
+  /** Names of real graph calls, from the executed entry graph through this graph. */
+  graphCallPath: readonly string[];
+
   /**
    * Marks this invocation's terminal result as an editor-cache replay.
    * Cache-aware node implementations call this only after confirming a hit.

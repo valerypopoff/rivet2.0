@@ -1057,6 +1057,7 @@ describe('GraphProcessor connected tool continuation', () => {
 
     AssistantMessageProbeNodeImpl.handlers.set('parallel', async (message, context) => {
       probeRunCount++;
+      assert.deepEqual(context.graphCallPath, ['Tool continuation integration']);
       events.push(`probe:start:${probeRunCount}`);
       assert.equal(message, 'I am checking that now.');
 

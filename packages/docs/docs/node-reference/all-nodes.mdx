@@ -169,3 +169,9 @@ The following is all of the nodes built-in to the core of Rivet.
 | [Set Stored Value](./set-stored-value.mdx)             | Saves a portable JSON value for the current root run and writes it through to browser or host persistence when configured.                                                                                                                                                                        |
 | [Subgraph](./subgraph.mdx)                             | Executes another graph within the current graph, facilitating logic reuse and complex graph breakdown. Automatically updates its inputs and outputs to match the selected subgraph and has an optional error output for handling execution errors.                                                |
 | [Wait For Event](./wait-for-event.mdx)                 | Pauses the execution of a graph until a specific event is signaled by a Raise Event Node or the host project. Beneficial for cases where the graph execution needs to wait for an external event, like a user's click or an API call completion.                                                  |
+
+## Debug
+
+| Node | Description |
+| --- | --- |
+| [Graph Call Path](./graph-call-path.mdx) | Returns the current graph name and the path of graph calls from the executed entry graph to this node. |

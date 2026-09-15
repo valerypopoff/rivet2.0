@@ -1,0 +1,30 @@
+---
+id: graph-call-path
+title: Graph Call Path
+sidebar_label: Graph Call Path
+---
+
+## Overview
+
+Graph Call Path is a Debug node that reports where it is running. Add it to the graph whose name or call path you want to include in an alert or log. It has no inputs or settings.
+
+## Inputs
+
+None. The node reads the current execution's graph-call path.
+
+## Outputs
+
+| Output | Type | Meaning |
+| --- | --- | --- |
+| Current Graph Name | `string` | Name of the graph containing this node. |
+| Graph Path | `string[]` | Graph names from the graph that actually started the run to the current graph. |
+
+For example, if Main calls Graph A and Graph A calls Graph B, a node in Graph B returns `"Graph B"` and `["Main", "Graph A", "Graph B"]`. The path includes graph calls made by Subgraph, Call Graph, loops, delegated tools, and other graph-calling nodes. Internal async or streaming branches that continue within the same graph do not add another path item. A directly executed graph starts its path with itself, even when it is not the project's main graph.
+
+Use Current Graph Name for a short alert label. For a more detailed validation error, join Graph Path with ` → ` or serialize the array as JSON before sending it to Loki. Graph Path is an array, not a preformatted string.
+
+Names are captured from the running project and are human-readable, but may be renamed or repeated; do not use them as a permanent identity key. An unnamed graph is shown as `(Unnamed Graph)`.
+
+## Settings
+
+None. The node reports the path of this execution; it does not select a different graph or alter execution.
