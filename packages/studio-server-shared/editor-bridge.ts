@@ -7,6 +7,19 @@ export type ProjectCompareSideLabels = {
   currentLabel?: string;
 };
 
+export type HostedProjectReconciliationContext = {
+  editorInstanceId: string;
+  observationSequence: number;
+  projects: Array<{ projectId: string; generation: number }>;
+};
+
+export type HostedProjectConflictSnapshot = {
+  editorInstanceId: string;
+  sequence: number;
+  recheckSequence: number;
+  contentChanges: WorkflowProjectContentChange[];
+};
+
 export type DashboardToEditorCommand =
   | {
       type: 'open-project';
@@ -31,13 +44,16 @@ export type DashboardToEditorCommand =
   | { type: 'trigger-editor-duplicate-shortcut'; modifier: EditorShortcutModifier }
   | { type: 'delete-workflow-project'; path: string; projectId?: string | null }
   | { type: 'workflow-paths-moved'; moves: WorkflowProjectPathMove[]; requestId?: string }
+  | { type: 'capture-workflow-project-reconciliation'; requestId: string }
   | {
       type: 'reconcile-workflow-project-bindings';
       bindings: WorkflowProjectEditorBinding[];
+      context: HostedProjectReconciliationContext;
       requestId?: string;
     }
   | {
       type: 'resolve-workflow-project-content-change';
+      changeId: string;
       projectId: string;
       path: string;
       revisionId: string;
@@ -54,6 +70,7 @@ export type WorkflowProjectBindingReconciliation = {
 };
 
 export type WorkflowProjectContentChange = {
+  changeId: string;
   projectId: string;
   path: string;
   title: string;
@@ -62,11 +79,13 @@ export type WorkflowProjectContentChange = {
 
 export type WorkflowProjectBindingReconciliationResult = {
   changes: WorkflowProjectBindingReconciliation[];
-  contentChanges: WorkflowProjectContentChange[];
+  status: 'applied' | 'retry' | 'waiting-for-save';
 };
 
 export type EditorToDashboardEvent =
-  | { type: 'editor-ready' }
+  | { type: 'editor-ready'; editorInstanceId: string }
+  | { type: 'workflow-project-reconciliation-captured'; context: HostedProjectReconciliationContext; requestId: string }
+  | { type: 'workflow-project-conflicts'; snapshot: HostedProjectConflictSnapshot }
   | { type: 'request-active-workflow-project-rename' }
   | { type: 'project-opened'; path: string; requestId?: string }
   | { type: 'project-open-failed'; path: string; error: string; requestId?: string }
@@ -78,7 +97,7 @@ export type EditorToDashboardEvent =
   | {
       type: 'workflow-project-bindings-reconciled';
       changes: WorkflowProjectBindingReconciliation[];
-      contentChanges: WorkflowProjectContentChange[];
+      status: WorkflowProjectBindingReconciliationResult['status'];
       requestId?: string;
     }
   | {
@@ -123,10 +142,31 @@ const isWorkflowProjectBindingReconciliation = (value: unknown): value is Workfl
 
 const isWorkflowProjectContentChange = (value: unknown): value is WorkflowProjectContentChange =>
   isRecord(value) &&
+  typeof value.changeId === 'string' &&
   typeof value.projectId === 'string' &&
   typeof value.path === 'string' &&
   typeof value.title === 'string' &&
   typeof value.revisionId === 'string';
+
+const isSequence = (value: unknown): value is number => Number.isSafeInteger(value) && (value as number) >= 0;
+
+export const isHostedProjectReconciliationContext = (value: unknown): value is HostedProjectReconciliationContext =>
+  isRecord(value) &&
+  typeof value.editorInstanceId === 'string' &&
+  isSequence(value.observationSequence) &&
+  Array.isArray(value.projects) &&
+  value.projects.every(
+    (entry) => isRecord(entry) && typeof entry.projectId === 'string' && isSequence(entry.generation),
+  ) &&
+  new Set(value.projects.map((entry) => entry.projectId)).size === value.projects.length;
+
+const isHostedProjectConflictSnapshot = (value: unknown): value is HostedProjectConflictSnapshot =>
+  isRecord(value) &&
+  typeof value.editorInstanceId === 'string' &&
+  isSequence(value.sequence) &&
+  isSequence(value.recheckSequence) &&
+  Array.isArray(value.contentChanges) &&
+  value.contentChanges.every(isWorkflowProjectContentChange);
 
 const isEditorShortcutModifier = (value: unknown): value is EditorShortcutModifier =>
   value === 'ctrl' || value === 'meta';
@@ -185,14 +225,18 @@ export function isDashboardToEditorCommand(value: unknown): value is DashboardTo
         value.moves.every(isWorkflowMove) &&
         (value.requestId == null || typeof value.requestId === 'string')
       );
+    case 'capture-workflow-project-reconciliation':
+      return typeof value.requestId === 'string';
     case 'reconcile-workflow-project-bindings':
       return (
+        isHostedProjectReconciliationContext(value.context) &&
         Array.isArray(value.bindings) &&
         value.bindings.every(isWorkflowProjectEditorBinding) &&
         (value.requestId == null || typeof value.requestId === 'string')
       );
     case 'resolve-workflow-project-content-change':
       return (
+        typeof value.changeId === 'string' &&
         typeof value.projectId === 'string' &&
         typeof value.path === 'string' &&
         typeof value.revisionId === 'string' &&
@@ -224,6 +268,11 @@ export function isEditorToDashboardEvent(value: unknown): value is EditorToDashb
 
   switch (value.type) {
     case 'editor-ready':
+      return typeof value.editorInstanceId === 'string';
+    case 'workflow-project-reconciliation-captured':
+      return typeof value.requestId === 'string' && isHostedProjectReconciliationContext(value.context);
+    case 'workflow-project-conflicts':
+      return isHostedProjectConflictSnapshot(value.snapshot);
     case 'request-active-workflow-project-rename':
       return true;
     case 'project-opened':
@@ -250,8 +299,7 @@ export function isEditorToDashboardEvent(value: unknown): value is EditorToDashb
       return (
         Array.isArray(value.changes) &&
         value.changes.every(isWorkflowProjectBindingReconciliation) &&
-        Array.isArray(value.contentChanges) &&
-        value.contentChanges.every(isWorkflowProjectContentChange) &&
+        (value.status === 'applied' || value.status === 'retry' || value.status === 'waiting-for-save') &&
         (value.requestId == null || typeof value.requestId === 'string')
       );
     case 'workflow-project-content-change-resolved':

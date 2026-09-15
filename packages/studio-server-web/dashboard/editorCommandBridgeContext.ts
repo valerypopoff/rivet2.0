@@ -25,6 +25,7 @@ export type SerializedEditorCommand = Extract<
       | 'refresh-open-project-from-disk'
       | 'compare-open-project-with'
       | 'workflow-paths-moved'
+      | 'capture-workflow-project-reconciliation'
       | 'reconcile-workflow-project-bindings'
       | 'resolve-workflow-project-content-change';
   }

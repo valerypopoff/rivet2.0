@@ -480,9 +480,15 @@ test('project saved event carries only a boolean retained-dirty-state signal', (
 });
 
 test('remote project binding reconciliation validates immutable IDs and the acknowledgement payload', () => {
+  const context = {
+    editorInstanceId: 'editor-1',
+    observationSequence: 1,
+    projects: [{ projectId: 'project-1', generation: 1 }],
+  };
   assert.equal(
     isDashboardToEditorCommand({
       type: 'reconcile-workflow-project-bindings',
+      context,
       bindings: [
         {
           projectId: 'project-1',
@@ -520,14 +526,7 @@ test('remote project binding reconciliation validates immutable IDs and the ackn
           toTitle: 'Project',
         },
       ],
-      contentChanges: [
-        {
-          projectId: 'project-1',
-          path: '/managed/workflows/Moved/Project.rivet-project',
-          title: 'Project',
-          revisionId: 'revision-2',
-        },
-      ],
+      status: 'applied',
       requestId: 'reconcile-1',
     }),
     true,
@@ -543,6 +542,7 @@ test('remote project binding reconciliation validates immutable IDs and the ackn
   assert.equal(
     isDashboardToEditorCommand({
       type: 'resolve-workflow-project-content-change',
+      changeId: 'change-1',
       projectId: 'project-1',
       path: '/managed/workflows/Project.rivet-project',
       revisionId: 'revision-2',

@@ -1,12 +1,11 @@
 import type { ProjectId } from '@valerypopoff/rivet2-core';
 
 import { flushHybridStorageGroup } from '../../app/src/state/storage';
-import {
-  clearHostedProjectRevisionPath,
-  remapHostedProjectRevisionPaths,
-} from '../io/HostedIOProvider';
+import { clearHostedProjectRevisionPath, remapHostedProjectRevisionPaths } from '../io/HostedIOProvider';
 import {
   acceptHostedProjectRemoteRevision,
+  claimHostedProjectObservation,
+  matchesHostedProjectConflict,
   getHostedProjectPendingRevision,
   observeHostedProjectRevision,
   pruneHostedProjectRevisions,
@@ -17,7 +16,7 @@ import {
   postMessageToDashboard,
   type DashboardToEditorCommand,
   type WorkflowProjectBindingReconciliation,
-  type WorkflowProjectContentChange,
+  type WorkflowProjectBindingReconciliationResult,
 } from '../../studio-server-shared/editor-bridge';
 import { clearHostedDatasetsForProject } from './hostedRivetProviders';
 import type { EditorCommandBridgeContext, SerializedEditorCommand } from './editorCommandBridgeContext';
@@ -160,7 +159,7 @@ export async function handleReconcileWorkflowProjectBindingsCommand(
     fromPath: string | null;
     fromTitle: string;
   }> = [];
-  const contentChanges: WorkflowProjectContentChange[] = [];
+  let status: WorkflowProjectBindingReconciliationResult['status'] = 'applied';
 
   pruneHostedProjectRevisions(projects.openedProjectsSortedIds);
 
@@ -171,23 +170,20 @@ export async function handleReconcileWorkflowProjectBindingsCommand(
       continue;
     }
 
+    const claim = claimHostedProjectObservation(command.context, projectId);
+    if (claim !== 'applied') {
+      if (status !== 'retry') status = claim;
+      continue;
+    }
+
     const pathChanged = normalizeWorkflowPath(openedProject.fsPath ?? '') !== normalizeWorkflowPath(binding.path);
     const titleChanged = openedProject.title !== binding.title;
     const structuralChange = pathChanged || titleChanged;
-    const remoteChange = observeHostedProjectRevision({
+    observeHostedProjectRevision({
       projectId,
       path: binding.path,
       revisionId: binding.revisionId,
-      structuralChange,
     });
-    if (remoteChange) {
-      contentChanges.push({
-        projectId,
-        path: binding.path,
-        title: binding.title,
-        revisionId: remoteChange.revisionId,
-      });
-    }
     if (!structuralChange) {
       continue;
     }
@@ -250,10 +246,11 @@ export async function handleReconcileWorkflowProjectBindingsCommand(
       }
     }
 
-    let persistedProjectStateChanged = false;
-    for (const update of updates) {
+    // Start all synchronous metadata mutations before yielding: a save of a
+    // later project must not slip between its freshness check and rebind.
+    const metadataUpdates = updates.map((update) => {
       context.openedProjectPathAliases.set(normalizeWorkflowPath(update.binding.path), update.projectId);
-      const updated = await context.getWorkspace().updateProjectMetadata(
+      return context.getWorkspace().updateProjectMetadata(
         update.projectId,
         { title: update.binding.title },
         {
@@ -262,16 +259,18 @@ export async function handleReconcileWorkflowProjectBindingsCommand(
           changeSource: 'external-wrapper-rename',
         },
       );
-      persistedProjectStateChanged ||= updated;
-    }
-    if (persistedProjectStateChanged) {
+    });
+    if ((await Promise.all(metadataUpdates)).some(Boolean)) {
       await flushHybridStorageGroup('project');
     }
+  } catch (error) {
+    status = 'retry';
+    console.error('Failed to reconcile project metadata:', error);
   } finally {
     postMessageToDashboard({
       type: 'workflow-project-bindings-reconciled',
       changes,
-      contentChanges,
+      status,
       requestId: command.requestId,
     });
   }
@@ -290,6 +289,10 @@ export async function handleResolveWorkflowProjectContentChangeCommand(
       throw new Error('The project is no longer open at this location.');
     }
 
+    if (!matchesHostedProjectConflict(command.projectId, command.path, command.revisionId, command.changeId)) {
+      throw new Error('This warning is no longer current. Review the latest saved-version notification.');
+    }
+
     if (command.resolution === 'keep-local') {
       resolved = acceptHostedProjectRemoteRevision(command.projectId, command.path, command.revisionId);
       if (!resolved) {
@@ -299,7 +302,10 @@ export async function handleResolveWorkflowProjectContentChangeCommand(
       if (getHostedProjectPendingRevision(command.projectId) !== command.revisionId) {
         throw new Error('A newer remote version is available. Review the updated notification before saving.');
       }
-      const refreshed = await handleRefreshOpenProjectCommand(context, { type: 'refresh-open-project-from-disk', path: command.path });
+      const refreshed = await handleRefreshOpenProjectCommand(context, {
+        type: 'refresh-open-project-from-disk',
+        path: command.path,
+      });
       if (!refreshed) {
         throw new Error('Could not reload the latest saved project.');
       }

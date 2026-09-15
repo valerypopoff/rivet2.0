@@ -1,4 +1,4 @@
-import { createElement, useCallback, useEffect, useRef, type MutableRefObject } from 'react';
+import { useCallback, useEffect, useRef, type MutableRefObject } from 'react';
 import { toast } from 'react-toastify';
 
 import type {
@@ -10,7 +10,7 @@ import type {
 import type {
   WorkflowProjectBindingReconciliation,
   WorkflowProjectBindingReconciliationResult,
-  WorkflowProjectContentChange,
+  HostedProjectReconciliationContext,
 } from '../../studio-server-shared/editor-bridge';
 import type { WorkflowProjectEditorBinding } from '../../studio-server-shared/workflow-types';
 import { isHostedVirtualProjectPath } from './openedProjectMetadata';
@@ -20,9 +20,7 @@ import { flattenProjects, normalizeWorkflowPath } from './workflowLibraryHelpers
 const REMOTE_TREE_REFRESH_RETRY_DELAY_MS = 2_000;
 
 type PendingTreeChange = {
-  kind: 'state' | 'change';
   state: WorkflowTreeSyncState;
-  sourceClientId: string | null;
   force: boolean;
 };
 
@@ -86,14 +84,13 @@ export function useWorkflowLibraryTreeSync(options: {
   openedProjectPath: string;
   openedProjectRef: MutableRefObject<WorkflowProjectItem | null>;
   editorReady: boolean;
+  reconciliationSequence: number;
+  captureReconciliation: () => Promise<HostedProjectReconciliationContext | null>;
   refreshFromRemoteChange: () => Promise<WorkflowTreeResponse | null>;
   reconcileProjectBindings: (
     bindings: WorkflowProjectEditorBinding[],
+    context: HostedProjectReconciliationContext,
   ) => Promise<WorkflowProjectBindingReconciliationResult>;
-  resolveProjectContentChange: (
-    change: WorkflowProjectContentChange,
-    resolution: 'reload' | 'keep-local',
-  ) => Promise<boolean>;
 }) {
   const currentSyncRef = options.currentSyncRef;
   const interactionActiveRef = useRef(options.isLocalTreeInteractionActive);
@@ -104,6 +101,7 @@ export function useWorkflowLibraryTreeSync(options: {
   const receivedInitialStateRef = useRef(false);
   const lastOpenProjectNoticeRef = useRef<string | null>(null);
   const drainRef = useRef<() => void>(() => {});
+  const lifetimeRef = useRef(0);
 
   interactionActiveRef.current = options.isLocalTreeInteractionActive;
 
@@ -112,7 +110,6 @@ export function useWorkflowLibraryTreeSync(options: {
       before: OpenedProjectReference,
       tree: WorkflowTreeResponse,
       reconciledChanges: WorkflowProjectBindingReconciliation[],
-      changeCameFromAnotherBrowser: boolean,
     ) => {
       const reconciledChange = reconciledChanges.find(
         (change) =>
@@ -127,13 +124,10 @@ export function useWorkflowLibraryTreeSync(options: {
         lastOpenProjectNoticeRef.current = noticeKey;
 
         const isRename = reconciledChange.fromTitle !== reconciledChange.toTitle;
-        const actor = changeCameFromAnotherBrowser
-          ? 'by another administrator'
-          : 'while this dashboard was reconnecting';
         toast.info(
           isRename
-            ? `"${reconciledChange.fromTitle}" was renamed to "${reconciledChange.toTitle}" ${actor}. Your editor tab now follows the renamed project.`
-            : `"${reconciledChange.toTitle}" was moved ${actor}. Your editor tab now follows the new location.`,
+            ? `"${reconciledChange.fromTitle}" was renamed to "${reconciledChange.toTitle}" on the server. Your editor tab now follows the renamed project.`
+            : `"${reconciledChange.toTitle}" was moved on the server. Your editor tab now follows the new location.`,
         );
         return;
       }
@@ -145,107 +139,25 @@ export function useWorkflowLibraryTreeSync(options: {
         return;
       }
 
-      const noticeKey = before.absolutePath;
+      const movedProject = findMovedProject(before, tree);
+      const noticeKey = movedProject?.projectMetadataId
+        ? `${movedProject.projectMetadataId}:${movedProject.absolutePath}`
+        : before.absolutePath;
       if (lastOpenProjectNoticeRef.current === noticeKey) {
         return;
       }
       lastOpenProjectNoticeRef.current = noticeKey;
 
-      const movedProject = findMovedProject(before, tree);
-      const changeDescription = changeCameFromAnotherBrowser
-        ? movedProject
-          ? `"${before.name}" was moved or renamed by another administrator.`
-          : `"${before.name}" was removed by another administrator.`
-        : movedProject
-          ? `"${before.name}" was moved or renamed while this dashboard was reconnecting.`
-          : `"${before.name}" no longer appears in the project tree after reconnecting.`;
+      const changeDescription = movedProject
+        ? `"${before.name}" was moved or renamed on the server.`
+        : `"${before.name}" no longer appears in the project tree.`;
       toast.info(`${changeDescription} It remains open unchanged in the editor.`);
     },
     [],
   );
 
-  const showRemoteProjectContentNotice = useCallback(
-    (change: WorkflowProjectContentChange, changedByAnotherAdministrator: boolean) => {
-      const toastId = `workflow-project-content-change:${change.projectId}`;
-      const actor = changedByAnotherAdministrator
-        ? 'another administrator'
-        : 'while this dashboard was reconnecting';
-      const render = ({ closeToast }: { closeToast?: () => void }) => {
-        let resolving = false;
-        const resolve = (resolution: 'reload' | 'keep-local', failureMessage: string) => {
-          if (resolving) {
-            return;
-          }
-          resolving = true;
-          void options.resolveProjectContentChange(change, resolution)
-            .then((resolved) => {
-              if (resolved) {
-                closeToast?.();
-              } else {
-                toast.error(failureMessage);
-                resolving = false;
-              }
-            })
-            .catch((error) => {
-              console.error('Failed to resolve remote project change:', error);
-              toast.error(failureMessage);
-              resolving = false;
-            });
-        };
-        return createElement(
-          'div',
-          { className: 'workflow-remote-project-change-notice' },
-          createElement(
-            'div',
-            { className: 'workflow-remote-project-change-message' },
-            `"${change.title}" was changed by ${actor}. Reload discards the version currently open in this tab; Keep mine lets your next Save overwrite the remote version.`,
-          ),
-          createElement(
-            'div',
-            { className: 'workflow-remote-project-change-actions' },
-            createElement(
-              'button',
-              {
-                type: 'button',
-                className: 'workflow-remote-project-change-reload',
-                onClick: () => {
-                  resolve('reload', `Could not reload "${change.title}". The remote-update warning remains active.`);
-                },
-              },
-              'Reload and discard mine',
-            ),
-            createElement(
-              'button',
-              {
-                type: 'button',
-                className: 'workflow-remote-project-change-keep',
-                onClick: () => {
-                  resolve('keep-local', `A newer version of "${change.title}" is available. Review the updated warning.`);
-                },
-              },
-              'Keep mine',
-            ),
-          ),
-        );
-      };
-
-      if (toast.isActive(toastId)) {
-        toast.update(toastId, { render: render as never });
-        return;
-      }
-      toast.info(render, {
-        toastId,
-        autoClose: false,
-        closeButton: false,
-        closeOnClick: false,
-        draggable: false,
-      });
-    },
-    [options],
-  );
-
   const drain = useCallback(() => {
-    if (refreshInFlightRef.current || interactionActiveRef.current) {
+    if (refreshInFlightRef.current || interactionActiveRef.current || !options.editorReady) {
       return;
     }
 
@@ -264,23 +176,36 @@ export function useWorkflowLibraryTreeSync(options: {
       ? openedProjectRef.current ?? createOpenedProjectReference(options.openedProjectPath)
       : null;
 
+    const retry = () => {
+      if (lifetimeRef.current !== lifetime) return;
+      pendingChangeRef.current ??= { ...pending, force: true };
+      if (retryTimerRef.current == null) {
+        retryTimerRef.current = window.setTimeout(() => {
+          retryTimerRef.current = null;
+          drainRef.current();
+        }, REMOTE_TREE_REFRESH_RETRY_DELAY_MS);
+      }
+    };
+    const lifetime = lifetimeRef.current;
     void options
-      .refreshFromRemoteChange()
-      .then((tree) => {
-        if (!tree) {
-          pendingChangeRef.current = pending;
-          if (retryTimerRef.current == null) {
-            retryTimerRef.current = window.setTimeout(() => {
-              retryTimerRef.current = null;
-              drainRef.current();
-            }, REMOTE_TREE_REFRESH_RETRY_DELAY_MS);
-          }
+      .captureReconciliation()
+      .then(async (context) => {
+        if (lifetimeRef.current !== lifetime) return;
+        if (!context) {
+          retry();
           return;
         }
-
+        const tree = await options.refreshFromRemoteChange();
+        if (lifetimeRef.current !== lifetime) return;
+        if (!tree) {
+          retry();
+          return;
+        }
         return options
-          .reconcileProjectBindings(getWorkflowProjectEditorBindings(tree))
+          .reconcileProjectBindings(getWorkflowProjectEditorBindings(tree), context)
           .then((reconciled) => {
+            if (lifetimeRef.current !== lifetime) return;
+            if (reconciled.status === 'retry') retry();
             // A remote mutation can affect an inactive tab too. Surface each
             // actual ID-based rebind once rather than only inspecting the
             // currently active project reference.
@@ -293,26 +218,19 @@ export function useWorkflowLibraryTreeSync(options: {
                 },
                 tree,
                 [reconciledChange],
-                pending.kind === 'change' && pending.sourceClientId !== getWorkflowTreeClientId(),
               );
             }
-            if (openedProjectBeforeRefresh) {
+            if (openedProjectBeforeRefresh && reconciled.status === 'applied') {
               showOpenProjectNotice(
                 openedProjectBeforeRefresh,
                 tree,
                 reconciled.changes,
-                pending.kind === 'change' && pending.sourceClientId !== getWorkflowTreeClientId(),
-              );
-            }
-            for (const contentChange of reconciled.contentChanges) {
-              showRemoteProjectContentNotice(
-                contentChange,
-                pending.kind === 'change' && pending.sourceClientId != null && pending.sourceClientId !== getWorkflowTreeClientId(),
               );
             }
           })
           .catch((error) => {
             console.error('Failed to reconcile open workflow project bindings:', error);
+            retry();
           });
       })
       .then(() => {
@@ -321,13 +239,15 @@ export function useWorkflowLibraryTreeSync(options: {
           pendingChangeRef.current = null;
         }
       })
+      .catch(() => retry())
       .finally(() => {
+        if (lifetimeRef.current !== lifetime) return;
         refreshInFlightRef.current = false;
         if (pendingChangeRef.current && retryTimerRef.current == null) {
           drainRef.current();
         }
       });
-  }, [currentSyncRef, openedProjectRef, options, showOpenProjectNotice, showRemoteProjectContentNotice]);
+  }, [currentSyncRef, openedProjectRef, options, showOpenProjectNotice]);
 
   drainRef.current = drain;
 
@@ -351,16 +271,18 @@ export function useWorkflowLibraryTreeSync(options: {
       // Tree events can arrive before the iframe finishes its bridge handshake.
       // Replaying the current authoritative state here ensures an open tab is
       // still rebound instead of leaving a stale path until another mutation.
-      enqueue({ kind: 'state', state: currentState, sourceClientId: null, force: true });
+      enqueue({ state: currentState, force: true });
     }
-  }, [currentSyncRef, enqueue, options.editorReady]);
+  }, [currentSyncRef, enqueue, options.editorReady, options.reconciliationSequence]);
 
   useEffect(() => {
+    lifetimeRef.current++;
+    refreshInFlightRef.current = false;
     const stream = openWorkflowTreeEventStream({
       onState: (state) => {
         const force = !receivedInitialStateRef.current;
         receivedInitialStateRef.current = true;
-        enqueue({ kind: 'state', state, sourceClientId: null, force });
+        enqueue({ state, force });
       },
       onChange: (event: WorkflowTreeChangeEvent) => {
         if (event.sourceClientId === getWorkflowTreeClientId()) {
@@ -369,11 +291,12 @@ export function useWorkflowLibraryTreeSync(options: {
         // The latest tree fetch may already have advanced the sync marker while
         // a local tree gesture was active. Keep this remote event as a forced
         // reconciliation so that update cannot be silently skipped.
-        enqueue({ kind: 'change', state: event, sourceClientId: event.sourceClientId, force: true });
+        enqueue({ state: event, force: true });
       },
     });
 
     return () => {
+      lifetimeRef.current++;
       stream?.close();
       if (retryTimerRef.current != null) {
         window.clearTimeout(retryTimerRef.current);
