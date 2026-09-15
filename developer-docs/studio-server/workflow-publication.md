@@ -27,9 +27,14 @@ entry, and retained parsed-body reservation. These remain held until the complet
 run settles, even when the client has received its response or disconnected.
 Normal shutdown drains that registry; its deadline aborts remaining branches.
 
-Response duration, execution debug headers, telemetry, and returned cost describe
-the foreground response point. Recordings are enqueued exactly once after full
-completion and include tail events, final status, and full execution duration.
+The response's `durationMs` and `x-duration-ms` measure the HTTP request from
+its entry through response publication, including work before processor startup.
+The optional `x-workflow-execute-ms` header measures processor execution through
+foreground output readiness. These request and processor windows must not be
+compared to each other as though they share a start time. Telemetry and returned
+cost describe work observed by response publication. Recordings are enqueued
+exactly once after full completion and include tail events, final status, and
+full execution duration.
 Late failures are logged with correlation and endpoint identity and recorded as
 failures; they cannot replace a response already sent. Pre-response execution
 failures retain the existing HTTP error handling. Response serialization/transport
