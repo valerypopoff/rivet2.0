@@ -186,6 +186,8 @@ If Helm is not already on PATH, install the pinned cached copy first:
 yarn studio-server:setup:k8s-tools
 ```
 
+The setup command reuses an explicit Helm override, system Helm, or an existing cached copy without downloading. If no Helm is available, it downloads the pinned archive and checksum with bounded retries and verifies the checksum before installing; a failed fetch identifies its URL and cause. Kubernetes release gates continue to resolve Helm in the same explicit → PATH → cached order.
+
 Current behavior:
 
 - builds local `proxy`, `web`, `api`, and `executor` images

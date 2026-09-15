@@ -95,16 +95,12 @@ export class GetGlobalNodeImpl extends NodeImpl<GetGlobalNode> {
     return [
       {
         type: 'custom',
-        label: 'Search Global Variables',
-        customEditorId: 'GetGlobalVariableSelector',
-        autoFocus: true,
-      },
-      {
-        type: 'string',
         label: 'Variable ID',
+        customEditorId: 'GetGlobalVariableSelector',
         dataKey: 'id',
         useInputToggleDataKey: 'useIdInput',
         includeInGraphSearch: true,
+        autoFocus: true,
       },
       {
         type: 'dataTypeSelector',

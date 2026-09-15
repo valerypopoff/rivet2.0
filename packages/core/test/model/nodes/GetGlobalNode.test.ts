@@ -26,13 +26,6 @@ describe('GetGlobalNode', () => {
       [
         {
           type: 'custom',
-          label: 'Search Global Variables',
-          dataKey: undefined,
-          includeInGraphSearch: undefined,
-          turnOffDataKeysWhenEnabled: undefined,
-        },
-        {
-          type: 'string',
           label: 'Variable ID',
           dataKey: 'id',
           includeInGraphSearch: true,
@@ -77,6 +70,21 @@ describe('GetGlobalNode', () => {
         dataType: 'string',
       },
     ]);
+  });
+
+  it('uses one searchable Variable ID editor with the existing input-port toggle', () => {
+    const editors = new GetGlobalNodeImpl(GetGlobalNodeImpl.create()).getEditors();
+
+    assert.equal(editors.filter((editor) => editor.label === 'Variable ID').length, 1);
+    assert.deepEqual(editors[0], {
+      type: 'custom',
+      label: 'Variable ID',
+      customEditorId: 'GetGlobalVariableSelector',
+      dataKey: 'id',
+      useInputToggleDataKey: 'useIdInput',
+      includeInGraphSearch: true,
+      autoFocus: true,
+    });
   });
 
   it('returns the variable ID output in on-demand mode', async () => {

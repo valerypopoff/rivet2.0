@@ -177,22 +177,30 @@ export function resolveHelmBinOrThrow(rootDir, { env = process.env, launcherName
   );
 }
 
-async function fetchBuffer(url) {
-  const response = await fetch(url);
-  if (!response.ok) {
-    throw new Error(`Failed to download ${url}: HTTP ${response.status}`);
+export async function fetchHelmAsset(url, readBody, {
+  fetchImpl = fetch,
+  retryDelay = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+} = {}) {
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    let response;
+    try {
+      response = await fetchImpl(url, { signal: AbortSignal.timeout(60_000) });
+      if (response.ok) {
+        return await readBody(response);
+      }
+    } catch (error) {
+      if (attempt === 3) {
+        throw new Error(`Failed to download ${url} after ${attempt} attempt(s): ${error.message}`, { cause: error });
+      }
+      await retryDelay(1_000 * attempt);
+      continue;
+    }
+
+    if (attempt === 3 || (response.status !== 429 && response.status < 500)) {
+      throw new Error(`Failed to download ${url} after ${attempt} attempt(s): HTTP ${response.status}`);
+    }
+    await retryDelay(1_000 * attempt);
   }
-
-  return Buffer.from(await response.arrayBuffer());
-}
-
-async function fetchText(url) {
-  const response = await fetch(url);
-  if (!response.ok) {
-    throw new Error(`Failed to download ${url}: HTTP ${response.status}`);
-  }
-
-  return response.text();
 }
 
 function parseChecksum(rawText) {
@@ -255,8 +263,8 @@ export async function installCachedHelm(rootDir) {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'rivet-helm-'));
 
   try {
-    const archiveBuffer = await fetchBuffer(archiveUrl);
-    const expectedChecksum = parseChecksum(await fetchText(checksumUrl));
+    const archiveBuffer = await fetchHelmAsset(archiveUrl, async (response) => Buffer.from(await response.arrayBuffer()));
+    const expectedChecksum = parseChecksum(await fetchHelmAsset(checksumUrl, (response) => response.text()));
     const actualChecksum = computeSha256(archiveBuffer);
     if (actualChecksum !== expectedChecksum) {
       throw new Error(

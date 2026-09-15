@@ -21,7 +21,7 @@ The node can also be configured to wait until the variable is available. This is
 
 Templates in interpolation-capable nodes can also read a current global value directly with `{{@globals.variableId}}`, a JSONPath expression such as `{{@globals.profile.user.name}}`, or bracket JSONPath such as `{{@globals["customer.profile"].names[0]}}`. These references do not create input ports, wait for a value, or establish ordering with Set Global. Use this node when the graph needs an explicit value connection, typed missing-value default, on-demand read, or wait behavior. See [Interpolation paths](../user-guide/data-types.md#interpolation-paths) for the common template rules and [Code](./code-new.mdx), [Expression](./expression.mdx), [JS Filter](./js-filter.mdx), or [JS Map](./js-map.mdx) for JavaScript-field examples.
 
-In the editor, the search field above `Variable ID` can find fixed IDs from [Set Global](./set-global.mdx) nodes and configured project global variables in Project settings → General, including the complete loaded project-reference tree, then copy the selected ID into `Variable ID`. The search text is not saved with the node. You can still type `Variable ID` manually, and dynamically generated Set Global IDs must still be entered or supplied through the input port.
+In the editor, `Variable ID` is one searchable field. Type an ID directly or choose a matching fixed ID from [Set Global](./set-global.mdx) nodes or configured project global variables in Project settings → General, including the complete loaded project-reference tree. What you type in this field is the node's Variable ID; there is no separate search setting. Enter keeps the typed ID unless you first highlight a suggestion with Up or Down; clicking a suggestion selects it directly. Dynamically generated Set Global IDs must still be entered manually or supplied through the input port.
 
 ## Project global variables
 
@@ -65,8 +65,7 @@ Configured project global variables are assigned from the project at the start o
 
 | Setting                 | Description                                                                                                                       | Default Value | Use Input Toggle | Input Data Type |
 | ----------------------- | --------------------------------------------------------------------------------------------------------------------------------- | ------------- | ---------------- | --------------- |
-| Search field            | Searches fixed-ID Set Global nodes and configured project global variables, including the loaded reference tree, and copies the selected ID to `Variable ID`. | Empty         | No               | N/A             |
-| Variable ID             | The ID of the global variable to retrieve.                                                                                        | (required)    | Yes              | `string`        |
+| Variable ID             | Type any ID or search fixed-ID Set Global nodes and configured project global variables, including the loaded reference tree. | (required)    | Yes              | `string`        |
 | Data Type               | The data type of the global variable.                                                                                             | `string`      | No               | N/A             |
 | On Demand               | If enabled, the global variable will be read when nodes need it, rather than when this node executes. Turning this on turns off "Wait". | False         | No               | N/A             |
 | Wait                    | If enabled, the node will wait until the variable is available. Turning this on turns off "On Demand".                           | True          | No               | N/A             |
