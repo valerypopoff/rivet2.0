@@ -4,7 +4,7 @@ import { authenticateIfNeeded, waitForDashboardReady } from './helpers/hostedEdi
 import { seedHostedEditorProject } from './helpers/hostedEditorStorage';
 
 test.describe('Evaluation dataset case bulk enable toggle', () => {
-  test('Ctrl/Cmd+click applies the switch target state to every case while a plain click changes only one', async ({
+  test('Control-click or Command-click applies the switch target state to every case while a plain click changes only one', async ({
     page,
   }) => {
     test.slow();
@@ -44,8 +44,8 @@ test.describe('Evaluation dataset case bulk enable toggle', () => {
     await expect(firstCaseInput).toBeChecked();
     await expect(secondCaseInput).toBeChecked();
 
-    const modifier = process.platform === 'darwin' ? 'Meta' : 'Control';
-    await firstCaseControl.click({ modifiers: [modifier] });
+    const primaryModifier = process.platform === 'darwin' ? 'Meta' : 'Control';
+    await firstCaseControl.click({ modifiers: [primaryModifier] });
     await expect(firstCaseInput).not.toBeChecked();
     await expect(secondCaseInput).not.toBeChecked();
 
@@ -53,7 +53,9 @@ test.describe('Evaluation dataset case bulk enable toggle', () => {
     await expect(firstCaseInput).not.toBeChecked();
     await expect(secondCaseInput).toBeChecked();
 
-    await firstCaseControl.click({ modifiers: [modifier] });
+    // Exercise the browser's Command-key event even on non-macOS CI. On macOS
+    // this is the normal system modifier; elsewhere it verifies metaKey support.
+    await firstCaseControl.click({ modifiers: ['Meta'] });
     await expect(firstCaseInput).toBeChecked();
     await expect(secondCaseInput).toBeChecked();
   });

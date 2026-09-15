@@ -1068,6 +1068,7 @@ export const GraphList: FC = memo(() => {
                 onGraphSelected={selectGraph}
                 onRenameItem={renameFolderItem}
                 onCancelRename={cancelRename}
+                onSetAllFoldersExpanded={setAllFoldersExpanded}
                 showUnreachableIndicators={graphListReachability.showUnreachableIndicators}
               />
             ))}
