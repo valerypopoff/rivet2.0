@@ -1,9 +1,6 @@
 import { getError } from '@valerypopoff/rivet2-core';
 
-import {
-  postMessageToDashboard,
-  type DashboardToEditorCommand,
-} from '../../studio-server-shared/editor-bridge';
+import { postMessageToDashboard, type DashboardToEditorCommand } from '../../studio-server-shared/editor-bridge';
 import { primeOpenedProjectSession } from '../io/openedProjectSessionCache';
 import { focusHostedEditorFrame } from './editorBridgeFocus';
 import {
@@ -14,13 +11,12 @@ import {
 } from './editorCommandBridgeContext';
 import {
   getHostedProjectRevisionState,
+  beginHostedProjectReload,
   restoreHostedProjectRevisionState,
 } from '../io/hostedProjectRevisionTracker';
 import { normalizeWorkflowPath } from './workflowLibraryHelpers';
 
-function resolveOpeningProjectTitle(
-  command: Extract<DashboardToEditorCommand, { type: 'open-project' }>,
-): string {
+function resolveOpeningProjectTitle(command: Extract<DashboardToEditorCommand, { type: 'open-project' }>): string {
   const commandTitle = command.title?.trim();
   if (commandTitle) {
     return commandTitle;
@@ -34,10 +30,7 @@ function waitForOpeningProjectTabFrame(): Promise<void> {
   return new Promise((resolve) => window.requestAnimationFrame(() => resolve()));
 }
 
-async function closeReplaceablePreviewProject(
-  context: EditorCommandBridgeContext,
-  nextPath: string,
-): Promise<void> {
+async function closeReplaceablePreviewProject(context: EditorCommandBridgeContext, nextPath: string): Promise<void> {
   const currentPreview = context.preview.previewProjectRef.current;
   if (!currentPreview || normalizeWorkflowPath(currentPreview.path) === normalizeWorkflowPath(nextPath)) {
     return;
@@ -68,19 +61,16 @@ export async function handleOpenProjectCommand(
   try {
     const existingOpenedProject = findOpenedProjectByPath(context, command.path);
     const existingPreview = context.preview.previewProjectRef.current;
-    const targetIsExistingPreview = (
-      existingPreview !== null &&
-      normalizeWorkflowPath(existingPreview.path) === normalizeWorkflowPath(command.path)
-    );
-    const shouldUsePreviewSlot = (
-      command.preview === true && (existingOpenedProject === null || targetIsExistingPreview)
-    );
+    const targetIsExistingPreview =
+      existingPreview !== null && normalizeWorkflowPath(existingPreview.path) === normalizeWorkflowPath(command.path);
+    const shouldUsePreviewSlot =
+      command.preview === true && (existingOpenedProject === null || targetIsExistingPreview);
     const shouldReplaceActivePreview = Boolean(
       shouldUsePreviewSlot &&
-      existingPreview &&
-      !targetIsExistingPreview &&
-      context.getCurrentProject().metadata.id === existingPreview.projectId &&
-      context.preview.previewProjectIsSafelyReplaceable(existingPreview)
+        existingPreview &&
+        !targetIsExistingPreview &&
+        context.getCurrentProject().metadata.id === existingPreview.projectId &&
+        context.preview.previewProjectIsSafelyReplaceable(existingPreview),
     );
 
     if (shouldUsePreviewSlot && !shouldReplaceActivePreview) {
@@ -89,11 +79,8 @@ export async function handleOpenProjectCommand(
 
     const replaceCurrent = Boolean(command.replaceCurrent || shouldReplaceActivePreview);
     const replacedPath = replaceCurrent ? context.getLoadedProject().path : '';
-    const canStartOpeningTabBeforeLoad = (
-      !existingOpenedProject &&
-      command.reloadFromDisk !== true &&
-      (!replaceCurrent || shouldReplaceActivePreview)
-    );
+    const canStartOpeningTabBeforeLoad =
+      !existingOpenedProject && command.reloadFromDisk !== true && (!replaceCurrent || shouldReplaceActivePreview);
     if (canStartOpeningTabBeforeLoad) {
       const openingTab = await context.getWorkspace().startOpeningProjectTab(
         { path: command.path, title: resolveOpeningProjectTitle(command) },
@@ -174,9 +161,11 @@ export async function handleRefreshOpenProjectCommand(
     return false;
   }
   const revisionStateBeforeRefresh = getHostedProjectRevisionState(openedProject.projectId);
-  if (normalizeWorkflowPath(context.getLoadedProject().path) !== normalizeWorkflowPath(command.path)) {
-    let replacementSucceeded = false;
-    try {
+  const inactive = normalizeWorkflowPath(context.getLoadedProject().path) !== normalizeWorkflowPath(command.path);
+  const finishReload = beginHostedProjectReload(openedProject.projectId);
+  let replacementSucceeded = false;
+  try {
+    if (inactive) {
       const loaded = await context.loadProjectData(command.path);
       if (loaded.project.metadata.id !== openedProject.projectId) {
         throw new Error('Reloaded project has a different project ID.');
@@ -200,19 +189,8 @@ export async function handleRefreshOpenProjectCommand(
       });
       context.clearLoadedRecordingForPath(command.path);
       return true;
-    } catch (error) {
-      if (!replacementSucceeded) {
-        restoreHostedProjectRevisionState(openedProject.projectId, revisionStateBeforeRefresh);
-      }
-      const message = getError(error).message;
-      console.error('Failed to refresh inactive workflow project from storage:', error);
-      postMessageToDashboard({ type: 'project-open-failed', path: command.path, error: message });
-      return false;
     }
-  }
 
-  let replacementSucceeded = false;
-  try {
     const openResult = await context.getOpenProject()(command.path, {
       replaceCurrent: true,
       openedProjectId: openedProject.projectId,
@@ -235,8 +213,12 @@ export async function handleRefreshOpenProjectCommand(
       restoreHostedProjectRevisionState(openedProject.projectId, revisionStateBeforeRefresh);
     }
     const message = getError(error).message;
-    console.error('Failed to refresh workflow project from storage:', error);
+    console.error(inactive
+      ? 'Failed to refresh inactive workflow project from storage:'
+      : 'Failed to refresh workflow project from storage:', error);
     postMessageToDashboard({ type: 'project-open-failed', path: command.path, error: message });
     return false;
+  } finally {
+    finishReload();
   }
 }

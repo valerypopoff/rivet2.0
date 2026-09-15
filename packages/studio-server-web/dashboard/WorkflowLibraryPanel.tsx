@@ -16,7 +16,7 @@ import { useWorkflowLibraryController } from './useWorkflowLibraryController';
 import type {
   ProjectCompareSideLabels,
   WorkflowProjectBindingReconciliationResult,
-  WorkflowProjectContentChange,
+  HostedProjectReconciliationContext,
 } from '../../studio-server-shared/editor-bridge';
 import type { WorkflowProjectEditorBinding } from '../../studio-server-shared/workflow-types';
 import './WorkflowLibraryPanel.css';
@@ -36,11 +36,10 @@ interface WorkflowLibraryPanelProps {
   onWorkflowPathsMoved: (moves: WorkflowProjectPathMove[]) => Promise<void> | void;
   onReconcileWorkflowProjectBindings: (
     bindings: WorkflowProjectEditorBinding[],
+    context: HostedProjectReconciliationContext,
   ) => Promise<WorkflowProjectBindingReconciliationResult>;
-  onResolveWorkflowProjectContentChange: (
-    change: WorkflowProjectContentChange,
-    resolution: 'reload' | 'keep-local',
-  ) => Promise<boolean>;
+  onCaptureProjectReconciliation: () => Promise<HostedProjectReconciliationContext | null>;
+  reconciliationSequence: number;
   onWorkflowProjectOpenIntent: (path: string) => void;
   onWorkflowProjectOpenIntentCanceled: (path: string) => void;
   onActiveWorkflowProjectPathChange: (path: string) => void;
@@ -85,7 +84,8 @@ export const WorkflowLibraryPanel: FC<WorkflowLibraryPanelProps> = ({
   onDeleteProject,
   onWorkflowPathsMoved,
   onReconcileWorkflowProjectBindings,
-  onResolveWorkflowProjectContentChange,
+  onCaptureProjectReconciliation,
+  reconciliationSequence,
   onWorkflowProjectOpenIntent,
   onWorkflowProjectOpenIntentCanceled,
   onActiveWorkflowProjectPathChange,
@@ -109,7 +109,8 @@ export const WorkflowLibraryPanel: FC<WorkflowLibraryPanelProps> = ({
     onDeleteProject,
     onWorkflowPathsMoved,
     onReconcileWorkflowProjectBindings,
-    onResolveWorkflowProjectContentChange,
+    onCaptureProjectReconciliation,
+    reconciliationSequence,
     onWorkflowProjectOpenIntent,
     onWorkflowProjectOpenIntentCanceled,
     onActiveWorkflowProjectPathChange,

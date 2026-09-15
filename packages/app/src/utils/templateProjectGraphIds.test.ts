@@ -82,3 +82,20 @@ test('remapTemplateProjectGraphIds updates same-project graph ids across support
   assert.equal((nodes[5]!.data as any).onMessageCreationSubgraphId, 'message-copy');
   assert.equal((nodes[6]!.data as any).graphId, 'external-graph');
 });
+
+test('unmapped graph ids that match inherited object keys remain opaque strings', () => {
+  const mapping = { copied: 'copied-new' } as Record<GraphId, GraphId>;
+  const project: Pick<Project, 'metadata' | 'graphs'> = {
+    metadata: { id: 'project' as ProjectId, title: 'Template', description: '' },
+    graphs: {
+      ['copied-new' as GraphId]: {
+        metadata: { id: 'copied-new' as GraphId, name: 'Copied' },
+        connections: [],
+        nodes: [makeNode('subGraph', { graphId: 'toString' as GraphId })],
+      },
+    },
+  };
+
+  remapTemplateProjectGraphIds(project, mapping);
+  assert.equal((project.graphs['copied-new' as GraphId]!.nodes[0]!.data as { graphId: GraphId }).graphId, 'toString');
+});

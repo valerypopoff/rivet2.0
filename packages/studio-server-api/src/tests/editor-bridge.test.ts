@@ -145,12 +145,14 @@ test('editor bridge rejects malformed messages', () => {
     }),
     false,
   );
+  assert.equal(isEditorToDashboardEvent({ type: 'editor-ready' }), false);
+  assert.equal(isEditorToDashboardEvent({ type: 'editor-ready', editorInstanceId: 123 }), false);
   assert.equal(isEditorToDashboardEvent({ type: 'project-saved' }), false);
   assert.equal(isEditorToDashboardEvent({ type: 'unknown' }), false);
 });
 
 test('editor bridge accepts valid editor events', () => {
-  assert.equal(isEditorToDashboardEvent({ type: 'editor-ready' }), true);
+  assert.equal(isEditorToDashboardEvent({ type: 'editor-ready', editorInstanceId: 'editor-1' }), true);
   assert.equal(isEditorToDashboardEvent({ type: 'project-opened', path: '/tmp/example.rivet-project' }), true);
   assert.equal(
     isEditorToDashboardEvent({

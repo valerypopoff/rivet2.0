@@ -70,6 +70,10 @@ export const addContextMenuGroups = [
     label: 'Advanced',
   },
   {
+    id: 'add-node-group:debug',
+    label: 'Debug',
+  },
+  {
     id: 'add-node-group:custom',
     label: 'Custom',
   },

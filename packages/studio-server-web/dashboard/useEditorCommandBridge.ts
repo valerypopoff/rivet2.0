@@ -3,17 +3,22 @@ import { useSetAtom } from 'jotai';
 import { useEffect, useRef } from 'react';
 
 import { useIOProvider, type RivetWorkspaceHost } from '../../app/src/host';
-import {
-  clearLoadedRecordingForPathState,
-  rebindLoadedRecordingPathState,
-} from '../../app/src/state/execution';
-import {
-  loadedProjectState,
-  type OpenedProjectsInfo,
-} from '../../app/src/state/savedGraphs';
+import { clearLoadedRecordingForPathState, rebindLoadedRecordingPathState } from '../../app/src/state/execution';
+import { loadedProjectState, type OpenedProjectsInfo } from '../../app/src/state/savedGraphs';
 import type { DefaultExecutor } from '../../app/src/state/settings.js';
 import type { OverlayKey } from '../../app/src/state/ui.js';
-import { isDashboardToEditorCommand, isValidBridgeOrigin } from '../../studio-server-shared/editor-bridge';
+import {
+  isDashboardToEditorCommand,
+  isValidBridgeOrigin,
+  postMessageToDashboard,
+} from '../../studio-server-shared/editor-bridge';
+import {
+  captureHostedProjectReconciliation,
+  getHostedProjectConflictSnapshot,
+  pruneHostedProjectRevisions,
+  subscribeHostedProjectRevisions,
+} from '../io/hostedProjectRevisionTracker';
+import { isHostedVirtualProjectPath } from './openedProjectMetadata';
 import {
   handleCompareOpenProjectCommand,
   handleOpenPublishedPreviewCommand,
@@ -31,10 +36,7 @@ import {
   handleWorkflowPathsMovedCommand,
 } from './editorProjectLifecycleCommands';
 import { handleOpenProjectCommand, handleRefreshOpenProjectCommand } from './editorProjectOpenCommands';
-import {
-  replayEditorDuplicateShortcut,
-  replayEditorFindShortcut,
-} from './useEditorBridgeInteractions';
+import { replayEditorDuplicateShortcut, replayEditorFindShortcut } from './useEditorBridgeInteractions';
 import { shouldSkipHostedShortcutProjectSave } from './editorBridgeFocus';
 import { useOpenWorkflowProject } from './useOpenWorkflowProject';
 import type { usePreviewProjectLifecycle } from './usePreviewProjectLifecycle';
@@ -83,6 +85,30 @@ export function useEditorCommandBridge({
   workspaceRef.current = workspaceHost;
   openProjectRef.current = openProject;
 
+  const editableProjects = () =>
+    projectsRef.current.openedProjectsSortedIds.flatMap((projectId) => {
+      const project = projectsRef.current.openedProjects[projectId];
+      return project?.fsPath && !isHostedVirtualProjectPath(project.fsPath)
+        ? [{ projectId, title: project.title }]
+        : [];
+    });
+  const publishHostedProjectConflicts = () =>
+    postMessageToDashboard({
+      type: 'workflow-project-conflicts',
+      snapshot: getHostedProjectConflictSnapshot(editableProjects()),
+    });
+
+  useEffect(() => {
+    const unsubscribe = subscribeHostedProjectRevisions(publishHostedProjectConflicts);
+    publishHostedProjectConflicts();
+    return unsubscribe;
+  }, []);
+
+  useEffect(() => {
+    pruneHostedProjectRevisions(editableProjects().map((project) => project.projectId));
+    publishHostedProjectConflicts();
+  }, [projects]);
+
   useEffect(() => {
     const context: EditorCommandBridgeContext = {
       clearLoadedRecordingForPath: (projectPath) => {
@@ -114,6 +140,14 @@ export function useEditorCommandBridge({
 
     const runSerializedCommand = async (command: SerializedEditorCommand): Promise<void> => {
       switch (command.type) {
+        case 'capture-workflow-project-reconciliation':
+          publishHostedProjectConflicts();
+          postMessageToDashboard({
+            type: 'workflow-project-reconciliation-captured',
+            requestId: command.requestId,
+            context: captureHostedProjectReconciliation(editableProjects().map((project) => project.projectId)),
+          });
+          return;
         case 'open-project':
           return handleOpenProjectCommand(context, command);
         case 'refresh-open-project-from-disk':
@@ -177,6 +211,7 @@ export function useEditorCommandBridge({
         case 'workflow-paths-moved':
         case 'reconcile-workflow-project-bindings':
         case 'resolve-workflow-project-content-change':
+        case 'capture-workflow-project-reconciliation':
           enqueueSerializedCommand(event.data);
           break;
       }

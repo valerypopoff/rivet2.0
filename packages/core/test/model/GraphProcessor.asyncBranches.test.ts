@@ -268,8 +268,9 @@ void describe('GraphProcessor scheduler boundaries', () => {
       executionOrder.push('source-finished');
       return { output: { type: 'string', value: 'final value' } };
     });
-    AsyncTestNodeImpl.handlers.set(branch.id, (inputs) => {
+    AsyncTestNodeImpl.handlers.set(branch.id, (inputs, context) => {
       executionOrder.push('watch-branch');
+      assert.deepEqual(context.graphCallPath, ['streaming-watch-rejoin']);
       assert.deepEqual(inputs['input' as PortId]?.value, { text: 'partial value' });
       watchReached.resolve();
       releaseSource.resolve();
@@ -386,11 +387,14 @@ void describe('GraphProcessor scheduler boundaries', () => {
     const releaseReferencedSource = deferred();
 
     AsyncTestNodeImpl.handlers.set(referencedSource.id, async (_inputs, context) => {
+      assert.deepEqual(context.graphCallPath, ['watch-referenced-graph-output', 'streaming-referenced-graph']);
+      assert.equal(Object.isFrozen(context.graphCallPath), true);
       context.onPartialOutputs?.({ output: { type: 'string', value: 'referenced partial' } });
       await releaseReferencedSource.promise;
       return { output: { type: 'string', value: 'referenced final' } };
     });
-    AsyncTestNodeImpl.handlers.set(branch.id, (inputs) => {
+    AsyncTestNodeImpl.handlers.set(branch.id, (inputs, context) => {
+      assert.deepEqual(context.graphCallPath, ['watch-referenced-graph-output']);
       receivedSnapshots.push({
         isFinal: inputs['other' as PortId]?.value,
         value: inputs['input' as PortId]?.value,
@@ -2724,7 +2728,8 @@ void describe('GraphProcessor scheduler boundaries', () => {
     const branchStarted = deferred();
     const releaseBranch = deferred();
     const foregroundFinished = deferred();
-    AsyncTestNodeImpl.handlers.set(asyncLeaf.id, async (inputs) => {
+    AsyncTestNodeImpl.handlers.set(asyncLeaf.id, async (inputs, context) => {
+      assert.deepEqual(context.graphCallPath, ['async-foreground']);
       branchStarted.resolve();
       await releaseBranch.promise;
       return { output: inputs['input' as PortId]! };

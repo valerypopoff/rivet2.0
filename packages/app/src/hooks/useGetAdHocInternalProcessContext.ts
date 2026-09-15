@@ -66,6 +66,7 @@ export function useGetAdHocInternalProcessContext() {
           graphRunId,
           rootRunId,
         },
+        graphCallPath: Object.freeze(['(Ad-hoc Process)']),
         executionCache: new Map(),
         externalFunctions: {},
         getGlobal: undefined!,

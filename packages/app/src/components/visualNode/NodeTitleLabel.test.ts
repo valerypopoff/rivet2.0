@@ -50,6 +50,14 @@ test('NodeTitleLabel gives every Knowledge node a database icon', () => {
   }
 });
 
+test('NodeTitleLabel gives Graph Call Path a bug icon before the title', () => {
+  const html = renderNodeTitle('graphCallPath', 'Graph Call Path');
+  assert.match(html, /^<span class="title-text-label"><svg[^>]*class="debug-node-title-icon"/);
+  assert.match(html, /aria-hidden="true"/);
+  assert.match(html, /d="m16 4-2\.251 2\.251/);
+  assert.match(html, />Graph Call Path<\/span>$/);
+});
+
 test('NodeTitleLabel gives Delegate Tool Call its lifecycle icon before the title', () => {
   const element = NodeTitleLabel({ node: { type: 'delegateFunctionCall', title: 'Delegate Tool Call' } as any });
 
@@ -69,5 +77,6 @@ test('NodeTitleLabel leaves other node titles plain', () => {
 
   assert.doesNotMatch(html, /global-node-title-icon/);
   assert.doesNotMatch(html, /knowledge-node-title-icon/);
+  assert.doesNotMatch(html, /debug-node-title-icon/);
   assert.match(html, /^<span class="title-text-label">Text<\/span>$/);
 });

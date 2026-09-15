@@ -665,6 +665,7 @@ export type AttachedNodeData = {
 export class GraphProcessor {
   // Per-instance state
   readonly #graph: NodeGraph;
+  #graphCallPath: readonly string[];
   readonly #project: Project;
   readonly #nodesById: Record<NodeId, ChartNode>;
   readonly #nodeInstances: Record<NodeId, NodeImpl<ChartNode>>;
@@ -888,6 +889,7 @@ export class GraphProcessor {
       throw new Error(`Graph ${graphId} not found in project`);
     }
     this.#graph = graph;
+    this.#graphCallPath = Object.freeze([graph.metadata?.name || '(Unnamed Graph)']);
 
     this.#includeTrace = includeTrace;
     this.#nodeInstances = {};
@@ -1652,6 +1654,7 @@ export class GraphProcessor {
       graphInputNodeValues: this.#graphInputNodeValues,
       graphInputs: this.#graphInputs,
       graphOutputs: this.#graphOutputs,
+      graphCallPath: this.#graphCallPath,
       onChatV2CallFinished: (event) => {
         try {
           const observerResult = hostChatV2Observer?.(event);
@@ -2607,6 +2610,7 @@ export class GraphProcessor {
     processor.#externalFunctions = this.#externalFunctions;
     processor.#contextValues = this.#contextValues;
     processor.#parent = sameGraphOwner;
+    processor.#graphCallPath = this.#graphCallPath;
     processor.#abortOwnerOverride = root;
     processor.#suppressGraphPartialOutputs = true;
     processor.#globals = this.#globals;
@@ -3585,6 +3589,7 @@ export class GraphProcessor {
     processor.#externalFunctions = this.#externalFunctions;
     processor.#contextValues = this.#contextValues;
     processor.#parent = this;
+    processor.#graphCallPath = this.#graphCallPath;
     processor.#abortOwnerOverride = this.#abortOwnerOverride ?? this;
     processor.#sameGraphRunOwnerOverride = this.#sameGraphRunOwnerOverride ?? this;
     processor.#globals = this.#globals;
@@ -4306,6 +4311,7 @@ export class GraphProcessor {
     processor.#externalFunctions = this.#externalFunctions;
     processor.#contextValues = this.#contextValues;
     processor.#parent = this;
+    processor.#graphCallPath = this.#graphCallPath;
     processor.#abortOwnerOverride = root;
     processor.#suppressGraphPartialOutputs = true;
     processor.#globals = this.#globals;
@@ -4891,6 +4897,10 @@ export class GraphProcessor {
     processor.#externalFunctions = this.#externalFunctions;
     processor.#contextValues = this.#contextValues;
     processor.#parent = this;
+    processor.#graphCallPath = Object.freeze([
+      ...this.#graphCallPath,
+      processor.#graph.metadata?.name || '(Unnamed Graph)',
+    ]);
     processor.#globals = this.#globals;
     processor.#storedValueController = this.#storedValueController;
     processor.#knowledgeStoreController = this.#knowledgeStoreController;

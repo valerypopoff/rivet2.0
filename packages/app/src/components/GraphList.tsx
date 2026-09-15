@@ -9,6 +9,7 @@ import { graphState } from '../state/graph.js';
 import { openOrFocusGraphSearchState, searchingGraphState } from '../state/graphBuilder.js';
 import { pluginsState } from '../state/plugins.js';
 import { projectState, savedGraphsState } from '../state/savedGraphs.js';
+import { clipboardState } from '../state/clipboard.js';
 import {
   expandedFoldersState,
   overlayOpenState,
@@ -23,6 +24,8 @@ import { useProjectNodeRegistry } from '../hooks/useProjectNodeRegistry.js';
 import { FolderItem } from './graphList/FolderItem';
 import EditPenIcon from 'majesticons/line/edit-pen-2-line.svg?react';
 import DuplicateIcon from '../assets/icons/duplicate-icon.svg?react';
+import CopyIcon from '../assets/icons/copy-icon.svg?react';
+import PasteIcon from '../assets/icons/paste-icon.svg?react';
 import DeleteIcon from 'majesticons/line/delete-bin-line.svg?react';
 import InfoIcon from 'majesticons/line/info-circle-line.svg?react';
 import PlusIcon from 'majesticons/line/plus-line.svg?react';
@@ -646,6 +649,8 @@ const graphListContextMenuIcons: GraphListContextMenuIcons = {
   collapseAllFolders: CollapseAllFoldersIcon,
   renameGraph: EditPenIcon,
   duplicateGraph: DuplicateIcon,
+  copyGraph: CopyIcon,
+  pasteGraphs: PasteIcon,
   expandAllFolders: ExpandAllFoldersIcon,
   graphInfo: InfoIcon,
   makeMainGraph: MainGraphIcon,
@@ -666,6 +671,9 @@ export const GraphList: FC = memo(() => {
     allFolderPaths,
     loadGraph,
     duplicateGraph,
+    copyGraph,
+    copyFolder,
+    pasteGraphs,
     importGraph,
     handleNew,
     handleNewFolder,
@@ -705,6 +713,7 @@ export const GraphList: FC = memo(() => {
 
   const runningGraphs = useAtomValue(runningGraphsState);
   const project = useAtomValue(projectState);
+  const clipboard = useAtomValue(clipboardState);
   const uiGraphs = Object.values(project.uiGraphs ?? {});
   const nodeLibraryItemCount = Object.keys(project.nodePrefabs ?? {}).length;
   const plugins = useAtomValue(pluginsState);
@@ -890,9 +899,19 @@ export const GraphList: FC = memo(() => {
     icons: graphListContextMenuIcons,
     isMainGraph: graphListContextMenu.target?.type === 'graph-item' ? graphListContextMenu.target.isMainGraph : false,
   });
-  const folderMenuItems = buildFolderContextMenuItems(graphListContextMenuIcons);
+  const canPasteGraphs = clipboard?.type === 'graphs';
+  const copyFolderPath =
+    graphListContextMenu.target?.type === 'graph-folder' ? graphListContextMenu.target.folderPath : undefined;
+  const folderMenuItems = buildFolderContextMenuItems({
+    icons: graphListContextMenuIcons,
+    canCopyFolder:
+      copyFolderPath != null &&
+      savedGraphs.some((savedGraph) => savedGraph.metadata?.name?.startsWith(`${copyFolderPath}/`)),
+    canPasteGraphs,
+  });
   const graphListMenuItems = buildGraphListContextMenuItems({
     hasFolders: graphListVisible.hasFolders,
+    canPasteGraphs,
     icons: graphListContextMenuIcons,
   });
   const uiGraphItemMenuItems = buildUiGraphItemContextMenuItems(graphListContextMenuIcons);
@@ -911,6 +930,9 @@ export const GraphList: FC = memo(() => {
         break;
       case 'duplicate-graph':
         duplicateGraph(target.graph);
+        break;
+      case 'copy-graph':
+        copyGraph(target.graph);
         break;
       case 'graph-info':
         setGraphPendingInfo(target.graph);
@@ -951,6 +973,12 @@ export const GraphList: FC = memo(() => {
       case 'new-folder-in-folder':
         handleNewFolder(target.folderPath);
         break;
+      case 'copy-folder':
+        copyFolder(target.folderPath);
+        break;
+      case 'paste-graphs-in-folder':
+        pasteGraphs(target.folderPath);
+        break;
       case 'delete-folder':
         handleDeleteFolder(target.folderPath);
         break;
@@ -976,6 +1004,9 @@ export const GraphList: FC = memo(() => {
         break;
       case 'import-graph':
         importGraph();
+        break;
+      case 'paste-graphs-at-root':
+        pasteGraphs();
         break;
       default:
         break;
@@ -1068,6 +1099,7 @@ export const GraphList: FC = memo(() => {
                 onGraphSelected={selectGraph}
                 onRenameItem={renameFolderItem}
                 onCancelRename={cancelRename}
+                onSetAllFoldersExpanded={setAllFoldersExpanded}
                 showUnreachableIndicators={graphListReachability.showUnreachableIndicators}
               />
             ))}

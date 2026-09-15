@@ -14,7 +14,7 @@ import { updateOpenedProjectExecutorMode } from '../utils/openedProjects.js';
 import { createLocalProjectExecutorMode } from '../utils/projectExecutorMode.js';
 import { SegmentedEditor } from './editors/SegmentedEditor';
 import { PopupMenu, PopupMenuItem } from './PopupMenu.js';
-import BugIcon from 'majesticons/line/bug-2-line.svg?react';
+import { RemoteDebuggerBugIcon } from './RemoteDebuggerBugIcon.js';
 import { useAtom, useAtomValue, useSetAtom } from 'jotai';
 
 const moreMenuStyles = css`
@@ -133,7 +133,7 @@ export const ActionBarMoreMenu: FC<{
           />
         )}
       </div>
-      <PopupMenuItem icon={BugIcon} onClick={openDebuggerPanel}>
+      <PopupMenuItem icon={RemoteDebuggerBugIcon} onClick={openDebuggerPanel}>
         Remote Debugger
       </PopupMenuItem>
       {recordingsEnabled ? <PopupMenuItem onClick={doLoadRecording}>Load Recording</PopupMenuItem> : null}

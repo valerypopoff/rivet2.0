@@ -16,6 +16,8 @@ export type GraphListContextMenuIcons = {
   collapseAllFolders: GraphListContextMenuIcon;
   renameGraph: GraphListContextMenuIcon;
   duplicateGraph: GraphListContextMenuIcon;
+  copyGraph: GraphListContextMenuIcon;
+  pasteGraphs: GraphListContextMenuIcon;
   expandAllFolders: GraphListContextMenuIcon;
   graphInfo: GraphListContextMenuIcon;
   makeMainGraph: GraphListContextMenuIcon;
@@ -141,6 +143,11 @@ export function buildGraphItemContextMenuItems(options: {
       icon: icons.duplicateGraph,
     },
     {
+      id: 'copy-graph',
+      label: 'Copy graph',
+      icon: icons.copyGraph,
+    },
+    {
       id: 'graph-info',
       label: 'Graph info',
       icon: icons.graphInfo,
@@ -165,7 +172,12 @@ export function buildGraphItemContextMenuItems(options: {
   ];
 }
 
-export function buildFolderContextMenuItems(icons: GraphListContextMenuIcons): GraphListContextMenuItem[] {
+export function buildFolderContextMenuItems(options: {
+  icons: GraphListContextMenuIcons;
+  canCopyFolder: boolean;
+  canPasteGraphs: boolean;
+}): GraphListContextMenuItem[] {
+  const { icons, canCopyFolder, canPasteGraphs } = options;
   return [
     {
       id: 'rename-folder',
@@ -182,6 +194,8 @@ export function buildFolderContextMenuItems(icons: GraphListContextMenuIcons): G
       label: 'New Folder',
       icon: icons.newFolder,
     },
+    ...(canCopyFolder ? [{ id: 'copy-folder', label: 'Copy folder', icon: icons.copyGraph }] : []),
+    ...(canPasteGraphs ? [{ id: 'paste-graphs-in-folder', label: 'Paste graphs', icon: icons.pasteGraphs }] : []),
     {
       id: 'collapse-all-folders',
       label: 'Collapse all folders',
@@ -205,9 +219,10 @@ export function buildFolderContextMenuItems(icons: GraphListContextMenuIcons): G
 
 export function buildGraphListContextMenuItems(options: {
   hasFolders: boolean;
+  canPasteGraphs: boolean;
   icons: GraphListContextMenuIcons;
 }): GraphListContextMenuItem[] {
-  const { hasFolders, icons } = options;
+  const { hasFolders, canPasteGraphs, icons } = options;
 
   return [
     {
@@ -225,6 +240,7 @@ export function buildGraphListContextMenuItems(options: {
       label: 'Import Graph...',
       icon: icons.importGraph,
     },
+    ...(canPasteGraphs ? [{ id: 'paste-graphs-at-root', label: 'Paste graphs', icon: icons.pasteGraphs }] : []),
     ...(hasFolders
       ? [
           {

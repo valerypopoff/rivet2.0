@@ -4,9 +4,7 @@ import { type FC, useCallback, useEffect, useMemo } from 'react';
 
 import { useExecutorSessionRuntime, type RivetWorkspaceHost } from '../../app/src/host';
 import { graphRunningState } from '../../app/src/state/dataFlow';
-import {
-  executorSessionRevisionState,
-} from '../../app/src/state/execution';
+import { executorSessionRevisionState } from '../../app/src/state/execution';
 import { openOrFocusGraphSearchState, searchingGraphState } from '../../app/src/state/graphBuilder';
 import {
   loadedProjectState,
@@ -18,6 +16,7 @@ import {
 import { selectedExecutorState } from '../../app/src/state/settings';
 import { overlayOpenState } from '../../app/src/state/ui';
 import { postMessageToDashboard } from '../../studio-server-shared/editor-bridge';
+import { hostedEditorInstanceId } from '../io/hostedProjectRevisionTracker';
 import { useEditorBridgeInteractions } from './useEditorBridgeInteractions';
 import { useEditorCommandBridge } from './useEditorCommandBridge';
 import { useOpenWorkflowProject } from './useOpenWorkflowProject';
@@ -46,9 +45,13 @@ export const EditorMessageBridge: FC<EditorMessageBridgeProps> = ({ savedProject
   const openOverlay = useAtomValue(overlayOpenState);
   const selectedExecutor = useAtomValue(selectedExecutorState);
   const setSearching = useSetAtom(searchingGraphState);
-  const openedProjectPaths = useMemo(() => projects.openedProjectsSortedIds
-    .map((projectId) => projects.openedProjects[projectId]?.fsPath)
-    .filter((projectPath): projectPath is string => Boolean(projectPath)), [projects]);
+  const openedProjectPaths = useMemo(
+    () =>
+      projects.openedProjectsSortedIds
+        .map((projectId) => projects.openedProjects[projectId]?.fsPath)
+        .filter((projectPath): projectPath is string => Boolean(projectPath)),
+    [projects],
+  );
   const preview = usePreviewProjectLifecycle({
     currentProjectId: currentProject.metadata.id as ProjectId | undefined,
     executorTargetType: executorSessionRuntime.getRuntimeState().target?.type,
@@ -89,7 +92,7 @@ export const EditorMessageBridge: FC<EditorMessageBridgeProps> = ({ savedProject
   }, [preview.promotePreviewProjectById, savedProjectSignal]);
 
   useEffect(() => {
-    postMessageToDashboard({ type: 'editor-ready' });
+    postMessageToDashboard({ type: 'editor-ready', editorInstanceId: hostedEditorInstanceId });
   }, []);
 
   useEffect(() => {
@@ -100,16 +103,11 @@ export const EditorMessageBridge: FC<EditorMessageBridgeProps> = ({ savedProject
       path,
       hasUnsavedChanges: Boolean(
         projectId &&
-        path &&
-        (projectUnsavedChanges[projectId] === true || projectDataUnsavedChanges[projectId] === true),
+          path &&
+          (projectUnsavedChanges[projectId] === true || projectDataUnsavedChanges[projectId] === true),
       ),
     });
-  }, [
-    currentProject.metadata.id,
-    loadedProject.path,
-    projectDataUnsavedChanges,
-    projectUnsavedChanges,
-  ]);
+  }, [currentProject.metadata.id, loadedProject.path, projectDataUnsavedChanges, projectUnsavedChanges]);
 
   return null;
 };

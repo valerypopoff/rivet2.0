@@ -4,6 +4,8 @@ import {
   isEditorToDashboardEvent,
   isValidBridgeOrigin,
   type WorkflowProjectBindingReconciliationResult,
+  type HostedProjectConflictSnapshot,
+  type HostedProjectReconciliationContext,
   postMessageToEditor,
 } from '../../studio-server-shared/editor-bridge';
 import {
@@ -21,7 +23,9 @@ type UseEditorBridgeEventsOptions = {
   iframeRef: RefObject<HTMLIFrameElement | null>;
   onActiveWorkflowProjectPathChange: (path: string) => void;
   onActiveProjectUnsavedChangesChange: (path: string, hasUnsavedChanges: boolean) => void;
-  onEditorReady: () => void;
+  onEditorReady: (editorInstanceId: string) => void;
+  onProjectConflicts: (snapshot: HostedProjectConflictSnapshot) => void;
+  onReconciliationCaptured: (context: HostedProjectReconciliationContext, requestId: string) => void;
   onOpenProjectCountChange: (count: number) => void;
   onProjectOpenFailed: (error: string, requestId?: string) => void;
   onProjectOpened: (path: string, requestId?: string) => void;
@@ -42,6 +46,8 @@ export function useEditorBridgeEvents(options: UseEditorBridgeEventsOptions) {
     onActiveWorkflowProjectPathChange,
     onActiveProjectUnsavedChangesChange,
     onEditorReady,
+    onProjectConflicts,
+    onReconciliationCaptured,
     onOpenProjectCountChange,
     onProjectOpenFailed,
     onProjectOpened,
@@ -149,7 +155,13 @@ export function useEditorBridgeEvents(options: UseEditorBridgeEventsOptions) {
 
       switch (event.data.type) {
         case 'editor-ready':
-          onEditorReady();
+          onEditorReady(event.data.editorInstanceId);
+          break;
+        case 'workflow-project-conflicts':
+          onProjectConflicts(event.data.snapshot);
+          break;
+        case 'workflow-project-reconciliation-captured':
+          onReconciliationCaptured(event.data.context, event.data.requestId);
           break;
         case 'request-active-workflow-project-rename':
           onRequestActiveWorkflowProjectRename();
@@ -177,7 +189,7 @@ export function useEditorBridgeEvents(options: UseEditorBridgeEventsOptions) {
           break;
         case 'workflow-project-bindings-reconciled':
           onWorkflowProjectBindingsReconciled(
-            { changes: event.data.changes, contentChanges: event.data.contentChanges },
+            { changes: event.data.changes, status: event.data.status },
             event.data.requestId,
           );
           break;
@@ -201,6 +213,8 @@ export function useEditorBridgeEvents(options: UseEditorBridgeEventsOptions) {
     onActiveProjectUnsavedChangesChange,
     onActiveWorkflowProjectPathChange,
     onEditorReady,
+    onProjectConflicts,
+    onReconciliationCaptured,
     onOpenProjectCountChange,
     onProjectOpenFailed,
     onProjectOpened,

@@ -375,7 +375,7 @@ export function useContextMenuConfiguration() {
                 id: 'paste',
                 label: 'Paste',
                 icon: PasteIcon,
-                conditional: (context) => isPasteCommandBlankAreaContext(context) && clipboard !== undefined,
+                conditional: (context) => isPasteCommandBlankAreaContext(context) && clipboard?.type === 'nodes',
               },
             ],
           },

@@ -10,6 +10,8 @@ import { type NodeGraph } from '@valerypopoff/rivet2-core';
 import { useStableCallback } from './useStableCallback.js';
 import { expandedFoldersState } from '../state/ui';
 import { toast } from 'react-toastify';
+import { clipboardState } from '../state/clipboard.js';
+import { buildPastedGraphs, copyFolderToClipboard, copyGraphToClipboard } from '../domain/graphEditing/graphClipboardActions.js';
 import { useFuseSearch } from './useFuseSearch';
 import {
   buildUniqueNewFolderPath,
@@ -26,6 +28,8 @@ export function useGraphOperations() {
   const setProjectMetadata = useSetAtom(projectMetadataState);
   const [savedGraphs, setSavedGraphs] = useAtom(savedGraphsState);
   const [graph, setGraph] = useAtom(graphState);
+  const clipboard = useAtomValue(clipboardState);
+  const setClipboard = useSetAtom(clipboardState);
 
   const [searchText, setSearchText] = useState('');
 
@@ -51,6 +55,30 @@ export function useGraphOperations() {
   const loadGraph = useLoadGraph();
   const duplicateGraph = useDuplicateGraph();
   const importGraph = useImportGraph();
+
+  const copyGraph = useStableCallback((savedGraph: NodeGraph) => {
+    const copied = copyGraphToClipboard(savedGraph, graph);
+    if (copied) setClipboard(copied);
+  });
+
+  const copyFolder = useStableCallback((folderPath: string) => {
+    const copied = copyFolderToClipboard(folderPath, savedGraphs, graph);
+    if (copied) setClipboard(copied);
+  });
+
+  const pasteGraphs = useStableCallback((destinationFolderPath?: string) => {
+    if (clipboard?.type !== 'graphs') return;
+
+    setSavedGraphs((prev) => [
+      ...prev,
+      ...buildPastedGraphs({
+        clipboard,
+        destinationFolderPath,
+        destinationGraphs: prev,
+        destinationFolderPaths: allFolderPaths,
+      }),
+    ]);
+  });
 
   const setExpandedFolders = useSetAtom(expandedFoldersState);
   const startRename = useStableCallback((folderItemName: string) => {
@@ -193,6 +221,9 @@ export function useGraphOperations() {
     allFolderPaths,
     loadGraph,
     duplicateGraph,
+    copyGraph,
+    copyFolder,
+    pasteGraphs,
     importGraph,
     handleNew,
     handleNewFolder,

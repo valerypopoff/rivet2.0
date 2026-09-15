@@ -38,6 +38,7 @@ import {
 import { deserializeHostedProjectPayloadAsync } from '../overrides/utils/deserializeProject';
 import {
   assertHostedProjectRevisionCanSave,
+  beginHostedProjectSave,
   bindHostedProjectRevision,
   clearHostedProjectRevisionPath as clearTrackedHostedProjectRevisionPath,
   getHostedProjectExpectedRevision,
@@ -311,24 +312,28 @@ export class HostedIOProvider implements IOProvider {
 
   async saveProjectData(project: Project): Promise<string | undefined> {
     assertProjectIsWritable(project, getCurrentLoadedProjectPath());
+    const finishSave = beginHostedProjectSave(project.metadata.id);
+    try {
+      const defaultName = `${project.metadata?.title ?? 'project'}.rivet-project`;
+      const filePath = prompt('Save project to server path:', await getSuggestedProjectPath(defaultName));
+      if (!filePath) return undefined;
 
-    const defaultName = `${project.metadata?.title ?? 'project'}.rivet-project`;
-    const filePath = prompt('Save project to server path:', await getSuggestedProjectPath(defaultName));
-    if (!filePath) return undefined;
+      await this.#flushEvaluationLibrary();
+      const datasets = await this.#datasetProvider.exportDatasetsForProject(project.metadata.id);
+      const saved = await apiSaveProject({
+        path: filePath,
+        contents: serializeProject(project) as string,
+        datasetsContents: datasets.length > 0 ? serializeDatasets(datasets) : null,
+        expectedRevisionId: null,
+        projectId: project.metadata.id,
+        saveIntent: 'save-as',
+      });
 
-    await this.#flushEvaluationLibrary();
-    const datasets = await this.#datasetProvider.exportDatasetsForProject(project.metadata.id);
-    const saved = await apiSaveProject({
-      path: filePath,
-      contents: serializeProject(project) as string,
-      datasetsContents: datasets.length > 0 ? serializeDatasets(datasets) : null,
-      expectedRevisionId: null,
-      projectId: project.metadata.id,
-      saveIntent: 'save-as',
-    });
-
-    bindHostedProjectRevision(project.metadata.id, saved.path, saved.revisionId ?? null);
-    return saved.path;
+      bindHostedProjectRevision(project.metadata.id, saved.path, saved.revisionId ?? null);
+      return saved.path;
+    } finally {
+      finishSave();
+    }
   }
 
   async saveProjectDataNoPrompt(project: Project, path: string): Promise<string> {
@@ -339,20 +344,24 @@ export class HostedIOProvider implements IOProvider {
     }
 
     assertHostedProjectRevisionCanSave(project.metadata.id);
+    const finishSave = beginHostedProjectSave(project.metadata.id);
+    try {
+      await this.#flushEvaluationLibrary();
+      const datasets = await this.#datasetProvider.exportDatasetsForProject(project.metadata.id);
+      const saved = await apiSaveProject({
+        path,
+        contents: serializeProject(project) as string,
+        datasetsContents: datasets.length > 0 ? serializeDatasets(datasets) : null,
+        expectedRevisionId: getHostedProjectExpectedRevision(project.metadata.id, path),
+        projectId: project.metadata.id,
+        saveIntent: 'in-place',
+      });
 
-    await this.#flushEvaluationLibrary();
-    const datasets = await this.#datasetProvider.exportDatasetsForProject(project.metadata.id);
-    const saved = await apiSaveProject({
-      path,
-      contents: serializeProject(project) as string,
-      datasetsContents: datasets.length > 0 ? serializeDatasets(datasets) : null,
-      expectedRevisionId: getHostedProjectExpectedRevision(project.metadata.id, path),
-      projectId: project.metadata.id,
-      saveIntent: 'in-place',
-    });
-
-    bindHostedProjectRevision(project.metadata.id, saved.path, saved.revisionId ?? null);
-    return saved.path;
+      bindHostedProjectRevision(project.metadata.id, saved.path, saved.revisionId ?? null);
+      return saved.path;
+    } finally {
+      finishSave();
+    }
   }
 
   async loadGraphData(callback: (graphData: NodeGraph) => void): Promise<void> {

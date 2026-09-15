@@ -8,6 +8,7 @@ import {
   useMemo,
   type FocusEvent,
   type KeyboardEvent,
+  type MouseEvent,
   memo,
   type SVGProps,
 } from 'react';
@@ -40,6 +41,7 @@ export const FolderItem: FC<{
   onGraphSelected?: (savedGraph: NodeGraph) => void;
   onRenameItem: (fullPath: string, newFullPath: string) => void;
   onCancelRename: () => void;
+  onSetAllFoldersExpanded: (isExpanded: boolean) => void;
   showUnreachableIndicators: boolean;
 }> = memo(
   ({
@@ -54,6 +56,7 @@ export const FolderItem: FC<{
     onGraphSelected,
     onRenameItem,
     onCancelRename,
+    onSetAllFoldersExpanded,
     depth,
     dragOverFolderName,
     showUnreachableIndicators,
@@ -149,7 +152,7 @@ export const FolderItem: FC<{
       }
     }, [isDragging]);
 
-    const handleItemClick = useStableCallback(() => {
+    const handleItemClick = useStableCallback((event: MouseEvent<HTMLDivElement>) => {
       if (suppressNextClickRef.current) {
         suppressNextClickRef.current = false;
         return;
@@ -162,7 +165,13 @@ export const FolderItem: FC<{
       if (item.type === 'graph') {
         onGraphSelected?.(item.graph);
       } else {
-        setExpanded(!isExpanded);
+        const nextExpanded = !isExpanded;
+
+        if (event.ctrlKey || event.metaKey) {
+          onSetAllFoldersExpanded(nextExpanded);
+        } else {
+          setExpanded(nextExpanded);
+        }
       }
     });
 
@@ -262,6 +271,7 @@ export const FolderItem: FC<{
                   onGraphSelected={onGraphSelected}
                   onRenameItem={onRenameItem}
                   onCancelRename={onCancelRename}
+                  onSetAllFoldersExpanded={onSetAllFoldersExpanded}
                   dragOverFolderName={dragOverFolderName}
                   depth={virtualDepth + 1}
                   draggingItemFolder={draggingItemFolder}

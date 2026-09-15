@@ -11,7 +11,7 @@ import type {
 import type {
   ProjectCompareSideLabels,
   WorkflowProjectBindingReconciliationResult,
-  WorkflowProjectContentChange,
+  HostedProjectReconciliationContext,
 } from '../../studio-server-shared/editor-bridge';
 import type { WorkflowProjectEditorBinding } from '../../studio-server-shared/workflow-types';
 import { isWorkflowProjectFullyUnpublished } from './projectSettingsForm';
@@ -60,11 +60,10 @@ export function useWorkflowLibraryController(options: {
   onWorkflowPathsMoved: (moves: WorkflowProjectPathMove[]) => Promise<void> | void;
   onReconcileWorkflowProjectBindings: (
     bindings: WorkflowProjectEditorBinding[],
+    context: HostedProjectReconciliationContext,
   ) => Promise<WorkflowProjectBindingReconciliationResult>;
-  onResolveWorkflowProjectContentChange: (
-    change: WorkflowProjectContentChange,
-    resolution: 'reload' | 'keep-local',
-  ) => Promise<boolean>;
+  onCaptureProjectReconciliation: () => Promise<HostedProjectReconciliationContext | null>;
+  reconciliationSequence: number;
   onWorkflowProjectOpenIntent: (path: string) => void;
   onWorkflowProjectOpenIntentCanceled: (path: string) => void;
   onActiveWorkflowProjectPathChange: (path: string) => void;
@@ -82,7 +81,8 @@ export function useWorkflowLibraryController(options: {
     onDeleteProject,
     onWorkflowPathsMoved,
     onReconcileWorkflowProjectBindings,
-    onResolveWorkflowProjectContentChange,
+    onCaptureProjectReconciliation,
+    reconciliationSequence,
     onWorkflowProjectOpenIntent,
     onWorkflowProjectOpenIntentCanceled,
     onActiveWorkflowProjectPathChange,
@@ -339,7 +339,8 @@ export function useWorkflowLibraryController(options: {
     editorReady,
     refreshFromRemoteChange,
     reconcileProjectBindings: onReconcileWorkflowProjectBindings,
-    resolveProjectContentChange: onResolveWorkflowProjectContentChange,
+    captureReconciliation: onCaptureProjectReconciliation,
+    reconciliationSequence,
   });
 
   const startSelectedProjectRename = useCallback(() => {

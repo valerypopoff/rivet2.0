@@ -18,8 +18,11 @@ import type {
   ProjectCompareSideLabels,
   WorkflowProjectBindingReconciliationResult,
   WorkflowProjectContentChange,
+  HostedProjectReconciliationContext,
+  HostedProjectConflictSnapshot,
 } from '../../studio-server-shared/editor-bridge';
 import type { WorkflowProjectEditorBinding } from '../../studio-server-shared/workflow-types';
+import { acceptConflictSnapshot, useHostedProjectConflictNotices } from './useHostedProjectConflictNotices';
 import {
   RIVET_EXECUTOR_WS_URL,
   RIVET_LATEST_WEB_APPS_BASE_PATH,
@@ -69,6 +72,11 @@ export const DashboardPage: FC = () => {
     new Map<string, (result: WorkflowProjectBindingReconciliationResult) => void>(),
   );
   const workflowProjectBindingRequestSequenceRef = useRef(0);
+  const captureResolversRef = useRef(new Map<string, (context: HostedProjectReconciliationContext | null) => void>());
+  const editorInstanceRef = useRef<string | null>(null);
+  const conflictSnapshotRef = useRef<HostedProjectConflictSnapshot | null>(null);
+  const [conflictSnapshot, setConflictSnapshot] = useState<HostedProjectConflictSnapshot | null>(null);
+  const [reconciliationSequence, setReconciliationSequence] = useState(0);
   const workflowProjectContentResolutionAckResolversRef = useRef(new Map<string, (resolved: boolean) => void>());
   const workflowProjectContentResolutionRequestSequenceRef = useRef(0);
   const pendingRecordingOpenResolversRef = useRef(
@@ -357,17 +365,36 @@ export const DashboardPage: FC = () => {
     [editorReady, postEditorCommand],
   );
 
+  const captureProjectReconciliation = useCallback((): Promise<HostedProjectReconciliationContext | null> => {
+    if (!editorReady) return Promise.resolve(null);
+    const requestId = `workflow-project-capture:${workflowProjectBindingRequestSequenceRef.current++}`;
+    return new Promise((resolve) => {
+      const timeout = window.setTimeout(() => {
+        captureResolversRef.current.delete(requestId);
+        resolve(null);
+      }, 5_000);
+      captureResolversRef.current.set(requestId, (context) => {
+        window.clearTimeout(timeout);
+        resolve(context?.editorInstanceId === editorInstanceRef.current ? context : null);
+      });
+      postEditorCommand({ type: 'capture-workflow-project-reconciliation', requestId });
+    });
+  }, [editorReady, postEditorCommand]);
+
   const reconcileWorkflowProjectBindings = useCallback(
-    (bindings: WorkflowProjectEditorBinding[]): Promise<WorkflowProjectBindingReconciliationResult> => {
-      if (!editorReady || bindings.length === 0) {
-        return Promise.resolve({ changes: [], contentChanges: [] });
+    (
+      bindings: WorkflowProjectEditorBinding[],
+      context: HostedProjectReconciliationContext,
+    ): Promise<WorkflowProjectBindingReconciliationResult> => {
+      if (!editorReady || context.editorInstanceId !== editorInstanceRef.current) {
+        return Promise.resolve({ changes: [], status: 'retry' });
       }
 
       const requestId = `workflow-project-bindings:${Date.now()}:${workflowProjectBindingRequestSequenceRef.current++}`;
       const applied = new Promise<WorkflowProjectBindingReconciliationResult>((resolve) => {
         const timeoutId = window.setTimeout(() => {
           workflowProjectBindingAckResolversRef.current.delete(requestId);
-          resolve({ changes: [], contentChanges: [] });
+          resolve({ changes: [], status: 'retry' });
         }, 5_000);
 
         workflowProjectBindingAckResolversRef.current.set(requestId, (changes) => {
@@ -376,7 +403,7 @@ export const DashboardPage: FC = () => {
         });
       });
 
-      postEditorCommand({ type: 'reconcile-workflow-project-bindings', bindings, requestId });
+      postEditorCommand({ type: 'reconcile-workflow-project-bindings', bindings, context, requestId });
       return applied;
     },
     [editorReady, postEditorCommand],
@@ -402,6 +429,7 @@ export const DashboardPage: FC = () => {
 
       postEditorCommand({
         type: 'resolve-workflow-project-content-change',
+        changeId: change.changeId,
         projectId: change.projectId,
         path: change.path,
         revisionId: change.revisionId,
@@ -413,6 +441,22 @@ export const DashboardPage: FC = () => {
     [editorReady, postEditorCommand],
   );
 
+  useHostedProjectConflictNotices(conflictSnapshot, resolveWorkflowProjectContentChange);
+
+  const resetEditorReconciliation = useCallback(() => {
+    editorInstanceRef.current = null;
+    for (const resolve of captureResolversRef.current.values()) resolve(null);
+    captureResolversRef.current.clear();
+    for (const resolve of workflowProjectBindingAckResolversRef.current.values())
+      resolve({ changes: [], status: 'retry' });
+    workflowProjectBindingAckResolversRef.current.clear();
+    for (const resolve of workflowProjectContentResolutionAckResolversRef.current.values()) resolve(false);
+    workflowProjectContentResolutionAckResolversRef.current.clear();
+    conflictSnapshotRef.current = null;
+    setConflictSnapshot(null);
+    setEditorReady(false);
+  }, []);
+
   useEffect(
     () => () => {
       clearPendingWorkflowProjectOpen();
@@ -421,9 +465,11 @@ export const DashboardPage: FC = () => {
       }
       workflowPathMoveAckResolversRef.current.clear();
       for (const resolve of workflowProjectBindingAckResolversRef.current.values()) {
-        resolve({ changes: [], contentChanges: [] });
+        resolve({ changes: [], status: 'retry' });
       }
       workflowProjectBindingAckResolversRef.current.clear();
+      for (const resolve of captureResolversRef.current.values()) resolve(null);
+      captureResolversRef.current.clear();
       for (const resolve of workflowProjectContentResolutionAckResolversRef.current.values()) {
         resolve(false);
       }
@@ -487,8 +533,26 @@ export const DashboardPage: FC = () => {
         };
       });
     },
-    onEditorReady: () => {
+    onEditorReady: (editorInstanceId) => {
+      if (editorInstanceRef.current !== editorInstanceId) {
+        resetEditorReconciliation();
+        editorInstanceRef.current = editorInstanceId;
+        setReconciliationSequence((sequence) => sequence + 1);
+      }
       setEditorReady(true);
+    },
+    onReconciliationCaptured: (context, requestId) => {
+      captureResolversRef.current.get(requestId)?.(context);
+      captureResolversRef.current.delete(requestId);
+    },
+    onProjectConflicts: (snapshot) => {
+      const previous = conflictSnapshotRef.current;
+      const accepted = acceptConflictSnapshot(editorInstanceRef.current, previous, snapshot);
+      if (accepted === previous) return;
+      conflictSnapshotRef.current = accepted;
+      setConflictSnapshot(accepted);
+      if (accepted?.recheckSequence !== previous?.recheckSequence)
+        setReconciliationSequence((sequence) => sequence + 1);
     },
     onOpenProjectCountChange: (count) => {
       setOpenProjectCount(count);
@@ -565,7 +629,8 @@ export const DashboardPage: FC = () => {
           onDeleteProject={handleDeleteProject}
           onWorkflowPathsMoved={handleWorkflowPathsMoved}
           onReconcileWorkflowProjectBindings={reconcileWorkflowProjectBindings}
-          onResolveWorkflowProjectContentChange={resolveWorkflowProjectContentChange}
+          onCaptureProjectReconciliation={captureProjectReconciliation}
+          reconciliationSequence={reconciliationSequence}
           onWorkflowProjectOpenIntent={handleWorkflowProjectOpenIntent}
           onWorkflowProjectOpenIntentCanceled={handleWorkflowProjectOpenIntentCanceled}
           onActiveWorkflowProjectPathChange={setActiveWorkflowProjectPath}
@@ -602,7 +667,7 @@ export const DashboardPage: FC = () => {
         <iframe
           ref={iframeRef}
           src="/?editor"
-          onLoad={() => setEditorReady(false)}
+          onLoad={resetEditorReconciliation}
           className={`dashboard-editor-frame ${openProjectCount === 0 ? 'dashboard-editor-frame-hidden' : ''}${sidebarResizing ? ' dashboard-editor-frame-resizing' : ''}`}
         />
       </main>

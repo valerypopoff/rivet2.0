@@ -38,6 +38,7 @@ test('Add node menu keeps explicitly retired types and the Convenience category 
       'Logic',
       'Input/Output',
       'Advanced',
+      'Debug',
       'Custom',
       'MCP',
     ],
