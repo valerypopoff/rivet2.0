@@ -26,7 +26,9 @@ HTTP body lifecycle regressions live in `src/tests/body-admission.test.ts` in th
   - is the fastest complete check that workspace exports and generated outputs
     line up after a cross-package change
 - `yarn studio-server:setup:k8s-tools`
-  - downloads the pinned Helm release into `.data/tools/helm/`
+  - uses `RIVET_K8S_HELM_BIN`, system Helm on PATH, or an existing cached copy without a network request
+  - only when none is available, downloads the pinned Helm release into `.data/tools/helm/` and verifies its SHA-256 checksum
+  - retries transient download failures with a bounded timeout; failures report the asset URL and underlying cause
   - use this when you want Kubernetes verification or the local Kubernetes launcher to work without a system Helm install
 
 ## Versioning

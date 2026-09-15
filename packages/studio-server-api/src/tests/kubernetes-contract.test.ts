@@ -1,12 +1,95 @@
 import { execFileSync } from 'node:child_process';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import test from 'node:test';
 
 import { readRepoFile, repoRoot } from './helpers/repo-contract-helpers.js';
 
 type K8sToolsModule = {
   resolveHelmBinOrThrow(rootDir: string, options?: { env?: NodeJS.ProcessEnv; launcherName?: string }): string;
+  fetchHelmAsset<T>(
+    url: string,
+    readBody: (response: { text(): Promise<string> }) => Promise<T>,
+    options: {
+      fetchImpl: () => Promise<{ ok: boolean; status: number; text(): Promise<string> }>;
+      retryDelay: () => Promise<void>;
+    },
+  ): Promise<T>;
 };
+
+test('Kubernetes tools setup reuses Helm on PATH without fetching a cached release', () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'rivet-helm-path-test-'));
+  try {
+    const helmName = process.platform === 'win32' ? 'helm.exe' : 'helm';
+    const helmPath = path.join(tempDir, helmName);
+    fs.writeFileSync(helmPath, '');
+    const output = execFileSync(
+      process.execPath,
+      [path.join(repoRoot, 'deploy/studio-server/scripts/ensure-k8s-tools.mjs')],
+      {
+        cwd: tempDir,
+        env: {
+          ...process.env,
+          RIVET_K8S_HELM_BIN: '',
+          PATH: `${tempDir}${path.delimiter}${process.env.PATH ?? ''}`,
+        },
+        encoding: 'utf8',
+        timeout: 5_000,
+      },
+    );
+    assert.match(output, /Helm ready from path/);
+    assert.equal(fs.existsSync(path.join(tempDir, '.data')), false);
+  } finally {
+    assert.ok(path.resolve(tempDir).startsWith(path.resolve(os.tmpdir()) + path.sep));
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test('Helm asset fetch retries transient failures but reports permanent failures immediately', async () => {
+  const moduleUrl = new URL('../../../../deploy/studio-server/scripts/lib/k8s-tools.mjs', import.meta.url);
+  const { fetchHelmAsset } = (await import(moduleUrl.href)) as K8sToolsModule;
+  let attempts = 0;
+  const result = await fetchHelmAsset('https://get.helm.sh/test', (response) => response.text(), {
+    fetchImpl: async () => {
+      attempts += 1;
+      if (attempts < 3) {
+        throw new Error('simulated DNS failure');
+      }
+      return { ok: true, status: 200, text: async () => 'verified bytes' };
+    },
+    retryDelay: async () => {},
+  });
+  assert.equal(result, 'verified bytes');
+  assert.equal(attempts, 3);
+
+  attempts = 0;
+  await assert.rejects(
+    fetchHelmAsset('https://get.helm.sh/missing', (response) => response.text(), {
+      fetchImpl: async () => {
+        attempts += 1;
+        return { ok: false, status: 404, text: async () => '' };
+      },
+      retryDelay: async () => {},
+    }),
+    /get\.helm\.sh\/missing.*HTTP 404/,
+  );
+  assert.equal(attempts, 1);
+
+  attempts = 0;
+  await assert.rejects(
+    fetchHelmAsset('https://get.helm.sh/offline', (response) => response.text(), {
+      fetchImpl: async () => {
+        attempts += 1;
+        throw new Error('simulated connection failure');
+      },
+      retryDelay: async () => {},
+    }),
+    /get\.helm\.sh\/offline after 3 attempt\(s\): simulated connection failure/,
+  );
+  assert.equal(attempts, 3);
+});
 
 async function resolveHelmBin(): Promise<string> {
   const moduleUrl = new URL('../../../../deploy/studio-server/scripts/lib/k8s-tools.mjs', import.meta.url);
