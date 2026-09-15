@@ -715,7 +715,12 @@ test('published workflow responds with any outputs and records the run asynchron
         ),
       );
 
-      assert.equal(runsResponse.runs[0]?.durationMs, workflowExecuteMs);
+      const recordingDurationMs = runsResponse.runs[0]?.durationMs;
+      assert.equal(typeof recordingDurationMs, 'number');
+      // The header captures foreground-output readiness; the recording ends only
+      // after the processor's complete run has settled. Compare rounded values
+      // because the header itself is rounded to an integer millisecond.
+      assert.ok(Math.round(recordingDurationMs) >= workflowExecuteMs);
     });
   });
 });
