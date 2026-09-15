@@ -1,6 +1,6 @@
 {
   "formatVersion": 1,
-  "catalogFingerprint": "fnv1a64:8f6e1006504a1e86",
+  "catalogFingerprint": "fnv1a64:3c03871225880ee9",
   "entries": [
     {
       "authoringChoiceId": "registered:abortGraph",
@@ -1804,7 +1804,7 @@
       "authoringChoiceId": "registered:setGlobal",
       "nodeType": "setGlobal",
       "displayName": "Set Global",
-      "description": "The Set Global Node is used to set a global value that is shared across all graphs and subgraphs during an execution in Rivet. This can be useful for storing and retrieving values that need to be accessed by multiple graphs. On the canvas, the node title shows a downward arrow icon so it is easier to distinguish from Get Global. This icon is only a visual title cue. The Set Global Node allows you to specify the ID of the global value and the value itself. The ID can be either a fixed string or an input value. The value can be of any data type. Fixed IDs and configured project global variables in Project settings → General appear in the Get Global node's search field so you can choose them without retyping. A Set Global node can overwrite a configured project global variable during its run; its Previous Value then returns the automatically assigned value. Interpolation capable nodes can r",
+      "description": "The Set Global Node is used to set a global value that is shared across all graphs and subgraphs during an execution in Rivet. This can be useful for storing and retrieving values that need to be accessed by multiple graphs. On the canvas, the node title shows a downward arrow icon so it is easier to distinguish from Get Global. This icon is only a visual title cue. The Set Global Node allows you to specify the ID of the global value and the value itself. The ID can be either a fixed string or an input value. The value can be of any data type. Fixed IDs and configured project global variables in Project settings → General appear as suggestions in Get Global's searchable Variable ID field so you can choose them without retyping. A Set Global node can overwrite a configured project global variable during its run; its Previous Value then returns the automatically assigned value. Interpolati",
       "aliases": [],
       "capabilities": {
         "createWithDefaults": true,
