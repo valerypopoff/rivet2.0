@@ -1,4 +1,4 @@
-import { type NodeConnection, type ChartNode } from '@valerypopoff/rivet2-core';
+import { type NodeConnection, type ChartNode, type NodeGraph } from '@valerypopoff/rivet2-core';
 import { atom } from 'jotai';
 
 export type NodesClipboardItem = {
@@ -7,6 +7,11 @@ export type NodesClipboardItem = {
   connections: NodeConnection[];
 };
 
-export type ClipboardItem = NodesClipboardItem;
+export type GraphsClipboardItem = {
+  type: 'graphs';
+  graphs: NodeGraph[];
+} & ({ source: 'graph' } | { source: 'folder'; sourceFolderPath: string });
+
+export type ClipboardItem = NodesClipboardItem | GraphsClipboardItem;
 
 export const clipboardState = atom<ClipboardItem | undefined>(undefined);

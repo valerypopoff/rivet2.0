@@ -1,6 +1,12 @@
 import type { Page } from '@playwright/test';
 
 export type SeedHostedEditorProjectOptions = {
+  extraOpenedProjects?: Array<{
+    graphId: string;
+    projectId: string;
+    projectPath: string;
+    title: string;
+  }>;
   extraGraphs?: Array<{
     connections?: unknown[];
     id: string;
@@ -81,8 +87,14 @@ export async function seedHostedEditorProject(page: Page, options: SeedHostedEdi
               fsPath: seed.projectPath,
               openedGraph: seed.graphId,
             },
+            ...Object.fromEntries((seed.extraOpenedProjects ?? []).map((opened) => [opened.projectId, {
+              projectId: opened.projectId,
+              title: opened.title,
+              fsPath: opened.projectPath,
+              openedGraph: opened.graphId,
+            }])),
           },
-          openedProjectsSortedIds: [seed.projectId],
+          openedProjectsSortedIds: [seed.projectId, ...(seed.extraOpenedProjects ?? []).map((opened) => opened.projectId)],
         },
         openedProjectSnapshotsState: {},
       }),

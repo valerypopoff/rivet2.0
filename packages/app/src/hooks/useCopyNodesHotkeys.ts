@@ -6,6 +6,7 @@ import { useCopyNodes } from './useCopyNodes';
 import { usePasteNodes } from './usePasteNodes';
 import { useDuplicateNode } from './useDuplicateNode';
 import { useDeleteNodesCommand } from '../commands/deleteNodeCommand';
+import { clipboardState } from '../state/clipboard.js';
 import { matchesKeyboardShortcut, type KeyboardShortcutEvent } from '../utils/keyboardShortcutMatcher.js';
 
 export type NodeClipboardShortcut = 'copy' | 'cut' | 'duplicate' | 'paste';
@@ -36,6 +37,7 @@ export function getNodeClipboardShortcut(event: KeyboardShortcutEvent): NodeClip
 export function useCopyNodesHotkeys() {
   const selectedNodeIds = useAtomValue(selectedNodesState);
   const editingNodeId = useAtomValue(editingNodeState);
+  const clipboard = useAtomValue(clipboardState);
 
   const mousePosition = useAtomValue(lastMousePositionState);
 
@@ -65,7 +67,7 @@ export function useCopyNodesHotkeys() {
       deleteNodes({ nodeIds: selectedNodeIds });
     }
 
-    if (shortcut === 'paste' && !editingNodeId) {
+    if (shortcut === 'paste' && !editingNodeId && clipboard?.type === 'nodes') {
       e.preventDefault();
       e.stopPropagation();
 

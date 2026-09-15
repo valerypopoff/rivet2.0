@@ -17,6 +17,8 @@ const icons: GraphListContextMenuIcons = {
   collapseAllFolders: TestIcon,
   renameGraph: TestIcon,
   duplicateGraph: TestIcon,
+  copyGraph: TestIcon,
+  pasteGraphs: TestIcon,
   expandAllFolders: TestIcon,
   graphInfo: TestIcon,
   makeMainGraph: TestIcon,
@@ -51,11 +53,11 @@ describe('graphListContextMenu', () => {
 
     assert.deepEqual(
       items.map((item) => item.id),
-      ['rename-graph', 'duplicate-graph', 'graph-info', 'make-main-graph', 'delete-graph'],
+      ['rename-graph', 'duplicate-graph', 'copy-graph', 'graph-info', 'make-main-graph', 'delete-graph'],
     );
-    assert.equal(items[3]?.separatorBefore, true);
-    assert.equal(items[4]?.tone, 'danger');
     assert.equal(items[4]?.separatorBefore, true);
+    assert.equal(items[5]?.tone, 'danger');
+    assert.equal(items[5]?.separatorBefore, true);
   });
 
   it('omits make-main for the current main graph without reordering the rest', () => {
@@ -63,32 +65,35 @@ describe('graphListContextMenu', () => {
 
     assert.deepEqual(
       items.map((item) => item.id),
-      ['rename-graph', 'duplicate-graph', 'graph-info', 'delete-graph'],
+      ['rename-graph', 'duplicate-graph', 'copy-graph', 'graph-info', 'delete-graph'],
     );
-    assert.equal(items[3]?.tone, 'danger');
-    assert.equal(items[3]?.separatorBefore, true);
+    assert.equal(items[4]?.tone, 'danger');
+    assert.equal(items[4]?.separatorBefore, true);
   });
 
   it('builds folder and list root menus in the existing visible order', () => {
     assert.deepEqual(
-      buildFolderContextMenuItems(icons).map((item) => item.id),
+      buildFolderContextMenuItems({ icons, canCopyFolder: true, canPasteGraphs: true }).map((item) => item.id),
       [
         'rename-folder',
         'new-graph-in-folder',
         'new-folder-in-folder',
+        'copy-folder',
+        'paste-graphs-in-folder',
         'collapse-all-folders',
         'expand-all-folders',
         'delete-folder',
       ],
     );
     assert.deepEqual(
-      buildGraphListContextMenuItems({ hasFolders: true, icons }).map((item) => item.id),
-      ['new-graph', 'new-folder', 'import-graph', 'collapse-all-folders', 'expand-all-folders'],
+      buildGraphListContextMenuItems({ hasFolders: true, canPasteGraphs: true, icons }).map((item) => item.id),
+      ['new-graph', 'new-folder', 'import-graph', 'paste-graphs-at-root', 'collapse-all-folders', 'expand-all-folders'],
     );
     assert.deepEqual(
-      buildGraphListContextMenuItems({ hasFolders: false, icons }).map((item) => item.id),
+      buildGraphListContextMenuItems({ hasFolders: false, canPasteGraphs: false, icons }).map((item) => item.id),
       ['new-graph', 'new-folder', 'import-graph'],
     );
+    assert.equal(buildFolderContextMenuItems({ icons, canCopyFolder: false, canPasteGraphs: false }).some((item) => item.id === 'copy-folder'), false);
   });
 
   it('resolves context-menu targets from captured DOM datasets and saved graphs', () => {

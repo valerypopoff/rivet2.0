@@ -1,4 +1,4 @@
-import { type ChartNode, type GraphId, type Project } from '@valerypopoff/rivet2-core';
+import { type ChartNode, type GraphId, type NodeGraph, type Project } from '@valerypopoff/rivet2-core';
 
 type TemplateProject = Pick<Project, 'metadata' | 'graphs'>;
 
@@ -15,7 +15,12 @@ export function remapTemplateProjectGraphIds(project: TemplateProject, graphIdMa
     project.metadata.mainGraphId = remapGraphId(project.metadata.mainGraphId, graphIdMapping);
   }
 
-  for (const graph of Object.values(project.graphs)) {
+  remapGraphNodeReferences(Object.values(project.graphs), graphIdMapping);
+}
+
+/** Remaps references within copied graphs without changing destination project metadata. */
+export function remapGraphNodeReferences(graphs: readonly NodeGraph[], graphIdMapping: GraphIdMapping): void {
+  for (const graph of graphs) {
     for (const node of graph.nodes) {
       remapNodeGraphIds(node, graphIdMapping);
     }
@@ -28,10 +33,11 @@ function remapNodeGraphIds(node: ChartNode, graphIdMapping: GraphIdMapping): voi
   for (const variant of (node.variants ?? []) as VariantLike[]) {
     remapNodeData(node.type, variant.data as Record<string, unknown>, graphIdMapping);
   }
-
 }
 
 function remapNodeData(nodeType: string, data: Record<string, unknown>, graphIdMapping: GraphIdMapping): void {
+  if (data == null || typeof data !== 'object') return;
+
   switch (nodeType) {
     case 'subGraph':
     case 'graphReference':
@@ -72,12 +78,12 @@ function remapToolHandlers(value: unknown, graphIdMapping: GraphIdMapping): void
   }
 
   for (const handler of value as ToolHandler[]) {
-    if (typeof handler.value === 'string') {
+    if (handler && typeof handler.value === 'string') {
       handler.value = remapGraphId(handler.value, graphIdMapping);
     }
   }
 }
 
 function remapGraphId(graphId: GraphId, graphIdMapping: GraphIdMapping): GraphId {
-  return graphIdMapping[graphId] ?? graphId;
+  return Object.hasOwn(graphIdMapping, graphId) ? graphIdMapping[graphId]! : graphId;
 }
