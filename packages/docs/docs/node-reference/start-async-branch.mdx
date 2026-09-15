@@ -9,7 +9,7 @@ sidebar_label: Start Async Branch
 The Start Async Branch node lets the foreground path continue without waiting
 for one downstream branch. Rivet still owns that branch until the root graph run
 ends, so execution events, cancellation, and errors remain part of the same run.
-Web-app actions return an already-ready graph result without waiting for the
+Web-app actions and Rivet Server workflow endpoints return an already-ready graph result without waiting for the
 async branch, while the processor remains running until that branch settles.
 
 Use this node for side effects that should overlap the foreground work, such as
@@ -50,9 +50,19 @@ payload visible at the scheduling boundary.
 
 If an async-branch node fails, the foreground path is not retroactively
 stopped. The root graph run reports the error when all foreground and async work
-has settled. If a web app already displayed its foreground result, a later async
+has settled. If a web app or endpoint already returned its foreground result, a later async
 error cannot retract that reply. Stopping the root run also stops its async
 branches.
+
+For workflow endpoints, the response is sent when foreground processing completes,
+not merely when the last Graph Output receives a value. The server keeps running
+the async branch and saves the complete recording afterward. A successful HTTP
+response therefore does not guarantee that later async work succeeded; check the
+run recording for its final outcome. Response timing and cost exclude work that
+finishes later. The run still occupies server execution capacity until it ends.
+
+These branches do not survive a server crash or forced termination. Use them for
+side effects that may safely happen after the reply, not as a durable job queue.
 
 Browser-backed Stored Value patches are returned with the web-app action result,
 so a Set Stored Value that runs later in an async branch cannot be persisted by

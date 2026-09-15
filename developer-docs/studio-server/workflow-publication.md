@@ -10,6 +10,78 @@ In the current deployment model:
 
 In `RIVET_API_PROFILE=combined`, the same API process serves both surfaces. In split deployments, `RIVET_API_PROFILE=control` and `RIVET_API_PROFILE=execution` separate them.
 
+## Endpoint responses and async completion
+
+Published, internal-published, and latest workflow endpoints enable Core's
+`returnWhenGraphOutputsReady` mode. They send the immutable foreground output
+snapshot once the foreground scheduler settles, without waiting for root-owned
+Start Async Branch work. Merely assigning every Graph Output is not sufficient:
+other foreground work and required Watch/Stop boundaries must settle too.
+Core also permits an early response while a Watch without a Stop drains, because
+that Watch cannot release additional foreground work through a Stop boundary.
+
+`executeWorkflowEndpoint` then awaits `waitForRunCompletion()` inside the same
+request handler. Do not replace that await with fire-and-forget execution: the
+outer handler owns the published execution permit, active HTTP execution registry
+entry, and retained parsed-body reservation. These remain held until the complete
+run settles, even when the client has received its response or disconnected.
+Normal shutdown drains that registry; its deadline aborts remaining branches.
+
+Response duration, execution debug headers, telemetry, and returned cost describe
+the foreground response point. Recordings are enqueued exactly once after full
+completion and include tail events, final status, and full execution duration.
+Late failures are logged with correlation and endpoint identity and recorded as
+failures; they cannot replace a response already sent. Pre-response execution
+failures retain the existing HTTP error handling. Response serialization/transport
+failures must not prematurely release a running processor. Recording-disabled runs
+still retain the same execution ownership.
+
+This is process-owned continuation, not durable job delivery. A crash or forced
+termination can interrupt remaining side effects. Required work must stay on the
+foreground path or use a separately durable job service. No authentication,
+publication resolution, storage schema, or execution-capacity bypass is added.
+
+Verification: `workflow-async-response.test.ts` exercises all three HTTP routes
+against a gated nested branch, including success, failure, shutdown cancellation,
+recording-disabled execution, admission retention, finalized recording content,
+replay, and live latest-debugger terminal delivery. Keep the existing
+Core async-branch, latest-debugger, recording HTTP, and active-execution tests in
+the regression set. The suite mounts `createApiApp`, so body ownership and health
+checks exercise the actual application middleware. It checks correlated late-error
+logs and orders async node events after `graphOutputsReady` and before completion.
+
+Additional acceptance entrypoints:
+
+- `yarn workspace @valerypopoff/rivet-studio-server-api run test:files src/tests/workflow-async-process.test.ts`
+  starts isolated API processes through the real `server.ts` entrypoint. It checks
+  foreground errors, response-writing failure with and without disconnect,
+  concurrent request/recording isolation, and shutdown both within and beyond the
+  grace period. Persisted metadata is inspected after process exit, proving that
+  shutdown drained recording persistence. On Windows the fixture delivers SIGTERM
+  through Node's signal event, invoking the installed production shutdown handler.
+- `yarn workspace @valerypopoff/rivet-studio-server-api run test:async-managed`
+  creates disposable loopback PostgreSQL and release-pinned MinIO containers,
+  migrates a fresh database, and exercises all three endpoint families through
+  the same real API process fixture. It reads and replays the persisted object
+  artifacts, including late failure. No deployment database or bucket is accepted.
+  This command is included in CI deployment contracts and requires Docker.
+  Its MinIO default matches the existing managed-services compose fixture.
+  `RIVET_ASYNC_TEST_MINIO_IMAGE` can select a locally cached image by digest when
+  the registry is unreachable; this affects only the disposable test service.
+- `PLAYWRIGHT_HEADLESS=1 PLAYWRIGHT_SLOW_MO=0 yarn studio-server:ui:observe workflow-async-recording.spec.ts`
+  uses the hosted UI and a disposable API. It receives the full HTTP response
+  while the async HTTP Call is gated, releases the branch, and opens the resulting
+  recording to display its final Text output. API requests are forwarded to the
+  fixture; project contents, recording metadata, and replay artifacts are real.
+
+The shared process fixture clears inherited Rivet settings and uses temporary
+filesystem roots. It bounds startup, RPC, and cleanup waits, and only kills its
+own child process if graceful cleanup fails. It adds no production hooks or
+detached execution registry. The managed test removes only its own containers.
+Run `yarn test:style` before these suites and keep the full Core early-output
+regressions as the authority for Watch/Stop readiness. No Kubernetes rehearsal
+is required for this feature.
+
 ## Concepts
 
 - **Project file** (`*.rivet-project`): the live, editable workflow file

@@ -20,7 +20,8 @@
     "workflow-storage:verify": "tsx src/scripts/migrate-workflow-storage.ts verify",
     "workflow-storage:dangerously-nuke-managed-state": "tsx src/scripts/dangerously-nuke-managed-workflow-storage.ts",
     "test": "node ../../deploy/studio-server/scripts/run-api-tests.mjs",
-    "test:files": "tsx --test --test-concurrency=1"
+    "test:files": "tsx --test --test-concurrency=1",
+    "test:async-managed": "tsx src/tests/workflow-async-managed.integration.ts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.901.0",

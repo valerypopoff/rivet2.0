@@ -1636,6 +1636,7 @@ async function executeWorkflowEndpoint(
   const codeRunnerTelemetry = shouldCollectCodeRunnerTelemetry() ? createManagedCodeRunnerTelemetry() : null;
   const executionIdentity = createWorkflowEndpointRecordingIdentity(executionProject, getRequestCorrelationId(req));
   const processor = createProcessor(project, {
+    returnWhenGraphOutputsReady: true,
     abortSignal: options.abortSignal,
     codeRunner: new ManagedCodeRunner(getRootPath(), {
       ...(codeRunnerTelemetry ? { telemetry: codeRunnerTelemetry } : {}),
@@ -1656,8 +1657,7 @@ async function executeWorkflowEndpoint(
 
   let recordingStatus: 'succeeded' | 'failed' | 'suspicious' = 'succeeded';
   let recordingErrorMessage: string | undefined;
-  let responsePayload: unknown;
-  let executionError: unknown;
+  let failure: { error: unknown } | undefined;
   let executionDurationMs = 0;
   const executionStartedAt = performance.now();
 
@@ -1667,11 +1667,26 @@ async function executeWorkflowEndpoint(
       outputs as Record<string, { type?: string; value?: unknown }>,
     );
 
-    responsePayload = getWorkflowResponsePayload(outputs as Record<string, { type?: string; value?: unknown }>);
+    try {
+      const responsePayload = getWorkflowResponsePayload(outputs as Record<string, { type?: string; value?: unknown }>);
+      setWorkflowExecutionDebugHeaders(res, executionProject, performance.now() - executionStartedAt);
+      setCodeRunnerTelemetryHeaders(res, codeRunnerTelemetry);
+      if (!res.destroyed && !res.writableEnded) {
+        sendJsonWithDuration(res, 200, responsePayload, requestStartedAt);
+      }
+    } catch (error) {
+      // A response conversion/transport failure must not release a running tail.
+      failure = { error };
+    }
+
+    // Keep this handler pending after sending the response: its callers own
+    // execution capacity, shutdown registration, and parsed-body reservations.
+    const finalOutputs = await processor.processor.waitForRunCompletion();
+    recordingStatus = getWorkflowRecordingStatusFromOutputs(finalOutputs);
   } catch (error) {
     recordingStatus = 'failed';
     recordingErrorMessage = getWorkflowErrorMessage(error);
-    executionError = error;
+    failure = { error };
   } finally {
     executionDurationMs = performance.now() - executionStartedAt;
   }
@@ -1691,15 +1706,20 @@ async function executeWorkflowEndpoint(
     },
   );
 
-  if (executionError) {
+  if (failure) {
+    if (res.headersSent || res.writableEnded || res.destroyed) {
+      console.error('Workflow execution failed after response delivery or disconnect:', {
+        correlationId: executionIdentity.correlationId,
+        endpointName: options.endpointName,
+        runKind: options.runKind,
+        error: getWorkflowErrorMessage(failure.error),
+      });
+      return;
+    }
     setWorkflowExecutionDebugHeaders(res, executionProject, executionDurationMs);
     setCodeRunnerTelemetryHeaders(res, codeRunnerTelemetry);
-    throw executionError;
+    throw failure.error;
   }
-
-  setWorkflowExecutionDebugHeaders(res, executionProject, executionDurationMs);
-  setCodeRunnerTelemetryHeaders(res, codeRunnerTelemetry);
-  sendJsonWithDuration(res, 200, responsePayload, requestStartedAt);
 }
 
 async function handlePublishedWorkflowRequest(

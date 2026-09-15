@@ -44,6 +44,8 @@ export type GraphPreprocessorExecutionPlanResult = GraphPreprocessorResult & Gra
 export type GraphPreprocessedState = GraphPreprocessorResult | GraphPreprocessorExecutionPlanResult;
 
 type GraphPreprocessorOptions = {
+  /** Original definitions for inert input anchors in an internally sliced graph. */
+  inputAnchorDefinitions?: GraphNodeDefinitions;
   buildExecutionPlan?: boolean;
   definitionContext?: NodeDefinitionContext;
   graph: NodeGraph;
@@ -110,6 +112,7 @@ export function preprocessGraphState(options: GraphPreprocessorOptions): GraphPr
   }
 
   const definitions = loadInputOutputDefinitions({
+    inputAnchorDefinitions: options.inputAnchorDefinitions,
     connections,
     loadedProjects,
     nodeInstances,
@@ -181,6 +184,7 @@ export function toReusableGraphExecutionPlan(preprocessedGraph: GraphPreprocesso
 }
 
 function loadInputOutputDefinitions(options: {
+  inputAnchorDefinitions?: GraphNodeDefinitions;
   connections: Record<NodeId, NodeConnection[]>;
   definitionContext?: NodeDefinitionContext;
   loadedProjects: Record<ProjectId, Project>;
@@ -195,6 +199,11 @@ function loadInputOutputDefinitions(options: {
 
   if (!definitionContext) {
     for (const node of values(nodesById)) {
+      const anchorDefinitions = options.inputAnchorDefinitions?.[node.id];
+      if (anchorDefinitions) {
+        definitions[node.id] = anchorDefinitions;
+        continue;
+      }
       const connectionsForNode = connections[node.id] ?? [];
       const inputDefinitions = nodeInstances[node.id]!.getInputDefinitionsIncludingBuiltIn(
         connectionsForNode,
@@ -261,6 +270,11 @@ function loadInputOutputDefinitions(options: {
   }
 
   for (const node of values(nodesById)) {
+    const anchorDefinitions = options.inputAnchorDefinitions?.[node.id];
+    if (anchorDefinitions) {
+      definitions[node.id] = anchorDefinitions;
+      continue;
+    }
     const connectionsForNode = connections[node.id] ?? [];
     const nodeDefinitionContext = usesGraphBoundaryDefinitionContext(node) ? definitionContext : undefined;
     const inputDefinitions = nodeDefinitionContext

@@ -191,9 +191,15 @@ export function createProcessor(project: Project, options: NodeCreateProcessorOp
   const abortSignal = effectiveProcessorOptions.abortSignal;
   let disposed = false;
   let abortCleanupAttached = false;
+  // `isRunning` becomes false just before Core emits `finish`. Keep this
+  // independent bit so an abort in that small terminal window cannot detach
+  // the debugger ahead of the final event sequence.
+  let hasStartedRun = false;
   const detachRemoteDebuggerOnAbort = () => {
     abortCleanupAttached = false;
-    detachRemoteDebugger();
+    // Running processors still owe the debugger their abort and terminal node
+    // events. The run's full-completion cleanup owns detachment in that case.
+    if (!hasStartedRun) detachRemoteDebugger();
   };
   const attachAbortCleanup = () => {
     if (!effectiveProcessorOptions.remoteDebugger || !abortSignal || abortCleanupAttached) return;
@@ -249,6 +255,7 @@ export function createProcessor(project: Project, options: NodeCreateProcessorOp
       const detachProcessorAbort = bindAbortSignal(processor.processor, abortSignal);
 
       const cleanupRunResources = () => {
+        hasStartedRun = false;
         detachProcessorAbort();
         runScopedCodeRunner?.clearCache();
         if (shouldManageRunScopedRuntimeCache) {
@@ -262,6 +269,7 @@ export function createProcessor(project: Project, options: NodeCreateProcessorOp
       };
 
       try {
+        hasStartedRun = true;
         const outputsPromise = processor.processor.processGraph(
           createNodeProcessContext(effectiveProcessorOptions, pluginEnv, executionEnvironment, {
             codeRunner: runScopedCodeRunner,

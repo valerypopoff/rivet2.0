@@ -884,6 +884,20 @@ class plus a benchmark proving the expansion is worth the risk.
 
 #### Root-owned async branches
 
+Workflow endpoint acceptance is documented in
+[`workflow-publication.md`](studio-server/workflow-publication.md#endpoint-responses-and-async-completion).
+It verifies the distinction between early output publication and complete run
+ownership through real HTTP, process shutdown, managed storage, and browser
+recording playback. Keep Core's Watch/Stop readiness matrix here instead of
+duplicating that scheduler matrix in each endpoint adapter.
+
+Internally sliced async graphs retain the original port definitions of their inert
+input anchors. Those anchors are not new async triggers. This matters when two
+Start Async Branch nodes are adjacent: trimming the outer trigger's inputs would
+otherwise erase its variadic outputs and silently disconnect the inner branch,
+depending on preprocessing order. Anchor definitions come only from the validated
+owning run, never from persisted user-supplied overrides.
+
 `Start Async Branch` is an explicit scheduler boundary, not a detached job. It
 processes like a variadic Passthrough after all connected inputs are ready, but
 its downstream slice is registered with the root processor instead of being
@@ -915,10 +929,17 @@ resolved as excluded, and all resulting foreground work has completed. The
 same suppression applies after its queue drains but before that outcome is
 known: either outcome can still affect ordinary graph outputs.
 `waitForRunCompletion()` observes the later drain, errors,
-`graphFinish`, `done`, and `finish`. Web-app action paths enable this mode so a
-Chat response is not held behind a side-effect-only branch. Local/Node executor
+`graphFinish`, `done`, and `finish`. Web-app action paths and Studio Server workflow
+HTTP endpoints enable this mode so a response is not held behind a side-effect-only
+branch. HTTP handlers send the foreground result but await full completion before
+finalizing recordings and releasing execution/body admission and shutdown ownership.
+Local/Node executor
 owners defer abort-listener, recorder, debugger, code-runner, cache, and active
-processor cleanup until `waitForRunCompletion()` settles. Remote execution
+processor cleanup until `waitForRunCompletion()` settles. Cancelling an active
+Node processor keeps its debugger attached for abort and terminal node events,
+including the small interval after Core marks the lifecycle complete but before
+it emits `finish`; aborting an unstarted processor still detaches immediately.
+Remote execution
 transports forward `graphOutputsReady` separately from `done`; the result waiter
 settles on either event while run routing remains active until the real terminal
 event. If no managed work remains, or foreground processing fails before an

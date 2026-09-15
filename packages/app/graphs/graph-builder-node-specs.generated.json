@@ -1,6 +1,6 @@
 {
   "formatVersion": 1,
-  "catalogFingerprint": "fnv1a64:2fb9f0893acc17f1",
+  "catalogFingerprint": "fnv1a64:4f69bd912be501b3",
   "entries": [
     {
       "authoringChoiceId": "registered:abortGraph",
@@ -1864,7 +1864,7 @@
       "authoringChoiceId": "registered:startBackgroundBranch",
       "nodeType": "startBackgroundBranch",
       "displayName": "Start Async Branch",
-      "description": "Start Async Branch Node The Start Async Branch node lets the foreground path continue without waiting for one downstream branch. Rivet still owns that branch until the root graph run ends, so execution events, cancellation, and errors remain part of the same run. Web app actions return an already ready graph result without waiting for the async branch, while the processor remains running until that branch settles. Use this node for side effects that should overlap the foreground work, such as publishing a progress status while an AI tool is running. It is not a detached job that can outlive the graph run. Inputs and outputs The node has paired variadic ports. Connecting another input adds another input/output pair. Port Data Type Description Async Input [i] any A value required before the node starts. The node waits for all connected inputs. Async Output [i] any The unchanged value from ",
+      "description": "Start Async Branch Node The Start Async Branch node lets the foreground path continue without waiting for one downstream branch. Rivet still owns that branch until the root graph run ends, so execution events, cancellation, and errors remain part of the same run. Web app actions and Rivet Server workflow endpoints return an already ready graph result without waiting for the async branch, while the processor remains running until that branch settles. Use this node for side effects that should overlap the foreground work, such as publishing a progress status while an AI tool is running. It is not a detached job that can outlive the graph run. Inputs and outputs The node has paired variadic ports. Connecting another input adds another input/output pair. Port Data Type Description Async Input [i] any A value required before the node starts. The node waits for all connected inputs. Async Outp",
       "aliases": [],
       "capabilities": {
         "createWithDefaults": true,
