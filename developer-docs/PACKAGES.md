@@ -4,33 +4,33 @@
 
 ## Version update: 2026-09-15
 
-The changes below cover `0477a3189` through `8b0330441`, the next version-bump
-baseline. These are minor releases because the interval adds user-visible
-capabilities, public runtime APIs, and server behavior. The public npm family and
-private Studio Server family retain their required lockstep versions; companion
-bumps in those families are release coordination, not claims of package-local
-implementation changes. See the [publishing version policy](./BUILD-AND-CI.md#versioning-policy)
+The changes below cover `d0e6c97a3` (the previous version update) through
+`eee1e0a29`. Core, App, Docs, and Studio Server Web/Shared changed in this
+interval. These are minor releases for the new graph-debugging and cross-project
+graph-copy capabilities and the Studio Server editor improvements. The four public
+npm packages and five private Studio Server packages retain their required
+lockstep versions; companion bumps are release coordination, not claims of
+package-local implementation changes. See the [publishing version policy](./BUILD-AND-CI.md#versioning-policy)
 and [Studio Server versioning](./studio-server/development.md#versioning).
 
 | Workspace | Version | Changes since its previous bump |
 | --- | --- | --- |
-| `core` | `2.8.0` → `2.9.0` | Adds the conditional-port-free Coalesce node while preserving Coalesce (legacy), makes an unreached streaming Stop a successful excluded boundary, and publishes foreground outputs while root-owned async branches continue. Streaming previews and nested async scheduling/replay received matching runtime protections. |
-| `node` | `2.8.0` → `2.9.0` | Authorizes and reauthorizes web-app socket clients from current publication access, prevents stale remote result delivery after revocation, preserves terminal debugger events through cancellation, and supports early endpoint output publication with full-run ownership. |
-| `cli` | `2.8.0` → `2.9.0` | Uses the shared evaluation event collector while preserving its compact provider-attempt output. Required companion release for the public npm family; its Docker fallback version follows the family. |
-| `evaluations` | `2.8.0` → `2.9.0` | Exports the typed shared evaluation event collector used by browser, remote, CLI, and hosted evaluation execution. |
-| `app` | `2.14.0` → `2.15.0` | Adds Coalesce and Coalesce (legacy) presentation, streamed-output previews, active arrow coloring, corrected output-duration spacing, port-rename history consolidation, and faster, visibly-progressing recording opening/search/replay behavior. |
-| `app-executor` | `2.5.0` → `2.6.0` | Allows the host to authorize debugger clients, so hosted transports can authenticate upgrades and reauthorize active sessions. |
-| `docs` | `2.6.0` → `2.7.0` | Documents Coalesce, trusted clients, streaming Watch/Stop behavior, and endpoint async-branch continuation semantics. |
-| `studio-server-api` | `1.13.0` → `1.14.0` | Moves protected body admission ahead of parsing, replaces hostname bypasses with verified trusted clients, revokes stale web-app socket access, and returns endpoint outputs while retained async work completes and records. |
-| `studio-server-web` | `1.13.0` → `1.14.0` | Shows recording-open progress, preserves paged-output search highlighting, and covers secure socket revocation plus complete async-recording replay. |
-| `studio-server-bootstrap` | `1.13.0` → `1.14.0` | Required Studio Server companion release. |
-| `studio-server-executor` | `1.13.0` → `1.14.0` | Carries current web-app authorization and shared execution behavior in the lockstep Studio Server release. |
-| `studio-server-shared` | `1.13.0` → `1.14.0` | Keeps the shared recording, policy, and execution contracts aligned with the lockstep Studio Server release. |
+| `core` | `2.9.0` → `2.10.0` | Adds the public `Graph Call Path` Debug node and graph-call lineage to execution context. Real subgraph calls append a name; internal async/streaming branches retain the same path. |
+| `node` | `2.9.0` → `2.10.0` | No package-local changes; required public npm companion for Core's new execution contract. |
+| `cli` | `2.9.0` → `2.10.0` | No package-local changes; required public npm companion. The CLI Docker fallback follows the family version. |
+| `evaluations` | `2.9.0` → `2.10.0` | No package-local changes; required public npm companion for Core. |
+| `app` | `2.15.0` → `2.16.0` | Adds Graph Call Path to the Debug category with the remote-debugger icon; adds graph/folder Copy and folder/root Paste across open projects, preserving unsaved source graph changes and remapping only copied graph references. Modifier-click toggles all graph folders on Windows/macOS, and evaluation dataset-case bulk toggle also accepts Cmd on macOS. |
+| `app-executor` | `2.6.0` (unchanged) | No package-local changes since the previous version update. |
+| `docs` | `2.7.0` → `2.8.0` | Adds the linked Graph Call Path node reference, including current-graph-name and full call-path examples. |
+| `studio-server-api` | `1.14.0` → `1.15.0` | No package-local production changes; async-response duration regressions were clarified. Required Studio Server companion release. |
+| `studio-server-web` | `1.14.0` → `1.15.0` | Prevents stale project-tree responses from inventing concurrent-edit conflicts after a local Save; conflict snapshots and resolution identities keep notices accurate through reload/Keep mine races. Adds browser coverage for graph-copy Save/reopen, modifier-click, and Graph Call Path. |
+| `studio-server-bootstrap` | `1.14.0` → `1.15.0` | No package-local changes; required Studio Server companion release. |
+| `studio-server-executor` | `1.14.0` → `1.15.0` | No package-local changes; required Studio Server companion release. |
+| `studio-server-shared` | `1.14.0` → `1.15.0` | Extends the dashboard/editor bridge contracts for fresh project-tree reconciliation and authoritative conflict snapshots. |
 
-Repository-wide dependency resolutions also moved `js-yaml` to `3.15.2`/`4.3.2`
-and `svgo` to `3.3.5` in `44cecff5f`. These are shared dependency/security updates,
-not additional package-local code changes. The root workspace has no version.
-Tauri/Cargo metadata follows App; Helm chart versions remain independent.
+The root workspace has no version. Tauri/Cargo metadata follows App; Helm chart
+versions remain independent. No package dependency or lockfile update is needed
+for this version-only change.
 
 ## Build Order
 
@@ -70,7 +70,7 @@ Shared runtime foundation for the entire repo.
 
 ### Package metadata
 
-- Version: `2.9.0`
+- Version: `2.10.0`
 - Main: `dist/cjs/bundle.cjs`
 - Module: `dist/esm/index.js`
 - Types: `dist/types/index.d.ts`
@@ -110,7 +110,7 @@ Node runtime wrapper around core.
 
 ### Package metadata
 
-- Version: `2.9.0`
+- Version: `2.10.0`
 - Main: `dist/cjs/bundle.cjs`
 - Module: `dist/esm/index.js`
 - Types: `dist/types/index.d.ts`
@@ -582,7 +582,7 @@ Desktop IDE frontend plus Tauri app packaging layer.
 
 ### Package metadata
 
-- Version: `2.15.0`
+- Version: `2.16.0`
 - Private: yes
 
 ### Runtime shape
@@ -752,7 +752,7 @@ Operational CLI for running or serving Rivet graphs.
 
 ### Package metadata
 
-- Version: `2.9.0`
+- Version: `2.10.0`
 - Source entry: `src/cli.ts`
 - Published bin mapping: `rivet -> bin/cli.js`
 - Types: `dist/types/cli.d.ts`
@@ -876,7 +876,7 @@ Portable, executor-agnostic evaluation engine shared by the app, CLI, and host i
 
 ### Package metadata
 
-- Version: `2.9.0`
+- Version: `2.10.0`
 - Main: `dist/cjs/bundle.cjs`
 - Module: `dist/esm/index.js`
 - Types: `dist/types/index.d.ts`
@@ -908,7 +908,7 @@ a crawler, credentials, or a server-side search API.
 
 ### Package metadata
 
-- Version: `2.7.0`
+- Version: `2.8.0`
 - Private: yes
 
 ### Script surface
