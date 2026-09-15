@@ -2,30 +2,30 @@
 
 > Detailed package-by-package reference for the current monorepo.
 
-## Version update: 2026-09-12
+## Version update: 2026-09-15
 
-The changes below cover `355b56946` through `a7637873f`, the next version-bump
+The changes below cover `0477a3189` through `8b0330441`, the next version-bump
 baseline. These are minor releases because the interval adds user-visible
-capabilities. The public npm family and private Studio Server family retain their
-required lockstep versions; companion bumps in those families are release
-coordination, not claims of package-local implementation changes. See the
-[publishing version policy](./BUILD-AND-CI.md#versioning-policy) and [Studio
-Server versioning](./studio-server/development.md#versioning).
+capabilities, public runtime APIs, and server behavior. The public npm family and
+private Studio Server family retain their required lockstep versions; companion
+bumps in those families are release coordination, not claims of package-local
+implementation changes. See the [publishing version policy](./BUILD-AND-CI.md#versioning-policy)
+and [Studio Server versioning](./studio-server/development.md#versioning).
 
 | Workspace | Version | Changes since its previous bump |
 | --- | --- | --- |
-| `core` | `2.7.0` → `2.8.0` | Watch Streaming Output recording history now retains the first three iterations, the terminal/decisive iteration, and a summary; terminal Stop values are reported consistently to recordings and downstream execution. The legacy Chat Loop display label now makes its legacy status explicit without changing its type ID. |
-| `node` | `2.7.0` → `2.8.0` | No package-local source changes. Required companion release for the public npm family’s updated Core contract. |
-| `cli` | `2.7.0` → `2.8.0` | No package-local source changes. Required companion release for the public npm family; its Docker fallback version follows the family. |
-| `evaluations` | `2.7.0` → `2.8.0` | No package-local source changes. Required companion release for the public npm family’s updated Core dependency. |
-| `app` | `2.13.0` → `2.14.0` | Node Library now shows immutable-node reference counts and navigation links; Watch/Stop execution history presents first-three-plus-terminal runs and terminal values in live, remote-debugger, and replay views; comment drags carry contained connection bends; project deletion and rename correctly maintain saved/published state. |
-| `app-executor` | `2.5.0` (unchanged) | No package-local changes. |
-| `docs` | `2.5.0` → `2.6.0` | User documentation now explains recording search progress and the Chat Loop (legacy) label; node-reference navigation was updated accordingly. |
-| `studio-server-api` | `1.12.0` → `1.13.0` | Recording input filtering is substantially faster through bounded, deadline-aware batched scanning, keyset query improvements, LRU caching, worker extraction, and benchmark coverage; it exposes accurate search progress and includes workflow-state/replay synchronization fixes. |
-| `studio-server-web` | `1.12.0` → `1.13.0` | Run Recordings shows filter progress and keeps virtualized result work bounded; browser coverage and dashboard synchronization now correctly treat recording replay tabs as virtual rather than tree-backed projects. |
-| `studio-server-bootstrap` | `1.12.0` → `1.13.0` | No package-local source changes. Required Studio Server companion release. |
-| `studio-server-executor` | `1.12.0` → `1.13.0` | No package-local source changes. Required Studio Server companion release. |
-| `studio-server-shared` | `1.12.0` → `1.13.0` | Workflow-recording contracts gained the bounded Watch history summary fields; the lockstep Studio Server release keeps all consumers aligned. |
+| `core` | `2.8.0` → `2.9.0` | Adds the conditional-port-free Coalesce node while preserving Coalesce (legacy), makes an unreached streaming Stop a successful excluded boundary, and publishes foreground outputs while root-owned async branches continue. Streaming previews and nested async scheduling/replay received matching runtime protections. |
+| `node` | `2.8.0` → `2.9.0` | Authorizes and reauthorizes web-app socket clients from current publication access, prevents stale remote result delivery after revocation, preserves terminal debugger events through cancellation, and supports early endpoint output publication with full-run ownership. |
+| `cli` | `2.8.0` → `2.9.0` | Uses the shared evaluation event collector while preserving its compact provider-attempt output. Required companion release for the public npm family; its Docker fallback version follows the family. |
+| `evaluations` | `2.8.0` → `2.9.0` | Exports the typed shared evaluation event collector used by browser, remote, CLI, and hosted evaluation execution. |
+| `app` | `2.14.0` → `2.15.0` | Adds Coalesce and Coalesce (legacy) presentation, streamed-output previews, active arrow coloring, corrected output-duration spacing, port-rename history consolidation, and faster, visibly-progressing recording opening/search/replay behavior. |
+| `app-executor` | `2.5.0` → `2.6.0` | Allows the host to authorize debugger clients, so hosted transports can authenticate upgrades and reauthorize active sessions. |
+| `docs` | `2.6.0` → `2.7.0` | Documents Coalesce, trusted clients, streaming Watch/Stop behavior, and endpoint async-branch continuation semantics. |
+| `studio-server-api` | `1.13.0` → `1.14.0` | Moves protected body admission ahead of parsing, replaces hostname bypasses with verified trusted clients, revokes stale web-app socket access, and returns endpoint outputs while retained async work completes and records. |
+| `studio-server-web` | `1.13.0` → `1.14.0` | Shows recording-open progress, preserves paged-output search highlighting, and covers secure socket revocation plus complete async-recording replay. |
+| `studio-server-bootstrap` | `1.13.0` → `1.14.0` | Required Studio Server companion release. |
+| `studio-server-executor` | `1.13.0` → `1.14.0` | Carries current web-app authorization and shared execution behavior in the lockstep Studio Server release. |
+| `studio-server-shared` | `1.13.0` → `1.14.0` | Keeps the shared recording, policy, and execution contracts aligned with the lockstep Studio Server release. |
 
 Repository-wide dependency resolutions also moved `js-yaml` to `3.15.2`/`4.3.2`
 and `svgo` to `3.3.5` in `44cecff5f`. These are shared dependency/security updates,
@@ -70,7 +70,7 @@ Shared runtime foundation for the entire repo.
 
 ### Package metadata
 
-- Version: `2.8.0`
+- Version: `2.9.0`
 - Main: `dist/cjs/bundle.cjs`
 - Module: `dist/esm/index.js`
 - Types: `dist/types/index.d.ts`
@@ -110,7 +110,7 @@ Node runtime wrapper around core.
 
 ### Package metadata
 
-- Version: `2.8.0`
+- Version: `2.9.0`
 - Main: `dist/cjs/bundle.cjs`
 - Module: `dist/esm/index.js`
 - Types: `dist/types/index.d.ts`
@@ -582,7 +582,7 @@ Desktop IDE frontend plus Tauri app packaging layer.
 
 ### Package metadata
 
-- Version: `2.14.0`
+- Version: `2.15.0`
 - Private: yes
 
 ### Runtime shape
@@ -647,7 +647,7 @@ Node sidecar process used by the desktop app for Node-capable execution.
 
 ### Package metadata
 
-- Version: `2.5.0`
+- Version: `2.6.0`
 - Bin: `./bin/executor-bundle.cjs`
 
 ### Main behavior
@@ -752,7 +752,7 @@ Operational CLI for running or serving Rivet graphs.
 
 ### Package metadata
 
-- Version: `2.8.0`
+- Version: `2.9.0`
 - Source entry: `src/cli.ts`
 - Published bin mapping: `rivet -> bin/cli.js`
 - Types: `dist/types/cli.d.ts`
@@ -876,7 +876,7 @@ Portable, executor-agnostic evaluation engine shared by the app, CLI, and host i
 
 ### Package metadata
 
-- Version: `2.8.0`
+- Version: `2.9.0`
 - Main: `dist/cjs/bundle.cjs`
 - Module: `dist/esm/index.js`
 - Types: `dist/types/index.d.ts`
@@ -908,7 +908,7 @@ a crawler, credentials, or a server-side search API.
 
 ### Package metadata
 
-- Version: `2.6.0`
+- Version: `2.7.0`
 - Private: yes
 
 ### Script surface
