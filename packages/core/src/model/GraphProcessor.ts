@@ -42,6 +42,7 @@ import type { NodeRegistration } from './NodeRegistration.js';
 import { getPluginConfig } from '../utils/index.js';
 import {
   type GraphExecutionPlan,
+  type GraphNodeDefinitions,
   type GraphPreprocessedState,
   isGraphExecutionPlan,
   preprocessGraphState,
@@ -158,6 +159,7 @@ type NodeTimingStart = number | undefined;
 type NodeAbortControllerEntry = AbortController | Set<AbortController>;
 const graphProcessorGraphOverride = Symbol('graphProcessorGraphOverride');
 const consumedAsyncBranchTriggerOverride = Symbol('consumedAsyncBranchTriggerOverride');
+const asyncBranchInputAnchorsOverride = Symbol('asyncBranchInputAnchorsOverride');
 const consumedStreamingWatchNodeOverride = Symbol('consumedStreamingWatchNodeOverride');
 type SchedulerBoundaryFailure = {
   error: Error;
@@ -692,6 +694,7 @@ export class GraphProcessor {
   #effectiveConnectionsForRun: NodeConnection[] | undefined;
   #asyncBranchPlansByTriggerNodeId = new Map<NodeId, ToolCallContinuationAsyncBranchPlan>();
   readonly #consumedAsyncBranchTriggerNodeId: NodeId | undefined;
+  readonly #asyncBranchInputAnchors: GraphNodeDefinitions | undefined;
   #streamingWatchPlansBySourceNodeId = new Map<NodeId, StreamingOutputWatchPlan[]>();
   #streamingWatchPlansByWatchNodeId = new Map<NodeId, StreamingOutputWatchPlan>();
   #streamingOutputWatches = new Map<NodeId, StreamingOutputWatch>();
@@ -874,6 +877,7 @@ export class GraphProcessor {
       scheduler?: GraphProcessorScheduler;
       [graphProcessorGraphOverride]?: NodeGraph;
       [consumedAsyncBranchTriggerOverride]?: NodeId;
+      [asyncBranchInputAnchorsOverride]?: GraphNodeDefinitions;
       [consumedStreamingWatchNodeOverride]?: NodeId;
     },
   ) {
@@ -898,6 +902,7 @@ export class GraphProcessor {
     this.#runtimeProfiler = options?.runtimeProfiler;
     this.#captureNodeTimings = options?.captureNodeTimings ?? false;
     this.#consumedAsyncBranchTriggerNodeId = options?.[consumedAsyncBranchTriggerOverride];
+    this.#asyncBranchInputAnchors = options?.[asyncBranchInputAnchorsOverride];
     this.#consumedStreamingWatchNodeId = options?.[consumedStreamingWatchNodeOverride];
 
     this.#emitter.bindMethods(this as unknown as Record<string, unknown>, ['on', 'off', 'once', 'onAny', 'offAny']);
@@ -932,6 +937,7 @@ export class GraphProcessor {
       }
 
       const preprocessedGraph = preprocessGraphState({
+        inputAnchorDefinitions: this.#asyncBranchInputAnchors,
         graph: this.#graph,
         loadedProjects: this.#loadedProjects,
         project: this.#project,
@@ -2587,6 +2593,11 @@ export class GraphProcessor {
       scheduler: this.#scheduler,
       [graphProcessorGraphOverride]: plan.graph,
       [consumedAsyncBranchTriggerOverride]: triggerNode.id,
+      [asyncBranchInputAnchorsOverride]: Object.fromEntries(
+        plan.graph.connections
+          .filter((connection) => connection.inputNodeId === triggerNode.id)
+          .map((connection) => [connection.outputNodeId, this.#definitions[connection.outputNodeId]!]),
+      ),
     });
     onProcessorCreated(processor);
 
@@ -4564,6 +4575,9 @@ export class GraphProcessor {
     }
 
     for (const triggerNode of Object.values(this.#nodesById)) {
+      // Input anchors describe the consumed trigger's ports, not executable work.
+      // A variadic anchor may itself be an outer async trigger.
+      if (this.#asyncBranchInputAnchors?.[triggerNode.id]) continue;
       if (triggerNode.type !== 'startBackgroundBranch' || triggerNode.disabled || !isRelevant(triggerNode.id)) {
         continue;
       }

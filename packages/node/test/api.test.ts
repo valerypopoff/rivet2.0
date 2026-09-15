@@ -766,6 +766,52 @@ describe('api', () => {
     assert.equal(detachCount, 1);
   });
 
+  it('keeps the debugger attached through cancellation of an active processor', async () => {
+    const abortController = new AbortController();
+    let started!: () => void;
+    let release!: () => void;
+    const ready = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let detachCount = 0;
+    const processor = createProcessor(makeCodeProject('return {};'), {
+      graph: 'code-graph',
+      abortSignal: abortController.signal,
+      codeRunner: {
+        async runCode() {
+          started();
+          await gate;
+          return {};
+        },
+      },
+      remoteDebugger: {
+        on: () => undefined,
+        off: () => undefined,
+        webSocketServer: {} as never,
+        broadcast: () => undefined,
+        attach: () => undefined,
+        detach: () => {
+          detachCount += 1;
+        },
+      },
+    });
+    const run = processor.run();
+    const rejected = assert.rejects(run);
+    try {
+      await ready;
+      abortController.abort();
+      assert.equal(detachCount, 0, 'abort must not discard pending terminal events');
+    } finally {
+      release();
+      await rejected;
+      processor.dispose();
+    }
+    assert.equal(detachCount, 1);
+  });
+
   it('keeps the default programmatic Code runner behavior', async () => {
     let codeOutput: Outputs | undefined;
     const processor = createProcessor(

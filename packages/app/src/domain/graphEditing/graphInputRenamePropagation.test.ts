@@ -11,10 +11,13 @@ import {
   makeSubGraphNode,
   makeTextNode,
 } from './testGraphBuilders.js';
-import { propagateGraphInputRename } from './graphInputRenamePropagation.js';
+import { propagateGraphPortRename } from './graphPortRenamePropagation.js';
 
 const subGraphId = 'sub-graph' as GraphId;
 const parentGraphId = 'parent-graph' as GraphId;
+
+const propagateGraphInputRename = (args: Omit<Parameters<typeof propagateGraphPortRename>[0], 'kind'>) =>
+  propagateGraphPortRename({ kind: 'input', ...args });
 
 function makeConnection(overrides: Partial<NodeConnection> = {}): NodeConnection {
   return makeBaseConnection({

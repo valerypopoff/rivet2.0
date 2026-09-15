@@ -110,25 +110,27 @@ describe('NodeExclusionPolicy', () => {
     }
   });
 
-  it('lets merge nodes consume normal excluded values but defers loop-wait sentinels', () => {
-    assert.deepEqual(
-      getControlFlowExclusionDecision({
-        node: makeNode({ type: 'coalesce' }),
-        inputValues: {
-          input1: { type: 'control-flow-excluded', value: undefined },
-        },
-      }),
-      { action: 'continue' },
-    );
-    assert.deepEqual(
-      getControlFlowExclusionDecision({
-        node: makeNode({ type: 'coalesce' }),
-        inputValues: {
-          input1: { type: 'control-flow-excluded', value: LOOP_NOT_BROKEN_SENTINEL },
-        },
-      }),
-      { action: 'defer' },
-    );
+  it('lets both Coalesce types consume normal excluded values but defers loop-wait sentinels', () => {
+    for (const type of ['coalesce', 'coalesceNew'] as const) {
+      assert.deepEqual(
+        getControlFlowExclusionDecision({
+          node: makeNode({ type }),
+          inputValues: {
+            input1: { type: 'control-flow-excluded', value: undefined },
+          },
+        }),
+        { action: 'continue' },
+      );
+      assert.deepEqual(
+        getControlFlowExclusionDecision({
+          node: makeNode({ type }),
+          inputValues: {
+            input1: { type: 'control-flow-excluded', value: LOOP_NOT_BROKEN_SENTINEL },
+          },
+        }),
+        { action: 'defer' },
+      );
+    }
   });
 
   it('formats missing required input exclusions without owning processor state changes', () => {

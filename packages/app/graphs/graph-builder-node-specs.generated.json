@@ -1,6 +1,6 @@
 {
   "formatVersion": 1,
-  "catalogFingerprint": "fnv1a64:3cf424c5a56f2342",
+  "catalogFingerprint": "fnv1a64:4f69bd912be501b3",
   "entries": [
     {
       "authoringChoiceId": "registered:abortGraph",
@@ -214,8 +214,23 @@
     {
       "authoringChoiceId": "registered:coalesce",
       "nodeType": "coalesce",
+      "displayName": "Coalesce (legacy)",
+      "description": "This legacy Coalesce Node returns the first usable value from a list of inputs. By default, \"usable\" means the first input that is not Not Ran . For new graphs, use the Coalesce Node. It has the same fallback behavior without this legacy node's Conditional input. Values that show as Not Ran in the UI have been excluded from the run due to control flow processing. Coalesce consumes those values, skips over them, and continues checking later inputs. This makes it useful for taking a set of branches where only one branch runs and returning that branch's output. See the examples section for more information on using this with a Regex Match Node. null and undefined are treated as real output values by default. Enable Ignore 'null' or Ignore 'undefined' when those values should also be skipped so Coalesce (legacy) continues checking later inputs.",
+      "aliases": [],
+      "capabilities": {
+        "createWithDefaults": true,
+        "inspectSafeProjection": false,
+        "resolvePorts": true,
+        "configureSettings": false,
+        "editLinkedPrefabInstance": false
+      },
+      "settings": []
+    },
+    {
+      "authoringChoiceId": "registered:coalesceNew",
+      "nodeType": "coalesceNew",
       "displayName": "Coalesce",
-      "description": "The Coalesce Node returns the first usable value from a list of inputs. By default, \"usable\" means the first input that is not Not Ran . Values that show as Not Ran in the UI have been excluded from the run due to control flow processing. Coalesce consumes those values, skips over them, and continues checking later inputs. This makes it useful for taking a set of branches where only one branch runs and returning that branch's output. See the examples section for more information on using this with a Regex Match Node. null and undefined are treated as real output values by default. Enable Ignore 'null' or Ignore 'undefined' when those values should also be skipped so Coalesce continues checking later inputs.",
+      "description": "The Coalesce Node returns the first usable value from a list of inputs. By default, \"usable\" means the first input that is not Not Ran . Values that show as Not Ran in the UI have been excluded from the run due to control flow processing. Coalesce consumes those values, skips over them, and continues checking later inputs. This makes it useful for combining branches where one branch runs and the others are excluded. null and undefined are treated as real output values by default. Enable Ignore 'null' or Ignore 'undefined' when those values should also be skipped so Coalesce continues checking later inputs.",
       "aliases": [],
       "capabilities": {
         "createWithDefaults": true,
@@ -1849,7 +1864,7 @@
       "authoringChoiceId": "registered:startBackgroundBranch",
       "nodeType": "startBackgroundBranch",
       "displayName": "Start Async Branch",
-      "description": "Start Async Branch Node The Start Async Branch node lets the foreground path continue without waiting for one downstream branch. Rivet still owns that branch until the root graph run ends, so execution events, cancellation, and errors remain part of the same run. Web app actions return an already ready graph result without waiting for the async branch, while the processor remains running until that branch settles. Use this node for side effects that should overlap the foreground work, such as publishing a progress status while an AI tool is running. It is not a detached job that can outlive the graph run. Inputs and outputs The node has paired variadic ports. Connecting another input adds another input/output pair. Port Data Type Description Async Input [i] any A value required before the node starts. The node waits for all connected inputs. Async Output [i] any The unchanged value from ",
+      "description": "Start Async Branch Node The Start Async Branch node lets the foreground path continue without waiting for one downstream branch. Rivet still owns that branch until the root graph run ends, so execution events, cancellation, and errors remain part of the same run. Web app actions and Rivet Server workflow endpoints return an already ready graph result without waiting for the async branch, while the processor remains running until that branch settles. Use this node for side effects that should overlap the foreground work, such as publishing a progress status while an AI tool is running. It is not a detached job that can outlive the graph run. Inputs and outputs The node has paired variadic ports. Connecting another input adds another input/output pair. Port Data Type Description Async Input [i] any A value required before the node starts. The node waits for all connected inputs. Async Outp",
       "aliases": [],
       "capabilities": {
         "createWithDefaults": true,

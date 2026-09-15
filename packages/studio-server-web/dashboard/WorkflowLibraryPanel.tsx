@@ -4,7 +4,12 @@ import { ActiveProjectSection } from './ActiveProjectSection';
 import { WorkflowFolderTree } from './WorkflowFolderTree';
 import { WorkflowLibraryContextMenus } from './WorkflowLibraryContextMenus';
 import { WorkflowLibraryModals } from './WorkflowLibraryModals';
-import type { HostedRouteConfig, WorkflowProjectOpenOptions, WorkflowProjectPathMove } from './types';
+import type {
+  HostedRouteConfig,
+  RecordingOpenResult,
+  WorkflowProjectOpenOptions,
+  WorkflowProjectPathMove,
+} from './types';
 import { getParentRelativePath } from './workflowLibraryHelpers';
 import { getWorkflowProjectDotStatus } from './workflowProjectPublicationStatus';
 import { useWorkflowLibraryController } from './useWorkflowLibraryController';
@@ -19,7 +24,7 @@ import './WorkflowLibraryPanel.css';
 interface WorkflowLibraryPanelProps {
   onOpenProject: (path: string, options?: WorkflowProjectOpenOptions) => void;
   onRefreshOpenProjectFromDisk: (path: string) => void;
-  onOpenRecording: (recordingId: string, options?: { replaceCurrent?: boolean }) => void;
+  onOpenRecording: (recordingId: string, options?: { replaceCurrent?: boolean }) => Promise<RecordingOpenResult>;
   onOpenPublishedVersionPreview: (
     relativePath: string,
     versionId: string,

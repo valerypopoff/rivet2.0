@@ -2,7 +2,12 @@ import { useCallback, useEffect, useRef, useState, type FC } from 'react';
 import { ToastContainer } from 'react-toastify';
 import 'react-toastify/dist/ReactToastify.css';
 import { WorkflowLibraryPanel } from './WorkflowLibraryPanel';
-import type { HostedRouteConfig, WorkflowProjectOpenOptions, WorkflowProjectPathMove } from './types';
+import type {
+  HostedRouteConfig,
+  RecordingOpenResult,
+  WorkflowProjectOpenOptions,
+  WorkflowProjectPathMove,
+} from './types';
 import { useEditorCommandQueue } from './useEditorCommandQueue';
 import { focusIframeElement } from './editorBridgeFocus';
 import { useDashboardSidebar } from './useDashboardSidebar';
@@ -28,6 +33,7 @@ import './DashboardPage.css';
 const WORKFLOW_DASHBOARD_COLLAPSED_SIDEBAR_WIDTH = 30;
 const MIN_SIDEBAR_WIDTH = 240;
 const MAX_SIDEBAR_WIDTH = 560;
+const RECORDING_OPEN_TIMEOUT_MS = 120_000;
 const DEFAULT_HOSTED_ROUTE_CONFIG: HostedRouteConfig = {
   executorWsUrl: RIVET_EXECUTOR_WS_URL,
   remoteDebuggerDefaultWs: RIVET_REMOTE_DEBUGGER_DEFAULT_WS,
@@ -65,6 +71,10 @@ export const DashboardPage: FC = () => {
   const workflowProjectBindingRequestSequenceRef = useRef(0);
   const workflowProjectContentResolutionAckResolversRef = useRef(new Map<string, (resolved: boolean) => void>());
   const workflowProjectContentResolutionRequestSequenceRef = useRef(0);
+  const pendingRecordingOpenResolversRef = useRef(
+    new Map<string, { resolve: (result: RecordingOpenResult) => void; timeoutId: number }>(),
+  );
+  const recordingOpenRequestSequenceRef = useRef(0);
   const [openedProjectPath, setOpenedProjectPath] = useState('');
   const [activeWorkflowProjectPath, setActiveWorkflowProjectPath] = useState('');
   const [projectUnsavedChangesByPath, setProjectUnsavedChangesByPath] = useState<Record<string, boolean>>({});
@@ -175,12 +185,44 @@ export const DashboardPage: FC = () => {
     [postEditorCommand],
   );
 
+  const settlePendingRecordingOpen = useCallback(
+    (requestId: string | undefined, result: RecordingOpenResult): boolean => {
+      if (!requestId) {
+        return false;
+      }
+
+      const pending = pendingRecordingOpenResolversRef.current.get(requestId);
+      if (!pending) {
+        return false;
+      }
+
+      pendingRecordingOpenResolversRef.current.delete(requestId);
+      window.clearTimeout(pending.timeoutId);
+      pending.resolve(result);
+      return true;
+    },
+    [],
+  );
+
   const handleOpenRecording = useCallback(
-    (recordingId: string, options?: { replaceCurrent?: boolean }) => {
-      postEditorCommand({
-        type: 'open-recording',
-        recordingId,
-        replaceCurrent: Boolean(options?.replaceCurrent),
+    (recordingId: string, options?: { replaceCurrent?: boolean }): Promise<RecordingOpenResult> => {
+      const requestId = `open-recording:${Date.now()}:${recordingOpenRequestSequenceRef.current++}`;
+      return new Promise((resolve) => {
+        const timeoutId = window.setTimeout(() => {
+          pendingRecordingOpenResolversRef.current.delete(requestId);
+          resolve({
+            opened: false,
+            error: 'Opening the recording timed out. Please try again.',
+          });
+        }, RECORDING_OPEN_TIMEOUT_MS);
+
+        pendingRecordingOpenResolversRef.current.set(requestId, { resolve, timeoutId });
+        postEditorCommand({
+          type: 'open-recording',
+          recordingId,
+          replaceCurrent: Boolean(options?.replaceCurrent),
+          requestId,
+        });
       });
     },
     [postEditorCommand],
@@ -386,6 +428,14 @@ export const DashboardPage: FC = () => {
         resolve(false);
       }
       workflowProjectContentResolutionAckResolversRef.current.clear();
+      for (const pending of pendingRecordingOpenResolversRef.current.values()) {
+        window.clearTimeout(pending.timeoutId);
+        pending.resolve({
+          opened: false,
+          error: 'The dashboard closed before the recording finished opening.',
+        });
+      }
+      pendingRecordingOpenResolversRef.current.clear();
     },
     [clearPendingWorkflowProjectOpen],
   );
@@ -443,9 +493,12 @@ export const DashboardPage: FC = () => {
     onOpenProjectCountChange: (count) => {
       setOpenProjectCount(count);
     },
-    onProjectOpenFailed: () => {},
+    onProjectOpenFailed: (error, requestId) => {
+      settlePendingRecordingOpen(requestId, { opened: false, error });
+    },
     onProjectOpened: (path, requestId) => {
-      if (requestId && !pendingWorkflowProjectOpenPathRef.current) {
+      const openedRecording = settlePendingRecordingOpen(requestId, { opened: true });
+      if (requestId && !pendingWorkflowProjectOpenPathRef.current && !openedRecording) {
         return;
       }
 

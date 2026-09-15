@@ -166,13 +166,27 @@ test('single-click project opens as a replaceable editor preview tab', async ({ 
   await firstRow.dblclick();
   await expect(firstActiveEditorTab).toBeVisible();
   await expectProjectTabPreview(firstActiveEditorTab, false);
+  await firstActiveEditorTab.hover();
+  const activeTabCloseInsets = await firstActiveEditorTab.evaluate((tab) => {
+    const close = tab.querySelector<HTMLElement>('.close-project');
+    const tabBounds = tab.getBoundingClientRect();
+    const closeBounds = close?.getBoundingClientRect();
+
+    return {
+      right: closeBounds ? Math.round(tabBounds.right - closeBounds.right) : null,
+      top: closeBounds ? Math.round(closeBounds.top - tabBounds.top) : null,
+    };
+  });
+  expect(activeTabCloseInsets).toEqual({ right: 5, top: 5 });
   await expect(secondEditorTab).toBeVisible();
   await expectProjectTabPreview(secondEditorTab, true);
   await expect(editorTabs).toHaveCount(2);
 
   for (const project of additionalProjects) {
     await page.locator('.project-row', { hasText: project.name }).dblclick();
-    await expect(editorTabs.filter({ hasText: project.name })).toBeVisible();
+    // Opening creates a temporary placeholder with the same label. Wait for
+    // the loaded tab rather than allowing strict mode to race that placeholder.
+    await expect(frame.locator('.projects-container .project:not(.opening)', { hasText: project.name })).toBeVisible();
   }
   await firstRow.click();
   await expect(firstActiveEditorTab).toBeVisible();

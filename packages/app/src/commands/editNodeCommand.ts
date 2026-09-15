@@ -19,25 +19,17 @@ import {
 } from '../state/recoverableNodeConnections';
 import { reconcileNodeEditConnections } from '../domain/graphEditing/editNodeConnectionRecovery';
 import {
-  propagateGraphInputRename,
-  rewriteSubGraphCallerGraphForGraphInputRename,
-} from '../domain/graphEditing/graphInputRenamePropagation';
-import {
-  propagateGraphOutputRename,
-  rewriteSubGraphCallerGraphForGraphOutputRename,
-} from '../domain/graphEditing/graphOutputRenamePropagation';
+  getGraphPortId,
+  type GraphPortRenameKind,
+  type GraphPortRenameProjectGraphSnapshots,
+  type PropagateGraphPortRenameResult,
+  propagateGraphPortRename,
+  rewriteSubGraphCallerGraphForGraphPortRename,
+} from '../domain/graphEditing/graphPortRenamePropagation';
 import { projectState } from '../state/savedGraphs';
 import { createContext, useContext } from 'react';
 
 const MERGE_WINDOW_MS = 5000;
-
-type GraphRenameProjectGraphSnapshots = Record<
-  GraphId,
-  {
-    previousGraph: NodeGraph;
-    nextGraph: NodeGraph;
-  }
->;
 
 type EditNodeParams = {
   nodeId: NodeId;
@@ -58,11 +50,20 @@ type EditNodeAppliedData = {
   nextConnections: NodeConnection[];
   previousRecoverableConnections: NodeConnection[];
   nextRecoverableConnections: NodeConnection[];
-  projectGraphSnapshots?: GraphRenameProjectGraphSnapshots;
+  currentGraphSnapshot?: CurrentGraphSnapshot;
+  projectGraphSnapshots?: GraphPortRenameProjectGraphSnapshots;
 };
 
-type GraphPortRename = {
-  kind: 'input' | 'output';
+type CurrentGraphSnapshot = {
+  graphId: GraphId;
+  previousGraph: NodeGraph;
+  nextGraph: NodeGraph;
+};
+
+// This is the original command's rename, retained for merged-edit history.
+// Propagation itself uses the smaller rename record inside graphPortRenamePropagation.
+type HistoricalGraphPortRename = {
+  kind: GraphPortRenameKind;
   newPortId: string;
   oldPortId: string;
   targetGraphId: GraphId;
@@ -74,24 +75,6 @@ function cloneConnections(connections: readonly NodeConnection[]): NodeConnectio
 
 function cloneNodes(nodes: readonly ChartNode[]): ChartNode[] {
   return structuredClone([...nodes]);
-}
-
-function getGraphInputId(node: Partial<ChartNode> | undefined): string | undefined {
-  if ((node as { type?: string } | undefined)?.type !== 'graphInput') {
-    return undefined;
-  }
-
-  const id = (node?.data as { id?: unknown } | undefined)?.id;
-  return typeof id === 'string' ? id : undefined;
-}
-
-function getGraphOutputId(node: Partial<ChartNode> | undefined): string | undefined {
-  if ((node as { type?: string } | undefined)?.type !== 'graphOutput') {
-    return undefined;
-  }
-
-  const id = (node?.data as { id?: unknown } | undefined)?.id;
-  return typeof id === 'string' ? id : undefined;
 }
 
 export function shouldMergeEditNodeCommand(
@@ -138,20 +121,31 @@ function removeLastCommandHistoryEntryForGraph(
   };
 }
 
-function getNextProjectFromGraphSnapshots(
-  project: GraphCommandState['project'],
-  snapshots: GraphRenameProjectGraphSnapshots | undefined,
-  snapshotKey: 'nextGraph' | 'previousGraph',
-) {
-  if (!snapshots || Object.keys(snapshots).length === 0) {
+function getNextProjectFromRenameSnapshots({
+  project,
+  currentGraphSnapshot,
+  projectGraphSnapshots,
+  snapshotKey,
+}: {
+  project: GraphCommandState['project'];
+  currentGraphSnapshot: CurrentGraphSnapshot | undefined;
+  projectGraphSnapshots: GraphPortRenameProjectGraphSnapshots | undefined;
+  snapshotKey: 'nextGraph' | 'previousGraph';
+}) {
+  if ((!projectGraphSnapshots || Object.keys(projectGraphSnapshots).length === 0) && !currentGraphSnapshot) {
     return project;
   }
 
   return produce(project, (draft) => {
-    for (const [graphId, snapshot] of Object.entries(snapshots) as Array<
-      [GraphId, GraphRenameProjectGraphSnapshots[GraphId]]
+    for (const [graphId, snapshot] of Object.entries(projectGraphSnapshots ?? {}) as Array<
+      [GraphId, GraphPortRenameProjectGraphSnapshots[GraphId]]
     >) {
       draft.graphs[graphId] = structuredClone(snapshot[snapshotKey]);
+    }
+    // The active graph is the live overlay and therefore wins if a future
+    // propagation change also supplies it in the external snapshot record.
+    if (currentGraphSnapshot) {
+      draft.graphs[currentGraphSnapshot.graphId] = structuredClone(currentGraphSnapshot[snapshotKey]);
     }
   });
 }
@@ -163,14 +157,14 @@ function mergeProjectGraphSnapshots({
   nextSnapshots,
 }: {
   currentProject: GraphCommandState['project'];
-  originalRename: GraphPortRename | undefined;
-  previousSnapshots: GraphRenameProjectGraphSnapshots | undefined;
-  nextSnapshots: GraphRenameProjectGraphSnapshots;
-}): GraphRenameProjectGraphSnapshots | undefined {
-  const mergedSnapshots: GraphRenameProjectGraphSnapshots = structuredClone(nextSnapshots);
+  originalRename: HistoricalGraphPortRename | undefined;
+  previousSnapshots: GraphPortRenameProjectGraphSnapshots | undefined;
+  nextSnapshots: GraphPortRenameProjectGraphSnapshots;
+}): GraphPortRenameProjectGraphSnapshots | undefined {
+  const mergedSnapshots: GraphPortRenameProjectGraphSnapshots = structuredClone(nextSnapshots);
 
   for (const [graphId, previousSnapshot] of Object.entries(previousSnapshots ?? {}) as Array<
-    [GraphId, GraphRenameProjectGraphSnapshots[GraphId]]
+    [GraphId, GraphPortRenameProjectGraphSnapshots[GraphId]]
   >) {
     const nextGraph = originalRename
       ? getNextGraphFromOriginalRenameSnapshot(previousSnapshot.previousGraph, originalRename)
@@ -185,24 +179,16 @@ function mergeProjectGraphSnapshots({
   return Object.keys(mergedSnapshots).length > 0 ? mergedSnapshots : undefined;
 }
 
-function getNextGraphFromOriginalRenameSnapshot(graph: NodeGraph, rename: GraphPortRename): NodeGraph {
+function getNextGraphFromOriginalRenameSnapshot(graph: NodeGraph, rename: HistoricalGraphPortRename): NodeGraph {
   if (rename.oldPortId === rename.newPortId) {
     return structuredClone(graph);
   }
 
-  if (rename.kind === 'input') {
-    return rewriteSubGraphCallerGraphForGraphInputRename({
-      graph,
-      newInputId: rename.newPortId,
-      oldInputId: rename.oldPortId,
-      targetGraphId: rename.targetGraphId,
-    }).graph;
-  }
-
-  return rewriteSubGraphCallerGraphForGraphOutputRename({
+  return rewriteSubGraphCallerGraphForGraphPortRename({
     graph,
-    newOutputId: rename.newPortId,
-    oldOutputId: rename.oldPortId,
+    kind: rename.kind,
+    newPortId: rename.newPortId,
+    oldPortId: rename.oldPortId,
     targetGraphId: rename.targetGraphId,
   }).graph;
 }
@@ -210,24 +196,33 @@ function getNextGraphFromOriginalRenameSnapshot(graph: NodeGraph, rename: GraphP
 function getOriginalGraphPortRename({
   currentGraphId,
   editedNodeId,
+  isMergedEdit,
   nextCurrentNodes,
   previousNode,
 }: {
   currentGraphId: GraphId | undefined;
   editedNodeId: NodeId;
+  isMergedEdit: boolean | undefined;
   nextCurrentNodes: readonly ChartNode[];
   previousNode: Partial<ChartNode>;
-}): GraphPortRename | undefined {
+}): HistoricalGraphPortRename | undefined {
   if (!currentGraphId) {
     return undefined;
   }
 
-  const oldInputId = getGraphInputId(previousNode);
-  const newInputId = getGraphInputId(nextCurrentNodes.find((node) => node.id === editedNodeId));
+  const oldInputId = getGraphPortId(previousNode, 'input');
+  const newInputId = getGraphPortId(nextCurrentNodes.find((node) => node.id === editedNodeId), 'input');
 
   if (oldInputId != null && newInputId != null) {
+    // A merged edit may intentionally return to the original ID. Retain that
+    // history so it can rebuild callers from the original snapshot; a normal
+    // same-ID edit is not a boundary rename and must not write project state.
+    if (oldInputId === newInputId && !isMergedEdit) {
+      return undefined;
+    }
+
     const oldInputStillExists = nextCurrentNodes.some(
-      (node) => node.id !== editedNodeId && getGraphInputId(node) === oldInputId,
+      (node) => node.id !== editedNodeId && getGraphPortId(node, 'input') === oldInputId,
     );
 
     if (oldInputStillExists) {
@@ -242,15 +237,19 @@ function getOriginalGraphPortRename({
     };
   }
 
-  const oldOutputId = getGraphOutputId(previousNode);
-  const newOutputId = getGraphOutputId(nextCurrentNodes.find((node) => node.id === editedNodeId));
+  const oldOutputId = getGraphPortId(previousNode, 'output');
+  const newOutputId = getGraphPortId(nextCurrentNodes.find((node) => node.id === editedNodeId), 'output');
 
   if (oldOutputId == null || newOutputId == null) {
     return undefined;
   }
 
+  if (oldOutputId === newOutputId && !isMergedEdit) {
+    return undefined;
+  }
+
   const oldOutputStillExists = nextCurrentNodes.some(
-    (node) => node.id !== editedNodeId && getGraphOutputId(node) === oldOutputId,
+    (node) => node.id !== editedNodeId && getGraphPortId(node, 'output') === oldOutputId,
   );
 
   if (oldOutputStillExists) {
@@ -281,12 +280,6 @@ function buildPreviousCurrentNodesForMergedEdit({
     : replaceNodeInGraph(currentNodes, editedNodeId, previousNode);
 }
 
-type GraphPortRenameResult = {
-  nextCurrentConnections: NodeConnection[];
-  nextCurrentNodes: ChartNode[];
-  projectGraphSnapshots: GraphRenameProjectGraphSnapshots;
-};
-
 function getMergedGraphPortRenameResult({
   currentGraphId,
   graphPortRenameResult,
@@ -299,15 +292,15 @@ function getMergedGraphPortRenameResult({
   previousNode,
 }: {
   currentGraphId: GraphId | undefined;
-  graphPortRenameResult: GraphPortRenameResult;
+  graphPortRenameResult: PropagateGraphPortRenameResult;
   isMergedEdit: boolean | undefined;
   nextNodes: readonly ChartNode[];
-  originalRename: GraphPortRename | undefined;
+  originalRename: HistoricalGraphPortRename | undefined;
   params: EditNodeParams;
   previousConnections: readonly NodeConnection[];
   previousCurrentNodes: readonly ChartNode[] | undefined;
   previousNode: Partial<ChartNode>;
-}): GraphPortRenameResult {
+}): PropagateGraphPortRenameResult {
   if (!isMergedEdit || !currentGraphId || !originalRename) {
     return graphPortRenameResult;
   }
@@ -337,6 +330,48 @@ function getMergedGraphPortRenameResult({
   };
 }
 
+function getCurrentGraphSnapshot({
+  currentGraphId,
+  effectiveGraphPortRenameResult,
+  originalRename,
+  previousConnections,
+  previousCurrentNodes,
+  project,
+  currentNodes,
+}: {
+  currentGraphId: GraphId | undefined;
+  effectiveGraphPortRenameResult: PropagateGraphPortRenameResult;
+  originalRename: HistoricalGraphPortRename | undefined;
+  previousConnections: readonly NodeConnection[];
+  previousCurrentNodes: readonly ChartNode[] | undefined;
+  project: GraphCommandState['project'];
+  currentNodes: readonly ChartNode[];
+}): CurrentGraphSnapshot | undefined {
+  if (!currentGraphId || !originalRename) {
+    return undefined;
+  }
+
+  const metadata = project.graphs[currentGraphId]?.metadata ?? {
+    id: currentGraphId,
+    name: 'Current Graph',
+    description: '',
+  };
+
+  return {
+    graphId: currentGraphId,
+    previousGraph: {
+      metadata: structuredClone(metadata),
+      nodes: cloneNodes(previousCurrentNodes ?? currentNodes),
+      connections: cloneConnections(previousConnections),
+    },
+    nextGraph: {
+      metadata: structuredClone(metadata),
+      nodes: cloneNodes(effectiveGraphPortRenameResult.nextCurrentNodes),
+      connections: cloneConnections(effectiveGraphPortRenameResult.nextCurrentConnections),
+    },
+  };
+}
+
 export function buildEditNodeAppliedData({
   params,
   currentState,
@@ -357,7 +392,7 @@ export function buildEditNodeAppliedData({
   previousRecoverableConnections: readonly NodeConnection[];
   currentRecoverableConnections: readonly NodeConnection[];
   isMergedEdit?: boolean;
-  previousProjectGraphSnapshots?: GraphRenameProjectGraphSnapshots;
+  previousProjectGraphSnapshots?: GraphPortRenameProjectGraphSnapshots;
   projectNodeRegistry: NodeRegistration<any, any>;
 }): EditNodeAppliedData {
   const nextNodes = replaceNodeInGraph(currentState.nodes, params.nodeId, params.newNode);
@@ -371,23 +406,25 @@ export function buildEditNodeAppliedData({
     referencedProjects: currentState.referencedProjects,
     projectNodeRegistry,
   });
-  const graphInputRenameResult = propagateGraphInputRename({
+  const graphInputRenameResult = propagateGraphPortRename({
     currentGraphId: currentState.graphId,
     editedNodeId: params.nodeId,
+    kind: 'input',
     nextCurrentConnections: nextConnections,
     nextCurrentNodes: nextNodes,
     previousCurrentNodes: currentState.nodes,
     project: currentState.project,
   });
-  const graphOutputRenameResult = propagateGraphOutputRename({
+  const graphOutputRenameResult = propagateGraphPortRename({
     currentGraphId: currentState.graphId,
     editedNodeId: params.nodeId,
+    kind: 'output',
     nextCurrentConnections: graphInputRenameResult.nextCurrentConnections,
     nextCurrentNodes: graphInputRenameResult.nextCurrentNodes,
     previousCurrentNodes: currentState.nodes,
     project: currentState.project,
   });
-  const graphPortRenameResult: GraphPortRenameResult = {
+  const graphPortRenameResult: PropagateGraphPortRenameResult = {
     nextCurrentConnections: graphOutputRenameResult.nextCurrentConnections,
     nextCurrentNodes: graphOutputRenameResult.nextCurrentNodes,
     projectGraphSnapshots: {
@@ -398,6 +435,7 @@ export function buildEditNodeAppliedData({
   const originalRename = getOriginalGraphPortRename({
     currentGraphId: currentState.graphId,
     editedNodeId: params.nodeId,
+    isMergedEdit,
     nextCurrentNodes: nextNodes,
     previousNode,
   });
@@ -422,6 +460,15 @@ export function buildEditNodeAppliedData({
     previousSnapshots: previousProjectGraphSnapshots,
     nextSnapshots: graphPortRenameResult.projectGraphSnapshots,
   });
+  const currentGraphSnapshot = getCurrentGraphSnapshot({
+    currentGraphId: currentState.graphId,
+    effectiveGraphPortRenameResult,
+    originalRename,
+    previousConnections,
+    previousCurrentNodes,
+    project: currentState.project,
+    currentNodes: currentState.nodes,
+  });
 
   return {
     previousNode: structuredClone(previousNode),
@@ -435,6 +482,7 @@ export function buildEditNodeAppliedData({
     nextConnections: cloneConnections(effectiveGraphPortRenameResult.nextCurrentConnections),
     previousRecoverableConnections: cloneConnections(previousRecoverableConnections),
     nextRecoverableConnections: cloneConnections(nextRecoverableConnections),
+    currentGraphSnapshot,
     projectGraphSnapshots,
   };
 }
@@ -456,9 +504,14 @@ function useDefaultEditNodeCommand() {
   ) => {
     setNodes(appliedData?.nextCurrentNodes ?? replaceNodeInGraph(currentState.nodes, params.nodeId, params.newNode));
     setConnections(cloneConnections(nextConnections));
-    if (appliedData?.projectGraphSnapshots) {
+    if (appliedData?.projectGraphSnapshots || appliedData?.currentGraphSnapshot) {
       setProject((project) =>
-        getNextProjectFromGraphSnapshots(project, appliedData.projectGraphSnapshots, 'nextGraph'),
+        getNextProjectFromRenameSnapshots({
+          project,
+          currentGraphSnapshot: appliedData.currentGraphSnapshot,
+          projectGraphSnapshots: appliedData.projectGraphSnapshots,
+          snapshotKey: 'nextGraph',
+        }),
       );
     }
     setRecoverableNodeConnections((entries) =>
@@ -563,9 +616,14 @@ function useDefaultEditNodeCommand() {
           }),
       );
       setConnections(cloneConnections(appliedData.previousConnections));
-      if (appliedData.projectGraphSnapshots) {
+      if (appliedData.projectGraphSnapshots || appliedData.currentGraphSnapshot) {
         setProject((project) =>
-          getNextProjectFromGraphSnapshots(project, appliedData.projectGraphSnapshots, 'previousGraph'),
+          getNextProjectFromRenameSnapshots({
+            project,
+            currentGraphSnapshot: appliedData.currentGraphSnapshot,
+            projectGraphSnapshots: appliedData.projectGraphSnapshots,
+            snapshotKey: 'previousGraph',
+          }),
         );
       }
       setRecoverableNodeConnections((entries) =>

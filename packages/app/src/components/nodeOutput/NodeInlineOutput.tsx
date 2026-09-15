@@ -609,7 +609,11 @@ const NodeOutputMultiProcess: FC<{
         onNextPage={nextPage}
         stopDoubleClickPropagation
       />
-      {showDurationSummary && <NodeRunDurationSummaryMeta processData={data} hasBody={selectedHasVisibleBody} />}
+      {showDurationSummary && (
+        <div className="multi-node-output-duration-summary">
+          <NodeRunDurationSummaryMeta processData={data} hasBody={selectedHasVisibleBody} />
+        </div>
+      )}
       {selectedData && (
         <NodeOutputSingleProcess
           data={selectedData.data}

@@ -29,8 +29,9 @@ import { toast, type Id as ToastId } from 'react-toastify';
 import { applyEvaluationRunEvent, applyEvaluationRunSnapshot, evaluationsState } from '../state/evaluations';
 import {
   assertPortableJson,
+  createEvaluationEventCollector,
   EvaluationGraphExecutionError,
-  type EvaluationExecutionMetrics,
+  type EvaluationEventCollector,
   type EvaluationRun,
   type EvaluationRecordingReference,
   type EvaluationRunPurpose,
@@ -96,13 +97,9 @@ import {
   emitRemoteResponseTrace,
   type RemoteResponseTraceState,
 } from './remoteResponseTrace.js';
+import { withRemoteEvaluationAccounting } from './remoteEvaluationEventCollection.js';
 
 type RemoteExecutorMessageHandler = Parameters<ExecutorSessionRuntime['subscribeMessages']>[0];
-
-type RemoteEvaluationMetricsState = {
-  metrics: EvaluationExecutionMetrics;
-  providerAttempts: PortableJson[];
-};
 
 type RemoteLocalExecutionRecordingCapture = {
   abortRequested: boolean;
@@ -167,74 +164,6 @@ function captureRemoteLocalExecutionTerminal(
   }
 }
 
-function createRemoteEvaluationMetricsState(): RemoteEvaluationMetricsState {
-  return {
-    metrics: { durationMs: 0, modelCallCount: 0, toolCallCount: 0, toolFailureCount: 0 },
-    providerAttempts: [],
-  };
-}
-
-function collectRemoteEvaluationEvent(
-  state: RemoteEvaluationMetricsState | undefined,
-  message: 'llmCallFinished' | 'llmProfileAttempt' | 'toolCallFinished',
-  data: unknown,
-): void {
-  if (!state) return;
-
-  if (message === 'llmCallFinished') {
-    const event = data as ProcessEventMessageMap['llmCallFinished'];
-    state.metrics.modelCallCount = (state.metrics.modelCallCount ?? 0) + 1;
-    state.metrics.inputTokens = (state.metrics.inputTokens ?? 0) + (event.normalizedUsage?.promptTokens ?? 0);
-    state.metrics.outputTokens = (state.metrics.outputTokens ?? 0) + (event.normalizedUsage?.completionTokens ?? 0);
-    state.metrics.cachedInputTokens =
-      (state.metrics.cachedInputTokens ?? 0) + (event.normalizedUsage?.cachedTokens ?? 0);
-    state.metrics.reasoningTokens =
-      (state.metrics.reasoningTokens ?? 0) + (event.normalizedUsage?.reasoningTokens ?? 0);
-    if (event.pricing.status === 'known')
-      state.metrics.costUsd = (state.metrics.costUsd ?? 0) + (event.pricing.costUsd ?? 0);
-    else state.metrics.hasUnknownCost = true;
-    state.providerAttempts.push({
-      kind: 'provider-call',
-      provider: event.provider,
-      model: event.model,
-      customProviderApi: event.customProviderApi ?? null,
-      outcome: event.outcome,
-      finishReason: event.finishReason ?? null,
-      profileIndex: event.profileIndex ?? null,
-      profileName: event.profileName ?? null,
-      attemptIndex: event.attemptIndex,
-      roundIndex: event.roundIndex ?? null,
-      durationMs: event.durationMs ?? null,
-    });
-    return;
-  }
-
-  if (message === 'llmProfileAttempt') {
-    const event = data as ProcessEventMessageMap['llmProfileAttempt'];
-    state.providerAttempts.push({
-      kind: 'profile-decision',
-      provider: event.provider,
-      model: event.model,
-      customProviderApi: event.customProviderApi ?? null,
-      stage: event.stage,
-      outcome: event.outcome,
-      profileIndex: event.profileIndex ?? null,
-      profileName: event.profileName ?? null,
-      attemptIndex: event.attemptIndex ?? null,
-      roundIndex: event.roundIndex,
-      status: event.status ?? null,
-      healthState: event.healthState ?? null,
-      healthDisposition: event.healthDisposition ?? null,
-      timeoutKind: event.timeoutKind ?? null,
-    });
-    return;
-  }
-
-  const event = data as ProcessEventMessageMap['toolCallFinished'];
-  state.metrics.toolCallCount = (state.metrics.toolCallCount ?? 0) + 1;
-  if (event.outcome !== 'success') state.metrics.toolFailureCount = (state.metrics.toolFailureCount ?? 0) + 1;
-}
-
 function evaluationInputsToGraphOutputs(
   project: Project,
   graphId: GraphId,
@@ -284,7 +213,7 @@ export function useRemoteExecutor() {
     new Map<RemoteRunRequestId, (storagePatch: RivetWebAppStorage) => void>(),
   );
   const responseTraceByRequestIdRef = useRef(new Map<RemoteRunRequestId, RemoteResponseTraceState>());
-  const evaluationMetricsByRequestIdRef = useRef(new Map<RemoteRunRequestId, RemoteEvaluationMetricsState>());
+  const evaluationEventCollectorsByRequestIdRef = useRef(new Map<RemoteRunRequestId, EvaluationEventCollector>());
   const localRecordingCapturesByRequestIdRef = useRef(
     new Map<RemoteRunRequestId, RemoteLocalExecutionRecordingCapture>(),
   );
@@ -382,7 +311,7 @@ export function useRemoteExecutor() {
       earlyResultRequestIdsRef.current.clear();
       webAppStoragePatchCallbacksByRequestIdRef.current.clear();
       responseTraceByRequestIdRef.current.clear();
-      evaluationMetricsByRequestIdRef.current.clear();
+      evaluationEventCollectorsByRequestIdRef.current.clear();
       for (const capture of localRecordingCapturesByRequestIdRef.current.values()) {
         capture.recorderAbortController.abort();
       }
@@ -592,11 +521,6 @@ export function useRemoteExecutor() {
         }
         break;
       case 'llmCallFinished':
-        collectRemoteEvaluationEvent(
-          requestId == null ? undefined : evaluationMetricsByRequestIdRef.current.get(requestId),
-          'llmCallFinished',
-          data,
-        );
         collectRemoteAgentTraceEvent(responseTraceByRequestIdRef.current, requestId, 'llm-call-finished', data);
         if (shouldDispatchExecutionEvent) {
           eventDispatcher.llmCallFinished(data);
@@ -608,22 +532,12 @@ export function useRemoteExecutor() {
         }
         break;
       case 'llmProfileAttempt':
-        collectRemoteEvaluationEvent(
-          requestId == null ? undefined : evaluationMetricsByRequestIdRef.current.get(requestId),
-          'llmProfileAttempt',
-          data,
-        );
         collectRemoteAgentTraceEvent(responseTraceByRequestIdRef.current, requestId, 'llm-profile-attempt', data);
         if (shouldDispatchExecutionEvent) {
           eventDispatcher.llmProfileAttempt(data);
         }
         break;
       case 'toolCallFinished':
-        collectRemoteEvaluationEvent(
-          requestId == null ? undefined : evaluationMetricsByRequestIdRef.current.get(requestId),
-          'toolCallFinished',
-          data,
-        );
         collectRemoteAgentTraceEvent(responseTraceByRequestIdRef.current, requestId, 'tool-call-finished', data);
         if (shouldDispatchExecutionEvent) {
           eventDispatcher.toolCallFinished(data);
@@ -700,7 +614,9 @@ export function useRemoteExecutor() {
   });
 
   useEffect(() => {
-    return executorSession.subscribeMessages(handleExecutorMessage);
+    return executorSession.subscribeMessages(
+      withRemoteEvaluationAccounting(evaluationEventCollectorsByRequestIdRef.current, handleExecutorMessage),
+    );
   }, [executorSession, handleExecutorMessage]);
 
   const tryRunGraph = async (options: EditorGraphRunOptions = {}): Promise<GraphOutputs | undefined> => {
@@ -1198,7 +1114,7 @@ export function useRemoteExecutor() {
             const startedAt = Date.now();
             if (signal?.aborted) throw signal.reason;
             let requestId: RemoteRunRequestId | undefined;
-            const captured = createRemoteEvaluationMetricsState();
+            const captured = createEvaluationEventCollector('full');
             const recorder = new ExecutionRecorder();
             const recording = createRemoteEvaluationRecordingReference();
             const recordingAbortController = new AbortController();
@@ -1244,7 +1160,7 @@ export function useRemoteExecutor() {
                 executorSession,
                 onRequestCreated: (createdRequestId) => {
                   requestId = createdRequestId;
-                  evaluationMetricsByRequestIdRef.current.set(createdRequestId, captured);
+                  evaluationEventCollectorsByRequestIdRef.current.set(createdRequestId, captured);
                   recorderPromise = executorSession.recordSocketEvents((socket) =>
                     recorder.recordSocket(socket, {
                       requestId: createdRequestId,
@@ -1287,7 +1203,7 @@ export function useRemoteExecutor() {
               });
             } finally {
               disposeIncompleteRecordingCapture();
-              if (requestId !== undefined) evaluationMetricsByRequestIdRef.current.delete(requestId);
+              if (requestId !== undefined) evaluationEventCollectorsByRequestIdRef.current.delete(requestId);
             }
           },
         });

@@ -6,12 +6,11 @@ import {
   ExecutionRecorder,
   NodeDatasetProvider,
   type LooseDataValue,
-  type ProcessEventMessageMap,
 } from '@valerypopoff/rivet2-node';
 import {
   assertPortableJson,
+  createEvaluationEventCollector,
   EvaluationGraphExecutionError,
-  type EvaluationExecutionMetrics,
   type EvaluationRecordingReference,
   type PortableJson,
 } from '@valerypopoff/rivet2-evaluations';
@@ -28,76 +27,6 @@ type HostedEvaluationExecutionDependencies = {
   llmProfileHealthStore: PostgresRivetLLMProfileHealthStore;
   createProjectReferenceLoader(): Promise<NonNullable<Parameters<typeof createProcessor>[1]['projectReferenceLoader']>>;
 };
-
-type CapturedMetrics = {
-  metrics: EvaluationExecutionMetrics;
-  providerAttempts: PortableJson[];
-};
-
-function createCapturedMetrics(): CapturedMetrics {
-  return {
-    metrics: { durationMs: 0, modelCallCount: 0, toolCallCount: 0, toolFailureCount: 0 },
-    providerAttempts: [],
-  };
-}
-
-function captureEvent(
-  captured: CapturedMetrics,
-  message: 'llmCallFinished' | 'llmProfileAttempt' | 'toolCallFinished',
-  data: unknown,
-): void {
-  if (message === 'llmCallFinished') {
-    const event = data as ProcessEventMessageMap['llmCallFinished'];
-    captured.metrics.modelCallCount = (captured.metrics.modelCallCount ?? 0) + 1;
-    captured.metrics.inputTokens = (captured.metrics.inputTokens ?? 0) + (event.normalizedUsage?.promptTokens ?? 0);
-    captured.metrics.outputTokens =
-      (captured.metrics.outputTokens ?? 0) + (event.normalizedUsage?.completionTokens ?? 0);
-    captured.metrics.cachedInputTokens =
-      (captured.metrics.cachedInputTokens ?? 0) + (event.normalizedUsage?.cachedTokens ?? 0);
-    captured.metrics.reasoningTokens =
-      (captured.metrics.reasoningTokens ?? 0) + (event.normalizedUsage?.reasoningTokens ?? 0);
-    if (event.pricing.status === 'known')
-      captured.metrics.costUsd = (captured.metrics.costUsd ?? 0) + (event.pricing.costUsd ?? 0);
-    else captured.metrics.hasUnknownCost = true;
-    captured.providerAttempts.push({
-      kind: 'provider-call',
-      provider: event.provider,
-      model: event.model,
-      customProviderApi: event.customProviderApi ?? null,
-      outcome: event.outcome,
-      finishReason: event.finishReason ?? null,
-      profileIndex: event.profileIndex ?? null,
-      profileName: event.profileName ?? null,
-      attemptIndex: event.attemptIndex,
-      roundIndex: event.roundIndex ?? null,
-      durationMs: event.durationMs ?? null,
-    });
-    return;
-  }
-  if (message === 'llmProfileAttempt') {
-    const event = data as ProcessEventMessageMap['llmProfileAttempt'];
-    captured.providerAttempts.push({
-      kind: 'profile-decision',
-      provider: event.provider,
-      model: event.model,
-      customProviderApi: event.customProviderApi ?? null,
-      stage: event.stage,
-      outcome: event.outcome,
-      profileIndex: event.profileIndex ?? null,
-      profileName: event.profileName ?? null,
-      attemptIndex: event.attemptIndex ?? null,
-      roundIndex: event.roundIndex,
-      status: event.status ?? null,
-      healthState: event.healthState ?? null,
-      healthDisposition: event.healthDisposition ?? null,
-      timeoutKind: event.timeoutKind ?? null,
-    });
-    return;
-  }
-  const event = data as ProcessEventMessageMap['toolCallFinished'];
-  captured.metrics.toolCallCount = (captured.metrics.toolCallCount ?? 0) + 1;
-  if (event.outcome !== 'success') captured.metrics.toolFailureCount = (captured.metrics.toolFailureCount ?? 0) + 1;
-}
 
 function toLooseInputValues(values: Record<string, PortableJson>): Record<string, LooseDataValue> {
   // Evaluation datasets carry raw portable values. Always wrap them, even when
@@ -129,7 +58,7 @@ export function createHostedEvaluationGraphRunner(
 ): HostedEvaluationGraphRunner {
   return async ({ project, graphId, inputs, signal, metadata, projectPath, datasetsContents, contextValues }) => {
     const startedAt = Date.now();
-    const captured = createCapturedMetrics();
+    const captured = createEvaluationEventCollector('full');
     const recorder = new ExecutionRecorder();
     const reference = createTemporaryReference();
     let persistedReference: EvaluationRecordingReference | undefined;
@@ -165,9 +94,9 @@ export function createHostedEvaluationGraphRunner(
         llmProfileHealthStore: dependencies.llmProfileHealthStore,
         evaluation: metadata,
       });
-      processor.processor.on('llmCallFinished', (event) => captureEvent(captured, 'llmCallFinished', event));
-      processor.processor.on('llmProfileAttempt', (event) => captureEvent(captured, 'llmProfileAttempt', event));
-      processor.processor.on('toolCallFinished', (event) => captureEvent(captured, 'toolCallFinished', event));
+      processor.processor.on('llmCallFinished', captured.llmCallFinished);
+      processor.processor.on('llmProfileAttempt', captured.llmProfileAttempt);
+      processor.processor.on('toolCallFinished', captured.toolCallFinished);
       recorder.record(processor.processor);
 
       const outputs = await processor.run();

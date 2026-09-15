@@ -9,18 +9,9 @@ import {
 } from '../../studio-server-shared/workflow-types';
 import { deserializeProjectAsync } from '../overrides/utils/deserializeProject';
 import { focusHostedEditorFrame } from './editorBridgeFocus';
-import type {
-  EditorCommandBridgeContext,
-  SerializedEditorCommand,
-} from './editorCommandBridgeContext';
-import {
-  fetchLoadedWorkflowRecording,
-  getRecordingStartGraphId,
-} from './useWorkflowRecordingBridge';
-import {
-  fetchHostedProjectFile,
-  fetchWorkflowPublishedVersionPreview,
-} from './workflowApi';
+import type { EditorCommandBridgeContext, SerializedEditorCommand } from './editorCommandBridgeContext';
+import { fetchLoadedWorkflowRecording, getRecordingStartGraphId } from './useWorkflowRecordingBridge';
+import { fetchHostedProjectFile, fetchWorkflowPublishedVersionPreview } from './workflowApi';
 import { normalizeWorkflowPath } from './workflowLibraryHelpers';
 
 async function fetchProjectCompareReference(path: string): Promise<Project> {
@@ -56,7 +47,7 @@ export async function handleOpenRecordingCommand(
       if (context.getLoadedProject().path === virtualProjectPath) {
         context.clearLoadedRecordingForPath(virtualProjectPath);
       }
-      return;
+      throw new Error('The recording could not be opened. Please try again.');
     }
     if (replacedPath && replacedPath !== virtualProjectPath) {
       context.preview.clearPreviewProjectByPath(replacedPath);
@@ -64,7 +55,7 @@ export async function handleOpenRecordingCommand(
     }
     context.recording.activateWorkflowRecording(loadedRecording, openResult.projectId, virtualProjectPath);
     focusHostedEditorFrame();
-    postMessageToDashboard({ type: 'project-opened', path: virtualProjectPath });
+    postMessageToDashboard({ type: 'project-opened', path: virtualProjectPath, requestId: command.requestId });
   } catch (error) {
     context.recording.recordingByProjectPathRef.current.delete(virtualProjectPath);
     if (context.getLoadedProject().path === virtualProjectPath) {
@@ -72,7 +63,12 @@ export async function handleOpenRecordingCommand(
     }
     const message = getError(error).message;
     console.error('Failed to open workflow recording:', error);
-    postMessageToDashboard({ type: 'project-open-failed', path: command.recordingId, error: message });
+    postMessageToDashboard({
+      type: 'project-open-failed',
+      path: command.recordingId,
+      error: message,
+      requestId: command.requestId,
+    });
   }
 }
 
@@ -121,11 +117,13 @@ export async function handleCompareOpenProjectCommand(
     }
 
     const referenceProject = await fetchProjectCompareReference(command.path);
-    const started = await context.getWorkspace().startProjectCompare(
-      referenceProject,
-      command.referencePath ?? command.path,
-      command.labels ? { labels: command.labels } : undefined,
-    );
+    const started = await context
+      .getWorkspace()
+      .startProjectCompare(
+        referenceProject,
+        command.referencePath ?? command.path,
+        command.labels ? { labels: command.labels } : undefined,
+      );
     if (!started) {
       throw new Error('Failed to start compare mode for the open project.');
     }

@@ -37,6 +37,7 @@ import { mapValues } from 'lodash-es';
 import { coercePromptToChatMessages } from '../../../model/chat/chatMessages.js';
 import { clampMaxTokensToModelLimit, setRequestAndResponseTokenOutputs } from '../../../model/chat/tokenBudget.js';
 import { createAssistantMessagesOutput } from '../../../model/chat/streamChatResponse.js';
+import { resolveLegacyChatEditorCache, writeLegacyChatEditorCache } from '../../../model/LegacyChatEditorCache.js';
 
 type JsonSchemaProperty = {
   type?: string | string[];
@@ -95,9 +96,6 @@ export type ChatGoogleNodeData = ChatGoogleNodeConfigData & {
 
   useAsGraphPartialOutput?: boolean;
 };
-
-// Temporary
-const cache = new Map<string, Outputs>();
 
 export const ChatGoogleNodeImpl: PluginNodeImpl<ChatGoogleNode> = {
   create(): ChatGoogleNode {
@@ -338,8 +336,10 @@ export const ChatGoogleNodeImpl: PluginNodeImpl<ChatGoogleNode> = {
       },
       {
         type: 'toggle',
-        label: 'Cache (same inputs, same outputs)',
+        label: 'Cache outputs (editor only)',
         dataKey: 'cache',
+        helperMessage:
+          'Reuses a matching ordinary chat response while this project remains open. Tool-capable requests always run normally.',
       },
       {
         type: 'toggle',
@@ -584,14 +584,22 @@ export const ChatGoogleNodeImpl: PluginNodeImpl<ChatGoogleNode> = {
             thinkingBudget,
             additionalHeaders: allAdditionalHeaders,
           };
-          const cacheKey = JSON.stringify(options);
-
-          if (data.cache) {
-            const cached = cache.get(cacheKey);
-            if (cached) {
-              context.markResultAsEditorCacheHit?.();
-              return cached;
-            }
+          const { cache, cachedOutputs } = resolveLegacyChatEditorCache({
+            context,
+            enabled: data.cache && !data.useToolCalling,
+            providerIdentity: apiKey
+              ? { apiKey, headers: allAdditionalHeaders, transport: 'generative-ai' }
+              : {
+                  applicationCredentials,
+                  location,
+                  project,
+                  transport: 'vertex-ai',
+                },
+            request: options,
+          });
+          if (cachedOutputs != null) {
+            context.markResultAsEditorCacheHit?.();
+            return cachedOutputs;
           }
 
           const startTime = Date.now();
@@ -716,7 +724,7 @@ export const ChatGoogleNodeImpl: PluginNodeImpl<ChatGoogleNode> = {
           output['duration' as PortId] = { type: 'number', value: duration };
 
           Object.freeze(output);
-          cache.set(cacheKey, output);
+          writeLegacyChatEditorCache(cache, output);
 
           return output;
         },
@@ -731,13 +739,26 @@ export const ChatGoogleNodeImpl: PluginNodeImpl<ChatGoogleNode> = {
           onFailedAttempt(err) {
             context.trace(`ChatGoogleNode failed, retrying: ${err.toString()}`);
 
-            const googleError = err as { status?: number; message?: string };
+            // p-retry gives this callback a failed-attempt wrapper. Reading
+            // status from the wrapper makes a provider's deterministic 4xx
+            // failure look retryable, even though the original error is
+            // available as `error`.
+            const providerError = (err as { error?: unknown }).error ?? err;
+            const googleError = providerError as { code?: number; message?: string; status?: number };
+            const message = googleError.message ?? String(providerError);
+            // Older browser versions of @google/genai expose 4xx failures as
+            // `ClientError` with the HTTP status only in the message. Keep
+            // the structured fields first for newer SDKs, then recover that
+            // documented message shape so invalid requests do not retry.
+            const messageStatus = /\bstatus:\s*(\d{3})\b/.exec(message)?.[1];
+            const status =
+              googleError.status ?? googleError.code ?? (messageStatus ? Number(messageStatus) : undefined);
 
-            if (googleError.status && googleError.status >= 400 && googleError.status < 500) {
-              if (googleError.status === 429) {
+            if (status && status >= 400 && status < 500) {
+              if (status === 429) {
                 context.trace('Google API rate limit exceeded, retrying...');
               } else {
-                throw new Error(`Google API error: ${googleError.status} ${googleError.message}`);
+                throw new Error(`Google API error: ${status} ${message}`);
               }
             }
 

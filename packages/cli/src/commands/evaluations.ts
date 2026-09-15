@@ -7,11 +7,11 @@ import {
 import {
   deserializeEvaluationProjectData,
   deserializeEvaluationSuiteBundleJson,
+  createEvaluationEventCollector,
   EvaluationGraphExecutionError,
   runEvaluationSuite,
   validateEvaluationDataset,
   type EvaluationDataset,
-  type EvaluationExecutionMetrics,
   type EvaluationProjectData,
   type EvaluationRun,
   type PortableJson,
@@ -83,7 +83,9 @@ function findSuite(data: ReturnType<typeof deserializeEvaluationProjectData>, in
   return data.suites.find((suite) => suite.id === input || suite.name === input);
 }
 
-async function loadEvaluationSuiteBundle(path: string): Promise<{ data: EvaluationProjectData; dataset: EvaluationDataset }> {
+async function loadEvaluationSuiteBundle(
+  path: string,
+): Promise<{ data: EvaluationProjectData; dataset: EvaluationDataset }> {
   let source: string;
   const resolvedPath = resolve(process.cwd(), path);
   try {
@@ -282,7 +284,10 @@ export function evaluationRunFailure(
 
 export async function runEvaluation(args: EvaluationRunArgs): Promise<void> {
   if (!args.project || (!args.suite && !args.suiteFile)) {
-    throw new EvaluationCliError('Provide --project and either --suite-file or --suite for a legacy project attachment.', 3);
+    throw new EvaluationCliError(
+      'Provide --project and either --suite-file or --suite for a legacy project attachment.',
+      3,
+    );
   }
   const projectPath = await getProjectFile(args.project);
   const [project, attachedData] = await loadProjectAndAttachedDataFromFile(projectPath);
@@ -298,9 +303,14 @@ export async function runEvaluation(args: EvaluationRunArgs): Promise<void> {
   const suite = importedBundle?.data.suites[0] ?? findSuite(evaluationData, args.suite!);
   if (!suite) throw new EvaluationCliError(`Evaluation suite "${args.suite}" was not found.`, 3);
   if (args.baseline !== undefined && importedBundle) {
-    throw new EvaluationCliError('Exported suite bundles do not include baselines; omit --baseline or use a legacy project attachment.', 3);
+    throw new EvaluationCliError(
+      'Exported suite bundles do not include baselines; omit --baseline or use a legacy project attachment.',
+      3,
+    );
   }
-  const dataset = importedBundle?.dataset ?? (await loadEvaluationDataset(projectPath, project.metadata.id, suite.datasetId, args.datasetFile));
+  const dataset =
+    importedBundle?.dataset ??
+    (await loadEvaluationDataset(projectPath, project.metadata.id, suite.datasetId, args.datasetFile));
   const datasetProvider = await createDatasetProvider(projectPath, args);
   const effectiveData =
     args.trials === undefined && args.concurrency === undefined
@@ -343,13 +353,7 @@ export async function runEvaluation(args: EvaluationRunArgs): Promise<void> {
     executionMode: 'node-cli',
     runGraph: async ({ graphId, inputs, signal, metadata }) => {
       const startedAt = Date.now();
-      const metrics: EvaluationExecutionMetrics = {
-        durationMs: 0,
-        modelCallCount: 0,
-        toolCallCount: 0,
-        toolFailureCount: 0,
-      };
-      const providerAttempts: PortableJson[] = [];
+      const captured = createEvaluationEventCollector('cli');
       const processorInfo = createProcessor(
         project,
         withCliProcessorOptions({ datasetProvider, projectPath }, args, {
@@ -359,62 +363,24 @@ export async function runEvaluation(args: EvaluationRunArgs): Promise<void> {
           evaluation: metadata,
         }),
       );
-      processorInfo.processor.on('llmCallFinished', (event) => {
-        metrics.modelCallCount = (metrics.modelCallCount ?? 0) + 1;
-        metrics.inputTokens = (metrics.inputTokens ?? 0) + (event.normalizedUsage?.promptTokens ?? 0);
-        metrics.outputTokens = (metrics.outputTokens ?? 0) + (event.normalizedUsage?.completionTokens ?? 0);
-        metrics.cachedInputTokens = (metrics.cachedInputTokens ?? 0) + (event.normalizedUsage?.cachedTokens ?? 0);
-        metrics.reasoningTokens = (metrics.reasoningTokens ?? 0) + (event.normalizedUsage?.reasoningTokens ?? 0);
-        if (event.pricing.status === 'known') metrics.costUsd = (metrics.costUsd ?? 0) + (event.pricing.costUsd ?? 0);
-        else metrics.hasUnknownCost = true;
-        providerAttempts.push({
-          kind: 'provider-call',
-          provider: event.provider,
-          model: event.model,
-          customProviderApi: event.customProviderApi ?? null,
-          outcome: event.outcome,
-          profileIndex: event.profileIndex ?? null,
-          attemptIndex: event.attemptIndex,
-          roundIndex: event.roundIndex ?? null,
-          durationMs: event.durationMs ?? null,
-        });
-      });
-      processorInfo.processor.on('llmProfileAttempt', (event) => {
-        providerAttempts.push({
-          kind: 'profile-decision',
-          provider: event.provider,
-          model: event.model,
-          customProviderApi: event.customProviderApi ?? null,
-          stage: event.stage,
-          outcome: event.outcome,
-          profileIndex: event.profileIndex ?? null,
-          attemptIndex: event.attemptIndex ?? null,
-          roundIndex: event.roundIndex,
-          status: event.status ?? null,
-          healthState: event.healthState ?? null,
-          healthDisposition: event.healthDisposition ?? null,
-          timeoutKind: event.timeoutKind ?? null,
-        });
-      });
-      processorInfo.processor.on('toolCallFinished', (event) => {
-        metrics.toolCallCount = (metrics.toolCallCount ?? 0) + 1;
-        if (event.outcome !== 'success') metrics.toolFailureCount = (metrics.toolFailureCount ?? 0) + 1;
-      });
+      processorInfo.processor.on('llmCallFinished', captured.llmCallFinished);
+      processorInfo.processor.on('llmProfileAttempt', captured.llmProfileAttempt);
+      processorInfo.processor.on('toolCallFinished', captured.toolCallFinished);
       try {
         const outputs = await processorInfo.run();
-        metrics.durationMs = Date.now() - startedAt;
+        captured.metrics.durationMs = Date.now() - startedAt;
         return {
           outputs: Object.fromEntries(
             Object.entries(outputs).map(([key, value]) => [key, value.value as PortableJson]),
           ),
-          metrics,
-          ...(providerAttempts.length === 0 ? {} : { providerAttempts }),
+          metrics: captured.metrics,
+          ...(captured.providerAttempts.length === 0 ? {} : { providerAttempts: captured.providerAttempts }),
         };
       } catch (error) {
-        metrics.durationMs = Math.max(metrics.durationMs, Date.now() - startedAt);
+        captured.metrics.durationMs = Math.max(captured.metrics.durationMs, Date.now() - startedAt);
         throw new EvaluationGraphExecutionError(error instanceof Error ? error.message : String(error), {
-          metrics,
-          ...(providerAttempts.length === 0 ? {} : { providerAttempts }),
+          metrics: captured.metrics,
+          ...(captured.providerAttempts.length === 0 ? {} : { providerAttempts: captured.providerAttempts }),
         });
       } finally {
         processorInfo.dispose();
@@ -429,7 +395,7 @@ export async function runEvaluation(args: EvaluationRunArgs): Promise<void> {
         ? `${run.aggregate?.trialCount ?? 0} trials measured`
         : run.evaluationMode === 'scoring'
           ? `${formatScore(run.aggregate?.meanScore)}; ${run.aggregate?.scoredTrialCount ?? 0}/${run.aggregate?.trialCount ?? 0} trials scored`
-        : `${run.aggregate?.passedTrialCount ?? 0}/${run.aggregate?.evaluatedTrialCount ?? 0} evaluated trials passed`;
+          : `${run.aggregate?.passedTrialCount ?? 0}/${run.aggregate?.evaluatedTrialCount ?? 0} evaluated trials passed`;
     process.stdout.write(`${run.suiteName}: ${run.qualityStatus} (${run.executionStatus}; ${measured})\n`);
   }
   const failure = evaluationRunFailure(run);

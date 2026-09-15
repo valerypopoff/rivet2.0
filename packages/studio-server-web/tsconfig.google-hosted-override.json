@@ -1,0 +1,15 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "composite": false,
+    "declaration": false,
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "noEmit": true,
+    "rootDir": ".."
+  },
+  "files": [
+    "overrides/core/plugins/google/google.ts",
+    "tests/google-hosted-override.typecheck.ts"
+  ]
+}

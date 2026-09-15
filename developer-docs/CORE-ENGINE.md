@@ -416,9 +416,11 @@ Current `Random number` behavior lives on the existing `randomNumber` node type 
 
 `Extract JSON` accepts an `any` input so graphs can normalize either raw text or already-structured values. String inputs keep the existing parse/extract/no-match behavior; `object`, `object[]`, `any[]`, and object-like `any` inputs are sent directly to the `Output` port and exclude `No Match`. This keeps the node safe to place after providers or custom nodes that sometimes return parsed JSON and sometimes return text.
 
-`Coalesce` is the control-flow merge node for "first usable input wins" graphs. It can consume `control-flow-excluded` inputs instead of being excluded by the processor, then scans its dynamic `Input N` ports in order and returns the first connected value that is not `control-flow-excluded`; the `Conditional` port only gates whether Coalesce itself ran and is not a candidate output. `null` and `undefined` are treated as real values by default for compatibility with existing graphs; the `Ignore 'null'` and `Ignore 'undefined'` settings opt into treating those payloads as skipped values so Coalesce continues to the next input. New Coalesce nodes default to a 190px canvas width so the app's inline ignore toggles have room without making the node large by default. The desktop app renders these settings as inline canvas toggles that write the same node data as the settings panel; core still keeps the active-setting text fallback for callers that render node bodies through `getBody()`.
+`Coalesce` (internal type `coalesceNew`) is the control-flow merge node for "first usable input wins" graphs. It can consume `control-flow-excluded` inputs instead of being excluded by the processor, then scans its dynamic `Input N` ports in order and returns the first connected value that is not `control-flow-excluded`. It deliberately has no dedicated `Conditional` port; use the standard optional **If** control when the entire node should run conditionally. `null` and `undefined` are treated as real values by default; the `Ignore 'null'` and `Ignore 'undefined'` settings opt into skipping those payloads and continuing to the next input. The persisted `coalesce` type is now **Coalesce (legacy)**: it retains its dedicated `Conditional` port and all previous execution behavior so existing graphs stay compatible. Both types default to a 190px canvas width so the app's inline ignore toggles have room without making the node large by default. The desktop app renders these settings as inline canvas toggles that write the same node data as the settings panel; core still keeps the active-setting text fallback for callers that render node bodies through `getBody()`.
 
-Numbered variadic ports derive their connected range through [`variadicPortIndex.ts`](../packages/core/src/model/nodes/variadicPortIndex.ts). `getNextVariadicPortIndex(...)` returns the highest matching connected index plus one for the trailing editable slot; Array, Did Run, Delay, Join, Passthrough, Start Async Branch, Race Inputs, Coalesce, Assemble Prompt, and Assemble Message use that policy. **Loop Controller (legacy)** deliberately uses `getHighestVariadicPortIndex(...)` because it builds its own trailing input/default pair. The explicit policy literal retains existing parsing rather than normalizing serialized connections: `legacy` for Array, Assemble Prompt, Assemble Message, and Loop Controller (legacy) keeps no-radix parsing; `decimal` for Did Run, Delay, Join, Passthrough, Start Async Branch, and Race Inputs keeps decimal parsing; `strict-positive` for Coalesce accepts only exact, positive, safe `inputN` ids. Do not silently make these policies stricter or more uniform without an explicit graph-compatibility change.
+Both implementations share fallback selection and settings in `CoalesceNodeBase.ts`; keep both types in `NodeExclusionPolicy.ts` so excluded branches can reach that selection. Existing serialized nodes keep their type, connections, and stored title; the legacy label applies to the registered node name and newly created legacy nodes. The dedicated legacy `Conditional` port excludes output only when its value is `control-flow-excluded`; boolean `false` still permits fallback selection. The standard **If** option is handled separately by the processor. Focused coverage lives in `CoalesceNode.test.ts` and `NodeExclusionPolicy.test.ts`; run `yarn studio-server:ui:observe coalesce-node.spec.ts` with headless settings to verify both palette entries and their ports.
+
+Numbered variadic ports derive their connected range through [`variadicPortIndex.ts`](../packages/core/src/model/nodes/variadicPortIndex.ts). `getNextVariadicPortIndex(...)` returns the highest matching connected index plus one for the trailing editable slot; Array, Did Run, Delay, Join, Passthrough, Start Async Branch, Race Inputs, Coalesce, Coalesce (legacy), Assemble Prompt, and Assemble Message use that policy. **Loop Controller (legacy)** deliberately uses `getHighestVariadicPortIndex(...)` because it builds its own trailing input/default pair. The explicit policy literal retains existing parsing rather than normalizing serialized connections: `legacy` for Array, Assemble Prompt, Assemble Message, and Loop Controller (legacy) keeps no-radix parsing; `decimal` for Did Run, Delay, Join, Passthrough, Start Async Branch, and Race Inputs keeps decimal parsing; `strict-positive` for both Coalesce types accepts only exact, positive, safe `inputN` ids. Do not silently make these policies stricter or more uniform without an explicit graph-compatibility change.
 
 `Did Run` is a small control-flow adapter node. It has Coalesce-style dynamic `Input N` ports and one boolean `Ran` output. `GraphProcessor` already prevents normal node processing when any connected upstream value is `control-flow-excluded`, so the node implementation deliberately does not re-check payload truthiness or data type. If the processor invokes it with at least one dynamic input entry, it outputs `true`; if no dynamic inputs are connected, it outputs `control-flow-excluded`. This keeps the node's meaning focused on "did every connected branch run at all?" rather than "what values did those branches produce?" Its explanatory copy belongs in the settings panel through a read-only `info` editor; the node body intentionally stays empty and new nodes default to a compact 167px width.
 
@@ -589,6 +591,10 @@ These helpers are now reused across more than just `ChatNodeBase`:
 - `ChatNodeBase.ts`
 - `plugins/google/nodes/ChatGoogleNode.ts`
 - `plugins/anthropic/nodes/ChatAnthropicNode.ts`
+
+The legacy Google node's API-key catalog, shared request types, and Generative AI streaming implementation live together in [`plugins/google/googleGenerativeAi.ts`](../packages/core/src/plugins/google/googleGenerativeAi.ts). [`plugins/google/google.ts`](../packages/core/src/plugins/google/google.ts) remains the public Core facade and owns only the Vertex application-credential path. Vertex credentials are supplied as the SDK client's `googleAuthOptions.keyFilename`, never by mutating `GOOGLE_APPLICATION_CREDENTIALS`; concurrent graph runs therefore retain their own configured identity. Hosted browser builds import the leaf through their narrow legacy-node override, then retain only the two historical Gemini 1.5 zero-cost catalog entries locally; Core's LLM Chat V2 registry continues using the facade's deliberately unpriced versions. The leaf must remain browser-safe: no Core-index, Vertex, Google-auth, or Node-runtime imports. The legacy node treats provider 4xx responses other than 429 as non-retryable by reading the original error from p-retry's failed-attempt wrapper; retrying an invalid request only delays the visible node error.
+
+The older OpenAI, Anthropic, and Google Chat nodes cache only ordinary model calls through [`LegacyChatEditorCache.ts`](../packages/core/src/model/LegacyChatEditorCache.ts). It selects the host-owned per-project editor cache (or the current graph execution cache for non-editor callers), hashes the graph/node, effective request, credentials, endpoint, and headers into an opaque key, and clones output maps on both cache boundaries. It never uses a module-global cache, so results cannot survive into another project or credential context. Tool-capable legacy Chat requests bypass caching altogether: replaying a prior tool-call output could otherwise cause downstream work to run from stale provider data.
 
 That means some of the former provider-level duplication is already removed in:
 
@@ -878,6 +884,20 @@ class plus a benchmark proving the expansion is worth the risk.
 
 #### Root-owned async branches
 
+Workflow endpoint acceptance is documented in
+[`workflow-publication.md`](studio-server/workflow-publication.md#endpoint-responses-and-async-completion).
+It verifies the distinction between early output publication and complete run
+ownership through real HTTP, process shutdown, managed storage, and browser
+recording playback. Keep Core's Watch/Stop readiness matrix here instead of
+duplicating that scheduler matrix in each endpoint adapter.
+
+Internally sliced async graphs retain the original port definitions of their inert
+input anchors. Those anchors are not new async triggers. This matters when two
+Start Async Branch nodes are adjacent: trimming the outer trigger's inputs would
+otherwise erase its variadic outputs and silently disconnect the inner branch,
+depending on preprocessing order. Anchor definitions come only from the validated
+owning run, never from persisted user-supplied overrides.
+
 `Start Async Branch` is an explicit scheduler boundary, not a detached job. It
 processes like a variadic Passthrough after all connected inputs are ready, but
 its downstream slice is registered with the root processor instead of being
@@ -909,10 +929,17 @@ resolved as excluded, and all resulting foreground work has completed. The
 same suppression applies after its queue drains but before that outcome is
 known: either outcome can still affect ordinary graph outputs.
 `waitForRunCompletion()` observes the later drain, errors,
-`graphFinish`, `done`, and `finish`. Web-app action paths enable this mode so a
-Chat response is not held behind a side-effect-only branch. Local/Node executor
+`graphFinish`, `done`, and `finish`. Web-app action paths and Studio Server workflow
+HTTP endpoints enable this mode so a response is not held behind a side-effect-only
+branch. HTTP handlers send the foreground result but await full completion before
+finalizing recordings and releasing execution/body admission and shutdown ownership.
+Local/Node executor
 owners defer abort-listener, recorder, debugger, code-runner, cache, and active
-processor cleanup until `waitForRunCompletion()` settles. Remote execution
+processor cleanup until `waitForRunCompletion()` settles. Cancelling an active
+Node processor keeps its debugger attached for abort and terminal node events,
+including the small interval after Core marks the lifecycle complete but before
+it emits `finish`; aborting an unstarted processor still detaches immediately.
+Remote execution
 transports forward `graphOutputsReady` separately from `done`; the result waiter
 settles on either event while run routing remains active until the real terminal
 event. If no managed work remains, or foreground processing fails before an

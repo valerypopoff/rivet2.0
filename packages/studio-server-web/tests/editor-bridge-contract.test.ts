@@ -42,7 +42,11 @@ const [{ handleOpenRecordingCommand, handleOpenPublishedPreviewCommand }, { hand
     import('../dashboard/editorProjectLifecycleCommands'),
   ]).finally(() => hooks.deregister());
 
-function createRecordingHarness(t: TestContext, initialPath: string) {
+function createRecordingHarness(
+  t: TestContext,
+  initialPath: string,
+  openResult: { opened: boolean; projectId?: ProjectId } = { opened: true, projectId: 'project-1' as ProjectId },
+) {
   const store = createStore();
   store.set(selectedExecutorState, 'nodejs');
   let recording!: ReturnType<typeof useWorkflowRecordingBridge>;
@@ -76,7 +80,7 @@ function createRecordingHarness(t: TestContext, initialPath: string) {
     getLoadedProject: () => ({ loaded: true, path: initialPath }),
     getOpenProject: () => async (path: string, options: unknown) => {
       openCalls.push({ path, options });
-      return { opened: true, projectId };
+      return openResult;
     },
     getProjects: () => ({ openedProjects: {}, openedProjectsSortedIds: [] }),
     getWorkspace: () => ({ moveProjectPaths: () => {} }),
@@ -143,11 +147,19 @@ test('project path moves rebind a manually loaded recording to its owner tab', a
   assert.deepEqual(messages, [{ type: 'workflow-paths-moved-applied', requestId: 'move-1' }]);
 });
 
-test('recording opens give a new replay tab the active local executor mode', async (t) => {
-  const { context, store, projectId, openCalls } = createRecordingHarness(t, '/workflows/project.rivet-project');
+test('recording opens give a new replay tab the active local executor mode and acknowledge the request', async (t) => {
+  const { context, store, projectId, openCalls, messages } = createRecordingHarness(
+    t,
+    '/workflows/project.rivet-project',
+  );
   t.mock.method(globalThis, 'fetch', async () => new Response(new ExecutionRecorder().serialize()));
 
-  await handleOpenRecordingCommand(context, { type: 'open-recording', recordingId: 'recording-1' });
+  await handleOpenRecordingCommand(context, {
+    type: 'open-recording',
+    recordingId: 'recording-1',
+    replaceCurrent: false,
+    requestId: 'recording-open-1',
+  });
 
   const replayPath = getWorkflowRecordingVirtualProjectPath('recording-1');
   assert.deepEqual(openCalls, [
@@ -163,6 +175,30 @@ test('recording opens give a new replay tab the active local executor mode', asy
   assert.equal(store.get(selectedExecutorState), 'nodejs');
   assert.equal(store.get(loadedRecordingState)?.projectPath, replayPath);
   assert.equal(store.get(loadedRecordingState)?.projectId, projectId);
+  assert.deepEqual(messages, [{ type: 'project-opened', path: replayPath, requestId: 'recording-open-1' }]);
+});
+
+test('recording open failures acknowledge the original request without leaving replay state behind', async (t) => {
+  const { context, store, messages } = createRecordingHarness(t, '/workflows/project.rivet-project', { opened: false });
+  t.mock.method(globalThis, 'fetch', async () => new Response(new ExecutionRecorder().serialize()));
+  t.mock.method(console, 'error', () => {});
+
+  await handleOpenRecordingCommand(context, {
+    type: 'open-recording',
+    recordingId: 'recording-1',
+    replaceCurrent: false,
+    requestId: 'recording-open-1',
+  });
+
+  assert.equal(store.get(loadedRecordingState), null);
+  assert.deepEqual(messages, [
+    {
+      type: 'project-open-failed',
+      path: 'recording-1',
+      error: 'The recording could not be opened. Please try again.',
+      requestId: 'recording-open-1',
+    },
+  ]);
 });
 
 test('open project bridge command accepts optional title and preview flags', () => {
@@ -282,6 +318,45 @@ test('project opened event accepts optional request ownership', () => {
       type: 'project-opened',
       path: '/workflows/example.rivet-project',
       requestId: 12,
+    }),
+    false,
+  );
+});
+
+test('recording bridge acknowledgements validate request ownership', () => {
+  assert.equal(
+    isDashboardToEditorCommand({
+      type: 'open-recording',
+      recordingId: 'recording-1',
+      replaceCurrent: false,
+      requestId: 'recording-open-1',
+    }),
+    true,
+  );
+  assert.equal(
+    isDashboardToEditorCommand({
+      type: 'open-recording',
+      recordingId: 'recording-1',
+      replaceCurrent: false,
+      requestId: 1,
+    }),
+    false,
+  );
+  assert.equal(
+    isEditorToDashboardEvent({
+      type: 'project-open-failed',
+      path: 'recording-1',
+      error: 'Not found',
+      requestId: 'recording-open-1',
+    }),
+    true,
+  );
+  assert.equal(
+    isEditorToDashboardEvent({
+      type: 'project-open-failed',
+      path: 'recording-1',
+      error: 'Not found',
+      requestId: 1,
     }),
     false,
   );

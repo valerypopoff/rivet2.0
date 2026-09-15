@@ -284,3 +284,64 @@ test('editNode graph output renames update recursive current-graph subgraph call
     },
   ]);
 });
+
+test('editNode merged graph output renames restore a recursive caller when the final ID returns to the original value', () => {
+  const graphOutputNode = makeGraphOutputNode('output-node', 'temp');
+  const nextGraphOutputNode = {
+    ...graphOutputNode,
+    data: {
+      ...(graphOutputNode.data as Record<string, unknown>),
+      id: 'old',
+    },
+  } as ChartNode;
+  const targetNode = makeTextNode('target', 'target');
+  const previousRecursiveCaller = makeSubGraphNode('recursive-caller', subGraphId, {
+    data: { outputPortOrder: ['old'] },
+  });
+  const currentRecursiveCaller = {
+    ...previousRecursiveCaller,
+    data: {
+      ...(previousRecursiveCaller.data as Record<string, unknown>),
+      outputPortOrder: ['temp'],
+    },
+  } as ChartNode;
+  const oldConnection = makeConnection({
+    outputNodeId: previousRecursiveCaller.id,
+    outputId: 'old' as PortId,
+    inputNodeId: targetNode.id,
+  });
+  const tempConnection = {
+    ...oldConnection,
+    outputId: 'temp' as PortId,
+  };
+  const previousGraphOutputNode = makeGraphOutputNode('output-node', 'old');
+  const currentState = makeCommandState({
+    graphId: subGraphId,
+    nodes: [graphOutputNode, targetNode, currentRecursiveCaller],
+    connections: [tempConnection],
+    project: makeProject([
+      makeGraph(subGraphId, [graphOutputNode, targetNode, currentRecursiveCaller], [tempConnection]),
+    ]),
+  });
+
+  const appliedData = buildEditNodeAppliedData({
+    params: {
+      nodeId: graphOutputNode.id,
+      newNode: nextGraphOutputNode,
+    },
+    currentState,
+    previousNode: previousGraphOutputNode,
+    previousCurrentNodes: [previousGraphOutputNode, targetNode, previousRecursiveCaller],
+    previousConnections: [oldConnection],
+    previousRecoverableConnections: [],
+    currentRecoverableConnections: [],
+    isMergedEdit: true,
+    projectNodeRegistry: registry,
+  });
+  const nextRecursiveCaller = appliedData.nextCurrentNodes!.find((node) => node.id === previousRecursiveCaller.id)!;
+
+  assert.deepEqual((nextRecursiveCaller.data as { outputPortOrder?: string[] }).outputPortOrder, ['old']);
+  assert.deepEqual(appliedData.nextConnections, [oldConnection]);
+  assert.deepEqual(appliedData.currentGraphSnapshot?.nextGraph.nodes.find((node) => node.id === nextRecursiveCaller.id), nextRecursiveCaller);
+  assert.deepEqual(appliedData.currentGraphSnapshot?.nextGraph.connections, [oldConnection]);
+});

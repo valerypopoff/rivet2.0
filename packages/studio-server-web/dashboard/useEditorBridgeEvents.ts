@@ -23,7 +23,7 @@ type UseEditorBridgeEventsOptions = {
   onActiveProjectUnsavedChangesChange: (path: string, hasUnsavedChanges: boolean) => void;
   onEditorReady: () => void;
   onOpenProjectCountChange: (count: number) => void;
-  onProjectOpenFailed: (error: string) => void;
+  onProjectOpenFailed: (error: string, requestId?: string) => void;
   onProjectOpened: (path: string, requestId?: string) => void;
   onRequestActiveWorkflowProjectRename: () => void;
   onProjectSaved: (path: string, hasNewerUnsavedChanges?: boolean) => void;
@@ -185,7 +185,7 @@ export function useEditorBridgeEvents(options: UseEditorBridgeEventsOptions) {
           onWorkflowProjectContentChangeResolved(event.data.requestId, event.data.resolved);
           break;
         case 'project-open-failed':
-          onProjectOpenFailed(event.data.error);
+          onProjectOpenFailed(event.data.error, event.data.requestId);
           toast.error(`Failed to open project: ${event.data.error}`);
           break;
         case 'project-compare-failed':

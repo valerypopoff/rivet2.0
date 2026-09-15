@@ -10,3 +10,4 @@ export * from './dataTypes.js';
 export * from './normalization.js';
 export * from './library.js';
 export * from './librarySync.js';
+export * from './executionEventCollector.js';

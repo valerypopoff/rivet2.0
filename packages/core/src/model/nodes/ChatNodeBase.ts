@@ -37,6 +37,7 @@ import {
   applyOpenAIStreamingResponse,
   handleOpenAIRetryableFailure,
 } from '../chat/openAIChatRuntime.js';
+import { resolveLegacyChatEditorCache, writeLegacyChatEditorCache } from '../LegacyChatEditorCache.js';
 
 export type ChatNodeConfigData = {
   model: string;
@@ -105,9 +106,6 @@ export type ChatNodeData = ChatNodeConfigData & {
 
   useAsGraphPartialOutput?: boolean;
 };
-
-// Temporary
-const cache = new Map<string, Outputs>();
 
 export const ChatNodeBase = {
   defaultData: (): ChatNodeData => ({
@@ -805,10 +803,10 @@ export const ChatNodeBase = {
           },
           {
             type: 'toggle',
-            label: 'Cache In Rivet',
+            label: 'Cache outputs (editor only)',
             dataKey: 'cache',
             helperMessage:
-              'If on, requests with the same parameters and messages will be cached in Rivet, for immediate responses without an API call.',
+              'Reuses a matching ordinary chat response while this project remains open. Tool-capable requests always run normally.',
           },
           {
             type: 'toggle',
@@ -1016,14 +1014,19 @@ export const ChatNodeBase = {
             options.max_tokens = maxTokens;
           }
 
-          const cacheKey = JSON.stringify(options);
-
-          if (data.cache) {
-            const cached = cache.get(cacheKey);
-            if (cached) {
-              context.markResultAsEditorCacheHit?.();
-              return cached;
-            }
+          const { cache, cachedOutputs } = resolveLegacyChatEditorCache({
+            context,
+            enabled: data.cache && !data.enableFunctionUse,
+            providerIdentity: {
+              apiKey: context.settings.openAiKey ?? '',
+              organization: context.settings.openAiOrganization,
+              headers: allAdditionalHeaders,
+            },
+            request: options,
+          });
+          if (cachedOutputs != null) {
+            context.markResultAsEditorCacheHit?.();
+            return cachedOutputs;
           }
 
           const startTime = Date.now();
@@ -1058,7 +1061,7 @@ export const ChatNodeBase = {
             });
 
             Object.freeze(output);
-            cache.set(cacheKey, output);
+            writeLegacyChatEditorCache(cache, output);
 
             return output;
           }
@@ -1097,7 +1100,7 @@ export const ChatNodeBase = {
           output['duration' as PortId] = { type: 'number', value: Date.now() - startTime };
 
           Object.freeze(output);
-          cache.set(cacheKey, output);
+          writeLegacyChatEditorCache(cache, output);
 
           return output;
         },

@@ -330,7 +330,7 @@ test('Watch Streaming Output exposes its chunk outputs', async ({ page }) => {
       markerStart: path.getAttribute('marker-start'),
     })),
   );
-  expect(markerAttributes.every(({ markerEnd }) => markerEnd?.startsWith('url(#tool-continuation-'))).toBe(true);
+  expect(markerAttributes.every(({ markerEnd }) => markerEnd?.startsWith('url(#wire-arrow-'))).toBe(true);
   expect(markerAttributes.every(({ markerStart }) => markerStart == null)).toBe(true);
 
   await watch.hover();

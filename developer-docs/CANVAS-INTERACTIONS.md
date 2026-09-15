@@ -73,7 +73,7 @@ and success/error styling. This aggregate running rule also drives node-header
 running chrome, so a faster last-started parallel call cannot make the Delegate
 look idle while an earlier sibling is still active. Idle lanes and arrowheads
 retain the ordinary wire color; hover and active execution apply the normal
-primary highlight to the lanes. Respect
+primary highlight to both the lanes and their arrowheads. Respect
 `prefers-reduced-motion`, and for bent connections put markers only on the two
 outer segment endpoints. Project Compare remains visible on valid continuation
 wires: added, changed, and removed wire colors also color the matching arrowheads
@@ -136,7 +136,7 @@ spaces short marker paths by arc length. Do not place arrows from only the
 overall endpoint vector: on a curved or bent wire that makes an arrow point
 away from the actual data direction. The marker paths reuse the existing
 comparison-aware SVG arrow definitions, so added and changed connection states
-retain the wire's color. The source-to-Watch association is
+and ordinary active highlights retain the wire's color. The source-to-Watch association is
 derived from the effective, definition-valid graph and disappears when the
 Watch node is disabled or the input is no longer its `stream` port. Invalid,
 disabled, and comparison-removed connections stay visually ordinary.

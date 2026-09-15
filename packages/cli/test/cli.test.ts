@@ -1,5 +1,11 @@
+import {
+  accountingGraph,
+  accountingProviderResponse,
+  accountingToolGraph,
+} from '../../evaluations/test/fixtures/accountingGraph.js';
 import assert from 'node:assert/strict';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import test from 'node:test';
@@ -15,6 +21,7 @@ import {
   type UiComponentId,
   type UiGraphId,
 } from '@valerypopoff/rivet2-node';
+import { serializeEvaluationSuiteBundleJson } from '@valerypopoff/rivet2-evaluations';
 import yargs from 'yargs';
 import { parseJsonInputRecord, parseJsonKeyValueInputRecord, parseKeyValueInputRecord } from '../src/commandInputs.js';
 import { buildDoctorReport, makeDoctorCommand } from '../src/commands/doctor.js';
@@ -22,6 +29,7 @@ import {
   evaluationRunFailure,
   formatEvaluationRunAsJUnit,
   makeEvaluationCommand,
+  runEvaluation,
 } from '../src/commands/evaluations.js';
 import { buildProjectInspection } from '../src/commands/list.js';
 import { makeCommand as makeRunCommand, run } from '../src/commands/run.js';
@@ -142,6 +150,133 @@ test('evaluations command distinguishes quality evaluation from execution benchm
   assert.equal(options.key.benchmark, true);
   assert.equal(options.key['suite-file'], true);
 });
+
+for (const fail of [false, true]) {
+  test(`evaluation CLI preserves compact evidence on ${fail ? 'failure' : 'success'}`, async (t) => {
+    let requestCount = 0;
+    const provider = createServer((request, response) => {
+      request.resume();
+      const reply = accountingProviderResponse(requestCount++, fail);
+      response.writeHead(reply.status, { 'Content-Type': 'application/json' });
+      response.end(JSON.stringify(reply.body));
+    });
+    await new Promise<void>((resolve) => provider.listen(0, '127.0.0.1', resolve));
+    const address = provider.address();
+    assert.ok(address && typeof address !== 'string');
+    t.after(async () => {
+      provider.closeAllConnections();
+      await new Promise<void>((resolve) => provider.close(() => resolve()));
+    });
+
+    const directory = await mkdtemp(join(tmpdir(), 'rivet-cli-evaluation-accounting-'));
+    t.after(() => rm(directory, { force: true, recursive: true }));
+    const projectFile = join(directory, 'project.rivet-project');
+    const suiteFile = join(directory, 'suite.json');
+    await writeFile(
+      projectFile,
+      serializeProject(createEvaluationProviderProject(`http://127.0.0.1:${address.port}/v1`)) as string,
+    );
+    await writeFile(
+      suiteFile,
+      serializeEvaluationSuiteBundleJson(
+        {
+          id: 'cli-accounting-suite',
+          name: 'CLI accounting suite',
+          targetGraphId: 'evaluation-provider-graph' as GraphId,
+          datasetId: 'cli-accounting-dataset',
+          inputBindings: [],
+          assertions: [],
+          evaluators: [],
+          configuration: { concurrency: 1, trialCount: 1 },
+        },
+        {
+          id: 'cli-accounting-dataset',
+          name: 'CLI accounting dataset',
+          fields: [],
+          cases: [{ id: 'case', name: 'Case', values: {} }],
+        },
+      ),
+    );
+
+    let serializedRun = '';
+    const originalWrite = process.stdout.write;
+    process.stdout.write = ((chunk: string | Uint8Array) => {
+      serializedRun += typeof chunk === 'string' ? chunk : Buffer.from(chunk).toString('utf8');
+      return true;
+    }) as typeof process.stdout.write;
+    let executionError: unknown;
+    try {
+      await runEvaluation({
+        benchmark: true,
+        concurrency: 1,
+        customAiApiKey: 'fixture-key',
+        datasetFile: undefined,
+        json: true,
+        junit: false,
+        project: projectFile,
+        requireDatasetFile: false,
+        saveDatasets: false,
+        suiteFile,
+        trials: 1,
+      });
+    } catch (error) {
+      executionError = error;
+    } finally {
+      process.stdout.write = originalWrite;
+    }
+
+    if (fail) {
+      assert.ok(executionError instanceof Error);
+      assert.equal((executionError as Error & { exitCode: number }).exitCode, 3);
+    } else assert.equal(executionError, undefined, serializedRun);
+
+    const serializedJsonStart = serializedRun.indexOf('{\n');
+    assert.notEqual(serializedJsonStart, -1, serializedRun);
+    const run = JSON.parse(serializedRun.slice(serializedJsonStart)) as {
+      trials: Array<{
+        targetMetrics: {
+          modelCallCount?: number;
+          hasUnknownCost?: boolean;
+          toolCallCount?: number;
+          toolFailureCount?: number;
+          inputTokens?: number;
+          outputTokens?: number;
+        };
+        targetProviderAttempts?: Array<Record<string, unknown>>;
+      }>;
+    };
+    const trial = run.trials[0];
+    assert.ok(trial);
+    assert.equal(trial.targetMetrics.modelCallCount, 2);
+    assert.equal(trial.targetMetrics.toolCallCount, 1);
+    assert.equal(trial.targetMetrics.toolFailureCount, 0);
+    assert.equal(trial.targetMetrics.inputTokens, fail ? 3 : 6);
+    assert.equal(trial.targetMetrics.outputTokens, fail ? 2 : 4);
+    const decisions = trial.targetProviderAttempts?.filter((attempt) => attempt.kind === 'profile-decision');
+    assert.ok(decisions?.length);
+    assert.ok(decisions.every((attempt) => !('profileName' in attempt)));
+    assert.equal(trial.targetMetrics.hasUnknownCost, true);
+    const attempt = trial.targetProviderAttempts?.filter((attempt) => attempt.kind === 'provider-call').at(-1);
+    assert.ok(attempt);
+    assert.deepEqual(Object.keys(attempt), [
+      'kind',
+      'provider',
+      'model',
+      'customProviderApi',
+      'outcome',
+      'profileIndex',
+      'attemptIndex',
+      'roundIndex',
+      'durationMs',
+    ]);
+    assert.equal(attempt.provider, 'custom');
+    assert.equal(attempt.model, 'fixture');
+    assert.equal(attempt.customProviderApi, 'completions');
+    assert.equal(attempt.outcome, fail ? 'provider-failure' : 'success');
+    assert.equal('finishReason' in attempt, false);
+    assert.equal('profileName' in attempt, false);
+  });
+}
 
 test('evaluation JUnit separates execution errors from quality failures', () => {
   const trial = (overrides: Record<string, unknown>) => ({
@@ -996,6 +1131,26 @@ function createProjectWithWebApp(): Project {
         name: 'Test web app',
       },
     },
+  };
+}
+
+function createEvaluationProviderProject(customProviderBaseURL: string): Project {
+  const graphId = 'evaluation-provider-graph' as GraphId;
+  return {
+    graphs: {
+      ['accounting-tool' as GraphId]: accountingToolGraph,
+      [graphId]: {
+        ...accountingGraph(customProviderBaseURL),
+        metadata: { description: '', id: graphId, name: 'Evaluation provider' },
+      },
+    },
+    metadata: {
+      description: '',
+      id: 'evaluation-provider-project' as ProjectId,
+      mainGraphId: graphId,
+      title: 'Evaluation provider project',
+    },
+    plugins: [],
   };
 }
 

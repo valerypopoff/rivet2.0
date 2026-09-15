@@ -273,6 +273,7 @@ const sidebars = {
       collapsed: false,
       items: [
         'node-reference/abort-graph',
+        'node-reference/coalesce-new',
         'node-reference/coalesce',
         'node-reference/compare',
         'node-reference/delay',

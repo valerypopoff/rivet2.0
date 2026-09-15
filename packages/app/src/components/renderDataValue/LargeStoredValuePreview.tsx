@@ -168,7 +168,6 @@ export const LargeStoredValuePreview: FC<{
   const chunkCount = shouldPageFullText ? Math.max(1, chunks.length) : 1;
   const showActions = shouldShowLargeStoredValueActions({ mode, allowLargeStoredValueActions });
   const missingRef = mode !== 'compact' && restoredValue == null;
-  const usesFoldingJsonPreview = preview.kind === 'json' && showFull && !shouldPageFullText;
   const markdownEnabled = preview.kind === 'text' && showFull && !!renderMarkdown;
   const markdownRendered = useMarkdown(activeChunkText, markdownEnabled);
   const { providerRootProps, clearSearchAutoExpansion, activeMatchRange } = useLargeStoredValueFullscreenSearch({
@@ -184,7 +183,7 @@ export const LargeStoredValuePreview: FC<{
     setShowFull,
     chunkPage,
     setChunkPage,
-    highlightMode: usesFoldingJsonPreview ? 'external' : 'dom',
+    highlightMode: preview.kind === 'json' ? 'external' : 'dom',
     renderMarkdown: markdownEnabled,
   });
 
@@ -244,7 +243,12 @@ export const LargeStoredValuePreview: FC<{
           <div ref={contentRef} className="preview-content">
             {preview.kind === 'json' ? (
               <div className="json-preview-content">
-                <ColorizedPreformattedText text={activeChunkText ?? ''} language="json" wrapWords />
+                <ColorizedPreformattedText
+                  text={activeChunkText ?? ''}
+                  language="json"
+                  wrapWords
+                  activeSearchMatchRange={activeMatchRange}
+                />
               </div>
             ) : markdownEnabled ? (
               <div className="markdown-body rivet-markdown-output" dangerouslySetInnerHTML={markdownRendered} />

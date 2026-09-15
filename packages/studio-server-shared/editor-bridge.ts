@@ -17,7 +17,7 @@ export type DashboardToEditorCommand =
       reloadFromDisk?: boolean;
       requestId?: string;
     }
-  | { type: 'open-recording'; recordingId: string; replaceCurrent: boolean }
+  | { type: 'open-recording'; recordingId: string; replaceCurrent: boolean; requestId?: string }
   | { type: 'open-published-version-preview'; relativePath: string; versionId: string; replaceCurrent: boolean }
   | {
       type: 'compare-open-project-with';
@@ -69,7 +69,7 @@ export type EditorToDashboardEvent =
   | { type: 'editor-ready' }
   | { type: 'request-active-workflow-project-rename' }
   | { type: 'project-opened'; path: string; requestId?: string }
-  | { type: 'project-open-failed'; path: string; error: string }
+  | { type: 'project-open-failed'; path: string; error: string; requestId?: string }
   | { type: 'active-project-path-changed'; path: string }
   | { type: 'active-project-unsaved-changes-changed'; path: string; hasUnsavedChanges: boolean }
   | { type: 'open-project-count-changed'; count: number }
@@ -152,7 +152,11 @@ export function isDashboardToEditorCommand(value: unknown): value is DashboardTo
         (value.requestId == null || typeof value.requestId === 'string')
       );
     case 'open-recording':
-      return typeof value.recordingId === 'string' && typeof value.replaceCurrent === 'boolean';
+      return (
+        typeof value.recordingId === 'string' &&
+        typeof value.replaceCurrent === 'boolean' &&
+        (value.requestId == null || typeof value.requestId === 'string')
+      );
     case 'open-published-version-preview':
       return (
         typeof value.relativePath === 'string' &&
@@ -235,7 +239,11 @@ export function isEditorToDashboardEvent(value: unknown): value is EditorToDashb
       return typeof value.path === 'string' && typeof value.hasUnsavedChanges === 'boolean';
     case 'project-compare-failed':
     case 'project-open-failed':
-      return typeof value.path === 'string' && typeof value.error === 'string';
+      return (
+        typeof value.path === 'string' &&
+        typeof value.error === 'string' &&
+        (value.requestId == null || typeof value.requestId === 'string')
+      );
     case 'workflow-paths-moved-applied':
       return value.requestId == null || typeof value.requestId === 'string';
     case 'workflow-project-bindings-reconciled':

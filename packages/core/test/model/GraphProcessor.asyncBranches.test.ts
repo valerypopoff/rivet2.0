@@ -3274,6 +3274,31 @@ void describe('GraphProcessor scheduler boundaries', () => {
     assert.equal(finishedNodeIds.includes(trigger.id), true);
   });
 
+  for (const reverseNodeOrder of [false, true]) {
+    void it(`preserves values through adjacent async triggers (reverse order: ${reverseNodeOrder})`, async () => {
+      const source = makeTestNode('adjacent-source');
+      const outer = makeAsyncNode('adjacent-outer');
+      const inner = makeAsyncNode('adjacent-inner');
+      const leaf = makeTestNode('adjacent-leaf');
+      const nodes = [source, outer, inner, leaf];
+      const graph = makeGraph('adjacent-async', reverseNodeOrder ? nodes.reverse() : nodes, [
+        connect(source.id, outer.id, 'input1'),
+        connect(outer.id, inner.id, 'input1', 'output1'),
+        connect(inner.id, leaf.id, 'input', 'output1'),
+      ]);
+      AsyncTestNodeImpl.handlers.set(source.id, async () => ({ output: { type: 'string', value: 'retained' } }));
+      let received: unknown;
+      AsyncTestNodeImpl.handlers.set(leaf.id, async (inputs) => {
+        received = inputs['input' as PortId]?.value;
+        return {};
+      });
+      await createProcessor(graph).processGraph(testProcessContext());
+      assert.equal(received, 'retained');
+      assert.equal(AsyncTestNodeImpl.runCounts.get(source.id), 1, 'anchors must never repeat side effects');
+      assert.equal(AsyncTestNodeImpl.runCounts.get(leaf.id), 1);
+    });
+  }
+
   void it('drains nested async branches to a fixed point', async () => {
     const source = makeTestNode('source');
     const outerTrigger = makeAsyncNode('outer-trigger');

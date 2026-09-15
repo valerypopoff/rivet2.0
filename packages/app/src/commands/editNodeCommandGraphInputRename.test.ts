@@ -5,6 +5,7 @@ import {
   makeConnection,
   makeGraph,
   makeGraphInputNode,
+  makeGraphOutputNode,
   makeProject,
   makeSubGraphNode,
   makeTextNode,
@@ -300,4 +301,124 @@ test('editNode merged graph input renames preserve original current-graph connec
     },
     tempConnection,
   ]);
+});
+
+test('editNode merged graph input renames restore recursive caller data, order, and connections after a transient collision', () => {
+  const graphInputNode = makeGraphInputNode('input-node', 'temp');
+  const existingGraphInputNode = makeGraphInputNode('existing-input-node', 'temp');
+  const nextGraphInputNode = {
+    ...graphInputNode,
+    data: {
+      ...(graphInputNode.data as Record<string, unknown>),
+      id: 'final',
+    },
+  } as ChartNode;
+  const oldSourceNode = makeTextNode('old-source', 'old source');
+  const tempSourceNode = makeTextNode('temp-source', 'temp source');
+  const recursiveCaller = makeSubGraphNode('recursive-caller', subGraphId, {
+    data: {
+      inputData: {
+        old: 'old default',
+        temp: 'temp default',
+      },
+      inputPortOrder: ['old', 'temp'],
+    },
+  });
+  const oldConnection = makeConnection({
+    outputNodeId: oldSourceNode.id,
+    inputNodeId: recursiveCaller.id,
+    inputId: 'old' as PortId,
+  });
+  const tempConnection = makeConnection({
+    outputNodeId: tempSourceNode.id,
+    inputNodeId: recursiveCaller.id,
+    inputId: 'temp' as PortId,
+  });
+  const currentState = makeCommandState({
+    graphId: subGraphId,
+    nodes: [graphInputNode, existingGraphInputNode, oldSourceNode, tempSourceNode, recursiveCaller],
+    connections: [tempConnection],
+    project: makeProject([
+      makeGraph(
+        subGraphId,
+        [graphInputNode, existingGraphInputNode, oldSourceNode, tempSourceNode, recursiveCaller],
+        [tempConnection],
+      ),
+    ]),
+  });
+
+  const appliedData = buildEditNodeAppliedData({
+    params: {
+      nodeId: graphInputNode.id,
+      newNode: nextGraphInputNode,
+    },
+    currentState,
+    previousNode: makeGraphInputNode('input-node', 'old'),
+    previousCurrentNodes: [
+      makeGraphInputNode('input-node', 'old'),
+      existingGraphInputNode,
+      oldSourceNode,
+      tempSourceNode,
+      recursiveCaller,
+    ],
+    previousConnections: [oldConnection, tempConnection],
+    previousRecoverableConnections: [],
+    currentRecoverableConnections: [],
+    isMergedEdit: true,
+    projectNodeRegistry: registry,
+  });
+  const nextRecursiveCaller = appliedData.nextCurrentNodes?.find((node) => node.id === recursiveCaller.id);
+
+  assert.deepEqual((nextRecursiveCaller?.data as Record<string, unknown>).inputData, {
+    final: 'old default',
+    temp: 'temp default',
+  });
+  assert.deepEqual((nextRecursiveCaller?.data as Record<string, unknown>).inputPortOrder, ['final', 'temp']);
+  assert.deepEqual(appliedData.nextConnections, [
+    {
+      ...oldConnection,
+      inputId: 'final' as PortId,
+    },
+    tempConnection,
+  ]);
+  assert.deepEqual(
+    appliedData.currentGraphSnapshot?.nextGraph.nodes.find((node) => node.id === recursiveCaller.id)?.data,
+    nextRecursiveCaller?.data,
+  );
+  assert.deepEqual(appliedData.currentGraphSnapshot?.nextGraph.connections, appliedData.nextConnections);
+});
+
+test('editNode does not snapshot project graphs for ordinary same-ID boundary edits', () => {
+  const boundaryEdits = [
+    makeGraphInputNode('input-node', 'unchanged-input'),
+    makeGraphOutputNode('output-node', 'unchanged-output'),
+  ];
+
+  for (const boundaryNode of boundaryEdits) {
+    const currentState = makeCommandState({
+      graphId: subGraphId,
+      nodes: [boundaryNode],
+      connections: [],
+      project: makeProject([makeGraph(subGraphId, [boundaryNode])]),
+    });
+    const nextNode = {
+      ...boundaryNode,
+      title: `${boundaryNode.title} edited`,
+    } as ChartNode;
+    const appliedData = buildEditNodeAppliedData({
+      params: {
+        nodeId: boundaryNode.id,
+        newNode: nextNode,
+      },
+      currentState,
+      previousNode: boundaryNode,
+      previousConnections: [],
+      previousRecoverableConnections: [],
+      currentRecoverableConnections: [],
+      projectNodeRegistry: registry,
+    });
+
+    assert.equal(appliedData.currentGraphSnapshot, undefined);
+    assert.equal(appliedData.projectGraphSnapshots, undefined);
+  }
 });

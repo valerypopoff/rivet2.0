@@ -1,0 +1,81 @@
+---
+id: coalesce-new
+title: Coalesce Node
+sidebar_label: Coalesce
+---
+
+import Tabs from '@theme/Tabs';
+import TabItem from '@theme/TabItem';
+
+## Overview
+
+The Coalesce Node returns the first usable value from a list of inputs. By default, "usable" means the first input that is not `Not Ran`.
+
+Values that show as `Not Ran` in the UI have been excluded from the run due to control flow processing. Coalesce consumes those values, skips over them, and continues checking later inputs. This makes it useful for combining branches where one branch runs and the others are excluded.
+
+`null` and `undefined` are treated as real output values by default. Enable `Ignore 'null'` or `Ignore 'undefined'` when those values should also be skipped so Coalesce continues checking later inputs.
+
+<Tabs
+  defaultValue="inputs"
+  values={[
+    {label: 'Inputs', value: 'inputs'},
+    {label: 'Outputs', value: 'outputs'},
+    {label: 'Editor Settings', value: 'settings'},
+  ]}
+>
+
+<TabItem value="inputs">
+
+## Inputs
+
+| Title   | Data Type | Description                                                                                                                                      | Default Value | Notes                                                                                             |
+| ------- | --------- | ------------------------------------------------------------------------------------------------------------------------------------------------ | ------------- | ------------------------------------------------------------------------------------------------- |
+| Input X | Any       | One of the inputs to check. The first input that is not `Not Ran` and is not skipped by the active ignore settings will be passed to the output. | N/A           | Dynamic number of inputs based on how many are connected.                                         |
+
+Use the ordinary node **If** option when the whole node should run conditionally. That standard control is separate from Coalesce's fallback inputs.
+
+</TabItem>
+
+<TabItem value="outputs">
+
+## Outputs
+
+| Title  | Data Type | Description                          | Notes                                                                             |
+| ------ | --------- | ------------------------------------ | --------------------------------------------------------------------------------- |
+| Output | Any       | The value of the first usable input. | If every input is `Not Ran` or skipped by settings, then the output is `Not Ran`. |
+
+</TabItem>
+
+<TabItem value="settings">
+
+## Editor Settings
+
+| Setting            | Description                                                                             | Default Value | Use Input Toggle | Input Data Type |
+| ------------------ | --------------------------------------------------------------------------------------- | ------------- | ---------------- | --------------- |
+| Ignore 'null'      | Treat `null` inputs as skipped values and continue checking later inputs.               | Off           | No               | N/A             |
+| Ignore 'undefined' | Treat explicit `undefined` inputs as skipped values and continue checking later inputs. | Off           | No               | N/A             |
+
+The workflow canvas also shows `Ignore null` and `Ignore undefined` switches in the node body. They control the same settings as this panel, so you can change the skip policy without opening the full node settings.
+
+</TabItem>
+
+</Tabs>
+
+## Example: Fallback after a branch does not run
+
+1. Connect a branch that may not run to `Input 1`.
+2. Connect a Text node with a fallback value to `Input 2`.
+3. Run the graph. If the first branch is `Not Ran`, Coalesce outputs the Text value.
+
+If the first branch runs and outputs an explicit `null` or `undefined`, Coalesce outputs that value by default. Turn on `Ignore 'null'` or `Ignore 'undefined'` when those values should fall through to the fallback instead.
+
+## Error Handling
+
+The Coalesce node cannot error in normal operation.
+
+## See Also
+
+- [Regex Match Node](./regex-match.mdx)
+- [If Node](./if.mdx)
+- [If/Else Node](./if-else.mdx)
+- [Coalesce (legacy) Node](./coalesce.mdx)

@@ -42,7 +42,7 @@ test('multi-run output keeps its pager and selected output on one card surface',
 
   assert.match(
     multiProcessSource,
-    /<div className="multi-node-output">[\s\S]*?<NodeOutputPager[\s\S]*?<NodeOutputSingleProcess[\s\S]*?<\/div>/,
+    /<div className="multi-node-output">[\s\S]*?<NodeOutputPager[\s\S]*?multi-node-output-duration-summary[\s\S]*?<NodeOutputSingleProcess[\s\S]*?<\/div>/,
   );
   assert.doesNotMatch(multiProcessSource, /<div className="node-output multi">/);
   assert.match(
@@ -50,6 +50,10 @@ test('multi-run output keeps its pager and selected output on one card surface',
     /\.node-output\.multi \.multi-node-output > \.node-output-inner \{[\s\S]*?border-radius: 0;[\s\S]*?margin: 0;[\s\S]*?border-top: 0;/,
   );
   assert.match(nodeStylesSource, /\.picker \{[\s\S]*?border-bottom: 1px solid var\(--node-output-picker-border\);/);
+  assert.match(
+    nodeStylesSource,
+    /\.multi-node-output-duration-summary \{[\s\S]*?padding: var\(--node-output-surface-padding\) var\(--node-output-surface-padding\) 0;/,
+  );
 });
 
 test('LLM Chat round history keeps the inline pager row and uses the compact fullscreen pager', () => {

@@ -35,6 +35,11 @@ External Remote Debugger runs are different: a backend that calls `createProcess
 
 [`NodeRunDurationMeta`](../packages/app/src/components/nodeOutput/NodeRunDurationMeta.tsx) renders `Duration: {n}ms` for single-process inline and fullscreen node outputs. When the same node has multiple visible process runs or split-run item timings, `NodeRunDurationSummaryMeta` renders `Total duration: {n}ms` followed by one `Run {n}: {n}ms` line per finished run, and the selected process suppresses its duplicate single-duration line. The pure visibility/view-model layer receives an explicit `showNodeRunDuration` option so duration-only terminal runs can become visible only when the setting is enabled. Nodes with their own runtime-like output ports (`subGraph`, `callGraph`, `referencedGraphAlias`, and legacy `chat`) suppress this extra metadata line to avoid duplicate duration display. Custom renderers for those nodes must render their own split-run metric arrays when they hide the raw metric ports; for example, the Subgraph renderer formats `duration: number[]` and `cost: number[]` outputs as total values plus one run line per split item.
 
+For inline multi-run output, the pager intentionally reaches the card edges, but
+the duration summary is ordinary output content. Its dedicated wrapper restores
+the output surface's top and horizontal inset without adding a second card or
+changing the selected page's existing padding.
+
 Copy actions intentionally ignore run-duration metadata. The ordinary copy button and JSON-copy button continue to serialize displayed output values / internal output maps only.
 
 ## Split-Run Aggregate Output Rendering

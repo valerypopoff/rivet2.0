@@ -116,3 +116,5 @@ export type WorkflowProjectOpenOptions = {
   reloadFromDisk?: boolean;
   title?: string;
 };
+
+export type RecordingOpenResult = { opened: true } | { opened: false; error: string };

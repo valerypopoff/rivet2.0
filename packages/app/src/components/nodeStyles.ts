@@ -1097,6 +1097,12 @@ export const nodeStyles = css`
     padding: 0;
   }
 
+  /* The multi-run pager deliberately reaches the output edges. Its duration
+   * summary is content, so it must retain the same inset as the selected page. */
+  .multi-node-output-duration-summary {
+    padding: var(--node-output-surface-padding) var(--node-output-surface-padding) 0;
+  }
+
   /*
    * A multi-run output has one card surface: the pager belongs to the selected
    * run output rather than ending a separate rounded card above it. The
