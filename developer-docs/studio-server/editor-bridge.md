@@ -25,14 +25,17 @@ All message types live in `packages/studio-server-shared/editor-bridge.ts`. Both
 | `trigger-editor-find-shortcut`            | `modifier`                                                                                 | Dashboard-focused `Ctrl+F` / `Cmd+F` should open Rivet search instead of browser find                                |
 | `delete-workflow-project`                 | `path`, `projectId`                                                                        | User deletes a workflow project from the dashboard                                                                   |
 | `workflow-paths-moved`                    | `moves[]`                                                                                  | A project or folder rename/move changed one or more workflow project references                                      |
-| `reconcile-workflow-project-bindings`     | authoritative `bindings[]` (`projectId`, `path`, `title`, optional `revisionId`)           | A refreshed remote workflow tree may have renamed or moved one or more open projects                                 |
-| `resolve-workflow-project-content-change` | `projectId`, `path`, `revisionId`, `resolution` (`reload` or `keep-local`)                 | User chooses how to handle an open project's remote saved-content change                                             |
+| `capture-workflow-project-reconciliation` | `requestId`                                                                                | Capture editor revision ownership before fetching the remote workflow tree                                           |
+| `reconcile-workflow-project-bindings`     | authoritative `bindings[]`, captured `context`, optional `requestId`                     | Apply only bindings whose editor instance and project generation remain current                                     |
+| `resolve-workflow-project-content-change` | `changeId`, `projectId`, `path`, `revisionId`, `resolution` (`reload` or `keep-local`)    | Resolve only the conflict identity the user actually chose                                                          |
 
 ### Editor-to-dashboard events
 
 | Type                                       | Payload                                                                        | When sent                                                                          |
 | ------------------------------------------ | ------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------- |
-| `editor-ready`                             | (none)                                                                         | Editor iframe mounted and is ready to receive commands                             |
+| `editor-ready`                             | `editorInstanceId`                                                            | Editor iframe mounted; the dashboard fences previous iframe messages              |
+| `workflow-project-reconciliation-captured` | `context`, `requestId`                                                        | The editor supplied a pre-fetch observation context                                |
+| `workflow-project-conflicts`              | `snapshot`                                                                    | Authoritative pending-conflict state for this editor instance                      |
 | `project-opened`                           | `path`, optional `requestId`                                                   | A project or replay opened successfully                                            |
 | `project-open-failed`                      | `path`, `error`, optional `requestId`                                          | Open failed for a project path or recording ID                                     |
 | `active-project-path-changed`              | `path`                                                                         | User switched the active tab inside the editor                                     |
@@ -41,12 +44,12 @@ All message types live in `packages/studio-server-shared/editor-bridge.ts`. Both
 | `project-compare-failed`                   | `path`, `error`                                                                | A project-tree compare reference could not be loaded or deserialized               |
 | `project-saved`                            | `path`                                                                         | Current project saved successfully                                                 |
 | `workflow-paths-moved-applied`             | optional request id                                                            | The iframe finished applying a local move or rename                                |
-| `workflow-project-bindings-reconciled`     | `changes[]`, `contentChanges[]`, optional request id                           | The iframe retargeted matching open tabs and reports remote saved-content versions |
+| `workflow-project-bindings-reconciled`     | `changes[]`, `status`, optional `requestId`                                    | The iframe applied current bindings or requested another fresh pass                |
 | `workflow-project-content-change-resolved` | `projectId`, `revisionId`, `resolution`, `resolved`, optional error/request id | The iframe applied or rejected the user's reload/keep-mine choice                  |
 
 ## Message flow
 
-1. The dashboard renders the iframe. The editor emits `editor-ready` once mounted.
+1. The dashboard renders the iframe. The editor emits `editor-ready` with its runtime `editorInstanceId` once mounted. Missing or malformed IDs are rejected; a replacement iframe invalidates the previous instance's outstanding reconciliation requests and conflict snapshots.
 2. Commands sent before `editor-ready` are validated, structured-cloned, buffered by `useEditorCommandQueue`, and flushed once the editor is ready. The clone snapshots queued commands against later mutation. `postMessageToEditor` repeats the same preparation so direct sends and queued flushes share the outbound guard.
 3. Both sides validate message shape and origin before acting. Outbound preparation rejects malformed or non-cloneable commands before they reach `window.postMessage`; error messages identify only the command type and do not inspect or serialize the invalid payload.
 4. Project, recording, published-version preview, refresh, and project-compare commands are serialized inside the editor iframe so overlapping async work cannot leave the active virtual project state from different runs.
