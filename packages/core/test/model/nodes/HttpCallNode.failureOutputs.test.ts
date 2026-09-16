@@ -8,6 +8,7 @@ import {
   installHttpCallNodeTestHooks,
   requestErrorOutputId,
 } from './HttpCallNode.testUtils.js';
+import type { Outputs } from '../../../src/index.js';
 
 installHttpCallNodeTestHooks();
 
@@ -78,6 +79,78 @@ void test('treats non-2XX responses as requestFailed=true when both toggles are 
   const result = await node.process({}, createContext());
 
   assertCaughtTextRequestFailure(result, [/HTTP call returned non-2XX status code: 404/]);
+});
+void test('retains a non-2XX response status and headers for the terminal error display', async () => {
+  globalThis.fetch = async () =>
+    new Response('rate limited', {
+      status: 429,
+      headers: {
+        'content-type': 'text/plain',
+        'retry-after': '30',
+        'x-request-id': 'request-429',
+      },
+    });
+
+  let failureOutputs: Outputs | undefined;
+  const node = createNode({
+    method: 'GET',
+    url: 'https://example.com',
+    errorOnNon200: true,
+    catchRequestFailed: false,
+  });
+
+  await assert.rejects(
+    () =>
+      node.process({}, {
+        ...createContext(),
+        setFailureOutputs: (outputs) => {
+          failureOutputs = outputs;
+        },
+      }),
+    /HTTP call returned non-2XX status code: 429/,
+  );
+
+  assert.deepStrictEqual(failureOutputs, {
+    statusCode: { type: 'number', value: 429 },
+    res_headers: {
+      type: 'object',
+      value: {
+        'content-type': 'text/plain',
+        'retry-after': '30',
+        'x-request-id': 'request-429',
+      },
+    },
+  });
+});
+void test('publishes non-2XX metadata to direct consumers when no failure-output channel is available', async () => {
+  globalThis.fetch = async () => new Response('rate limited', { status: 429, headers: { 'retry-after': '30' } });
+
+  const node = createNode({
+    method: 'GET',
+    url: 'https://example.com',
+    errorOnNon200: true,
+    catchRequestFailed: false,
+  });
+  const context = {
+    ...createContext(),
+    partialOutputs: undefined as Outputs | undefined,
+    onPartialOutputs(outputs: Outputs) {
+      this.partialOutputs = outputs;
+    },
+  };
+
+  await assert.rejects(
+    () => node.process({}, context),
+    /HTTP call returned non-2XX status code: 429/,
+  );
+
+  assert.deepStrictEqual(context.partialOutputs, {
+    statusCode: { type: 'number', value: 429 },
+    res_headers: {
+      type: 'object',
+      value: { 'content-type': 'text/plain;charset=UTF-8', 'retry-after': '30' },
+    },
+  });
 });
 void test('still throws runtime request failures when catchRequestFailed is disabled', async () => {
   globalThis.fetch = async () => {
