@@ -1,0 +1,93 @@
+---
+id: match-case
+title: Match case Node
+sidebar_label: Match case
+---
+
+import Tabs from '@theme/Tabs';
+import TabItem from '@theme/TabItem';
+
+## Overview
+
+The **Match case** Node routes an `Input` value to one or more case outputs. Each case has an output port, and `Unmatched` runs when no case matches. It is a switch/case-style control-flow node for strings.
+
+By default, **Plain text** cases use exact, case-sensitive string equality. For example, the case `approved` matches `approved`, but not `Approved` or `approved later`. Turn off **Case sensitive** to ignore letter case while retaining exact whole-string matching. Choose **Regular expression** to use the existing JavaScript `RegExp` pattern behavior; the **Case sensitive** switch does not apply in that mode.
+
+**Trigger** controls whether the node triggers every matching output or only the first matching output. It uses **First matching case** by default. **Output value** controls what each active branch emits: boolean `true` by default, the tested string, or a custom value. When Custom is selected, an unlabeled chooser selects one shared input or individual inputs for each branch.
+
+<Tabs
+  defaultValue="inputs"
+  values={[
+    {label: 'Inputs', value: 'inputs'},
+    {label: 'Outputs', value: 'outputs'},
+    {label: 'Editor Settings', value: 'settings'},
+  ]}
+>
+
+<TabItem value="inputs">
+
+## Inputs
+
+| Output value mode | Title | Data Type | Description | Notes |
+| --- | --- | --- | --- | --- |
+| All | Input | `string` | The value tested against each configured case. | Required. Rivet coerces the input to a string if needed. |
+| Custom + One shared custom value | Return value | `any` | The value emitted from every active output. | Optional. An unconnected input falls back to `Input`. |
+| Custom + Custom values per case | `[Case]` | `any` | The custom value emitted for that case. | Shown under **Return values**; optional, otherwise `Input`. |
+| Custom + Custom values per case | Unmatched | `any` | The value emitted when no case matches. | Shown under **Return values**; optional, otherwise `Input`. |
+
+</TabItem>
+
+<TabItem value="outputs">
+
+## Outputs
+
+| Title | Data Type | Description |
+| --- | --- | --- |
+| Case [i] | `boolean`, `string`, or `any` | The output for the corresponding configured case. Its type follows **Output value**: `boolean` for True, `string` for Input value, and `any` for Custom. The number of case outputs is dynamic. |
+| Unmatched | `boolean`, `string`, or `any` | Runs when no configured case matches and returns the value selected by **Output value**. |
+
+</TabItem>
+
+<TabItem value="settings">
+
+## Editor settings
+
+| Setting | Description | Default |
+| --- | --- | --- |
+| Match mode | **Plain text** compares the entire `Input` string exactly. **Regular expression** applies each case as a JavaScript regular expression. | Plain text |
+| Case sensitive | In **Plain text** mode, compare letter case exactly. Turn it off to match `approved` and `APPROVED` as the same case. This setting is hidden in **Regular expression** mode. | On |
+| Cases | The ordered list of values or regular expressions to test. Case outputs follow this order. | `YES`, `NO` |
+| Trigger | **First matching case** runs the first matching case in list order. **All matching cases** runs every matching case. | First matching case |
+| Output value | **True** emits boolean `true`. **Input value** emits the tested string. **Custom** emits values supplied through additional inputs. | True |
+| Custom return mode | When **Output value** is Custom, the unlabeled chooser offers **One shared custom value**, which adds one optional `Return value` input for all active outputs, and **Custom values per case**, which adds individual optional values under **Return values** for every case and `Unmatched`. Hidden in the other return modes. | One shared custom value |
+
+</TabItem>
+
+</Tabs>
+
+## Examples
+
+### Route exact statuses
+
+Use the default **Plain text** mode when a service returns a finite set of known values.
+
+1. Set cases to `approved`, `rejected`, and `pending`.
+2. Connect the status to `Input`.
+3. Connect each case output to the work for that status.
+
+The value `approved` triggers only the `approved` output and returns `true` with the default settings. The value `approved later` triggers `Unmatched` and returns `true` there.
+
+### Route a pattern
+
+Select **Regular expression** when you need a pattern. For example, the case `^ERR_[0-9]+$` matches `ERR_42`. Regular-expression cases use JavaScript `RegExp` behavior, including its syntax and errors for invalid patterns.
+
+## Error handling
+
+When `Input` is missing, `null`, or `undefined`, no case is matched and the node triggers `Unmatched`. In **Regular expression** mode, an invalid regular expression reports an execution error.
+
+## See also
+
+- [Regex Match (legacy) Node](./regex-match.mdx)
+- [If Node](./if.mdx)
+- [If/Else Node](./if-else.mdx)
+- [Control Flow](../user-guide/control-flow.md)

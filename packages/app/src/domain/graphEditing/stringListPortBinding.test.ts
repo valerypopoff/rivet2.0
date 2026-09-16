@@ -232,11 +232,11 @@ test('legacy match ids remap to generated stable ids on first edit', () => {
   assert.equal(result.nextConnections[0]!.outputId, result.nextNode.data.casePortIds[1]);
 });
 
-test('paired stable-id bindings keep Regex Match input and output wires with the same case', () => {
+test('paired stable-id bindings keep Match case input and output wires with the same case', () => {
   const node = makeNode<{
     cases: string[];
     casePortIds?: string[];
-  }>('match', {
+  }>('matchCase', {
     cases: ['YES', 'NO'],
     casePortIds: ['case-yes', 'case-no'],
   });

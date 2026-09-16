@@ -1,6 +1,6 @@
 {
   "formatVersion": 1,
-  "catalogFingerprint": "fnv1a64:3c03871225880ee9",
+  "catalogFingerprint": "fnv1a64:1adc6ceb02dd61a3",
   "entries": [
     {
       "authoringChoiceId": "registered:abortGraph",
@@ -215,7 +215,7 @@
       "authoringChoiceId": "registered:coalesce",
       "nodeType": "coalesce",
       "displayName": "Coalesce (legacy)",
-      "description": "This legacy Coalesce Node returns the first usable value from a list of inputs. By default, \"usable\" means the first input that is not Not Ran . For new graphs, use the Coalesce Node. It has the same fallback behavior without this legacy node's Conditional input. Values that show as Not Ran in the UI have been excluded from the run due to control flow processing. Coalesce consumes those values, skips over them, and continues checking later inputs. This makes it useful for taking a set of branches where only one branch runs and returning that branch's output. See the examples section for more information on using this with a Regex Match Node. null and undefined are treated as real output values by default. Enable Ignore 'null' or Ignore 'undefined' when those values should also be skipped so Coalesce (legacy) continues checking later inputs.",
+      "description": "This legacy Coalesce Node returns the first usable value from a list of inputs. By default, \"usable\" means the first input that is not Not Ran . For new graphs, use the Coalesce Node. It has the same fallback behavior without this legacy node's Conditional input. Values that show as Not Ran in the UI have been excluded from the run due to control flow processing. Coalesce consumes those values, skips over them, and continues checking later inputs. This makes it useful for taking a set of branches where only one branch runs and returning that branch's output. See the examples section for more information on using this with a Match case Node. null and undefined are treated as real output values by default. Enable Ignore 'null' or Ignore 'undefined' when those values should also be skipped so Coalesce (legacy) continues checking later inputs.",
       "aliases": [],
       "capabilities": {
         "createWithDefaults": true,
@@ -1422,8 +1422,23 @@
     {
       "authoringChoiceId": "registered:match",
       "nodeType": "match",
-      "displayName": "Regex Match",
-      "description": "The Regex Match Node is used to match a string input against a series of regular expressions. Each regular expression corresponds to an output of the node. The node can be configured to either run the first matching output port, or to run all matching output ports. If no match is found, the Unmatched output port will be executed. This node is useful for routing control flow based on the content of a string. For example, you can use the Regex Match Node to check if a user's message contains certain keywords and route the conversation accordingly. Choose how custom values reach the outputs with Custom case values . One shared custom value keeps the original single optional Custom value input: its value reaches every output that matches, or the Test value is passed through when Custom value is unconnected. Custom values per case adds a canvas only Custom values group after Test , containing",
+      "displayName": "Regex Match (legacy)",
+      "description": "Regex Match (legacy) is the original regular expression routing node. It remains available so existing projects keep their saved behavior. New projects should use Match case, which uses exact plain text cases by default and can also use regular expressions. Each configured regular expression corresponds to one output. The node triggers every matching output by default, or just the first matching output when Matching cases to trigger is set to Trigger first only . If no regular expression matches, it triggers Unmatched .",
+      "aliases": [],
+      "capabilities": {
+        "createWithDefaults": true,
+        "inspectSafeProjection": false,
+        "resolvePorts": true,
+        "configureSettings": false,
+        "editLinkedPrefabInstance": false
+      },
+      "settings": []
+    },
+    {
+      "authoringChoiceId": "registered:matchCase",
+      "nodeType": "matchCase",
+      "displayName": "Match case",
+      "description": "The Match case Node routes an Input value to one or more case outputs. Each case has an output port, and Unmatched runs when no case matches. It is a switch/case style control flow node for strings. By default, Plain text cases use exact, case sensitive string equality. For example, the case approved matches approved , but not Approved or approved later . Turn off Case sensitive to ignore letter case while retaining exact whole string matching. Choose Regular expression to use the existing JavaScript RegExp pattern behavior; the Case sensitive switch does not apply in that mode. Trigger controls whether the node triggers every matching output or only the first matching output. It uses First matching case by default. Output value controls what each active branch emits: boolean true by default, the tested string, or a custom value. When Custom is selected, an unlabeled chooser selects one ",
       "aliases": [],
       "capabilities": {
         "createWithDefaults": true,

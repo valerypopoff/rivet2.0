@@ -14,7 +14,7 @@ export class CoalesceNewNodeImpl extends CoalesceNodeBase<CoalesceNewNode> {
   static getUIData(): NodeUIData {
     return {
       infoBoxBody: dedent`
-        Takes in any number of inputs and outputs the first value that is not "Not Ran". Useful for consolidating branches after a Match node.
+        Takes in any number of inputs and outputs the first value that is not "Not Ran". Useful for consolidating branches after a Match case node.
 
         Null and undefined input values are emitted by default, but the node can be configured to skip either value and continue checking later inputs.
       `,

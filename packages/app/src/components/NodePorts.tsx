@@ -56,17 +56,29 @@ export type NodePortsProps = {
   zoomedOut?: boolean;
 };
 
-type RegexMatchValueConnectionGuide = {
+type MatchCaseValueConnectionGuide = {
   inputId: PortId;
   left: number;
   top: number;
   width: number;
 };
 
-const REGEX_MATCH_VALUE_GUIDE_ENDPOINT_GAP_PX = 6;
+const MATCH_CASE_VALUE_GUIDE_ENDPOINT_GAP_PX = 6;
 
-function hasPerOutputRegexMatchValues(node: ChartNode): boolean {
-  return node.type === 'match' && (node.data as { valueInputMode?: unknown }).valueInputMode === 'per-output';
+function getMatchCaseValueGroupLabel(node: ChartNode): string | undefined {
+  if ((node.data as { valueInputMode?: unknown }).valueInputMode !== 'per-output') {
+    return undefined;
+  }
+
+  if (node.type === 'match') {
+    return 'Custom values';
+  }
+
+  if (node.type === 'matchCase' && (node.data as { returnValue?: unknown }).returnValue === 'custom') {
+    return 'Return values';
+  }
+
+  return undefined;
 }
 
 function isSubGraphErrorOutputDefinition(node: ChartNode, output: NodeOutputDefinition): boolean {
@@ -104,8 +116,8 @@ export const NodePorts: FC<NodePortsProps> = ({ node, connections }) => {
   const previewPortOrderRef = useRef<string[] | undefined>();
   const [draggedPort, setDraggedPort] = useState<PortReorderDrag | undefined>();
   const [previewPortOrder, setPreviewPortOrder] = useState<string[] | undefined>();
-  const [regexMatchValueConnectionGuides, setRegexMatchValueConnectionGuides] = useState<
-    RegexMatchValueConnectionGuide[]
+  const [matchCaseValueConnectionGuides, setMatchCaseValueConnectionGuides] = useState<
+    MatchCaseValueConnectionGuide[]
   >([]);
   const hoveredDataBusChannelKeySet = useMemo(() => new Set(hoveredDataBusChannelKeys), [hoveredDataBusChannelKeys]);
 
@@ -144,7 +156,8 @@ export const NodePorts: FC<NodePortsProps> = ({ node, connections }) => {
   };
 
   const isSubGraphNode = node.type === 'subGraph';
-  const alignRegexMatchOutputsWithValues = hasPerOutputRegexMatchValues(node);
+  const matchCaseValueGroupLabel = getMatchCaseValueGroupLabel(node);
+  const alignMatchCaseOutputsWithValues = matchCaseValueGroupLabel != null;
   const isRearrangingSubGraphPorts =
     isSubGraphNode &&
     subGraphPortRearrangeTarget?.projectId === projectId &&
@@ -258,8 +271,8 @@ export const NodePorts: FC<NodePortsProps> = ({ node, connections }) => {
   ]);
 
   useLayoutEffect(() => {
-    if (!alignRegexMatchOutputsWithValues) {
-      setRegexMatchValueConnectionGuides((previousGuides) => (previousGuides.length === 0 ? previousGuides : []));
+    if (!alignMatchCaseOutputsWithValues) {
+      setMatchCaseValueConnectionGuides((previousGuides) => (previousGuides.length === 0 ? previousGuides : []));
       return;
     }
 
@@ -295,8 +308,8 @@ export const NodePorts: FC<NodePortsProps> = ({ node, connections }) => {
           return [];
         }
 
-        const left = (inputRect.right - rootRect.left) / scaleX + REGEX_MATCH_VALUE_GUIDE_ENDPOINT_GAP_PX;
-        const right = (outputTargetRect.left - rootRect.left) / scaleX - REGEX_MATCH_VALUE_GUIDE_ENDPOINT_GAP_PX;
+        const left = (inputRect.right - rootRect.left) / scaleX + MATCH_CASE_VALUE_GUIDE_ENDPOINT_GAP_PX;
+        const right = (outputTargetRect.left - rootRect.left) / scaleX - MATCH_CASE_VALUE_GUIDE_ENDPOINT_GAP_PX;
         const width = right - left;
 
         if (width <= 0) {
@@ -313,7 +326,7 @@ export const NodePorts: FC<NodePortsProps> = ({ node, connections }) => {
         ];
       });
 
-      setRegexMatchValueConnectionGuides((previousGuides) =>
+      setMatchCaseValueConnectionGuides((previousGuides) =>
         previousGuides.length === nextGuides.length &&
         previousGuides.every(
           (guide, index) =>
@@ -339,7 +352,7 @@ export const NodePorts: FC<NodePortsProps> = ({ node, connections }) => {
     return () => {
       resizeObserver.disconnect();
     };
-  }, [alignRegexMatchOutputsWithValues, displayedInputDefinitions, displayedOutputDefinitions]);
+  }, [alignMatchCaseOutputsWithValues, displayedInputDefinitions, displayedOutputDefinitions]);
 
   const handlePortMouseDown = useStableCallback((event: MouseEvent<HTMLDivElement>, port: PortId, isInput: boolean) => {
     event.stopPropagation();
@@ -596,7 +609,7 @@ export const NodePorts: FC<NodePortsProps> = ({ node, connections }) => {
   return (
     <>
       <div
-        className={`node-ports${alignRegexMatchOutputsWithValues ? ' match-per-output-values' : ''}${
+        className={`node-ports${alignMatchCaseOutputsWithValues ? ' match-per-output-values' : ''}${
           isRearrangingSubGraphPorts ? ' subgraph-port-rearrange-mode' : ''
         }${isRearrangingVariadicPorts ? ' variadic-port-rearrange-mode' : ''}`}
         ref={portsRootRef}
@@ -611,19 +624,21 @@ export const NodePorts: FC<NodePortsProps> = ({ node, connections }) => {
               isRearrangingVariadicPorts &&
               reorderableVariadicInputDefinitions.some((definition) => definition.id === input.id);
             const reorderable = isRearrangingSubGraphPorts || isVariadicInputReorderable;
-            const isFirstRegexMatchValueInput =
-              alignRegexMatchOutputsWithValues &&
+            const isFirstMatchCaseValueInput =
+              alignMatchCaseOutputsWithValues &&
               input.id.startsWith('value-') &&
               !displayedInputDefinitions.slice(0, index).some((definition) => definition.id.startsWith('value-'));
-            const hideRegexMatchValueInputLabel = alignRegexMatchOutputsWithValues && input.id.startsWith('value-');
+            const hideMatchCaseValueInputLabel = alignMatchCaseOutputsWithValues && input.id.startsWith('value-');
 
             return (
               <Fragment key={`input-${input.id}`}>
-                {isFirstRegexMatchValueInput && <div className="regex-match-values-label">Custom values</div>}
+                {isFirstMatchCaseValueInput && (
+                  <div className="match-case-values-label">{matchCaseValueGroupLabel}</div>
+                )}
                 <Port
                   title={input.title}
                   id={input.id}
-                  hideLabel={hideRegexMatchValueInputLabel}
+                  hideLabel={hideMatchCaseValueInputLabel}
                   preservePortCase={preservePortTextCase}
                   input
                   connected={connected}
@@ -650,11 +665,11 @@ export const NodePorts: FC<NodePortsProps> = ({ node, connections }) => {
             );
           })}
         </div>
-        {alignRegexMatchOutputsWithValues && (
-          <div aria-hidden className="regex-match-value-connection-guides">
-            {regexMatchValueConnectionGuides.map((guide) => (
+        {alignMatchCaseOutputsWithValues && (
+          <div aria-hidden className="match-case-value-connection-guides">
+            {matchCaseValueConnectionGuides.map((guide) => (
               <div
-                className="regex-match-value-connection-guide"
+                className="match-case-value-connection-guide"
                 key={`guide-${guide.inputId}`}
                 style={{ left: guide.left, top: guide.top, width: guide.width }}
               />

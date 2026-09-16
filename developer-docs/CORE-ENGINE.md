@@ -136,9 +136,9 @@ Keep this policy covered by focused tests. The `loop-not-broken` sentinel is exp
 Node input definitions describe the expected data type, but a runtime `DataValue`
 can still carry a `null` or `undefined` payload. Node-specific semantics decide
 whether that is an error, a default, or a control-flow result; generic coercion
-must not be treated as the whole behavior contract. For example, `MatchNode`
-treats a missing, `null`, or `undefined` `Test` value as an unmatched result,
-marks every case output as control-flow-excluded, and emits its `Unmatched`
+must not be treated as the whole behavior contract. For example, both Match
+case variants treat a missing, `null`, or `undefined` primary input as an unmatched result,
+mark every case output as control-flow-excluded, and emit their `Unmatched`
 output. It still preserves normal coercion and matching for non-nullish values,
 including an empty string.
 
@@ -208,11 +208,20 @@ Projects currently include:
 - optional metadata path
 
 Node display names are presentation metadata and are separate from serialized
-node types. The built-in `MatchNode` keeps the internal type `match` and its
-existing `MatchNode`/`matchNode` symbols, while its current UI display name is
-`Regex Match`. Existing node titles remain project data and are not rewritten
-when a display name changes, so old projects continue to load and run without
-an implicit migration.
+node types. The legacy `MatchNode` keeps its established internal type `match`
+and `MatchNode`/`matchNode` symbols, but displays as `Regex Match (legacy)` and
+remains regex-only. The current `MatchCaseNode` has the distinct `matchCase`
+type and displays as `Match case`. Its optional `matchMode` is `plainText` by
+default (including a missing value), which means exact case-sensitive string
+equality. Its optional `caseSensitive` value defaults to `true`; only an
+explicit `false` makes plain-text comparison ignore letter case. The toggle
+editor declares the same rendered default, so older nodes that omit the field
+do not show an unchecked control while running case-sensitive matching. `regex`
+preserves the legacy JavaScript `RegExp` pattern behavior and hides the
+plain-text-only switch; it does not reinterpret the stored pattern as a slash-delimited
+literal with separate flags. Existing node titles remain project data and are not
+rewritten when a display name changes, so old projects continue to load and run
+without an implicit migration.
 
 ### Stable dynamic-port companions
 
@@ -221,25 +230,46 @@ each string-list row. A stored-stable binding may also declare
 `companionBindings` for ports whose ids are derived from that same stable id.
 When a row is renamed, reordered, migrated from a legacy generated id, or
 deleted, the app remaps or removes the primary port and every companion port
-together. `Regex Match` uses this for its case output and `value-<case-id>`
-input in Custom values per case mode. This is an editor-only connection-preservation
+together. Match case and Regex Match (legacy) use this for a case output and
+`value-<case-id>` input in Custom values per case mode. This is an editor-only connection-preservation
 contract: runtime nodes still own which ports are currently exposed, and mode
 changes rely on recoverable connections rather than guessing or fan-out.
 
-`Regex Match` stores its routing choice as the existing optional boolean
-`exclusive`: `false` (including a missing legacy value) runs all matches, and
-`true` runs only the first one. Its editor presents that unchanged contract as
-the **Matching cases to trigger** segmented selector (**Trigger all matching
-cases** / **Trigger first only**), so this UI does not require a project
-migration or add another runtime mode.
+Both routing node variants store their routing choice as the optional boolean
+`exclusive`: `false` runs all matches, and `true` runs only the first one. The
+legacy `match` type treats a missing value as `false` and keeps **Trigger all
+matching cases** first in its selector. The current `matchCase` type treats a
+missing value as `true`, defaults new instances to `true`, and presents
+**First matching case** before **All matching cases** under its **Trigger**
+label. `matchCase` adds
+its explicit matching-mode and return-value selectors; the legacy `match` type
+never consults them. The current node uses the concise **Trigger: First matching
+case** canvas summary; the legacy node retains **Trigger: First matching case
+only**.
 
-In Custom values per case mode, the canvas presents the paired inputs beneath a
-non-port **Custom values** label after `Test`, with non-interactive dotted guides that
+Current Match case nodes store an optional `returnValue`: missing or `true`
+emits boolean `true` from the active case or Unmatched branch, `testValue`
+emits the coerced Input string, and `custom` enables shared or per-output value
+inputs. The editor shows an unlabeled custom-return-mode chooser only for
+`custom`. A shared
+custom input is titled **Return value**; the app groups per-output inputs under
+**Return values**. True and Input value modes expose no custom inputs even when
+a dormant `valueInputMode` remains stored. The legacy `match` type deliberately
+retains its existing custom-value default, **Custom value** shared port, and
+always-visible custom-value setting. Match case orders its settings as Match
+mode, Case sensitive, Cases, Trigger, Output value, then the unlabeled
+custom-return-mode chooser; the cases list belongs with matching configuration
+rather than the return-value controls.
+
+In per-output custom mode, the canvas presents the paired inputs beneath a
+non-port **Return values** label for Match case or **Custom values** for the
+legacy node after Match case's `Input` port or the legacy node's `Test` port,
+with non-interactive dotted guides that
 start after each input circle and stop before its matching output label. Their
 persisted ids remain `value-<case-id>` and `value-unmatched`; the concise
 visible labels, group heading, and guides do not affect execution, saved
 projects, or existing connections. These inputs are optional: every unwired
-per-case input independently preserves the legacy `Test` fallback, so an
+per-case input independently preserves its node's primary-input fallback, so an
 unwired branch cannot hold up a selected route.
 
 Graphs include:

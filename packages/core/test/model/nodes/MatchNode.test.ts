@@ -37,15 +37,15 @@ function makeProject(graph: object) {
 }
 
 describe('MatchNode', () => {
-  it('uses Regex Match for UI labels while preserving the match node type', () => {
+  it('uses the legacy label while preserving the match node type and regex behavior', () => {
     const node = MatchNodeImpl.create();
     const uiData = MatchNodeImpl.getUIData();
 
     assert.equal(node.type, 'match');
-    assert.equal(node.title, 'Regex Match');
-    assert.equal(matchNode.displayName, 'Regex Match');
-    assert.equal(uiData.contextMenuTitle, 'Regex Match');
-    assert.equal(uiData.infoBoxTitle, 'Regex Match Node');
+    assert.equal(node.title, 'Regex Match (legacy)');
+    assert.equal(matchNode.displayName, 'Regex Match (legacy)');
+    assert.equal(uiData.contextMenuTitle, 'Regex Match (legacy)');
+    assert.equal(uiData.infoBoxTitle, 'Regex Match (legacy) Node');
   });
 
   it('renders compact routing-mode text and edits the existing exclusive boolean with a selector', () => {

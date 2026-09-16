@@ -11,10 +11,11 @@ export const DefaultToggleEditor: FC<
   }
 > = ({ node, isReadonly, isDisabled, onChange, editor }) => {
   const data = node.data as Record<string, unknown>;
+  const value = (data[editor.dataKey] as boolean | undefined) ?? editor.defaultValue;
   const helperMessage = getHelperMessage(editor, node.data);
   return (
     <ToggleEditor
-      value={data[editor.dataKey] as boolean | undefined}
+      value={value}
       isReadonly={isReadonly}
       isDisabled={isDisabled}
       onChange={(newValue) => {

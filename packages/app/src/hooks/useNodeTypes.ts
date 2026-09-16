@@ -23,7 +23,7 @@ import { httpCallNodeDescriptor } from '../components/nodes/HttpCallNode.js';
 import { promptNodeDescriptor } from '../components/nodes/PromptNode.js';
 import { booleanNodeDescriptor } from '../components/nodes/BooleanNode.js';
 import { compareNodeDescriptor } from '../components/nodes/CompareNode.js';
-import { matchNodeDescriptor } from '../components/nodes/MatchNode.js';
+import { matchCaseNodeDescriptor, matchNodeDescriptor } from '../components/nodes/MatchNode.js';
 import { coalesceNewNodeDescriptor, coalesceNodeDescriptor } from '../components/nodes/CoalesceNode.js';
 import { passthroughNodeDescriptor } from '../components/nodes/PassthroughNode.js';
 import { dataBusNodeDescriptor } from '../components/nodes/DataBusNode.js';
@@ -91,6 +91,7 @@ const overriddenDescriptors: Partial<NodeComponentDescriptors> = {
   boolean: booleanNodeDescriptor,
   compare: compareNodeDescriptor,
   match: matchNodeDescriptor,
+  matchCase: matchCaseNodeDescriptor,
   coalesce: coalesceNodeDescriptor,
   coalesceNew: coalesceNewNodeDescriptor,
   passthrough: passthroughNodeDescriptor,

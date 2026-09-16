@@ -34,6 +34,9 @@ export * from './nodes/ExpressionNode.js';
 import { matchNode } from './nodes/MatchNode.js';
 export * from './nodes/MatchNode.js';
 
+import { matchCaseNode } from './nodes/MatchCaseNode.js';
+export * from './nodes/MatchCaseNode.js';
+
 import { ifNode } from './nodes/IfNode.js';
 export * from './nodes/IfNode.js';
 
@@ -334,6 +337,7 @@ export const registerBuiltInNodes = (registry: NodeRegistration) => {
     .register(codeNewNode)
     .register(expressionNode)
     .register(matchNode)
+    .register(matchCaseNode)
     .register(ifNode)
     .register(readDirectoryNode)
     .register(readFileNode)

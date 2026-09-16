@@ -54,6 +54,8 @@ export type ToggleEditorDefinition<T extends ChartNode> = SharedEditorDefinition
   type: 'toggle';
 
   dataKey: DataOfType<T, boolean>;
+  /** Value rendered when an older node omits this optional boolean setting. */
+  defaultValue?: boolean;
   useInputToggleDataKey?: DataOfType<T, boolean>;
   turnOffDataKeysWhenEnabled?: DataOfType<T, boolean>[];
 };

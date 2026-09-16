@@ -1,105 +1,36 @@
 ---
 id: regex-match
-title: Regex Match Node
-sidebar_label: Regex Match
+title: Regex Match (legacy) Node
+sidebar_label: Regex Match (legacy)
 ---
-
-import Tabs from '@theme/Tabs';
-import TabItem from '@theme/TabItem';
-
-![Regex Match Node Screenshot](./assets/match-node.png)
 
 ## Overview
 
-The Regex Match Node is used to match a string input against a series of regular expressions. Each regular expression corresponds to an output of the node.
+**Regex Match (legacy)** is the original regular-expression routing node. It remains available so existing projects keep their saved behavior. New projects should use [Match case](./match-case.mdx), which uses exact plain-text cases by default and can also use regular expressions.
 
-The node can be configured to either run the _first_ matching output port, or to run _all_ matching output ports. If no match is found, the `Unmatched` output port will be executed.
+Each configured regular expression corresponds to one output. The node triggers every matching output by default, or just the first matching output when **Matching cases to trigger** is set to **Trigger first only**. If no regular expression matches, it triggers `Unmatched`.
 
-This node is useful for routing control flow based on the content of a string. For example, you can use the Regex Match Node to check if a user's message contains certain keywords and route the conversation accordingly.
+## Inputs and outputs
 
-Choose how custom values reach the outputs with **Custom case values**. **One shared custom value** keeps the original single optional `Custom value` input: its value reaches every output that matches, or the `Test` value is passed through when `Custom value` is unconnected. **Custom values per case** adds a canvas-only **Custom values** group after `Test`, containing one optional custom value for every case and one for `Unmatched`. Each input falls back to `Test` independently when it is unconnected. Dotted row guides show which input belongs to each labelled output, so each route can emit its own value and type.
+`Test` is required and is coerced to a string. In **One shared custom value** mode, the optional `Custom value` is emitted from every matching output; an unconnected input falls back to `Test`.
 
-<Tabs
-  defaultValue="inputs"
-  values={[
-    {label: 'Inputs', value: 'inputs'},
-    {label: 'Outputs', value: 'outputs'},
-    {label: 'Editor Settings', value: 'settings'},
-  ]
-}>
+**Custom values per case** adds one optional value input for every regular expression and one for `Unmatched`. Each case independently falls back to `Test` when its custom input is unconnected. The node keeps stable case-output and custom-value port IDs so existing connections remain attached when cases are renamed or reordered.
 
-<TabItem value="inputs">
+## Settings
 
-## Inputs
+| Setting | Description | Default |
+| --- | --- | --- |
+| Matching cases to trigger | Trigger every matching regular expression, or only the first one. | Trigger all matching cases |
+| Custom case values | Use one shared value for all active outputs, or a separate value for every case and `Unmatched`. | One shared custom value |
+| Cases (regular expressions) | The JavaScript regular expressions tested against `Test`. | `YES`, `NO` |
 
-| Custom case value mode  | Title        | Data Type | Description                                              | Notes                                                      |
-| ----------------------- | ------------ | --------- | -------------------------------------------------------- | ---------------------------------------------------------- |
-| Both                    | Test         | `string`  | The string to be tested against the regular expressions. | Required. The input is coerced to a string if needed.      |
-| One shared custom value | Custom value | `any`     | The value passed to every matching output.               | Optional. If unconnected, `Test` is passed through.        |
-| Custom values per case  | `[Case]`     | `any`     | The custom value emitted for that matching case.         | Shown under **Custom values**; optional, otherwise `Test`. |
-| Custom values per case  | Unmatched    | `any`     | The custom value emitted when no case matches.           | Shown under **Custom values**; optional, otherwise `Test`. |
+## Error handling
 
-</TabItem>
+When `Test` is missing, `null`, or `undefined`, no case is matched and the node triggers `Unmatched`. Invalid regular expressions continue to report the existing runtime error.
 
-<TabItem value="outputs">
+## See also
 
-## Outputs
-
-| Title     | Data Type | Description                                                                 | Notes                                                                                        |
-| --------- | --------- | --------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
-| Case [i]  | `any`     | The output port corresponding to the ith regular expression.                | Dynamic number of outputs based on the number of regular expressions configured in the node. |
-| Unmatched | `any`     | The output port that is executed if no match is found for the input string. | If a match is found for the input string, this output port will not be executed.             |
-
-</TabItem>
-
-<TabItem value="settings">
-
-## Editor Settings
-
-| Setting                     | Description                                                                                                                                                   | Default Value              | Use Input Toggle | Input Data Type |
-| --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------- | ---------------- | --------------- |
-| Matching cases to trigger   | **Trigger all matching cases** runs every matching case. **Trigger first only** runs only the first matching case.                                            | Trigger all matching cases | No               | N/A             |
-| Custom case values          | **One shared custom value** uses one optional `Custom value` input for all outputs. **Custom values per case** adds the **Custom values** group after `Test`. | One shared custom value    | No               | N/A             |
-| Cases (regular expressions) | The list of regular expression cases to match against.                                                                                                        | `YES`, `NO`                | No               | N/A             |
-
-</TabItem>
-
-</Tabs>
-
-## Example 1: Route control flow based on AI input
-
-1. Create an [LLM Chat Node](./llm-chat.mdx) and set the `Prompt` to a question, such as:
-   > Would you like to hear about information about cats or dogs first? Please only pick one! I will give you information on both, I just want to know what you'd like to hear first.
-2. Create a Regex Match Node and connect the `Response` output of the LLM Chat Node to the `Test` input of the Regex Match Node.
-3. In the body of the Regex Match Node, set the regular expressions to `cats` and `dogs`.
-4. Set **Custom case values** to **Custom values per case**. Connect three [Text Nodes](./text.mdx) with the values "You chose cats!", "You chose dogs!", and "Sorry, I didn't understand that. Please try again." directly to the `cats`, `dogs`, and `Unmatched` inputs under **Custom values**.
-5. Connect the Regex Match outputs to the next work for each route.
-6. Run the graph. Depending on the AI's response, the corresponding output is executed with its own configured text.
-
-![Regex Match Node Example 1](./assets/match-node-example-01.png)
-
-## Error Handling
-
-If the `Test` input is missing, `null`, or `undefined`, the Regex Match Node treats it as an unmatched value. It does not run any case outputs and executes the `Unmatched` output port. If no regular expression matches the test value, the `Unmatched` output port is also executed.
-
-## FAQ
-
-**Q: Can multiple cases match at once?**
-
-A: Yes, multiple cases can match at once. **Trigger all matching cases** is the default. Choose **Trigger first only** to execute only the first matching case.
-
-**Q: Can I use the Regex Match Node to match against numbers?**
-
-A: Yes, you can use the Regex Match Node to match against numbers. However, the `Test` input will be coerced into a string for the matching.
-
-**Q: Can I use the Regex Match Node to match against a list of strings?**
-
-A: Yes, you can use the Regex Match Node to match against a list of strings. However, the `Test` input will be coerced into a string for the matching. The default coercion will put each string on its own line for testing against.
-
-## See Also
-
+- [Match case Node](./match-case.mdx)
 - [If Node](./if.mdx)
 - [If/Else Node](./if-else.mdx)
-- [Loop Controller Node](./loop-controller.mdx)
-- [Coalesce Node](./coalesce-new.mdx)
 - [Control Flow](../user-guide/control-flow.md)
