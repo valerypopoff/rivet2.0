@@ -35,7 +35,7 @@ HTTP body lifecycle regressions live in `src/tests/body-admission.test.ts` in th
 
 The five private `@valerypopoff/rivet-studio-server-*` workspaces form one
 Studio Server product and use one lockstep package version. Their current
-version is `1.16.0`. `yarn studio-server:verify:repo-structure` rejects version
+version is `1.17.0`. `yarn studio-server:verify:repo-structure` rejects version
 drift between the API, web, executor, shared, and bootstrap manifests.
 
 These private package versions are release metadata, not npm publication or

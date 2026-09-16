@@ -635,7 +635,7 @@ test.describe('Workflow library layout', () => {
     const publishedButton = bottomActions.getByRole('button', { name: 'Published', exact: true });
     const settingsButton = bottomActions.getByRole('button', { name: 'Settings', exact: true });
     await expect(recordingsButton.locator('svg')).toHaveCount(1);
-    await expect(publishedButton.locator('svg')).toHaveCount(1);
+    await expect(publishedButton.locator('svg')).toHaveCount(0);
     await expect(settingsButton.locator('svg')).toHaveCount(1);
     const recordingsLabel = recordingsButton.locator(':scope > span', { hasText: 'Run recordings' });
     const settingsLabel = settingsButton.locator(':scope > span', { hasText: 'Settings' });

@@ -2,6 +2,24 @@
 
 > Detailed package-by-package reference for the current monorepo.
 
+## Version update: 2026-09-17
+
+Changes since `437c8ba53`, through the current version bump:
+
+| Packages | Version | Changes |
+| --- | --- | --- |
+| Core, Node, CLI, Evaluations | `2.11.0` → `2.12.0` | Adds the new `Coalesce` and `Match case` built-in nodes while retaining their renamed legacy counterparts. Node, CLI, and Evaluations are required public npm companions. |
+| App | `2.17.0` → `2.18.0` | Adds Match case editing and summaries, graph-tree filtering and folder controls, improved project/sidebar keyboard navigation, and richer Compare-mode deleted-node inspection. |
+| Docs | `2.9.0` → `2.10.0` | Documents the new and legacy node variants, matching modes, and updated user guidance. |
+| All five Studio Server packages | `1.16.0` → `1.17.0` | Adds the published-items catalog, settings-integrated runtime libraries, project-tree improvements, and the API/shared contracts that provide publication freshness. Bootstrap and executor are lockstep companions. |
+| App Executor | `2.6.0` (unchanged) | No package-local changes. |
+
+Minor releases cover the new workflow-routing and coalescing capabilities and
+the Studio Server dashboard/editor features. Tauri/Cargo metadata and the CLI
+Docker fallback are synchronized. Public npm and Studio Server lockstep policies
+remain in force. No dependency or Yarn lockfile update is required; Helm chart
+versions are independent.
+
 ## Version update: 2026-09-16
 
 Changes since `77cb30dbc`, through `a317cbab7`:
@@ -90,7 +108,7 @@ Shared runtime foundation for the entire repo.
 
 ### Package metadata
 
-- Version: `2.11.0`
+- Version: `2.12.0`
 - Main: `dist/cjs/bundle.cjs`
 - Module: `dist/esm/index.js`
 - Types: `dist/types/index.d.ts`
@@ -130,7 +148,7 @@ Node runtime wrapper around core.
 
 ### Package metadata
 
-- Version: `2.11.0`
+- Version: `2.12.0`
 - Main: `dist/cjs/bundle.cjs`
 - Module: `dist/esm/index.js`
 - Types: `dist/types/index.d.ts`
@@ -602,7 +620,7 @@ Desktop IDE frontend plus Tauri app packaging layer.
 
 ### Package metadata
 
-- Version: `2.17.0`
+- Version: `2.18.0`
 - Private: yes
 
 ### Runtime shape
@@ -772,7 +790,7 @@ Operational CLI for running or serving Rivet graphs.
 
 ### Package metadata
 
-- Version: `2.11.0`
+- Version: `2.12.0`
 - Source entry: `src/cli.ts`
 - Published bin mapping: `rivet -> bin/cli.js`
 - Types: `dist/types/cli.d.ts`
@@ -896,7 +914,7 @@ Portable, executor-agnostic evaluation engine shared by the app, CLI, and host i
 
 ### Package metadata
 
-- Version: `2.11.0`
+- Version: `2.12.0`
 - Main: `dist/cjs/bundle.cjs`
 - Module: `dist/esm/index.js`
 - Types: `dist/types/index.d.ts`
@@ -928,7 +946,7 @@ a crawler, credentials, or a server-side search API.
 
 ### Package metadata
 
-- Version: `2.9.0`
+- Version: `2.10.0`
 - Private: yes
 
 ### Script surface

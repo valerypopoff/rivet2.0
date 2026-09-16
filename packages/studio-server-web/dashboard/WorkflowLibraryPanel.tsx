@@ -1,6 +1,5 @@
 import Button from '@atlaskit/button';
 import RecordingIcon from 'majesticons/line/video-line.svg?react';
-import PublishedIcon from 'majesticons/line/share-line.svg?react';
 import SettingsCogIcon from 'majesticons/line/settings-cog-line.svg?react';
 import type { Dispatch, FC, SetStateAction } from 'react';
 import { ActiveProjectSection } from './ActiveProjectSection';
@@ -292,7 +291,6 @@ export const WorkflowLibraryPanel: FC<WorkflowLibraryPanelProps> = ({
           <Button
             appearance="subtle"
             className="panel-bottom-button project-settings-secondary-button button-size-m"
-            iconBefore={<PublishedIcon aria-hidden="true" />}
             onClick={() => setPublishedItemsOpen(true)}
             title="Browse published workflow endpoints and web apps"
           >
