@@ -109,6 +109,13 @@ export function useCanvasHotkeys(options: CanvasHotkeyOptions = true) {
     }
 
     const navigationShortcut = getCanvasNavigationShortcut(e);
+    if (e.key === 'Tab' && (
+      e.defaultPrevented || e.isComposing ||
+      document.activeElement?.closest('select, [role="textbox"], .monaco-editor') ||
+      document.querySelector('[role="dialog"], [role="alertdialog"]')
+    )) {
+      return;
+    }
     if (navigationShortcut) {
       e.preventDefault();
       e.stopPropagation();

@@ -124,6 +124,7 @@ export function mapWorkflowRowToProjectItem(
         slug: webApp.slug,
         publishedAt: toIsoString(webApp.published_at) ?? new Date().toISOString(),
         allowedEmails: webApp.allowed_emails ?? [],
+        status: webApp.revision_id === row.current_draft_revision_id ? 'published' : 'unpublished_changes',
       })),
     },
   };

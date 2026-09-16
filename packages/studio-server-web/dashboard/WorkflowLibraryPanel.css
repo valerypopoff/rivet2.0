@@ -109,9 +109,9 @@
   backdrop-filter: blur(2px);
 }
 
-[data-testid='runtime-libraries-modal--blanket'],
 [data-testid='run-recordings-modal--blanket'],
 [data-testid='run-statistics-modal--blanket'],
+[data-testid='published-items-modal--blanket'],
 [data-testid='workflow-project-version-modal--blanket'],
 [data-testid='workflow-published-version-history-modal--blanket'],
 [data-testid='app-settings-modal--blanket'] {
@@ -120,9 +120,9 @@
 }
 
 [data-testid='workflow-project-settings-modal'],
-[data-testid='runtime-libraries-modal'],
 [data-testid='run-recordings-modal'],
 [data-testid='run-statistics-modal'],
+[data-testid='published-items-modal'],
 [data-testid='workflow-project-version-modal'],
 [data-testid='workflow-published-version-history-modal'],
 [data-testid='app-settings-modal'] {
@@ -136,10 +136,20 @@
   overflow: hidden !important;
 }
 
+/* Modal focus remains functional without adding rings on open or modifier keys. */
+[role='dialog']:focus,
+[role='dialog'] :focus {
+  outline: none !important;
+}
+
+[role='dialog'] :is(button, a):focus {
+  box-shadow: none !important;
+}
+
 [data-testid='workflow-project-settings-modal--header'],
-[data-testid='runtime-libraries-modal--header'],
 [data-testid='run-recordings-modal--header'],
 [data-testid='run-statistics-modal--header'],
+[data-testid='published-items-modal--header'],
 [data-testid='workflow-project-version-modal--header'],
 [data-testid='workflow-published-version-history-modal--header'],
 [data-testid='app-settings-modal--header'] {
@@ -147,9 +157,9 @@
 }
 
 [data-testid='workflow-project-settings-modal--body'],
-[data-testid='runtime-libraries-modal--body'],
 [data-testid='run-recordings-modal--body'],
 [data-testid='run-statistics-modal--body'],
+[data-testid='published-items-modal--body'],
 [data-testid='workflow-project-version-modal--body'],
 [data-testid='workflow-published-version-history-modal--body'],
 [data-testid='app-settings-modal--body'] {
@@ -584,7 +594,9 @@
   cursor: pointer;
   color: var(--grey-lightest);
   background: rgba(255, 255, 255, 0.06);
-  transition: background 120ms ease, opacity 120ms ease;
+  transition:
+    background 120ms ease,
+    opacity 120ms ease;
 }
 
 .workflow-library-panel .icon-button {
@@ -637,7 +649,13 @@
 }
 
 .workflow-library-panel .panel-bottom-button > span {
+  width: auto;
   justify-content: flex-start;
+}
+
+.workflow-library-panel .panel-bottom-button > span:last-child {
+  flex: 1 1 auto;
+  min-width: 0;
 }
 
 .workflow-library-panel .panel-bottom-action-with-summary {
@@ -647,7 +665,7 @@
   min-width: 0;
 }
 
-.workflow-library-panel .panel-bottom-action-with-summary.has-summary .panel-bottom-button > span {
+.workflow-library-panel .panel-bottom-action-with-summary.has-summary .panel-bottom-button > span:last-child {
   box-sizing: border-box;
   padding-right: 96px;
 }
@@ -743,7 +761,6 @@
   text-decoration: underline;
 }
 
-
 .workflow-library-panel .folder-row,
 .workflow-library-panel .project-row {
   width: 100%;
@@ -814,7 +831,7 @@
   height: var(--workflow-button-height-s);
 }
 
-.folder-toggle svg{
+.folder-toggle svg {
   width: 100% !important;
   height: 100% !important;
   display: block;

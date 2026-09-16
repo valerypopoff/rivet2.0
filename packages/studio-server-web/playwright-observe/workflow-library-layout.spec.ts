@@ -145,7 +145,8 @@ async function installAppSettingsRoute(page: Page): Promise<void> {
       contentType: 'application/json',
       body: JSON.stringify({
         executorWsUrl: executorUrlOverrideSettings.executorWsUrl || 'ws://127.0.0.1:8081/ws/executor/internal',
-        remoteDebuggerDefaultWs: executorUrlOverrideSettings.remoteDebuggerDefaultWs || 'ws://127.0.0.1:8081/ws/latest-debugger',
+        remoteDebuggerDefaultWs:
+          executorUrlOverrideSettings.remoteDebuggerDefaultWs || 'ws://127.0.0.1:8081/ws/latest-debugger',
         ...publicRouteSettings,
         webAppsAuthMode: 'ui-gate',
         storageMode: deploymentStorageSettings.storageMode,
@@ -353,7 +354,10 @@ async function installAppSettingsRoute(page: Page): Promise<void> {
           latestAppsBasePath?: string;
         };
         const normalizeSlug = (value: unknown, fallback: string) => {
-          const normalized = String(value || fallback).trim().replace(/^\/+/, '').replace(/\/+$/, '');
+          const normalized = String(value || fallback)
+            .trim()
+            .replace(/^\/+/, '')
+            .replace(/\/+$/, '');
           return `/${normalized}`;
         };
         publicRouteSettings = {
@@ -392,8 +396,12 @@ async function installAppSettingsRoute(page: Page): Promise<void> {
           commandTimeoutSeconds: Number(body.commandTimeoutSeconds ?? runtimeLimitSettings.commandTimeoutSeconds),
           maxOutputBytes: Number(body.maxOutputBytes ?? runtimeLimitSettings.maxOutputBytes),
           proxyReadTimeoutSeconds: Number(body.proxyReadTimeoutSeconds ?? runtimeLimitSettings.proxyReadTimeoutSeconds),
-          webAppActionRequestLimitBytes: Number(body.webAppActionRequestLimitBytes ?? runtimeLimitSettings.webAppActionRequestLimitBytes),
-          dockerWaitTimeoutSeconds: Number(body.dockerWaitTimeoutSeconds ?? runtimeLimitSettings.dockerWaitTimeoutSeconds),
+          webAppActionRequestLimitBytes: Number(
+            body.webAppActionRequestLimitBytes ?? runtimeLimitSettings.webAppActionRequestLimitBytes,
+          ),
+          dockerWaitTimeoutSeconds: Number(
+            body.dockerWaitTimeoutSeconds ?? runtimeLimitSettings.dockerWaitTimeoutSeconds,
+          ),
           updatedAt: '2026-06-30T12:01:00.000Z',
           source: 'app-settings',
         };
@@ -492,10 +500,12 @@ async function installAppSettingsRoute(page: Page): Promise<void> {
           artifactsHostPath: String(body.artifactsHostPath ?? deploymentStorageSettings.artifactsHostPath),
           databaseMode: String(body.databaseMode ?? deploymentStorageSettings.databaseMode),
           databaseSslMode: String(body.databaseSslMode ?? deploymentStorageSettings.databaseSslMode),
-          databaseConnectionStringConfigured: Boolean(body.databaseConnectionString) || deploymentStorageSettings.databaseConnectionStringConfigured,
+          databaseConnectionStringConfigured:
+            Boolean(body.databaseConnectionString) || deploymentStorageSettings.databaseConnectionStringConfigured,
           storageUrl: String(body.storageUrl ?? deploymentStorageSettings.storageUrl),
           storageAccessKeyId: String(body.storageAccessKeyId ?? deploymentStorageSettings.storageAccessKeyId),
-          storageAccessKeyConfigured: Boolean(body.storageAccessKey) || deploymentStorageSettings.storageAccessKeyConfigured,
+          storageAccessKeyConfigured:
+            Boolean(body.storageAccessKey) || deploymentStorageSettings.storageAccessKeyConfigured,
           updatedAt: '2026-06-30T12:01:00.000Z',
           source: 'app-settings',
         };
@@ -592,31 +602,80 @@ async function dispatchProjectOpenedFromEditorFrame(page: Page, path: string): P
   await page.evaluate((projectPath) => {
     const editorFrame = document.querySelector<HTMLIFrameElement>('.dashboard-editor-frame');
 
-    window.dispatchEvent(new MessageEvent('message', {
-      data: { type: 'project-opened', path: projectPath },
-      origin: window.location.origin,
-      source: editorFrame?.contentWindow ?? null,
-    }));
+    window.dispatchEvent(
+      new MessageEvent('message', {
+        data: { type: 'project-opened', path: projectPath },
+        origin: window.location.origin,
+        source: editorFrame?.contentWindow ?? null,
+      }),
+    );
   }, path);
 }
 
 test.describe('Workflow library layout', () => {
+  test('orders the footer actions and shows the requested icons', async ({ page }) => {
+    await page.route('**/?editor', (route) =>
+      route.fulfill({
+        contentType: 'text/html',
+        body: '<script>setInterval(() => parent.postMessage({type:"editor-ready"}, location.origin), 100)</script>',
+      }),
+    );
+    await page.goto('/', { waitUntil: 'domcontentloaded' });
+    await authenticateIfNeeded(page);
+    await waitForDashboardReady(page);
+
+    const bottomActions = page.locator('.workflow-library-panel .panel-bottom-actions');
+    await expect(bottomActions.getByRole('button')).toHaveText([
+      'Run recordings',
+      'Run statistics',
+      'Published',
+      'Settings',
+    ]);
+    const recordingsButton = bottomActions.getByRole('button', { name: 'Run recordings' });
+    const publishedButton = bottomActions.getByRole('button', { name: 'Published', exact: true });
+    const settingsButton = bottomActions.getByRole('button', { name: 'Settings', exact: true });
+    await expect(recordingsButton.locator('svg')).toHaveCount(1);
+    await expect(publishedButton.locator('svg')).toHaveCount(1);
+    await expect(settingsButton.locator('svg')).toHaveCount(1);
+    const recordingsLabel = recordingsButton.locator(':scope > span', { hasText: 'Run recordings' });
+    const settingsLabel = settingsButton.locator(':scope > span', { hasText: 'Settings' });
+    await expect(recordingsLabel).toBeVisible();
+    await expect(settingsLabel).toBeVisible();
+    const [recordingsLabelBox, settingsLabelBox] = await Promise.all([
+      recordingsLabel.boundingBox(),
+      settingsLabel.boundingBox(),
+    ]);
+    expect(recordingsLabelBox?.width).toBeGreaterThan(80);
+    expect(settingsLabelBox?.width).toBeGreaterThan(80);
+  });
+
   test('trusted clients explains legacy hosts and unavailable client identity', async ({ page }) => {
     await installAppSettingsRoute(page);
-    await page.route('**/api/app-settings/trusted-clients', (route) => route.fulfill({
-      json: { trustedClients: [], legacyTrustedHosts: ['old.internal.example'], source: 'app-settings', updatedAt: null },
-    }));
-    await page.route('**/api/app-settings/trusted-clients/current-request', (route) => route.fulfill({
-      json: { clientAddress: null, trusted: false },
-    }));
-    await page.route('**/?editor', (route) => route.fulfill({
-      contentType: 'text/html',
-      body: '<script>setInterval(() => parent.postMessage({type:"editor-ready"}, location.origin), 100)</script>',
-    }));
+    await page.route('**/api/app-settings/trusted-clients', (route) =>
+      route.fulfill({
+        json: {
+          trustedClients: [],
+          legacyTrustedHosts: ['old.internal.example'],
+          source: 'app-settings',
+          updatedAt: null,
+        },
+      }),
+    );
+    await page.route('**/api/app-settings/trusted-clients/current-request', (route) =>
+      route.fulfill({
+        json: { clientAddress: null, trusted: false },
+      }),
+    );
+    await page.route('**/?editor', (route) =>
+      route.fulfill({
+        contentType: 'text/html',
+        body: '<script>setInterval(() => parent.postMessage({type:"editor-ready"}, location.origin), 100)</script>',
+      }),
+    );
     await page.goto('/');
     await authenticateIfNeeded(page);
     await waitForDashboardReady(page);
-    await page.getByRole('button', { name: 'App settings' }).click();
+    await page.getByRole('button', { name: 'Settings', exact: true }).click();
     const modal = page.getByTestId('app-settings-modal');
     await expect(modal.getByLabel('Trusted clients', { exact: true })).toHaveValue('');
     await expect(modal).toContainText('Hostname-only access has been disabled. Previous entries: old.internal.example');
@@ -626,10 +685,12 @@ test.describe('Workflow library layout', () => {
   test('collapses from the full header row into a clickable narrow rail', async ({ page }) => {
     await installAppSettingsRoute(page);
     // This dashboard/settings fixture does not exercise the embedded editor.
-    await page.route('**/?editor', (route) => route.fulfill({
-      contentType: 'text/html',
-      body: '<script>setInterval(() => parent.postMessage({type:"editor-ready"}, location.origin), 100)</script>',
-    }));
+    await page.route('**/?editor', (route) =>
+      route.fulfill({
+        contentType: 'text/html',
+        body: '<script>setInterval(() => parent.postMessage({type:"editor-ready"}, location.origin), 100)</script>',
+      }),
+    );
 
     await page.goto('/', { waitUntil: 'domcontentloaded' });
     await authenticateIfNeeded(page);
@@ -659,8 +720,8 @@ test.describe('Workflow library layout', () => {
     const bottomActions = page.locator('.workflow-library-panel .panel-bottom-actions');
     await expect(bottomActions).toHaveCSS('padding-bottom', '24px');
 
-    await expect(page.getByRole('button', { name: 'App settings' })).toBeVisible();
-    await page.getByRole('button', { name: 'App settings' }).click();
+    await expect(page.getByRole('button', { name: 'Settings', exact: true })).toBeVisible();
+    await page.getByRole('button', { name: 'Settings', exact: true }).click();
     const appSettingsModal = page.locator('[data-testid="app-settings-modal"]');
     await expect(appSettingsModal).toBeVisible();
     const appSettingsActions = appSettingsModal.locator('.app-settings-panel-region > .app-settings-actions-row');
@@ -692,8 +753,13 @@ test.describe('Workflow library layout', () => {
     await expect(appSettingsModal.getByLabel('Trusted clients')).toHaveValue('10.20.0.0/16\n192.0.2.15');
 
     await appSettingsModal.getByRole('tab', { name: 'Shell execution' }).click();
-    await expect(appSettingsModal.getByRole('tab', { name: 'Shell execution' })).toHaveAttribute('aria-selected', 'true');
-    await expect(appSettingsModal.getByText('They do not limit workflows, web apps, LLM calls, HTTP Call nodes, or endpoints.')).toBeVisible();
+    await expect(appSettingsModal.getByRole('tab', { name: 'Shell execution' })).toHaveAttribute(
+      'aria-selected',
+      'true',
+    );
+    await expect(
+      appSettingsModal.getByText('They do not limit workflows, web apps, LLM calls, HTTP Call nodes, or endpoints.'),
+    ).toBeVisible();
     await expect(appSettingsModal.getByLabel('Command timeout in seconds')).toHaveValue('30');
     await expect(appSettingsModal.getByLabel('Maximum captured output in MiB')).toHaveValue('10');
     await appSettingsModal.getByLabel('Command timeout in seconds').fill('45');
@@ -732,44 +798,77 @@ test.describe('Workflow library layout', () => {
     await expect(appSettingsModal.getByLabel('Environment variable 1 value')).toHaveValue('replacement-value');
 
     await appSettingsModal.getByRole('tab', { name: 'Workflow endpoints' }).click();
-    await expect(appSettingsModal.getByRole('tab', { name: 'Workflow endpoints' })).toHaveAttribute('aria-selected', 'true');
-    await expect(appSettingsModal.locator('.app-settings-workflow-endpoints-panel .app-settings-section-title')).toContainText(['Routes', 'Access control', 'HTTP request timeout']);
+    await expect(appSettingsModal.getByRole('tab', { name: 'Workflow endpoints' })).toHaveAttribute(
+      'aria-selected',
+      'true',
+    );
+    await expect(
+      appSettingsModal.locator('.app-settings-workflow-endpoints-panel .app-settings-section-title'),
+    ).toContainText(['Routes', 'Access control', 'HTTP request timeout']);
     await expect(appSettingsModal.getByLabel('Published workflow endpoint URL slug')).toHaveValue('workflows');
-    await expect(appSettingsModal.getByLabel('Latest saved workflow endpoint URL slug')).toHaveValue('workflows-latest');
-    await expect(appSettingsModal.getByLabel('Require Authorization: Bearer <Rivet key> for workflow endpoint calls')).toBeChecked();
+    await expect(appSettingsModal.getByLabel('Latest saved workflow endpoint URL slug')).toHaveValue(
+      'workflows-latest',
+    );
+    await expect(
+      appSettingsModal.getByLabel('Require Authorization: Bearer <Rivet key> for workflow endpoint calls'),
+    ).toBeChecked();
     await expect(appSettingsModal.getByLabel('Proxy read timeout in seconds')).toHaveValue('180');
     await expect(appSettingsModal.getByLabel('Published web app URL slug')).toHaveCount(0);
     await appSettingsModal.getByLabel('Published workflow endpoint URL slug').fill('public-workflows');
-    await appSettingsModal.getByLabel('Require Authorization: Bearer <Rivet key> for workflow endpoint calls').uncheck();
+    await appSettingsModal
+      .getByLabel('Require Authorization: Bearer <Rivet key> for workflow endpoint calls')
+      .uncheck();
     await appSettingsModal.getByLabel('Proxy read timeout in seconds').fill('240');
     await expect(appSettingsActions).toHaveCount(1);
     await appSettingsActions.getByRole('button', { name: 'Save' }).click();
     await expect(appSettingsActions.locator('.project-settings-success')).toHaveText('Saved.');
     await expect(appSettingsModal.getByLabel('Published workflow endpoint URL slug')).toHaveValue('public-workflows');
-    await expect(appSettingsModal.getByLabel('Require Authorization: Bearer <Rivet key> for workflow endpoint calls')).not.toBeChecked();
-    await expect.poll(async () => {
-      const [contentBox, sectionBox] = await Promise.all([
-        appSettingsModal.locator('.app-settings-panel-region').boundingBox(),
-        appSettingsModal.locator('.app-settings-workflow-endpoints-panel .app-settings-section').first().boundingBox(),
-      ]);
-      return contentBox && sectionBox ? sectionBox.width / contentBox.width : 0;
-    }).toBeGreaterThan(0.9);
+    await expect(
+      appSettingsModal.getByLabel('Require Authorization: Bearer <Rivet key> for workflow endpoint calls'),
+    ).not.toBeChecked();
+    await expect
+      .poll(async () => {
+        const [contentBox, sectionBox] = await Promise.all([
+          appSettingsModal.locator('.app-settings-panel-region').boundingBox(),
+          appSettingsModal
+            .locator('.app-settings-workflow-endpoints-panel .app-settings-section')
+            .first()
+            .boundingBox(),
+        ]);
+        return contentBox && sectionBox ? sectionBox.width / contentBox.width : 0;
+      })
+      .toBeGreaterThan(0.9);
 
     await appSettingsModal.getByRole('tab', { name: 'Storage' }).click();
     await expect(appSettingsModal.getByRole('tab', { name: 'Storage' })).toHaveAttribute('aria-selected', 'true');
     await expect(appSettingsModal.locator('.app-settings-storage-panel .app-settings-section-title')).toHaveCount(0);
     await expect(appSettingsModal.locator('.app-settings-storage-panel .app-settings-section')).toHaveCount(2);
-    await expect(appSettingsModal.getByRole('button', { name: 'Local folders' })).toHaveAttribute('aria-pressed', 'true');
-    await expect(appSettingsModal.getByRole('button', { name: 'Object storage' })).toHaveAttribute('aria-pressed', 'false');
+    await expect(appSettingsModal.getByRole('button', { name: 'Local folders' })).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    );
+    await expect(appSettingsModal.getByRole('button', { name: 'Object storage' })).toHaveAttribute(
+      'aria-pressed',
+      'false',
+    );
     await expect(appSettingsModal.getByLabel('Host artifacts folder')).toHaveValue('../');
     await expect(appSettingsModal.getByLabel('Host artifacts folder')).toHaveAttribute('readonly', '');
-    await expect(appSettingsModal.getByText('The running app shows it for reference only because changing it here cannot remount host folders.')).toBeVisible();
+    await expect(
+      appSettingsModal.getByText(
+        'The running app shows it for reference only because changing it here cannot remount host folders.',
+      ),
+    ).toBeVisible();
     const storageFieldGrids = appSettingsModal.locator('.app-settings-storage-panel .app-settings-field-grid');
     await expect(storageFieldGrids.first()).toHaveCSS('gap', '18px');
     await expect(storageFieldGrids.nth(1)).toHaveCSS('gap', '18px');
     await appSettingsModal.getByRole('button', { name: 'Object storage' }).click();
-    await expect(appSettingsModal.getByRole('button', { name: 'Local Docker Postgres' })).toHaveAttribute('aria-pressed', 'true');
-    await expect(appSettingsModal.getByText('It must already be running before object storage mode can apply.')).toBeVisible();
+    await expect(appSettingsModal.getByRole('button', { name: 'Local Docker Postgres' })).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    );
+    await expect(
+      appSettingsModal.getByText('It must already be running before object storage mode can apply.'),
+    ).toBeVisible();
     await expect(appSettingsModal.getByLabel('Object storage URL')).toHaveValue('');
     await expect(appSettingsModal.getByLabel('Object storage access key ID')).toHaveValue('');
     await appSettingsModal.getByLabel('Object storage URL').fill('http://workflow-minio:9000/rivet-workflows');
@@ -780,22 +879,50 @@ test.describe('Workflow library layout', () => {
     await expect(appSettingsActions.locator('.app-settings-action-button').first()).toHaveCSS('min-width', '84px');
     await expect(appSettingsActions).toHaveCSS('border-top-width', '1px');
     await appSettingsActions.getByRole('button', { name: 'Save' }).click();
-    await expect(appSettingsActions.locator('.project-settings-success')).toHaveText('Saved. Restart Docker services or roll out Kubernetes pods to apply storage changes.');
-    await expect(appSettingsModal.locator('.app-settings-storage-panel .app-settings-section > .project-settings-success')).toHaveCount(0);
+    await expect(appSettingsActions.locator('.project-settings-success')).toHaveText(
+      'Saved. Restart Docker services or roll out Kubernetes pods to apply storage changes.',
+    );
+    await expect(
+      appSettingsModal.locator('.app-settings-storage-panel .app-settings-section > .project-settings-success'),
+    ).toHaveCount(0);
 
     await appSettingsModal.getByRole('tab', { name: 'Run recordings' }).click();
-    await expect(appSettingsModal.getByRole('tab', { name: 'Run recordings' })).toHaveAttribute('aria-selected', 'true');
+    await expect(appSettingsModal.getByRole('tab', { name: 'Run recordings' })).toHaveAttribute(
+      'aria-selected',
+      'true',
+    );
     await expect(appSettingsModal.locator('.app-settings-recordings-panel .app-settings-section-title')).toHaveCount(0);
     await expect(appSettingsModal.getByLabel('Queued recording writes')).toHaveValue('100');
-    await expect(appSettingsModal.getByRole('button', { name: 'Keep latest runs' })).toHaveAttribute('aria-pressed', 'true');
-    await expect(appSettingsModal.getByRole('button', { name: 'Keep all runs' })).toHaveAttribute('aria-pressed', 'false');
+    await expect(appSettingsModal.getByRole('button', { name: 'Keep latest runs' })).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    );
+    await expect(appSettingsModal.getByRole('button', { name: 'Keep all runs' })).toHaveAttribute(
+      'aria-pressed',
+      'false',
+    );
     await expect(appSettingsModal.getByLabel('Newest runs to keep per workflow endpoint')).toHaveValue('2000');
-    await expect(appSettingsModal.getByRole('button', { name: 'Keep forever' })).toHaveAttribute('aria-pressed', 'true');
-    await expect(appSettingsModal.getByRole('button', { name: 'Keep for some time' })).toHaveAttribute('aria-pressed', 'false');
+    await expect(appSettingsModal.getByRole('button', { name: 'Keep forever' })).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    );
+    await expect(appSettingsModal.getByRole('button', { name: 'Keep for some time' })).toHaveAttribute(
+      'aria-pressed',
+      'false',
+    );
     await expect(appSettingsModal.getByRole('spinbutton', { name: 'Days to keep recordings' })).toHaveCount(0);
-    await expect(appSettingsModal.locator('.app-settings-recordings-panel .app-settings-field-grid')).toHaveCSS('gap', '18px');
-    await expect(appSettingsModal.getByText('Keeping only the newest runs for each endpoint. Older runs are removed during cleanup.')).toBeVisible();
-    await expect(appSettingsModal.getByText('Recordings are kept indefinitely unless another saved limit removes them.')).toBeVisible();
+    await expect(appSettingsModal.locator('.app-settings-recordings-panel .app-settings-field-grid')).toHaveCSS(
+      'gap',
+      '18px',
+    );
+    await expect(
+      appSettingsModal.getByText(
+        'Keeping only the newest runs for each endpoint. Older runs are removed during cleanup.',
+      ),
+    ).toBeVisible();
+    await expect(
+      appSettingsModal.getByText('Recordings are kept indefinitely unless another saved limit removes them.'),
+    ).toBeVisible();
     await appSettingsModal.getByRole('button', { name: 'Keep all runs' }).click();
     await expect(appSettingsModal.getByText('Keeping every recorded run for each endpoint.')).toBeVisible();
     await expect(appSettingsModal.getByLabel('Newest runs to keep per workflow endpoint')).toHaveCount(0);
@@ -803,16 +930,20 @@ test.describe('Workflow library layout', () => {
     await expect(appSettingsModal.getByLabel('Newest runs to keep per workflow endpoint')).toHaveValue('2000');
     await appSettingsModal.getByRole('button', { name: 'Keep for some time' }).click();
     await expect(appSettingsModal.getByRole('spinbutton', { name: 'Days to keep recordings' })).toHaveValue('14');
-    await expect(appSettingsModal.getByText('Recordings older than the selected number of days are removed during cleanup.')).toBeVisible();
+    await expect(
+      appSettingsModal.getByText('Recordings older than the selected number of days are removed during cleanup.'),
+    ).toBeVisible();
     await appSettingsModal.getByRole('button', { name: 'Keep forever' }).click();
     await expect(appSettingsModal.getByRole('spinbutton', { name: 'Days to keep recordings' })).toHaveCount(0);
-    await expect.poll(async () => {
-      const [contentBox, sectionBox] = await Promise.all([
-        appSettingsModal.locator('.app-settings-panel-region').boundingBox(),
-        appSettingsModal.locator('.app-settings-recordings-panel .app-settings-section').boundingBox(),
-      ]);
-      return contentBox && sectionBox ? sectionBox.width / contentBox.width : 0;
-    }).toBeGreaterThan(0.9);
+    await expect
+      .poll(async () => {
+        const [contentBox, sectionBox] = await Promise.all([
+          appSettingsModal.locator('.app-settings-panel-region').boundingBox(),
+          appSettingsModal.locator('.app-settings-recordings-panel .app-settings-section').boundingBox(),
+        ]);
+        return contentBox && sectionBox ? sectionBox.width / contentBox.width : 0;
+      })
+      .toBeGreaterThan(0.9);
     await appSettingsModal.getByLabel('Queued recording writes').fill('101');
     await expect(appSettingsActions).toHaveCount(1);
     await expect(appSettingsActions.locator('.app-settings-action-button').first()).toHaveCSS('height', '40px');
@@ -822,48 +953,82 @@ test.describe('Workflow library layout', () => {
     await expect(appSettingsActions).toHaveCSS('padding-top', '14px');
     await appSettingsActions.getByRole('button', { name: 'Save' }).click();
     await expect(appSettingsActions.locator('.project-settings-success')).toHaveText('Saved.');
-    await expect(appSettingsModal.locator('.app-settings-recordings-panel .app-settings-section > .project-settings-success')).toHaveCount(0);
+    await expect(
+      appSettingsModal.locator('.app-settings-recordings-panel .app-settings-section > .project-settings-success'),
+    ).toHaveCount(0);
     await appSettingsModal.getByRole('tab', { name: 'Node executor proxy' }).click();
-    await expect(appSettingsModal.getByRole('tab', { name: 'Node executor proxy' })).toHaveAttribute('aria-selected', 'true');
-    const websocketOverrideSection = appSettingsModal.locator('.app-settings-proxy-panel .app-settings-section', { hasText: 'Websocket URL overrides' });
+    await expect(appSettingsModal.getByRole('tab', { name: 'Node executor proxy' })).toHaveAttribute(
+      'aria-selected',
+      'true',
+    );
+    const websocketOverrideSection = appSettingsModal.locator('.app-settings-proxy-panel .app-settings-section', {
+      hasText: 'Websocket URL overrides',
+    });
     await expect(websocketOverrideSection.locator('.app-settings-section-title')).toHaveText('Websocket URL overrides');
     await expect(appSettingsModal.getByText('HTTP_PROXY')).toBeVisible();
-    await expect(appSettingsModal.locator('.app-settings-proxy-panel .app-settings-section').first().locator('.app-settings-field-grid')).toHaveCSS('gap', '18px');
+    await expect(
+      appSettingsModal
+        .locator('.app-settings-proxy-panel .app-settings-section')
+        .first()
+        .locator('.app-settings-field-grid'),
+    ).toHaveCSS('gap', '18px');
     await expect(appSettingsActions).toHaveCount(1);
-    await expect(appSettingsModal.getByRole('textbox', { name: 'HTTP_PROXY' })).toHaveValue('http://proxy.example.internal:3128');
+    await expect(appSettingsModal.getByRole('textbox', { name: 'HTTP_PROXY' })).toHaveValue(
+      'http://proxy.example.internal:3128',
+    );
     await expect(appSettingsModal.getByText('NO_PROXY')).toBeVisible();
-    await expect(appSettingsModal.getByRole('textbox', { name: 'NO_PROXY' })).toHaveValue('localhost,127.0.0.1,::1,api,web,executor,proxy,.svc,.cluster.local');
-    await expect(appSettingsModal.getByText('In Kubernetes, include cluster-local suffixes such as .svc and .cluster.local')).toBeVisible();
+    await expect(appSettingsModal.getByRole('textbox', { name: 'NO_PROXY' })).toHaveValue(
+      'localhost,127.0.0.1,::1,api,web,executor,proxy,.svc,.cluster.local',
+    );
+    await expect(
+      appSettingsModal.getByText('In Kubernetes, include cluster-local suffixes such as .svc and .cluster.local'),
+    ).toBeVisible();
     await expect(appSettingsModal.getByText('Websocket URL overrides')).toBeVisible();
-    await expect(appSettingsModal.getByRole('textbox', { name: 'Node executor websocket URL override' })).toHaveValue('');
-    await expect(appSettingsModal.getByRole('textbox', { name: 'Remote Debugger websocket URL override' })).toHaveValue('');
+    await expect(appSettingsModal.getByRole('textbox', { name: 'Node executor websocket URL override' })).toHaveValue(
+      '',
+    );
+    await expect(appSettingsModal.getByRole('textbox', { name: 'Remote Debugger websocket URL override' })).toHaveValue(
+      '',
+    );
     await expect(appSettingsModal.getByText('Active URL: ws://127.0.0.1:8081/ws/executor/internal.')).toBeVisible();
     await appSettingsModal.getByRole('textbox', { name: 'HTTP_PROXY' }).fill('http://proxy.example.internal:3129');
     await appSettingsModal
       .getByRole('textbox', { name: 'Remote Debugger websocket URL override' })
       .fill('wss://debugger.example.test/ws/latest-debugger');
     await appSettingsActions.getByRole('button', { name: 'Save' }).click();
-    await expect(appSettingsActions.locator('.project-settings-success')).toHaveText('Saved. Reload the editor to apply websocket URL overrides to active sessions.');
-    await expect(appSettingsModal.getByText('Active URL: wss://debugger.example.test/ws/latest-debugger.')).toBeVisible();
+    await expect(appSettingsActions.locator('.project-settings-success')).toHaveText(
+      'Saved. Reload the editor to apply websocket URL overrides to active sessions.',
+    );
+    await expect(
+      appSettingsModal.getByText('Active URL: wss://debugger.example.test/ws/latest-debugger.'),
+    ).toBeVisible();
 
     await appSettingsModal.getByRole('tab', { name: 'Web apps' }).click();
     await expect(appSettingsModal.getByRole('tab', { name: 'Web apps' })).toHaveAttribute('aria-selected', 'true');
-    await expect(appSettingsModal.locator('.app-settings-web-apps-panel .app-settings-section-title')).toContainText(['Routes', 'Auth', 'Button data']);
+    await expect(appSettingsModal.locator('.app-settings-web-apps-panel .app-settings-section-title')).toContainText([
+      'Routes',
+      'Auth',
+      'Button data',
+    ]);
     await expect(appSettingsModal.getByLabel('Published workflow endpoint URL slug')).toHaveCount(0);
     await expect(appSettingsModal.getByLabel('Published web app URL slug')).toHaveValue('apps');
     await expect(appSettingsModal.getByLabel('Maximum web app button data in MiB')).toHaveValue('100');
     await expect(appSettingsModal.getByLabel('Latest saved changes URL slug')).toHaveValue('apps-latest');
-    const appRouteRow = appSettingsModal.locator('.app-settings-web-apps-panel .app-settings-prefixed-input-row').first();
+    const appRouteRow = appSettingsModal
+      .locator('.app-settings-web-apps-panel .app-settings-prefixed-input-row')
+      .first();
     await expect(appRouteRow).toHaveCSS('display', 'flex');
-    await expect.poll(async () => {
-      const [prefixBox, inputBox] = await Promise.all([
-        appRouteRow.locator('.project-settings-url-prefix').boundingBox(),
-        appRouteRow.locator('.project-settings-input').boundingBox(),
-      ]);
-      return prefixBox && inputBox
-        ? Math.max(Math.abs(prefixBox.y - inputBox.y), Math.abs(prefixBox.height - inputBox.height))
-        : Number.POSITIVE_INFINITY;
-    }).toBeLessThanOrEqual(1);
+    await expect
+      .poll(async () => {
+        const [prefixBox, inputBox] = await Promise.all([
+          appRouteRow.locator('.project-settings-url-prefix').boundingBox(),
+          appRouteRow.locator('.project-settings-input').boundingBox(),
+        ]);
+        return prefixBox && inputBox
+          ? Math.max(Math.abs(prefixBox.y - inputBox.y), Math.abs(prefixBox.height - inputBox.height))
+          : Number.POSITIVE_INFINITY;
+      })
+      .toBeLessThanOrEqual(1);
     await appSettingsModal.getByLabel('Published web app URL slug').fill('public-apps');
     await expect(appSettingsModal.getByRole('button', { name: 'Key' })).toHaveAttribute('aria-pressed', 'true');
     const webAppAuthMode = appSettingsModal.getByRole('group', { name: 'Web app auth mode' });
@@ -871,7 +1036,11 @@ test.describe('Workflow library layout', () => {
     await expect(webAppAuthMode.getByRole('button', { name: 'Key' })).toHaveCSS('height', '28px');
     await expect(appSettingsModal.getByText('Visitors enter the Rivet key before opening web apps.')).toBeVisible();
     await appSettingsModal.getByRole('button', { name: 'OAuth' }).click();
-    await expect(appSettingsModal.getByText("Visitors sign in with the provider configured in the OAuth tab and are checked against each web app's allowed-email list.")).toBeVisible();
+    await expect(
+      appSettingsModal.getByText(
+        "Visitors sign in with the provider configured in the OAuth tab and are checked against each web app's allowed-email list.",
+      ),
+    ).toBeVisible();
 
     const webAppButtonDataSection = appSettingsModal.locator('section[aria-label="Web app button data"]');
     await expect(webAppButtonDataSection.getByText('Large payloads are buffered in the API process.')).toBeVisible();
@@ -885,7 +1054,9 @@ test.describe('Workflow library layout', () => {
 
     await appSettingsModal.getByRole('tab', { name: 'OAuth' }).click();
     await expect(appSettingsModal.getByRole('tab', { name: 'OAuth' })).toHaveAttribute('aria-selected', 'true');
-    await expect(appSettingsModal.locator('.app-settings-oauth-panel .app-settings-section-title')).toHaveText('Provider');
+    await expect(appSettingsModal.locator('.app-settings-oauth-panel .app-settings-section-title')).toHaveText(
+      'Provider',
+    );
     await expect(appSettingsModal.getByText('These settings are used by web apps in OAuth mode')).toBeVisible();
     await expect(appSettingsModal.getByLabel('Server UI admin emails')).toHaveCount(0);
     await expect(appSettingsModal).toHaveCSS('overflow-y', 'hidden');
@@ -896,16 +1067,21 @@ test.describe('Workflow library layout', () => {
     await settingsPanelRegion.evaluate((element) => {
       element.scrollTop = element.scrollHeight;
     });
-    await expect.poll(async () => {
-      const tabsAfterPanelScroll = await settingsTabList.boundingBox();
-      return tabsBeforePanelScroll && tabsAfterPanelScroll
-        ? Math.abs(tabsAfterPanelScroll.y - tabsBeforePanelScroll.y)
-        : Number.POSITIVE_INFINITY;
-    }).toBeLessThanOrEqual(1);
+    await expect
+      .poll(async () => {
+        const tabsAfterPanelScroll = await settingsTabList.boundingBox();
+        return tabsBeforePanelScroll && tabsAfterPanelScroll
+          ? Math.abs(tabsAfterPanelScroll.y - tabsBeforePanelScroll.y)
+          : Number.POSITIVE_INFINITY;
+      })
+      .toBeLessThanOrEqual(1);
     await settingsPanelRegion.evaluate((element) => {
       element.scrollTop = 0;
     });
-    await expect(appSettingsModal.getByRole('button', { name: 'External provider' })).toHaveAttribute('aria-pressed', 'true');
+    await expect(appSettingsModal.getByRole('button', { name: 'External provider' })).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    );
     await appSettingsModal.getByRole('button', { name: 'Local dummy' }).click();
     await expect(appSettingsModal.getByText('Default test email')).toBeVisible();
     await expect(appSettingsModal.getByLabel('Default test email')).toHaveValue('local@example.test');
@@ -915,7 +1091,10 @@ test.describe('Workflow library layout', () => {
     await expect(appSettingsActions.locator('.project-settings-success')).toHaveText('Saved.');
 
     await appSettingsModal.getByRole('tab', { name: 'Server UI access' }).click();
-    await expect(appSettingsModal.getByRole('tab', { name: 'Server UI access' })).toHaveAttribute('aria-selected', 'true');
+    await expect(appSettingsModal.getByRole('tab', { name: 'Server UI access' })).toHaveAttribute(
+      'aria-selected',
+      'true',
+    );
     await expect(appSettingsModal.getByText('RIVET_SERVER_UI_AUTH_MODE', { exact: true })).toBeVisible();
     const serverUiEmails = appSettingsModal.getByLabel('Server UI admin emails');
     const serverUiEmailBorder = await serverUiEmails.evaluate((element) => getComputedStyle(element).borderColor);
@@ -936,7 +1115,9 @@ test.describe('Workflow library layout', () => {
     await appSettingsModal.getByRole('tab', { name: 'Docker' }).click();
     await expect(appSettingsModal.getByRole('tab', { name: 'Docker' })).toHaveAttribute('aria-selected', 'true');
     await expect(appSettingsModal.locator('.app-settings-docker-panel .app-settings-section-title')).toHaveCount(0);
-    const dockerTimeoutInput = appSettingsModal.getByRole('spinbutton', { name: 'Docker startup wait timeout in seconds' });
+    const dockerTimeoutInput = appSettingsModal.getByRole('spinbutton', {
+      name: 'Docker startup wait timeout in seconds',
+    });
     await expect(dockerTimeoutInput).toHaveValue('1200');
     await expect(appSettingsModal.getByText('Kubernetes ignores this setting.')).toBeVisible();
     await dockerTimeoutInput.fill('1500');
@@ -977,7 +1158,9 @@ test.describe('Workflow library layout', () => {
     expect(expandIconBox).not.toBeNull();
     expect(Math.round(expandButtonBox!.width)).toBe(Math.round(sidebarBox!.width));
     expect(Math.round(expandButtonBox!.height)).toBe(Math.round(sidebarBox!.height));
-    expect(Math.abs((expandIconBox!.y + expandIconBox!.height / 2) - (sidebarBox!.y + sidebarBox!.height / 2))).toBeLessThan(2);
+    expect(
+      Math.abs(expandIconBox!.y + expandIconBox!.height / 2 - (sidebarBox!.y + sidebarBox!.height / 2)),
+    ).toBeLessThan(2);
 
     await page.mouse.click(sidebarBox!.x + sidebarBox!.width / 2, sidebarBox!.y + sidebarBox!.height - 20);
 
@@ -986,7 +1169,7 @@ test.describe('Workflow library layout', () => {
     await expect.poll(async () => Math.round((await sidebar.boundingBox())?.width ?? 0)).toBeGreaterThan(200);
     await expect(page.getByRole('button', { name: 'Collapse folders pane' })).toBeVisible();
     await expect(title).toBeVisible();
-    await expect(title).toHaveText('Rivet Projects');
+    await expect(title).toHaveText('Rivet Studio Server');
   });
 
   test('resizes with a wider drag target and folds while dragging below half the minimum width', async ({ page }) => {
@@ -1052,8 +1235,10 @@ test.describe('Workflow library layout', () => {
     expect(statusDotBox).not.toBeNull();
     expect(Math.round(statusDotBox!.width)).toBe(12);
     expect(Math.round(statusDotBox!.height)).toBe(12);
-    expect(Math.abs((statusDotBox!.x + statusDotBox!.width / 2) - (sidebarBox!.x + sidebarBox!.width / 2))).toBeLessThan(2);
-    expect(Math.abs((statusDotBox!.y + statusDotBox!.height / 2) - (sidebarBox!.y + 18.5))).toBeLessThan(2);
+    expect(Math.abs(statusDotBox!.x + statusDotBox!.width / 2 - (sidebarBox!.x + sidebarBox!.width / 2))).toBeLessThan(
+      2,
+    );
+    expect(Math.abs(statusDotBox!.y + statusDotBox!.height / 2 - (sidebarBox!.y + 18.5))).toBeLessThan(2);
   });
 
   test('tints the active project summary by publication status', async ({ page }) => {
@@ -1069,7 +1254,10 @@ test.describe('Workflow library layout', () => {
     for (const project of projects) {
       await page.getByRole('button', { name: project.name, exact: true }).click();
       await expect(activeProjectSection).toHaveClass(new RegExp(`\\b${project.settings.status}\\b`));
-      await expect(activeProjectSection).toHaveCSS('background-color', ACTIVE_PROJECT_BACKGROUND[project.settings.status]);
+      await expect(activeProjectSection).toHaveCSS(
+        'background-color',
+        ACTIVE_PROJECT_BACKGROUND[project.settings.status],
+      );
     }
   });
 
@@ -1169,12 +1357,20 @@ test.describe('Workflow library layout', () => {
 
     await expect(activeProjectSlot).toHaveCSS('height', '166px');
     await expect(activeProjectSection).toHaveCSS('height', '166px');
-    await expect(page.getByRole('button', { name: noAppsProject.name, exact: true }).locator('.project-status-dot')).toBeHidden();
-    await expect(page.getByRole('button', { name: oneAppProject.name, exact: true }).locator('.project-status-dot')).toHaveClass(/\bpublished\b/);
-    await expect(page.getByRole('button', { name: sameStatusAppsProject.name, exact: true }).locator('.project-status-dot')).toHaveClass(/\bunpublished_changes\b/);
+    await expect(
+      page.getByRole('button', { name: noAppsProject.name, exact: true }).locator('.project-status-dot'),
+    ).toBeHidden();
+    await expect(
+      page.getByRole('button', { name: oneAppProject.name, exact: true }).locator('.project-status-dot'),
+    ).toHaveClass(/\bpublished\b/);
+    await expect(
+      page.getByRole('button', { name: sameStatusAppsProject.name, exact: true }).locator('.project-status-dot'),
+    ).toHaveClass(/\bunpublished_changes\b/);
 
     await page.getByRole('button', { name: noAppsProject.name, exact: true }).click();
-    await expect(activeProjectSection.locator('.active-project-details > :first-child')).toHaveClass(/active-project-name-row/);
+    await expect(activeProjectSection.locator('.active-project-details > :first-child')).toHaveClass(
+      /active-project-name-row/,
+    );
     await expect(activeProjectSection.locator('.active-project-name')).toHaveText(noAppsProject.name);
     await expect(statusLines).toHaveCount(2);
     await expect(statusLines.first()).toContainText('Endpoint:');

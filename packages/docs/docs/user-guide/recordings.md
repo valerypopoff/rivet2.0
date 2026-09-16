@@ -29,9 +29,9 @@ If `Show node run durations` is enabled in Settings, replayed node outputs show 
 
 ## Saving a Recording
 
-Use **Save Recording** in the action bar to download a recording. When a recording is loaded, Rivet serializes that original recording's execution evidence, even after you play it. Playback is a visual replay of past execution evidence, not a new execution recording, so saving it never replaces the original timeline with the much faster playback delivery timeline.
+When a recording is loaded, open the action bar's **...** menu and choose **Export recording** to download it. Rivet serializes that original recording's execution evidence, even after you play it. Playback is a visual replay of past execution evidence, not a new execution recording, so exporting it never replaces the original timeline with the much faster playback delivery timeline.
 
-If no recording is loaded, **Save Recording** downloads the most recent recording captured from a normal local run.
+If no recording is loaded, **Save Recording** remains directly in the action bar and downloads the most recent recording captured from a normal local run.
 
 ## Playing a Recording
 

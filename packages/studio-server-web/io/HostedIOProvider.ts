@@ -49,6 +49,10 @@ const API = RIVET_API_BASE_URL;
 const jotaiStore = getDefaultStore();
 let workflowStorageBackendPromise: Promise<'filesystem' | 'managed'> | null = null;
 
+function isAbortError(error: unknown): boolean {
+  return typeof error === 'object' && error != null && 'name' in error && error.name === 'AbortError';
+}
+
 type HostedDatasetProvider = AppDatasetProvider & {
   importDatasetsForProject: NonNullable<AppDatasetProvider['importDatasetsForProject']>;
 };
@@ -558,8 +562,11 @@ export class HostedIOProvider implements IOProvider {
         await writable.write(content);
         await writable.close();
         return;
-      } catch {
-        // Fallback
+      } catch (error) {
+        if (isAbortError(error)) {
+          return;
+        }
+        // Fall back when the advertised picker API is unavailable or unusable.
       }
     }
     const blob = new Blob([content], { type: 'text/plain' });

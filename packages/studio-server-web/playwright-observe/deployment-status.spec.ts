@@ -21,7 +21,7 @@ test.describe('Deployment status settings', () => {
     await page.goto('/', { waitUntil: 'domcontentloaded' });
     await authenticateIfNeeded(page);
     await waitForDashboardReady(page);
-    await page.getByRole('button', { name: 'App settings' }).click();
+    await page.getByRole('button', { name: 'Settings', exact: true }).click();
 
     const appSettingsModal = page.locator('[data-testid="app-settings-modal"]');
     await expect(appSettingsModal).toBeVisible();

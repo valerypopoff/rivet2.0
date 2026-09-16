@@ -1,7 +1,7 @@
 import { lazy, Suspense, type Dispatch, type FC, type SetStateAction } from 'react';
 import { AppSettingsModal } from './AppSettingsModal';
 import { ProjectSettingsModal } from './ProjectSettingsModal';
-import { RuntimeLibrariesModal } from './RuntimeLibrariesModal';
+import { PublishedItemsModal } from './PublishedItemsModal';
 import { RunRecordingsModal } from './RunRecordingsModal';
 import { WorkflowPublishedVersionHistoryModal } from './WorkflowPublishedVersionHistoryModal';
 import { WorkflowProjectVersionModal } from './WorkflowProjectVersionModal';
@@ -43,8 +43,6 @@ export const WorkflowLibraryModals: FC<{
     refresh,
     handlePublishedVersionRestored,
     onDeleteProject,
-    runtimeLibsOpen,
-    setRuntimeLibsOpen,
     runRecordingsOpen,
     runRecordingsResetToken,
     hideRunRecordingsModal,
@@ -52,6 +50,9 @@ export const WorkflowLibraryModals: FC<{
     handleRunRecordingsFoundCountChange,
     runStatisticsOpen,
     setRunStatisticsOpen,
+    publishedItemsOpen,
+    setPublishedItemsOpen,
+    openPublishedItemProject,
     appSettingsOpen,
     setAppSettingsOpen,
     onOpenRecording,
@@ -86,10 +87,6 @@ export const WorkflowLibraryModals: FC<{
         onPreviewVersion={onOpenPublishedVersionPreview}
         onRestored={handlePublishedVersionRestored}
       />
-      <RuntimeLibrariesModal
-        isOpen={runtimeLibsOpen}
-        onClose={() => setRuntimeLibsOpen(false)}
-      />
       <RunRecordingsModal
         isOpen={runRecordingsOpen}
         resetToken={runRecordingsResetToken}
@@ -103,6 +100,13 @@ export const WorkflowLibraryModals: FC<{
           <RunStatisticsModal isOpen={runStatisticsOpen} onClose={() => setRunStatisticsOpen(false)} />
         </Suspense>
       ) : null}
+      <PublishedItemsModal
+        isOpen={publishedItemsOpen}
+        projects={allProjects}
+        routeConfig={routeConfig}
+        onClose={() => setPublishedItemsOpen(false)}
+        onOpenProject={openPublishedItemProject}
+      />
       <AppSettingsModal
         isOpen={appSettingsOpen}
         onClose={() => setAppSettingsOpen(false)}

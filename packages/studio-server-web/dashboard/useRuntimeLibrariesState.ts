@@ -23,8 +23,9 @@ import {
   patchRuntimeLibrariesJobStatusState,
 } from './runtimeLibrariesJobStream';
 
-export function useRuntimeLibrariesModalState(isOpen: boolean) {
-  const STALLED_THRESHOLD_MS = 45_000;
+const STALLED_THRESHOLD_MS = 45_000;
+
+export function useRuntimeLibrariesState() {
   const [state, setState] = useState<RuntimeLibrariesState | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -42,7 +43,7 @@ export function useRuntimeLibrariesModalState(isOpen: boolean) {
 
   const logPanelRef = useRef<HTMLDivElement>(null);
   const eventSourceRef = useRef<EventSource | null>(null);
-  const wasOpenRef = useRef(false);
+  const activeRef = useRef(false);
   const trackedJobIdRef = useRef<string | null>(null);
   const retainedJobRef = useRef<JobState | null>(null);
   const refreshRef = useRef<() => Promise<void>>(async () => {});
@@ -80,12 +81,19 @@ export function useRuntimeLibrariesModalState(isOpen: boolean) {
   }, []);
 
   const startStreaming = useCallback((jobId: string) => {
+    if (!activeRef.current) {
+      return;
+    }
+
     closeStream();
 
     eventSourceRef.current = openRuntimeLibrariesJobStream(
       jobId,
       {
         onLog: (entry) => {
+          if (!activeRef.current) {
+            return;
+          }
           setLogEntries((prev) => {
             const mergedEntries = mergeRuntimeLibraryLogEntries(prev, [entry]);
             updateDisplayedJob((base) => patchRuntimeLibrariesJobLogState(base, mergedEntries, entry.createdAt));
@@ -93,6 +101,9 @@ export function useRuntimeLibrariesModalState(isOpen: boolean) {
           });
         },
         onStatus: (event) => {
+          if (!activeRef.current) {
+            return;
+          }
           updateDisplayedJob((base) => patchRuntimeLibrariesJobStatusState(base, {
             status: event.status,
             createdAt: event.createdAt,
@@ -100,6 +111,9 @@ export function useRuntimeLibrariesModalState(isOpen: boolean) {
           }));
         },
         onDone: (event) => {
+          if (!activeRef.current) {
+            return;
+          }
           setJobResult({ status: event.status as 'succeeded' | 'failed', error: event.error });
           setCancellingJob(false);
           trackedJobIdRef.current = jobId;
@@ -112,6 +126,9 @@ export function useRuntimeLibrariesModalState(isOpen: boolean) {
           void refreshRef.current();
         },
         onError: () => {
+          if (!activeRef.current) {
+            return;
+          }
           void refreshActiveStateSilentlyRef.current(jobId);
         },
       },
@@ -123,6 +140,9 @@ export function useRuntimeLibrariesModalState(isOpen: boolean) {
       setLoading(true);
       setError(null);
       const data = await fetchRuntimeLibraries();
+      if (!activeRef.current) {
+        return;
+      }
       setState(data);
 
       if (data.activeJob && data.activeJob.status !== 'succeeded' && data.activeJob.status !== 'failed') {
@@ -133,9 +153,13 @@ export function useRuntimeLibrariesModalState(isOpen: boolean) {
         applyJobState(data.activeJob ?? retainedJobRef.current ?? null);
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      if (activeRef.current) {
+        setError(err instanceof Error ? err.message : String(err));
+      }
     } finally {
-      setLoading(false);
+      if (activeRef.current) {
+        setLoading(false);
+      }
     }
   }, [applyJobState, closeStream, startStreaming]);
 
@@ -146,6 +170,9 @@ export function useRuntimeLibrariesModalState(isOpen: boolean) {
         fetchRuntimeLibraries(),
         trackedJobId ? fetchJob(trackedJobId).catch(() => null) : Promise.resolve(null),
       ]);
+      if (!activeRef.current) {
+        return;
+      }
 
       setState(data);
 
@@ -185,25 +212,14 @@ export function useRuntimeLibrariesModalState(isOpen: boolean) {
     displayedJob.status !== 'failed';
 
   useEffect(() => {
-    if (isOpen) {
-      wasOpenRef.current = true;
-      void refresh();
-    } else if (wasOpenRef.current) {
-      closeStream();
-      setActiveJob(null);
-      setLogEntries([]);
-      setJobResult(null);
-      setShowInstallForm(false);
-      setCancellingJob(false);
-      trackedJobIdRef.current = null;
-      retainedJobRef.current = null;
-      wasOpenRef.current = false;
-    }
+    activeRef.current = true;
+    void refresh();
 
     return () => {
+      activeRef.current = false;
       closeStream();
     };
-  }, [closeStream, isOpen, refresh]);
+  }, [closeStream, refresh]);
 
   useEffect(() => {
     if (logPanelRef.current) {
@@ -212,26 +228,18 @@ export function useRuntimeLibrariesModalState(isOpen: boolean) {
   }, [logEntries]);
 
   useEffect(() => {
-    if (!isOpen) {
-      return;
-    }
-
     const tick = setInterval(() => {
       setNowMs(Date.now());
     }, 1_000);
     return () => clearInterval(tick);
-  }, [isOpen]);
+  }, []);
 
   useEffect(() => {
-    if (!isOpen) {
-      return;
-    }
-
     const interval = setInterval(() => {
       void refreshActiveStateSilently(activeJob?.id);
     }, 5_000);
     return () => clearInterval(interval);
-  }, [activeJob?.id, isOpen, refreshActiveStateSilently]);
+  }, [activeJob?.id, refreshActiveStateSilently]);
 
   const handleInstall = useCallback(async () => {
     if (!addName.trim()) {
@@ -242,12 +250,17 @@ export function useRuntimeLibrariesModalState(isOpen: boolean) {
       setError(null);
       setJobResult(null);
       const job = await installPackages([{ name: addName.trim(), version: addVersion.trim() || 'latest' }]);
+      if (!activeRef.current) {
+        return;
+      }
       applyJobState(job);
       startStreaming(job.id);
       setAddName('');
       setAddVersion('latest');
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      if (activeRef.current) {
+        setError(err instanceof Error ? err.message : String(err));
+      }
     }
   }, [addName, addVersion, applyJobState, startStreaming]);
 
@@ -256,10 +269,15 @@ export function useRuntimeLibrariesModalState(isOpen: boolean) {
       setError(null);
       setJobResult(null);
       const job = await removePackages([packageName]);
+      if (!activeRef.current) {
+        return;
+      }
       applyJobState(job);
       startStreaming(job.id);
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      if (activeRef.current) {
+        setError(err instanceof Error ? err.message : String(err));
+      }
     }
   }, [applyJobState, startStreaming]);
 
@@ -272,6 +290,9 @@ export function useRuntimeLibrariesModalState(isOpen: boolean) {
       setCancellingJob(true);
       setError(null);
       const job = await cancelJob(displayedJob.id);
+      if (!activeRef.current) {
+        return;
+      }
       applyJobState(job);
       if (job.status === 'failed' || job.status === 'succeeded') {
         setJobResult({ status: job.status, error: job.error });
@@ -279,8 +300,10 @@ export function useRuntimeLibrariesModalState(isOpen: boolean) {
         void refresh();
       }
     } catch (err) {
-      setCancellingJob(false);
-      setError(err instanceof Error ? err.message : String(err));
+      if (activeRef.current) {
+        setCancellingJob(false);
+        setError(err instanceof Error ? err.message : String(err));
+      }
     }
   }, [applyJobState, cancellingJob, displayedJob, isJobActive, refresh]);
 

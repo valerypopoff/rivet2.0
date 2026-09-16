@@ -62,8 +62,9 @@ const moreMenuStyles = css`
 export const ActionBarMoreMenu: FC<{
   getDebuggerPanelAnchor: () => DebuggerPanelAnchor | undefined;
   onClose: () => void;
+  onExportRecording?: () => void;
   onAddRunInputsToEvaluation?: () => void;
-}> = ({ getDebuggerPanelAnchor, onClose, onAddRunInputsToEvaluation }) => {
+}> = ({ getDebuggerPanelAnchor, onClose, onExportRecording, onAddRunInputsToEvaluation }) => {
   const setDebuggerPanelOpen = useSetAtom(debuggerPanelOpenState);
   const setDebuggerPanelAnchor = useSetAtom(debuggerPanelAnchorState);
   const [selectedExecutor, setSelectedExecutor] = useAtom(selectedExecutorState);
@@ -91,6 +92,11 @@ export const ActionBarMoreMenu: FC<{
 
   const doLoadRecording = () => {
     loadRecording();
+    onClose();
+  };
+
+  const doExportRecording = () => {
+    onExportRecording?.();
     onClose();
   };
 
@@ -137,6 +143,7 @@ export const ActionBarMoreMenu: FC<{
         Remote Debugger
       </PopupMenuItem>
       {recordingsEnabled ? <PopupMenuItem onClick={doLoadRecording}>Load Recording</PopupMenuItem> : null}
+      {onExportRecording ? <PopupMenuItem onClick={doExportRecording}>Export recording</PopupMenuItem> : null}
       {evaluationInputCopyEnabled && onAddRunInputsToEvaluation ? (
         <PopupMenuItem onClick={onAddRunInputsToEvaluation}>Add run inputs to evaluation dataset</PopupMenuItem>
       ) : null}

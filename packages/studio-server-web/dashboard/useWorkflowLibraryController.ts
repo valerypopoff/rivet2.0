@@ -112,8 +112,8 @@ export function useWorkflowLibraryController(options: {
   const runRecordings = useRunRecordingsModalState();
   const [settingsModalProject, setSettingsModalProject] = useState<WorkflowProjectItem | null>(null);
   const [publishedHistoryProject, setPublishedHistoryProject] = useState<WorkflowProjectItem | null>(null);
-  const [runtimeLibsOpen, setRuntimeLibsOpen] = useState(false);
   const [runStatisticsOpen, setRunStatisticsOpen] = useState(false);
+  const [publishedItemsOpen, setPublishedItemsOpen] = useState(false);
   const [appSettingsOpen, setAppSettingsOpen] = useState(false);
   const [folderContextMenuState, setFolderContextMenuState] = useState<WorkflowFolderContextMenuState | null>(null);
   const [projectContextMenuState, setProjectContextMenuState] = useState<WorkflowProjectContextMenuState | null>(null);
@@ -137,6 +137,7 @@ export function useWorkflowLibraryController(options: {
     isActiveProjectOpen,
     openedWorkflowProject,
     openedWorkflowProjectRef,
+    openPersistent,
     remapSelectedPath,
     setProjectRowRef,
     suppressAncestorExpansion,
@@ -317,7 +318,7 @@ export function useWorkflowLibraryController(options: {
       publishedHistoryProject ||
       runRecordings.open ||
       runStatisticsOpen ||
-      runtimeLibsOpen ||
+      publishedItemsOpen ||
       settingsModalOpen,
   );
 
@@ -653,6 +654,14 @@ export function useWorkflowLibraryController(options: {
     [editingFolderId, renamingFolderId, toggleFolderExpanded],
   );
 
+  const openPublishedItemProject = useCallback(
+    (project: WorkflowProjectItem) => {
+      setPublishedItemsOpen(false);
+      openPersistent(project);
+    },
+    [openPersistent],
+  );
+
   const handleProjectRowKeyDown = useCallback(
     (project: WorkflowProjectItem) => (event: KeyboardEvent<HTMLElement>) => {
       if (!isPlainF2ShortcutEvent(event) || project.absolutePath !== activePath || !startSelectedProjectRename()) {
@@ -689,12 +698,12 @@ export function useWorkflowLibraryController(options: {
     settingsModalOpen,
     settingsModalProject,
     publishedHistoryProject,
-    runtimeLibsOpen,
     runRecordingsOpen: runRecordings.open,
     runRecordingsRetained: runRecordings.retained,
     runRecordingsFoundCount: runRecordings.foundCount,
     runRecordingsResetToken: runRecordings.resetToken,
     runStatisticsOpen,
+    publishedItemsOpen,
     appSettingsOpen,
     folderContextMenuState,
     projectContextMenuState,
@@ -745,8 +754,9 @@ export function useWorkflowLibraryController(options: {
     handleDeleteProjectFromContextMenu,
     handleProjectModalSelectPublished,
     handleProjectModalSelectUnpublishedChanges,
-    setRuntimeLibsOpen,
     setRunStatisticsOpen,
+    setPublishedItemsOpen,
+    openPublishedItemProject,
     openRunRecordingsModal: runRecordings.show,
     hideRunRecordingsModal: runRecordings.hide,
     closeRunRecordingsModal: runRecordings.close,

@@ -135,7 +135,7 @@ test.describe('Run statistics modal', () => {
     await authenticateIfNeeded(page);
     await waitForDashboardReady(page);
 
-    await page.getByRole('button', { name: 'Run statistics' }).click();
+    await page.getByRole('button', { name: 'Run statistics', exact: true }).click();
     const modal = page.getByTestId('run-statistics-modal');
     await expect(modal).toBeVisible();
     await expect(page.getByTestId('run-statistics-modal--blanket')).toHaveCSS('background-color', 'rgba(0, 0, 0, 0.56)');

@@ -24,6 +24,7 @@ export type AppSettingsTab =
   | 'node-executor-proxy'
   | 'environment-variables'
   | 'run-recordings'
+  | 'runtime-libraries'
   | 'web-apps'
   | 'oauth'
   | 'server-ui-access'

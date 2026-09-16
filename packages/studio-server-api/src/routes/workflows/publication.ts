@@ -72,12 +72,13 @@ export async function getWorkflowProjectSettings(
       : {}),
     endpointName: storedSettings.endpointName,
     lastPublishedAt: await resolveWorkflowLastPublishedAt(projectPath, storedSettings, status),
-    publishedWebApps: storedSettings.publishedWebApps.map((webApp) => ({
+    publishedWebApps: storedSettings.publishedWebApps.map((webApp, index) => ({
       uiGraphId: webApp.uiGraphId,
       uiGraphName: webApp.uiGraphName,
       slug: webApp.slug,
       publishedAt: webApp.publishedAt,
       allowedEmails: webApp.allowedEmails,
+      ...(webAppStatuses[index] ? { status: webAppStatuses[index] } : {}),
     })),
   };
 }

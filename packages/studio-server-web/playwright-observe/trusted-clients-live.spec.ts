@@ -12,7 +12,7 @@ test('trusted-client repair and validation through the real proxy and API', asyn
   await page.locator('button[type="submit"]').click();
   await expect(page.locator('#gate-key')).toHaveCount(0);
   await waitForDashboardReady(page);
-  await page.getByRole('button', { name: 'App settings' }).click();
+  await page.getByRole('button', { name: 'Settings', exact: true }).click();
   const modal = page.getByTestId('app-settings-modal');
   const clients = modal.getByLabel('Trusted clients', { exact: true });
   const save = modal.locator('.app-settings-panel-region > .app-settings-actions-row').getByRole('button', { name: 'Save' });

@@ -1,6 +1,15 @@
 import { DndContext, PointerSensor, useDroppable, useSensor, useSensors } from '@dnd-kit/core';
 import { css } from '@emotion/react';
-import { type FC, type MouseEvent, type KeyboardEvent, memo, useMemo, useRef, useState, type SVGProps } from 'react';
+import {
+  type FC,
+  type KeyboardEvent,
+  type MouseEvent,
+  memo,
+  useMemo,
+  useRef,
+  useState,
+  type SVGProps,
+} from 'react';
 import { useAtomValue, useSetAtom } from 'jotai';
 import { type GraphId, type NodeGraph, type UiGraph, type UiGraphId } from '@valerypopoff/rivet2-core';
 import clsx from 'clsx';
@@ -46,6 +55,7 @@ import { useProjectWorkspaceTarget } from '../hooks/useProjectWorkspaceTarget.js
 import { useUiGraphOperations } from '../hooks/useUiGraphOperations.js';
 import { GraphListDialogs } from './graphList/GraphListDialogs.js';
 import { GraphListHeader } from './graphList/GraphListHeader.js';
+import { GraphListSectionHeader } from './graphList/GraphListSectionHeader.js';
 import { UiGraphResourceSection } from './graphList/UiGraphResourceSection.js';
 import { GraphListContextMenus } from './graphList/GraphListContextMenus.js';
 
@@ -94,12 +104,12 @@ const styles = css`
 
   .project-tree-header-label {
     flex-shrink: 0;
-    font-weight: 700;
-    color: var(--grey-lightest);
+    color: var(--grey-light);
   }
 
   .project-tree-header-title {
     min-width: 0;
+    color: var(--grey-lightest);
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -119,8 +129,7 @@ const styles = css`
     width: 100%;
   }
 
-  .graph-list-action,
-  .graph-list-filter-label {
+  .graph-list-action {
     position: relative;
     display: flex;
     align-items: center;
@@ -136,8 +145,7 @@ const styles = css`
     text-align: left;
   }
 
-  .graph-list-action::before,
-  .graph-list-filter-label::before {
+  .graph-list-action::before {
     content: '';
     position: absolute;
     inset: -7px -10px;
@@ -151,8 +159,7 @@ const styles = css`
     }
   }
 
-  .graph-list-action > *,
-  .graph-list-filter-label > * {
+  .graph-list-action > * {
     position: relative;
     z-index: 1;
   }
@@ -185,26 +192,11 @@ const styles = css`
     --project-tree-panel-icon-y: -0.05em;
   }
 
-  .project-tree-panel-icon-filter {
-    --project-tree-panel-icon-x: 0;
-    --project-tree-panel-icon-y: 0;
-  }
-
-  .project-tree-panel-icon-filter-clear {
-    --project-tree-panel-icon-size: 12px;
-    --project-tree-panel-icon-x: 0;
-    --project-tree-panel-icon-y: 0;
-  }
-
-  .graph-list-action:hover,
-  .graph-list-filter:hover .graph-list-filter-label,
-  .graph-list-filter:focus-within .graph-list-filter-label {
+  .graph-list-action:hover {
     color: var(--grey-lightest);
   }
 
-  .graph-list-action:hover::before,
-  .graph-list-filter:hover .graph-list-filter-label::before,
-  .graph-list-filter:focus-within .graph-list-filter-label::before {
+  .graph-list-action:hover::before {
     background-color: var(--grey-darkish);
   }
 
@@ -221,44 +213,16 @@ const styles = css`
     background-color: var(--primary-dark);
   }
 
-  .graph-list-filter {
-    position: relative;
-    isolation: isolate;
-  }
-
-  .graph-list-filter-label {
-    cursor: text;
-  }
-
-  .graph-list-filter input {
-    flex: 1 1 auto;
-    min-width: 0;
-    height: calc(20px * var(--ui-font-scale));
-    padding: 0 24px 0 0;
-    border: 0 !important;
-    border-width: 0 !important;
-    outline: 0 !important;
-    box-shadow: none !important;
-    background: transparent !important;
-    color: inherit;
-    font-size: var(--ui-font-size-base) !important;
-    line-height: calc(20px * var(--ui-font-scale));
-
-    &::placeholder {
-      color: currentColor;
-      opacity: 1;
-    }
-
-    &:focus::placeholder {
-      opacity: 0;
-    }
-  }
-
-  .graph-list {
-    overflow-y: auto;
-    overflow-x: hidden;
-    flex: 1 1 auto;
-    padding: 0 0 12px;
+  .graph-list-section-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    min-height: calc(20px * var(--ui-font-scale));
+    margin: 0 10px 8px;
+    color: color-mix(in srgb, var(--grey-light) 64%, transparent);
+    font-size: var(--ui-font-size-base);
+    font-weight: 400;
+    line-height: calc(16px * var(--ui-font-scale));
   }
 
   .graph-list-heading {
@@ -268,6 +232,72 @@ const styles = css`
     font-weight: 400;
     letter-spacing: 0;
     line-height: calc(16px * var(--ui-font-scale));
+  }
+
+  .graph-list-section-header .graph-list-heading {
+    margin: 0;
+  }
+
+  .graph-list-filter-tooltip {
+    display: inline-flex;
+  }
+
+  .graph-list-filter-toggle,
+  .graph-list-filter-close {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: calc(20px * var(--ui-font-scale));
+    height: calc(20px * var(--ui-font-scale));
+    padding: 0;
+    border: 0;
+    background: transparent;
+    color: inherit;
+    cursor: pointer;
+  }
+
+  .graph-list-filter-toggle:hover,
+  .graph-list-filter-close:hover {
+    color: var(--grey-lightest);
+  }
+
+  .graph-list-filter-toggle svg,
+  .graph-list-section-filter-icon {
+    width: 16px;
+    height: 16px;
+  }
+
+  .graph-list-section-filter {
+    justify-content: flex-start;
+    gap: 6px;
+    color: var(--grey-lightest);
+  }
+
+  .graph-list-section-filter input {
+    flex: 1 1 auto;
+    min-width: 0;
+    height: calc(20px * var(--ui-font-scale));
+    padding: 0;
+    border: 0 !important;
+    border-width: 0 !important;
+    outline: 0 !important;
+    box-shadow: none !important;
+    background: transparent !important;
+    color: inherit;
+    font-size: var(--ui-font-size-base) !important;
+    line-height: calc(20px * var(--ui-font-scale));
+  }
+
+  .graph-list-filter-close svg {
+    width: 12px;
+    height: 12px;
+  }
+
+  .graph-list {
+    overflow-y: auto;
+    overflow-x: hidden;
+    flex: 1 1 auto;
+    padding: 0 0 12px;
   }
 
   .ui-graph-entry,
@@ -722,6 +752,7 @@ export const GraphList: FC = memo(() => {
   const [uiGraphPendingDelete, setUiGraphPendingDelete] = useState<UiGraph | null>(null);
   const [graphPendingInfo, setGraphPendingInfo] = useState<NodeGraph | null>(null);
   const [isProjectInfoOpen, setIsProjectInfoOpen] = useState(false);
+  const [filterOpen, setFilterOpen] = useState(false);
   const showUnreachableGraphTags = useAtomValue(showUnreachableGraphTagsState);
   const showGraphReferenceIndicators = useAtomValue(showGraphReferenceIndicatorsState);
   const activeComparison = useAtomValue(activeProjectComparisonState);
@@ -759,11 +790,9 @@ export const GraphList: FC = memo(() => {
     uiGraphs: project.uiGraphs,
   });
 
-  const handleSearchKeyDown = useStableCallback((e: KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === 'Escape') {
-      setSearchText('');
-      (e.target as HTMLElement).blur();
-    }
+  const closeGraphFilter = useStableCallback(() => {
+    setSearchText('');
+    setFilterOpen(false);
   });
 
   const openGraphSearch = useStableCallback(() => {
@@ -1044,11 +1073,7 @@ export const GraphList: FC = memo(() => {
         nodeLibraryItemCount={nodeLibraryItemCount}
         nodeLibraryOpen={nodeLibraryOpen}
         projectTitle={project.metadata.title}
-        searchText={searchText}
-        onClearFilter={() => setSearchText('')}
         onCreateWebApp={handleCreateUiGraph}
-        onFilterKeyDown={handleSearchKeyDown}
-        onFilterTextChange={setSearchText}
         onOpenNodeLibrary={handleOpenNodeLibrary}
         onOpenProjectSettings={() => setIsProjectInfoOpen(true)}
         onOpenSearch={openGraphSearch}
@@ -1071,7 +1096,13 @@ export const GraphList: FC = memo(() => {
             onOpen={handleOpenUiGraph}
           />
         )}
-        <div className="graph-list-heading">Graphs</div>
+        <GraphListSectionHeader
+          filterOpen={filterOpen}
+          searchText={searchText}
+          onCloseFilter={closeGraphFilter}
+          onFilterTextChange={setSearchText}
+          onOpenFilter={() => setFilterOpen(true)}
+        />
         {graphListReachability.notice && <div className="graph-list-notice">{graphListReachability.notice}</div>}
         <div
           className={clsx('graph-list', { 'dragging-over': dragOverFolderName === '' && draggingItemFolder !== '' })}

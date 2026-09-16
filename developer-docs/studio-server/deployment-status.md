@@ -2,7 +2,7 @@
 
 `Settings` -> `Deployment` is Rivet Studio Server's read-only operational
 topology view. It deliberately separates deployment information from
-`Runtime libraries`, which is solely for adding, removing, and inspecting
+`Settings` -> `Runtime libraries`, which is solely for adding, removing, and inspecting
 Code-node packages.
 
 ## What the page tells an operator

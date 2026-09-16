@@ -1,4 +1,7 @@
 import Button from '@atlaskit/button';
+import RecordingIcon from 'majesticons/line/video-line.svg?react';
+import PublishedIcon from 'majesticons/line/share-line.svg?react';
+import SettingsCogIcon from 'majesticons/line/settings-cog-line.svg?react';
 import type { Dispatch, FC, SetStateAction } from 'react';
 import { ActiveProjectSection } from './ActiveProjectSection';
 import { WorkflowFolderTree } from './WorkflowFolderTree';
@@ -161,9 +164,9 @@ export const WorkflowLibraryPanel: FC<WorkflowLibraryPanelProps> = ({
     onProjectPreviewOpen,
     onProjectPersistentOpen,
     setProjectRowRef,
-    setRuntimeLibsOpen,
     openRunRecordingsModal,
     setRunStatisticsOpen,
+    setPublishedItemsOpen,
     runRecordingsRetained,
     runRecordingsFoundCount,
     setAppSettingsOpen,
@@ -233,7 +236,7 @@ export const WorkflowLibraryPanel: FC<WorkflowLibraryPanelProps> = ({
           <span className="header-collapse-icon">
             <SidebarOpenIcon />
           </span>
-          <span className="header-title">Rivet Projects</span>
+          <span className="header-title">Rivet Studio Server</span>
         </button>
 
         <div className="active-project-slot">
@@ -264,18 +267,11 @@ export const WorkflowLibraryPanel: FC<WorkflowLibraryPanelProps> = ({
         </div>
 
         <div className="panel-bottom-actions">
-          <Button
-            appearance="subtle"
-            className="panel-bottom-button project-settings-secondary-button button-size-m"
-            onClick={() => setRuntimeLibsOpen(true)}
-            title="Manage runtime libraries available to Code nodes"
-          >
-            Runtime libraries
-          </Button>
           <div className={`panel-bottom-action-with-summary${runRecordingsRetained ? ' has-summary' : ''}`}>
             <Button
               appearance="subtle"
               className="panel-bottom-button project-settings-secondary-button button-size-m"
+              iconBefore={<RecordingIcon aria-hidden="true" />}
               onClick={openRunRecordingsModal}
               title="Browse workflow run recordings and load them into the editor"
             >
@@ -296,9 +292,18 @@ export const WorkflowLibraryPanel: FC<WorkflowLibraryPanelProps> = ({
           <Button
             appearance="subtle"
             className="panel-bottom-button project-settings-secondary-button button-size-m"
+            iconBefore={<PublishedIcon aria-hidden="true" />}
+            onClick={() => setPublishedItemsOpen(true)}
+            title="Browse published workflow endpoints and web apps"
+          >
+            Published
+          </Button>
+          <Button
+            appearance="subtle"
+            className="panel-bottom-button project-settings-secondary-button button-size-m"
+            iconBefore={<SettingsCogIcon aria-hidden="true" />}
             onClick={() => setAppSettingsOpen(true)}
             title="Open app settings"
-            aria-label="App settings"
           >
             Settings
           </Button>

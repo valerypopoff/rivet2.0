@@ -9,6 +9,7 @@ import { GeneralSettingsTab } from './app-settings/tabs/GeneralSettingsTab';
 import { NodeExecutorSettingsTab } from './app-settings/tabs/NodeExecutorSettingsTab';
 import { OAuthSettingsTab } from './app-settings/tabs/OAuthSettingsTab';
 import { RunRecordingsSettingsTab } from './app-settings/tabs/RunRecordingsSettingsTab';
+import { RuntimeLibrariesSettingsTab } from './app-settings/tabs/RuntimeLibrariesSettingsTab';
 import { ServerUiAccessSettingsTab } from './app-settings/tabs/ServerUiAccessSettingsTab';
 import { ShellExecutionSettingsTab } from './app-settings/tabs/ShellExecutionSettingsTab';
 import { StorageSettingsTab } from './app-settings/tabs/StorageSettingsTab';
@@ -42,6 +43,7 @@ const tabs: ReadonlyArray<{ id: AppSettingsTab; label: string }> = [
   { id: 'deployment-status', label: 'Deployment' },
   { id: 'workflow-endpoints', label: 'Workflow endpoints' },
   { id: 'run-recordings', label: 'Run recordings' },
+  { id: 'runtime-libraries', label: 'Runtime libraries' },
   { id: 'node-executor-proxy', label: 'Node executor proxy' },
   { id: 'environment-variables', label: 'Environment variables' },
   { id: 'web-apps', label: 'Web apps' },
@@ -106,6 +108,8 @@ function OpenAppSettingsModal({
           ? <WorkflowEndpointsSettingsTab auth={workflowAuth} limits={limits} routes={routes} />
           : activeTab === 'run-recordings'
             ? <RunRecordingsSettingsTab recordings={recordings} />
+            : activeTab === 'runtime-libraries'
+              ? <RuntimeLibrariesSettingsTab />
             : activeTab === 'node-executor-proxy'
               ? <NodeExecutorSettingsTab nodeExecutor={nodeExecutor} routeConfig={routeConfig} />
               : activeTab === 'environment-variables'
@@ -116,7 +120,7 @@ function OpenAppSettingsModal({
                   ? <OAuthSettingsTab auth={webAppAuth} routeConfig={routeConfig} />
                   : <DockerSettingsTab limits={limits} />;
 
-  const tabActions: TabSettingsAction[] = activeTab === 'deployment-status'
+  const tabActions: TabSettingsAction[] = activeTab === 'deployment-status' || activeTab === 'runtime-libraries'
     ? []
     : activeTab === 'general'
     ? [{

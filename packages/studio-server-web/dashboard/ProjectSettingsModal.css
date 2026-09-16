@@ -104,8 +104,7 @@
   line-height: 1;
 }
 
-.project-settings-close-button:hover,
-.project-settings-close-button:focus-visible {
+.project-settings-close-button:hover {
   background: rgba(255, 255, 255, 0.08);
   border-radius: inherit;
 }
@@ -116,8 +115,7 @@
   flex-direction: column;
 }
 
-.project-settings-close-button:hover:not(:disabled),
-.project-settings-close-button:focus-visible:not(:disabled) {
+.project-settings-close-button:hover:not(:disabled) {
   background: rgba(255, 255, 255, 0.08);
 }
 

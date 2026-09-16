@@ -2,7 +2,7 @@
 
 Managed runtime libraries let hosted Rivet `Code` nodes `require()` packages that are not baked into the base images.
 
-The dashboard exposes this through the `Runtime libraries` button in the left panel.
+The dashboard exposes this through `Settings` -> `Runtime libraries`.
 
 ## Backend modes
 
@@ -397,12 +397,13 @@ The current wrapper UI exposes a simple single-package workflow:
 
 - install one package name/version at a time
 - remove installed packages one at a time
-- cancel a queued or running job from the modal
-- show the live job log inline in the modal
-- in `filesystem` mode, closing the modal clears the transient terminal view; reopening the modal shows the installed libraries list and only resumes job logs/status if another job is still actively running
-- while the modal is open, poll `/api/runtime-libraries` every 5 seconds so active job state can recover after a reconnect
+- cancel a queued or running job from the settings tab
+- show the live job log inline in the settings tab
+- in `filesystem` mode, leaving the tab clears the transient terminal view; reopening it shows the installed libraries list and only resumes job logs/status if another job is still actively running
+- delayed install, remove, cancel, or refresh responses are ignored after the tab unmounts, so they cannot reopen an invisible SSE stream; reopening the tab performs a fresh server reconciliation and reconnects to an active job once
+- while the tab is open, poll `/api/runtime-libraries` every 5 seconds so active job state can recover after a reconnect
 - in `managed` mode, persisted job state can still be rehydrated across refreshes/reopen because the backend stores logs and status durably
-- `RuntimeLibrariesModal.tsx` remains the shell, `useRuntimeLibrariesModalState.ts` remains the public controller, and `runtimeLibrariesJobStream.ts` owns SSE connection helpers plus log/status patching so those state transitions are not duplicated inside the hook
+- `RuntimeLibrariesSettingsTab.tsx` remains the Settings composition surface, `useRuntimeLibrariesState.ts` remains the public controller, and `runtimeLibrariesJobStream.ts` owns SSE connection helpers plus log/status patching so those state transitions are not duplicated inside the hook
 
 Replica topology and Code-runtime synchronization are shown separately at `Settings` -> `Deployment`; see [deployment-status.md](deployment-status.md). Keeping it there prevents package-management UI from being mistaken for a general deployment-health view.
 
@@ -410,7 +411,7 @@ The underlying API accepts arrays for install/remove requests, so bulk operation
 
 ## Related feature
 
-The adjacent `Run recordings` action is separate. It browses stored workflow execution recordings, can filter runs by recorded workflow request or graph action input, opens replay bundles back into the editor by `recordingId`, and can delete individual runs; see [workflow-publication.md](workflow-publication.md).
+The separate `Run recordings` action browses stored workflow execution recordings, can filter runs by recorded workflow request or graph action input, opens replay bundles back into the editor by `recordingId`, and can delete individual runs; see [workflow-publication.md](workflow-publication.md).
 
 ## Key files
 
@@ -425,6 +426,6 @@ The adjacent `Run recordings` action is separate. It browses stored workflow exe
 - `packages/studio-server-api/src/runtime-libraries/managed/replica-status.ts` - stale-replica cleanup helpers
 - `packages/studio-server-api/src/runtime-libraries/managed/cleanup.ts` - audit/prune tooling for historical managed state
 - `packages/studio-server-api/src/runtime-libraries/managed-code-runner.ts` - API-side `Code` node resolution path with lazy managed-package preparation, compiled-function caching, and endpoint telemetry
-- `packages/studio-server-web/dashboard/RuntimeLibrariesModal.tsx` - modal shell
-- `packages/studio-server-web/dashboard/useRuntimeLibrariesModalState.ts` - public dashboard controller for runtime-library admin flows
+- `packages/studio-server-web/dashboard/app-settings/tabs/RuntimeLibrariesSettingsTab.tsx` - Settings tab composition surface
+- `packages/studio-server-web/dashboard/useRuntimeLibrariesState.ts` - public dashboard controller for runtime-library admin flows
 - `packages/studio-server-web/dashboard/runtimeLibrariesJobStream.ts` - browser-side SSE/log/status helper layer

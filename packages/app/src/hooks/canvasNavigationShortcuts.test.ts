@@ -34,6 +34,8 @@ test('canvas navigation shortcuts ignore modified page navigation keys', () => {
 });
 
 test('canvas navigation shortcuts resolve graph tree toggle keys', () => {
+  assert.equal(getCanvasNavigationShortcut({ ...BASE_EVENT, key: 'Tab' }), 'toggleGraphTree');
+  assert.equal(getCanvasNavigationShortcut({ ...BASE_EVENT, key: 'Tab', shiftKey: true }), undefined);
   assert.equal(getCanvasNavigationShortcut({ ...BASE_EVENT, ctrlKey: true, key: 'q' }), 'toggleGraphTree');
   assert.equal(getCanvasNavigationShortcut({ ...BASE_EVENT, metaKey: true, key: 'Q' }), 'toggleGraphTree');
   assert.equal(getCanvasNavigationShortcut({ ...BASE_EVENT, ctrlKey: true, code: 'KeyQ', key: '' }), 'toggleGraphTree');
@@ -47,7 +49,7 @@ test('canvas navigation shortcut tooltip labels expose the requested keys', () =
   assert.equal(GRAPH_HISTORY_PREVIOUS_TOOLTIP, 'Go to previous graph (PgUp)');
   assert.equal(GRAPH_HISTORY_NEXT_TOOLTIP, 'Go to next graph (PgDwn)');
   assert.equal(MAIN_GRAPH_SHORTCUT_LABEL, 'Home');
-  assert.equal(GRAPH_TREE_TOGGLE_SHORTCUT_LABEL, 'Ctrl+Q / Cmd+Q');
+  assert.equal(GRAPH_TREE_TOGGLE_SHORTCUT_LABEL, 'Tab / Ctrl+Q / Cmd+Q');
 });
 
 test('canvas navigation shortcuts can clear active browser focus after firing', () => {

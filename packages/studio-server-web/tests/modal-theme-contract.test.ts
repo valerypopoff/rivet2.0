@@ -9,7 +9,7 @@ const hostedModals = [
   ['../dashboard/ProjectSettingsModal.tsx', 'workflow-project-settings-modal'],
   ['../dashboard/RunRecordingsModal.tsx', 'run-recordings-modal'],
   ['../dashboard/RunStatisticsModal.tsx', 'run-statistics-modal'],
-  ['../dashboard/RuntimeLibrariesModal.tsx', 'runtime-libraries-modal'],
+  ['../dashboard/PublishedItemsModal.tsx', 'published-items-modal'],
   ['../dashboard/WorkflowProjectVersionModal.tsx', 'workflow-project-version-modal'],
   ['../dashboard/WorkflowPublishedVersionHistoryModal.tsx', 'workflow-published-version-history-modal'],
 ] as const;
@@ -17,7 +17,11 @@ const hostedModals = [
 test('every hosted modal uses the shared dark overlay and dialog theme', () => {
   for (const [sourcePath, testId] of hostedModals) {
     const source = readFileSync(new URL(sourcePath, import.meta.url), 'utf8');
-    assert.match(source, new RegExp(`testId=["']${testId}["']`), `${sourcePath} should keep its stable ModalDialog test ID.`);
+    assert.match(
+      source,
+      new RegExp(`testId=["']${testId}["']`),
+      `${sourcePath} should keep its stable ModalDialog test ID.`,
+    );
 
     for (const suffix of ['--blanket', '', '--header', '--body']) {
       assert.ok(
