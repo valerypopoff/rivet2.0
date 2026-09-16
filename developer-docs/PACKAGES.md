@@ -2,7 +2,27 @@
 
 > Detailed package-by-package reference for the current monorepo.
 
-## Version update: 2026-09-15
+## Version update: 2026-09-16
+
+Changes since `77cb30dbc`, through `a317cbab7`:
+
+| Packages | Version | Changes |
+| --- | --- | --- |
+| Core, Node, CLI, Evaluations | `2.10.0` → `2.11.0` | HTTP failure metadata and per-response retry headers; conditional final-response hint; Get Global editor and Regex Match preview. Node, CLI, and Evaluations are required public npm companions. |
+| App | `2.16.0` → `2.17.0` | Searchable Get Global Variable ID and keyboard fixes; readable deleted-node previews, reference wires/ports, and read-only Compare inspection; styled Regex Match trigger summary. |
+| Docs | `2.8.0` → `2.9.0` | Deployment page, Variables guide/tutorial, refreshed setup screenshots and global-node references, homepage presentation improvements. |
+| All five Studio Server packages | `1.15.0` → `1.16.0` | Shared editor improvements, Web test registration/browser coverage, and API bridge/deployment contract tests. Bootstrap, executor, and shared have companion bumps only. |
+| App Executor | `2.6.0` (unchanged) | No package-local changes. |
+
+Minor releases cover the expanded diagnostics, editor inspection, and documentation.
+Deployment scripts also gain bounded, checksum-verified Helm download retries;
+deployment examples are refreshed. These scripts have no separate version.
+Retry-enabled HTTP Call consumers of `Headers` must now handle `object[]`;
+non-retry calls retain `object`. Tauri/Cargo and the CLI Docker fallback are
+synchronized. Public npm and Studio Server lockstep policies remain in force.
+No dependency or Yarn lockfile update is required; Helm chart versions are independent.
+
+## Previous version update: 2026-09-15
 
 The changes below cover `d0e6c97a3` (the previous version update) through
 `eee1e0a29`. Core, App, Docs, and Studio Server Web/Shared changed in this
@@ -70,7 +90,7 @@ Shared runtime foundation for the entire repo.
 
 ### Package metadata
 
-- Version: `2.10.0`
+- Version: `2.11.0`
 - Main: `dist/cjs/bundle.cjs`
 - Module: `dist/esm/index.js`
 - Types: `dist/types/index.d.ts`
@@ -110,7 +130,7 @@ Node runtime wrapper around core.
 
 ### Package metadata
 
-- Version: `2.10.0`
+- Version: `2.11.0`
 - Main: `dist/cjs/bundle.cjs`
 - Module: `dist/esm/index.js`
 - Types: `dist/types/index.d.ts`
@@ -582,7 +602,7 @@ Desktop IDE frontend plus Tauri app packaging layer.
 
 ### Package metadata
 
-- Version: `2.16.0`
+- Version: `2.17.0`
 - Private: yes
 
 ### Runtime shape
@@ -752,7 +772,7 @@ Operational CLI for running or serving Rivet graphs.
 
 ### Package metadata
 
-- Version: `2.10.0`
+- Version: `2.11.0`
 - Source entry: `src/cli.ts`
 - Published bin mapping: `rivet -> bin/cli.js`
 - Types: `dist/types/cli.d.ts`
@@ -876,7 +896,7 @@ Portable, executor-agnostic evaluation engine shared by the app, CLI, and host i
 
 ### Package metadata
 
-- Version: `2.10.0`
+- Version: `2.11.0`
 - Main: `dist/cjs/bundle.cjs`
 - Module: `dist/esm/index.js`
 - Types: `dist/types/index.d.ts`
@@ -908,7 +928,7 @@ a crawler, credentials, or a server-side search API.
 
 ### Package metadata
 
-- Version: `2.8.0`
+- Version: `2.9.0`
 - Private: yes
 
 ### Script surface
