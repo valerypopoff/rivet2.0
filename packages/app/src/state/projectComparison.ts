@@ -55,8 +55,6 @@ export function resolveProjectCompareSideLabels(
 
 export const projectCompareReferenceState = atom<ProjectCompareReference | undefined>(undefined);
 
-export const viewingProjectComparisonNodeState = atom<{ graphId: GraphId; nodeId: NodeId } | undefined>(undefined);
-
 export const activeProjectComparisonState = atom<ActiveProjectComparison | undefined>((get) => {
   const project = get(projectState);
   const graph = get(graphState);
@@ -82,6 +80,36 @@ export const activeProjectComparisonState = atom<ActiveProjectComparison | undef
     comparison: compareProjects(reference.referenceProject, liveProject as Project),
   };
 });
+
+const comparisonInspectionState = atom<
+  | {
+      graphId: GraphId;
+      nodeId: NodeId;
+      reference: ProjectCompareReference;
+    }
+  | undefined
+>(undefined);
+
+// Bind inspection to the exact reference, not just reusable graph/node IDs.
+export const viewingProjectComparisonNodeState = atom(
+  (get) => {
+    const inspection = get(comparisonInspectionState);
+    const reference = get(projectCompareReferenceState);
+    if (!inspection || inspection.reference !== reference || reference?.projectId !== get(projectState).metadata.id) {
+      return undefined;
+    }
+
+    const nodeComparison = get(activeProjectComparisonState)?.comparison.graphs[inspection.graphId]?.nodes[
+      inspection.nodeId
+    ];
+    return nodeComparison?.kind === 'changed' || nodeComparison?.kind === 'removed' ? inspection : undefined;
+  },
+  (get, set, target: { graphId: GraphId; nodeId: NodeId; reference?: ProjectCompareReference } | undefined) => {
+    const reference = get(projectCompareReferenceState);
+    if (target?.reference && target.reference !== reference) return;
+    set(comparisonInspectionState, target && reference ? { ...target, reference } : undefined);
+  },
+);
 
 export const selectedGraphProjectComparisonState = atom<ProjectGraphComparison | undefined>((get) => {
   const comparison = get(activeProjectComparisonState)?.comparison;

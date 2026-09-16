@@ -55,16 +55,21 @@ export const homepageContent = {
   },
   hero: {
     eyebrow: 'Free · Open-source · MIT licensed',
-    title: 'Rivet 2 — visual IDE for production AI agents, workflows, and web apps',
+    title: 'Visual IDE for production AI-workflows, agents and apps',
     description:
-      'Run the same Rivet 2 project in a desktop app, as an async function on your backend, or serve as an endpoint in a self-hosted web-service.',
+      `From fast prototypes to serving production endpoints:
+      - <b>Desktop app</b> for fast prototypes and local use
+      - <b>Self-hosted Studio server</b> for building and serving projects as endpoints
+      - <b>Small VM</b> for a hobby project with local files and DB
+      - <b>Kubernetes setup</b> for enterprise grade production with managed Postgres and S3
+      - <b>Out of the box:</b> Run recordings and statistics, OAuth`,
     primaryAction: {
-      label: 'Download Rivet 2',
+      label: 'Download Rivet 2: Desktop app',
       to: '/download',
     },
     secondaryAction: {
-      label: 'Read user guide',
-      to: '/user-guide',
+      label: 'Deploy Rivet Studio server',
+      to: '/studio-server',
     },
     sourceAction: {
       label: 'View source on GitHub',

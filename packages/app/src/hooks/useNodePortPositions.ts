@@ -41,6 +41,7 @@ export function useNodePortPositions({
   isDraggingNode,
   isDraggingWire,
   nodes,
+  referenceNodesById,
   visibleNodeIdSet,
 }: {
   clientToCanvasPosition: (x: number, y: number) => { x: number; y: number };
@@ -48,6 +49,7 @@ export function useNodePortPositions({
   isDraggingNode: boolean;
   isDraggingWire: boolean;
   nodes: readonly ChartNode[];
+  referenceNodesById?: Record<NodeId, ChartNode>;
   visibleNodeIdSet: ReadonlySet<NodeId>;
 }) {
   const [nodePortPositions, setNodePortPositions] = useState<PortPositions>({});
@@ -120,14 +122,15 @@ export function useNodePortPositions({
       const portId = elem.dataset.portid! as PortId;
       const nodeId = elem.dataset.nodeid! as NodeId;
       const portType = elem.dataset.porttype! as 'input' | 'output';
-      const key = `${nodeId}-${portType}-${portId}`;
+      const referencePort = elem.dataset.comparisonReference === 'true';
+      const key = `${referencePort ? 'reference:' : ''}${nodeId}-${portType}-${portId}`;
 
       if (seen.has(key)) {
         continue;
       }
 
       // For most nodes we can grab the harcoded position from the node data for the root position of the node
-      const node = nodesById[nodeId];
+      const node = referencePort ? referenceNodesById?.[nodeId] : nodesById[nodeId];
 
       if (!node) {
         continue;
@@ -162,6 +165,12 @@ export function useNodePortPositions({
       seen.add(key);
     }
 
+    for (const key of Object.keys(newPositions)) {
+      if (key.startsWith('reference:') && !seen.has(key)) {
+        delete newPositions[key];
+        changed = true;
+      }
+    }
     changed = collectDataBusPortPositions(previousPositions, newPositions, seen) || changed;
 
     // Fixes a rendering issue where when you drag a node, for one frame the node.visualData.x and node.visualData.y have been updated
@@ -233,7 +242,7 @@ export function useNodePortPositions({
       nodePortPositionsRef.current = newPositions;
       setNodePortPositions(newPositions);
     }
-  }, [collectDataBusPortPositions, enabled, isDraggingNode, nodesById]);
+  }, [collectDataBusPortPositions, enabled, isDraggingNode, nodesById, referenceNodesById]);
 
   const recalculateDataBusPortPositions = useCallback(() => {
     if (!enabled) {

@@ -4,6 +4,7 @@
 const sidebars = {
   userGuide: [
     'introduction',
+    'studio-server',
     {
       type: 'category',
       label: 'Getting Started',
@@ -11,6 +12,7 @@ const sidebars = {
       collapsed: false,
       items: ['getting-started/installation', 'getting-started/setup', 'getting-started/first-ai-agent'],
     },
+    'user-guide/variables',
     {
       type: 'category',
       label: 'Working with Rivet',
@@ -95,6 +97,7 @@ const sidebars = {
     'tutorial',
     'tutorial/installing-getting-started',
     'tutorial/simple-graph',
+    'tutorial/variables',
     'tutorial/interpolation-more-node-types',
     'tutorial/matching-conditionals',
     'tutorial/yaml',

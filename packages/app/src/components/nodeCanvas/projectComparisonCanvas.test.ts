@@ -211,6 +211,12 @@ test('getCanvasProjectComparisonRenderState derives node and connection overlay 
         kind: 'removed',
         before: node(removedNodeId),
       },
+      ['surviving-node' as NodeId]: {
+        id: asNodeId('surviving-node'),
+        kind: 'unchanged',
+        before: { ...node(asNodeId('surviving-node')), visualData: { x: 50, y: 100 } },
+        after: { ...node(asNodeId('surviving-node')), visualData: { x: 500, y: 100 } },
+      },
     },
     connections: {
       [addedConnectionKey]: {
@@ -264,7 +270,8 @@ test('getCanvasProjectComparisonRenderState derives node and connection overlay 
 
   assert.deepEqual(renderState.nodeCompareKindsById, { [addedNodeId]: 'added' });
   assert.deepEqual(renderState.compareRemovedNodes.map((node) => node.id), [removedNodeId]);
-  assert.deepEqual(Object.keys(renderState.compareNodesById), [removedNodeId]);
+  assert.deepEqual(Object.keys(renderState.compareReferenceNodesById), [removedNodeId, 'surviving-node']);
+  assert.equal(renderState.compareReferenceNodesById[asNodeId('surviving-node')]!.visualData.x, 50);
   assert.deepEqual(renderState.connectionCompareKindsByKey, {
     [addedConnectionKey]: 'added',
     [changedConnectionKey]: 'changed',

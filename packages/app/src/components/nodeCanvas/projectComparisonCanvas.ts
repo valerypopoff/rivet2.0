@@ -7,7 +7,8 @@ import type {
 } from '@valerypopoff/rivet2-core';
 
 export type CanvasProjectComparisonRenderState = {
-  compareNodesById: Record<NodeId, ChartNode>;
+  /** Every node from the reference graph, used only for historical wire geometry. */
+  compareReferenceNodesById: Record<NodeId, ChartNode>;
   compareRemovedConnections: NodeConnection[];
   compareRemovedNodes: ChartNode[];
   connectionCompareKindsByKey: Record<string, ProjectComparisonChangeKind>;
@@ -15,7 +16,7 @@ export type CanvasProjectComparisonRenderState = {
 };
 
 export const EMPTY_CANVAS_PROJECT_COMPARISON_RENDER_STATE: CanvasProjectComparisonRenderState = {
-  compareNodesById: {},
+  compareReferenceNodesById: {},
   compareRemovedConnections: [],
   compareRemovedNodes: [],
   connectionCompareKindsByKey: {},
@@ -61,10 +62,11 @@ export function getCanvasProjectComparisonRenderState(
   ) as Record<string, ProjectComparisonChangeKind>;
 
   return {
-    compareNodesById: Object.fromEntries(compareRemovedNodes.map((node) => [node.id, node])) as Record<
-      NodeId,
-      ChartNode
-    >,
+    compareReferenceNodesById: Object.fromEntries(
+      Object.values(graphComparison.nodes)
+        .filter((entry) => entry.before)
+        .map((entry) => [entry.before!.id, entry.before!]),
+    ) as Record<NodeId, ChartNode>,
     compareRemovedConnections,
     compareRemovedNodes,
     connectionCompareKindsByKey,

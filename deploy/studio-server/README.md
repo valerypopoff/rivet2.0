@@ -71,7 +71,12 @@ development and deployment always use the `studio-server:*` namespace.
 
 ## Production Docker
 
-Create `.env` from `deploy/studio-server/.env.example`, then run:
+Create `.env` from `deploy/studio-server/.env.example`.
+The template contains only the starting settings for a single-host deployment.
+The Docker launchers and Compose set internal service defaults; configure
+storage, endpoint access, and other runtime policy in App Settings. Use the
+dedicated Kubernetes template and operator guidance for cluster rehearsals.
+Then run:
 
 ```bash
 yarn studio-server:prod

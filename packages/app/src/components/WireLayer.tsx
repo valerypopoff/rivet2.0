@@ -305,7 +305,7 @@ function getWireArrowMarkerId({
 
 type WireLayerProps = {
   connections: NodeConnection[];
-  compareNodesById?: Record<NodeId, ChartNode>;
+  compareReferenceNodesById?: Record<NodeId, ChartNode>;
   compareRemovedConnections?: NodeConnection[];
   connectionCompareKindsByKey?: Record<string, ProjectComparisonChangeKind | undefined>;
   dataBusTopology: DataBusTopology;
@@ -328,7 +328,7 @@ type WireLayerProps = {
 
 export const WireLayer: FC<WireLayerProps> = ({
   connections,
-  compareNodesById = {},
+  compareReferenceNodesById = {},
   compareRemovedConnections = [],
   connectionCompareKindsByKey = {},
   dataBusTopology,
@@ -453,7 +453,10 @@ export const WireLayer: FC<WireLayerProps> = ({
   const nodesById = useAtomValue(nodesByIdState);
   const effectiveNodesById = useAtomValue(effectiveNodesByIdState);
   const definitionValidConnections = useAtomValue(definitionValidConnectionsState);
-  const renderNodesById = useMemo(() => ({ ...compareNodesById, ...nodesById }), [compareNodesById, nodesById]);
+  const renderNodesById = useMemo(
+    () => ({ ...compareReferenceNodesById, ...nodesById }),
+    [compareReferenceNodesById, nodesById],
+  );
   const toolContinuationWireStates = useMemo(
     () =>
       getToolContinuationWireStates({
@@ -715,6 +718,7 @@ export const WireLayer: FC<WireLayerProps> = ({
   });
 
   const sharedStaticWireContentsProps = {
+    compareReferenceNodesById,
     graphSelectionOptions,
     allowConnectionBendEditing,
     allowConnectionHover: !draggingNode && !draggingBend && !draggingWire,
@@ -907,6 +911,7 @@ const ToolContinuationEndpointMarkerContents: FC<{
 
 const StaticWireContents = memo(
   ({
+    compareReferenceNodesById,
     allowConnectionHover,
     allowConnectionBendEditing,
     compareRemovedConnections,
@@ -933,6 +938,7 @@ const StaticWireContents = memo(
     wireArrowMarkerIds,
     toolContinuationWireStates,
   }: {
+    compareReferenceNodesById: Record<NodeId, ChartNode>;
     allowConnectionHover: boolean;
     allowConnectionBendEditing: boolean;
     compareRemovedConnections: NodeConnection[];
@@ -977,7 +983,7 @@ const StaticWireContents = memo(
               connection={connection}
               selected={false}
               highlighted={false}
-              nodesById={nodesById}
+              nodesById={compareReferenceNodesById}
               portPositions={portPositions}
               isNotRan={false}
               compareChangeKind="removed"

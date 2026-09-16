@@ -4,21 +4,39 @@ title: Setup
 
 ## Settings
 
-Open Rivet settings from the app menu in the desktop app. In the browser-hosted app, open the top-bar **Menu** dropdown and choose **Rivet settings**.
+Open the top-bar **Menu** dropdown and choose **Rivet settings**. On macOS, you can also use **Rivet → Settings…** in the native app menu. In Studio Server, these editor preferences are separate from the dashboard's **App Settings**, which configure the server.
 
-![Rivet Settings](assets/rivet-settings.png) ![Rivet Settings Menu](./assets/rivet-settings-menu.png)
+![The editor Menu with Rivet settings](assets/rivet-settings-menu.png)
 
-### LLM
+### Add your provider credentials
 
 If you are using built-in providers for text generation, add your API keys to Rivet. The [LLM Chat Node](../node-reference/llm-chat.mdx) can use configured OpenAI, Anthropic, and Google keys, or it can expose an `API Key` input port for graph-provided keys. The OpenAI key is also used by the legacy [Chat Node](../node-reference/chat.mdx), the [Get Embedding Node](../node-reference/get-embedding.mdx), and OpenAI-backed paths.
 
-In the `LLM` page in Settings, the `LLM credentials` section lets you set OpenAI, Anthropic, Google, and custom-provider keys, plus the optional OpenAI organization ID. Alternatively, you may set `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GOOGLE_GENERATIVE_AI_API_KEY`, `CUSTOM_PROVIDER_API_KEY`, and `OPENAI_ORG_ID` environment variables. Programmatic runs can pass matching runtime keys such as `openAiApiKey`, `anthropicApiKey`, `googleApiKey`, `customAiApiKey`, and `openAiOrganization`. LLM Chat and LLM Profile can give each built-in provider a different programmatic name and environment-variable name, which is useful when one project must select among several accounts for the same provider. Only the names are saved in the project; the keys remain in Settings, processor options, or the runtime environment. If you change environment variables after Rivet starts, restart Rivet so the Node executor and app settings can see the new values.
+1. Select **LLM** in the settings sidebar.
+2. Under **LLM credentials**, enter the API key for the provider you intend to use. You do not need keys for every provider. **OpenAI Organization** is optional.
+3. Close the settings modal and select the matching provider and model in an **LLM Chat** node. Settings changes are saved as you edit; there is no separate Save button in this modal.
 
-![LLM Settings](assets/openai-settings.png)
+![LLM settings with Generate using AI controls and empty provider credential fields](assets/llm-settings.png)
 
-### LLM Providers
+The **Generate using AI** section above the credentials selects the **Drafting provider** and **Drafting model** for the editor's AI generation feature. Your graph's LLM Chat nodes have their own provider and model choices.
 
-For new chat workflows, prefer [LLM Chat](../node-reference/llm-chat.mdx). It supports OpenAI, Anthropic, Google, and custom OpenAI-compatible providers from one node. Each node can either use a configured provider API key or expose an `API Key` input port. In Configured key mode, built-in providers expose editable programmatic and environment-variable names. The editor trims surrounding whitespace, and clearing a field restores that provider's default. An explicit name pair is strict and does not fall back to the shared provider key when neither named source exists. Custom providers retain their alternative programmatic/environment names and shared Settings fallback. Custom providers also have their own `Provider base URL` field; built-in OpenAI, Anthropic, and Google providers use their provider-owned endpoints.
+Credentials entered here are not saved into project YAML. Configure credentials for the environment that runs your project when moving it to another machine or deploying it to Studio Server.
+
+### Provider options and environment variables
+
+For custom OpenAI-compatible providers, set the node's **Provider base URL** as well as its model and credentials. See [LLM Chat](../node-reference/llm-chat.mdx) for API Key inputs and named credential options, including selecting between multiple accounts for the same provider.
+
+For execution environments that supply credentials through environment variables, the default names are:
+
+| Credential | Environment variable | Programmatic runtime key |
+| --- | --- | --- |
+| OpenAI | `OPENAI_API_KEY` | `openAiApiKey` |
+| Anthropic | `ANTHROPIC_API_KEY` | `anthropicApiKey` |
+| Google | `GOOGLE_GENERATIVE_AI_API_KEY` | `googleApiKey` |
+| Custom provider | `CUSTOM_PROVIDER_API_KEY` | `customAiApiKey` |
+| OpenAI organization | `OPENAI_ORG_ID` | `openAiOrganization` |
+
+Environment variables must be available to the process running the workflow. Restart that app or server process after changing its environment. For application code, see [the Node integration guide](../api-reference/getting-started-integration.mdx).
 
 ### Plugin Settings
 

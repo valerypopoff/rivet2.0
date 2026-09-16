@@ -72,7 +72,7 @@ const SuspendedNodeBody: FC<{ heightCache: HeightCache; node: ChartNode }> = ({ 
   );
 };
 
-const UnknownNodeBodyWrapper = styled.div<{
+export const NodeBodySpecWrapper = styled.div<{
   fontSize: number;
   fontFamily: 'monospace' | 'sans-serif';
 }>`
@@ -188,9 +188,9 @@ const UnknownNodeBody: FC<{ heightCache: HeightCache; node: ChartNode }> = ({ he
   return (
     <div ref={ref} style={{ height }}>
       {renderedSpecs.map(({ spec, rendered }, i) => (
-        <UnknownNodeBodyWrapper key={i} fontFamily={spec.fontFamily ?? 'monospace'} fontSize={spec.fontSize ?? 12}>
+        <NodeBodySpecWrapper key={i} fontFamily={spec.fontFamily ?? 'monospace'} fontSize={spec.fontSize ?? 12}>
           {rendered}
-        </UnknownNodeBodyWrapper>
+        </NodeBodySpecWrapper>
       ))}
     </div>
   );

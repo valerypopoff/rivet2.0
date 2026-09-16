@@ -12,28 +12,44 @@ import {
 } from '../content/homepageContent';
 import styles from './index.module.css';
 
+function renderHeroDescription(description: string): ReactNode[] {
+  const styledText = /<(b|strong|i|em|u|code)>([\s\S]*?)<\/\1>/g;
+  const content: ReactNode[] = [];
+  let cursor = 0;
+  let match: RegExpExecArray | null;
+  while ((match = styledText.exec(description)) !== null) {
+    const start = match.index;
+    content.push(description.slice(cursor, start));
+    content.push(React.createElement(match[1], { key: start }, match[2]));
+    cursor = start + match[0].length;
+  }
+  content.push(description.slice(cursor));
+  return content;
+}
+
 function RivetNodeRunningIndicator() {
   return <span aria-hidden="true" className={styles.liveDemoRunningIndicator} />;
 }
 
 type DownloadPlatform = 'macos' | 'windows';
 
-function detectDownloadPlatform(): DownloadPlatform {
-  if (typeof navigator !== 'undefined' && /Macintosh|Mac OS X|iPhone|iPad/i.test(navigator.userAgent)) {
-    return 'macos';
-  }
-
-  return 'windows';
-}
-
 function DownloadPlatformIcon({ platform }: { platform: DownloadPlatform }) {
   return platform === 'macos' ? (
-    <svg aria-hidden="true" className={styles.actionIcon} viewBox="0 0 24 24">
+    <svg aria-hidden="true" className={styles.actionIcon} viewBox="2 2.6 20.5 20.5">
       <path d="M16.7 12.7c0-2 1.6-3 1.7-3.1a3.7 3.7 0 0 0-2.9-1.6c-1.2-.1-2.4.7-3 .7-.7 0-1.7-.7-2.8-.7a3.9 3.9 0 0 0-3.3 2c-1.4 2.4-.4 5.9 1 7.9.7 1 1.5 2.1 2.5 2.1 1 0 1.4-.6 2.7-.6s1.6.6 2.7.6c1.1 0 1.8-1 2.5-2 .8-1.1 1.1-2.2 1.1-2.3-.1 0-2.1-.8-2.1-3Zm-2-6a3.5 3.5 0 0 0 .8-2.6 3.6 3.6 0 0 0-2.4 1.2 3.3 3.3 0 0 0-.9 2.5c1 .1 1.9-.5 2.5-1.1Z" />
     </svg>
   ) : (
     <svg aria-hidden="true" className={styles.actionIcon} viewBox="0 0 24 24">
       <path d="m3 4.2 7.4-1v7.2H3V4.2Zm8.5-1.2 9.5-1.3v8.7h-9.5V3Zm-8.5 8.5h7.4v7.3L3 17.8v-6.3Zm8.5 0H21v8.8l-9.5-1.3v-7.5Z" />
+    </svg>
+  );
+}
+
+function TerminalIcon() {
+  return (
+    <svg aria-hidden="true" className={`${styles.actionIcon} ${styles.terminalIcon}`} viewBox="0 0 24 24">
+      <rect x="2.5" y="4" width="19" height="16" rx="2" />
+      <path d="m7 9 3 3-3 3m6 0h4" />
     </svg>
   );
 }
@@ -47,15 +63,12 @@ function GitHubIcon() {
 }
 
 function DownloadAction({ label, to }: { label: string; to: string }) {
-  const [platform, setPlatform] = useState<DownloadPlatform>('windows');
-
-  useEffect(() => {
-    setPlatform(detectDownloadPlatform());
-  }, []);
-
   return (
     <ActionLink to={to}>
-      <DownloadPlatformIcon platform={platform} />
+      <span className={styles.desktopPlatformIcons} role="img" aria-label="Windows and macOS">
+        <DownloadPlatformIcon platform="windows" />
+        <DownloadPlatformIcon platform="macos" />
+      </span>
       {label}
     </ActionLink>
   );
@@ -74,7 +87,6 @@ function SectionHeading({
 }) {
   return (
     <div className={align === 'center' ? styles.sectionHeadingCentered : styles.sectionHeading}>
-      <span className={styles.headingGlow} aria-hidden="true" />
       <p className={styles.eyebrow}>{eyebrow}</p>
       <h2>{title}</h2>
       {description && <p className={styles.sectionDescription}>{description}</p>}
@@ -529,92 +541,19 @@ export default function Home() {
         <meta property="og:description" content={content.meta.description} />
       </Head>
       <main className={styles.landing}>
-        <svg className={styles.landingAtmosphereFilters} aria-hidden="true" focusable="false">
-          <defs>
-            <filter id="landing-cloud-hero" x="-30%" y="-40%" width="160%" height="180%">
-              <feTurbulence
-                type="fractalNoise"
-                baseFrequency="0.009 0.014"
-                numOctaves="4"
-                seed="17"
-                result="cloudNoise"
-              />
-              <feDisplacementMap
-                in="SourceGraphic"
-                in2="cloudNoise"
-                scale="118"
-                xChannelSelector="R"
-                yChannelSelector="B"
-                result="displacedCloud"
-              />
-              <feColorMatrix in="cloudNoise" type="luminanceToAlpha" result="cloudOpacity" />
-              <feComponentTransfer in="cloudOpacity" result="shapedCloudOpacity">
-                <feFuncA type="table" tableValues="0.28 0.42 0.6 0.78 0.94" />
-              </feComponentTransfer>
-              <feComposite in="displacedCloud" in2="shapedCloudOpacity" operator="in" result="texturedCloud" />
-              <feGaussianBlur in="texturedCloud" stdDeviation="36" />
-            </filter>
-            <filter id="landing-cloud-closing" x="-30%" y="-40%" width="160%" height="180%">
-              <feTurbulence
-                type="fractalNoise"
-                baseFrequency="0.012 0.008"
-                numOctaves="4"
-                seed="31"
-                result="cloudNoise"
-              />
-              <feDisplacementMap
-                in="SourceGraphic"
-                in2="cloudNoise"
-                scale="94"
-                xChannelSelector="G"
-                yChannelSelector="R"
-                result="displacedCloud"
-              />
-              <feColorMatrix in="cloudNoise" type="luminanceToAlpha" result="cloudOpacity" />
-              <feComponentTransfer in="cloudOpacity" result="shapedCloudOpacity">
-                <feFuncA type="table" tableValues="0.3 0.46 0.63 0.8 0.95" />
-              </feComponentTransfer>
-              <feComposite in="displacedCloud" in2="shapedCloudOpacity" operator="in" result="texturedCloud" />
-              <feGaussianBlur in="texturedCloud" stdDeviation="32" />
-            </filter>
-            <filter id="landing-cloud-heading" x="-35%" y="-50%" width="170%" height="200%">
-              <feTurbulence
-                type="fractalNoise"
-                baseFrequency="0.016 0.011"
-                numOctaves="4"
-                seed="43"
-                result="cloudNoise"
-              />
-              <feDisplacementMap
-                in="SourceGraphic"
-                in2="cloudNoise"
-                scale="72"
-                xChannelSelector="B"
-                yChannelSelector="G"
-                result="displacedCloud"
-              />
-              <feColorMatrix in="cloudNoise" type="luminanceToAlpha" result="cloudOpacity" />
-              <feComponentTransfer in="cloudOpacity" result="shapedCloudOpacity">
-                <feFuncA type="table" tableValues="0.24 0.4 0.58 0.76 0.92" />
-              </feComponentTransfer>
-              <feComposite in="displacedCloud" in2="shapedCloudOpacity" operator="in" result="texturedCloud" />
-              <feGaussianBlur in="texturedCloud" stdDeviation="24" />
-            </filter>
-          </defs>
-        </svg>
         <section className={`${styles.hero} ${expandedShowcaseId === 'hero' ? styles.sectionWithExpandedDemo : ''}`}>
           <div className={styles.heroGrid}>
             <div className={styles.heroCopy}>
-              <div className={styles.heroGlow} aria-hidden="true" />
               <p className={styles.heroEyebrow}>
                 <span />
                 {content.hero.eyebrow}
               </p>
               <h1>{content.hero.title}</h1>
-              <p className={styles.heroDescription}>{content.hero.description}</p>
+              <p className={styles.heroDescription}>{renderHeroDescription(content.hero.description)}</p>
               <div className={styles.heroActions}>
                 <DownloadAction label={content.hero.primaryAction.label} to={content.hero.primaryAction.to} />
                 <ActionLink to={content.hero.secondaryAction.to} variant="secondary">
+                  <TerminalIcon />
                   {content.hero.secondaryAction.label}
                 </ActionLink>
                 <ActionLink to={content.hero.sourceAction.to} variant="text">
@@ -743,7 +682,6 @@ export default function Home() {
 
         <section className={styles.closingSection}>
           <div className={styles.closingContent}>
-            <div className={styles.closingGlow} aria-hidden="true" />
             <p className={styles.eyebrow}>{content.closing.eyebrow}</p>
             <h2>{content.closing.title}</h2>
             <p>{content.closing.description}</p>
