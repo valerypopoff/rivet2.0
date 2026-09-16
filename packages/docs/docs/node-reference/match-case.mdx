@@ -31,9 +31,9 @@ By default, **Plain text** cases use exact, case-sensitive string equality. For 
 | Output value mode | Title | Data Type | Description | Notes |
 | --- | --- | --- | --- | --- |
 | All | Input | `string` | The value tested against each configured case. | Required. Rivet coerces the input to a string if needed. |
-| Custom + One shared custom value | Return value | `any` | The value emitted from every active output. | Optional. An unconnected input falls back to `Input`. |
-| Custom + Custom values per case | `[Case]` | `any` | The custom value emitted for that case. | Shown under **Return values**; optional, otherwise `Input`. |
-| Custom + Custom values per case | Unmatched | `any` | The value emitted when no case matches. | Shown under **Return values**; optional, otherwise `Input`. |
+| Custom + One shared custom value | Output value | `any` | The value emitted from every active output. | Optional. An unconnected input falls back to `Input`. |
+| Custom + Custom values per case | `[Case]` | `any` | The custom value emitted for that case. | Shown under **Output values**; optional, otherwise `Input`. |
+| Custom + Custom values per case | Unmatched | `any` | The value emitted when no case matches. | Shown under **Output values**; optional, otherwise `Input`. |
 
 </TabItem>
 
@@ -59,7 +59,7 @@ By default, **Plain text** cases use exact, case-sensitive string equality. For 
 | Cases | The ordered list of values or regular expressions to test. Case outputs follow this order. | `YES`, `NO` |
 | Trigger | **First matching case** runs the first matching case in list order. **All matching cases** runs every matching case. | First matching case |
 | Output value | **True** emits boolean `true`. **Input value** emits the tested string. **Custom** emits values supplied through additional inputs. | True |
-| Custom return mode | When **Output value** is Custom, the unlabeled chooser offers **One shared custom value**, which adds one optional `Return value` input for all active outputs, and **Custom values per case**, which adds individual optional values under **Return values** for every case and `Unmatched`. Hidden in the other return modes. | One shared custom value |
+| Custom return mode | When **Output value** is Custom, the unlabeled chooser offers **One shared custom value**, which adds one optional `Output value` input for all active outputs, and **Custom values per case**, which adds individual optional values under **Output values** for every case and `Unmatched`. Hidden in the other return modes. | One shared custom value |
 
 </TabItem>
 

@@ -84,13 +84,13 @@ test('Match case groups match, trigger, and output settings and exposes custom-v
   ]);
   await expect(editor.getByRole('group', { name: 'Custom case values' })).toBeVisible();
   await expect(editor.getByText('Custom case values', { exact: true })).toHaveCount(0);
-  await expect(node.locator('.input-ports .port-label')).toHaveText(['Input', 'Return value']);
+  await expect(node.locator('.input-ports .port-label')).toHaveText(['Input', 'Output value']);
 
   await editor
     .getByRole('group', { name: 'Custom case values' })
     .getByRole('button', { name: 'Custom values per case' })
     .click();
-  await expect(node.locator('.match-case-values-label')).toHaveText('Return values');
+  await expect(node.locator('.match-case-values-label')).toHaveText('Output values');
 
   await returnValueChoices.filter({ hasText: /^Input value$/ }).click();
   await expect(editor.getByRole('group', { name: 'Custom case values' })).toHaveCount(0);

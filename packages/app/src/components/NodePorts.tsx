@@ -75,7 +75,7 @@ function getMatchCaseValueGroupLabel(node: ChartNode): string | undefined {
   }
 
   if (node.type === 'matchCase' && (node.data as { returnValue?: unknown }).returnValue === 'custom') {
-    return 'Return values';
+    return 'Output values';
   }
 
   return undefined;
