@@ -3,7 +3,7 @@ import type { FC } from 'react';
 
 type LLMNodeBodySection = Readonly<{
   id: string;
-  fields: readonly Readonly<{ label: string; value: string }>[];
+  fields: readonly Readonly<{ label: string; value: string; valueIsCode?: boolean }>[];
   snippet?: Readonly<{ label: string; text: string }> | undefined;
 }>;
 
@@ -40,6 +40,14 @@ const llmNodeBodyStyles = css`
     opacity: 0.6;
   }
 
+  .llm-node-body-code-value {
+    background: color-mix(in srgb, var(--foreground) 9%, transparent);
+    border-radius: 3px;
+    font-family: var(--font-family-monospace);
+    font-size: 0.95em;
+    padding: 1px 3px;
+  }
+
   .llm-node-body-snippet-label {
     line-height: 1.4;
     margin-top: 4px;
@@ -66,7 +74,8 @@ export const LLMNodeBody: FC<{ sections: readonly LLMNodeBodySection[] }> = ({ s
       <div className="llm-node-body-section" key={section.id}>
         {section.fields.map((field) => (
           <div className="llm-node-body-field" key={field.label}>
-            <span className="llm-node-body-label">{field.label}:</span> {field.value}
+            <span className="llm-node-body-label">{field.label}:</span>{' '}
+            {field.valueIsCode ? <code className="llm-node-body-code-value">{field.value}</code> : field.value}
           </div>
         ))}
         {section.snippet ? (

@@ -197,6 +197,10 @@ reviewed successor in `currentDestinationSuccessors` in the same change, then
 regenerate and review the ledger. Do not leave the prior destination in the
 ledger and rely on CI to discover the missing successor after push.
 
+This includes UI ownership moves: moving a standalone modal into a Settings tab
+must register successors for its component, stylesheet, and state owner rather
+than only the most obvious entry point.
+
 The write command,
 `yarn studio-server:verify:migration-ledger:write`, exists only to regenerate
 the deterministic ledger after a reviewed mapping-rule change. Review the JSON

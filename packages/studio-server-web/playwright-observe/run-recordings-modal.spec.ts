@@ -1316,20 +1316,39 @@ test.describe('Run recordings modal', () => {
 
   test('saves the loaded recording artifact after playback instead of a replay timeline', async ({ page }) => {
     await page.addInitScript(() => {
-      const savedFiles: Array<{ suggestedName: string; content: string }> = [];
+      const exportState = {
+        cancelNextSave: false,
+        fallbackDownloads: 0,
+        savedFiles: [] as Array<{ suggestedName: string; content: string }>,
+      };
       Object.defineProperty(window, 'showSaveFilePicker', {
         configurable: true,
-        value: async ({ suggestedName }: { suggestedName: string }) => ({
-          createWritable: async () => ({
-            write: async (content: string) => {
-              savedFiles.push({ suggestedName, content });
-            },
-            close: async () => {},
-          }),
-        }),
+        value: async ({ suggestedName }: { suggestedName: string }) => {
+          if (exportState.cancelNextSave) {
+            exportState.cancelNextSave = false;
+            throw new DOMException('The user aborted a request.', 'AbortError');
+          }
+
+          return {
+            createWritable: async () => ({
+              write: async (content: string) => {
+                exportState.savedFiles.push({ suggestedName, content });
+              },
+              close: async () => {},
+            }),
+          };
+        },
       });
-      (window as typeof window & { __rivetSavedRecordingFiles?: typeof savedFiles }).__rivetSavedRecordingFiles =
-        savedFiles;
+      const originalAnchorClick = HTMLAnchorElement.prototype.click;
+      HTMLAnchorElement.prototype.click = function click() {
+        if (this.download.endsWith('.rivet-recording')) {
+          exportState.fallbackDownloads += 1;
+          return;
+        }
+        originalAnchorClick.call(this);
+      };
+      (window as typeof window & { __rivetRecordingExportState?: typeof exportState }).__rivetRecordingExportState =
+        exportState;
     });
     await installRunRecordingRoutes(page, { includeResponseInspectorRun: true });
     const modal = await openLatestFlowRecordings(page, 13);
@@ -1348,17 +1367,25 @@ test.describe('Run recordings modal', () => {
 
     const editorFrame = page.frameLocator('iframe.dashboard-editor-frame');
     const editorElement = page.locator('iframe.dashboard-editor-frame');
-    const savedFiles = () =>
+    const recordingExportState = () =>
       editorElement.evaluate((frame) => {
         const editorWindow = (frame as HTMLIFrameElement).contentWindow as
-          | (Window & { __rivetSavedRecordingFiles?: Array<{ content: string }> })
+          | (Window & {
+              __rivetRecordingExportState?: {
+                cancelNextSave: boolean;
+                fallbackDownloads: number;
+                savedFiles: Array<{ content: string }>;
+              };
+            })
           | null;
-        return editorWindow?.__rivetSavedRecordingFiles ?? [];
+        return editorWindow?.__rivetRecordingExportState;
       });
 
-    await editorFrame.getByRole('button', { name: 'Save Recording', exact: true }).click();
-    await expect.poll(async () => (await savedFiles()).length).toBe(1);
-    const savedBeforePlayback = (await savedFiles())[0]?.content;
+    await expect(editorFrame.getByRole('button', { name: 'Save Recording', exact: true })).toHaveCount(0);
+    await editorFrame.locator('button.more-menu').click();
+    await editorFrame.getByRole('button', { name: 'Export recording', exact: true }).click();
+    await expect.poll(async () => (await recordingExportState())?.savedFiles.length).toBe(1);
+    const savedBeforePlayback = (await recordingExportState())?.savedFiles[0]?.content;
     const firstRecording = JSON.parse(savedBeforePlayback!) as {
       recording: { startTs: number; finishTs: number; events: Array<{ type: string; data: { durationMs?: number } }> };
     };
@@ -1367,9 +1394,26 @@ test.describe('Run recordings modal', () => {
 
     await editorFrame.getByRole('button', { name: 'Play Recording', exact: true }).click();
     await expect(editorFrame.locator('.response-inspector-button')).toBeVisible();
-    await editorFrame.getByRole('button', { name: 'Save Recording', exact: true }).click();
-    await expect.poll(async () => (await savedFiles()).length).toBe(2);
-    expect((await savedFiles())[1]?.content).toBe(savedBeforePlayback);
+    await expect(editorFrame.getByRole('button', { name: 'Save Recording', exact: true })).toHaveCount(0);
+    await editorFrame.locator('button.more-menu').click();
+    await editorFrame.getByRole('button', { name: 'Export recording', exact: true }).click();
+    await expect.poll(async () => (await recordingExportState())?.savedFiles.length).toBe(2);
+    expect((await recordingExportState())?.savedFiles[1]?.content).toBe(savedBeforePlayback);
+
+    await editorElement.evaluate((frame) => {
+      const editorWindow = (frame as HTMLIFrameElement).contentWindow as
+        | (Window & { __rivetRecordingExportState?: { cancelNextSave: boolean } })
+        | null;
+      if (editorWindow?.__rivetRecordingExportState) {
+        editorWindow.__rivetRecordingExportState.cancelNextSave = true;
+      }
+    });
+    await editorFrame.locator('button.more-menu').click();
+    await editorFrame.getByRole('button', { name: 'Export recording', exact: true }).click();
+    await expect.poll(async () => await recordingExportState()).toMatchObject({
+      fallbackDownloads: 0,
+      savedFiles: [{ content: savedBeforePlayback }, { content: savedBeforePlayback }],
+    });
   });
 
   test('stops an active input search when the modal closes', async ({ page }) => {

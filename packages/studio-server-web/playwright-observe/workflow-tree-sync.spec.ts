@@ -6,7 +6,7 @@ import {
 } from '../../studio-server-api/src/tests/helpers/workflow-async-process';
 
 import { authenticateIfNeeded, waitForDashboardReady } from './helpers/hostedEditorObserve';
-import type { WorkflowProjectItem } from '../dashboard/types';
+import type { WorkflowFolderItem, WorkflowProjectItem } from '../dashboard/types';
 import type { HostedProjectConflictSnapshot } from '../../studio-server-shared/editor-bridge';
 
 declare global {
@@ -70,15 +70,7 @@ test.beforeEach(async ({ page }) => {
 });
 
 type TreeState = {
-  folders: Array<{
-    id: string;
-    name: string;
-    relativePath: string;
-    absolutePath: string;
-    updatedAt: string;
-    folders: [];
-    projects: [];
-  }>;
+  folders: WorkflowFolderItem[];
   projects: WorkflowProjectItem[];
   revision: number;
 };
@@ -207,6 +199,71 @@ async function dispatchProjectOpenedFromEditorFrame(page: Page, path: string): P
   }, path);
 }
 
+test('folder context menu creates a nested folder inside the selected folder', async ({ page }) => {
+  const parentFolder: WorkflowFolderItem = {
+    id: 'parent-folder',
+    name: 'Parent folder',
+    relativePath: 'Parent folder',
+    absolutePath: '/managed/workflows/Parent folder',
+    updatedAt: '2026-09-16T00:00:00.000Z',
+    folders: [],
+    projects: [],
+  };
+  const state: TreeState = { folders: [parentFolder], projects: [], revision: 0 };
+  const createRequests: unknown[] = [];
+  await installMockEventSource(page);
+  await installTreeRoute(page, state, { count: 0 });
+  await page.route('**/api/workflows/folders', async (route) => {
+    if (route.request().method() !== 'POST') {
+      await route.fallback();
+      return;
+    }
+
+    const requestBody = route.request().postDataJSON();
+    createRequests.push(requestBody);
+    const childFolder: WorkflowFolderItem = {
+      id: 'parent-folder/child-folder',
+      name: 'Child folder',
+      relativePath: 'Parent folder/Child folder',
+      absolutePath: '/managed/workflows/Parent folder/Child folder',
+      updatedAt: '2026-09-16T00:00:01.000Z',
+      folders: [],
+      projects: [],
+    };
+    parentFolder.folders = [childFolder];
+    state.revision += 1;
+    await route.fulfill({ status: 201, json: { folder: childFolder } });
+  });
+
+  await page.goto('/', { waitUntil: 'domcontentloaded' });
+  await authenticateIfNeeded(page);
+  await waitForDashboardReady(page);
+
+  await page.getByRole('button', { name: 'Expand Parent folder' }).click({ button: 'right' });
+  await expect(page.getByRole('menuitem', { name: 'New folder' })).toBeVisible();
+  expect(await page.getByRole('menuitem').allTextContents()).toEqual([
+    'Rename folder',
+    'New folder',
+    'New project',
+    'Upload project',
+    'Delete folder',
+  ]);
+  page.once('dialog', (dialog) => {
+    expect(dialog.message()).toBe('New folder name in folder "Parent folder":');
+    void dialog.accept('Child folder');
+  });
+  await page.getByRole('menuitem', { name: 'New folder' }).click();
+
+  await expect(page.getByRole('button', { name: 'Collapse Parent folder' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Collapse Child folder' })).toBeVisible();
+  expect(createRequests).toEqual([
+    {
+      name: 'Child folder',
+      parentRelativePath: 'Parent folder',
+    },
+  ]);
+});
+
 test('a workflow tree mutation refreshes a second administrator browser without reloading it', async ({ browser }) => {
   const administratorA = await browser.newContext();
   const administratorB = await browser.newContext();
@@ -329,17 +386,22 @@ test('a tab opened by another dashboard still receives that dashboard’s tree c
   await expect(secondPage.locator('.folder-row', { hasText: 'First folder' })).toBeVisible();
   const readsBeforeChange = secondPageTreeReads.count;
 
-  state.folders = [...state.folders, {
-    id: 'second-folder',
-    name: 'Second folder',
-    relativePath: 'Second folder',
-    absolutePath: '/managed/workflows/Second folder',
-    updatedAt: '2026-08-31T00:00:00.000Z',
-    folders: [],
-    projects: [],
-  }];
+  state.folders = [
+    ...state.folders,
+    {
+      id: 'second-folder',
+      name: 'Second folder',
+      relativePath: 'Second folder',
+      absolutePath: '/managed/workflows/Second folder',
+      updatedAt: '2026-08-31T00:00:00.000Z',
+      folders: [],
+      projects: [],
+    },
+  ];
   await emitTreeChange(secondPage, {
-    epoch: 'playwright-tree-sync', revision: ++state.revision, sourceClientId,
+    epoch: 'playwright-tree-sync',
+    revision: ++state.revision,
+    sourceClientId,
   });
   await expect.poll(() => secondPageTreeReads.count).toBeGreaterThan(readsBeforeChange);
   await expect(secondPage.locator('.folder-row', { hasText: 'Second folder' })).toBeVisible();
@@ -840,13 +902,19 @@ test('a move with a newer saved revision rebinds the tab but blocks overwriting 
   await waitForDashboardReady(page);
   await page.locator('.project-row', { hasText: name }).dblclick();
   await expect(page.locator('.active-project-name')).toHaveText(name);
-  state.projects = [{
-    ...project,
-    relativePath: `New folder/${project.fileName}`,
-    absolutePath: movedPath,
-    revisionId: 'remote',
-  }];
-  await emitTreeChange(page, { epoch: 'playwright-tree-sync', revision: ++state.revision, sourceClientId: 'other-browser' });
+  state.projects = [
+    {
+      ...project,
+      relativePath: `New folder/${project.fileName}`,
+      absolutePath: movedPath,
+      revisionId: 'remote',
+    },
+  ];
+  await emitTreeChange(page, {
+    epoch: 'playwright-tree-sync',
+    revision: ++state.revision,
+    sourceClientId: 'other-browser',
+  });
   const warning = page.locator('.workflow-remote-project-change-notice');
   await expect(warning).toContainText(name);
   await saveThroughEditor(page);
@@ -865,33 +933,42 @@ test('a renamed pending project updates its warning and fences the old resolutio
   await installMockEventSource(page);
   await installTreeRoute(page, state, { count: 0 });
   await page.route('**/api/projects/load', (route) =>
-    route.fulfill({ json: { contents: createProjectContents(originalName), datasetsContents: null, revisionId: 'accepted' } }),
+    route.fulfill({
+      json: { contents: createProjectContents(originalName), datasetsContents: null, revisionId: 'accepted' },
+    }),
   );
   await page.goto('/');
   await waitForDashboardReady(page);
   await page.locator('.project-row', { hasText: originalName }).dblclick();
   await expect(page.locator('.active-project-name')).toHaveText(originalName);
   const warning = page.locator('.workflow-remote-project-change-notice');
-  const change = () => emitTreeChange(page, {
-    epoch: 'playwright-tree-sync',
-    revision: ++state.revision,
-    sourceClientId: 'other-browser',
-  });
+  const change = () =>
+    emitTreeChange(page, {
+      epoch: 'playwright-tree-sync',
+      revision: ++state.revision,
+      sourceClientId: 'other-browser',
+    });
   state.projects = [{ ...project, revisionId: 'remote' }];
   await change();
   await expect(warning).toContainText(originalName);
-  const before = await page.evaluate(() => window.__conflictSnapshots.findLast((snapshot) => snapshot.contentChanges.length > 0)!);
-  state.projects = [{
-    ...project,
-    name: renamedName,
-    fileName: `${renamedName}.rivet-project`,
-    relativePath: `${renamedName}.rivet-project`,
-    absolutePath: `/managed/workflows/${renamedName}.rivet-project`,
-    revisionId: 'remote',
-  }];
+  const before = await page.evaluate(
+    () => window.__conflictSnapshots.findLast((snapshot) => snapshot.contentChanges.length > 0)!,
+  );
+  state.projects = [
+    {
+      ...project,
+      name: renamedName,
+      fileName: `${renamedName}.rivet-project`,
+      relativePath: `${renamedName}.rivet-project`,
+      absolutePath: `/managed/workflows/${renamedName}.rivet-project`,
+      revisionId: 'remote',
+    },
+  ];
   await change();
   await expect(warning).toContainText(renamedName);
-  const after = await page.evaluate(() => window.__conflictSnapshots.findLast((snapshot) => snapshot.contentChanges.length > 0)!);
+  const after = await page.evaluate(
+    () => window.__conflictSnapshots.findLast((snapshot) => snapshot.contentChanges.length > 0)!,
+  );
   expect(after.sequence).toBeGreaterThan(before.sequence);
   expect(after.contentChanges[0]?.changeId).not.toBe(before.contentChanges[0]?.changeId);
   await warning.getByRole('button', { name: 'Keep mine' }).click();

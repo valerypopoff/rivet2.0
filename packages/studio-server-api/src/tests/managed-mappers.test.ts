@@ -7,7 +7,12 @@ import {
   splitCurrentDraftRevisionRow,
   toIsoString,
 } from '../routes/workflows/managed/mappers.js';
-import type { CurrentDraftRevisionRow, FolderRow, WorkflowRow } from '../routes/workflows/managed/types.js';
+import type {
+  CurrentDraftRevisionRow,
+  FolderRow,
+  WebAppPublicationRow,
+  WorkflowRow,
+} from '../routes/workflows/managed/types.js';
 
 function createWorkflowRow(overrides: Partial<WorkflowRow> = {}): WorkflowRow {
   return {
@@ -59,6 +64,39 @@ test('mapWorkflowRowToProjectItem preserves managed virtual paths and ISO timest
   assert.equal(item.settings.status, 'published');
   assert.equal(item.settings.lastPublishedAt, '2026-04-07T09:00:00.000Z');
   assert.equal(item.updatedAt, '2026-04-07T10:00:00.000Z');
+});
+
+test('mapWorkflowRowToProjectItem exposes freshness for each published web app', () => {
+  const currentRevisionWebApp: WebAppPublicationRow = {
+    app_id: 'app-current',
+    workflow_id: 'workflow-a',
+    revision_id: 'revision-a',
+    ui_graph_id: 'graph-current',
+    slug: 'current-app',
+    slug_lookup_name: 'current-app',
+    allowed_emails: [],
+    published_at: '2026-04-07T09:00:00.000Z',
+  };
+  const staleWebApp: WebAppPublicationRow = {
+    ...currentRevisionWebApp,
+    app_id: 'app-stale',
+    revision_id: 'revision-before-edit',
+    ui_graph_id: 'graph-stale',
+    slug: 'stale-app',
+    slug_lookup_name: 'stale-app',
+  };
+
+  const item = mapWorkflowRowToProjectItem(createWorkflowRow(), {
+    webAppRows: [currentRevisionWebApp, staleWebApp],
+  });
+
+  assert.deepEqual(
+    item.settings.publishedWebApps.map((webApp) => [webApp.slug, webApp.status]),
+    [
+      ['current-app', 'published'],
+      ['stale-app', 'unpublished_changes'],
+    ],
+  );
 });
 
 test('mapFolderRowToFolderItem preserves managed folder virtual paths', () => {

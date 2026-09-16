@@ -61,15 +61,15 @@ Each admitted parser also has a `120 seconds` receive deadline. A stalled body r
 
 This is the ownership boundary to preserve when adding a body-consuming route. Do not add a global parser or attach a parser before the listed pre-body policy.
 
-| Route owner | Accepted representation | Pre-body policy | Decoded limit |
-| --- | --- | --- | --- |
-| `/api/native`, `/api/shell`, `/api/plugins`, `/api/projects`, `/api/runtime-libraries`, `/api/app-settings`, and ordinary `/api/workflows` mutations | JSON | Trusted proxy/operator authentication at `/api` | `100 MiB` |
-| `/api/workflows/local-editor-recordings` | JSON | Trusted proxy/operator authentication at `/api` | `48 MiB` |
-| `/api/workflows/evaluation-runs` recording submission | JSON | Trusted proxy/operator authentication at `/api` | `24 MiB` |
-| Published and latest workflow `POST /:endpointName` | JSON, including primitives | Published/latest bearer or trusted-client policy | `100 MiB` |
-| `/internal/workflows/:endpointName` | JSON, including primitives | Network-isolated internal route; no bearer check | `100 MiB` |
-| Published/latest web-app `/:slug/actions/run` | JSON object | Gate/session/origin, project resolution, and project OAuth allowlist; bounded preflight | Saved web-app button-data limit (`1 MiB`–`1 GiB`) |
-| `/ui-auth` and dummy OAuth credential posts | JSON or URL-encoded form | Intentionally unauthenticated credential exchange | `64 KiB` |
+| Route owner                                                                                                                                          | Accepted representation    | Pre-body policy                                                                         | Decoded limit                                     |
+| ---------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------- | --------------------------------------------------------------------------------------- | ------------------------------------------------- |
+| `/api/native`, `/api/shell`, `/api/plugins`, `/api/projects`, `/api/runtime-libraries`, `/api/app-settings`, and ordinary `/api/workflows` mutations | JSON                       | Trusted proxy/operator authentication at `/api`                                         | `100 MiB`                                         |
+| `/api/workflows/local-editor-recordings`                                                                                                             | JSON                       | Trusted proxy/operator authentication at `/api`                                         | `48 MiB`                                          |
+| `/api/workflows/evaluation-runs` recording submission                                                                                                | JSON                       | Trusted proxy/operator authentication at `/api`                                         | `24 MiB`                                          |
+| Published and latest workflow `POST /:endpointName`                                                                                                  | JSON, including primitives | Published/latest bearer or trusted-client policy                                        | `100 MiB`                                         |
+| `/internal/workflows/:endpointName`                                                                                                                  | JSON, including primitives | Network-isolated internal route; no bearer check                                        | `100 MiB`                                         |
+| Published/latest web-app `/:slug/actions/run`                                                                                                        | JSON object                | Gate/session/origin, project resolution, and project OAuth allowlist; bounded preflight | Saved web-app button-data limit (`1 MiB`–`1 GiB`) |
+| `/ui-auth` and dummy OAuth credential posts                                                                                                          | JSON or URL-encoded form   | Intentionally unauthenticated credential exchange                                       | `64 KiB`                                          |
 
 Routes with no body, unknown paths, and unsupported methods never enter these parsers. A body-bearing request whose content type is not accepted by its row is rejected with `415`; a zero-length request continues to normal route validation so established `400` responses remain compatible.
 
@@ -248,7 +248,7 @@ Current create-project route behavior:
 - `POST /api/workflows/projects` accepts `{ "folderRelativePath"?: string, "name": string }`
 - it returns `201 { "project": WorkflowProjectItem }`
 - it creates a new blank `.rivet-project` file in the target folder and uses the provided name for both the filename base and initial project title
-- the dashboard currently calls this route from the folder-row context menu's `Create project` action
+- the dashboard currently calls this route from the folder-row context menu's `New project` action
 - folder-level project creation currently exists only in that custom folder context menu, not in an inline row button
 - if the target folder already contains that exact project name, the route returns `409`
 

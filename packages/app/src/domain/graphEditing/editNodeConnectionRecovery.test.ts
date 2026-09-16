@@ -1007,14 +1007,15 @@ test('restoring an output-side recoverable connection still works for dynamic do
   assert.deepEqual(result.nextRecoverableConnections, []);
 });
 
-test('Regex Match Per output wires become recoverable in Shared mode and restore when switched back', () => {
+test('Match case per-output wires become recoverable in Shared mode and restore when switched back', () => {
   const sourceNode = makeTextNode('source', 'case value');
-  const matchNode = registry.createDynamic('match');
+  const matchNode = registry.createDynamic('matchCase');
   matchNode.id = 'match' as NodeId;
   matchNode.data = {
     ...(matchNode.data as Record<string, unknown>),
     cases: ['YES'],
     casePortIds: ['case-yes'],
+    returnValue: 'custom',
     valueInputMode: 'per-output',
   };
   const connection = makeConnection({
@@ -1067,4 +1068,67 @@ test('Regex Match Per output wires become recoverable in Shared mode and restore
 
   assert.deepEqual(perOutputResult.nextConnections, [connection]);
   assert.deepEqual(perOutputResult.nextRecoverableConnections, []);
+});
+
+test('Match case custom return wires become recoverable in True mode and restore in Custom mode', () => {
+  const sourceNode = makeTextNode('source', 'case value');
+  const matchNode = registry.createDynamic('matchCase');
+  matchNode.id = 'match' as NodeId;
+  matchNode.data = {
+    ...(matchNode.data as Record<string, unknown>),
+    cases: ['YES'],
+    casePortIds: ['case-yes'],
+    returnValue: 'custom',
+    valueInputMode: 'per-output',
+  };
+  const connection = makeConnection({
+    outputNodeId: sourceNode.id,
+    inputNodeId: matchNode.id,
+    inputId: 'value-case-yes' as PortId,
+  });
+
+  const trueResult = reconcileNodeEditConnections({
+    nodeId: matchNode.id,
+    newNode: {
+      data: {
+        ...(matchNode.data as Record<string, unknown>),
+        returnValue: 'true',
+      },
+    },
+    nodes: [sourceNode, matchNode],
+    liveConnections: [connection],
+    recoverableConnections: [],
+    project,
+    referencedProjects: {},
+    projectNodeRegistry: registry,
+  });
+
+  assert.deepEqual(trueResult.nextConnections, []);
+  assert.deepEqual(trueResult.nextRecoverableConnections, [connection]);
+
+  const trueMatchNode = {
+    ...matchNode,
+    data: {
+      ...(matchNode.data as Record<string, unknown>),
+      returnValue: 'true',
+    },
+  };
+  const customResult = reconcileNodeEditConnections({
+    nodeId: trueMatchNode.id,
+    newNode: {
+      data: {
+        ...(trueMatchNode.data as Record<string, unknown>),
+        returnValue: 'custom',
+      },
+    },
+    nodes: [sourceNode, trueMatchNode],
+    liveConnections: [],
+    recoverableConnections: trueResult.nextRecoverableConnections,
+    project,
+    referencedProjects: {},
+    projectNodeRegistry: registry,
+  });
+
+  assert.deepEqual(customResult.nextConnections, [connection]);
+  assert.deepEqual(customResult.nextRecoverableConnections, []);
 });

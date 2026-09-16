@@ -307,7 +307,7 @@ Single-clicking a project row opens that project in the editor as a preview tab,
 
 The shared editor renders deleted comparison nodes from that reference snapshot, with passive body previews, reference ports and an **Inspect deleted node** action (also double-click). The inspector exposes complete saved settings, including unavailable plugin nodes and reference library definitions, without modifying either project. Replacing/exiting a comparison or switching projects invalidates inspection. Reference rendering and measurement ownership are documented in [App architecture](../APP-ARCHITECTURE.md); hosted acceptance coverage is `project-compare-mode.spec.ts`.
 
-The folder-row context menu exposes `Rename folder`, `Create project`, `Upload project`, and `Delete folder`.
+The folder-row context menu exposes `Rename folder`, `New folder`, `New project`, `Upload project`, and `Delete folder`.
 
 - `Rename folder` edits the folder name inline in the tree; `Enter` closes the edit field and shows a preloader on the folder name while the API saves, while `Esc` or focus leaving the edit field cancels without calling the API
 - `Delete folder` is enabled only for empty folders in the dashboard, and the API still rejects non-empty folder deletion if called directly
@@ -330,6 +330,7 @@ Workflow folders are managed through:
 Current folder behavior:
 
 - the workflow library's `+ New folder` action creates new folders at the root level
+- a folder row's `New folder` context-menu action creates a child folder by sending the selected folder's relative path as `parentRelativePath`, then expands the parent and new child
 - `Rename folder` shows the shared inline edit field on the selected folder row, hides that field immediately when the user presses `Enter`, shows a preloader on the folder name while the backend rename is pending, returns `movedProjectPaths`, and lets the dashboard retarget open editor tabs without closing them
 - pressing `Esc` or clicking away from the inline folder edit field cancels without calling the rename API
 - a folder keeps its previous expanded or collapsed state after rename, even when the active project path inside that folder is retargeted
@@ -347,7 +348,7 @@ Projects can now also be created inside workflow folders from the folder-row con
 
 Current creation behavior:
 
-- folder-level project creation currently exists only in the folder-row context menu's `Create project` action
+- folder-level project creation currently exists only in the folder-row context menu's `New project` action
 - the dashboard prompts for a new project name and posts that name plus the target folder path to the API
 - the server writes a new blank `.rivet-project` file in the selected folder and returns it as a normal unpublished workflow project
 - after successful creation, the dashboard expands the folder, refreshes the tree, and opens the new project in the editor
@@ -908,7 +909,9 @@ The main recordings routes are:
 
 ## Recording browser
 
-The dashboard exposes a `Run recordings` action next to `Runtime libraries`.
+Plain Tab toggles the sidebar belonging to the focused document: the server sidebar in the dashboard, or the graph sidebar inside the editor iframe. Text/code entry and open dashboard dialogs retain normal Tab navigation; Shift+Tab and modified Tab are unchanged. The editor also retains Ctrl+Q/Cmd+Q. Hosted modal focus retains keyboard navigation, trapping, and restoration without decorative focus outlines on dialogs or their controls; close buttons highlight on pointer hover only. Published-catalog browser coverage verifies the rendered close glyph, corner placement, content insets, and fixed header during list scrolling.
+
+The dashboard exposes `Run recordings` in the left-panel footer. Runtime-library administration lives separately under `Settings` -> `Runtime libraries`. The text-only `Published` action opens a live catalog derived from the authoritative workflow tree. It lists every currently published workflow endpoint and web app in separate modal-level `Endpoints (n)` and `Web apps (n)` tabs, where each counter is derived from that same live catalog. The title, description, tabs, and corner close control occupy the fixed modal header; only the selected tab's inset item list scrolls. Each row presents the configured public route as a copy control that writes the absolute current-server URL to the clipboard, reveals a copy icon immediately before that route on hover or keyboard focus, and provides a separate `Project: ...` reference: the `Project:` label is muted and the project name is bright. Activating that project reference closes the catalog and opens the project persistently in the editor through the normal project-opening path. Rows do not repeat their publication type. Their names and project references share a consistent left edge, with the labeled freshness badge below both: green means the item is published from the current draft, while amber means it remains published but the project has unpublished changes. The workflow tree carries freshness for each web-app publication independently, so a stale endpoint or sibling app cannot mislabel another app. Older tree responses without per-app freshness are displayed conservatively as published. Endpoint drafts whose endpoint publication status is `unpublished` are excluded even when the same project owns published web apps; the tree's `publishedWebApps` entries remain independently visible. The dashboard does not cache a second publication index or infer endpoint publication from the aggregate project status.
 
 It also exposes a separate `Run statistics` action. It uses indexed recording metadata only; it never reads or decompresses replay bundles just to calculate timings. Its target dropdown is the complete retained endpoint or web-app action catalog for the selected surface, independent of period, version, and outcome filters. The modal defaults to the last seven days of successful published runs and lets a developer switch among those targets, choose 24-hour/7-day/30-day/90-day/custom periods, include failed or warning (`suspicious`) runs, and select Published, Latest, or Both. When the selected target has no runs under those filters, it stays selected and the modal says so below the filters. It reports count, median, P95, average, fastest, and slowest processor execution time for the selected period only. A colored Run outcomes section always shows the succeeded, error, and warning counts and percentages for every matching run, even when errors or warnings are excluded from duration metrics. The chart uses hour/day/week/month buckets according to the selected span.
 

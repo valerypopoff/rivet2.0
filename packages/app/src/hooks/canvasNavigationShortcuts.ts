@@ -3,7 +3,7 @@ import { matchesKeyboardShortcut, type KeyboardShortcutEvent } from '../utils/ke
 export const GRAPH_HISTORY_PREVIOUS_SHORTCUT_LABEL = 'PgUp';
 export const GRAPH_HISTORY_NEXT_SHORTCUT_LABEL = 'PgDwn';
 export const MAIN_GRAPH_SHORTCUT_LABEL = 'Home';
-export const GRAPH_TREE_TOGGLE_SHORTCUT_LABEL = 'Ctrl+Q / Cmd+Q';
+export const GRAPH_TREE_TOGGLE_SHORTCUT_LABEL = 'Tab / Ctrl+Q / Cmd+Q';
 
 export const GRAPH_HISTORY_PREVIOUS_TOOLTIP = `Go to previous graph (${GRAPH_HISTORY_PREVIOUS_SHORTCUT_LABEL})`;
 export const GRAPH_HISTORY_NEXT_TOOLTIP = `Go to next graph (${GRAPH_HISTORY_NEXT_SHORTCUT_LABEL})`;
@@ -17,6 +17,9 @@ export function getCanvasNavigationShortcut(
   event: CanvasNavigationShortcutEvent,
 ): CanvasNavigationShortcut | undefined {
   if (!event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey) {
+    if (event.key === 'Tab') {
+      return 'toggleGraphTree';
+    }
     if (event.key === 'PageUp' || event.code === 'PageUp') {
       return 'previousGraph';
     }

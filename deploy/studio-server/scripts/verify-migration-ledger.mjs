@@ -110,6 +110,27 @@ const currentDestinationSuccessors = new Map([
       reason: 'Replica readiness moved from Runtime libraries to Deployment settings after the monorepo import.',
     },
   ],
+  [
+    'packages/studio-server-web/dashboard/RuntimeLibrariesModal.css',
+    {
+      path: 'packages/studio-server-web/dashboard/app-settings/RuntimeLibrariesSettingsTab.css',
+      reason: 'Runtime-library presentation moved from a standalone modal into the Runtime libraries Settings tab.',
+    },
+  ],
+  [
+    'packages/studio-server-web/dashboard/RuntimeLibrariesModal.tsx',
+    {
+      path: 'packages/studio-server-web/dashboard/app-settings/tabs/RuntimeLibrariesSettingsTab.tsx',
+      reason: 'Runtime-library administration moved from a standalone modal into the application Settings tabs.',
+    },
+  ],
+  [
+    'packages/studio-server-web/dashboard/useRuntimeLibrariesModalState.ts',
+    {
+      path: 'packages/studio-server-web/dashboard/useRuntimeLibrariesState.ts',
+      reason: 'Runtime-library state is now shared by the Settings tab instead of being owned by a standalone modal.',
+    },
+  ],
 ]);
 const destinationRules = [
   ['wrapper/api/', 'packages/studio-server-api/'],

@@ -18,7 +18,7 @@ export class CoalesceNodeImpl extends CoalesceNodeBase<CoalesceNode> {
   static getUIData(): NodeUIData {
     return {
       infoBoxBody: dedent`
-        Legacy Coalesce node. Takes in any number of inputs and outputs the first value that is not "Not Ran". Useful for consolidating branches after a Match node.
+        Legacy Coalesce node. Takes in any number of inputs and outputs the first value that is not "Not Ran". Useful for consolidating branches after a Match case node.
 
         Its Conditional input can exclude the node itself. New graphs should use Coalesce instead, which has the same fallback behavior without that port.
       `,

@@ -289,7 +289,7 @@ export const ActionBar: FC<ActionBarProps> = ({ onRunGraph, onAbortGraph, onPaus
 
       {isGentracePluginEnabled && <GentraceInteractors />}
 
-      {recordingsEnabled && hasRecordingToSave && (
+      {recordingsEnabled && hasRecordingToSave && !activeRecording && (
         <div className={clsx('save-recording-button')}>
           <button onClick={saveRecording}>Save Recording</button>
         </div>
@@ -346,6 +346,7 @@ export const ActionBar: FC<ActionBarProps> = ({ onRunGraph, onAbortGraph, onPaus
           <ActionBarMoreMenu
             getDebuggerPanelAnchor={getDebuggerPanelAnchor}
             onClose={toggleMenuIsOpen.setLeft}
+            onExportRecording={activeRecording && hasRecordingToSave ? saveRecording : undefined}
             onAddRunInputsToEvaluation={
               evaluationInputCopyEnabled ? toggleAddRunInputsToEvaluationModalOpen.setRight : undefined
             }

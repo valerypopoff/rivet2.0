@@ -7,6 +7,7 @@ import {
   type PointerEvent as ReactPointerEvent,
   type TransitionEvent,
 } from 'react';
+import { isEditableElement } from './editorBridgeFocus';
 
 const SIDEBAR_REVEAL_FALLBACK_MS = 240;
 const SIDEBAR_DRAG_COLLAPSE_THRESHOLD_RATIO = 0.5;
@@ -138,6 +139,26 @@ export function useDashboardSidebar(options: UseDashboardSidebarOptions) {
     setSidebarContentVisible(false);
     setSidebarCollapsedState(true);
   }, [clearRevealTimeout, scheduleSidebarContentReveal, setSidebarCollapsedState, sidebarCollapsed]);
+
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (
+        event.key !== 'Tab' || event.shiftKey || event.ctrlKey || event.metaKey || event.altKey ||
+        event.defaultPrevented || event.isComposing ||
+        isEditableElement(document.activeElement) ||
+        document.activeElement?.closest('[role="textbox"], .monaco-editor') ||
+        document.querySelector('[role="dialog"], [role="alertdialog"]')
+      ) {
+        return;
+      }
+      event.preventDefault();
+      if (!event.repeat) {
+        handleToggleSidebar();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [handleToggleSidebar]);
 
   const finishResize = useCallback(() => {
     flushPendingResize();

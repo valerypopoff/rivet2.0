@@ -56,20 +56,23 @@ export function getWorkflowTreeMutationHeaders(): Record<string, string> {
   };
 }
 
-const workflowJsonResponse = <T,>(response: Response) => parseJsonResponse<T>(response, {
-  nonJsonErrorMessage:
-    'Workflow API returned HTML instead of JSON. Make sure you are accessing the app through the proxy and that /api/workflows is routed to the API service.',
-});
+const workflowJsonResponse = <T>(response: Response) =>
+  parseJsonResponse<T>(response, {
+    nonJsonErrorMessage:
+      'Workflow API returned HTML instead of JSON. Make sure you are accessing the app through the proxy and that /api/workflows is routed to the API service.',
+  });
 
-const hostedProjectJsonResponse = <T,>(response: Response) => parseJsonResponse<T>(response, {
-  nonJsonErrorMessage:
-    'Project API returned HTML instead of JSON. Make sure you are accessing the app through the proxy and that /api/projects is routed to the API service.',
-});
+const hostedProjectJsonResponse = <T>(response: Response) =>
+  parseJsonResponse<T>(response, {
+    nonJsonErrorMessage:
+      'Project API returned HTML instead of JSON. Make sure you are accessing the app through the proxy and that /api/projects is routed to the API service.',
+  });
 
-const hostedConfigJsonResponse = <T,>(response: Response) => parseJsonResponse<T>(response, {
-  nonJsonErrorMessage:
-    'Config API returned HTML instead of JSON. Make sure you are accessing the app through the proxy and that /api/config is routed to the API service.',
-});
+const hostedConfigJsonResponse = <T>(response: Response) =>
+  parseJsonResponse<T>(response, {
+    nonJsonErrorMessage:
+      'Config API returned HTML instead of JSON. Make sure you are accessing the app through the proxy and that /api/config is routed to the API service.',
+  });
 
 async function parseBlobResponse(response: Response): Promise<{ blob: Blob; fileName: string | null }> {
   const contentType = response.headers.get('content-type') ?? '';
@@ -140,7 +143,9 @@ export async function fetchWorkflowTree(): Promise<WorkflowTreeResponse> {
   return workflowJsonResponse<WorkflowTreeResponse>(response);
 }
 
-function parseWorkflowTreeSyncEvent(event: MessageEvent<string>): WorkflowTreeSyncState | WorkflowTreeChangeEvent | null {
+function parseWorkflowTreeSyncEvent(
+  event: MessageEvent<string>,
+): WorkflowTreeSyncState | WorkflowTreeChangeEvent | null {
   try {
     const parsed = JSON.parse(event.data) as Partial<WorkflowTreeChangeEvent>;
     if (typeof parsed.epoch !== 'string' || !Number.isSafeInteger(parsed.revision) || parsed.revision < 0) {
@@ -189,7 +194,9 @@ export async function fetchHostedConfig(): Promise<Partial<HostedRouteConfig>> {
   return normalizedConfig;
 }
 
-export async function fetchWorkflowRecordingWorkflows(options: { signal?: AbortSignal } = {}): Promise<WorkflowRecordingWorkflowListResponse> {
+export async function fetchWorkflowRecordingWorkflows(
+  options: { signal?: AbortSignal } = {},
+): Promise<WorkflowRecordingWorkflowListResponse> {
   const response = await fetch(`${API}/workflows/recordings/workflows`, {
     cache: 'no-store',
     signal: options.signal,
@@ -225,10 +232,13 @@ export async function fetchWorkflowRecordingRuns(
       query.set('inputAfter', options.inputAfter);
     }
   }
-  const response = await fetch(`${API}/workflows/recordings/workflows/${encodeURIComponent(workflowId)}/runs?${query}`, {
-    cache: 'no-store',
-    signal: options.signal,
-  });
+  const response = await fetch(
+    `${API}/workflows/recordings/workflows/${encodeURIComponent(workflowId)}/runs?${query}`,
+    {
+      cache: 'no-store',
+      signal: options.signal,
+    },
+  );
   return workflowJsonResponse<WorkflowRecordingRunsPageResponse>(response);
 }
 
@@ -293,11 +303,11 @@ export async function deleteWorkflowRecording(recordingId: string): Promise<void
   await workflowJsonResponse<{ deleted: true }>(response);
 }
 
-export async function createWorkflowFolder(name: string): Promise<WorkflowFolderItem> {
+export async function createWorkflowFolder(name: string, parentRelativePath = ''): Promise<WorkflowFolderItem> {
   const response = await fetch(`${API}/workflows/folders`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...getWorkflowTreeMutationHeaders() },
-    body: JSON.stringify({ name }),
+    body: JSON.stringify(parentRelativePath ? { name, parentRelativePath } : { name }),
   });
 
   const data = await workflowJsonResponse<{ folder: WorkflowFolderItem }>(response);
@@ -314,9 +324,10 @@ export async function renameWorkflowFolder(
     body: JSON.stringify({ relativePath, newName }),
   });
 
-  return workflowJsonResponse<{ folder: WorkflowFolderItem; movedProjectPaths: WorkflowMoveResponse['movedProjectPaths'] }>(
-    response,
-  );
+  return workflowJsonResponse<{
+    folder: WorkflowFolderItem;
+    movedProjectPaths: WorkflowMoveResponse['movedProjectPaths'];
+  }>(response);
 }
 
 export async function deleteWorkflowFolder(relativePath: string): Promise<void> {
@@ -329,10 +340,7 @@ export async function deleteWorkflowFolder(relativePath: string): Promise<void> 
   await workflowJsonResponse<{ deleted: true }>(response);
 }
 
-export async function createWorkflowProject(
-  folderRelativePath: string,
-  name: string,
-): Promise<WorkflowProjectItem> {
+export async function createWorkflowProject(folderRelativePath: string, name: string): Promise<WorkflowProjectItem> {
   const response = await fetch(`${API}/workflows/projects`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...getWorkflowTreeMutationHeaders() },
@@ -368,7 +376,10 @@ export async function renameWorkflowProject(
     body: JSON.stringify({ relativePath, newName }),
   });
 
-  return workflowJsonResponse<{ project: WorkflowProjectItem; movedProjectPaths: WorkflowMoveResponse['movedProjectPaths'] }>(response);
+  return workflowJsonResponse<{
+    project: WorkflowProjectItem;
+    movedProjectPaths: WorkflowMoveResponse['movedProjectPaths'];
+  }>(response);
 }
 
 export async function duplicateWorkflowProjectVersion(
@@ -407,10 +418,7 @@ export async function fetchWorkflowPublishedVersions(relativePath: string): Prom
   return workflowJsonResponse<WorkflowPublishedVersionsResponse>(response);
 }
 
-export async function downloadWorkflowPublishedVersion(
-  relativePath: string,
-  versionId: string,
-): Promise<void> {
+export async function downloadWorkflowPublishedVersion(relativePath: string, versionId: string): Promise<void> {
   const response = await fetch(`${API}/workflows/projects/published-versions/download`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },

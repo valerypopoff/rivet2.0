@@ -85,7 +85,10 @@ test('library references count instances and navigate to the chosen graph node',
   await expect(references.locator('summary')).toHaveText('3 references');
   await expect(references.getByRole('button')).toHaveCount(3);
   const annotationColor = await references.evaluate((element) => getComputedStyle(element).color);
-  const linkColor = await references.getByRole('button').first().evaluate((element) => getComputedStyle(element).color);
+  const linkColor = await references
+    .getByRole('button')
+    .first()
+    .evaluate((element) => getComputedStyle(element).color);
   expect(linkColor).toBe(annotationColor);
   const expandedNodeBounds = await sourceNode.boundingBox();
   const referenceBounds = await references.boundingBox();
@@ -101,4 +104,18 @@ test('library references count instances and navigate to the chosen graph node',
   await references.getByRole('button', { name: 'Graph B · third' }).click();
   await expect(editor.locator('.node.selected[data-nodeid="third"]')).toBeVisible();
   await expect(editor.locator('.node-library-references')).toHaveCount(0);
+
+  await editor.getByText('Node library', { exact: true }).click();
+  await expect(editor.locator('.node[data-nodeid="source"]')).toBeVisible();
+  await page.keyboard.press('Control+a');
+  await page.keyboard.press('Control+d');
+  await page.keyboard.press('Control+z');
+  await expect(editor.locator('.node[data-nodeid="source"]')).toHaveCount(1);
+
+  // Navigation stays available on a non-graph canvas, while graph commands above
+  // must not mutate the graph that was active before opening Node Library.
+  await page.keyboard.press('Home');
+  await expect(editor.locator('.node[data-nodeid="first"]')).toBeVisible();
+  await editor.getByText('Graph B', { exact: true }).click();
+  await expect(editor.locator('.node[data-nodeid="third"]')).toHaveCount(1);
 });

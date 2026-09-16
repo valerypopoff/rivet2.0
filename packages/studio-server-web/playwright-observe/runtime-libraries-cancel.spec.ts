@@ -10,14 +10,14 @@ test.describe('Runtime library job cancellation', () => {
     await page.goto('/', { waitUntil: 'domcontentloaded' });
     await authenticateIfNeeded(page);
     await waitForDashboardReady(page);
-    const modal = page.locator('[data-testid="runtime-libraries-modal"]');
+    const modal = page.getByTestId('app-settings-modal');
 
-    const runtimeLibrariesButton = page.getByRole('button', { name: 'Runtime libraries' });
-    await expect(runtimeLibrariesButton).toBeVisible({ timeout: 30_000 });
+    const settingsButton = page.getByRole('button', { name: 'Settings', exact: true });
+    await expect(settingsButton).toBeVisible({ timeout: 30_000 });
     await page.waitForTimeout(2_000);
 
     for (let attempt = 0; attempt < 3; attempt += 1) {
-      await runtimeLibrariesButton.click({ force: true });
+      await settingsButton.click({ force: true });
       try {
         await modal.waitFor({ state: 'visible', timeout: 5_000 });
         break;
@@ -29,31 +29,35 @@ test.describe('Runtime library job cancellation', () => {
       }
     }
 
-    const packageNameInput = modal.locator('#runtime-library-package-name');
+    await modal.getByRole('tab', { name: 'Runtime libraries' }).click();
+    const panel = modal.locator('section[aria-label="Runtime libraries"]');
+    await expect(panel).toBeVisible();
+
+    const packageNameInput = panel.locator('#runtime-library-package-name');
     if ((await packageNameInput.count()) === 0) {
-      const addButton = modal.locator('.runtime-libraries-add-button');
+      const addButton = panel.locator('.runtime-libraries-add-button');
       await addButton.waitFor({ state: 'visible', timeout: 30_000 });
       await addButton.click();
       await packageNameInput.waitFor({ state: 'visible', timeout: 30_000 });
     }
 
     await packageNameInput.fill('sharp');
-    await modal.locator('#runtime-library-package-version').fill('latest');
-    await modal.getByRole('button', { name: 'Install' }).click();
+    await panel.locator('#runtime-library-package-version').fill('latest');
+    await panel.getByRole('button', { name: 'Install' }).click();
 
-    await modal.locator('.runtime-libraries-log-panel').waitFor({ state: 'visible', timeout: 30_000 });
-    await modal.locator('.runtime-libraries-log-line').first().waitFor({ state: 'visible', timeout: 30_000 });
+    await panel.locator('.runtime-libraries-log-panel').waitFor({ state: 'visible', timeout: 30_000 });
+    await panel.locator('.runtime-libraries-log-line').first().waitFor({ state: 'visible', timeout: 30_000 });
 
     await page.waitForTimeout(1_500);
-    await modal.getByRole('button', { name: 'Cancel job' }).click();
+    await panel.getByRole('button', { name: 'Cancel job' }).click();
 
-    const failedStatus = modal.locator('.runtime-libraries-status.failed', {
+    const failedStatus = panel.locator('.runtime-libraries-status.failed', {
       hasText: 'Cancelled by user',
     });
     await expect(failedStatus).toBeVisible({ timeout: 30_000 });
     await expect(failedStatus).toContainText('Cancelled by user');
 
-    const logText = await modal.locator('.runtime-libraries-log-panel').textContent();
+    const logText = await panel.locator('.runtime-libraries-log-panel').textContent();
     expect((logText?.match(/--- Starting install job ---/g) ?? []).length).toBe(1);
     expect((logText?.match(/Running npm install\.\.\./g) ?? []).length).toBe(1);
   });

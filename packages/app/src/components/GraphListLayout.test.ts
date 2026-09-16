@@ -23,20 +23,28 @@ test('graph tree shell delegates header, resources, context menus, and dialogs',
   assert.match(source, /useUiGraphOperations/);
 });
 
-test('graph tree header preserves action order, filter behavior, and Node library count', () => {
+test('graph tree header preserves action order and Node library count', () => {
   const header = readComponent('graphList', 'GraphListHeader.tsx');
-  const filterFocus = readComponent('graphList', 'graphFilterFocus.ts');
 
-  assert.match(
-    header,
-    /<span>Search<\/span>[\s\S]*<span>Project settings<\/span>[\s\S]*<span>Node library<\/span>[\s\S]*className="graph-list-filter"/,
-  );
+  assert.match(header, /<span>Search<\/span>[\s\S]*<span>Project settings<\/span>[\s\S]*<span>Node library<\/span>/);
   assert.doesNotMatch(header, /Node Library/);
   assert.match(header, /aria-current=\{nodeLibraryOpen \? 'page' : undefined\}/);
   assert.match(header, /nodeLibraryItemCount > 0/);
-  assert.match(header, /\{\.\.\.GRAPH_FILTER_INPUT_MARKER\}/);
-  assert.match(header, /aria-label="Filter graphs"/);
-  assert.match(header, /className="graph-list-filter"[\s\S]*!hasWebApps[\s\S]*<span>Create web app<\/span>/);
+  assert.match(header, /<span>Node library<\/span>[\s\S]*!hasWebApps[\s\S]*<span>Create web app<\/span>/);
+  assert.doesNotMatch(header, /Filter graphs/);
+});
+
+test('graph section owns the collapsible graph filter and focus marker', () => {
+  const source = readComponent('GraphList.tsx');
+  const sectionHeader = readComponent('graphList', 'GraphListSectionHeader.tsx');
+  const filterFocus = readComponent('graphList', 'graphFilterFocus.ts');
+
+  assert.match(source, /<GraphListSectionHeader/);
+  assert.match(sectionHeader, /<span className="graph-list-heading">Graphs<\/span>/);
+  assert.match(sectionHeader, /content="Filter graphs"/);
+  assert.match(sectionHeader, /aria-label="Filter graphs"/);
+  assert.match(sectionHeader, /\{\.\.\.GRAPH_FILTER_INPUT_MARKER\}/);
+  assert.match(sectionHeader, /aria-label="Close graph filter"/);
   assert.match(filterFocus, /GRAPH_FILTER_INPUT_MARKER/);
 });
 

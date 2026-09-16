@@ -286,6 +286,7 @@ const sidebars = {
         'node-reference/if-else',
         'node-reference/loop-controller',
         'node-reference/loop-until',
+        'node-reference/match-case',
         'node-reference/regex-match',
         'node-reference/passthrough',
         'node-reference/race-inputs',

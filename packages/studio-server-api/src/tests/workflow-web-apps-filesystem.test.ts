@@ -531,7 +531,13 @@ test('workflow web app publication status tracks saved draft changes and republi
   await withWorkflowApiServer(async (baseUrl) => {
     const readTreePublicationStatus = async () => {
       const tree = await workflowStorageBackend.getWorkflowTree();
-      return tree.projects.find((project) => project.relativePath === created.relativePath)?.settings.publicationStatus;
+      const settings = tree.projects.find((project) => project.relativePath === created.relativePath)?.settings;
+      return {
+        aggregate: settings?.publicationStatus,
+        webApp: settings?.publishedWebApps.find(
+          (webApp) => webApp.uiGraphId === WEB_APP_TEST_UI_GRAPH_ID,
+        )?.status,
+      };
     };
     const readStatus = async () => {
       const response = await readJson<{
@@ -553,7 +559,7 @@ test('workflow web app publication status tracks saved draft changes and republi
       publishedSlug: 'web-app-publication-status',
       status: 'published',
     });
-    assert.equal(await readTreePublicationStatus(), 'published');
+    assert.deepEqual(await readTreePublicationStatus(), { aggregate: 'published', webApp: 'published' });
 
     const datasetPath = workflowFs.getWorkflowDatasetPath(created.absolutePath);
     await fs.writeFile(datasetPath, 'dataset: changed\n', 'utf8');
@@ -562,7 +568,10 @@ test('workflow web app publication status tracks saved draft changes and republi
       publishedSlug: 'web-app-publication-status',
       status: 'unpublished_changes',
     });
-    assert.equal(await readTreePublicationStatus(), 'unpublished_changes');
+    assert.deepEqual(await readTreePublicationStatus(), {
+      aggregate: 'unpublished_changes',
+      webApp: 'unpublished_changes',
+    });
 
     await fs.rm(datasetPath);
     assert.deepEqual(await readStatus(), {
@@ -570,7 +579,7 @@ test('workflow web app publication status tracks saved draft changes and republi
       publishedSlug: 'web-app-publication-status',
       status: 'published',
     });
-    assert.equal(await readTreePublicationStatus(), 'published');
+    assert.deepEqual(await readTreePublicationStatus(), { aggregate: 'published', webApp: 'published' });
 
     await writeWebAppProject(created.absolutePath, 'WebAppPublicationStatus', 'Changed Status Web App');
     assert.deepEqual(await readStatus(), {
@@ -578,7 +587,10 @@ test('workflow web app publication status tracks saved draft changes and republi
       publishedSlug: 'web-app-publication-status',
       status: 'unpublished_changes',
     });
-    assert.equal(await readTreePublicationStatus(), 'unpublished_changes');
+    assert.deepEqual(await readTreePublicationStatus(), {
+      aggregate: 'unpublished_changes',
+      webApp: 'unpublished_changes',
+    });
 
     await readJson<{ project: unknown }>(await fetch(`${baseUrl}/projects/web-apps/publish`, {
       method: 'POST',
@@ -596,7 +608,7 @@ test('workflow web app publication status tracks saved draft changes and republi
       publishedSlug: 'web-app-publication-status',
       status: 'published',
     });
-    assert.equal(await readTreePublicationStatus(), 'published');
+    assert.deepEqual(await readTreePublicationStatus(), { aggregate: 'published', webApp: 'published' });
   });
 });
 

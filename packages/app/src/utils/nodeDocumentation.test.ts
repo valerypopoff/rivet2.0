@@ -70,7 +70,8 @@ test('built-in node documentation URLs point at checked-in Node Reference pages'
   assert.deepEqual(missingSlugs, []);
 });
 
-test('Match uses the Regex Match public documentation route', () => {
+test('Match case and the legacy Regex Match use their dedicated public documentation routes', () => {
+  assert.equal(getBuiltInNodeDocumentationUrl('matchCase'), `${NODE_REFERENCE_BASE_URL}/match-case`);
   assert.equal(getBuiltInNodeDocumentationUrl('match'), `${NODE_REFERENCE_BASE_URL}/regex-match`);
 });
 

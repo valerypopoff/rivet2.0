@@ -115,6 +115,11 @@ export type WorkflowPublishedWebAppSummary = {
   slug: string;
   publishedAt: string;
   allowedEmails: string[];
+  /**
+   * Freshness of this specific publication. Optional for compatibility with
+   * older Studio Server tree responses.
+   */
+  status?: WorkflowProjectStatus;
 };
 
 export type WorkflowProjectWebAppSummary = {

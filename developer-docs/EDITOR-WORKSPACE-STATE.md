@@ -86,7 +86,7 @@ long app name stays inside the left panel while its full accessible button name 
 preserved. The resource section keeps the same breathing room before the Graphs
 section as the project header uses before Web Apps. When a project has no web apps,
 the empty Web Apps section and its `New web app` row stay hidden; `GraphListHeader`
-instead exposes `Create web app` after `Filter graphs`. It calls the same
+instead exposes `Create web app` after `Node library`. It calls the same
 `useUiGraphOperations.createUiGraph()` path, so the new app is opened and the normal
 Web Apps resource section appears immediately on the resulting project update.
 

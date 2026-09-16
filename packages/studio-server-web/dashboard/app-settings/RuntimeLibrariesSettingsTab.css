@@ -1,48 +1,9 @@
-.runtime-libraries-shell {
-  min-height: 0;
-}
-
-.runtime-libraries-header-row {
-  position: relative;
-  padding: 16px 56px 0 18px;
-}
-
-.runtime-libraries-heading {
-  width: 100%;
-}
-
-.runtime-libraries-title-group {
+.app-settings-runtime-libraries-panel {
   display: flex;
   flex-direction: column;
-  gap: 10px;
-}
-
-.runtime-libraries-title {
-  font-size: 20px;
-  font-weight: 600;
-  color: var(--grey-lightest);
-  line-height: 1.2;
-}
-
-.runtime-libraries-status-row {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 8px;
-}
-
-.runtime-libraries-count-badge,
-.runtime-libraries-job-badge {
-  text-transform: none;
-}
-
-.runtime-libraries-job-badge.running {
-  background: rgba(74, 158, 255, 0.18);
-  color: #8fc2ff;
-}
-
-.runtime-libraries-content {
-  min-height: 0;
+  gap: 14px;
+  width: 100%;
+  max-width: none;
 }
 
 .runtime-libraries-section {
@@ -53,13 +14,6 @@
   height: 1px;
   width: 100%;
   background: rgba(255, 255, 255, 0.08);
-}
-
-.runtime-libraries-section-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
 }
 
 .runtime-libraries-empty-state {
@@ -97,12 +51,6 @@
   color: var(--grey-lightest);
 }
 
-.runtime-libraries-package-version {
-  font-size: 12px;
-  font-weight: 500;
-  color: var(--grey-light);
-}
-
 .runtime-libraries-remove-button {
   min-height: var(--workflow-button-height-s);
   font-size: var(--workflow-button-font-size-s) !important;
@@ -119,11 +67,6 @@
 .runtime-libraries-form-action {
   display: flex;
   align-items: center;
-}
-
-.runtime-libraries-field-label {
-  font-size: 12px;
-  font-weight: 500;
 }
 
 .runtime-libraries-status {
@@ -214,18 +157,10 @@
   white-space: nowrap;
 }
 
-.runtime-libraries-actions {
-  align-items: flex-end;
-}
-
 .runtime-libraries-help {
   color: var(--grey-light);
   font-size: 15px;
   max-width: 420px;
-}
-
-.runtime-libraries-header-help {
-  margin-top: 2px;
 }
 
 .runtime-libraries-install-button {
@@ -250,11 +185,6 @@
 
   .runtime-libraries-install-button {
     width: 100%;
-  }
-
-  .runtime-libraries-actions {
-    flex-direction: column;
-    align-items: stretch;
   }
 
   .runtime-libraries-help {
