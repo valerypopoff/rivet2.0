@@ -853,7 +853,7 @@ For workflow-library project creation behavior:
 
 1. `yarn studio-server:dev`
 2. validate the browser flow through `http://localhost:8080` by default, or your configured `RIVET_PORT`
-3. right-click a folder in the left panel and run `Create project`
+3. right-click a folder in the left panel and run `New project`
 4. enter a new project name when prompted
 5. confirm the folder expands and the new project opens in the editor
 6. confirm there is no inline `+` create-project button on folder rows anymore

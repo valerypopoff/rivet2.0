@@ -118,6 +118,7 @@ import {
   parseFiniteStyleNumber,
 } from './nodeCanvas/nodeCanvasResizeModel.js';
 import { DataBusRail } from './nodeCanvas/DataBusRail.js';
+import { getNodeCanvasShortcutPolicy } from './nodeCanvas/nodeCanvasShortcutPolicy.js';
 import {
   createDataBusTopology,
   EMPTY_DATA_BUS_TOPOLOGY,
@@ -234,6 +235,10 @@ export const NodeCanvas: FC<NodeCanvasProps> = ({
   const referencedProjects = useAtomValue(referencedProjectsState);
   const selectedGraphComparison = useAtomValue(selectedGraphProjectComparisonState);
   const comparisonInspectorOpen = useAtomValue(viewingProjectComparisonNodeState) != null;
+  const shortcutPolicy = getNodeCanvasShortcutPolicy({
+    comparisonInspectorOpen,
+    graphCommandsDisabled: disableGraphCommands,
+  });
   const executorSession = useExecutorSessionState();
   const canStartEditorGraphRun =
     canRunGraphFromEditor({
@@ -865,7 +870,7 @@ export const NodeCanvas: FC<NodeCanvasProps> = ({
   useGlobalHotkey(
     'Space',
     (e) => {
-      if (comparisonInspectorOpen) return;
+      if (!shortcutPolicy.canvasCommandsEnabled) return;
       e.preventDefault();
       const target = lastMouseInfoRef.current.target;
       if (!target || isDataBusRailTarget(target)) {
@@ -883,7 +888,7 @@ export const NodeCanvas: FC<NodeCanvasProps> = ({
   );
 
   const deleteSelectedNodesFromHotkey = useStableCallback((event: KeyboardEvent) => {
-    if (comparisonInspectorOpen) return;
+    if (!shortcutPolicy.canvasCommandsEnabled) return;
     event.preventDefault();
     if (selectedNodeIds.length === 0) {
       return;
@@ -983,7 +988,10 @@ export const NodeCanvas: FC<NodeCanvasProps> = ({
     ],
   );
 
-  useCanvasHotkeys({ enabled: !comparisonInspectorOpen, graphCommandsEnabled: !disableGraphCommands });
+  useCanvasHotkeys({
+    enabled: shortcutPolicy.canvasCommandsEnabled,
+    graphCommandsEnabled: shortcutPolicy.graphCommandsEnabled,
+  });
   useSearchGraph(!disableGraphCommands);
 
   const isZoomedOut = canvasPosition.zoom < 0.4;
@@ -1118,7 +1126,7 @@ export const NodeCanvas: FC<NodeCanvasProps> = ({
           pattern={normalizedCanvasBackgroundPattern}
         />
         <MouseIcon isDraggingNode={isDraggingCanvasItem} />
-        {!disableGraphCommands && !comparisonInspectorOpen && <CopyNodesHotkeys />}
+        {shortcutPolicy.clipboardCommandsEnabled && <CopyNodesHotkeys />}
         <DebugOverlay enabled={false} />
         <NodeCanvasViewport
           viewportBounds={viewportBounds}

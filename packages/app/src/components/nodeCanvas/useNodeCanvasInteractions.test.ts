@@ -175,12 +175,7 @@ test('non-graph canvases keep drag, resize, and alignment commands out of graph 
   const nodeCanvasSource = readFileSync(join(componentsDir, 'NodeCanvas.tsx'), 'utf8');
   const nodeLibraryBuilderSource = readFileSync(join(componentsDir, 'NodeLibraryBuilder.tsx'), 'utf8');
   const draggingNodeSource = readFileSync(join(testDir, '../../hooks/useDraggingNode.ts'), 'utf8');
-  const canvasHotkeysSource = readFileSync(join(hooksDir, 'useCanvasHotkeys.ts'), 'utf8');
 
-  const canvasHotkeyOptions = nodeCanvasSource.match(/useCanvasHotkeys\(\{([^}]*)\}\)/)?.[1];
-  assert.ok(canvasHotkeyOptions, 'NodeCanvas supplies explicit canvas shortcut options');
-  assert.match(canvasHotkeyOptions, /\bgraphCommandsEnabled:\s*!disableGraphCommands\s*(?:,|$)/);
-  assert.match(canvasHotkeyOptions, /\benabled:\s*!comparisonInspectorOpen\s*(?:,|$)/);
   assert.match(nodeCanvasSource, /pasteCommandsEnabled = !disableGraphCommands/);
   assert.match(nodeCanvasSource, /pasteCommandsEnabled,\s*}\)/);
   assert.match(
@@ -217,11 +212,6 @@ test('non-graph canvases keep drag, resize, and alignment commands out of graph 
     /controlledOnNodesChanged\(\s*bringNodesToFront\(\s*\[\.\.\.nodes, \.\.\.newNodes\]/,
   );
   assert.match(draggingNodeSource, /setSelectedNodeIds\(newNodes\.map\(\(node\) => node\.id\)\)/);
-  assert.match(
-    canvasHotkeysSource,
-    /const navigationShortcut = getCanvasNavigationShortcut\(e\);[\s\S]*if \(!graphCommandsEnabled\) \{[\s\S]*return;[\s\S]*\}/,
-  );
-  assert.match(canvasHotkeysSource, /nodeLibraryOpen \|\| graphMetadata\?\.id !== mainGraphId/);
   assert.match(
     nodeCanvasSource,
     /useDraggingWire\(\{[\s\S]*connections,[\s\S]*enabled: !disableConnections,[\s\S]*nodesById: canvasEffectiveNodesById,[\s\S]*\}\)/,

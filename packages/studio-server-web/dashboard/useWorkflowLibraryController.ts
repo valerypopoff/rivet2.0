@@ -495,6 +495,23 @@ export function useWorkflowLibraryController(options: {
     uploadingFolderPath,
   ]);
 
+  const handleCreateFolderFromContextMenu = useCallback(async () => {
+    const targetFolder = folderContextMenuState?.folder;
+    if (!targetFolder || duplicatingProjectPath || downloadingProjectPath || uploadingFolderPath) {
+      return;
+    }
+
+    closeFolderContextMenu();
+    await handleCreateFolder(targetFolder);
+  }, [
+    closeFolderContextMenu,
+    downloadingProjectPath,
+    duplicatingProjectPath,
+    folderContextMenuState,
+    handleCreateFolder,
+    uploadingFolderPath,
+  ]);
+
   const handleRenameFolderFromContextMenu = useCallback(async () => {
     const targetFolder = folderContextMenuState?.folder;
     if (!targetFolder || duplicatingProjectPath || downloadingProjectPath || uploadingFolderPath) {
@@ -710,6 +727,7 @@ export function useWorkflowLibraryController(options: {
     handleRootDrop,
     handlePanelBodyClick,
     handleUploadProjectFromFolder,
+    handleCreateFolderFromContextMenu,
     handleCreateProjectFromContextMenu,
     handleRenameFolderFromContextMenu,
     handleSubmitFolderRename,

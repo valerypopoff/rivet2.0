@@ -22,6 +22,7 @@ type WorkflowFolderContextMenuProps = {
   onClose: () => void;
   canDelete: boolean;
   onRename: () => void;
+  onCreateFolder: () => void;
   onCreateProject: () => void;
   onUploadProject: () => void;
   onDelete: () => void;
@@ -52,6 +53,7 @@ export const WorkflowFolderContextMenu: FC<WorkflowFolderContextMenuProps> = ({
   onClose,
   canDelete,
   onRename,
+  onCreateFolder,
   onCreateProject,
   onUploadProject,
   onDelete,
@@ -65,10 +67,7 @@ export const WorkflowFolderContextMenu: FC<WorkflowFolderContextMenuProps> = ({
     },
     placement: 'bottom-start',
     strategy: 'fixed',
-    middleware: [
-      offset(6),
-      shift({ padding: 8 }),
-    ],
+    middleware: [offset(6), shift({ padding: 8 })],
   });
 
   const dismiss = useDismiss(context);
@@ -96,30 +95,19 @@ export const WorkflowFolderContextMenu: FC<WorkflowFolderContextMenuProps> = ({
       aria-label={`Actions for ${folder.name}`}
       {...getFloatingProps()}
     >
-      <button
-        type="button"
-        className="workflow-project-context-menu-item"
-        role="menuitem"
-        onClick={onRename}
-      >
+      <button type="button" className="workflow-project-context-menu-item" role="menuitem" onClick={onRename}>
         <span>Rename folder</span>
       </button>
-      <div className="workflow-project-context-menu-separator" role="separator" aria-hidden="true" />
-      <button
-        type="button"
-        className="workflow-project-context-menu-item"
-        role="menuitem"
-        onClick={onCreateProject}
-      >
+      <button type="button" className="workflow-project-context-menu-item" role="menuitem" onClick={onCreateFolder}>
         <PlusIcon className="workflow-project-context-menu-item-icon" aria-hidden="true" />
-        <span>Create project</span>
+        <span>New folder</span>
       </button>
-      <button
-        type="button"
-        className="workflow-project-context-menu-item"
-        role="menuitem"
-        onClick={onUploadProject}
-      >
+      <div className="workflow-project-context-menu-separator" role="separator" aria-hidden="true" />
+      <button type="button" className="workflow-project-context-menu-item" role="menuitem" onClick={onCreateProject}>
+        <PlusIcon className="workflow-project-context-menu-item-icon" aria-hidden="true" />
+        <span>New project</span>
+      </button>
+      <button type="button" className="workflow-project-context-menu-item" role="menuitem" onClick={onUploadProject}>
         <ArrowUpIcon className="workflow-project-context-menu-item-icon" aria-hidden="true" />
         <span>Upload project</span>
       </button>

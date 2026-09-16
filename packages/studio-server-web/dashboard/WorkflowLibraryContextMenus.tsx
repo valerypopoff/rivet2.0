@@ -15,6 +15,7 @@ export const WorkflowLibraryContextMenus: FC<{
     closeFolderContextMenu,
     closeProjectContextMenu,
     handleRenameFolderFromContextMenu,
+    handleCreateFolderFromContextMenu,
     handleCreateProjectFromContextMenu,
     handleUploadProjectFromFolder,
     handleDeleteFolderFromContextMenu,
@@ -41,6 +42,7 @@ export const WorkflowLibraryContextMenus: FC<{
           onClose={closeFolderContextMenu}
           canDelete={isFolderEmpty(folderContextMenuState.folder)}
           onRename={() => void handleRenameFolderFromContextMenu()}
+          onCreateFolder={() => void handleCreateFolderFromContextMenu()}
           onCreateProject={() => void handleCreateProjectFromContextMenu()}
           onUploadProject={() => void handleUploadProjectFromFolder()}
           onDelete={() => void handleDeleteFolderFromContextMenu()}

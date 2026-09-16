@@ -307,7 +307,7 @@ Single-clicking a project row opens that project in the editor as a preview tab,
 
 The shared editor renders deleted comparison nodes from that reference snapshot, with passive body previews, reference ports and an **Inspect deleted node** action (also double-click). The inspector exposes complete saved settings, including unavailable plugin nodes and reference library definitions, without modifying either project. Replacing/exiting a comparison or switching projects invalidates inspection. Reference rendering and measurement ownership are documented in [App architecture](../APP-ARCHITECTURE.md); hosted acceptance coverage is `project-compare-mode.spec.ts`.
 
-The folder-row context menu exposes `Rename folder`, `Create project`, `Upload project`, and `Delete folder`.
+The folder-row context menu exposes `Rename folder`, `New folder`, `New project`, `Upload project`, and `Delete folder`.
 
 - `Rename folder` edits the folder name inline in the tree; `Enter` closes the edit field and shows a preloader on the folder name while the API saves, while `Esc` or focus leaving the edit field cancels without calling the API
 - `Delete folder` is enabled only for empty folders in the dashboard, and the API still rejects non-empty folder deletion if called directly
@@ -330,6 +330,7 @@ Workflow folders are managed through:
 Current folder behavior:
 
 - the workflow library's `+ New folder` action creates new folders at the root level
+- a folder row's `New folder` context-menu action creates a child folder by sending the selected folder's relative path as `parentRelativePath`, then expands the parent and new child
 - `Rename folder` shows the shared inline edit field on the selected folder row, hides that field immediately when the user presses `Enter`, shows a preloader on the folder name while the backend rename is pending, returns `movedProjectPaths`, and lets the dashboard retarget open editor tabs without closing them
 - pressing `Esc` or clicking away from the inline folder edit field cancels without calling the rename API
 - a folder keeps its previous expanded or collapsed state after rename, even when the active project path inside that folder is retargeted
@@ -347,7 +348,7 @@ Projects can now also be created inside workflow folders from the folder-row con
 
 Current creation behavior:
 
-- folder-level project creation currently exists only in the folder-row context menu's `Create project` action
+- folder-level project creation currently exists only in the folder-row context menu's `New project` action
 - the dashboard prompts for a new project name and posts that name plus the target folder path to the API
 - the server writes a new blank `.rivet-project` file in the selected folder and returns it as a normal unpublished workflow project
 - after successful creation, the dashboard expands the folder, refreshes the tree, and opens the new project in the editor

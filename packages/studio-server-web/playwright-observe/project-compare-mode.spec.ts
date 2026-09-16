@@ -332,6 +332,7 @@ test.describe('Project compare mode', () => {
       ).toHaveCount(0);
       await editor.locator('.node[data-nodeid="added"] .node-title').dispatchEvent('click', { shiftKey: true });
       await expect(editor.locator('.node[data-nodeid="added"]')).toHaveClass(/selected/);
+      await page.keyboard.press('Control+c');
       await deleted('text').getByRole('button', { name: 'Inspect deleted node' }).focus();
       await page.keyboard.press('Delete');
       await expect(editor.locator('.node[data-nodeid="added"]')).toHaveCount(1);
@@ -341,8 +342,18 @@ test.describe('Project compare mode', () => {
       await editor.locator('[role="dialog"] pre').focus();
       await page.keyboard.press('Delete');
       await page.keyboard.press('Control+x');
+      await page.keyboard.press('Control+d');
+      await page.keyboard.press('Control+v');
+      await page.keyboard.press('Control+a');
+      await page.keyboard.press('Control+z');
+      await page.keyboard.press('Control+y');
       await expect(editor.locator('.node[data-nodeid="added"]')).toHaveCount(1);
+      await expect(editor.locator('.node[data-nodeid]')).toHaveCount(3);
+      await expect(editor.locator('.node.selected[data-nodeid="added"]')).toHaveCount(1);
       await editor.getByRole('button', { name: 'Done', exact: true }).click();
+      await editor.locator('.node[data-nodeid="added"] .node-title').focus();
+      await page.keyboard.press('Control+d');
+      await expect(editor.locator('.node[data-nodeid]')).toHaveCount(4);
       await deleted('library').dblclick();
       await expect(editor.getByText('Saved node configuration', { exact: true })).toBeVisible();
       await expect(editor.locator('[role="dialog"]')).toContainText('nodePrefabInstance');
