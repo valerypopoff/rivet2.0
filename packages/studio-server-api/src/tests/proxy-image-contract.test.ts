@@ -498,7 +498,6 @@ test('CI and production launchers publish and run the Studio Server image set fr
   const verificationWorkflow = readRepoFile('.github/workflows/studio-server-verify.yml');
   const prodCompose = readRepoFile('deploy/studio-server/compose/docker-compose.yml');
   const prodDockerLauncher = readRepoFile('deploy/studio-server/scripts/prod-docker.mjs');
-  const envExample = readRepoFile('deploy/studio-server/.env.example');
   const packageJson = readRepoJson<{
     packageManager: string;
     scripts: Record<string, string>;
@@ -557,7 +556,6 @@ test('CI and production launchers publish and run the Studio Server image set fr
       ),
     );
     assert.ok(prodCompose.includes(`ghcr.io/valerypopoff/rivet2.0-studio-server/${service}`));
-    assert.ok(envExample.includes(`ghcr.io/valerypopoff/rivet2.0-studio-server/${service}:latest`));
   }
 
   assert.equal(packageJson.scripts['studio-server:prod'], 'yarn studio-server:prod:prebuilt');

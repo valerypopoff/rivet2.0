@@ -1,9 +1,13 @@
-import { lazy, Suspense, type FC } from 'react';
+import { lazy, Suspense, useEffect, type FC } from 'react';
 import Button from '@atlaskit/button';
 import Modal, { ModalBody, ModalFooter, ModalTransition } from '@atlaskit/modal-dialog';
 import { css } from '@emotion/react';
 import { useAtomValue, useSetAtom } from 'jotai';
-import { getProjectNodeFieldComparisons, type ProjectNodeFieldComparison } from '@valerypopoff/rivet2-core';
+import {
+  getProjectNodeFieldComparisons,
+  getNodePrefabInstancePrefabId,
+  type ProjectNodeFieldComparison,
+} from '@valerypopoff/rivet2-core';
 import * as yaml from 'yaml';
 import {
   activeProjectComparisonState,
@@ -76,11 +80,14 @@ const styles = css`
     font-size: var(--ui-font-size-sm);
     min-height: 56px;
   }
-
 `;
 
 export const ProjectComparisonNodeChangesModalRenderer: FC = () => {
   const viewingNode = useAtomValue(viewingProjectComparisonNodeState);
+  const setViewingNode = useSetAtom(viewingProjectComparisonNodeState);
+  useEffect(() => {
+    if (!viewingNode) setViewingNode(undefined);
+  }, [viewingNode, setViewingNode]);
 
   return <ModalTransition>{viewingNode == null ? null : <ProjectComparisonNodeChangesModal />}</ModalTransition>;
 };
@@ -97,15 +104,58 @@ export const ProjectComparisonNodeChangesModal: FC = () => {
   }
 
   const nodeComparison = activeComparison.comparison.graphs[viewingNode.graphId]?.nodes[viewingNode.nodeId];
-  if (!nodeComparison || nodeComparison.kind !== 'changed') {
+  if (!nodeComparison || (nodeComparison.kind !== 'changed' && nodeComparison.kind !== 'removed')) {
     return null;
   }
 
-  const fieldComparisons = getProjectNodeFieldComparisons(nodeComparison);
   const beforeTitle = nodeComparison.before?.title ?? nodeComparison.before?.type ?? viewingNode.nodeId;
   const afterTitle = nodeComparison.after?.title ?? nodeComparison.after?.type ?? viewingNode.nodeId;
   const labels = resolveProjectCompareSideLabels(activeComparison.labels);
 
+  if (nodeComparison.kind === 'removed' && nodeComparison.before) {
+    const original = nodeComparison.before;
+    const prefabId = getNodePrefabInstancePrefabId(original);
+    const source = prefabId ? activeComparison.referenceProject.nodePrefabs?.[prefabId]?.sourceNode : undefined;
+    return (
+      <Modal width={PROJECT_COMPARE_NODE_CHANGES_MODAL_WIDTH} autoFocus={false} onClose={close}>
+        <AppModalHeader title="Deleted node details" onClose={close} />
+        <ModalBody>
+          <div css={styles}>
+            <div className="project-compare-node-meta">
+              {labels.referenceLabel}: <strong>{String(beforeTitle)}</strong> ({original.id})
+            </div>
+            <section>
+              <h3>Saved node configuration</h3>
+              <pre
+                tabIndex={0}
+                style={{ whiteSpace: 'pre-wrap', overflow: 'auto', maxHeight: '55vh', userSelect: 'text' }}
+              >
+                {yaml.stringify(original)}
+              </pre>
+            </section>
+            {source && (
+              <section>
+                <h3>Reference library source configuration ({prefabId})</h3>
+                <pre
+                  tabIndex={0}
+                  style={{ whiteSpace: 'pre-wrap', overflow: 'auto', maxHeight: '55vh', userSelect: 'text' }}
+                >
+                  {yaml.stringify(source)}
+                </pre>
+              </section>
+            )}
+          </div>
+        </ModalBody>
+        <ModalFooter>
+          <Button appearance="primary" onClick={close}>
+            Done
+          </Button>
+        </ModalFooter>
+      </Modal>
+    );
+  }
+
+  const fieldComparisons = getProjectNodeFieldComparisons(nodeComparison);
   return (
     <Modal width={PROJECT_COMPARE_NODE_CHANGES_MODAL_WIDTH} autoFocus={false} onClose={close}>
       <AppModalHeader title="Node config changes" onClose={close} />

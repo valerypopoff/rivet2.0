@@ -102,7 +102,7 @@ import { subGraphPortRearrangeTargetState, uiFontSizeState, variadicPortRearrang
 import { getMinimumNodeWidthForPortLabels } from '../utils/nodePortLabelWidth.js';
 import { getUiFontScale } from '../utils/uiFontSize.js';
 import { blurFocusedGraphFilterInput } from './graphList/graphFilterFocus.js';
-import { selectedGraphProjectComparisonState } from '../state/projectComparison.js';
+import { selectedGraphProjectComparisonState, viewingProjectComparisonNodeState } from '../state/projectComparison.js';
 import {
   EMPTY_CANVAS_PROJECT_COMPARISON_RENDER_STATE,
   getCanvasProjectComparisonRenderState,
@@ -233,6 +233,7 @@ export const NodeCanvas: FC<NodeCanvasProps> = ({
   const loadedRecording = useAtomValue(currentProjectLoadedRecordingState);
   const referencedProjects = useAtomValue(referencedProjectsState);
   const selectedGraphComparison = useAtomValue(selectedGraphProjectComparisonState);
+  const comparisonInspectorOpen = useAtomValue(viewingProjectComparisonNodeState) != null;
   const executorSession = useExecutorSessionState();
   const canStartEditorGraphRun =
     canRunGraphFromEditor({
@@ -844,6 +845,7 @@ export const NodeCanvas: FC<NodeCanvasProps> = ({
     isDraggingNode,
     isDraggingWire,
     nodes,
+    referenceNodesById: comparisonRenderState.compareReferenceNodesById,
     visibleNodeIdSet,
   });
 
@@ -863,6 +865,7 @@ export const NodeCanvas: FC<NodeCanvasProps> = ({
   useGlobalHotkey(
     'Space',
     (e) => {
+      if (comparisonInspectorOpen) return;
       e.preventDefault();
       const target = lastMouseInfoRef.current.target;
       if (!target || isDataBusRailTarget(target)) {
@@ -880,6 +883,7 @@ export const NodeCanvas: FC<NodeCanvasProps> = ({
   );
 
   const deleteSelectedNodesFromHotkey = useStableCallback((event: KeyboardEvent) => {
+    if (comparisonInspectorOpen) return;
     event.preventDefault();
     if (selectedNodeIds.length === 0) {
       return;
@@ -979,7 +983,7 @@ export const NodeCanvas: FC<NodeCanvasProps> = ({
     ],
   );
 
-  useCanvasHotkeys({ graphCommandsEnabled: !disableGraphCommands });
+  useCanvasHotkeys({ enabled: !comparisonInspectorOpen, graphCommandsEnabled: !disableGraphCommands });
   useSearchGraph(!disableGraphCommands);
 
   const isZoomedOut = canvasPosition.zoom < 0.4;
@@ -1114,9 +1118,10 @@ export const NodeCanvas: FC<NodeCanvasProps> = ({
           pattern={normalizedCanvasBackgroundPattern}
         />
         <MouseIcon isDraggingNode={isDraggingCanvasItem} />
-        {!disableGraphCommands && <CopyNodesHotkeys />}
+        {!disableGraphCommands && !comparisonInspectorOpen && <CopyNodesHotkeys />}
         <DebugOverlay enabled={false} />
         <NodeCanvasViewport
+          viewportBounds={viewportBounds}
           canvasHandlersContextValue={canvasHandlersContextValue}
           canvasPositionX={canvasPosition.x}
           canvasPositionY={canvasPosition.y}
@@ -1136,6 +1141,7 @@ export const NodeCanvas: FC<NodeCanvasProps> = ({
           layer="comments"
           nodeTypes={nodeTypes}
           nodeCompareKindsById={comparisonRenderState.nodeCompareKindsById}
+          compareRemovedConnections={comparisonRenderState.compareRemovedConnections}
           compareRemovedNodes={comparisonRenderState.compareRemovedNodes}
           nodesWithConnections={nodesWithConnections}
           onNodeDragActivatorPointerDown={handleNodeDragActivatorPointerDown}
@@ -1151,7 +1157,7 @@ export const NodeCanvas: FC<NodeCanvasProps> = ({
           <WireLayer
             connections={dragPreviewConnections}
             draggingWire={visibleDraggingWire}
-            compareNodesById={comparisonRenderState.compareNodesById}
+            compareReferenceNodesById={comparisonRenderState.compareReferenceNodesById}
             compareRemovedConnections={comparisonRenderState.compareRemovedConnections}
             connectionCompareKindsByKey={comparisonRenderState.connectionCompareKindsByKey}
             dataBusTopology={dataBusTopology}
@@ -1178,6 +1184,7 @@ export const NodeCanvas: FC<NodeCanvasProps> = ({
           selectedNodeIds={selectedViewportNodeIds}
         />
         <NodeCanvasViewport
+          viewportBounds={viewportBounds}
           canvasHandlersContextValue={canvasHandlersContextValue}
           canvasPositionX={canvasPosition.x}
           canvasPositionY={canvasPosition.y}
@@ -1197,6 +1204,7 @@ export const NodeCanvas: FC<NodeCanvasProps> = ({
           layer="nodes"
           nodeTypes={nodeTypes}
           nodeCompareKindsById={comparisonRenderState.nodeCompareKindsById}
+          compareRemovedConnections={comparisonRenderState.compareRemovedConnections}
           compareRemovedNodes={comparisonRenderState.compareRemovedNodes}
           nodesWithConnections={nodesWithConnections}
           onNodeDragActivatorPointerDown={handleNodeDragActivatorPointerDown}

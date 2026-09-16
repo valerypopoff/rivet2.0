@@ -73,9 +73,7 @@ export const nodeStyles = css`
 
   .node.compare-removed {
     --node-frame-border-color: var(--error);
-    filter: grayscale(0.45);
-    opacity: 0.58;
-    pointer-events: none;
+    cursor: default;
   }
 
   .node.compare-removed .node-title {
@@ -90,6 +88,31 @@ export const nodeStyles = css`
   .node.compare-removed .node-resize-handles,
   .node.compare-removed .title-controls {
     display: none;
+  }
+
+  .comparison-node .node-body {
+    max-height: 300px;
+    overflow: hidden;
+    pointer-events: none;
+  }
+  .comparison-node .port {
+    pointer-events: none;
+  }
+  .comparison-node .comparison-inspect {
+    margin-left: 6px;
+    cursor: pointer;
+    flex-shrink: 0;
+    align-self: flex-start;
+  }
+  .comparison-node .comparison-deleted-label {
+    font-size: 11px;
+    margin-left: auto;
+    padding-left: 8px;
+    white-space: nowrap;
+  }
+  .comparison-node.reference-geometry {
+    visibility: hidden;
+    pointer-events: none;
   }
 
   .node-skeleton {
@@ -1293,7 +1316,6 @@ export const nodeStyles = css`
     border-top-style: dashed;
     border-top-color: var(--node-output-not-ran-border);
   }
-
 
   .node:is(:hover, .hovered, .showHoverControls) .node-output-inner,
   .node:is(:hover, .hovered, .showHoverControls) .node-output-warnings {

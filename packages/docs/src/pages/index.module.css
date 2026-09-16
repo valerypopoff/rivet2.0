@@ -54,14 +54,6 @@
   box-sizing: border-box;
 }
 
-.landingAtmosphereFilters {
-  position: absolute;
-  width: 0;
-  height: 0;
-  overflow: hidden;
-  pointer-events: none;
-}
-
 /* Landing controls and cards use the same rounded-square silhouette as Rivet's editor chrome. */
 .landing
   :is(
@@ -88,73 +80,8 @@
 }
 
 .hero {
-  position: relative;
   padding: clamp(5.5rem, 9vw, 8.5rem) 1.5rem clamp(5.5rem, 9vw, 8.5rem);
   border-bottom: 1px solid var(--landing-line);
-  isolation: isolate;
-}
-
-.heroGlow {
-  position: absolute;
-  z-index: -1;
-  top: 36%;
-  left: 40%;
-  width: 58rem;
-  height: 30rem;
-  filter: url('#landing-cloud-hero');
-  opacity: 0.23;
-  transform: translate(-50%, -50%) rotate(-6deg);
-  pointer-events: none;
-}
-
-.heroGlow::before,
-.heroGlow::after,
-.headingGlow::before,
-.headingGlow::after,
-.closingGlow::before,
-.closingGlow::after {
-  position: absolute;
-  content: '';
-  background: var(--landing-accent);
-}
-
-.heroGlow::before {
-  inset: 3% 22% 17% 2%;
-  clip-path: polygon(
-    3% 44%,
-    11% 20%,
-    28% 7%,
-    47% 15%,
-    63% 5%,
-    83% 18%,
-    97% 39%,
-    89% 61%,
-    96% 82%,
-    72% 94%,
-    52% 80%,
-    34% 94%,
-    12% 78%
-  );
-  transform: rotate(-4deg);
-}
-
-.heroGlow::after {
-  inset: 24% 1% 1% 31%;
-  clip-path: polygon(
-    4% 31%,
-    20% 9%,
-    43% 16%,
-    61% 4%,
-    85% 20%,
-    97% 48%,
-    84% 68%,
-    91% 91%,
-    63% 84%,
-    45% 97%,
-    22% 79%,
-    3% 63%
-  );
-  transform: rotate(11deg);
 }
 
 .heroGrid,
@@ -216,6 +143,7 @@
   color: var(--landing-muted);
   font-size: var(--hero-description-size);
   line-height: 1.75;
+  white-space: pre-line;
 }
 
 .heroActions {
@@ -303,6 +231,21 @@
   height: 1.08em;
   flex: 0 0 auto;
   fill: currentColor;
+}
+
+.desktopPlatformIcons {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.18em;
+  flex: 0 0 auto;
+}
+
+.terminalIcon {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 .heroActions .textAction {
@@ -757,71 +700,14 @@
 
 .sectionHeading,
 .sectionHeadingCentered {
-  position: relative;
   max-width: 720px;
   margin-bottom: clamp(2.7rem, 5vw, 4.5rem);
-  isolation: isolate;
-}
-
-.headingGlow {
-  position: absolute;
-  z-index: -1;
-  top: 48%;
-  left: 34%;
-  width: 46rem;
-  height: 19rem;
-  filter: url('#landing-cloud-heading');
-  opacity: 0.25;
-  transform: translate(-50%, -50%) rotate(-5deg);
-  pointer-events: none;
-}
-
-.headingGlow::before {
-  inset: 3% 20% 14% 2%;
-  clip-path: polygon(
-    2% 38%,
-    15% 12%,
-    38% 4%,
-    57% 18%,
-    79% 7%,
-    97% 34%,
-    87% 58%,
-    95% 82%,
-    70% 94%,
-    48% 81%,
-    28% 97%,
-    7% 73%
-  );
-  transform: rotate(6deg);
-}
-
-.headingGlow::after {
-  inset: 24% 1% 1% 32%;
-  clip-path: polygon(3% 30%, 21% 6%, 44% 17%, 65% 3%, 94% 29%, 85% 55%, 97% 77%, 72% 95%, 49% 82%, 24% 96%, 6% 70%);
-  transform: rotate(-11deg);
 }
 
 .sectionHeadingCentered {
   margin-right: auto;
   margin-left: auto;
   text-align: center;
-}
-
-.sectionHeadingCentered .headingGlow {
-  left: 50%;
-  transform: translate(-50%, -50%) rotate(5deg);
-}
-
-.lifecycleSection .headingGlow {
-  transform: translate(-50%, -50%) rotate(8deg) scaleX(0.92);
-}
-
-.wrapperSection .headingGlow {
-  transform: translate(-50%, -50%) rotate(-9deg) scaleX(1.05);
-}
-
-.boundarySection .headingGlow {
-  transform: translate(-50%, -50%) rotate(4deg) scaleX(0.96);
 }
 
 .sectionHeading .eyebrow,
@@ -1026,57 +912,14 @@
 }
 
 .closingSection {
-  position: relative;
   padding: clamp(6.5rem, 11vw, 10rem) 1.5rem;
-  overflow: hidden;
   background: var(--landing-bg);
-  isolation: isolate;
-}
-
-.closingGlow {
-  position: absolute;
-  z-index: -1;
-  top: 50%;
-  left: 50%;
-  width: 46rem;
-  height: 23rem;
-  filter: url('#landing-cloud-closing');
-  opacity: 0.22;
-  transform: translate(-50%, -50%) rotate(7deg);
-  pointer-events: none;
-}
-
-.closingGlow::before {
-  inset: 2% 28% 14% 1%;
-  clip-path: polygon(
-    2% 39%,
-    14% 16%,
-    38% 5%,
-    55% 17%,
-    77% 7%,
-    96% 31%,
-    88% 55%,
-    98% 77%,
-    74% 92%,
-    49% 82%,
-    31% 97%,
-    9% 75%
-  );
-  transform: rotate(8deg);
-}
-
-.closingGlow::after {
-  inset: 20% 1% 2% 34%;
-  clip-path: polygon(3% 28%, 23% 5%, 47% 15%, 66% 4%, 94% 27%, 86% 54%, 98% 75%, 74% 94%, 51% 82%, 27% 97%, 8% 72%);
-  transform: rotate(-13deg);
 }
 
 .closingContent {
-  position: relative;
   width: min(800px, 100%);
   margin: 0 auto;
   text-align: center;
-  isolation: isolate;
 }
 
 .closingContent .eyebrow {

@@ -1965,7 +1965,16 @@ That terminal checkpoint is always recorded and bridged through the Browser,
 Node, and Remote Debugger serialized event contracts. The app shows those
 outputs alongside the error, and Run Activity records their port metadata so
 its full-output affordance remains available without retaining the values in
-the journal. For LLM Chat, the checkpoint includes request messages plus a
+the journal. `Http Call` uses the same checkpoint for an uncaught non-`2XX`
+response: its response `Status Code` and `Headers` remain inspectable beside
+the terminal error. Without retry, each is the final response value; with
+retry, both retain one item for every HTTP response in response order. It does
+not read or publish the response body as graph data.
+Browser execution can only display response headers exposed to browser code;
+cross-origin APIs must use `Access-Control-Expose-Headers` for custom fields
+such as `Retry-After`. Node and Studio Server execution do not have that
+browser visibility restriction.
+For LLM Chat, the checkpoint includes request messages plus a
 complete streamed or generated response observed before later metadata,
 non-200-status, or JSON-schema finalization failures. At the normal
 completed-call boundary it is refreshed after opt-in response-body capture

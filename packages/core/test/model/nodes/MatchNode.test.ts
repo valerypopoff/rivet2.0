@@ -60,8 +60,8 @@ describe('MatchNode', () => {
       valueInputMode: 'per-output',
     });
 
-    assert.equal(allMatches.getBody(), 'Trigger all matching cases');
-    assert.equal(firstMatch.getBody(), 'Trigger the first matching case only');
+    assert.equal(allMatches.getBody(), 'Trigger: All matching cases');
+    assert.equal(firstMatch.getBody(), 'Trigger: First matching case only');
 
     const routingModeEditor = allMatches
       .getEditors()

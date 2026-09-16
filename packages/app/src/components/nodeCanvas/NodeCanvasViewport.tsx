@@ -12,6 +12,7 @@ import { useAtomValue } from 'jotai';
 import { CanvasHandlersContext, CanvasViewContext } from '../CanvasContext.js';
 import { DraggableNode } from '../DraggableNode.js';
 import { VisualNode } from '../VisualNode.js';
+import { ComparisonNodeLayer } from './ComparisonNode.js';
 import { countCanvasPerf } from './canvasPerfDebug.js';
 import {
   constrainDragDeltaToAxisLock,
@@ -31,6 +32,7 @@ type NodeTypes = ReturnType<typeof useNodeTypes>;
 export type NodeCanvasLayer = 'comments' | 'nodes';
 
 export interface NodeCanvasViewportProps {
+  viewportBounds: { left: number; right: number; top: number; bottom: number };
   canvasHandlersContextValue: CanvasHandlersValue;
   canvasPositionX: number;
   canvasPositionY: number;
@@ -50,6 +52,7 @@ export interface NodeCanvasViewportProps {
   layer: NodeCanvasLayer;
   nodeTypes: NodeTypes;
   nodeCompareKindsById: Record<NodeId, ProjectComparisonChangeKind | undefined>;
+  compareRemovedConnections: NodeConnection[];
   compareRemovedNodes: ChartNode[];
   nodesWithConnections: Array<{ node: ChartNode; nodeConnections: NodeConnection[] }>;
   onNodeDragActivatorPointerDown: (modifierState: DragActivatorModifierState) => void;
@@ -98,7 +101,9 @@ const NodeCanvasScene: FC<Omit<NodeCanvasViewportProps, 'canvasPositionX' | 'can
     layer,
     nodeTypes,
     nodeCompareKindsById,
+    compareRemovedConnections,
     compareRemovedNodes,
+    viewportBounds,
     nodesWithConnections,
     onNodeDragActivatorPointerDown,
     expandedOutputNodeIds,
@@ -147,19 +152,12 @@ const NodeCanvasScene: FC<Omit<NodeCanvasViewportProps, 'canvasPositionX' | 'can
       <CanvasViewContext.Provider value={canvasViewContextValue}>
         <CanvasHandlersContext.Provider value={canvasHandlersContextValue}>
           <div className="nodes">
-            {compareRemovedNodes
-              .filter((node) => (layer === 'comments' ? node.type === 'comment' : node.type !== 'comment'))
-              .map((node) => (
-                <VisualNode
-                  key={`compare-removed-${node.id}`}
-                  node={node}
-                  compareChangeKind="removed"
-                  isKnownNodeType={isKnownNodeType(node)}
-                  isOutputExpanded={false}
-                  processPage={0}
-                  renderHeavyContent={false}
-                />
-              ))}
+            <ComparisonNodeLayer
+              referenceConnections={compareRemovedConnections}
+              removedNodes={compareRemovedNodes}
+              layer={layer}
+              viewportBounds={viewportBounds}
+            />
             {backgroundCommentDragEntries.map(({ node, index }) => {
               const { isOutputExpanded, lastRun, processPage, executionSourceNodeId } =
                 resolveDraggingExecutionContext({

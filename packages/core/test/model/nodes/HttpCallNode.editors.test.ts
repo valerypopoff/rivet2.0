@@ -71,6 +71,24 @@ void test('includes retry-on-non-200 editors and hides retry details until enabl
   assert.equal(cooldownEditor?.layout, 'inline');
   assert.equal(cooldownEditor?.helperMessage, 'Milliseconds to wait between repeats');
 });
+void test('explains that fail-on-non-2XX checks only the final response when retry is enabled', () => {
+  const node = new HttpCallNodeImpl(HttpCallNodeImpl.create());
+  const failOnNon2xxEditor = node.getEditors().find(
+    (editor) => editor.type === 'toggle' && editor.dataKey === 'errorOnNon200',
+  );
+  const helperMessage = failOnNon2xxEditor?.helperMessage;
+
+  assert.equal(typeof helperMessage, 'function');
+  if (typeof helperMessage !== 'function') {
+    throw new Error('Fail on non-2XX status code must provide a conditional helper message.');
+  }
+
+  assert.equal(helperMessage({ ...node.data, retryOnNon200: false }), undefined);
+  assert.equal(
+    helperMessage({ ...node.data, retryOnNon200: true }),
+    'With Retry on non-200 enabled, only the final response after all retries is checked.',
+  );
+});
 void test('exposes request failure and retry-attempt outputs only for their enabled modes', () => {
   const withoutCatch = createNode({});
   const withCatch = createNode({ catchRequestFailed: true });

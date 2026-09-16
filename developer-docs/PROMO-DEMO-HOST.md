@@ -82,15 +82,22 @@ and border changes only. They must not translate or deepen their shadow on
 hover, and the page deliberately does not append external-link arrow glyphs to
 action labels.
 
+The hero desktop download action shows Windows and macOS glyphs together,
+independent of the visitor's browser platform. The Rivet Studio Server deploy
+action uses a terminal glyph. These inline SVGs share the action icon sizing;
+the platform pair stays grouped when buttons wrap at narrow widths.
+The Apple SVG uses a tighter view box to match the Windows glyph's visible height
+and vertical alignment; equal SVG element sizes alone do not align their artwork.
+The Studio Server hero action points to the concise `docs/studio-server.mdx`
+deployment page. It summarizes the prerequisites and the published-image
+Docker Compose path from `deploy/studio-server/README.md`; update both when the
+launcher or environment contract changes.
+
 The landing atmosphere is owned by `pages/index.module.css` and intentionally
-has no repeating background grid. Every large heading owns its nearby blue
-cloud: the hero and closing copy contain their dedicated glow, while reusable
-`SectionHeading` instances contain `headingGlow`. The glows start as layered
-polygonal patches and use the hidden SVG filters in `pages/index.tsx` for
-seeded fractal displacement, continuously varying opacity, and soft edges. Do
-not replace them with radial or elliptical gradients, which read as regular
-mathematical blobs. Keep the filters deterministic and noninteractive so the
-decoration never shifts between renders or participates in page input.
+has no repeating background grid or color clouds behind headings. Hero,
+section, and closing headings use flat surfaces; their copy, spacing, and
+accent-colored controls retain the visual hierarchy without decorative SVG
+filters or polygonal blobs.
 
 Landing color variables deliberately use near-white and near-black surfaces
 with lightly tinted text rather than low-contrast gray-on-gray combinations.

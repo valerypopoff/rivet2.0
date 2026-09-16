@@ -1,0 +1,33 @@
+---
+id: studio-server
+title: Deploy Rivet Studio Server
+sidebar_label: Deploy Studio Server
+---
+
+# Deploy Rivet Studio Server
+
+Rivet Studio Server runs the editor in your browser and lets you manage projects, publish workflow endpoints, and review run recordings on your own host.
+
+## Before you start
+
+Use a host with Git, Node.js 24 or newer, Corepack (for the Yarn version pinned by the repository), Docker, and the Docker Compose plugin. Docker must be running and accessible to the account that starts the server. The host needs space for the container images and a writable folder for workflows, recordings, and runtime libraries; it also needs access to pull the published images from GHCR. Make port 8080 available, or choose another port in `.env`.
+
+## Start with Docker Compose
+
+From a checkout of the [Rivet 2 repository](https://github.com/valerypopoff/rivet2.0), run:
+
+```bash
+corepack enable
+yarn install --immutable
+cp deploy/studio-server/.env.example .env
+```
+
+Edit `.env` before starting. Set `RIVET_ARTIFACTS_HOST_PATH` to a writable host folder that you will keep between upgrades. Set `RIVET_PORT` if port 8080 is unavailable. Configure the UI authentication mode and `RIVET_KEY` for access to the server; do not expose an unprotected editor to the public internet. The example intentionally contains only these starting settings. Internal service ports and image names are supplied by Docker Compose; storage and endpoint policies are configured in the editor's App Settings.
+
+```bash
+yarn studio-server:prod
+```
+
+The command pulls the published Studio Server images, starts the Compose stack, and waits for it to become healthy. Open `http://localhost:8080` on the host (or use your chosen port). If you make the server available over the internet, put it behind HTTPS and configure access controls before inviting users.
+
+For existing installations, keep the same `.env`, artifact folder, and Docker volumes when updating. See the [Studio Server deployment guide](https://github.com/valerypopoff/rivet2.0/blob/main/deploy/studio-server/README.md) for upgrade precautions, troubleshooting commands, and the custom-image and Kubernetes options.

@@ -1,12 +1,13 @@
 import { expect, test, type Page } from '@playwright/test';
+import { serializeProject, type Project } from '@valerypopoff/rivet2-core';
 import { authenticateIfNeeded, waitForDashboardReady } from './helpers/hostedEditorObserve';
-import type {
-  WorkflowProjectItem,
-  WorkflowPublishedVersionSummary,
-  WorkflowTreeResponse,
-} from '../dashboard/types';
+import type { WorkflowProjectItem, WorkflowPublishedVersionSummary, WorkflowTreeResponse } from '../dashboard/types';
 
-function isRouteRequest(routeRequest: { method: () => string; url: () => string }, method: string, pathname: string): boolean {
+function isRouteRequest(
+  routeRequest: { method: () => string; url: () => string },
+  method: string,
+  pathname: string,
+): boolean {
   const url = new URL(routeRequest.url());
 
   return routeRequest.method() === method && url.pathname === pathname;
@@ -196,25 +197,262 @@ async function installPublishedVersionRoutes(
 }
 
 test.describe('Project compare mode', () => {
+  for (const theme of ['molten', 'bright']) {
+    test(`deleted nodes show reference settings, passive ports and complete read-only inspection (${theme})`, async ({
+      page,
+    }, testInfo) => {
+      test.setTimeout(120_000);
+      page.setDefaultTimeout(25_000);
+      await page.addInitScript((theme) => localStorage.setItem('recoil-persist', JSON.stringify({ theme })), theme);
+      const currentItem = createCompareProjectItem('deleted-current');
+      const referenceItem = createCompareProjectItem('deleted-reference');
+      const fullText = Array.from({ length: 40 }, (_, index) => `Original prompt line ${index}`).join('\n');
+      const makeNode = (id: string, type: string, data: unknown, x: number, y: number) => ({
+        id,
+        type,
+        title: id,
+        visualData: { x, y, width: 260 },
+        data,
+      });
+      const survivor = makeNode('survivor', 'graphOutput', { id: 'result', dataType: 'any' }, 920, 550);
+      const changed = makeNode('changed', 'text', { text: 'old' }, 0, -180);
+      const reference = {
+        metadata: { id: referenceItem.id, title: referenceItem.name, description: '', mainGraphId: 'main' },
+        graphs: {
+          main: {
+            metadata: { id: 'main', name: 'Main' },
+            nodes: [
+              changed,
+              survivor,
+              makeNode('deleted-global', 'getGlobal', { id: 'which-global', dataType: 'string' }, 0, 0),
+              makeNode(
+                'deleted-input',
+                'graphInput',
+                { id: 'which-input', dataType: 'string', defaultValue: 'original default' },
+                310,
+                0,
+              ),
+              makeNode('deleted-bool', 'boolean', { value: true }, 620, 0),
+              makeNode('deleted-text', 'text', { text: fullText }, 0, 230),
+              makeNode('deleted-subgraph', 'subGraph', { graphId: 'child' }, 310, 230),
+              makeNode('deleted-library', 'nodePrefabInstance', { prefabId: 'library' }, 620, 230),
+              makeNode(
+                'deleted-code',
+                'code',
+                {
+                  code: fullText
+                    .split('\n')
+                    .map((line) => `// ${line}`)
+                    .join('\n'),
+                  inputNames: ['original_code_input'],
+                  outputNames: ['original_code_output'],
+                },
+                620,
+                570,
+              ),
+              makeNode(
+                'deleted-plugin',
+                'unavailablePlugin',
+                { prompt: fullText, customSetting: 'preserved' },
+                310,
+                570,
+              ),
+            ],
+            connections: [
+              { outputNodeId: 'deleted-bool', outputId: 'value', inputNodeId: 'survivor', inputId: 'value' },
+            ],
+          },
+          child: {
+            metadata: { id: 'child', name: 'Original child name' },
+            nodes: [
+              makeNode('child-input', 'graphInput', { id: 'historical-input', dataType: 'string' }, 0, 0),
+              makeNode('child-output', 'graphOutput', { id: 'historical-output', dataType: 'string' }, 300, 0),
+            ],
+            connections: [],
+          },
+        },
+        nodePrefabs: {
+          library: {
+            id: 'library',
+            sourceNode: makeNode('source', 'getGlobal', { id: 'library-original', dataType: 'number' }, 0, 0),
+          },
+        },
+        plugins: [],
+        references: [],
+      } as unknown as Project;
+      const current = structuredClone(reference);
+      current.metadata.id = currentItem.id as Project['metadata']['id'];
+      current.metadata.title = currentItem.name;
+      current.graphs.main!.nodes = [
+        { ...changed, data: { text: 'new' } },
+        survivor,
+        makeNode('added', 'text', { text: 'added content' }, 920, -180),
+      ] as Project['graphs'][string]['nodes'];
+      current.graphs.main!.connections = [];
+      delete current.graphs.child;
+      current.nodePrefabs = {};
+      const contents = new Map([
+        [currentItem.absolutePath, serializeProject(current) as string],
+        [referenceItem.absolutePath, serializeProject(reference) as string],
+      ]);
+      await installCompareModeRoutes(page, [currentItem, referenceItem], contents);
+      await page.goto('/', { waitUntil: 'domcontentloaded' });
+      await authenticateIfNeeded(page);
+      await waitForDashboardReady(page);
+      const editor = page.frameLocator('iframe.dashboard-editor-frame');
+      await page.locator('.project-row', { hasText: currentItem.name }).dblclick();
+      await expect(editor.locator('.node-canvas')).toBeVisible({ timeout: 120_000 });
+      const startCompare = async () => {
+        await page.locator('.project-row', { hasText: referenceItem.name }).click({ button: 'right' });
+        await page.getByRole('menuitem', { name: 'Compare opened project with this one' }).click();
+        await expect(editor.locator('.node.compare-removed')).toHaveCount(8);
+      };
+      await startCompare();
+      const deleted = (id: string) => editor.locator(`[data-comparison-nodeid="deleted-${id}"]`);
+      await expect(deleted('global')).toContainText('which-global');
+      await expect(deleted('global')).toContainText('Type: string');
+      await expect(deleted('input')).toContainText('which-input');
+      await expect(deleted('input')).toContainText('Default: original default');
+      await expect(deleted('bool').locator('.node-body')).toHaveText('true');
+      await expect(deleted('subgraph')).toContainText('Original child name');
+      await expect(deleted('subgraph')).toContainText('historical-input');
+      await expect(deleted('subgraph')).toContainText('historical-output');
+      await expect(deleted('library')).toContainText('library-original');
+      await expect(deleted('text')).toContainText('Original prompt line 0');
+      await expect(deleted('text')).not.toContainText('Original prompt line 39');
+      await expect(deleted('code')).toContainText('// Original prompt line 0');
+      await expect(deleted('code')).toContainText('original_code_input');
+      await expect(deleted('code')).toContainText('original_code_output');
+      await expect(editor.locator('.node.compare-added')).toHaveCount(1);
+      await expect(editor.locator('.node.compare-changed')).toHaveCount(1);
+      await expect(
+        editor.locator(
+          '.compare-removed input, .compare-removed select, .compare-removed .node-output, .compare-removed .node-resize-handles',
+        ),
+      ).toHaveCount(0);
+      await editor.locator('.node[data-nodeid="added"] .node-title').dispatchEvent('click', { shiftKey: true });
+      await expect(editor.locator('.node[data-nodeid="added"]')).toHaveClass(/selected/);
+      await deleted('text').getByRole('button', { name: 'Inspect deleted node' }).focus();
+      await page.keyboard.press('Delete');
+      await expect(editor.locator('.node[data-nodeid="added"]')).toHaveCount(1);
+      await page.keyboard.press('Enter');
+      await expect(editor.getByText('Deleted node details', { exact: true })).toBeVisible();
+      await expect(editor.locator('[role="dialog"] pre')).toContainText(fullText.split('\n').at(-1)!);
+      await editor.locator('[role="dialog"] pre').focus();
+      await page.keyboard.press('Delete');
+      await page.keyboard.press('Control+x');
+      await expect(editor.locator('.node[data-nodeid="added"]')).toHaveCount(1);
+      await editor.getByRole('button', { name: 'Done', exact: true }).click();
+      await deleted('library').dblclick();
+      await expect(editor.getByText('Saved node configuration', { exact: true })).toBeVisible();
+      await expect(editor.locator('[role="dialog"]')).toContainText('nodePrefabInstance');
+      await expect(editor.locator('[role="dialog"]')).toContainText('Reference library source configuration');
+      await expect(editor.locator('[role="dialog"]')).toContainText('library-original');
+      await editor.getByRole('button', { name: 'Done', exact: true }).click();
+      await deleted('plugin').getByRole('button', { name: 'Inspect deleted node' }).click();
+      await expect(editor.locator('[role="dialog"]')).toContainText('customSetting: preserved');
+      await page.keyboard.press('Escape');
+      await expect(editor.getByText('Deleted node details', { exact: true })).toHaveCount(0);
+      const originalTransform = await deleted('bool').getAttribute('style');
+      await deleted('code').getByRole('button', { name: 'Inspect deleted node' }).click();
+      await expect(editor.locator('[role="dialog"]')).toContainText('// Original prompt line 39');
+      await editor.getByRole('button', { name: 'Done', exact: true }).click();
+      const bounds = await deleted('bool').boundingBox();
+      await page.mouse.move(bounds!.x + 20, bounds!.y + 20);
+      await page.mouse.down();
+      await page.mouse.move(bounds!.x + 90, bounds!.y + 90);
+      await page.mouse.up();
+      expect(await deleted('bool').getAttribute('style')).toBe(originalTransform);
+      await expect(editor.locator('.wire.compare-removed')).toHaveCount(1);
+      const assertWireAttachment = async () => {
+        await expect
+          .poll(() =>
+            editor.locator('.node-canvas').evaluate((canvas) => {
+              const wire = canvas.querySelector<SVGPathElement>('.wire.compare-removed')!;
+              const matrix = wire.getScreenCTM()!;
+              return [
+                ['deleted-bool', 'output', 0],
+                ['survivor', 'input', wire.getTotalLength()],
+              ]
+                .map(([id, side, distance]) => {
+                  const point = wire.getPointAtLength(Number(distance)).matrixTransform(matrix);
+                  const port = canvas
+                    .querySelector(`[data-comparison-nodeid="${id}"] [data-porttype="${side}"]`)!
+                    .getBoundingClientRect();
+                  return Math.hypot(point.x - port.x - port.width / 2, point.y - port.y - port.height / 2);
+                })
+                .every((error) => error < 2);
+            }),
+          )
+          .toBe(true);
+      };
+      await assertWireAttachment();
+      await page.setViewportSize({ width: 1700, height: 1100 });
+      await expect(deleted('global')).toContainText('which-global');
+      await assertWireAttachment();
+      await page.screenshot({ path: testInfo.outputPath('deleted-node-previews.png') });
+      await editor.locator('.node.compare-changed .project-compare-changes-button').click();
+      await expect(editor.getByText('Node config changes', { exact: true })).toBeVisible();
+      await editor.getByRole('button', { name: 'Done', exact: true }).click();
+      // Zoom around a deleted node so it stays on-screen; wait for each observable transform.
+      await deleted('global').getByRole('button', { name: 'Inspect deleted node' }).click();
+      const replacement = structuredClone(reference);
+      replacement.graphs.main!.nodes.find((node) => node.id === 'deleted-global')!.data = {
+        id: 'replacement-global',
+        dataType: 'string',
+      };
+      contents.set(referenceItem.absolutePath, serializeProject(replacement) as string);
+      await startCompare();
+      await expect(editor.getByText('Deleted node details', { exact: true })).toHaveCount(0);
+      await expect(deleted('global')).toContainText('replacement-global');
+      await expect(deleted('global')).not.toContainText('which-global');
+      for (let step = 0; step < 20 && (await deleted('global').locator('.node-body').count()); step++) {
+        const before = await editor.locator('.canvas-node-contents').getAttribute('style');
+        await deleted('global').hover();
+        await page.mouse.wheel(0, 120);
+        await expect(editor.locator('.canvas-node-contents')).not.toHaveAttribute('style', before!);
+      }
+      await expect(deleted('global').locator('.node-body')).toHaveCount(0);
+      await deleted('global').getByRole('button', { name: 'Inspect deleted node' }).click();
+      await expect(editor.locator('[role="dialog"]')).toContainText('replacement-global');
+      await editor.getByRole('button', { name: 'Done', exact: true }).click();
+      await editor.locator('.project-compare-notice').getByRole('button', { name: 'Exit', exact: true }).click();
+      await expect(editor.locator('.compare-removed')).toHaveCount(0);
+      await startCompare();
+      await deleted('global').getByRole('button', { name: 'Inspect deleted node' }).click();
+      await expect(editor.locator('[role="dialog"]')).toContainText('replacement-global');
+      await page.locator('.project-row', { hasText: referenceItem.name }).dblclick();
+      await expect(page.locator('.active-project-name')).toHaveText(referenceItem.name);
+      await expect(editor.getByText('Deleted node details', { exact: true })).toHaveCount(0);
+      await expect(editor.locator('.node.compare-removed')).toHaveCount(0);
+    });
+  }
+
   test('starts compare mode from another project row context menu', async ({ page }) => {
     test.slow();
 
     const currentProject = createCompareProjectItem('codex-compare-current');
     const referenceProject = createCompareProjectItem('codex-compare-reference');
     const projectContentsByPath = new Map<string, string>([
-      [currentProject.absolutePath, createCompareProjectFile({
-        graphId: 'compare-current-graph',
-        nodeText: 'current',
-        projectId: currentProject.id,
-        secondNode: true,
-        title: currentProject.name,
-      })],
-      [referenceProject.absolutePath, createCompareProjectFile({
-        graphId: 'compare-current-graph',
-        nodeText: 'reference',
-        projectId: referenceProject.id,
-        title: referenceProject.name,
-      })],
+      [
+        currentProject.absolutePath,
+        createCompareProjectFile({
+          graphId: 'compare-current-graph',
+          nodeText: 'current',
+          projectId: currentProject.id,
+          secondNode: true,
+          title: currentProject.name,
+        }),
+      ],
+      [
+        referenceProject.absolutePath,
+        createCompareProjectFile({
+          graphId: 'compare-current-graph',
+          nodeText: 'reference',
+          projectId: referenceProject.id,
+          title: referenceProject.name,
+        }),
+      ],
     ]);
 
     await installCompareModeRoutes(page, [currentProject, referenceProject], projectContentsByPath);
@@ -239,9 +477,9 @@ test.describe('Project compare mode', () => {
     await page.getByRole('menuitem', { name: 'Compare opened project with this one' }).click();
 
     await expect(
-      editorFrame.locator('.project-compare-notice').getByText(
-        `Compare mode: ${currentProject.name} against ${referenceProject.name}`,
-      ),
+      editorFrame
+        .locator('.project-compare-notice')
+        .getByText(`Compare mode: ${currentProject.name} against ${referenceProject.name}`),
     ).toBeVisible({ timeout: 30_000 });
     await expect(editorFrame.getByText(referenceProject.fileName)).toBeVisible({ timeout: 30_000 });
   });
@@ -277,9 +515,7 @@ test.describe('Project compare mode', () => {
       projectId: currentProject.id,
       title: currentProject.name,
     });
-    const projectContentsByPath = new Map<string, string>([
-      [currentProject.absolutePath, liveContents],
-    ]);
+    const projectContentsByPath = new Map<string, string>([[currentProject.absolutePath, liveContents]]);
 
     await installCompareModeRoutes(page, [currentProject], projectContentsByPath);
     await installPublishedVersionRoutes(page, currentProject, currentPublishedVersion, publishedContents);
@@ -305,7 +541,9 @@ test.describe('Project compare mode', () => {
     await expect(
       editorFrame.locator('.project-compare-notice').getByText('Compare mode: Unpublished against Published'),
     ).toBeVisible({ timeout: 30_000 });
-    await expect(editorFrame.getByText(`Published version of ${currentProject.fileName}`)).toBeVisible({ timeout: 30_000 });
+    await expect(editorFrame.getByText(`Published version of ${currentProject.fileName}`)).toBeVisible({
+      timeout: 30_000,
+    });
   });
 
   test('asks which saved version to compare when the reference project has unpublished changes', async ({ page }) => {
@@ -340,9 +578,7 @@ test.describe('Project compare mode', () => {
       projectId: referenceProject.id,
       title: referenceProject.name,
     });
-    const projectContentsByPath = new Map<string, string>([
-      [currentProject.absolutePath, currentContents],
-    ]);
+    const projectContentsByPath = new Map<string, string>([[currentProject.absolutePath, currentContents]]);
 
     await installCompareModeRoutes(page, [currentProject, referenceProject], projectContentsByPath);
     await installPublishedVersionRoutes(page, referenceProject, currentPublishedVersion, referencePublishedContents);
@@ -371,10 +607,12 @@ test.describe('Project compare mode', () => {
     await page.getByRole('button', { name: 'Compare "Published"' }).click();
 
     await expect(
-      editorFrame.locator('.project-compare-notice').getByText(
-        `Compare mode: ${currentProject.name} against ${referenceProject.name} (Published)`,
-      ),
+      editorFrame
+        .locator('.project-compare-notice')
+        .getByText(`Compare mode: ${currentProject.name} against ${referenceProject.name} (Published)`),
     ).toBeVisible({ timeout: 30_000 });
-    await expect(editorFrame.getByText(`Published version of ${referenceProject.fileName}`)).toBeVisible({ timeout: 30_000 });
+    await expect(editorFrame.getByText(`Published version of ${referenceProject.fileName}`)).toBeVisible({
+      timeout: 30_000,
+    });
   });
 });

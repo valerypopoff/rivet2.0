@@ -4,6 +4,8 @@ sidebar_label: 02 - Interpolation & More Node Types
 
 # Interpolation & More Node Types
 
+Start with [Variables](./variables.md) for a provider-free introduction to interpolation, JSONPath, and `@` variables. The [Variables reference](../user-guide/variables.md) covers the complete syntax and formatting rules.
+
 In the sidebar you should see the graphs tab with a list of numbered folders with graphs. These are the graphs that are included in the tutorial project.
 
 Inside the `2. Interpolation` folder you should see an `Interpolation` graph. Click on the graph to open it.

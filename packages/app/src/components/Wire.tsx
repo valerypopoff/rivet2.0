@@ -88,8 +88,9 @@ export const ConditionallyRenderWire: FC<WireProps> = ({
 
   const [outputCacheKey, inputCacheKey] = getConnectionCacheKeys(connection);
 
-  const start = getNodePortPosition(outputNode, connection.outputId, outputCacheKey, portPositions);
-  const end = getNodePortPosition(inputNode, connection.inputId, inputCacheKey, portPositions);
+  const prefix = compareChangeKind === 'removed' ? 'reference:' : '';
+  const start = getNodePortPosition(outputNode, connection.outputId, prefix + outputCacheKey, portPositions);
+  const end = getNodePortPosition(inputNode, connection.inputId, prefix + inputCacheKey, portPositions);
   const wireSegments = getWireSegments({
     bendPoint: bendPointOverride ?? connection.bendPoint,
     end,

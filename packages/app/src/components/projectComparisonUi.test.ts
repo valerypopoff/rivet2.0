@@ -50,7 +50,6 @@ test('canvas compare mode highlights nodes and wires without changing graph data
   assert.match(projectComparisonCanvasSource, /graphComparison\.nodes/);
   assert.match(projectComparisonCanvasSource, /comparison\.kind === 'added'/);
   assert.match(projectComparisonCanvasSource, /comparison\.kind === 'changed'/);
-  assert.match(viewportSource, /compareChangeKind="removed"/);
   assert.match(wireLayerSource, /\.wire\.compare-added/);
   assert.match(wireLayerSource, /\.wire\.compare-changed/);
   assert.match(wireLayerSource, /\.wire\.compare-removed/);

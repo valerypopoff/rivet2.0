@@ -16,11 +16,13 @@ import { getError } from '../../utils/errors.js';
 const REQUEST_FAILED_OUTPUT_ID = 'requestFailed' as PortId;
 const REQUEST_ERROR_OUTPUT_ID = 'requestError' as PortId;
 const STATUS_CODE_OUTPUT_ID = 'statusCode' as PortId;
+const RESPONSE_HEADERS_OUTPUT_ID = 'res_headers' as PortId;
 const DEFAULT_RETRY_ON_NON_200_REPEAT_TIMES = 1;
 const DEFAULT_RETRY_ON_NON_200_COOLDOWN_MS = 0;
 
 type HttpCallRequestAttempts = {
   statusCodeValues: number[];
+  responseHeaderValues: Record<string, string>[];
   requestFailedValues: boolean[];
   requestErrorMessages: string[];
 };
@@ -83,15 +85,21 @@ function formatCaughtRequestFailureError(error: unknown, seen = new Set<unknown>
 function createHttpCallRequestAttempts(): HttpCallRequestAttempts {
   return {
     statusCodeValues: [],
+    responseHeaderValues: [],
     requestFailedValues: [],
     requestErrorMessages: [],
   };
+}
+
+function getHttpCallResponseHeaders(response: Response): Record<string, string> {
+  return Object.fromEntries(response.headers.entries());
 }
 
 function recordHttpCallResponseAttempt(attempts: HttpCallRequestAttempts, response: Response): void {
   const requestFailed = response.status !== 200;
 
   attempts.statusCodeValues.push(response.status);
+  attempts.responseHeaderValues.push(getHttpCallResponseHeaders(response));
   attempts.requestFailedValues.push(requestFailed);
 
   if (requestFailed) {
@@ -120,7 +128,14 @@ function buildRetryAttemptOutput(
   type: 'string[]',
   values: string[],
 ): { type: 'string[]'; value: string[] } | ExcludedOutput;
-function buildRetryAttemptOutput(type: 'number[]' | 'boolean[]' | 'string[]', values: number[] | boolean[] | string[]) {
+function buildRetryAttemptOutput(
+  type: 'object[]',
+  values: Record<string, string>[],
+): { type: 'object[]'; value: Record<string, string>[] } | ExcludedOutput;
+function buildRetryAttemptOutput(
+  type: 'number[]' | 'boolean[]' | 'string[]' | 'object[]',
+  values: number[] | boolean[] | string[] | Record<string, string>[],
+) {
   return values.length > 0
     ? {
         type,
@@ -130,6 +145,26 @@ function buildRetryAttemptOutput(type: 'number[]' | 'boolean[]' | 'string[]', va
         type: 'control-flow-excluded' as const,
         value: undefined,
       };
+}
+
+function buildHttpCallResponseMetadataOutputs(
+  response: Response,
+  requestAttempts: HttpCallRequestAttempts | undefined,
+): Outputs {
+  return {
+    [STATUS_CODE_OUTPUT_ID]: requestAttempts
+      ? buildRetryAttemptOutput('number[]', requestAttempts.statusCodeValues)
+      : {
+          type: 'number',
+          value: response.status,
+        },
+    [RESPONSE_HEADERS_OUTPUT_ID]: requestAttempts
+      ? buildRetryAttemptOutput('object[]', requestAttempts.responseHeaderValues)
+      : {
+          type: 'object',
+          value: getHttpCallResponseHeaders(response),
+        },
+  };
 }
 
 function isCaughtFailureAlreadyRecorded(attempts: HttpCallRequestAttempts, error: unknown): boolean {
@@ -160,7 +195,7 @@ function withCaughtFailureAttemptFallback(attempts: HttpCallRequestAttempts, err
   requestFailedValues[requestFailedValues.length - 1] = true;
 
   return {
-    statusCodeValues: attempts.statusCodeValues,
+    ...attempts,
     requestFailedValues,
     requestErrorMessages: [...attempts.requestErrorMessages, formatCaughtRequestFailureError(error)],
   };
@@ -227,7 +262,7 @@ function buildRequestFailedOutputs(params: {
           type: 'control-flow-excluded',
           value: undefined,
         },
-    ['res_headers' as PortId]: {
+    [RESPONSE_HEADERS_OUTPUT_ID]: {
       type: 'control-flow-excluded',
       value: undefined,
     },
@@ -447,8 +482,8 @@ export class HttpCallNodeImpl extends NodeImpl<HttpCallNode> {
         title: 'Status Code',
       },
       {
-        dataType: 'object',
-        id: 'res_headers' as PortId,
+        dataType: this.data.retryOnNon200 ? 'object[]' : 'object',
+        id: RESPONSE_HEADERS_OUTPUT_ID,
         title: 'Headers',
       },
     );
@@ -544,6 +579,10 @@ export class HttpCallNodeImpl extends NodeImpl<HttpCallNode> {
         type: 'toggle',
         label: 'Fail on non-2XX status code',
         dataKey: 'errorOnNon200',
+        helperMessage: (data) =>
+          data.retryOnNon200
+            ? 'With Retry on non-200 enabled, only the final response after all retries is checked.'
+            : undefined,
       },
       {
         type: 'toggle',
@@ -664,22 +703,28 @@ export class HttpCallNodeImpl extends NodeImpl<HttpCallNode> {
         }
       }
 
+      const responseMetadataOutputs = buildHttpCallResponseMetadataOutputs(response, requestAttempts);
+
       if (this.data.errorOnNon200 && !response.ok) {
+        // The request reached the server, so retain its response metadata for
+        // display on the terminal nodeError. It remains inspection evidence,
+        // never a successful graph output. Caught failures return their
+        // existing normal output contract instead and must not leave a stale
+        // failure checkpoint behind.
+        if (!this.data.catchRequestFailed) {
+          // GraphProcessor supplies the durable terminal channel. Direct/custom
+          // node consumers receive the same metadata through their ordinary
+          // live-output callback when that channel is unavailable.
+          if (context.setFailureOutputs) {
+            context.setFailureOutputs(responseMetadataOutputs);
+          } else {
+            context.onPartialOutputs?.(responseMetadataOutputs);
+          }
+        }
         throw buildNon2xxStatusCodeError(response.status);
       }
 
-      const output: Outputs = {
-        [STATUS_CODE_OUTPUT_ID]: requestAttempts
-          ? buildRetryAttemptOutput('number[]', requestAttempts.statusCodeValues)
-          : {
-              type: 'number',
-              value: response.status,
-            },
-        ['res_headers' as PortId]: {
-          type: 'object',
-          value: Object.fromEntries(response.headers.entries()),
-        },
-      };
+      const output: Outputs = responseMetadataOutputs;
 
       if (this.data.isBinaryOutput) {
         const responseBlob = await response.blob();

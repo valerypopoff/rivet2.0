@@ -121,7 +121,7 @@ export class MatchNodeImpl extends NodeImpl<MatchNode> {
   }
 
   getBody(): NodeBody {
-    return this.data.exclusive ? 'Trigger the first matching case only' : 'Trigger all matching cases';
+    return this.data.exclusive ? 'Trigger: First matching case only' : 'Trigger: All matching cases';
   }
 
   getEditors(): EditorDefinition<MatchNode>[] {

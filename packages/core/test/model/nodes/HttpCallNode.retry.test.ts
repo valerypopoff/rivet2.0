@@ -8,6 +8,7 @@ import {
   installHttpCallNodeTestHooks,
   requestErrorOutputId,
 } from './HttpCallNode.testUtils.js';
+import type { Outputs } from '../../../src/index.js';
 
 installHttpCallNodeTestHooks();
 
@@ -23,13 +24,66 @@ void test('throws on non-2XX responses when errorOnNon200 is enabled and catchRe
 
   await assert.rejects(() => node.process({}, createContext()), /HTTP call returned non-2XX status code: 404/);
 });
+void test('retains response headers for every retry attempt when retries end in a non-2XX error', async () => {
+  let requestCount = 0;
+  globalThis.fetch = async () => {
+    requestCount += 1;
+    return new Response('rate limited', {
+      status: 429,
+      headers: {
+        'retry-after': requestCount === 1 ? '1' : '30',
+        'x-request-id': `request-${requestCount}`,
+      },
+    });
+  };
+
+  let failureOutputs: Outputs | undefined;
+  const node = createNode({
+    method: 'GET',
+    url: 'https://example.com',
+    errorOnNon200: true,
+    retryOnNon200: true,
+    retryOnNon200RepeatTimes: 1,
+  });
+
+  await assert.rejects(
+    () =>
+      node.process({}, {
+        ...createContext(),
+        setFailureOutputs: (outputs) => {
+          failureOutputs = outputs;
+        },
+      }),
+    /HTTP call returned non-2XX status code: 429/,
+  );
+
+  assert.equal(requestCount, 2);
+  assert.deepStrictEqual(failureOutputs, {
+    statusCode: { type: 'number[]', value: [429, 429] },
+    res_headers: {
+      type: 'object[]',
+      value: [
+        {
+          'content-type': 'text/plain;charset=UTF-8',
+          'retry-after': '1',
+          'x-request-id': 'request-1',
+        },
+        {
+          'content-type': 'text/plain;charset=UTF-8',
+          'retry-after': '30',
+          'x-request-id': 'request-2',
+        },
+      ],
+    },
+  });
+});
 void test('retries non-200 responses before applying fail-on-non-2XX behavior', async () => {
   let requestCount = 0;
   globalThis.fetch = async () => {
     requestCount++;
     return requestCount === 1
-      ? new Response('server error', { status: 500, headers: { 'content-type': 'text/plain' } })
-      : new Response('ok', { status: 200, headers: { 'content-type': 'text/plain' } });
+      ? new Response('server error', { status: 500, headers: { 'content-type': 'text/plain', 'x-attempt': '1' } })
+      : new Response('ok', { status: 200, headers: { 'content-type': 'text/plain', 'x-attempt': '2' } });
   };
 
   const node = createNode({
@@ -44,6 +98,13 @@ void test('retries non-200 responses before applying fail-on-non-2XX behavior', 
 
   assert.equal(requestCount, 2);
   assert.deepStrictEqual(result.res_body, { type: 'string', value: 'ok' });
+  assert.deepStrictEqual(result.res_headers, {
+    type: 'object[]',
+    value: [
+      { 'content-type': 'text/plain', 'x-attempt': '1' },
+      { 'content-type': 'text/plain', 'x-attempt': '2' },
+    ],
+  });
   assertRetryAttemptOutputs(result, {
     statusCodeValues: [500, 200],
     requestFailedValues: [true, false],
