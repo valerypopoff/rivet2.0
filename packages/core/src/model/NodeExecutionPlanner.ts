@@ -156,8 +156,8 @@ export function getWaitingForInputNode(
   node: ChartNode,
   inputNodes: ChartNode[],
   inputValues: Inputs,
-): false | string {
-  let waitingForInputNode: false | string = false;
+): ChartNode | undefined {
+  let waitingForInputNode: ChartNode | undefined;
   const anyInputIsValid = Object.values(inputValues).some((value) => value && !isControlFlowExcluded(value));
 
   for (const inputNode of inputNodes) {
@@ -170,12 +170,12 @@ export function getWaitingForInputNode(
     }
 
     if (node.type === 'raceInputs' && state.visitedNodes.has(inputNode.id) && anyInputIsValid) {
-      waitingForInputNode = false;
+      waitingForInputNode = undefined;
       break;
     }
 
-    if (waitingForInputNode === false && state.visitedNodes.has(inputNode.id) === false) {
-      waitingForInputNode = inputNode.title;
+    if (waitingForInputNode === undefined && state.visitedNodes.has(inputNode.id) === false) {
+      waitingForInputNode = inputNode;
     }
   }
 

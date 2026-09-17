@@ -2221,7 +2221,9 @@ export class GraphProcessor {
 
     const waitingForInputNode = getWaitingForInputNode(this.#executionState, node, inputNodes, inputValues);
     if (waitingForInputNode) {
-      this.#emitTraceEvent(`Node ${node.title} is waiting for input node ${waitingForInputNode}`);
+      this.#emitTraceEvent(
+        `Node ${node.title} is waiting for input node ${waitingForInputNode.title || waitingForInputNode.id}`,
+      );
       return [];
     }
 
