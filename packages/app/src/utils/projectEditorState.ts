@@ -105,16 +105,25 @@ function createRootNavigationStack(graphId: GraphId | undefined): GraphNavigatio
   };
 }
 
-function pickFallbackGraph(project: ProjectLike): NodeGraph {
-  if (project.metadata.mainGraphId && project.graphs[project.metadata.mainGraphId]) {
-    return project.graphs[project.metadata.mainGraphId]!;
+export function resolveProjectGraphId(
+  project: ProjectLike,
+  options: { explicitGraphId?: GraphId; openedGraphId?: GraphId } = {},
+): GraphId | undefined {
+  if (options.explicitGraphId && project.graphs[options.explicitGraphId]) {
+    return options.explicitGraphId;
   }
 
-  const firstSortedGraph = Object.values(project.graphs).sort((a, b) =>
-    (a.metadata?.name ?? '').localeCompare(b.metadata?.name ?? ''),
-  )[0];
+  if (options.openedGraphId && project.graphs[options.openedGraphId]) {
+    return options.openedGraphId;
+  }
 
-  return firstSortedGraph ?? emptyNodeGraph();
+  if (project.metadata.mainGraphId && project.graphs[project.metadata.mainGraphId]) {
+    return project.metadata.mainGraphId;
+  }
+
+  return Object.values(project.graphs).sort((a, b) =>
+    (a.metadata?.name ?? '').localeCompare(b.metadata?.name ?? ''),
+  )[0]?.metadata?.id;
 }
 
 function resolveSavedViewport(
@@ -242,7 +251,6 @@ export function buildCurrentProjectEditorStateSnapshot(args: {
   navigationStack: GraphNavigationStack;
   canvasPosition: CanvasPosition;
   existingProjectEditorState?: ProjectEditorState;
-  legacyCanvasPositionsByGraph?: Record<GraphId, CanvasPosition | undefined>;
 }): ProjectEditorState {
   const {
     project,
@@ -250,7 +258,6 @@ export function buildCurrentProjectEditorStateSnapshot(args: {
     navigationStack,
     canvasPosition,
     existingProjectEditorState,
-    legacyCanvasPositionsByGraph,
   } = args;
 
   const existingPositionsByGraph = pruneCanvasPositionsForProject(project, existingProjectEditorState?.canvasPositionsByGraph);
@@ -258,11 +265,6 @@ export function buildCurrentProjectEditorStateSnapshot(args: {
   const nextPositionsByGraph = {
     ...existingPositionsByGraph,
   };
-
-  const currentLegacyPosition = currentGraphId ? toPersistedCanvasPosition(legacyCanvasPositionsByGraph?.[currentGraphId]) : undefined;
-  if (currentGraphId && project.graphs[currentGraphId] && currentLegacyPosition && !nextPositionsByGraph[currentGraphId]) {
-    nextPositionsByGraph[currentGraphId] = currentLegacyPosition;
-  }
 
   if (currentGraphId && project.graphs[currentGraphId]) {
     nextPositionsByGraph[currentGraphId] = toPersistedCanvasPosition(canvasPosition);
@@ -321,25 +323,6 @@ export function resolveCanvasPositionsForProject(args: {
     (Object.keys(project.graphs) as GraphId[]).flatMap((graphId) => {
       const normalizedPosition = toCanvasPosition(legacyCanvasPositionsByGraph?.[graphId]);
       return normalizedPosition ? [[graphId, normalizedPosition]] : [];
-    }),
-  );
-}
-
-export function resolvePersistedCanvasPositionsForLegacyCache(args: {
-  project: ProjectLike;
-  persistedProjectEditorState?: ProjectEditorState;
-}): Record<GraphId, CanvasPosition | undefined> {
-  const persistedCanvasPositionsByGraph = pruneCanvasPositionsForProject(
-    args.project,
-    args.persistedProjectEditorState?.canvasPositionsByGraph,
-  );
-
-  return Object.fromEntries(
-    Object.entries(persistedCanvasPositionsByGraph).flatMap(([graphId, position]) => {
-      const normalizedPosition = toCanvasPosition(position);
-      return normalizedPosition
-        ? [[graphId as GraphId, { ...normalizedPosition, fromSaved: true } satisfies CanvasPosition]]
-        : [];
     }),
   );
 }
@@ -424,8 +407,8 @@ export function resolveProjectEditorRestoreTarget(args: {
     };
   }
 
-  const graph = pickFallbackGraph(project);
-  const graphId = graph.metadata?.id;
+  const graphId = resolveProjectGraphId(project, { openedGraphId });
+  const graph = graphId ? project.graphs[graphId]! : emptyNodeGraph();
   return {
     graph,
     navigationStack: createRootNavigationStack(graphId),

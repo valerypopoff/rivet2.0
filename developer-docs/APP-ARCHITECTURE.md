@@ -1695,7 +1695,7 @@ Current structure:
 
 This keeps the real boundary in place without preserving a thin wrapper file that only forwarded editor props.
 
-Canvas title icons are presentation-only. [`NodeTitleLabel.tsx`](../packages/app/src/components/visualNode/NodeTitleLabel.tsx) renders Graph Call Path with the shared [`RemoteDebuggerBugIcon.tsx`](../packages/app/src/components/RemoteDebuggerBugIcon.tsx), also used by the Remote Debugger menu; [`nodeDocumentation.ts`](../packages/app/src/utils/nodeDocumentation.ts) links it to the Debug Node Reference page. Ad-hoc prompt and dataset previews do not execute an open graph, so [`useGetAdHocInternalProcessContext.ts`](../packages/app/src/hooks/useGetAdHocInternalProcessContext.ts) supplies the explicit `(Ad-hoc Process)` path placeholder.
+Canvas title icons are presentation-only. [`NodeTitleLabel.tsx`](../packages/app/src/components/visualNode/NodeTitleLabel.tsx) renders Graph Call Path and Project Name with the shared [`RemoteDebuggerBugIcon.tsx`](../packages/app/src/components/RemoteDebuggerBugIcon.tsx), also used by the Remote Debugger menu; [`nodeDocumentation.ts`](../packages/app/src/utils/nodeDocumentation.ts) links each Debug node to its Node Reference page. Ad-hoc prompt and dataset previews do not execute an open graph, so [`useGetAdHocInternalProcessContext.ts`](../packages/app/src/hooks/useGetAdHocInternalProcessContext.ts) supplies the explicit `(Ad-hoc Process)` path placeholder.
 
 Split-run mode UI is presentation-only:
 

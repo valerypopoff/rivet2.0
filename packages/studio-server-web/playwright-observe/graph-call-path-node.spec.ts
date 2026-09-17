@@ -2,7 +2,7 @@ import { expect, test } from '@playwright/test';
 import { authenticateIfNeeded, waitForDashboardReady } from './helpers/hostedEditorObserve';
 import { seedHostedEditorProject } from './helpers/hostedEditorStorage';
 
-test('Graph Call Path appears in Debug and exposes both outputs in the editor', async ({ page }) => {
+test('Debug context nodes appear with their outputs and documentation in the editor', async ({ page }) => {
   const suffix = String(Date.now());
   const projectPath = `/workflows/Graph Call Path ${suffix}.rivet-project`;
   await seedHostedEditorProject(page, {
@@ -87,4 +87,17 @@ test('Graph Call Path appears in Debug and exposes both outputs in the editor', 
   const titleIconPath = await node.locator('.debug-node-title-icon path').getAttribute('d');
   const debuggerIconPath = await debuggerMenuItem.locator('svg path').getAttribute('d');
   expect(titleIconPath).toBe(debuggerIconPath);
+
+  await canvas.click({ button: 'right', position: { x: 620, y: 260 } });
+  await labels.filter({ hasText: /^Add node$/ }).click();
+  await expect(labels.filter({ hasText: /^Debug$/ })).toHaveCount(1);
+  await search.fill('Project Name');
+  await labels.filter({ hasText: /^Project Name$/ }).click();
+
+  const projectNameNode = editor.locator('.node[data-nodeid]', {
+    has: editor.locator('.node-title', { hasText: /^Project Name$/ }),
+  });
+  await expect(projectNameNode).toHaveCount(1);
+  await expect(projectNameNode.locator('.node-title svg.debug-node-title-icon')).toBeVisible();
+  await expect(projectNameNode.locator('.port-label', { hasText: /^Project Name$/ })).toHaveCount(1);
 });

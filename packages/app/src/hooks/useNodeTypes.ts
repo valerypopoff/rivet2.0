@@ -30,6 +30,7 @@ import { dataBusNodeDescriptor } from '../components/nodes/DataBusNode.js';
 import { llmChatV2NodeDescriptor } from '../components/nodes/LLMChatV2Node.js';
 import { llmProfileNodeDescriptor } from '../components/nodes/LLMProfileNode.js';
 import { toolNodeDescriptor } from '../components/nodes/ToolNode.js';
+import { assemblePromptNodeDescriptor } from '../components/nodes/AssemblePromptNode.js';
 import { useAtomValue } from 'jotai';
 import { useProjectNodeRegistry } from './useProjectNodeRegistry';
 import type { NodeOutputCopyValueProjector } from '../utils/executionDataCopyValue.js';
@@ -99,6 +100,7 @@ const overriddenDescriptors: Partial<NodeComponentDescriptors> = {
   llmChatV2: llmChatV2NodeDescriptor,
   llmProfile: llmProfileNodeDescriptor,
   gptFunction: toolNodeDescriptor,
+  assemblePrompt: assemblePromptNodeDescriptor,
 };
 
 export function useNodeTypes(): NodeComponentDescriptors {

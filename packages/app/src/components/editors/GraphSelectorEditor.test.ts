@@ -9,6 +9,7 @@ test('graph selector editor uses the shared project graph option helper', () => 
     graphSelectorEditorSource,
     /import \{ getProjectGraphSelectorOptions \} from '\.\.\/\.\.\/utils\/graphSelectorOptions';/,
   );
-  assert.match(graphSelectorEditorSource, /const graphOptions = getProjectGraphSelectorOptions\(project\.graphs\);/);
+  assert.match(graphSelectorEditorSource, /const graphOptions = getProjectGraphSelectorOptions\(project\.graphs, \{/);
+  assert.match(graphSelectorEditorSource, /isSearchable/);
   assert.doesNotMatch(graphSelectorEditorSource, /nanoid/);
 });

@@ -101,6 +101,29 @@ direct child Graph Output chunks through this route because their outputs
 aggregate or transform child-graph results. **Loop Until** can still emit its
 own per-iteration output updates.
 
+## Watching a Subgraph input
+
+You can keep Watch and its downstream branch together inside a Subgraph.
+Connect the outer LLM response to a named Subgraph input, then connect the
+matching **Graph Input** directly to Watch inside the child graph. Live updates
+reach the Watch without calling the whole Subgraph again. This also works through
+nested Subgraphs, referenced graphs, and Data Bus channels.
+
+The caller waits for its other, non-streamed arguments to be ready. Before then,
+only the latest partial value is retained; superseded updates count as coalesced.
+Ordinary nodes consuming the same input receive its final value once, not every
+chunk. Unrelated child work also waits for the streamed inputs to finish.
+
+Conditional, disabled, frozen, **Many**, and **Use Error Output** caller boundaries
+remain final-only. Ordinary processing nodes between the stream and Watch do not
+forward partials. **Skip unused outputs** does not activate a pruned Watch branch.
+Graph Inputs with **Default Value** configured as an input also remain final-only;
+ordinary saved defaults and input type conversion apply to live updates.
+
+The branch's output pager retains the first three started iterations and the
+decisive iteration, not every streamed update. Recordings preserve those same
+pages. A non-streaming source still produces only one final iteration.
+
 ## Reusing saved results
 
 When you use **Run from Watch Streaming Output**, Rivet can reuse the connected

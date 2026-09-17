@@ -16,6 +16,7 @@ export type NodeProcessContextBase = Omit<
   | 'getPluginConfig'
   | 'node'
   | 'onGraphOutputPartial'
+  | 'graphInputStreams'
   | 'onPartialOutputs'
   | 'setFailureOutputs'
   | 'processId'
@@ -48,6 +49,7 @@ export function buildNodeProcessContext(options: {
   node: ChartNode;
   nodeAbortController: AbortController;
   onGraphOutputPartial?: (partialOutputs: Outputs) => void;
+  graphInputStreams?: InternalProcessContext['graphInputStreams'];
   onPartialOutputs: (partialOutputs: Outputs) => void;
   setFailureOutputs?: InternalProcessContext['setFailureOutputs'];
   processId: ProcessId;
@@ -73,6 +75,7 @@ export function buildNodeProcessContext(options: {
     node,
     nodeAbortController,
     onGraphOutputPartial,
+    graphInputStreams,
     onPartialOutputs,
     setFailureOutputs,
     processId,
@@ -98,6 +101,7 @@ export function buildNodeProcessContext(options: {
     waitForStoredValue: (key, signal = nodeAbortController.signal) => base.waitForStoredValue(key, signal),
     externalFunctions: { ...externalFunctions },
     onGraphOutputPartial,
+    graphInputStreams,
     onPartialOutputs,
     setFailureOutputs,
     signal: nodeAbortController.signal,

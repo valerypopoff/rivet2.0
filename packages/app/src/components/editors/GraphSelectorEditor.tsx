@@ -60,18 +60,31 @@ export const GraphSelectorSelect: FC<{
   value: GraphId | undefined;
   isReadonly?: boolean;
   onChange?: (selected: GraphId) => void;
-}> = ({ value, isReadonly, onChange }) => {
+  ariaLabel?: string;
+  className?: string;
+  includeMissingSelectedGraph?: boolean;
+}> = ({ value, isReadonly, onChange, ariaLabel, className, includeMissingSelectedGraph = false }) => {
   const project = useAtomValue(projectState);
-  const graphOptions = getProjectGraphSelectorOptions(project.graphs);
+  const graphOptions = getProjectGraphSelectorOptions(project.graphs, {
+    includeMissingSelectedGraph,
+    selectedGraphId: value,
+  });
 
   const selectedOption = graphOptions.find((option) => option.value === value);
 
   return (
     <Select
+      aria-label={ariaLabel}
+      className={className}
       isDisabled={isReadonly}
+      isSearchable
       options={graphOptions}
-      value={selectedOption}
-      onChange={(selected) => onChange?.(selected!.value)}
+      value={selectedOption ?? null}
+      onChange={(selected) => {
+        if (selected) {
+          onChange?.(selected.value);
+        }
+      }}
       placeholder="Select Graph..."
     />
   );

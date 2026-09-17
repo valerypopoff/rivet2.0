@@ -1,6 +1,6 @@
 {
   "formatVersion": 1,
-  "catalogFingerprint": "fnv1a64:1adc6ceb02dd61a3",
+  "catalogFingerprint": "fnv1a64:8cd91c9647fcd65d",
   "entries": [
     {
       "authoringChoiceId": "registered:abortGraph",
@@ -1595,6 +1595,21 @@
       "nodeType": "pop",
       "displayName": "Pop",
       "description": "The Pop Node is used to remove either the first or last element from an array and output both the removed element and the remaining array. By default, the Pop Node will pop the last element from the array. This node is useful when you want to process elements of an array one by one in a loop.",
+      "aliases": [],
+      "capabilities": {
+        "createWithDefaults": true,
+        "inspectSafeProjection": false,
+        "resolvePorts": true,
+        "configureSettings": false,
+        "editLinkedPrefabInstance": false
+      },
+      "settings": []
+    },
+    {
+      "authoringChoiceId": "registered:projectName",
+      "nodeType": "projectName",
+      "displayName": "Project Name",
+      "description": "Project Name is a Debug node that returns the name of the project that owns the graph currently being executed. Use it to include the project name in alerts, logs, traces, or other diagnostic output. It has no inputs or settings.",
       "aliases": [],
       "capabilities": {
         "createWithDefaults": true,

@@ -1,9 +1,20 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import type { ChartNode, NodeConnection, NodeId, PortId } from '@valerypopoff/rivet2-core';
+import {
+  createBuiltInRegistry,
+  type ChartNode,
+  type GraphId,
+  type NodeGraph,
+  type Project,
+  type ProjectId,
+  type NodeConnection,
+  type NodeId,
+  type NodePrefabId,
+  type PortId,
+} from '@valerypopoff/rivet2-core';
 import {
   getStreamingOutputWatchBranchNodeIds,
-  getStreamingOutputWatchConnections,
+  getProjectStreamingOutputWatchConnections,
 } from './streamingOutputWatchWireState.js';
 
 function node(id: string, type: ChartNode['type'], disabled = false): ChartNode {
@@ -26,35 +37,311 @@ function connection(inputId: string): NodeConnection {
   };
 }
 
-test('marks only the direct streaming input of an enabled Watch Streaming Output node', () => {
-  const streamingConnection = connection('stream');
-  const ordinaryConnection = connection('value');
+const registry = createBuiltInRegistry();
 
-  const states = getStreamingOutputWatchConnections({
-    connections: [streamingConnection, ordinaryConnection],
-    nodes: [node('llm', 'llmChatV2'), node('watch', 'watchStreamingOutput')],
+function streamFixture() {
+  const make = (id: string, type: Parameters<typeof registry.createDynamic>[0], data = {}) => {
+    const created = registry.createDynamic(type);
+    return { ...created, id: id as NodeId, data: { ...(created.data as object), ...data } };
+  };
+  const edge = (source: string, output: string, target: string, input: string): NodeConnection => ({
+    outputNodeId: source as NodeId,
+    outputId: output as PortId,
+    inputNodeId: target as NodeId,
+    inputId: input as PortId,
   });
+  const leaf: NodeGraph = {
+    metadata: { id: 'leaf' as GraphId, name: 'Leaf' },
+    nodes: [make('producer', 'llmChatV2'), make('out', 'graphOutput', { id: 'answer', dataType: 'string' })],
+    connections: [edge('producer', 'response', 'out', 'value')],
+  };
+  const middle: NodeGraph = {
+    metadata: { id: 'middle' as GraphId, name: 'Middle' },
+    nodes: [
+      make('caller', 'subGraph', { graphId: 'leaf' }),
+      make('out', 'graphOutput', { id: 'renamed', dataType: 'string' }),
+    ],
+    connections: [edge('caller', 'answer', 'out', 'value')],
+  };
+  const root: NodeGraph = {
+    metadata: { id: 'root' as GraphId, name: 'Root' },
+    nodes: [make('caller', 'subGraph', { graphId: 'middle' }), make('watch', 'watchStreamingOutput')],
+    connections: [edge('caller', 'renamed', 'watch', 'stream')],
+  };
+  const project: Project = {
+    metadata: { id: 'project' as ProjectId, title: 'Test', description: '' },
+    graphs: { [leaf.metadata!.id!]: leaf, [middle.metadata!.id!]: middle, [root.metadata!.id!]: root },
+    plugins: [],
+  };
+  const marked = (graph: NodeGraph) =>
+    getProjectStreamingOutputWatchConnections({ project, graph, registry, referencedProjects: {} });
+  return { project, root, middle, leaf, marked, make, edge };
+}
 
-  assert.deepEqual(states, new Set([streamingConnection]));
+function inputStreamFixture() {
+  const fixture = streamFixture();
+  const { root, middle, leaf, make, edge } = fixture;
+  root.nodes = [make('producer', 'llmChatV2'), make('caller', 'subGraph', { graphId: 'middle' })];
+  root.connections = [edge('producer', 'response', 'caller', 'outer')];
+  middle.nodes = [make('input', 'graphInput', { id: 'outer' }), make('caller', 'subGraph', { graphId: 'leaf' })];
+  middle.connections = [edge('input', 'data', 'caller', 'stream')];
+  leaf.nodes = [make('input', 'graphInput', { id: 'stream' }), make('watch', 'watchStreamingOutput')];
+  leaf.connections = [edge('input', 'data', 'watch', 'stream')];
+  return fixture;
+}
+
+test('traces a nested Watch back through differently named Graph Inputs to every caller', () => {
+  const { root, middle, leaf, marked, make, edge } = inputStreamFixture();
+  for (const graph of [root, middle, leaf]) assert.deepEqual(marked(graph), new Set(graph.connections));
+  middle.nodes.push(make('other', 'graphInput', { id: 'unwatched' }));
+  root.connections.push(edge('producer', 'response', 'caller', 'unwatched'));
+  assert.deepEqual(marked(root), new Set([root.connections[0]]));
+  leaf.nodes[1]!.disabled = true;
+  assert.equal(marked(root).size, 0);
+});
+
+test('input routes ignore disabled callers, invalid ports, and ordinary processing nodes', () => {
+  for (const mode of ['disabled', 'invalid', 'ordinary']) {
+    const { root, middle, marked, make, edge } = inputStreamFixture();
+    if (mode === 'disabled') root.nodes[1]!.disabled = true;
+    if (mode === 'invalid') root.connections[0]!.inputId = 'missing' as PortId;
+    if (mode === 'ordinary') {
+      middle.nodes.push(make('plain', 'passthrough'));
+      middle.connections = [edge('input', 'data', 'plain', 'input1'), edge('plain', 'output1', 'caller', 'stream')];
+    }
+    assert.equal(marked(root).size, 0, mode);
+  }
+});
+
+test('input routes stop at final-only callers and output-selection pruning', () => {
+  for (const mode of ['conditional', 'split', 'error-output', 'pruned', 'default-input']) {
+    const { root, middle, marked } = inputStreamFixture();
+    const caller = middle.nodes[1]!;
+    if (mode === 'conditional') caller.isConditional = true;
+    if (mode === 'split') caller.isSplitRun = true;
+    if (mode === 'error-output') Object.assign(caller.data as object, { useErrorOutput: true });
+    if (mode === 'pruned') Object.assign(caller.data as object, { skipUnusedOutputs: true });
+    if (mode === 'default-input') Object.assign(middle.nodes[0]!.data as object, { useDefaultValueInput: true });
+    assert.equal(marked(root).size, 0, mode);
+    if (mode !== 'default-input') assert.equal(marked(middle).size, 0, mode);
+  }
+});
+
+test('traces across a producer output and a consumer input in the same route', () => {
+  const { project, root, middle, leaf, marked, make, edge } = inputStreamFixture();
+  const producer: NodeGraph = {
+    metadata: { id: 'producer-graph' as GraphId, name: 'Producer' },
+    nodes: [make('llm', 'llmChatV2'), make('out', 'graphOutput', { id: 'answer' })],
+    connections: [edge('llm', 'response', 'out', 'value')],
+  };
+  project.graphs[producer.metadata!.id!] = producer;
+  root.nodes[0] = make('producer', 'subGraph', { graphId: producer.metadata!.id });
+  root.connections[0] = edge('producer', 'answer', 'caller', 'outer');
+  for (const graph of [root, middle, leaf, producer]) assert.deepEqual(marked(graph), new Set(graph.connections));
+});
+
+test('input routes cross referenced graph callers and terminate recursive calls', () => {
+  const { project, root, middle, leaf, make, edge } = inputStreamFixture();
+  const external: Project = {
+    metadata: { id: 'external' as ProjectId, title: 'External', description: '' },
+    graphs: { [leaf.metadata!.id!]: leaf },
+    plugins: [],
+  };
+  delete project.graphs[leaf.metadata!.id!];
+  middle.nodes[1] = make('caller', 'referencedGraphAlias', { projectId: 'external', graphId: 'leaf' });
+  middle.nodes.push(make('recursive', 'subGraph', { graphId: 'middle' }));
+  middle.connections.push(edge('input', 'data', 'recursive', 'outer'));
+  assert.deepEqual(
+    getProjectStreamingOutputWatchConnections({
+      project,
+      graph: root,
+      registry,
+      referencedProjects: { [external.metadata.id]: external },
+    }),
+    new Set(root.connections),
+  );
+});
+
+test('frozen input boundaries and callers do not propagate Watch demand to their parents', () => {
+  for (const frozen of ['input', 'caller', 'watch'] as const) {
+    const { project, root, middle, leaf } = inputStreamFixture();
+    const frozenGraph = frozen === 'caller' ? middle : leaf;
+    const frozenNode = frozen === 'caller' ? middle.nodes[1]! : leaf.nodes[frozen === 'input' ? 0 : 1]!;
+    assert.equal(
+      getProjectStreamingOutputWatchConnections({
+        project,
+        graph: root,
+        registry,
+        referencedProjects: {},
+        frozenNodeOutputs: { [frozenGraph.metadata!.id!]: { [frozenNode.id]: [{}] } },
+      }).size,
+      0,
+      frozen,
+    );
+  }
+});
+
+test('a frozen producer Subgraph keeps its direct Watch wire but does not trace into its child', () => {
+  const { project, root, leaf } = streamFixture();
+  const options = {
+    project,
+    registry,
+    referencedProjects: {},
+    frozenNodeOutputs: { [root.metadata!.id!]: { [root.nodes[0]!.id]: [{}] } },
+  };
+  assert.deepEqual(getProjectStreamingOutputWatchConnections({ ...options, graph: root }), new Set(root.connections));
+  assert.equal(getProjectStreamingOutputWatchConnections({ ...options, graph: leaf }).size, 0);
+});
+
+test('ambiguous Watch inputs do not mark either route', () => {
+  const { root, leaf, marked, make, edge } = streamFixture();
+  root.nodes.push(make('second', 'llmChatV2'));
+  root.connections.push(edge('second', 'response', 'watch', 'stream'));
+  assert.equal(marked(root).size, 0);
+  assert.equal(marked(leaf).size, 0);
+});
+
+test('port definitions are resolved once per visited node and never for unrelated branches', (t) => {
+  const { root, project, make, edge } = inputStreamFixture();
+  root.nodes.push(make('unrelated', 'llmChatV2'), make('sink', 'passthrough'));
+  root.connections.push(edge('unrelated', 'response', 'sink', 'input1'));
+  const localRegistry = createBuiltInRegistry();
+  const lookup = t.mock.method(localRegistry, 'createDynamicImpl');
+  getProjectStreamingOutputWatchConnections({ project, graph: root, registry: localRegistry, referencedProjects: {} });
+  const resolved = lookup.mock.calls.map((call) => call.arguments[0]);
+  assert.ok(resolved.length > 0);
+  assert.ok(resolved.every((node) => node.id !== 'unrelated' && node.id !== 'sink'));
+  assert.equal(new Set(resolved).size, resolved.length);
+});
+
+test('traces renamed streaming outputs at every nesting level with graph-local node IDs', () => {
+  const { root, middle, leaf, marked } = streamFixture();
+  for (const graph of [root, middle, leaf]) assert.deepEqual(marked(graph), new Set(graph.connections));
+});
+
+test('uses unsaved active graph changes and removes arrows when the Watch is disabled', () => {
+  const { root, leaf, marked } = streamFixture();
+  const live = { ...leaf, connections: [] };
+  assert.equal(marked(live).size, 0);
+  root.nodes[1]!.disabled = true;
+  assert.equal(marked(leaf).size, 0);
+});
+
+test('stops at ordinary processing nodes and leaves unrelated fanout ordinary', () => {
+  const { leaf, marked, make, edge } = streamFixture();
+  leaf.nodes.push(make('plain', 'passthrough'));
+  const fanout = edge('producer', 'response', 'plain', 'input1');
+  leaf.connections.push(fanout);
+  assert.deepEqual(marked(leaf), new Set([leaf.connections[0]]));
+  leaf.connections[0] = edge('plain', 'output1', 'out', 'value');
+  assert.deepEqual(marked(leaf), new Set([leaf.connections[0]]));
+});
+
+test('does not descend through final-only, ambiguous, missing, or stale named outputs', () => {
+  for (const mode of [
+    'conditional',
+    'split-output',
+    'split-source',
+    'duplicate',
+    'error',
+    'missing-port',
+    'disabled',
+  ] as const) {
+    const { leaf, middle, marked, make } = streamFixture();
+    if (mode === 'conditional') leaf.nodes[1]!.isConditional = true;
+    if (mode === 'split-output') leaf.nodes[1]!.isSplitRun = true;
+    if (mode === 'split-source') leaf.nodes[0]!.isSplitRun = true;
+    if (mode === 'duplicate') leaf.nodes.push(make('duplicate', 'graphOutput', { id: 'answer', dataType: 'string' }));
+    if (mode === 'error') (middle.nodes[0]!.data as { useErrorOutput: boolean }).useErrorOutput = true;
+    if (mode === 'missing-port') leaf.connections[0]!.outputId = 'removed' as PortId;
+    if (mode === 'disabled') leaf.nodes[0]!.disabled = true;
+    assert.equal(marked(leaf).size, 0, mode);
+  }
+});
+
+test('frozen Graph Outputs are final-only and recursive callers terminate', () => {
+  const { project, leaf, middle, root } = streamFixture();
+  assert.equal(
+    getProjectStreamingOutputWatchConnections({
+      project,
+      graph: leaf,
+      registry,
+      referencedProjects: {},
+      frozenNodeOutputs: { [leaf.metadata!.id!]: { ['out' as NodeId]: [{}] } },
+    }).size,
+    0,
+  );
+  (middle.nodes[0]!.data as { graphId: string }).graphId = 'middle';
+  middle.connections[0]!.outputId = 'renamed' as PortId;
+  assert.equal(
+    getProjectStreamingOutputWatchConnections({ project, graph: root, registry, referencedProjects: {} }).size,
+    1,
+  );
+});
+
+test('follows the watched Data Bus channel without marking other channels', () => {
+  const { leaf, marked, make, edge } = streamFixture();
+  leaf.nodes.push(make('bus', 'dataBus'));
+  leaf.connections = [
+    edge('producer', 'response', 'bus', 'input1'),
+    edge('bus', 'output1', 'out', 'value'),
+    edge('producer', 'response', 'bus', 'input2'),
+  ];
+  assert.deepEqual(marked(leaf), new Set(leaf.connections.slice(0, 2)));
+  leaf.nodes[0]!.isSplitRun = true;
+  assert.equal(marked(leaf).size, 0);
+});
+
+test('follows referenced aliases while keeping project identities separate', () => {
+  const { project, leaf, middle, root, make } = streamFixture();
+  const external: Project = {
+    ...project,
+    metadata: { ...project.metadata, id: 'external' as ProjectId },
+    graphs: { [leaf.metadata!.id!]: leaf },
+  };
+  delete project.graphs[leaf.metadata!.id!];
+  middle.nodes[0] = make('caller', 'referencedGraphAlias', { projectId: 'external', graphId: 'leaf' });
+  assert.deepEqual(
+    getProjectStreamingOutputWatchConnections({
+      project,
+      graph: middle,
+      registry,
+      referencedProjects: { [external.metadata.id]: external },
+    }),
+    new Set(middle.connections),
+  );
+  assert.deepEqual(
+    getProjectStreamingOutputWatchConnections({
+      project,
+      graph: root,
+      registry,
+      referencedProjects: { [external.metadata.id]: external },
+    }),
+    new Set(root.connections),
+  );
+});
+
+test('resolves library callers and marks only the watched named output', () => {
+  const { project, middle, leaf, marked, make, edge } = streamFixture();
+  const source = middle.nodes[0]!;
+  const prefabId = 'caller' as NodePrefabId;
+  project.nodePrefabs = { [prefabId]: { id: prefabId, sourceNode: source } };
+  middle.nodes[0] = { ...source, type: 'nodePrefabInstance', data: { prefabId: 'caller' } };
+  leaf.nodes.push(make('other-output', 'graphOutput', { id: 'unwatched', dataType: 'string' }));
+  leaf.connections.push(edge('producer', 'response', 'other-output', 'value'));
+  assert.deepEqual(marked(middle), new Set(middle.connections));
+  assert.deepEqual(marked(leaf), new Set([leaf.connections[0]]));
 });
 
 test('leaves disabled and non-watch targets visually ordinary', () => {
-  const streamingConnection = connection('stream');
-
-  assert.equal(
-    getStreamingOutputWatchConnections({
-      connections: [streamingConnection],
-      nodes: [node('llm', 'llmChatV2'), node('watch', 'watchStreamingOutput', true)],
-    }).size,
-    0,
-  );
-  assert.equal(
-    getStreamingOutputWatchConnections({
-      connections: [streamingConnection],
-      nodes: [node('llm', 'llmChatV2'), node('watch', 'passthrough')],
-    }).size,
-    0,
-  );
+  const { leaf, root, marked, make, edge } = streamFixture();
+  root.nodes[1]!.disabled = true;
+  assert.equal(marked(root).size, 0);
+  assert.equal(marked(leaf).size, 0);
+  root.nodes[1] = make('plain', 'passthrough');
+  root.connections = [edge('caller', 'renamed', 'plain', 'input1')];
+  assert.equal(marked(root).size, 0);
+  assert.equal(marked(leaf).size, 0);
 });
 
 test('finds the Watch branch through Stop but not its ordinary downstream work', () => {

@@ -345,27 +345,11 @@ describe('workspaceTransitions', () => {
     assert.equal(merged.graphs['g-1' as GraphId], existingEmptyGraph);
   });
 
-  test('shouldPersistProjectBeforeLoad keeps empty opened tabs snapshot-eligible', () => {
-    const emptyProject = makeProject([]);
-    const emptyNavigationStack = { stack: [], index: undefined };
+  test('shouldPersistProjectBeforeLoad requires the current project to own an open tab', () => {
+    const project = makeProject([makeGraph('g-1', 'Graph')]);
 
-    assert.equal(
-      shouldPersistProjectBeforeLoad({
-        currentProjectHasOpenTab: true,
-        loadedProject: { loaded: false },
-        navigationStack: emptyNavigationStack,
-        project: emptyProject,
-      }),
-      true,
-    );
-    assert.equal(
-      shouldPersistProjectBeforeLoad({
-        currentProjectHasOpenTab: false,
-        loadedProject: { loaded: false },
-        navigationStack: emptyNavigationStack,
-        project: emptyProject,
-      }),
-      false,
-    );
+    assert.equal(shouldPersistProjectBeforeLoad({ currentProjectHasOpenTab: true, project }), true);
+    assert.equal(shouldPersistProjectBeforeLoad({ currentProjectHasOpenTab: false, project }), false);
   });
+
 });

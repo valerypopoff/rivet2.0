@@ -1,6 +1,6 @@
 import { useSetAtom, useStore } from 'jotai';
 import { toast } from 'react-toastify';
-import type { GraphId, NodeGraph, Project, ProjectId } from '@valerypopoff/rivet2-core';
+import type { GraphId, Project, ProjectId } from '@valerypopoff/rivet2-core';
 import type { ProjectExecutorMode } from '../../app/src/utils/projectExecutorMode.js';
 import type { EvaluationProjectFileData } from '../../app/src/io/IOProvider.js';
 import {
@@ -24,6 +24,7 @@ import {
 } from '../io/openedProjectSessionCache';
 import { resolveHostedProjectTitle, withHostedProjectTitle } from './openedProjectMetadata';
 import { normalizeWorkflowPath } from './workflowLibraryHelpers';
+import { resolveProjectGraphId } from '../../app/src/utils/projectEditorState.js';
 
 type OpenWorkflowProjectOptions = {
   executorMode?: ProjectExecutorMode;
@@ -85,19 +86,6 @@ function getSnapshotForOpenedProject(options: {
   }
 
   return options.snapshots[options.openedProject.projectId] ?? null;
-}
-
-function resolveOpenedGraph(project: Omit<Project, 'data'>, preferredGraphId?: GraphId): GraphId | undefined {
-  if (preferredGraphId && project.graphs[preferredGraphId]) {
-    return preferredGraphId;
-  }
-
-  if (project.metadata.mainGraphId && project.graphs[project.metadata.mainGraphId]) {
-    return project.metadata.mainGraphId;
-  }
-
-  return (Object.values(project.graphs) as NodeGraph[])
-    .sort((a, b) => (a.metadata?.name ?? '').localeCompare(b.metadata?.name ?? ''))[0]?.metadata?.id;
 }
 
 function retainOnlyOpenedProject(projects: OpenedProjectsInfo, projectId: ProjectId): OpenedProjectsInfo {
@@ -226,7 +214,10 @@ export function useOpenWorkflowProject(workspace: RivetWorkspaceHost) {
         throw new Error(`No in-memory snapshot is available for "${alreadyOpenByPath.title}".`);
       }
 
-      const openedGraph = resolveOpenedGraph(snapshot.project, preferredGraphId) ?? alreadyOpenByPath.openedGraph;
+      const openedGraph = resolveProjectGraphId(snapshot.project, {
+        explicitGraphId: preferredGraphId,
+        openedGraphId: alreadyOpenByPath.openedGraph,
+      });
       await cancelOpeningTab();
       const opened = replaceCurrent
         ? await workspace.replaceCurrent(
@@ -293,7 +284,7 @@ export function useOpenWorkflowProject(workspace: RivetWorkspaceHost) {
     }
 
     const snapshot = splitProjectSnapshot(project);
-    const openedGraph = resolveOpenedGraph(project, preferredGraphId);
+    const openedGraph = resolveProjectGraphId(project, { explicitGraphId: preferredGraphId });
     const projectId = project.metadata.id as ProjectId;
     const projectInput = {
       ...snapshot,

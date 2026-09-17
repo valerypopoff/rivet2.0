@@ -243,7 +243,7 @@ describe('MatchCaseNode', () => {
     assert.deepEqual(output.same, { type: 'string', value: 'same' });
   });
 
-  it('exposes Return value inputs and retains custom-value routing in Custom mode', async () => {
+  it('exposes Output value inputs and retains custom-value routing in Custom mode', async () => {
     const shared = createNode({
       cases: ['same'],
       casePortIds: ['same'],
@@ -254,7 +254,7 @@ describe('MatchCaseNode', () => {
       shared.getInputDefinitions().map(({ id, title }) => ({ id, title })),
       [
         { id: 'input', title: 'Input' },
-        { id: 'value', title: 'Return value' },
+        { id: 'value', title: 'Output value' },
       ],
     );
     assert.ok(shared.getOutputDefinitions().every((output) => output.dataType === 'any'));

@@ -1115,8 +1115,11 @@ Important nuance:
   into that project-scoped store, so programmatic viewport moves are captured too
 - `useRestorePersistedWorkspace` restores the remembered graph/subgraph context and viewport once on
   boot without re-running the full project-load side effects
-- `lastCanvasPositionByGraphState` remains as a same-session runtime cache and compatibility
-  fallback for graph switching, but it is no longer the authoritative reopen source
+- a non-bfcache `pagehide` checkpoint stores only the active project entry in tab-session storage before the
+  grouped project store flushes; replacement hydration merges that entry without overwriting inactive
+  project state
+- `lastCanvasPositionByGraphState` is a read-only migration fallback for pre-existing browser state;
+  current synchronization does not write or repopulate it
 
 Switching between views therefore prefers the current project's persisted canvas positions, then
 falls back to the legacy cache, and centers/resets only when neither has a saved viewport.

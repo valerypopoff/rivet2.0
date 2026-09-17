@@ -130,36 +130,32 @@ export class GraphInputNodeImpl extends NodeImpl<GraphInputNode> {
   }
 
   async process(inputs: Inputs, context: InternalProcessContext): Promise<Record<string, DataValue>> {
-    let inputValue =
-      context.graphInputs[this.data.id] == null
-        ? undefined
-        : coerceTypeOptional(context.graphInputs[this.data.id], this.data.dataType);
-
-    if (inputValue == null && this.data.useDefaultValueInput) {
-      inputValue = coerceTypeOptional(inputs['default' as PortId], this.data.dataType);
-    }
-
-    if (inputValue == null) {
-      inputValue =
-        coerceTypeOptional(inferType(this.data.defaultValue), this.data.dataType) ||
-        getDefaultValue(this.data.dataType);
-    }
-
-    // Resolve undefined for array inputs to empty array
-    if (inputValue == null && isArrayDataType(this.data.dataType)) {
-      inputValue = { type: this.data.dataType, value: [] } as DataValue;
-    }
-
-    const value = {
-      type: this.data.dataType,
-      value: inputValue,
-    } as DataValue;
+    const value = resolveGraphInputValue(this.data, context.graphInputs[this.data.id], inputs);
 
     // Store the resolved value in the context for access by other nodes
     context.graphInputNodeValues[this.data.id] = value;
 
     return { ['data' as PortId]: value };
   }
+}
+
+/** One coercion/default policy for ordinary and live graph inputs. */
+export function resolveGraphInputValue(
+  data: GraphInputNodeData,
+  input: DataValue | undefined,
+  inputs: Inputs = {},
+): DataValue {
+  let inputValue = input == null ? undefined : coerceTypeOptional(input, data.dataType);
+  if (inputValue == null && data.useDefaultValueInput) {
+    inputValue = coerceTypeOptional(inputs['default' as PortId], data.dataType);
+  }
+  if (inputValue == null) {
+    inputValue = coerceTypeOptional(inferType(data.defaultValue), data.dataType) || getDefaultValue(data.dataType);
+  }
+  if (inputValue == null && isArrayDataType(data.dataType)) {
+    inputValue = { type: data.dataType, value: [] } as DataValue;
+  }
+  return { type: data.dataType, value: inputValue } as DataValue;
 }
 
 export const graphInputNode = nodeDefinition(GraphInputNodeImpl, 'Graph Input');

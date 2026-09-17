@@ -203,6 +203,7 @@ export class SubGraphNodeImpl extends NodeImpl<SubGraphNode> {
         context.contextValues,
         {
           ...(requestedGraphOutputIds ? { requestedGraphOutputIds } : {}),
+          graphInputStreams: context.graphInputStreams,
           // A child Graph Output can relay a direct producer's partial value
           // under the public boundary port ID. An Error-output Subgraph may
           // later replace that same normal output with an exclusion, so it is

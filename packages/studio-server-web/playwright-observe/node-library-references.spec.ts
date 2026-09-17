@@ -1,6 +1,6 @@
 import { expect, test } from '@playwright/test';
 import { serializeProject, type Project } from '@valerypopoff/rivet2-core';
-import { authenticateIfNeeded, waitForDashboardReady } from './helpers/hostedEditorObserve';
+import { authenticateIfNeeded, panGraphCanvas, waitForDashboardReady } from './helpers/hostedEditorObserve';
 
 test('library references count instances and navigate to the chosen graph node', async ({ page }, testInfo) => {
   const source = {
@@ -76,6 +76,15 @@ test('library references count instances and navigate to the chosen graph node',
   await waitForDashboardReady(page);
   await page.locator('.project-row', { hasText: 'Library references' }).dblclick();
   const editor = page.frameLocator('iframe.dashboard-editor-frame');
+  const canvasContents = editor.locator('.canvas-node-contents');
+  const savedGraphTransform = await panGraphCanvas(page);
+
+  await editor.getByText('Node library', { exact: true }).click();
+  await panGraphCanvas(page);
+  await editor.getByText('Graph A', { exact: true }).click();
+  await expect(editor.locator('.node[data-nodeid="first"]')).toBeVisible();
+  await expect.poll(() => canvasContents.evaluate((element) => (element as HTMLElement).style.transform)).toBe(savedGraphTransform);
+
   await editor.getByText('Node library', { exact: true }).click();
   const references = editor.locator('.node-library-references');
   await expect(references).toHaveCount(1);
@@ -118,4 +127,19 @@ test('library references count instances and navigate to the chosen graph node',
   await expect(editor.locator('.node[data-nodeid="first"]')).toBeVisible();
   await editor.getByText('Graph B', { exact: true }).click();
   await expect(editor.locator('.node[data-nodeid="third"]')).toHaveCount(1);
+
+  const graphBTransform = await panGraphCanvas(page);
+
+  // Opening Node Library replaces the shared canvas transform. Reload while it
+  // is active to prove the app-level checkpoint keeps the last graph viewport.
+  await editor.getByText('Node library', { exact: true }).click();
+  await expect(editor.locator('.node[data-nodeid="source"]')).toBeVisible();
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await authenticateIfNeeded(page);
+  await waitForDashboardReady(page);
+  const restoredEditor = page.frameLocator('iframe.dashboard-editor-frame');
+  await expect(restoredEditor.locator('.node[data-nodeid="third"]')).toBeVisible();
+  await expect
+    .poll(() => restoredEditor.locator('.canvas-node-contents').evaluate((element) => (element as HTMLElement).style.transform))
+    .toBe(graphBTransform);
 });

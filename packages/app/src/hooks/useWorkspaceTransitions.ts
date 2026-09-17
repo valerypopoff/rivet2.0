@@ -19,6 +19,7 @@ import {
   lastCanvasPositionByGraphState,
   selectedNodesState,
 } from '../state/graphBuilder.js';
+import { projectEditorStateByProjectIdState } from '../state/projectEditor.js';
 import {
   loadedProjectState,
   openedProjectSnapshotsState,
@@ -45,7 +46,6 @@ import { useStaticDataDatabase } from './useStaticDataDatabase.js';
 import { resolveOpenedProjectSavePath, updateOpenedProjectMetadata } from '../utils/openedProjects.js';
 import {
   resolveCanvasPositionsForProject,
-  resolvePersistedCanvasPositionsForLegacyCache,
   resolveProjectEditorRestoreTarget,
 } from '../utils/projectEditorState.js';
 import { flushHybridStorageGroup } from '../state/storage.js';
@@ -83,7 +83,6 @@ export function useWorkspaceTransitions() {
   const setHistoricalGraph = useSetAtom(historicalGraphState);
   const setSelectedNodes = useSetAtom(selectedNodesState);
   const setPosition = useSetAtom(canvasPositionState);
-  const setLastSavedPositions = useSetAtom(lastCanvasPositionByGraphState);
   const setOpenedProjectSnapshots = useSetAtom(openedProjectSnapshotsState);
   const setSavedProjectContentDigests = useSetAtom(savedProjectContentDigestsState);
   const setProjectUnsavedChanges = useSetAtom(projectUnsavedChangesState);
@@ -95,13 +94,11 @@ export function useWorkspaceTransitions() {
   const applyProjectExecutorMode = useApplyProjectExecutorMode();
   const { persistCurrentProjectExecutionSnapshot, restoreProjectExecutionSnapshot } = useProjectExecutionSnapshots();
   const evaluations = useAtomValue(evaluationsState);
+  const legacyCanvasPositionsByGraph = useAtomValue(lastCanvasPositionByGraphState);
   const {
-    canvasPosition,
     graphNavigationStack,
-    lastCanvasPositionsByGraph: lastSavedPositions,
     persistOpenedProjectSnapshot,
     persistCurrentProjectEditorSnapshot,
-    projectEditorStateByProjectId,
   } = useCurrentProjectEditorSnapshot();
 
   const persistCurrentGraphWorkspace = () => {
@@ -111,17 +108,6 @@ export function useWorkspaceTransitions() {
 
     if (project.metadata.id && leavePolicy.persistGraphViewport) {
       persistCurrentProjectEditorSnapshot({ currentGraphId });
-
-      if (currentGraphId) {
-        setLastSavedPositions((previousPositionsByGraph) => ({
-          ...previousPositionsByGraph,
-          [currentGraphId]: {
-            x: canvasPosition.x,
-            y: canvasPosition.y,
-            zoom: canvasPosition.zoom,
-          },
-        }));
-      }
     }
 
     const savedCurrentGraph = leavePolicy.commitLiveGraph ? saveCurrentGraph() : undefined;
@@ -192,8 +178,6 @@ export function useWorkspaceTransitions() {
         const storedWorkspaceTarget = store.get(projectWorkspaceTargetsState)[targetProjectId];
         const shouldPersistCurrentProject = shouldPersistProjectBeforeLoad({
           currentProjectHasOpenTab,
-          loadedProject,
-          navigationStack: graphNavigationStack,
           project,
         });
         const currentWorkspaceTarget = store.get(projectWorkspaceTargetsState)[currentProjectId];
@@ -214,15 +198,15 @@ export function useWorkspaceTransitions() {
 
         const persistedProjectEditorState =
           targetProjectId === currentProjectId
-            ? currentProjectEditorSnapshot ?? projectEditorStateByProjectId[targetProjectId]
-            : projectEditorStateByProjectId[targetProjectId];
+            ? currentProjectEditorSnapshot ?? store.get(projectEditorStateByProjectIdState)[targetProjectId]
+            : store.get(projectEditorStateByProjectIdState)[targetProjectId];
         const restoreTarget = resolveProjectEditorRestoreTarget({
           project: projectInfo.project,
           persistedProjectEditorState,
           explicitGraphToLoad: projectInfo.graphToLoad,
           explicitGraphView: projectInfo.graphView,
           openedGraphId: projectInfo.openedGraph,
-          legacyCanvasPositionsByGraph: lastSavedPositions,
+          legacyCanvasPositionsByGraph,
         });
 
         const transition = createProjectLoadTransition({
@@ -268,17 +252,6 @@ export function useWorkspaceTransitions() {
         setHistoricalGraph(null);
         setWorkspaceTarget({ projectId: targetProjectId, target: workspaceTarget });
         setGraph(transition.graph);
-        const persistedCanvasPositionsByGraph = resolvePersistedCanvasPositionsForLegacyCache({
-          project: projectInfo.project,
-          persistedProjectEditorState,
-        });
-        if (Object.keys(persistedCanvasPositionsByGraph).length > 0) {
-          setLastSavedPositions((previousPositionsByGraph) => ({
-            ...previousPositionsByGraph,
-            ...persistedCanvasPositionsByGraph,
-          }));
-        }
-
         if (transition.viewport.type === 'saved') {
           setPosition(transition.viewport.position);
         } else if (transition.viewport.type === 'center') {
@@ -338,8 +311,8 @@ export function useWorkspaceTransitions() {
         graphToLoad: savedGraph,
         lastSavedPositions: resolveCanvasPositionsForProject({
           project,
-          persistedProjectEditorState: projectEditorStateByProjectId[project.metadata.id],
-          legacyCanvasPositionsByGraph: lastSavedPositions,
+          persistedProjectEditorState: store.get(projectEditorStateByProjectIdState)[project.metadata.id],
+          legacyCanvasPositionsByGraph,
         }),
         nextGraphView: options.graphView,
         previousNavigationStack: graphNavigationStack,

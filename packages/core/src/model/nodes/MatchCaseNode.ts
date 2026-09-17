@@ -39,7 +39,7 @@ export class MatchCaseNodeImpl extends MatchCaseNodeBase<MatchCaseNode> {
     { value: true, label: 'First matching case' },
     { value: false, label: 'All matching cases' },
   ];
-  protected readonly sharedCustomValueInputTitle = 'Return value';
+  protected readonly sharedCustomValueInputTitle = 'Output value';
   protected readonly triggerEditorLabel = 'Trigger';
 
   static create(): MatchCaseNode {
@@ -148,7 +148,7 @@ export class MatchCaseNodeImpl extends MatchCaseNodeBase<MatchCaseNode> {
       infoBoxBody: dedent`
         Routes an Input value to matching case outputs. Plain text cases use exact, case-sensitive equality by default; turn off Case sensitive to ignore letter case. Choose Regular expression to use the existing JavaScript RegExp pattern behavior; the Case sensitive switch does not apply in that mode.
 
-        Choose First matching case to trigger only the first matching output, or All matching cases to trigger every matching output. Active outputs return True by default. They can instead return the Input value, or a custom value supplied through one shared Return value input or separate Return values inputs for every case and Unmatched.
+        Choose First matching case to trigger only the first matching output, or All matching cases to trigger every matching output. Active outputs return True by default. They can instead return the Input value, or a custom value supplied through one shared Output value input or separate Output values inputs for every case and Unmatched.
       `,
       infoBoxTitle: 'Match case Node',
       contextMenuTitle: 'Match case',

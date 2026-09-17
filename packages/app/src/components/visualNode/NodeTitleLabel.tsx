@@ -51,7 +51,7 @@ export const NodeTitleLabel: FC<{ node: Pick<ChartNode, 'title' | 'type'> }> = (
         ? 'set'
         : undefined;
   const hasKnowledgeIcon = knowledgeNodeTypes.has(node.type);
-  const hasDebugIcon = node.type === 'graphCallPath';
+  const hasDebugIcon = node.type === 'graphCallPath' || node.type === 'projectName';
   const hasToolCallContinuationIcon = node.type === 'delegateFunctionCall';
 
   return (

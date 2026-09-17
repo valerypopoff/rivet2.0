@@ -35,6 +35,29 @@ transition.
 Persist graph coordinates only when leaving a graph. Never serialize Node library
 or UI-graph viewport coordinates into the previously active graph.
 
+`projectEditorStateByProjectIdState` is the canonical persisted editor state: it
+keys navigation and canvas positions by immutable project ID, then graph ID. During a
+non-bfcache `pagehide`, only the active project entry receives a one-shot tab-session checkpoint
+so an immediate hosted-page reload cannot lose a pending asynchronous storage write.
+The checkpoint is merged during the replacement editor's storage hydration and is
+never project content. `lastCanvasPositionByGraphState` remains a read-only
+compatibility fallback for pre-existing browser state; new editor synchronization
+must not write or repopulate it. The app shell owns the checkpoint listener so it
+also protects the most recent graph viewport while Node library or a UI graph is open;
+those resource canvases must instead reuse the already persisted graph snapshot.
+Closing a project tab is not project deletion: the project-scoped editor entry must
+survive so reopening the same project restores its graph and viewport. The workspace
+host snapshots the active tab, performs all tab/snapshot/context cleanup, and only
+then flushes the grouped `project` store. The final flush must durably contain both
+the retained editor state and the removed tab metadata; flushing before cleanup can
+recover a contradictory stale-open tab after an immediate reload.
+
+The last loaded `projectState` and `graphState` deliberately survive tab closure,
+but they no longer own a live viewport. Every snapshot write therefore requires an
+open tab and a graph workspace. Background synchronization, pagehide checkpointing,
+and project transitions must ignore closed projects so an empty-workspace startup
+cannot overwrite the retained viewport with the runtime canvas default.
+
 ## Project Strip
 
 [`ProjectSelector.tsx`](../packages/app/src/components/ProjectSelector.tsx) is the

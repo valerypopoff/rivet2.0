@@ -7,10 +7,14 @@ import {
   getActiveGraphId,
   pruneCanvasPositionsForProject,
   resolveCanvasPositionsForProject,
-  resolvePersistedCanvasPositionsForLegacyCache,
+  resolveProjectGraphId,
   resolveProjectEditorRestoreTarget,
   sanitizeNavigationStackForProject,
 } from './projectEditorState.js';
+import {
+  mergeProjectEditorReloadCheckpoint,
+  parseProjectEditorReloadCheckpoint,
+} from '../state/projectEditor.js';
 
 function makeGraph(
   id: string,
@@ -155,7 +159,20 @@ test('sanitizeNavigationStackForProject drops invalid entries and restores a val
     });
   });
 
-  test('buildCurrentProjectEditorStateSnapshot preserves the currently visible graph and only backfills the active legacy position', () => {
+  test('pruneCanvasPositionsForProject keeps finite zero and negative canvas values', () => {
+    const project = makeProject([makeGraph('alpha', 'Alpha')]);
+
+    assert.deepEqual(
+      pruneCanvasPositionsForProject(project, makeCanvasPositions({
+        alpha: { x: 0, y: -12, zoom: 0 } as any,
+      })),
+      {
+        alpha: { x: 0, y: -12, zoom: 0 },
+      },
+    );
+  });
+
+  test('buildCurrentProjectEditorStateSnapshot preserves the currently visible graph without importing unrelated legacy positions', () => {
     const project = makeProject([makeGraph('alpha', 'Alpha'), makeGraph('beta', 'Beta'), makeGraph('gamma', 'Gamma')]);
 
     const snapshot = buildCurrentProjectEditorStateSnapshot({
@@ -175,10 +192,6 @@ test('sanitizeNavigationStackForProject drops invalid entries and restores a val
           alpha: { x: 1, y: 2, zoom: 1 },
         }),
       },
-      legacyCanvasPositionsByGraph: makeCanvasPositions({
-        beta: { x: 7, y: 8, zoom: 1.5 },
-        gamma: { x: 30, y: 40, zoom: 2.5 },
-      }),
     });
 
     assert.equal(getActiveGraphId(snapshot.navigationStack), 'beta');
@@ -345,31 +358,6 @@ test('sanitizeNavigationStackForProject drops invalid entries and restores a val
     });
   });
 
-  test('resolvePersistedCanvasPositionsForLegacyCache converts persisted project-scoped positions to saved canvas entries', () => {
-    const alpha = makeGraph('alpha', 'Alpha');
-    const beta = makeGraph('beta', 'Beta');
-    const project = makeProject([alpha, beta], { mainGraphId: 'alpha' });
-
-    const resolved = resolvePersistedCanvasPositionsForLegacyCache({
-      project,
-      persistedProjectEditorState: {
-        navigationStack: {
-          stack: [createRootGraphViewContext('alpha' as GraphId)],
-          index: 0,
-        },
-        canvasPositionsByGraph: makeCanvasPositions({
-          alpha: { x: 1, y: 2, zoom: 1.2 },
-          beta: { x: 3, y: 4, zoom: 1.5 },
-        }),
-      },
-    });
-
-    assert.deepEqual(resolved, {
-      alpha: { x: 1, y: 2, zoom: 1.2, fromSaved: true },
-      beta: { x: 3, y: 4, zoom: 1.5, fromSaved: true },
-    });
-  });
-
   test('resolveProjectEditorRestoreTarget falls back from openedGraph to main graph to sorted graph to empty graph', () => {
     const alpha = makeGraph('alpha', 'Alpha');
     const beta = makeGraph('beta', 'Beta');
@@ -401,5 +389,72 @@ test('sanitizeNavigationStackForProject drops invalid entries and restores a val
     });
     assert.equal(emptyRestoreTarget.graph.metadata?.name, 'Untitled graph');
     assert.deepEqual(emptyRestoreTarget.viewport, { type: 'reset' });
+  });
+
+  test('resolveProjectGraphId consistently prioritizes explicit, opened, main, then sorted graphs', () => {
+    const alpha = makeGraph('alpha', 'Alpha');
+    const beta = makeGraph('beta', 'Beta');
+    const project = makeProject([beta, alpha], { mainGraphId: 'beta' });
+
+    assert.equal(
+      resolveProjectGraphId(project, {
+        explicitGraphId: 'alpha' as GraphId,
+        openedGraphId: 'beta' as GraphId,
+      }),
+      'alpha',
+    );
+    assert.equal(resolveProjectGraphId(project, { openedGraphId: 'alpha' as GraphId }), 'alpha');
+    assert.equal(resolveProjectGraphId(project, { openedGraphId: 'missing' as GraphId }), 'beta');
+    assert.equal(resolveProjectGraphId(makeProject([beta, alpha])), 'alpha');
+    assert.equal(resolveProjectGraphId(makeProject([])), undefined);
+  });
+
+  test('reload checkpoints replace only the active project entry and reject malformed values', () => {
+    const checkpoint = parseProjectEditorReloadCheckpoint(
+      JSON.stringify({
+        projectId: 'active-project',
+        state: {
+          navigationStack: {
+            stack: [createRootGraphViewContext('active-graph' as GraphId)],
+            index: 0,
+          },
+          canvasPositionsByGraph: makeCanvasPositions({
+            'active-graph': { x: 10, y: 20, zoom: 2 },
+          }),
+        },
+      }),
+    );
+
+    assert.deepEqual(
+      mergeProjectEditorReloadCheckpoint(
+        {
+          'inactive-project': {
+            navigationStack: {
+              stack: [createRootGraphViewContext('inactive-graph' as GraphId)],
+              index: 0,
+            },
+            canvasPositionsByGraph: makeCanvasPositions({
+              'inactive-graph': { x: 1, y: 2, zoom: 1 },
+            }),
+          },
+        } as any,
+        checkpoint,
+      ),
+      {
+        'inactive-project': {
+          navigationStack: {
+            stack: [createRootGraphViewContext('inactive-graph' as GraphId)],
+            index: 0,
+          },
+          canvasPositionsByGraph: makeCanvasPositions({
+            'inactive-graph': { x: 1, y: 2, zoom: 1 },
+          }),
+        },
+        'active-project': checkpoint!.state,
+      },
+    );
+    assert.equal(parseProjectEditorReloadCheckpoint('{'), undefined);
+    assert.equal(parseProjectEditorReloadCheckpoint(JSON.stringify({ projectId: '', state: {} })), undefined);
+    assert.equal(parseProjectEditorReloadCheckpoint(JSON.stringify({ projectId: 'active-project', state: [] })), undefined);
   });
 });

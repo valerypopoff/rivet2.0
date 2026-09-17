@@ -17,6 +17,7 @@ import { createDefaultEvaluationsState } from '../state/evaluations.js';
 import type { CanvasPosition } from '../state/graphBuilder.js';
 import type { OpenedProjectInfo } from '../state/savedGraphs.js';
 import { prepareCurrentGraphForSave } from './currentGraphSave.js';
+import { resolveProjectGraphId } from './projectEditorState.js';
 
 export type WorkspaceTransitionType =
   | 'load-project'
@@ -84,25 +85,11 @@ export function resolveProjectGraphForLoad(
     openedGraphId?: GraphId;
   } = {},
 ): NodeGraph {
-  const explicitGraphId = options.graphToLoad?.metadata?.id;
-
-  if (explicitGraphId && project.graphs[explicitGraphId]) {
-    return project.graphs[explicitGraphId]!;
-  }
-
-  if (options.openedGraphId && project.graphs[options.openedGraphId]) {
-    return project.graphs[options.openedGraphId]!;
-  }
-
-  if (project.metadata.mainGraphId && project.graphs[project.metadata.mainGraphId]) {
-    return project.graphs[project.metadata.mainGraphId]!;
-  }
-
-  const firstSortedGraph = Object.values(project.graphs).sort((a, b) =>
-    (a.metadata?.name ?? '').localeCompare(b.metadata?.name ?? ''),
-  )[0];
-
-  return firstSortedGraph ?? emptyNodeGraph();
+  const graphId = resolveProjectGraphId(project, {
+    explicitGraphId: options.graphToLoad?.metadata?.id,
+    openedGraphId: options.openedGraphId,
+  });
+  return graphId ? project.graphs[graphId]! : emptyNodeGraph();
 }
 
 export function createProjectLoadTransition(options: {
@@ -184,21 +171,9 @@ export function mergeCurrentGraphIntoProject(
 
 export function shouldPersistProjectBeforeLoad(options: {
   currentProjectHasOpenTab: boolean;
-  loadedProject: { loaded: boolean };
-  navigationStack: GraphNavigationStack;
   project: Omit<Project, 'data'>;
 }): boolean {
-  const projectId = options.project.metadata.id;
-  if (!projectId) {
-    return false;
-  }
-
-  return (
-    options.currentProjectHasOpenTab ||
-    options.loadedProject.loaded ||
-    Object.keys(options.project.graphs).length > 0 ||
-    options.navigationStack.stack.length > 0
-  );
+  return options.currentProjectHasOpenTab && Boolean(options.project.metadata.id);
 }
 
 export function mergeStaticData(

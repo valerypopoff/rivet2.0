@@ -145,6 +145,25 @@ export async function findBlankCanvasPoint(canvas: Locator, nodes: Locator, minV
   return null;
 }
 
+export async function panGraphCanvas(page: Page): Promise<string> {
+  const editor = page.frameLocator('iframe.dashboard-editor-frame');
+  const canvas = editor.locator('.node-canvas');
+  const contents = editor.locator('.canvas-node-contents');
+  await expect(canvas).toBeVisible();
+  const initialTransform = await contents.evaluate((element) => (element as HTMLElement).style.transform);
+  const box = await canvas.boundingBox();
+  expect(box).not.toBeNull();
+
+  const start = { x: box!.x + box!.width - 80, y: box!.y + box!.height - 80 };
+  await page.mouse.move(start.x, start.y);
+  await page.mouse.down();
+  await page.mouse.move(start.x - 180, start.y - 120, { steps: 4 });
+  await page.mouse.up();
+
+  await expect.poll(() => contents.evaluate((element) => (element as HTMLElement).style.transform)).not.toBe(initialTransform);
+  return contents.evaluate((element) => (element as HTMLElement).style.transform);
+}
+
 export async function saveStepScreenshot(page: Page, testInfo: TestInfo, name: string) {
   await page.screenshot({
     path: testInfo.outputPath(name),

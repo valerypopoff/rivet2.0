@@ -1,0 +1,27 @@
+---
+id: project-name
+title: Project Name
+sidebar_label: Project Name
+---
+
+## Overview
+
+Project Name is a Debug node that returns the name of the project that owns the graph currently being executed. Use it to include the project name in alerts, logs, traces, or other diagnostic output. It has no inputs or settings.
+
+## Inputs
+
+None. The node reads the current execution's project metadata.
+
+## Outputs
+
+| Output       | Type     | Meaning                                                           |
+| ------------ | -------- | ----------------------------------------------------------------- |
+| Project Name | `string` | Name of the project that owns the graph currently being executed. |
+
+Ordinary subgraphs return the same project name as their caller. If a Referenced Graph Alias calls a graph from another project, a Project Name node inside that graph returns the referenced project's name.
+
+Project names are human-readable and can be changed. Do not use this output as a permanent project identity key.
+
+## Settings
+
+None. The node only reports the current execution context and does not alter execution.

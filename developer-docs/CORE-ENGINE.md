@@ -450,7 +450,9 @@ Current `Random number` behavior lives on the existing `randomNumber` node type 
 
 Both implementations share fallback selection and settings in `CoalesceNodeBase.ts`; keep both types in `NodeExclusionPolicy.ts` so excluded branches can reach that selection. Existing serialized nodes keep their type, connections, and stored title; the legacy label applies to the registered node name and newly created legacy nodes. The dedicated legacy `Conditional` port excludes output only when its value is `control-flow-excluded`; boolean `false` still permits fallback selection. The standard **If** option is handled separately by the processor. Focused coverage lives in `CoalesceNode.test.ts` and `NodeExclusionPolicy.test.ts`; run `yarn studio-server:ui:observe coalesce-node.spec.ts` with headless settings to verify both palette entries and their ports.
 
-Numbered variadic ports derive their connected range through [`variadicPortIndex.ts`](../packages/core/src/model/nodes/variadicPortIndex.ts). `getNextVariadicPortIndex(...)` returns the highest matching connected index plus one for the trailing editable slot; Array, Did Run, Delay, Join, Passthrough, Start Async Branch, Race Inputs, Coalesce, Coalesce (legacy), Assemble Prompt, and Assemble Message use that policy. **Loop Controller (legacy)** deliberately uses `getHighestVariadicPortIndex(...)` because it builds its own trailing input/default pair. The explicit policy literal retains existing parsing rather than normalizing serialized connections: `legacy` for Array, Assemble Prompt, Assemble Message, and Loop Controller (legacy) keeps no-radix parsing; `decimal` for Did Run, Delay, Join, Passthrough, Start Async Branch, and Race Inputs keeps decimal parsing; `strict-positive` for both Coalesce types accepts only exact, positive, safe `inputN` ids. Do not silently make these policies stricter or more uniform without an explicit graph-compatibility change.
+Numbered variadic ports derive their connected range through [`variadicPortIndex.ts`](../packages/core/src/model/nodes/variadicPortIndex.ts). `getNextVariadicPortIndex(...)` returns the highest matching connected index plus one for the trailing editable slot; Array, Did Run, Delay, Join, Passthrough, Start Async Branch, Race Inputs, Coalesce, Coalesce (legacy), Assemble Prompt, and Assemble Message use that policy. **Loop Controller (legacy)** deliberately uses `getHighestVariadicPortIndex(...)` because it builds its own trailing input/default pair. The explicit policy literal retains existing parsing rather than normalizing serialized connections: `legacy` for Array, Assemble Prompt, Assemble Message, and Loop Controller (legacy) keeps no-radix parsing; `decimal` for Did Run, Delay, Join, Passthrough, Start Async Branch, and Race Inputs keeps decimal parsing; `strict-positive` for both Coalesce types accepts only exact, positive, safe `inputN` ids. Assemble Prompt and Assemble Message also use the shared parser to order runtime inputs numerically, so index 10 follows index 2 while historical legacy IDs retain their established interpretation. Do not silently make these policies stricter or more uniform without an explicit graph-compatibility change.
+
+Assemble Prompt's optional `filterEmptyPrompts` setting is deliberately opt-in and missing values mean disabled, preserving serialized projects that include empty chat messages. Processing order is flatten variadic inputs, coerce each value to a chat message, optionally remove content-empty messages, apply the existing last-message cache-breakpoint rule when at least two messages remain, then calculate the optional token count. A text-only message is empty when every text part is empty or whitespace-only. Rich image, URL, and document parts remain meaningful, as do assistant tool calls and function-response messages with empty text; filtering must not break provider tool-protocol history. Applying a cache breakpoint replaces the final output entry with a shallow copy so a fan-out input message is never mutated. The prompt output remains a valid empty `chat-message[]` when every message is removed. The App owns the ordinary canvas presentation for this node: it dims the `Filter empty prompts:` label while leaving its state readable, matching the LLM setting-summary convention; Core's text body remains the fallback for non-App renderers.
 
 `Did Run` is a small control-flow adapter node. It has Coalesce-style dynamic `Input N` ports and one boolean `Ran` output. `GraphProcessor` already prevents normal node processing when any connected upstream value is `control-flow-excluded`, so the node implementation deliberately does not re-check payload truthiness or data type. If the processor invokes it with at least one dynamic input entry, it outputs `true`; if no dynamic inputs are connected, it outputs `control-flow-excluded`. This keeps the node's meaning focused on "did every connected branch run at all?" rather than "what values did those branches produce?" Its explanatory copy belongs in the settings panel through a read-only `info` editor; the node body intentionally stays empty and new nodes default to a compact 167px width.
 
@@ -728,6 +730,7 @@ Current behavioral detail:
 
 - helper paths such as `getDependencyNodesDeep(...)` can trigger preprocessing before `processGraph(...)` starts, because the app uses them to plan editor run-from execution before preloading already-computed boundary inputs
 - `contextValues` are refreshed per `processGraph(...)` call even when reusing the same processor instance
+- dependency readiness tracks upstream nodes directly; titles are presentation metadata and must never decide whether a consumer is allowed to run
 - `Context` nodes resolve values in a strict order: runtime `contextValues[id]`, then a connected default input when the default-input toggle is enabled, then the editor default, then the data type's built-in default. Every resolved value is coerced to the node's configured data type before being emitted.
 - pause waits are abort-aware, so aborting a paused run unwinds instead of waiting forever for a later `resume`
 
@@ -878,7 +881,7 @@ Current execution policy details:
 - split-run parallel execution uses its own bounded `splitRunConcurrency` limit instead of raw `Promise.all`; individual nodes can override that limit with `node.splitRunConcurrency`, while undefined nodes keep the processor-level default so older workflows that do not have the per-node field keep their existing behavior
 - node-level abort signals are tracked in a run-scoped map keyed by exact `NodeId`. The common case stores the single active controller directly and promotes to a `Set<AbortController>` only when overlapping executions of the same node are active. Processor aborts walk active controllers directly instead of registering a processor-level abort listener for every node execution, while race winners still abort only controllers for exact nodes in that race branch. Keep controller registration and cleanup paired around every pre-process exit path, including paused nodes waiting to resume.
 - each graph run prepares the stable part of `InternalProcessContext` once, then layers per-node fields such as `node`, `signal`, `processId`, `execution`, `attachedData`, partial-output callbacks, user-input callbacks, globals setters, wait-event handlers, plugin config, and subprocessor creation for every node execution. Do not move mutable node/run-scoped fields into the stable base.
-- the Debug-category Graph Call Path node reads a stable, immutable graph-name path from that process context. A real `createSubProcessor` graph call appends its child graph; synthetic same-graph processors for async branches, tool continuations, and streaming watches inherit the path unchanged. The first item is the graph actually selected for the run, not necessarily the project's main graph. This path is node data only, not a replacement for graph-run IDs in execution metadata.
+- Debug-category context nodes read execution identity without duplicating it in node data. Graph Call Path reads a stable, immutable graph-name path: a real `createSubProcessor` graph call appends its child graph, while synthetic same-graph processors for async branches, tool continuations, and streaming watches inherit the path unchanged. The first item is the graph actually selected for the run, not necessarily the project's main graph. Project Name reads `InternalProcessContext.project.metadata.title`; referenced-project subprocessors already replace `project`, so a node inside a referenced graph reports the referenced project rather than the root caller. These human-readable values are diagnostic data, not replacements for project or graph-run IDs.
 - the default isomorphic Code runner is a shared stateless instance for core/browser-style contexts. Custom `ProcessContext.codeRunner` values remain per-caller and are still passed through unchanged.
 
 The readiness/dependency logic used by this flow now lives largely in `NodeExecutionPlanner.ts`, while `GraphProcessor` coordinates queueing and mutable execution state.
@@ -1037,6 +1040,23 @@ late `onPartialOutputs` callbacks from a misbehaving producer are ignored and
 cannot schedule a branch after ordinary final execution has begun.
 
 #### Named streaming outputs across graph-boundary callers
+
+Core and editor arrows share the route resolver in
+`packages/core/src/model/StreamingWatchTopology.ts`. It traces enabled Watch
+demand through named graph inputs/outputs and Data Bus channels, resolving
+library instances and definition-valid ports. Caller lookup is scoped by target
+graph and owning project, not globally unique node IDs. Visited connections
+terminate recursive traversal. Ordinary processing nodes and final-only
+boundaries stop traversal; unrelated ports never inherit arrows.
+
+The active unsaved graph overlays the saved project. Arrows indicate a static
+Watch route, not current token activity. Frozen Graph Inputs and callers stop
+boundary traversal, while a frozen producer can retain its direct Watch wire
+for a final replayed value. Ambiguous multiple-provider Watch inputs are invalid.
+Port definitions, including failed plugin lookups, are cached per traversal and
+resolved only for visited connections. Browser coverage in
+`streaming-boundary-wires.spec.ts` navigates two levels in both directions:
+from a parent Watch to a nested producer and from a producer to a nested Watch.
 
 A child graph may expose a stream through a normal named **Graph Output**. If
 an emitting node directly feeds that Graph Output in the effective topology,
@@ -1253,6 +1273,54 @@ ordinary parent queue, and managed async branches to a fixed point. Therefore a
 Stop accepted after the source's compatible scheduler has already gone idle
 still finishes every normal downstream node (including a newly started async
 branch) before graph completion.
+
+#### Live named graph inputs
+
+An enabled Watch reached through a named Graph Input establishes input-stream
+demand on eligible Subgraph and Referenced Graph Alias callers. Core and editor
+wire arrows use `StreamingWatchTopology` for the same project-scoped routes,
+including library instances, Data Bus channels, and output-pruned invocations.
+Ordinary intermediate nodes and conditional, split, disabled, frozen, or
+Error-output callers do not become streaming forwarders.
+Graph Inputs using a dynamic default-value input also remain final-only. Partial
+and final Graph Input values share the same coercion and authored-default resolver.
+
+Each caller/port owns one runtime-only `GraphInputStreamRelay`. Partial and final
+values are cloned. Before subscription it retains only the latest partial and
+counts superseded updates as coalesced; afterward the existing Watch scheduler
+owns bounded queuing, interval delivery, parallelism, and Stop. Caller startup
+waits for non-stream arguments, not streamed arguments. Waiting callers are
+tracked outside the node queue so a concurrency limit of one cannot starve the
+producer needed to finish the invocation.
+
+The child graph starts once. Its Graph Input forwards partial values to Watch
+and nested eligible input relays without committing an ordinary node result.
+Each input drives its Watch independently. Final Graph Input results and ordinary
+child work wait for all streamed arguments, preserving the final-input readiness
+barrier through further nesting. Producer error, exclusion, or abort
+does not release unrelated side effects. Subscriptions are disposed at the end
+of the invocation; repeated terminals and late partials cannot replace results.
+No stream object is persisted in the graph, events, or recordings.
+
+Failed/excluded streams discard their pre-subscription partial buffer. A partial
+callback is valid only while its exact node abort-controller registration remains
+active and un-aborted, not merely while the processor is running. This prevents
+late provider callbacks from entering another invocation or a reused processor's
+next run, including through named graph-output forwarding.
+
+Defaulted/non-streamed Graph Inputs remain available as caller startup arguments,
+but defer terminal Watch/relay delivery until streamed siblings settle. Otherwise
+a default could release ordinary work in a deeper invocation prematurely. At
+queue quiescence, a producer skipped because of a transitive upstream error
+settles its outgoing relays with that error; awaiting callers must not hang on
+a producer that will never emit a terminal node event. Recheck after each caller
+settles, rather than waiting for all callers before reconsidering failed dependencies.
+
+Retained Watch branch events keep their existing same-graph synthetic child-run
+identity under the one containing Subgraph invocation. Existing selection,
+snapshot, transport, and recording paths retain the first three iterations and
+the decisive iteration. A Graph Input receiving only a final value still gives
+Watch one iteration; old recordings cannot reconstruct missing partials.
 
 #### Streaming Watch evidence retention
 

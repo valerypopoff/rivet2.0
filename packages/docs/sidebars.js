@@ -360,7 +360,7 @@ const sidebars = {
       label: 'Debug',
       collapsible: true,
       collapsed: false,
-      items: ['node-reference/graph-call-path'],
+      items: ['node-reference/graph-call-path', 'node-reference/project-name'],
     },
   ],
   cli: [

@@ -121,6 +121,13 @@ import {
   type StreamingOutputWatchHistorySummary,
 } from './StreamingOutputWatchHistory.js';
 import { cloneExecutionOutputs } from './ExecutionOutputClone.js';
+import { GraphInputStreamRelay, type GraphInputStream } from './GraphInputStream.js';
+import {
+  canStreamThroughGraphCaller,
+  canStreamThroughGraphInput,
+  getProjectStreamingOutputWatchConnections,
+} from './StreamingWatchTopology.js';
+import { type GraphInputNode, resolveGraphInputValue } from './nodes/GraphInputNode.js';
 import type { RivetKnowledgeStoreRegistry } from '../integrations/KnowledgeStore.js';
 import { KnowledgeStoreController } from '../integrations/KnowledgeStoreProvider.js';
 import { isDataBusTopologyNode } from './DataBusTopology.js';
@@ -217,16 +224,6 @@ type GraphOutputPartialBinding = {
   graphOutputId: string;
   sourceOutputId: PortId;
 };
-
-/**
- * These nodes expose a child graph's named Graph Output ports verbatim. Other
- * nodes that happen to run a graph (for example Call Graph or Loop Until)
- * aggregate or transform child outputs, so streaming through them would not
- * have the same terminal semantics.
- */
-function isNamedGraphBoundaryCaller(node: ChartNode): boolean {
-  return node.type === 'subGraph' || node.type === 'referencedGraphAlias';
-}
 
 function createGraphOutputsOverlay(parent: GraphOutputs): { view: GraphOutputs; writes: GraphOutputs } {
   const writes: GraphOutputs = {};
@@ -703,6 +700,12 @@ export class GraphProcessor {
   #graphOutputPartialListener: GraphOutputPartialListener | undefined;
   readonly #consumedStreamingWatchNodeId: NodeId | undefined;
   #streamingWatchInvocation: StreamingOutputWatchInvocation | undefined;
+  #graphInputStreams: Readonly<Record<string, GraphInputStream>> = {};
+  #callerInputStreams = new Map<NodeId, Record<string, GraphInputStreamRelay>>();
+  #inputStreamRoutes = new Map<NodeId, Array<{ port: PortId; relay: GraphInputStreamRelay }>>();
+  #streamCallerTasks = new Set<Promise<unknown>>();
+  #inputStreamDisposers: Array<() => void> = [];
+  #pendingGraphInputFinals = new Map<NodeId, Outputs>();
   readonly #registry: NodeRegistration<any, any>;
   readonly #concurrency: Required<GraphProcessorConcurrency>;
   readonly #executionPlanCacheMode: GraphProcessorExecutionPlanCacheMode;
@@ -1425,6 +1428,8 @@ export class GraphProcessor {
        * event protocol.
        */
       onGraphOutputPartial?: GraphOutputPartialListener;
+      /** Internal, invocation-scoped live named inputs. Not a serialized value. */
+      graphInputStreams?: Readonly<Record<string, GraphInputStream>>;
     } = {},
   ): Promise<GraphOutputs> {
     if (this.#lifecycle.isRunning) {
@@ -1451,6 +1456,12 @@ export class GraphProcessor {
           this.#profileRuntimeSync('initializeGraphRun', () =>
             this.#initializeGraphRun(context, inputs, contextValues),
           );
+          this.#graphInputStreams = options.graphInputStreams ?? {};
+          this.#callerInputStreams = new Map();
+          this.#inputStreamRoutes = new Map();
+          this.#streamCallerTasks = new Set();
+          this.#inputStreamDisposers = [];
+          this.#pendingGraphInputFinals = new Map();
           await this.#profileRuntimeAsync('loadProjectReferences', () => this.#loadProjectReferences());
           this.#profileRuntimeSync('initializeProjectGlobalVariables', () =>
             this.#initializeProjectGlobalVariablesForRootRun(),
@@ -1482,6 +1493,7 @@ export class GraphProcessor {
           this.#prepareAsyncBranchTopology();
           this.#prepareStreamingWatchTopology();
           this.#prepareGraphOutputPartialTopology();
+          this.#prepareGraphInputStreamRoutes();
         } catch (error) {
           const normalizedError = getError(error);
           await this.#emitRootStartupError(normalizedError);
@@ -1489,6 +1501,7 @@ export class GraphProcessor {
         }
 
         await this.#profileRuntimeAsync('emitGraphStart', () => this.#emitGraphStart());
+        this.#subscribeGraphInputStreams();
         await this.#profileRuntimeAsync('emitInitialProjectGlobalVariables', () =>
           this.#emitInitialProjectGlobalVariables(),
         );
@@ -1526,6 +1539,12 @@ export class GraphProcessor {
         await this.#profileRuntimeAsync('throwIfGraphErrored', () => this.#throwIfGraphErrored());
         return await this.#profileRuntimeAsync('finalizeGraphRun', () => this.#finalizeGraphRun());
       } finally {
+        for (const dispose of this.#inputStreamDisposers) dispose();
+        this.#pendingGraphInputFinals.clear();
+        for (const streams of this.#callerInputStreams.values()) {
+          for (const relay of Object.values(streams))
+            relay.finish({ error: new Error('Graph input stream owner finished') });
+        }
         await this.#drainSchedulerBoundaries();
         this.#graphOutputPartialListener = undefined;
         this.#lifecycle.complete();
@@ -1836,6 +1855,34 @@ export class GraphProcessor {
         getStartNodes(this.#executionState, this.#executionGraphNodes, this.runToNodeIds),
     );
     await this.#processingQueue.onIdle();
+    if (Object.keys(this.#graphInputStreams).length) {
+      await this.#waitForGraphInputStreams();
+      for (const [nodeId, outputs] of this.#pendingGraphInputFinals) {
+        this.#finishStreamingOutputWatches(this.#nodesById[nodeId]!, outputs);
+      }
+      this.#pendingGraphInputFinals.clear();
+      for (const node of this.#executionGraphNodes) {
+        if (!this.#isNodeSelected(node.id)) continue;
+        void this.#processingQueue.add(() => this.#processNodeIfAllInputsAvailable(node));
+      }
+      await this.#processingQueue.onIdle();
+    }
+    while (this.#streamCallerTasks.size) {
+      // A producer skipped transitively after an upstream failure never emits
+      // nodeError itself. Settle its consumers once ordinary work is quiescent.
+      for (const [sourceId, routes] of this.#inputStreamRoutes) {
+        if (this.#currentlyProcessing.has(sourceId) || routes.every(({ relay }) => relay.result)) continue;
+        const failedDependency = this.getDependencyNodesDeep(sourceId).find((id) => this.#erroredNodes.has(id));
+        if (failedDependency) {
+          const error = getError(this.#erroredNodes.get(failedDependency));
+          for (const { relay } of routes) relay.finish({ error });
+        }
+      }
+      // Recheck skipped producers after each caller settles; another caller may
+      // depend on ordinary nodes skipped because this caller failed.
+      await Promise.race(this.#streamCallerTasks);
+      await this.#processingQueue.onIdle();
+    }
     this.#markUnqueuedNodesIgnored();
   }
 
@@ -1846,6 +1893,8 @@ export class GraphProcessor {
 
     if (
       this.#graphOutputSelection ||
+      this.#callerInputStreams.size > 0 ||
+      Object.keys(this.#graphInputStreams).length > 0 ||
       this.#hasPreloadedData ||
       this.runToNodeIds ||
       this.slowMode ||
@@ -2180,9 +2229,21 @@ export class GraphProcessor {
   /** If all inputs are present, all conditions met, processes the node. */
   async #processNodeIfAllInputsAvailable(
     node: ChartNode,
-    options: { queueOutputNodes?: boolean } = {},
+    options: { queueOutputNodes?: boolean; streamingDispatch?: boolean } = {},
   ): Promise<ChartNode[]> {
     if (!this.#isNodeSelected(node.id)) return [];
+    // Waiting graph callers must not occupy a queue slot needed by their producer.
+    if (this.#callerInputStreams.has(node.id) && !options.streamingDispatch) {
+      const task = this.#processNodeIfAllInputsAvailable(node, { ...options, streamingDispatch: true }).catch(
+        (error: unknown) => this.#nodeErrored(node, error, nanoid() as ProcessId),
+      );
+      this.#streamCallerTasks.add(task);
+      void task.then(
+        () => this.#streamCallerTasks.delete(task),
+        () => this.#streamCallerTasks.delete(task),
+      );
+      return [];
+    }
     const { queueOutputNodes = true } = options;
     const builtInNode = node as BuiltInNodes;
     const inputNodesProfileStart = this.#startRuntimeProfile();
@@ -2195,6 +2256,42 @@ export class GraphProcessor {
     }
 
     if (this.#shouldSkipNodeProcessing(node, inputNodes)) {
+      return [];
+    }
+
+    const namedInput = node.type === 'graphInput' ? (node as GraphInputNode).data.id : undefined;
+    const inputStream =
+      namedInput != null && Object.hasOwn(this.#graphInputStreams, namedInput)
+        ? this.#graphInputStreams[namedInput]
+        : undefined;
+    if (inputStream) {
+      const terminals = Object.values(this.#graphInputStreams).map((stream) => stream.result);
+      // A containing invocation cannot release a successful final into a deeper
+      // caller when another required input failed or was excluded.
+      const terminal =
+        terminals.find((result) => result?.error) ??
+        terminals.find((result) => result?.value?.type === 'control-flow-excluded') ??
+        inputStream.result;
+      if (!terminal) return [];
+      if (terminal.error) {
+        await this.#nodeErrored(node, terminal.error, nanoid() as ProcessId);
+        return [];
+      }
+      if (terminal.value.type === 'control-flow-excluded') {
+        return this.#excludeNode(node, nanoid() as ProcessId, {}, 'streamed input is excluded', { queueOutputNodes });
+      }
+      // Final boundary results retain the invocation's original readiness barrier.
+      // Otherwise a deeper caller could finish its ordinary work while a sibling
+      // input to this invocation is still streaming.
+      if (terminals.some((result) => !result)) return [];
+    } else if (
+      node.type !== 'graphInput' &&
+      !this.#callerInputStreams.has(node.id) &&
+      Object.values(this.#graphInputStreams).some(
+        (stream) => !stream.result || stream.result.error || stream.result.value?.type === 'control-flow-excluded',
+      )
+    ) {
+      // Only streaming boundary plumbing runs early; ordinary side effects wait.
       return [];
     }
 
@@ -2219,9 +2316,19 @@ export class GraphProcessor {
       return loopExclusion === true ? [] : loopExclusion;
     }
 
-    const waitingForInputNode = getWaitingForInputNode(this.#executionState, node, inputNodes, inputValues);
+    const streamedInputs = this.#callerInputStreams.get(node.id);
+    const blockingInputNodes = streamedInputs
+      ? inputNodes.filter((inputNode) =>
+          this.#getInputConnectionsForNode(node).some(
+            (edge) => edge.outputNodeId === inputNode.id && !streamedInputs[edge.inputId],
+          ),
+        )
+      : inputNodes;
+    const waitingForInputNode = getWaitingForInputNode(this.#executionState, node, blockingInputNodes, inputValues);
     if (waitingForInputNode) {
-      this.#emitTraceEvent(`Node ${node.title} is waiting for input node ${waitingForInputNode}`);
+      this.#emitTraceEvent(
+        `Node ${node.title} is waiting for input node ${waitingForInputNode.title || waitingForInputNode.id}`,
+      );
       return [];
     }
 
@@ -2804,10 +2911,7 @@ export class GraphProcessor {
           event === 'nodeFinish'
             ? this.#claimStreamingWatchStopFromInvocation(node, (data as { outputs: Outputs }).outputs)
             : undefined;
-        const eventData =
-          event === 'nodeFinish' && stopClaim
-            ? { ...data, streamingWatchTerminal: true }
-            : data;
+        const eventData = event === 'nodeFinish' && stopClaim ? { ...data, streamingWatchTerminal: true } : data;
         return this.#emitter.emit(event, this.#withExecution(eventData)).then(() => stopClaim?.commit());
       },
       startNodeTiming: this.#captureNodeTimings ? () => this.#startNodeTiming() : undefined,
@@ -2955,6 +3059,7 @@ export class GraphProcessor {
     splitOutputs?: Record<number, Outputs>,
   ): Promise<void> {
     const error = getError(e);
+    for (const route of this.#inputStreamRoutes.get(node.id) ?? []) route.relay.finish({ error });
     // Most callers are ordinary (non-split) node executions. Let those retain
     // any checkpoint without requiring every error path to know about the
     // internal map. Split callers provide their per-index map explicitly.
@@ -3252,13 +3357,21 @@ export class GraphProcessor {
     markResultAsEditorCacheHit?: InternalProcessContext['markResultAsEditorCacheHit'],
   ): InternalProcessContext {
     const plugin = this.#registry.getPluginFor(node.type);
+    const acceptsPartialOutputs = () => {
+      if (nodeAbortController.signal.aborted) return false;
+      const active = this.#nodeAbortControllers.get(node.id);
+      return active === nodeAbortController || (active instanceof Set && active.has(nodeAbortController));
+    };
     const onGraphOutputPartial =
-      isNamedGraphBoundaryCaller(node) &&
+      canStreamThroughGraphCaller(node) &&
       (this.#streamingWatchPlansBySourceNodeId.has(node.id) ||
+        this.#inputStreamRoutes.has(node.id) ||
         this.#graphOutputPartialBindingsBySourceNodeId.has(node.id))
         ? (partialOutputs: Outputs) => {
+            if (!acceptsPartialOutputs()) return;
             this.#publishStreamingOutputWatchPartial(node, partialOutputs);
             this.#publishGraphOutputPartial(node, partialOutputs);
+            this.#publishGraphInputStreamPartial(node, partialOutputs);
           }
         : undefined;
     const toolCallContinuation = this.#getToolCallContinuationContext(
@@ -3282,9 +3395,12 @@ export class GraphProcessor {
       node,
       nodeAbortController,
       onGraphOutputPartial,
+      graphInputStreams: this.#callerInputStreams.get(node.id),
       onPartialOutputs: (partialOutputs) => {
+        if (!acceptsPartialOutputs()) return;
         partialOutput?.(node, partialOutputs, index);
         this.#publishStreamingOutputWatchPartial(node, partialOutputs);
+        this.#publishGraphInputStreamPartial(node, partialOutputs);
         this.#publishGraphOutputPartial(node, partialOutputs);
         this.#emitGraphPartialOutputIfNeeded(node, partialOutputs);
       },
@@ -4045,7 +4161,7 @@ export class GraphProcessor {
     }
   }
 
-  #publishStreamingOutputWatchPartial(node: ChartNode, partialOutputs: Outputs): void {
+  #publishStreamingOutputWatchPartial(node: ChartNode, partialOutputs: Outputs, coalesced = 0): void {
     for (const plan of this.#streamingWatchPlansBySourceNodeId.get(node.id) ?? []) {
       const value = partialOutputs[plan.sourceOutputId];
       if (value == null || value.type === 'control-flow-excluded') {
@@ -4055,8 +4171,123 @@ export class GraphProcessor {
       if (!watch || watch.stopped) {
         continue;
       }
+      watch.accountCoalescedUpdates(coalesced);
+      plan.nextUpdateIndex += coalesced;
       const updateIndex = this.#nextStreamingWatchUpdateIndex(plan);
       watch.publish(this.#createStreamingOutputWatchSnapshot(plan, value, updateIndex, false));
+    }
+  }
+
+  #prepareGraphInputStreamRoutes(): void {
+    if (!this.#executionGraphNodes.some((node) => canStreamThroughGraphCaller(node) && this.#isNodeSelected(node.id)))
+      return;
+    const marked = getProjectStreamingOutputWatchConnections({
+      project: this.#project,
+      graph: this.#graph,
+      referencedProjects: this.#loadedProjects,
+      registry: this.#registry,
+      fullGraphCallers: new Set(this.runToNodeIds ?? []),
+      isNodeFrozen: (_owner, candidate, node) =>
+        this.#frozenNodeOutputResolver != null &&
+        this.#frozenNodeOutputResolver.hasFrozenNodeOutput?.({ graphId: candidate.metadata!.id!, node }) !== false,
+    });
+    const inputKeys = new Map<NodeId, Set<PortId>>();
+    for (const edge of marked) {
+      const ports = inputKeys.get(edge.inputNodeId) ?? new Set<PortId>();
+      ports.add(edge.inputId);
+      inputKeys.set(edge.inputNodeId, ports);
+    }
+    for (const node of this.#executionGraphNodes) {
+      if (
+        !this.#isNodeSelected(node.id) ||
+        !canStreamThroughGraphCaller(node) ||
+        this.#hasFrozenNodeOutputOrUnknownResolver(node)
+      )
+        continue;
+      const streams: Record<string, GraphInputStreamRelay> = Object.create(null);
+      const incoming = this.#getInputConnectionsForNode(node).filter((edge) => this.#isDefinitionValidConnection(edge));
+      for (const edge of incoming) {
+        const source = this.#nodesById[edge.outputNodeId];
+        if (
+          !inputKeys.get(node.id)?.has(edge.inputId) ||
+          !source ||
+          source.disabled ||
+          source.isSplitRun ||
+          incoming.filter((other) => other.inputId === edge.inputId).length !== 1
+        )
+          continue;
+        const relay = new GraphInputStreamRelay();
+        streams[edge.inputId] = relay;
+        const routes = this.#inputStreamRoutes.get(source.id) ?? [];
+        routes.push({ port: edge.outputId, relay });
+        this.#inputStreamRoutes.set(source.id, routes);
+      }
+      if (Object.keys(streams).length) this.#callerInputStreams.set(node.id, streams);
+    }
+    const abort = () => {
+      const error = createGraphAbortErrorFromSignal(this.#abortController.signal);
+      for (const streams of this.#callerInputStreams.values()) {
+        for (const relay of Object.values(streams)) relay.finish({ error });
+      }
+    };
+    this.#abortController.signal.addEventListener('abort', abort, { once: true });
+    this.#inputStreamDisposers.push(() => this.#abortController.signal.removeEventListener('abort', abort));
+  }
+
+  #publishGraphInputStreamPartial(node: ChartNode, outputs: Outputs, coalesced = 0): void {
+    for (const { port, relay } of this.#inputStreamRoutes.get(node.id) ?? []) {
+      const value = outputs[port];
+      if (value && value.type !== 'control-flow-excluded') relay.publish(value, coalesced);
+    }
+  }
+
+  #subscribeGraphInputStreams(): void {
+    for (const [name, stream] of Object.entries(this.#graphInputStreams)) {
+      const inputs = this.#executionGraphNodes.filter(
+        (node): node is GraphInputNode =>
+          node.type === 'graphInput' &&
+          (node as GraphInputNode).data.id === name &&
+          !node.disabled &&
+          this.#isNodeSelected(node.id),
+      );
+      let active = true;
+      const unsubscribe = stream.subscribe((value, coalesced) => {
+        if (!active || this.#abortController.signal.aborted) return;
+        for (const node of inputs) {
+          if (!canStreamThroughGraphInput(node) || this.#hasFrozenNodeOutputOrUnknownResolver(node)) continue;
+          const output = {
+            ['data' as PortId]: resolveGraphInputValue(node.data, value),
+          };
+          this.#publishStreamingOutputWatchPartial(node, output, coalesced);
+          this.#publishGraphInputStreamPartial(node, output, coalesced);
+        }
+      });
+      this.#inputStreamDisposers.push(() => {
+        active = false;
+        unsubscribe();
+      });
+      void stream.settled.then((result) => {
+        if (!active || this.#abortController.signal.aborted) return;
+        if (result.value) this.#graphInputs[name] = result.value;
+        for (const node of inputs) void this.#processingQueue.add(() => this.#processNodeIfAllInputsAvailable(node));
+      });
+    }
+  }
+
+  async #waitForGraphInputStreams(): Promise<void> {
+    const signal = this.#abortController.signal;
+    if (signal.aborted) throw createGraphAbortErrorFromSignal(signal);
+    let abort!: () => void;
+    try {
+      await Promise.race([
+        Promise.all(Object.values(this.#graphInputStreams).map((stream) => stream.settled)),
+        new Promise<never>((_resolve, reject) => {
+          abort = () => reject(createGraphAbortErrorFromSignal(signal));
+          signal.addEventListener('abort', abort, { once: true });
+        }),
+      ]);
+    } finally {
+      signal.removeEventListener('abort', abort);
     }
   }
 
@@ -4166,6 +4397,30 @@ export class GraphProcessor {
   }
 
   #finishStreamingOutputWatches(node: ChartNode, outputs: Outputs): void {
+    if (node.type === 'graphInput') {
+      const terminals = Object.values(this.#graphInputStreams).map((stream) => stream.result);
+      if (terminals.some((result) => !result)) {
+        // Defaults/non-streamed arguments may be needed for caller startup, but
+        // their final Watch delivery must not release ordinary nested work early.
+        this.#pendingGraphInputFinals.set(node.id, cloneExecutionOutputs(outputs));
+        return;
+      }
+      const failure = terminals.find((result) => result?.error);
+      if (failure?.error) {
+        for (const route of this.#inputStreamRoutes.get(node.id) ?? []) route.relay.finish({ error: failure.error });
+        this.#cancelStreamingOutputWatchesForSource(node.id);
+        return;
+      }
+      if (terminals.some((result) => result?.value?.type === 'control-flow-excluded')) {
+        outputs = Object.fromEntries(
+          Object.keys(outputs).map((port) => [port, { type: 'control-flow-excluded', value: undefined }]),
+        );
+      }
+    }
+    for (const { port, relay } of this.#inputStreamRoutes.get(node.id) ?? []) {
+      const value = outputs[port];
+      relay.finish(value ? { value } : { error: new Error(`Missing final streamed output ${port}`) });
+    }
     for (const plan of this.#streamingWatchPlansBySourceNodeId.get(node.id) ?? []) {
       const value = outputs[plan.sourceOutputId];
       const watch = this.#streamingOutputWatches.get(plan.watchNode.id);
@@ -4548,7 +4803,9 @@ export class GraphProcessor {
 
       const stopNode = this.#nodesById[plan.stopNodeId];
       if (!stopNode) {
-        throw new Error(`Watch Streaming Output "${plan.watchNode.title}" lost its Stop Watching Streaming Output node.`);
+        throw new Error(
+          `Watch Streaming Output "${plan.watchNode.title}" lost its Stop Watching Streaming Output node.`,
+        );
       }
 
       plan.unmatchedStopResolved = true;

@@ -198,6 +198,7 @@ export class ReferencedGraphAliasNodeImpl extends NodeImpl<ReferencedGraphAliasN
         inputData as Record<string, DataValue>,
         context.contextValues,
         {
+          graphInputStreams: context.graphInputStreams,
           // This node preserves the referenced graph's named boundary ports,
           // so it may relay their direct producer partials to a parent Watch.
           // An Error-output alias can replace normal ports with exclusions,

@@ -40,7 +40,6 @@ import {
   canvasPositionState,
   editingNodeState,
   searchingGraphState,
-  lastCanvasPositionByGraphState,
   lastMousePositionState,
   selectedNodesState,
   draggingWireClosestPortState,
@@ -258,7 +257,6 @@ export const NodeCanvas: FC<NodeCanvasProps> = ({
             : undefined;
   const canUseFrozenNodes = freezeUnavailableReason == null;
 
-  const setLastSavedCanvasPosition = useSetAtom(lastCanvasPositionByGraphState);
   const setLastMousePosition = useSetAtom(lastMousePositionState);
   const normalizedCanvasBackgroundPattern = resolveCanvasBackgroundPattern(canvasBackgroundPattern);
   const normalizedCanvasBackgroundPatternOpacity = clampCanvasBackgroundPatternOpacity(canvasBackgroundPatternOpacity);
@@ -600,7 +598,6 @@ export const NodeCanvas: FC<NodeCanvasProps> = ({
         onCanvasClick?.();
       },
       onCanvasContextMenu: handleCanvasContextMenuRequest,
-      selectedGraphId: selectedGraphMetadata?.id,
       selectedNodeIds,
       selectionBox,
       setCanvasPosition,
@@ -608,7 +605,6 @@ export const NodeCanvas: FC<NodeCanvasProps> = ({
       setEditingNodeId,
       setIsDraggingCanvas,
       setLastMousePosition,
-      setLastSavedCanvasPosition,
       setSelectedNodeIds,
       startSelectionBox,
       isNodeDragGestureActive,
