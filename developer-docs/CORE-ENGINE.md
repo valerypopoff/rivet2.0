@@ -1041,6 +1041,23 @@ cannot schedule a branch after ordinary final execution has begun.
 
 #### Named streaming outputs across graph-boundary callers
 
+Core and editor arrows share the route resolver in
+`packages/core/src/model/StreamingWatchTopology.ts`. It traces enabled Watch
+demand through named graph inputs/outputs and Data Bus channels, resolving
+library instances and definition-valid ports. Caller lookup is scoped by target
+graph and owning project, not globally unique node IDs. Visited connections
+terminate recursive traversal. Ordinary processing nodes and final-only
+boundaries stop traversal; unrelated ports never inherit arrows.
+
+The active unsaved graph overlays the saved project. Arrows indicate a static
+Watch route, not current token activity. Frozen Graph Inputs and callers stop
+boundary traversal, while a frozen producer can retain its direct Watch wire
+for a final replayed value. Ambiguous multiple-provider Watch inputs are invalid.
+Port definitions, including failed plugin lookups, are cached per traversal and
+resolved only for visited connections. Browser coverage in
+`streaming-boundary-wires.spec.ts` navigates two levels in both directions:
+from a parent Watch to a nested producer and from a producer to a nested Watch.
+
 A child graph may expose a stream through a normal named **Graph Output**. If
 an emitting node directly feeds that Graph Output in the effective topology,
 Core maps its partial port value through the Graph Output's normal data-type
@@ -1256,6 +1273,54 @@ ordinary parent queue, and managed async branches to a fixed point. Therefore a
 Stop accepted after the source's compatible scheduler has already gone idle
 still finishes every normal downstream node (including a newly started async
 branch) before graph completion.
+
+#### Live named graph inputs
+
+An enabled Watch reached through a named Graph Input establishes input-stream
+demand on eligible Subgraph and Referenced Graph Alias callers. Core and editor
+wire arrows use `StreamingWatchTopology` for the same project-scoped routes,
+including library instances, Data Bus channels, and output-pruned invocations.
+Ordinary intermediate nodes and conditional, split, disabled, frozen, or
+Error-output callers do not become streaming forwarders.
+Graph Inputs using a dynamic default-value input also remain final-only. Partial
+and final Graph Input values share the same coercion and authored-default resolver.
+
+Each caller/port owns one runtime-only `GraphInputStreamRelay`. Partial and final
+values are cloned. Before subscription it retains only the latest partial and
+counts superseded updates as coalesced; afterward the existing Watch scheduler
+owns bounded queuing, interval delivery, parallelism, and Stop. Caller startup
+waits for non-stream arguments, not streamed arguments. Waiting callers are
+tracked outside the node queue so a concurrency limit of one cannot starve the
+producer needed to finish the invocation.
+
+The child graph starts once. Its Graph Input forwards partial values to Watch
+and nested eligible input relays without committing an ordinary node result.
+Each input drives its Watch independently. Final Graph Input results and ordinary
+child work wait for all streamed arguments, preserving the final-input readiness
+barrier through further nesting. Producer error, exclusion, or abort
+does not release unrelated side effects. Subscriptions are disposed at the end
+of the invocation; repeated terminals and late partials cannot replace results.
+No stream object is persisted in the graph, events, or recordings.
+
+Failed/excluded streams discard their pre-subscription partial buffer. A partial
+callback is valid only while its exact node abort-controller registration remains
+active and un-aborted, not merely while the processor is running. This prevents
+late provider callbacks from entering another invocation or a reused processor's
+next run, including through named graph-output forwarding.
+
+Defaulted/non-streamed Graph Inputs remain available as caller startup arguments,
+but defer terminal Watch/relay delivery until streamed siblings settle. Otherwise
+a default could release ordinary work in a deeper invocation prematurely. At
+queue quiescence, a producer skipped because of a transitive upstream error
+settles its outgoing relays with that error; awaiting callers must not hang on
+a producer that will never emit a terminal node event. Recheck after each caller
+settles, rather than waiting for all callers before reconsidering failed dependencies.
+
+Retained Watch branch events keep their existing same-graph synthetic child-run
+identity under the one containing Subgraph invocation. Existing selection,
+snapshot, transport, and recording paths retain the first three iterations and
+the decisive iteration. A Graph Input receiving only a final value still gives
+Watch one iteration; old recordings cannot reconstruct missing partials.
 
 #### Streaming Watch evidence retention
 

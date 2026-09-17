@@ -78,7 +78,10 @@ function normalizePositiveInteger(value: unknown, fallback: number, maximum: num
  */
 export class StreamingOutputWatch {
   readonly #options: StreamingOutputWatchOptions;
-  readonly #run: (snapshot: StreamingOutputWatchSnapshot, registerCancel: (cancel: () => void) => void) => Promise<void>;
+  readonly #run: (
+    snapshot: StreamingOutputWatchSnapshot,
+    registerCancel: (cancel: () => void) => void,
+  ) => Promise<void>;
   readonly #onFailure: (error: Error) => void;
   readonly #queue: StreamingOutputWatchSnapshot[] = [];
   readonly #activeRuns = new Set<ActiveRun>();
@@ -122,6 +125,12 @@ export class StreamingOutputWatch {
     };
     this.#run = run;
     this.#onFailure = onFailure;
+  }
+
+  /** Updates superseded before the receiving graph could start. */
+  accountCoalescedUpdates(count: number): void {
+    this.#receivedUpdates += count;
+    this.#coalescedUpdates += count;
   }
 
   get hasPending(): boolean {

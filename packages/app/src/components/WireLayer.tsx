@@ -26,10 +26,13 @@ import { ConditionallyRenderWire, PartialWire, ToolContinuationEndpointMarkers }
 import { useCanvasPositioning } from '../hooks/useCanvasPositioning.js';
 import { ErrorBoundary } from 'react-error-boundary';
 import { draggingWireClosestPortState } from '../state/graphBuilder.js';
-import { effectiveNodesByIdState, isReadOnlyGraphState, nodesByIdState } from '../state/graph.js';
+import { effectiveNodesByIdState, graphState, isReadOnlyGraphState, nodesByIdState } from '../state/graph.js';
+import { projectState, referencedProjectsState } from '../state/savedGraphs.js';
+import { projectNodeRegistryState } from '../state/plugins.js';
 import { type PortPositions } from './NodeCanvas';
 import {
   lastRunDataByNodeState,
+  frozenNodeOutputsState,
   resolvedGraphSelectionState,
   selectedProcessPageNodesState,
   type PageValue,
@@ -57,7 +60,7 @@ import {
   getToolContinuationWireStates,
   type ToolContinuationWireState,
 } from './nodeCanvas/toolContinuationWireState.js';
-import { getStreamingOutputWatchConnections } from './nodeCanvas/streamingOutputWatchWireState.js';
+import { getProjectStreamingOutputWatchConnections } from './nodeCanvas/streamingOutputWatchWireState.js';
 import { definitionValidConnectionsState } from '../state/selectors/ioDefinitions.js';
 import {
   connectionMatchesDataBusChannelKeys,
@@ -465,13 +468,21 @@ export const WireLayer: FC<WireLayerProps> = ({
       }),
     [definitionValidConnections, effectiveNodesById],
   );
+  const project = useAtomValue(projectState);
+  const graph = useAtomValue(graphState);
+  const referencedProjects = useAtomValue(referencedProjectsState);
+  const registry = useAtomValue(projectNodeRegistryState);
+  const frozenNodeOutputs = useAtomValue(frozenNodeOutputsState);
   const streamingOutputWatchConnections = useMemo(
     () =>
-      getStreamingOutputWatchConnections({
-        connections: definitionValidConnections,
-        nodes: Object.values(effectiveNodesById),
+      getProjectStreamingOutputWatchConnections({
+        project,
+        graph,
+        referencedProjects,
+        registry,
+        frozenNodeOutputs,
       }),
-    [definitionValidConnections, effectiveNodesById],
+    [project, graph, referencedProjects, registry, frozenNodeOutputs],
   );
   const establishedConnectionKeySet = useMemo(
     () => new Set(definitionValidConnections.map(getProjectConnectionComparisonKey)),
@@ -1051,7 +1062,7 @@ const StaticWireContents = memo(
                   markerIds: wireArrowMarkerIds,
                 }),
                 title:
-                  'Streaming watch: partial output snapshots flow repeatedly from this node to Watch Streaming Output.',
+                  'Streaming watch: this connection leads to Watch Streaming Output, including through named graph inputs and outputs.',
               }
             : undefined;
           const bendPoint = connection.bendPoint;

@@ -1,14 +1,41 @@
 import { expect, type FrameLocator, type Page, test } from '@playwright/test';
 import { authenticateIfNeeded } from './helpers/hostedEditorObserve';
-import { seedHostedEditorProject } from './helpers/hostedEditorStorage';
+import { seedHostedEditorProject, type SeedHostedEditorProjectOptions } from './helpers/hostedEditorStorage';
 import { createServer, type ServerResponse } from 'node:http';
 
 type EditorRoot = Page | FrameLocator;
 
-for (const scenario of ['text', 'schema', 'parallel-stop', 'unmatched-stop', 'abort'] as const) {
+test.beforeEach(async ({ page }) => {
+  await page.route('**/api/workflows/evaluation-runs/library', (route) =>
+    route.fulfill({
+      json: {
+        revision: 0,
+        resourceVersions: { suites: {}, datasets: {} },
+        library: {
+          version: 1,
+          data: { version: 1, suites: [], baselines: [] },
+          datasets: [],
+          migratedLegacyProjectIds: [],
+        },
+      },
+    }),
+  );
+});
+
+for (const scenario of [
+  'text',
+  'schema',
+  'parallel-stop',
+  'unmatched-stop',
+  'abort',
+  'nested-input',
+  'deep-input',
+  'nested-stop',
+] as const) {
   test(`live preview and Watch share a stream: ${scenario}`, async ({ page }) => {
     const pageErrors: string[] = [];
-    const hasStop = scenario === 'parallel-stop' || scenario === 'unmatched-stop';
+    const hasStop = scenario === 'parallel-stop' || scenario === 'unmatched-stop' || scenario === 'nested-stop';
+    const nestedInput = scenario === 'nested-input' || scenario === 'deep-input' || scenario === 'nested-stop';
     page.on('pageerror', (error) => pageErrors.push(error.message));
     const firstChunk = scenario === 'schema' ? '{"message":"hello' : 'hello';
     const lastChunk = scenario === 'schema' ? ' world"}' : ' world';
@@ -41,7 +68,7 @@ for (const scenario of ['text', 'schema', 'parallel-stop', 'unmatched-stop', 'ab
           '\n\n',
       );
     try {
-      await seedHostedEditorProject(page, {
+      const seed: SeedHostedEditorProjectOptions = {
         graphId: 'live-preview',
         projectId: 'live-preview-project',
         title: 'Live preview',
@@ -157,9 +184,7 @@ for (const scenario of ['text', 'schema', 'parallel-stop', 'unmatched-stop', 'ab
               inputNodeId: 'branch',
               inputId: scenario === 'unmatched-stop' ? 'value' : 'input',
             },
-            ...(hasStop
-              ? [{ outputNodeId: 'branch', outputId: 'output', inputNodeId: 'stop', inputId: 'value' }]
-              : []),
+            ...(hasStop ? [{ outputNodeId: 'branch', outputId: 'output', inputNodeId: 'stop', inputId: 'value' }] : []),
             ...(scenario === 'unmatched-stop'
               ? [
                   { outputNodeId: 'stop', outputId: 'value', inputNodeId: 'after-stop-one', inputId: 'input' },
@@ -173,16 +198,117 @@ for (const scenario of ['text', 'schema', 'parallel-stop', 'unmatched-stop', 'ab
               : []),
           ],
         },
-      });
-      await page.addInitScript(() =>
-        localStorage.setItem(
-          'recoil-persist',
-          JSON.stringify({
-            defaultExecutor: 'browser',
-            recordExecutions: false,
-          }),
-        ),
+      };
+      if (nestedInput) {
+        const nodes = seed.graph!.nodes! as Array<{
+          id: string;
+          type: string;
+          data: unknown;
+          title: string;
+          visualData: unknown;
+        }>;
+        const connections = seed.graph!.connections! as Array<{
+          inputNodeId: string;
+          inputId: string;
+          outputNodeId: string;
+          outputId: string;
+        }>;
+        const childNodes = nodes.filter((node) => ['consumer', 'watch', 'branch', 'stop'].includes(node.id));
+        childNodes.push({
+          id: 'stream-input',
+          type: 'graphInput',
+          title: 'Graph Input',
+          data: { id: 'stream', dataType: 'string' },
+          visualData: { x: 300, y: 100 },
+        });
+        seed.extraGraphs = [
+          {
+            id: 'watch-child',
+            name: 'Watch child',
+            nodes: childNodes,
+            connections: connections
+              .filter((edge) => ['consumer', 'watch', 'branch', 'stop'].includes(edge.inputNodeId))
+              .map((edge) =>
+                edge.outputNodeId === 'llm' ? { ...edge, outputNodeId: 'stream-input', outputId: 'data' } : edge,
+              ),
+          },
+        ];
+        seed.graph = {
+          nodes: [
+            ...nodes.filter((node) => ['prompt', 'llm'].includes(node.id)),
+            {
+              id: 'caller',
+              type: 'subGraph',
+              title: 'Watch child',
+              data: { graphId: scenario === 'deep-input' ? 'middle' : 'watch-child' },
+              visualData: { x: 650, y: 100 },
+            },
+          ],
+          connections: [
+            ...connections.filter((edge) => edge.inputNodeId === 'llm'),
+            { outputNodeId: 'llm', outputId: 'response', inputNodeId: 'caller', inputId: 'stream' },
+          ],
+        };
+        if (scenario === 'deep-input')
+          seed.extraGraphs.push({
+            id: 'middle',
+            nodes: [
+              {
+                id: 'middle-input',
+                type: 'graphInput',
+                title: 'Graph Input',
+                data: { id: 'stream', dataType: 'string' },
+                visualData: { x: 300, y: 100 },
+              },
+              {
+                id: 'inner-caller',
+                type: 'subGraph',
+                title: 'Watch child',
+                data: { graphId: 'watch-child' },
+                visualData: { x: 650, y: 100 },
+              },
+            ],
+            connections: [
+              { outputNodeId: 'middle-input', outputId: 'data', inputNodeId: 'inner-caller', inputId: 'stream' },
+            ],
+          });
+      }
+      await seedHostedEditorProject(page, seed);
+      await page.addInitScript(
+        (record) =>
+          localStorage.setItem(
+            'recoil-persist',
+            JSON.stringify({
+              defaultExecutor: 'browser',
+              recordExecutions: record,
+            }),
+          ),
+        nestedInput,
       );
+      if (nestedInput)
+        await page.addInitScript(() => {
+          let recording = '';
+          Object.defineProperty(window, 'showSaveFilePicker', {
+            configurable: true,
+            value: async () => ({
+              createWritable: async () => ({
+                write: async (content: string) => {
+                  recording = content;
+                },
+                close: async () => {},
+              }),
+            }),
+          });
+          Object.defineProperty(window, 'showOpenFilePicker', {
+            configurable: true,
+            value: async () => [
+              {
+                name: 'nested-watch.rivet-recording',
+                getFile: async () => new File([recording], 'nested-watch.rivet-recording'),
+              },
+            ],
+          });
+        });
       await page.route('**/api/**', (route) =>
         ['GET', 'HEAD', 'OPTIONS'].includes(route.request().method()) ? route.fallback() : route.abort(),
       );
@@ -190,16 +316,25 @@ for (const scenario of ['text', 'schema', 'parallel-stop', 'unmatched-stop', 'ab
       await authenticateIfNeeded(page);
       const editor = await getEditorRoot(page);
       const consumer = editor.locator('.node[data-nodeid="consumer"]');
-      await expect(consumer).toBeVisible({ timeout: 60_000 });
+      await expect(editor.locator(`.node[data-nodeid="${nestedInput ? 'caller' : 'consumer'}"]`)).toBeVisible({
+        timeout: 60_000,
+      });
       await editor.locator('.run-button button').first().click();
       await expect.poll(() => Boolean(response), { timeout: 30_000 }).toBe(true);
+      if (nestedInput) {
+        await editor.getByRole('button', { name: 'Go to subgraph', exact: true }).click();
+        if (scenario === 'deep-input')
+          await editor.getByRole('button', { name: 'Go to subgraph', exact: true }).click();
+        await expect(consumer).toBeVisible();
+      }
       chunk(firstChunk);
-      await expect(consumer.locator('.live-streaming-input-preview')).toContainText('hello');
+      if (nestedInput) await expect(consumer.locator('.node-output')).toHaveCount(0);
+      else await expect(consumer.locator('.live-streaming-input-preview')).toContainText('hello');
       await expect(consumer).not.toHaveClass(/success/);
       if (scenario !== 'unmatched-stop') {
         await expect(editor.locator('.node[data-nodeid="branch"] .node-output')).toContainText('hello');
       }
-      if (scenario === 'parallel-stop') {
+      if (scenario === 'parallel-stop' || scenario === 'nested-stop') {
         await expect(editor.locator('.node[data-nodeid="stop"] .node-output')).toContainText('hello');
         await expect(editor.locator('.node[data-nodeid="stop"]')).toHaveClass(/success/);
       }
@@ -211,15 +346,59 @@ for (const scenario of ['text', 'schema', 'parallel-stop', 'unmatched-stop', 'ab
         return;
       }
       chunk(lastChunk);
-      await expect(consumer.locator('.live-streaming-input-preview')).toContainText('hello world');
+      if (nestedInput && !hasStop) {
+        const output = editor.locator('.node[data-nodeid="branch"] .node-output');
+        await expect(output).toHaveClass(/multi/);
+        await output.locator('.picker-right').click();
+        await expect(output).toContainText('hello world');
+      } else if (!nestedInput)
+        await expect(consumer.locator('.live-streaming-input-preview')).toContainText('hello world');
       chunk('', true);
       response!.end('data: [DONE]\n\n');
       await expect(consumer).toHaveClass(/success/);
       await expect(consumer.locator('.live-streaming-input-preview')).toHaveCount(0);
       await expect(consumer.locator('.node-output')).toContainText('hello world');
-      if (scenario === 'parallel-stop') {
+      if (nestedInput && !hasStop) {
+        const branchOutput = editor.locator('.node[data-nodeid="branch"] .node-output');
+        await expect(branchOutput).toHaveClass(/multi/);
+        await branchOutput.locator('.picker-right').click();
+        await expect(branchOutput).toContainText('Terminal');
+        await branchOutput.locator('.picker-left').click();
+        await branchOutput.locator('.picker-left').click();
+        await expect(branchOutput).toContainText('hello');
+        await expect(branchOutput).not.toContainText('world');
+        await branchOutput.locator('.picker-right').click();
+        await branchOutput.locator('.picker-right').click();
+        await branchOutput.hover();
+        await branchOutput.locator('.expand-button').click();
+        const fullscreen = editor.getByTestId('fullscreen-output-modal');
+        await expect(fullscreen).toContainText('Terminal');
+        await fullscreen.locator('.picker-left').click();
+        await fullscreen.locator('.picker-left').click();
+        await expect(fullscreen).toContainText('hello');
+        await expect(fullscreen).not.toContainText('world');
+        await page.keyboard.press('Escape');
+        await expect(fullscreen).toHaveCount(0);
+        await editor.getByRole('button', { name: 'Save Recording', exact: true }).click();
+        await editor.locator('button.more-menu').click();
+        await editor.getByRole('button', { name: 'Load Recording', exact: true }).click();
+        await editor.getByRole('button', { name: 'Play Recording', exact: true }).click();
+        await editor.getByRole('button', { name: 'Main Graph', exact: true }).click();
+        await expect(editor.locator('.node[data-nodeid="caller"]')).toBeVisible();
+        await editor.getByRole('button', { name: 'Go to subgraph', exact: true }).click();
+        if (scenario === 'deep-input')
+          await editor.getByRole('button', { name: 'Go to subgraph', exact: true }).click();
+        await expect(branchOutput).toHaveClass(/multi/);
+        await expect(branchOutput).toContainText('hello');
+        await branchOutput.locator('.picker-right').click();
+        await branchOutput.locator('.picker-right').click();
+        await expect(branchOutput).toContainText('Terminal');
+        await expect(branchOutput).toContainText('hello world');
+      }
+      if (scenario === 'parallel-stop' || scenario === 'nested-stop') {
         // Stopping Watch must not abort the LLM or replace its winning output.
         await expect(editor.locator('.node[data-nodeid="stop"] .node-output')).not.toContainText('world');
+        await expect(editor.locator('.node[data-nodeid="stop"] .node-output')).not.toHaveClass(/multi/);
       }
       if (scenario === 'unmatched-stop') {
         const stopOutput = editor.locator('.node[data-nodeid="stop"] .node-output');

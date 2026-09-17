@@ -16,6 +16,7 @@ import {
   type NodeId,
   type NodeInputDefinition,
   type NodeOutputDefinition,
+  type NodePrefabId,
   type Outputs,
   type PortId,
   type ProcessEvents,
@@ -23,6 +24,7 @@ import {
   type ProjectId,
 } from '../../src/index.js';
 import { ManagedAsyncBranches } from '../../src/model/ManagedAsyncBranches.js';
+import { GraphInputStreamRelay } from '../../src/model/GraphInputStream.js';
 import { replayExecutionRecording } from '../../src/model/RecordingPlayer.js';
 import { ExecutionRecorder } from '../../src/recording/ExecutionRecorder.js';
 import { testProcessContext } from '../testUtils.js';
@@ -2129,6 +2131,709 @@ void describe('GraphProcessor scheduler boundaries', () => {
     await assert.rejects(processor.processGraph(testProcessContext()), /watch-branch/);
     assert.deepEqual(erroredNodeIds, [branch.id]);
     assert.deepEqual(lifecycleEvents, ['graph-error', 'error']);
+  });
+
+  for (const route of [
+    'direct',
+    'nested',
+    'producer-subgraph',
+    'data-bus',
+    'library',
+    'alias',
+    'default-value',
+  ] as const) {
+    void it(`streams into a once-called Subgraph Watch before the outer producer finishes: ${route}`, async () => {
+      const source = makeTestNode('outer-stream');
+      const input = makeGraphInputNode('stream-input', 'stream');
+      if (route === 'default-value') Object.assign(input.data as object, { defaultValue: '1' });
+      const watch = makeWatchNode();
+      const branch = makeTestNode('inner-branch');
+      const ordinary = makeTestNode('ordinary-final-consumer');
+      const child = makeGraph(
+        'stream-child',
+        [input, watch, branch, ordinary],
+        [
+          connect(input.id, watch.id, 'stream', 'data'),
+          connect(watch.id, branch.id, 'input', 'value'),
+          connect(input.id, ordinary.id, 'input', 'data'),
+        ],
+      );
+      const caller = makeSubgraphNode('caller', child.metadata!.id!);
+      const root = makeGraph('stream-root', [source, caller], [connect(source.id, caller.id, 'stream')]);
+      const extraGraphs = [child];
+      if (route === 'nested') {
+        const middleInput = makeGraphInputNode('middle-input', 'outer');
+        const middleCaller = makeSubgraphNode('middle-caller', child.metadata!.id!);
+        const middle = makeGraph(
+          'middle',
+          [middleInput, middleCaller],
+          [connect(middleInput.id, middleCaller.id, 'stream', 'data')],
+        );
+        (caller.data as { graphId: GraphId }).graphId = middle.metadata!.id!;
+        root.connections[0]!.inputId = 'outer' as PortId;
+        extraGraphs.push(middle);
+      }
+      if (route === 'producer-subgraph') {
+        const output = makeGraphOutputNode('answer');
+        const producer = makeGraph('producer', [source, output], [connect(source.id, output.id, 'value')]);
+        const producerCaller = makeSubgraphNode('producer-caller', producer.metadata!.id!);
+        root.nodes[0] = producerCaller;
+        root.connections[0] = connect(producerCaller.id, caller.id, 'stream', 'answer');
+        extraGraphs.push(producer);
+      }
+      if (route === 'data-bus') {
+        const bus = makeDataBusNode('input-bus');
+        child.nodes.push(bus);
+        child.connections[0] = connect(input.id, bus.id, 'input1', 'data');
+        child.connections.push(connect(bus.id, watch.id, 'stream', 'output1'));
+      }
+      const ready = deferred();
+      const release = deferred();
+      const firstBranch = deferred();
+      let publish!: (value: string | undefined) => void;
+      AsyncTestNodeImpl.handlers.set(source.id, async (_inputs, context) => {
+        publish = (value) => context.onPartialOutputs?.({ output: { type: 'any', value } });
+        ready.resolve();
+        await release.promise;
+        return { output: { type: 'string', value: '6' } };
+      });
+      AsyncTestNodeImpl.handlers.set(branch.id, (inputs) => {
+        firstBranch.resolve();
+        return { output: inputs['input' as PortId]! };
+      });
+      const project = makeProject(root, extraGraphs);
+      let referencedProject: Project | undefined;
+      if (route === 'alias') {
+        referencedProject = makeProject(child);
+        referencedProject.metadata.id = 'stream-external' as ProjectId;
+        delete project.graphs[child.metadata!.id!];
+        project.references = [{ id: referencedProject.metadata.id }];
+        root.nodes[1] = makeReferencedGraphAliasNode(caller.id, referencedProject.metadata.id, child.metadata!.id!);
+      }
+      if (route === 'library') {
+        project.nodePrefabs = {
+          ['library-caller' as NodePrefabId]: {
+            id: 'library-caller' as NodePrefabId,
+            sourceNode: caller,
+          },
+        };
+        root.nodes[1] = { ...caller, type: 'nodePrefabInstance', data: { prefabId: 'library-caller' } };
+      }
+      const processor = new GraphProcessor(
+        project,
+        root.metadata!.id!,
+        createBuiltInRegistry().register(asyncTestNode),
+        false,
+        {
+          concurrency: { nodeConcurrency: 1 },
+        },
+      );
+      const recorder = new ExecutionRecorder();
+      recorder.record(processor);
+      const finishes: ProcessEvents['nodeFinish'][] = [];
+      const starts: ProcessEvents['graphStart'][] = [];
+      processor.on('nodeFinish', (event) => {
+        finishes.push(event);
+      });
+      processor.on('graphStart', (event) => {
+        starts.push(event);
+      });
+      const run = processor.processGraph({
+        ...testProcessContext(),
+        ...(referencedProject
+          ? {
+              projectReferenceLoader: { loadProject: async () => referencedProject! },
+            }
+          : {}),
+      });
+      try {
+        await withTimeout(ready.promise, 'outer stream starts');
+        publish(route === 'default-value' ? undefined : '1');
+        await withTimeout(firstBranch.promise, 'nested Watch receives a live input');
+        assert.equal(AsyncTestNodeImpl.runCounts.get(ordinary.id), undefined);
+        for (const value of ['2', '3', '4', '5']) publish(value);
+      } finally {
+        release.resolve();
+        await withTimeout(run, 'streaming subgraph settles');
+      }
+      assert.equal(starts.filter((event) => event.graph.metadata?.id === child.metadata!.id).length, 1);
+      assert.equal(finishes.filter((event) => event.node.id === caller.id).length, 1);
+      assert.deepEqual(
+        finishes
+          .filter((event) => event.node.id === branch.id)
+          .map((event) => event.outputs['output' as PortId]?.value),
+        ['1', '2', '3', '6'],
+      );
+      assert.deepEqual(
+        finishes
+          .filter((event) => event.node.id === ordinary.id)
+          .map((event) => event.outputs['output' as PortId]?.value),
+        ['6'],
+      );
+      const recorded = recorder.events.filter(
+        (event) => event.type === 'nodeFinish' && event.data.nodeId === branch.id,
+      );
+      assert.equal(recorded.length, 4);
+      if (route !== 'alias') {
+        const replayEmitter = new Emittery<ProcessEvents>();
+        const replayed: unknown[] = [];
+        replayEmitter.on('nodeFinish', (event) => {
+          if (event.node.id === branch.id) replayed.push(event.outputs['output' as PortId]?.value);
+        });
+        await replayExecutionRecording({
+          emitter: replayEmitter,
+          erroredNodes: new Map(),
+          graphInputs: {},
+          graphOutputs: {},
+          isAborted: () => false,
+          nodeResults: new Map(),
+          project,
+          recorder,
+          recordingPlaybackChatLatency: 0,
+          setContextValues: () => {},
+          setGraphInputs: () => {},
+          setGraphOutputs: () => {},
+          setRunning: () => {},
+          visitedNodes: new Set(),
+          waitUntilUnpaused: async () => {},
+        });
+        assert.deepEqual(replayed, ['1', '2', '3', '6']);
+      }
+    });
+  }
+
+  for (const upstream of ['ordinary', 'streamed-caller'] as const) {
+    void it(`settles a skipped watched producer after an upstream ${upstream} error`, async () => {
+      const failed = makeTestNode('failed');
+      const skipped = makeTestNode('skipped');
+      const source = makeTestNode('skipped-producer');
+      const input = makeGraphInputNode('input', 'stream');
+      const watch = makeWatchNode();
+      const child = makeGraph('child', [input, watch], [connect(input.id, watch.id, 'stream', 'data')]);
+      const caller = makeSubgraphNode('caller', child.metadata!.id!);
+      const root = makeGraph(
+        'root',
+        [failed, skipped, source, caller],
+        [connect(failed.id, skipped.id), connect(skipped.id, source.id), connect(source.id, caller.id, 'stream')],
+      );
+      AsyncTestNodeImpl.handlers.set(failed.id, () => {
+        throw new Error('upstream failed');
+      });
+      const graphs = [child];
+      if (upstream === 'streamed-caller') {
+        const upstreamInput = makeGraphInputNode('upstream-input', 'stream');
+        const upstreamWatch = makeWatchNode('upstream-watch');
+        const output = makeGraphOutputNode('output');
+        const upstreamGraph = makeGraph(
+          'upstream',
+          [upstreamInput, upstreamWatch, failed, output],
+          [connect(upstreamInput.id, upstreamWatch.id, 'stream', 'data'), connect(failed.id, output.id, 'value')],
+        );
+        root.nodes[0] = makeSubgraphNode(failed.id, upstreamGraph.metadata!.id!);
+        const liveSource = makeTestNode('live-source');
+        root.nodes.push(liveSource);
+        root.connections.push(connect(liveSource.id, failed.id, 'stream'));
+        graphs.push(upstreamGraph);
+        AsyncTestNodeImpl.handlers.set(liveSource.id, async (_inputs, context) => {
+          context.onPartialOutputs?.({ output: { type: 'string', value: 'partial' } });
+          await wait(30);
+          return { output: { type: 'string', value: 'final' } };
+        });
+      }
+      const processor = createProcessor(root, graphs);
+      const run = processor.processGraph(testProcessContext());
+      try {
+        await assert.rejects(withTimeout(run, 'blocked producer failure'), (error: Error) => {
+          assert.ok(error instanceof AggregateError);
+          const containsSourceError = (cause: Error): boolean =>
+            cause.message === 'upstream failed' ||
+            (cause instanceof AggregateError && cause.errors.some(containsSourceError));
+          if (upstream === 'ordinary') assert.ok(containsSourceError(error));
+          else {
+            assert.equal(AsyncTestNodeImpl.runCounts.get(failed.id), 1);
+            assert.ok(error.errors.some((cause: Error) => cause.message.includes('upstream')));
+          }
+          return true;
+        });
+        assert.equal(AsyncTestNodeImpl.runCounts.get(source.id), undefined);
+      } finally {
+        await processor.abort();
+        await run.catch(() => {});
+      }
+    });
+  }
+
+  for (const outcome of ['success', 'failure', 'exclusion', 'abort'] as const) {
+    void it(`keeps unbound Graph Input nested work behind streamed siblings on ${outcome}`, async () => {
+      const source = makeTestNode('source');
+      const release = deferred();
+      const live = deferred();
+      const stream = makeGraphInputNode('stream', 'stream');
+      const preset = makeGraphInputNode('preset', 'preset');
+      const watch = makeWatchNode();
+      const branch = makeTestNode('branch');
+      const leafInput = makeGraphInputNode('leaf-input', 'value');
+      const leafWatch = makeWatchNode('leaf-watch');
+      const sideEffect = makeTestNode('side-effect');
+      const leaf = makeGraph(
+        'leaf',
+        [leafInput, leafWatch, sideEffect],
+        [connect(leafInput.id, leafWatch.id, 'stream', 'data')],
+      );
+      const inner = makeSubgraphNode('inner', leaf.metadata!.id!);
+      const child = makeGraph(
+        'child',
+        [stream, preset, watch, branch, inner],
+        [
+          connect(stream.id, watch.id, 'stream', 'data'),
+          connect(watch.id, branch.id, 'input', 'value'),
+          connect(preset.id, inner.id, 'value', 'data'),
+        ],
+      );
+      const caller = makeSubgraphNode('caller', child.metadata!.id!);
+      const root = makeGraph('root', [source, caller], [connect(source.id, caller.id, 'stream')]);
+      AsyncTestNodeImpl.handlers.set(source.id, async (_inputs, context) => {
+        context.onPartialOutputs?.({ output: { type: 'string', value: 'partial' } });
+        await release.promise;
+        if (outcome === 'failure') throw new Error('source failed');
+        if (outcome === 'abort') context.signal.throwIfAborted();
+        if (outcome === 'exclusion') return { output: { type: 'control-flow-excluded', value: undefined } };
+        return { output: { type: 'string', value: 'final' } };
+      });
+      AsyncTestNodeImpl.handlers.set(branch.id, () => {
+        live.resolve();
+        return {};
+      });
+      const processor = createProcessor(root, [child, leaf]);
+      const run = processor.processGraph(testProcessContext()).then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+      try {
+        await withTimeout(live.promise, 'live sibling Watch');
+        await wait(10);
+        assert.equal(AsyncTestNodeImpl.runCounts.get(sideEffect.id), undefined);
+        if (outcome === 'abort') void processor.abort(false, new Error('test abort'));
+      } finally {
+        release.resolve();
+      }
+      const error = await withTimeout(run, 'containing invocation');
+      if (outcome === 'failure' || outcome === 'abort') assert.ok(error);
+      else assert.equal(error, undefined);
+      assert.equal(AsyncTestNodeImpl.runCounts.get(sideEffect.id), outcome === 'success' ? 1 : undefined);
+    });
+  }
+
+  for (const outcome of ['failure', 'abort', 'exclusion'] as const) {
+    void it(`settles streamed Subgraph inputs on ${outcome} without executing unrelated work`, async () => {
+      const source = makeTestNode('outer-stream');
+      const input = makeGraphInputNode('input', 'stream');
+      const watch = makeWatchNode();
+      const branch = makeTestNode('branch');
+      const ordinary = makeTestNode('unrelated');
+      const child = makeGraph(
+        'child',
+        [input, watch, branch, ordinary],
+        [connect(input.id, watch.id, 'stream', 'data'), connect(watch.id, branch.id, 'input', 'value')],
+      );
+      const caller = makeSubgraphNode('caller', child.metadata!.id!);
+      const root = makeGraph('root', [source, caller], [connect(source.id, caller.id, 'stream')]);
+      const branchStarted = deferred();
+      const release = deferred();
+      AsyncTestNodeImpl.handlers.set(source.id, async (_inputs, context) => {
+        context.onPartialOutputs?.({ output: { type: 'string', value: 'partial' } });
+        await release.promise;
+        if (outcome === 'failure') throw new Error('source failed');
+        if (outcome === 'abort') context.signal.throwIfAborted();
+        return { output: { type: 'control-flow-excluded', value: undefined } };
+      });
+      AsyncTestNodeImpl.handlers.set(branch.id, () => {
+        branchStarted.resolve();
+        return { output: { type: 'string', value: 'observed' } };
+      });
+      const processor = createProcessor(root, [child]);
+      const result = processor.processGraph(testProcessContext()).then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+      try {
+        await withTimeout(branchStarted.promise, 'nested branch starts');
+        assert.equal(AsyncTestNodeImpl.runCounts.get(ordinary.id), undefined);
+        if (outcome === 'abort') void processor.abort(false, new Error('test abort'));
+      } finally {
+        release.resolve();
+      }
+      const error = await withTimeout(result, 'nested branch terminates');
+      if (outcome !== 'exclusion') assert.ok(error);
+      else assert.equal(error, undefined);
+      assert.equal(AsyncTestNodeImpl.runCounts.get(ordinary.id), undefined);
+    });
+  }
+
+  for (const outcome of ['success', 'failure', 'exclusion'] as const) {
+    void it(`keeps independent watched inputs live but final work behind all input terminals: ${outcome}`, async () => {
+      const sources = [makeTestNode('source-a'), makeTestNode('source-b')];
+      const input = makeGraphInputNode('leaf-input', 'value');
+      const watch = makeWatchNode();
+      const branch = makeTestNode('branch');
+      const ordinary = makeTestNode('ordinary');
+      const leaf = makeGraph(
+        'leaf',
+        [input, watch, branch, ordinary],
+        [connect(input.id, watch.id, 'stream', 'data'), connect(watch.id, branch.id, 'input', 'value')],
+      );
+      const inputs = [makeGraphInputNode('input-a', 'a'), makeGraphInputNode('input-b', 'b')];
+      const callers = [
+        makeSubgraphNode('caller-a', leaf.metadata!.id!),
+        makeSubgraphNode('caller-b', leaf.metadata!.id!),
+      ];
+      const middle = makeGraph(
+        'middle',
+        [...inputs, ...callers],
+        inputs.map((node, index) => connect(node.id, callers[index]!.id, 'value', 'data')),
+      );
+      const caller = makeSubgraphNode('caller', middle.metadata!.id!);
+      const root = makeGraph(
+        'root',
+        [...sources, caller],
+        sources.map((node, index) => connect(node.id, caller.id, index === 0 ? 'a' : 'b')),
+      );
+      const releases = [deferred(), deferred()];
+      const live = [deferred(), deferred()];
+      const finishedA = deferred();
+      const seen: unknown[] = [];
+      for (const [index, source] of sources.entries()) {
+        AsyncTestNodeImpl.handlers.set(source.id, async (_inputs, context) => {
+          context.onPartialOutputs?.({ output: { type: 'string', value: `partial-${index}` } });
+          await releases[index]!.promise;
+          if (index === 1 && outcome === 'failure') throw new Error('second stream failed');
+          if (index === 1 && outcome === 'exclusion')
+            return { output: { type: 'control-flow-excluded', value: undefined } };
+          return { output: { type: 'string', value: `final-${index}` } };
+        });
+      }
+      AsyncTestNodeImpl.handlers.set(branch.id, (values) => {
+        const value = values['input' as PortId]!.value;
+        seen.push(value);
+        if (value === 'partial-0') live[0]!.resolve();
+        if (value === 'partial-1') live[1]!.resolve();
+        return {};
+      });
+      const processor = createProcessor(root, [middle, leaf]);
+      processor.on('nodeFinish', ({ node }) => {
+        if (node.id === sources[0]!.id) finishedA.resolve();
+      });
+      const run = processor.processGraph(testProcessContext()).then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+      try {
+        await withTimeout(Promise.all(live.map((signal) => signal.promise)), 'both independent live branches');
+        releases[0]!.resolve();
+        await finishedA.promise;
+        await wait(10);
+        assert.equal(AsyncTestNodeImpl.runCounts.get(ordinary.id), undefined);
+      } finally {
+        releases.forEach((signal) => signal.resolve());
+        const error = await withTimeout(run, 'both input terminals');
+        if (outcome === 'failure') assert.ok(error);
+        else assert.equal(error, undefined);
+      }
+      assert.deepEqual(
+        seen.sort(),
+        outcome === 'success' ? ['final-0', 'final-1', 'partial-0', 'partial-1'] : ['partial-0', 'partial-1'],
+      );
+      assert.equal(AsyncTestNodeImpl.runCounts.get(ordinary.id), outcome === 'success' ? 2 : undefined);
+      assert.equal(AsyncTestNodeImpl.runCounts.get(branch.id), outcome === 'success' ? 4 : 2);
+    });
+  }
+
+  for (const outcome of ['failure', 'exclusion'] as const) {
+    void it(`does not start obsolete Watch work when a stream ends in ${outcome} during graph startup`, async () => {
+      const input = makeGraphInputNode('input', 'stream');
+      const watch = makeWatchNode();
+      const branch = makeTestNode('branch');
+      const graph = makeGraph(
+        'child',
+        [input, watch, branch],
+        [connect(input.id, watch.id, 'stream', 'data'), connect(watch.id, branch.id, 'input', 'value')],
+      );
+      const relay = new GraphInputStreamRelay();
+      const processor = createProcessor(graph);
+      processor.on('graphStart', () => {
+        relay.publish({ type: 'string', value: 'obsolete' });
+        relay.finish(
+          outcome === 'failure'
+            ? { error: new Error('source failed') }
+            : { value: { type: 'control-flow-excluded', value: undefined } },
+        );
+      });
+      const result = processor.processGraph(testProcessContext(), {}, {}, { graphInputStreams: { stream: relay } });
+      if (outcome === 'failure') await assert.rejects(result);
+      else await result;
+      assert.equal(AsyncTestNodeImpl.runCounts.get(branch.id), undefined);
+    });
+  }
+
+  for (const feedback of ['direct', 'ordinary-node'] as const) {
+    void it(`does not turn ${feedback} caller feedback into a live stream deadlock`, async () => {
+      const input = makeGraphInputNode('input', 'stream');
+      const argument = makeGraphInputNode('argument', 'argument');
+      const watch = makeWatchNode();
+      const output = makeGraphOutputNode('output');
+      const child = makeGraph(
+        'child',
+        [input, argument, watch, output],
+        [connect(input.id, watch.id, 'stream', 'data'), connect(input.id, output.id, 'value', 'data')],
+      );
+      const caller = makeSubgraphNode('caller', child.metadata!.id!);
+      const transform = makeTestNode('transform');
+      const root = makeGraph(
+        'root',
+        feedback === 'direct' ? [caller] : [caller, transform],
+        feedback === 'direct'
+          ? [connect(caller.id, caller.id, 'stream')]
+          : [connect(caller.id, transform.id), connect(transform.id, caller.id, 'stream')],
+      );
+      const kickoff = makeTestNode('kickoff');
+      root.nodes.push(kickoff);
+      root.connections.push(connect(kickoff.id, caller.id, 'argument'));
+      const processor = createProcessor(root, [child]);
+      const run = processor.processGraph(testProcessContext());
+      try {
+        await withTimeout(run, 'feedback remains ordinary final-only execution');
+      } finally {
+        await processor.abort();
+        await run.catch(() => {});
+      }
+    });
+  }
+
+  void it('ignores callbacks from a previous run while forwarding to two current callers', async () => {
+    const source = makeTestNode('source');
+    const input = makeGraphInputNode('input', 'stream');
+    const watch = makeWatchNode();
+    const branch = makeTestNode('branch');
+    const child = makeGraph(
+      'child',
+      [input, watch, branch],
+      [connect(input.id, watch.id, 'stream', 'data'), connect(watch.id, branch.id, 'input', 'value')],
+    );
+    const first = makeSubgraphNode('first', child.metadata!.id!);
+    const second = makeSubgraphNode('second', child.metadata!.id!);
+    const root = makeGraph(
+      'root',
+      [source, first, second],
+      [connect(source.id, first.id, 'stream'), connect(source.id, second.id, 'stream')],
+    );
+    const seen: unknown[] = [];
+    let stale: (() => void) | undefined;
+    let round = 0;
+    let live = deferred();
+    AsyncTestNodeImpl.handlers.set(branch.id, (values) => {
+      seen.push(values['input' as PortId]?.value);
+      if (seen.filter((value) => value === `partial-${round}`).length === 2) live.resolve();
+      return {};
+    });
+    AsyncTestNodeImpl.handlers.set(source.id, async (_inputs, context) => {
+      context.onPartialOutputs?.({ output: { type: 'string', value: `partial-${round}` } });
+      await live.promise;
+      stale?.();
+      stale = () => context.onPartialOutputs?.({ output: { type: 'string', value: 'stale' } });
+      return { output: { type: 'string', value: `final-${round}` } };
+    });
+    const processor = createProcessor(root, [child]);
+    try {
+      for (round = 1; round <= 2; round++) {
+        live = deferred();
+        await withTimeout(processor.processGraph(testProcessContext()), 'reused processor');
+      }
+      assert.deepEqual(
+        seen.slice().sort(),
+        ['partial-1', 'partial-1', 'final-1', 'final-1', 'partial-2', 'partial-2', 'final-2', 'final-2'].sort(),
+      );
+    } finally {
+      live.resolve();
+      await processor.abort();
+    }
+  });
+
+  for (const boundary of [
+    'conditional',
+    'error-output',
+    'split',
+    'disabled',
+    'pruned',
+    'no-partials',
+    'default-input',
+  ] as const) {
+    void it(`keeps a ${boundary} Subgraph boundary final-only`, async () => {
+      const source = makeTestNode('source');
+      const input = makeGraphInputNode('input', 'stream');
+      if (boundary === 'default-input') Object.assign(input.data as object, { useDefaultValueInput: true });
+      const watch = makeWatchNode();
+      const branch = makeTestNode('branch');
+      const child = makeGraph(
+        'child',
+        [input, watch, branch],
+        [connect(input.id, watch.id, 'stream', 'data'), connect(watch.id, branch.id, 'input', 'value')],
+      );
+      const caller = makeSubgraphNode('caller', child.metadata!.id!);
+      if (boundary === 'conditional') caller.isConditional = true;
+      if (boundary === 'split') caller.isSplitRun = true;
+      if (boundary === 'disabled') caller.disabled = true;
+      if (boundary === 'error-output') (caller.data as { useErrorOutput: boolean }).useErrorOutput = true;
+      if (boundary === 'pruned') (caller.data as { skipUnusedOutputs: boolean }).skipUnusedOutputs = true;
+      const root = makeGraph('root', [source, caller], [connect(source.id, caller.id, 'stream')]);
+      let sourceFinished = false;
+      AsyncTestNodeImpl.handlers.set(source.id, async (_inputs, context) => {
+        if (boundary !== 'no-partials') context.onPartialOutputs?.({ output: { type: 'string', value: 'partial' } });
+        await wait(10);
+        sourceFinished = true;
+        return { output: { type: 'string', value: 'final' } };
+      });
+      const seen: unknown[] = [];
+      AsyncTestNodeImpl.handlers.set(branch.id, (values) => {
+        assert.equal(sourceFinished, true);
+        seen.push(values['input' as PortId]?.value);
+        return {};
+      });
+      await withTimeout(createProcessor(root, [child]).processGraph(testProcessContext()), 'final-only boundary');
+      assert.deepEqual(seen, ['disabled', 'pruned', 'conditional'].includes(boundary) ? [] : ['final']);
+    });
+  }
+
+  for (const mode of ['parallel', 'interval', 'stop', 'overflow'] as const) {
+    void it(`uses the existing ${mode} Watch policy for live Subgraph inputs`, async () => {
+      const source = makeTestNode('source');
+      const input = makeGraphInputNode('input', 'stream');
+      const watch = makeWatchNode();
+      Object.assign(
+        watch.data,
+        mode === 'parallel'
+          ? { executionMode: 'parallel', maxParallelRuns: 2 }
+          : mode === 'interval'
+            ? { triggerMode: 'interval', intervalMs: 1 }
+            : mode === 'overflow'
+              ? { maxQueuedUpdates: 1 }
+              : {},
+      );
+      const branch = makeTestNode('branch');
+      const stop = makeStopWatchNode();
+      const child = makeGraph(
+        'child',
+        [input, watch, branch, ...(mode === 'stop' ? [stop] : [])],
+        [
+          connect(input.id, watch.id, 'stream', 'data'),
+          connect(watch.id, branch.id, 'input', 'value'),
+          ...(mode === 'stop' ? [connect(branch.id, stop.id, 'value')] : []),
+        ],
+      );
+      const caller = makeSubgraphNode('caller', child.metadata!.id!);
+      const root = makeGraph('root', [source, caller], [connect(source.id, caller.id, 'stream')]);
+      const started = deferred();
+      const releaseBranch = deferred();
+      const releaseSource = deferred();
+      let publish!: (value: string) => void;
+      const seen: unknown[] = [];
+      AsyncTestNodeImpl.handlers.set(source.id, async (_values, context) => {
+        publish = (value) => context.onPartialOutputs?.({ output: { type: 'string', value } });
+        publish('first');
+        await releaseSource.promise;
+        return { output: { type: 'string', value: 'final' } };
+      });
+      AsyncTestNodeImpl.handlers.set(branch.id, async (values) => {
+        seen.push(values['input' as PortId]?.value);
+        started.resolve();
+        if (mode === 'overflow') await releaseBranch.promise;
+        return { output: values['input' as PortId]! };
+      });
+      const processor = createProcessor(root, [child]);
+      const stopAccepted = deferred();
+      processor.on('nodeFinish', ({ node }) => {
+        if (node.id === stop.id) stopAccepted.resolve();
+      });
+      const run = processor.processGraph(testProcessContext()).then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+      try {
+        await withTimeout(started.promise, 'live nested branch');
+        if (mode === 'stop') await withTimeout(stopAccepted.promise, 'nested Stop winner');
+        for (const value of ['second', 'third', 'fourth']) publish(value);
+      } finally {
+        releaseBranch.resolve();
+        releaseSource.resolve();
+      }
+      const error = await withTimeout(run, 'nested Watch policy completion');
+      if (mode === 'overflow') assert.ok(error);
+      else {
+        assert.equal(error, undefined);
+        if (mode === 'stop') assert.deepEqual(seen, ['first']);
+        else assert.equal(seen.at(-1), 'final');
+      }
+      assert.equal(AsyncTestNodeImpl.runCounts.get(source.id), 1);
+    });
+  }
+
+  void it('coalesces pre-start streamed inputs while waiting for ordinary arguments', async () => {
+    const source = makeTestNode('source');
+    const slow = makeTestNode('slow');
+    const input = makeGraphInputNode('input', 'stream');
+    const argument = makeGraphInputNode('argument', 'argument');
+    const watch = makeWatchNode();
+    const branch = makeTestNode('branch');
+    const child = makeGraph(
+      'child',
+      [input, argument, watch, branch],
+      [connect(input.id, watch.id, 'stream', 'data'), connect(watch.id, branch.id, 'input', 'value')],
+    );
+    const caller = makeSubgraphNode('caller', child.metadata!.id!);
+    const root = makeGraph(
+      'root',
+      [source, slow, caller],
+      [connect(source.id, caller.id, 'stream'), connect(slow.id, caller.id, 'argument')],
+    );
+    const emitted = deferred();
+    const releaseArgument = deferred();
+    const releaseSource = deferred();
+    const started = deferred();
+    AsyncTestNodeImpl.handlers.set(source.id, async (_inputs, context) => {
+      context.onPartialOutputs?.({ output: { type: 'string', value: 'old' } });
+      context.onPartialOutputs?.({ output: { type: 'string', value: 'latest' } });
+      emitted.resolve();
+      await releaseSource.promise;
+      return { output: { type: 'string', value: 'final' } };
+    });
+    AsyncTestNodeImpl.handlers.set(slow.id, async () => {
+      await releaseArgument.promise;
+      return { output: { type: 'string', value: 'ready' } };
+    });
+    const seen: unknown[] = [];
+    AsyncTestNodeImpl.handlers.set(branch.id, (inputs) => {
+      seen.push(inputs['input' as PortId]?.value);
+      started.resolve();
+      return {};
+    });
+    const processor = createProcessor(root, [child]);
+    const summaries: ProcessEvents['streamingOutputWatchSummary'][] = [];
+    processor.on('streamingOutputWatchSummary', (event) => {
+      summaries.push(event);
+    });
+    const run = processor.processGraph(testProcessContext());
+    try {
+      await emitted.promise;
+      assert.deepEqual(seen, []);
+      releaseArgument.resolve();
+      await withTimeout(started.promise, 'latest pending snapshot');
+      assert.deepEqual(seen, ['latest']);
+    } finally {
+      releaseArgument.resolve();
+      releaseSource.resolve();
+      await withTimeout(run, 'delayed arguments settle');
+    }
+    assert.deepEqual(seen, ['latest', 'final']);
+    assert.equal(summaries[0]?.summary.coalescedUpdates, 1);
   });
 
   void it('excludes an unmatched Stop and its ordinary downstream branch after the stream settles', async () => {

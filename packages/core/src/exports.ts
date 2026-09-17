@@ -6,6 +6,8 @@ export * from './model/DataValue.js';
 export * from './model/NodeBase.js';
 export * from './model/NodeGraph.js';
 export * from './model/NodePrefabResolver.js';
+export * from './model/StreamingWatchTopology.js';
+export type { GraphInputStream } from './model/GraphInputStream.js';
 export { getGraphBoundary } from './model/GraphBoundaryCache.js';
 export type { GraphBoundary } from './model/GraphBoundaryCache.js';
 export * from './model/UiGraph.js';

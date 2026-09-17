@@ -23,6 +23,7 @@ import type { Tokenizer } from '../integrations/Tokenizer.js';
 import type { CodeRunner } from '../integrations/CodeRunner.js';
 import type { ProjectReferenceLoader } from './ProjectReferenceLoader.js';
 import type { GraphBoundary } from './GraphBoundaryCache.js';
+import type { GraphInputStream } from './GraphInputStream.js';
 import type { GraphProgress } from './GraphProgress.js';
 import type { CustomProviderApi } from './chat-v2/customProviderApi.js';
 import type {
@@ -315,6 +316,8 @@ export type GraphExecutionMetadata = {
 };
 
 export type InternalProcessContext<T extends ChartNode = ChartNode> = ProcessContext & {
+  /** Invocation-scoped live inputs for a named graph caller. Never serialized. */
+  graphInputStreams?: Readonly<Record<string, GraphInputStream>>;
   /** The executor that is running the current processor. */
   executor: 'nodejs' | 'browser';
 

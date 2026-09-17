@@ -348,6 +348,15 @@ Current behavior:
 - the main hosted-editor observable spec uses mocked workflow/project API responses to open a two-node project, then visibly exercises the hosted editor focus, copy, cut, and paste path without mutating workflow storage
 - trace, video, screenshots, and the HTML report are written under `artifacts/playwright/`
 - `watch-streaming-output.spec.ts` seeds isolated editor projects and verifies
+  live named-input streaming into a once-called Subgraph (also at two levels),
+  final-only ordinary consumers, nested Stop, and retained inline/fullscreen
+  Watch pages after navigation and recording export/replay. Core regressions also
+  cover startup failure/exclusion buffers and late callbacks across processor
+  reuse with two simultaneous Subgraph consumers; these must not manufacture
+  additional history pages in another invocation.
+  Its SSE producer is held open until the browser observes branch execution;
+  the evaluation-library fixture is isolated from server authorization.
+  It also verifies
   streaming-wire arrows, chunk port labels, a dynamically derived named
   Subgraph output connected to Watch, the default overflow policy, and
   contextual scheduling controls. Run it against a target built from the current
