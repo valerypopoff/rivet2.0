@@ -16,7 +16,7 @@ import { nodeDefinition } from '../NodeDefinition.js';
 import type { EditorDefinition } from '../EditorDefinition.js';
 import type { RivetUIContext } from '../RivetUIContext.js';
 import { match } from 'ts-pattern';
-import { getNextVariadicPortIndex } from './variadicPortIndex.js';
+import { getNextVariadicPortIndex, parseVariadicPortIndex } from './variadicPortIndex.js';
 
 export type AssembleMessageNode = ChartNode<'assembleMessage', AssembleMessageNodeData>;
 
@@ -203,7 +203,7 @@ export class AssembleMessageNodeImpl extends NodeImpl<AssembleMessageNode> {
 
     const inputParts = orderBy(
       Object.entries(inputs).filter(([key]) => key.startsWith('part')),
-      ([key]) => key,
+      ([key]) => parseVariadicPortIndex(key, 'part', 'legacy'),
       'asc',
     );
 

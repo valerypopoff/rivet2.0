@@ -15,19 +15,35 @@ import { orderBy } from 'lodash-es';
 import { dedent } from 'ts-dedent';
 import { nodeDefinition } from '../NodeDefinition.js';
 import type { EditorDefinition } from '../EditorDefinition.js';
-import type { RivetUIContext } from '../RivetUIContext.js';
 import type { InternalProcessContext } from '../ProcessContext.js';
 import { getInputOrData } from '../../utils/inputs.js';
-import { getNextVariadicPortIndex } from './variadicPortIndex.js';
+import { getNextVariadicPortIndex, parseVariadicPortIndex } from './variadicPortIndex.js';
 
 export type AssemblePromptNode = ChartNode<'assemblePrompt', AssemblePromptNodeData>;
 
 export type AssemblePromptNodeData = {
   computeTokenCount?: boolean;
 
+  /** Remove messages that contain no meaningful text or rich content. */
+  filterEmptyPrompts?: boolean;
+
   isLastMessageCacheBreakpoint?: boolean;
   useIsLastMessageCacheBreakpointInput?: boolean;
 };
+
+function isEmptyPromptMessage(message: ChatMessage): boolean {
+  // Tool protocol messages remain meaningful even when their textual content is empty.
+  if (message.type === 'function') {
+    return false;
+  }
+
+  if (message.type === 'assistant' && (message.function_call != null || (message.function_calls?.length ?? 0) > 0)) {
+    return false;
+  }
+
+  const parts = Array.isArray(message.message) ? message.message : [message.message];
+  return !parts.some((part) => typeof part !== 'string' || part.trim().length > 0);
+}
 
 export class AssemblePromptNodeImpl extends NodeImpl<AssemblePromptNode> {
   static create(): AssemblePromptNode {
@@ -40,7 +56,9 @@ export class AssemblePromptNodeImpl extends NodeImpl<AssemblePromptNode> {
         y: 0,
         width: 250,
       },
-      data: {},
+      data: {
+        filterEmptyPrompts: false,
+      },
     };
 
     return chartNode;
@@ -55,7 +73,7 @@ export class AssemblePromptNodeImpl extends NodeImpl<AssemblePromptNode> {
         dataType: 'boolean',
         id: 'isLastMessageCacheBreakpoint' as PortId,
         title: 'Is Last Message Cache Breakpoint',
-        description: 'Whether the last message in the prompt should be a cache breakpoint.',
+        description: 'Whether the last message in a multi-message prompt should be a cache breakpoint.',
       });
     }
 
@@ -108,7 +126,7 @@ export class AssemblePromptNodeImpl extends NodeImpl<AssemblePromptNode> {
     };
   }
 
-  getEditors(_context: RivetUIContext): EditorDefinition<AssemblePromptNode>[] {
+  getEditors(): EditorDefinition<AssemblePromptNode>[] {
     return [
       {
         type: 'toggle',
@@ -117,16 +135,34 @@ export class AssemblePromptNodeImpl extends NodeImpl<AssemblePromptNode> {
       },
       {
         type: 'toggle',
+        label: 'Filter empty prompts',
+        dataKey: 'filterEmptyPrompts',
+        defaultValue: false,
+        helperMessage:
+          'Removes text-only messages whose content is empty or whitespace. Rich-content and tool-protocol messages are preserved.',
+      },
+      {
+        type: 'toggle',
         label: 'Is Last Message Cache Breakpoint',
         dataKey: 'isLastMessageCacheBreakpoint',
+        useInputToggleDataKey: 'useIsLastMessageCacheBreakpointInput',
         helperMessage:
-          'For Anthropic, marks the last message as a cache breakpoint - this message and every message before it will be cached using Prompt Caching.',
+          'For Anthropic, marks the last message in a prompt containing at least two messages as a cache breakpoint. This message and every message before it will be cached using Prompt Caching.',
       },
     ];
   }
 
-  getBody(_context: RivetUIContext): NodeBody | Promise<NodeBody> {
-    return this.data.isLastMessageCacheBreakpoint ? 'Last message is cache breakpoint' : '';
+  getBody(): NodeBody | Promise<NodeBody> {
+    return [
+      this.data.filterEmptyPrompts ? 'Filter empty prompts: Enabled' : '',
+      this.data.useIsLastMessageCacheBreakpointInput
+        ? 'Last message cache breakpoint: From input'
+        : this.data.isLastMessageCacheBreakpoint
+          ? 'Last message is cache breakpoint'
+          : '',
+    ]
+      .filter(Boolean)
+      .join('\n');
   }
 
   async process(inputs: Inputs, context: InternalProcessContext): Promise<Outputs> {
@@ -138,7 +174,7 @@ export class AssemblePromptNodeImpl extends NodeImpl<AssemblePromptNode> {
 
     const inputMessages = orderBy(
       Object.entries(inputs).filter(([key]) => key.startsWith('message')),
-      ([key]) => key,
+      ([key]) => parseVariadicPortIndex(key, 'message', 'legacy'),
       'asc',
     );
 
@@ -149,20 +185,21 @@ export class AssemblePromptNodeImpl extends NodeImpl<AssemblePromptNode> {
 
       const inMessages = arrayizeDataValue(unwrapDataValue(inputMessage));
       for (const message of inMessages) {
-        if (message.type === 'chat-message') {
-          outMessages.push(message.value);
-        } else {
-          const coerced = coerceType(message, 'chat-message');
+        const outMessage = message.type === 'chat-message' ? message.value : coerceType(message, 'chat-message');
 
-          if (coerced) {
-            outMessages.push(coerced);
-          }
+        if (this.data.filterEmptyPrompts && isEmptyPromptMessage(outMessage)) {
+          continue;
         }
+
+        outMessages.push(outMessage);
       }
     }
 
     if (isLastMessageCacheBreakpoint && outMessages.length > 1) {
-      outMessages.at(-1)!.isCacheBreakpoint = true;
+      outMessages[outMessages.length - 1] = {
+        ...outMessages[outMessages.length - 1]!,
+        isCacheBreakpoint: true,
+      };
     }
 
     output['prompt' as PortId] = {

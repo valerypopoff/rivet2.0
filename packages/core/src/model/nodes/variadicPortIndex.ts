@@ -33,7 +33,11 @@ export function getNextVariadicPortIndex(
   return getHighestVariadicPortIndex(connections, inputNodeId, prefix, policy) + 1;
 }
 
-function parseVariadicPortIndex(portId: string, prefix: string, policy: VariadicPortIndexPolicy): number | undefined {
+export function parseVariadicPortIndex(
+  portId: string,
+  prefix: string,
+  policy: VariadicPortIndexPolicy,
+): number | undefined {
   if (policy === 'legacy') {
     const index = parseInt(portId.replace(prefix, ''));
     return Number.isNaN(index) ? undefined : index;

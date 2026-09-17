@@ -29,9 +29,10 @@ If a string is connected to any of the inputs, it will be converted to a User ty
 
 ## Inputs
 
-| Title       | Data Type                    | Description                                | Default Value | Notes                                                            |
-| ----------- | ---------------------------- | ------------------------------------------ | ------------- | ---------------------------------------------------------------- |
-| Message [i] | chat-message, chat-message[] | The ith chat message input to be assembled | N/A           | Dynamic number of inputs based on how many connections there are |
+| Title                            | Data Type                    | Description                                                      | Default Value | Notes                                                            |
+| -------------------------------- | ---------------------------- | ---------------------------------------------------------------- | ------------- | ---------------------------------------------------------------- |
+| Message [i]                      | chat-message, chat-message[] | The ith chat message input to be assembled                       | N/A           | Dynamic number of inputs based on how many connections there are |
+| Is Last Message Cache Breakpoint | boolean                      | Whether to mark the final retained message as a cache breakpoint | N/A           | Available when the setting's input-port control is enabled       |
 
 </TabItem>
 
@@ -39,9 +40,10 @@ If a string is connected to any of the inputs, it will be converted to a User ty
 
 ## Outputs
 
-| Title  | Data Type      | Description                 | Notes                                                                                |
-| ------ | -------------- | --------------------------- | ------------------------------------------------------------------------------------ |
-| Prompt | chat-message[] | The assembled chat messages | The output will be a single prompt resulting from assembling all valid chat messages |
+| Title       | Data Type      | Description                         | Notes                                                                                                       |
+| ----------- | -------------- | ----------------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| Prompt      | chat-message[] | The assembled chat messages         | The output will be a single prompt resulting from assembling all valid chat messages.                       |
+| Token Count | number         | Token count of the assembled prompt | Present only when **Compute Token Count** is enabled and calculated after optional empty-message filtering. |
 
 </TabItem>
 
@@ -49,7 +51,11 @@ If a string is connected to any of the inputs, it will be converted to a User ty
 
 ## Editor Settings
 
-This node does not have any specific settings.
+| Setting                          | Description                                                                                                                                                                                            | Default |
+| -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------- |
+| Compute Token Count              | Adds a `Token Count` output containing the token count of the final assembled prompt.                                                                                                                  | Off     |
+| Filter empty prompts             | Removes text-only messages whose content is empty or whitespace. Messages containing images, URLs, documents, assistant tool calls, or function responses are preserved even when their text is empty. | Off     |
+| Is Last Message Cache Breakpoint | For providers that support prompt caching, marks the final message of a prompt containing at least two messages as a cache breakpoint. When filtering is enabled, this uses the retained messages.     | Off     |
 
 </TabItem>
 
@@ -107,6 +113,6 @@ A: Yes, you can connect an Array Node to the Assemble Prompt Node. Each element 
 
 **Q: How does the Assemble Prompt Node handle empty strings or null values?**
 
-A: The Assemble Prompt Node will ignore any inputs that are null or not a chat message. Empty chat messages, however, will be included in the assembling operation.
+A: The Assemble Prompt Node ignores missing and null inputs. Empty chat messages are included by default for compatibility with existing graphs. Enable **Filter empty prompts** to remove messages whose content is empty or whitespace-only. Rich-content messages and tool-protocol messages are retained because they remain meaningful even without text.
 
 ## See Also
