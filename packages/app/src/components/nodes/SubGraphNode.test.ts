@@ -15,30 +15,21 @@ test('subgraph node keeps the settings-panel graph selector as the source editor
   assert.match(coreSubGraphNodeSource, /dataKey: 'graphId'/);
 });
 
-test('subgraph node canvas body mirrors graphId with a compact selector', () => {
+test('subgraph node canvas body reuses the searchable settings selector', () => {
   assert.match(subGraphNodeSource, /useEditNodeCommand\(\)/);
-  assert.match(subGraphNodeSource, /projectState/);
-  assert.match(subGraphNodeSource, /getProjectGraphSelectorOptions\(project\.graphs, \{/);
-  assert.match(subGraphNodeSource, /aria-label="Subgraph graph"/);
-  assert.match(subGraphNodeSource, /<button[\s\S]*?className="subgraph-node-body-select"/);
-  assert.doesNotMatch(subGraphNodeSource, /<select[\s\S]*?className="subgraph-node-body-select"/);
-  assert.match(subGraphNodeSource, /const menuId = useId\(\)/);
-  assert.match(subGraphNodeSource, /aria-controls=\{isMenuOpen \? menuId : undefined\}/);
-  assert.match(subGraphNodeSource, /id=\{menuId\}/);
-  assert.match(subGraphNodeSource, /role="listbox"/);
-  assert.match(subGraphNodeSource, /role="option"/);
+  assert.match(subGraphNodeSource, /import \{ GraphSelectorSelect \} from '\.\.\/editors\/GraphSelectorEditor\.js';/);
+  assert.match(subGraphNodeSource, /<GraphSelectorSelect[\s\S]*?ariaLabel="Subgraph graph"/);
+  assert.match(subGraphNodeSource, /className="subgraph-node-body-select"/);
+  assert.match(subGraphNodeSource, /includeMissingSelectedGraph/);
   assert.match(subGraphNodeSource, /graphId,/);
   assert.match(subGraphNodeSource, /data: \{[\s\S]*?\.\.\.node\.data[\s\S]*?graphId,/);
-  assert.match(subGraphNodeSource, /font-family: var\(--font-family-monospace\);/);
-  assert.match(subGraphNodeSource, /background: var\(--node-body-bg\);/);
-  assert.match(subGraphNodeSource, /height: calc\(30px \* var\(--ui-font-scale, 1\)\);/);
-  assert.doesNotMatch(subGraphNodeSource, /font-weight: 700;/);
-  assert.doesNotMatch(subGraphNodeSource, /font-family: var\(--font-family\);/);
+  assert.match(subGraphNodeSource, /\.subgraph-node-body-select \{[\s\S]*?width: 100%;/);
+  assert.doesNotMatch(subGraphNodeSource, /subgraph-node-body-select__option/);
 });
 
 test('subgraph node canvas selector preserves stale graph ids visibly', () => {
-  assert.match(subGraphNodeSource, /includeMissingSelectedGraph: true/);
-  assert.match(subGraphNodeSource, /selectedGraphId: node\.data\.graphId/);
+  assert.match(subGraphNodeSource, /includeMissingSelectedGraph/);
+  assert.match(subGraphNodeSource, /value=\{node\.data\.graphId\}/);
 });
 
 test('subgraph node canvas body displays enabled output pruning after its graph selector only', () => {
@@ -52,34 +43,12 @@ test('subgraph node canvas body displays enabled output pruning after its graph 
   );
 });
 
-test('subgraph node selector handles focus and double-click like other canvas controls', () => {
-  assert.match(subGraphNodeSource, /const \[isMenuOpen, setIsMenuOpen\] = useState\(false\)/);
-  assert.match(subGraphNodeSource, /if \(!isMenuOpen\) \{[\s\S]*?return;[\s\S]*?\}/);
-  assert.match(subGraphNodeSource, /document\.addEventListener\('pointerdown', handleDocumentPointerDown, true\)/);
-  assert.match(subGraphNodeSource, /document\.addEventListener\('wheel', handleDocumentWheel, true\)/);
-  assert.match(subGraphNodeSource, /document\.addEventListener\('keydown', handleDocumentKeyDown, true\)/);
-  assert.match(subGraphNodeSource, /rootRef\.current\?\.contains\(event\.target\)/);
-  assert.match(
-    subGraphNodeSource,
-    /event\.preventDefault\(\);[\s\S]*?event\.stopPropagation\(\);[\s\S]*?closeMenu\(\)/,
-  );
-  assert.match(subGraphNodeSource, /closeMenu\(\)/);
-  assert.match(subGraphNodeSource, /document\.removeEventListener\('pointerdown', handleDocumentPointerDown, true\)/);
-  assert.match(subGraphNodeSource, /document\.removeEventListener\('wheel', handleDocumentWheel, true\)/);
-  assert.match(subGraphNodeSource, /document\.removeEventListener\('keydown', handleDocumentKeyDown, true\)/);
+test('subgraph node selector keeps canvas pointer and keyboard interactions isolated', () => {
   assert.match(subGraphNodeSource, /onDoubleClick=\{handleControlDoubleClick\}/);
   assert.match(subGraphNodeSource, /onMouseDown=\{handleControlMouseDown\}/);
-  assert.match(
-    subGraphNodeSource,
-    /const handleMenuWheel = \(event: ReactWheelEvent<HTMLDivElement>\) => \{[\s\S]*?event\.stopPropagation\(\);[\s\S]*?\}/,
-  );
+  assert.match(subGraphNodeSource, /onPointerDown=\{handleControlPointerDown\}/);
   assert.match(subGraphNodeSource, /onWheel=\{handleMenuWheel\}/);
-  assert.match(
-    subGraphNodeSource,
-    /const handleControlWheel = \(event: ReactWheelEvent<HTMLButtonElement>\) => \{[\s\S]*?if \(!isMenuOpen\) \{[\s\S]*?return;[\s\S]*?\}[\s\S]*?event\.stopPropagation\(\);[\s\S]*?setIsMenuOpen\(false\);[\s\S]*?\}/,
-  );
-  assert.match(subGraphNodeSource, /onWheel=\{handleControlWheel\}/);
-  assert.doesNotMatch(subGraphNodeSource, /handleOptionDoubleClick/);
+  assert.match(subGraphNodeSource, /onKeyDown=\{handleControlKeyDown\}/);
   assert.match(subGraphNodeSource, /event\.stopPropagation\(\)/);
 });
 

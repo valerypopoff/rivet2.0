@@ -83,6 +83,9 @@ test('linked node headers use the library-link control instead of the edit gear'
   assert.match(splitRunSummarySource, /onNodeStartEditing\?\.\(editTargetNode \?\? node\);/);
   assert.match(subGraphHeaderLinkSource, /SubgraphGraphIcon/);
   assert.doesNotMatch(subGraphHeaderLinkSource, /SubgraphLinkIcon/);
+  assert.match(subGraphHeaderLinkSource, /subgraph-link-placeholder/);
+  assert.match(subGraphHeaderLinkSource, /if \(!graphId \|\| !project\.graphs\[graphId\]\)/);
+  assert.match(nodeStylesSource, /\.subgraph-link-placeholder \{[\s\S]*pointer-events: none;/);
   assert.match(
     nodeStylesSource,
     /\.subgraph-link-tooltip \{[\s\S]*position: absolute;[\s\S]*top: 0;[\s\S]*bottom: 0;[\s\S]*left: 0;[\s\S]*width: calc\(41px \* var\(--ui-font-scale\)\);[\s\S]*\}/,

@@ -355,6 +355,10 @@ export const nodeStyles = css`
     color: var(--primary-text);
   }
 
+  .subgraph-link-placeholder {
+    pointer-events: none;
+  }
+
   .subgraph-link-tooltip {
     position: absolute;
     top: 0;

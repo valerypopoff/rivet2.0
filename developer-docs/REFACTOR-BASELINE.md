@@ -95,6 +95,14 @@ contract only. Pair it with the owning API/storage suite for durability claims.
    Check commit/Undo/Redo, click thresholds, double-click removal and read-only mode.
 6. Edit Tool descriptions and Subgraph settings. Tool name remains `Name: ...`
    with the field style/separator; description uses Text-style formatting/clipping.
+   The Subgraph canvas body uses the same full-width searchable graph selector and
+   option styling as its settings panel, while keeping its keyboard and pointer
+   interactions local to the control. Its header keeps the Subgraph icon visible
+   before a target graph is configured, but only makes the icon navigable when the
+   target exists.
+   Keep the canvas selector wrapper above the node's port, output-control, and
+   border layers so the open menu remains readable and receives option clicks;
+   retain its canvas transform so the menu follows pan and zoom.
    Skip unused outputs appears after the graph selector only when enabled; its
    saved setting survives Undo/Redo and save/reload independently per instance.
 7. Exercise embedded editor commands from dashboard and iframe focus; save while

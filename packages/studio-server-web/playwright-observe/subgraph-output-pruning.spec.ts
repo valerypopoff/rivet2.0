@@ -61,6 +61,10 @@ data:
             graphId: child
             skipUnusedOutputs: true
           visualData: 800/420/260/null//
+        '[subgraph-unset]:subGraph "Unconfigured caller"':
+          data:
+            skipUnusedOutputs: true
+          visualData: 800/820/260/null//
     child:
       metadata:
         id: child
@@ -93,6 +97,11 @@ data:
             id: unused
             dataType: string
           visualData: 860/620/240/null//
+    selector-search-target:
+      metadata:
+        id: selector-search-target
+        name: Selector search target
+      nodes: []
   plugins: []
   references: []
 `;
@@ -123,7 +132,30 @@ test('Subgraph pruning is opt-in per instance, undoable, persisted, and reflecte
     await fixturePage.route('**/api/**', async (route) => {
       const request = route.request();
       const path = new URL(request.url()).pathname;
-      if (path === '/api/workflows/tree' && request.method() === 'GET') {
+      if (path === '/api/config' && request.method() === 'GET') {
+        await route.fulfill({
+          json: {
+            publishedWorkflowsBasePath: '/workflows',
+            latestWorkflowsBasePath: '/workflows-latest',
+            publishedAppsBasePath: '/apps',
+            latestAppsBasePath: '/apps-latest',
+            webAppsAuthMode: 'ui-gate',
+          },
+        });
+      } else if (path === '/api/workflows/evaluation-runs/library' && request.method() === 'GET') {
+        await route.fulfill({
+          json: {
+            revision: 0,
+            resourceVersions: { suites: {}, datasets: {} },
+            library: {
+              version: 1,
+              data: { version: 1, suites: [], baselines: [] },
+              datasets: [],
+              migratedLegacyProjectIds: [],
+            },
+          },
+        });
+      } else if (path === '/api/workflows/tree' && request.method() === 'GET') {
         const tree: WorkflowTreeResponse = {
           root: '/workflows',
           sync: { epoch: 'pruning-fixture', revision: 0 },
@@ -167,8 +199,42 @@ test('Subgraph pruning is opt-in per instance, undoable, persisted, and reflecte
   const frame = await openFixture(page);
   const optimized = frame.locator('.node[data-nodeid="subgraph-a"]');
   const full = frame.locator('.node[data-nodeid="subgraph-b"]');
+  const unset = frame.locator('.node[data-nodeid="subgraph-unset"]');
   const toggle = frame.locator('input#skipUnusedOutputs');
   const pruningBodySetting = (node: Locator) => node.getByTestId('subgraph-skip-unused-outputs');
+
+  await test.step('Keep the Subgraph header icon before a target is configured', async () => {
+    await expect(unset.locator('.subgraph-link-placeholder svg')).toBeVisible();
+    await expect(unset.getByRole('button', { name: 'Go to subgraph', exact: true })).toHaveCount(0);
+  });
+
+  await test.step('Search and select from the full-width canvas graph selector', async () => {
+    const selector = unset.getByRole('combobox', { name: 'Subgraph graph' });
+    const selectorContainer = unset.locator('.subgraph-node-body-select');
+
+    await expect
+      .poll(async () => {
+        const selectorWidth = await selectorContainer.evaluate((element) => element.getBoundingClientRect().width);
+        const bodyWidth = await unset
+          .locator('.node-body')
+          .evaluate((element) => element.getBoundingClientRect().width);
+        return Math.abs(selectorWidth - bodyWidth);
+      })
+      .toBeLessThan(1);
+
+    await selector.click();
+    await selector.fill('Selector search');
+    await selectorContainer.getByText('Selector search target', { exact: true }).click();
+    await expect(selector).toHaveAttribute('aria-expanded', 'false');
+    await expect(selectorContainer).toContainText('Selector search target');
+    await expect(unset.getByRole('button', { name: 'Go to subgraph', exact: true })).toBeVisible();
+
+    await selector.click();
+    await selector.fill('Child Graph');
+    await selectorContainer.getByText('Child Graph', { exact: true }).click();
+    await expect(selector).toHaveAttribute('aria-expanded', 'false');
+    await expect(selectorContainer).toContainText('Child Graph');
+  });
 
   await test.step('Enable the setting and verify its ordinary editing behavior', async () => {
     await expect(pruningBodySetting(optimized)).toHaveCount(0);
@@ -202,10 +268,11 @@ test('Subgraph pruning is opt-in per instance, undoable, persisted, and reflecte
     const savedNodes = parse(contents).data.graphs.main.nodes;
     const nodeData = (id: string) =>
       Object.entries(savedNodes).find(([key]) => key.startsWith(`[${id}]:`))?.[1] as {
-        data: { skipUnusedOutputs?: boolean };
+        data: { skipUnusedOutputs?: boolean; graphId?: string };
       };
     expect(nodeData('subgraph-a').data.skipUnusedOutputs).toBe(true);
     expect(nodeData('subgraph-b').data.skipUnusedOutputs ?? false).toBe(false);
+    expect(nodeData('subgraph-unset').data.graphId).toBe('child');
   });
 
   // A fresh browser context proves file persistence rather than restoring the
@@ -221,6 +288,9 @@ test('Subgraph pruning is opt-in per instance, undoable, persisted, and reflecte
     await expect.poll(() => loadCount).toBeGreaterThan(loadCountBeforeReload);
     const optimizedReloaded = reloadedFrame.locator('.node[data-nodeid="subgraph-a"]');
     const fullReloaded = reloadedFrame.locator('.node[data-nodeid="subgraph-b"]');
+    await expect(reloadedFrame.locator('.node[data-nodeid="subgraph-unset"] .subgraph-node-body-select')).toContainText(
+      'Child Graph',
+    );
     await editNode(optimizedReloaded);
     await expect(reloadedFrame.locator('input#skipUnusedOutputs')).toBeChecked();
     await editNode(fullReloaded);

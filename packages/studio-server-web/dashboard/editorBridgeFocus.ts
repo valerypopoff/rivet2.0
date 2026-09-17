@@ -2,7 +2,7 @@ import type { OverlayKey } from '../../app/src/state/ui.js';
 
 const EDITOR_CANVAS_SELECTOR = '.node-canvas';
 const CANVAS_FOCUS_PRESERVE_SELECTOR =
-  'input, textarea, select, button, [contenteditable="true"], [contenteditable=""], [role="textbox"]';
+  'input, textarea, select, button, [contenteditable="true"], [contenteditable=""], [role="textbox"], [data-canvas-focus-preserve]';
 
 export const isSaveShortcutEvent = (event: KeyboardEvent) =>
   (event.ctrlKey || event.metaKey) &&
@@ -75,7 +75,10 @@ export function isEditableElement(element: Element | null | undefined): element 
 }
 
 export function shouldPreserveCanvasFocusTarget(target: Element) {
-  return target.closest(CANVAS_FOCUS_PRESERVE_SELECTOR) !== null || (target instanceof HTMLElement && target.isContentEditable);
+  return (
+    target.closest(CANVAS_FOCUS_PRESERVE_SELECTOR) !== null ||
+    (target instanceof HTMLElement && target.isContentEditable)
+  );
 }
 
 export function focusHostedEditorCanvas(target: Element) {

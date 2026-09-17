@@ -18,7 +18,13 @@ export const SubGraphHeaderLink: FC<{ node: ChartNode }> = ({ node }) => {
   const graphId = subGraphNode.data.graphId;
 
   if (!graphId || !project.graphs[graphId]) {
-    return null;
+    return (
+      <span className="subgraph-link-tooltip subgraph-link-placeholder" aria-hidden="true">
+        <span className="subgraph-link-button">
+          <SubgraphGraphIcon />
+        </span>
+      </span>
+    );
   }
 
   const handleClick = (event: MouseEvent<HTMLButtonElement>) => {
