@@ -752,6 +752,8 @@ When adding new code, keep the post-refactor ownership seams explicit instead of
   - keep `projectsState.openedProjects` as lightweight tab metadata: project id, title, path, and opened graph
   - keep full in-memory project content in `openedProjectSnapshotsState`
   - prefer `RivetWorkspaceHost.openProjectSnapshot`, `replaceCurrent`, `closeProject`, `moveProjectPaths`, and `updateProjectMetadata` for the actual workspace transition or externally persisted title/path reconciliation
+  - closing a tab must retain its `projectEditorStateByProjectIdState` navigation/viewport entry, finish tab/snapshot/context cleanup, and then await one grouped `project` storage flush; this keeps close -> immediate page reload -> reopen from losing the latest canvas position without durably resurrecting stale open-tab metadata, including when an inactive tab still has a pending debounced snapshot
+  - the last loaded project and graph remain cached after the final tab closes, but viewport snapshots and reload checkpoints require an open graph tab; reopening uses the retained editor entry instead of snapshotting an empty workspace's default canvas
   - wrapper atom reads are acceptable for hosted path lookup, duplicate-project-id checks, and stale-empty-tab cleanup, but do not reimplement tab close fallback, path rewrite transitions, or live project metadata patching in wrapper code when the workspace host exposes them
   - normalize persisted opened-project metadata by dropping missing entries, orphan metadata, duplicate project ids, and legacy full-project payloads before the tab strip reads it; when damaged duplicate entries share an id, prefer the entry that still has a file path
   - resolve tab titles through the wrapper helper so old projects or legacy persisted tab entries fall back to the project filename instead of rendering missing, `undefined`, or `null` labels
@@ -957,6 +959,16 @@ For workflow-library project rename entry behavior:
 18. try renaming to an existing sibling project name and confirm the preloader clears and the UI shows the API conflict without leaving a stale edit field open
 19. open Project Settings separately and confirm there is no modal-level rename button or title edit field
 20. save the renamed project and confirm the saved `.rivet-project` title now aligns with the tree name; for a previously published project, confirm this real content edit becomes `Unpublished changes`
+
+For hosted editor canvas restoration:
+
+1. open a workflow project and pan or zoom its graph canvas to an unmistakable position
+2. immediately reload the Rivet Studio Server page, without waiting for background persistence
+3. confirm the same project and graph reopen at the exact saved canvas transform instead of recentering
+4. switch to another graph, move its canvas, reload again, and confirm the last-open graph and its own project-scoped viewport are restored
+5. open another project and confirm graph IDs or canvas positions from the first project do not leak into it
+6. open Node library or a web app, reload while that resource editor remains open, and confirm the last graph reopens at its prior viewport rather than at the resource editor's canvas position
+7. pan a graph, close its project tab, immediately reload the Studio Server page, reopen that project from the tree, and confirm the graph returns to the transform captured before Close
 
 For hosted editor keyboard-node behavior:
 

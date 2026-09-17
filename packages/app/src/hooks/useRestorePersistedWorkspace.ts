@@ -1,16 +1,17 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useAtomValue, useSetAtom } from 'jotai';
 import { graphState } from '../state/graph.js';
 import { canvasPositionState, graphNavigationStackState, lastCanvasPositionByGraphState } from '../state/graphBuilder.js';
 import { openedProjectsState, openedProjectsSortedIdsState, projectState } from '../state/savedGraphs.js';
 import { projectEditorHydratedState, projectEditorStateByProjectIdState } from '../state/projectEditor.js';
-import { resolvePersistedCanvasPositionsForLegacyCache, resolveProjectEditorRestoreTarget } from '../utils/projectEditorState.js';
+import { resolveProjectEditorRestoreTarget } from '../utils/projectEditorState.js';
 import { useCenterViewOnGraph } from './useCenterViewOnGraph.js';
 import { handleError } from '../utils/errorHandling.js';
 import { useApplyProjectExecutorMode } from './useProjectExecutorMode.js';
 
 export function useRestorePersistedWorkspace() {
   const didRestoreRef = useRef(false);
+  const [storageAtomsMounted, setStorageAtomsMounted] = useState(false);
 
   const currentProject = useAtomValue(projectState);
   const currentGraph = useAtomValue(graphState);
@@ -22,13 +23,19 @@ export function useRestorePersistedWorkspace() {
   const setGraph = useSetAtom(graphState);
   const setCanvasPosition = useSetAtom(canvasPositionState);
   const setGraphNavigationStack = useSetAtom(graphNavigationStackState);
-  const setLastCanvasPositionsByGraph = useSetAtom(lastCanvasPositionByGraphState);
   const setProjectEditorHydrated = useSetAtom(projectEditorHydratedState);
   const centerViewOnGraph = useCenterViewOnGraph();
   const applyProjectExecutorMode = useApplyProjectExecutorMode();
 
   useEffect(() => {
-    if (didRestoreRef.current) {
+    // atomWithStorage hydrates synchronous storage from its onMount callback.
+    // Wait for the resulting render before consuming the persisted workspace;
+    // otherwise the one-shot restore can permanently accept atom defaults.
+    setStorageAtomsMounted(true);
+  }, []);
+
+  useEffect(() => {
+    if (!storageAtomsMounted || didRestoreRef.current) {
       return;
     }
 
@@ -47,17 +54,6 @@ export function useRestorePersistedWorkspace() {
         openedGraphId: openedProjects[currentProjectId]?.openedGraph,
         legacyCanvasPositionsByGraph: lastCanvasPositionsByGraph,
       });
-
-      const persistedCanvasPositionsByGraph = resolvePersistedCanvasPositionsForLegacyCache({
-        project: currentProject,
-        persistedProjectEditorState,
-      });
-      if (Object.keys(persistedCanvasPositionsByGraph).length > 0) {
-        setLastCanvasPositionsByGraph((previousPositionsByGraph) => ({
-          ...previousPositionsByGraph,
-          ...persistedCanvasPositionsByGraph,
-        }));
-      }
 
       const currentGraphId = currentGraph.metadata?.id;
       const currentGraphIsValid = currentGraphId != null && currentProject.graphs[currentGraphId] != null;
@@ -104,7 +100,7 @@ export function useRestorePersistedWorkspace() {
     setCanvasPosition,
     setGraph,
     setGraphNavigationStack,
-    setLastCanvasPositionsByGraph,
     setProjectEditorHydrated,
+    storageAtomsMounted,
   ]);
 }

@@ -34,7 +34,6 @@ import { AiGraphCreatorInput } from './AiGraphCreatorInput';
 import { AiGraphCreatorToggle } from './AiGraphCreatorToggle';
 import { useReloadProjectReferences } from '../hooks/useReloadProjectReferences';
 import { submitUserInputAnswers } from '../state/actions/userInputActions';
-import { useSyncCurrentProjectEditorState } from '../hooks/useSyncCurrentProjectEditorState.js';
 import { toggleNodeSelection } from '../domain/graphEditing/nodeSelection.js';
 import { useSyncProjectPluginsFromGraphUsage } from '../hooks/useSyncProjectPluginsFromGraphUsage.js';
 import { warmCodeEditor } from './LazyComponents.js';
@@ -142,8 +141,6 @@ export const GraphBuilder: FC<{ runGraph: EditorGraphRun }> = ({ runGraph }) => 
   const setProjectCompareReference = useSetAtom(projectCompareReferenceState);
 
   useReloadProjectReferences();
-  useSyncCurrentProjectEditorState();
-
   useDatasets(project.metadata.id);
 
   const historyNav = useGraphHistoryNavigation();

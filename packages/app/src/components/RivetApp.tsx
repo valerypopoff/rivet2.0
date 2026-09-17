@@ -46,6 +46,7 @@ import { AppErrorBoundary } from './AppErrorBoundary';
 import { wrapAsync } from '../utils/errorHandling';
 import { useExecutorSessionCoordinator } from '../hooks/useExecutorSessionCoordinator';
 import { useRestorePersistedWorkspace } from '../hooks/useRestorePersistedWorkspace.js';
+import { useSyncCurrentProjectEditorState } from '../hooks/useSyncCurrentProjectEditorState.js';
 import { DeleteGraphInputConfirmModalRenderer } from './DeleteGraphInputConfirmModal';
 import {
   dataBusFullRowCountState,
@@ -198,6 +199,7 @@ export const RivetApp: FC = () => {
 
   useLoadStaticData();
   useRestorePersistedWorkspace();
+  useSyncCurrentProjectEditorState();
   useProjectPlugins();
 
   useEffect(() => {

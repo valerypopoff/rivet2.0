@@ -1,6 +1,6 @@
 import { useThrottleFn } from 'ahooks';
-import { useEffect, useRef } from 'react';
-import type { ChartNode, GraphId, NodeId } from '@valerypopoff/rivet2-core';
+import { useRef } from 'react';
+import type { ChartNode, NodeId } from '@valerypopoff/rivet2-core';
 import { useStableCallback } from '../../hooks/useStableCallback.js';
 import type { CanvasPosition } from '../../state/graphBuilder.js';
 
@@ -57,7 +57,6 @@ export interface UseNodeCanvasInteractionsOptions {
   nodes: ChartNode[];
   onCanvasClick?: () => void;
   onCanvasContextMenu: (event: { clientX: number; clientY: number; target: EventTarget }) => void;
-  selectedGraphId: GraphId | undefined;
   selectedNodeIds: NodeId[];
   selectionBox: { x: number; y: number; width: number; height: number } | null;
   setCanvasPosition: (position: CanvasPosition) => void;
@@ -65,9 +64,6 @@ export interface UseNodeCanvasInteractionsOptions {
   setEditingNodeId: (id: NodeId | null) => void;
   setIsDraggingCanvas: (value: boolean) => void;
   setLastMousePosition: (position: { x: number; y: number }) => void;
-  setLastSavedCanvasPosition: (
-    updater: (saved: Record<GraphId, CanvasPosition | undefined>) => Record<GraphId, CanvasPosition | undefined>,
-  ) => void;
   setSelectedNodeIds: (ids: NodeId[]) => void;
   startSelectionBox: (x: number, y: number, baseSelectedNodeIds: readonly NodeId[]) => void;
   isNodeDragGestureActive?: () => boolean;
@@ -91,7 +87,6 @@ export const useNodeCanvasInteractions = ({
   nodes,
   onCanvasClick,
   onCanvasContextMenu,
-  selectedGraphId,
   selectedNodeIds,
   selectionBox,
   setCanvasPosition,
@@ -99,7 +94,6 @@ export const useNodeCanvasInteractions = ({
   setEditingNodeId,
   setIsDraggingCanvas,
   setLastMousePosition,
-  setLastSavedCanvasPosition,
   setSelectedNodeIds,
   startSelectionBox,
   isNodeDragGestureActive = () => false,
@@ -111,7 +105,6 @@ export const useNodeCanvasInteractions = ({
     y: 0,
     target: undefined,
   });
-  const persistCanvasPositionTimeoutRef = useRef<number | undefined>();
 
   const isScrollable = (element: HTMLElement): boolean => {
     const style = window.getComputedStyle(element);
@@ -154,25 +147,6 @@ export const useNodeCanvasInteractions = ({
 
     setIsDraggingCanvas(true);
     setDragStart({ x: e.clientX, y: e.clientY, canvasStartX: canvasPosition.x, canvasStartY: canvasPosition.y });
-  });
-
-  const persistCanvasPosition = useStableCallback((position: CanvasPosition) => {
-    if (!selectedGraphId) {
-      return;
-    }
-
-    setLastSavedCanvasPosition((saved) => ({ ...saved, [selectedGraphId]: position }));
-  });
-
-  const schedulePersistCanvasPosition = useStableCallback((position: CanvasPosition) => {
-    if (persistCanvasPositionTimeoutRef.current) {
-      window.clearTimeout(persistCanvasPositionTimeoutRef.current);
-    }
-
-    persistCanvasPositionTimeoutRef.current = window.setTimeout(() => {
-      persistCanvasPosition(position);
-      persistCanvasPositionTimeoutRef.current = undefined;
-    }, 150);
   });
 
   const getCanvasDragPosition = useStableCallback((clientX: number, clientY: number): CanvasPosition => {
@@ -233,7 +207,6 @@ export const useNodeCanvasInteractions = ({
       const position = getCanvasPositionForZoomAtClientPoint(newZoom, clientX, clientY);
 
       setCanvasPosition(position);
-      schedulePersistCanvasPosition(position);
     },
     { wait: 25 },
   );
@@ -270,14 +243,8 @@ export const useNodeCanvasInteractions = ({
     }
 
     if (wasDraggingCanvas) {
-      if (persistCanvasPositionTimeoutRef.current) {
-        window.clearTimeout(persistCanvasPositionTimeoutRef.current);
-        persistCanvasPositionTimeoutRef.current = undefined;
-      }
-
       const finalPosition = getCanvasDragPosition(e.clientX, e.clientY);
       setCanvasPosition(finalPosition);
-      persistCanvasPosition(finalPosition);
       setIsDraggingCanvas(false);
     }
 
@@ -301,15 +268,6 @@ export const useNodeCanvasInteractions = ({
       target: e.target,
     });
   });
-
-  useEffect(
-    () => () => {
-      if (persistCanvasPositionTimeoutRef.current) {
-        window.clearTimeout(persistCanvasPositionTimeoutRef.current);
-      }
-    },
-    [],
-  );
 
   return {
     canvasMouseDown,

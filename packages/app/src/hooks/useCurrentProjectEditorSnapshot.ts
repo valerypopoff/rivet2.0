@@ -1,13 +1,15 @@
 import { type GraphId } from '@valerypopoff/rivet2-core';
-import { useCallback } from 'react';
-import { useAtom, useAtomValue, useSetAtom } from 'jotai';
+import { useAtomValue, useSetAtom, useStore } from 'jotai';
 import { isEqual } from 'lodash-es';
 import { graphState } from '../state/graph.js';
-import { canvasPositionState, graphNavigationStackState, lastCanvasPositionByGraphState } from '../state/graphBuilder.js';
-import { openedProjectSnapshotsState, projectDataState, projectState } from '../state/savedGraphs.js';
+import { canvasPositionState, graphNavigationStackState } from '../state/graphBuilder.js';
+import { openedProjectSnapshotsState, projectDataState, projectsState, projectState } from '../state/savedGraphs.js';
+import { projectWorkspaceTargetsState } from '../state/workspaceTarget.js';
+import { getProjectWorkspaceLeavePolicy } from '../domain/workspace/projectWorkspaceTarget.js';
 import { projectEditorStateByProjectIdState, type ProjectEditorState } from '../state/projectEditor.js';
 import { buildOpenedProjectSnapshot } from '../utils/openedProjectSnapshots.js';
 import { buildCurrentProjectEditorStateSnapshot } from '../utils/projectEditorState.js';
+import { useStableCallback } from './useStableCallback.js';
 
 export function useCurrentProjectEditorSnapshot() {
   const currentProject = useAtomValue(projectState);
@@ -15,43 +17,45 @@ export function useCurrentProjectEditorSnapshot() {
   const currentGraph = useAtomValue(graphState);
   const canvasPosition = useAtomValue(canvasPositionState);
   const graphNavigationStack = useAtomValue(graphNavigationStackState);
-  const lastCanvasPositionsByGraph = useAtomValue(lastCanvasPositionByGraphState);
-  const [projectEditorStateByProjectId, setProjectEditorStateByProjectId] = useAtom(projectEditorStateByProjectIdState);
+  const setProjectEditorStateByProjectId = useSetAtom(projectEditorStateByProjectIdState);
   const setOpenedProjectSnapshots = useSetAtom(openedProjectSnapshotsState);
+  const store = useStore();
 
-  const buildSnapshot = useCallback((options: {
+  const buildSnapshot = useStableCallback((options: {
     project?: typeof currentProject;
     currentGraphId?: GraphId | undefined;
     existingProjectEditorState?: ProjectEditorState;
   } = {}) => {
-    const snapshotProject = options.project ?? currentProject;
+    // A pointer event can update Jotai before React rerenders this hook. Snapshot
+    // directly from the store so an immediate graph/resource switch never saves
+    // the previous canvas transform.
+    const snapshotProject = options.project ?? store.get(projectState);
+    const snapshotGraph = store.get(graphState);
 
     return buildCurrentProjectEditorStateSnapshot({
       project: snapshotProject,
-      currentGraphId: options.currentGraphId ?? currentGraph.metadata?.id,
-      navigationStack: graphNavigationStack,
-      canvasPosition,
+      currentGraphId: options.currentGraphId ?? snapshotGraph.metadata?.id,
+      navigationStack: store.get(graphNavigationStackState),
+      canvasPosition: store.get(canvasPositionState),
       existingProjectEditorState:
-        options.existingProjectEditorState ?? projectEditorStateByProjectId[snapshotProject.metadata.id],
-      legacyCanvasPositionsByGraph: lastCanvasPositionsByGraph,
+        options.existingProjectEditorState ?? store.get(projectEditorStateByProjectIdState)[snapshotProject.metadata.id],
     });
-  }, [
-    canvasPosition,
-    currentGraph.metadata?.id,
-    currentProject,
-    graphNavigationStack,
-    lastCanvasPositionsByGraph,
-    projectEditorStateByProjectId,
-  ]);
+  });
 
-  const persistSnapshot = useCallback((options: {
+  const persistSnapshot = useStableCallback((options: {
     project?: typeof currentProject;
     currentGraphId?: GraphId | undefined;
     existingProjectEditorState?: ProjectEditorState;
   } = {}) => {
-    const snapshotProject = options.project ?? currentProject;
+    const snapshotProject = options.project ?? store.get(projectState);
     const snapshotProjectId = snapshotProject.metadata.id;
-    if (!snapshotProjectId) {
+    // The last loaded project/graph survive closing the final tab. They do not
+    // own the live canvas anymore, especially after an empty-workspace reload.
+    if (
+      !snapshotProjectId ||
+      !store.get(projectsState).openedProjects[snapshotProjectId] ||
+      !getProjectWorkspaceLeavePolicy(store.get(projectWorkspaceTargetsState)[snapshotProjectId]).persistGraphViewport
+    ) {
       return undefined;
     }
 
@@ -69,22 +73,22 @@ export function useCurrentProjectEditorSnapshot() {
     });
 
     return nextProjectEditorState;
-  }, [buildSnapshot, currentProject, setProjectEditorStateByProjectId]);
+  });
 
-  const persistOpenedProjectSnapshot = useCallback((options: {
+  const persistOpenedProjectSnapshot = useStableCallback((options: {
     project?: typeof currentProject;
     graph?: typeof currentGraph;
     data?: typeof currentProjectData;
   } = {}) => {
-    const snapshotProject = options.project ?? currentProject;
+    const snapshotProject = options.project ?? store.get(projectState);
     if (!snapshotProject.metadata.id) {
       return;
     }
 
     const nextSnapshot = buildOpenedProjectSnapshot({
       project: snapshotProject,
-      graph: options.graph ?? currentGraph,
-      data: options.data ?? currentProjectData,
+      graph: options.graph ?? store.get(graphState),
+      data: options.data ?? store.get(projectDataState),
     });
 
     setOpenedProjectSnapshots((previousSnapshots) => {
@@ -97,17 +101,15 @@ export function useCurrentProjectEditorSnapshot() {
         [snapshotProject.metadata.id]: nextSnapshot,
       };
     });
-  }, [currentGraph, currentProject, currentProjectData, setOpenedProjectSnapshots]);
+  });
 
   return {
     canvasPosition,
     currentGraph,
     currentProject,
     graphNavigationStack,
-    lastCanvasPositionsByGraph,
     persistOpenedProjectSnapshot,
     buildCurrentProjectEditorSnapshot: buildSnapshot,
     persistCurrentProjectEditorSnapshot: persistSnapshot,
-    projectEditorStateByProjectId,
   };
 }

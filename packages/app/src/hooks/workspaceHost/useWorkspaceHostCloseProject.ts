@@ -7,6 +7,7 @@ import {
   projectState,
 } from '../../state/savedGraphs.js';
 import { clearLoadedRecordingForTabState } from '../../state/execution.js';
+import { flushHybridStorageGroup } from '../../state/storage.js';
 import { removeOpenedProject } from '../../utils/openedProjects.js';
 import { isOpenedProjectRecoverable } from '../../utils/openedProjectSnapshots.js';
 import { useCurrentProjectEditorSnapshot } from '../useCurrentProjectEditorSnapshot.js';
@@ -75,6 +76,12 @@ export function useWorkspaceHostCloseProject() {
       projectPath: projects.openedProjects[projectId]?.fsPath ?? null,
     });
     setProjects((previousProjects) => removeOpenedProject(previousProjects, projectId));
+
+    // Persist the close as one complete transaction: retain the editor
+    // snapshot, but also commit the final tab/snapshot/context cleanup. A flush
+    // before removeOpenedProject would make stale open-tab metadata durable
+    // while leaving the actual close behind in a cancellable debounce.
+    await flushHybridStorageGroup('project');
 
     return true;
   });

@@ -5,7 +5,7 @@ import {
   withAsyncDeadline,
 } from '../../studio-server-api/src/tests/helpers/workflow-async-process';
 
-import { authenticateIfNeeded, waitForDashboardReady } from './helpers/hostedEditorObserve';
+import { authenticateIfNeeded, panGraphCanvas, waitForDashboardReady } from './helpers/hostedEditorObserve';
 import type { WorkflowFolderItem, WorkflowProjectItem } from '../dashboard/types';
 import type { HostedProjectConflictSnapshot } from '../../studio-server-shared/editor-bridge';
 
@@ -460,6 +460,103 @@ test('a remote removal updates the tree but preserves the already open editor do
   await page.waitForTimeout(250);
   expect(projectLoadRequests).toBe(1);
   expect(treeReads.count).toBeGreaterThan(1);
+});
+
+test('a page reload restores the latest graph canvas position', async ({ page }) => {
+  const projectName = 'Viewport persistence project';
+  const project = createProjectFixture(projectName);
+  const state: TreeState = { folders: [], projects: [project], revision: 0 };
+
+  await installMockEventSource(page);
+  await installTreeRoute(page, state, { count: 0 });
+  await page.route('**/api/projects/load', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        contents: createProjectContents(projectName),
+        datasetsContents: null,
+        revisionId: null,
+      }),
+    });
+  });
+
+  await page.goto('/', { waitUntil: 'domcontentloaded' });
+  await authenticateIfNeeded(page);
+  await waitForDashboardReady(page);
+  await page.locator('.project-row', { hasText: projectName }).dblclick();
+
+  const editor = page.frameLocator('iframe.dashboard-editor-frame');
+  const canvasContents = editor.locator('.canvas-node-contents');
+  const movedTransform = await panGraphCanvas(page);
+
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await authenticateIfNeeded(page);
+  await waitForDashboardReady(page);
+  await expect(editor.locator('.projects-container .project.active', { hasText: projectName })).toBeVisible();
+  await expect.poll(() => canvasContents.evaluate((element) => (element as HTMLElement).style.transform)).toBe(movedTransform);
+});
+
+test('closing a preview project before reload preserves its canvas position when reopened', async ({ page }) => {
+  const projectName = 'Closed viewport persistence project';
+  const project = createProjectFixture(projectName);
+  const state: TreeState = { folders: [], projects: [project], revision: 0 };
+
+  await installMockEventSource(page);
+  await installTreeRoute(page, state, { count: 0 });
+  await page.route('**/api/projects/load', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        contents: createProjectContents(projectName),
+        datasetsContents: null,
+        revisionId: null,
+      }),
+    });
+  });
+
+  await page.goto('/', { waitUntil: 'domcontentloaded' });
+  await authenticateIfNeeded(page);
+  await waitForDashboardReady(page);
+  await page.locator('.project-row', { hasText: projectName }).click();
+
+  const editor = page.frameLocator('iframe.dashboard-editor-frame');
+  await expect(editor.locator('.projects-container .project.active.preview', { hasText: projectName })).toBeVisible();
+  const canvasContents = editor.locator('.canvas-node-contents');
+  const movedTransform = await panGraphCanvas(page);
+
+  // Match a normal editing session: startup hydrates the last loaded graph
+  // separately from the project-scoped editor state.
+  await expect.poll(() => page.evaluate(async () => {
+    const database = await new Promise<IDBDatabase>((resolve, reject) => {
+      const request = indexedDB.open('jotai-store');
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+    });
+    try {
+      return await new Promise<string | undefined>((resolve, reject) => {
+        const request = database.transaction('state').objectStore('state').get('graph');
+        request.onsuccess = () => resolve(JSON.parse(request.result ?? '{}').graphState?.metadata?.id);
+        request.onerror = () => reject(request.error);
+      });
+    } finally {
+      database.close();
+    }
+  })).toBe(`${projectName}-graph-id`);
+  const activeProjectTab = editor.locator('.projects-container .project.active', { hasText: projectName });
+  await activeProjectTab.hover();
+  await activeProjectTab.getByRole('button', { name: `Close ${projectName}` }).click();
+  await expect(editor.locator('.projects-container .project', { hasText: projectName })).toHaveCount(0);
+
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await authenticateIfNeeded(page);
+  await waitForDashboardReady(page);
+  await expect(editor.locator('h1', { hasText: 'Welcome to Rivet' })).toBeAttached();
+  await page.locator('.project-row', { hasText: projectName }).click();
+
+  await expect(editor.locator('.projects-container .project.active.preview', { hasText: projectName })).toBeVisible();
+  await expect.poll(() => canvasContents.evaluate((element) => (element as HTMLElement).style.transform)).toBe(movedTransform);
 });
 
 test('a remote tree change does not misidentify an open recording replay as a removed project', async ({ page }) => {
