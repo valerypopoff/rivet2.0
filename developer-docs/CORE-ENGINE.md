@@ -244,6 +244,40 @@ selecting a case. The mirror follows native horizontal input scrolling, so long 
 do not lose token alignment outside the initial visible width. The legacy `match` node deliberately overrides none of this
 behavior and continues to treat every saved regex as literal source.
 
+### Code object-field output inference
+
+`codeNew` uses the pure, bounded Acorn analysis in `codeOutputInference.ts` to
+discover explicit data-property names in direct object returns. Analysis uses
+the shared JS-value interpolation transformation and an async-function wrapper;
+nested function/class returns and indirect object shapes are not inferred.
+Definitions always prefer valid source, even when it yields no fields. Optional
+`inferredOutputKeys` remains the backward-compatible invalid-source fallback;
+`inferredOutputFields` is the persisted `{ id, key }` binding for each visible
+field. New field IDs are namespaced under `field:`, while the permanent
+whole-value port remains `output`. Definition queries are read-only and never
+create or update either metadata field.
+
+The Code execution wrapper extracts own enumerable data descriptors before runner
+transport. Missing properties and accessors emit exclusion; present undefined
+emits `any`. No getters are invoked for field extraction, and execution never
+adds ports. The editor prepares metadata before connection reconciliation in the
+same undoable transaction as source edits. Syntax-invalid saved code therefore
+retains its ports across reload; valid removal uses ordinary exact-ID connection
+recovery. A field key-only source edit may carry its existing stable ID to the
+new key only when Core can prove that the complete transformed-source change is
+within one unique direct-object property key. It deliberately rejects repeated
+branch keys and broader rewrites, leaving those cases to ordinary recoverable
+connection behavior. A bounded retired-ID list preserves exact remove/recreate
+recovery without retaining unbounded historical source state. This is additive
+node metadata, not a runner or recording-format change.
+
+The retired-binding list retains at most 32 removed fields. These bindings are
+persisted identities, not saved wires: wire recovery still depends on the
+editor's existing session-local recovery pool. Exact retired-key recovery takes
+precedence over rename inference. The last valid source is retained only while
+syntax is invalid and is discarded after a valid edit. Incoming editor metadata
+is ignored; preparation derives bindings from the previous node and new source.
+
 ### Stable dynamic-port companions
 
 `StringListPortBinding` can assign a stored stable id to a dynamic port for

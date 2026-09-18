@@ -10,6 +10,8 @@ import {
   type NodeId,
   type NodePrefab,
   type NodePrefabId,
+  type CodeNewNode,
+  prepareCodeOutputEdit,
 } from '@valerypopoff/rivet2-core';
 import { NodeCanvas } from './NodeCanvas.js';
 import { NodeEditor, type NodeChanged } from './NodeEditor.js';
@@ -272,7 +274,13 @@ export const NodeLibraryBuilder: FC = () => {
       updateProjectNodePrefabs((draftPrefabs) => {
         const prefab = draftPrefabs[prefabId];
         if (prefab) {
-          prefab.sourceNode = nextNode;
+          prefab.sourceNode =
+            nextNode.type === 'codeNew' && prefab.sourceNode.type === 'codeNew'
+              ? {
+                  ...nextNode,
+                  data: prepareCodeOutputEdit((prefab.sourceNode as CodeNewNode).data, (nextNode as CodeNewNode).data),
+                }
+              : nextNode;
         }
       });
 

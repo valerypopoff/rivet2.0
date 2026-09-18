@@ -1775,9 +1775,25 @@ Current node-editor Monaco rules that matter for editor changes:
 - the shared app editor in [`packages/app/src/components/editors/StringListEditor.tsx`](../packages/app/src/components/editors/StringListEditor.tsx) owns the add/delete controls plus the handle-only drag UI; node definitions opt in through metadata instead of rendering bespoke reorder UIs
 - the shared `StringListEditor` also owns the small interaction rules for that UI: newly added rows autofocus their text field, definitions can provide `newItemDefault` for new rows, and reorder handles stay hidden for single-row lists so non-reorderable states do not show dead drag affordances
 - connector-preserving list edits flow through [`packages/app/src/domain/graphEditing/stringListPortBinding.ts`](../packages/app/src/domain/graphEditing/stringListPortBinding.ts) plus [`packages/app/src/commands/editNodeWithConnectionsCommand.ts`](../packages/app/src/commands/editNodeWithConnectionsCommand.ts), so the editor UI can reorder/rename rows without scattering node-specific connection-remap code
-- `Code` node port ids stay value-derived because the node's runtime API is name-based (`inputs.foo` / returned output keys), while `Destructure` and `Match` use stored stable output ids so reorder/rename can preserve connector identity independently from the displayed row order
+- `Code` input ports stay value-derived because the runtime API is name-based (`inputs.foo`), while object-field output ports persist an independent stable ID/key binding. `Destructure` and `Match` likewise use stored stable output IDs, so a supported output rename can preserve connector identity independently from its displayed label or lookup key
 - `Destructure` path rows use `newItemDefault: '$.'`, so the shared add button starts new JSONPath entries at the JSONPath root without changing existing saved paths
 - legacy `Destructure` / `Match` projects without stored stable id arrays convert lazily on first relevant list edit; there is no graph-wide migration pass on load
+
+Code edits also prepare `codeNew.data.inferredOutputFields` (plus the legacy
+`inferredOutputKeys` fallback) before reconciling connections. The preparer
+first merges partial editor data into the live node, then analyzes that complete
+source. Valid source replaces the visible key set; invalid source preserves the
+prior successful bindings and last valid source. Source and metadata share the
+command snapshot, so inline/fullscreen edits, merged edits, undo/redo, and
+save/reload keep output ports consistent. A single unique direct-object
+property-key edit such as `foo` to `foo1` carries its existing output ID and
+wire forward; reordering fields also preserves IDs. Multiple field changes,
+repeated branch keys, and edits outside the property token are intentionally
+ambiguous and do not rename a connection. Removed fields enter the bounded
+retired-binding set so recreating the exact key still uses ordinary exact-ID
+wire recovery. Library-source edits use the same preparer before linked
+instance reconciliation, so an eligible Code field rename retains its wires in
+every instance.
 
 ### Output rendering
 

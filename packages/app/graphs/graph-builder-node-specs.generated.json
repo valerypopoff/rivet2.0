@@ -1,6 +1,6 @@
 {
   "formatVersion": 1,
-  "catalogFingerprint": "fnv1a64:ff5710b930064bea",
+  "catalogFingerprint": "fnv1a64:a53a247c5a1e844b",
   "entries": [
     {
       "authoringChoiceId": "registered:abortGraph",
@@ -286,7 +286,7 @@
       "authoringChoiceId": "registered:codeNew",
       "nodeType": "codeNew",
       "displayName": "Code",
-      "description": "The Code Node runs JavaScript code and returns the exact value returned by that code as a single output. It is useful when you want the convenience of the Expression node's {{input}} ports, but you also want a normal code body with local variables, multiple statements, await , and an explicit return . Use Code (legacy) when you need multiple named outputs or when you want to work with the lower level inputs.foo.value API directly.",
+      "description": "The Code Node runs JavaScript code and sends the exact returned value to Output . Explicit fields in a directly returned object also create named output ports automatically. It is useful when you want the convenience of the Expression node's {{input}} ports, but you also want a normal code body with local variables, multiple statements, await , and an explicit return . Use Code (legacy) when you want to work with the lower level inputs.foo.value API and manually configured outputs directly.",
       "aliases": [],
       "capabilities": {
         "createWithDefaults": true,
@@ -304,7 +304,7 @@
         }
       ],
       "safeDefaults": {
-        "code": "// This is a Code node. Write JavaScript here and return one value.\n// Interpolation tokens create input ports and evaluate as connected values.\n// The returned value becomes the node's single output.\nconst value = {{input}};\nreturn value;"
+        "code": "// This is a Code node. Write JavaScript here and return one value.\n// Interpolation tokens create input ports and evaluate as connected values.\n// Output carries the returned value; explicit object fields also get ports.\nconst value = {{input}};\nreturn value;"
       }
     },
     {

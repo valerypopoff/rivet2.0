@@ -9,11 +9,11 @@ import TabItem from '@theme/TabItem';
 
 ## Overview
 
-The Code Node runs JavaScript code and returns the exact value returned by that code as a single output.
+The Code Node runs JavaScript code and sends the exact returned value to **Output**. Explicit fields in a directly returned object also create named output ports automatically.
 
 It is useful when you want the convenience of the Expression node's `{{input}}` ports, but you also want a normal code body with local variables, multiple statements, `await`, and an explicit `return`.
 
-Use [Code (legacy)](./code.mdx) when you need multiple named outputs or when you want to work with the lower-level `inputs.foo.value` API directly.
+Use [Code (legacy)](./code.mdx) when you want to work with the lower-level `inputs.foo.value` API and manually configured outputs directly.
 
 ### Inputs From Interpolation
 
@@ -54,7 +54,7 @@ return currentUser?.name ?? 'Unknown';
 
 ### Output
 
-Code always has one output named `Output`. Whatever the code returns becomes that output's value:
+Code always has an output named `Output`. Whatever the code returns becomes that output's value:
 
 ```js
 const fullName = String({{firstName}}) + ' ' + String({{lastName}});
@@ -65,6 +65,12 @@ return {
 ```
 
 The returned value can be a string, number, boolean, object, array, `null`, or JavaScript `undefined`. Rivet displays explicit `null` and `undefined` values as the literal words `null` and `undefined`.
+
+The example above also creates `fullName` and `length` ports. Discovery reads JavaScript syntax without executing your code. Shorthand fields, quoted names, and numeric names are supported. Fields from different direct object-return branches are combined; a field absent from the actual result excludes that output, while an explicitly present `undefined` remains a value.
+
+Only top-level data fields in direct object returns are discovered. Nested objects remain whole values. Spreads, computed keys, methods, getters, and helper-function returns do not add ports. Neither `return result` nor `return condition ? { foo: 1 } : { bar: 2 }` is followed to infer fields; those results remain available through **Output**. Unknown keys added at runtime do not change ports.
+
+Temporarily invalid code retains the last successfully discovered ports and their wires, including after saving and reopening. Once code is valid, its current fields determine the ports. Reordering fields preserves connections. Renaming one unique direct object-property key, such as `foo` to `foo1`, also keeps that field's connection. Rivet only does this when the edit is confined to that one property name; broad rewrites or repeated branch fields are intentionally treated as new fields rather than guessed renames. Removing a field removes its wire, and recreating that exact name restores it through the editor's connection recovery.
 
 <Tabs
   defaultValue="inputs"
@@ -89,9 +95,10 @@ The returned value can be a string, number, boolean, object, array, `null`, or J
 
 ## Outputs
 
-| Title  | Data Type | Description                           | Notes           |
-| ------ | --------- | ------------------------------------- | --------------- |
-| Output | Any       | The exact value returned by the code. | Always present. |
+| Title        | Data Type | Description                                       | Notes                                             |
+| ------------ | --------- | ------------------------------------------------- | ------------------------------------------------- |
+| Output       | Any       | The exact value returned by the code.             | Always present.                                   |
+| (field name) | Any       | Own enumerable data field of the returned object. | Missing fields and accessors exclude this output. |
 
 </TabItem>
 

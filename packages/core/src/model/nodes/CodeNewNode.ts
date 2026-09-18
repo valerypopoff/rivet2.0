@@ -19,17 +19,30 @@ import {
   getJsValueInterpolationCodeRunnerOptions,
   getJsValueInterpolationInputDefinitions,
   getJsValueInterpolationRuntimeContext,
+  getSafeJsValueInterpolationIdentifier,
   interpolateJsValuePreviewSource,
   sanitizeGeneratedJsValueError,
   type JsValueInterpolationRuntimeContext,
 } from './jsValueInterpolation.js';
 import { ALL_CODE_RUNNER_OPTIONS } from '../../integrations/CodeRunnerOptions.js';
 import { getInterpolationGlobalValues } from '../../utils/interpolation.js';
+import { getCodeOutputFields, type CodeOutputField } from './codeOutputInference.js';
+export {
+  analyzeCodeOutputs,
+  getCodeOutputFields,
+  getCodeOutputKeys,
+  prepareCodeOutputEdit,
+  type CodeOutputField,
+} from './codeOutputInference.js';
 
 export type CodeNewNode = ChartNode<'codeNew', CodeNewNodeData>;
 
 export type CodeNewNodeData = {
   code: string;
+  inferredOutputFields?: CodeOutputField[];
+  inferredOutputKeys?: string[];
+  inferredOutputRetiredFields?: CodeOutputField[];
+  inferredOutputLastValidCode?: string;
 };
 
 const CODE_RUNTIME_HELPER_MESSAGE =
@@ -38,7 +51,7 @@ const CODE_RUNTIME_HELPER_MESSAGE =
 const DEFAULT_CODE_NEW = dedent`
   // This is a Code node. Write JavaScript here and return one value.
   // Interpolation tokens create input ports and evaluate as connected values.
-  // The returned value becomes the node's single output.
+  // Output carries the returned value; explicit object fields also get ports.
   const value = {{input}};
   return value;
 `;
@@ -84,24 +97,35 @@ function sanitizeCodeNewError(error: unknown, interpolationContext: JsValueInter
 function buildCodeNewWrapper(
   code: string,
   interpolationContext: JsValueInterpolationRuntimeContext,
+  outputFields: readonly CodeOutputField[],
 ): {
   source: string;
   userCodeLineOffset: number;
 } {
+  const resultIdentifier = getSafeJsValueInterpolationIdentifier(code, '__codeNewResult');
+  const outputsIdentifier = getSafeJsValueInterpolationIdentifier(code, '__codeNewOutputs');
   const beforeUserCodeLines = [
     ...buildCodeNewInputsInitializer(interpolationContext).split(/\r?\n/),
     '',
-    'const __codeNewResult = await (async () => {',
+    `const ${resultIdentifier} = await (async () => {`,
   ];
   const afterUserCodeLines = [
     '})();',
     '',
-    'return {',
+    `const ${outputsIdentifier} = {`,
     '  output: {',
     "    type: 'any',",
-    '    value: __codeNewResult,',
+    `    value: ${resultIdentifier},`,
     '  },',
     '};',
+    `for (const { id, key } of ${JSON.stringify(outputFields)}) {`,
+    `  const descriptor = ${resultIdentifier} !== null && typeof ${resultIdentifier} === "object" && !Array.isArray(${resultIdentifier})`,
+    `    ? Object.getOwnPropertyDescriptor(${resultIdentifier}, key) : undefined;`,
+    `  ${outputsIdentifier}[id] = descriptor?.enumerable && Object.prototype.hasOwnProperty.call(descriptor, "value")`,
+    '    ? { type: "any", value: descriptor.value }',
+    '    : { type: "control-flow-excluded", value: undefined };',
+    '}',
+    `return ${outputsIdentifier};`,
   ];
 
   return {
@@ -121,7 +145,7 @@ function isDataValueLike(value: unknown): value is { type: string; value: unknow
   );
 }
 
-function validateCodeNewRunnerOutputs(outputs: unknown): Outputs {
+function validateCodeNewRunnerOutputs(outputs: unknown, outputFields: readonly CodeOutputField[]): Outputs {
   if (outputs == null || typeof outputs !== 'object' || ('then' in outputs && typeof outputs.then === 'function')) {
     throw new Error('Code node runner must return an object containing the Output value.');
   }
@@ -135,6 +159,12 @@ function validateCodeNewRunnerOutputs(outputs: unknown): Outputs {
     throw new Error('Code node runner must return an any DataValue for the Output port.');
   }
 
+  for (const { id, key } of outputFields) {
+    const value = (outputs as Outputs)[id as PortId];
+    if (!isDataValueLike(value) || (value.type !== 'any' && value.type !== 'control-flow-excluded')) {
+      throw new Error(`Code node runner must return a DataValue for field ${JSON.stringify(key)}.`);
+    }
+  }
   return outputs as Outputs;
 }
 
@@ -166,6 +196,11 @@ export class CodeNewNodeImpl extends NodeImpl<CodeNewNode> {
         title: 'Output',
         dataType: 'any',
       },
+      ...getCodeOutputFields(this.data).map(({ id, key }) => ({
+        id: id as PortId,
+        title: key,
+        dataType: 'any' as const,
+      })),
     ];
   }
 
@@ -209,7 +244,8 @@ export class CodeNewNodeImpl extends NodeImpl<CodeNewNode> {
   async process(inputs: Inputs, context: InternalProcessContext): Promise<Outputs> {
     const sourceUrl = buildCodeNodeSourceUrl(this.chartNode.id);
     const interpolationContext = getJsValueInterpolationRuntimeContext(this.data.code, CODE_NEW_INPUTS_IDENTIFIER);
-    const { source, userCodeLineOffset } = buildCodeNewWrapper(this.data.code, interpolationContext);
+    const outputFields = getCodeOutputFields(this.data);
+    const { source, userCodeLineOffset } = buildCodeNewWrapper(this.data.code, interpolationContext, outputFields);
 
     try {
       const outputs = await context.codeRunner.runCode(
@@ -221,7 +257,7 @@ export class CodeNewNodeImpl extends NodeImpl<CodeNewNode> {
         getInterpolationGlobalValues(this.data.code, context.getGlobal),
       );
 
-      return validateCodeNewRunnerOutputs(outputs);
+      return validateCodeNewRunnerOutputs(outputs, outputFields);
     } catch (error) {
       const enrichedError = await enrichCodeNodeErrorWithLocation({
         code: this.data.code,

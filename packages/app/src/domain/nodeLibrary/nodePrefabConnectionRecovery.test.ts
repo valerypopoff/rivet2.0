@@ -24,6 +24,7 @@ const instanceNodeId = 'instance' as NodeId;
 const outputPort = 'output' as PortId;
 const optionalInputPort = 'apiKey' as PortId;
 const responsePort = 'response' as PortId;
+const renamedCodeFieldPort = 'field:foo' as PortId;
 
 function node(id: string, type: string, data: unknown = {}): ChartNode {
   return {
@@ -55,8 +56,15 @@ const fakeRegistry = {
   createDynamicImpl(chartNode: ChartNode) {
     return {
       getInputDefinitionsIncludingBuiltIn(): NodeInputDefinition[] {
-        if (chartNode.type === 'prefabSource' && (chartNode.data as { exposeOptionalInput?: boolean }).exposeOptionalInput) {
+        if (
+          chartNode.type === 'prefabSource' &&
+          (chartNode.data as { exposeOptionalInput?: boolean }).exposeOptionalInput
+        ) {
           return [input(optionalInputPort, 'API key')];
+        }
+
+        if (chartNode.type === 'downstream') {
+          return [input(optionalInputPort, 'Input')];
         }
 
         return [];
@@ -67,6 +75,11 @@ const fakeRegistry = {
         }
 
         if (chartNode.type === 'prefabSource') {
+          const outputField = (chartNode.data as { outputField?: { id: PortId; key: string } }).outputField;
+          if (outputField) {
+            return [output(outputField.id, outputField.key)];
+          }
+
           return [output(responsePort, 'Response')];
         }
 
@@ -76,7 +89,7 @@ const fakeRegistry = {
   },
 } as unknown as NodeRegistration<any, any>;
 
-function projectWithPrefabSource(exposeOptionalInput: boolean): Project {
+function projectWithPrefabSource(exposeOptionalInput: boolean, outputField?: { id: PortId; key: string }): Project {
   return {
     metadata: {
       id: projectId,
@@ -87,7 +100,7 @@ function projectWithPrefabSource(exposeOptionalInput: boolean): Project {
     nodePrefabs: {
       [prefabId]: {
         id: prefabId,
-        sourceNode: node('source', 'prefabSource', { exposeOptionalInput }),
+        sourceNode: node('source', 'prefabSource', { exposeOptionalInput, outputField }),
       },
     },
     plugins: [],
@@ -104,10 +117,7 @@ const sourceConnection: NodeConnection = {
 function graphWithInstance(connections: NodeConnection[]) {
   return {
     metadata: { id: graphId, name: 'Graph', description: '' },
-    nodes: [
-      node(upstreamNodeId, 'upstream'),
-      node(instanceNodeId, 'nodePrefabInstance', { prefabId }),
-    ],
+    nodes: [node(upstreamNodeId, 'upstream'), node(instanceNodeId, 'nodePrefabInstance', { prefabId })],
     connections,
   };
 }
@@ -139,5 +149,27 @@ test('linked nodes restore recoverable wires when the source port returns', () =
   });
 
   assert.deepEqual(result.graph.connections, [sourceConnection]);
+  assert.deepEqual(result.recoverableConnections, {});
+});
+
+test('linked nodes retain a Code object-field wire when its stable ID keeps a renamed key', () => {
+  const connection: NodeConnection = {
+    outputNodeId: instanceNodeId,
+    outputId: renamedCodeFieldPort,
+    inputNodeId: 'downstream' as NodeId,
+    inputId: optionalInputPort,
+  };
+  const graph = graphWithInstance([connection]);
+  graph.nodes.push(node('downstream', 'downstream'));
+
+  const result = reconcileNodePrefabInstanceConnectionsInGraph({
+    graph,
+    project: projectWithPrefabSource(true, { id: renamedCodeFieldPort, key: 'foo1' }),
+    projectNodeRegistry: fakeRegistry,
+    recoverableConnections: {},
+    referencedProjects: {},
+  });
+
+  assert.deepEqual(result.graph.connections, [connection]);
   assert.deepEqual(result.recoverableConnections, {});
 });

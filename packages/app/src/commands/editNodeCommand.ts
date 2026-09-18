@@ -7,6 +7,8 @@ import {
   type GraphId,
   type NodeGraph,
   type NodeRegistration,
+  type CodeNewNode,
+  prepareCodeOutputEdit,
 } from '@valerypopoff/rivet2-core';
 import { nodesState, connectionsState } from '../state/graph';
 import { produce } from 'immer';
@@ -44,6 +46,7 @@ export const EditNodeCommandOverrideContext = createContext<EditNodeCommand | nu
 
 type EditNodeAppliedData = {
   previousNode: Partial<ChartNode>;
+  preparedNode?: Partial<ChartNode>;
   previousConnections: NodeConnection[];
   previousCurrentNodes?: ChartNode[];
   nextCurrentNodes?: ChartNode[];
@@ -211,7 +214,10 @@ function getOriginalGraphPortRename({
   }
 
   const oldInputId = getGraphPortId(previousNode, 'input');
-  const newInputId = getGraphPortId(nextCurrentNodes.find((node) => node.id === editedNodeId), 'input');
+  const newInputId = getGraphPortId(
+    nextCurrentNodes.find((node) => node.id === editedNodeId),
+    'input',
+  );
 
   if (oldInputId != null && newInputId != null) {
     // A merged edit may intentionally return to the original ID. Retain that
@@ -238,7 +244,10 @@ function getOriginalGraphPortRename({
   }
 
   const oldOutputId = getGraphPortId(previousNode, 'output');
-  const newOutputId = getGraphPortId(nextCurrentNodes.find((node) => node.id === editedNodeId), 'output');
+  const newOutputId = getGraphPortId(
+    nextCurrentNodes.find((node) => node.id === editedNodeId),
+    'output',
+  );
 
   if (oldOutputId == null || newOutputId == null) {
     return undefined;
@@ -395,6 +404,21 @@ export function buildEditNodeAppliedData({
   previousProjectGraphSnapshots?: GraphPortRenameProjectGraphSnapshots;
   projectNodeRegistry: NodeRegistration<any, any>;
 }): EditNodeAppliedData {
+  const currentNode = currentState.nodes.find((node) => node.id === params.nodeId);
+  const nextNodeType = params.newNode.type ?? currentNode?.type;
+  const isCodeEdit = currentNode?.type === 'codeNew' && nextNodeType === 'codeNew' && params.newNode.data !== undefined;
+  if (isCodeEdit) {
+    params = {
+      ...params,
+      newNode: {
+        ...params.newNode,
+        data: prepareCodeOutputEdit(
+          (currentNode as CodeNewNode).data,
+          params.newNode.data as Partial<CodeNewNode['data']>,
+        ),
+      },
+    };
+  }
   const nextNodes = replaceNodeInGraph(currentState.nodes, params.nodeId, params.newNode);
   const { nextConnections, nextRecoverableConnections } = reconcileNodeEditConnections({
     nodeId: params.nodeId,
@@ -472,6 +496,7 @@ export function buildEditNodeAppliedData({
 
   return {
     previousNode: structuredClone(previousNode),
+    preparedNode: isCodeEdit ? structuredClone(params.newNode) : undefined,
     previousConnections: cloneConnections(previousConnections),
     previousCurrentNodes: shouldSnapshotCurrentNodes
       ? cloneNodes(previousCurrentNodes ?? currentState.nodes)
@@ -502,7 +527,10 @@ function useDefaultEditNodeCommand() {
     currentState: GraphCommandState,
     appliedData?: EditNodeAppliedData,
   ) => {
-    setNodes(appliedData?.nextCurrentNodes ?? replaceNodeInGraph(currentState.nodes, params.nodeId, params.newNode));
+    setNodes(
+      appliedData?.nextCurrentNodes ??
+        replaceNodeInGraph(currentState.nodes, params.nodeId, appliedData?.preparedNode ?? params.newNode),
+    );
     setConnections(cloneConnections(nextConnections));
     if (appliedData?.projectGraphSnapshots || appliedData?.currentGraphSnapshot) {
       setProject((project) =>

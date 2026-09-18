@@ -1,9 +1,84 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { type NodeConnection, type NodeId, type PortId } from '@valerypopoff/rivet2-core';
+import { CodeNewNodeImpl, type NodeConnection, type NodeId, type PortId } from '@valerypopoff/rivet2-core';
 import { makeConnection, makeTextNode } from '../domain/graphEditing/testGraphBuilders.js';
 import { buildEditNodeAppliedData } from './editNodeCommand.js';
 import { makeCommandState, registry } from './editNodeCommandTestUtils.js';
+
+test('Code edits retain fields through invalid syntax and recover exact removed output wires', () => {
+  const code = CodeNewNodeImpl.create();
+  code.data.code = 'return { foo: 111, bar: 222 };';
+  const target = makeTextNode('consumer', '{{input}}');
+  const wire = makeConnection({
+    outputNodeId: code.id,
+    outputId: 'field:foo' as PortId,
+    inputNodeId: target.id,
+    inputId: 'input' as PortId,
+  });
+  let state = makeCommandState({ nodes: [code, target], connections: [wire] });
+  let recovered: NodeConnection[] = [];
+  for (const [source, connected] of [
+    ['return {', true],
+    ['return { bar: 222 };', false],
+    ['return { foo: 111 };', true],
+  ] as const) {
+    const previous = state.nodes[0]!;
+    const applied = buildEditNodeAppliedData({
+      params: { nodeId: code.id, newNode: { data: { code: source } } },
+      currentState: state,
+      previousNode: previous,
+      previousConnections: state.connections,
+      previousRecoverableConnections: recovered,
+      currentRecoverableConnections: recovered,
+      projectNodeRegistry: registry,
+    });
+    assert.deepEqual(applied.nextConnections, connected ? [wire] : []);
+    assert.ok(applied.preparedNode);
+    assert.deepEqual(applied.previousNode, previous);
+    const nextNodes = [{ ...previous, ...applied.preparedNode }, target];
+    state = { ...state, nodes: JSON.parse(JSON.stringify(nextNodes)), connections: applied.nextConnections };
+    recovered = applied.nextRecoverableConnections;
+  }
+});
+
+test('Code property renames preserve the connected output identity through incomplete edits', () => {
+  const code = CodeNewNodeImpl.create();
+  code.data.code = 'return { foo: 111, bar: 222 };';
+  const target = makeTextNode('consumer', '{{input}}');
+  const wire = makeConnection({
+    outputNodeId: code.id,
+    outputId: 'field:foo' as PortId,
+    inputNodeId: target.id,
+    inputId: 'input' as PortId,
+  });
+  let state = makeCommandState({ nodes: [code, target], connections: [wire] });
+
+  for (const source of ['return { foo', 'return { foo1: 111, bar: 222 };']) {
+    const previous = state.nodes[0]!;
+    const applied = buildEditNodeAppliedData({
+      params: { nodeId: code.id, newNode: { data: { code: source } } },
+      currentState: state,
+      previousNode: previous,
+      previousConnections: state.connections,
+      previousRecoverableConnections: [],
+      currentRecoverableConnections: [],
+      projectNodeRegistry: registry,
+    });
+
+    assert.deepEqual(applied.nextConnections, [wire]);
+    const nextNodes = [{ ...previous, ...applied.preparedNode }, target];
+    state = { ...state, nodes: JSON.parse(JSON.stringify(nextNodes)), connections: applied.nextConnections };
+  }
+
+  const renamed = state.nodes[0] as ReturnType<typeof CodeNewNodeImpl.create>;
+  assert.deepEqual(
+    renamed.data.inferredOutputFields?.find((field) => field.key === 'foo1'),
+    {
+      id: 'field:foo',
+      key: 'foo1',
+    },
+  );
+});
 
 test('editNode applied data snapshots both connection state and recovery pool', () => {
   const targetNode = makeTextNode('target', '{{foo}}');
