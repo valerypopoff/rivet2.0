@@ -11,11 +11,13 @@ import {
   type NodeInputDefinition,
   type NodeOutputDefinition,
   type NodeRegistration,
+  type MatchCaseNode,
   type PortId,
   type Project,
 } from '@valerypopoff/rivet2-core';
 import { reconcileNodeEditConnections } from './editNodeConnectionRecovery.js';
 import { createTestNodeRegistry, makeConnection, makeObjectNode, makeTextNode } from './testGraphBuilders.js';
+import { createEditableStringListRows, prepareStringListPortBindingEdit } from './stringListPortBinding.js';
 
 const registry = createTestNodeRegistry();
 type PluginInterpolationNode = ChartNode<'pluginInterpolation', { template: string }>;
@@ -1131,4 +1133,60 @@ test('Match case custom return wires become recoverable in True mode and restore
 
   assert.deepEqual(customResult.nextConnections, [connection]);
   assert.deepEqual(customResult.nextRecoverableConnections, []);
+});
+
+test('Match case case edits preserve stable branch wiring while reconciling interpolation inputs', () => {
+  const variableSource = makeTextNode('variable-source', 'approved');
+  const downstreamNode = makeArrayNode('downstream');
+  const matchNode = registry.createDynamic('matchCase') as MatchCaseNode;
+  matchNode.id = 'match' as NodeId;
+  matchNode.data = {
+    ...(matchNode.data as Record<string, unknown>),
+    cases: ['{{expected}}'],
+    casePortIds: ['case-expected'],
+  };
+  const interpolationConnection = makeConnection({
+    outputNodeId: variableSource.id,
+    inputNodeId: matchNode.id,
+    inputId: 'input-expected' as PortId,
+  });
+  const outputConnection = makeConnection({
+    outputNodeId: matchNode.id,
+    outputId: 'case-expected' as PortId,
+    inputNodeId: downstreamNode.id,
+    inputId: 'input1' as PortId,
+  });
+  const previousRows = createEditableStringListRows(['{{expected}}']);
+  const nextRows = previousRows.map((row) => ({ ...row, value: '{{actual}}' }));
+  const prepared = prepareStringListPortBindingEdit({
+    node: matchNode,
+    dataKey: 'cases',
+    portBinding: {
+      side: 'output',
+      identity: 'stored-stable-id',
+      idDataKey: 'casePortIds',
+      legacyPortIdPattern: { kind: 'prefix', prefix: 'case', startIndex: 1 },
+      companionBindings: [{ side: 'input', prefix: 'value-' }],
+    },
+    previousRows,
+    nextRows,
+    connections: [interpolationConnection, outputConnection],
+  });
+
+  const result = reconcileNodeEditConnections({
+    nodeId: matchNode.id,
+    newNode: prepared.nextNode,
+    nodes: [variableSource, downstreamNode, matchNode],
+    liveConnections: prepared.nextConnections,
+    recoverableConnections: prepared.nextRecoverableConnections,
+    project,
+    referencedProjects: {},
+    projectNodeRegistry: registry,
+  });
+
+  assert.deepEqual(result.nextConnections, [
+    { ...interpolationConnection, inputId: 'input-actual' as PortId },
+    outputConnection,
+  ]);
+  assert.deepEqual(result.nextRecoverableConnections, []);
 });

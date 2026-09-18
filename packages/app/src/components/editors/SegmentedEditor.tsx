@@ -135,6 +135,7 @@ export const DefaultSegmentedEditor: FC<
       helperMessage={helperMessage}
       options={editor.options}
       defaultValue={editor.defaultValue}
+      allowOptionWrap={editor.allowOptionWrap}
     />
   );
 };

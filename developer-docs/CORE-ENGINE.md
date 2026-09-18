@@ -223,6 +223,25 @@ literal with separate flags. Existing node titles remain project data and are no
 rewritten when a display name changes, so old projects continue to load and run
 without an implicit migration.
 
+The current Match case node treats every saved Cases row as a standard Rivet
+text-interpolation template. It discovers ordinary references across the rows
+in first-occurrence order, creates optional `input-<name>` ports through
+`createInterpolationInputDefinition(...)`, and resolves every row once at node
+start before plain-text comparison or `RegExp` compilation. JSONPath, formatter
+chains, escaped braces, and the portless `@graphInputs`, `@context`, and
+`@globals` roots use the shared interpolation rules. A missing value becomes
+empty text, and an invalid regular expression after resolution remains a node
+execution error. Case output ids stay anchored to stored `casePortIds`; output
+labels intentionally show the authored template because resolved values exist
+only during that run. Match case opts its Cases string-list editor into
+visual-only interpolation highlighting in the same monospace font as the text
+and code editors: the app mirrors Core's active token scanner over the native
+input, so editing, selection, focus, and the persisted text stay native while
+escaped triple-brace and malformed text follows the same token rules as
+execution. The mirror follows native horizontal input scrolling, so long cases
+do not lose token alignment outside the initial visible width. The legacy `match` node deliberately overrides none of this
+behavior and continues to treat every saved regex as literal source.
+
 ### Stable dynamic-port companions
 
 `StringListPortBinding` can assign a stored stable id to a dynamic port for
@@ -252,17 +271,21 @@ emits boolean `true` from the active case or Unmatched branch, `testValue`
 emits the coerced Input string, and `custom` enables shared or per-output value
 inputs. The editor shows an unlabeled custom-return-mode chooser only for
 `custom`. A shared
-custom input is titled **Return value**; the app groups per-output inputs under
-**Return values**. True and Input value modes expose no custom inputs even when
+custom input is titled **Output value**; the app groups per-output inputs under
+**Output values**. True and Input value modes expose no custom inputs even when
 a dormant `valueInputMode` remains stored. The legacy `match` type deliberately
 retains its existing custom-value default, **Custom value** shared port, and
 always-visible custom-value setting. Match case orders its settings as Match
-mode, Case sensitive, Cases, Trigger, Output value, then the unlabeled
-custom-return-mode chooser; the cases list belongs with matching configuration
-rather than the return-value controls.
+mode and Case sensitive in content-sized columns with a fixed gap, with the switch centered
+against the selector below its label. Match mode sets `allowOptionWrap: false`
+so both choices stay on one line. Next comes a persistent boxed Cases panel,
+Trigger, Output value, then the unlabeled custom-return-mode chooser. The Cases
+panel deliberately has no helper copy or fold/unfold state: interpolation is
+documented in the node help and user guide, while the list belongs with matching
+configuration rather than the return-value controls.
 
 In per-output custom mode, the canvas presents the paired inputs beneath a
-non-port **Return values** label for Match case or **Custom values** for the
+non-port **Output values** label for Match case or **Custom values** for the
 legacy node after Match case's `Input` port or the legacy node's `Test` port,
 with non-interactive dotted guides that
 start after each input circle and stop before its matching output label. Their

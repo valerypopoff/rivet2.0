@@ -25,6 +25,8 @@ import {
   getRecoverableNodeConnectionsForNode,
   recoverableNodeConnectionsStatePerGraph,
 } from '../../state/recoverableNodeConnections';
+import { getInterpolationTextSegments } from './interpolationTextSegments';
+import { StaticPanel } from '../CollapsiblePanel.js';
 
 const styles = css`
   & > div:first-of-type {
@@ -49,6 +51,47 @@ const styles = css`
 
   .string-item-input {
     flex: 1;
+  }
+
+  .string-list-monospace input,
+  .string-list-monospace .interpolation-text-field-display {
+    font-family: var(--font-family-monospace) !important;
+  }
+
+  .interpolation-text-field {
+    position: relative;
+  }
+
+  .interpolation-text-field-display {
+    position: absolute;
+    z-index: 1;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    padding: 0 8px;
+    overflow: hidden;
+    pointer-events: none;
+    color: var(--foreground);
+    font: inherit;
+    line-height: inherit;
+    white-space: pre;
+  }
+
+  .interpolation-text-field-display-content {
+    flex: none;
+  }
+
+  .interpolation-text-field-token {
+    color: var(--highlighted-text);
+  }
+
+  .interpolation-text-field input {
+    color: transparent !important;
+    caret-color: var(--foreground);
+
+    &::placeholder {
+      color: var(--foreground-muted);
+    }
   }
 
   .drag-handle {
@@ -107,6 +150,26 @@ const styles = css`
   .helperMessage {
     margin-top: 8px;
     margin-bottom: 8px;
+  }
+
+  .string-list-static-panel-content {
+    padding: calc(16px * var(--ui-font-scale)) calc(16px * var(--ui-font-scale))
+      calc(18px * var(--ui-font-scale));
+  }
+
+  /* The static panel already supplies this field's visible heading. Keep the
+   * Atlaskit label for the native inputs, but expose it only to assistive tech
+   * instead of depending on Atlaskit's generated label id. */
+  .string-list-static-panel-content label {
+    position: absolute !important;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px !important;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+    border: 0;
   }
 `;
 
@@ -236,6 +299,9 @@ export const StringListEditor: FC<StringListEditorProps> = ({
       label={editor.label}
       dataKey={editor.dataKey}
       placeholder={editor.placeholder}
+      highlightInterpolationTokens={editor.highlightInterpolationTokens === true}
+      inputFontFamily={editor.inputFontFamily}
+      boxed={editor.boxed === true}
       isReadonly={isReadonly}
       isDisabled={isDisabled}
       canReorder={canReorder}
@@ -256,6 +322,9 @@ type StringListProps = {
   label: string;
   dataKey: string;
   placeholder?: string;
+  highlightInterpolationTokens: boolean;
+  inputFontFamily?: 'monospace';
+  boxed: boolean;
   isReadonly?: boolean;
   isDisabled?: boolean;
   canReorder: boolean;
@@ -274,6 +343,9 @@ const StringList: FC<StringListProps> = ({
   label,
   dataKey,
   placeholder,
+  highlightInterpolationTokens,
+  inputFontFamily,
+  boxed,
   isReadonly,
   isDisabled,
   canReorder,
@@ -289,9 +361,8 @@ const StringList: FC<StringListProps> = ({
 }) => {
   const showReorderHandle = canReorder && rows.length > 1;
 
-  return (
-    <div css={styles}>
-      <Field name={dataKey} label={label} isDisabled={isDisabled}>
+  const content = (
+    <Field name={dataKey} label={label} isDisabled={isDisabled}>
         {({ fieldProps }) => (
           <>
             {helperMessage && (
@@ -301,13 +372,14 @@ const StringList: FC<StringListProps> = ({
             )}
             <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={onDragEnd}>
               <SortableContext items={rows.map((row) => row.uiId)} strategy={verticalListSortingStrategy}>
-                <div className="string-list">
+                <div className={`string-list${inputFontFamily === 'monospace' ? ' string-list-monospace' : ''}`}>
                   {rows.map((row) => (
                     <SortableStringListItem
                       key={row.uiId}
                       row={row}
                       fieldProps={fieldProps}
                       placeholder={placeholder}
+                      highlightInterpolationTokens={highlightInterpolationTokens}
                       shouldAutoFocus={row.uiId === pendingAutoFocusUiId}
                       showReorderHandle={showReorderHandle}
                       isDisabled={isDisabled}
@@ -325,7 +397,18 @@ const StringList: FC<StringListProps> = ({
             </Button>
           </>
         )}
-      </Field>
+    </Field>
+  );
+
+  return (
+    <div css={styles}>
+      {boxed ? (
+        <StaticPanel className="string-list-static-panel" label={label}>
+          <div className="string-list-static-panel-content">{content}</div>
+        </StaticPanel>
+      ) : (
+        content
+      )}
     </div>
   );
 };
@@ -334,6 +417,7 @@ const SortableStringListItem: FC<{
   row: EditableStringListRow;
   fieldProps: any;
   placeholder?: string;
+  highlightInterpolationTokens: boolean;
   shouldAutoFocus: boolean;
   showReorderHandle: boolean;
   isDisabled?: boolean;
@@ -345,6 +429,7 @@ const SortableStringListItem: FC<{
   row,
   fieldProps,
   placeholder,
+  highlightInterpolationTokens,
   shouldAutoFocus,
   showReorderHandle,
   isDisabled,
@@ -371,19 +456,16 @@ const SortableStringListItem: FC<{
         </button>
       ) : null}
       <div className="string-item-input">
-        <TextField
-          {...fieldProps}
+        <InterpolationTextField
+          fieldProps={fieldProps}
           value={row.value}
           autoFocus={shouldAutoFocus}
-          onChange={(e) => onItemChange(row.uiId, (e.target as HTMLInputElement).value)}
+          onChange={(value) => onItemChange(row.uiId, value)}
           isDisabled={isDisabled}
-          isReadOnly={isReadonly}
+          isReadonly={isReadonly}
           placeholder={placeholder ?? 'Item'}
-          onKeyDown={(e) => {
-            if (e.key === 'Escape') {
-              onClose?.();
-            }
-          }}
+          highlightInterpolationTokens={highlightInterpolationTokens}
+          onEscape={onClose}
         />
       </div>
       <Button
@@ -394,6 +476,70 @@ const SortableStringListItem: FC<{
       >
         <CrossIcon />
       </Button>
+    </div>
+  );
+};
+
+const InterpolationTextField: FC<{
+  fieldProps: any;
+  value: string;
+  autoFocus: boolean;
+  onChange: (value: string) => void;
+  isDisabled?: boolean;
+  isReadonly?: boolean;
+  placeholder: string;
+  highlightInterpolationTokens: boolean;
+  onEscape?: () => void;
+}> = ({
+  fieldProps,
+  value,
+  autoFocus,
+  onChange,
+  isDisabled,
+  isReadonly,
+  placeholder,
+  highlightInterpolationTokens,
+  onEscape,
+}) => {
+  const [scrollLeft, setScrollLeft] = useState(0);
+
+  const input = (
+    <TextField
+      {...fieldProps}
+      value={value}
+      autoFocus={autoFocus}
+      onChange={(event) => onChange((event.target as HTMLInputElement).value)}
+      isDisabled={isDisabled}
+      isReadOnly={isReadonly}
+      placeholder={placeholder}
+      onKeyDown={(event) => {
+        if (event.key === 'Escape') {
+          onEscape?.();
+        }
+      }}
+      onScroll={(event) => setScrollLeft(event.currentTarget.scrollLeft)}
+    />
+  );
+
+  if (!highlightInterpolationTokens) {
+    return input;
+  }
+
+  return (
+    <div className="interpolation-text-field">
+      <div className="interpolation-text-field-display" aria-hidden="true">
+        <span
+          className="interpolation-text-field-display-content"
+          style={{ transform: `translateX(-${scrollLeft}px)` }}
+        >
+          {getInterpolationTextSegments(value).map((segment, index) => (
+            <span className={segment.isInterpolation ? 'interpolation-text-field-token' : undefined} key={index}>
+              {segment.text}
+            </span>
+          ))}
+        </span>
+      </div>
+      {input}
     </div>
   );
 };

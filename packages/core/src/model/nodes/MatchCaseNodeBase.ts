@@ -1,6 +1,7 @@
 import { type DataValue } from '../DataValue.js';
 import { type EditorDefinition } from '../EditorDefinition.js';
 import { type Inputs, type Outputs } from '../GraphProcessor.js';
+import { type InternalProcessContext } from '../ProcessContext.js';
 import { NodeImpl } from '../NodeImpl.js';
 import {
   type ChartNode,
@@ -33,6 +34,10 @@ export type MatchCaseReturnValueMode = 'true' | 'testValue' | 'custom';
 export abstract class MatchCaseNodeBase<T extends ChartNode<string, MatchCaseRoutingData>> extends NodeImpl<T> {
   protected abstract readonly caseEditorLabel: string;
   protected abstract readonly caseEditorPlaceholder: string;
+  protected readonly caseEditorHelperMessage: string | undefined = undefined;
+  protected readonly caseEditorHighlightsInterpolation: boolean = false;
+  protected readonly caseEditorInputFontFamily: 'monospace' | undefined = undefined;
+  protected readonly caseEditorBoxed: boolean = false;
   protected readonly casesEditorPlacement: 'before-trigger' | 'after-custom-values' = 'after-custom-values';
   protected readonly customCaseValuesEditorLabel: string = 'Custom case values';
   protected readonly defaultExclusive: boolean = false;
@@ -61,6 +66,19 @@ export abstract class MatchCaseNodeBase<T extends ChartNode<string, MatchCaseRou
     return false;
   }
 
+  /**
+   * Current Match case resolves its saved case templates at execution time.
+   * The legacy Regex Match node deliberately leaves its saved expressions raw.
+   */
+  protected resolveCaseValues(_inputs: Inputs, _context?: InternalProcessContext): readonly string[] {
+    return this.data.cases;
+  }
+
+  /** Additional inputs that sit between the tested value and custom return values. */
+  protected getInterpolationInputDefinitions(): NodeInputDefinition[] {
+    return [];
+  }
+
   getInputDefinitions(): NodeInputDefinition[] {
     const inputs: NodeInputDefinition[] = [
       {
@@ -71,6 +89,8 @@ export abstract class MatchCaseNodeBase<T extends ChartNode<string, MatchCaseRou
         description: `The ${this.inputTitle} value tested against each case.`,
       },
     ];
+
+    inputs.push(...this.getInterpolationInputDefinitions());
 
     if (this.getReturnValueMode() !== 'custom') {
       return inputs;
@@ -143,6 +163,10 @@ export abstract class MatchCaseNodeBase<T extends ChartNode<string, MatchCaseRou
       dataKey: 'cases',
       label: this.caseEditorLabel,
       placeholder: this.caseEditorPlaceholder,
+      helperMessage: this.caseEditorHelperMessage,
+      highlightInterpolationTokens: this.caseEditorHighlightsInterpolation,
+      inputFontFamily: this.caseEditorInputFontFamily,
+      boxed: this.caseEditorBoxed,
       reorderable: true,
       portBinding: {
         side: 'output',
@@ -183,12 +207,13 @@ export abstract class MatchCaseNodeBase<T extends ChartNode<string, MatchCaseRou
     ] as EditorDefinition<T>[];
   }
 
-  async process(inputs: Inputs): Promise<Outputs> {
+  async process(inputs: Inputs, context?: InternalProcessContext): Promise<Outputs> {
     const inputValue = inputs['input' as PortId];
     const inputString = inputValue?.value == null ? undefined : coerceType(inputValue, 'string');
     const portIds = this.getCasePortIds();
     const sharedValue = inputs['value' as PortId];
     const returnValueMode = this.getReturnValueMode();
+    const resolvedCaseValues = this.resolveCaseValues(inputs, context);
 
     const getInputOutputValue = (): DataValue =>
       ({
@@ -217,7 +242,7 @@ export abstract class MatchCaseNodeBase<T extends ChartNode<string, MatchCaseRou
     const output: Outputs = {};
 
     for (let index = 0; index < this.data.cases.length; index++) {
-      const caseValue = this.data.cases[index]!;
+      const caseValue = resolvedCaseValues[index] ?? this.data.cases[index]!;
       const matches = inputString !== undefined && this.matchesCase(inputString, caseValue);
       const canMatch = !this.getExclusive() || !matched;
       const portId = portIds[index]!;

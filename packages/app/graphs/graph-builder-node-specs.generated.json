@@ -1,6 +1,6 @@
 {
   "formatVersion": 1,
-  "catalogFingerprint": "fnv1a64:d6152c42d4a071c0",
+  "catalogFingerprint": "fnv1a64:ff5710b930064bea",
   "entries": [
     {
       "authoringChoiceId": "registered:abortGraph",
@@ -1438,7 +1438,7 @@
       "authoringChoiceId": "registered:matchCase",
       "nodeType": "matchCase",
       "displayName": "Match case",
-      "description": "The Match case Node routes an Input value to one or more case outputs. Each case has an output port, and Unmatched runs when no case matches. It is a switch/case style control flow node for strings. By default, Plain text cases use exact, case sensitive string equality. For example, the case approved matches approved , but not Approved or approved later . Turn off Case sensitive to ignore letter case while retaining exact whole string matching. Choose Regular expression to use the existing JavaScript RegExp pattern behavior; the Case sensitive switch does not apply in that mode. Trigger controls whether the node triggers every matching output or only the first matching output. It uses First matching case by default. Output value controls what each active branch emits: boolean true by default, the tested string, or a custom value. When Custom is selected, an unlabeled chooser selects one ",
+      "description": "The Match case Node routes an Input value to one or more case outputs. Each case has an output port, and Unmatched runs when no case matches. It is a switch/case style control flow node for strings. By default, Plain text cases use exact, case sensitive string equality. For example, the case approved matches approved , but not Approved or approved later . Turn off Case sensitive to ignore letter case while retaining exact whole string matching. Choose Regular expression to use the existing JavaScript RegExp pattern behavior; the Case sensitive switch does not apply in that mode. Each case supports Rivet interpolation. Write {{expectedStatus}} to add an input named expectedStatus , or use a path such as {{response.status}} . The case is resolved when Match case runs, before it is compared or compiled as a regular expression. You can also use portless runtime roots such as {{@graphInputs.s",
       "aliases": [],
       "capabilities": {
         "createWithDefaults": true,

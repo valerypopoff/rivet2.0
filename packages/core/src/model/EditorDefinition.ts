@@ -105,6 +105,8 @@ export type DropdownEditorDefinition<T extends ChartNode> = SharedEditorDefiniti
 
 export type SegmentedEditorDefinition<T extends ChartNode> = SharedEditorDefinitionProps<T> & {
   type: 'segmented';
+  /** Keep choices on one line when the surrounding layout provides intrinsic width. */
+  allowOptionWrap?: boolean;
 
   dataKey: DataOfType<T, string | boolean>;
   ariaLabel?: string;
@@ -231,6 +233,12 @@ export type StringListEditorDefinition<T extends ChartNode> = SharedEditorDefini
   placeholder?: string;
   newItemDefault?: string;
   reorderable?: boolean;
+  /** Highlight active Rivet {{...}} interpolation tokens without changing the saved string. */
+  highlightInterpolationTokens?: boolean;
+  /** Use the same monospace font as text and code editors. */
+  inputFontFamily?: 'monospace';
+  /** Render this list in a persistent, non-collapsible settings panel. */
+  boxed?: boolean;
   portBinding?: StringListPortBinding<T>;
 };
 
