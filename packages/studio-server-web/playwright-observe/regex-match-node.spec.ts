@@ -87,6 +87,12 @@ test('Match case groups match, trigger, and output settings and exposes custom-v
   await expect(highlightedCase.locator('.interpolation-text-field-token')).toHaveText('{{expected}}');
   await expect(firstCase).toHaveCSS('font-family', /Roboto Mono/);
   await expect(firstCase).toHaveCSS('color', 'rgba(0, 0, 0, 0)');
+  await firstCase.press('ControlOrMeta+a');
+  expect(await firstCase.evaluate((input) => ({
+    start: input.selectionStart,
+    end: input.selectionEnd,
+    foreground: getComputedStyle(input, '::selection').color,
+  }))).toEqual({ start: 0, end: 'Before {{expected}} after!'.length, foreground: 'rgba(0, 0, 0, 0)' });
   await expect(highlightedCase.locator('.interpolation-text-field-display')).toHaveCSS('font-family', /Roboto Mono/);
   await firstCase.fill(`${'prefix '.repeat(48)}{{expected}}`);
   await firstCase.press('End');

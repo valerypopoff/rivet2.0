@@ -89,6 +89,12 @@ const styles = css`
     color: transparent !important;
     caret-color: var(--foreground);
 
+    /* Native selection otherwise paints its own foreground over the mirror. */
+    &::selection {
+      color: transparent;
+      background-color: Highlight;
+    }
+
     &::placeholder {
       color: var(--foreground-muted);
     }

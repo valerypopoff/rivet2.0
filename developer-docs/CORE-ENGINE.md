@@ -238,7 +238,9 @@ visual-only interpolation highlighting in the same monospace font as the text
 and code editors: the app mirrors Core's active token scanner over the native
 input, so editing, selection, focus, and the persisted text stay native while
 escaped triple-brace and malformed text follows the same token rules as
-execution. The mirror follows native horizontal input scrolling, so long cases
+execution. Native input selection keeps its highlight background but uses a
+transparent foreground, leaving the mirror as the only painted text even while
+selecting a case. The mirror follows native horizontal input scrolling, so long cases
 do not lose token alignment outside the initial visible width. The legacy `match` node deliberately overrides none of this
 behavior and continues to treat every saved regex as literal source.
 
