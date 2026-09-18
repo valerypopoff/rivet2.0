@@ -144,7 +144,7 @@ function createSmokeProject() {
             type: 'graphOutput',
             id: 'result-output',
             title: 'result',
-            data: { id: 'result', dataType: 'string' },
+            data: { id: 'result', dataType: 'any' },
             visualData: { x: 100, y: 0 },
           },
         ],
@@ -159,6 +159,10 @@ function createSmokeProject() {
       },
     },
   };
+}
+
+function assertSmokeResult(completed) {
+  assert.deepEqual(completed.data.results.result, { type: 'any', value: 'native sidecar' });
 }
 
 async function runExecutorSmokeTest(socket, output) {
@@ -195,7 +199,7 @@ async function runExecutorSmokeTest(socket, output) {
   socket.send(JSON.stringify({ type: 'set-dynamic-data', data: { project: createSmokeProject(), settings: {} } }));
   socket.send(JSON.stringify({ type: 'run', data: { requestId, graphId: 'main', useEditorCache: true } }));
   const completed = await done;
-  assert.deepEqual(completed.data.results.result, { type: 'string', value: 'native sidecar' });
+  assertSmokeResult(completed);
 }
 
 async function main(args = process.argv.slice(2)) {
@@ -229,4 +233,4 @@ if (process.argv[1] && process.argv[1] === fileURLToPath(import.meta.url)) {
   await main();
 }
 
-export { resolveBundledSidecarPaths };
+export { assertSmokeResult, createSmokeProject, resolveBundledSidecarPaths };

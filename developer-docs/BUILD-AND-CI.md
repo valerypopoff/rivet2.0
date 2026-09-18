@@ -1078,7 +1078,9 @@ executable and both bundled sidecars to be thin executables for the selected
 architecture with `lipo`, checks their signatures with `codesign`, starts the
 packaged Node executor, opens its local WebSocket, runs a minimal
 Code-to-Graph-Output execution through its worker, and runs the packaged pnpm
-`--version` command. The reusable workflow retains the
+`--version` command. The smoke graph uses an `any` Graph Output because the
+current Code node's whole-value output is intentionally an `any` DataValue; the
+assertion verifies both that type and the returned value. The reusable workflow retains the
 existing rolling GitHub Release feeds and
 `official-release.json`/`developer-release.json` download-page contract, now
 with a required macOS architecture field.
