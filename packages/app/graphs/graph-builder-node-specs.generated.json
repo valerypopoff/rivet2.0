@@ -1,6 +1,6 @@
 {
   "formatVersion": 1,
-  "catalogFingerprint": "fnv1a64:8cd91c9647fcd65d",
+  "catalogFingerprint": "fnv1a64:d6152c42d4a071c0",
   "entries": [
     {
       "authoringChoiceId": "registered:abortGraph",
@@ -2189,7 +2189,7 @@
       "authoringChoiceId": "registered:watchStreamingOutput",
       "nodeType": "watchStreamingOutput",
       "displayName": "Watch Streaming Output",
-      "description": "Watch Streaming Output Node Watch Streaming Output lets a branch begin work from snapshots emitted by a node that is still running. It is useful when an LLM Chat response is streaming and some downstream work can begin as soon as a useful partial value appears. Ordinary connections do not change: they still receive only the producer's final output. This node creates an explicit, bounded watch boundary instead of making every wire in a graph stream aware. The wire into Streaming Output is marked with repeated forward arrowheads. They show that partial snapshots travel repeatedly from the producer to this Watch node; it remains a one way connection and does not change any other output wire's final only behavior. Inputs and outputs Port Data Type Description Streaming Output any Connect one output from the node that emits partial outputs. Chunk any The immutable value snapshot for this watc",
+      "description": "Watch Streaming Output Node Watch Streaming Output lets a branch begin work from snapshots emitted by a node that is still running. It is useful when an LLM Chat response is streaming and some downstream work can begin as soon as a useful partial value appears. Ordinary connections do not change: they still receive only the producer's final output. This node creates an explicit, bounded watch boundary instead of making every wire in a graph stream aware. When the complete route can carry partial snapshots, its wires are marked with repeated forward arrowheads. Rivet does not show those arrows for a route that ends at a frozen or final only boundary, has an ambiguous Subgraph input, or enters a recursive caller chain with no eligible producer. The route remains one way and does not change any other output wire's final only behavior. Inputs and outputs Port Data Type Description Streaming ",
       "aliases": [],
       "capabilities": {
         "createWithDefaults": true,

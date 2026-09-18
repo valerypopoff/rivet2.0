@@ -123,6 +123,8 @@ import {
 import { cloneExecutionOutputs } from './ExecutionOutputClone.js';
 import { GraphInputStreamRelay, type GraphInputStream } from './GraphInputStream.js';
 import {
+  canForwardGraphCallerOutputPartials,
+  canForwardGraphOutputPartials,
   canStreamThroughGraphCaller,
   canStreamThroughGraphInput,
   getProjectStreamingOutputWatchConnections,
@@ -3363,7 +3365,7 @@ export class GraphProcessor {
       return active === nodeAbortController || (active instanceof Set && active.has(nodeAbortController));
     };
     const onGraphOutputPartial =
-      canStreamThroughGraphCaller(node) &&
+      canForwardGraphCallerOutputPartials(node) &&
       (this.#streamingWatchPlansBySourceNodeId.has(node.id) ||
         this.#inputStreamRoutes.has(node.id) ||
         this.#graphOutputPartialBindingsBySourceNodeId.has(node.id))
@@ -4206,6 +4208,13 @@ export class GraphProcessor {
         continue;
       const streams: Record<string, GraphInputStreamRelay> = Object.create(null);
       const incoming = this.#getInputConnectionsForNode(node).filter((edge) => this.#isDefinitionValidConnection(edge));
+      const authoredIncoming = (this.#connections[node.id] ?? []).filter(
+        (edge) => edge.inputNodeId === node.id && this.#isDefinitionValidConnection(edge),
+      );
+      const authoredProviderCounts = new Map<PortId, number>();
+      for (const edge of authoredIncoming) {
+        authoredProviderCounts.set(edge.inputId, (authoredProviderCounts.get(edge.inputId) ?? 0) + 1);
+      }
       for (const edge of incoming) {
         const source = this.#nodesById[edge.outputNodeId];
         if (
@@ -4213,7 +4222,7 @@ export class GraphProcessor {
           !source ||
           source.disabled ||
           source.isSplitRun ||
-          incoming.filter((other) => other.inputId === edge.inputId).length !== 1
+          authoredProviderCounts.get(edge.inputId) !== 1
         )
           continue;
         const relay = new GraphInputStreamRelay();
@@ -4329,7 +4338,10 @@ export class GraphProcessor {
         continue;
       }
       const sourceNode = this.#nodesById[connection.outputNodeId];
-      if (!sourceNode || !this.#canStreamAcrossGraphOutput(graphOutput, sourceNode)) {
+      if (
+        !sourceNode ||
+        !canForwardGraphOutputPartials(graphOutput, sourceNode, this.#hasFrozenNodeOutputOrUnknownResolver(graphOutput))
+      ) {
         continue;
       }
       const bindings = this.#graphOutputPartialBindingsBySourceNodeId.get(connection.outputNodeId) ?? [];
@@ -4340,20 +4352,6 @@ export class GraphProcessor {
       });
       this.#graphOutputPartialBindingsBySourceNodeId.set(connection.outputNodeId, bindings);
     }
-  }
-
-  /**
-   * A named Graph Output can forward a partial only when its terminal result
-   * is determined by that same direct producer. Conditions, split aggregation,
-   * and frozen replay each introduce an independent boundary decision, so they
-   * remain final-only just like an ordinary intermediate node.
-   */
-  #canStreamAcrossGraphOutput(graphOutput: ChartNode, sourceNode: ChartNode): boolean {
-    if (graphOutput.isConditional || graphOutput.isSplitRun || sourceNode.isSplitRun) {
-      return false;
-    }
-
-    return !this.#hasFrozenNodeOutputOrUnknownResolver(graphOutput);
   }
 
   #hasFrozenNodeOutputOrUnknownResolver(node: ChartNode): boolean {

@@ -347,6 +347,19 @@ Current behavior:
 - unless `PLAYWRIGHT_BASE_URL` is already set, the runner targets `http://127.0.0.1:${RIVET_PORT}` from your env file, defaulting to `8080`
 - the main hosted-editor observable spec uses mocked workflow/project API responses to open a two-node project, then visibly exercises the hosted editor focus, copy, cut, and paste path without mutating workflow storage
 - trace, video, screenshots, and the HTML report are written under `artifacts/playwright/`
+- `watch-conditional-remote.spec.ts` runs a real Node processor and debugger
+  WebSocket against the hosted editor with a controlled local LLM stream. It
+  covers a conditional producing Subgraph feeding two calls to the same Watch
+  graph with different field arguments, parallel branches, and independent
+  conditional Stops. Keep assertions for live delivery, caller-pinned
+  first-three/Terminal pages, inline/fullscreen output, final-only ordinary
+  consumers, and replay of the host-recorded execution. This catches missing
+  execution history at the producer boundary; broadening the editor's history
+  selector cannot repair a stream that was never forwarded. On Windows, this
+  fixture retries only an explicitly observed pre-mount local navigation or
+  Vite script failure (`ERR_NO_BUFFER_SPACE` or
+  `ERR_INSUFFICIENT_RESOURCES`); it does not retry editor, debugger,
+  execution, history, or replay assertions.
 - `watch-streaming-output.spec.ts` seeds isolated editor projects and verifies
   live named-input streaming into a once-called Subgraph (also at two levels),
   final-only ordinary consumers, nested Stop, and retained inline/fullscreen
@@ -364,7 +377,7 @@ Current behavior:
   `StreamingOutputWatch.test.ts` separately cover execution ordering, cancellation,
   first-Stop selection, snapshot isolation, exclusions, direct/nested/Data Bus
   Subgraph and Referenced Graph Alias output propagation, and final-only
-  conditional, frozen, duplicate, split, and Error-output named boundaries,
+  conditional Graph Output, frozen, duplicate, split, and Error-output named boundaries,
   plus subgraph cost accounting and rejection of **Start Async Branch** nodes
   with runnable downstream work
   at every nested Watch-Subgraph depth. Ordinary awaited Subgraphs remain valid inside a Watch;

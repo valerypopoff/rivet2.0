@@ -1280,8 +1280,23 @@ An enabled Watch reached through a named Graph Input establishes input-stream
 demand on eligible Subgraph and Referenced Graph Alias callers. Core and editor
 wire arrows use `StreamingWatchTopology` for the same project-scoped routes,
 including library instances, Data Bus channels, and output-pruned invocations.
+The tracer commits a wire only after the complete route reaches an eligible
+partial producer. Frozen/final-only boundaries, unresolved recursive caller
+cycles, ambiguous duplicate caller inputs, and shadowed Graph Output providers
+therefore cannot leave misleading arrows on an outer graph. Duplicate caller
+inputs remain final-only for streaming even though ordinary execution preserves
+its legacy first-provider projection.
 Ordinary intermediate nodes and conditional, split, disabled, frozen, or
-Error-output callers do not become streaming forwarders.
+Error-output callers do not accept early streamed inputs.
+Input startup eligibility (`canStreamThroughGraphCaller`) is distinct from
+output forwarding (`canForwardGraphCallerOutputPartials`): an executing conditional
+Subgraph or Referenced Graph Alias may relay named output partials after its
+ordinary condition has passed. A false condition never starts its producer.
+Do not apply the early-input condition restriction to that producer's outputs;
+doing so silently reduces downstream nested Watches to one final iteration.
+Named-output execution and arrow tracing share
+`canForwardGraphOutputPartials`; do not duplicate conditional, split, or frozen
+boundary policy in either consumer.
 Graph Inputs using a dynamic default-value input also remain final-only. Partial
 and final Graph Input values share the same coercion and authored-default resolver.
 

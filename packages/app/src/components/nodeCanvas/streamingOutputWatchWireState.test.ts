@@ -113,17 +113,24 @@ test('input routes ignore disabled callers, invalid ports, and ordinary processi
   }
 });
 
+test('input routes reject duplicate providers for the same caller input', () => {
+  const { root, middle, leaf, marked, make, edge } = inputStreamFixture();
+  root.nodes.push(make('second', 'llmChatV2'));
+  root.connections.push(edge('second', 'response', 'caller', 'outer'));
+
+  for (const graph of [root, middle, leaf]) assert.equal(marked(graph).size, 0);
+});
+
 test('input routes stop at final-only callers and output-selection pruning', () => {
   for (const mode of ['conditional', 'split', 'error-output', 'pruned', 'default-input']) {
-    const { root, middle, marked } = inputStreamFixture();
+    const { root, middle, leaf, marked } = inputStreamFixture();
     const caller = middle.nodes[1]!;
     if (mode === 'conditional') caller.isConditional = true;
     if (mode === 'split') caller.isSplitRun = true;
     if (mode === 'error-output') Object.assign(caller.data as object, { useErrorOutput: true });
     if (mode === 'pruned') Object.assign(caller.data as object, { skipUnusedOutputs: true });
     if (mode === 'default-input') Object.assign(middle.nodes[0]!.data as object, { useDefaultValueInput: true });
-    assert.equal(marked(root).size, 0, mode);
-    if (mode !== 'default-input') assert.equal(marked(middle).size, 0, mode);
+    for (const graph of [root, middle, leaf]) assert.equal(marked(graph).size, 0, mode);
   }
 });
 
@@ -138,6 +145,34 @@ test('traces across a producer output and a consumer input in the same route', (
   root.nodes[0] = make('producer', 'subGraph', { graphId: producer.metadata!.id });
   root.connections[0] = edge('producer', 'answer', 'caller', 'outer');
   for (const graph of [root, middle, leaf, producer]) assert.deepEqual(marked(graph), new Set(graph.connections));
+  root.nodes[0]!.isConditional = true;
+  for (const graph of [root, middle, leaf, producer]) assert.deepEqual(marked(graph), new Set(graph.connections));
+});
+
+test('a conditional Referenced Graph Alias relays named outputs', () => {
+  const { project, root, middle, leaf, make } = streamFixture();
+  const referenced: Project = {
+    metadata: { id: 'referenced' as ProjectId, title: 'Referenced', description: '' },
+    graphs: { [leaf.metadata!.id!]: leaf },
+    plugins: [],
+  };
+  delete project.graphs[leaf.metadata!.id!];
+  middle.nodes[0] = {
+    ...make('caller', 'referencedGraphAlias', { projectId: 'referenced', graphId: 'leaf' }),
+    isConditional: true,
+  };
+  for (const graph of [root, middle, leaf]) {
+    const owner = graph === leaf ? referenced : project;
+    assert.deepEqual(
+      getProjectStreamingOutputWatchConnections({
+        project: owner,
+        graph,
+        registry,
+        referencedProjects: { [project.metadata.id]: project, [referenced.metadata.id]: referenced },
+      }),
+      new Set(graph.connections),
+    );
+  }
 });
 
 test('input routes cross referenced graph callers and terminate recursive calls', () => {
@@ -181,7 +216,7 @@ test('frozen input boundaries and callers do not propagate Watch demand to their
   }
 });
 
-test('a frozen producer Subgraph keeps its direct Watch wire but does not trace into its child', () => {
+test('a frozen producer Subgraph has no streaming route at any depth', () => {
   const { project, root, leaf } = streamFixture();
   const options = {
     project,
@@ -189,7 +224,7 @@ test('a frozen producer Subgraph keeps its direct Watch wire but does not trace 
     referencedProjects: {},
     frozenNodeOutputs: { [root.metadata!.id!]: { [root.nodes[0]!.id]: [{}] } },
   };
-  assert.deepEqual(getProjectStreamingOutputWatchConnections({ ...options, graph: root }), new Set(root.connections));
+  assert.equal(getProjectStreamingOutputWatchConnections({ ...options, graph: root }).size, 0);
   assert.equal(getProjectStreamingOutputWatchConnections({ ...options, graph: leaf }).size, 0);
 });
 
@@ -247,7 +282,7 @@ test('does not descend through final-only, ambiguous, missing, or stale named ou
     'missing-port',
     'disabled',
   ] as const) {
-    const { leaf, middle, marked, make } = streamFixture();
+    const { root, leaf, middle, marked, make } = streamFixture();
     if (mode === 'conditional') leaf.nodes[1]!.isConditional = true;
     if (mode === 'split-output') leaf.nodes[1]!.isSplitRun = true;
     if (mode === 'split-source') leaf.nodes[0]!.isSplitRun = true;
@@ -255,11 +290,11 @@ test('does not descend through final-only, ambiguous, missing, or stale named ou
     if (mode === 'error') (middle.nodes[0]!.data as { useErrorOutput: boolean }).useErrorOutput = true;
     if (mode === 'missing-port') leaf.connections[0]!.outputId = 'removed' as PortId;
     if (mode === 'disabled') leaf.nodes[0]!.disabled = true;
-    assert.equal(marked(leaf).size, 0, mode);
+    for (const graph of [root, middle, leaf]) assert.equal(marked(graph).size, 0, mode);
   }
 });
 
-test('frozen Graph Outputs are final-only and recursive callers terminate', () => {
+test('frozen Graph Outputs and unresolved recursive callers have no streaming route', () => {
   const { project, leaf, middle, root } = streamFixture();
   assert.equal(
     getProjectStreamingOutputWatchConnections({
@@ -275,8 +310,29 @@ test('frozen Graph Outputs are final-only and recursive callers terminate', () =
   middle.connections[0]!.outputId = 'renamed' as PortId;
   assert.equal(
     getProjectStreamingOutputWatchConnections({ project, graph: root, registry, referencedProjects: {} }).size,
-    1,
+    0,
   );
+});
+
+test('a shadowed Graph Output provider is not presented as a streaming route', () => {
+  const { root, middle, leaf, marked, make, edge } = streamFixture();
+  leaf.nodes.push(make('shadowed', 'llmChatV2'));
+  leaf.connections.push(edge('shadowed', 'response', 'out', 'value'));
+
+  assert.deepEqual(marked(root), new Set(root.connections));
+  assert.deepEqual(marked(middle), new Set(middle.connections));
+  assert.deepEqual(marked(leaf), new Set([leaf.connections[0]]));
+});
+
+test('an ineligible first Graph Output provider does not expose a shadowed streaming provider', () => {
+  const { root, middle, leaf, marked, make, edge } = streamFixture();
+  const shadowed = leaf.nodes[0]!;
+  const selected = make('selected', 'llmChatV2');
+  selected.isSplitRun = true;
+  leaf.nodes.splice(0, 1, selected, shadowed);
+  leaf.connections = [edge('selected', 'response', 'out', 'value'), edge('producer', 'response', 'out', 'value')];
+
+  for (const graph of [root, middle, leaf]) assert.equal(marked(graph).size, 0);
 });
 
 test('follows the watched Data Bus channel without marking other channels', () => {
