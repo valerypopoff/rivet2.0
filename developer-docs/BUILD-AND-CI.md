@@ -629,9 +629,11 @@ Desktop executor binaries are target-specific. A non-empty `RIVET_DESKTOP_TARGET
 `aarch64-apple-darwin` and `node18-macos-x64` for `x86_64-apple-darwin`; a local
 native build falls back to the Rust host target. The build refuses
 `universal-apple-darwin`: an executor must be genuinely native for the package
-it is embedded in, not copied under a universal filename. Tauri resolves
-`app-executor-<target-triple>` from `bundle.externalBin`, so each package must
-contain exactly the sidecar matching its own target.
+it is embedded in, not copied under a universal filename. Tauri resolves the
+target-suffixed `app-executor-<target-triple>` source from `bundle.externalBin`,
+then installs it as the canonical `app-executor` runtime executable inside the
+macOS app bundle. The finished-DMG verifier must check that runtime filename,
+not the build-time target-suffixed source filename.
 
 The app-executor binary accepts `--port` / `-p` and `--host` flags. The default
 host is `127.0.0.1` for the desktop internal sidecar; hosted/container wrappers
@@ -1070,12 +1072,13 @@ runs the selected branch's release.
 Graph Builder validation, Windows packaging, both native macOS packages, and
 documentation building start concurrently. The Windows job produces MSI and
 NSIS installers; the macOS matrix produces, signs, notarizes, staples, and
-verifies separate Apple Silicon and Intel DMGs. The verifier mounts each
-finished DMG, requires the app executable and both bundled sidecars to be thin
-executables for the selected architecture with `lipo`, checks their signatures
-with `codesign`, starts the packaged Node executor, opens its local WebSocket,
-runs a minimal Code-to-Graph-Output execution through its worker, and runs the
-packaged pnpm `--version` command. The reusable workflow retains the
+verifies separate Apple Silicon and Intel DMGs. The verifier requires exactly
+one DMG and one app bundle for each target before mounting it, requires the app
+executable and both bundled sidecars to be thin executables for the selected
+architecture with `lipo`, checks their signatures with `codesign`, starts the
+packaged Node executor, opens its local WebSocket, runs a minimal
+Code-to-Graph-Output execution through its worker, and runs the packaged pnpm
+`--version` command. The reusable workflow retains the
 existing rolling GitHub Release feeds and
 `official-release.json`/`developer-release.json` download-page contract, now
 with a required macOS architecture field.

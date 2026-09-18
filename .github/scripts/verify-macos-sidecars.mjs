@@ -4,31 +4,23 @@ import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync, spawn } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 
 const TARGETS = {
   'aarch64-apple-darwin': { architecture: 'arm64', pnpmVersion: '8.8.0' },
   'x86_64-apple-darwin': { architecture: 'x86_64', pnpmVersion: '8.8.0' },
 };
 
-const [appPath, targetTriple] = process.argv.slice(2);
-const target = TARGETS[targetTriple];
-
-if (!appPath || !target) {
-  throw new Error('Usage: verify-macos-sidecars.mjs <app-path> <aarch64-apple-darwin|x86_64-apple-darwin>');
+function resolveBundledSidecarPaths(macosDirectory) {
+  // Tauri uses target-suffixed files to locate sidecars at build time, then
+  // installs them under the externalBin basename inside the app bundle.
+  return {
+    executorPath: join(macosDirectory, 'app-executor'),
+    pnpmPath: join(macosDirectory, 'pnpm'),
+  };
 }
 
-const macosDirectory = join(appPath, 'Contents', 'MacOS');
-const appExecutableName = execFileSync(
-  'plutil',
-  ['-extract', 'CFBundleExecutable', 'raw', '-o', '-', join(appPath, 'Contents', 'Info.plist')],
-  { encoding: 'utf8' },
-).trim();
-assert.ok(appExecutableName && !appExecutableName.includes('/'), `Could not read a safe CFBundleExecutable from ${appPath}.`);
-const appExecutablePath = join(macosDirectory, appExecutableName);
-const executorPath = join(macosDirectory, `app-executor-${targetTriple}`);
-const pnpmPath = join(macosDirectory, `pnpm-${targetTriple}`);
-
-function verifyArchitecture(binaryPath) {
+function verifyArchitecture(binaryPath, target) {
   const architectures = execFileSync('lipo', ['-archs', binaryPath], { encoding: 'utf8' }).trim();
   assert.equal(
     architectures,
@@ -50,7 +42,7 @@ async function reserveLocalPort() {
   return address.port;
 }
 
-async function verifyExecutorStartup() {
+async function verifyExecutorStartup(executorPath) {
   const port = await reserveLocalPort();
   const isolatedHome = await mkdtemp(join(tmpdir(), 'rivet-macos-sidecar-'));
   const child = spawn(executorPath, [], {
@@ -206,10 +198,35 @@ async function runExecutorSmokeTest(socket, output) {
   assert.deepEqual(completed.data.results.result, { type: 'string', value: 'native sidecar' });
 }
 
-for (const binaryPath of [appExecutablePath, executorPath, pnpmPath]) {
-  verifyArchitecture(binaryPath);
+async function main(args = process.argv.slice(2)) {
+  const [appPath, targetTriple] = args;
+  const target = TARGETS[targetTriple];
+
+  if (!appPath || !target) {
+    throw new Error('Usage: verify-macos-sidecars.mjs <app-path> <aarch64-apple-darwin|x86_64-apple-darwin>');
+  }
+
+  const macosDirectory = join(appPath, 'Contents', 'MacOS');
+  const appExecutableName = execFileSync(
+    'plutil',
+    ['-extract', 'CFBundleExecutable', 'raw', '-o', '-', join(appPath, 'Contents', 'Info.plist')],
+    { encoding: 'utf8' },
+  ).trim();
+  assert.ok(appExecutableName && !appExecutableName.includes('/'), `Could not read a safe CFBundleExecutable from ${appPath}.`);
+  const appExecutablePath = join(macosDirectory, appExecutableName);
+  const { executorPath, pnpmPath } = resolveBundledSidecarPaths(macosDirectory);
+
+  for (const binaryPath of [appExecutablePath, executorPath, pnpmPath]) {
+    verifyArchitecture(binaryPath, target);
+  }
+  const pnpmVersion = execFileSync(pnpmPath, ['--version'], { encoding: 'utf8' }).trim();
+  assert.equal(pnpmVersion, target.pnpmVersion, `Unexpected pnpm version in ${pnpmPath}`);
+  await verifyExecutorStartup(executorPath);
+  console.log(`Verified native ${target.architecture} executor and pnpm sidecars in ${appPath}.`);
 }
-const pnpmVersion = execFileSync(pnpmPath, ['--version'], { encoding: 'utf8' }).trim();
-assert.equal(pnpmVersion, target.pnpmVersion, `Unexpected pnpm version in ${pnpmPath}`);
-await verifyExecutorStartup();
-console.log(`Verified native ${target.architecture} executor and pnpm sidecars in ${appPath}.`);
+
+if (process.argv[1] && process.argv[1] === fileURLToPath(import.meta.url)) {
+  await main();
+}
+
+export { resolveBundledSidecarPaths };

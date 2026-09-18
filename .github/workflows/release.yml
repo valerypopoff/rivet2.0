@@ -92,9 +92,15 @@ jobs:
         if: matrix.desktop_target != ''
         shell: bash
         run: |
-          app_path="$(find "packages/app/src-tauri/target/${{ matrix.desktop_target }}/release/bundle" -type d -name '*.app' -print -quit)"
-          test -n "$app_path"
-          node .github/scripts/verify-macos-sidecars.mjs "$app_path" "${{ matrix.desktop_target }}"
+          app_paths=()
+          while IFS= read -r -d '' candidate; do
+            app_paths+=("$candidate")
+          done < <(find "packages/app/src-tauri/target/${{ matrix.desktop_target }}/release/bundle" -type d -name '*.app' -print0)
+          if (( ${#app_paths[@]} != 1 )); then
+            printf 'Expected exactly one macOS app bundle; found %d\n' "${#app_paths[@]}" >&2
+            exit 1
+          fi
+          node .github/scripts/verify-macos-sidecars.mjs "${app_paths[0]}" "${{ matrix.desktop_target }}"
 
   publish-updater-manifest:
     name: Publish architecture-specific updater manifest
