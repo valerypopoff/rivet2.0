@@ -1,6 +1,7 @@
 import { type NodeId } from '@valerypopoff/rivet2-core';
 import { connectionsForSingleNodeState } from './selectors/graphSelectors';
-import { ioDefinitionsForNodeState } from './selectors/ioDefinitions';
+import { ioDefinitionsForNodeState, removeIoDefinitionsForNodeState } from './selectors/ioDefinitions';
+import { removeCanvasIoDefinitionsForNodeState } from './selectors/canvasGraphSelectors';
 import { nodeByIdState, nodeInstanceByIdState } from './selectors/nodeSelectors';
 import { removeExecutionNodeStateFamilies } from './dataFlow';
 import { removeGraphBuilderNodeStateFamilies } from './graphBuilder';
@@ -14,11 +15,7 @@ export {
   isReadOnlyGraphState,
   nodesState,
 } from './atoms/graph';
-export {
-  connectionsForNodeState,
-  nodesByIdState,
-  nodesForConnectionState,
-} from './selectors/graphSelectors';
+export { connectionsForNodeState, nodesByIdState, nodesForConnectionState } from './selectors/graphSelectors';
 export { connectionsForSingleNodeState } from './selectors/graphSelectors';
 export { ioDefinitionsForNodeState } from './selectors/ioDefinitions';
 export {
@@ -34,7 +31,8 @@ export function removeGraphNodeStateFamilies(nodeId: NodeId): void {
   connectionsForSingleNodeState.remove(nodeId);
   nodeByIdState.remove(nodeId);
   nodeInstanceByIdState.remove(nodeId);
-  ioDefinitionsForNodeState.remove(nodeId);
+  removeIoDefinitionsForNodeState(nodeId);
+  removeCanvasIoDefinitionsForNodeState(nodeId);
 }
 
 /** Clean up all node-keyed atomFamily entries for a set of nodes (e.g., when switching graphs). */

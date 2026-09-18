@@ -50,7 +50,7 @@ export class PassthroughNodeImpl extends NodeImpl<PassthroughNode> {
       visualData: {
         x: 0,
         y: 0,
-        width: 175,
+        width: 190,
       },
     };
     return chartNode;

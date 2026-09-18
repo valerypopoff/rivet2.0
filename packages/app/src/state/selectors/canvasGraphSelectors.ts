@@ -14,9 +14,10 @@ import { getCanvasPreviewConnections } from '../../domain/graphEditing/wireDragA
 import { handleError } from '../../utils/errorHandling.js';
 import { nodesByIdState } from './graphSelectors.js';
 import { projectState, referencedProjectsState } from '../savedGraphs.js';
-import { nodeInstanceByIdState } from './nodeSelectors.js';
+import { effectiveNodesByIdState, nodeInstanceByIdState } from './nodeSelectors.js';
 import { projectNodeRegistryState } from '../plugins.js';
 import { nodePrefabSourceNodesByIdState } from './nodePrefabSelectors.js';
+import { applyPassthroughConnectionLabels } from '../../domain/graphEditing/passthroughPortLabels.js';
 
 export const canvasPreviewConnectionsState = atom((get) => {
   const connections = get(connectionsState);
@@ -48,6 +49,30 @@ export function getCanvasIoConnectionsForNode(options: {
   );
 }
 
+/**
+ * During an input-origin rewire, that input retains its original connection
+ * while the user chooses a replacement so dynamic ports do not disappear.
+ * Passthrough labels use the same effective graph for that node.
+ */
+export function getCanvasLabelConnectionsForNode(options: {
+  nodeId: NodeId;
+  previewConnections: NodeConnection[];
+  draggingWire:
+    | {
+        originalConnection?: NodeConnection;
+        rewireSourceInput?: {
+          nodeId: NodeId;
+        };
+      }
+    | undefined;
+}): NodeConnection[] {
+  if (options.draggingWire?.originalConnection && options.draggingWire.rewireSourceInput?.nodeId === options.nodeId) {
+    return [...options.previewConnections, options.draggingWire.originalConnection];
+  }
+
+  return options.previewConnections;
+}
+
 export const canvasConnectionsForNodeState = atom((get) =>
   get(canvasPreviewConnectionsState).reduce(
     (accumulator, connection) => {
@@ -72,7 +97,7 @@ export const canvasConnectionsForSingleNodeState = atomFamily((nodeId: NodeId) =
   ),
 );
 
-export const canvasIoDefinitionsForNodeState = atomFamily((nodeId: NodeId | undefined) =>
+const rawCanvasIoDefinitionsForNodeState = atomFamily((nodeId: NodeId | undefined) =>
   atom((get) => {
     if (!nodeId) {
       return { inputDefinitions: [], outputDefinitions: [] };
@@ -80,7 +105,7 @@ export const canvasIoDefinitionsForNodeState = atomFamily((nodeId: NodeId | unde
 
     const project = get(projectState);
     const sourceNode = get(nodePrefabSourceNodesByIdState)[nodeId];
-    const connections = sourceNode ? [] : (get(canvasConnectionsForSingleNodeState(nodeId)) ?? []);
+    const connections = sourceNode ? [] : get(canvasConnectionsForSingleNodeState(nodeId)) ?? [];
     const nodesById = sourceNode ? { ...get(nodesByIdState), [nodeId]: sourceNode } : get(nodesByIdState);
     let instance: NodeImpl<ChartNode> | undefined;
     if (sourceNode) {
@@ -104,7 +129,12 @@ export const canvasIoDefinitionsForNodeState = atomFamily((nodeId: NodeId | unde
     let outputDefinitions: NodeOutputDefinition[] | undefined;
 
     try {
-      inputDefinitions = instance?.getInputDefinitionsIncludingBuiltIn(connections, nodesById, project, referencedProjects);
+      inputDefinitions = instance?.getInputDefinitionsIncludingBuiltIn(
+        connections,
+        nodesById,
+        project,
+        referencedProjects,
+      );
     } catch (error) {
       handleError(error, 'Error getting canvas node input definitions', {
         metadata: {
@@ -134,3 +164,34 @@ export const canvasIoDefinitionsForNodeState = atomFamily((nodeId: NodeId | unde
       : { inputDefinitions: [], outputDefinitions: [] };
   }),
 );
+
+export const canvasIoDefinitionsForNodeState = atomFamily((nodeId: NodeId | undefined) =>
+  atom((get) => {
+    const definitions = get(rawCanvasIoDefinitionsForNodeState(nodeId));
+    if (!nodeId) return definitions;
+    const sourceNode = get(nodePrefabSourceNodesByIdState)[nodeId];
+    const effectiveNodesById = get(effectiveNodesByIdState);
+    const nodesById = sourceNode ? { ...effectiveNodesById, [nodeId]: sourceNode } : effectiveNodesById;
+    if (nodesById[nodeId]?.type !== 'passthrough') return definitions;
+
+    return applyPassthroughConnectionLabels({
+      connections: getCanvasLabelConnectionsForNode({
+        draggingWire: get(draggingWireState),
+        nodeId,
+        previewConnections: get(canvasPreviewConnectionsState),
+      }),
+      getNodeIoDefinitions: (connectedNodeId) => get(rawCanvasIoDefinitionsForNodeState(connectedNodeId)),
+      inputDefinitions: definitions.inputDefinitions,
+      nodeId,
+      nodesById,
+      outputDefinitions: definitions.outputDefinitions,
+    });
+  }),
+);
+
+/** Removes transient and rendered canvas I/O projections together. */
+export function removeCanvasIoDefinitionsForNodeState(nodeId: NodeId): void {
+  canvasConnectionsForSingleNodeState.remove(nodeId);
+  rawCanvasIoDefinitionsForNodeState.remove(nodeId);
+  canvasIoDefinitionsForNodeState.remove(nodeId);
+}
