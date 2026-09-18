@@ -34,6 +34,12 @@ function findStep(job, name, label) {
   return step;
 }
 
+function findActionStep(job, uses, label) {
+  const step = job.steps?.find((candidate) => candidate.uses === uses);
+  assert.ok(step, `${label} must use ${JSON.stringify(uses)}.`);
+  return step;
+}
+
 const build = parseWorkflow('.github/workflows/build.yml');
 const buildJobs = build.workflow.jobs;
 assertIncludesAll(
@@ -665,6 +671,31 @@ for (const [jobName, stepName] of [
     `${jobName} must replace its immutable artifact when the build job is re-run.`,
   );
 }
+assert.deepEqual(
+  reusableJobs['build-macos'].strategy.matrix.include.map((entry) => entry.target).sort(),
+  ['aarch64-apple-darwin', 'x86_64-apple-darwin'],
+  'Desktop releases must build separate native Apple Silicon and Intel macOS bundles.',
+);
+assert.equal(
+  findStep(reusableJobs['build-macos'], 'Build Tauri macOS bundle', 'macOS release job').env?.RIVET_DESKTOP_TARGET,
+  '${{ matrix.target }}',
+  'macOS release builds must explicitly pass their target to the executor-sidecar build.',
+);
+assert.equal(
+  findActionStep(reusableJobs['build-macos'], 'Swatinem/rust-cache@v2', 'macOS release job').with?.key,
+  '${{ matrix.target }}',
+  'macOS release builds must keep Rust target caches separate by architecture.',
+);
+assert.match(
+  String(findStep(reusableJobs['build-macos'], 'Verify macOS signing and notarization', 'macOS release job').run),
+  /verify-macos-dmg\.sh[\s\S]*matrix\.target/,
+  'Each macOS release bundle must be verified against its target architecture.',
+);
+assert.match(
+  reusableDesktop.source,
+  /macos-aarch64-bundles[\s\S]*macos-x86_64-bundles/,
+  'Desktop publication must collect both native macOS bundle artifacts.',
+);
 assert.match(reusableDesktop.source, /git ls-remote origin/);
 assert.match(reusableDesktop.source, /steps\.freshness\.outputs\.current == 'true'/);
 assert.match(
@@ -696,6 +727,53 @@ for (const workflowPath of [
   );
   assert.equal(caller.workflow.jobs.release.uses, './.github/workflows/desktop-release.yml');
 }
+
+const taggedDesktopRelease = parseWorkflow('.github/workflows/release.yml');
+const taggedReleaseJobs = taggedDesktopRelease.workflow.jobs;
+assert.deepEqual(
+  taggedReleaseJobs['build-release'].strategy.matrix.include
+    .filter((entry) => entry.desktop_target)
+    .map((entry) => ({ runner: entry.runner, target: entry.desktop_target }))
+    .sort((left, right) => left.target.localeCompare(right.target)),
+  [
+    { runner: 'macos-15', target: 'aarch64-apple-darwin' },
+    { runner: 'macos-15-intel', target: 'x86_64-apple-darwin' },
+  ],
+  'Tagged desktop releases must build native Apple Silicon and Intel packages on matching runners.',
+);
+const taggedBuildStep = findStep(taggedReleaseJobs['build-release'], 'Build Tauri App', 'Tagged desktop release job');
+assert.equal(
+  taggedBuildStep.with?.includeUpdaterJson,
+  false,
+  'Parallel release jobs must not race to write an incomplete updater manifest.',
+);
+assert.match(
+  String(taggedBuildStep.with?.args),
+  /--target \{0\}/,
+  'Tagged macOS builds must pass the matrix target through to Tauri.',
+);
+assert.equal(
+  taggedBuildStep.env?.RIVET_DESKTOP_TARGET,
+  '${{ matrix.desktop_target }}',
+  'Tagged macOS builds must explicitly pass their target to the executor-sidecar build.',
+);
+assert.equal(
+  findActionStep(taggedReleaseJobs['build-release'], 'Swatinem/rust-cache@v2', 'Tagged desktop release job').with?.key,
+  '${{ matrix.desktop_target || matrix.runner }}',
+  'Tagged release builds must keep Rust target caches separate by runner target.',
+);
+assert.match(
+  String(
+    findStep(taggedReleaseJobs['build-release'], 'Verify packaged macOS sidecars', 'Tagged desktop release job').run,
+  ),
+  /verify-macos-sidecars\.mjs[\s\S]*matrix\.desktop_target/,
+  'Tagged macOS releases must validate the packaged sidecars before upload.',
+);
+assert.deepEqual(
+  asArray(taggedReleaseJobs['publish-updater-manifest'].needs),
+  ['build-release'],
+  'The updater manifest must be published only after every release architecture uploaded its artifacts.',
+);
 
 const npmPublish = parseWorkflow('.github/workflows/publish-npm-packages.yml');
 assert.ok(npmPublish.workflow.on.push.paths.length > 0, 'npm publishing must be path-gated.');

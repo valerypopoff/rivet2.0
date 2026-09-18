@@ -8,7 +8,7 @@
   "scripts": {
     "build": "node scripts/build-executor.cjs",
     "dev": "tsx watch --inspect=9228 --experimental-network-imports bin/executor.mts",
-    "test": "tsx --test bin/**/*.test.mts",
+    "test": "tsx --test bin/**/*.test.mts scripts/**/*.test.mts",
     "start": "yarn build && node --experimental-network-imports bin/executor-bundle.cjs",
     "lint": "eslint ."
   },

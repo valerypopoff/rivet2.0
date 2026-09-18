@@ -20,7 +20,7 @@ if (( ${#missing[@]} > 0 )); then
   exit 1
 fi
 
-bundle_dir="${1:-packages/app/src-tauri/target/universal-apple-darwin/release/bundle}"
+bundle_dir="${1:?Usage: notarize-macos-dmg.sh <bundle-dir>}"
 
 if [[ ! -d "$bundle_dir" ]]; then
   printf 'macOS bundle directory does not exist: %s\n' "$bundle_dir" >&2

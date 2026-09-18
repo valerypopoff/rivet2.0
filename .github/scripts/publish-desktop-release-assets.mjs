@@ -38,9 +38,14 @@ const platformConfigs = {
     releaseFilePattern: /\.(dmg|zip|sig|json|blockmap)$/i,
     sourceBundleDir: path.resolve(
       repoRoot,
-      process.env.MACOS_BUNDLE_DIR ?? 'packages/app/src-tauri/target/universal-apple-darwin/release/bundle',
+      process.env.MACOS_BUNDLE_DIR ?? 'release-bundles/macos',
     ),
   },
+};
+
+const MACOS_ARCHITECTURES = {
+  aarch64: { displayName: 'Apple Silicon', releaseName: 'Apple-Silicon' },
+  x86_64: { displayName: 'Intel', releaseName: 'Intel' },
 };
 
 function requiredEnvironment(name) {
@@ -169,8 +174,17 @@ async function collectPlatformArtifacts(platformConfig) {
     bundleFiles.map(async (sourcePath) => {
       const relativeSourcePath = path.relative(platformConfig.sourceBundleDir, sourcePath);
       const fileStat = await stat(sourcePath);
+      const architecture =
+        platformConfig.id === 'macos' ? relativeSourcePath.split(path.sep).find((part) => part in MACOS_ARCHITECTURES) : undefined;
+
+      if (platformConfig.id === 'macos' && !architecture) {
+        throw new Error(
+          `Could not determine the macOS architecture for ${sourcePath}. Place Mac artifacts under aarch64/ or x86_64/.`,
+        );
+      }
 
       return {
+        architecture,
         name: path.basename(sourcePath),
         originalPath: toPosixPath(path.join(platformConfig.id, relativeSourcePath)),
         platform: platformConfig.id,
@@ -186,7 +200,14 @@ function findPrimaryArtifacts(artifacts) {
     [
       ['windowsSetup', artifacts.find((artifact) => artifact.platform === 'windows' && /setup\.exe$/i.test(artifact.name))],
       ['windowsMsi', artifacts.find((artifact) => artifact.platform === 'windows' && /\.msi$/i.test(artifact.name))],
-      ['macosDmg', artifacts.find((artifact) => artifact.platform === 'macos' && /\.dmg$/i.test(artifact.name))],
+      [
+        'macosAarch64Dmg',
+        artifacts.find((artifact) => artifact.platform === 'macos' && artifact.architecture === 'aarch64' && /\.dmg$/i.test(artifact.name)),
+      ],
+      [
+        'macosX86_64Dmg',
+        artifacts.find((artifact) => artifact.platform === 'macos' && artifact.architecture === 'x86_64' && /\.dmg$/i.test(artifact.name)),
+      ],
     ].filter((entry) => entry[1]),
   );
 }
@@ -202,8 +223,9 @@ function releaseAssetName({ artifact, assetPrefix, buildId, primaryKind }) {
     return `${assetPrefix}-Windows-${buildId}${extension}`;
   }
 
-  if (primaryKind === 'macosDmg') {
-    return `${assetPrefix}-macOS-${buildId}${extension}`;
+  if (primaryKind === 'macosAarch64Dmg' || primaryKind === 'macosX86_64Dmg') {
+    const architecture = primaryKind === 'macosAarch64Dmg' ? 'aarch64' : 'x86_64';
+    return `${assetPrefix}-macOS-${MACOS_ARCHITECTURES[architecture].releaseName}-${buildId}${extension}`;
   }
 
   const sourceStem = artifact.originalPath.slice(0, -extension.length);
@@ -216,8 +238,10 @@ function stableDownloadDetails(primaryKind, assetPrefix) {
       return { label: 'Windows setup executable', name: `${assetPrefix}-Windows-Setup.exe` };
     case 'windowsMsi':
       return { label: 'Windows MSI installer', name: `${assetPrefix}-Windows.msi` };
-    case 'macosDmg':
-      return { label: 'macOS disk image', name: `${assetPrefix}-macOS.dmg` };
+    case 'macosAarch64Dmg':
+      return { label: 'macOS Apple Silicon disk image', name: `${assetPrefix}-macOS-Apple-Silicon.dmg` };
+    case 'macosX86_64Dmg':
+      return { label: 'macOS Intel disk image', name: `${assetPrefix}-macOS-Intel.dmg` };
     default:
       return null;
   }
@@ -267,6 +291,16 @@ function assertStableDownloadsForRequestedPlatforms(uploadPlan, releasePlatforms
         .map((platformConfig) => platformConfig.displayName)
         .join(', ')}.`,
     );
+  }
+
+  const missingMacArchitectures = Object.keys(MACOS_ARCHITECTURES).filter(
+    (architecture) =>
+      releasePlatforms.some((platformConfig) => platformConfig.id === 'macos') &&
+      !uploadPlan.some((asset) => asset.platform === 'macos' && asset.architecture === architecture && asset.primaryKind),
+  );
+
+  if (missingMacArchitectures.length > 0) {
+    throw new Error(`No primary macOS release download was produced for ${missingMacArchitectures.join(', ')}.`);
   }
 }
 
@@ -440,6 +474,7 @@ function createReleaseAssetManifest({ assetPrefix, channel, release, uploadPlan,
 
     return [
       {
+        architecture: asset.architecture,
         label: details.label,
         name: details.name,
         platform: asset.platform,

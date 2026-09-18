@@ -609,6 +609,9 @@ Maintenance rules:
 - Keep [`packages/app/sidecars/pnpm/SHA256SUMS`](../packages/app/sidecars/pnpm/SHA256SUMS) updated whenever the binaries change.
 - Keep [`packages/app/sidecars/pnpm/README.md`](../packages/app/sidecars/pnpm/README.md) updated with version/provenance notes.
 - Keep `.gitattributes` marking the sidecars as binary and vendored.
+- Treat macOS target suffixes as claims to verify, not as architecture evidence: use `lipo -archs` for every replacement. Rivet ships separate Apple Silicon and Intel packages, so it must never manufacture a universal pnpm sidecar by copying a thin executable.
+- The finished-DMG verifier checks the matching bundled pnpm version and architecture before the release is uploaded.
+- Executor packaging is likewise target allowlisted. A new desktop target needs an explicit `pkg` mapping and a native package-validation path; it must not fall through to an x64 binary based only on its target string.
 - If the release pipeline later gains checksum-verified artifact downloads or Git LFS support, reassess whether these binaries should stay in normal Git history.
 
 ### App executor
@@ -620,6 +623,15 @@ Maintenance rules:
 - `start`: build then run bundled executor
 
 The CommonJS build launcher (`scripts/build-executor.cjs`) bundles the ESM source to CJS using esbuild, then compiles the CJS bundle into a native binary via `pkg`. Keeping the launcher itself in CJS avoids the Node 22/Yarn PnP mixed-loader failure described under Core; the ESM-only `execa` and `chalk` build helpers are loaded asynchronously after esbuild. CJS output format is required because `pkg` needs static analysis of `require()` calls. A custom esbuild plugin (`resolveRivet`) maps `@valerypopoff/rivet2-core` and `@valerypopoff/rivet2-node` to their workspace source entrypoints before package exports are resolved. This keeps the desktop Node executor in lockstep with local source edits and prevents stale `packages/core/dist` / `packages/node/dist` output from being bundled into a fresh sidecar.
+
+Desktop executor binaries are target-specific. A non-empty `RIVET_DESKTOP_TARGET`
+(otherwise Tauri's target-triple environment) selects `node18-macos-arm64` for
+`aarch64-apple-darwin` and `node18-macos-x64` for `x86_64-apple-darwin`; a local
+native build falls back to the Rust host target. The build refuses
+`universal-apple-darwin`: an executor must be genuinely native for the package
+it is embedded in, not copied under a universal filename. Tauri resolves
+`app-executor-<target-triple>` from `bundle.externalBin`, so each package must
+contain exactly the sidecar matching its own target.
 
 The app-executor binary accepts `--port` / `-p` and `--host` flags. The default
 host is `127.0.0.1` for the desktop internal sidecar; hosted/container wrappers
@@ -645,8 +657,8 @@ surface narrow:
 - Executor images need built core, node, and app-executor bundle/artifacts; use
   `yarn build:executor-runtime` and
   `node scripts/create-built-package-artifacts.mjs --target executor-runtime`.
-  The app-executor binary artifacts are platform-specific, so build this target
-  on the platform that will run the executor image.
+  The app-executor binary artifacts are platform- and CPU-specific, so build
+  this target on the same architecture that will run the executor image.
 - Hosted web/editor images need built core and Evaluations plus app host/editor
   source under `packages/app/src`; use `yarn build:hosted-web-deps` and
   `node scripts/create-built-package-artifacts.mjs --target hosted-web-deps`.
@@ -885,7 +897,8 @@ that path under the runner temp directory with a Windows-specific PowerShell
 step and a Unix `bash` step, then caches it by runner OS, architecture,
 `yarn.lock`, `packages/app-executor/package.json`, and the app-executor build
 script. Including the build script keeps the cache key fresh if the packaged
-Node target changes.
+Node target changes. macOS jobs run natively on their matching architecture, so
+their runner-specific cache keys must remain separate.
 
 Build helper scripts that can hide meaningful work should report timings with
 [`scripts/ci-timing.mjs`](../scripts/ci-timing.mjs). The helper prints
@@ -976,7 +989,8 @@ succeeded. `check-ci-workflows.mjs` guards both fan-outs.
 ### Matrix targets
 
 - `windows-latest`
-- `macos-latest`
+- `macos-15` for Apple Silicon (`aarch64-apple-darwin`)
+- `macos-15-intel` for Intel (`x86_64-apple-darwin`)
 - `ubuntu-22.04`
 - `ubuntu-22.04-arm`
 
@@ -1015,7 +1029,20 @@ The workflow currently uses:
 - `projectPath: packages/app`
 - `tauriScript: yarn tauri`
 - draft GitHub releases
-- universal macOS target
+- separate native Apple Silicon and Intel macOS targets
+- a single updater-manifest publication after every target bundle is present
+
+The release-asset and updater-archive selectors have pure Node tests in
+`.github/scripts/`; `yarn test:style` runs them. Keep those tests behavior-based:
+they must prove that each native archive is selected exactly once and that a
+wrong-architecture or universal-looking filename is rejected.
+
+The updater publisher reads a previous `latest.json` before replacing it. If
+the replacement upload fails, it restores that previous asset and fails the
+job; if the release has multiple assets named `latest.json`, it fails before
+deleting either one. This is not fully atomic at GitHub's asset API boundary,
+but it keeps a transient publish failure from permanently removing a working
+updater feed.
 
 ### Release secrets/environment
 
@@ -1040,11 +1067,18 @@ manifests. Studio Server-only and developer-documentation-only commits no longer
 consume signed desktop runners. Manual dispatch remains available and always
 runs the selected branch's release.
 
-Graph Builder validation, Windows packaging, macOS packaging, and documentation
-building start concurrently. The Windows job produces MSI and NSIS installers;
-the macOS job produces, signs, notarizes, staples, and verifies the universal
-DMG. The reusable workflow retains the existing rolling GitHub Release feeds and
-`official-release.json`/`developer-release.json` download-page contract.
+Graph Builder validation, Windows packaging, both native macOS packages, and
+documentation building start concurrently. The Windows job produces MSI and
+NSIS installers; the macOS matrix produces, signs, notarizes, staples, and
+verifies separate Apple Silicon and Intel DMGs. The verifier mounts each
+finished DMG, requires the app executable and both bundled sidecars to be thin
+executables for the selected architecture with `lipo`, checks their signatures
+with `codesign`, starts the packaged Node executor, opens its local WebSocket,
+runs a minimal Code-to-Graph-Output execution through its worker, and runs the
+packaged pnpm `--version` command. The reusable workflow retains the
+existing rolling GitHub Release feeds and
+`official-release.json`/`developer-release.json` download-page contract, now
+with a required macOS architecture field.
 
 Superseded push build work is canceled per channel/ref; manual releases do not interrupt an active release. Only the final publication
 job uses the shared `rivet-docs-pages` concurrency group. That job performs
@@ -1082,9 +1116,13 @@ The Pages release workflows use Node 24-compatible action majors (`actions/check
 
 ### Secrets/environment
 
-The Pages release workflows do not pass updater-signing secrets. They explicitly request only Windows installer bundles and the macOS DMG bundle, so Tauri does not create updater zip bundles and does not need `TAURI_PRIVATE_KEY` or `TAURI_KEY_PASSWORD`.
+The Pages release workflows do not pass updater-signing secrets. They explicitly request only Windows installer bundles and the two native macOS DMGs, so Tauri does not create updater zip bundles and does not need `TAURI_PRIVATE_KEY` or `TAURI_KEY_PASSWORD`.
 
-The Pages macOS job uses the same Tauri macOS packaging path as the tagged release workflow's universal target, but it does not publish signed updater feeds. Mac signing/notarization is separate from updater signing: missing Apple secrets should fail the macOS build before upload, while missing Tauri updater keys should not affect these installer-only workflows.
+The Pages macOS jobs use the same target-specific Tauri paths as the tagged
+release workflow, but they do not publish signed updater feeds. Mac
+signing/notarization is separate from updater signing: missing Apple secrets
+should fail the matching macOS build before upload, while missing Tauri updater
+keys should not affect these installer-only workflows.
 
 Required macOS signing/notarization secrets:
 

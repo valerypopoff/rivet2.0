@@ -14,15 +14,18 @@ Current policy:
 - Keep `SHA256SUMS` updated whenever any sidecar binary changes.
 - Keep `.gitattributes` marking this directory as binary and vendored.
 
-Current observed Windows sidecar version:
+Current sidecar version:
 
-- `pnpm-x86_64-pc-windows-msvc.exe --version` reports `8.8.0`.
+- All supported target binaries report `8.8.0`.
+- `pnpm-aarch64-apple-darwin` is the official `pnpm-macos-arm64` v8.8.0 binary (SHA-256 `25aa33415e3b6895e3cf90ce2ed67ce648155fe4623b9f7595520c5b57f19c45`).
+- `pnpm-x86_64-apple-darwin` is the matching Intel macOS binary. Rivet ships separate native Mac installers; do not add a falsely universal sidecar by copying either file under another target name.
 
 Update checklist:
 
-1. Replace all target sidecar binaries together.
-2. Run the Windows sidecar with `--version` and update this file if the version changes.
-3. Regenerate checksums from the repository root:
+1. When upgrading pnpm, replace all target sidecar binaries together from their upstream release assets.
+2. On macOS, use `lipo -archs` to confirm each binary's architecture before accepting it. A target suffix is not proof of its contents.
+3. Run every sidecar with `--version` and update this file if the version changes.
+4. Regenerate checksums from the repository root:
 
    ```powershell
    Get-ChildItem packages/app/sidecars/pnpm -File |
@@ -34,8 +37,8 @@ Update checklist:
      }
    ```
 
-4. Replace `packages/app/sidecars/pnpm/SHA256SUMS` with the regenerated output.
-5. Verify Tauri can still start the sidecar and install a package plugin.
+5. Replace `packages/app/sidecars/pnpm/SHA256SUMS` with the regenerated output.
+6. Verify the signed, packaged Tauri app can still start the sidecar and install a package plugin.
 
 Future improvement:
 

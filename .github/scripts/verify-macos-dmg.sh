@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-bundle_dir="${1:-packages/app/src-tauri/target/universal-apple-darwin/release/bundle}"
+bundle_dir="${1:?Usage: verify-macos-dmg.sh <bundle-dir> <aarch64-apple-darwin|x86_64-apple-darwin>}"
+target_triple="${2:?Usage: verify-macos-dmg.sh <bundle-dir> <aarch64-apple-darwin|x86_64-apple-darwin>}"
 temp_root="${RUNNER_TEMP:-${TMPDIR:-/tmp}}"
 mount_dir="$(mktemp -d "${temp_root%/}/rivet-dmg-verify.XXXXXX")"
 
@@ -32,6 +33,7 @@ if [[ -z "$app_path" ]]; then
 fi
 
 codesign --verify --deep --strict --verbose=2 "$app_path"
+node .github/scripts/verify-macos-sidecars.mjs "$app_path" "$target_triple"
 codesign --verify --verbose=2 "$dmg_path"
 spctl --assess --type execute --verbose=4 "$app_path"
 xcrun stapler validate "$dmg_path"
