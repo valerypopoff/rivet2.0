@@ -3,6 +3,7 @@ import { afterEach, test } from 'node:test';
 import {
   ClassifierEvaluateNodeImpl,
   ClassifierQuestionNodeImpl,
+  calculateClassifierUsageCost,
   classifierProviders,
   createBuiltInRegistry,
   deserializeProject,
@@ -55,6 +56,23 @@ test('Classifier nodes are first-party built-ins in the Classifier group', () =>
   assert.equal(registry.getPluginFor('classifierEvaluate'), undefined);
   assert.deepEqual(ClassifierQuestionNodeImpl.getUIData().group, ['Classifier']);
   assert.deepEqual(ClassifierEvaluateNodeImpl.getUIData().group, ['Classifier']);
+});
+
+test('Classifier Question presents dimmed Type and ID fields before separated question and criteria summaries', () => {
+  const body = questionNode({ questionId: 'route', instructions: 'Route {{subject}}' }).getBody();
+
+  assert.deepEqual(body, {
+    type: 'markdown',
+    disableLinks: true,
+    text: [
+      '<div class="rivet-node-body-field-row"><span class="rivet-node-body-field-label">Type:</span> <span class="rivet-node-body-field-value">Choice</span></div>',
+      '<div class="rivet-node-body-field-row"><span class="rivet-node-body-field-label">ID:</span> <span class="rivet-node-body-field-value">route</span></div>',
+      '<div class="rivet-node-body-separator"></div>',
+      '<div class="rivet-node-body-text-row"><span class="rivet-node-body-field-value">Route {{subject}}</span></div>',
+      '<div class="rivet-node-body-separator"></div>',
+      '<div class="rivet-node-body-field-row"><span class="rivet-node-body-field-label">Criteria:</span> <span class="rivet-node-body-field-value">2 choices</span></div>',
+    ].join(''),
+  });
 });
 
 test('legacy Jev projects migrate their node types, wires, prefabs, plugin declarations, and credential settings', () => {
@@ -300,7 +318,17 @@ test('Classifier Evaluate preserves arrays, exposes trailing question input, and
   assert.ok(inputs.filter((input) => input.id === 'state' || input.id.startsWith('question')).every((input) => input.splitRunBehavior === 'preserve-array'));
   const providerEditor = instance.getEditors().find((editor) => editor.type === 'dropdown' && editor.dataKey === 'provider');
   assert.deepEqual(providerEditor && 'options' in providerEditor ? providerEditor.options : undefined, [{ value: 'jev', label: 'Jev' }]);
-  assert.match(instance.getBody(), /Provider: Jev/);
+  assert.deepEqual(instance.getOutputDefinitions().map((output) => output.id), ['answers', 'usage']);
+  const body = instance.getBody();
+  assert.deepEqual(body, {
+    type: 'markdown',
+    disableLinks: true,
+    text: [
+      '<div class="rivet-node-body-field-row"><span class="rivet-node-body-field-label">Provider:</span> <span class="rivet-node-body-field-value">Jev</span></div>',
+      '<div class="rivet-node-body-field-row"><span class="rivet-node-body-field-label">Model:</span> <span class="rivet-node-body-field-value">jev-latest</span></div>',
+    ].join(''),
+  });
+  assert.doesNotMatch(body.text, /Batch: one request/);
 });
 
 test('Classifier Evaluate exposes provider HTTP body outputs only when enabled in Outputs', () => {
@@ -326,6 +354,8 @@ test('Classifier Evaluate exposes provider HTTP body outputs only when enabled i
     bothNode.getOutputDefinitions().slice(-2).map((output) => output.id),
     ['requestBody', 'responseBody'],
   );
+  assert.equal(outputsGroup.editors[0]?.dataKey, 'outputUsage');
+  assert.equal(outputsGroup.editors[0]?.label, 'Output usage details');
   assert.equal(outputsGroup.editors.find((editor: any) => editor.dataKey === 'outputRequestBody')?.label, 'Output request body');
   assert.equal(outputsGroup.editors.find((editor: any) => editor.dataKey === 'outputResponseBody')?.label, 'Output response body');
 });
@@ -342,10 +372,12 @@ test('Classifier Evaluate mirrors LLM Chat Error behavior settings and its node-
   ]);
   assert.equal(errorGroup.editors[1].hideIf({ retryOnNon200: false }), true);
   assert.equal(errorGroup.editors[1].hideIf({ retryOnNon200: true }), false);
-  assert.match(
-    instance.getBody(),
-    /Retry on non-200: Enabled\nRepeat times: 2\nCooldown, ms: 25/,
-  );
+  const body = instance.getBody().text;
+  assert.match(body, /Retry on non-200:<\/span> <span class="rivet-node-body-field-value">Enabled/);
+  assert.match(body, /Repeat times:<\/span> <span class="rivet-node-body-field-value">2/);
+  assert.match(body, /Cooldown, ms:<\/span> <span class="rivet-node-body-field-value">25/);
+  assert.match(body, /<div class="rivet-node-body-separator"><\/div>/);
+  assert.doesNotMatch(body, /\n/);
 });
 
 test('Classifier Evaluate resolves a newly selected provider default model without serializing Jev into the node', async () => {
@@ -370,7 +402,10 @@ test('Classifier Evaluate resolves a newly selected provider default model witho
   providers.push(provider);
   try {
     const instance = evaluateNode({ provider: provider.id });
-    assert.match(instance.getBody(), /Provider: Future\nModel: future-latest/);
+    assert.match(
+      instance.getBody().text,
+      /Provider:<\/span> <span class="rivet-node-body-field-value">Future<\/span><\/div><div class="rivet-node-body-field-row"><span class="rivet-node-body-field-label">Model:<\/span> <span class="rivet-node-body-field-value">future-latest<\/span>/,
+    );
     await instance.process(
       {
         ['state' as PortId]: { type: 'string', value: 'state' },
@@ -474,10 +509,35 @@ test('Classifier Evaluate makes one API-compatible Jev request and excludes Rive
   assert.equal(calls[0]!.url, 'https://api.typesafe.ai/v1/systemone');
   assert.equal(calls[0]!.body.questions.route.rivetMetadata, undefined);
   assert.equal(calls[0]!.body.questions.route.questionId, undefined);
+  assert.equal(outputs['model' as PortId], undefined);
   assert.deepEqual(outputs.usage!.value, { input_tokens: 12, output_tokens: 8 });
   assert.deepEqual(outputs.requestBody!.value, calls[0]!.body);
   assert.deepEqual(outputs.responseBody!.value, providerResponse);
   assert.equal(JSON.stringify(outputs.requestBody!.value).includes('first-party-key'), false);
+});
+
+test("Classifier Evaluate adds Jev's fixed input-only totalCost to opt-in Usage details", async () => {
+  const providerResponse = {
+    model: 'jev-1.13.0',
+    answers: { q: { type: 'noul', noul: 0.5 } },
+    usage: { input_tokens: 1_000_000, output_tokens: 1_000_000 },
+  };
+  globalThis.fetch = (async () => new Response(JSON.stringify(providerResponse), { status: 200 })) as typeof fetch;
+  const inputs = {
+    ['state' as PortId]: { type: 'string' as const, value: 'state' },
+    ['question1' as PortId]: {
+      type: 'object' as const,
+      value: { questionId: 'q', type: 'noul', instructions: 'Question?' },
+    },
+  };
+
+  const plainOutputs = await evaluateNode({ outputResponseBody: true }).process(inputs, context());
+  assert.deepEqual(plainOutputs.usage!.value, providerResponse.usage);
+
+  const detailedOutputs = await evaluateNode({ outputResponseBody: true, outputUsage: true }).process(inputs, context());
+  assert.deepEqual(detailedOutputs.usage!.value, { ...providerResponse.usage, totalCost: 0.042 });
+  assert.deepEqual(detailedOutputs.responseBody!.value, providerResponse);
+  assert.equal(calculateClassifierUsageCost({}, providerResponse.usage), undefined);
 });
 
 test('Classifier request output stays identical to every retry even if shared state changes', async () => {

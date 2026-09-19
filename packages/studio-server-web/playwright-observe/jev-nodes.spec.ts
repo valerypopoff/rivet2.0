@@ -124,6 +124,16 @@ async function expectInputToggleOnRight(field: Locator) {
     .toBeGreaterThanOrEqual(8);
 }
 
+async function expectClassifierBodyUsesLlmLayout(node: Locator) {
+  const sections = node.locator('.llm-node-body-section');
+
+  await expect(node.locator('.node-body-markdown')).toHaveCount(0);
+  await expect(sections).toHaveCount(3);
+  await expect(sections.nth(1)).toHaveCSS('border-top-width', '1px');
+  await expect(sections.nth(1)).toHaveCSS('margin-top', '8px');
+  await expect(sections.nth(1)).toHaveCSS('padding-top', '8px');
+}
+
 test('Choice selection persists and keeps both criteria columns usable', async ({ page }) => {
   const editor = await openFixture(page);
   const choice = editor.locator('.node[data-nodeid="choice"]');
@@ -204,11 +214,31 @@ test('Classifier Criteria input-source control stays in the trailing grid column
   await expectInputToggleOnRight(scoreTextCriteria);
 });
 
+test('Classifier cards share the LLM Chat body layout', async ({ page }) => {
+  const editor = await openFixture(page);
+  const choice = editor.locator('.node[data-nodeid="choice"]');
+  const evaluate = editor.locator('.node[data-nodeid="evaluate"]');
+
+  await expectClassifierBodyUsesLlmLayout(choice);
+  await expect(choice.locator('.llm-node-body-label')).toHaveText(['Type:', 'ID:', 'Criteria:']);
+  await expect(choice.locator('.llm-node-body-label').first()).toHaveCSS('opacity', '0.6');
+
+  await expect(evaluate.locator('.node-body-markdown')).toHaveCount(0);
+  await expect(evaluate.locator('.llm-node-body-section')).toHaveCount(1);
+  await expect(evaluate.locator('.llm-node-body-label')).toHaveText(['Provider:', 'Model:']);
+  await expect(evaluate.locator('.llm-node-body-label').first()).toHaveCSS('opacity', '0.6');
+});
+
 test('legacy Jev projects migrate to built-in Classifier nodes without installing a plugin', async ({ page }) => {
   const editor = await openFixture(page);
   const choice = editor.locator('.node[data-nodeid="choice"]');
-  await expect(choice).toContainText('ID: route');
   await expect(choice).toContainText('Type: Choice');
+  await expect(choice).toContainText('ID: route');
+  await expect(choice).toContainText('Route {{subject}}');
+  const choiceBodyFields = choice.locator('.llm-node-body-label');
+  await expect(choiceBodyFields).toHaveText(['Type:', 'ID:', 'Criteria:']);
+  await expect(choiceBodyFields.first()).toHaveCSS('opacity', '0.6');
+  await expectClassifierBodyUsesLlmLayout(choice);
   await expect(choice.locator('.port-label', { hasText: /^subject$/ })).toHaveCount(1);
 
   await choice.hover();
@@ -281,22 +311,32 @@ test('legacy Jev projects migrate to built-in Classifier nodes without installin
       return nameBox && descriptionBox ? descriptionBox.width / nameBox.width : 0;
     })
     .toBeGreaterThan(0.8);
-  await page.keyboard.press('Escape');
-
   const evaluate = editor.locator('.node[data-nodeid="evaluate"]');
   await expect(evaluate.locator('.port-label', { hasText: /^Question 1$/ })).toHaveCount(1);
   await expect(evaluate.locator('.port-label', { hasText: /^Answers$/ })).toHaveCount(1);
+  await expect(evaluate.locator('.port-label', { hasText: /^Model$/ })).toHaveCount(0);
+  await expect(evaluate).not.toContainText('Batch: one request');
+  const evaluateBodyFields = evaluate.locator('.llm-node-body-label');
+  await expect(evaluateBodyFields).toHaveText(['Provider:', 'Model:']);
+  await expect(evaluateBodyFields.first()).toHaveCSS('opacity', '0.6');
+  await expect(evaluate).toContainText('Provider: Jev');
+  await expect(evaluate).toContainText('Model: jev-latest');
 
-  await evaluate.locator('button.edit-button').click({ force: true });
+  // The inspector intentionally stays open until Escape. Dispatch the next node's
+  // edit action so this assertion exercises switching inspectors instead of relying
+  // on page-level keyboard focus across the editor iframe.
+  await evaluate.locator('button.edit-button').dispatchEvent('click');
   await expect(editor.getByText('Provider', { exact: true })).toBeVisible();
-  await expect(editor.getByText('Jev', { exact: true })).toBeVisible();
   await expect(editor.getByRole('group', { name: 'API key source' })).toBeVisible();
   await expect(editor.getByRole('button', { name: 'Configured key' })).toHaveAttribute('aria-pressed', 'true');
   await expect(editor.locator('input[value="typesafeApiKey"]')).toBeVisible();
   await expect(editor.locator('input[value="TYPESAFE_API_KEY"]')).toBeVisible();
   await expect(editor.getByText('Outputs', { exact: true })).toBeVisible();
+  await expect(editor.getByText('Output usage details', { exact: true })).toBeVisible();
   await expect(editor.getByText('Output request body', { exact: true })).toBeVisible();
   await expect(editor.getByText('Output response body', { exact: true })).toBeVisible();
+  await editor.locator('input#outputUsage').check();
+  await expect(editor.locator('input#outputUsage')).toBeChecked();
   await editor.locator('input#outputRequestBody').check();
   await expect(evaluate.locator('.port-label', { hasText: /^Classifier request body$/ })).toHaveCount(1);
   await editor.locator('input#outputResponseBody').check();

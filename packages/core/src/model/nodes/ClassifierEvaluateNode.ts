@@ -1,9 +1,11 @@
 import { nanoid } from 'nanoid/non-secure';
 import type { EditorDefinition } from '../EditorDefinition.js';
 import type { Inputs, Outputs } from '../GraphProcessor.js';
+import type { NodeBodySpec } from '../NodeBodySpec.js';
 import type { ChartNode, NodeConnection, NodeId, NodeInputDefinition, NodeOutputDefinition, PortId } from '../NodeBase.js';
 import { nodeDefinition } from '../NodeDefinition.js';
 import { NodeImpl, type NodeUIData } from '../NodeImpl.js';
+import { formatNodeBodyMarkdownField, formatNodeBodyMarkdownSeparator } from '../nodeBodyMarkdown.js';
 import type { InternalProcessContext } from '../ProcessContext.js';
 import { getNextVariadicPortIndex } from './variadicPortIndex.js';
 import {
@@ -13,6 +15,7 @@ import {
 } from '../classifier/credentials.js';
 import { assertClassifierEntry, assertClassifierInstructions } from '../classifier/questionHelpers.js';
 import {
+  calculateClassifierUsageCost,
   classifierProviders,
   DEFAULT_CLASSIFIER_RETRY_ON_NON_200_COOLDOWN_MS,
   DEFAULT_CLASSIFIER_RETRY_ON_NON_200_REPEAT_TIMES,
@@ -36,6 +39,8 @@ export type ClassifierEvaluateNodeData = {
   outputRequestBody?: boolean;
   /** Adds the complete parsed JSON body returned by the provider. */
   outputResponseBody?: boolean;
+  /** Adds calculated provider cost details to the existing Usage output. */
+  outputUsage?: boolean;
   retryOnNon200?: boolean;
   retryOnNon200RepeatTimes?: number;
   retryOnNon200CooldownMs?: number;
@@ -47,6 +52,11 @@ export type ClassifierEvaluateNodeData = {
 };
 
 export type ClassifierEvaluateNode = ChartNode<'classifierEvaluate', ClassifierEvaluateNodeData>;
+
+export type ClassifierEvaluateBodySection = Readonly<{
+  id: 'configuration' | 'error-behavior';
+  fields: readonly Readonly<{ label: string; value: string }>[];
+}>;
 
 const QUESTION_TYPES = ['object', 'object[]', 'any', 'any[]'] as const;
 
@@ -96,7 +106,6 @@ export class ClassifierEvaluateNodeImpl extends NodeImpl<ClassifierEvaluateNode>
   getOutputDefinitions(): NodeOutputDefinition[] {
     const outputs: NodeOutputDefinition[] = [
       { id: 'answers' as PortId, title: 'Answers', dataType: 'object' },
-      { id: 'model' as PortId, title: 'Model', dataType: 'string' },
       { id: 'usage' as PortId, title: 'Usage', dataType: 'object' },
     ];
     if (this.data.outputRequestBody === true) {
@@ -146,6 +155,13 @@ export class ClassifierEvaluateNodeImpl extends NodeImpl<ClassifierEvaluateNode>
         type: 'group',
         label: 'Outputs',
         editors: [
+          {
+            type: 'toggle',
+            label: 'Output usage details',
+            dataKey: 'outputUsage',
+            helperMessage:
+              'Adds totalCost to Usage when the selected provider has fixed token pricing. Jev input tokens cost $0.042 / MTok; output tokens are free.',
+          },
           {
             type: 'toggle',
             label: 'Output request body',
@@ -216,15 +232,18 @@ export class ClassifierEvaluateNodeImpl extends NodeImpl<ClassifierEvaluateNode>
     ];
   }
 
-  getBody(): string {
-    const provider = getProviderForDisplay(this.data.provider);
-    const model = this.data.useModelInput ? 'input' : getStaticModel(this.data.model, provider.defaultModel);
-    return [
-      `Provider: ${provider.label}`,
-      `Model: ${model}`,
-      'Batch: one request',
-      ...getErrorBehaviorBodyLines(this.data),
-    ].join('\n');
+  getBody(): NodeBodySpec {
+    const sections = getClassifierEvaluateBodySections(this.data);
+    return {
+      type: 'markdown',
+      disableLinks: true,
+      text: sections
+        .flatMap((section, index) => [
+          ...(index === 0 ? [] : [formatNodeBodyMarkdownSeparator()]),
+          ...section.fields.map((field) => formatNodeBodyMarkdownField(field.label, field.value)),
+        ])
+        .join(''),
+    };
   }
 
   static getUIData(): NodeUIData {
@@ -288,10 +307,14 @@ export class ClassifierEvaluateNodeImpl extends NodeImpl<ClassifierEvaluateNode>
       state,
       timeoutMs: normalizeTimeout(this.data.timeoutMs),
     });
+    const totalCost = this.data.outputUsage ? calculateClassifierUsageCost(provider, result.response.usage) : undefined;
+    // The provider's parsed response may also be exposed verbatim through the
+    // diagnostic output. Do not mutate its Usage object while adding Rivet's
+    // calculated accounting detail.
+    const usage = totalCost === undefined ? result.response.usage : { ...result.response.usage, totalCost };
     const outputs: Outputs = {
       ['answers' as PortId]: { type: 'object', value: result.response.answers },
-      ['model' as PortId]: { type: 'string', value: result.response.model },
-      ['usage' as PortId]: { type: 'object', value: result.response.usage },
+      ['usage' as PortId]: { type: 'object', value: usage },
     };
     if (this.data.outputRequestBody === true) {
       outputs['requestBody' as PortId] = { type: 'object', value: result.requestBody };
@@ -315,13 +338,31 @@ function getStaticModel(model: string | undefined, defaultModel: string): string
   return typeof model === 'string' && model.trim() !== '' ? model.trim() : defaultModel;
 }
 
-function getErrorBehaviorBodyLines(data: ClassifierEvaluateNodeData): string[] {
-  if (!data.retryOnNon200) return [];
-  return [
-    'Retry on non-200: Enabled',
-    `Repeat times: ${normalizeClassifierNon200RetryCount(data.retryOnNon200RepeatTimes)}`,
-    `Cooldown, ms: ${normalizeClassifierNon200RetryCooldownMs(data.retryOnNon200CooldownMs)}`,
+/** Shared presentation model for the app's Classifier Evaluate card. */
+export function getClassifierEvaluateBodySections(
+  data: ClassifierEvaluateNodeData,
+): readonly ClassifierEvaluateBodySection[] {
+  const provider = getProviderForDisplay(data.provider);
+  const sections: ClassifierEvaluateBodySection[] = [
+    {
+      id: 'configuration',
+      fields: [
+        { label: 'Provider', value: provider.label },
+        { label: 'Model', value: data.useModelInput ? 'input' : getStaticModel(data.model, provider.defaultModel) },
+      ],
+    },
   ];
+  if (data.retryOnNon200) {
+    sections.push({
+      id: 'error-behavior',
+      fields: [
+        { label: 'Retry on non-200', value: 'Enabled' },
+        { label: 'Repeat times', value: `${normalizeClassifierNon200RetryCount(data.retryOnNon200RepeatTimes)}` },
+        { label: 'Cooldown, ms', value: `${normalizeClassifierNon200RetryCooldownMs(data.retryOnNon200CooldownMs)}` },
+      ],
+    });
+  }
+  return sections;
 }
 
 function compareQuestionPorts([left]: [string, unknown], [right]: [string, unknown]): number {

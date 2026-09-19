@@ -21,6 +21,10 @@ function getMarkdownBodyText(node: LLMProfileNodeImpl): string {
   return body.text;
 }
 
+function bodyField(label: string, value: string): string {
+  return `<div class="rivet-node-body-field-row"><span class="rivet-node-body-field-label">${label}:</span> <span class="rivet-node-body-field-value">${value}</span></div>`;
+}
+
 function createProfileNode(data: Partial<LLMProfileNode['data']> = {}) {
   const node = LLMProfileNodeImpl.create();
   return new LLMProfileNodeImpl({
@@ -123,24 +127,24 @@ describe('LLMProfileNodeImpl', () => {
     );
 
     for (const expectedLine of [
-      'Provider:</span> Custom Responses',
-      'Base URL:</span> \\(Using Input\\)',
-      'Model:</span> \\(Using Input\\)',
-      'API key source:</span> Input port',
-      'Temperature:</span> \\(Using Input\\)',
-      'Max output tokens:</span> \\(Using Input\\)',
-      'Top P:</span> 0\\.75',
-      'Top K:</span> 42',
-      'Presence penalty:</span> 0\\.2',
-      'Frequency penalty:</span> \\-0\\.1',
-      'Stop sequences:</span> &quot;END&quot;, &quot;STOP&quot;',
-      'Seed:</span> 123',
-      'Headers:</span> x\\-project: alpha',
+      bodyField('Provider', 'Custom Responses'),
+      bodyField('Base URL', '(Using Input)'),
+      bodyField('Model', '(Using Input)'),
+      bodyField('API key source', 'Input port'),
+      bodyField('Temperature', '(Using Input)'),
+      bodyField('Max output tokens', '(Using Input)'),
+      bodyField('Top P', '0.75'),
+      bodyField('Top K', '42'),
+      bodyField('Presence penalty', '0.2'),
+      bodyField('Frequency penalty', '-0.1'),
+      bodyField('Stop sequences', '&quot;END&quot;, &quot;STOP&quot;'),
+      bodyField('Seed', '123'),
+      bodyField('Headers', 'x-project: alpha'),
     ]) {
       assert.ok(body.includes(expectedLine), `Missing profile body line: ${expectedLine}`);
     }
-    assert.ok(body.includes('Extra provider options:</span> '));
-    assert.ok(body.includes('\\{&quot;reasoning\\_effort&quot;:&quot;high&quot;\\}'));
+    assert.ok(body.includes('<span class="rivet-node-body-field-label">Extra provider options:</span>'));
+    assert.ok(body.includes('{"reasoning_effort":"high"}'));
   });
 
   it('keeps configured extra provider options as an unmodified body snippet', () => {
@@ -171,11 +175,11 @@ describe('LLMProfileNodeImpl', () => {
     );
 
     for (const expectedLine of [
-      'Previous response ID:</span> resp\\_123',
-      'Reasoning effort:</span> High',
-      'Reasoning summary:</span> detailed',
-      'Web search:</span> Enabled \\(High\\)',
-      'Code interpreter:</span> Enabled',
+      bodyField('Previous response ID', 'resp_123'),
+      bodyField('Reasoning effort', 'High'),
+      bodyField('Reasoning summary', 'detailed'),
+      bodyField('Web search', 'Enabled (High)'),
+      bodyField('Code interpreter', 'Enabled'),
     ]) {
       assert.ok(body.includes(expectedLine), `Missing profile body line: ${expectedLine}`);
     }
@@ -203,19 +207,19 @@ describe('LLMProfileNodeImpl', () => {
     );
 
     for (const expectedLine of [
-      'Thinking mode:</span> Enabled',
-      'Effort:</span> Max',
-      'Thinking budget:</span> 4096',
-      'Cache breakpoint TTL:</span> 1 hour',
+      bodyField('Thinking mode', 'Enabled'),
+      bodyField('Effort', 'Max'),
+      bodyField('Thinking budget', '4096'),
+      bodyField('Cache breakpoint TTL', '1 hour'),
     ]) {
       assert.ok(anthropicBody.includes(expectedLine), `Missing Anthropic profile body line: ${expectedLine}`);
     }
     for (const expectedLine of [
-      'Thinking level:</span> High',
-      'Thinking budget:</span> \\(Using Input\\)',
-      'Include thoughts:</span> Enabled',
-      'Google search grounding:</span> Enabled',
-      'URL context:</span> Enabled',
+      bodyField('Thinking level', 'High'),
+      bodyField('Thinking budget', '(Using Input)'),
+      bodyField('Include thoughts', 'Enabled'),
+      bodyField('Google search grounding', 'Enabled'),
+      bodyField('URL context', 'Enabled'),
     ]) {
       assert.ok(googleBody.includes(expectedLine), `Missing Google profile body line: ${expectedLine}`);
     }
@@ -328,7 +332,7 @@ describe('LLMProfileNodeImpl', () => {
       customProviderApi: 'response' as any,
     });
 
-    assert.ok(getMarkdownBodyText(node).includes('Provider:</span> Custom \\(response\\)'));
+    assert.ok(getMarkdownBodyText(node).includes(bodyField('Provider', 'Custom (response)')));
     await assert.rejects(() => node.process({}, createRuntimeContext()), /Unsupported Custom provider API: response/);
   });
 

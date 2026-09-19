@@ -88,6 +88,26 @@ export const NodeBodySpecWrapper = styled.div<{
     margin-bottom: 0;
   }
 
+  .node-body-markdown .rivet-node-body-field-label {
+    opacity: 0.55;
+  }
+
+  .node-body-markdown .rivet-node-body-field-row,
+  .node-body-markdown .rivet-node-body-text-row {
+    display: block;
+  }
+
+  .node-body-markdown .rivet-node-body-field-row + .rivet-node-body-field-row {
+    margin-top: calc(6px * var(--ui-font-scale));
+  }
+
+  .node-body-markdown .rivet-node-body-separator {
+    display: block;
+    height: 0;
+    border-top: 1px solid color-mix(in srgb, var(--node-port-border) 62%, transparent);
+    margin: calc(8px * var(--ui-font-scale)) 0;
+  }
+
   pre {
     margin: 0;
   }

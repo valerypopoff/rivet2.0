@@ -6,6 +6,7 @@ import type { NodeId, NodeInputDefinition, NodeOutputDefinition, PortId } from '
 import type { NodeBodySpec } from '../NodeBodySpec.js';
 import { nodeDefinition } from '../NodeDefinition.js';
 import { NodeImpl, type NodeRunActivityDescriptor, type NodeUIData } from '../NodeImpl.js';
+import { formatNodeBodyMarkdownField, formatNodeBodyMarkdownLabel } from '../nodeBodyMarkdown.js';
 import type { ChatV2CallFinishedEvent, InternalProcessContext } from '../ProcessContext.js';
 import type { RivetUIContext } from '../RivetUIContext.js';
 import { getCommonChatV2Inputs, getCommonChatV2Outputs } from '../chat-v2/chatV2Shared.js';
@@ -48,19 +49,8 @@ function usesBaseURLInput(data: LLMChatV2Node['data']): boolean {
   return data.provider === 'custom' && data.useCustomProviderBaseURLInput;
 }
 
-function escapeMarkdownInline(value: string): string {
-  return value
-    .replace(/\r/g, '\\r')
-    .replace(/\n/g, '\\n')
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/([\\`*_[\]{}()#+\-.!|])/g, '\\$1');
-}
-
 function getBodyLine(label: string, value: string): string {
-  return `<span style="opacity: 0.55">${label}:</span> ${escapeMarkdownInline(value)}`;
+  return formatNodeBodyMarkdownField(label, value);
 }
 
 function escapeMarkdownPreformatted(value: string): string {
@@ -72,7 +62,7 @@ function getBodySectionText(section: ReturnType<typeof getLLMChatV2BodySections>
     ...section.fields.map((field) => getBodyLine(field.label, field.value)),
     ...(section.snippet
       ? [
-          `<span style="opacity: 0.55">${section.snippet.label}:</span>`,
+          formatNodeBodyMarkdownLabel(section.snippet.label),
           `<pre>${escapeMarkdownPreformatted(section.snippet.text)}</pre>`,
         ]
       : []),

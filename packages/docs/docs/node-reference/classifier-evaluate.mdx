@@ -14,7 +14,7 @@ Evaluates one shared state against a batch of independent typed questions in exa
 - **Model**: defaults to `jev-latest` for Jev. New nodes resolve the selected provider's default model unless you enter an explicit model, so switching Provider does not retain Jev's default accidentally. Pin a version when downstream thresholds were calibrated against it.
 - **API key source**: use an API Key input port or a configured provider key. Jev defaults to the `typesafeApiKey` programmatic setting and `TYPESAFE_API_KEY` environment variable. The Rivet app also provides Settings → Classifier → Jev API Key.
 - **Overall timeout**: defaults to 30 seconds and includes retries and backoff.
-- **Outputs**: enable **Output request body** or **Output response body** when you need to inspect the provider exchange. These are off by default.
+- **Outputs**: enable **Output usage details** to add calculated cost to Usage. For Jev, Rivet uses the fixed rate of **$0.042 / MTok input** and **free output tokens**. Enable **Output request body** or **Output response body** when you need to inspect the provider exchange. These are off by default.
 - **Error behavior**: **Retry on non-200** retries non-authentication, non-validation HTTP responses. **Repeat times** is the number of retries after the initial request; **Cooldown, ms** is the fixed wait between them. Both fields use the same defaults and layout as LLM Chat.
 
 Changing Provider is an authored graph setting, not an input port. Providers added later use this same node and question contract.
@@ -31,10 +31,9 @@ An empty batch, malformed definition, duplicate Question ID, or invalid criteria
 ## Outputs
 
 - **Answers** (`object`): aggregate answer map keyed by Question ID.
-- **Model** (`string`): resolved model version reported by the provider.
-- **Usage** (`object`): provider input and output token counts.
+- **Usage** (`object`): provider input and output token counts. When **Output usage details** is enabled, Jev also includes `totalCost` in USD, calculated from its fixed $0.042 / MTok input rate; output tokens contribute $0.
 - **Classifier request body** (`object`): available when **Output request body** is enabled. This is the exact JSON body sent to the provider after Rivet has resolved State, Model, and Questions. It excludes authorization headers and Rivet-managed API keys, but state and question content are intentionally visible.
-- **Classifier response body** (`object`): available when **Output response body** is enabled. This is the complete parsed JSON body returned by the successful provider call after response validation. Rivet does not redact or truncate its content.
+- **Classifier response body** (`object`): available when **Output response body** is enabled. This is the complete parsed JSON body returned by the successful provider call after response validation, including its resolved provider model. Rivet does not redact or truncate its content.
 
 For Jev, Choice answers contain `choice`, `probabilities`, and `confidence`; Score answers contain a fractional `score`, `legend`, `probabilities`, and `confidence`; Noul answers contain a zero-to-one `noul` probability.
 

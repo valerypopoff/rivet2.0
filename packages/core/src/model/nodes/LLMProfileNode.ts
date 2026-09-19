@@ -5,6 +5,7 @@ import type { ChartNode, NodeId, NodeInputDefinition, NodeOutputDefinition, Port
 import type { NodeBodySpec } from '../NodeBodySpec.js';
 import { nodeDefinition } from '../NodeDefinition.js';
 import { NodeImpl, type NodeUIData } from '../NodeImpl.js';
+import { formatNodeBodyMarkdownField, formatNodeBodyMarkdownLabel } from '../nodeBodyMarkdown.js';
 import type { InternalProcessContext } from '../ProcessContext.js';
 import type { RivetUIContext } from '../RivetUIContext.js';
 import { getLLMProfileEditors } from '../chat-v2/llmChatV2NodeEditors.js';
@@ -17,19 +18,8 @@ export type { LLMProfileValue } from '../chat-v2/llmProfileTypes.js';
 export type LLMProfileNodeData = LLMChatV2ProfileData;
 export type LLMProfileNode = ChartNode<'llmProfile', LLMProfileNodeData>;
 
-function escapeMarkdownInline(value: unknown): string {
-  return String(value)
-    .replace(/\r/g, '\\r')
-    .replace(/\n/g, '\\n')
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/([\\`*_[\]{}()#+\-.!|])/g, '\\$1');
-}
-
 function getBodyLine(label: string, value: unknown): string {
-  return `<span style="opacity: 0.55">${label}:</span> ${escapeMarkdownInline(value)}`;
+  return formatNodeBodyMarkdownField(label, value);
 }
 
 export class LLMProfileNodeImpl extends NodeImpl<LLMProfileNode> {
@@ -140,7 +130,7 @@ export class LLMProfileNodeImpl extends NodeImpl<LLMProfileNode> {
         .map((section) => {
           const fields = section.fields.map((field) => getBodyLine(field.label, field.value));
           const snippet = section.snippet
-            ? `${getBodyLine(section.snippet.label, '')}\n${escapeMarkdownInline(section.snippet.text)}`
+            ? `${formatNodeBodyMarkdownLabel(section.snippet.label)}\n<pre>${escapeHtml(section.snippet.text)}</pre>`
             : undefined;
           return [...fields, ...(snippet ? [snippet] : [])].join('\n');
         })
@@ -170,6 +160,10 @@ export class LLMProfileNodeImpl extends NodeImpl<LLMProfileNode> {
       },
     };
   }
+}
+
+function escapeHtml(value: unknown): string {
+  return String(value).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
 export const llmProfileNode = nodeDefinition(LLMProfileNodeImpl, 'LLM Profile');

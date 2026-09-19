@@ -351,13 +351,13 @@ describe('LLMChatV2NodeImpl', () => {
       getMarkdownBodyText(node),
       [
         [
-          '<span style="opacity: 0.55">Provider:</span> Custom',
-          '<span style="opacity: 0.55">Base URL:</span> https://api\\.cerebras\\.ai/v1',
-          '<span style="opacity: 0.55">Model:</span> llama\\-custom',
+          '<div class="rivet-node-body-field-row"><span class="rivet-node-body-field-label">Provider:</span> <span class="rivet-node-body-field-value">Custom</span></div>',
+          '<div class="rivet-node-body-field-row"><span class="rivet-node-body-field-label">Base URL:</span> <span class="rivet-node-body-field-value">https://api.cerebras.ai/v1</span></div>',
+          '<div class="rivet-node-body-field-row"><span class="rivet-node-body-field-label">Model:</span> <span class="rivet-node-body-field-value">llama-custom</span></div>',
         ].join('\n'),
         [
-          '<span style="opacity: 0.55">Temperature:</span> 0\\.5',
-          '<span style="opacity: 0.55">Max output tokens:</span> 1024',
+          '<div class="rivet-node-body-field-row"><span class="rivet-node-body-field-label">Temperature:</span> <span class="rivet-node-body-field-value">0.5</span></div>',
+          '<div class="rivet-node-body-field-row"><span class="rivet-node-body-field-label">Max output tokens:</span> <span class="rivet-node-body-field-value">1024</span></div>',
         ].join('\n'),
       ].join('\n\n'),
     );
@@ -372,24 +372,24 @@ describe('LLMChatV2NodeImpl', () => {
     );
 
     assert.equal(body.disableLinks, true);
-    assert.match(body.text, /Base URL:<\/span> https:\/\/api\\\.cerebras\\\.ai\/v1/);
+    assert.match(body.text, /Base URL:<\/span> <span class="rivet-node-body-field-value">https:\/\/api\.cerebras\.ai\/v1<\/span>/);
   });
 
   it('labels provider and model in the node body', () => {
     assert.match(
       getMarkdownBodyText(createNode({ provider: 'openai', model: 'custom-openai-model' })),
-      /^<span style="opacity: 0\.55">Provider:<\/span> OpenAI\n<span style="opacity: 0\.55">Model:<\/span> custom\\-openai\\-model/m,
+      /^<div class="rivet-node-body-field-row"><span class="rivet-node-body-field-label">Provider:<\/span> <span class="rivet-node-body-field-value">OpenAI<\/span><\/div>\n<div class="rivet-node-body-field-row"><span class="rivet-node-body-field-label">Model:<\/span> <span class="rivet-node-body-field-value">custom-openai-model<\/span>/m,
     );
     assert.match(
       getMarkdownBodyText(createNode({ provider: 'anthropic', model: 'custom-anthropic-model' })),
-      /^<span style="opacity: 0\.55">Provider:<\/span> Anthropic\n<span style="opacity: 0\.55">Model:<\/span> custom\\-anthropic\\-model/m,
+      /^<div class="rivet-node-body-field-row"><span class="rivet-node-body-field-label">Provider:<\/span> <span class="rivet-node-body-field-value">Anthropic<\/span><\/div>\n<div class="rivet-node-body-field-row"><span class="rivet-node-body-field-label">Model:<\/span> <span class="rivet-node-body-field-value">custom-anthropic-model<\/span>/m,
     );
   });
 
-  it('escapes node body values before rendering markdown labels', () => {
+  it('keeps node body values literal while encoding unsafe HTML', () => {
     assert.ok(
       getMarkdownBodyText(createNode({ provider: 'custom', model: 'model_<script>_[x]\nnext' })).includes(
-        'Model:</span> model\\_&lt;script&gt;\\_\\[x\\]\\\\nnext',
+        'Model:</span> <span class="rivet-node-body-field-value">model_&lt;script&gt;_[x]\nnext</span>',
       ),
     );
   });
@@ -403,7 +403,10 @@ describe('LLMChatV2NodeImpl', () => {
     });
 
     const body = getMarkdownBodyText(node);
-    assert.match(body, /<span style="opacity: 0\.55">Base URL:<\/span> \\\(Using Input\\\)/);
+    assert.match(
+      body,
+      /Base URL:<\/span> <span class="rivet-node-body-field-value">\(Using Input\)<\/span>/,
+    );
     assert.doesNotMatch(body, /api\.cerebras/);
   });
 
@@ -419,12 +422,12 @@ describe('LLMChatV2NodeImpl', () => {
       }),
     );
 
-    assert.match(body, /<span style="opacity: 0\.55">Top P:<\/span> 0\\\.75/);
-    assert.match(body, /<span style="opacity: 0\.55">Top K:<\/span> 40/);
-    assert.match(body, /<span style="opacity: 0\.55">Presence penalty:<\/span> 0\\\.2/);
-    assert.match(body, /<span style="opacity: 0\.55">Frequency penalty:<\/span> \\\-0\\\.1/);
-    assert.match(body, /<span style="opacity: 0\.55">Stop sequences:<\/span> &quot;END&quot;, &quot;STOP&quot;/);
-    assert.match(body, /<span style="opacity: 0\.55">Seed:<\/span> 1234/);
+    assert.match(body, /Top P:<\/span> <span class="rivet-node-body-field-value">0\.75<\/span>/);
+    assert.match(body, /Top K:<\/span> <span class="rivet-node-body-field-value">40<\/span>/);
+    assert.match(body, /Presence penalty:<\/span> <span class="rivet-node-body-field-value">0\.2<\/span>/);
+    assert.match(body, /Frequency penalty:<\/span> <span class="rivet-node-body-field-value">-0\.1<\/span>/);
+    assert.match(body, /Stop sequences:<\/span> <span class="rivet-node-body-field-value">&quot;END&quot;, &quot;STOP&quot;<\/span>/);
+    assert.match(body, /Seed:<\/span> <span class="rivet-node-body-field-value">1234<\/span>/);
   });
 
   it('shows input-driven generation parameters in the node body', () => {
@@ -442,27 +445,27 @@ describe('LLMChatV2NodeImpl', () => {
       }),
     );
 
-    assert.match(body, /<span style="opacity: 0\.55">Top P:<\/span> \\\(Using Input\\\)/);
-    assert.match(body, /<span style="opacity: 0\.55">Top K:<\/span> \\\(Using Input\\\)/);
-    assert.match(body, /<span style="opacity: 0\.55">Presence penalty:<\/span> \\\(Using Input\\\)/);
-    assert.match(body, /<span style="opacity: 0\.55">Frequency penalty:<\/span> \\\(Using Input\\\)/);
-    assert.match(body, /<span style="opacity: 0\.55">Stop sequences:<\/span> \\\(Using Input\\\)/);
-    assert.match(body, /<span style="opacity: 0\.55">Seed:<\/span> \\\(Using Input\\\)/);
+    assert.match(body, /Top P:<\/span> <span class="rivet-node-body-field-value">\(Using Input\)<\/span>/);
+    assert.match(body, /Top K:<\/span> <span class="rivet-node-body-field-value">\(Using Input\)<\/span>/);
+    assert.match(body, /Presence penalty:<\/span> <span class="rivet-node-body-field-value">\(Using Input\)<\/span>/);
+    assert.match(body, /Frequency penalty:<\/span> <span class="rivet-node-body-field-value">\(Using Input\)<\/span>/);
+    assert.match(body, /Stop sequences:<\/span> <span class="rivet-node-body-field-value">\(Using Input\)<\/span>/);
+    assert.match(body, /Seed:<\/span> <span class="rivet-node-body-field-value">\(Using Input\)<\/span>/);
   });
 
   it('shows built-in provider reasoning effort in the node body', () => {
-    assert.match(getMarkdownBodyText(createNode()), /<span style="opacity: 0\.55">Reasoning effort:<\/span> Default/);
+    assert.match(getMarkdownBodyText(createNode()), /Reasoning effort:<\/span> <span class="rivet-node-body-field-value">Default<\/span>/);
     assert.match(
       getMarkdownBodyText(createNode({ provider: 'openai', openAIReasoningEffort: 'high' })),
-      /<span style="opacity: 0\.55">Reasoning effort:<\/span> High/,
+      /Reasoning effort:<\/span> <span class="rivet-node-body-field-value">High<\/span>/,
     );
     assert.match(
       getMarkdownBodyText(createNode({ provider: 'anthropic', anthropicEffort: 'max' })),
-      /<span style="opacity: 0\.55">Reasoning effort:<\/span> Max/,
+      /Reasoning effort:<\/span> <span class="rivet-node-body-field-value">Max<\/span>/,
     );
     assert.match(
       getMarkdownBodyText(createNode({ provider: 'google', googleThinkingLevel: 'minimal' })),
-      /<span style="opacity: 0\.55">Reasoning effort:<\/span> Minimal/,
+      /Reasoning effort:<\/span> <span class="rivet-node-body-field-value">Minimal<\/span>/,
     );
     assert.doesNotMatch(getMarkdownBodyText(createNode({ provider: 'custom' })), /Reasoning effort:/);
   });
@@ -1939,8 +1942,8 @@ describe('LLMChatV2NodeImpl', () => {
     );
 
     assert.doesNotMatch(defaultBody, /Programmatic API key name/);
-    assert.match(overrideBody, /Programmatic API key name:<\/span> billingOpenAiKey/);
-    assert.match(overrideBody, /API key environment variable:<\/span> BILLING\\_OPENAI\\_KEY/);
+    assert.match(overrideBody, /Programmatic API key name:<\/span> <span class="rivet-node-body-field-value">billingOpenAiKey<\/span>/);
+    assert.match(overrideBody, /API key environment variable:<\/span> <span class="rivet-node-body-field-value">BILLING_OPENAI_KEY<\/span>/);
   });
 
   it('keeps malformed built-in credential aliases out of display paths while execution stays strict', async () => {

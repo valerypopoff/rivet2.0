@@ -9,6 +9,14 @@ import type {
 
 export const JEV_SYSTEM_ONE_ENDPOINT = 'https://api.typesafe.ai/v1/systemone';
 
+/** Jev's published USD rates. Keep this Core-owned rather than graph-authored. */
+export const JEV_TOKEN_PRICING = {
+  inputPerMillionTokens: 0.042,
+  outputPerMillionTokens: 0,
+} as const;
+
+const TOKENS_PER_MILLION = 1_000_000;
+
 const MAX_AUTOMATIC_ATTEMPTS = 3;
 const RETRYABLE_STATUSES = new Set([429, 529]);
 
@@ -21,12 +29,19 @@ export type ClassifierProvider = {
   defaultModel: string;
   credentialNames: ClassifierCredentialNames;
   browserExecutionSupported: boolean;
+  /** Static USD token pricing used only for optional Usage accounting. */
+  pricing?: ClassifierTokenPricing;
   /**
    * The response used by the node plus the exact JSON bodies that crossed the
    * provider boundary. Request headers deliberately do not belong here: they
    * carry the API key and must never become graph outputs.
    */
   evaluate(args: ClassifierProviderEvaluateArgs): Promise<ClassifierProviderEvaluationResult>;
+};
+
+export type ClassifierTokenPricing = {
+  inputPerMillionTokens: number;
+  outputPerMillionTokens: number;
 };
 
 export type ClassifierProviderEvaluationResult = {
@@ -57,6 +72,8 @@ export type ApiCompatibleClassifierProviderConfig = {
   /** Static, provider-owned endpoint. It must never come from graph data. */
   endpoint: string;
   browserExecutionSupported?: boolean;
+  /** Static USD token pricing used only for optional Usage accounting. */
+  pricing?: ClassifierTokenPricing;
 };
 
 /**
@@ -73,6 +90,7 @@ export function createApiCompatibleClassifierProvider(
     defaultModel: config.defaultModel,
     credentialNames: config.credentialNames,
     browserExecutionSupported: config.browserExecutionSupported ?? false,
+    pricing: config.pricing,
     async evaluate({
       apiKey,
       fetchImplementation = fetch,
@@ -114,6 +132,7 @@ export const jevClassifierProvider = createApiCompatibleClassifierProvider({
   defaultModel: 'jev-latest',
   credentialNames: JEV_DEFAULT_CREDENTIAL_NAMES,
   endpoint: JEV_SYSTEM_ONE_ENDPOINT,
+  pricing: JEV_TOKEN_PRICING,
 });
 
 /** Ordered so adding later API-compatible providers does not alter authored provider IDs. */
@@ -127,6 +146,36 @@ export function getClassifierProvider(id: string | undefined): ClassifierProvide
 
 export function getClassifierProviderEnvironmentVariableNames(): string[] {
   return [...new Set(classifierProviders.map((provider) => provider.credentialNames.environmentVariableName))];
+}
+
+/**
+ * Returns a USD cost only when the selected provider has static pricing and
+ * the token counts are safe non-negative integers. Callers must not treat an
+ * unpriced provider as free.
+ */
+export function calculateClassifierUsageCost(
+  provider: Pick<ClassifierProvider, 'pricing'>,
+  usage: ClassifierEvaluationResponse['usage'],
+): number | undefined {
+  const pricing = provider.pricing;
+  if (
+    pricing == null ||
+    !Number.isFinite(pricing.inputPerMillionTokens) ||
+    pricing.inputPerMillionTokens < 0 ||
+    !Number.isFinite(pricing.outputPerMillionTokens) ||
+    pricing.outputPerMillionTokens < 0 ||
+    !Number.isSafeInteger(usage.input_tokens) ||
+    usage.input_tokens < 0 ||
+    !Number.isSafeInteger(usage.output_tokens) ||
+    usage.output_tokens < 0
+  ) {
+    return undefined;
+  }
+
+  const totalCost =
+    (usage.input_tokens * pricing.inputPerMillionTokens + usage.output_tokens * pricing.outputPerMillionTokens) /
+    TOKENS_PER_MILLION;
+  return Number.isFinite(totalCost) && totalCost >= 0 ? totalCost : undefined;
 }
 
 type ApiCompatibleRequest = {

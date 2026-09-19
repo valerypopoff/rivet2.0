@@ -2,8 +2,14 @@ import { nanoid } from 'nanoid/non-secure';
 import type { EditorDefinition } from '../EditorDefinition.js';
 import type { Inputs, Outputs } from '../GraphProcessor.js';
 import type { ChartNode, NodeId, NodeInputDefinition, NodeOutputDefinition, PortId } from '../NodeBase.js';
+import type { NodeBodySpec } from '../NodeBodySpec.js';
 import { nodeDefinition } from '../NodeDefinition.js';
 import { NodeImpl, type NodeUIData } from '../NodeImpl.js';
+import {
+  formatNodeBodyMarkdownField,
+  formatNodeBodyMarkdownSeparator,
+  formatNodeBodyMarkdownTextRow,
+} from '../nodeBodyMarkdown.js';
 import type { InternalProcessContext } from '../ProcessContext.js';
 import {
   abbreviate,
@@ -56,6 +62,12 @@ export type ClassifierQuestionNodeData = ClassifierQuestionBaseData & {
 };
 
 export type ClassifierQuestionNode = ChartNode<'classifierQuestion', ClassifierQuestionNodeData>;
+
+export type ClassifierQuestionBodySection = Readonly<{
+  id: 'identity' | 'instructions' | 'criteria';
+  fields: readonly Readonly<{ label: string; value: string }>[];
+  summary?: string | undefined;
+}>;
 
 const defaultOptions = () => [{ key: '', value: '' }, { key: '', value: '' }];
 const defaultLevels = () => ['', ''];
@@ -336,15 +348,24 @@ export class ClassifierQuestionNodeImpl extends NodeImpl<ClassifierQuestionNode>
     ];
   }
 
-  getBody(): string {
-    const data = this.data;
-    const criteria = data.useCriteriaInput ? 'input' : getCriteriaSummary(data);
-    return [
-      `ID: ${data.questionId || '(required)'}`,
-      `Type: ${getQuestionTypeLabel(data.questionType)}`,
-      getInstructionsSummary(data),
-      `Criteria: ${criteria}`,
-    ].join('\n');
+  getBody(): NodeBodySpec {
+    const sections = getClassifierQuestionBodySections(this.data);
+    const identity = sections[0]!;
+    const instructions = sections[1]!;
+    const criteria = sections[2]!;
+    return {
+      type: 'markdown',
+      disableLinks: true,
+      text: [
+        ...identity.fields.map((field) => formatNodeBodyMarkdownField(field.label, field.value)),
+        formatNodeBodyMarkdownSeparator(),
+        ...(instructions.summary === undefined
+          ? instructions.fields.map((field) => formatNodeBodyMarkdownField(field.label, field.value))
+          : [formatNodeBodyMarkdownTextRow(instructions.summary)]),
+        formatNodeBodyMarkdownSeparator(),
+        ...criteria.fields.map((field) => formatNodeBodyMarkdownField(field.label, field.value)),
+      ].join(''),
+    };
   }
 
   static getUIData(): NodeUIData {
@@ -400,6 +421,31 @@ function getQuestionTypeLabel(questionType: ClassifierQuestionType): string {
   return questionType === 'noul' ? 'Noul' : questionType[0]!.toUpperCase() + questionType.slice(1);
 }
 
+/**
+ * Shared presentation model for the app's Classifier card. Keep this data-only
+ * so the Core Markdown fallback and the app's LLM-style React body cannot
+ * disagree about what a saved question represents.
+ */
+export function getClassifierQuestionBodySections(
+  data: ClassifierQuestionNodeData,
+): readonly ClassifierQuestionBodySection[] {
+  const instructions = getInstructionsBodySection(data);
+  return [
+    {
+      id: 'identity',
+      fields: [
+        { label: 'Type', value: getQuestionTypeLabel(data.questionType) },
+        { label: 'ID', value: data.questionId || '(required)' },
+      ],
+    },
+    instructions,
+    {
+      id: 'criteria',
+      fields: [{ label: 'Criteria', value: data.useCriteriaInput ? 'input' : getCriteriaSummary(data) }],
+    },
+  ];
+}
+
 function getCriteriaSummary(data: ClassifierQuestionNodeData): string {
   if (data.questionType === 'choice') {
     return `${getCriteriaType(data) === 'text' ? (data.options ?? []).length : getChoiceCriteria(data).length} choices`;
@@ -411,11 +457,16 @@ function getCriteriaSummary(data: ClassifierQuestionNodeData): string {
   return `${count} descriptions`;
 }
 
-function getInstructionsSummary(data: ClassifierQuestionNodeData): string {
-  if (data.useInstructionsInput) return 'Instructions: input';
-  if (data.instructionsType === 'lines') return `Instructions: ${Math.max(1, data.instructionsLines?.length ?? 0)} lines`;
-  if (data.instructionsType === 'object') return 'Instructions: object';
-  return abbreviate(data.instructions) || 'Instructions: (required)';
+function getInstructionsBodySection(data: ClassifierQuestionNodeData): ClassifierQuestionBodySection {
+  if (data.useInstructionsInput) return { id: 'instructions', fields: [{ label: 'Instructions', value: 'input' }] };
+  if (data.instructionsType === 'lines') {
+    return {
+      id: 'instructions',
+      fields: [{ label: 'Instructions', value: `${Math.max(1, data.instructionsLines?.length ?? 0)} lines` }],
+    };
+  }
+  if (data.instructionsType === 'object') return { id: 'instructions', fields: [{ label: 'Instructions', value: 'object' }] };
+  return { id: 'instructions', fields: [], summary: abbreviate(data.instructions) || '(required)' };
 }
 
 function createQuestionDefinition(
