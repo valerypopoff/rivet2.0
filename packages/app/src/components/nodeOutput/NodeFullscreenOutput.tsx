@@ -521,6 +521,18 @@ const NodeFullscreenOutput: FC<{ node: ChartNode }> = ({ node }) => {
     });
   });
 
+  const firstPage = useStableCallback(() => {
+    setSelectedPage(0);
+  });
+
+  const lastPage = useStableCallback(() => {
+    if (!presentationOutput?.length) {
+      return;
+    }
+
+    setSelectedPage(presentationOutput.length - 1);
+  });
+
   if (outputViewModel.kind === 'empty') {
     return null;
   }
@@ -635,6 +647,8 @@ const NodeFullscreenOutput: FC<{ node: ChartNode }> = ({ node }) => {
               totalPages={outputViewModel.totalPages}
               onPrevPage={prevPage}
               onNextPage={nextPage}
+              onFirstPage={firstPage}
+              onLastPage={lastPage}
             />
           )}
           {llmChatOutputHistoryPager}
