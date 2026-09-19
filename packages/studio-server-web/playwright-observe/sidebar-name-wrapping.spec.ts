@@ -236,3 +236,104 @@ test('F2 renames only the item in the sidebar that owns focus', async ({ page })
   await expect(page.getByRole('textbox', { name: `Rename ${projectName}` })).toHaveCount(0);
   await editorRenameInput.press('Escape');
 });
+
+test('Ctrl/Cmd-click toggles all Server folders together', async ({ page }) => {
+  const project = (id: string, name: string, relativePath: string): WorkflowProjectItem => ({
+    id,
+    name,
+    fileName: `${name}.rivet-project`,
+    relativePath: `${relativePath}/${name}.rivet-project`,
+    absolutePath: `/workflows/${relativePath}/${name}.rivet-project`,
+    updatedAt: '2026-09-19T00:00:00.000Z',
+    settings: {
+      status: 'unpublished',
+      endpointName: '',
+      publishedWebApps: [],
+    },
+  });
+  const nestedFolder: WorkflowFolderItem = {
+    id: 'modifier-click-nested-folder',
+    name: 'Nested folder',
+    relativePath: 'Parent folder/Nested folder',
+    absolutePath: '/workflows/Parent folder/Nested folder',
+    updatedAt: '2026-09-19T00:00:00.000Z',
+    folders: [],
+    projects: [project('nested-project', 'Nested project', 'Parent folder/Nested folder')],
+  };
+  const parentFolder: WorkflowFolderItem = {
+    id: 'modifier-click-parent-folder',
+    name: 'Parent folder',
+    relativePath: 'Parent folder',
+    absolutePath: '/workflows/Parent folder',
+    updatedAt: '2026-09-19T00:00:00.000Z',
+    folders: [nestedFolder],
+    projects: [project('parent-project', 'Parent project', 'Parent folder')],
+  };
+  const siblingFolder: WorkflowFolderItem = {
+    id: 'modifier-click-sibling-folder',
+    name: 'Sibling folder',
+    relativePath: 'Sibling folder',
+    absolutePath: '/workflows/Sibling folder',
+    updatedAt: '2026-09-19T00:00:00.000Z',
+    folders: [],
+    projects: [project('sibling-project', 'Sibling project', 'Sibling folder')],
+  };
+  const tree: WorkflowTreeResponse = {
+    root: '/workflows',
+    sync: { epoch: 'modifier-click-folders', revision: 0 },
+    folders: [parentFolder, siblingFolder],
+    projects: [],
+  };
+
+  await installWrappingFixture(
+    page,
+    tree,
+    createProjectContents({
+      graphFolderName: 'Graph folder',
+      graphName: 'Graph',
+      projectName: 'Parent project',
+    }),
+  );
+  await page.goto('/', { waitUntil: 'domcontentloaded' });
+  await authenticateIfNeeded(page);
+  await waitForDashboardReady(page);
+
+  const parentRow = page.locator('.workflow-library-panel .folder-row', { hasText: 'Parent folder' });
+  const siblingRow = page.locator('.workflow-library-panel .folder-row', { hasText: 'Sibling folder' });
+  const nestedRow = page.locator('.workflow-library-panel .folder-row', { hasText: 'Nested folder' });
+
+  await expect(parentRow).toHaveAttribute('aria-expanded', 'false');
+  await expect(siblingRow).toHaveAttribute('aria-expanded', 'false');
+  await expect(nestedRow).toHaveCount(0);
+
+  await parentRow.click({ modifiers: ['Control'] });
+  await expect(parentRow).toHaveAttribute('aria-expanded', 'true');
+  await expect(siblingRow).toHaveAttribute('aria-expanded', 'true');
+  await expect(nestedRow).toBeVisible();
+  await expect(nestedRow).toHaveAttribute('aria-expanded', 'true');
+
+  await siblingRow.click();
+  await expect(parentRow).toHaveAttribute('aria-expanded', 'true');
+  await expect(siblingRow).toHaveAttribute('aria-expanded', 'false');
+  await expect(nestedRow).toHaveAttribute('aria-expanded', 'true');
+
+  await siblingRow.click({ modifiers: ['Meta'] });
+  await expect(parentRow).toHaveAttribute('aria-expanded', 'true');
+  await expect(siblingRow).toHaveAttribute('aria-expanded', 'true');
+  await expect(nestedRow).toHaveAttribute('aria-expanded', 'true');
+
+  await parentRow.click();
+  await expect(parentRow).toHaveAttribute('aria-expanded', 'false');
+  await expect(siblingRow).toHaveAttribute('aria-expanded', 'true');
+  await expect(nestedRow).toHaveCount(0);
+
+  await siblingRow.click({ modifiers: ['Meta'] });
+  await expect(parentRow).toHaveAttribute('aria-expanded', 'false');
+  await expect(siblingRow).toHaveAttribute('aria-expanded', 'false');
+  await expect(nestedRow).toHaveCount(0);
+
+  await parentRow.click();
+  await expect(parentRow).toHaveAttribute('aria-expanded', 'true');
+  await expect(siblingRow).toHaveAttribute('aria-expanded', 'false');
+  await expect(nestedRow).toHaveAttribute('aria-expanded', 'false');
+});

@@ -139,6 +139,7 @@ export function useWorkflowLibraryController(options: {
     remapSelectedPath,
     setProjectRowRef,
     suppressAncestorExpansion,
+    toggleAllFoldersExpanded,
     toggleFolderExpanded,
   } = selection;
 
@@ -615,14 +616,19 @@ export function useWorkflowLibraryController(options: {
   );
 
   const handleFolderRowClick = useCallback(
-    (folder: WorkflowFolderItem) => (_event: MouseEvent<HTMLElement>) => {
+    (folder: WorkflowFolderItem) => (event: MouseEvent<HTMLElement>) => {
       if (editingFolderId === folder.id || renamingFolderId === folder.id) {
+        return;
+      }
+
+      if (event.ctrlKey || event.metaKey) {
+        toggleAllFoldersExpanded(folder.id);
         return;
       }
 
       toggleFolderExpanded(folder.id);
     },
-    [editingFolderId, renamingFolderId, toggleFolderExpanded],
+    [editingFolderId, renamingFolderId, toggleAllFoldersExpanded, toggleFolderExpanded],
   );
 
   const handleFolderRowKeyDown = useCallback(
