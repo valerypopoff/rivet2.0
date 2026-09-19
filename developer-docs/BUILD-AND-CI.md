@@ -162,9 +162,9 @@ Packages without a `test` script are not included.
 
 #### Test Guardrails
 
-When adding or cleaning tests, use behavior-level tests at the owning helper, domain model, runtime API, or rendered-component seam. New tests that read production `.ts` or `.tsx` files and assert exact source text fail `yarn test:style`; do not grow the migration allowlist to make a new test pass. Existing allowlisted static entrypoint/CSS guards are migration debt. Each retained guard should name its product contract and avoid duplicating behavior already covered by owner tests. When a browser test can observe a visual contract through computed style, geometry, or interaction, use that test and remove the matching CSS-source assertion; source formatting must not become an accidental product contract.
+When adding or cleaning tests, use behavior-level tests at the owning helper, domain model, runtime API, or rendered-component seam. New tests that read production `.ts` or `.tsx` files and assert exact source text fail `yarn test:style`; do not grow the migration allowlist to make a new test pass. The App's former TSX/CSS source-text queue has been removed: output paging and sidebar behavior now have pure presentation tests plus narrow hosted-browser coverage. Each remaining static owner guard must name an irreducibly static contract and avoid duplicating behavior already covered by owner tests. When a browser test can observe a visual contract through computed style, geometry, or interaction, use that test and remove the matching CSS-source assertion; source formatting must not become an accidental product contract.
 When a retained source-shape guard covers a formatted expression or call, match the required semantic arguments while allowing normal whitespace and multiline formatting; do not make Prettier-compatible layout changes fail the suite.
-`packages/app-executor/bin/executorHost.test.mts` is an approved static-entrypoint guard: importing its startup path would bind the executor socket server, so it verifies the host/standalone bootstrap boundary from source. Keep that one exception listed in `scripts/checks/source-reading-test-allowlist.mjs`; migrate any other test to an observable helper instead.
+`packages/app-executor/bin/executorHost.test.mts` is an approved static-entrypoint guard: importing its startup path would bind the executor socket server, so it verifies the host/standalone bootstrap boundary from source. Keep that one exception listed in `scripts/checks/source-reading-test-allowlist.mjs`; migrate any other test to an observable helper instead. A test that must parse a checked-in serialized fixture or published documentation asset, rather than implementation source, may use one local `// test-style: fixture-read: <reason>` comment. That exception is not for TSX, CSS, imports, or source ordering assertions.
 
 Graph Builder evaluation manifest hashes canonicalize text asset line endings to LF before hashing. This keeps the checked manifest identical across Windows CRLF and Linux LF checkouts; do not replace the canonical digest with a raw-byte digest.
 
@@ -270,10 +270,15 @@ fixture changes require the full Kubernetes gate. The Studio Server aggregate
 accepts a skip only after successful classification explicitly returns `false`;
 a failed classifier or missing decision fails verification.
 
-The app test script lets the Node/tsx test runner discover `*.test.ts` files
+The App test script lets the Node/tsx test runner discover its test files
 instead of expanding `src/**/*.test.ts` in the shell. Keep discovery internal to
 the runner: expanding the app's full test list exceeds the Windows command-line
-limit before tests can start.
+limit before tests can start. `yarn test:app` preserves that full-suite discovery
+locally. CI passes `--shard-index <zero-based-index> --shard-count 4` to the
+root script, which sorts discovered tests and launches only the selected subset
+through a direct Node child process. Do not replace this with shell globbing or
+one expanded full-suite command; every shard must stay deterministic and every
+test must belong to exactly one shard.
 
 ### `yarn test:style`
 
@@ -292,8 +297,9 @@ The test-style script fails when `test.only`, `it.only`, `describe.only`,
 non-ignored test files. Source-reading candidates are controlled by the explicit shrinking
 allowlist in `source-reading-test-allowlist.mjs`: a new candidate fails, and removing one
 requires removing its stale allowlist entry. The lexical candidate check intentionally also
-catches direct filesystem reads, so a retained black-box fixture or generated-artifact test
-needs a narrow comment explaining why it is not a production-source contract. `.skip` is
+catches direct filesystem reads. A serialized fixture or published documentation-asset test
+must carry the narrow `test-style: fixture-read` comment described above; it does not permit
+production-source assertions. `.skip` is
 reported for review rather than rejected by this checker. A reported skipped test
 is not execution evidence. Do not interpret the report-only policy as meaning
 that output pruning is parked: Skip unused outputs has active per-node coverage.
@@ -1021,9 +1027,10 @@ work behind it is parallelized.
    to their shared `packages/` ancestor, so `package-tests` restores the artifact
    beneath `packages/`; this preserves each workspace package's declared
    `packages/<name>/dist` export path.
-2. `package-tests` fans out Core, Node, Evaluations, App, App Executor, and CLI
-   into six isolated jobs. Every suite always runs; changed-path selection is
-   deliberately not used for the general correctness gate.
+2. `package-tests` fans out Core, Node, Evaluations, App Executor, and CLI, plus
+   four deterministic App shards, into isolated jobs. The test matrix retains a
+   six-job concurrency cap; every suite always runs, and changed-path selection
+   is deliberately not used for the general correctness gate.
 3. `package-lint` fans out the same six source-only workspaces immediately; it does not
    wait for compiled artifacts. Test and lint matrices use `fail-fast: false`, so one
    failure cannot hide failures in other packages.

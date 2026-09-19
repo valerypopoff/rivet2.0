@@ -1,11 +1,6 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
 import test from 'node:test';
-import { fileURLToPath } from 'node:url';
 import { getActionBarRunButtonPresentation } from './actionBarRunButtons.js';
-
-const componentsDir = dirname(fileURLToPath(import.meta.url));
 
 const DEFAULT_OPTIONS = {
   currentGraphName: 'Current graph',
@@ -31,7 +26,6 @@ test('main graph selected uses one project-level run button', () => {
     },
   );
 });
-
 test('non-main graph selected shows a selected-graph run button plus Run project', () => {
   assert.deepEqual(
     getActionBarRunButtonPresentation({
@@ -68,25 +62,4 @@ test('no main graph configured preserves the existing single Run label', () => {
     projectGraphRunLabel: 'Run project',
     showProjectGraphRunButton: false,
   });
-});
-
-test('RivetApp forwards explicit run options from ActionBar to the graph executor', () => {
-  const rivetAppSource = readFileSync(join(componentsDir, 'RivetApp.tsx'), 'utf8');
-  const graphBuilderSource = readFileSync(join(componentsDir, 'GraphBuilder.tsx'), 'utf8');
-  const graphBuilderContextMenuSource = readFileSync(
-    join(componentsDir, '..', 'hooks', 'useGraphBuilderContextMenuHandler.ts'),
-    'utf8',
-  );
-  const runGraphDefinition =
-    /const runGraph = wrapAsync\(async \(options\?: EditorGraphRunOptions\) => \{([\s\S]*?)\}, 'Run graph'\);/.exec(
-      rivetAppSource,
-    );
-
-  assert.ok(runGraphDefinition);
-  assert.match(runGraphDefinition[1] ?? '', /await tryRunGraph\(options\);/);
-  assert.equal(rivetAppSource.match(/useGraphExecutor\(\)/g)?.length, 1);
-  assert.match(rivetAppSource, /<GraphBuilder runGraph=\{tryRunGraph\} \/>/);
-  assert.doesNotMatch(graphBuilderSource, /useGraphExecutor/);
-  assert.doesNotMatch(graphBuilderContextMenuSource, /useGraphExecutor/);
-  assert.match(graphBuilderContextMenuSource, /useGraphBuilderContextMenuHandler\(runGraph: EditorGraphRun\)/);
 });

@@ -64,8 +64,18 @@ assert.equal(buildJobs['package-tests'].strategy['max-parallel'], 6);
 assert.equal(buildJobs['package-lint'].strategy['max-parallel'], 6);
 assert.deepEqual(
   buildJobs['package-tests'].strategy.matrix.include.map((entry) => entry.command).sort(),
-  ['test:app', 'test:app-executor', 'test:cli', 'test:core', 'test:evaluations', 'test:node'],
-  'Build test matrix must retain all six package suites.',
+  [
+    'test:app --shard-index 0 --shard-count 4',
+    'test:app --shard-index 1 --shard-count 4',
+    'test:app --shard-index 2 --shard-count 4',
+    'test:app --shard-index 3 --shard-count 4',
+    'test:app-executor',
+    'test:cli',
+    'test:core',
+    'test:evaluations',
+    'test:node',
+  ],
+  'Build test matrix must retain every package suite and all four deterministic App shards.',
 );
 const compiledArtifactUpload = findStep(
   buildJobs['compiled-artifacts'],
@@ -134,6 +144,7 @@ assertIncludesAll(
     'build-studio-server',
     'api-tests',
     'web-tests',
+    'editor-regression',
     'host-compatibility',
     'repository-contracts',
     'deployment-contracts',
@@ -150,6 +161,7 @@ assert.equal(studioJobs['api-tests'].strategy['max-parallel'], 4);
 assert.deepEqual(asArray(studioJobs['build-studio-server'].needs), ['changes']);
 assert.deepEqual(asArray(studioJobs['api-tests'].needs), ['changes', 'build-studio-server']);
 assert.deepEqual(asArray(studioJobs['web-tests'].needs), ['changes', 'build-studio-server']);
+assert.deepEqual(asArray(studioJobs['editor-regression'].needs), ['changes', 'build-studio-server']);
 assert.deepEqual(asArray(studioJobs['host-compatibility'].needs), ['changes']);
 assert.deepEqual(asArray(studioJobs['repository-contracts'].needs), ['changes']);
 assert.deepEqual(asArray(studioJobs['deployment-contracts'].needs), ['changes', 'build-studio-server']);
@@ -168,7 +180,7 @@ assert.equal(
   true,
   'The sole Studio Server artifact producer must replace an artifact when its job is re-run.',
 );
-for (const jobName of ['api-tests', 'web-tests', 'deployment-contracts']) {
+for (const jobName of ['api-tests', 'web-tests', 'editor-regression', 'deployment-contracts']) {
   const compiledStudioArtifactDownload = findStep(
     studioJobs[jobName],
     'Download compiled Studio Server dependencies',
@@ -188,6 +200,7 @@ assertIncludesAll(
     'build-studio-server',
     'api-tests',
     'web-tests',
+    'editor-regression',
     'host-compatibility',
     'repository-contracts',
     'deployment-contracts',
@@ -196,7 +209,9 @@ assertIncludesAll(
 );
 const studioGate = findStep(studioJobs.verify, 'Require every applicable Studio Server gate', 'Studio verifier');
 assert.equal(studioGate.env?.CLASSIFICATION_RESULT, '${{ needs.changes.result }}');
+assert.equal(studioGate.env?.EDITOR_REGRESSION_RESULT, '${{ needs.editor-regression.result }}');
 assert.match(studioGate.run, /\$CLASSIFICATION_RESULT.*success/);
+assert.match(studioGate.run, /\$EDITOR_REGRESSION_RESULT/);
 assert.match(studioGate.run, /\$RELEVANT.*!= "true".*\$RELEVANT.*!= "false"/);
 assert.match(studioGate.run, /if \[\[ "\$RELEVANT" == "false" \]\]/);
 assert.match(

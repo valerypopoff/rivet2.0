@@ -1,5 +1,4 @@
 import assert from 'node:assert/strict';
-import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import {
   getActiveInterpolationOffsetRanges,
@@ -74,15 +73,8 @@ test('JSON template interpolation uses JSON validation markers only', () => {
   assert.deepEqual([...JSON_TEMPLATE_INTERPOLATION_MARKER_OWNERS], ['json']);
 });
 
-test('JSON template interpolation installs Rivet-owned validation markers', async () => {
-  const source = await readFile(new URL('./interpolationEditorSupport.ts', import.meta.url), 'utf8');
-
+test('JSON template interpolation reserves the Rivet validation-marker owner', () => {
   assert.equal(JSON_TEMPLATE_VALIDATION_MARKER_OWNER, 'rivet-json-template-validation');
-  assert.match(source, /validateJsonTemplate/);
-  assert.match(source, /JSON_TEMPLATE_VALIDATION_MARKER_OWNER/);
-  assert.match(source, /syntax === 'json-template'\s+\?\s+\[\]/);
-  assert.match(source, /monaco\.editor\.setModelMarkers\(model, JSON_TEMPLATE_VALIDATION_MARKER_OWNER, markers\)/);
-  assert.match(source, /clearPendingMarkerFilterTimeouts/);
 });
 
 test('JavaScript value interpolation uses JavaScript and TypeScript validation markers only', () => {

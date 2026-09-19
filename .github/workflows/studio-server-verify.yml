@@ -158,6 +158,47 @@ jobs:
         if: always()
         run: node scripts/ci/job-timing.mjs finish "Studio Server web tests"
 
+  editor-regression:
+    name: Studio Server editor regressions
+    if: needs.changes.outputs.relevant == 'true'
+    needs:
+      - changes
+      - build-studio-server
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: ./.github/actions/setup-yarn
+        with:
+          node-version: 24
+      - name: Start timing
+        run: node scripts/ci/job-timing.mjs start "Studio Server editor regressions"
+      - name: Install dependencies
+        run: node .yarn/releases/yarn-4.17.1.cjs install --immutable --immutable-cache
+      - name: Download compiled Studio Server dependencies
+        uses: actions/download-artifact@v7
+        with:
+          name: studio-server-build-${{ github.sha }}
+          path: packages
+      - name: Install Playwright Chromium
+        run: yarn workspace @valerypopoff/rivet-studio-server-web exec playwright install --with-deps chromium
+      - name: Run hosted editor regressions
+        env:
+          PLAYWRIGHT_HEADLESS: 1
+          PLAYWRIGHT_SLOW_MO: 0
+        run: yarn studio-server:ui:ci
+      - name: Upload Playwright failure artifacts
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: studio-server-editor-regression-${{ github.sha }}
+          path: artifacts/playwright
+          if-no-files-found: ignore
+          retention-days: 7
+      - name: Report timing
+        if: always()
+        run: node scripts/ci/job-timing.mjs finish "Studio Server editor regressions"
+
   host-compatibility:
     name: Studio Server host compatibility
     if: needs.changes.outputs.relevant == 'true'
@@ -253,6 +294,7 @@ jobs:
       - build-studio-server
       - api-tests
       - web-tests
+      - editor-regression
       - host-compatibility
       - repository-contracts
       - deployment-contracts
@@ -266,6 +308,7 @@ jobs:
           BUILD_RESULT: ${{ needs.build-studio-server.result }}
           API_RESULT: ${{ needs.api-tests.result }}
           WEB_RESULT: ${{ needs.web-tests.result }}
+          EDITOR_REGRESSION_RESULT: ${{ needs.editor-regression.result }}
           HOST_RESULT: ${{ needs.host-compatibility.result }}
           REPOSITORY_RESULT: ${{ needs.repository-contracts.result }}
           DEPLOYMENT_RESULT: ${{ needs.deployment-contracts.result }}
@@ -278,7 +321,7 @@ jobs:
             echo "No Studio Server-affecting paths changed; heavy verification was skipped."
             exit 0
           fi
-          for result in "$BUILD_RESULT" "$API_RESULT" "$WEB_RESULT" "$HOST_RESULT" "$REPOSITORY_RESULT" "$DEPLOYMENT_RESULT"; do
+          for result in "$BUILD_RESULT" "$API_RESULT" "$WEB_RESULT" "$EDITOR_REGRESSION_RESULT" "$HOST_RESULT" "$REPOSITORY_RESULT" "$DEPLOYMENT_RESULT"; do
             test "$result" = success
           done
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4

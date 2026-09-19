@@ -67,8 +67,14 @@ jobs:
             command: test:node
           - label: Evaluations
             command: test:evaluations
-          - label: App
-            command: test:app
+          - label: App 1/4
+            command: test:app --shard-index 0 --shard-count 4
+          - label: App 2/4
+            command: test:app --shard-index 1 --shard-count 4
+          - label: App 3/4
+            command: test:app --shard-index 2 --shard-count 4
+          - label: App 4/4
+            command: test:app --shard-index 3 --shard-count 4
           - label: App Executor
             command: test:app-executor
           - label: CLI

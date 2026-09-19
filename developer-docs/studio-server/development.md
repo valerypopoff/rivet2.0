@@ -35,7 +35,7 @@ HTTP body lifecycle regressions live in `src/tests/body-admission.test.ts` in th
 
 The five private `@valerypopoff/rivet-studio-server-*` workspaces form one
 Studio Server product and use one lockstep package version. Their current
-version is `1.18.0`. `yarn studio-server:verify:repo-structure` rejects version
+version is `1.19.0`. `yarn studio-server:verify:repo-structure` rejects version
 drift between the API, web, executor, shared, and bootstrap manifests.
 
 These private package versions are release metadata, not npm publication or
@@ -100,6 +100,7 @@ compatibility aliases.
 | `yarn studio-server:ui:observe`                                                                                                                                                                                                 | Runs the headed slow-motion Playwright flow against the current hosted app                                                                                                                                               | Watch the browser click through a real scenario                                                                     |
 | `yarn studio-server:ui:observe:debug`                                                                                                                                                                                           | Runs the same flow with Playwright Inspector enabled                                                                                                                                                                     | Step through or pause browser actions                                                                               |
 | `yarn studio-server:ui:observe:report`                                                                                                                                                                                          | Opens the last Playwright HTML report                                                                                                                                                                                    | Review traces, screenshots, and videos after a run                                                                  |
+| `yarn studio-server:ui:ci`                                                                                                                                                                                                      | Runs the narrow headless hosted-editor regression set against a fresh Vite host                                                                                                                                         | Reproduce the CI output-paging and sidebar interaction gate locally after installing Chromium                    |
 
 `yarn studio-server:clean` is intentionally Docker-volume-safe but Docker-host-wide. It first prints the selected Docker context/endpoint, a concise Docker disk summary, and counted stopped-container, custom-network, and image inventories (showing at most 20 rows from each inventory). Docker evaluates the latter two inventories for unused resources only at prune time. Run `yarn studio-server:clean -- --dry-run` to stop there. An interactive terminal must then type `PRUNE`; automation must pass `--confirm-host-prune`. The command rejects remote or unknown endpoints before Docker preflight unless the caller also supplies both `--allow-remote-docker-host` and `--confirm-host-prune`. When it resolves the currently selected context, it pins that context on every later Docker invocation so a concurrent `docker context use` cannot retarget the cleanup. This prevents an inherited Docker context or `DOCKER_HOST` from silently cleaning another machine.
 
@@ -343,6 +344,8 @@ The repo now includes a headed Playwright workflow for frontend debugging and de
 Current behavior:
 
 - `yarn studio-server:ui:observe` launches Chromium in headed mode with `slowMo`, trace capture, video capture, and HTML reporting enabled
+- `yarn studio-server:ui:ci` is intentionally separate from the interactive observer: it starts a fresh hosted Vite app, runs only `fullscreen-output-search-paging.spec.ts` and `sidebar-name-wrapping.spec.ts` headlessly, and retains trace/video/screenshots only on failure
+- the reusable Studio Server verifier runs that same narrow browser set in the `editor-regression` job after the hosted build. It installs Chromium, uploads `artifacts/playwright/` on failure, and the final verifier rejects a skipped or failed applicable browser job
 - the runner loads the same `.env` / `.env.dev` file as the Docker scripts, so UI-gated hosts automatically reuse `RIVET_KEY`
 - unless `PLAYWRIGHT_BASE_URL` is already set, the runner targets `http://127.0.0.1:${RIVET_PORT}` from your env file, defaulting to `8080`
 - the main hosted-editor observable spec uses mocked workflow/project API responses to open a two-node project, then visibly exercises the hosted editor focus, copy, cut, and paste path without mutating workflow storage

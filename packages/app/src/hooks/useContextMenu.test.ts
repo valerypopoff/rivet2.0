@@ -1,5 +1,4 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import { createContextMenuVirtualElement, getContextMenuDataFromTarget } from './useContextMenu.js';
 
@@ -26,7 +25,6 @@ test('context menu target lookup resolves a context menu ancestor', () => {
   assert.equal(data?.type, 'graph-item');
   assert.equal(data?.element, graphItem);
 });
-
 test('context menu target lookup tolerates text-node-like targets without a dataset', () => {
   const folderItem: FakeContextMenuNode = {
     dataset: { contextmenutype: 'graph-folder' },
@@ -86,13 +84,4 @@ test('context menu virtual reference anchors to the pointer without DOM nesting'
     },
   );
   assert.equal(rect.toJSON(), rect);
-});
-
-test('context menu hook keeps legacy reference refs separate from floating menu refs', () => {
-  const source = readFileSync(new URL('./useContextMenu.ts', import.meta.url), 'utf8');
-
-  assert.match(source, /const setReference = useMergeRefs\(\[refs\.setReference, contextMenuRef\]\);/);
-  assert.match(source, /const setFloatingMenu = useMergeRefs\(\[refs\.setFloating, contextMenuRef\]\);/);
-  assert.match(source, /refs:\s*\{\s*\.\.\.refs,\s*setReference,\s*\}/s);
-  assert.match(source, /setFloatingMenu,/);
 });

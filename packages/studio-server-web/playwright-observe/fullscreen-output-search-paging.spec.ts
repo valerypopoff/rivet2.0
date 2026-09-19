@@ -61,8 +61,22 @@ test('fullscreen search keeps the match highlighted after opening a paged JSON c
 
   await modal.locator('.search-input').fill(marker);
   await expect(modal.locator('.search-count')).toHaveText('1 / 1');
-  await expect(modal.locator('.chunk-pager')).toBeVisible();
-  await expect(modal.locator('.chunk-pager')).not.toContainText('1 / 1');
+  const chunkPagers = modal.locator('.chunk-pager');
+  await expect(chunkPagers).toHaveCount(2);
+  for (const pager of [chunkPagers.nth(0), chunkPagers.nth(1)]) {
+    await expect(pager).toBeVisible();
+    await expect(pager).not.toContainText('1 / 1');
+  }
+  const firstPager = chunkPagers.first();
+  const pageCountText = (await firstPager.locator('span').textContent())?.split('/').at(-1)?.trim();
+  expect(pageCountText).toBeTruthy();
+  const pageCount = pageCountText!;
+  expect(Number(pageCount)).toBeGreaterThan(1);
+
+  await firstPager.getByRole('button', { name: '<' }).click({ modifiers: ['Control'] });
+  await expect(firstPager).toContainText(`1 / ${pageCount}`);
+  await chunkPagers.last().getByRole('button', { name: '>' }).click({ modifiers: ['Control'] });
+  await expect(firstPager).toContainText(`${pageCount} / ${pageCount}`);
 
   const colorizedPreview = modal.locator('.json-preview-content pre');
   await expect(colorizedPreview).toContainText(marker);
