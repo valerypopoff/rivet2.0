@@ -172,12 +172,12 @@
 
 .workflow-library-panel .active-project-slot {
   margin: 13px 13px 0;
-  flex: 0 0 166px;
-  height: 166px;
+  flex: 0 0 auto;
+  min-height: 166px;
 }
 
 .workflow-library-panel .active-project-section {
-  height: 100%;
+  min-height: 166px;
   padding: 10px 12px;
   background: var(--active-project-section-bg, rgba(255, 255, 255, 0.07));
   border: 1px solid var(--active-project-section-border, rgba(255, 255, 255, 0.05));
@@ -398,9 +398,8 @@
   font-size: var(--workflow-library-font-size-m);
   font-weight: 600;
   color: var(--grey-lightest);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
+  white-space: normal;
   max-width: 100%;
   margin-top: 0;
 }
@@ -943,7 +942,9 @@
 }
 
 .workflow-library-panel .folder-project-count {
+  align-self: flex-start;
   flex: 0 0 auto;
+  margin-top: 2px;
   min-width: 22px;
   padding: 1px 7px;
   border-radius: 999px;
@@ -956,9 +957,11 @@
 }
 
 .workflow-library-panel .project-status-dot {
+  align-self: flex-start;
   width: 8px;
   height: 8px;
   min-width: 8px;
+  margin-top: 6px;
   border-radius: 999px;
   background: currentColor;
 }
@@ -989,9 +992,10 @@
 }
 
 .workflow-library-panel .label {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  white-space: normal;
   font-size: var(--workflow-library-font-size-s);
 }
 

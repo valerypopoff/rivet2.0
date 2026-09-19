@@ -635,6 +635,96 @@ then installs it as the canonical `app-executor` runtime executable inside the
 macOS app bundle. The finished-DMG verifier must check that runtime filename,
 not the build-time target-suffixed source filename.
 
+#### Apple Silicon packaging incident record and guardrails
+
+Keep this section as institutional memory. In September 2026, Apple Silicon
+support failed in several distinct layers. Fixing only the first visible error
+would not have produced a trustworthy release:
+
+| Stage                                                | Observed failure                                                                                               | Root cause                                                                                                                                                     | Durable fix                                                                                                                                                                                                                  |
+| ---------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Installed app starts Node executor                   | `Bad CPU type in executable (os error 86)`                                                                     | An Apple Silicon app contained an Intel `app-executor` binary. The package label and app architecture did not make the sidecar native.                         | `build-executor.cjs` now maps `aarch64-apple-darwin` to `node18-macos-arm64` and `x86_64-apple-darwin` to `node18-macos-x64`, writes a target-suffixed build artifact, and rejects unsupported or falsely universal targets. |
+| Finished-DMG architecture verification               | `lipo` could not open `app-executor-aarch64-apple-darwin` or `app-executor-x86_64-apple-darwin` inside the app | The verifier confused Tauri's target-suffixed **build input** with the canonical **installed runtime name**.                                                   | The verifier resolves `Contents/MacOS/app-executor` and `Contents/MacOS/pnpm`, while still validating each binary against the matrix target with `lipo`.                                                                     |
+| Packaged executor smoke test                         | Expected `{ type: 'string', ... }`, received `{ type: 'any', ... }`                                            | The smoke assertion had drifted from the current Code node whole-output contract. The executor was correct; the test graph was not.                            | The smoke graph declares an `any` Graph Output and asserts `{ type: 'any', value: 'native sidecar' }`, matching real execution semantics.                                                                                    |
+| Apple Silicon DMG creation on GitHub's hosted runner | `hdiutil: create failed - Resource busy`                                                                       | A transient `hdiutil` failure occurred after the native app and sidecars had already been prepared correctly. It was unrelated to CPU architecture or signing. | `build-macos-dmg.mjs` retries only that exact failure twice, cleans only the current target's `rw.*.dmg` scratch image, and preserves every other failure.                                                                   |
+
+The resulting Apple Silicon DMG was subsequently installed and its Node
+executor was confirmed working on Apple Silicon hardware. That real-device
+result is the acceptance baseline; an Intel build passing, a successful
+TypeScript build, or a correctly named file is not equivalent evidence.
+
+The following invariants are non-negotiable:
+
+- Keep separate `aarch64-apple-darwin` and `x86_64-apple-darwin` matrix builds
+  on matching native GitHub runners. Keep their Rust and `pkg` caches separated
+  by target.
+- Pass the same matrix target through the Tauri `--target` argument and
+  `RIVET_DESKTOP_TARGET`. `prepare:tauri` rebuilds the executor inside Tauri's
+  packaging path, so the sidecar build must receive the intended package
+  target rather than guessing from a filename or stale artifact.
+- Keep macOS executor target selection explicit and fail closed. Adding a new
+  target requires a real `pkg` target, build-plan coverage, a matching pnpm
+  binary, native-runner packaging, and finished-bundle verification.
+- Preserve the two-name contract: Tauri discovers
+  `app-executor-<target-triple>` and `pnpm-<target-triple>` as build inputs,
+  then installs them as `app-executor` and `pnpm` under
+  `Rivet 2.app/Contents/MacOS/`.
+- Treat architecture as binary metadata. Verify the app executable,
+  `app-executor`, and `pnpm` with `lipo -archs`; then verify signatures, start
+  the packaged executor, execute a graph over its WebSocket, and invoke the
+  packaged pnpm. File presence alone is insufficient.
+- Keep the smoke graph synchronized with the actual Code-node DataValue
+  contract. If that contract intentionally changes, update the graph and the
+  assertion together and retain an end-to-end returned-value assertion.
+- Keep the DMG retry narrow and bounded. The retry classifier must continue to
+  require the exact nonzero `hdiutil: create failed - Resource busy` failure.
+  Cleanup must stay confined to `rw.*.dmg` files in the current target's
+  `release/bundle/macos` directory.
+
+Never “fix” this pipeline by doing any of the following:
+
+- copying or renaming an Intel binary to an ARM filename, treating a filename
+  suffix as proof of architecture, or requiring Rosetta for the Apple Silicon
+  package;
+- manufacturing a universal package from thin sidecars, weakening the
+  unsupported-target error into an x64 fallback, or sharing target output/cache
+  directories between architectures;
+- removing `RIVET_DESKTOP_TARGET` from the release matrix or allowing
+  `prepare:tauri` to reuse an executor built for another target;
+- looking for target-suffixed sidecar names inside the installed `.app`, or
+  changing `bundle.externalBin` without updating both the build-time and
+  installed-name tests;
+- weakening the finished-DMG gate to signature or file-presence checks, or
+  replacing its real executor graph run with a mocked response;
+- changing the smoke expectation merely to match observed output without first
+  checking the node's declared Graph Output type and runtime DataValue
+  semantics;
+- retrying every Tauri, signing, notarization, compilation, or `hdiutil`
+  failure, ignoring a final exit status, or deleting the whole bundle directory
+  during retry. Broad retries hide deterministic defects and broad cleanup can
+  destroy the correctly signed app being packaged.
+
+When changing any part of this path, review these owners together:
+
+- [`packages/app-executor/scripts/build-executor.cjs`](../packages/app-executor/scripts/build-executor.cjs)
+  and its build-plan tests;
+- [`packages/app/src-tauri/tauri.conf.json`](../packages/app/src-tauri/tauri.conf.json)
+  for `bundle.externalBin` and sidecar permissions;
+- [`.github/workflows/desktop-release.yml`](../.github/workflows/desktop-release.yml)
+  for native matrix targets, target propagation, and per-target caches;
+- [`.github/scripts/verify-macos-sidecars.mjs`](../.github/scripts/verify-macos-sidecars.mjs)
+  and its canonical-name/smoke-contract tests;
+- [`.github/scripts/verify-macos-dmg.sh`](../.github/scripts/verify-macos-dmg.sh)
+  for final mounted-DMG verification;
+- [`.github/scripts/build-macos-dmg.mjs`](../.github/scripts/build-macos-dmg.mjs)
+  and its exact-error retry tests.
+
+At minimum, run `yarn test:style`, the app-executor tests, documentation-link
+validation, and both native macOS release matrix jobs. For a release-affecting
+change, inspect the mounted app with `lipo -archs` and exercise Node executor
+mode on real Apple Silicon hardware before declaring Apple Silicon support
+healthy.
+
 The app-executor binary accepts `--port` / `-p` and `--host` flags. The default
 host is `127.0.0.1` for the desktop internal sidecar; hosted/container wrappers
 can pass `--host 0.0.0.0` or set `RIVET_EXECUTOR_HOST=0.0.0.0` without patching
@@ -1088,6 +1178,8 @@ because the Tauri v1 DMG helper can occasionally receive
 exact transient failure is retried, after removing target-local `rw.*.dmg`
 scratch images, with 5-second and 15-second delays. Compilation, signing,
 permission, and every other bundling failure remain single-attempt failures.
+The complete failure history and the invariants that protect this path are
+recorded under [Apple Silicon packaging incident record and guardrails](#apple-silicon-packaging-incident-record-and-guardrails).
 
 The reusable workflow retains the existing rolling GitHub Release feeds and
 `official-release.json`/`developer-release.json` download-page contract, now
