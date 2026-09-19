@@ -1,6 +1,6 @@
 import { DndContext, PointerSensor, useDroppable, useSensor, useSensors } from '@dnd-kit/core';
 import { css } from '@emotion/react';
-import { type FC, type KeyboardEvent, type MouseEvent, memo, useMemo, useRef, useState, type SVGProps } from 'react';
+import { type FC, type KeyboardEvent, type MouseEvent, type PointerEvent, memo, useMemo, useRef, useState, type SVGProps } from 'react';
 import { useAtomValue, useSetAtom } from 'jotai';
 import { type GraphId, type NodeGraph, type UiGraph, type UiGraphId } from '@valerypopoff/rivet2-core';
 import clsx from 'clsx';
@@ -837,14 +837,17 @@ export const GraphList: FC = memo(() => {
     return savedGraphs.find((savedGraph) => savedGraph.metadata?.id === currentGraphId)?.metadata?.name;
   }, [graph.metadata?.id, savedGraphs]);
 
-  const handleGraphListMouseDownCapture = useStableCallback((e: MouseEvent<HTMLDivElement>) => {
+  const handleGraphListPointerDownCapture = useStableCallback((e: PointerEvent<HTMLDivElement>) => {
     if (e.button !== 0) {
       e.preventDefault();
-      return;
     }
+  });
 
+  const handleGraphListClick = useStableCallback((e: MouseEvent<HTMLDivElement>) => {
     if (!isInteractiveGraphListTarget(e.target)) {
-      graphListContainerRef.current?.focus({ preventScroll: true });
+      queueMicrotask(() => {
+        graphListContainerRef.current?.focus({ preventScroll: true });
+      });
     }
   });
 
@@ -1064,9 +1067,10 @@ export const GraphList: FC = memo(() => {
       />
       <div
         className="graph-list-container"
+        onClick={handleGraphListClick}
         onContextMenu={handleSidebarContextMenu}
         onKeyDown={handleGraphListKeyDown}
-        onMouseDownCapture={handleGraphListMouseDownCapture}
+        onPointerDownCapture={handleGraphListPointerDownCapture}
         ref={graphListContainerRef}
         tabIndex={-1}
       >

@@ -69,6 +69,7 @@ export async function mockHostedEditorBootstrap(page: Page): Promise<void> {
 
 export async function waitForDashboardReady(page: Page) {
   await page.locator('.dashboard-app-loading').waitFor({ state: 'hidden', timeout: 180_000 });
+  await page.locator('.workflow-library-panel').waitFor({ state: 'visible', timeout: 180_000 });
 }
 
 export async function describeActiveElement(page: Page): Promise<ActiveElementDescriptor> {
