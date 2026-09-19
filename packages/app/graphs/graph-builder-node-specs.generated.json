@@ -1,6 +1,6 @@
 {
   "formatVersion": 1,
-  "catalogFingerprint": "fnv1a64:a53a247c5a1e844b",
+  "catalogFingerprint": "fnv1a64:3b48b7b54db6103f",
   "entries": [
     {
       "authoringChoiceId": "registered:abortGraph",
@@ -201,6 +201,36 @@
       "nodeType": "chunk",
       "displayName": "Chunk",
       "description": "The Chunk node is used to split a string into an array of strings based on a token count. Chunking a string is useful to avoid hitting token count limits in LLMs. You can split a string into multiple chunks and then feed each chunk into an LLM Chat node that runs many items, then combine the outputs back together to answer questions about strings of text longer than the LLM can handle. The Chunk node can also be used to truncate a string to a certain token count, from the beginning or the end, by using the first or last outputs. If an overlap percentage is specified, then the chunks will overlap by the specified percentage (relative to the max token count). For example, if the max token count is 100 and the overlap is 50%, then the chunks will overlap by 50 tokens. This can be useful so that context is not lost between chunks, but it may result in more total chunks.",
+      "aliases": [],
+      "capabilities": {
+        "createWithDefaults": true,
+        "inspectSafeProjection": false,
+        "resolvePorts": true,
+        "configureSettings": false,
+        "editLinkedPrefabInstance": false
+      },
+      "settings": []
+    },
+    {
+      "authoringChoiceId": "registered:classifierEvaluate",
+      "nodeType": "classifierEvaluate",
+      "displayName": "Classifier Evaluate",
+      "description": "Evaluates one shared state against a batch of independent typed questions in exactly one provider request. It is not an LLM Chat node and does not stream tokens.",
+      "aliases": [],
+      "capabilities": {
+        "createWithDefaults": true,
+        "inspectSafeProjection": false,
+        "resolvePorts": true,
+        "configureSettings": false,
+        "editLinkedPrefabInstance": false
+      },
+      "settings": []
+    },
+    {
+      "authoringChoiceId": "registered:classifierQuestion",
+      "nodeType": "classifierQuestion",
+      "displayName": "Classifier Question",
+      "description": "Builds one serializable typed question for a classifier provider. It does not make a network request. Question ID is preserved exactly and becomes the key in Classifier Evaluate's aggregate Answers object.",
       "aliases": [],
       "capabilities": {
         "createWithDefaults": true,

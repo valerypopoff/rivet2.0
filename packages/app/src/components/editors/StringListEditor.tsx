@@ -210,10 +210,18 @@ export const StringListEditor: FC<StringListEditorProps> = ({
     () => (!stringListValue ? [] : Array.isArray(stringListValue) ? stringListValue : [stringListValue]),
     [stringListValue],
   );
+  const minimumItems = Math.max(0, editor.minimumItems ?? 0);
+  const normalizedStringList = useMemo(
+    () => [
+      ...stringList,
+      ...Array.from({ length: Math.max(0, minimumItems - stringList.length) }, () => editor.newItemDefault ?? ''),
+    ],
+    [editor.newItemDefault, minimumItems, stringList],
+  );
 
   const helperMessage = getHelperMessage(editor, node.data);
   const canReorder = editor.reorderable === true && !isReadonly && !isDisabled;
-  const [rows, setRows] = useState<EditableStringListRow[]>(() => createEditableStringListRows(stringList));
+  const [rows, setRows] = useState<EditableStringListRow[]>(() => createEditableStringListRows(normalizedStringList));
   const [pendingAutoFocusUiId, setPendingAutoFocusUiId] = useState<string | null>(null);
   const nodeIdRef = useRef(node.id);
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 4 } }));
@@ -264,6 +272,7 @@ export const StringListEditor: FC<StringListEditorProps> = ({
   };
 
   const handleDeleteItem = (uiId: string) => {
+    if (rows.length <= minimumItems) return;
     applyRowsChange((currentRows) => currentRows.filter((row) => row.uiId !== uiId));
   };
 
@@ -283,12 +292,12 @@ export const StringListEditor: FC<StringListEditorProps> = ({
     if (nodeIdRef.current !== node.id) {
       nodeIdRef.current = node.id;
       setPendingAutoFocusUiId(null);
-      setRows(createEditableStringListRows(stringList));
+      setRows(createEditableStringListRows(normalizedStringList));
       return;
     }
 
-    setRows((previousRows) => reconcileEditableStringListRows(previousRows, stringList));
-  }, [node.id, stringList]);
+    setRows((previousRows) => reconcileEditableStringListRows(previousRows, normalizedStringList));
+  }, [node.id, normalizedStringList]);
 
   useEffect(() => {
     if (!pendingAutoFocusUiId) {
@@ -311,6 +320,7 @@ export const StringListEditor: FC<StringListEditorProps> = ({
       isReadonly={isReadonly}
       isDisabled={isDisabled}
       canReorder={canReorder}
+      minimumItems={minimumItems}
       helperMessage={helperMessage}
       rows={rows}
       pendingAutoFocusUiId={pendingAutoFocusUiId}
@@ -334,6 +344,7 @@ type StringListProps = {
   isReadonly?: boolean;
   isDisabled?: boolean;
   canReorder: boolean;
+  minimumItems: number;
   rows: EditableStringListRow[];
   pendingAutoFocusUiId: string | null;
   helperMessage?: string;
@@ -355,6 +366,7 @@ const StringList: FC<StringListProps> = ({
   isReadonly,
   isDisabled,
   canReorder,
+  minimumItems,
   rows,
   pendingAutoFocusUiId,
   helperMessage,
@@ -388,6 +400,7 @@ const StringList: FC<StringListProps> = ({
                       highlightInterpolationTokens={highlightInterpolationTokens}
                       shouldAutoFocus={row.uiId === pendingAutoFocusUiId}
                       showReorderHandle={showReorderHandle}
+                      canDelete={rows.length > minimumItems}
                       isDisabled={isDisabled}
                       isReadonly={isReadonly}
                       onDeleteItem={onDeleteItem}
@@ -426,6 +439,7 @@ const SortableStringListItem: FC<{
   highlightInterpolationTokens: boolean;
   shouldAutoFocus: boolean;
   showReorderHandle: boolean;
+  canDelete: boolean;
   isDisabled?: boolean;
   isReadonly?: boolean;
   onDeleteItem: (uiId: string) => void;
@@ -438,6 +452,7 @@ const SortableStringListItem: FC<{
   highlightInterpolationTokens,
   shouldAutoFocus,
   showReorderHandle,
+  canDelete,
   isDisabled,
   isReadonly,
   onDeleteItem,
@@ -478,7 +493,7 @@ const SortableStringListItem: FC<{
         className="delete-item"
         appearance="subtle"
         onClick={() => onDeleteItem(row.uiId)}
-        isDisabled={isDisabled || isReadonly}
+        isDisabled={isDisabled || isReadonly || !canDelete}
       >
         <CrossIcon />
       </Button>

@@ -1199,12 +1199,16 @@ const RAW_RUNTIME_STATE =
           ["@babel/runtime", "npm:7.26.7"],\
           ["@emotion/react", "virtual:c72650afd8d8ecff5306990489065a4e0c34d2b88c4acd8d3577f92d5cf46b6fcfd28624afe640ea0bc70671a30a586d15077b1a64459cd4c0f76ed3d182f496#npm:11.11.1"],\
           ["@types/react", "npm:18.2.31"],\
+          ["@types/react-dom", null],\
           ["bind-event-listener", "npm:2.1.1"],\
           ["react", "npm:18.2.0"],\
+          ["react-dom", null],\
           ["react-node-resolver", "virtual:5bc402ceab000c10c2ce6326fb378ad092acd0b6993db226fdf617e8999437935c0794f1a29bbd991c0dc398fb86f8f3f0bb72087744a03c4f2bdd8161afef83#npm:1.0.1"]\
         ],\
         "packagePeers": [\
+          "@types/react-dom",\
           "@types/react",\
+          "react-dom",\
           "react"\
         ],\
         "linkType": "HARD"\
@@ -1299,31 +1303,6 @@ const RAW_RUNTIME_STATE =
         ],\
         "linkType": "SOFT"\
       }],\
-      ["virtual:34afe99355a2c91b57581b5c29bdb337a33590e4b6965278f5edf5df77a27da763b55711d086a7a5f4f22563cb869102809cedece2d8ca2dd13c1636edbe9d38#npm:2.1.1", {\
-        "packageLocation": "./.yarn/__virtual__/@atlaskit-menu-virtual-b04dd1dbbb/0/cache/@atlaskit-menu-npm-2.1.1-57e8cf6cde-ed0548fb81.zip/node_modules/@atlaskit/menu/",\
-        "packageDependencies": [\
-          ["@atlaskit/ds-lib", "virtual:625e4332bd10062467729d3a11a551914998737567caaed7e3302dd8a9cc26393dfd3a322355f4b81992efe69bb54dc4d5c4de28789d771c47136fc19a8d8c5f#npm:2.2.0"],\
-          ["@atlaskit/focus-ring", "virtual:625e4332bd10062467729d3a11a551914998737567caaed7e3302dd8a9cc26393dfd3a322355f4b81992efe69bb54dc4d5c4de28789d771c47136fc19a8d8c5f#npm:1.3.3"],\
-          ["@atlaskit/menu", "virtual:34afe99355a2c91b57581b5c29bdb337a33590e4b6965278f5edf5df77a27da763b55711d086a7a5f4f22563cb869102809cedece2d8ca2dd13c1636edbe9d38#npm:2.1.1"],\
-          ["@atlaskit/platform-feature-flags", "npm:0.2.4"],\
-          ["@atlaskit/primitives", "virtual:aa65a5c8f1ea7128ce7b065dd1f08989c6ac432f5bb7c28461fd452aca3d093222dcc41486a6a44285adabe2bb68d2160f879932a2679fd8148384686cb01e74#npm:1.6.7"],\
-          ["@atlaskit/theme", "virtual:c72650afd8d8ecff5306990489065a4e0c34d2b88c4acd8d3577f92d5cf46b6fcfd28624afe640ea0bc70671a30a586d15077b1a64459cd4c0f76ed3d182f496#npm:12.6.2"],\
-          ["@atlaskit/tokens", "virtual:c72650afd8d8ecff5306990489065a4e0c34d2b88c4acd8d3577f92d5cf46b6fcfd28624afe640ea0bc70671a30a586d15077b1a64459cd4c0f76ed3d182f496#npm:1.28.0"],\
-          ["@babel/runtime", "npm:7.26.7"],\
-          ["@emotion/react", "virtual:c72650afd8d8ecff5306990489065a4e0c34d2b88c4acd8d3577f92d5cf46b6fcfd28624afe640ea0bc70671a30a586d15077b1a64459cd4c0f76ed3d182f496#npm:11.11.1"],\
-          ["@types/react", "npm:18.2.31"],\
-          ["@types/react-dom", null],\
-          ["react", "npm:18.2.0"],\
-          ["react-dom", null]\
-        ],\
-        "packagePeers": [\
-          "@types/react-dom",\
-          "@types/react",\
-          "react-dom",\
-          "react"\
-        ],\
-        "linkType": "HARD"\
-      }],\
       ["virtual:c72650afd8d8ecff5306990489065a4e0c34d2b88c4acd8d3577f92d5cf46b6fcfd28624afe640ea0bc70671a30a586d15077b1a64459cd4c0f76ed3d182f496#npm:2.1.1", {\
         "packageLocation": "./.yarn/__virtual__/@atlaskit-menu-virtual-4caf3c374b/0/cache/@atlaskit-menu-npm-2.1.1-57e8cf6cde-ed0548fb81.zip/node_modules/@atlaskit/menu/",\
         "packageDependencies": [\
@@ -1371,22 +1350,26 @@ const RAW_RUNTIME_STATE =
           ["@atlaskit/modal-dialog", "virtual:c72650afd8d8ecff5306990489065a4e0c34d2b88c4acd8d3577f92d5cf46b6fcfd28624afe640ea0bc70671a30a586d15077b1a64459cd4c0f76ed3d182f496#npm:12.8.3"],\
           ["@atlaskit/motion", "virtual:97a3a9a576305afbb7266e4982f5b59c3ed847ae075847925434d38281ff41e6f529ce5c9beaf9e3c74173fe63935c557cda5711e05956fa14d4e3f97795b41f#npm:1.5.1"],\
           ["@atlaskit/platform-feature-flags", "npm:0.2.4"],\
-          ["@atlaskit/portal", "virtual:97a3a9a576305afbb7266e4982f5b59c3ed847ae075847925434d38281ff41e6f529ce5c9beaf9e3c74173fe63935c557cda5711e05956fa14d4e3f97795b41f#npm:4.3.6"],\
+          ["@atlaskit/portal", "virtual:c72650afd8d8ecff5306990489065a4e0c34d2b88c4acd8d3577f92d5cf46b6fcfd28624afe640ea0bc70671a30a586d15077b1a64459cd4c0f76ed3d182f496#npm:4.3.6"],\
           ["@atlaskit/primitives", "virtual:aa65a5c8f1ea7128ce7b065dd1f08989c6ac432f5bb7c28461fd452aca3d093222dcc41486a6a44285adabe2bb68d2160f879932a2679fd8148384686cb01e74#npm:1.6.7"],\
           ["@atlaskit/theme", "virtual:c72650afd8d8ecff5306990489065a4e0c34d2b88c4acd8d3577f92d5cf46b6fcfd28624afe640ea0bc70671a30a586d15077b1a64459cd4c0f76ed3d182f496#npm:12.6.2"],\
           ["@atlaskit/tokens", "virtual:c72650afd8d8ecff5306990489065a4e0c34d2b88c4acd8d3577f92d5cf46b6fcfd28624afe640ea0bc70671a30a586d15077b1a64459cd4c0f76ed3d182f496#npm:1.28.0"],\
           ["@babel/runtime", "npm:7.26.7"],\
           ["@emotion/react", "virtual:c72650afd8d8ecff5306990489065a4e0c34d2b88c4acd8d3577f92d5cf46b6fcfd28624afe640ea0bc70671a30a586d15077b1a64459cd4c0f76ed3d182f496#npm:11.11.1"],\
           ["@types/react", "npm:18.2.31"],\
+          ["@types/react-dom", "npm:18.2.14"],\
           ["bind-event-listener", "npm:2.1.1"],\
           ["raf-schd", "npm:4.0.3"],\
           ["react", "npm:18.2.0"],\
+          ["react-dom", "virtual:c72650afd8d8ecff5306990489065a4e0c34d2b88c4acd8d3577f92d5cf46b6fcfd28624afe640ea0bc70671a30a586d15077b1a64459cd4c0f76ed3d182f496#npm:18.2.0"],\
           ["react-focus-lock", "virtual:97a3a9a576305afbb7266e4982f5b59c3ed847ae075847925434d38281ff41e6f529ce5c9beaf9e3c74173fe63935c557cda5711e05956fa14d4e3f97795b41f#npm:2.9.6"],\
           ["react-scrolllock", "virtual:97a3a9a576305afbb7266e4982f5b59c3ed847ae075847925434d38281ff41e6f529ce5c9beaf9e3c74173fe63935c557cda5711e05956fa14d4e3f97795b41f#npm:5.0.1"],\
           ["react-uid", "virtual:781c7517dad21ee1e66387afa236477a168cc64ed34e1177db8e2d53fb875ee93326e1ea1b4811133f802b7f5b63e1b58a70197cfe9e7b082b736948afa22188#npm:2.3.2"]\
         ],\
         "packagePeers": [\
+          "@types/react-dom",\
           "@types/react",\
+          "react-dom",\
           "react"\
         ],\
         "linkType": "HARD"\
@@ -1444,11 +1427,36 @@ const RAW_RUNTIME_STATE =
           ["@babel/runtime", "npm:7.26.7"],\
           ["@popperjs/core", "npm:2.11.7"],\
           ["@types/react", "npm:18.2.31"],\
+          ["@types/react-dom", null],\
           ["react", "npm:18.2.0"],\
+          ["react-dom", null],\
           ["react-popper", "virtual:71172b75fd34d2e5c5dd84b9222d39c47f7032ff47cd9713725abea4dbcb601ef612a0866c175fe841f956095d78bb08cd83ab1607fb87bb47241517010cf68d#npm:2.3.0"]\
         ],\
         "packagePeers": [\
+          "@types/react-dom",\
           "@types/react",\
+          "react-dom",\
+          "react"\
+        ],\
+        "linkType": "HARD"\
+      }],\
+      ["virtual:b1010e6923c647e3996bcaf12fd09f7417606f9bcf312586d8b0498aea94c7cf239db130db1a21c8760a8b52f51119eed757ad9c6ed6c14ed1d9999866f10c3c#npm:5.5.3", {\
+        "packageLocation": "./.yarn/__virtual__/@atlaskit-popper-virtual-2a7514a80a/0/cache/@atlaskit-popper-npm-5.5.3-7ae400c2e9-3c08758802.zip/node_modules/@atlaskit/popper/",\
+        "packageDependencies": [\
+          ["@atlaskit/in-product-testing", "npm:0.2.3"],\
+          ["@atlaskit/popper", "virtual:b1010e6923c647e3996bcaf12fd09f7417606f9bcf312586d8b0498aea94c7cf239db130db1a21c8760a8b52f51119eed757ad9c6ed6c14ed1d9999866f10c3c#npm:5.5.3"],\
+          ["@babel/runtime", "npm:7.26.7"],\
+          ["@popperjs/core", "npm:2.11.7"],\
+          ["@types/react", "npm:18.2.31"],\
+          ["@types/react-dom", "npm:18.2.14"],\
+          ["react", "npm:18.2.0"],\
+          ["react-dom", "virtual:c72650afd8d8ecff5306990489065a4e0c34d2b88c4acd8d3577f92d5cf46b6fcfd28624afe640ea0bc70671a30a586d15077b1a64459cd4c0f76ed3d182f496#npm:18.2.0"],\
+          ["react-popper", "virtual:2a7514a80aaea42e8730cf9c8cf3ac79388a2d4aee63a89c9dd7733ea163027cf67ea8dbf83abd8bc378740b78303008fb0bbca9a5ad7382937f1a516560b70d#npm:2.3.0"]\
+        ],\
+        "packagePeers": [\
+          "@types/react-dom",\
+          "@types/react",\
+          "react-dom",\
           "react"\
         ],\
         "linkType": "HARD"\
@@ -1468,7 +1476,7 @@ const RAW_RUNTIME_STATE =
           ["@atlaskit/ds-lib", "virtual:625e4332bd10062467729d3a11a551914998737567caaed7e3302dd8a9cc26393dfd3a322355f4b81992efe69bb54dc4d5c4de28789d771c47136fc19a8d8c5f#npm:2.2.0"],\
           ["@atlaskit/layering", "virtual:873d295f2fee9318dbefd8734a99506c37a2fa857fd3ee1c8432f3240caa8505760cf756440ee8859244c77cddcd18566cb75efdb043c838586300b63130b580#npm:0.2.3"],\
           ["@atlaskit/platform-feature-flags", "npm:0.2.4"],\
-          ["@atlaskit/popper", "virtual:5bc402ceab000c10c2ce6326fb378ad092acd0b6993db226fdf617e8999437935c0794f1a29bbd991c0dc398fb86f8f3f0bb72087744a03c4f2bdd8161afef83#npm:5.5.3"],\
+          ["@atlaskit/popper", "virtual:b1010e6923c647e3996bcaf12fd09f7417606f9bcf312586d8b0498aea94c7cf239db130db1a21c8760a8b52f51119eed757ad9c6ed6c14ed1d9999866f10c3c#npm:5.5.3"],\
           ["@atlaskit/popup", "virtual:c72650afd8d8ecff5306990489065a4e0c34d2b88c4acd8d3577f92d5cf46b6fcfd28624afe640ea0bc70671a30a586d15077b1a64459cd4c0f76ed3d182f496#npm:1.11.2"],\
           ["@atlaskit/portal", "virtual:c72650afd8d8ecff5306990489065a4e0c34d2b88c4acd8d3577f92d5cf46b6fcfd28624afe640ea0bc70671a30a586d15077b1a64459cd4c0f76ed3d182f496#npm:4.3.6"],\
           ["@atlaskit/theme", "virtual:c72650afd8d8ecff5306990489065a4e0c34d2b88c4acd8d3577f92d5cf46b6fcfd28624afe640ea0bc70671a30a586d15077b1a64459cd4c0f76ed3d182f496#npm:12.6.2"],\
@@ -1498,25 +1506,6 @@ const RAW_RUNTIME_STATE =
           ["@atlaskit/portal", "npm:4.3.6"]\
         ],\
         "linkType": "SOFT"\
-      }],\
-      ["virtual:97a3a9a576305afbb7266e4982f5b59c3ed847ae075847925434d38281ff41e6f529ce5c9beaf9e3c74173fe63935c557cda5711e05956fa14d4e3f97795b41f#npm:4.3.6", {\
-        "packageLocation": "./.yarn/__virtual__/@atlaskit-portal-virtual-06add9a21f/0/cache/@atlaskit-portal-npm-4.3.6-1df24c0563-ce39cd42c8.zip/node_modules/@atlaskit/portal/",\
-        "packageDependencies": [\
-          ["@atlaskit/portal", "virtual:97a3a9a576305afbb7266e4982f5b59c3ed847ae075847925434d38281ff41e6f529ce5c9beaf9e3c74173fe63935c557cda5711e05956fa14d4e3f97795b41f#npm:4.3.6"],\
-          ["@atlaskit/theme", "virtual:c72650afd8d8ecff5306990489065a4e0c34d2b88c4acd8d3577f92d5cf46b6fcfd28624afe640ea0bc70671a30a586d15077b1a64459cd4c0f76ed3d182f496#npm:12.6.2"],\
-          ["@babel/runtime", "npm:7.26.7"],\
-          ["@types/react", "npm:18.2.31"],\
-          ["@types/react-dom", null],\
-          ["react", "npm:18.2.0"],\
-          ["react-dom", null]\
-        ],\
-        "packagePeers": [\
-          "@types/react-dom",\
-          "@types/react",\
-          "react-dom",\
-          "react"\
-        ],\
-        "linkType": "HARD"\
       }],\
       ["virtual:c72650afd8d8ecff5306990489065a4e0c34d2b88c4acd8d3577f92d5cf46b6fcfd28624afe640ea0bc70671a30a586d15077b1a64459cd4c0f76ed3d182f496#npm:4.3.6", {\
         "packageLocation": "./.yarn/__virtual__/@atlaskit-portal-virtual-ae80aa6fe3/0/cache/@atlaskit-portal-npm-4.3.6-1df24c0563-ce39cd42c8.zip/node_modules/@atlaskit/portal/",\
@@ -1624,7 +1613,7 @@ const RAW_RUNTIME_STATE =
           ["react-fast-compare", "npm:3.2.1"],\
           ["react-focus-lock", "virtual:97a3a9a576305afbb7266e4982f5b59c3ed847ae075847925434d38281ff41e6f529ce5c9beaf9e3c74173fe63935c557cda5711e05956fa14d4e3f97795b41f#npm:2.9.6"],\
           ["react-node-resolver", "virtual:f5b2f259a1f7b5e4e2e194b78ca239915b189ec80912010cc5c48e53be2ecc77ff78b71b3f74b3bd11427226d21481ef734a5752eccef915d1b3cc422d1e5546#npm:1.0.1"],\
-          ["react-popper", "virtual:f5b2f259a1f7b5e4e2e194b78ca239915b189ec80912010cc5c48e53be2ecc77ff78b71b3f74b3bd11427226d21481ef734a5752eccef915d1b3cc422d1e5546#npm:2.3.0"],\
+          ["react-popper", "virtual:2a7514a80aaea42e8730cf9c8cf3ac79388a2d4aee63a89c9dd7733ea163027cf67ea8dbf83abd8bc378740b78303008fb0bbca9a5ad7382937f1a516560b70d#npm:2.3.0"],\
           ["react-select", "virtual:c72650afd8d8ecff5306990489065a4e0c34d2b88c4acd8d3577f92d5cf46b6fcfd28624afe640ea0bc70671a30a586d15077b1a64459cd4c0f76ed3d182f496#npm:5.7.7"],\
           ["react-uid", "virtual:781c7517dad21ee1e66387afa236477a168cc64ed34e1177db8e2d53fb875ee93326e1ea1b4811133f802b7f5b63e1b58a70197cfe9e7b082b736948afa22188#npm:2.3.2"],\
           ["shallow-equal", "npm:1.2.1"]\
@@ -1652,7 +1641,7 @@ const RAW_RUNTIME_STATE =
           ["@atlaskit/ds-explorations", "virtual:34afe99355a2c91b57581b5c29bdb337a33590e4b6965278f5edf5df77a27da763b55711d086a7a5f4f22563cb869102809cedece2d8ca2dd13c1636edbe9d38#npm:3.0.5"],\
           ["@atlaskit/ds-lib", "virtual:625e4332bd10062467729d3a11a551914998737567caaed7e3302dd8a9cc26393dfd3a322355f4b81992efe69bb54dc4d5c4de28789d771c47136fc19a8d8c5f#npm:2.2.0"],\
           ["@atlaskit/icon", "virtual:c72650afd8d8ecff5306990489065a4e0c34d2b88c4acd8d3577f92d5cf46b6fcfd28624afe640ea0bc70671a30a586d15077b1a64459cd4c0f76ed3d182f496#npm:21.12.7"],\
-          ["@atlaskit/menu", "virtual:34afe99355a2c91b57581b5c29bdb337a33590e4b6965278f5edf5df77a27da763b55711d086a7a5f4f22563cb869102809cedece2d8ca2dd13c1636edbe9d38#npm:2.1.1"],\
+          ["@atlaskit/menu", "virtual:c72650afd8d8ecff5306990489065a4e0c34d2b88c4acd8d3577f92d5cf46b6fcfd28624afe640ea0bc70671a30a586d15077b1a64459cd4c0f76ed3d182f496#npm:2.1.1"],\
           ["@atlaskit/motion", "virtual:97a3a9a576305afbb7266e4982f5b59c3ed847ae075847925434d38281ff41e6f529ce5c9beaf9e3c74173fe63935c557cda5711e05956fa14d4e3f97795b41f#npm:1.5.1"],\
           ["@atlaskit/primitives", "virtual:aa65a5c8f1ea7128ce7b065dd1f08989c6ac432f5bb7c28461fd452aca3d093222dcc41486a6a44285adabe2bb68d2160f879932a2679fd8148384686cb01e74#npm:1.6.7"],\
           ["@atlaskit/side-navigation", "virtual:c72650afd8d8ecff5306990489065a4e0c34d2b88c4acd8d3577f92d5cf46b6fcfd28624afe640ea0bc70671a30a586d15077b1a64459cd4c0f76ed3d182f496#npm:3.0.0"],\
@@ -1661,10 +1650,14 @@ const RAW_RUNTIME_STATE =
           ["@babel/runtime", "npm:7.26.7"],\
           ["@emotion/react", "virtual:c72650afd8d8ecff5306990489065a4e0c34d2b88c4acd8d3577f92d5cf46b6fcfd28624afe640ea0bc70671a30a586d15077b1a64459cd4c0f76ed3d182f496#npm:11.11.1"],\
           ["@types/react", "npm:18.2.31"],\
-          ["react", "npm:18.2.0"]\
+          ["@types/react-dom", "npm:18.2.14"],\
+          ["react", "npm:18.2.0"],\
+          ["react-dom", "virtual:c72650afd8d8ecff5306990489065a4e0c34d2b88c4acd8d3577f92d5cf46b6fcfd28624afe640ea0bc70671a30a586d15077b1a64459cd4c0f76ed3d182f496#npm:18.2.0"]\
         ],\
         "packagePeers": [\
+          "@types/react-dom",\
           "@types/react",\
+          "react-dom",\
           "react"\
         ],\
         "linkType": "HARD"\
@@ -31843,17 +31836,17 @@ const RAW_RUNTIME_STATE =
         ],\
         "linkType": "SOFT"\
       }],\
-      ["virtual:71172b75fd34d2e5c5dd84b9222d39c47f7032ff47cd9713725abea4dbcb601ef612a0866c175fe841f956095d78bb08cd83ab1607fb87bb47241517010cf68d#npm:2.3.0", {\
-        "packageLocation": "./.yarn/__virtual__/react-popper-virtual-de8f447bed/0/cache/react-popper-npm-2.3.0-1045578379-2afc495479.zip/node_modules/react-popper/",\
+      ["virtual:2a7514a80aaea42e8730cf9c8cf3ac79388a2d4aee63a89c9dd7733ea163027cf67ea8dbf83abd8bc378740b78303008fb0bbca9a5ad7382937f1a516560b70d#npm:2.3.0", {\
+        "packageLocation": "./.yarn/__virtual__/react-popper-virtual-0266e10c5a/0/cache/react-popper-npm-2.3.0-1045578379-2afc495479.zip/node_modules/react-popper/",\
         "packageDependencies": [\
           ["@popperjs/core", "npm:2.11.7"],\
           ["@types/popperjs__core", null],\
           ["@types/react", "npm:18.2.31"],\
-          ["@types/react-dom", null],\
+          ["@types/react-dom", "npm:18.2.14"],\
           ["react", "npm:18.2.0"],\
-          ["react-dom", null],\
+          ["react-dom", "virtual:c72650afd8d8ecff5306990489065a4e0c34d2b88c4acd8d3577f92d5cf46b6fcfd28624afe640ea0bc70671a30a586d15077b1a64459cd4c0f76ed3d182f496#npm:18.2.0"],\
           ["react-fast-compare", "npm:3.2.1"],\
-          ["react-popper", "virtual:71172b75fd34d2e5c5dd84b9222d39c47f7032ff47cd9713725abea4dbcb601ef612a0866c175fe841f956095d78bb08cd83ab1607fb87bb47241517010cf68d#npm:2.3.0"],\
+          ["react-popper", "virtual:2a7514a80aaea42e8730cf9c8cf3ac79388a2d4aee63a89c9dd7733ea163027cf67ea8dbf83abd8bc378740b78303008fb0bbca9a5ad7382937f1a516560b70d#npm:2.3.0"],\
           ["warning", "npm:4.0.3"]\
         ],\
         "packagePeers": [\
@@ -31866,17 +31859,17 @@ const RAW_RUNTIME_STATE =
         ],\
         "linkType": "HARD"\
       }],\
-      ["virtual:f5b2f259a1f7b5e4e2e194b78ca239915b189ec80912010cc5c48e53be2ecc77ff78b71b3f74b3bd11427226d21481ef734a5752eccef915d1b3cc422d1e5546#npm:2.3.0", {\
-        "packageLocation": "./.yarn/__virtual__/react-popper-virtual-e99cc503b2/0/cache/react-popper-npm-2.3.0-1045578379-2afc495479.zip/node_modules/react-popper/",\
+      ["virtual:71172b75fd34d2e5c5dd84b9222d39c47f7032ff47cd9713725abea4dbcb601ef612a0866c175fe841f956095d78bb08cd83ab1607fb87bb47241517010cf68d#npm:2.3.0", {\
+        "packageLocation": "./.yarn/__virtual__/react-popper-virtual-de8f447bed/0/cache/react-popper-npm-2.3.0-1045578379-2afc495479.zip/node_modules/react-popper/",\
         "packageDependencies": [\
           ["@popperjs/core", "npm:2.11.7"],\
           ["@types/popperjs__core", null],\
           ["@types/react", "npm:18.2.31"],\
-          ["@types/react-dom", "npm:18.2.14"],\
+          ["@types/react-dom", null],\
           ["react", "npm:18.2.0"],\
-          ["react-dom", "virtual:c72650afd8d8ecff5306990489065a4e0c34d2b88c4acd8d3577f92d5cf46b6fcfd28624afe640ea0bc70671a30a586d15077b1a64459cd4c0f76ed3d182f496#npm:18.2.0"],\
+          ["react-dom", null],\
           ["react-fast-compare", "npm:3.2.1"],\
-          ["react-popper", "virtual:f5b2f259a1f7b5e4e2e194b78ca239915b189ec80912010cc5c48e53be2ecc77ff78b71b3f74b3bd11427226d21481ef734a5752eccef915d1b3cc422d1e5546#npm:2.3.0"],\
+          ["react-popper", "virtual:71172b75fd34d2e5c5dd84b9222d39c47f7032ff47cd9713725abea4dbcb601ef612a0866c175fe841f956095d78bb08cd83ab1607fb87bb47241517010cf68d#npm:2.3.0"],\
           ["warning", "npm:4.0.3"]\
         ],\
         "packagePeers": [\

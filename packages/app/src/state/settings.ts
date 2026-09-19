@@ -37,6 +37,34 @@ export const settingsState = atomWithStorage<Settings>(
   storage,
 );
 
+/**
+ * Copies the legacy TypeSafe plugin key into the first-party Classifier
+ * namespace. The legacy value is retained so hosts that have not persisted
+ * this migration can still execute existing projects.
+ */
+export function migrateLegacyTypeSafeClassifierSettings(settings: Settings): Settings {
+  const legacyApiKey = settings.pluginSettings?.typesafe?.typesafeApiKey;
+  const firstPartyApiKey = settings.classifierProviders?.jev?.apiKey;
+  if (
+    typeof legacyApiKey !== 'string' ||
+    legacyApiKey.trim() === '' ||
+    (typeof firstPartyApiKey === 'string' && firstPartyApiKey.trim() !== '')
+  ) {
+    return settings;
+  }
+
+  return {
+    ...settings,
+    classifierProviders: {
+      ...settings.classifierProviders,
+      jev: {
+        ...settings.classifierProviders?.jev,
+        apiKey: legacyApiKey,
+      },
+    },
+  };
+}
+
 export type EditorPreferences = {
   applyDefaultNodeColors: boolean;
   openNodeSettingsOnCreate: boolean;

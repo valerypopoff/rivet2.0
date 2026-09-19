@@ -8,7 +8,11 @@ import {
 import useAsyncEffect from 'use-async-effect';
 import { RivetApp } from './RivetApp';
 import { useAtomValue, useSetAtom } from 'jotai';
-import { clearLegacyInvalidOpenAiApiKeyPlaceholder, settingsState } from '../state/settings.js';
+import {
+  clearLegacyInvalidOpenAiApiKeyPlaceholder,
+  migrateLegacyTypeSafeClassifierSettings,
+  settingsState,
+} from '../state/settings.js';
 import { useDependsOnPlugins } from '../hooks/useDependsOnPlugins.js';
 import { fillMissingSettingsFromEnvironmentVariables } from '../utils/tauri.js';
 import { prefetchChatV2DiscoveredModelOptions } from '../utils/chatV2ModelCatalog.js';
@@ -18,11 +22,18 @@ import { evaluationLibraryState, evaluationLibrarySyncIssueState } from '../stat
 import { handleError } from '../utils/errorHandling.js';
 import { describeEvaluationLibraryRemoteChange } from '../utils/evaluationLibraryRemoteChange.js';
 import { toast } from 'react-toastify';
+import { graphState } from '../state/graph.js';
+import { openedProjectSnapshotsState, projectState } from '../state/savedGraphs.js';
+import {
+  normalizeClassifierGraphForAppState,
+  normalizeClassifierProjectForAppState,
+} from '../utils/classifierProjectMigration.js';
 
 // Storage-backed atoms read synchronously on mount, so this subtree must stay behind the
 // async hybrid-storage bootstrap or settings/theme atoms can lock in default values.
 const InitializedRivetApp = ({ children }: { children?: ReactNode }) => {
   const settings = useAtomValue(settingsState);
+  const setSettings = useSetAtom(settingsState);
   const plugins = useDependsOnPlugins();
   const environmentProvider = useEnvironmentProvider();
   const evaluationStore = useEvaluationStore();
@@ -30,9 +41,48 @@ const InitializedRivetApp = ({ children }: { children?: ReactNode }) => {
   const setEvaluationLibrary = useSetAtom(evaluationLibraryState);
   const evaluationLibrarySyncIssue = useAtomValue(evaluationLibrarySyncIssueState);
   const setEvaluationLibrarySyncIssue = useSetAtom(evaluationLibrarySyncIssueState);
+  const project = useAtomValue(projectState);
+  const graph = useAtomValue(graphState);
+  const setProject = useSetAtom(projectState);
+  const setGraph = useSetAtom(graphState);
+  const setOpenedProjectSnapshots = useSetAtom(openedProjectSnapshotsState);
+  const [workspaceMigrationReady, setWorkspaceMigrationReady] = useState(false);
   const pendingLibraryWrite = useRef(Promise.resolve());
   const lastObservedLibrary = useRef(evaluationLibrary);
   const evaluationLibrarySyncIssueId = useRef<string>();
+
+  useEffect(() => {
+    const migrated = migrateLegacyTypeSafeClassifierSettings(settings);
+    if (migrated !== settings) setSettings(migrated);
+  }, [setSettings, settings]);
+
+  useEffect(() => {
+    // Browser storage and workspace-host snapshots are object-valued, unlike
+    // project files. Repair every persisted project surface before mounting
+    // the editor, including inactive tabs that could otherwise resurrect an
+    // old node type after a later tab switch.
+    const normalizedProject = normalizeClassifierProjectForAppState(project);
+    if (normalizedProject !== project) setProject(normalizedProject);
+
+    const normalizedGraph = normalizeClassifierGraphForAppState(graph);
+    if (normalizedGraph !== graph) setGraph(normalizedGraph);
+
+    setOpenedProjectSnapshots((snapshots) => {
+      let changed = false;
+      const normalizedSnapshots = Object.fromEntries(
+        Object.entries(snapshots).map(([projectId, snapshot]) => {
+          const normalizedSnapshotProject = normalizeClassifierProjectForAppState(snapshot.project);
+          if (normalizedSnapshotProject !== snapshot.project) {
+            changed = true;
+            return [projectId, { ...snapshot, project: normalizedSnapshotProject }];
+          }
+          return [projectId, snapshot];
+        }),
+      );
+      return changed ? normalizedSnapshots : snapshots;
+    });
+    setWorkspaceMigrationReady(true);
+  }, [graph, project, setGraph, setOpenedProjectSnapshots, setProject]);
 
   useEffect(() => {
     if (!evaluationStore.subscribeLibrarySyncIssue) {
@@ -173,6 +223,10 @@ const InitializedRivetApp = ({ children }: { children?: ReactNode }) => {
       plugins,
     });
   }, [environmentProvider, plugins, settings]);
+
+  if (!workspaceMigrationReady) {
+    return null;
+  }
 
   return (
     <>

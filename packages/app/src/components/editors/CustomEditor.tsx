@@ -15,6 +15,9 @@ import { GetStoredValueSelectorEditor } from './custom/GetStoredValueSelectorEdi
 import { KnowledgeStoreSelectorEditor } from './custom/KnowledgeStoreSelectorEditor';
 import { LLMChatV2ConfigurationEditor } from './custom/LLMChatV2ConfigurationEditor';
 import { LLMChatV2CredentialNamesEditor } from './custom/LLMChatV2CredentialNamesEditor';
+import { ClassifierCredentialNamesEditor } from './custom/ClassifierCredentialNamesEditor';
+import { ClassifierScoreCriteriaEditor } from './custom/ClassifierScoreCriteriaEditor';
+import { ClassifierChoiceCriteriaEditor } from './custom/ClassifierChoiceCriteriaEditor';
 
 export const CustomEditor: FC<
   SharedEditorProps & {
@@ -33,6 +36,9 @@ export const CustomEditor: FC<
     .with('TextNodeAiAssist', () => <TextNodeAiAssistEditor {...props} editor={editor} />)
     .with('LLMChatV2Configuration', () => <LLMChatV2ConfigurationEditor {...props} editor={editor} />)
     .with('LLMChatV2CredentialNames', () => <LLMChatV2CredentialNamesEditor {...props} editor={editor} />)
+    .with('ClassifierCredentialNames', () => <ClassifierCredentialNamesEditor {...props} editor={editor} />)
+    .with('ClassifierScoreCriteria', () => <ClassifierScoreCriteriaEditor {...props} editor={editor} />)
+    .with('ClassifierChoiceCriteria', () => <ClassifierChoiceCriteriaEditor {...props} editor={editor} />)
     .with('LLMChatV2ModelCatalog', () => <LLMChatV2ModelCatalogEditor {...props} editor={editor} />)
     .with('GetGlobalVariableSelector', () => <GetGlobalVariableSelectorEditor {...props} editor={editor} />)
     .with('GetStoredValueSelector', () => <GetStoredValueSelectorEditor {...props} editor={editor} />)

@@ -316,7 +316,7 @@ test('renders an incomplete terminal duration as an accessible unavailable value
     const rootDuration = dom.window.document.querySelector<HTMLElement>(
       '[aria-label="Duration unavailable because the recording has no historical start"]',
     );
-    assert.equal(rootDuration?.textContent, '/ —');
+    assert.equal(rootDuration?.textContent?.trim(), '/ —');
   } finally {
     await act(async () => root.unmount());
     restore();
@@ -484,6 +484,7 @@ function installDomGlobals(dom: JSDOM): () => void {
     window: globalThis.window,
     document: globalThis.document,
     navigator: globalThis.navigator,
+    Element: globalThis.Element,
     HTMLElement: globalThis.HTMLElement,
     ResizeObserver: globalThis.ResizeObserver,
     requestAnimationFrame: globalThis.requestAnimationFrame,
@@ -494,6 +495,7 @@ function installDomGlobals(dom: JSDOM): () => void {
     window: { configurable: true, value: dom.window },
     document: { configurable: true, value: dom.window.document },
     navigator: { configurable: true, value: dom.window.navigator },
+    Element: { configurable: true, value: dom.window.Element },
     HTMLElement: { configurable: true, value: dom.window.HTMLElement },
     ResizeObserver: {
       configurable: true,
@@ -514,17 +516,29 @@ function installDomGlobals(dom: JSDOM): () => void {
     cancelAnimationFrame: { configurable: true, value: (id: number) => dom.window.clearTimeout(id) },
     IS_REACT_ACT_ENVIRONMENT: { configurable: true, value: true },
   });
+  Object.defineProperties(dom.window, {
+    requestAnimationFrame: {
+      configurable: true,
+      value: (callback: FrameRequestCallback) => dom.window.setTimeout(() => callback(Date.now()), 0),
+    },
+    cancelAnimationFrame: { configurable: true, value: (id: number) => dom.window.clearTimeout(id) },
+  });
   Object.defineProperty(dom.window.HTMLElement.prototype, 'scrollTo', {
     configurable: true,
     value(options: ScrollToOptions) {
       if (typeof options.top === 'number') this.scrollTop = options.top;
     },
   });
+  Object.defineProperties(dom.window.HTMLElement.prototype, {
+    attachEvent: { configurable: true, value: () => undefined },
+    detachEvent: { configurable: true, value: () => undefined },
+  });
   return () => {
     Object.defineProperties(globalThis, {
       window: { configurable: true, value: previous.window },
       document: { configurable: true, value: previous.document },
       navigator: { configurable: true, value: previous.navigator },
+      Element: { configurable: true, value: previous.Element },
       HTMLElement: { configurable: true, value: previous.HTMLElement },
       ResizeObserver: { configurable: true, value: previous.ResizeObserver },
       requestAnimationFrame: { configurable: true, value: previous.requestAnimationFrame },

@@ -470,7 +470,7 @@ const styles = css`
     font-weight: 700;
     line-height: 1.2;
     text-align: center;
-    transform: translateY(-1px);
+    transform: translateY(1px);
   }
 
   .graph-folder-count > span {
@@ -837,21 +837,14 @@ export const GraphList: FC = memo(() => {
     return savedGraphs.find((savedGraph) => savedGraph.metadata?.id === currentGraphId)?.metadata?.name;
   }, [graph.metadata?.id, savedGraphs]);
 
-  const handleGraphListMouseDown = useStableCallback((e: MouseEvent<HTMLDivElement>) => {
-    if (e.button !== 0) {
-      return;
-    }
-
-    if (isInteractiveGraphListTarget(e.target)) {
-      return;
-    }
-
-    graphListContainerRef.current?.focus({ preventScroll: true });
-  });
-
   const handleGraphListMouseDownCapture = useStableCallback((e: MouseEvent<HTMLDivElement>) => {
     if (e.button !== 0) {
       e.preventDefault();
+      return;
+    }
+
+    if (!isInteractiveGraphListTarget(e.target)) {
+      graphListContainerRef.current?.focus({ preventScroll: true });
     }
   });
 
@@ -1073,7 +1066,6 @@ export const GraphList: FC = memo(() => {
         className="graph-list-container"
         onContextMenu={handleSidebarContextMenu}
         onKeyDown={handleGraphListKeyDown}
-        onMouseDown={handleGraphListMouseDown}
         onMouseDownCapture={handleGraphListMouseDownCapture}
         ref={graphListContainerRef}
         tabIndex={-1}

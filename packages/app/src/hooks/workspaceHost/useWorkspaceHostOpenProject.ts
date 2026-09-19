@@ -64,7 +64,7 @@ export function useWorkspaceHostOpenProject() {
           data: normalized.data,
           fsPath: snapshot.path,
           openedGraph: snapshot.openedGraph,
-          graphToLoad: snapshot.graphToLoad,
+          graphToLoad: normalized.graphToLoad,
           evaluationData: snapshot.evaluationData,
           evaluationDatasets: snapshot.evaluationDatasets,
           executorMode,
@@ -102,7 +102,7 @@ export function useWorkspaceHostOpenProject() {
             },
             {
               fsPath: snapshot.path,
-              openedGraph: snapshot.openedGraph ?? snapshot.graphToLoad?.metadata?.id,
+              openedGraph: snapshot.openedGraph ?? normalized.graphToLoad?.metadata?.id,
               ...(nextExecutorMode ? { executorMode: nextExecutorMode } : {}),
             },
           );

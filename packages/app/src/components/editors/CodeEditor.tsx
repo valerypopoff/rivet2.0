@@ -223,10 +223,20 @@ export const DefaultCodeEditor: FC<
   const helperMessage = getHelperMessage(editorDef, node.data);
   const postEditorHelperMessage = getPostEditorHelperMessage(editorDef, node.data);
   const nodeLatest = useLatest(node);
+  const isMounted = useRef(true);
 
   const debouncedOnChange = useDebounceFn<(node: ChartNode) => void>(onChange, { wait: 100 });
 
+  useEffect(() => {
+    isMounted.current = true;
+    return () => {
+      isMounted.current = false;
+      debouncedOnChange.cancel();
+    };
+  }, [debouncedOnChange]);
+
   const onEditorChange = (newText: string) => {
+    if (!isMounted.current) return;
     const currentNode = nodeLatest.current;
     if (!currentNode) return;
     debouncedOnChange.run({
@@ -239,7 +249,9 @@ export const DefaultCodeEditor: FC<
   };
 
   const editorProps: CodeEditorProps = {
-    value: (node.data as Record<string, unknown> | undefined)?.[editorDef.dataKey] as string | undefined,
+    value:
+      ((node.data as Record<string, unknown> | undefined)?.[editorDef.dataKey] as string | undefined) ??
+      editorDef.defaultValue,
     onChange: onEditorChange,
     isReadonly,
     isDisabled,

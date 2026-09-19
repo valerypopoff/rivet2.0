@@ -27,6 +27,7 @@ export function resolveProcessSettings(settings: Settings = {}, fallbacks: Parti
     openAiEndpoint: settings.openAiEndpoint ?? fallbacks.openAiEndpoint ?? '',
     pluginEnv: settings.pluginEnv ?? fallbacks.pluginEnv ?? {},
     pluginSettings: settings.pluginSettings ?? {},
+    classifierProviders: settings.classifierProviders ?? fallbacks.classifierProviders ?? {},
     recordingPlaybackLatency: settings.recordingPlaybackLatency ?? 1000,
     defaultNodeColors: settings.defaultNodeColors ?? false,
     openNodeSettingsOnCreate: settings.openNodeSettingsOnCreate ?? true,

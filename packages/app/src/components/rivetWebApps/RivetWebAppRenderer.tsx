@@ -240,11 +240,15 @@ function useUiGraphChatBrowserPersistence(
   }, [interactionController, persistence, uiGraph]);
 
   const reset = useCallback(() => {
+    const chatState = getUiGraphChatPersistentState(uiGraph, interactionController.getSnapshot().state);
     isRestoringRef.current = true;
     interactionController.reset();
+    if (Object.keys(chatState).length > 0) {
+      interactionController.updateStatePatch(chatState);
+    }
     isRestoringRef.current = false;
     void persistence.saveChatState(interactionController.getSnapshot().state).catch(() => undefined);
-  }, [interactionController, persistence]);
+  }, [interactionController, persistence, uiGraph]);
 
   return { hydrated, persistence, reset, warning };
 }

@@ -44,6 +44,13 @@ export const collapsiblePanelStyles = css`
     background: var(--settings-collapsible-body-bg);
   }
 
+  > .collapsible-panel-static-content:first-child {
+    border: 1px solid var(--settings-collapsible-border);
+    border-radius: var(--collapsible-panel-radius);
+    corner-shape: squircle;
+    background: var(--settings-collapsible-body-bg);
+  }
+
   .collapsible-panel-toggle-area {
     display: flex;
     flex-direction: column;
@@ -163,12 +170,20 @@ export const CollapsiblePanel: FC<{
 export const StaticPanel: FC<{
   children: ReactNode;
   className?: string;
-  label: ReactNode;
+  /** Omit when an enclosing section already supplies the visible heading. */
+  label?: ReactNode;
 }> = ({ children, className, label }) => (
-  <div className={className} css={collapsiblePanelStyles} role="group" aria-label={typeof label === 'string' ? label : undefined}>
-    <div className="collapsible-panel-toggle-container open">
-      <div className="collapsible-panel-static-label">{label}</div>
-    </div>
+  <div
+    className={className}
+    css={collapsiblePanelStyles}
+    role="group"
+    aria-label={typeof label === 'string' && label.trim() ? label : undefined}
+  >
+    {label ? (
+      <div className="collapsible-panel-toggle-container open">
+        <div className="collapsible-panel-static-label">{label}</div>
+      </div>
+    ) : null}
     <div className="collapsible-panel-static-content">{children}</div>
   </div>
 );

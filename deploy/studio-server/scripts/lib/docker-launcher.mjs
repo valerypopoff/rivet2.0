@@ -144,6 +144,16 @@ export function composeProjectFingerprintMatches(actualFingerprint, expectedFing
   return typeof expectedFingerprint === 'string' && actualFingerprint === expectedFingerprint;
 }
 
+/**
+ * Esbuild reports this exact kernel error when Docker Desktop's host bind mount
+ * temporarily cannot read a workspace file. It is deliberately narrower than
+ * generic build-error matching: a TypeScript/import failure must never cause
+ * the launcher to tear down a developer's stack.
+ */
+export function hasBindMountInputOutputError(output) {
+  return typeof output === 'string' && /\binput\/output error\b/i.test(output);
+}
+
 export async function composeProjectInputFingerprint(options) {
   const {
     composeConfigFiles,

@@ -15,6 +15,9 @@ export interface Settings<PluginSettings = Record<string, Record<string, unknown
     [key: string]: string | undefined;
   };
 
+  /** First-party credentials used by built-in classifier providers. */
+  classifierProviders?: Record<string, { apiKey?: string | undefined }>;
+
   // Shared LLM provider settings. Legacy OpenAI-backed nodes still consume the OpenAI fields directly.
   openAiApiKey?: string;
   openAiKey?: string;

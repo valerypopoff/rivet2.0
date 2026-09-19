@@ -4,7 +4,7 @@ import type {
   WorkflowProjectItem,
   WorkflowTreeResponse,
 } from '../../studio-server-shared/workflow-types';
-import { authenticateIfNeeded, waitForDashboardReady } from './helpers/hostedEditorObserve';
+import { authenticateIfNeeded, mockHostedEditorBootstrap, waitForDashboardReady } from './helpers/hostedEditorObserve';
 
 function createProjectContents({
   graphFolderName,
@@ -71,7 +71,7 @@ async function expectWrappedLabel(locator: Locator): Promise<void> {
   expect(metrics.height).toBeGreaterThan(metrics.lineHeight * 1.5);
 }
 
-async function expectFirstLineMarkAlignment(mark: Locator, label: Locator): Promise<void> {
+async function expectFirstLineMarkAlignment(mark: Locator, label: Locator, description: string): Promise<void> {
   await expect(mark).toBeVisible();
   const [markBox, labelMetrics] = await Promise.all([
     mark.boundingBox(),
@@ -87,10 +87,11 @@ async function expectFirstLineMarkAlignment(mark: Locator, label: Locator): Prom
   expect(markBox).not.toBeNull();
   const markCenter = markBox!.y + markBox!.height / 2;
   const firstLineCenter = labelMetrics.top + labelMetrics.lineHeight / 2;
-  expect(Math.abs(markCenter - firstLineCenter)).toBeLessThanOrEqual(3);
+  expect(Math.abs(markCenter - firstLineCenter), description).toBeLessThanOrEqual(3);
 }
 
 async function installWrappingFixture(page: Page, tree: WorkflowTreeResponse, projectContents: string): Promise<void> {
+  await mockHostedEditorBootstrap(page);
   await page.route('**/api/workflows/tree', async (route) => {
     await route.fulfill({
       status: 200,
@@ -129,9 +130,9 @@ test('wraps long project, graph, and folder names in the server and editor sideb
   const project: WorkflowProjectItem = {
     id: 'sidebar-name-wrapping-project',
     name: projectName,
-    fileName: 'sidebar-name-wrapping-project.rivet-project',
-    relativePath: `${serverFolderName}/sidebar-name-wrapping-project.rivet-project`,
-    absolutePath: `/workflows/${serverFolderName}/sidebar-name-wrapping-project.rivet-project`,
+    fileName: `${projectName}.rivet-project`,
+    relativePath: `${serverFolderName}/${projectName}.rivet-project`,
+    absolutePath: `/workflows/${serverFolderName}/${projectName}.rivet-project`,
     updatedAt: '2026-09-19T00:00:00.000Z',
     settings: {
       status: 'published',
@@ -168,13 +169,21 @@ test('wraps long project, graph, and folder names in the server and editor sideb
   const serverFolderRow = page.locator('.workflow-library-panel .folder-row', { hasText: serverFolderName });
   const serverFolderLabel = serverFolderRow.locator('.label');
   await expectWrappedLabel(serverFolderLabel);
-  await expectFirstLineMarkAlignment(serverFolderRow.locator('.folder-project-count'), serverFolderLabel);
+  await expectFirstLineMarkAlignment(
+    serverFolderRow.locator('.folder-project-count'),
+    serverFolderLabel,
+    'Server folder count aligns with its first label line',
+  );
   await serverFolderRow.click();
 
   const serverProjectRow = page.locator('.workflow-library-panel .project-row', { hasText: projectName });
   const serverProjectLabel = serverProjectRow.locator('.label');
   await expectWrappedLabel(serverProjectLabel);
-  await expectFirstLineMarkAlignment(serverProjectRow.locator('.project-status-dot'), serverProjectLabel);
+  await expectFirstLineMarkAlignment(
+    serverProjectRow.locator('.project-status-dot'),
+    serverProjectLabel,
+    'Server project status aligns with its first label line',
+  );
   await serverProjectRow.dblclick();
 
   const activeProjectName = page.locator('.workflow-library-panel .active-project-name');
@@ -189,7 +198,11 @@ test('wraps long project, graph, and folder names in the server and editor sideb
   await expectWrappedLabel(editor.locator('.project-tree-header-title'));
   const editorFolderLabel = editor.locator('.folder-graph-item .graph-item-name-text', { hasText: graphFolderName });
   await expectWrappedLabel(editorFolderLabel);
-  await expectFirstLineMarkAlignment(editor.locator('.folder-graph-item .graph-folder-count'), editorFolderLabel);
+  await expectFirstLineMarkAlignment(
+    editor.locator('.folder-graph-item .graph-folder-count'),
+    editorFolderLabel,
+    'Editor folder count aligns with its first label line',
+  );
 
   const editorGraphLabel = editor.locator('.graph-item:not(.folder-graph-item) .graph-item-name-text', {
     hasText: graphName,
@@ -198,6 +211,7 @@ test('wraps long project, graph, and folder names in the server and editor sideb
   await expectFirstLineMarkAlignment(
     editor.locator('.graph-item[data-graphid="main"] .graph-main-icon'),
     editorGraphLabel,
+    'Editor graph icon aligns with its first label line',
   );
   await expectWrappedLabel(editor.locator('.ui-graph-entry-name', { hasText: uiGraphName }));
 });

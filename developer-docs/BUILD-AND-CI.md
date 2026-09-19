@@ -278,7 +278,14 @@ locally. CI passes `--shard-index <zero-based-index> --shard-count 4` to the
 root script, which sorts discovered tests and launches only the selected subset
 through a direct Node child process. Do not replace this with shell globbing or
 one expanded full-suite command; every shard must stay deterministic and every
-test must belong to exactly one shard.
+test must belong to exactly one shard. The explicit shards include `.tsx` tests
+that Node/tsx discovery historically missed. Both App test commands preload
+`packages/app/scripts/register-test-browser-assets.mjs`, which supplies Node-only
+stand-ins for Vite-managed asset imports and the browser-oriented component
+entry points whose CommonJS shape Node exposes differently from Vite. Its
+regression test exercises both local assets and real Yarn PnP package imports.
+Keep that preload test-only; application builds and runtime imports must
+continue through Vite's real asset pipeline.
 
 ### `yarn test:style`
 
@@ -489,9 +496,12 @@ build output.
 The root `.yarnrc.yml` may also contain narrowly scoped `packageExtensions` for
 upstream packages with undeclared runtime peers. `react-node-resolver` must
 declare `react` and `react-dom` as peers because Atlaskit Select loads both at
-runtime; keep that extension while Rivet uses Atlaskit Select under strict PnP.
-After changing an extension, rerun Yarn install and commit the resulting tracked
-PnP loader update.
+runtime. Atlaskit's inline dialog, modal dialog, popper, and side-navigation
+packages must expose `react-dom` to the peer-dependent packages they own; Vite's
+bundler can conceal those missing declarations, but strict PnP component tests
+cannot. Keep those extensions while Rivet uses these Atlaskit versions. After
+changing an extension, rerun Yarn install and commit the resulting tracked PnP
+loader update.
 
 ### `yarn lint`
 

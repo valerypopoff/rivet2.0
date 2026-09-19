@@ -47,9 +47,43 @@ const styles = css`
     min-height: 0;
   }
 
+  &.editor-section {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    width: 100%;
+    margin-top: calc(8px * var(--ui-font-scale));
+  }
+
+  .editor-section-heading {
+    margin: 0 0 calc(14px * var(--ui-font-scale));
+    color: var(--grey-lightest);
+    font-size: var(--ui-font-size-xl);
+    font-weight: 700;
+    line-height: 1.25;
+  }
+
+  .editor-section-helper {
+    margin: calc(-8px * var(--ui-font-scale)) 0 calc(12px * var(--ui-font-scale));
+  }
+
+  .editor-section-content {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    width: 100%;
+    align-content: start;
+    gap: 0;
+    flex: 1 1 auto;
+    min-height: 0;
+  }
+
   .editor-group > .row:not(:last-child),
   .editor-group > .node-editor-code-ai-pair:not(:last-child),
-  .editor-group > .inline-editor-row:not(:last-child) {
+  .editor-group > .inline-editor-row:not(:last-child),
+  .editor-section-content > .row:not(:last-child),
+  .editor-section-content > .node-editor-code-ai-pair:not(:last-child),
+  .editor-section-content > .inline-editor-row:not(:last-child) {
     margin-bottom: var(--node-editor-row-gap, calc(24px * var(--ui-font-scale)));
   }
 `;
@@ -83,7 +117,7 @@ export const EditorGroup: FC<
     editorKey: string;
   }
 > = ({ editor, editorKey, ...sharedProps }) => {
-  const { editors, label, hideIf, defaultOpen = false, toggleDataKey } = editor;
+  const { editors, label, hideIf, presentation, defaultOpen = false, toggleDataKey } = editor;
   const [nodeEditorGroupOpen, setNodeEditorGroupOpenState] = useAtom(nodeEditorGroupOpenState);
 
   if (hideIf?.(sharedProps.node.data)) {
@@ -110,6 +144,14 @@ export const EditorGroup: FC<
     );
   };
   const renderEditorField = (editor: (typeof editors)[number], index: number) => {
+    // Code editors are wrapped with an AI-assist bridge below. If a
+    // conditional editor is hidden, returning before that wrapper is crucial:
+    // the bridge itself owns a visible collapsed generator shell and would
+    // otherwise leave an empty-looking vertical gap in the group.
+    if (editor.hideIf?.(sharedProps.node.data)) {
+      return null;
+    }
+
     const isDisabled = editor.disableIf?.(sharedProps.node.data) || sharedProps.isDisabled;
     const childEditorKey = `${editorKey}/${getEditorListKey(editor, index)}`;
 
@@ -141,8 +183,8 @@ export const EditorGroup: FC<
       />
     );
   };
-  const renderedContent = (
-    <div className="editor-group">
+  const renderContent = (className: string) => (
+    <div className={className}>
       {getEditorRenderRows(editors).map((row) => {
         if (row.type === 'inline') {
           return (
@@ -158,6 +200,25 @@ export const EditorGroup: FC<
       })}
     </div>
   );
+  if (presentation === 'section') {
+    const headingId = `node-editor-section-${sharedProps.node.id}-${editorKey}`;
+
+    return (
+      <section css={styles} className="editor-section" aria-labelledby={headingId}>
+        <h2 id={headingId} className="editor-section-heading">
+          {label}
+        </h2>
+        {helperMessage ? (
+          <div className="editor-section-helper">
+            <HelperMessage>{helperMessage}</HelperMessage>
+          </div>
+        ) : null}
+        {renderContent('editor-section-content')}
+      </section>
+    );
+  }
+
+  const renderedContent = renderContent('editor-group');
 
   if (toggleDataKey) {
     const toggleId = `editor-group-toggle-${sharedProps.node.id}-${String(toggleDataKey)}`;

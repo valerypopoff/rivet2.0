@@ -12,6 +12,7 @@ import {
   type RemoteRunRequestId,
   type OutgoingMessageMap,
   decodeDebuggerTransportSentinels,
+  normalizeClassifierProject,
 } from '@valerypopoff/rivet2-core';
 import { match } from 'ts-pattern';
 import Emittery from 'emittery';
@@ -212,6 +213,10 @@ export function startDebuggerServer(
                 settings: Settings;
                 datasets: string;
               };
+              // Remote clients send an already-objectified project instead of
+              // serialized YAML. Normalize here before the sidecar resolves
+              // project plugins so legacy Jev graphs work without TypeSafe.
+              normalizeClassifierProject(project);
               const debuggerState = getDebuggerStateForClient(socket, options);
               debuggerState.uploadedProject = project;
               debuggerState.settings = settings;

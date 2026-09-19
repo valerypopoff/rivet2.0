@@ -564,6 +564,10 @@ const NodeCodeEditorWithAiAssist: FC<
   codeEditor,
   codeEditorIndex,
 }) => {
+  if (codeEditor.hideIf?.(node.data)) {
+    return null;
+  }
+
   return (
     <CodeEditorAiAssistBridge
       codeEditor={(footerLeftAction) => (
@@ -603,6 +607,10 @@ const NodeCodeEditorWithGenericAiAssist: FC<
     onRefreshEditors: () => void;
   }
 > = ({ node, onChange, isReadonly, onClose, onRefreshEditors, codeEditor, codeEditorIndex }) => {
+  if (codeEditor.hideIf?.(node.data)) {
+    return null;
+  }
+
   const isDisabled = codeEditor.disableIf?.(node.data) ?? false;
 
   return (
@@ -754,6 +762,13 @@ export const DefaultNodeEditor: FC<
               )}
             </div>
           );
+        }
+
+        // A Code editor gets an AI-assist bridge below. Do not create that
+        // visible wrapper for a conditionally hidden editor: the field itself
+        // would return null, but the bridge would still reserve a blank row.
+        if (row.editor.hideIf?.(node.data)) {
+          return null;
         }
 
         if (pairedAiAssistIndexes.has(row.index)) {

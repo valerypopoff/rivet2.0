@@ -1615,6 +1615,14 @@ describe('startDebuggerServer broadcast', () => {
 
     const projectA = makeUploadedProject('project-a', 'Project A');
     const projectB = makeUploadedProject('project-b', 'Project B');
+    projectA.plugins = [{ type: 'built-in', id: 'typesafe', name: 'TypeSafe AI (Jev)' }];
+    projectA.graphs[projectA.metadata.mainGraphId]!.nodes.push({
+      id: 'legacy-question' as NodeId,
+      type: 'jevNoulQuestion',
+      title: 'Jev Noul Question',
+      visualData: { x: 0, y: 0, width: 280 },
+      data: { questionId: 'legacy', instructions: 'Legacy?' },
+    } as unknown as ChartNode);
     const settingsA = { editorVersion: 'a' } as unknown as Settings;
     const settingsB = { editorVersion: 'b' } as unknown as Settings;
 
@@ -1633,6 +1641,11 @@ describe('startDebuggerServer broadcast', () => {
     });
     assert.deepEqual(getState(socketA as unknown as WebSocket).settings, settingsA);
     assert.deepEqual(getState(socketB as unknown as WebSocket).settings, settingsB);
+    assert.equal(getState(socketA as unknown as WebSocket).uploadedProject?.plugins?.some((plugin) => plugin.id === 'typesafe'), false);
+    assert.equal(
+      getState(socketA as unknown as WebSocket).uploadedProject?.graphs[projectA.metadata.mainGraphId]?.nodes[0]?.type,
+      'classifierQuestion',
+    );
 
     socketA.emit('message', Buffer.from('set-static-data:data-a:value-a'));
     await waitFor(() => {

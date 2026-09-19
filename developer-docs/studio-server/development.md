@@ -173,6 +173,19 @@ Operational note:
 - Docker dev mode bind-mounts the owning monorepo package sources. The API and
   executor consume built Rivet workspace exports, while the hosted web build
   aliases selected editor sources and hosted overrides through Vite.
+- A Docker Desktop/Windows host-file bridge failure can surface as esbuild
+  `input/output error` messages for many unrelated Core imports. Those imports
+  are not missing: Docker cannot read `/workspace`. The launcher makes a
+  read-only Core-source bind-mount probe before bringing up a new Docker dev
+  stack, and stops with a direct host-mount diagnostic instead of leaving proxy
+  `502` noise. If the bridge fails after a successful probe, the launcher
+  recreates the dev stack once; if that retry also has the exact kernel error,
+  it tears the failed stack down and reports the host-mount cause. Named volumes
+  and mounted workflow, recording, runtime-library, and app data are preserved.
+  Do not remove imports or rebuild dependency volumes to address such errors.
+  Restore Docker Desktop access to the checkout (restart Docker Desktop, or use
+  a checkout on the WSL filesystem), then rerun `yarn studio-server:dev`; it is
+  not a Core compilation error.
 - The hosted web package declares every browser dependency imported by its
   source graph directly. Keep those versions aligned with the owning Rivet
   workspaces instead of relying on incidental transitive dependencies.
@@ -344,7 +357,8 @@ The repo now includes a headed Playwright workflow for frontend debugging and de
 Current behavior:
 
 - `yarn studio-server:ui:observe` launches Chromium in headed mode with `slowMo`, trace capture, video capture, and HTML reporting enabled
-- `yarn studio-server:ui:ci` is intentionally separate from the interactive observer: it starts a fresh hosted Vite app, runs only `fullscreen-output-search-paging.spec.ts` and `sidebar-name-wrapping.spec.ts` headlessly, and retains trace/video/screenshots only on failure
+- `yarn studio-server:ui:ci` is intentionally separate from the interactive observer: it starts a fresh hosted Vite app bound explicitly to IPv4 `127.0.0.1`, runs only `fullscreen-output-search-paging.spec.ts` and `sidebar-name-wrapping.spec.ts` headlessly, and retains trace/video/screenshots only on failure. Keep Vite CLI options directly after `run dev`; an extra Yarn `--` separator prevents Vite from receiving the host binding and makes Playwright's IPv4 readiness probe time out. The configured `PLAYWRIGHT_CI_PORT` is also passed to Vite so the readiness probe and server cannot silently diverge.
+- Browser observations that seed a project in local browser storage must also use `mockHostedEditorBootstrap` for the read-only configuration and evaluation-library requests. This keeps the observation about editor behavior rather than the authentication state of an unrelated API process on the developer's machine.
 - the reusable Studio Server verifier runs that same narrow browser set in the `editor-regression` job after the hosted build. It installs Chromium, uploads `artifacts/playwright/` on failure, and the final verifier rejects a skipped or failed applicable browser job
 - the runner loads the same `.env` / `.env.dev` file as the Docker scripts, so UI-gated hosts automatically reuse `RIVET_KEY`
 - unless `PLAYWRIGHT_BASE_URL` is already set, the runner targets `http://127.0.0.1:${RIVET_PORT}` from your env file, defaulting to `8080`

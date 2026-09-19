@@ -1,5 +1,5 @@
 import { expect, test, type FrameLocator, type Page } from '@playwright/test';
-import { authenticateIfNeeded } from './helpers/hostedEditorObserve';
+import { authenticateIfNeeded, mockHostedEditorBootstrap } from './helpers/hostedEditorObserve';
 import { seedHostedEditorProject } from './helpers/hostedEditorStorage';
 
 type EditorRoot = Page | FrameLocator;
@@ -38,6 +38,7 @@ test('fullscreen search keeps the match highlighted after opening a paged JSON c
       }),
     ),
   );
+  await mockHostedEditorBootstrap(page);
   await page.route('**/api/**', (route) =>
     ['GET', 'HEAD', 'OPTIONS'].includes(route.request().method()) ? route.fallback() : route.abort(),
   );
@@ -75,7 +76,10 @@ test('fullscreen search keeps the match highlighted after opening a paged JSON c
 
   await firstPager.getByRole('button', { name: '<' }).click({ modifiers: ['Control'] });
   await expect(firstPager).toContainText(`1 / ${pageCount}`);
-  await chunkPagers.last().getByRole('button', { name: '>' }).click({ modifiers: ['Control'] });
+  await chunkPagers
+    .last()
+    .getByRole('button', { name: '>' })
+    .click({ modifiers: ['Control'] });
   await expect(firstPager).toContainText(`${pageCount} / ${pageCount}`);
 
   const colorizedPreview = modal.locator('.json-preview-content pre');

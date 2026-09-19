@@ -38,6 +38,10 @@ export const addContextMenuGroups = [
     label: 'AI',
   },
   {
+    id: 'add-node-group:classifier',
+    label: 'Classifier',
+  },
+  {
     id: 'add-node-group:knowledge',
     label: 'Knowledge',
   },

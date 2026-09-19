@@ -326,6 +326,12 @@ export * from './nodes/ReferencedGraphAliasNode.js';
 import { nodePrefabInstanceNode } from './nodes/NodePrefabInstanceNode.js';
 export * from './nodes/NodePrefabInstanceNode.js';
 
+import { classifierQuestionNode } from './nodes/ClassifierQuestionNode.js';
+export * from './nodes/ClassifierQuestionNode.js';
+
+import { classifierEvaluateNode } from './nodes/ClassifierEvaluateNode.js';
+export * from './nodes/ClassifierEvaluateNode.js';
+
 export const registerBuiltInNodes = (registry: NodeRegistration) => {
   return registry
     .register(toYamlNode)
@@ -435,6 +441,8 @@ export const registerBuiltInNodes = (registry: NodeRegistration) => {
     .register(mcpToolCallNode)
     .register(mcpGetPromptNode)
     .register(referencedGraphAliasNode)
+    .register(classifierQuestionNode)
+    .register(classifierEvaluateNode)
     .register(nodePrefabInstanceNode);
 };
 

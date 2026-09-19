@@ -426,6 +426,30 @@ describe('api', () => {
     }
   });
 
+  it('normalizes legacy Jev project objects before resolving their declared plugins', () => {
+    resetGlobalRivetNodeRegistry();
+    const project = makeCodeProject(`return { output1: { type: 'string', value: 'done' } };`);
+    const graph = project.graphs[project.metadata.mainGraphId]!;
+    project.plugins = [{ type: 'built-in', id: 'typesafe', name: 'TypeSafe AI (Jev)' }];
+    graph.nodes.push({
+      data: { instructions: 'Classify this.', questionId: 'legacy-question' },
+      id: 'legacy-question' as NodeId,
+      title: 'Jev Noul Question',
+      type: 'jevNoulQuestion',
+      visualData: { x: 250, y: 0 },
+    } as unknown as ChartNode);
+
+    const processor = createProcessor(project, {});
+    try {
+      assert.equal(project.plugins?.some((plugin) => plugin.id === 'typesafe'), false);
+      assert.equal(graph.nodes.at(-1)?.type, 'classifierQuestion');
+      assert.equal((graph.nodes.at(-1)?.data as { questionType?: unknown }).questionType, 'noul');
+    } finally {
+      processor.dispose();
+      resetGlobalRivetNodeRegistry();
+    }
+  });
+
   it('does not augment a host-supplied registry from project plugin specs', () => {
     const project = makeCodeProject(`return { output1: { type: 'string', value: 'done' } };`);
     project.plugins = [{ type: 'built-in', id: 'pinecone', name: 'Pinecone' }];

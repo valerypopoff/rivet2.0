@@ -17,10 +17,7 @@ export default defineConfig({
   fullyParallel: false,
   workers: 1,
   outputDir: '../../artifacts/playwright/ci-test-results',
-  reporter: [
-    ['list'],
-    ['html', { open: 'never', outputFolder: '../../artifacts/playwright/ci-report' }],
-  ],
+  reporter: [['list'], ['html', { open: 'never', outputFolder: '../../artifacts/playwright/ci-report' }]],
   use: {
     baseURL,
     headless: true,
@@ -33,8 +30,7 @@ export default defineConfig({
     },
   },
   webServer: {
-    command:
-      'node .yarn/releases/yarn-4.17.1.cjs workspace @valerypopoff/rivet-studio-server-web run dev -- --host 127.0.0.1 --strictPort',
+    command: `node .yarn/releases/yarn-4.17.1.cjs workspace @valerypopoff/rivet-studio-server-web run dev --host 127.0.0.1 --port ${port} --strictPort`,
     cwd: workspaceRoot,
     url: baseURL,
     reuseExistingServer: false,
