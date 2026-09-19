@@ -70,18 +70,6 @@ test('graph tree styles keep compact selected and reachability presentation', ()
   assert.match(source, /\.graph-reference-dot \{[\s\S]*left: 0;/);
 });
 
-test('web app resource names shrink and truncate within the graph panel', () => {
-  const source = readComponent('GraphList.tsx');
-
-  assert.match(source, /\.graph-list-container \{[\s\S]*min-width: 0;/);
-  assert.match(source, /\.ui-graph-list \{[\s\S]*min-width: 0;/);
-  assert.match(source, /\.ui-graph-entry,[\s\S]*\.ui-graph-create \{[\s\S]*width: 100%;[\s\S]*min-width: 0;/);
-  assert.match(
-    source,
-    /\.ui-graph-entry-name \{[\s\S]*flex: 1 1 auto;[\s\S]*min-width: 0;[\s\S]*text-overflow: ellipsis;/,
-  );
-});
-
 test('web app resources keep the same section gap as the project header', () => {
   const source = readComponent('GraphList.tsx');
 

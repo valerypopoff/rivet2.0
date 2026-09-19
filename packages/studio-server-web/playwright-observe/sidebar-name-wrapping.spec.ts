@@ -10,10 +10,12 @@ function createProjectContents({
   graphFolderName,
   graphName,
   projectName,
+  uiGraphName,
 }: {
   graphFolderName: string;
   graphName: string;
   projectName: string;
+  uiGraphName?: string;
 }): string {
   return [
     'version: 4',
@@ -31,6 +33,15 @@ function createProjectContents({
     '        description: ""',
     '      nodes: {}',
     '  plugins: []',
+    ...(uiGraphName
+      ? [
+          '  uiGraphs:',
+          '    sidebar-name-wrapping-web-app:',
+          '      components: []',
+          '      id: sidebar-name-wrapping-web-app',
+          `      name: ${JSON.stringify(uiGraphName)}`,
+        ]
+      : []),
     '  references: []',
     '',
   ].join('\n');
@@ -114,6 +125,7 @@ test('wraps long project, graph, and folder names in the server and editor sideb
   const serverFolderName = `server-folder-${'unbroken-name-'.repeat(12)}`;
   const graphFolderName = `editor-folder-${'unbroken-name-'.repeat(12)}`;
   const graphName = `graph-${'unbroken-name-'.repeat(14)}`;
+  const uiGraphName = `web-app-${'unbroken-name-'.repeat(14)}`;
   const project: WorkflowProjectItem = {
     id: 'sidebar-name-wrapping-project',
     name: projectName,
@@ -144,7 +156,11 @@ test('wraps long project, graph, and folder names in the server and editor sideb
     projects: [],
   };
 
-  await installWrappingFixture(page, tree, createProjectContents({ graphFolderName, graphName, projectName }));
+  await installWrappingFixture(
+    page,
+    tree,
+    createProjectContents({ graphFolderName, graphName, projectName, uiGraphName }),
+  );
   await page.goto('/', { waitUntil: 'domcontentloaded' });
   await authenticateIfNeeded(page);
   await waitForDashboardReady(page);
@@ -183,6 +199,7 @@ test('wraps long project, graph, and folder names in the server and editor sideb
     editor.locator('.graph-item[data-graphid="main"] .graph-main-icon'),
     editorGraphLabel,
   );
+  await expectWrappedLabel(editor.locator('.ui-graph-entry-name', { hasText: uiGraphName }));
 });
 
 test('F2 renames only the item in the sidebar that owns focus', async ({ page }) => {
