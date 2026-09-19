@@ -1080,8 +1080,16 @@ packaged Node executor, opens its local WebSocket, runs a minimal
 Code-to-Graph-Output execution through its worker, and runs the packaged pnpm
 `--version` command. The smoke graph uses an `any` Graph Output because the
 current Code node's whole-value output is intentionally an `any` DataValue; the
-assertion verifies both that type and the returned value. The reusable workflow retains the
-existing rolling GitHub Release feeds and
+assertion verifies both that type and the returned value.
+
+The macOS matrix invokes [`.github/scripts/build-macos-dmg.mjs`](../.github/scripts/build-macos-dmg.mjs)
+because the Tauri v1 DMG helper can occasionally receive
+`hdiutil: create failed - Resource busy` on a hosted macOS runner. Only that
+exact transient failure is retried, after removing target-local `rw.*.dmg`
+scratch images, with 5-second and 15-second delays. Compilation, signing,
+permission, and every other bundling failure remain single-attempt failures.
+
+The reusable workflow retains the existing rolling GitHub Release feeds and
 `official-release.json`/`developer-release.json` download-page contract, now
 with a required macOS architecture field.
 

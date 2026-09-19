@@ -111,8 +111,7 @@ jobs:
           APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
           APPLE_API_PRIVATE_KEY: ${{ secrets.APPLE_API_PRIVATE_KEY }}
       - name: Build Tauri macOS bundle
-        working-directory: packages/app
-        run: yarn tauri build --verbose --ci --target ${{ matrix.target }} --bundles "dmg"
+        run: node .github/scripts/build-macos-dmg.mjs ${{ matrix.target }}
         env:
           NODE_OPTIONS: --max-old-space-size=6000
           RIVET_DESKTOP_TARGET: ${{ matrix.target }}

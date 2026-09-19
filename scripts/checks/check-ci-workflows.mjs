@@ -681,6 +681,11 @@ assert.equal(
   '${{ matrix.target }}',
   'macOS release builds must explicitly pass their target to the executor-sidecar build.',
 );
+assert.match(
+  String(findStep(reusableJobs['build-macos'], 'Build Tauri macOS bundle', 'macOS release job').run),
+  /build-macos-dmg\.mjs[\s\S]*matrix\.target/,
+  'macOS release builds must use the target-specific bounded hdiutil retry wrapper.',
+);
 assert.equal(
   findActionStep(reusableJobs['build-macos'], 'Swatinem/rust-cache@v2', 'macOS release job').with?.key,
   '${{ matrix.target }}',
