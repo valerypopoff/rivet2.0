@@ -49,7 +49,6 @@ interface WorkflowLibraryPanelProps {
   activeProjectHasUnsavedChanges: boolean;
   editorReady: boolean;
   projectSaveSequence: number;
-  projectTreeRenameRequestSequence: number;
   collapsed: boolean;
   contentVisible: boolean;
   onToggleCollapse: () => void;
@@ -95,7 +94,6 @@ export const WorkflowLibraryPanel: FC<WorkflowLibraryPanelProps> = ({
   activeProjectHasUnsavedChanges,
   editorReady,
   projectSaveSequence,
-  projectTreeRenameRequestSequence,
   collapsed,
   contentVisible,
   onToggleCollapse,
@@ -119,7 +117,6 @@ export const WorkflowLibraryPanel: FC<WorkflowLibraryPanelProps> = ({
     openedProjectPath,
     editorReady,
     projectSaveSequence,
-    projectTreeRenameRequestSequence,
   });
 
   const {

@@ -70,7 +70,6 @@ export function useWorkflowLibraryController(options: {
   openedProjectPath: string;
   editorReady: boolean;
   projectSaveSequence: number;
-  projectTreeRenameRequestSequence: number;
 }) {
   const {
     onOpenProject,
@@ -88,7 +87,6 @@ export function useWorkflowLibraryController(options: {
     onActiveWorkflowProjectPathChange,
     openedProjectPath,
     editorReady,
-    projectTreeRenameRequestSequence,
     projectSaveSequence,
   } = options;
 
@@ -381,17 +379,6 @@ export function useWorkflowLibraryController(options: {
     treeMutationPending,
     uploadingFolderPath,
   ]);
-
-  const handledProjectTreeRenameRequestRef = useRef(projectTreeRenameRequestSequence);
-
-  useEffect(() => {
-    if (handledProjectTreeRenameRequestRef.current === projectTreeRenameRequestSequence) {
-      return;
-    }
-
-    handledProjectTreeRenameRequestRef.current = projectTreeRenameRequestSequence;
-    startSelectedProjectRename();
-  }, [projectTreeRenameRequestSequence, startSelectedProjectRename]);
 
   useEffect(() => {
     const handleFallbackProjectRenameShortcut = (event: globalThis.KeyboardEvent) => {

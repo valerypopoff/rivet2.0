@@ -89,7 +89,6 @@ export const DashboardPage: FC = () => {
   const [editorReady, setEditorReady] = useState(false);
   const [openProjectCount, setOpenProjectCount] = useState(0);
   const [projectSaveSequence, setProjectSaveSequence] = useState(0);
-  const [projectTreeRenameRequestSequence, setProjectTreeRenameRequestSequence] = useState(0);
   const [routeConfig, setRouteConfig] = useState<HostedRouteConfig>(DEFAULT_HOSTED_ROUTE_CONFIG);
   const postEditorCommand = useEditorCommandQueue(iframeRef, editorReady);
   const {
@@ -574,9 +573,6 @@ export const DashboardPage: FC = () => {
       setOpenedProjectPath(path);
       setActiveWorkflowProjectPath(path);
     },
-    onRequestActiveWorkflowProjectRename: () => {
-      setProjectTreeRenameRequestSequence((previous) => previous + 1);
-    },
     onProjectSaved: (path, hasNewerUnsavedChanges = false) => {
       setProjectSaveSequence((prev) => prev + 1);
       setProjectUnsavedChangesByPath((prev) =>
@@ -638,7 +634,6 @@ export const DashboardPage: FC = () => {
           activeProjectHasUnsavedChanges={activeProjectHasUnsavedChanges}
           editorReady={editorReady}
           projectSaveSequence={projectSaveSequence}
-          projectTreeRenameRequestSequence={projectTreeRenameRequestSequence}
           collapsed={sidebarCollapsed}
           contentVisible={sidebarContentVisible}
           onToggleCollapse={handleToggleSidebar}

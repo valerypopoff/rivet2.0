@@ -184,3 +184,55 @@ test('wraps long project, graph, and folder names in the server and editor sideb
     editorGraphLabel,
   );
 });
+
+test('F2 renames only the item in the sidebar that owns focus', async ({ page }) => {
+  const projectName = 'focus-owned-project';
+  const graphFolderName = 'Focus folder';
+  const graphName = 'Focus graph';
+  const project: WorkflowProjectItem = {
+    id: 'focus-owned-project',
+    name: projectName,
+    fileName: `${projectName}.rivet-project`,
+    relativePath: `${projectName}.rivet-project`,
+    absolutePath: `/workflows/${projectName}.rivet-project`,
+    updatedAt: '2026-09-19T00:00:00.000Z',
+    settings: {
+      status: 'unpublished',
+      endpointName: '',
+      lastPublishedAt: null,
+      publishedWebApps: [],
+    },
+  };
+  const tree: WorkflowTreeResponse = {
+    root: '/workflows',
+    sync: { epoch: 'focus-owned-sidebar', revision: 0 },
+    folders: [],
+    projects: [project],
+  };
+
+  await installWrappingFixture(page, tree, createProjectContents({ graphFolderName, graphName, projectName }));
+  await page.goto('/', { waitUntil: 'domcontentloaded' });
+  await authenticateIfNeeded(page);
+  await waitForDashboardReady(page);
+
+  const serverProjectRow = page.locator('.workflow-library-panel .project-row', { hasText: projectName });
+  await serverProjectRow.click();
+  await serverProjectRow.press('F2');
+  const serverRenameInput = page.getByRole('textbox', { name: `Rename ${projectName}` });
+  await expect(serverRenameInput).toBeFocused();
+  await serverRenameInput.press('Escape');
+
+  await serverProjectRow.dblclick();
+  const editor = page.frameLocator('iframe.dashboard-editor-frame');
+  const editorGraphRow = editor.locator('.graph-item[data-graphid="main"] .graph-item-select');
+  const editorGraphList = editor.locator('.graph-list-container');
+  await expect(editorGraphRow).toBeVisible({ timeout: 90_000 });
+  await editorGraphRow.click();
+  await expect(editorGraphList).toBeFocused();
+  await editorGraphList.press('F2');
+
+  const editorRenameInput = editor.locator('.graph-item[data-graphid="main"] input');
+  await expect(editorRenameInput).toBeFocused();
+  await expect(page.getByRole('textbox', { name: `Rename ${projectName}` })).toHaveCount(0);
+  await editorRenameInput.press('Escape');
+});
