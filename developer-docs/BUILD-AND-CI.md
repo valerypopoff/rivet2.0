@@ -284,6 +284,11 @@ that Node/tsx discovery historically missed. Both App test commands preload
 stand-ins for Vite-managed asset imports and the browser-oriented component
 entry points whose CommonJS shape Node exposes differently from Vite. Its
 regression test exercises both local assets and real Yarn PnP package imports.
+The preload registers asynchronous resolve/load hooks and delegates every
+non-browser module unchanged. Keep it asynchronous: Node 22 patch releases
+have differed in how chained synchronous hooks represent native CommonJS
+sources, and manufacturing source bytes changes CommonJS `require()` behavior
+under Yarn PnP.
 Keep that preload test-only; application builds and runtime imports must
 continue through Vite's real asset pipeline.
 

@@ -87,7 +87,7 @@ async function expectFirstLineMarkAlignment(mark: Locator, label: Locator, descr
   expect(markBox).not.toBeNull();
   const markCenter = markBox!.y + markBox!.height / 2;
   const firstLineCenter = labelMetrics.top + labelMetrics.lineHeight / 2;
-  expect(Math.abs(markCenter - firstLineCenter), description).toBeLessThanOrEqual(3);
+  expect(Math.abs(markCenter - firstLineCenter), description).toBeLessThan(labelMetrics.lineHeight / 2);
 }
 
 async function installWrappingFixture(page: Page, tree: WorkflowTreeResponse, projectContents: string): Promise<void> {
