@@ -1038,9 +1038,16 @@ work behind it is parallelized.
    beneath `packages/`; this preserves each workspace package's declared
    `packages/<name>/dist` export path.
 2. `package-tests` fans out Core, Node, Evaluations, App Executor, and CLI, plus
-   four deterministic App shards, into isolated jobs. The test matrix retains a
-   six-job concurrency cap; every suite always runs, and changed-path selection
-   is deliberately not used for the general correctness gate.
+   four deterministic App shards, into isolated jobs. The compiled-artifact job
+   verifies every declared Core, Node, and Evaluations export is present and
+   loadable, and that the executor bundle is present and syntactically valid,
+   before upload; each package-test job repeats that check immediately after
+   restore. This turns an incomplete artifact into a clear dependency error
+   before package tests instead of unrelated `ENOENT` fanout. Each App shard
+   also rebuilds Core's ESM output before launching because App tests consume
+   Core's published-style ESM export. The test matrix retains a six-job
+   concurrency cap; every suite always runs, and changed-path selection is
+   deliberately not used for the general correctness gate.
 3. `package-lint` fans out the same six source-only workspaces immediately; it does not
    wait for compiled artifacts. Test and lint matrices use `fail-fast: false`, so one
    failure cannot hide failures in other packages.

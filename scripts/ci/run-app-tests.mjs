@@ -75,6 +75,11 @@ export async function runAppTests({ shardIndex = 0, shardCount = 1 } = {}) {
     throw new Error(`App test shard ${shardIndex + 1}/${shardCount} is empty.`);
   }
 
+  // App tests import Core through its published ESM export. Build that
+  // prerequisite here so local full and sharded App-test runs are self-contained;
+  // CI independently verifies the restored artifact before this runner starts.
+  await run(['workspace', '@valerypopoff/rivet2-core', 'run', 'build:esm']);
+
   if (shardCount === 1) {
     // Keep the full local suite on tsx discovery. Expanding every App test path
     // would exceed Windows' command-line limit before the test runner starts.
@@ -83,14 +88,7 @@ export async function runAppTests({ shardIndex = 0, shardCount = 1 } = {}) {
   }
 
   console.log(`[app-tests] Running shard ${shardIndex + 1}/${shardCount}: ${selectedFiles.length} files.`);
-  await run([
-    'workspace',
-    '@valerypopoff/rivet-app',
-    'run',
-    'test:files',
-    '--',
-    ...selectedFiles,
-  ]);
+  await run(['workspace', '@valerypopoff/rivet-app', 'run', 'test:files', '--', ...selectedFiles]);
 }
 
 async function main() {

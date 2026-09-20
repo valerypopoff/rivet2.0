@@ -36,6 +36,7 @@
     "security:audit": "node scripts/checks/check-dependency-audit.mjs",
     "security:audit:rust-exceptions": "node scripts/checks/check-rust-audit-exceptions.mjs",
     "check:file-tree": "node scripts/checks/check-file-tree.mjs",
+    "check:compiled-workspace-exports": "node scripts/checks/check-compiled-workspace-exports.mjs",
     "check:graph-builder-policy": "tsx scripts/checks/check-graph-builder-policy.mjs",
     "check:graph-builder-node-specs": "yarn workspace @valerypopoff/rivet2-core run build:esm && tsx scripts/checks/check-graph-builder-node-specs.mjs",
     "check:graph-builder-assets": "node scripts/checks/check-legacy-graph-creator-rollback.mjs && yarn check:graph-builder-policy && yarn check:graph-builder-node-specs",

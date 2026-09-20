@@ -47,6 +47,13 @@ First-party saved credentials live at `settings.classifierProviders.<providerId>
 
 For Jev, configured lookup order is: named programmatic setting, named `pluginEnv` value, host environment, first-party saved key, then the legacy `pluginSettings.typesafe.typesafeApiKey` compatibility fallback. The fallback must remain read-only compatibility support; new code must not restore a TypeSafe plugin dependency.
 
+`resolveProcessSettings` keeps an explicitly supplied `classifierProviders` map ahead of a host fallback map. Hosts can therefore provide a default credential for headless execution without overwriting a saved first-party credential.
+
+Studio Server's hosted environment shim collects the default environment-variable
+name of every built-in classifier provider and places any value in `pluginEnv`
+before graph execution. This keeps Jev's `TYPESAFE_API_KEY` available in hosted
+runs without restoring a plugin-specific environment path.
+
 Both desktop and hosted environment loaders enumerate classifier-provider environment variables independently of plugins. Keep this path in sync with every provider descriptor so Node executor, desktop sidecar, CLI, Studio Server, and remote debugging resolve the same credentials. Browser execution is rejected by the provider policy before credentials or network access.
 
 ## Project migration

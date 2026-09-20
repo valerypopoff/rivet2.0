@@ -87,6 +87,33 @@ const compiledArtifactDownload = findStep(
   'Download compiled dependencies',
   'Package-tests job',
 );
+const compiledArtifactVerification = findStep(
+  buildJobs['compiled-artifacts'],
+  'Verify compiled workspace exports',
+  'Compiled-artifacts job',
+);
+const restoredArtifactVerification = findStep(
+  buildJobs['package-tests'],
+  'Verify restored compiled dependencies',
+  'Package-tests job',
+);
+assert.equal(compiledArtifactVerification.run, 'yarn check:compiled-workspace-exports');
+assert.equal(restoredArtifactVerification.run, 'yarn check:compiled-workspace-exports');
+assert.ok(
+  buildJobs['compiled-artifacts'].steps.indexOf(compiledArtifactVerification) <
+    buildJobs['compiled-artifacts'].steps.indexOf(compiledArtifactUpload),
+  'Compiled exports must be verified before upload.',
+);
+assert.ok(
+  buildJobs['package-tests'].steps.indexOf(compiledArtifactDownload) <
+    buildJobs['package-tests'].steps.indexOf(restoredArtifactVerification),
+  'Restored exports must be verified after download.',
+);
+assert.ok(
+  buildJobs['package-tests'].steps.indexOf(restoredArtifactVerification) <
+    buildJobs['package-tests'].steps.findIndex((step) => step.name === 'Test ${{ matrix.label }}'),
+  'Restored exports must be verified before package tests.',
+);
 assert.equal(compiledArtifactUpload.with?.name, 'build-dependencies-${{ github.sha }}');
 assert.equal(
   compiledArtifactUpload.with?.overwrite,
@@ -174,6 +201,17 @@ const compiledStudioArtifactUpload = findStep(
   'Upload compiled Studio Server dependencies',
   'Build Studio Server job',
 );
+const compiledStudioArtifactVerification = findStep(
+  studioJobs['build-studio-server'],
+  'Verify compiled workspace dependencies',
+  'Build Studio Server job',
+);
+assert.equal(compiledStudioArtifactVerification.run, 'yarn check:compiled-workspace-exports');
+assert.ok(
+  studioJobs['build-studio-server'].steps.indexOf(compiledStudioArtifactVerification) <
+    studioJobs['build-studio-server'].steps.indexOf(compiledStudioArtifactUpload),
+  'Studio Server workspace dependencies must be verified before upload.',
+);
 assert.equal(compiledStudioArtifactUpload.with?.name, 'studio-server-build-${{ github.sha }}');
 assert.equal(
   compiledStudioArtifactUpload.with?.overwrite,
@@ -191,6 +229,17 @@ for (const jobName of ['api-tests', 'web-tests', 'editor-regression', 'deploymen
     compiledStudioArtifactDownload.with?.path,
     'packages',
     `${jobName} must restore compiled workspace exports beneath packages/.`,
+  );
+  const restoredStudioArtifactVerification = findStep(
+    studioJobs[jobName],
+    'Verify restored compiled workspace dependencies',
+    `${jobName} job`,
+  );
+  assert.equal(restoredStudioArtifactVerification.run, 'yarn check:compiled-workspace-exports');
+  assert.ok(
+    studioJobs[jobName].steps.indexOf(compiledStudioArtifactDownload) <
+      studioJobs[jobName].steps.indexOf(restoredStudioArtifactVerification),
+    `${jobName} must verify restored workspace dependencies after download.`,
   );
 }
 assertIncludesAll(

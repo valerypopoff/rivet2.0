@@ -15,6 +15,7 @@ describe('resolveProcessSettings', () => {
       openAiEndpoint: '',
       pluginEnv: {},
       pluginSettings: {},
+      classifierProviders: {},
       recordingPlaybackLatency: 1000,
       defaultNodeColors: false,
       openNodeSettingsOnCreate: true,
@@ -47,6 +48,13 @@ describe('resolveProcessSettings', () => {
       resolveProcessSettings({ openAiKey: 'explicit', pluginEnv: { A: '1' } }, { pluginEnv: { B: '2' } }).pluginEnv,
       { A: '1' },
     );
+    assert.deepEqual(
+      resolveProcessSettings(
+        { classifierProviders: { jev: { apiKey: 'explicit-classifier-key' } } },
+        { classifierProviders: { jev: { apiKey: 'fallback-classifier-key' } } },
+      ).classifierProviders,
+      { jev: { apiKey: 'explicit-classifier-key' } },
+    );
     assert.equal(resolveProcessSettings({ customOne: 'explicit' }, { customOne: 'fallback' }).customOne, 'explicit');
     assert.equal(resolveProcessSettings({ customOne: '' }, { customOne: 'fallback' }).customOne, 'fallback');
     assert.equal(resolveProcessSettings({ customOne: undefined }, { customOne: 'fallback' }).customOne, 'fallback');
@@ -63,6 +71,7 @@ describe('resolveProcessSettings', () => {
         openAiOrganization: 'env-org',
         openAiEndpoint: 'env-endpoint',
         pluginEnv: { API_TOKEN: 'token' },
+        classifierProviders: { jev: { apiKey: 'classifier-env-key' } },
       }),
       {
         openAiApiKey: 'env-key',
@@ -75,6 +84,7 @@ describe('resolveProcessSettings', () => {
         openAiEndpoint: 'env-endpoint',
         pluginEnv: { API_TOKEN: 'token' },
         pluginSettings: {},
+        classifierProviders: { jev: { apiKey: 'classifier-env-key' } },
         recordingPlaybackLatency: 1000,
         defaultNodeColors: false,
         openNodeSettingsOnCreate: true,
