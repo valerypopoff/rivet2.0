@@ -67,9 +67,21 @@ jobs:
           overwrite: true
 
   build-macos:
-    name: ${{ inputs.channel_label }} macOS desktop bundle
+    name: ${{ inputs.channel_label }} macOS ${{ matrix.label }} desktop bundle
     if: github.ref == inputs.branch_ref
-    runs-on: macos-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - architecture: aarch64
+            label: Apple Silicon
+            runner: macos-15
+            target: aarch64-apple-darwin
+          - architecture: x86_64
+            label: Intel
+            runner: macos-15-intel
+            target: x86_64-apple-darwin
+    runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v6
       - uses: ./.github/actions/setup-yarn
@@ -80,6 +92,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: packages/app/src-tauri -> target
+          key: ${{ matrix.target }}
       - name: Install dependencies
         run: node .yarn/releases/yarn-4.17.1.cjs install --immutable --immutable-cache
       - name: Sync desktop version metadata
@@ -98,28 +111,28 @@ jobs:
           APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
           APPLE_API_PRIVATE_KEY: ${{ secrets.APPLE_API_PRIVATE_KEY }}
       - name: Build Tauri macOS bundle
-        working-directory: packages/app
-        run: yarn tauri build --verbose --ci --target universal-apple-darwin --bundles "dmg"
+        run: node .github/scripts/build-macos-dmg.mjs ${{ matrix.target }}
         env:
           NODE_OPTIONS: --max-old-space-size=6000
+          RIVET_DESKTOP_TARGET: ${{ matrix.target }}
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
           APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
           APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
       - name: Notarize macOS DMG
-        run: bash .github/scripts/notarize-macos-dmg.sh
+        run: bash .github/scripts/notarize-macos-dmg.sh packages/app/src-tauri/target/${{ matrix.target }}/release/bundle
         env:
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
           APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
           APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
       - name: Verify macOS signing and notarization
-        run: bash .github/scripts/verify-macos-dmg.sh
+        run: bash .github/scripts/verify-macos-dmg.sh packages/app/src-tauri/target/${{ matrix.target }}/release/bundle ${{ matrix.target }}
       - name: Upload macOS bundles
         uses: actions/upload-artifact@v7
         with:
-          name: rivet-${{ inputs.channel }}-macos-bundles
-          path: packages/app/src-tauri/target/universal-apple-darwin/release/bundle
+          name: rivet-${{ inputs.channel }}-macos-${{ matrix.architecture }}-bundles
+          path: packages/app/src-tauri/target/${{ matrix.target }}/release/bundle
           if-no-files-found: error
           retention-days: 7
           overwrite: true
@@ -201,12 +214,18 @@ jobs:
         with:
           name: rivet-${{ inputs.channel }}-windows-bundles
           path: release-bundles/windows
-      - name: Download macOS bundles
+      - name: Download Apple Silicon macOS bundles
         if: steps.freshness.outputs.current == 'true'
         uses: actions/download-artifact@v7
         with:
-          name: rivet-${{ inputs.channel }}-macos-bundles
-          path: release-bundles/macos
+          name: rivet-${{ inputs.channel }}-macos-aarch64-bundles
+          path: release-bundles/macos/aarch64
+      - name: Download Intel macOS bundles
+        if: steps.freshness.outputs.current == 'true'
+        uses: actions/download-artifact@v7
+        with:
+          name: rivet-${{ inputs.channel }}-macos-x86_64-bundles
+          path: release-bundles/macos/x86_64
       - name: Confirm release is still current before publishing assets
         id: asset_freshness
         if: steps.freshness.outputs.current == 'true'

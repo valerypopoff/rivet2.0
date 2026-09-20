@@ -2,12 +2,14 @@ import { useSetAtom } from 'jotai';
 import { type GraphCommandState, commandHistoryStackStatePerGraph, type CommandData, useCommand } from './Command';
 import { type NodeConnection, type ChartNode, type NodeId } from '@valerypopoff/rivet2-core';
 import { nodesState, connectionsState } from '../state/graph';
+import { useProjectNodeRegistry } from '../hooks/useProjectNodeRegistry';
 import { produce } from 'immer';
 import {
   getRecoverableNodeConnectionsForNode,
   recoverableNodeConnectionsStatePerGraph,
   setRecoverableNodeConnectionsForGraphNode,
 } from '../state/recoverableNodeConnections';
+import { reconcileNodeEditConnections } from '../domain/graphEditing/editNodeConnectionRecovery';
 
 const MERGE_WINDOW_MS = 5000;
 
@@ -23,6 +25,7 @@ type EditNodeWithConnectionsAppliedData = {
   previousNode: ChartNode;
   previousConnections: NodeConnection[];
   previousRecoverableConnections: NodeConnection[];
+  nextConnections: NodeConnection[];
   nextRecoverableConnections: NodeConnection[];
 };
 
@@ -72,6 +75,7 @@ export function useEditNodeWithConnectionsCommand() {
   const setConnections = useSetAtom(connectionsState);
   const setCommandHistories = useSetAtom(commandHistoryStackStatePerGraph);
   const setRecoverableNodeConnections = useSetAtom(recoverableNodeConnectionsStatePerGraph);
+  const projectNodeRegistry = useProjectNodeRegistry();
 
   const applyNodeAndConnections = (
     nodeId: NodeId,
@@ -100,7 +104,7 @@ export function useEditNodeWithConnectionsCommand() {
         applyNodeAndConnections(
           params.nodeId,
           params.newNode,
-          params.nextConnections,
+          appliedData.nextConnections,
           appliedData.nextRecoverableConnections,
           currentState,
         );
@@ -114,6 +118,19 @@ export function useEditNodeWithConnectionsCommand() {
         currentState.recoverableNodeConnections,
         params.nodeId,
       );
+      // String-list editors first preserve their stable output and companion
+      // ports. Reconcile that prepared state as well so generated inputs cannot
+      // leave dangling wires or bypass normal recoverable-connection handling.
+      const { nextConnections, nextRecoverableConnections } = reconcileNodeEditConnections({
+        nodeId: params.nodeId,
+        newNode: params.newNode,
+        nodes: currentState.nodes,
+        liveConnections: params.nextConnections,
+        recoverableConnections: params.nextRecoverableConnections,
+        project: currentState.project,
+        referencedProjects: currentState.referencedProjects,
+        projectNodeRegistry,
+      });
 
       if (shouldMerge) {
         setCommandHistories((stacks) => removeLastCommandHistoryEntryForGraph(stacks, currentState.graphId));
@@ -121,8 +138,8 @@ export function useEditNodeWithConnectionsCommand() {
         applyNodeAndConnections(
           params.nodeId,
           params.newNode,
-          params.nextConnections,
-          params.nextRecoverableConnections,
+          nextConnections,
+          nextRecoverableConnections,
           currentState,
         );
 
@@ -134,15 +151,16 @@ export function useEditNodeWithConnectionsCommand() {
           previousRecoverableConnections: structuredClone(
             commandToMergeWith.appliedData.previousRecoverableConnections,
           ),
-          nextRecoverableConnections: structuredClone(params.nextRecoverableConnections),
+          nextConnections: structuredClone(nextConnections),
+          nextRecoverableConnections: structuredClone(nextRecoverableConnections),
         };
       }
 
       applyNodeAndConnections(
         params.nodeId,
         params.newNode,
-        params.nextConnections,
-        params.nextRecoverableConnections,
+        nextConnections,
+        nextRecoverableConnections,
         currentState,
       );
 
@@ -150,7 +168,8 @@ export function useEditNodeWithConnectionsCommand() {
         previousNode: structuredClone(params.previousNodeOverride ?? nodeToEdit),
         previousConnections: structuredClone(currentState.connections),
         previousRecoverableConnections: structuredClone(currentRecoverableConnections),
-        nextRecoverableConnections: structuredClone(params.nextRecoverableConnections),
+        nextConnections: structuredClone(nextConnections),
+        nextRecoverableConnections: structuredClone(nextRecoverableConnections),
       };
     },
     undo({ nodeId }, appliedData, currentState) {

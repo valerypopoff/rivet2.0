@@ -5,6 +5,7 @@ import { Global, css } from '@emotion/react';
 import { P, match } from 'ts-pattern';
 import { useDependsOnPlugins } from '../hooks/useDependsOnPlugins';
 import {
+  ClassifierSettingsPage,
   CustomPluginsSettingsPage,
   GeneralSettingsPage,
   GraphsSettingsPage,
@@ -87,7 +88,7 @@ export const modalBody = css`
   }
 `;
 
-type DefaultPages = 'general' | 'graphs' | 'ui' | 'llm' | 'plugins' | 'pluginsSettings' | 'updates';
+type DefaultPages = 'general' | 'graphs' | 'ui' | 'llm' | 'classifier' | 'plugins' | 'pluginsSettings' | 'updates';
 type Pages = DefaultPages | string;
 
 const settingsNavButtonStyles = css`
@@ -178,6 +179,9 @@ export const SettingsModal: FC<SettingsModalProps> = () => {
                   <SettingsNavButton isSelected={page === 'llm'} onClick={() => setPage('llm')}>
                     LLM
                   </SettingsNavButton>
+                  <SettingsNavButton isSelected={page === 'classifier'} onClick={() => setPage('classifier')}>
+                    Classifier
+                  </SettingsNavButton>
                   <SettingsNavButton isSelected={page === 'plugins'} onClick={() => setPage('plugins')}>
                     Plugins
                   </SettingsNavButton>
@@ -204,6 +208,7 @@ export const SettingsModal: FC<SettingsModalProps> = () => {
                   .with('graphs', () => <GraphsSettingsPage />)
                   .with('ui', () => <UiSettingsPage />)
                   .with('llm', () => <LlmSettingsPage />)
+                  .with('classifier', () => <ClassifierSettingsPage />)
                   .with('plugins', () => <PluginsCatalogPage />)
                   .with('pluginsSettings', () => <PluginsSettingsPage />)
                   .with('updates', () => <UpdatesSettingsPage />)

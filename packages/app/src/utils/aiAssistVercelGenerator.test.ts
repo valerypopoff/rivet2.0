@@ -59,6 +59,7 @@ function createTaggedPromptInputs(message: string): Inputs {
   };
 }
 
+// test-style: fixture-read: parses checked-in serialized generator projects, not implementation source.
 function readBundledGraph(name: string): Project {
   const projectText = readFileSync(fileURLToPath(new URL(`../../graphs/${name}`, import.meta.url)), 'utf8');
   const [project] = deserializeProject(projectText);
@@ -219,20 +220,6 @@ test('AI assist generator Vercel adapter preserves the legacy generator graph po
     false,
   );
   assert.deepEqual(outputIds, ['response', 'function-calls', 'all-messages']);
-});
-
-test('AI assist generator adapter owns the Vercel SDK path instead of legacy chat transport', () => {
-  const source = readFileSync(fileURLToPath(new URL('./aiAssistVercelGenerator.ts', import.meta.url)), 'utf8');
-
-  assert.match(source, /runChatV2Pipeline/);
-  assert.match(source, /createResolvedChatV2Provider/);
-  assert.match(source, /emitPartialOutputs: false/);
-  assert.match(source, /getInputRawString\(inputs, 'stop'\)/);
-  assert.match(source, /parallelToolCalls: false/);
-  assert.doesNotMatch(source, /temperature:\s*getTemperature/);
-  assert.doesNotMatch(source, /topP:\s*getTopP/);
-  assert.doesNotMatch(source, /streamChatCompletions/);
-  assert.doesNotMatch(source, /openAiCompatibleBaseURLToChatEndpoint/);
 });
 
 test('AI assist generator adapter preserves the legacy graph builder one-tool-call loop contract', () => {

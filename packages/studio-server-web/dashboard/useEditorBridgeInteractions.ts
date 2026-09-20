@@ -1,13 +1,11 @@
 import { useEffect } from 'react';
 
 import type { EditorShortcutModifier } from '../../studio-server-shared/editor-bridge';
-import { postMessageToDashboard } from '../../studio-server-shared/editor-bridge';
 import {
   focusHostedEditorCanvas,
   focusHostedEditorFrame,
   isEditorFindShortcutEvent,
   isEditableElement,
-  isPlainF2ShortcutEvent,
 } from './editorBridgeFocus';
 
 const MOUNTED_EDITOR_SEARCH_INPUT_SELECTORS = [
@@ -44,10 +42,7 @@ function focusMountedEditorSearchInput(): boolean {
   return false;
 }
 
-function createEditorKeyboardEvent(
-  modifier: EditorShortcutModifier,
-  key: 'd' | 'f',
-): KeyboardEvent {
+function createEditorKeyboardEvent(modifier: EditorShortcutModifier, key: 'd' | 'f'): KeyboardEvent {
   return new KeyboardEvent('keydown', {
     bubbles: true,
     cancelable: true,
@@ -82,25 +77,12 @@ export function useEditorBridgeInteractions({
 
       const targetElement = event.target instanceof Element ? event.target : null;
       const activeElement = document.activeElement;
-      if (isPlainF2ShortcutEvent(event)) {
-        if (isEditableElement(targetElement) || isEditableElement(activeElement)) {
-          return;
-        }
-
-        event.preventDefault();
-        event.stopPropagation();
-        event.stopImmediatePropagation?.();
-        postMessageToDashboard({ type: 'request-active-workflow-project-rename' });
-        return;
-      }
-
       if (!isEditorFindShortcutEvent(event)) {
         return;
       }
 
-      const shortcutStartedInEditorSearch = (
-        isMountedEditorSearchInput(targetElement) || isMountedEditorSearchInput(activeElement)
-      );
+      const shortcutStartedInEditorSearch =
+        isMountedEditorSearchInput(targetElement) || isMountedEditorSearchInput(activeElement);
       if (!shortcutStartedInEditorSearch && (isEditableElement(targetElement) || isEditableElement(activeElement))) {
         return;
       }

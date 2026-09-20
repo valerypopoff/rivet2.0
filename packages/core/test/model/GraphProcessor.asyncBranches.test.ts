@@ -374,12 +374,15 @@ void describe('GraphProcessor scheduler boundaries', () => {
     referencedProject.metadata.id = referencedProjectId;
 
     const alias = makeReferencedGraphAliasNode('streaming-referenced-alias', referencedProjectId, referencedGraphId);
+    alias.isConditional = true;
+    const condition = makeTestNode('streaming-referenced-condition');
     const watch = makeWatchNode('watch-referenced-response');
     const branch = makeTestNode('watch-referenced-branch');
     const root = makeGraph(
       'watch-referenced-graph-output',
-      [alias, watch, branch],
+      [condition, alias, watch, branch],
       [
+        connect(condition.id, alias.id, '$if'),
         connect(alias.id, watch.id, 'stream', 'response'),
         connect(watch.id, branch.id, 'input', 'value'),
         connect(watch.id, branch.id, 'other', 'isFinal'),
@@ -388,6 +391,7 @@ void describe('GraphProcessor scheduler boundaries', () => {
     const receivedSnapshots: Array<{ isFinal: unknown; value: unknown }> = [];
     const releaseReferencedSource = deferred();
 
+    AsyncTestNodeImpl.handlers.set(condition.id, () => ({ output: { type: 'boolean', value: true } }));
     AsyncTestNodeImpl.handlers.set(referencedSource.id, async (_inputs, context) => {
       assert.deepEqual(context.graphCallPath, ['watch-referenced-graph-output', 'streaming-referenced-graph']);
       assert.equal(Object.isFrozen(context.graphCallPath), true);
@@ -2133,6 +2137,158 @@ void describe('GraphProcessor scheduler boundaries', () => {
     assert.deepEqual(lifecycleEvents, ['graph-error', 'error']);
   });
 
+  void it('streams a conditional producer into two callers with separate parallel Watch histories and Stop', async () => {
+    const registry = createBuiltInRegistry();
+    const source = makeTestNode('source');
+    const input = makeGraphInputNode('stream-input', 'stream');
+    const field = makeGraphInputNode('field-input', 'fieldName');
+    field.isConditional = true;
+    const didRun = { ...registry.createDynamic('didRun'), id: 'did-run' as NodeId };
+    const watch = makeWatchNode();
+    Object.assign(watch.data, { executionMode: 'parallel', maxParallelRuns: 25 });
+    const branch = makeTestNode('extract-field');
+    const stop = makeStopWatchNode();
+    stop.isConditional = true;
+    const output = makeGraphOutputNode('fieldValue');
+    const child = makeGraph(
+      'extract',
+      [input, watch, didRun, field, branch, stop, output],
+      [
+        connect(input.id, watch.id, 'stream', 'data'),
+        connect(watch.id, didRun.id, 'input1', 'value'),
+        connect(didRun.id, field.id, '$if', 'ran'),
+        connect(field.id, branch.id, 'other', 'data'),
+        connect(watch.id, branch.id, 'input', 'value'),
+        connect(branch.id, stop.id, '$if', 'cost'),
+        connect(branch.id, stop.id, 'value'),
+        connect(stop.id, output.id, 'value', 'value'),
+      ],
+    );
+    const callers = ['alpha', 'beta'].map((name) => {
+      const caller = makeSubgraphNode(name, child.metadata!.id!);
+      Object.assign(caller.data, { inputData: { fieldName: { type: 'string', value: name } } });
+      return caller;
+    });
+    const producerOutput = makeGraphOutputNode('stream');
+    const producerGraph = makeGraph(
+      'producer',
+      [source, producerOutput],
+      [connect(source.id, producerOutput.id, 'value')],
+    );
+    const producer = makeSubgraphNode('producer-call', producerGraph.metadata!.id!);
+    producer.isConditional = true;
+    const condition = makeTestNode('condition');
+    const conditionReady = deferred();
+    const allowProducer = deferred();
+    AsyncTestNodeImpl.handlers.set(condition.id, async () => {
+      conditionReady.resolve();
+      await allowProducer.promise;
+      return { output: { type: 'boolean', value: true } };
+    });
+    const root = makeGraph(
+      'root',
+      [condition, producer, ...callers],
+      [
+        connect(condition.id, producer.id, '$if'),
+        ...callers.map((caller) => connect(producer.id, caller.id, 'stream', 'stream')),
+      ],
+    );
+    const ready = deferred();
+    const release = deferred();
+    let publish!: (value: string) => void;
+    const seen: Record<string, string[]> = { alpha: [], beta: [] };
+    const delivered = new Map(['1', '2', '3', '4', '5'].map((value) => [value, deferred()]));
+    AsyncTestNodeImpl.handlers.set(source.id, async (_inputs, context) => {
+      publish = (value) => context.onPartialOutputs?.({ output: { type: 'string', value } });
+      ready.resolve();
+      await release.promise;
+      return { output: { type: 'string', value: 'final' } };
+    });
+    AsyncTestNodeImpl.handlers.set(branch.id, (inputs) => {
+      const name = String(inputs['other' as PortId]?.value);
+      const value = String(inputs['input' as PortId]?.value);
+      seen[name]!.push(value);
+      if (seen.beta!.includes(value) && (value === '5' || seen.alpha!.includes(value))) delivered.get(value)?.resolve();
+      return {
+        output: { type: 'string', value: `${name}:${value}` },
+        cost: { type: 'number', value: value === (name === 'alpha' ? '4' : '5') ? 1 : 0 },
+      };
+    });
+    const processor = createProcessor(root, [child, producerGraph]);
+    const finishes: ProcessEvents['nodeFinish'][] = [];
+    const starts: ProcessEvents['graphStart'][] = [];
+    const summaries: ProcessEvents['streamingOutputWatchSummary'][] = [];
+    processor.on('nodeFinish', (event) => {
+      finishes.push(event);
+    });
+    processor.on('graphStart', (event) => {
+      starts.push(event);
+    });
+    processor.on('streamingOutputWatchSummary', (event) => {
+      summaries.push(event);
+    });
+    const run = processor.processGraph(testProcessContext());
+    try {
+      await withTimeout(conditionReady.promise, 'producer condition starts');
+      assert.equal(AsyncTestNodeImpl.runCounts.get(source.id), undefined);
+      allowProducer.resolve();
+      await withTimeout(ready.promise, 'producer starts after condition');
+      for (const value of ['1', '2', '3', '4', '5']) {
+        publish(value);
+        await withTimeout(delivered.get(value)!.promise, `both callers receive live update ${value}`);
+        // Give the completed branch's downstream Stop claim one scheduler turn
+        // before another partial can enter the parallel Watch.
+        await new Promise<void>((resolve) => setImmediate(resolve));
+      }
+      assert.deepEqual(seen, { alpha: ['1', '2', '3', '4'], beta: ['1', '2', '3', '4', '5'] });
+    } finally {
+      allowProducer.resolve();
+      release.resolve();
+      await withTimeout(run, 'two field callers settle');
+    }
+    const childStarts = starts.filter((event) => event.graph.metadata?.id === child.metadata!.id);
+    assert.equal(childStarts.length, 2);
+    for (const childStart of childStarts) {
+      const pages = finishes.filter(
+        (event) =>
+          event.node.id === branch.id && event.execution?.parentGraphRunId === childStart.execution?.graphRunId,
+      );
+      assert.equal(pages.length, 4);
+      const name = childStart.execution?.executor?.nodeId;
+      assert.deepEqual(
+        pages.map((event) => event.outputs['output' as PortId]?.value),
+        ['1', '2', '3', name === 'alpha' ? '4' : '5'].map((value) => `${name}:${value}`),
+      );
+    }
+    assert.equal(summaries.length, 2);
+    assert.equal(starts.filter((event) => event.graph.metadata?.id === producerGraph.metadata!.id).length, 1);
+    assert.equal(AsyncTestNodeImpl.runCounts.get(source.id), 1);
+  });
+
+  void it('does not run or stream from a conditional producer when its condition is false', async () => {
+    const source = makeTestNode('source');
+    const output = makeGraphOutputNode('stream');
+    const child = makeGraph('producer', [source, output], [connect(source.id, output.id, 'value')]);
+    const caller = makeSubgraphNode('caller', child.metadata!.id!);
+    caller.isConditional = true;
+    const condition = makeTestNode('condition');
+    AsyncTestNodeImpl.handlers.set(condition.id, () => ({ output: { type: 'boolean', value: false } }));
+    const watch = makeWatchNode();
+    const branch = makeTestNode('branch');
+    const root = makeGraph(
+      'root',
+      [condition, caller, watch, branch],
+      [
+        connect(condition.id, caller.id, '$if'),
+        connect(caller.id, watch.id, 'stream', 'stream'),
+        connect(watch.id, branch.id, 'input', 'value'),
+      ],
+    );
+    await withTimeout(createProcessor(root, [child]).processGraph(testProcessContext()), 'false producer settles');
+    assert.equal(AsyncTestNodeImpl.runCounts.get(source.id), undefined);
+    assert.equal(AsyncTestNodeImpl.runCounts.get(branch.id), undefined);
+  });
+
   for (const route of [
     'direct',
     'nested',
@@ -2702,6 +2858,51 @@ void describe('GraphProcessor scheduler boundaries', () => {
       assert.deepEqual(seen, ['disabled', 'pruned', 'conditional'].includes(boundary) ? [] : ['final']);
     });
   }
+
+  void it('keeps duplicate authored providers for one Subgraph input final-only', async () => {
+    const first = makeTestNode('first-source');
+    const second = makeTestNode('second-source');
+    const input = makeGraphInputNode('input', 'stream');
+    const watch = makeWatchNode();
+    const branch = makeTestNode('branch');
+    const child = makeGraph(
+      'child',
+      [input, watch, branch],
+      [connect(input.id, watch.id, 'stream', 'data'), connect(watch.id, branch.id, 'input', 'value')],
+    );
+    const caller = makeSubgraphNode('caller', child.metadata!.id!);
+    const root = makeGraph(
+      'root',
+      [first, second, caller],
+      [connect(first.id, caller.id, 'stream'), connect(second.id, caller.id, 'stream')],
+    );
+    const ready = [deferred(), deferred()];
+    const release = deferred();
+    for (const [index, source] of [first, second].entries()) {
+      AsyncTestNodeImpl.handlers.set(source.id, async (_inputs, context) => {
+        context.onPartialOutputs?.({ output: { type: 'string', value: `partial-${index}` } });
+        ready[index]!.resolve();
+        await release.promise;
+        return { output: { type: 'string', value: `final-${index}` } };
+      });
+    }
+    const seen: unknown[] = [];
+    AsyncTestNodeImpl.handlers.set(branch.id, (inputs) => {
+      seen.push(inputs['input' as PortId]?.value);
+      return {};
+    });
+
+    const run = createProcessor(root, [child]).processGraph(testProcessContext());
+    try {
+      await withTimeout(Promise.all(ready.map((signal) => signal.promise)), 'both duplicate providers start');
+      await wait(10);
+      assert.deepEqual(seen, []);
+    } finally {
+      release.resolve();
+      await withTimeout(run, 'duplicate providers settle');
+    }
+    assert.deepEqual(seen, ['final-0']);
+  });
 
   for (const mode of ['parallel', 'interval', 'stop', 'overflow'] as const) {
     void it(`uses the existing ${mode} Watch policy for live Subgraph inputs`, async () => {

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import type { RivetPlugin } from '@valerypopoff/rivet2-core';
+import { getClassifierProviderEnvironmentVariableNames, type RivetPlugin } from '@valerypopoff/rivet2-core';
 
 import { fillMissingSettingsFromEnvironmentVariables } from './tauri';
 
@@ -34,33 +34,36 @@ test('fillMissingSettingsFromEnvironmentVariables resolves independent env looku
     },
   );
 
-  assert.deepEqual([...requestedEnvVars].sort(), [
-    'ANTHROPIC_API_KEY',
-    'CUSTOM_ENV',
-    'CUSTOM_PROVIDER_API_KEY',
-    'EXTRA_ENV',
-    'GOOGLE_GENERATIVE_AI_API_KEY',
-    'OPENAI_API_KEY',
-    'OPENAI_ORG_ID',
-    'PLUGIN_KEY',
+  assert.deepEqual(
+    [...requestedEnvVars].sort(),
+    [
+      'ANTHROPIC_API_KEY',
+      'CUSTOM_ENV',
+      'CUSTOM_PROVIDER_API_KEY',
+      'EXTRA_ENV',
+      'GOOGLE_GENERATIVE_AI_API_KEY',
+      'OPENAI_API_KEY',
+      'OPENAI_ORG_ID',
+      'PLUGIN_KEY',
+      ...getClassifierProviderEnvironmentVariableNames(),
+    ].sort(),
+  );
+
+  const classifierEnvironmentValues = Object.fromEntries(
+    getClassifierProviderEnvironmentVariableNames().map((envVarName) => [envVarName, `classifier-${envVarName}`]),
+  );
+  const environmentValues = new Map([
+    ['OPENAI_API_KEY', 'openai-key'],
+    ['ANTHROPIC_API_KEY', 'anthropic-key'],
+    ['GOOGLE_GENERATIVE_AI_API_KEY', 'google-key'],
+    ['CUSTOM_PROVIDER_API_KEY', 'custom-provider-key'],
+    ['CUSTOM_ENV', 'custom-value'],
+    ['EXTRA_ENV', 'extra-value'],
+    ...Object.entries(classifierEnvironmentValues),
   ]);
 
   for (const envVarName of requestedEnvVars) {
-    resolveEnvVars.get(envVarName)?.(
-      envVarName === 'OPENAI_API_KEY'
-        ? 'openai-key'
-        : envVarName === 'ANTHROPIC_API_KEY'
-          ? 'anthropic-key'
-          : envVarName === 'GOOGLE_GENERATIVE_AI_API_KEY'
-            ? 'google-key'
-            : envVarName === 'CUSTOM_PROVIDER_API_KEY'
-              ? 'custom-provider-key'
-              : envVarName === 'CUSTOM_ENV'
-                ? 'custom-value'
-                : envVarName === 'EXTRA_ENV'
-                  ? 'extra-value'
-                  : undefined,
-    );
+    resolveEnvVars.get(envVarName)?.(environmentValues.get(envVarName));
   }
 
   const settings = await settingsPromise;
@@ -75,6 +78,7 @@ test('fillMissingSettingsFromEnvironmentVariables resolves independent env looku
   assert.deepEqual(settings.pluginEnv, {
     CUSTOM_ENV: 'custom-value',
     EXTRA_ENV: 'extra-value',
+    ...classifierEnvironmentValues,
   });
 });
 

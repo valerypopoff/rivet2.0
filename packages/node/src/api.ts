@@ -22,6 +22,7 @@ import {
   type ProcessContext,
   type GraphProcessorRuntimeProfiler,
   resolveBuiltInPlugin,
+  normalizeClassifierProject,
 } from '@valerypopoff/rivet2-core';
 
 import { readFile } from 'node:fs/promises';
@@ -386,6 +387,10 @@ function resolveNodeProcessorRegistry(
   project: Project,
   registry: NodeRegistration<any, any> | undefined,
 ): NodeRegistration<any, any> {
+  // Plugin registration happens before Core constructs a processor, so object
+  // callers must be normalized here rather than relying on the later Core
+  // execution boundary.
+  normalizeClassifierProject(project);
   if (registry) {
     return registry;
   }

@@ -14,10 +14,11 @@ Ordinary connections do not change: they still receive only the producer's
 final output. This node creates an explicit, bounded watch boundary instead of
 making every wire in a graph stream-aware.
 
-The wire into **Streaming Output** is marked with repeated forward arrowheads.
-They show that partial snapshots travel repeatedly from the producer to this
-Watch node; it remains a one-way connection and does not change any other
-output wire's final-only behavior.
+When the complete route can carry partial snapshots, its wires are marked with
+repeated forward arrowheads. Rivet does not show those arrows for a route that
+ends at a frozen or final-only boundary, has an ambiguous Subgraph input, or
+enters a recursive caller chain with no eligible producer. The route remains
+one-way and does not change any other output wire's final-only behavior.
 
 ## Inputs and outputs
 
@@ -81,6 +82,10 @@ to a Graph Output named `response`, then connect the Subgraph node's
 and through a Data Bus. The same Watch queue, concurrency, overflow, Stop, and
 history rules apply at the parent connection.
 
+The producing Subgraph may have an **if** input. Once its condition passes and
+it starts, its named outputs can stream normally, including into other Subgraphs
+containing Watches. A false condition does not start the producer or emit chunks.
+
 The Graph Output must receive the producer directly in the effective graph
 topology. If you put an ordinary node between LLM Chat and Graph Output, that
 node remains final-only and the parent Watch receives only the completed
@@ -114,8 +119,9 @@ only the latest partial value is retained; superseded updates count as coalesced
 Ordinary nodes consuming the same input receive its final value once, not every
 chunk. Unrelated child work also waits for the streamed inputs to finish.
 
-Conditional, disabled, frozen, **Many**, and **Use Error Output** caller boundaries
-remain final-only. Ordinary processing nodes between the stream and Watch do not
+Conditional, disabled, frozen, **Many**, and **Use Error Output** callers do not
+accept early streamed inputs. This is separate from a producing Subgraph's **if**
+gate described above. Ordinary processing nodes between the stream and Watch do not
 forward partials. **Skip unused outputs** does not activate a pruned Watch branch.
 Graph Inputs with **Default Value** configured as an input also remain final-only;
 ordinary saved defaults and input type conversion apply to live updates.

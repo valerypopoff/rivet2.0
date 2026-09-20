@@ -25,6 +25,7 @@ import { getProcessorEvents, getProcessorSSEStream, getSingleNodeStream } from '
 // eslint-disable-next-line import/no-cycle -- GraphProcessor depends on CodeRunner, which exposes the package export surface.
 import { GraphProcessor } from '../model/GraphProcessor.js';
 import { deserializeProject } from '../utils/serialization/serialization.js';
+import { normalizeClassifierProject } from '../model/classifier/migration.js';
 import { GptTokenizerTokenizer } from '../integrations/GptTokenizerTokenizer.js';
 import type { Tokenizer } from '../integrations/Tokenizer.js';
 import { looseDataValuesToDataValues, type LooseDataValue } from './looseDataValue.js';
@@ -86,6 +87,10 @@ export function coreCreateProcessor(
   options: RunGraphOptions,
   internalOptions: CoreCreateProcessorInternalOptions = {},
 ) {
+  // Public programmatic callers can provide a Project object directly rather
+  // than loading YAML through deserializeProject. Keep the legacy Jev
+  // compatibility boundary intact for that route as well.
+  normalizeClassifierProject(project);
   const { graph, inputs = {}, context = {} } = options;
 
   const graphId = graph

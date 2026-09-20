@@ -3,7 +3,7 @@ title: Variables
 sidebar_label: Variables
 ---
 
-Variables let you reuse values in prompts, text, objects, and code. In a field that supports Rivet interpolation, write `{{name}}` to insert a value when the node runs. This is Rivet syntax, not JavaScript template-string syntax, and it is not supported by every settings field.
+Variables let you reuse values in prompts, text, objects, code, and Match case **Cases**. In a field that supports Rivet interpolation, write `{{name}}` to insert a value when the node runs. This is Rivet syntax, not JavaScript template-string syntax, and it is not supported by every settings field.
 
 For a guided exercise, see [Variables in the tutorial](../tutorial/variables.md).
 

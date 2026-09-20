@@ -22,6 +22,11 @@ import {
 import { graphV2Deserializer, projectV2Deserializer } from './serialization_v2.js';
 import { graphV1Deserializer, projectV1Deserializer } from './serialization_v1.js';
 import { normalizeSerializedLLMChatV2Node } from '../../model/chat-v2/llmChatV2NodeMigration.js';
+import {
+  normalizeClassifierGraph,
+  normalizeClassifierNode,
+  normalizeClassifierProject,
+} from '../../model/classifier/migration.js';
 
 export function serializeProject(project: Project, attachedData?: AttachedData): unknown {
   return projectV4Serializer(project, attachedData);
@@ -75,6 +80,7 @@ export function deserializeGraph(serializedGraph: unknown): NodeGraph {
 }
 
 function normalizeDeserializedProject(project: Project): void {
+  normalizeClassifierProject(project);
   for (const graph of Object.values(project.graphs)) {
     normalizeDeserializedGraph(graph);
   }
@@ -85,6 +91,7 @@ function normalizeDeserializedProject(project: Project): void {
 }
 
 function normalizeDeserializedGraph(graph: NodeGraph): void {
+  normalizeClassifierGraph(graph);
   for (const node of graph.nodes) {
     normalizeDeserializedNode(node);
   }
@@ -100,6 +107,7 @@ function hasLegacyDataBusFlag(node: ChartNode): node is ChartNode<'passthrough',
 }
 
 function normalizeDeserializedNode(node: ChartNode): void {
+  normalizeClassifierNode(node);
   if (node.type === 'code' && node.title === 'Code') {
     node.title = 'Code (legacy)';
   } else if (node.type === 'codeNew' && node.title === 'Code new') {

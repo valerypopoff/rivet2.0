@@ -33,6 +33,8 @@ jobs:
         run: yarn build
         env:
           NODE_OPTIONS: --max_old_space_size=6000
+      - name: Verify compiled workspace exports
+        run: yarn check:compiled-workspace-exports
       - name: Upload compiled dependencies
         uses: actions/upload-artifact@v7
         with:
@@ -67,8 +69,14 @@ jobs:
             command: test:node
           - label: Evaluations
             command: test:evaluations
-          - label: App
-            command: test:app
+          - label: App 1/4
+            command: test:app --shard-index 0 --shard-count 4
+          - label: App 2/4
+            command: test:app --shard-index 1 --shard-count 4
+          - label: App 3/4
+            command: test:app --shard-index 2 --shard-count 4
+          - label: App 4/4
+            command: test:app --shard-index 3 --shard-count 4
           - label: App Executor
             command: test:app-executor
           - label: CLI
@@ -88,6 +96,8 @@ jobs:
           # packages/ ancestor. Restore beneath packages/ to put every built
           # workspace export back at its package-defined path.
           path: packages
+      - name: Verify restored compiled dependencies
+        run: yarn check:compiled-workspace-exports
       - name: Test ${{ matrix.label }}
         run: yarn ${{ matrix.command }}
       - name: Report timing

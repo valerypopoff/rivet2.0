@@ -1,6 +1,6 @@
 import { css } from '@emotion/react';
 import prettyBytes from 'pretty-bytes';
-import { useEffect, useId, useMemo, useRef, useState, type FC } from 'react';
+import { useEffect, useId, useMemo, useRef, useState, type FC, type MouseEvent } from 'react';
 import { useMarkdown } from '../../hooks/useMarkdown.js';
 import { useDataRefs } from '../../providers/ProvidersContext.js';
 import type { StoredDataValue } from '../../state/dataFlow.js';
@@ -14,6 +14,7 @@ import { shouldShowLargeStoredValueActions, type OutputRenderMode } from './outp
 import { buildLargeStoredValueChunks, type LargeStoredValueChunk } from './largeStoredValueChunks.js';
 import { deriveLargeStoredValuePreviewFullText } from './largeStoredValuePreviewText.js';
 import { useLargeStoredValueFullscreenSearch } from './useLargeStoredValueFullscreenSearch.js';
+import { getPagedPageIndex, isPageBoundaryModifierClick } from '../pageNavigation.js';
 
 const styles = css`
   display: block;
@@ -210,6 +211,27 @@ export const LargeStoredValuePreview: FC<{
     setShowFull(true);
   };
 
+  const handleChunkPageChange = (direction: 'previous' | 'next', event: MouseEvent<HTMLButtonElement>) => {
+    setChunkPage((current) =>
+      getPagedPageIndex({
+        currentPage: current,
+        pageCount: chunkCount,
+        direction,
+        jumpToBoundary: isPageBoundaryModifierClick(event),
+      }),
+    );
+  };
+
+  const chunkPager = (
+    <div className="chunk-pager">
+      <button onClick={(event) => handleChunkPageChange('previous', event)}>{'<'}</button>
+      <span>
+        {chunkPage + 1} / {chunkCount}
+      </span>
+      <button onClick={(event) => handleChunkPageChange('next', event)}>{'>'}</button>
+    </div>
+  );
+
   return (
     <div ref={rootRef} css={styles} {...providerRootProps}>
       <div className="preview-meta">
@@ -233,13 +255,7 @@ export const LargeStoredValuePreview: FC<{
         <div className="missing-ref">Value no longer available in memory.</div>
       ) : showFull && shouldPageFullText ? (
         <>
-          <div className="chunk-pager">
-            <button onClick={() => setChunkPage((current) => Math.max(0, current - 1))}>{'<'}</button>
-            <span>
-              {chunkPage + 1} / {chunkCount}
-            </span>
-            <button onClick={() => setChunkPage((current) => Math.min(chunkCount - 1, current + 1))}>{'>'}</button>
-          </div>
+          {chunkPager}
           <div ref={contentRef} className="preview-content">
             {preview.kind === 'json' ? (
               <div className="json-preview-content">
@@ -256,6 +272,7 @@ export const LargeStoredValuePreview: FC<{
               <pre>{activeChunkText}</pre>
             )}
           </div>
+          {chunkPager}
         </>
       ) : preview.kind === 'json' && showFull ? (
         <div ref={contentRef} className="preview-content">

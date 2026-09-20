@@ -10,6 +10,7 @@ const dockerLauncher = await import(
   composeConfigFilesMatch: (configFilesLabel: string | undefined, expectedConfigFiles: string[]) => boolean;
   composeProjectFingerprintMatches: (actualFingerprint: string | undefined, expectedFingerprint: string | undefined) => boolean;
   composeProjectInputFingerprint: (options: { composeConfigFiles: string[]; cwd: string }) => Promise<string>;
+  hasBindMountInputOutputError: (output: unknown) => boolean;
 };
 
 test('Compose configuration matching is path-platform independent and detects added runtime overlays', () => {
@@ -71,4 +72,13 @@ test('Compose input fingerprint changes only with selected Compose source inputs
   } finally {
     await rm(tempDir, { force: true, recursive: true });
   }
+});
+
+test('Docker bind-mount recovery only recognizes the kernel read failure', () => {
+  assert.equal(
+    dockerLauncher.hasBindMountInputOutputError('Cannot read file "src/model/Nodes.ts": input/output error'),
+    true,
+  );
+  assert.equal(dockerLauncher.hasBindMountInputOutputError('Could not resolve "./Nodes.js"'), false);
+  assert.equal(dockerLauncher.hasBindMountInputOutputError(new Error('input/output error')), false);
 });

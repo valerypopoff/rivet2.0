@@ -181,6 +181,24 @@ single repair action that clears the incompatible settings without changing its
 title, geometry, or connections.
 Passthrough has no Data Bus presentation mode and the editor does not convert a
 Passthrough into topology. Designers add the dedicated Data Bus node explicitly.
+Passthrough port IDs remain the serialized `inputN` / `outputN` pairs, but the
+canvas I/O projection gives each connected pair a display-only semantic label.
+It prefers the first non-Passthrough upstream output title and carries that title
+through Passthrough chains. For an output-only repair slot, it uses a downstream
+input title only when every resolvable destination agrees. Missing definitions,
+conflicting fan-out, multiple providers, and relay cycles keep the numbered
+fallback. The projection uses preview connections so labels update while wiring,
+classifies linked nodes from their resolved source type, indexes connections once
+per projection, and never recursively asks an I/O selector to resolve another
+Passthrough node. An input-origin rewire retains the original label for its
+source node until a replacement connection is committed,
+matching the existing dynamic-port stability rule. Both the raw and display
+projection atom families are cleared with deleted nodes and graph transitions.
+New Passthrough nodes persist a 190px default width. The ordinary add-node
+command adds its established 30px canvas margin, so a newly added Passthrough
+renders at 220px—15px wider than its former 205px default. The width remains
+ordinary persisted node geometry, so existing projects retain their saved
+layouts without a migration.
 Because a Data Bus is rendered as a rail instead of a movable node card, the
 content area of its settings exposes a compact, top-aligned **Delete Data Bus**
 action instead of mounting the empty default node editor. The global-controls

@@ -29,7 +29,6 @@ type UseEditorBridgeEventsOptions = {
   onOpenProjectCountChange: (count: number) => void;
   onProjectOpenFailed: (error: string, requestId?: string) => void;
   onProjectOpened: (path: string, requestId?: string) => void;
-  onRequestActiveWorkflowProjectRename: () => void;
   onProjectSaved: (path: string, hasNewerUnsavedChanges?: boolean) => void;
   onWorkflowPathsMovedApplied: (requestId?: string) => void;
   onWorkflowProjectBindingsReconciled: (result: WorkflowProjectBindingReconciliationResult, requestId?: string) => void;
@@ -51,7 +50,6 @@ export function useEditorBridgeEvents(options: UseEditorBridgeEventsOptions) {
     onOpenProjectCountChange,
     onProjectOpenFailed,
     onProjectOpened,
-    onRequestActiveWorkflowProjectRename,
     onProjectSaved,
     onWorkflowPathsMovedApplied,
     onWorkflowProjectBindingsReconciled,
@@ -163,9 +161,6 @@ export function useEditorBridgeEvents(options: UseEditorBridgeEventsOptions) {
         case 'workflow-project-reconciliation-captured':
           onReconciliationCaptured(event.data.context, event.data.requestId);
           break;
-        case 'request-active-workflow-project-rename':
-          onRequestActiveWorkflowProjectRename();
-          break;
         case 'project-opened':
           onProjectOpened(event.data.path, event.data.requestId);
           if (!isEditableElement(document.activeElement)) {
@@ -218,7 +213,6 @@ export function useEditorBridgeEvents(options: UseEditorBridgeEventsOptions) {
     onOpenProjectCountChange,
     onProjectOpenFailed,
     onProjectOpened,
-    onRequestActiveWorkflowProjectRename,
     onProjectSaved,
     onWorkflowPathsMovedApplied,
     onWorkflowProjectBindingsReconciled,

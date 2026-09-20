@@ -15,8 +15,9 @@ import { projectNodeRegistryState } from '../plugins.js';
 import { nodePrefabSourceNodesByIdState } from './nodePrefabSelectors.js';
 import { connectionsState } from '../atoms/graph.js';
 import { getDisabledUpstreamInputWarnings } from '../../domain/graphEditing/disabledNodeWarnings.js';
+import { applyPassthroughConnectionLabels } from '../../domain/graphEditing/passthroughPortLabels.js';
 
-export const ioDefinitionsForNodeState = atomFamily((nodeId: NodeId | undefined) =>
+const rawIoDefinitionsForNodeState = atomFamily((nodeId: NodeId | undefined) =>
   atom((get) => {
     if (!nodeId) {
       return { inputDefinitions: [], outputDefinitions: [] };
@@ -85,6 +86,33 @@ export const ioDefinitionsForNodeState = atomFamily((nodeId: NodeId | undefined)
       : { inputDefinitions: [], outputDefinitions: [] };
   }),
 );
+
+export const ioDefinitionsForNodeState = atomFamily((nodeId: NodeId | undefined) =>
+  atom((get) => {
+    const definitions = get(rawIoDefinitionsForNodeState(nodeId));
+    if (!nodeId) return definitions;
+    const sourceNode = get(nodePrefabSourceNodesByIdState)[nodeId];
+    const nodesById = sourceNode
+      ? { ...get(effectiveNodesByIdState), [nodeId]: sourceNode }
+      : get(effectiveNodesByIdState);
+    if (nodesById[nodeId]?.type !== 'passthrough') return definitions;
+
+    return applyPassthroughConnectionLabels({
+      connections: get(connectionsState),
+      getNodeIoDefinitions: (connectedNodeId) => get(rawIoDefinitionsForNodeState(connectedNodeId)),
+      inputDefinitions: definitions.inputDefinitions,
+      nodeId,
+      nodesById,
+      outputDefinitions: definitions.outputDefinitions,
+    });
+  }),
+);
+
+/** Removes both layers of the I/O projection for deleted nodes and graph switches. */
+export function removeIoDefinitionsForNodeState(nodeId: NodeId): void {
+  rawIoDefinitionsForNodeState.remove(nodeId);
+  ioDefinitionsForNodeState.remove(nodeId);
+}
 
 /**
  * The persisted graph can contain stale edges whose ports no longer exist.

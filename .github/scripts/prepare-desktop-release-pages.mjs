@@ -51,9 +51,14 @@ const platformConfigs = {
     releaseFilePattern: /\.(dmg|zip|sig|json|blockmap)$/i,
     sourceBundleDir: path.resolve(
       repoRoot,
-      process.env.MACOS_BUNDLE_DIR ?? 'packages/app/src-tauri/target/universal-apple-darwin/release/bundle',
+      process.env.MACOS_BUNDLE_DIR ?? 'release-bundles/macos',
     ),
   },
+};
+
+const MACOS_ARCHITECTURES = {
+  aarch64: { displayName: 'Apple Silicon', stableSuffix: 'Apple-Silicon' },
+  x86_64: { displayName: 'Intel', stableSuffix: 'Intel' },
 };
 
 function parseReleasePlatforms() {
@@ -289,6 +294,15 @@ async function collectPlatformArtifacts(platformConfig) {
 
   for (const sourcePath of bundleFiles) {
     const relativeSourcePath = path.relative(platformConfig.sourceBundleDir, sourcePath);
+    const architecture =
+      platformConfig.id === 'macos' ? relativeSourcePath.split(path.sep).find((part) => part in MACOS_ARCHITECTURES) : undefined;
+
+    if (platformConfig.id === 'macos' && !architecture) {
+      throw new Error(
+        `Could not determine the macOS architecture for ${sourcePath}. Place Mac artifacts under aarch64/ or x86_64/.`,
+      );
+    }
+
     const originalPath = toPagePath(path.join(platformConfig.id, relativeSourcePath));
     const downloadPath = path.join(originalDownloadsDir, originalPath);
     await mkdir(path.dirname(downloadPath), { recursive: true });
@@ -296,6 +310,7 @@ async function collectPlatformArtifacts(platformConfig) {
 
     const fileStat = await stat(sourcePath);
     artifacts.push({
+      architecture,
       name: path.basename(sourcePath),
       originalPath,
       platform: platformConfig.id,
@@ -314,6 +329,7 @@ async function createStableDownload({ artifact, label, stableName }) {
   await copyFile(artifact.sourcePath, stablePath);
 
   return {
+    architecture: artifact.architecture,
     label,
     name: stableName,
     platform: artifact.platform,
@@ -333,8 +349,13 @@ async function createStableDownloads(artifacts) {
   const primaryMsi = artifacts.find(
     (artifact) => artifact.platform === 'windows' && /\.msi$/i.test(artifact.name),
   );
-  const primaryDmg = artifacts.find(
-    (artifact) => artifact.platform === 'macos' && /\.dmg$/i.test(artifact.name),
+  const primaryMacDmgByArchitecture = new Map(
+    Object.keys(MACOS_ARCHITECTURES).map((architecture) => [
+      architecture,
+      artifacts.find(
+        (artifact) => artifact.platform === 'macos' && artifact.architecture === architecture && /\.dmg$/i.test(artifact.name),
+      ),
+    ]),
   );
 
   if (primarySetup) {
@@ -357,12 +378,14 @@ async function createStableDownloads(artifacts) {
     );
   }
 
-  if (primaryDmg) {
+  for (const [architecture, primaryDmg] of primaryMacDmgByArchitecture) {
+    if (!primaryDmg) continue;
+
     stableDownloads.push(
       await createStableDownload({
         artifact: primaryDmg,
-        label: 'macOS disk image',
-        stableName: `${macosPrefix}.dmg`,
+        label: `macOS ${MACOS_ARCHITECTURES[architecture].displayName} disk image`,
+        stableName: `${macosPrefix}-${MACOS_ARCHITECTURES[architecture].stableSuffix}.dmg`,
       }),
     );
   }
@@ -381,6 +404,16 @@ function assertStableDownloadsForRequestedPlatforms(stableDownloads, releasePlat
         .map((platformConfig) => platformConfig.displayName)
         .join(', ')}.`,
     );
+  }
+
+  const missingMacArchitectures = Object.keys(MACOS_ARCHITECTURES).filter(
+    (architecture) =>
+      releasePlatforms.some((platformConfig) => platformConfig.id === 'macos') &&
+      !stableDownloads.some((download) => download.platform === 'macos' && download.architecture === architecture),
+  );
+
+  if (missingMacArchitectures.length > 0) {
+    throw new Error(`No stable macOS download aliases were produced for ${missingMacArchitectures.join(', ')}.`);
   }
 }
 

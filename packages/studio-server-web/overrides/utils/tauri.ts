@@ -1,7 +1,12 @@
 // Override for packages/app/src/utils/tauri.ts
 // Adds isHostedMode(), routes getEnvVar() through API backend
 
-import { type RivetPlugin, type Settings, type StringPluginConfigurationSpec } from '@valerypopoff/rivet2-core';
+import {
+  getClassifierProviderEnvironmentVariableNames,
+  type RivetPlugin,
+  type Settings,
+  type StringPluginConfigurationSpec,
+} from '@valerypopoff/rivet2-core';
 import { entries } from '../../../core/src/utils/typeSafety';
 import type { EnvironmentProvider, PathPolicyProvider } from '../../../app/src/providers/ProvidersContext.js';
 import { RIVET_API_BASE_URL, RIVET_HOSTED_MODE } from '../../../studio-server-shared/hosted-env';
@@ -114,7 +119,7 @@ export async function fillMissingSettingsFromEnvironmentVariables(
   const getProviderEnvVar = (name: string) => environmentProvider.getEnvVar(name);
   const resolveSetting = (value: string | undefined, envVarName: string) =>
     value ? Promise.resolve(value) : getProviderEnvVar(envVarName);
-  const pluginEnvVarNames = new Set<string>();
+  const pluginEnvVarNames = new Set<string>(getClassifierProviderEnvironmentVariableNames());
 
   for (const plugin of plugins) {
     const stringConfigs = entries(plugin.configSpec ?? {}).filter(([, c]) => c.type === 'string') as [

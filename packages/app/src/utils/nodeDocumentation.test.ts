@@ -17,6 +17,7 @@ const docsNodeReferenceDir = join(repoRoot, 'packages', 'docs', 'docs', 'node-re
 const docsNodeReferenceIndexPath = join(docsNodeReferenceDir, 'all-nodes.mdx');
 const docsSidebarPath = join(repoRoot, 'packages', 'docs', 'sidebars.js');
 
+// test-style: fixture-read: verifies published Node Reference assets, not App implementation source.
 function getDocSourceFileName(slug: string): string {
   return slug.toLowerCase() === 'rng' ? 'rng.mdx' : `${slug}.mdx`;
 }

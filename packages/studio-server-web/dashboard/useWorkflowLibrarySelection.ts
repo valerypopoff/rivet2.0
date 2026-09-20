@@ -166,6 +166,24 @@ export function useWorkflowLibrarySelection({
   const toggleFolderExpanded = useCallback((folderId: string) => {
     setExpandedFolders((previous) => ({ ...previous, [folderId]: !(previous[folderId] ?? false) }));
   }, [setExpandedFolders]);
+  const toggleAllFoldersExpanded = useCallback((folderId: string) => {
+    setExpandedFolders((previous) => {
+      const nextExpanded = !(previous[folderId] ?? false);
+      let changed = false;
+      const next = { ...previous };
+
+      for (const folder of flattenedFolders) {
+        if ((previous[folder.id] ?? false) === nextExpanded) {
+          continue;
+        }
+
+        next[folder.id] = nextExpanded;
+        changed = true;
+      }
+
+      return changed ? next : previous;
+    });
+  }, [flattenedFolders, setExpandedFolders]);
   const suppressAncestorExpansion = useCallback((folderIds: string[]) => {
     suppressedActiveAncestorExpansionIdsRef.current = new Set([
       ...suppressedActiveAncestorExpansionIdsRef.current,
@@ -207,6 +225,7 @@ export function useWorkflowLibrarySelection({
     setProjectRowRef,
     setSelectedProjectPath,
     suppressAncestorExpansion,
+    toggleAllFoldersExpanded,
     toggleFolderExpanded,
   };
 }

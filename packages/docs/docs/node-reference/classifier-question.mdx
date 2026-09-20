@@ -1,0 +1,27 @@
+---
+id: classifier-question
+title: Classifier Question Node
+sidebar_label: Classifier Question
+---
+
+## Overview
+
+Builds one serializable typed question for a classifier provider. It does not make a network request. **Question ID** is preserved exactly and becomes the key in Classifier Evaluate's aggregate **Answers** object.
+
+## Settings
+
+- **Question type**: choose **Choice**, **Score**, or **Noul**.
+- **Question ID**: non-empty static key for the answer map.
+- **Instructions type**: choose **Text**, **List of lines**, or **Object**. Text opens the multiline text editor, List of lines provides add/delete controls, and Object opens an interpolated JSON template. Every form supports `{{variable}}`; the complete value may instead come from the **Instructions** input.
+- **Criteria type**: choose one shared **Text**, **List of lines**, or **Object** representation for the active question's criteria.
+- **Choice**: **Criteria** contains 2–255 reorderable rows. Each row has an exact, unique **Name** and an optional description represented using the selected Criteria type.
+- **Score**: **Criteria** contains 2–10 ordered entries using the selected Criteria type. Its order defines numeric positions beginning at zero; returned scores may be fractional. The Text form uses compact sortable name rows.
+- **Noul**: the **Criteria** section contains optional paired **true** and **false** values using the selected Criteria type. Each value may independently come from an input port. A Noul answer is a zero-to-one probability, not an automatic boolean.
+
+Choice and Score can accept their complete criteria through the **Criteria** input toggle. Switching the question type or a structured-entry type retains inactive authored values so an author can switch back without recreating them.
+
+## Inputs and output
+
+**Instructions** and complete **Criteria** inputs are added only when their corresponding input mode is enabled. Noul exposes separate lowercase **true** and **false** ports when their individual input controls are enabled. Structured inputs preserve arrays as one value. Interpolation references in active text, line-list, and JSON-template fields add optional inputs.
+
+**Question** (`object`) contains `{ questionId, type, instructions, criteria? }`. Connect it directly or through an Array node to [Classifier Evaluate](./classifier-evaluate.mdx).

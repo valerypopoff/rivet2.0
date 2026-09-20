@@ -20,6 +20,7 @@ export type SeedHostedEditorProjectOptions = {
   graphId: string;
   loaded?: boolean;
   metadata?: Record<string, unknown>;
+  nodePrefabs?: Record<string, { id: string; sourceNode: unknown }>;
   projectId: string;
   projectPath: string;
   title: string;
@@ -77,6 +78,7 @@ export async function seedHostedEditorProject(page: Page, options: SeedHostedEdi
             [seed.graphId]: graph,
             ...extraGraphs,
           },
+          ...(seed.nodePrefabs ? { nodePrefabs: seed.nodePrefabs } : {}),
           plugins: [],
         },
         projectsState: {

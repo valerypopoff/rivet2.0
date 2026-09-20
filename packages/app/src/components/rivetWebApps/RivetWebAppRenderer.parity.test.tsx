@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { runInContext } from 'node:vm';
 import createDOMPurify from 'dompurify';
 import { JSDOM } from 'jsdom';
 import { marked, Renderer } from 'marked';
@@ -23,6 +24,7 @@ test('fenced JSON controls reserve a scrollbar inset only for vertically overflo
       '<div id="short"><pre><code class="language-json">{}</code></pre></div>',
       '<div id="long"><pre><code class="language-json">{}</code></pre></div>',
     ].join(''),
+    { pretendToBeVisual: true },
   );
 
   try {
@@ -51,8 +53,12 @@ test('fenced JSON controls reserve a scrollbar inset only for vertically overflo
 
 test('React and hosted renderers keep the same component and action behavior', async () => {
   const hostedClientScript = await loadGeneratedHostedClient();
-  const reactDom = new JSDOM('<div id="root"></div>', { url: 'https://example.test/preview' });
+  const reactDom = new JSDOM('<div id="root"></div>', {
+    pretendToBeVisual: true,
+    url: 'https://example.test/preview',
+  });
   const hostedDom = new JSDOM('<div id="app"></div>', {
+    pretendToBeVisual: true,
     runScripts: 'outside-only',
     url: 'https://example.test/app',
   });
@@ -78,7 +84,7 @@ test('React and hosted renderers keep the same component and action behavior', a
       );
     });
 
-    configureHostedRenderer(hostedDom, hostedClientScript, uiGraph, (state) => {
+    await configureHostedRenderer(hostedDom, hostedClientScript, uiGraph, (state) => {
       hostedActionState = state;
       return hostedAction.promise;
     });
@@ -105,6 +111,11 @@ test('React and hosted renderers keep the same component and action behavior', a
     hostedDom.window.document.querySelectorAll<HTMLButtonElement>('.rivet-web-app-button')[0]?.click();
 
     assert.deepEqual(reactActionState, { prompt: 'Edited', tone: '' });
+    await waitForCondition(
+      () => hostedActionState !== undefined,
+      'hosted action request',
+      () => hostedDom.window.document.body.textContent ?? '',
+    );
     assert.deepEqual(hostedActionState, reactActionState);
     assert.deepEqual(readRenderedComponents(reactRootElement), readRenderedComponents(hostedDom.window.document));
     assert.deepEqual(readButtonStates(reactRootElement), [
@@ -202,8 +213,15 @@ test('React and hosted renderers keep the same component and action behavior', a
 
 test('React and hosted Chat renderers submit scoped conversation and mapped page state', async () => {
   const hostedClientScript = await loadGeneratedHostedClient();
-  const reactDom = new JSDOM('<div id="root"></div>', { url: 'https://example.test/preview' });
-  const hostedDom = new JSDOM('<div id="app"></div>', { runScripts: 'outside-only', url: 'https://example.test/app' });
+  const reactDom = new JSDOM('<div id="root"></div>', {
+    pretendToBeVisual: true,
+    url: 'https://example.test/preview',
+  });
+  const hostedDom = new JSDOM('<div id="app"></div>', {
+    pretendToBeVisual: true,
+    runScripts: 'outside-only',
+    url: 'https://example.test/app',
+  });
   const restoreGlobals = installDomGlobals(reactDom);
   enableLegacyReactInputFocus(reactDom);
   const uiGraph = makeChatUiGraph();
@@ -226,7 +244,7 @@ test('React and hosted Chat renderers submit scoped conversation and mapped page
         />,
       );
     });
-    configureHostedRenderer(hostedDom, hostedClientScript, uiGraph, (state) => {
+    await configureHostedRenderer(hostedDom, hostedClientScript, uiGraph, (state) => {
       hostedActionState = state;
       return hostedAction.promise;
     });
@@ -260,6 +278,11 @@ test('React and hosted Chat renderers submit scoped conversation and mapped page
       [messagesKey]: [{ role: 'user', content: '**Hello**' }],
       tone: 'Friendly',
     });
+    await waitForCondition(
+      () => hostedActionState !== undefined,
+      'hosted chat action request',
+      () => hostedDom.window.document.body.textContent ?? '',
+    );
     assert.deepEqual(removeChatMessageTimestamps(hostedActionState), removeChatMessageTimestamps(reactActionState));
     for (const actionState of [reactActionState, hostedActionState]) {
       const timestamp = (actionState?.[messagesKey] as Array<{ timestamp?: unknown }> | undefined)?.[0]?.timestamp;
@@ -277,8 +300,12 @@ test('React and hosted Chat renderers submit scoped conversation and mapped page
 
     const statePatch = {
       [messagesKey]: [
-        { role: 'user', content: '**Hello**' },
-        { role: 'assistant', content: '**Hi!** <script>blocked()</script>' },
+        { role: 'user', content: '**Hello**', timestamp: '2026-01-02T12:00:00.000Z' },
+        {
+          role: 'assistant',
+          content: '**Hi!** <script>blocked()</script>',
+          timestamp: '2026-01-02T12:00:01.000Z',
+        },
       ],
     };
     await act(async () => {
@@ -321,8 +348,12 @@ test('React and hosted Chat renderers submit scoped conversation and mapped page
       reactRootElement.querySelector<HTMLButtonElement>('.rivet-web-app-chat-pins-button')?.click(),
     );
     hostedDom.window.document.querySelector<HTMLButtonElement>('.rivet-web-app-chat-pins-button')?.click();
+    await waitForCondition(
+      () => hostedDom.window.document.querySelector('.rivet-web-app-chat-pin-exchange') !== null,
+      'hosted pinned-chat panel',
+    );
     for (const root of [reactRootElement, hostedDom.window.document]) {
-      assert.equal(root.querySelector('.rivet-web-app-chat-pin-exchange:first-child strong')?.textContent, 'You asked');
+      assert.equal(root.querySelector('.rivet-web-app-chat-pin-exchange strong')?.textContent, 'You asked');
       assert.equal(root.querySelector('.rivet-web-app-chat-pins')?.textContent?.includes('Hello'), true);
       assert.equal(root.querySelector('.rivet-web-app-chat-pins')?.textContent?.includes('Hi!'), true);
     }
@@ -432,8 +463,15 @@ test('React and hosted Chat renderers submit scoped conversation and mapped page
 
 test('React and hosted Chat renderers keep timestamp and date-separator presentation in parity', async () => {
   const hostedClientScript = await loadGeneratedHostedClient();
-  const reactDom = new JSDOM('<div id="root"></div>', { url: 'https://example.test/preview' });
-  const hostedDom = new JSDOM('<div id="app"></div>', { runScripts: 'outside-only', url: 'https://example.test/app' });
+  const reactDom = new JSDOM('<div id="root"></div>', {
+    pretendToBeVisual: true,
+    url: 'https://example.test/preview',
+  });
+  const hostedDom = new JSDOM('<div id="app"></div>', {
+    pretendToBeVisual: true,
+    runScripts: 'outside-only',
+    url: 'https://example.test/app',
+  });
   const restoreGlobals = installDomGlobals(reactDom);
   const uiGraph = makeChatUiGraph();
   const messagesKey = getUiGraphChatMessagesStateKey('chat' as UiComponentId);
@@ -461,7 +499,7 @@ test('React and hosted Chat renderers keep timestamp and date-separator presenta
         />,
       );
     });
-    configureHostedRenderer(
+    await configureHostedRenderer(
       hostedDom,
       hostedClientScript,
       uiGraph,
@@ -493,8 +531,15 @@ test('React and hosted Chat renderers keep timestamp and date-separator presenta
 
 test('React and hosted Chat renderers add safe independent controls to every fenced JSON block', async () => {
   const hostedClientScript = await loadGeneratedHostedClient();
-  const reactDom = new JSDOM('<div id="root"></div>', { url: 'https://example.test/preview' });
-  const hostedDom = new JSDOM('<div id="app"></div>', { runScripts: 'outside-only', url: 'https://example.test/app' });
+  const reactDom = new JSDOM('<div id="root"></div>', {
+    pretendToBeVisual: true,
+    url: 'https://example.test/preview',
+  });
+  const hostedDom = new JSDOM('<div id="app"></div>', {
+    pretendToBeVisual: true,
+    runScripts: 'outside-only',
+    url: 'https://example.test/app',
+  });
   const reactCopies: string[] = [];
   const hostedCopies: string[] = [];
   const reactDownloads: Array<{ download: string; href: string }> = [];
@@ -573,7 +618,7 @@ test('React and hosted Chat renderers add safe independent controls to every fen
         />,
       );
     });
-    configureHostedRenderer(
+    await configureHostedRenderer(
       hostedDom,
       hostedClientScript,
       uiGraph,
@@ -662,6 +707,11 @@ test('React and hosted Chat renderers add safe independent controls to every fen
       { content: 'Please revise it', role: 'user' },
     ];
     assert.deepEqual(removeChatMessageTimestamps(reactActionState)?.[messagesKey], expectedHistory);
+    await waitForCondition(
+      () => hostedActionState !== undefined,
+      'hosted JSON chat action request',
+      () => hostedDom.window.document.body.textContent ?? '',
+    );
     assert.deepEqual(removeChatMessageTimestamps(hostedActionState)?.[messagesKey], expectedHistory);
   } finally {
     await act(async () => reactRoot.unmount());
@@ -677,13 +727,13 @@ test('React and hosted Chat renderers add safe independent controls to every fen
   }
 });
 
-function configureHostedRenderer(
+async function configureHostedRenderer(
   dom: JSDOM,
   clientScript: string,
   uiGraph: UiGraph,
   runAction: (state: Record<string, unknown>) => Promise<Response>,
   initialState: Record<string, unknown> = getUiGraphInitialState(uiGraph),
-): void {
+): Promise<void> {
   const hostedWindow = dom.window as typeof dom.window & {
     DOMPurify?: ReturnType<typeof createDOMPurify>;
     __RIVET_WEB_APP__?: unknown;
@@ -691,6 +741,14 @@ function configureHostedRenderer(
   };
   hostedWindow.DOMPurify = createDOMPurify(hostedWindow);
   hostedWindow.marked = { Renderer, parse: marked };
+  Object.defineProperty(hostedWindow, 'structuredClone', {
+    configurable: true,
+    value: structuredClone,
+  });
+  Object.defineProperties(hostedWindow, {
+    TextDecoder: { configurable: true, value: TextDecoder },
+    TextEncoder: { configurable: true, value: TextEncoder },
+  });
   hostedWindow.__RIVET_WEB_APP__ = {
     actionPath: '/actions/run',
     initialState,
@@ -701,7 +759,30 @@ function configureHostedRenderer(
     const body = JSON.parse(`${init?.body ?? '{}'}`) as { state: Record<string, unknown> };
     return runAction(body.state);
   };
-  hostedWindow.eval(clientScript);
+  runInContext(clientScript, dom.getInternalVMContext());
+
+  await waitForCondition(() => {
+    const initializationError = dom.window.document.querySelector('.rivet-web-app-error');
+    if (initializationError) {
+      throw new Error(initializationError.textContent ?? 'Hosted renderer initialization failed.');
+    }
+    return dom.window.document.querySelector('.rivet-web-app-surface') !== null;
+  }, 'hosted renderer initialization');
+}
+
+async function waitForCondition(
+  condition: () => boolean,
+  label: string,
+  describeState: () => string = () => '',
+): Promise<void> {
+  const deadline = Date.now() + 2_000;
+  while (!condition()) {
+    if (Date.now() >= deadline) {
+      const state = describeState().trim();
+      throw new Error(`Timed out waiting for ${label}.${state ? ` Current document text: ${state}` : ''}`);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
 }
 
 function readRenderedComponents(root: ParentNode): unknown[] {

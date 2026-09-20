@@ -1,6 +1,5 @@
 import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFile } from 'node:fs/promises';
 import { type ProjectId } from '@valerypopoff/rivet2-core';
 import { createExecutorSessionRegistry } from './ExecutorSessionContext.js';
 import { attachAndStartDesktopSidecarForRuntime } from '../hooks/executorSessionRuntimeResources.js';
@@ -175,32 +174,4 @@ describe('ExecutorSessionRegistry', () => {
     }
   });
 
-  test('settles request-scoped inactive terminal events before visual dispatch filtering', async () => {
-    const source = await readFile(new URL('./ExecutorSessionContext.tsx', import.meta.url), 'utf8');
-
-    assert.match(
-      source,
-      /const shouldSettlePendingRequest = requestId != null \|\| dispatchDecision\.shouldDispatch;/,
-    );
-    assert.match(source, /if \(!dispatchDecision\.shouldDispatch\) \{\s+return;\s+\}/);
-  });
-
-  test('flushes frozen outputs for inactive external debugger runs', async () => {
-    const source = await readFile(new URL('./ExecutorSessionContext.tsx', import.meta.url), 'utf8');
-
-    assert.match(source, /shouldFlushFrozenNodeOutputsForRemoteDebuggerEvent/);
-    assert.match(source, /alreadyFlushed: false/);
-    assert.match(source, /target: runtimeState\.target/);
-    assert.match(source, /applyProcessEventToProjectExecutionSnapshots/);
-    assert.match(source, /mapSnapshot: shouldFlushFrozenOutputs/);
-    assert.match(source, /frozenNodeOutputs: \{\}/);
-  });
-
-  test('settles running inactive project snapshots on executor disconnect', async () => {
-    const source = await readFile(new URL('./ExecutorSessionContext.tsx', import.meta.url), 'utf8');
-
-    assert.match(source, /subscribeDisconnectsForAllProjects/);
-    assert.match(source, /applyExecutorDisconnectToProjectExecutionSnapshots/);
-    assert.match(source, /Executor session disconnected/);
-  });
 });

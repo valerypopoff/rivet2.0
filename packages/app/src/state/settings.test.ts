@@ -20,6 +20,7 @@ import {
   defaultExecutorState,
   getExecutorOptions,
   getStartupDefaultExecutor,
+  migrateLegacyTypeSafeClassifierSettings,
   normalizeCanvasBackgroundCustomColor,
   normalizeCustomThemePrimaryColor,
   normalizeCustomThemeSecondaryColor,
@@ -51,6 +52,26 @@ test('resolveEditorPreferences applies editor defaults when settings are missing
     applyDefaultNodeColors: true,
     openNodeSettingsOnCreate: true,
   });
+});
+
+test('migrateLegacyTypeSafeClassifierSettings copies a legacy plugin credential without overwriting a first-party key', () => {
+  const legacy = migrateLegacyTypeSafeClassifierSettings({
+    pluginSettings: { typesafe: { typesafeApiKey: 'legacy-key' } },
+  });
+  assert.equal(legacy.classifierProviders?.jev?.apiKey, 'legacy-key');
+  assert.equal(legacy.pluginSettings?.typesafe?.typesafeApiKey, 'legacy-key');
+
+  const blankFirstPartyKey = migrateLegacyTypeSafeClassifierSettings({
+    classifierProviders: { jev: { apiKey: '' } },
+    pluginSettings: { typesafe: { typesafeApiKey: 'legacy-key' } },
+  });
+  assert.equal(blankFirstPartyKey.classifierProviders?.jev?.apiKey, 'legacy-key');
+
+  const existing = migrateLegacyTypeSafeClassifierSettings({
+    classifierProviders: { jev: { apiKey: 'current-key' } },
+    pluginSettings: { typesafe: { typesafeApiKey: 'legacy-key' } },
+  });
+  assert.equal(existing.classifierProviders?.jev?.apiKey, 'current-key');
 });
 
 test('default zoom sensitivity is the approximately 60 percent slider position', () => {

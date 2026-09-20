@@ -2,6 +2,12 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { CachedNodeCodeRunner } from '../src/native/CachedNodeCodeRunner.js';
 import type { CodeRunnerOptions } from '../src/index.js';
+import {
+  CodeNewNodeImpl,
+  decodeDebuggerTransportSentinels,
+  type InternalProcessContext,
+} from '@valerypopoff/rivet2-core';
+import { stringifyDebuggerPayloadForTransport } from '../src/debuggerPayloadSanitizer.js';
 
 const DEFAULT_OPTIONS: CodeRunnerOptions = {
   includeConsole: false,
@@ -12,6 +18,43 @@ const DEFAULT_OPTIONS: CodeRunnerOptions = {
 };
 
 void describe('CachedNodeCodeRunner', () => {
+  void it('preserves inferred Code fields through cached execution and debugger transport', async () => {
+    const runner = new CachedNodeCodeRunner();
+    const node = CodeNewNodeImpl.create();
+    node.data.code = 'if ({{absent}}) return null; return { foo: 111, bar: 222, empty: undefined };';
+    const impl = new CodeNewNodeImpl(node);
+    const context = { codeRunner: runner, graphInputNodeValues: {}, contextValues: {} } as InternalProcessContext;
+    for (const absent of [false, true]) {
+      const outputs = await impl.process({ absent: { type: 'boolean', value: absent } }, context);
+      const transported = decodeDebuggerTransportSentinels(JSON.parse(stringifyDebuggerPayloadForTransport(outputs)));
+      assert.deepEqual(transported, outputs);
+      assert.deepEqual(
+        outputs['field:foo'],
+        absent ? { type: 'control-flow-excluded', value: undefined } : { type: 'any', value: 111 },
+      );
+      assert.deepEqual(outputs['field:empty'], { type: absent ? 'control-flow-excluded' : 'any', value: undefined });
+    }
+    assert.equal(runner.getCacheStats().hits, 1);
+  });
+
+  void it('preserves a renamed Code field identity through cached execution and debugger transport', async () => {
+    const runner = new CachedNodeCodeRunner();
+    const node = CodeNewNodeImpl.create();
+    node.data = {
+      code: 'return { foo1: 111 };',
+      inferredOutputFields: [{ id: 'field:original-foo', key: 'foo1' }],
+    };
+    const impl = new CodeNewNodeImpl(node);
+    const context = { codeRunner: runner, graphInputNodeValues: {}, contextValues: {} } as InternalProcessContext;
+
+    const outputs = await impl.process({}, context);
+    const transported = decodeDebuggerTransportSentinels(JSON.parse(stringifyDebuggerPayloadForTransport(outputs)));
+
+    assert.deepEqual(transported, outputs);
+    assert.deepEqual(outputs['field:original-foo'], { type: 'any', value: 111 });
+    assert.equal(outputs['field:foo1'], undefined);
+  });
+
   void it('caches compiled code while keeping inputs fresh per invocation', async () => {
     const runner = new CachedNodeCodeRunner();
     const code = "return { output: { type: 'any', value: inputs.input.value + 1 } };";

@@ -10,7 +10,7 @@
 
 ### [Download Rivet](../download.mdx)
 
-Use the Download page for stable Windows and macOS releases from the `main` branch, plus developer Windows and macOS releases from the `develop` branch.
+Use the Download page for stable Windows and macOS releases from the `main` branch, plus developer Windows and macOS releases from the `develop` branch. For a Mac, choose the separate **Apple Silicon** or **Intel** disk image that matches **Apple menu > About This Mac**; the Apple Silicon build runs natively and does not require Rosetta.
 
 ## Building from Source
 

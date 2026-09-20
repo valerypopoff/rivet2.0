@@ -290,12 +290,12 @@ test('outbound bridge validation rejects event payloads before postMessage', () 
   ]);
 });
 
-test('project-tree rename request event is accepted only by its exact bridge type', () => {
+test('project-tree rename bridge events are rejected so iframe focus cannot rename a Server project', () => {
   assert.equal(
     isEditorToDashboardEvent({
       type: 'request-active-workflow-project-rename',
     }),
-    true,
+    false,
   );
   assert.equal(
     isEditorToDashboardEvent({

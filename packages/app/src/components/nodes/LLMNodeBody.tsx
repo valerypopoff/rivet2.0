@@ -1,9 +1,10 @@
 import { css } from '@emotion/react';
 import type { FC } from 'react';
 
-type LLMNodeBodySection = Readonly<{
+export type LLMNodeBodySection = Readonly<{
   id: string;
   fields: readonly Readonly<{ label: string; value: string; valueIsCode?: boolean }>[];
+  summary?: string | undefined;
   snippet?: Readonly<{ label: string; text: string }> | undefined;
 }>;
 
@@ -34,6 +35,13 @@ const llmNodeBodyStyles = css`
 
   .llm-node-body-field + .llm-node-body-field {
     margin-top: 3px;
+  }
+
+  .llm-node-body-summary {
+    line-height: 1.4;
+    min-width: 0;
+    overflow-wrap: anywhere;
+    white-space: pre-wrap;
   }
 
   .llm-node-body-label {
@@ -78,6 +86,7 @@ export const LLMNodeBody: FC<{ sections: readonly LLMNodeBodySection[] }> = ({ s
             {field.valueIsCode ? <code className="llm-node-body-code-value">{field.value}</code> : field.value}
           </div>
         ))}
+        {section.summary ? <div className="llm-node-body-summary">{section.summary}</div> : null}
         {section.snippet ? (
           <>
             <div className="llm-node-body-snippet-label">{section.snippet.label}:</div>

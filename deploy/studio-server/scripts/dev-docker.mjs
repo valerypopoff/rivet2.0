@@ -5,6 +5,7 @@ import {
   composeProjectInputFingerprint,
   reconcileComposeProjectConfiguration,
   ensurePortAvailable,
+  hasBindMountInputOutputError,
   isComposeServiceRunning,
   printFailureDiagnostics,
   readDockerWaitTimeoutSeconds,
@@ -38,6 +39,8 @@ const devDependencyMarkerChecks = {
   ].join(' && '),
 };
 
+const workspaceSourceProbe = "find /workspace/packages/core/src -type f -name '*.ts' -exec cat {} + >/dev/null";
+
 async function runningServiceDependenciesNeedRefresh(service, env) {
   const result = await runCapture(`${composeBase} exec -T ${service} sh -lc "${devDependencyMarkerChecks[service]}"`, env, {
     allowFailure: true,
@@ -45,6 +48,79 @@ async function runningServiceDependenciesNeedRefresh(service, env) {
   });
 
   return result.exitCode !== 0;
+}
+
+async function runningServiceHasBrokenWorkspaceBindMount(service, env) {
+  const result = await runCapture(`${composeBase} exec -T ${service} sh -lc \"${workspaceSourceProbe}\"`, env, {
+    allowFailure: true,
+    cwd: rootDir,
+  });
+  return hasBindMountInputOutputError(`${result.stdout}\n${result.stderr}`);
+}
+
+async function runningWorkspaceBindMountNeedsRecovery(env) {
+  for (const service of ['api', 'executor']) {
+    if (!await isComposeServiceRunning(service, { composeBase, cwd: rootDir, env })) {
+      continue;
+    }
+    if (await runningServiceHasBrokenWorkspaceBindMount(service, env)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+async function assertWorkspaceBindMountReadable(env) {
+  const result = await runCapture(
+    `${composeBase} run --rm --no-deps --entrypoint sh executor -lc \"${workspaceSourceProbe}\"`,
+    env,
+    { allowFailure: true, cwd: rootDir },
+  );
+  if (!hasBindMountInputOutputError(`${result.stdout}\n${result.stderr}`)) {
+    return;
+  }
+
+  throw new Error(
+    '[dev-docker] Docker Desktop cannot read the mounted workspace source (input/output error). The repository files and imports are not missing. Restore Docker Desktop access to this checkout (for example, restart Docker Desktop or use a checkout on the WSL filesystem), then run yarn studio-server:dev again.',
+  );
+}
+
+async function devStackHasBindMountInputOutputError(env) {
+  const result = await runCapture(`${composeBase} logs --tail=200 api web executor`, env, {
+    allowFailure: true,
+    cwd: rootDir,
+  });
+  return hasBindMountInputOutputError(`${result.stdout}\n${result.stderr}`);
+}
+
+async function runCommandsWithBindMountRecovery(commands, env, waitTimeoutSeconds) {
+  try {
+    for (const command of commands) {
+      await run(command, env, { cwd: rootDir });
+    }
+  } catch (error) {
+    if (await devStackHasBindMountInputOutputError(env) === false) {
+      throw error;
+    }
+
+    console.warn(
+      '[dev-docker] Docker Desktop lost access to the mounted workspace during startup. Recreating this dev stack once to refresh the bind mount; named volumes and mounted project data are preserved.',
+    );
+    await run(`${composeBase} down --remove-orphans --timeout 20`, env, { allowFailure: true, cwd: rootDir });
+    try {
+      await run(
+        `${composeBase} up -d --remove-orphans --wait --wait-timeout ${waitTimeoutSeconds}`,
+        env,
+        { cwd: rootDir },
+      );
+    } catch (retryError) {
+      await run(`${composeBase} down --remove-orphans --timeout 20`, env, { allowFailure: true, cwd: rootDir });
+      throw new Error(
+        '[dev-docker] Docker Desktop still cannot read the mounted workspace after one remount retry. The repository files and imports are not missing. Restore Docker Desktop access to this checkout (for example, restart Docker Desktop or use a checkout on the WSL filesystem), then run yarn studio-server:dev again.',
+        { cause: retryError },
+      );
+    }
+  }
 }
 
 async function main() {
@@ -131,9 +207,21 @@ async function main() {
           label: 'dev-docker',
         });
       }
+
+      await assertWorkspaceBindMountReadable(mergedEnv);
     }
 
     if (action === 'dev') {
+      if (await runningWorkspaceBindMountNeedsRecovery(mergedEnv)) {
+        console.warn(
+          '[dev-docker] Docker Desktop returned an input/output error while reading the mounted Core source. Recreating only this dev stack to refresh the bind mount; named volumes and mounted project data are preserved.',
+        );
+        commands = [
+          `${composeBase} down --remove-orphans --timeout 20`,
+          `${composeBase} up -d --remove-orphans --wait --wait-timeout ${waitTimeoutSeconds}`,
+        ];
+      }
+
       for (const service of ['web', 'api']) {
         const alreadyRunning = await isComposeServiceRunning(service, {
           composeBase,
@@ -157,8 +245,12 @@ async function main() {
       }
     }
 
-    for (const command of commands) {
-      await run(command, mergedEnv, { cwd: rootDir });
+    if (action === 'dev') {
+      await runCommandsWithBindMountRecovery(commands, mergedEnv, waitTimeoutSeconds);
+    } else {
+      for (const command of commands) {
+        await run(command, mergedEnv, { cwd: rootDir });
+      }
     }
 
     if (action === 'dev') {

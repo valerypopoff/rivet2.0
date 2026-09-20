@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import type { RivetPlugin } from '@valerypopoff/rivet2-core';
+import { getClassifierProviderEnvironmentVariableNames, type RivetPlugin } from '@valerypopoff/rivet2-core';
 
 import {
   fillMissingSettingsFromEnvironmentVariables,
@@ -189,25 +189,31 @@ test('fillMissingSettingsFromEnvironmentVariables resolves unique env lookups co
     },
   );
 
-  assert.deepEqual([...requestedEnvVars].sort(), [
-    'CUSTOM_ENV',
-    'EXTRA_ENV',
-    'OPENAI_API_KEY',
-    'OPENAI_ENDPOINT',
-    'OPENAI_ORG_ID',
-    'PLUGIN_KEY',
+  assert.deepEqual(
+    [...requestedEnvVars].sort(),
+    [
+      'CUSTOM_ENV',
+      'EXTRA_ENV',
+      'OPENAI_API_KEY',
+      'OPENAI_ENDPOINT',
+      'OPENAI_ORG_ID',
+      'PLUGIN_KEY',
+      ...getClassifierProviderEnvironmentVariableNames(),
+    ].sort(),
+  );
+
+  const classifierEnvironmentValues = Object.fromEntries(
+    getClassifierProviderEnvironmentVariableNames().map((envVarName) => [envVarName, `classifier-${envVarName}`]),
+  );
+  const environmentValues = new Map([
+    ['OPENAI_API_KEY', 'openai-key'],
+    ['CUSTOM_ENV', 'custom-value'],
+    ['EXTRA_ENV', 'extra-value'],
+    ...Object.entries(classifierEnvironmentValues),
   ]);
 
   for (const envVarName of requestedEnvVars) {
-    resolveEnvVars.get(envVarName)?.(
-      envVarName === 'OPENAI_API_KEY'
-        ? 'openai-key'
-        : envVarName === 'CUSTOM_ENV'
-          ? 'custom-value'
-          : envVarName === 'EXTRA_ENV'
-            ? 'extra-value'
-            : undefined,
-    );
+    resolveEnvVars.get(envVarName)?.(environmentValues.get(envVarName));
   }
 
   const settings = await settingsPromise;
@@ -218,5 +224,6 @@ test('fillMissingSettingsFromEnvironmentVariables resolves unique env lookups co
   assert.deepEqual(settings.pluginEnv, {
     CUSTOM_ENV: 'custom-value',
     EXTRA_ENV: 'extra-value',
+    ...classifierEnvironmentValues,
   });
 });

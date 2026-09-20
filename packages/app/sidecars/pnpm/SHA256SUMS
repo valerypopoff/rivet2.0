@@ -1,6 +1,5 @@
-ac5c0783ed770dd9334293dc6790bb808111d743beb4a43540e211d9aa4d3824  packages/app/sidecars/pnpm/pnpm-aarch64-apple-darwin
+25aa33415e3b6895e3cf90ce2ed67ce648155fe4623b9f7595520c5b57f19c45  packages/app/sidecars/pnpm/pnpm-aarch64-apple-darwin
 b9943ece17b204495be1af42170bb2f4a5bb1fb1f2a527b93fc84976e0c6b8b8  packages/app/sidecars/pnpm/pnpm-aarch64-unknown-linux-gnu
-ac5c0783ed770dd9334293dc6790bb808111d743beb4a43540e211d9aa4d3824  packages/app/sidecars/pnpm/pnpm-universal-apple-darwin
 ac5c0783ed770dd9334293dc6790bb808111d743beb4a43540e211d9aa4d3824  packages/app/sidecars/pnpm/pnpm-x86_64-apple-darwin
 c299695409e320075dfdeeed64b3dcd399ba2b8a6454f8ea3ba41f24c2cf97ab  packages/app/sidecars/pnpm/pnpm-x86_64-pc-windows-msvc.exe
 2f0b4a6d9952ed1c3aecc8c4f78aa3c13ba88ee20be2278bfbec6e9a27fce816  packages/app/sidecars/pnpm/pnpm-x86_64-unknown-linux-gnu

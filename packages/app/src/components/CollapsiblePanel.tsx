@@ -44,6 +44,13 @@ export const collapsiblePanelStyles = css`
     background: var(--settings-collapsible-body-bg);
   }
 
+  > .collapsible-panel-static-content:first-child {
+    border: 1px solid var(--settings-collapsible-border);
+    border-radius: var(--collapsible-panel-radius);
+    corner-shape: squircle;
+    background: var(--settings-collapsible-body-bg);
+  }
+
   .collapsible-panel-toggle-area {
     display: flex;
     flex-direction: column;
@@ -81,6 +88,14 @@ export const collapsiblePanelStyles = css`
     &:hover {
       background: var(--settings-collapsible-hover-bg);
     }
+  }
+
+  .collapsible-panel-static-label {
+    padding: var(--collapsible-panel-toggle-padding-y) 0;
+    color: var(--label-color);
+    font-size: var(--ui-font-size-base);
+    font-weight: var(--label-font-weight);
+    line-height: 1.25;
   }
 `;
 
@@ -145,5 +160,30 @@ export const CollapsiblePanel: FC<{
     >
       {children}
     </Collapsible>
+  </div>
+);
+
+/**
+ * A persistent panel that shares the settings-section visual language without
+ * exposing an interactive fold/unfold affordance.
+ */
+export const StaticPanel: FC<{
+  children: ReactNode;
+  className?: string;
+  /** Omit when an enclosing section already supplies the visible heading. */
+  label?: ReactNode;
+}> = ({ children, className, label }) => (
+  <div
+    className={className}
+    css={collapsiblePanelStyles}
+    role="group"
+    aria-label={typeof label === 'string' && label.trim() ? label : undefined}
+  >
+    {label ? (
+      <div className="collapsible-panel-toggle-container open">
+        <div className="collapsible-panel-static-label">{label}</div>
+      </div>
+    ) : null}
+    <div className="collapsible-panel-static-content">{children}</div>
   </div>
 );

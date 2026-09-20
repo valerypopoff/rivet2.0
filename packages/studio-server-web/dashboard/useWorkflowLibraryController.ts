@@ -70,7 +70,6 @@ export function useWorkflowLibraryController(options: {
   openedProjectPath: string;
   editorReady: boolean;
   projectSaveSequence: number;
-  projectTreeRenameRequestSequence: number;
 }) {
   const {
     onOpenProject,
@@ -88,7 +87,6 @@ export function useWorkflowLibraryController(options: {
     onActiveWorkflowProjectPathChange,
     openedProjectPath,
     editorReady,
-    projectTreeRenameRequestSequence,
     projectSaveSequence,
   } = options;
 
@@ -141,6 +139,7 @@ export function useWorkflowLibraryController(options: {
     remapSelectedPath,
     setProjectRowRef,
     suppressAncestorExpansion,
+    toggleAllFoldersExpanded,
     toggleFolderExpanded,
   } = selection;
 
@@ -382,17 +381,6 @@ export function useWorkflowLibraryController(options: {
     uploadingFolderPath,
   ]);
 
-  const handledProjectTreeRenameRequestRef = useRef(projectTreeRenameRequestSequence);
-
-  useEffect(() => {
-    if (handledProjectTreeRenameRequestRef.current === projectTreeRenameRequestSequence) {
-      return;
-    }
-
-    handledProjectTreeRenameRequestRef.current = projectTreeRenameRequestSequence;
-    startSelectedProjectRename();
-  }, [projectTreeRenameRequestSequence, startSelectedProjectRename]);
-
   useEffect(() => {
     const handleFallbackProjectRenameShortcut = (event: globalThis.KeyboardEvent) => {
       if (event.defaultPrevented || !isPlainF2ShortcutEvent(event)) {
@@ -628,14 +616,19 @@ export function useWorkflowLibraryController(options: {
   );
 
   const handleFolderRowClick = useCallback(
-    (folder: WorkflowFolderItem) => (_event: MouseEvent<HTMLElement>) => {
+    (folder: WorkflowFolderItem) => (event: MouseEvent<HTMLElement>) => {
       if (editingFolderId === folder.id || renamingFolderId === folder.id) {
+        return;
+      }
+
+      if (event.ctrlKey || event.metaKey) {
+        toggleAllFoldersExpanded(folder.id);
         return;
       }
 
       toggleFolderExpanded(folder.id);
     },
-    [editingFolderId, renamingFolderId, toggleFolderExpanded],
+    [editingFolderId, renamingFolderId, toggleAllFoldersExpanded, toggleFolderExpanded],
   );
 
   const handleFolderRowKeyDown = useCallback(

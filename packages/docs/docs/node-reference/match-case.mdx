@@ -13,6 +13,8 @@ The **Match case** Node routes an `Input` value to one or more case outputs. Eac
 
 By default, **Plain text** cases use exact, case-sensitive string equality. For example, the case `approved` matches `approved`, but not `Approved` or `approved later`. Turn off **Case sensitive** to ignore letter case while retaining exact whole-string matching. Choose **Regular expression** to use the existing JavaScript `RegExp` pattern behavior; the **Case sensitive** switch does not apply in that mode.
 
+Each case supports Rivet interpolation. Write `{{expectedStatus}}` to add an input named `expectedStatus`, or use a path such as `{{response.status}}`. The case is resolved when Match case runs, before it is compared or compiled as a regular expression. You can also use portless runtime roots such as `{{@graphInputs.status}}`, `{{@context.tenant}}`, and `{{@globals.environment}}`. Output names keep the authored template because their resolved values are run-specific. See [Variables](../user-guide/variables.md) for the complete syntax.
+
 **Trigger** controls whether the node triggers every matching output or only the first matching output. It uses **First matching case** by default. **Output value** controls what each active branch emits: boolean `true` by default, the tested string, or a custom value. When Custom is selected, an unlabeled chooser selects one shared input or individual inputs for each branch.
 
 <Tabs
@@ -31,6 +33,7 @@ By default, **Plain text** cases use exact, case-sensitive string equality. For 
 | Output value mode | Title | Data Type | Description | Notes |
 | --- | --- | --- | --- | --- |
 | All | Input | `string` | The value tested against each configured case. | Required. Rivet coerces the input to a string if needed. |
+| Cases with ordinary `{{variable}}` references | Variable name | `string` or `any` | Value substituted into all cases that reference it. | Bare references use `string`; JSONPath references use `any`. Runtime `@` roots do not add ports. |
 | Custom + One shared custom value | Output value | `any` | The value emitted from every active output. | Optional. An unconnected input falls back to `Input`. |
 | Custom + Custom values per case | `[Case]` | `any` | The custom value emitted for that case. | Shown under **Output values**; optional, otherwise `Input`. |
 | Custom + Custom values per case | Unmatched | `any` | The value emitted when no case matches. | Shown under **Output values**; optional, otherwise `Input`. |
@@ -56,7 +59,7 @@ By default, **Plain text** cases use exact, case-sensitive string equality. For 
 | --- | --- | --- |
 | Match mode | **Plain text** compares the entire `Input` string exactly. **Regular expression** applies each case as a JavaScript regular expression. | Plain text |
 | Case sensitive | In **Plain text** mode, compare letter case exactly. Turn it off to match `approved` and `APPROVED` as the same case. This setting is hidden in **Regular expression** mode. | On |
-| Cases | The ordered list of values or regular expressions to test. Case outputs follow this order. | `YES`, `NO` |
+| Cases | The ordered list of text templates or regular expressions to test. `{{variable}}` creates one optional input shared by all matching rows; paths and runtime `@` roots use the normal Variables syntax. Case outputs follow the authored row order and keep stable identities when a template changes. | `YES`, `NO` |
 | Trigger | **First matching case** runs the first matching case in list order. **All matching cases** runs every matching case. | First matching case |
 | Output value | **True** emits boolean `true`. **Input value** emits the tested string. **Custom** emits values supplied through additional inputs. | True |
 | Custom return mode | When **Output value** is Custom, the unlabeled chooser offers **One shared custom value**, which adds one optional `Output value` input for all active outputs, and **Custom values per case**, which adds individual optional values under **Output values** for every case and `Unmatched`. Hidden in the other return modes. | One shared custom value |
@@ -80,6 +83,14 @@ The value `approved` triggers only the `approved` output and returns `true` with
 ### Route a pattern
 
 Select **Regular expression** when you need a pattern. For example, the case `^ERR_[0-9]+$` matches `ERR_42`. Regular-expression cases use JavaScript `RegExp` behavior, including its syntax and errors for invalid patterns.
+
+### Route a dynamic value
+
+1. Add `{{expectedStatus}}` as a case.
+2. Connect the expected status value to the new `expectedStatus` input.
+3. Connect the value being tested to `Input`.
+
+The resolved `expectedStatus` value is compared at runtime. In Regular expression mode, a case such as `^{{prefix}}_[0-9]+$` resolves first and is then compiled as a JavaScript regular expression.
 
 ## Error handling
 

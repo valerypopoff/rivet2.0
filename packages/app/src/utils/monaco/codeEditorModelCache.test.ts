@@ -1,8 +1,5 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
 import test, { afterEach } from 'node:test';
-import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import {
   clearCodeEditorModelCache,
   clearCodeEditorModelCacheForProject,
@@ -13,7 +10,6 @@ import {
 } from './codeEditorModelCache.js';
 import { buildCodeEditorModelCacheKey } from './codeEditorModelCacheKey.js';
 
-const monacoUtilsDir = dirname(fileURLToPath(import.meta.url));
 
 class FakeTextModel {
   disposed = false;
@@ -40,7 +36,6 @@ function createFakeModel(value: string) {
 afterEach(() => {
   clearCodeEditorModelCache();
 });
-
 test('buildCodeEditorModelCacheKey requires project, graph, node, and editor identity', () => {
   assert.equal(
     buildCodeEditorModelCacheKey({
@@ -214,10 +209,4 @@ test('model cache evicts matching editor view state', () => {
   }
 
   assert.equal(getCodeEditorViewState(firstKey), undefined);
-});
-
-test('model cache module stays independent from main-used cache key helpers', () => {
-  const source = readFileSync(join(monacoUtilsDir, 'codeEditorModelCache.ts'), 'utf8');
-
-  assert.doesNotMatch(source, /codeEditorModelCacheKey/);
 });

@@ -52,6 +52,62 @@ test('Match case groups match, trigger, and output settings and exposes custom-v
   await expect(node.locator('.llm-node-body-code-value')).toHaveText('true');
 
   await node.locator('.node-title').click();
+  await expect(
+    editor.getByText('Use {{variable}} to add an input. JSONPath and @graphInputs, @context, and @globals are supported.'),
+  ).toHaveCount(0);
+  const matchingSettings = editor.locator('.inline-editor-row', {
+    has: editor.getByRole('group', { name: 'Match mode' }),
+  });
+  await expect(matchingSettings).toHaveCount(1);
+  await expect(matchingSettings.locator('.row.segmented')).toHaveCount(1);
+  await expect(matchingSettings.locator('.row.toggle')).toHaveCount(1);
+  const [matchModeRowBox, caseSensitiveRowBox] = await Promise.all([
+    matchingSettings.getByRole('group', { name: 'Match mode' }).boundingBox(),
+    matchingSettings.locator('.toggle-editor-control-row').boundingBox(),
+  ]);
+  expect(matchModeRowBox).not.toBeNull();
+  expect(caseSensitiveRowBox).not.toBeNull();
+  expect(caseSensitiveRowBox!.x).toBeGreaterThan(matchModeRowBox!.x);
+  expect(Math.abs(
+    caseSensitiveRowBox!.y + caseSensitiveRowBox!.height / 2 -
+    (matchModeRowBox!.y + matchModeRowBox!.height / 2),
+  )).toBeLessThan(1);
+  await expect(matchingSettings.getByRole('group', { name: 'Match mode' })).toHaveAttribute('data-wrap', 'false');
+  const casesPanel = editor.getByRole('group', { name: 'Cases' });
+  await expect(casesPanel).toHaveCount(1);
+  await expect(casesPanel.locator('.collapsible-panel-static-label')).toHaveText('Cases');
+  await expect(casesPanel.getByRole('button', { name: 'Cases' })).toHaveCount(0);
+  await expect(casesPanel.locator('.collapsible-panel-static-content')).toHaveCSS('border-left-width', '1px');
+  const firstCase = editor.locator('.string-list input').first();
+  await firstCase.fill('Before {{expected}} after');
+  await firstCase.press('End');
+  await firstCase.press('!');
+  await expect(firstCase).toHaveValue('Before {{expected}} after!');
+  const highlightedCase = editor.locator('.string-list .interpolation-text-field').first();
+  await expect(highlightedCase.locator('.interpolation-text-field-token')).toHaveText('{{expected}}');
+  await expect(firstCase).toHaveCSS('font-family', /Roboto Mono/);
+  await expect(firstCase).toHaveCSS('color', 'rgba(0, 0, 0, 0)');
+  await firstCase.press('ControlOrMeta+a');
+  expect(await firstCase.evaluate((input) => ({
+    start: input.selectionStart,
+    end: input.selectionEnd,
+    foreground: getComputedStyle(input, '::selection').color,
+  }))).toEqual({ start: 0, end: 'Before {{expected}} after!'.length, foreground: 'rgba(0, 0, 0, 0)' });
+  await expect(highlightedCase.locator('.interpolation-text-field-display')).toHaveCSS('font-family', /Roboto Mono/);
+  await firstCase.fill(`${'prefix '.repeat(48)}{{expected}}`);
+  await firstCase.press('End');
+  await expect.poll(() => firstCase.evaluate((input) => input.scrollLeft)).toBeGreaterThan(0);
+  const [highlightDisplayBox, highlightedTokenBox] = await Promise.all([
+    highlightedCase.locator('.interpolation-text-field-display').boundingBox(),
+    highlightedCase.locator('.interpolation-text-field-token').boundingBox(),
+  ]);
+  expect(highlightDisplayBox).not.toBeNull();
+  expect(highlightedTokenBox).not.toBeNull();
+  expect(highlightedTokenBox!.x + highlightedTokenBox!.width).toBeLessThanOrEqual(
+    highlightDisplayBox!.x + highlightDisplayBox!.width + 1,
+  );
+  await expect(node.locator('.input-ports .port-label')).toHaveText(['Input', 'expected']);
+  await expect(node.locator('.output-ports .port-label').first()).toHaveText(`${'prefix '.repeat(48)}{{expected}}`);
   const caseSensitive = editor.getByLabel('Case sensitive');
   await expect(caseSensitive).toBeChecked();
   await editor
@@ -84,7 +140,7 @@ test('Match case groups match, trigger, and output settings and exposes custom-v
   ]);
   await expect(editor.getByRole('group', { name: 'Custom case values' })).toBeVisible();
   await expect(editor.getByText('Custom case values', { exact: true })).toHaveCount(0);
-  await expect(node.locator('.input-ports .port-label')).toHaveText(['Input', 'Output value']);
+  await expect(node.locator('.input-ports .port-label')).toHaveText(['Input', 'expected', 'Output value']);
 
   await editor
     .getByRole('group', { name: 'Custom case values' })
@@ -95,7 +151,7 @@ test('Match case groups match, trigger, and output settings and exposes custom-v
   await returnValueChoices.filter({ hasText: /^Input value$/ }).click();
   await expect(editor.getByRole('group', { name: 'Custom case values' })).toHaveCount(0);
   await expect(node.locator('.match-case-values-label')).toHaveCount(0);
-  await expect(node.locator('.input-ports .port-label')).toHaveText(['Input']);
+  await expect(node.locator('.input-ports .port-label')).toHaveText(['Input', 'expected']);
 });
 
 test('Regex Match (legacy) remains available as the regex-only compatibility node', async ({ page }) => {
@@ -118,4 +174,5 @@ test('Regex Match (legacy) remains available as the regex-only compatibility nod
   await node.locator('.node-title').click();
   await expect(editor.getByRole('group', { name: 'Match mode' })).toHaveCount(0);
   await expect(editor.getByText('Cases (regular expressions)', { exact: true })).toBeVisible();
+  await expect(editor.locator('.string-list .interpolation-text-field')).toHaveCount(0);
 });

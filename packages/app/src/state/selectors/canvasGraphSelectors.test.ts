@@ -11,9 +11,13 @@ import {
 import { createStore } from 'jotai/vanilla';
 import { graphState } from '../atoms/graph';
 import { draggingWireState } from '../graphBuilder';
-import { canvasIoDefinitionsForNodeState, canvasPreviewConnectionsState } from './canvasGraphSelectors';
+import {
+  canvasIoDefinitionsForNodeState,
+  canvasPreviewConnectionsState,
+  getCanvasLabelConnectionsForNode,
+} from './canvasGraphSelectors';
 import { projectState } from '../savedGraphs';
-import { definitionValidConnectionsState } from './ioDefinitions.js';
+import { definitionValidConnectionsState, ioDefinitionsForNodeState } from './ioDefinitions.js';
 
 describe('canvasGraphSelectors', () => {
   it('keeps the source node dynamic ports stable during an input-origin rewire preview', () => {
@@ -79,6 +83,144 @@ describe('canvasGraphSelectors', () => {
     const io = store.get(canvasIoDefinitionsForNodeState(sourceNode.id));
 
     assert.ok(io.outputDefinitions.some((definition) => definition.id === 'output'));
+  });
+
+  it('projects a connected output title onto both sides of a Passthrough slot', () => {
+    const store = createStore();
+    const registry = createBuiltInRegistry();
+    const sourceNode = registry.createDynamic('number');
+    const passthroughNode = registry.createDynamic('passthrough');
+    const sourceConnection: NodeConnection = {
+      inputNodeId: passthroughNode.id,
+      inputId: 'input1' as any,
+      outputNodeId: sourceNode.id,
+      outputId: 'value' as any,
+    };
+
+    store.set(graphState, {
+      metadata: { id: 'graph-1', name: 'Test Graph' },
+      nodes: [sourceNode, passthroughNode],
+      connections: [sourceConnection],
+    } as any);
+
+    const io = store.get(canvasIoDefinitionsForNodeState(passthroughNode.id));
+
+    assert.equal(io.inputDefinitions.find(({ id }) => id === 'input1')?.title, 'Value');
+    assert.equal(io.outputDefinitions.find(({ id }) => id === 'output1')?.title, 'Value');
+    assert.equal(io.inputDefinitions.find(({ id }) => id === 'input2')?.title, 'Input 2');
+  });
+
+  it('projects Passthrough labels through the non-canvas I/O selector too', () => {
+    const store = createStore();
+    const registry = createBuiltInRegistry();
+    const sourceNode = registry.createDynamic('number');
+    const passthroughNode = registry.createDynamic('passthrough');
+    const sourceConnection: NodeConnection = {
+      inputNodeId: passthroughNode.id,
+      inputId: 'input1' as any,
+      outputNodeId: sourceNode.id,
+      outputId: 'value' as any,
+    };
+
+    store.set(graphState, {
+      metadata: { id: 'graph-1', name: 'Test Graph' },
+      nodes: [sourceNode, passthroughNode],
+      connections: [sourceConnection],
+    } as any);
+
+    const io = store.get(ioDefinitionsForNodeState(passthroughNode.id));
+    assert.equal(io.inputDefinitions.find(({ id }) => id === 'input1')?.title, 'Value');
+    assert.equal(io.outputDefinitions.find(({ id }) => id === 'output1')?.title, 'Value');
+  });
+
+  it('carries labels through a linked Passthrough instance on the canvas', () => {
+    const store = createStore();
+    const registry = createBuiltInRegistry();
+    const sourceNode = registry.createDynamic('number');
+    const libraryPassthrough = registry.createDynamic('passthrough');
+    const finalPassthrough = registry.createDynamic('passthrough');
+    const prefabId = 'passthrough-library' as NodePrefabId;
+    const linkedPassthrough = {
+      data: { prefabId },
+      id: 'linked-passthrough',
+      title: 'Linked Passthrough',
+      type: 'nodePrefabInstance',
+      visualData: { x: 350, y: 0, width: 220 },
+    } as any;
+
+    store.set(projectState, {
+      metadata: { description: '', id: 'project-1' as ProjectId, title: 'Project' },
+      graphs: {},
+      nodePrefabs: {
+        [prefabId]: { id: prefabId, sourceNode: libraryPassthrough },
+      },
+    } as any);
+    store.set(graphState, {
+      metadata: { id: 'graph-1', name: 'Test Graph' },
+      nodes: [sourceNode, linkedPassthrough, finalPassthrough],
+      connections: [
+        {
+          inputNodeId: linkedPassthrough.id,
+          inputId: 'input1',
+          outputNodeId: sourceNode.id,
+          outputId: 'value',
+        },
+        {
+          inputNodeId: finalPassthrough.id,
+          inputId: 'input1',
+          outputNodeId: linkedPassthrough.id,
+          outputId: 'output1',
+        },
+      ],
+    } as any);
+
+    const io = store.get(canvasIoDefinitionsForNodeState(finalPassthrough.id));
+    assert.equal(io.inputDefinitions.find(({ id }) => id === 'input1')?.title, 'Value');
+    assert.equal(io.outputDefinitions.find(({ id }) => id === 'output1')?.title, 'Value');
+  });
+
+  it('keeps a Passthrough label while its input-origin connection is being rewired', () => {
+    const store = createStore();
+    const registry = createBuiltInRegistry();
+    const sourceNode = registry.createDynamic('number');
+    const passthroughNode = registry.createDynamic('passthrough');
+    const originalConnection: NodeConnection = {
+      inputNodeId: passthroughNode.id,
+      inputId: 'input1' as any,
+      outputNodeId: sourceNode.id,
+      outputId: 'value' as any,
+    };
+
+    store.set(graphState, {
+      metadata: { id: 'graph-1', name: 'Test Graph' },
+      nodes: [sourceNode, passthroughNode],
+      connections: [originalConnection],
+    } as any);
+    store.set(draggingWireState, {
+      startNodeId: sourceNode.id,
+      startPortId: originalConnection.outputId,
+      startPortIsInput: false,
+      dataType: 'number',
+      originalConnection,
+      rewireSourceInput: {
+        nodeId: passthroughNode.id,
+        portId: originalConnection.inputId,
+      },
+    });
+
+    assert.deepEqual(store.get(canvasPreviewConnectionsState), []);
+    assert.deepEqual(
+      getCanvasLabelConnectionsForNode({
+        draggingWire: store.get(draggingWireState),
+        nodeId: passthroughNode.id,
+        previewConnections: store.get(canvasPreviewConnectionsState),
+      }),
+      [originalConnection],
+    );
+
+    const io = store.get(canvasIoDefinitionsForNodeState(passthroughNode.id));
+    assert.equal(io.inputDefinitions.find(({ id }) => id === 'input1')?.title, 'Value');
+    assert.equal(io.outputDefinitions.find(({ id }) => id === 'output1')?.title, 'Value');
   });
 
   it('removes stale port edges before connection-order-sensitive editor analysis', () => {

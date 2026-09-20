@@ -11,14 +11,19 @@ import type { ReferencedGraphAliasNode } from './nodes/ReferencedGraphAliasNode.
 import type { SubGraphNode } from './nodes/SubGraphNode.js';
 import { createGraphOutputSelection } from './GraphOutputSelection.js';
 
-export function canStreamThroughGraphCaller(node: ChartNode): node is SubGraphNode | ReferencedGraphAliasNode {
+/** An executing caller may forward outputs after its condition has passed. */
+export function canForwardGraphCallerOutputPartials(node: ChartNode): node is SubGraphNode | ReferencedGraphAliasNode {
   return (
     (node.type === 'subGraph' || node.type === 'referencedGraphAlias') &&
     !node.disabled &&
-    !node.isConditional &&
     !node.isSplitRun &&
     !(node as SubGraphNode).data.useErrorOutput
   );
+}
+
+/** Early input delivery must not bypass the caller's ordinary readiness/condition gate. */
+export function canStreamThroughGraphCaller(node: ChartNode): node is SubGraphNode | ReferencedGraphAliasNode {
+  return canForwardGraphCallerOutputPartials(node) && !node.isConditional;
 }
 
 export function canStreamThroughGraphInput(node: ChartNode): node is GraphInputNode {
@@ -28,6 +33,22 @@ export function canStreamThroughGraphInput(node: ChartNode): node is GraphInputN
     !node.isConditional &&
     !node.isSplitRun &&
     !(node as GraphInputNode).data.useDefaultValueInput
+  );
+}
+
+/** A named output may forward only when one direct producer determines its terminal value. */
+export function canForwardGraphOutputPartials(
+  graphOutput: ChartNode,
+  sourceNode: ChartNode,
+  graphOutputIsFrozen: boolean,
+): graphOutput is GraphOutputNode {
+  return (
+    graphOutput.type === 'graphOutput' &&
+    !graphOutput.disabled &&
+    !graphOutput.isConditional &&
+    !graphOutput.isSplitRun &&
+    !sourceNode.isSplitRun &&
+    !graphOutputIsFrozen
   );
 }
 
@@ -165,73 +186,100 @@ export function getProjectStreamingOutputWatchConnections({
     }
   }
 
-  const pending: Array<{ graph: NodeGraph; edge: NodeConnection }> = [];
+  const watchInputs: Array<{ graph: NodeGraph; edge: NodeConnection }> = [];
   for (const [candidate, context] of contexts) {
     for (const node of Object.values(context.nodes)) {
       if (node.type !== 'watchStreamingOutput' || node.disabled || isFrozen(context.project, candidate, node)) continue;
       const inputs = context.incoming(node.id).filter((edge) => edge.inputId === 'stream');
       // Multiple providers are rejected by the Watch scheduler, not multiple streams.
-      if (inputs.length === 1) pending.push({ graph: candidate, edge: inputs[0]! });
+      if (inputs.length === 1) watchInputs.push({ graph: candidate, edge: inputs[0]! });
     }
   }
 
-  while (pending.length) {
-    const { graph: candidate, edge } = pending.pop()!;
+  const visiting = new Map<NodeGraph, Set<NodeConnection>>();
+  const trace = (candidate: NodeGraph, edge: NodeConnection): boolean => {
     const context = contexts.get(candidate)!;
-    if (context.marked.has(edge)) continue;
-    const route = new Set([edge]);
-    let producerEdge = edge;
-    let source = context.nodes[producerEdge.outputNodeId];
-    while (source && canRenderDataBusNode(source)) {
-      const channel = getDataBusOutputChannelIndex(producerEdge.outputId);
-      const providers = context
-        .incoming(source.id)
-        .filter((input) => getDataBusInputChannelIndex(input.inputId) === channel);
-      if (channel == null || providers.length !== 1 || route.has(providers[0]!)) {
-        source = undefined;
-        break;
-      }
-      producerEdge = providers[0]!;
-      route.add(producerEdge);
-      source = context.nodes[producerEdge.outputNodeId];
-    }
-    if (!source || source.disabled || source.type === 'dataBus') continue;
-    if (context.nodes[edge.inputNodeId]?.type === 'graphOutput' && source.isSplitRun) continue;
-    for (const segment of route) context.marked.add(segment);
-    if (source.isSplitRun || isFrozen(context.project, candidate, source)) continue;
+    if (context.marked.has(edge)) return true;
+    const graphVisiting = visiting.get(candidate) ?? new Set<NodeConnection>();
+    if (graphVisiting.has(edge)) return false;
+    graphVisiting.add(edge);
+    visiting.set(candidate, graphVisiting);
 
-    if (source.type === 'graphInput' && producerEdge.outputId === 'data') {
-      if (!canStreamThroughGraphInput(source)) continue;
-      const inputName = (source as GraphInputNode).data.id;
-      for (const parent of callers.get(candidate) ?? []) {
-        if (parent.selected && !parent.selected.has(edge.inputNodeId)) continue;
-        for (const input of contexts.get(parent.graph)!.incoming(parent.node.id)) {
-          if (input.inputId === inputName) pending.push({ graph: parent.graph, edge: input });
+    try {
+      const source = context.nodes[edge.outputNodeId];
+      if (!source || source.disabled || source.isSplitRun || isFrozen(context.project, candidate, source)) return false;
+
+      if (canRenderDataBusNode(source)) {
+        const channel = getDataBusOutputChannelIndex(edge.outputId);
+        if (channel == null) return false;
+        const providers = context
+          .incoming(source.id)
+          .filter((input) => getDataBusInputChannelIndex(input.inputId) === channel);
+        if (providers.length !== 1 || !trace(candidate, providers[0]!)) return false;
+        context.marked.add(edge);
+        return true;
+      }
+
+      if (source.type === 'graphInput' && edge.outputId === 'data') {
+        if (!canStreamThroughGraphInput(source)) return false;
+        const inputName = (source as GraphInputNode).data.id;
+        let foundSource = false;
+        for (const parent of callers.get(candidate) ?? []) {
+          if (parent.selected && !parent.selected.has(edge.inputNodeId)) continue;
+          const inputs = contexts
+            .get(parent.graph)!
+            .incoming(parent.node.id)
+            .filter((input) => input.inputId === inputName);
+          // Ambiguous authored inputs stay final-only even though ordinary
+          // execution retains its established first-provider projection.
+          if (inputs.length === 1 && trace(parent.graph, inputs[0]!)) foundSource = true;
         }
+        if (!foundSource) return false;
+        context.marked.add(edge);
+        return true;
       }
-      continue;
-    }
 
-    if (!canStreamThroughGraphCaller(source)) continue;
-    const caller = source;
-    const childProject = caller.type === 'subGraph' ? context.project : projects[caller.data.projectId];
-    const child = childProject?.graphs[caller.data.graphId];
-    const childContext = child && contexts.get(child);
-    if (!child || !childContext) continue;
-    const outputs = Object.values(childContext.nodes).filter(
-      (node): node is GraphOutputNode =>
-        node.type === 'graphOutput' && !node.disabled && (node as GraphOutputNode).data.id === producerEdge.outputId,
-    );
-    // Duplicate names have first-final-winner semantics, so cannot relay partials.
-    if (outputs.length !== 1) continue;
-    const output = outputs[0]!;
-    if (output.isConditional || output.isSplitRun || isFrozen(childProject, child, output)) continue;
-    for (const input of childContext.incoming(output.id)) {
-      if (input.inputId === 'value' && !childContext.nodes[input.outputNodeId]?.isSplitRun) {
-        pending.push({ graph: child, edge: input });
+      if (source.type !== 'subGraph' && source.type !== 'referencedGraphAlias') {
+        context.marked.add(edge);
+        return true;
       }
+
+      if (!canForwardGraphCallerOutputPartials(source)) return false;
+      const caller = source;
+      const childProject = caller.type === 'subGraph' ? context.project : projects[caller.data.projectId];
+      const child = childProject?.graphs[caller.data.graphId];
+      const childContext = child && contexts.get(child);
+      if (!child || !childContext) return false;
+      const outputs = Object.values(childContext.nodes).filter(
+        (node): node is GraphOutputNode =>
+          node.type === 'graphOutput' && !node.disabled && (node as GraphOutputNode).data.id === edge.outputId,
+      );
+      // Duplicate names have first-final-winner semantics, so cannot relay partials.
+      if (outputs.length !== 1) return false;
+      const output = outputs[0]!;
+      const outputIsFrozen = isFrozen(childProject, child, output);
+      const providers = childContext.incoming(output.id).filter((input) => input.inputId === 'value');
+      // As in GraphProcessor's effective connection projection, the first
+      // valid provider owns a single-input Graph Output in a malformed graph.
+      // Never mark a shadowed provider that cannot determine the final value.
+      const provider = providers[0];
+      const providerNode = provider && childContext.nodes[provider.outputNodeId];
+      if (
+        !provider ||
+        !providerNode ||
+        !canForwardGraphOutputPartials(output, providerNode, outputIsFrozen) ||
+        !trace(child, provider)
+      )
+        return false;
+      context.marked.add(edge);
+      return true;
+    } finally {
+      graphVisiting.delete(edge);
+      if (graphVisiting.size === 0) visiting.delete(candidate);
     }
-  }
+  };
+
+  for (const { graph: candidate, edge } of watchInputs) trace(candidate, edge);
 
   return contexts.get(graph)?.marked ?? new Set();
 }

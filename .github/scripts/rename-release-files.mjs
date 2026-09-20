@@ -97,7 +97,7 @@ const uploadFailures = [];
 for (const asset of assets) {
   const file = asset.name;
 
-  if (!/[Rr]ivet_.*_(universal\.dmg|amd64\.AppImage|amd64\.deb|x64-setup.exe)$/.test(file)) {
+  if (!/[Rr]ivet_.*_(universal\.dmg|aarch64\.dmg|x64\.dmg|x86_64\.dmg|amd64\.AppImage|amd64\.deb|x64-setup.exe)$/.test(file)) {
     continue;
   }
 
@@ -105,6 +105,12 @@ for (const asset of assets) {
   const assetData = await downloadReleaseAsset(asset);
 
   let newFileName = `Rivet-2.${file.split('.').pop()}`;
+
+  if (/aarch64\.dmg$/i.test(file)) {
+    newFileName = 'Rivet-2-Apple-Silicon.dmg';
+  } else if (/(x64|x86_64)\.dmg$/i.test(file)) {
+    newFileName = 'Rivet-2-Intel.dmg';
+  }
 
   if (/x64-setup\.exe$/i.test(file)) {
     newFileName = 'Rivet-2-Setup.exe';

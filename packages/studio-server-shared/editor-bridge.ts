@@ -86,7 +86,6 @@ export type EditorToDashboardEvent =
   | { type: 'editor-ready'; editorInstanceId: string }
   | { type: 'workflow-project-reconciliation-captured'; context: HostedProjectReconciliationContext; requestId: string }
   | { type: 'workflow-project-conflicts'; snapshot: HostedProjectConflictSnapshot }
-  | { type: 'request-active-workflow-project-rename' }
   | { type: 'project-opened'; path: string; requestId?: string }
   | { type: 'project-open-failed'; path: string; error: string; requestId?: string }
   | { type: 'active-project-path-changed'; path: string }
@@ -273,8 +272,6 @@ export function isEditorToDashboardEvent(value: unknown): value is EditorToDashb
       return typeof value.requestId === 'string' && isHostedProjectReconciliationContext(value.context);
     case 'workflow-project-conflicts':
       return isHostedProjectConflictSnapshot(value.snapshot);
-    case 'request-active-workflow-project-rename':
-      return true;
     case 'project-opened':
       return typeof value.path === 'string' && (value.requestId == null || typeof value.requestId === 'string');
     case 'active-project-path-changed':

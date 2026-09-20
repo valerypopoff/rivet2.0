@@ -20,3 +20,21 @@ test('renderMarkdown can flatten links to plain text', () => {
   assert.match(html, /Base URL: https:\/\/api\.cerebras\.ai\/v1/);
   assert.match(html, /Docs/);
 });
+
+test('renderMarkdown preserves safe node-body classes and literal field values', () => {
+  const html = renderMarkdown(
+    '<div class="rivet-node-body-field-row" style="opacity: 1">' +
+      '<span class="rivet-node-body-field-label">Type:</span> ' +
+      '<span class="rivet-node-body-field-value">Choice {{subject}} ...</span></div>\n' +
+      '<div class="rivet-node-body-separator"></div>',
+    true,
+    { disableLinks: true },
+  );
+
+  assert.match(html, /class="rivet-node-body-field-label"/);
+  assert.match(html, /class="rivet-node-body-field-value"/);
+  assert.match(html, /Choice \{\{subject\}\} \.\.\./);
+  assert.match(html, /class="rivet-node-body-separator"/);
+  assert.match(html, /^<div class="rivet-node-body-field-row">/);
+  assert.doesNotMatch(html, /\sstyle=/);
+});

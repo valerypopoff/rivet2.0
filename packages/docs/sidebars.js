@@ -215,6 +215,13 @@ const sidebars = {
     },
     {
       type: 'category',
+      label: 'Classifier',
+      collapsible: true,
+      collapsed: false,
+      items: ['node-reference/classifier-question', 'node-reference/classifier-evaluate'],
+    },
+    {
+      type: 'category',
       label: 'MCP',
       collapsible: true,
       collapsed: false,

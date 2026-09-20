@@ -9,6 +9,10 @@ const testFilePattern = /\.(?:test|spec)\.(?:cjs|cts|js|jsx|mjs|mts|ts|tsx)$/;
 const focusedTestPattern = /\b(?:context|describe|it|suite|test)\.only\b/;
 const skippedTestPattern = /\b(?:context|describe|it|suite|test)\.skip\b/;
 const sourceReadPattern = /\breadFile(?:Sync)?\s*\(/;
+// A fixture-read exception is intentionally local and reviewable. It is only
+// for black-box serialized projects or published documentation assets; it must
+// never be used to assert production implementation text.
+const fixtureReadExceptionPattern = /^\s*\/\/\s*test-style:\s*fixture-read:\s*\S.+$/m;
 
 function getCandidateTestFiles() {
   return execFileSync('git', ['ls-files', '--cached', '--others', '--exclude-standard'], {
@@ -36,7 +40,7 @@ for (const file of getCandidateTestFiles()) {
     focusedTests.push(normalizedFile);
   }
 
-  if (sourceReadPattern.test(source)) {
+  if (sourceReadPattern.test(source) && !fixtureReadExceptionPattern.test(source)) {
     sourceReadingTests.push(normalizedFile);
   }
 

@@ -223,6 +223,61 @@ literal with separate flags. Existing node titles remain project data and are no
 rewritten when a display name changes, so old projects continue to load and run
 without an implicit migration.
 
+The current Match case node treats every saved Cases row as a standard Rivet
+text-interpolation template. It discovers ordinary references across the rows
+in first-occurrence order, creates optional `input-<name>` ports through
+`createInterpolationInputDefinition(...)`, and resolves every row once at node
+start before plain-text comparison or `RegExp` compilation. JSONPath, formatter
+chains, escaped braces, and the portless `@graphInputs`, `@context`, and
+`@globals` roots use the shared interpolation rules. A missing value becomes
+empty text, and an invalid regular expression after resolution remains a node
+execution error. Case output ids stay anchored to stored `casePortIds`; output
+labels intentionally show the authored template because resolved values exist
+only during that run. Match case opts its Cases string-list editor into
+visual-only interpolation highlighting in the same monospace font as the text
+and code editors: the app mirrors Core's active token scanner over the native
+input, so editing, selection, focus, and the persisted text stay native while
+escaped triple-brace and malformed text follows the same token rules as
+execution. Native input selection keeps its highlight background but uses a
+transparent foreground, leaving the mirror as the only painted text even while
+selecting a case. The mirror follows native horizontal input scrolling, so long cases
+do not lose token alignment outside the initial visible width. The legacy `match` node deliberately overrides none of this
+behavior and continues to treat every saved regex as literal source.
+
+### Code object-field output inference
+
+`codeNew` uses the pure, bounded Acorn analysis in `codeOutputInference.ts` to
+discover explicit data-property names in direct object returns. Analysis uses
+the shared JS-value interpolation transformation and an async-function wrapper;
+nested function/class returns and indirect object shapes are not inferred.
+Definitions always prefer valid source, even when it yields no fields. Optional
+`inferredOutputKeys` remains the backward-compatible invalid-source fallback;
+`inferredOutputFields` is the persisted `{ id, key }` binding for each visible
+field. New field IDs are namespaced under `field:`, while the permanent
+whole-value port remains `output`. Definition queries are read-only and never
+create or update either metadata field.
+
+The Code execution wrapper extracts own enumerable data descriptors before runner
+transport. Missing properties and accessors emit exclusion; present undefined
+emits `any`. No getters are invoked for field extraction, and execution never
+adds ports. The editor prepares metadata before connection reconciliation in the
+same undoable transaction as source edits. Syntax-invalid saved code therefore
+retains its ports across reload; valid removal uses ordinary exact-ID connection
+recovery. A field key-only source edit may carry its existing stable ID to the
+new key only when Core can prove that the complete transformed-source change is
+within one unique direct-object property key. It deliberately rejects repeated
+branch keys and broader rewrites, leaving those cases to ordinary recoverable
+connection behavior. A bounded retired-ID list preserves exact remove/recreate
+recovery without retaining unbounded historical source state. This is additive
+node metadata, not a runner or recording-format change.
+
+The retired-binding list retains at most 32 removed fields. These bindings are
+persisted identities, not saved wires: wire recovery still depends on the
+editor's existing session-local recovery pool. Exact retired-key recovery takes
+precedence over rename inference. The last valid source is retained only while
+syntax is invalid and is discarded after a valid edit. Incoming editor metadata
+is ignored; preparation derives bindings from the previous node and new source.
+
 ### Stable dynamic-port companions
 
 `StringListPortBinding` can assign a stored stable id to a dynamic port for
@@ -252,17 +307,21 @@ emits boolean `true` from the active case or Unmatched branch, `testValue`
 emits the coerced Input string, and `custom` enables shared or per-output value
 inputs. The editor shows an unlabeled custom-return-mode chooser only for
 `custom`. A shared
-custom input is titled **Return value**; the app groups per-output inputs under
-**Return values**. True and Input value modes expose no custom inputs even when
+custom input is titled **Output value**; the app groups per-output inputs under
+**Output values**. True and Input value modes expose no custom inputs even when
 a dormant `valueInputMode` remains stored. The legacy `match` type deliberately
 retains its existing custom-value default, **Custom value** shared port, and
 always-visible custom-value setting. Match case orders its settings as Match
-mode, Case sensitive, Cases, Trigger, Output value, then the unlabeled
-custom-return-mode chooser; the cases list belongs with matching configuration
-rather than the return-value controls.
+mode and Case sensitive in content-sized columns with a fixed gap, with the switch centered
+against the selector below its label. Match mode sets `allowOptionWrap: false`
+so both choices stay on one line. Next comes a persistent boxed Cases panel,
+Trigger, Output value, then the unlabeled custom-return-mode chooser. The Cases
+panel deliberately has no helper copy or fold/unfold state: interpolation is
+documented in the node help and user guide, while the list belongs with matching
+configuration rather than the return-value controls.
 
 In per-output custom mode, the canvas presents the paired inputs beneath a
-non-port **Return values** label for Match case or **Custom values** for the
+non-port **Output values** label for Match case or **Custom values** for the
 legacy node after Match case's `Input` port or the legacy node's `Test` port,
 with non-interactive dotted guides that
 start after each input circle and stop before its matching output label. Their
@@ -1280,8 +1339,23 @@ An enabled Watch reached through a named Graph Input establishes input-stream
 demand on eligible Subgraph and Referenced Graph Alias callers. Core and editor
 wire arrows use `StreamingWatchTopology` for the same project-scoped routes,
 including library instances, Data Bus channels, and output-pruned invocations.
+The tracer commits a wire only after the complete route reaches an eligible
+partial producer. Frozen/final-only boundaries, unresolved recursive caller
+cycles, ambiguous duplicate caller inputs, and shadowed Graph Output providers
+therefore cannot leave misleading arrows on an outer graph. Duplicate caller
+inputs remain final-only for streaming even though ordinary execution preserves
+its legacy first-provider projection.
 Ordinary intermediate nodes and conditional, split, disabled, frozen, or
-Error-output callers do not become streaming forwarders.
+Error-output callers do not accept early streamed inputs.
+Input startup eligibility (`canStreamThroughGraphCaller`) is distinct from
+output forwarding (`canForwardGraphCallerOutputPartials`): an executing conditional
+Subgraph or Referenced Graph Alias may relay named output partials after its
+ordinary condition has passed. A false condition never starts its producer.
+Do not apply the early-input condition restriction to that producer's outputs;
+doing so silently reduces downstream nested Watches to one final iteration.
+Named-output execution and arrow tracing share
+`canForwardGraphOutputPartials`; do not duplicate conditional, split, or frozen
+boundary policy in either consumer.
 Graph Inputs using a dynamic default-value input also remain final-only. Partial
 and final Graph Input values share the same coercion and authored-default resolver.
 

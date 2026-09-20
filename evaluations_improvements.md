@@ -305,9 +305,10 @@ Meanwhile,
 roughly 5,000-line integration component that also owns resource mutations,
 import/export, history loading and caching, selection reconciliation, naming,
 deletion, recordings, baseline promotion, validation warnings, and presentation.
-The source-based parity assertion in
-[`useLocalExecutor.test.ts`](packages/app/src/hooks/useLocalExecutor.test.ts)
-checks for a shared call name; it does not prove equivalent lifecycle behavior.
+Behavioral lifecycle coverage in
+[`evaluationExecutionLifecycle.test.ts`](packages/app/src/utils/evaluationExecutionLifecycle.test.ts)
+proves the shared framework-independent sequence, but it does not prove that
+the local and remote hook adapters supply equivalent runtime behavior.
 
 ### Confirmed risks
 

@@ -26,6 +26,8 @@ export interface PluginNodeImpl<T extends ChartNode> {
     connections: NodeConnection[],
     nodes: Record<NodeId, ChartNode>,
     project: Project,
+    /** Concrete owner for node-scoped dynamic definitions. Older plugins may omit this optional argument. */
+    node?: T,
   ): NodeInputDefinition[];
 
   getOutputDefinitions(
@@ -156,7 +158,7 @@ export class PluginNodeImplClass<T extends ChartNode, Type extends T['type'] = T
     _referencedProjects?: Record<ProjectId, Project>,
     _definitionContext?: NodeDefinitionContext,
   ): NodeInputDefinition[] {
-    return this.impl.getInputDefinitions(this.data, connections, nodes, project);
+    return this.impl.getInputDefinitions(this.data, connections, nodes, project, this.chartNode);
   }
 
   getOutputDefinitions(

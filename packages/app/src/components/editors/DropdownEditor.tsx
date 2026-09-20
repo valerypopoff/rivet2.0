@@ -29,6 +29,7 @@ export const DefaultDropdownEditor: FC<
         });
       }}
       label={editor.label}
+      ariaLabel={editor.ariaLabel}
       name={editor.dataKey}
       helperMessage={helperMessage}
       options={editor.options}
@@ -44,6 +45,7 @@ export const DropdownEditor: FC<{
   isReadonly: boolean;
   autoFocus?: boolean;
   label: string;
+  ariaLabel?: string;
   name?: string;
   helperMessage?: string;
   onClose?: () => void;
@@ -56,6 +58,7 @@ export const DropdownEditor: FC<{
   isDisabled,
   autoFocus,
   label,
+  ariaLabel,
   name,
   helperMessage,
   onClose,
@@ -69,6 +72,27 @@ export const DropdownEditor: FC<{
       ? options.find((option) => option.value === defaultValue)
       : options.find((option) => option.value === value);
 
+  if (!label) {
+    return (
+      <>
+        {helperMessage && <HelperMessage>{helperMessage}</HelperMessage>}
+        <Select
+          name={name}
+          aria-label={ariaLabel || name}
+          isDisabled={isReadonly || isDisabled}
+          options={options}
+          value={selectedValue}
+          menuPortalTarget={menuPortalTarget}
+          autoFocus={autoFocus}
+          onChange={(selected) => onChange(selected!.value)}
+        />
+        <Portal>
+          <div ref={setMenuPortalTarget} />
+        </Portal>
+      </>
+    );
+  }
+
   return (
     <Field name={name ?? label} label={label} isDisabled={isReadonly || isDisabled}>
       {({ fieldProps }) => (
@@ -76,6 +100,8 @@ export const DropdownEditor: FC<{
           {helperMessage && <HelperMessage>{helperMessage}</HelperMessage>}
           <Select
             {...fieldProps}
+            name={name}
+            aria-label={ariaLabel || label}
             options={options}
             value={selectedValue}
             menuPortalTarget={menuPortalTarget}

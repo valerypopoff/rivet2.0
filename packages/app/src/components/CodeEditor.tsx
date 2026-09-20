@@ -234,7 +234,14 @@ export const CodeEditor: FC<CodeEditorProps> = ({
     }
 
     return () => {
-      currentOnChange?.(editor.getValue());
+      // An editor that is conditionally hidden can unmount immediately after a
+      // sibling control changes its node data. Re-emitting an unchanged value
+      // here would use that editor's stale callback and undo the sibling edit.
+      // Still flush genuine in-progress edits that have not reached the parent.
+      const finalText = editor.getValue();
+      if (finalText !== text) {
+        currentOnChange?.(finalText);
+      }
       saveCodeEditorViewState(modelCacheKey, editor.saveViewState());
       spellcheckActionDisposable.current?.dispose();
       spellcheckActionDisposable.current = undefined;

@@ -99,12 +99,16 @@ export type DropdownEditorDefinition<T extends ChartNode> = SharedEditorDefiniti
     label: string;
   }[];
   defaultValue?: string;
+  /** Accessible name when the visual label is intentionally omitted. */
+  ariaLabel?: string;
 
   useInputToggleDataKey?: DataOfType<T, boolean>;
 };
 
 export type SegmentedEditorDefinition<T extends ChartNode> = SharedEditorDefinitionProps<T> & {
   type: 'segmented';
+  /** Keep choices on one line when the surrounding layout provides intrinsic width. */
+  allowOptionWrap?: boolean;
 
   dataKey: DataOfType<T, string | boolean>;
   ariaLabel?: string;
@@ -158,6 +162,8 @@ export type CodeEditorDefinition<T extends ChartNode> = SharedEditorDefinitionPr
   type: 'code';
 
   dataKey: DataOfType<T, string>;
+  /** Displayed for an absent legacy value without mutating the node on mount. */
+  defaultValue?: string;
   useInputToggleDataKey?: DataOfType<T, boolean>;
   postEditorHelperMessage?: string | ((data: T['data']) => string | undefined);
 
@@ -218,8 +224,13 @@ export type KeyValuePairEditorDefinition<T extends ChartNode> = SharedEditorDefi
 
   keyPlaceholder?: string;
   valuePlaceholder?: string;
+  /** Singular noun used by add, remove, and reorder controls. */
+  itemLabel?: string;
 
   valuesSecret?: boolean;
+  reorderable?: boolean;
+  /** Highlight Rivet interpolation tokens in the value field. */
+  highlightInterpolationTokens?: boolean;
 };
 
 export type StringListEditorDefinition<T extends ChartNode> = SharedEditorDefinitionProps<T> & {
@@ -230,7 +241,15 @@ export type StringListEditorDefinition<T extends ChartNode> = SharedEditorDefini
 
   placeholder?: string;
   newItemDefault?: string;
+  /** Keep this many authored rows available in the editor. */
+  minimumItems?: number;
   reorderable?: boolean;
+  /** Highlight active Rivet {{...}} interpolation tokens without changing the saved string. */
+  highlightInterpolationTokens?: boolean;
+  /** Use the same monospace font as text and code editors. */
+  inputFontFamily?: 'monospace';
+  /** Render this list in a persistent, non-collapsible settings panel. */
+  boxed?: boolean;
   portBinding?: StringListPortBinding<T>;
 };
 
@@ -259,6 +278,11 @@ export type StringListPortBinding<T extends ChartNode> =
 
 export type EditorDefinitionGroup<T extends ChartNode> = SharedEditorDefinitionProps<T> & {
   type: 'group';
+  /**
+   * A non-collapsible, unboxed settings section with a semantic heading.
+   * Omit to retain the ordinary collapsible-panel behavior.
+   */
+  presentation?: 'section';
   defaultOpen?: boolean;
   toggleDataKey?: DataOfType<T, boolean>;
   editors: EditorDefinition<T>[];

@@ -1,4 +1,5 @@
 import {
+  getClassifierProviderEnvironmentVariableNames,
   resolveProcessSettings,
   type RivetPlugin,
   type RuntimeSettings,
@@ -92,7 +93,7 @@ export async function fillMissingSettingsFromEnvironmentVariables(
 
     return undefined;
   };
-  const pluginEnvVarNames = new Set<string>();
+  const pluginEnvVarNames = new Set<string>(getClassifierProviderEnvironmentVariableNames());
 
   for (const plugin of plugins) {
     const stringConfigs = entries(plugin.configSpec ?? {}).filter(([, c]) => c.type === 'string') as [

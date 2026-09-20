@@ -83,5 +83,6 @@ void describe('PassthroughNode', () => {
 
     assert.deepStrictEqual(chartNode.data, {});
     assert.equal(chartNode.type, 'passthrough');
+    assert.equal(chartNode.visualData.width, 190);
   });
 });

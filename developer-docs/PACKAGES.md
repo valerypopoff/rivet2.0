@@ -2,6 +2,38 @@
 
 > Detailed package-by-package reference for the current monorepo.
 
+## Version update: 2026-09-20
+
+Changes since `386d4ba32`, through `11a56331f`:
+
+| Packages | Version | Changes |
+| --- | --- | --- |
+| Core, Node, CLI, Evaluations | `2.14.0` → `2.15.0` | Adds first-party Classifier Question/Evaluate nodes, Jev evaluation, project migration, and Node/remote-debugger migration coverage. Node, CLI, and Evaluations are required public npm companions. |
+| App | `2.20.0` → `2.21.0` | Adds classifier authoring, credential settings, LLM-aligned node cards, and the corresponding editor and focus-restoration fixes. |
+| Docs | `2.12.0` → `2.13.0` | Adds the Classifier node references and documents credentials, diagnostic outputs, and Jev usage pricing. |
+| All five Studio Server packages | `1.19.0` → `1.20.0` | Adds hosted classifier migration, credential resolution, browser coverage, and dashboard readiness fixes. API, bootstrap, executor, and shared are lockstep companions. |
+| App Executor | `2.7.0` (unchanged) | No package-local changes since the previous version update. |
+
+Minor releases cover the new classifier feature and the corresponding desktop and hosted editor behavior. Desktop Tauri/Cargo metadata and the CLI Docker fallback are synchronized. Public npm and Studio Server lockstep policies remain in force; Helm chart versions are independent. No dependency or Yarn lockfile update is required.
+
+## Version update: 2026-09-19
+
+Changes since `d6937e469`, through `cb6c01b5e`:
+
+| Packages | Version | Changes |
+| --- | --- | --- |
+| Core, Node, CLI, Evaluations | `2.13.0` → `2.14.0` | Core adds automatic Code object-field outputs with rename-aware connection recovery, interpolated Match case values, dynamic Passthrough labels, and hardened live Watch streaming across nested Subgraphs. Node, CLI, and Evaluations are required public npm companions. |
+| App | `2.19.0` → `2.20.0` | Adds the corresponding editor surfaces plus refreshed output paging, focused-sidebar shortcuts, wrapped tree labels, and Apple Silicon sidecar support. |
+| Docs | `2.11.0` → `2.12.0` | Documents the new Code, Match case, Passthrough, and streamed-Watch behavior. |
+| All five Studio Server packages | `1.18.0` → `1.19.0` | The dashboard and editor bridge add the matching hosted editor behavior and browser coverage. API, bootstrap, and executor are required Studio Server companions. |
+| App Executor | `2.6.0` → `2.7.0` | Builds target-specific native sidecars for Apple Silicon and Intel macOS, and verifies their packaged startup contract. |
+
+Minor releases cover the new graph-authoring, streaming, and desktop-platform
+capabilities. Desktop Tauri/Cargo metadata and the CLI Docker fallback are
+synchronized. Public npm and Studio Server lockstep policies remain in force;
+Helm chart versions are independent. No dependency or Yarn lockfile update is
+required.
+
 ## Version update: 2026-09-18
 
 Changes since `fe0356154`, through `983c02d41`:
@@ -126,7 +158,7 @@ Shared runtime foundation for the entire repo.
 
 ### Package metadata
 
-- Version: `2.13.0`
+- Version: `2.15.0`
 - Main: `dist/cjs/bundle.cjs`
 - Module: `dist/esm/index.js`
 - Types: `dist/types/index.d.ts`
@@ -166,7 +198,7 @@ Node runtime wrapper around core.
 
 ### Package metadata
 
-- Version: `2.13.0`
+- Version: `2.15.0`
 - Main: `dist/cjs/bundle.cjs`
 - Module: `dist/esm/index.js`
 - Types: `dist/types/index.d.ts`
@@ -638,7 +670,7 @@ Desktop IDE frontend plus Tauri app packaging layer.
 
 ### Package metadata
 
-- Version: `2.19.0`
+- Version: `2.21.0`
 - Private: yes
 
 ### Runtime shape
@@ -703,7 +735,7 @@ Node sidecar process used by the desktop app for Node-capable execution.
 
 ### Package metadata
 
-- Version: `2.6.0`
+- Version: `2.7.0`
 - Bin: `./bin/executor-bundle.cjs`
 
 ### Main behavior
@@ -808,7 +840,7 @@ Operational CLI for running or serving Rivet graphs.
 
 ### Package metadata
 
-- Version: `2.13.0`
+- Version: `2.15.0`
 - Source entry: `src/cli.ts`
 - Published bin mapping: `rivet -> bin/cli.js`
 - Types: `dist/types/cli.d.ts`
@@ -932,7 +964,7 @@ Portable, executor-agnostic evaluation engine shared by the app, CLI, and host i
 
 ### Package metadata
 
-- Version: `2.13.0`
+- Version: `2.15.0`
 - Main: `dist/cjs/bundle.cjs`
 - Module: `dist/esm/index.js`
 - Types: `dist/types/index.d.ts`
@@ -964,7 +996,7 @@ a crawler, credentials, or a server-side search API.
 
 ### Package metadata
 
-- Version: `2.11.0`
+- Version: `2.13.0`
 - Private: yes
 
 ### Script surface

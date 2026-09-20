@@ -162,9 +162,9 @@ Packages without a `test` script are not included.
 
 #### Test Guardrails
 
-When adding or cleaning tests, use behavior-level tests at the owning helper, domain model, runtime API, or rendered-component seam. New tests that read production `.ts` or `.tsx` files and assert exact source text fail `yarn test:style`; do not grow the migration allowlist to make a new test pass. Existing allowlisted static entrypoint/CSS guards are migration debt. Each retained guard should name its product contract and avoid duplicating behavior already covered by owner tests.
+When adding or cleaning tests, use behavior-level tests at the owning helper, domain model, runtime API, or rendered-component seam. New tests that read production `.ts` or `.tsx` files and assert exact source text fail `yarn test:style`; do not grow the migration allowlist to make a new test pass. The App's former TSX/CSS source-text queue has been removed: output paging and sidebar behavior now have pure presentation tests plus narrow hosted-browser coverage. Each remaining static owner guard must name an irreducibly static contract and avoid duplicating behavior already covered by owner tests. When a browser test can observe a visual contract through computed style, geometry, or interaction, use that test and remove the matching CSS-source assertion; source formatting must not become an accidental product contract.
 When a retained source-shape guard covers a formatted expression or call, match the required semantic arguments while allowing normal whitespace and multiline formatting; do not make Prettier-compatible layout changes fail the suite.
-`packages/app-executor/bin/executorHost.test.mts` is an approved static-entrypoint guard: importing its startup path would bind the executor socket server, so it verifies the host/standalone bootstrap boundary from source. Keep that one exception listed in `scripts/checks/source-reading-test-allowlist.mjs`; migrate any other test to an observable helper instead.
+`packages/app-executor/bin/executorHost.test.mts` is an approved static-entrypoint guard: importing its startup path would bind the executor socket server, so it verifies the host/standalone bootstrap boundary from source. Keep that one exception listed in `scripts/checks/source-reading-test-allowlist.mjs`; migrate any other test to an observable helper instead. A test that must parse a checked-in serialized fixture or published documentation asset, rather than implementation source, may use one local `// test-style: fixture-read: <reason>` comment. That exception is not for TSX, CSS, imports, or source ordering assertions.
 
 Graph Builder evaluation manifest hashes canonicalize text asset line endings to LF before hashing. This keeps the checked manifest identical across Windows CRLF and Linux LF checkouts; do not replace the canonical digest with a raw-byte digest.
 
@@ -270,10 +270,27 @@ fixture changes require the full Kubernetes gate. The Studio Server aggregate
 accepts a skip only after successful classification explicitly returns `false`;
 a failed classifier or missing decision fails verification.
 
-The app test script lets the Node/tsx test runner discover `*.test.ts` files
+The App test script lets the Node/tsx test runner discover its test files
 instead of expanding `src/**/*.test.ts` in the shell. Keep discovery internal to
 the runner: expanding the app's full test list exceeds the Windows command-line
-limit before tests can start.
+limit before tests can start. `yarn test:app` preserves that full-suite discovery
+locally. CI passes `--shard-index <zero-based-index> --shard-count 4` to the
+root script, which sorts discovered tests and launches only the selected subset
+through a direct Node child process. Do not replace this with shell globbing or
+one expanded full-suite command; every shard must stay deterministic and every
+test must belong to exactly one shard. The explicit shards include `.tsx` tests
+that Node/tsx discovery historically missed. Both App test commands preload
+`packages/app/scripts/register-test-browser-assets.mjs`, which supplies Node-only
+stand-ins for Vite-managed asset imports and the browser-oriented component
+entry points whose CommonJS shape Node exposes differently from Vite. Its
+regression test exercises both local assets and real Yarn PnP package imports.
+The preload registers asynchronous resolve/load hooks and delegates every
+non-browser module unchanged. Keep it asynchronous: Node 22 patch releases
+have differed in how chained synchronous hooks represent native CommonJS
+sources, and manufacturing source bytes changes CommonJS `require()` behavior
+under Yarn PnP.
+Keep that preload test-only; application builds and runtime imports must
+continue through Vite's real asset pipeline.
 
 ### `yarn test:style`
 
@@ -292,8 +309,9 @@ The test-style script fails when `test.only`, `it.only`, `describe.only`,
 non-ignored test files. Source-reading candidates are controlled by the explicit shrinking
 allowlist in `source-reading-test-allowlist.mjs`: a new candidate fails, and removing one
 requires removing its stale allowlist entry. The lexical candidate check intentionally also
-catches direct filesystem reads, so a retained black-box fixture or generated-artifact test
-needs a narrow comment explaining why it is not a production-source contract. `.skip` is
+catches direct filesystem reads. A serialized fixture or published documentation-asset test
+must carry the narrow `test-style: fixture-read` comment described above; it does not permit
+production-source assertions. `.skip` is
 reported for review rather than rejected by this checker. A reported skipped test
 is not execution evidence. Do not interpret the report-only policy as meaning
 that output pruning is parked: Skip unused outputs has active per-node coverage.
@@ -483,9 +501,12 @@ build output.
 The root `.yarnrc.yml` may also contain narrowly scoped `packageExtensions` for
 upstream packages with undeclared runtime peers. `react-node-resolver` must
 declare `react` and `react-dom` as peers because Atlaskit Select loads both at
-runtime; keep that extension while Rivet uses Atlaskit Select under strict PnP.
-After changing an extension, rerun Yarn install and commit the resulting tracked
-PnP loader update.
+runtime. Atlaskit's inline dialog, modal dialog, popper, and side-navigation
+packages must expose `react-dom` to the peer-dependent packages they own; Vite's
+bundler can conceal those missing declarations, but strict PnP component tests
+cannot. Keep those extensions while Rivet uses these Atlaskit versions. After
+changing an extension, rerun Yarn install and commit the resulting tracked PnP
+loader update.
 
 ### `yarn lint`
 
@@ -609,6 +630,9 @@ Maintenance rules:
 - Keep [`packages/app/sidecars/pnpm/SHA256SUMS`](../packages/app/sidecars/pnpm/SHA256SUMS) updated whenever the binaries change.
 - Keep [`packages/app/sidecars/pnpm/README.md`](../packages/app/sidecars/pnpm/README.md) updated with version/provenance notes.
 - Keep `.gitattributes` marking the sidecars as binary and vendored.
+- Treat macOS target suffixes as claims to verify, not as architecture evidence: use `lipo -archs` for every replacement. Rivet ships separate Apple Silicon and Intel packages, so it must never manufacture a universal pnpm sidecar by copying a thin executable.
+- The finished-DMG verifier checks the matching bundled pnpm version and architecture before the release is uploaded.
+- Executor packaging is likewise target allowlisted. A new desktop target needs an explicit `pkg` mapping and a native package-validation path; it must not fall through to an x64 binary based only on its target string.
 - If the release pipeline later gains checksum-verified artifact downloads or Git LFS support, reassess whether these binaries should stay in normal Git history.
 
 ### App executor
@@ -620,6 +644,107 @@ Maintenance rules:
 - `start`: build then run bundled executor
 
 The CommonJS build launcher (`scripts/build-executor.cjs`) bundles the ESM source to CJS using esbuild, then compiles the CJS bundle into a native binary via `pkg`. Keeping the launcher itself in CJS avoids the Node 22/Yarn PnP mixed-loader failure described under Core; the ESM-only `execa` and `chalk` build helpers are loaded asynchronously after esbuild. CJS output format is required because `pkg` needs static analysis of `require()` calls. A custom esbuild plugin (`resolveRivet`) maps `@valerypopoff/rivet2-core` and `@valerypopoff/rivet2-node` to their workspace source entrypoints before package exports are resolved. This keeps the desktop Node executor in lockstep with local source edits and prevents stale `packages/core/dist` / `packages/node/dist` output from being bundled into a fresh sidecar.
+
+Desktop executor binaries are target-specific. A non-empty `RIVET_DESKTOP_TARGET`
+(otherwise Tauri's target-triple environment) selects `node18-macos-arm64` for
+`aarch64-apple-darwin` and `node18-macos-x64` for `x86_64-apple-darwin`; a local
+native build falls back to the Rust host target. The build refuses
+`universal-apple-darwin`: an executor must be genuinely native for the package
+it is embedded in, not copied under a universal filename. Tauri resolves the
+target-suffixed `app-executor-<target-triple>` source from `bundle.externalBin`,
+then installs it as the canonical `app-executor` runtime executable inside the
+macOS app bundle. The finished-DMG verifier must check that runtime filename,
+not the build-time target-suffixed source filename.
+
+#### Apple Silicon packaging incident record and guardrails
+
+Keep this section as institutional memory. In September 2026, Apple Silicon
+support failed in several distinct layers. Fixing only the first visible error
+would not have produced a trustworthy release:
+
+| Stage                                                | Observed failure                                                                                               | Root cause                                                                                                                                                     | Durable fix                                                                                                                                                                                                                  |
+| ---------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Installed app starts Node executor                   | `Bad CPU type in executable (os error 86)`                                                                     | An Apple Silicon app contained an Intel `app-executor` binary. The package label and app architecture did not make the sidecar native.                         | `build-executor.cjs` now maps `aarch64-apple-darwin` to `node18-macos-arm64` and `x86_64-apple-darwin` to `node18-macos-x64`, writes a target-suffixed build artifact, and rejects unsupported or falsely universal targets. |
+| Finished-DMG architecture verification               | `lipo` could not open `app-executor-aarch64-apple-darwin` or `app-executor-x86_64-apple-darwin` inside the app | The verifier confused Tauri's target-suffixed **build input** with the canonical **installed runtime name**.                                                   | The verifier resolves `Contents/MacOS/app-executor` and `Contents/MacOS/pnpm`, while still validating each binary against the matrix target with `lipo`.                                                                     |
+| Packaged executor smoke test                         | Expected `{ type: 'string', ... }`, received `{ type: 'any', ... }`                                            | The smoke assertion had drifted from the current Code node whole-output contract. The executor was correct; the test graph was not.                            | The smoke graph declares an `any` Graph Output and asserts `{ type: 'any', value: 'native sidecar' }`, matching real execution semantics.                                                                                    |
+| Apple Silicon DMG creation on GitHub's hosted runner | `hdiutil: create failed - Resource busy`                                                                       | A transient `hdiutil` failure occurred after the native app and sidecars had already been prepared correctly. It was unrelated to CPU architecture or signing. | `build-macos-dmg.mjs` retries only that exact failure twice, cleans only the current target's `rw.*.dmg` scratch image, and preserves every other failure.                                                                   |
+
+The resulting Apple Silicon DMG was subsequently installed and its Node
+executor was confirmed working on Apple Silicon hardware. That real-device
+result is the acceptance baseline; an Intel build passing, a successful
+TypeScript build, or a correctly named file is not equivalent evidence.
+
+The following invariants are non-negotiable:
+
+- Keep separate `aarch64-apple-darwin` and `x86_64-apple-darwin` matrix builds
+  on matching native GitHub runners. Keep their Rust and `pkg` caches separated
+  by target.
+- Pass the same matrix target through the Tauri `--target` argument and
+  `RIVET_DESKTOP_TARGET`. `prepare:tauri` rebuilds the executor inside Tauri's
+  packaging path, so the sidecar build must receive the intended package
+  target rather than guessing from a filename or stale artifact.
+- Keep macOS executor target selection explicit and fail closed. Adding a new
+  target requires a real `pkg` target, build-plan coverage, a matching pnpm
+  binary, native-runner packaging, and finished-bundle verification.
+- Preserve the two-name contract: Tauri discovers
+  `app-executor-<target-triple>` and `pnpm-<target-triple>` as build inputs,
+  then installs them as `app-executor` and `pnpm` under
+  `Rivet 2.app/Contents/MacOS/`.
+- Treat architecture as binary metadata. Verify the app executable,
+  `app-executor`, and `pnpm` with `lipo -archs`; then verify signatures, start
+  the packaged executor, execute a graph over its WebSocket, and invoke the
+  packaged pnpm. File presence alone is insufficient.
+- Keep the smoke graph synchronized with the actual Code-node DataValue
+  contract. If that contract intentionally changes, update the graph and the
+  assertion together and retain an end-to-end returned-value assertion.
+- Keep the DMG retry narrow and bounded. The retry classifier must continue to
+  require the exact nonzero `hdiutil: create failed - Resource busy` failure.
+  Cleanup must stay confined to `rw.*.dmg` files in the current target's
+  `release/bundle/macos` directory.
+
+Never “fix” this pipeline by doing any of the following:
+
+- copying or renaming an Intel binary to an ARM filename, treating a filename
+  suffix as proof of architecture, or requiring Rosetta for the Apple Silicon
+  package;
+- manufacturing a universal package from thin sidecars, weakening the
+  unsupported-target error into an x64 fallback, or sharing target output/cache
+  directories between architectures;
+- removing `RIVET_DESKTOP_TARGET` from the release matrix or allowing
+  `prepare:tauri` to reuse an executor built for another target;
+- looking for target-suffixed sidecar names inside the installed `.app`, or
+  changing `bundle.externalBin` without updating both the build-time and
+  installed-name tests;
+- weakening the finished-DMG gate to signature or file-presence checks, or
+  replacing its real executor graph run with a mocked response;
+- changing the smoke expectation merely to match observed output without first
+  checking the node's declared Graph Output type and runtime DataValue
+  semantics;
+- retrying every Tauri, signing, notarization, compilation, or `hdiutil`
+  failure, ignoring a final exit status, or deleting the whole bundle directory
+  during retry. Broad retries hide deterministic defects and broad cleanup can
+  destroy the correctly signed app being packaged.
+
+When changing any part of this path, review these owners together:
+
+- [`packages/app-executor/scripts/build-executor.cjs`](../packages/app-executor/scripts/build-executor.cjs)
+  and its build-plan tests;
+- [`packages/app/src-tauri/tauri.conf.json`](../packages/app/src-tauri/tauri.conf.json)
+  for `bundle.externalBin` and sidecar permissions;
+- [`.github/workflows/desktop-release.yml`](../.github/workflows/desktop-release.yml)
+  for native matrix targets, target propagation, and per-target caches;
+- [`.github/scripts/verify-macos-sidecars.mjs`](../.github/scripts/verify-macos-sidecars.mjs)
+  and its canonical-name/smoke-contract tests;
+- [`.github/scripts/verify-macos-dmg.sh`](../.github/scripts/verify-macos-dmg.sh)
+  for final mounted-DMG verification;
+- [`.github/scripts/build-macos-dmg.mjs`](../.github/scripts/build-macos-dmg.mjs)
+  and its exact-error retry tests.
+
+At minimum, run `yarn test:style`, the app-executor tests, documentation-link
+validation, and both native macOS release matrix jobs. For a release-affecting
+change, inspect the mounted app with `lipo -archs` and exercise Node executor
+mode on real Apple Silicon hardware before declaring Apple Silicon support
+healthy.
 
 The app-executor binary accepts `--port` / `-p` and `--host` flags. The default
 host is `127.0.0.1` for the desktop internal sidecar; hosted/container wrappers
@@ -645,8 +770,8 @@ surface narrow:
 - Executor images need built core, node, and app-executor bundle/artifacts; use
   `yarn build:executor-runtime` and
   `node scripts/create-built-package-artifacts.mjs --target executor-runtime`.
-  The app-executor binary artifacts are platform-specific, so build this target
-  on the platform that will run the executor image.
+  The app-executor binary artifacts are platform- and CPU-specific, so build
+  this target on the same architecture that will run the executor image.
 - Hosted web/editor images need built core and Evaluations plus app host/editor
   source under `packages/app/src`; use `yarn build:hosted-web-deps` and
   `node scripts/create-built-package-artifacts.mjs --target hosted-web-deps`.
@@ -885,7 +1010,8 @@ that path under the runner temp directory with a Windows-specific PowerShell
 step and a Unix `bash` step, then caches it by runner OS, architecture,
 `yarn.lock`, `packages/app-executor/package.json`, and the app-executor build
 script. Including the build script keeps the cache key fresh if the packaged
-Node target changes.
+Node target changes. macOS jobs run natively on their matching architecture, so
+their runner-specific cache keys must remain separate.
 
 Build helper scripts that can hide meaningful work should report timings with
 [`scripts/ci-timing.mjs`](../scripts/ci-timing.mjs). The helper prints
@@ -916,8 +1042,16 @@ work behind it is parallelized.
    to their shared `packages/` ancestor, so `package-tests` restores the artifact
    beneath `packages/`; this preserves each workspace package's declared
    `packages/<name>/dist` export path.
-2. `package-tests` fans out Core, Node, Evaluations, App, App Executor, and CLI
-   into six isolated jobs. Every suite always runs; changed-path selection is
+2. `package-tests` fans out Core, Node, Evaluations, App Executor, and CLI, plus
+   four deterministic App shards, into isolated jobs. The compiled-artifact job
+   verifies every declared Core, Node, and Evaluations export is present and
+   loadable, and that the executor bundle is present and syntactically valid,
+   before upload; each package-test job repeats that check immediately after
+   restore. This turns an incomplete artifact into a clear dependency error
+   before package tests instead of unrelated `ENOENT` fanout. Each App shard
+   also rebuilds Core's ESM output before launching because App tests consume
+   Core's published-style ESM export. The test matrix retains a six-job
+   concurrency cap; every suite always runs, and changed-path selection is
    deliberately not used for the general correctness gate.
 3. `package-lint` fans out the same six source-only workspaces immediately; it does not
    wait for compiled artifacts. Test and lint matrices use `fail-fast: false`, so one
@@ -976,7 +1110,8 @@ succeeded. `check-ci-workflows.mjs` guards both fan-outs.
 ### Matrix targets
 
 - `windows-latest`
-- `macos-latest`
+- `macos-15` for Apple Silicon (`aarch64-apple-darwin`)
+- `macos-15-intel` for Intel (`x86_64-apple-darwin`)
 - `ubuntu-22.04`
 - `ubuntu-22.04-arm`
 
@@ -1015,7 +1150,20 @@ The workflow currently uses:
 - `projectPath: packages/app`
 - `tauriScript: yarn tauri`
 - draft GitHub releases
-- universal macOS target
+- separate native Apple Silicon and Intel macOS targets
+- a single updater-manifest publication after every target bundle is present
+
+The release-asset and updater-archive selectors have pure Node tests in
+`.github/scripts/`; `yarn test:style` runs them. Keep those tests behavior-based:
+they must prove that each native archive is selected exactly once and that a
+wrong-architecture or universal-looking filename is rejected.
+
+The updater publisher reads a previous `latest.json` before replacing it. If
+the replacement upload fails, it restores that previous asset and fails the
+job; if the release has multiple assets named `latest.json`, it fails before
+deleting either one. This is not fully atomic at GitHub's asset API boundary,
+but it keeps a transient publish failure from permanently removing a working
+updater feed.
 
 ### Release secrets/environment
 
@@ -1040,11 +1188,31 @@ manifests. Studio Server-only and developer-documentation-only commits no longer
 consume signed desktop runners. Manual dispatch remains available and always
 runs the selected branch's release.
 
-Graph Builder validation, Windows packaging, macOS packaging, and documentation
-building start concurrently. The Windows job produces MSI and NSIS installers;
-the macOS job produces, signs, notarizes, staples, and verifies the universal
-DMG. The reusable workflow retains the existing rolling GitHub Release feeds and
-`official-release.json`/`developer-release.json` download-page contract.
+Graph Builder validation, Windows packaging, both native macOS packages, and
+documentation building start concurrently. The Windows job produces MSI and
+NSIS installers; the macOS matrix produces, signs, notarizes, staples, and
+verifies separate Apple Silicon and Intel DMGs. The verifier requires exactly
+one DMG and one app bundle for each target before mounting it, requires the app
+executable and both bundled sidecars to be thin executables for the selected
+architecture with `lipo`, checks their signatures with `codesign`, starts the
+packaged Node executor, opens its local WebSocket, runs a minimal
+Code-to-Graph-Output execution through its worker, and runs the packaged pnpm
+`--version` command. The smoke graph uses an `any` Graph Output because the
+current Code node's whole-value output is intentionally an `any` DataValue; the
+assertion verifies both that type and the returned value.
+
+The macOS matrix invokes [`.github/scripts/build-macos-dmg.mjs`](../.github/scripts/build-macos-dmg.mjs)
+because the Tauri v1 DMG helper can occasionally receive
+`hdiutil: create failed - Resource busy` on a hosted macOS runner. Only that
+exact transient failure is retried, after removing target-local `rw.*.dmg`
+scratch images, with 5-second and 15-second delays. Compilation, signing,
+permission, and every other bundling failure remain single-attempt failures.
+The complete failure history and the invariants that protect this path are
+recorded under [Apple Silicon packaging incident record and guardrails](#apple-silicon-packaging-incident-record-and-guardrails).
+
+The reusable workflow retains the existing rolling GitHub Release feeds and
+`official-release.json`/`developer-release.json` download-page contract, now
+with a required macOS architecture field.
 
 Superseded push build work is canceled per channel/ref; manual releases do not interrupt an active release. Only the final publication
 job uses the shared `rivet-docs-pages` concurrency group. That job performs
@@ -1082,9 +1250,13 @@ The Pages release workflows use Node 24-compatible action majors (`actions/check
 
 ### Secrets/environment
 
-The Pages release workflows do not pass updater-signing secrets. They explicitly request only Windows installer bundles and the macOS DMG bundle, so Tauri does not create updater zip bundles and does not need `TAURI_PRIVATE_KEY` or `TAURI_KEY_PASSWORD`.
+The Pages release workflows do not pass updater-signing secrets. They explicitly request only Windows installer bundles and the two native macOS DMGs, so Tauri does not create updater zip bundles and does not need `TAURI_PRIVATE_KEY` or `TAURI_KEY_PASSWORD`.
 
-The Pages macOS job uses the same Tauri macOS packaging path as the tagged release workflow's universal target, but it does not publish signed updater feeds. Mac signing/notarization is separate from updater signing: missing Apple secrets should fail the macOS build before upload, while missing Tauri updater keys should not affect these installer-only workflows.
+The Pages macOS jobs use the same target-specific Tauri paths as the tagged
+release workflow, but they do not publish signed updater feeds. Mac
+signing/notarization is separate from updater signing: missing Apple secrets
+should fail the matching macOS build before upload, while missing Tauri updater
+keys should not affect these installer-only workflows.
 
 Required macOS signing/notarization secrets:
 

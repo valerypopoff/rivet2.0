@@ -1,8 +1,5 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
 import test from 'node:test';
-import { fileURLToPath } from 'node:url';
 import {
   getSpellcheckIssues,
   getSpellcheckMarkers,
@@ -10,8 +7,6 @@ import {
   SPELLCHECK_MARKER_LIMIT,
   SPELLCHECK_MARKER_OWNER,
 } from './spellcheck.js';
-
-const utilsDir = dirname(fileURLToPath(import.meta.url));
 
 const fakeSpellchecker = {
   correct: (word: string) => !['mispelled', 'wrds', 'helllo'].includes(word.toLowerCase()),
@@ -38,13 +33,6 @@ function createFakeModel(text: string) {
   } as any;
 }
 
-test('runCodeEditorSpellcheck is available for every Monaco editor language', () => {
-  const spellcheckSource = readFileSync(join(utilsDir, 'spellcheck.ts'), 'utf8');
-
-  assert.doesNotMatch(spellcheckSource, /SPELLCHECK_LANGUAGES/);
-  assert.doesNotMatch(spellcheckSource, /getLanguageId\(\)/);
-});
-
 test('getSpellcheckWordRanges ignores URLs, emails, numbers, interpolation, and dotted identifiers', () => {
   const text = [
     'This has mispelled wrds.',
@@ -58,7 +46,6 @@ test('getSpellcheckWordRanges ignores URLs, emails, numbers, interpolation, and 
     ['This', 'has', 'mispelled', 'wrds', 'Ignore', 'and', 'Ignore', 'and', 'Ignore', 'and'],
   );
 });
-
 test('getSpellcheckIssues accepts valid delimiter and camel-case compounds', () => {
   const text = [
     'system-facing',
@@ -140,10 +127,4 @@ test('getSpellcheckMarkers converts offsets to Monaco marker ranges and caps mar
 
 test('spellcheck marker owner is dedicated to Rivet spellcheck markers', () => {
   assert.equal(SPELLCHECK_MARKER_OWNER, 'rivet-spellcheck');
-});
-
-test('spellcheck lazy dictionary load is retryable after failure', () => {
-  const spellcheckSource = readFileSync(join(utilsDir, 'spellcheck.ts'), 'utf8');
-
-  assert.match(spellcheckSource, /catch\(\(error\) => \{[\s\S]*spellcheckResourcesPromise = undefined;/);
 });

@@ -6,6 +6,7 @@ import { handleError } from '../utils/errorHandling.js';
 import { useWorkspaceTransitions } from './useWorkspaceTransitions.js';
 import type { EvaluationProjectFileData } from '../io/IOProvider.js';
 import { useRivetAppHostCallbacks } from '../providers/HostCallbacksContext.js';
+import { normalizeProjectSnapshot } from './workspaceHost/projectSnapshot.js';
 
 export function useLoadProject() {
   const ioProvider = useIOProvider();
@@ -41,6 +42,13 @@ export function useLoadProject() {
       if (!project) {
         throw new Error(`No in-memory snapshot is available for "${projectInfo.title}".`);
       }
+
+      // Stored tabs are object snapshots rather than serialized project files.
+      // Normalize them at their restore boundary as well as when the app first
+      // hydrates storage, so direct callers cannot revive legacy Jev node types.
+      const normalized = normalizeProjectSnapshot({ project, data });
+      project = normalized.project;
+      data = normalized.data;
 
       return await workspaceTransitions.loadProject({
         project,

@@ -12,23 +12,32 @@ The Passthrough node is an executable value relay: every connected `Input [i]`
 is emitted unchanged from `Output [i]`. Use it when a value belongs on an
 actual workflow path or when you need a readable, local fan-out point.
 
+Connected slots use the upstream output port's name on both sides of the node,
+so a value such as **Response** remains recognizable across one or more
+Passthrough nodes. An output-only slot can use its destination's input name when
+every destination agrees. Unconnected, ambiguous, unavailable, and cyclic
+connections retain the numbered **Input [i]** and **Output [i]** labels.
+
 For a compact canvas rail that shares values broadly without adding an
 executable relay, add the dedicated [Data Bus](./data-bus.mdx) node instead.
 Passthrough cannot be displayed or configured as a Data Bus.
+
+## Compatibility
+
 Projects carrying the retired Passthrough bus-line flag open with an ordinary
 Passthrough; Rivet ignores and removes that legacy presentation setting.
 
 ## Inputs
 
-| Title | Data type | Description | Notes |
-| --- | --- | --- | --- |
-| Input [i] | `any` | The ith input to pass through. | Ports are added as connections are made. |
+| Title                            | Data type | Description                    | Notes                                    |
+| -------------------------------- | --------- | ------------------------------ | ---------------------------------------- |
+| Input [i] or connected port name | `any`     | The ith input to pass through. | Ports are added as connections are made. |
 
 ## Outputs
 
-| Title | Data type | Description | Notes |
-| --- | --- | --- | --- |
-| Output [i] | `any` | The ith input value, unchanged. | Mirrors the corresponding connected input. |
+| Title                             | Data type | Description                     | Notes                                                             |
+| --------------------------------- | --------- | ------------------------------- | ----------------------------------------------------------------- |
+| Output [i] or connected port name | `any`     | The ith input value, unchanged. | Mirrors the corresponding connected input and its displayed name. |
 
 ## Settings
 

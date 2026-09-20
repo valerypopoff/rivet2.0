@@ -1,15 +1,6 @@
 import { DndContext, PointerSensor, useDroppable, useSensor, useSensors } from '@dnd-kit/core';
 import { css } from '@emotion/react';
-import {
-  type FC,
-  type KeyboardEvent,
-  type MouseEvent,
-  memo,
-  useMemo,
-  useRef,
-  useState,
-  type SVGProps,
-} from 'react';
+import { type FC, type KeyboardEvent, type MouseEvent, type PointerEvent, memo, useMemo, useRef, useState, type SVGProps } from 'react';
 import { useAtomValue, useSetAtom } from 'jotai';
 import { type GraphId, type NodeGraph, type UiGraph, type UiGraphId } from '@valerypopoff/rivet2-core';
 import clsx from 'clsx';
@@ -94,6 +85,7 @@ const styles = css`
 
   .project-tree-header {
     display: flex;
+    align-items: baseline;
     gap: 4px;
     min-width: 0;
     margin: 0 0 18px;
@@ -108,11 +100,11 @@ const styles = css`
   }
 
   .project-tree-header-title {
+    flex: 1 1 auto;
     min-width: 0;
     color: var(--grey-lightest);
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+    overflow-wrap: anywhere;
+    white-space: normal;
   }
 
   .graph-list-toolbar {
@@ -359,9 +351,8 @@ const styles = css`
   .ui-graph-entry-name {
     flex: 1 1 auto;
     min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+    overflow-wrap: anywhere;
+    white-space: normal;
   }
 
   .graph-list,
@@ -434,17 +425,17 @@ const styles = css`
 
   .graph-item-name {
     display: flex;
-    align-items: center;
+    align-items: baseline;
     gap: 6px;
     flex: 1;
     min-width: 0;
   }
 
   .graph-item-name-text {
+    flex: 1 1 auto;
     min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+    overflow-wrap: anywhere;
+    white-space: normal;
   }
 
   .folder-graph-item .graph-item-name-text {
@@ -463,7 +454,7 @@ const styles = css`
     width: 1em;
     height: 1em;
     flex-shrink: 0;
-    transform: translateY(-1px);
+    transform: translateY(2px);
     color: var(--grey-lightish);
   }
 
@@ -479,7 +470,7 @@ const styles = css`
     font-weight: 700;
     line-height: 1.2;
     text-align: center;
-    transform: translateY(-1px);
+    transform: translateY(1px);
   }
 
   .graph-folder-count > span {
@@ -507,10 +498,10 @@ const styles = css`
   .graph-reference-dot {
     position: absolute;
     left: 0;
-    top: 50%;
+    top: calc(5px + (9px * var(--ui-font-scale)));
     width: 6px;
     height: 6px;
-    transform: translateY(-50%);
+    transform: none;
     border-radius: 50%;
     background: var(--primary);
     box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.18);
@@ -846,21 +837,17 @@ export const GraphList: FC = memo(() => {
     return savedGraphs.find((savedGraph) => savedGraph.metadata?.id === currentGraphId)?.metadata?.name;
   }, [graph.metadata?.id, savedGraphs]);
 
-  const handleGraphListMouseDown = useStableCallback((e: MouseEvent<HTMLDivElement>) => {
-    if (e.button !== 0) {
-      return;
-    }
-
-    if (isInteractiveGraphListTarget(e.target)) {
-      return;
-    }
-
-    graphListContainerRef.current?.focus({ preventScroll: true });
-  });
-
-  const handleGraphListMouseDownCapture = useStableCallback((e: MouseEvent<HTMLDivElement>) => {
+  const handleGraphListPointerDownCapture = useStableCallback((e: PointerEvent<HTMLDivElement>) => {
     if (e.button !== 0) {
       e.preventDefault();
+    }
+  });
+
+  const handleGraphListClick = useStableCallback((e: MouseEvent<HTMLDivElement>) => {
+    if (!isInteractiveGraphListTarget(e.target)) {
+      queueMicrotask(() => {
+        graphListContainerRef.current?.focus({ preventScroll: true });
+      });
     }
   });
 
@@ -1080,10 +1067,10 @@ export const GraphList: FC = memo(() => {
       />
       <div
         className="graph-list-container"
+        onClick={handleGraphListClick}
         onContextMenu={handleSidebarContextMenu}
         onKeyDown={handleGraphListKeyDown}
-        onMouseDown={handleGraphListMouseDown}
-        onMouseDownCapture={handleGraphListMouseDownCapture}
+        onPointerDownCapture={handleGraphListPointerDownCapture}
         ref={graphListContainerRef}
         tabIndex={-1}
       >

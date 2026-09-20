@@ -86,6 +86,78 @@ class IdentifierErrorCodeRunner implements CodeRunner {
 }
 
 describe('CodeNewNode', () => {
+  it('keeps a renamed field port stable while reading the renamed property', async () => {
+    const node = createNode({
+      code: 'return { foo1: 111, bar: 222 };',
+      inferredOutputFields: [
+        { id: 'field:foo', key: 'foo1' },
+        { id: 'field:bar', key: 'bar' },
+      ],
+    });
+
+    assert.deepEqual(
+      node.getOutputDefinitions().map(({ id, title }) => [id, title]),
+      [
+        ['output', 'Output'],
+        ['field:foo', 'foo1'],
+        ['field:bar', 'bar'],
+      ],
+    );
+    assert.deepEqual(await node.process({}, createContext()), {
+      output: { type: 'any', value: { foo1: 111, bar: 222 } },
+      'field:foo': { type: 'any', value: 111 },
+      'field:bar': { type: 'any', value: 222 },
+    });
+  });
+
+  it('isolates generated names and transports literal unusual field names safely', async () => {
+    const node = createNode({
+      code: 'const __proto__ = 7; return { __proto__, "a\\"b": 8, "日本語": 9, internal: typeof __codeNewOutputs, result: typeof __codeNewResult };',
+    });
+    const outputs = await node.process({}, createContext());
+    assert.deepEqual(outputs['field:__proto__'], { type: 'any', value: 7 });
+    assert.deepEqual(outputs['field:a"b'], { type: 'any', value: 8 });
+    assert.deepEqual(outputs['field:日本語'], { type: 'any', value: 9 });
+    assert.deepEqual(outputs['field:internal'], { type: 'any', value: 'undefined' });
+    assert.deepEqual(outputs['field:result'], { type: 'any', value: 'undefined' });
+  });
+
+  it('returns the whole object and fields with one execution, including safe unusual names', async () => {
+    const node = createNode({
+      code: 'let runs = 0; return { foo: ++runs, bar: 222, output: 3, constructor: 4, "quoted key": undefined };',
+    });
+    assert.deepEqual(
+      node.getOutputDefinitions().map((port) => port.id),
+      ['output', 'field:foo', 'field:bar', 'field:output', 'field:constructor', 'field:quoted key'],
+    );
+    const outputs = await node.process({}, createContext());
+    assert.deepEqual(outputs['field:foo'], { type: 'any', value: 1 });
+    assert.deepEqual(outputs['field:bar'], { type: 'any', value: 222 });
+    assert.deepEqual(outputs['field:output'], { type: 'any', value: 3 });
+    assert.deepEqual(outputs['field:constructor'], { type: 'any', value: 4 });
+    assert.deepEqual(outputs['field:quoted key'], { type: 'any', value: undefined });
+    assert.equal((outputs.output!.value as any).foo, 1);
+  });
+
+  it('excludes absent branch fields and does not invoke accessor fields', async () => {
+    const node = createNode({
+      code: 'if ({{first}}) return { foo: 1 }; return { bar: 2, get foo() { throw new Error("getter called"); } };',
+    });
+    const outputs = await node.process({ first: { type: 'boolean', value: false } }, createContext());
+    assert.deepEqual(outputs['field:foo'], { type: 'control-flow-excluded', value: undefined });
+    assert.deepEqual(outputs['field:bar'], { type: 'any', value: 2 });
+  });
+
+  it('uses final overwritten data fields and excludes fields for non-object branches', async () => {
+    const node = createNode({ code: 'if ({{plain}}) return null; return { foo: 1, ...{ foo: 9, extra: 3 } };' });
+    const outputs = await node.process({ plain: { type: 'boolean', value: false } }, createContext());
+    assert.deepEqual(outputs['field:foo'], { type: 'any', value: 9 });
+    assert.equal(outputs['field:extra'], undefined);
+    const empty = await node.process({ plain: { type: 'boolean', value: true } }, createContext());
+    assert.deepEqual(empty['field:foo'], { type: 'control-flow-excluded', value: undefined });
+    assert.equal(empty.output!.value, null);
+  });
+
   it('can create node', () => {
     const node = CodeNewNodeImpl.create();
 

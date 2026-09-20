@@ -1,4 +1,5 @@
 import type { FC, MouseEvent } from 'react';
+import { isPageBoundaryModifierClick } from '../pageNavigation.js';
 
 export type NodeOutputPagerProps = {
   /** A settled, semantic page label (for example a Watch terminal iteration). */
@@ -7,6 +8,8 @@ export type NodeOutputPagerProps = {
   totalPages: number;
   onPrevPage: () => void;
   onNextPage: () => void;
+  onFirstPage?: () => void;
+  onLastPage?: () => void;
   stopDoubleClickPropagation?: boolean;
 };
 
@@ -17,16 +20,34 @@ export const NodeOutputPager: FC<NodeOutputPagerProps> = ({
   selectedPage,
   stopDoubleClickPropagation = false,
   totalPages,
+  onFirstPage,
+  onLastPage,
 }) => {
   const handleDoubleClick = stopDoubleClickPropagation ? (event: MouseEvent) => event.stopPropagation() : undefined;
+  const handlePreviousPage = (event: MouseEvent<HTMLButtonElement>) => {
+    if (onFirstPage && isPageBoundaryModifierClick(event)) {
+      onFirstPage();
+      return;
+    }
+
+    onPrevPage();
+  };
+  const handleNextPage = (event: MouseEvent<HTMLButtonElement>) => {
+    if (onLastPage && isPageBoundaryModifierClick(event)) {
+      onLastPage();
+      return;
+    }
+
+    onNextPage();
+  };
 
   return (
     <div className="picker">
-      <button className="picker-left" onClick={onPrevPage} onDoubleClick={handleDoubleClick}>
+      <button className="picker-left" onClick={handlePreviousPage} onDoubleClick={handleDoubleClick}>
         {'<'}
       </button>
       <div className="picker-page">{getNodeOutputPagerPageLabel(selectedPage, totalPages, labelledPage)}</div>
-      <button className="picker-right" onClick={onNextPage} onDoubleClick={handleDoubleClick}>
+      <button className="picker-right" onClick={handleNextPage} onDoubleClick={handleDoubleClick}>
         {'>'}
       </button>
     </div>

@@ -34,6 +34,12 @@ function findStep(job, name, label) {
   return step;
 }
 
+function findActionStep(job, uses, label) {
+  const step = job.steps?.find((candidate) => candidate.uses === uses);
+  assert.ok(step, `${label} must use ${JSON.stringify(uses)}.`);
+  return step;
+}
+
 const build = parseWorkflow('.github/workflows/build.yml');
 const buildJobs = build.workflow.jobs;
 assertIncludesAll(
@@ -58,8 +64,18 @@ assert.equal(buildJobs['package-tests'].strategy['max-parallel'], 6);
 assert.equal(buildJobs['package-lint'].strategy['max-parallel'], 6);
 assert.deepEqual(
   buildJobs['package-tests'].strategy.matrix.include.map((entry) => entry.command).sort(),
-  ['test:app', 'test:app-executor', 'test:cli', 'test:core', 'test:evaluations', 'test:node'],
-  'Build test matrix must retain all six package suites.',
+  [
+    'test:app --shard-index 0 --shard-count 4',
+    'test:app --shard-index 1 --shard-count 4',
+    'test:app --shard-index 2 --shard-count 4',
+    'test:app --shard-index 3 --shard-count 4',
+    'test:app-executor',
+    'test:cli',
+    'test:core',
+    'test:evaluations',
+    'test:node',
+  ],
+  'Build test matrix must retain every package suite and all four deterministic App shards.',
 );
 const compiledArtifactUpload = findStep(
   buildJobs['compiled-artifacts'],
@@ -70,6 +86,33 @@ const compiledArtifactDownload = findStep(
   buildJobs['package-tests'],
   'Download compiled dependencies',
   'Package-tests job',
+);
+const compiledArtifactVerification = findStep(
+  buildJobs['compiled-artifacts'],
+  'Verify compiled workspace exports',
+  'Compiled-artifacts job',
+);
+const restoredArtifactVerification = findStep(
+  buildJobs['package-tests'],
+  'Verify restored compiled dependencies',
+  'Package-tests job',
+);
+assert.equal(compiledArtifactVerification.run, 'yarn check:compiled-workspace-exports');
+assert.equal(restoredArtifactVerification.run, 'yarn check:compiled-workspace-exports');
+assert.ok(
+  buildJobs['compiled-artifacts'].steps.indexOf(compiledArtifactVerification) <
+    buildJobs['compiled-artifacts'].steps.indexOf(compiledArtifactUpload),
+  'Compiled exports must be verified before upload.',
+);
+assert.ok(
+  buildJobs['package-tests'].steps.indexOf(compiledArtifactDownload) <
+    buildJobs['package-tests'].steps.indexOf(restoredArtifactVerification),
+  'Restored exports must be verified after download.',
+);
+assert.ok(
+  buildJobs['package-tests'].steps.indexOf(restoredArtifactVerification) <
+    buildJobs['package-tests'].steps.findIndex((step) => step.name === 'Test ${{ matrix.label }}'),
+  'Restored exports must be verified before package tests.',
 );
 assert.equal(compiledArtifactUpload.with?.name, 'build-dependencies-${{ github.sha }}');
 assert.equal(
@@ -128,6 +171,7 @@ assertIncludesAll(
     'build-studio-server',
     'api-tests',
     'web-tests',
+    'editor-regression',
     'host-compatibility',
     'repository-contracts',
     'deployment-contracts',
@@ -144,6 +188,7 @@ assert.equal(studioJobs['api-tests'].strategy['max-parallel'], 4);
 assert.deepEqual(asArray(studioJobs['build-studio-server'].needs), ['changes']);
 assert.deepEqual(asArray(studioJobs['api-tests'].needs), ['changes', 'build-studio-server']);
 assert.deepEqual(asArray(studioJobs['web-tests'].needs), ['changes', 'build-studio-server']);
+assert.deepEqual(asArray(studioJobs['editor-regression'].needs), ['changes', 'build-studio-server']);
 assert.deepEqual(asArray(studioJobs['host-compatibility'].needs), ['changes']);
 assert.deepEqual(asArray(studioJobs['repository-contracts'].needs), ['changes']);
 assert.deepEqual(asArray(studioJobs['deployment-contracts'].needs), ['changes', 'build-studio-server']);
@@ -156,13 +201,24 @@ const compiledStudioArtifactUpload = findStep(
   'Upload compiled Studio Server dependencies',
   'Build Studio Server job',
 );
+const compiledStudioArtifactVerification = findStep(
+  studioJobs['build-studio-server'],
+  'Verify compiled workspace dependencies',
+  'Build Studio Server job',
+);
+assert.equal(compiledStudioArtifactVerification.run, 'yarn check:compiled-workspace-exports');
+assert.ok(
+  studioJobs['build-studio-server'].steps.indexOf(compiledStudioArtifactVerification) <
+    studioJobs['build-studio-server'].steps.indexOf(compiledStudioArtifactUpload),
+  'Studio Server workspace dependencies must be verified before upload.',
+);
 assert.equal(compiledStudioArtifactUpload.with?.name, 'studio-server-build-${{ github.sha }}');
 assert.equal(
   compiledStudioArtifactUpload.with?.overwrite,
   true,
   'The sole Studio Server artifact producer must replace an artifact when its job is re-run.',
 );
-for (const jobName of ['api-tests', 'web-tests', 'deployment-contracts']) {
+for (const jobName of ['api-tests', 'web-tests', 'editor-regression', 'deployment-contracts']) {
   const compiledStudioArtifactDownload = findStep(
     studioJobs[jobName],
     'Download compiled Studio Server dependencies',
@@ -174,6 +230,17 @@ for (const jobName of ['api-tests', 'web-tests', 'deployment-contracts']) {
     'packages',
     `${jobName} must restore compiled workspace exports beneath packages/.`,
   );
+  const restoredStudioArtifactVerification = findStep(
+    studioJobs[jobName],
+    'Verify restored compiled workspace dependencies',
+    `${jobName} job`,
+  );
+  assert.equal(restoredStudioArtifactVerification.run, 'yarn check:compiled-workspace-exports');
+  assert.ok(
+    studioJobs[jobName].steps.indexOf(compiledStudioArtifactDownload) <
+      studioJobs[jobName].steps.indexOf(restoredStudioArtifactVerification),
+    `${jobName} must verify restored workspace dependencies after download.`,
+  );
 }
 assertIncludesAll(
   asArray(studioJobs.verify.needs),
@@ -182,6 +249,7 @@ assertIncludesAll(
     'build-studio-server',
     'api-tests',
     'web-tests',
+    'editor-regression',
     'host-compatibility',
     'repository-contracts',
     'deployment-contracts',
@@ -190,7 +258,9 @@ assertIncludesAll(
 );
 const studioGate = findStep(studioJobs.verify, 'Require every applicable Studio Server gate', 'Studio verifier');
 assert.equal(studioGate.env?.CLASSIFICATION_RESULT, '${{ needs.changes.result }}');
+assert.equal(studioGate.env?.EDITOR_REGRESSION_RESULT, '${{ needs.editor-regression.result }}');
 assert.match(studioGate.run, /\$CLASSIFICATION_RESULT.*success/);
+assert.match(studioGate.run, /\$EDITOR_REGRESSION_RESULT/);
 assert.match(studioGate.run, /\$RELEVANT.*!= "true".*\$RELEVANT.*!= "false"/);
 assert.match(studioGate.run, /if \[\[ "\$RELEVANT" == "false" \]\]/);
 assert.match(
@@ -665,6 +735,36 @@ for (const [jobName, stepName] of [
     `${jobName} must replace its immutable artifact when the build job is re-run.`,
   );
 }
+assert.deepEqual(
+  reusableJobs['build-macos'].strategy.matrix.include.map((entry) => entry.target).sort(),
+  ['aarch64-apple-darwin', 'x86_64-apple-darwin'],
+  'Desktop releases must build separate native Apple Silicon and Intel macOS bundles.',
+);
+assert.equal(
+  findStep(reusableJobs['build-macos'], 'Build Tauri macOS bundle', 'macOS release job').env?.RIVET_DESKTOP_TARGET,
+  '${{ matrix.target }}',
+  'macOS release builds must explicitly pass their target to the executor-sidecar build.',
+);
+assert.match(
+  String(findStep(reusableJobs['build-macos'], 'Build Tauri macOS bundle', 'macOS release job').run),
+  /build-macos-dmg\.mjs[\s\S]*matrix\.target/,
+  'macOS release builds must use the target-specific bounded hdiutil retry wrapper.',
+);
+assert.equal(
+  findActionStep(reusableJobs['build-macos'], 'Swatinem/rust-cache@v2', 'macOS release job').with?.key,
+  '${{ matrix.target }}',
+  'macOS release builds must keep Rust target caches separate by architecture.',
+);
+assert.match(
+  String(findStep(reusableJobs['build-macos'], 'Verify macOS signing and notarization', 'macOS release job').run),
+  /verify-macos-dmg\.sh[\s\S]*matrix\.target/,
+  'Each macOS release bundle must be verified against its target architecture.',
+);
+assert.match(
+  reusableDesktop.source,
+  /macos-aarch64-bundles[\s\S]*macos-x86_64-bundles/,
+  'Desktop publication must collect both native macOS bundle artifacts.',
+);
 assert.match(reusableDesktop.source, /git ls-remote origin/);
 assert.match(reusableDesktop.source, /steps\.freshness\.outputs\.current == 'true'/);
 assert.match(
@@ -696,6 +796,53 @@ for (const workflowPath of [
   );
   assert.equal(caller.workflow.jobs.release.uses, './.github/workflows/desktop-release.yml');
 }
+
+const taggedDesktopRelease = parseWorkflow('.github/workflows/release.yml');
+const taggedReleaseJobs = taggedDesktopRelease.workflow.jobs;
+assert.deepEqual(
+  taggedReleaseJobs['build-release'].strategy.matrix.include
+    .filter((entry) => entry.desktop_target)
+    .map((entry) => ({ runner: entry.runner, target: entry.desktop_target }))
+    .sort((left, right) => left.target.localeCompare(right.target)),
+  [
+    { runner: 'macos-15', target: 'aarch64-apple-darwin' },
+    { runner: 'macos-15-intel', target: 'x86_64-apple-darwin' },
+  ],
+  'Tagged desktop releases must build native Apple Silicon and Intel packages on matching runners.',
+);
+const taggedBuildStep = findStep(taggedReleaseJobs['build-release'], 'Build Tauri App', 'Tagged desktop release job');
+assert.equal(
+  taggedBuildStep.with?.includeUpdaterJson,
+  false,
+  'Parallel release jobs must not race to write an incomplete updater manifest.',
+);
+assert.match(
+  String(taggedBuildStep.with?.args),
+  /--target \{0\}/,
+  'Tagged macOS builds must pass the matrix target through to Tauri.',
+);
+assert.equal(
+  taggedBuildStep.env?.RIVET_DESKTOP_TARGET,
+  '${{ matrix.desktop_target }}',
+  'Tagged macOS builds must explicitly pass their target to the executor-sidecar build.',
+);
+assert.equal(
+  findActionStep(taggedReleaseJobs['build-release'], 'Swatinem/rust-cache@v2', 'Tagged desktop release job').with?.key,
+  '${{ matrix.desktop_target || matrix.runner }}',
+  'Tagged release builds must keep Rust target caches separate by runner target.',
+);
+assert.match(
+  String(
+    findStep(taggedReleaseJobs['build-release'], 'Verify packaged macOS sidecars', 'Tagged desktop release job').run,
+  ),
+  /verify-macos-sidecars\.mjs[\s\S]*matrix\.desktop_target/,
+  'Tagged macOS releases must validate the packaged sidecars before upload.',
+);
+assert.deepEqual(
+  asArray(taggedReleaseJobs['publish-updater-manifest'].needs),
+  ['build-release'],
+  'The updater manifest must be published only after every release architecture uploaded its artifacts.',
+);
 
 const npmPublish = parseWorkflow('.github/workflows/publish-npm-packages.yml');
 assert.ok(npmPublish.workflow.on.push.paths.length > 0, 'npm publishing must be path-gated.');

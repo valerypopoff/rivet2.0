@@ -511,6 +511,34 @@ export const defaultEditorContainerStyles = css`
     width: min(180px, 100%);
   }
 
+  &.match-case-node-editor > .inline-editor-row {
+    grid-template-columns: max-content max-content;
+    justify-content: start;
+    row-gap: var(--node-editor-label-gap);
+
+    > .row.segmented,
+    > .row.segmented > div {
+      display: contents;
+    }
+
+    > .row.segmented label {
+      grid-column: 1;
+      grid-row: 1;
+      margin-bottom: 0 !important;
+    }
+
+    .segmented-editor-control {
+      grid-column: 1;
+      grid-row: 2;
+    }
+
+    > .row.toggle {
+      grid-column: 2;
+      grid-row: 2;
+      align-self: center;
+    }
+  }
+
   &.comment-node-editor {
     padding-top: 45px;
   }
@@ -536,6 +564,10 @@ const NodeCodeEditorWithAiAssist: FC<
   codeEditor,
   codeEditorIndex,
 }) => {
+  if (codeEditor.hideIf?.(node.data)) {
+    return null;
+  }
+
   return (
     <CodeEditorAiAssistBridge
       codeEditor={(footerLeftAction) => (
@@ -575,6 +607,10 @@ const NodeCodeEditorWithGenericAiAssist: FC<
     onRefreshEditors: () => void;
   }
 > = ({ node, onChange, isReadonly, onClose, onRefreshEditors, codeEditor, codeEditorIndex }) => {
+  if (codeEditor.hideIf?.(node.data)) {
+    return null;
+  }
+
   const isDisabled = codeEditor.disableIf?.(node.data) ?? false;
 
   return (
@@ -713,7 +749,10 @@ export const DefaultNodeEditor: FC<
   };
 
   return (
-    <div css={defaultEditorContainerStyles} className={node.type === 'comment' ? 'comment-node-editor' : undefined}>
+    <div
+      css={defaultEditorContainerStyles}
+      className={node.type === 'comment' ? 'comment-node-editor' : node.type === 'matchCase' ? 'match-case-node-editor' : undefined}
+    >
       {getEditorRenderRows(editors).map((row) => {
         if (row.type === 'inline') {
           return (
@@ -723,6 +762,13 @@ export const DefaultNodeEditor: FC<
               )}
             </div>
           );
+        }
+
+        // A Code editor gets an AI-assist bridge below. Do not create that
+        // visible wrapper for a conditionally hidden editor: the field itself
+        // would return null, but the bridge would still reserve a blank row.
+        if (row.editor.hideIf?.(node.data)) {
+          return null;
         }
 
         if (pairedAiAssistIndexes.has(row.index)) {

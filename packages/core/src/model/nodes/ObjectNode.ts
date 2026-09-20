@@ -85,6 +85,66 @@ function stringifyEmbeddedJsonStringFragment(value: any): string {
   return JSON.stringify(fragment).slice(1, -1);
 }
 
+/**
+ * Interpolates a JSON template without parsing it. Shared by Object and other
+ * first-party nodes which author structured EntryType values.
+ */
+export function interpolateJsonTemplate(
+  baseString: string,
+  values: Record<string, unknown>,
+  graphInputNodeValues?: Record<string, DataValue>,
+  contextValues?: Record<string, DataValue>,
+  globalValues?: Record<string, unknown>,
+): string {
+  const protectedBaseString = protectEscapedInterpolationTokens(baseString);
+  const parsedTemplate = parseInterpolationTemplate(protectedBaseString);
+
+  if (parsedTemplate.tokens.length === 0) {
+    return restoreEscapedInterpolationTokens(protectedBaseString);
+  }
+
+  let result = '';
+  let cursor = 0;
+
+  for (const token of parsedTemplate.tokens) {
+    const tokenSpan = token.span;
+    const isInsideString = isInsideJsonString(protectedBaseString, tokenSpan.start);
+    const isWholeQuotedToken =
+      isInsideString &&
+      isUnescapedQuoteAt(protectedBaseString, tokenSpan.start - 1) &&
+      isUnescapedQuoteAt(protectedBaseString, tokenSpan.end);
+    const replacementStart = isWholeQuotedToken ? tokenSpan.start - 1 : tokenSpan.start;
+    const replacementEnd = isWholeQuotedToken ? tokenSpan.end + 1 : tokenSpan.end;
+    const value = token.reference
+      ? resolveInterpolationExpressionRawValue(token.reference, {
+          variables: values,
+          graphInputValues: graphInputNodeValues,
+          contextValues,
+          globalValues,
+          unwrapVariableDataValues: false,
+        })
+      : undefined;
+
+    // Restore escaped delimiters only from the authored JSON template. An
+    // interpolated string may itself contain literal interpolation syntax and
+    // must not be processed again while the final JSON is assembled.
+    result += restoreEscapedInterpolationTokens(protectedBaseString.slice(cursor, replacementStart));
+
+    if (isInsideString && !isWholeQuotedToken) {
+      result += stringifyEmbeddedJsonStringFragment(value);
+    } else if (isWholeQuotedToken) {
+      result += stringifyWholeQuotedJsonValue(value);
+    } else {
+      result += stringifyJsonValue(value);
+    }
+
+    cursor = replacementEnd;
+  }
+
+  result += restoreEscapedInterpolationTokens(protectedBaseString.slice(cursor));
+  return result;
+}
+
 export class ObjectNodeImpl extends NodeImpl<ObjectNode> {
   static create(): ObjectNode {
     const chartNode: ObjectNode = {
@@ -167,54 +227,7 @@ export class ObjectNodeImpl extends NodeImpl<ObjectNode> {
     contextValues?: Record<string, DataValue>,
     globalValues?: Record<string, unknown>,
   ): string {
-    const protectedBaseString = protectEscapedInterpolationTokens(baseString);
-    const parsedTemplate = parseInterpolationTemplate(protectedBaseString);
-
-    if (parsedTemplate.tokens.length === 0) {
-      return restoreEscapedInterpolationTokens(protectedBaseString);
-    }
-
-    let result = '';
-    let cursor = 0;
-
-    for (const token of parsedTemplate.tokens) {
-      const tokenSpan = token.span;
-      const isInsideString = isInsideJsonString(protectedBaseString, tokenSpan.start);
-      const isWholeQuotedToken =
-        isInsideString &&
-        isUnescapedQuoteAt(protectedBaseString, tokenSpan.start - 1) &&
-        isUnescapedQuoteAt(protectedBaseString, tokenSpan.end);
-      const replacementStart = isWholeQuotedToken ? tokenSpan.start - 1 : tokenSpan.start;
-      const replacementEnd = isWholeQuotedToken ? tokenSpan.end + 1 : tokenSpan.end;
-      const value = token.reference
-        ? resolveInterpolationExpressionRawValue(token.reference, {
-            variables: values,
-            graphInputValues: graphInputNodeValues,
-            contextValues,
-            globalValues,
-            unwrapVariableDataValues: false,
-          })
-        : undefined;
-
-      // Restore escaped delimiters only from the authored JSON template. An
-      // interpolated string may itself contain literal interpolation syntax and
-      // must not be processed again while the final JSON is assembled.
-      result += restoreEscapedInterpolationTokens(protectedBaseString.slice(cursor, replacementStart));
-
-      if (isInsideString && !isWholeQuotedToken) {
-        result += stringifyEmbeddedJsonStringFragment(value);
-      } else if (isWholeQuotedToken) {
-        result += stringifyWholeQuotedJsonValue(value);
-      } else {
-        result += stringifyJsonValue(value);
-      }
-
-      cursor = replacementEnd;
-    }
-
-    result += restoreEscapedInterpolationTokens(protectedBaseString.slice(cursor));
-
-    return result;
+    return interpolateJsonTemplate(baseString, values, graphInputNodeValues, contextValues, globalValues);
   }
 
   async process(
