@@ -11,8 +11,25 @@ const retainedOutputLength = 64 * 1024;
 
 export const macDmgBuildRetryDelaysMs = [5_000, 15_000];
 
-export const isTransientMacDmgBuildFailure = (result) =>
-  result.status !== 0 && result.output.includes('hdiutil: create failed - Resource busy');
+const transientMacDmgBuildFailures = [
+  {
+    kind: 'hdiutil-resource-busy',
+    message: 'hdiutil: create failed - Resource busy',
+    description: 'hdiutil resource-busy failure',
+  },
+  {
+    kind: 'apple-secure-timestamp',
+    message: 'A timestamp was expected but was not found.',
+    description: 'Apple secure-timestamp failure',
+  },
+];
+
+export const getTransientMacDmgBuildFailure = (result) => {
+  if (result.status === 0) return undefined;
+  return transientMacDmgBuildFailures.find(({ message }) => result.output.includes(message));
+};
+
+export const isTransientMacDmgBuildFailure = (result) => getTransientMacDmgBuildFailure(result) !== undefined;
 
 const waitForRetry = (delayMs) => new Promise((resolve) => setTimeout(resolve, delayMs));
 
@@ -26,11 +43,12 @@ export const runMacDmgBuildWithRetries = async ({
   for (let attempt = 1; attempt <= retryDelays.length + 1; attempt += 1) {
     const result = await run();
     const retryDelayMs = retryDelays[attempt - 1];
+    const transientFailure = getTransientMacDmgBuildFailure(result);
 
-    if (!isTransientMacDmgBuildFailure(result) || retryDelayMs === undefined) return result;
+    if (!transientFailure || retryDelayMs === undefined) return result;
 
     warn(
-      `macOS DMG build attempt ${attempt} hit a transient hdiutil resource-busy failure; cleaning its partial image and retrying attempt ${attempt + 1} in ${retryDelayMs / 1000}s.`,
+      `macOS DMG build attempt ${attempt} hit a transient ${transientFailure.description}; cleaning its partial image and retrying attempt ${attempt + 1} in ${retryDelayMs / 1000}s.`,
     );
     await cleanup();
     await wait(retryDelayMs);
